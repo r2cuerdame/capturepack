@@ -61,17 +61,23 @@ Local first · Offline first · Open format · Plugin based · No cloud · No lo
 
 Generated CapturePacks should remain readable forever.
 
-## What's inside a `.capturepack`
+## What's inside a CapturePack
+
+The pack is a plain **folder** — browsable, editable, honest. ZIP (`.capturepack`) is
+created only when you want to share.
 
 ```
-example.capturepack  (a standard ZIP — or the same tree as a plain directory)
-├── manifest.json       # REQUIRED  format version, environment, inventory
-├── snapshot.png        # REQUIRED  the captured frame
-├── replay.webm         # OPTIONAL  last ~30 s of replay (or replay.mp4)
-├── annotations.json    # OPTIONAL  editable annotations (never burned into video)
-├── timeline.json       # OPTIONAL  machine-readable event log
-├── report.md           # OPTIONAL  human/LLM-readable summary
-└── plugins/            # OPTIONAL  structured metadata appended by plugins
+CapturePack_2026-07-27_143052/
+├── replay.webm              # original evidence — never modified
+├── replay_annotated.webm    # annotations rendered in; plays in any player
+├── snapshot.png             # the captured frame (original)
+├── annotations.json         # the true source: boxes, lifetimes, numbers, blur
+├── timeline.json            # machine-readable event log
+├── report.md                # your description, LLM-ready
+├── manifest.json            # format version, inventory
+├── README.md                # the first document a human reads
+├── skills/                  # context structured for AI (works without MCP)
+└── plugins/                 # structured metadata from integrations
 ```
 
 A screenshot-only pack — `manifest.json` + `snapshot.png`, nothing else — is fully valid.
