@@ -13,7 +13,11 @@
   --shadow: 0 1px 2px rgba(23, 23, 28, 0.04), 0 12px 32px rgba(23, 23, 28, 0.06);
 }
 
-html { color-scheme: light; scroll-behavior: smooth; }
+html {
+  color-scheme: light;
+  scroll-behavior: smooth;
+  overflow-x: hidden;
+}
 
 body {
   background: var(--bg);
@@ -24,13 +28,16 @@ body {
   flex-direction: column;
   min-height: 100vh;
   overflow-x: hidden;
+  max-width: 100vw;
 }
 
-/* aurora backdrop */
+/* aurora backdrop — kept inside the viewport; the blur does the spreading */
 body::before {
   content: "";
   position: fixed;
-  inset: -20vh -20vw auto -20vw;
+  top: -20vh;
+  left: 0;
+  right: 0;
   height: 90vh;
   background:
     radial-gradient(38% 45% at 22% 22%, rgba(124, 92, 255, 0.20), transparent 70%),
@@ -224,6 +231,16 @@ h1 { color: var(--text); }
   border-radius: 16px;
   padding: 24px 32px;
   box-shadow: 0 20px 48px rgba(23, 23, 28, 0.22);
+  /* wide content scrolls inside the card, never the page */
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 640px) {
+  .hero { padding: 8vh 0 4vh; }
+  .output pre { font-size: 0.76rem; padding: 16px 18px; }
+  .lang-pick { top: 12px; right: 12px; }
 }
 
 .output-note {
