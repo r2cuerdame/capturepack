@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CapturePack — Capture context, not screenshots.</title>
+  <meta name="description" content="The fastest way to explain something to humans and AI. Capture the last 30 seconds, annotate in 5, export a context package any LLM understands.">
+  <meta property="og:title" content="CapturePack">
+  <meta property="og:description" content="Capture context, not screenshots. The fastest way to explain something to humans and AI.">
+  <link rel="icon" type="image/png" href="assets/icon.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <main>
+    <section class="hero">
+      <img class="logo" src="assets/icon.png" alt="" width="56" height="56">
+      <h1>Capture context,<br>not screenshots.</h1>
+      <p class="sub">The fastest way to explain something<br>to humans and AI.</p>
+
+      <div class="buttons">
+        <a class="btn primary" id="download-btn" href="https://github.com/r2cuerdame/capturepack/releases/latest">
+          Download<span id="download-meta"></span>
+        </a>
+        <a class="btn" href="https://github.com/r2cuerdame/capturepack">GitHub</a>
+        <a class="btn" href="https://buymeacoffee.com/r2cuerdame" rel="noopener">☕ Buy me a coffee</a>
+      </div>
+      <p class="platform">Windows · free &amp; open source</p>
+    </section>
+
+    <section class="demo">
+      <img src="assets/demo.svg" alt="Demo: press Ctrl+Alt+C, the capture freezes, the mouse wheel moves through time, click an object, write an annotation, and a CapturePack is exported." loading="lazy">
+    </section>
+
+    <section class="output">
+      <pre aria-label="Contents of an exported CapturePack">issue.capturepack
+├─ replay.webm
+├─ snapshot.png
+├─ report.md
+├─ annotations.json
+├─ timeline.json
+└─ manifest.json</pre>
+      <p class="output-note">One file. Enough context for any developer — or any LLM.</p>
+    </section>
+  </main>
+
+  <footer>
+    <p>MIT License · Open Source</p>
+    <p class="why">Made because explaining bugs to AI<br>was taking too much time.</p>
+  </footer>
+
+  <script>
+    // Point Download at the latest installer directly; fall back to the releases page.
+    fetch('https://api.github.com/repos/r2cuerdame/capturepack/releases/latest')
+      .then(function (r) { return r.ok ? r.json() : null })
+      .then(function (rel) {
+        if (!rel) return
+        var exe = (rel.assets || []).find(function (a) { return a.name.endsWith('.exe') })
+        if (exe) document.getElementById('download-btn').href = exe.browser_download_url
+        if (rel.tag_name) document.getElementById('download-meta').textContent = ' ' + rel.tag_name
+      })
+      .catch(function () {})
+  </script>
+</body>
+</html>

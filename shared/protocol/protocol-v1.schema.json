@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/r2cuerdame/capturepack/shared/protocol/protocol-v1.schema.json",
+  "title": "CapturePack Protocol v1 message",
+  "type": "object",
+  "required": ["type", "protocol", "timestamp"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": ["dom.element.selected", "tab.updated", "url.changed", "host.hello"]
+    },
+    "protocol": { "const": 1 },
+    "timestamp": { "type": "number", "description": "Milliseconds, sender-relative" },
+    "tab": {
+      "type": "object",
+      "properties": {
+        "url": { "type": "string" },
+        "title": { "type": "string" }
+      },
+      "required": ["url", "title"]
+    },
+    "element": {
+      "type": "object",
+      "properties": {
+        "tag": { "type": "string" },
+        "id": { "type": "string" },
+        "role": { "type": "string" },
+        "text": { "type": "string", "maxLength": 200 },
+        "selector": { "type": "string" },
+        "bounds": {
+          "type": "object",
+          "properties": {
+            "x": { "type": "number" },
+            "y": { "type": "number" },
+            "width": { "type": "number" },
+            "height": { "type": "number" }
+          },
+          "required": ["x", "y", "width", "height"]
+        }
+      },
+      "required": ["tag", "selector", "bounds"]
+    },
+    "app": { "type": "string" },
+    "version": { "type": "string" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "const": "dom.element.selected" } } },
+      "then": { "required": ["tab", "element"] }
+    },
+    {
+      "if": { "properties": { "type": { "enum": ["tab.updated", "url.changed"] } } },
+      "then": { "required": ["tab"] }
+    }
+  ]
+}

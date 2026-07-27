@@ -1,0 +1,130 @@
+/* CapturePack landing — minimal by principle. One action: Download. */
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0e0e12;
+  --text: #ececf1;
+  --muted: #9a9aa6;
+  --accent: #7c5cff;
+  --line: #26262e;
+}
+
+html { color-scheme: dark; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+main {
+  width: min(860px, 92vw);
+  margin: 0 auto;
+  flex: 1;
+}
+
+/* Hero */
+.hero {
+  text-align: center;
+  padding: 9vh 0 4vh;
+}
+
+.logo { border-radius: 14px; margin-bottom: 22px; }
+
+h1 {
+  font-size: clamp(2rem, 5.4vw, 3.4rem);
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  line-height: 1.12;
+}
+
+.sub {
+  margin-top: 16px;
+  font-size: clamp(1.02rem, 2.2vw, 1.25rem);
+  color: var(--muted);
+}
+
+.buttons {
+  margin-top: 34px;
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.btn {
+  display: inline-block;
+  padding: 12px 22px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  color: var(--text);
+  text-decoration: none;
+  font-weight: 600;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.btn:hover { border-color: var(--muted); }
+
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.btn.primary:hover { background: #6b4ce6; }
+
+.platform {
+  margin-top: 14px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+/* Demo */
+.demo { padding: 3vh 0; }
+
+.demo img {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  display: block;
+}
+
+/* Output preview */
+.output {
+  padding: 3vh 0 6vh;
+  text-align: center;
+}
+
+.output pre {
+  display: inline-block;
+  text-align: left;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 0.95rem;
+  color: var(--text);
+  background: #14141a;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 20px 28px;
+}
+
+.output-note {
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+/* Footer */
+footer {
+  border-top: 1px solid var(--line);
+  text-align: center;
+  padding: 28px 0 36px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+footer .why { margin-top: 10px; font-style: italic; }

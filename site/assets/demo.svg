@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 540" font-family="system-ui, 'Segoe UI', sans-serif">
+  <style>
+    .cap { font-size: 22px; font-weight: 650; fill: #ececf1; text-anchor: middle; }
+    .dim { fill: #9a9aa6; }
+    g[id^="s"] { opacity: 0; }
+    /* 12s loop, six 2s steps */
+    #s1 { animation: st1 12s linear infinite; }
+    #s2 { animation: st2 12s linear infinite; }
+    #s3 { animation: st3 12s linear infinite; }
+    #s4 { animation: st4 12s linear infinite; }
+    #s5 { animation: st5 12s linear infinite; }
+    #s6 { animation: st6 12s linear infinite; }
+    @keyframes st1 { 0%,2% {opacity:0} 4%,14% {opacity:1} 16%,100% {opacity:0} }
+    @keyframes st2 { 0%,18% {opacity:0} 20%,31% {opacity:1} 33%,100% {opacity:0} }
+    @keyframes st3 { 0%,34% {opacity:0} 36%,48% {opacity:1} 50%,100% {opacity:0} }
+    @keyframes st4 { 0%,51% {opacity:0} 53%,64% {opacity:1} 66%,100% {opacity:0} }
+    @keyframes st5 { 0%,67% {opacity:0} 69%,81% {opacity:1} 83%,100% {opacity:0} }
+    @keyframes st6 { 0%,84% {opacity:0} 86%,97% {opacity:1} 99%,100% {opacity:0} }
+    /* frozen frame border appears from step 2 on */
+    #frozen { opacity: 0; animation: frz 12s linear infinite; }
+    @keyframes frz { 0%,18% {opacity:0} 20%,97% {opacity:1} 99%,100% {opacity:0} }
+    /* timeline playhead scrubs into the past during step 3 */
+    #playhead { animation: ph 12s linear infinite; }
+    @keyframes ph {
+      0%,34% { transform: translateX(0) }
+      48%,100% { transform: translateX(-190px) }
+    }
+    /* annotation elements appear from their step onward */
+    #objrect { opacity: 0; animation: obj 12s linear infinite; }
+    @keyframes obj { 0%,53% {opacity:0} 56%,97% {opacity:1} 99%,100% {opacity:0} }
+    #note { opacity: 0; animation: nt 12s linear infinite; }
+    @keyframes nt { 0%,69% {opacity:0} 72%,97% {opacity:1} 99%,100% {opacity:0} }
+  </style>
+
+  <!-- backdrop -->
+  <rect width="960" height="540" fill="#0e0e12"/>
+
+  <!-- caption line -->
+  <g>
+    <g id="s1"><text class="cap" x="480" y="52">Press  Ctrl + Alt + C</text></g>
+    <g id="s2"><text class="cap" x="480" y="52">The last 30 seconds freeze</text></g>
+    <g id="s3"><text class="cap" x="480" y="52">Mouse wheel moves through time</text></g>
+    <g id="s4"><text class="cap" x="480" y="52">Click the object</text></g>
+    <g id="s5"><text class="cap" x="480" y="52">Write the annotation</text></g>
+    <g id="s6"><text class="cap" x="480" y="52">issue.capturepack exported ✓</text></g>
+  </g>
+
+  <!-- mock screen -->
+  <g>
+    <rect x="140" y="86" width="680" height="360" rx="14" fill="#1a1a22" stroke="#26262e"/>
+    <!-- app window -->
+    <rect x="190" y="120" width="580" height="290" rx="10" fill="#202029" stroke="#2e2e38"/>
+    <rect x="190" y="120" width="580" height="34" rx="10" fill="#262630"/>
+    <circle cx="212" cy="137" r="5" fill="#3a3a46"/>
+    <circle cx="230" cy="137" r="5" fill="#3a3a46"/>
+    <!-- layout: sidebar + content -->
+    <rect x="208" y="170" width="130" height="220" rx="8" fill="#262631"/>
+    <rect x="356" y="170" width="300" height="140" rx="8" fill="#262631"/>
+    <!-- the "bug": button overflowing its container -->
+    <rect x="596" y="286" width="128" height="40" rx="8" fill="#7c5cff"/>
+    <text x="660" y="311" font-size="16" fill="#ffffff" text-anchor="middle">Submit</text>
+  </g>
+
+  <!-- frozen frame indicator -->
+  <g id="frozen">
+    <rect x="140" y="86" width="680" height="360" rx="14" fill="none" stroke="#7c5cff" stroke-width="2.5"/>
+    <!-- timeline -->
+    <rect x="190" y="466" width="580" height="6" rx="3" fill="#26262e"/>
+    <g id="playhead" transform="translate(0,0)">
+      <rect x="742" y="458" width="4" height="22" rx="2" fill="#7c5cff"/>
+    </g>
+    <text x="190" y="500" font-size="14" class="dim">-30s</text>
+    <text x="770" y="500" font-size="14" class="dim" text-anchor="end">now</text>
+  </g>
+
+  <!-- object selection -->
+  <g id="objrect">
+    <rect x="588" y="278" width="144" height="56" rx="8" fill="none" stroke="#ff3b30" stroke-width="2.5"/>
+    <circle cx="588" cy="334" r="4" fill="#ff3b30"/>
+  </g>
+
+  <!-- annotation note -->
+  <g id="note">
+    <rect x="374" y="336" width="270" height="38" rx="8" fill="#14141a" stroke="#3a3a46"/>
+    <text x="388" y="361" font-size="16" fill="#ececf1">Submit overflows its container</text>
+  </g>
+</svg>

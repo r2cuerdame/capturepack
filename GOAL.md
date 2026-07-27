@@ -1,6 +1,8 @@
 # CapturePack
 
 > **Capture context, not screenshots.**
+>
+> **Better input. Better answers.**
 
 ## Essence
 
@@ -107,6 +109,31 @@ Generated CapturePacks should remain readable forever.
 | Secondary | Developers begin attaching CapturePack files instead of screenshots. |
 | Operational | Install once from a GitHub Release, then keep using it for a month without any manual reinstall. |
 | Long-term | CapturePack becomes an open specification adopted by other tools. |
+
+---
+
+## Landing Page (GitHub Pages)
+
+The goal of the page is not to explain the product — it is to drive the Download click.
+
+- Static site served by GitHub Pages from `site/` in this repository (no separate repo).
+- One page, minimal scroll, no signup/server/database, no flashy animation.
+- A visitor must understand the product within 5 seconds; the only action is **Download**.
+
+Structure:
+
+- **Hero** — "Capture context, not screenshots." / "The fastest way to explain something
+  to humans and AI." Exactly three buttons: **Download**, **GitHub**, **☕ Buy me a coffee**.
+- **Demo** — one ~10s GIF below the hero: Ctrl+Alt+C → capture freezes → mouse wheel moves
+  through time → click object → write annotation → CapturePack exported.
+- **Output preview** — the generated pack tree (manifest.json, snapshot.png, annotations.json,
+  timeline.json, report.md, replay video).
+- **Footer** — MIT License · Open Source · "Made because explaining bugs to AI was taking
+  too much time."
+
+Download always points at the latest GitHub Release; release info is auto-reflected
+(client-side fetch of the latest release, falling back to the releases page).
+Deployment: `.github/workflows/pages.yml` publishes `site/` on push to main.
 
 ---
 
@@ -320,6 +347,160 @@ Plugins generate structured events.
 
 ---
 
+## Chrome Extension
+
+CapturePack is not a single Windows application. An official Chrome Extension is developed
+alongside it to obtain DOM information. The extension is part of CapturePack, not a separate
+product.
+
+**Purpose** — deliver real DOM objects, not screen pixels. The user clicks a button on the
+replay; CapturePack stores the button's meaning: selector, id, role, text, bounds, url.
+This information is linked to annotations.
+
+**Structure** — managed inside this repository:
+
+```
+extensions/
+└── chrome/
+    ├── manifest.json
+    ├── background.js
+    ├── content-script.js
+    └── native-host/
+shared/
+└── protocol/
+```
+
+**Extension role (minimum only)** — current URL, tab title, DOM element under the mouse,
+user-selected element, CSS selector generation, element bounds, tab/URL change events.
+The DOM is never streamed continuously; information is sent only at the moment it is needed.
+
+**Application role** — replay buffer, timeline, annotation, export, UI, package creation.
+The extension handles DOM metadata only.
+
+**Communication**
+
+```
+Chrome Extension
+      │  Native Messaging
+      ▼
+CapturePack Native Host
+      │  IPC
+      ▼
+CapturePack Application
+```
+
+The extension talks only to CapturePack. No cloud servers.
+
+**Shared protocol** — application and extension speak the same protocol, managed in
+`shared/protocol/`. Example:
+
+```json
+{
+  "type": "dom.element.selected",
+  "timestamp": 18420,
+  "tab": { "url": "...", "title": "..." },
+  "element": {
+    "tag": "button", "id": "save", "role": "button", "text": "Save",
+    "selector": "#save",
+    "bounds": { "x": 100, "y": 200, "width": 120, "height": 40 }
+  }
+}
+```
+
+**Phases** — Phase 1: URL, tab title, DOM element selection, selector, bounds.
+Phase 2: DOM snapshot, Shadow DOM, iframes, SPA route-change detection.
+
+**Distribution** — app, extension, and protocol share one version (CapturePack 0.1.0 =
+Chrome Extension 0.1.0 = Protocol v1). Initially loaded unpacked in developer mode;
+Chrome Web Store distribution comes after stabilization.
+
+**Philosophy** — the extension's purpose is not to store the DOM. It is to make CapturePack
+understand meaningful objects (context) instead of screen pixels.
+
+### Extension Install & Management UX
+
+The extension is part of CapturePack. Users must never hunt through browser settings or
+developer mode — every install and status check starts and ends inside the CapturePack app.
+The user presses one button: **Install**. CapturePack handles the rest.
+
+**Settings UI** — add an Integrations menu:
+
+```
+Settings
+└── Integrations
+    └── Chrome DOM Capture
+```
+
+- Not installed: status "Not Installed" + [ Install Chrome Extension ].
+- Installed: Extension Connected · Native Host Installed · Protocol v1 · Version, plus
+  [ Open Extension Settings ] [ Reinstall ] [ Uninstall ]. Status visible at a glance.
+
+**Install flow** — starts from CapturePack: Install button → open Chrome Web Store → user
+clicks "Add to Chrome" → CapturePack installs the Native Messaging host → connection
+verified → Connected.
+
+**Developer mode** (before Web Store listing): [ Open chrome://extensions ]
+[ Open Extension Folder ] [ Copy Extension Path ] — CapturePack opens the needed pages
+and folders automatically.
+
+**Native Messaging (installer responsibilities)** — the CapturePack installer automatically:
+installs the native host, generates the native messaging manifest, registers the Windows
+Registry key, registers the extension ID, links the CapturePack executable, and cleans up
+registry + manifest on uninstall. No manual setup, ever.
+
+**Diagnostics** — CapturePack always knows the extension state:
+"✔ Extension Installed / ✔ Native Host Installed / ✔ Connected / ✔ Protocol Compatible",
+"✖ Extension Missing [ Install ]", or "⚠ Version Mismatch (Extension 0.1.0, CapturePack
+0.2.0) [ Update ]".
+
+**First run** — if the extension is absent: "Chrome context capture is unavailable.
+[ Install ] [ Not now ]". Never force the install; always available later in Settings.
+
+### Integration Operations (post-install experience)
+
+What matters most is the experience after installation:
+
+1. **Auto-update (most important)** — a version gap between app and extension breaks UX.
+   The app always checks the protocol version:
+   "CapturePack 0.3.0 / Chrome Extension 0.2.0 → Update available [ Update Extension ]".
+2. **Browser support structure** — extensible from day one, not Chrome-hardcoded:
+   ✓ Chrome; Coming soon: Edge, Brave, Arc, Firefox. (Chromium-family browsers can reuse
+   the extension almost as-is.)
+3. **Health check** — six-point diagnostics, invaluable for bug reports:
+   ✔ Extension Installed · ✔ Native Host Installed · ✔ IPC Connected ·
+   ✔ Protocol Compatible · ✔ Permissions Granted · ✔ Content Script Running.
+4. **[Test Connection] button** — one click shows: current tab URL, DOM count,
+   element under mouse, round-trip latency. Solves most install problems alone.
+5. **Permission display** — explain why the extension is needed:
+   ✓ Read current page · ✓ Read selected DOM element · ✗ No browsing history ·
+   ✗ No passwords · ✗ No cloud upload. Open source makes this credible.
+6. **Privacy (near-mandatory)** — "Everything stays on your PC. No cloud. No telemetry.
+   No page data leaves your computer."
+7. **Plugin structure** — future integrations (Chrome, Windows UI Automation, Unity,
+   Unreal, VS Code, JetBrains, Terminal, Git) all Enable/Disable from the same UI.
+8. **Status icons** — on the main surface, not only Settings:
+   🟢 Chrome Connected · 🟢 Replay Running · ⚪ UI Automation Disabled.
+
+### Plugin Manager
+
+Settings is a **Plugin Manager**. The Chrome extension gets no special treatment — it is
+one plugin among equals, sharing the exact structure future integrations will use:
+
+```
+Plugins
+🟢 Chrome DOM
+🟢 Windows Window Tracking
+⚪ UI Automation
+⚪ Unreal
+⚪ Unity
+⚪ VSCode
+⚪ Git
+```
+
+With this design CapturePack naturally grows into a plugin-based context platform.
+
+---
+
 ## CapturePack Specification
 
 ```
@@ -351,6 +532,49 @@ Annotation speed is everything.
 - Undo must be instant.
 - Annotation should remain editable.
 - Never burn annotations permanently into videos.
+
+---
+
+## Editor Input System
+
+The editor is not a static screenshot viewer — it scrubs the frozen replay in time.
+The user should finish **time selection → object selection → description** with the mouse alone.
+
+**Final UX**
+
+```
+Ctrl+Alt+C
+→ Freeze the last 30 seconds
+→ Open the editor on the last frame
+
+Wheel up        → toward the past
+Wheel down      → toward the present
+
+Left click      → semantic object auto-selection → type description immediately (V3;
+                  MVP falls back to manual selection)
+
+Right-click drag → manual rectangle → type description immediately
+
+Space + drag    → pan the zoomed view
+Ctrl + wheel    → zoom in/out
+Timeline drag   → coarse navigation across the buffer
+```
+
+**Wheel time navigation**
+
+Time-based movement, independent of the video's FPS:
+
+| Input | Movement |
+| --- | --- |
+| Wheel | ±100 ms |
+| Shift + wheel | ±1 s |
+| Alt + wheel | ±1 frame |
+| Ctrl + wheel | zoom |
+
+- Sensitivity is configurable in settings.
+- Wheel direction: up = past, down = future — with an **invert option** for users with
+  video-editor habits.
+- Scrubbing while playing: pause instantly and scrub to that point.
 
 ---
 

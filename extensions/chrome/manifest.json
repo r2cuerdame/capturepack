@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "CapturePack",
+  "description": "Sends DOM context (selector, role, bounds) to the CapturePack app. Part of CapturePack, not a separate product.",
+  "version": "0.1.0",
+  "permissions": ["nativeMessaging", "activeTab", "scripting", "tabs"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "CapturePack: pick an element"
+  }
+}

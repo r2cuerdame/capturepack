@@ -1,0 +1,9 @@
+{
+  "name": "com.capturepack.host",
+  "description": "CapturePack native messaging host (installed and registered automatically by the CapturePack app installer)",
+  "path": "REPLACED_BY_INSTALLER\\capturepack-host.exe",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://REPLACED_BY_INSTALLER_WITH_EXTENSION_ID/"
+  ]
+}
