@@ -199,16 +199,53 @@ updates the same pack in place; **Save** (Enter) finalizes it. Cancelling the ed
 the raw capture; a crash can never lose one. The UI verb is **Save**, not Export —
 "export" survives only as the SPEC's internal event name (`core.export.created`).
 
-**Output layout** — not a bare zip dropped in one folder. Every capture lands in a date
-folder as BOTH forms (equally valid per SPEC):
+**Output layout — Folder First.** The primary save unit is always a **folder**; ZIP is not
+the original, only an optional distribution package created when the user clicks
+[ Create ZIP ]. (This supersedes the earlier date-folder + automatic zip layout — the date
+lives in the folder name now.)
 
 ```
-CapturePack/
-└── 2026-07-27/
-    ├── capture-143059/             ← extracted, browsable
-    │   ├── manifest.json …
-    └── capture-143059.capturepack  ← the shareable file
+CapturePack_2026-07-27_143052/
+├── replay.webm              ← original evidence, never modified
+├── replay_annotated.webm    ← annotations rendered in; plays in any player
+├── snapshot.png
+├── annotations.json         ← the true source: annotations, lifetime, DOM,
+│                              tracking, style, bounds — replay_annotated is
+│                              always regenerable from it
+├── timeline.json            ← all time info: window, DOM, focus, mouse,
+│                              keyboard, plugin metadata
+├── report.md                ← the user's own description
+├── manifest.json            ← format version, file inventory, plugins, created
+├── README.md                ← the FIRST document a human reads
+├── skills/                  ← context structured for LLMs, readable without MCP
+│   ├── overview.md          ← whole-pack summary
+│   ├── timeline.md          ├── annotation.md
+│   ├── dom.md               └── project.md
+└── plugins/
 ```
+
+**README.md (human-first)** — Created, Application, Duration, Description, Files,
+How to use (1. open replay_annotated 2. read report.md 3. open via CapturePack MCP).
+Reading README alone must be enough for a person to understand the whole pack.
+
+**skills/ (AI-first)** — structured so an LLM understands the pack immediately even
+without the MCP server.
+
+**Save pipeline** — Save → create folder → metadata → original replay →
+annotated-replay render (may run in the background).
+
+**Save-complete UI**
+
+```
+Saved  CapturePack_2026-07-27_143052
+[ Open Folder ] [ Copy Folder Path ] [ Create ZIP ] [ Copy Prompt ]
+```
+
+**Principles** — the folder is the source; ZIP is distribution. replay is evidence;
+replay_annotated is the instantly-understandable result; annotations.json is the true
+original. A person should understand from replay_annotated alone; an AI should
+understand from README.md + skills/ alone. One CapturePack must carry complete context
+for both.
 
 ---
 
