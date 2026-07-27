@@ -901,6 +901,22 @@ Time-based movement, independent of the video's FPS:
   video-editor habits.
 - Scrubbing while playing: pause instantly and scrub to that point.
 
+### Replay Trim
+
+The timebar carries **in/out trim handles** (default: the full buffer). Keep only the
+part that matters:
+
+- Drag the handles, or press **I** / **O** to set the in/out point at the current scrub
+  position; double-click a handle to reset it. A chip shows the trimmed length.
+- **Save writes the trimmed range as `replay.webm`** (re-encoded through the render
+  pipeline) and renders `replay_annotated` over the same range. Annotations, timeline,
+  and `snapshot_t_ms` rebase onto the trimmed clock; the manifest records
+  `trim_offset_ms` for provenance.
+- Annotations whose lifetime falls entirely outside the trim are dropped — with a count
+  hint shown before saving.
+- Trim exists only in the initial capture session. Re-edit (History) cannot trim
+  further: the pack's replay is already the original evidence.
+
 ### Annotation Interaction (toolless)
 
 The editor minimizes annotation tool menus. Selection boxes, object selection, deletion,
