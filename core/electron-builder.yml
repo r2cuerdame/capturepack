@@ -6,6 +6,7 @@ files:
   - dist/**
   - package.json
 win:
+  icon: build/icon.ico
   target:
     - nsis
   artifactName: CapturePack-Setup-${version}.${ext}

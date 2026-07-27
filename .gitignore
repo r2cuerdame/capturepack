@@ -2,6 +2,8 @@ node_modules/
 dist/
 out/
 build/
+# electron-builder buildResources (icon.ico) must ship with the repo
+!core/build/
 *.log
 .DS_Store
 Thumbs.db
