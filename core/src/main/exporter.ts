@@ -98,9 +98,83 @@ export function isoWithOffset(date: Date): string {
   )
 }
 
-export async function exportPack(input: ExportInput): Promise<string> {
+/** Identity of a pack saved at capture time; finalizing updates it in place. */
+export interface PackHandle {
+  id: string
+  dirPath: string
+  packPath: string
+}
+
+export interface InitialSaveInput {
+  snapshotPng: Buffer
+  width: number
+  height: number
+  capturedAt: Date
+  replayWebm: Buffer | null
+  replayDurationMs: number
+  timeline: TimelineFile
+  outputDir: string
+}
+
+/**
+ * Save-first: writes the raw capture the moment the hotkey fires, before the
+ * editor opens (GOAL "Save-first capture"). A crash or cancel never loses a
+ * capture. Silent: no reveal, no clipboard — that happens on finalize.
+ */
+export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
+  const id = randomUUID()
   const manifest = buildManifest({
-    id: randomUUID(),
+    id,
+    createdAt: input.capturedAt,
+    generatorVersion: app.getVersion(),
+    title: '',
+    note: '',
+    osVersion: release(),
+    screens: physicalScreens(),
+    hasReplay: input.replayWebm !== null,
+    replayDurationMs: input.replayDurationMs,
+    snapshotTMs: null,
+  })
+  const annotationsFile: AnnotationsFile = {
+    reference_width: input.width,
+    reference_height: input.height,
+    annotations: [],
+  }
+  const report = buildReport(manifest, annotationsFile)
+
+  // Layout: outputDir/YYYY-MM-DD/capture-HHmmss/ (extracted, browsable) plus
+  // outputDir/YYYY-MM-DD/capture-HHmmss.capturepack (the shareable file).
+  // Both forms are equally valid packs per SPEC §3.2.
+  const dayDir = join(input.outputDir, dayFolder(input.capturedAt))
+  await mkdir(dayDir, { recursive: true })
+  const { dirPath, packPath } = uniquePackPaths(dayDir, input.capturedAt)
+  try {
+    await mkdir(dirPath)
+    await writeFile(join(dirPath, 'manifest.json'), toJson(manifest))
+    await writeFile(join(dirPath, 'snapshot.png'), input.snapshotPng)
+    await writeFile(join(dirPath, 'annotations.json'), toJson(annotationsFile))
+    await writeFile(join(dirPath, 'timeline.json'), toJson(input.timeline))
+    await writeFile(join(dirPath, 'report.md'), report, 'utf8')
+    if (input.replayWebm !== null) {
+      await writeFile(join(dirPath, 'replay.webm'), input.replayWebm)
+    }
+    await zipDir(dirPath, packPath)
+    return { id, dirPath, packPath }
+  } catch (err) {
+    // Never leave a half-written pack behind.
+    await rm(dirPath, { recursive: true, force: true })
+    await rm(packPath, { force: true })
+    throw err
+  }
+}
+
+/**
+ * Finalize after annotation: updates the save-first pack in place (same id,
+ * same paths), then reveals it and copies the file to the clipboard.
+ */
+export async function updatePack(handle: PackHandle, input: ExportInput): Promise<string> {
+  const manifest = buildManifest({
+    id: handle.id,
     createdAt: input.capturedAt,
     generatorVersion: app.getVersion(),
     title: input.title,
@@ -120,36 +194,28 @@ export async function exportPack(input: ExportInput): Promise<string> {
   const timeline = withExportEvent(input.timeline, new Date())
   const report = buildReport(manifest, annotationsFile)
 
-  // Layout: outputDir/YYYY-MM-DD/capture-HHmmss/ (extracted, browsable) plus
-  // outputDir/YYYY-MM-DD/capture-HHmmss.capturepack (the shareable file).
-  // Both forms are equally valid packs per SPEC §3.2.
-  const dayDir = join(input.outputDir, dayFolder(input.capturedAt))
-  await mkdir(dayDir, { recursive: true })
-  const { dirPath, packPath } = uniquePackPaths(dayDir, input.capturedAt)
-  try {
-    await mkdir(dirPath)
-    await writeFile(join(dirPath, 'manifest.json'), toJson(manifest))
-    await writeFile(join(dirPath, 'snapshot.png'), input.snapshotPng)
-    await writeFile(join(dirPath, 'annotations.json'), toJson(annotationsFile))
-    await writeFile(join(dirPath, 'timeline.json'), toJson(timeline))
-    await writeFile(join(dirPath, 'report.md'), report, 'utf8')
-    if (input.replayWebm !== null) {
-      await writeFile(join(dirPath, 'replay.webm'), input.replayWebm)
-    }
-
-    const zip = new AdmZip()
-    zip.addLocalFolder(dirPath)
-    await zip.writeZipPromise(packPath)
-
-    shell.showItemInFolder(packPath)
-    if (input.copyToClipboard) copyFileToClipboard(packPath)
-    return packPath
-  } catch (err) {
-    // Never leave a half-written pack behind.
-    await rm(dirPath, { recursive: true, force: true })
-    await rm(packPath, { force: true })
-    throw err
+  await writeFile(join(handle.dirPath, 'manifest.json'), toJson(manifest))
+  await writeFile(join(handle.dirPath, 'snapshot.png'), input.snapshotPng)
+  await writeFile(join(handle.dirPath, 'annotations.json'), toJson(annotationsFile))
+  await writeFile(join(handle.dirPath, 'timeline.json'), toJson(timeline))
+  await writeFile(join(handle.dirPath, 'report.md'), report, 'utf8')
+  if (input.replayWebm === null) {
+    // The user excluded the replay at save time (e.g. blur privacy).
+    await rm(join(handle.dirPath, 'replay.webm'), { force: true })
+  } else {
+    await writeFile(join(handle.dirPath, 'replay.webm'), input.replayWebm)
   }
+  await zipDir(handle.dirPath, handle.packPath)
+
+  shell.showItemInFolder(handle.packPath)
+  if (input.copyToClipboard) copyFileToClipboard(handle.packPath)
+  return handle.packPath
+}
+
+async function zipDir(dirPath: string, packPath: string): Promise<void> {
+  const zip = new AdmZip()
+  zip.addLocalFolder(dirPath)
+  await zip.writeZipPromise(packPath, { overwrite: true })
 }
 
 /** Local-date folder name for a capture, e.g. 2026-07-27. */

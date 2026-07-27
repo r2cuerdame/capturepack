@@ -193,6 +193,12 @@ A `.capturepack` file (a standard ZIP) contains:
 
 No plugins required. Everything works locally.
 
+**Save-first capture** — the moment Ctrl+Alt+C is pressed, the raw capture (snapshot +
+replay + manifest) is saved to disk immediately, BEFORE the editor opens. Annotating then
+updates the same pack in place; **Save** (Enter) finalizes it. Cancelling the editor keeps
+the raw capture; a crash can never lose one. The UI verb is **Save**, not Export —
+"export" survives only as the SPEC's internal event name (`core.export.created`).
+
 **Output layout** — not a bare zip dropped in one folder. Every capture lands in a date
 folder as BOTH forms (equally valid per SPEC):
 

@@ -1,4 +1,5 @@
-// Capture flow state machine: snapshot -> replay fetch -> fullscreen editor -> export.
+// Capture flow state machine: snapshot -> replay fetch -> save-first ->
+// fullscreen editor -> in-place pack update on Save.
 import { app, BrowserWindow, dialog, ipcMain, Notification, screen } from 'electron'
 import type { IpcMainEvent } from 'electron'
 import { randomUUID } from 'node:crypto'
@@ -7,7 +8,7 @@ import { IPC } from '../shared/ipc'
 import type { EditorAnnotationAddedPayload, EditorExportPayload, EditorInitPayload } from '../shared/ipc'
 import type { Annotation, Settings, TimelineEvent, TimelineFile } from '../shared/types'
 import { requestReplay, takeSnapshot } from './capture'
-import { exportPack, type ExportInput } from './exporter'
+import { savePack, updatePack, type ExportInput, type InitialSaveInput, type PackHandle } from './exporter'
 
 const REPLAY_TIMEOUT_MS = 5_000
 
@@ -36,6 +37,26 @@ async function runFlow(captureWindow: BrowserWindow, settings: Settings): Promis
   const t0Ms = triggerAt - replayDurationMs
 
   const events: TimelineEvent[] = [{ t_ms: replayDurationMs, type: 'core.capture.triggered', source: 'core' }]
+
+  // Save-first (GOAL): the raw capture hits disk before the editor opens, so a
+  // cancelled editor or a crash never loses it. Failure is non-fatal — the
+  // editor still opens and Save retries the write from scratch.
+  const initialSave: InitialSaveInput = {
+    snapshotPng: snap.png,
+    width: snap.width,
+    height: snap.height,
+    capturedAt: new Date(triggerAt),
+    replayWebm: replay === null ? null : replay.buffer,
+    replayDurationMs,
+    timeline: { t0: new Date(t0Ms).toISOString(), events: [...events] },
+    outputDir: settings.outputDir,
+  }
+  let handle: PackHandle | null = null
+  try {
+    handle = await savePack(initialSave)
+  } catch (err) {
+    console.error('capturepack: save-first failed:', errorMessage(err))
+  }
 
   const editor = createEditorWindow()
   editor.once('ready-to-show', () => {
@@ -100,10 +121,12 @@ async function runFlow(captureWindow: BrowserWindow, settings: Settings): Promis
   }
 
   try {
-    const packPath: string = await exportPack(input)
+    // Save-first failed earlier? Retry the initial write now, then finalize.
+    if (handle === null) handle = await savePack(initialSave)
+    const packPath: string = await updatePack(handle, input)
     new Notification({ title: 'CapturePack saved', body: path.basename(packPath) }).show()
   } catch (err) {
-    dialog.showErrorBox('CapturePack export failed', errorMessage(err))
+    dialog.showErrorBox('CapturePack save failed', errorMessage(err))
   }
 }
 
