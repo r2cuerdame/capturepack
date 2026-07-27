@@ -982,6 +982,11 @@ annotation is blurred. The save-complete screen warns:
 "Original replay contains unredacted content. Share replay_annotated or create a
 sanitized ZIP." A future sanitized-ZIP option excludes replay + original snapshot.png.
 
+**No include-replay toggle** — the editor has no option to exclude the replay from the
+pack. Saving always keeps everything (save-first philosophy); what leaves the machine is
+decided at SHARE time (annotated video, on-demand ZIP, future sanitized ZIP). Replay
+length is the trim feature's job, not a checkbox.
+
 Data example:
 
 ```json
