@@ -503,6 +503,62 @@ With this design CapturePack naturally grows into a plugin-based context platfor
 
 ---
 
+## Annotation Timeline & Lifetime
+
+Annotations are not drawings on a screen — CapturePack is a program that creates
+**Context with time**. Every annotation has a start time and an end time.
+
+**Two kinds of annotations**
+
+1. **Tracked Element** — automatically selected objects (Chrome DOM, Windows UI Automation;
+   later Unity objects, Unreal widgets/actors, HTML elements). Selecting one stores the
+   OBJECT, not coordinates: selector, AutomationId, role, text, bounds.
+2. **Manual Annotation** — user-drawn rectangle, arrow, circle, highlight, pin (and text/blur).
+
+**Tracked Element lifetime** — alive for as long as the object exists. CapturePack tracks
+the same object frame by frame; when its bounding box moves, the annotation moves with it.
+Tracking ends automatically when the element is removed from the DOM / UI Automation tree,
+the window closes, or the capture ends. The user never manages duration.
+UI: an × button always at the top-right — clicking it (or Delete) removes the annotation,
+its tracking, and the linked context; restorable with Ctrl+Z.
+
+**Manual Annotation lifetime** — default duration **1.0 s**, centered on the current time
+(−0.5 s → +0.5 s), auto-clamped at the capture edges. When selected, the duration label
+("1.0s") shows at the top-left; clicking it opens the editor (duration or start/end offsets)
+with quick presets: 0.5s · 1s · 2s · 5s · 10s · Until End · Entire Capture.
+
+**Timeline visualization** — the timeline shows every annotation's lifetime as bars;
+tracked elements' bars grow automatically to the object's lifespan:
+
+```
+Rectangle       ███████
+Arrow           ██
+Tracked Button  ██████████████████
+```
+
+**UI summary** — top-left: duration (manual only) · top-right: × delete.
+
+**Settings**
+
+```
+Settings └── Annotation
+  Default Manual Duration: 1.0 s
+  Manual Duration Presets: 0.5 / 1 / 2 / 5 / 10
+  Auto Track Elements: ✓
+  Delete Key Removes Annotation: ✓
+  Show Duration Label: ✓
+```
+
+**UX principles** — selecting an object starts tracking automatically; users never manage
+tracked lifetimes; only manual annotations have editable durations; duration is always one
+click away at the top-left; delete via × and Delete key; the timeline visualizes every
+lifetime.
+
+**Core philosophy** — a Tracked Element is "an annotation that lives while the object
+exists". A Manual Annotation is "an annotation that exists for the time the user chose".
+
+---
+
 ## Always-On MCP Server
 
 CapturePack is not only a program that creates .capturepack files — it ships an official,
