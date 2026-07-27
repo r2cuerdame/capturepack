@@ -143,6 +143,19 @@ Deployment: `.github/workflows/pages.yml` publishes `site/` on push to main.
 
 ---
 
+## Development Practice: Docs Follow Every Fix
+
+Every fix or feature updates ALL public surfaces in the same pass — none may drift:
+
+- **GitHub Issues** — bugs get an issue (cause, fix, commit) even when fixed immediately;
+  user-reported pain links back to the usage journal.
+- **README** — reflects the current released behavior.
+- **Landing page** — capturepack.dev stays truthful (roadmap Now/Next, download state).
+- **Release notes** — every tag ships human-readable notes on the GitHub Release
+  (what changed, what was fixed, upgrade impact).
+
+---
+
 ## Development Practice: Usage Journal
 
 Open GitHub Issues from day one — and don't use them only for feature requests.
