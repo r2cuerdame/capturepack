@@ -271,6 +271,24 @@ without the MCP server.
 **Save pipeline** — Save → create folder → metadata → original replay →
 annotated-replay render (may run in the background).
 
+**Annotated keyframes (LLM-first)** — LLMs read images, not videos. The render pass also
+saves an annotated STILL at every annotation state change (each box's appearance /
+disappearance / edit point; changes within ~300 ms merge into one frame):
+
+```
+frames/
+├── frame-01_00-03.200.png    ← box ① appears
+├── frame-02_00-05.400.png    ← box ② appears, ① still visible
+└── frame-03_00-08.100.png    ← blur box ③
+```
+
+- Declared in the manifest as `media.keyframes: [{file, t_ms}]`.
+- report.md / README.md / skills reference the frames inline (markdown images), so an
+  LLM reconstructs the whole story without decoding video.
+- MCP `capturepack_frame(time)` returns the nearest rendered keyframe (removing the v0
+  snapshot-only limitation).
+- Screenshot-only packs still get one annotated keyframe.
+
 **Save-complete UI**
 
 ```
