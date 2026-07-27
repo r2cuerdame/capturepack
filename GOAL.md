@@ -1035,6 +1035,11 @@ Blur toggle · (right edge) Delete:
 
 No Pin/Rectangle/Blur tool menus exist.
 
+**The header appears with the description input** — the moment a right-drag ends, the
+box header (`[#] [1.0s] [Blur] [×]`) shows *together with* the text field, so number,
+duration, and blur can be set while typing, without committing first and re-selecting.
+Toggling a control never steals focus from the input; Enter commits the whole box.
+
 - **Number toggle** — [#] click → numbered:true, shows the auto-computed number ([①]);
   click again → off; remaining numbered boxes renumber immediately. Numbers are never
   typed by the user; identity is always annotation_id.
