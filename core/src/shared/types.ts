@@ -128,6 +128,10 @@ export interface Settings {
   copyToClipboard: boolean
   replaySeconds: number
   fps: number
+  // Capture display: "cursor" (default — follow the mouse at trigger; a
+  // recorder pair runs per connected display) or an Electron display id as a
+  // string (fixed display — one recorder pair, lower CPU).
+  captureDisplay: string
   scrubInvert: boolean
   scrubSensitivityMs: number
   // Default lifetime duration (ms) stamped on manual annotations in the editor.

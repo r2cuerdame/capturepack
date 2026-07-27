@@ -15,6 +15,7 @@ function defaultSettings(): Settings {
     copyToClipboard: true,
     replaySeconds: 30,
     fps: 15,
+    captureDisplay: 'cursor',
     scrubInvert: false,
     scrubSensitivityMs: 100,
     defaultManualDurationMs: 1000,
@@ -64,8 +65,12 @@ export function loadSettings(): Settings {
   // --output-dir=<path> overrides outputDir for this run only. Applied after
   // saveSettings so the override is never persisted.
   const override = outputDirOverride(process.argv)
+  activeOutputDirOverride = override
   return override !== null ? { ...settings, outputDir: override } : settings
 }
+
+// Set by loadSettings when a --output-dir=<path> override is active this run.
+let activeOutputDirOverride: string | null = null
 
 function outputDirOverride(argv: string[]): string | null {
   for (const arg of argv) {
@@ -83,6 +88,87 @@ export function saveSettings(settings: Settings): void {
   fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n')
 }
 
+// An EXPLICIT outputDir choice from the settings GUI supersedes an active
+// --output-dir override for the rest of the run — even when the chosen folder
+// happens to equal the override path. persistSettings alone cannot tell that
+// intent apart from an untouched override (the values are identical), so the
+// settings:set pipeline calls this whenever the patch explicitly carried an
+// applied outputDir, ensuring the user's pick persists across restarts.
+export function clearOutputDirOverride(): void {
+  activeOutputDirOverride = null
+}
+
+// Persistence entry point for the settings GUI. A --output-dir override applies
+// to this run only (loadSettings contract), so while it is active and the user
+// has not explicitly chosen a new folder, the outputDir written to disk is the
+// one already stored there — never the override.
+export function persistSettings(settings: Settings): void {
+  if (activeOutputDirOverride !== null && settings.outputDir === activeOutputDirOverride) {
+    saveSettings({ ...settings, outputDir: onDiskOutputDir() })
+    return
+  }
+  // The user picked a different folder: the override is superseded from now on.
+  if (settings.outputDir !== activeOutputDirOverride) activeOutputDirOverride = null
+  saveSettings(settings)
+}
+
+function onDiskOutputDir(): string {
+  try {
+    let text = fs.readFileSync(settingsFilePath(), 'utf8')
+    // Editors commonly save UTF-8 with a BOM, which JSON.parse rejects.
+    if (text.charCodeAt(0) === 0xfeff) text = text.slice(1)
+    const parsed: unknown = JSON.parse(text)
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const value = (parsed as Record<string, unknown>).outputDir
+      if (typeof value === 'string' && value.length > 0) return value
+    }
+  } catch {
+    // Missing/corrupt file: fall through to the default.
+  }
+  return defaultSettings().outputDir
+}
+
+// Exhaustive by construction: Record<keyof Settings, true> fails to compile
+// when Settings gains or loses a key, keeping GUI patch filtering in sync.
+const SETTINGS_KEY_SET: Record<keyof Settings, true> = {
+  autoUpdateCheck: true,
+  outputDir: true,
+  copyToClipboard: true,
+  replaySeconds: true,
+  fps: true,
+  captureDisplay: true,
+  scrubInvert: true,
+  scrubSensitivityMs: true,
+  defaultManualDurationMs: true,
+  showDurationLabel: true,
+  mcpEnabled: true,
+  mcpPort: true,
+  mcpAutoStart: true,
+  mcpReadOnly: true,
+  mcpWatchExportFolder: true,
+  mcpLogRequests: true,
+}
+const SETTINGS_KEYS = Object.keys(SETTINGS_KEY_SET) as Array<keyof Settings>
+
+// Applies a partial update (settings GUI) onto `current`: recognized keys are
+// validated with the same per-key rules as loadSettings — an invalid value is
+// rejected and the current value stays — and unknown keys in the patch are
+// dropped, so nothing invalid ever reaches settings.json.
+export function applyPartial(current: Settings, patch: Record<string, unknown>): Settings {
+  const raw: Record<string, unknown> = { ...current }
+  for (const key of SETTINGS_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(patch, key)) raw[key] = patch[key]
+  }
+  return mergeSettings(current, raw)
+}
+
+// "cursor" (follow the mouse) or an Electron display id as digits. A stale but
+// well-formed id is accepted here — capture falls back to primary at runtime
+// when the display is no longer connected.
+function isCaptureDisplay(value: string): boolean {
+  return value === 'cursor' || /^\d+$/.test(value)
+}
+
 // Known keys are validated against defaults; unknown keys ride along so a newer
 // version's settings survive a downgrade.
 function mergeSettings(base: Settings, raw: Record<string, unknown>): Settings {
@@ -93,6 +179,10 @@ function mergeSettings(base: Settings, raw: Record<string, unknown>): Settings {
     replaySeconds:
       typeof raw.replaySeconds === 'number' && raw.replaySeconds > 0 ? raw.replaySeconds : base.replaySeconds,
     fps: typeof raw.fps === 'number' && raw.fps > 0 ? raw.fps : base.fps,
+    captureDisplay:
+      typeof raw.captureDisplay === 'string' && isCaptureDisplay(raw.captureDisplay)
+        ? raw.captureDisplay
+        : base.captureDisplay,
     scrubInvert: typeof raw.scrubInvert === 'boolean' ? raw.scrubInvert : base.scrubInvert,
     scrubSensitivityMs:
       typeof raw.scrubSensitivityMs === 'number' && raw.scrubSensitivityMs > 0

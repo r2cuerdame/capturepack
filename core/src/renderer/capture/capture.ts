@@ -76,7 +76,8 @@ async function startCapture(payload: CaptureStartPayload): Promise<void> {
   startPayload = payload
   segmentMs = payload.segmentSeconds * 1000
   try {
-    // The main process routes this to the primary display; no picker appears.
+    // The main process routes this to the display assigned to this window
+    // (payload.displayId); no picker appears.
     stream = await navigator.mediaDevices.getDisplayMedia({
       audio: false,
       video: { frameRate: payload.fps },

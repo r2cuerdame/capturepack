@@ -25,7 +25,7 @@ export function createTray(handlers: TrayHandlers): TrayControls {
     const items: MenuItemConstructorOptions[] = [
       { label: 'Capture now  Ctrl+Alt+C', click: () => handlers.onCapture() },
       { label: 'Open output folder', click: () => handlers.onOpenOutput() },
-      { label: 'Open settings file', click: () => handlers.onOpenSettings() },
+      { label: 'Settings…', click: () => handlers.onOpenSettings() },
       { type: 'separator' },
     ]
     if (updateVersion !== null) {

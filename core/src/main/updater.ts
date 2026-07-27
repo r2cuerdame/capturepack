@@ -11,6 +11,10 @@ import type { UpdaterStatusPayload } from '../shared/ipc'
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000
 
 let initialized = false
+// Live value of the autoUpdateCheck setting; setAutoUpdateCheck keeps it in
+// sync so the GUI toggle applies this run, not only at the next boot.
+let autoCheckEnabled = false
+let runCheck: (() => void) | null = null
 
 export function initUpdater(opts: {
   autoCheck: boolean
@@ -24,16 +28,19 @@ export function initUpdater(opts: {
     }
   }
 
-  // Dev runs must never touch the updater; same for the settings opt-out.
-  if (!app.isPackaged || !opts.autoCheck) {
+  // Dev runs must never touch the updater.
+  if (!app.isPackaged) {
     report({ state: 'idle' })
     return
   }
   if (initialized) return
   initialized = true
+  autoCheckEnabled = opts.autoCheck
 
   autoUpdater.autoDownload = true
-  autoUpdater.autoInstallOnAppQuit = true
+  // Kept in sync with the setting (here and in setAutoUpdateCheck) so opting
+  // out also stops a previously downloaded update from installing on quit.
+  autoUpdater.autoInstallOnAppQuit = opts.autoCheck
 
   autoUpdater.on('checking-for-update', () => report({ state: 'checking' }))
   autoUpdater.on('update-available', (info) =>
@@ -52,14 +59,29 @@ export function initUpdater(opts: {
   })
 
   const check = (): void => {
+    // Gated on the LIVE setting, not the boot value: the settings GUI opt-out
+    // stops future checks (and downloads) this run.
+    if (!autoCheckEnabled) return
     // Failures surface through the 'error' event above; just stop rejection.
     autoUpdater.checkForUpdates().catch(() => undefined)
   }
+  runCheck = check
 
   check()
   // Electron timers lack unref(); clear on will-quit instead.
   const interval = setInterval(check, CHECK_INTERVAL_MS)
   app.on('will-quit', () => clearInterval(interval))
+}
+
+// Applies the settings GUI's autoUpdateCheck toggle instantly: enabling checks
+// right away and resumes the 4-hour cadence; disabling stops future checks and
+// install-on-quit. A download already in flight is not aborted, but it will
+// not install on quit while disabled. No-op in dev runs (updater untouched).
+export function setAutoUpdateCheck(enabled: boolean): void {
+  autoCheckEnabled = enabled
+  if (!initialized) return
+  autoUpdater.autoInstallOnAppQuit = enabled
+  if (enabled) runCheck?.()
 }
 
 export function restartAndUpdate(): void {

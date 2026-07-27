@@ -1,0 +1,299 @@
+:root {
+  --bg: #121216;
+  --panel: #1c1c22;
+  --panel-hover: #26262e;
+  --border: #2c2c34;
+  --text: #e8e8ea;
+  --muted: #8a8a93;
+  --action: #3574f0;
+  --warn-bg: #33270f;
+  --warn-border: #7a5a1e;
+  --warn-text: #ffd27a;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.4 "Segoe UI", system-ui, sans-serif;
+  user-select: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+#content {
+  max-width: 760px;
+  padding: 14px 22px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ---- sections ---- */
+
+section {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 14px 6px;
+}
+
+h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 2px 0 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.badge {
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-hover);
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+}
+
+/* ---- rows ---- */
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 34px;
+  padding: 4px 0;
+}
+
+.row + .row,
+.row + .pluginRow,
+.pluginRow + .pluginRow {
+  border-top: 1px solid #22222a;
+}
+
+.rowCol {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.rowTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.label {
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.labelWrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.unit {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.hint {
+  color: var(--warn-text);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.toggleRow {
+  cursor: pointer;
+}
+
+/* ---- controls ---- */
+
+input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--action);
+  cursor: pointer;
+  flex: none;
+}
+
+input[type="number"],
+select {
+  background: #111116;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 5px 8px;
+  font: inherit;
+  user-select: text;
+  transition: border-color 0.35s ease, background-color 0.35s ease;
+}
+
+input[type="number"] {
+  width: 88px;
+  font-variant-numeric: tabular-nums;
+}
+
+select {
+  min-width: 250px;
+  max-width: 380px;
+  cursor: pointer;
+}
+
+input[type="number"]:focus,
+select:focus {
+  outline: none;
+  border-color: #4a4a58;
+}
+
+/* Out-of-range value was clamped: brief highlight, fades via the transition. */
+input.flash {
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+}
+
+button {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-hover);
+  color: var(--text);
+  padding: 5px 12px;
+  font: 600 12px "Segoe UI", system-ui, sans-serif;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+button:hover:not(:disabled) {
+  background: #2e2e38;
+  border-color: #3c3c48;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+:focus-visible {
+  outline: 2px solid var(--action);
+  outline-offset: 1px;
+}
+
+/* ---- output folder ---- */
+
+.pathRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 4px;
+}
+
+.path {
+  flex: 1;
+  min-width: 0;
+  background: #111116;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+  direction: rtl; /* ellipsis at the START so the folder name stays visible */
+  text-align: left;
+}
+
+/* ---- MCP url ---- */
+
+code {
+  background: #111116;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  color: var(--muted);
+  font: 12px Consolas, "Cascadia Mono", monospace;
+  user-select: text;
+}
+
+/* ---- plugins ---- */
+
+.pluginRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  padding: 4px 0;
+}
+
+.pluginIcon {
+  width: 18px;
+  text-align: center;
+  font-size: 11px;
+  flex: none;
+}
+
+.pluginName {
+  flex: none;
+  min-width: 180px;
+}
+
+.pluginStatus {
+  flex: 1;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pluginAction {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.soon {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* ---- footer ---- */
+
+#about {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 11px;
+  padding: 0 2px;
+}

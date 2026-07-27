@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self'"
+  />
+  <title>CapturePack — Settings</title>
+  <link rel="stylesheet" href="./settings.css" />
+</head>
+<body>
+  <main id="content">
+
+    <section aria-labelledby="hGeneral">
+      <h2 id="hGeneral">General</h2>
+      <div class="row rowCol">
+        <div class="rowTop">
+          <span class="label" id="outputDirLabel">Output folder</span>
+          <span class="hint" id="outputDirHint" hidden>restart CapturePack so MCP indexes the new folder</span>
+        </div>
+        <div class="pathRow">
+          <div class="path" id="outputPath" aria-labelledby="outputDirLabel"></div>
+          <button id="changeOutputBtn" type="button">Change…</button>
+          <button id="openOutputBtn" type="button">Open</button>
+        </div>
+      </div>
+      <label class="row toggleRow">
+        <span class="label">Copy saved pack to clipboard</span>
+        <input type="checkbox" id="copyToClipboard" />
+      </label>
+      <label class="row toggleRow">
+        <span class="label">Check for updates automatically</span>
+        <input type="checkbox" id="autoUpdateCheck" />
+      </label>
+    </section>
+
+    <section aria-labelledby="hCapture">
+      <h2 id="hCapture">Capture</h2>
+      <div class="row">
+        <label class="label" for="captureDisplay">Capture display</label>
+        <span class="control">
+          <select id="captureDisplay"></select>
+        </span>
+      </div>
+      <div class="row">
+        <label class="label" for="replaySeconds">Replay length</label>
+        <span class="control">
+          <input type="number" id="replaySeconds" min="10" max="60" step="1" />
+          <span class="unit">s</span>
+        </span>
+      </div>
+      <div class="row">
+        <label class="label" for="fps">Capture FPS</label>
+        <span class="control">
+          <input type="number" id="fps" min="5" max="30" step="1" />
+          <span class="unit">fps</span>
+        </span>
+      </div>
+    </section>
+
+    <section aria-labelledby="hAnnotation">
+      <h2 id="hAnnotation">Annotation</h2>
+      <div class="row">
+        <label class="label" for="defaultManualDuration">Default manual duration</label>
+        <span class="control">
+          <input type="number" id="defaultManualDuration" min="0.5" max="10" step="0.5" />
+          <span class="unit">s</span>
+        </span>
+      </div>
+      <label class="row toggleRow">
+        <span class="label">Show duration label on selected annotation</span>
+        <input type="checkbox" id="showDurationLabel" />
+      </label>
+      <label class="row toggleRow">
+        <span class="label">Invert scrub wheel direction</span>
+        <input type="checkbox" id="scrubInvert" />
+      </label>
+      <div class="row">
+        <label class="label" for="scrubSensitivityMs">Scrub sensitivity</label>
+        <span class="control">
+          <input type="number" id="scrubSensitivityMs" min="50" max="1000" step="10" />
+          <span class="unit">ms / notch</span>
+        </span>
+      </div>
+    </section>
+
+    <section aria-labelledby="hMcp">
+      <h2 id="hMcp">MCP <span class="badge">read-only</span></h2>
+      <label class="row toggleRow">
+        <span class="labelWrap">
+          <span class="label">Enable MCP server</span>
+          <span class="hint" id="mcpEnabledHint" hidden>restart CapturePack to apply</span>
+        </span>
+        <input type="checkbox" id="mcpEnabled" />
+      </label>
+      <label class="row toggleRow">
+        <span class="labelWrap">
+          <span class="label">Start automatically</span>
+          <span class="hint" id="mcpAutoStartHint" hidden>restart CapturePack to apply</span>
+        </span>
+        <input type="checkbox" id="mcpAutoStart" />
+      </label>
+      <div class="row">
+        <label class="label" for="mcpPort">Port</label>
+        <span class="control">
+          <span class="hint" id="mcpPortHint" hidden>restart CapturePack to apply</span>
+          <input type="number" id="mcpPort" min="1024" max="65535" step="1" />
+        </span>
+      </div>
+      <label class="row toggleRow">
+        <span class="labelWrap">
+          <span class="label">Watch export folder</span>
+          <span class="hint" id="mcpWatchExportFolderHint" hidden>restart CapturePack to apply</span>
+        </span>
+        <input type="checkbox" id="mcpWatchExportFolder" />
+      </label>
+      <label class="row toggleRow">
+        <span class="label">Log requests</span>
+        <input type="checkbox" id="mcpLogRequests" />
+      </label>
+      <div class="row">
+        <span class="label" id="mcpUrlLabel">Connection URL</span>
+        <span class="control">
+          <code id="mcpUrl" aria-labelledby="mcpUrlLabel"></code>
+          <button id="copyUrlBtn" type="button">Copy</button>
+        </span>
+      </div>
+    </section>
+
+    <section aria-labelledby="hPlugins">
+      <h2 id="hPlugins">Plugins</h2>
+      <div class="pluginRow">
+        <span class="pluginIcon" aria-hidden="true">🟣</span>
+        <span class="pluginName">Chrome DOM</span>
+        <span class="pluginStatus">Not installed</span>
+        <span class="pluginAction">
+          <button type="button" disabled title="Coming soon">Install</button>
+          <span class="soon">coming soon</span>
+        </span>
+      </div>
+      <div class="pluginRow">
+        <span class="pluginIcon" aria-hidden="true">⚪</span>
+        <span class="pluginName">Windows UI Automation</span>
+        <span class="pluginStatus">Coming soon</span>
+      </div>
+      <div class="pluginRow">
+        <span class="pluginIcon" aria-hidden="true">⚪</span>
+        <span class="pluginName">Unity</span>
+        <span class="pluginStatus">Coming soon</span>
+      </div>
+      <div class="pluginRow">
+        <span class="pluginIcon" aria-hidden="true">⚪</span>
+        <span class="pluginName">Unreal</span>
+        <span class="pluginStatus">Coming soon</span>
+      </div>
+      <div class="pluginRow">
+        <span class="pluginIcon" aria-hidden="true">⚪</span>
+        <span class="pluginName">VS Code</span>
+        <span class="pluginStatus">Coming soon</span>
+      </div>
+      <div class="pluginRow">
+        <span class="pluginIcon" aria-hidden="true">⚪</span>
+        <span class="pluginName">Git</span>
+        <span class="pluginStatus">Coming soon</span>
+      </div>
+    </section>
+
+    <footer id="about">
+      <span id="appVersion"></span>
+      <span id="escHint">Esc closes</span>
+    </footer>
+
+  </main>
+  <script src="./settings.js"></script>
+</body>
+</html>

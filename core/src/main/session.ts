@@ -1,13 +1,13 @@
-// Capture flow state machine: snapshot -> replay fetch -> save-first ->
-// fullscreen editor -> in-place pack update on Save.
-import { app, BrowserWindow, dialog, ipcMain, Notification, screen } from 'electron'
-import type { IpcMainEvent } from 'electron'
+// Capture flow state machine: pick target display -> snapshot -> replay fetch
+// -> save-first -> fullscreen editor on that display -> in-place pack update on Save.
+import { app, BrowserWindow, dialog, ipcMain, Notification } from 'electron'
+import type { Display, IpcMainEvent } from 'electron'
 import { randomUUID } from 'node:crypto'
 import * as path from 'node:path'
 import { IPC } from '../shared/ipc'
 import type { EditorAnnotationAddedPayload, EditorExportPayload, EditorInitPayload } from '../shared/ipc'
 import type { Annotation, Settings, TimelineEvent, TimelineFile } from '../shared/types'
-import { requestReplay, takeSnapshot } from './capture'
+import { captureWindowForDisplay, requestReplay, resolveTargetDisplay, takeSnapshot } from './capture'
 import { savePack, updatePack, type ExportInput, type InitialSaveInput, type PackHandle } from './exporter'
 
 const REPLAY_TIMEOUT_MS = 5_000
@@ -16,11 +16,11 @@ type EditorOutcome = { kind: 'export'; payload: EditorExportPayload } | { kind: 
 
 let flowActive = false
 
-export async function startCaptureFlow(captureWindow: BrowserWindow, settings: Settings): Promise<void> {
+export async function startCaptureFlow(settings: Settings): Promise<void> {
   if (flowActive) return
   flowActive = true
   try {
-    await runFlow(captureWindow, settings)
+    await runFlow(settings)
   } catch (err) {
     dialog.showErrorBox('CapturePack', `Capture failed: ${errorMessage(err)}`)
   } finally {
@@ -28,11 +28,17 @@ export async function startCaptureFlow(captureWindow: BrowserWindow, settings: S
   }
 }
 
-async function runFlow(captureWindow: BrowserWindow, settings: Settings): Promise<void> {
+async function runFlow(settings: Settings): Promise<void> {
   const triggerAt = Date.now()
-  const snap = await takeSnapshot()
-  // On timeout or recorder failure, replay is null: proceed screenshot-only.
-  const replay = await requestReplay(captureWindow, randomUUID(), REPLAY_TIMEOUT_MS)
+  // Cursor mode: the display the mouse is on at trigger time; fixed mode: the
+  // configured display. Snapshot, replay, and editor all target THIS display.
+  const display = resolveTargetDisplay(settings)
+  const snap = await takeSnapshot(display)
+  // On timeout, recorder failure, or no recorder window for this display
+  // (hotplug rebuild in progress), replay is null: proceed screenshot-only.
+  const captureWindow = captureWindowForDisplay(display.id)
+  const replay =
+    captureWindow === null ? null : await requestReplay(captureWindow, randomUUID(), REPLAY_TIMEOUT_MS)
   const replayDurationMs = replay === null ? 0 : replay.durationMs
   const t0Ms = triggerAt - replayDurationMs
 
@@ -58,7 +64,7 @@ async function runFlow(captureWindow: BrowserWindow, settings: Settings): Promis
     console.error('capturepack: save-first failed:', errorMessage(err))
   }
 
-  const editor = createEditorWindow()
+  const editor = createEditorWindow(display)
   editor.once('ready-to-show', () => {
     const init: EditorInitPayload = {
       snapshotPng: toArrayBuffer(snap.png),
@@ -130,8 +136,10 @@ async function runFlow(captureWindow: BrowserWindow, settings: Settings): Promis
   }
 }
 
-function createEditorWindow(): BrowserWindow {
-  const { bounds } = screen.getPrimaryDisplay()
+// The annotation editor always opens fullscreen on the CAPTURED display
+// (GOAL "Multi-Monitor Support"), not on the primary.
+function createEditorWindow(display: Display): BrowserWindow {
+  const { bounds } = display
   const editor = new BrowserWindow({
     x: bounds.x,
     y: bounds.y,
