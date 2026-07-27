@@ -156,6 +156,9 @@ Every fix or feature updates ALL public surfaces in the same pass — none may d
 - **MCP interface** — tool descriptions, responses, and docs/MCP.md always match the
   current format and behavior; a format change (annotation model, pack layout, naming)
   is not done until the MCP tools speak it.
+- **GitHub Milestones** — actively used: every issue belongs to a release milestone
+  (vX.Y.Z), milestones mirror the roadmap, and a release closes its milestone with all
+  issues resolved or explicitly moved.
 
 ---
 
