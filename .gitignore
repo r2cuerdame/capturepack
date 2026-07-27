@@ -1,0 +1,10 @@
+node_modules/
+dist/
+out/
+build/
+*.log
+.DS_Store
+Thumbs.db
+*.capturepack
+!examples/**/*.capturepack
+.env
