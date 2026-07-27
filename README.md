@@ -55,6 +55,14 @@ A CapturePack is input an AI actually understands:
 
 Better input. Better answers.
 
+## 🌍 Languages
+
+CapturePack speaks **9 languages**: English · 한국어 · 日本語 · 中文 · Español · Français · Deutsch · Português · Русский
+
+- The app follows your **system language** automatically — change it any time in Settings → General.
+- Generated pack documents (`README.md`, `report.md`, `skills/`) can follow their own language setting; your own descriptions are never translated.
+- [capturepack.dev](https://capturepack.dev) auto-detects your browser language too.
+
 ## Principles
 
 Local first · Offline first · Open format · Plugin based · No cloud · No login · No database · No AI dependency · No vendor lock-in.
