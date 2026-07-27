@@ -1,0 +1,35 @@
+{
+  "t0": "2026-07-27T10:41:07+09:00",
+  "events": [
+    {
+      "t_ms": 0,
+      "type": "core.capture.triggered",
+      "source": "core",
+      "data": { "hotkey": "Ctrl+Alt+C" }
+    },
+    {
+      "t_ms": 2680,
+      "type": "core.annotation.added",
+      "source": "core",
+      "data": { "annotation_id": "a1", "annotation_type": "rect" }
+    },
+    {
+      "t_ms": 4470,
+      "type": "core.annotation.added",
+      "source": "core",
+      "data": { "annotation_id": "a2", "annotation_type": "pin" }
+    },
+    {
+      "t_ms": 6890,
+      "type": "core.annotation.added",
+      "source": "core",
+      "data": { "annotation_id": "a3", "annotation_type": "text" }
+    },
+    {
+      "t_ms": 9120,
+      "type": "core.export.created",
+      "source": "core",
+      "data": { "filename": "minimal.capturepack" }
+    }
+  ]
+}

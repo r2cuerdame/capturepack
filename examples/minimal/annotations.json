@@ -1,0 +1,39 @@
+{
+  "reference_width": 640,
+  "reference_height": 400,
+  "annotations": [
+    {
+      "id": "a1",
+      "type": "rect",
+      "z": 1,
+      "color": "#FF3B30",
+      "created_at": "2026-07-27T10:41:09.680+09:00",
+      "x": 304,
+      "y": 280,
+      "w": 168,
+      "h": 56,
+      "label": "Submit button escapes the form card"
+    },
+    {
+      "id": "a2",
+      "type": "pin",
+      "z": 2,
+      "color": "#FF3B30",
+      "created_at": "2026-07-27T10:41:11.470+09:00",
+      "x": 416,
+      "y": 308,
+      "label": "card's right edge — the button should end here"
+    },
+    {
+      "id": "a3",
+      "type": "text",
+      "z": 3,
+      "color": "#FF3B30",
+      "created_at": "2026-07-27T10:41:13.890+09:00",
+      "x": 48,
+      "y": 356,
+      "text": "Only at 125% browser zoom — 100% renders fine",
+      "size": 14
+    }
+  ]
+}

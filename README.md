@@ -5,6 +5,8 @@
 **CapturePack is the fastest way to explain something to an LLM.**
 
 > Capture context, not screenshots.
+>
+> Better input. Better answers.
 
 CapturePack is an open-source context capture format and toolkit that helps humans and AI understand visual problems beyond screenshots and screen recordings.
 
@@ -33,15 +35,17 @@ Generated CapturePacks should remain readable forever.
 ## What's inside a `.capturepack`
 
 ```
-CapturePack/
-├── manifest.json       # format version, capture metadata
-├── timeline.json       # machine-readable events
-├── annotations.json    # editable annotations (never burned into video)
-├── report.md           # human/LLM-readable summary
-├── snapshot.png        # the captured frame
-├── replay.mp4          # last 30 seconds
-└── plugins/            # structured metadata from plugins
+example.capturepack  (a standard ZIP — or the same tree as a plain directory)
+├── manifest.json       # REQUIRED  format version, environment, inventory
+├── snapshot.png        # REQUIRED  the captured frame
+├── replay.webm         # OPTIONAL  last ~30 s of replay (or replay.mp4)
+├── annotations.json    # OPTIONAL  editable annotations (never burned into video)
+├── timeline.json       # OPTIONAL  machine-readable event log
+├── report.md           # OPTIONAL  human/LLM-readable summary
+└── plugins/            # OPTIONAL  structured metadata appended by plugins
 ```
+
+A screenshot-only pack — `manifest.json` + `snapshot.png`, nothing else — is fully valid.
 
 The specification matters more than any implementation — any language can generate CapturePack files. See [SPEC.md](SPEC.md).
 

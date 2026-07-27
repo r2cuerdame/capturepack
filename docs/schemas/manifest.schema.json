@@ -1,0 +1,188 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CapturePack manifest.json",
+  "description": "Schema for manifest.json, the REQUIRED entry point of a CapturePack (format 0.1.0). It identifies the pack, records the capture environment, and inventories the variable parts of the pack (replay video, plugin payloads). Unknown additional properties are deliberately allowed everywhere: readers MUST accept unknown optional fields for forward compatibility (SPEC.md §13). See SPEC.md §5 for the normative definition; where schema and prose disagree, the prose wins.",
+  "type": "object",
+  "required": [
+    "format",
+    "format_version",
+    "id",
+    "created_at",
+    "generator",
+    "environment",
+    "media"
+  ],
+  "properties": {
+    "format": {
+      "description": "Format marker. MUST be the literal string \"capturepack\". The first thing a reader checks to identify the file.",
+      "const": "capturepack"
+    },
+    "format_version": {
+      "description": "Version of the CapturePack specification this pack conforms to, as semver (e.g. \"0.1.0\"). Writers SHOULD write the oldest version that fully expresses their content. Major (pre-1.0: minor) version changes are breaking; see SPEC.md §13.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"
+    },
+    "id": {
+      "description": "RFC 4122 UUID uniquely identifying this pack. Version 4 (random) RECOMMENDED, lowercase RECOMMENDED.",
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    "created_at": {
+      "description": "Capture instant as ISO 8601 date-time. A timezone designator (offset or 'Z') MUST be present — local wall-clock time is context. Example: \"2026-07-27T14:03:21+09:00\".",
+      "type": "string",
+      "format": "date-time"
+    },
+    "generator": {
+      "description": "The software that wrote this pack.",
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": {
+          "description": "Name of the generating tool, e.g. \"capturepack\".",
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "description": "Version of the generating tool. Note: this is the tool's version, not the format version.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "title": {
+      "description": "OPTIONAL short human-readable title, one line. Used as the report.md heading and recommended as the basis of the pack filename.",
+      "type": "string"
+    },
+    "note": {
+      "description": "OPTIONAL user-written intent, verbatim: what the user was doing, what they expected, what went wrong. Carried into report.md unchanged. The single most valuable field for an LLM reading the pack.",
+      "type": "string"
+    },
+    "environment": {
+      "description": "Where the capture happened. Describes the hardware/OS environment; it does not define the annotation coordinate space (annotations are always in snapshot pixel coordinates, SPEC.md §8.2).",
+      "type": "object",
+      "required": ["os"],
+      "properties": {
+        "os": {
+          "description": "Operating system family, lowercase. Recommended values: \"windows\", \"macos\", \"linux\". Other values allowed for other platforms.",
+          "type": "string",
+          "minLength": 1
+        },
+        "os_version": {
+          "description": "OPTIONAL (recommended) free-form OS version, e.g. \"11 Pro 26200\" or \"14.5\".",
+          "type": "string"
+        },
+        "screens": {
+          "description": "OPTIONAL (recommended) list of displays present at capture time, in OS enumeration order.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["width", "height"],
+            "properties": {
+              "width": {
+                "description": "Display width in physical pixels.",
+                "type": "integer",
+                "minimum": 1
+              },
+              "height": {
+                "description": "Display height in physical pixels.",
+                "type": "integer",
+                "minimum": 1
+              },
+              "scale": {
+                "description": "OS display scale factor (1, 1.25, 1.5, 2, ...). Default 1 when absent.",
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "default": 1
+              }
+            }
+          }
+        },
+        "app": {
+          "description": "OPTIONAL name of the application that had focus at capture time, e.g. \"notably.exe\" or \"Google Chrome\". Plugins can attach richer window/app data under plugins/.",
+          "type": "string"
+        }
+      }
+    },
+    "media": {
+      "description": "Declares the pack's media files. Readers MUST take the replay filename from media.replay rather than probing the pack for files.",
+      "type": "object",
+      "required": ["snapshot", "replay"],
+      "properties": {
+        "snapshot": {
+          "description": "Filename of the snapshot image. In format 0.1.0 this MUST be \"snapshot.png\". Declared explicitly so future format versions can vary it without breaking readers that trust the manifest.",
+          "const": "snapshot.png"
+        },
+        "replay": {
+          "description": "Filename of the replay video — \"replay.webm\" (recommended; MediaRecorder output, no extra dependencies) or \"replay.mp4\" — or null for a screenshot-only pack. A pack contains at most one replay file.",
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^replay\\.(webm|mp4)$"
+            },
+            { "type": "null" }
+          ]
+        },
+        "replay_duration_ms": {
+          "description": "Duration of the replay video in milliseconds. REQUIRED (as an integer) when replay is a filename; MUST be null or absent when replay is null.",
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            { "type": "null" }
+          ]
+        }
+      },
+      "if": {
+        "properties": {
+          "replay": { "type": "string" }
+        },
+        "required": ["replay"]
+      },
+      "then": {
+        "required": ["replay_duration_ms"],
+        "properties": {
+          "replay_duration_ms": {
+            "description": "When a replay file is declared, its duration in milliseconds is required and must be an integer.",
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "replay_duration_ms": {
+            "description": "When replay is null (screenshot-only pack), replay_duration_ms must be null if present.",
+            "type": "null"
+          }
+        }
+      }
+    },
+    "plugins": {
+      "description": "OPTIONAL inventory of plugin payload directories under plugins/. Absent or empty means no plugin data. Every plugin directory written by the exporter must have an entry here; readers MUST ignore plugin directories they do not recognize (SPEC.md §11).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "version", "path"],
+        "properties": {
+          "name": {
+            "description": "Plugin name: lowercase letters, digits, single hyphens; no leading/trailing hyphen. Must equal the directory name under plugins/ and the name in that directory's meta.json.",
+            "type": "string",
+            "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
+          },
+          "version": {
+            "description": "Plugin version (semver recommended). Must equal the version in the plugin's meta.json.",
+            "type": "string",
+            "minLength": 1
+          },
+          "path": {
+            "description": "Directory path relative to the pack root, with trailing slash. Must be exactly \"plugins/<name>/\" where <name> is this entry's name field (equality with name cannot be expressed in JSON Schema; see SPEC.md §5.4).",
+            "type": "string",
+            "pattern": "^plugins/[a-z0-9]([a-z0-9-]*[a-z0-9])?/$"
+          }
+        }
+      }
+    }
+  }
+}

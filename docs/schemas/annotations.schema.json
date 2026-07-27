@@ -1,0 +1,216 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CapturePack annotations.json",
+  "description": "Schema for annotations.json, the OPTIONAL editable annotation layer of a CapturePack (format 0.1.0). Annotations are stored as data — editable forever, never burned into media. The one exception is blur, which exporters MUST additionally apply destructively to the exported snapshot.png (SPEC.md §9); the blur annotation itself is still recorded here as data. All geometry is in snapshot pixel coordinates: origin at the top-left pixel of snapshot.png, x right, y down, units are snapshot pixels; coordinates may be non-integers. Unknown additional properties are deliberately allowed for forward compatibility, but this schema only accepts the five annotation types defined by 0.1.0 — a pack using a newer type fails validation here while remaining readable under the defensive-reading rules (SPEC.md §13). See SPEC.md §8 for the normative definition; where schema and prose disagree, the prose wins.",
+  "type": "object",
+  "required": ["reference_width", "reference_height", "annotations"],
+  "properties": {
+    "reference_width": {
+      "description": "Width in pixels of the annotation coordinate space. MUST equal the pixel width of snapshot.png. If a reader finds the actual snapshot dimensions differ (e.g. the image was rescaled by an intermediate tool), it SHOULD scale all geometry by actual/reference per axis rather than discard the annotations.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "reference_height": {
+      "description": "Height in pixels of the annotation coordinate space. MUST equal the pixel height of snapshot.png.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "annotations": {
+      "description": "Ordered list of annotations. Array order is reading order — the order in which a human (or report.md) should walk through them, normally creation order. Stacking for rendering is controlled by z, not array order. May be empty.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/annotation" }
+    }
+  },
+  "$defs": {
+    "annotation": {
+      "description": "One annotation. Discriminated by the 'type' field: pin, arrow, rect, blur, or text (the five types defined in format 0.1.0). Readers MUST skip annotations of unknown type and SHOULD preserve them when rewriting a pack.",
+      "oneOf": [
+        { "$ref": "#/$defs/pin" },
+        { "$ref": "#/$defs/arrow" },
+        { "$ref": "#/$defs/rect" },
+        { "$ref": "#/$defs/blur" },
+        { "$ref": "#/$defs/text" }
+      ]
+    },
+    "commonFields": {
+      "description": "Fields shared by every annotation type.",
+      "type": "object",
+      "required": ["id", "type"],
+      "properties": {
+        "id": {
+          "description": "Non-empty identifier, unique within this file. Short ids (\"a1\") or UUIDs both fine. Referenced by timeline events (core.annotation.added) and by report.md.",
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "description": "The annotation type. One of \"pin\", \"arrow\", \"rect\", \"blur\", \"text\" in format 0.1.0.",
+          "type": "string"
+        },
+        "z": {
+          "description": "OPTIONAL stacking order for rendering; higher draws on top. Default: array position (later entries render on top).",
+          "type": "integer"
+        },
+        "color": {
+          "description": "OPTIONAL display color as CSS-style hex: \"#RRGGBB\" or \"#RRGGBBAA\". Meaningless for blur and SHOULD be omitted there. Viewers pick their own default when absent.",
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"
+        },
+        "created_at": {
+          "description": "OPTIONAL creation instant of the annotation, ISO 8601 with timezone.",
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "pin": {
+      "description": "A pointed marker at a single spot, optionally labeled — e.g. \"1. renamed the document here\".",
+      "allOf": [
+        { "$ref": "#/$defs/commonFields" },
+        {
+          "type": "object",
+          "required": ["x", "y"],
+          "properties": {
+            "type": { "const": "pin" },
+            "x": {
+              "description": "X of the pinned point, in snapshot pixels.",
+              "type": "number"
+            },
+            "y": {
+              "description": "Y of the pinned point, in snapshot pixels.",
+              "type": "number"
+            },
+            "label": {
+              "description": "OPTIONAL short caption for the pin.",
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "arrow": {
+      "description": "A directed line from tail (x1,y1) to head (x2,y2). The head is what the arrow points at.",
+      "allOf": [
+        { "$ref": "#/$defs/commonFields" },
+        {
+          "type": "object",
+          "required": ["x1", "y1", "x2", "y2"],
+          "properties": {
+            "type": { "const": "arrow" },
+            "x1": {
+              "description": "Tail X (where the arrow starts), in snapshot pixels.",
+              "type": "number"
+            },
+            "y1": {
+              "description": "Tail Y, in snapshot pixels.",
+              "type": "number"
+            },
+            "x2": {
+              "description": "Head X (what the arrow points at), in snapshot pixels.",
+              "type": "number"
+            },
+            "y2": {
+              "description": "Head Y, in snapshot pixels.",
+              "type": "number"
+            }
+          }
+        }
+      ]
+    },
+    "rect": {
+      "description": "A rectangle outline highlighting a region, optionally labeled.",
+      "allOf": [
+        { "$ref": "#/$defs/commonFields" },
+        {
+          "type": "object",
+          "required": ["x", "y", "w", "h"],
+          "properties": {
+            "type": { "const": "rect" },
+            "x": {
+              "description": "Top-left corner X, in snapshot pixels.",
+              "type": "number"
+            },
+            "y": {
+              "description": "Top-left corner Y, in snapshot pixels.",
+              "type": "number"
+            },
+            "w": {
+              "description": "Width in snapshot pixels, > 0.",
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "h": {
+              "description": "Height in snapshot pixels, > 0.",
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "label": {
+              "description": "OPTIONAL short caption for the region.",
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "blur": {
+      "description": "A redacted rectangular region. Special semantics (SPEC.md §9): exporters MUST apply this region destructively to the exported snapshot.png — the unredacted frame MUST NOT be included anywhere in the pack — while still recording this annotation as data. Readers MUST NOT expect to recover the pixels underneath. In the MVP era the replay video is NOT redacted; exporters SHOULD offer excluding the replay when blur is used. The color field is meaningless for blur and SHOULD be omitted.",
+      "allOf": [
+        { "$ref": "#/$defs/commonFields" },
+        {
+          "type": "object",
+          "required": ["x", "y", "w", "h"],
+          "properties": {
+            "type": { "const": "blur" },
+            "x": {
+              "description": "Top-left corner X of the redacted region, in snapshot pixels.",
+              "type": "number"
+            },
+            "y": {
+              "description": "Top-left corner Y of the redacted region, in snapshot pixels.",
+              "type": "number"
+            },
+            "w": {
+              "description": "Width in snapshot pixels, > 0.",
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "h": {
+              "description": "Height in snapshot pixels, > 0.",
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          }
+        }
+      ]
+    },
+    "text": {
+      "description": "A free-floating text note anchored at (x,y).",
+      "allOf": [
+        { "$ref": "#/$defs/commonFields" },
+        {
+          "type": "object",
+          "required": ["x", "y", "text"],
+          "properties": {
+            "type": { "const": "text" },
+            "x": {
+              "description": "Anchor X — top-left of the first line of text, in snapshot pixels.",
+              "type": "number"
+            },
+            "y": {
+              "description": "Anchor Y — top-left of the first line of text, in snapshot pixels.",
+              "type": "number"
+            },
+            "text": {
+              "description": "The note content.",
+              "type": "string"
+            },
+            "size": {
+              "description": "OPTIONAL font size in snapshot pixels. Viewers pick a legible default when absent.",
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          }
+        }
+      ]
+    }
+  }
+}

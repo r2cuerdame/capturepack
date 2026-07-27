@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CapturePack timeline.json",
+  "description": "Schema for timeline.json, the OPTIONAL machine-readable event log of a CapturePack (format 0.1.0). The timeline is append-only during capture, sorted ascending by t_ms, and replayable: when a replay video exists, t0 SHOULD be the instant of the replay's first frame so that t_ms doubles as a video seek position. Event types are namespaced dot-paths: core.* (defined in 0.1.0), input.* (reserved for V2 — not emitted yet), plugin.<name>.* (plugin-defined). Readers MUST skip events of unknown type and SHOULD preserve them when rewriting a pack. Unknown additional properties are deliberately allowed for forward compatibility (SPEC.md §13). See SPEC.md §10 for the normative definition; where schema and prose disagree, the prose wins.",
+  "type": "object",
+  "required": ["t0", "events"],
+  "properties": {
+    "t0": {
+      "description": "The absolute anchor instant, ISO 8601 with timezone (e.g. \"2026-07-27T14:02:53.104+09:00\"). Every event's t_ms is a millisecond offset relative to this instant. When a replay video exists, t0 SHOULD be the replay's first frame; otherwise the capture trigger instant is a natural choice.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "events": {
+      "description": "The events, sorted ascending by t_ms (stable order for equal values). Writers only append while capturing — events are never rewritten or reordered during a session. May be empty.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/event" }
+    }
+  },
+  "$defs": {
+    "event": {
+      "description": "One timeline event.",
+      "type": "object",
+      "required": ["t_ms", "type", "source"],
+      "properties": {
+        "t_ms": {
+          "description": "Milliseconds relative to t0. May be negative for events that occurred before t0.",
+          "type": "integer"
+        },
+        "type": {
+          "description": "Namespaced lowercase dot-path identifying the event kind. Namespaces in 0.1.0: core.* — events from the capture tool itself (core.capture.triggered, core.annotation.added, core.export.created); input.* — RESERVED for V2 user-input events (input.mouse.click, input.key.down, input.window.focus); writers MUST NOT emit them yet; plugin.<name>.* — events from plugin <name>, where <name> matches a declared plugin. Readers skip unknown types.",
+          "type": "string",
+          "pattern": "^[a-z0-9_-]+(\\.[a-z0-9_-]+)+$"
+        },
+        "source": {
+          "description": "The component that emitted the event: \"core\" for core.* events; the plugin name (matching plugins/<name>/ and the <name> segment of the type) for plugin.<name>.* events.",
+          "type": "string",
+          "minLength": 1
+        },
+        "data": {
+          "description": "OPTIONAL type-specific payload; absent means {}. Conventional fields for 0.1.0 core events — core.capture.triggered: {hotkey}; core.annotation.added: {annotation_id, annotation_type} matching annotations.json; core.export.created: {filename}. Conventions, not requirements: readers MUST tolerate their absence. Keep payloads small and structured — the timeline is an index into the capture, not a data store (bulk data belongs under plugins/).",
+          "type": "object"
+        }
+      }
+    }
+  }
+}
