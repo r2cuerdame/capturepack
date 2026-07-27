@@ -4,6 +4,7 @@
 import type { Annotation, AnnotationsFile, Manifest } from '../shared/types'
 
 const px = (n: number): number => Math.round(n)
+const secs = (ms: number): string => (ms / 1000).toFixed(1)
 
 /** One human-readable line per annotation, e.g. `rect (612,340 → 918,520): "Submit button overflows"`. */
 export function describeAnnotation(a: Annotation): string {
@@ -50,6 +51,9 @@ export function buildReport(manifest: Manifest, annotationsFile: AnnotationsFile
       ? `- Capture: screenshot + ${replaySeconds}s replay video (${manifest.media.replay})`
       : '- Capture: screenshot only (no replay)',
   )
+  if (manifest.media.snapshot_t_ms !== undefined) {
+    lines.push(`- Snapshot frame: ${secs(manifest.media.snapshot_t_ms)}s into the replay`)
+  }
   lines.push('')
 
   lines.push('## Annotations')
@@ -59,7 +63,10 @@ export function buildReport(manifest: Manifest, annotationsFile: AnnotationsFile
   if (annotations.length === 0) {
     lines.push('(none)')
   } else {
-    annotations.forEach((a, i) => lines.push(`${i + 1}. ${describeAnnotation(a)}`))
+    annotations.forEach((a, i) => {
+      const at = a.t_ms !== undefined ? ` — at ${secs(a.t_ms)}s in the replay` : ''
+      lines.push(`${i + 1}. ${describeAnnotation(a)}${at}`)
+    })
   }
   const blurCount = annotations.filter((a) => a.type === 'blur').length
   if (blurCount > 0) {

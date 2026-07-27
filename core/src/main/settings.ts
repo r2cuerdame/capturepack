@@ -15,6 +15,8 @@ function defaultSettings(): Settings {
     copyToClipboard: true,
     replaySeconds: 30,
     fps: 15,
+    scrubInvert: false,
+    scrubSensitivityMs: 100,
   }
 }
 
@@ -54,6 +56,11 @@ function mergeSettings(base: Settings, raw: Record<string, unknown>): Settings {
     replaySeconds:
       typeof raw.replaySeconds === 'number' && raw.replaySeconds > 0 ? raw.replaySeconds : base.replaySeconds,
     fps: typeof raw.fps === 'number' && raw.fps > 0 ? raw.fps : base.fps,
+    scrubInvert: typeof raw.scrubInvert === 'boolean' ? raw.scrubInvert : base.scrubInvert,
+    scrubSensitivityMs:
+      typeof raw.scrubSensitivityMs === 'number' && raw.scrubSensitivityMs > 0
+        ? raw.scrubSensitivityMs
+        : base.scrubSensitivityMs,
   }
   return Object.assign({}, raw, known)
 }

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta
     http-equiv="Content-Security-Policy"
-    content="default-src 'self'; script-src 'self'; style-src 'self'"
+    content="default-src 'self'; script-src 'self'; style-src 'self'; media-src 'self' blob:"
   />
   <title>CapturePack — Annotate</title>
   <link rel="stylesheet" href="./editor.css" />
@@ -27,7 +27,7 @@
       <input id="includeReplay" type="checkbox" checked />
       include replay
     </label>
-    <span id="keysHint">P pin · A arrow · R rect · B blur · T text · C color · Ctrl+Z undo · Enter export · Esc cancel</span>
+    <span id="keysHint">P pin · A arrow · R rect · B blur · T text · C color · RMB rect · wheel scrub · Ctrl+Z undo · Enter export · Esc cancel</span>
     <button id="exportBtn">Export</button>
   </header>
   <main id="stage">
@@ -35,12 +35,22 @@
       <canvas id="snapshot"></canvas>
       <canvas id="overlay" tabindex="-1"></canvas>
       <input id="textEditor" type="text" autocomplete="off" spellcheck="false" hidden />
+      <input id="labelEditor" type="text" placeholder="Label" autocomplete="off" spellcheck="false" hidden />
     </div>
     <div id="blurWarning" hidden>
       Blur is not applied to the replay video
       <button id="excludeReplayBtn">exclude replay</button>
     </div>
   </main>
+  <footer id="timebar" hidden>
+    <button id="playBtn" title="Play / pause" disabled>▶</button>
+    <div id="track">
+      <div id="trackFill"></div>
+      <div id="playhead"></div>
+    </div>
+    <span id="timeLabel">now</span>
+    <span id="scrubHint">loading replay…</span>
+  </footer>
   <script src="./editor.js"></script>
 </body>
 </html>

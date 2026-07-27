@@ -28,6 +28,8 @@ export interface ExportInput {
   annotations: Annotation[]
   title: string
   note: string
+  // Replay position (ms) of the exported snapshot frame; null = the capture instant
+  snapshotTMs: number | null
   timeline: TimelineFile
   outputDir: string
   copyToClipboard: boolean
@@ -43,6 +45,7 @@ export interface ManifestInput {
   screens: Array<{ width: number; height: number; scale: number }>
   hasReplay: boolean
   replayDurationMs: number
+  snapshotTMs: number | null
 }
 
 export function buildManifest(input: ManifestInput): Manifest {
@@ -67,7 +70,18 @@ export function buildManifest(input: ManifestInput): Manifest {
   if (title !== '') manifest.title = title
   const note = input.note.trim()
   if (note !== '') manifest.note = note
-  if (input.hasReplay) manifest.media.replay_duration_ms = input.replayDurationMs
+  if (input.hasReplay) {
+    manifest.media.replay_duration_ms = input.replayDurationMs
+    // snapshot_t_ms is only written alongside a replay (SPEC §5.3), clamped to
+    // replay_duration_ms: the editor's scrub position lives on the parsed
+    // video clock, which can run slightly past the recorder's wall clock.
+    if (input.snapshotTMs !== null) {
+      manifest.media.snapshot_t_ms = Math.min(
+        Math.max(0, Math.round(input.snapshotTMs)),
+        input.replayDurationMs,
+      )
+    }
+  }
   return manifest
 }
 
@@ -95,6 +109,7 @@ export async function exportPack(input: ExportInput): Promise<string> {
     screens: physicalScreens(),
     hasReplay: input.replayWebm !== null,
     replayDurationMs: input.replayDurationMs,
+    snapshotTMs: input.snapshotTMs,
   })
   const annotationsFile: AnnotationsFile = {
     reference_width: input.width,

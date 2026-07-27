@@ -276,6 +276,7 @@ function validateManifest(m, pack) {
   // media
   const media = m.media;
   let replay = null;
+  let replayDurationMs = null;
   if (!isObj(media)) {
     fail(`manifest.json: media MUST be an object (SPEC §5.3)`);
   } else {
@@ -291,12 +292,26 @@ function validateManifest(m, pack) {
     } else if (isStr(media.replay) && REPLAY_RE.test(media.replay)) {
       replay = media.replay;
       if (isInt(media.replay_duration_ms) && media.replay_duration_ms >= 0) {
+        replayDurationMs = media.replay_duration_ms;
         pass(`manifest.json: media.replay is "${media.replay}" (${media.replay_duration_ms} ms)`);
       } else {
         fail(`manifest.json: media.replay_duration_ms MUST be an integer when replay is declared (SPEC §5.3)`);
       }
     } else {
       fail(`manifest.json: media.replay ${JSON.stringify(media.replay)} MUST be "replay.webm", "replay.mp4", or null (SPEC §5.3)`);
+    }
+
+    // snapshot_t_ms (frame-accurate snapshot, SPEC §7.1) — null is reported by checkNoNulls
+    if (media.snapshot_t_ms !== undefined && media.snapshot_t_ms !== null) {
+      if (!isInt(media.snapshot_t_ms) || media.snapshot_t_ms < 0) {
+        fail(`manifest.json: media.snapshot_t_ms ${JSON.stringify(media.snapshot_t_ms)} MUST be an integer >= 0 (SPEC §5.3)`);
+      } else if (!replay) {
+        note(`manifest.json: media.snapshot_t_ms is ${media.snapshot_t_ms} but replay is null — SHOULD be absent when there is no replay timeline to anchor it (SPEC §5.3)`);
+      } else if (replayDurationMs !== null && media.snapshot_t_ms > replayDurationMs) {
+        note(`manifest.json: media.snapshot_t_ms ${media.snapshot_t_ms} exceeds replay_duration_ms ${replayDurationMs} — the frame position should lie within the replay (SPEC §5.3)`);
+      } else {
+        pass(`manifest.json: media.snapshot_t_ms is ${media.snapshot_t_ms} ms into the replay (frame-accurate snapshot, SPEC §7.1)`);
+      }
     }
   }
 
@@ -357,10 +372,10 @@ function validateManifest(m, pack) {
     }
   }
 
-  return { replay, declaredPlugins: declared };
+  return { replay, replayDurationMs, declaredPlugins: declared };
 }
 
-function validateAnnotations(a, snapshotDims) {
+function validateAnnotations(a, snapshotDims, replay, replayDurationMs) {
   const knownIds = new Set();
   if (!isInt(a.reference_width) || a.reference_width < 1 || !isInt(a.reference_height) || a.reference_height < 1) {
     fail(`annotations.json: reference_width/reference_height MUST be positive integers (SPEC §8.1)`);
@@ -386,6 +401,11 @@ function validateAnnotations(a, snapshotDims) {
     if (ann.z !== undefined && !isInt(ann.z)) { fail(`${label}.z MUST be an integer (SPEC §8.3)`); bad++; }
     if (ann.color !== undefined && (!isStr(ann.color) || !COLOR_RE.test(ann.color))) { fail(`${label}.color MUST be "#RRGGBB" or "#RRGGBBAA" (SPEC §8.3)`); bad++; }
     if (ann.created_at !== undefined && !isIsoWithTz(ann.created_at)) { fail(`${label}.created_at MUST be ISO 8601 with timezone (SPEC §8.3)`); bad++; }
+    if (ann.t_ms !== undefined) {
+      if (!isNum(ann.t_ms)) { fail(`${label}.t_ms MUST be a number (SPEC §8.3)`); bad++; }
+      else if (!replay) note(`${label}.t_ms is ${ann.t_ms} but the pack has no replay — t_ms is a replay position and is only meaningful with a replay (SPEC §8.3)`);
+      else if (replayDurationMs !== null && (ann.t_ms < 0 || ann.t_ms > replayDurationMs)) note(`${label}.t_ms ${ann.t_ms} lies outside the replay [0, ${replayDurationMs}] ms (SPEC §8.3)`);
+    }
 
     const req = (fields, pred, what) => {
       for (const f of fields) {
@@ -502,14 +522,14 @@ function validatePack(pack) {
   }
 
   // --- manifest fields, media consistency, plugins ---
-  const { replay, declaredPlugins } = validateManifest(manifest, pack);
+  const { replay, replayDurationMs, declaredPlugins } = validateManifest(manifest, pack);
 
   // --- optional JSON files ---
   let annotationIds = null;
   const annBuf = pack.files.get("annotations.json");
   if (annBuf) {
     const parsed = parseJsonFile("annotations.json", annBuf);
-    if (!parsed.error && isObj(parsed.value)) annotationIds = validateAnnotations(parsed.value, snapshotDims);
+    if (!parsed.error && isObj(parsed.value)) annotationIds = validateAnnotations(parsed.value, snapshotDims, replay, replayDurationMs);
     else if (!parsed.error) fail(`annotations.json: MUST be a JSON object (SPEC §8.1)`);
   } else {
     note(`annotations.json: absent (OPTIONAL — a pack without annotations is valid)`);

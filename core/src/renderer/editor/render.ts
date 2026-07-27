@@ -1,6 +1,7 @@
 // Canvas drawing for the annotation overlay and the exported snapshot.
-// All coordinates are native snapshot pixels; `ui` (= 1 / fit scale) converts
-// desired on-screen pixel sizes into native units so strokes look constant.
+// All coordinates are native snapshot pixels; `ui` (= 1 / effective on-screen
+// scale, zoom included) converts desired on-screen pixel sizes into native
+// units so strokes look constant.
 import type { Annotation, BlurAnnotation, TextAnnotation } from '../../shared/types'
 
 const BLUR_BLOCK = 12 // native px per pixelation block

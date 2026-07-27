@@ -216,6 +216,7 @@ of screen count or scaling.
 | `snapshot` | string | REQUIRED | Filename of the snapshot. In format 0.1.0 this MUST be `"snapshot.png"`. Declared explicitly so future versions can vary it without breaking readers that trust the manifest. |
 | `replay` | string **or** `null` | REQUIRED | Filename of the replay video — `"replay.webm"` or `"replay.mp4"` — or `null` for a screenshot-only pack. Readers MUST take the replay filename from this field rather than probing the pack. |
 | `replay_duration_ms` | integer **or** `null` | REQUIRED when `replay` is a string | Duration of the replay video in milliseconds. MUST be `null` (or absent) when `replay` is `null`. |
+| `snapshot_t_ms` | integer | OPTIONAL | Position in the replay timeline, in milliseconds, of the frame shown in `snapshot.png` — the same clock as timeline `t_ms` offsets relative to `t0` ([§10.1](#101-structure)). MUST be >= 0. **Absent means the snapshot is the capture instant** — the native "now" frame. SHOULD be absent when `replay` is `null`: without a replay there is no timeline to anchor the value to. See [§7.1](#71-frame-accurate-captures). |
 
 ### 5.4 `plugins`
 
@@ -306,6 +307,28 @@ happened *before* the frame.
 When both a replay and a timeline exist, `timeline.json`'s `t0` SHOULD be the instant of the
 replay's first frame, so event offsets double as video seek positions ([§10.1](#101-structure)).
 
+### 7.1 Frame-accurate captures
+
+An editor that holds the frozen replay can let the user scrub backwards in time and pick the
+exact frame that shows the problem — the moment *before* the dialog closed, the frame where the
+glitch is visible. The chosen frame becomes `snapshot.png`, and the writer records its position
+in the replay timeline in `manifest.media.snapshot_t_ms` ([§5.3](#53-media)). When
+`snapshot_t_ms` is absent, the snapshot is the capture instant — the default, and the only
+possibility in a screenshot-only pack.
+
+A scrubbed snapshot changes nothing else about the format:
+
+- `snapshot.png` is still the single still frame the pack is built around, and its pixel
+  dimensions still define the annotation coordinate space ([§8.2](#82-coordinate-space)).
+  Writers composing the snapshot from a decoded video frame SHOULD render it at the same
+  resolution a capture-instant snapshot would have had, so the coordinate space does not depend
+  on the replay's encoded resolution.
+- Blur still applies destructively to the exported `snapshot.png` ([§9](#9-blur-and-privacy)),
+  and the replay-gap caveat of [§9.4](#94-the-replay-gap-mvp-era) still applies.
+- Individual annotations MAY additionally record the replay position they refer to via their
+  own optional `t_ms` ([§8.3](#83-common-fields)) — useful when different annotations were made
+  at different scrub positions.
+
 ---
 
 ## 8. annotations.json
@@ -345,6 +368,7 @@ Every annotation object:
 | `z` | integer | OPTIONAL | Stacking order for rendering; higher draws on top. Default: array position (later entries on top). |
 | `color` | string | OPTIONAL | Display color as CSS-style hex, `"#RRGGBB"` or `"#RRGGBBAA"`. Meaningless for `blur` and SHOULD be omitted there. Viewers pick their own default when absent. |
 | `created_at` | string | OPTIONAL | When the annotation was made, ISO 8601 with timezone. |
+| `t_ms` | number | OPTIONAL | The replay position, in milliseconds, that this annotation refers to — normally the scrub position at which it was created ([§7.1](#71-frame-accurate-captures)). Same clock as timeline `t_ms` offsets relative to `t0` ([§10.1](#101-structure)). Only meaningful when the pack has a replay; SHOULD lie within `[0, replay_duration_ms]`. It does not change the coordinate space — geometry is always in snapshot pixel coordinates ([§8.2](#82-coordinate-space)). |
 
 ### 8.4 Annotation types
 

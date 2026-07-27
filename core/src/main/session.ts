@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto'
 import * as path from 'node:path'
 import { IPC } from '../shared/ipc'
 import type { EditorAnnotationAddedPayload, EditorExportPayload, EditorInitPayload } from '../shared/ipc'
-import type { Settings, TimelineEvent, TimelineFile } from '../shared/types'
+import type { Annotation, Settings, TimelineEvent, TimelineFile } from '../shared/types'
 import { requestReplay, takeSnapshot } from './capture'
 import { exportPack, type ExportInput } from './exporter'
 
@@ -45,6 +45,12 @@ async function runFlow(captureWindow: BrowserWindow, settings: Settings): Promis
       height: snap.height,
       hasReplay: replay !== null,
       replayDurationMs,
+      // Replay bytes are already in memory; the editor scrubs its own copy and
+      // never re-requests them at export time.
+      replayWebm: replay === null ? null : toArrayBuffer(replay.buffer),
+      fps: settings.fps,
+      scrubInvert: settings.scrubInvert,
+      scrubSensitivityMs: settings.scrubSensitivityMs,
     }
     editor.webContents.send(IPC.editorInit, init)
     editor.show()
@@ -66,6 +72,14 @@ async function runFlow(captureWindow: BrowserWindow, settings: Settings): Promis
         }
       : { t0: new Date(t0Ms).toISOString(), events }
 
+  // Same reason: replay positions have no timeline to anchor to without the
+  // replay, so drop snapshot_t_ms (SPEC §5.3) and annotation t_ms (SPEC §8.3).
+  const annotations =
+    replayWebm === null
+      ? outcome.payload.annotations.map(withoutTMs)
+      : outcome.payload.annotations
+  const snapshotTMs = replayWebm === null ? null : outcome.payload.snapshotTMs
+
   const input: ExportInput = {
     snapshotPng: Buffer.from(outcome.payload.snapshotPng),
     width: snap.width,
@@ -73,9 +87,10 @@ async function runFlow(captureWindow: BrowserWindow, settings: Settings): Promis
     capturedAt: new Date(triggerAt),
     replayWebm,
     replayDurationMs: replayWebm === null ? 0 : replayDurationMs,
-    annotations: outcome.payload.annotations,
+    annotations,
     title: outcome.payload.title,
     note: outcome.payload.note,
+    snapshotTMs,
     timeline,
     outputDir: settings.outputDir,
     copyToClipboard: settings.copyToClipboard,
@@ -162,6 +177,14 @@ function runEditor(editor: BrowserWindow, events: TimelineEvent[], t0Ms: number)
     ipcMain.on(IPC.editorCancel, onCancel)
     editor.on('closed', onClosed)
   })
+}
+
+// A replay-relative position is meaningless in a pack without the replay.
+function withoutTMs(a: Annotation): Annotation {
+  if (a.t_ms === undefined) return a
+  const copy = { ...a }
+  delete copy.t_ms
+  return copy
 }
 
 function toArrayBuffer(buf: Buffer): ArrayBuffer {

@@ -132,6 +132,11 @@
             },
             { "type": "null" }
           ]
+        },
+        "snapshot_t_ms": {
+          "description": "OPTIONAL position in the replay timeline, in milliseconds, of the frame shown in snapshot.png — the same clock as timeline t_ms offsets relative to t0 (SPEC.md §10.1). Absent means the snapshot is the capture instant (the native 'now' frame). SHOULD be absent when replay is null: without a replay there is no timeline to anchor the value to. See SPEC.md §7.1 (frame-accurate captures).",
+          "type": "integer",
+          "minimum": 0
         }
       },
       "if": {

@@ -48,6 +48,11 @@ export interface EditorInitPayload {
   height: number
   hasReplay: boolean
   replayDurationMs: number
+  // webm bytes of the replay for scrubbing; null when screenshot-only
+  replayWebm: ArrayBuffer | null
+  fps: number
+  scrubInvert: boolean
+  scrubSensitivityMs: number
 }
 
 export interface EditorAnnotationAddedPayload {
@@ -64,6 +69,8 @@ export interface EditorExportPayload {
   title: string
   note: string
   includeReplay: boolean
+  // Replay position (ms) of the exported frame; null = the capture instant ("now")
+  snapshotTMs: number | null
 }
 
 export interface UpdaterStatusPayload {

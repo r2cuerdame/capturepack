@@ -54,13 +54,17 @@ Exit codes: `0` valid, `1` invalid, `2` usage or unreadable input.
   ISO 8601 `created_at` with timezone, `generator`, `environment`, `media`
   field shapes; nullable rules (`null` only where the spec allows it).
 - **Media consistency** (SPEC §5.3, §7): declared replay exists; no undeclared
-  or second replay file; `replay_duration_ms` coupled to `replay`.
+  or second replay file; `replay_duration_ms` coupled to `replay`;
+  `snapshot_t_ms` (frame-accurate snapshot, §7.1) is an integer >= 0, with a
+  note when it has no replay to anchor to or exceeds the replay duration.
 - **Plugins** (SPEC §5.4, §11): name pattern, `path` exactly
   `plugins/<name>/`, `meta.json` present and matching the declaration.
   Undeclared plugin directories are ignored with a note.
 - **annotations.json** (SPEC §8): reference dimensions equal the actual
   snapshot dimensions; per-type geometry (rect/blur `w`,`h` > 0, etc.), unique
-  ids, color format. Unknown annotation types are skipped with a note.
+  ids, color format; `t_ms` (replay position, §8.3) is a number, with a note
+  when the pack has no replay or the value lies outside
+  `[0, replay_duration_ms]`. Unknown annotation types are skipped with a note.
 - **timeline.json** (SPEC §10): `t0` with timezone, events sorted ascending by
   `t_ms`, namespaced event types, `source` matching the namespace, `input.*`
   rejected (reserved for V2), plugin events matching declared plugins.

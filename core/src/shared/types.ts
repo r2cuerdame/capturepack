@@ -22,6 +22,9 @@ export interface Manifest {
     snapshot: string
     replay: string | null
     replay_duration_ms?: number
+    // Replay-timeline position (ms, same clock as timeline t_ms) of the frame
+    // shown in snapshot.png. Absent = the capture instant ("now").
+    snapshot_t_ms?: number
   }
   plugins: Array<{ name: string; version: string; path: string }>
 }
@@ -33,6 +36,9 @@ interface AnnotationBase {
   type: AnnotationType
   z: number
   created_at: string
+  // Replay position (ms) the annotation refers to — the scrub position when it
+  // was created. Absent for screenshot-only captures.
+  t_ms?: number
 }
 
 // Display color; SPEC §8.3 declares it meaningless for blur, so blur omits it.
@@ -113,4 +119,6 @@ export interface Settings {
   copyToClipboard: boolean
   replaySeconds: number
   fps: number
+  scrubInvert: boolean
+  scrubSensitivityMs: number
 }

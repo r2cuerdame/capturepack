@@ -59,6 +59,10 @@
           "description": "OPTIONAL creation instant of the annotation, ISO 8601 with timezone.",
           "type": "string",
           "format": "date-time"
+        },
+        "t_ms": {
+          "description": "OPTIONAL replay position, in milliseconds, that this annotation refers to — normally the scrub position at which it was created (SPEC.md §7.1). Same clock as timeline t_ms offsets relative to t0 (SPEC.md §10.1). Only meaningful when the pack has a replay; SHOULD lie within [0, replay_duration_ms]. Does not change the coordinate space — geometry is always in snapshot pixel coordinates (SPEC.md §8.2).",
+          "type": "number"
         }
       }
     },
