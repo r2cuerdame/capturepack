@@ -2,6 +2,7 @@
 import { app, dialog, globalShortcut, Notification, shell } from 'electron'
 import * as fs from 'node:fs'
 import type { UpdaterStatusPayload } from '../shared/ipc'
+import { openAboutWindow, pushAboutState, registerAboutIpc } from './aboutWindow'
 import { setupDisplayMediaHandler, startCapture } from './capture'
 import { disposeHistory, notifyHistoryChanged, openHistoryWindow, registerHistoryIpc } from './historyWindow'
 import { registerCaptureHotkey } from './hotkey'
@@ -13,7 +14,7 @@ import { loadSettings } from './settings'
 import { openSettingsWindow, registerSettingsIpc } from './settingsWindow'
 import { createTray } from './tray'
 import type { TrayControls } from './tray'
-import { initUpdater, restartAndUpdate } from './updater'
+import { checkNow, initUpdater, restartAndUpdate, updaterState } from './updater'
 
 if (process.argv.includes('--smoke')) {
   // CI smoke test: settings load only — no windows, tray, hotkey, or MCP.
@@ -75,6 +76,7 @@ function main(): void {
       onLanguageChanged: () => {
         tray?.refresh()
         notifyHistoryChanged()
+        pushAboutState()
       },
       // What a re-registered capture hotkey has to trigger.
       onCapture: capture,
@@ -87,6 +89,8 @@ function main(): void {
     })
     // Same live settings object: History honors outputDir changes on next access.
     registerHistoryIpc(settings)
+    // Same again: the About window resolves the UI language at call time.
+    registerAboutIpc(settings)
 
     tray = createTray(
       {
@@ -97,11 +101,16 @@ function main(): void {
           void shell.openPath(settings.outputDir)
         },
         onOpenSettings: () => openSettingsWindow(),
+        // Manual check (GOAL "Tray Menu"): runs even with auto-check off; the
+        // menu item's label follows the state through the getter below.
+        onCheckUpdates: () => void checkNow(),
+        onAbout: () => openAboutWindow(),
         onRestartUpdate: () => restartAndUpdate(),
         onQuit: () => app.quit(),
       },
       () => uiLanguage(settings),
       () => settings.captureHotkey,
+      () => updaterState(),
     )
     const trayControls = tray
 
@@ -109,6 +118,8 @@ function main(): void {
     if (process.argv.includes('--show-settings')) openSettingsWindow()
     // Dev aid / headed testing: open the History window on launch.
     if (process.argv.includes('--show-history')) openHistoryWindow()
+    // Dev aid / headed testing: open the About window on launch.
+    if (process.argv.includes('--show-about')) openAboutWindow()
 
     if (!registerCaptureHotkey(settings.captureHotkey, capture)) {
       // Async on purpose: showErrorBox blocks the main-process event loop until
@@ -120,14 +131,31 @@ function main(): void {
       })
     }
 
+    // The version the "update ready" notification has already announced. A
+    // scheduled re-check re-emits 'update-downloaded' for the cached file, and
+    // the same toast every 4 hours would be nagging, not news.
+    let notifiedVersion: string | null = null
     initUpdater({
       autoCheck: settings.autoUpdateCheck,
       onStatus: (status: UpdaterStatusPayload) => {
-        if (status.state !== 'downloaded' || !status.version) return
-        trayControls.setUpdateReady(status.version)
+        // Every state change re-renders the surfaces that show it: the tray's
+        // "Check for updates…" item and an open About window. setUpdateReady()
+        // rebuilds the menu itself, so it REPLACES refresh() — never both.
+        const readyVersion =
+          status.state === 'downloaded' && status.version !== undefined && status.version !== ''
+            ? status.version
+            : null
+        if (readyVersion !== null) {
+          trayControls.setUpdateReady(readyVersion)
+        } else {
+          trayControls.refresh()
+        }
+        pushAboutState()
+        if (readyVersion === null || readyVersion === notifiedVersion) return
+        notifiedVersion = readyVersion
         const note = new Notification({
           title: 'CapturePack', // product name — never translated
-          body: uiT(settings)('app.updateReady', { version: status.version }),
+          body: uiT(settings)('app.updateReady', { version: readyVersion }),
         })
         note.on('click', () => restartAndUpdate())
         note.show()

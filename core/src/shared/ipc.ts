@@ -27,9 +27,15 @@ export const IPC = {
   // editor -> main: an annotation was added (EditorAnnotationAddedPayload, for the timeline)
   editorAnnotationAdded: 'editor:annotation-added',
 
-  // main -> tray/editor: updater state changed
-  updaterStatus: 'updater:status',
-  // renderer -> main: user chose "Restart and update"
+  // about window -> main (invoke): version, icon, language, updater state
+  aboutGet: 'about:get',
+  // main -> about window: fresh about state (the updater state changed, or the
+  // UI language did while the window is open)
+  aboutState: 'about:state',
+  // about window -> main: open one of the hardcoded links. The renderer sends an
+  // AboutLinkKey, never a URL — main maps it through its own allowlist.
+  aboutOpenLink: 'about:open-link',
+  // about window -> main: user chose "Restart and update"
   updaterRestart: 'updater:restart',
 
   // settings window -> main (invoke): current settings + display list + app info
@@ -227,10 +233,46 @@ export interface ToastCreateZipResult {
   error?: string
 }
 
+// Updater state as the tray label and the About window render it.
+// 'up-to-date' is the transient answer to a finished check ("You're up to
+// date"), which the updater itself reverts to 'idle' after a few seconds;
+// 'dev' is an unpackaged run, where electron-updater is never touched.
 export interface UpdaterStatusPayload {
-  state: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'error'
+  state:
+    | 'idle'
+    | 'checking'
+    | 'up-to-date'
+    | 'available'
+    | 'downloading'
+    | 'downloaded'
+    | 'error'
+    | 'dev'
   version?: string
   message?: string
+}
+
+// ---------------------------------------------------------------------------
+// About window
+
+/** The links the About window may ask main to open. Never a URL: main owns the
+ * hardcoded allowlist, so a compromised renderer cannot open arbitrary pages. */
+export type AboutLinkKey = 'website' | 'github' | 'issues' | 'sponsor'
+
+export interface AboutInfoResult {
+  // app.getVersion() — the running version, shown as "Version {version}"
+  version: string
+  // dist/assets/icon.png as a data: URL (CSP img-src 'self' data:); '' when the
+  // icon could not be read, and the renderer then shows no image at all
+  iconDataUrl: string
+  // Resolved UI language (shared/i18n Language) for the window's strings
+  uiLanguage: string
+  updater: UpdaterStatusPayload
+  // Version of an already-downloaded update waiting for a restart, else null.
+  // STICKY across later checks (which momentarily report 'checking'/'available'
+  // while revalidating the cached file), so the About window's Restart button
+  // follows the same rule as the tray's "Restart and update (vX)" item instead
+  // of blinking out during every scheduled re-check.
+  downloadedVersion: string | null
 }
 
 // Partial settings update from the settings GUI. Every value is validated

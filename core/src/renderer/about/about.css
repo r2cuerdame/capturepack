@@ -1,0 +1,154 @@
+/* About window: compact, dark, centered — same palette as the settings GUI. */
+:root {
+  --bg: #121216;
+  --panel: #1c1c22;
+  --panel-hover: #2e2e38;
+  --border: #2c2c34;
+  --text: #e8e8ea;
+  --muted: #8a8a93;
+  --accent: #e5537b;
+  --accent-border: #7a2f45;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.5 "Segoe UI", system-ui, sans-serif;
+  user-select: none;
+  overflow: hidden;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+#about {
+  height: 100%;
+  padding: 22px 24px 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 6px;
+}
+
+#icon {
+  width: 88px;
+  height: 88px;
+  image-rendering: auto;
+}
+
+#name {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  margin-top: 4px;
+}
+
+.version {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- update state ---- */
+
+.update {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 30px;
+  margin-top: 2px;
+}
+
+.updateState {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.updateState.ready {
+  color: #6fd08c;
+}
+
+.updateState.failed {
+  color: #ff8a80;
+}
+
+/* ---- slogans ---- */
+
+.slogan {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.slogan + .slogan {
+  color: var(--muted);
+}
+
+/* ---- links ---- */
+
+.links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: auto;
+  padding: 14px 0 12px;
+}
+
+button {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 6px 12px;
+  font: 600 12px "Segoe UI", system-ui, sans-serif;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+button:hover {
+  background: var(--panel-hover);
+  border-color: #3c3c48;
+}
+
+button:focus-visible {
+  outline: 2px solid #3574f0;
+  outline-offset: 1px;
+}
+
+/* Sponsor stands apart from the plain links — the one accent in the window. */
+button.sponsor {
+  color: var(--accent);
+  border-color: var(--accent-border);
+}
+
+button.sponsor:hover {
+  background: #2a1620;
+  border-color: var(--accent);
+}
+
+/* ---- footer ---- */
+
+footer {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+}

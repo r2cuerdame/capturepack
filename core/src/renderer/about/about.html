@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:"
+  />
+  <title data-i18n="about.windowTitle">CapturePack — About</title>
+  <link rel="stylesheet" href="./about.css" />
+</head>
+<body>
+  <main id="about">
+    <!-- Decorative: the product name is spelled out right below it. -->
+    <img id="icon" alt="" hidden />
+    <h1 id="name">CapturePack</h1>
+    <div id="version" class="version"></div>
+
+    <div class="update">
+      <span id="updateState" class="updateState"></span>
+      <button id="restartBtn" type="button" hidden data-i18n="about.restartUpdate">Restart and update</button>
+    </div>
+
+    <p class="slogan" data-i18n="about.slogan1">Capture context, not screenshots.</p>
+    <p class="slogan" data-i18n="about.slogan2">Better input. Better answers.</p>
+
+    <div class="links">
+      <button type="button" data-link="website" data-i18n="about.website">Website</button>
+      <button type="button" data-link="github" data-i18n="about.github">GitHub</button>
+      <button type="button" data-link="issues" data-i18n="about.reportIssue">Report an issue</button>
+      <button type="button" class="sponsor" data-link="sponsor" data-i18n="about.sponsor">♥ Sponsor</button>
+    </div>
+
+    <footer>
+      <span data-i18n="about.license">MIT License · Open source</span>
+      <span data-i18n="common.escCloses">Esc closes</span>
+    </footer>
+  </main>
+  <script src="./about.js"></script>
+</body>
+</html>
