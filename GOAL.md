@@ -618,6 +618,9 @@ With this design CapturePack naturally grows into a plugin-based context platfor
 
 ## Tray Menu
 
+**Left-clicking the tray icon opens History** — the icon must never be inert; the menu
+below is the right-click surface.
+
 The tray menu is the app's only always-present surface, so it stays short:
 
 ```

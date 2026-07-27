@@ -38,6 +38,9 @@ export function createTray(
 ): TrayControls {
   const tray = new Tray(path.join(app.getAppPath(), 'dist', 'assets', 'tray.png'))
   tray.setToolTip('CapturePack') // product name — never translated
+  // A left click has to do something: open History, the one window a user
+  // reaches for repeatedly. The menu stays on right-click.
+  tray.on('click', () => handlers.onOpenHistory())
 
   let updateVersion: string | null = null
 
