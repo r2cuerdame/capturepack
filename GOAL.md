@@ -810,6 +810,12 @@ Automatic window/control selection ships in a static form first:
 2. **In the editor**, the object tool (O / left click) highlights the UIA element under the
    cursor from that dump; clicking selects the element's exact bounds and pre-fills its
    name as the label — stored as the `"element"` annotation type with the object metadata.
+   **Windows are always selectable.** The window list is captured for every visible
+   window, so even when a window exposes no usable control tree (Chromium and Electron
+   windows do not until an assistive client asks), hovering it highlights the WINDOW and
+   clicking snaps a box to its bounds with its title as the label. Controls refine the
+   selection when they exist; the window is the guaranteed floor, never "nothing
+   happens". Hovering shows which level is being offered (window vs control).
 3. In Chrome, the extension's DOM picker plays the same role (protocol v1).
 4. Frame-by-frame tracking (bounds following the object through the replay) remains V3.
 
