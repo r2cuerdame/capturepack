@@ -65,7 +65,11 @@ export function buildReport(manifest: Manifest, annotationsFile: AnnotationsFile
   } else {
     annotations.forEach((a, i) => {
       const at = a.t_ms !== undefined ? ` — at ${secs(a.t_ms)}s in the replay` : ''
-      lines.push(`${i + 1}. ${describeAnnotation(a)}${at}`)
+      const visible =
+        a.t_start_ms !== undefined && a.t_end_ms !== undefined
+          ? ` — visible ${secs(a.t_start_ms)}s-${secs(a.t_end_ms)}s`
+          : ''
+      lines.push(`${i + 1}. ${describeAnnotation(a)}${at}${visible}`)
     })
   }
   const blurCount = annotations.filter((a) => a.type === 'blur').length

@@ -41,12 +41,29 @@
       Blur is not applied to the replay video
       <button id="excludeReplayBtn">exclude replay</button>
     </div>
+    <button id="durationChip" title="Edit duration" hidden>1.0s</button>
+    <button id="deleteChip" title="Delete (Del)" hidden>×</button>
+    <div id="durationEditor" hidden>
+      <div id="durationPresets">
+        <button type="button" data-ms="500">0.5s</button>
+        <button type="button" data-ms="1000">1s</button>
+        <button type="button" data-ms="2000">2s</button>
+        <button type="button" data-ms="5000">5s</button>
+        <button type="button" data-ms="10000">10s</button>
+        <button type="button" id="untilEndBtn">Until End</button>
+        <button type="button" id="entireCaptureBtn">Entire Capture</button>
+      </div>
+      <input id="durationInput" type="text" placeholder="custom: 1500ms or 1.5s" autocomplete="off" spellcheck="false" />
+    </div>
   </main>
   <footer id="timebar" hidden>
     <button id="playBtn" title="Play / pause" disabled>▶</button>
-    <div id="track">
-      <div id="trackFill"></div>
-      <div id="playhead"></div>
+    <div id="trackArea">
+      <div id="lanes" hidden></div>
+      <div id="track">
+        <div id="trackFill"></div>
+        <div id="playhead"></div>
+      </div>
     </div>
     <span id="timeLabel">now</span>
     <span id="scrubHint">loading replay…</span>

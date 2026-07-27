@@ -53,6 +53,10 @@ export interface EditorInitPayload {
   fps: number
   scrubInvert: boolean
   scrubSensitivityMs: number
+  // Default lifetime duration (ms) stamped on committed manual annotations
+  defaultManualDurationMs: number
+  // Show the duration chip on the selected annotation
+  showDurationLabel: boolean
 }
 
 export interface EditorAnnotationAddedPayload {

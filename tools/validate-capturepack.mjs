@@ -407,6 +407,38 @@ function validateAnnotations(a, snapshotDims, replay, replayDurationMs) {
       else if (replayDurationMs !== null && (ann.t_ms < 0 || ann.t_ms > replayDurationMs)) note(`${label}.t_ms ${ann.t_ms} lies outside the replay [0, ${replayDurationMs}] ms (SPEC §8.3)`);
     }
 
+    // Lifetime interval (SPEC §8.3, "Annotation lifetime").
+    if (ann.t_start_ms !== undefined || ann.t_end_ms !== undefined) {
+      let lifetimeOk = true;
+      for (const f of ["t_start_ms", "t_end_ms"]) {
+        if (ann[f] !== undefined && !isNum(ann[f])) { fail(`${label}.${f} MUST be a number (SPEC §8.3)`); bad++; lifetimeOk = false; }
+      }
+      if (lifetimeOk) {
+        const start = ann.t_start_ms;
+        const end = ann.t_end_ms;
+        if (start !== undefined && end !== undefined && start > end) {
+          fail(`${label}: t_start_ms ${start} > t_end_ms ${end} — a lifetime MUST satisfy t_start_ms <= t_end_ms (SPEC §8.3)`);
+          bad++;
+        } else {
+          if (start === undefined || end === undefined) {
+            note(`${label}: only one of t_start_ms/t_end_ms is present — writers SHOULD emit both bounds of a lifetime or neither (SPEC §8.3)`);
+          }
+          if (!replay) {
+            note(`${label}: has a lifetime (t_start_ms/t_end_ms) but the pack has no replay — a lifetime is a replay interval and is only meaningful with a replay (SPEC §8.3)`);
+          } else if (replayDurationMs !== null) {
+            for (const f of ["t_start_ms", "t_end_ms"]) {
+              if (ann[f] !== undefined && (ann[f] < 0 || ann[f] > replayDurationMs)) {
+                note(`${label}.${f} ${ann[f]} lies outside the replay [0, ${replayDurationMs}] ms (SPEC §8.3)`);
+              }
+            }
+          }
+          if (isNum(ann.t_ms) && start !== undefined && end !== undefined && (ann.t_ms < start || ann.t_ms > end)) {
+            note(`${label}: anchor t_ms ${ann.t_ms} lies outside the lifetime [${start}, ${end}] ms — the anchor SHOULD lie inside the lifetime (SPEC §8.3)`);
+          }
+        }
+      }
+    }
+
     const req = (fields, pred, what) => {
       for (const f of fields) {
         if (!pred(ann[f])) { fail(`${label} (${ann.type}): "${f}" MUST be ${what} (SPEC §8.4)`); bad++; }

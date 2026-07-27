@@ -327,7 +327,8 @@ A scrubbed snapshot changes nothing else about the format:
   and the replay-gap caveat of [§9.4](#94-the-replay-gap-mvp-era) still applies.
 - Individual annotations MAY additionally record the replay position they refer to via their
   own optional `t_ms` ([§8.3](#83-common-fields)) — useful when different annotations were made
-  at different scrub positions.
+  at different scrub positions — and MAY scope when they apply with a lifetime interval
+  (`t_start_ms`/`t_end_ms`, [§8.3](#annotation-lifetime)).
 
 ---
 
@@ -368,7 +369,33 @@ Every annotation object:
 | `z` | integer | OPTIONAL | Stacking order for rendering; higher draws on top. Default: array position (later entries on top). |
 | `color` | string | OPTIONAL | Display color as CSS-style hex, `"#RRGGBB"` or `"#RRGGBBAA"`. Meaningless for `blur` and SHOULD be omitted there. Viewers pick their own default when absent. |
 | `created_at` | string | OPTIONAL | When the annotation was made, ISO 8601 with timezone. |
-| `t_ms` | number | OPTIONAL | The replay position, in milliseconds, that this annotation refers to — normally the scrub position at which it was created ([§7.1](#71-frame-accurate-captures)). Same clock as timeline `t_ms` offsets relative to `t0` ([§10.1](#101-structure)). Only meaningful when the pack has a replay; SHOULD lie within `[0, replay_duration_ms]`. It does not change the coordinate space — geometry is always in snapshot pixel coordinates ([§8.2](#82-coordinate-space)). |
+| `t_ms` | number | OPTIONAL | The replay position, in milliseconds, that this annotation refers to — normally the scrub position at which it was created ([§7.1](#71-frame-accurate-captures)). Same clock as timeline `t_ms` offsets relative to `t0` ([§10.1](#101-structure)). Only meaningful when the pack has a replay; SHOULD lie within `[0, replay_duration_ms]`. It does not change the coordinate space — geometry is always in snapshot pixel coordinates ([§8.2](#82-coordinate-space)). When a lifetime is present, `t_ms` is its **anchor** and SHOULD lie inside the lifetime interval. |
+| `t_start_ms` | number | OPTIONAL | Start of the annotation's **lifetime** — the interval of the replay timeline during which the annotation applies. Milliseconds, same clock as `t_ms`. MUST be <= `t_end_ms`. See [Annotation lifetime](#annotation-lifetime) below. |
+| `t_end_ms` | number | OPTIONAL | End of the annotation's lifetime, in milliseconds. MUST be >= `t_start_ms`. |
+
+#### Annotation lifetime
+
+An annotation MAY carry a **lifetime**: the closed interval `[t_start_ms, t_end_ms]` of the
+replay timeline during which the annotation applies — the same millisecond clock as `t_ms` and
+as timeline offsets relative to `t0` ([§10.1](#101-structure)).
+
+- **Absent lifetime = whole capture.** When neither field is present the annotation applies to
+  the entire capture. This is always valid — a simple writer that does not track time just omits
+  both fields. Lifetimes are only meaningful when the pack has a replay; in a screenshot-only
+  pack writers SHOULD omit them (like `t_ms`).
+- **Well-formed interval.** `t_start_ms` MUST be <= `t_end_ms`, and both bounds SHOULD lie
+  within `[0, replay_duration_ms]`. Writers SHOULD emit both fields or neither; a reader that
+  finds only one SHOULD treat the absent bound as the corresponding edge of the capture
+  (0 for the start, the replay end for the end).
+- **`t_ms` stays the anchor.** The optional `t_ms` still identifies the single frame the
+  annotation refers to — the frame that `snapshot.png` and `report.md` speak about. When a
+  lifetime is present, the anchor SHOULD lie inside it.
+- **Rendering.** A viewer scrubbing the replay SHOULD draw an annotation only while the current
+  position lies inside its lifetime; annotations without a lifetime always draw.
+- **Blur ignores lifetime.** A `blur` region is applied destructively to the exported
+  `snapshot.png` regardless of any lifetime ([§9](#9-blur-and-privacy)). A lifetime can scope
+  when a viewer outlines the region over the replay — never whether the pixels are redacted.
+  Privacy beats the timeline, exactly as it beats editability.
 
 ### 8.4 Annotation types
 
@@ -412,6 +439,11 @@ semantics.
 | `text` | string | The note content. |
 | `size` | number (optional) | Font size in snapshot pixels. Viewers pick a legible default when absent. |
 
+> **Reserved:** the annotation type `"element"` (a **Tracked Element** — an annotation that
+> lives while a tracked UI object exists, its bounds following the object) is reserved for a
+> future format version and is not defined in 0.1.0; readers already MUST skip unknown types
+> ([§8.3](#83-common-fields)).
+
 ### 8.5 Example
 
 ```json
@@ -435,6 +467,9 @@ semantics.
       "z": 2,
       "color": "#FF3B30",
       "created_at": "2026-07-27T14:03:29+09:00",
+      "t_ms": 27400,
+      "t_start_ms": 26900,
+      "t_end_ms": 27900,
       "x": 2140,
       "y": 1236,
       "w": 180,
@@ -487,7 +522,8 @@ rule — deliberately.
 ### 9.1 The rule
 
 1. Exporters MUST apply every `blur` region **destructively** to the exported `snapshot.png`:
-   the pixels inside each blur rectangle are irreversibly obscured in the image itself.
+   the pixels inside each blur rectangle are irreversibly obscured in the image itself. This
+   holds regardless of any annotation lifetime ([§8.3](#annotation-lifetime)).
 2. The original, unredacted frame MUST NOT be included anywhere in the pack — not as another
    file, not embedded in metadata, not recoverable from any pack content.
 3. The `blur` annotation MUST still be recorded as data in `annotations.json`, exactly like any

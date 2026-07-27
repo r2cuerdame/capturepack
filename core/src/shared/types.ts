@@ -29,6 +29,9 @@ export interface Manifest {
   plugins: Array<{ name: string; version: string; path: string }>
 }
 
+// SPEC reserves type "element" (Tracked Element — alive while the tracked
+// object exists, bounds following it) for a future format version; readers
+// MUST ignore unknown types, so it stays out of this union until then.
 export type AnnotationType = 'pin' | 'arrow' | 'rect' | 'blur' | 'text'
 
 interface AnnotationBase {
@@ -36,9 +39,15 @@ interface AnnotationBase {
   type: AnnotationType
   z: number
   created_at: string
-  // Replay position (ms) the annotation refers to — the scrub position when it
-  // was created. Absent for screenshot-only captures.
+  // Replay position (ms) the annotation refers to — the ANCHOR frame: the
+  // scrub position when it was created. Absent for screenshot-only captures.
   t_ms?: number
+  // OPTIONAL lifetime interval on the replay timeline (same clock as t_ms,
+  // t_start_ms <= t_end_ms): the annotation applies while the scrub position
+  // lies inside it. When present the anchor SHOULD lie inside the interval.
+  // Absent lifetime = the annotation applies to the whole capture.
+  t_start_ms?: number
+  t_end_ms?: number
 }
 
 // Display color; SPEC §8.3 declares it meaningless for blur, so blur omits it.
@@ -121,4 +130,8 @@ export interface Settings {
   fps: number
   scrubInvert: boolean
   scrubSensitivityMs: number
+  // Default lifetime duration (ms) stamped on manual annotations in the editor.
+  defaultManualDurationMs: number
+  // Show the duration chip on the selected annotation in the editor.
+  showDurationLabel: boolean
 }

@@ -267,6 +267,96 @@ body {
   background: rgba(255, 210, 122, 0.12);
 }
 
+/* ---- selected-annotation chips (screen-space, glued to the bounds) ---- */
+
+#durationChip,
+#deleteChip {
+  position: absolute;
+  z-index: 6;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: rgba(20, 20, 26, 0.92);
+  color: var(--text);
+  font: 600 11px "Segoe UI", system-ui, sans-serif;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+#durationChip {
+  padding: 1px 6px;
+  /* Anchored by its bottom-left to the selection's top-left corner. */
+  transform: translateY(-100%);
+  font-variant-numeric: tabular-nums;
+}
+
+#deleteChip {
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  line-height: 15px;
+  border-radius: 50%;
+  /* Centered on the selection's top-right corner. */
+  transform: translate(-50%, -50%);
+}
+
+#durationChip:hover,
+#deleteChip:hover {
+  background: var(--panel-hover);
+  border-color: #4a4a58;
+}
+
+#durationEditor {
+  position: absolute;
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+}
+
+#durationPresets {
+  display: flex;
+  gap: 4px;
+}
+
+#durationPresets button {
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  padding: 3px 7px;
+  font: 600 11px "Segoe UI", system-ui, sans-serif;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+#durationPresets button:hover {
+  background: var(--panel-hover);
+}
+
+#durationInput {
+  background: #111116;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+  padding: 3px 7px;
+  font: 12px "Segoe UI", system-ui, sans-serif;
+  outline: none;
+  user-select: text;
+}
+
+#durationInput:focus {
+  border-color: #4a4a58;
+}
+
+#durationInput::placeholder {
+  color: #6a6a74;
+}
+
 /* ---- timeline bar ---- */
 
 #timebar {
@@ -274,8 +364,8 @@ body {
   display: flex;
   align-items: center;
   gap: 12px;
-  height: 40px;
-  padding: 0 12px;
+  min-height: 40px;
+  padding: 5px 12px;
   background: var(--panel);
   border-top: 1px solid var(--border);
 }
@@ -303,9 +393,41 @@ body {
   cursor: default;
 }
 
+#trackArea {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+
+/* Compact lane strip: one slim bar per annotation lifetime, above the track. */
+#lanes {
+  position: relative;
+  width: 100%;
+}
+
+.laneBar {
+  position: absolute;
+  height: 3px;
+  min-width: 3px;
+  border-radius: 2px;
+  opacity: 0.85;
+  cursor: pointer;
+}
+
+.laneBar:hover {
+  opacity: 1;
+}
+
+.laneBar.selected {
+  opacity: 1;
+  outline: 1px solid #fff;
+}
+
 #track {
   position: relative;
-  flex: 1;
   height: 18px;
   cursor: pointer;
 }

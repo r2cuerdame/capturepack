@@ -51,6 +51,8 @@ async function runFlow(captureWindow: BrowserWindow, settings: Settings): Promis
       fps: settings.fps,
       scrubInvert: settings.scrubInvert,
       scrubSensitivityMs: settings.scrubSensitivityMs,
+      defaultManualDurationMs: settings.defaultManualDurationMs,
+      showDurationLabel: settings.showDurationLabel,
     }
     editor.webContents.send(IPC.editorInit, init)
     editor.show()
@@ -73,10 +75,11 @@ async function runFlow(captureWindow: BrowserWindow, settings: Settings): Promis
       : { t0: new Date(t0Ms).toISOString(), events }
 
   // Same reason: replay positions have no timeline to anchor to without the
-  // replay, so drop snapshot_t_ms (SPEC §5.3) and annotation t_ms (SPEC §8.3).
+  // replay, so drop snapshot_t_ms (SPEC §5.3) and annotation anchors (t_ms)
+  // plus lifetime intervals (t_start_ms/t_end_ms) (SPEC §8.3).
   const annotations =
     replayWebm === null
-      ? outcome.payload.annotations.map(withoutTMs)
+      ? outcome.payload.annotations.map(withoutReplayTimes)
       : outcome.payload.annotations
   const snapshotTMs = replayWebm === null ? null : outcome.payload.snapshotTMs
 
@@ -179,11 +182,14 @@ function runEditor(editor: BrowserWindow, events: TimelineEvent[], t0Ms: number)
   })
 }
 
-// A replay-relative position is meaningless in a pack without the replay.
-function withoutTMs(a: Annotation): Annotation {
-  if (a.t_ms === undefined) return a
+// Replay-relative positions (the anchor and the lifetime interval) are
+// meaningless in a pack without the replay.
+function withoutReplayTimes(a: Annotation): Annotation {
+  if (a.t_ms === undefined && a.t_start_ms === undefined && a.t_end_ms === undefined) return a
   const copy = { ...a }
   delete copy.t_ms
+  delete copy.t_start_ms
+  delete copy.t_end_ms
   return copy
 }
 

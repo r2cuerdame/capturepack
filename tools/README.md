@@ -64,7 +64,12 @@ Exit codes: `0` valid, `1` invalid, `2` usage or unreadable input.
   snapshot dimensions; per-type geometry (rect/blur `w`,`h` > 0, etc.), unique
   ids, color format; `t_ms` (replay position, §8.3) is a number, with a note
   when the pack has no replay or the value lies outside
-  `[0, replay_duration_ms]`. Unknown annotation types are skipped with a note.
+  `[0, replay_duration_ms]`. Lifetime intervals (`t_start_ms`/`t_end_ms`,
+  §8.3 "Annotation lifetime"): both must be numbers with
+  `t_start_ms <= t_end_ms` (FAIL otherwise), with a note when a bound lies
+  outside `[0, replay_duration_ms]`, when the anchor `t_ms` lies outside the
+  lifetime, when only one bound is present, or when a lifetime appears in a
+  pack without a replay. Unknown annotation types are skipped with a note.
 - **timeline.json** (SPEC §10): `t0` with timezone, events sorted ascending by
   `t_ms`, namespaced event types, `source` matching the namespace, `input.*`
   rejected (reserved for V2), plugin events matching declared plugins.

@@ -9,7 +9,8 @@ import type {
 } from '../../shared/ipc'
 import type { Annotation, BlurAnnotation, RectAnnotation } from '../../shared/types'
 import { EditorState, type Tool } from './state'
-import { composeExportPng, drawScene, hitTest } from './render'
+import { formatDurationLabel, lifetimeAround, parseDurationMs, visibleAt } from './lifetime'
+import { annotationBounds, composeExportPng, drawScene, hitTest, SELECTION_PAD } from './render'
 import { ScrubController, wheelScrubDeltaMs } from './scrub'
 import { Timebar } from './timebar'
 import { Viewport } from './viewport'
@@ -53,6 +54,12 @@ const excludeReplayBtn = el<HTMLButtonElement>('excludeReplayBtn')
 const colorBtn = el<HTMLButtonElement>('colorBtn')
 const colorSwatch = el<HTMLSpanElement>('colorSwatch')
 const exportBtn = el<HTMLButtonElement>('exportBtn')
+const durationChip = el<HTMLButtonElement>('durationChip')
+const deleteChip = el<HTMLButtonElement>('deleteChip')
+const durationEditor = el<HTMLDivElement>('durationEditor')
+const durationInput = el<HTMLInputElement>('durationInput')
+const untilEndBtn = el<HTMLButtonElement>('untilEndBtn')
+const entireCaptureBtn = el<HTMLButtonElement>('entireCaptureBtn')
 const toolButtons = Array.from(
   document.querySelectorAll<HTMLButtonElement>('#tools .tool[data-tool]'),
 )
@@ -84,6 +91,8 @@ let exporting = false
 let fps = 15
 let scrubInvert = false
 let scrubSensitivityMs = 100
+let defaultManualDurationMs = 1000
+let showDurationLabel = true
 // Original desktop snapshot, kept for restoring the "now" frame after scrubbing.
 let nativeBitmap: ImageBitmap | null = null
 let scrub: ScrubController | null = null
@@ -139,7 +148,20 @@ function schedulePaint(): void {
     // ui = 1 / effective on-screen scale, so strokes stay constant under zoom
     // and drawn sizes match hitTest's.
     drawScene(overlayCtx, snapshot, sceneAnnotations(), state.selectedId, 1 / (fitScale * viewport.zoom))
+    syncSelectionUi()
   })
+}
+
+/** True when `a` applies at the current scrub position (always, without a replay). */
+function annotationVisibleNow(a: Annotation): boolean {
+  if (!scrub) return true
+  // The parsed video clock can run slightly past the manifest's wall-clock
+  // replay_duration_ms, which lifetimes are clamped to.
+  return visibleAt(a, Math.min(scrub.tMs, replayDurationMs), scrub.atNow, replayDurationMs)
+}
+
+function visibleAnnotations(): readonly Annotation[] {
+  return scrub ? state.annotations.filter(annotationVisibleNow) : state.annotations
 }
 
 function sceneAnnotations(): readonly Annotation[] {
@@ -158,12 +180,26 @@ function sceneAnnotations(): readonly Annotation[] {
       ...pendingRect,
     })
   }
-  return extras.length > 0 ? [...state.annotations, ...extras] : state.annotations
+  const base = visibleAnnotations()
+  return extras.length > 0 ? [...base, ...extras] : base
 }
 
 function refresh(): void {
   syncBlurWarning()
+  syncLanes()
   schedulePaint()
+}
+
+// Duration the lane strip was last built against; when ScrubController adopts
+// the parsed webm duration (replacing the manifest fallback) the bars must be
+// rebuilt so they keep sharing the playhead's time→x mapping.
+let laneDurationMs = -1
+
+/** Rebuilds the timebar lane strip (cheap, but DOM churn — keep out of the rAF). */
+function syncLanes(): void {
+  if (!scrub) return
+  laneDurationMs = scrub.durationMs
+  timebar.setAnnotations(state.annotations, state.selectedId, scrub.durationMs)
 }
 
 function syncBlurWarning(): void {
@@ -181,6 +217,7 @@ function setTool(next: Tool): void {
   for (const btn of toolButtons) btn.classList.toggle('active', btn.dataset['tool'] === next)
   overlay.style.cursor = next === 'select' ? 'default' : next === 'text' ? 'text' : 'crosshair'
   overlay.focus()
+  syncLanes() // deselecting clears the highlighted lifetime bar
   schedulePaint()
 }
 
@@ -224,13 +261,22 @@ function draftFromDrag(d: {
   return { ...base, type: 'blur', ...box }
 }
 
-// Single commit path: stamps the replay position (t_ms) the annotation refers
-// to, then stores and reports. Mirrors exportTMs(): "now" (the capture
-// instant) is encoded by absence, exactly like manifest snapshot_t_ms, and a
-// scrubbed stamp is clamped to the manifest's wall-clock replay_duration_ms —
-// the parsed video clock can run slightly past it.
+// Single commit path: stamps the anchor replay position (t_ms) the annotation
+// refers to plus its default lifetime, then stores and reports. Mirrors
+// exportTMs(): "now" (the capture instant) is encoded by t_ms absence, exactly
+// like manifest snapshot_t_ms, and a scrubbed stamp is clamped to the
+// manifest's wall-clock replay_duration_ms — the parsed video clock can run
+// slightly past it. Screenshot-only captures get neither anchor nor lifetime.
 function commitAnnotation(a: Annotation): void {
-  if (scrub && !scrub.atNow) a.t_ms = Math.min(Math.round(scrub.tMs), replayDurationMs)
+  if (scrub) {
+    const anchor = scrub.atNow ? replayDurationMs : Math.min(Math.round(scrub.tMs), replayDurationMs)
+    if (!scrub.atNow) a.t_ms = anchor
+    // Default lifetime: settings.defaultManualDurationMs centered on the
+    // anchor, clamped to [0, replay duration].
+    const life = lifetimeAround(anchor, defaultManualDurationMs, replayDurationMs)
+    a.t_start_ms = life.t_start_ms
+    a.t_end_ms = life.t_end_ms
+  }
   state.add(a)
   window.editorBridge.annotationAdded({ id: a.id, type: a.type })
   refresh()
@@ -266,9 +312,12 @@ function moveAnnotation(a: Annotation, dx: number, dy: number): void {
   }
 }
 
+// Delete mirrors the × chip: both act only while the selection is visible at
+// the current scrub position — a hidden annotation never vanishes silently.
 function deleteSelected(): void {
-  if (state.selectedId === null) return
-  state.remove(state.selectedId)
+  const a = selectedVisibleAnnotation()
+  if (a === null) return
+  state.remove(a.id)
   refresh()
 }
 
@@ -360,12 +409,164 @@ labelEditor.addEventListener('keydown', (e) => {
 labelEditor.addEventListener('blur', () => commitLabelEditor(false))
 
 // ---------------------------------------------------------------------------
+// Selected-annotation chips: duration (top-left) + × delete (top-right), and
+// the inline duration editor. All live in #stage screen space, repositioned
+// from the annotation bounds so zoom/pan never detaches them.
+// ---------------------------------------------------------------------------
+
+let durationEditorOpen = false
+
+/** The selected annotation, if it applies at the current scrub position. */
+function selectedVisibleAnnotation(): Annotation | null {
+  if (state.selectedId === null) return null
+  const a = state.byId(state.selectedId)
+  return a !== undefined && annotationVisibleNow(a) ? a : null
+}
+
+/** Maps a native snapshot point to #stage-relative screen coordinates. */
+function toScreen(x: number, y: number): { x: number; y: number } {
+  const or = overlay.getBoundingClientRect()
+  const sr = stage.getBoundingClientRect()
+  const scale = or.width > 0 ? or.width / nativeW : fitScale
+  return { x: or.left - sr.left + x * scale, y: or.top - sr.top + y * scale }
+}
+
+function chipLabel(a: Annotation): string {
+  return a.t_start_ms !== undefined && a.t_end_ms !== undefined
+    ? formatDurationLabel(a.t_end_ms - a.t_start_ms)
+    : 'all'
+}
+
+function syncSelectionUi(): void {
+  const a = loaded && !exporting ? selectedVisibleAnnotation() : null
+  if (a === null) {
+    durationChip.hidden = true
+    deleteChip.hidden = true
+    closeDurationEditor(false)
+    return
+  }
+  const ui = 1 / (fitScale * viewport.zoom)
+  const b = annotationBounds(overlayCtx, a, ui)
+  const pad = SELECTION_PAD * ui // chips hug the dashed selection rect's corners
+  const topLeft = toScreen(b.x - pad, b.y - pad)
+  const topRight = toScreen(b.x + b.w + pad, b.y - pad)
+  // Duration is only meaningful with a replay; respect settings.showDurationLabel.
+  const showChip = scrub !== null && showDurationLabel
+  durationChip.hidden = !showChip
+  if (showChip) {
+    durationChip.textContent = chipLabel(a)
+    durationChip.style.left = `${topLeft.x}px`
+    durationChip.style.top = `${topLeft.y - 4}px`
+  } else {
+    closeDurationEditor(false)
+  }
+  deleteChip.hidden = false
+  deleteChip.style.left = `${topRight.x}px`
+  deleteChip.style.top = `${topRight.y}px`
+  if (durationEditorOpen) positionDurationEditor()
+}
+
+function openDurationEditor(): void {
+  if (selectedVisibleAnnotation() === null || !scrub) return
+  durationEditorOpen = true
+  durationInput.value = ''
+  durationEditor.hidden = false
+  positionDurationEditor()
+  durationInput.focus()
+}
+
+/** Esc / outside-click path: closes without applying anything. */
+function closeDurationEditor(refocus = true): void {
+  if (!durationEditorOpen) return
+  durationEditorOpen = false
+  durationEditor.hidden = true
+  if (refocus) overlay.focus()
+}
+
+function positionDurationEditor(): void {
+  const cr = durationChip.getBoundingClientRect()
+  const sr = stage.getBoundingClientRect()
+  const left = Math.max(8, Math.min(cr.left - sr.left, stage.clientWidth - durationEditor.offsetWidth - 8))
+  const top = Math.max(8, Math.min(cr.bottom - sr.top + 6, stage.clientHeight - durationEditor.offsetHeight - 8))
+  durationEditor.style.left = `${left}px`
+  durationEditor.style.top = `${top}px`
+}
+
+/** The replay position a lifetime centers on; absent anchor = the capture instant. */
+function anchorMs(a: Annotation): number {
+  return a.t_ms ?? replayDurationMs
+}
+
+// Applies a lifetime mutation to the selected annotation through the undo
+// stack (same snapshot pattern as drag-moves), then closes the editor.
+function applyLifetime(mutate: (a: Annotation) => void): void {
+  const a = selectedVisibleAnnotation()
+  if (!a) return
+  const before = state.cloneAnnotations()
+  mutate(a)
+  state.pushUndoSnapshot(before)
+  closeDurationEditor()
+  refresh()
+}
+
+function setSelectedDuration(ms: number): void {
+  applyLifetime((a) => {
+    const life = lifetimeAround(anchorMs(a), ms, replayDurationMs)
+    a.t_start_ms = life.t_start_ms
+    a.t_end_ms = life.t_end_ms
+  })
+}
+
+durationChip.addEventListener('click', () => {
+  if (durationEditorOpen) closeDurationEditor()
+  else openDurationEditor()
+})
+
+deleteChip.addEventListener('click', deleteSelected)
+
+for (const btn of durationEditor.querySelectorAll<HTMLButtonElement>('button[data-ms]')) {
+  btn.addEventListener('click', () => {
+    const ms = Number(btn.dataset['ms'])
+    if (Number.isFinite(ms) && ms > 0) setSelectedDuration(ms)
+  })
+}
+
+untilEndBtn.addEventListener('click', () => {
+  applyLifetime((a) => {
+    a.t_start_ms = a.t_start_ms ?? Math.max(0, Math.min(anchorMs(a), replayDurationMs))
+    a.t_end_ms = replayDurationMs
+  })
+})
+
+// Absent lifetime = the annotation applies to the whole capture.
+entireCaptureBtn.addEventListener('click', () => {
+  applyLifetime((a) => {
+    delete a.t_start_ms
+    delete a.t_end_ms
+  })
+})
+
+// Keyboard shortcuts stay dead while typing here (stopPropagation keeps the
+// window handler out); Esc closes without applying.
+durationEditor.addEventListener('keydown', (e) => {
+  e.stopPropagation()
+  if (e.key === 'Escape') closeDurationEditor()
+})
+
+durationInput.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return
+  const ms = parseDurationMs(durationInput.value)
+  if (ms !== null) setSelectedDuration(ms)
+})
+
+// ---------------------------------------------------------------------------
 // Pointer input
 // ---------------------------------------------------------------------------
 
 overlay.addEventListener('pointerdown', (e) => {
   if (!loaded) return
   scrub?.pause() // annotating targets a moment; freeze it
+  closeDurationEditor(false) // any canvas interaction dismisses it, unapplied
   if (e.button === 2) {
     // Right-click drag draws a rectangle regardless of the active tool, then
     // takes a label inline.
@@ -394,12 +595,14 @@ overlay.addEventListener('pointerdown', (e) => {
     return
   }
   if (tool === 'select') {
-    const id = hitTest(overlayCtx, state.annotations, p.x, p.y, 1 / (fitScale * viewport.zoom))
+    // Only annotations visible at the current scrub position are clickable.
+    const id = hitTest(overlayCtx, visibleAnnotations(), p.x, p.y, 1 / (fitScale * viewport.zoom))
     state.selectedId = id
     if (id !== null) {
       overlay.setPointerCapture(e.pointerId)
       drag = { kind: 'move', id, lastX: p.x, lastY: p.y, before: state.cloneAnnotations(), moved: false }
     }
+    syncLanes()
     schedulePaint()
     return
   }
@@ -459,8 +662,11 @@ window.addEventListener(
   (e) => {
     if (!loaded) return
     const target = e.target
-    if (target instanceof HTMLElement && (target.closest('#topbar') || target instanceof HTMLInputElement)) {
-      return // wheel over the top bar or an inline input is not a scrub
+    if (
+      target instanceof HTMLElement &&
+      (target.closest('#topbar') || target.closest('#durationEditor') || target instanceof HTMLInputElement)
+    ) {
+      return // wheel over the top bar, the duration editor, or an inline input is not a scrub
     }
     e.preventDefault()
     if (e.ctrlKey || e.metaKey) {
@@ -498,6 +704,7 @@ stage.addEventListener(
     viewport.panBy(e.clientX - panning.x, e.clientY - panning.y)
     panning.x = e.clientX
     panning.y = e.clientY
+    syncSelectionUi() // pan skips repaint (transform-glued), chips are screen-space
   },
   { capture: true },
 )
@@ -520,9 +727,17 @@ function syncPanCursor(): void {
 // ---------------------------------------------------------------------------
 
 window.addEventListener('keydown', (e) => {
+  // Inline inputs own their keys (their handlers stopPropagation; the contains
+  // check covers focus landing on the duration editor's buttons).
   if (e.isComposing || e.target === textEditor || e.target === labelEditor) return
+  if (e.target instanceof Node && durationEditor.contains(e.target)) return
   const typing = e.target === titleInput || e.target === noteInput
   if (e.key === 'Escape') {
+    // Esc closes the duration editor without applying before it can cancel.
+    if (durationEditorOpen) {
+      closeDurationEditor()
+      return
+    }
     window.editorBridge.cancel()
     return
   }
@@ -622,6 +837,17 @@ const timebar = new Timebar(el<HTMLElement>('timebar'), {
     if (scrub) scrub.scrubTo(fraction * scrub.durationMs)
   },
   togglePlay: () => scrub?.togglePlay(),
+  // Clicking a lifetime bar selects the annotation and scrubs to its anchor
+  // (absent anchor = the capture instant, i.e. "now").
+  selectAnnotation: (id) => {
+    const a = state.byId(id)
+    if (!a) return
+    setTool('select')
+    state.selectedId = id
+    if (scrub) scrub.scrubTo(a.t_ms ?? scrub.durationMs)
+    syncLanes()
+    schedulePaint()
+  },
 })
 
 // ---------------------------------------------------------------------------
@@ -635,10 +861,13 @@ async function doExport(): Promise<void> {
   scrub?.pause()
   commitTextEditor()
   commitLabelEditor()
+  closeDurationEditor(false)
   try {
     // A wheel burst right before Enter can leave a seek in flight; wait until
     // the base canvas shows the frame snapshotTMs will describe.
     if (scrub) await scrub.whenSettled()
+    // Every blur region burns into the exported snapshot regardless of its
+    // lifetime — redaction is a privacy guarantee, not a display state (SPEC §9).
     const blurs = state.annotations.filter((a): a is BlurAnnotation => a.type === 'blur')
     // The base canvas now shows the frame being exported (native snapshot or
     // scrubbed replay frame upscaled to native resolution).
@@ -666,6 +895,8 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
   fps = payload.fps
   scrubInvert = payload.scrubInvert
   scrubSensitivityMs = payload.scrubSensitivityMs
+  defaultManualDurationMs = payload.defaultManualDurationMs
+  showDurationLabel = payload.showDurationLabel
   // Kept alive: scrubbing back to "now" restores this sharpest frame.
   nativeBitmap = await createImageBitmap(new Blob([payload.snapshotPng], { type: 'image/png' }))
   snapshot.width = nativeW
@@ -683,11 +914,20 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
   if (payload.replayWebm !== null) {
     const controller = new ScrubController(payload.replayWebm, payload.replayDurationMs, {
       drawFrame: drawBase,
-      onState: () => timebar.update(controller),
+      // Scrubbing moves annotations in/out of their lifetimes: repaint the
+      // overlay and re-evaluate the selection chips alongside the timebar.
+      onState: () => {
+        timebar.update(controller)
+        // Lanes rebuild only on a duration change (webm parse resolving), not
+        // per tick — setAnnotations is DOM churn unfit for the playback rAF.
+        if (controller.durationMs !== laneDurationMs) syncLanes()
+        schedulePaint()
+      },
     })
     scrub = controller
     timebar.show()
     timebar.update(controller)
+    syncLanes()
   }
   layout()
   schedulePaint()

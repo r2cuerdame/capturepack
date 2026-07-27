@@ -7,12 +7,16 @@ import type { Annotation, BlurAnnotation, TextAnnotation } from '../../shared/ty
 const BLUR_BLOCK = 12 // native px per pixelation block
 const PIN_R = 12
 
-interface Box {
+export interface Box {
   x: number
   y: number
   w: number
   h: number
 }
+
+// Pad between an annotation's bounds and its dashed selection rect; the
+// selection chips (duration / delete) anchor to the padded corners too.
+export const SELECTION_PAD = 6
 
 function must<T>(v: T | null): T {
   if (v === null) throw new Error('canvas 2d context unavailable')
@@ -140,7 +144,8 @@ function drawAnnotation(
   }
 }
 
-function annotationBounds(ctx: CanvasRenderingContext2D, a: Annotation, ui: number): Box {
+/** Native-pixel bounding box of an annotation (`ui` sizes pin radius / text). */
+export function annotationBounds(ctx: CanvasRenderingContext2D, a: Annotation, ui: number): Box {
   switch (a.type) {
     case 'pin': {
       const r = PIN_R * ui
@@ -169,7 +174,7 @@ function annotationBounds(ctx: CanvasRenderingContext2D, a: Annotation, ui: numb
 
 function drawSelection(ctx: CanvasRenderingContext2D, a: Annotation, ui: number): void {
   const b = annotationBounds(ctx, a, ui)
-  const pad = 6 * ui
+  const pad = SELECTION_PAD * ui
   ctx.save()
   ctx.strokeStyle = '#8ab4ff'
   ctx.lineWidth = 1.5 * ui

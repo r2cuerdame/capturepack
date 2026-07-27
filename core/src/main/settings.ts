@@ -17,6 +17,8 @@ function defaultSettings(): Settings {
     fps: 15,
     scrubInvert: false,
     scrubSensitivityMs: 100,
+    defaultManualDurationMs: 1000,
+    showDurationLabel: true,
   }
 }
 
@@ -61,6 +63,12 @@ function mergeSettings(base: Settings, raw: Record<string, unknown>): Settings {
       typeof raw.scrubSensitivityMs === 'number' && raw.scrubSensitivityMs > 0
         ? raw.scrubSensitivityMs
         : base.scrubSensitivityMs,
+    defaultManualDurationMs:
+      typeof raw.defaultManualDurationMs === 'number' && raw.defaultManualDurationMs > 0
+        ? raw.defaultManualDurationMs
+        : base.defaultManualDurationMs,
+    showDurationLabel:
+      typeof raw.showDurationLabel === 'boolean' ? raw.showDurationLabel : base.showDurationLabel,
   }
   return Object.assign({}, raw, known)
 }

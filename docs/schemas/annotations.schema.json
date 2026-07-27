@@ -61,7 +61,15 @@
           "format": "date-time"
         },
         "t_ms": {
-          "description": "OPTIONAL replay position, in milliseconds, that this annotation refers to — normally the scrub position at which it was created (SPEC.md §7.1). Same clock as timeline t_ms offsets relative to t0 (SPEC.md §10.1). Only meaningful when the pack has a replay; SHOULD lie within [0, replay_duration_ms]. Does not change the coordinate space — geometry is always in snapshot pixel coordinates (SPEC.md §8.2).",
+          "description": "OPTIONAL replay position, in milliseconds, that this annotation refers to — normally the scrub position at which it was created (SPEC.md §7.1). Same clock as timeline t_ms offsets relative to t0 (SPEC.md §10.1). Only meaningful when the pack has a replay; SHOULD lie within [0, replay_duration_ms]. Does not change the coordinate space — geometry is always in snapshot pixel coordinates (SPEC.md §8.2). When a lifetime (t_start_ms/t_end_ms) is present, t_ms is its anchor and SHOULD lie inside the lifetime interval.",
+          "type": "number"
+        },
+        "t_start_ms": {
+          "description": "OPTIONAL start of the annotation's lifetime — the closed interval [t_start_ms, t_end_ms] of the replay timeline during which the annotation applies, in milliseconds, same clock as t_ms (SPEC.md §8.3, 'Annotation lifetime'). MUST be <= t_end_ms. Absent lifetime (neither field present) means the annotation applies to the whole capture — always valid for simple writers. Only meaningful when the pack has a replay; both bounds SHOULD lie within [0, replay_duration_ms]. Writers SHOULD emit both fields or neither.",
+          "type": "number"
+        },
+        "t_end_ms": {
+          "description": "OPTIONAL end of the annotation's lifetime, in milliseconds, same clock as t_ms (SPEC.md §8.3, 'Annotation lifetime'). MUST be >= t_start_ms. Viewers draw an annotation only while the scrub position lies inside its lifetime; annotations without a lifetime always draw. Blur is the exception: a blur region is applied destructively to the exported snapshot.png regardless of any lifetime (SPEC.md §9).",
           "type": "number"
         }
       }
