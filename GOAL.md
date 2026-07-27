@@ -922,6 +922,20 @@ part that matters:
 - Trim exists only in the initial capture session. Re-edit (History) cannot trim
   further: the pack's replay is already the original evidence.
 
+### First-Run Tutorial
+
+The toolless editor explains itself once. On the editor's FIRST open, a compact popup
+shows an animated demonstration of the core interactions:
+
+- **Left click** → select an object/box (animated cursor click + highlight)
+- **Right drag** → draw a box, description input appears (animated drag + typing)
+- **Wheel** → travel back through time (animated playhead)
+
+Rules: dismiss with [Got it] (Enter/Esc too); a **"Don't show again"** checkbox persists
+(`showEditorTutorial` setting); never blocks the 5-second workflow more than once.
+Settings → General gets a **Guide link** (opens the online manual) and a
+**"Show tutorial again"** action. All tutorial text is i18n'd.
+
 ### Annotation Interaction (toolless)
 
 The editor minimizes annotation tool menus. Selection boxes, object selection, deletion,
