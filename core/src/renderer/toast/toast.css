@@ -1,0 +1,103 @@
+/* Save-complete toast: compact, dark, always-on-top. */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+  background: #1b1b20;
+  color: #e8e8ec;
+  font: 13px/1.4 "Segoe UI", system-ui, sans-serif;
+  user-select: none;
+}
+
+#toast {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  padding: 12px 14px;
+  border: 1px solid #34343c;
+  border-radius: 8px;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.saved {
+  color: #6fd08c;
+  font-weight: 700;
+}
+
+.folder {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+#closeBtn {
+  align-self: flex-start;
+  border: none;
+  background: none;
+  color: #9a9aa4;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+#closeBtn:hover {
+  color: #ffffff;
+}
+
+.buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.buttons button {
+  border: 1px solid #3c3c46;
+  border-radius: 5px;
+  background: #26262e;
+  color: #e8e8ec;
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 9px;
+  cursor: pointer;
+}
+
+.buttons button:hover {
+  background: #30303a;
+}
+
+.buttons button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.warning {
+  color: #ffb454;
+  font-size: 12px;
+}
+
+.status {
+  color: #9a9aa4;
+  font-size: 12px;
+}
+
+.status.done {
+  color: #6fd08c;
+}
+
+.status.failed {
+  color: #ff6b6b;
+}

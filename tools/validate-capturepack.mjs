@@ -38,6 +38,13 @@ const COLOR_RE = /^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
 const PLUGIN_NAME_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
 const EVENT_TYPE_RE = /^[a-z0-9_-]+(\.[a-z0-9_-]+)+$/;
 const REPLAY_RE = /^replay\.(webm|mp4)$/;
+const REPLAY_ANNOTATED_RE = /^replay_annotated\.(webm|mp4)$/;
+const ANNOTATION_ID_RE = /^ann_[0-9a-f]{6}$/;
+// Annotation type names from pre-release drafts of 0.1.0. The unified box model
+// replaced them before release; a pack that still uses one was written against
+// a draft, not against format 0.1.0 — that is a FAIL, not an unknown type.
+const LEGACY_ANNOTATION_TYPES = new Set(["pin", "arrow", "rect", "blur", "text"]);
+const SKILLS_DOCS = ["overview.md", "timeline.md", "annotation.md", "dom.md", "project.md"];
 
 const isStr = (v) => typeof v === "string";
 const isInt = (v) => Number.isInteger(v);
@@ -277,6 +284,7 @@ function validateManifest(m, pack) {
   const media = m.media;
   let replay = null;
   let replayDurationMs = null;
+  let replayAnnotated = null;
   if (!isObj(media)) {
     fail(`manifest.json: media MUST be an object (SPEC §5.3)`);
   } else {
@@ -301,6 +309,17 @@ function validateManifest(m, pack) {
       fail(`manifest.json: media.replay ${JSON.stringify(media.replay)} MUST be "replay.webm", "replay.mp4", or null (SPEC §5.3)`);
     }
 
+    // replay_annotated (annotated replay, SPEC §5.3, §7.2)
+    if (media.replay_annotated !== undefined && media.replay_annotated !== null) {
+      if (!isStr(media.replay_annotated) || !REPLAY_ANNOTATED_RE.test(media.replay_annotated)) {
+        fail(`manifest.json: media.replay_annotated ${JSON.stringify(media.replay_annotated)} MUST be "replay_annotated.webm" or "replay_annotated.mp4" (SPEC §5.3)`);
+      } else if (media.replay === null) {
+        fail(`manifest.json: media.replay_annotated is declared but replay is null — the annotated replay is rendered from the replay and MUST be absent in a screenshot-only pack (SPEC §5.3, §7.2)`);
+      } else {
+        replayAnnotated = media.replay_annotated;
+      }
+    }
+
     // snapshot_t_ms (frame-accurate snapshot, SPEC §7.1) — null is reported by checkNoNulls
     if (media.snapshot_t_ms !== undefined && media.snapshot_t_ms !== null) {
       if (!isInt(media.snapshot_t_ms) || media.snapshot_t_ms < 0) {
@@ -323,6 +342,18 @@ function validateManifest(m, pack) {
   for (const candidate of ["replay.webm", "replay.mp4"]) {
     if (candidate !== replay && pack.files.has(candidate)) {
       fail(`media: "${candidate}" exists but is not declared in manifest.media.replay — readers take the replay from the manifest, and a pack MUST NOT contain more than one replay file (SPEC §7)`);
+    }
+  }
+  if (replayAnnotated) {
+    if (pack.files.has(replayAnnotated)) {
+      pass(`media: declared annotated replay "${replayAnnotated}" exists in the pack (regenerable from replay + annotations.json, SPEC §7.2)`);
+    } else {
+      note(`media: declared annotated replay "${replayAnnotated}" is not in the pack — it may still be rendering (the annotated replay renders in the background after save); readers fall back to replay + annotations.json (SPEC §5.3, §7.2)`);
+    }
+  }
+  for (const candidate of ["replay_annotated.webm", "replay_annotated.mp4"]) {
+    if (candidate !== replayAnnotated && pack.files.has(candidate)) {
+      note(`media: "${candidate}" exists but is not declared in manifest.media.replay_annotated — readers take the annotated replay from the manifest; writers declare it once rendered (SPEC §5.3, §7.2)`);
     }
   }
 
@@ -372,7 +403,7 @@ function validateManifest(m, pack) {
     }
   }
 
-  return { replay, replayDurationMs, declaredPlugins: declared };
+  return { replay, replayDurationMs, replayAnnotated, declaredPlugins: declared };
 }
 
 function validateAnnotations(a, snapshotDims, replay, replayDurationMs) {
@@ -391,85 +422,140 @@ function validateAnnotations(a, snapshotDims, replay, replayDurationMs) {
   }
 
   let bad = 0;
+  let blurCount = 0;
+  const numberedBoxes = []; // { id, startMs, z, index } for display-number computation
   a.annotations.forEach((ann, i) => {
     const label = `annotations.json: annotations[${i}]`;
     if (!isObj(ann)) { fail(`${label} MUST be an object`); bad++; return; }
-    if (!isStr(ann.id) || ann.id.length === 0) { fail(`${label}.id MUST be a non-empty string (SPEC §8.3)`); bad++; }
-    else if (knownIds.has(ann.id)) { fail(`${label}.id "${ann.id}" is not unique within the file (SPEC §8.3)`); bad++; }
-    else knownIds.add(ann.id);
 
-    if (ann.z !== undefined && !isInt(ann.z)) { fail(`${label}.z MUST be an integer (SPEC §8.3)`); bad++; }
-    if (ann.color !== undefined && (!isStr(ann.color) || !COLOR_RE.test(ann.color))) { fail(`${label}.color MUST be "#RRGGBB" or "#RRGGBBAA" (SPEC §8.3)`); bad++; }
-    if (ann.created_at !== undefined && !isIsoWithTz(ann.created_at)) { fail(`${label}.created_at MUST be ISO 8601 with timezone (SPEC §8.3)`); bad++; }
-    if (ann.t_ms !== undefined) {
-      if (!isNum(ann.t_ms)) { fail(`${label}.t_ms MUST be a number (SPEC §8.3)`); bad++; }
-      else if (!replay) note(`${label}.t_ms is ${ann.t_ms} but the pack has no replay — t_ms is a replay position and is only meaningful with a replay (SPEC §8.3)`);
-      else if (replayDurationMs !== null && (ann.t_ms < 0 || ann.t_ms > replayDurationMs)) note(`${label}.t_ms ${ann.t_ms} lies outside the replay [0, ${replayDurationMs}] ms (SPEC §8.3)`);
+    // annotation_id — permanent identity (SPEC §8.3).
+    if (!isStr(ann.annotation_id) || !ANNOTATION_ID_RE.test(ann.annotation_id)) {
+      fail(`${label}.annotation_id ${JSON.stringify(ann.annotation_id)} MUST match ^ann_[0-9a-f]{6}$ — "ann_" plus 6 lowercase hex digits (SPEC §8.3)`);
+      bad++;
+    } else if (knownIds.has(ann.annotation_id)) {
+      fail(`${label}.annotation_id "${ann.annotation_id}" is not unique within the file (SPEC §8.3)`);
+      bad++;
+    } else {
+      knownIds.add(ann.annotation_id);
     }
 
-    // Lifetime interval (SPEC §8.3, "Annotation lifetime").
-    if (ann.t_start_ms !== undefined || ann.t_end_ms !== undefined) {
-      let lifetimeOk = true;
-      for (const f of ["t_start_ms", "t_end_ms"]) {
-        if (ann[f] !== undefined && !isNum(ann[f])) { fail(`${label}.${f} MUST be a number (SPEC §8.3)`); bad++; lifetimeOk = false; }
+    // type — "box" is the only type in 0.1.0.
+    if (ann.type !== "box") {
+      if (isStr(ann.type) && LEGACY_ANNOTATION_TYPES.has(ann.type)) {
+        fail(`${label}.type "${ann.type}" is a legacy type from a pre-release draft — format 0.1.0 defines only "box"; compose the role with numbered/blur/text properties on a box instead (SPEC §8.3)`);
+        bad++;
+      } else if (isStr(ann.type)) {
+        note(`${label}: unknown type "${ann.type}" — skipped (readers MUST skip unknown annotation types, SPEC §8.3)`);
+      } else {
+        fail(`${label}.type MUST be a string (SPEC §8.3)`);
+        bad++;
       }
-      if (lifetimeOk) {
-        const start = ann.t_start_ms;
-        const end = ann.t_end_ms;
-        if (start !== undefined && end !== undefined && start > end) {
-          fail(`${label}: t_start_ms ${start} > t_end_ms ${end} — a lifetime MUST satisfy t_start_ms <= t_end_ms (SPEC §8.3)`);
-          bad++;
-        } else {
-          if (start === undefined || end === undefined) {
-            note(`${label}: only one of t_start_ms/t_end_ms is present — writers SHOULD emit both bounds of a lifetime or neither (SPEC §8.3)`);
-          }
-          if (!replay) {
-            note(`${label}: has a lifetime (t_start_ms/t_end_ms) but the pack has no replay — a lifetime is a replay interval and is only meaningful with a replay (SPEC §8.3)`);
-          } else if (replayDurationMs !== null) {
-            for (const f of ["t_start_ms", "t_end_ms"]) {
-              if (ann[f] !== undefined && (ann[f] < 0 || ann[f] > replayDurationMs)) {
-                note(`${label}.${f} ${ann[f]} lies outside the replay [0, ${replayDurationMs}] ms (SPEC §8.3)`);
-              }
-            }
-          }
-          if (isNum(ann.t_ms) && start !== undefined && end !== undefined && (ann.t_ms < start || ann.t_ms > end)) {
-            note(`${label}: anchor t_ms ${ann.t_ms} lies outside the lifetime [${start}, ${end}] ms — the anchor SHOULD lie inside the lifetime (SPEC §8.3)`);
+      return;
+    }
+
+    // bounds — sanity (SPEC §8.3).
+    let boundsOk = false;
+    const b = ann.bounds;
+    if (!isObj(b) || !isNum(b.x) || !isNum(b.y) || !isNum(b.width) || !isNum(b.height)) {
+      fail(`${label}.bounds MUST be { x, y, width, height } with all four numbers (SPEC §8.3)`);
+      bad++;
+    } else if (b.width <= 0 || b.height <= 0) {
+      fail(`${label}.bounds: width and height MUST be > 0 (got ${b.width}x${b.height}) (SPEC §8.3)`);
+      bad++;
+    } else {
+      boundsOk = true;
+      if (isInt(a.reference_width) && isInt(a.reference_height) &&
+          (b.x + b.width <= 0 || b.y + b.height <= 0 || b.x >= a.reference_width || b.y >= a.reference_height)) {
+        note(`${label}.bounds lies entirely outside the ${a.reference_width}x${a.reference_height} coordinate space — nothing of the box is visible (SPEC §8.2)`);
+      }
+    }
+
+    // text — the description; MAY be empty, absent means "" (SPEC §8.3).
+    if (ann.text !== undefined && !isStr(ann.text)) { fail(`${label}.text MUST be a string (may be empty) (SPEC §8.3)`); bad++; }
+
+    // numbered / blur — booleans (SPEC §8.3).
+    let numbered = false;
+    if (ann.numbered !== undefined) {
+      if (typeof ann.numbered !== "boolean") { fail(`${label}.numbered MUST be a boolean (SPEC §8.3)`); bad++; }
+      else numbered = ann.numbered;
+    }
+    if (ann.blur !== undefined) {
+      if (typeof ann.blur !== "boolean") { fail(`${label}.blur MUST be a boolean (SPEC §8.3)`); bad++; }
+      else if (ann.blur) blurCount++;
+    }
+
+    // tracking — { enabled: false } in 0.1.0; richer data reserved (SPEC §8.3).
+    if (ann.tracking !== undefined) {
+      if (!isObj(ann.tracking) || typeof ann.tracking.enabled !== "boolean") {
+        fail(`${label}.tracking MUST be an object with a boolean "enabled" (SPEC §8.3)`);
+        bad++;
+      } else if (ann.tracking.enabled) {
+        note(`${label}.tracking.enabled is true — tracking is reserved in format 0.1.0 (MUST be false); readers treat the box as untracked (SPEC §8.3)`);
+      }
+    }
+
+    // target — reserved for semantic object metadata (SPEC §8.3).
+    if (ann.target !== undefined && !isObj(ann.target)) { fail(`${label}.target, when present, MUST be an object (reserved for semantic object metadata, SPEC §8.3)`); bad++; }
+
+    // style — { color } in 0.1.0 (SPEC §8.3).
+    if (ann.style !== undefined) {
+      if (!isObj(ann.style)) { fail(`${label}.style, when present, MUST be an object (SPEC §8.3)`); bad++; }
+      else if (ann.style.color !== undefined && (!isStr(ann.style.color) || !COLOR_RE.test(ann.style.color))) {
+        fail(`${label}.style.color MUST be "#RRGGBB" or "#RRGGBBAA" (SPEC §8.3)`);
+        bad++;
+      }
+    }
+
+    if (ann.created_at !== undefined && !isIsoWithTz(ann.created_at)) { fail(`${label}.created_at MUST be ISO 8601 with timezone (SPEC §8.3)`); bad++; }
+    if (ann.z !== undefined && !isInt(ann.z)) { fail(`${label}.z MUST be an integer (SPEC §8.3)`); bad++; }
+
+    // Lifetime — [start_ms, end_ms], both or neither (SPEC §8.4).
+    let lifetimeOk = true;
+    for (const f of ["start_ms", "end_ms"]) {
+      if (ann[f] !== undefined && !isNum(ann[f])) { fail(`${label}.${f} MUST be a number (SPEC §8.4)`); bad++; lifetimeOk = false; }
+    }
+    if (lifetimeOk && (ann.start_ms !== undefined) !== (ann.end_ms !== undefined)) {
+      fail(`${label}: only one of start_ms/end_ms is present — a lifetime MUST carry both bounds or neither (SPEC §8.4)`);
+      bad++;
+      lifetimeOk = false;
+    }
+    if (lifetimeOk && ann.start_ms !== undefined) {
+      if (ann.start_ms > ann.end_ms) {
+        fail(`${label}: start_ms ${ann.start_ms} > end_ms ${ann.end_ms} — a lifetime MUST satisfy start_ms <= end_ms (SPEC §8.4)`);
+        bad++;
+      } else if (!replay) {
+        note(`${label}: has a lifetime (start_ms/end_ms) but the pack has no replay — a lifetime is a replay-clock interval and is only meaningful with a replay (SPEC §8.4)`);
+      } else if (replayDurationMs !== null) {
+        for (const f of ["start_ms", "end_ms"]) {
+          if (ann[f] < 0 || ann[f] > replayDurationMs) {
+            note(`${label}.${f} ${ann[f]} lies outside the replay [0, ${replayDurationMs}] ms (SPEC §8.4)`);
           }
         }
       }
     }
 
-    const req = (fields, pred, what) => {
-      for (const f of fields) {
-        if (!pred(ann[f])) { fail(`${label} (${ann.type}): "${f}" MUST be ${what} (SPEC §8.4)`); bad++; }
-      }
-    };
-    switch (ann.type) {
-      case "pin":
-        req(["x", "y"], isNum, "a number");
-        if (ann.label !== undefined && !isStr(ann.label)) { fail(`${label}.label MUST be a string`); bad++; }
-        break;
-      case "arrow":
-        req(["x1", "y1", "x2", "y2"], isNum, "a number");
-        break;
-      case "rect":
-      case "blur":
-        req(["x", "y"], isNum, "a number");
-        req(["w", "h"], (v) => isNum(v) && v > 0, "a number > 0");
-        if (ann.type === "rect" && ann.label !== undefined && !isStr(ann.label)) { fail(`${label}.label MUST be a string`); bad++; }
-        if (ann.type === "blur" && ann.color !== undefined) note(`${label}: color on a blur annotation SHOULD be omitted (SPEC §8.3)`);
-        break;
-      case "text":
-        req(["x", "y"], isNum, "a number");
-        if (!isStr(ann.text)) { fail(`${label} (text): "text" MUST be a string (SPEC §8.4)`); bad++; }
-        if (ann.size !== undefined && (!isNum(ann.size) || ann.size <= 0)) { fail(`${label}.size MUST be a number > 0 (SPEC §8.4)`); bad++; }
-        break;
-      default:
-        if (isStr(ann.type)) note(`${label}: unknown type "${ann.type}" — skipped (readers MUST skip unknown annotation types, SPEC §8.3)`);
-        else { fail(`${label}.type MUST be a string (SPEC §8.3)`); bad++; }
+    if (numbered && boundsOk) {
+      numberedBoxes.push({
+        id: isStr(ann.annotation_id) ? ann.annotation_id : `(annotations[${i}])`,
+        startMs: isNum(ann.start_ms) ? ann.start_ms : 0,
+        z: isInt(ann.z) ? ann.z : i,
+        index: i,
+      });
     }
   });
-  if (bad === 0) pass(`annotations.json: all ${a.annotations.length} annotation(s) are well-formed`);
+
+  // Display numbers — computed, never stored (SPEC §8.5): start_ms asc
+  // (absent = 0), then z asc (absent = array position), then annotation_id asc.
+  if (numberedBoxes.length > 0) {
+    numberedBoxes.sort((p, q) =>
+      p.startMs - q.startMs || p.z - q.z || (p.id < q.id ? -1 : p.id > q.id ? 1 : 0));
+    const assigned = numberedBoxes.map((nb, idx) => `${nb.id}=${idx + 1}`).join(", ");
+    pass(`annotations.json: display numbers (computed, never stored — SPEC §8.5): ${assigned}`);
+  }
+  if (blurCount > 0) {
+    note(`annotations.json: ${blurCount} box(es) are marked blur — snapshot.png and the replay keep the ORIGINAL unredacted pixels; blur renders only into derived views such as replay_annotated (SPEC §9)`);
+  }
+  if (bad === 0) pass(`annotations.json: all ${a.annotations.length} annotation(s) are well-formed boxes`);
   return knownIds;
 }
 
@@ -554,7 +640,7 @@ function validatePack(pack) {
   }
 
   // --- manifest fields, media consistency, plugins ---
-  const { replay, replayDurationMs, declaredPlugins } = validateManifest(manifest, pack);
+  const { replay, replayDurationMs, replayAnnotated, declaredPlugins } = validateManifest(manifest, pack);
 
   // --- optional JSON files ---
   let annotationIds = null;
@@ -576,14 +662,34 @@ function validatePack(pack) {
     note(`timeline.json: absent (OPTIONAL — a pack without a timeline is valid)`);
   }
 
-  if (pack.files.has("report.md")) pass(`report.md: present (RECOMMENDED; generated view, not validated as a source of truth — SPEC §12)`);
-  else note(`report.md: absent (OPTIONAL, but RECOMMENDED for every pack that will be shared — SPEC §12)`);
+  // --- generated views (SPEC §12): recommended, never required ---
+  if (pack.files.has("report.md")) pass(`report.md: present (RECOMMENDED; generated view, not validated as a source of truth — SPEC §12.1)`);
+  else note(`report.md: absent (OPTIONAL, but RECOMMENDED for every pack that will be shared — SPEC §12.1)`);
+
+  if (pack.files.has("README.md")) pass(`README.md: present (RECOMMENDED; the human-first entry point — SPEC §12.2)`);
+  else note(`README.md: absent (OPTIONAL, but RECOMMENDED — the first document a human reads — SPEC §12.2)`);
+
+  const skillsFiles = [...pack.files.keys()].filter((f) => f.startsWith("skills/"));
+  if (skillsFiles.length > 0) {
+    pass(`skills/: present with ${skillsFiles.length} document(s) (RECOMMENDED; AI-first context, readable without MCP — SPEC §12.3)`);
+    const missing = SKILLS_DOCS.filter((d) => !pack.files.has(`skills/${d}`));
+    if (missing.length > 0) {
+      note(`skills/: missing recommended document(s): ${missing.join(", ")} (the well-known set is RECOMMENDED, not required — SPEC §12.3)`);
+    }
+  } else {
+    note(`skills/: absent (OPTIONAL, but RECOMMENDED — AI-first context documents — SPEC §12.3)`);
+  }
 
   // --- unknown files: ignored, with a note (forward compatibility, SPEC §13) ---
-  const known = new Set(["manifest.json", "snapshot.png", "annotations.json", "timeline.json", "report.md"]);
+  const known = new Set(["manifest.json", "snapshot.png", "annotations.json", "timeline.json", "report.md", "README.md"]);
   if (replay) known.add(replay);
+  // Undeclared replay_annotated files were already noted in the media checks.
+  for (const candidate of ["replay_annotated.webm", "replay_annotated.mp4"]) {
+    if (pack.files.has(candidate)) known.add(candidate);
+  }
   for (const name of pack.files.keys()) {
     if (known.has(name)) continue;
+    if (name.startsWith("skills/")) continue; // skills/ documents are open-ended (SPEC §12.3)
     const pluginMatch = /^plugins\/([^/]+)\//.exec(name);
     if (pluginMatch) continue; // plugin payloads are arbitrary; undeclared dirs already noted
     note(`${name}: unknown file — ignored (readers MUST ignore unknown files, SPEC §13.1)`);

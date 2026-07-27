@@ -177,7 +177,7 @@ Most sessions never pass an argument: `capturepack_latest` → `capturepack_summ
 ## Tools
 
 All tools are read-only. `id` always means: pack id (the pack's path relative to the export
-folder, as shown by `capturepack_list` — e.g. `2026-07-27/capture-140309`; the plain base
+folder, as shown by `capturepack_list` — e.g. `CapturePack_2026-07-27_140309`; the plain base
 name is also accepted and resolves to the newest match) or an absolute path to a
 `.capturepack` file or an extracted pack directory. Optional `id` defaults to the current
 pack as described above.
@@ -198,8 +198,8 @@ pack as described above.
 | `capturepack_dom` | `id?` | Generic plugin metadata under `plugins/*/` (DOM-ish data lives under a chrome plugin dir when present) |
 | `capturepack_find_dom` | `selector`, `id?` | Plugin/DOM entries matching the selector |
 | `capturepack_windows` | `id?` | Window/focus timeline events plus window-related plugin metadata, when present |
-| `capturepack_search` | `keyword`, `id?` | Case-insensitive substring search across `report.md`, annotation labels/text, timeline event types + data, plugin JSON, and manifest title/note — hits grouped by source |
-| `capturepack_export_markdown` | `id?` | One Markdown document: `report.md` + annotations table (with `t_ms` / lifetimes) + timeline listing + plugin inventory. Returned as text; **writes no files** |
+| `capturepack_search` | `keyword`, `id?` | Case-insensitive substring search across `report.md`, annotation texts, timeline event types + data, plugin JSON, and manifest title/note — hits grouped by source |
+| `capturepack_export_markdown` | `id?` | One Markdown document: `report.md` + annotations table (with computed display numbers / lifetimes) + timeline listing + plugin inventory. Returned as text; **writes no files** |
 
 Plugin metadata is exposed generically — the MCP server never special-cases plugin kinds.
 If a pack has no plugin data, the plugin-reading tools return empty results with a clear
@@ -226,13 +226,17 @@ unsupported — no tool will ever:
 The server keeps an index of the export folder (`outputDir` setting) and watches it —
 no manual refresh, ever:
 
-- **What counts as a pack:** `*.capturepack` files (standard ZIPs) and extracted pack
-  **directories** (a directory containing a `manifest.json`), found in the export folder
-  itself or one subfolder level below it — the app saves into `YYYY-MM-DD` date folders.
-  A `.capturepack` file and its extracted directory sitting side by side count as **one**
-  pack (the ZIP).
+- **What counts as a pack:** `*.capturepack` files (standard ZIPs) and pack **directories**
+  (a directory containing a `manifest.json`), found in the export folder itself or one
+  subfolder level below it — the app saves flat `CapturePack_YYYY-MM-DD_HHMMSS` folders
+  directly into the export folder; the extra scan level covers user-organized subfolders
+  (and pre-release date folders). A pack directory and a same-stem sibling `.capturepack`
+  file count as **one** pack: the **directory**. The ZIP is an on-demand distribution copy
+  made by the save toast's [Create ZIP] button and may be stale (e.g. created before the
+  background annotated-replay render finished); a ZIP with no sibling directory is still a
+  pack of its own.
 - **Order:** most recently modified first. **Id:** the pack's path relative to the export
-  folder, without the `.capturepack` extension (e.g. `2026-07-27/capture-140309`). The
+  folder, without the `.capturepack` extension (e.g. `CapturePack_2026-07-27_140309`). The
   plain base name is accepted anywhere an id is, and resolves to the newest match.
 - **Freshness:** a recursive filesystem watcher triggers a debounced rescan on any change,
   and the index also rescans on access when it is more than a few seconds old (so a dead
@@ -267,10 +271,11 @@ actually lands in the configured `outputDir` (or the `--output-dir` you launched
 Filesystem watching can be unreliable on network drives; a restart forces a full rescan.
 
 **A pack exists but isn't listed** — the index scans the export folder and **one subfolder
-level** below it (the app's `YYYY-MM-DD` date folders). A pack nested deeper, or an
-extracted directory without a `manifest.json`, is not indexed. An extracted directory whose
-sibling `.capturepack` file has the same name is listed once, as the ZIP. Malformed packs
-appear as warning entries rather than disappearing silently.
+level** below it (for user-organized subfolders). A pack nested deeper, or a directory
+without a `manifest.json`, is not indexed. A pack directory whose sibling `.capturepack`
+file has the same stem is listed once, as the **directory** (the ZIP is treated as a
+possibly-stale distribution copy). Malformed packs appear as warning entries rather than
+disappearing silently.
 
 **Client can't connect** — the server only listens on `127.0.0.1`; connect from the same
 machine, confirm CapturePack is running, and confirm `mcpEnabled` and `mcpAutoStart` are both

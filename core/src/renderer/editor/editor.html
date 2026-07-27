@@ -11,15 +11,7 @@
 </head>
 <body>
   <header id="topbar">
-    <div id="tools" role="toolbar" aria-label="Annotation tools">
-      <button class="tool" data-tool="select" title="Select / move (V)">V</button>
-      <button class="tool" data-tool="pin" title="Pin (P)">P</button>
-      <button class="tool" data-tool="arrow" title="Arrow (A)">A</button>
-      <button class="tool active" data-tool="rect" title="Rectangle (R)">R</button>
-      <button class="tool" data-tool="blur" title="Blur (B)">B</button>
-      <button class="tool" data-tool="text" title="Text (T)">T</button>
-      <button class="tool" id="colorBtn" title="Color (C)"><span id="colorSwatch"></span></button>
-    </div>
+    <button id="colorBtn" title="Color (C)"><span id="colorSwatch"></span></button>
     <input id="titleInput" type="text" placeholder="Title (optional)" autocomplete="off" spellcheck="false" />
     <input id="noteInput" type="text" placeholder="What is wrong? (optional)" autocomplete="off" spellcheck="false" />
     <span id="replayChip" class="chip">No replay</span>
@@ -27,22 +19,23 @@
       <input id="includeReplay" type="checkbox" checked />
       include replay
     </label>
-    <span id="keysHint">P pin · A arrow · R rect · B blur · T text · C color · RMB rect · wheel scrub · Ctrl+Z undo · Enter save · Esc close</span>
+    <span id="keysHint">L-click select · R-drag box · # number · Blur · Enter save · Esc close</span>
     <button id="exportBtn">Save</button>
   </header>
   <main id="stage">
     <div id="frame">
       <canvas id="snapshot"></canvas>
       <canvas id="overlay" tabindex="-1"></canvas>
-      <input id="textEditor" type="text" autocomplete="off" spellcheck="false" hidden />
-      <input id="labelEditor" type="text" placeholder="Label" autocomplete="off" spellcheck="false" hidden />
+      <input id="textEditor" type="text" placeholder="Describe… (Enter)" autocomplete="off" spellcheck="false" hidden />
     </div>
-    <div id="blurWarning" hidden>
-      Blur is not applied to the replay video
-      <button id="excludeReplayBtn">exclude replay</button>
+    <!-- Selected-box header: floats above the box in screen space, glued to it
+         under zoom/pan. Editor chrome only — never rendered into any output. -->
+    <div id="boxHeader" hidden>
+      <button id="numberBtn" title="Toggle number">#</button>
+      <button id="durationChip" title="Edit duration">1.0s</button>
+      <button id="blurBtn" title="Toggle blur">Blur</button>
+      <button id="deleteBtn" title="Delete (Del)">×</button>
     </div>
-    <button id="durationChip" title="Edit duration" hidden>1.0s</button>
-    <button id="deleteChip" title="Delete (Del)" hidden>×</button>
     <div id="durationEditor" hidden>
       <div id="durationPresets">
         <button type="button" data-ms="500">0.5s</button>

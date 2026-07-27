@@ -1,0 +1,149 @@
+// Save-complete toast (replaces the old Notification): a small frameless
+// always-on-top window bottom-right with [Open Folder] [Copy Folder Path]
+// [Create ZIP] [Copy Prompt], the blur warning line when the pack contains a
+// blurred box, and the background render status. Auto-closes after 30 s.
+import { app, BrowserWindow, clipboard, ipcMain, screen, shell } from 'electron'
+import type { IpcMainEvent, IpcMainInvokeEvent } from 'electron'
+import * as path from 'node:path'
+import { IPC } from '../shared/ipc'
+import type {
+  ToastCreateZipResult,
+  ToastInitPayload,
+  ToastRenderState,
+} from '../shared/ipc'
+import { createPackZip } from './exporter'
+
+const TOAST_WIDTH = 420
+const TOAST_HEIGHT = 180
+const TOAST_MARGIN = 16
+const AUTO_CLOSE_MS = 30_000
+
+interface ActiveToast {
+  win: BrowserWindow
+  folderPath: string
+  timer: NodeJS.Timeout
+}
+
+// One toast at a time: a new save replaces the previous toast.
+let active: ActiveToast | null = null
+let ipcRegistered = false
+
+/** The exact Copy Prompt text (FIXED CONTRACT — do not reword). */
+export function analyzePrompt(folderPath: string): string {
+  return (
+    `Analyze the CapturePack at ${folderPath}. Read README.md first, then skills/ and ` +
+    'report.md; annotations.json is the machine-readable source. If a CapturePack MCP ' +
+    'server is connected, call capturepack_latest instead.'
+  )
+}
+
+export function showSaveToast(options: {
+  folderPath: string
+  hasBlur: boolean
+  renderState: ToastRenderState
+}): void {
+  registerToastIpc()
+  if (active !== null && !active.win.isDestroyed()) active.win.close()
+  active = null
+
+  const work = screen.getPrimaryDisplay().workArea
+  const win = new BrowserWindow({
+    x: work.x + work.width - TOAST_WIDTH - TOAST_MARGIN,
+    y: work.y + work.height - TOAST_HEIGHT - TOAST_MARGIN,
+    width: TOAST_WIDTH,
+    height: TOAST_HEIGHT,
+    frame: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    backgroundColor: '#1b1b20',
+    show: false,
+    webPreferences: {
+      preload: path.join(app.getAppPath(), 'dist', 'preload', 'toast.js'),
+    },
+  })
+
+  const timer = setTimeout(() => {
+    if (!win.isDestroyed()) win.close()
+  }, AUTO_CLOSE_MS)
+  win.on('closed', () => {
+    clearTimeout(timer)
+    if (active?.win === win) active = null
+  })
+
+  win.webContents.on('did-finish-load', () => {
+    const init: ToastInitPayload = {
+      folderName: path.basename(options.folderPath),
+      folderPath: options.folderPath,
+      hasBlur: options.hasBlur,
+      renderState: options.renderState,
+    }
+    win.webContents.send(IPC.toastInit, init)
+    // showInactive: a toast must never steal focus from the user's work.
+    win.showInactive()
+  })
+  void win.loadFile(path.join(app.getAppPath(), 'dist', 'renderer', 'toast', 'toast.html'))
+
+  active = { win, folderPath: options.folderPath, timer }
+}
+
+/**
+ * Flips the toast's "rendering annotated replay…" line once the background
+ * render for `folderPath` finishes. No-op when the toast already closed or a
+ * newer save replaced it.
+ */
+export function updateToastRenderStatus(folderPath: string, state: ToastRenderState): void {
+  if (active === null || active.win.isDestroyed()) return
+  if (active.folderPath !== folderPath) return
+  active.win.webContents.send(IPC.toastRenderStatus, { state })
+}
+
+function fromActiveToast(event: IpcMainEvent | IpcMainInvokeEvent): ActiveToast | null {
+  if (active === null || active.win.isDestroyed()) return null
+  return event.sender === active.win.webContents ? active : null
+}
+
+function registerToastIpc(): void {
+  if (ipcRegistered) return
+  ipcRegistered = true
+
+  ipcMain.on(IPC.toastOpenFolder, (event) => {
+    const toast = fromActiveToast(event)
+    if (toast === null) return
+    void shell.openPath(toast.folderPath)
+  })
+
+  ipcMain.on(IPC.toastCopyPath, (event) => {
+    const toast = fromActiveToast(event)
+    if (toast === null) return
+    clipboard.writeText(toast.folderPath)
+  })
+
+  ipcMain.on(IPC.toastCopyPrompt, (event) => {
+    const toast = fromActiveToast(event)
+    if (toast === null) return
+    clipboard.writeText(analyzePrompt(toast.folderPath))
+  })
+
+  ipcMain.on(IPC.toastClose, (event) => {
+    const toast = fromActiveToast(event)
+    if (toast === null) return
+    toast.win.close()
+  })
+
+  ipcMain.handle(IPC.toastCreateZip, async (event): Promise<ToastCreateZipResult> => {
+    const toast = fromActiveToast(event)
+    if (toast === null) return { ok: false, error: 'toast is no longer active' }
+    try {
+      const zipPath = await createPackZip(toast.folderPath)
+      return { ok: true, zipPath }
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err)
+      console.error('capturepack: Create ZIP failed:', error)
+      return { ok: false, error }
+    }
+  })
+}

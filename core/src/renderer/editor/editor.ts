@@ -1,16 +1,34 @@
-// Annotation editor renderer: keyboard-first tools over the captured snapshot.
-// Annotations live in native snapshot pixel coords; display is a CSS-scaled fit.
-// The base canvas shows either the native snapshot ("now") or a replay frame
-// scaled to the same native rect, so annotations and export share one space.
+// Annotation editor renderer: toolless box annotation over the captured
+// snapshot (GOAL "Unified Annotation Box"). One annotation type — the box —
+// created with a RIGHT-DRAG, selected with a LEFT CLICK; a floating header on
+// the selection toggles number/blur, edits the lifetime, and deletes.
+// Annotations live in native snapshot pixel coords; display is a CSS-scaled
+// fit. The base canvas shows either the native snapshot ("now") or a replay
+// frame scaled to the same native rect, so annotations and export share one
+// space.
 import type {
-  EditorAnnotationAddedPayload,
   EditorExportPayload,
   EditorInitPayload,
 } from '../../shared/ipc'
-import type { Annotation, BlurAnnotation, RectAnnotation } from '../../shared/types'
-import { EditorState, type Tool } from './state'
-import { formatDurationLabel, lifetimeAround, parseDurationMs, visibleAt } from './lifetime'
-import { annotationBounds, composeExportPng, drawScene, hitTest, SELECTION_PAD } from './render'
+import type { Annotation, AnnotationBounds } from '../../shared/types'
+import { computeDisplayNumbers } from '../../shared/numbering'
+import { EditorState } from './state'
+import {
+  formatDurationLabel,
+  lifetimeAround,
+  lifetimeMidpoint,
+  parseDurationMs,
+  visibleAt,
+} from './lifetime'
+import {
+  annotationBounds,
+  composeExportPng,
+  drawScene,
+  handleAt,
+  hitTest,
+  SELECTION_PAD,
+  type HandleId,
+} from './render'
 import { ScrubController, wheelScrubDeltaMs } from './scrub'
 import { Timebar } from './timebar'
 import { Viewport } from './viewport'
@@ -19,7 +37,7 @@ interface EditorBridge {
   onInit(cb: (payload: EditorInitPayload) => void): void
   export(payload: EditorExportPayload): void
   cancel(): void
-  annotationAdded(payload: EditorAnnotationAddedPayload): void
+  annotationAdded(payload: { id: string; type: string }): void
 }
 
 declare global {
@@ -43,26 +61,23 @@ const frame = el<HTMLDivElement>('frame')
 const snapshot = el<HTMLCanvasElement>('snapshot')
 const overlay = el<HTMLCanvasElement>('overlay')
 const textEditor = el<HTMLInputElement>('textEditor')
-const labelEditor = el<HTMLInputElement>('labelEditor')
 const titleInput = el<HTMLInputElement>('titleInput')
 const noteInput = el<HTMLInputElement>('noteInput')
 const replayChip = el<HTMLSpanElement>('replayChip')
 const replayToggle = el<HTMLLabelElement>('replayToggle')
 const includeReplay = el<HTMLInputElement>('includeReplay')
-const blurWarning = el<HTMLDivElement>('blurWarning')
-const excludeReplayBtn = el<HTMLButtonElement>('excludeReplayBtn')
 const colorBtn = el<HTMLButtonElement>('colorBtn')
 const colorSwatch = el<HTMLSpanElement>('colorSwatch')
 const exportBtn = el<HTMLButtonElement>('exportBtn')
+const boxHeader = el<HTMLDivElement>('boxHeader')
+const numberBtn = el<HTMLButtonElement>('numberBtn')
 const durationChip = el<HTMLButtonElement>('durationChip')
-const deleteChip = el<HTMLButtonElement>('deleteChip')
+const blurBtn = el<HTMLButtonElement>('blurBtn')
+const deleteBtn = el<HTMLButtonElement>('deleteBtn')
 const durationEditor = el<HTMLDivElement>('durationEditor')
 const durationInput = el<HTMLInputElement>('durationInput')
 const untilEndBtn = el<HTMLButtonElement>('untilEndBtn')
 const entireCaptureBtn = el<HTMLButtonElement>('entireCaptureBtn')
-const toolButtons = Array.from(
-  document.querySelectorAll<HTMLButtonElement>('#tools .tool[data-tool]'),
-)
 
 function ctx2d(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
   const ctx = canvas.getContext('2d')
@@ -77,14 +92,14 @@ const overlayCtx = ctx2d(overlay)
 // State
 // ---------------------------------------------------------------------------
 
-const MIN_DRAG = 3 // native px below which a drag commits nothing
+const MIN_DRAG = 3 // native px below which a right-drag creates nothing
+const MIN_SIZE = 2 // native px floor for resize (bounds sizes must stay > 0)
 
 const state = new EditorState()
-let tool: Tool = 'rect'
 let nativeW = 0
 let nativeH = 0
 let hasReplay = false
-let replayDurationMs = 0 // manifest replay_duration_ms; caps every t_ms stamp
+let replayDurationMs = 0 // manifest replay_duration_ms; caps every lifetime stamp
 let fitScale = 1
 let loaded = false
 let exporting = false
@@ -100,15 +115,24 @@ const viewport = new Viewport(frame)
 let spaceDown = false
 let panning: { pointerId: number; x: number; y: number } | null = null
 
-type DrawTool = 'arrow' | 'rect' | 'blur'
 type Drag =
-  // `label: true` = right-click drag: opens the inline label input on release
-  | { kind: 'draw'; tool: DrawTool; x0: number; y0: number; x: number; y: number; label: boolean }
+  | { kind: 'draw'; x0: number; y0: number; x: number; y: number }
   | { kind: 'move'; id: string; lastX: number; lastY: number; before: Annotation[]; moved: boolean }
+  | { kind: 'resize'; id: string; handle: HandleId; before: Annotation[]; moved: boolean }
 let drag: Drag | null = null
-let pendingText: { x: number; y: number; size: number } | null = null
-// Right-click rectangle awaiting its label (committed on Enter/blur, discarded on Esc).
-let pendingRect: { x: number; y: number; w: number; h: number } | null = null
+
+// The inline text input serves two flows: a freshly right-dragged box waiting
+// for its description (Enter commits the box, Esc discards it) and editing the
+// text of an existing box (double-click).
+type TextSession = { kind: 'new'; draft: Annotation } | { kind: 'edit'; id: string }
+let textSession: TextSession | null = null
+// Bounds the text input hangs under (live object: repositions track the box).
+let textAnchor: AnnotationBounds | null = null
+
+/** 1 / effective on-screen scale: converts on-screen px into native units. */
+function uiScale(): number {
+  return 1 / (fitScale * viewport.zoom)
+}
 
 // ---------------------------------------------------------------------------
 // Layout + painting
@@ -123,7 +147,6 @@ function layout(): void {
   frame.style.width = `${nativeW * fitScale}px`
   frame.style.height = `${nativeH * fitScale}px`
   positionTextEditor()
-  positionLabelEditor()
 }
 
 /** Paints the base image: a scrubbed replay frame or the native snapshot. */
@@ -145,9 +168,17 @@ function schedulePaint(): void {
   requestAnimationFrame(() => {
     paintQueued = false
     if (!loaded) return
-    // ui = 1 / effective on-screen scale, so strokes stay constant under zoom
-    // and drawn sizes match hitTest's.
-    drawScene(overlayCtx, snapshot, sceneAnnotations(), state.selectedId, 1 / (fitScale * viewport.zoom))
+    // Display numbers are GLOBAL (SPEC §8.5): computed over ALL boxes via the
+    // one shared implementation, so toggling a number renumbers instantly and
+    // the editor can never disagree with replay_annotated/report/README/MCP.
+    drawScene(
+      overlayCtx,
+      snapshot,
+      sceneAnnotations(),
+      state.selectedId,
+      computeDisplayNumbers(state.annotations),
+      uiScale(),
+    )
     syncSelectionUi()
   })
 }
@@ -167,25 +198,15 @@ function visibleAnnotations(): readonly Annotation[] {
 function sceneAnnotations(): readonly Annotation[] {
   const extras: Annotation[] = []
   if (drag?.kind === 'draw') {
-    const draft = draftFromDrag(drag)
+    const draft = dragDraft(drag)
     if (draft) extras.push(draft)
   }
-  if (pendingRect) {
-    extras.push({
-      id: 'draft-label',
-      z: Number.MAX_SAFE_INTEGER,
-      created_at: '',
-      type: 'rect',
-      color: state.color,
-      ...pendingRect,
-    })
-  }
+  if (textSession?.kind === 'new') extras.push(textSession.draft)
   const base = visibleAnnotations()
   return extras.length > 0 ? [...base, ...extras] : base
 }
 
 function refresh(): void {
-  syncBlurWarning()
   syncLanes()
   schedulePaint()
 }
@@ -202,32 +223,16 @@ function syncLanes(): void {
   timebar.setAnnotations(state.annotations, state.selectedId, scrub.durationMs)
 }
 
-function syncBlurWarning(): void {
-  const show = hasReplay && includeReplay.checked && state.annotations.some((a) => a.type === 'blur')
-  blurWarning.hidden = !show
-}
-
 // ---------------------------------------------------------------------------
-// Tools
+// Box creation (right-drag) + commit
 // ---------------------------------------------------------------------------
-
-function setTool(next: Tool): void {
-  tool = next
-  if (next !== 'select') state.selectedId = null
-  for (const btn of toolButtons) btn.classList.toggle('active', btn.dataset['tool'] === next)
-  overlay.style.cursor = next === 'select' ? 'default' : next === 'text' ? 'text' : 'crosshair'
-  overlay.focus()
-  syncLanes() // deselecting clears the highlighted lifetime bar
-  schedulePaint()
-}
 
 function cycleColor(): void {
   state.cycleColor()
   colorSwatch.style.background = state.color
-  textEditor.style.color = state.color
 }
 
-function toNative(e: PointerEvent): { x: number; y: number } {
+function toNative(e: PointerEvent | MouseEvent): { x: number; y: number } {
   // Derive the effective scale from the on-screen rect so the mapping stays
   // correct under the viewport's zoom/pan transform.
   const r = overlay.getBoundingClientRect()
@@ -237,121 +242,125 @@ function toNative(e: PointerEvent): { x: number; y: number } {
   return { x: Math.max(0, Math.min(nativeW, x)), y: Math.max(0, Math.min(nativeH, y)) }
 }
 
-function draftFromDrag(d: {
-  tool: DrawTool
-  x0: number
-  y0: number
-  x: number
-  y: number
-}): Annotation | null {
-  // Blur carries no color (SPEC §8.3), so color joins per-branch, not the base.
-  const base = { id: 'draft', z: Number.MAX_SAFE_INTEGER, created_at: '' }
-  if (d.tool === 'arrow') {
-    if (Math.hypot(d.x - d.x0, d.y - d.y0) < MIN_DRAG) return null
-    return { ...base, type: 'arrow', color: state.color, x1: d.x0, y1: d.y0, x2: d.x, y2: d.y }
-  }
-  const box = {
+function normBox(d: { x0: number; y0: number; x: number; y: number }): Box {
+  return {
     x: Math.min(d.x0, d.x),
     y: Math.min(d.y0, d.y),
     w: Math.abs(d.x - d.x0),
     h: Math.abs(d.y - d.y0),
   }
-  if (box.w < MIN_DRAG || box.h < MIN_DRAG) return null
-  if (d.tool === 'rect') return { ...base, type: 'rect', color: state.color, ...box }
-  return { ...base, type: 'blur', ...box }
 }
 
-// Single commit path: stamps the anchor replay position (t_ms) the annotation
-// refers to plus its default lifetime, then stores and reports. Mirrors
-// exportTMs(): "now" (the capture instant) is encoded by t_ms absence, exactly
-// like manifest snapshot_t_ms, and a scrubbed stamp is clamped to the
-// manifest's wall-clock replay_duration_ms — the parsed video clock can run
-// slightly past it. Screenshot-only captures get neither anchor nor lifetime.
-function commitAnnotation(a: Annotation): void {
+interface Box {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+/** Live right-drag preview: an ephemeral box that never enters the store. */
+function dragDraft(d: { x0: number; y0: number; x: number; y: number }): Annotation | null {
+  const b = normBox(d)
+  if (b.w < MIN_DRAG || b.h < MIN_DRAG) return null
+  return {
+    annotation_id: 'draft',
+    type: 'box',
+    bounds: { x: b.x, y: b.y, width: b.w, height: b.h },
+    text: '',
+    numbered: false,
+    blur: false,
+    tracking: { enabled: false },
+    style: { color: state.color },
+    created_at: '',
+    z: Number.MAX_SAFE_INTEGER,
+  }
+}
+
+/**
+ * Right-drag released on a viable rect: build the real box (identity, z,
+ * default lifetime = scrub position ± defaultManualDurationMs/2 clamped to the
+ * replay) and open the inline text input focused. Enter commits, Esc discards.
+ */
+function beginPendingBox(b: Box): void {
+  const stamp = state.nextStamp()
+  const draft: Annotation = {
+    annotation_id: stamp.annotation_id,
+    type: 'box',
+    bounds: { x: b.x, y: b.y, width: b.w, height: b.h },
+    text: '',
+    numbered: false,
+    blur: false,
+    tracking: { enabled: false },
+    style: { color: state.color },
+    created_at: stamp.created_at,
+    z: stamp.z,
+  }
   if (scrub) {
+    // "Now" (the capture instant) anchors at the end of the replay; a scrubbed
+    // stamp is clamped to the manifest's wall-clock replay_duration_ms — the
+    // parsed video clock can run slightly past it.
     const anchor = scrub.atNow ? replayDurationMs : Math.min(Math.round(scrub.tMs), replayDurationMs)
-    if (!scrub.atNow) a.t_ms = anchor
-    // Default lifetime: settings.defaultManualDurationMs centered on the
-    // anchor, clamped to [0, replay duration].
     const life = lifetimeAround(anchor, defaultManualDurationMs, replayDurationMs)
-    a.t_start_ms = life.t_start_ms
-    a.t_end_ms = life.t_end_ms
+    draft.start_ms = life.start_ms
+    draft.end_ms = life.end_ms
   }
-  state.add(a)
-  window.editorBridge.annotationAdded({ id: a.id, type: a.type })
-  refresh()
-}
-
-function commitDraw(d: { tool: DrawTool; x0: number; y0: number; x: number; y: number }): void {
-  const a = draftFromDrag(d)
-  if (!a) return
-  Object.assign(a, state.nextStamp())
-  commitAnnotation(a)
-}
-
-function placePin(p: { x: number; y: number }): void {
-  commitAnnotation({
-    ...state.nextStamp(),
-    type: 'pin',
-    x: p.x,
-    y: p.y,
-    color: state.color,
-    label: state.nextPinLabel(),
-  })
-}
-
-function moveAnnotation(a: Annotation, dx: number, dy: number): void {
-  if (a.type === 'arrow') {
-    a.x1 += dx
-    a.y1 += dy
-    a.x2 += dx
-    a.y2 += dy
-  } else {
-    a.x += dx
-    a.y += dy
-  }
-}
-
-// Delete mirrors the × chip: both act only while the selection is visible at
-// the current scrub position — a hidden annotation never vanishes silently.
-function deleteSelected(): void {
-  const a = selectedVisibleAnnotation()
-  if (a === null) return
-  state.remove(a.id)
-  refresh()
+  textSession = { kind: 'new', draft }
+  openTextEditor(draft.bounds, '')
+  schedulePaint()
 }
 
 // ---------------------------------------------------------------------------
-// Inline text annotation input
+// Inline text input (new-box description / double-click text edit)
 // ---------------------------------------------------------------------------
 
-function openTextEditor(p: { x: number; y: number }): void {
-  pendingText = { x: p.x, y: p.y, size: Math.max(14, Math.round(18 / fitScale)) }
-  textEditor.value = ''
-  textEditor.style.color = state.color
+function openTextEditor(anchor: AnnotationBounds, value: string): void {
+  textAnchor = anchor
+  textEditor.value = value
   textEditor.hidden = false
   positionTextEditor()
   textEditor.focus()
 }
 
 function positionTextEditor(): void {
-  if (!pendingText) return
-  textEditor.style.left = `${pendingText.x * fitScale}px`
-  textEditor.style.top = `${pendingText.y * fitScale}px`
-  textEditor.style.fontSize = `${pendingText.size * fitScale}px`
+  if (!textAnchor) return
+  textEditor.style.left = `${textAnchor.x * fitScale}px`
+  textEditor.style.top = `${(textAnchor.y + textAnchor.height) * fitScale + 6}px`
 }
 
+/** Enter/blur path: commits the pending box or applies the text edit. */
 function commitTextEditor(refocus = true): void {
-  if (!pendingText) return
-  const p = pendingText
-  const text = textEditor.value.trim()
+  if (!textSession) return
+  const session = textSession
+  const value = textEditor.value.trim()
   closeTextEditor(refocus)
-  if (!text) return
-  commitAnnotation({ ...state.nextStamp(), type: 'text', x: p.x, y: p.y, text, size: p.size, color: state.color })
+  if (session.kind === 'new') {
+    session.draft.text = value
+    state.add(session.draft)
+    state.selectedId = session.draft.annotation_id
+    // The timeline event carries the SAVED identity: the ann_… id this box
+    // keeps in annotations.json, and the one real type "box" (SPEC §10.2).
+    window.editorBridge.annotationAdded({ id: session.draft.annotation_id, type: 'box' })
+  } else {
+    const a = state.byId(session.id)
+    if (a && a.text !== value) {
+      const before = state.cloneAnnotations()
+      a.text = value
+      state.pushUndoSnapshot(before)
+    }
+  }
+  refresh()
+}
+
+/** Esc path: discards a pending box entirely; abandons a text edit unchanged. */
+function cancelTextEditor(): void {
+  if (!textSession) return
+  closeTextEditor()
+  refresh()
 }
 
 function closeTextEditor(refocus = true): void {
-  pendingText = null
+  textSession = null
+  textAnchor = null
   textEditor.hidden = true
   textEditor.value = ''
   if (refocus) overlay.focus()
@@ -360,63 +369,19 @@ function closeTextEditor(refocus = true): void {
 textEditor.addEventListener('keydown', (e) => {
   e.stopPropagation()
   if (e.key === 'Enter') commitTextEditor()
-  else if (e.key === 'Escape') closeTextEditor()
+  else if (e.key === 'Escape') cancelTextEditor()
 })
 textEditor.addEventListener('blur', () => commitTextEditor(false))
 
 // ---------------------------------------------------------------------------
-// Inline label input for right-click rectangles
-// ---------------------------------------------------------------------------
-
-function openLabelEditor(box: { x: number; y: number; w: number; h: number }): void {
-  pendingRect = box
-  labelEditor.value = ''
-  labelEditor.hidden = false
-  positionLabelEditor()
-  labelEditor.focus()
-  schedulePaint()
-}
-
-function positionLabelEditor(): void {
-  if (!pendingRect) return
-  labelEditor.style.left = `${pendingRect.x * fitScale}px`
-  labelEditor.style.top = `${(pendingRect.y + pendingRect.h) * fitScale + 6}px`
-}
-
-function commitLabelEditor(refocus = true): void {
-  if (!pendingRect) return
-  const box = pendingRect
-  const label = labelEditor.value.trim()
-  closeLabelEditor(refocus)
-  const a: RectAnnotation = { ...state.nextStamp(), type: 'rect', color: state.color, ...box }
-  if (label !== '') a.label = label
-  commitAnnotation(a)
-}
-
-function closeLabelEditor(refocus = true): void {
-  pendingRect = null
-  labelEditor.hidden = true
-  labelEditor.value = ''
-  if (refocus) overlay.focus()
-  schedulePaint()
-}
-
-labelEditor.addEventListener('keydown', (e) => {
-  e.stopPropagation()
-  if (e.key === 'Enter') commitLabelEditor()
-  else if (e.key === 'Escape') closeLabelEditor()
-})
-labelEditor.addEventListener('blur', () => commitLabelEditor(false))
-
-// ---------------------------------------------------------------------------
-// Selected-annotation chips: duration (top-left) + × delete (top-right), and
-// the inline duration editor. All live in #stage screen space, repositioned
-// from the annotation bounds so zoom/pan never detaches them.
+// Selected-box header: [#|N] number toggle, duration chip, blur toggle, and ×
+// delete, floating above the box. Lives in #stage screen space, repositioned
+// from the box bounds so zoom/pan never detaches it.
 // ---------------------------------------------------------------------------
 
 let durationEditorOpen = false
 
-/** The selected annotation, if it applies at the current scrub position. */
+/** The selected box, if it applies at the current scrub position. */
 function selectedVisibleAnnotation(): Annotation | null {
   if (state.selectedId === null) return null
   const a = state.byId(state.selectedId)
@@ -432,39 +397,76 @@ function toScreen(x: number, y: number): { x: number; y: number } {
 }
 
 function chipLabel(a: Annotation): string {
-  return a.t_start_ms !== undefined && a.t_end_ms !== undefined
-    ? formatDurationLabel(a.t_end_ms - a.t_start_ms)
+  return a.start_ms !== undefined && a.end_ms !== undefined
+    ? formatDurationLabel(a.end_ms - a.start_ms)
     : 'all'
 }
 
 function syncSelectionUi(): void {
   const a = loaded && !exporting ? selectedVisibleAnnotation() : null
   if (a === null) {
-    durationChip.hidden = true
-    deleteChip.hidden = true
+    boxHeader.hidden = true
     closeDurationEditor(false)
     return
   }
-  const ui = 1 / (fitScale * viewport.zoom)
-  const b = annotationBounds(overlayCtx, a, ui)
-  const pad = SELECTION_PAD * ui // chips hug the dashed selection rect's corners
+  const b = annotationBounds(a)
+  const pad = SELECTION_PAD * uiScale() // the header hugs the dashed selection rect
   const topLeft = toScreen(b.x - pad, b.y - pad)
-  const topRight = toScreen(b.x + b.w + pad, b.y - pad)
+  boxHeader.hidden = false
+  boxHeader.style.left = `${Math.max(4, topLeft.x)}px`
+  boxHeader.style.top = `${Math.max(28, topLeft.y - 4)}px`
+  // [#|N]: shows the computed display number while numbering is on.
+  const number = computeDisplayNumbers(state.annotations).get(a.annotation_id)
+  numberBtn.textContent = a.numbered && number !== undefined ? String(number) : '#'
+  numberBtn.classList.toggle('on', a.numbered)
+  blurBtn.textContent = a.blur ? 'Blur On' : 'Blur'
+  blurBtn.classList.toggle('on', a.blur)
   // Duration is only meaningful with a replay; respect settings.showDurationLabel.
   const showChip = scrub !== null && showDurationLabel
   durationChip.hidden = !showChip
-  if (showChip) {
-    durationChip.textContent = chipLabel(a)
-    durationChip.style.left = `${topLeft.x}px`
-    durationChip.style.top = `${topLeft.y - 4}px`
-  } else {
-    closeDurationEditor(false)
-  }
-  deleteChip.hidden = false
-  deleteChip.style.left = `${topRight.x}px`
-  deleteChip.style.top = `${topRight.y}px`
+  if (showChip) durationChip.textContent = chipLabel(a)
+  else closeDurationEditor(false)
   if (durationEditorOpen) positionDurationEditor()
 }
+
+/** Applies an undoable mutation to the selected box, then refreshes all views. */
+function applyMutation(mutate: (a: Annotation) => void): void {
+  const a = selectedVisibleAnnotation()
+  if (a === null) return
+  const before = state.cloneAnnotations()
+  mutate(a)
+  state.pushUndoSnapshot(before)
+  refresh()
+}
+
+// Delete mirrors the header ×: both act only while the selection is visible at
+// the current scrub position — a hidden box never vanishes silently.
+function deleteSelected(): void {
+  const a = selectedVisibleAnnotation()
+  if (a === null) return
+  state.remove(a.annotation_id)
+  refresh()
+}
+
+numberBtn.addEventListener('click', () => {
+  applyMutation((a) => {
+    a.numbered = !a.numbered
+  })
+  overlay.focus()
+})
+
+blurBtn.addEventListener('click', () => {
+  applyMutation((a) => {
+    a.blur = !a.blur
+  })
+  overlay.focus()
+})
+
+deleteBtn.addEventListener('click', deleteSelected)
+
+// ---------------------------------------------------------------------------
+// Inline duration editor (opened from the header's duration chip)
+// ---------------------------------------------------------------------------
 
 function openDurationEditor(): void {
   if (selectedVisibleAnnotation() === null || !scrub) return
@@ -492,37 +494,26 @@ function positionDurationEditor(): void {
   durationEditor.style.top = `${top}px`
 }
 
-/** The replay position a lifetime centers on; absent anchor = the capture instant. */
+// The representative instant a lifetime re-centers on: the current lifetime's
+// MIDPOINT (SPEC §8.4 — the midpoint replaced the stored t_ms anchor); a box
+// without a lifetime anchors at the capture instant ("now").
 function anchorMs(a: Annotation): number {
-  return a.t_ms ?? replayDurationMs
-}
-
-// Applies a lifetime mutation to the selected annotation through the undo
-// stack (same snapshot pattern as drag-moves), then closes the editor.
-function applyLifetime(mutate: (a: Annotation) => void): void {
-  const a = selectedVisibleAnnotation()
-  if (!a) return
-  const before = state.cloneAnnotations()
-  mutate(a)
-  state.pushUndoSnapshot(before)
-  closeDurationEditor()
-  refresh()
+  return lifetimeMidpoint(a, replayDurationMs)
 }
 
 function setSelectedDuration(ms: number): void {
-  applyLifetime((a) => {
+  applyMutation((a) => {
     const life = lifetimeAround(anchorMs(a), ms, replayDurationMs)
-    a.t_start_ms = life.t_start_ms
-    a.t_end_ms = life.t_end_ms
+    a.start_ms = life.start_ms
+    a.end_ms = life.end_ms
   })
+  closeDurationEditor()
 }
 
 durationChip.addEventListener('click', () => {
   if (durationEditorOpen) closeDurationEditor()
   else openDurationEditor()
 })
-
-deleteChip.addEventListener('click', deleteSelected)
 
 for (const btn of durationEditor.querySelectorAll<HTMLButtonElement>('button[data-ms]')) {
   btn.addEventListener('click', () => {
@@ -532,18 +523,21 @@ for (const btn of durationEditor.querySelectorAll<HTMLButtonElement>('button[dat
 }
 
 untilEndBtn.addEventListener('click', () => {
-  applyLifetime((a) => {
-    a.t_start_ms = a.t_start_ms ?? Math.max(0, Math.min(anchorMs(a), replayDurationMs))
-    a.t_end_ms = replayDurationMs
+  applyMutation((a) => {
+    const start = a.start_ms ?? Math.max(0, Math.min(Math.round(anchorMs(a)), replayDurationMs))
+    a.start_ms = start
+    a.end_ms = replayDurationMs
   })
+  closeDurationEditor()
 })
 
-// Absent lifetime = the annotation applies to the whole capture.
+// Absent lifetime = the box applies to the whole capture (SPEC §8.4).
 entireCaptureBtn.addEventListener('click', () => {
-  applyLifetime((a) => {
-    delete a.t_start_ms
-    delete a.t_end_ms
+  applyMutation((a) => {
+    delete a.start_ms
+    delete a.end_ms
   })
+  closeDurationEditor()
 })
 
 // Keyboard shortcuts stay dead while typing here (stopPropagation keeps the
@@ -560,72 +554,103 @@ durationInput.addEventListener('keydown', (e) => {
 })
 
 // ---------------------------------------------------------------------------
-// Pointer input
+// SEMANTIC TARGET HOOK (future work — GOAL "Annotation Interaction"): when a
+// left click hits no box, probe the real UI object under the cursor (UIA /
+// DOM accessibility data captured alongside the screen) and offer a
+// snap-to-object box whose reserved `target` field (SPEC §8.3) carries the
+// semantic metadata. Format 0.1.0 ships no probing data, so this is a no-op;
+// wire the probe result into beginPendingBox-style creation when it arrives.
 // ---------------------------------------------------------------------------
+function probeSemanticTarget(_point: { x: number; y: number }): void {
+  // Intentionally empty in 0.1.0.
+}
+
+// ---------------------------------------------------------------------------
+// Pointer input: LEFT click selects / drags (move, corner-resize); RIGHT drag
+// creates a box. No tool modes.
+// ---------------------------------------------------------------------------
+
+function applyResize(a: Annotation, handle: HandleId, px: number, py: number): void {
+  const b = a.bounds
+  const right = b.x + b.width
+  const bottom = b.y + b.height
+  if (handle === 'nw' || handle === 'sw') {
+    b.x = Math.min(px, right - MIN_SIZE)
+    b.width = right - b.x
+  } else {
+    b.width = Math.max(MIN_SIZE, px - b.x)
+  }
+  if (handle === 'nw' || handle === 'ne') {
+    b.y = Math.min(py, bottom - MIN_SIZE)
+    b.height = bottom - b.y
+  } else {
+    b.height = Math.max(MIN_SIZE, py - b.y)
+  }
+}
 
 overlay.addEventListener('pointerdown', (e) => {
   if (!loaded) return
   scrub?.pause() // annotating targets a moment; freeze it
   closeDurationEditor(false) // any canvas interaction dismisses it, unapplied
   if (e.button === 2) {
-    // Right-click drag draws a rectangle regardless of the active tool, then
-    // takes a label inline.
+    // RIGHT-DRAG creates a box (live preview; text input opens on release).
     commitTextEditor()
-    commitLabelEditor()
     const p = toNative(e)
     overlay.setPointerCapture(e.pointerId)
-    drag = { kind: 'draw', tool: 'rect', x0: p.x, y0: p.y, x: p.x, y: p.y, label: true }
+    drag = { kind: 'draw', x0: p.x, y0: p.y, x: p.x, y: p.y }
     return
   }
   if (e.button !== 0) return
-  const p = toNative(e)
-  if (tool === 'text') {
-    // Keep focus under our control: default mousedown focus would blur the
-    // inline input the moment we open it.
-    e.preventDefault()
-    commitTextEditor()
-    commitLabelEditor()
-    openTextEditor(p)
-    return
-  }
   commitTextEditor()
-  commitLabelEditor()
-  if (tool === 'pin') {
-    placePin(p)
-    return
-  }
-  if (tool === 'select') {
-    // Only annotations visible at the current scrub position are clickable.
-    const id = hitTest(overlayCtx, visibleAnnotations(), p.x, p.y, 1 / (fitScale * viewport.zoom))
-    state.selectedId = id
-    if (id !== null) {
+  const p = toNative(e)
+  const ui = uiScale()
+  // Corner resize handles (editor-only chrome) win over box stacking.
+  const sel = selectedVisibleAnnotation()
+  if (sel !== null) {
+    const handle = handleAt(sel, p.x, p.y, ui)
+    if (handle !== null) {
       overlay.setPointerCapture(e.pointerId)
-      drag = { kind: 'move', id, lastX: p.x, lastY: p.y, before: state.cloneAnnotations(), moved: false }
+      drag = { kind: 'resize', id: sel.annotation_id, handle, before: state.cloneAnnotations(), moved: false }
+      return
     }
-    syncLanes()
-    schedulePaint()
-    return
   }
-  if (tool === 'arrow' || tool === 'rect' || tool === 'blur') {
+  // LEFT CLICK selects the topmost box whose lifetime is visible at the cursor.
+  const id = hitTest(visibleAnnotations(), p.x, p.y, ui)
+  state.selectedId = id
+  if (id !== null) {
     overlay.setPointerCapture(e.pointerId)
-    drag = { kind: 'draw', tool, x0: p.x, y0: p.y, x: p.x, y: p.y, label: false }
+    drag = { kind: 'move', id, lastX: p.x, lastY: p.y, before: state.cloneAnnotations(), moved: false }
+  } else {
+    probeSemanticTarget(p)
   }
+  syncLanes()
+  schedulePaint()
 })
 
 overlay.addEventListener('pointermove', (e) => {
-  if (!drag) return
+  if (!drag) {
+    if (loaded) syncHoverCursor(e)
+    return
+  }
   const p = toNative(e)
   if (drag.kind === 'draw') {
     drag.x = p.x
     drag.y = p.y
-  } else {
+  } else if (drag.kind === 'move') {
     const a = state.byId(drag.id)
     if (a && (p.x !== drag.lastX || p.y !== drag.lastY)) {
-      moveAnnotation(a, p.x - drag.lastX, p.y - drag.lastY)
+      a.bounds.x += p.x - drag.lastX
+      a.bounds.y += p.y - drag.lastY
       drag.moved = true
     }
     drag.lastX = p.x
     drag.lastY = p.y
+  } else {
+    const a = state.byId(drag.id)
+    if (a) {
+      applyResize(a, drag.handle, p.x, p.y)
+      drag.moved = true
+    }
   }
   schedulePaint()
 })
@@ -635,12 +660,8 @@ function endDrag(): void {
   const d = drag
   drag = null
   if (d.kind === 'draw') {
-    if (d.label) {
-      const a = draftFromDrag(d)
-      if (a && a.type === 'rect') openLabelEditor({ x: a.x, y: a.y, w: a.w, h: a.h })
-    } else {
-      commitDraw(d)
-    }
+    const b = normBox(d)
+    if (b.w >= MIN_DRAG && b.h >= MIN_DRAG) beginPendingBox(b)
   } else if (d.moved) {
     state.pushUndoSnapshot(d.before)
   }
@@ -650,11 +671,43 @@ function endDrag(): void {
 overlay.addEventListener('pointerup', endDrag)
 overlay.addEventListener('pointercancel', endDrag)
 
+// Double-click a box to edit its text inline (Enter applies, Esc abandons).
+overlay.addEventListener('dblclick', (e) => {
+  if (!loaded || e.button !== 0) return
+  const p = toNative(e)
+  const id = hitTest(visibleAnnotations(), p.x, p.y, uiScale())
+  if (id === null) return
+  const a = state.byId(id)
+  if (!a) return
+  e.preventDefault()
+  state.selectedId = id
+  textSession = { kind: 'edit', id }
+  openTextEditor(a.bounds, a.text)
+  syncLanes()
+  schedulePaint()
+})
+
+/** Idle-hover cursor: resize arrows over handles, move over a box, else default. */
+function syncHoverCursor(e: PointerEvent): void {
+  if (spaceDown) return // pan cursor owns the stage
+  const p = toNative(e)
+  const ui = uiScale()
+  const sel = selectedVisibleAnnotation()
+  if (sel !== null) {
+    const handle = handleAt(sel, p.x, p.y, ui)
+    if (handle !== null) {
+      overlay.style.cursor = handle === 'nw' || handle === 'se' ? 'nwse-resize' : 'nesw-resize'
+      return
+    }
+  }
+  overlay.style.cursor = hitTest(visibleAnnotations(), p.x, p.y, ui) !== null ? 'move' : 'default'
+}
+
 // ---------------------------------------------------------------------------
 // Scrub wheel, zoom, and pan
 // ---------------------------------------------------------------------------
 
-// Right-click is the rectangle tool; never show a context menu.
+// Right-click starts a box; never show a context menu.
 window.addEventListener('contextmenu', (e) => e.preventDefault())
 
 window.addEventListener(
@@ -683,7 +736,7 @@ window.addEventListener(
   { passive: false },
 )
 
-// Space+drag pan, captured on the stage so it wins over annotation tools.
+// Space+drag pan, captured on the stage so it wins over box interactions.
 stage.addEventListener(
   'pointerdown',
   (e) => {
@@ -704,7 +757,7 @@ stage.addEventListener(
     viewport.panBy(e.clientX - panning.x, e.clientY - panning.y)
     panning.x = e.clientX
     panning.y = e.clientY
-    syncSelectionUi() // pan skips repaint (transform-glued), chips are screen-space
+    syncSelectionUi() // pan skips repaint (transform-glued), the header is screen-space
   },
   { capture: true },
 )
@@ -723,19 +776,26 @@ function syncPanCursor(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Keyboard
+// Keyboard: Enter save, Esc cancel-current/close, Ctrl+Z/Y, Delete, C color.
 // ---------------------------------------------------------------------------
 
 window.addEventListener('keydown', (e) => {
   // Inline inputs own their keys (their handlers stopPropagation; the contains
   // check covers focus landing on the duration editor's buttons).
-  if (e.isComposing || e.target === textEditor || e.target === labelEditor) return
+  if (e.isComposing || e.target === textEditor) return
   if (e.target instanceof Node && durationEditor.contains(e.target)) return
   const typing = e.target === titleInput || e.target === noteInput
   if (e.key === 'Escape') {
-    // Esc closes the duration editor without applying before it can cancel.
+    // Cancel-current first: duration editor, then an active selection; a bare
+    // Esc with nothing in progress closes the editor without saving.
     if (durationEditorOpen) {
       closeDurationEditor()
+      return
+    }
+    if (state.selectedId !== null) {
+      state.selectedId = null
+      syncLanes()
+      schedulePaint()
       return
     }
     window.editorBridge.cancel()
@@ -768,24 +828,6 @@ window.addEventListener('keydown', (e) => {
   }
   if (e.altKey) return
   switch (e.key.toLowerCase()) {
-    case 'v':
-      setTool('select')
-      break
-    case 'p':
-      setTool('pin')
-      break
-    case 'a':
-      setTool('arrow')
-      break
-    case 'r':
-      setTool('rect')
-      break
-    case 'b':
-      setTool('blur')
-      break
-    case 't':
-      setTool('text')
-      break
     case 'c':
       cycleColor()
       break
@@ -814,19 +856,11 @@ window.addEventListener('blur', () => {
 // Top bar controls
 // ---------------------------------------------------------------------------
 
-for (const btn of toolButtons) {
-  btn.addEventListener('click', () => setTool(btn.dataset['tool'] as Tool))
-}
 colorBtn.addEventListener('click', () => {
   cycleColor()
   colorBtn.blur()
 })
 exportBtn.addEventListener('click', () => void doExport())
-includeReplay.addEventListener('change', syncBlurWarning)
-excludeReplayBtn.addEventListener('click', () => {
-  includeReplay.checked = false
-  syncBlurWarning()
-})
 
 // ---------------------------------------------------------------------------
 // Timeline bar
@@ -837,14 +871,13 @@ const timebar = new Timebar(el<HTMLElement>('timebar'), {
     if (scrub) scrub.scrubTo(fraction * scrub.durationMs)
   },
   togglePlay: () => scrub?.togglePlay(),
-  // Clicking a lifetime bar selects the annotation and scrubs to its anchor
-  // (absent anchor = the capture instant, i.e. "now").
+  // Clicking a lifetime bar selects the box and scrubs to its lifetime
+  // midpoint (SPEC §8.4 — absent lifetime = the capture instant, i.e. "now").
   selectAnnotation: (id) => {
     const a = state.byId(id)
     if (!a) return
-    setTool('select')
     state.selectedId = id
-    if (scrub) scrub.scrubTo(a.t_ms ?? scrub.durationMs)
+    if (scrub) scrub.scrubTo(lifetimeMidpoint(a, scrub.durationMs))
     syncLanes()
     schedulePaint()
   },
@@ -860,18 +893,16 @@ async function doExport(): Promise<void> {
   exportBtn.disabled = true
   scrub?.pause()
   commitTextEditor()
-  commitLabelEditor()
   closeDurationEditor(false)
   try {
     // A wheel burst right before Enter can leave a seek in flight; wait until
     // the base canvas shows the frame snapshotTMs will describe.
     if (scrub) await scrub.whenSettled()
-    // Every blur region burns into the exported snapshot regardless of its
-    // lifetime — redaction is a privacy guarantee, not a display state (SPEC §9).
-    const blurs = state.annotations.filter((a): a is BlurAnnotation => a.type === 'blur')
+    // Blur is NON-destructive (SPEC §9): snapshot.png keeps original pixels;
+    // blur renders only into derived views (replay_annotated, editor preview).
     // The base canvas now shows the frame being exported (native snapshot or
     // scrubbed replay frame upscaled to native resolution).
-    const snapshotPng = await composeExportPng(snapshot, blurs)
+    const snapshotPng = await composeExportPng(snapshot)
     window.editorBridge.export({
       annotations: state.annotations,
       snapshotPng,
@@ -914,8 +945,8 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
   if (payload.replayWebm !== null) {
     const controller = new ScrubController(payload.replayWebm, payload.replayDurationMs, {
       drawFrame: drawBase,
-      // Scrubbing moves annotations in/out of their lifetimes: repaint the
-      // overlay and re-evaluate the selection chips alongside the timebar.
+      // Scrubbing moves boxes in/out of their lifetimes: repaint the overlay
+      // and re-evaluate the selection header alongside the timebar.
       onState: () => {
         timebar.update(controller)
         // Lanes rebuild only on a duration change (webm parse resolving), not
@@ -943,5 +974,4 @@ window.editorBridge.onInit((payload) => {
   void initEditor(payload)
 })
 
-setTool('rect')
 colorSwatch.style.background = state.color

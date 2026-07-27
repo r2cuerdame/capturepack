@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "CapturePack annotations.json",
-  "description": "Schema for annotations.json, the OPTIONAL editable annotation layer of a CapturePack (format 0.1.0). Annotations are stored as data — editable forever, never burned into media. The one exception is blur, which exporters MUST additionally apply destructively to the exported snapshot.png (SPEC.md §9); the blur annotation itself is still recorded here as data. All geometry is in snapshot pixel coordinates: origin at the top-left pixel of snapshot.png, x right, y down, units are snapshot pixels; coordinates may be non-integers. Unknown additional properties are deliberately allowed for forward compatibility, but this schema only accepts the five annotation types defined by 0.1.0 — a pack using a newer type fails validation here while remaining readable under the defensive-reading rules (SPEC.md §13). See SPEC.md §8 for the normative definition; where schema and prose disagree, the prose wins.",
+  "description": "Schema for annotations.json, the OPTIONAL editable annotation layer of a CapturePack (format 0.1.0). Format 0.1.0 defines exactly one annotation type: the box. A box composes its roles through properties — numbered:true makes it a numbered marker, blur:true marks a sensitive region, text carries its description; any combination is valid on one box. Annotations are stored as data, editable forever, and are NEVER burned into the original media: snapshot.png and the replay always keep original pixels, and blur renders only into derived views such as replay_annotated (SPEC.md §9). Display numbers are computed from the numbered boxes (SPEC.md §8.5), never stored. All geometry is in snapshot pixel coordinates: origin at the top-left pixel of snapshot.png, x right, y down, units are snapshot pixels; coordinates may be non-integers. Unknown additional properties are deliberately allowed for forward compatibility, but this schema only accepts the \"box\" type — a pack using a newer type fails validation here while remaining readable under the defensive-reading rules (SPEC.md §13). See SPEC.md §8 for the normative definition; where schema and prose disagree, the prose wins.",
   "type": "object",
   "required": ["reference_width", "reference_height", "annotations"],
   "properties": {
@@ -16,127 +16,31 @@
       "minimum": 1
     },
     "annotations": {
-      "description": "Ordered list of annotations. Array order is reading order — the order in which a human (or report.md) should walk through them, normally creation order. Stacking for rendering is controlled by z, not array order. May be empty.",
+      "description": "List of annotation boxes. May be empty. Array order carries no meaning — reading order is defined by the display-number rule (SPEC.md §8.5) and lifetimes, not by array position.",
       "type": "array",
-      "items": { "$ref": "#/$defs/annotation" }
+      "items": { "$ref": "#/$defs/box" }
     }
   },
   "$defs": {
-    "annotation": {
-      "description": "One annotation. Discriminated by the 'type' field: pin, arrow, rect, blur, or text (the five types defined in format 0.1.0). Readers MUST skip annotations of unknown type and SHOULD preserve them when rewriting a pack.",
-      "oneOf": [
-        { "$ref": "#/$defs/pin" },
-        { "$ref": "#/$defs/arrow" },
-        { "$ref": "#/$defs/rect" },
-        { "$ref": "#/$defs/blur" },
-        { "$ref": "#/$defs/text" }
-      ]
-    },
-    "commonFields": {
-      "description": "Fields shared by every annotation type.",
+    "box": {
+      "description": "One annotation box — the only annotation type in format 0.1.0. Readers MUST skip annotations of unknown type and SHOULD preserve them when rewriting a pack.",
       "type": "object",
-      "required": ["id", "type"],
+      "required": ["annotation_id", "type", "bounds"],
       "properties": {
-        "id": {
-          "description": "Non-empty identifier, unique within this file. Short ids (\"a1\") or UUIDs both fine. Referenced by timeline events (core.annotation.added) and by report.md.",
+        "annotation_id": {
+          "description": "Permanent identity of the annotation: the literal prefix \"ann_\" plus 6 lowercase hex digits, e.g. \"ann_8f21c4\". MUST be unique within this file. Referenced by timeline events (core.annotation.added), documents, and MCP responses. The id never changes; display numbers do (SPEC.md §8.5).",
           "type": "string",
-          "minLength": 1
+          "pattern": "^ann_[0-9a-f]{6}$"
         },
         "type": {
-          "description": "The annotation type. One of \"pin\", \"arrow\", \"rect\", \"blur\", \"text\" in format 0.1.0.",
-          "type": "string"
+          "description": "The annotation type. MUST be \"box\" in format 0.1.0.",
+          "const": "box"
         },
-        "z": {
-          "description": "OPTIONAL stacking order for rendering; higher draws on top. Default: array position (later entries render on top).",
-          "type": "integer"
-        },
-        "color": {
-          "description": "OPTIONAL display color as CSS-style hex: \"#RRGGBB\" or \"#RRGGBBAA\". Meaningless for blur and SHOULD be omitted there. Viewers pick their own default when absent.",
-          "type": "string",
-          "pattern": "^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"
-        },
-        "created_at": {
-          "description": "OPTIONAL creation instant of the annotation, ISO 8601 with timezone.",
-          "type": "string",
-          "format": "date-time"
-        },
-        "t_ms": {
-          "description": "OPTIONAL replay position, in milliseconds, that this annotation refers to — normally the scrub position at which it was created (SPEC.md §7.1). Same clock as timeline t_ms offsets relative to t0 (SPEC.md §10.1). Only meaningful when the pack has a replay; SHOULD lie within [0, replay_duration_ms]. Does not change the coordinate space — geometry is always in snapshot pixel coordinates (SPEC.md §8.2). When a lifetime (t_start_ms/t_end_ms) is present, t_ms is its anchor and SHOULD lie inside the lifetime interval.",
-          "type": "number"
-        },
-        "t_start_ms": {
-          "description": "OPTIONAL start of the annotation's lifetime — the closed interval [t_start_ms, t_end_ms] of the replay timeline during which the annotation applies, in milliseconds, same clock as t_ms (SPEC.md §8.3, 'Annotation lifetime'). MUST be <= t_end_ms. Absent lifetime (neither field present) means the annotation applies to the whole capture — always valid for simple writers. Only meaningful when the pack has a replay; both bounds SHOULD lie within [0, replay_duration_ms]. Writers SHOULD emit both fields or neither.",
-          "type": "number"
-        },
-        "t_end_ms": {
-          "description": "OPTIONAL end of the annotation's lifetime, in milliseconds, same clock as t_ms (SPEC.md §8.3, 'Annotation lifetime'). MUST be >= t_start_ms. Viewers draw an annotation only while the scrub position lies inside its lifetime; annotations without a lifetime always draw. Blur is the exception: a blur region is applied destructively to the exported snapshot.png regardless of any lifetime (SPEC.md §9).",
-          "type": "number"
-        }
-      }
-    },
-    "pin": {
-      "description": "A pointed marker at a single spot, optionally labeled — e.g. \"1. renamed the document here\".",
-      "allOf": [
-        { "$ref": "#/$defs/commonFields" },
-        {
+        "bounds": {
+          "description": "The box rectangle in snapshot pixel coordinates. width and height MUST be > 0.",
           "type": "object",
-          "required": ["x", "y"],
+          "required": ["x", "y", "width", "height"],
           "properties": {
-            "type": { "const": "pin" },
-            "x": {
-              "description": "X of the pinned point, in snapshot pixels.",
-              "type": "number"
-            },
-            "y": {
-              "description": "Y of the pinned point, in snapshot pixels.",
-              "type": "number"
-            },
-            "label": {
-              "description": "OPTIONAL short caption for the pin.",
-              "type": "string"
-            }
-          }
-        }
-      ]
-    },
-    "arrow": {
-      "description": "A directed line from tail (x1,y1) to head (x2,y2). The head is what the arrow points at.",
-      "allOf": [
-        { "$ref": "#/$defs/commonFields" },
-        {
-          "type": "object",
-          "required": ["x1", "y1", "x2", "y2"],
-          "properties": {
-            "type": { "const": "arrow" },
-            "x1": {
-              "description": "Tail X (where the arrow starts), in snapshot pixels.",
-              "type": "number"
-            },
-            "y1": {
-              "description": "Tail Y, in snapshot pixels.",
-              "type": "number"
-            },
-            "x2": {
-              "description": "Head X (what the arrow points at), in snapshot pixels.",
-              "type": "number"
-            },
-            "y2": {
-              "description": "Head Y, in snapshot pixels.",
-              "type": "number"
-            }
-          }
-        }
-      ]
-    },
-    "rect": {
-      "description": "A rectangle outline highlighting a region, optionally labeled.",
-      "allOf": [
-        { "$ref": "#/$defs/commonFields" },
-        {
-          "type": "object",
-          "required": ["x", "y", "w", "h"],
-          "properties": {
-            "type": { "const": "rect" },
             "x": {
               "description": "Top-left corner X, in snapshot pixels.",
               "type": "number"
@@ -145,84 +49,82 @@
               "description": "Top-left corner Y, in snapshot pixels.",
               "type": "number"
             },
-            "w": {
+            "width": {
               "description": "Width in snapshot pixels, > 0.",
               "type": "number",
               "exclusiveMinimum": 0
             },
-            "h": {
-              "description": "Height in snapshot pixels, > 0.",
-              "type": "number",
-              "exclusiveMinimum": 0
-            },
-            "label": {
-              "description": "OPTIONAL short caption for the region.",
-              "type": "string"
-            }
-          }
-        }
-      ]
-    },
-    "blur": {
-      "description": "A redacted rectangular region. Special semantics (SPEC.md §9): exporters MUST apply this region destructively to the exported snapshot.png — the unredacted frame MUST NOT be included anywhere in the pack — while still recording this annotation as data. Readers MUST NOT expect to recover the pixels underneath. In the MVP era the replay video is NOT redacted; exporters SHOULD offer excluding the replay when blur is used. The color field is meaningless for blur and SHOULD be omitted.",
-      "allOf": [
-        { "$ref": "#/$defs/commonFields" },
-        {
-          "type": "object",
-          "required": ["x", "y", "w", "h"],
-          "properties": {
-            "type": { "const": "blur" },
-            "x": {
-              "description": "Top-left corner X of the redacted region, in snapshot pixels.",
-              "type": "number"
-            },
-            "y": {
-              "description": "Top-left corner Y of the redacted region, in snapshot pixels.",
-              "type": "number"
-            },
-            "w": {
-              "description": "Width in snapshot pixels, > 0.",
-              "type": "number",
-              "exclusiveMinimum": 0
-            },
-            "h": {
+            "height": {
               "description": "Height in snapshot pixels, > 0.",
               "type": "number",
               "exclusiveMinimum": 0
             }
           }
-        }
-      ]
-    },
-    "text": {
-      "description": "A free-floating text note anchored at (x,y).",
-      "allOf": [
-        { "$ref": "#/$defs/commonFields" },
-        {
+        },
+        "text": {
+          "description": "The box's description — what the user typed. MAY be empty; absent means \"\".",
+          "type": "string",
+          "default": ""
+        },
+        "start_ms": {
+          "description": "Start of the box's lifetime — the closed interval [start_ms, end_ms] of the replay clock during which the box applies, in milliseconds (SPEC.md §8.4). MUST be <= end_ms, and MUST appear together with end_ms (both or neither; enforced below via dependentRequired). Absent lifetime = the box applies to the whole capture. Only meaningful when the pack has a replay; both bounds SHOULD lie within [0, replay_duration_ms]. When a single representative instant is needed, it is the lifetime midpoint (start_ms + end_ms) / 2 — there is no separately stored anchor.",
+          "type": "number"
+        },
+        "end_ms": {
+          "description": "End of the box's lifetime, in milliseconds on the replay clock (SPEC.md §8.4). MUST be >= start_ms, and MUST appear together with start_ms (both or neither). Viewers and the annotated-replay renderer draw a box only while the current position lies inside its lifetime; boxes without a lifetime always draw. Blur applies exactly during the lifetime (SPEC.md §9).",
+          "type": "number"
+        },
+        "numbered": {
+          "description": "Whether the box takes part in display numbering (SPEC.md §8.5). Default false. The number itself is NEVER stored — it is computed: numbered boxes sorted by start_ms ascending (absent lifetime = 0), then z ascending (absent z = array position), then annotation_id ascending, numbered contiguously from 1. Every consumer (editor, replay_annotated, report.md, README.md, skills/, MCP) MUST use exactly this rule.",
+          "type": "boolean",
+          "default": false
+        },
+        "blur": {
+          "description": "Whether the box's interior is sensitive and MUST be blurred in rendered views (SPEC.md §9). Default false. Blur is non-destructive: snapshot.png and the replay keep the original, unredacted pixels; blur renders only into derived views (replay_annotated, editor previews), during the box's lifetime, moving with the box, and before any other annotation layer is drawn.",
+          "type": "boolean",
+          "default": false
+        },
+        "tracking": {
+          "description": "Object-tracking state. In format 0.1.0 the only defined field is 'enabled', and it MUST be false — frame-by-frame tracking data (bounds following a moving object) is reserved for a future version. Absent means { \"enabled\": false }. Readers MUST ignore tracking content they do not understand and treat the box as untracked.",
           "type": "object",
-          "required": ["x", "y", "text"],
+          "required": ["enabled"],
           "properties": {
-            "type": { "const": "text" },
-            "x": {
-              "description": "Anchor X — top-left of the first line of text, in snapshot pixels.",
-              "type": "number"
-            },
-            "y": {
-              "description": "Anchor Y — top-left of the first line of text, in snapshot pixels.",
-              "type": "number"
-            },
-            "text": {
-              "description": "The note content.",
-              "type": "string"
-            },
-            "size": {
-              "description": "OPTIONAL font size in snapshot pixels. Viewers pick a legible default when absent.",
-              "type": "number",
-              "exclusiveMinimum": 0
+            "enabled": {
+              "description": "Whether the box tracks a moving object. MUST be false in format 0.1.0.",
+              "type": "boolean"
+            }
+          },
+          "default": { "enabled": false }
+        },
+        "target": {
+          "description": "RESERVED for semantic object metadata: what real UI object the box points at (DOM selector/role/text, Windows UI Automation AutomationId/ControlType, engine object ids, ...). This is where the earlier draft's 'element'/Tracked Element concept lives — a box with a target is a semantic annotation; there is no separate element type. Format 0.1.0 does not define its contents; readers MUST ignore what they do not understand and MUST still render the box from bounds.",
+          "type": "object"
+        },
+        "style": {
+          "description": "OPTIONAL display styling. In 0.1.0 the only defined field is 'color', used for the border, number badge, and text. Viewers pick their own default when absent.",
+          "type": "object",
+          "properties": {
+            "color": {
+              "description": "Display color as CSS-style hex: \"#RRGGBB\" or \"#RRGGBBAA\".",
+              "type": "string",
+              "pattern": "^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"
             }
           }
+        },
+        "created_at": {
+          "description": "OPTIONAL creation instant of the annotation, ISO 8601 with timezone.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "z": {
+          "description": "OPTIONAL stacking order for rendering; higher draws on top. Also the second tiebreaker in display numbering (SPEC.md §8.5). Default: the annotation's array position (later entries render on top).",
+          "type": "integer"
         }
-      ]
+      },
+      "dependentRequired": {
+        "start_ms": ["end_ms"],
+        "end_ms": ["start_ms"]
+      }
     }
   }
 }

@@ -6,9 +6,6 @@
   --text: #e8e8ea;
   --muted: #8a8a93;
   --action: #3574f0;
-  --warn-bg: #33270f;
-  --warn-border: #7a5a1e;
-  --warn-text: #ffd27a;
 }
 
 * {
@@ -49,12 +46,7 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
-#tools {
-  display: flex;
-  gap: 2px;
-}
-
-.tool {
+#colorBtn {
   width: 28px;
   height: 28px;
   display: inline-flex;
@@ -63,20 +55,11 @@ body {
   border: 1px solid transparent;
   border-radius: 6px;
   background: transparent;
-  color: var(--muted);
-  font: 600 12px "Segoe UI", system-ui, sans-serif;
   cursor: pointer;
 }
 
-.tool:hover {
+#colorBtn:hover {
   background: var(--panel-hover);
-  color: var(--text);
-}
-
-.tool.active {
-  background: #2e2e38;
-  color: #fff;
-  border-color: #3c3c48;
 }
 
 #colorSwatch {
@@ -205,104 +188,63 @@ body {
 #textEditor {
   position: absolute;
   z-index: 3;
-  background: rgba(10, 10, 14, 0.6);
-  border: 1px dashed currentColor;
-  border-radius: 3px;
-  padding: 1px 4px;
-  min-width: 90px;
-  color: #ff3b30;
-  font-weight: 700;
-  font-family: "Segoe UI", system-ui, sans-serif;
-  outline: none;
-  user-select: text;
-}
-
-#labelEditor {
-  position: absolute;
-  z-index: 3;
   background: rgba(10, 10, 14, 0.85);
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 3px 6px;
-  min-width: 120px;
+  min-width: 140px;
   color: var(--text);
   font: 13px "Segoe UI", system-ui, sans-serif;
   outline: none;
   user-select: text;
 }
 
-#labelEditor::placeholder {
+#textEditor::placeholder {
   color: #6a6a74;
 }
 
-#blurWarning {
+/* ---- selected-box header (screen-space, glued above the box) ---- */
+
+#boxHeader {
   position: absolute;
-  z-index: 5;
-  bottom: 16px;
-  left: 50%;
-  transform: translateX(-50%);
+  z-index: 6;
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 12px;
-  border: 1px solid var(--warn-border);
-  border-radius: 8px;
-  background: var(--warn-bg);
-  color: var(--warn-text);
-  font-size: 12px;
+  align-items: stretch;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(20, 20, 26, 0.92);
+  /* Anchored by its bottom-left to the selection's top-left corner. */
+  transform: translateY(-100%);
   white-space: nowrap;
 }
 
-#blurWarning button {
-  border: 1px solid var(--warn-border);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--warn-text);
-  padding: 2px 8px;
-  font: 600 12px "Segoe UI", system-ui, sans-serif;
-  cursor: pointer;
-}
-
-#blurWarning button:hover {
-  background: rgba(255, 210, 122, 0.12);
-}
-
-/* ---- selected-annotation chips (screen-space, glued to the bounds) ---- */
-
-#durationChip,
-#deleteChip {
-  position: absolute;
-  z-index: 6;
-  border: 1px solid var(--border);
+#boxHeader button {
+  border: 1px solid transparent;
   border-radius: 4px;
-  background: rgba(20, 20, 26, 0.92);
+  background: transparent;
   color: var(--text);
+  padding: 1px 7px;
+  min-width: 22px;
   font: 600 11px "Segoe UI", system-ui, sans-serif;
   cursor: pointer;
   white-space: nowrap;
 }
 
-#durationChip {
-  padding: 1px 6px;
-  /* Anchored by its bottom-left to the selection's top-left corner. */
-  transform: translateY(-100%);
-  font-variant-numeric: tabular-nums;
-}
-
-#deleteChip {
-  width: 17px;
-  height: 17px;
-  padding: 0;
-  line-height: 15px;
-  border-radius: 50%;
-  /* Centered on the selection's top-right corner. */
-  transform: translate(-50%, -50%);
-}
-
-#durationChip:hover,
-#deleteChip:hover {
+#boxHeader button:hover {
   background: var(--panel-hover);
   border-color: #4a4a58;
+}
+
+#boxHeader button.on {
+  background: var(--action);
+  border-color: var(--action);
+  color: #fff;
+}
+
+#durationChip {
+  font-variant-numeric: tabular-nums;
 }
 
 #durationEditor {

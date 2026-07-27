@@ -11,25 +11,25 @@
       "t_ms": 2680,
       "type": "core.annotation.added",
       "source": "core",
-      "data": { "annotation_id": "a1", "annotation_type": "rect" }
+      "data": { "annotation_id": "ann_4b0e2f", "annotation_type": "box" }
     },
     {
       "t_ms": 4470,
       "type": "core.annotation.added",
       "source": "core",
-      "data": { "annotation_id": "a2", "annotation_type": "pin" }
+      "data": { "annotation_id": "ann_9c31d7", "annotation_type": "box" }
     },
     {
       "t_ms": 6890,
       "type": "core.annotation.added",
       "source": "core",
-      "data": { "annotation_id": "a3", "annotation_type": "text" }
+      "data": { "annotation_id": "ann_e5a601", "annotation_type": "box" }
     },
     {
       "t_ms": 9120,
       "type": "core.export.created",
       "source": "core",
-      "data": { "filename": "minimal.capturepack" }
+      "data": { "filename": "CapturePack_2026-07-27_104107" }
     }
   ]
 }

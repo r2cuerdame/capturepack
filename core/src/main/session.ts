@@ -1,14 +1,17 @@
 // Capture flow state machine: pick target display -> snapshot -> replay fetch
-// -> save-first -> fullscreen editor on that display -> in-place pack update on Save.
-import { app, BrowserWindow, dialog, ipcMain, Notification } from 'electron'
+// -> save-first -> fullscreen editor on that display -> in-place pack update on
+// Save -> save toast + background annotated-replay render.
+import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import type { Display, IpcMainEvent } from 'electron'
 import { randomUUID } from 'node:crypto'
 import * as path from 'node:path'
 import { IPC } from '../shared/ipc'
 import type { EditorAnnotationAddedPayload, EditorExportPayload, EditorInitPayload } from '../shared/ipc'
 import type { Annotation, Settings, TimelineEvent, TimelineFile } from '../shared/types'
+import { startAnnotatedRender } from './annotatedRender'
 import { captureWindowForDisplay, requestReplay, resolveTargetDisplay, takeSnapshot } from './capture'
 import { savePack, updatePack, type ExportInput, type InitialSaveInput, type PackHandle } from './exporter'
+import { showSaveToast, updateToastRenderStatus } from './saveToast'
 
 const REPLAY_TIMEOUT_MS = 5_000
 
@@ -102,8 +105,8 @@ async function runFlow(settings: Settings): Promise<void> {
       : { t0: new Date(t0Ms).toISOString(), events }
 
   // Same reason: replay positions have no timeline to anchor to without the
-  // replay, so drop snapshot_t_ms (SPEC §5.3) and annotation anchors (t_ms)
-  // plus lifetime intervals (t_start_ms/t_end_ms) (SPEC §8.3).
+  // replay, so drop snapshot_t_ms (SPEC §5.3) and annotation lifetimes
+  // (start_ms/end_ms) (SPEC §8.4).
   const annotations =
     replayWebm === null
       ? outcome.payload.annotations.map(withoutReplayTimes)
@@ -122,15 +125,35 @@ async function runFlow(settings: Settings): Promise<void> {
     note: outcome.payload.note,
     snapshotTMs,
     timeline,
-    outputDir: settings.outputDir,
     copyToClipboard: settings.copyToClipboard,
   }
 
   try {
     // Save-first failed earlier? Retry the initial write now, then finalize.
     if (handle === null) handle = await savePack(initialSave)
-    const packPath: string = await updatePack(handle, input)
-    new Notification({ title: 'CapturePack saved', body: path.basename(packPath) }).show()
+    const dirPath: string = await updatePack(handle, input)
+    // Save pipeline (GOAL): update folder -> toast -> background render. The
+    // toast never waits for the render; its status line flips when it ends.
+    const hasReplay = replayWebm !== null
+    showSaveToast({
+      folderPath: dirPath,
+      hasBlur: annotations.some((a) => a.blur),
+      renderState: hasReplay ? 'rendering' : 'none',
+    })
+    if (replayWebm !== null) {
+      startAnnotatedRender(
+        handle,
+        {
+          replayWebm,
+          annotations,
+          width: snap.width,
+          height: snap.height,
+          fps: settings.fps,
+          replayDurationMs,
+        },
+        (state) => updateToastRenderStatus(dirPath, state),
+      )
+    }
   } catch (err) {
     dialog.showErrorBox('CapturePack save failed', errorMessage(err))
   }
@@ -213,14 +236,12 @@ function runEditor(editor: BrowserWindow, events: TimelineEvent[], t0Ms: number)
   })
 }
 
-// Replay-relative positions (the anchor and the lifetime interval) are
-// meaningless in a pack without the replay.
+// Replay-relative lifetimes are meaningless in a pack without the replay.
 function withoutReplayTimes(a: Annotation): Annotation {
-  if (a.t_ms === undefined && a.t_start_ms === undefined && a.t_end_ms === undefined) return a
+  if (a.start_ms === undefined && a.end_ms === undefined) return a
   const copy = { ...a }
-  delete copy.t_ms
-  delete copy.t_start_ms
-  delete copy.t_end_ms
+  delete copy.start_ms
+  delete copy.end_ms
   return copy
 }
 

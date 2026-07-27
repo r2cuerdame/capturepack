@@ -36,6 +36,26 @@ export const IPC = {
   settingsPickOutputDir: 'settings:pick-output-dir',
   // settings window -> main (invoke): open the output folder in the file manager
   settingsOpenOutput: 'settings:open-output',
+
+  // main -> hidden render window: render replay_annotated.webm from this job
+  renderStart: 'render:start',
+  // render window -> main: rendered webm bytes (or failure) for the job
+  renderResult: 'render:result',
+
+  // main -> toast window: everything the save-complete toast shows
+  toastInit: 'toast:init',
+  // main -> toast window: background annotated-replay render state changed
+  toastRenderStatus: 'toast:render-status',
+  // toast -> main: open the pack folder in the file manager
+  toastOpenFolder: 'toast:open-folder',
+  // toast -> main: copy the absolute pack folder path to the clipboard
+  toastCopyPath: 'toast:copy-path',
+  // toast -> main (invoke): create {folder}.capturepack next to the folder
+  toastCreateZip: 'toast:create-zip',
+  // toast -> main: copy the analyze-this-pack prompt to the clipboard
+  toastCopyPrompt: 'toast:copy-prompt',
+  // toast -> main: close the toast window (× button / auto-close)
+  toastClose: 'toast:close',
 } as const
 
 export interface CaptureStartPayload {
@@ -81,13 +101,57 @@ export interface EditorAnnotationAddedPayload {
 
 export interface EditorExportPayload {
   annotations: Annotation[]
-  // Snapshot with blur destructively applied (equals original when no blur used)
+  // The exported snapshot frame (native snapshot or the scrubbed replay frame).
+  // Blur is NEVER burned in (SPEC §9): blur boxes render only into derived
+  // views (replay_annotated.webm, editor previews) — snapshot.png stays original.
   snapshotPng: ArrayBuffer
   title: string
   note: string
   includeReplay: boolean
   // Replay position (ms) of the exported frame; null = the capture instant ("now")
   snapshotTMs: number | null
+}
+
+// main -> hidden render window: one annotated-replay render job (SPEC §7.2).
+// The renderer plays the original replay into a canvas, draws per-frame
+// overlays (blur first, then border, number badge, text — lifetime-gated,
+// GLOBAL display numbers, no editor controls), and records the canvas.
+export interface RenderStartPayload {
+  replayWebm: ArrayBuffer
+  annotations: Annotation[]
+  // Canvas size = snapshot reference size (annotation coordinate space)
+  width: number
+  height: number
+  fps: number
+  // manifest replay_duration_ms — the lifetime clock cap
+  durationMs: number
+}
+
+export interface RenderResultPayload {
+  ok: boolean
+  // webm bytes of replay_annotated when ok
+  webm?: ArrayBuffer
+  error?: string
+}
+
+export type ToastRenderState = 'none' | 'rendering' | 'done' | 'failed'
+
+export interface ToastInitPayload {
+  folderName: string
+  folderPath: string
+  // Any blur box in the pack: show the unredacted-original warning line
+  hasBlur: boolean
+  renderState: ToastRenderState
+}
+
+export interface ToastRenderStatusPayload {
+  state: ToastRenderState
+}
+
+export interface ToastCreateZipResult {
+  ok: boolean
+  zipPath?: string
+  error?: string
 }
 
 export interface UpdaterStatusPayload {

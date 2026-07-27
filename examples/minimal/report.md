@@ -19,16 +19,23 @@ Reproduced every time by toggling zoom 100% -> 125%.
 
 ## Annotations
 
-Coordinates are pixels in snapshot.png (640×400), listed in reading order.
+Coordinates are pixels in snapshot.png (640×400). Numbers are the computed display numbers
+(SPEC §8.5) — identical in every rendered view.
 
-1. **Rect** at (304, 280) size 168×56 — "Submit button escapes the form card"
-2. **Pin** at (416, 308) — "card's right edge — the button should end here"
-3. **Text** at (48, 356) — "Only at 125% browser zoom — 100% renders fine"
+1. entire capture — "Submit button escapes the form card — should end at the card's right
+   edge" — box at (304, 280) size 168×56
+- "customer email address" — box at (48, 96) size 224×22, blur
+- "Only at 125% browser zoom — 100% renders fine" — box at (40, 344) size 328×32
+
+1 box is marked blur. snapshot.png contains the original, unredacted pixels; blur is rendered
+only in derived views (this pack has no replay, so no annotated replay exists).
 
 ## Files
 
 - manifest.json — pack identity, environment, inventory
-- snapshot.png — captured frame, 640×400
-- annotations.json — the 3 annotations above, as editable data
-- timeline.json — capture/annotation/export events
+- snapshot.png — captured frame, 640×400 (original pixels, never modified)
+- annotations.json — the 3 annotation boxes above, as editable data
+- timeline.json — capture/annotation/save events
+- README.md — human-first entry point
+- skills/ — AI-first context documents
 - report.md — this file

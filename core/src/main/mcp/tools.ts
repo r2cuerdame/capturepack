@@ -5,6 +5,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 import type { Annotation, TimelineEvent } from '../../shared/types'
+import { computeDisplayNumbers } from '../../shared/numbering'
 import { errorMessage, type PackHandle, type PackStore } from './store'
 
 const MAX_HITS_PER_GROUP = 100
@@ -190,9 +191,10 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
     {
       title: 'Annotations',
       description:
-        'All annotations of a CapturePack as data: type (pin/arrow/rect/blur/text), coordinates in ' +
-        'snapshot pixels, color, label/text, anchor time t_ms and optional lifetime ' +
-        '(t_start_ms..t_end_ms) on the replay timeline.',
+        'All annotation boxes of a CapturePack as data: annotation_id, bounds {x, y, width, height} ' +
+        'in snapshot pixels, text, numbered/blur flags, optional lifetime (start_ms..end_ms on the ' +
+        'replay clock, both or neither; the representative instant is the midpoint), optional ' +
+        'style.color, and z stacking order. Display numbers are computed, never stored.',
       inputSchema: idArg,
     },
     (args) =>
@@ -216,10 +218,10 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
     {
       title: 'Find annotations',
       description:
-        'Case-insensitive keyword search over annotation labels and texts of a CapturePack. ' +
+        'Case-insensitive keyword search over the annotation box texts of a CapturePack. ' +
         'Returns the matching annotations with all their fields.',
       inputSchema: {
-        keyword: z.string().min(1).describe('Substring to look for in annotation labels/texts (case-insensitive).'),
+        keyword: z.string().min(1).describe('Substring to look for in annotation texts (case-insensitive).'),
         ...idArg,
       },
     },
@@ -391,7 +393,7 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
       title: 'Search a pack',
       description:
         'Case-insensitive substring search across everything in a CapturePack: report.md lines, ' +
-        'annotation labels/texts, timeline event types and data, plugin JSON metadata, and the ' +
+        'annotation texts, timeline event types and data, plugin JSON metadata, and the ' +
         'manifest title/note. Returns hits grouped by source.',
       inputSchema: {
         keyword: z.string().min(1).describe('Substring to search for (case-insensitive).'),
@@ -407,8 +409,8 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
       title: 'Export pack as Markdown',
       description:
         'A single self-contained Markdown document for a CapturePack: report.md followed by an ' +
-        'annotations table (with anchor t_ms and lifetimes), the full timeline listing, and the ' +
-        'plugin inventory. Returns the Markdown as text; writes no files.',
+        'annotations table (with computed display numbers and lifetimes), the full timeline ' +
+        'listing, and the plugin inventory. Returns the Markdown as text; writes no files.',
       inputSchema: idArg,
     },
     (args) => run('capturepack_export_markdown', args, () => textResult(exportMarkdown(store.resolve(args.id)))),
@@ -479,29 +481,18 @@ function annotationList(pack: PackHandle): Annotation[] {
 }
 
 function annotationText(a: Annotation): string | null {
-  if (a.type === 'text') return a.text
-  if ((a.type === 'pin' || a.type === 'rect') && a.label !== undefined) return a.label
-  return null
+  return typeof a.text === 'string' && a.text.trim() !== '' ? a.text : null
 }
 
 function annotationPosition(a: Annotation): string {
-  switch (a.type) {
-    case 'pin':
-    case 'text':
-      return `(${a.x}, ${a.y})`
-    case 'rect':
-    case 'blur':
-      return `(${a.x}, ${a.y}) ${a.w}×${a.h}`
-    case 'arrow':
-      return `(${a.x1}, ${a.y1}) → (${a.x2}, ${a.y2})`
-    default:
-      return ''
-  }
+  const b = a.bounds
+  if (typeof b?.x !== 'number') return '' // tolerate malformed external packs
+  return `(${b.x}, ${b.y}) ${b.width}×${b.height}`
 }
 
 function annotationLifetime(a: Annotation): string {
-  if (a.t_start_ms === undefined && a.t_end_ms === undefined) return 'entire capture'
-  return `${a.t_start_ms ?? 0}–${a.t_end_ms ?? 'end'} ms`
+  if (a.start_ms === undefined || a.end_ms === undefined) return 'entire capture'
+  return `${a.start_ms}–${a.end_ms} ms`
 }
 
 interface PluginJsonFile {
@@ -606,14 +597,17 @@ function exportMarkdown(pack: PackHandle): string {
   lines.push('', '---', '', `## Annotations (${annotations.length})`, '')
   if (annotations.length === 0) lines.push('No annotations.')
   else {
+    // Display numbers come from the ONE shared rule (SPEC §8.5) so MCP output
+    // can never disagree with the editor, replay_annotated, or the documents.
+    const numbers = computeDisplayNumbers(annotations)
     lines.push(
-      '| # | Type | Anchor t_ms | Lifetime | Position | Text |',
+      '| Display # | ID | Lifetime | Bounds | Blur | Text |',
       '| --- | --- | --- | --- | --- | --- |',
     )
-    annotations.forEach((a, i) => {
+    annotations.forEach((a) => {
       lines.push(
-        `| ${i + 1} | ${a.type} | ${a.t_ms ?? '—'} | ${annotationLifetime(a)} | ` +
-          `${annotationPosition(a)} | ${mdCell(annotationText(a) ?? '')} |`,
+        `| ${numbers.get(a.annotation_id) ?? '—'} | ${a.annotation_id} | ${annotationLifetime(a)} | ` +
+          `${annotationPosition(a)} | ${a.blur ? 'yes' : ''} | ${mdCell(annotationText(a) ?? '')} |`,
       )
     })
   }

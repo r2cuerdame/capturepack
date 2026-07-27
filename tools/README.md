@@ -31,7 +31,7 @@ Output is one line per check, then a summary:
 capturepack validator (spec 0.1.0)
 input: examples/minimal.capturepack
 
-  PASS  container: standard ZIP, 5 entries, store/deflate only, not encrypted (SPEC §3.1)
+  PASS  container: standard ZIP, 11 entries, store/deflate only, not encrypted (SPEC §3.1)
   PASS  manifest.json: present at the pack root
   ...
   NOTE  extra.txt: unknown file — ignored (readers MUST ignore unknown files, SPEC §13.1)
@@ -46,8 +46,8 @@ Exit codes: `0` valid, `1` invalid, `2` usage or unreadable input.
 - **Container** (SPEC §3): standard ZIP, store/deflate only, not encrypted or
   split, entry names safe (`/` separators, no `..`, no absolute paths), CRC-32
   intact. A single wrapping top-level directory is accepted defensively, with a
-  note, as §3.1 allows readers to do. The extracted directory form is equally
-  valid input.
+  note, as §3.2 allows readers to do. The extracted directory form — the
+  primary, folder-first form of a pack — is equally valid input.
 - **Required files** (SPEC §4–6): `manifest.json` parses as UTF-8 JSON without
   BOM; `snapshot.png` is a real PNG (signature + IHDR).
 - **Manifest** (SPEC §5): `format` marker, semver `format_version`, UUID `id`,
@@ -55,31 +55,43 @@ Exit codes: `0` valid, `1` invalid, `2` usage or unreadable input.
   field shapes; nullable rules (`null` only where the spec allows it).
 - **Media consistency** (SPEC §5.3, §7): declared replay exists; no undeclared
   or second replay file; `replay_duration_ms` coupled to `replay`;
-  `snapshot_t_ms` (frame-accurate snapshot, §7.1) is an integer >= 0, with a
-  note when it has no replay to anchor to or exceeds the replay duration.
+  `replay_annotated` (the annotated replay, §7.2) matches
+  `replay_annotated.(webm|mp4)` and requires a replay (FAIL when declared on a
+  screenshot-only pack); a *declared but missing* annotated replay is only a
+  NOTE — it may still be rendering in the background, and is always
+  regenerable from `replay` + `annotations.json`; `snapshot_t_ms`
+  (frame-accurate snapshot, §7.1) is an integer >= 0, with a note when it has
+  no replay to anchor to or exceeds the replay duration.
 - **Plugins** (SPEC §5.4, §11): name pattern, `path` exactly
   `plugins/<name>/`, `meta.json` present and matching the declaration.
   Undeclared plugin directories are ignored with a note.
-- **annotations.json** (SPEC §8): reference dimensions equal the actual
-  snapshot dimensions; per-type geometry (rect/blur `w`,`h` > 0, etc.), unique
-  ids, color format; `t_ms` (replay position, §8.3) is a number, with a note
-  when the pack has no replay or the value lies outside
-  `[0, replay_duration_ms]`. Lifetime intervals (`t_start_ms`/`t_end_ms`,
-  §8.3 "Annotation lifetime"): both must be numbers with
-  `t_start_ms <= t_end_ms` (FAIL otherwise), with a note when a bound lies
-  outside `[0, replay_duration_ms]`, when the anchor `t_ms` lies outside the
-  lifetime, when only one bound is present, or when a lifetime appears in a
-  pack without a replay. Unknown annotation types are skipped with a note.
+- **annotations.json** (SPEC §8, unified **box** model): reference dimensions
+  equal the actual snapshot dimensions; `annotation_id` matches
+  `^ann_[0-9a-f]{6}$` and is unique; `bounds` is `{x, y, width, height}` with
+  `width`/`height` > 0 (a note when the box lies entirely outside the
+  coordinate space); `text` a string; `numbered`/`blur` booleans; `tracking`
+  an object with boolean `enabled` (a note when `enabled` is `true` — reserved
+  in 0.1.0); `target` an object (reserved); `style.color` hex. Lifetimes
+  (`start_ms`/`end_ms`, §8.4): both bounds or neither (FAIL otherwise),
+  `start_ms <= end_ms` (FAIL otherwise), notes when a bound lies outside
+  `[0, replay_duration_ms]` or a lifetime appears without a replay. Display
+  numbers are recomputed by the §8.5 rule and printed as a PASS line — they
+  are never stored in the pack. The five legacy pre-release type names
+  (`pin`, `arrow`, `rect`, `blur`, `text`) **FAIL** with a legacy-type
+  message; other unknown types are skipped with a note. When any box is
+  marked blur, a NOTE reminds that the originals are never redacted (§9).
 - **timeline.json** (SPEC §10): `t0` with timezone, events sorted ascending by
   `t_ms`, namespaced event types, `source` matching the namespace, `input.*`
   rejected (reserved for V2), plugin events matching declared plugins.
+- **Generated views** (SPEC §12): `report.md`, `README.md`, and `skills/` are
+  PASS lines when present and NOTE lines when absent — RECOMMENDED, never
+  required. Missing well-known `skills/` documents (overview, timeline,
+  annotation, dom, project) get a single note. None of them is
+  content-checked: they are generated views, never the source of truth.
 - **Forward compatibility** (SPEC §13): unknown files, unknown fields, unknown
-  annotation/event types, and undeclared plugin directories never fail a pack —
-  they are reported as `NOTE` lines and otherwise ignored, exactly as the spec
-  requires of readers.
-
-`report.md` is noted but not content-checked: per SPEC §12 it is a generated
-view, never the source of truth.
+  annotation/event types, extra `skills/` documents, and undeclared plugin
+  directories never fail a pack — they are reported as `NOTE` lines and
+  otherwise ignored, exactly as the spec requires of readers.
 
 ### Notes
 

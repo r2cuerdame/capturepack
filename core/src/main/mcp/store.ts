@@ -9,8 +9,10 @@ import type { AnnotationsFile, Manifest, TimelineFile } from '../../shared/types
 const PACK_EXT = '.capturepack'
 const RESCAN_DEBOUNCE_MS = 300
 const MAX_DIR_FILES = 2000
-// Packs live at the top of outputDir or one subfolder down (the exporter's
-// YYYY-MM-DD date folders): outputDir/2026-07-27/capture-140309.capturepack.
+// Folder-first exporter: packs are flat outputDir/CapturePack_YYYY-MM-DD_HHMMSS/
+// folders (each contains manifest.json, so depth-0 scanning finds them). One
+// extra level is still scanned for packs from the pre-release date-folder
+// layout (outputDir/YYYY-MM-DD/…) and for user-organized subfolders.
 const MAX_SCAN_DEPTH = 1
 // Even with a live watcher, rescan when the index is older than this: a
 // silently dead watcher (network/OneDrive-redirected folders) must not freeze
@@ -114,12 +116,19 @@ export function createPackStore(options: { outputDir: string; watch: boolean }):
     } catch {
       return // dir missing or unreadable: nothing to add, no crash
     }
-    // The exporter writes capture-X/ (extracted) and capture-X.capturepack side
-    // by side — one pack. Index only the zip; the dir is its extracted twin.
-    const zipStems = new Set<string>()
+    // Folder-first (SPEC §3): the FOLDER is the pack; a same-stem sibling
+    // CapturePack_X.capturepack is an on-demand distribution copy created by
+    // the toast's [Create ZIP] — possibly stale (e.g. made before the
+    // background annotated-replay render finished). Index the dir and suppress
+    // its zip twin; a zip with no sibling dir is still a pack of its own.
+    const dirStems = new Set<string>()
     for (const d of dirents) {
-      if (d.isFile() && d.name.toLowerCase().endsWith(PACK_EXT)) {
-        zipStems.add(d.name.slice(0, -PACK_EXT.length).toLowerCase())
+      try {
+        if (d.isDirectory() && fs.existsSync(path.join(dir, d.name, 'manifest.json'))) {
+          dirStems.add(d.name.toLowerCase())
+        }
+      } catch {
+        // Directory vanished mid-scan: skip it.
       }
     }
     for (const d of dirents) {
@@ -127,12 +136,12 @@ export function createPackStore(options: { outputDir: string; watch: boolean }):
       const rel = relPrefix === '' ? d.name : `${relPrefix}/${d.name}`
       try {
         if (d.isFile() && d.name.toLowerCase().endsWith(PACK_EXT)) {
-          out.push({ id: rel.slice(0, -PACK_EXT.length), path: full, kind: 'zip', mtimeMs: fs.statSync(full).mtimeMs })
+          if (!dirStems.has(d.name.slice(0, -PACK_EXT.length).toLowerCase())) {
+            out.push({ id: rel.slice(0, -PACK_EXT.length), path: full, kind: 'zip', mtimeMs: fs.statSync(full).mtimeMs })
+          }
         } else if (d.isDirectory()) {
           if (fs.existsSync(path.join(full, 'manifest.json'))) {
-            if (!zipStems.has(d.name.toLowerCase())) {
-              out.push({ id: rel, path: full, kind: 'dir', mtimeMs: fs.statSync(full).mtimeMs })
-            }
+            out.push({ id: rel, path: full, kind: 'dir', mtimeMs: fs.statSync(full).mtimeMs })
           } else if (depth < MAX_SCAN_DEPTH) {
             scanDir(full, rel, depth + 1, out)
           }

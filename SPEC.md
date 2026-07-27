@@ -21,7 +21,7 @@ this repository — follows this spec, never the other way around.
 
 1. [Overview](#1-overview)
 2. [Conformance and terminology](#2-conformance-and-terminology)
-3. [Container format](#3-container-format)
+3. [Container format — folder first](#3-container-format--folder-first)
 4. [Pack layout](#4-pack-layout)
 5. [manifest.json](#5-manifestjson)
 6. [snapshot.png](#6-snapshotpng)
@@ -30,7 +30,7 @@ this repository — follows this spec, never the other way around.
 9. [Blur and privacy](#9-blur-and-privacy)
 10. [timeline.json](#10-timelinejson)
 11. [plugins/](#11-plugins)
-12. [report.md](#12-reportmd)
+12. [report.md, README.md, and skills/](#12-reportmd-readmemd-and-skills)
 13. [Versioning and compatibility](#13-versioning-and-compatibility)
 14. [Minimal valid pack](#14-minimal-valid-pack)
 - [Appendix A: JSON Schemas](#appendix-a-json-schemas)
@@ -42,37 +42,50 @@ this repository — follows this spec, never the other way around.
 A **CapturePack** is a small, self-contained package that explains a visual situation — usually a
 bug — to another human or to an LLM. It bundles what a screenshot cannot:
 
-- **snapshot.png** — the captured frame (pixels).
-- **replay video** — the last ~30 seconds before capture (motion).
-- **annotations.json** — pins, arrows, rectangles, blurs, and text notes, stored as editable data
-  (intent).
+- **snapshot.png** — the captured frame (pixels). Original, never modified.
+- **replay video** — the last ~30 seconds before capture (motion). Original evidence, never
+  modified.
+- **replay_annotated video** — the replay with annotations rendered in: instantly understandable
+  in any video player, and always regenerable from the originals.
+- **annotations.json** — annotation **boxes**: bounded regions with text, a lifetime, an optional
+  number, and an optional blur, stored as editable data (intent). The true source that
+  `replay_annotated` is rendered from.
 - **timeline.json** — a machine-readable, replayable event log (time).
 - **manifest.json** — identity, environment, and an inventory of the pack (structure).
-- **report.md** — a human- and LLM-readable summary of all of the above (understanding).
+- **report.md** — a generated narrative of all of the above (understanding).
+- **README.md** — the first document a *human* reads: what happened, what's in the folder, how to
+  use it.
+- **skills/** — context structured for *LLMs*: small focused documents an AI can read directly,
+  with no CapturePack-specific tooling and no MCP server.
 - **plugins/** — optional structured metadata appended by plugins (extra context).
 
 ### Design goals
 
 These follow directly from the project principles in `GOAL.md`:
 
-- **Local first, offline, forever readable.** A pack is plain files in a standard ZIP. No cloud,
-  no login, no database, no proprietary runtime. `unzip` plus a text editor is a valid viewer.
+- **Local first, offline, forever readable.** A pack is plain files in a folder (optionally
+  zipped for distribution). No cloud, no login, no database, no proprietary runtime. A file
+  manager plus a text editor is a valid viewer.
+- **Folder first.** The save unit is a **directory**; a `.capturepack` ZIP is a distribution
+  package made from it on demand, never the original ([§3](#3-container-format--folder-first)).
 - **Open and language-neutral.** A shell script, a Rust CLI, or a browser extension can all write
   valid packs. Nothing in this format requires a specific library.
-- **Data over pixels.** Annotations are structured data, editable forever, and are never burned
-  into the replay video. The single deliberate exception is [blur](#9-blur-and-privacy), which is
-  destructive for privacy.
-- **LLM-ready by construction.** `report.md` + `snapshot.png` + `annotations.json` alone must let
-  any LLM understand the situation, with no CapturePack-specific tooling.
+- **Data over pixels.** Annotations are structured data, editable forever, and are **never**
+  burned into the original media — not even blur ([§9](#9-blur-and-privacy)). Rendered artifacts
+  like `replay_annotated.webm` are derived views, regenerable from the originals at any time.
+- **Two audiences, one pack.** A person should understand the situation from
+  `replay_annotated.webm` (or `snapshot.png`) alone; an AI should understand it from `README.md`
+  + `skills/` + the JSON files alone. One pack carries complete context for both.
 - **Plugin-based, core-owned.** Core owns capture. Plugins only append metadata under `plugins/`
   and can never alter core files.
 - **Never sacrifice the 5-second workflow.** The format imposes nothing that would slow down
-  `Ctrl+Alt+C → annotate → export`.
+  `Ctrl+Alt+C → annotate → save`.
 
 ### What this spec is not
 
 This spec defines a **file format**, not an application. Hotkeys, editors, replay buffers,
-auto-update, and UI are implementation concerns and appear here only as context.
+background renderers, auto-update, and UI are implementation concerns and appear here only as
+context.
 
 ---
 
@@ -86,12 +99,14 @@ capitals.
 
 | Term | Meaning |
 |---|---|
-| **Pack** | A CapturePack: either a `.capturepack` ZIP file or its extracted directory. Both forms are equally valid (see [§3](#3-container-format)). |
+| **Pack** | A CapturePack: a pack **folder**, or a `.capturepack` ZIP made from one. Both forms are valid; the folder is primary (see [§3](#3-container-format--folder-first)). |
 | **Writer** (or **exporter**) | Software that produces a pack. The reference app is a writer; so is any script that assembles the files by hand. |
 | **Reader** | Software that consumes a pack: viewers, editors, converters, indexers, LLM ingestion pipelines. |
-| **Core files** | `manifest.json`, `snapshot.png`, the replay video, `annotations.json`, `timeline.json`, `report.md`. |
+| **Source files** | The files annotations and views are derived *from*: `manifest.json`, `snapshot.png`, the replay video, `annotations.json`, `timeline.json`. |
+| **Generated views** | Files derived from the source files for a specific audience: `replay_annotated` (video players), `report.md` (narrative), `README.md` (humans), `skills/` (LLMs). Regenerating any of them from the source files SHOULD produce an equivalent result; none of them is ever authoritative over the source files. |
 | **Plugin** | An extension that appends structured metadata under `plugins/<name>/`. Plugins never modify core files. |
 | **Snapshot pixel coordinates** | The coordinate space of `snapshot.png`: origin at the top-left pixel, x grows right, y grows down, units are pixels of the snapshot image. |
+| **Replay clock** | The millisecond clock of the replay timeline: `0` at the replay's first frame. Annotation lifetimes ([§8.4](#84-lifetime)), `manifest.media.snapshot_t_ms`, and (when `t0` is the replay start) timeline `t_ms` offsets all use it. |
 
 All JSON in a pack MUST be UTF-8 encoded, without a byte-order mark. Writers SHOULD pretty-print
 JSON (packs are meant to be opened and read by humans, not only machines). Unless a field is
@@ -99,52 +114,78 @@ explicitly documented as nullable, writers MUST omit a field rather than write `
 
 ---
 
-## 3. Container format
+## 3. Container format — folder first
 
-### 3.1 The `.capturepack` file
+The primary form of a CapturePack is a **plain directory**. The ZIP file is a distribution
+package created from that directory on demand — packaging, not transformation. Tools MUST accept
+both forms wherever a pack is an input; this spec uses "pack" for both and "pack root" for the
+directory (or archive root) that contains `manifest.json`.
 
-A `.capturepack` file is a **standard ZIP archive** (PKWARE APPNOTE ZIP) of the pack directory.
+### 3.1 The pack folder (the save unit)
 
+A directory containing the files of [§4](#4-pack-layout) *is* a CapturePack. Writers save into a
+folder; nothing further is required.
+
+- The RECOMMENDED folder name is `CapturePack_YYYY-MM-DD_HHMMSS` (local time of the capture),
+  e.g. `CapturePack_2026-07-27_143052`, so packs sort chronologically. On a name collision,
+  writers SHOULD append a numeric suffix: `CapturePack_2026-07-27_143052-2`, `-3`, and so on.
+- Writers MUST NOT create a ZIP automatically as part of saving. Zipping happens only as an
+  explicit, user- or caller-initiated distribution step ([§3.2](#32-the-capturepack-file-distribution)).
+- **A folder may be observed mid-save.** Save-first writers create the folder at the moment of
+  capture and update its files as the user annotates; generated views — in particular the
+  annotated replay, which may render in the background — can appear later than the source files.
+  Readers SHOULD tolerate a pack whose declared `replay_annotated` file is not (yet) present
+  ([§5.3](#53-media)) and fall back to the source files.
+
+### 3.2 The `.capturepack` file (distribution)
+
+A `.capturepack` file is a **standard ZIP archive** (PKWARE APPNOTE ZIP) of the pack folder's
+*contents* — made to travel: attached to issues, dropped into chats, sent to another machine.
+
+- The RECOMMENDED name is the folder name plus the extension, as a sibling of the folder:
+  `CapturePack_2026-07-27_143052.capturepack`.
 - Entries MUST use compression method **store (0)** or **deflate (8)** only.
 - The archive MUST NOT be encrypted, split, or spanned.
 - Entry names MUST be UTF-8, use `/` as the path separator, and MUST be relative paths. Entry
   names MUST NOT contain `..` segments or begin with `/` or a drive letter. Readers MUST reject
   entries that would escape the extraction root (zip-slip).
-- The core files MUST be at the **root** of the archive: `manifest.json` is a top-level entry,
+- The pack's files MUST be at the **root** of the archive: `manifest.json` is a top-level entry,
   not nested inside a wrapping folder. Readers MAY, defensively, accept an archive whose entries
   all share a single top-level directory, but writers MUST NOT produce one.
 - Explicit directory entries (e.g. `plugins/`) are OPTIONAL.
 - The file extension is `.capturepack`. There is no registered media type; `application/zip` is
   accurate where one is needed.
 
-Writers MAY choose any base filename. A RECOMMENDED default is a timestamp plus a slug of the
-title, e.g. `2026-07-27-1403-save-button.capturepack`, so packs sort chronologically in a folder.
-
-### 3.2 The directory form
-
-Working with the **extracted directory** is equally valid. A directory containing the same files
-in the same layout *is* a CapturePack; zipping is packaging, not transformation. Tools SHOULD
-accept both forms wherever a pack is an input.
-
-This spec uses "pack" for both forms and "pack root" for the directory (or archive root) that
-contains `manifest.json`.
+> **Note.** A future *sanitized* ZIP variant — one that deliberately excludes the unredacted
+> originals when blur is used — is anticipated but **not defined in 0.1.0**. See
+> [§9](#9-blur-and-privacy).
 
 ---
 
 ## 4. Pack layout
 
 ```
-example.capturepack  (ZIP)  — or the same tree as a plain directory
-├── manifest.json        REQUIRED   identity, environment, inventory
-├── snapshot.png         REQUIRED   the captured frame
-├── replay.webm          OPTIONAL   last ~30 s of replay (or replay.mp4)
-├── annotations.json     OPTIONAL   editable annotation data
-├── timeline.json        OPTIONAL   machine-readable event log
-├── report.md            OPTIONAL   human/LLM-readable summary
-└── plugins/             OPTIONAL   one subdirectory per plugin
+CapturePack_2026-07-27_143052/        — or the same tree zipped as a .capturepack
+├── manifest.json            REQUIRED   identity, environment, inventory
+├── snapshot.png             REQUIRED   the captured frame — original pixels, never modified
+├── replay.webm              OPTIONAL   last ~30 s of replay (or replay.mp4) — original evidence,
+│                                       never modified
+├── replay_annotated.webm    OPTIONAL (RECOMMENDED) annotations rendered in; plays in any player;
+│                                       regenerable from replay + annotations.json
+├── annotations.json         OPTIONAL   annotation boxes — the true source of annotation data
+├── timeline.json            OPTIONAL   machine-readable event log
+├── report.md                OPTIONAL (RECOMMENDED) generated narrative
+├── README.md                OPTIONAL (RECOMMENDED) human-first entry point
+├── skills/                  OPTIONAL (RECOMMENDED) AI-first context documents
+│   ├── overview.md                     whole-pack summary
+│   ├── timeline.md                     the timeline, narrated
+│   ├── annotation.md                   the annotations, narrated
+│   ├── dom.md                          DOM/object metadata, when present
+│   └── project.md                      what a CapturePack is, for cold-start readers
+└── plugins/                 OPTIONAL   one subdirectory per plugin (an empty plugins/ is fine)
     └── git/
-        ├── meta.json    REQUIRED per plugin directory
-        └── state.json   (arbitrary plugin files)
+        ├── meta.json        REQUIRED per plugin directory
+        └── state.json       (arbitrary plugin files)
 ```
 
 | Path | Requirement | Section |
@@ -152,16 +193,20 @@ example.capturepack  (ZIP)  — or the same tree as a plain directory
 | `manifest.json` | REQUIRED | [§5](#5-manifestjson) |
 | `snapshot.png` | REQUIRED | [§6](#6-snapshotpng) |
 | `replay.webm` **or** `replay.mp4` | OPTIONAL — declared in `manifest.media.replay` | [§7](#7-replay-video) |
+| `replay_annotated.webm` **or** `replay_annotated.mp4` | OPTIONAL (RECOMMENDED when annotations exist) — declared in `manifest.media.replay_annotated` | [§7.2](#72-the-annotated-replay) |
 | `annotations.json` | OPTIONAL — fixed name, present when annotations exist | [§8](#8-annotationsjson) |
 | `timeline.json` | OPTIONAL — fixed name, present when events were recorded | [§10](#10-timelinejson) |
-| `report.md` | OPTIONAL (RECOMMENDED) — fixed name | [§12](#12-reportmd) |
+| `report.md` | OPTIONAL (RECOMMENDED) — fixed name | [§12.1](#121-reportmd) |
+| `README.md` | OPTIONAL (RECOMMENDED) — fixed name | [§12.2](#122-readmemd) |
+| `skills/` | OPTIONAL (RECOMMENDED) — fixed names inside | [§12.3](#123-skills) |
 | `plugins/<name>/` | OPTIONAL — each declared in `manifest.plugins` | [§11](#11-plugins) |
 
 The manifest is the pack's entry point. Components whose identity varies are declared there
-explicitly: the replay's actual filename and duration in `media`, and every plugin payload in
-`plugins`. The remaining optional files have fixed, well-known names; their presence in the pack
-is their declaration. Readers MUST NOT fail because an optional file is absent, and MUST ignore
-unknown extra files anywhere in the pack (see [§13](#13-versioning-and-compatibility)).
+explicitly: the replay's actual filename and duration in `media`, the annotated replay's filename
+in `media.replay_annotated`, and every plugin payload in `plugins`. The remaining optional files
+have fixed, well-known names; their presence in the pack is their declaration. Readers MUST NOT
+fail because an optional file is absent, and MUST ignore unknown extra files anywhere in the pack
+(see [§13](#13-versioning-and-compatibility)).
 
 A **screenshot-only pack** — `manifest.json` + `snapshot.png`, nothing else — is fully valid (see
 [§14](#14-minimal-valid-pack)).
@@ -182,10 +227,10 @@ inventories the variable parts of the pack.
 | `id` | string | REQUIRED | RFC 4122 UUID uniquely identifying this pack. Version 4 (random) RECOMMENDED. Lowercase RECOMMENDED. |
 | `created_at` | string | REQUIRED | Capture instant as ISO 8601 with a timezone offset (`"2026-07-27T14:03:21+09:00"` or `...Z`). A timezone designator MUST be present — local wall-clock time is context. |
 | `generator` | object | REQUIRED | The software that wrote the pack: `{ "name": string, "version": string }`. Both fields REQUIRED. |
-| `title` | string | OPTIONAL | Short human-readable title, one line. Used as the report heading and RECOMMENDED as the basis of the pack filename. |
-| `note` | string | OPTIONAL | The user's own words about intent: what they were doing, what they expected, what went wrong. Carried verbatim into `report.md`. This is the single most valuable field for an LLM — writers SHOULD make entering it effortless, and MUST NOT block export on it (the 5-second workflow wins). |
+| `title` | string | OPTIONAL | Short human-readable title, one line. Used as the report heading and RECOMMENDED as part of documentation; the pack *folder* name stays the timestamped default ([§3.1](#31-the-pack-folder-the-save-unit)). |
+| `note` | string | OPTIONAL | The user's own words about intent: what they were doing, what they expected, what went wrong. Carried verbatim into `report.md` and `README.md`. This is the single most valuable field for an LLM — writers SHOULD make entering it effortless, and MUST NOT block saving on it (the 5-second workflow wins). |
 | `environment` | object | REQUIRED | Where the capture happened. See [§5.2](#52-environment). |
-| `media` | object | REQUIRED | Declares the snapshot and replay. See [§5.3](#53-media). |
+| `media` | object | REQUIRED | Declares the snapshot, replay, and annotated replay. See [§5.3](#53-media). |
 | `plugins` | array | OPTIONAL | One entry per plugin payload in `plugins/`. Absent or `[]` means no plugin data. See [§5.4](#54-plugins). |
 
 ### 5.2 `environment`
@@ -214,9 +259,10 @@ of screen count or scaling.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `snapshot` | string | REQUIRED | Filename of the snapshot. In format 0.1.0 this MUST be `"snapshot.png"`. Declared explicitly so future versions can vary it without breaking readers that trust the manifest. |
-| `replay` | string **or** `null` | REQUIRED | Filename of the replay video — `"replay.webm"` or `"replay.mp4"` — or `null` for a screenshot-only pack. Readers MUST take the replay filename from this field rather than probing the pack. |
+| `replay` | string **or** `null` | REQUIRED | Filename of the original replay video — `"replay.webm"` or `"replay.mp4"` — or `null` for a screenshot-only pack. Readers MUST take the replay filename from this field rather than probing the pack. |
 | `replay_duration_ms` | integer **or** `null` | REQUIRED when `replay` is a string | Duration of the replay video in milliseconds. MUST be `null` (or absent) when `replay` is `null`. |
-| `snapshot_t_ms` | integer | OPTIONAL | Position in the replay timeline, in milliseconds, of the frame shown in `snapshot.png` — the same clock as timeline `t_ms` offsets relative to `t0` ([§10.1](#101-structure)). MUST be >= 0. **Absent means the snapshot is the capture instant** — the native "now" frame. SHOULD be absent when `replay` is `null`: without a replay there is no timeline to anchor the value to. See [§7.1](#71-frame-accurate-captures). |
+| `replay_annotated` | string | OPTIONAL | Filename of the **annotated replay** — `"replay_annotated.webm"` or `"replay_annotated.mp4"` ([§7.2](#72-the-annotated-replay)). MUST be absent when `replay` is `null` (there is nothing to render it from). Absent while the annotated replay has not (yet) been rendered. The annotated replay may render in the background after save, so a reader MAY encounter a manifest that declares this file before the file exists — it SHOULD treat that as "still rendering" and fall back to `replay` + `annotations.json`. |
+| `snapshot_t_ms` | integer | OPTIONAL | Position on the replay clock, in milliseconds, of the frame shown in `snapshot.png` — the same clock as annotation lifetimes ([§8.4](#84-lifetime)) and timeline `t_ms` offsets relative to `t0` ([§10.1](#101-structure)). MUST be >= 0. **Absent means the snapshot is the capture instant** — the native "now" frame. SHOULD be absent when `replay` is `null`: without a replay there is no timeline to anchor the value to. See [§7.1](#71-frame-accurate-captures). |
 
 ### 5.4 `plugins`
 
@@ -229,8 +275,9 @@ Each entry declares one plugin payload directory:
 | `path` | string | REQUIRED | Directory path relative to the pack root, with trailing slash. MUST be exactly `"plugins/<name>/"`. |
 
 Every directory under `plugins/` written by the exporter MUST have a corresponding entry here.
-Readers MUST ignore any `plugins/` directory they find that is *not* declared (or not understood)
-— see [§11](#11-plugins).
+An empty `plugins/` directory (no payloads, no declarations) is fine. Readers MUST ignore any
+`plugins/` directory they find that is *not* declared (or not understood) — see
+[§11](#11-plugins).
 
 ### 5.5 Example
 
@@ -254,7 +301,8 @@ Readers MUST ignore any `plugins/` directory they find that is *not* declared (o
   "media": {
     "snapshot": "snapshot.png",
     "replay": "replay.webm",
-    "replay_duration_ms": 28437
+    "replay_duration_ms": 28437,
+    "replay_annotated": "replay_annotated.webm"
   },
   "plugins": [
     { "name": "git", "version": "0.1.0", "path": "plugins/git/" }
@@ -275,11 +323,10 @@ screen content at (or immediately before) the capture trigger.
   present ([§8.2](#82-coordinate-space)).
 - What the snapshot shows — one screen, a region, a window, the whole virtual desktop — is the
   writer's choice. The format does not care; annotations are relative to the image itself.
-- If any blur annotations exist, the exported `snapshot.png` MUST be the **redacted** image, with
-  blur applied destructively. The unredacted frame MUST NOT appear anywhere in the pack. This is
-  the format's one privacy-over-editability rule — see [§9](#9-blur-and-privacy).
-- Annotations other than blur MUST NOT be burned into `snapshot.png`. The snapshot is evidence;
-  annotations are data drawn on top of it by viewers.
+- **The snapshot is original evidence and MUST NOT be modified.** No annotation is ever burned
+  into `snapshot.png` — including blur. Blur renders only into derived views
+  ([§9](#9-blur-and-privacy)). The snapshot is pixels; annotations are data drawn on top of it by
+  viewers.
 
 ---
 
@@ -297,10 +344,12 @@ happened *before* the frame.
   compatibility.
 - `manifest.media.replay_duration_ms` MUST hold the video's duration in milliseconds.
 - Audio is OPTIONAL and typically absent.
-- Annotations MUST NOT be burned into the replay video — ever. Annotations live in
-  `annotations.json` as editable data.
-- **Privacy note:** in the MVP era, blur is applied to the snapshot only; the replay video is
-  *not* redacted. See the exporter requirements in [§9](#9-blur-and-privacy).
+- **The replay is original evidence and MUST NOT be modified.** Annotations — including blur —
+  are never burned into `replay.webm`/`replay.mp4`. Annotations live in `annotations.json` as
+  editable data; the rendered view lives in the *separate* annotated replay file
+  ([§7.2](#72-the-annotated-replay)).
+- **Privacy note:** because the original replay is never redacted, blurred content is visible in
+  it. See the sharing rule in [§9](#9-blur-and-privacy).
 - A screenshot-only pack (`"replay": null`) is fully valid. Replay is evidence, not a
   prerequisite.
 
@@ -312,9 +361,9 @@ replay's first frame, so event offsets double as video seek positions ([§10.1](
 An editor that holds the frozen replay can let the user scrub backwards in time and pick the
 exact frame that shows the problem — the moment *before* the dialog closed, the frame where the
 glitch is visible. The chosen frame becomes `snapshot.png`, and the writer records its position
-in the replay timeline in `manifest.media.snapshot_t_ms` ([§5.3](#53-media)). When
-`snapshot_t_ms` is absent, the snapshot is the capture instant — the default, and the only
-possibility in a screenshot-only pack.
+on the replay clock in `manifest.media.snapshot_t_ms` ([§5.3](#53-media)). When `snapshot_t_ms`
+is absent, the snapshot is the capture instant — the default, and the only possibility in a
+screenshot-only pack.
 
 A scrubbed snapshot changes nothing else about the format:
 
@@ -323,12 +372,39 @@ A scrubbed snapshot changes nothing else about the format:
   Writers composing the snapshot from a decoded video frame SHOULD render it at the same
   resolution a capture-instant snapshot would have had, so the coordinate space does not depend
   on the replay's encoded resolution.
-- Blur still applies destructively to the exported `snapshot.png` ([§9](#9-blur-and-privacy)),
-  and the replay-gap caveat of [§9.4](#94-the-replay-gap-mvp-era) still applies.
-- Individual annotations MAY additionally record the replay position they refer to via their
-  own optional `t_ms` ([§8.3](#83-common-fields)) — useful when different annotations were made
-  at different scrub positions — and MAY scope when they apply with a lifetime interval
-  (`t_start_ms`/`t_end_ms`, [§8.3](#annotation-lifetime)).
+- Individual annotations scope *when* they apply with their lifetime interval
+  (`start_ms`/`end_ms`, [§8.4](#84-lifetime)) — useful when different annotations were made at
+  different scrub positions.
+
+### 7.2 The annotated replay
+
+`replay_annotated.webm` (or `.mp4`) is OPTIONAL, and RECOMMENDED whenever the pack has both a
+replay and annotations. It is the replay with the annotation boxes **rendered into the pixels**,
+so that any video player — and any human with ten seconds — sees the full story without
+CapturePack-aware tooling.
+
+- The filename MUST be `replay_annotated.webm` or `replay_annotated.mp4`, and MUST match
+  `manifest.media.replay_annotated` ([§5.3](#53-media)). A pack MUST NOT contain more than one
+  annotated replay file. A pack without a replay MUST NOT contain one at all.
+- The annotated replay is a **generated view**, never a source: it MUST be renderable from
+  `replay` + `annotations.json` alone, and regenerating it after editing annotations SHOULD
+  produce an equivalent result. Readers MUST NOT treat its pixels as authoritative annotation
+  data — `annotations.json` is the truth.
+- **Per-frame rendering.** For each frame at replay-clock time `t`, a renderer draws, in order:
+  1. the original frame;
+  2. the **blur** of every box with `blur: true` whose lifetime contains `t`
+     ([§9](#9-blur-and-privacy)) — blur first, so nothing sensitive leaks under later layers;
+  3. each visible box's **border/highlight**;
+  4. each visible numbered box's **number badge**, using the box's *global* display number
+     ([§8.5](#85-display-numbers)) — numbers are never re-compressed per frame;
+  5. each visible box's **text**.
+- A box is *visible* at `t` when its lifetime contains `t`; boxes without a lifetime are visible
+  for the whole video ([§8.4](#84-lifetime)).
+- **Results only.** Editing controls MUST NOT appear in the annotated replay: no headers, no
+  toggles, no duration chips, no delete buttons, no resize handles, no selection outlines. The
+  video contains blur, borders, number badges, and text — nothing else.
+- Rendering MAY happen in the background after the pack is saved ([§3.1](#31-the-pack-folder-the-save-unit));
+  a render failure loses the annotated replay, not the pack.
 
 ---
 
@@ -336,8 +412,14 @@ A scrubbed snapshot changes nothing else about the format:
 
 `annotations.json` is OPTIONAL; it is present when the user annotated the capture. Annotations
 are the *intent* layer: they say what matters in the pixels. They are stored as data, are
-editable forever, and are never burned into media (blur excepted, and even blur keeps its data —
-[§9](#9-blur-and-privacy)).
+editable forever, and are never burned into the original media ([§6](#6-snapshotpng),
+[§7](#7-replay-video)); the annotated replay is a derived rendering of them
+([§7.2](#72-the-annotated-replay)).
+
+Format 0.1.0 defines exactly **one annotation type: the box.** There are no pin, arrow,
+rectangle, blur, or text annotation types — a box *composes* those roles through its properties:
+a box with `numbered: true` plays the role of a numbered pin; a box with `blur: true` marks a
+sensitive region; a box with text is a labeled callout; any combination is valid on a single box.
 
 ### 8.1 Structure
 
@@ -345,7 +427,7 @@ editable forever, and are never burned into media (blur excepted, and even blur 
 |---|---|---|---|
 | `reference_width` | integer | REQUIRED | Width in pixels of the coordinate space — MUST equal the pixel width of `snapshot.png`. |
 | `reference_height` | integer | REQUIRED | Height in pixels of the coordinate space — MUST equal the pixel height of `snapshot.png`. |
-| `annotations` | array | REQUIRED | Ordered list of annotation objects. Array order is **reading order** — the order in which a human (or `report.md`) should walk through them, normally creation order. May be empty. |
+| `annotations` | array | REQUIRED | List of annotation boxes. May be empty. Order carries no meaning — reading order is defined by the display-number rule ([§8.5](#85-display-numbers)) and lifetimes, not by array position. |
 
 ### 8.2 Coordinate space
 
@@ -358,93 +440,74 @@ finds that `snapshot.png`'s actual dimensions differ from the reference (for exa
 was recompressed or scaled by an intermediate tool), it SHOULD scale all geometry by
 `actual / reference` per axis rather than discard the annotations.
 
-### 8.3 Common fields
+### 8.3 The box
 
 Every annotation object:
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `id` | string | REQUIRED | Non-empty, unique within this file. Short ids (`"a1"`) or UUIDs both fine. Referenced by timeline events and `report.md`. |
-| `type` | string | REQUIRED | One of `"pin"`, `"arrow"`, `"rect"`, `"blur"`, `"text"` in format 0.1.0. Readers MUST skip (and SHOULD preserve on rewrite) annotations of unknown type. |
-| `z` | integer | OPTIONAL | Stacking order for rendering; higher draws on top. Default: array position (later entries on top). |
-| `color` | string | OPTIONAL | Display color as CSS-style hex, `"#RRGGBB"` or `"#RRGGBBAA"`. Meaningless for `blur` and SHOULD be omitted there. Viewers pick their own default when absent. |
+| `annotation_id` | string | REQUIRED | Permanent identity of the annotation. MUST match `^ann_[0-9a-f]{6}$` — the literal prefix `ann_` plus 6 lowercase hex digits, e.g. `"ann_8f21c4"`. MUST be unique within this file. Referenced by timeline events, documents, and MCP responses. The id never changes; display numbers do ([§8.5](#85-display-numbers)). |
+| `type` | string | REQUIRED | MUST be `"box"` — the only annotation type in format 0.1.0. Readers MUST skip (and SHOULD preserve on rewrite) annotations of unknown type; new types can only arrive in a future format version. |
+| `bounds` | object | REQUIRED | The box rectangle in snapshot pixel coordinates: `{ "x": number, "y": number, "width": number, "height": number }`. All four fields REQUIRED; `width` and `height` MUST be > 0. |
+| `text` | string | OPTIONAL | The box's description — what the user typed. MAY be empty; absent means `""`. This is the annotation's meaning; writers SHOULD make entering it effortless. |
+| `start_ms` | number | OPTIONAL | Start of the box's **lifetime** on the replay clock, in milliseconds. MUST appear together with `end_ms` — both or neither. See [§8.4](#84-lifetime). |
+| `end_ms` | number | OPTIONAL | End of the box's lifetime, in milliseconds. MUST be >= `start_ms`. MUST appear together with `start_ms`. |
+| `numbered` | boolean | OPTIONAL | Whether the box takes part in display numbering ([§8.5](#85-display-numbers)). Default `false`. The number itself is **never stored** — it is computed. |
+| `blur` | boolean | OPTIONAL | Whether the box's interior is sensitive and MUST be blurred in rendered views ([§9](#9-blur-and-privacy)). Default `false`. Blur is a box property, never a separate annotation type. |
+| `tracking` | object | OPTIONAL | Object-tracking state. In format 0.1.0 the only defined field is `enabled` (boolean, REQUIRED inside `tracking`), and it MUST be `false` — frame-by-frame tracking data (bounds following a moving object) is **reserved** for a future version. Absent means `{ "enabled": false }`. Readers MUST ignore tracking content they do not understand and treat the box as untracked. |
+| `target` | object | OPTIONAL | **Reserved** for semantic object metadata: what real UI object the box points at (DOM selector, role and text; Windows UI Automation `AutomationId`/`ControlType`; engine object ids…). This is where the earlier draft's "element"/Tracked Element concept lives now — a box *with a target* is a semantic annotation; there is no separate element type. Format 0.1.0 does not define its contents; readers MUST ignore what they do not understand and MUST still render the box from `bounds`. |
+| `style` | object | OPTIONAL | Display styling. In 0.1.0 the only defined field is `color`: CSS-style hex, `"#RRGGBB"` or `"#RRGGBBAA"`, used for the border, badge, and text. Viewers pick their own default when absent. |
 | `created_at` | string | OPTIONAL | When the annotation was made, ISO 8601 with timezone. |
-| `t_ms` | number | OPTIONAL | The replay position, in milliseconds, that this annotation refers to — normally the scrub position at which it was created ([§7.1](#71-frame-accurate-captures)). Same clock as timeline `t_ms` offsets relative to `t0` ([§10.1](#101-structure)). Only meaningful when the pack has a replay; SHOULD lie within `[0, replay_duration_ms]`. It does not change the coordinate space — geometry is always in snapshot pixel coordinates ([§8.2](#82-coordinate-space)). When a lifetime is present, `t_ms` is its **anchor** and SHOULD lie inside the lifetime interval. |
-| `t_start_ms` | number | OPTIONAL | Start of the annotation's **lifetime** — the interval of the replay timeline during which the annotation applies. Milliseconds, same clock as `t_ms`. MUST be <= `t_end_ms`. See [Annotation lifetime](#annotation-lifetime) below. |
-| `t_end_ms` | number | OPTIONAL | End of the annotation's lifetime, in milliseconds. MUST be >= `t_start_ms`. |
+| `z` | integer | OPTIONAL | Stacking order for rendering; higher draws on top. Also a tiebreaker in display numbering ([§8.5](#85-display-numbers)). Default: the annotation's array position (later entries on top). |
 
-#### Annotation lifetime
+### 8.4 Lifetime
 
-An annotation MAY carry a **lifetime**: the closed interval `[t_start_ms, t_end_ms]` of the
-replay timeline during which the annotation applies — the same millisecond clock as `t_ms` and
+A box MAY carry a **lifetime**: the closed interval `[start_ms, end_ms]` of the replay clock
+during which the box applies — the same millisecond clock as `manifest.media.snapshot_t_ms` and
 as timeline offsets relative to `t0` ([§10.1](#101-structure)).
 
-- **Absent lifetime = whole capture.** When neither field is present the annotation applies to
-  the entire capture. This is always valid — a simple writer that does not track time just omits
-  both fields. Lifetimes are only meaningful when the pack has a replay; in a screenshot-only
-  pack writers SHOULD omit them (like `t_ms`).
-- **Well-formed interval.** `t_start_ms` MUST be <= `t_end_ms`, and both bounds SHOULD lie
-  within `[0, replay_duration_ms]`. Writers SHOULD emit both fields or neither; a reader that
-  finds only one SHOULD treat the absent bound as the corresponding edge of the capture
-  (0 for the start, the replay end for the end).
-- **`t_ms` stays the anchor.** The optional `t_ms` still identifies the single frame the
-  annotation refers to — the frame that `snapshot.png` and `report.md` speak about. When a
-  lifetime is present, the anchor SHOULD lie inside it.
-- **Rendering.** A viewer scrubbing the replay SHOULD draw an annotation only while the current
-  position lies inside its lifetime; annotations without a lifetime always draw.
-- **Blur ignores lifetime.** A `blur` region is applied destructively to the exported
-  `snapshot.png` regardless of any lifetime ([§9](#9-blur-and-privacy)). A lifetime can scope
-  when a viewer outlines the region over the replay — never whether the pixels are redacted.
-  Privacy beats the timeline, exactly as it beats editability.
+- **Absent lifetime = whole capture.** When neither field is present the box applies to the
+  entire capture. This is always valid — a simple writer that does not track time just omits both
+  fields, and it is the natural state in a screenshot-only pack.
+- **Both or neither.** `start_ms` and `end_ms` MUST be written together; a box with only one of
+  them is malformed. (The JSON schema enforces this pairing.)
+- **Well-formed interval.** `start_ms` MUST be <= `end_ms`, and both bounds SHOULD lie within
+  `[0, replay_duration_ms]`. Lifetimes are only meaningful when the pack has a replay; in a
+  screenshot-only pack writers SHOULD omit them.
+- **The midpoint is the anchor.** When a single representative instant is needed for a box — the
+  frame a document links to, the seek position a viewer jumps to — it is the **midpoint** of the
+  lifetime, `(start_ms + end_ms) / 2`. A box without a lifetime has no anchor (treat as the
+  snapshot frame). There is no separately stored anchor field.
+- **Rendering.** A viewer scrubbing the replay SHOULD draw a box only while the current position
+  lies inside its lifetime; boxes without a lifetime always draw. The annotated replay renders by
+  the same rule ([§7.2](#72-the-annotated-replay)) — including blur, which applies exactly during
+  the lifetime ([§9](#9-blur-and-privacy)).
 
-### 8.4 Annotation types
+### 8.5 Display numbers
 
-Geometry fields are REQUIRED unless marked optional.
+Numbered boxes carry visible numbers — ①, ②, ③ — in every rendered view. Those numbers are
+**computed, never stored**:
 
-**`pin`** — a numbered/pointed marker at a spot.
+- A box's permanent identity is its immutable `annotation_id`. The display number is derived at
+  display/render time and is not a source-data identifier. Writers MUST NOT store display
+  numbers in the pack; readers MUST NOT parse them back out of rendered views.
+- **The rule.** Take every box with `numbered: true`. Sort by:
+  1. `start_ms` ascending, treating an absent lifetime as `start_ms = 0`;
+  2. then `z` ascending (absent `z` = array position);
+  3. then `annotation_id` ascending (lexicographic).
+  Number them contiguously from **1** in that order. No gaps, ever: adding, deleting, or
+  re-timing a box renumbers the rest immediately.
+- **Consistency scope.** Every consumer MUST use exactly this rule, so the same box shows the
+  same number everywhere: editor canvas, annotated replay, `report.md`, `README.md`, `skills/`
+  documents, and MCP responses. Video numbers and document numbers never differ.
+- **Global, not per-frame.** In the annotated replay, each frame draws only the boxes alive at
+  that time, but with their global numbers: if only box ② is visible in a frame, it renders as
+  ② — numbers are never re-compressed per frame ([§7.2](#72-the-annotated-replay)).
+- Documents list numbered boxes in display order, e.g. `1. 00:03.200 — "renamed the document
+  here"` ([§12](#12-reportmd-readmemd-and-skills)); if annotations change after generation, the
+  documents are regenerated on the next save.
 
-| Field | Type | Description |
-|---|---|---|
-| `x`, `y` | number | The pinned point. |
-| `label` | string (optional) | Short caption, e.g. `"1. renamed the document here"`. |
-
-**`arrow`** — a directed line from tail to head.
-
-| Field | Type | Description |
-|---|---|---|
-| `x1`, `y1` | number | Tail (where the arrow starts). |
-| `x2`, `y2` | number | Head (what the arrow points at). |
-
-**`rect`** — a rectangle outline highlighting a region.
-
-| Field | Type | Description |
-|---|---|---|
-| `x`, `y` | number | Top-left corner. |
-| `w`, `h` | number | Width and height, both > 0. |
-| `label` | string (optional) | Short caption for the region. |
-
-**`blur`** — a redacted rectangular region. See [§9](#9-blur-and-privacy) for its special
-semantics.
-
-| Field | Type | Description |
-|---|---|---|
-| `x`, `y` | number | Top-left corner. |
-| `w`, `h` | number | Width and height, both > 0. |
-
-**`text`** — a free-floating text note.
-
-| Field | Type | Description |
-|---|---|---|
-| `x`, `y` | number | Anchor: top-left of the first line of text. |
-| `text` | string | The note content. |
-| `size` | number (optional) | Font size in snapshot pixels. Viewers pick a legible default when absent. |
-
-> **Reserved:** the annotation type `"element"` (a **Tracked Element** — an annotation that
-> lives while a tracked UI object exists, its bounds following the object) is reserved for a
-> future format version and is not defined in 0.1.0; readers already MUST skip unknown types
-> ([§8.3](#83-common-fields)).
-
-### 8.5 Example
+### 8.6 Example
 
 ```json
 {
@@ -452,119 +515,118 @@ semantics.
   "reference_height": 1440,
   "annotations": [
     {
-      "id": "a1",
-      "type": "pin",
-      "z": 1,
-      "color": "#FF3B30",
+      "annotation_id": "ann_8f21c4",
+      "type": "box",
+      "bounds": { "x": 620, "y": 380, "width": 300, "height": 44 },
+      "text": "renamed the document here",
+      "start_ms": 21500,
+      "end_ms": 23000,
+      "numbered": true,
+      "blur": false,
+      "tracking": { "enabled": false },
+      "style": { "color": "#FF3B30" },
       "created_at": "2026-07-27T14:03:26+09:00",
-      "x": 640,
-      "y": 402,
-      "label": "1. renamed the document here"
+      "z": 1
     },
     {
-      "id": "a2",
-      "type": "rect",
-      "z": 2,
-      "color": "#FF3B30",
+      "annotation_id": "ann_1d9b02",
+      "type": "box",
+      "bounds": { "x": 2140, "y": 1236, "width": 180, "height": 56 },
+      "text": "Save — stays disabled, clicked 3x",
+      "start_ms": 26900,
+      "end_ms": 27900,
+      "numbered": true,
+      "blur": false,
+      "tracking": { "enabled": false },
+      "style": { "color": "#FF3B30" },
       "created_at": "2026-07-27T14:03:29+09:00",
-      "t_ms": 27400,
-      "t_start_ms": 26900,
-      "t_end_ms": 27900,
-      "x": 2140,
-      "y": 1236,
-      "w": 180,
-      "h": 56,
-      "label": "2. Save — stays disabled"
+      "z": 2
     },
     {
-      "id": "a3",
-      "type": "arrow",
-      "z": 3,
-      "color": "#FF3B30",
-      "created_at": "2026-07-27T14:03:31+09:00",
-      "x1": 1980,
-      "y1": 1040,
-      "x2": 2210,
-      "y2": 1230
-    },
-    {
-      "id": "a4",
-      "type": "text",
-      "z": 4,
-      "color": "#FF3B30",
+      "annotation_id": "ann_e33a7f",
+      "type": "box",
+      "bounds": { "x": 2080, "y": 24, "width": 360, "height": 40 },
+      "text": "user email address",
+      "start_ms": 0,
+      "end_ms": 28437,
+      "numbered": false,
+      "blur": true,
+      "tracking": { "enabled": false },
       "created_at": "2026-07-27T14:03:34+09:00",
-      "x": 1860,
-      "y": 990,
-      "text": "clicked 3x — no reaction",
-      "size": 32
-    },
-    {
-      "id": "a5",
-      "type": "blur",
-      "z": 5,
-      "created_at": "2026-07-27T14:03:37+09:00",
-      "x": 2080,
-      "y": 24,
-      "w": 360,
-      "h": 40
+      "z": 3
     }
   ]
 }
 ```
 
+Display numbers here: `ann_8f21c4` (start 21500) is **1**, `ann_1d9b02` (start 26900) is **2**;
+`ann_e33a7f` is not numbered. The blurred box covers the whole replay, so the email address is
+obscured in every frame of `replay_annotated.webm` — while `replay.webm` and `snapshot.png` keep
+the original pixels ([§9](#9-blur-and-privacy)).
+
 ---
 
 ## 9. Blur and privacy
 
-Blur is the one place where CapturePack breaks its own "annotations are data, never burned in"
-rule — deliberately.
+Blur is a **box property** (`blur: true`, [§8.3](#83-the-box)), not an annotation type, and it is
+**non-destructive**: the original media in the pack are never modified.
 
 ### 9.1 The rule
 
-1. Exporters MUST apply every `blur` region **destructively** to the exported `snapshot.png`:
-   the pixels inside each blur rectangle are irreversibly obscured in the image itself. This
-   holds regardless of any annotation lifetime ([§8.3](#annotation-lifetime)).
-2. The original, unredacted frame MUST NOT be included anywhere in the pack — not as another
-   file, not embedded in metadata, not recoverable from any pack content.
-3. The `blur` annotation MUST still be recorded as data in `annotations.json`, exactly like any
-   other annotation.
-4. The obscuring MUST be irreversible in practice. Strong pixelation (large blocks) or a solid
-   fill is RECOMMENDED. A weak Gaussian blur SHOULD NOT be used: lightly blurred text can
-   sometimes be reconstructed.
+1. **Originals stay original.** `snapshot.png` and the replay video MUST contain the original,
+   unredacted pixels. Writers MUST NOT apply blur — or any annotation — destructively to them.
+2. **Blur renders into derived views only.** Every rendered view of the capture — the annotated
+   replay ([§7.2](#72-the-annotated-replay)), live editor previews, any future export — MUST
+   obscure the interior of every `blur: true` box while that box is alive:
+   - during the box's lifetime ([§8.4](#84-lifetime)); a box without a lifetime blurs every
+     frame;
+   - over the box's current bounds — the blur moves with the box (including future tracked
+     bounds);
+   - **before** any other annotation layer is drawn, so borders, badges, and text never sit on
+     top of unredacted pixels ([§7.2](#72-the-annotated-replay)).
+3. **Blur data is ordinary data.** The box stays fully editable in `annotations.json` — movable,
+   resizable, removable — and rewriting the pack regenerates the derived views accordingly.
+4. **Obscure strongly.** In rendered views, strong pixelation (large blocks) or a solid fill is
+   RECOMMENDED. A weak Gaussian blur SHOULD NOT be used: lightly blurred text can sometimes be
+   reconstructed.
 
-### 9.2 Why the exception
+### 9.2 The sharing rule
 
-Every other annotation is additive commentary — losing it loses intent, so it stays editable
-data. **Blur is a promise.** A pack exists to travel: it gets dropped into LLM chats, attached
-to issues, forwarded in DMs, and read by tools that have never heard of CapturePack. If blur were
-stored only as an overlay, every one of those readers would receive the secret pixels underneath
-it, and any viewer that ignores `annotations.json` — including a human just opening
-`snapshot.png` — would expose them. The only blur that keeps the promise is one applied to the
-pixels themselves before the pack leaves the machine. Privacy beats editability, exactly once.
+Because the originals are preserved, **the pack folder itself is not redacted**. The redaction
+lives in `replay_annotated` — the artifact meant for sharing. Consequences:
 
-Keeping the blur *annotation* as data still pays for itself: readers can see that redaction
-happened and where, viewers can outline redacted regions, `report.md` can list them, and the
-live editor (before export, while the original frame still exists only in the app's memory) can
-move or remove the blur freely. Destructiveness applies at **export**, not while editing.
+- Writers MUST make this visible at save time whenever any `blur: true` box exists. The
+  reference wording:
 
-### 9.3 Consequences for re-export
+  > Original replay contains unredacted content — share replay_annotated.webm or create a
+  > sanitized ZIP.
 
-A pack, once exported with blur, contains only redacted pixels. Editing a pack's annotations and
-re-exporting cannot un-blur anything — the data is gone, which is the point. Newly added blur
-regions on a re-export are applied destructively again, to the already-redacted snapshot.
+- Readers MUST NOT assume `snapshot.png` or the replay video honor blur boxes — they never do in
+  format 0.1.0.
+- `report.md`, `README.md`, and `skills/` documents SHOULD note when a pack contains blurred
+  boxes, so downstream humans and LLMs know which files are safe to forward.
 
-### 9.4 The replay gap (MVP era)
+### 9.3 Why non-destructive
 
-In the MVP era, blur applies to the snapshot only — the replay video is **not** redacted, and the
-blurred content may be visible in it. Therefore:
+An earlier draft of this spec burned blur into `snapshot.png` destructively. 0.1.0 reverses that,
+deliberately:
 
-- Exporters MUST make this limitation visible to the user when a blur annotation exists and a
-  replay is about to be included.
-- Exporters SHOULD offer, in that moment, a one-step way to exclude the replay from the export
-  (producing a pack with `"replay": null`).
-- Readers MUST NOT assume the replay honors blur regions in format 0.1.0.
+- **Evidence survives.** The pack's reason to exist is faithful context. Destroying pixels in the
+  source of truth contradicts it — and could never cover the replay anyway, which shows the same
+  content in motion.
+- **Blur stays editable.** A mis-drawn blur box can be fixed and the views re-rendered. A
+  destructive blur was forever, including its mistakes.
+- **The folder is local.** A pack folder lives on the user's own machine; redaction matters at
+  the moment of *sharing*, and the shareable artifact — `replay_annotated` — is exactly where
+  blur renders.
 
-A future format version that specifies replay redaction will address this gap.
+### 9.4 Sanitized distribution (future)
+
+A future version will define a **sanitized ZIP**: a `.capturepack` variant that excludes the
+unredacted originals (`replay.webm`/`replay.mp4` and `snapshot.png`) and ships the annotated
+replay in their place, for sharing a blurred capture without any unredacted pixels at all. It is
+**not defined in 0.1.0**; until then, the sharing rule of [§9.2](#92-the-sharing-rule) is the
+guidance.
 
 ---
 
@@ -578,7 +640,7 @@ the replay video or reconstruct the session's story without watching anything.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `t0` | string | REQUIRED | The absolute anchor instant, ISO 8601 with timezone. Every event's `t_ms` is an offset in milliseconds relative to `t0`. When a replay video exists, `t0` SHOULD be the instant of the replay's first frame, so `t_ms` doubles as a video seek position. Otherwise the capture trigger instant is a natural choice. |
+| `t0` | string | REQUIRED | The absolute anchor instant, ISO 8601 with timezone. Every event's `t_ms` is an offset in milliseconds relative to `t0`. When a replay video exists, `t0` SHOULD be the instant of the replay's first frame, so `t_ms` doubles as a video seek position (and shares the replay clock with annotation lifetimes, [§8.4](#84-lifetime)). Otherwise the capture trigger instant is a natural choice. |
 | `events` | array | REQUIRED | The events, sorted ascending by `t_ms` (stable order for equal values). Writers MUST only append while capturing — events are never rewritten or reordered during a session. May be empty. |
 
 Each event:
@@ -605,8 +667,8 @@ Core events defined in 0.1.0:
 | Type | Emitted when | Conventional `data` fields |
 |---|---|---|
 | `core.capture.triggered` | The user triggered the capture (e.g. pressed the hotkey). | `hotkey` (string, optional) |
-| `core.annotation.added` | An annotation was added in the editor. | `annotation_id`, `annotation_type` (matching `annotations.json`) |
-| `core.export.created` | The pack was exported. | `filename` (string, optional) |
+| `core.annotation.added` | An annotation was added in the editor. | `annotation_id`, `annotation_type` (matching `annotations.json`; in 0.1.0 `annotation_type` is always `"box"`) |
+| `core.export.created` | The pack was saved/exported. | `filename` (string, optional) |
 
 `data` fields listed here are conventions, not requirements — readers MUST tolerate their
 absence. Readers MUST skip events of unknown type and SHOULD preserve them when rewriting a pack.
@@ -615,7 +677,7 @@ New `core.*` event types may be added in minor format versions.
 ### 10.3 Example
 
 `t0` is the replay's first frame; the capture was triggered 28.4 s later (matching
-`replay_duration_ms` in [§5.5](#55-example)); annotation and export events follow after the
+`replay_duration_ms` in [§5.5](#55-example)); annotation and save events follow after the
 replay ends.
 
 ```json
@@ -632,13 +694,13 @@ replay ends.
       "t_ms": 33180,
       "type": "core.annotation.added",
       "source": "core",
-      "data": { "annotation_id": "a1", "annotation_type": "pin" }
+      "data": { "annotation_id": "ann_8f21c4", "annotation_type": "box" }
     },
     {
       "t_ms": 36020,
       "type": "core.annotation.added",
       "source": "core",
-      "data": { "annotation_id": "a2", "annotation_type": "rect" }
+      "data": { "annotation_id": "ann_1d9b02", "annotation_type": "box" }
     },
     {
       "t_ms": 44310,
@@ -650,7 +712,7 @@ replay ends.
       "t_ms": 61042,
       "type": "core.export.created",
       "source": "core",
-      "data": { "filename": "2026-07-27-1403-save-button.capturepack" }
+      "data": { "filename": "CapturePack_2026-07-27_140321" }
     }
   ]
 }
@@ -683,6 +745,7 @@ window trees, console logs, engine data.
   core files. The one channel into core data is the timeline: plugins MAY emit
   `plugin.<name>.*` events ([§10.2](#102-event-namespaces)), which core appends on their behalf.
   Core owns nothing except capture; plugins own nothing except their directory.
+- An empty `plugins/` directory is valid (a folder-first writer MAY always create it).
 - Core readers MUST ignore plugin directories they do not recognize — unknown plugin data never
   makes a pack unreadable. Readers that rewrite packs SHOULD preserve plugin directories intact.
 
@@ -718,19 +781,30 @@ plugins/
 
 ---
 
-## 12. report.md
+## 12. report.md, README.md, and skills/
 
-`report.md` is OPTIONAL but RECOMMENDED for every pack that will be shared. It is the
-human- and LLM-readable narrative of the pack, generated by the exporter from the other files.
+Three generated, audience-specific views live beside the source files. All three are OPTIONAL
+(RECOMMENDED for every pack that will be shared), all three are **generated views, not sources of
+truth**: regenerating them from the source files SHOULD produce an equivalent result, writers
+SHOULD regenerate them on every save, and readers MUST NOT treat any of them as authoritative
+when they disagree with the JSON. Display numbers appearing in any of them MUST come from the
+rule of [§8.5](#85-display-numbers).
 
-The test it must pass: **a person drops the pack into any LLM, and the model understands the
-situation from `report.md` + `snapshot.png` + `annotations.json` alone** — no CapturePack-aware
-tooling, no video decoding, no JSON spelunking required. To that end, `report.md` deliberately
-duplicates data from the JSON files in prose form. It is a generated view, not a source of truth:
-regenerating it from the other files SHOULD produce an equivalent report, and readers MUST NOT
-treat it as authoritative when it disagrees with the JSON.
+| File | Audience | Job |
+|---|---|---|
+| `report.md` | Humans *and* LLMs | The narrative of the capture: note, environment, annotations, files. |
+| `README.md` | Humans first | The folder's front door: what this is, what happened, how to use it. |
+| `skills/*.md` | LLMs first | Focused context documents an AI can consume directly, without MCP. |
 
-### 12.1 Recommended template
+### 12.1 report.md
+
+`report.md` is the generated narrative of the pack. The test it must pass: **a person drops the
+pack into any LLM, and the model understands the situation from `report.md` + `snapshot.png` +
+`annotations.json` alone** — no CapturePack-aware tooling, no video decoding, no JSON spelunking
+required. To that end, `report.md` deliberately duplicates data from the JSON files in prose
+form.
+
+Recommended template:
 
 ```markdown
 # {title, or "Untitled capture"}
@@ -749,17 +823,22 @@ treat it as authoritative when it disagrees with the JSON.
 - **Screens:** {for each: width×height @ scale}
 - **Focused app:** {app, if present}
 - **Replay:** {replay filename and duration in seconds, or "none (screenshot only)"}
+  {plus, if present: "annotated replay: replay_annotated.webm"}
 
 ## Annotations
 
-Coordinates are pixels in snapshot.png ({reference_width}×{reference_height}), listed in
-reading order.
+Coordinates are pixels in snapshot.png ({reference_width}×{reference_height}). Numbers are the
+computed display numbers (SPEC §8.5) — identical in every rendered view.
 
-1. **{Type}** at {geometry summary} — "{label/text, if any}"
+1. {lifetime as mm:ss.mmm–mm:ss.mmm, or "entire capture"} — "{text}" — box at (x, y)
+   size width×height{", blur" when blur: true}
 2. ...
+{then each unnumbered box as a bullet, same line shape:}
+- {lifetime or "entire capture"} — "{text}" — box at (x, y) size width×height{", blur"}
 
-{If any blur annotations: a line noting that N region(s) of the snapshot are permanently
-redacted, and (if a replay is included) that the replay is not redacted.}
+{If any blur boxes: a line noting that N box(es) are marked blur, that snapshot.png and the
+replay contain the ORIGINAL unredacted pixels, and that blur is rendered only in
+replay_annotated.}
 
 ## Files
 
@@ -771,7 +850,7 @@ redacted, and (if a replay is included) that the replay is not redacted.}
 Writers MAY extend the template (for example with a plugin-provided summary section) but SHOULD
 keep the section order above so readers and LLMs see a predictable shape.
 
-### 12.2 Example
+Example:
 
 ```markdown
 # Save button stays disabled after renaming a document
@@ -790,30 +869,77 @@ in a row. Expected: Save enables as soon as the title changes.
 - **OS:** windows 11 Pro 26200
 - **Screens:** 2560×1440 @ 1.0
 - **Focused app:** notably.exe
-- **Replay:** replay.webm (28.4 s)
+- **Replay:** replay.webm (28.4 s) — annotated replay: replay_annotated.webm
 
 ## Annotations
 
-Coordinates are pixels in snapshot.png (2560×1440), listed in reading order.
+Coordinates are pixels in snapshot.png (2560×1440). Numbers are the computed display numbers
+(SPEC §8.5) — identical in every rendered view.
 
-1. **Pin** at (640, 402) — "1. renamed the document here"
-2. **Rect** at (2140, 1236) size 180×56 — "2. Save — stays disabled"
-3. **Arrow** from (1980, 1040) to (2210, 1230)
-4. **Text** at (1860, 990) — "clicked 3x — no reaction"
-5. **Blur** at (2080, 24) size 360×40
+1. 00:21.750–00:22.750 — "renamed the document here" — box at (620, 380) size 300×44
+2. 00:26.900–00:27.900 — "Save — stays disabled, clicked 3x" — box at (2140, 1236) size 180×56
+- entire capture — "user email address" — box at (2080, 24) size 360×40, blur
 
-1 region of the snapshot is permanently redacted (blur). The replay video is not redacted.
+1 box is marked blur. snapshot.png and replay.webm contain the original, unredacted pixels;
+the blur is rendered only in replay_annotated.webm.
 
 ## Files
 
 - manifest.json — pack identity, environment, inventory
-- snapshot.png — captured frame, 2560×1440
-- replay.webm — last 28.4 s before capture
-- annotations.json — the 5 annotations above, as editable data
-- timeline.json — capture/annotation/export events
+- snapshot.png — captured frame, 2560×1440 (original pixels)
+- replay.webm — last 28.4 s before capture (original evidence)
+- replay_annotated.webm — the replay with the 3 boxes rendered in
+- annotations.json — the 3 annotation boxes above, as editable data
+- timeline.json — capture/annotation/save events
+- README.md — human-first entry point
+- skills/ — AI-first context documents
 - plugins/git/ — git repository state at capture time
 - report.md — this file
 ```
+
+### 12.2 README.md
+
+`README.md` is the **first document a human reads** when they open the folder — the front door.
+Reading it alone must be enough for a person to understand the whole pack: what was captured,
+when, where, what it shows, and what to open next. It is deliberately shorter and less formal
+than `report.md`.
+
+RECOMMENDED content, in order:
+
+1. **Title** — the manifest `title` (or "Untitled capture").
+2. **Created / Application / Duration** — capture instant, focused app, replay length (or
+   "screenshot only").
+3. **Description** — the manifest `note`, verbatim.
+4. **Files** — one line per file in the folder, saying what each is (mark the originals as
+   never-modified, the annotated replay as the watchable result).
+5. **How to use** — e.g.:
+   1. Watch `replay_annotated.webm` (or open `snapshot.png`).
+   2. Read `report.md` for the full narrative.
+   3. AI: read `skills/`, or connect through a CapturePack MCP server.
+
+When blur boxes exist, `README.md` SHOULD repeat the sharing warning of
+[§9.2](#92-the-sharing-rule).
+
+### 12.3 skills/
+
+`skills/` holds **AI-first context documents**: small, focused Markdown files structured so an
+LLM understands the pack immediately even without an MCP server — plain files beat protocols for
+cold starts. Each document narrates one aspect of the pack in prose + compact lists, staying
+within what the source files actually contain.
+
+Well-known filenames (all OPTIONAL; RECOMMENDED as a set):
+
+| File | Content |
+|---|---|
+| `skills/overview.md` | Whole-pack summary: what happened, where to look first, counts (annotations, events, plugins), whether blur is present. |
+| `skills/timeline.md` | The timeline narrated: notable events in order with timestamps, or "no timeline recorded". |
+| `skills/annotation.md` | Every annotation box: display number (when numbered), text, bounds, lifetime, blur flag — plus a one-line statement of the numbering rule. |
+| `skills/dom.md` | DOM/semantic object metadata when a browser or UIA plugin contributed it; otherwise a one-line "no DOM metadata in this pack" so the LLM stops looking. |
+| `skills/project.md` | What a CapturePack is and how this folder is laid out — for a model that has never seen the format. |
+
+Writers MAY add further documents under `skills/`; readers MUST ignore names they do not know.
+Like every generated view, `skills/` documents are regenerated on save and are never
+authoritative over the JSON files.
 
 ---
 
@@ -843,13 +969,15 @@ This maximizes the packs' audience — old readers keep working.
 **Readers MUST accept unknown optional fields and unknown files.** Forward compatibility is a
 requirement, not a courtesy:
 
-- Unknown JSON fields anywhere: ignore them; preserve them when rewriting.
+- Unknown JSON fields anywhere: ignore them; preserve them when rewriting. (This includes the
+  reserved `tracking` and `target` contents of [§8.3](#83-the-box).)
 - Unknown files in the pack root or anywhere else: ignore them; preserve them when rewriting.
-- Unknown annotation types, event types, plugin directories: skip them; preserve on rewrite.
+- Unknown annotation types, event types, plugin directories, extra `skills/` documents: skip
+  them; preserve on rewrite.
 
 Readers encountering a higher major version than they support SHOULD tell the user and MAY still
-attempt a best-effort read of the parts they understand (`snapshot.png` and `report.md` degrade
-gracefully by design).
+attempt a best-effort read of the parts they understand (`snapshot.png`, `report.md`, and
+`replay_annotated` degrade gracefully by design).
 
 ### 13.2 Reading a pack defensively
 
@@ -858,9 +986,11 @@ A checklist for reader implementations:
 1. **Identify.** Read `manifest.json`. Check `format == "capturepack"`; if not, this is not a
    pack. Parse `format_version`; compare the major (pre-1.0: minor) version against what you
    support, and warn — don't crash — on a newer one.
-2. **Trust the manifest, tolerate its absence of extras.** Take the replay filename from
-   `media.replay`; never guess by listing files. Treat absent optional files as normal, not as
-   corruption.
+2. **Trust the manifest, tolerate its absence of extras.** Take the replay and annotated-replay
+   filenames from `media`; never guess by listing files. Treat absent optional files as normal,
+   not as corruption — a declared `replay_annotated` that is not on disk usually means the
+   background render has not finished ([§5.3](#53-media)); fall back to `replay` +
+   `annotations.json`.
 3. **Validate lazily, fail small.** A malformed `timeline.json` should cost you the timeline,
    not the pack. Only a missing/unparseable `manifest.json` or `snapshot.png` makes a pack
    invalid.
@@ -872,7 +1002,10 @@ A checklist for reader implementations:
    ([§8.2](#82-coordinate-space)).
 6. **Extract safely.** Reject ZIP entries with absolute paths or `..` segments. Accept a single
    wrapping directory if you want to be generous; never require one.
-7. **Never expect blurred pixels back.** Redaction is permanent by design ([§9](#9-blur-and-privacy)).
+7. **Recompute, never trust, display numbers.** Derive them from
+   [§8.5](#85-display-numbers) — never from a document or a rendered frame.
+8. **Never assume redaction in the originals.** `snapshot.png` and the replay always hold
+   original pixels; only derived views honor blur ([§9](#9-blur-and-privacy)).
 
 ---
 
@@ -881,7 +1014,7 @@ A checklist for reader implementations:
 The smallest valid CapturePack is a screenshot with a manifest — two files:
 
 ```
-minimal.capturepack
+CapturePack_2026-07-27_140321/
 ├── manifest.json
 └── snapshot.png
 ```
@@ -904,9 +1037,10 @@ minimal.capturepack
 }
 ```
 
-No replay, no annotations, no timeline, no report, no plugins — and every conforming reader MUST
-accept it. Anything a five-line script can produce is a first-class citizen of the format; that
-is what keeps CapturePack an open format rather than an app's save file.
+No replay, no annotations, no timeline, no report, no README, no skills, no plugins — and every
+conforming reader MUST accept it. Anything a five-line script can produce is a first-class
+citizen of the format; that is what keeps CapturePack an open format rather than an app's save
+file.
 
 ---
 

@@ -2,12 +2,12 @@
 // label ("-12.4s" behind "now"), the replay-loading hint, and a compact lane
 // strip above the track showing each annotation's lifetime as a slim bar.
 import type { Annotation } from '../../shared/types'
+import { boxColor } from './render'
 
 // Lane strip geometry: 3px bars on a 5px pitch, greedily packed so
 // non-overlapping lifetimes share a lane and the strip stays compact.
 const LANE_STEP = 5
 const LANE_GAP = 2
-const NO_COLOR = '#9a9aa4' // blur carries no color (SPEC §8.3)
 
 export interface TimebarState {
   ready: boolean
@@ -22,7 +22,7 @@ export interface TimebarCallbacks {
   /** Scrub to a fraction (0..1) of the replay duration. */
   scrubToFraction(fraction: number): void
   togglePlay(): void
-  /** A lifetime bar was clicked: select that annotation and scrub to its anchor. */
+  /** A lifetime bar was clicked: select that box and scrub to its lifetime midpoint. */
   selectAnnotation(id: string): void
 }
 
@@ -96,17 +96,18 @@ export class Timebar {
     selectedId: string | null,
     durationMs: number,
   ): void {
-    // Half-open lifetimes default the absent bound to the capture edge (SPEC §8.3).
+    // Lifetimes are both-or-neither (SPEC §8.4); boxes without one apply to
+    // the whole capture and stay out of the lane strip.
     const spans = annotations
-      .filter((a) => a.t_start_ms !== undefined || a.t_end_ms !== undefined)
-      .sort((a, b) => (a.t_start_ms ?? 0) - (b.t_start_ms ?? 0))
+      .filter((a) => a.start_ms !== undefined && a.end_ms !== undefined)
+      .sort((a, b) => (a.start_ms ?? 0) - (b.start_ms ?? 0))
     this.lanes.textContent = ''
     this.lanes.hidden = spans.length === 0 || durationMs <= 0
     if (this.lanes.hidden) return
     const laneEnds: number[] = []
     for (const a of spans) {
-      const start = a.t_start_ms ?? 0
-      const end = a.t_end_ms ?? durationMs
+      const start = a.start_ms ?? 0
+      const end = a.end_ms ?? durationMs
       // First lane whose last bar ended before this one starts; else a new lane.
       let lane = laneEnds.findIndex((endMs) => endMs <= start)
       if (lane === -1) {
@@ -117,16 +118,16 @@ export class Timebar {
       }
       const bar = document.createElement('div')
       bar.className = 'laneBar'
-      bar.classList.toggle('selected', a.id === selectedId)
+      bar.classList.toggle('selected', a.annotation_id === selectedId)
       bar.style.left = `${(Math.min(start, durationMs) / durationMs) * 100}%`
       bar.style.width = `${(Math.max(0, Math.min(end, durationMs) - start) / durationMs) * 100}%`
       bar.style.top = `${lane * LANE_STEP}px`
-      bar.style.background = a.type === 'blur' ? NO_COLOR : a.color
-      bar.title = a.type
+      bar.style.background = boxColor(a)
+      bar.title = a.text !== '' ? a.text : 'box'
       bar.addEventListener('pointerdown', (e) => {
         if (e.button !== 0) return
         e.stopPropagation()
-        this.cb.selectAnnotation(a.id)
+        this.cb.selectAnnotation(a.annotation_id)
       })
       this.lanes.appendChild(bar)
     }

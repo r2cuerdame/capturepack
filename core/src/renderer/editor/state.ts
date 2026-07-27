@@ -1,7 +1,7 @@
-// Annotation store with snapshot-based undo/redo and the shared color palette.
-import type { Annotation, AnnotationType } from '../../shared/types'
-
-export type Tool = 'select' | AnnotationType
+// Box-annotation store with snapshot-based undo/redo and the shared palette.
+// The editor works directly in format 0.1.0 BoxAnnotations (SPEC §8) — what it
+// holds is exactly what gets saved into annotations.json.
+import type { Annotation } from '../../shared/types'
 
 export const PALETTE = ['#FF3B30', '#FF9500', '#FFD60A', '#34C759', '#0A84FF'] as const
 
@@ -11,6 +11,10 @@ export class EditorState {
   private colorIndex = 0
   private undoStack: Annotation[][] = []
   private redoStack: Annotation[][] = []
+  // Every annotation_id ever handed out this session, so an id freed by undo
+  // is never reissued — core.annotation.added timeline events (sent at commit
+  // time) must stay unambiguous.
+  private usedIds = new Set<string>()
 
   get color(): string {
     return PALETTE[this.colorIndex] ?? PALETTE[0]
@@ -20,31 +24,23 @@ export class EditorState {
     this.colorIndex = (this.colorIndex + 1) % PALETTE.length
   }
 
-  // Derived from live annotations so ids/z stay contiguous across undo.
-  nextStamp(): { id: string; z: number; created_at: string } {
-    let max = 0
+  /** Identity + stacking stamp for a new box: "ann_" + 6 lowercase hex (SPEC §8.3). */
+  nextStamp(): { annotation_id: string; z: number; created_at: string } {
+    let id: string
+    do {
+      const bytes = crypto.getRandomValues(new Uint8Array(3))
+      id = `ann_${Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')}`
+    } while (this.usedIds.has(id))
+    this.usedIds.add(id)
+    let maxZ = 0
     for (const a of this.annotations) {
-      const n = Number(a.id.slice(1))
-      if (Number.isFinite(n) && n > max) max = n
-      if (a.z > max) max = a.z
+      if (a.z > maxZ) maxZ = a.z
     }
-    return { id: `a${max + 1}`, z: max + 1, created_at: new Date().toISOString() }
-  }
-
-  // Max existing numeric label + 1, so deleting pin 2 of [1,2,3] never yields a
-  // duplicate "3" (a count-based label would).
-  nextPinLabel(): string {
-    let max = 0
-    for (const a of this.annotations) {
-      if (a.type !== 'pin') continue
-      const n = Number(a.label)
-      if (Number.isFinite(n) && n > max) max = n
-    }
-    return String(max + 1)
+    return { annotation_id: id, z: maxZ + 1, created_at: new Date().toISOString() }
   }
 
   byId(id: string): Annotation | undefined {
-    return this.annotations.find((a) => a.id === id)
+    return this.annotations.find((a) => a.annotation_id === id)
   }
 
   cloneAnnotations(): Annotation[] {
@@ -58,11 +54,11 @@ export class EditorState {
 
   remove(id: string): void {
     this.pushUndoSnapshot(this.cloneAnnotations())
-    this.annotations = this.annotations.filter((a) => a.id !== id)
+    this.annotations = this.annotations.filter((a) => a.annotation_id !== id)
     if (this.selectedId === id) this.selectedId = null
   }
 
-  /** Records a pre-mutation snapshot; also used by drag-moves that mutate in place. */
+  /** Records a pre-mutation snapshot; also used by drags that mutate in place. */
   pushUndoSnapshot(before: Annotation[]): void {
     this.undoStack.push(before)
     this.redoStack.length = 0

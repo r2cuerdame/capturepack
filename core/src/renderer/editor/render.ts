@@ -1,11 +1,17 @@
-// Canvas drawing for the annotation overlay and the exported snapshot.
+// Canvas drawing for the box-annotation overlay and the exported snapshot.
 // All coordinates are native snapshot pixels; `ui` (= 1 / effective on-screen
 // scale, zoom included) converts desired on-screen pixel sizes into native
 // units so strokes look constant.
-import type { Annotation, BlurAnnotation, TextAnnotation } from '../../shared/types'
+//
+// Per-frame draw order matches the annotated-replay renderer (SPEC §7.2):
+// original frame -> blur pass -> border/badge/text per box (z ascending).
+// Selection chrome (dashed rect + corner handles) is EDITOR-ONLY: it lives on
+// the overlay canvas, which is never part of the exported snapshot.
+import type { Annotation } from '../../shared/types'
 
-const BLUR_BLOCK = 12 // native px per pixelation block
-const PIN_R = 12
+const BLUR_BLOCK = 12 // native px per pixelation block (matches render/render.ts)
+const FALLBACK_COLOR = '#FF3B30' // boxes without style.color (palette default)
+const HANDLE_R = 4.5 // on-screen px, half the side of a corner resize handle
 
 export interface Box {
   x: number
@@ -14,17 +20,19 @@ export interface Box {
   h: number
 }
 
-// Pad between an annotation's bounds and its dashed selection rect; the
-// selection chips (duration / delete) anchor to the padded corners too.
+// Pad between a box's bounds and its dashed selection rect; the floating
+// selection header anchors to the padded top-left corner too.
 export const SELECTION_PAD = 6
+
+export type HandleId = 'nw' | 'ne' | 'sw' | 'se'
 
 function must<T>(v: T | null): T {
   if (v === null) throw new Error('canvas 2d context unavailable')
   return v
 }
 
-function textFont(a: TextAnnotation): string {
-  return `700 ${a.size ?? 24}px "Segoe UI", system-ui, sans-serif`
+export function boxColor(a: Annotation): string {
+  return a.style?.color ?? FALLBACK_COLOR
 }
 
 /** Draws a pixelated copy of a source region onto ctx (both in native coords). */
@@ -52,134 +60,121 @@ function pixelate(
   ctx.restore()
 }
 
+/**
+ * Paints all given boxes onto the overlay. `annotations` is the set to draw
+ * (already lifetime-filtered by the caller; may include ephemeral drafts);
+ * `numbers` is the GLOBAL display-number map from computeDisplayNumbers over
+ * ALL annotations, so numbering never re-compresses to the visible subset.
+ */
 export function drawScene(
   ctx: CanvasRenderingContext2D,
   source: HTMLCanvasElement,
   annotations: readonly Annotation[],
   selectedId: string | null,
+  numbers: ReadonlyMap<string, number>,
   ui: number,
 ): void {
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
   const ordered = [...annotations].sort((a, b) => a.z - b.z)
+  // Blur pass first (live non-destructive preview — the base canvas keeps the
+  // original pixels), so borders and badges are never pixelated.
+  for (const a of ordered) {
+    if (a.blur) pixelate(ctx, source, a.bounds.x, a.bounds.y, a.bounds.width, a.bounds.height)
+  }
   for (const a of ordered) {
     ctx.save()
-    drawAnnotation(ctx, source, a, ui)
+    drawBox(ctx, a, numbers.get(a.annotation_id), ui)
     ctx.restore()
   }
   if (selectedId !== null) {
-    const sel = annotations.find((a) => a.id === selectedId)
+    const sel = annotations.find((a) => a.annotation_id === selectedId)
     if (sel) drawSelection(ctx, sel, ui)
   }
 }
 
-function drawAnnotation(
+/** Border + number badge (top-left corner) + text label for one box. */
+function drawBox(
   ctx: CanvasRenderingContext2D,
-  source: HTMLCanvasElement,
   a: Annotation,
+  displayNumber: number | undefined,
   ui: number,
 ): void {
-  switch (a.type) {
-    case 'pin': {
-      const r = PIN_R * ui
-      ctx.beginPath()
-      ctx.arc(a.x, a.y, r, 0, Math.PI * 2)
-      ctx.fillStyle = a.color
-      ctx.fill()
-      ctx.lineWidth = 2 * ui
-      ctx.strokeStyle = '#ffffff'
-      ctx.stroke()
-      ctx.fillStyle = '#ffffff'
-      ctx.font = `700 ${Math.round(13 * ui)}px "Segoe UI", system-ui, sans-serif`
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
-      ctx.fillText(a.label ?? '', a.x, a.y + ui)
-      break
-    }
-    case 'arrow': {
-      const dx = a.x2 - a.x1
-      const dy = a.y2 - a.y1
-      const len = Math.hypot(dx, dy)
-      if (len < 1) break
-      const ux = dx / len
-      const uy = dy / len
-      const head = Math.min(16 * ui, len * 0.5)
-      ctx.strokeStyle = a.color
-      ctx.fillStyle = a.color
-      ctx.lineWidth = 3.5 * ui
-      ctx.lineCap = 'round'
-      ctx.beginPath()
-      ctx.moveTo(a.x1, a.y1)
-      ctx.lineTo(a.x2 - ux * head * 0.8, a.y2 - uy * head * 0.8)
-      ctx.stroke()
-      ctx.beginPath()
-      ctx.moveTo(a.x2, a.y2)
-      ctx.lineTo(a.x2 - ux * head - uy * head * 0.45, a.y2 - uy * head + ux * head * 0.45)
-      ctx.lineTo(a.x2 - ux * head + uy * head * 0.45, a.y2 - uy * head - ux * head * 0.45)
-      ctx.closePath()
-      ctx.fill()
-      break
-    }
-    case 'rect':
-      ctx.strokeStyle = a.color
-      ctx.lineWidth = 3 * ui
-      ctx.strokeRect(a.x, a.y, a.w, a.h)
-      break
-    case 'blur':
-      pixelate(ctx, source, a.x, a.y, a.w, a.h)
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)'
-      ctx.lineWidth = ui
-      ctx.strokeRect(a.x, a.y, a.w, a.h)
-      break
-    case 'text':
-      ctx.font = textFont(a)
-      ctx.textAlign = 'left'
-      ctx.textBaseline = 'top'
-      ctx.lineJoin = 'round'
-      ctx.lineWidth = 3 * ui
-      ctx.strokeStyle = 'rgba(0, 0, 0, 0.65)'
-      ctx.strokeText(a.text, a.x, a.y)
-      ctx.fillStyle = a.color
-      ctx.fillText(a.text, a.x, a.y)
-      break
+  const { x, y, width: w, height: h } = a.bounds
+  const color = boxColor(a)
+
+  ctx.strokeStyle = color
+  ctx.lineWidth = 3 * ui
+  ctx.strokeRect(x, y, w, h)
+
+  if (a.numbered) {
+    const r = 12 * ui
+    ctx.beginPath()
+    ctx.arc(x, y, r, 0, Math.PI * 2)
+    ctx.fillStyle = color
+    ctx.fill()
+    ctx.lineWidth = 2 * ui
+    ctx.strokeStyle = '#ffffff'
+    ctx.stroke()
+    ctx.fillStyle = '#ffffff'
+    ctx.font = `700 ${Math.round(13 * ui)}px "Segoe UI", system-ui, sans-serif`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(displayNumber !== undefined ? String(displayNumber) : '·', x, y + ui)
+  }
+
+  const text = a.text.trim()
+  if (text !== '') {
+    ctx.font = `700 ${Math.round(14 * ui)}px "Segoe UI", system-ui, sans-serif`
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'top'
+    const pad = 5 * ui
+    const metrics = ctx.measureText(text)
+    const lineH = 18 * ui
+    // Below the box when it fits, above otherwise; clamped into the frame.
+    let ty = y + h + pad
+    if (ty + lineH + pad > ctx.canvas.height) ty = y - lineH - pad * 2
+    ty = Math.max(pad, ty)
+    const tx = Math.min(Math.max(pad, x), Math.max(pad, ctx.canvas.width - metrics.width - pad * 2))
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.65)'
+    ctx.fillRect(tx - pad, ty - pad * 0.5, metrics.width + pad * 2, lineH + pad)
+    ctx.fillStyle = '#ffffff'
+    ctx.fillText(text, tx, ty)
   }
 }
 
-/** Native-pixel bounding box of an annotation (`ui` sizes pin radius / text). */
-export function annotationBounds(ctx: CanvasRenderingContext2D, a: Annotation, ui: number): Box {
-  switch (a.type) {
-    case 'pin': {
-      const r = PIN_R * ui
-      return { x: a.x - r, y: a.y - r, w: r * 2, h: r * 2 }
-    }
-    case 'arrow':
-      return {
-        x: Math.min(a.x1, a.x2),
-        y: Math.min(a.y1, a.y2),
-        w: Math.abs(a.x2 - a.x1),
-        h: Math.abs(a.y2 - a.y1),
-      }
-    case 'rect':
-    case 'blur':
-      return { x: a.x, y: a.y, w: a.w, h: a.h }
-    case 'text': {
-      ctx.save()
-      ctx.font = textFont(a)
-      const w = ctx.measureText(a.text).width
-      ctx.restore()
-      const size = a.size ?? 24
-      return { x: a.x, y: a.y, w, h: size * 1.25 }
-    }
-  }
+/** Native-pixel bounding box of a box annotation. */
+export function annotationBounds(a: Annotation): Box {
+  return { x: a.bounds.x, y: a.bounds.y, w: a.bounds.width, h: a.bounds.height }
+}
+
+/** The four corner-handle centers of a box (editor-only resize chrome). */
+function handleCenters(a: Annotation): Array<{ id: HandleId; x: number; y: number }> {
+  const { x, y, width: w, height: h } = a.bounds
+  return [
+    { id: 'nw', x, y },
+    { id: 'ne', x: x + w, y },
+    { id: 'sw', x, y: y + h },
+    { id: 'se', x: x + w, y: y + h },
+  ]
 }
 
 function drawSelection(ctx: CanvasRenderingContext2D, a: Annotation, ui: number): void {
-  const b = annotationBounds(ctx, a, ui)
+  const b = annotationBounds(a)
   const pad = SELECTION_PAD * ui
   ctx.save()
   ctx.strokeStyle = '#8ab4ff'
   ctx.lineWidth = 1.5 * ui
   ctx.setLineDash([6 * ui, 4 * ui])
   ctx.strokeRect(b.x - pad, b.y - pad, b.w + pad * 2, b.h + pad * 2)
+  ctx.setLineDash([])
+  const r = HANDLE_R * ui
+  for (const c of handleCenters(a)) {
+    ctx.fillStyle = '#ffffff'
+    ctx.strokeStyle = '#3574f0'
+    ctx.lineWidth = 1.5 * ui
+    ctx.fillRect(c.x - r, c.y - r, r * 2, r * 2)
+    ctx.strokeRect(c.x - r, c.y - r, r * 2, r * 2)
+  }
   ctx.restore()
 }
 
@@ -187,17 +182,12 @@ function inBox(x: number, y: number, b: Box, pad: number): boolean {
   return x >= b.x - pad && y >= b.y - pad && x <= b.x + b.w + pad && y <= b.y + b.h + pad
 }
 
-function segDist(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
-  const dx = x2 - x1
-  const dy = y2 - y1
-  const len2 = dx * dx + dy * dy
-  const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / len2))
-  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy))
-}
-
-/** Returns the id of the topmost annotation at native point (x, y), or null. */
+/**
+ * Returns the id of the topmost box at native point (x, y), or null. Toolless
+ * selection (GOAL): a left click selects the topmost box whose lifetime is
+ * visible at the cursor — callers pass the lifetime-filtered set.
+ */
 export function hitTest(
-  ctx: CanvasRenderingContext2D,
   annotations: readonly Annotation[],
   x: number,
   y: number,
@@ -206,45 +196,31 @@ export function hitTest(
   const tol = 6 * ui
   const ordered = [...annotations].sort((a, b) => b.z - a.z)
   for (const a of ordered) {
-    if (hits(ctx, a, x, y, ui, tol)) return a.id
+    if (inBox(x, y, annotationBounds(a), tol)) return a.annotation_id
   }
   return null
 }
 
-function hits(
-  ctx: CanvasRenderingContext2D,
-  a: Annotation,
-  x: number,
-  y: number,
-  ui: number,
-  tol: number,
-): boolean {
-  switch (a.type) {
-    case 'pin':
-      return Math.hypot(x - a.x, y - a.y) <= PIN_R * ui + tol * 0.5
-    case 'arrow':
-      return segDist(x, y, a.x1, a.y1, a.x2, a.y2) <= tol
-    case 'blur':
-      return inBox(x, y, a, tol)
-    case 'rect':
-      // Stroke-only shape: hit near the border, not deep inside.
-      return inBox(x, y, a, tol) && !inBox(x, y, a, -tol)
-    case 'text':
-      return inBox(x, y, annotationBounds(ctx, a, ui), tol * 0.5)
+/** The corner resize handle of `a` at native point (x, y), or null. */
+export function handleAt(a: Annotation, x: number, y: number, ui: number): HandleId | null {
+  const r = (HANDLE_R + 3) * ui // slightly generous hit area
+  for (const c of handleCenters(a)) {
+    if (Math.abs(x - c.x) <= r && Math.abs(y - c.y) <= r) return c.id
   }
+  return null
 }
 
-/** Original snapshot with blur regions destructively pixelated, as PNG bytes. */
-export async function composeExportPng(
-  source: HTMLCanvasElement,
-  blurs: readonly BlurAnnotation[],
-): Promise<ArrayBuffer> {
+/**
+ * The exported snapshot: the ORIGINAL base frame, untouched (SPEC §9). Blur is
+ * non-destructive — it renders only into derived views (replay_annotated.webm,
+ * the editor preview), never into snapshot.png.
+ */
+export async function composeExportPng(source: HTMLCanvasElement): Promise<ArrayBuffer> {
   const out = document.createElement('canvas')
   out.width = source.width
   out.height = source.height
   const ctx = must(out.getContext('2d'))
   ctx.drawImage(source, 0, 0)
-  for (const b of blurs) pixelate(ctx, source, b.x, b.y, b.w, b.h)
   const blob = await new Promise<Blob>((resolve, reject) => {
     out.toBlob((b) => (b ? resolve(b) : reject(new Error('snapshot encode failed'))), 'image/png')
   })
