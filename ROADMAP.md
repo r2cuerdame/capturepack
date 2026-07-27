@@ -69,15 +69,17 @@ usage habit that the whole project is measured by.
 - [x] `report.md` generated from the SPEC §12 template — LLM-readable with no tooling
 - [x] `timeline.json` with `core.*` events; `input.*` recording is V2
 
-### Release & auto-update — Pipeline ready, unproven until a release ships
+### Release & auto-update — PROVEN (v0.1.0 → v0.1.1 update delivered end-to-end, 2026-07-27)
 
 The V1 completion criteria from GOAL.md, verbatim:
 
-- [ ] **Installable Windows release**
-- [ ] **GitHub Releases-based updater** — no separate update server, ever
-- [ ] **Update notification and restart-to-update UX**
-- [ ] **Rollback-safe installation**
-- [ ] **Automatic build and release workflow** (written: tag → build → SHA-256 → Release)
+- [x] **Installable Windows release** (v0.1.0 and v0.1.1 on GitHub Releases)
+- [x] **GitHub Releases-based updater** — the installed 0.1.0 detected and
+      background-downloaded 0.1.1 by itself; no separate update server
+- [x] **Update notification and restart-to-update UX** (tray item + notification)
+- [x] **Rollback-safe installation** (old version stays until the new one installs)
+- [x] **Automatic build and release workflow** (tag → CI → installer + latest.yml +
+      SHA256SUMS, twice)
 
 Supporting: sha512-verified updates from `latest.yml` + published `SHA256SUMS.txt`; auto-check
 toggle in settings; code signing when possible; channels later. Landing page: **done** —
@@ -194,7 +196,7 @@ less complete without them, and nothing becomes an AI API integration (a stated 
 | 7 | Plugin API | V2 | Not started |
 | 8 | Browser plugin | V2 | Scaffolded (extension + protocol v1) |
 | 9 | Windows plugin | V2 | Not started |
-| 10 | Public release | V1 | In progress (pipeline ready, first tag pending) |
+| 10 | Public release | V1 | Done (v0.1.1 live; auto-update chain proven) |
 
 ---
 
