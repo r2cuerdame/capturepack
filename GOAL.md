@@ -686,9 +686,18 @@ simultaneously is the default** — one Ctrl+Alt+C, N displays in the pack.
   - **Cursor display** — record all, but the pack keeps only the cursor display
     (smaller packs).
   - **Fixed display** — record only the chosen display (lowest CPU).
-- The annotation editor always opens fullscreen on the focused display; a display
-  switcher lets the user view the other frozen displays (annotating non-focused
-  displays arrives later).
+- **All captured displays are shown at once.** The editor lays the frozen displays out
+  side by side (scaled to fit, in their real left-to-right arrangement), not one at a
+  time behind a switcher. Every display is annotatable: a box belongs to the display it
+  was drawn on, and the scrub timeline drives all of them together so the whole desktop
+  moves through time as one moment.
+  - The focused display (cursor at trigger) opens centered and at the largest scale;
+    the others sit beside it. Zoom/pan applies to the whole board.
+  - Annotations stay in their own display's pixel space; `annotations.json` gains an
+    optional `display` index (absent = the focused display, so single-monitor packs are
+    unchanged).
+- Existing profiles that still carry the pre-0.1.3 default (`cursor`) migrate once to
+  `all`, since that value was never a deliberate choice.
 - `manifest.environment.screens` continues to list every connected display; the focused
   one is the snapshot's coordinate space.
 - Display hotplug (connect/disconnect, resolution change) restarts the affected recorders
