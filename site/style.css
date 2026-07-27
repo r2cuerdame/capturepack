@@ -118,6 +118,36 @@ h1 {
   font-size: 0.95rem;
 }
 
+/* Features */
+.features {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  padding: 0 0 3vh;
+}
+
+@media (max-width: 640px) {
+  .features { grid-template-columns: 1fr; }
+}
+
+.feature {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 18px 20px;
+}
+
+.feature h3 {
+  font-size: 1.02rem;
+  margin-bottom: 8px;
+}
+
+.feature p {
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.feature em { color: var(--text); font-style: normal; font-weight: 600; }
+
 /* Roadmap */
 .roadmap {
   padding: 0 0 6vh;

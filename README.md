@@ -32,6 +32,24 @@ Ctrl+Alt+C  →  capture  →  5-second annotation  →  export  →  drop into
 - **Videos preserve motion.** You lose intent and structure.
 - **CapturePack preserves context.** Time, space, intent, environment.
 
+## 🕰 It's a time machine
+
+The bug already happened? CapturePack was **already recording**. Press `Ctrl+Alt+C`
+*after* something goes wrong — the last 30 seconds are frozen, and the mouse wheel
+scrolls you **back through time** to the exact frame where it broke. Annotate that
+moment, not a re-enactment.
+
+## 🤖 Built for LLMs
+
+A CapturePack is input an AI actually understands:
+
+- Drop the pack into **ChatGPT, Claude, Codex, Cursor, Gemini** — the generated
+  report and context files explain the situation with zero extra prompting.
+- Or don't even attach anything: the app runs an **MCP server**, so a connected AI
+  just hears *"Analyze the latest CapturePack."* and reads it by itself.
+
+Better input. Better answers.
+
 ## Principles
 
 Local first · Offline first · Open format · Plugin based · No cloud · No login · No database · No AI dependency · No vendor lock-in.
