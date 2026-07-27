@@ -1,0 +1,248 @@
+:root {
+  --bg: #121216;
+  --panel: #1c1c22;
+  --panel-hover: #26262e;
+  --border: #2c2c34;
+  --text: #e8e8ea;
+  --muted: #8a8a93;
+  --action: #3574f0;
+  --warn-bg: #33270f;
+  --warn-border: #7a5a1e;
+  --warn-text: #ffd27a;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.4 "Segoe UI", system-ui, sans-serif;
+  user-select: none;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* ---- top bar ---- */
+
+#topbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 10px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+#tools {
+  display: flex;
+  gap: 2px;
+}
+
+.tool {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: 600 12px "Segoe UI", system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.tool:hover {
+  background: var(--panel-hover);
+  color: var(--text);
+}
+
+.tool.active {
+  background: #2e2e38;
+  color: #fff;
+  border-color: #3c3c48;
+}
+
+#colorSwatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  background: #ff3b30;
+}
+
+#topbar input[type="text"] {
+  background: #111116;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 5px 8px;
+  font: inherit;
+  user-select: text;
+  min-width: 0;
+}
+
+#topbar input[type="text"]:focus {
+  outline: none;
+  border-color: #4a4a58;
+}
+
+#topbar input::placeholder {
+  color: #6a6a74;
+}
+
+#titleInput {
+  flex: 0 1 170px;
+}
+
+#noteInput {
+  flex: 1 1 220px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: var(--panel-hover);
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+#replayToggle {
+  cursor: pointer;
+  color: var(--text);
+}
+
+#replayToggle input {
+  accent-color: var(--action);
+  cursor: pointer;
+}
+
+#keysHint {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+@media (max-width: 1220px) {
+  #keysHint {
+    display: none;
+  }
+}
+
+#exportBtn {
+  border: none;
+  border-radius: 6px;
+  background: var(--action);
+  color: #fff;
+  padding: 6px 14px;
+  font: 600 13px "Segoe UI", system-ui, sans-serif;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+#exportBtn:hover {
+  background: #4683ff;
+}
+
+#exportBtn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* ---- stage ---- */
+
+#stage {
+  flex: 1;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+#frame {
+  position: relative;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+}
+
+#snapshot,
+#overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+#overlay {
+  z-index: 2;
+  touch-action: none;
+  outline: none;
+}
+
+#textEditor {
+  position: absolute;
+  z-index: 3;
+  background: rgba(10, 10, 14, 0.6);
+  border: 1px dashed currentColor;
+  border-radius: 3px;
+  padding: 1px 4px;
+  min-width: 90px;
+  color: #ff3b30;
+  font-weight: 700;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  outline: none;
+  user-select: text;
+}
+
+#blurWarning {
+  position: absolute;
+  z-index: 5;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border: 1px solid var(--warn-border);
+  border-radius: 8px;
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+#blurWarning button {
+  border: 1px solid var(--warn-border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--warn-text);
+  padding: 2px 8px;
+  font: 600 12px "Segoe UI", system-ui, sans-serif;
+  cursor: pointer;
+}
+
+#blurWarning button:hover {
+  background: rgba(255, 210, 122, 0.12);
+}

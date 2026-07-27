@@ -1,0 +1,22 @@
+appId: io.github.r2cuerdame.capturepack
+productName: CapturePack
+directories:
+  output: release
+files:
+  - dist/**
+  - package.json
+win:
+  target:
+    - nsis
+  artifactName: CapturePack-Setup-${version}.${ext}
+nsis:
+  oneClick: true
+  perMachine: false
+  deleteAppDataOnUninstall: false
+publish:
+  provider: github
+  owner: r2cuerdame
+  repo: capturepack
+  # Publish releases immediately: electron-updater cannot see draft releases
+  # (the provider default), which would silently break auto-update.
+  releaseType: release

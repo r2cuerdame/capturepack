@@ -1,0 +1,33 @@
+{
+  "name": "capturepack",
+  "productName": "CapturePack",
+  "version": "0.1.0",
+  "description": "Capture context, not screenshots. The fastest way to explain something to an LLM.",
+  "license": "MIT",
+  "author": "r2cuerdame",
+  "homepage": "https://github.com/r2cuerdame/capturepack",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/r2cuerdame/capturepack.git"
+  },
+  "main": "dist/main/index.js",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "dev": "npm run build && electron .",
+    "dist": "npm run build && electron-builder --win",
+    "release": "npm run build && electron-builder --win --publish always"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.16",
+    "electron-updater": "^6.3.9"
+  },
+  "devDependencies": {
+    "@types/adm-zip": "^0.5.5",
+    "@types/node": "^20.14.0",
+    "electron": "^36.0.0",
+    "electron-builder": "^25.1.8",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0"
+  }
+}

@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: core/package-lock.json
+
+      - name: Install dependencies
+        working-directory: core
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: core
+        run: npm run typecheck
+
+      - name: Build
+        working-directory: core
+        run: npm run build
+
+      - name: Smoke test (electron --smoke)
+        working-directory: core
+        timeout-minutes: 3
+        run: npx electron . --smoke
+
+  spec-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Validate example pack against spec
+        run: |
+          if [ ! -f tools/validate-capturepack.mjs ]; then
+            echo "Skipping spec validation: tools/validate-capturepack.mjs does not exist yet."
+          elif [ ! -d examples/minimal ]; then
+            echo "Skipping spec validation: examples/minimal does not exist yet."
+          else
+            node tools/validate-capturepack.mjs examples/minimal
+          fi

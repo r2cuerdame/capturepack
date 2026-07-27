@@ -1,0 +1,116 @@
+// CapturePack format types — mirror SPEC.md (format_version 0.1.0).
+// These types describe data written into a .capturepack; keep them in sync with the spec.
+
+export const FORMAT_NAME = 'capturepack'
+export const FORMAT_VERSION = '0.1.0'
+
+export interface Manifest {
+  format: typeof FORMAT_NAME
+  format_version: string
+  id: string
+  created_at: string
+  generator: { name: string; version: string }
+  title?: string
+  note?: string
+  environment: {
+    os: string
+    os_version: string
+    screens: Array<{ width: number; height: number; scale: number }>
+    app?: string
+  }
+  media: {
+    snapshot: string
+    replay: string | null
+    replay_duration_ms?: number
+  }
+  plugins: Array<{ name: string; version: string; path: string }>
+}
+
+export type AnnotationType = 'pin' | 'arrow' | 'rect' | 'blur' | 'text'
+
+interface AnnotationBase {
+  id: string
+  type: AnnotationType
+  z: number
+  created_at: string
+}
+
+// Display color; SPEC §8.3 declares it meaningless for blur, so blur omits it.
+interface ColoredAnnotationBase extends AnnotationBase {
+  color: string
+}
+
+export interface PinAnnotation extends ColoredAnnotationBase {
+  type: 'pin'
+  x: number
+  y: number
+  label?: string
+}
+
+export interface ArrowAnnotation extends ColoredAnnotationBase {
+  type: 'arrow'
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+}
+
+export interface RectAnnotation extends ColoredAnnotationBase {
+  type: 'rect'
+  x: number
+  y: number
+  w: number
+  h: number
+  label?: string
+}
+
+export interface BlurAnnotation extends AnnotationBase {
+  type: 'blur'
+  color?: never // SPEC §8.3: SHOULD be omitted for blur — `never` keeps writers honest
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+export interface TextAnnotation extends ColoredAnnotationBase {
+  type: 'text'
+  x: number
+  y: number
+  text: string
+  size?: number
+}
+
+export type Annotation =
+  | PinAnnotation
+  | ArrowAnnotation
+  | RectAnnotation
+  | BlurAnnotation
+  | TextAnnotation
+
+export interface AnnotationsFile {
+  reference_width: number
+  reference_height: number
+  annotations: Annotation[]
+}
+
+export interface TimelineEvent {
+  t_ms: number
+  type: string
+  source: string
+  data?: Record<string, unknown>
+}
+
+export interface TimelineFile {
+  t0: string
+  events: TimelineEvent[]
+}
+
+// App settings (not part of the pack format).
+export interface Settings {
+  autoUpdateCheck: boolean
+  outputDir: string
+  copyToClipboard: boolean
+  replaySeconds: number
+  fps: number
+}

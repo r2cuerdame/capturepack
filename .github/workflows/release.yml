@@ -1,0 +1,72 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # electron-builder derives the version (artifact names, latest.yml) from
+      # core/package.json; a mismatched tag would publish an update installed
+      # apps never see, or collide with a previous release's assets.
+      - name: Verify tag matches package version
+        shell: pwsh
+        run: |
+          $version = (Get-Content core/package.json -Raw | ConvertFrom-Json).version
+          if ("v$version" -ne $env:GITHUB_REF_NAME) {
+            throw "Tag $env:GITHUB_REF_NAME does not match core/package.json version $version"
+          }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: core/package-lock.json
+
+      - name: Install dependencies
+        working-directory: core
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: core
+        run: npm run typecheck
+
+      - name: Build
+        working-directory: core
+        run: npm run build
+
+      # Publishes CapturePack-Setup-{version}.exe + latest.yml (sha512 for
+      # electron-updater verification) to the GitHub Release for this tag.
+      #
+      # Releases are UNSIGNED — accepted V1 limitation (GOAL.md: signing "when
+      # possible"; no certificate is available yet). Update integrity relies on
+      # electron-updater's sha512 check via latest.yml plus SHA256SUMS.txt below.
+      # When a certificate exists, add electron-builder win signing config and
+      # the secret here.
+      - name: Package and publish
+        working-directory: core
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run release
+
+      - name: Upload SHA256SUMS.txt
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $lines = Get-ChildItem core/release -Filter *.exe | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($_.Name)"
+          }
+          if (-not $lines) { throw "No .exe artifacts found in core/release" }
+          $sums = "core/release/SHA256SUMS.txt"
+          $lines | Out-File $sums -Encoding utf8
+          Get-Content $sums
+          gh release upload "$env:GITHUB_REF_NAME" $sums --clobber
