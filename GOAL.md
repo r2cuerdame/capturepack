@@ -116,6 +116,7 @@ Generated CapturePacks should remain readable forever.
 
 The goal of the page is not to explain the product — it is to drive the Download click.
 
+- Domain: **https://capturepack.dev** (registered at Gabia, pointed at GitHub Pages).
 - Static site served by GitHub Pages from `site/` in this repository (no separate repo).
 - One page, minimal scroll, no signup/server/database, no flashy animation.
 - A visitor must understand the product within 5 seconds; the only action is **Download**.
