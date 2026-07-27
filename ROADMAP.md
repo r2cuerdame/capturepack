@@ -4,9 +4,11 @@ This file maps the path from [GOAL.md](GOAL.md) to shippable milestones. The for
 defined in [SPEC.md](SPEC.md) — spec before code, always. This roadmap tracks sequence and honest
 status; it never overrides either document.
 
-**Status legend:** `Done` · `In progress` · `Not started`. The app typechecks, builds, and
-smoke-runs; the end-to-end capture flow has not yet been verified by daily use, and **no GitHub
-Release has shipped yet.**
+**Status legend:** `Done` · `In progress` · `Not started`.
+**Shipping since 2026-07-27:** [v0.1.1](https://github.com/r2cuerdame/capturepack/releases/latest)
+is installable from GitHub Releases, and the auto-update chain (0.1.0 → 0.1.1) has been
+verified end to end on a real install. What is *not* yet proven is the long-run habit —
+the one-month no-manual-reinstall criterion is still running.
 
 The guiding constraint for every milestone: **never sacrifice the 5-second workflow.**
 
@@ -21,17 +23,18 @@ Ctrl+Alt+C  →  capture  →  5-second annotation  →  export .capturepack  �
 | Milestone | Scope | Status |
 |---|---|---|
 | Format spec 0.1.0 | SPEC.md + JSON Schemas (`docs/schemas/`) | Done (draft) |
-| **V1 — MVP + release** | Capture, annotate (scrub timeline), export + installable auto-updating Windows release | In progress (implemented; first release pending) |
-| **V1.5 — MCP server** | Always-on read-only MCP so any AI reads packs natively | Implemented (live-usage verification pending) |
+| **V1 — MVP + release** | Capture, annotate (scrub timeline), export + installable auto-updating Windows release | **Done — shipped v0.1.0 and v0.1.1** |
+| **V1.5 — MCP server** | Always-on read-only MCP so any AI reads packs natively | Shipped in v0.1.1 (daily-use verification ongoing) |
 | **V2 — Context depth** | Timeline input events + Plugin API, Chrome extension, Plugin Manager | Extension scaffolded; rest not started |
 | **V3 — Semantic layer** | Tracked elements, object picking, AI-assisted annotation | Not started |
 
 What exists today: SPEC.md (format 0.1.0, draft) with validating schemas; a valid example pack
-and dependency-free validator (`tools/`); the full Electron app under `core/` (replay ring
-buffer, snapshot, Ctrl+Alt+C, annotation editor, exporter, tray, settings, GitHub-Releases
-updater, always-on MCP server) passing typecheck/build/smoke; CI + tag-triggered release
-workflows; the landing page
-live at **[capturepack.dev](https://capturepack.dev)**; the Chrome extension Phase 1 scaffold
+and dependency-free validator (`tools/`); the full Electron app under `core/` — replay ring
+buffer, snapshot, global hotkey, unified-box annotation editor with scrub timeline,
+folder-first exporter with README/skills/annotated replay, History screen, tray, settings GUI,
+GitHub-Releases updater, always-on MCP server — **released and auto-updating**; CI +
+tag-triggered release workflows proven twice; the landing page live at
+**[capturepack.dev](https://capturepack.dev)**; the Chrome extension Phase 1 scaffold
 (`extensions/chrome/`) and protocol v1 (`shared/protocol/`).
 
 ---
@@ -162,8 +165,8 @@ less complete without them, and nothing becomes an AI API integration (a stated 
 
 ## Later — noted, not scheduled
 
-- **Replay redaction** — blur applies to the snapshot only in 0.1.0; a future format version
-  closes the replay gap (SPEC §9.4).
+- **Sanitized sharing** — an export option that leaves the unredacted original replay and
+  snapshot out of the shared ZIP (blur already renders into `replay_annotated` only).
 - **mp4 replay** — optional ffmpeg-based export alongside webm.
 - **Open specification adoption** — other tools reading and writing `.capturepack`.
 - **Future MCP tools** — compare, merge, diff, statistics, exportPDF/HTML/Issue,
@@ -176,9 +179,9 @@ less complete without them, and nothing becomes an AI API integration (a stated 
 
 | KPI | Criteria | Status |
 |---|---|---|
-| Primary | The creator naturally uses CapturePack every day. | Not met — first release pending |
-| Secondary | Developers begin attaching CapturePack files instead of screenshots. | Not met |
-| Operational | Install once from a GitHub Release, then keep using it for a month without any manual reinstall. | Not met — no release exists |
+| Primary | The creator naturally uses CapturePack every day. | In progress — installed and in daily use since 2026-07-27 |
+| Secondary | Developers begin attaching CapturePack files instead of screenshots. | Not met — no outside users yet |
+| Operational | Install once from a GitHub Release, then keep using it for a month without any manual reinstall. | In progress — installed 2026-07-27, one auto-update received; the month is running |
 | Long-term | CapturePack becomes an open specification adopted by other tools. | Not met — spec drafted, no external adopters |
 
 ---
@@ -189,10 +192,10 @@ less complete without them, and nothing becomes an AI API integration (a stated 
 |---|---|---|---|
 | 1 | Write SPEC.md | — | Done (draft 0.1.0) |
 | 2 | Define CapturePack format | — | Done (SPEC + schemas) |
-| 3 | Build replay buffer | V1 | Done (field verification pending) |
-| 4 | Screenshot | V1 | Done |
-| 5 | Annotation editor | V1 | Done; scrub timeline + lifetime in progress |
-| 6 | Export CapturePack | V1 | Done |
+| 3 | Build replay buffer | V1 | Done (shipped) |
+| 4 | Screenshot | V1 | Done (shipped) |
+| 5 | Annotation editor | V1 | Done — unified box editor with scrub timeline and lifetimes (shipped) |
+| 6 | Export CapturePack | V1 | Done — folder-first packs with README/skills/annotated replay (shipped) |
 | 7 | Plugin API | V2 | Not started |
 | 8 | Browser plugin | V2 | Scaffolded (extension + protocol v1) |
 | 9 | Windows plugin | V2 | Not started |

@@ -2,6 +2,8 @@
 // actions), case-insensitive search with lazily loaded report/annotation text,
 // and filter chips. Kept dumb where possible: main owns the file system; every
 // action is one bridge call keyed by the pack's absolute path.
+import { applyDomI18n, makeT } from '../../shared/i18n'
+import type { TranslateFn } from '../../shared/i18n'
 import type {
   HistoryActionResult,
   HistoryListResult,
@@ -57,6 +59,10 @@ const countLabel = el<HTMLSpanElement>('countLabel')
 
 let packs: HistoryPackSummary[] = []
 let outputDir = ''
+// Active-language t(); every list result carries uiLanguage, so a language
+// change from the settings GUI reaches this window on its next re-list.
+let uiLanguage = 'en'
+let t: TranslateFn = makeT('en')
 let query = ''
 let filter: FilterId = 'all'
 
@@ -98,6 +104,11 @@ async function refresh(): Promise<void> {
     const result = await bridge.list()
     outputDir = result.outputDir
     packs = result.packs
+    if (result.uiLanguage !== uiLanguage) {
+      uiLanguage = result.uiLanguage
+      t = makeT(uiLanguage)
+      applyDomI18n(t)
+    }
     const live = new Set(packs.map((p) => p.path))
     for (const map of [thumbs, sizes, cardErrors]) {
       for (const key of [...map.keys()]) if (!live.has(key)) map.delete(key)
@@ -257,14 +268,16 @@ function render(): void {
   countLabel.textContent =
     packs.length === 0
       ? outputDir
-      : `${filtered ? `${visible.length} of ${packs.length}` : `${packs.length}`} pack${packs.length === 1 ? '' : 's'} — ${outputDir}`
+      : filtered
+        ? t('history.countFiltered', { visible: visible.length, count: packs.length, dir: outputDir })
+        : packs.length === 1
+          ? t('history.countOne', { dir: outputDir })
+          : t('history.countMany', { count: packs.length, dir: outputDir })
   countLabel.title = outputDir
   if (visible.length === 0) {
     const empty = elc('div', 'empty')
     empty.textContent =
-      packs.length === 0
-        ? 'No CapturePacks yet — press Ctrl+Alt+C to capture.'
-        : 'No packs match the current search / filter.'
+      packs.length === 0 ? t('history.emptyNoPacks') : t('history.emptyFiltered')
     listEl.append(empty)
     return
   }
@@ -306,7 +319,7 @@ function buildCard(p: HistoryPackSummary): HTMLElement {
     img.src = dataUrl
     thumbWrap.append(img)
   } else {
-    thumbWrap.append(elc('div', 'thumbPh', dataUrl === null ? 'no snapshot' : '…'))
+    thumbWrap.append(elc('div', 'thumbPh', dataUrl === null ? t('history.noSnapshot') : '…'))
   }
   card.append(thumbWrap)
 
@@ -332,19 +345,23 @@ function buildCard(p: HistoryPackSummary): HTMLElement {
   // Badges
   const badges = elc('div', 'cardBadges')
   if (p.warning !== null) {
-    const warn = elc('span', 'badge warn', 'unreadable')
+    const warn = elc('span', 'badge warn', t('history.badgeUnreadable'))
     warn.title = p.warning
     badges.append(warn)
   }
-  if (p.hasBlur) badges.append(elc('span', 'badge blur', 'blur'))
-  if (p.annotated === 'ready') badges.append(elc('span', 'badge ready', 'annotated ✓'))
+  if (p.hasBlur) badges.append(elc('span', 'badge blur', t('history.badgeBlur')))
+  if (p.annotated === 'ready') badges.append(elc('span', 'badge ready', t('history.badgeAnnotated')))
   else if (p.annotated === 'missing') {
     badges.append(
-      elc('span', 'badge missing', rendering.has(p.path) ? 'rendering…' : 'annotated missing'),
+      elc(
+        'span',
+        'badge missing',
+        rendering.has(p.path) ? t('history.badgeRendering') : t('history.badgeAnnotatedMissing'),
+      ),
     )
   }
-  if (p.zipTwin) badges.append(elc('span', 'badge', 'ZIP ✓'))
-  if (p.kind === 'zip') badges.append(elc('span', 'badge', 'zip pack'))
+  if (p.zipTwin) badges.append(elc('span', 'badge', t('history.badgeZip')))
+  if (p.kind === 'zip') badges.append(elc('span', 'badge', t('history.badgeZipPack')))
   body.append(badges)
 
   // Inline delete confirm / rename input replace the action row.
@@ -369,48 +386,48 @@ function buildActions(p: HistoryPackSummary): HTMLElement {
   const row = elc('div', 'cardActions')
 
   // [Open] — re-edit. NEXT STAGE owns the flow; main logs until it exists.
-  const openBtn = elc('button', 'primary', 'Open')
+  const openBtn = elc('button', 'primary', t('history.open'))
   openBtn.type = 'button'
   openBtn.disabled = p.kind !== 'dir'
-  if (p.kind !== 'dir') openBtn.title = 'Extract the zip to re-edit it'
+  if (p.kind !== 'dir') openBtn.title = t('history.openZipTooltip')
   openBtn.addEventListener('click', () => bridge.openPack(p.path))
   row.append(openBtn)
 
-  const playBtn = elc('button', undefined, 'Play')
+  const playBtn = elc('button', undefined, t('history.play'))
   playBtn.type = 'button'
   playBtn.disabled = p.annotated !== 'ready' || p.kind !== 'dir'
   playBtn.title =
     p.annotated === 'none'
-      ? 'This pack has no replay'
+      ? t('history.playNoReplay')
       : p.annotated === 'missing'
-        ? 'Annotated replay is not rendered yet'
-        : 'Play replay_annotated.webm'
+        ? t('history.playNotRendered')
+        : t('history.playTooltip')
   playBtn.addEventListener('click', () => {
     void bridge.play(p.path).then((result) => {
-      if (!result.ok) showCardError(p.path, result.error ?? 'Could not play')
+      if (!result.ok) showCardError(p.path, result.error ?? t('history.couldNotPlay'))
     })
   })
   row.append(playBtn)
 
-  const zipBtn = elc('button', undefined, p.zipTwin ? 'ZIP ✓' : 'Create ZIP')
+  const zipBtn = elc('button', undefined, p.zipTwin ? t('history.badgeZip') : t('toast.createZip'))
   zipBtn.type = 'button'
   zipBtn.disabled = p.zipTwin || p.kind !== 'dir'
   zipBtn.addEventListener('click', () => {
     zipBtn.disabled = true
-    zipBtn.textContent = 'Zipping…'
+    zipBtn.textContent = t('history.zipping')
     void bridge.createZip(p.path).then((result) => {
       if (result.ok) {
         p.zipTwin = true
         render()
       } else {
-        showCardError(p.path, result.error ?? 'Create ZIP failed')
+        showCardError(p.path, result.error ?? t('history.createZipFailed'))
       }
     })
   })
   row.append(zipBtn)
 
   if (p.annotated === 'missing' && p.kind === 'dir') {
-    const retryBtn = elc('button', undefined, rendering.has(p.path) ? 'Rendering…' : 'Retry Render')
+    const retryBtn = elc('button', undefined, rendering.has(p.path) ? t('history.renderingBtn') : t('history.retryRender'))
     retryBtn.type = 'button'
     retryBtn.disabled = rendering.has(p.path)
     retryBtn.addEventListener('click', () => startRerender(p))
@@ -419,7 +436,7 @@ function buildActions(p: HistoryPackSummary): HTMLElement {
 
   const moreBtn = elc('button', 'moreBtn', '⋯')
   moreBtn.type = 'button'
-  moreBtn.setAttribute('aria-label', 'More actions')
+  moreBtn.setAttribute('aria-label', t('history.moreActions'))
   moreBtn.addEventListener('click', (event) => {
     event.stopPropagation()
     openMenuFor = openMenuFor === p.path ? null : p.path
@@ -446,35 +463,35 @@ function buildMenu(p: HistoryPackSummary): HTMLElement {
     menu.append(btn)
   }
 
-  item('Open Folder', {}, () => {
+  item(t('toast.openFolder'), {}, () => {
     bridge.openFolder(p.path)
     render()
   })
-  item('Copy Folder Path', {}, () => {
+  item(t('toast.copyPath'), {}, () => {
     bridge.copyPath(p.path)
     render()
   })
-  item('Copy Prompt', {}, () => {
+  item(t('toast.copyPrompt'), {}, () => {
     bridge.copyPrompt(p.path)
     render()
   })
   menu.append(elc('div', 'menuSep'))
   item(
-    'Re-render',
+    t('history.menuRerender'),
     {
       disabled: !p.hasReplay || p.kind !== 'dir' || rendering.has(p.path),
-      title: !p.hasReplay ? 'This pack has no replay' : 'Re-render the annotated replay',
+      title: !p.hasReplay ? t('history.playNoReplay') : t('history.rerenderTooltip'),
     },
     () => startRerender(p),
   )
-  item('Rename', {}, () => {
+  item(t('history.menuRename'), {}, () => {
     renamingFor = p.path
     renameValue = p.name
     renameError = null
     render()
   })
   menu.append(elc('div', 'menuSep'))
-  item('Delete', { danger: true }, () => {
+  item(t('history.menuDelete'), { danger: true }, () => {
     deletingFor = p.path
     render()
   })
@@ -503,12 +520,12 @@ function buildRenameRow(p: HistoryPackSummary): HTMLElement {
   })
   row.append(input)
 
-  const saveBtn = elc('button', 'primary', 'Rename')
+  const saveBtn = elc('button', 'primary', t('history.menuRename'))
   saveBtn.type = 'button'
   saveBtn.addEventListener('click', () => void commitRename(p))
   row.append(saveBtn)
 
-  const cancelBtn = elc('button', undefined, 'Cancel')
+  const cancelBtn = elc('button', undefined, t('common.cancel'))
   cancelBtn.type = 'button'
   cancelBtn.addEventListener('click', () => cancelRename())
   row.append(cancelBtn)
@@ -525,7 +542,7 @@ async function commitRename(p: HistoryPackSummary): Promise<void> {
     renameError = null
     await refresh()
   } else {
-    renameError = result.error ?? 'Rename failed'
+    renameError = result.error ?? t('history.renameFailed')
     render()
   }
 }
@@ -543,23 +560,21 @@ function buildDeleteConfirm(p: HistoryPackSummary): HTMLElement {
     elc(
       'span',
       'confirmText',
-      p.kind === 'dir' && p.zipTwin
-        ? 'Move this CapturePack and its ZIP to the Recycle Bin?'
-        : 'Move this CapturePack to the Recycle Bin?',
+      p.kind === 'dir' && p.zipTwin ? t('history.deleteConfirmZip') : t('history.deleteConfirm'),
     ),
   )
-  const yesBtn = elc('button', 'danger', 'Delete')
+  const yesBtn = elc('button', 'danger', t('history.menuDelete'))
   yesBtn.type = 'button'
   yesBtn.addEventListener('click', () => {
     yesBtn.disabled = true
     void bridge.remove(p.path).then((result) => {
       deletingFor = null
-      if (!result.ok) showCardError(p.path, result.error ?? 'Delete failed')
+      if (!result.ok) showCardError(p.path, result.error ?? t('history.deleteFailed'))
       void refresh()
     })
   })
   row.append(yesBtn)
-  const noBtn = elc('button', undefined, 'Cancel')
+  const noBtn = elc('button', undefined, t('common.cancel'))
   noBtn.type = 'button'
   noBtn.addEventListener('click', () => {
     deletingFor = null
@@ -575,7 +590,7 @@ function startRerender(p: HistoryPackSummary): void {
     if (result.ok) {
       rendering.add(p.path)
     } else {
-      showCardError(p.path, result.error ?? 'Re-render failed')
+      showCardError(p.path, result.error ?? t('history.rerenderFailed'))
     }
     render()
   })
@@ -601,7 +616,7 @@ function updateThumb(packPath: string): void {
     img.src = dataUrl
     wrap.append(img)
   } else {
-    wrap.append(elc('div', 'thumbPh', 'no snapshot'))
+    wrap.append(elc('div', 'thumbPh', t('history.noSnapshot')))
   }
 }
 
@@ -618,10 +633,16 @@ function buildMetaText(p: HistoryPackSummary): string {
   if (p.app !== null) meta.push(p.app)
   const when = formatDate(p.capturedAt)
   if (when !== null) meta.push(when)
-  meta.push(p.replayDurationMs !== null ? `replay ${formatDuration(p.replayDurationMs)}` : 'screenshot only')
   meta.push(
-    `${p.annotationCount} annotation${p.annotationCount === 1 ? '' : 's'}` +
-      (p.numberedCount > 0 ? ` (${p.numberedCount} numbered)` : ''),
+    p.replayDurationMs !== null
+      ? t('history.metaReplay', { duration: formatDuration(p.replayDurationMs) })
+      : t('history.metaScreenshotOnly'),
+  )
+  meta.push(
+    (p.annotationCount === 1
+      ? t('history.metaAnnotationsOne')
+      : t('history.metaAnnotationsMany', { count: p.annotationCount })) +
+      (p.numberedCount > 0 ? ` (${t('history.metaNumbered', { count: p.numberedCount })})` : ''),
   )
   const bytes = sizes.get(p.path)
   if (typeof bytes === 'number') meta.push(formatBytes(bytes))
@@ -731,7 +752,7 @@ bridge.onRenderStatus((payload) => {
   } else {
     rendering.delete(payload.path)
     if (payload.state === 'failed') {
-      cardErrors.set(payload.path, 'Annotated replay render failed — try Retry Render')
+      cardErrors.set(payload.path, t('history.renderFailedCard'))
     } else {
       cardErrors.delete(payload.path)
     }

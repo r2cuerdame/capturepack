@@ -6,52 +6,64 @@
     http-equiv="Content-Security-Policy"
     content="default-src 'self'; script-src 'self'; style-src 'self'"
   />
-  <title>CapturePack — Settings</title>
+  <title data-i18n="settings.windowTitle">CapturePack — Settings</title>
   <link rel="stylesheet" href="./settings.css" />
 </head>
 <body>
   <main id="content">
 
     <section aria-labelledby="hGeneral">
-      <h2 id="hGeneral">General</h2>
+      <h2 id="hGeneral" data-i18n="settings.general">General</h2>
+      <div class="row">
+        <label class="label" for="language" data-i18n="settings.language">Language</label>
+        <span class="control">
+          <select id="language"></select>
+        </span>
+      </div>
+      <div class="row">
+        <label class="label" for="packLanguage" data-i18n="settings.packLanguage">Pack document language</label>
+        <span class="control">
+          <select id="packLanguage"></select>
+        </span>
+      </div>
       <div class="row rowCol">
         <div class="rowTop">
-          <span class="label" id="outputDirLabel">Output folder</span>
-          <span class="hint" id="outputDirHint" hidden>restart CapturePack so MCP indexes the new folder</span>
+          <span class="label" id="outputDirLabel" data-i18n="settings.outputFolder">Output folder</span>
+          <span class="hint" id="outputDirHint" hidden data-i18n="settings.outputDirHint">restart CapturePack so MCP indexes the new folder</span>
         </div>
         <div class="pathRow">
           <div class="path" id="outputPath" aria-labelledby="outputDirLabel"></div>
-          <button id="changeOutputBtn" type="button">Change…</button>
-          <button id="openOutputBtn" type="button">Open</button>
+          <button id="changeOutputBtn" type="button" data-i18n="settings.change">Change…</button>
+          <button id="openOutputBtn" type="button" data-i18n="settings.openBtn">Open</button>
         </div>
       </div>
       <label class="row toggleRow">
-        <span class="label">Copy saved pack to clipboard</span>
+        <span class="label" data-i18n="settings.copyToClipboard">Copy saved pack to clipboard</span>
         <input type="checkbox" id="copyToClipboard" />
       </label>
       <label class="row toggleRow">
-        <span class="label">Check for updates automatically</span>
+        <span class="label" data-i18n="settings.autoUpdate">Check for updates automatically</span>
         <input type="checkbox" id="autoUpdateCheck" />
       </label>
     </section>
 
     <section aria-labelledby="hCapture">
-      <h2 id="hCapture">Capture</h2>
+      <h2 id="hCapture" data-i18n="settings.captureSection">Capture</h2>
       <div class="row">
-        <label class="label" for="captureDisplay">Capture display</label>
+        <label class="label" for="captureDisplay" data-i18n="settings.captureDisplay">Capture display</label>
         <span class="control">
           <select id="captureDisplay"></select>
         </span>
       </div>
       <div class="row">
-        <label class="label" for="replaySeconds">Replay length</label>
+        <label class="label" for="replaySeconds" data-i18n="settings.replayLength">Replay length</label>
         <span class="control">
           <input type="number" id="replaySeconds" min="10" max="60" step="1" />
           <span class="unit">s</span>
         </span>
       </div>
       <div class="row">
-        <label class="label" for="fps">Capture FPS</label>
+        <label class="label" for="fps" data-i18n="settings.captureFps">Capture FPS</label>
         <span class="control">
           <input type="number" id="fps" min="5" max="30" step="1" />
           <span class="unit">fps</span>
@@ -60,115 +72,115 @@
     </section>
 
     <section aria-labelledby="hAnnotation">
-      <h2 id="hAnnotation">Annotation</h2>
+      <h2 id="hAnnotation" data-i18n="settings.annotationSection">Annotation</h2>
       <div class="row">
-        <label class="label" for="defaultManualDuration">Default manual duration</label>
+        <label class="label" for="defaultManualDuration" data-i18n="settings.defaultManualDuration">Default manual duration</label>
         <span class="control">
           <input type="number" id="defaultManualDuration" min="0.5" max="10" step="0.5" />
           <span class="unit">s</span>
         </span>
       </div>
       <label class="row toggleRow">
-        <span class="label">Show duration label on selected annotation</span>
+        <span class="label" data-i18n="settings.showDurationLabel">Show duration label on selected annotation</span>
         <input type="checkbox" id="showDurationLabel" />
       </label>
       <label class="row toggleRow">
-        <span class="label">Invert scrub wheel direction</span>
+        <span class="label" data-i18n="settings.scrubInvert">Invert scrub wheel direction</span>
         <input type="checkbox" id="scrubInvert" />
       </label>
       <div class="row">
-        <label class="label" for="scrubSensitivityMs">Scrub sensitivity</label>
+        <label class="label" for="scrubSensitivityMs" data-i18n="settings.scrubSensitivity">Scrub sensitivity</label>
         <span class="control">
           <input type="number" id="scrubSensitivityMs" min="50" max="1000" step="10" />
-          <span class="unit">ms / notch</span>
+          <span class="unit" data-i18n="settings.unitMsNotch">ms / notch</span>
         </span>
       </div>
     </section>
 
     <section aria-labelledby="hMcp">
-      <h2 id="hMcp">MCP <span class="badge">read-only</span></h2>
+      <h2 id="hMcp">MCP <span class="badge" data-i18n="settings.readOnlyBadge">read-only</span></h2>
       <label class="row toggleRow">
         <span class="labelWrap">
-          <span class="label">Enable MCP server</span>
-          <span class="hint" id="mcpEnabledHint" hidden>restart CapturePack to apply</span>
+          <span class="label" data-i18n="settings.mcpEnable">Enable MCP server</span>
+          <span class="hint" id="mcpEnabledHint" hidden data-i18n="settings.restartToApply">restart CapturePack to apply</span>
         </span>
         <input type="checkbox" id="mcpEnabled" />
       </label>
       <label class="row toggleRow">
         <span class="labelWrap">
-          <span class="label">Start automatically</span>
-          <span class="hint" id="mcpAutoStartHint" hidden>restart CapturePack to apply</span>
+          <span class="label" data-i18n="settings.mcpAutoStart">Start automatically</span>
+          <span class="hint" id="mcpAutoStartHint" hidden data-i18n="settings.restartToApply">restart CapturePack to apply</span>
         </span>
         <input type="checkbox" id="mcpAutoStart" />
       </label>
       <div class="row">
-        <label class="label" for="mcpPort">Port</label>
+        <label class="label" for="mcpPort" data-i18n="settings.mcpPort">Port</label>
         <span class="control">
-          <span class="hint" id="mcpPortHint" hidden>restart CapturePack to apply</span>
+          <span class="hint" id="mcpPortHint" hidden data-i18n="settings.restartToApply">restart CapturePack to apply</span>
           <input type="number" id="mcpPort" min="1024" max="65535" step="1" />
         </span>
       </div>
       <label class="row toggleRow">
         <span class="labelWrap">
-          <span class="label">Watch export folder</span>
-          <span class="hint" id="mcpWatchExportFolderHint" hidden>restart CapturePack to apply</span>
+          <span class="label" data-i18n="settings.mcpWatch">Watch export folder</span>
+          <span class="hint" id="mcpWatchExportFolderHint" hidden data-i18n="settings.restartToApply">restart CapturePack to apply</span>
         </span>
         <input type="checkbox" id="mcpWatchExportFolder" />
       </label>
       <label class="row toggleRow">
-        <span class="label">Log requests</span>
+        <span class="label" data-i18n="settings.mcpLog">Log requests</span>
         <input type="checkbox" id="mcpLogRequests" />
       </label>
       <div class="row">
-        <span class="label" id="mcpUrlLabel">Connection URL</span>
+        <span class="label" id="mcpUrlLabel" data-i18n="settings.mcpUrl">Connection URL</span>
         <span class="control">
           <code id="mcpUrl" aria-labelledby="mcpUrlLabel"></code>
-          <button id="copyUrlBtn" type="button">Copy</button>
+          <button id="copyUrlBtn" type="button" data-i18n="settings.copy">Copy</button>
         </span>
       </div>
     </section>
 
     <section aria-labelledby="hPlugins">
-      <h2 id="hPlugins">Plugins</h2>
+      <h2 id="hPlugins" data-i18n="settings.pluginsSection">Plugins</h2>
       <div class="pluginRow">
         <span class="pluginIcon" aria-hidden="true">🟣</span>
         <span class="pluginName">Chrome DOM</span>
-        <span class="pluginStatus">Not installed</span>
+        <span class="pluginStatus" data-i18n="settings.notInstalled">Not installed</span>
         <span class="pluginAction">
-          <button type="button" disabled title="Coming soon">Install</button>
-          <span class="soon">coming soon</span>
+          <button type="button" disabled title="Coming soon" data-i18n-title="settings.comingSoon" data-i18n="settings.install">Install</button>
+          <span class="soon" data-i18n="settings.comingSoonLower">coming soon</span>
         </span>
       </div>
       <div class="pluginRow">
         <span class="pluginIcon" aria-hidden="true">⚪</span>
         <span class="pluginName">Windows UI Automation</span>
-        <span class="pluginStatus">Coming soon</span>
+        <span class="pluginStatus" data-i18n="settings.comingSoon">Coming soon</span>
       </div>
       <div class="pluginRow">
         <span class="pluginIcon" aria-hidden="true">⚪</span>
         <span class="pluginName">Unity</span>
-        <span class="pluginStatus">Coming soon</span>
+        <span class="pluginStatus" data-i18n="settings.comingSoon">Coming soon</span>
       </div>
       <div class="pluginRow">
         <span class="pluginIcon" aria-hidden="true">⚪</span>
         <span class="pluginName">Unreal</span>
-        <span class="pluginStatus">Coming soon</span>
+        <span class="pluginStatus" data-i18n="settings.comingSoon">Coming soon</span>
       </div>
       <div class="pluginRow">
         <span class="pluginIcon" aria-hidden="true">⚪</span>
         <span class="pluginName">VS Code</span>
-        <span class="pluginStatus">Coming soon</span>
+        <span class="pluginStatus" data-i18n="settings.comingSoon">Coming soon</span>
       </div>
       <div class="pluginRow">
         <span class="pluginIcon" aria-hidden="true">⚪</span>
         <span class="pluginName">Git</span>
-        <span class="pluginStatus">Coming soon</span>
+        <span class="pluginStatus" data-i18n="settings.comingSoon">Coming soon</span>
       </div>
     </section>
 
     <footer id="about">
       <span id="appVersion"></span>
-      <span id="escHint">Esc closes</span>
+      <span id="escHint" data-i18n="common.escCloses">Esc closes</span>
     </footer>
 
   </main>

@@ -1,7 +1,10 @@
-// System tray icon and context menu.
+// System tray icon and context menu. Labels come from the shared i18n layer;
+// refreshLanguage() rebuilds the menu the moment the language setting changes.
 import { app, Menu, Tray } from 'electron'
 import type { MenuItemConstructorOptions } from 'electron'
 import * as path from 'node:path'
+import { makeT } from '../shared/i18n'
+import type { Language } from '../shared/i18n'
 
 export interface TrayHandlers {
   onCapture: () => void
@@ -14,31 +17,37 @@ export interface TrayHandlers {
 
 export interface TrayControls {
   setUpdateReady(version: string | null): void
+  /** Rebuilds the menu with the current language (settings GUI instant apply). */
+  refreshLanguage(): void
 }
 
-export function createTray(handlers: TrayHandlers): TrayControls {
+export function createTray(handlers: TrayHandlers, getLanguage: () => Language): TrayControls {
   const tray = new Tray(path.join(app.getAppPath(), 'dist', 'assets', 'tray.png'))
-  tray.setToolTip('CapturePack')
+  tray.setToolTip('CapturePack') // product name — never translated
 
   let updateVersion: string | null = null
 
   const rebuildMenu = (): void => {
+    const t = makeT(getLanguage())
     // Menu order (GOAL "History" navigation):
     // Capture now · History · Open output folder · Open settings
     const items: MenuItemConstructorOptions[] = [
-      { label: 'Capture now  Ctrl+Alt+C', click: () => handlers.onCapture() },
-      { label: 'History', click: () => handlers.onOpenHistory() },
-      { label: 'Open output folder', click: () => handlers.onOpenOutput() },
-      { label: 'Settings…', click: () => handlers.onOpenSettings() },
+      { label: t('tray.captureNow'), click: () => handlers.onCapture() },
+      { label: t('tray.history'), click: () => handlers.onOpenHistory() },
+      { label: t('tray.openOutput'), click: () => handlers.onOpenOutput() },
+      { label: t('tray.settings'), click: () => handlers.onOpenSettings() },
       { type: 'separator' },
     ]
     if (updateVersion !== null) {
       items.push(
-        { label: `Restart and update (v${updateVersion})`, click: () => handlers.onRestartUpdate() },
+        {
+          label: t('tray.restartUpdate', { version: updateVersion }),
+          click: () => handlers.onRestartUpdate(),
+        },
         { type: 'separator' },
       )
     }
-    items.push({ label: 'Quit CapturePack', click: () => handlers.onQuit() })
+    items.push({ label: t('tray.quit'), click: () => handlers.onQuit() })
     tray.setContextMenu(Menu.buildFromTemplate(items))
   }
 
@@ -47,6 +56,9 @@ export function createTray(handlers: TrayHandlers): TrayControls {
   return {
     setUpdateReady(version: string | null): void {
       updateVersion = version
+      rebuildMenu()
+    },
+    refreshLanguage(): void {
       rebuildMenu()
     },
   }

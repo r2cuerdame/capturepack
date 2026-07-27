@@ -21,12 +21,12 @@ CapturePack is an open-source context capture format and toolkit that helps huma
   <img src="site/assets/demo.svg" alt="Demo: press Ctrl+Alt+C, the last 30 seconds freeze, the mouse wheel scrubs through time, drag to select the object, write the annotation, and issue.capturepack is exported." width="760">
 </p>
 
-A `.capturepack` file bundles what a screenshot cannot: the last 30 seconds of replay, a snapshot, editable annotations, a machine-readable event timeline, and a human-readable report — everything another developer or any LLM needs to immediately understand the situation.
+A CapturePack **folder** bundles what a screenshot cannot: the last 30 seconds of replay, a snapshot, editable annotations, a machine-readable event timeline, and human- and AI-readable reports — everything another developer or any LLM needs to immediately understand the situation. When you need to share it, package the folder as a single `.capturepack` file.
 
 ## The 5-second workflow
 
 ```
-Ctrl+Alt+C  →  capture  →  5-second annotation  →  export  →  drop into
+Ctrl+Alt+C  →  capture  →  5-second annotation  →  save  →  drop into
                                                               ChatGPT / Claude / Codex / Cursor / Gemini
                                                               or send to another developer
 ```

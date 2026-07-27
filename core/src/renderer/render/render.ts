@@ -44,6 +44,13 @@ async function renderAnnotated(job: RenderStartPayload): Promise<ArrayBuffer> {
   video.src = URL.createObjectURL(new Blob([job.replayWebm], { type: 'video/webm' }))
   await videoReady(video)
 
+  // Plain-trim range (GOAL "Replay Trim"): play only [trimStartMs, trimEndMs]
+  // of the source. Absent fields = 0 / the video end — the classic full-range
+  // annotated render takes exactly the code path it always did.
+  const trimStartMs = job.trimStartMs ?? 0
+  const trimEndMs = job.trimEndMs
+  if (trimStartMs > 0) await videoSeek(video, trimStartMs / 1000)
+
   const canvas = document.createElement('canvas')
   canvas.width = job.width
   canvas.height = job.height
@@ -98,13 +105,21 @@ async function renderAnnotated(job: RenderStartPayload): Promise<ArrayBuffer> {
   // Real-time render: the video plays once while every presented frame is
   // composited. requestVideoFrameCallback ties drawing to decoded frames;
   // backgroundThrottling is disabled on this hidden window so it keeps firing.
+  let reachedTrimEnd = (): void => {}
   const done = new Promise<void>((resolve, reject) => {
+    reachedTrimEnd = resolve
     video.onended = () => resolve()
     video.onerror = () => reject(new Error('replay video failed to decode'))
   })
   const scheduleDraw = (): void => {
     if (video.ended) return
     drawFrame()
+    // Out-point reached: stop like 'ended' would, holding the current frame.
+    if (trimEndMs !== undefined && video.currentTime * 1000 >= trimEndMs) {
+      video.pause()
+      reachedTrimEnd()
+      return
+    }
     video.requestVideoFrameCallback(() => scheduleDraw())
   }
   recorder.start(1000)
@@ -127,6 +142,19 @@ function videoReady(video: HTMLVideoElement): Promise<void> {
   return new Promise((resolve, reject) => {
     video.onloadeddata = () => resolve()
     video.onerror = () => reject(new Error('replay video failed to load'))
+  })
+}
+
+/** Seeks to the trim in-point before recording starts (cue-less MediaRecorder
+ * webm resolves mid-file seeks by parsing — same mechanism the editor scrubs with). */
+function videoSeek(video: HTMLVideoElement, seconds: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    video.onseeked = () => {
+      video.onseeked = null
+      resolve()
+    }
+    video.onerror = () => reject(new Error('replay video failed to seek'))
+    video.currentTime = seconds
   })
 }
 

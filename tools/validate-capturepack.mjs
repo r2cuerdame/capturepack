@@ -332,6 +332,17 @@ function validateManifest(m, pack) {
         pass(`manifest.json: media.snapshot_t_ms is ${media.snapshot_t_ms} ms into the replay (frame-accurate snapshot, SPEC §7.1)`);
       }
     }
+
+    // trim_offset_ms (trimmed-replay provenance, SPEC §5.3) — null is reported by checkNoNulls
+    if (media.trim_offset_ms !== undefined && media.trim_offset_ms !== null) {
+      if (!isInt(media.trim_offset_ms) || media.trim_offset_ms < 0) {
+        fail(`manifest.json: media.trim_offset_ms ${JSON.stringify(media.trim_offset_ms)} MUST be an integer >= 0 (SPEC §5.3)`);
+      } else if (!replay) {
+        note(`manifest.json: media.trim_offset_ms is ${media.trim_offset_ms} but replay is null — trim provenance SHOULD be absent when there is no replay (SPEC §5.3)`);
+      } else {
+        pass(`manifest.json: media.trim_offset_ms is ${media.trim_offset_ms} — the replay was trimmed from the original recording at that in-point (provenance only; all pack times are on the trimmed clock, SPEC §5.3)`);
+      }
+    }
   }
 
   // media declarations vs actual files

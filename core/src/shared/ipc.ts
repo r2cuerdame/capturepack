@@ -142,6 +142,9 @@ export interface EditorInitPayload {
   // tracking shows the "Unsaved changes" chip, and Esc when dirty offers
   // [Save] [Save As New CapturePack] [Discard] instead of closing.
   editMode: boolean
+  // Resolved UI language (shared/i18n Language) the editor renders its
+  // chrome in. Fixed for the session — the editor window is transient.
+  uiLanguage: string
 }
 
 export interface EditorAnnotationAddedPayload {
@@ -162,6 +165,13 @@ export interface EditorExportPayload {
   includeReplay: boolean
   // Replay position (ms) of the exported frame; null = the capture instant ("now")
   snapshotTMs: number | null
+  // Replay trim range (GOAL "Replay Trim") on the replay clock. null on a
+  // side = that side is untrimmed (start = 0 / end = the replay end); both
+  // null = full range, no trim. FRESH capture flow only: in editMode the trim
+  // handles are hidden and the payload is always null/null — a saved pack's
+  // replay is already the original evidence and is never trimmed further.
+  trimStartMs: number | null
+  trimEndMs: number | null
 }
 
 // main -> hidden render window: one annotated-replay render job (SPEC §7.2).
@@ -175,8 +185,15 @@ export interface RenderStartPayload {
   width: number
   height: number
   fps: number
-  // manifest replay_duration_ms — the lifetime clock cap
+  // manifest replay_duration_ms of the SOURCE video — the lifetime clock cap
   durationMs: number
+  // Plain-trim render mode (GOAL "Replay Trim"): when set, only the
+  // [trimStartMs, trimEndMs] range of the source video is played and recorded
+  // (absent = 0 / the video end). The SAME pipeline serves both jobs: the
+  // annotated render (no trim fields, overlays drawn) and the plain trim that
+  // produces the trimmed replay.webm (trim range + an EMPTY annotation set).
+  trimStartMs?: number
+  trimEndMs?: number
 }
 
 export interface RenderResultPayload {
@@ -186,7 +203,10 @@ export interface RenderResultPayload {
   error?: string
 }
 
-export type ToastRenderState = 'none' | 'rendering' | 'done' | 'failed'
+// 'trimming' = the plain-trim render is producing the trimmed replay bytes
+// (GOAL "Replay Trim") — it precedes 'rendering' (the annotated render) when
+// the save carries an active trim.
+export type ToastRenderState = 'none' | 'trimming' | 'rendering' | 'done' | 'failed'
 
 export interface ToastInitPayload {
   folderName: string
@@ -194,6 +214,8 @@ export interface ToastInitPayload {
   // Any blur box in the pack: show the unredacted-original warning line
   hasBlur: boolean
   renderState: ToastRenderState
+  // Resolved UI language (shared/i18n Language) for the toast strings.
+  uiLanguage: string
 }
 
 export interface ToastRenderStatusPayload {
@@ -236,6 +258,11 @@ export interface SettingsGetResult {
   // e.g. "http://127.0.0.1:39393/mcp" — the port the RUNNING server listens on
   // (the boot-time mcpPort), not the configured port a pending change would use
   mcpUrl: string
+  // Resolved UI language right now (settings.language with "system" resolved).
+  uiLanguage: string
+  // What "system" resolves to on this machine — lets the renderer re-resolve
+  // the language locally the moment the dropdown changes (instant apply).
+  systemLanguage: string
 }
 
 export interface SettingsSetResult {
@@ -281,6 +308,9 @@ export interface HistoryListResult {
   outputDir: string
   // Newest-first, same order as the MCP pack index
   packs: HistoryPackSummary[]
+  // Resolved UI language; the window re-applies it on every re-list, which is
+  // how a language change reaches an already-open History window.
+  uiLanguage: string
 }
 
 export interface HistoryActionResult {

@@ -2,6 +2,7 @@
 import { app } from 'electron'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import { isSupportedLanguage } from '../shared/i18n'
 import type { Settings } from '../shared/types'
 
 export function settingsFilePath(): string {
@@ -10,6 +11,8 @@ export function settingsFilePath(): string {
 
 function defaultSettings(): Settings {
   return {
+    language: 'system',
+    packLanguage: 'ui',
     autoUpdateCheck: true,
     outputDir: path.join(app.getPath('desktop'), 'CapturePack'),
     copyToClipboard: true,
@@ -131,6 +134,8 @@ function onDiskOutputDir(): string {
 // Exhaustive by construction: Record<keyof Settings, true> fails to compile
 // when Settings gains or loses a key, keeping GUI patch filtering in sync.
 const SETTINGS_KEY_SET: Record<keyof Settings, true> = {
+  language: true,
+  packLanguage: true,
   autoUpdateCheck: true,
   outputDir: true,
   copyToClipboard: true,
@@ -169,10 +174,26 @@ function isCaptureDisplay(value: string): boolean {
   return value === 'cursor' || /^\d+$/.test(value)
 }
 
+// "system" (resolve from app.getLocale() at use time) or a supported language.
+function isUiLanguage(value: string): boolean {
+  return value === 'system' || isSupportedLanguage(value)
+}
+
+// "ui" (follow the resolved UI language) or a supported language.
+function isPackLanguage(value: string): boolean {
+  return value === 'ui' || isSupportedLanguage(value)
+}
+
 // Known keys are validated against defaults; unknown keys ride along so a newer
 // version's settings survive a downgrade.
 function mergeSettings(base: Settings, raw: Record<string, unknown>): Settings {
   const known: Settings = {
+    language:
+      typeof raw.language === 'string' && isUiLanguage(raw.language) ? raw.language : base.language,
+    packLanguage:
+      typeof raw.packLanguage === 'string' && isPackLanguage(raw.packLanguage)
+        ? raw.packLanguage
+        : base.packLanguage,
     autoUpdateCheck: typeof raw.autoUpdateCheck === 'boolean' ? raw.autoUpdateCheck : base.autoUpdateCheck,
     outputDir: typeof raw.outputDir === 'string' && raw.outputDir.length > 0 ? raw.outputDir : base.outputDir,
     copyToClipboard: typeof raw.copyToClipboard === 'boolean' ? raw.copyToClipboard : base.copyToClipboard,

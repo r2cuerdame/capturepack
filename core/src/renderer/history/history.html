@@ -6,7 +6,7 @@
     http-equiv="Content-Security-Policy"
     content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:"
   />
-  <title>CapturePack — History</title>
+  <title data-i18n="history.windowTitle">CapturePack — History</title>
   <link rel="stylesheet" href="./history.css" />
 </head>
 <body>
@@ -15,22 +15,23 @@
       id="search"
       type="search"
       placeholder="Search title, report, app, annotations, date…"
+      data-i18n-placeholder="history.searchPlaceholder"
       spellcheck="false"
       autocomplete="off"
     />
-    <nav id="filters" aria-label="Filters">
-      <button type="button" class="chip active" data-filter="all">All</button>
-      <button type="button" class="chip" data-filter="today">Today</button>
-      <button type="button" class="chip" data-filter="week">This Week</button>
-      <button type="button" class="chip" data-filter="blur">Has Blur</button>
-      <button type="button" class="chip" data-filter="renderfailed">Render Failed</button>
-      <button type="button" class="chip" data-filter="notpackaged">Not Packaged</button>
+    <nav id="filters" aria-label="Filters" data-i18n-aria-label="history.filtersAria">
+      <button type="button" class="chip active" data-filter="all" data-i18n="history.filterAll">All</button>
+      <button type="button" class="chip" data-filter="today" data-i18n="history.filterToday">Today</button>
+      <button type="button" class="chip" data-filter="week" data-i18n="history.filterWeek">This Week</button>
+      <button type="button" class="chip" data-filter="blur" data-i18n="history.filterBlur">Has Blur</button>
+      <button type="button" class="chip" data-filter="renderfailed" data-i18n="history.filterRenderFailed">Render Failed</button>
+      <button type="button" class="chip" data-filter="notpackaged" data-i18n="history.filterNotPackaged">Not Packaged</button>
     </nav>
   </header>
   <main id="list" aria-live="polite"></main>
   <footer id="statusbar">
     <span id="countLabel"></span>
-    <span id="escHint">Esc closes</span>
+    <span id="escHint" data-i18n="common.escCloses">Esc closes</span>
   </footer>
   <script src="./history.js"></script>
 </body>

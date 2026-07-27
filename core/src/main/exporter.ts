@@ -10,6 +10,7 @@ import { release } from 'node:os'
 import { dirname, join } from 'node:path'
 import { app, screen } from 'electron'
 import AdmZip from 'adm-zip'
+import type { Language } from '../shared/i18n'
 import type {
   Annotation,
   AnnotationsFile,
@@ -35,11 +36,19 @@ export interface ExportInput {
   note: string
   // Replay position (ms) of the exported snapshot frame; null = the capture instant
   snapshotTMs: number | null
+  // Manifest media.trim_offset_ms (GOAL "Replay Trim"): the in-point (ms) in
+  // the original recording that replayWebm was trimmed from — provenance only.
+  // Absent/null = the replay was never trimmed. On re-edit this carries the
+  // LOADED manifest's value through (re-edit can never trim further).
+  trimOffsetMs?: number | null
   timeline: TimelineFile
   // Plugin declarations carried through from a loaded manifest on re-edit
   // (external packs — the current exporter never writes its own). Absent = [].
   plugins?: Manifest['plugins']
   copyToClipboard: boolean
+  // Pack document language (GOAL i18n, packLanguage setting): the language the
+  // regenerated README/report/skills templates are written in. Absent = en.
+  docLanguage?: Language
 }
 
 export interface ManifestInput {
@@ -53,6 +62,9 @@ export interface ManifestInput {
   hasReplay: boolean
   replayDurationMs: number
   snapshotTMs: number | null
+  // media.trim_offset_ms (provenance only, GOAL "Replay Trim"); absent/null =
+  // never trimmed. Only written alongside a replay.
+  trimOffsetMs?: number | null
   // Carried through from a loaded manifest on re-edit; absent = [] (fresh packs).
   plugins?: Manifest['plugins']
 }
@@ -93,6 +105,13 @@ export function buildManifest(input: ManifestInput): Manifest {
         input.replayDurationMs,
       )
     }
+    // trim_offset_ms is provenance only (GOAL "Replay Trim"): where in the
+    // original recording the trimmed replay begins. Every other time in the
+    // pack is already on the trimmed clock. Never written without a replay.
+    const trimOffsetMs = input.trimOffsetMs
+    if (typeof trimOffsetMs === 'number' && trimOffsetMs >= 0) {
+      manifest.media.trim_offset_ms = Math.round(trimOffsetMs)
+    }
   }
   return manifest
 }
@@ -125,6 +144,8 @@ export interface InitialSaveInput {
   replayDurationMs: number
   timeline: TimelineFile
   outputDir: string
+  // Pack document language for the save-first docs (same as ExportInput's).
+  docLanguage?: Language
 }
 
 /**
@@ -161,7 +182,7 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
   const dirPath = uniquePackDir(input.outputDir, input.capturedAt)
   try {
     await mkdir(dirPath)
-    await writePackFiles(dirPath, manifest, annotationsFile, input.timeline)
+    await writePackFiles(dirPath, manifest, annotationsFile, input.timeline, input.docLanguage)
     await writeFile(join(dirPath, 'snapshot.png'), input.snapshotPng)
     if (input.replayWebm !== null) {
       await writeFile(join(dirPath, 'replay.webm'), input.replayWebm)
@@ -207,6 +228,7 @@ export async function updatePack(
     hasReplay,
     replayDurationMs: input.replayDurationMs,
     snapshotTMs: input.snapshotTMs,
+    trimOffsetMs: input.trimOffsetMs,
     plugins: input.plugins,
   })
   const annotationsFile: AnnotationsFile = {
@@ -217,7 +239,7 @@ export async function updatePack(
   // Save time (not capturedAt) — this event records when the pack was written.
   const timeline = withExportEvent(input.timeline, new Date())
 
-  await writePackFiles(handle.dirPath, manifest, annotationsFile, timeline)
+  await writePackFiles(handle.dirPath, manifest, annotationsFile, timeline, input.docLanguage)
   await writeFile(join(handle.dirPath, 'snapshot.png'), input.snapshotPng)
   // A stale annotated replay must never outlive the annotations that produced
   // it: the background render rewrites it (and re-declares it in the manifest)
@@ -259,6 +281,7 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
     hasReplay,
     replayDurationMs: input.replayDurationMs,
     snapshotTMs: input.snapshotTMs,
+    trimOffsetMs: input.trimOffsetMs,
     plugins: input.plugins,
   })
   const annotationsFile: AnnotationsFile = {
@@ -273,7 +296,7 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
   const dirPath = uniquePackDir(dirname(sourceDir), new Date())
   try {
     await mkdir(dirPath)
-    await writePackFiles(dirPath, manifest, annotationsFile, timeline)
+    await writePackFiles(dirPath, manifest, annotationsFile, timeline, input.docLanguage)
     await writeFile(join(dirPath, 'snapshot.png'), input.snapshotPng)
     if (hasReplay) await copyFile(srcReplay, join(dirPath, 'replay.webm'))
     // Plugin payloads (external packs): the files travel with their manifest
@@ -298,15 +321,16 @@ async function writePackFiles(
   manifest: Manifest,
   annotationsFile: AnnotationsFile,
   timeline: TimelineFile,
+  docLanguage: Language = 'en',
 ): Promise<void> {
-  const skills = buildSkills(manifest, annotationsFile, timeline)
+  const skills = buildSkills(manifest, annotationsFile, timeline, docLanguage)
   await mkdir(join(dirPath, 'skills'), { recursive: true })
   await mkdir(join(dirPath, 'plugins'), { recursive: true })
   await writeFile(join(dirPath, 'manifest.json'), toJson(manifest))
   await writeFile(join(dirPath, 'annotations.json'), toJson(annotationsFile))
   await writeFile(join(dirPath, 'timeline.json'), toJson(timeline))
-  await writeFile(join(dirPath, 'report.md'), buildReport(manifest, annotationsFile), 'utf8')
-  await writeFile(join(dirPath, 'README.md'), buildReadme(manifest, annotationsFile), 'utf8')
+  await writeFile(join(dirPath, 'report.md'), buildReport(manifest, annotationsFile, docLanguage), 'utf8')
+  await writeFile(join(dirPath, 'README.md'), buildReadme(manifest, annotationsFile, docLanguage), 'utf8')
   for (const name of SKILLS_FILES) {
     await writeFile(join(dirPath, 'skills', `${name}.md`), skills[name], 'utf8')
   }

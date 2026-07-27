@@ -1,6 +1,13 @@
 // Builds report.md — the generated narrative of a pack (SPEC §12.1).
 // Pure functions only; no Electron or filesystem access.
+//
+// i18n scope (GOAL "Internationalization", packLanguage): template HEADINGS
+// and short labels are localized via the pack.* dictionary keys; explanatory
+// PROSE stays English on purpose so the generated documents remain canonical
+// for AI readers. The user's own title/note text is NEVER translated.
 
+import { makeT } from '../shared/i18n'
+import type { Language, TranslateFn } from '../shared/i18n'
 import type { Annotation, AnnotationsFile, Manifest } from '../shared/types'
 import { computeDisplayNumbers } from '../shared/numbering'
 
@@ -29,8 +36,8 @@ export function humanDate(iso: string): string {
 }
 
 /** "00:03.200–00:04.200" for a lifetime box, or "entire capture" without one. */
-export function lifetimeLabel(a: Annotation): string {
-  if (a.start_ms === undefined || a.end_ms === undefined) return 'entire capture'
+export function lifetimeLabel(a: Annotation, t: TranslateFn = makeT('en')): string {
+  if (a.start_ms === undefined || a.end_ms === undefined) return t('pack.entireCapture')
   return `${formatClock(a.start_ms)}–${formatClock(a.end_ms)}`
 }
 
@@ -38,8 +45,8 @@ export function lifetimeLabel(a: Annotation): string {
  * One human-readable line per box (without the display number), e.g.
  * `00:03.200–00:04.200 — "Submit overflows" — box at (612, 340) size 306×180, blur`.
  */
-export function describeAnnotation(a: Annotation): string {
-  const parts: string[] = [lifetimeLabel(a)]
+export function describeAnnotation(a: Annotation, t: TranslateFn = makeT('en')): string {
+  const parts: string[] = [lifetimeLabel(a, t)]
   if (a.text.trim() !== '') parts.push(`"${a.text.trim()}"`)
   const b = a.bounds
   const flags = a.blur ? ', blur' : ''
@@ -47,51 +54,57 @@ export function describeAnnotation(a: Annotation): string {
   return parts.join(' — ')
 }
 
-export function buildReport(manifest: Manifest, annotationsFile: AnnotationsFile): string {
+export function buildReport(
+  manifest: Manifest,
+  annotationsFile: AnnotationsFile,
+  lang: Language = 'en',
+): string {
+  const t = makeT(lang)
   const lines: string[] = []
 
-  lines.push(`# ${manifest.title ?? 'CapturePack capture'}`)
+  // The user's own title is never translated; only the fallback is localized.
+  lines.push(`# ${manifest.title ?? t('pack.untitled')}`)
   lines.push('')
-  lines.push(`- **Captured:** ${humanDate(manifest.created_at)}`)
-  lines.push(`- **Pack ID:** ${manifest.id}`)
-  lines.push(`- **Generator:** ${manifest.generator.name} ${manifest.generator.version}`)
+  lines.push(`- **${t('pack.captured')}:** ${humanDate(manifest.created_at)}`)
+  lines.push(`- **${t('pack.packId')}:** ${manifest.id}`)
+  lines.push(`- **${t('pack.generator')}:** ${manifest.generator.name} ${manifest.generator.version}`)
   lines.push('')
 
-  lines.push('## Note')
+  lines.push(`## ${t('pack.note')}`)
   lines.push('')
-  lines.push(manifest.note ?? '(no note provided)')
+  lines.push(manifest.note ?? t('pack.noNote'))
   lines.push('')
 
   const hasReplay = manifest.media.replay !== null
   const replaySeconds = ((manifest.media.replay_duration_ms ?? 0) / 1000).toFixed(1)
-  lines.push('## Environment')
+  lines.push(`## ${t('pack.environment')}`)
   lines.push('')
-  lines.push(`- **OS:** ${manifest.environment.os} (version ${manifest.environment.os_version})`)
+  lines.push(`- **${t('pack.os')}:** ${manifest.environment.os} (version ${manifest.environment.os_version})`)
   const screens = manifest.environment.screens
     .map((s) => `${s.width}×${s.height} @${s.scale}x scale`)
     .join('; ')
-  lines.push(`- **Screens:** ${screens}`)
+  lines.push(`- **${t('pack.screens')}:** ${screens}`)
   if (manifest.environment.app !== undefined) {
-    lines.push(`- **Focused app:** ${manifest.environment.app}`)
+    lines.push(`- **${t('pack.focusedApp')}:** ${manifest.environment.app}`)
   }
   lines.push(
     hasReplay
-      ? `- **Replay:** ${replaySeconds}s screen recording (${manifest.media.replay})` +
+      ? `- **${t('pack.replay')}:** ${replaySeconds}s screen recording (${manifest.media.replay})` +
           (manifest.media.replay_annotated !== undefined
             ? `; annotated view: ${manifest.media.replay_annotated}`
             : '')
-      : '- **Replay:** none (screenshot only)',
+      : `- **${t('pack.replay')}:** ${t('pack.replayNone')}`,
   )
   if (manifest.media.snapshot_t_ms !== undefined) {
-    lines.push(`- **Snapshot frame:** ${formatClock(manifest.media.snapshot_t_ms)} into the replay`)
+    lines.push(`- **${t('pack.snapshotFrame')}:** ${formatClock(manifest.media.snapshot_t_ms)} into the replay`)
   }
   lines.push('')
 
-  lines.push('## Annotations')
+  lines.push(`## ${t('pack.annotations')}`)
   lines.push('')
   const annotations = annotationsFile.annotations
   if (annotations.length === 0) {
-    lines.push('(none)')
+    lines.push(t('pack.none'))
   } else {
     lines.push(
       `Coordinates are pixels in snapshot.png (${annotationsFile.reference_width}×${annotationsFile.reference_height}). ` +
@@ -105,10 +118,10 @@ export function buildReport(manifest: Manifest, annotationsFile: AnnotationsFile
       .filter((a) => numbers.has(a.annotation_id))
       .sort((a, b) => (numbers.get(a.annotation_id) ?? 0) - (numbers.get(b.annotation_id) ?? 0))
     for (const a of numbered) {
-      lines.push(`${numbers.get(a.annotation_id)}. ${describeAnnotation(a)}`)
+      lines.push(`${numbers.get(a.annotation_id)}. ${describeAnnotation(a, t)}`)
     }
     for (const a of annotations) {
-      if (!numbers.has(a.annotation_id)) lines.push(`- ${describeAnnotation(a)}`)
+      if (!numbers.has(a.annotation_id)) lines.push(`- ${describeAnnotation(a, t)}`)
     }
   }
   const blurCount = annotations.filter((a) => a.blur).length
@@ -124,7 +137,7 @@ export function buildReport(manifest: Manifest, annotationsFile: AnnotationsFile
   }
   lines.push('')
 
-  lines.push('## Files')
+  lines.push(`## ${t('pack.files')}`)
   lines.push('')
   lines.push('- manifest.json — pack identity, environment, file inventory')
   lines.push(

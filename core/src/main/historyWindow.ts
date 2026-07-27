@@ -29,6 +29,7 @@ import type {
 import type { Annotation, Settings } from '../shared/types'
 import { isRenderInFlight, onRenderStateChange, startAnnotatedRender } from './annotatedRender'
 import { createPackZip } from './exporter'
+import { uiLanguage, uiT } from './locale'
 import { createPackStore, openPack } from './mcp/store'
 import type { PackHandle, PackStore, RawPackEntry } from './mcp/store'
 import { analyzePrompt } from './saveToast'
@@ -77,11 +78,15 @@ export function registerHistoryIpc(live: Settings): void {
   })
 
   ipcMain.handle(IPC.historyList, (event): HistoryListResult => {
-    if (!fromHistory(event)) return { outputDir: '', packs: [] }
+    if (!fromHistory(event)) return { outputDir: '', packs: [], uiLanguage: 'en' }
     const s = getStore()
     const entries = s.entries()
     pruneCaches(new Set(entries.map((e) => e.path)))
-    return { outputDir: s.outputDir, packs: entries.map(safeSummarize) }
+    return {
+      outputDir: s.outputDir,
+      packs: entries.map(safeSummarize),
+      uiLanguage: uiLanguage(live),
+    }
   })
 
   ipcMain.handle(IPC.historyThumb, (event, ref: unknown): string | null => {
@@ -160,10 +165,11 @@ export function registerHistoryIpc(live: Settings): void {
   ipcMain.handle(IPC.historyPlay, async (event, ref: unknown): Promise<HistoryActionResult> => {
     if (!fromHistory(event)) return { ok: false, error: 'not the history window' }
     const entry = entryFor(ref)
-    if (entry === null) return { ok: false, error: 'pack not found' }
-    if (entry.kind !== 'dir') return { ok: false, error: 'extract the zip to play its annotated replay' }
+    const t = uiT(live)
+    if (entry === null) return { ok: false, error: t('history.errPackNotFound') }
+    if (entry.kind !== 'dir') return { ok: false, error: t('history.errZipPlay') }
     const file = path.join(entry.path, 'replay_annotated.webm')
-    if (!fs.existsSync(file)) return { ok: false, error: 'replay_annotated.webm is not rendered yet' }
+    if (!fs.existsSync(file)) return { ok: false, error: t('history.errNotRendered') }
     const result = await shell.openPath(file)
     return result === '' ? { ok: true } : { ok: false, error: result }
   })
@@ -171,8 +177,8 @@ export function registerHistoryIpc(live: Settings): void {
   ipcMain.handle(IPC.historyCreateZip, async (event, ref: unknown): Promise<ToastCreateZipResult> => {
     if (!fromHistory(event)) return { ok: false, error: 'not the history window' }
     const entry = entryFor(ref)
-    if (entry === null) return { ok: false, error: 'pack not found' }
-    if (entry.kind !== 'dir') return { ok: false, error: 'this pack is already a zip' }
+    if (entry === null) return { ok: false, error: uiT(live)('history.errPackNotFound') }
+    if (entry.kind !== 'dir') return { ok: false, error: uiT(live)('history.errAlreadyZip') }
     try {
       const zipPath = await createPackZip(entry.path)
       return { ok: true, zipPath }
@@ -207,22 +213,22 @@ export function registerHistoryIpc(live: Settings): void {
   ipcMain.handle(IPC.historyRerender, (event, ref: unknown): HistoryActionResult => {
     if (!fromHistory(event)) return { ok: false, error: 'not the history window' }
     const entry = entryFor(ref)
-    if (entry === null) return { ok: false, error: 'pack not found' }
-    if (entry.kind !== 'dir') return { ok: false, error: 'zip packs cannot be re-rendered' }
+    if (entry === null) return { ok: false, error: uiT(live)('history.errPackNotFound') }
+    if (entry.kind !== 'dir') return { ok: false, error: uiT(live)('history.errZipRerender') }
     return startRerender(entry)
   })
 
   ipcMain.handle(IPC.historyRename, async (event, ref: unknown, newName: unknown): Promise<HistoryRenameResult> => {
     if (!fromHistory(event)) return { ok: false, error: 'not the history window' }
     const entry = entryFor(ref)
-    if (entry === null) return { ok: false, error: 'pack not found' }
+    if (entry === null) return { ok: false, error: uiT(live)('history.errPackNotFound') }
     return renamePack(entry, typeof newName === 'string' ? newName : '')
   })
 
   ipcMain.handle(IPC.historyDelete, async (event, ref: unknown): Promise<HistoryActionResult> => {
     if (!fromHistory(event)) return { ok: false, error: 'not the history window' }
     const entry = entryFor(ref)
-    if (entry === null) return { ok: false, error: 'pack not found' }
+    if (entry === null) return { ok: false, error: uiT(live)('history.errPackNotFound') }
     try {
       await shell.trashItem(entry.path)
     } catch (err) {
@@ -258,7 +264,9 @@ export function openHistoryWindow(): void {
     minHeight: 480,
     autoHideMenuBar: true,
     backgroundColor: '#121216',
-    title: 'CapturePack — History',
+    // Pre-load placeholder only: the renderer document title (localized via
+    // data-i18n) replaces it as soon as the page loads.
+    title: liveSettings !== null ? uiT(liveSettings)('history.windowTitle') : 'CapturePack',
     show: false,
     webPreferences: {
       preload: path.join(app.getAppPath(), 'dist', 'preload', 'history.js'),
@@ -276,6 +284,19 @@ export function openHistoryWindow(): void {
   })
   void win.loadFile(path.join(app.getAppPath(), 'dist', 'renderer', 'history', 'history.html'))
   historyWindow = win
+}
+
+/** t() for the current UI language (English before IPC registration). */
+function liveT(): ReturnType<typeof uiT> {
+  return uiT(liveSettings ?? ({ language: 'system', packLanguage: 'ui' } as Settings))
+}
+
+/** Nudges an open History window to re-list (e.g. after a language change —
+ * the list result carries the new uiLanguage, so the window re-renders). */
+export function notifyHistoryChanged(): void {
+  if (historyWindow !== null && !historyWindow.isDestroyed()) {
+    historyWindow.webContents.send(IPC.historyChanged)
+  }
 }
 
 /** Stops the History pack-store watcher (app quit). */
@@ -371,7 +392,7 @@ function safeSummarize(entry: RawPackEntry): HistoryPackSummary {
       hasBlur: false,
       annotated: 'none',
       zipTwin: zipTwinPresent(entry),
-      warning: `unreadable pack: ${errorMessage(err)}`,
+      warning: liveT()('history.errUnreadablePack', { error: errorMessage(err) }),
     }
   }
 }
@@ -415,7 +436,9 @@ function summarize(entry: RawPackEntry): HistoryPackSummary {
     hasBlur: annotations.some((a) => a.blur === true),
     annotated,
     zipTwin: zipTwinPresent(entry),
-    warning: manifest === null ? (pack.warnings()[0] ?? 'manifest.json missing or malformed') : null,
+    // NOTE: cached by stamp — after a language change an unchanged malformed
+    // pack keeps its old-language warning until it changes on disk (harmless).
+    warning: manifest === null ? (pack.warnings()[0] ?? liveT()('history.errManifestBad')) : null,
   }
   summaryCache.set(entry.path, { stamp, summary })
   return summary
@@ -482,20 +505,21 @@ function startRerender(entry: RawPackEntry): HistoryActionResult {
   if (isRenderInFlight(entry.path)) return { ok: true }
   const pack = openPack(entry.path, entry.kind, entry.id)
   const manifest = pack.manifest()
-  if (manifest === null) return { ok: false, error: 'manifest.json missing or malformed' }
+  const t = uiT(settings)
+  if (manifest === null) return { ok: false, error: t('history.errManifestBad') }
   const replayRel = manifest.media?.replay
   if (typeof replayRel !== 'string') {
-    return { ok: false, error: 'this pack has no replay to render' }
+    return { ok: false, error: t('history.errNoReplayRender') }
   }
   const replayWebm = pack.readBinary(replayRel)
-  if (replayWebm === null) return { ok: false, error: `${replayRel} is missing on disk` }
+  if (replayWebm === null) return { ok: false, error: t('history.errFileMissing', { file: replayRel }) }
   const annotationsFile = pack.annotations()
   if (
     annotationsFile === null ||
     typeof annotationsFile.reference_width !== 'number' ||
     typeof annotationsFile.reference_height !== 'number'
   ) {
-    return { ok: false, error: 'annotations.json missing or malformed' }
+    return { ok: false, error: t('history.errAnnotationsBad') }
   }
   const replayDurationMs =
     typeof manifest.media.replay_duration_ms === 'number' ? manifest.media.replay_duration_ms : 0
@@ -531,7 +555,7 @@ async function renamePack(entry: RawPackEntry, rawName: string): Promise<History
   // Case-only renames are legal on Windows; anything else must not overwrite.
   const caseOnly = target.toLowerCase() === entry.path.toLowerCase()
   if (!caseOnly && (fs.existsSync(target) || (entry.kind === 'dir' && fs.existsSync(`${target}${PACK_EXT}`)))) {
-    return { ok: false, error: 'A file or folder with that name already exists' }
+    return { ok: false, error: liveT()('history.errNameExists') }
   }
   try {
     await rename(entry.path, target)
@@ -554,12 +578,13 @@ async function renamePack(entry: RawPackEntry, rawName: string): Promise<History
 }
 
 function validatePackName(name: string): string | null {
-  if (name === '') return 'Name cannot be empty'
-  if (name.length > MAX_PACK_NAME_LENGTH) return `Name is too long (max ${MAX_PACK_NAME_LENGTH} characters)`
-  if (INVALID_NAME_CHARS.test(name)) return 'Name contains invalid characters: < > : " / \\ | ? *'
-  if (RESERVED_NAMES.test(name)) return 'That name is reserved on Windows'
-  if (name.endsWith('.') || name !== name.trimEnd()) return 'Name cannot end with a dot or space'
-  if (name === '.' || name === '..') return 'Name is not allowed'
+  const t = liveT()
+  if (name === '') return t('history.errNameEmpty')
+  if (name.length > MAX_PACK_NAME_LENGTH) return t('history.errNameTooLong', { max: MAX_PACK_NAME_LENGTH })
+  if (INVALID_NAME_CHARS.test(name)) return t('history.errNameInvalid')
+  if (RESERVED_NAMES.test(name)) return t('history.errNameReserved')
+  if (name.endsWith('.') || name !== name.trimEnd()) return t('history.errNameDotSpace')
+  if (name === '.' || name === '..') return t('history.errNameNotAllowed')
   return null
 }
 

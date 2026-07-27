@@ -6,23 +6,23 @@
     http-equiv="Content-Security-Policy"
     content="default-src 'self'; script-src 'self'; style-src 'self'"
   />
-  <title>CapturePack — Saved</title>
+  <title data-i18n="toast.windowTitle">CapturePack — Saved</title>
   <link rel="stylesheet" href="./toast.css" />
 </head>
 <body>
   <main id="toast">
     <header>
-      <span class="saved">Saved</span>
+      <span class="saved" data-i18n="toast.saved">Saved</span>
       <span id="folderName" class="folder" title=""></span>
-      <button id="closeBtn" type="button" aria-label="Close">×</button>
+      <button id="closeBtn" type="button" aria-label="Close" data-i18n-aria-label="toast.close">×</button>
     </header>
     <div class="buttons">
-      <button id="openFolderBtn" type="button">Open Folder</button>
-      <button id="copyPathBtn" type="button">Copy Folder Path</button>
-      <button id="createZipBtn" type="button">Create ZIP</button>
-      <button id="copyPromptBtn" type="button">Copy Prompt</button>
+      <button id="openFolderBtn" type="button" data-i18n="toast.openFolder">Open Folder</button>
+      <button id="copyPathBtn" type="button" data-i18n="toast.copyPath">Copy Folder Path</button>
+      <button id="createZipBtn" type="button" data-i18n="toast.createZip">Create ZIP</button>
+      <button id="copyPromptBtn" type="button" data-i18n="toast.copyPrompt">Copy Prompt</button>
     </div>
-    <div id="blurWarning" class="warning" hidden>
+    <div id="blurWarning" class="warning" hidden data-i18n="toast.blurWarning">
       Original replay contains unredacted content — share replay_annotated.webm or create a sanitized ZIP.
     </div>
     <div id="renderStatus" class="status" hidden></div>

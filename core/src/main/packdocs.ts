@@ -2,10 +2,18 @@
 // Pure functions only; no Electron or filesystem access. Regenerated on every
 // save so the documents always match annotations.json (GOAL "Pin Numbering":
 // documents are regenerated when annotations change).
+//
+// i18n scope (GOAL "Internationalization", packLanguage): template HEADINGS
+// and short labels are localized via the pack.* dictionary keys; explanatory
+// PROSE stays English on purpose so the documents remain canonical for AI
+// readers (like the MCP tool descriptions). The user's own title/note text is
+// NEVER translated.
 
+import { makeT } from '../shared/i18n'
+import type { Language, TranslateFn } from '../shared/i18n'
 import type { Annotation, AnnotationsFile, Manifest, TimelineFile } from '../shared/types'
 import { computeDisplayNumbers } from '../shared/numbering'
-import { describeAnnotation, formatClock, humanDate, lifetimeLabel } from './report'
+import { formatClock, humanDate, lifetimeLabel } from './report'
 
 const px = (n: number): number => Math.round(n)
 
@@ -26,10 +34,10 @@ export const SKILLS_FILES: ReadonlyArray<keyof SkillsDocs> = [
   'project',
 ]
 
-function replayLabel(manifest: Manifest): string {
-  if (manifest.media.replay === null) return 'screenshot only (no replay)'
+function replayLabel(manifest: Manifest, t: TranslateFn): string {
+  if (manifest.media.replay === null) return t('pack.screenshotOnly')
   const seconds = ((manifest.media.replay_duration_ms ?? 0) / 1000).toFixed(1)
-  return `${seconds}s replay + snapshot`
+  return t('pack.replaySnapshot', { seconds })
 }
 
 function annotationCounts(annotations: readonly Annotation[]): string {
@@ -47,28 +55,34 @@ function annotationCounts(annotations: readonly Annotation[]): string {
 // enough to understand the whole pack (GOAL "Output layout — Folder First").
 // ---------------------------------------------------------------------------
 
-export function buildReadme(manifest: Manifest, annotationsFile: AnnotationsFile): string {
+export function buildReadme(
+  manifest: Manifest,
+  annotationsFile: AnnotationsFile,
+  lang: Language = 'en',
+): string {
+  const t = makeT(lang)
   const annotations = annotationsFile.annotations
   const hasReplay = manifest.media.replay !== null
   const blurCount = annotations.filter((a) => a.blur).length
   const lines: string[] = []
 
-  lines.push(`# ${manifest.title ?? 'CapturePack capture'}`)
+  // The user's own title is never translated; only the fallback is localized.
+  lines.push(`# ${manifest.title ?? t('pack.untitled')}`)
   lines.push('')
-  lines.push(`- **Created:** ${humanDate(manifest.created_at)}`)
-  lines.push(`- **Application:** ${manifest.environment.app ?? 'unknown'}`)
-  lines.push(`- **Duration:** ${replayLabel(manifest)}`)
+  lines.push(`- **${t('pack.created')}:** ${humanDate(manifest.created_at)}`)
+  lines.push(`- **${t('pack.application')}:** ${manifest.environment.app ?? t('pack.unknown')}`)
+  lines.push(`- **${t('pack.duration')}:** ${replayLabel(manifest, t)}`)
   lines.push('')
 
-  lines.push('## Description')
+  lines.push(`## ${t('pack.description')}`)
   lines.push('')
   const description = manifest.note ?? manifest.title
-  lines.push(description ?? '(no description was provided for this capture)')
+  lines.push(description ?? t('pack.noDescription'))
   lines.push('')
 
-  lines.push('## Files')
+  lines.push(`## ${t('pack.files')}`)
   lines.push('')
-  lines.push('| File | What it is |')
+  lines.push(`| ${t('pack.fileCol')} | ${t('pack.whatCol')} |`)
   lines.push('|---|---|')
   lines.push(
     `| snapshot.png | The captured frame, ${annotationsFile.reference_width}×${annotationsFile.reference_height} — original pixels, never modified |`,
@@ -87,7 +101,7 @@ export function buildReadme(manifest: Manifest, annotationsFile: AnnotationsFile
   lines.push('| manifest.json | Pack identity, environment, and file inventory |')
   lines.push('')
 
-  lines.push('## How to use')
+  lines.push(`## ${t('pack.howToUse')}`)
   lines.push('')
   if (hasReplay) {
     lines.push('1. Watch `replay_annotated.webm` — the annotations are rendered into the video.')
@@ -124,13 +138,17 @@ export function buildSkills(
   manifest: Manifest,
   annotationsFile: AnnotationsFile,
   timeline: TimelineFile,
+  lang: Language = 'en',
 ): SkillsDocs {
+  // skills/ documents are AI-first: only the top-level headings follow
+  // packLanguage; the body prose deliberately stays English (see header note).
+  const t = makeT(lang)
   return {
-    overview: buildOverviewSkill(manifest, annotationsFile, timeline),
-    timeline: buildTimelineSkill(manifest, timeline),
-    annotation: buildAnnotationSkill(annotationsFile),
-    dom: buildDomSkill(manifest, annotationsFile),
-    project: buildProjectSkill(manifest),
+    overview: buildOverviewSkill(manifest, annotationsFile, timeline, t),
+    timeline: buildTimelineSkill(manifest, timeline, t),
+    annotation: buildAnnotationSkill(annotationsFile, t),
+    dom: buildDomSkill(manifest, annotationsFile, t),
+    project: buildProjectSkill(manifest, t),
   }
 }
 
@@ -138,13 +156,14 @@ function buildOverviewSkill(
   manifest: Manifest,
   annotationsFile: AnnotationsFile,
   timeline: TimelineFile,
+  t: TranslateFn,
 ): string {
   const annotations = annotationsFile.annotations
   const hasReplay = manifest.media.replay !== null
   const numbers = computeDisplayNumbers(annotations)
   const lines: string[] = []
 
-  lines.push('# Pack overview')
+  lines.push(`# ${t('pack.skillOverview')}`)
   lines.push('')
   lines.push(`**Title:** ${manifest.title ?? '(untitled capture)'}`)
   lines.push(
@@ -203,10 +222,10 @@ function buildOverviewSkill(
   return lines.join('\n')
 }
 
-function buildTimelineSkill(manifest: Manifest, timeline: TimelineFile): string {
+function buildTimelineSkill(manifest: Manifest, timeline: TimelineFile, t: TranslateFn): string {
   const hasReplay = manifest.media.replay !== null
   const lines: string[] = []
-  lines.push('# Timeline')
+  lines.push(`# ${t('pack.skillTimeline')}`)
   lines.push('')
   lines.push(
     `\`t0\` = ${timeline.t0} (${
@@ -247,11 +266,11 @@ function timelineEventDetail(type: string, data: Record<string, unknown> | undef
   return JSON.stringify(data).replaceAll('|', '\\|')
 }
 
-function buildAnnotationSkill(annotationsFile: AnnotationsFile): string {
+function buildAnnotationSkill(annotationsFile: AnnotationsFile, t: TranslateFn): string {
   const annotations = annotationsFile.annotations
   const numbers = computeDisplayNumbers(annotations)
   const lines: string[] = []
-  lines.push('# Annotations')
+  lines.push(`# ${t('pack.annotations')}`)
   lines.push('')
   lines.push(
     `Coordinate space: snapshot.png, ${annotationsFile.reference_width}×${annotationsFile.reference_height} pixels, origin top-left.`,
@@ -296,7 +315,7 @@ function buildAnnotationSkill(annotationsFile: AnnotationsFile): string {
     )
     lines.push(
       a.start_ms !== undefined && a.end_ms !== undefined
-        ? `- **Lifetime:** ${lifetimeLabel(a)} on the replay clock`
+        ? `- **Lifetime:** ${lifetimeLabel(a, t)} on the replay clock`
         : '- **Lifetime:** none (applies to the whole capture)',
     )
     if (a.blur) {
@@ -323,9 +342,9 @@ function buildAnnotationSkill(annotationsFile: AnnotationsFile): string {
   return lines.join('\n')
 }
 
-function buildDomSkill(manifest: Manifest, annotationsFile: AnnotationsFile): string {
+function buildDomSkill(manifest: Manifest, annotationsFile: AnnotationsFile, t: TranslateFn): string {
   const lines: string[] = []
-  lines.push('# DOM / semantic objects')
+  lines.push(`# ${t('pack.skillDom')}`)
   lines.push('')
   const targeted = annotationsFile.annotations.filter((a) => a.target !== undefined)
   if (manifest.plugins.length === 0 && targeted.length === 0) {
@@ -361,10 +380,10 @@ function buildDomSkill(manifest: Manifest, annotationsFile: AnnotationsFile): st
   return lines.join('\n')
 }
 
-function buildProjectSkill(manifest: Manifest): string {
+function buildProjectSkill(manifest: Manifest, t: TranslateFn): string {
   const hasReplay = manifest.media.replay !== null
   const lines: string[] = []
-  lines.push('# What is a CapturePack?')
+  lines.push(`# ${t('pack.skillProject')}`)
   lines.push('')
   lines.push('A CapturePack is a local-first context package that explains a visual situation — usually a')
   lines.push('bug — to humans and to LLMs. It is a plain folder (optionally zipped as `.capturepack`, a')

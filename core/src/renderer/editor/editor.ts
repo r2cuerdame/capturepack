@@ -10,6 +10,8 @@ import type {
   EditorExportPayload,
   EditorInitPayload,
 } from '../../shared/ipc'
+import { applyDomI18n, makeT } from '../../shared/i18n'
+import type { TranslateFn } from '../../shared/i18n'
 import type { Annotation, AnnotationBounds } from '../../shared/types'
 import { computeDisplayNumbers } from '../../shared/numbering'
 import { EditorState } from './state'
@@ -80,6 +82,7 @@ const durationInput = el<HTMLInputElement>('durationInput')
 const untilEndBtn = el<HTMLButtonElement>('untilEndBtn')
 const entireCaptureBtn = el<HTMLButtonElement>('entireCaptureBtn')
 const dirtyChip = el<HTMLSpanElement>('dirtyChip')
+const trimDropChip = el<HTMLSpanElement>('trimDropChip')
 const unsavedBar = el<HTMLDivElement>('unsavedBar')
 const unsavedSaveBtn = el<HTMLButtonElement>('unsavedSaveBtn')
 const unsavedSaveAsBtn = el<HTMLButtonElement>('unsavedSaveAsBtn')
@@ -102,6 +105,9 @@ const MIN_DRAG = 3 // native px below which a right-drag creates nothing
 const MIN_SIZE = 2 // native px floor for resize (bounds sizes must stay > 0)
 
 const state = new EditorState()
+// Active-language t(); replaced at init from the payload's uiLanguage (the
+// language is fixed for the session — the editor window is transient).
+let t: TranslateFn = makeT('en')
 let nativeW = 0
 let nativeH = 0
 let hasReplay = false
@@ -122,6 +128,12 @@ let dirty = false
 // Original desktop snapshot, kept for restoring the "now" frame after scrubbing.
 let nativeBitmap: ImageBitmap | null = null
 let scrub: ScrubController | null = null
+// Replay Trim (GOAL "Replay Trim"), on the scrub (parsed video) clock.
+// trimInMs 0 = untrimmed start; trimOutMs null = untrimmed end. Fresh-capture
+// flow only — edit mode never enables trimming (the saved replay is already
+// the original evidence).
+let trimInMs = 0
+let trimOutMs: number | null = null
 const viewport = new Viewport(frame)
 let spaceDown = false
 let panning: { pointerId: number; x: number; y: number } | null = null
@@ -221,6 +233,7 @@ function refresh(): void {
   syncLanes()
   schedulePaint()
   updateDirty()
+  syncTrimDropChip() // lifetime edits move boxes in/out of the trim range
 }
 
 // ---------------------------------------------------------------------------
@@ -273,6 +286,97 @@ function syncLanes(): void {
   laneDurationMs = scrub.durationMs
   timebar.setAnnotations(state.annotations, state.selectedId, scrub.durationMs)
 }
+
+// ---------------------------------------------------------------------------
+// Replay Trim (GOAL "Replay Trim") — in/out handles on the timebar, fresh
+// capture flow only. Scrubbing outside the trim stays allowed; the trim only
+// decides what Save keeps.
+// ---------------------------------------------------------------------------
+
+// Minimum kept range, so in/out can never cross or collapse to nothing.
+const TRIM_MIN_GAP_MS = 100
+
+function trimEnabled(): boolean {
+  // An excluded replay cannot be trimmed: with "include replay" unchecked the
+  // save drops replay.webm entirely (main nulls the trim and keeps every box),
+  // so the handles, the I/O keys, and the drop hint all go dormant with it.
+  return scrub !== null && !editMode && includeReplay.checked
+}
+
+function trimActive(): boolean {
+  return trimEnabled() && (trimInMs > 0 || trimOutMs !== null)
+}
+
+/** Sets the in-point (ms on the scrub clock), clamped below the out-point. */
+function setTrimIn(ms: number): void {
+  if (!trimEnabled() || !scrub) return
+  const out = trimOutMs ?? scrub.durationMs
+  trimInMs = Math.max(0, Math.min(ms, out - TRIM_MIN_GAP_MS))
+  syncTrim()
+}
+
+/** Sets the out-point; dragging to (or past) the end resets that side. */
+function setTrimOut(ms: number): void {
+  if (!trimEnabled() || !scrub) return
+  const d = scrub.durationMs
+  const v = Math.min(d, Math.max(ms, trimInMs + TRIM_MIN_GAP_MS))
+  trimOutMs = v >= d ? null : v
+  syncTrim()
+}
+
+function syncTrim(): void {
+  timebar.setTrim(trimInMs, trimOutMs)
+  syncTrimDropChip()
+}
+
+/**
+ * The trim range as the export payload carries it (null = that side is
+ * untrimmed), clamped to the manifest replay clock — the parsed video clock
+ * can run slightly past the recorder's wall clock, like every lifetime stamp.
+ */
+function payloadTrim(): { start: number | null; end: number | null } {
+  if (!trimActive() || !scrub) return { start: null, end: null }
+  const start = trimInMs > 0 ? Math.min(Math.round(trimInMs), replayDurationMs) : null
+  const end =
+    trimOutMs !== null && trimOutMs < scrub.durationMs
+      ? Math.min(Math.round(trimOutMs), replayDurationMs)
+      : null
+  // Degenerate after clamping (sub-ms replays): behave as untrimmed.
+  if (start !== null && end !== null && end <= start) return { start: null, end: null }
+  return { start, end }
+}
+
+/** Boxes whose lifetime falls WHOLLY outside the trim — dropped at save. */
+function droppedByTrimCount(): number {
+  const t = payloadTrim()
+  if (t.start === null && t.end === null) return 0
+  const start = t.start ?? 0
+  const end = t.end ?? replayDurationMs
+  let n = 0
+  for (const a of state.annotations) {
+    if (a.start_ms === undefined || a.end_ms === undefined) continue
+    if (a.end_ms < start || a.start_ms > end) n += 1
+  }
+  return n
+}
+
+/** The subtle near-Save hint: "2 boxes outside trim will be dropped". */
+function syncTrimDropChip(): void {
+  const n = droppedByTrimCount()
+  trimDropChip.hidden = n === 0
+  if (n > 0) {
+    trimDropChip.textContent =
+      n === 1 ? t('editor.trimDropOne') : t('editor.trimDropMany', { count: n })
+  }
+}
+
+// Unchecking "include replay" makes any trim moot (see trimEnabled): hide the
+// handles and the drop hint while unchecked; the in/out points survive so
+// re-checking restores them exactly.
+includeReplay.addEventListener('change', () => {
+  timebar.setTrimEnabled(!editMode && includeReplay.checked)
+  syncTrim()
+})
 
 // ---------------------------------------------------------------------------
 // Box creation (right-drag) + commit
@@ -450,7 +554,7 @@ function toScreen(x: number, y: number): { x: number; y: number } {
 function chipLabel(a: Annotation): string {
   return a.start_ms !== undefined && a.end_ms !== undefined
     ? formatDurationLabel(a.end_ms - a.start_ms)
-    : 'all'
+    : t('editor.lifetimeAll')
 }
 
 function syncSelectionUi(): void {
@@ -470,7 +574,7 @@ function syncSelectionUi(): void {
   const number = computeDisplayNumbers(state.annotations).get(a.annotation_id)
   numberBtn.textContent = a.numbered && number !== undefined ? String(number) : '#'
   numberBtn.classList.toggle('on', a.numbered)
-  blurBtn.textContent = a.blur ? 'Blur On' : 'Blur'
+  blurBtn.textContent = a.blur ? t('editor.blurOn') : t('editor.blur')
   blurBtn.classList.toggle('on', a.blur)
   // Duration is only meaningful with a replay; respect settings.showDurationLabel.
   const showChip = scrub !== null && showDurationLabel
@@ -910,6 +1014,15 @@ window.addEventListener('keydown', (e) => {
     case 'backspace':
       deleteSelected()
       break
+    // Replay Trim (GOAL "Replay Trim"): I/O set the in/out point at the
+    // current scrub position ("now" = the end of the replay). Fresh-capture
+    // flow only — the setters no-op in edit mode.
+    case 'i':
+      if (scrub?.ready) setTrimIn(scrub.atNow ? scrub.durationMs : scrub.tMs)
+      break
+    case 'o':
+      if (scrub?.ready) setTrimOut(scrub.atNow ? scrub.durationMs : scrub.tMs)
+      break
   }
 })
 
@@ -956,6 +1069,20 @@ const timebar = new Timebar(el<HTMLElement>('timebar'), {
     syncLanes()
     schedulePaint()
   },
+  // Trim handle drags (GOAL "Replay Trim"): fraction of the track -> ms.
+  trimTo: (kind, fraction) => {
+    if (!scrub) return
+    const ms = fraction * scrub.durationMs
+    if (kind === 'in') setTrimIn(ms)
+    else setTrimOut(ms)
+  },
+  // Double-click a handle: reset that side to the track edge.
+  resetTrim: (kind) => {
+    if (!trimEnabled()) return
+    if (kind === 'in') trimInMs = 0
+    else trimOutMs = null
+    syncTrim()
+  },
 })
 
 // ---------------------------------------------------------------------------
@@ -979,6 +1106,10 @@ async function doExport(kind: 'save' | 'saveAsNew' = 'save'): Promise<void> {
     // The base canvas now shows the frame being exported (native snapshot or
     // scrubbed replay frame upscaled to native resolution).
     const snapshotPng = await composeExportPng(snapshot)
+    // Edit mode ALWAYS ships null/null (GOAL "Replay Trim": re-edit cannot
+    // trim — the pack's replay is already the original evidence); payloadTrim
+    // itself returns null/null then, but the contract stays explicit here.
+    const trim = editMode ? { start: null, end: null } : payloadTrim()
     const payload: EditorExportPayload = {
       annotations: state.annotations,
       snapshotPng,
@@ -988,6 +1119,8 @@ async function doExport(kind: 'save' | 'saveAsNew' = 'save'): Promise<void> {
       // (main saves with keepReplay), so report the replay as included.
       includeReplay: hasReplay && (editMode || includeReplay.checked),
       snapshotTMs: scrub ? scrub.exportTMs() : null,
+      trimStartMs: trim.start,
+      trimEndMs: trim.end,
     }
     if (kind === 'saveAsNew') window.editorBridge.saveAsNew(payload)
     else window.editorBridge.export(payload)
@@ -999,6 +1132,10 @@ async function doExport(kind: 'save' | 'saveAsNew' = 'save'): Promise<void> {
 }
 
 async function initEditor(payload: EditorInitPayload): Promise<void> {
+  // Language first: everything below may render user-visible text.
+  t = makeT(payload.uiLanguage)
+  applyDomI18n(t)
+  timebar.setT(t)
   nativeW = payload.width
   nativeH = payload.height
   hasReplay = payload.hasReplay
@@ -1022,8 +1159,8 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
   overlay.height = nativeH
   snapCtx.drawImage(nativeBitmap, 0, 0, nativeW, nativeH)
   replayChip.textContent = hasReplay
-    ? `Replay: ${Math.round(payload.replayDurationMs / 1000)}s`
-    : 'No replay'
+    ? t('editor.replaySeconds', { seconds: Math.round(payload.replayDurationMs / 1000) })
+    : t('editor.noReplay')
   // Edit mode never offers include-replay: replay.webm is not touched on re-edit.
   replayToggle.hidden = !hasReplay || editMode
   loaded = true
@@ -1044,6 +1181,10 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
     })
     scrub = controller
     timebar.show()
+    // Trim handles exist only in the fresh-capture flow (GOAL "Replay Trim")
+    // and only while the replay is included; in edit mode they stay hidden and
+    // the export payload stays null/null.
+    timebar.setTrimEnabled(!editMode && includeReplay.checked)
     timebar.update(controller)
     syncLanes()
   }

@@ -30,6 +30,11 @@ export interface Manifest {
     // Replay-timeline position (ms, same clock as timeline t_ms) of the frame
     // shown in snapshot.png. Absent = the capture instant ("now").
     snapshot_t_ms?: number
+    // Provenance only (GOAL "Replay Trim"): the in-point (ms) in the ORIGINAL
+    // recording that this replay was trimmed from at save time. Every other
+    // time in the pack is already on the trimmed replay clock — readers never
+    // need to apply this offset. Absent = the replay was never trimmed.
+    trim_offset_ms?: number
   }
   plugins: Array<{ name: string; version: string; path: string }>
 }
@@ -149,6 +154,12 @@ export interface TimelineFile {
 
 // App settings (not part of the pack format).
 export interface Settings {
+  // UI language: "system" (default — app.getLocale() at runtime) or a
+  // supported language code from shared/i18n.ts (en/ko/ja/zh/es/fr/de/pt/ru).
+  language: string
+  // Pack document language (README/report/skills templates): "ui" (default —
+  // follow the resolved UI language) or a supported language code.
+  packLanguage: string
   autoUpdateCheck: boolean
   outputDir: string
   copyToClipboard: boolean

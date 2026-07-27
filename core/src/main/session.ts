@@ -13,7 +13,7 @@ import * as path from 'node:path'
 import { IPC } from '../shared/ipc'
 import type { EditorAnnotationAddedPayload, EditorExportPayload, EditorInitPayload } from '../shared/ipc'
 import type { Annotation, Manifest, Settings, TimelineEvent, TimelineFile } from '../shared/types'
-import { startAnnotatedRender } from './annotatedRender'
+import { renderTrimmedReplay, startAnnotatedRender } from './annotatedRender'
 import { captureWindowForDisplay, requestReplay, resolveTargetDisplay, takeSnapshot } from './capture'
 import {
   savePack,
@@ -24,6 +24,7 @@ import {
   type InitialSaveInput,
   type PackHandle,
 } from './exporter'
+import { packDocLanguage, uiLanguage, uiT } from './locale'
 import { openPack } from './mcp/store'
 import { showSaveToast, updateToastRenderStatus } from './saveToast'
 
@@ -43,7 +44,8 @@ export async function startCaptureFlow(settings: Settings): Promise<void> {
   try {
     await runFlow(settings)
   } catch (err) {
-    dialog.showErrorBox('CapturePack', `Capture failed: ${errorMessage(err)}`)
+    // 'CapturePack' is the product name — never translated.
+    dialog.showErrorBox('CapturePack', uiT(settings)('app.captureFailed', { error: errorMessage(err) }))
   } finally {
     flowActive = false
   }
@@ -56,7 +58,7 @@ export async function startEditFlow(dirPath: string, settings: Settings): Promis
   try {
     await runEditFlow(dirPath, settings)
   } catch (err) {
-    dialog.showErrorBox('CapturePack', `Re-edit failed: ${errorMessage(err)}`)
+    dialog.showErrorBox('CapturePack', uiT(settings)('app.reeditFailed', { error: errorMessage(err) }))
   } finally {
     flowActive = false
   }
@@ -90,6 +92,7 @@ async function runFlow(settings: Settings): Promise<void> {
     replayDurationMs,
     timeline: { t0: new Date(t0Ms).toISOString(), events: [...events] },
     outputDir: settings.outputDir,
+    docLanguage: packDocLanguage(settings),
   }
   let handle: PackHandle | null = null
   try {
@@ -118,6 +121,7 @@ async function runFlow(settings: Settings): Promise<void> {
       title: '',
       note: '',
       editMode: false,
+      uiLanguage: uiLanguage(settings),
     }
     editor.webContents.send(IPC.editorInit, init)
     editor.show()
@@ -161,36 +165,112 @@ async function runFlow(settings: Settings): Promise<void> {
     snapshotTMs,
     timeline,
     copyToClipboard: settings.copyToClipboard,
+    docLanguage: packDocLanguage(settings),
   }
+
+  // Replay Trim (GOAL "Replay Trim") — fresh-capture flow only. null when the
+  // payload carries no active trim (or the replay is excluded): the save below
+  // is then exactly the untrimmed path.
+  const trim = replayWebm === null ? null : resolveTrim(outcome.payload, replayDurationMs)
 
   try {
     // Save-first failed earlier? Retry the initial write now, then finalize.
     if (handle === null) handle = await savePack(initialSave)
-    const dirPath: string = await updatePack(handle, input)
-    // Save pipeline (GOAL): update folder -> toast -> background render. The
-    // toast never waits for the render; its status line flips when it ends.
-    const hasReplay = replayWebm !== null
-    showSaveToast({
-      folderPath: dirPath,
-      hasBlur: annotations.some((a) => a.blur),
-      renderState: hasReplay ? 'rendering' : 'none',
-    })
-    if (replayWebm !== null) {
-      startAnnotatedRender(
-        handle,
-        {
+    // What updatePack writes and what the annotated render consumes; the trim
+    // step below swaps in the trimmed bytes + the rebased (trimmed-clock) data.
+    let finalInput = input
+    let renderWebm = replayWebm
+    let renderAnnotations = annotations
+    let renderDurationMs = replayDurationMs
+    let toastShown = false
+    if (trim !== null && replayWebm !== null) {
+      // Trim save: the toast opens EARLY ("Trimming replay…") because the
+      // plain-trim render plays the kept range in real time before the pack
+      // can be updated; the annotated render then flips it to 'rendering'.
+      const trimmedAnnotations = rebaseAnnotationsForTrim(annotations, trim)
+      showSaveToast({
+        folderPath: handle.dirPath,
+        hasBlur: trimmedAnnotations.some((a) => a.blur),
+        renderState: 'trimming',
+        uiLanguage: uiLanguage(settings),
+      })
+      toastShown = true
+      try {
+        // The TRIMMED replay bytes first, via the render pipeline in plain
+        // mode (empty overlay set, arbitrary range) — then everything else is
+        // rebased onto the trimmed clock and the normal pipeline runs.
+        const trimmedWebm = await renderTrimmedReplay({
           replayWebm,
-          annotations,
           width: snap.width,
           height: snap.height,
           fps: settings.fps,
-          replayDurationMs,
+          sourceDurationMs: replayDurationMs,
+          trimStartMs: trim.startMs,
+          trimEndMs: trim.endMs < replayDurationMs ? trim.endMs : null,
+        })
+        finalInput = {
+          ...input,
+          replayWebm: trimmedWebm,
+          replayDurationMs: trim.lengthMs,
+          annotations: trimmedAnnotations,
+          snapshotTMs: rebaseSnapshotTMsForTrim(input.snapshotTMs, trim),
+          // t0 stays the instant of the replay's first frame (SPEC §10.1) —
+          // which is now the trim in-point; events shift with it (clamped so
+          // pre-in-point events cannot go negative, like every other rebase).
+          timeline: {
+            t0: new Date(t0Ms + trim.startMs).toISOString(),
+            events: events.map((e) => ({ ...e, t_ms: Math.max(0, e.t_ms - trim.startMs) })),
+          },
+          trimOffsetMs: trim.startMs,
+        }
+        renderWebm = trimmedWebm
+        renderAnnotations = trimmedAnnotations
+        renderDurationMs = trim.lengthMs
+      } catch (err) {
+        // The trim is best-effort — never lose the capture over it: fall back
+        // to saving the full-range replay (the untrimmed path) and say so.
+        // Async on purpose (like index.ts's hotkey dialog): showErrorBox would
+        // block the main-process event loop mid-save, freezing the visible
+        // "Trimming replay…" toast, the fallback updatePack write below, and
+        // the always-on MCP server until dismissed.
+        console.error('capturepack: replay trim failed:', errorMessage(err))
+        void dialog.showMessageBox({
+          type: 'error',
+          title: 'CapturePack', // product name — never translated
+          message: uiT(settings)('app.trimFailed', { error: errorMessage(err) }),
+        })
+      }
+    }
+    const dirPath: string = await updatePack(handle, finalInput)
+    // Save pipeline (GOAL): update folder -> toast -> background render. The
+    // toast never waits for the render; its status line flips when it ends.
+    const hasReplay = renderWebm !== null
+    if (toastShown) {
+      updateToastRenderStatus(dirPath, hasReplay ? 'rendering' : 'none')
+    } else {
+      showSaveToast({
+        folderPath: dirPath,
+        hasBlur: finalInput.annotations.some((a) => a.blur),
+        renderState: hasReplay ? 'rendering' : 'none',
+        uiLanguage: uiLanguage(settings),
+      })
+    }
+    if (renderWebm !== null) {
+      startAnnotatedRender(
+        handle,
+        {
+          replayWebm: renderWebm,
+          annotations: renderAnnotations,
+          width: snap.width,
+          height: snap.height,
+          fps: settings.fps,
+          replayDurationMs: renderDurationMs,
         },
         (state) => updateToastRenderStatus(dirPath, state),
       )
     }
   } catch (err) {
-    dialog.showErrorBox('CapturePack save failed', errorMessage(err))
+    dialog.showErrorBox(uiT(settings)('app.saveFailedTitle'), errorMessage(err))
   }
 }
 
@@ -240,6 +320,11 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
   const replayDurationMs = replayWebm !== null ? declaredDurationMs : 0
   const loadedSnapshotTMs =
     typeof manifest.media?.snapshot_t_ms === 'number' ? manifest.media.snapshot_t_ms : null
+  // trim_offset_ms provenance (GOAL "Replay Trim"): a re-edit save regenerates
+  // the manifest, so a loaded value must survive — re-edit can never trim
+  // further, only carry the original in-point through.
+  const loadedTrimOffsetMs =
+    typeof manifest.media?.trim_offset_ms === 'number' ? manifest.media.trim_offset_ms : null
   // Plugin declarations from the loaded manifest (entry-validated): the
   // current exporter never writes plugins, but an external pack may declare
   // them and a re-edit save regenerates the manifest — the declaration must
@@ -282,6 +367,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
       title: typeof manifest.title === 'string' ? manifest.title : '',
       note: typeof manifest.note === 'string' ? manifest.note : '',
       editMode: true,
+      uiLanguage: uiLanguage(settings),
     }
     editor.webContents.send(IPC.editorInit, init)
     editor.show()
@@ -320,12 +406,16 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
     // The editor's "now" frame IS the loaded snapshot.png in edit mode, so a
     // null position keeps the original snapshot_t_ms; a scrubbed export wins.
     snapshotTMs: hasReplay ? (outcome.payload.snapshotTMs ?? loadedSnapshotTMs) : null,
+    // Provenance carried through (only meaningful while the replay exists).
+    trimOffsetMs: hasReplay ? loadedTrimOffsetMs : null,
     timeline,
     // External packs may declare plugins the current exporter never writes:
     // carry the declaration through a re-edit save (the plugins/ files on disk
     // stay untouched and must not become undeclared).
     plugins: loadedPlugins,
     copyToClipboard: settings.copyToClipboard,
+    // Re-edit saves regenerate the docs too — in the CURRENT pack language.
+    docLanguage: packDocLanguage(settings),
   }
 
   try {
@@ -339,6 +429,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
       folderPath: handle.dirPath,
       hasBlur: annotations.some((a) => a.blur),
       renderState: hasReplay ? 'rendering' : 'none',
+      uiLanguage: uiLanguage(settings),
     })
     if (replayWebm !== null) {
       startAnnotatedRender(
@@ -355,7 +446,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
       )
     }
   } catch (err) {
-    dialog.showErrorBox('CapturePack save failed', errorMessage(err))
+    dialog.showErrorBox(uiT(settings)('app.saveFailedTitle'), errorMessage(err))
   }
 }
 
@@ -442,6 +533,68 @@ function runEditor(editor: BrowserWindow, events: TimelineEvent[], t0Ms: number)
     ipcMain.on(IPC.editorCancel, onCancel)
     editor.on('closed', onClosed)
   })
+}
+
+// ---------------------------------------------------------------------------
+// Replay Trim (GOAL "Replay Trim") — fresh-capture flow only
+
+interface TrimRange {
+  startMs: number
+  endMs: number
+  lengthMs: number
+}
+
+/**
+ * The payload's in/out points validated against the manifest replay clock.
+ * Returns null when there is no ACTIVE trim — payload null/null (edit mode
+ * always sends that), a degenerate range, or a range covering the full replay
+ * — so the caller falls through to exactly the untrimmed save path.
+ */
+function resolveTrim(payload: EditorExportPayload, replayDurationMs: number): TrimRange | null {
+  if (replayDurationMs <= 0) return null
+  const rawStart = typeof payload.trimStartMs === 'number' ? payload.trimStartMs : null
+  const rawEnd = typeof payload.trimEndMs === 'number' ? payload.trimEndMs : null
+  if (rawStart === null && rawEnd === null) return null
+  const startMs = Math.min(Math.max(0, Math.round(rawStart ?? 0)), replayDurationMs)
+  const endMs = Math.min(Math.max(0, Math.round(rawEnd ?? replayDurationMs)), replayDurationMs)
+  if (endMs <= startMs) return null
+  if (startMs === 0 && endMs === replayDurationMs) return null
+  return { startMs, endMs, lengthMs: endMs - startMs }
+}
+
+/**
+ * Rebases lifetimes onto the trimmed clock (start/end minus the in-point,
+ * clamped into [0, trim length]). Boxes whose lifetime falls WHOLLY outside
+ * the kept range are dropped — the editor showed the count hint before saving.
+ * Boxes without a lifetime apply to the whole capture and pass through as-is.
+ */
+function rebaseAnnotationsForTrim(annotations: Annotation[], trim: TrimRange): Annotation[] {
+  const result: Annotation[] = []
+  for (const a of annotations) {
+    if (a.start_ms === undefined || a.end_ms === undefined) {
+      result.push(a)
+      continue
+    }
+    if (a.end_ms < trim.startMs || a.start_ms > trim.endMs) continue // wholly outside
+    result.push({
+      ...a,
+      start_ms: clampToTrim(a.start_ms - trim.startMs, trim.lengthMs),
+      end_ms: clampToTrim(a.end_ms - trim.startMs, trim.lengthMs),
+    })
+  }
+  return result
+}
+
+/** snapshot_t_ms on the trimmed clock; a frame outside the kept range has no
+ * position in the saved replay, so it degrades to null (the capture instant). */
+function rebaseSnapshotTMsForTrim(snapshotTMs: number | null, trim: TrimRange): number | null {
+  if (snapshotTMs === null) return null
+  if (snapshotTMs < trim.startMs || snapshotTMs > trim.endMs) return null
+  return clampToTrim(snapshotTMs - trim.startMs, trim.lengthMs)
+}
+
+function clampToTrim(ms: number, lengthMs: number): number {
+  return Math.min(Math.max(0, Math.round(ms)), lengthMs)
 }
 
 // Replay-relative lifetimes are meaningless in a pack without the replay.

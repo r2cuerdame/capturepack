@@ -28,7 +28,9 @@ interface ActiveToast {
 let active: ActiveToast | null = null
 let ipcRegistered = false
 
-/** The exact Copy Prompt text (FIXED CONTRACT — do not reword). */
+/** The exact Copy Prompt text (FIXED CONTRACT — do not reword). Deliberately
+ * NOT localized: it is pasted into an LLM conversation (LLM-facing surface,
+ * like the MCP tool descriptions), so it stays English in every UI language. */
 export function analyzePrompt(folderPath: string): string {
   return (
     `Analyze the CapturePack at ${folderPath}. Read README.md first, then skills/ and ` +
@@ -41,6 +43,8 @@ export function showSaveToast(options: {
   folderPath: string
   hasBlur: boolean
   renderState: ToastRenderState
+  // Resolved UI language for the toast strings (shared/i18n Language).
+  uiLanguage: string
 }): void {
   registerToastIpc()
   if (active !== null && !active.win.isDestroyed()) active.win.close()
@@ -80,6 +84,7 @@ export function showSaveToast(options: {
       folderPath: options.folderPath,
       hasBlur: options.hasBlur,
       renderState: options.renderState,
+      uiLanguage: options.uiLanguage,
     }
     win.webContents.send(IPC.toastInit, init)
     // showInactive: a toast must never steal focus from the user's work.

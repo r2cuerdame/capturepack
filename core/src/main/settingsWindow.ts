@@ -9,18 +9,29 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { IPC } from '../shared/ipc'
 import type { SettingsDisplayOption, SettingsGetResult, SettingsSetResult } from '../shared/ipc'
+import { resolveLanguage } from '../shared/i18n'
 import type { Settings } from '../shared/types'
 import { restartCapture } from './capture'
+import { uiLanguage, uiT } from './locale'
 import { applyPartial, clearOutputDirOverride, persistSettings } from './settings'
 import { setAutoUpdateCheck } from './updater'
 
 let settingsWindow: BrowserWindow | null = null
+// The live settings object, for pre-load window chrome (title) localization.
+let liveSettings: Settings | null = null
+
+export interface SettingsIpcHooks {
+  // Fired after a settings:set patch changed the UI language (instant apply:
+  // index.ts rebuilds the tray and nudges the History window).
+  onLanguageChanged?: () => void
+}
 
 // Registers the settings IPC handlers around the live settings object — the
 // same object index.ts hands to the capture flow, tray, and MCP server, so
 // mutations here apply instantly wherever main reads settings at use time.
 // Call once at startup, before the window can open.
-export function registerSettingsIpc(live: Settings): void {
+export function registerSettingsIpc(live: Settings, hooks: SettingsIpcHooks = {}): void {
+  liveSettings = live
   // Boot-time snapshot, taken before any GUI mutation is possible: the values
   // the running MCP server/watcher actually honor. The renderer's "restart to
   // apply" hints compare against this so they survive window close/reopen.
@@ -30,11 +41,13 @@ export function registerSettingsIpc(live: Settings): void {
     return {
       settings: { ...live },
       bootSettings: { ...boot },
-      displays: listDisplays(),
+      displays: listDisplays(live),
       appVersion: app.getVersion(),
       // The RUNNING server bound the boot-time port; a changed live.mcpPort
       // takes effect only after restart (the GUI shows the hint).
       mcpUrl: mcpUrl(boot.mcpPort),
+      uiLanguage: uiLanguage(live),
+      systemLanguage: resolveLanguage('system', app.getLocale()),
     }
   })
 
@@ -71,12 +84,16 @@ export function registerSettingsIpc(live: Settings): void {
     if (live.autoUpdateCheck !== before.autoUpdateCheck) {
       setAutoUpdateCheck(live.autoUpdateCheck)
     }
+    // Instant apply (GOAL i18n): the tray rebuilds and open windows re-render.
+    if (live.language !== before.language) {
+      hooks.onLanguageChanged?.()
+    }
     return { settings: { ...live } }
   })
 
   ipcMain.handle(IPC.settingsPickOutputDir, async (): Promise<string | null> => {
     const options: Electron.OpenDialogOptions = {
-      title: 'Choose output folder',
+      title: uiT(live)('settings.chooseOutputFolder'),
       defaultPath: live.outputDir,
       properties: ['openDirectory', 'createDirectory'],
     }
@@ -110,7 +127,9 @@ export function openSettingsWindow(): void {
     fullscreenable: false,
     autoHideMenuBar: true,
     backgroundColor: '#121216',
-    title: 'CapturePack — Settings',
+    // Pre-load placeholder only: the renderer document title (localized via
+    // data-i18n) replaces it as soon as the page loads.
+    title: liveSettings !== null ? uiT(liveSettings)('settings.windowTitle') : 'CapturePack',
     show: false,
     webPreferences: {
       preload: path.join(app.getAppPath(), 'dist', 'preload', 'settings.js'),
@@ -127,12 +146,13 @@ export function openSettingsWindow(): void {
 
 // Labels use physical pixels (size x scaleFactor) so they match the snapshot
 // resolution the user will actually get, plus DIP position and a primary mark.
-function listDisplays(): SettingsDisplayOption[] {
+function listDisplays(live: Settings): SettingsDisplayOption[] {
+  const t = uiT(live)
   const primaryId = screen.getPrimaryDisplay().id
   return screen.getAllDisplays().map((d) => {
     const w = Math.round(d.size.width * d.scaleFactor)
     const h = Math.round(d.size.height * d.scaleFactor)
-    const primary = d.id === primaryId ? ' — primary' : ''
+    const primary = d.id === primaryId ? ` — ${t('settings.primary')}` : ''
     return { id: String(d.id), label: `${w}×${h} at ${d.bounds.x},${d.bounds.y}${primary}` }
   })
 }

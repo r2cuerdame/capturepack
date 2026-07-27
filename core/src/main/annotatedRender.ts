@@ -90,6 +90,61 @@ export function startAnnotatedRender(
 }
 
 async function renderAnnotatedReplay(handle: PackHandle, job: AnnotatedRenderJob): Promise<void> {
+  const payload: RenderStartPayload = {
+    replayWebm: toArrayBuffer(job.replayWebm),
+    annotations: job.annotations,
+    width: job.width,
+    height: job.height,
+    fps: job.fps,
+    durationMs: job.replayDurationMs,
+  }
+  const webm = await runRenderWindow(payload, job.replayDurationMs * 2 + RENDER_TIMEOUT_SLACK_MS)
+  await writeFile(path.join(handle.dirPath, 'replay_annotated.webm'), Buffer.from(webm))
+  await setManifestReplayAnnotated(handle)
+}
+
+export interface TrimRenderJob {
+  replayWebm: Buffer
+  width: number
+  height: number
+  fps: number
+  // Wall-clock duration of the SOURCE replay (manifest replay_duration_ms) —
+  // the lifetime clock cap, kept for pipeline parity (the overlay set is empty)
+  sourceDurationMs: number
+  // Kept range on the source replay clock; trimEndMs null = to the video end
+  trimStartMs: number
+  trimEndMs: number | null
+}
+
+/**
+ * Plain-trim render (GOAL "Replay Trim"): the SAME hidden render pipeline with
+ * an EMPTY overlay set over an arbitrary [start, end] range, returning the
+ * re-encoded trimmed replay bytes for the session to write as replay.webm.
+ * Unlike startAnnotatedRender this is a FOREGROUND save step: the caller
+ * awaits it and reports it on the save toast ("Trimming replay…"). It never
+ * touches the pack folder, the manifest, or the render lifecycle bus — those
+ * track replay_annotated renders only.
+ */
+export async function renderTrimmedReplay(job: TrimRenderJob): Promise<Buffer> {
+  const endMs = job.trimEndMs ?? job.sourceDurationMs
+  const lengthMs = Math.max(0, endMs - job.trimStartMs)
+  const payload: RenderStartPayload = {
+    replayWebm: toArrayBuffer(job.replayWebm),
+    annotations: [],
+    width: job.width,
+    height: job.height,
+    fps: job.fps,
+    durationMs: job.sourceDurationMs,
+    trimStartMs: job.trimStartMs,
+  }
+  if (job.trimEndMs !== null) payload.trimEndMs = job.trimEndMs
+  // The render plays only the kept range in real time.
+  const webm = await runRenderWindow(payload, lengthMs * 2 + RENDER_TIMEOUT_SLACK_MS)
+  return Buffer.from(webm)
+}
+
+/** Opens the hidden render window, runs one job, and returns the webm bytes. */
+async function runRenderWindow(payload: RenderStartPayload, timeoutMs: number): Promise<ArrayBuffer> {
   const win = new BrowserWindow({
     show: false,
     width: 320,
@@ -103,20 +158,11 @@ async function renderAnnotatedReplay(handle: PackHandle, job: AnnotatedRenderJob
   })
   try {
     await win.loadFile(path.join(app.getAppPath(), 'dist', 'renderer', 'render', 'render.html'))
-    const payload: RenderStartPayload = {
-      replayWebm: toArrayBuffer(job.replayWebm),
-      annotations: job.annotations,
-      width: job.width,
-      height: job.height,
-      fps: job.fps,
-      durationMs: job.replayDurationMs,
-    }
-    const result = await awaitRenderResult(win, payload, job.replayDurationMs * 2 + RENDER_TIMEOUT_SLACK_MS)
+    const result = await awaitRenderResult(win, payload, timeoutMs)
     if (!result.ok || result.webm === undefined) {
       throw new Error(result.error ?? 'render window returned no video')
     }
-    await writeFile(path.join(handle.dirPath, 'replay_annotated.webm'), Buffer.from(result.webm))
-    await setManifestReplayAnnotated(handle)
+    return result.webm
   } finally {
     if (!win.isDestroyed()) win.destroy()
   }

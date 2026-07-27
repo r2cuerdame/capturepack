@@ -6,36 +6,39 @@
     http-equiv="Content-Security-Policy"
     content="default-src 'self'; script-src 'self'; style-src 'self'; media-src 'self' blob:"
   />
-  <title>CapturePack — Annotate</title>
+  <title data-i18n="editor.windowTitle">CapturePack — Annotate</title>
   <link rel="stylesheet" href="./editor.css" />
 </head>
 <body>
   <header id="topbar">
-    <button id="colorBtn" title="Color (C)"><span id="colorSwatch"></span></button>
-    <input id="titleInput" type="text" placeholder="Title (optional)" autocomplete="off" spellcheck="false" />
-    <input id="noteInput" type="text" placeholder="What is wrong? (optional)" autocomplete="off" spellcheck="false" />
-    <span id="replayChip" class="chip">No replay</span>
+    <button id="colorBtn" title="Color (C)" data-i18n-title="editor.colorTooltip"><span id="colorSwatch"></span></button>
+    <input id="titleInput" type="text" placeholder="Title (optional)" data-i18n-placeholder="editor.titlePlaceholder" autocomplete="off" spellcheck="false" />
+    <input id="noteInput" type="text" placeholder="What is wrong? (optional)" data-i18n-placeholder="editor.notePlaceholder" autocomplete="off" spellcheck="false" />
+    <span id="replayChip" class="chip" data-i18n="editor.noReplay">No replay</span>
     <label id="replayToggle" class="chip" hidden>
       <input id="includeReplay" type="checkbox" checked />
-      include replay
+      <span data-i18n="editor.includeReplay">include replay</span>
     </label>
-    <span id="dirtyChip" class="chip" hidden>Unsaved changes</span>
-    <span id="keysHint">L-click select · R-drag box · # number · Blur · Enter save · Esc close</span>
-    <button id="exportBtn">Save</button>
+    <span id="dirtyChip" class="chip" hidden data-i18n="editor.unsavedChanges">Unsaved changes</span>
+    <span id="keysHint" data-i18n="editor.keysHint">L-click select · R-drag box · # number · Blur · Enter save · Esc close</span>
+    <!-- Trim drop hint (GOAL "Replay Trim"): boxes whose lifetime is wholly
+         outside the active trim are dropped at save — count shown up front. -->
+    <span id="trimDropChip" class="chip" hidden></span>
+    <button id="exportBtn" data-i18n="editor.save">Save</button>
   </header>
   <main id="stage">
     <div id="frame">
       <canvas id="snapshot"></canvas>
       <canvas id="overlay" tabindex="-1"></canvas>
-      <input id="textEditor" type="text" placeholder="Describe… (Enter)" autocomplete="off" spellcheck="false" hidden />
+      <input id="textEditor" type="text" placeholder="Describe… (Enter)" data-i18n-placeholder="editor.describePlaceholder" autocomplete="off" spellcheck="false" hidden />
     </div>
     <!-- Selected-box header: floats above the box in screen space, glued to it
          under zoom/pan. Editor chrome only — never rendered into any output. -->
     <div id="boxHeader" hidden>
-      <button id="numberBtn" title="Toggle number">#</button>
-      <button id="durationChip" title="Edit duration">1.0s</button>
-      <button id="blurBtn" title="Toggle blur">Blur</button>
-      <button id="deleteBtn" title="Delete (Del)">×</button>
+      <button id="numberBtn" title="Toggle number" data-i18n-title="editor.numberTooltip">#</button>
+      <button id="durationChip" title="Edit duration" data-i18n-title="editor.durationTooltip">1.0s</button>
+      <button id="blurBtn" title="Toggle blur" data-i18n-title="editor.blurTooltip" data-i18n="editor.blur">Blur</button>
+      <button id="deleteBtn" title="Delete (Del)" data-i18n-title="editor.deleteTooltip">×</button>
     </div>
     <div id="durationEditor" hidden>
       <div id="durationPresets">
@@ -44,31 +47,38 @@
         <button type="button" data-ms="2000">2s</button>
         <button type="button" data-ms="5000">5s</button>
         <button type="button" data-ms="10000">10s</button>
-        <button type="button" id="untilEndBtn">Until End</button>
-        <button type="button" id="entireCaptureBtn">Entire Capture</button>
+        <button type="button" id="untilEndBtn" data-i18n="editor.untilEnd">Until End</button>
+        <button type="button" id="entireCaptureBtn" data-i18n="editor.entireCapture">Entire Capture</button>
       </div>
-      <input id="durationInput" type="text" placeholder="custom: 1500ms or 1.5s" autocomplete="off" spellcheck="false" />
+      <input id="durationInput" type="text" placeholder="custom: 1500ms or 1.5s" data-i18n-placeholder="editor.customDurationPlaceholder" autocomplete="off" spellcheck="false" />
     </div>
     <!-- Edit mode only (GOAL "History — Save after re-edit"): shown by Esc
          while there are unsaved changes. Esc again returns to editing. -->
     <div id="unsavedBar" hidden>
-      <span id="unsavedLabel">Unsaved changes</span>
-      <button id="unsavedSaveBtn" type="button">Save</button>
-      <button id="unsavedSaveAsBtn" type="button">Save As New CapturePack</button>
-      <button id="unsavedDiscardBtn" type="button">Discard</button>
+      <span id="unsavedLabel" data-i18n="editor.unsavedChanges">Unsaved changes</span>
+      <button id="unsavedSaveBtn" type="button" data-i18n="editor.save">Save</button>
+      <button id="unsavedSaveAsBtn" type="button" data-i18n="editor.saveAsNew">Save As New CapturePack</button>
+      <button id="unsavedDiscardBtn" type="button" data-i18n="editor.discard">Discard</button>
     </div>
   </main>
   <footer id="timebar" hidden>
-    <button id="playBtn" title="Play / pause" disabled>▶</button>
+    <button id="playBtn" title="Play / pause" data-i18n-title="editor.playTooltip" disabled>▶</button>
     <div id="trackArea">
       <div id="lanes" hidden></div>
       <div id="track">
         <div id="trackFill"></div>
+        <!-- Replay Trim (GOAL "Replay Trim"): regions outside the in/out trim
+             are dimmed; the handles drag, I/O set them, double-click resets. -->
+        <div id="trimDimIn" class="trimDim" hidden></div>
+        <div id="trimDimOut" class="trimDim" hidden></div>
         <div id="playhead"></div>
+        <div id="trimIn" class="trimHandle" title="Trim in (I) — double-click to reset" data-i18n-title="editor.trimInTooltip" hidden></div>
+        <div id="trimOut" class="trimHandle" title="Trim out (O) — double-click to reset" data-i18n-title="editor.trimOutTooltip" hidden></div>
       </div>
     </div>
-    <span id="timeLabel">now</span>
-    <span id="scrubHint">loading replay…</span>
+    <span id="trimChip" hidden></span>
+    <span id="timeLabel" data-i18n="editor.now">now</span>
+    <span id="scrubHint" data-i18n="editor.loadingReplay">loading replay…</span>
   </footer>
   <script src="./editor.js"></script>
 </body>

@@ -1,6 +1,8 @@
 // Save-complete toast renderer: folder name, the four actions, the blur
 // warning line, and the background render status. Kept dumb: every action is
 // one bridge call; main owns the file system and the clipboard.
+import { applyDomI18n, makeT } from '../../shared/i18n'
+import type { TranslateFn } from '../../shared/i18n'
 import type {
   ToastCreateZipResult,
   ToastInitPayload,
@@ -38,6 +40,9 @@ const copyPromptBtn = el<HTMLButtonElement>('copyPromptBtn')
 const blurWarning = el<HTMLDivElement>('blurWarning')
 const renderStatus = el<HTMLDivElement>('renderStatus')
 
+// Active-language t(); replaced by the init payload's uiLanguage.
+let t: TranslateFn = makeT('en')
+
 /** Briefly confirms a click by swapping the button label. */
 function flash(btn: HTMLButtonElement, label: string): void {
   const original = btn.textContent
@@ -49,23 +54,30 @@ function flash(btn: HTMLButtonElement, label: string): void {
 
 function setRenderStatus(state: string): void {
   renderStatus.classList.remove('done', 'failed')
-  if (state === 'rendering') {
+  if (state === 'trimming') {
+    // Trim save (GOAL "Replay Trim"): the plain-trim render runs first, then
+    // the annotated render flips this line to 'rendering'.
     renderStatus.hidden = false
-    renderStatus.textContent = 'rendering annotated replay…'
+    renderStatus.textContent = t('toast.trimming')
+  } else if (state === 'rendering') {
+    renderStatus.hidden = false
+    renderStatus.textContent = t('toast.rendering')
   } else if (state === 'done') {
     renderStatus.hidden = false
     renderStatus.classList.add('done')
-    renderStatus.textContent = 'annotated replay ready'
+    renderStatus.textContent = t('toast.renderReady')
   } else if (state === 'failed') {
     renderStatus.hidden = false
     renderStatus.classList.add('failed')
-    renderStatus.textContent = 'annotated replay render failed'
+    renderStatus.textContent = t('toast.renderFailed')
   } else {
     renderStatus.hidden = true
   }
 }
 
 window.toastBridge.onInit((payload) => {
+  t = makeT(payload.uiLanguage)
+  applyDomI18n(t)
   folderName.textContent = payload.folderName
   folderName.title = payload.folderPath
   blurWarning.hidden = !payload.hasBlur
@@ -80,11 +92,11 @@ closeBtn.addEventListener('click', () => window.toastBridge.close())
 openFolderBtn.addEventListener('click', () => window.toastBridge.openFolder())
 copyPathBtn.addEventListener('click', () => {
   window.toastBridge.copyPath()
-  flash(copyPathBtn, 'Copied!')
+  flash(copyPathBtn, t('toast.copiedFlash'))
 })
 copyPromptBtn.addEventListener('click', () => {
   window.toastBridge.copyPrompt()
-  flash(copyPromptBtn, 'Copied!')
+  flash(copyPromptBtn, t('toast.copiedFlash'))
 })
 createZipBtn.addEventListener('click', () => {
   createZipBtn.disabled = true
@@ -92,15 +104,15 @@ createZipBtn.addEventListener('click', () => {
     .createZip()
     .then((result) => {
       if (result.ok) {
-        createZipBtn.textContent = 'ZIP created'
+        createZipBtn.textContent = t('toast.zipCreated')
       } else {
         createZipBtn.disabled = false
-        flash(createZipBtn, 'ZIP failed')
+        flash(createZipBtn, t('toast.zipFailed'))
       }
     })
     .catch(() => {
       createZipBtn.disabled = false
-      flash(createZipBtn, 'ZIP failed')
+      flash(createZipBtn, t('toast.zipFailed'))
     })
 })
 

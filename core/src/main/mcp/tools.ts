@@ -1,6 +1,11 @@
 // MCP tool registrations (all read-only). Each tool answers with compact JSON
 // in a text block (capturepack_frame adds an image block); descriptions are
 // written so an LLM can use each tool without any other documentation.
+//
+// i18n NOTE (GOAL "Internationalization"): tool names, descriptions, and
+// response shapes deliberately stay ENGLISH in every UI language — they are an
+// LLM-facing API surface (like the SPEC), not app UI, and are never routed
+// through shared/i18n.ts.
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'

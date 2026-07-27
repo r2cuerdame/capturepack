@@ -2,7 +2,15 @@
 // saves every change immediately on input (no Save button), clamps out-of-range
 // numbers on commit with a brief highlight, and shows inline "restart to apply"
 // hints for the keys the main process cannot honor live.
-import type { SettingsGetResult, SettingsPatch, SettingsSetResult } from '../../shared/ipc'
+import type { SettingsDisplayOption, SettingsGetResult, SettingsPatch, SettingsSetResult } from '../../shared/ipc'
+import {
+  applyDomI18n,
+  LANGUAGE_NATIVE_NAMES,
+  makeT,
+  resolveLanguage,
+  SUPPORTED_LANGUAGES,
+} from '../../shared/i18n'
+import type { TranslateFn } from '../../shared/i18n'
 import type { Settings } from '../../shared/types'
 
 interface SettingsBridge {
@@ -38,6 +46,8 @@ const captureDisplaySelect = el<HTMLSelectElement>('captureDisplay')
 const mcpUrlEl = el<HTMLElement>('mcpUrl')
 const copyUrlBtn = el<HTMLButtonElement>('copyUrlBtn')
 const appVersionEl = el<HTMLSpanElement>('appVersion')
+const languageSelect = el<HTMLSelectElement>('language')
+const packLanguageSelect = el<HTMLSelectElement>('packLanguage')
 
 // ---------------------------------------------------------------------------
 // State
@@ -50,6 +60,27 @@ let boot: Settings | null = null
 // The URL the RUNNING server listens on (boot-time port), shown and copied
 // as-is: a changed port needs a restart, which the mcpPort hint says.
 let runningMcpUrl = ''
+// What "system" resolves to on this machine (from main); lets the window
+// re-resolve the language locally the moment the dropdown changes.
+let systemLanguage = 'en'
+let appVersion = ''
+let displays: SettingsDisplayOption[] = []
+// Active-language t(); re-created by refreshLanguage() on every change.
+let t: TranslateFn = makeT('en')
+
+function activeLanguage(): string {
+  return current === null ? 'en' : resolveLanguage(current.language, systemLanguage)
+}
+
+// Instant apply (GOAL i18n): re-applies the static data-i18n texts and
+// rebuilds every dynamically built label in the new language.
+function refreshLanguage(): void {
+  t = makeT(activeLanguage())
+  applyDomI18n(t)
+  buildLanguageOptions()
+  buildDisplayOptions()
+  appVersionEl.textContent = t('settings.version', { version: appVersion })
+}
 
 // Keys whose change the main process cannot honor without a restart; each has
 // an inline hint element `${key}Hint` (outputDir's hint is MCP-index specific).
@@ -176,13 +207,13 @@ for (const field of NUMBER_FIELDS) {
 // ---------------------------------------------------------------------------
 // Capture display picker
 
-function buildDisplayOptions(data: SettingsGetResult): void {
+function buildDisplayOptions(): void {
   captureDisplaySelect.replaceChildren()
   const cursorOption = document.createElement('option')
   cursorOption.value = 'cursor'
-  cursorOption.textContent = 'Cursor display (recommended)'
+  cursorOption.textContent = t('settings.cursorDisplay')
   captureDisplaySelect.append(cursorOption)
-  for (const display of data.displays) {
+  for (const display of displays) {
     const option = document.createElement('option')
     option.value = display.id
     option.textContent = display.label
@@ -191,14 +222,52 @@ function buildDisplayOptions(data: SettingsGetResult): void {
   // A configured fixed display that is currently disconnected still needs an
   // entry, or the select would silently show the wrong value. Capture itself
   // falls back to primary while it is gone.
-  const configured = data.settings.captureDisplay
-  if (configured !== 'cursor' && !data.displays.some((d) => d.id === configured)) {
+  const configured = current?.captureDisplay ?? 'cursor'
+  if (configured !== 'cursor' && !displays.some((d) => d.id === configured)) {
     const option = document.createElement('option')
     option.value = configured
-    option.textContent = `Display ${configured} (disconnected)`
+    option.textContent = t('settings.displayDisconnected', { id: configured })
     captureDisplaySelect.append(option)
   }
+  if (current !== null) captureDisplaySelect.value = current.captureDisplay
 }
+
+// Language pickers (GOAL i18n, Settings > General): "System default" / "Match
+// app language" first, then the nine languages under their NATIVE names.
+function buildLanguageOptions(): void {
+  const build = (select: HTMLSelectElement, first: string, firstLabel: string): void => {
+    select.replaceChildren()
+    const head = document.createElement('option')
+    head.value = first
+    head.textContent = firstLabel
+    select.append(head)
+    for (const lang of SUPPORTED_LANGUAGES) {
+      const option = document.createElement('option')
+      option.value = lang
+      option.textContent = LANGUAGE_NATIVE_NAMES[lang]
+      select.append(option)
+    }
+  }
+  build(languageSelect, 'system', t('settings.languageSystem'))
+  build(packLanguageSelect, 'ui', t('settings.packLanguageMatch'))
+  if (current !== null) {
+    languageSelect.value = current.language
+    packLanguageSelect.value = current.packLanguage
+  }
+}
+
+languageSelect.addEventListener('change', () => {
+  void (async () => {
+    await apply({ language: languageSelect.value })
+    // Full reload: main rebuilds the display labels (the "primary" word) in
+    // the new language, and refreshLanguage() re-renders this whole window.
+    await hydrate()
+  })()
+})
+
+packLanguageSelect.addEventListener('change', () => {
+  void apply({ packLanguage: packLanguageSelect.value })
+})
 
 captureDisplaySelect.addEventListener('change', () => {
   void apply({ captureDisplay: captureDisplaySelect.value })
@@ -227,9 +296,9 @@ copyUrlBtn.addEventListener('click', () => {
   navigator.clipboard
     .writeText(url)
     .then(() => {
-      copyUrlBtn.textContent = 'Copied'
+      copyUrlBtn.textContent = t('settings.copied')
       window.setTimeout(() => {
-        copyUrlBtn.textContent = 'Copy'
+        copyUrlBtn.textContent = t('settings.copy')
       }, 900)
     })
     .catch(() => {
@@ -252,6 +321,8 @@ function syncControls(): void {
     el<HTMLInputElement>(field.id).value = String(field.fromSettings(s))
   }
   captureDisplaySelect.value = s.captureDisplay
+  languageSelect.value = s.language
+  packLanguageSelect.value = s.packLanguage
   mcpUrlEl.textContent = runningMcpUrl
 }
 
@@ -262,13 +333,17 @@ window.addEventListener('keydown', (event) => {
   }
 })
 
-void (async () => {
+async function hydrate(): Promise<void> {
   const data = await bridge.get()
   current = data.settings
   boot = data.bootSettings
+  displays = data.displays
   runningMcpUrl = data.mcpUrl
-  buildDisplayOptions(data)
+  systemLanguage = data.systemLanguage
+  appVersion = data.appVersion
+  refreshLanguage()
   syncControls()
-  appVersionEl.textContent = `CapturePack v${data.appVersion}`
   updateHints()
-})()
+}
+
+void hydrate()
