@@ -616,6 +616,32 @@ With this design CapturePack naturally grows into a plugin-based context platfor
 
 ---
 
+## Tray Menu
+
+The tray menu is the app's only always-present surface, so it stays short:
+
+```
+Capture now   Ctrl+Alt+C
+History
+Open output folder
+Settings…
+─────────────────
+Check for updates…
+About CapturePack
+─────────────────
+Quit CapturePack
+```
+
+- **Check for updates…** — manual check with inline feedback in the menu item
+  ("Checking…", "You're up to date", "Downloading…", "Restart and update (vX)").
+  The automatic check keeps working exactly as before.
+- **About CapturePack** — a small window: icon, name, version (+ "up to date" state),
+  the two slogans, MIT license, and links: Website · GitHub · Report an issue ·
+  **♥ Sponsor**. Donation lives here, never in the capture flow — the tool must never
+  interrupt the 5-second workflow to ask for money.
+
+---
+
 ## Settings GUI
 
 Settings are edited in a GUI window — never by opening settings.json in an editor
