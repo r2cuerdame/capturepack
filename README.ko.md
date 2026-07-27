@@ -1,4 +1,4 @@
-# capturepack
+﻿# capturepack
 
 [English](README.md) · **한국어** · [日本語](README.ja.md) · [中文](README.zh.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Português](README.pt.md) · [Русский](README.ru.md)
 
@@ -23,7 +23,7 @@ CapturePack은 스크린샷과 화면 녹화를 넘어, 사람과 AI가 눈에 �
   <!-- Absolute raw URL with a version query: GitHub proxies README images through
        camo, which caches by source URL — without the bump a fixed demo keeps
        rendering the stale copy for hours. Bump ?v= whenever demo.svg changes. -->
-  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=2" alt="데모: Ctrl+Alt+C를 누르면 지난 30초가 멈추고, 마우스 휠로 시간을 거슬러 이동하고, 드래그로 개체를 선택하고, 주석을 적으면 CapturePack이 저장됩니다." width="760">
+  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=3" alt="데모: Ctrl+Alt+C를 누르면 지난 30초가 멈추고, 마우스 휠로 시간을 거슬러 이동하고, 드래그로 개체를 선택하고, 주석을 적으면 CapturePack이 저장됩니다." width="760">
 </p>
 
 CapturePack **폴더**에는 스크린샷이 담지 못하는 것이 들어 있습니다. 지난 30초의 리플레이, 스냅샷, 편집 가능한 주석, 기계가 읽는 이벤트 타임라인, 그리고 사람과 AI가 모두 읽는 리포트까지 — 다른 개발자든 어떤 LLM이든 상황을 바로 이해하는 데 필요한 모든 것입니다. 공유할 일이 생기면 폴더를 `.capturepack` 파일 하나로 묶으세요.

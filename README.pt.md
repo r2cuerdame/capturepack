@@ -1,4 +1,4 @@
-# capturepack
+﻿# capturepack
 
 [English](README.md) · [한국어](README.ko.md) · [日本語](README.ja.md) · [中文](README.zh.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · **Português** · [Русский](README.ru.md)
 
@@ -23,7 +23,7 @@ O CapturePack é um formato aberto de captura de contexto — e o kit de ferrame
   <!-- Absolute raw URL with a version query: GitHub proxies README images through
        camo, which caches by source URL — without the bump a fixed demo keeps
        rendering the stale copy for hours. Bump ?v= whenever demo.svg changes. -->
-  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=2" alt="Demo: aperte Ctrl+Alt+C, os últimos 30 segundos congelam, a roda do mouse percorre o tempo, arraste para selecionar o objeto, escreva a anotação e o CapturePack está salvo." width="760">
+  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=3" alt="Demo: aperte Ctrl+Alt+C, os últimos 30 segundos congelam, a roda do mouse percorre o tempo, arraste para selecionar o objeto, escreva a anotação e o CapturePack está salvo." width="760">
 </p>
 
 Uma **pasta** CapturePack reúne o que uma captura de tela não consegue: os últimos 30 segundos de replay, o quadro capturado, anotações editáveis, uma linha do tempo de eventos legível por máquina e relatórios legíveis por humanos e por IA — tudo o que outro desenvolvedor ou qualquer LLM precisa para entender a situação na hora. Quando for compartilhar, empacote a pasta em um único arquivo `.capturepack`.

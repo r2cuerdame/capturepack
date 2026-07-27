@@ -1,4 +1,4 @@
-# capturepack
+﻿# capturepack
 
 [English](README.md) · [한국어](README.ko.md) · [日本語](README.ja.md) · [中文](README.zh.md) · [Español](README.es.md) · **Français** · [Deutsch](README.de.md) · [Português](README.pt.md) · [Русский](README.ru.md)
 
@@ -23,7 +23,7 @@ CapturePack est un format et une boîte à outils open source de capture de cont
   <!-- Absolute raw URL with a version query: GitHub proxies README images through
        camo, which caches by source URL — without the bump a fixed demo keeps
        rendering the stale copy for hours. Bump ?v= whenever demo.svg changes. -->
-  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=2" alt="Démo : appuyez sur Ctrl+Alt+C, les 30 dernières secondes se figent, la molette fait défiler le temps, glissez pour sélectionner l’objet, écrivez l’annotation, et le CapturePack est enregistré." width="760">
+  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=3" alt="Démo : appuyez sur Ctrl+Alt+C, les 30 dernières secondes se figent, la molette fait défiler le temps, glissez pour sélectionner l’objet, écrivez l’annotation, et le CapturePack est enregistré." width="760">
 </p>
 
 Un **dossier** CapturePack rassemble tout ce qu’une capture d’écran ne peut pas contenir : les 30 dernières secondes de replay, un instantané, des annotations modifiables, une chronologie d’événements lisible par une machine, et des rapports lisibles aussi bien par un humain que par une IA — tout ce qu’il faut à un autre développeur ou à n’importe quel LLM pour comprendre la situation immédiatement. Au moment de partager, empaquetez le dossier en un seul fichier `.capturepack`.

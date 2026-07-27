@@ -1,4 +1,4 @@
-# capturepack
+﻿# capturepack
 
 [English](README.md) · [한국어](README.ko.md) · [日本語](README.ja.md) · **中文** · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Português](README.pt.md) · [Русский](README.ru.md)
 
@@ -23,7 +23,7 @@ CapturePack 是一套开源的上下文捕捉格式与工具集，让人类和 A
   <!-- Absolute raw URL with a version query: GitHub proxies README images through
        camo, which caches by source URL — without the bump a fixed demo keeps
        rendering the stale copy for hours. Bump ?v= whenever demo.svg changes. -->
-  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=2" alt="演示：按下 Ctrl+Alt+C，最后 30 秒被冻结，滚动滚轮在时间中穿梭，拖拽框选对象，写下标注，CapturePack 就保存好了。" width="760">
+  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=3" alt="演示：按下 Ctrl+Alt+C，最后 30 秒被冻结，滚动滚轮在时间中穿梭，拖拽框选对象，写下标注，CapturePack 就保存好了。" width="760">
 </p>
 
 一个 CapturePack **文件夹**装下了截图装不下的东西：最后 30 秒的回放、一张快照、可编辑的标注、机器可读的事件时间线，还有人和 AI 都读得懂的报告 — 另一位开发者或任何 LLM 立刻看懂现场所需的一切。需要分享时，把文件夹打包成一个 `.capturepack` 文件就行。

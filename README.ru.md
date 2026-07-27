@@ -1,4 +1,4 @@
-# capturepack
+﻿# capturepack
 
 [English](README.md) · [한국어](README.ko.md) · [日本語](README.ja.md) · [中文](README.zh.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Português](README.pt.md) · **Русский**
 
@@ -23,7 +23,7 @@ CapturePack — открытый формат захвата контекста 
   <!-- Absolute raw URL with a version query: GitHub proxies README images through
        camo, which caches by source URL — without the bump a fixed demo keeps
        rendering the stale copy for hours. Bump ?v= whenever demo.svg changes. -->
-  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=2" alt="Демо: нажмите Ctrl+Alt+C — последние 30 секунд застывают, колесо мыши перематывает время, выделите объект перетаскиванием, напишите аннотацию, и CapturePack сохранён." width="760">
+  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=3" alt="Демо: нажмите Ctrl+Alt+C — последние 30 секунд застывают, колесо мыши перематывает время, выделите объект перетаскиванием, напишите аннотацию, и CapturePack сохранён." width="760">
 </p>
 
 **Папка** CapturePack собирает то, что скриншоту не под силу: последние 30 секунд реплея, снимок экрана, редактируемые аннотации, машиночитаемую хронологию событий и отчёты, понятные и человеку, и ИИ, — всё, что нужно другому разработчику или любой LLM, чтобы сразу разобраться в ситуации. Когда нужно поделиться, упакуйте папку в один файл `.capturepack`.

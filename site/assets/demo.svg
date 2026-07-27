@@ -1,135 +1,119 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 540" font-family="system-ui, 'Segoe UI', sans-serif">
   <style>
-    .cap { font-size: 22px; font-weight: 650; fill: #ececf1; text-anchor: middle; }
-    .dim { fill: #9a9aa6; }
-    g[id^="s"] { opacity: 0; }
-    /* 8s loop: six quick steps */
-    #s1 { animation: st1 8s linear infinite; }
-    #s2 { animation: st2 8s linear infinite; }
-    #s3 { animation: st3 8s linear infinite; }
-    #s4 { animation: st4 8s linear infinite; }
-    #s5 { animation: st5 8s linear infinite; }
-    #s6 { animation: st6 8s linear infinite; }
-    @keyframes st1 { 0%,1% {opacity:0} 3%,13% {opacity:1} 15%,100% {opacity:0} }
-    @keyframes st2 { 0%,15% {opacity:0} 17%,28% {opacity:1} 30%,100% {opacity:0} }
-    @keyframes st3 { 0%,30% {opacity:0} 32%,45% {opacity:1} 47%,100% {opacity:0} }
-    @keyframes st4 { 0%,47% {opacity:0} 49%,63% {opacity:1} 65%,100% {opacity:0} }
-    @keyframes st5 { 0%,65% {opacity:0} 67%,83% {opacity:1} 85%,100% {opacity:0} }
-    @keyframes st6 { 0%,85% {opacity:0} 87%,98% {opacity:1} 100% {opacity:0} }
+    .cap    { font-size: 26px; font-weight: 700; fill: #17171c; text-anchor: middle; }
+    .capsub { font-size: 15px; fill: #6b6b78; text-anchor: middle; }
+    .step   { font-size: 13px; font-weight: 700; fill: #7c5cff; text-anchor: middle; letter-spacing: .12em; }
+    g[id^="s"] { opacity: 0 }
+    #s1 { animation: st1 9s linear infinite } #s2 { animation: st2 9s linear infinite }
+    #s3 { animation: st3 9s linear infinite } #s4 { animation: st4 9s linear infinite }
+    #s5 { animation: st5 9s linear infinite }
+    @keyframes st1 { 0%,1%{opacity:0} 3%,16%{opacity:1} 18%,100%{opacity:0} }
+    @keyframes st2 { 0%,18%{opacity:0} 20%,36%{opacity:1} 38%,100%{opacity:0} }
+    @keyframes st3 { 0%,38%{opacity:0} 40%,57%{opacity:1} 59%,100%{opacity:0} }
+    @keyframes st4 { 0%,59%{opacity:0} 61%,78%{opacity:1} 80%,100%{opacity:0} }
+    @keyframes st5 { 0%,80%{opacity:0} 82%,97%{opacity:1} 99%,100%{opacity:0} }
 
-    /* frozen frame + timeline appear from step 2 on */
-    #frozen { opacity: 0; animation: frz 8s linear infinite; }
-    @keyframes frz { 0%,15% {opacity:0} 17%,98% {opacity:1} 100% {opacity:0} }
+    #frozen { opacity: 0; animation: frz 9s linear infinite }
+    @keyframes frz { 0%,18%{opacity:0} 20%,97%{opacity:1} 99%,100%{opacity:0} }
+    #playhead { animation: ph 9s linear infinite }
+    @keyframes ph { 0%,40%{transform:translateX(0)} 55%,100%{transform:translateX(-214px)} }
 
-    /* playhead scrubs into the past during step 3 */
-    #playhead { animation: ph 8s linear infinite; }
-    @keyframes ph { 0%,31% { transform: translateX(0) } 45%,100% { transform: translateX(-190px) } }
-
-    /* cursor: appears for the drag, travels corner to corner, moves to the note, fades */
-    #cursor { opacity: 0; animation: cur 8s linear infinite; }
+    #cursor { opacity: 0; animation: cur 9s linear infinite }
     @keyframes cur {
-      0%,47%  { opacity: 0; transform: translate(586px, 276px) }
-      49%     { opacity: 1; transform: translate(586px, 276px) }
-      62%     { opacity: 1; transform: translate(734px, 336px) }
-      66%     { opacity: 1; transform: translate(560px, 372px) }
-      82%     { opacity: 1; transform: translate(560px, 372px) }
-      85%,100%{ opacity: 0; transform: translate(560px, 372px) }
+      0%,58%   { opacity:0; transform: translate(596px,236px) }
+      61%      { opacity:1; transform: translate(596px,236px) }
+      74%      { opacity:1; transform: translate(760px,300px) }
+      78%      { opacity:1; transform: translate(470px,360px) }
+      96%      { opacity:1; transform: translate(470px,360px) }
+      98%,100% { opacity:0; transform: translate(470px,360px) }
     }
-
-    /* selection rect grows with the drag */
-    #objrect { opacity: 0; transform-box: fill-box; transform-origin: top left; animation: obj 8s linear infinite; }
+    #objrect { opacity:0; transform-box: fill-box; transform-origin: top left; animation: obj 9s linear infinite }
     @keyframes obj {
-      0%,48%  { opacity: 0; transform: scale(0.06) }
-      50%     { opacity: 1; transform: scale(0.06) }
-      62%     { opacity: 1; transform: scale(1) }
-      98%     { opacity: 1; transform: scale(1) }
-      100%    { opacity: 0; transform: scale(1) }
+      0%,60%{opacity:0; transform:scale(.05)} 62%{opacity:1; transform:scale(.05)}
+      74%{opacity:1; transform:scale(1)} 97%{opacity:1; transform:scale(1)} 99%,100%{opacity:0; transform:scale(1)}
     }
-
-    /* annotation note box appears, then the text types itself */
-    #note { opacity: 0; animation: nt 8s linear infinite; }
-    @keyframes nt { 0%,65% {opacity:0} 67%,98% {opacity:1} 100% {opacity:0} }
-    #typecover { animation: tc 8s linear infinite; }
-    @keyframes tc { 0%,68% { transform: translateX(0) } 82%,100% { transform: translateX(242px) } }
-    #caret { animation: ca 8s linear infinite; }
-    @keyframes ca {
-      0%,67% { opacity: 0 }
-      68%,81% { opacity: 1 }
-      83%,100% { opacity: 0 }
-    }
+    #note { opacity:0; animation: nt 9s linear infinite }
+    @keyframes nt { 0%,78%{opacity:0} 80%,97%{opacity:1} 99%,100%{opacity:0} }
+    #typecover { animation: tc 9s linear infinite }
+    @keyframes tc { 0%,81%{transform:translateX(0)} 93%,100%{transform:translateX(228px)} }
+    #saved { opacity:0; animation: sv 9s linear infinite }
+    @keyframes sv { 0%,94%{opacity:0} 96%,99%{opacity:1} 100%{opacity:0} }
   </style>
 
   <defs>
-    <!-- Interior of the annotation note; the typing cover may never paint outside it. -->
-    <clipPath id="noteClip">
-      <rect x="376" y="338" width="266" height="34" rx="7"/>
-    </clipPath>
+    <clipPath id="noteClip"><rect x="330" y="392" width="252" height="30" rx="6"/></clipPath>
+    <linearGradient id="btn" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7c5cff"/><stop offset="1" stop-color="#9d5cff"/>
+    </linearGradient>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#17171c" flood-opacity="0.14"/>
+    </filter>
   </defs>
 
-  <!-- backdrop -->
-  <rect width="960" height="540" fill="#0e0e12"/>
+  <rect width="960" height="540" fill="#f6f6f9"/>
 
-  <!-- caption line -->
+  <!-- caption -->
   <g>
-    <g id="s1"><text class="cap" x="480" y="52">Press  Ctrl + Alt + C</text></g>
-    <g id="s2"><text class="cap" x="480" y="52">The last 30 seconds freeze</text></g>
-    <g id="s3"><text class="cap" x="480" y="52">Mouse wheel moves through time</text></g>
-    <g id="s4"><text class="cap" x="480" y="52">Drag to select the object</text></g>
-    <g id="s5"><text class="cap" x="480" y="52">Write the annotation</text></g>
-    <g id="s6"><text class="cap" x="480" y="52">issue.capturepack exported ✓</text></g>
+    <g id="s1"><text class="step" x="480" y="40">STEP 1</text><text class="cap" x="480" y="70">Press Ctrl + Alt + C</text><text class="capsub" x="480" y="94">after the bug already happened</text></g>
+    <g id="s2"><text class="step" x="480" y="40">STEP 2</text><text class="cap" x="480" y="70">The last 30 seconds freeze</text><text class="capsub" x="480" y="94">CapturePack was already recording</text></g>
+    <g id="s3"><text class="step" x="480" y="40">STEP 3</text><text class="cap" x="480" y="70">Scroll back through time</text><text class="capsub" x="480" y="94">the wheel moves 100 ms per notch</text></g>
+    <g id="s4"><text class="step" x="480" y="40">STEP 4</text><text class="cap" x="480" y="70">Drag a box on the problem</text><text class="capsub" x="480" y="94">right-drag — no tool to pick first</text></g>
+    <g id="s5"><text class="step" x="480" y="40">STEP 5</text><text class="cap" x="480" y="70">Type it. Done.</text><text class="capsub" x="480" y="94">a CapturePack folder lands on your desktop</text></g>
   </g>
 
-  <!-- mock screen -->
-  <g>
-    <rect x="140" y="86" width="680" height="360" rx="14" fill="#1a1a22" stroke="#26262e"/>
-    <!-- app window -->
-    <rect x="190" y="120" width="580" height="290" rx="10" fill="#202029" stroke="#2e2e38"/>
-    <rect x="190" y="120" width="580" height="34" rx="10" fill="#262630"/>
-    <circle cx="212" cy="137" r="5" fill="#3a3a46"/>
-    <circle cx="230" cy="137" r="5" fill="#3a3a46"/>
-    <!-- layout: sidebar + content -->
-    <rect x="208" y="170" width="130" height="220" rx="8" fill="#262631"/>
-    <rect x="356" y="170" width="300" height="140" rx="8" fill="#262631"/>
-    <!-- the "bug": button overflowing its container -->
-    <rect x="596" y="286" width="128" height="40" rx="8" fill="#7c5cff"/>
-    <text x="660" y="311" font-size="16" fill="#ffffff" text-anchor="middle">Submit</text>
+  <!-- app mockup: LIGHT ui -->
+  <g filter="url(#soft)">
+    <rect x="150" y="120" width="660" height="330" rx="14" fill="#ffffff" stroke="#e2e2ea"/>
+    <rect x="150" y="120" width="660" height="40" rx="14" fill="#f1f1f6"/>
+    <rect x="150" y="146" width="660" height="14" fill="#f1f1f6"/>
+    <circle cx="174" cy="140" r="5" fill="#ff5f57"/><circle cx="192" cy="140" r="5" fill="#febc2e"/><circle cx="210" cy="140" r="5" fill="#28c840"/>
+    <rect x="240" y="131" width="300" height="18" rx="9" fill="#e6e6ee"/>
+
+    <!-- sidebar -->
+    <rect x="170" y="180" width="130" height="250" rx="10" fill="#f5f5f9"/>
+    <rect x="186" y="200" width="74" height="9" rx="4.5" fill="#c9c9d6"/>
+    <rect x="186" y="222" width="98" height="9" rx="4.5" fill="#dcdce6"/>
+    <rect x="186" y="244" width="86" height="9" rx="4.5" fill="#dcdce6"/>
+    <rect x="186" y="266" width="94" height="9" rx="4.5" fill="#dcdce6"/>
+
+    <!-- form -->
+    <rect x="322" y="186" width="60" height="9" rx="4.5" fill="#b6b6c6"/>
+    <rect x="322" y="204" width="330" height="30" rx="8" fill="#f5f5f9" stroke="#e6e6ee"/>
+    <rect x="322" y="254" width="80" height="9" rx="4.5" fill="#b6b6c6"/>
+    <rect x="322" y="272" width="330" height="30" rx="8" fill="#f5f5f9" stroke="#e6e6ee"/>
+
+    <!-- the bug: submit button overflowing the card -->
+    <rect x="606" y="322" width="132" height="42" rx="9" fill="url(#btn)"/>
+    <text x="672" y="349" font-size="16" font-weight="600" fill="#fff" text-anchor="middle">Submit</text>
   </g>
 
-  <!-- frozen frame indicator + timeline -->
+  <!-- frozen frame + timeline -->
   <g id="frozen">
-    <rect x="140" y="86" width="680" height="360" rx="14" fill="none" stroke="#7c5cff" stroke-width="2.5"/>
-    <rect x="190" y="466" width="580" height="6" rx="3" fill="#26262e"/>
-    <g id="playhead" transform="translate(0,0)">
-      <rect x="742" y="458" width="4" height="22" rx="2" fill="#7c5cff"/>
-    </g>
-    <text x="190" y="500" font-size="14" class="dim">-30s</text>
-    <text x="770" y="500" font-size="14" class="dim" text-anchor="end">now</text>
+    <rect x="146" y="116" width="668" height="338" rx="16" fill="none" stroke="#7c5cff" stroke-width="3"/>
+    <rect x="196" y="474" width="568" height="8" rx="4" fill="#e0e0ea"/>
+    <g id="playhead"><rect x="752" y="464" width="5" height="28" rx="2.5" fill="#7c5cff"/></g>
+    <text x="196" y="506" font-size="13" fill="#8a8a99">−30s</text>
+    <text x="764" y="506" font-size="13" fill="#8a8a99" text-anchor="end">now</text>
   </g>
 
-  <!-- drag-selection rectangle -->
-  <g id="objrect">
-    <rect x="588" y="278" width="144" height="56" rx="6" fill="rgba(255,59,48,0.10)" stroke="#ff3b30" stroke-width="2.5"/>
-  </g>
+  <!-- annotation -->
+  <g id="objrect"><rect x="598" y="314" width="148" height="58" rx="8" fill="rgba(255,59,48,.10)" stroke="#ff3b30" stroke-width="3"/></g>
 
-  <!-- annotation note with typing text -->
   <g id="note">
-    <rect x="374" y="336" width="270" height="38" rx="8" fill="#14141a" stroke="#3a3a46"/>
-    <text x="388" y="361" font-size="16" fill="#ececf1">Submit overflows container</text>
-    <!-- Cover slides right, revealing the text as if typed. The clip must sit on
-         a STATIC wrapper: clip-path on the animated group itself is resolved in
-         that group's own coordinate system, so it travels with the translate and
-         the cover keeps spilling past the note. -->
-    <g clip-path="url(#noteClip)">
-      <g id="typecover">
-        <rect x="386" y="342" width="242" height="26" fill="#14141a"/>
-        <rect id="caret" x="386" y="344" width="2" height="22" fill="#ececf1"/>
-      </g>
-    </g>
+    <rect x="326" y="388" width="260" height="38" rx="8" fill="#17171c"/>
+    <text x="340" y="413" font-size="15" fill="#ffffff">Submit overflows the card</text>
+    <g clip-path="url(#noteClip)"><g id="typecover">
+      <rect x="338" y="392" width="228" height="30" fill="#17171c"/>
+      <rect x="338" y="396" width="2" height="22" fill="#ffffff"/>
+    </g></g>
   </g>
 
-  <!-- mouse cursor -->
+  <g id="saved">
+    <rect x="330" y="452" width="300" height="34" rx="8" fill="#e9fbef" stroke="#7fd79b"/>
+    <text x="348" y="474" font-size="14" fill="#177a3c">✓ CapturePack_2026-07-27_143052 saved</text>
+  </g>
+
   <g id="cursor">
-    <path d="M0,0 L0,16 L4.5,12.5 L7.5,19 L10,17.8 L7,11.5 L12.5,11.5 Z"
-          fill="#ffffff" stroke="#111116" stroke-width="1"/>
+    <path d="M0,0 L0,17 L4.8,13.2 L8,20 L10.8,18.7 L7.6,12.1 L13.4,12.1 Z" fill="#17171c" stroke="#ffffff" stroke-width="1.4"/>
   </g>
 </svg>
