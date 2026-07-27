@@ -153,6 +153,9 @@ Every fix or feature updates ALL public surfaces in the same pass — none may d
 - **Landing page** — capturepack.dev stays truthful (roadmap Now/Next, download state).
 - **Release notes** — every tag ships human-readable notes on the GitHub Release
   (what changed, what was fixed, upgrade impact).
+- **MCP interface** — tool descriptions, responses, and docs/MCP.md always match the
+  current format and behavior; a format change (annotation model, pack layout, naming)
+  is not done until the MCP tools speak it.
 
 ---
 
