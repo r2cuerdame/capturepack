@@ -455,8 +455,8 @@ function schedulePaint(): void {
       overlayCtx,
       snapshot,
       sceneAnnotations(),
-      state.selectedId,
-      computeDisplayNumbers(state.annotations),
+      paintedSelectionId(),
+      displayNumbers(),
       ui,
     )
     // Object hover last, on top of everything (GOAL "Static object picking") —
@@ -731,6 +731,11 @@ function beginPendingBox(b: Box, picked?: PickableObject): void {
   // A pre-filled description opens SELECTED: keeping it is one Enter, replacing
   // it is just typing.
   openTextEditor(draft.bounds, draft.text, draft.text !== '')
+  // GOAL "Unified Annotation Box" — the header appears WITH the description
+  // input: [#] [1.0s] [Blur] [×] are placed over the pending rect now, not
+  // after a commit + re-select, so number/duration/blur can be set while
+  // typing. Synchronous (schedulePaint's rAF would show it a frame late).
+  syncSelectionUi()
   schedulePaint()
 }
 
@@ -783,6 +788,14 @@ function commitTextEditor(refocus = true): void {
 /** Esc path: discards a pending box entirely; abandons a text edit unchanged. */
 function cancelTextEditor(): void {
   if (!textSession) return
+  // A discarded object-pick must not leave its remembered rect behind: the box
+  // it belonged to never reaches the store, so nothing would ever clean up the
+  // entry beginPendingBox registered under an id that now means nothing.
+  const pending = pendingDraft()
+  if (pending !== null) pickedRects.delete(pending.annotation_id)
+  // The pending box's own chrome goes with it (the duration editor may have
+  // been opened from the header while typing).
+  closeDurationEditor(false)
   closeTextEditor()
   refresh()
 }
@@ -801,24 +814,96 @@ textEditor.addEventListener('keydown', (e) => {
   // box description (which is where re-edit spends most of its time).
   if (e.key === 'F11') return
   e.stopPropagation()
-  if (e.key === 'Enter') commitTextEditor()
-  else if (e.key === 'Escape') cancelTextEditor()
+  if (e.key === 'Enter') {
+    // Enter commits the box WITH whatever the header toggles were set to while
+    // typing — number, lifetime, blur are all already on the draft.
+    commitTextEditor()
+  } else if (e.key === 'Escape') {
+    // Cancel-current first, like the canvas Esc ladder: an open duration
+    // popover is dismissed before the box it belongs to. Otherwise Esc
+    // discards the WHOLE pending box, not just the text.
+    if (durationEditorOpen) closeDurationEditor()
+    else cancelTextEditor()
+  }
 })
-textEditor.addEventListener('blur', () => commitTextEditor(false))
+textEditor.addEventListener('blur', (e) => {
+  // Focus landing inside the box's OWN header (or the duration editor it opens)
+  // is an edit of the box being created, not the end of it — the description
+  // stays open and the pending box uncommitted. The header buttons also
+  // preventDefault their mousedown, so they never take focus at all; this
+  // covers the one control that legitimately does: the custom-duration input.
+  const next = e.relatedTarget
+  if (next instanceof Node && (boxHeader.contains(next) || durationEditor.contains(next))) return
+  commitTextEditor(false)
+})
 
 // ---------------------------------------------------------------------------
-// Selected-box header: [#|N] number toggle, duration chip, blur toggle, and ×
-// delete, floating above the box. Lives in #stage screen space, repositioned
-// from the box bounds so zoom/pan never detaches it.
+// Box header: [#|N] number toggle, duration chip, blur toggle, and × delete,
+// floating above the box. Lives in #stage screen space, repositioned from the
+// box bounds so zoom/pan never detaches it.
+//
+// It serves TWO boxes (GOAL "Unified Annotation Box" — "the header appears with
+// the description input"): the box being CREATED, from the instant the
+// right-drag ends until Enter/Esc, and — with nothing pending — the selected
+// box. The pending box always wins: it is the one the user is looking at.
 // ---------------------------------------------------------------------------
 
 let durationEditorOpen = false
+
+/** The box being created (right-drag released, description still open). */
+function pendingDraft(): Annotation | null {
+  return textSession?.kind === 'new' ? textSession.draft : null
+}
 
 /** The selected box, if it applies at the current scrub position. */
 function selectedVisibleAnnotation(): Annotation | null {
   if (state.selectedId === null) return null
   const a = state.byId(state.selectedId)
   return a !== undefined && annotationVisibleNow(a) ? a : null
+}
+
+/**
+ * The box every header control acts on: the pending one while a box is being
+ * created (its lifetime is irrelevant — it is drawn regardless), else the
+ * selection.
+ */
+function headerAnnotation(): Annotation | null {
+  return pendingDraft() ?? selectedVisibleAnnotation()
+}
+
+/**
+ * Display numbers over every box on screen — the PENDING one included, so the
+ * [#] toggle shows the number the box will actually get once committed (SPEC
+ * §8.5 ordering, one shared implementation). The draft sorts by the same rules
+ * as any committed box, so nothing renumbers on commit.
+ */
+function displayNumbers(): ReadonlyMap<string, number> {
+  const pending = pendingDraft()
+  return computeDisplayNumbers(
+    pending === null ? state.annotations : [...state.annotations, pending],
+  )
+}
+
+/** The box drawn with selection chrome: the pending one, else the selection. */
+function paintedSelectionId(): string | null {
+  return pendingDraft()?.annotation_id ?? state.selectedId
+}
+
+/**
+ * Where focus belongs once a header popover closes: back in the description
+ * input while a box is being created — the header must never end the typing it
+ * appeared alongside — and on the canvas otherwise.
+ *
+ * "Otherwise" excludes the top bar's title/note fields: the header is also
+ * shown for a merely SELECTED box, so [#]/[Blur] can be clicked mid-sentence in
+ * the pack title. Yanking focus to the canvas there would feed the rest of the
+ * sentence to the shortcut ladder (c cycles the colour, Delete deletes the box).
+ * The header's mousedown preventDefault already keeps focus out of the buttons
+ * themselves, so leaving it exactly where it is, is right.
+ */
+function refocusEditing(): void {
+  if (textSession !== null && !textEditor.hidden) textEditor.focus()
+  else if (document.activeElement !== titleInput && document.activeElement !== noteInput) overlay.focus()
 }
 
 /** Maps a native snapshot point to #stage-relative screen coordinates. */
@@ -837,8 +922,9 @@ function chipLabel(a: Annotation): string {
 
 function syncSelectionUi(): void {
   // Never while another display is on screen: that view is read-only, and the
-  // header would float over a frame the selection does not belong to.
-  const a = loaded && !exporting && viewingFocused() ? selectedVisibleAnnotation() : null
+  // header would float over a frame the box does not belong to. (Switching
+  // displays commits any pending description first, so nothing is stranded.)
+  const a = loaded && !exporting && viewingFocused() ? headerAnnotation() : null
   if (a === null) {
     boxHeader.hidden = true
     closeDurationEditor(false)
@@ -848,6 +934,9 @@ function syncSelectionUi(): void {
   const pad = SELECTION_PAD * uiScale() // the header hugs the dashed selection rect
   const topLeft = toScreen(b.x - pad, b.y - pad)
   boxHeader.hidden = false
+  // The box is not committed yet (Enter commits, Esc discards it): the header
+  // says so with the same accent the dashed selection rect uses.
+  boxHeader.classList.toggle('pending', pendingDraft() !== null)
   // Clamped on BOTH edges (#stage is overflow:hidden). The fullscreen overlay
   // almost always leaves horizontal margin, but a windowed editor can be
   // resized until the image fills the stage — and a header pushed off the right
@@ -856,8 +945,9 @@ function syncSelectionUi(): void {
   const maxLeft = Math.max(4, stage.clientWidth - boxHeader.offsetWidth - 4)
   boxHeader.style.left = `${Math.max(4, Math.min(topLeft.x, maxLeft))}px`
   boxHeader.style.top = `${Math.max(28, topLeft.y - 4)}px`
-  // [#|N]: shows the computed display number while numbering is on.
-  const number = computeDisplayNumbers(state.annotations).get(a.annotation_id)
+  // [#|N]: shows the computed display number while numbering is on — for a
+  // pending box, the number it will carry the moment Enter commits it.
+  const number = displayNumbers().get(a.annotation_id)
   numberBtn.textContent = a.numbered && number !== undefined ? String(number) : '#'
   numberBtn.classList.toggle('on', a.numbered)
   blurBtn.textContent = a.blur ? t('editor.blurOn') : t('editor.blur')
@@ -870,8 +960,25 @@ function syncSelectionUi(): void {
   if (durationEditorOpen) positionDurationEditor()
 }
 
-/** Applies an undoable mutation to the selected box, then refreshes all views. */
+/**
+ * Applies a mutation to the header's box, then refreshes all views.
+ *
+ * A PENDING box is mutated in place with no undo snapshot: it is not in the
+ * store yet, Esc (or the header ×) discards the whole box, and pushing a
+ * snapshot of a state the box does not exist in would make Ctrl+Z after the
+ * commit undo the wrong step. A committed box goes through the normal
+ * undoable path.
+ */
 function applyMutation(mutate: (a: Annotation) => void): void {
+  const pending = pendingDraft()
+  if (pending !== null) {
+    mutate(pending)
+    // Repaints the live preview (blur, number badge, border) and re-syncs the
+    // header labels — the pending box is in neither the store nor the lanes.
+    schedulePaint()
+    syncSelectionUi()
+    return
+  }
   const a = selectedVisibleAnnotation()
   if (a === null) return
   const before = state.cloneAnnotations()
@@ -880,27 +987,54 @@ function applyMutation(mutate: (a: Annotation) => void): void {
   refresh()
 }
 
-// Delete mirrors the header ×: both act only while the selection is visible at
-// the current scrub position — a hidden box never vanishes silently.
+// Delete mirrors the header ×: both act only while the box is visible at the
+// current scrub position — a hidden box never vanishes silently. On a pending
+// box it discards the box being created, exactly like Esc.
 function deleteSelected(): void {
+  if (pendingDraft() !== null) {
+    cancelTextEditor()
+    return
+  }
   const a = selectedVisibleAnnotation()
   if (a === null) return
   state.remove(a.annotation_id)
+  // Same reason as cancelTextEditor: the box is gone, so its picked rect is too.
+  pickedRects.delete(a.annotation_id)
   refresh()
 }
+
+// Typing must survive every header control (GOAL: "Toggling a control never
+// steals focus from the input"). Suppressing the default mousedown action keeps
+// focus wherever it is — in the description input of the box being created —
+// so no blur fires, nothing commits early, and Enter still ends the box.
+// Clicks are unaffected: preventDefault on mousedown does not cancel them.
+boxHeader.addEventListener('mousedown', (e) => e.preventDefault())
+
+// The SAME rule for the canvas, and for the same reason. #overlay carries
+// tabindex="-1", so it is mouse-focusable: focusing is a default action of
+// mousedown, which Chromium dispatches AFTER the pointerdown handler has
+// already opened a pending box's description input (the static-object-picking
+// path). Without this, focus is pulled straight back to the canvas, textEditor
+// blurs with relatedTarget === overlay, and the box commits itself instantly —
+// no description, no [#] [1.0s] [Blur] [×] header, no Esc-discards. Guarded on
+// an open session so an ordinary click on empty canvas still focuses the
+// overlay and keeps the keyboard shortcuts working.
+overlay.addEventListener('mousedown', (e) => {
+  if (textSession !== null) e.preventDefault()
+})
 
 numberBtn.addEventListener('click', () => {
   applyMutation((a) => {
     a.numbered = !a.numbered
   })
-  overlay.focus()
+  refocusEditing()
 })
 
 blurBtn.addEventListener('click', () => {
   applyMutation((a) => {
     a.blur = !a.blur
   })
-  overlay.focus()
+  refocusEditing()
 })
 
 deleteBtn.addEventListener('click', deleteSelected)
@@ -910,12 +1044,15 @@ deleteBtn.addEventListener('click', deleteSelected)
 // ---------------------------------------------------------------------------
 
 function openDurationEditor(): void {
-  if (selectedVisibleAnnotation() === null || !scrub) return
+  if (headerAnnotation() === null || !scrub) return
   durationEditorOpen = true
   durationInput.value = ''
   durationEditor.hidden = false
   positionDurationEditor()
-  durationInput.focus()
+  // While a box is being created the description input keeps focus: the presets
+  // are one click away and Enter must still commit the box, not a duration the
+  // user never typed. Otherwise the custom field takes focus as it always did.
+  if (pendingDraft() === null) durationInput.focus()
 }
 
 /** Esc / outside-click path: closes without applying anything. */
@@ -923,7 +1060,7 @@ function closeDurationEditor(refocus = true): void {
   if (!durationEditorOpen) return
   durationEditorOpen = false
   durationEditor.hidden = true
-  if (refocus) overlay.focus()
+  if (refocus) refocusEditing()
 }
 
 function positionDurationEditor(): void {
@@ -954,6 +1091,15 @@ function setSelectedDuration(ms: number): void {
 durationChip.addEventListener('click', () => {
   if (durationEditorOpen) closeDurationEditor()
   else openDurationEditor()
+})
+
+// Same rule as the header (see boxHeader's mousedown): a preset click edits the
+// lifetime of the box being created without taking focus off its description.
+// The custom-duration input is the one exception — it has to be typed in, and
+// the description's blur handler knows that focus landing in here is not the
+// end of the pending box.
+durationEditor.addEventListener('mousedown', (e) => {
+  if (e.target !== durationInput) e.preventDefault()
 })
 
 for (const btn of durationEditor.querySelectorAll<HTMLButtonElement>('button[data-ms]')) {
@@ -1372,6 +1518,15 @@ window.addEventListener('keydown', (e) => {
     // [Save] [Save As New CapturePack] [Discard] bar instead of discarding.
     if (durationEditorOpen) {
       closeDurationEditor()
+      return
+    }
+    // A box being CREATED is the most-current thing on screen, so Esc discards
+    // it whole — text, number, duration and blur together (GOAL "Unified
+    // Annotation Box"). The description input handles this itself while it has
+    // focus; this covers focus having landed elsewhere (a header control, the
+    // duration popover) with the box still pending.
+    if (textSession !== null) {
+      cancelTextEditor()
       return
     }
     if (!unsavedBar.hidden) {

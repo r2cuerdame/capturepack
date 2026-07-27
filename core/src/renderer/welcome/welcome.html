@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self'"
+  />
+  <title data-i18n="welcome.windowTitle">CapturePack — Welcome</title>
+  <link rel="stylesheet" href="./welcome.css" />
+</head>
+<body>
+  <main id="welcome">
+    <h1 data-i18n="welcome.heading">CapturePack is running in your tray.</h1>
+
+    <!-- The LIVE accelerator (settings.captureHotkey) and the LIVE replay
+         length are filled in by the renderer — never hardcoded here. -->
+    <section class="hotkey">
+      <p id="hotkeyLine" class="hotkeyLine"></p>
+      <p id="recordedLine" class="recordedLine"></p>
+    </section>
+
+    <ol class="steps">
+      <li>
+        <span class="num">1</span>
+        <span class="stepName" data-i18n="welcome.step1Title">Capture</span>
+        <span class="stepBody" data-i18n="welcome.step1Body">press the hotkey after the problem happens</span>
+      </li>
+      <li>
+        <span class="num">2</span>
+        <span class="stepName" data-i18n="welcome.step2Title">Annotate</span>
+        <span class="stepBody" data-i18n="welcome.step2Body">right-drag a box, type what is wrong</span>
+      </li>
+      <li>
+        <span class="num">3</span>
+        <span class="stepName" data-i18n="welcome.step3Title">Save</span>
+        <!-- Filled in with the real output folder path. -->
+        <span id="saveBody" class="stepBody"></span>
+      </li>
+    </ol>
+
+    <section class="notes">
+      <p data-i18n="welcome.trayLine">The tray icon opens History — every capture you have saved.</p>
+      <p data-i18n="welcome.mcpLine">The built-in MCP server lets any AI read your captures: “Analyze the latest CapturePack.”</p>
+      <!-- Hidden when the MCP server is disabled: no endpoint is advertised
+           that nothing is listening on. -->
+      <p id="mcpEndpoint" class="endpoint" hidden></p>
+    </section>
+
+    <div class="actions">
+      <button id="tryBtn" class="primary" type="button" data-i18n="welcome.tryNow">Try it now</button>
+      <button id="settingsBtn" type="button" data-i18n="welcome.settings">Settings</button>
+      <button id="doneBtn" type="button" data-i18n="welcome.done">Done</button>
+    </div>
+
+    <footer>
+      <span data-i18n="common.escCloses">Esc closes</span>
+    </footer>
+  </main>
+  <script src="./welcome.js"></script>
+</body>
+</html>

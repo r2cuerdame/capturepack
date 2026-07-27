@@ -296,6 +296,13 @@ export interface Settings {
   autoUpdateCheck: boolean
   outputDir: string
   copyToClipboard: boolean
+  // The first-launch welcome window has been shown (GOAL "Welcome (first launch
+  // after install)"): written the moment the window opens, so it appears once
+  // and never again on its own. Showing it is gated on a genuinely fresh
+  // install (no settings file existed at load) AND this flag — an update, which
+  // always finds a settings file, never shows it. About's "Show welcome again"
+  // re-opens it on demand.
+  welcomeShown: boolean
   // Global capture accelerator in Electron syntax, e.g. "Ctrl+Alt+C" (default
   // DEFAULT_CAPTURE_HOTKEY). At least one modifier plus exactly one key; an
   // unusable value falls back to the default when settings load.

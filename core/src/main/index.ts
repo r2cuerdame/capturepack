@@ -15,6 +15,7 @@ import { openSettingsWindow, registerSettingsIpc } from './settingsWindow'
 import { createTray } from './tray'
 import type { TrayControls } from './tray'
 import { checkNow, initUpdater, restartAndUpdate, updaterState } from './updater'
+import { openWelcomeWindow, registerWelcomeIpc } from './welcomeWindow'
 
 if (process.argv.includes('--smoke')) {
   // CI smoke test: settings load only — no windows, tray, hotkey, or MCP.
@@ -49,7 +50,9 @@ function main(): void {
   })
 
   void app.whenReady().then(async () => {
-    const settings = loadSettings()
+    // `firstRun` is TRUE only when no settings file existed a moment ago — the
+    // one honest fresh-install signal (GOAL "Welcome": never shown on update).
+    const { settings, firstRun } = loadSettings()
 
     mcp = startMcpServer(settings)
 
@@ -91,6 +94,20 @@ function main(): void {
     registerHistoryIpc(settings)
     // Same again: the About window resolves the UI language at call time.
     registerAboutIpc(settings)
+    // Welcome window (GOAL "Welcome (first launch after install)"): [Try it
+    // now] fires `capture` — the very closure the global hotkey and the tray
+    // run — so the guided first capture is the real capture flow, not a copy.
+    // The MCP line's endpoint comes from the RUNNING server (a getter, since it
+    // binds asynchronously and may never bind at all): mcpAutoStart off or a
+    // port already in use must leave the row hidden, not print a dead URL.
+    registerWelcomeIpc(
+      settings,
+      {
+        onCapture: capture,
+        onOpenSettings: () => openSettingsWindow(),
+      },
+      () => mcp?.endpoint() ?? '',
+    )
 
     tray = createTray(
       {
@@ -120,6 +137,17 @@ function main(): void {
     if (process.argv.includes('--show-history')) openHistoryWindow()
     // Dev aid / headed testing: open the About window on launch.
     if (process.argv.includes('--show-about')) openAboutWindow()
+    // Dev aid / headed testing: open the Welcome window on launch.
+    if (process.argv.includes('--show-welcome')) {
+      openWelcomeWindow()
+    } else if (firstRun && !settings.welcomeShown) {
+      // FIRST LAUNCH ONLY (GOAL "Welcome"): a genuinely fresh install — no
+      // settings file existed when settings loaded. An update always finds one,
+      // so it never lands here; the stored flag alone would not be enough,
+      // since a settings.json written before the flag existed defaults it to
+      // false. openWelcomeWindow() persists welcomeShown, so this is once.
+      openWelcomeWindow()
+    }
 
     if (!registerCaptureHotkey(settings.captureHotkey, capture)) {
       // Async on purpose: showErrorBox blocks the main-process event loop until

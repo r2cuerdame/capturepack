@@ -13,6 +13,15 @@ const MCP_PATH = '/mcp'
 const BIND_HOST = '127.0.0.1'
 
 export interface McpServerHandle {
+  /**
+   * The endpoint the HTTP server ACTUALLY bound, or '' while it is not
+   * listening — before the async listen callback fires, after an EADDRINUSE (or
+   * any other) bind error, and after stop(). Callers that advertise the URL to
+   * the user (the welcome window) must read it from here rather than rebuild it
+   * from settings: `mcpPort` in settings is only a request, and `mcpAutoStart`
+   * can leave the server unstarted entirely.
+   */
+  endpoint(): string
   stop(): Promise<void>
 }
 
@@ -96,7 +105,12 @@ export function startMcpServer(settings: Settings): McpServerHandle | null {
     }
   }
 
+  // The single source of truth for "is there something listening, and where?".
+  // Empty until the listen callback runs, and emptied again on any bind error.
+  let boundEndpoint = ''
+
   httpServer.on('error', (err: NodeJS.ErrnoException) => {
+    boundEndpoint = ''
     if (err.code === 'EADDRINUSE') {
       console.error(
         `capturepack: MCP port ${settings.mcpPort} is already in use — MCP server disabled for this run (the app keeps running).`,
@@ -107,11 +121,19 @@ export function startMcpServer(settings: Settings): McpServerHandle | null {
   })
 
   httpServer.listen(settings.mcpPort, BIND_HOST, () => {
-    console.log(`capturepack: MCP server listening on http://${BIND_HOST}:${settings.mcpPort}${MCP_PATH}`)
+    // The port the socket really got, not the one that was asked for.
+    const address = httpServer.address()
+    const port = typeof address === 'object' && address !== null ? address.port : settings.mcpPort
+    boundEndpoint = `http://${BIND_HOST}:${port}${MCP_PATH}`
+    console.log(`capturepack: MCP server listening on ${boundEndpoint}`)
   })
 
   return {
+    endpoint(): string {
+      return boundEndpoint
+    },
     stop(): Promise<void> {
+      boundEndpoint = ''
       store.dispose()
       return new Promise((resolve) => {
         httpServer.close(() => resolve())

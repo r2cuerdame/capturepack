@@ -45,6 +45,18 @@ export const IPC = {
   aboutOpenLink: 'about:open-link',
   // about window -> main: user chose "Restart and update"
   updaterRestart: 'updater:restart',
+  // about window -> main: "Show welcome again" — re-opens the first-launch
+  // welcome window (GOAL "Welcome (first launch after install)")
+  aboutShowWelcome: 'about:show-welcome',
+
+  // welcome window -> main (invoke): live hotkey, output folder, replay
+  // length, MCP endpoint, language — everything the window prints
+  welcomeGet: 'welcome:get',
+  // welcome window -> main: [Try it now] — close the window, then fire a
+  // capture through the SAME entry point the global hotkey triggers
+  welcomeTryNow: 'welcome:try-now',
+  // welcome window -> main: [Settings] — open the settings GUI
+  welcomeOpenSettings: 'welcome:open-settings',
 
   // settings window -> main (invoke): current settings + display list + app info
   settingsGet: 'settings:get',
@@ -356,6 +368,27 @@ export interface AboutInfoResult {
   // follows the same rule as the tray's "Restart and update (vX)" item instead
   // of blinking out during every scheduled re-check.
   downloadedVersion: string | null
+}
+
+// ---------------------------------------------------------------------------
+// Welcome window (GOAL "Welcome (first launch after install)")
+
+/** Everything the welcome window prints — all of it LIVE, none of it hardcoded. */
+export interface WelcomeInfoResult {
+  // Resolved UI language (shared/i18n Language) for the window's strings
+  uiLanguage: string
+  // settings.captureHotkey, the accelerator actually configured right now
+  // (e.g. "Ctrl+Alt+C") — the window never spells a default of its own
+  hotkey: string
+  // settings.outputDir — the real folder a saved pack lands in
+  outputDir: string
+  // settings.replaySeconds — "the last N seconds are already recorded"
+  replaySeconds: number
+  // Streamable HTTP endpoint of the built-in MCP server, e.g.
+  // "http://127.0.0.1:39393/mcp" — the port the RUNNING server bound at boot.
+  // EMPTY when MCP is disabled: the window then explains the feature without
+  // printing an endpoint nothing is listening on.
+  mcpUrl: string
 }
 
 // Partial settings update from the settings GUI. Every value is validated

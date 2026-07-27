@@ -96,6 +96,28 @@ body {
   color: var(--muted);
 }
 
+/* ---- actions ---- */
+
+/* Sits above the links and below the slogans; margin-top:auto here (rather
+   than on .links) keeps the whole bottom block anchored as one group. */
+.actions {
+  display: flex;
+  justify-content: center;
+  margin-top: auto;
+  padding-top: 14px;
+}
+
+/* An in-app action, not an external link: quieter than the link row. */
+button.quiet {
+  background: transparent;
+  color: var(--muted);
+}
+
+button.quiet:hover {
+  background: var(--panel);
+  color: var(--text);
+}
+
 /* ---- links ---- */
 
 .links {
@@ -103,8 +125,7 @@ body {
   flex-wrap: wrap;
   justify-content: center;
   gap: 8px;
-  margin-top: auto;
-  padding: 14px 0 12px;
+  padding: 10px 0 12px;
 }
 
 button {

@@ -17,4 +17,7 @@ contextBridge.exposeInMainWorld('aboutBridge', {
   restartUpdate(): void {
     ipcRenderer.send(IPC.updaterRestart)
   },
+  showWelcome(): void {
+    ipcRenderer.send(IPC.aboutShowWelcome)
+  },
 })

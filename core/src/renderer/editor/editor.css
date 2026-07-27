@@ -331,7 +331,9 @@ body[data-window-mode="windowed"] #topbar #displaySwitcher {
   color: #6a6a74;
 }
 
-/* ---- selected-box header (screen-space, glued above the box) ---- */
+/* ---- box header (screen-space, glued above the box) ----
+   Shown for the selected box AND for the box being created, where it appears
+   together with the description input (GOAL "Unified Annotation Box"). */
 
 #boxHeader {
   position: absolute;
@@ -369,6 +371,12 @@ body[data-window-mode="windowed"] #topbar #displaySwitcher {
   background: var(--action);
   border-color: var(--action);
   color: #fff;
+}
+
+/* A box being created: same accent as its dashed selection rect, so the header
+   visibly belongs to the rect the user just dragged and is still describing. */
+#boxHeader.pending {
+  border-color: #8ab4ff;
 }
 
 #durationChip {

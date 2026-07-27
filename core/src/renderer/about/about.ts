@@ -13,6 +13,7 @@ interface AboutBridge {
   onState(cb: (info: AboutInfoResult) => void): void
   openLink(key: AboutLinkKey): void
   restartUpdate(): void
+  showWelcome(): void
 }
 
 declare global {
@@ -35,6 +36,7 @@ const iconEl = el<HTMLImageElement>('icon')
 const versionEl = el<HTMLElement>('version')
 const updateStateEl = el<HTMLElement>('updateState')
 const restartBtn = el<HTMLButtonElement>('restartBtn')
+const welcomeBtn = el<HTMLButtonElement>('welcomeBtn')
 
 function render(info: AboutInfoResult): void {
   const t = makeT(info.uiLanguage)
@@ -102,6 +104,10 @@ for (const button of document.querySelectorAll<HTMLButtonElement>('[data-link]')
 }
 
 restartBtn.addEventListener('click', () => bridge.restartUpdate())
+
+// Re-opens the first-launch introduction (GOAL "Welcome"): About is where a
+// once-only window stays reachable. Not a data-link button — nothing external.
+welcomeBtn.addEventListener('click', () => bridge.showWelcome())
 
 window.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {

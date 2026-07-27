@@ -25,6 +25,10 @@ function defaultSettings(): Settings {
     autoUpdateCheck: true,
     outputDir: path.join(app.getPath('desktop'), 'CapturePack'),
     copyToClipboard: true,
+    // The welcome window has never been shown on this machine (GOAL "Welcome
+    // (first launch after install)"). Flipped — and written — the moment the
+    // window opens.
+    welcomeShown: false,
     captureHotkey: DEFAULT_CAPTURE_HOTKEY,
     replaySeconds: 30,
     fps: 15,
@@ -50,17 +54,37 @@ function defaultSettings(): Settings {
   }
 }
 
-export function loadSettings(): Settings {
+/** What loadSettings reports: the settings themselves plus how they were found. */
+export interface LoadedSettings {
+  settings: Settings
+  /**
+   * NO settings file existed when this ran — i.e. a genuinely fresh install.
+   *
+   * The first-launch welcome window (GOAL "Welcome (first launch after
+   * install)") keys off THIS, never off a stored flag alone: an update always
+   * finds a settings file, so it can never show the window, while a settings.json
+   * written before `welcomeShown` existed would default the flag to false and
+   * pop the window open on the first launch after an update.
+   */
+  firstRun: boolean
+}
+
+export function loadSettings(): LoadedSettings {
   const base = defaultSettings()
   let raw: Record<string, unknown> | null = null
   // A malformed but non-empty file is preserved on disk (defaults apply in
   // memory only) so a user's hand-edit mistake is never silently destroyed.
   let preserveFile = false
   let text: string | null = null
+  // Was settings.json there BEFORE this load? An existing but UNREADABLE file
+  // still counts as existing: a permission error on an upgraded install must
+  // never be mistaken for a fresh one.
+  let fileExisted = true
   try {
     text = fs.readFileSync(settingsFilePath(), 'utf8')
   } catch {
     text = null // Missing/unreadable file: fall through and write defaults.
+    fileExisted = fs.existsSync(settingsFilePath())
   }
   if (text !== null) {
     try {
@@ -87,7 +111,10 @@ export function loadSettings(): Settings {
   // saveSettings so the override is never persisted.
   const override = outputDirOverride(process.argv)
   activeOutputDirOverride = override
-  return override !== null ? { ...settings, outputDir: override } : settings
+  return {
+    settings: override !== null ? { ...settings, outputDir: override } : settings,
+    firstRun: !fileExisted,
+  }
 }
 
 // Set by loadSettings when a --output-dir=<path> override is active this run.
@@ -157,6 +184,7 @@ const SETTINGS_KEY_SET: Record<keyof Settings, true> = {
   autoUpdateCheck: true,
   outputDir: true,
   copyToClipboard: true,
+  welcomeShown: true,
   captureHotkey: true,
   replaySeconds: true,
   fps: true,
@@ -279,6 +307,7 @@ function mergeSettings(base: Settings, raw: Record<string, unknown>): Settings {
     autoUpdateCheck: typeof raw.autoUpdateCheck === 'boolean' ? raw.autoUpdateCheck : base.autoUpdateCheck,
     outputDir: typeof raw.outputDir === 'string' && raw.outputDir.length > 0 ? raw.outputDir : base.outputDir,
     copyToClipboard: typeof raw.copyToClipboard === 'boolean' ? raw.copyToClipboard : base.copyToClipboard,
+    welcomeShown: typeof raw.welcomeShown === 'boolean' ? raw.welcomeShown : base.welcomeShown,
     captureHotkey:
       typeof raw.captureHotkey === 'string' && isCaptureHotkey(raw.captureHotkey)
         ? raw.captureHotkey

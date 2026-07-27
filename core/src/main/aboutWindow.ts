@@ -15,6 +15,7 @@ import type { AboutInfoResult, AboutLinkKey } from '../shared/ipc'
 import type { Settings } from '../shared/types'
 import { uiLanguage, uiT } from './locale'
 import { downloadedVersion, restartAndUpdate, updaterState } from './updater'
+import { openWelcomeWindow } from './welcomeWindow'
 
 const WIDTH = 420
 const HEIGHT = 460
@@ -56,6 +57,13 @@ export function registerAboutIpc(live: Settings): void {
     void shell.openExternal(url).catch((err: unknown) => {
       console.error('capturepack: could not open link:', err instanceof Error ? err.message : err)
     })
+  })
+
+  // The one way back to the first-launch introduction (GOAL "Welcome":
+  // "Shown once (welcomeShown); re-openable from About").
+  ipcMain.on(IPC.aboutShowWelcome, (event) => {
+    if (!fromAboutWindow(event)) return
+    openWelcomeWindow()
   })
 
   ipcMain.on(IPC.updaterRestart, (event) => {

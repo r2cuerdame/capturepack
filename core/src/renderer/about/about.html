@@ -24,6 +24,12 @@
     <p class="slogan" data-i18n="about.slogan1">Capture context, not screenshots.</p>
     <p class="slogan" data-i18n="about.slogan2">Better input. Better answers.</p>
 
+    <!-- The once-only first-launch window stays reachable from here
+         (GOAL "Welcome": "Shown once; re-openable from About"). -->
+    <div class="actions">
+      <button id="welcomeBtn" class="quiet" type="button" data-i18n="about.showWelcome">Show welcome again</button>
+    </div>
+
     <div class="links">
       <button type="button" data-link="website" data-i18n="about.website">Website</button>
       <button type="button" data-link="github" data-i18n="about.github">GitHub</button>

@@ -53,8 +53,12 @@
       <canvas id="overlay" tabindex="-1"></canvas>
       <input id="textEditor" type="text" placeholder="Describe… (Enter)" data-i18n-placeholder="editor.describePlaceholder" autocomplete="off" spellcheck="false" hidden />
     </div>
-    <!-- Selected-box header: floats above the box in screen space, glued to it
-         under zoom/pan. Editor chrome only — never rendered into any output. -->
+    <!-- Box header: floats above the box in screen space, glued to it under
+         zoom/pan. Shown for the selected box AND, from the instant a right-drag
+         ends, for the box being created — together with the description input
+         below it (GOAL "Unified Annotation Box"), so number, duration and blur
+         can be set while typing. Editor chrome only: never rendered into any
+         output. -->
     <div id="boxHeader" hidden>
       <button id="numberBtn" title="Toggle number" data-i18n-title="editor.numberTooltip">#</button>
       <button id="durationChip" title="Edit duration" data-i18n-title="editor.durationTooltip">1.0s</button>
