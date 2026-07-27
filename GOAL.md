@@ -604,6 +604,47 @@ Dual (and more) monitor setups are fully supported.
 
 ---
 
+## History
+
+CapturePack provides a **History** screen managing saved CapturePack projects — not a
+recent-files list, but the entry point for reopening a saved Folder and continuing work.
+
+**Main navigation** is minimal: **Capture · History · Settings**. History is a top-level
+menu; there is no separate Export menu — packaging, sharing, and re-rendering live in
+History.
+
+**History list** — CapturePack folders in the output folder, newest first, searchable.
+Each card shows: title (or report.md first sentence), captured application, time, replay
+length, annotation count (+ numbered count), blur presence, annotated-replay state
+(ready / rendering / failed → [Retry Render]), ZIP created or not, folder size, and a
+snapshot.png thumbnail (placeholder when missing/corrupt; external share previews must
+use a sanitized snapshot).
+
+**Search / filters** — search over title, report.md, application, URL, date, annotation
+text. Filters: All · Today · This Week · Has Blur · Render Failed · Not Packaged.
+(v0.1: search + minimal filters are enough.)
+
+**Open & re-edit** — Open loads the Folder back into the Editor with everything restored:
+replay, annotations (bounds/text/lifetime/numbered/blur/tracking), timeline, manifest,
+report, DOM/UIA metadata, timeline position. Every editing operation works again (move,
+resize, retext, duration, number toggle, blur toggle, delete, add, adjust times, edit
+report, re-save, re-render). No project conversion step — the Folder IS the project.
+
+**Source of truth** — replay + annotations.json + timeline.json + manifest.json.
+replay_annotated is derived; README.md, report.md, and skills/ are (partly) derived.
+After re-edit, regenerate: annotations/timeline/report/manifest/README/skills/
+replay_annotated. replay is NEVER modified or overwritten.
+
+**Save after re-edit** — Save updates the same Folder by default, with an explicit
+unsaved-changes state: [ Save ] [ Save As New CapturePack ] [ Discard ]. Save As creates
+a new folder preserving the original; Discard restores the last saved state.
+
+**Detail actions** — Edit CapturePack · Play Annotated Replay · Open Folder ·
+Create ZIP (choose included files; option to exclude the original replay) · Copy Prompt;
+secondary: Re-render · Save As · Rename · Delete.
+
+---
+
 ## Annotation Timeline & Lifetime
 
 Annotations are not drawings on a screen — CapturePack is a program that creates
