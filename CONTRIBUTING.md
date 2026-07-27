@@ -80,6 +80,25 @@ Format changes are the highest-impact changes in this project, so they move deli
    the schemas in `docs/schemas/`. Implementation can land in the same PR or follow it — but
    never precede it.
 
+## Translations
+
+[README.md](README.md) (English) is the source of truth. Every other README is a translation of it:
+`README.ko.md`, `README.ja.md`, `README.zh.md`, `README.es.md`, `README.fr.md`, `README.de.md`,
+`README.pt.md`, `README.ru.md`.
+
+- **Any change to README.md must be mirrored into all eight translations in the same PR.** If you
+  can't cover every language, say so explicitly in the PR description — list which languages still
+  need updating so someone can pick them up.
+- Keep the structure identical across languages: same headings in the same order, same links, same
+  code blocks and file names left untouched. Translate headings and prose, not commands or paths.
+- The **language bar** sits directly under the H1 of every README and must list all nine files —
+  the current language as plain bold text, the other eight as links. Adding a language means
+  updating the bar in every file.
+- User-facing strings live outside the READMEs too: the app reads `core/src/shared/i18n.ts` and the
+  landing page reads `site/i18n.js`. Both cover the same nine languages and must stay consistent
+  with what the READMEs claim — if you change a tagline, a principle, or the language list in one
+  place, change it in all three.
+
 ## Commits and pull requests
 
 - Keep PRs small and focused: one change per PR.
