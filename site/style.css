@@ -118,6 +118,57 @@ h1 {
   font-size: 0.95rem;
 }
 
+/* Roadmap */
+.roadmap {
+  padding: 0 0 6vh;
+}
+
+.roadmap h2 {
+  text-align: center;
+  font-size: 1.3rem;
+  margin-bottom: 22px;
+}
+
+.roadmap .cols {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+@media (max-width: 640px) {
+  .roadmap .cols { grid-template-columns: 1fr; }
+}
+
+.roadmap h3 {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  margin-bottom: 10px;
+}
+
+.roadmap ul {
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+  height: 100%;
+}
+
+.roadmap li {
+  color: var(--muted);
+  font-size: 0.92rem;
+  padding: 4px 0;
+}
+
+.roadmap-link {
+  text-align: center;
+  margin-top: 18px;
+  font-size: 0.9rem;
+}
+
+.roadmap-link a { color: var(--muted); }
+
 /* Footer */
 footer {
   border-top: 1px solid var(--line);
