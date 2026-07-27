@@ -925,6 +925,17 @@ part that matters:
 - Trim exists only in the initial capture session. Re-edit (History) cannot trim
   further: the pack's replay is already the original evidence.
 
+### Editor Window Mode
+
+The editor opens as a fullscreen overlay by default (fastest annotation), but it is a
+real window too:
+
+- A ⧉ button in the top bar (and F11) toggles **windowed mode**: standard move (top-bar
+  drag region) and resize (edges/corners), alwaysOnTop off, canvas re-fits live.
+- The last mode and windowed bounds are remembered (`editorWindowMode` + bounds);
+  the next capture opens the way the user left it.
+- Esc/Enter semantics identical in both modes.
+
 ### First-Run Tutorial
 
 The toolless editor explains itself once. On the editor's FIRST open, a compact popup
