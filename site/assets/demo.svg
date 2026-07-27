@@ -3,33 +3,60 @@
     .cap { font-size: 22px; font-weight: 650; fill: #ececf1; text-anchor: middle; }
     .dim { fill: #9a9aa6; }
     g[id^="s"] { opacity: 0; }
-    /* 12s loop, six 2s steps */
-    #s1 { animation: st1 12s linear infinite; }
-    #s2 { animation: st2 12s linear infinite; }
-    #s3 { animation: st3 12s linear infinite; }
-    #s4 { animation: st4 12s linear infinite; }
-    #s5 { animation: st5 12s linear infinite; }
-    #s6 { animation: st6 12s linear infinite; }
-    @keyframes st1 { 0%,2% {opacity:0} 4%,14% {opacity:1} 16%,100% {opacity:0} }
-    @keyframes st2 { 0%,18% {opacity:0} 20%,31% {opacity:1} 33%,100% {opacity:0} }
-    @keyframes st3 { 0%,34% {opacity:0} 36%,48% {opacity:1} 50%,100% {opacity:0} }
-    @keyframes st4 { 0%,51% {opacity:0} 53%,64% {opacity:1} 66%,100% {opacity:0} }
-    @keyframes st5 { 0%,67% {opacity:0} 69%,81% {opacity:1} 83%,100% {opacity:0} }
-    @keyframes st6 { 0%,84% {opacity:0} 86%,97% {opacity:1} 99%,100% {opacity:0} }
-    /* frozen frame border appears from step 2 on */
-    #frozen { opacity: 0; animation: frz 12s linear infinite; }
-    @keyframes frz { 0%,18% {opacity:0} 20%,97% {opacity:1} 99%,100% {opacity:0} }
-    /* timeline playhead scrubs into the past during step 3 */
-    #playhead { animation: ph 12s linear infinite; }
-    @keyframes ph {
-      0%,34% { transform: translateX(0) }
-      48%,100% { transform: translateX(-190px) }
+    /* 8s loop: six quick steps */
+    #s1 { animation: st1 8s linear infinite; }
+    #s2 { animation: st2 8s linear infinite; }
+    #s3 { animation: st3 8s linear infinite; }
+    #s4 { animation: st4 8s linear infinite; }
+    #s5 { animation: st5 8s linear infinite; }
+    #s6 { animation: st6 8s linear infinite; }
+    @keyframes st1 { 0%,1% {opacity:0} 3%,13% {opacity:1} 15%,100% {opacity:0} }
+    @keyframes st2 { 0%,15% {opacity:0} 17%,28% {opacity:1} 30%,100% {opacity:0} }
+    @keyframes st3 { 0%,30% {opacity:0} 32%,45% {opacity:1} 47%,100% {opacity:0} }
+    @keyframes st4 { 0%,47% {opacity:0} 49%,63% {opacity:1} 65%,100% {opacity:0} }
+    @keyframes st5 { 0%,65% {opacity:0} 67%,83% {opacity:1} 85%,100% {opacity:0} }
+    @keyframes st6 { 0%,85% {opacity:0} 87%,98% {opacity:1} 100% {opacity:0} }
+
+    /* frozen frame + timeline appear from step 2 on */
+    #frozen { opacity: 0; animation: frz 8s linear infinite; }
+    @keyframes frz { 0%,15% {opacity:0} 17%,98% {opacity:1} 100% {opacity:0} }
+
+    /* playhead scrubs into the past during step 3 */
+    #playhead { animation: ph 8s linear infinite; }
+    @keyframes ph { 0%,31% { transform: translateX(0) } 45%,100% { transform: translateX(-190px) } }
+
+    /* cursor: appears for the drag, travels corner to corner, moves to the note, fades */
+    #cursor { opacity: 0; animation: cur 8s linear infinite; }
+    @keyframes cur {
+      0%,47%  { opacity: 0; transform: translate(586px, 276px) }
+      49%     { opacity: 1; transform: translate(586px, 276px) }
+      62%     { opacity: 1; transform: translate(734px, 336px) }
+      66%     { opacity: 1; transform: translate(560px, 372px) }
+      82%     { opacity: 1; transform: translate(560px, 372px) }
+      85%,100%{ opacity: 0; transform: translate(560px, 372px) }
     }
-    /* annotation elements appear from their step onward */
-    #objrect { opacity: 0; animation: obj 12s linear infinite; }
-    @keyframes obj { 0%,53% {opacity:0} 56%,97% {opacity:1} 99%,100% {opacity:0} }
-    #note { opacity: 0; animation: nt 12s linear infinite; }
-    @keyframes nt { 0%,69% {opacity:0} 72%,97% {opacity:1} 99%,100% {opacity:0} }
+
+    /* selection rect grows with the drag */
+    #objrect { opacity: 0; transform-box: fill-box; transform-origin: top left; animation: obj 8s linear infinite; }
+    @keyframes obj {
+      0%,48%  { opacity: 0; transform: scale(0.06) }
+      50%     { opacity: 1; transform: scale(0.06) }
+      62%     { opacity: 1; transform: scale(1) }
+      98%     { opacity: 1; transform: scale(1) }
+      100%    { opacity: 0; transform: scale(1) }
+    }
+
+    /* annotation note box appears, then the text types itself */
+    #note { opacity: 0; animation: nt 8s linear infinite; }
+    @keyframes nt { 0%,65% {opacity:0} 67%,98% {opacity:1} 100% {opacity:0} }
+    #typecover { animation: tc 8s linear infinite; }
+    @keyframes tc { 0%,68% { transform: translateX(0) } 82%,100% { transform: translateX(242px) } }
+    #caret { animation: ca 8s linear infinite; }
+    @keyframes ca {
+      0%,67% { opacity: 0 }
+      68%,81% { opacity: 1 }
+      83%,100% { opacity: 0 }
+    }
   </style>
 
   <!-- backdrop -->
@@ -40,7 +67,7 @@
     <g id="s1"><text class="cap" x="480" y="52">Press  Ctrl + Alt + C</text></g>
     <g id="s2"><text class="cap" x="480" y="52">The last 30 seconds freeze</text></g>
     <g id="s3"><text class="cap" x="480" y="52">Mouse wheel moves through time</text></g>
-    <g id="s4"><text class="cap" x="480" y="52">Click the object</text></g>
+    <g id="s4"><text class="cap" x="480" y="52">Drag to select the object</text></g>
     <g id="s5"><text class="cap" x="480" y="52">Write the annotation</text></g>
     <g id="s6"><text class="cap" x="480" y="52">issue.capturepack exported ✓</text></g>
   </g>
@@ -61,10 +88,9 @@
     <text x="660" y="311" font-size="16" fill="#ffffff" text-anchor="middle">Submit</text>
   </g>
 
-  <!-- frozen frame indicator -->
+  <!-- frozen frame indicator + timeline -->
   <g id="frozen">
     <rect x="140" y="86" width="680" height="360" rx="14" fill="none" stroke="#7c5cff" stroke-width="2.5"/>
-    <!-- timeline -->
     <rect x="190" y="466" width="580" height="6" rx="3" fill="#26262e"/>
     <g id="playhead" transform="translate(0,0)">
       <rect x="742" y="458" width="4" height="22" rx="2" fill="#7c5cff"/>
@@ -73,15 +99,27 @@
     <text x="770" y="500" font-size="14" class="dim" text-anchor="end">now</text>
   </g>
 
-  <!-- object selection -->
+  <!-- drag-selection rectangle -->
   <g id="objrect">
-    <rect x="588" y="278" width="144" height="56" rx="8" fill="none" stroke="#ff3b30" stroke-width="2.5"/>
-    <circle cx="588" cy="334" r="4" fill="#ff3b30"/>
+    <rect x="588" y="278" width="144" height="56" rx="6" fill="rgba(255,59,48,0.10)" stroke="#ff3b30" stroke-width="2.5"/>
   </g>
 
-  <!-- annotation note -->
+  <!-- annotation note with typing text -->
   <g id="note">
     <rect x="374" y="336" width="270" height="38" rx="8" fill="#14141a" stroke="#3a3a46"/>
-    <text x="388" y="361" font-size="16" fill="#ececf1">Submit overflows its container</text>
+    <text x="388" y="361" font-size="16" fill="#ececf1">Submit overflows container</text>
+    <!-- cover slides right, revealing the text as if typed -->
+    <g id="typecover">
+      <rect x="386" y="342" width="242" height="26" fill="#14141a"/>
+      <rect id="caret" x="386" y="344" width="2" height="22" fill="#ececf1"/>
+    </g>
+    <!-- keep the cover from spilling outside the note box -->
+    <rect x="628" y="340" width="120" height="30" fill="#0e0e12" opacity="0"/>
+  </g>
+
+  <!-- mouse cursor -->
+  <g id="cursor">
+    <path d="M0,0 L0,16 L4.5,12.5 L7.5,19 L10,17.8 L7,11.5 L12.5,11.5 Z"
+          fill="#ffffff" stroke="#111116" stroke-width="1"/>
   </g>
 </svg>

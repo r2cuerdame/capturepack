@@ -123,7 +123,8 @@ The goal of the page is not to explain the product — it is to drive the Downlo
 Structure:
 
 - **Hero** — "Capture context, not screenshots." / "The fastest way to explain something
-  to humans and AI." Exactly three buttons: **Download**, **GitHub**, **☕ Buy me a coffee**.
+  to humans and AI." Exactly three buttons: **Download**, **GitHub**, **♥ Sponsor**
+  (GitHub Sponsors).
 - **Demo** — one ~10s GIF below the hero: Ctrl+Alt+C → capture freezes → mouse wheel moves
   through time → click object → write annotation → CapturePack exported.
 - **Output preview** — the generated pack tree (manifest.json, snapshot.png, annotations.json,
@@ -177,10 +178,10 @@ After a month, the journal itself becomes the best roadmap.
 
 **Export**
 
-`CapturePack.zip` contains:
+A `.capturepack` file (a standard ZIP) contains:
 
 - `manifest.json`
-- `replay.mp4`
+- `replay.webm` (or `replay.mp4`)
 - `snapshot.png`
 - `annotations.json`
 - `report.md`
@@ -510,7 +511,7 @@ CapturePack/
 ├── annotations.json
 ├── report.md
 ├── snapshot.png
-├── replay.mp4
+├── replay.webm
 └── plugins/
 ```
 
@@ -650,6 +651,7 @@ capturepack/
 ├── plugins/
 ├── examples/
 ├── tools/
+├── site/
 └── tests/
 ```
 
