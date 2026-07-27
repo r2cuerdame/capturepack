@@ -18,7 +18,10 @@ CapturePack is an open-source context capture format and toolkit that helps huma
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Download](https://github.com/r2cuerdame/capturepack/releases/latest)
 
 <p align="center">
-  <img src="site/assets/demo.svg" alt="Demo: press Ctrl+Alt+C, the last 30 seconds freeze, the mouse wheel scrubs through time, drag to select the object, write the annotation, and issue.capturepack is exported." width="760">
+  <!-- Absolute raw URL with a version query: GitHub proxies README images through
+       camo, which caches by source URL — without the bump a fixed demo keeps
+       rendering the stale copy for hours. Bump ?v= whenever demo.svg changes. -->
+  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=2" alt="Demo: press Ctrl+Alt+C, the last 30 seconds freeze, the mouse wheel scrubs through time, drag to select the object, write the annotation, and the CapturePack is saved." width="760">
 </p>
 
 A CapturePack **folder** bundles what a screenshot cannot: the last 30 seconds of replay, a snapshot, editable annotations, a machine-readable event timeline, and human- and AI-readable reports — everything another developer or any LLM needs to immediately understand the situation. When you need to share it, package the folder as a single `.capturepack` file.
