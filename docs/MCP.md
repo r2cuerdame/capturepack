@@ -64,15 +64,103 @@ Add to `.vscode/mcp.json`:
 }
 ```
 
-### stdio-only clients
+### Claude Desktop
 
-Clients that only speak stdio can bridge to the HTTP endpoint with the
+Settings → Developer → Edit Config (`claude_desktop_config.json`). Claude Desktop speaks
+stdio, so bridge with `mcp-remote`:
+
+```json
+{
+  "mcpServers": {
+    "capturepack": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://127.0.0.1:39393/mcp"]
+    }
+  }
+}
+```
+
+### ChatGPT
+
+ChatGPT Desktop: Settings → Connectors → Add connector → paste
+`http://127.0.0.1:39393/mcp` (developer mode must be enabled for localhost
+connectors).
+
+### Windsurf
+
+Add to `~/.codeium/windsurf/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "capturepack": { "serverUrl": "http://127.0.0.1:39393/mcp" }
+  }
+}
+```
+
+### Codex CLI
+
+Add to `~/.codex/config.toml` (Codex speaks stdio — bridge with `mcp-remote`):
+
+```toml
+[mcp_servers.capturepack]
+command = "npx"
+args = ["-y", "mcp-remote", "http://127.0.0.1:39393/mcp"]
+```
+
+### Gemini CLI
+
+Add to `~/.gemini/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "capturepack": { "httpUrl": "http://127.0.0.1:39393/mcp" }
+  }
+}
+```
+
+### Cline
+
+Cline (VS Code) → MCP Servers → Configure (`cline_mcp_settings.json`):
+
+```json
+{
+  "mcpServers": {
+    "capturepack": { "url": "http://127.0.0.1:39393/mcp", "type": "streamableHttp" }
+  }
+}
+```
+
+### Zed
+
+`settings.json`:
+
+```json
+{
+  "context_servers": {
+    "capturepack": {
+      "source": "custom",
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://127.0.0.1:39393/mcp"]
+    }
+  }
+}
+```
+
+### Any other stdio-only client
+
+Bridge to the HTTP endpoint with the
 [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) npm package — configure the client
 to run:
 
 ```
 npx -y mcp-remote http://127.0.0.1:39393/mcp
 ```
+
+Exact config formats evolve with each client — when in doubt, the server is plain
+MCP Streamable HTTP at `http://127.0.0.1:39393/mcp`, and `mcp-remote` covers every
+stdio-only client.
 
 ## The default pack: latest, unless you open one
 
