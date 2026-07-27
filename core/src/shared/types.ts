@@ -134,4 +134,11 @@ export interface Settings {
   defaultManualDurationMs: number
   // Show the duration chip on the selected annotation in the editor.
   showDurationLabel: boolean
+  // Always-On MCP Server (read-only, Streamable HTTP on 127.0.0.1:<mcpPort>/mcp).
+  mcpEnabled: boolean
+  mcpPort: number
+  mcpAutoStart: boolean
+  mcpReadOnly: boolean
+  mcpWatchExportFolder: boolean
+  mcpLogRequests: boolean
 }

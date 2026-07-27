@@ -10,3 +10,4 @@ Thumbs.db
 *.capturepack
 !examples/**/*.capturepack
 .env
+release/

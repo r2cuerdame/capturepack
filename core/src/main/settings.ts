@@ -19,27 +19,62 @@ function defaultSettings(): Settings {
     scrubSensitivityMs: 100,
     defaultManualDurationMs: 1000,
     showDurationLabel: true,
+    mcpEnabled: true,
+    mcpPort: 39393,
+    mcpAutoStart: true,
+    mcpReadOnly: true,
+    mcpWatchExportFolder: true,
+    mcpLogRequests: false,
   }
 }
 
 export function loadSettings(): Settings {
   const base = defaultSettings()
   let raw: Record<string, unknown> | null = null
+  // A malformed but non-empty file is preserved on disk (defaults apply in
+  // memory only) so a user's hand-edit mistake is never silently destroyed.
+  let preserveFile = false
+  let text: string | null = null
   try {
-    const parsed: unknown = JSON.parse(fs.readFileSync(settingsFilePath(), 'utf8'))
-    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      raw = parsed as Record<string, unknown>
-    }
+    text = fs.readFileSync(settingsFilePath(), 'utf8')
   } catch {
-    // Missing or corrupt file: fall through and rewrite defaults.
+    text = null // Missing/unreadable file: fall through and write defaults.
+  }
+  if (text !== null) {
+    try {
+      // Editors commonly save UTF-8 with a BOM, which JSON.parse rejects.
+      const parsed: unknown = JSON.parse(text.replace(/^\uFEFF/, ''))
+      if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        raw = parsed as Record<string, unknown>
+      } else if (text.trim() !== '') {
+        preserveFile = true
+      }
+    } catch {
+      if (text.trim() !== '') preserveFile = true
+    }
   }
   const settings = raw ? mergeSettings(base, raw) : base
-  try {
-    saveSettings(settings)
-  } catch {
-    // Unwritable disk: keep running with in-memory settings.
+  if (!preserveFile) {
+    try {
+      saveSettings(settings)
+    } catch {
+      // Unwritable disk: keep running with in-memory settings.
+    }
   }
-  return settings
+  // --output-dir=<path> overrides outputDir for this run only. Applied after
+  // saveSettings so the override is never persisted.
+  const override = outputDirOverride(process.argv)
+  return override !== null ? { ...settings, outputDir: override } : settings
+}
+
+function outputDirOverride(argv: string[]): string | null {
+  for (const arg of argv) {
+    if (arg.startsWith('--output-dir=')) {
+      const value = arg.slice('--output-dir='.length).trim()
+      if (value !== '') return path.resolve(value)
+    }
+  }
+  return null
 }
 
 export function saveSettings(settings: Settings): void {
@@ -69,6 +104,16 @@ function mergeSettings(base: Settings, raw: Record<string, unknown>): Settings {
         : base.defaultManualDurationMs,
     showDurationLabel:
       typeof raw.showDurationLabel === 'boolean' ? raw.showDurationLabel : base.showDurationLabel,
+    mcpEnabled: typeof raw.mcpEnabled === 'boolean' ? raw.mcpEnabled : base.mcpEnabled,
+    mcpPort:
+      typeof raw.mcpPort === 'number' && Number.isInteger(raw.mcpPort) && raw.mcpPort >= 1 && raw.mcpPort <= 65535
+        ? raw.mcpPort
+        : base.mcpPort,
+    mcpAutoStart: typeof raw.mcpAutoStart === 'boolean' ? raw.mcpAutoStart : base.mcpAutoStart,
+    mcpReadOnly: typeof raw.mcpReadOnly === 'boolean' ? raw.mcpReadOnly : base.mcpReadOnly,
+    mcpWatchExportFolder:
+      typeof raw.mcpWatchExportFolder === 'boolean' ? raw.mcpWatchExportFolder : base.mcpWatchExportFolder,
+    mcpLogRequests: typeof raw.mcpLogRequests === 'boolean' ? raw.mcpLogRequests : base.mcpLogRequests,
   }
   return Object.assign({}, raw, known)
 }

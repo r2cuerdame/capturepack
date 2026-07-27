@@ -22,14 +22,15 @@ Ctrl+Alt+C  →  capture  →  5-second annotation  →  export .capturepack  �
 |---|---|---|
 | Format spec 0.1.0 | SPEC.md + JSON Schemas (`docs/schemas/`) | Done (draft) |
 | **V1 — MVP + release** | Capture, annotate (scrub timeline), export + installable auto-updating Windows release | In progress (implemented; first release pending) |
-| **V1.5 — MCP server** | Always-on read-only MCP so any AI reads packs natively | Not started (designed in GOAL.md) |
+| **V1.5 — MCP server** | Always-on read-only MCP so any AI reads packs natively | Implemented (live-usage verification pending) |
 | **V2 — Context depth** | Timeline input events + Plugin API, Chrome extension, Plugin Manager | Extension scaffolded; rest not started |
 | **V3 — Semantic layer** | Tracked elements, object picking, AI-assisted annotation | Not started |
 
 What exists today: SPEC.md (format 0.1.0, draft) with validating schemas; a valid example pack
 and dependency-free validator (`tools/`); the full Electron app under `core/` (replay ring
 buffer, snapshot, Ctrl+Alt+C, annotation editor, exporter, tray, settings, GitHub-Releases
-updater) passing typecheck/build/smoke; CI + tag-triggered release workflows; the landing page
+updater, always-on MCP server) passing typecheck/build/smoke; CI + tag-triggered release
+workflows; the landing page
 live at **[capturepack.dev](https://capturepack.dev)**; the Chrome extension Phase 1 scaffold
 (`extensions/chrome/`) and protocol v1 (`shared/protocol/`).
 
@@ -89,19 +90,25 @@ least one update through restart-to-update — **a full month with no manual rei
 
 ---
 
-## V1.5 — Always-On MCP Server (read-only)
+## V1.5 — Always-On MCP Server (read-only) — Implemented (live-usage verification pending)
 
-Ships soon after the first release (GOAL "Always-On MCP Server"). The MCP server lives inside
-CapturePack.exe (localhost:39393), watches the export folder, and lets any AI analyze packs
-without the user explaining anything — "Analyze the latest CapturePack." is the whole prompt.
+Implemented ahead of the first release (GOAL "Always-On MCP Server"). The MCP server lives
+inside CapturePack.exe (Streamable HTTP at `http://127.0.0.1:39393/mcp`, localhost only),
+watches the export folder, and lets any AI analyze packs without the user explaining
+anything — "Analyze the latest CapturePack." is the whole prompt. Like the rest of the app,
+it has not yet been proven by daily use. Client setup and the full tool reference:
+[docs/MCP.md](docs/MCP.md).
 
-- [ ] Recent-pack index + export-folder watcher (no manual refresh)
-- [ ] Read-only tools: `latest` · `list` · `open` (dir or zip) · `summary` · `manifest` ·
-      `report` · `timeline(from,to)` · `annotations` · `findAnnotations` · `frame(time)` ·
-      `replay` · `dom` / `findDOM` · `windows` · `search` · `exportMarkdown`
-- [ ] Generic plugin-metadata exposure (MCP never special-cases plugin kinds)
-- [ ] Settings → MCP (enable, autostart, read-only, watch, port, request log)
-- [ ] Never creates/edits captures — capture always belongs to the application
+- [x] Recent-pack index + export-folder watcher (no manual refresh)
+- [x] Read-only tools: `latest` · `list` · `open` (dir or zip) · `summary` · `manifest` ·
+      `report` · `timeline(from_ms,to_ms)` · `annotations` · `find_annotations` ·
+      `frame(time_s)` · `replay` · `dom` / `find_dom` · `windows` · `search` ·
+      `export_markdown` — exposed as `capturepack_*` tool names; every pack-reading tool
+      defaults to the latest pack. `frame` is v0: it returns the snapshot frame with a note;
+      true replay-frame extraction is future work
+- [x] Generic plugin-metadata exposure (MCP never special-cases plugin kinds)
+- [x] Settings → MCP (enable, autostart, read-only, watch, port, request log)
+- [x] Never creates/edits captures — capture always belongs to the application
 
 ---
 
@@ -158,7 +165,8 @@ less complete without them, and nothing becomes an AI API integration (a stated 
 - **mp4 replay** — optional ffmpeg-based export alongside webm.
 - **Open specification adoption** — other tools reading and writing `.capturepack`.
 - **Future MCP tools** — compare, merge, diff, statistics, exportPDF/HTML/Issue,
-  findByApplication/URL/WindowTitle.
+  findByApplication/URL/WindowTitle; true replay-frame extraction for `frame(time_s)`
+  (v0 returns the snapshot frame with a note).
 
 ---
 

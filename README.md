@@ -55,6 +55,16 @@ A screenshot-only pack — `manifest.json` + `snapshot.png`, nothing else — is
 
 The specification matters more than any implementation — any language can generate CapturePack files. See [SPEC.md](SPEC.md).
 
+## MCP — talk to your captures
+
+The app ships an always-on, read-only [MCP](https://modelcontextprotocol.io) server at `http://127.0.0.1:39393/mcp` (localhost only), so any AI can find and analyze your latest pack by itself — "Analyze the latest CapturePack." is the whole prompt.
+
+```
+claude mcp add --transport http capturepack http://127.0.0.1:39393/mcp
+```
+
+Tools, client setup, and settings: [docs/MCP.md](docs/MCP.md).
+
 ## Status
 
 Early development. See [GOAL.md](GOAL.md) for the project vision and [ROADMAP.md](ROADMAP.md) for what's next.

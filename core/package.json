@@ -19,8 +19,10 @@
     "release": "npm run build && electron-builder --win --publish always"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "adm-zip": "^0.5.16",
-    "electron-updater": "^6.3.9"
+    "electron-updater": "^6.3.9",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/adm-zip": "^0.5.5",
