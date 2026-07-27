@@ -106,6 +106,12 @@ Tools, client setup, and settings: [docs/MCP.md](docs/MCP.md).
 
 Early development. See [GOAL.md](GOAL.md) for the project vision and [ROADMAP.md](ROADMAP.md) for what's next.
 
+## Security &amp; signing
+
+Windows builds are currently unsigned (SmartScreen will warn — *More info → Run anyway*);
+every release ships `SHA256SUMS.txt` for verification, and an OSS code-signing application
+is pending. Details, team roles, and privacy practices: [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md).
+
 ## ♥ Support
 
 CapturePack is free, open source, and cloud-free — no accounts, no telemetry, nothing to sell.
