@@ -507,6 +507,29 @@ With this design CapturePack naturally grows into a plugin-based context platfor
 
 ---
 
+## Settings GUI
+
+Settings are edited in a GUI window — never by opening settings.json in an editor
+(the JSON file remains the storage; no database).
+
+- Opened from the tray ("Settings…"). One compact dark window consistent with the editor's
+  minimal design; keyboard accessible; instant apply where possible, an inline "restart to
+  apply" hint where not (e.g. MCP port).
+- Grouped sections:
+  - **General** — output folder (picker + open button), copy exported pack to clipboard,
+    auto-update check.
+  - **Capture** — replay length (seconds), capture FPS.
+  - **Annotation** — default manual duration, show duration label, scrub wheel invert,
+    scrub sensitivity (ms per notch).
+  - **MCP** — enable, start automatically, port, watch export folder, log requests;
+    read-only badge and connection URL shown for copy-paste.
+  - **Plugins** — the Plugin Manager surface (GOAL "Plugin Manager"): each integration with
+    status icon and Enable/Disable; Chrome DOM appears first (install/health-check UX per
+    "Extension Install & Management UX"); others listed as coming soon.
+- Settings values validate on input; invalid values never write to settings.json.
+
+---
+
 ## Annotation Timeline & Lifetime
 
 Annotations are not drawings on a screen — CapturePack is a program that creates
