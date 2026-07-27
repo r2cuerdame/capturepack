@@ -39,6 +39,20 @@ export class EditorState {
     return { annotation_id: id, z: maxZ + 1, created_at: new Date().toISOString() }
   }
 
+  /**
+   * Re-edit (GOAL "History — Open & re-edit"): adopts a saved pack's boxes as
+   * the session's starting state. The undo baseline is THIS state (undo never
+   * walks past it), and every loaded id is registered so nextStamp() continues
+   * past the existing ann_ ids instead of ever reissuing one.
+   */
+  restore(annotations: Annotation[]): void {
+    this.annotations = structuredClone(annotations)
+    for (const a of this.annotations) this.usedIds.add(a.annotation_id)
+    this.undoStack.length = 0
+    this.redoStack.length = 0
+    this.selectedId = null
+  }
+
   byId(id: string): Annotation | undefined {
     return this.annotations.find((a) => a.annotation_id === id)
   }

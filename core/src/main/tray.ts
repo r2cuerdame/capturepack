@@ -5,6 +5,7 @@ import * as path from 'node:path'
 
 export interface TrayHandlers {
   onCapture: () => void
+  onOpenHistory: () => void
   onOpenOutput: () => void
   onOpenSettings: () => void
   onRestartUpdate: () => void
@@ -22,8 +23,11 @@ export function createTray(handlers: TrayHandlers): TrayControls {
   let updateVersion: string | null = null
 
   const rebuildMenu = (): void => {
+    // Menu order (GOAL "History" navigation):
+    // Capture now · History · Open output folder · Open settings
     const items: MenuItemConstructorOptions[] = [
       { label: 'Capture now  Ctrl+Alt+C', click: () => handlers.onCapture() },
+      { label: 'History', click: () => handlers.onOpenHistory() },
       { label: 'Open output folder', click: () => handlers.onOpenOutput() },
       { label: 'Settings…', click: () => handlers.onOpenSettings() },
       { type: 'separator' },

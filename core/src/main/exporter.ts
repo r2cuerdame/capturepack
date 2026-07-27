@@ -5,9 +5,9 @@
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { copyFile, cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { release } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { app, screen } from 'electron'
 import AdmZip from 'adm-zip'
 import type {
@@ -36,6 +36,9 @@ export interface ExportInput {
   // Replay position (ms) of the exported snapshot frame; null = the capture instant
   snapshotTMs: number | null
   timeline: TimelineFile
+  // Plugin declarations carried through from a loaded manifest on re-edit
+  // (external packs — the current exporter never writes its own). Absent = [].
+  plugins?: Manifest['plugins']
   copyToClipboard: boolean
 }
 
@@ -50,6 +53,8 @@ export interface ManifestInput {
   hasReplay: boolean
   replayDurationMs: number
   snapshotTMs: number | null
+  // Carried through from a loaded manifest on re-edit; absent = [] (fresh packs).
+  plugins?: Manifest['plugins']
 }
 
 export function buildManifest(input: ManifestInput): Manifest {
@@ -71,7 +76,7 @@ export function buildManifest(input: ManifestInput): Manifest {
       // the background render finishes — absent while not yet rendered and
       // always absent when replay is null (SPEC §5).
     },
-    plugins: [],
+    plugins: input.plugins ?? [],
   }
   const title = input.title.trim()
   if (title !== '') manifest.title = title
@@ -169,12 +174,28 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
   }
 }
 
+export interface UpdatePackOptions {
+  // Re-edit mode (GOAL "History — Save after re-edit"): replay.webm is NEVER
+  // rewritten, re-encoded, or deleted — the file already on disk stays the
+  // original evidence. input.replayWebm is ignored (pass null); the manifest's
+  // replay declaration reflects the file actually present in the folder.
+  keepReplay?: boolean
+}
+
 /**
  * Finalize after annotation: updates the save-first folder in place (same id,
  * same path). Shows no UI itself — the caller shows the save toast and starts
  * the background annotated-replay render.
  */
-export async function updatePack(handle: PackHandle, input: ExportInput): Promise<string> {
+export async function updatePack(
+  handle: PackHandle,
+  input: ExportInput,
+  options: UpdatePackOptions = {},
+): Promise<string> {
+  const keepReplay = options.keepReplay === true
+  const hasReplay = keepReplay
+    ? existsSync(join(handle.dirPath, 'replay.webm'))
+    : input.replayWebm !== null
   const manifest = buildManifest({
     id: handle.id,
     createdAt: input.capturedAt,
@@ -183,9 +204,10 @@ export async function updatePack(handle: PackHandle, input: ExportInput): Promis
     note: input.note,
     osVersion: release(),
     screens: physicalScreens(),
-    hasReplay: input.replayWebm !== null,
+    hasReplay,
     replayDurationMs: input.replayDurationMs,
     snapshotTMs: input.snapshotTMs,
+    plugins: input.plugins,
   })
   const annotationsFile: AnnotationsFile = {
     reference_width: input.width,
@@ -201,15 +223,73 @@ export async function updatePack(handle: PackHandle, input: ExportInput): Promis
   // it: the background render rewrites it (and re-declares it in the manifest)
   // after this save.
   await rm(join(handle.dirPath, 'replay_annotated.webm'), { force: true })
-  if (input.replayWebm === null) {
-    // The user excluded the replay at save time (e.g. privacy).
-    await rm(join(handle.dirPath, 'replay.webm'), { force: true })
-  } else {
-    await writeFile(join(handle.dirPath, 'replay.webm'), input.replayWebm)
+  if (!keepReplay) {
+    if (input.replayWebm === null) {
+      // The user excluded the replay at save time (e.g. privacy).
+      await rm(join(handle.dirPath, 'replay.webm'), { force: true })
+    } else {
+      await writeFile(join(handle.dirPath, 'replay.webm'), input.replayWebm)
+    }
   }
 
   if (input.copyToClipboard) copyFolderToClipboard(handle.dirPath)
   return handle.dirPath
+}
+
+/**
+ * Save As New CapturePack (GOAL "History — Save after re-edit"): writes the
+ * edited state into a NEW folder (CapturePack_<now>, collision-suffixed) with
+ * a NEW manifest id, copying replay.webm from the source pack byte-for-byte.
+ * The original folder is never touched. Docs are regenerated from the edited
+ * data; replay_annotated is NOT copied (it is stale relative to the edited
+ * annotations — the caller starts a background render for the new folder).
+ */
+export async function saveAsNewPack(sourceDir: string, input: ExportInput): Promise<PackHandle> {
+  const id = randomUUID()
+  const srcReplay = join(sourceDir, 'replay.webm')
+  const hasReplay = existsSync(srcReplay)
+  const manifest = buildManifest({
+    id,
+    createdAt: input.capturedAt,
+    generatorVersion: app.getVersion(),
+    title: input.title,
+    note: input.note,
+    osVersion: release(),
+    screens: physicalScreens(),
+    hasReplay,
+    replayDurationMs: input.replayDurationMs,
+    snapshotTMs: input.snapshotTMs,
+    plugins: input.plugins,
+  })
+  const annotationsFile: AnnotationsFile = {
+    reference_width: input.width,
+    reference_height: input.height,
+    annotations: input.annotations,
+  }
+  const timeline = withExportEvent(input.timeline, new Date())
+
+  // The new pack lands next to its source (same parent folder), named by the
+  // save instant so it can never collide with the original.
+  const dirPath = uniquePackDir(dirname(sourceDir), new Date())
+  try {
+    await mkdir(dirPath)
+    await writePackFiles(dirPath, manifest, annotationsFile, timeline)
+    await writeFile(join(dirPath, 'snapshot.png'), input.snapshotPng)
+    if (hasReplay) await copyFile(srcReplay, join(dirPath, 'replay.webm'))
+    // Plugin payloads (external packs): the files travel with their manifest
+    // declaration — Save As New must not silently strip plugins/.
+    const srcPlugins = join(sourceDir, 'plugins')
+    if (existsSync(srcPlugins)) {
+      await cp(srcPlugins, join(dirPath, 'plugins'), { recursive: true })
+    }
+  } catch (err) {
+    // Never leave a half-written pack behind.
+    await rm(dirPath, { recursive: true, force: true })
+    throw err
+  }
+
+  if (input.copyToClipboard) copyFolderToClipboard(dirPath)
+  return { id, dirPath }
 }
 
 /** The metadata + generated documents common to save-first and finalize. */

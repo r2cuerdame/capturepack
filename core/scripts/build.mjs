@@ -31,11 +31,13 @@ await Promise.all([
   build({ ...node, entryPoints: ['src/preload/settings.ts'], outfile: 'dist/preload/settings.js' }),
   build({ ...node, entryPoints: ['src/preload/render.ts'], outfile: 'dist/preload/render.js' }),
   build({ ...node, entryPoints: ['src/preload/toast.ts'], outfile: 'dist/preload/toast.js' }),
+  build({ ...node, entryPoints: ['src/preload/history.ts'], outfile: 'dist/preload/history.js' }),
   build({ ...browser, entryPoints: ['src/renderer/capture/capture.ts'], outfile: 'dist/renderer/capture/capture.js' }),
   build({ ...browser, entryPoints: ['src/renderer/editor/editor.ts'], outfile: 'dist/renderer/editor/editor.js' }),
   build({ ...browser, entryPoints: ['src/renderer/settings/settings.ts'], outfile: 'dist/renderer/settings/settings.js' }),
   build({ ...browser, entryPoints: ['src/renderer/render/render.ts'], outfile: 'dist/renderer/render/render.js' }),
   build({ ...browser, entryPoints: ['src/renderer/toast/toast.ts'], outfile: 'dist/renderer/toast/toast.js' }),
+  build({ ...browser, entryPoints: ['src/renderer/history/history.ts'], outfile: 'dist/renderer/history/history.js' }),
 ])
 
 await Promise.all([
@@ -47,6 +49,8 @@ await Promise.all([
   cp('src/renderer/render/render.html', 'dist/renderer/render/render.html'),
   cp('src/renderer/toast/toast.html', 'dist/renderer/toast/toast.html'),
   cp('src/renderer/toast/toast.css', 'dist/renderer/toast/toast.css'),
+  cp('src/renderer/history/history.html', 'dist/renderer/history/history.html'),
+  cp('src/renderer/history/history.css', 'dist/renderer/history/history.css'),
   cp('assets', 'dist/assets', { recursive: true }),
 ])
 

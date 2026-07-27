@@ -10,6 +10,10 @@ contextBridge.exposeInMainWorld('editorBridge', {
   export(payload: EditorExportPayload): void {
     ipcRenderer.send(IPC.editorExport, payload)
   },
+  // Edit mode only: write the edited state into a NEW pack folder.
+  saveAsNew(payload: EditorExportPayload): void {
+    ipcRenderer.send(IPC.editorSaveAsNew, payload)
+  },
   cancel(): void {
     ipcRenderer.send(IPC.editorCancel)
   },

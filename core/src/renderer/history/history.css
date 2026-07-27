@@ -1,0 +1,396 @@
+:root {
+  --bg: #121216;
+  --panel: #1c1c22;
+  --panel-hover: #26262e;
+  --border: #2c2c34;
+  --text: #e8e8ea;
+  --muted: #8a8a93;
+  --action: #3574f0;
+  --danger: #e5484d;
+  --warn-bg: #33270f;
+  --warn-border: #7a5a1e;
+  --warn-text: #ffd27a;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.4 "Segoe UI", system-ui, sans-serif;
+  user-select: none;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* ---- top bar ---- */
+
+#topbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  flex-wrap: wrap;
+}
+
+#search {
+  flex: 1 1 220px;
+  min-width: 180px;
+  background: #111116;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text);
+  padding: 6px 10px;
+  font: inherit;
+  user-select: text;
+}
+
+#search:focus {
+  outline: none;
+  border-color: #4a4a58;
+}
+
+#filters {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.chip {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--muted);
+  padding: 4px 11px;
+  font: 600 12px "Segoe UI", system-ui, sans-serif;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chip:hover {
+  background: var(--panel-hover);
+  color: var(--text);
+}
+
+.chip.active {
+  background: #24324f;
+  border-color: var(--action);
+  color: #cfe0ff;
+}
+
+/* ---- list ---- */
+
+#list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.empty {
+  color: var(--muted);
+  text-align: center;
+  padding: 48px 16px;
+}
+
+/* ---- card ---- */
+
+.card {
+  display: flex;
+  gap: 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  position: relative;
+}
+
+.thumbWrap {
+  flex: none;
+  width: 160px;
+  height: 100px;
+  border-radius: 7px;
+  overflow: hidden;
+  background: #0d0d11;
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.thumbPh {
+  color: #4a4a55;
+  font-size: 11px;
+}
+
+.cardBody {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cardTitleRow {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.cardTitle {
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.cardName {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: none;
+  max-width: 40%;
+}
+
+.cardMeta {
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cardBadges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-hover);
+  color: var(--muted);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.badge.ready {
+  border-color: #245c37;
+  background: #142a1c;
+  color: #7fd89b;
+}
+
+.badge.missing {
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+
+.badge.blur {
+  border-color: #5c2470;
+  background: #26102e;
+  color: #d79bf0;
+}
+
+.badge.warn {
+  border-color: #7a2e31;
+  background: #2e1416;
+  color: #f2a0a3;
+}
+
+/* ---- actions ---- */
+
+.cardActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  flex-wrap: wrap;
+}
+
+button {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-hover);
+  color: var(--text);
+  padding: 5px 12px;
+  font: 600 12px "Segoe UI", system-ui, sans-serif;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+button:hover:not(:disabled) {
+  background: #2e2e38;
+  border-color: #3c3c48;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+button.primary {
+  background: #24324f;
+  border-color: var(--action);
+  color: #cfe0ff;
+}
+
+button.primary:hover:not(:disabled) {
+  background: #2b3c60;
+}
+
+button.danger {
+  border-color: #7a2e31;
+  color: #f2a0a3;
+}
+
+button.danger:hover:not(:disabled) {
+  background: #2e1416;
+}
+
+.moreBtn {
+  padding: 5px 9px;
+  font-size: 14px;
+  line-height: 1;
+}
+
+:focus-visible {
+  outline: 2px solid var(--action);
+  outline-offset: 1px;
+}
+
+/* ---- overflow menu ---- */
+
+.menu {
+  position: absolute;
+  right: 12px;
+  top: 40px;
+  z-index: 10;
+  min-width: 180px;
+  background: #202027;
+  border: 1px solid #3c3c48;
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.45);
+  display: flex;
+  flex-direction: column;
+}
+
+.menuItem {
+  border: none;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: 5px;
+  font-weight: 400;
+}
+
+.menuItem:hover:not(:disabled) {
+  background: var(--panel-hover);
+  border: none;
+}
+
+.menuItem.danger {
+  color: #f2a0a3;
+}
+
+.menuSep {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 6px;
+}
+
+/* ---- inline rename / delete confirm / errors ---- */
+
+.inlineRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.inlineRow input[type="text"] {
+  flex: 1 1 240px;
+  min-width: 160px;
+  background: #111116;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 5px 8px;
+  font: inherit;
+  user-select: text;
+}
+
+.inlineRow input[type="text"]:focus {
+  outline: none;
+  border-color: #4a4a58;
+}
+
+.confirmText {
+  color: var(--warn-text);
+  font-size: 12px;
+}
+
+.cardError {
+  color: #f2a0a3;
+  font-size: 12px;
+}
+
+/* ---- status bar ---- */
+
+#statusbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 16px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+#countLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+}

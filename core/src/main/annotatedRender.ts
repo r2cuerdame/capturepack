@@ -27,6 +27,41 @@ export interface AnnotatedRenderJob {
 // before declaring the hidden window stuck.
 const RENDER_TIMEOUT_SLACK_MS = 60_000
 
+// EVERY render's lifecycle (fresh-capture save, re-edit save, History
+// re-render), observable in one place: the History window subscribes so a
+// save-started render shows as "Rendering…" instead of an enabled
+// [Retry Render], and isRenderInFlight lets it join a running render rather
+// than stack a second hidden render window for the same pack.
+export type RenderLifecycleState = 'rendering' | 'done' | 'failed'
+type RenderStateListener = (dirPath: string, state: RenderLifecycleState) => void
+const renderStateListeners = new Set<RenderStateListener>()
+// In-flight render count per resolved pack dir (concurrent renders of one
+// pack are possible when a re-edit save races an older render).
+const inFlight = new Map<string, number>()
+
+/** Subscribe to every render's start/terminal state. Returns unsubscribe. */
+export function onRenderStateChange(listener: RenderStateListener): () => void {
+  renderStateListeners.add(listener)
+  return () => {
+    renderStateListeners.delete(listener)
+  }
+}
+
+/** True while any render for this pack folder is still running. */
+export function isRenderInFlight(dirPath: string): boolean {
+  return (inFlight.get(path.resolve(dirPath)) ?? 0) > 0
+}
+
+function emitRenderState(dirPath: string, state: RenderLifecycleState): void {
+  for (const listener of [...renderStateListeners]) {
+    try {
+      listener(dirPath, state)
+    } catch (err) {
+      console.error('capturepack: render state listener failed:', errorMessage(err))
+    }
+  }
+}
+
 /**
  * Fire-and-forget: never blocks the save toast. `onDone` reports the terminal
  * state so the toast can flip its "rendering annotated replay…" status line.
@@ -36,11 +71,21 @@ export function startAnnotatedRender(
   job: AnnotatedRenderJob,
   onDone: (state: 'done' | 'failed') => void,
 ): void {
+  const key = path.resolve(handle.dirPath)
+  inFlight.set(key, (inFlight.get(key) ?? 0) + 1)
+  emitRenderState(handle.dirPath, 'rendering')
+  const finish = (state: 'done' | 'failed'): void => {
+    const count = (inFlight.get(key) ?? 1) - 1
+    if (count <= 0) inFlight.delete(key)
+    else inFlight.set(key, count)
+    emitRenderState(handle.dirPath, state)
+    onDone(state)
+  }
   void renderAnnotatedReplay(handle, job)
-    .then(() => onDone('done'))
+    .then(() => finish('done'))
     .catch((err) => {
       console.error('capturepack: annotated replay render failed:', errorMessage(err))
-      onDone('failed')
+      finish('failed')
     })
 }
 

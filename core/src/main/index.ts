@@ -3,6 +3,7 @@ import { app, dialog, globalShortcut, Notification, shell } from 'electron'
 import * as fs from 'node:fs'
 import type { UpdaterStatusPayload } from '../shared/ipc'
 import { setupDisplayMediaHandler, startCapture } from './capture'
+import { disposeHistory, openHistoryWindow, registerHistoryIpc } from './historyWindow'
 import { startMcpServer } from './mcp/server'
 import type { McpServerHandle } from './mcp/server'
 import { startCaptureFlow } from './session'
@@ -39,6 +40,7 @@ function main(): void {
 
   app.on('will-quit', () => {
     globalShortcut.unregisterAll()
+    disposeHistory()
     void mcp?.stop().catch(() => {})
   })
 
@@ -57,6 +59,8 @@ function main(): void {
     // closure below (capture flow, tray, MCP request logging) applies changes
     // the moment they are saved.
     registerSettingsIpc(settings)
+    // Same live settings object: History honors outputDir changes on next access.
+    registerHistoryIpc(settings)
 
     const capture = (): void => {
       void startCaptureFlow(settings)
@@ -64,6 +68,7 @@ function main(): void {
 
     const tray = createTray({
       onCapture: capture,
+      onOpenHistory: () => openHistoryWindow(),
       onOpenOutput: () => {
         fs.mkdirSync(settings.outputDir, { recursive: true })
         void shell.openPath(settings.outputDir)
@@ -75,6 +80,8 @@ function main(): void {
 
     // Dev aid: open the settings window on launch.
     if (process.argv.includes('--show-settings')) openSettingsWindow()
+    // Dev aid / headed testing: open the History window on launch.
+    if (process.argv.includes('--show-history')) openHistoryWindow()
 
     if (!globalShortcut.register('Ctrl+Alt+C', capture)) {
       // Async on purpose: showErrorBox blocks the main-process event loop until

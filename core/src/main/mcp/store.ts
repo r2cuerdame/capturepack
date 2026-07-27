@@ -67,16 +67,31 @@ export interface PackStore {
   open(idOrPath: string): PackHandle
   /** Resolve id/path, or the pinned/newest pack when omitted. Does not re-pin. */
   resolve(idOrPath?: string): PackHandle
+  /**
+   * Newest-first raw index (no manifest reads) — the History window's listing
+   * surface. Reuses the exact scan the MCP tools use; callers attach their own
+   * metadata via openPack().
+   */
+  entries(): RawPackEntry[]
+  /**
+   * Subscribe to watcher-driven index changes (debounced; fires only when the
+   * set of packs or an mtime actually changed). Returns an unsubscribe
+   * function. Scans triggered by direct store access never notify, so a
+   * listener that re-lists in response cannot loop.
+   */
+  onDidChange(listener: () => void): () => void
   dispose(): void
 }
 
 /** Index entry before manifest metadata is (lazily) attached. */
-interface RawEntry {
+export interface RawPackEntry {
   id: string
   path: string
   kind: PackKind
   mtimeMs: number
 }
+
+type RawEntry = RawPackEntry
 
 export function createPackStore(options: { outputDir: string; watch: boolean }): PackStore {
   const outputDir = options.outputDir
@@ -90,6 +105,29 @@ export function createPackStore(options: { outputDir: string; watch: boolean }):
     string,
     { mtimeMs: number; title: string | null; capturedAt: string | null; warning: string | null }
   >()
+  // History-window change subscribers; notified only from the watcher path.
+  const changeListeners = new Set<() => void>()
+  let lastNotifiedSig: string | null = null
+
+  function indexSignature(): string {
+    return index.map((e) => `${e.kind}:${e.path}|${e.mtimeMs}`).join('\n')
+  }
+
+  // Notifies subscribers when the index really changed since the last
+  // notification. Only the watcher debounce calls this: access-driven rescans
+  // (ensureFresh) must not notify, or a listener that re-lists would loop.
+  function notifyIfChanged(): void {
+    const sig = indexSignature()
+    if (sig === lastNotifiedSig) return
+    lastNotifiedSig = sig
+    for (const listener of [...changeListeners]) {
+      try {
+        listener()
+      } catch (err) {
+        console.error('capturepack: pack store change listener failed:', errorMessage(err))
+      }
+    }
+  }
 
   // Cheap by design: dirents + stat only, never opens a pack. Manifest metadata
   // is attached lazily by getMeta() for just the entries a tool actually returns.
@@ -189,6 +227,7 @@ export function createPackStore(options: { outputDir: string; watch: boolean }):
         debounce = setTimeout(() => {
           debounce = null
           scan()
+          notifyIfChanged()
         }, RESCAN_DEBOUNCE_MS)
       })
       watcher.on('error', () => {
@@ -257,6 +296,9 @@ export function createPackStore(options: { outputDir: string; watch: boolean }):
   }
 
   scan()
+  // Baseline for change notification: the first watcher event only notifies
+  // when it changed something relative to this initial index.
+  lastNotifiedSig = indexSignature()
   tryWatch()
 
   return {
@@ -286,11 +328,22 @@ export function createPackStore(options: { outputDir: string; watch: boolean }):
       }
       return newestHandle()
     },
+    entries(): RawPackEntry[] {
+      ensureFresh()
+      return index.map((e) => ({ ...e }))
+    },
+    onDidChange(listener: () => void): () => void {
+      changeListeners.add(listener)
+      return () => {
+        changeListeners.delete(listener)
+      }
+    },
     dispose(): void {
       if (debounce) clearTimeout(debounce)
       debounce = null
       watcher?.close()
       watcher = null
+      changeListeners.clear()
     },
   }
 }

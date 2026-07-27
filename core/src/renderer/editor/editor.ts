@@ -36,6 +36,7 @@ import { Viewport } from './viewport'
 interface EditorBridge {
   onInit(cb: (payload: EditorInitPayload) => void): void
   export(payload: EditorExportPayload): void
+  saveAsNew(payload: EditorExportPayload): void
   cancel(): void
   annotationAdded(payload: { id: string; type: string }): void
 }
@@ -78,6 +79,11 @@ const durationEditor = el<HTMLDivElement>('durationEditor')
 const durationInput = el<HTMLInputElement>('durationInput')
 const untilEndBtn = el<HTMLButtonElement>('untilEndBtn')
 const entireCaptureBtn = el<HTMLButtonElement>('entireCaptureBtn')
+const dirtyChip = el<HTMLSpanElement>('dirtyChip')
+const unsavedBar = el<HTMLDivElement>('unsavedBar')
+const unsavedSaveBtn = el<HTMLButtonElement>('unsavedSaveBtn')
+const unsavedSaveAsBtn = el<HTMLButtonElement>('unsavedSaveAsBtn')
+const unsavedDiscardBtn = el<HTMLButtonElement>('unsavedDiscardBtn')
 
 function ctx2d(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
   const ctx = canvas.getContext('2d')
@@ -108,6 +114,11 @@ let scrubInvert = false
 let scrubSensitivityMs = 100
 let defaultManualDurationMs = 1000
 let showDurationLabel = true
+// Re-edit mode (GOAL "History — Save after re-edit"): dirty tracking against
+// the loaded state, and Esc-when-dirty offers Save / Save As New / Discard.
+let editMode = false
+let baselineSig = ''
+let dirty = false
 // Original desktop snapshot, kept for restoring the "now" frame after scrubbing.
 let nativeBitmap: ImageBitmap | null = null
 let scrub: ScrubController | null = null
@@ -209,7 +220,47 @@ function sceneAnnotations(): readonly Annotation[] {
 function refresh(): void {
   syncLanes()
   schedulePaint()
+  updateDirty()
 }
+
+// ---------------------------------------------------------------------------
+// Edit-mode dirty tracking + the Esc [Save][Save As New][Discard] bar
+// ---------------------------------------------------------------------------
+
+/** Everything a save would write, as a comparable string. */
+function editSig(): string {
+  return `${JSON.stringify(state.annotations)}\u0000${titleInput.value.trim()}\u0000${noteInput.value.trim()}`
+}
+
+// Compare-based dirty: undoing back to the loaded state clears the chip.
+function updateDirty(): void {
+  if (!editMode || !loaded) return
+  const d = editSig() !== baselineSig
+  if (d === dirty) return
+  dirty = d
+  dirtyChip.hidden = !d
+  // Back at the baseline: the bar has nothing to offer. No refocus — the user
+  // may be typing in the title/note input right now.
+  if (!d) hideUnsavedBar(false)
+}
+
+function showUnsavedBar(): void {
+  unsavedBar.hidden = false
+  unsavedSaveBtn.focus()
+}
+
+function hideUnsavedBar(refocus = true): void {
+  if (unsavedBar.hidden) return
+  unsavedBar.hidden = true
+  if (refocus) overlay.focus()
+}
+
+unsavedSaveBtn.addEventListener('click', () => void doExport('save'))
+unsavedSaveAsBtn.addEventListener('click', () => void doExport('saveAsNew'))
+unsavedDiscardBtn.addEventListener('click', () => window.editorBridge.cancel())
+
+titleInput.addEventListener('input', updateDirty)
+noteInput.addEventListener('input', updateDirty)
 
 // Duration the lane strip was last built against; when ScrubController adopts
 // the parsed webm duration (replacing the manifest fallback) the bars must be
@@ -666,6 +717,7 @@ function endDrag(): void {
     state.pushUndoSnapshot(d.before)
   }
   schedulePaint()
+  updateDirty() // move/resize commits bypass refresh()
 }
 
 overlay.addEventListener('pointerup', endDrag)
@@ -784,18 +836,41 @@ window.addEventListener('keydown', (e) => {
   // check covers focus landing on the duration editor's buttons).
   if (e.isComposing || e.target === textEditor) return
   if (e.target instanceof Node && durationEditor.contains(e.target)) return
+  // The Esc bar's focused button owns Enter/Space: its native activation must
+  // fire THAT button's click (Save / Save As New / Discard). Without this,
+  // tabbing to [Save As New] or [Discard] and pressing Enter would fall
+  // through to the global Enter-saves shortcut and overwrite the original
+  // pack; Space would be swallowed by the pan modifier below.
+  if (
+    !unsavedBar.hidden &&
+    e.target instanceof Node &&
+    unsavedBar.contains(e.target) &&
+    (e.key === 'Enter' || e.key === ' ')
+  ) {
+    return
+  }
   const typing = e.target === titleInput || e.target === noteInput
   if (e.key === 'Escape') {
-    // Cancel-current first: duration editor, then an active selection; a bare
-    // Esc with nothing in progress closes the editor without saving.
+    // Cancel-current first: duration editor, then the unsaved-changes bar,
+    // then an active selection. A bare Esc with nothing in progress closes the
+    // editor — except in edit mode with unsaved changes, where it opens the
+    // [Save] [Save As New CapturePack] [Discard] bar instead of discarding.
     if (durationEditorOpen) {
       closeDurationEditor()
+      return
+    }
+    if (!unsavedBar.hidden) {
+      hideUnsavedBar()
       return
     }
     if (state.selectedId !== null) {
       state.selectedId = null
       syncLanes()
       schedulePaint()
+      return
+    }
+    if (editMode && dirty) {
+      showUnsavedBar()
       return
     }
     window.editorBridge.cancel()
@@ -887,13 +962,14 @@ const timebar = new Timebar(el<HTMLElement>('timebar'), {
 // IO
 // ---------------------------------------------------------------------------
 
-async function doExport(): Promise<void> {
+async function doExport(kind: 'save' | 'saveAsNew' = 'save'): Promise<void> {
   if (!loaded || exporting) return
   exporting = true
   exportBtn.disabled = true
   scrub?.pause()
   commitTextEditor()
   closeDurationEditor(false)
+  hideUnsavedBar(false)
   try {
     // A wheel burst right before Enter can leave a seek in flight; wait until
     // the base canvas shows the frame snapshotTMs will describe.
@@ -903,14 +979,18 @@ async function doExport(): Promise<void> {
     // The base canvas now shows the frame being exported (native snapshot or
     // scrubbed replay frame upscaled to native resolution).
     const snapshotPng = await composeExportPng(snapshot)
-    window.editorBridge.export({
+    const payload: EditorExportPayload = {
       annotations: state.annotations,
       snapshotPng,
       title: titleInput.value.trim(),
       note: noteInput.value.trim(),
-      includeReplay: hasReplay && includeReplay.checked,
+      // Hidden checkbox in edit mode: replay.webm is never touched on re-edit
+      // (main saves with keepReplay), so report the replay as included.
+      includeReplay: hasReplay && (editMode || includeReplay.checked),
       snapshotTMs: scrub ? scrub.exportTMs() : null,
-    })
+    }
+    if (kind === 'saveAsNew') window.editorBridge.saveAsNew(payload)
+    else window.editorBridge.export(payload)
   } catch (err) {
     exporting = false
     exportBtn.disabled = false
@@ -928,6 +1008,12 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
   scrubSensitivityMs = payload.scrubSensitivityMs
   defaultManualDurationMs = payload.defaultManualDurationMs
   showDurationLabel = payload.showDurationLabel
+  editMode = payload.editMode
+  // Re-edit: adopt the saved pack's boxes (undo baseline; ids registered so
+  // new ann_ ids continue past the loaded ones) and prefill title/note.
+  state.restore(payload.annotations)
+  titleInput.value = payload.title
+  noteInput.value = payload.note
   // Kept alive: scrubbing back to "now" restores this sharpest frame.
   nativeBitmap = await createImageBitmap(new Blob([payload.snapshotPng], { type: 'image/png' }))
   snapshot.width = nativeW
@@ -938,7 +1024,8 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
   replayChip.textContent = hasReplay
     ? `Replay: ${Math.round(payload.replayDurationMs / 1000)}s`
     : 'No replay'
-  replayToggle.hidden = !hasReplay
+  // Edit mode never offers include-replay: replay.webm is not touched on re-edit.
+  replayToggle.hidden = !hasReplay || editMode
   loaded = true
   // The replay loads asynchronously behind the instantly-usable snapshot;
   // the timebar shows "loading replay…" until scrubbing is ready.
@@ -960,6 +1047,8 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
     timebar.update(controller)
     syncLanes()
   }
+  // Dirty baseline = the loaded state exactly as restored above.
+  baselineSig = editSig()
   layout()
   schedulePaint()
   overlay.focus()

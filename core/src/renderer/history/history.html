@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:"
+  />
+  <title>CapturePack — History</title>
+  <link rel="stylesheet" href="./history.css" />
+</head>
+<body>
+  <header id="topbar">
+    <input
+      id="search"
+      type="search"
+      placeholder="Search title, report, app, annotations, date…"
+      spellcheck="false"
+      autocomplete="off"
+    />
+    <nav id="filters" aria-label="Filters">
+      <button type="button" class="chip active" data-filter="all">All</button>
+      <button type="button" class="chip" data-filter="today">Today</button>
+      <button type="button" class="chip" data-filter="week">This Week</button>
+      <button type="button" class="chip" data-filter="blur">Has Blur</button>
+      <button type="button" class="chip" data-filter="renderfailed">Render Failed</button>
+      <button type="button" class="chip" data-filter="notpackaged">Not Packaged</button>
+    </nav>
+  </header>
+  <main id="list" aria-live="polite"></main>
+  <footer id="statusbar">
+    <span id="countLabel"></span>
+    <span id="escHint">Esc closes</span>
+  </footer>
+  <script src="./history.js"></script>
+</body>
+</html>

@@ -19,6 +19,7 @@
       <input id="includeReplay" type="checkbox" checked />
       include replay
     </label>
+    <span id="dirtyChip" class="chip" hidden>Unsaved changes</span>
     <span id="keysHint">L-click select · R-drag box · # number · Blur · Enter save · Esc close</span>
     <button id="exportBtn">Save</button>
   </header>
@@ -47,6 +48,14 @@
         <button type="button" id="entireCaptureBtn">Entire Capture</button>
       </div>
       <input id="durationInput" type="text" placeholder="custom: 1500ms or 1.5s" autocomplete="off" spellcheck="false" />
+    </div>
+    <!-- Edit mode only (GOAL "History — Save after re-edit"): shown by Esc
+         while there are unsaved changes. Esc again returns to editing. -->
+    <div id="unsavedBar" hidden>
+      <span id="unsavedLabel">Unsaved changes</span>
+      <button id="unsavedSaveBtn" type="button">Save</button>
+      <button id="unsavedSaveAsBtn" type="button">Save As New CapturePack</button>
+      <button id="unsavedDiscardBtn" type="button">Discard</button>
     </div>
   </main>
   <footer id="timebar" hidden>

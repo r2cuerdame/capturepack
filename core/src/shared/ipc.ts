@@ -17,8 +17,13 @@ export const IPC = {
   editorInit: 'editor:init',
   // editor -> main: user confirmed export
   editorExport: 'editor:export',
-  // editor -> main: user cancelled (Esc)
+  // editor -> main: user cancelled (Esc). In edit mode this is Discard: close
+  // without writing anything.
   editorCancel: 'editor:cancel',
+  // editor -> main (edit mode only): Save As New CapturePack — same payload as
+  // editor:export, but written to a NEW folder with a NEW manifest id while the
+  // original pack stays untouched.
+  editorSaveAsNew: 'editor:save-as-new',
   // editor -> main: an annotation was added (EditorAnnotationAddedPayload, for the timeline)
   editorAnnotationAdded: 'editor:annotation-added',
 
@@ -56,6 +61,41 @@ export const IPC = {
   toastCopyPrompt: 'toast:copy-prompt',
   // toast -> main: close the toast window (× button / auto-close)
   toastClose: 'toast:close',
+
+  // history window -> main (invoke): list every pack with card metadata
+  historyList: 'history:list',
+  // history window -> main (invoke): snapshot thumbnail as a data URL (main-side
+  // nativeImage resize to 320px width — the renderer never touches file://)
+  historyThumb: 'history:thumb',
+  // history window -> main (invoke): total pack size in bytes (computed async)
+  historySize: 'history:size',
+  // history window -> main (invoke): lazily loaded searchable text for one pack
+  // (report.md + note + annotation texts), cached main-side until the pack changes
+  historySearchText: 'history:search-text',
+  // history window -> main: open the pack for re-editing (session.startEditFlow)
+  historyOpenPack: 'history:open-pack',
+  // history window -> main (invoke): open replay_annotated.webm in the system player
+  historyPlay: 'history:play',
+  // history window -> main (invoke): create the sibling {folder}.capturepack zip
+  historyCreateZip: 'history:create-zip',
+  // history window -> main: open the pack folder in the file manager
+  historyOpenFolder: 'history:open-folder',
+  // history window -> main: copy the absolute pack folder path to the clipboard
+  historyCopyPath: 'history:copy-path',
+  // history window -> main: copy the analyze-this-pack prompt (same text as the
+  // save toast) to the clipboard
+  historyCopyPrompt: 'history:copy-prompt',
+  // history window -> main (invoke): re-run the background annotated-replay render
+  historyRerender: 'history:rerender',
+  // history window -> main (invoke): rename the pack folder AND its zip twin
+  historyRename: 'history:rename',
+  // history window -> main (invoke): move the pack folder + zip twin to the trash
+  historyDelete: 'history:delete',
+  // main -> history window: the pack index changed on disk — re-list
+  historyChanged: 'history:changed',
+  // main -> history window: an annotated-replay render for a pack started or
+  // finished — pushed for EVERY render (save-time and History re-render)
+  historyRenderStatus: 'history:render-status',
 } as const
 
 export interface CaptureStartPayload {
@@ -90,6 +130,18 @@ export interface EditorInitPayload {
   defaultManualDurationMs: number
   // Show the duration chip on the selected annotation
   showDurationLabel: boolean
+  // Existing boxes to restore (GOAL "History — Open & re-edit"). Empty for a
+  // fresh capture. The editor adopts them as its undo baseline and registers
+  // their ids so new ann_ ids can never collide with loaded ones.
+  annotations: Annotation[]
+  // manifest title/note to prefill the top-bar inputs ('' for a fresh capture)
+  title: string
+  note: string
+  // True when re-editing a saved pack from History: the include-replay
+  // checkbox is hidden (replay.webm is never touched on re-edit), dirty
+  // tracking shows the "Unsaved changes" chip, and Esc when dirty offers
+  // [Save] [Save As New CapturePack] [Discard] instead of closing.
+  editMode: boolean
 }
 
 export interface EditorAnnotationAddedPayload {
@@ -190,4 +242,64 @@ export interface SettingsSetResult {
   // The full settings after the patch was validated and applied — the GUI
   // resyncs from this so a rejected value visibly snaps back.
   settings: Settings
+}
+
+// ---------------------------------------------------------------------------
+// History window
+
+// Annotated-replay presence for a listed pack: 'ready' = the file exists,
+// 'none' = the pack has no replay (nothing to render), 'missing' = replay
+// present but replay_annotated.webm absent (background render pending or
+// failed) — the card shows [Retry Render].
+export type HistoryAnnotatedState = 'ready' | 'none' | 'missing'
+
+export interface HistoryPackSummary {
+  // manifest id when readable, else the index id (relative folder/zip stem)
+  id: string
+  // Absolute path of the pack folder ('dir') or .capturepack file ('zip').
+  // This is the ref every history:* action channel takes.
+  path: string
+  kind: 'dir' | 'zip'
+  // Folder/file basename, e.g. "CapturePack_2026-07-27_120000"
+  name: string
+  title: string | null
+  capturedAt: string | null
+  app: string | null
+  hasReplay: boolean
+  replayDurationMs: number | null
+  annotationCount: number
+  numberedCount: number
+  hasBlur: boolean
+  annotated: HistoryAnnotatedState
+  // A sibling {folder}.capturepack exists (always true for kind 'zip')
+  zipTwin: boolean
+  // Unreadable/malformed pack: the card renders degraded with this message
+  warning: string | null
+}
+
+export interface HistoryListResult {
+  outputDir: string
+  // Newest-first, same order as the MCP pack index
+  packs: HistoryPackSummary[]
+}
+
+export interface HistoryActionResult {
+  ok: boolean
+  error?: string
+}
+
+export interface HistoryRenameResult {
+  ok: boolean
+  // New absolute pack path after a successful rename
+  path?: string
+  error?: string
+}
+
+export interface HistoryRenderStatusPayload {
+  // The pack path the render was started for (its path at start time —
+  // a concurrent rename orphans the status, which the re-list then corrects)
+  path: string
+  // 'rendering' marks a render start (save-time renders included) so the card
+  // shows "Rendering…" instead of an enabled [Retry Render] while in flight
+  state: 'rendering' | 'done' | 'failed'
 }
