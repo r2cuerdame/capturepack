@@ -983,6 +983,32 @@ real window too:
   the next capture opens the way the user left it.
 - Esc/Enter semantics identical in both modes.
 
+### Welcome (first launch after install)
+
+A tray app that opens nothing after install leaves the user with no idea what happened.
+On the **first launch only**, a small welcome window appears:
+
+```
+CapturePack is running in your tray.
+
+  Press  Ctrl+Alt+C  anytime               ← the live hotkey, not a hardcoded string
+  the last 30 seconds are already recorded
+
+  1  Capture      press the hotkey after the problem happens
+  2  Annotate     right-drag a box, type what's wrong
+  3  Save         a folder lands in <output folder>
+
+  [ Try it now ]  [ Settings ]  [ Done ]
+```
+
+- **Try it now** closes the window and fires a capture, so the very first capture is
+  guided rather than guessed at.
+- Also mentions, in one line each: the tray icon opens History, and the built-in MCP
+  server lets any AI read captures ("Analyze the latest CapturePack.").
+- Shown once (`welcomeShown` setting); re-openable from About. Never shown on update —
+  only on a genuinely fresh install (no settings file yet).
+- Fully i18n'd; opens on the display holding the cursor.
+
 ### First-Run Tutorial
 
 The toolless editor explains itself once. On the editor's FIRST open, a compact popup
