@@ -621,6 +621,19 @@ lifetime.
 **Core philosophy** — a Tracked Element is "an annotation that lives while the object
 exists". A Manual Annotation is "an annotation that exists for the time the user chose".
 
+### Static object picking (v0 — before full tracking)
+
+Automatic window/control selection ships in a static form first:
+
+1. **At capture** (alongside save-first) a Windows UI Automation helper dumps the window
+   list + the foreground window's control tree (Name, ControlType, AutomationId, Bounds)
+   into `plugins/windows-uia/` — budgeted (sub-second, async), never delaying the editor.
+2. **In the editor**, the object tool (O / left click) highlights the UIA element under the
+   cursor from that dump; clicking selects the element's exact bounds and pre-fills its
+   name as the label — stored as the `"element"` annotation type with the object metadata.
+3. In Chrome, the extension's DOM picker plays the same role (protocol v1).
+4. Frame-by-frame tracking (bounds following the object through the replay) remains V3.
+
 ---
 
 ## Always-On MCP Server
