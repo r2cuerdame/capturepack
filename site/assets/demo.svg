@@ -59,6 +59,13 @@
     }
   </style>
 
+  <defs>
+    <!-- Interior of the annotation note; the typing cover may never paint outside it. -->
+    <clipPath id="noteClip">
+      <rect x="376" y="338" width="266" height="34" rx="7"/>
+    </clipPath>
+  </defs>
+
   <!-- backdrop -->
   <rect width="960" height="540" fill="#0e0e12"/>
 
@@ -108,13 +115,13 @@
   <g id="note">
     <rect x="374" y="336" width="270" height="38" rx="8" fill="#14141a" stroke="#3a3a46"/>
     <text x="388" y="361" font-size="16" fill="#ececf1">Submit overflows container</text>
-    <!-- cover slides right, revealing the text as if typed -->
-    <g id="typecover">
+    <!-- Cover slides right, revealing the text as if typed. Clipped to the note's
+         interior: the slide travels past the box edge and would otherwise paint a
+         dark bar across the mockup beside it. -->
+    <g id="typecover" clip-path="url(#noteClip)">
       <rect x="386" y="342" width="242" height="26" fill="#14141a"/>
       <rect id="caret" x="386" y="344" width="2" height="22" fill="#ececf1"/>
     </g>
-    <!-- keep the cover from spilling outside the note box -->
-    <rect x="628" y="340" width="120" height="30" fill="#0e0e12" opacity="0"/>
   </g>
 
   <!-- mouse cursor -->
