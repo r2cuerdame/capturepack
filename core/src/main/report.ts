@@ -10,7 +10,7 @@ import { makeT } from '../shared/i18n'
 import type { Language, TranslateFn } from '../shared/i18n'
 import type { Annotation, AnnotationsFile, Manifest } from '../shared/types'
 import { computeDisplayNumbers } from '../shared/numbering'
-import { computeKeyframeTimes, keyframeFileName } from '../shared/keyframes'
+import { computeKeyframes, keyframeFileName } from '../shared/keyframes'
 
 const px = (n: number): number => Math.round(n)
 
@@ -136,11 +136,28 @@ export interface KeyframeSet {
   //         normal case at save time), so these are the names it will write.
   //         Deterministic: the same shared rule produces both.
   declared: boolean
+  // State changes the MAX_KEYFRAMES cap left without a still. 0 normally.
+  dropped: number
 }
 
-/** The pack's keyframes: the manifest's declaration when it has one, else the
- * set the pending render will produce (computeKeyframeTimes, shared rule). */
-export function keyframeSet(manifest: Manifest, annotationsFile: AnnotationsFile): KeyframeSet {
+/**
+ * The pack's keyframes: the manifest's declaration when it has one, else the
+ * set the PENDING render will produce (computeKeyframeTimes, shared rule).
+ *
+ * `renderPending` is the caller's promise that a render really is coming. A
+ * save-first folder (which no render follows) and a document regenerated AFTER
+ * a render pass false: an undeclared set is then simply an absent one, and the
+ * documents say nothing about stills that will never exist (SPEC §12.2).
+ */
+export function keyframeSet(
+  manifest: Manifest,
+  annotationsFile: AnnotationsFile,
+  renderPending = false,
+): KeyframeSet {
+  const durationMs =
+    manifest.media.replay === null ? 0 : (manifest.media.replay_duration_ms ?? 0)
+  // The same input the render used, so the cap it hit is the cap reported here.
+  const { times, dropped } = computeKeyframes(annotationsFile.annotations, durationMs)
   const declared = manifest.media.keyframes
   if (Array.isArray(declared) && declared.length > 0) {
     const frames: KeyframeRef[] = []
@@ -149,14 +166,13 @@ export function keyframeSet(manifest: Manifest, annotationsFile: AnnotationsFile
       if (typeof k.file !== 'string' || typeof k.t_ms !== 'number') return
       frames.push({ n: i + 1, file: k.file, tMs: k.t_ms })
     })
-    if (frames.length > 0) return { frames, declared: true }
+    if (frames.length > 0) return { frames, declared: true, dropped }
   }
-  const durationMs =
-    manifest.media.replay === null ? 0 : (manifest.media.replay_duration_ms ?? 0)
-  const times = computeKeyframeTimes(annotationsFile.annotations, durationMs)
+  if (!renderPending) return { frames: [], declared: false, dropped: 0 }
   return {
     frames: times.map((tMs, i) => ({ n: i + 1, file: keyframeFileName(i + 1, tMs), tMs })),
     declared: false,
+    dropped,
   }
 }
 
@@ -177,6 +193,16 @@ export function keyframeSectionLines(set: KeyframeSet, t: TranslateFn): string[]
     const clock = formatClock(f.tMs)
     lines.push(`- **${clock}** — ![${t('pack.keyframeAlt', { n: String(f.n), time: clock })}](${f.file})`)
   }
+  // Honesty about the MAX_KEYFRAMES cap: "read them in order to reconstruct the
+  // capture" stops being the whole truth once a state change had no slot left.
+  if (set.dropped > 0) {
+    lines.push('')
+    lines.push(
+      `${set.dropped} further annotation state change${set.dropped === 1 ? '' : 's'} ` +
+        'were not rendered as stills (per-pack still limit); annotations.json carries every ' +
+        'lifetime, and replay_annotated.webm shows them all.',
+    )
+  }
   if (!set.declared) {
     lines.push('')
     lines.push(
@@ -195,7 +221,10 @@ export function keyframeFileEntry(set: KeyframeSet): { name: string; what: strin
     name: 'frames/',
     what:
       `${n} annotated still${n === 1 ? '' : 's'} (frame-NN_MM-SS.mmm.png), one per annotation state ` +
-      'change — the same overlays the annotated replay draws, declared in manifest.media.keyframes',
+      'change — the same overlays the annotated replay draws' +
+      (set.declared
+        ? ', declared in manifest.media.keyframes'
+        : '; manifest.media.keyframes declares them once the background render finishes'),
   }
 }
 
@@ -203,6 +232,9 @@ export function buildReport(
   manifest: Manifest,
   annotationsFile: AnnotationsFile,
   lang: Language = 'en',
+  // True only when a background render really is about to write the stills the
+  // keyframe section names — see keyframeSet().
+  renderPending = false,
 ): string {
   const t = makeT(lang)
   const lines: string[] = []
@@ -286,7 +318,7 @@ export function buildReport(
 
   // Annotated keyframes (GOAL "Annotated keyframes"): images beat video for an
   // LLM, so they sit directly under the annotation list they illustrate.
-  const keyframes = keyframeSet(manifest, annotationsFile)
+  const keyframes = keyframeSet(manifest, annotationsFile, renderPending)
   const keyframeLines = keyframeSectionLines(keyframes, t)
   if (keyframeLines.length > 0) {
     lines.push(`## ${t('pack.keyframes')}`)
@@ -304,7 +336,10 @@ export function buildReport(
   lines.push('- annotations.json — the annotation boxes above, as editable data (the true source)')
   lines.push('- timeline.json — timestamped events from capture start to save')
   if (hasReplay) {
-    lines.push(`- replay.webm — ${replaySeconds}s screen recording (original evidence, never modified)`)
+    // The DECLARED name (SPEC §5.3 allows replay.mp4 too) — never assumed.
+    lines.push(
+      `- ${manifest.media.replay} — ${replaySeconds}s screen recording (original evidence, never modified)`,
+    )
     lines.push(
       '- replay_annotated.webm — the replay with annotations rendered in ' +
         '(generated in the background; may appear shortly after save)',

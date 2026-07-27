@@ -45,7 +45,7 @@ const DISPLAY_SNAPSHOT_RE = /^snapshot-d[1-9][0-9]*\.png$/;
 const DISPLAY_REPLAY_RE = /^replay-d[1-9][0-9]*\.(webm|mp4)$/;
 // Annotated keyframe stills (SPEC §5.7): frames/frame-<NN>_<MM-SS.mmm>.png,
 // NN = the 1-based position in media.keyframes, MM-SS.mmm = its t_ms.
-const KEYFRAME_FILE_RE = /^frames\/frame-(\d{2,})_(\d{2})-(\d{2})\.(\d{3})\.png$/;
+const KEYFRAME_FILE_RE = /^frames\/frame-(\d{2,})_(\d{2,})-(\d{2})\.(\d{3})\.png$/;
 const ANNOTATION_ID_RE = /^ann_[0-9a-f]{6}$/;
 // Annotation type names from pre-release drafts of 0.1.0. The unified box model
 // replaced them before release; a pack that still uses one was written against

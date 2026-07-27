@@ -17,11 +17,39 @@ const TOAST_WIDTH = 420
 const TOAST_HEIGHT = 180
 const TOAST_MARGIN = 16
 const AUTO_CLOSE_MS = 30_000
+// Hard ceiling for a toast held open by work in flight: a render that never
+// reports a terminal state must not leave the toast on screen forever.
+const MAX_OPEN_MS = 5 * 60_000
 
 interface ActiveToast {
   win: BrowserWindow
   folderPath: string
-  timer: NodeJS.Timeout
+  // The 30 s auto-close, armed only once nothing is in flight (see below).
+  timer: NodeJS.Timeout | null
+  ceiling: NodeJS.Timeout
+}
+
+/** True while the toast is reporting work the user is waiting on. */
+function isWorking(state: ToastRenderState): boolean {
+  return state === 'trimming' || state === 'rendering'
+}
+
+/**
+ * Arms the auto-close. Deliberately NOT armed while the toast is reporting
+ * 'trimming' or 'rendering': both are REAL-TIME passes over the replay, so a
+ * 30-60 s capture routinely outlives a fixed 30 s timer — and a toast that
+ * closed itself mid-render takes [Open Folder], [Copy Folder Path],
+ * [Create ZIP] and [Copy Prompt] with it and can never report the result.
+ */
+function armAutoClose(toast: ActiveToast, state: ToastRenderState): void {
+  if (toast.timer !== null) {
+    clearTimeout(toast.timer)
+    toast.timer = null
+  }
+  if (isWorking(state)) return
+  toast.timer = setTimeout(() => {
+    if (!toast.win.isDestroyed()) toast.win.close()
+  }, AUTO_CLOSE_MS)
 }
 
 // One toast at a time: a new save replaces the previous toast.
@@ -70,11 +98,14 @@ export function showSaveToast(options: {
     },
   })
 
-  const timer = setTimeout(() => {
+  const ceiling = setTimeout(() => {
     if (!win.isDestroyed()) win.close()
-  }, AUTO_CLOSE_MS)
+  }, MAX_OPEN_MS)
+  const toast: ActiveToast = { win, folderPath: options.folderPath, timer: null, ceiling }
+  armAutoClose(toast, options.renderState)
   win.on('closed', () => {
-    clearTimeout(timer)
+    if (toast.timer !== null) clearTimeout(toast.timer)
+    clearTimeout(toast.ceiling)
     if (active?.win === win) active = null
   })
 
@@ -92,7 +123,7 @@ export function showSaveToast(options: {
   })
   void win.loadFile(path.join(app.getAppPath(), 'dist', 'renderer', 'toast', 'toast.html'))
 
-  active = { win, folderPath: options.folderPath, timer }
+  active = toast
 }
 
 /**
@@ -104,6 +135,8 @@ export function updateToastRenderStatus(folderPath: string, state: ToastRenderSt
   if (active === null || active.win.isDestroyed()) return
   if (active.folderPath !== folderPath) return
   active.win.webContents.send(IPC.toastRenderStatus, { state })
+  // A terminal state is when the countdown may finally start.
+  armAutoClose(active, state)
 }
 
 function fromActiveToast(event: IpcMainEvent | IpcMainInvokeEvent): ActiveToast | null {

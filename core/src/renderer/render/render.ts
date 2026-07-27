@@ -18,6 +18,7 @@ import { computeKeyframeTimes } from '../../shared/keyframes'
 
 interface RenderBridge {
   onStart(cb: (payload: RenderStartPayload) => void): void
+  frame(payload: RenderFramePayload): void
   result(payload: RenderResultPayload): void
 }
 
@@ -44,6 +45,29 @@ async function run(payload: RenderStartPayload): Promise<void> {
       ok: false,
       error: err instanceof Error ? err.message : String(err),
     })
+  }
+}
+
+/**
+ * Ships one still to main the moment it is encoded and RELEASES it here.
+ *
+ * The stills used to be accumulated for the whole render and sent with the
+ * video in a single structured clone: on a 4K capture that is up to 24
+ * multi-megabyte PNGs retained through a real-time playback, then copied
+ * renderer -> main in one message. Streaming keeps the renderer's peak at ONE
+ * still, and main writes each into frames/ as it lands.
+ *
+ * Resolves to true when the still was handed over, false when it was dropped
+ * (an encode failure is never fatal to the annotated replay).
+ */
+async function shipFrame(pending: Promise<RenderFramePayload>): Promise<boolean> {
+  try {
+    const frame = await pending
+    window.renderBridge.frame(frame)
+    return true
+  } catch (err) {
+    console.error('capturepack: keyframe capture failed:', err)
+    return false
   }
 }
 
@@ -90,7 +114,7 @@ function drawOverlay(
  * interval (SPEC §8.4) and have nothing to anchor to without a replay, so every
  * box is drawn.
  */
-async function renderStill(job: RenderStartPayload): Promise<{ frames: RenderFramePayload[] }> {
+async function renderStill(job: RenderStartPayload): Promise<{ frameCount: number }> {
   const snapshotPng = job.snapshotPng
   if (snapshotPng === undefined) throw new Error('still render job carries no snapshot')
   // createImageBitmap decodes the bytes directly — no object URL, so the
@@ -105,7 +129,8 @@ async function renderStill(job: RenderStartPayload): Promise<{ frames: RenderFra
     if (!ctx) throw new Error('canvas 2d context unavailable')
     ctx.drawImage(bitmap, 0, 0, job.width, job.height)
     drawOverlay(ctx, canvas, makeOverlay(job), null)
-    return { frames: [await capturePng(canvas, 0)] }
+    const shipped = await shipFrame(capturePng(canvas, 0))
+    return { frameCount: shipped ? 1 : 0 }
   } finally {
     bitmap.close()
   }
@@ -113,7 +138,7 @@ async function renderStill(job: RenderStartPayload): Promise<{ frames: RenderFra
 
 async function renderAnnotated(
   job: RenderStartPayload,
-): Promise<{ webm: ArrayBuffer; frames: RenderFramePayload[] }> {
+): Promise<{ webm: ArrayBuffer; frameCount: number }> {
   const replayWebm = job.replayWebm
   if (replayWebm === null) throw new Error('annotated render job carries no replay')
   const video = document.createElement('video')
@@ -143,7 +168,10 @@ async function renderAnnotated(
   // trim job asks for no keyframes, and the annotated render that follows it
   // runs over the already-trimmed bytes with no trim range.
   const targets = job.keyframes === true ? computeKeyframeTimes(job.annotations, job.durationMs) : []
-  const pending: Array<Promise<RenderFramePayload>> = []
+  // Each still leaves for main as soon as it encodes (shipFrame); only the
+  // in-flight promises are tracked, so the loop below can wait for them before
+  // reporting how many actually made it.
+  const pending: Array<Promise<boolean>> = []
   let nextTarget = 0
   // Copies the composited canvas off whenever the playhead has reached the next
   // target. toBlob snapshots the bitmap synchronously and encodes off-thread,
@@ -153,7 +181,7 @@ async function renderAnnotated(
       const target = targets[nextTarget]
       if (target === undefined || target > tMs) return
       nextTarget += 1
-      pending.push(capturePng(canvas, target))
+      pending.push(shipFrame(capturePng(canvas, target)))
     }
   }
 
@@ -223,7 +251,8 @@ async function renderAnnotated(
 
   const blob = new Blob(chunks, { type: 'video/webm' })
   if (blob.size === 0) throw new Error('recorded annotated replay is empty')
-  return { webm: await blob.arrayBuffer(), frames: await settleFrames(pending) }
+  const shipped = (await Promise.all(pending)).filter(Boolean).length
+  return { webm: await blob.arrayBuffer(), frameCount: shipped }
 }
 
 /** Encodes the canvas as a PNG still without blocking the real-time render. */
@@ -240,19 +269,6 @@ function capturePng(canvas: HTMLCanvasElement, tMs: number): Promise<RenderFrame
         .catch(reject)
     }, 'image/png')
   })
-}
-
-/** A still that failed to encode is dropped — never fatal to the annotated replay. */
-async function settleFrames(
-  pending: ReadonlyArray<Promise<RenderFramePayload>>,
-): Promise<RenderFramePayload[]> {
-  const settled = await Promise.allSettled(pending)
-  const frames: RenderFramePayload[] = []
-  for (const r of settled) {
-    if (r.status === 'fulfilled') frames.push(r.value)
-    else console.error('capturepack: keyframe capture failed:', r.reason)
-  }
-  return frames
 }
 
 function videoReady(video: HTMLVideoElement): Promise<void> {

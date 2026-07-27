@@ -58,6 +58,13 @@ export const IPC = {
 
   // main -> hidden render window: render replay_annotated.webm from this job
   renderStart: 'render:start',
+  // render window -> main: ONE annotated keyframe still, sent the moment it
+  // finishes encoding (SPEC §7.3). Streamed rather than batched into the
+  // result: up to MAX_KEYFRAMES full-resolution PNGs are 100-200 MB on a 4K
+  // capture, and holding them all for the length of a real-time render — then
+  // structured-cloning them in one message — is a spike in two processes at
+  // once (and the classic way to lose a renderer with no error surfaced).
+  renderFrame: 'render:frame',
   // render window -> main: rendered webm bytes (or failure) for the job
   renderResult: 'render:result',
 
@@ -135,8 +142,12 @@ export interface EditorDisplayPayload {
   // 1-based manifest display index (manifest.media.displays[].index)
   index: number
   focused: boolean
-  // PNG bytes of that display's frozen frame, at its native resolution
-  snapshotPng: ArrayBuffer
+  // PNG bytes of that display's frozen frame, at its native resolution.
+  // NULL on the FOCUSED entry: those exact bytes are already
+  // EditorInitPayload.snapshotPng, and the editor draws the focused display
+  // from the live base frame — a second copy would only add megabytes to the
+  // editor-open message and to the renderer's retained memory.
+  snapshotPng: ArrayBuffer | null
   width: number
   height: number
 }
@@ -273,9 +284,10 @@ export interface RenderResultPayload {
   ok: boolean
   // webm bytes of replay_annotated when ok; absent on a still job
   webm?: ArrayBuffer
-  // Annotated keyframe stills, ascending by t_ms (only when the job asked for
-  // them). A still that failed to encode is dropped, never fatal to the render.
-  frames?: RenderFramePayload[]
+  // How many stills this job SENT over IPC.renderFrame (the bytes themselves
+  // never travel in this message). A still that failed to encode is dropped and
+  // not counted, and is never fatal to the render.
+  frameCount?: number
   error?: string
 }
 

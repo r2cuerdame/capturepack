@@ -5,8 +5,11 @@ directories:
 files:
   - dist/**
   - package.json
-# PowerShell cannot read a script from inside an asar archive, and the UI
-# Automation helper (GOAL "Static object picking") is spawned as a real file.
+# The UI Automation helper (GOAL "Static object picking") is read by main
+# through Node's asar-aware fs and handed to powershell.exe as an encoded
+# command, so it does not have to exist as a real file — unpacking it anyway
+# keeps it inspectable (READ-ONLY BY CONSTRUCTION is a claim a user can check)
+# and keeps `powershell -File dist/scripts/uia-dump.ps1` working standalone.
 asarUnpack:
   - dist/scripts/**
 win:

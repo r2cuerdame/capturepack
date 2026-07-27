@@ -100,9 +100,11 @@ body {
 }
 
 .chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+  /* inline-BLOCK, not inline-flex: every chip is a single text node, and
+     text-overflow only ellipsizes text in a block container — a flex container
+     would hard-cut it mid-word instead. #topbar is the flex container that
+     centres them, so the chip's own display type does not affect alignment. */
+  display: inline-block;
   padding: 4px 9px;
   border-radius: 999px;
   background: var(--panel-hover);
@@ -110,9 +112,24 @@ body {
   font-size: 12px;
   white-space: nowrap;
   /* Windowed mode can be narrow (GOAL "Editor Window Mode"): the informational
-     chips give way first, so the controls below never get pushed out of view. */
+     chips give way first, so the controls below never get pushed out of view.
+     Whatever truncation is left stays legible — a chip cut mid-word reads as a
+     rendering bug, and one of these chips is the only warning before a
+     destructive save. */
   min-width: 0;
   overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The WARNING chips never shrink: #replayChip and the note field give way
+   first. "2 boxes outside trim will be dropped" is the only thing standing
+   between the user and annotations that Save silently discards, and
+   "annotations stay on display N" is the only explanation for a canvas that
+   ignores every click. Neither may be squeezed out by window width. */
+#dirtyChip,
+#trimDropChip,
+#displayHint {
+  flex: none;
 }
 
 #dirtyChip {
@@ -149,9 +166,15 @@ body {
   cursor: pointer;
 }
 
-#displaySwitcher button:hover {
+#displaySwitcher button:hover:not(:disabled) {
   color: var(--text);
   background: #33333d;
+}
+
+/* A display whose frame could not be decoded is not offered. */
+#displaySwitcher button:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 #displaySwitcher button.focusedDisplay {

@@ -36,6 +36,21 @@ export function boxColor(a: Annotation): string {
   return a.style?.color ?? FALLBACK_COLOR
 }
 
+// ONE reusable downscale buffer for the blur pass. The overlay repaints on
+// every pointer move that changes the hovered UI object (GOAL "Static object
+// picking"), so allocating a canvas per blurred box per frame was allocating —
+// and garbage-collecting — several canvases per frame while the user simply
+// swept the mouse across the image.
+let blurScratch: HTMLCanvasElement | null = null
+
+function scratchCanvas(width: number, height: number): HTMLCanvasElement {
+  const canvas = blurScratch ?? document.createElement('canvas')
+  blurScratch = canvas
+  canvas.width = width
+  canvas.height = height
+  return canvas
+}
+
 /** Draws a pixelated copy of a source region onto ctx (both in native coords). */
 function pixelate(
   ctx: CanvasRenderingContext2D,
@@ -50,10 +65,14 @@ function pixelate(
   const cw = Math.min(Math.ceil(w), source.width - x0)
   const ch = Math.min(Math.ceil(h), source.height - y0)
   if (cw < 1 || ch < 1) return
-  const tiny = document.createElement('canvas')
-  tiny.width = Math.max(1, Math.round(cw / BLUR_BLOCK))
-  tiny.height = Math.max(1, Math.round(ch / BLUR_BLOCK))
+  const tiny = scratchCanvas(
+    Math.max(1, Math.round(cw / BLUR_BLOCK)),
+    Math.max(1, Math.round(ch / BLUR_BLOCK)),
+  )
   const tctx = must(tiny.getContext('2d'))
+  // Setting width/height already clears it; this only matters if a future
+  // caller reuses the same size back to back.
+  tctx.clearRect(0, 0, tiny.width, tiny.height)
   tctx.drawImage(source, x0, y0, cw, ch, 0, 0, tiny.width, tiny.height)
   ctx.save()
   ctx.imageSmoothingEnabled = false

@@ -68,6 +68,9 @@ export function buildReadme(
   manifest: Manifest,
   annotationsFile: AnnotationsFile,
   lang: Language = 'en',
+  // True only when a background render really is about to write the annotated
+  // stills this document names — see report.ts keyframeSet().
+  renderPending = false,
 ): string {
   const t = makeT(lang)
   const annotations = annotationsFile.annotations
@@ -95,7 +98,7 @@ export function buildReadme(
   // Annotated keyframes (GOAL "Annotated keyframes (LLM-first)"): the story as
   // images, right after the description — before the reader is asked to open
   // anything at all.
-  const keyframes = keyframeSet(manifest, annotationsFile)
+  const keyframes = keyframeSet(manifest, annotationsFile, renderPending)
   const keyframeLines = keyframeSectionLines(keyframes, t)
   if (keyframeLines.length > 0) {
     lines.push(`## ${t('pack.keyframes')}`)
@@ -113,7 +116,10 @@ export function buildReadme(
   )
   if (hasReplay) {
     const seconds = ((manifest.media.replay_duration_ms ?? 0) / 1000).toFixed(1)
-    lines.push(`| replay.webm | ${seconds}s screen recording before the capture — original, never modified |`)
+    // The DECLARED name (SPEC §5.3 allows replay.mp4 too) — never assumed.
+    lines.push(
+      `| ${manifest.media.replay} | ${seconds}s screen recording before the capture — original, never modified |`,
+    )
     lines.push(
       '| replay_annotated.webm | The replay with annotations rendered in — watch this one (generated in the background; may appear shortly after save) |',
     )
@@ -177,12 +183,13 @@ export function buildSkills(
   annotationsFile: AnnotationsFile,
   timeline: TimelineFile,
   lang: Language = 'en',
+  renderPending = false,
 ): SkillsDocs {
   // skills/ documents are AI-first: only the top-level headings follow
   // packLanguage; the body prose deliberately stays English (see header note).
   const t = makeT(lang)
   return {
-    overview: buildOverviewSkill(manifest, annotationsFile, timeline, t),
+    overview: buildOverviewSkill(manifest, annotationsFile, timeline, t, renderPending),
     timeline: buildTimelineSkill(manifest, timeline, t),
     annotation: buildAnnotationSkill(annotationsFile, t),
     dom: buildDomSkill(manifest, annotationsFile, t),
@@ -195,6 +202,7 @@ function buildOverviewSkill(
   annotationsFile: AnnotationsFile,
   timeline: TimelineFile,
   t: TranslateFn,
+  renderPending: boolean,
 ): string {
   const annotations = annotationsFile.annotations
   const hasReplay = manifest.media.replay !== null
@@ -239,7 +247,7 @@ function buildOverviewSkill(
   // Annotated keyframes (GOAL "Annotated keyframes (LLM-first)"): the whole
   // story as images — the single most useful thing in this document for a
   // model that cannot decode video.
-  const keyframes = keyframeSet(manifest, annotationsFile)
+  const keyframes = keyframeSet(manifest, annotationsFile, renderPending)
   const keyframeLines = keyframeSectionLines(keyframes, t)
   if (keyframeLines.length > 0) {
     lines.push(`## ${t('pack.keyframes')}`)
@@ -252,7 +260,11 @@ function buildOverviewSkill(
     lines.push('Where to look:')
     lines.push('')
     if (hasReplay) lines.push('- `replay_annotated.webm` shows the annotations in place, in time.')
-    lines.push('- `frames/` holds the same annotations as stills, one per state change.')
+    // Only when this pack really has (or is about to have) stills — a pointer
+    // to frames/ in a pack that will never contain it is a dead end.
+    if (keyframeLines.length > 0) {
+      lines.push('- `frames/` holds the same annotations as stills, one per state change.')
+    }
     lines.push('- `snapshot.png` shows the captured frame.')
     const numbered = annotations
       .filter((a) => numbers.has(a.annotation_id))

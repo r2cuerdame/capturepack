@@ -37,6 +37,20 @@ export class Viewport {
     this.apply()
   }
 
+  /**
+   * Back to 1:1, unpanned. Used when the coordinate space underneath changes
+   * (the display switcher shows a screen of a different size): a pan measured
+   * in the old frame's on-screen pixels would push the new one out of the
+   * overflow:hidden stage entirely.
+   */
+  reset(): void {
+    if (this.zoom === 1 && this.panX === 0 && this.panY === 0) return
+    this.zoom = 1
+    this.panX = 0
+    this.panY = 0
+    this.apply()
+  }
+
   private apply(): void {
     this.frame.style.transform = `translate(${this.panX}px, ${this.panY}px) scale(${this.zoom})`
   }

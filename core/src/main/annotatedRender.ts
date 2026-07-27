@@ -17,9 +17,10 @@ import { mkdir, rm, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import { IPC } from '../shared/ipc'
 import type { RenderFramePayload, RenderResultPayload, RenderStartPayload } from '../shared/ipc'
+import type { Language } from '../shared/i18n'
 import { keyframeFileName } from '../shared/keyframes'
 import type { Annotation, ManifestKeyframe } from '../shared/types'
-import { setManifestRenderOutputs, type PackHandle } from './exporter'
+import { refreshPackDocs, setManifestRenderOutputs, type PackHandle } from './exporter'
 
 export interface AnnotatedRenderJob {
   replayWebm: Buffer
@@ -28,6 +29,9 @@ export interface AnnotatedRenderJob {
   height: number
   fps: number
   replayDurationMs: number
+  // Pack document language: the documents are REGENERATED once the stills are
+  // declared, so their image links describe what the render actually wrote.
+  docLanguage?: Language
 }
 
 /** A screenshot-only pack's single annotated still, drawn from snapshot.png. */
@@ -36,6 +40,7 @@ export interface KeyframeStillJob {
   annotations: Annotation[]
   width: number
   height: number
+  docLanguage?: Language
 }
 
 // The render plays in real time; allow twice the replay plus startup slack
@@ -52,9 +57,42 @@ const STILL_RENDER_TIMEOUT_MS = 30_000
 export type RenderLifecycleState = 'rendering' | 'done' | 'failed'
 type RenderStateListener = (dirPath: string, state: RenderLifecycleState) => void
 const renderStateListeners = new Set<RenderStateListener>()
-// In-flight render count per resolved pack dir (concurrent renders of one
-// pack are possible when a re-edit save races an older render).
+// In-flight render count per resolved pack dir (a re-edit save can ask for a
+// render while an older one is still queued or running — they are SERIALIZED
+// by the job queue below, never overlapped).
 const inFlight = new Map<string, number>()
+
+// ---------------------------------------------------------------------------
+// The render job queue
+//
+// Every hidden render window is a full Chromium renderer doing real-time video
+// decode + VP9 encode + full-resolution PNG encodes, and it competes with the
+// always-on per-display recorders that must never stutter. So background
+// renders run ONE AT A TIME, globally: History's [Retry Render] on ten cards
+// queues ten jobs instead of spawning ten render processes, and a burst of
+// saves cannot fan out either.
+//
+// Serializing globally also makes the frames/ directory swap safe by
+// construction: writeKeyframes() removes frames/ and rewrites it, so two
+// renders of the SAME pack overlapping could leave the manifest declaring
+// files the other render deleted.
+//
+// The foreground plain-trim render (renderTrimmedReplay) deliberately does NOT
+// queue: the user is watching a "Trimming replay…" toast and waiting for the
+// save, and it must never sit behind a background job. At most two render
+// windows can therefore exist at once, and only one of them is background work.
+// ---------------------------------------------------------------------------
+let renderQueue: Promise<void> = Promise.resolve()
+
+function enqueueRender<T>(run: () => Promise<T>): Promise<T> {
+  const result = renderQueue.then(run, run)
+  // The queue chain must never reject or it would stop scheduling.
+  renderQueue = result.then(
+    () => undefined,
+    () => undefined,
+  )
+  return result
+}
 
 /** Subscribe to every render's start/terminal state. Returns unsubscribe. */
 export function onRenderStateChange(listener: RenderStateListener): () => void {
@@ -117,18 +155,42 @@ async function renderAnnotatedReplay(handle: PackHandle, job: AnnotatedRenderJob
     // The annotated stills come out of this same pass (SPEC §7.3).
     keyframes: true,
   }
-  const result = await runRenderWindow(payload, job.replayDurationMs * 2 + RENDER_TIMEOUT_SLACK_MS)
-  if (result.webm === undefined) throw new Error('render window returned no video')
-  await writeFile(path.join(handle.dirPath, 'replay_annotated.webm'), Buffer.from(result.webm))
-  // The stills are the smaller half of this job: losing them must never cost
-  // the annotated replay its declaration (SPEC §5.7 — keyframes are optional).
-  let keyframes: ManifestKeyframe[] = []
+  // The render AND its write phase are one queued unit: writeKeyframes()
+  // removes frames/ and rewrites it, so another render of the same pack landing
+  // between the writes and the declaration would leave the manifest pointing at
+  // files that no longer exist.
+  await enqueueRender(async () => {
+    const { result, frames } = await runRenderWindow(
+      payload,
+      job.replayDurationMs * 2 + RENDER_TIMEOUT_SLACK_MS,
+    )
+    if (result.webm === undefined) throw new Error('render window returned no video')
+    await writeFile(path.join(handle.dirPath, 'replay_annotated.webm'), Buffer.from(result.webm))
+    // The stills are the smaller half of this job: losing them must never cost
+    // the annotated replay its declaration (SPEC §5.7 — keyframes are optional).
+    let keyframes: ManifestKeyframe[] = []
+    try {
+      keyframes = await writeKeyframes(handle, frames)
+    } catch (err) {
+      console.error('capturepack: writing annotated keyframes failed:', errorMessage(err))
+    }
+    await setManifestRenderOutputs(handle, { replayAnnotated: true, keyframes })
+    await refreshDocs(handle, job.docLanguage)
+  })
+}
+
+/**
+ * Rewrites report.md / README.md / skills from the manifest the render just
+ * declared: the documents were generated BEFORE the render, from the predicted
+ * filenames, and a still that failed to encode renumbers the survivors. Never
+ * fatal — the pack is complete and valid either way.
+ */
+async function refreshDocs(handle: PackHandle, docLanguage: Language | undefined): Promise<void> {
   try {
-    keyframes = await writeKeyframes(handle, result.frames ?? [])
+    await refreshPackDocs(handle.dirPath, docLanguage)
   } catch (err) {
-    console.error('capturepack: writing annotated keyframes failed:', errorMessage(err))
+    console.error('capturepack: refreshing the pack documents failed:', errorMessage(err))
   }
-  await setManifestRenderOutputs(handle, { replayAnnotated: true, keyframes })
 }
 
 /**
@@ -159,10 +221,13 @@ async function renderKeyframeStill(handle: PackHandle, job: KeyframeStillJob): P
     durationMs: 0,
     keyframes: true,
   }
-  const result = await runRenderWindow(payload, STILL_RENDER_TIMEOUT_MS)
-  const keyframes = await writeKeyframes(handle, result.frames ?? [])
-  if (keyframes.length === 0) throw new Error('still render produced no keyframe')
-  await setManifestRenderOutputs(handle, { replayAnnotated: false, keyframes })
+  await enqueueRender(async () => {
+    const { frames } = await runRenderWindow(payload, STILL_RENDER_TIMEOUT_MS)
+    const keyframes = await writeKeyframes(handle, frames)
+    if (keyframes.length === 0) throw new Error('still render produced no keyframe')
+    await setManifestRenderOutputs(handle, { replayAnnotated: false, keyframes })
+    await refreshDocs(handle, job.docLanguage)
+  })
 }
 
 /**
@@ -230,16 +295,22 @@ export async function renderTrimmedReplay(job: TrimRenderJob): Promise<Buffer> {
   // The render plays only the kept range in real time. No keyframes: the trim
   // job draws no overlays, and the annotated render that follows it produces
   // the stills from the trimmed bytes.
-  const result = await runRenderWindow(payload, lengthMs * 2 + RENDER_TIMEOUT_SLACK_MS)
+  const { result } = await runRenderWindow(payload, lengthMs * 2 + RENDER_TIMEOUT_SLACK_MS)
   if (result.webm === undefined) throw new Error('render window returned no video')
   return Buffer.from(result.webm)
+}
+
+/** A finished render: the video plus the stills that were streamed in. */
+interface RenderOutcome {
+  result: RenderResultPayload
+  frames: RenderFramePayload[]
 }
 
 /** Opens the hidden render window, runs one job, and returns its result. */
 async function runRenderWindow(
   payload: RenderStartPayload,
   timeoutMs: number,
-): Promise<RenderResultPayload> {
+): Promise<RenderOutcome> {
   const win = new BrowserWindow({
     show: false,
     width: 320,
@@ -253,9 +324,9 @@ async function runRenderWindow(
   })
   try {
     await win.loadFile(path.join(app.getAppPath(), 'dist', 'renderer', 'render', 'render.html'))
-    const result = await awaitRenderResult(win, payload, timeoutMs)
-    if (!result.ok) throw new Error(result.error ?? 'render window reported a failure')
-    return result
+    const outcome = await awaitRenderResult(win, payload, timeoutMs)
+    if (!outcome.result.ok) throw new Error(outcome.result.error ?? 'render window reported a failure')
+    return outcome
   } finally {
     if (!win.isDestroyed()) win.destroy()
   }
@@ -265,20 +336,31 @@ function awaitRenderResult(
   win: BrowserWindow,
   payload: RenderStartPayload,
   timeoutMs: number,
-): Promise<RenderResultPayload> {
+): Promise<RenderOutcome> {
   return new Promise((resolve, reject) => {
     let settled = false
+    // The stills arrive one at a time while the render runs (IPC.renderFrame).
+    const frames: RenderFramePayload[] = []
     const settle = (fn: () => void): void => {
       if (settled) return
       settled = true
       clearTimeout(timer)
       ipcMain.removeListener(IPC.renderResult, onResult)
+      ipcMain.removeListener(IPC.renderFrame, onFrame)
       win.removeListener('closed', onClosed)
       fn()
     }
+    const onFrame = (event: IpcMainEvent, frame: RenderFramePayload): void => {
+      if (win.isDestroyed() || event.sender !== win.webContents) return
+      if (frame === null || typeof frame !== 'object') return
+      frames.push(frame)
+    }
     const onResult = (event: IpcMainEvent, result: RenderResultPayload): void => {
       if (win.isDestroyed() || event.sender !== win.webContents) return
-      settle(() => resolve(result))
+      // Ascending by t_ms is what makes NN the reading order (SPEC §5.7); the
+      // stills are shipped as they finish ENCODING, which need not be in order.
+      frames.sort((a, b) => a.t_ms - b.t_ms)
+      settle(() => resolve({ result, frames }))
     }
     const onClosed = (): void => settle(() => reject(new Error('render window closed prematurely')))
     const timer = setTimeout(
@@ -286,6 +368,7 @@ function awaitRenderResult(
       timeoutMs,
     )
     ipcMain.on(IPC.renderResult, onResult)
+    ipcMain.on(IPC.renderFrame, onFrame)
     win.on('closed', onClosed)
     win.webContents.send(IPC.renderStart, payload)
   })

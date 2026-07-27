@@ -142,6 +142,9 @@ let showDurationLabel = true
 let editMode = false
 let baselineSig = ''
 let dirty = false
+// The unsaved bar was open when the user looked at another display: hidden
+// while that frame is on screen, restored on return (see schedulePaint).
+let unsavedBarHiddenByDisplay = false
 // Original desktop snapshot, kept for restoring the "now" frame after scrubbing.
 let nativeBitmap: ImageBitmap | null = null
 let scrub: ScrubController | null = null
@@ -149,10 +152,15 @@ let scrub: ScrubController | null = null
 // capture froze. Empty for a single-display capture — the switcher never
 // appears then, and every path below behaves exactly as it did before.
 interface DisplayView extends Omit<EditorDisplayPayload, 'snapshotPng'> {
-  png: ArrayBuffer
+  // null on the FOCUSED entry: its frame is the live base canvas, never this
+  // copy (see showDisplay) — main does not ship those bytes twice.
+  png: ArrayBuffer | null
   // Decoded lazily on first view: decoding every display up front would delay
   // the editor for frames the user may never look at.
   bitmap: ImageBitmap | null
+  // Set when this display's PNG could not be decoded: its switcher button is
+  // disabled rather than silently doing nothing.
+  broken?: boolean
 }
 let displayViews: DisplayView[] = []
 let focusedDisplayIndex = 0
@@ -163,7 +171,6 @@ let focusedH = 0
 // The base frame showing when the user left the focused display — restored on
 // return, so a scrubbed position survives a look at another screen.
 let focusedBaseFrame: ImageBitmap | null = null
-let switchingDisplay = false
 // Static object picking (GOAL "Static object picking (v0)"): the capture-instant
 // UI Automation elements, indexed once at init. An empty index (no dump, a
 // timed-out dump, a pack without plugins/windows-uia) leaves every path below
@@ -290,7 +297,14 @@ function buildDisplaySwitcher(): void {
 function syncDisplaySwitcher(): void {
   if (displayViews.length < 2) return
   const buttons = displaySwitcher.querySelectorAll('button')
-  displayViews.forEach((d, i) => buttons[i]?.classList.toggle('viewing', d.index === viewDisplayIndex))
+  displayViews.forEach((d, i) => {
+    const btn = buttons[i]
+    if (btn === undefined) return
+    btn.classList.toggle('viewing', d.index === viewDisplayIndex)
+    // A frame that could not be decoded: the button says so instead of
+    // looking live and doing nothing.
+    btn.disabled = d.broken === true
+  })
   const focused = viewingFocused()
   displayHint.hidden = focused
   if (!focused) {
@@ -312,41 +326,82 @@ function resizeCanvases(): void {
   overlay.height = nativeH
 }
 
-/** Shows one captured display: the focused one (editable) or a frozen frame. */
-async function showDisplay(index: number): Promise<void> {
-  if (!loaded || switchingDisplay || exporting) return
+/**
+ * Shows one captured display: the focused one (editable) or a frozen frame.
+ *
+ * Re-entrant by design: a click (or Save) landing while a switch is in flight
+ * gets the SAME promise back and therefore waits for the real completion,
+ * instead of the no-op that made the first Enter after a switch look like a
+ * dropped keystroke.
+ */
+let switchInFlight: Promise<void> | null = null
+
+function showDisplay(index: number): Promise<void> {
+  if (switchInFlight !== null) return switchInFlight
+  if (!loaded || exporting) return Promise.resolve()
   const target = displayViews.find((d) => d.index === index)
-  if (target === undefined || index === viewDisplayIndex) return
-  switchingDisplay = true
+  if (target === undefined || target.broken === true || index === viewDisplayIndex) {
+    return Promise.resolve()
+  }
+  // Never rejects: every caller is a `void`/`await` on a UI gesture, and an
+  // unhandled rejection here would take the editor's console with it.
+  const run = runDisplaySwitch(target, index)
+    .catch((err: unknown) => {
+      console.error('capturepack: switching the displayed screen failed:', err)
+    })
+    .finally(() => {
+      switchInFlight = null
+    })
+  switchInFlight = run
+  return run
+}
+
+async function runDisplaySwitch(target: DisplayView, index: number): Promise<void> {
   // Picked objects belong to the focused display's coordinate space; a stale
   // outline must never survive onto another screen's frame.
   probeObjectHover(null)
-  try {
-    if (viewingFocused()) {
-      // Leaving the focused display: settle any in-flight seek and keep the
-      // exact frame on screen, so coming back needs no re-seek.
-      commitTextEditor(false)
-      closeDurationEditor(false)
-      scrub?.pause()
-      await scrub?.whenSettled()
-      focusedBaseFrame?.close()
-      focusedBaseFrame = await createImageBitmap(snapshot)
-    }
-    if (!target.focused && target.bitmap === null) {
-      target.bitmap = await createImageBitmap(new Blob([target.png], { type: 'image/png' }))
-    }
-    viewDisplayIndex = index
-    nativeW = target.focused ? focusedW : target.width
-    nativeH = target.focused ? focusedH : target.height
-    resizeCanvases()
-    const frame = target.focused ? (focusedBaseFrame ?? nativeBitmap) : target.bitmap
-    if (frame) snapCtx.drawImage(frame, 0, 0, nativeW, nativeH)
-    syncDisplaySwitcher()
-    layout()
-    schedulePaint()
-  } finally {
-    switchingDisplay = false
+  if (viewingFocused()) {
+    // Leaving the focused display: settle any in-flight seek and keep the
+    // exact frame on screen, so coming back needs no re-seek.
+    commitTextEditor(false)
+    closeDurationEditor(false)
+    scrub?.pause()
+    await scrub?.whenSettled()
   }
+  if (!target.focused && target.bitmap === null) {
+    // A truncated/corrupt per-display PNG (an interrupted copy of a re-edited
+    // pack) rejects here. Leaving it unhandled would surface as an unhandled
+    // rejection and a switcher button that silently does nothing — and, worse,
+    // would already have thrown away the focused base frame below.
+    try {
+      const png = target.png
+      if (png === null) throw new Error('display carries no frame')
+      target.bitmap = await createImageBitmap(new Blob([png], { type: 'image/png' }))
+    } catch (err) {
+      console.error('capturepack: decoding a captured display failed:', err)
+      target.broken = true
+      syncDisplaySwitcher()
+      return
+    }
+  }
+  if (viewingFocused()) {
+    focusedBaseFrame?.close()
+    focusedBaseFrame = await createImageBitmap(snapshot)
+  }
+  viewDisplayIndex = index
+  nativeW = target.focused ? focusedW : target.width
+  nativeH = target.focused ? focusedH : target.height
+  // The coordinate space genuinely changed (a 4K display and a 1080p one do not
+  // share a pan): keeping the old pan would translate the smaller frame clean
+  // out of the overflow:hidden stage and leave a black editor.
+  viewport.reset()
+  resizeCanvases()
+  const frame = target.focused ? (focusedBaseFrame ?? nativeBitmap) : target.bitmap
+  if (frame) snapCtx.drawImage(frame, 0, 0, nativeW, nativeH)
+  syncDisplaySwitcher()
+  layout()
+  syncPanCursor()
+  schedulePaint()
 }
 
 /** Paints the base image: a scrubbed replay frame or the native snapshot. */
@@ -377,7 +432,20 @@ function schedulePaint(): void {
       overlayCtx.clearRect(0, 0, overlay.width, overlay.height)
       boxHeader.hidden = true
       closeDurationEditor(false)
+      // The Esc [Save][Save As New][Discard] bar belongs to the focused
+      // display's edits: floating it over another screen's frozen frame reads
+      // as if Save would write what is on screen. Remembered and restored.
+      if (!unsavedBar.hidden) {
+        unsavedBarHiddenByDisplay = true
+        unsavedBar.hidden = true
+      }
       return
+    }
+    if (unsavedBarHiddenByDisplay) {
+      unsavedBarHiddenByDisplay = false
+      // Never during a save: doExport switches back to the focused display and
+      // then hides the bar, and this must not put it up again behind it.
+      if (editMode && dirty && !exporting) unsavedBar.hidden = false
     }
     // Display numbers are GLOBAL (SPEC §8.5): computed over ALL boxes via the
     // one shared implementation, so toggling a number renumbers instantly and
@@ -644,7 +712,12 @@ function beginPendingBox(b: Box, picked?: PickableObject): void {
     created_at: stamp.created_at,
     z: stamp.z,
   }
-  if (picked !== undefined) draft.target = uiaTargetOf(picked)
+  if (picked !== undefined) {
+    draft.target = uiaTargetOf(picked)
+    // Remembered so a later move/resize can tell whether the box still
+    // annotates the object it claims to.
+    pickedRects.set(draft.annotation_id, { x: b.x, y: b.y, w: b.w, h: b.h })
+  }
   if (scrub) {
     // "Now" (the capture instant) anchors at the end of the replay; a scrubbed
     // stamp is clamped to the manifest's wall-clock replay_duration_ms — the
@@ -676,7 +749,10 @@ function openTextEditor(anchor: AnnotationBounds, value: string, selectAll = fal
 
 function positionTextEditor(): void {
   if (!textAnchor) return
-  textEditor.style.left = `${textAnchor.x * fitScale}px`
+  // Clamped inside #frame for the same reason the box header is: a 140px-min
+  // input anchored to a box near the right edge would otherwise run off it.
+  const maxLeft = Math.max(0, frame.clientWidth - textEditor.offsetWidth)
+  textEditor.style.left = `${Math.max(0, Math.min(textAnchor.x * fitScale, maxLeft))}px`
   textEditor.style.top = `${(textAnchor.y + textAnchor.height) * fitScale + 6}px`
 }
 
@@ -720,6 +796,10 @@ function closeTextEditor(refocus = true): void {
 }
 
 textEditor.addEventListener('keydown', (e) => {
+  // F11 is a window shortcut, not an editing key: forwarded rather than
+  // swallowed, so the advertised "works from anywhere" holds while typing a
+  // box description (which is where re-edit spends most of its time).
+  if (e.key === 'F11') return
   e.stopPropagation()
   if (e.key === 'Enter') commitTextEditor()
   else if (e.key === 'Escape') cancelTextEditor()
@@ -768,7 +848,13 @@ function syncSelectionUi(): void {
   const pad = SELECTION_PAD * uiScale() // the header hugs the dashed selection rect
   const topLeft = toScreen(b.x - pad, b.y - pad)
   boxHeader.hidden = false
-  boxHeader.style.left = `${Math.max(4, topLeft.x)}px`
+  // Clamped on BOTH edges (#stage is overflow:hidden). The fullscreen overlay
+  // almost always leaves horizontal margin, but a windowed editor can be
+  // resized until the image fills the stage — and a header pushed off the right
+  // edge takes the blur toggle, the number toggle and the duration chip with it,
+  // none of which have a keyboard fallback. offsetWidth is read after unhiding.
+  const maxLeft = Math.max(4, stage.clientWidth - boxHeader.offsetWidth - 4)
+  boxHeader.style.left = `${Math.max(4, Math.min(topLeft.x, maxLeft))}px`
   boxHeader.style.top = `${Math.max(28, topLeft.y - 4)}px`
   // [#|N]: shows the computed display number while numbering is on.
   const number = computeDisplayNumbers(state.annotations).get(a.annotation_id)
@@ -898,6 +984,9 @@ entireCaptureBtn.addEventListener('click', () => {
 // Keyboard shortcuts stay dead while typing here (stopPropagation keeps the
 // window handler out); Esc closes without applying.
 durationEditor.addEventListener('keydown', (e) => {
+  // Same as the text input: F11 belongs to the window, so it is forwarded to
+  // the window handler instead of dying in the popover.
+  if (e.key === 'F11') return
   e.stopPropagation()
   if (e.key === 'Escape') closeDurationEditor()
 })
@@ -959,6 +1048,32 @@ function showObjectHintOnce(): void {
     objectHint.hidden = true
     objectHintTimer = null
   }, 6000)
+}
+
+// The rect a box was SNAPPED to when its `target` was stamped, per annotation
+// id. `target` carries no geometry (name/control_type/automation_id/class_name
+// only), so nothing downstream could ever notice that the box was later dragged
+// somewhere else — and annotations.json, packdocs and the MCP tools would keep
+// telling every AI reader that the box annotating one thing targets another.
+const pickedRects = new Map<string, Box>()
+
+/**
+ * Drops `target` once the box no longer covers the element it was picked from.
+ * Called after a committed move or resize; a box that still contains the
+ * picked rect's centre is considered to be annotating the same object.
+ */
+function invalidateTargetIfMoved(id: string): void {
+  const a = state.byId(id)
+  if (!a || a.target === undefined) return
+  const picked = pickedRects.get(id)
+  if (picked === undefined) return
+  const cx = picked.x + picked.w / 2
+  const cy = picked.y + picked.h / 2
+  const b = a.bounds
+  const stillOn = cx >= b.x && cx <= b.x + b.width && cy >= b.y && cy <= b.y + b.height
+  if (stillOn) return
+  delete a.target
+  pickedRects.delete(id)
 }
 
 /** `target` for a picked element (SPEC §8.7): empty fields are never written. */
@@ -1082,6 +1197,8 @@ function endDrag(): void {
     const b = normBox(d)
     if (b.w >= MIN_DRAG && b.h >= MIN_DRAG) beginPendingBox(b)
   } else if (d.moved) {
+    // A box dragged off the UI object it was snapped to stops claiming it.
+    invalidateTargetIfMoved(d.id)
     state.pushUndoSnapshot(d.before)
   }
   schedulePaint()
@@ -1210,18 +1327,20 @@ function syncPanCursor(): void {
 // ---------------------------------------------------------------------------
 
 window.addEventListener('keydown', (e) => {
-  // Inline inputs own their keys (their handlers stopPropagation; the contains
-  // check covers focus landing on the duration editor's buttons).
-  if (e.isComposing || e.target === textEditor) return
-  if (e.target instanceof Node && durationEditor.contains(e.target)) return
   // F11 toggles windowed/fullscreen from ANYWHERE in the editor (GOAL "Editor
-  // Window Mode"): it is never an editing key, so it is answered before the
-  // typing, read-only-display, and unsaved-bar gates below.
+  // Window Mode"): it is never an editing key (nor a composition key), so it is
+  // answered FIRST — before the inline-input, typing, read-only-display and
+  // unsaved-bar gates below. The inline inputs stopPropagation their keydowns,
+  // so they forward this one explicitly (see their handlers).
   if (e.key === 'F11') {
     e.preventDefault()
     toggleWindowMode()
     return
   }
+  // Inline inputs own their keys (their handlers stopPropagation; the contains
+  // check covers focus landing on the duration editor's buttons).
+  if (e.isComposing || e.target === textEditor) return
+  if (e.target instanceof Node && durationEditor.contains(e.target)) return
   // The Esc bar's focused button owns Enter/Space: its native activation must
   // fire THAT button's click (Save / Save As New / Discard). Without this,
   // tabbing to [Save As New] or [Discard] and pressing Enter would fall
@@ -1397,9 +1516,14 @@ async function doExport(kind: 'save' | 'saveAsNew' = 'save'): Promise<void> {
   // be the one on screen — saving while viewing another display would ship the
   // wrong screen's pixels under the focused display's annotations.
   if (!viewingFocused()) {
+    // showDisplay returns the IN-FLIGHT switch when one is running, so this
+    // waits for the real completion; the second call then performs the switch
+    // back to the focused display. (Pressing Enter within the ~100 ms a 4K
+    // decode takes used to hit a no-op and look like a dropped keystroke.)
     await showDisplay(focusedDisplayIndex)
-    // A switch was still in flight (showDisplay is a no-op then): refuse the
-    // save rather than ship another display's pixels as snapshot.png.
+    if (!viewingFocused()) await showDisplay(focusedDisplayIndex)
+    // Still not focused: the focused frame is unusable — refuse the save rather
+    // than ship another display's pixels as snapshot.png.
     if (!viewingFocused()) return
   }
   exporting = true
@@ -1460,6 +1584,19 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
   // Re-edit: adopt the saved pack's boxes (undo baseline; ids registered so
   // new ann_ ids continue past the loaded ones) and prefill title/note.
   state.restore(payload.annotations)
+  // A loaded box carrying `target` was snapped to that object at its CURRENT
+  // bounds, so those bounds are the picked rect: dragging it away in this
+  // session drops the claim, exactly as it would for a freshly picked box.
+  pickedRects.clear()
+  for (const a of payload.annotations) {
+    if (a.target === undefined) continue
+    pickedRects.set(a.annotation_id, {
+      x: a.bounds.x,
+      y: a.bounds.y,
+      w: a.bounds.width,
+      h: a.bounds.height,
+    })
+  }
   titleInput.value = payload.title
   noteInput.value = payload.note
   // Kept alive: scrubbing back to "now" restores this sharpest frame.

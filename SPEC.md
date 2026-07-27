@@ -411,7 +411,7 @@ Each entry:
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `file` | string | REQUIRED | Pack-relative filename, `"frames/frame-<NN>_<MM-SS.mmm>.png"`. `NN` is this entry's **1-based position in the array**, zero-padded to at least two digits; `MM-SS.mmm` SHOULD be `t_ms` formatted as minutes-seconds.milliseconds (`:` is not a legal filename character on Windows, hence `-`). The file MUST exist in the pack. |
+| `file` | string | REQUIRED | Pack-relative filename, `"frames/frame-<NN>_<MM-SS.mmm>.png"`. `NN` is this entry's **1-based position in the array**, zero-padded to at least two digits; `MM-SS.mmm` SHOULD be `t_ms` formatted as minutes-seconds.milliseconds, minutes zero-padded to at least two digits (`:` is not a legal filename character on Windows, hence `-`). The file MUST exist in the pack. |
 | `t_ms` | integer | REQUIRED | Position on the replay clock, in milliseconds, of the frame this still shows — the same clock as annotation lifetimes ([§8.4](#84-lifetime)), `snapshot_t_ms`, and timeline offsets against `t0`. MUST be >= 0. |
 
 Rules:

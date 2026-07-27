@@ -26,15 +26,37 @@
 # UI Automation client is what settles this process's DPI awareness, and both
 # readings must come from the same state.
 
-param(
-  # Maximum control-tree depth to walk (the foreground window itself is depth 0).
-  [int]$MaxDepth = 12,
-  # Maximum number of elements to EMIT.
-  [int]$MaxElements = 3000,
-  # Budget the caller enforces by killing this process. Used here only to stop
-  # walking early enough to still print what was collected.
-  [int]$BudgetMs = 1200
-)
+# PARAMETERS come from the ENVIRONMENT, not from param(): the caller runs this
+# file through -EncodedCommand (execution policy is set by Group Policy on
+# managed machines and the -ExecutionPolicy switch cannot override it, so -File
+# would simply be refused there), and a param() block is not valid in a command
+# string. Every value has a working default, so the script still runs standalone.
+#
+#   CAPTUREPACK_UIA_MAX_DEPTH     control-tree depth cap (foreground window = 0)
+#   CAPTUREPACK_UIA_MAX_ELEMENTS  cap on emitted elements
+#   CAPTUREPACK_UIA_DEADLINE      absolute Unix ms instant of the caller's HARD
+#                                 kill — the only budget origin both sides share
+#   CAPTUREPACK_UIA_BUDGET_MS     fallback budget when no deadline is given
+
+function Get-EnvInt([string]$name, [int]$fallback) {
+  $raw = [Environment]::GetEnvironmentVariable($name)
+  if ([string]::IsNullOrWhiteSpace($raw)) { return $fallback }
+  $value = 0
+  if ([int]::TryParse($raw, [ref]$value) -and $value -gt 0) { return $value }
+  return $fallback
+}
+
+function Get-EnvLong([string]$name) {
+  $raw = [Environment]::GetEnvironmentVariable($name)
+  if ([string]::IsNullOrWhiteSpace($raw)) { return 0L }
+  $value = 0L
+  if ([long]::TryParse($raw, [ref]$value) -and $value -gt 0) { return $value }
+  return 0L
+}
+
+$MaxDepth = Get-EnvInt 'CAPTUREPACK_UIA_MAX_DEPTH' 12
+$MaxElements = Get-EnvInt 'CAPTUREPACK_UIA_MAX_ELEMENTS' 3000
+$BudgetMs = Get-EnvInt 'CAPTUREPACK_UIA_BUDGET_MS' 1200
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -42,7 +64,21 @@ $ProgressPreference = 'SilentlyContinue'
 $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 # Self-imposed soft budget: a killed process prints NOTHING, so stop walking
 # well before the caller's hard kill and emit what has been collected.
-$softBudgetMs = [Math]::Max(150, $BudgetMs - 350)
+#
+# The budget MUST be measured from the caller's origin, not from this line:
+# powershell.exe startup (plus the UIAutomation/WinForms assembly loads below)
+# is 100-1500 ms of the caller's budget that this process never sees. Measuring
+# from a local stopwatch would let the walk run happily past the hard kill on
+# exactly the slow machines the soft budget exists for. The deadline is an
+# absolute instant on the shared wall clock; the stopwatch then only converts it
+# into "elapsed" terms for the loop checks below.
+$deadlineUnixMs = Get-EnvLong 'CAPTUREPACK_UIA_DEADLINE'
+if ($deadlineUnixMs -gt 0) {
+  $remainingMs = $deadlineUnixMs - [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+  $softBudgetMs = [Math]::Max(150, [int][Math]::Min([double]($remainingMs - 350), [double]$BudgetMs))
+} else {
+  $softBudgetMs = [Math]::Max(150, $BudgetMs - 350)
+}
 
 # Window titles are routinely non-ASCII (한국어 / 日本語 / …) and the caller
 # decodes stdout as UTF-8. Numbers are formatted culture-invariantly so a

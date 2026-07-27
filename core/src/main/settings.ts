@@ -6,6 +6,14 @@ import { isSupportedLanguage } from '../shared/i18n'
 import { DEFAULT_CAPTURE_HOTKEY } from '../shared/types'
 import type { EditorWindowBounds, Settings } from '../shared/types'
 
+/**
+ * Longest replay buffer that may be configured (10 minutes). The recorder holds
+ * 1x-2x of this in memory per display, every render replays it in REAL TIME,
+ * and the annotated-keyframe filename format spells the replay clock as
+ * MM-SS.mmm (SPEC §5.7) — the bound is what keeps all three honest.
+ */
+export const MAX_REPLAY_SECONDS = 600
+
 export function settingsFilePath(): string {
   return path.join(app.getPath('userData'), 'settings.json')
 }
@@ -275,8 +283,16 @@ function mergeSettings(base: Settings, raw: Record<string, unknown>): Settings {
       typeof raw.captureHotkey === 'string' && isCaptureHotkey(raw.captureHotkey)
         ? raw.captureHotkey
         : base.captureHotkey,
+    // Upper bound as well as lower: the replay is held in memory by the
+    // recorder pair and re-encoded in real time by every render, and the
+    // keyframe filename clock (frames/frame-NN_MM-SS.mmm.png, SPEC §5.7) spells
+    // minutes. A hand-edited settings.json must not be able to ask for hours.
     replaySeconds:
-      typeof raw.replaySeconds === 'number' && raw.replaySeconds > 0 ? raw.replaySeconds : base.replaySeconds,
+      typeof raw.replaySeconds === 'number' &&
+      raw.replaySeconds > 0 &&
+      raw.replaySeconds <= MAX_REPLAY_SECONDS
+        ? raw.replaySeconds
+        : base.replaySeconds,
     fps: typeof raw.fps === 'number' && raw.fps > 0 ? raw.fps : base.fps,
     captureDisplay:
       typeof raw.captureDisplay === 'string' && isCaptureDisplay(raw.captureDisplay)

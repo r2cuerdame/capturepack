@@ -38,15 +38,30 @@ export const MAX_KEYFRAMES = 24
  * - A pack with a replay but no annotations still gets that one still at the
  *   capture instant, so "the render finished" always means "there is at least
  *   one keyframe".
+ * - Past MAX_KEYFRAMES the EARLIEST changes are kept, except that the LAST
+ *   instant always keeps its slot: that is the capture instant whenever any box
+ *   has no lifetime, and it is the one instant SPEC §5.7 names explicitly.
  */
 export function computeKeyframeTimes(
   annotations: readonly Annotation[],
   replayDurationMs: number,
 ): number[] {
+  return computeKeyframes(annotations, replayDurationMs).times
+}
+
+/**
+ * computeKeyframeTimes() plus how many state changes the MAX_KEYFRAMES cap
+ * dropped — the documents say so rather than quietly claiming the stills
+ * reconstruct the whole capture.
+ */
+export function computeKeyframes(
+  annotations: readonly Annotation[],
+  replayDurationMs: number,
+): { times: number[]; dropped: number } {
   const durationMs =
     Number.isFinite(replayDurationMs) && replayDurationMs > 0 ? Math.round(replayDurationMs) : 0
   // Screenshot-only pack: one still, drawn from snapshot.png (SPEC §7.3).
-  if (durationMs === 0) return [0]
+  if (durationMs === 0) return { times: [0], dropped: 0 }
 
   const raw: number[] = []
   for (const a of annotations) {
@@ -71,7 +86,16 @@ export function computeKeyframeTimes(
     const last = times[times.length - 1]
     if (last === undefined || t - last > KEYFRAME_MERGE_MS) times.push(t)
   }
-  return times.slice(0, MAX_KEYFRAMES)
+  if (times.length <= MAX_KEYFRAMES) return { times, dropped: 0 }
+  // Over the cap: the earliest changes tell the story, but the LAST slot is
+  // reserved for the final instant. A box with no lifetime contributes the
+  // capture instant (SPEC §5.7) — dropping it would mean the frame the trigger
+  // actually froze has no still at all.
+  const final = times[times.length - 1] as number
+  return {
+    times: [...times.slice(0, MAX_KEYFRAMES - 1), final],
+    dropped: times.length - MAX_KEYFRAMES,
+  }
 }
 
 /** Replay-clock label for a keyframe FILENAME, e.g. 3200 -> "00-03.200".

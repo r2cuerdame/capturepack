@@ -30,7 +30,7 @@ import { DEFAULT_CAPTURE_HOTKEY } from '../shared/types'
 import type { Annotation, Settings } from '../shared/types'
 import { isRenderInFlight, onRenderStateChange, startAnnotatedRender } from './annotatedRender'
 import { createPackZip } from './exporter'
-import { uiLanguage, uiT } from './locale'
+import { packDocLanguage, uiLanguage, uiT } from './locale'
 import { createPackStore, openPack } from './mcp/store'
 import type { PackHandle, PackStore, RawPackEntry } from './mcp/store'
 import { analyzePrompt } from './saveToast'
@@ -536,6 +536,8 @@ function startRerender(entry: RawPackEntry): HistoryActionResult {
       height: annotationsFile.reference_height,
       fps: settings.fps,
       replayDurationMs,
+      // The render regenerates the pack documents from what it declared.
+      docLanguage: packDocLanguage(settings),
     },
     // Terminal state reaches the window via onRenderStateChange (registered in
     // registerHistoryIpc) — 'failed' leaves the disk unchanged (no watcher

@@ -35,7 +35,7 @@ import {
   requestReplay,
   resolveCaptureTargets,
   resolveTargetDisplay,
-  takeSnapshot,
+  takeDisplaySnapshots,
 } from './capture'
 import {
   addManifestPlugin,
@@ -43,8 +43,11 @@ import {
   saveAsNewPack,
   uiaPluginDeclaration,
   updatePack,
+  displayMediaName,
+  displayReplayName,
   displaySnapshotName,
   isoWithOffset,
+  replayFileName,
   writeUiaPlugin,
   UIA_PLUGIN_NAME,
   type DisplayCapture,
@@ -137,11 +140,14 @@ interface FrozenDisplay {
  * cursor/fixed display otherwise.
  *
  * The FOCUSED display is snapshotted first and alone, so its frame stays as
- * close to the trigger instant as it was before all-displays capture existed;
- * the other displays follow concurrently (recording already runs for them —
- * "all" costs export work, not capture work). A per-display failure is logged
- * and that display simply drops out of the pack; the focused display's failure
- * is fatal to the capture, exactly as before.
+ * close to the trigger instant as it was before all-displays capture existed —
+ * and that one call already carries every same-sized display's frame, so an
+ * ordinary desk of identical monitors costs exactly ONE screen capture round
+ * trip (see takeDisplaySnapshots). Differently-sized displays follow
+ * concurrently (recording already runs for them — "all" costs export work, not
+ * capture work). A per-display failure is logged and that display simply drops
+ * out of the pack; the focused display's failure is fatal to the capture,
+ * exactly as before.
  */
 async function freezeDisplays(settings: Settings): Promise<{
   screens: Array<{ width: number; height: number; scale: number }>
@@ -155,42 +161,57 @@ async function freezeDisplays(settings: Settings): Promise<{
     scale: d.scaleFactor,
   }))
   const indexById = new Map(targets.allDisplays.map((d, i) => [d.id, i + 1]))
-
-  const freeze = async (
-    display: (typeof targets.displays)[number],
-    focused: boolean,
-  ): Promise<FrozenDisplay> => {
-    const snap = await takeSnapshot(display, { exact: !focused })
-    return {
-      id: display.id,
-      index: indexById.get(display.id) ?? 1,
-      focused,
-      bounds: { ...display.bounds },
-      scale: display.scaleFactor,
-      snapshotPng: snap.png,
-      width: snap.width,
-      height: snap.height,
-      replayWebm: null,
-      replayDurationMs: 0,
-    }
+  // resolveCaptureTargets prepends the focused display when getDisplayNearestPoint
+  // returned something getAllDisplays does not contain. It is then absent from
+  // environment.screens AND from indexById — and a default index would COLLIDE
+  // with a real display's (media.displays[].index MUST be unique, SPEC §5.6).
+  // Give it the next free position in both lists instead.
+  if (!indexById.has(targets.focused.id)) {
+    const focused = targets.focused
+    screens.push({
+      width: Math.round(focused.size.width * focused.scaleFactor),
+      height: Math.round(focused.size.height * focused.scaleFactor),
+      scale: focused.scaleFactor,
+    })
+    indexById.set(focused.id, screens.length)
   }
 
-  const focused = await freeze(targets.focused, true)
-  const others = await Promise.all(
-    targets.displays
-      .filter((d) => d.id !== targets.focused.id)
-      .map(async (d) => {
-        try {
-          return await freeze(d, false)
-        } catch (err) {
-          console.error(`capturepack: display ${d.id} snapshot failed:`, errorMessage(err))
-          return null
-        }
-      }),
-  )
-  const displays = [focused, ...others.filter((d): d is FrozenDisplay => d !== null)].sort(
-    (a, b) => a.index - b.index,
-  )
+  const frozen = (
+    display: (typeof targets.displays)[number],
+    focused: boolean,
+    snap: { png: Buffer; width: number; height: number },
+  ): FrozenDisplay => ({
+    id: display.id,
+    index: indexById.get(display.id) ?? 1,
+    focused,
+    bounds: { ...display.bounds },
+    scale: display.scaleFactor,
+    snapshotPng: snap.png,
+    width: snap.width,
+    height: snap.height,
+    replayWebm: null,
+    replayDurationMs: 0,
+  })
+
+  // ONE grouped capture for the whole trigger: desktopCapturer's thumbnail size
+  // is global, so a call per display would grab every screen N times over (see
+  // takeDisplaySnapshots). The focused display's frame is still taken first and
+  // alone; a display whose frame did not come back drops out of the pack, and
+  // the focused display's failure is fatal to the capture, exactly as before.
+  const snaps = await takeDisplaySnapshots(targets.displays, targets.focused)
+  const focusedSnap = snaps.get(targets.focused.id)
+  if (focusedSnap === undefined) {
+    throw new Error(`no screen source available for display ${targets.focused.id}`)
+  }
+  const focused = frozen(targets.focused, true, focusedSnap)
+  const others: FrozenDisplay[] = []
+  for (const d of targets.displays) {
+    if (d.id === targets.focused.id) continue
+    const snap = snaps.get(d.id)
+    if (snap === undefined) continue
+    others.push(frozen(d, false, snap))
+  }
+  const displays = [focused, ...others].sort((a, b) => a.index - b.index)
 
   // Replay fetch runs in parallel: each request is an independent round trip to
   // that display's own recorder window. On timeout, recorder failure, or no
@@ -217,6 +238,10 @@ function toDisplayCaptures(displays: readonly FrozenDisplay[]): DisplayCapture[]
     scale: d.scale,
     hasReplay: d.replayWebm !== null,
     replayDurationMs: d.replayDurationMs,
+    // A fresh capture writes the canonical names; they travel with the entry so
+    // every writer uses the SAME string the manifest declares.
+    snapshotFile: displaySnapshotName(d.index),
+    replayFile: d.replayWebm !== null ? displayReplayName(d.index) : null,
     snapshotPng: d.focused ? null : d.snapshotPng,
     replayWebm: d.focused ? null : d.replayWebm,
   }))
@@ -228,7 +253,10 @@ function toEditorDisplays(displays: readonly FrozenDisplay[]): EditorDisplayPayl
   return displays.map((d) => ({
     index: d.index,
     focused: d.focused,
-    snapshotPng: toArrayBuffer(d.snapshotPng),
+    // The FOCUSED display's frame is already EditorInitPayload.snapshotPng and
+    // the editor never decodes this copy — sending it again would put another
+    // 3-8 MB into the editor-open critical path per 4K display.
+    snapshotPng: d.focused ? null : toArrayBuffer(d.snapshotPng),
     width: d.width,
     height: d.height,
   }))
@@ -438,7 +466,6 @@ async function runFlow(settings: Settings): Promise<void> {
     let renderWebm = replayWebm
     let renderAnnotations = annotations
     let renderDurationMs = replayDurationMs
-    let toastShown = false
     if (trim !== null && replayWebm !== null) {
       // Trim save: the toast opens EARLY ("Trimming replay…") because the
       // plain-trim render plays the kept range in real time before the pack
@@ -450,7 +477,6 @@ async function runFlow(settings: Settings): Promise<void> {
         renderState: 'trimming',
         uiLanguage: uiLanguage(settings),
       })
-      toastShown = true
       try {
         // The TRIMMED replay bytes first, via the render pipeline in plain
         // mode (empty overlay set, arbitrary range) — then everything else is
@@ -505,17 +531,18 @@ async function runFlow(settings: Settings): Promise<void> {
     const dirPath: string = await updatePack(handle, finalInput)
     // Save pipeline (GOAL): update folder -> toast -> background render. The
     // toast never waits for the render; its status line flips when it ends.
+    //
+    // ALWAYS a fresh toast, even when the trim path already opened one: the
+    // trim plays the kept range in REAL TIME, so a 30-60 s replay outlives the
+    // "Trimming replay…" toast, and updating a toast that closed itself would
+    // leave the save with no [Open Folder] / [Create ZIP] / [Copy Prompt] at all.
     const hasReplay = renderWebm !== null
-    if (toastShown) {
-      updateToastRenderStatus(dirPath, hasReplay ? 'rendering' : 'none')
-    } else {
-      showSaveToast({
-        folderPath: dirPath,
-        hasBlur: finalInput.annotations.some((a) => a.blur),
-        renderState: hasReplay ? 'rendering' : 'none',
-        uiLanguage: uiLanguage(settings),
-      })
-    }
+    showSaveToast({
+      folderPath: dirPath,
+      hasBlur: finalInput.annotations.some((a) => a.blur),
+      renderState: hasReplay ? 'rendering' : 'none',
+      uiLanguage: uiLanguage(settings),
+    })
     if (renderWebm !== null) {
       startAnnotatedRender(
         handle,
@@ -526,6 +553,9 @@ async function runFlow(settings: Settings): Promise<void> {
           height: snap.height,
           fps: settings.fps,
           replayDurationMs: renderDurationMs,
+          // The render regenerates the pack documents once it declares its
+          // stills, so it needs the pack language too.
+          docLanguage: packDocLanguage(settings),
         },
         (state) => updateToastRenderStatus(dirPath, state),
       )
@@ -538,6 +568,7 @@ async function runFlow(settings: Settings): Promise<void> {
         annotations: finalInput.annotations,
         width: snap.width,
         height: snap.height,
+        docLanguage: packDocLanguage(settings),
       })
     }
   } catch (err) {
@@ -580,12 +611,14 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
   // Replay: the manifest declares it, the bytes come from the folder. Declared
   // but missing on disk degrades to screenshot-only editing (like a capture
   // without a replay) — lifetimes are then stripped on save.
-  const replayRel = manifest.media?.replay
-  const replayWebm = typeof replayRel === 'string' ? pack.readBinary(replayRel) : null
+  // The name the pack DECLARES (SPEC §5.3 allows replay.mp4), validated before
+  // it is used as a path or written back into the regenerated manifest.
+  const replayRel = typeof manifest.media?.replay === 'string' ? replayFileName(manifest.media.replay) : null
+  const replayWebm = replayRel !== null ? pack.readBinary(replayRel) : null
   // The duration the manifest DECLARES, kept even when the replay file is
   // missing on disk: the degraded save must rebase the loaded timeline off it.
   const declaredDurationMs =
-    typeof replayRel === 'string' && typeof manifest.media.replay_duration_ms === 'number'
+    replayRel !== null && typeof manifest.media.replay_duration_ms === 'number'
       ? Math.max(0, manifest.media.replay_duration_ms)
       : 0
   const replayDurationMs = replayWebm !== null ? declaredDurationMs : 0
@@ -625,10 +658,16 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
   const loadedDisplays = loadedDisplayCaptures(manifest, dirPath)
   // The displays present at CAPTURE time — media.displays indices point into
   // this list, so it must survive the regenerated manifest too.
+  // MAPPED, never filtered: media.displays[].index is the 1-based POSITION in
+  // this list (SPEC §5.6), so dropping a malformed entry would shift every
+  // later screen and silently point each display's index at the wrong one.
+  // A placeholder keeps the positions; the bounds x scale of the display that
+  // refers to it is the honest substitute where one exists.
   const loadedScreens = Array.isArray(manifest.environment?.screens)
-    ? manifest.environment.screens.filter(
-        (s): s is { width: number; height: number; scale: number } =>
-          s !== null && typeof s === 'object' && typeof s.width === 'number' && typeof s.height === 'number',
+    ? manifest.environment.screens.map((s, i) =>
+        s !== null && typeof s === 'object' && typeof s.width === 'number' && typeof s.height === 'number'
+          ? { width: s.width, height: s.height, scale: typeof s.scale === 'number' && s.scale > 0 ? s.scale : 1 }
+          : screenFromDisplay(manifest, i + 1),
       )
     : []
 
@@ -699,12 +738,24 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
           events: events.map((e) => ({ ...e, t_ms: Math.max(0, e.t_ms - declaredDurationMs) })),
         }
       : { t0, events }
+  // The declared focused replay is missing on disk: the save above rebased t0
+  // onto the capture instant and dropped trim_offset_ms, so nothing in the pack
+  // can align a per-display replay to the pack clock any more (SPEC §5.6's
+  // alignment rule is "add trim_offset_ms"). Keep the files — undeclared
+  // per-display files are explicitly ignored by readers — but stop declaring
+  // them rather than declaring a clock that no longer resolves.
+  const savedDisplays =
+    hasReplay || declaredDurationMs === 0
+      ? loadedDisplays
+      : loadedDisplays.map((d) => ({ ...d, hasReplay: false, replayFile: null, replayDurationMs: 0 }))
   const input: ExportInput = {
     snapshotPng: Buffer.from(outcome.payload.snapshotPng),
     width,
     height,
     capturedAt, // created_at stays the ORIGINAL capture instant
     replayWebm: null, // never carried through a re-edit save
+    // The pack keeps the replay it already has, under the name it declares.
+    ...(replayRel !== null ? { replayFile: replayRel } : {}),
     replayDurationMs,
     annotations,
     title: outcome.payload.title,
@@ -721,7 +772,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
     plugins: loadedPlugins,
     // Same rule for per-display media: the files stay, the declaration is
     // regenerated from what the folder actually holds.
-    displays: loadedDisplays.length > 0 ? loadedDisplays : undefined,
+    displays: savedDisplays.length > 0 ? savedDisplays : undefined,
     screens: loadedScreens.length > 0 ? loadedScreens : undefined,
     copyToClipboard: settings.copyToClipboard,
     // Re-edit saves regenerate the docs too — in the CURRENT pack language.
@@ -751,6 +802,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
           height,
           fps: settings.fps,
           replayDurationMs,
+          docLanguage: packDocLanguage(settings),
         },
         (state) => updateToastRenderStatus(handle.dirPath, state),
       )
@@ -762,6 +814,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
         annotations,
         width,
         height,
+        docLanguage: packDocLanguage(settings),
       })
     }
   } catch (err) {
@@ -799,12 +852,21 @@ function loadedDisplayCaptures(manifest: Manifest, dirPath: string): DisplayCapt
     if (typeof e.index !== 'number' || !Number.isInteger(e.index) || e.index < 1) continue
     if (typeof e.snapshot !== 'string' || typeof e.focused !== 'boolean') continue
     if (!isBoundsLike(e.bounds)) continue
+    // The DECLARED names travel with the entry: SPEC §5.6 permits
+    // `replay-d<N>.mp4`, so re-deriving `.webm` from the index on save would
+    // declare a file the pack does not contain and orphan the one it does.
+    // displayMediaName() also keeps a hand-edited name from reaching a path.
+    const snapshotFile = displayMediaName(e.snapshot, displaySnapshotName(e.index), 'snapshot')
+    const replayFile =
+      typeof e.replay === 'string'
+        ? displayMediaName(e.replay, displayReplayName(e.index), 'replay')
+        : null
     // The focused display's files are the top-level ones, which the caller
     // already validated; a non-focused display without its snapshot on disk
     // must not be declared again.
-    if (!e.focused && !existsSync(path.join(dirPath, e.snapshot))) continue
+    if (!e.focused && !existsSync(path.join(dirPath, snapshotFile))) continue
     const hasReplay =
-      typeof e.replay === 'string' && (e.focused || existsSync(path.join(dirPath, e.replay)))
+      replayFile !== null && (e.focused || existsSync(path.join(dirPath, replayFile)))
     result.push({
       index: e.index,
       focused: e.focused,
@@ -812,11 +874,37 @@ function loadedDisplayCaptures(manifest: Manifest, dirPath: string): DisplayCapt
       scale: typeof e.scale === 'number' && e.scale > 0 ? e.scale : 1,
       hasReplay,
       replayDurationMs: typeof e.replay_duration_ms === 'number' ? Math.max(0, e.replay_duration_ms) : 0,
+      snapshotFile,
+      replayFile: hasReplay ? replayFile : null,
       snapshotPng: null,
       replayWebm: null,
     })
   }
   return result.length > 1 ? result : []
+}
+
+/**
+ * A stand-in for a malformed environment.screens entry, derived from the
+ * media.displays entry that points at it (bounds x scale IS that screen's
+ * physical size, SPEC §5.6). 1x1 when nothing refers to it — a placeholder that
+ * holds the POSITION is what the display indices need.
+ */
+function screenFromDisplay(
+  manifest: Manifest,
+  index: number,
+): { width: number; height: number; scale: number } {
+  const displays = manifest.media?.displays
+  const match = Array.isArray(displays)
+    ? displays.find((d) => d !== null && typeof d === 'object' && d.index === index)
+    : undefined
+  if (match !== undefined && isBoundsLike(match.bounds) && typeof match.scale === 'number' && match.scale > 0) {
+    return {
+      width: Math.round(match.bounds.width * match.scale),
+      height: Math.round(match.bounds.height * match.scale),
+      scale: match.scale,
+    }
+  }
+  return { width: 1, height: 1, scale: 1 }
 }
 
 /** The saved pack's per-display snapshots, for the editor's read-only switcher. */
@@ -827,7 +915,10 @@ function loadedEditorDisplays(
   if (displays.length < 2) return []
   const result: EditorDisplayPayload[] = []
   for (const d of displays) {
-    const rel = d.focused ? 'snapshot.png' : displaySnapshotName(d.index)
+    // The DECLARED filename, not one re-derived from the index — otherwise a
+    // spec-legal name the pack actually uses silently disappears from the
+    // switcher.
+    const rel = d.focused ? 'snapshot.png' : d.snapshotFile
     const png = pack.readBinary(rel)
     if (png === null) continue
     const size = nativeImage.createFromBuffer(png).getSize()
@@ -835,7 +926,9 @@ function loadedEditorDisplays(
     result.push({
       index: d.index,
       focused: d.focused,
-      snapshotPng: toArrayBuffer(png),
+      // The focused frame is already EditorInitPayload.snapshotPng; the editor
+      // never decodes this copy (see toEditorDisplays).
+      snapshotPng: d.focused ? null : toArrayBuffer(png),
       width: size.width,
       height: size.height,
     })

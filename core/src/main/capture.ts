@@ -127,22 +127,126 @@ export function captureWindowForDisplay(displayId: number): BrowserWindow | null
 // silently store the wrong screen's pixels under a display's index, whereas the
 // focused display (the pack's snapshot.png) is better served by a best-effort
 // frame than by no capture at all.
-export async function takeSnapshot(
-  display: Display,
-  options: { exact?: boolean } = {},
-): Promise<{ png: Buffer; width: number; height: number }> {
+export type DisplaySnapshot = { png: Buffer; width: number; height: number }
+
+/** A display's native (physical-pixel) size — what its snapshot is captured at. */
+function physicalSize(display: Display): { width: number; height: number } {
+  return {
+    width: Math.round(display.size.width * display.scaleFactor),
+    height: Math.round(display.size.height * display.scaleFactor),
+  }
+}
+
+function sizeKey(display: Display): string {
+  const size = physicalSize(display)
+  return `${size.width}x${size.height}`
+}
+
+/**
+ * ONE desktopCapturer round trip for a group of same-sized displays.
+ *
+ * `fallbackFor` is the one display allowed the "any screen" fallback — the
+ * FOCUSED display, whose frame becomes snapshot.png and is better served by a
+ * best-effort frame than by no capture at all. Every other display is matched
+ * strictly by display_id: an all-displays capture must never store the wrong
+ * screen's pixels under a display's index.
+ */
+async function snapshotGroup(
+  group: readonly Display[],
+  fallbackFor: number | null,
+  into: Map<number, DisplaySnapshot>,
+): Promise<void> {
+  const first = group[0]
+  if (first === undefined) return
   const sources = await desktopCapturer.getSources({
     types: ['screen'],
-    thumbnailSize: {
-      width: Math.round(display.size.width * display.scaleFactor),
-      height: Math.round(display.size.height * display.scaleFactor),
-    },
+    thumbnailSize: physicalSize(first),
   })
-  const matched = sources.find((s) => s.display_id === String(display.id))
-  const source = matched ?? (options.exact === true ? undefined : sources[0])
-  if (!source) throw new Error(`no screen source available for display ${display.id}`)
-  const size = source.thumbnail.getSize()
-  return { png: source.thumbnail.toPNG(), width: size.width, height: size.height }
+  for (const d of group) {
+    const matched = sources.find((s) => s.display_id === String(d.id))
+    const source = matched ?? (d.id === fallbackFor ? sources[0] : undefined)
+    if (source === undefined) {
+      console.error(`[capture] no screen source available for display ${d.id}`)
+      continue
+    }
+    const size = source.thumbnail.getSize()
+    into.set(d.id, { png: source.thumbnail.toPNG(), width: size.width, height: size.height })
+  }
+}
+
+/**
+ * Freezes every given display, with as few desktopCapturer calls as possible.
+ *
+ * thumbnailSize is a GLOBAL option: EVERY getSources() call captures and
+ * rescales a full-resolution frame of EVERY connected screen, whatever the
+ * caller does with the result. One call per display therefore costs N x N
+ * full-resolution captures per trigger (9 frames on a 3-monitor desk, 16 on 4)
+ * and holds N uncompressed frames per call in memory at once.
+ *
+ * So displays that share a native size share a call. Grouping by SIZE rather
+ * than taking one call at the largest size keeps every frame exact: one
+ * thumbnailSize for differently-shaped screens aspect-fits the smaller ones,
+ * and rescaling them back would resample original evidence (SPEC §5.6). On the
+ * common desk of identical monitors this is a single call for the whole
+ * trigger; it is never more calls than one-per-display.
+ *
+ * The FOCUSED display's group is issued FIRST and ALONE and awaited before any
+ * other call starts, so its frame stays as close to the trigger instant as it
+ * was before all-displays capture existed — and its same-sized peers come out
+ * of that very call for free.
+ *
+ * Resolves a map keyed by display id; a display whose source never appeared is
+ * simply absent (the caller drops it from the pack — or, for the focused
+ * display, fails the capture).
+ */
+export async function takeDisplaySnapshots(
+  displays: readonly Display[],
+  focused: Display,
+): Promise<Map<number, DisplaySnapshot>> {
+  const result = new Map<number, DisplaySnapshot>()
+  const focusedKey = sizeKey(focused)
+  const withFocused: Display[] = []
+  const rest = new Map<string, Display[]>()
+  for (const d of displays) {
+    if (sizeKey(d) === focusedKey) {
+      withFocused.push(d)
+      continue
+    }
+    const bucket = rest.get(sizeKey(d))
+    if (bucket === undefined) rest.set(sizeKey(d), [d])
+    else bucket.push(d)
+  }
+  if (!withFocused.some((d) => d.id === focused.id)) withFocused.unshift(focused)
+  // The focused group is the only one whose failure is allowed to fail the
+  // capture (it carries snapshot.png). A different resolution's group failing
+  // costs those displays their place in the pack, nothing more.
+  await snapshotGroup(withFocused, focused.id, result)
+  await Promise.all(
+    [...rest.values()].map((group) =>
+      snapshotGroup(group, null, result).catch((err: unknown) => {
+        console.error('[capture] per-display snapshot group failed:', String(err))
+      }),
+    ),
+  )
+  return result
+}
+
+// ONE permanent listener for every replay reply, dispatching by requestId.
+//
+// An all-displays capture fires one request per display in the same tick; a
+// listener per request would put N listeners on a single channel (past
+// EventEmitter's default limit of 10 that is a MaxListenersExceededWarning on
+// every capture) and wake every one of them for every other display's reply.
+const replayWaiters = new Map<string, (payload: CaptureReplayResultPayload) => void>()
+let replayListenerRegistered = false
+
+function registerReplayListener(): void {
+  if (replayListenerRegistered) return
+  replayListenerRegistered = true
+  ipcMain.on(IPC.captureReplayResult, (_event: IpcMainEvent, payload: CaptureReplayResultPayload) => {
+    const waiter = payload === null ? undefined : replayWaiters.get(payload.requestId)
+    if (waiter !== undefined) waiter(payload)
+  })
 }
 
 // Asks a capture window for its current replay blob. Resolves null on timeout,
@@ -153,11 +257,11 @@ export function requestReplay(
   requestId: string,
   timeoutMs: number,
 ): Promise<{ buffer: Buffer; durationMs: number } | null> {
+  registerReplayListener()
   return new Promise((resolve) => {
     let timer: ReturnType<typeof setTimeout> | undefined
 
-    const onResult = (_event: IpcMainEvent, payload: CaptureReplayResultPayload): void => {
-      if (payload.requestId !== requestId) return
+    const onResult = (payload: CaptureReplayResultPayload): void => {
       cleanup()
       if (payload.buffer.byteLength === 0) resolve(null)
       else resolve({ buffer: Buffer.from(payload.buffer), durationMs: payload.durationMs })
@@ -168,7 +272,7 @@ export function requestReplay(
     }
     const cleanup = (): void => {
       clearTimeout(timer)
-      ipcMain.removeListener(IPC.captureReplayResult, onResult)
+      replayWaiters.delete(requestId)
       win.removeListener('closed', onClosed)
     }
 
@@ -176,7 +280,7 @@ export function requestReplay(
       resolve(null)
       return
     }
-    ipcMain.on(IPC.captureReplayResult, onResult)
+    replayWaiters.set(requestId, onResult)
     win.once('closed', onClosed)
     timer = setTimeout(() => {
       cleanup()

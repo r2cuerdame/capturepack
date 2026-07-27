@@ -25,8 +25,9 @@
 // fallback for a helper that could not enumerate monitors.
 import { spawn } from 'node:child_process'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import * as path from 'node:path'
+import { gzipSync } from 'node:zlib'
 import { app, screen } from 'electron'
 import type { Rectangle } from 'electron'
 import type {
@@ -84,12 +85,18 @@ export interface UiaSnapshotTarget {
  */
 export function startUiaDump(): Promise<UiaRawDump | null> {
   if (process.platform !== 'win32') return Promise.resolve(null)
-  const script = resolveHelperScript()
-  if (script === null) {
+  const command = encodedHelperCommand()
+  if (command === null) {
     logOnce('uia: helper script not found; continuing without object data')
     return Promise.resolve(null)
   }
   const startedAt = new Date()
+  // ONE origin for both budgets: the helper's own soft budget is computed from
+  // this absolute instant, so powershell.exe's startup is charged to the
+  // helper's remaining time instead of being invisible to it (a cold start can
+  // exceed the whole budget, and a stopwatch started inside the script would
+  // happily keep walking past the kill below).
+  const deadlineAtMs = Date.now() + UIA_BUDGET_MS
   return new Promise<UiaRawDump | null>((resolve) => {
     let settled = false
     let killTimer: ReturnType<typeof setTimeout> | undefined
@@ -112,26 +119,44 @@ export function startUiaDump(): Promise<UiaRawDump | null> {
           '-NonInteractive',
           // UI Automation clients are happiest on an STA thread.
           '-STA',
-          // The helper ships with the app; a restrictive machine policy must not
-          // silently disable object picking.
-          '-ExecutionPolicy',
-          'Bypass',
-          '-File',
-          script,
-          '-BudgetMs',
-          String(UIA_BUDGET_MS),
-          '-MaxDepth',
-          String(UIA_MAX_DEPTH),
-          '-MaxElements',
-          String(UIA_MAX_ELEMENTS),
+          // NOT -File: PowerShell's execution policy governs script FILES, and
+          // it resolves by scope precedence — MachinePolicy and UserPolicy beat
+          // the -ExecutionPolicy switch (which only sets the Process scope). On
+          // a domain-joined machine with an AllSigned/Restricted policy the
+          // unsigned helper would simply be refused, silently turning object
+          // picking off forever. A command is not a script file, so this runs
+          // regardless of policy — and it reads the helper through Electron's
+          // own fs, so the archive it ships in stops mattering too.
+          '-EncodedCommand',
+          command,
         ],
-        { windowsHide: true },
+        {
+          windowsHide: true,
+          // The helper's parameters (a command string cannot carry a param()
+          // block), including the shared hard deadline.
+          env: {
+            ...process.env,
+            CAPTUREPACK_UIA_DEADLINE: String(deadlineAtMs),
+            CAPTUREPACK_UIA_BUDGET_MS: String(UIA_BUDGET_MS),
+            CAPTUREPACK_UIA_MAX_DEPTH: String(UIA_MAX_DEPTH),
+            CAPTUREPACK_UIA_MAX_ELEMENTS: String(UIA_MAX_ELEMENTS),
+          },
+        },
       )
     } catch (err) {
       done(null, `helper could not be started (${errorMessage(err)})`)
       return
     }
-    // The helper never reads stdin (-NonInteractive, -File); closing it keeps a
+    // Rule 1, the last hole in it: an 'error' event on a stdio stream with no
+    // listener is an unhandled EventEmitter error, i.e. an uncaughtException
+    // that would take the whole tray app down — hotkey and MCP server included.
+    // A powershell.exe that dies during launch (AppLocker/WDAC denial, AV
+    // termination, a machine mid-shutdown) breaks the stdin pipe end() is
+    // closing right now. Object picking must never be able to do that.
+    child.stdin.on('error', () => {})
+    child.stdout.on('error', () => {})
+    child.stderr.on('error', () => {})
+    // The helper never reads stdin (-NonInteractive); closing it keeps a
     // dangling pipe from holding the child open.
     child.stdin.end()
 
@@ -345,11 +370,11 @@ function toPhysicalRect(bounds: Rectangle): Rectangle {
 // ---------------------------------------------------------------------------
 
 let cachedScriptPath: string | null | undefined
+let cachedCommand: string | null | undefined
 
 /**
- * dist/scripts/uia-dump.ps1 — copied there by scripts/build.mjs and kept OUT of
- * the asar (electron-builder asarUnpack), because PowerShell cannot read a file
- * inside an archive.
+ * dist/scripts/uia-dump.ps1 — copied there by scripts/build.mjs. Read through
+ * Node's (asar-aware) fs, so both the packed and the unpacked copy work.
  */
 function resolveHelperScript(): string | null {
   if (cachedScriptPath !== undefined) return cachedScriptPath
@@ -357,6 +382,42 @@ function resolveHelperScript(): string | null {
   const unpacked = packed.replace(`${path.sep}app.asar${path.sep}`, `${path.sep}app.asar.unpacked${path.sep}`)
   cachedScriptPath = [unpacked, packed].find((candidate) => existsSync(candidate)) ?? null
   return cachedScriptPath
+}
+
+/**
+ * The helper as a -EncodedCommand argument: a tiny bootstrap that inflates the
+ * gzipped script and runs it as a scriptblock.
+ *
+ * Why not the script text itself: a Windows command line caps at ~32 767
+ * characters and UTF-16LE base64 nearly triples the source, which the helper
+ * comfortably exceeds. Gzipping first keeps the whole thing around 20 KB.
+ *
+ * Built ONCE (a capture must never pay for a file read + compress at the
+ * trigger); a failure caches null and object picking stays silently off.
+ */
+function encodedHelperCommand(): string | null {
+  if (cachedCommand !== undefined) return cachedCommand
+  const script = resolveHelperScript()
+  if (script === null) {
+    cachedCommand = null
+    return null
+  }
+  try {
+    const payload = gzipSync(readFileSync(script), { level: 9 }).toString('base64')
+    const bootstrap =
+      `$ErrorActionPreference='Stop';` +
+      `$b=[Convert]::FromBase64String('${payload}');` +
+      `$ms=New-Object System.IO.MemoryStream(,$b);` +
+      `$gz=New-Object System.IO.Compression.GzipStream($ms,[System.IO.Compression.CompressionMode]::Decompress);` +
+      `$sr=New-Object System.IO.StreamReader($gz,[System.Text.Encoding]::UTF8);` +
+      `$code=$sr.ReadToEnd();$sr.Close();` +
+      `& ([scriptblock]::Create($code))`
+    cachedCommand = Buffer.from(bootstrap, 'utf16le').toString('base64')
+  } catch (err) {
+    logOnce(`uia: helper script could not be read (${errorMessage(err)})`)
+    cachedCommand = null
+  }
+  return cachedCommand
 }
 
 /**

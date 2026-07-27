@@ -40,6 +40,14 @@ export interface DisplayDeclaration {
   scale: number
   hasReplay: boolean
   replayDurationMs: number
+  // The filenames this display's media is DECLARED under, carried rather than
+  // re-derived from `index`: SPEC §5.6 allows `replay-d<N>.mp4` just as much as
+  // `.webm`, so a re-edit save of an external pack must keep the names the
+  // folder actually holds. Ignored on the focused entry (its media IS the
+  // top-level media). Both are validated against the SPEC §5.6 name patterns
+  // before they are ever joined onto a path — see displayMediaName().
+  snapshotFile: string
+  replayFile: string | null
 }
 
 /** A captured display plus the bytes to write for it. */
@@ -59,6 +67,29 @@ export function displayReplayName(index: number): string {
   return `replay-d${index}.webm`
 }
 
+// The names SPEC §5.3/§5.6 permits. A declared name is read back out of a
+// manifest.json this process did not write (re-edit of an external or
+// hand-edited pack), and it is joined onto a path — so it is checked against
+// these before it can reach existsSync/copyFile/writeFile/rm.
+export const REPLAY_NAME_RE = /^replay\.(webm|mp4)$/
+const DISPLAY_SNAPSHOT_NAME_RE = /^snapshot-d[1-9][0-9]*\.png$/
+const DISPLAY_REPLAY_NAME_RE = /^replay-d[1-9][0-9]*\.(webm|mp4)$/
+
+/** A declared top-level replay filename, or the default when it is not legal. */
+export function replayFileName(declared: string | null | undefined): string {
+  return typeof declared === 'string' && REPLAY_NAME_RE.test(declared) ? declared : 'replay.webm'
+}
+
+/** A declared per-display filename, or the index-derived default. */
+export function displayMediaName(
+  declared: string | null | undefined,
+  fallback: string,
+  kind: 'snapshot' | 'replay',
+): string {
+  const re = kind === 'snapshot' ? DISPLAY_SNAPSHOT_NAME_RE : DISPLAY_REPLAY_NAME_RE
+  return typeof declared === 'string' && re.test(declared) ? declared : fallback
+}
+
 /**
  * media.displays[] for the captured displays. The focused entry is filled from
  * the FINAL top-level media object, so "focused entry === top-level media"
@@ -69,17 +100,13 @@ function buildDisplayMedia(
   media: Manifest['media'],
 ): ManifestDisplayMedia[] {
   return displays.map((d) => {
-    const replay = d.focused
-      ? media.replay
-      : d.hasReplay
-        ? displayReplayName(d.index)
-        : null
+    const replay = d.focused ? media.replay : d.hasReplay ? d.replayFile : null
     const durationMs = d.focused
       ? media.replay_duration_ms
       : Math.max(0, Math.round(d.replayDurationMs))
     return {
       index: d.index,
-      snapshot: d.focused ? media.snapshot : displaySnapshotName(d.index),
+      snapshot: d.focused ? media.snapshot : d.snapshotFile,
       replay,
       // Written only alongside a replay, and next to it (SPEC §5.6).
       ...(replay !== null && durationMs !== undefined ? { replay_duration_ms: durationMs } : {}),
@@ -90,21 +117,88 @@ function buildDisplayMedia(
   })
 }
 
-/** Writes the per-display media files (the focused display's are the top-level ones). */
+/**
+ * Writes the per-display media files (the focused display's are the top-level
+ * ones). Concurrent on purpose: each of these is 20-45 MB of webm, and a
+ * sequential loop over three or four screens is seconds of wall clock between
+ * the hotkey and the editor (see savePack's background write).
+ */
 async function writeDisplayFiles(
   dirPath: string,
   displays: readonly DisplayCapture[] | undefined,
 ): Promise<void> {
   if (displays === undefined) return
-  for (const d of displays) {
-    if (d.focused) continue // its bytes are snapshot.png / replay.webm
-    if (d.snapshotPng !== null) {
-      await writeFile(join(dirPath, displaySnapshotName(d.index)), d.snapshotPng)
-    }
-    if (d.hasReplay && d.replayWebm !== null) {
-      await writeFile(join(dirPath, displayReplayName(d.index)), d.replayWebm)
-    }
+  await Promise.all(
+    displays.map(async (d) => {
+      if (d.focused) return // its bytes are snapshot.png / replay.webm
+      if (d.snapshotPng !== null) {
+        await writeFile(join(dirPath, d.snapshotFile), d.snapshotPng)
+      }
+      if (d.hasReplay && d.replayFile !== null && d.replayWebm !== null) {
+        await writeFile(join(dirPath, d.replayFile), d.replayWebm)
+      }
+    }),
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Save-first per-display writes, off the editor-opening critical path
+// ---------------------------------------------------------------------------
+
+// dirPath -> the save-first per-display write still in flight for it. savePack
+// returns as soon as the CRASH-CRITICAL bytes (manifest, snapshot.png,
+// replay.webm, annotations/timeline/docs) are down, so the editor opens without
+// waiting for 100+ MB of other screens; every later writer for that folder
+// (updatePack, saveAsNewPack) settles this first.
+const pendingDisplayWrites = new Map<string, Promise<void>>()
+
+/** Waits for a save-first per-display write to finish. Never rejects. */
+export async function settleDisplayWrites(dirPath: string): Promise<void> {
+  const pending = pendingDisplayWrites.get(dirPath)
+  if (pending === undefined) return
+  try {
+    await pending
+  } catch {
+    /* already logged by the writer */
   }
+}
+
+/**
+ * A per-display file the background write could not lay down must not stay
+ * DECLARED: re-reads the manifest and drops every media.displays entry whose
+ * files are missing (and the whole array when fewer than two survive, SPEC
+ * §5.6). Keeps a save-first folder valid even when the editor is cancelled.
+ */
+async function dropUndeclarableDisplays(dirPath: string): Promise<void> {
+  const manifestPath = join(dirPath, 'manifest.json')
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Manifest
+  const displays = manifest.media.displays
+  if (!Array.isArray(displays)) return
+  let changed = false
+  const kept: ManifestDisplayMedia[] = []
+  for (const d of displays) {
+    if (d.focused) {
+      kept.push(d)
+      continue
+    }
+    if (!existsSync(join(dirPath, d.snapshot))) {
+      changed = true
+      continue // no frame for this display: it is not in the pack at all
+    }
+    if (d.replay !== null && !existsSync(join(dirPath, d.replay))) {
+      // The frame landed, the recording did not — a screenshot-only display is
+      // a legal entry (SPEC §5.6); a declared missing file is not.
+      const { replay_duration_ms: _dropped, ...rest } = d
+      kept.push({ ...rest, replay: null })
+      changed = true
+      continue
+    }
+    kept.push(d)
+  }
+  if (!changed) return
+  if (kept.length > 1) manifest.media.displays = kept
+  else delete manifest.media.displays
+  await writeFile(manifestPath, toJson(manifest))
 }
 
 // ---------------------------------------------------------------------------
@@ -200,6 +294,11 @@ export interface ExportInput {
   capturedAt: Date
   replayWebm: Buffer | null
   replayDurationMs: number
+  // The filename the replay is DECLARED under (SPEC §5.3 allows replay.webm and
+  // replay.mp4). Absent = replay.webm, which is the only name this app writes;
+  // a re-edit of an external pack passes the loaded manifest's name so the file
+  // on disk stays declared instead of being silently orphaned.
+  replayFile?: string
   annotations: Annotation[]
   title: string
   note: string
@@ -242,6 +341,8 @@ export interface ManifestInput {
   osVersion: string
   screens: Array<{ width: number; height: number; scale: number }>
   hasReplay: boolean
+  // Declared name of the replay file; absent = replay.webm (SPEC §5.3).
+  replayFile?: string
   replayDurationMs: number
   snapshotTMs: number | null
   // media.trim_offset_ms (provenance only, GOAL "Replay Trim"); absent/null =
@@ -267,7 +368,8 @@ export function buildManifest(input: ManifestInput): Manifest {
     },
     media: {
       snapshot: 'snapshot.png',
-      replay: input.hasReplay ? 'replay.webm' : null,
+      // The name the file on disk actually has — never assumed (SPEC §5.3).
+      replay: input.hasReplay ? replayFileName(input.replayFile) : null,
       // media.replay_annotated and media.keyframes are added by
       // setManifestRenderOutputs() once the background render finishes — both
       // absent while not yet rendered, and replay_annotated always absent when
@@ -299,8 +401,10 @@ export function buildManifest(input: ManifestInput): Manifest {
     }
   }
   // Declared LAST so the focused entry copies the finished top-level media
-  // (replay filename + duration, trimmed or not).
-  if (input.displays !== undefined && input.displays.length > 0) {
+  // (replay filename + duration, trimmed or not). Present ONLY for a capture
+  // that covered more than one display — a single-display capture omits it and
+  // the top-level media already describes the whole pack (SPEC §5.6).
+  if (input.displays !== undefined && input.displays.length > 1) {
     manifest.media.displays = buildDisplayMedia(input.displays, manifest.media)
   }
   return manifest
@@ -377,18 +481,38 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
   const dirPath = uniquePackDir(input.outputDir, input.capturedAt)
   try {
     await mkdir(dirPath)
-    await writePackFiles(dirPath, manifest, annotationsFile, input.timeline, input.docLanguage)
+    // No render follows a save-first folder — the editor may never finish — so
+    // the documents must not promise stills nothing will ever write.
+    await writePackFiles(dirPath, manifest, annotationsFile, input.timeline, input.docLanguage, false)
     await writeFile(join(dirPath, 'snapshot.png'), input.snapshotPng)
     if (input.replayWebm !== null) {
       await writeFile(join(dirPath, 'replay.webm'), input.replayWebm)
     }
-    await writeDisplayFiles(dirPath, input.displays)
-    return { id, dirPath }
   } catch (err) {
     // Never leave a half-written pack behind.
     await rm(dirPath, { recursive: true, force: true })
     throw err
   }
+  // The OTHER displays' media (up to ~45 MB of webm each) is written in the
+  // background: the pack above is already complete and valid, and the editor
+  // must not wait on 100+ MB of screens the user is not annotating. Every later
+  // writer for this folder settles it first (settleDisplayWrites).
+  if (input.displays !== undefined) {
+    const write = writeDisplayFiles(dirPath, input.displays)
+      .catch(async (err: unknown) => {
+        console.error(
+          'capturepack: writing the per-display media failed:',
+          err instanceof Error ? err.message : String(err),
+        )
+        // A file that did not land must not stay declared (SPEC §5.6).
+        await dropUndeclarableDisplays(dirPath).catch(() => {})
+      })
+      .finally(() => {
+        if (pendingDisplayWrites.get(dirPath) === write) pendingDisplayWrites.delete(dirPath)
+      })
+    pendingDisplayWrites.set(dirPath, write)
+  }
+  return { id, dirPath }
 }
 
 export interface UpdatePackOptions {
@@ -409,9 +533,16 @@ export async function updatePack(
   input: ExportInput,
   options: UpdatePackOptions = {},
 ): Promise<string> {
+  // A save-first per-display write may still be in flight for this folder; the
+  // rewrite below must not race it.
+  await settleDisplayWrites(handle.dirPath)
   const keepReplay = options.keepReplay === true
+  // The replay is whatever the pack DECLARES it is (SPEC §5.3 allows .mp4):
+  // testing for replay.webm here would silently orphan a legal replay.mp4 and
+  // drop replay_duration_ms / snapshot_t_ms / every annotation lifetime with it.
+  const replayFile = replayFileName(input.replayFile)
   const hasReplay = keepReplay
-    ? existsSync(join(handle.dirPath, 'replay.webm'))
+    ? existsSync(join(handle.dirPath, replayFile))
     : input.replayWebm !== null
   // The plugin payload goes down BEFORE the manifest that declares it, and its
   // failure is swallowed: object data is a best-effort extra and must never
@@ -427,6 +558,7 @@ export async function updatePack(
     osVersion: release(),
     screens: input.screens ?? physicalScreens(),
     hasReplay,
+    replayFile,
     replayDurationMs: input.replayDurationMs,
     snapshotTMs: input.snapshotTMs,
     trimOffsetMs: input.trimOffsetMs,
@@ -441,7 +573,10 @@ export async function updatePack(
   // Save time (not capturedAt) — this event records when the pack was written.
   const timeline = withExportEvent(input.timeline, new Date())
 
-  await writePackFiles(handle.dirPath, manifest, annotationsFile, timeline, input.docLanguage)
+  // A background render always follows this save (annotated replay + stills, or
+  // the single still of a screenshot-only pack), so the documents may reference
+  // the keyframe files it is about to write.
+  await writePackFiles(handle.dirPath, manifest, annotationsFile, timeline, input.docLanguage, true)
   await writeFile(join(handle.dirPath, 'snapshot.png'), input.snapshotPng)
   // Non-focused displays: rewritten from the same bytes save-first used (a
   // failed save-first retries the whole write here). Re-edit passes null
@@ -457,9 +592,9 @@ export async function updatePack(
   if (!keepReplay) {
     if (input.replayWebm === null) {
       // The user excluded the replay at save time (e.g. privacy).
-      await rm(join(handle.dirPath, 'replay.webm'), { force: true })
+      await rm(join(handle.dirPath, replayFile), { force: true })
     } else {
-      await writeFile(join(handle.dirPath, 'replay.webm'), input.replayWebm)
+      await writeFile(join(handle.dirPath, replayFile), input.replayWebm)
     }
   }
 
@@ -476,22 +611,29 @@ export async function updatePack(
  * annotations — the caller starts a background render for the new folder).
  */
 export async function saveAsNewPack(sourceDir: string, input: ExportInput): Promise<PackHandle> {
+  // The source folder may still be finishing its save-first per-display write.
+  await settleDisplayWrites(sourceDir)
   const id = randomUUID()
-  const srcReplay = join(sourceDir, 'replay.webm')
+  const replayFile = replayFileName(input.replayFile)
+  const srcReplay = join(sourceDir, replayFile)
   const hasReplay = existsSync(srcReplay)
   // All-displays pack: only the per-display files actually present in the
   // source can travel, so the new pack declares exactly what it will contain.
   const displays = input.displays?.filter(
-    (d) => d.focused || existsSync(join(sourceDir, displaySnapshotName(d.index))),
+    (d) => d.focused || existsSync(join(sourceDir, d.snapshotFile)),
   )
-  const displayFiles: DisplayCapture[] | undefined = displays?.map((d) =>
+  const surviving: DisplayCapture[] | undefined = displays?.map((d) =>
     d.focused
       ? d
       : {
           ...d,
-          hasReplay: d.hasReplay && existsSync(join(sourceDir, displayReplayName(d.index))),
+          hasReplay:
+            d.hasReplay && d.replayFile !== null && existsSync(join(sourceDir, d.replayFile)),
         },
   )
+  // Fewer than two surviving displays is a SINGLE-display pack: media.displays
+  // exists only for a capture that covered more than one (SPEC §5.6).
+  const displayFiles = surviving !== undefined && surviving.length > 1 ? surviving : undefined
   const manifest = buildManifest({
     id,
     createdAt: input.capturedAt,
@@ -501,6 +643,7 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
     osVersion: release(),
     screens: input.screens ?? physicalScreens(),
     hasReplay,
+    replayFile,
     replayDurationMs: input.replayDurationMs,
     snapshotTMs: input.snapshotTMs,
     trimOffsetMs: input.trimOffsetMs,
@@ -519,18 +662,19 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
   const dirPath = uniquePackDir(dirname(sourceDir), new Date())
   try {
     await mkdir(dirPath)
-    await writePackFiles(dirPath, manifest, annotationsFile, timeline, input.docLanguage)
+    // A background render for the NEW folder always follows this save.
+    await writePackFiles(dirPath, manifest, annotationsFile, timeline, input.docLanguage, true)
     await writeFile(join(dirPath, 'snapshot.png'), input.snapshotPng)
-    if (hasReplay) await copyFile(srcReplay, join(dirPath, 'replay.webm'))
-    // Per-display media travels byte-for-byte with its declaration; entries
-    // that still carry bytes (a fresh capture saved as new) write them instead.
+    if (hasReplay) await copyFile(srcReplay, join(dirPath, replayFile))
+    // Per-display media travels byte-for-byte with its declaration — under the
+    // names the source pack declared, never names re-derived from the index.
     for (const d of displayFiles ?? []) {
       if (d.focused) continue
-      const snapName = displaySnapshotName(d.index)
+      const snapName = d.snapshotFile
       if (d.snapshotPng !== null) await writeFile(join(dirPath, snapName), d.snapshotPng)
       else await copyFile(join(sourceDir, snapName), join(dirPath, snapName))
-      if (!d.hasReplay) continue
-      const replayName = displayReplayName(d.index)
+      if (!d.hasReplay || d.replayFile === null) continue
+      const replayName = d.replayFile
       if (d.replayWebm !== null) await writeFile(join(dirPath, replayName), d.replayWebm)
       else await copyFile(join(sourceDir, replayName), join(dirPath, replayName))
     }
@@ -550,25 +694,81 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
   return { id, dirPath }
 }
 
-/** The metadata + generated documents common to save-first and finalize. */
+/**
+ * The metadata + generated documents common to save-first and finalize.
+ *
+ * `renderPending` is what lets the documents reference the annotated keyframe
+ * stills BEFORE the background render has written them (the shared rule in
+ * shared/keyframes.ts makes the filenames deterministic). It is false for a
+ * save-first folder, which no render ever follows — the documents of a
+ * cancelled capture must not link images that will never exist (SPEC §12.2).
+ */
 async function writePackFiles(
   dirPath: string,
   manifest: Manifest,
   annotationsFile: AnnotationsFile,
   timeline: TimelineFile,
   docLanguage: Language = 'en',
+  renderPending = false,
 ): Promise<void> {
-  const skills = buildSkills(manifest, annotationsFile, timeline, docLanguage)
   await mkdir(join(dirPath, 'skills'), { recursive: true })
   await mkdir(join(dirPath, 'plugins'), { recursive: true })
   await writeFile(join(dirPath, 'manifest.json'), toJson(manifest))
   await writeFile(join(dirPath, 'annotations.json'), toJson(annotationsFile))
   await writeFile(join(dirPath, 'timeline.json'), toJson(timeline))
-  await writeFile(join(dirPath, 'report.md'), buildReport(manifest, annotationsFile, docLanguage), 'utf8')
-  await writeFile(join(dirPath, 'README.md'), buildReadme(manifest, annotationsFile, docLanguage), 'utf8')
+  await writeDocs(dirPath, manifest, annotationsFile, timeline, docLanguage, renderPending)
+}
+
+/** report.md + README.md + skills/ — the three generated documents, one writer. */
+async function writeDocs(
+  dirPath: string,
+  manifest: Manifest,
+  annotationsFile: AnnotationsFile,
+  timeline: TimelineFile,
+  docLanguage: Language,
+  renderPending: boolean,
+): Promise<void> {
+  const skills = buildSkills(manifest, annotationsFile, timeline, docLanguage, renderPending)
+  await writeFile(
+    join(dirPath, 'report.md'),
+    buildReport(manifest, annotationsFile, docLanguage, renderPending),
+    'utf8',
+  )
+  await writeFile(
+    join(dirPath, 'README.md'),
+    buildReadme(manifest, annotationsFile, docLanguage, renderPending),
+    'utf8',
+  )
   for (const name of SKILLS_FILES) {
     await writeFile(join(dirPath, 'skills', `${name}.md`), skills[name], 'utf8')
   }
+}
+
+/**
+ * Regenerates the three documents from what is ON DISK now — called once the
+ * background render has declared its outputs.
+ *
+ * The documents are written BEFORE the render, from the deterministic keyframe
+ * rule, so they can name stills that do not exist yet. If the render then
+ * produced a different set (a still that failed to encode is dropped and the
+ * survivors renumber, SPEC §5.7 requires NN == array position), every later
+ * image link in report.md/README.md/skills/overview.md would point at a file
+ * that was never written. Rewriting them from the finished declaration is what
+ * makes "the documents describe the pack" true again.
+ *
+ * Never fatal: a pack whose documents could not be refreshed is still valid.
+ */
+export async function refreshPackDocs(dirPath: string, docLanguage: Language = 'en'): Promise<void> {
+  const manifest = JSON.parse(await readFile(join(dirPath, 'manifest.json'), 'utf8')) as Manifest
+  const annotationsFile = JSON.parse(
+    await readFile(join(dirPath, 'annotations.json'), 'utf8'),
+  ) as AnnotationsFile
+  if (!Array.isArray(annotationsFile.annotations)) return
+  const timeline = JSON.parse(await readFile(join(dirPath, 'timeline.json'), 'utf8')) as TimelineFile
+  if (!Array.isArray(timeline.events)) return
+  // The render has already run: nothing further will write stills, so an
+  // undeclared keyframe set is an ABSENT one, not a pending one.
+  await writeDocs(dirPath, manifest, annotationsFile, timeline, docLanguage, false)
 }
 
 /**
@@ -592,8 +792,18 @@ export async function setManifestRenderOutputs(
   if (outputs.replayAnnotated && manifest.media.replay !== null) {
     manifest.media.replay_annotated = 'replay_annotated.webm'
   }
-  if (outputs.keyframes.length > 0) {
-    manifest.media.keyframes = outputs.keyframes.map((k) => ({ file: k.file, t_ms: k.t_ms }))
+  // Belt and braces against a second render for the same folder having wiped
+  // frames/ between this render's writes and this declaration: a declared file
+  // MUST exist (SPEC §5.7). Renders are serialized (annotatedRender.ts), so
+  // this normally truncates nothing. A PREFIX rather than a filter: NN is the
+  // entry's 1-based position, so skipping a middle entry would be invalid too.
+  const present: ManifestKeyframe[] = []
+  for (const k of outputs.keyframes) {
+    if (!existsSync(join(handle.dirPath, k.file))) break
+    present.push(k)
+  }
+  if (present.length > 0) {
+    manifest.media.keyframes = present.map((k) => ({ file: k.file, t_ms: k.t_ms }))
   } else {
     delete manifest.media.keyframes
   }

@@ -19,6 +19,15 @@ const MIN_SIDE = 6
  */
 const MAX_AREA_FRACTION = 0.8
 /**
+ * A second, dimensional guard on the same idea. An element can be a window /
+ * client area / pane without covering 80% of the SNAPSHOT — a half-screen
+ * maximized 1920x2160 window on a 3840x2160 desktop is only 50% of it — and
+ * snapping a box onto a whole window is never a useful annotation. An element
+ * that is large in BOTH axes is a frame, not a control; large in one axis (a
+ * toolbar, a list, a side panel) still is one.
+ */
+const MAX_SIDE_FRACTION = 0.7
+/**
  * Elements spanning more cells than this go into a linear overflow list instead
  * of being written into every cell they touch — an index build is O(elements),
  * never O(elements x screen area).
@@ -75,6 +84,8 @@ export class ObjectIndex {
    */
   static build(elements: readonly EditorUiaElement[], width: number, height: number): ObjectIndex {
     const maxArea = width * height * MAX_AREA_FRACTION
+    const maxW = width * MAX_SIDE_FRACTION
+    const maxH = height * MAX_SIDE_FRACTION
     const objects: PickableObject[] = []
     for (const element of elements) {
       const x0 = Math.max(0, Math.round(element.bounds.x))
@@ -88,6 +99,7 @@ export class ObjectIndex {
       if (w < MIN_SIDE || h < MIN_SIDE) continue
       const area = w * h
       if (area > maxArea) continue
+      if (w > maxW && h > maxH) continue
       objects.push({ element, x: x0, y: y0, width: w, height: h, area })
     }
     objects.sort((a, b) => a.area - b.area)
