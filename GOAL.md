@@ -193,6 +193,17 @@ A `.capturepack` file (a standard ZIP) contains:
 
 No plugins required. Everything works locally.
 
+**Output layout** — not a bare zip dropped in one folder. Every capture lands in a date
+folder as BOTH forms (equally valid per SPEC):
+
+```
+CapturePack/
+└── 2026-07-27/
+    ├── capture-143059/             ← extracted, browsable
+    │   ├── manifest.json …
+    └── capture-143059.capturepack  ← the shareable file
+```
+
 ---
 
 ## V1 Release & Auto-Update (Required)
@@ -527,6 +538,26 @@ Settings are edited in a GUI window — never by opening settings.json in an edi
     status icon and Enable/Disable; Chrome DOM appears first (install/health-check UX per
     "Extension Install & Management UX"); others listed as coming soon.
 - Settings values validate on input; invalid values never write to settings.json.
+
+---
+
+## Multi-Monitor Support
+
+Dual (and more) monitor setups are fully supported.
+
+- **Capture display** is selectable in Settings: a list of connected displays with
+  resolution/position labels. Modes:
+  - **Cursor display (default)** — at Ctrl+Alt+C, the capture follows the display the mouse
+    cursor is on. The replay buffer records every connected display so the last 30 seconds
+    exist for whichever display the trigger picks; the export contains the triggered
+    display's replay + snapshot.
+  - **Fixed display** — record only the chosen display (lower CPU; the buffer runs on one
+    display only).
+- The annotation editor always opens fullscreen on the captured display.
+- `manifest.environment.screens` continues to list every connected display; the captured
+  one is the snapshot's coordinate space.
+- Display hotplug (connect/disconnect, resolution change) restarts the affected recorders
+  without losing the app.
 
 ---
 

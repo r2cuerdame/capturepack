@@ -26,6 +26,10 @@ export class ScrubController {
   private seekInFlight = false
   private rafId = 0
   private settleWaiters: Array<() => void> = []
+  // The Infinity-duration workaround performs seeks the position model must
+  // ignore: they end at the file tail and would otherwise read as user scrubs.
+  private workaroundSeek = false
+  private durationAdopted = false
 
   constructor(webm: ArrayBuffer, fallbackDurationMs: number, private readonly host: ScrubHost) {
     this.durationMs = Math.max(1, Math.round(fallbackDurationMs))
@@ -39,14 +43,23 @@ export class ScrubController {
       () => {
         // MediaRecorder webm reports Infinity until parsed to the end; a far
         // seek forces Chromium to resolve the real duration (durationchange).
-        if (video.duration === Infinity) video.currentTime = 1e7
+        if (video.duration === Infinity) {
+          this.workaroundSeek = true
+          video.currentTime = 1e7
+        }
       },
       { once: true },
     )
     video.addEventListener('durationchange', () => this.adoptDuration())
     video.addEventListener('canplay', () => this.markReady())
     video.addEventListener('seeked', () => this.onSeeked())
-    video.addEventListener('ended', () => this.snapToNow())
+    // 'ended' only matters during playback. Chromium also fires it when a seek
+    // lands on the file tail (including the duration workaround above); letting
+    // that snap to "now" made wheel scrubbing keep jumping back to the latest
+    // frame. Paused seeks must never move the position model.
+    video.addEventListener('ended', () => {
+      if (this.playing) this.snapToNow()
+    })
     video.addEventListener('error', () => {
       this.failed = true
       this.notifySettled() // in-flight seeks will never complete; release waiters
@@ -171,9 +184,15 @@ export class ScrubController {
     const seconds = this.video.duration
     if (!Number.isFinite(seconds) || seconds <= 0) return
     const ms = seconds * 1000
-    const wasAtEnd = this.tMs >= this.durationMs
+    // Cue-less webm re-parses can re-fire durationchange with small jitter on
+    // every seek; adopting each value dragged the position toward the end
+    // while the user was scrubbing. Ignore refinements once adopted.
+    if (this.durationAdopted && Math.abs(ms - this.durationMs) < 250) return
+    this.durationAdopted = true
     this.durationMs = ms
-    this.tMs = wasAtEnd ? ms : Math.min(this.tMs, ms)
+    // "At the end" is the explicit native-snapshot state, never inferred from
+    // the numbers — a scrubbed position only gets clamped into range.
+    this.tMs = this.showingNative ? ms : Math.min(this.tMs, ms)
     this.host.onState()
   }
 
@@ -192,6 +211,13 @@ export class ScrubController {
   }
 
   private onSeeked(): void {
+    if (this.workaroundSeek) {
+      this.workaroundSeek = false
+      // The duration probe's own completion carries no user position — consume
+      // it. If a real scrub superseded the probe, fall through and process
+      // this event as that seek's completion instead.
+      if (!this.seekInFlight && this.pendingSeekMs === null) return
+    }
     this.seekInFlight = false
     if (!this.showingNative && !this.playing) {
       this.host.drawFrame(this.video)

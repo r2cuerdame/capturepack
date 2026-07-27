@@ -3,8 +3,8 @@
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { release, tmpdir } from 'node:os'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { release } from 'node:os'
 import { join } from 'node:path'
 import { app, screen, shell } from 'electron'
 import AdmZip from 'adm-zip'
@@ -120,29 +120,42 @@ export async function exportPack(input: ExportInput): Promise<string> {
   const timeline = withExportEvent(input.timeline, new Date())
   const report = buildReport(manifest, annotationsFile)
 
-  const stageDir = await mkdtemp(join(tmpdir(), 'capturepack-'))
+  // Layout: outputDir/YYYY-MM-DD/capture-HHmmss/ (extracted, browsable) plus
+  // outputDir/YYYY-MM-DD/capture-HHmmss.capturepack (the shareable file).
+  // Both forms are equally valid packs per SPEC §3.2.
+  const dayDir = join(input.outputDir, dayFolder(input.capturedAt))
+  await mkdir(dayDir, { recursive: true })
+  const { dirPath, packPath } = uniquePackPaths(dayDir, input.capturedAt)
   try {
-    await writeFile(join(stageDir, 'manifest.json'), toJson(manifest))
-    await writeFile(join(stageDir, 'snapshot.png'), input.snapshotPng)
-    await writeFile(join(stageDir, 'annotations.json'), toJson(annotationsFile))
-    await writeFile(join(stageDir, 'timeline.json'), toJson(timeline))
-    await writeFile(join(stageDir, 'report.md'), report, 'utf8')
+    await mkdir(dirPath)
+    await writeFile(join(dirPath, 'manifest.json'), toJson(manifest))
+    await writeFile(join(dirPath, 'snapshot.png'), input.snapshotPng)
+    await writeFile(join(dirPath, 'annotations.json'), toJson(annotationsFile))
+    await writeFile(join(dirPath, 'timeline.json'), toJson(timeline))
+    await writeFile(join(dirPath, 'report.md'), report, 'utf8')
     if (input.replayWebm !== null) {
-      await writeFile(join(stageDir, 'replay.webm'), input.replayWebm)
+      await writeFile(join(dirPath, 'replay.webm'), input.replayWebm)
     }
 
-    await mkdir(input.outputDir, { recursive: true })
-    const packPath = uniquePackPath(input.outputDir, input.capturedAt)
     const zip = new AdmZip()
-    zip.addLocalFolder(stageDir)
+    zip.addLocalFolder(dirPath)
     await zip.writeZipPromise(packPath)
 
     shell.showItemInFolder(packPath)
     if (input.copyToClipboard) copyFileToClipboard(packPath)
     return packPath
-  } finally {
-    await rm(stageDir, { recursive: true, force: true })
+  } catch (err) {
+    // Never leave a half-written pack behind.
+    await rm(dirPath, { recursive: true, force: true })
+    await rm(packPath, { force: true })
+    throw err
   }
+}
+
+/** Local-date folder name for a capture, e.g. 2026-07-27. */
+function dayFolder(date: Date): string {
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
 }
 
 function physicalScreens(): Array<{ width: number; height: number; scale: number }> {
@@ -163,16 +176,15 @@ function withExportEvent(timeline: TimelineFile, now: Date): TimelineFile {
   }
 }
 
-function uniquePackPath(outputDir: string, date: Date): string {
+function uniquePackPaths(dayDir: string, date: Date): { dirPath: string; packPath: string } {
   const pad = (n: number): string => String(n).padStart(2, '0')
-  const stem =
-    `capture-${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}` +
-    `-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
-  let candidate = join(outputDir, `${stem}.capturepack`)
-  for (let n = 2; existsSync(candidate); n += 1) {
-    candidate = join(outputDir, `${stem}-${n}.capturepack`)
+  const stem = `capture-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
+  for (let n = 1; ; n += 1) {
+    const name = n === 1 ? stem : `${stem}-${n}`
+    const dirPath = join(dayDir, name)
+    const packPath = join(dayDir, `${name}.capturepack`)
+    if (!existsSync(dirPath) && !existsSync(packPath)) return { dirPath, packPath }
   }
-  return candidate
 }
 
 // Set-Clipboard -LiteralPath puts the file itself (not its path as text) on the
