@@ -105,6 +105,7 @@ Generated CapturePacks should remain readable forever.
 | --- | --- |
 | Primary | The creator naturally uses CapturePack every day. |
 | Secondary | Developers begin attaching CapturePack files instead of screenshots. |
+| Operational | Install once from a GitHub Release, then keep using it for a month without any manual reinstall. |
 | Long-term | CapturePack becomes an open specification adopted by other tools. |
 
 ---
@@ -135,6 +136,103 @@ Generated CapturePacks should remain readable forever.
 - `report.md`
 
 No plugins required. Everything works locally.
+
+---
+
+## V1 Release & Auto-Update (Required)
+
+Auto-update is **required in V1** — not a nice-to-have. The creator uses CapturePack daily while
+fixing it frequently; downloading a ZIP from GitHub and replacing files by hand breaks the usage
+habit. Auto-update is the deployment infrastructure that turns CapturePack from a development
+experiment into a real resident tool.
+
+**Update flow (Windows)**
+
+```
+GitHub Release
+    ↓
+Check latest version on app start
+    ↓
+Notify if a new version exists
+    ↓
+Background download
+    ↓
+Replace on app exit
+    ↓
+Relaunch
+```
+
+**Auto-update principles**
+
+- GitHub Releases only — no separate update server.
+- No forced restart while in use.
+- If an update fails, keep the existing version.
+- Hash verification (SHA-256) of update files.
+- Auto-check can be disabled in settings.
+- Stable / Preview channels can be separated.
+
+**Update UX**
+
+Fully unattended updates are not the starting point. The safe initial UX:
+
+```
+CapturePack 0.1.4 available
+
+[Restart and update]  [Later]
+```
+
+Download ahead of time; let the user restart after finishing their work. CapturePack holds a live
+screen replay buffer — force-killing it is not acceptable.
+
+**Release pipeline**
+
+```
+Git tag: v0.1.4
+    ↓
+GitHub Actions
+    ↓
+Build + Test
+    ↓
+Code sign
+    ↓
+Generate SHA-256
+    ↓
+Upload GitHub Release
+    ↓
+Update latest.json
+```
+
+Example `latest.json`:
+
+```json
+{
+  "version": "0.1.4",
+  "channel": "stable",
+  "url": "GitHub Release asset URL",
+  "sha256": "...",
+  "minimum_supported_version": "0.1.0",
+  "release_notes": "..."
+}
+```
+
+**Update security**
+
+CapturePack runs continuously and handles screen content, so update security matters more than
+usual. Minimum requirements:
+
+- HTTPS only.
+- SHA-256 verification.
+- Windows code signing when possible.
+- Signature verification of the update executable.
+- Never update from arbitrary URLs.
+
+**V1 completion criteria**
+
+- Installable Windows release
+- GitHub Releases-based updater
+- Update notification and restart-to-update
+- Rollback-safe installation
+- Automatic build and release workflow
 
 ---
 
