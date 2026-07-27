@@ -1,5 +1,6 @@
 // System tray icon and context menu. Labels come from the shared i18n layer;
-// refreshLanguage() rebuilds the menu the moment the language setting changes.
+// refresh() rebuilds the menu the moment the language OR the capture hotkey
+// setting changes (both are baked into the "Capture now" label).
 import { app, Menu, Tray } from 'electron'
 import type { MenuItemConstructorOptions } from 'electron'
 import * as path from 'node:path'
@@ -17,11 +18,20 @@ export interface TrayHandlers {
 
 export interface TrayControls {
   setUpdateReady(version: string | null): void
-  /** Rebuilds the menu with the current language (settings GUI instant apply). */
-  refreshLanguage(): void
+  /**
+   * Rebuilds the menu with the current language and capture hotkey (settings
+   * GUI instant apply).
+   */
+  refresh(): void
 }
 
-export function createTray(handlers: TrayHandlers, getLanguage: () => Language): TrayControls {
+// Both getters read the LIVE settings object at call time, so refresh() always
+// renders what was just saved.
+export function createTray(
+  handlers: TrayHandlers,
+  getLanguage: () => Language,
+  getHotkey: () => string,
+): TrayControls {
   const tray = new Tray(path.join(app.getAppPath(), 'dist', 'assets', 'tray.png'))
   tray.setToolTip('CapturePack') // product name — never translated
 
@@ -32,7 +42,7 @@ export function createTray(handlers: TrayHandlers, getLanguage: () => Language):
     // Menu order (GOAL "History" navigation):
     // Capture now · History · Open output folder · Open settings
     const items: MenuItemConstructorOptions[] = [
-      { label: t('tray.captureNow'), click: () => handlers.onCapture() },
+      { label: t('tray.captureNow', { hotkey: getHotkey() }), click: () => handlers.onCapture() },
       { label: t('tray.history'), click: () => handlers.onOpenHistory() },
       { label: t('tray.openOutput'), click: () => handlers.onOpenOutput() },
       { label: t('tray.settings'), click: () => handlers.onOpenSettings() },
@@ -58,7 +68,7 @@ export function createTray(handlers: TrayHandlers, getLanguage: () => Language):
       updateVersion = version
       rebuildMenu()
     },
-    refreshLanguage(): void {
+    refresh(): void {
       rebuildMenu()
     },
   }

@@ -137,9 +137,9 @@ export interface EditorInitPayload {
   // manifest title/note to prefill the top-bar inputs ('' for a fresh capture)
   title: string
   note: string
-  // True when re-editing a saved pack from History: the include-replay
-  // checkbox is hidden (replay.webm is never touched on re-edit), dirty
-  // tracking shows the "Unsaved changes" chip, and Esc when dirty offers
+  // True when re-editing a saved pack from History: the trim handles are
+  // hidden (replay.webm is never touched on re-edit), dirty tracking shows
+  // the "Unsaved changes" chip, and Esc when dirty offers
   // [Save] [Save As New CapturePack] [Discard] instead of closing.
   editMode: boolean
   // Resolved UI language (shared/i18n Language) the editor renders its
@@ -162,7 +162,6 @@ export interface EditorExportPayload {
   snapshotPng: ArrayBuffer
   title: string
   note: string
-  includeReplay: boolean
   // Replay position (ms) of the exported frame; null = the capture instant ("now")
   snapshotTMs: number | null
   // Replay trim range (GOAL "Replay Trim") on the replay clock. null on a
@@ -269,6 +268,10 @@ export interface SettingsSetResult {
   // The full settings after the patch was validated and applied — the GUI
   // resyncs from this so a rejected value visibly snaps back.
   settings: Settings
+  // The patch changed captureHotkey but the OS refused to register it (another
+  // app owns the combination): `settings` carries the REVERTED value, the old
+  // accelerator still works, and the GUI shows its inline conflict error.
+  hotkeyFailed?: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -311,6 +314,9 @@ export interface HistoryListResult {
   // Resolved UI language; the window re-applies it on every re-list, which is
   // how a language change reaches an already-open History window.
   uiLanguage: string
+  // Current capture accelerator, for the "press {hotkey} to capture" empty
+  // state. Travels with the list for the same reason uiLanguage does.
+  captureHotkey: string
 }
 
 export interface HistoryActionResult {

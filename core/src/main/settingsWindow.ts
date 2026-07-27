@@ -12,6 +12,7 @@ import type { SettingsDisplayOption, SettingsGetResult, SettingsSetResult } from
 import { resolveLanguage } from '../shared/i18n'
 import type { Settings } from '../shared/types'
 import { restartCapture } from './capture'
+import { currentCaptureHotkey, registerCaptureHotkey } from './hotkey'
 import { uiLanguage, uiT } from './locale'
 import { applyPartial, clearOutputDirOverride, persistSettings } from './settings'
 import { setAutoUpdateCheck } from './updater'
@@ -24,6 +25,12 @@ export interface SettingsIpcHooks {
   // Fired after a settings:set patch changed the UI language (instant apply:
   // index.ts rebuilds the tray and nudges the History window).
   onLanguageChanged?: () => void
+  // The capture action a re-registered hotkey must trigger — the same closure
+  // index.ts bound at startup, so the accelerator swap changes nothing else.
+  onCapture?: () => void
+  // Fired after the capture hotkey was successfully re-registered (the tray's
+  // "Capture now" label shows the accelerator).
+  onHotkeyChanged?: () => void
 }
 
 // Registers the settings IPC handlers around the live settings object — the
@@ -67,8 +74,27 @@ export function registerSettingsIpc(live: Settings, hooks: SettingsIpcHooks = {}
     if (typeof safePatch.outputDir === 'string' && applied.outputDir === safePatch.outputDir) {
       clearOutputDirOverride()
     }
+    // Capture hotkey (GOAL "Settings GUI" > Capture): applies instantly, and a
+    // conflict with another app's global shortcut is only detectable BY
+    // registering. On failure the setting reverts before anything is written,
+    // so the old accelerator keeps working and settings.json never records a
+    // hotkey the app does not actually hold; the renderer shows it inline.
+    // A hotkey patch re-registers whenever the accelerator the app actually
+    // HOLDS differs from the configured one — not merely when the value
+    // changed. A conflict at startup leaves settings.json naming a combination
+    // nothing is registered for; re-recording that same combination once the
+    // other app is gone must be able to take it back (value equality would
+    // make that patch, and Backspace-to-default, silent no-ops).
+    let hotkeyFailed = false
+    const hotkeyPatched = typeof safePatch.captureHotkey === 'string'
+    if (
+      live.captureHotkey !== before.captureHotkey ||
+      (hotkeyPatched && currentCaptureHotkey() !== live.captureHotkey)
+    ) {
+      hotkeyFailed = !applyCaptureHotkey(live, before.captureHotkey, hooks)
+    }
     try {
-      persistSettings(applied)
+      persistSettings({ ...live })
     } catch (err) {
       console.error('capturepack: settings write failed:', errorMessage(err))
     }
@@ -88,7 +114,7 @@ export function registerSettingsIpc(live: Settings, hooks: SettingsIpcHooks = {}
     if (live.language !== before.language) {
       hooks.onLanguageChanged?.()
     }
-    return { settings: { ...live } }
+    return { settings: { ...live }, hotkeyFailed }
   })
 
   ipcMain.handle(IPC.settingsPickOutputDir, async (): Promise<string | null> => {
@@ -142,6 +168,25 @@ export function openSettingsWindow(): void {
   })
   void win.loadFile(path.join(app.getAppPath(), 'dist', 'renderer', 'settings', 'settings.html'))
   settingsWindow = win
+}
+
+// Re-registers the capture hotkey after `live.captureHotkey` changed. Returns
+// true when the new accelerator is now live; on refusal `live.captureHotkey` is
+// rolled back to `previous`, that accelerator is put back in place, and the
+// caller reports the conflict to the settings window.
+function applyCaptureHotkey(live: Settings, previous: string, hooks: SettingsIpcHooks): boolean {
+  const handler = hooks.onCapture
+  if (handler === undefined) return true // No capture wired (tests/dev harness).
+  if (registerCaptureHotkey(live.captureHotkey, handler)) {
+    hooks.onHotkeyChanged?.()
+    return true
+  }
+  live.captureHotkey = previous
+  // Best effort: the previous accelerator was just released, so take it back.
+  // A failure here would mean another app grabbed it in between — nothing left
+  // to do but leave the app hotkey-less until the next successful change.
+  registerCaptureHotkey(previous, handler)
+  return false
 }
 
 // Labels use physical pixels (size x scaleFactor) so they match the snapshot

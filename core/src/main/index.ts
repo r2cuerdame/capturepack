@@ -4,6 +4,7 @@ import * as fs from 'node:fs'
 import type { UpdaterStatusPayload } from '../shared/ipc'
 import { setupDisplayMediaHandler, startCapture } from './capture'
 import { disposeHistory, notifyHistoryChanged, openHistoryWindow, registerHistoryIpc } from './historyWindow'
+import { registerCaptureHotkey } from './hotkey'
 import { uiLanguage, uiT } from './locale'
 import { startMcpServer } from './mcp/server'
 import type { McpServerHandle } from './mcp/server'
@@ -57,9 +58,13 @@ function main(): void {
     // GUI applies changes via restartCapture(settings).
     await startCapture(settings)
 
-    // Assigned right below; the language-change hook fires only from the
-    // settings GUI, which cannot open before the tray exists.
+    // Assigned right below; the settings-GUI hooks fire only from that window,
+    // which cannot open before the tray exists.
     let tray: TrayControls | null = null
+
+    const capture = (): void => {
+      void startCaptureFlow(settings)
+    }
 
     // The settings GUI mutates this exact `settings` object in place, so every
     // closure below (capture flow, tray, MCP request logging) applies changes
@@ -68,16 +73,20 @@ function main(): void {
       // Instant apply (GOAL i18n): tray menu rebuilds immediately; an open
       // History window re-renders via its normal re-list push.
       onLanguageChanged: () => {
-        tray?.refreshLanguage()
+        tray?.refresh()
+        notifyHistoryChanged()
+      },
+      // What a re-registered capture hotkey has to trigger.
+      onCapture: capture,
+      // The tray's "Capture now" label and the History empty state both carry
+      // the accelerator: same refresh path as a language change.
+      onHotkeyChanged: () => {
+        tray?.refresh()
         notifyHistoryChanged()
       },
     })
     // Same live settings object: History honors outputDir changes on next access.
     registerHistoryIpc(settings)
-
-    const capture = (): void => {
-      void startCaptureFlow(settings)
-    }
 
     tray = createTray(
       {
@@ -92,6 +101,7 @@ function main(): void {
         onQuit: () => app.quit(),
       },
       () => uiLanguage(settings),
+      () => settings.captureHotkey,
     )
     const trayControls = tray
 
@@ -100,13 +110,13 @@ function main(): void {
     // Dev aid / headed testing: open the History window on launch.
     if (process.argv.includes('--show-history')) openHistoryWindow()
 
-    if (!globalShortcut.register('Ctrl+Alt+C', capture)) {
+    if (!registerCaptureHotkey(settings.captureHotkey, capture)) {
       // Async on purpose: showErrorBox blocks the main-process event loop until
       // dismissed, which would freeze the always-on MCP server with it.
       void dialog.showMessageBox({
         type: 'error',
         title: 'CapturePack', // product name — never translated
-        message: uiT(settings)('app.hotkeyFailed'),
+        message: uiT(settings)('app.hotkeyFailed', { hotkey: settings.captureHotkey }),
       })
     }
 

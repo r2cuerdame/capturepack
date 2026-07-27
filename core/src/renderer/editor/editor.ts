@@ -67,8 +67,6 @@ const textEditor = el<HTMLInputElement>('textEditor')
 const titleInput = el<HTMLInputElement>('titleInput')
 const noteInput = el<HTMLInputElement>('noteInput')
 const replayChip = el<HTMLSpanElement>('replayChip')
-const replayToggle = el<HTMLLabelElement>('replayToggle')
-const includeReplay = el<HTMLInputElement>('includeReplay')
 const colorBtn = el<HTMLButtonElement>('colorBtn')
 const colorSwatch = el<HTMLSpanElement>('colorSwatch')
 const exportBtn = el<HTMLButtonElement>('exportBtn')
@@ -297,10 +295,9 @@ function syncLanes(): void {
 const TRIM_MIN_GAP_MS = 100
 
 function trimEnabled(): boolean {
-  // An excluded replay cannot be trimmed: with "include replay" unchecked the
-  // save drops replay.webm entirely (main nulls the trim and keeps every box),
-  // so the handles, the I/O keys, and the drop hint all go dormant with it.
-  return scrub !== null && !editMode && includeReplay.checked
+  // The replay is ALWAYS kept when one exists (GOAL "No include-replay
+  // toggle"), so trimming is available whenever a fresh capture has one.
+  return scrub !== null && !editMode
 }
 
 function trimActive(): boolean {
@@ -369,14 +366,6 @@ function syncTrimDropChip(): void {
       n === 1 ? t('editor.trimDropOne') : t('editor.trimDropMany', { count: n })
   }
 }
-
-// Unchecking "include replay" makes any trim moot (see trimEnabled): hide the
-// handles and the drop hint while unchecked; the in/out points survive so
-// re-checking restores them exactly.
-includeReplay.addEventListener('change', () => {
-  timebar.setTrimEnabled(!editMode && includeReplay.checked)
-  syncTrim()
-})
 
 // ---------------------------------------------------------------------------
 // Box creation (right-drag) + commit
@@ -1115,9 +1104,6 @@ async function doExport(kind: 'save' | 'saveAsNew' = 'save'): Promise<void> {
       snapshotPng,
       title: titleInput.value.trim(),
       note: noteInput.value.trim(),
-      // Hidden checkbox in edit mode: replay.webm is never touched on re-edit
-      // (main saves with keepReplay), so report the replay as included.
-      includeReplay: hasReplay && (editMode || includeReplay.checked),
       snapshotTMs: scrub ? scrub.exportTMs() : null,
       trimStartMs: trim.start,
       trimEndMs: trim.end,
@@ -1161,8 +1147,6 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
   replayChip.textContent = hasReplay
     ? t('editor.replaySeconds', { seconds: Math.round(payload.replayDurationMs / 1000) })
     : t('editor.noReplay')
-  // Edit mode never offers include-replay: replay.webm is not touched on re-edit.
-  replayToggle.hidden = !hasReplay || editMode
   loaded = true
   // The replay loads asynchronously behind the instantly-usable snapshot;
   // the timebar shows "loading replay…" until scrubbing is ready.
@@ -1181,10 +1165,9 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
     })
     scrub = controller
     timebar.show()
-    // Trim handles exist only in the fresh-capture flow (GOAL "Replay Trim")
-    // and only while the replay is included; in edit mode they stay hidden and
-    // the export payload stays null/null.
-    timebar.setTrimEnabled(!editMode && includeReplay.checked)
+    // Trim handles exist only in the fresh-capture flow (GOAL "Replay Trim");
+    // in edit mode they stay hidden and the export payload stays null/null.
+    timebar.setTrimEnabled(!editMode)
     timebar.update(controller)
     syncLanes()
   }

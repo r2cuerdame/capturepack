@@ -153,6 +153,12 @@ export interface TimelineFile {
 }
 
 // App settings (not part of the pack format).
+
+// The out-of-the-box capture accelerator (GOAL "Settings GUI" > Capture). Both
+// the settings default and the settings GUI's reset-to-default read this one
+// constant so the two can never drift.
+export const DEFAULT_CAPTURE_HOTKEY = 'Ctrl+Alt+C'
+
 export interface Settings {
   // UI language: "system" (default — app.getLocale() at runtime) or a
   // supported language code from shared/i18n.ts (en/ko/ja/zh/es/fr/de/pt/ru).
@@ -163,6 +169,10 @@ export interface Settings {
   autoUpdateCheck: boolean
   outputDir: string
   copyToClipboard: boolean
+  // Global capture accelerator in Electron syntax, e.g. "Ctrl+Alt+C" (default
+  // DEFAULT_CAPTURE_HOTKEY). At least one modifier plus exactly one key; an
+  // unusable value falls back to the default when settings load.
+  captureHotkey: string
   replaySeconds: number
   fps: number
   // Capture display: "cursor" (default — follow the mouse at trigger; a

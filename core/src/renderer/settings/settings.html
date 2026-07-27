@@ -49,6 +49,33 @@
 
     <section aria-labelledby="hCapture">
       <h2 id="hCapture" data-i18n="settings.captureSection">Capture</h2>
+      <!-- Recordable field (GOAL "Settings GUI" > Capture): click (or Enter /
+           Space when focused) arms it, the next key combination is captured,
+           formatted as an Electron accelerator, and saved instantly. Tabbing
+           through it never arms it, so keyboard navigation is never trapped. -->
+      <div class="row rowCol">
+        <div class="rowTop">
+          <span class="label" id="captureHotkeyLabel" data-i18n="settings.captureHotkey">Capture hotkey</span>
+          <span class="control">
+            <button
+              id="captureHotkeyBtn"
+              type="button"
+              class="hotkey"
+              aria-labelledby="captureHotkeyLabel captureHotkeyBtn"
+            >Ctrl+Alt+C</button>
+          </span>
+        </div>
+        <div class="rowFoot">
+          <span class="subhint" id="captureHotkeyHint" data-i18n="settings.captureHotkeyHint">click the field (or press Enter), then press the new combination</span>
+          <!-- settings.hotkeyResetHint carries a {hotkey} variable, so the
+               renderer fills this one in (applyDomI18n cannot interpolate). -->
+          <span class="subhint" id="captureHotkeyRecordHint" hidden>Esc cancels · Backspace resets to Ctrl+Alt+C</span>
+          <!-- Two possible messages (in use by another app / not a usable
+               combination), so the renderer picks the key and fills this one
+               in rather than data-i18n binding it to a fixed one. -->
+          <span class="error" id="captureHotkeyError" hidden>That shortcut is in use by another app</span>
+        </div>
+      </div>
       <div class="row">
         <label class="label" for="captureDisplay" data-i18n="settings.captureDisplay">Capture display</label>
         <span class="control">

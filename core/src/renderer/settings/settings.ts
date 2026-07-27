@@ -11,6 +11,7 @@ import {
   SUPPORTED_LANGUAGES,
 } from '../../shared/i18n'
 import type { TranslateFn } from '../../shared/i18n'
+import { DEFAULT_CAPTURE_HOTKEY } from '../../shared/types'
 import type { Settings } from '../../shared/types'
 
 interface SettingsBridge {
@@ -43,6 +44,10 @@ const outputPath = el<HTMLDivElement>('outputPath')
 const changeOutputBtn = el<HTMLButtonElement>('changeOutputBtn')
 const openOutputBtn = el<HTMLButtonElement>('openOutputBtn')
 const captureDisplaySelect = el<HTMLSelectElement>('captureDisplay')
+const captureHotkeyBtn = el<HTMLButtonElement>('captureHotkeyBtn')
+const captureHotkeyHint = el<HTMLElement>('captureHotkeyHint')
+const captureHotkeyRecordHint = el<HTMLElement>('captureHotkeyRecordHint')
+const captureHotkeyError = el<HTMLElement>('captureHotkeyError')
 const mcpUrlEl = el<HTMLElement>('mcpUrl')
 const copyUrlBtn = el<HTMLButtonElement>('copyUrlBtn')
 const appVersionEl = el<HTMLSpanElement>('appVersion')
@@ -79,7 +84,12 @@ function refreshLanguage(): void {
   applyDomI18n(t)
   buildLanguageOptions()
   buildDisplayOptions()
+  // Interpolated strings applyDomI18n cannot fill in on its own.
   appVersionEl.textContent = t('settings.version', { version: appVersion })
+  captureHotkeyRecordHint.textContent = t('settings.hotkeyResetHint', {
+    hotkey: DEFAULT_CAPTURE_HOTKEY,
+  })
+  syncHotkeyField()
 }
 
 // Keys whose change the main process cannot honor without a restart; each has
@@ -93,11 +103,12 @@ function updateHints(): void {
   }
 }
 
-async function apply(patch: SettingsPatch): Promise<void> {
+async function apply(patch: SettingsPatch): Promise<SettingsSetResult> {
   const result = await bridge.set(patch)
   current = result.settings
   syncControls()
   updateHints()
+  return result
 }
 
 // ---------------------------------------------------------------------------
@@ -203,6 +214,175 @@ for (const field of NUMBER_FIELDS) {
     void apply(field.patch(clamped))
   })
 }
+
+// ---------------------------------------------------------------------------
+// Capture hotkey (GOAL "Settings GUI" > Capture): a recordable field. Clicking
+// it — or activating it from the keyboard with Enter/Space — arms it, the next
+// real key combination is captured, formatted as an Electron accelerator, and
+// saved instantly; Esc cancels and Backspace/Delete resets to the default. A
+// combination another app already owns cannot be registered — main reverts it
+// and the inline conflict error appears.
+//
+// Arming deliberately does NOT happen on focus: the armed field swallows every
+// keystroke, so a field that armed itself the moment Tab moved into it would
+// trap keyboard navigation (GOAL "Settings GUI": keyboard accessible).
+
+// Keys that only modify: pressing one alone keeps the field waiting.
+const MODIFIER_KEYS = new Set(['Control', 'Alt', 'Shift', 'Meta', 'AltGraph'])
+
+// event.key -> Electron accelerator key name, for keys whose name differs.
+// Tab is absent on purpose: it must always move focus, never be recorded.
+const ACCELERATOR_KEY_NAMES: Record<string, string> = {
+  ' ': 'Space',
+  Enter: 'Return',
+  // '+' is the accelerator separator, so Electron names it instead.
+  '+': 'Plus',
+  ArrowUp: 'Up',
+  ArrowDown: 'Down',
+  ArrowLeft: 'Left',
+  ArrowRight: 'Right',
+  PageUp: 'PageUp',
+  PageDown: 'PageDown',
+  Home: 'Home',
+  End: 'End',
+  Insert: 'Insert',
+}
+
+let recordingHotkey = false
+// Which inline error the hotkey row shows, or null for none. Kept as a KEY (not
+// rendered text) so an instant language switch re-renders a visible error.
+type HotkeyErrorKey = 'settings.hotkeyConflict' | 'settings.hotkeyInvalid'
+let hotkeyErrorKey: HotkeyErrorKey | null = null
+
+/** The accelerator key name for a keydown, or null when it has none we can use. */
+function acceleratorKey(event: KeyboardEvent): string | null {
+  const named = ACCELERATOR_KEY_NAMES[event.key]
+  if (named !== undefined) return named
+  if (/^F\d{1,2}$/.test(event.key)) return event.key
+  // Letters and digits come from the PHYSICAL key so a non-Latin layout still
+  // produces the accelerator the OS will match.
+  const code = event.code
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3)
+  if (/^Digit\d$/.test(code)) return code.slice(5)
+  if (/^Numpad\d$/.test(code)) return `num${code.slice(6)}`
+  // Punctuation: the single character the active layout produces, but only
+  // when it is printable ASCII — that is the whole set Electron can name.
+  // Anything else (ä, ß, …) has no accelerator, so the field keeps waiting
+  // instead of emitting a combination that could never register.
+  if (/^[\x21-\x7e]$/.test(event.key)) return event.key.toUpperCase()
+  return null
+}
+
+/**
+ * Electron accelerator for a keydown, or null when it is not a usable
+ * combination (no modifier, or a key with no accelerator name). Windows is the
+ * shipped platform, so the modifier is the literal Ctrl — CommandOrControl
+ * would only matter on macOS.
+ */
+function toAccelerator(event: KeyboardEvent): string | null {
+  const parts: string[] = []
+  if (event.ctrlKey) parts.push('Ctrl')
+  if (event.altKey) parts.push('Alt')
+  if (event.shiftKey) parts.push('Shift')
+  if (event.metaKey) parts.push('Super')
+  if (parts.length === 0) return null
+  const key = acceleratorKey(event)
+  if (key === null) return null
+  parts.push(key)
+  return parts.join('+')
+}
+
+function syncHotkeyField(): void {
+  captureHotkeyBtn.textContent = recordingHotkey
+    ? t('settings.hotkeyRecording')
+    : (current?.captureHotkey ?? DEFAULT_CAPTURE_HOTKEY)
+  captureHotkeyBtn.classList.toggle('recording', recordingHotkey)
+  captureHotkeyHint.hidden = recordingHotkey
+  captureHotkeyRecordHint.hidden = !recordingHotkey
+  if (hotkeyErrorKey === null) {
+    captureHotkeyError.hidden = true
+  } else {
+    captureHotkeyError.textContent = t(hotkeyErrorKey)
+    captureHotkeyError.hidden = false
+  }
+}
+
+function startRecording(): void {
+  if (recordingHotkey) return
+  recordingHotkey = true
+  hotkeyErrorKey = null
+  syncHotkeyField()
+}
+
+function stopRecording(): void {
+  if (!recordingHotkey) return
+  recordingHotkey = false
+  syncHotkeyField()
+}
+
+// Always round-trips to main, even when the recorded accelerator equals the
+// stored one: after a refused registration the app holds NOTHING while the
+// setting still names that accelerator, and re-recording it is the only way to
+// take it back (main re-registers on that mismatch).
+async function applyHotkey(accelerator: string): Promise<void> {
+  const result = await apply({ captureHotkey: accelerator })
+  // Two distinct failures, told apart by what came back:
+  //  - hotkeyFailed: main reverted the setting because the OS refused the
+  //    accelerator (another app owns it); syncControls() already restored the
+  //    old value in the field.
+  //  - settings unchanged without hotkeyFailed: main's validator rejected the
+  //    string outright, so it was never a usable combination in the first place.
+  hotkeyErrorKey =
+    result.hotkeyFailed === true
+      ? 'settings.hotkeyConflict'
+      : result.settings.captureHotkey === accelerator
+        ? null
+        : 'settings.hotkeyInvalid'
+  syncHotkeyField()
+}
+
+captureHotkeyBtn.addEventListener('click', startRecording)
+captureHotkeyBtn.addEventListener('blur', stopRecording)
+
+captureHotkeyBtn.addEventListener('keydown', (event) => {
+  // Tab is never armed, never swallowed, and never recorded: focus must always
+  // be able to leave the field (GOAL "Settings GUI": keyboard accessible).
+  // Recording Shift+Tab would additionally hand reverse tab-navigation to
+  // globalShortcut system-wide.
+  if (event.key === 'Tab') {
+    stopRecording()
+    return
+  }
+  if (!recordingHotkey) {
+    // Keyboard equivalent of the click that arms the field. preventDefault
+    // keeps the button's native activation (and Space scrolling) out of it.
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      startRecording()
+    }
+    return
+  }
+  // Swallow the keystroke entirely: no button activation, no scrolling, and
+  // above all no Esc reaching the window handler that closes the window.
+  event.preventDefault()
+  event.stopPropagation()
+  if (event.key === 'Escape') {
+    stopRecording()
+    return
+  }
+  if (event.key === 'Backspace' || event.key === 'Delete') {
+    stopRecording()
+    void applyHotkey(DEFAULT_CAPTURE_HOTKEY)
+    return
+  }
+  // A lone modifier (or an unusable key) is the user still reaching for the
+  // combination: keep waiting instead of rejecting it.
+  if (MODIFIER_KEYS.has(event.key)) return
+  const accelerator = toAccelerator(event)
+  if (accelerator === null) return
+  stopRecording()
+  void applyHotkey(accelerator)
+})
 
 // ---------------------------------------------------------------------------
 // Capture display picker
@@ -321,6 +501,7 @@ function syncControls(): void {
     el<HTMLInputElement>(field.id).value = String(field.fromSettings(s))
   }
   captureDisplaySelect.value = s.captureDisplay
+  syncHotkeyField()
   languageSelect.value = s.language
   packLanguageSelect.value = s.packLanguage
   mcpUrlEl.textContent = runningMcpUrl

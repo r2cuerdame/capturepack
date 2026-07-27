@@ -136,6 +136,24 @@ h2 {
   white-space: nowrap;
 }
 
+.subhint {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.error {
+  color: #ff8a80;
+  font-size: 11px;
+}
+
+/* Second line of a .rowCol row: hints and inline errors under the control. */
+.rowFoot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 4px;
+}
+
 .toggleRow {
   cursor: pointer;
 }
@@ -204,6 +222,22 @@ button:hover:not(:disabled) {
 button:disabled {
   opacity: 0.45;
   cursor: default;
+}
+
+/* Recordable capture-hotkey field: a button that reads as an input, showing
+   the accelerator — and the "press a combination" prompt while armed. */
+button.hotkey {
+  min-width: 250px;
+  background: #111116;
+  font: 12px Consolas, "Cascadia Mono", monospace;
+  text-align: center;
+  padding: 6px 12px;
+}
+
+button.hotkey.recording {
+  border-color: var(--action);
+  color: var(--muted);
+  font: 600 12px "Segoe UI", system-ui, sans-serif;
 }
 
 :focus-visible {

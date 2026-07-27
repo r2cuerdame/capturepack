@@ -256,7 +256,11 @@ function buildTimelineSkill(manifest: Manifest, timeline: TimelineFile, t: Trans
 }
 
 function timelineEventDetail(type: string, data: Record<string, unknown> | undefined): string {
-  if (type === 'core.capture.triggered') return 'Hotkey Ctrl+Alt+C'
+  // SPEC §10.2 allows data.hotkey on this event; the accelerator is
+  // configurable, so never spell a fixed one out here.
+  if (type === 'core.capture.triggered') {
+    return typeof data?.hotkey === 'string' ? `Hotkey ${data.hotkey}` : 'Capture hotkey'
+  }
   if (type === 'core.export.created') return 'Pack saved'
   if (type === 'core.annotation.added') {
     const id = typeof data?.annotation_id === 'string' ? data.annotation_id : 'unknown'

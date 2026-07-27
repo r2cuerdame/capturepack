@@ -26,6 +26,7 @@ import type {
   HistoryRenderStatusPayload,
   ToastCreateZipResult,
 } from '../shared/ipc'
+import { DEFAULT_CAPTURE_HOTKEY } from '../shared/types'
 import type { Annotation, Settings } from '../shared/types'
 import { isRenderInFlight, onRenderStateChange, startAnnotatedRender } from './annotatedRender'
 import { createPackZip } from './exporter'
@@ -78,7 +79,9 @@ export function registerHistoryIpc(live: Settings): void {
   })
 
   ipcMain.handle(IPC.historyList, (event): HistoryListResult => {
-    if (!fromHistory(event)) return { outputDir: '', packs: [], uiLanguage: 'en' }
+    if (!fromHistory(event)) {
+      return { outputDir: '', packs: [], uiLanguage: 'en', captureHotkey: DEFAULT_CAPTURE_HOTKEY }
+    }
     const s = getStore()
     const entries = s.entries()
     pruneCaches(new Set(entries.map((e) => e.path)))
@@ -86,6 +89,7 @@ export function registerHistoryIpc(live: Settings): void {
       outputDir: s.outputDir,
       packs: entries.map(safeSummarize),
       uiLanguage: uiLanguage(live),
+      captureHotkey: live.captureHotkey,
     }
   })
 

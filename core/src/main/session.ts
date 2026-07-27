@@ -78,7 +78,17 @@ async function runFlow(settings: Settings): Promise<void> {
   const replayDurationMs = replay === null ? 0 : replay.durationMs
   const t0Ms = triggerAt - replayDurationMs
 
-  const events: TimelineEvent[] = [{ t_ms: replayDurationMs, type: 'core.capture.triggered', source: 'core' }]
+  // SPEC §10.2: the trigger event carries the accelerator that fired it in
+  // `data.hotkey` (report.md renders it). It is configurable, so it is read
+  // from the live settings rather than spelled out anywhere.
+  const events: TimelineEvent[] = [
+    {
+      t_ms: replayDurationMs,
+      type: 'core.capture.triggered',
+      source: 'core',
+      data: { hotkey: settings.captureHotkey },
+    },
+  ]
 
   // Save-first (GOAL): the raw capture hits disk before the editor opens, so a
   // cancelled editor or a crash never loses it. Failure is non-fatal — the
@@ -130,18 +140,19 @@ async function runFlow(settings: Settings): Promise<void> {
   const outcome = await runEditor(editor, events, t0Ms)
   if (outcome.kind === 'cancel') return
 
-  const replayWebm = outcome.payload.includeReplay && replay !== null ? replay.buffer : null
+  // The replay is ALWAYS kept when one exists (GOAL "No include-replay
+  // toggle"): what leaves the machine is decided at share time, not here. It
+  // stays null for a screenshot-only capture (no recorder / recorder failure /
+  // replay timeout), which every path below still handles.
+  const replayWebm = replay !== null ? replay.buffer : null
 
   // The exporter appends the core.export.created event itself.
-  // When a recorded replay is excluded from the pack, t0 must not reference a
-  // video the reader cannot see (SPEC §10.1): rebase on the trigger instant.
-  const timeline: TimelineFile =
-    replayWebm === null && replayDurationMs > 0
-      ? {
-          t0: new Date(triggerAt).toISOString(),
-          events: events.map((e) => ({ ...e, t_ms: e.t_ms - replayDurationMs })),
-        }
-      : { t0: new Date(t0Ms).toISOString(), events }
+  // t0 is the start of replay.webm (SPEC §10.1). No rebase is possible here:
+  // the replay is always kept when one exists, so a null replayWebm means the
+  // capture had none, replayDurationMs is 0, and t0Ms IS the trigger instant.
+  // (The re-edit flow below DOES rebase — there a declared replay can be
+  // missing from the folder.)
+  const timeline: TimelineFile = { t0: new Date(t0Ms).toISOString(), events }
 
   // Same reason: replay positions have no timeline to anchor to without the
   // replay, so drop snapshot_t_ms (SPEC §5.3) and annotation lifetimes
@@ -158,7 +169,7 @@ async function runFlow(settings: Settings): Promise<void> {
     height: snap.height,
     capturedAt: new Date(triggerAt),
     replayWebm,
-    replayDurationMs: replayWebm === null ? 0 : replayDurationMs,
+    replayDurationMs, // already 0 whenever replayWebm is null
     annotations,
     title: outcome.payload.title,
     note: outcome.payload.note,
@@ -169,8 +180,8 @@ async function runFlow(settings: Settings): Promise<void> {
   }
 
   // Replay Trim (GOAL "Replay Trim") — fresh-capture flow only. null when the
-  // payload carries no active trim (or the replay is excluded): the save below
-  // is then exactly the untrimmed path.
+  // capture has no replay or the payload carries no active trim: the save
+  // below is then exactly the untrimmed path.
   const trim = replayWebm === null ? null : resolveTrim(outcome.payload, replayDurationMs)
 
   try {

@@ -12,6 +12,7 @@ import type {
   HistoryRenderStatusPayload,
   ToastCreateZipResult,
 } from '../../shared/ipc'
+import { DEFAULT_CAPTURE_HOTKEY } from '../../shared/types'
 
 interface HistoryBridge {
   list(): Promise<HistoryListResult>
@@ -62,6 +63,8 @@ let outputDir = ''
 // Active-language t(); every list result carries uiLanguage, so a language
 // change from the settings GUI reaches this window on its next re-list.
 let uiLanguage = 'en'
+// Same deal for the capture accelerator the empty state tells the user to press.
+let captureHotkey = DEFAULT_CAPTURE_HOTKEY
 let t: TranslateFn = makeT('en')
 let query = ''
 let filter: FilterId = 'all'
@@ -104,6 +107,7 @@ async function refresh(): Promise<void> {
     const result = await bridge.list()
     outputDir = result.outputDir
     packs = result.packs
+    captureHotkey = result.captureHotkey
     if (result.uiLanguage !== uiLanguage) {
       uiLanguage = result.uiLanguage
       t = makeT(uiLanguage)
@@ -277,7 +281,9 @@ function render(): void {
   if (visible.length === 0) {
     const empty = elc('div', 'empty')
     empty.textContent =
-      packs.length === 0 ? t('history.emptyNoPacks') : t('history.emptyFiltered')
+      packs.length === 0
+        ? t('history.emptyNoPacks', { hotkey: captureHotkey })
+        : t('history.emptyFiltered')
     listEl.append(empty)
     return
   }

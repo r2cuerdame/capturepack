@@ -3,6 +3,7 @@ import { app } from 'electron'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { isSupportedLanguage } from '../shared/i18n'
+import { DEFAULT_CAPTURE_HOTKEY } from '../shared/types'
 import type { Settings } from '../shared/types'
 
 export function settingsFilePath(): string {
@@ -16,6 +17,7 @@ function defaultSettings(): Settings {
     autoUpdateCheck: true,
     outputDir: path.join(app.getPath('desktop'), 'CapturePack'),
     copyToClipboard: true,
+    captureHotkey: DEFAULT_CAPTURE_HOTKEY,
     replaySeconds: 30,
     fps: 15,
     captureDisplay: 'cursor',
@@ -139,6 +141,7 @@ const SETTINGS_KEY_SET: Record<keyof Settings, true> = {
   autoUpdateCheck: true,
   outputDir: true,
   copyToClipboard: true,
+  captureHotkey: true,
   replaySeconds: true,
   fps: true,
   captureDisplay: true,
@@ -165,6 +168,43 @@ export function applyPartial(current: Settings, patch: Record<string, unknown>):
     if (Object.prototype.hasOwnProperty.call(patch, key)) raw[key] = patch[key]
   }
   return mergeSettings(current, raw)
+}
+
+// Electron accelerator modifiers (globalShortcut syntax). CommandOrControl and
+// its aliases are accepted from a hand-edited settings.json even though the
+// settings GUI emits plain Ctrl on Windows.
+const ACCELERATOR_MODIFIERS = new Set([
+  'command',
+  'cmd',
+  'control',
+  'ctrl',
+  'commandorcontrol',
+  'cmdorctrl',
+  'alt',
+  'option',
+  'altgr',
+  'shift',
+  'super',
+  'meta',
+])
+
+// Accelerator-ish check (globalShortcut.register would throw on garbage): at
+// least one modifier plus EXACTLY one non-modifier key, e.g. "Ctrl+Alt+C".
+// The key name itself is not enumerated here — an unknown one simply fails to
+// register, which the settings GUI reports inline and the startup path reports
+// in its dialog.
+function isCaptureHotkey(value: string): boolean {
+  const parts = value.split('+')
+  if (parts.length < 2) return false
+  let keys = 0
+  for (const part of parts) {
+    const token = part.trim()
+    if (token === '') return false
+    if (ACCELERATOR_MODIFIERS.has(token.toLowerCase())) continue
+    keys += 1
+  }
+  // parts.length >= 2 with exactly one key means at least one modifier.
+  return keys === 1
 }
 
 // "cursor" (follow the mouse) or an Electron display id as digits. A stale but
@@ -197,6 +237,10 @@ function mergeSettings(base: Settings, raw: Record<string, unknown>): Settings {
     autoUpdateCheck: typeof raw.autoUpdateCheck === 'boolean' ? raw.autoUpdateCheck : base.autoUpdateCheck,
     outputDir: typeof raw.outputDir === 'string' && raw.outputDir.length > 0 ? raw.outputDir : base.outputDir,
     copyToClipboard: typeof raw.copyToClipboard === 'boolean' ? raw.copyToClipboard : base.copyToClipboard,
+    captureHotkey:
+      typeof raw.captureHotkey === 'string' && isCaptureHotkey(raw.captureHotkey)
+        ? raw.captureHotkey
+        : base.captureHotkey,
     replaySeconds:
       typeof raw.replaySeconds === 'number' && raw.replaySeconds > 0 ? raw.replaySeconds : base.replaySeconds,
     fps: typeof raw.fps === 'number' && raw.fps > 0 ? raw.fps : base.fps,

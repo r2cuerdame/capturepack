@@ -87,7 +87,7 @@ preference. Each requirement maps to something Electron gives us without native 
 |---|---|
 | 30-second replay ring buffer, always on, low overhead | `MediaRecorder` over `desktopCapturer` + `getUserMedia` — hardware-accelerated VP8/VP9 encoding in Chromium's media pipeline, zero native code, produces the WebM the spec recommends. |
 | Annotation editor that feels instant | A `<canvas>` overlay is the fastest annotation surface available: immediate-mode drawing, sub-pixel geometry, and `getImageData`/`putImageData` for destructive blur — no UI framework needed. |
-| Global hotkey `Ctrl+Alt+C` | `globalShortcut` — one call, works while any app has focus. |
+| Global hotkey (`Ctrl+Alt+C` by default) | `globalShortcut` — one call, works while any app has focus, and re-registering is how the settings GUI applies a new accelerator instantly. |
 | GOAL.md's exact auto-update flow | `electron-updater` + `electron-builder`: GitHub Releases only, check on start, background download, install on quit, rollback-safe, hash-verified (sha512 in `latest.yml`), no update server. This flow is required for V1, not optional. |
 
 Runtime dependencies are exactly two: `electron-updater` and `adm-zip` (ZIP writing). Everything
@@ -134,8 +134,11 @@ The main process is a **tray app** — no dock/taskbar presence, no main window.
 
 - **Tray.** The only permanent UI: capture now, open output folder, settings, update status,
   quit. Quitting the tray is the only way to stop the replay buffer.
-- **Global hotkey.** Registers `Ctrl+Alt+C` via `globalShortcut` at startup; unregisters on
-  quit. The hotkey handler does one thing: tell the capture orchestrator to trigger.
+- **Global hotkey.** Registers `settings.captureHotkey` (default `Ctrl+Alt+C`) via
+  `globalShortcut` at startup; unregisters on quit. One module owns registration, so changing
+  the accelerator in Settings releases the old one before claiming the new one — and puts the
+  old one back when the new one is refused. The handler does one thing: tell the capture
+  orchestrator to trigger.
 - **Capture orchestration.** Creates the hidden capture window at startup and keeps it
   recording. On trigger: grab the snapshot, request the replay blob from the capture window,
   open the editor window, and hold both until the editor resolves (export or cancel). Records
@@ -213,9 +216,10 @@ It exists for one purpose: **five seconds from open to export.**
   and sends only the redacted PNG to main. The unredacted frame exists solely in the editor's
   memory and dies with the window; the export writer never sees it, so it cannot leak into the
   pack. The blur annotations still ship as data in `annotations.json`.
-- **The replay gap, surfaced honestly:** when blur annotations exist and a replay is about to
-  be included, the editor shows the SPEC §9.4 warning — the replay is not redacted — with a
-  one-keystroke option to exclude the replay (`includeReplay: false` → `"replay": null`).
+- **The replay gap, surfaced honestly:** the replay is always kept when one was recorded
+  (GOAL "No include-replay toggle" — save-first; what leaves the machine is decided at share
+  time). Where blur annotations exist, the save-complete toast shows the SPEC §9.4 warning —
+  the original replay is not redacted, share `replay_annotated.webm` or a sanitized ZIP.
 
 ### 2.7 Export writer
 
