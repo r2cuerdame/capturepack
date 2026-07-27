@@ -97,8 +97,46 @@
           "default": { "enabled": false }
         },
         "target": {
-          "description": "RESERVED for semantic object metadata: what real UI object the box points at (DOM selector/role/text, Windows UI Automation AutomationId/ControlType, engine object ids, ...). This is where the earlier draft's 'element'/Tracked Element concept lives — a box with a target is a semantic annotation; there is no separate element type. Format 0.1.0 does not define its contents; readers MUST ignore what they do not understand and MUST still render the box from bounds.",
-          "type": "object"
+          "description": "OPTIONAL semantic object metadata: what real UI object the box points at (Windows UI Automation control, DOM node, engine object, ...). This is where the earlier draft's 'element'/Tracked Element concept lives — a box with a target is a semantic annotation; there is no separate element type. 'source' is the discriminator for every other field; format 0.1.0 defines the value \"uia\" (SPEC.md §8.7). Readers MUST ignore sources and fields they do not understand and MUST still render the box from bounds.",
+          "type": "object",
+          "required": ["source"],
+          "properties": {
+            "source": {
+              "description": "Where the metadata came from. Format 0.1.0 defines \"uia\" (Windows UI Automation); other writers MAY define further values but MUST NOT redefine this one.",
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "allOf": [
+            {
+              "description": "source \"uia\": Microsoft UI Automation properties of the control, as it was at the capture instant. Every field is optional — a property the element had no value for is omitted, never written as an empty string.",
+              "if": { "properties": { "source": { "const": "uia" } }, "required": ["source"] },
+              "then": {
+                "properties": {
+                  "name": {
+                    "description": "UIA Name — the accessible name the user sees, e.g. \"Save\". Localized, and not stable across UI changes.",
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "control_type": {
+                    "description": "UIA ControlType without the \"ControlType.\" prefix, e.g. \"Button\". Language-independent.",
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "automation_id": {
+                    "description": "UIA AutomationId — the application's own identifier for the control, when it provides one.",
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "class_name": {
+                    "description": "Win32 window class of the element, e.g. \"Chrome_WidgetWin_1\".",
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          ]
         },
         "style": {
           "description": "OPTIONAL display styling. In 0.1.0 the only defined field is 'color', used for the border, number badge, and text. Viewers pick their own default when absent.",

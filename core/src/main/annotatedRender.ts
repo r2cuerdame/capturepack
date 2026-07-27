@@ -5,14 +5,21 @@
 // canvas, and returns webm bytes; main writes replay_annotated.webm into the
 // pack folder and declares it in manifest.json. Failures are logged, never
 // fatal — the pack stays valid without the annotated view.
+//
+// The SAME pass returns the annotated KEYFRAME stills (SPEC §7.3, GOAL
+// "Annotated keyframes (LLM-first)") — one PNG per annotation state change,
+// written into frames/ and declared as manifest.media.keyframes alongside
+// replay_annotated. A pack with no replay has no video to render, so its single
+// still comes from startKeyframeStill() below.
 import { app, BrowserWindow, ipcMain } from 'electron'
 import type { IpcMainEvent } from 'electron'
-import { writeFile } from 'node:fs/promises'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import { IPC } from '../shared/ipc'
-import type { RenderResultPayload, RenderStartPayload } from '../shared/ipc'
-import type { Annotation } from '../shared/types'
-import { setManifestReplayAnnotated, type PackHandle } from './exporter'
+import type { RenderFramePayload, RenderResultPayload, RenderStartPayload } from '../shared/ipc'
+import { keyframeFileName } from '../shared/keyframes'
+import type { Annotation, ManifestKeyframe } from '../shared/types'
+import { setManifestRenderOutputs, type PackHandle } from './exporter'
 
 export interface AnnotatedRenderJob {
   replayWebm: Buffer
@@ -23,9 +30,19 @@ export interface AnnotatedRenderJob {
   replayDurationMs: number
 }
 
+/** A screenshot-only pack's single annotated still, drawn from snapshot.png. */
+export interface KeyframeStillJob {
+  snapshotPng: Buffer
+  annotations: Annotation[]
+  width: number
+  height: number
+}
+
 // The render plays in real time; allow twice the replay plus startup slack
 // before declaring the hidden window stuck.
 const RENDER_TIMEOUT_SLACK_MS = 60_000
+// A still job decodes one PNG and draws once — no playback, no recorder.
+const STILL_RENDER_TIMEOUT_MS = 30_000
 
 // EVERY render's lifecycle (fresh-capture save, re-edit save, History
 // re-render), observable in one place: the History window subscribes so a
@@ -97,10 +114,82 @@ async function renderAnnotatedReplay(handle: PackHandle, job: AnnotatedRenderJob
     height: job.height,
     fps: job.fps,
     durationMs: job.replayDurationMs,
+    // The annotated stills come out of this same pass (SPEC §7.3).
+    keyframes: true,
   }
-  const webm = await runRenderWindow(payload, job.replayDurationMs * 2 + RENDER_TIMEOUT_SLACK_MS)
-  await writeFile(path.join(handle.dirPath, 'replay_annotated.webm'), Buffer.from(webm))
-  await setManifestReplayAnnotated(handle)
+  const result = await runRenderWindow(payload, job.replayDurationMs * 2 + RENDER_TIMEOUT_SLACK_MS)
+  if (result.webm === undefined) throw new Error('render window returned no video')
+  await writeFile(path.join(handle.dirPath, 'replay_annotated.webm'), Buffer.from(result.webm))
+  // The stills are the smaller half of this job: losing them must never cost
+  // the annotated replay its declaration (SPEC §5.7 — keyframes are optional).
+  let keyframes: ManifestKeyframe[] = []
+  try {
+    keyframes = await writeKeyframes(handle, result.frames ?? [])
+  } catch (err) {
+    console.error('capturepack: writing annotated keyframes failed:', errorMessage(err))
+  }
+  await setManifestRenderOutputs(handle, { replayAnnotated: true, keyframes })
+}
+
+/**
+ * The ONE annotated still of a screenshot-only pack (SPEC §7.3): there is no
+ * video to play, so the hidden window composites snapshot.png + the overlays
+ * and hands back a single PNG.
+ *
+ * Deliberately NOT on the render lifecycle bus: 'rendering'/'done' there means
+ * the annotated REPLAY (the save toast's status line, History's [Retry Render]),
+ * and a pack without a replay has none. Fire-and-forget, failures logged only —
+ * the pack is already complete and valid without frames/.
+ */
+export function startKeyframeStill(handle: PackHandle, job: KeyframeStillJob): void {
+  void renderKeyframeStill(handle, job).catch((err) => {
+    console.error('capturepack: annotated keyframe render failed:', errorMessage(err))
+  })
+}
+
+async function renderKeyframeStill(handle: PackHandle, job: KeyframeStillJob): Promise<void> {
+  const payload: RenderStartPayload = {
+    // No video: the still job draws snapshot.png instead.
+    replayWebm: null,
+    snapshotPng: toArrayBuffer(job.snapshotPng),
+    annotations: job.annotations,
+    width: job.width,
+    height: job.height,
+    fps: 1, // unused without a recorder
+    durationMs: 0,
+    keyframes: true,
+  }
+  const result = await runRenderWindow(payload, STILL_RENDER_TIMEOUT_MS)
+  const keyframes = await writeKeyframes(handle, result.frames ?? [])
+  if (keyframes.length === 0) throw new Error('still render produced no keyframe')
+  await setManifestRenderOutputs(handle, { replayAnnotated: false, keyframes })
+}
+
+/**
+ * Writes frames/ from scratch and returns the manifest declarations.
+ * Stale stills never outlive the render that replaced them: the directory is
+ * removed first (the same rule replay_annotated.webm follows), so a re-edit or
+ * a History re-render can only ever leave the CURRENT set behind.
+ */
+async function writeKeyframes(
+  handle: PackHandle,
+  frames: readonly RenderFramePayload[],
+): Promise<ManifestKeyframe[]> {
+  const framesDir = path.join(handle.dirPath, 'frames')
+  await rm(framesDir, { recursive: true, force: true })
+  if (frames.length === 0) return []
+  await mkdir(framesDir, { recursive: true })
+  const declared: ManifestKeyframe[] = []
+  // Order is the render's own ascending order; NN is the 1-based position in
+  // the surviving list, so the numbering stays contiguous even if a still
+  // failed to encode.
+  for (const [i, frame] of frames.entries()) {
+    const t_ms = Math.max(0, Math.round(frame.t_ms))
+    const file = keyframeFileName(i + 1, t_ms)
+    await writeFile(path.join(handle.dirPath, file), Buffer.from(frame.png))
+    declared.push({ file, t_ms })
+  }
+  return declared
 }
 
 export interface TrimRenderJob {
@@ -138,13 +227,19 @@ export async function renderTrimmedReplay(job: TrimRenderJob): Promise<Buffer> {
     trimStartMs: job.trimStartMs,
   }
   if (job.trimEndMs !== null) payload.trimEndMs = job.trimEndMs
-  // The render plays only the kept range in real time.
-  const webm = await runRenderWindow(payload, lengthMs * 2 + RENDER_TIMEOUT_SLACK_MS)
-  return Buffer.from(webm)
+  // The render plays only the kept range in real time. No keyframes: the trim
+  // job draws no overlays, and the annotated render that follows it produces
+  // the stills from the trimmed bytes.
+  const result = await runRenderWindow(payload, lengthMs * 2 + RENDER_TIMEOUT_SLACK_MS)
+  if (result.webm === undefined) throw new Error('render window returned no video')
+  return Buffer.from(result.webm)
 }
 
-/** Opens the hidden render window, runs one job, and returns the webm bytes. */
-async function runRenderWindow(payload: RenderStartPayload, timeoutMs: number): Promise<ArrayBuffer> {
+/** Opens the hidden render window, runs one job, and returns its result. */
+async function runRenderWindow(
+  payload: RenderStartPayload,
+  timeoutMs: number,
+): Promise<RenderResultPayload> {
   const win = new BrowserWindow({
     show: false,
     width: 320,
@@ -159,10 +254,8 @@ async function runRenderWindow(payload: RenderStartPayload, timeoutMs: number): 
   try {
     await win.loadFile(path.join(app.getAppPath(), 'dist', 'renderer', 'render', 'render.html'))
     const result = await awaitRenderResult(win, payload, timeoutMs)
-    if (!result.ok || result.webm === undefined) {
-      throw new Error(result.error ?? 'render window returned no video')
-    }
-    return result.webm
+    if (!result.ok) throw new Error(result.error ?? 'render window reported a failure')
+    return result
   } finally {
     if (!win.isDestroyed()) win.destroy()
   }

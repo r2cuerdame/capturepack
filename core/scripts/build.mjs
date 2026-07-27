@@ -55,6 +55,10 @@ await Promise.all([
   cp('src/renderer/history/history.css', 'dist/renderer/history/history.css'),
   cp('src/renderer/about/about.html', 'dist/renderer/about/about.html'),
   cp('src/renderer/about/about.css', 'dist/renderer/about/about.css'),
+  // Windows UI Automation helper (GOAL "Static object picking"): spawned by
+  // src/main/uia.ts as a real file, so it must ship next to the bundles AND be
+  // kept out of the asar — see asarUnpack in electron-builder.yml.
+  cp('scripts/uia-dump.ps1', 'dist/scripts/uia-dump.ps1'),
   cp('assets', 'dist/assets', { recursive: true }),
 ])
 

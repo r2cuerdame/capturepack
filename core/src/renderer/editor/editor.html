@@ -14,12 +14,37 @@
     <button id="colorBtn" title="Color (C)" data-i18n-title="editor.colorTooltip"><span id="colorSwatch"></span></button>
     <input id="titleInput" type="text" placeholder="Title (optional)" data-i18n-placeholder="editor.titlePlaceholder" autocomplete="off" spellcheck="false" />
     <input id="noteInput" type="text" placeholder="What is wrong? (optional)" data-i18n-placeholder="editor.notePlaceholder" autocomplete="off" spellcheck="false" />
+    <!-- Read-only display switcher (GOAL "Multi-Monitor Support"): one button
+         per captured display, shown only when the capture froze more than one.
+         The focused display is marked and is the only annotatable one. -->
+    <span
+      id="displaySwitcher"
+      role="group"
+      aria-label="Captured displays"
+      data-i18n-aria-label="editor.displaysLabel"
+      hidden
+    ></span>
+    <span id="displayHint" class="chip" hidden></span>
+    <!-- Static object picking (GOAL "Static object picking (v0)"): shown once,
+         when the user hovers a pickable object while scrubbed away from "now" —
+         the object data is from the capture instant, not from this frame. -->
+    <span id="objectHint" class="chip" hidden></span>
     <span id="replayChip" class="chip" data-i18n="editor.noReplay">No replay</span>
     <span id="dirtyChip" class="chip" hidden data-i18n="editor.unsavedChanges">Unsaved changes</span>
     <span id="keysHint" data-i18n="editor.keysHint">L-click select · R-drag box · # number · Blur · Enter save · Esc close</span>
     <!-- Trim drop hint (GOAL "Replay Trim"): boxes whose lifetime is wholly
          outside the active trim are dropped at save — count shown up front. -->
     <span id="trimDropChip" class="chip" hidden></span>
+    <!-- Editor Window Mode (GOAL "Editor Window Mode"): the fullscreen overlay
+         is the default; this button (and F11) turns the editor into a real
+         movable/resizable window, and the choice is remembered. -->
+    <button
+      id="windowModeBtn"
+      type="button"
+      title="Toggle windowed mode (F11)"
+      data-i18n-title="editor.windowModeTooltip"
+      aria-pressed="false"
+    >⧉</button>
     <button id="exportBtn" data-i18n="editor.save">Save</button>
   </header>
   <main id="stage">

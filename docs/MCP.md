@@ -187,17 +187,17 @@ pack as described above.
 | `capturepack_latest` | — | Summary of the newest pack; re-pins it as the current pack |
 | `capturepack_list` | `limit?` | Recent packs (newest first, default 20 — `total` reports the full count): id, title, capture time |
 | `capturepack_open` | `id` — pack id or absolute path (folder and ZIP both supported) | The pack's summary; pins it as the current pack for subsequent calls |
-| `capturepack_summary` | `id?` | Title, note, captured_at, environment (os/screens/app), replay duration (or screenshot-only), `snapshot_t_ms` when present, annotation count (+ per-type), timeline event count, plugin list |
+| `capturepack_summary` | `id?` | Title, note, captured_at, environment (os/screens/app), replay duration (or screenshot-only), `snapshot_t_ms` when present, annotated-keyframe count + times when present, annotation count (+ per-type), timeline event count, plugin list |
 | `capturepack_manifest` | `id?` | Raw `manifest.json` |
 | `capturepack_report` | `id?` | Raw `report.md` |
 | `capturepack_timeline` | `id?`, `from_ms?`, `to_ms?` | Full timeline, or the slice between `from_ms` and `to_ms` |
-| `capturepack_annotations` | `id?` | The annotation list |
+| `capturepack_annotations` | `id?` | The annotation list — including each box's optional `target` (the real UI object it was placed on, e.g. `{source:"uia", name:"Save", control_type:"Button"}`) |
 | `capturepack_find_annotations` | `keyword`, `id?` | Annotations matching the keyword |
-| `capturepack_frame` | `time_s?`, `id?` | The frame at `time_s` (omitted = the snapshot frame) — **v0 limitation, see below** |
+| `capturepack_frame` | `time_s?`, `id?` | An image of the capture: the **nearest annotated keyframe** to `time_s` when the pack has them, else `snapshot.png` — **see below** |
 | `capturepack_replay` | `id?` | Replay **metadata** only: filename, duration_ms, size_bytes — never raw video bytes |
-| `capturepack_dom` | `id?` | Generic plugin metadata under `plugins/*/` (DOM-ish data lives under a chrome plugin dir when present) |
-| `capturepack_find_dom` | `selector`, `id?` | Plugin/DOM entries matching the selector |
-| `capturepack_windows` | `id?` | Window/focus timeline events plus window-related plugin metadata, when present |
+| `capturepack_dom` | `id?` | Generic plugin metadata under `plugins/*/` — on Windows usually `windows-uia` (the capture-instant window list + foreground control tree); DOM-ish data lives under a chrome plugin dir when present |
+| `capturepack_find_dom` | `selector`, `id?` | Plugin/DOM entries matching the selector — e.g. an `automation_id` or a control name in the `windows-uia` dump |
+| `capturepack_windows` | `id?` | Window/focus timeline events plus window-related plugin metadata (the `windows-uia` window list), when present |
 | `capturepack_search` | `keyword`, `id?` | Case-insensitive substring search across `report.md`, annotation texts, timeline event types + data, plugin JSON, and manifest title/note — hits grouped by source |
 | `capturepack_export_markdown` | `id?` | One Markdown document: `report.md` + annotations table (with computed display numbers / lifetimes) + timeline listing + plugin inventory. Returned as text; **writes no files** |
 
@@ -205,11 +205,46 @@ Plugin metadata is exposed generically — the MCP server never special-cases pl
 If a pack has no plugin data, the plugin-reading tools return empty results with a clear
 message; that is expected today.
 
-### `capturepack_frame` — v0 limitation
+### Object context (`windows-uia` + annotation `target`)
 
-v0 returns `snapshot.png` as MCP image content (base64) plus a text note stating the
-snapshot's frame time versus the requested `time_s`. True frame extraction from the replay
-video is a documented future enhancement.
+A Windows capture usually carries `plugins/windows-uia/elements.json`
+([SPEC §11.3](../SPEC.md)): the top-level window list and the foreground window's UI Automation
+control tree **as they were at the capture instant**, with every rectangle already in
+`snapshot.png` pixel coordinates — the same space as the annotations. Read it with
+`capturepack_dom`, search it with `capturepack_find_dom`, and get just the windows from
+`capturepack_windows`.
+
+When the user placed a box on one of those objects, that box also carries `target`
+([SPEC §8.7](../SPEC.md)) in `capturepack_annotations`:
+
+```json
+"target": { "source": "uia", "name": "Save", "control_type": "Button", "automation_id": "saveButton" }
+```
+
+That is the difference between *"a box at (2140, 1236)"* and *"the Save button"*. Two rules
+never change: the box's geometry always comes from `bounds` alone, and both the dump and the
+target describe **one instant** — they say nothing about any other position in the replay.
+A pack without either (a non-Windows capture, a dump that ran out of budget) is complete and
+valid; the tools then simply report that there is no object data.
+
+### `capturepack_frame` — annotated keyframes
+
+`capturepack_frame` always answers with MCP image content (base64 PNG) plus a text note.
+Which image depends on the pack:
+
+- **The pack has annotated keyframes** (`manifest.media.keyframes`, [SPEC §5.7](../SPEC.md)) —
+  stills rendered at every annotation state change, with blur, borders, number badges and text
+  drawn into the pixels. `capturepack_frame(time_s)` returns the **nearest** one, and the note
+  states which keyframe it is, its exact time, and **every** keyframe time in the pack — so a
+  model can walk the whole story image by image (`0.0s, 3.2s, 5.4s, …`).
+- **No keyframes, or `time_s` omitted** — `snapshot.png` is returned (original pixels, never
+  annotated), with a note giving its frame time (`media.snapshot_t_ms`, or the capture instant)
+  and, when keyframes exist, the times available. Keyframes render in the background right
+  after a save, so a pack saved seconds ago may not have them yet.
+
+Frames are never decoded out of the replay video at arbitrary times: what a pack ships as
+images is what MCP serves. `capturepack_summary` (and `capturepack_latest`) announce the
+keyframe count and times, so a session usually knows the stills exist before asking.
 
 ## Read-only by design
 

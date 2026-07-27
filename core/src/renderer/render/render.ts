@@ -4,9 +4,17 @@
 // (never re-compressed per frame). No editor controls, header, or handles are
 // ever drawn: the video contains results only. The canvas is recorded with
 // captureStream + MediaRecorder and the webm bytes go back to main.
-import type { RenderResultPayload, RenderStartPayload } from '../../shared/ipc'
+//
+// The SAME pass also captures the annotated KEYFRAME stills (SPEC §7.3, GOAL
+// "Annotated keyframes (LLM-first)"): whenever the playhead reaches an
+// annotation state change, the composited canvas is copied off as a PNG. The
+// stills are therefore drawn exactly like the video, by construction — one
+// canvas, one code path. A screenshot-only pack has no video to play, so its
+// single still is drawn from snapshot.png instead (the `replayWebm: null` job).
+import type { RenderFramePayload, RenderResultPayload, RenderStartPayload } from '../../shared/ipc'
 import type { Annotation } from '../../shared/types'
 import { computeDisplayNumbers } from '../../shared/numbering'
+import { computeKeyframeTimes } from '../../shared/keyframes'
 
 interface RenderBridge {
   onStart(cb: (payload: RenderStartPayload) => void): void
@@ -28,8 +36,9 @@ window.renderBridge.onStart((payload) => {
 
 async function run(payload: RenderStartPayload): Promise<void> {
   try {
-    const webm = await renderAnnotated(payload)
-    window.renderBridge.result({ ok: true, webm })
+    const result =
+      payload.replayWebm === null ? await renderStill(payload) : await renderAnnotated(payload)
+    window.renderBridge.result({ ok: true, ...result })
   } catch (err) {
     window.renderBridge.result({
       ok: false,
@@ -38,10 +47,78 @@ async function run(payload: RenderStartPayload): Promise<void> {
   }
 }
 
-async function renderAnnotated(job: RenderStartPayload): Promise<ArrayBuffer> {
+/** The overlay drawing state shared by every frame of a job. */
+interface Overlay {
+  ordered: Annotation[]
+  numbers: Map<string, number>
+  ui: number
+}
+
+function makeOverlay(job: RenderStartPayload): Overlay {
+  return {
+    // Stacking order for the overlay passes; z decides who draws on top.
+    ordered: [...job.annotations].sort((a, b) => a.z - b.z),
+    // GLOBAL display numbers, computed once for the whole video (SPEC §8.5): a
+    // frame where only box 2 is alive still labels it 2.
+    numbers: computeDisplayNumbers(job.annotations),
+    // Overlay sizes scale with the capture resolution so a 4K replay does not
+    // get hairline borders.
+    ui: Math.max(1, job.width / 1280),
+  }
+}
+
+/** Draw order per frame (SPEC §7.2): original -> blur -> border -> badge -> text.
+ * `tMs` null = no clock (still job): every box is drawn. */
+function drawOverlay(
+  ctx: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+  overlay: Overlay,
+  tMs: number | null,
+): void {
+  const alive = tMs === null ? overlay.ordered : overlay.ordered.filter((a) => visibleAt(a, tMs))
+  for (const a of alive) {
+    if (a.blur) pixelate(ctx, canvas, a)
+  }
+  for (const a of alive) {
+    drawBox(ctx, a, overlay.numbers.get(a.annotation_id), overlay.ui)
+  }
+}
+
+/**
+ * Screenshot-only pack (SPEC §7.3): no video exists, so the one annotated
+ * keyframe is composited from snapshot.png. Lifetimes are a replay-clock
+ * interval (SPEC §8.4) and have nothing to anchor to without a replay, so every
+ * box is drawn.
+ */
+async function renderStill(job: RenderStartPayload): Promise<{ frames: RenderFramePayload[] }> {
+  const snapshotPng = job.snapshotPng
+  if (snapshotPng === undefined) throw new Error('still render job carries no snapshot')
+  // createImageBitmap decodes the bytes directly — no object URL, so the
+  // window's CSP (which allows blob: for media only) is never in play. Same
+  // mechanism the editor decodes its snapshot with.
+  const bitmap = await createImageBitmap(new Blob([snapshotPng], { type: 'image/png' }))
+  try {
+    const canvas = document.createElement('canvas')
+    canvas.width = job.width
+    canvas.height = job.height
+    const ctx = canvas.getContext('2d')
+    if (!ctx) throw new Error('canvas 2d context unavailable')
+    ctx.drawImage(bitmap, 0, 0, job.width, job.height)
+    drawOverlay(ctx, canvas, makeOverlay(job), null)
+    return { frames: [await capturePng(canvas, 0)] }
+  } finally {
+    bitmap.close()
+  }
+}
+
+async function renderAnnotated(
+  job: RenderStartPayload,
+): Promise<{ webm: ArrayBuffer; frames: RenderFramePayload[] }> {
+  const replayWebm = job.replayWebm
+  if (replayWebm === null) throw new Error('annotated render job carries no replay')
   const video = document.createElement('video')
   video.muted = true
-  video.src = URL.createObjectURL(new Blob([job.replayWebm], { type: 'video/webm' }))
+  video.src = URL.createObjectURL(new Blob([replayWebm], { type: 'video/webm' }))
   await videoReady(video)
 
   // Plain-trim range (GOAL "Replay Trim"): play only [trimStartMs, trimEndMs]
@@ -57,16 +134,30 @@ async function renderAnnotated(job: RenderStartPayload): Promise<ArrayBuffer> {
   const ctx = canvas.getContext('2d')
   if (!ctx) throw new Error('canvas 2d context unavailable')
 
-  // GLOBAL display numbers, computed once for the whole video (SPEC §8.5): a
-  // frame where only box 2 is alive still labels it 2.
-  const numbers = computeDisplayNumbers(job.annotations)
-  // Stacking order for the overlay passes; z decides who draws on top.
-  const ordered = [...job.annotations].sort((a, b) => a.z - b.z)
-  // Overlay sizes scale with the capture resolution so a 4K replay does not
-  // get hairline borders.
-  const ui = Math.max(1, job.width / 1280)
+  const overlay = makeOverlay(job)
 
-  const drawFrame = (): void => {
+  // Annotated keyframes (SPEC §7.3): the instants a still is captured at, from
+  // the SHARED rule — the exporter names the files from the same list, and the
+  // pack documents reference those names before this render even finishes.
+  // These times are on the job's own clock, so the two modes never combine: the
+  // trim job asks for no keyframes, and the annotated render that follows it
+  // runs over the already-trimmed bytes with no trim range.
+  const targets = job.keyframes === true ? computeKeyframeTimes(job.annotations, job.durationMs) : []
+  const pending: Array<Promise<RenderFramePayload>> = []
+  let nextTarget = 0
+  // Copies the composited canvas off whenever the playhead has reached the next
+  // target. toBlob snapshots the bitmap synchronously and encodes off-thread,
+  // so the real-time recording is never stalled by PNG compression.
+  const captureDue = (tMs: number): void => {
+    for (;;) {
+      const target = targets[nextTarget]
+      if (target === undefined || target > tMs) return
+      nextTarget += 1
+      pending.push(capturePng(canvas, target))
+    }
+  }
+
+  const drawFrame = (): number => {
     // Clamp to the manifest replay_duration_ms (the lifetime clock cap): the
     // decoded clock can run slightly past the recorder's wall clock, which
     // would hide "until end" boxes (end_ms == replay_duration_ms) on the
@@ -74,19 +165,13 @@ async function renderAnnotated(job: RenderStartPayload): Promise<ArrayBuffer> {
     const rawMs = video.currentTime * 1000
     const tMs = job.durationMs > 0 ? Math.min(rawMs, job.durationMs) : rawMs
     ctx.drawImage(video, 0, 0, job.width, job.height)
-    const alive = ordered.filter((a) => visibleAt(a, tMs))
-    // Draw order per frame (SPEC §7.2): original -> blur -> border -> badge -> text.
-    for (const a of alive) {
-      if (a.blur) pixelate(ctx, canvas, a)
-    }
-    for (const a of alive) {
-      drawBox(ctx, a, numbers.get(a.annotation_id), ui)
-    }
+    drawOverlay(ctx, canvas, overlay, tMs)
+    return tMs
   }
 
   // Draw the first frame before recording starts so the stream never opens on
   // a blank canvas.
-  drawFrame()
+  captureDue(drawFrame())
 
   const stream = canvas.captureStream(job.fps)
   const recorder = new MediaRecorder(stream, {
@@ -113,7 +198,7 @@ async function renderAnnotated(job: RenderStartPayload): Promise<ArrayBuffer> {
   })
   const scheduleDraw = (): void => {
     if (video.ended) return
-    drawFrame()
+    captureDue(drawFrame())
     // Out-point reached: stop like 'ended' would, holding the current frame.
     if (trimEndMs !== undefined && video.currentTime * 1000 >= trimEndMs) {
       video.pause()
@@ -128,6 +213,9 @@ async function renderAnnotated(job: RenderStartPayload): Promise<ArrayBuffer> {
   await done
   // Final frame + a short tail so the recorder flushes the last chunk.
   drawFrame()
+  // Targets the playhead never reached (the decoded clock can end just short of
+  // the recorder's wall clock) resolve against this last composited frame.
+  captureDue(Number.POSITIVE_INFINITY)
   await new Promise((r) => setTimeout(r, 200))
   recorder.stop()
   await stopped
@@ -135,7 +223,36 @@ async function renderAnnotated(job: RenderStartPayload): Promise<ArrayBuffer> {
 
   const blob = new Blob(chunks, { type: 'video/webm' })
   if (blob.size === 0) throw new Error('recorded annotated replay is empty')
-  return blob.arrayBuffer()
+  return { webm: await blob.arrayBuffer(), frames: await settleFrames(pending) }
+}
+
+/** Encodes the canvas as a PNG still without blocking the real-time render. */
+function capturePng(canvas: HTMLCanvasElement, tMs: number): Promise<RenderFramePayload> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob === null) {
+        reject(new Error('keyframe encoding failed'))
+        return
+      }
+      blob
+        .arrayBuffer()
+        .then((png) => resolve({ t_ms: tMs, png }))
+        .catch(reject)
+    }, 'image/png')
+  })
+}
+
+/** A still that failed to encode is dropped — never fatal to the annotated replay. */
+async function settleFrames(
+  pending: ReadonlyArray<Promise<RenderFramePayload>>,
+): Promise<RenderFramePayload[]> {
+  const settled = await Promise.allSettled(pending)
+  const frames: RenderFramePayload[] = []
+  for (const r of settled) {
+    if (r.status === 'fulfilled') frames.push(r.value)
+    else console.error('capturepack: keyframe capture failed:', r.reason)
+  }
+  return frames
 }
 
 function videoReady(video: HTMLVideoElement): Promise<void> {

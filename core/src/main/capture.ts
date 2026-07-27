@@ -1,13 +1,15 @@
 // Main-process side of capture: owns the hidden recorder window SET (one per
-// connected display in "cursor" mode, exactly one in fixed mode), routes each
-// window's getDisplayMedia call to its assigned display, takes per-display
+// connected display in "all"/"cursor" mode, exactly one in fixed mode), routes
+// each window's getDisplayMedia call to its assigned display, takes per-display
 // screenshots, handles display hotplug, and bridges replay request/response.
 //
 // CPU note (GOAL "Multi-Monitor Support"): every capture window runs a recorder
 // PAIR — two rotating MediaRecorder sessions (see renderer/capture/capture.ts).
-// Cursor mode therefore costs one recorder pair PER connected display so the
-// last 30 seconds exist wherever the trigger lands; fixed mode runs a single
-// pair on the chosen display only (lower CPU).
+// "all" and "cursor" run the SAME recorder set — one pair PER connected display
+// so the last 30 seconds exist wherever the trigger lands. Capturing all
+// displays therefore costs nothing extra at record time; what "all" adds is
+// EXPORT work (one more snapshot + replay fetch + file write per display at the
+// trigger). Fixed mode runs a single pair on the chosen display (lowest CPU).
 import path from 'node:path'
 import { BrowserWindow, desktopCapturer, ipcMain, screen, session, webContents } from 'electron'
 import type { Display, IpcMainEvent } from 'electron'
@@ -72,14 +74,43 @@ export function restartCapture(settings: Settings): Promise<void> {
   return queueRebuild()
 }
 
-// The display the NEXT capture should target. Cursor mode: the display under
-// the mouse right now. Fixed mode: the configured display, falling back to
-// primary when it is no longer connected.
+// The display the NEXT capture should target — i.e. the FOCUSED display: the
+// one the editor opens on and annotations anchor to. "all"/"cursor": the
+// display under the mouse right now. Fixed mode: the configured display,
+// falling back to primary when it is no longer connected.
 export function resolveTargetDisplay(settings: Settings): Display {
-  if (settings.captureDisplay === 'cursor') {
+  if (settings.captureDisplay === 'all' || settings.captureDisplay === 'cursor') {
     return screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
   }
   return resolveFixedDisplay(settings.captureDisplay)
+}
+
+/** What one capture covers: every display it freezes, and which one is focused. */
+export interface CaptureTargets {
+  // In screen.getAllDisplays() order — the SAME order manifest.environment.screens
+  // uses, so a display's 1-based position here is its manifest display index.
+  displays: Display[]
+  focused: Display
+  // The connected-display list the indices refer to, captured once at trigger
+  // time so a hotplug between trigger and save cannot renumber them.
+  allDisplays: Display[]
+}
+
+/**
+ * The displays the NEXT capture freezes (GOAL "Multi-Monitor Support"):
+ *  - "all": every connected display, focused = the cursor's display.
+ *  - "cursor"/"<id>": that one display only.
+ */
+export function resolveCaptureTargets(settings: Settings): CaptureTargets {
+  const allDisplays = screen.getAllDisplays()
+  const focused = resolveTargetDisplay(settings)
+  if (settings.captureDisplay !== 'all') {
+    return { displays: [focused], focused, allDisplays }
+  }
+  // The cursor's display must be part of the set even in the pathological case
+  // where getDisplayNearestPoint returns something the list does not contain.
+  const displays = allDisplays.some((d) => d.id === focused.id) ? allDisplays : [focused, ...allDisplays]
+  return { displays, focused, allDisplays }
 }
 
 // The live recorder window assigned to a display, or null when none exists
@@ -91,8 +122,14 @@ export function captureWindowForDisplay(displayId: number): BrowserWindow | null
 }
 
 // Snapshots ONE display at its native (physical-pixel) resolution.
+//
+// `exact` refuses the "any screen" fallback: an all-displays capture must never
+// silently store the wrong screen's pixels under a display's index, whereas the
+// focused display (the pack's snapshot.png) is better served by a best-effort
+// frame than by no capture at all.
 export async function takeSnapshot(
   display: Display,
+  options: { exact?: boolean } = {},
 ): Promise<{ png: Buffer; width: number; height: number }> {
   const sources = await desktopCapturer.getSources({
     types: ['screen'],
@@ -101,8 +138,9 @@ export async function takeSnapshot(
       height: Math.round(display.size.height * display.scaleFactor),
     },
   })
-  const source = sources.find((s) => s.display_id === String(display.id)) ?? sources[0]
-  if (!source) throw new Error('no screen source available for snapshot')
+  const matched = sources.find((s) => s.display_id === String(display.id))
+  const source = matched ?? (options.exact === true ? undefined : sources[0])
+  if (!source) throw new Error(`no screen source available for display ${display.id}`)
   const size = source.thumbnail.getSize()
   return { png: source.thumbnail.toPNG(), width: size.width, height: size.height }
 }
@@ -209,10 +247,12 @@ function recorderSignature(display: Display, settings: Settings): string {
 // degrades to screenshot-only.
 async function rebuild(): Promise<void> {
   const settings = currentSettings
+  // "all" and "cursor" record every connected display (see the CPU note at the
+  // top of this file); only fixed mode narrows the recorder set.
   const displays =
     settings === null
       ? []
-      : settings.captureDisplay === 'cursor'
+      : settings.captureDisplay === 'all' || settings.captureDisplay === 'cursor'
         ? screen.getAllDisplays()
         : [resolveFixedDisplay(settings.captureDisplay)]
   const wanted = new Map<number, Display>(displays.map((d) => [d.id, d]))

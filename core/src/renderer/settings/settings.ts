@@ -389,6 +389,11 @@ captureHotkeyBtn.addEventListener('keydown', (event) => {
 
 function buildDisplayOptions(): void {
   captureDisplaySelect.replaceChildren()
+  // GOAL "Multi-Monitor Support": all displays first, and the default.
+  const allOption = document.createElement('option')
+  allOption.value = 'all'
+  allOption.textContent = t('settings.allDisplays')
+  captureDisplaySelect.append(allOption)
   const cursorOption = document.createElement('option')
   cursorOption.value = 'cursor'
   cursorOption.textContent = t('settings.cursorDisplay')
@@ -402,8 +407,8 @@ function buildDisplayOptions(): void {
   // A configured fixed display that is currently disconnected still needs an
   // entry, or the select would silently show the wrong value. Capture itself
   // falls back to primary while it is gone.
-  const configured = current?.captureDisplay ?? 'cursor'
-  if (configured !== 'cursor' && !displays.some((d) => d.id === configured)) {
+  const configured = current?.captureDisplay ?? 'all'
+  if (configured !== 'all' && configured !== 'cursor' && !displays.some((d) => d.id === configured)) {
     const option = document.createElement('option')
     option.value = configured
     option.textContent = t('settings.displayDisconnected', { id: configured })

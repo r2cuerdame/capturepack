@@ -9,7 +9,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
-import type { Annotation, TimelineEvent } from '../../shared/types'
+import type { Annotation, Manifest, ManifestKeyframe, TimelineEvent } from '../../shared/types'
 import { computeDisplayNumbers } from '../../shared/numbering'
 import { errorMessage, type PackHandle, type PackStore } from './store'
 
@@ -199,7 +199,11 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
         'All annotation boxes of a CapturePack as data: annotation_id, bounds {x, y, width, height} ' +
         'in snapshot pixels, text, numbered/blur flags, optional lifetime (start_ms..end_ms on the ' +
         'replay clock, both or neither; the representative instant is the midpoint), optional ' +
-        'style.color, and z stacking order. Display numbers are computed, never stored.',
+        'style.color, and z stacking order. A box MAY also carry "target": the real UI object it ' +
+        'was placed on, e.g. {source:"uia", name:"Save", control_type:"Button", automation_id, ' +
+        'class_name} from Windows UI Automation at the capture instant — that is the box\'s ' +
+        'meaning ("the Save button"), while its geometry always comes from bounds alone. ' +
+        'Display numbers are computed, never stored.',
       inputSchema: idArg,
     },
     (args) =>
@@ -248,10 +252,13 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
     {
       title: 'Frame at a time',
       description:
-        'The captured frame as a PNG image. Pass time_s (seconds on the replay timeline) for the ' +
-        'frame you want. NOTE (v0): this always returns the exported snapshot.png — the frame the ' +
-        'user chose when exporting; a text note states the snapshot frame time vs the requested ' +
-        'time. True frame extraction from the replay video is a planned future enhancement.',
+        'A frame of the capture as a PNG image. Pass time_s (seconds on the replay timeline) for ' +
+        'the moment you want. When the pack has ANNOTATED KEYFRAMES (manifest.media.keyframes — ' +
+        'stills rendered at every annotation state change, with blur, borders, number badges and ' +
+        'text drawn in), the NEAREST keyframe to time_s is returned; the response lists every ' +
+        'keyframe time so you can walk the story image by image. Without keyframes — and whenever ' +
+        'time_s is omitted — the exported snapshot.png is returned, with a note stating its frame ' +
+        'time. Frames at arbitrary replay times are never decoded out of the video.',
       inputSchema: {
         ...idArg,
         time_s: z.number().min(0).optional().describe('Requested time in seconds on the replay timeline.'),
@@ -261,16 +268,52 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
       run('capturepack_frame', args, () => {
         const pack = store.resolve(args.id)
         const manifest = pack.manifest()
+        const keyframes = keyframeList(manifest)
+        const times = keyframes.map((k) => `${(k.t_ms / 1000).toFixed(3)}s`).join(', ')
+
+        // Annotated keyframes (SPEC §5.7) answer "what did it look like at t"
+        // far better than the snapshot: they carry the annotations themselves.
+        if (args.time_s !== undefined && keyframes.length > 0) {
+          const wantMs = args.time_s * 1000
+          let best = keyframes[0] as ManifestKeyframe
+          for (const k of keyframes) {
+            if (Math.abs(k.t_ms - wantMs) < Math.abs(best.t_ms - wantMs)) best = k
+          }
+          const framePng = pack.readBinary(best.file)
+          if (framePng) {
+            const n = keyframes.indexOf(best) + 1
+            return {
+              content: [
+                { type: 'image', data: framePng.toString('base64'), mimeType: 'image/png' },
+                {
+                  type: 'text',
+                  text:
+                    `Annotated keyframe ${n}/${keyframes.length} (${best.file}) at ` +
+                    `${(best.t_ms / 1000).toFixed(3)}s — the nearest state change to the requested ` +
+                    `${args.time_s}s. Annotations (blur, borders, numbers, text) are rendered into ` +
+                    `this image; snapshot.png is never annotated. Keyframe times: ${times}.`,
+                },
+              ],
+            }
+          }
+        }
+
         const snapshotFile = manifest?.media?.snapshot ?? 'snapshot.png'
         const png = pack.readBinary(snapshotFile)
         if (!png) return errorResult(`${snapshotFile} not found in pack "${pack.id}"`)
         const snapT = manifest?.media?.snapshot_t_ms
         const snapDesc = typeof snapT === 'number' ? `${(snapT / 1000).toFixed(1)}s on the replay timeline` : 'the capture instant'
+        const keyframeNote =
+          keyframes.length === 0
+            ? ' This pack has no annotated keyframes (they render in the background after save), so ' +
+              'no frame is available at other times.'
+            : ` This pack has ${keyframes.length} annotated keyframe(s) at ${times} — pass time_s to get ` +
+              'the nearest one, with the annotations rendered in.'
         const note =
           args.time_s === undefined
-            ? `Snapshot frame from ${snapDesc}.`
-            : `Requested ${args.time_s}s; v0 returns the exported snapshot frame, which is from ${snapDesc}. ` +
-              'Frame extraction at arbitrary replay times is a future enhancement.'
+            ? `Snapshot frame from ${snapDesc} (original pixels, no annotations).${keyframeNote}`
+            : `Requested ${args.time_s}s; returned the exported snapshot frame, which is from ${snapDesc}.` +
+              keyframeNote
         return {
           content: [
             { type: 'image', data: png.toString('base64'), mimeType: 'image/png' },
@@ -314,8 +357,12 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
       title: 'DOM / plugin metadata',
       description:
         'Generic plugin metadata of a CapturePack: every JSON file under plugins/*/ parsed and ' +
-        'returned as-is (DOM data contributed by the Chrome extension lives under a chrome plugin ' +
-        'directory when present). Packs without plugin data return an empty list with a message.',
+        'returned as-is. On Windows the "windows-uia" plugin is the usual one: elements.json holds ' +
+        'the top-level window list and the foreground window\'s UI Automation control tree at the ' +
+        'capture instant (name, control_type, automation_id, class_name, bounds in SNAPSHOT pixel ' +
+        'coordinates, depth) — that is what annotation targets are picked from. DOM data ' +
+        'contributed by the Chrome extension lives under a chrome plugin directory when present. ' +
+        'Packs without plugin data return an empty list with a message.',
       inputSchema: idArg,
     },
     (args) =>
@@ -326,7 +373,10 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
           return jsonResult({
             pack: pack.id,
             plugins: [],
-            message: 'No plugin metadata in this pack (no plugins/ directory). DOM data appears here once a browser plugin contributed it.',
+            message:
+              'No plugin metadata in this pack (no plugins/ directory). Object data appears here as a ' +
+              '"windows-uia" plugin when the capture could read the Windows UI Automation tree, and DOM ' +
+              'data once a browser plugin contributed it.',
           })
         }
         return jsonResult({ pack: pack.id, plugins })
@@ -371,8 +421,10 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
       title: 'Window focus timeline',
       description:
         'Window-related context of a CapturePack: timeline events whose type or source mentions ' +
-        'window/focus, plus any window-tracking plugin metadata. Returns empty lists with a ' +
-        'message when the pack has no window data.',
+        'window/focus, plus any window-tracking plugin metadata — on Windows that is the ' +
+        '"windows-uia" payload, whose windows[] lists every top-level window at the capture ' +
+        'instant (title, process, bounds in snapshot pixels, and which one had focus). Returns ' +
+        'empty lists with a message when the pack has no window data.',
       inputSchema: idArg,
     },
     (args) =>
@@ -475,9 +527,38 @@ function summarize(pack: PackHandle): Record<string, unknown> {
     plugins: pack.plugins().map((p) => p.name),
   }
   if (typeof media?.snapshot_t_ms === 'number') summary.snapshot_t_ms = media.snapshot_t_ms
+  // Annotated keyframes (SPEC §5.7): announce them here so a session that only
+  // calls latest()/summary() knows images of every annotation state exist and
+  // can fetch them with capturepack_frame(time_s).
+  const keyframes = keyframeList(manifest)
+  if (keyframes.length > 0) {
+    summary.keyframes = {
+      count: keyframes.length,
+      t_ms: keyframes.map((k) => k.t_ms),
+      note: 'Annotated stills, one per annotation state change — capturepack_frame(time_s) returns the nearest one.',
+    }
+  }
   const warnings = pack.warnings()
   if (warnings.length > 0) summary.warnings = warnings
   return summary
+}
+
+/**
+ * manifest.media.keyframes, entry-validated and ordered by t_ms (SPEC §5.7).
+ * External packs are hand-writable, so nothing here trusts the declaration's
+ * shape — a malformed entry is skipped, never thrown on.
+ */
+function keyframeList(manifest: Manifest | null): ManifestKeyframe[] {
+  const raw: unknown = manifest?.media?.keyframes
+  if (!Array.isArray(raw)) return []
+  const frames: ManifestKeyframe[] = []
+  for (const item of raw as unknown[]) {
+    if (item === null || typeof item !== 'object') continue
+    const k = item as Partial<ManifestKeyframe>
+    if (typeof k.file !== 'string' || k.file === '' || typeof k.t_ms !== 'number') continue
+    frames.push({ file: k.file, t_ms: k.t_ms })
+  }
+  return frames.sort((a, b) => a.t_ms - b.t_ms)
 }
 
 function annotationList(pack: PackHandle): Annotation[] {

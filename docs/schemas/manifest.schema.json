@@ -144,9 +144,91 @@
           "minimum": 0
         },
         "trim_offset_ms": {
-          "description": "OPTIONAL, provenance only: when the writer trimmed the replay before saving, the position (ms) in the original captured recording of this replay's first frame (the trim in-point). Every time in the pack — annotation lifetimes, snapshot_t_ms, timeline offsets against t0 — is already on the trimmed replay's clock, so readers never apply this offset. Absent means the replay was never trimmed. SHOULD be absent when replay is null (SPEC.md §5.3).",
+          "description": "OPTIONAL, provenance only: when the writer trimmed the replay before saving, the position (ms) in the original captured recording of this replay's first frame (the trim in-point). Every time in the pack — annotation lifetimes, snapshot_t_ms, timeline offsets against t0 — is already on the trimmed replay's clock, so readers never apply this offset. Absent means the replay was never trimmed. SHOULD be absent when replay is null (SPEC.md §5.3). Only the FOCUSED display's replay is trimmed; non-focused per-display replays keep the original recording's clock (SPEC.md §5.6).",
           "type": "integer",
           "minimum": 0
+        },
+        "displays": {
+          "description": "OPTIONAL per-display media of a capture that froze MORE THAN ONE display at the same instant (SPEC.md §5.6). Absent for a single-display capture. Exactly one entry has focused: true — the display the annotations belong to — and that entry repeats the top-level media (snapshot \"snapshot.png\", the same replay filename and duration) rather than duplicating the bytes under a per-display name, so a reader that ignores this array still sees the whole pack. Every declared file must exist in the pack; index values are 1-based positions in environment.screens and must be unique.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["index", "snapshot", "replay", "bounds", "scale", "focused"],
+            "properties": {
+              "index": {
+                "description": "1-based position of this display in environment.screens (OS enumeration order). Unique within the array.",
+                "type": "integer",
+                "minimum": 1
+              },
+              "snapshot": {
+                "description": "Filename of this display's frozen frame: \"snapshot-d<index>.png\", except the focused entry, which repeats the top-level media.snapshot (\"snapshot.png\").",
+                "type": "string",
+                "pattern": "^(snapshot\\.png|snapshot-d[1-9][0-9]*\\.png)$"
+              },
+              "replay": {
+                "description": "Filename of this display's replay — \"replay-d<index>.webm\" (or .mp4), the top-level media.replay on the focused entry — or null when this display has no replay.",
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^(replay\\.(webm|mp4)|replay-d[1-9][0-9]*\\.(webm|mp4))$"
+                  },
+                  { "type": "null" }
+                ]
+              },
+              "replay_duration_ms": {
+                "description": "Duration of this display's replay in milliseconds. REQUIRED when this entry's replay is a filename.",
+                "type": "integer",
+                "minimum": 0
+              },
+              "bounds": {
+                "description": "This display's rectangle in the OS virtual-desktop coordinate space, in device-independent pixels. Multiply by scale for physical pixels: bounds.width * scale equals the per-display snapshot's pixel width and environment.screens[index-1].width.",
+                "type": "object",
+                "required": ["x", "y", "width", "height"],
+                "properties": {
+                  "x": { "description": "Left edge in the virtual-desktop space (may be negative).", "type": "number" },
+                  "y": { "description": "Top edge in the virtual-desktop space (may be negative).", "type": "number" },
+                  "width": { "description": "Width in device-independent pixels.", "type": "number", "exclusiveMinimum": 0 },
+                  "height": { "description": "Height in device-independent pixels.", "type": "number", "exclusiveMinimum": 0 }
+                }
+              },
+              "scale": {
+                "description": "This display's scale factor (1, 1.25, 1.5, 2, ...).",
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "focused": {
+                "description": "True on exactly one entry: the display the capture and its annotations are about. Its media is the top-level media.",
+                "type": "boolean"
+              }
+            },
+            "if": {
+              "properties": { "replay": { "type": "string" } },
+              "required": ["replay"]
+            },
+            "then": { "required": ["replay_duration_ms"] }
+          }
+        },
+        "keyframes": {
+          "description": "OPTIONAL annotated keyframe stills under frames/ (SPEC.md §5.7, §7.3): one PNG per annotation state change, with the annotations rendered into the pixels exactly as the annotated replay draws them — so a reader that cannot decode video still gets the whole story. Ordered by t_ms ascending; the NN in each filename is the entry's 1-based position. Written by the same background render as replay_annotated and declared with it, so the field is absent until that render completes (and in a pack that was never rendered). A screenshot-only pack has exactly one entry, t_ms 0, drawn from snapshot.png. Every declared file must exist in the pack; keyframes are a generated view, regenerable from the media + annotations.json, and never authoritative over annotations.json.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["file", "t_ms"],
+            "properties": {
+              "file": {
+                "description": "Pack-relative filename \"frames/frame-<NN>_<MM-SS.mmm>.png\": NN is this entry's 1-based position in the array (zero-padded to at least two digits) and MM-SS.mmm encodes t_ms ('-' because ':' is not a legal filename character on Windows).",
+                "type": "string",
+                "pattern": "^frames/frame-[0-9]{2,}_[0-9]{2}-[0-9]{2}\\.[0-9]{3}\\.png$"
+              },
+              "t_ms": {
+                "description": "Position on the replay clock, in milliseconds, of the frame this still shows — the same clock as annotation lifetimes, snapshot_t_ms and timeline offsets against t0. 0 in a screenshot-only pack.",
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
         }
       },
       "if": {

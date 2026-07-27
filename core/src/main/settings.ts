@@ -4,7 +4,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { isSupportedLanguage } from '../shared/i18n'
 import { DEFAULT_CAPTURE_HOTKEY } from '../shared/types'
-import type { Settings } from '../shared/types'
+import type { EditorWindowBounds, Settings } from '../shared/types'
 
 export function settingsFilePath(): string {
   return path.join(app.getPath('userData'), 'settings.json')
@@ -20,11 +20,19 @@ function defaultSettings(): Settings {
     captureHotkey: DEFAULT_CAPTURE_HOTKEY,
     replaySeconds: 30,
     fps: 15,
-    captureDisplay: 'cursor',
+    // All displays by default (GOAL "Multi-Monitor Support"). Migration is
+    // silent by construction: mergeSettings keeps any VALID stored value, so an
+    // existing settings.json that says "cursor" (or a fixed display id) stays
+    // exactly as the user chose it — only a fresh install starts at "all".
+    captureDisplay: 'all',
     scrubInvert: false,
     scrubSensitivityMs: 100,
     defaultManualDurationMs: 1000,
     showDurationLabel: true,
+    // The fullscreen overlay stays the default editor (GOAL "Editor Window
+    // Mode"); windowed mode is opt-in and then remembered with its rectangle.
+    editorWindowMode: 'fullscreen',
+    editorWindowBounds: null,
     mcpEnabled: true,
     mcpPort: 39393,
     mcpAutoStart: true,
@@ -149,6 +157,8 @@ const SETTINGS_KEY_SET: Record<keyof Settings, true> = {
   scrubSensitivityMs: true,
   defaultManualDurationMs: true,
   showDurationLabel: true,
+  editorWindowMode: true,
+  editorWindowBounds: true,
   mcpEnabled: true,
   mcpPort: true,
   mcpAutoStart: true,
@@ -207,11 +217,35 @@ function isCaptureHotkey(value: string): boolean {
   return keys === 1
 }
 
-// "cursor" (follow the mouse) or an Electron display id as digits. A stale but
-// well-formed id is accepted here — capture falls back to primary at runtime
-// when the display is no longer connected.
+// "all" (freeze every display), "cursor" (follow the mouse, keep that display
+// only), or an Electron display id as digits. A stale but well-formed id is
+// accepted here — capture falls back to primary at runtime when the display is
+// no longer connected.
 function isCaptureDisplay(value: string): boolean {
-  return value === 'cursor' || /^\d+$/.test(value)
+  return value === 'all' || value === 'cursor' || /^\d+$/.test(value)
+}
+
+// The editor's two window modes (GOAL "Editor Window Mode").
+function isEditorWindowMode(value: unknown): value is Settings['editorWindowMode'] {
+  return value === 'fullscreen' || value === 'windowed'
+}
+
+// A remembered windowed-editor rectangle. Position may be negative (a display
+// left of the primary); the size must be a positive finite number. A rectangle
+// that no longer fits any connected display is NOT rejected here — the editor
+// clamps it to the target display's work area when it opens.
+function isEditorWindowBounds(value: unknown): value is EditorWindowBounds {
+  if (value === null || typeof value !== 'object') return false
+  const b = value as Record<string, unknown>
+  const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+  return (
+    finite(b['x']) &&
+    finite(b['y']) &&
+    finite(b['width']) &&
+    finite(b['height']) &&
+    b['width'] > 0 &&
+    b['height'] > 0
+  )
 }
 
 // "system" (resolve from app.getLocale() at use time) or a supported language.
@@ -259,6 +293,20 @@ function mergeSettings(base: Settings, raw: Record<string, unknown>): Settings {
         : base.defaultManualDurationMs,
     showDurationLabel:
       typeof raw.showDurationLabel === 'boolean' ? raw.showDurationLabel : base.showDurationLabel,
+    editorWindowMode: isEditorWindowMode(raw.editorWindowMode)
+      ? raw.editorWindowMode
+      : base.editorWindowMode,
+    // Copied field by field: whatever else a hand-edited (or newer) settings.json
+    // hung on the object must never ride into the window bounds the editor
+    // applies.
+    editorWindowBounds: isEditorWindowBounds(raw.editorWindowBounds)
+      ? {
+          x: raw.editorWindowBounds.x,
+          y: raw.editorWindowBounds.y,
+          width: raw.editorWindowBounds.width,
+          height: raw.editorWindowBounds.height,
+        }
+      : base.editorWindowBounds,
     mcpEnabled: typeof raw.mcpEnabled === 'boolean' ? raw.mcpEnabled : base.mcpEnabled,
     mcpPort:
       typeof raw.mcpPort === 'number' && Number.isInteger(raw.mcpPort) && raw.mcpPort >= 1 && raw.mcpPort <= 65535

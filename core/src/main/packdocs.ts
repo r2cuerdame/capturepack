@@ -13,7 +13,16 @@ import { makeT } from '../shared/i18n'
 import type { Language, TranslateFn } from '../shared/i18n'
 import type { Annotation, AnnotationsFile, Manifest, TimelineFile } from '../shared/types'
 import { computeDisplayNumbers } from '../shared/numbering'
-import { formatClock, humanDate, lifetimeLabel } from './report'
+import {
+  displaySummaryLines,
+  extraDisplayFiles,
+  formatClock,
+  humanDate,
+  keyframeFileEntry,
+  keyframeSectionLines,
+  keyframeSet,
+  lifetimeLabel,
+} from './report'
 
 const px = (n: number): number => Math.round(n)
 
@@ -72,6 +81,9 @@ export function buildReadme(
   lines.push(`- **${t('pack.created')}:** ${humanDate(manifest.created_at)}`)
   lines.push(`- **${t('pack.application')}:** ${manifest.environment.app ?? t('pack.unknown')}`)
   lines.push(`- **${t('pack.duration')}:** ${replayLabel(manifest, t)}`)
+  // All-displays capture (GOAL "Multi-Monitor Support"): the pack holds every
+  // screen the trigger froze, not only the annotated one.
+  lines.push(...displaySummaryLines(manifest, t))
   lines.push('')
 
   lines.push(`## ${t('pack.description')}`)
@@ -79,6 +91,18 @@ export function buildReadme(
   const description = manifest.note ?? manifest.title
   lines.push(description ?? t('pack.noDescription'))
   lines.push('')
+
+  // Annotated keyframes (GOAL "Annotated keyframes (LLM-first)"): the story as
+  // images, right after the description — before the reader is asked to open
+  // anything at all.
+  const keyframes = keyframeSet(manifest, annotationsFile)
+  const keyframeLines = keyframeSectionLines(keyframes, t)
+  if (keyframeLines.length > 0) {
+    lines.push(`## ${t('pack.keyframes')}`)
+    lines.push('')
+    lines.push(...keyframeLines)
+    lines.push('')
+  }
 
   lines.push(`## ${t('pack.files')}`)
   lines.push('')
@@ -94,6 +118,11 @@ export function buildReadme(
       '| replay_annotated.webm | The replay with annotations rendered in — watch this one (generated in the background; may appear shortly after save) |',
     )
   }
+  for (const f of extraDisplayFiles(manifest)) {
+    lines.push(`| ${f.name} | ${f.what} |`)
+  }
+  const framesEntry = keyframeFileEntry(keyframes)
+  if (framesEntry !== null) lines.push(`| ${framesEntry.name} | ${framesEntry.what} |`)
   lines.push(`| annotations.json | ${annotationCounts(annotations)} — the editable source |`)
   lines.push('| timeline.json | When the capture and each annotation happened |')
   lines.push('| report.md | The full generated narrative of this pack |')
@@ -111,8 +140,17 @@ export function buildReadme(
     )
     lines.push('   to watch. (In packs with a replay, watch `replay_annotated.webm` first.)')
   }
-  lines.push('2. Read `report.md` for the full narrative.')
-  lines.push('3. AI: read the documents in `skills/`, or connect through a CapturePack MCP server.')
+  if (keyframeLines.length > 0) {
+    lines.push(
+      '2. In a hurry — or reading as an AI: the stills above (`frames/`) show every annotation state',
+    )
+    lines.push('   without decoding video. They are rendered in the background right after save.')
+    lines.push('3. Read `report.md` for the full narrative.')
+    lines.push('4. AI: read the documents in `skills/`, or connect through a CapturePack MCP server.')
+  } else {
+    lines.push('2. Read `report.md` for the full narrative.')
+    lines.push('3. AI: read the documents in `skills/`, or connect through a CapturePack MCP server.')
+  }
 
   if (blurCount > 0) {
     const which =
@@ -178,6 +216,18 @@ function buildOverviewSkill(
           '; the annotated view replay_annotated.webm is generated in the background after save.'
       : `**Media:** screenshot only (${size} snapshot.png); no replay, no annotated replay.`,
   )
+  // All-displays capture: say plainly which screen the annotations belong to.
+  const displays = manifest.media.displays
+  if (displays !== undefined && displays.length > 1) {
+    const focused = displays.find((d) => d.focused)
+    lines.push(
+      `**Displays:** ${displays.length} screens were frozen by the same trigger` +
+        (focused === undefined ? '' : `; display ${focused.index} is the FOCUSED one`) +
+        '. snapshot.png, the replay, and EVERY annotation belong to the focused display; the other ' +
+        'screens ship as synchronized context (snapshot-d<N>.png / replay-d<N>.webm, declared in ' +
+        'manifest.media.displays) and carry no annotations.',
+    )
+  }
   lines.push('')
   lines.push(
     manifest.note ??
@@ -186,10 +236,23 @@ function buildOverviewSkill(
   )
   lines.push('')
 
+  // Annotated keyframes (GOAL "Annotated keyframes (LLM-first)"): the whole
+  // story as images — the single most useful thing in this document for a
+  // model that cannot decode video.
+  const keyframes = keyframeSet(manifest, annotationsFile)
+  const keyframeLines = keyframeSectionLines(keyframes, t)
+  if (keyframeLines.length > 0) {
+    lines.push(`## ${t('pack.keyframes')}`)
+    lines.push('')
+    lines.push(...keyframeLines)
+    lines.push('')
+  }
+
   if (annotations.length > 0) {
     lines.push('Where to look:')
     lines.push('')
     if (hasReplay) lines.push('- `replay_annotated.webm` shows the annotations in place, in time.')
+    lines.push('- `frames/` holds the same annotations as stills, one per state change.')
     lines.push('- `snapshot.png` shows the captured frame.')
     const numbered = annotations
       .filter((a) => numbers.has(a.annotation_id))
@@ -417,6 +480,16 @@ function buildProjectSkill(manifest: Manifest, t: TranslateFn): string {
       ? '  after save, regenerable at any time from replay.webm + annotations.json.'
       : '  (absent here — it only exists when there is a replay).',
   )
+  if (manifest.media.displays !== undefined && manifest.media.displays.length > 1) {
+    lines.push('- `snapshot-d<N>.png` / `replay-d<N>.webm` — the OTHER displays this capture froze, one')
+    lines.push('  set per display, declared in `manifest.media.displays` (N = the display index there).')
+    lines.push('  The focused display’s media is the top-level snapshot.png/replay.webm; annotations')
+    lines.push('  apply to the focused display only.')
+  }
+  lines.push('- `frames/frame-NN_MM-SS.mmm.png` — annotated STILLS, one per annotation state change,')
+  lines.push('  declared in `manifest.media.keyframes` with their replay-clock time. Same overlays as the')
+  lines.push('  annotated replay: read these instead of decoding video. Rendered in the background after')
+  lines.push('  save, so they may be absent (a screenshot-only pack still gets exactly one).')
   lines.push('- `annotations.json` — annotation boxes: bounds + text + optional number, blur, lifetime.')
   lines.push('  The single source of truth for annotations; rendered views are derived from it.')
   lines.push('- `timeline.json` — machine-readable event log.')

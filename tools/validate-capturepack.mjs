@@ -39,6 +39,13 @@ const PLUGIN_NAME_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
 const EVENT_TYPE_RE = /^[a-z0-9_-]+(\.[a-z0-9_-]+)+$/;
 const REPLAY_RE = /^replay\.(webm|mp4)$/;
 const REPLAY_ANNOTATED_RE = /^replay_annotated\.(webm|mp4)$/;
+// Per-display media of a multi-monitor capture (SPEC §5.6). The focused entry
+// repeats the top-level names instead of using these.
+const DISPLAY_SNAPSHOT_RE = /^snapshot-d[1-9][0-9]*\.png$/;
+const DISPLAY_REPLAY_RE = /^replay-d[1-9][0-9]*\.(webm|mp4)$/;
+// Annotated keyframe stills (SPEC §5.7): frames/frame-<NN>_<MM-SS.mmm>.png,
+// NN = the 1-based position in media.keyframes, MM-SS.mmm = its t_ms.
+const KEYFRAME_FILE_RE = /^frames\/frame-(\d{2,})_(\d{2})-(\d{2})\.(\d{3})\.png$/;
 const ANNOTATION_ID_RE = /^ann_[0-9a-f]{6}$/;
 // Annotation type names from pre-release drafts of 0.1.0. The unified box model
 // replaced them before release; a pack that still uses one was written against
@@ -209,7 +216,7 @@ function checkNoNulls(obj, path, nullableAt) {
 // Section validators
 // ---------------------------------------------------------------------------
 
-function validateManifest(m, pack) {
+function validateManifest(m, pack, snapshotDims) {
   // format / format_version
   if (m.format === "capturepack") pass(`manifest.json: format is "capturepack"`);
   else fail(`manifest.json: format is ${JSON.stringify(m.format)} — MUST be "capturepack" (SPEC §5.1)`);
@@ -285,6 +292,10 @@ function validateManifest(m, pack) {
   let replay = null;
   let replayDurationMs = null;
   let replayAnnotated = null;
+  // Files declared by media.displays[] — known to the unknown-file sweep.
+  const displayFiles = new Set();
+  // Same, for the annotated keyframe stills declared by media.keyframes[].
+  const keyframeFiles = new Set();
   if (!isObj(media)) {
     fail(`manifest.json: media MUST be an object (SPEC §5.3)`);
   } else {
@@ -343,6 +354,16 @@ function validateManifest(m, pack) {
         pass(`manifest.json: media.trim_offset_ms is ${media.trim_offset_ms} — the replay was trimmed from the original recording at that in-point (provenance only; all pack times are on the trimmed clock, SPEC §5.3)`);
       }
     }
+
+    // media.displays[] — multi-monitor capture (SPEC §5.6)
+    if (media.displays !== undefined && media.displays !== null) {
+      validateDisplays(media, env, pack, displayFiles);
+    }
+
+    // media.keyframes[] — annotated stills (SPEC §5.7)
+    if (media.keyframes !== undefined && media.keyframes !== null) {
+      validateKeyframes(media, pack, keyframeFiles, replay, replayDurationMs, snapshotDims);
+    }
   }
 
   // media declarations vs actual files
@@ -395,6 +416,9 @@ function validateManifest(m, pack) {
         } else {
           pass(`plugins/${p.name}/: declared in manifest and meta.json matches (${p.name} ${p.version})`);
         }
+        // windows-uia is a well-known payload with a defined shape (SPEC §11.3);
+        // every other plugin's contents stay plugin-defined and unchecked.
+        if (p.name === "windows-uia") validateWindowsUia(pack);
       }
       if (m.plugins.length === 0) pass(`manifest.json: plugins is [] (no plugin data)`);
     }
@@ -414,7 +438,316 @@ function validateManifest(m, pack) {
     }
   }
 
-  return { replay, replayDurationMs, replayAnnotated, declaredPlugins: declared };
+  return { replay, replayDurationMs, replayAnnotated, declaredPlugins: declared, displayFiles, keyframeFiles };
+}
+
+/**
+ * plugins/windows-uia/elements.json (SPEC §11.3): the capture-instant window
+ * list and foreground-window UI Automation tree that annotation targets are
+ * picked from. Purely additive data — a malformed payload is a failure of THIS
+ * plugin, never of the core pack, so nothing here touches annotation results.
+ */
+function validateWindowsUia(pack) {
+  const name = "plugins/windows-uia/elements.json";
+  const buf = pack.files.get(name);
+  if (!buf) {
+    fail(`${name}: missing — the windows-uia payload REQUIRES it (SPEC §11.3)`);
+    return;
+  }
+  const parsed = parseJsonFile(name, buf);
+  if (parsed.error) return;
+  const p = parsed.value;
+  if (!isObj(p)) { fail(`${name}: MUST be a JSON object (SPEC §11.3)`); return; }
+
+  let bad = 0;
+  if (!isIsoWithTz(p.captured_at)) { fail(`${name}: captured_at MUST be ISO 8601 with a timezone designator (SPEC §11.3)`); bad++; }
+  if (!isInt(p.budget_ms) || p.budget_ms <= 0) { fail(`${name}: budget_ms MUST be a positive integer — the bound the dump was given (SPEC §11.3)`); bad++; }
+  if (typeof p.truncated !== "boolean") { fail(`${name}: truncated MUST be a boolean (SPEC §11.3)`); bad++; }
+
+  const checkBounds = (label, b) => {
+    if (!isObj(b) || !isNum(b.x) || !isNum(b.y) || !isNum(b.width) || !isNum(b.height)) {
+      fail(`${label}.bounds MUST be { x, y, width, height } with all four numbers, in snapshot pixel coordinates (SPEC §11.3)`);
+      return false;
+    }
+    return true;
+  };
+
+  let focusedWindows = 0;
+  if (!Array.isArray(p.windows)) {
+    fail(`${name}: windows MUST be an array (may be empty) (SPEC §11.3)`);
+    bad++;
+  } else {
+    p.windows.forEach((w, i) => {
+      const label = `${name}: windows[${i}]`;
+      if (!isObj(w)) { fail(`${label} MUST be an object`); bad++; return; }
+      for (const f of ["title", "process"]) {
+        if (!isStr(w[f])) { fail(`${label}.${f} MUST be a string (may be empty) (SPEC §11.3)`); bad++; }
+      }
+      if (typeof w.focused !== "boolean") { fail(`${label}.focused MUST be a boolean (SPEC §11.3)`); bad++; }
+      else if (w.focused) focusedWindows++;
+      if (!checkBounds(label, w.bounds)) bad++;
+    });
+  }
+  if (focusedWindows > 1) {
+    fail(`${name}: ${focusedWindows} windows are marked focused — at most ONE window had focus at the capture instant (SPEC §11.3)`);
+    bad++;
+  }
+
+  if (!Array.isArray(p.elements)) {
+    fail(`${name}: elements MUST be an array (may be empty) (SPEC §11.3)`);
+    bad++;
+  } else {
+    p.elements.forEach((e, i) => {
+      const label = `${name}: elements[${i}]`;
+      if (!isObj(e)) { fail(`${label} MUST be an object`); bad++; return; }
+      for (const f of ["name", "control_type", "automation_id", "class_name"]) {
+        if (!isStr(e[f])) { fail(`${label}.${f} MUST be a string (may be empty — this is a dump, SPEC §11.3)`); bad++; }
+      }
+      if (!isInt(e.depth) || e.depth < 0) { fail(`${label}.depth MUST be a non-negative integer (0 = the foreground window itself) (SPEC §11.3)`); bad++; }
+      if (!checkBounds(label, e.bounds)) bad++;
+    });
+    if (bad === 0 && p.truncated === true) {
+      note(`${name}: truncated is true — the UI Automation walk ran out of budget/depth/elements, so the tree is INCOMPLETE; an absent element means "not recorded", never "not on screen" (SPEC §11.3)`);
+    }
+    if (bad === 0 && p.elements.length === 0 && Array.isArray(p.windows) && p.windows.length === 0) {
+      note(`${name}: the dump is empty (no windows, no elements) — valid, but it carries no object context (SPEC §11.3)`);
+    }
+  }
+  if (bad === 0) {
+    pass(`plugins/windows-uia/: capture-instant object dump is well-formed (${Array.isArray(p.windows) ? p.windows.length : 0} window(s), ${Array.isArray(p.elements) ? p.elements.length : 0} element(s), bounds in snapshot pixels — SPEC §11.3)`);
+  }
+}
+
+/**
+ * media.keyframes[]: the annotated stills under frames/ (SPEC §5.7). Checks the
+ * array shape, ascending t_ms, the NN-encodes-the-order filename rule, and that
+ * every declared still exists and is a real PNG in the annotation coordinate
+ * space. The array is written by the same background render as
+ * replay_annotated, but — unlike that declaration — it is written AFTER the
+ * files, so a declared-but-missing still is a failure, not a "still rendering".
+ */
+function validateKeyframes(media, pack, keyframeFiles, replay, replayDurationMs, snapshotDims) {
+  const keyframes = media.keyframes;
+  if (!Array.isArray(keyframes)) {
+    fail(`manifest.json: media.keyframes MUST be an array (SPEC §5.7)`);
+    return;
+  }
+  if (keyframes.length === 0) {
+    note(`manifest.json: media.keyframes is [] — omit it entirely when the pack has no annotated stills (SPEC §5.7)`);
+    return;
+  }
+  let ok = true;
+  let lastT = null;
+
+  keyframes.forEach((k, i) => {
+    const label = `manifest.json: media.keyframes[${i}]`;
+    if (!isObj(k)) {
+      fail(`${label} MUST be an object with "file" and "t_ms" (SPEC §5.7)`);
+      ok = false;
+      return;
+    }
+
+    // t_ms — the position on the replay clock this still shows.
+    let tOk = false;
+    if (!isInt(k.t_ms) || k.t_ms < 0) {
+      fail(`${label}.t_ms ${JSON.stringify(k.t_ms)} MUST be an integer >= 0 on the replay clock (SPEC §5.7)`);
+      ok = false;
+    } else {
+      tOk = true;
+      if (lastT !== null && k.t_ms < lastT) {
+        fail(`${label}.t_ms ${k.t_ms} is earlier than the previous entry (${lastT}) — keyframes MUST be ordered by t_ms ascending (SPEC §5.7)`);
+        ok = false;
+      } else if (lastT !== null && k.t_ms === lastT) {
+        note(`${label}.t_ms ${k.t_ms} repeats the previous entry — state changes within ~300 ms SHOULD merge into one still (SPEC §5.7)`);
+      }
+      lastT = k.t_ms;
+      if (replayDurationMs !== null && k.t_ms > replayDurationMs) {
+        note(`${label}.t_ms ${k.t_ms} lies past the replay end (${replayDurationMs} ms) — a keyframe is a position on the replay clock (SPEC §5.7)`);
+      }
+      if (!replay && k.t_ms !== 0) {
+        note(`${label}.t_ms is ${k.t_ms} but the pack has no replay — a screenshot-only pack has exactly one still at t_ms 0, drawn from snapshot.png (SPEC §5.7, §7.3)`);
+      }
+    }
+
+    // file — "frames/frame-<NN>_<MM-SS.mmm>.png", NN = the 1-based position.
+    const mtch = isStr(k.file) ? KEYFRAME_FILE_RE.exec(k.file) : null;
+    if (!mtch) {
+      fail(`${label}.file ${JSON.stringify(k.file)} MUST be "frames/frame-<NN>_<MM-SS.mmm>.png" (SPEC §5.7)`);
+      ok = false;
+      return;
+    }
+    if (Number(mtch[1]) !== i + 1) {
+      fail(`${label}.file ${JSON.stringify(k.file)} carries order ${Number(mtch[1])} but is entry ${i + 1} — NN MUST be the entry's 1-based position (SPEC §5.7)`);
+      ok = false;
+    }
+    if (tOk) {
+      const named = Number(mtch[2]) * 60_000 + Number(mtch[3]) * 1000 + Number(mtch[4]);
+      if (named !== k.t_ms) {
+        note(`${label}.file encodes ${named} ms but t_ms is ${k.t_ms} — the filename SHOULD spell the entry's own time (SPEC §5.7); t_ms is what readers use`);
+      }
+    }
+
+    keyframeFiles.add(k.file);
+    const buf = pack.files.get(k.file);
+    if (!buf) {
+      fail(`media.keyframes: declared still "${k.file}" is missing from the pack (SPEC §5.7)`);
+      ok = false;
+      return;
+    }
+    const dims = pngDimensions(buf);
+    if (!dims) {
+      fail(`media.keyframes: "${k.file}" is not a valid PNG (bad signature or IHDR) (SPEC §5.7, §7.3)`);
+      ok = false;
+    } else if (snapshotDims && (dims.width !== snapshotDims.width || dims.height !== snapshotDims.height)) {
+      note(`media.keyframes: "${k.file}" is ${dims.width}x${dims.height} but snapshot.png is ${snapshotDims.width}x${snapshotDims.height} — stills SHOULD use the annotation coordinate space so box bounds map onto them directly (SPEC §7.3)`);
+    }
+  });
+
+  if (ok) {
+    pass(`manifest.json: media.keyframes declares ${keyframes.length} annotated still(s), ordered by t_ms and present in the pack (SPEC §5.7)`);
+  }
+}
+
+/**
+ * media.displays[]: the per-display media of a capture that froze more than one
+ * display (SPEC §5.6). Checks the array shape, index uniqueness, that exactly
+ * one entry is focused and repeats the top-level media, and that every declared
+ * file exists. A display without a replay is a NOTE, never a failure.
+ */
+function validateDisplays(media, env, pack, displayFiles) {
+  const displays = media.displays;
+  if (!Array.isArray(displays)) {
+    fail(`manifest.json: media.displays MUST be an array (SPEC §5.6)`);
+    return;
+  }
+  if (displays.length === 0) {
+    note(`manifest.json: media.displays is [] — omit it entirely for a single-display capture (SPEC §5.6)`);
+    return;
+  }
+  const screenCount = isObj(env) && Array.isArray(env.screens) ? env.screens.length : null;
+  const seenIndices = new Set();
+  let focused = 0;
+  let focusedIndex = null;
+  let nonFocusedReplays = 0;
+  let ok = true;
+
+  displays.forEach((d, i) => {
+    const label = `manifest.json: media.displays[${i}]`;
+    if (!isObj(d)) {
+      fail(`${label} MUST be an object (SPEC §5.6)`);
+      ok = false;
+      return;
+    }
+    const isFocused = d.focused === true;
+    if (typeof d.focused !== "boolean") {
+      fail(`${label}.focused MUST be a boolean — exactly one entry is the focused display (SPEC §5.6)`);
+      ok = false;
+    } else if (isFocused) {
+      focused += 1;
+      focusedIndex = d.index;
+    }
+
+    // index: 1-based position in environment.screens, unique
+    let indexOk = false;
+    if (!isInt(d.index) || d.index < 1) {
+      fail(`${label}.index ${JSON.stringify(d.index)} MUST be an integer >= 1 — the 1-based position in environment.screens (SPEC §5.6)`);
+      ok = false;
+    } else if (seenIndices.has(d.index)) {
+      fail(`${label}.index ${d.index} is declared more than once — display indices MUST be unique (SPEC §5.6)`);
+      ok = false;
+    } else {
+      seenIndices.add(d.index);
+      indexOk = true;
+      if (screenCount !== null && d.index > screenCount) {
+        note(`${label}.index ${d.index} has no matching environment.screens entry (${screenCount} declared) — the index is the display's position in that list (SPEC §5.6)`);
+      }
+    }
+
+    // geometry
+    const b = d.bounds;
+    if (!isObj(b) || !isNum(b.x) || !isNum(b.y) || !isNum(b.width) || b.width <= 0 || !isNum(b.height) || b.height <= 0) {
+      fail(`${label}.bounds MUST be { x, y, width, height } in device-independent pixels, width/height > 0 (SPEC §5.6)`);
+      ok = false;
+    }
+    if (!isNum(d.scale) || d.scale <= 0) {
+      fail(`${label}.scale MUST be a number > 0 (SPEC §5.6)`);
+      ok = false;
+    }
+
+    // snapshot: the focused entry repeats the top-level file, the others use
+    // the per-display name for their own index.
+    if (!isStr(d.snapshot)) {
+      fail(`${label}.snapshot MUST be a string (SPEC §5.6)`);
+      ok = false;
+    } else if (isFocused) {
+      if (d.snapshot !== media.snapshot) {
+        fail(`${label}.snapshot ${JSON.stringify(d.snapshot)} MUST equal the top-level media.snapshot ${JSON.stringify(media.snapshot)} — the focused display's media IS the pack's media (SPEC §5.6)`);
+        ok = false;
+      }
+    } else if (!DISPLAY_SNAPSHOT_RE.test(d.snapshot)) {
+      fail(`${label}.snapshot ${JSON.stringify(d.snapshot)} MUST be "snapshot-d<index>.png" for a non-focused display (SPEC §5.6)`);
+      ok = false;
+    } else {
+      if (indexOk && d.snapshot !== `snapshot-d${d.index}.png`) {
+        fail(`${label}.snapshot ${JSON.stringify(d.snapshot)} MUST be "snapshot-d${d.index}.png" to match its index (SPEC §5.6)`);
+        ok = false;
+      }
+      displayFiles.add(d.snapshot);
+      if (pack.files.has(d.snapshot)) {
+        pass(`media.displays: declared snapshot "${d.snapshot}" exists in the pack`);
+      } else {
+        fail(`media.displays: declared snapshot "${d.snapshot}" is missing from the pack (SPEC §5.6)`);
+        ok = false;
+      }
+    }
+
+    // replay: optional per display — a display without one is context-only.
+    if (d.replay === null) {
+      note(`media.displays: display ${isInt(d.index) ? d.index : i} has no replay (replay: null) — its snapshot is the only media for that screen (SPEC §5.6)`);
+    } else if (!isStr(d.replay)) {
+      fail(`${label}.replay MUST be a filename string or null (SPEC §5.6)`);
+      ok = false;
+    } else if (isFocused) {
+      if (d.replay !== media.replay) {
+        fail(`${label}.replay ${JSON.stringify(d.replay)} MUST equal the top-level media.replay ${JSON.stringify(media.replay)} (SPEC §5.6)`);
+        ok = false;
+      } else if (d.replay_duration_ms !== media.replay_duration_ms) {
+        fail(`${label}.replay_duration_ms ${JSON.stringify(d.replay_duration_ms)} MUST equal the top-level media.replay_duration_ms ${JSON.stringify(media.replay_duration_ms)} (SPEC §5.6)`);
+        ok = false;
+      }
+    } else if (!DISPLAY_REPLAY_RE.test(d.replay)) {
+      fail(`${label}.replay ${JSON.stringify(d.replay)} MUST be "replay-d<index>.webm" (or .mp4) for a non-focused display (SPEC §5.6)`);
+      ok = false;
+    } else {
+      nonFocusedReplays += 1;
+      if (indexOk && !d.replay.startsWith(`replay-d${d.index}.`)) {
+        fail(`${label}.replay ${JSON.stringify(d.replay)} MUST be "replay-d${d.index}.webm" (or .mp4) to match its index (SPEC §5.6)`);
+        ok = false;
+      }
+      if (!isInt(d.replay_duration_ms) || d.replay_duration_ms < 0) {
+        fail(`${label}.replay_duration_ms MUST be an integer >= 0 when this display declares a replay (SPEC §5.6)`);
+        ok = false;
+      }
+      displayFiles.add(d.replay);
+      if (pack.files.has(d.replay)) {
+        pass(`media.displays: declared replay "${d.replay}" exists in the pack`);
+      } else {
+        fail(`media.displays: declared replay "${d.replay}" is missing from the pack (SPEC §5.6)`);
+        ok = false;
+      }
+    }
+  });
+
+  if (focused !== 1) {
+    fail(`manifest.json: media.displays MUST contain EXACTLY ONE entry with focused: true (found ${focused}) — the focused display owns snapshot.png, the replay, and every annotation (SPEC §5.6)`);
+    ok = false;
+  }
+  if (ok) {
+    pass(`manifest.json: media.displays declares ${displays.length} display(s), display ${focusedIndex} focused and matching the top-level media (SPEC §5.6)`);
+  }
+  if (nonFocusedReplays > 0 && isInt(media.trim_offset_ms)) {
+    note(`media.displays: the replay was trimmed (trim_offset_ms ${media.trim_offset_ms}) but non-focused per-display replays keep the ORIGINAL recording's clock — add trim_offset_ms to align them with the pack clock (SPEC §5.6)`);
+  }
 }
 
 function validateAnnotations(a, snapshotDims, replay, replayDurationMs) {
@@ -435,6 +768,7 @@ function validateAnnotations(a, snapshotDims, replay, replayDurationMs) {
   let bad = 0;
   let blurCount = 0;
   const numberedBoxes = []; // { id, startMs, z, index } for display-number computation
+  const targetedBoxes = []; // annotation ids carrying a source:"uia" target (SPEC §8.7)
   a.annotations.forEach((ann, i) => {
     const label = `annotations.json: annotations[${i}]`;
     if (!isObj(ann)) { fail(`${label} MUST be an object`); bad++; return; }
@@ -505,8 +839,30 @@ function validateAnnotations(a, snapshotDims, replay, replayDurationMs) {
       }
     }
 
-    // target — reserved for semantic object metadata (SPEC §8.3).
-    if (ann.target !== undefined && !isObj(ann.target)) { fail(`${label}.target, when present, MUST be an object (reserved for semantic object metadata, SPEC §8.3)`); bad++; }
+    // target — semantic object metadata (SPEC §8.3, §8.7). It is purely
+    // additive: whatever is wrong with it, the box still renders from bounds.
+    if (ann.target !== undefined) {
+      if (!isObj(ann.target)) {
+        fail(`${label}.target, when present, MUST be an object (semantic object metadata, SPEC §8.7)`);
+        bad++;
+      } else if (!isStr(ann.target.source) || ann.target.source.length === 0) {
+        fail(`${label}.target.source MUST be a non-empty string — it is the discriminator for every other field of a target (SPEC §8.7)`);
+        bad++;
+      } else if (ann.target.source === "uia") {
+        targetedBoxes.push(isStr(ann.annotation_id) ? ann.annotation_id : `(annotations[${i}])`);
+        for (const f of ["name", "control_type", "automation_id", "class_name"]) {
+          if (ann.target[f] === undefined) continue;
+          if (!isStr(ann.target[f])) {
+            fail(`${label}.target.${f} MUST be a string (SPEC §8.7)`);
+            bad++;
+          } else if (ann.target[f].length === 0) {
+            note(`${label}.target.${f} is an empty string — a UIA property the element had no value for MUST be omitted, not written empty (SPEC §8.7)`);
+          }
+        }
+      } else {
+        note(`${label}.target.source "${ann.target.source}" is not defined in format 0.1.0 — skipped (readers MUST ignore target sources they do not understand and render the box from bounds, SPEC §8.7)`);
+      }
+    }
 
     // style — { color } in 0.1.0 (SPEC §8.3).
     if (ann.style !== undefined) {
@@ -565,6 +921,9 @@ function validateAnnotations(a, snapshotDims, replay, replayDurationMs) {
   }
   if (blurCount > 0) {
     note(`annotations.json: ${blurCount} box(es) are marked blur — snapshot.png and the replay keep the ORIGINAL unredacted pixels; blur renders only into derived views such as replay_annotated (SPEC §9)`);
+  }
+  if (targetedBoxes.length > 0) {
+    pass(`annotations.json: ${targetedBoxes.length} box(es) carry a semantic target with source "uia" (${targetedBoxes.join(", ")}) — the box's geometry still comes from bounds alone (SPEC §8.7)`);
   }
   if (bad === 0) pass(`annotations.json: all ${a.annotations.length} annotation(s) are well-formed boxes`);
   return knownIds;
@@ -651,7 +1010,8 @@ function validatePack(pack) {
   }
 
   // --- manifest fields, media consistency, plugins ---
-  const { replay, replayDurationMs, replayAnnotated, declaredPlugins } = validateManifest(manifest, pack);
+  const { replay, replayDurationMs, replayAnnotated, declaredPlugins, displayFiles, keyframeFiles } =
+    validateManifest(manifest, pack, snapshotDims);
 
   // --- optional JSON files ---
   let annotationIds = null;
@@ -694,6 +1054,12 @@ function validatePack(pack) {
   // --- unknown files: ignored, with a note (forward compatibility, SPEC §13) ---
   const known = new Set(["manifest.json", "snapshot.png", "annotations.json", "timeline.json", "report.md", "README.md"]);
   if (replay) known.add(replay);
+  // Per-display media of a multi-monitor capture (SPEC §5.6); undeclared
+  // snapshot-d*/replay-d* files fall through to the unknown-file note below.
+  for (const name of displayFiles) known.add(name);
+  // Annotated stills (SPEC §5.7): declared ones are known, undeclared ones get
+  // their own note below — readers MUST ignore them.
+  for (const name of keyframeFiles) known.add(name);
   // Undeclared replay_annotated files were already noted in the media checks.
   for (const candidate of ["replay_annotated.webm", "replay_annotated.mp4"]) {
     if (pack.files.has(candidate)) known.add(candidate);
@@ -703,6 +1069,10 @@ function validatePack(pack) {
     if (name.startsWith("skills/")) continue; // skills/ documents are open-ended (SPEC §12.3)
     const pluginMatch = /^plugins\/([^/]+)\//.exec(name);
     if (pluginMatch) continue; // plugin payloads are arbitrary; undeclared dirs already noted
+    if (name.startsWith("frames/")) {
+      note(`${name}: not declared in manifest.media.keyframes — ignored (readers MUST ignore undeclared stills; writers regenerate frames/ from scratch and declare every still, SPEC §5.7)`);
+      continue;
+    }
     note(`${name}: unknown file — ignored (readers MUST ignore unknown files, SPEC §13.1)`);
   }
 }

@@ -5,6 +5,10 @@ directories:
 files:
   - dist/**
   - package.json
+# PowerShell cannot read a script from inside an asar archive, and the UI
+# Automation helper (GOAL "Static object picking") is spawned as a real file.
+asarUnpack:
+  - dist/scripts/**
 win:
   icon: build/icon.ico
   target:

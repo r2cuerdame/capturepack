@@ -1,7 +1,7 @@
 // IPC contract between main, the hidden capture window, and the editor window.
 // Every channel is listed here; no module may invent channels outside this file.
 
-import type { Annotation, Settings } from './types'
+import type { Annotation, EditorWindowMode, Settings } from './types'
 
 export const IPC = {
   // main -> capture window: begin recording this desktop source id
@@ -26,6 +26,14 @@ export const IPC = {
   editorSaveAsNew: 'editor:save-as-new',
   // editor -> main: an annotation was added (EditorAnnotationAddedPayload, for the timeline)
   editorAnnotationAdded: 'editor:annotation-added',
+  // editor -> main: put the editor window into this mode (GOAL "Editor Window
+  // Mode"). Payload: EditorWindowMode — an ABSOLUTE target, never a toggle, so
+  // the window state can never end up inverted against the renderer's.
+  editorSetWindowMode: 'editor:set-window-mode',
+  // main -> editor: the mode the window is ACTUALLY in, pushed once a switch
+  // has settled (and after any other fullscreen change). Main owns the truth;
+  // the renderer only paints what it is told.
+  editorWindowMode: 'editor:window-mode',
 
   // about window -> main (invoke): version, icon, language, updater state
   aboutGet: 'about:get',
@@ -120,6 +128,35 @@ export interface CaptureReplayResultPayload {
   durationMs: number
 }
 
+// One frozen display in the editor's read-only display switcher (GOAL
+// "Multi-Monitor Support"). The focused display is the one the editor
+// annotates; the others can only be VIEWED in this version.
+export interface EditorDisplayPayload {
+  // 1-based manifest display index (manifest.media.displays[].index)
+  index: number
+  focused: boolean
+  // PNG bytes of that display's frozen frame, at its native resolution
+  snapshotPng: ArrayBuffer
+  width: number
+  height: number
+}
+
+/**
+ * One pickable UI object in the editor (GOAL "Static object picking (v0)"):
+ * a Windows UI Automation element from the CAPTURE-INSTANT dump that also
+ * became plugins/windows-uia/elements.json. `bounds` is already in snapshot
+ * pixels — the annotation coordinate space (SPEC §8.2) — so a pick snaps a box
+ * straight onto it. Fields are raw app data, never translated; an element that
+ * had no value for one carries ''.
+ */
+export interface EditorUiaElement {
+  name: string
+  control_type: string
+  automation_id: string
+  class_name: string
+  bounds: { x: number; y: number; width: number; height: number }
+}
+
 export interface EditorInitPayload {
   // PNG bytes of the snapshot at native resolution
   snapshotPng: ArrayBuffer
@@ -127,8 +164,18 @@ export interface EditorInitPayload {
   height: number
   hasReplay: boolean
   replayDurationMs: number
+  // Every display this capture froze, focused included — EMPTY when only one
+  // display was captured (the switcher then never appears). The focused
+  // display's snapshot is the same frame as snapshotPng above.
+  displays: EditorDisplayPayload[]
   // webm bytes of the replay for scrubbing; null when screenshot-only
   replayWebm: ArrayBuffer | null
+  // Pickable UI objects from the capture instant (GOAL "Static object
+  // picking"). EMPTY whenever there is no object data — no Windows UI
+  // Automation dump, a dump that timed out, or a re-edited pack without
+  // plugins/windows-uia — and the editor then behaves exactly as it did
+  // before the feature existed.
+  uiaElements: EditorUiaElement[]
   fps: number
   scrubInvert: boolean
   scrubSensitivityMs: number
@@ -151,6 +198,10 @@ export interface EditorInitPayload {
   // Resolved UI language (shared/i18n Language) the editor renders its
   // chrome in. Fixed for the session — the editor window is transient.
   uiLanguage: string
+  // The mode the window OPENED in (GOAL "Editor Window Mode") — the persisted
+  // settings.editorWindowMode. The renderer paints its top-bar drag region and
+  // the ⧉ button from this, then follows the editorWindowMode pushes.
+  windowMode: EditorWindowMode
 }
 
 export interface EditorAnnotationAddedPayload {
@@ -184,7 +235,11 @@ export interface EditorExportPayload {
 // overlays (blur first, then border, number badge, text — lifetime-gated,
 // GLOBAL display numbers, no editor controls), and records the canvas.
 export interface RenderStartPayload {
-  replayWebm: ArrayBuffer
+  // null = STILL job (SPEC §7.3): nothing is played or recorded — the single
+  // annotated keyframe of a screenshot-only pack is drawn from snapshotPng.
+  replayWebm: ArrayBuffer | null
+  // Still job only: the frame the keyframe is drawn from (snapshot.png bytes).
+  snapshotPng?: ArrayBuffer
   annotations: Annotation[]
   // Canvas size = snapshot reference size (annotation coordinate space)
   width: number
@@ -199,12 +254,28 @@ export interface RenderStartPayload {
   // produces the trimmed replay.webm (trim range + an EMPTY annotation set).
   trimStartMs?: number
   trimEndMs?: number
+  // Also capture annotated keyframe stills (GOAL "Annotated keyframes",
+  // SPEC §7.3): the SAME render pass hands back a PNG of the canvas at every
+  // annotation state change. Absent/false on the plain-trim job, which renders
+  // no overlays and produces no stills.
+  keyframes?: boolean
+}
+
+/** One annotated still handed back by the render window (SPEC §7.3). */
+export interface RenderFramePayload {
+  // Replay-clock position (ms) the still was captured at
+  t_ms: number
+  // PNG bytes of the composited canvas at that instant
+  png: ArrayBuffer
 }
 
 export interface RenderResultPayload {
   ok: boolean
-  // webm bytes of replay_annotated when ok
+  // webm bytes of replay_annotated when ok; absent on a still job
   webm?: ArrayBuffer
+  // Annotated keyframe stills, ascending by t_ms (only when the job asked for
+  // them). A still that failed to encode is dropped, never fatal to the render.
+  frames?: RenderFramePayload[]
   error?: string
 }
 

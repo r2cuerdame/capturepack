@@ -15,11 +15,180 @@ import type {
   Annotation,
   AnnotationsFile,
   Manifest,
+  ManifestDisplayMedia,
+  ManifestKeyframe,
   TimelineFile,
+  UiaPluginPayload,
 } from '../shared/types'
 import { FORMAT_NAME, FORMAT_VERSION } from '../shared/types'
 import { buildReport } from './report'
 import { buildReadme, buildSkills, SKILLS_FILES } from './packdocs'
+
+// ---------------------------------------------------------------------------
+// All-displays capture (GOAL "Multi-Monitor Support", SPEC §5.3)
+// ---------------------------------------------------------------------------
+
+/** What one captured display DECLARES in manifest.media.displays. */
+export interface DisplayDeclaration {
+  // 1-based position in manifest.environment.screens.
+  index: number
+  // Exactly one entry is focused: the display the editor annotates. Its files
+  // ARE the top-level snapshot.png/replay.webm — never duplicated bytes.
+  focused: boolean
+  // Virtual-desktop rectangle in device-independent pixels; x scale = physical.
+  bounds: { x: number; y: number; width: number; height: number }
+  scale: number
+  hasReplay: boolean
+  replayDurationMs: number
+}
+
+/** A captured display plus the bytes to write for it. */
+export interface DisplayCapture extends DisplayDeclaration {
+  // NON-focused displays only. null = write nothing (the focused display's
+  // frame is written as snapshot.png; a re-edit save keeps the files already
+  // on disk and only carries the declaration through).
+  snapshotPng: Buffer | null
+  replayWebm: Buffer | null
+}
+
+/** Per-display filenames — one source for both the files and the manifest. */
+export function displaySnapshotName(index: number): string {
+  return `snapshot-d${index}.png`
+}
+export function displayReplayName(index: number): string {
+  return `replay-d${index}.webm`
+}
+
+/**
+ * media.displays[] for the captured displays. The focused entry is filled from
+ * the FINAL top-level media object, so "focused entry === top-level media"
+ * holds by construction — including after a trim replaced the replay bytes.
+ */
+function buildDisplayMedia(
+  displays: readonly DisplayDeclaration[],
+  media: Manifest['media'],
+): ManifestDisplayMedia[] {
+  return displays.map((d) => {
+    const replay = d.focused
+      ? media.replay
+      : d.hasReplay
+        ? displayReplayName(d.index)
+        : null
+    const durationMs = d.focused
+      ? media.replay_duration_ms
+      : Math.max(0, Math.round(d.replayDurationMs))
+    return {
+      index: d.index,
+      snapshot: d.focused ? media.snapshot : displaySnapshotName(d.index),
+      replay,
+      // Written only alongside a replay, and next to it (SPEC §5.6).
+      ...(replay !== null && durationMs !== undefined ? { replay_duration_ms: durationMs } : {}),
+      bounds: { ...d.bounds },
+      scale: d.scale,
+      focused: d.focused,
+    }
+  })
+}
+
+/** Writes the per-display media files (the focused display's are the top-level ones). */
+async function writeDisplayFiles(
+  dirPath: string,
+  displays: readonly DisplayCapture[] | undefined,
+): Promise<void> {
+  if (displays === undefined) return
+  for (const d of displays) {
+    if (d.focused) continue // its bytes are snapshot.png / replay.webm
+    if (d.snapshotPng !== null) {
+      await writeFile(join(dirPath, displaySnapshotName(d.index)), d.snapshotPng)
+    }
+    if (d.hasReplay && d.replayWebm !== null) {
+      await writeFile(join(dirPath, displayReplayName(d.index)), d.replayWebm)
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// plugins/windows-uia (GOAL "Static object picking", SPEC §11.3)
+// ---------------------------------------------------------------------------
+
+/** Directory name, manifest name, and meta.json name — one constant for all three. */
+export const UIA_PLUGIN_NAME = 'windows-uia'
+/** Payload schema version, not the app version (SPEC §11.1 requires both to match). */
+export const UIA_PLUGIN_VERSION = '0.1.0'
+
+/** The manifest.plugins entry for the payload writeUiaPlugin() lays down. */
+export function uiaPluginDeclaration(): Manifest['plugins'][number] {
+  return { name: UIA_PLUGIN_NAME, version: UIA_PLUGIN_VERSION, path: `plugins/${UIA_PLUGIN_NAME}/` }
+}
+
+/**
+ * Writes plugins/windows-uia/{meta.json,elements.json}. Plugins only APPEND
+ * metadata (SPEC §11.1): nothing here touches a core file. The declaration is
+ * the caller's job — see uiaPluginDeclaration()/addManifestPlugin() — so a
+ * declaration is only ever written for a payload that exists.
+ */
+export async function writeUiaPlugin(dirPath: string, payload: UiaPluginPayload): Promise<void> {
+  const dir = join(dirPath, 'plugins', UIA_PLUGIN_NAME)
+  await mkdir(dir, { recursive: true })
+  await writeFile(
+    join(dir, 'meta.json'),
+    toJson({ name: UIA_PLUGIN_NAME, version: UIA_PLUGIN_VERSION }),
+  )
+  await writeFile(join(dir, 'elements.json'), toJson(payload))
+}
+
+/**
+ * Adds one plugin declaration to an ALREADY written manifest.json, the way
+ * setManifestRenderOutputs() adds the render outputs: the save-first folder is
+ * complete before the (asynchronous, budgeted) dump lands, so its payload is
+ * declared in place rather than by rewriting the pack. A no-op when the plugin
+ * is already declared.
+ */
+export async function addManifestPlugin(
+  handle: PackHandle,
+  declaration: Manifest['plugins'][number],
+): Promise<void> {
+  const manifestPath = join(handle.dirPath, 'manifest.json')
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Manifest
+  const plugins = Array.isArray(manifest.plugins) ? manifest.plugins : []
+  if (plugins.some((p) => p !== null && typeof p === 'object' && p.name === declaration.name)) return
+  manifest.plugins = [...plugins, declaration]
+  await writeFile(manifestPath, toJson(manifest))
+}
+
+/**
+ * writeUiaPlugin() that can never fail a save: returns whether the payload
+ * actually landed, which is exactly when it may be declared.
+ */
+async function tryWriteUiaPlugin(
+  dirPath: string,
+  payload: UiaPluginPayload | undefined,
+): Promise<boolean> {
+  if (payload === undefined) return false
+  try {
+    await writeUiaPlugin(dirPath, payload)
+    return true
+  } catch (err) {
+    console.error(
+      'capturepack: writing plugins/windows-uia failed:',
+      err instanceof Error ? err.message : String(err),
+    )
+    return false
+  }
+}
+
+/** Declares the UIA payload alongside whatever plugins the caller carries. */
+function withUiaPlugin(
+  plugins: Manifest['plugins'] | undefined,
+  hasUia: boolean,
+): Manifest['plugins'] | undefined {
+  if (!hasUia) return plugins
+  const existing = plugins ?? []
+  if (existing.some((p) => p !== null && typeof p === 'object' && p.name === UIA_PLUGIN_NAME)) {
+    return existing
+  }
+  return [...existing, uiaPluginDeclaration()]
+}
 
 export interface ExportInput {
   // The exported snapshot frame. Blur is NEVER burned in (SPEC §9) — this is
@@ -43,8 +212,21 @@ export interface ExportInput {
   trimOffsetMs?: number | null
   timeline: TimelineFile
   // Plugin declarations carried through from a loaded manifest on re-edit
-  // (external packs — the current exporter never writes its own). Absent = [].
+  // (external packs, and this exporter's own windows-uia payload). Absent = [].
   plugins?: Manifest['plugins']
+  // Capture-instant UI Automation dump (GOAL "Static object picking"), honored
+  // by updatePack: present = write plugins/windows-uia/ and declare it; absent
+  // = leave whatever is on disk alone. A re-edit save leaves it absent — the
+  // payload files stay untouched and only their declaration travels, through
+  // `plugins` (and, for Save As New, the byte-for-byte plugins/ copy).
+  uia?: UiaPluginPayload
+  // All-displays capture: every display the trigger froze, focused included.
+  // Absent = a single-display pack (no media.displays). On re-edit the entries
+  // carry null buffers: the declaration survives, the files stay untouched.
+  displays?: DisplayCapture[]
+  // The displays present at capture time, in the order media.displays indices
+  // refer to. Absent = enumerate the CURRENT displays (single-display packs).
+  screens?: Array<{ width: number; height: number; scale: number }>
   copyToClipboard: boolean
   // Pack document language (GOAL i18n, packLanguage setting): the language the
   // regenerated README/report/skills templates are written in. Absent = en.
@@ -67,6 +249,8 @@ export interface ManifestInput {
   trimOffsetMs?: number | null
   // Carried through from a loaded manifest on re-edit; absent = [] (fresh packs).
   plugins?: Manifest['plugins']
+  // media.displays[] source (all-displays capture); absent = single display.
+  displays?: readonly DisplayDeclaration[]
 }
 
 export function buildManifest(input: ManifestInput): Manifest {
@@ -84,9 +268,10 @@ export function buildManifest(input: ManifestInput): Manifest {
     media: {
       snapshot: 'snapshot.png',
       replay: input.hasReplay ? 'replay.webm' : null,
-      // media.replay_annotated is added by setManifestReplayAnnotated() once
-      // the background render finishes — absent while not yet rendered and
-      // always absent when replay is null (SPEC §5).
+      // media.replay_annotated and media.keyframes are added by
+      // setManifestRenderOutputs() once the background render finishes — both
+      // absent while not yet rendered, and replay_annotated always absent when
+      // replay is null (SPEC §5.3, §5.7).
     },
     plugins: input.plugins ?? [],
   }
@@ -112,6 +297,11 @@ export function buildManifest(input: ManifestInput): Manifest {
     if (typeof trimOffsetMs === 'number' && trimOffsetMs >= 0) {
       manifest.media.trim_offset_ms = Math.round(trimOffsetMs)
     }
+  }
+  // Declared LAST so the focused entry copies the finished top-level media
+  // (replay filename + duration, trimmed or not).
+  if (input.displays !== undefined && input.displays.length > 0) {
+    manifest.media.displays = buildDisplayMedia(input.displays, manifest.media)
   }
   return manifest
 }
@@ -144,6 +334,10 @@ export interface InitialSaveInput {
   replayDurationMs: number
   timeline: TimelineFile
   outputDir: string
+  // All-displays capture: save-first writes EVERY display too (that is the
+  // point of the feature — a crash must not lose the other screens).
+  displays?: DisplayCapture[]
+  screens?: Array<{ width: number; height: number; scale: number }>
   // Pack document language for the save-first docs (same as ExportInput's).
   docLanguage?: Language
 }
@@ -164,10 +358,11 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
     title: '',
     note: '',
     osVersion: release(),
-    screens: physicalScreens(),
+    screens: input.screens ?? physicalScreens(),
     hasReplay: input.replayWebm !== null,
     replayDurationMs: input.replayDurationMs,
     snapshotTMs: null,
+    displays: input.displays,
   })
   const annotationsFile: AnnotationsFile = {
     reference_width: input.width,
@@ -187,6 +382,7 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
     if (input.replayWebm !== null) {
       await writeFile(join(dirPath, 'replay.webm'), input.replayWebm)
     }
+    await writeDisplayFiles(dirPath, input.displays)
     return { id, dirPath }
   } catch (err) {
     // Never leave a half-written pack behind.
@@ -217,6 +413,11 @@ export async function updatePack(
   const hasReplay = keepReplay
     ? existsSync(join(handle.dirPath, 'replay.webm'))
     : input.replayWebm !== null
+  // The plugin payload goes down BEFORE the manifest that declares it, and its
+  // failure is swallowed: object data is a best-effort extra and must never
+  // cost the user a save (GOAL "Static object picking"). A payload that did not
+  // land is simply not declared.
+  const uiaWritten = await tryWriteUiaPlugin(handle.dirPath, input.uia)
   const manifest = buildManifest({
     id: handle.id,
     createdAt: input.capturedAt,
@@ -224,12 +425,13 @@ export async function updatePack(
     title: input.title,
     note: input.note,
     osVersion: release(),
-    screens: physicalScreens(),
+    screens: input.screens ?? physicalScreens(),
     hasReplay,
     replayDurationMs: input.replayDurationMs,
     snapshotTMs: input.snapshotTMs,
     trimOffsetMs: input.trimOffsetMs,
-    plugins: input.plugins,
+    plugins: withUiaPlugin(input.plugins, uiaWritten),
+    displays: input.displays,
   })
   const annotationsFile: AnnotationsFile = {
     reference_width: input.width,
@@ -241,10 +443,17 @@ export async function updatePack(
 
   await writePackFiles(handle.dirPath, manifest, annotationsFile, timeline, input.docLanguage)
   await writeFile(join(handle.dirPath, 'snapshot.png'), input.snapshotPng)
+  // Non-focused displays: rewritten from the same bytes save-first used (a
+  // failed save-first retries the whole write here). Re-edit passes null
+  // buffers, so the files already on disk are left alone.
+  await writeDisplayFiles(handle.dirPath, input.displays)
   // A stale annotated replay must never outlive the annotations that produced
   // it: the background render rewrites it (and re-declares it in the manifest)
-  // after this save.
+  // after this save. The annotated keyframe stills follow the same rule — the
+  // manifest written above declares neither, so both are removed here and the
+  // render puts back exactly the current set (SPEC §5.7).
   await rm(join(handle.dirPath, 'replay_annotated.webm'), { force: true })
+  await rm(join(handle.dirPath, 'frames'), { recursive: true, force: true })
   if (!keepReplay) {
     if (input.replayWebm === null) {
       // The user excluded the replay at save time (e.g. privacy).
@@ -270,6 +479,19 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
   const id = randomUUID()
   const srcReplay = join(sourceDir, 'replay.webm')
   const hasReplay = existsSync(srcReplay)
+  // All-displays pack: only the per-display files actually present in the
+  // source can travel, so the new pack declares exactly what it will contain.
+  const displays = input.displays?.filter(
+    (d) => d.focused || existsSync(join(sourceDir, displaySnapshotName(d.index))),
+  )
+  const displayFiles: DisplayCapture[] | undefined = displays?.map((d) =>
+    d.focused
+      ? d
+      : {
+          ...d,
+          hasReplay: d.hasReplay && existsSync(join(sourceDir, displayReplayName(d.index))),
+        },
+  )
   const manifest = buildManifest({
     id,
     createdAt: input.capturedAt,
@@ -277,12 +499,13 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
     title: input.title,
     note: input.note,
     osVersion: release(),
-    screens: physicalScreens(),
+    screens: input.screens ?? physicalScreens(),
     hasReplay,
     replayDurationMs: input.replayDurationMs,
     snapshotTMs: input.snapshotTMs,
     trimOffsetMs: input.trimOffsetMs,
     plugins: input.plugins,
+    displays: displayFiles,
   })
   const annotationsFile: AnnotationsFile = {
     reference_width: input.width,
@@ -299,6 +522,18 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
     await writePackFiles(dirPath, manifest, annotationsFile, timeline, input.docLanguage)
     await writeFile(join(dirPath, 'snapshot.png'), input.snapshotPng)
     if (hasReplay) await copyFile(srcReplay, join(dirPath, 'replay.webm'))
+    // Per-display media travels byte-for-byte with its declaration; entries
+    // that still carry bytes (a fresh capture saved as new) write them instead.
+    for (const d of displayFiles ?? []) {
+      if (d.focused) continue
+      const snapName = displaySnapshotName(d.index)
+      if (d.snapshotPng !== null) await writeFile(join(dirPath, snapName), d.snapshotPng)
+      else await copyFile(join(sourceDir, snapName), join(dirPath, snapName))
+      if (!d.hasReplay) continue
+      const replayName = displayReplayName(d.index)
+      if (d.replayWebm !== null) await writeFile(join(dirPath, replayName), d.replayWebm)
+      else await copyFile(join(sourceDir, replayName), join(dirPath, replayName))
+    }
     // Plugin payloads (external packs): the files travel with their manifest
     // declaration — Save As New must not silently strip plugins/.
     const srcPlugins = join(sourceDir, 'plugins')
@@ -337,15 +572,31 @@ async function writePackFiles(
 }
 
 /**
- * Declares the freshly rendered annotated replay in manifest.json
- * (media.replay_annotated, SPEC §5). Reads the file on disk rather than
- * rebuilding, so it composes with whatever the last save wrote.
+ * Declares what the background render just produced in manifest.json: the
+ * annotated replay (media.replay_annotated, SPEC §5.3) and the annotated
+ * keyframe stills (media.keyframes, SPEC §5.7) — both written by the same
+ * render pass, so both are declared in one update. Reads the file on disk
+ * rather than rebuilding, so it composes with whatever the last save wrote.
+ *
+ * The declaration always follows the files: the caller has already written
+ * replay_annotated.webm and frames/, so a declared file is a file that exists.
  */
-export async function setManifestReplayAnnotated(handle: PackHandle): Promise<void> {
+export async function setManifestRenderOutputs(
+  handle: PackHandle,
+  outputs: { replayAnnotated: boolean; keyframes: readonly ManifestKeyframe[] },
+): Promise<void> {
   const manifestPath = join(handle.dirPath, 'manifest.json')
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Manifest
-  if (manifest.media.replay === null) return // never declared without a replay
-  manifest.media.replay_annotated = 'replay_annotated.webm'
+  // Never declared without a replay (SPEC §5.3) — keyframes have no such rule:
+  // a screenshot-only pack has exactly one still, rendered from snapshot.png.
+  if (outputs.replayAnnotated && manifest.media.replay !== null) {
+    manifest.media.replay_annotated = 'replay_annotated.webm'
+  }
+  if (outputs.keyframes.length > 0) {
+    manifest.media.keyframes = outputs.keyframes.map((k) => ({ file: k.file, t_ms: k.t_ms }))
+  } else {
+    delete manifest.media.keyframes
+  }
   await writeFile(manifestPath, toJson(manifest))
 }
 

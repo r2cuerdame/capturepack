@@ -62,16 +62,58 @@ Exit codes: `0` valid, `1` invalid, `2` usage or unreadable input.
   regenerable from `replay` + `annotations.json`; `snapshot_t_ms`
   (frame-accurate snapshot, §7.1) is an integer >= 0, with a note when it has
   no replay to anchor to or exceeds the replay duration.
+- **Per-display media** (SPEC §5.6): when `media.displays` is present (a
+  multi-monitor capture), every declared `snapshot-d<N>.png` /
+  `replay-d<N>.webm` exists in the pack, `index` values are integers >= 1 and
+  unique (a note when an index has no `environment.screens` entry), `bounds`
+  and `scale` are well-formed, exactly one entry is `focused: true`, and that
+  entry repeats the top-level `snapshot`, `replay`, and `replay_duration_ms`
+  rather than declaring its own files. A display with `replay: null` is a
+  NOTE, never a failure; a trimmed replay alongside non-focused replays gets a
+  clock-alignment note.
+- **Annotated keyframes** (SPEC §5.7, §7.3): when `media.keyframes` is present,
+  every entry is `{ file, t_ms }` with an integer `t_ms >= 0`, the array is
+  ordered by `t_ms` ascending (FAIL otherwise), each `file` matches
+  `frames/frame-<NN>_<MM-SS.mmm>.png` with `NN` equal to the entry's 1-based
+  position (FAIL otherwise; a filename whose time disagrees with `t_ms` is only
+  a NOTE — `t_ms` is what readers use), and every declared still exists in the
+  pack and is a real PNG. Unlike a declared-but-missing annotated replay, a
+  missing still is a FAIL: the declaration is written *after* the files. Notes
+  cover a still past the replay end, a repeated `t_ms` (state changes within
+  ~300 ms should merge), a non-zero `t_ms` in a screenshot-only pack (which has
+  exactly one still at 0), and stills whose pixel size differs from
+  `snapshot.png`. Undeclared PNGs under `frames/` are ignored with their own
+  note.
 - **Plugins** (SPEC §5.4, §11): name pattern, `path` exactly
   `plugins/<name>/`, `meta.json` present and matching the declaration.
-  Undeclared plugin directories are ignored with a note.
+  Undeclared plugin directories are ignored with a note. Plugin payload
+  *contents* are plugin-defined and unchecked, with one exception:
+- **plugins/windows-uia/** (SPEC §11.3), the well-known capture-instant object
+  dump, is shape-checked when declared: `elements.json` must exist and be an
+  object with an ISO-8601-with-timezone `captured_at`, a positive integer
+  `budget_ms`, a boolean `truncated`, and `windows`/`elements` arrays (either
+  MAY be empty). Every window needs string `title`/`process`, a boolean
+  `focused`, and numeric `bounds`; **more than one focused window FAILS** (only
+  one window had focus). Every element needs string `name`/`control_type`/
+  `automation_id`/`class_name` — which MAY be empty, this is a dump — a
+  non-negative integer `depth`, and numeric `bounds`. Notes cover
+  `truncated: true` (the tree is incomplete; an absent element means "not
+  recorded", never "not on screen") and a dump with no windows and no elements.
+  A malformed payload never affects the annotation results — object data is
+  additive.
 - **annotations.json** (SPEC §8, unified **box** model): reference dimensions
   equal the actual snapshot dimensions; `annotation_id` matches
   `^ann_[0-9a-f]{6}$` and is unique; `bounds` is `{x, y, width, height}` with
   `width`/`height` > 0 (a note when the box lies entirely outside the
   coordinate space); `text` a string; `numbered`/`blur` booleans; `tracking`
   an object with boolean `enabled` (a note when `enabled` is `true` — reserved
-  in 0.1.0); `target` an object (reserved); `style.color` hex. Lifetimes
+  in 0.1.0); `style.color` hex. A `target` (§8.7 — the real UI object the box
+  was placed on) must be an object with a non-empty string `source`; for
+  `source: "uia"` the `name`/`control_type`/`automation_id`/`class_name` fields
+  must be strings when present, with a NOTE on an empty one (a property the
+  element had no value for is omitted, not written empty) and a NOTE for a
+  `source` value 0.1.0 does not define. A PASS line lists the boxes carrying a
+  UIA target. Lifetimes
   (`start_ms`/`end_ms`, §8.4): both bounds or neither (FAIL otherwise),
   `start_ms <= end_ms` (FAIL otherwise), notes when a bound lies outside
   `[0, replay_duration_ms]` or a lifetime appears without a replay. Display

@@ -12,6 +12,7 @@ import type { Annotation } from '../../shared/types'
 const BLUR_BLOCK = 12 // native px per pixelation block (matches render/render.ts)
 const FALLBACK_COLOR = '#FF3B30' // boxes without style.color (palette default)
 const HANDLE_R = 4.5 // on-screen px, half the side of a corner resize handle
+const OBJECT_HOVER_COLOR = '#8ab4ff' // same accent the selection rect uses
 
 export interface Box {
   x: number
@@ -174,6 +175,43 @@ function drawSelection(ctx: CanvasRenderingContext2D, a: Annotation, ui: number)
     ctx.lineWidth = 1.5 * ui
     ctx.fillRect(c.x - r, c.y - r, r * 2, r * 2)
     ctx.strokeRect(c.x - r, c.y - r, r * 2, r * 2)
+  }
+  ctx.restore()
+}
+
+/**
+ * Static object picking hover (GOAL "Static object picking (v0)"): the UI
+ * Automation element under the cursor, outlined thin in the selection accent
+ * with a tiny label naming it. Pure editor chrome, like the selection rect —
+ * it lives on the overlay canvas and is never part of any exported pixels.
+ */
+export function drawObjectHover(
+  ctx: CanvasRenderingContext2D,
+  box: Box,
+  label: string,
+  ui: number,
+): void {
+  ctx.save()
+  ctx.strokeStyle = OBJECT_HOVER_COLOR
+  ctx.lineWidth = 1.5 * ui
+  ctx.strokeRect(box.x, box.y, box.w, box.h)
+  const text = label.trim()
+  if (text !== '') {
+    const clipped = text.length > 64 ? `${text.slice(0, 63)}…` : text
+    ctx.font = `600 ${Math.round(11 * ui)}px "Segoe UI", system-ui, sans-serif`
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'top'
+    const pad = 4 * ui
+    const lineH = 14 * ui
+    const width = ctx.measureText(clipped).width
+    // Above the outline when it fits, inside its top edge otherwise.
+    let ty = box.y - lineH - pad * 2
+    if (ty < pad) ty = box.y + pad
+    const tx = Math.min(Math.max(pad, box.x), Math.max(pad, ctx.canvas.width - width - pad * 2))
+    ctx.fillStyle = 'rgba(10, 10, 14, 0.82)'
+    ctx.fillRect(tx - pad, ty, width + pad * 2, lineH + pad)
+    ctx.fillStyle = OBJECT_HOVER_COLOR
+    ctx.fillText(clipped, tx, ty + pad * 0.5)
   }
   ctx.restore()
 }

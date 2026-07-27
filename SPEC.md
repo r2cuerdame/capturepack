@@ -47,6 +47,8 @@ bug — to another human or to an LLM. It bundles what a screenshot cannot:
   modified.
 - **replay_annotated video** — the replay with annotations rendered in: instantly understandable
   in any video player, and always regenerable from the originals.
+- **frames/** — the same annotations as **still images**, one per annotation state change. LLMs
+  read images, not video; a reader that cannot decode a video still gets the whole story.
 - **annotations.json** — annotation **boxes**: bounded regions with text, a lifetime, an optional
   number, and an optional blur, stored as editable data (intent). The true source that
   `replay_annotated` is rendered from.
@@ -133,9 +135,11 @@ folder; nothing further is required.
   explicit, user- or caller-initiated distribution step ([§3.2](#32-the-capturepack-file-distribution)).
 - **A folder may be observed mid-save.** Save-first writers create the folder at the moment of
   capture and update its files as the user annotates; generated views — in particular the
-  annotated replay, which may render in the background — can appear later than the source files.
-  Readers SHOULD tolerate a pack whose declared `replay_annotated` file is not (yet) present
-  ([§5.3](#53-media)) and fall back to the source files.
+  annotated replay and the keyframe stills in `frames/`, which may render in the background —
+  can appear later than the source files. Readers SHOULD tolerate a pack whose declared
+  `replay_annotated` file is not (yet) present ([§5.3](#53-media)), and a pack that declares no
+  `media.keyframes` yet ([§5.7](#57-keyframes-annotated-stills)), and fall back to the source
+  files.
 
 ### 3.2 The `.capturepack` file (distribution)
 
@@ -172,6 +176,11 @@ CapturePack_2026-07-27_143052/        — or the same tree zipped as a .capturep
 │                                       never modified
 ├── replay_annotated.webm    OPTIONAL (RECOMMENDED) annotations rendered in; plays in any player;
 │                                       regenerable from replay + annotations.json
+├── snapshot-d2.png          OPTIONAL   another display frozen by the same trigger (multi-monitor);
+├── replay-d2.webm           OPTIONAL   its replay — both declared in manifest.media.displays
+├── frames/                  OPTIONAL (RECOMMENDED) annotated stills, one per annotation state
+│   ├── frame-01_00-03.200.png          change — declared in manifest.media.keyframes;
+│   └── frame-02_00-05.400.png          regenerable from the media + annotations.json
 ├── annotations.json         OPTIONAL   annotation boxes — the true source of annotation data
 ├── timeline.json            OPTIONAL   machine-readable event log
 ├── report.md                OPTIONAL (RECOMMENDED) generated narrative
@@ -194,6 +203,8 @@ CapturePack_2026-07-27_143052/        — or the same tree zipped as a .capturep
 | `snapshot.png` | REQUIRED | [§6](#6-snapshotpng) |
 | `replay.webm` **or** `replay.mp4` | OPTIONAL — declared in `manifest.media.replay` | [§7](#7-replay-video) |
 | `replay_annotated.webm` **or** `replay_annotated.mp4` | OPTIONAL (RECOMMENDED when annotations exist) — declared in `manifest.media.replay_annotated` | [§7.2](#72-the-annotated-replay) |
+| `snapshot-d<N>.png`, `replay-d<N>.webm` | OPTIONAL — per-display media of a multi-monitor capture, each declared in `manifest.media.displays` | [§5.6](#56-displays-multi-monitor-captures) |
+| `frames/frame-<NN>_<MM-SS.mmm>.png` | OPTIONAL (RECOMMENDED) — annotated keyframe stills, each declared in `manifest.media.keyframes` | [§5.7](#57-keyframes-annotated-stills) |
 | `annotations.json` | OPTIONAL — fixed name, present when annotations exist | [§8](#8-annotationsjson) |
 | `timeline.json` | OPTIONAL — fixed name, present when events were recorded | [§10](#10-timelinejson) |
 | `report.md` | OPTIONAL (RECOMMENDED) — fixed name | [§12.1](#121-reportmd) |
@@ -264,6 +275,8 @@ of screen count or scaling.
 | `replay_annotated` | string | OPTIONAL | Filename of the **annotated replay** — `"replay_annotated.webm"` or `"replay_annotated.mp4"` ([§7.2](#72-the-annotated-replay)). MUST be absent when `replay` is `null` (there is nothing to render it from). Absent while the annotated replay has not (yet) been rendered. The annotated replay may render in the background after save, so a reader MAY encounter a manifest that declares this file before the file exists — it SHOULD treat that as "still rendering" and fall back to `replay` + `annotations.json`. |
 | `snapshot_t_ms` | integer | OPTIONAL | Position on the replay clock, in milliseconds, of the frame shown in `snapshot.png` — the same clock as annotation lifetimes ([§8.4](#84-lifetime)) and timeline `t_ms` offsets relative to `t0` ([§10.1](#101-structure)). MUST be >= 0. **Absent means the snapshot is the capture instant** — the native "now" frame. SHOULD be absent when `replay` is `null`: without a replay there is no timeline to anchor the value to. See [§7.1](#71-frame-accurate-captures). |
 | `trim_offset_ms` | integer | OPTIONAL | **Provenance only.** When the writer trimmed the replay before saving, the position (ms) in the original captured recording of this replay's first frame — the trim in-point. MUST be >= 0. Purely informational: every time in the pack (annotation lifetimes, `snapshot_t_ms`, timeline offsets against `t0`) is already on the trimmed replay's clock, so readers never apply this offset to anything. Absent means the replay was never trimmed. SHOULD be absent when `replay` is `null`. |
+| `displays` | array | OPTIONAL | Per-display media of a capture that froze MORE THAN ONE display at the same instant. Absent for a single-display capture — which is the whole pack in that case. See [§5.6](#56-displays-multi-monitor-captures). |
+| `keyframes` | array | OPTIONAL (RECOMMENDED) | The **annotated keyframe stills** in `frames/`: one PNG per annotation state change, with the annotations rendered into the pixels. Absent until the render that produces them completes (the same background render as `replay_annotated`), and absent in a pack that was never rendered. See [§5.7](#57-keyframes-annotated-stills). |
 
 ### 5.4 `plugins`
 
@@ -311,6 +324,133 @@ An empty `plugins/` directory (no payloads, no declarations) is fine. Readers MU
 }
 ```
 
+### 5.6 `displays` (multi-monitor captures)
+
+A capture MAY freeze every connected display at the same instant. The pack then carries one
+snapshot (and optionally one replay) **per display**, and `media.displays` declares them.
+
+`media.displays` is present only when the capture covered **more than one** display. A
+single-display capture omits it: the top-level `media` already describes the whole pack.
+
+Exactly one entry is the **focused** display — the display the user was on (cursor position) at
+the trigger. It is the display the annotations belong to, and its media *is* the top-level
+media: `snapshot.png`, `replay`, `replay_duration_ms`, `replay_annotated`. Its bytes are never
+duplicated under a per-display name, so a reader that ignores `displays` entirely still sees
+exactly the pack it would have seen without this feature.
+
+Each entry:
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `index` | integer | REQUIRED | 1-based position of this display in `environment.screens` ([§5.2](#52-environment)) — the OS enumeration order. MUST be >= 1 and unique within the array. |
+| `snapshot` | string | REQUIRED | Filename of this display's frozen frame: `"snapshot-d<index>.png"`, except the focused entry, which MUST repeat the top-level `media.snapshot` (`"snapshot.png"`). |
+| `replay` | string **or** `null` | REQUIRED | Filename of this display's replay: `"replay-d<index>.webm"` (or `.mp4`), the top-level `media.replay` on the focused entry, or `null` when this display has no replay. |
+| `replay_duration_ms` | integer | REQUIRED when `replay` is a string | Duration of this display's replay in milliseconds. |
+| `bounds` | object | REQUIRED | This display's rectangle in the OS virtual-desktop coordinate space, in **device-independent pixels**: `{ "x", "y", "width", "height" }`. Multiply by `scale` for physical pixels — `bounds.width × scale` equals the per-display snapshot's pixel width and `environment.screens[index-1].width`. The offsets place the screens relative to each other. |
+| `scale` | number | REQUIRED | This display's scale factor (`1`, `1.25`, `1.5`, `2`, …). MUST be > 0. |
+| `focused` | boolean | REQUIRED | `true` on exactly one entry: the display the capture (and its annotations) is about. |
+
+Rules:
+
+- Annotations always live in the **snapshot pixel coordinate space** of the focused display
+  ([§8.2](#82-coordinate-space)). Non-focused displays carry no annotations in format 0.1.0;
+  they ship as synchronized context.
+- The annotated replay ([§7.2](#72-the-annotated-replay)) and the annotated keyframes
+  ([§5.7](#57-keyframes-annotated-stills)) cover the focused display only.
+- All per-display media is frozen by the **same trigger**, so the snapshots are the same instant
+  and the replays cover the same wall-clock window.
+- When the writer trimmed the replay (`trim_offset_ms`, [§5.3](#53-media)), only the focused
+  display's replay is trimmed — re-encoding every screen would cost a real-time render each.
+  Non-focused replays keep the ORIGINAL recording's clock; a reader aligning them with the pack
+  clock adds `trim_offset_ms`.
+- A declared per-display file MUST exist in the pack. Readers MUST ignore per-display files that
+  are not declared, and MUST NOT fail when `displays` is absent.
+
+```json
+"media": {
+  "snapshot": "snapshot.png",
+  "replay": "replay.webm",
+  "replay_duration_ms": 28437,
+  "displays": [
+    {
+      "index": 1,
+      "snapshot": "snapshot-d1.png",
+      "replay": "replay-d1.webm",
+      "replay_duration_ms": 28402,
+      "bounds": { "x": 0, "y": 0, "width": 1920, "height": 1080 },
+      "scale": 1,
+      "focused": false
+    },
+    {
+      "index": 2,
+      "snapshot": "snapshot.png",
+      "replay": "replay.webm",
+      "replay_duration_ms": 28437,
+      "bounds": { "x": 1920, "y": 0, "width": 2560, "height": 1440 },
+      "scale": 1,
+      "focused": true
+    }
+  ]
+}
+```
+
+### 5.7 `keyframes` (annotated stills)
+
+LLMs read images, not video. `media.keyframes` declares the **annotated keyframe stills** in
+`frames/`: PNGs of the capture with the annotations rendered into the pixels — the same overlays
+the annotated replay draws ([§7.2](#72-the-annotated-replay)) — one per **annotation state
+change**. Reading them in order reconstructs the whole capture without decoding a single video
+frame. How they are produced is [§7.3](#73-annotated-keyframes).
+
+`keyframes` is OPTIONAL and RECOMMENDED. It is absent in a pack whose stills have not been
+rendered — writers render them in the background after saving, so a freshly saved pack may
+declare nothing here for a moment (or forever, if the render failed). Its presence is the
+declaration that the files exist.
+
+Each entry:
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `file` | string | REQUIRED | Pack-relative filename, `"frames/frame-<NN>_<MM-SS.mmm>.png"`. `NN` is this entry's **1-based position in the array**, zero-padded to at least two digits; `MM-SS.mmm` SHOULD be `t_ms` formatted as minutes-seconds.milliseconds (`:` is not a legal filename character on Windows, hence `-`). The file MUST exist in the pack. |
+| `t_ms` | integer | REQUIRED | Position on the replay clock, in milliseconds, of the frame this still shows — the same clock as annotation lifetimes ([§8.4](#84-lifetime)), `snapshot_t_ms`, and timeline offsets against `t0`. MUST be >= 0. |
+
+Rules:
+
+- Entries MUST be ordered by `t_ms` **ascending**, which is what makes `NN` the reading order.
+- Which instants get a still (the *state changes*): each box lifetime contributes its `start_ms`
+  (the box appears) and its `end_ms` (it disappears); a box with no lifetime contributes the
+  **capture instant** — the last frame of the replay, where the trigger froze the buffer. Writers
+  SHOULD merge changes closer together than ~300 ms into a single still, and SHOULD cap the array
+  at a sane number of stills (the reference implementation merges at 300 ms and caps at 24).
+- A **screenshot-only pack** (`"replay": null`) has no video to render, and gets exactly **one**
+  entry with `t_ms` 0, drawn from `snapshot.png`. A pack with a replay but no annotations gets
+  one still at the capture instant.
+- A keyframe is a **generated view**, never a source: it MUST be regenerable from the media +
+  `annotations.json`, and readers MUST NOT treat its pixels as authoritative annotation data.
+- A still shows the box lifetimes in effect at `t_ms` and the **global** display numbers
+  ([§8.5](#85-display-numbers)) — identical to the annotated replay at the same instant.
+- Like the annotated replay, keyframes cover the **focused display** only in a multi-monitor
+  capture ([§5.6](#56-displays-multi-monitor-captures)).
+- Writers MUST regenerate `frames/` from scratch when annotations change (deleting stale stills),
+  exactly as they do for `replay_annotated`. Readers MUST ignore PNGs under `frames/` that are
+  not declared, and MUST NOT fail when `keyframes` is absent.
+- Blur applies here like everywhere else ([§9](#9-blur-and-privacy)): blurred regions are
+  pixelated in the still, while `snapshot.png` and the replay keep the original pixels.
+
+```json
+"media": {
+  "snapshot": "snapshot.png",
+  "replay": "replay.webm",
+  "replay_duration_ms": 28437,
+  "replay_annotated": "replay_annotated.webm",
+  "keyframes": [
+    { "file": "frames/frame-01_00-21.750.png", "t_ms": 21750 },
+    { "file": "frames/frame-02_00-22.750.png", "t_ms": 22750 },
+    { "file": "frames/frame-03_00-26.900.png", "t_ms": 26900 }
+  ]
+}
+```
+
 ---
 
 ## 6. snapshot.png
@@ -338,7 +478,9 @@ up to the capture — the MVP target is a ~30-second rolling buffer — so a rea
 happened *before* the frame.
 
 - The filename MUST be `replay.webm` or `replay.mp4`, and MUST match `manifest.media.replay`.
-  A pack MUST NOT contain more than one replay file.
+  A pack MUST NOT contain more than one replay file *of the pack's own display*. A
+  multi-monitor capture MAY additionally contain one `replay-d<N>.webm` per other display, each
+  declared in `manifest.media.displays` ([§5.6](#56-displays-multi-monitor-captures)).
 - `replay.webm` is the RECOMMENDED container: browser `MediaRecorder` produces WebM (VP8/VP9)
   with no extra dependencies, which fits the minimal-dependencies principle. `replay.mp4` MAY be
   used by tools that can produce it; H.264 video is RECOMMENDED inside MP4 for playback
@@ -407,6 +549,29 @@ CapturePack-aware tooling.
 - Rendering MAY happen in the background after the pack is saved ([§3.1](#31-the-pack-folder-the-save-unit));
   a render failure loses the annotated replay, not the pack.
 
+### 7.3 Annotated keyframes
+
+The annotated **keyframes** are the still-image form of the same rendering: PNGs under `frames/`,
+declared in `manifest.media.keyframes` ([§5.7](#57-keyframes-annotated-stills)). They exist for
+the reader that cannot — or will not — decode video, which today is every LLM.
+
+- **Same pixels, same rules.** A keyframe at `t_ms` MUST be composited exactly as the annotated
+  replay's frame at that instant: original frame → blur → border → number badge → text, with the
+  boxes whose lifetime contains `t_ms` and their GLOBAL display numbers, and with **no editing
+  controls of any kind**. The straightforward implementation is to capture the stills from the
+  annotated-replay render itself, which makes the two identical by construction.
+- **When.** One still per annotation state change, merged and capped as described in
+  [§5.7](#57-keyframes-annotated-stills).
+- **No replay, one still.** A screenshot-only pack has nothing to play: its single keyframe is
+  `snapshot.png` with the annotations drawn on top (`t_ms` 0). Lifetimes are replay-clock
+  intervals ([§8.4](#84-lifetime)) with nothing to anchor to in such a pack, so every box is
+  drawn.
+- **Derived and disposable.** Keyframes are regenerated from scratch whenever annotations change,
+  MAY render in the background after save, and a failed render loses the stills, not the pack.
+- The stills are PNG. Their pixel dimensions SHOULD equal `snapshot.png`'s — the annotation
+  coordinate space ([§8.2](#82-coordinate-space)) — so a reader can map box bounds onto them
+  directly.
+
 ---
 
 ## 8. annotations.json
@@ -456,7 +621,7 @@ Every annotation object:
 | `numbered` | boolean | OPTIONAL | Whether the box takes part in display numbering ([§8.5](#85-display-numbers)). Default `false`. The number itself is **never stored** — it is computed. |
 | `blur` | boolean | OPTIONAL | Whether the box's interior is sensitive and MUST be blurred in rendered views ([§9](#9-blur-and-privacy)). Default `false`. Blur is a box property, never a separate annotation type. |
 | `tracking` | object | OPTIONAL | Object-tracking state. In format 0.1.0 the only defined field is `enabled` (boolean, REQUIRED inside `tracking`), and it MUST be `false` — frame-by-frame tracking data (bounds following a moving object) is **reserved** for a future version. Absent means `{ "enabled": false }`. Readers MUST ignore tracking content they do not understand and treat the box as untracked. |
-| `target` | object | OPTIONAL | **Reserved** for semantic object metadata: what real UI object the box points at (DOM selector, role and text; Windows UI Automation `AutomationId`/`ControlType`; engine object ids…). This is where the earlier draft's "element"/Tracked Element concept lives now — a box *with a target* is a semantic annotation; there is no separate element type. Format 0.1.0 does not define its contents; readers MUST ignore what they do not understand and MUST still render the box from `bounds`. |
+| `target` | object | OPTIONAL | Semantic object metadata: what real UI object the box points at (DOM selector, role and text; Windows UI Automation `AutomationId`/`ControlType`; engine object ids…). This is where the earlier draft's "element"/Tracked Element concept lives now — a box *with a target* is a semantic annotation; there is no separate element type. Its `source` field says where the metadata came from; see [§8.7](#87-target-semantic-objects). Readers MUST ignore sources and fields they do not understand and MUST still render the box from `bounds`. |
 | `style` | object | OPTIONAL | Display styling. In 0.1.0 the only defined field is `color`: CSS-style hex, `"#RRGGBB"` or `"#RRGGBBAA"`, used for the border, badge, and text. Viewers pick their own default when absent. |
 | `created_at` | string | OPTIONAL | When the annotation was made, ISO 8601 with timezone. |
 | `z` | integer | OPTIONAL | Stacking order for rendering; higher draws on top. Also a tiebreaker in display numbering ([§8.5](#85-display-numbers)). Default: the annotation's array position (later entries on top). |
@@ -539,6 +704,13 @@ Numbered boxes carry visible numbers — ①, ②, ③ — in every rendered vie
       "numbered": true,
       "blur": false,
       "tracking": { "enabled": false },
+      "target": {
+        "source": "uia",
+        "name": "Save",
+        "control_type": "Button",
+        "automation_id": "saveButton",
+        "class_name": "Chrome_WidgetWin_1"
+      },
       "style": { "color": "#FF3B30" },
       "created_at": "2026-07-27T14:03:29+09:00",
       "z": 2
@@ -563,7 +735,48 @@ Numbered boxes carry visible numbers — ①, ②, ③ — in every rendered vie
 Display numbers here: `ann_8f21c4` (start 21500) is **1**, `ann_1d9b02` (start 26900) is **2**;
 `ann_e33a7f` is not numbered. The blurred box covers the whole replay, so the email address is
 obscured in every frame of `replay_annotated.webm` — while `replay.webm` and `snapshot.png` keep
-the original pixels ([§9](#9-blur-and-privacy)).
+the original pixels ([§9](#9-blur-and-privacy)). Box **2** also carries a `target`
+([§8.7](#87-target-semantic-objects)): it was placed on a real UI object, so a reader knows it
+is *the Save button*, not just a rectangle. A reader that ignores `target` entirely loses
+nothing but that sentence.
+
+### 8.7 `target` (semantic objects)
+
+A box's `bounds` says *where*; `target` says *what*. It records the real UI object the box was
+placed on, so a reader can talk about "the Save button" rather than "the rectangle at
+(2140, 1236)" — and so the same object can still be found after the UI moved.
+
+`target` is OPTIONAL and purely additive: a box without one is an ordinary box, and a box with
+one MUST still be renderable from `bounds` alone. Writers MUST NOT require a reader to
+understand `target`.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `source` | string | REQUIRED | Where the metadata came from — the discriminator for every other field in the object. Format 0.1.0 defines exactly one value: `"uia"` (see below). Readers MUST ignore a `target` whose `source` they do not know, and MUST NOT guess at its other fields. |
+
+**`source: "uia"` — Windows UI Automation.** The object is a control from the Microsoft UI
+Automation tree of the foreground window, as it was **at the capture instant**. Every field
+below is OPTIONAL and carries the UIA property of the same meaning; a field the element had no
+value for is OMITTED rather than written as an empty string.
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | string | UIA `Name` — the element's accessible name, i.e. what the user sees ("Save"). Localized to the captured machine's language, and not stable across UI changes. |
+| `control_type` | string | UIA `ControlType` **without** the `ControlType.` prefix, e.g. `"Button"`, `"Edit"`, `"TabItem"`. Language-independent. |
+| `automation_id` | string | UIA `AutomationId` — the application's own identifier for the control. The most stable field when the application provides one; MAY be absent, and is only unique within its container. |
+| `class_name` | string | The element's Win32 window class, e.g. `"Chrome_WidgetWin_1"`. |
+
+- **The bounds are the truth.** `target` describes the object a box was placed on; it never
+  overrides, extends, or replaces `bounds`. A reader that cannot resolve the object still has
+  the exact rectangle in the snapshot.
+- **A moment, not a live handle.** The metadata is a snapshot of one instant, like the pixels
+  next to it. It says nothing about the object at any other point in the replay; following an
+  object through time is `tracking` ([§8.3](#83-the-box)), which is reserved.
+- **Provenance.** When the pack also carries the dump the object was picked from
+  ([§11.3](#113-windows-uia-windows-ui-automation)), a reader MAY match the two by name,
+  control type, automation id, and bounds. The dump is OPTIONAL: a `target` stands on its own.
+- Writers MAY define further `source` values (a DOM picker, a game engine); they MUST NOT
+  redefine `"uia"`.
 
 ---
 
@@ -577,7 +790,8 @@ Blur is a **box property** (`blur: true`, [§8.3](#83-the-box)), not an annotati
 1. **Originals stay original.** `snapshot.png` and the replay video MUST contain the original,
    unredacted pixels. Writers MUST NOT apply blur — or any annotation — destructively to them.
 2. **Blur renders into derived views only.** Every rendered view of the capture — the annotated
-   replay ([§7.2](#72-the-annotated-replay)), live editor previews, any future export — MUST
+   replay ([§7.2](#72-the-annotated-replay)), the annotated keyframe stills
+   ([§7.3](#73-annotated-keyframes)), live editor previews, any future export — MUST
    obscure the interior of every `blur: true` box while that box is alive:
    - during the box's lifetime ([§8.4](#84-lifetime)); a box without a lifetime blurs every
      frame;
@@ -594,7 +808,8 @@ Blur is a **box property** (`blur: true`, [§8.3](#83-the-box)), not an annotati
 ### 9.2 The sharing rule
 
 Because the originals are preserved, **the pack folder itself is not redacted**. The redaction
-lives in `replay_annotated` — the artifact meant for sharing. Consequences:
+lives in the rendered views — `replay_annotated` and the keyframe stills in `frames/`
+([§7.3](#73-annotated-keyframes)) — the artifacts meant for sharing. Consequences:
 
 - Writers MUST make this visible at save time whenever any `blur: true` box exists. The
   reference wording:
@@ -625,7 +840,9 @@ deliberately:
 
 A future version will define a **sanitized ZIP**: a `.capturepack` variant that excludes the
 unredacted originals (`replay.webm`/`replay.mp4` and `snapshot.png`) and ships the annotated
-replay in their place, for sharing a blurred capture without any unredacted pixels at all. It is
+replay — and the equally redacted keyframe stills of
+[§7.3](#73-annotated-keyframes) — in their place, for sharing a blurred capture without any
+unredacted pixels at all. It is
 **not defined in 0.1.0**; until then, the sharing rule of [§9.2](#92-the-sharing-rule) is the
 guidance.
 
@@ -727,6 +944,11 @@ replay ends.
 subdirectory and appends whatever structured metadata it wants there — DOM snapshots, git state,
 window trees, console logs, engine data.
 
+A payload's contents are the plugin's own business, with one exception: this spec defines the
+shape of the well-known `windows-uia` payload ([§11.3](#113-windows-uia-windows-ui-automation)),
+because annotation targets ([§8.7](#87-target-semantic-objects)) are picked from it. Everything
+in [§11.1](#111-rules) still applies to it unchanged.
+
 ### 11.1 Rules
 
 - Each plugin writes to `plugins/<plugin-name>/` and nowhere else. `<plugin-name>` MUST match
@@ -779,6 +1001,71 @@ plugins/
   "changed_files": ["src/editor/save-state.ts", "src/ui/toolbar.tsx"]
 }
 ```
+
+### 11.3 `windows-uia` (Windows UI Automation)
+
+`plugins/windows-uia/` is the well-known payload for **what was on screen as objects** at the
+capture instant on Windows: the top-level window list and the foreground window's Microsoft UI
+Automation control tree. It is what makes an annotation box able to say *"the Save button"*
+([§8.7](#87-target-semantic-objects)) instead of only *"this rectangle"*.
+
+Like every plugin payload it is OPTIONAL and purely additive. A pack without it is complete; a
+reader that ignores it loses no core data. It follows all of [§11.1](#111-rules).
+
+```
+plugins/
+└── windows-uia/
+    ├── meta.json
+    └── elements.json
+```
+
+`meta.json` is the standard plugin metadata (`{ "name": "windows-uia", "version": "0.1.0" }`).
+
+`elements.json`:
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `captured_at` | string | REQUIRED | When the dump was taken — the capture instant. ISO 8601 with timezone, the same shape as `manifest.created_at`. |
+| `budget_ms` | integer | REQUIRED | The time budget the dump was given. Reading the UI Automation tree of an arbitrary application is unbounded work, so writers MUST bound it; this records the bound that was used. |
+| `truncated` | boolean | REQUIRED | `true` = the walk ran out of budget, depth, or element allowance, so `elements` is INCOMPLETE. It is never a reason to distrust the entries that ARE present — an absent element means "not recorded", never "not on screen". |
+| `windows` | array | REQUIRED | Top-level windows that existed at the capture instant. MAY be empty. |
+| `elements` | array | REQUIRED | Controls of the FOREGROUND window's UI Automation tree, in pre-order. MAY be empty. |
+
+Each entry of `windows`:
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `title` | string | REQUIRED | Window title. MAY be empty. |
+| `process` | string | REQUIRED | Process name without extension, e.g. `"chrome"`. Empty when it could not be read. |
+| `bounds` | object | REQUIRED | `{ x, y, width, height }` — see the coordinate rule below. |
+| `focused` | boolean | REQUIRED | The window that had focus. At most one entry is `true`; a dump that could not determine the foreground window has none. |
+
+Each entry of `elements`:
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | REQUIRED | UIA `Name`. MAY be empty. |
+| `control_type` | string | REQUIRED | UIA `ControlType` without the `ControlType.` prefix, e.g. `"Button"`. MAY be empty. |
+| `automation_id` | string | REQUIRED | UIA `AutomationId`. MAY be empty. |
+| `class_name` | string | REQUIRED | Win32 window class. MAY be empty. |
+| `bounds` | object | REQUIRED | `{ x, y, width, height }` — see the coordinate rule below. |
+| `depth` | integer | REQUIRED | Depth in the foreground window's control tree; `0` is that window itself. |
+
+Unlike `target` ([§8.7](#87-target-semantic-objects)), these fields are REQUIRED but MAY be
+empty strings: this is a dump, and an empty `name` is itself information.
+
+- **Coordinates.** Every `bounds` in this payload is in **snapshot pixel coordinates** — the
+  same space as `annotations.json` ([§8.2](#82-coordinate-space)), i.e. the pixels of
+  `snapshot.png`, which is the focused display ([§5.6](#56-displays-multi-monitor-captures)).
+  Writers MUST convert from the OS's virtual-desktop coordinates, accounting for display scaling
+  and the virtual desktop's origin. A window or element on ANOTHER display therefore lands
+  outside the snapshot rectangle — possibly at negative coordinates. Such entries are valid and
+  MUST NOT be dropped by readers: they describe the rest of the desktop.
+- **One instant.** The payload describes the capture instant only. It says nothing about any
+  other position in the replay, and it is never updated when annotations change.
+- **Not authoritative for annotations.** An annotation's geometry always comes from
+  `annotations.json`. This payload is context, and a `target` on a box is self-contained — the
+  two are matched by a reader that wants more detail, never required to agree.
 
 ---
 
@@ -841,6 +1128,13 @@ computed display numbers (SPEC §8.5) — identical in every rendered view.
 replay contain the ORIGINAL unredacted pixels, and that blur is rendered only in
 replay_annotated.}
 
+## Annotated keyframes
+
+{one line per keyframe (SPEC §5.7), as a markdown image so any Markdown reader — and any LLM —
+sees the annotated frames without decoding video:}
+
+- **{t_ms as mm:ss.mmm}** — ![Keyframe {NN} at {mm:ss.mmm}]({file})
+
 ## Files
 
 - manifest.json — {one-line purpose}
@@ -884,12 +1178,19 @@ Coordinates are pixels in snapshot.png (2560×1440). Numbers are the computed di
 1 box is marked blur. snapshot.png and replay.webm contain the original, unredacted pixels;
 the blur is rendered only in replay_annotated.webm.
 
+## Annotated keyframes
+
+- **00:21.750** — ![Keyframe 1 at 00:21.750](frames/frame-01_00-21.750.png)
+- **00:22.750** — ![Keyframe 2 at 00:22.750](frames/frame-02_00-22.750.png)
+- **00:26.900** — ![Keyframe 3 at 00:26.900](frames/frame-03_00-26.900.png)
+
 ## Files
 
 - manifest.json — pack identity, environment, inventory
 - snapshot.png — captured frame, 2560×1440 (original pixels)
 - replay.webm — last 28.4 s before capture (original evidence)
 - replay_annotated.webm — the replay with the 3 boxes rendered in
+- frames/ — 3 annotated stills, one per annotation state change
 - annotations.json — the 3 annotation boxes above, as editable data
 - timeline.json — capture/annotation/save events
 - README.md — human-first entry point
@@ -911,12 +1212,16 @@ RECOMMENDED content, in order:
 2. **Created / Application / Duration** — capture instant, focused app, replay length (or
    "screenshot only").
 3. **Description** — the manifest `note`, verbatim.
-4. **Files** — one line per file in the folder, saying what each is (mark the originals as
+4. **Annotated keyframes** — the stills of [§5.7](#57-keyframes-annotated-stills) as markdown
+   images with their timestamps, when the pack has them. The story is visible before the reader
+   opens anything.
+5. **Files** — one line per file in the folder, saying what each is (mark the originals as
    never-modified, the annotated replay as the watchable result).
-5. **How to use** — e.g.:
+6. **How to use** — e.g.:
    1. Watch `replay_annotated.webm` (or open `snapshot.png`).
-   2. Read `report.md` for the full narrative.
-   3. AI: read `skills/`, or connect through a CapturePack MCP server.
+   2. Or read the stills in `frames/` — no video decoding needed.
+   3. Read `report.md` for the full narrative.
+   4. AI: read `skills/`, or connect through a CapturePack MCP server.
 
 When blur boxes exist, `README.md` SHOULD repeat the sharing warning of
 [§9.2](#92-the-sharing-rule).
@@ -932,7 +1237,7 @@ Well-known filenames (all OPTIONAL; RECOMMENDED as a set):
 
 | File | Content |
 |---|---|
-| `skills/overview.md` | Whole-pack summary: what happened, where to look first, counts (annotations, events, plugins), whether blur is present. |
+| `skills/overview.md` | Whole-pack summary: what happened, where to look first, counts (annotations, events, plugins), whether blur is present. SHOULD embed the annotated keyframes ([§5.7](#57-keyframes-annotated-stills)) as markdown images — an LLM then reconstructs the capture from this one file. |
 | `skills/timeline.md` | The timeline narrated: notable events in order with timestamps, or "no timeline recorded". |
 | `skills/annotation.md` | Every annotation box: display number (when numbered), text, bounds, lifetime, blur flag — plus a one-line statement of the numbering rule. |
 | `skills/dom.md` | DOM/semantic object metadata when a browser or UIA plugin contributed it; otherwise a one-line "no DOM metadata in this pack" so the LLM stops looking. |
@@ -971,7 +1276,8 @@ This maximizes the packs' audience — old readers keep working.
 requirement, not a courtesy:
 
 - Unknown JSON fields anywhere: ignore them; preserve them when rewriting. (This includes the
-  reserved `tracking` and `target` contents of [§8.3](#83-the-box).)
+  reserved `tracking` contents of [§8.3](#83-the-box) and any `target` whose `source` the reader
+  does not know, [§8.7](#87-target-semantic-objects).)
 - Unknown files in the pack root or anywhere else: ignore them; preserve them when rewriting.
 - Unknown annotation types, event types, plugin directories, extra `skills/` documents: skip
   them; preserve on rewrite.
@@ -1007,6 +1313,16 @@ A checklist for reader implementations:
    [§8.5](#85-display-numbers) — never from a document or a rendered frame.
 8. **Never assume redaction in the originals.** `snapshot.png` and the replay always hold
    original pixels; only derived views honor blur ([§9](#9-blur-and-privacy)).
+9. **Prefer images over video when you cannot decode video.** If `media.keyframes` is present,
+   its stills already carry the annotations at every state change
+   ([§5.7](#57-keyframes-annotated-stills)); if it is absent, fall back to `snapshot.png` +
+   `annotations.json` and draw the boxes yourself.
+10. **Read object metadata as a bonus, never as a requirement.** A box's `target`
+    ([§8.7](#87-target-semantic-objects)) tells you *what* it points at, and
+    `plugins/windows-uia/` ([§11.3](#113-windows-uia-windows-ui-automation)) describes the
+    windows and controls at the capture instant. Both are optional and describe one instant:
+    render every box from `bounds` alone, ignore a `target` whose `source` you do not know, and
+    treat a pack without either as complete.
 
 ---
 

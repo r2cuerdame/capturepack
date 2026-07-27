@@ -47,6 +47,7 @@ body {
 }
 
 #colorBtn {
+  flex: none;
   width: 28px;
   height: 28px;
   display: inline-flex;
@@ -108,6 +109,10 @@ body {
   color: var(--muted);
   font-size: 12px;
   white-space: nowrap;
+  /* Windowed mode can be narrow (GOAL "Editor Window Mode"): the informational
+     chips give way first, so the controls below never get pushed out of view. */
+  min-width: 0;
+  overflow: hidden;
 }
 
 #dirtyChip {
@@ -119,6 +124,62 @@ body {
 #trimDropChip {
   color: #ffb454;
   background: rgba(255, 180, 84, 0.12);
+}
+
+/* Read-only display switcher (GOAL "Multi-Monitor Support"): the focused
+   display carries an accent outline, the one being viewed is filled. */
+#displaySwitcher {
+  flex: none;
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--panel-hover);
+}
+
+#displaySwitcher button {
+  min-width: 24px;
+  height: 22px;
+  padding: 0 5px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: 600 12px "Segoe UI", system-ui, sans-serif;
+  cursor: pointer;
+}
+
+#displaySwitcher button:hover {
+  color: var(--text);
+  background: #33333d;
+}
+
+#displaySwitcher button.focusedDisplay {
+  border-color: var(--action);
+  color: var(--text);
+}
+
+#displaySwitcher button.viewing {
+  background: var(--action);
+  color: #fff;
+}
+
+/* Viewing a non-focused display: view-only, annotations live elsewhere. */
+#displayHint {
+  color: #ffb454;
+  background: rgba(255, 180, 84, 0.12);
+}
+
+/* Static object picking: the objects come from the capture instant, said once
+   while the user is scrubbed away from "now" (GOAL "Static object picking"). */
+#objectHint {
+  color: #ffb454;
+  background: rgba(255, 180, 84, 0.12);
+}
+
+#timebar.readonlyDisplay {
+  opacity: 0.4;
+  pointer-events: none;
 }
 
 #keysHint {
@@ -133,7 +194,50 @@ body {
   }
 }
 
+/* ---- window mode toggle (GOAL "Editor Window Mode") ---- */
+
+#windowModeBtn {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: 14px/1 "Segoe UI Symbol", "Segoe UI", system-ui, sans-serif;
+  cursor: pointer;
+}
+
+#windowModeBtn:hover {
+  background: var(--panel-hover);
+  color: var(--text);
+}
+
+/* Pressed = the editor is currently a window, not the fullscreen overlay. */
+#windowModeBtn[aria-pressed="true"] {
+  border-color: var(--action);
+  color: var(--text);
+}
+
+/* Windowed mode: the top bar IS the window's title bar — drag it to move the
+   window (double-click maximizes, as any frameless window does). Every control
+   inside opts back out, or it could no longer be clicked at all. */
+body[data-window-mode="windowed"] #topbar {
+  -webkit-app-region: drag;
+}
+
+body[data-window-mode="windowed"] #topbar button,
+body[data-window-mode="windowed"] #topbar input,
+body[data-window-mode="windowed"] #topbar #displaySwitcher {
+  -webkit-app-region: no-drag;
+}
+
 #exportBtn {
+  /* Never shrinks: Save has to stay reachable at the minimum window width. */
+  flex: none;
   border: none;
   border-radius: 6px;
   background: var(--action);

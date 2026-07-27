@@ -10,6 +10,7 @@ import { makeT } from '../shared/i18n'
 import type { Language, TranslateFn } from '../shared/i18n'
 import type { Annotation, AnnotationsFile, Manifest } from '../shared/types'
 import { computeDisplayNumbers } from '../shared/numbering'
+import { computeKeyframeTimes, keyframeFileName } from '../shared/keyframes'
 
 const px = (n: number): number => Math.round(n)
 
@@ -54,6 +55,150 @@ export function describeAnnotation(a: Annotation, t: TranslateFn = makeT('en')):
   return parts.join(' — ')
 }
 
+// ---------------------------------------------------------------------------
+// All-displays capture (GOAL "Multi-Monitor Support", SPEC §5.3): every
+// document lists every captured display, so a reader knows the pack holds more
+// than the one screen the annotations live on.
+// ---------------------------------------------------------------------------
+
+/** Physical pixel size of a declared display (bounds are DIP × scale). */
+function displayPixels(d: NonNullable<Manifest['media']['displays']>[number]): string {
+  return `${Math.round(d.bounds.width * d.scale)}×${Math.round(d.bounds.height * d.scale)}`
+}
+
+/**
+ * The captured displays as markdown bullets, e.g.
+ * `- **Displays:** 2 captured` + one indented line per display.
+ * Empty for a single-display pack (no media.displays).
+ */
+export function displaySummaryLines(manifest: Manifest, t: TranslateFn = makeT('en')): string[] {
+  const displays = manifest.media.displays
+  if (displays === undefined || displays.length === 0) return []
+  const lines = [`- **${t('pack.displays')}:** ${displays.length} captured`]
+  for (const d of displays) {
+    const replay =
+      d.replay === null
+        ? 'no replay'
+        : `${((d.replay_duration_ms ?? 0) / 1000).toFixed(1)}s \`${d.replay}\``
+    const focused = d.focused ? ` (${t('pack.displayFocused')})` : ''
+    lines.push(
+      `  - ${d.index}: ${displayPixels(d)} at ${px(d.bounds.x)},${px(d.bounds.y)} @${d.scale}x — ` +
+        `\`${d.snapshot}\`, ${replay}${focused}`,
+    )
+  }
+  return lines
+}
+
+/**
+ * The per-display files a single-display pack does not have: the NON-focused
+ * displays' media (the focused display's files are snapshot.png/replay.webm,
+ * already listed by every document).
+ */
+export function extraDisplayFiles(manifest: Manifest): Array<{ name: string; what: string }> {
+  const displays = manifest.media.displays
+  if (displays === undefined) return []
+  const files: Array<{ name: string; what: string }> = []
+  for (const d of displays) {
+    if (d.focused) continue
+    files.push({
+      name: d.snapshot,
+      what: `Display ${d.index}, ${displayPixels(d)} — the same instant on another screen (original pixels, no annotations)`,
+    })
+    if (d.replay !== null) {
+      files.push({
+        name: d.replay,
+        what: `Display ${d.index} screen recording, ${((d.replay_duration_ms ?? 0) / 1000).toFixed(1)}s — original evidence, never modified`,
+      })
+    }
+  }
+  return files
+}
+
+// ---------------------------------------------------------------------------
+// Annotated keyframes (GOAL "Annotated keyframes (LLM-first)", SPEC §5.7):
+// every generated document links the stills as markdown images, so a model
+// reconstructs the whole story from text + images alone — no video decoding.
+// ---------------------------------------------------------------------------
+
+export interface KeyframeRef {
+  // 1-based position — the NN in the filename and the order to read them in
+  n: number
+  // Pack-relative path, e.g. "frames/frame-01_00-03.200.png"
+  file: string
+  tMs: number
+}
+
+export interface KeyframeSet {
+  frames: KeyframeRef[]
+  // true  = manifest.media.keyframes declares them: the render finished and
+  //         every listed file is in the pack.
+  // false = the documents were generated BEFORE the background render (the
+  //         normal case at save time), so these are the names it will write.
+  //         Deterministic: the same shared rule produces both.
+  declared: boolean
+}
+
+/** The pack's keyframes: the manifest's declaration when it has one, else the
+ * set the pending render will produce (computeKeyframeTimes, shared rule). */
+export function keyframeSet(manifest: Manifest, annotationsFile: AnnotationsFile): KeyframeSet {
+  const declared = manifest.media.keyframes
+  if (Array.isArray(declared) && declared.length > 0) {
+    const frames: KeyframeRef[] = []
+    declared.forEach((k, i) => {
+      if (k === null || typeof k !== 'object') return
+      if (typeof k.file !== 'string' || typeof k.t_ms !== 'number') return
+      frames.push({ n: i + 1, file: k.file, tMs: k.t_ms })
+    })
+    if (frames.length > 0) return { frames, declared: true }
+  }
+  const durationMs =
+    manifest.media.replay === null ? 0 : (manifest.media.replay_duration_ms ?? 0)
+  const times = computeKeyframeTimes(annotationsFile.annotations, durationMs)
+  return {
+    frames: times.map((tMs, i) => ({ n: i + 1, file: keyframeFileName(i + 1, tMs), tMs })),
+    declared: false,
+  }
+}
+
+/**
+ * The "Annotated keyframes" section BODY (the caller supplies its own heading),
+ * shared by report.md, README.md and skills/overview.md so the three documents
+ * can never list different stills.
+ */
+export function keyframeSectionLines(set: KeyframeSet, t: TranslateFn): string[] {
+  if (set.frames.length === 0) return []
+  const lines: string[] = [
+    'Stills rendered exactly like the annotated replay — one per annotation state change (a box',
+    'appearing or disappearing), with blur, borders, number badges and text drawn in. Read them in',
+    'order to reconstruct the capture without decoding any video.',
+    '',
+  ]
+  for (const f of set.frames) {
+    const clock = formatClock(f.tMs)
+    lines.push(`- **${clock}** — ![${t('pack.keyframeAlt', { n: String(f.n), time: clock })}](${f.file})`)
+  }
+  if (!set.declared) {
+    lines.push('')
+    lines.push(
+      'These render in the background right after save. A link that does not resolve yet means the',
+    )
+    lines.push('render is still running (or failed) — the media and annotations.json are complete either way.')
+  }
+  return lines
+}
+
+/** The frames/ entry for a document's file list, or null when there are none. */
+export function keyframeFileEntry(set: KeyframeSet): { name: string; what: string } | null {
+  if (set.frames.length === 0) return null
+  const n = set.frames.length
+  return {
+    name: 'frames/',
+    what:
+      `${n} annotated still${n === 1 ? '' : 's'} (frame-NN_MM-SS.mmm.png), one per annotation state ` +
+      'change — the same overlays the annotated replay draws, declared in manifest.media.keyframes',
+  }
+}
+
 export function buildReport(
   manifest: Manifest,
   annotationsFile: AnnotationsFile,
@@ -84,6 +229,8 @@ export function buildReport(
     .map((s) => `${s.width}×${s.height} @${s.scale}x scale`)
     .join('; ')
   lines.push(`- **${t('pack.screens')}:** ${screens}`)
+  // All-displays capture: what the trigger actually froze, per display.
+  lines.push(...displaySummaryLines(manifest, t))
   if (manifest.environment.app !== undefined) {
     lines.push(`- **${t('pack.focusedApp')}:** ${manifest.environment.app}`)
   }
@@ -137,6 +284,17 @@ export function buildReport(
   }
   lines.push('')
 
+  // Annotated keyframes (GOAL "Annotated keyframes"): images beat video for an
+  // LLM, so they sit directly under the annotation list they illustrate.
+  const keyframes = keyframeSet(manifest, annotationsFile)
+  const keyframeLines = keyframeSectionLines(keyframes, t)
+  if (keyframeLines.length > 0) {
+    lines.push(`## ${t('pack.keyframes')}`)
+    lines.push('')
+    lines.push(...keyframeLines)
+    lines.push('')
+  }
+
   lines.push(`## ${t('pack.files')}`)
   lines.push('')
   lines.push('- manifest.json — pack identity, environment, file inventory')
@@ -152,6 +310,11 @@ export function buildReport(
         '(generated in the background; may appear shortly after save)',
     )
   }
+  for (const f of extraDisplayFiles(manifest)) {
+    lines.push(`- ${f.name} — ${f.what}`)
+  }
+  const framesEntry = keyframeFileEntry(keyframes)
+  if (framesEntry !== null) lines.push(`- ${framesEntry.name} — ${framesEntry.what}`)
   lines.push('- README.md — human-first entry point')
   lines.push('- skills/ — AI-first context documents')
   lines.push('- report.md — this file')

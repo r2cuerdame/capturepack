@@ -4,6 +4,40 @@
 export const FORMAT_NAME = 'capturepack'
 export const FORMAT_VERSION = '0.1.0'
 
+// Per-display media of an all-displays capture (SPEC §5.3, GOAL "Multi-Monitor
+// Support"). One entry per display frozen by the trigger.
+export interface ManifestDisplayMedia {
+  // 1-based position in manifest.environment.screens (OS enumeration order).
+  index: number
+  // "snapshot-d<index>.png" — except the FOCUSED display, whose media IS the
+  // top-level media: snapshot === "snapshot.png" (the bytes are never
+  // duplicated, so a reader ignoring displays[] still sees the focused one).
+  snapshot: string
+  // "replay-d<index>.webm", the top-level replay filename on the focused
+  // display, or null when this display recorded nothing.
+  replay: string | null
+  replay_duration_ms?: number
+  // The display's rectangle in the OS virtual-desktop coordinate space
+  // (device-independent pixels); multiply by `scale` for physical pixels.
+  bounds: { x: number; y: number; width: number; height: number }
+  scale: number
+  // Exactly one entry is focused: the display the cursor was on at the
+  // trigger. The editor opens there and annotations anchor to it.
+  focused: boolean
+}
+
+// One annotated keyframe still (SPEC §5.7, GOAL "Annotated keyframes"): a PNG
+// rendered at one annotation state change, with the SAME overlays the annotated
+// replay draws. LLMs read images, not video.
+export interface ManifestKeyframe {
+  // Pack-relative filename, "frames/frame-<NN>_<MM-SS.mmm>.png" — NN is the
+  // entry's 1-based position in the array (shared/keyframes.ts owns the rule).
+  file: string
+  // Position on the replay clock (ms) of the frame this still shows. 0 in a
+  // screenshot-only pack, whose single still comes from snapshot.png.
+  t_ms: number
+}
+
 export interface Manifest {
   format: typeof FORMAT_NAME
   format_version: string
@@ -22,11 +56,22 @@ export interface Manifest {
     snapshot: string
     replay: string | null
     replay_duration_ms?: number
+    // All-displays capture (SPEC §5.3): the media of EVERY display the trigger
+    // froze, focused one included. Absent when only one display was captured
+    // (settings.captureDisplay "cursor"/"<id>"), which is exactly the 0.1.2
+    // single-display pack.
+    displays?: ManifestDisplayMedia[]
     // Annotated replay ("replay_annotated.webm"/".mp4", SPEC §7.2): the replay
     // with annotation boxes rendered into the pixels. Absent while not yet
     // rendered (it renders in the background after save) and always absent
     // when replay is null. Regenerable from replay + annotations.json.
     replay_annotated?: string
+    // Annotated keyframe stills (SPEC §5.7, §7.3): one PNG per annotation state
+    // change, ordered by t_ms ascending. Written by the SAME render pass as
+    // replay_annotated and declared with it, so it is absent until that render
+    // completes. A screenshot-only pack gets exactly one entry (t_ms 0),
+    // rendered from snapshot.png. Regenerable from the media + annotations.json.
+    keyframes?: ManifestKeyframe[]
     // Replay-timeline position (ms, same clock as timeline t_ms) of the frame
     // shown in snapshot.png. Absent = the capture instant ("now").
     snapshot_t_ms?: number
@@ -61,10 +106,80 @@ export interface AnnotationTracking {
   enabled: boolean
 }
 
-// RESERVED (SPEC §8.3): semantic object metadata — what real UI object the box
-// points at (DOM selector/role/text, UIA AutomationId/ControlType, ...). The
-// old "element" annotation concept lives here now. Contents undefined in 0.1.0.
+// Semantic object metadata (SPEC §8.3, §8.7): what real UI object the box
+// points at. The old "element" annotation concept lives here — a box WITH a
+// target is a semantic annotation; there is no separate element type.
+//
+// `source` is the discriminator. Format 0.1.0 defines exactly one source,
+// "uia" (see UiaAnnotationTarget); readers ignore sources they do not know and
+// still render the box from `bounds`.
 export type AnnotationTarget = Record<string, unknown>
+
+/**
+ * `target` for source "uia" (SPEC §8.7): a Windows UI Automation element the
+ * user picked in the editor, from the capture-instant dump in
+ * plugins/windows-uia/ (GOAL "Static object picking (v0 — before full
+ * tracking)"). Every field but `source` is omitted when the element had no
+ * value for it — an empty string is never written.
+ */
+export type UiaAnnotationTarget = {
+  source: 'uia'
+  // UIA Name — what the user sees (also the box's pre-filled text).
+  name?: string
+  // UIA ControlType without the "ControlType." prefix, e.g. "Button".
+  control_type?: string
+  // UIA AutomationId — the stable, non-localized id when the app provides one.
+  automation_id?: string
+  // Win32 window class of the element, e.g. "Chrome_WidgetWin_1".
+  class_name?: string
+}
+
+// ---------------------------------------------------------------------------
+// plugins/windows-uia (SPEC §11.3, GOAL "Static object picking")
+// ---------------------------------------------------------------------------
+
+/** A rectangle in the pack's snapshot pixel coordinate space (SPEC §8.2). */
+export interface UiaBounds {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+/** One top-level window that existed at the capture instant. */
+export interface UiaWindowRecord {
+  title: string
+  // Process name without extension, e.g. "chrome". '' when unavailable.
+  process: string
+  bounds: UiaBounds
+  // Exactly the window that had focus; false for every other window. A dump
+  // that could not determine the foreground window has no focused entry.
+  focused: boolean
+}
+
+/** One control of the FOREGROUND window's UI Automation tree. */
+export interface UiaElementRecord {
+  name: string
+  control_type: string
+  automation_id: string
+  class_name: string
+  bounds: UiaBounds
+  // 0 = the foreground window itself; a pre-order walk of its control view.
+  depth: number
+}
+
+/** plugins/windows-uia/elements.json (SPEC §11.3). */
+export interface UiaPluginPayload {
+  // When the dump was taken — the capture instant, ISO 8601 with offset.
+  captured_at: string
+  // The budget (ms) the dump was given; it is killed at that point.
+  budget_ms: number
+  // true = the walk hit the budget, the element cap, or the depth cap, so the
+  // tree below is INCOMPLETE. Never a reason to distrust what IS there.
+  truncated: boolean
+  windows: UiaWindowRecord[]
+  elements: UiaElementRecord[]
+}
 
 // Display styling (SPEC §8.3). `color` is CSS hex ("#RRGGBB"/"#RRGGBBAA"),
 // used for the border, number badge, and text.
@@ -159,6 +274,18 @@ export interface TimelineFile {
 // constant so the two can never drift.
 export const DEFAULT_CAPTURE_HOTKEY = 'Ctrl+Alt+C'
 
+// How the annotation editor opens (GOAL "Editor Window Mode"): the fullscreen
+// overlay (DEFAULT — fastest annotation) or a real movable/resizable window.
+export type EditorWindowMode = 'fullscreen' | 'windowed'
+
+/** Remembered windowed-mode editor rectangle, in device-independent pixels. */
+export interface EditorWindowBounds {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
 export interface Settings {
   // UI language: "system" (default — app.getLocale() at runtime) or a
   // supported language code from shared/i18n.ts (en/ko/ja/zh/es/fr/de/pt/ru).
@@ -175,9 +302,15 @@ export interface Settings {
   captureHotkey: string
   replaySeconds: number
   fps: number
-  // Capture display: "cursor" (default — follow the mouse at trigger; a
-  // recorder pair runs per connected display) or an Electron display id as a
-  // string (fixed display — one recorder pair, lower CPU).
+  // Capture display (GOAL "Multi-Monitor Support"):
+  //  - "all" (DEFAULT) — the trigger freezes EVERY connected display; the pack
+  //    carries per-display media (manifest.media.displays) and the display
+  //    under the cursor becomes the focused one.
+  //  - "cursor" — record every display, but keep only the cursor display.
+  //  - "<displayId>" — an Electron display id as a string (fixed display; one
+  //    recorder pair, lowest CPU).
+  // "all" and "cursor" run the same recorder set, so "all" costs export work,
+  // not capture work.
   captureDisplay: string
   scrubInvert: boolean
   scrubSensitivityMs: number
@@ -185,6 +318,17 @@ export interface Settings {
   defaultManualDurationMs: number
   // Show the duration chip on the selected annotation in the editor.
   showDurationLabel: boolean
+  // Editor window mode (GOAL "Editor Window Mode"): "fullscreen" (DEFAULT — the
+  // overlay every capture opened with before this existed) or "windowed". The
+  // editor writes it back whenever the user toggles (⧉ / F11), so the next
+  // capture opens the way the user left it.
+  editorWindowMode: EditorWindowMode
+  // The windowed editor's last rectangle, remembered with the mode. null until
+  // the user has been in windowed mode once (a default rectangle is then
+  // centered on the capture's display). Re-opened on the CAPTURE's display and
+  // clamped to its work area, so a remembered rectangle can never strand the
+  // editor off-screen after a monitor change.
+  editorWindowBounds: EditorWindowBounds | null
   // Always-On MCP Server (read-only, Streamable HTTP on 127.0.0.1:<mcpPort>/mcp).
   mcpEnabled: boolean
   mcpPort: number

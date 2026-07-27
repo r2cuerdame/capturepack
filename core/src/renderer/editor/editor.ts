@@ -7,13 +7,22 @@
 // frame scaled to the same native rect, so annotations and export share one
 // space.
 import type {
+  EditorDisplayPayload,
   EditorExportPayload,
   EditorInitPayload,
 } from '../../shared/ipc'
 import { applyDomI18n, makeT } from '../../shared/i18n'
 import type { TranslateFn } from '../../shared/i18n'
-import type { Annotation, AnnotationBounds } from '../../shared/types'
+import type {
+  Annotation,
+  AnnotationBounds,
+  AnnotationTarget,
+  EditorWindowMode,
+  UiaAnnotationTarget,
+} from '../../shared/types'
 import { computeDisplayNumbers } from '../../shared/numbering'
+import { ObjectIndex, objectLabel } from './objects'
+import type { PickableObject } from './objects'
 import { EditorState } from './state'
 import {
   formatDurationLabel,
@@ -25,6 +34,7 @@ import {
 import {
   annotationBounds,
   composeExportPng,
+  drawObjectHover,
   drawScene,
   handleAt,
   hitTest,
@@ -41,6 +51,10 @@ interface EditorBridge {
   saveAsNew(payload: EditorExportPayload): void
   cancel(): void
   annotationAdded(payload: { id: string; type: string }): void
+  // Editor Window Mode (GOAL): an ABSOLUTE request; main applies it and pushes
+  // back the mode the window actually ended up in.
+  setWindowMode(mode: EditorWindowMode): void
+  onWindowMode(cb: (mode: EditorWindowMode) => void): void
 }
 
 declare global {
@@ -70,6 +84,7 @@ const replayChip = el<HTMLSpanElement>('replayChip')
 const colorBtn = el<HTMLButtonElement>('colorBtn')
 const colorSwatch = el<HTMLSpanElement>('colorSwatch')
 const exportBtn = el<HTMLButtonElement>('exportBtn')
+const windowModeBtn = el<HTMLButtonElement>('windowModeBtn')
 const boxHeader = el<HTMLDivElement>('boxHeader')
 const numberBtn = el<HTMLButtonElement>('numberBtn')
 const durationChip = el<HTMLButtonElement>('durationChip')
@@ -79,12 +94,16 @@ const durationEditor = el<HTMLDivElement>('durationEditor')
 const durationInput = el<HTMLInputElement>('durationInput')
 const untilEndBtn = el<HTMLButtonElement>('untilEndBtn')
 const entireCaptureBtn = el<HTMLButtonElement>('entireCaptureBtn')
+const displaySwitcher = el<HTMLSpanElement>('displaySwitcher')
+const displayHint = el<HTMLSpanElement>('displayHint')
+const objectHint = el<HTMLSpanElement>('objectHint')
 const dirtyChip = el<HTMLSpanElement>('dirtyChip')
 const trimDropChip = el<HTMLSpanElement>('trimDropChip')
 const unsavedBar = el<HTMLDivElement>('unsavedBar')
 const unsavedSaveBtn = el<HTMLButtonElement>('unsavedSaveBtn')
 const unsavedSaveAsBtn = el<HTMLButtonElement>('unsavedSaveAsBtn')
 const unsavedDiscardBtn = el<HTMLButtonElement>('unsavedDiscardBtn')
+const timebarEl = el<HTMLElement>('timebar')
 
 function ctx2d(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
   const ctx = canvas.getContext('2d')
@@ -126,12 +145,48 @@ let dirty = false
 // Original desktop snapshot, kept for restoring the "now" frame after scrubbing.
 let nativeBitmap: ImageBitmap | null = null
 let scrub: ScrubController | null = null
+// Read-only display switcher (GOAL "Multi-Monitor Support"): every display the
+// capture froze. Empty for a single-display capture — the switcher never
+// appears then, and every path below behaves exactly as it did before.
+interface DisplayView extends Omit<EditorDisplayPayload, 'snapshotPng'> {
+  png: ArrayBuffer
+  // Decoded lazily on first view: decoding every display up front would delay
+  // the editor for frames the user may never look at.
+  bitmap: ImageBitmap | null
+}
+let displayViews: DisplayView[] = []
+let focusedDisplayIndex = 0
+let viewDisplayIndex = 0
+// Native size of the FOCUSED display (nativeW/H follow the display on screen).
+let focusedW = 0
+let focusedH = 0
+// The base frame showing when the user left the focused display — restored on
+// return, so a scrubbed position survives a look at another screen.
+let focusedBaseFrame: ImageBitmap | null = null
+let switchingDisplay = false
+// Static object picking (GOAL "Static object picking (v0)"): the capture-instant
+// UI Automation elements, indexed once at init. An empty index (no dump, a
+// timed-out dump, a pack without plugins/windows-uia) leaves every path below
+// behaving exactly as it did before the feature existed.
+let objectIndex: ObjectIndex | null = null
+let hoverObject: PickableObject | null = null
+// Last probed snapshot pixel: hovering does NO work until the pointer moves off it.
+let lastProbeX = -1
+let lastProbeY = -1
+// Honesty (GOAL): the objects come from the capture instant, so a scrubbed-away
+// view is showing pixels they no longer describe. Said once per session.
+let objectHintShown = false
+let objectHintTimer: number | null = null
 // Replay Trim (GOAL "Replay Trim"), on the scrub (parsed video) clock.
 // trimInMs 0 = untrimmed start; trimOutMs null = untrimmed end. Fresh-capture
 // flow only — edit mode never enables trimming (the saved replay is already
 // the original evidence).
 let trimInMs = 0
 let trimOutMs: number | null = null
+// Editor Window Mode (GOAL "Editor Window Mode"): mirrors the window state main
+// reports. The fullscreen overlay is the default; windowed mode is a real
+// movable/resizable window whose top bar is the drag region.
+let windowMode: EditorWindowMode = 'fullscreen'
 const viewport = new Viewport(frame)
 let spaceDown = false
 let panning: { pointerId: number; x: number; y: number } | null = null
@@ -170,9 +225,136 @@ function layout(): void {
   positionTextEditor()
 }
 
+// ---------------------------------------------------------------------------
+// Window mode (GOAL "Editor Window Mode"): fullscreen overlay (default) or a
+// real window. Main owns the window state — the renderer asks for a mode and
+// paints only what is pushed back, so the ⧉ button can never claim a mode the
+// window is not in. Everything else (Esc, Enter, scrubbing, picking, the box
+// header) behaves identically in both modes.
+// ---------------------------------------------------------------------------
+
+/** Paints the mode main reported: drag region, button state, canvas re-fit. */
+function applyWindowMode(mode: EditorWindowMode): void {
+  windowMode = mode
+  // The CSS drag region hangs off this: the top bar is only draggable — and
+  // only steals clicks from its own padding — while the editor is a window.
+  document.body.dataset['windowMode'] = mode
+  windowModeBtn.setAttribute('aria-pressed', String(mode === 'windowed'))
+  // The window size just changed under us; the resize event does this too, but
+  // not every platform guarantees one for a fullscreen transition.
+  layout()
+  syncSelectionUi()
+  schedulePaint()
+}
+
+function toggleWindowMode(): void {
+  window.editorBridge.setWindowMode(windowMode === 'windowed' ? 'fullscreen' : 'windowed')
+}
+
+// ---------------------------------------------------------------------------
+// Display switcher (GOAL "Multi-Monitor Support") — the other displays this
+// capture froze are VIEWABLE, never annotatable in this version. Annotation,
+// scrubbing, and the exported frame always belong to the focused display.
+// ---------------------------------------------------------------------------
+
+/** True while the focused display is on screen — i.e. editing is live. */
+function viewingFocused(): boolean {
+  return displayViews.length < 2 || viewDisplayIndex === focusedDisplayIndex
+}
+
+function buildDisplaySwitcher(): void {
+  displaySwitcher.replaceChildren()
+  if (displayViews.length < 2) {
+    displaySwitcher.hidden = true
+    displayHint.hidden = true
+    return
+  }
+  for (const d of displayViews) {
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.textContent = String(d.index)
+    btn.title = d.focused
+      ? t('editor.displayFocusedTooltip', { index: d.index })
+      : t('editor.displayTooltip', { index: d.index })
+    btn.classList.toggle('focusedDisplay', d.focused)
+    btn.addEventListener('click', () => {
+      btn.blur() // keyboard shortcuts belong to the canvas, not this button
+      void showDisplay(d.index)
+    })
+    displaySwitcher.append(btn)
+  }
+  displaySwitcher.hidden = false
+  syncDisplaySwitcher()
+}
+
+function syncDisplaySwitcher(): void {
+  if (displayViews.length < 2) return
+  const buttons = displaySwitcher.querySelectorAll('button')
+  displayViews.forEach((d, i) => buttons[i]?.classList.toggle('viewing', d.index === viewDisplayIndex))
+  const focused = viewingFocused()
+  displayHint.hidden = focused
+  if (!focused) {
+    displayHint.textContent = t('editor.displayReadOnly', {
+      index: viewDisplayIndex,
+      focused: focusedDisplayIndex,
+    })
+  }
+  // Scrubbing applies to the focused display only.
+  timebarEl.classList.toggle('readonlyDisplay', !focused)
+  overlay.style.pointerEvents = focused ? '' : 'none'
+}
+
+/** Canvas backing store = the displayed display's native pixel size. */
+function resizeCanvases(): void {
+  snapshot.width = nativeW
+  snapshot.height = nativeH
+  overlay.width = nativeW
+  overlay.height = nativeH
+}
+
+/** Shows one captured display: the focused one (editable) or a frozen frame. */
+async function showDisplay(index: number): Promise<void> {
+  if (!loaded || switchingDisplay || exporting) return
+  const target = displayViews.find((d) => d.index === index)
+  if (target === undefined || index === viewDisplayIndex) return
+  switchingDisplay = true
+  // Picked objects belong to the focused display's coordinate space; a stale
+  // outline must never survive onto another screen's frame.
+  probeObjectHover(null)
+  try {
+    if (viewingFocused()) {
+      // Leaving the focused display: settle any in-flight seek and keep the
+      // exact frame on screen, so coming back needs no re-seek.
+      commitTextEditor(false)
+      closeDurationEditor(false)
+      scrub?.pause()
+      await scrub?.whenSettled()
+      focusedBaseFrame?.close()
+      focusedBaseFrame = await createImageBitmap(snapshot)
+    }
+    if (!target.focused && target.bitmap === null) {
+      target.bitmap = await createImageBitmap(new Blob([target.png], { type: 'image/png' }))
+    }
+    viewDisplayIndex = index
+    nativeW = target.focused ? focusedW : target.width
+    nativeH = target.focused ? focusedH : target.height
+    resizeCanvases()
+    const frame = target.focused ? (focusedBaseFrame ?? nativeBitmap) : target.bitmap
+    if (frame) snapCtx.drawImage(frame, 0, 0, nativeW, nativeH)
+    syncDisplaySwitcher()
+    layout()
+    schedulePaint()
+  } finally {
+    switchingDisplay = false
+  }
+}
+
 /** Paints the base image: a scrubbed replay frame or the native snapshot. */
 function drawBase(source: HTMLVideoElement | 'native'): void {
   if (!loaded) return
+  // A non-focused display shows its frozen frame; a late seek must not paint
+  // the focused display's replay over it.
+  if (!viewingFocused()) return
   if (source === 'native') {
     if (nativeBitmap) snapCtx.drawImage(nativeBitmap, 0, 0, nativeW, nativeH)
   } else {
@@ -189,17 +371,36 @@ function schedulePaint(): void {
   requestAnimationFrame(() => {
     paintQueued = false
     if (!loaded) return
+    // A non-focused display is shown READ-ONLY: no boxes, no selection chrome
+    // (annotations belong to the focused display's coordinate space).
+    if (!viewingFocused()) {
+      overlayCtx.clearRect(0, 0, overlay.width, overlay.height)
+      boxHeader.hidden = true
+      closeDurationEditor(false)
+      return
+    }
     // Display numbers are GLOBAL (SPEC §8.5): computed over ALL boxes via the
     // one shared implementation, so toggling a number renumbers instantly and
     // the editor can never disagree with replay_annotated/report/README/MCP.
+    const ui = uiScale()
     drawScene(
       overlayCtx,
       snapshot,
       sceneAnnotations(),
       state.selectedId,
       computeDisplayNumbers(state.annotations),
-      uiScale(),
+      ui,
     )
+    // Object hover last, on top of everything (GOAL "Static object picking") —
+    // and never while a drag or a pending description is in progress.
+    if (hoverObject !== null && drag === null && textSession === null && !exporting) {
+      drawObjectHover(
+        overlayCtx,
+        { x: hoverObject.x, y: hoverObject.y, w: hoverObject.width, h: hoverObject.height },
+        objectLabel(hoverObject),
+        ui,
+      )
+    }
     syncSelectionUi()
   })
 }
@@ -421,17 +622,21 @@ function dragDraft(d: { x0: number; y0: number; x: number; y: number }): Annotat
 }
 
 /**
- * Right-drag released on a viable rect: build the real box (identity, z,
- * default lifetime = scrub position ± defaultManualDurationMs/2 clamped to the
- * replay) and open the inline text input focused. Enter commits, Esc discards.
+ * Right-drag released on a viable rect — or a left click on a picked UI object
+ * (GOAL "Static object picking"), which passes that object's identity and name:
+ * build the real box (identity, z, default lifetime = scrub position ±
+ * defaultManualDurationMs/2 clamped to the replay) and open the inline text
+ * input focused. Enter commits, Esc discards.
  */
-function beginPendingBox(b: Box): void {
+function beginPendingBox(b: Box, picked?: PickableObject): void {
   const stamp = state.nextStamp()
   const draft: Annotation = {
     annotation_id: stamp.annotation_id,
     type: 'box',
     bounds: { x: b.x, y: b.y, width: b.w, height: b.h },
-    text: '',
+    // Pre-filled from the object's name, falling back to its control type so a
+    // nameless control still says what it is (SPEC §8.7).
+    text: picked === undefined ? '' : objectLabel(picked),
     numbered: false,
     blur: false,
     tracking: { enabled: false },
@@ -439,6 +644,7 @@ function beginPendingBox(b: Box): void {
     created_at: stamp.created_at,
     z: stamp.z,
   }
+  if (picked !== undefined) draft.target = uiaTargetOf(picked)
   if (scrub) {
     // "Now" (the capture instant) anchors at the end of the replay; a scrubbed
     // stamp is clamped to the manifest's wall-clock replay_duration_ms — the
@@ -449,7 +655,9 @@ function beginPendingBox(b: Box): void {
     draft.end_ms = life.end_ms
   }
   textSession = { kind: 'new', draft }
-  openTextEditor(draft.bounds, '')
+  // A pre-filled description opens SELECTED: keeping it is one Enter, replacing
+  // it is just typing.
+  openTextEditor(draft.bounds, draft.text, draft.text !== '')
   schedulePaint()
 }
 
@@ -457,12 +665,13 @@ function beginPendingBox(b: Box): void {
 // Inline text input (new-box description / double-click text edit)
 // ---------------------------------------------------------------------------
 
-function openTextEditor(anchor: AnnotationBounds, value: string): void {
+function openTextEditor(anchor: AnnotationBounds, value: string, selectAll = false): void {
   textAnchor = anchor
   textEditor.value = value
   textEditor.hidden = false
   positionTextEditor()
   textEditor.focus()
+  if (selectAll) textEditor.select()
 }
 
 function positionTextEditor(): void {
@@ -547,7 +756,9 @@ function chipLabel(a: Annotation): string {
 }
 
 function syncSelectionUi(): void {
-  const a = loaded && !exporting ? selectedVisibleAnnotation() : null
+  // Never while another display is on screen: that view is read-only, and the
+  // header would float over a frame the selection does not belong to.
+  const a = loaded && !exporting && viewingFocused() ? selectedVisibleAnnotation() : null
   if (a === null) {
     boxHeader.hidden = true
     closeDurationEditor(false)
@@ -698,15 +909,70 @@ durationInput.addEventListener('keydown', (e) => {
 })
 
 // ---------------------------------------------------------------------------
-// SEMANTIC TARGET HOOK (future work — GOAL "Annotation Interaction"): when a
-// left click hits no box, probe the real UI object under the cursor (UIA /
-// DOM accessibility data captured alongside the screen) and offer a
-// snap-to-object box whose reserved `target` field (SPEC §8.3) carries the
-// semantic metadata. Format 0.1.0 ships no probing data, so this is a no-op;
-// wire the probe result into beginPendingBox-style creation when it arrives.
+// Static object picking (GOAL "Static object picking (v0 — before full
+// tracking)"): a left click that hits no box probes the real UI object under
+// the cursor from the capture-instant Windows UI Automation dump. Hovering
+// outlines it; clicking creates a box snapped to its exact bounds, pre-filled
+// with its name and carrying its identity in `target` (SPEC §8.7).
 // ---------------------------------------------------------------------------
-function probeSemanticTarget(_point: { x: number; y: number }): void {
-  // Intentionally empty in 0.1.0.
+
+/** The object under the cursor, or null when there is none (or picking is off). */
+function objectAt(p: { x: number; y: number }): PickableObject | null {
+  if (objectIndex === null || !viewingFocused()) return null
+  return objectIndex.pick(p.x, p.y)
+}
+
+/** Hover probe. Cheap by design: nothing happens until the pointer moves. */
+function probeObjectHover(p: { x: number; y: number } | null): void {
+  if (objectIndex === null || objectIndex.size === 0) return
+  if (p === null) {
+    lastProbeX = -1
+    lastProbeY = -1
+    setHoverObject(null)
+    return
+  }
+  if (p.x === lastProbeX && p.y === lastProbeY) return
+  lastProbeX = p.x
+  lastProbeY = p.y
+  setHoverObject(objectAt(p))
+}
+
+function setHoverObject(next: PickableObject | null): void {
+  if (next === hoverObject) return
+  hoverObject = next
+  if (next !== null) showObjectHintOnce()
+  schedulePaint()
+}
+
+/**
+ * The one honesty hint: object data is from the capture instant, so while the
+ * user is scrubbed away from "now" the outlines describe a moment that is not
+ * on screen. Picking stays allowed — the hint just says what it means.
+ */
+function showObjectHintOnce(): void {
+  if (objectHintShown || scrub === null || scrub.atNow) return
+  objectHintShown = true
+  objectHint.textContent = t('editor.objectFromCapture')
+  objectHint.hidden = false
+  if (objectHintTimer !== null) window.clearTimeout(objectHintTimer)
+  objectHintTimer = window.setTimeout(() => {
+    objectHint.hidden = true
+    objectHintTimer = null
+  }, 6000)
+}
+
+/** `target` for a picked element (SPEC §8.7): empty fields are never written. */
+function uiaTargetOf(o: PickableObject): AnnotationTarget {
+  const target: UiaAnnotationTarget = { source: 'uia' }
+  const name = o.element.name.trim()
+  const controlType = o.element.control_type.trim()
+  const automationId = o.element.automation_id.trim()
+  const className = o.element.class_name.trim()
+  if (name !== '') target.name = name
+  if (controlType !== '') target.control_type = controlType
+  if (automationId !== '') target.automation_id = automationId
+  if (className !== '') target.class_name = className
+  return target
 }
 
 // ---------------------------------------------------------------------------
@@ -736,6 +1002,7 @@ overlay.addEventListener('pointerdown', (e) => {
   if (!loaded) return
   scrub?.pause() // annotating targets a moment; freeze it
   closeDurationEditor(false) // any canvas interaction dismisses it, unapplied
+  setHoverObject(null) // the outline has served its purpose the moment it is used
   if (e.button === 2) {
     // RIGHT-DRAG creates a box (live preview; text input opens on release).
     commitTextEditor()
@@ -764,8 +1031,16 @@ overlay.addEventListener('pointerdown', (e) => {
   if (id !== null) {
     overlay.setPointerCapture(e.pointerId)
     drag = { kind: 'move', id, lastX: p.x, lastY: p.y, before: state.cloneAnnotations(), moved: false }
-  } else {
-    probeSemanticTarget(p)
+    syncLanes()
+    schedulePaint()
+    return
+  }
+  // No box here: probe the real UI object under the cursor (GOAL "Static object
+  // picking"). A hit snaps a pre-filled box onto its exact bounds; a miss keeps
+  // the old behavior — the click simply cleared the selection.
+  const picked = objectAt(p)
+  if (picked !== null) {
+    beginPendingBox({ x: picked.x, y: picked.y, w: picked.width, h: picked.height }, picked)
   }
   syncLanes()
   schedulePaint()
@@ -842,11 +1117,19 @@ function syncHoverCursor(e: PointerEvent): void {
     const handle = handleAt(sel, p.x, p.y, ui)
     if (handle !== null) {
       overlay.style.cursor = handle === 'nw' || handle === 'se' ? 'nwse-resize' : 'nesw-resize'
+      probeObjectHover(null)
       return
     }
   }
-  overlay.style.cursor = hitTest(visibleAnnotations(), p.x, p.y, ui) !== null ? 'move' : 'default'
+  const overBox = hitTest(visibleAnnotations(), p.x, p.y, ui) !== null
+  overlay.style.cursor = overBox ? 'move' : 'default'
+  // Object picking is what a left click on empty canvas does now, so the
+  // outline is only offered where no box would take the click instead.
+  probeObjectHover(overBox ? null : p)
 }
+
+// The outline must not linger once the pointer leaves the canvas.
+overlay.addEventListener('pointerleave', () => probeObjectHover(null))
 
 // ---------------------------------------------------------------------------
 // Scrub wheel, zoom, and pan
@@ -873,7 +1156,9 @@ window.addEventListener(
       schedulePaint() // stroke/handle sizes are zoom-dependent
       return
     }
-    if (!scrub || !scrub.ready) return
+    // Zoom stays available while viewing another display; scrubbing does not
+    // (it belongs to the focused display's replay).
+    if (!scrub || !scrub.ready || !viewingFocused()) return
     // Any wheel while playing pauses instantly and scrubs (ScrubController).
     const deltaMs = wheelScrubDeltaMs(e, fps, scrubSensitivityMs, scrubInvert)
     if (deltaMs !== 0) scrub.scrubBy(deltaMs)
@@ -929,6 +1214,14 @@ window.addEventListener('keydown', (e) => {
   // check covers focus landing on the duration editor's buttons).
   if (e.isComposing || e.target === textEditor) return
   if (e.target instanceof Node && durationEditor.contains(e.target)) return
+  // F11 toggles windowed/fullscreen from ANYWHERE in the editor (GOAL "Editor
+  // Window Mode"): it is never an editing key, so it is answered before the
+  // typing, read-only-display, and unsaved-bar gates below.
+  if (e.key === 'F11') {
+    e.preventDefault()
+    toggleWindowMode()
+    return
+  }
   // The Esc bar's focused button owns Enter/Space: its native activation must
   // fire THAT button's click (Save / Save As New / Discard). Without this,
   // tabbing to [Save As New] or [Discard] and pressing Enter would fall
@@ -943,6 +1236,16 @@ window.addEventListener('keydown', (e) => {
     return
   }
   const typing = e.target === titleInput || e.target === noteInput
+  // Viewing another display is a read-only detour: Esc returns to the focused
+  // display, Enter still saves (doExport switches back first), and every
+  // editing shortcut below is inert until the focused display is back.
+  if (!viewingFocused() && e.key !== 'Enter' && e.key !== ' ') {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      void showDisplay(focusedDisplayIndex)
+    }
+    return
+  }
   if (e.key === 'Escape') {
     // Cancel-current first: duration editor, then the unsaved-changes bar,
     // then an active selection. A bare Esc with nothing in progress closes the
@@ -1039,18 +1342,28 @@ colorBtn.addEventListener('click', () => {
 })
 exportBtn.addEventListener('click', () => void doExport())
 
+windowModeBtn.addEventListener('click', () => {
+  windowModeBtn.blur() // keyboard shortcuts belong to the canvas, not this button
+  toggleWindowMode()
+})
+
 // ---------------------------------------------------------------------------
 // Timeline bar
 // ---------------------------------------------------------------------------
 
-const timebar = new Timebar(el<HTMLElement>('timebar'), {
+// Every callback is inert while a non-focused display is on screen (the bar is
+// pointer-events:none then, but keyboard-driven paths reach it too).
+const timebar = new Timebar(timebarEl, {
   scrubToFraction: (fraction) => {
-    if (scrub) scrub.scrubTo(fraction * scrub.durationMs)
+    if (scrub && viewingFocused()) scrub.scrubTo(fraction * scrub.durationMs)
   },
-  togglePlay: () => scrub?.togglePlay(),
+  togglePlay: () => {
+    if (viewingFocused()) scrub?.togglePlay()
+  },
   // Clicking a lifetime bar selects the box and scrubs to its lifetime
   // midpoint (SPEC §8.4 — absent lifetime = the capture instant, i.e. "now").
   selectAnnotation: (id) => {
+    if (!viewingFocused()) return
     const a = state.byId(id)
     if (!a) return
     state.selectedId = id
@@ -1060,14 +1373,14 @@ const timebar = new Timebar(el<HTMLElement>('timebar'), {
   },
   // Trim handle drags (GOAL "Replay Trim"): fraction of the track -> ms.
   trimTo: (kind, fraction) => {
-    if (!scrub) return
+    if (!scrub || !viewingFocused()) return
     const ms = fraction * scrub.durationMs
     if (kind === 'in') setTrimIn(ms)
     else setTrimOut(ms)
   },
   // Double-click a handle: reset that side to the track edge.
   resetTrim: (kind) => {
-    if (!trimEnabled()) return
+    if (!trimEnabled() || !viewingFocused()) return
     if (kind === 'in') trimInMs = 0
     else trimOutMs = null
     syncTrim()
@@ -1080,6 +1393,15 @@ const timebar = new Timebar(el<HTMLElement>('timebar'), {
 
 async function doExport(kind: 'save' | 'saveAsNew' = 'save'): Promise<void> {
   if (!loaded || exporting) return
+  // snapshot.png is composed from the base canvas, so the FOCUSED display must
+  // be the one on screen — saving while viewing another display would ship the
+  // wrong screen's pixels under the focused display's annotations.
+  if (!viewingFocused()) {
+    await showDisplay(focusedDisplayIndex)
+    // A switch was still in flight (showDisplay is a no-op then): refuse the
+    // save rather than ship another display's pixels as snapshot.png.
+    if (!viewingFocused()) return
+  }
   exporting = true
   exportBtn.disabled = true
   scrub?.pause()
@@ -1132,6 +1454,9 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
   defaultManualDurationMs = payload.defaultManualDurationMs
   showDurationLabel = payload.showDurationLabel
   editMode = payload.editMode
+  // The mode the window opened in (GOAL "Editor Window Mode") — the one the
+  // user left behind last time. Applied before anything is laid out.
+  applyWindowMode(payload.windowMode === 'windowed' ? 'windowed' : 'fullscreen')
   // Re-edit: adopt the saved pack's boxes (undo baseline; ids registered so
   // new ann_ ids continue past the loaded ones) and prefill title/note.
   state.restore(payload.annotations)
@@ -1139,11 +1464,27 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
   noteInput.value = payload.note
   // Kept alive: scrubbing back to "now" restores this sharpest frame.
   nativeBitmap = await createImageBitmap(new Blob([payload.snapshotPng], { type: 'image/png' }))
-  snapshot.width = nativeW
-  snapshot.height = nativeH
-  overlay.width = nativeW
-  overlay.height = nativeH
+  focusedW = nativeW
+  focusedH = nativeH
+  // Captured displays (GOAL "Multi-Monitor Support"): the switcher appears only
+  // when more than one was frozen; the focused one opens, as always.
+  displayViews = payload.displays.map((d) => ({
+    index: d.index,
+    focused: d.focused,
+    width: d.width,
+    height: d.height,
+    png: d.snapshotPng,
+    bitmap: null,
+  }))
+  focusedDisplayIndex = displayViews.find((d) => d.focused)?.index ?? displayViews[0]?.index ?? 0
+  viewDisplayIndex = focusedDisplayIndex
+  // Static object picking (GOAL): one index build over the capture-instant UI
+  // Automation elements, in the FOCUSED display's snapshot coordinate space.
+  // An empty payload yields an empty index and picking stays silently off.
+  objectIndex = ObjectIndex.build(payload.uiaElements, focusedW, focusedH)
+  resizeCanvases()
   snapCtx.drawImage(nativeBitmap, 0, 0, nativeW, nativeH)
+  buildDisplaySwitcher()
   replayChip.textContent = hasReplay
     ? t('editor.replaySeconds', { seconds: Math.round(payload.replayDurationMs / 1000) })
     : t('editor.noReplay')
@@ -1178,13 +1519,25 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
   overlay.focus()
 }
 
+// Windowed mode makes resizing a normal thing to do (GOAL "Editor Window
+// Mode"): the canvas re-fits, and the SCREEN-SPACE chrome — the inline text
+// input (via layout), the selected-box header, and the duration popover — is
+// re-anchored to boxes that have just moved on screen. (The timebar is
+// percentage-positioned and follows on its own.)
 window.addEventListener('resize', () => {
   layout()
+  syncSelectionUi()
   schedulePaint()
 })
 
 window.editorBridge.onInit((payload) => {
   void initEditor(payload)
+})
+
+// Main is the authority on the window state: every mode change lands here,
+// including the ones this renderer asked for.
+window.editorBridge.onWindowMode((mode) => {
+  applyWindowMode(mode === 'windowed' ? 'windowed' : 'fullscreen')
 })
 
 colorSwatch.style.background = state.color

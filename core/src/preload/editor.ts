@@ -2,6 +2,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../shared/ipc'
 import type { EditorAnnotationAddedPayload, EditorExportPayload, EditorInitPayload } from '../shared/ipc'
+import type { EditorWindowMode } from '../shared/types'
 
 contextBridge.exposeInMainWorld('editorBridge', {
   onInit(cb: (payload: EditorInitPayload) => void): void {
@@ -19,5 +20,13 @@ contextBridge.exposeInMainWorld('editorBridge', {
   },
   annotationAdded(payload: EditorAnnotationAddedPayload): void {
     ipcRenderer.send(IPC.editorAnnotationAdded, payload)
+  },
+  // Editor Window Mode (GOAL): ask main to put the window into `mode`. Absolute,
+  // never a toggle — main applies it idempotently and pushes back what stuck.
+  setWindowMode(mode: EditorWindowMode): void {
+    ipcRenderer.send(IPC.editorSetWindowMode, mode)
+  },
+  onWindowMode(cb: (mode: EditorWindowMode) => void): void {
+    ipcRenderer.on(IPC.editorWindowMode, (_event, mode: EditorWindowMode) => cb(mode))
   },
 })
