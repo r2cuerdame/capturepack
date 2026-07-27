@@ -5,9 +5,9 @@ defined in [SPEC.md](SPEC.md) — spec before code, always. This roadmap tracks 
 status; it never overrides either document.
 
 **Status legend:** `Done` · `In progress` · `Not started`.
-**Shipping since 2026-07-27:** [v0.1.1](https://github.com/r2cuerdame/capturepack/releases/latest)
-is installable from GitHub Releases, and the auto-update chain (0.1.0 → 0.1.1) has been
-verified end to end on a real install. What is *not* yet proven is the long-run habit —
+**Shipping since 2026-07-27:** [v0.1.2](https://github.com/r2cuerdame/capturepack/releases/latest)
+is installable from GitHub Releases, and the auto-update chain has been verified end to end
+on a real install (0.1.0 → 0.1.1 → 0.1.2). What is *not* yet proven is the long-run habit —
 the one-month no-manual-reinstall criterion is still running.
 
 The guiding constraint for every milestone: **never sacrifice the 5-second workflow.**
@@ -23,8 +23,9 @@ Ctrl+Alt+C  →  capture  →  5-second annotation  →  export .capturepack  �
 | Milestone | Scope | Status |
 |---|---|---|
 | Format spec 0.1.0 | SPEC.md + JSON Schemas (`docs/schemas/`) | Done (draft) |
-| **V1 — MVP + release** | Capture, annotate (scrub timeline), export + installable auto-updating Windows release | **Done — shipped v0.1.0 and v0.1.1** |
+| **V1 — MVP + release** | Capture, annotate (scrub timeline), export + installable auto-updating Windows release | **Done — shipped v0.1.0 → v0.1.2** |
 | **V1.5 — MCP server** | Always-on read-only MCP so any AI reads packs natively | Shipped in v0.1.1 (daily-use verification ongoing) |
+| **V1.6 — Working with saved packs** | History (browse/re-edit/re-render/package), replay trim, 9 languages, configurable hotkey | Shipped in v0.1.2 |
 | **V2 — Context depth** | Timeline input events + Plugin API, Chrome extension, Plugin Manager | Extension scaffolded; rest not started |
 | **V3 — Semantic layer** | Tracked elements, object picking, AI-assisted annotation | Not started |
 
