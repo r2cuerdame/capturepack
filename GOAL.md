@@ -823,6 +823,45 @@ Time-based movement, independent of the video's FPS:
   video-editor habits.
 - Scrubbing while playing: pause instantly and scrub to that point.
 
+### Annotation Interaction (toolless)
+
+The editor minimizes annotation tool menus. Selection boxes, object selection, deletion,
+and duration editing happen through mouse interaction alone — no Rectangle/Selection/Pin
+tool buttons in the default UI. The user remembers only:
+
+| Interaction | Action |
+| --- | --- |
+| **Left click** | Probe the real object at the current frame (Chrome DOM, Windows UI Automation). If a semantic object exists, select it, create an object annotation, and show the description input immediately. |
+| **Right drag** | Manual selection box, live while dragging; on release, default 1.0 s lifetime + description input immediately. No tool-selection step exists. |
+| **Top-left duration** | Shows the manual annotation's duration; click to edit instantly. Default 1.0 s. |
+| **Top-right ×** | Delete the annotation (for Tracked Elements, tracking ends too). Ctrl+Z restores. |
+| **Delete key** | Delete the selected annotation. |
+| **Escape** | Cancel the annotation being created or edited. |
+
+Manual boxes carry no semantic info; they store annotation_id, type, bounds, start/end
+time, text, style.
+
+### Pin Numbering
+
+- Displayed pin numbers are **computed, never stored** — each annotation's permanent
+  identity is its immutable `annotation_id` (e.g. `ann_8f21c4`); `display_number` is
+  derived at display/export time and is not a source-data identifier.
+- **Automatic renumbering** — add, delete, move, or time-change recomputes every pin
+  number immediately. No gaps, always contiguous from 1.
+- **Ordering** — start_time asc → creation order asc → annotation_id asc. Changing a
+  pin's time on the timeline updates its number immediately.
+- **Consistency scope** — the same numbers everywhere: editor canvas, annotation list,
+  timeline, replay_annotated, report.md, README.md, the annotations export view, MCP
+  responses, skills documents. Video numbers and document numbers must never differ.
+- **Rendering** — final numbers are computed right before rendering replay_annotated;
+  each frame draws only the pins active at that time, but with their GLOBAL fixed
+  numbers (if only ② is active in a frame, it renders as ② — numbers never re-compress
+  per frame).
+- **Documents** — report.md/README.md use the final computed order
+  (`1. 00:03.200 - description`); if pins change after generation, documents are
+  regenerated on Save/Export.
+- The user never manages pin numbers — CapturePack always keeps them tidy.
+
 ---
 
 ## Object Model
