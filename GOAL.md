@@ -623,18 +623,23 @@ Settings are edited in a GUI window — never by opening settings.json in an edi
 
 ## Multi-Monitor Support
 
-Dual (and more) monitor setups are fully supported.
+Dual (and more) monitor setups are fully supported. **Capturing ALL displays
+simultaneously is the default** — one Ctrl+Alt+C, N displays in the pack.
 
-- **Capture display** is selectable in Settings: a list of connected displays with
-  resolution/position labels. Modes:
-  - **Cursor display (default)** — at Ctrl+Alt+C, the capture follows the display the mouse
-    cursor is on. The replay buffer records every connected display so the last 30 seconds
-    exist for whichever display the trigger picks; the export contains the triggered
-    display's replay + snapshot.
-  - **Fixed display** — record only the chosen display (lower CPU; the buffer runs on one
-    display only).
-- The annotation editor always opens fullscreen on the captured display.
-- `manifest.environment.screens` continues to list every connected display; the captured
+- **Capture display** modes in Settings:
+  - **All displays (default)** — every connected display records continuously; the
+    trigger freezes ALL of them. The pack contains a replay + snapshot per display
+    (`media.displays[]` in the manifest: snapshot/replay/annotated per display, with
+    the focused display marked). The display under the cursor becomes the FOCUSED
+    display — the editor opens on it and annotations anchor to it; the other displays
+    ship as synchronized context.
+  - **Cursor display** — record all, but the pack keeps only the cursor display
+    (smaller packs).
+  - **Fixed display** — record only the chosen display (lowest CPU).
+- The annotation editor always opens fullscreen on the focused display; a display
+  switcher lets the user view the other frozen displays (annotating non-focused
+  displays arrives later).
+- `manifest.environment.screens` continues to list every connected display; the focused
   one is the snapshot's coordinate space.
 - Display hotplug (connect/disconnect, resolution change) restarts the affected recorders
   without losing the app.
