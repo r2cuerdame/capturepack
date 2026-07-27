@@ -10,6 +10,12 @@
 
 CapturePack is an open-source context capture format and toolkit that helps humans and AI understand visual problems beyond screenshots and screen recordings.
 
+🌐 **[capturepack.dev](https://capturepack.dev)** · [Download](https://github.com/r2cuerdame/capturepack/releases/latest)
+
+<p align="center">
+  <img src="site/assets/demo.svg" alt="Demo: press Ctrl+Alt+C, the last 30 seconds freeze, the mouse wheel scrubs through time, drag to select the object, write the annotation, and issue.capturepack is exported." width="760">
+</p>
+
 A `.capturepack` file bundles what a screenshot cannot: the last 30 seconds of replay, a snapshot, editable annotations, a machine-readable event timeline, and a human-readable report — everything another developer or any LLM needs to immediately understand the situation.
 
 ## The 5-second workflow
