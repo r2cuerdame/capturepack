@@ -143,6 +143,24 @@ Deployment: `.github/workflows/pages.yml` publishes `site/` on push to main.
 
 ---
 
+## Internationalization (9+ languages)
+
+Both the landing page and the application support at least nine languages:
+**English, 한국어, 日本語, 中文, Español, Français, Deutsch, Português, Русский.**
+
+- **Landing** — client-side dictionary (`site/i18n.js`), top-right language picker,
+  browser-language auto-detection, choice persisted. English is the SEO base.
+- **Application** — every UI string goes through a shared i18n layer
+  (`core/src/shared/i18n.ts`): tray menu, editor (top bar, hints, box header, duration
+  editor, toast), settings window, notifications, dialogs. Language setting in
+  Settings → General (default: system language via `app.getLocale()`, fallback English).
+  No hardcoded UI strings outside the dictionaries.
+- **Pack documents** (README/skills/report templates) follow a `packLanguage` setting
+  defaulting to the UI language — the user's own description text is never translated.
+- Adding a language = adding one dictionary entry; missing keys fall back to English.
+
+---
+
 ## Development Practice: Docs Follow Every Fix
 
 Every fix or feature updates ALL public surfaces in the same pass — none may drift:

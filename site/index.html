@@ -6,7 +6,7 @@
   <title>CapturePack — Capture context, not screenshots</title>
   <meta name="description" content="Free open-source screen capture for bug reports and AI. A 30-second time machine: press Ctrl+Alt+C after the bug, scroll back in time, annotate in 5 seconds, and share a context pack any LLM understands — ChatGPT, Claude, Cursor, Gemini.">
   <meta name="robots" content="index, follow">
-  <meta name="theme-color" content="#0e0e12">
+  <meta name="theme-color" content="#fafafc">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="CapturePack">
   <meta property="og:title" content="CapturePack — Capture context, not screenshots">
@@ -39,42 +39,56 @@
 </head>
 <body>
 
+  <div class="lang-pick">
+    <select id="langSel" aria-label="Language">
+      <option value="en">English</option>
+      <option value="ko">한국어</option>
+      <option value="ja">日本語</option>
+      <option value="zh">中文</option>
+      <option value="es">Español</option>
+      <option value="fr">Français</option>
+      <option value="de">Deutsch</option>
+      <option value="pt">Português</option>
+      <option value="ru">Русский</option>
+    </select>
+  </div>
+
   <main>
     <section class="hero">
       <img class="logo" src="assets/icon.png" alt="" width="56" height="56">
-      <h1>Capture context,<br>not screenshots.</h1>
-      <p class="sub">The fastest way to explain something<br>to humans and AI.</p>
+      <h1 data-i18n="h1">Capture context,<br>not screenshots.</h1>
+      <p class="sub" data-i18n="sub">The fastest way to explain something to humans and AI.</p>
 
       <div class="buttons">
         <a class="btn primary" id="download-btn" href="https://github.com/r2cuerdame/capturepack/releases/latest">
-          Download<span id="download-meta"></span>
+          <span data-i18n="btn_download">Download</span><span id="download-meta"></span>
         </a>
         <a class="btn" href="https://github.com/r2cuerdame/capturepack">GitHub</a>
-        <a class="btn" href="https://github.com/sponsors/r2cuerdame" rel="noopener">♥ Sponsor</a>
+        <a class="btn" href="https://github.com/sponsors/r2cuerdame" rel="noopener" data-i18n="btn_sponsor">♥ Sponsor</a>
       </div>
       <p class="badges">
         <span class="badge">Windows</span>
-        <span class="badge">Free &amp; open source</span>
+        <span class="badge" data-i18n="badge_foss">Free &amp; open source</span>
         <span class="badge">MIT</span>
-        <span class="badge">Local-first · no cloud</span>
-        <span class="badge">MCP built-in</span>
+        <span class="badge" data-i18n="badge_local">Local-first · no cloud</span>
+        <span class="badge" data-i18n="badge_mcp">MCP built-in</span>
       </p>
     </section>
 
     <section class="demo">
-      <img src="assets/demo.svg" alt="Demo: press Ctrl+Alt+C, the capture freezes, the mouse wheel moves through time, click an object, write an annotation, and a CapturePack is exported." loading="lazy">
+      <img src="assets/demo.svg" alt="Demo: press Ctrl+Alt+C, the last 30 seconds freeze, the mouse wheel scrubs through time, drag to select the object, write the annotation, and the CapturePack is saved." loading="lazy">
     </section>
 
     <section class="features">
       <div class="feature">
-        <h3>🕰 It's a time machine</h3>
-        <p>CapturePack was already recording. Press the hotkey <em>after</em> the bug
+        <h3 data-i18n="f1_title">🕰 It's a time machine</h3>
+        <p data-i18n="f1_body">CapturePack was already recording. Press the hotkey <em>after</em> the bug
         happens, then scroll the wheel to travel back through the last 30 seconds to
         the exact frame where it broke.</p>
       </div>
       <div class="feature">
-        <h3>🤖 Built for LLMs</h3>
-        <p>Drop a pack into ChatGPT, Claude, Cursor, or Gemini — it explains itself.
+        <h3 data-i18n="f2_title">🤖 Built for LLMs</h3>
+        <p data-i18n="f2_body">Drop a pack into ChatGPT, Claude, Cursor, or Gemini — it explains itself.
         Or connect over MCP and just say <em>"Analyze the latest CapturePack."</em></p>
       </div>
     </section>
@@ -88,41 +102,41 @@
 ├─ timeline.json
 ├─ report.md · README.md · skills/
 └─ manifest.json</pre>
-      <p class="output-note">One folder. Enough context for any developer — or any LLM.<br>Zip it only when you share.</p>
+      <p class="output-note" data-i18n="out_note">One folder. Enough context for any developer — or any LLM.<br>Zip it only when you share.</p>
     </section>
 
     <section class="roadmap">
-      <h2>Roadmap</h2>
+      <h2 data-i18n="rm_title">Roadmap</h2>
       <div class="cols">
         <div>
-          <h3>Now</h3>
+          <h3 data-i18n="rm_now">Now</h3>
           <ul>
-            <li>30-second replay capture</li>
-            <li>Scrub-timeline annotation editor</li>
-            <li><code>.capturepack</code> export</li>
-            <li>Auto-update via GitHub Releases</li>
+            <li data-i18n="now1">30-second replay capture</li>
+            <li data-i18n="now2">Scrub-timeline annotation editor</li>
+            <li data-i18n="now3">Folder packs + annotated replay</li>
+            <li data-i18n="now4">Auto-update + built-in MCP server</li>
           </ul>
         </div>
         <div>
-          <h3>Next</h3>
+          <h3 data-i18n="rm_next">Next</h3>
           <ul>
-            <li>MCP server — any AI reads packs natively</li>
-            <li>Chrome DOM capture extension</li>
-            <li>Annotation lifetimes on the timeline</li>
-            <li>Plugin manager — one-click integrations</li>
+            <li data-i18n="next1">History — browse &amp; re-edit packs</li>
+            <li data-i18n="next2">Chrome DOM capture extension</li>
+            <li data-i18n="next3">Semantic object picking (UIA)</li>
+            <li data-i18n="next4">Plugin manager</li>
           </ul>
         </div>
         <div>
-          <h3>Later</h3>
+          <h3 data-i18n="rm_later">Later</h3>
           <ul>
-            <li>Semantic object picking</li>
-            <li>Windows UI Automation tracking</li>
-            <li>Unity · Unreal · VS Code · Git plugins</li>
-            <li>Prompt builder</li>
+            <li data-i18n="later1">Unity · Unreal · VS Code · Git plugins</li>
+            <li data-i18n="later2">Frame-accurate element tracking</li>
+            <li data-i18n="later3">Prompt builder</li>
+            <li data-i18n="later4">Sanitized sharing</li>
           </ul>
         </div>
       </div>
-      <p class="roadmap-link"><a href="https://github.com/r2cuerdame/capturepack/blob/main/ROADMAP.md">Full roadmap →</a></p>
+      <p class="roadmap-link"><a href="https://github.com/r2cuerdame/capturepack/blob/main/ROADMAP.md" data-i18n="rm_full">Full roadmap →</a></p>
     </section>
   </main>
 
@@ -130,15 +144,16 @@
     <nav class="footer-nav">
       <a href="https://github.com/r2cuerdame/capturepack">GitHub</a>
       <a href="https://github.com/r2cuerdame/capturepack/blob/main/SPEC.md">Spec</a>
-      <a href="https://github.com/r2cuerdame/capturepack/blob/main/ROADMAP.md">Roadmap</a>
+      <a href="https://github.com/r2cuerdame/capturepack/blob/main/ROADMAP.md" data-i18n="ft_roadmap">Roadmap</a>
       <a href="https://github.com/r2cuerdame/capturepack/blob/main/docs/MCP.md">MCP</a>
-      <a href="https://github.com/r2cuerdame/capturepack/releases">Releases</a>
-      <a href="https://github.com/sponsors/r2cuerdame">Sponsor</a>
+      <a href="https://github.com/r2cuerdame/capturepack/releases" data-i18n="ft_releases">Releases</a>
+      <a href="https://github.com/sponsors/r2cuerdame" data-i18n="ft_sponsor">Sponsor</a>
     </nav>
-    <p>MIT License · Open Source</p>
-    <p class="why">Made because explaining bugs to AI<br>was taking too much time.</p>
+    <p data-i18n="ft_license">MIT License · Open Source</p>
+    <p class="why" data-i18n="ft_why">Made because explaining bugs to AI<br>was taking too much time.</p>
   </footer>
 
+  <script src="i18n.js"></script>
   <script>
     // Point Download at the latest installer directly; fall back to the releases page.
     fetch('https://api.github.com/repos/r2cuerdame/capturepack/releases/latest')
