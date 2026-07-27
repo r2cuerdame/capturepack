@@ -110,6 +110,29 @@ Generated CapturePacks should remain readable forever.
 
 ---
 
+## Development Practice: Usage Journal
+
+Open GitHub Issues from day one — and don't use them only for feature requests.
+Keep a daily usage journal:
+
+```
+Used Today
+
+Today I used CapturePack 7 times.
+
+Pain
+
+- Annotation took too long.
+
+Idea
+
+- Need object picker.
+```
+
+After a month, the journal itself becomes the best roadmap.
+
+---
+
 ## MVP
 
 **Capture**
