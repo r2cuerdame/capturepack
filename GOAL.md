@@ -116,7 +116,11 @@ Generated CapturePacks should remain readable forever.
 
 The goal of the page is not to explain the product — it is to drive the Download click.
 
-- Domain: **https://capturepack.dev** (registered at Gabia, pointed at GitHub Pages).
+- Domain: **https://capturepack.dev** — the one and only official domain; every document,
+  README link, and download link uses it. A one-line `CNAME` file (exactly `capturepack.dev`)
+  lives at the repo root AND in `site/` so every Pages deployment carries the domain; it must
+  always match the Pages custom-domain setting. DNS: apex A records 185.199.108–111.153,
+  `www` CNAME → `r2cuerdame.github.io`. Enforce HTTPS as soon as the certificate is issued.
 - Static site served by GitHub Pages from `site/` in this repository (no separate repo).
 - One page, minimal scroll, no signup/server/database, no flashy animation.
 - A visitor must understand the product within 5 seconds; the only action is **Download**.
