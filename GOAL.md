@@ -841,6 +841,68 @@ tool buttons in the default UI. The user remembers only:
 Manual boxes carry no semantic info; they store annotation_id, type, bounds, start/end
 time, text, style.
 
+### Unified Annotation Box
+
+Pin, Rectangle, and Blur are NOT separate annotation types. Every annotation is one
+**Box** model; users compose the features they need on a single box:
+
+- Common properties: `annotation_id`, `bounds`, `text`, `start_ms`, `end_ms`,
+  `numbered` (bool), `blur` (bool), `tracking`, `target`, `style`.
+- Plain description box: numbered:false, blur:false · Numbered box: numbered:true ·
+  Sensitive-content box: blur:true · Both: numbered+blur true.
+
+**Box header** — minimal inline controls only, left to right: Number toggle · Duration ·
+Blur toggle · (right edge) Delete:
+
+```
+[#] [1.0s] [Blur]                    [×]
+[①] [1.0s] [Blur On]                 [×]   ← numbered + blurred
+```
+
+No Pin/Rectangle/Blur tool menus exist.
+
+- **Number toggle** — [#] click → numbered:true, shows the auto-computed number ([①]);
+  click again → off; remaining numbered boxes renumber immediately. Numbers are never
+  typed by the user; identity is always annotation_id.
+- **Duration** — [1.0s] click → inline edit. Default 1.0 s; presets 0.5/1/2/5/10 s,
+  Until End, Entire Capture, Custom. Tracked Elements may auto-extend until the target
+  object disappears.
+- **Blur toggle** — click flips blur on the box's interior instantly: editor preview
+  blurs live, replay_annotated renders the blur, blur applies ONLY during the box's
+  lifetime, and it moves with the box (including tracking). The original replay is
+  never modified. Blur is a box property, never a separate annotation.
+
+**Blur rendering order (per frame)** — original frame → blur → highlight/border →
+number badge → annotation text. Editing controls (header, #, duration, blur toggle, ×,
+resize handles) are NEVER rendered into replay_annotated — the video contains results
+only (blur, border, number, text; arrow/highlight when supported later).
+
+**Blur security principle (supersedes destructive snapshot blur)** — replay stays
+original (preservation); blur lives in replay_annotated only. README/report may note an
+annotation is blurred. The save-complete screen warns:
+"Original replay contains unredacted content. Share replay_annotated or create a
+sanitized ZIP." A future sanitized-ZIP option excludes replay + original snapshot.png.
+
+Data example:
+
+```json
+{
+  "annotation_id": "ann_8f21c4",
+  "type": "box",
+  "numbered": true,
+  "blur": true,
+  "start_ms": 12400,
+  "end_ms": 13400,
+  "text": "사용자 이메일 주소",
+  "bounds": { "x": 100, "y": 200, "width": 240, "height": 42 },
+  "tracking": { "enabled": false }
+}
+```
+
+**UX principle** — no tool selection, ever: Left click = semantic object → box ·
+Right drag = manual box · # = number toggle · Duration = time edit · Blur = blur
+toggle · × = delete. Everything happens inside one Annotation Box.
+
 ### Pin Numbering
 
 - Displayed pin numbers are **computed, never stored** — each annotation's permanent
