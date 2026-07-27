@@ -115,12 +115,15 @@
   <g id="note">
     <rect x="374" y="336" width="270" height="38" rx="8" fill="#14141a" stroke="#3a3a46"/>
     <text x="388" y="361" font-size="16" fill="#ececf1">Submit overflows container</text>
-    <!-- Cover slides right, revealing the text as if typed. Clipped to the note's
-         interior: the slide travels past the box edge and would otherwise paint a
-         dark bar across the mockup beside it. -->
-    <g id="typecover" clip-path="url(#noteClip)">
-      <rect x="386" y="342" width="242" height="26" fill="#14141a"/>
-      <rect id="caret" x="386" y="344" width="2" height="22" fill="#ececf1"/>
+    <!-- Cover slides right, revealing the text as if typed. The clip must sit on
+         a STATIC wrapper: clip-path on the animated group itself is resolved in
+         that group's own coordinate system, so it travels with the translate and
+         the cover keeps spilling past the note. -->
+    <g clip-path="url(#noteClip)">
+      <g id="typecover">
+        <rect x="386" y="342" width="242" height="26" fill="#14141a"/>
+        <rect id="caret" x="386" y="344" width="2" height="22" fill="#ececf1"/>
+      </g>
     </g>
   </g>
 
