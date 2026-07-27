@@ -266,6 +266,14 @@ h1 { color: var(--text); }
   gap: 16px;
 }
 
+/* Column = heading + card. The card grows to fill the row so all three cards
+   end level, without the heading's height pushing it past the row (which used
+   to overlap the "Full roadmap" link below). */
+.roadmap .cols > div {
+  display: flex;
+  flex-direction: column;
+}
+
 @media (max-width: 640px) {
   .roadmap .cols { grid-template-columns: 1fr; }
 }
@@ -289,7 +297,7 @@ h1 { color: var(--text); }
   border: 1px solid var(--line);
   border-radius: 16px;
   padding: 16px 18px;
-  height: 100%;
+  flex: 1;
   box-shadow: var(--shadow);
 }
 
