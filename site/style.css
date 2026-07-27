@@ -30,17 +30,37 @@ main {
 
 /* Hero */
 .hero {
+  position: relative;
   text-align: center;
   padding: 9vh 0 4vh;
 }
 
-.logo { border-radius: 14px; margin-bottom: 22px; }
+/* soft brand glow behind the hero — subtle, static */
+.hero::before {
+  content: "";
+  position: absolute;
+  inset: -20% -30% auto -30%;
+  height: 130%;
+  background: radial-gradient(ellipse 60% 55% at 50% 30%, rgba(124, 92, 255, 0.16), transparent 70%);
+  pointer-events: none;
+  z-index: -1;
+}
+
+.logo {
+  border-radius: 14px;
+  margin-bottom: 22px;
+  box-shadow: 0 10px 40px rgba(124, 92, 255, 0.35);
+}
 
 h1 {
   font-size: clamp(2rem, 5.4vw, 3.4rem);
   font-weight: 750;
   letter-spacing: -0.02em;
   line-height: 1.12;
+  background: linear-gradient(180deg, #ffffff 30%, #c9bcff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 
 .sub {
@@ -74,14 +94,30 @@ h1 {
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
+  box-shadow: 0 8px 28px rgba(124, 92, 255, 0.35);
 }
 
-.btn.primary:hover { background: #6b4ce6; }
+.btn.primary:hover {
+  background: #6b4ce6;
+  transform: translateY(-1px);
+}
 
-.platform {
-  margin-top: 14px;
-  font-size: 0.85rem;
+.btn { transition: border-color 0.15s, background 0.15s, transform 0.15s; }
+
+.badges {
+  margin-top: 18px;
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.badge {
+  font-size: 0.78rem;
   color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 12px;
 }
 
 /* Demo */
@@ -134,7 +170,10 @@ h1 {
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 18px 20px;
+  transition: border-color 0.2s;
 }
+
+.feature:hover { border-color: #3d3d4c; }
 
 .feature h3 {
   font-size: 1.02rem;
@@ -209,3 +248,18 @@ footer {
 }
 
 footer .why { margin-top: 10px; font-style: italic; }
+
+.footer-nav {
+  display: flex;
+  gap: 20px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.footer-nav a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.footer-nav a:hover { color: var(--text); }

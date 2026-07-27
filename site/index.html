@@ -3,14 +3,39 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>CapturePack — Capture context, not screenshots.</title>
-  <meta name="description" content="The fastest way to explain something to humans and AI. Capture the last 30 seconds, annotate in 5, export a context package any LLM understands.">
-  <meta property="og:title" content="CapturePack">
-  <meta property="og:description" content="Capture context, not screenshots. The fastest way to explain something to humans and AI.">
+  <title>CapturePack — Capture context, not screenshots</title>
+  <meta name="description" content="Free open-source screen capture for bug reports and AI. A 30-second time machine: press Ctrl+Alt+C after the bug, scroll back in time, annotate in 5 seconds, and share a context pack any LLM understands — ChatGPT, Claude, Cursor, Gemini.">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#0e0e12">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="CapturePack">
+  <meta property="og:title" content="CapturePack — Capture context, not screenshots">
+  <meta property="og:description" content="A 30-second time machine for bug reports. Annotate in 5 seconds, share a pack any human or LLM understands. Free, open source, local-first.">
   <meta property="og:url" content="https://capturepack.dev/">
+  <meta property="og:image" content="https://capturepack.dev/assets/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="CapturePack — Capture context, not screenshots">
+  <meta name="twitter:description" content="A 30-second time machine for bug reports. Annotate in 5 seconds, share a pack any human or LLM understands.">
+  <meta name="twitter:image" content="https://capturepack.dev/assets/og.png">
   <link rel="canonical" href="https://capturepack.dev/">
   <link rel="icon" type="image/png" href="assets/icon.png">
   <link rel="stylesheet" href="style.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "CapturePack",
+    "operatingSystem": "Windows",
+    "applicationCategory": "DeveloperApplication",
+    "description": "Open-source context capture toolkit. Records the last 30 seconds, lets you scrub back in time and annotate in 5 seconds, then exports a context pack any human or LLM understands.",
+    "url": "https://capturepack.dev/",
+    "downloadUrl": "https://github.com/r2cuerdame/capturepack/releases/latest",
+    "license": "https://opensource.org/licenses/MIT",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+  }
+  </script>
 </head>
 <body>
 
@@ -27,7 +52,13 @@
         <a class="btn" href="https://github.com/r2cuerdame/capturepack">GitHub</a>
         <a class="btn" href="https://github.com/sponsors/r2cuerdame" rel="noopener">♥ Sponsor</a>
       </div>
-      <p class="platform">Windows · free &amp; open source</p>
+      <p class="badges">
+        <span class="badge">Windows</span>
+        <span class="badge">Free &amp; open source</span>
+        <span class="badge">MIT</span>
+        <span class="badge">Local-first · no cloud</span>
+        <span class="badge">MCP built-in</span>
+      </p>
     </section>
 
     <section class="demo">
@@ -95,6 +126,14 @@
   </main>
 
   <footer>
+    <nav class="footer-nav">
+      <a href="https://github.com/r2cuerdame/capturepack">GitHub</a>
+      <a href="https://github.com/r2cuerdame/capturepack/blob/main/SPEC.md">Spec</a>
+      <a href="https://github.com/r2cuerdame/capturepack/blob/main/ROADMAP.md">Roadmap</a>
+      <a href="https://github.com/r2cuerdame/capturepack/blob/main/docs/MCP.md">MCP</a>
+      <a href="https://github.com/r2cuerdame/capturepack/releases">Releases</a>
+      <a href="https://github.com/sponsors/r2cuerdame">Sponsor</a>
+    </nav>
     <p>MIT License · Open Source</p>
     <p class="why">Made because explaining bugs to AI<br>was taking too much time.</p>
   </footer>

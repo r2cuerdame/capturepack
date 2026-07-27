@@ -1,5 +1,10 @@
 # capturepack
 
+[![Release](https://img.shields.io/github/v/release/r2cuerdame/capturepack?color=7c5cff&label=release)](https://github.com/r2cuerdame/capturepack/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/r2cuerdame/capturepack/total?color=7c5cff)](https://github.com/r2cuerdame/capturepack/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Sponsor](https://img.shields.io/badge/%E2%99%A5_Sponsor-ea4aaa)](https://github.com/sponsors/r2cuerdame)
+
 ## Can you explain a bug in under 5 seconds?
 
 **CapturePack is the fastest way to explain something to an LLM.**
@@ -86,6 +91,11 @@ Tools, client setup, and settings: [docs/MCP.md](docs/MCP.md).
 ## Status
 
 Early development. See [GOAL.md](GOAL.md) for the project vision and [ROADMAP.md](ROADMAP.md) for what's next.
+
+## ♥ Support
+
+CapturePack is free, open source, and cloud-free — no accounts, no telemetry, nothing to sell.
+If it saves you time, [**sponsoring on GitHub**](https://github.com/sponsors/r2cuerdame) keeps it moving.
 
 ## License
 
