@@ -502,6 +502,81 @@ With this design CapturePack naturally grows into a plugin-based context platfor
 
 ---
 
+## Always-On MCP Server
+
+CapturePack is not only a program that creates .capturepack files — it ships an official,
+always-running **MCP (Model Context Protocol) server** so any AI can read CapturePacks in a
+standard way. The MCP server never creates captures; it reads, explores, and analyzes them.
+
+**Core goal** — after saving a CapturePack the user does nothing. The workflow is
+Capture → Annotate → Save → done. Any AI finds and analyzes the latest CapturePack through
+MCP on its own. The user never explains the file structure, never unzips, never pastes
+report.md.
+
+**Philosophy**
+
+```
+CapturePack        → creates Context
+CapturePack Format → stores Context      (a data format, AI-independent)
+CapturePack MCP    → serves Context      (the standard read interface)
+Any AI             → consumes Context    (ChatGPT, Claude, Gemini, Cursor, VSCode, Codex, …)
+```
+
+**Always-on** — the MCP server starts automatically with the app and stays resident:
+
+```
+CapturePack.exe
+├── Replay Buffer
+├── Editor
+├── Export
+└── MCP Server   (port 39393, localhost only)
+```
+
+**Index & discovery** — MCP watches the export folder and keeps a recent-packs index
+updated automatically (no manual refresh). `latest()`, `list()`, `open()` all use this index.
+
+**Tools (initial, read-only)**
+
+| Tool | Purpose |
+| --- | --- |
+| `capturepack.latest()` | The most recent pack — most LLM sessions need only this |
+| `capturepack.list()` | Recent packs ("1 Chrome Login Bug / 2 Unreal Crash / …") |
+| `capturepack.open(id \| path)` | Open a pack — folder and ZIP both supported |
+| `capturepack.summary()` | App, window, URL, capture time, duration, annotation count, timeline length |
+| `capturepack.manifest()` / `report()` | Raw manifest.json / report.md |
+| `capturepack.timeline(from?, to?)` | Full timeline or a time slice |
+| `capturepack.annotations()` / `findAnnotations(keyword)` | Annotation list / keyword search |
+| `capturepack.frame(time)` | Frame at a given time (e.g. 12.4s) |
+| `capturepack.replay()` | Replay metadata (segments on demand) |
+| `capturepack.dom()` / `findDOM(selector)` | DOM metadata when the Chrome extension contributed it |
+| `capturepack.windows()` | Window focus timeline |
+| `capturepack.search(keyword)` | Search across report, annotations, timeline, DOM, window, plugin metadata |
+| `capturepack.exportMarkdown()` | Convert a pack to Markdown (HTML/Issue export later) |
+
+Plugin metadata is exposed generically — MCP never needs to know plugin kinds.
+
+**Read-only rule** — initial version supports Read / Search / Summary / Export only.
+No edit, no delete, no annotation modification, no capture creation (capture always
+belongs to the application).
+
+**Settings**
+
+```
+Settings └── MCP
+  [✓] Enable MCP Server      [✓] Start Automatically   [✓] Always Running
+  [✓] Read Only              [✓] Auto Discover Latest  [✓] Watch Export Folder
+  Port: 39393                [ ] Log Requests
+```
+
+**Usage** — the user says only "방금 캡처한 거 분석해줘" / "Analyze the latest CapturePack."
+The AI chains `latest() → summary() → timeline() → annotations() → report() → dom()` itself.
+
+**Future tools (not in the initial version)** — compare, merge, diff, statistics,
+exportPDF/HTML/Issue, findByApplication, findByURL, findByWindowTitle,
+latestFromApplication, latestFromBrowser.
+
+---
+
 ## CapturePack Specification
 
 ```
