@@ -593,11 +593,20 @@ visibility changes; Unreal uses widget-tree checkpoints + create/destroy/transfo
 
 **One clock.** Every Provider timestamps against a monotonic session clock Core hands out
 (`sessionId`, `nowMs`, `bufferStartMs`, `bufferEndMs`) — never its own wall clock, or the
-semantic timeline drifts from the visual one and every answer is subtly wrong.
+semantic timeline drifts from the visual one and every answer is subtly wrong. Replay frame time,
+DOM event time, UIA event time, window z-order time and annotation time are all comparable on
+that one `timeMs`.
 
-**Buffer lifecycle.** `onPrune(beforeTimeMs)` drops data that has fallen out of the ring buffer
-(keeping the last checkpoint needed to restore what remains); `onFreeze(range)` pins the captured
-range so it survives until the editor closes or the pack is saved.
+**Approximate, but never silently.** A Provider that cannot produce the exact requested instant
+returns its nearest sample *together with the error* — `TemporalAccuracy { requestedTimeMs,
+materializedTimeMs, errorMs, exact }`. An answer that is 80 ms off is useful; an answer that is
+80 ms off and claims to be exact is the same class of lie as a tray icon that says "recording".
+
+**Buffer lifecycle.** `onBufferStart` (new session, retention), `onTick` (current monotonic time —
+**not** an order to snapshot; each Provider samples at its own rate, e.g. event-driven plus ~10 Hz
+bounds for DOM, 10–15 Hz for UIA, engine tick for Unreal), `onPrune(beforeTimeMs)` (drop what fell
+out of the ring, keeping the last checkpoint still needed to restore what remains), and
+`onFreeze(range)` (pin the captured range until the editor closes or the pack is saved).
 
 #### Surface Timeline and the arbitration problem
 
@@ -614,15 +623,45 @@ Providers then claim *regions*, not whole windows. One Chrome window is shared: 
 owns the web content viewport, the Windows UI Provider owns the address bar, tabs and frame.
 
 **Selection algorithm.** Restore the surface stack at T → take the topmost visible surface at the
-point → ask only the Providers holding a claim there → sort candidates by authority, depth and
-confidence → offer the first → **keep the rest as a candidate stack** (Tab / Shift+Tab cycle
-them; Alt+Click for surfaces behind, whose data model must exist even if the binding ships later)
-→ and with no candidate at all, fall back to a manual rectangle. Authority is specificity, not
-rank: Unreal beats Windows UI inside a game's render surface, DOM beats UIA inside web content.
+point → ask only the Providers holding a claim there → drop candidates that are not visible or are
+occluded → order them by **surface visibility and z-order, then Provider claim, then semantic
+authority, then semantic depth, then confidence, then user preference** → offer the first →
+**keep the rest as a candidate stack** (Tab / Shift+Tab cycle objects, Alt+Click cycles surfaces
+behind — Alt+Click may ship later, but the candidate model and surface stack must support it from
+the start) → and with no candidate at all, fall back to a manual rectangle.
+
+Authority is specificity, not rank, and the ladder is fixed:
+
+```
+application-native  →  document-native  →  accessibility  →  window  →  manual rectangle
+   (Unreal widget)      (DOM element)       (UIA element)     (HWND)
+```
+
 **The default must always match what the user was actually looking at.**
 
-**Tracked annotations** follow their object: bounds move with it, and the annotation's lifetime
-ends when the object does.
+**Tracked annotations** follow their object: Core stores `{ providerId, surfaceId, objectId }`,
+asks the Provider for that object's bounds over the range, and the track carries `createdAtMs` /
+`removedAtMs` — so the annotation appears when the object does, moves with it, and its lifetime
+ends when the object is destroyed.
+
+**A slow Provider must never hold the editor shut.** Timeouts are budgets, not suggestions:
+hitTest 100–300 ms, materialize under ~500 ms, background work may take seconds, an After Save
+Action 30 s by default and minutes if configured. Late candidates update the list asynchronously
+rather than delaying the first paint.
+
+**Permissions are declared and shown.** A plugin manifest names its `type`, `protocol_version`,
+`entry` and `permissions` from a fixed set — `read-pack`, `write-plugin-files`, `network`,
+`run-process`, `read-browser-context`, `read-active-window`, `native-messaging`, `create-zip`,
+`open-browser` — and the user sees them before enabling it. Anything that sends pack data off the
+machine says so in those words.
+
+**What this project maintains, and what it does not.** Officially: **Chrome Web DOM**, one
+Provider. As Core platform infrastructure, not a Provider: the **Windows Surface Timeline** and
+the **Surface Resolver**. Everything else — Windows UI Automation objects, Unreal, Unity, other
+applications — is community or external. Core does not interpret a Windows UI tree or an Unreal
+object tree; keeping that line is what makes the plugin API real rather than decorative.
+(Note the tension to resolve before building: object picking ships UIA *inside Core* today. Either
+it becomes the first community Provider on this protocol, or the boundary above needs restating.)
 
 #### Export, failure, and isolation
 
