@@ -1751,6 +1751,36 @@ Future versions should understand actual interface objects.
 
 CapturePack should remember objects instead of pixels whenever possible.
 
+### The picture is the clock (#81)
+
+**A box goes where the user can see the thing it points at.** Not where the
+thing was at some correct-but-invisible instant.
+
+Those come apart because a video cannot be seeked to an arbitrary moment. Ask a
+replay for time T and it shows the last frame at or before T — that is the only
+picture that exists. The surface ring, being a list of samples rather than a
+film, answers T exactly. Draw one over the other and the box sits beside the
+window.
+
+Measured in 0.2.0-rc.4 on a 15 fps capture that actually achieved 11.9 fps: the
+picked boxes were accurate to a median of 9 ms, while the frame on screen at
+each box's own time was up to 498 ms old — 1304 px of error on a dragged window.
+The box was right and the picture was late.
+
+So **anything that has to agree with the image asks on the image's clock**: the
+presentation timestamp of the frame the compositor actually put on screen. The
+playhead keeps its own nominal time, because a timeline that jumps backwards
+under the user's hand is worse than one that is a frame off.
+
+**No frame rate is ever assumed.** The rate a machine achieves depends on the
+machine, the encoder and whatever else is running, so a constant correction
+would be right on one desk and wrong on the next. The browser reports the
+presented frame's time; that number is correct everywhere by construction.
+
+Recording faster is a separate obligation (#82) and does not replace this one.
+A capture that drops to 1 fps for a second still owes the user a box on the
+window they are looking at.
+
 ---
 
 ## Event Timeline
