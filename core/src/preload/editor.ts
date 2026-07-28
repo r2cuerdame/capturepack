@@ -29,4 +29,9 @@ contextBridge.exposeInMainWorld('editorBridge', {
   onWindowMode(cb: (mode: EditorWindowMode) => void): void {
     ipcRenderer.on(IPC.editorWindowMode, (_event, mode: EditorWindowMode) => cb(mode))
   },
+  // Shortcut sheet (GOAL "Editor Chrome"): remember the `?` / F1 toggle in
+  // settings.showShortcutOverlay. Absolute state, never a toggle.
+  setShortcutOverlay(show: boolean): void {
+    ipcRenderer.send(IPC.editorSetShortcutOverlay, show)
+  },
 })

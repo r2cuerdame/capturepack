@@ -128,9 +128,8 @@ body {
 
    #objectHint belongs here for the same reason: each of its messages is shown
    ONCE per session and can never be re-shown, so a truncated one is lost for
-   good — and it is the only place Shift (the window-level modifier) is ever
-   mentioned, since #keysHint is hidden below 1220px. At the 720px windowed
-   minimum the longest strings would otherwise ellipsize to about half. */
+   good. At the 720px windowed minimum the longest strings would otherwise
+   ellipsize to about half. */
 #dirtyChip,
 #trimDropChip,
 #objectHint {
@@ -148,47 +147,6 @@ body {
   background: rgba(255, 180, 84, 0.12);
 }
 
-/* Board legend (GOAL "Multi-Monitor Support"): every captured display is on
-   screen and annotatable at once — these chips only mark which one is FOCUSED
-   (accent outline) and frame that screen when clicked. */
-#displayLegend {
-  flex: none;
-  display: inline-flex;
-  gap: 2px;
-  padding: 2px;
-  border-radius: 8px;
-  background: var(--panel-hover);
-}
-
-#displayLegend button {
-  min-width: 24px;
-  height: 22px;
-  padding: 0 5px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--muted);
-  font: 600 12px "Segoe UI", system-ui, sans-serif;
-  cursor: pointer;
-}
-
-#displayLegend button:hover {
-  color: var(--text);
-  background: #33333d;
-}
-
-#displayLegend button.focusedDisplay {
-  border-color: var(--action);
-  color: var(--text);
-}
-
-/* A display whose frozen frame could not be decoded: its board region is
-   drawn empty and labelled, and the chip says so too. */
-#displayLegend button.brokenDisplay {
-  color: #ffb454;
-  text-decoration: line-through;
-}
-
 /* Static object picking: the honesty chip — stale data, a window with no
    control data, the window-level modifier, or nothing here at all. Each said
    once per session (GOAL "Static object picking"). */
@@ -201,21 +159,12 @@ body {
   max-width: 70%;
 }
 
-#keysHint {
-  color: var(--muted);
-  font-size: 11px;
-  white-space: nowrap;
-}
+/* ---- icon controls (GOAL "Editor Chrome": "Icons, not words") ----
+   Inline SVG, 20px, currentColor — no icon font and no asset to ship. The
+   accessible name and the shortcut live on the button (aria-label + title),
+   never in the graphic. */
 
-@media (max-width: 1220px) {
-  #keysHint {
-    display: none;
-  }
-}
-
-/* ---- window mode toggle (GOAL "Editor Window Mode") ---- */
-
-#windowModeBtn {
+.iconBtn {
   flex: none;
   width: 28px;
   height: 28px;
@@ -226,13 +175,79 @@ body {
   border-radius: 6px;
   background: transparent;
   color: var(--muted);
-  font: 14px/1 "Segoe UI Symbol", "Segoe UI", system-ui, sans-serif;
   cursor: pointer;
 }
 
-#windowModeBtn:hover {
+.iconBtn:hover {
   background: var(--panel-hover);
   color: var(--text);
+}
+
+.icon {
+  display: block;
+  width: 20px;
+  height: 20px;
+}
+
+/* Pressed = the sheet is open; the button is also the way to close it. */
+#helpBtn[aria-expanded="true"] {
+  background: var(--panel-hover);
+  color: var(--text);
+}
+
+/* ---- zoom control (GOAL "Editor Chrome") ----
+   [-] slider [+] and the live percentage. Never shrinks: like Save, it is a
+   control, and the informational chips give way before any control does. */
+
+#zoomControl {
+  /* Shrinks only as far as its slider allows (the buttons and the percentage
+     are fixed), so a 720px windowed editor narrows the track instead of
+     dropping a control the GOAL calls first-class. */
+  flex: 0 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.zoomBtn {
+  width: 24px;
+  height: 24px;
+}
+
+.zoomBtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+  background: transparent;
+  color: var(--muted);
+}
+
+#zoomSlider {
+  flex: 0 1 84px;
+  width: 84px;
+  min-width: 44px;
+  height: 24px;
+  margin: 0 2px;
+  accent-color: var(--action);
+  background: transparent;
+  cursor: pointer;
+}
+
+#zoomSlider:focus-visible {
+  outline: 1px solid var(--action);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+#zoomPct {
+  /* Tabular figures so the label does not jitter while the slider is dragged. */
+  flex: none;
+  min-width: 40px;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
 }
 
 /* Pressed = the editor is currently a window, not the fullscreen overlay. */
@@ -249,19 +264,21 @@ body[data-window-mode="windowed"] #topbar {
 }
 
 body[data-window-mode="windowed"] #topbar button,
-body[data-window-mode="windowed"] #topbar input,
-body[data-window-mode="windowed"] #topbar #displayLegend {
+body[data-window-mode="windowed"] #topbar input {
   -webkit-app-region: no-drag;
 }
 
 #exportBtn {
   /* Never shrinks: Save has to stay reachable at the minimum window width. */
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   border: none;
   border-radius: 6px;
   background: var(--action);
   color: #fff;
-  padding: 6px 14px;
+  padding: 6px 12px;
   font: 600 13px "Segoe UI", system-ui, sans-serif;
   cursor: pointer;
   white-space: nowrap;
@@ -479,6 +496,86 @@ body[data-window-mode="windowed"] #topbar #displayLegend {
 
 #unsavedSaveBtn:hover {
   background: #4683ff;
+}
+
+/* ---- shortcut sheet (GOAL "Editor Chrome") ----
+   A PASSIVE LAYER pinned to the top-right of the capture, on by default. It is
+   never a modal: pointer-events:none makes every click, drag and wheel pass
+   straight through to the board underneath, so it can be left open for the
+   whole session. Fixed rather than inside #stage, which is overflow:hidden. */
+
+#helpSheet {
+  position: fixed;
+  z-index: 9;
+  top: 48px;
+  right: 10px;
+  width: 340px;
+  max-width: calc(100vw - 20px);
+  max-height: calc(100vh - 100px);
+  /* Not scrollable — nothing in here is operable, and a scrollbar on a
+     click-through panel is a control that cannot be used. */
+  overflow: hidden;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(24, 24, 30, 0.86);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
+  /* Click-through: it is read, never operated (GOAL "It is a passive layer,
+     never a modal: click-through, no focus, no Esc handling"). */
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+/* ...and it dims further while the pointer is NEAR it, so it can never hide
+   the thing being annotated (GOAL). Set from editor.ts, which owns the
+   proximity test — the panel takes no pointer events of its own. */
+#helpSheet[data-near="true"] {
+  opacity: 0.18;
+}
+
+#helpTitle {
+  margin-bottom: 8px;
+  color: var(--text);
+  font: 600 13px "Segoe UI", system-ui, sans-serif;
+}
+
+.helpGroup + .helpGroup {
+  margin-top: 10px;
+}
+
+.helpGroupTitle {
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.helpRow {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 2px 0;
+}
+
+.helpKeys {
+  flex: none;
+  width: 118px;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: right;
+  /* A long localized gesture name wraps instead of pushing the description
+     out of the panel. */
+  overflow-wrap: anywhere;
+}
+
+.helpWhat {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 /* ---- timeline bar ---- */

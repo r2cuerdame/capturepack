@@ -44,6 +44,10 @@ function defaultSettings(): Settings {
     scrubSensitivityMs: 100,
     defaultManualDurationMs: 1000,
     showDurationLabel: true,
+    // The editor's shortcut sheet is ON for a new user (GOAL "Editor Chrome":
+    // "so a new user sees the whole vocabulary without asking"). The `?` / F1
+    // toggle writes this back, so turning it off is permanent.
+    showShortcutOverlay: true,
     // The fullscreen overlay stays the default editor (GOAL "Editor Window
     // Mode"); windowed mode is opt-in and then remembered with its rectangle.
     editorWindowMode: 'fullscreen',
@@ -220,6 +224,7 @@ const SETTINGS_KEY_SET: Record<keyof Settings, true> = {
   scrubSensitivityMs: true,
   defaultManualDurationMs: true,
   showDurationLabel: true,
+  showShortcutOverlay: true,
   editorWindowMode: true,
   editorWindowBounds: true,
   mcpEnabled: true,
@@ -372,6 +377,10 @@ function mergeSettings(base: Settings, raw: Record<string, unknown>): Settings {
         : base.defaultManualDurationMs,
     showDurationLabel:
       typeof raw.showDurationLabel === 'boolean' ? raw.showDurationLabel : base.showDurationLabel,
+    showShortcutOverlay:
+      typeof raw.showShortcutOverlay === 'boolean'
+        ? raw.showShortcutOverlay
+        : base.showShortcutOverlay,
     editorWindowMode: isEditorWindowMode(raw.editorWindowMode)
       ? raw.editorWindowMode
       : base.editorWindowMode,

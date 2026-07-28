@@ -416,6 +416,7 @@ async function runFlow(settings: Settings): Promise<void> {
         scrubSensitivityMs: settings.scrubSensitivityMs,
         defaultManualDurationMs: settings.defaultManualDurationMs,
         showDurationLabel: settings.showDurationLabel,
+        showShortcutOverlay: settings.showShortcutOverlay,
         annotations: [],
         title: '',
         note: '',
@@ -776,6 +777,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
       scrubSensitivityMs: settings.scrubSensitivityMs,
       defaultManualDurationMs: settings.defaultManualDurationMs,
       showDurationLabel: settings.showDurationLabel,
+      showShortcutOverlay: settings.showShortcutOverlay,
       annotations: loadedAnnotations,
       title: typeof manifest.title === 'string' ? manifest.title : '',
       note: typeof manifest.note === 'string' ? manifest.note : '',
@@ -1469,8 +1471,28 @@ function createEditorWindow(bounds: EditorWindowBounds, settings: Settings): Edi
     applyMode(payload)
   }
   ipcMain.on(IPC.editorSetWindowMode, onSetWindowMode)
+
+  /**
+   * The shortcut sheet's `?` / F1 toggle (GOAL "Editor Chrome": the state
+   * persists, so turning it off is permanent until turned back on). Written
+   * straight through — it is one boolean of chrome, and an unwritable settings
+   * file must not disturb a capture any more than it does for the window mode.
+   */
+  const onSetShortcutOverlay = (event: IpcMainEvent, payload: unknown): void => {
+    if (editor.isDestroyed() || event.sender !== editor.webContents) return
+    if (typeof payload !== 'boolean' || settings.showShortcutOverlay === payload) return
+    settings.showShortcutOverlay = payload
+    try {
+      persistSettings({ ...settings })
+    } catch (err) {
+      console.error('capturepack: saving the shortcut overlay state failed:', errorMessage(err))
+    }
+  }
+  ipcMain.on(IPC.editorSetShortcutOverlay, onSetShortcutOverlay)
+
   editor.on('closed', () => {
     ipcMain.removeListener(IPC.editorSetWindowMode, onSetWindowMode)
+    ipcMain.removeListener(IPC.editorSetShortcutOverlay, onSetShortcutOverlay)
     // Final rectangle (the move/resize listeners kept it current while the
     // window lived) — this is what the next capture opens at.
     persist()
@@ -1593,11 +1615,18 @@ function rebaseAnnotationsForTrim(annotations: Annotation[], trim: TrimRange): A
   return result
 }
 
-/** snapshot_t_ms on the trimmed clock; a frame outside the kept range has no
- * position in the saved replay, so it degrades to null (the capture instant). */
+/**
+ * snapshot_t_ms on the trimmed clock.
+ *
+ * null in means null out: the snapshot IS the capture instant (SPEC §5.3) and
+ * stays unstamped. Everything else is CLAMPED into the kept range rather than
+ * degraded to null — a video frame that lands outside the trim (only reachable
+ * from a hand-built payload now that the editor clamps its own position onto
+ * the manifest clock) still is not the capture instant, and saying it is would
+ * be the one lie this field can tell.
+ */
 function rebaseSnapshotTMsForTrim(snapshotTMs: number | null, trim: TrimRange): number | null {
   if (snapshotTMs === null) return null
-  if (snapshotTMs < trim.startMs || snapshotTMs > trim.endMs) return null
   return clampToTrim(snapshotTMs - trim.startMs, trim.lengthMs)
 }
 

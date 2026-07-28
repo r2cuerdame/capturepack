@@ -194,8 +194,9 @@ export function drawDisplayScene(
 }
 
 /**
- * The per-display frame and caption (GOAL: "Keep a compact legend marking which
- * display is focused"). Drawn in BOARD canvas space, not inside the display
+ * The per-display frame and caption — with no display picker in the top bar
+ * (GOAL "Multi-Monitor Support"), THIS is what says which screen is which and
+ * which one is focused. Drawn in BOARD canvas space, not inside the display
  * transform: the caption must stay the same size on every screen of the board,
  * whatever each one's pixel density is.
  *

@@ -10,22 +10,16 @@
   <link rel="stylesheet" href="./editor.css" />
 </head>
 <body>
+  <!-- Editor Chrome (GOAL "Editor Chrome"): the bar sits above the frozen
+       capture, so it stays quiet — ICONS for the recurring controls (window
+       mode, help, save), text only where text is content (title, note). There
+       is no display picker: the board already shows every captured display, and
+       framing one is a keyboard gesture (1..9, 0/Esc), documented in the help
+       sheet rather than in a row of toolbar buttons. -->
   <header id="topbar">
     <button id="colorBtn" title="Color (C)" data-i18n-title="editor.colorTooltip"><span id="colorSwatch"></span></button>
     <input id="titleInput" type="text" placeholder="Title (optional)" data-i18n-placeholder="editor.titlePlaceholder" autocomplete="off" spellcheck="false" />
     <input id="noteInput" type="text" placeholder="What is wrong? (optional)" data-i18n-placeholder="editor.notePlaceholder" autocomplete="off" spellcheck="false" />
-    <!-- Board legend (GOAL "Multi-Monitor Support"): one chip per captured
-         display, shown only when the capture froze more than one. EVERY display
-         is on the board and annotatable at once — the chips mark which one is
-         focused and frame that screen at the largest usable scale when clicked
-         (1..9 do the same; 0 fits the whole board again). -->
-    <span
-      id="displayLegend"
-      role="group"
-      aria-label="Captured displays"
-      data-i18n-aria-label="editor.displaysLabel"
-      hidden
-    ></span>
     <!-- Static object picking (GOAL "Static object picking (v0)"): the one
          honesty channel, each message said ONCE per session and QUEUED so none
          replaces another mid-read — the object data is from the capture instant
@@ -37,21 +31,102 @@
     <span id="objectHint" class="chip" hidden></span>
     <span id="replayChip" class="chip" data-i18n="editor.noReplay">No replay</span>
     <span id="dirtyChip" class="chip" hidden data-i18n="editor.unsavedChanges">Unsaved changes</span>
-    <span id="keysHint" data-i18n="editor.keysHint">L-click select · R-drag box · # number · Blur · Enter save · Esc close</span>
     <!-- Trim drop hint (GOAL "Replay Trim"): boxes whose lifetime is wholly
          outside the active trim are dropped at save — count shown up front. -->
     <span id="trimDropChip" class="chip" hidden></span>
+    <!-- Zoom control (GOAL "Editor Chrome"): the board's zoom is a FIRST-CLASS
+         control, not a hidden gesture — a wheel shortcut alone leaves it
+         undiscoverable. [-] slider [+] plus the live percentage; it mirrors
+         Ctrl+wheel (same 0.5x-4x range, same 1.2x step), snaps to Fit and
+         100%, and double-clicking the slider returns to Fit. -->
+    <div id="zoomControl">
+      <button
+        id="zoomOutBtn"
+        class="iconBtn zoomBtn"
+        type="button"
+        title="Zoom out (Ctrl+wheel)"
+        data-i18n-title="editor.zoomOutTooltip"
+        aria-label="Zoom out (Ctrl+wheel)"
+        data-i18n-aria-label="editor.zoomOutTooltip"
+      >
+        <svg class="icon" viewBox="0 0 20 20" width="20" height="20" aria-hidden="true" focusable="false">
+          <path d="M4.5 10h11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+        </svg>
+      </button>
+      <input
+        id="zoomSlider"
+        type="range"
+        min="0"
+        max="1000"
+        step="1"
+        value="500"
+        title="Zoom — double-click to fit"
+        data-i18n-title="editor.zoomSliderTooltip"
+        aria-label="Zoom — double-click to fit"
+        data-i18n-aria-label="editor.zoomSliderTooltip"
+      />
+      <button
+        id="zoomInBtn"
+        class="iconBtn zoomBtn"
+        type="button"
+        title="Zoom in (Ctrl+wheel)"
+        data-i18n-title="editor.zoomInTooltip"
+        aria-label="Zoom in (Ctrl+wheel)"
+        data-i18n-aria-label="editor.zoomInTooltip"
+      >
+        <svg class="icon" viewBox="0 0 20 20" width="20" height="20" aria-hidden="true" focusable="false">
+          <path d="M4.5 10h11M10 4.5v11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+        </svg>
+      </button>
+      <span id="zoomPct">100%</span>
+    </div>
     <!-- Editor Window Mode (GOAL "Editor Window Mode"): the fullscreen overlay
          is the default; this button (and F11) turns the editor into a real
          movable/resizable window, and the choice is remembered. -->
     <button
       id="windowModeBtn"
+      class="iconBtn"
       type="button"
       title="Toggle windowed mode (F11)"
       data-i18n-title="editor.windowModeTooltip"
+      aria-label="Toggle windowed mode (F11)"
+      data-i18n-aria-label="editor.windowModeTooltip"
       aria-pressed="false"
-    >⧉</button>
-    <button id="exportBtn" data-i18n="editor.save">Save</button>
+    >
+      <svg class="icon" viewBox="0 0 20 20" width="20" height="20" aria-hidden="true" focusable="false">
+        <rect x="2.75" y="6.75" width="10.5" height="8.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4" />
+        <path d="M6.75 6.75V6.25a1.5 1.5 0 0 1 1.5-1.5h7a1.5 1.5 0 0 1 1.5 1.5v7a1.5 1.5 0 0 1-1.5 1.5h-.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+      </svg>
+    </button>
+    <!-- Help sheet affordance (GOAL "Editor Chrome"): ONE `?` replaces the long
+         inline key hint that used to be a wall of text here. -->
+    <button
+      id="helpBtn"
+      class="iconBtn"
+      type="button"
+      title="Shortcuts (F1)"
+      data-i18n-title="editor.helpTooltip"
+      aria-label="Shortcuts (F1)"
+      data-i18n-aria-label="editor.helpTooltip"
+      aria-expanded="false"
+      aria-controls="helpSheet"
+    >
+      <svg class="icon" viewBox="0 0 20 20" width="20" height="20" aria-hidden="true" focusable="false">
+        <circle cx="10" cy="10" r="7.25" fill="none" stroke="currentColor" stroke-width="1.4" />
+        <path d="M7.9 7.85a2.15 2.15 0 1 1 2.95 2c-.57.27-.85.72-.85 1.35v.35" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+        <circle cx="10" cy="13.9" r="0.95" fill="currentColor" />
+      </svg>
+    </button>
+    <!-- Save keeps its word: it is the primary action, so it is icon + text
+         while the other controls are icon-only (GOAL "Editor Chrome"). -->
+    <button id="exportBtn" type="button" title="Save (Enter)" data-i18n-title="editor.saveTooltip">
+      <svg class="icon" viewBox="0 0 20 20" width="20" height="20" aria-hidden="true" focusable="false">
+        <path d="M4.45 3.5h8.1l3.95 3.95v8.05a1.5 1.5 0 0 1-1.5 1.5H4.45a1.5 1.5 0 0 1-1.5-1.5V5a1.5 1.5 0 0 1 1.5-1.5z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" />
+        <path d="M6.75 3.5v4.25h6.1V3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" />
+        <rect x="6.25" y="11" width="7.5" height="6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" />
+      </svg>
+      <span data-i18n="editor.save">Save</span>
+    </button>
   </header>
   <main id="stage">
     <div id="frame">
@@ -92,6 +167,22 @@
       <button id="unsavedDiscardBtn" type="button" data-i18n="editor.discard">Discard</button>
     </div>
   </main>
+  <!-- Shortcut sheet (GOAL "Editor Chrome"): ON BY DEFAULT (persisted as
+       settings.showShortcutOverlay), toggled by the `?` button or F1. It is a
+       PASSIVE LAYER, never a modal — click-through (pointer-events: none), it
+       never takes focus, it answers no Esc, and it dims further while the
+       pointer is near it so it can never hide the thing being annotated.
+       Rows are built from i18n at open time so the configurable steps (scrub
+       sensitivity, capture FPS) show their LIVE values.
+
+       A labelled region rather than a dialog: focus deliberately never enters
+       it, so role="dialog" would name a thing no screen-reader user could ever
+       reach. aria-live carries the list instead — it is built while VISIBLE, so
+       the reveal is announced. -->
+  <section id="helpSheet" aria-labelledby="helpTitle" aria-live="polite" hidden>
+    <h2 id="helpTitle" data-i18n="editor.helpTitle">Shortcuts</h2>
+    <div id="helpGroups"></div>
+  </section>
   <footer id="timebar" hidden>
     <button id="playBtn" title="Play / pause" data-i18n-title="editor.playTooltip" disabled>▶</button>
     <div id="trackArea">
@@ -99,7 +190,9 @@
       <div id="track">
         <div id="trackFill"></div>
         <!-- Replay Trim (GOAL "Replay Trim"): regions outside the in/out trim
-             are dimmed; the handles drag, I/O set them, double-click resets. -->
+             are dimmed; the handles drag, I/O set them, double-click resets.
+             The trim is also the BOUNDARY of the clock — scrubbing, playback
+             and track drags all stay inside it (GOAL "Editor Input System"). -->
         <div id="trimDimIn" class="trimDim" hidden></div>
         <div id="trimDimOut" class="trimDim" hidden></div>
         <div id="playhead"></div>

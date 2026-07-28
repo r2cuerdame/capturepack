@@ -466,6 +466,11 @@ export interface Settings {
   defaultManualDurationMs: number
   // Show the duration chip on the selected annotation in the editor.
   showDurationLabel: boolean
+  // Shortcut overlay (GOAL "Editor Chrome"): the editor's `?` / F1 panel is ON
+  // BY DEFAULT, so a new user sees the whole vocabulary without asking. The
+  // editor writes this back whenever the user toggles it, so turning it off is
+  // permanent until turned back on.
+  showShortcutOverlay: boolean
   // Editor window mode (GOAL "Editor Window Mode"): "fullscreen" (DEFAULT — the
   // overlay every capture opened with before this existed) or "windowed". The
   // editor writes it back whenever the user toggles (⧉ / F11), so the next

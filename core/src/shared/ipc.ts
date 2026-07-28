@@ -34,6 +34,11 @@ export const IPC = {
   // has settled (and after any other fullscreen change). Main owns the truth;
   // the renderer only paints what it is told.
   editorWindowMode: 'editor:window-mode',
+  // editor -> main: remember whether the shortcut sheet is showing (GOAL
+  // "Editor Chrome" — settings.showShortcutOverlay). Payload: boolean, the
+  // ABSOLUTE new state. Fire-and-forget: the panel is chrome, so a failed disk
+  // write costs the preference, never the capture.
+  editorSetShortcutOverlay: 'editor:set-shortcut-overlay',
 
   // about window -> main (invoke): version, icon, language, updater state
   aboutGet: 'about:get',
@@ -267,6 +272,10 @@ export interface EditorInitPayload {
   defaultManualDurationMs: number
   // Show the duration chip on the selected annotation
   showDurationLabel: boolean
+  // Whether the shortcut sheet opens with the editor (GOAL "Editor Chrome":
+  // on by default, and the `?`/F1 toggle is remembered) — the persisted
+  // settings.showShortcutOverlay.
+  showShortcutOverlay: boolean
   // Existing boxes to restore (GOAL "History — Open & re-edit"). Empty for a
   // fresh capture. The editor adopts them as its undo baseline and registers
   // their ids so new ann_ ids can never collide with loaded ones.

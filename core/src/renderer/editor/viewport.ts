@@ -4,7 +4,13 @@
 
 export const ZOOM_MIN = 0.5
 export const ZOOM_MAX = 4
-const ZOOM_STEP = 1.2
+/** One notch of Ctrl+wheel — and one press of the top bar's [-] / [+]. */
+export const ZOOM_STEP = 1.2
+
+/** The zoom range is a hard wall: nothing may set a factor outside it. */
+export function clampZoom(zoom: number): number {
+  return clamp(zoom, ZOOM_MIN, ZOOM_MAX)
+}
 
 export class Viewport {
   zoom = 1
@@ -20,7 +26,19 @@ export class Viewport {
 
   /** Zooms by one step, keeping the point under the cursor fixed. */
   zoomAt(clientX: number, clientY: number, zoomIn: boolean): void {
-    const next = clamp(this.zoom * (zoomIn ? ZOOM_STEP : 1 / ZOOM_STEP), ZOOM_MIN, ZOOM_MAX)
+    this.zoomTo(this.zoom * (zoomIn ? ZOOM_STEP : 1 / ZOOM_STEP), clientX, clientY)
+  }
+
+  /**
+   * Zooms to an ABSOLUTE factor, keeping (clientX, clientY) fixed on screen.
+   *
+   * This is what the top bar's zoom control drives (GOAL "Editor Chrome": the
+   * board's zoom is a first-class control, not a hidden gesture) — anchored on
+   * the stage centre there, on the cursor for Ctrl+wheel. Same range, same
+   * transform, one implementation, so the two can never disagree.
+   */
+  zoomTo(zoom: number, clientX: number, clientY: number): void {
+    const next = clampZoom(zoom)
     if (next === this.zoom) return
     // rect.left = untransformedLeft + panX, so the cursor-fixed pan update
     // only needs the current on-screen rect.
@@ -42,10 +60,11 @@ export class Viewport {
    * size: zooms to the largest scale at which it still fits, and pans so its
    * centre lands on the stage centre.
    *
-   * This is how the board's legend chips work (GOAL "Multi-Monitor Support"):
-   * the whole board opens fitted, and one click gives a single display the
-   * largest usable scale without ever leaving the board — the other screens are
-   * a pan away, not a mode away.
+   * This is how framing one display works (GOAL "Multi-Monitor Support" —
+   * `1`..`9`, with `0`/Esc fitting the board again): the whole board opens
+   * fitted, and one keystroke gives a single display the largest usable scale
+   * without ever leaving the board — the other screens are a pan away, not a
+   * mode away.
    *
    * `frameW`/`frameH` are the frame's CSS size, which flex centring places at
    * ((stageW - frameW) / 2, (stageH - frameH) / 2); the transform then applies

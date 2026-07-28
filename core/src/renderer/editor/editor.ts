@@ -48,7 +48,7 @@ import type { BoardDisplay, BoardInput, BoardLayout } from './board'
 import { BoardScrub, wheelScrubDeltaMs } from './scrub'
 import type { BoardReplayInput } from './scrub'
 import { Timebar } from './timebar'
-import { Viewport } from './viewport'
+import { clampZoom, Viewport, ZOOM_MAX, ZOOM_MIN, ZOOM_STEP } from './viewport'
 
 interface EditorBridge {
   onInit(cb: (payload: EditorInitPayload) => void): void
@@ -60,6 +60,10 @@ interface EditorBridge {
   // back the mode the window actually ended up in.
   setWindowMode(mode: EditorWindowMode): void
   onWindowMode(cb: (mode: EditorWindowMode) => void): void
+  // Shortcut overlay (GOAL "Editor Chrome"): the `?`/F1 toggle state, persisted
+  // as settings.showShortcutOverlay — turning it off is permanent until turned
+  // back on.
+  setShortcutOverlay(show: boolean): void
 }
 
 declare global {
@@ -99,7 +103,14 @@ const durationEditor = el<HTMLDivElement>('durationEditor')
 const durationInput = el<HTMLInputElement>('durationInput')
 const untilEndBtn = el<HTMLButtonElement>('untilEndBtn')
 const entireCaptureBtn = el<HTMLButtonElement>('entireCaptureBtn')
-const displayLegend = el<HTMLSpanElement>('displayLegend')
+const helpBtn = el<HTMLButtonElement>('helpBtn')
+const helpSheet = el<HTMLElement>('helpSheet')
+const helpGroups = el<HTMLElement>('helpGroups')
+const zoomControl = el<HTMLDivElement>('zoomControl')
+const zoomInBtn = el<HTMLButtonElement>('zoomInBtn')
+const zoomOutBtn = el<HTMLButtonElement>('zoomOutBtn')
+const zoomSlider = el<HTMLInputElement>('zoomSlider')
+const zoomPct = el<HTMLSpanElement>('zoomPct')
 const objectHint = el<HTMLSpanElement>('objectHint')
 const dirtyChip = el<HTMLSpanElement>('dirtyChip')
 const trimDropChip = el<HTMLSpanElement>('trimDropChip')
@@ -161,7 +172,8 @@ interface DisplayRuntime {
   // 33 MB, and a board holds several).
   bitmap: ImageBitmap | null
   // This display's frame could not be decoded: its region is drawn empty and
-  // its legend chip says so, rather than silently showing the wrong screen.
+  // its caption on the board says so, rather than silently showing the wrong
+  // screen.
   broken: boolean
 }
 const runtimes = new Map<number, DisplayRuntime>()
@@ -219,6 +231,10 @@ let trimOutMs: number | null = null
 let windowMode: EditorWindowMode = 'fullscreen'
 const viewport = new Viewport(frame)
 let spaceDown = false
+// Space serves two gestures: HELD it is the pan modifier, TAPPED (pressed and
+// released without ever panning) it toggles playback. This stays true from the
+// keydown until a pan actually starts, which is what tells the two apart.
+let spaceTap = false
 let panning: { pointerId: number; x: number; y: number } | null = null
 
 // Every drag remembers the DISPLAY it started on: a box belongs to one screen,
@@ -301,6 +317,10 @@ function layout(): void {
   frame.style.width = `${board.width * fitScale}px`
   frame.style.height = `${board.height * fitScale}px`
   positionTextEditor()
+  // The percentage is fitScale x zoom, so a resize changes it without the
+  // viewport moving at all — and the help sheet's proximity box just moved.
+  syncZoomUi()
+  syncHelpGeometry()
 }
 
 /** The board display an index names, or null when the board does not have it. */
@@ -362,50 +382,13 @@ function toggleWindowMode(): void {
 }
 
 // ---------------------------------------------------------------------------
-// The board legend (GOAL "Multi-Monitor Support"): a compact chip per captured
-// display marking which one is focused. It is a NAVIGATION aid, not a switcher
-// — every display is on screen and annotatable all the time; clicking a chip
-// only zooms the board onto that screen, and Esc/0 fits the whole board again.
-// Hidden entirely for a single-display capture.
+// Board navigation (GOAL "Multi-Monitor Support": "No display picker in the top
+// bar"). Every captured display is on the board, drawn with its own caption and
+// an accent frame around the focused one, so a row of monitor buttons in the
+// one place that must stay uncluttered was redundant chrome. Framing a single
+// display is a keyboard gesture — 1..9, and 0 (or Esc) to fit the whole board —
+// discoverable through the help sheet.
 // ---------------------------------------------------------------------------
-
-function buildDisplayLegend(): void {
-  displayLegend.replaceChildren()
-  const displays = board?.displays ?? []
-  if (displays.length < 2) {
-    displayLegend.hidden = true
-    return
-  }
-  for (const d of displays) {
-    const btn = document.createElement('button')
-    btn.type = 'button'
-    btn.textContent = String(d.index)
-    btn.title = d.focused
-      ? t('editor.displayFocusedTooltip', { index: d.index })
-      : t('editor.displayTooltip', { index: d.index })
-    btn.classList.toggle('focusedDisplay', d.focused)
-    btn.addEventListener('click', () => {
-      btn.blur() // keyboard shortcuts belong to the canvas, not this button
-      zoomToDisplay(d.index)
-    })
-    displayLegend.append(btn)
-  }
-  displayLegend.hidden = false
-  syncDisplayLegend()
-}
-
-function syncDisplayLegend(): void {
-  const displays = board?.displays ?? []
-  if (displays.length < 2) return
-  const buttons = displayLegend.querySelectorAll('button')
-  displays.forEach((d, i) => {
-    const btn = buttons[i]
-    if (btn === undefined) return
-    // A frame that could not be decoded: the chip says so rather than looking
-    // live over an empty region.
-    btn.classList.toggle('brokenDisplay', runtimes.get(d.index)?.broken === true)
-  })
-}
 
 /** The caption drawn inside a display's own frame on the board. */
 function displayLabel(d: BoardDisplay): string {
@@ -437,6 +420,7 @@ function zoomToDisplay(index: number): void {
   syncPanCursor()
   syncSelectionUi()
   schedulePaint()
+  syncZoomUi()
 }
 
 /** Back to the whole board, unzoomed — the state the editor opens in. */
@@ -445,7 +429,105 @@ function fitBoard(): void {
   syncPanCursor()
   syncSelectionUi()
   schedulePaint()
+  syncZoomUi()
 }
+
+// ---------------------------------------------------------------------------
+// Zoom control (GOAL "Editor Chrome"): "[-] slider [+], showing the current
+// percentage. It mirrors Ctrl+wheel (same range and steps), snaps to Fit and
+// 100%, and double-clicking the slider returns to Fit. The board's zoom is a
+// first-class control, not a hidden gesture."
+//
+// The percentage is the board's REAL on-screen scale (fitScale x viewport
+// zoom), not the viewport factor: 100% means one board unit per CSS pixel,
+// which is the only reading of "100%" a user can check against their screen.
+// Fit is therefore a different number on every window size, and both are snap
+// points.
+// ---------------------------------------------------------------------------
+
+/** Slider resolution. Fine enough that the log mapping feels continuous. */
+const ZOOM_SLIDER_MAX = 1000
+/** Within this relative distance of a snap point, the control lands on it. */
+const ZOOM_SNAP_RATIO = 0.05
+
+/** Viewport factor at which the board is drawn 1:1 ("100%"), inside the range. */
+function hundredPercentZoom(): number {
+  return clampZoom(fitScale > 0 ? 1 / fitScale : 1)
+}
+
+/**
+ * `target`, pulled onto a snap point when it lands near one — or when this step
+ * would step OVER one. Fit (viewport 1) and 100% are the two; on a board small
+ * enough to fit unscaled they are the same point and nothing changes.
+ */
+function snapZoom(target: number, from: number): number {
+  for (const snap of [1, hundredPercentZoom()]) {
+    const crossed = (from < snap && target > snap) || (from > snap && target < snap)
+    if (crossed || Math.abs(target - snap) / snap <= ZOOM_SNAP_RATIO) return snap
+  }
+  return target
+}
+
+/** Slider position <-> zoom factor: logarithmic, so each pixel is a ratio. */
+function zoomToSlider(zoom: number): number {
+  const span = Math.log(ZOOM_MAX / ZOOM_MIN)
+  return Math.round((Math.log(clampZoom(zoom) / ZOOM_MIN) / span) * ZOOM_SLIDER_MAX)
+}
+
+function sliderToZoom(position: number): number {
+  const t = Math.max(0, Math.min(1, position / ZOOM_SLIDER_MAX))
+  return clampZoom(ZOOM_MIN * Math.exp(t * Math.log(ZOOM_MAX / ZOOM_MIN)))
+}
+
+/**
+ * Zooms to an absolute factor from the CONTROL (buttons/slider), anchored on
+ * the stage centre — there is no cursor to keep fixed, and the middle of the
+ * view is what the user is looking at.
+ */
+function applyControlZoom(target: number): void {
+  if (!loaded) return
+  const next = snapZoom(clampZoom(target), viewport.zoom)
+  // Fit is the whole board, centred: snapping to it has to undo the pan too, or
+  // "Fit" would leave the board pushed half off screen at fit scale.
+  if (next === 1) {
+    fitBoard()
+    return
+  }
+  const r = stage.getBoundingClientRect()
+  viewport.zoomTo(next, r.left + r.width / 2, r.top + r.height / 2)
+  syncPanCursor()
+  syncSelectionUi()
+  schedulePaint()
+  syncZoomUi()
+}
+
+/** Paints the control from the viewport — the single source of the zoom. */
+function syncZoomUi(): void {
+  const percent = Math.round(fitScale * viewport.zoom * 100)
+  const label = `${percent}%`
+  zoomPct.textContent = label
+  zoomSlider.value = String(zoomToSlider(viewport.zoom))
+  // The slider's own value is an opaque log position; the percentage is what a
+  // screen reader must read out.
+  zoomSlider.setAttribute('aria-valuetext', label)
+  zoomOutBtn.disabled = viewport.zoom <= ZOOM_MIN + 1e-6
+  zoomInBtn.disabled = viewport.zoom >= ZOOM_MAX - 1e-6
+}
+
+zoomInBtn.addEventListener('click', () => applyControlZoom(viewport.zoom * ZOOM_STEP))
+zoomOutBtn.addEventListener('click', () => applyControlZoom(viewport.zoom / ZOOM_STEP))
+zoomSlider.addEventListener('input', () => applyControlZoom(sliderToZoom(Number(zoomSlider.value))))
+// Double-click the slider returns to Fit (GOAL).
+zoomSlider.addEventListener('dblclick', () => fitBoard())
+
+// Same rule as the box header: adjusting the zoom must never end the box
+// description being typed. The buttons never take focus at all; the slider has
+// to (it is dragged), so it hands the keyboard straight back on release — and
+// the description's blur handler knows focus landing in here is not the end of
+// the pending box.
+zoomInBtn.addEventListener('mousedown', (e) => e.preventDefault())
+zoomOutBtn.addEventListener('mousedown', (e) => e.preventDefault())
+zoomSlider.addEventListener('pointerup', () => refocusEditing())
 
 /** Canvas backing store = the board's bounded-budget size (board.ts). */
 function resizeCanvases(): void {
@@ -623,9 +705,196 @@ function syncLanes(): void {
 }
 
 // ---------------------------------------------------------------------------
+// Shortcut sheet (GOAL "Editor Chrome"): ONE `?` affordance in the top bar,
+// toggled by that button or F1, replacing the long inline key hint that used to
+// sit above the frozen capture as a wall of text.
+//
+// ON BY DEFAULT, so a new user sees the whole vocabulary without asking; the
+// toggle state persists (settings.showShortcutOverlay), so turning it off is
+// permanent until turned back on.
+//
+// It is a PASSIVE LAYER, never a modal: click-through (pointer-events: none in
+// the CSS), it never takes focus, and it answers NO Esc — Esc always means what
+// it meant, so the sheet can never cost the user a second press to close the
+// editor. The only two things that toggle it are the `?` button and F1. It dims
+// further while the pointer is near it, so it can never hide the thing being
+// annotated.
+// ---------------------------------------------------------------------------
+
+let helpOpen = false
+/** Screen box the proximity dim measures against; null until measured. */
+let helpRect: DOMRect | null = null
+let helpNear = false
+/** Last pointer position seen anywhere in the window (proximity dim input). */
+let helpPointerX = Number.NEGATIVE_INFINITY
+let helpPointerY = Number.NEGATIVE_INFINITY
+/** How close the pointer has to get before the sheet gets out of the way. */
+const HELP_NEAR_PADDING = 90
+
+/** One line of the sheet: the gesture/keys, and what they do. */
+type HelpRow = readonly [keys: string, what: string]
+
+/** ' + '-joined key atoms; the modifier caps are key names, not prose. */
+function keys(...parts: string[]): string {
+  return parts.join(' + ')
+}
+
+/**
+ * The sheet's content, built fresh on every open so the CONFIGURABLE steps
+ * show their live values (scrub sensitivity ms/notch, capture FPS) instead of
+ * the defaults they had in the docs. Groups that describe things this capture
+ * cannot do are left out entirely: no replay = no time group, one display = no
+ * display framing.
+ */
+function helpContent(): Array<{ title: string; rows: HelpRow[] }> {
+  const groups: Array<{ title: string; rows: HelpRow[] }> = []
+  const captureRows: HelpRow[] = [[t('editor.keyLeftClick'), t('editor.helpPickObject')]]
+  // The window-level modifier only means something where there IS object data
+  // (GOAL "Static object picking"); a pack without a UIA dump would be told
+  // about a modifier that can never do anything.
+  if (objectIndex !== null && objectIndex.size > 0) {
+    captureRows.push([keys('Shift', t('editor.keyLeftClick')), t('editor.helpForceWindow')])
+  }
+  captureRows.push([t('editor.keyRightDrag'), t('editor.helpNewBox')])
+  groups.push({ title: t('editor.helpGroupCapture'), rows: captureRows })
+  if (scrub !== null) {
+    const timeRows: HelpRow[] = [
+      [t('editor.keyWheel'), t('editor.helpWheelStep', { ms: scrubSensitivityMs })],
+      [keys('Shift', t('editor.keyWheel')), t('editor.helpWheelSecond')],
+      [keys('Alt', t('editor.keyWheel')), t('editor.helpWheelFrame', { fps })],
+    ]
+    // Trim is the fresh-capture flow only: re-editing a saved pack never
+    // trims further, so I/O do nothing there and are not advertised.
+    if (trimEnabled()) timeRows.push(['I / O', t('editor.helpTrim')])
+    timeRows.push(['Space', t('editor.helpPlay')])
+    groups.push({ title: t('editor.helpGroupTime'), rows: timeRows })
+  }
+  const viewRows: HelpRow[] = [
+    [keys('Ctrl', t('editor.keyWheel')), t('editor.helpZoom')],
+    [keys('Space', t('editor.keyDrag')), t('editor.helpPan')],
+  ]
+  if (board !== null && board.displays.length > 1) {
+    viewRows.push(['1…9', t('editor.helpFrameDisplay')], ['0', t('editor.helpFitBoard')])
+  }
+  groups.push({ title: t('editor.helpGroupView'), rows: viewRows })
+  groups.push({
+    title: t('editor.helpGroupEdit'),
+    rows: [
+      // Ctrl/Shift/Alt/Space stay as the app spells them everywhere else (the
+      // capture accelerator is shown untranslated too); the caps that ARE
+      // printed differently per locale — Enter/Esc/Del — come from i18n.
+      ['Ctrl+Z / Ctrl+Y', t('editor.helpUndoRedo')],
+      [t('editor.keyDelete'), t('editor.helpDeleteBox')],
+      [t('editor.keyEnter'), t('editor.save')],
+      [t('editor.keyEsc'), t('editor.helpClose')],
+    ],
+  })
+  return groups
+}
+
+function buildHelpSheet(): void {
+  helpGroups.replaceChildren()
+  for (const group of helpContent()) {
+    const section = document.createElement('div')
+    section.className = 'helpGroup'
+    const title = document.createElement('div')
+    title.className = 'helpGroupTitle'
+    title.textContent = group.title
+    section.append(title)
+    for (const [k, what] of group.rows) {
+      const row = document.createElement('div')
+      row.className = 'helpRow'
+      const keyCell = document.createElement('span')
+      keyCell.className = 'helpKeys'
+      keyCell.textContent = k
+      const whatCell = document.createElement('span')
+      whatCell.className = 'helpWhat'
+      whatCell.textContent = what
+      row.append(keyCell, whatCell)
+      section.append(row)
+    }
+    helpGroups.append(section)
+  }
+}
+
+function openHelp(): void {
+  if (helpOpen) return
+  helpOpen = true
+  helpSheet.hidden = false
+  // Built while VISIBLE: the panel is an aria-live region and nothing inside it
+  // is focusable, so an announcement on reveal is the only way a screen-reader
+  // user ever hears the shortcut list.
+  buildHelpSheet()
+  helpBtn.setAttribute('aria-expanded', 'true')
+  syncHelpGeometry()
+}
+
+function closeHelp(): void {
+  if (!helpOpen) return
+  helpOpen = false
+  helpSheet.hidden = true
+  helpBtn.setAttribute('aria-expanded', 'false')
+}
+
+/** The `?` button and F1 — the ONLY two toggles — and the choice is remembered. */
+function toggleHelp(): void {
+  if (helpOpen) closeHelp()
+  else openHelp()
+  window.editorBridge.setShortcutOverlay(helpOpen)
+}
+
+helpBtn.addEventListener('click', () => toggleHelp())
+
+// Same rule as the box header: reaching for the `?` mid-task must never end the
+// box description being typed. Without this, mousedown moves focus, #textEditor
+// blurs onto a target that is neither the header nor the duration popover, and
+// the pending box commits itself while the user is still typing it.
+helpBtn.addEventListener('mousedown', (e) => e.preventDefault())
+
+/** Re-measures the sheet (open, rebuilt, or the window resized) and re-dims. */
+function syncHelpGeometry(): void {
+  if (!helpOpen) {
+    helpRect = null
+    return
+  }
+  helpRect = helpSheet.getBoundingClientRect()
+  syncHelpProximity()
+}
+
+/**
+ * Dims the sheet while the pointer is near it (GOAL: "it dims further while the
+ * pointer is near it so it can never hide the thing being annotated"). The
+ * panel is click-through, so it can never be told this itself — the test is a
+ * distance against a rect measured once per open/resize, never per move.
+ */
+function syncHelpProximity(): void {
+  const r = helpRect
+  const near =
+    helpOpen &&
+    r !== null &&
+    helpPointerX >= r.left - HELP_NEAR_PADDING &&
+    helpPointerX <= r.right + HELP_NEAR_PADDING &&
+    helpPointerY >= r.top - HELP_NEAR_PADDING &&
+    helpPointerY <= r.bottom + HELP_NEAR_PADDING
+  if (near === helpNear) return
+  helpNear = near
+  helpSheet.dataset['near'] = near ? 'true' : 'false'
+}
+
+window.addEventListener(
+  'pointermove',
+  (e) => {
+    helpPointerX = e.clientX
+    helpPointerY = e.clientY
+    if (helpOpen) syncHelpProximity()
+  },
+  { capture: true, passive: true },
+)
+
+// ---------------------------------------------------------------------------
 // Replay Trim (GOAL "Replay Trim") — in/out handles on the timebar, fresh
-// capture flow only. Scrubbing outside the trim stays allowed; the trim only
-// decides what Save keeps.
+// capture flow only. The trim decides what Save keeps AND bounds the clock:
+// once set, scrubbing, playback and timeline drags stay inside it.
 // ---------------------------------------------------------------------------
 
 // Minimum kept range, so in/out can never cross or collapse to nothing.
@@ -659,6 +928,12 @@ function setTrimOut(ms: number): void {
 }
 
 function syncTrim(): void {
+  // THE TRIM RANGE IS THE BOUNDARY (GOAL "Editor Input System"): the clock
+  // itself is bounded, so wheel scrubbing, playback and timeline drags all
+  // clamp at the handles — and moving a handle past the playhead pulls the
+  // playhead (every display's, the board has one clock) into the new range.
+  // Untrimmed values (0 / null) hand the whole buffer back.
+  scrub?.setRange(trimInMs, trimOutMs)
   timebar.setTrim(trimInMs, trimOutMs)
   syncTrimDropChip()
 }
@@ -918,10 +1193,11 @@ function closeTextEditor(refocus = true): void {
 }
 
 textEditor.addEventListener('keydown', (e) => {
-  // F11 is a window shortcut, not an editing key: forwarded rather than
-  // swallowed, so the advertised "works from anywhere" holds while typing a
-  // box description (which is where re-edit spends most of its time).
-  if (e.key === 'F11') return
+  // F11 (window mode) and F1 (the shortcut sheet) are window shortcuts, not
+  // editing keys: forwarded rather than swallowed, so the advertised "works
+  // from anywhere" holds while typing a box description (which is where
+  // re-edit spends most of its time).
+  if (e.key === 'F11' || e.key === 'F1') return
   e.stopPropagation()
   if (e.key === 'Enter') {
     // Enter commits the box WITH whatever the header toggles were set to while
@@ -940,9 +1216,16 @@ textEditor.addEventListener('blur', (e) => {
   // is an edit of the box being created, not the end of it — the description
   // stays open and the pending box uncommitted. The header buttons also
   // preventDefault their mousedown, so they never take focus at all; this
-  // covers the one control that legitimately does: the custom-duration input.
+  // covers the two controls that legitimately do: the custom-duration input and
+  // the zoom slider (a range input cannot be dragged without focus — it hands
+  // the keyboard back on pointerup).
   const next = e.relatedTarget
-  if (next instanceof Node && (boxHeader.contains(next) || durationEditor.contains(next))) return
+  if (
+    next instanceof Node &&
+    (boxHeader.contains(next) || durationEditor.contains(next) || zoomControl.contains(next))
+  ) {
+    return
+  }
   commitTextEditor(false)
 })
 
@@ -1011,8 +1294,14 @@ function paintedSelectionId(): string | null {
  * themselves, so leaving it exactly where it is, is right.
  */
 function refocusEditing(): void {
+  // The custom-duration field is the one control here that is TYPED IN. Pulling
+  // focus off it mid-number would hand the digits to the shortcut ladder while
+  // its popover is still open and visible (Enter would save the pack), so a
+  // still-open duration editor keeps what it has.
+  const active = document.activeElement
+  if (durationEditorOpen && active instanceof Node && durationEditor.contains(active)) return
   if (textSession !== null && !textEditor.hidden) textEditor.focus()
-  else if (document.activeElement !== titleInput && document.activeElement !== noteInput) overlay.focus()
+  else if (active !== titleInput && active !== noteInput) overlay.focus()
 }
 
 /** Maps a point in ONE display's native pixels to #stage-relative screen px. */
@@ -1045,7 +1334,7 @@ function syncSelectionUi(): void {
   const pad = SELECTION_PAD * uiOf(on)
   const topLeft = toScreen(on, b.x - pad, b.y - pad)
   // #stage is overflow:hidden, and the board makes "the selection is somewhere
-  // off screen" routine: zoomToDisplay (1..9, a legend chip) does not clear the
+  // off screen" routine: zoomToDisplay (1..9) does not clear the
   // selection, so framing another display leaves the box outside the viewport
   // entirely. A header pinned to the stage edge then floats over a screen the
   // box is not on and points at nothing, which is worse than no header.
@@ -1261,9 +1550,9 @@ entireCaptureBtn.addEventListener('click', () => {
 // Keyboard shortcuts stay dead while typing here (stopPropagation keeps the
 // window handler out); Esc closes without applying.
 durationEditor.addEventListener('keydown', (e) => {
-  // Same as the text input: F11 belongs to the window, so it is forwarded to
-  // the window handler instead of dying in the popover.
-  if (e.key === 'F11') return
+  // Same as the text input: F11/F1 belong to the window, so they are forwarded
+  // to the window handler instead of dying in the popover.
+  if (e.key === 'F11' || e.key === 'F1') return
   e.stopPropagation()
   if (e.key === 'Escape') closeDurationEditor()
 })
@@ -1758,15 +2047,18 @@ window.addEventListener(
     const target = e.target
     if (
       target instanceof HTMLElement &&
-      (target.closest('#topbar') || target.closest('#durationEditor') || target instanceof HTMLInputElement)
+      (target.closest('#topbar') ||
+        target.closest('#durationEditor') ||
+        target instanceof HTMLInputElement)
     ) {
-      return // wheel over the top bar, the duration editor, or an inline input is not a scrub
+      return // wheel over the top bar, a popover, or an inline input is not a scrub
     }
     e.preventDefault()
     if (e.ctrlKey || e.metaKey) {
       viewport.zoomAt(e.clientX, e.clientY, e.deltaY < 0)
       syncPanCursor()
       schedulePaint() // stroke/handle sizes are zoom-dependent
+      syncZoomUi() // the top-bar control mirrors the gesture, always
       return
     }
     // ONE CLOCK: a wheel anywhere over the board scrubs every display's replay
@@ -1777,6 +2069,22 @@ window.addEventListener(
     if (deltaMs !== 0) scrub.scrubBy(deltaMs)
   },
   { passive: false },
+)
+
+// ANY pointer press while Space is held ends the play/pause tap, whatever that
+// press turns out to be. The pan handler below cannot be the one to clear it:
+// it returns early on a non-left button and while `panEnabled` is false — and
+// `panEnabled` is false in the state the editor OPENS in (fit zoom, no pan), so
+// the very gesture the shortcut sheet advertises, performed at the default
+// zoom, would otherwise start playback on release. Same for a Space-held
+// right-drag or a drag on the timebar, neither of which reaches the stage
+// handler at all.
+window.addEventListener(
+  'pointerdown',
+  () => {
+    if (spaceDown) spaceTap = false
+  },
+  { capture: true },
 )
 
 // Space+drag pan, captured on the stage so it wins over box interactions.
@@ -1819,18 +2127,27 @@ function syncPanCursor(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Keyboard: Enter save, Esc cancel-current/close, Ctrl+Z/Y, Delete, C color.
+// Keyboard: Enter save, Esc cancel-current/close, F1 shortcuts, Ctrl+Z/Y,
+// Delete, C color, I/O trim, Space play (held: pan) — the sheet documents them.
 // ---------------------------------------------------------------------------
 
 window.addEventListener('keydown', (e) => {
   // F11 toggles windowed/fullscreen from ANYWHERE in the editor (GOAL "Editor
   // Window Mode"): it is never an editing key (nor a composition key), so it is
-  // answered FIRST — before the inline-input, typing, read-only-display and
-  // unsaved-bar gates below. The inline inputs stopPropagation their keydowns,
-  // so they forward this one explicitly (see their handlers).
+  // answered FIRST — before the inline-input, unsaved-bar and typing gates
+  // below. The inline inputs stopPropagation their keydowns, so they forward
+  // this one explicitly (see their handlers).
   if (e.key === 'F11') {
     e.preventDefault()
     toggleWindowMode()
+    return
+  }
+  // F1 opens/closes the shortcut sheet (GOAL "Editor Chrome"), from anywhere
+  // and for the same reason F11 is answered here: it is never an editing key,
+  // and "press F1 for the shortcuts" has to hold while typing a description.
+  if (e.key === 'F1') {
+    e.preventDefault()
+    toggleHelp()
     return
   }
   // Inline inputs own their keys (their handlers stopPropagation; the contains
@@ -1852,11 +2169,16 @@ window.addEventListener('keydown', (e) => {
   }
   const typing = e.target === titleInput || e.target === noteInput
   if (e.key === 'Escape') {
-    // Cancel-current first: duration editor, then a zoomed board, then the
-    // unsaved-changes bar, then an active selection. A bare Esc with nothing in
-    // progress closes the editor — except in edit mode with unsaved changes,
-    // where it opens the [Save] [Save As New CapturePack] [Discard] bar
-    // instead of discarding.
+    // Cancel-current first: the duration editor, then a pending box, then a
+    // zoomed board, then the unsaved-changes bar, then an active selection. A
+    // bare Esc with nothing in progress closes the editor — except in edit mode
+    // with unsaved changes, where it opens the [Save] [Save As New
+    // CapturePack] [Discard] bar instead of discarding.
+    //
+    // The shortcut sheet is deliberately NOT in this ladder (GOAL "Editor
+    // Chrome": "no Esc handling"). It is a passive layer that may be left open
+    // for the whole session, so answering Esc would cost every user a second
+    // press to close the editor for a panel they were not interacting with.
     if (durationEditorOpen) {
       closeDurationEditor()
       return
@@ -1921,10 +2243,18 @@ window.addEventListener('keydown', (e) => {
     reprobeObjectHover()
   }
   if (e.key === ' ') {
-    // Space is the pan modifier; keep it away from focused buttons/scrolling.
+    // A FOCUSED CONTROL owns Space: on a button it is that button's native
+    // activation, and a keyboard user pressing Space on [?] or [Save] must get
+    // the button — not the pan modifier, and certainly not playback, which
+    // moves the clock and with it the frame snapshot.png is composed from. The
+    // top bar as a whole is excluded for the same reason (the zoom slider is
+    // not a button). Space belongs to the canvas, and only to the canvas.
+    if (e.target instanceof HTMLElement && e.target.closest('button, #topbar') !== null) return
+    // Space is the pan modifier; keep it away from page scrolling.
     e.preventDefault()
     if (!spaceDown) {
       spaceDown = true
+      spaceTap = true // until a pan starts, this press is still a play/pause tap
       syncPanCursor()
     }
     return
@@ -1971,9 +2301,15 @@ window.addEventListener('keydown', (e) => {
 
 window.addEventListener('keyup', (e) => {
   if (e.key === ' ') {
+    // A press that never panned is a PLAY/PAUSE tap. `spaceDown` gates it on
+    // the keydown having been accepted at all, so a space typed into the pack
+    // title or a box description never reaches playback.
+    const tapped = spaceDown && spaceTap
     spaceDown = false
+    spaceTap = false
     panning = null
     syncPanCursor()
+    if (tapped) scrub?.togglePlay()
   }
   if (e.key === 'Shift' && windowLevelKey) {
     windowLevelKey = false
@@ -1983,6 +2319,9 @@ window.addEventListener('keyup', (e) => {
 
 window.addEventListener('blur', () => {
   spaceDown = false
+  // The keyup will never arrive: this press ends here, and silently — a window
+  // switch is not a play command.
+  spaceTap = false
   panning = null
   syncPanCursor()
   // A modifier released while another window had focus never reaches keyup.
@@ -2050,6 +2389,22 @@ const timebar = new Timebar(timebarEl, {
 // IO
 // ---------------------------------------------------------------------------
 
+/**
+ * The exported frame's position, or null for the capture instant ("now").
+ *
+ * Clamped onto the MANIFEST replay clock, which is the clock payloadTrim()
+ * reports the trim range on: the parsed webm clock can run a few ms past
+ * replay_duration_ms (the same overrun every lifetime stamp is capped for), and
+ * a position past the clamped out point would be dropped to null when main
+ * rebases it onto the trimmed clock — turning a mid-replay frame into a claim
+ * that the still is the native capture instant.
+ */
+function exportSnapshotTMs(): number | null {
+  const ms = scrub?.exportTMs() ?? null
+  if (ms === null) return null
+  return Math.max(0, Math.min(ms, replayDurationMs))
+}
+
 async function doExport(kind: 'save' | 'saveAsNew' = 'save'): Promise<void> {
   if (!loaded || exporting) return
   exporting = true
@@ -2082,7 +2437,12 @@ async function doExport(kind: 'save' | 'saveAsNew' = 'save'): Promise<void> {
       snapshotPng,
       title: titleInput.value.trim(),
       note: noteInput.value.trim(),
-      snapshotTMs: scrub ? scrub.exportTMs() : null,
+      // On the SAME clock payloadTrim() reports the range on (the manifest's
+      // replay_duration_ms): the parsed video clock can run slightly past it, and
+      // a position outside the trim it was derived from would be rebased away to
+      // null main-side — i.e. the pack would claim "this is the capture instant"
+      // (SPEC §5.3) for a mid-replay frame.
+      snapshotTMs: exportSnapshotTMs(),
       trimStartMs: trim.start,
       trimEndMs: trim.end,
     }
@@ -2201,7 +2561,6 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
   resizeCanvases()
   loaded = true
   drawAllFrozen()
-  buildDisplayLegend()
   replayChip.textContent = hasReplay
     ? t('editor.replaySeconds', { seconds: Math.round(payload.replayDurationMs / 1000) })
     : t('editor.noReplay')
@@ -2254,6 +2613,12 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
   baselineSig = editSig()
   layout()
   schedulePaint()
+  // The shortcut sheet is ON BY DEFAULT (GOAL "Editor Chrome"), and remembers
+  // being turned off. Opened LAST: its rows describe what this capture can
+  // actually do — the time group only exists with a replay, display framing
+  // only on a multi-display board — so the board and the clock have to be in
+  // place first.
+  if (payload.showShortcutOverlay) openHelp()
   overlay.focus()
 }
 
@@ -2263,7 +2628,7 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
 // re-anchored to boxes that have just moved on screen. (The timebar is
 // percentage-positioned and follows on its own.)
 window.addEventListener('resize', () => {
-  layout()
+  layout() // also re-measures the zoom percentage and the help sheet's box
   syncSelectionUi()
   schedulePaint()
 })
@@ -2279,3 +2644,6 @@ window.editorBridge.onWindowMode((mode) => {
 })
 
 colorSwatch.style.background = state.color
+// The zoom control reads true from the first paint, not from the markup's
+// placeholder value: an editor that has not loaded a board yet is at Fit.
+syncZoomUi()

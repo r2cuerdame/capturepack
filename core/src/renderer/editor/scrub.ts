@@ -4,6 +4,18 @@
 // Position model: tMs in [0, durationMs]. "Now" (tMs = durationMs with
 // showingNative set) displays the native desktop snapshot, not a video frame,
 // and exports with snapshotTMs = null.
+//
+// THE TRIM RANGE IS THE BOUNDARY (GOAL "Editor Input System"): once in/out
+// points are set, the position model lives in [rangeStart, rangeEnd] instead of
+// [0, durationMs] — wheel scrubbing, playback and timeline drags all clamp at
+// the handles rather than wandering into footage that will not be saved, and
+// playback stops at the out point. With no trim set the range IS the whole
+// buffer, so every path below behaves exactly as it did before.
+//
+// The ONE thing the range does not move is "now": the native capture-instant
+// frame is the desktop grab, not a video position, so a trim never pushes the
+// editor off it (see clampIntoRange). Scrubbing away is the user's choice; a
+// trim alone must never change which pixels snapshot.png is made of.
 
 export interface ScrubHost {
   /** Paint the base image: the current video frame or the native snapshot. */
@@ -30,6 +42,11 @@ export class ScrubController {
   // ignore: they end at the file tail and would otherwise read as user scrubs.
   private workaroundSeek = false
   private durationAdopted = false
+  // Replay Trim (GOAL "Replay Trim" / "Editor Input System") mirrored from the
+  // editor: the KEPT range on this replay's clock. 0 / null = untrimmed, i.e.
+  // the whole buffer is in range.
+  private rangeInMs = 0
+  private rangeOutMs: number | null = null
 
   constructor(webm: ArrayBuffer, fallbackDurationMs: number, private readonly host: ScrubHost) {
     this.durationMs = Math.max(1, Math.round(fallbackDurationMs))
@@ -58,7 +75,11 @@ export class ScrubController {
     // that snap to "now" made wheel scrubbing keep jumping back to the latest
     // frame. Paused seeks must never move the position model.
     video.addEventListener('ended', () => {
-      if (this.playing) this.snapToNow()
+      if (!this.playing) return
+      // With an out point set, the end of the FILE is outside the kept range;
+      // the tick normally stops there first, and this is the backstop.
+      if (this.nowInRange) this.snapToNow()
+      else this.scrubTo(this.rangeEndMs)
     })
     video.addEventListener('error', () => {
       this.failed = true
@@ -71,6 +92,63 @@ export class ScrubController {
   /** True when the native snapshot (the capture instant) is displayed. */
   get atNow(): boolean {
     return this.showingNative
+  }
+
+  /** First position inside the kept range (0 while untrimmed). */
+  get rangeStartMs(): number {
+    return Math.max(0, Math.min(this.rangeInMs, this.durationMs))
+  }
+
+  /** Last position inside the kept range (the buffer end while untrimmed). */
+  get rangeEndMs(): number {
+    const end = this.rangeOutMs === null ? this.durationMs : Math.min(this.rangeOutMs, this.durationMs)
+    return Math.max(this.rangeStartMs, end)
+  }
+
+  /**
+   * Whether the capture instant ("now", the native snapshot) is still inside
+   * the kept range. With an out point set it is NOT: the out point becomes the
+   * effective end of the clock, so the editor never sits on a frozen desktop
+   * frame that the saved replay stops before.
+   */
+  private get nowInRange(): boolean {
+    return this.rangeOutMs === null || this.rangeOutMs >= this.durationMs
+  }
+
+  /**
+   * Mirrors the editor's trim state (in ms on this clock; outMs null = the
+   * untrimmed end) and re-clamps the current position into the new range —
+   * moving a handle past the playhead pulls the playhead with it. The one
+   * exception is "now": see clampIntoRange.
+   */
+  setRange(inMs: number, outMs: number | null): void {
+    this.rangeInMs = Math.max(0, inMs)
+    this.rangeOutMs = outMs
+    this.clampIntoRange()
+  }
+
+  /**
+   * Pulls the position back inside [rangeStart, rangeEnd]; a no-op inside it.
+   *
+   * "NOW" IS NOT FOOTAGE. The native capture-instant frame is the desktop grab
+   * snapshot.png is composed from at full resolution — it is not a position in
+   * the video that a trim could exclude. So setting an out point never forces
+   * the position off it: dragging the out handle one pixel would otherwise flip
+   * the exported still from the crisp native grab to a re-encoded VP9 frame the
+   * user never scrubbed to, and stamp it with a snapshot_t_ms to match — the
+   * pack's primary evidence, silently downgraded by "capture, trim the tail,
+   * Save". The trim still bounds every MOVEMENT (scrubTo clamps, playback stops
+   * at the out point), so once the user does scrub, the range owns the position.
+   */
+  private clampIntoRange(): void {
+    if (!this.ready) return
+    if (this.showingNative) return
+    if (this.tMs < this.rangeStartMs) this.scrubTo(this.rangeStartMs)
+    else if (this.tMs > this.rangeEndMs) this.scrubTo(this.rangeEndMs)
+  }
+
+  private clampToRange(ms: number): number {
+    return Math.max(this.rangeStartMs, Math.min(this.rangeEndMs, ms))
   }
 
   /**
@@ -121,8 +199,12 @@ export class ScrubController {
   scrubTo(ms: number): void {
     if (!this.ready) return
     this.stopPlayback()
-    const t = Math.max(0, Math.min(this.durationMs, ms))
-    if (t >= this.durationMs) {
+    // The trim handles are the walls: a position past one lands ON it.
+    const end = this.rangeEndMs
+    const t = this.clampToRange(ms)
+    // Only the UNTRIMMED end is "now" — with an out point set, the capture
+    // instant lies outside the kept range and the out frame is the end.
+    if (t >= end && this.nowInRange) {
       this.snapToNow()
       return
     }
@@ -138,10 +220,19 @@ export class ScrubController {
       this.pause()
       return
     }
-    if (this.showingNative) {
-      // Nothing lies ahead of "now": play restarts from the beginning.
-      this.video.currentTime = 0
-      this.tMs = 0
+    const start = this.rangeStartMs
+    // Nothing lies ahead of the range end: play restarts from the in point.
+    //
+    // The extra conditions are scoped to a TRIMMED replay on purpose, so the
+    // untrimmed path is bit-for-bit what it always was — resume from wherever
+    // the video is, and let 'ended' snap to "now". Untrimmed, `rangeEndMs` is
+    // `durationMs`, so an unscoped test would also restart from 0 for any
+    // position within 1 ms of the end (reachable by scrubbing, or by pausing
+    // playback that playbackTick clamped there).
+    const trimmed = this.rangeInMs > 0 || !this.nowInRange
+    if (this.showingNative || (trimmed && (this.tMs >= this.rangeEndMs - 1 || this.tMs < start))) {
+      this.video.currentTime = start / 1000
+      this.tMs = start
     }
     this.showingNative = false
     this.playing = true
@@ -165,12 +256,22 @@ export class ScrubController {
     this.playing = false
     cancelAnimationFrame(this.rafId)
     this.video.pause()
-    this.tMs = Math.min(this.video.currentTime * 1000, this.durationMs)
+    this.tMs = this.clampToRange(this.video.currentTime * 1000)
   }
 
   private playbackTick(): void {
     if (!this.playing) return
-    this.tMs = Math.min(this.video.currentTime * 1000, this.durationMs)
+    const raw = this.video.currentTime * 1000
+    // Playback STOPS at the out point (GOAL "Editor Input System"). Only when a
+    // trim is actually set: untrimmed, the tail is left to the 'ended' event
+    // exactly as before, so a video whose adopted duration undershoots the file
+    // by a few frames still plays to its real end and then snaps to "now".
+    if (!this.nowInRange && raw >= this.rangeEndMs) {
+      this.stopPlayback()
+      this.scrubTo(this.rangeEndMs)
+      return
+    }
+    this.tMs = this.clampToRange(raw)
     this.host.drawFrame(this.video)
     this.host.onState()
     this.rafId = requestAnimationFrame(() => this.playbackTick())
@@ -190,6 +291,9 @@ export class ScrubController {
     if (this.ready) return
     this.ready = true
     this.adoptDuration()
+    // A trim set before the video was ready (or before its real duration was
+    // parsed) still owns the position from the first usable frame on.
+    this.clampIntoRange()
     this.host.onState()
   }
 
@@ -206,6 +310,9 @@ export class ScrubController {
     // "At the end" is the explicit native-snapshot state, never inferred from
     // the numbers — a scrubbed position only gets clamped into range.
     this.tMs = this.showingNative ? ms : Math.min(this.tMs, ms)
+    // The trim range is expressed on this clock, so a new duration moves its
+    // end (an untrimmed out point IS the duration).
+    this.clampIntoRange()
     this.host.onState()
   }
 
@@ -504,6 +611,16 @@ export class BoardScrub {
     this.master.scrubTo(ms)
   }
 
+  /**
+   * The kept range (GOAL "Editor Input System": "the trim range is the
+   * boundary"). Only the MASTER needs it: it owns the one position on the
+   * board, and every follower is seeked from that position, so a clock that
+   * cannot leave [in, out] keeps every display inside it too.
+   */
+  setRange(inMs: number, outMs: number | null): void {
+    this.master.setRange(inMs, outMs)
+  }
+
   togglePlay(): void {
     this.master.togglePlay()
     // The master's own onState fires syncSlaves; this covers the start of
@@ -544,7 +661,14 @@ export class BoardScrub {
       for (const s of this.slaves) s.follow(this.master.tMs)
       return
     }
-    for (const s of this.slaves) s.seekTo(this.master.tMs)
+    // The master is NOT playing, so no follower may be either — playback that
+    // ends on its own (the trim out point, the end of the buffer) never goes
+    // through togglePlay/pause, and a still-rolling follower would drift off
+    // the one board moment within a frame.
+    for (const s of this.slaves) {
+      s.pause()
+      s.seekTo(this.master.tMs)
+    }
   }
 }
 
