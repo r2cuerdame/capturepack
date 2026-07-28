@@ -781,6 +781,11 @@ a new folder preserving the original; Discard restores the last saved state.
 Create ZIP (choose included files; option to exclude the original replay) · Copy Prompt;
 secondary: Re-render · Save As · Rename · Delete.
 
+**Card buttons say what they do.** The primary action is labelled **Edit** — it reopens the
+pack in the editor, and "Open" left users guessing whether it opened a folder, a video, or
+the editor. **Open folder** is a first-class button next to it, not buried in the overflow
+menu: reaching the files on disk is one of the two things people come to History for.
+
 ---
 
 ## Annotation Timeline & Lifetime
