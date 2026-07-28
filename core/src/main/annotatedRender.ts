@@ -31,6 +31,10 @@ export interface AnnotatedRenderJob {
   // subset, so the renderer must not derive the numbering from it — see
   // RenderStartPayload.displayNumbers.
   displayNumbers?: Array<[string, number]>
+  // The pack's focused display index — what an ABSENT `display` means, here and
+  // on an annotation (SPEC §8.8). Only needed once a box can follow its object
+  // onto another screen (#86); absent in a single-display pack.
+  focusedDisplay?: number
   width: number
   height: number
   fps: number
@@ -53,6 +57,8 @@ export interface KeyframeStillJob {
   annotations: Annotation[]
   /** Same rule as AnnotatedRenderJob.displayNumbers. */
   displayNumbers?: Array<[string, number]>
+  /** Same rule as AnnotatedRenderJob.focusedDisplay. */
+  focusedDisplay?: number
   width: number
   height: number
   docLanguage?: Language
@@ -166,6 +172,8 @@ async function renderAnnotatedReplay(handle: PackHandle, job: AnnotatedRenderJob
     replayMimeType: job.replayMimeType,
     annotations: job.annotations,
     ...(job.displayNumbers === undefined ? {} : { displayNumbers: job.displayNumbers }),
+    ...(job.display === undefined ? {} : { display: job.display }),
+    ...(job.focusedDisplay === undefined ? {} : { focusedDisplay: job.focusedDisplay }),
     width: job.width,
     height: job.height,
     fps: job.fps,
@@ -258,6 +266,8 @@ async function renderKeyframeStill(handle: PackHandle, job: KeyframeStillJob): P
     snapshotPng: toArrayBuffer(job.snapshotPng),
     annotations: job.annotations,
     ...(job.displayNumbers === undefined ? {} : { displayNumbers: job.displayNumbers }),
+    ...(job.display === undefined ? {} : { display: job.display }),
+    ...(job.focusedDisplay === undefined ? {} : { focusedDisplay: job.focusedDisplay }),
     width: job.width,
     height: job.height,
     fps: 1, // unused without a recorder

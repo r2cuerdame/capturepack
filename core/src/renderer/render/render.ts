@@ -77,6 +77,23 @@ interface Overlay {
   ordered: Annotation[]
   numbers: Map<string, number>
   ui: number
+  /** Which display this job draws; undefined = the focused one. */
+  display: number | undefined
+  /** What an absent display index MEANS. Undefined = single-display pack. */
+  focused: number | undefined
+}
+
+/**
+ * Whether a RESOLVED annotation is on the screen this job renders.
+ *
+ * An absent `display` means the FOCUSED one — on the job and on the annotation
+ * alike (SPEC §8.8) — so both are resolved through `focused` before comparing.
+ * Getting that wrong would silently drop every tracked box from the focused
+ * display's own video, which is the one most people watch.
+ */
+function onThisDisplay(a: Annotation, overlay: Overlay): boolean {
+  if (overlay.focused === undefined) return true // single-display pack: one screen, every box
+  return (a.display ?? overlay.focused) === (overlay.display ?? overlay.focused)
 }
 
 function makeOverlay(job: RenderStartPayload, outputWidth: number, outputHeight: number): Overlay {
@@ -105,6 +122,9 @@ function makeOverlay(job: RenderStartPayload, outputWidth: number, outputHeight:
                 ...a.tracking,
                 samples: a.tracking.samples.map((s) => ({
                   t_ms: s.t_ms,
+                  // Scaled coordinates, UNSCALED identity: which screen a
+                  // sample is on is not a length.
+                  ...(s.display === undefined ? {} : { display: s.display }),
                   x: s.x * scaleX,
                   y: s.y * scaleY,
                   width: s.width * scaleX,
@@ -128,6 +148,8 @@ function makeOverlay(job: RenderStartPayload, outputWidth: number, outputHeight:
     // Overlay sizes scale with the capture resolution so a 4K replay does not
     // get hairline borders.
     ui: Math.max(1, outputWidth / 1280),
+    display: job.display,
+    focused: job.focusedDisplay,
   }
 }
 
@@ -149,7 +171,14 @@ function drawOverlay(
   const alive =
     tMs === null
       ? overlay.ordered
-      : overlay.ordered.filter((a) => visibleAt(a, tMs)).map((a) => annotationAt(a, tMs))
+      : overlay.ordered
+          .filter((a) => visibleAt(a, tMs))
+          .map((a) => annotationAt(a, tMs))
+          // A tracked box follows its object onto other screens (#86), and this
+          // job draws ONE screen. A box currently on the neighbour's monitor
+          // belongs in the neighbour's video, not painted at foreign
+          // coordinates into this one.
+          .filter((a) => onThisDisplay(a, overlay))
   for (const a of alive) {
     if (a.blur) pixelate(ctx, canvas, a)
   }

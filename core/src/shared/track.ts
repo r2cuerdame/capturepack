@@ -22,27 +22,42 @@ import type { Annotation, AnnotationBounds, AnnotationTrackSample } from './type
  * not blink out — its LIFETIME is what says when it stops (clamped to the
  * object's own end, #77), not the sample list.
  */
-export function trackedBoundsAt(a: Annotation, tMs: number): AnnotationBounds | null {
+export function trackedSampleAt(a: Annotation, tMs: number): AnnotationTrackSample | null {
   const samples = a.tracking?.samples
   if (a.tracking?.enabled !== true || samples === undefined || samples.length === 0) return null
-  if (samples.length === 1 || tMs <= samples[0]!.t_ms) return boundsOf(samples[0]!)
+  if (samples.length === 1 || tMs <= samples[0]!.t_ms) return samples[0]!
   const last = samples[samples.length - 1]!
-  if (tMs >= last.t_ms) return boundsOf(last)
+  if (tMs >= last.t_ms) return last
   for (let i = 1; i < samples.length; i += 1) {
     const end = samples[i]!
     if (end.t_ms < tMs) continue
     const start = samples[i - 1]!
     const span = end.t_ms - start.t_ms
-    if (span <= 0) return boundsOf(end)
+    if (span <= 0) return end
+    // A CROSSING IS A JUMP, NOT A BLEND. The two samples are pixels of two
+    // DIFFERENT images, so there is no rectangle "between" them — averaging
+    // them would produce coordinates that mean nothing on either screen. The
+    // crossing takes effect at the sample that observed it.
+    if (start.display !== end.display) return end
     const r = (tMs - start.t_ms) / span
     return {
-      x: Math.round(start.x + (end.x - start.x) * r),
-      y: Math.round(start.y + (end.y - start.y) * r),
-      width: Math.round(start.width + (end.width - start.width) * r),
-      height: Math.round(start.height + (end.height - start.height) * r),
+      t_ms: tMs,
+      ...(end.display === undefined ? {} : { display: end.display }),
+      x: start.x + (end.x - start.x) * r,
+      y: start.y + (end.y - start.y) * r,
+      width: start.width + (end.width - start.width) * r,
+      height: start.height + (end.height - start.height) * r,
     }
   }
-  return boundsOf(last)
+  return last
+}
+
+/**
+ * The rectangle a tracked box occupies at `tMs`, or null when it has no track.
+ */
+export function trackedBoundsAt(a: Annotation, tMs: number): AnnotationBounds | null {
+  const s = trackedSampleAt(a, tMs)
+  return s === null ? null : boundsOf(s)
 }
 
 /**
@@ -50,17 +65,30 @@ export function trackedBoundsAt(a: Annotation, tMs: number): AnnotationBounds | 
  *
  * Returns the annotation itself when it has no track, so the untracked path is
  * byte-identical to what it always was and costs nothing. When it does have
- * one, the copy carries the tracked rectangle in `bounds` — which is what lets
- * every existing drawing, blurring, selection and hit-test routine keep reading
- * `bounds` and be right, with no time argument threaded through any of them.
+ * one, the copy carries the tracked rectangle in `bounds` — and, when the
+ * object has crossed to another monitor, that sample's `display` too. Both are
+ * the fields every existing routine already reads to decide where a box goes,
+ * so drawing, blurring, selection and hit-testing follow the object across
+ * screens without a line of change and without a time argument threaded
+ * through any of them (#86).
  *
  * The copy is a VIEW. Editing writes to the stored annotation, never to this.
  */
 export function annotationAt(a: Annotation, tMs: number): Annotation {
-  const bounds = trackedBoundsAt(a, tMs)
-  return bounds === null ? a : { ...a, bounds }
+  const s = trackedSampleAt(a, tMs)
+  if (s === null) return a
+  return {
+    ...a,
+    bounds: boundsOf(s),
+    ...(s.display === undefined ? {} : { display: s.display }),
+  }
 }
 
 function boundsOf(s: AnnotationTrackSample): AnnotationBounds {
-  return { x: s.x, y: s.y, width: s.width, height: s.height }
+  return {
+    x: Math.round(s.x),
+    y: Math.round(s.y),
+    width: Math.round(s.width),
+    height: Math.round(s.height),
+  }
 }

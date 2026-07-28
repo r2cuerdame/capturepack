@@ -90,5 +90,52 @@ console.log('\nA single-sample track (an object that never moved)')
     trackedBoundsAt(still, 0).x === 7 && trackedBoundsAt(still, 99999).x === 7)
 }
 
+console.log('\nAn object dragged onto another monitor')
+{
+  const crossing = box(
+    {
+      enabled: true,
+      samples: [
+        { t_ms: 1000, display: 2, x: 200, y: 0, width: 100, height: 50 },
+        { t_ms: 1100, display: 2, x: 100, y: 0, width: 100, height: 50 },
+        // Same window, other screen: these numbers are pixels of a DIFFERENT image.
+        { t_ms: 1200, display: 1, x: 900, y: 0, width: 100, height: 50 },
+        { t_ms: 1300, display: 1, x: 800, y: 0, width: 100, height: 50 },
+      ],
+    },
+    { x: 200, y: 0, width: 100, height: 50 },
+  )
+
+  check('before the crossing it is on the screen it started on',
+    annotationAt(crossing, 1050).display === 2)
+  check('and interpolates there', trackedBoundsAt(crossing, 1050).x === 150,
+    JSON.stringify(trackedBoundsAt(crossing, 1050)))
+  check('after the crossing it is on the other screen',
+    annotationAt(crossing, 1250).display === 1)
+  check('and interpolates there', trackedBoundsAt(crossing, 1250).x === 850,
+    JSON.stringify(trackedBoundsAt(crossing, 1250)))
+
+  // The two ends of the crossing segment are in different coordinate spaces:
+  // averaging them names a rectangle that exists on neither screen.
+  const mid = annotationAt(crossing, 1150)
+  check('the crossing itself is a jump, never a blend',
+    mid.display === 1 && mid.bounds.x === 900,
+    `got display ${mid.display} x=${mid.bounds.x}`)
+}
+
+console.log('\nA track whose samples name no display (one screen)')
+{
+  const plain = box({
+    enabled: true,
+    samples: [
+      { t_ms: 0, x: 0, y: 0, width: 100, height: 50 },
+      { t_ms: 100, x: 100, y: 0, width: 100, height: 50 },
+    ],
+  })
+  check("leaves the annotation's own display alone",
+    annotationAt(plain, 50).display === undefined)
+  check('and still interpolates', trackedBoundsAt(plain, 50).x === 50)
+}
+
 console.log(`\nresult: ${failed === 0 ? 'OK' : 'BROKEN'} — ${passed} passed, ${failed} failed\n`)
 process.exit(failed === 0 ? 0 : 1)

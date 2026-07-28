@@ -112,6 +112,18 @@ export interface AnnotationBounds {
 /** One rectangle the tracked object occupied, at one moment of the pack clock. */
 export interface AnnotationTrackSample {
   t_ms: number
+  /**
+   * Which display these numbers are pixels of — absent = the annotation's own
+   * `display`.
+   *
+   * A window dragged to another monitor is still the same window, so a track
+   * follows it there (#86). Each sample therefore says which image it is
+   * measured in, and the box moves between screens with the object while every
+   * rectangle stays unambiguous. The ANNOTATION's `display` is unchanged by
+   * this: it is where the box was drawn, and where a reader that ignores
+   * tracking puts it.
+   */
+  display?: number
   x: number
   y: number
   width: number
@@ -126,9 +138,10 @@ export interface AnnotationTrackSample {
 // so. Measured on a real capture: a picked box held for ten seconds ended up on
 // a different window entirely, half a screen away.
 //
-// `samples` is the object's path: ascending on the pack clock, in the same
-// display's snapshot pixels as `bounds` (SPEC §8.2, §8.8). Between two samples a
-// reader interpolates linearly; outside them there is nothing to follow.
+// `samples` is the object's path: ascending on the pack clock, in the snapshot
+// pixels of each sample's own display (SPEC §8.2, §8.8) — which is `bounds`'s
+// display unless the sample says otherwise. Between two samples a reader
+// interpolates linearly; outside them there is nothing to follow.
 //
 // `bounds` REMAINS the box's rectangle at its representative instant, so a
 // reader that ignores `tracking` still draws a correct box — which is what lets
@@ -384,7 +397,18 @@ export function annotationsOnDisplay(
   focusedIndex: number,
   declared?: ReadonlySet<number>,
 ): Annotation[] {
-  return annotations.filter((a) => annotationDisplayIndex(a, focusedIndex, declared) === index)
+  return annotations.filter((a) => {
+    if (annotationDisplayIndex(a, focusedIndex, declared) === index) return true
+    // A TRACKED BOX BELONGS TO EVERY SCREEN ITS OBJECT VISITS (#86). The window
+    // was dragged onto this display, so this display's rendering has to carry
+    // the box — otherwise the video of the screen the window moved TO is the
+    // one view of the capture where the annotation is missing. Each renderer
+    // still draws it only while the resolved sample is on its own screen.
+    return (
+      a.tracking?.enabled === true &&
+      (a.tracking.samples ?? []).some((s) => s.display === index)
+    )
+  })
 }
 
 /**

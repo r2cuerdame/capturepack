@@ -491,6 +491,8 @@ export interface ContextFrameRequest {
 /** One rectangle on one display's snapshot, at one moment of the pack clock. */
 export interface ObjectTrackSample {
   tMs: number
+  /** Which display these numbers are pixels of — a window can cross screens (#86). */
+  display: number
   x: number
   y: number
   width: number
@@ -507,6 +509,7 @@ export interface ObjectTrackSample {
  * being recorded, and a box has nothing to follow.
  */
 export interface ObjectTrackResult {
+  /** The display the object STARTED on; individual samples may name another. */
   display: number
   samples: ObjectTrackSample[]
   /**
@@ -577,6 +580,16 @@ export interface RenderStartPayload {
   // which all number globally. Absent = single-display job: the subset IS the
   // whole set and the renderer computes it itself.
   displayNumbers?: Array<[string, number]>
+  // WHICH display this job is drawing (SPEC §5.6 index), absent = the focused
+  // one. Only tracked boxes need it: a box follows its object onto another
+  // screen (#86), so a job has to know which rectangles are its own to draw and
+  // which belong to the neighbour's video.
+  display?: number
+  // The pack's focused display index, which is what an ABSENT `display` means —
+  // on the job above and on an annotation alike (SPEC §8.8). Carried so the two
+  // can be compared without the renderer guessing. Absent in a single-display
+  // pack, where every box is on the one screen and there is nothing to compare.
+  focusedDisplay?: number
   // Canvas size = snapshot reference size (annotation coordinate space)
   width: number
   height: number

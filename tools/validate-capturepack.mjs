@@ -1111,23 +1111,32 @@ function validateAnnotations(a, snapshotDims, replay, replayDurationMs, displayI
         bad++;
       } else if (ann.tracking.enabled) {
         // FOLLOWING IS REAL FROM 0.2.0 (SPEC §8.3). `samples` is the object's
-        // path: ascending on the pack clock, in the same display's snapshot
-        // pixels as `bounds`. A tracked box that carries no path is a claim
+        // path: ascending on the pack clock, in the snapshot pixels of each
+        // sample's own display. A tracked box that carries no path is a claim
         // with nothing behind it, and a reader honouring `enabled` would draw
         // it nowhere.
+        //
+        // `annDisplay` is what an absent sample display means — the box's own
+        // screen, which is the focused one when the box does not say (SPEC §8.8).
+        const annDisplay = typeof ann.display === "number" ? ann.display : null;
         const samples = ann.tracking.samples;
         if (!Array.isArray(samples) || samples.length === 0) {
           fail(`${label}.tracking.enabled is true but tracking.samples is missing or empty — a tracked box MUST carry the path it follows (SPEC §8.3)`);
         } else {
           let previous = -Infinity;
           let bad = 0;
+          let screens = new Set();
           for (const s of samples) {
             if (!isObj(s) || ["t_ms","x","y","width","height"].some((k) => typeof s[k] !== "number" || !Number.isFinite(s[k]))) { bad += 1; continue; }
             if (s.t_ms < previous) bad += 1;
+            // A sample may name the display its numbers are pixels of: a window
+            // dragged to another monitor is still the same window (SPEC §8.3).
+            if (s.display !== undefined && (!Number.isInteger(s.display) || s.display < 1)) bad += 1;
+            else screens.add(s.display ?? annDisplay);
             previous = s.t_ms;
           }
           if (bad > 0) fail(`${label}.tracking.samples has ${bad} sample(s) that are not finite {t_ms,x,y,width,height} in ascending t_ms (SPEC §8.3)`);
-          else pass(`${label}.tracking: ${samples.length} sample(s), ${samples[0].t_ms}..${samples[samples.length-1].t_ms} ms — the box follows its object (SPEC §8.3)`);
+          else pass(`${label}.tracking: ${samples.length} sample(s), ${samples[0].t_ms}..${samples[samples.length-1].t_ms} ms across ${screens.size} display(s) — the box follows its object (SPEC §8.3)`);
         }
       } else if (false) {
         note(`${label}.tracking.enabled is true — tracking is reserved in format 0.1.0 (MUST be false); readers treat the box as untracked (SPEC §8.3)`);

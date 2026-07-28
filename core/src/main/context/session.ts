@@ -192,16 +192,23 @@ export class ContextSession {
         if (samples.length > 0) endedAtMs = observation.tMs
         break
       }
-      // An annotation belongs to exactly one display (SPEC 8.8) and its numbers
-      // are that display's snapshot pixels. A window dragged onto another screen
-      // changes which image its coordinates mean, so the track ends where it
-      // leaves rather than silently changing what its numbers refer to.
+      // A WINDOW DRAGGED ONTO ANOTHER SCREEN IS STILL THE SAME WINDOW (#86).
+      //
+      // This used to end the track there, because an annotation belongs to
+      // exactly one display (SPEC §8.8) and its numbers are that display's
+      // snapshot pixels — so continuing would have silently changed what the
+      // coordinates referred to. Correct about the format, wrong about the
+      // user: they drag a window to the other monitor and the box stops
+      // following the thing it names, which is the whole defect this exists to
+      // fix.
+      //
+      // So each SAMPLE carries the display its numbers are in. The box moves
+      // between screens with the window, and every rectangle still says exactly
+      // which image it is pixels of. `display` on the annotation stays what it
+      // always was: where the box was drawn, and where a reader that ignores
+      // tracking puts it.
       if (display === null) display = window.display
-      else if (window.display !== display) {
-        endedAtMs = observation.tMs
-        break
-      }
-      samples.push({ tMs: observation.tMs, ...window.bounds })
+      samples.push({ tMs: observation.tMs, display: window.display, ...window.bounds })
     }
 
     if (display === null || samples.length === 0) return null
