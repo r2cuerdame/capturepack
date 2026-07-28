@@ -488,6 +488,8 @@ class SlaveReplay {
   private pendingSeekMs: number | null = null
   private seekInFlight = false
   private lastTargetMs: number | null = null
+  /** Raw media time of the frame this screen is actually showing (#88). */
+  private presentedRawMs: number | null = null
   private settleWaiters: Array<() => void> = []
   private workaroundSeek = false
   private durationAdopted = false
@@ -506,6 +508,9 @@ class SlaveReplay {
     video.muted = true
     video.preload = 'auto'
     video.src = URL.createObjectURL(new Blob([webm], { type: mimeType }))
+    trackPresentedFrames(video, (mediaTimeMs) => {
+      this.presentedRawMs = mediaTimeMs
+    })
     video.addEventListener(
       'loadedmetadata',
       () => {
@@ -542,6 +547,20 @@ class SlaveReplay {
   }
 
   /** Seeks to a PACK-clock position. Repeated identical targets are free. */
+  /**
+   * The pack time of the frame THIS SCREEN is showing, or null when it has not
+   * presented one (#88).
+   *
+   * EVERY SCREEN HAS ITS OWN FRAMES. The recorders are independent, so seeking
+   * two replays to the same pack time lands them on two different moments — up
+   * to a frame apart, and this recorder's gaps have been measured at up to a
+   * second. A box drawn on this screen has to be resolved on THIS clock, or it
+   * is placed for a picture the neighbour is showing.
+   */
+  get presentedMs(): number | null {
+    return this.presentedRawMs === null ? null : this.presentedRawMs - this.offsetMs
+  }
+
   seekTo(packMs: number): void {
     const target = this.clamp(packMs + this.offsetMs)
     if (!this.showingNative && this.lastTargetMs === target) return
@@ -657,6 +676,8 @@ export interface BoardReplayInput {
 export class BoardScrub {
   private readonly master: ScrubController
   private readonly slaves: SlaveReplay[] = []
+  /** displayIndex -> that screen's replay, for its own frame clock (#88). */
+  private readonly byDisplay = new Map<number, SlaveReplay>()
   private readonly focusedIndex: number
 
   constructor(replays: readonly BoardReplayInput[], host: BoardScrubHost) {
@@ -679,10 +700,12 @@ export class BoardScrub {
     )
     for (const r of replays) {
       if (r.focused) continue
+      const slave = new SlaveReplay(r.webm, r.mimeType, r.durationMs, r.offsetMs, (source) =>
+        host.drawFrame(r.displayIndex, source),
+      )
+      this.byDisplay.set(r.displayIndex, slave)
       this.slaves.push(
-        new SlaveReplay(r.webm, r.mimeType, r.durationMs, r.offsetMs, (source) =>
-          host.drawFrame(r.displayIndex, source),
-        ),
+        slave,
       )
     }
   }
@@ -701,6 +724,24 @@ export class BoardScrub {
    */
   get presentedMs(): number {
     return this.master.presentedMs
+  }
+
+  /**
+   * The pack time THIS SCREEN is showing (#88).
+   *
+   * EVERY SCREEN HAS ITS OWN FRAMES. The recorders run independently, so
+   * seeking two replays to the same pack position lands them on two different
+   * moments — and this recorder's gaps have been measured at up to a second. A
+   * box drawn on a screen must be resolved on THAT screen's clock, or it is
+   * placed for a picture the neighbour is showing.
+   *
+   * Falls back to the board's own position for a display with no replay of its
+   * own (it shows a frozen snapshot, which has no clock to differ on) and for a
+   * renderer that cannot report a presentation time.
+   */
+  presentedMsFor(displayIndex: number): number {
+    if (displayIndex === this.focusedIndex) return this.master.presentedMs
+    return this.byDisplay.get(displayIndex)?.presentedMs ?? this.master.presentedMs
   }
 
   get durationMs(): number {

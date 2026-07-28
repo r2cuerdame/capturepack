@@ -75,21 +75,22 @@ console.log('\nA window dragged at a constant speed')
   const line = timeline(samples)
 
   // Worst case for nearest-sample is the midpoint between two samples.
-  const truthAt = (t) => t * 2.5
-  let worst = 0
-  for (let t = 0; t <= 1000; t += 7) worst = Math.max(worst, Math.abs(xAt(line, t) - truthAt(t)))
 
-  check(
-    'every off-grid time is reconstructed within 1 px',
-    worst <= 1,
-    `worst error ${worst.toFixed(1)} px (nearest-sample would be ~125 px)`,
-  )
-  check('a time exactly on a sample is unchanged', xAt(line, 300) === 750)
-  check('the answer is flagged as an estimate', line.restore(350).accuracy.interpolated === true)
-  check(
-    'an on-sample answer is NOT flagged as an estimate',
-    line.restore(300).accuracy.interpolated === undefined,
-  )
+  // #89: no estimates. Every answer is a rectangle that was recorded, so the
+  // error is bounded by half a sample interval and the accuracy says how far.
+  let offGrid = 0
+  for (let t = 0; t <= 1000; t += 7) {
+    const x = xAt(line, t)
+    if (!samples.some((s) => s.surfaces[0].bounds.x === x)) offGrid += 1
+  }
+  check('every answer is a rectangle that was actually recorded', offGrid === 0,
+    `${offGrid} answers were not in the record`)
+  check('a time exactly on a sample is that sample', xAt(line, 300) === 750)
+  check('nothing is ever flagged as an estimate',
+    line.restore(350).accuracy.interpolated === undefined)
+  check('and the accuracy still says how far off it is',
+    line.restore(350).accuracy.errorMs === 50,
+    String(line.restore(350).accuracy.errorMs))
 }
 
 // ---------------------------------------------------------------------------
@@ -109,7 +110,6 @@ console.log('\nA window that jumped (snap, maximise, another monitor)')
     mid === 100 || mid === 2000,
     `got ${mid}, which is a position the window never occupied`,
   )
-  check('a jumped answer is not flagged as an estimate', line.restore(150).accuracy.interpolated === undefined)
 }
 
 // ---------------------------------------------------------------------------
@@ -119,7 +119,8 @@ console.log('\nA window that changed shape')
     { tMs: 0, surfaces: [surface(100, 400, 1440, 952)] },
     { tMs: 100, surfaces: [surface(100, 400, 1900, 1200)] },
   ])
-  check('a resize is not treated as a translation', xAt(line, 50) === 100)
+  check('a resize invents no intermediate size',
+    [1440, 1900].includes(line.restore(50).surfaces[0].bounds.width))
 }
 
 // ---------------------------------------------------------------------------
@@ -132,7 +133,7 @@ console.log('\nA gap the ring never filled')
     { tMs: 900, surfaces: [surface(500, 400)] },
   ])
   const mid = xAt(line, 450)
-  check('a gap wider than the ceiling falls back to nearest', mid === 100 || mid === 500, `got ${mid}`)
+  check('a wide gap is answered by one of its ends', mid === 100 || mid === 500, `got ${mid}`)
 }
 
 // ---------------------------------------------------------------------------
@@ -144,7 +145,8 @@ console.log('\nSurfaces that are not in both samples')
   ])
   const restored = line.restore(50)
   const w1 = restored.surfaces.find((s) => s.surfaceId === 'w1')
-  check('a window present in both is still interpolated', w1.bounds.x === 200, `got ${w1.bounds.x}`)
+  check('a window present in both answers from one of them',
+    w1.bounds.x === 100 || w1.bounds.x === 300, `got ${w1.bounds.x}`)
   const w2 = restored.surfaces.find((s) => s.surfaceId === 'w2')
   check('a window that appeared mid-gap is left where it was observed', w2 === undefined || w2.bounds.x === 50)
 }

@@ -779,8 +779,37 @@ function annotationVisibleNow(a: Annotation): boolean {
  * with the frame it is drawn over, and those differ by up to one frame gap.
  */
 function nowMs(): number {
+  return presentedOn(focusedDisplayIndex)
+}
+
+/**
+ * The pack time ONE SCREEN is showing (#88).
+ *
+ * Every screen has its own frames: the recorders run independently, so two
+ * replays seeked to the same position land on two different moments. A box
+ * drawn on a screen is resolved on THAT screen's clock or it is placed for a
+ * picture the neighbour is showing.
+ */
+function presentedOn(displayIndex: number): number {
   if (!scrub) return replayDurationMs
-  return scrub.atNow ? replayDurationMs : Math.min(scrub.presentedMs, replayDurationMs)
+  if (scrub.atNow) return replayDurationMs
+  return Math.min(scrub.presentedMsFor(displayIndex), replayDurationMs)
+}
+
+/**
+ * One annotation as it should be DRAWN, on the clock of the screen it is on.
+ *
+ * Two passes, because a tracked box can MOVE between screens: resolving it
+ * needs a clock, and which clock depends on where it resolved to. The first
+ * pass asks the screen it is stored on, and if that says it is somewhere else
+ * now, the second asks that screen instead. Both clocks are within a frame of
+ * each other, so this converges immediately and never oscillates.
+ */
+function resolveForBoard(a: Annotation): Annotation {
+  const stored = displayIndexOf(a)
+  const first = annotationAt(a, presentedOn(stored))
+  const landed = displayIndexOf(first)
+  return landed === stored ? first : annotationAt(a, presentedOn(landed))
 }
 
 /**
@@ -793,9 +822,8 @@ function nowMs(): number {
  * `state.annotations`, which is untouched by this.
  */
 function visibleAnnotations(): readonly Annotation[] {
-  const t = nowMs()
   const live = scrub ? state.annotations.filter(annotationVisibleNow) : state.annotations
-  return live.map((a) => annotationAt(a, t))
+  return live.map(resolveForBoard)
 }
 
 /** The boxes of ONE display that apply at the current board position. */
@@ -1597,7 +1625,7 @@ function selectedVisibleAnnotation(): Annotation | null {
  */
 function selectedPaintedAnnotation(): Annotation | null {
   const a = selectedVisibleAnnotation()
-  return a === null ? null : annotationAt(a, nowMs())
+  return a === null ? null : resolveForBoard(a)
 }
 
 /**

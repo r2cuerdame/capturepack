@@ -6,55 +6,40 @@
 // with the picture of itself — which is the exact failure this project keeps
 // removing. One function, three callers.
 //
-// The interpolation rule is the same one Core uses between surface samples: a
-// straight line between the two the requested time falls between. It is stated
-// in SPEC §8.3 as part of the format, because a reader that rounds to the
-// nearest sample instead would draw a box that visibly steps while the window
-// it names moves smoothly.
+// EVERY RECTANGLE IT RETURNS WAS OBSERVED (#89). It picks the nearest recorded
+// sample and hands it back unchanged; it never averages two of them. An average
+// is a rectangle nobody saw, written in the same numbers as a measurement, and
+// a reader has no way to tell the two apart. Since the ring samples once per
+// captured frame (#87), every picture a pack can show has an observation of its
+// own — so there is nothing left to average, and averaging anyway could only
+// move a box off the window it names.
 import type { Annotation, AnnotationBounds, AnnotationTrackSample } from './types'
 
 /**
- * The rectangle a tracked box occupies at `tMs`, or null when it has no track.
+ * The nearest RECORDED sample to `tMs`, unchanged, or null when the box has no
+ * track.
  *
- * Before the first sample and after the last, the box is held at the end it is
- * nearest rather than being hidden: the track says where the object was while
- * it was recorded, and a box whose lifetime reaches a little past that should
- * not blink out — its LIFETIME is what says when it stops (clamped to the
- * object's own end, #77), not the sample list.
+ * Before the first sample and after the last that is the end it is nearest to,
+ * so a box whose lifetime reaches a little past the track does not blink out —
+ * its LIFETIME says when it stops (clamped to the object's own end, #77), not
+ * the sample list.
  */
 export function trackedSampleAt(a: Annotation, tMs: number): AnnotationTrackSample | null {
   const samples = a.tracking?.samples
   if (a.tracking?.enabled !== true || samples === undefined || samples.length === 0) return null
-  if (samples.length === 1 || tMs <= samples[0]!.t_ms) return samples[0]!
-  const last = samples[samples.length - 1]!
-  if (tMs >= last.t_ms) return last
-  for (let i = 1; i < samples.length; i += 1) {
-    const end = samples[i]!
-    if (end.t_ms < tMs) continue
-    const start = samples[i - 1]!
-    const span = end.t_ms - start.t_ms
-    if (span <= 0) return end
-    // A CROSSING IS A JUMP, NOT A BLEND. The two samples are pixels of two
-    // DIFFERENT images, so there is no rectangle "between" them — averaging
-    // them would produce coordinates that mean nothing on either screen. The
-    // crossing takes effect at the sample that observed it.
-    if (start.display !== end.display) return end
-    const r = (tMs - start.t_ms) / span
-    return {
-      t_ms: tMs,
-      ...(end.display === undefined ? {} : { display: end.display }),
-      x: start.x + (end.x - start.x) * r,
-      y: start.y + (end.y - start.y) * r,
-      width: start.width + (end.width - start.width) * r,
-      height: start.height + (end.height - start.height) * r,
+  let best = samples[0]!
+  let bestGap = Math.abs(best.t_ms - tMs)
+  for (const s of samples) {
+    const gap = Math.abs(s.t_ms - tMs)
+    if (gap < bestGap) {
+      best = s
+      bestGap = gap
     }
   }
-  return last
+  return best
 }
 
-/**
- * The rectangle a tracked box occupies at `tMs`, or null when it has no track.
- */
+/** The rectangle a tracked box occupies at `tMs`, or null when it has no track. */
 export function trackedBoundsAt(a: Annotation, tMs: number): AnnotationBounds | null {
   const s = trackedSampleAt(a, tMs)
   return s === null ? null : boundsOf(s)
@@ -65,12 +50,12 @@ export function trackedBoundsAt(a: Annotation, tMs: number): AnnotationBounds | 
  *
  * Returns the annotation itself when it has no track, so the untracked path is
  * byte-identical to what it always was and costs nothing. When it does have
- * one, the copy carries the tracked rectangle in `bounds` — and, when the
+ * one, the copy carries the observed rectangle in `bounds` — and, when the
  * object has crossed to another monitor, that sample's `display` too. Both are
- * the fields every existing routine already reads to decide where a box goes,
- * so drawing, blurring, selection and hit-testing follow the object across
- * screens without a line of change and without a time argument threaded
- * through any of them (#86).
+ * fields every existing routine already reads to decide where a box goes, so
+ * drawing, blurring, selection and hit-testing follow the object across screens
+ * without a line of change and without a time argument threaded through any of
+ * them.
  *
  * The copy is a VIEW. Editing writes to the stored annotation, never to this.
  */
