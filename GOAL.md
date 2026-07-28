@@ -1004,11 +1004,18 @@ The editor's own UI must read as an editor, not a settings screen:
   current percentage. It mirrors Ctrl+wheel (same range and steps), snaps to Fit and 100%,
   and double-clicking the slider returns to Fit. The board's zoom is a first-class control,
   not a hidden gesture — a wheel shortcut alone leaves it undiscoverable.
-- **One `?` help affordance** in the top bar opens a compact shortcut sheet — capture
-  interactions (left click, right drag, Shift), time (wheel, Shift/Alt wheel, I/O trim,
-  play), view (Ctrl+wheel, Space drag, `1`..`9`, `0`), and edit (Ctrl+Z, Del, Enter, Esc).
-  It replaces the long inline key hint, which was a wall of text in the one place that
-  must stay quiet.
+- **Shortcut overlay**, toggled by the `?` button (and F1): a translucent panel pinned to
+  the **top-right of the capture**, listing the shortcuts grouped as capture (left click,
+  right drag, Shift), time (wheel, Shift/Alt wheel, I/O trim, play), view (Ctrl+wheel,
+  Space drag, `1`..`9`, `0`), and edit (Ctrl+Z, Del, Enter, Esc).
+  - **On by default**, so a new user sees the whole vocabulary without asking; the toggle
+    state persists (`showShortcutOverlay`), so turning it off is permanent until turned
+    back on.
+  - It is a passive layer, never a modal: click-through (`pointer-events: none`), no focus,
+    no Esc handling, and it dims further while the pointer is near it so it can never hide
+    the thing being annotated. Shows the LIVE key names where they are configurable.
+  - It replaces the long inline key hint in the top bar, which was a wall of text in the
+    one place that must stay quiet.
 
 ### Replay Trim
 
