@@ -100,6 +100,22 @@ function sameProcess(a: string, b: string): boolean {
   return norm(a) === norm(b) && norm(a) !== ''
 }
 
+/**
+ * `bounds` clipped to a display's snapshot, or null when nothing of it is on
+ * that screen (#100).
+ */
+function clipTo(
+  bounds: EditorUiaWindow['bounds'],
+  screen: ContextDisplayTarget,
+): EditorUiaWindow['bounds'] | null {
+  const x = Math.max(0, bounds.x)
+  const y = Math.max(0, bounds.y)
+  const right = Math.min(screen.width, bounds.x + bounds.width)
+  const bottom = Math.min(screen.height, bounds.y + bounds.height)
+  if (right <= x || bottom <= y) return null
+  return { x, y, width: right - x, height: bottom - y }
+}
+
 function rectGap(a: EditorUiaWindow['bounds'], b: EditorUiaWindow['bounds']): number {
   return (
     Math.abs(a.x - b.x) +
@@ -393,7 +409,23 @@ export class ContextSession {
       // always was: where the box was drawn, and where a reader that ignores
       // tracking puts it.
       if (display === null) display = window.display
-      samples.push({ tMs: observation.tMs, display: window.display, ...window.bounds })
+      // A BOX STAYS INSIDE THE SCREEN IT IS MEASURED IN (#74, #100).
+      //
+      // A window dragged half off the left edge is really there, and the ring
+      // records it there — x reached -664 on the capture that reported "프레임
+      // 벗어났어". But an annotation marks something the reader can LOOK at, and
+      // the part of the window past the edge is in no image. So the sample is
+      // the VISIBLE rectangle: the window clipped to its own display's snapshot.
+      //
+      // Clipped to nothing means the object is not on this screen at this
+      // moment, which is the same statement `endedAtMs` makes.
+      const screen = this.displays.find((d) => d.index === window.display)
+      const visible = screen === undefined ? window.bounds : clipTo(window.bounds, screen)
+      if (visible === null) {
+        if (samples.length > 0) endedAtMs = observation.tMs
+        break
+      }
+      samples.push({ tMs: observation.tMs, display: window.display, ...visible })
     }
 
     if (display === null || samples.length === 0) return null

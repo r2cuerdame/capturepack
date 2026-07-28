@@ -19,7 +19,7 @@ import type { Annotation } from '../../shared/types'
 const BLUR_BLOCK = 12 // native px per pixelation block (matches render/render.ts)
 const FALLBACK_COLOR = '#FF3B30'
 /** A box that FOLLOWS an object (#99) — Core's rectangle, not a drawn one. */
-const TRACKED_COLOR = '#3574F0' // boxes without style.color (palette default)
+const TRACKED_COLOR = '#22C55E' // boxes without style.color (palette default)
 const HANDLE_R = 4.5 // on-screen px, half the side of a corner resize handle
 const OBJECT_HOVER_COLOR = '#8ab4ff' // same accent the selection rect uses
 const FOCUSED_FRAME_COLOR = '#3574f0' // the focused display's accent

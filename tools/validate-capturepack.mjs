@@ -1126,6 +1126,7 @@ function validateAnnotations(a, snapshotDims, replay, replayDurationMs, displayI
           let previous = -Infinity;
           let bad = 0;
           let screens = new Set();
+          let offscreen = 0;
           for (const s of samples) {
             if (!isObj(s) || ["t_ms","x","y","width","height"].some((k) => typeof s[k] !== "number" || !Number.isFinite(s[k]))) { bad += 1; continue; }
             if (s.t_ms < previous) bad += 1;
@@ -1133,9 +1134,15 @@ function validateAnnotations(a, snapshotDims, replay, replayDurationMs, displayI
             // dragged to another monitor is still the same window (SPEC §8.3).
             if (s.display !== undefined && (!Number.isInteger(s.display) || s.display < 1)) bad += 1;
             else screens.add(s.display ?? annDisplay);
+            // A SAMPLE STAYS ON ITS SCREEN (SPEC §8.2, and the same rule
+            // `bounds` already obeys). A window really can hang off an edge —
+            // but the part past it is in no image, so a rectangle reaching
+            // there marks something no reader can look at.
+            if (s.x < 0 || s.y < 0 || s.width <= 0 || s.height <= 0) offscreen += 1;
             previous = s.t_ms;
           }
           if (bad > 0) fail(`${label}.tracking.samples has ${bad} sample(s) that are not finite {t_ms,x,y,width,height} in ascending t_ms (SPEC §8.3)`);
+          else if (offscreen > 0) fail(`${label}.tracking.samples has ${offscreen} sample(s) outside their own display's snapshot — a box marks something a reader can look at, and the part of a window past the screen edge is in no image (SPEC §8.2)`);
           else pass(`${label}.tracking: ${samples.length} sample(s), ${samples[0].t_ms}..${samples[samples.length-1].t_ms} ms across ${screens.size} display(s) — the box follows its object (SPEC §8.3)`);
         }
       } else if (false) {

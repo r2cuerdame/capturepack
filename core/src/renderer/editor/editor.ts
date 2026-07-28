@@ -154,8 +154,8 @@ const overlayCtx = ctx2d(overlay)
 // State
 // ---------------------------------------------------------------------------
 
-/** Blue: Core owns this rectangle (#99). Mirrors render.ts's TRACKED_COLOR. */
-const TRACKED_BOX_COLOR = '#3574F0'
+/** Green: Core owns this rectangle (#99). Mirrors render.ts's TRACKED_COLOR. */
+const TRACKED_BOX_COLOR = '#22C55E'
 
 const MIN_DRAG = 3 // native px below which a right-drag creates nothing
 const MIN_SIZE = 2 // native px floor for resize (bounds sizes must stay > 0)
@@ -1335,6 +1335,22 @@ function dragDraft(d: {
  * to what this editor wrote before the board existed (SPEC §8.8).
  */
 function beginPendingBox(on: BoardDisplay, b: Box, picked?: PickableObject): void {
+  // ONE BOX PER OBJECT PER MOMENT (#101).
+  //
+  // "같은프레임에 같은 윈도우는 셀렉트 또 안생기게 해줘". Clicking a window that
+  // is already annotated at this position produced a SECOND box on top of the
+  // first — same rectangle, same target, indistinguishable in the pack, and the
+  // one underneath unreachable. The click means "this object", and this object
+  // already has a box here, so the click SELECTS it instead of duplicating it.
+  //
+  // Scoped to the moment, not the whole replay: the same window annotated at
+  // 4 s and again at 20 s is two statements about two different times, which is
+  // the entire point of a lifetime.
+  const already = picked === undefined ? null : existingBoxFor(picked)
+  if (already !== null) {
+    selectBox(already.annotation_id, on)
+    return
+  }
   const stamp = state.nextStamp()
   const draft: Annotation = {
     annotation_id: stamp.annotation_id,
@@ -2552,6 +2568,24 @@ function displayObjectHint(text: string): void {
 // somewhere else — and annotations.json, packdocs and the MCP tools would keep
 // telling every AI reader that the box annotating one thing targets another.
 const pickedRects = new Map<string, Box>()
+
+/**
+ * The box that already annotates this object AT THIS MOMENT, if there is one.
+ *
+ * Matched on the surface the object IS (#90's stable id), not on its rectangle:
+ * two clicks a few pixels apart on the same window are the same window, and a
+ * window that has moved since is still the same window.
+ */
+function existingBoxFor(picked: PickableObject): Annotation | null {
+  const surfaceId = picked.surface?.surfaceId
+  if (surfaceId === undefined) return null
+  for (const a of state.annotations) {
+    if (trackedSurfaces.get(a.annotation_id) !== surfaceId) continue
+    if (!annotationVisibleNow(a)) continue
+    return a
+  }
+  return null
+}
 
 /**
  * Gives a freshly picked box the path of the object it names (#86).
