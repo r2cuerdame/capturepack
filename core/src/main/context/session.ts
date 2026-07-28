@@ -409,23 +409,21 @@ export class ContextSession {
       // always was: where the box was drawn, and where a reader that ignores
       // tracking puts it.
       if (display === null) display = window.display
-      // A BOX STAYS INSIDE THE SCREEN IT IS MEASURED IN (#74, #100).
-      //
-      // A window dragged half off the left edge is really there, and the ring
-      // records it there — x reached -664 on the capture that reported "프레임
-      // 벗어났어". But an annotation marks something the reader can LOOK at, and
-      // the part of the window past the edge is in no image. So the sample is
-      // the VISIBLE rectangle: the window clipped to its own display's snapshot.
-      //
-      // Clipped to nothing means the object is not on this screen at this
-      // moment, which is the same statement `endedAtMs` makes.
-      const screen = this.displays.find((d) => d.index === window.display)
-      const visible = screen === undefined ? window.bounds : clipTo(window.bounds, screen)
-      if (visible === null) {
+      // One sample per screen the window is visible on (#103) — the split is
+      // made upstream, in `ringObservations`, where a surface still has its
+      // virtual-desktop rectangle and every display's mapping is in hand. Here
+      // it is simply "every window in this observation with this id".
+      let placed = 0
+      for (const w of observation.windows) {
+        if (surfaceIdOf(this.ids, observation, w) !== surfaceId) continue
+        samples.push({ tMs: observation.tMs, display: w.display, ...w.bounds })
+        placed += 1
+      }
+      if (placed === 0) {
         if (samples.length > 0) endedAtMs = observation.tMs
         break
       }
-      samples.push({ tMs: observation.tMs, display: window.display, ...visible })
+
     }
 
     if (display === null || samples.length === 0) return null

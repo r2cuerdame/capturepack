@@ -49,6 +49,9 @@ const READ_INTERVAL_MS = 100
 interface DisplaySpace {
   index: number
   focused: boolean
+  /** The snapshot's own size, which a rectangle on it is clipped to. */
+  width: number
+  height: number
   monitor: HostMonitor
   toSnapshot: (bounds: SurfaceInfo['bounds']) => EditorUiaWindow['bounds']
 }
@@ -103,6 +106,8 @@ function buildSpaces(
     spaces.push({
       index: target.index,
       focused: target.focused,
+      width: target.width,
+      height: target.height,
       monitor,
       toSnapshot: (b) => ({
         x: Math.round((b.x - monitor.bounds.x) * sx),
@@ -113,6 +118,28 @@ function buildSpaces(
     })
   }
   return spaces
+}
+
+/** Every display the surface overlaps at all, in board order. */
+function spacesOver(
+  spaces: readonly DisplaySpace[],
+  bounds: SurfaceInfo['bounds'],
+): DisplaySpace[] {
+  return spaces.filter((space) => overlapArea(bounds, space.monitor.bounds) > 0)
+}
+
+/** The surface in one display's snapshot pixels, clipped to it; null if none of it is there. */
+function clipToSpace(
+  space: DisplaySpace,
+  bounds: SurfaceInfo['bounds'],
+): EditorUiaWindow['bounds'] | null {
+  const b = space.toSnapshot(bounds)
+  const x = Math.max(0, b.x)
+  const y = Math.max(0, b.y)
+  const right = Math.min(space.width, b.x + b.width)
+  const bottom = Math.min(space.height, b.y + b.height)
+  if (right <= x || bottom <= y) return null
+  return { x, y, width: right - x, height: bottom - y }
 }
 
 function overlapArea(a: SurfaceInfo['bounds'], b: HostMonitor['bounds']): number {
@@ -159,8 +186,21 @@ function observationOf(
   const windows: EditorUiaWindow[] = []
   for (const surface of surfaces) {
     if (surface.minimized || !surface.visible) continue
-    const space = spaceOf(spaces, surface.bounds)
-    if (space === null) continue
+    // ONE ENTRY PER SCREEN THE SURFACE IS ON (#103).
+    //
+    // A window dragged between monitors is visible on BOTH, and a single entry
+    // could only ever describe one of them — so the half on the other screen
+    // was unmarked, both for picking and for the box that follows it. Here the
+    // surface still has its virtual-desktop rectangle and every display's
+    // mapping is in hand, which is the only place the split can be made
+    // correctly: each entry is that screen's own snapshot pixels, clipped to
+    // that screen, because the part past an edge is in no image.
+    //
+    // They share `surface_id` and `hwnd`, so everything downstream knows they
+    // are ONE object: one box, one number, drawn wherever it can be seen.
+    for (const space of spacesOver(spaces, surface.bounds)) {
+    const clipped = clipToSpace(space, surface.bounds)
+    if (clipped === null) continue
     windows.push({
       // Carried, not re-derived (#90): this id is stable across the whole
       // session, and re-deriving one from name and list order is what let two
@@ -173,13 +213,14 @@ function observationOf(
       title: surface.windowTitle ?? '',
       process: surface.executableName ?? '',
       class_name: surface.className ?? '',
-      bounds: space.toSnapshot(surface.bounds),
+      bounds: clipped,
       display: space.index,
       focused: surface.foreground,
       z: surface.zOrder,
       hasControls: false,
       tree: 'skipped',
     })
+    }
   }
   return { tMs, windows, elements: [] }
 }
