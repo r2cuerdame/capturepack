@@ -675,6 +675,39 @@ did not offer, the honest response would be that **the protocol has a gap** — 
 special. A plugin API whose most important consumer does not use it is decorative, and we would
 find that out years later, from someone else's bug report.
 
+#### The two APIs get different promises
+
+They are both plugin APIs and they are not the same kind of thing, so they do not get the same
+commitment:
+
+| | Temporal Context Provider | After Save Action |
+|---|---|---|
+| **status** | documented, **explicitly unstable** | **public and stable** |
+| the job | run all day, keep a temporal buffer, restore the past, claim regions, hit-test in ~200 ms | take a saved folder and do something with it |
+| when it fails | *"CapturePack picks the wrong thing"* | `✕ Jira failed` — named, retryable, pack already safe |
+| trust it needs | continuous observation of the whole screen | read one folder, with declared permissions |
+
+**Failure attribution is what decides this.** A community Unreal Provider returning wrong bounds
+is experienced by the user as CapturePack picking wrong; they blame us, and we cannot fix it. An
+After Save Action failing is shown by name, next to a Retry button, beside a pack that is already
+saved. **Open the side where failure lands honestly on whoever wrote it.**
+
+Demand runs the same way. Almost nobody wants to write a Provider — it is deep platform work.
+Everyone with an internal tool wants to write an After Save Action. That is where third-party
+energy actually is, so that is what we commit to keeping stable.
+
+**But the Provider API is not closed, only unfrozen.** Sealing it would quietly destroy the UIA
+decision above: the only thing that keeps "no private path into Core" true is that the Provider
+API is a real API. Make it internal and the first "we're all on the same team, just one shortcut
+here" is a matter of time. And we have not built a single temporal Provider yet — fixing the
+abstraction now, against two consumers we control, is exactly how the wrong one gets frozen. So:
+the API is documented, anyone may build on it, and it will move. Someone wanting an Unreal
+Provider hears *"yes, and the API will change"* — not *"no"*.
+
+**Stabilisation trigger, decided in advance so it does not quietly never happen:** the Provider
+protocol goes to v1 with a compatibility promise at whichever comes first — **a Provider we did
+not write working in the wild**, or **the first serious external request to build one**.
+
 #### Export, failure, and isolation
 
 A Provider's whole temporal buffer is working data and does NOT go in the pack. Saving exports
