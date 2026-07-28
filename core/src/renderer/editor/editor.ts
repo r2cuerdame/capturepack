@@ -2358,21 +2358,53 @@ function isRepeatClick(e: PointerEvent): boolean {
   return repeat
 }
 
-function applyResize(a: Annotation, handle: HandleId, px: number, py: number): void {
+/**
+ * Keeps a box inside the display it belongs to (issue #74).
+ *
+ * A box's coordinates ARE that display's snapshot pixels (SPEC §8.2), so a
+ * negative x is not a position in the space the annotation declares — it is a
+ * number no reader can interpret, and `report.md` prints it as a fact. Found in
+ * a pack the user made to report it: `box at (-202, 864)` on a 3840x2160
+ * snapshot, its left border rendered off the screen entirely.
+ *
+ * The pointer is already clamped to the display (board.ts toNativePoint), but a
+ * MOVE adds a delta: grab a box by its right edge, drag left past the screen,
+ * and the pointer stops while the delta keeps pushing the origin negative.
+ *
+ * A box wider than its display keeps the inverted range, so it can still be
+ * positioned to cover the screen rather than snapping to a corner.
+ */
+function clampBoxTo(b: { x: number; y: number; width: number; height: number }, d: BoardDisplay): void {
+  const spanX = d.width - b.width
+  const spanY = d.height - b.height
+  b.x = spanX >= 0 ? Math.max(0, Math.min(b.x, spanX)) : Math.min(0, Math.max(b.x, spanX))
+  b.y = spanY >= 0 ? Math.max(0, Math.min(b.y, spanY)) : Math.min(0, Math.max(b.y, spanY))
+}
+
+function applyResize(
+  a: Annotation,
+  handle: HandleId,
+  px: number,
+  py: number,
+  d: BoardDisplay,
+): void {
   const b = a.bounds
   const right = b.x + b.width
   const bottom = b.y + b.height
+  // Every edge is clamped to the display as it moves (issue #74). Resizing is
+  // the other way a box leaves its own coordinate space: the pointer stops at
+  // the edge, but an opposite edge already outside it would stay there.
   if (handle === 'nw' || handle === 'sw') {
-    b.x = Math.min(px, right - MIN_SIZE)
+    b.x = Math.max(0, Math.min(px, right - MIN_SIZE))
     b.width = right - b.x
   } else {
-    b.width = Math.max(MIN_SIZE, px - b.x)
+    b.width = Math.max(MIN_SIZE, Math.min(px, d.width) - b.x)
   }
   if (handle === 'nw' || handle === 'ne') {
-    b.y = Math.min(py, bottom - MIN_SIZE)
+    b.y = Math.max(0, Math.min(py, bottom - MIN_SIZE))
     b.height = bottom - b.y
   } else {
-    b.height = Math.max(MIN_SIZE, py - b.y)
+    b.height = Math.max(MIN_SIZE, Math.min(py, d.height) - b.y)
   }
 }
 
@@ -2541,6 +2573,10 @@ overlay.addEventListener('pointermove', (e) => {
     if (a && (p.x !== drag.lastX || p.y !== drag.lastY)) {
       a.bounds.x += p.x - drag.lastX
       a.bounds.y += p.y - drag.lastY
+      // The pointer is clamped to the display; the DELTA is not. Grab a box by
+      // its right edge, drag past the screen, and the pointer stops while the
+      // delta keeps pushing the origin negative (issue #74).
+      clampBoxTo(a.bounds, drag.d)
       drag.moved = true
     }
     drag.lastX = p.x
@@ -2551,7 +2587,7 @@ overlay.addEventListener('pointermove', (e) => {
   } else {
     const a = state.byId(drag.id)
     if (a) {
-      applyResize(a, drag.handle, p.x, p.y)
+      applyResize(a, drag.handle, p.x, p.y, drag.d)
       drag.moved = true
     }
     positionTextEditor()

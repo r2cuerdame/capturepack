@@ -305,7 +305,7 @@ function validateManifest(m, pack, snapshotDims) {
   // Which displays this pack declares, and which one is focused — what
   // annotations.json's `display` field is checked against (SPEC §8.8). Empty
   // indices = a single-display pack, where no box may name a display at all.
-  const displayInfo = { indices: new Set(), focused: null, declared: false };
+  const displayInfo = { indices: new Set(), focused: null, declared: false, snapshots: new Map() };
   if (!isObj(media)) {
     fail(`manifest.json: media MUST be an object (SPEC §5.3)`);
   } else {
@@ -789,7 +789,10 @@ function validateDisplays(media, env, pack, displayFiles, keyframeFiles, display
 
     // index: 1-based position in environment.screens, unique
     let indexOk = false;
-    if (isInt(d.index) && d.index >= 1) displayInfo.indices.add(d.index);
+    if (isInt(d.index) && d.index >= 1) {
+      displayInfo.indices.add(d.index);
+      if (isStr(d.snapshot)) displayInfo.snapshots.set(d.index, d.snapshot);
+    }
     if (!isInt(d.index) || d.index < 1) {
       fail(`${label}.index ${JSON.stringify(d.index)} MUST be an integer >= 1 — the 1-based position in environment.screens (SPEC §5.6)`);
       ok = false;
@@ -1028,9 +1031,34 @@ function validateAnnotations(a, snapshotDims, replay, replayDurationMs, displayI
       bad++;
     } else {
       boundsOk = true;
-      if (isInt(a.reference_width) && isInt(a.reference_height) &&
-          (b.x + b.width <= 0 || b.y + b.height <= 0 || b.x >= a.reference_width || b.y >= a.reference_height)) {
-        note(`${label}.bounds lies entirely outside the ${a.reference_width}x${a.reference_height} coordinate space — nothing of the box is visible (SPEC §8.2)`);
+      // The frame this box DECLARES: its own display's snapshot when it names
+      // one, the reference space otherwise (SPEC §8.2, §8.8).
+      let frame = null;
+      let frameName = "the coordinate space";
+      if (isInt(ann.display) && displayInfo.snapshots.has(ann.display)) {
+        const file = displayInfo.snapshots.get(ann.display);
+        const dims = pngDimensions(readBinary(file));
+        if (dims) { frame = dims; frameName = file; }
+      } else if (ann.display === undefined && isInt(a.reference_width) && isInt(a.reference_height)) {
+        frame = { width: a.reference_width, height: a.reference_height };
+        frameName = `the ${a.reference_width}x${a.reference_height} reference space`;
+      }
+      // A box's coordinates ARE that snapshot's pixels. An origin outside it, or
+      // an edge past it, is not a position in the space the annotation declares:
+      // report.md and the MCP tools print these numbers as facts, and "box at
+      // (-202, 864)" on a 3840x2160 snapshot means nothing to any reader
+      // (issue #74 — the editor clamps as of v0.1.8; a pack written before that
+      // can carry one).
+      if (frame) {
+        const over = [];
+        if (b.x < 0) over.push(`x ${b.x} < 0`);
+        if (b.y < 0) over.push(`y ${b.y} < 0`);
+        if (b.x + b.width > frame.width) over.push(`right edge ${b.x + b.width} > ${frame.width}`);
+        if (b.y + b.height > frame.height) over.push(`bottom edge ${b.y + b.height} > ${frame.height}`);
+        if (over.length > 0) {
+          fail(`${label}.bounds leaves ${frameName} (${over.join(", ")}) — bounds are pixels IN that snapshot, so a coordinate outside it is not a position any reader can interpret (SPEC §8.2)`);
+          bad++;
+        }
       }
     }
 

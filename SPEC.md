@@ -650,6 +650,14 @@ against that display's own snapshot, whose size is `bounds.width × scale` of it
 `media.displays` entry. There is no board-wide or virtual-desktop coordinate space in the
 format: every box belongs to exactly one screen.
 
+A box's geometry MUST lie **within** the snapshot it is expressed in: `x >= 0`, `y >= 0`,
+`x + width <= ` that snapshot's width, and `y + height <= ` its height. Coordinates outside the
+image are not positions in the space the annotation declares — a reader cannot interpret them,
+renderers clip them inconsistently, and generated views print them as facts (`report.md` writes
+"box at (-202, 864)" for a box that left a 3840x2160 screen). Writers MUST clamp a box to its
+display as it is drawn, moved or resized; readers encountering an out-of-range box SHOULD clamp
+it into the frame rather than discard the annotation, and MAY report the pack as malformed.
+
 `reference_width`/`reference_height` exist so annotations survive image processing: if a reader
 finds that `snapshot.png`'s actual dimensions differ from the reference (for example the snapshot
 was recompressed or scaled by an intermediate tool), it SHOULD scale all geometry by
