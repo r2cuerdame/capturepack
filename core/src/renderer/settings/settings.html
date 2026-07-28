@@ -282,26 +282,12 @@
       </div>
       <p class="pluginSummary" data-i18n="settings.uiaSummary">Click real buttons and windows instead of drawing boxes — costs a sub-second helper run per capture.</p>
       <p class="pluginDetail" id="uiaDetail" hidden data-i18n="settings.uiaDetail">At the capture instant a short-lived helper reads the window list and the control tree of the visible windows, so the editor can snap a box onto a real button or window and store its name. It reads UI state only — never your keyboard or mouse input — and nothing leaves this machine.</p>
-      <div class="pluginRow">
-        <span class="pluginIcon" aria-hidden="true">⚪</span>
-        <span class="pluginName">Unity</span>
-        <span class="pluginStatus" data-i18n="settings.comingSoon">Coming soon</span>
-      </div>
-      <div class="pluginRow">
-        <span class="pluginIcon" aria-hidden="true">⚪</span>
-        <span class="pluginName">Unreal</span>
-        <span class="pluginStatus" data-i18n="settings.comingSoon">Coming soon</span>
-      </div>
-      <div class="pluginRow">
-        <span class="pluginIcon" aria-hidden="true">⚪</span>
-        <span class="pluginName">VS Code</span>
-        <span class="pluginStatus" data-i18n="settings.comingSoon">Coming soon</span>
-      </div>
-      <div class="pluginRow">
-        <span class="pluginIcon" aria-hidden="true">⚪</span>
-        <span class="pluginName">Git</span>
-        <span class="pluginStatus" data-i18n="settings.comingSoon">Coming soon</span>
-      </div>
+      <!-- Unity / Unreal / VS Code / Git used to sit here as "Coming soon" rows.
+           They are gone: nothing was being built, no date was ever attached, and
+           a permanent "coming soon" is the same lie the Windows UI Automation row
+           told for two releases. This list now shows only what exists. Unreal and
+           Unity are community/external in the v0.3.0 plugin design (GOAL.md),
+           so they will appear here when a plugin does, not before. -->
     </section>
 
     <footer id="about">

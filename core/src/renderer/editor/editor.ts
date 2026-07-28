@@ -257,6 +257,9 @@ type ObjectHintKind =
   | 'noData'
   | 'displayNoData'
   | 'gutter'
+  // Scrubbed away from the capture instant: the objects describe a different
+  // moment than the one on screen, so nothing is offered here (v0.3.0 #64/#66).
+  | 'scrubbedAway'
   | 'boxTookClick'
 const objectHintsShown = new Set<ObjectHintKind>()
 let objectHintTimer: number | null = null
@@ -1935,11 +1938,31 @@ function buildObjectIndexes(
 }
 
 /**
+ * Whether object data can honestly describe the frame on screen right now.
+ *
+ * The UIA dump is ONE instant — the moment the hotkey was pressed, which is the
+ * END of the replay. Scrub back and the windows were somewhere else, while the
+ * index still holds where they ended up: reported from live use as "it only
+ * matches the last information; I moved and it does not match". Offering a
+ * rectangle that is quietly for a different moment is the same defect as a tray
+ * icon that says "recording" — the answer looks like an answer and is wrong.
+ *
+ * So picking is offered at the capture instant and nowhere else, until providers
+ * can restore the past for real (v0.3.0 temporal context providers, #64/#66).
+ * Refusing to answer is the honest reading of data that does not cover the
+ * question.
+ */
+function objectsDescribeNow(): boolean {
+  return scrub === null || !scrub.ready || scrub.atNow
+}
+
+/**
  * The object under the cursor on `d`, or null when the dump knows nothing about
  * that point — asked of the index of the display the pointer is ON, so every
  * screen of the board picks (issue #30).
  */
 function objectAt(d: BoardDisplay, p: { x: number; y: number }): PickableObject | null {
+  if (!objectsDescribeNow()) return null
   const index = objectIndexOf(d.index)
   if (index === null || index.size === 0) return null
   return index.pick(p.x, p.y, windowLevelKey)
@@ -2103,12 +2126,6 @@ function hoverChipLabel(o: PickableObject): string {
  * here — they are answers to an action (emptyAnswer), not to a hover.
  */
 function announceObject(o: PickableObject): void {
-  // The objects come from the capture instant, so while the user is scrubbed
-  // away from "now" the outlines describe a moment that is not on screen.
-  // Picking stays allowed — the hint just says what it means.
-  if (scrub !== null && !scrub.atNow) {
-    if (showObjectHintOnce('fromCapture', t('editor.objectFromCapture'))) return
-  }
   if (o.level === 'window') {
     // A window with no control to offer — and WHY not, because SPEC §11.3
     // ("Silence is not absence") makes these three different statements and
@@ -2152,6 +2169,12 @@ function announceObject(o: PickableObject): void {
  * not absence").
  */
 function emptyAnswer(on: BoardDisplay): { kind: ObjectHintKind; text: string } {
+  // FIRST, because it is the reason there is nothing to offer at all — and the
+  // one the user cannot work out for themselves. Everything below is about
+  // WHERE they clicked; this is about WHEN.
+  if (!objectsDescribeNow()) {
+    return { kind: 'scrubbedAway', text: t('editor.objectScrubbedAway') }
+  }
   const index = objectIndexOf(on.index)
   if (index === null || index.size === 0) {
     return {
