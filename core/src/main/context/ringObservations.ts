@@ -35,11 +35,13 @@ import type { ContextObservation } from './buffer'
 import type { ContextDisplayTarget } from './session'
 
 /**
- * How often the frozen ring is read back, in pack-clock ms.
+ * The fallback cadence for reading the ring back, when the caller cannot say
+ * WHEN it actually sampled.
  *
- * The ring is written at 10 Hz, so 100 ms reads every sample there is and no
- * more. Reading finer would invent nothing; reading coarser would throw away
- * motion the user can see in the replay, which is the whole point.
+ * Prefer the real sample times (#87). A grid — any grid — lands between two
+ * samples and asks for a rectangle that was never observed, and the answer is
+ * an interpolation dressed as a reading. The ring now samples once per captured
+ * frame, so its own times are exactly the moments a pack can show.
  */
 const READ_INTERVAL_MS = 100
 
@@ -189,20 +191,28 @@ export function frozenRingObservations(
   monitors: readonly HostMonitor[],
   targets: readonly ContextDisplayTarget[],
   replayDurationMs: number,
+  sampleTimesMs?: readonly number[],
 ): ContextObservation[] {
   const spaces = buildSpaces(monitors, targets)
   if (spaces.length === 0) return []
   const observations: ContextObservation[] = []
   const end = Math.max(0, Math.round(replayDurationMs))
-  for (let t = 0; t <= end; t += READ_INTERVAL_MS) {
+  // THE RING'S OWN TIMES WHEN THEY ARE KNOWN (#87), a grid only as a fallback.
+  const times: number[] = []
+  if (sampleTimesMs !== undefined && sampleTimesMs.length > 0) {
+    for (const t of sampleTimesMs) if (t >= 0 && t <= end) times.push(Math.round(t))
+  } else {
+    for (let t = 0; t <= end; t += READ_INTERVAL_MS) times.push(t)
+  }
+  for (const t of times) {
     const stack = surfacesAt(t)
     if (stack === null || stack.surfaces.length === 0) continue
     observations.push(observationOf(t, stack.surfaces, spaces))
   }
-  // The capture instant itself, which the loop only lands on when the duration
-  // happens to be a multiple of the interval. It is the one moment the user is
-  // guaranteed to look at.
-  if (end % READ_INTERVAL_MS !== 0) {
+  // The capture instant itself, which the walk only lands on when a sample
+  // happened to fall exactly there. It is the one moment the user is guaranteed
+  // to look at.
+  if (times[times.length - 1] !== end) {
     const last = surfacesAt(end)
     if (last !== null && last.surfaces.length > 0) {
       observations.push(observationOf(end, last.surfaces, spaces))

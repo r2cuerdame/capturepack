@@ -59,6 +59,12 @@ const freezes = new Map<string, Freeze>()
 export interface ContextRuntimeOptions {
   /** The configured replay length; the ring keeps this plus a few seconds. */
   replayMs: number
+  /**
+   * The capture frame rate. The surface ring samples ONCE PER FRAME (#87): a
+   * pack cannot show anything finer than a frame, and sampling coarser than one
+   * leaves frames whose box is an interpolation rather than an observation.
+   */
+  fps?: number
 }
 
 /**
@@ -82,7 +88,11 @@ export function startContextRuntime(options: ContextRuntimeOptions): void {
   const retentionMs = Math.max(1_000, options.replayMs) + RETENTION_SLACK_MS
   const clock = new SessionClock(retentionMs)
   const timeline = new SurfaceTimeline()
-  const lane = new SurfaceLane(clock, timeline)
+  // ONE SAMPLE PER FRAME. Not a cadence of its own: the replay is the evidence,
+  // and the ring exists to say where things were in it.
+  const intervalMs =
+    options.fps !== undefined && options.fps > 0 ? 1000 / options.fps : undefined
+  const lane = new SurfaceLane(clock, timeline, intervalMs)
   // The real log sink. `ProviderHost` takes it by injection rather than
   // importing it, so the same class can run in the Electron-free harnesses —
   // this is the Electron side, so it passes the real thing.
@@ -221,11 +231,22 @@ export function frozenObservations(
 ): ContextObservation[] {
   const current = runtime
   if (current === null || !freezes.has(freezeId)) return []
+  // The ring's OWN sample times, in pack time — not a grid (#87). Every
+  // observation the editor adopts is then a moment Core really looked at, and
+  // the box drawn at it is measured rather than interpolated.
+  const freeze = freezes.get(freezeId)
+  const times =
+    freeze === undefined
+      ? []
+      : current.timeline
+          .sampleTimesBetween(freeze.startMs, freeze.endMs)
+          .map((sessionMs) => sessionMs - freeze.startMs)
   return frozenRingObservations(
     (packTMs) => surfacesAt(freezeId, packTMs),
     current.lane.monitors(),
     targets,
     replayDurationMs,
+    times,
   )
 }
 

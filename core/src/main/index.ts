@@ -237,7 +237,7 @@ function main(): void {
     // never answer a question about thirty seconds ago. It is started AFTER the
     // recorder so that a machine where recording itself is failing does not also
     // pay for a context host it will never be asked about.
-    startContextRuntime({ replayMs: settings.replaySeconds * 1000 })
+    startContextRuntime({ replayMs: settings.replaySeconds * 1000, fps: settings.fps })
 
     const capture = (): void => {
       void startCaptureFlow(settings)

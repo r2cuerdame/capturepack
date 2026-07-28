@@ -477,6 +477,24 @@ export class SurfaceTimeline {
     return { surfaces: withRegions, accuracy: restored.accuracy }
   }
 
+  /**
+   * The times this ring ACTUALLY SAMPLED inside a range, ascending (#87).
+   *
+   * Read back through these instead of a grid of the reader's own invention and
+   * nothing is interpolated on the way out: every observation the editor adopts
+   * corresponds to a moment Core really looked. A grid can only ever land
+   * between two samples and ask for a rectangle that was never observed.
+   */
+  sampleTimesBetween(startMs: number, endMs: number): number[] {
+    const out: number[] = []
+    for (const sample of this.samples) {
+      if (sample.timeMs < startMs) continue
+      if (sample.timeMs > endMs) break
+      out.push(sample.timeMs)
+    }
+    return out
+  }
+
   stats(): SurfaceTimelineStats {
     const range = this.rangeMs()
     return {

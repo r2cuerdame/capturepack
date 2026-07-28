@@ -26,8 +26,29 @@ import { ClockOffsetEstimator, type SessionClock } from './clock'
 import { ContextHost, type HostEvent, type HostReply } from './host'
 import { SurfaceTimeline, type SurfaceSampleWindow } from './timeline'
 
-/** How often lane S samples. 10 Hz — the design's cadence, and what was measured. */
+/**
+ * How often lane S samples, WHEN NOBODY SAYS OTHERWISE.
+ *
+ * THE RING MUST NOT BE COARSER THAN THE EVIDENCE IT ANNOTATES (#87). A replay
+ * recorded at 15 fps holds a frame every 67 ms; sampling window geometry every
+ * 100 ms means most frames have no observation of their own and the box drawn
+ * over them is an interpolation between two moments the user never saw.
+ *
+ * Measured on CapturePack_2026-07-29_020118: a window flicked 1378 DIP inside
+ * ONE 100 ms interval. The straight line between its endpoints put the box
+ * ~250 DIP from the window in the frame the user was looking at — the frame was
+ * there, the observation was not. The user marked that exact spot by hand.
+ *
+ * So the interval FOLLOWS THE CAPTURE FRAME RATE and this is only the fallback
+ * for a session that never declared one.
+ */
 const DEFAULT_INTERVAL_MS = 100
+
+/**
+ * The floor. Faster than this buys nothing a replay can show and costs a real
+ * fraction of a core: nothing in a pack is finer-grained than one frame.
+ */
+const MIN_INTERVAL_MS = 16
 /** Coarser steps the governor may fall back to before giving up entirely. */
 const FALLBACK_INTERVALS_MS = [200, 500]
 /** How often Core re-measures the host clock offset. */
@@ -159,9 +180,12 @@ export class SurfaceLane {
   private lastError: string | null = null
   private running = false
 
-  constructor(clock: SessionClock, timeline: SurfaceTimeline) {
+  constructor(clock: SessionClock, timeline: SurfaceTimeline, intervalMs?: number) {
     this.clock = clock
     this.timeline = timeline
+    if (intervalMs !== undefined && Number.isFinite(intervalMs)) {
+      this.intervalMs = Math.max(MIN_INTERVAL_MS, Math.round(intervalMs))
+    }
     this.host = new ContextHost({
       onEvent: (event) => this.onEvent(event),
       onReady: (hello) => {
