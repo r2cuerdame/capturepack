@@ -27,7 +27,7 @@ import type {
   EditorWindowMode,
   UiaAnnotationTarget,
 } from '../../shared/types'
-import { annotationAt } from '../../shared/track'
+import { annotationAt, trackedBoundsAt } from '../../shared/track'
 import { computeDisplayNumbers } from '../../shared/numbering'
 import { ObjectIndex, objectHoverLabel, objectLabel } from './objects'
 import type { PickableObject } from './objects'
@@ -1895,7 +1895,10 @@ function applyMutation(mutate: (a: Annotation) => void): void {
     // A track was fetched for the lifetime the box had when it was picked. Any
     // change to that lifetime — a preset, "until the end", "entire capture" —
     // makes the path we hold the wrong length (#86).
-    if (lifeKey(pending) !== before) refreshTrack(pending)
+    if (lifeKey(pending) !== before) {
+      reanchorBounds(pending)
+      refreshTrack(pending)
+    }
     // Repaints the live preview (blur, number badge, border), re-syncs the
     // header labels, and moves the pending box's own lane (#92).
     syncLanes()
@@ -1908,7 +1911,10 @@ function applyMutation(mutate: (a: Annotation) => void): void {
   const snapshot = state.cloneAnnotations()
   const life = lifeKey(a)
   mutate(a)
-  if (lifeKey(a) !== life) refreshTrack(a)
+  if (lifeKey(a) !== life) {
+    reanchorBounds(a)
+    refreshTrack(a)
+  }
   state.pushUndoSnapshot(snapshot)
   refresh()
 }
@@ -2570,6 +2576,19 @@ function displayObjectHint(text: string): void {
 const pickedRects = new Map<string, Box>()
 
 /**
+ * Puts `bounds` back on the object's rectangle at this box's representative
+ * instant (#102) — the lifetime's midpoint, per SPEC §8.4.
+ *
+ * A no-op for a box with no track: a hand-drawn rectangle IS the answer, and
+ * there is nothing to re-anchor it to.
+ */
+function reanchorBounds(a: Annotation): void {
+  if (a.tracking?.enabled !== true) return
+  const at = trackedBoundsAt(a, lifetimeMidpoint(a, replayDurationMs))
+  if (at !== null) a.bounds = at
+}
+
+/**
  * The box that already annotates this object AT THIS MOMENT, if there is one.
  *
  * Matched on the surface the object IS (#90's stable id), not on its rectangle:
@@ -2660,6 +2679,20 @@ function attachTrack(draft: Annotation, surfaceId: string): void {
       if (track.endedAtMs !== null && live.end_ms !== undefined && live.end_ms > track.endedAtMs) {
         live.end_ms = Math.max(live.start_ms ?? 0, track.endedAtMs)
       }
+      // `bounds` IS THE RECTANGLE AT THIS BOX'S OWN MOMENT (#102).
+      //
+      // SPEC §8.3 defines it that way and §8.4 says the moment is the lifetime's
+      // MIDPOINT — but it was left as the rectangle the object had when the user
+      // clicked, and the midpoint moves the instant the lifetime is changed.
+      // Measured on CapturePack_2026-07-29_081922: `bounds` was (1784,608),
+      // the object's rectangle at that box's own midpoint was (75,941), and
+      // every reader that honours `bounds` — a 0.1.0 reader, our own still
+      // renderer, report.md — placed the box 1709 px from the thing it names.
+      //
+      // So it is re-anchored from the track, which is the record of where the
+      // object actually was. Nothing is estimated: this is the nearest OBSERVED
+      // sample (#89), the same one the editor draws.
+      reanchorBounds(live)
       schedulePaint()
     })
     .catch((err: unknown) => {

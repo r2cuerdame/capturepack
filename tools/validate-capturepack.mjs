@@ -1141,6 +1141,21 @@ function validateAnnotations(a, snapshotDims, replay, replayDurationMs, displayI
             if (s.x < 0 || s.y < 0 || s.width <= 0 || s.height <= 0) offscreen += 1;
             previous = s.t_ms;
           }
+          // `bounds` IS THE RECTANGLE AT THIS BOX'S OWN MOMENT (SPEC §8.3/§8.4).
+          // A tracked box knows where its object was at every recorded instant,
+          // so a `bounds` that disagrees with the track at its own midpoint is
+          // the box naming one moment and drawing another — and every reader
+          // that honours `bounds` (a 0.1.0 reader, a still render, report.md)
+          // then puts it somewhere the object never was.
+          if (bad === 0 && typeof ann.start_ms === "number" && typeof ann.end_ms === "number") {
+            const mid = Math.round((ann.start_ms + ann.end_ms) / 2);
+            let near = samples[0];
+            for (const s of samples) if (Math.abs(s.t_ms - mid) < Math.abs(near.t_ms - mid)) near = s;
+            const off = Math.abs(near.x - ann.bounds.x) + Math.abs(near.y - ann.bounds.y);
+            if (off > 2) {
+              fail(`${label}.bounds (${ann.bounds.x},${ann.bounds.y}) is not where the track puts the object at this box's own instant ${mid} ms (${near.x},${near.y}) — bounds MUST be the rectangle at the representative instant (SPEC §8.3, §8.4)`);
+            }
+          }
           if (bad > 0) fail(`${label}.tracking.samples has ${bad} sample(s) that are not finite {t_ms,x,y,width,height} in ascending t_ms (SPEC §8.3)`);
           else if (offscreen > 0) fail(`${label}.tracking.samples has ${offscreen} sample(s) outside their own display's snapshot — a box marks something a reader can look at, and the part of a window past the screen edge is in no image (SPEC §8.2)`);
           else pass(`${label}.tracking: ${samples.length} sample(s), ${samples[0].t_ms}..${samples[samples.length-1].t_ms} ms across ${screens.size} display(s) — the box follows its object (SPEC §8.3)`);
