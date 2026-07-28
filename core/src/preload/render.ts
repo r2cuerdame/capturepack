@@ -4,6 +4,10 @@ import { IPC } from '../shared/ipc'
 import type { RenderFramePayload, RenderResultPayload, RenderStartPayload } from '../shared/ipc'
 
 contextBridge.exposeInMainWorld('renderBridge', {
+  // REAL progress, from the only place that knows it: the playhead (#96).
+  progress(ratio: number): void {
+    ipcRenderer.send(IPC.renderProgress, ratio)
+  },
   onStart(cb: (payload: RenderStartPayload) => void): void {
     ipcRenderer.on(IPC.renderStart, (_event, payload: RenderStartPayload) => cb(payload))
   },

@@ -118,6 +118,11 @@ export const IPC = {
   // structured-cloning them in one message — is a spike in two processes at
   // once (and the classic way to lose a renderer with no error surfaced).
   renderFrame: 'render:frame',
+  // render window -> main: how far through the replay this render has played.
+  // The annotated render is REAL-TIME playback, so the only honest source of a
+  // progress number is the playhead itself — main cannot compute one without
+  // guessing, and a progress bar that guesses is a progress bar that lies.
+  renderProgress: 'render:progress',
   // render window -> main: rendered webm bytes (or failure) for the job
   renderResult: 'render:result',
 
@@ -660,6 +665,18 @@ export interface RenderResultPayload {
 // (GOAL "Replay Trim") — it precedes 'rendering' (the annotated render) when
 // the save carries an active trim.
 export type ToastRenderState = 'none' | 'trimming' | 'rendering' | 'done' | 'failed'
+
+/** What the toast is told about a render in flight (#96). */
+export interface ToastRenderStatusPayload {
+  state: ToastRenderState
+  /**
+   * How far through, 0..1 — ABSENT while nothing real is known.
+   *
+   * The bar is indeterminate until the render reports a playhead, rather than
+   * animating from a number nobody measured.
+   */
+  progress?: number
+}
 
 /**
  * A saved pack that is (partly) screenshot-only because a display's replay

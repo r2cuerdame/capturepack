@@ -41,6 +41,9 @@ const copyPromptBtn = el<HTMLButtonElement>('copyPromptBtn')
 const blurWarning = el<HTMLDivElement>('blurWarning')
 const replayWarning = el<HTMLDivElement>('replayWarning')
 const renderStatus = el<HTMLDivElement>('renderStatus')
+const renderLabel = el<HTMLSpanElement>('renderLabel')
+const renderBar = el<HTMLDivElement>('renderBar')
+const renderBarFill = el<HTMLDivElement>('renderBarFill')
 
 // Active-language t(); replaced by the init payload's uiLanguage.
 let t: TranslateFn = makeT('en')
@@ -54,24 +57,39 @@ function flash(btn: HTMLButtonElement, label: string): void {
   }, 1500)
 }
 
-function setRenderStatus(state: string): void {
+/**
+ * The render's own account of itself (#96).
+ *
+ * `progress` is ABSENT until the render reports a playhead, and the bar is
+ * indeterminate until then rather than sitting at a number nobody measured.
+ * The annotated render is real-time playback, so the playhead is the only
+ * honest source — main cannot compute one without guessing.
+ */
+function setRenderStatus(state: string, progress?: number): void {
   renderStatus.classList.remove('done', 'failed')
+  const running = state === 'trimming' || state === 'rendering'
+  renderBar.hidden = !running
+  if (running) {
+    const known = typeof progress === 'number' && Number.isFinite(progress)
+    renderBar.classList.toggle('indeterminate', !known)
+    if (known) renderBarFill.style.width = `${Math.round(Math.max(0, Math.min(1, progress)) * 100)}%`
+  }
   if (state === 'trimming') {
     // Trim save (GOAL "Replay Trim"): the plain-trim render runs first, then
     // the annotated render flips this line to 'rendering'.
     renderStatus.hidden = false
-    renderStatus.textContent = t('toast.trimming')
+    renderLabel.textContent = t('toast.trimming')
   } else if (state === 'rendering') {
     renderStatus.hidden = false
-    renderStatus.textContent = t('toast.rendering')
+    renderLabel.textContent = t('toast.rendering')
   } else if (state === 'done') {
     renderStatus.hidden = false
     renderStatus.classList.add('done')
-    renderStatus.textContent = t('toast.renderReady')
+    renderLabel.textContent = t('toast.renderReady')
   } else if (state === 'failed') {
     renderStatus.hidden = false
     renderStatus.classList.add('failed')
-    renderStatus.textContent = t('toast.renderFailed')
+    renderLabel.textContent = t('toast.renderFailed')
   } else {
     renderStatus.hidden = true
   }
@@ -113,7 +131,7 @@ window.toastBridge.onInit((payload) => {
 })
 
 window.toastBridge.onRenderStatus((payload) => {
-  setRenderStatus(payload.state)
+  setRenderStatus(payload.state, payload.progress)
 })
 
 closeBtn.addEventListener('click', () => window.toastBridge.close())

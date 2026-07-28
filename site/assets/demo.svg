@@ -19,13 +19,18 @@
     @keyframes ph { 0%,40%{transform:translateX(0)} 55%,100%{transform:translateX(-214px)} }
 
     #cursor { opacity: 0; animation: cur 9s linear infinite }
+    /* THE CURSOR DRAGS THE BOX THAT APPEARS. Its tip is the path's origin, so
+       these translates ARE the rectangle's corners: #objrect is (598,314) to
+       (746,372) and scales from its top-left over the same 62%-74% window. They
+       were 78px apart before, which read as the cursor drawing one rectangle
+       while a different one showed up. */
     @keyframes cur {
-      0%,58%   { opacity:0; transform: translate(596px,236px) }
-      61%      { opacity:1; transform: translate(596px,236px) }
-      74%      { opacity:1; transform: translate(760px,300px) }
-      78%      { opacity:1; transform: translate(470px,360px) }
-      96%      { opacity:1; transform: translate(470px,360px) }
-      98%,100% { opacity:0; transform: translate(470px,360px) }
+      0%,58%   { opacity:0; transform: translate(598px,314px) }
+      61%      { opacity:1; transform: translate(598px,314px) }
+      74%      { opacity:1; transform: translate(746px,372px) }
+      78%      { opacity:1; transform: translate(470px,392px) }
+      96%      { opacity:1; transform: translate(470px,392px) }
+      98%,100% { opacity:0; transform: translate(470px,392px) }
     }
     #objrect { opacity:0; transform-box: fill-box; transform-origin: top left; animation: obj 9s linear infinite }
     @keyframes obj {

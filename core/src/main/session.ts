@@ -1086,6 +1086,7 @@ function startFreshCaptureRenders(
         docLanguage: packDocLanguage(settings),
       },
       (state) => updateToastRenderStatus(dirPath, state),
+      (ratio) => updateToastRenderStatus(dirPath, 'rendering', ratio),
     )
   } else {
     startKeyframeStill(handle, {

@@ -29,7 +29,12 @@
     <div id="blurWarning" class="warning" hidden data-i18n="toast.blurWarning">
       Original replay contains unredacted content — share replay_annotated.webm or create a sanitized ZIP.
     </div>
-    <div id="renderStatus" class="status" hidden></div>
+    <div id="renderStatus" class="status" hidden>
+      <span id="renderLabel"></span>
+      <!-- The bar is INDETERMINATE until the render reports a real playhead:
+           a filled fraction nobody measured is a lie the eye believes. -->
+      <div id="renderBar" class="bar" hidden><div id="renderBarFill"></div></div>
+    </div>
   </main>
   <script src="toast.js"></script>
 </body>

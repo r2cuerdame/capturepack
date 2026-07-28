@@ -20,6 +20,8 @@ import { annotationAt } from '../../shared/track'
 interface RenderBridge {
   onStart(cb: (payload: RenderStartPayload) => void): void
   frame(payload: RenderFramePayload): void
+  /** How far through the replay this render has played, 0..1 (#96). */
+  progress?(ratio: number): void
   result(payload: RenderResultPayload): void
 }
 
@@ -305,6 +307,17 @@ async function renderAnnotated(
     presentedMs = mediaTimeMs
   })
 
+  // Throttled so a 30 s render sends a few dozen messages, not a thousand: the
+  // bar cannot show more than the eye can read anyway.
+  let lastProgressAt = 0
+  const reportProgress = (tMs: number): void => {
+    if (job.durationMs <= 0) return
+    const now = performance.now()
+    if (now - lastProgressAt < 200) return
+    lastProgressAt = now
+    window.renderBridge.progress?.(Math.max(0, Math.min(1, tMs / job.durationMs)))
+  }
+
   const drawFrame = (): number => {
     // Clamp to the manifest replay_duration_ms (the lifetime clock cap): the
     // decoded clock can run slightly past the recorder's wall clock, which
@@ -314,6 +327,7 @@ async function renderAnnotated(
     const tMs = job.durationMs > 0 ? Math.min(rawMs, job.durationMs) : rawMs
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
     drawOverlay(ctx, canvas, overlay, tMs)
+    reportProgress(tMs)
     return tMs
   }
 
