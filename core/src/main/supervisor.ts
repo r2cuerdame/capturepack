@@ -36,7 +36,7 @@
 // deletes the shortcut and the installer writes a stand-down flag so that
 // supervision can never fight setup.
 import { app } from 'electron'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { CAPTURE_ARG, armShortcutArgs, lnkHotkeyFromAccelerator } from '../shared/startMenuLink'
@@ -446,6 +446,13 @@ function disarmShortcut(): boolean {
 }
 
 /**
+ * How long the synchronous Start Menu arm may take before it is abandoned. It
+ * is one WScript.Shell call; a second is generous, and blocking startup on a
+ * wedged PowerShell would be worse than having no fallback.
+ */
+const ARM_SHORTCUT_TIMEOUT_MS = 5_000
+
+/**
  * Hands the accelerator to Explorer NOW rather than waiting for the watchdog.
  *
  * Used when the app is about to stop supervising itself while continuing to run
@@ -457,13 +464,26 @@ export function armShortcutNow(accelerator: string, description: string): void {
   const spec = shortcutSpec(accelerator, description)
   if (spec === null) return
   try {
-    const child = spawn('powershell.exe', armShortcutArgs(spec), {
-      detached: true,
-      stdio: 'ignore',
+    // SYNCHRONOUS, and deliberately not detached. Measured: under
+    // `detached: true`, WScript.Shell's Save() silently writes nothing —
+    // PowerShell still exits 0 with an empty stderr, so the old code logged
+    // success and left no shortcut at all. This is the gave-up path, where the
+    // app has just refused the accelerator on purpose; handing it nowhere and
+    // announcing that it was handed over recreates issue #61 INSIDE the safety
+    // net built for it. Waiting for a short PowerShell call here is cheap, and
+    // it is the only way the log can state what actually happened.
+    const done = spawnSync('powershell.exe', armShortcutArgs(spec), {
       windowsHide: true,
+      timeout: ARM_SHORTCUT_TIMEOUT_MS,
     })
-    child.unref()
-    logInfo(`[supervisor] armed the Start Menu fallback on ${spec.hotkey}`)
+    if (done.status === 0 && fs.existsSync(spec.linkPath)) {
+      logInfo(`[supervisor] armed the Start Menu fallback on ${spec.hotkey}`)
+      return
+    }
+    logWarn(
+      `[supervisor] could not arm the Start Menu fallback on ${spec.hotkey} — ` +
+        `powershell exit ${String(done.status)}, shortcut present: ${String(fs.existsSync(spec.linkPath))}`,
+    )
   } catch (err) {
     logWarn(`[supervisor] could not arm the Start Menu fallback: ${describe(err)}`)
   }

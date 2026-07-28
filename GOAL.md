@@ -249,10 +249,17 @@ working. So:
   something from a live recorder: asking for a replay stops the older of its two rotating
   segments, and recreating its window throws the whole ring buffer away. So neither is
   allowed on a guess. A request that goes UNANSWERED is not evidence — a busy machine
-  failing to reply in time says nothing about whether frames are flowing — and a recorder
-  is only ever recreated when there is nothing left to lose: its renderer is gone, or it
-  has answered and the answer was empty. Losing the last 30 seconds to a wrong verdict is
-  strictly worse than displaying a wrong verdict, which is all the original bug ever did.
+  failing to reply in time says nothing about whether frames are flowing, so it does not
+  move the state AND does not count towards a rebuild. A recorder is only ever recreated
+  when its renderer is gone, or when it has ANSWERED — twice, emptily — because a slot that
+  was entirely muxer-buffered comes back empty on a perfectly healthy recorder, so one
+  empty answer is not proof of anything either. Losing the last 30 seconds to a wrong
+  verdict is strictly worse than displaying a wrong verdict, which is all the original bug
+  ever did.
+- **And the honest price of that rule, so it is never mistaken for an oversight**: a display
+  whose renderer answers nothing at all, ever, sits on "starting…" rather than being named
+  as failed. No evidence is not evidence of failure. It is on the record every time it
+  happens, and it is far cheaper than a confident verdict that throws a working buffer away.
 
 **Start with Windows, by default.** A capture tool that is not running when the bug happens
 has already failed — the buffer only holds what it was there to record. So the app
@@ -318,7 +325,11 @@ So the product makes one promise, and everything below exists only to keep it:
   "CapturePack Capture", carrying the configured hotkey as a Windows shortcut key. The
   shortcut key is **armed the moment the app is gone** (by the watchdog) and **removed
   while the app is running** (which is what lets the app hold the accelerator itself, so a
-  capture stays instant instead of costing a process launch). Pressing it while the app is
+  capture stays instant instead of costing a process launch). The watchdog arms BEFORE it
+  works out why the app went — the keystroke must have an answer during the gap — so it
+  also takes the shortcut back on every path that ends with CapturePack alive again. An
+  intentional Quit is the one case where it stays: nothing is running, so Explorer holding
+  the key is the promise being kept. Pressing it while the app is
   running is forwarded into the live instance through the single-instance lock and captures
   immediately; pressing it while the app is dead starts CapturePack and says so, instead of
   hitting nothing. A hotkey the user re-records in Settings is mirrored onto the shortcut.

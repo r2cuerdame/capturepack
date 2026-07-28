@@ -66,6 +66,7 @@ const timer = setInterval(() => {
 function onAppGone(): void {
   if (standDownRequested()) {
     log('app gone while the installer is running — standing down')
+    disarmShortcut()
     stop(0)
     return
   }
@@ -85,6 +86,9 @@ function onAppGone(): void {
     // Someone else's marker. Relaunching on it could resurrect an app the user
     // deliberately stopped — never act on evidence that is not about our run.
     log(`marker belongs to run ${marker.startedAt}, not ${plan.runStartedAt} — standing down`)
+    // A newer run wrote that marker, so CapturePack is BACK — and it disarmed
+    // the shortcut on its way up, before this arm put one there again.
+    disarmShortcut()
     stop(0)
     return
   }
@@ -172,6 +176,30 @@ function withoutRunAsNode(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
  * Blocking costs the relaunch about half a second, which is the right price for
  * "the keystroke has an answer no matter what happens next".
  */
+/**
+ * Takes the fallback back off the Start Menu.
+ *
+ * The arm above happens BEFORE the watchdog knows why the app is gone, because
+ * the keystroke must have an answer during the gap. Every stand-down path that
+ * ends with CapturePack ALIVE has to undo it: the running app holds the
+ * accelerator itself, and a .lnk still carrying that hotkey is exactly the
+ * "supervision fights the app" state GOAL calls out — measured leaving the
+ * shortcut armed 25s into a healthy new run.
+ *
+ * An exit that was intentional deliberately does NOT come through here: the app
+ * is not running, so Explorer keeping the key is the promise being kept.
+ */
+function disarmShortcut(): void {
+  const spec = plan.shortcut
+  if (spec === null) return
+  try {
+    fs.rmSync(spec.linkPath, { force: true })
+    log(`removed the Start Menu fallback: ${spec.linkPath}`)
+  } catch (err) {
+    log(`could not remove the Start Menu fallback: ${describe(err)}`)
+  }
+}
+
 function armShortcut(): void {
   const spec = plan.shortcut
   if (spec === null) {

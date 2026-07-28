@@ -118,11 +118,16 @@ const RECONCILE_INTERVAL_MS = 15_000
 const RECOVERY_FIRST_DELAY_MS = 30_000
 const RECOVERY_MAX_DELAY_MS = 10 * 60_000
 // A display that is STOPPED and whose window is still alive gets this many
-// probes before the window is recreated. One: the renderer spends a single
-// restart per failure episode, and a probe is how a restart that succeeded but
-// cannot prove itself (no delivered-frame counter on this runtime) gets to say
-// so BEFORE a rebuild throws away the buffer it just refilled.
-const RECOVERY_PROBES_BEFORE_REBUILD = 1
+// ANSWERED probes before the window is recreated (an unanswered one is not
+// evidence and is not counted — see RULE 1 at the probe).
+//
+// Two, not one, and the reason is three hundred lines down at the 'empty'
+// outcome: a slot that was entirely muxer-buffered comes back empty on a
+// PERFECTLY HEALTHY recorder. One empty answer is therefore not enough to
+// justify destroying a ring buffer — it would make the ordinary MP4 case a
+// coin flip. Two consecutive empties, from a renderer that flushed its muxer
+// both times, is a buffer that really is not filling.
+const RECOVERY_PROBES_BEFORE_REBUILD = 2
 
 export type { RecorderFailureReason }
 
@@ -341,7 +346,6 @@ async function probeRecorder(displayId: number, win: BrowserWindow): Promise<voi
   }
   const { replay: result, miss } = outcome
   if (captureWindows.get(displayId) !== win || !wantedDisplayIds.has(displayId)) return
-  probesSinceProof.set(displayId, (probesSinceProof.get(displayId) ?? 0) + 1)
   if (result !== null && result.buffer.byteLength >= RECORDER_EVIDENCE_MIN_BYTES) {
     probesSinceProof.delete(displayId)
     // The SIZE of the proof, on the record (issue #60). "The tray said it was
@@ -375,6 +379,15 @@ async function probeRecorder(displayId: number, win: BrowserWindow): Promise<voi
     )
     return
   }
+  // ...and RULE 1 has to hold for the COUNTER too, not only for the status.
+  //
+  // This increment used to sit above the guard, so an unanswered probe left the
+  // state alone (correct) while still spending a rebuild credit (not). Measured:
+  // one 'stopped' from an ordinary blip, then one probe that missed its 10 s
+  // window, and the next reconcile destroyed a recorder window holding 549 KB of
+  // real footage — the precise thing this release promises can no longer happen.
+  // Only an ANSWER may be spent, because only an answer is evidence.
+  probesSinceProof.set(displayId, (probesSinceProof.get(displayId) ?? 0) + 1)
   // Preserve a more specific renderer-reported failure if it raced the probe.
   if (displayRecorderStates.get(displayId)?.status === 'stopped') return
   // The renderer DID answer, which means it stopped its slot and flushed the
