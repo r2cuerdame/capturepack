@@ -238,8 +238,13 @@ what the user scrubs is what the pack contains.
 
 - Keep the surplus small at the source: rotate on a finer interval so the buffer
   overshoots by a fraction of N instead of up to 2xN.
-- Cut the remainder to exact length through the existing trim render path, in the
-  background pass that already produces the annotated replay — saving stays instant.
+- Cut the remainder to exact length through the existing trim render path.
+- **Showing work is allowed.** If preparing the replay genuinely needs time (an encode or a
+  cut), the editor may open with a progress bar for that step instead of pretending to be
+  ready. The rules: the frozen SNAPSHOT and annotation stay usable immediately — the
+  progress belongs to the replay only — the bar states what it is doing and how far along,
+  and Save is never blocked by it (the pack finishes writing when the encode does). Silent
+  waiting is the only forbidden option.
 - A shorter-than-N buffer (right after launch) is reported honestly as its real length;
   the guarantee is "never longer than N", never padding.
 
