@@ -166,6 +166,10 @@ function observationOf(
       // session, and re-deriving one from name and list order is what let two
       // same-titled windows trade identities when their order changed.
       surface_id: surface.surfaceId,
+      // The OS handle, so the control dump and this ring can be joined on the
+      // one value they both observe rather than on descriptions they spell
+      // differently (#97).
+      ...(surface.hwnd === undefined ? {} : { hwnd: surface.hwnd }),
       title: surface.windowTitle ?? '',
       process: surface.executableName ?? '',
       class_name: surface.className ?? '',

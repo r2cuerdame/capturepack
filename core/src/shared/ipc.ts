@@ -397,6 +397,19 @@ export interface EditorUiaElement {
  */
 export interface EditorUiaWindow {
   /**
+   * The OS window handle, decimal — the one identifier every source of window
+   * data is looking at the same value of (#97).
+   *
+   * Everything else is a description two sources can disagree about: the
+   * surface host reports a process as "explorer.exe" and the UI Automation dump
+   * as "explorer"; an untitled window has its class written into its title by
+   * the dump and left empty by the host. Matching on those is guesswork, and it
+   * silently matched nothing at all.
+   *
+   * Absent on a pack written before the dump reported it.
+   */
+  hwnd?: string
+  /**
    * Core's own surface id, when this window came from the surface ring (#90).
    *
    * Stable for the whole session — hwnd plus a creation ordinal, so a recycled

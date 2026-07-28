@@ -843,7 +843,12 @@ function isWindowShape(value: unknown): value is Record<string, unknown> {
 
 function toWindowRecord(raw: Record<string, unknown>, index: number): UiaWindowRecord {
   const z = raw['z']
+  const hwnd = raw['hwnd']
   return {
+    // The OS handle (#97) — the one value this dump and the surface ring both
+    // observe rather than describe. Absent on a payload written before the dump
+    // reported it, and absent stays absent: a handle nobody read is not a zero.
+    ...(typeof hwnd === 'string' && hwnd !== '' && hwnd !== '0' ? { hwnd } : {}),
     title: raw['title'] as string,
     process: raw['process'] as string,
     class_name: typeof raw['class_name'] === 'string' ? raw['class_name'] : '',

@@ -73,6 +73,42 @@ export interface ContextSessionOptions {
 /** Candidates per frame. Generous — the reference capture's whole desk is 451. */
 const MAX_CANDIDATES = 4_000
 
+/**
+ * How far two rectangles of the SAME window may differ, summed over the four
+ * edges, and still be the same window (#97).
+ *
+ * The UI Automation dump measures a window with the invisible resize border
+ * Windows adds; Core's ring measures the DWM extended frame without it.
+ * Measured on this desk: 1461x962 against 1443x953, i.e. 18 wide and 9 tall,
+ * which is 54 summed over four edges. 160 leaves room for a higher DPI without
+ * letting a different window in.
+ */
+const WINDOW_MATCH_SLACK = 160
+
+/**
+ * Whether two sources are naming the same executable (#97).
+ *
+ * THEY SPELL IT DIFFERENTLY. `scripts/context-host.ps1` reports what
+ * `QueryFullProcessImageNameW` returns — the file name, "explorer.exe". The UI
+ * Automation dump reports PowerShell's process name, "explorer". An exact
+ * comparison therefore matched NOTHING, every element was dropped as
+ * unattributable, and no control could be picked on any pack — which is what
+ * "하위 컨트롤 못잡음" survived two rounds of fixes as.
+ */
+function sameProcess(a: string, b: string): boolean {
+  const norm = (v: string): string => v.trim().toLowerCase().replace(/\.exe$/, '')
+  return norm(a) === norm(b) && norm(a) !== ''
+}
+
+function rectGap(a: EditorUiaWindow['bounds'], b: EditorUiaWindow['bounds']): number {
+  return (
+    Math.abs(a.x - b.x) +
+    Math.abs(a.y - b.y) +
+    Math.abs(a.width - b.width) +
+    Math.abs(a.height - b.height)
+  )
+}
+
 export class ContextSession {
   readonly sessionId: string
   private readonly displays: readonly ContextDisplayTarget[]
@@ -196,22 +232,52 @@ export class ContextSession {
       // give or take the invisible resize border.
       const zOf = new Map<number, number>()
       const used = new Set<EditorUiaWindow>()
+      // THE HANDLE FIRST, ALWAYS (#97). Both sources observe it; everything
+      // else about a window they merely describe, and they describe it
+      // differently — "explorer.exe" against "explorer", and an untitled window
+      // whose CLASS the dump writes into its title. Matching on descriptions
+      // silently matched nothing at all, which is what left every control
+      // unattributable and unpickable.
+      const byHandle = new Map<string, EditorUiaWindow>()
+      for (const w of host.windows) if (w.hwnd !== undefined) byHandle.set(w.hwnd, w)
       for (const dumped of instant.windows) {
         let best: EditorUiaWindow | null = null
         let bestGap = Number.POSITIVE_INFINITY
+        const exact = dumped.hwnd === undefined ? undefined : byHandle.get(dumped.hwnd)
+        if (exact !== undefined && !used.has(exact)) {
+          used.add(exact)
+          zOf.set(dumped.z, exact.z)
+          continue
+        }
+        // Only a pack whose dump predates the handle reaches here. Kept so an
+        // older recording still resolves its controls, and deliberately narrow.
         for (const w of host.windows) {
           if (used.has(w)) continue
-          if (w.process !== dumped.process) continue
+          if (!sameProcess(w.process, dumped.process)) continue
           if (w.class_name !== dumped.class_name) continue
           if (w.title !== dumped.title) continue
-          const gap =
-            Math.abs(w.bounds.x - dumped.bounds.x) +
-            Math.abs(w.bounds.y - dumped.bounds.y) +
-            Math.abs(w.bounds.width - dumped.bounds.width) +
-            Math.abs(w.bounds.height - dumped.bounds.height)
+          const gap = rectGap(w.bounds, dumped.bounds)
           if (gap < bestGap) {
             best = w
             bestGap = gap
+          }
+        }
+        // A title can change between the dump and the nearest ring sample — a
+        // download counter, a terminal's progress line. The window is still the
+        // same window, and at one instant its RECTANGLE is unique, so fall back
+        // to process + class + the closest rectangle. `WINDOW_MATCH_SLACK` is the
+        // invisible resize border: the dump measures with it, the ring measures
+        // the DWM frame without it, and on this desk that is 18 x 9 physical px.
+        if (best === null) {
+          for (const w of host.windows) {
+            if (used.has(w)) continue
+            if (!sameProcess(w.process, dumped.process)) continue
+            if (w.class_name !== dumped.class_name) continue
+            const gap = rectGap(w.bounds, dumped.bounds)
+            if (gap < bestGap && gap <= WINDOW_MATCH_SLACK) {
+              best = w
+              bestGap = gap
+            }
           }
         }
         if (best === null) continue

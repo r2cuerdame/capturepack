@@ -55,6 +55,8 @@ function windowsAt(tMs, n = 12) {
       // Ring observations carry Core's own stable id (#90). Reproduced here
       // because it is what production hands the session.
       surface_id: `sfc-${i}`,
+      // Both sources observe the handle; only the handle (#97).
+      hwnd: `${1000 + i}`,
       title: i === 0 ? 'CapturePack - 파일 탐색기' : `window ${i}`,
       process: i === 0 ? 'explorer.exe' : 'app.exe',
       class_name: i === 0 ? 'CabinetWClass' : 'Cls',
@@ -240,9 +242,14 @@ for (const order of ['dump first, then ring', 'ring first, then dump']) {
     windows: [
       {
         ...w0,
-        // Same window, seen through a different enumeration — and a rectangle
-        // that differs by the invisible resize border, as a real dump's does.
+        // The SAME window as the ring's, and everything the two sources merely
+        // DESCRIBE is spelled differently — exactly as measured on a real pack:
+        // the surface host says "explorer.exe" where the dump says "explorer",
+        // and the dump writes a window's CLASS into its title when it has none.
+        // Only `hwnd` is observed by both.
         surface_id: undefined,
+        process: w0.process.replace(/\.exe$/, ''),
+        title: `${w0.title} (as the dump spells it)`,
         z: DUMP_Z,
         bounds: {
           x: w0.bounds.x - 9,
@@ -292,6 +299,50 @@ for (const order of ['dump first, then ring', 'ring first, then dump']) {
     `offered ${controls.map((c) => c.name).join(', ') || 'nothing'}`)
   check(`[${order}] the window ring survives`, pastWindows > 1,
     'the ring was thrown away — picking in the past falls back to one instant')
+}
+
+// A pack whose dump predates the handle (#97) must still resolve its controls.
+console.log('\nAn older dump that reports no handle at all')
+{
+  const s4 = new ContextSession('ctx-nohwnd', {
+    displays: [{ index: 2, focused: true, width: 3840, height: 2160 }],
+    replayDurationMs: REPLAY_MS,
+    observation: null,
+    dropped: false,
+  })
+  const w0 = windowsAt(REPLAY_MS, 1)[0]
+  s4.adoptAll(observations)
+  s4.adopt({
+    tMs: REPLAY_MS,
+    // No hwnd, and the process spelled the dump's way: the description
+    // fallback has to carry it, which is what an already-saved pack needs.
+    windows: [
+      {
+        ...w0,
+        surface_id: undefined,
+        hwnd: undefined,
+        z: 55,
+        process: w0.process.replace(/\.exe$/, ''),
+        hasControls: true,
+        tree: 'collected',
+      },
+    ],
+    elements: [
+      {
+        name: '열기',
+        control_type: 'Button',
+        automation_id: 'openBtn',
+        class_name: 'Button',
+        bounds: { x: w0.bounds.x + 40, y: w0.bounds.y + 40, width: 90, height: 30 },
+        display: 2,
+        window: 55,
+      },
+    ],
+  })
+  const f = await s4.frameAt(REPLAY_MS)
+  const named = (f.displays[0]?.candidates ?? []).find((c) => c.name === '열기')
+  check('an older dump still resolves through the description fallback', named !== undefined,
+    'a pack already on disk lost its controls')
 }
 
 console.log(`\nresult: ${failed === 0 ? 'OK' : 'BROKEN'} — ${passed} passed, ${failed} failed\n`)
