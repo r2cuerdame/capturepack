@@ -2035,7 +2035,14 @@ function scheduleContextFrame(): void {
     if (scrub === null) return
     // "Now" is the capture instant, which is the END of the pack clock — the
     // native snapshot, not a video position.
-    requestContextFrame(scrub.atNow ? replayDurationMs : scrub.tMs)
+    //
+    // Otherwise ask for the time of the frame ON SCREEN, not the playhead's
+    // (#81). A seek to T shows the last frame at or before T; asking the ring
+    // for T instead returns where the window HAD GOT TO by then, and the box
+    // lands beside the window the user can see. Measured in rc.4: the displayed
+    // frame ran up to 498 ms behind the playhead, worth 1304 px on a dragged
+    // window, while the boxes themselves were accurate to a median of 9 ms.
+    requestContextFrame(scrub.atNow ? replayDurationMs : scrub.presentedMs)
   }, FRAME_SETTLE_MS)
 }
 
@@ -3550,6 +3557,11 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
         scheduleContextFrame()
         schedulePaint()
       },
+      // AND PICKING FOLLOWS THE PICTURE (#81). A seek can outlast the settle
+      // timer above, so the frame that arrives afterwards must re-ask — the
+      // request is time-keyed and de-duplicated, so when the timer was already
+      // right this costs nothing.
+      onFrame: () => scheduleContextFrame(),
     })
     scrub = controller
     timebar.show()
