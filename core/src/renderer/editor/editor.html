@@ -10,12 +10,27 @@
   <link rel="stylesheet" href="./editor.css" />
 </head>
 <body>
+  <!-- Windowed title bar (GOAL "Editor Window Mode", issue #49): WINDOWED MODE
+       ONLY. The top bar was already the drag region, but its controls stretch
+       across the whole width, so the only draggable pixels were the few of gap
+       between them — an invisible sliver nobody can find, which is why the
+       window "could not be moved at all". This is a real title bar: it NAMES
+       the capture, it is unmistakably the thing to grab, and the whole strip is
+       a drag region (double-clicking it maximizes/restores, the caption
+       behaviour the OS gives any drag region).
+       It sits ABOVE the top bar in normal flow rather than over the board, so
+       it cannot swallow a single click meant for the canvas — and it is
+       display:none in the fullscreen overlay, which carries no drag region at
+       all because dragging there would do nothing. -->
+  <div id="titleBar">
+    <span id="titleBarLabel" data-i18n="editor.windowTitle">CapturePack — Annotate</span>
+  </div>
   <!-- Editor Chrome (GOAL "Editor Chrome"): the bar sits above the frozen
        capture, so it stays quiet — ICONS for the recurring controls (window
        mode, help, save), text only where text is content (title, note). There
        is no display picker: the board already shows every captured display, and
-       framing one is a keyboard gesture (1..9, then ` — the key left of 1 — or
-       Esc, to fit the board), documented in the help
+       framing one is a keyboard gesture (1..9, then ` — the key left of 1 — to
+       fit the board again; never Esc, issue #53), documented in the help
        sheet rather than in a row of toolbar buttons. -->
   <header id="topbar">
     <button id="colorBtn" title="Color (C)" data-i18n-title="editor.colorTooltip"><span id="colorSwatch"></span></button>
@@ -37,22 +52,25 @@
     <span id="trimDropChip" class="chip" hidden></span>
     <!-- Zoom control (GOAL "Editor Chrome", issue #31): the board's zoom is a
          FIRST-CLASS control, not a hidden gesture — a wheel shortcut alone
-         leaves it undiscoverable. ORDER IS THE GOAL'S: zoom-in button · slider ·
-         zoom-out button, then the live percentage. It mirrors Ctrl+wheel (same
+         leaves it undiscoverable. ORDER: zoom-out button · slider · zoom-in
+         button, then the live percentage. It follows the SLIDER (issue #44):
+         dragging right makes the image larger, so [+] on the left contradicted
+         the very control it sits on — the direction the user reaches has to
+         agree with the direction the track grows. It mirrors Ctrl+wheel (same
          0.5x-4x range, same 1.2x step), snaps to Fit and 100%, and
          double-clicking the slider returns to Fit. -->
     <div id="zoomControl">
       <button
-        id="zoomInBtn"
+        id="zoomOutBtn"
         class="iconBtn zoomBtn"
         type="button"
-        title="Zoom in (Ctrl+Wheel)"
-        data-i18n-title="editor.zoomInTooltip"
-        aria-label="Zoom in (Ctrl+Wheel)"
-        data-i18n-aria-label="editor.zoomInTooltip"
+        title="Zoom out (Ctrl+Wheel)"
+        data-i18n-title="editor.zoomOutTooltip"
+        aria-label="Zoom out (Ctrl+Wheel)"
+        data-i18n-aria-label="editor.zoomOutTooltip"
       >
         <svg class="icon" viewBox="0 0 20 20" width="20" height="20" aria-hidden="true" focusable="false">
-          <path d="M4.5 10h11M10 4.5v11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+          <path d="M4.5 10h11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
         </svg>
       </button>
       <input
@@ -68,16 +86,16 @@
         data-i18n-aria-label="editor.zoomSliderTooltip"
       />
       <button
-        id="zoomOutBtn"
+        id="zoomInBtn"
         class="iconBtn zoomBtn"
         type="button"
-        title="Zoom out (Ctrl+Wheel)"
-        data-i18n-title="editor.zoomOutTooltip"
-        aria-label="Zoom out (Ctrl+Wheel)"
-        data-i18n-aria-label="editor.zoomOutTooltip"
+        title="Zoom in (Ctrl+Wheel)"
+        data-i18n-title="editor.zoomInTooltip"
+        aria-label="Zoom in (Ctrl+Wheel)"
+        data-i18n-aria-label="editor.zoomInTooltip"
       >
         <svg class="icon" viewBox="0 0 20 20" width="20" height="20" aria-hidden="true" focusable="false">
-          <path d="M4.5 10h11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+          <path d="M4.5 10h11M10 4.5v11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
         </svg>
       </button>
       <span id="zoomPct">100%</span>
@@ -141,7 +159,9 @@
          ends, for the box being created — together with the description input
          below it (GOAL "Unified Annotation Box"), so number, duration and blur
          can be set while typing. Editor chrome only: never rendered into any
-         output. -->
+         output. A SIBLING of #frame, so it is positioned against #stage — see
+         syncSelectionUi() for why that space has to stay unscrolled (issue
+         #50). -->
     <div id="boxHeader" hidden>
       <button id="numberBtn" title="Toggle number" data-i18n-title="editor.numberTooltip">#</button>
       <button id="durationChip" title="Edit duration" data-i18n-title="editor.durationTooltip">1.0s</button>
