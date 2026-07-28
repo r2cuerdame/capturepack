@@ -15,6 +15,19 @@ export const IPC = {
 
   // main -> editor window: everything the editor needs to open
   editorInit: 'editor:init',
+  // main -> editor window: the capture-instant object dump, LATE (GOAL "Static
+  // object picking"). Payload: EditorUiaObjectsPayload.
+  //
+  // Object data is the one part of the editor that is allowed to arrive after
+  // the window does: the dump is budgeted and killed independently, so on a
+  // slow machine it can settle a few hundred ms after the editor is on screen.
+  // Before this channel existed the editor simply opened with an empty index
+  // and picking was dead for the whole session — a settled payload thrown away
+  // because a stopwatch started at the capture trigger had run out. The editor
+  // MUST accept this message at any time after editor:init and rebuild its
+  // object index from it; `dropped` says the dump produced nothing and none is
+  // coming, so it can say so once instead of failing silently.
+  editorUiaObjects: 'editor:uia-objects',
   // editor -> main: user confirmed export
   editorExport: 'editor:export',
   // editor -> main: user cancelled (Esc). In edit mode this is Discard: close
@@ -209,6 +222,13 @@ export interface EditorUiaElement {
   automation_id: string
   class_name: string
   bounds: { x: number; y: number; width: number; height: number }
+  // WHICH display's snapshot space `bounds` is in: the 1-based board/manifest
+  // display index (GOAL "Multi-Monitor Support"). ALWAYS resolved — a payload
+  // that names no display (a pack written before the dump was mapped
+  // per-display) reports the focused display here, which is the only space it
+  // was ever mapped into. The editor builds ONE object index per display and
+  // must only ever feed an entry to the index of THIS display.
+  display: number
   // `z` of the window this control was walked from — which window covers a
   // pixel decides which controls may be offered there. -1 when the dump did
   // not say (a pack written before the dump covered more than one window).
@@ -227,6 +247,11 @@ export interface EditorUiaWindow {
   process: string
   class_name: string
   bounds: { x: number; y: number; width: number; height: number }
+  // The display `bounds` is in — see EditorUiaElement.display. A window is
+  // reported on the display it mostly covers; a window straddling two screens
+  // keeps ONE space (its controls have to stay with it) and simply reaches off
+  // the edge of that display's snapshot.
+  display: number
   focused: boolean
   // Z-order at the capture instant: 0 is the top-most window. Decides which
   // window owns a pixel when several overlap.
@@ -263,8 +288,20 @@ export interface EditorInitPayload {
   // without plugins/windows-uia — and the editor then behaves exactly as it
   // did before the feature existed. Controls refine; windows are the floor,
   // so uiaWindows is routinely non-empty while uiaElements is not.
+  //
+  // EMPTY IS NOT FINAL on a fresh capture: when the dump has not settled by the
+  // time the editor is ready, these open empty and the real lists arrive on
+  // IPC.editorUiaObjects moments later (see uiaDropped below).
   uiaElements: EditorUiaElement[]
   uiaWindows: EditorUiaWindow[]
+  // The object dump was attempted and produced NOTHING usable, so picking is
+  // off for this session and no editor:uia-objects message is coming (GOAL:
+  // "Silence is not absence" — the editor says so once instead of looking
+  // broken). FALSE both when objects are present AND when they are still on
+  // their way; it is never true for a pack that simply never had object data
+  // (a non-Windows capture, or a re-edited pack without the plugin), because
+  // nothing was dropped there.
+  uiaDropped: boolean
   fps: number
   scrubInvert: boolean
   scrubSensitivityMs: number
@@ -295,6 +332,25 @@ export interface EditorInitPayload {
   // settings.editorWindowMode. The renderer paints its top-bar drag region and
   // the ⧉ button from this, then follows the editorWindowMode pushes.
   windowMode: EditorWindowMode
+}
+
+/**
+ * IPC.editorUiaObjects — the object dump, delivered after the editor opened.
+ *
+ * The editor treats this as a REPLACEMENT for the (empty) lists it opened with:
+ * it rebuilds its per-display object indexes and picking starts working
+ * mid-session, with no other state touched. Annotations already drawn are
+ * unaffected — this only ever adds what can be picked.
+ *
+ * Preload bridge: expose it as `onUiaObjects(cb)` beside `onInit(cb)`.
+ */
+export interface EditorUiaObjectsPayload {
+  uiaElements: EditorUiaElement[]
+  uiaWindows: EditorUiaWindow[]
+  // Same meaning as EditorInitPayload.uiaDropped: the dump settled with nothing
+  // usable. Both lists are then empty and this is the LAST word on picking for
+  // the session.
+  dropped: boolean
 }
 
 export interface EditorAnnotationAddedPayload {

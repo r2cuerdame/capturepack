@@ -229,11 +229,17 @@ async function dropUndeclarableDisplays(dirPath: string): Promise<void> {
 export const UIA_PLUGIN_NAME = 'windows-uia'
 /**
  * Payload schema version, not the app version (SPEC §11.1 requires the
- * manifest declaration and meta.json to agree). 0.2.0 added the per-window
- * class_name/z/tree/element_count and the per-element window index (SPEC
- * §11.3) — additive, so a 0.1.0 reader still reads every field it knows.
+ * manifest declaration and meta.json to agree). Every version so far has been
+ * additive, so a reader of any of them still reads every field it knows:
+ *  - 0.2.0 added the per-window class_name/z/tree/element_count and the
+ *    per-element window index (SPEC §11.3).
+ *  - 0.3.0 added `display` on both, so a multi-display capture reports each
+ *    window and control in the snapshot space of the display it is ON instead
+ *    of forcing the whole desktop through the focused display's transform.
+ *    Absent = the focused display, which is what a single-display pack writes,
+ *    so its payload is unchanged.
  */
-export const UIA_PLUGIN_VERSION = '0.2.0'
+export const UIA_PLUGIN_VERSION = '0.3.0'
 
 /** The manifest.plugins entry for the payload writeUiaPlugin() lays down. */
 export function uiaPluginDeclaration(): Manifest['plugins'][number] {

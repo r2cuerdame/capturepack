@@ -26,17 +26,24 @@
 // sees — which Windows may have DPI-virtualized, and NOT uniformly: a
 // system-DPI-aware client sees a monitor whose DPI differs from the system's
 // scaled by (system DPI / monitor DPI). So the helper also reports every
-// MONITOR's rectangle in that same space, and mapping onto the focused
-// display's snapshot pixels (the annotation coordinate space, SPEC §8.2) is a
-// per-monitor affine transform — `snapshot = (uia - monitor.origin) x
-// (snapshot size / monitor size)` — which no virtualization can fool.
-// `root_bounds` (the UIA desktop root = the primary display) is the cruder
-// fallback for a helper that could not enumerate monitors.
+// MONITOR's rectangle in that same space, and mapping onto one display's
+// snapshot pixels (the annotation coordinate space, SPEC §8.2) is a per-monitor
+// affine transform — `snapshot = (uia - monitor.origin) x (snapshot size /
+// monitor size)` — which no virtualization can fool. `root_bounds` (the UIA
+// desktop root = the primary display) is the cruder fallback for a helper that
+// could not enumerate monitors.
+//
+// ONE SPACE PER CAPTURED DISPLAY. The capture freezes every screen and the
+// editor draws them all, so each window and control is mapped into the snapshot
+// of the display it is ON and says which one that is (`display`, SPEC §11.3 —
+// absent means the focused display, exactly like an annotation's, SPEC §8.8).
+// Forcing the whole desktop through the focused display's transform, as this
+// once did, left every other screen holding rectangles that belonged to no
+// image: picking worked on one monitor and was silently dead on the rest.
 import { spawn } from 'node:child_process'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import * as path from 'node:path'
-import { gzipSync } from 'node:zlib'
 import { app, screen } from 'electron'
 import type { Rectangle } from 'electron'
 import type {
@@ -76,6 +83,15 @@ const UIA_MAX_ELEMENTS = 3_000
 const UIA_MAX_WINDOWS = 24
 /** Grace after the kill signal before the promise resolves without the child. */
 const UIA_KILL_GRACE_MS = 300
+/**
+ * Slack over budget + kill grace before the resolution time is worth a log
+ * line. The DESIGNED worst case (helper killed at the budget, resolved from
+ * partial output one grace later) lands exactly on that bound and timers fire a
+ * few ms late, so warning at the bound itself would print on every truncated
+ * dump — noise, not a diagnostic. Past this, something held the resolution up
+ * that the design did not account for, and the editor waited for it.
+ */
+const UIA_OVERSHOOT_SLACK_MS = 100
 
 /** One display as the helper process saw it — the mapping yardstick. */
 export interface UiaMonitor {
@@ -98,12 +114,27 @@ export interface UiaRawDump {
   elements: UiaElementRecord[]
 }
 
-/** The display an element dump is mapped onto: the FOCUSED display's snapshot. */
-export interface UiaSnapshotTarget {
-  // Electron display.bounds (device-independent pixels) of the focused display.
+/**
+ * ONE captured display a dump can be mapped into (SPEC §5.6, §11.3).
+ *
+ * The capture freezes every display and the editor draws them all, so the dump
+ * is mapped into EVERY display's own snapshot space — not forced through the
+ * focused display's transform, which left every other screen holding rectangles
+ * that belong to no image and made picking dead everywhere but one monitor.
+ */
+export interface UiaDisplayTarget {
+  // 1-based display index as the PACK declares it (manifest.media.displays[].index,
+  // SPEC §5.6) — the value `display` carries on a window, an element and an
+  // annotation alike. A pack that declares no per-display media has exactly one
+  // display and its index is 1.
+  index: number
+  // The display snapshot.png is (SPEC §8.2): the one whose entries write no
+  // `display` field at all. Exactly one target is focused.
+  focused: boolean
+  // Electron display.bounds (device-independent pixels).
   bounds: Rectangle
-  // The focused display's snapshot size in pixels — literally what snapshot.png
-  // is, so the mapped coordinates are the annotation coordinate space.
+  // This display's snapshot size in pixels — literally what its snapshot PNG
+  // is, so the mapped coordinates are that display's annotation coordinate space.
   width: number
   height: number
 }
@@ -115,18 +146,19 @@ export interface UiaSnapshotTarget {
  */
 export function startUiaDump(): Promise<UiaRawDump | null> {
   if (process.platform !== 'win32') return Promise.resolve(null)
-  const command = encodedHelperCommand()
-  if (command === null) {
+  const invocation = helperInvocation()
+  if (invocation === null) {
     logOnce('uia: helper script not found; continuing without object data')
     return Promise.resolve(null)
   }
   const startedAt = new Date()
+  const startedAtMs = Date.now()
   // ONE origin for both budgets: the helper's own soft budget is computed from
   // this absolute instant, so powershell.exe's startup is charged to the
   // helper's remaining time instead of being invisible to it (a cold start can
   // exceed the whole budget, and a stopwatch started inside the script would
   // happily keep walking past the kill below).
-  const deadlineAtMs = Date.now() + UIA_BUDGET_MS
+  const deadlineAtMs = startedAtMs + UIA_BUDGET_MS
   return new Promise<UiaRawDump | null>((resolve) => {
     let settled = false
     let killTimer: ReturnType<typeof setTimeout> | undefined
@@ -137,6 +169,19 @@ export function startUiaDump(): Promise<UiaRawDump | null> {
       clearTimeout(killTimer)
       clearTimeout(graceTimer)
       if (reason !== undefined) logOnce(`uia: ${reason}; continuing without object data`)
+      // How long the dump ACTUALLY took to resolve, printed only when it ran
+      // past what it was allowed. This is the number that explains a late or
+      // empty index (the editor waits for this promise), and until it was
+      // logged the overshoot was invisible: the budget is what we ASK for, this
+      // is what we got.
+      const elapsedMs = Date.now() - startedAtMs
+      if (elapsedMs > UIA_BUDGET_MS + UIA_KILL_GRACE_MS + UIA_OVERSHOOT_SLACK_MS) {
+        console.warn(
+          `capturepack: uia: the dump resolved in ${elapsedMs} ms, past its ${UIA_BUDGET_MS} ms budget ` +
+            `+ ${UIA_KILL_GRACE_MS} ms kill grace` +
+            `${dump === null ? ' (with nothing usable)' : ''}`,
+        )
+      }
       resolve(dump)
     }
 
@@ -149,21 +194,17 @@ export function startUiaDump(): Promise<UiaRawDump | null> {
           '-NonInteractive',
           // UI Automation clients are happiest on an STA thread.
           '-STA',
-          // NOT -File: PowerShell's execution policy governs script FILES, and
-          // it resolves by scope precedence — MachinePolicy and UserPolicy beat
-          // the -ExecutionPolicy switch (which only sets the Process scope). On
-          // a domain-joined machine with an AllSigned/Restricted policy the
-          // unsigned helper would simply be refused, silently turning object
-          // picking off forever. A command is not a script file, so this runs
-          // regardless of policy — and it reads the helper through Electron's
-          // own fs, so the archive it ships in stops mattering too.
-          '-EncodedCommand',
-          command,
+          // Only the Process scope, which MachinePolicy/UserPolicy still beat —
+          // see helperInvocation() for what happens when they do.
+          '-ExecutionPolicy',
+          'Bypass',
+          ...invocation.args,
         ],
         {
           windowsHide: true,
-          // The helper's parameters (a command string cannot carry a param()
-          // block), including the shared hard deadline.
+          // The helper's parameters (it takes no param() block, so that one
+          // interface serves both invocation forms), including the shared hard
+          // deadline.
           env: {
             ...process.env,
             CAPTUREPACK_UIA_DEADLINE: String(deadlineAtMs),
@@ -230,6 +271,11 @@ export function startUiaDump(): Promise<UiaRawDump | null> {
         done(dump)
         return
       }
+      // Execution policy refused the script FILE (Group Policy beats
+      // -ExecutionPolicy). Nothing can be done for THIS capture — its budget is
+      // spent — but the next one runs the same file as a command instead, so a
+      // managed machine loses one dump rather than the feature.
+      if (!killed && isPolicyRefusal(stderr)) forcedCommandForm = true
       const detail = killed
         ? `helper exceeded its ${UIA_BUDGET_MS} ms budget`
         : `helper produced no usable output (exit ${String(code)}${stderr.trim() === '' ? '' : `: ${firstLine(stderr)}`})`
@@ -239,28 +285,79 @@ export function startUiaDump(): Promise<UiaRawDump | null> {
 }
 
 /**
- * Maps a raw dump into the pack payload: every rectangle in the FOCUSED
- * display's snapshot pixels (SPEC §8.2, §11.3). Elements from other displays
- * keep their (out-of-frame) positions rather than being dropped — they are
- * still context, and the editor simply never picks them.
+ * Maps a raw dump into the pack payload: every rectangle in the snapshot pixels
+ * of the display it is ON (SPEC §8.2, §11.3), with that display named in
+ * `display` — absent for the focused one, exactly the rule annotations follow
+ * (SPEC §8.8), so a single-display capture writes the same bytes it always did.
+ *
+ * WHICH display an entry belongs to is decided in the HELPER's coordinate space
+ * (matchMonitor already pairs a helper monitor rectangle with each Electron
+ * display): a window goes to the display it overlaps most, and its controls
+ * ALWAYS follow their window — a control mapped into a different space than the
+ * window that owns it could never be offered under that window's pixels.
+ *
+ * An entry on a display this capture did not freeze (or on a desktop the helper
+ * could not enumerate monitors for) falls back to the focused display's
+ * transform and lands out of frame, which is what the payload has always done
+ * with the rest of the desktop: still context, never picked.
+ *
+ * `targets` carries at least the focused display — a capture that froze no
+ * display cannot exist. Given none, records keep the helper's own coordinates,
+ * because there is no snapshot to express them in.
  */
 export function mapUiaToSnapshot(
   raw: UiaRawDump,
-  target: UiaSnapshotTarget,
+  targets: readonly UiaDisplayTarget[],
   budgetMs: number = UIA_BUDGET_MS,
 ): UiaPluginPayload {
-  const map = buildMapper(raw, target)
+  const spaces = targets.map((target) => buildSpace(raw, target))
+  const fallback = spaces.find((s) => s.focused) ?? spaces[0]
+  const spaceOf = (b: UiaBounds): DisplaySpace | undefined => coveringSpace(spaces, b) ?? fallback
+  // z -> the space its window was placed in, so every control can be mapped
+  // with its own window rather than re-derived (and possibly disagreeing).
+  const windowSpaces = new Map<number, DisplaySpace>()
+  const windows = raw.windows.map((w) => {
+    const space = spaceOf(w.bounds)
+    if (space !== undefined) windowSpaces.set(w.z, space)
+    return place(w, space)
+  })
+  const elements = raw.elements.map((e) => place(e, windowSpaces.get(e.window) ?? spaceOf(e.bounds)))
   return {
     captured_at: isoWithOffset(raw.capturedAt),
     budget_ms: budgetMs,
     truncated: raw.truncated,
-    windows: raw.windows.map((w) => ({ ...w, bounds: map(w.bounds) })),
-    elements: raw.elements.map((e) => ({ ...e, bounds: map(e.bounds) })),
+    windows,
+    elements,
   }
 }
 
-/** The pickable CONTROLS the editor receives (SPEC §8.7 target fields). */
-export function editorUiaElements(payload: UiaPluginPayload | null): EditorUiaElement[] {
+/** One record moved into `space` (no space: left exactly as the helper saw it). */
+function place<T extends { bounds: UiaBounds; display?: number }>(
+  record: T,
+  space: DisplaySpace | undefined,
+): T {
+  if (space === undefined) return { ...record }
+  const mapped: T = { ...record, bounds: space.map(record.bounds) }
+  // SPEC §8.8/§11.3: absent means the focused display, so it is never written
+  // for one — and never left over from anywhere either.
+  if (space.focused) delete mapped.display
+  else mapped.display = space.index
+  return mapped
+}
+
+/**
+ * The pickable CONTROLS the editor receives (SPEC §8.7 target fields).
+ *
+ * `focusedIndex` is the pack's focused display index (SPEC §5.6) — what an
+ * entry WITHOUT a `display` field means. Resolving it here rather than in the
+ * editor keeps one rule in one place: a payload written before the dump was
+ * mapped per-display was mapped into the focused display's space and nowhere
+ * else, so that is the only honest answer for it.
+ */
+export function editorUiaElements(
+  payload: UiaPluginPayload | null,
+  focusedIndex: number,
+): EditorUiaElement[] {
   if (payload === null) return []
   return payload.elements.map((e) => ({
     name: e.name,
@@ -268,8 +365,14 @@ export function editorUiaElements(payload: UiaPluginPayload | null): EditorUiaEl
     automation_id: e.automation_id,
     class_name: e.class_name,
     bounds: { ...e.bounds },
+    display: displayIndexOf(e.display, focusedIndex),
     window: e.window,
   }))
+}
+
+/** A payload `display` field resolved against the focused display (SPEC §8.8). */
+function displayIndexOf(value: number | undefined, focusedIndex: number): number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1 ? value : focusedIndex
 }
 
 /**
@@ -287,7 +390,10 @@ export function editorUiaElements(payload: UiaPluginPayload | null): EditorUiaEl
  * report a window that was never walked as *no data recorded*, never as *no
  * objects*.
  */
-export function editorUiaWindows(payload: UiaPluginPayload | null): EditorUiaWindow[] {
+export function editorUiaWindows(
+  payload: UiaPluginPayload | null,
+  focusedIndex: number,
+): EditorUiaWindow[] {
   if (payload === null) return []
   const legacy = payload.elements.length > 0 && payload.elements.every((e) => e.window < 0)
   const counts = new Map<number, number>()
@@ -303,6 +409,7 @@ export function editorUiaWindows(payload: UiaPluginPayload | null): EditorUiaWin
       process: w.process,
       class_name: w.class_name,
       bounds: { ...w.bounds },
+      display: displayIndexOf(w.display, focusedIndex),
       focused: w.focused,
       z,
       hasControls: controls > 0,
@@ -349,10 +456,71 @@ export function parseUiaPayload(text: string | null): UiaPluginPayload | null {
 // ---------------------------------------------------------------------------
 
 /**
- * uia space -> focused-display snapshot pixels.
+ * One captured display as a mapping space: its pack index, its rectangle in the
+ * HELPER's coordinates (null when the helper listed no monitors, or none of
+ * them could be paired with this display), and uia space -> its snapshot pixels.
+ */
+interface DisplaySpace {
+  index: number
+  focused: boolean
+  monitor: UiaMonitor | null
+  map: (b: UiaBounds) => UiaBounds
+}
+
+function buildSpace(raw: UiaRawDump, target: UiaDisplayTarget): DisplaySpace {
+  const monitor = matchMonitor(raw.monitors, target.bounds)
+  return {
+    index: target.index,
+    focused: target.focused,
+    monitor,
+    map: buildMapper(raw, target, monitor),
+  }
+}
+
+/**
+ * The display an entry is ON: the one whose helper rectangle it overlaps most.
  *
- * PREFERRED: the helper's rectangle for the focused MONITOR, which turns the
- * mapping into `(uia - monitor.origin) x (snapshot size / monitor size)`. Exact
+ * Overlap, not the centre point: a window is routinely dragged half off a
+ * screen, and the half that is visible is the one worth picking on. A rectangle
+ * that touches no captured display (another monitor, a window fully off-screen)
+ * gets no space here and the caller falls back to the focused display.
+ */
+function coveringSpace(
+  spaces: readonly DisplaySpace[],
+  bounds: UiaBounds,
+): DisplaySpace | undefined {
+  let best: DisplaySpace | undefined
+  let bestArea = 0
+  for (const space of spaces) {
+    if (space.monitor === null) continue
+    const area = overlapArea(space.monitor.bounds, bounds)
+    if (area > bestArea) {
+      best = space
+      bestArea = area
+    }
+  }
+  if (best !== undefined) return best
+  // Degenerate rectangle (zero width or height): it can overlap nothing, so ask
+  // which display CONTAINS its origin instead of dropping it on the focused one.
+  if (bounds.width > 0 && bounds.height > 0) return undefined
+  return spaces.find((s) => s.monitor !== null && contains(s.monitor.bounds, bounds.x, bounds.y))
+}
+
+function overlapArea(a: UiaBounds, b: UiaBounds): number {
+  const w = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x)
+  const h = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y)
+  return w > 0 && h > 0 ? w * h : 0
+}
+
+function contains(r: UiaBounds, x: number, y: number): boolean {
+  return x >= r.x && y >= r.y && x < r.x + r.width && y < r.y + r.height
+}
+
+/**
+ * uia space -> ONE display's snapshot pixels.
+ *
+ * PREFERRED: the helper's rectangle for THAT MONITOR, which turns the mapping
+ * into `(uia - monitor.origin) x (snapshot size / monitor size)`. Exact
  * whatever DPI awareness the helper ended up with, and correct on mixed-DPI
  * desktops where a single global scale is not.
  *
@@ -361,8 +529,11 @@ export function parseUiaPayload(text: string | null): UiaPluginPayload | null {
  * the helper's space, so its width against the primary's real physical width is
  * that factor (1 for a fully DPI-aware helper).
  */
-function buildMapper(raw: UiaRawDump, target: UiaSnapshotTarget): (b: UiaBounds) => UiaBounds {
-  const monitor = matchMonitor(raw.monitors, target.bounds)
+function buildMapper(
+  raw: UiaRawDump,
+  target: UiaDisplayTarget,
+  monitor: UiaMonitor | null,
+): (b: UiaBounds) => UiaBounds {
   if (monitor !== null && target.width > 0 && target.height > 0) {
     const sx = target.width / monitor.bounds.width
     const sy = target.height / monitor.bounds.height
@@ -373,7 +544,7 @@ function buildMapper(raw: UiaRawDump, target: UiaSnapshotTarget): (b: UiaBounds)
       height: Math.max(0, Math.round(b.height * sy)),
     })
   }
-  const focusedPhysical = toPhysicalRect(target.bounds)
+  const targetPhysical = toPhysicalRect(target.bounds)
   let scale = 1
   if (raw.rootBounds !== null && raw.rootBounds.width > 0) {
     const primaryPhysical = toPhysicalRect(screen.getPrimaryDisplay().bounds)
@@ -383,15 +554,16 @@ function buildMapper(raw: UiaRawDump, target: UiaSnapshotTarget): (b: UiaBounds)
     if (Number.isFinite(candidate) && candidate >= 0.25 && candidate <= 4) scale = candidate
   }
   return (b) => ({
-    x: Math.round(b.x * scale - focusedPhysical.x),
-    y: Math.round(b.y * scale - focusedPhysical.y),
+    x: Math.round(b.x * scale - targetPhysical.x),
+    y: Math.round(b.y * scale - targetPhysical.y),
     width: Math.max(0, Math.round(b.width * scale)),
     height: Math.max(0, Math.round(b.height * scale)),
   })
 }
 
 /**
- * The helper monitor that IS the focused display.
+ * The helper monitor that IS the display with these bounds — for ANY captured
+ * display, not only the focused one: every display gets its own mapping space.
  *
  * The two lists describe the same non-overlapping tiling of the same desktop,
  * so sorting each by (x, y) pairs them positionally — per-monitor scaling moves
@@ -399,34 +571,34 @@ function buildMapper(raw: UiaRawDump, target: UiaSnapshotTarget): (b: UiaBounds)
  * then checked as a guard: a mismatch means the assumption broke and the caller
  * gets the cruder fallback rather than confidently wrong coordinates.
  */
-function matchMonitor(monitors: readonly UiaMonitor[], focusedBounds: Rectangle): UiaMonitor | null {
+function matchMonitor(monitors: readonly UiaMonitor[], displayBounds: Rectangle): UiaMonitor | null {
   const usable = monitors.filter((m) => m.bounds.width > 0 && m.bounds.height > 0)
   if (usable.length === 0) return null
   const displays = screen.getAllDisplays()
   const primaryId = screen.getPrimaryDisplay().id
-  const focused = displays.find(
-    (d) => d.bounds.x === focusedBounds.x && d.bounds.y === focusedBounds.y,
+  const target = displays.find(
+    (d) => d.bounds.x === displayBounds.x && d.bounds.y === displayBounds.y,
   )
-  const focusedIsPrimary = focused !== undefined && focused.id === primaryId
-  // Single monitor, or the focused display is the primary: no ambiguity at all.
+  const targetIsPrimary = target !== undefined && target.id === primaryId
+  // Single monitor, or this display is the primary: no ambiguity at all.
   if (usable.length === 1) return displays.length === 1 ? (usable[0] ?? null) : null
-  if (focusedIsPrimary) {
+  if (targetIsPrimary) {
     const primaryMonitor = usable.find((m) => m.primary)
-    if (primaryMonitor !== undefined && aspectMatches(primaryMonitor, focusedBounds)) {
+    if (primaryMonitor !== undefined && aspectMatches(primaryMonitor, displayBounds)) {
       return primaryMonitor
     }
     return null
   }
-  if (focused === undefined || usable.length !== displays.length) return null
+  if (target === undefined || usable.length !== displays.length) return null
   const byPosition = <T>(items: readonly T[], at: (item: T) => { x: number; y: number }): T[] =>
     [...items].sort((a, b) => at(a).x - at(b).x || at(a).y - at(b).y)
   const sortedMonitors = byPosition(usable, (m) => m.bounds)
   const sortedDisplays = byPosition(displays, (d) => d.bounds)
-  const index = sortedDisplays.findIndex((d) => d.id === focused.id)
+  const index = sortedDisplays.findIndex((d) => d.id === target.id)
   const candidate = index < 0 ? undefined : sortedMonitors[index]
   if (candidate === undefined) return null
-  if (candidate.primary !== (focused.id === primaryId)) return null
-  return aspectMatches(candidate, focusedBounds) ? candidate : null
+  if (candidate.primary !== (target.id === primaryId)) return null
+  return aspectMatches(candidate, displayBounds) ? candidate : null
 }
 
 /** Guard on a positional match: the same monitor cannot change shape. */
@@ -453,7 +625,22 @@ function toPhysicalRect(bounds: Rectangle): Rectangle {
 // ---------------------------------------------------------------------------
 
 let cachedScriptPath: string | null | undefined
-let cachedCommand: string | null | undefined
+
+/**
+ * A Windows command line is capped at 32 767 characters INCLUDING the
+ * executable and every other switch. The command form below is a few hundred
+ * characters plus the script path, so this is only ever a tripwire — but it is
+ * checked, because the form this replaced carried the whole gzipped helper as
+ * base64 and sat at ~89% of this limit: the next few KB of helper source would
+ * have turned object picking off for everyone, with no error anywhere.
+ */
+const MAX_COMMAND_CHARS = 30_000
+
+/**
+ * Set when execution policy refused the script FILE (see startUiaDump). Every
+ * later spawn uses the command form, which no policy scope governs.
+ */
+let forcedCommandForm = false
 
 /**
  * dist/scripts/uia-dump.ps1 — copied there by scripts/build.mjs. Read through
@@ -468,39 +655,59 @@ function resolveHelperScript(): string | null {
 }
 
 /**
- * The helper as a -EncodedCommand argument: a tiny bootstrap that inflates the
- * gzipped script and runs it as a scriptblock.
+ * How to run the helper: the RESOLVED SCRIPT FILE, never its source.
  *
- * Why not the script text itself: a Windows command line caps at ~32 767
- * characters and UTF-16LE base64 nearly triples the source, which the helper
- * comfortably exceeds. Gzipping first keeps the whole thing around 20 KB.
+ * PRIMARY — `-File <path>`. resolveHelperScript() has already proved the file
+ * exists (it tries the app.asar.unpacked copy first, which is the one a
+ * packaged build ships and the one powershell.exe can actually open), so the
+ * command line is a path, not a program. Nothing about the helper's size can
+ * ever reach a limit again.
  *
- * Built ONCE (a capture must never pay for a file read + compress at the
- * trigger); a failure caches null and object picking stays silently off.
+ * FALLBACK — the same file, read and run as a scriptblock through a ~700-char
+ * -EncodedCommand. Execution policy governs script FILES and resolves by scope
+ * precedence, so MachinePolicy/UserPolicy (Group Policy) beat the
+ * -ExecutionPolicy switch: on a managed AllSigned/Restricted machine `-File`
+ * is simply refused. A command is not a script file, so this form runs anyway.
+ * It is used only after a refusal has actually been seen (startUiaDump sets
+ * forcedCommandForm), because it starts marginally slower and the whole point
+ * of the primary form is that nothing travels on the command line.
  */
-function encodedHelperCommand(): string | null {
-  if (cachedCommand !== undefined) return cachedCommand
+function helperInvocation(): { args: string[] } | null {
   const script = resolveHelperScript()
-  if (script === null) {
-    cachedCommand = null
+  if (script === null) return null
+  if (!forcedCommandForm) return { args: ['-File', script] }
+  // Single quotes are PowerShell's literal string; a path may legitimately
+  // contain one, and doubling it is the escape.
+  const command =
+    `$ErrorActionPreference='Stop';` +
+    `& ([scriptblock]::Create([IO.File]::ReadAllText('${script.replace(/'/g, "''")}',[Text.Encoding]::UTF8)))`
+  const encoded = Buffer.from(command, 'utf16le').toString('base64')
+  if (encoded.length > MAX_COMMAND_CHARS) {
+    // Only reachable via an absurd install path; the honest answer is to say so
+    // rather than hand Windows a line it will truncate.
+    logOnce(`uia: the helper command is ${encoded.length} characters, over the ${MAX_COMMAND_CHARS} limit`)
     return null
   }
-  try {
-    const payload = gzipSync(readFileSync(script), { level: 9 }).toString('base64')
-    const bootstrap =
-      `$ErrorActionPreference='Stop';` +
-      `$b=[Convert]::FromBase64String('${payload}');` +
-      `$ms=New-Object System.IO.MemoryStream(,$b);` +
-      `$gz=New-Object System.IO.Compression.GzipStream($ms,[System.IO.Compression.CompressionMode]::Decompress);` +
-      `$sr=New-Object System.IO.StreamReader($gz,[System.Text.Encoding]::UTF8);` +
-      `$code=$sr.ReadToEnd();$sr.Close();` +
-      `& ([scriptblock]::Create($code))`
-    cachedCommand = Buffer.from(bootstrap, 'utf16le').toString('base64')
-  } catch (err) {
-    logOnce(`uia: helper script could not be read (${errorMessage(err)})`)
-    cachedCommand = null
-  }
-  return cachedCommand
+  return { args: ['-EncodedCommand', encoded] }
+}
+
+/**
+ * PowerShell refusing to run a script FILE because of execution policy.
+ *
+ * Deliberately NOT the bare word "UnauthorizedAccess": UI Automation itself
+ * raises UnauthorizedAccessException against elevated or protected windows and
+ * the helper writes that to stderr, so matching it alone would latch
+ * `forcedCommandForm` (which is never reset) for the rest of the process and
+ * permanently downgrade every later capture to the slower encoded form the
+ * primary form exists to avoid. The signals below are execution policy's own:
+ * PSSecurityException and the UnauthorizedAccess FullyQualifiedErrorId
+ * PowerShell prints for a refused script file, plus the message text itself in
+ * whatever wording the host uses.
+ */
+function isPolicyRefusal(stderr: string): boolean {
+  return /PSSecurityException|UnauthorizedAccess,\s*Microsoft\.PowerShell\.Commands|execution of scripts is disabled|running scripts is disabled|not digitally signed/i.test(
+    stderr,
+  )
 }
 
 /**
@@ -616,6 +823,10 @@ function toWindowRecord(raw: Record<string, unknown>, index: number): UiaWindowR
     title: raw['title'] as string,
     process: raw['process'] as string,
     class_name: typeof raw['class_name'] === 'string' ? raw['class_name'] : '',
+    // Absent = the focused display (SPEC §11.3), which is what a 0.2.0 payload
+    // and every focused-screen entry mean — so it stays absent, never defaulted
+    // to a number the pack does not declare.
+    ...displayField(raw['display']),
     bounds: raw['bounds'] as UiaBounds,
     focused: raw['focused'] === true,
     // The array order IS the z-order; the field only makes it explicit for
@@ -647,10 +858,16 @@ function toElementRecord(raw: Record<string, unknown>, fallbackWindow: number): 
     control_type: raw['control_type'] as string,
     automation_id: raw['automation_id'] as string,
     class_name: raw['class_name'] as string,
+    ...displayField(raw['display']),
     bounds: raw['bounds'] as UiaBounds,
     depth: raw['depth'] as number,
     window: typeof window === 'number' && Number.isInteger(window) && window >= 0 ? window : fallbackWindow,
   }
+}
+
+/** `{ display }` for a usable 1-based index, `{}` otherwise (= focused display). */
+function displayField(value: unknown): { display?: number } {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1 ? { display: value } : {}
 }
 
 function countOf(value: unknown): number {
@@ -679,8 +896,46 @@ function logOnce(message: string): void {
   console.warn(`capturepack: ${message}`)
 }
 
+/**
+ * The first line of a child's stderr that says something to a HUMAN.
+ *
+ * PowerShell does not write plain text to a redirected stderr: it writes its
+ * error records as CLIXML — a `#< CLIXML` marker followed by one long
+ * `<Objs …><S S="Error">the actual message</S>…</Objs>` document. Taken
+ * literally, the "first line" of a failed dump was therefore always the string
+ * `#< CLIXML`, which is the one diagnostic this module emits and it named the
+ * ENVELOPE instead of the error. Unwrap it: the `<S>` runs hold the message,
+ * `_x000D__x000A_` is how CLIXML spells a newline, and the usual XML entities
+ * apply.
+ */
 function firstLine(text: string): string {
-  return text.trim().split('\n')[0]?.trim() ?? ''
+  const unwrapped = /#<\s*CLIXML/i.test(text) ? clixmlText(text) : text
+  for (const raw of unwrapped.split('\n')) {
+    const line = raw.trim()
+    // Skip blanks, the marker, and any XML that survived the unwrap: a tag is
+    // never the message.
+    if (line === '' || line.startsWith('#<') || line.startsWith('<')) continue
+    return line
+  }
+  return ''
+}
+
+/** The text content of a PowerShell CLIXML stderr document. */
+function clixmlText(text: string): string {
+  const runs = text.match(/<S[^>]*>([\s\S]*?)<\/S>/g) ?? []
+  return runs
+    .map((run) =>
+      run
+        .replace(/^<S[^>]*>|<\/S>$/g, '')
+        // CLIXML escapes any character it cannot spell as _xHHHH_.
+        .replace(/_x([0-9A-Fa-f]{4})_/g, (_m, hex: string) => String.fromCharCode(parseInt(hex, 16)))
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&apos;/g, "'")
+        .replace(/&amp;/g, '&'),
+    )
+    .join('')
 }
 
 function errorMessage(err: unknown): string {

@@ -1141,10 +1141,16 @@ plugins/
     └── elements.json
 ```
 
-`meta.json` is the standard plugin metadata (`{ "name": "windows-uia", "version": "0.2.0" }`).
-Payload version 0.2.0 added the per-window fields `class_name`, `z`, `tree` and
-`element_count`, and the per-element field `window`; a 0.1.0 payload is still valid and is read
-by treating every added field as absent (see each row below).
+`meta.json` is the standard plugin metadata (`{ "name": "windows-uia", "version": "0.3.0" }`).
+Every version has been additive, and an older payload is still valid — read it by treating each
+added field as absent (see each row below):
+
+- **0.2.0** added the per-window fields `class_name`, `z`, `tree` and `element_count`, and the
+  per-element field `window`.
+- **0.3.0** added `display` on both windows and elements: on a multi-display capture each entry
+  is now in the snapshot space of the display it is ON, instead of every entry being forced
+  through the focused display's coordinate transform. Absent means the focused display, which
+  is what a single-display pack writes — so such a payload is byte-identical to 0.2.0.
 
 `elements.json`:
 
@@ -1163,6 +1169,7 @@ Each entry of `windows`:
 | `title` | string | REQUIRED | Window title. MAY be empty. |
 | `process` | string | REQUIRED | Process name without extension, e.g. `"chrome"`. Empty when it could not be read. |
 | `class_name` | string | REQUIRED (0.2.0) | Win32 window class, e.g. `"Chrome_WidgetWin_1"`. MAY be empty. Absent in a 0.1.0 payload. |
+| `display` | integer | OPTIONAL (0.3.0) | WHICH captured display `bounds` is expressed in: a `manifest.media.displays[].index` ([§5.6](#56-displays-multi-monitor-captures)). ABSENT = the focused display, the same rule an annotation's `display` follows ([§8.8](#88-display-which-display-a-box-is-on)). A window is reported on the display it mostly covers; one straddling two displays keeps a single space and simply reaches past that snapshot's edge. |
 | `bounds` | object | REQUIRED | `{ x, y, width, height }` — see the coordinate rule below. |
 | `focused` | boolean | REQUIRED | The window that had focus. At most one entry is `true`; a dump that could not determine the foreground window has none. |
 | `z` | integer | REQUIRED (0.2.0) | Z-order at the capture instant, `0` = top-most. This is what decides which window covers a given pixel when several overlap. Absent in a 0.1.0 payload, where the array order carries the same information. |
@@ -1177,6 +1184,7 @@ Each entry of `elements`:
 | `control_type` | string | REQUIRED | UIA `ControlType` without the `ControlType.` prefix, e.g. `"Button"`. MAY be empty. |
 | `automation_id` | string | REQUIRED | UIA `AutomationId`. MAY be empty. |
 | `class_name` | string | REQUIRED | Win32 window class. MAY be empty. |
+| `display` | integer | OPTIONAL (0.3.0) | The display `bounds` is expressed in, exactly as on a window above — and ALWAYS the same display as the window this control was walked from, since a control and its window MUST be resolvable in one coordinate space. |
 | `bounds` | object | REQUIRED | `{ x, y, width, height }` — see the coordinate rule below. |
 | `depth` | integer | REQUIRED | Depth in its window's control tree; `0` is that window itself. |
 | `window` | integer | REQUIRED (0.2.0) | The `z` of the window this control was walked from. Absent in a 0.1.0 payload, where every element belongs to the focused window. |
@@ -1185,16 +1193,21 @@ Unlike `target` ([§8.7](#87-target-semantic-objects)), these fields are REQUIRE
 empty strings: this is a dump, and an empty `name` is itself information.
 
 - **Coordinates.** Every `bounds` in this payload is in **snapshot pixel coordinates** — the
-  same space as `annotations.json` ([§8.2](#82-coordinate-space)), i.e. the pixels of
-  `snapshot.png`, which is the focused display ([§5.6](#56-displays-multi-monitor-captures)).
-  Writers MUST convert from the OS's virtual-desktop coordinates, accounting for display scaling
-  and the virtual desktop's origin. A window or element on ANOTHER display therefore lands
+  same space as `annotations.json` ([§8.2](#82-coordinate-space)) — of the display its `display`
+  field names, i.e. the pixels of that display's snapshot, and of `snapshot.png` itself when
+  `display` is absent ([§5.6](#56-displays-multi-monitor-captures)). Writers MUST convert from
+  the OS's virtual-desktop coordinates, accounting for display scaling and the virtual desktop's
+  origin, and SHOULD do so PER DISPLAY: a single transform for the whole desktop leaves every
+  screen but one holding rectangles that match no image. An entry on a display the capture did
+  not freeze, and any entry of a 0.2.0 payload that was on another display, therefore lands
   outside the snapshot rectangle — possibly at negative coordinates. Such entries are valid and
   MUST NOT be dropped by readers: they describe the rest of the desktop.
 - **Occlusion is `z`, not order of discovery.** Windows overlap, and `bounds` alone cannot say
   which one a pixel belongs to. A reader resolving "what is at (x, y)" MUST consider the
   window with the lowest `z` that contains the point, and MUST NOT offer a control of a window
-  that another window covers at that point. The focused window was on top by definition.
+  that another window covers at that point. The focused window was on top by definition. A
+  point belongs to ONE display, so this resolution runs over the entries of THAT display
+  (`z` is desktop-wide and remains comparable across them).
 - **Silence is not absence.** `elements` covers only the windows whose `tree` is `"collected"`
   or `"truncated"`. For any other window the payload says nothing about its contents, and a
   reader MUST report that as *no data recorded*, never as *no objects*. Presenting a window

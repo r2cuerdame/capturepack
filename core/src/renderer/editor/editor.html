@@ -34,23 +34,24 @@
     <!-- Trim drop hint (GOAL "Replay Trim"): boxes whose lifetime is wholly
          outside the active trim are dropped at save — count shown up front. -->
     <span id="trimDropChip" class="chip" hidden></span>
-    <!-- Zoom control (GOAL "Editor Chrome"): the board's zoom is a FIRST-CLASS
-         control, not a hidden gesture — a wheel shortcut alone leaves it
-         undiscoverable. [-] slider [+] plus the live percentage; it mirrors
-         Ctrl+wheel (same 0.5x-4x range, same 1.2x step), snaps to Fit and
-         100%, and double-clicking the slider returns to Fit. -->
+    <!-- Zoom control (GOAL "Editor Chrome", issue #31): the board's zoom is a
+         FIRST-CLASS control, not a hidden gesture — a wheel shortcut alone
+         leaves it undiscoverable. ORDER IS THE GOAL'S: zoom-in button · slider ·
+         zoom-out button, then the live percentage. It mirrors Ctrl+wheel (same
+         0.5x-4x range, same 1.2x step), snaps to Fit and 100%, and
+         double-clicking the slider returns to Fit. -->
     <div id="zoomControl">
       <button
-        id="zoomOutBtn"
+        id="zoomInBtn"
         class="iconBtn zoomBtn"
         type="button"
-        title="Zoom out (Ctrl+wheel)"
-        data-i18n-title="editor.zoomOutTooltip"
-        aria-label="Zoom out (Ctrl+wheel)"
-        data-i18n-aria-label="editor.zoomOutTooltip"
+        title="Zoom in (Ctrl+Wheel)"
+        data-i18n-title="editor.zoomInTooltip"
+        aria-label="Zoom in (Ctrl+Wheel)"
+        data-i18n-aria-label="editor.zoomInTooltip"
       >
         <svg class="icon" viewBox="0 0 20 20" width="20" height="20" aria-hidden="true" focusable="false">
-          <path d="M4.5 10h11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+          <path d="M4.5 10h11M10 4.5v11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
         </svg>
       </button>
       <input
@@ -66,16 +67,16 @@
         data-i18n-aria-label="editor.zoomSliderTooltip"
       />
       <button
-        id="zoomInBtn"
+        id="zoomOutBtn"
         class="iconBtn zoomBtn"
         type="button"
-        title="Zoom in (Ctrl+wheel)"
-        data-i18n-title="editor.zoomInTooltip"
-        aria-label="Zoom in (Ctrl+wheel)"
-        data-i18n-aria-label="editor.zoomInTooltip"
+        title="Zoom out (Ctrl+Wheel)"
+        data-i18n-title="editor.zoomOutTooltip"
+        aria-label="Zoom out (Ctrl+Wheel)"
+        data-i18n-aria-label="editor.zoomOutTooltip"
       >
         <svg class="icon" viewBox="0 0 20 20" width="20" height="20" aria-hidden="true" focusable="false">
-          <path d="M4.5 10h11M10 4.5v11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+          <path d="M4.5 10h11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
         </svg>
       </button>
       <span id="zoomPct">100%</span>

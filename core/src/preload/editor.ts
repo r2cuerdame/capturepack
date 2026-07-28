@@ -1,12 +1,25 @@
 // Preload for the editor window: narrow, typed bridge over the IPC contract.
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../shared/ipc'
-import type { EditorAnnotationAddedPayload, EditorExportPayload, EditorInitPayload } from '../shared/ipc'
+import type {
+  EditorAnnotationAddedPayload,
+  EditorExportPayload,
+  EditorInitPayload,
+  EditorUiaObjectsPayload,
+} from '../shared/ipc'
 import type { EditorWindowMode } from '../shared/types'
 
 contextBridge.exposeInMainWorld('editorBridge', {
   onInit(cb: (payload: EditorInitPayload) => void): void {
     ipcRenderer.on(IPC.editorInit, (_event, payload: EditorInitPayload) => cb(payload))
+  },
+  // Static object picking (GOAL): the capture-instant object dump, delivered
+  // LATE. The dump is budgeted and killed independently of the editor window, so
+  // on a slow machine it settles a few hundred ms after the editor is on screen;
+  // without this bridge that payload would be dropped and picking would stay
+  // dead for the whole session (the editor opens with empty lists).
+  onUiaObjects(cb: (payload: EditorUiaObjectsPayload) => void): void {
+    ipcRenderer.on(IPC.editorUiaObjects, (_event, payload: EditorUiaObjectsPayload) => cb(payload))
   },
   export(payload: EditorExportPayload): void {
     ipcRenderer.send(IPC.editorExport, payload)

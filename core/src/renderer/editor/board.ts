@@ -216,19 +216,38 @@ function overlaps(a: Placed | undefined, b: Placed | undefined): boolean {
   return a.bx < b.bx + b.bw && b.bx < a.bx + a.bw && a.by < b.by + b.bh && b.by < a.by + a.bh
 }
 
-/** The board display a board-unit point falls on, or null (a gutter/outside). */
+/**
+ * The board display a board-unit point falls on, or null (a gutter/outside).
+ *
+ * HALF-OPEN on the right/bottom edge, because ADJACENT DISPLAYS SHARE THAT
+ * SEAM: with inclusive bounds on both sides and first-match-wins, every pixel
+ * column of a shared edge belonged to the display on the left, so the
+ * neighbour's own first column could never be hovered, picked, or drawn on.
+ * The board's OUTER right/bottom edge belongs to no half-open rectangle and is
+ * still a reachable pointer position, so it falls back to inclusive bounds.
+ */
 export function displayAtBoardPoint(
   board: BoardLayout,
   bx: number,
   by: number,
 ): BoardDisplay | null {
   for (const d of board.displays) {
+    if (bx >= d.bx && by >= d.by && bx < d.bx + d.bw && by < d.by + d.bh) return d
+  }
+  for (const d of board.displays) {
     if (bx >= d.bx && by >= d.by && bx <= d.bx + d.bw && by <= d.by + d.bh) return d
   }
   return null
 }
 
-/** A board-unit point expressed in one display's NATIVE snapshot pixels. */
+/**
+ * A board-unit point expressed in one display's NATIVE snapshot pixels.
+ *
+ * Clamped to the LAST PIXEL (width - 1, height - 1), not to the pixel count: a
+ * point at x === width is off the image — it addresses the first pixel of the
+ * next screen — and everything downstream reads it as a real position (the
+ * object index probes it, a drag pins a box edge to it).
+ */
 export function toNativePoint(
   d: BoardDisplay,
   bx: number,
@@ -237,8 +256,8 @@ export function toNativePoint(
   const sx = d.bw > 0 ? d.width / d.bw : 1
   const sy = d.bh > 0 ? d.height / d.bh : 1
   return {
-    x: clamp(Math.round((bx - d.bx) * sx), 0, d.width),
-    y: clamp(Math.round((by - d.by) * sy), 0, d.height),
+    x: clamp(Math.round((bx - d.bx) * sx), 0, Math.max(0, d.width - 1)),
+    y: clamp(Math.round((by - d.by) * sy), 0, Math.max(0, d.height - 1)),
   }
 }
 

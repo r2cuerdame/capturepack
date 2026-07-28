@@ -195,9 +195,10 @@ body {
   color: var(--text);
 }
 
-/* ---- zoom control (GOAL "Editor Chrome") ----
-   [-] slider [+] and the live percentage. Never shrinks: like Save, it is a
-   control, and the informational chips give way before any control does. */
+/* ---- zoom control (GOAL "Editor Chrome", issue #31) ----
+   [+] slider [-] and the live percentage, in the GOAL's order. Never shrinks:
+   like Save, it is a control, and the informational chips give way before any
+   control does. */
 
 #zoomControl {
   /* Shrinks only as far as its slider allows (the buttons and the percentage

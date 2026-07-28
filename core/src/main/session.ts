@@ -17,6 +17,7 @@ import type {
   EditorDisplayPayload,
   EditorExportPayload,
   EditorInitPayload,
+  EditorUiaObjectsPayload,
 } from '../shared/ipc'
 import type {
   Annotation,
@@ -29,7 +30,7 @@ import type {
   TimelineFile,
   UiaPluginPayload,
 } from '../shared/types'
-import { annotationsOnDisplay } from '../shared/types'
+import { annotationsOnDisplay, focusedDisplayIndex } from '../shared/types'
 import { computeDisplayNumbers } from '../shared/numbering'
 import type { Language } from '../shared/i18n'
 import {
@@ -73,7 +74,7 @@ import {
   mapUiaToSnapshot,
   parseUiaPayload,
   startUiaDump,
-  UIA_BUDGET_MS,
+  type UiaDisplayTarget,
 } from './uia'
 
 const REPLAY_TIMEOUT_MS = 5_000
@@ -81,13 +82,21 @@ const REPLAY_TIMEOUT_MS = 5_000
 /** Plugin name pattern from SPEC §5.4 — also what makes a name path-safe. */
 const PLUGIN_NAME_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
 
-// How long past the UIA budget the editor may wait for the object dump before
-// opening without it (GOAL: "never delaying the editor"). The dump is started
-// at the trigger and killed at UIA_BUDGET_MS, so by the time the editor window
-// is ready — after the snapshot, the replay fetch, and save-first — it has
-// almost always resolved and this deadline is never reached. It exists so that
-// a pathological child (kill signal ignored) cannot hold the editor at all.
-const UIA_EDITOR_DEADLINE_MS = UIA_BUDGET_MS + 400
+/**
+ * How long the READY editor may wait for the object dump before opening without
+ * it (GOAL: "never delaying the editor").
+ *
+ * Measured from the moment the editor is ready to show — NOT from the capture
+ * trigger, which is the bug that killed object picking outright: the dump's own
+ * budget and kill are spent against the trigger, so by the time the editor was
+ * ready (after the snapshot, the replay fetch and save-first) a trigger-relative
+ * deadline was routinely already in the past, and the wait returned null WITHOUT
+ * LOOKING at a promise that had resolved with a full dump hundreds of ms
+ * earlier. Nothing is dropped any more either: a dump that lands after this
+ * grace is PUSHED to the editor (IPC.editorUiaObjects) and picking starts
+ * working mid-session.
+ */
+const UIA_EDITOR_GRACE_MS = 400
 
 type EditorOutcome =
   | { kind: 'export' | 'saveAsNew'; payload: EditorExportPayload }
@@ -356,18 +365,28 @@ async function runFlow(settings: Settings): Promise<void> {
   // known, which is why the mapping happens here rather than in the helper.
   // Neither promise may EVER reject: a rejection here would surface as
   // "Capture failed", and object data must never be able to fail a capture.
+  //
+  // ONE MAPPING SPACE PER CAPTURED DISPLAY (GOAL "Multi-Monitor Support"): the
+  // editor draws every frozen screen and every one of them is annotatable, so
+  // every one of them gets its objects in ITS OWN snapshot pixels. The indices
+  // are the ones the PACK declares (SPEC §5.6) — which for a single-display
+  // capture is 1 and nothing else, exactly what the editor's one-display board
+  // calls it, so the payload it writes is byte-for-byte what it always was.
+  const uiaTargets: UiaDisplayTarget[] = multiDisplay
+    ? frozen.displays.map((d) => ({
+        index: d.index,
+        focused: d.focused,
+        bounds: d.bounds,
+        // The snapshot's ACTUAL pixel size — the annotation coordinate space
+        // the picked bounds have to land in (SPEC §8.2).
+        width: d.focused ? snap.width : d.width,
+        height: d.focused ? snap.height : d.height,
+      }))
+    : [{ index: 1, focused: true, bounds: display.bounds, width: snap.width, height: snap.height }]
+  // What an entry WITHOUT a `display` field means, here and in the editor.
+  const uiaFocusedIndex = uiaTargets.find((t) => t.focused)?.index ?? 1
   const uiaReady: Promise<UiaPluginPayload | null> = uiaDump
-    .then((raw) =>
-      raw === null
-        ? null
-        : mapUiaToSnapshot(raw, {
-            bounds: display.bounds,
-            // The snapshot's ACTUAL pixel size — the annotation coordinate space
-            // the picked bounds have to land in (SPEC §8.2).
-            width: snap.width,
-            height: snap.height,
-          }),
-    )
+    .then((raw) => (raw === null ? null : mapUiaToSnapshot(raw, uiaTargets)))
     .catch((err: unknown) => {
       console.error('capturepack: mapping the UI Automation dump failed:', errorMessage(err))
       return null
@@ -389,10 +408,21 @@ async function runFlow(settings: Settings): Promise<void> {
   const { win: editor, mode: windowMode } = createEditorWindow(display.bounds, settings)
   editor.once('ready-to-show', () => {
     void (async () => {
-      // Bounded by construction: the dump was started at the trigger and can
-      // never outlive its budget, so this is a no-op wait in the normal case.
-      const uia = await withDeadline(uiaReady, triggerAt + UIA_EDITOR_DEADLINE_MS)
+      // The dump was started at the trigger and can never outlive its budget,
+      // so this is a no-op wait in the normal case. When it IS still running,
+      // the editor opens without objects and takes them the moment they land
+      // (below) — a slow dump costs picking for a few hundred ms, never for the
+      // session.
+      const settled = await settleWithin(uiaReady, UIA_EDITOR_GRACE_MS)
       if (editor.isDestroyed()) return
+      const uia = settled.ready ? settled.value : null
+      if (settled.ready && uiaEmpty(uia)) {
+        // GOAL "Silence is not absence": the editor is about to open with
+        // picking off, and until this line the only trace was an empty index.
+        console.warn(
+          'capturepack: object picking: the UI Automation dump produced nothing usable for this capture',
+        )
+      }
       const init: EditorInitPayload = {
         snapshotPng: toArrayBuffer(snap.png),
         width: snap.width,
@@ -408,9 +438,12 @@ async function runFlow(settings: Settings): Promise<void> {
         replayWebm: replay === null ? null : toArrayBuffer(replay.buffer),
         // Pickable objects (GOAL "Static object picking"): controls refine,
         // windows are the floor. Both [] when the dump produced nothing, which
-        // is exactly the pre-feature editor.
-        uiaElements: editorUiaElements(uia),
-        uiaWindows: editorUiaWindows(uia),
+        // is exactly the pre-feature editor — and [] TOO when it has not landed
+        // yet, in which case the push below carries the real lists.
+        uiaElements: editorUiaElements(uia, uiaFocusedIndex),
+        uiaWindows: editorUiaWindows(uia, uiaFocusedIndex),
+        // Attempted and empty — never "still on its way" (see the push below).
+        uiaDropped: settled.ready && uiaEmpty(uia),
         fps: settings.fps,
         scrubInvert: settings.scrubInvert,
         scrubSensitivityMs: settings.scrubSensitivityMs,
@@ -428,6 +461,47 @@ async function runFlow(settings: Settings): Promise<void> {
       }
       editor.webContents.send(IPC.editorInit, init)
       editor.show()
+      // The dump was not back in time: hand it over the moment it is, rather
+      // than throwing away a payload the capture already paid for. The editor
+      // rebuilds its object indexes and picking simply starts working.
+      if (!settled.ready) {
+        void uiaReady
+          .then((payload) => {
+            if (editor.isDestroyed()) return
+            if (uiaEmpty(payload)) {
+              console.warn(
+                'capturepack: object picking: the UI Automation dump produced nothing usable for this capture',
+              )
+            }
+            const objects: EditorUiaObjectsPayload = {
+              uiaElements: editorUiaElements(payload, uiaFocusedIndex),
+              uiaWindows: editorUiaWindows(payload, uiaFocusedIndex),
+              dropped: uiaEmpty(payload),
+            }
+            editor.webContents.send(IPC.editorUiaObjects, objects)
+          })
+          // Rule 1 again: object data may never be able to fail a capture, and
+          // an unhandled rejection here would be an uncaughtException.
+          //
+          // The editor was told `uiaDropped: false` because the dump was still
+          // RUNNING, and it is waiting for this push: a failure that only logged
+          // would leave picking silently off for the whole session, which is the
+          // one thing "Silence is not absence" forbids. However this promise
+          // ended, the editor gets an answer.
+          .catch((err: unknown) => {
+            console.error('capturepack: pushing object data to the editor failed:', errorMessage(err))
+            try {
+              if (editor.isDestroyed()) return
+              editor.webContents.send(IPC.editorUiaObjects, {
+                uiaElements: [],
+                uiaWindows: [],
+                dropped: true,
+              } satisfies EditorUiaObjectsPayload)
+            } catch {
+              // A window that went away mid-send: nothing left to tell.
+            }
+          })
+      }
     })()
   })
 
@@ -720,7 +794,16 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
     : []
   // The pack's own capture-instant object data (GOAL "Static object picking"):
   // re-editing offers exactly the same picking as the original session.
-  const loadedUia = parseUiaPayload(pack.readText(`plugins/${UIA_PLUGIN_NAME}/elements.json`))
+  const loadedUiaText = pack.readText(`plugins/${UIA_PLUGIN_NAME}/elements.json`)
+  const loadedUia = parseUiaPayload(loadedUiaText)
+  // A pack that never had object data is not a pack whose object data was
+  // DROPPED: the flag is only for a payload that is there and unreadable, so
+  // the editor can say so instead of behaving like the pre-feature editor for
+  // no visible reason.
+  const loadedUiaDropped = loadedUiaText !== null && uiaEmpty(loadedUia)
+  // Which display an entry without a `display` field belongs to (SPEC §5.6,
+  // §11.3) — the same index the editor's board gives the focused screen.
+  const loadedFocusedIndex = focusedDisplayIndex(manifest.media?.displays)
   // All-displays pack (GOAL "Multi-Monitor Support"): the per-display files
   // stay on disk untouched, so the re-edit save carries their DECLARATION
   // through with null buffers — dropping entries whose files have since
@@ -770,8 +853,9 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
       displays: loadedEditorDisplays(pack, loadedDisplays, replayDurationMs),
       replayWebm: replayWebm === null ? null : toArrayBuffer(replayWebm),
       // Picking works on re-edit too, from the pack's own saved dump.
-      uiaElements: editorUiaElements(loadedUia),
-      uiaWindows: editorUiaWindows(loadedUia),
+      uiaElements: editorUiaElements(loadedUia, loadedFocusedIndex),
+      uiaWindows: editorUiaWindows(loadedUia, loadedFocusedIndex),
+      uiaDropped: loadedUiaDropped,
       fps: settings.fps,
       scrubInvert: settings.scrubInvert,
       scrubSensitivityMs: settings.scrubSensitivityMs,
@@ -1644,23 +1728,50 @@ function withoutReplayTimes(a: Annotation): Annotation {
 }
 
 /**
- * `promise` if it settles by `deadlineAtMs` (an absolute Date.now() instant),
- * otherwise null. The promise itself is never abandoned — its own work still
- * completes, this only stops the CALLER from waiting on it.
+ * Waits at most `graceMs` for `promise` and reports WHICH happened: a settled
+ * value, or "not yet". The promise itself is never abandoned — its own work
+ * still completes, and the caller can keep waiting on it (the object dump is
+ * pushed to the editor when it lands late).
+ *
+ * The grace is a DURATION from this call, never an absolute instant computed
+ * somewhere else: a deadline that has already passed used to short-circuit to
+ * null WITHOUT LOOKING at the promise, so a payload that had resolved long ago
+ * was discarded. And `ready` is the answer to a different question than the
+ * value: `{ ready: true, value: null }` means the work finished with nothing —
+ * which is worth telling the user — while `{ ready: false }` means it is still
+ * running, which is not. A rejection is reported as not-ready: this helper
+ * never invents a value, and only the promise's owner can say what its failure
+ * means (the object dump's owner catches its own, so it never rejects).
  */
-function withDeadline<T>(promise: Promise<T>, deadlineAtMs: number): Promise<T | null> {
-  const remaining = deadlineAtMs - Date.now()
-  if (remaining <= 0) return Promise.resolve(null)
-  return new Promise<T | null>((resolve) => {
-    const timer = setTimeout(() => resolve(null), remaining)
+/**
+ * "The dump produced nothing usable" — which is EMPTINESS, not null.
+ *
+ * A helper that printed its window-list header and was then killed (or whose
+ * windows were all filtered out, or that ran against a locked/secure desktop)
+ * parses into a perfectly valid payload with `windows: []` and `elements: []`.
+ * Keying the dropped flag on `payload === null` alone told the editor picking
+ * was FINE and then handed it empty lists, so no chip at open, no answer on
+ * hover, and a dead click that said nothing — exactly the invisible failure
+ * "Silence is not absence" (GOAL, SPEC §11.3) exists to end.
+ */
+function uiaEmpty(payload: UiaPluginPayload | null): boolean {
+  return payload === null || (payload.windows.length === 0 && payload.elements.length === 0)
+}
+
+function settleWithin<T>(
+  promise: Promise<T>,
+  graceMs: number,
+): Promise<{ ready: true; value: T } | { ready: false }> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve({ ready: false }), Math.max(0, graceMs))
     void promise.then(
       (value) => {
         clearTimeout(timer)
-        resolve(value)
+        resolve({ ready: true, value })
       },
       () => {
         clearTimeout(timer)
-        resolve(null)
+        resolve({ ready: false })
       },
     )
   })

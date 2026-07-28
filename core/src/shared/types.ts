@@ -193,6 +193,13 @@ export interface UiaWindowRecord {
   process: string
   // Win32 window class, e.g. "Chrome_WidgetWin_1". '' when unavailable.
   class_name: string
+  // WHICH captured display `bounds` is expressed in (SPEC §11.3, payload
+  // 0.3.0) — the 1-based manifest.media.displays[].index, exactly the rule
+  // annotations follow (SPEC §8.8). ABSENT = the focused display, which is what
+  // a single-display pack and every window on the focused screen write, so a
+  // 0.2.0 payload reads unchanged. A window is placed on the display it mostly
+  // covers, and its controls are always in the SAME space as their window.
+  display?: number
   bounds: UiaBounds
   // Exactly the window that had focus; false for every other window. A dump
   // that could not determine the foreground window has no focused entry.
@@ -213,6 +220,11 @@ export interface UiaElementRecord {
   control_type: string
   automation_id: string
   class_name: string
+  // The captured display `bounds` is expressed in — same rule as the window
+  // record above (SPEC §11.3, payload 0.3.0), and ALWAYS the display of the
+  // window this control was walked from: a control and its window must be
+  // pickable in one coordinate space or the window can never own it.
+  display?: number
   bounds: UiaBounds
   // 0 = the window this control belongs to; a pre-order walk of its control view.
   depth: number

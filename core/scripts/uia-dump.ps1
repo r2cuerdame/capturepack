@@ -41,11 +41,13 @@
 # UI Automation client is what settles this process's DPI awareness, and both
 # readings must come from the same state.
 
-# PARAMETERS come from the ENVIRONMENT, not from param(): the caller runs this
-# file through -EncodedCommand (execution policy is set by Group Policy on
-# managed machines and the -ExecutionPolicy switch cannot override it, so -File
-# would simply be refused there), and a param() block is not valid in a command
-# string. Every value has a working default, so the script still runs standalone.
+# PARAMETERS come from the ENVIRONMENT, not from param(): the caller normally
+# runs this file with -File, but falls back to running the same file as a
+# COMMAND when execution policy refuses script files (Group Policy beats the
+# -ExecutionPolicy switch on managed machines) — and a param() block is not
+# valid in a command string, so the environment is the one interface that
+# serves both. Every value has a working default, so the script still runs
+# standalone: `powershell -STA -File scripts/uia-dump.ps1`.
 #
 #   CAPTUREPACK_UIA_MAX_DEPTH     control-tree depth cap (each window = 0)
 #   CAPTUREPACK_UIA_MAX_ELEMENTS  soft cap on emitted elements across ALL windows

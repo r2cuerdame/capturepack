@@ -391,13 +391,23 @@ function buildCard(p: HistoryPackSummary): HTMLElement {
 function buildActions(p: HistoryPackSummary): HTMLElement {
   const row = elc('div', 'cardActions')
 
-  // [Open] — re-edit. NEXT STAGE owns the flow; main logs until it exists.
-  const openBtn = elc('button', 'primary', t('history.open'))
-  openBtn.type = 'button'
-  openBtn.disabled = p.kind !== 'dir'
-  if (p.kind !== 'dir') openBtn.title = t('history.openZipTooltip')
-  openBtn.addEventListener('click', () => bridge.openPack(p.path))
-  row.append(openBtn)
+  // The two headline actions, in this order: [Edit] reopens the pack in the
+  // editor (main: startEditFlow), [Open Folder] reaches the files on disk.
+  // A bare "Open" never said which of the two it meant.
+  const editBtn = elc('button', 'primary', t('history.edit'))
+  editBtn.type = 'button'
+  editBtn.disabled = p.kind !== 'dir'
+  editBtn.title = p.kind === 'dir' ? t('history.editTooltip') : t('history.editZipTooltip')
+  editBtn.addEventListener('click', () => bridge.openPack(p.path))
+  row.append(editBtn)
+
+  // Enabled for zip packs too: main reveals the .capturepack in Explorer
+  // instead of opening a folder.
+  const folderBtn = elc('button', undefined, t('toast.openFolder'))
+  folderBtn.type = 'button'
+  folderBtn.title = t('history.openFolderTooltip')
+  folderBtn.addEventListener('click', () => bridge.openFolder(p.path))
+  row.append(folderBtn)
 
   const playBtn = elc('button', undefined, t('history.play'))
   playBtn.type = 'button'
@@ -469,10 +479,7 @@ function buildMenu(p: HistoryPackSummary): HTMLElement {
     menu.append(btn)
   }
 
-  item(t('toast.openFolder'), {}, () => {
-    bridge.openFolder(p.path)
-    render()
-  })
+  // Open Folder is NOT here: it is a visible button in the action row.
   item(t('toast.copyPath'), {}, () => {
     bridge.copyPath(p.path)
     render()

@@ -428,7 +428,7 @@ function validateManifest(m, pack, snapshotDims) {
         }
         // windows-uia is a well-known payload with a defined shape (SPEC §11.3);
         // every other plugin's contents stay plugin-defined and unchecked.
-        if (p.name === "windows-uia") validateWindowsUia(pack);
+        if (p.name === "windows-uia") validateWindowsUia(pack, displayInfo);
       }
       if (m.plugins.length === 0) pass(`manifest.json: plugins is [] (no plugin data)`);
     }
@@ -467,11 +467,41 @@ function validateManifest(m, pack, snapshotDims) {
  * annotation results.
  *
  * Fields added in payload 0.2.0 (class_name/z/tree/element_count on a window,
- * window on an element) are checked WHEN PRESENT: a 0.1.0 payload is still
- * valid, and demanding them would fail packs written by a conforming older
- * writer.
+ * window on an element) and 0.3.0 (display on both) are checked WHEN PRESENT: a
+ * 0.1.0 payload is still valid, and demanding them would fail packs written by
+ * a conforming older writer.
  */
-function validateWindowsUia(pack) {
+function validateWindowsUia(pack, displayInfo) {
+  /**
+   * `display` (payload 0.3.0) — WHICH captured display `bounds` is expressed
+   * in. Unchecked, a pack naming a display the manifest never declared reads as
+   * VALID while every reader drops those objects on an exact index match: the
+   * editor's own per-display indexes do, so such a pack silently loses picking
+   * on the affected screen, which is precisely the failure this field exists to
+   * prevent. Same rule as annotations.json's display (SPEC §8.8): an integer
+   * >= 1 naming a declared manifest.media.displays[].index, and ABSENT (never
+   * present) on a single-display pack, where absence means the focused display.
+   */
+  const checkDisplay = (label, value) => {
+    if (value === undefined) return 0;
+    if (!isInt(value) || value < 1) {
+      fail(`${label}.display ${JSON.stringify(value)} MUST be an integer >= 1 — the 1-based manifest.media.displays[].index whose snapshot pixels bounds is in (SPEC §11.3, payload 0.3.0)`);
+      return 1;
+    }
+    if (displayInfo && displayInfo.declared && !displayInfo.indices.has(value)) {
+      fail(`${label}.display ${value} names no display declared in manifest.media.displays (${[...displayInfo.indices].join(", ") || "none"}) — bounds are pixels in THAT display's snapshot, so an unresolvable index leaves them meaningless and readers that match on the index drop the object entirely (SPEC §11.3)`);
+      return 1;
+    }
+    if (displayInfo && !displayInfo.declared) {
+      fail(`${label}.display ${value} is set but this pack declares no manifest.media.displays — a single-display pack has exactly one screen and MUST omit display (absent = the focused display) (SPEC §11.3, §8.8)`);
+      return 1;
+    }
+    if (displayInfo && value === displayInfo.focused) {
+      note(`${label}.display ${value} names the FOCUSED display — writers SHOULD omit display there (absent means the focused display), which is what keeps a payload byte-identical to one written without this field (SPEC §11.3)`);
+    }
+    return 0;
+  };
+
   const name = "plugins/windows-uia/elements.json";
   const buf = pack.files.get(name);
   if (!buf) {
@@ -499,6 +529,9 @@ function validateWindowsUia(pack) {
   let focusedWindows = 0;
   const TREE_STATUSES = ["collected", "truncated", "unavailable", "skipped"];
   const windowZ = new Set();
+  // z -> the display that window's bounds are in, so a control can be checked
+  // against the ONE space it and its window must share (SPEC §11.3).
+  const windowDisplay = new Map();
   let noTreeWindows = 0;
   if (!Array.isArray(p.windows)) {
     fail(`${name}: windows MUST be an array (may be empty) (SPEC §11.3)`);
@@ -542,6 +575,12 @@ function validateWindowsUia(pack) {
         fail(`${label}.element_count MUST be a non-negative integer (SPEC §11.3, payload 0.2.0)`);
         bad++;
       }
+      const windowDisplayBad = checkDisplay(label, w.display);
+      bad += windowDisplayBad;
+      // Only a display that CHECKED OUT is worth comparing controls against —
+      // one already reported as unresolvable would otherwise fail every control
+      // under it a second time for the same reason.
+      if (isInt(w.z) && windowDisplayBad === 0) windowDisplay.set(w.z, w.display);
     });
   }
   if (focusedWindows > 1) {
@@ -579,6 +618,16 @@ function validateWindowsUia(pack) {
           }
           bad++;
         }
+      }
+      const displayBad = checkDisplay(label, e.display);
+      bad += displayBad;
+      // ONE SPACE per control and its window (SPEC §11.3): a control mapped
+      // into a different display than the window it was walked from cannot be
+      // resolved against it at all — occlusion, refinement and the "smallest
+      // control of the top window" rule all compare the two directly.
+      if (displayBad === 0 && isInt(e.window) && windowDisplay.has(e.window) && windowDisplay.get(e.window) !== e.display) {
+        fail(`${label}.display ${JSON.stringify(e.display ?? null)} disagrees with windows[z=${e.window}].display ${JSON.stringify(windowDisplay.get(e.window) ?? null)} — a control and its window MUST be resolvable in ONE coordinate space (SPEC §11.3)`);
+        bad++;
       }
     });
     if (orphans > ORPHAN_REPORTS) {

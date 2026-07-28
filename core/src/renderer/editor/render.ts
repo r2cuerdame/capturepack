@@ -387,12 +387,35 @@ export function hitTest(
   y: number,
   ui: number,
 ): string | null {
-  const tol = 6 * ui
+  const tol = HIT_TOL * ui
   const ordered = [...annotations].sort((a, b) => b.z - a.z)
   for (const a of ordered) {
     if (inBox(x, y, annotationBounds(a), tol)) return a.annotation_id
   }
   return null
+}
+
+/** The grab band around a box, in on-screen px — how far off it a click still hits. */
+const HIT_TOL = 6
+
+/**
+ * Whether (x, y) is ON a box's OUTLINE rather than inside its empty middle: the
+ * same grab band hitTest allows around the edge, mirrored inwards.
+ *
+ * A box annotation is a rectangle drawn AROUND something — the pixels it is
+ * made of are its stroke, and everything it encloses still belongs to the
+ * screenshot underneath. That is what lets a box keep a click of its own where
+ * the UI object under it would otherwise take every interior pixel (editor.ts
+ * `pickBeatsBox`): the outline is always the box, so a box can always be
+ * selected, moved and resized however much is pickable inside it.
+ *
+ * A box thinner than twice the band is ALL outline, which is the right answer —
+ * such a box has no middle to aim past.
+ */
+export function onBoxEdge(a: Annotation, x: number, y: number, ui: number): boolean {
+  const tol = HIT_TOL * ui
+  const b = annotationBounds(a)
+  return inBox(x, y, b, tol) && !inBox(x, y, b, -tol)
 }
 
 /** The corner resize handle of `a` at native point (x, y), or null. */

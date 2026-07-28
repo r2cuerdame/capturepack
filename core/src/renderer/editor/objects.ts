@@ -19,15 +19,41 @@
 // may be offered there, so a button of a window buried behind another one is
 // never picked through it.
 //
-// Built ONCE at init; a pointer probe is then a couple of array scans, so
-// hovering costs nothing per frame (and editor.ts probes only when the pointer
-// actually moved to a new snapshot pixel).
+// ONE INDEX PER CAPTURED DISPLAY, each built over the objects whose bounds are
+// in THAT display's snapshot space (SPEC §11.3): every screen of the board is
+// annotatable, so a single index could only ever answer for one of them. A
+// pointer probe is then a couple of array scans, so hovering costs nothing per
+// frame (and editor.ts probes only when the pointer actually moved to a new
+// snapshot pixel).
 import type { EditorUiaElement, EditorUiaWindow } from '../../shared/ipc'
 
 /** Uniform grid cell, in snapshot pixels. */
 const CELL = 64
 /** Objects thinner than this in either axis are noise, not pick targets. */
 const MIN_SIDE = 6
+/**
+ * How much of a rectangle must SURVIVE clipping for this display to be able to
+ * offer it at all.
+ *
+ * Clipping alone CLAMPS: a window that lives entirely on another screen (or far
+ * off the edge of this one) comes out as a sliver pinned to x=0 or y=0 —
+ * measured on a two-monitor desk, two Chrome windows became 10px-wide strips
+ * down the left edge of the neighbouring snapshot, where they shadowed
+ * everything actually visible there. A rectangle with essentially nothing of
+ * itself on this image is not a pick target on it.
+ */
+const MIN_VISIBLE_FRACTION = 0.02
+/**
+ * ...but the fraction alone scales with the object, so it is STRICTEST for the
+ * biggest windows: on a 3840x2160 screen a maximized window would have to keep
+ * ~166 kpx — a ~77 px wide strip — before it counted as visible at all, and a
+ * window genuinely peeking out from behind another one by a couple of hundred
+ * pixels would vanish from the index (its controls with it, since only the top
+ * window at a point may offer any). A rectangle that survives with real size on
+ * BOTH axes is on this image whatever fraction of itself that is; the sliver
+ * case above is metres away from these numbers.
+ */
+const MIN_VISIBLE_SIDE = 32
 /**
  * A CONTROL covering most of the screen is a container (the window, its client
  * area, a full-bleed pane) — snapping a box onto it is never a useful
@@ -70,11 +96,14 @@ const WINDOW_FRAME_FRACTION = 0.95
  * does not offer — the editor says "no object data here" instead. The dump
  * still records it; this is an editor-level decision.
  *
- * It is NOT what preserves "click empty canvas = clear the selection": on a
- * normally tiled desk no wallpaper is visible at all and every pixel belongs to
- * some window. That gesture is protected in the editor's pointerdown, where a
- * modifier-free WINDOW-level pick defers to a click that had a selection to
- * clear (Shift, and any CONTROL pick, still snap immediately).
+ * It is also the only thing left of "click empty canvas = clear the selection":
+ * a point no ordinary window covers offers nothing, so the click there does
+ * exactly what it always did. On a normal desk that is a point that does not
+ * exist — every pixel belongs to some window — so the honest statement is that
+ * clearing the selection is Esc's job now, and the click gesture survives only
+ * on a bare desktop. (The editor no longer refuses window-level picks that had
+ * a selection to clear; that made a plain click unable to pick a window at all,
+ * which is the single most common thing there is to annotate.)
  */
 const DESKTOP_CLASSES = new Set(['progman', 'workerw'])
 
@@ -335,12 +364,11 @@ export class ObjectIndex {
       const owner = o.element?.window ?? -1
       return owner < 0 || owner === top
     }
-    // CLAMPED into the grid, not bounds-checked out of it. A display's own
-    // right/bottom edge is a reachable probe point — board.ts toNativePoint
-    // clamps inclusively to [0, width] — and every common display width is an
-    // exact multiple of CELL, so floor(width / CELL) is one PAST the last
-    // column. Skipping the grid there silently degraded the whole last pixel
-    // column to the window level; contains() below still rejects a real miss.
+    // CLAMPED into the grid, not bounds-checked out of it. A probe point is
+    // never negative and never past the last pixel (board.ts toNativePoint
+    // clamps to width - 1), but a caller with raw coordinates could still land
+    // outside, and skipping the grid there would silently degrade that point to
+    // the window level; contains() below still rejects a real miss.
     const c = Math.min(this.cols - 1, Math.max(0, Math.floor(x / CELL)))
     const r = Math.min(this.rows - 1, Math.max(0, Math.floor(y / CELL)))
     const best: PickableObject | null = this.firstHit(
@@ -417,5 +445,14 @@ function clip(
   const w = x1 - x0
   const h = y1 - y0
   if (w < MIN_SIDE || h < MIN_SIDE) return null
+  // ...and what is left has to be a meaningful part of the object, OR big
+  // enough in absolute terms to be an object on this image in its own right.
+  // Either test passing keeps the rectangle: the first is what rejects an
+  // off-screen window clamped into frame, the second is what stops that
+  // rejection from swallowing a large window that really is peeking in from the
+  // side (MIN_VISIBLE_SIDE).
+  const whole = Math.max(0, Math.round(bounds.width)) * Math.max(0, Math.round(bounds.height))
+  const bigEnough = w >= MIN_VISIBLE_SIDE && h >= MIN_VISIBLE_SIDE
+  if (whole > 0 && !bigEnough && w * h < whole * MIN_VISIBLE_FRACTION) return null
   return { x: x0, y: y0, width: w, height: h, area: w * h }
 }

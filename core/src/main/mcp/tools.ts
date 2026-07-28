@@ -442,8 +442,9 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
         'Window-related context of a CapturePack: timeline events whose type or source mentions ' +
         'window/focus, plus any window-tracking plugin metadata — on Windows that is the ' +
         '"windows-uia" payload, whose windows[] lists every top-level window at the capture ' +
-        'instant (title, process, class_name, bounds in snapshot pixels, z-order with 0 on top, ' +
-        'which one had focus, and whether its control tree was collected). Returns empty lists ' +
+        'instant (title, process, class_name, bounds in the snapshot pixels of the display in ' +
+        '"display" — absent means the focused display — z-order with 0 on top, which one had ' +
+        'focus, and whether its control tree was collected). Returns empty lists ' +
         'with a message when the pack has no window data.',
       inputSchema: idArg,
     },

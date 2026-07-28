@@ -9,7 +9,13 @@
 // it was drawn on and its bounds stay in THAT display's snapshot pixel space;
 // one clock scrubs every display's replay together. A single-display capture
 // builds a one-display board and behaves exactly as this editor always did.
-import type { EditorExportPayload, EditorInitPayload } from '../../shared/ipc'
+import type {
+  EditorExportPayload,
+  EditorInitPayload,
+  EditorUiaElement,
+  EditorUiaObjectsPayload,
+  EditorUiaWindow,
+} from '../../shared/ipc'
 import { applyDomI18n, makeT } from '../../shared/i18n'
 import type { TranslateFn } from '../../shared/i18n'
 import type {
@@ -40,6 +46,7 @@ import {
   drawObjectHover,
   handleAt,
   hitTest,
+  onBoxEdge,
   SELECTION_PAD,
   type HandleId,
 } from './render'
@@ -52,6 +59,10 @@ import { clampZoom, Viewport, ZOOM_MAX, ZOOM_MIN, ZOOM_STEP } from './viewport'
 
 interface EditorBridge {
   onInit(cb: (payload: EditorInitPayload) => void): void
+  // Static object picking (GOAL): the dump, when it settles after the editor
+  // opened. The editor rebuilds its per-display object indexes from it and
+  // picking starts working mid-session.
+  onUiaObjects(cb: (payload: EditorUiaObjectsPayload) => void): void
   export(payload: EditorExportPayload): void
   saveAsNew(payload: EditorExportPayload): void
   cancel(): void
@@ -184,19 +195,37 @@ let focusedW = 0
 let focusedH = 0
 // Static object picking (GOAL "Static object picking (v0)"): the capture-instant
 // UI Automation objects — every visible WINDOW plus the CONTROLS of the windows
-// whose tree the dump reached — indexed once at init. An empty index (no dump, a
-// timed-out dump, a pack without plugins/windows-uia) leaves every path below
-// behaving exactly as it did before the feature existed.
-let objectIndex: ObjectIndex | null = null
+// whose tree the dump reached.
+//
+// ONE INDEX PER CAPTURED DISPLAY, keyed by the manifest display index (GOAL
+// "Multi-Monitor Support", issue #30). Every object says which display's
+// snapshot space its bounds are in (`display`, SPEC §11.3), every screen of the
+// board is annotatable, and a pick therefore comes from the index of the display
+// UNDER THE POINTER. One index in the focused display's space — which is what
+// this was — left picking silently dead on every other screen, i.e. on most of a
+// two-monitor desk.
+//
+// Empty everywhere (no dump, a dump that produced nothing, a pack without
+// plugins/windows-uia) leaves every path below behaving exactly as it did before
+// the feature existed.
+const objectIndexes = new Map<number, ObjectIndex>()
+// A push that arrived before initEditor finished (it awaits image decoding):
+// held rather than dropped, and applied the moment the board exists.
+let pendingUiaObjects: EditorUiaObjectsPayload | null = null
 let hoverObject: PickableObject | null = null
-// The board display the hovered object belongs to — always the focused one (the
-// dump is mapped into ITS snapshot space, SPEC §11.3), kept explicitly so the
-// outline is drawn with that display's transform and never on a neighbour.
+// The board display the hovered object belongs to — the one under the pointer,
+// kept explicitly so the outline is drawn with that display's transform and
+// never on a neighbour.
 let hoverDisplay: BoardDisplay | null = null
 // Last probed snapshot pixel: hovering does NO work until the pointer moves off it.
 let lastProbeX = -1
 let lastProbeY = -1
 let lastProbeDisplay = -1
+// The pending box a PLAIN LEFT CLICK on a picked object just opened. A second
+// click of the same gesture (a double-click aimed at the box that click landed
+// on) discards it instead of committing a box the user never asked for; cleared
+// the moment any text session ends, so it can only ever name a live draft.
+let clickPickDraftId: string | null = null
 // WINDOW-LEVEL MODIFIER (GOAL "Static object picking"): a control on top of a
 // window normally wins, because it is the more precise annotation. Holding
 // SHIFT forces the window level back — Shift is free on the canvas (it is a
@@ -207,13 +236,21 @@ let windowLevelKey = false
 // session — object data is a best-effort extra, and repeating any of these
 // would be nagging.
 type ObjectHintKind =
+  // TIPS — something the user could do, raised while merely hovering.
   | 'fromCapture'
   | 'windowModifier'
   | 'windowOnly'
   | 'windowNoTree'
   | 'windowOffDisplay'
+  // Object picking is off for this capture entirely (the dump produced nothing).
+  | 'dropped'
+  // ANSWERS — why the thing the user just did produced nothing. Each has its OWN
+  // kind so a tip the hover path already burnt can never swallow one (the window
+  // modifier tip used to be the only feedback a refused click had).
   | 'noData'
-  | 'otherDisplay'
+  | 'displayNoData'
+  | 'gutter'
+  | 'boxTookClick'
 const objectHintsShown = new Set<ObjectHintKind>()
 let objectHintTimer: number | null = null
 // Each hint is shown ONCE per session, so one that is replaced mid-read is lost
@@ -230,6 +267,18 @@ let trimOutMs: number | null = null
 // movable/resizable window whose top bar is the drag region.
 let windowMode: EditorWindowMode = 'fullscreen'
 const viewport = new Viewport(frame)
+// WHICH display the view is currently FRAMED on (null = the whole board, or a
+// free zoom/pan the user drove). Viewport.focusRect derives its pan from the
+// CURRENT fit scale and stage size, so a stage that changes size — a window
+// resize, or the fullscreen<->windowed toggle, which is a first-class editor
+// control — invalidates it: layout() re-derives the framing from this instead
+// of leaving the board displaced by the ratio of the fit change.
+let framedDisplay: number | null = null
+// Whether the current view is one the USER navigated to. The editor OPENS
+// framed on the focused display, which no user action asked for, and Esc's
+// first rung ("give the whole desk back") must not charge a press for a view
+// nobody chose — every close, deselect and discard would cost one.
+let viewNavigated = false
 let spaceDown = false
 // Space serves two gestures: HELD it is the pan modifier, TAPPED (pressed and
 // released without ever panning) it toggles playback. This stays true from the
@@ -316,6 +365,12 @@ function layout(): void {
   fitScale = Math.min(availW / board.width, availH / board.height, 1)
   frame.style.width = `${board.width * fitScale}px`
   frame.style.height = `${board.height * fitScale}px`
+  // A FRAMED display is a pan computed from the fit scale and the stage size,
+  // both of which just changed: re-derive it, or the first resize (and the
+  // window-mode toggle, which resizes without a resize event on every platform)
+  // would shove the framed screen off the stage with nothing but the zoom
+  // percentage to explain it.
+  if (framedDisplay !== null) applyFraming(framedDisplay)
   positionTextEditor()
   // The percentage is fitScale x zoom, so a resize changes it without the
   // viewport moving at all — and the help sheet's proximity box just moved.
@@ -407,9 +462,25 @@ function displayLabel(d: BoardDisplay): string {
  * focused display "opens centered and at the largest scale" — here on demand,
  * for any display, because every one of them is now a place work happens).
  */
-function zoomToDisplay(index: number): void {
+function zoomToDisplay(index: number, byUser = true): void {
+  if (!applyFraming(index)) return
+  framedDisplay = index
+  // The editor's OWN opening framing is not a view the user backed into: Esc
+  // must not have to undo it (see the Esc ladder).
+  if (byUser) viewNavigated = true
+  syncPanCursor()
+  syncSelectionUi()
+  schedulePaint()
+  syncZoomUi()
+}
+
+/**
+ * The transform alone: everything framing needs that DERIVES from the current
+ * fit scale and stage size, so layout() can re-run it after either changed.
+ */
+function applyFraming(index: number): boolean {
   const d = displayByIndex(index)
-  if (d === null || board === null || !loaded) return
+  if (d === null || board === null || !loaded) return false
   viewport.focusRect(
     { x: d.bx * fitScale, y: d.by * fitScale, width: d.bw * fitScale, height: d.bh * fitScale },
     board.width * fitScale,
@@ -417,19 +488,28 @@ function zoomToDisplay(index: number): void {
     stage.clientWidth,
     stage.clientHeight,
   )
+  return true
+}
+
+/** Back to the whole board, unzoomed — the state the editor opens in. */
+function fitBoard(): void {
+  viewport.reset()
+  framedDisplay = null
+  viewNavigated = false
   syncPanCursor()
   syncSelectionUi()
   schedulePaint()
   syncZoomUi()
 }
 
-/** Back to the whole board, unzoomed — the state the editor opens in. */
-function fitBoard(): void {
-  viewport.reset()
-  syncPanCursor()
-  syncSelectionUi()
-  schedulePaint()
-  syncZoomUi()
+/**
+ * A free zoom or pan (Ctrl+wheel, the zoom control, Space+drag): the view is
+ * the user's own now — it is no longer the framing of any one display, so
+ * layout() must stop re-deriving one, and Esc's first rung applies again.
+ */
+function markViewNavigated(): void {
+  framedDisplay = null
+  viewNavigated = true
 }
 
 // ---------------------------------------------------------------------------
@@ -495,6 +575,7 @@ function applyControlZoom(target: number): void {
   }
   const r = stage.getBoundingClientRect()
   viewport.zoomTo(next, r.left + r.width / 2, r.top + r.height / 2)
+  markViewNavigated()
   syncPanCursor()
   syncSelectionUi()
   schedulePaint()
@@ -597,14 +678,14 @@ function schedulePaint(): void {
       drawDisplayFrame(overlayCtx, d, displayLabel(d), d.focused, chrome)
     }
     // Object hover last, on top of everything (GOAL "Static object picking") —
-    // and never while a drag or a pending description is in progress.
-    if (
-      hoverObject !== null &&
-      hoverDisplay !== null &&
-      drag === null &&
-      textSession === null &&
-      !exporting
-    ) {
+    // and never while a drag is in progress (the box being dragged is what the
+    // pointer means then).
+    //
+    // A pending description does NOT suppress it: the probe keeps running while
+    // one is open, so the outline was the only part of the answer that went
+    // missing — the pointer moved over object after object with nothing to show
+    // for it, in the state where the next pick is most likely to come.
+    if (hoverObject !== null && hoverDisplay !== null && drag === null && !exporting) {
       drawObjectHover(
         overlayCtx,
         hoverDisplay,
@@ -752,7 +833,7 @@ function helpContent(): Array<{ title: string; rows: HelpRow[] }> {
   // The window-level modifier only means something where there IS object data
   // (GOAL "Static object picking"); a pack without a UIA dump would be told
   // about a modifier that can never do anything.
-  if (objectIndex !== null && objectIndex.size > 0) {
+  if (hasObjectData()) {
     captureRows.push([keys('Shift', t('editor.keyLeftClick')), t('editor.helpForceWindow')])
   }
   captureRows.push([t('editor.keyRightDrag'), t('editor.helpNewBox')])
@@ -1187,6 +1268,9 @@ function closeTextEditor(refocus = true): void {
   textSession = null
   textAnchor = null
   textDisplay = null
+  // Whatever ended it — commit, cancel, a click elsewhere — the click-pick draft
+  // is no longer live, and a stale id here could only ever mean the wrong box.
+  clickPickDraftId = null
   textEditor.hidden = true
   textEditor.value = ''
   if (refocus) overlay.focus()
@@ -1577,22 +1661,135 @@ durationInput.addEventListener('keydown', (e) => {
 // always says which level a click would take.
 // ---------------------------------------------------------------------------
 
+/** This display's object index — empty (or absent) means picking is off there. */
+function objectIndexOf(index: number): ObjectIndex | null {
+  return objectIndexes.get(index) ?? null
+}
+
+/** Whether ANY display of this board has object data at all. */
+function hasObjectData(): boolean {
+  for (const index of objectIndexes.values()) {
+    if (index.size > 0) return true
+  }
+  return false
+}
+
 /**
- * The object under the cursor, or null when there is none.
- *
- * The dump is mapped into the FOCUSED display's snapshot space (SPEC §11.3), so
- * that is the only screen it can answer for. On any other display picking is
- * simply off — and says so once (announceObject), because the index is not
- * empty and silence there would read as "this window has no objects".
+ * Builds ONE index per captured display, each in ITS OWN snapshot pixel space
+ * (issue #30). Every element and window carries the display its bounds belong
+ * to, so the split is a filter — and an object can never be offered on a screen
+ * whose image it does not describe.
+ */
+function buildObjectIndexes(
+  elements: readonly EditorUiaElement[],
+  windows: readonly EditorUiaWindow[],
+): void {
+  objectIndexes.clear()
+  if (board === null) return
+  for (const d of board.displays) {
+    objectIndexes.set(
+      d.index,
+      ObjectIndex.build(
+        elements.filter((e) => e.display === d.index),
+        windows.filter((w) => w.display === d.index),
+        d.width,
+        d.height,
+      ),
+    )
+  }
+}
+
+/**
+ * The object under the cursor on `d`, or null when the dump knows nothing about
+ * that point — asked of the index of the display the pointer is ON, so every
+ * screen of the board picks (issue #30).
  */
 function objectAt(d: BoardDisplay, p: { x: number; y: number }): PickableObject | null {
-  if (objectIndex === null || d.index !== focusedDisplayIndex) return null
-  return objectIndex.pick(p.x, p.y, windowLevelKey)
+  const index = objectIndexOf(d.index)
+  if (index === null || index.size === 0) return null
+  return index.pick(p.x, p.y, windowLevelKey)
+}
+
+/** The topmost box under a native point of `d` — the one a click could take. */
+function boxUnder(d: BoardDisplay, x: number, y: number): Annotation | null {
+  const id = hitTest(visibleAnnotationsOn(d.index), x, y, uiOf(d))
+  if (id === null) return null
+  return state.byId(id) ?? null
+}
+
+/** Two rectangles that are the same object, within a pixel of rounding. */
+function sameRect(b: Box, o: PickableObject): boolean {
+  return (
+    Math.abs(b.x - o.x) <= 1 &&
+    Math.abs(b.y - o.y) <= 1 &&
+    Math.abs(b.w - o.width) <= 1 &&
+    Math.abs(b.h - o.height) <= 1
+  )
+}
+
+/** Whether `a` is the box that already annotates exactly `picked`. */
+function annotatesPick(a: Annotation, picked: PickableObject): boolean {
+  const b = a.bounds
+  if (sameRect({ x: b.x, y: b.y, w: b.width, h: b.height }, picked)) return true
+  // The rect the box was SNAPPED to, which a resize may have moved it off.
+  const snapped = pickedRects.get(a.annotation_id)
+  return snapped !== undefined && sameRect(snapped, picked)
+}
+
+/**
+ * A pick has to be a REAL refinement of the box to take its click: half its area
+ * or less. A control within a hair of the box's own rectangle refines nothing,
+ * and the box is the thing the user drew.
+ */
+const PICK_REFINE_RATIO = 2
+
+/** Everything about the click (or hover) that decides box-vs-pick precedence. */
+interface AimAt {
+  x: number
+  y: number
+  /** 1 / on-screen scale of one native pixel — the grab band is screen-sized. */
+  ui: number
+  /** A repeat click (`PointerEvent.detail >= 2`): the second half of a gesture. */
+  repeat?: boolean
+}
+
+/**
+ * WHO TAKES THE CLICK when a pick and an existing box are both under the cursor.
+ *
+ * Both are real offers, and on a normal Windows desktop they overlap EVERYWHERE:
+ * every pixel belongs to some window, so a box always has something pickable
+ * under it. Neither may simply win.
+ *
+ *   The BOX wins when the user can still be aiming at it —
+ *     · it is the SELECTED box (select, then drag to move / drag a corner to
+ *       resize: the gesture this editor is built on, and the pick under it is
+ *       one Esc away),
+ *     · this is a REPEAT click (a double-click has to reach the box, or a box
+ *       with anything under it could never have its text edited),
+ *     · the pointer is on its OUTLINE (render.ts onBoxEdge) — a box is a
+ *       rectangle drawn around something, so its stroke is always a grip on it,
+ *     · or the pick is the object it already annotates / not meaningfully
+ *       smaller than it.
+ *   The PICK wins in the box's empty middle, where it genuinely refines it —
+ *     one click per control inside an already-boxed window.
+ *
+ * Both halves are load-bearing. Letting the box win over its whole AREA turned
+ * the first box ever drawn into a permanent hole in picking (snapping a window
+ * box made every control in that window unpickable). Letting a smaller pick win
+ * over the whole area cost the reverse: a committed window box could not be
+ * selected, moved or resized anywhere inside itself, because every interior
+ * pixel of it holds a smaller control.
+ */
+function pickBeatsBox(picked: PickableObject, a: Annotation, at: AimAt): boolean {
+  if (a.annotation_id === state.selectedId) return false
+  if (at.repeat === true) return false
+  if (onBoxEdge(a, at.x, at.y, at.ui)) return false
+  if (annotatesPick(a, picked)) return false
+  return picked.area * PICK_REFINE_RATIO <= Math.max(1, a.bounds.width * a.bounds.height)
 }
 
 /** Hover probe. Cheap by design: nothing happens until the pointer moves. */
 function probeObjectHover(p: { d: BoardDisplay; x: number; y: number } | null): void {
-  if (objectIndex === null || objectIndex.size === 0) return
   if (p === null) {
     lastProbeX = -1
     lastProbeY = -1
@@ -1603,26 +1800,47 @@ function probeObjectHover(p: { d: BoardDisplay; x: number; y: number } | null): 
   lastProbeDisplay = p.d.index
   lastProbeX = p.x
   lastProbeY = p.y
-  const next = objectAt(p.d, p)
-  setHoverObject(next, p.d)
-  // HOVER only ever describes an offer that IS on screen. The empty cases —
-  // "no object data here", "object data covers display N only" — are answers to
-  // an ACTION that failed, and merely sweeping the pointer over wallpaper (or
-  // onto the second screen of a board) would otherwise fire them within seconds
-  // of every capture opening, for a user who never touched object picking. The
-  // pointerdown path says them when a click actually snapped nothing.
-  if (next !== null) announceObject(p.d, next)
+  answerProbe(p.d, p.x, p.y)
 }
 
-/** Re-probes the last point after the modifier changed the answer. */
+/** The outline (and its one-time explanations) for one probed point. */
+function answerProbe(d: BoardDisplay, x: number, y: number): void {
+  const index = objectIndexOf(d.index)
+  if (index === null || index.size === 0) {
+    setHoverObject(null, null)
+    // A SCREEN the dump had nothing for, on a board whose other screens do have
+    // object data: hovering it is exactly when that is worth saying — the
+    // outline that appears everywhere else simply never comes here, and silence
+    // reads as "this screen's windows have no objects" (issue #30). With no data
+    // anywhere, picking is off as a whole and silence is the truth.
+    if (hasObjectData()) {
+      const answer = emptyAnswer(d)
+      showObjectHintOnce(answer.kind, answer.text, 'answer')
+    }
+    return
+  }
+  const next = index.pick(x, y, windowLevelKey)
+  // The PROBE runs over boxes too (that is what stops a box from shadowing
+  // picking), but the outline must not promise a pick the click will not make:
+  // where the box under the cursor wins, only the outline is suppressed.
+  const box = next === null ? null : boxUnder(d, x, y)
+  const shadowed =
+    next !== null && box !== null && !pickBeatsBox(next, box, { x, y, ui: uiOf(d) })
+  setHoverObject(shadowed ? null : next, shadowed ? null : d)
+  // HOVER only ever describes an offer that IS on screen. "No object data here"
+  // is an answer to an ACTION that failed, and merely sweeping the pointer over
+  // wallpaper would otherwise fire it within seconds of every capture opening,
+  // for a user who never touched object picking. The pointerdown path says it
+  // when a click actually snapped nothing.
+  if (next !== null && !shadowed) announceObject(next)
+}
+
+/** Re-probes the last point after the modifier (or the data) changed the answer. */
 function reprobeObjectHover(): void {
-  if (objectIndex === null || lastProbeX < 0 || lastProbeY < 0) return
+  if (lastProbeX < 0 || lastProbeY < 0) return
   const d = displayByIndex(lastProbeDisplay)
   if (d === null) return
-  const next = objectAt(d, { x: lastProbeX, y: lastProbeY })
-  setHoverObject(next, d)
-  // Same rule as the hover probe: only a real offer speaks here.
-  if (next !== null) announceObject(d, next)
+  answerProbe(d, lastProbeX, lastProbeY)
 }
 
 function setHoverObject(next: PickableObject | null, on: BoardDisplay | null): void {
@@ -1641,31 +1859,15 @@ function hoverChipLabel(o: PickableObject): string {
 }
 
 /**
- * Honest feedback (GOAL). Picking is a best-effort extra built on a dump that
- * is budgeted, one instant old, and blind to some windows — so every gap says
- * so once, instead of leaving a click that does nothing to speak for it.
+ * Honest feedback about an offer that IS on screen (GOAL). Picking is a
+ * best-effort extra built on a dump that is budgeted, one instant old, and blind
+ * to some windows — so every gap in what it can offer says so once.
  *
- * Priority matters: the first hint that has not been shown yet wins the chip,
- * and staleness of the data beats anything about levels.
+ * Order matters: the first hint that has not been shown yet wins the chip, and
+ * staleness of the data beats anything about levels. The empty cases are not
+ * here — they are answers to an action (emptyAnswer), not to a hover.
  */
-function announceObject(on: BoardDisplay, o: PickableObject | null): void {
-  if (o === null) {
-    // Another screen of the board: the dump lives in the FOCUSED display's
-    // coordinate space (SPEC §11.3), so there is nothing to offer here — which
-    // is a fact about the DATA, not about this screen's windows. Annotating
-    // works exactly the same; only the snap-to-object shortcut does not.
-    if (on.index !== focusedDisplayIndex) {
-      showObjectHintOnce(
-        'otherDisplay',
-        t('editor.objectOtherDisplay', { index: focusedDisplayIndex }),
-      )
-      return
-    }
-    // Nothing here at all — not even a window. Over the desktop wallpaper, or
-    // outside every window the dump saw.
-    showObjectHintOnce('noData', t('editor.objectNoData'))
-    return
-  }
+function announceObject(o: PickableObject): void {
   // The objects come from the capture instant, so while the user is scrubbed
   // away from "now" the outlines describe a moment that is not on screen.
   // Picking stays allowed — the hint just says what it means.
@@ -1701,14 +1903,47 @@ function announceObject(on: BoardDisplay, o: PickableObject | null): void {
   // A control is on offer and a window is under it: the modifier is worth
   // knowing about exactly now. (The membership test first — this runs on every
   // pointer move, and the window scan must not.)
-  if (objectHintsShown.has('windowModifier') || windowLevelKey || objectIndex === null) return
-  if (objectIndex.windowAt(o.x, o.y) !== null) {
+  if (objectHintsShown.has('windowModifier') || windowLevelKey) return
+  const index = hoverDisplay === null ? null : objectIndexOf(hoverDisplay.index)
+  if (index !== null && index.windowAt(o.x, o.y) !== null) {
     showObjectHintOnce('windowModifier', t('editor.objectWindowModifier'))
   }
 }
 
+/**
+ * The honest answer for a point that offered NOTHING: this whole screen has no
+ * object data, or the dump has data here and simply knows nothing about that
+ * pixel. Two different statements, so two hint kinds (SPEC §11.3, "Silence is
+ * not absence").
+ */
+function emptyAnswer(on: BoardDisplay): { kind: ObjectHintKind; text: string } {
+  const index = objectIndexOf(on.index)
+  if (index === null || index.size === 0) {
+    return {
+      kind: 'displayNoData',
+      text: t('editor.objectDisplayNoData', { index: on.index }),
+    }
+  }
+  return { kind: 'noData', text: t('editor.objectNoData') }
+}
+
 /** How long one hint holds the chip before the next queued one may have it. */
 const OBJECT_HINT_MS = 6000
+
+/**
+ * TWO PRIORITIES, because a proactive tip must never cost a reactive answer its
+ * slot — which is exactly what used to happen: the only feedback a refused click
+ * had was the window-modifier TIP, whose one showing the hover path had almost
+ * always consumed already, so the click was silent.
+ *
+ *   'tip'    — something the user COULD do (the Shift modifier, stale object
+ *              data, picking being off for this capture). Queued behind whatever
+ *              the chip is showing.
+ *   'answer' — why what the user just did produced nothing. Pre-empts a tip in
+ *              the chip immediately; the interrupted tip goes back to the FRONT
+ *              of the queue, so nothing that is shown once is ever lost.
+ */
+type ObjectHintPriority = 'tip' | 'answer'
 
 /**
  * Shows `text` in the hint chip if `kind` has not been said yet this session.
@@ -1717,15 +1952,43 @@ const OBJECT_HINT_MS = 6000
  * never be re-shown, so a message replaced after half a second is lost
  * permanently. A hint raised while the chip is busy waits for it instead.
  */
-function showObjectHintOnce(kind: ObjectHintKind, text: string): boolean {
+function showObjectHintOnce(
+  kind: ObjectHintKind,
+  text: string,
+  priority: ObjectHintPriority = 'tip',
+): boolean {
   if (objectHintsShown.has(kind)) return false
   objectHintsShown.add(kind)
-  if (objectHintTimer !== null) {
-    objectHintQueue.push(text)
-    return true
-  }
-  displayObjectHint(text)
+  showObjectHintText(text, priority)
   return true
+}
+
+/**
+ * ALWAYS shown, whatever has been said before: the answer to an ACTION that just
+ * produced nothing. A click that snapped no box must say why every time — a
+ * user who tries again after the once-per-session hint has been spent would
+ * otherwise be met with the silence this whole feature is meant to end.
+ */
+function showObjectAnswer(kind: ObjectHintKind, text: string): void {
+  // Hovering need not repeat what the click has just said.
+  objectHintsShown.add(kind)
+  showObjectHintText(text, 'answer')
+}
+
+function showObjectHintText(text: string, priority: ObjectHintPriority): void {
+  if (objectHintTimer === null) {
+    displayObjectHint(text)
+    return
+  }
+  if (priority === 'tip') {
+    objectHintQueue.push(text)
+    return
+  }
+  const interrupted = objectHint.textContent ?? ''
+  window.clearTimeout(objectHintTimer)
+  objectHintTimer = null
+  if (interrupted !== '' && interrupted !== text) objectHintQueue.unshift(interrupted)
+  displayObjectHint(text)
 }
 
 function displayObjectHint(text: string): void {
@@ -1809,6 +2072,34 @@ function uiaTargetOf(o: PickableObject): AnnotationTarget {
 // creates a box. No tool modes.
 // ---------------------------------------------------------------------------
 
+/**
+ * Is this left press the SECOND (or third) of one multi-click gesture?
+ *
+ * Tracked here rather than read off `PointerEvent.detail`: the Pointer Events
+ * spec defines `detail` as 0 for pointerdown, so the click count a `mousedown`
+ * would carry cannot be relied on — and this decides whether a box or the
+ * object under it takes the press, which the double-click-to-edit gesture
+ * depends on. Same shape as every platform's own rule: soon enough, and close
+ * enough, on screen.
+ */
+const REPEAT_CLICK_MS = 500 // the Windows double-click default
+const REPEAT_CLICK_PX = 6 // screen px of slop, as forgiving as the box grab band
+let lastClickMs = Number.NEGATIVE_INFINITY
+let lastClickX = 0
+let lastClickY = 0
+
+function isRepeatClick(e: PointerEvent): boolean {
+  const repeat =
+    e.detail >= 2 ||
+    (e.timeStamp - lastClickMs <= REPEAT_CLICK_MS &&
+      Math.abs(e.clientX - lastClickX) <= REPEAT_CLICK_PX &&
+      Math.abs(e.clientY - lastClickY) <= REPEAT_CLICK_PX)
+  lastClickMs = e.timeStamp
+  lastClickX = e.clientX
+  lastClickY = e.clientY
+  return repeat
+}
+
 function applyResize(a: Annotation, handle: HandleId, px: number, py: number): void {
   const b = a.bounds
   const right = b.x + b.width
@@ -1844,7 +2135,19 @@ overlay.addEventListener('pointerdown', (e) => {
     return
   }
   if (e.button !== 0) return
-  commitTextEditor()
+  const repeat = isRepeatClick(e)
+  // A REPEAT click is the second half of one gesture, and the pending box the
+  // FIRST half opened was never asked for: "double-click a box to edit its
+  // text" starts with a plain click, which — over a box with something pickable
+  // under it — snaps a pick and opens its description. Committing that here
+  // would file a junk annotation AND leave the dblclick handler editing THAT
+  // instead of the box that was aimed at. Discarding it is what the user meant;
+  // anything else pending (a right-drag box, a text edit) still commits.
+  if (repeat && clickPickDraftId !== null && pendingDraft()?.annotation_id === clickPickDraftId) {
+    cancelTextEditor()
+  } else {
+    commitTextEditor()
+  }
   if (hit === null) {
     state.selectedId = null
     syncLanes()
@@ -1871,19 +2174,42 @@ overlay.addEventListener('pointerdown', (e) => {
       return
     }
   }
-  // LEFT CLICK selects the topmost box whose lifetime is visible at the cursor,
-  // among the boxes of the display that was clicked.
-  const id = hitTest(visibleAnnotationsOn(hit.d.index), p.x, p.y, ui)
-  // Whether this click had a selection to CLEAR — read before it is cleared,
-  // because a window-level pick below defers to that gesture.
-  const hadSelection = state.selectedId !== null
-  state.selectedId = id
-  if (id !== null) {
+  // LEFT CLICK: the box under the cursor and the UI object under it are BOTH
+  // offers, and pickBeatsBox decides between them — the box keeps its outline,
+  // its selected state and any repeat click; the pick gets the box's empty
+  // middle, where it genuinely refines it. The object is probed even where a box
+  // is: a box is hit over its whole AREA, so letting it shadow the probe turned
+  // the first picked box into a permanent hole in picking.
+  //
+  // Shift is read from the EVENT, not from the tracked key state: a window that
+  // has just regained focus with Shift already down never saw the keydown.
+  windowLevelKey = e.shiftKey
+  const box = boxUnder(hit.d, p.x, p.y)
+  const picked = objectAt(hit.d, p)
+  const pickWins =
+    picked !== null && (box === null || pickBeatsBox(picked, box, { x: p.x, y: p.y, ui, repeat }))
+  if (box !== null && !pickWins) {
+    // The box takes the click: select it and start the move drag, exactly as
+    // this editor always did. A pick it refused is a real refusal, so it gets
+    // its own one-time chip rather than looking like nothing was there — but
+    // only where the refusal could SURPRISE. A box the user has already
+    // selected, and the second click of a double-click, are aimed at the box by
+    // definition, and explaining those would be nagging about a gesture that
+    // did exactly what it looked like.
+    if (
+      picked !== null &&
+      !repeat &&
+      box.annotation_id !== state.selectedId &&
+      !annotatesPick(box, picked)
+    ) {
+      showObjectHintOnce('boxTookClick', t('editor.objectBoxTookClick'), 'answer')
+    }
+    state.selectedId = box.annotation_id
     overlay.setPointerCapture(e.pointerId)
     drag = {
       kind: 'move',
       d: hit.d,
-      id,
+      id: box.annotation_id,
       lastX: p.x,
       lastY: p.y,
       before: state.cloneAnnotations(),
@@ -1893,39 +2219,35 @@ overlay.addEventListener('pointerdown', (e) => {
     schedulePaint()
     return
   }
-  // No box here: pick the real UI object under the cursor (GOAL "Static object
-  // picking") — the smallest control, or the window itself when there is no
-  // control (or Shift is held). Only a point no window covers at all still
-  // means what it always did: the click cleared the selection.
+  // No box takes this click. Pick the real UI object under the cursor (GOAL
+  // "Static object picking") — the smallest control, or the window itself when
+  // there is no control (or Shift is held).
   //
-  // Shift is read from the EVENT, not from the tracked key state: a window that
-  // has just regained focus with Shift already down never saw the keydown.
-  windowLevelKey = e.shiftKey
-  const picked = objectAt(hit.d, p)
-  // A WINDOW-level pick never takes a click that was a DESELECT. On a normally
-  // tiled desktop the windows cover the screen completely, so without this
-  // every single pixel snaps a whole-window box and "click empty space = clear
-  // the selection" — the gesture the desktop-class exclusion in objects.ts
-  // exists to preserve — has nowhere left to happen: deselecting would cost a
-  // click plus an Esc to dismiss the description input that opened.
+  // A WINDOW-level pick is a PICK, with or without a modifier and whatever was
+  // selected. It used to defer to "click empty space clears the selection"
+  // whenever anything was selected, which on a tiled desktop (where every pixel
+  // belongs to some window) meant a plain click could not pick a window at all —
+  // the single most common thing there is to annotate.
   //
-  // A CONTROL pick is precise enough to be unambiguous intent, and Shift is the
-  // explicit "I mean the window" modifier, so both still snap immediately. A
-  // modifier-free window pick with nothing selected does too — there is no
-  // deselect to protect then.
-  const deselecting = picked !== null && picked.level === 'window' && !e.shiftKey && hadSelection
-  if (deselecting) {
-    // The click did clear the selection; say once how to get the window box it
-    // did not create. This chip is the only place Shift is ever mentioned.
-    showObjectHintOnce('windowModifier', t('editor.objectWindowModifier'))
-  }
-  if (picked !== null && !deselecting) {
+  // What that costs, said plainly: on a desk where every pixel belongs to some
+  // window, there is NO empty canvas left, so clearing the selection by clicking
+  // beside a box is gone — a click there picks. Esc clears the selection from
+  // anywhere and is the gesture to reach for; the click below still clears it
+  // over a point no window covers (objects.ts never offers the desktop), which
+  // is a bare desktop, not a normal one.
+  state.selectedId = null
+  if (pickWins && picked !== null) {
     beginPendingBox(hit.d, { x: picked.x, y: picked.y, w: picked.width, h: picked.height }, picked)
-  } else if (picked === null && objectIndex !== null && objectIndex.size > 0) {
-    // Says once why the click snapped nothing (the click itself still did what
-    // it always did: cleared the selection). Gated on the index having data at
-    // all — with no dump, picking is simply OFF and silence is the truth.
-    announceObject(hit.d, null)
+    // Remembered so the SECOND click of a double-click can discard it (above)
+    // rather than committing a box nobody asked for.
+    clickPickDraftId = pendingDraft()?.annotation_id ?? null
+  } else if (hasObjectData()) {
+    // The click snapped nothing (it still did what it always did: cleared the
+    // selection). Say why — EVERY time, under the kind that belongs to this
+    // refusal. Gated on there being object data at all: with no dump, picking is
+    // simply OFF and silence is the truth.
+    const answer = emptyAnswer(hit.d)
+    showObjectAnswer(answer.kind, answer.text)
   }
   syncLanes()
   schedulePaint()
@@ -1997,7 +2319,11 @@ overlay.addEventListener('dblclick', (e) => {
 
 /** Idle-hover cursor: resize arrows over handles, move over a box, else default. */
 function syncHoverCursor(e: PointerEvent): void {
-  if (spaceDown) return // pan cursor owns the stage
+  // Space is the PAN MODIFIER only where panning is possible, which is exactly
+  // what the pan handler requires — and at the zoom the editor opens in it is
+  // not. Returning on `spaceDown` alone killed the hover probe while a click at
+  // the same moment still picked, so hover and click disagreed about Space.
+  if (spaceDown && viewport.panEnabled) return // pan cursor owns the stage
   // The pointer event carries the modifier state the OS actually has, which the
   // keydown/keyup tracking below can miss (Shift held while the window was not
   // focused). A change here re-answers the hover on the next probe.
@@ -2008,9 +2334,18 @@ function syncHoverCursor(e: PointerEvent): void {
   }
   const hit = pointAt(e)
   if (hit === null) {
-    // The gutter between two screens: nothing to hover, nothing to pick.
+    // A board point NO captured display covers: the gap between two screens,
+    // and equally the empty band above or below a shorter one (screens of
+    // different heights are the common desk, so "between displays" would be a
+    // lie there). It belongs to no display, so there is nothing to hover,
+    // nothing to pick and nothing a click could snap. Said once, because a
+    // pointer that finds no outline there is otherwise indistinguishable from
+    // picking being broken.
     overlay.style.cursor = 'default'
     probeObjectHover(null)
+    if (board !== null && board.displays.length > 1 && hasObjectData()) {
+      showObjectHintOnce('gutter', t('editor.objectGutter'), 'answer')
+    }
     return
   }
   const ui = uiOf(hit.d)
@@ -2023,11 +2358,16 @@ function syncHoverCursor(e: PointerEvent): void {
       return
     }
   }
-  const overBox = hitTest(visibleAnnotationsOn(hit.d.index), hit.x, hit.y, ui) !== null
-  overlay.style.cursor = overBox ? 'move' : 'default'
-  // Object picking is what a left click on empty canvas does now, so the
-  // outline is only offered where no box would take the click instead.
-  probeObjectHover(overBox ? null : hit)
+  // The PROBE runs wherever the pointer is, boxes included: it is the probe that
+  // decides who would take the click, and skipping it over a box is what made
+  // every picked box a permanent hole in picking. The cursor follows that same
+  // answer — 'move' only where the box really would take the click.
+  probeObjectHover(hit)
+  const box = boxUnder(hit.d, hit.x, hit.y)
+  const pickWins =
+    hoverObject !== null &&
+    (box === null || pickBeatsBox(hoverObject, box, { x: hit.x, y: hit.y, ui }))
+  overlay.style.cursor = box !== null && !pickWins ? 'move' : 'default'
 }
 
 // The outline must not linger once the pointer leaves the canvas.
@@ -2056,6 +2396,7 @@ window.addEventListener(
     e.preventDefault()
     if (e.ctrlKey || e.metaKey) {
       viewport.zoomAt(e.clientX, e.clientY, e.deltaY < 0)
+      markViewNavigated()
       syncPanCursor()
       schedulePaint() // stroke/handle sizes are zoom-dependent
       syncZoomUi() // the top-bar control mirrors the gesture, always
@@ -2106,6 +2447,7 @@ stage.addEventListener(
     if (!panning || e.pointerId !== panning.pointerId) return
     e.stopPropagation()
     viewport.panBy(e.clientX - panning.x, e.clientY - panning.y)
+    markViewNavigated()
     panning.x = e.clientX
     panning.y = e.clientY
     syncSelectionUi() // pan skips repaint (transform-glued), the header is screen-space
@@ -2201,7 +2543,14 @@ window.addEventListener('keydown', (e) => {
     // has meant "clear the selection, then close" since the first version. A
     // user who zoomed in to read something must not have to press Esc twice
     // more than they used to.
-    if (board !== null && board.displays.length > 1 && viewport.panEnabled) {
+    //
+    // And only for a view the USER navigated to (viewNavigated). The editor
+    // opens framed on the focused display, which is a zoomed, panned viewport
+    // from the first frame — treating that as something to back out of would
+    // charge every multi-display capture an extra Esc for close, deselect and
+    // discard alike, which is exactly what the rung above exists to avoid. The
+    // whole board is still one keystroke away: 0.
+    if (board !== null && board.displays.length > 1 && viewNavigated && viewport.panEnabled) {
       fitBoard()
       return
     }
@@ -2552,12 +2901,12 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
       }
     }),
   )
-  // Static object picking (GOAL): one index build over the capture-instant UI
-  // Automation objects — windows (the floor) and controls (the refinement) — in
-  // the FOCUSED display's snapshot coordinate space (SPEC §11.3), which is the
-  // only space the dump was mapped into. An empty payload yields an empty index
-  // and picking stays silently off.
-  objectIndex = ObjectIndex.build(payload.uiaElements, payload.uiaWindows, focusedW, focusedH)
+  // Static object picking (GOAL): ONE index per captured display over the
+  // capture-instant UI Automation objects — windows (the floor) and controls
+  // (the refinement) — each in that display's own snapshot coordinate space
+  // (SPEC §11.3). An empty payload yields empty indexes and picking stays
+  // silently off.
+  buildObjectIndexes(payload.uiaElements, payload.uiaWindows)
   resizeCanvases()
   loaded = true
   drawAllFrozen()
@@ -2612,7 +2961,26 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
   // Dirty baseline = the loaded state exactly as restored above.
   baselineSig = editSig()
   layout()
+  // OPENS FRAMED ON THE FOCUSED DISPLAY (GOAL: the focused display "opens
+  // centered and at the largest scale"). Fitting the whole board instead sized
+  // the screen the capture is ABOUT by the union of every screen — measured on a
+  // two-monitor desk: 0.578 -> 0.430, i.e. every control ~44% smaller by area,
+  // which is precisely the resolution annotation work needs. The overview is one
+  // keystroke away (0, or Esc), and every other display is a pan away.
+  if (board.displays.length > 1) zoomToDisplay(focusedDisplayIndex, false)
   schedulePaint()
+  // A dump that settled while the editor was decoding its frames: apply it now
+  // that there is a board to index it against.
+  if (pendingUiaObjects !== null) {
+    const late = pendingUiaObjects
+    pendingUiaObjects = null
+    applyUiaObjects(late)
+  } else if (payload.uiaDropped) {
+    // GOAL "Silence is not absence": the dump was attempted and produced
+    // nothing, so picking is off for this capture. Until this was said, that was
+    // indistinguishable from an editor whose picking is broken.
+    showObjectHintOnce('dropped', t('editor.objectDropped'))
+  }
   // The shortcut sheet is ON BY DEFAULT (GOAL "Editor Chrome"), and remembers
   // being turned off. Opened LAST: its rows describe what this capture can
   // actually do — the time group only exists with a replay, display framing
@@ -2635,6 +3003,33 @@ window.addEventListener('resize', () => {
 
 window.editorBridge.onInit((payload) => {
   void initEditor(payload)
+})
+
+/**
+ * The object dump, arriving AFTER the editor opened (GOAL "Static object
+ * picking"): the dump is budgeted and killed independently of the window, so on
+ * a slow machine it settles a few hundred ms late. Rebuilding the per-display
+ * indexes from it makes picking start working mid-session; nothing else is
+ * touched, so boxes already drawn are unaffected.
+ */
+function applyUiaObjects(payload: EditorUiaObjectsPayload): void {
+  if (!loaded || board === null) {
+    // init has not built the board yet — hold it rather than drop it.
+    pendingUiaObjects = payload
+    return
+  }
+  buildObjectIndexes(payload.uiaElements, payload.uiaWindows)
+  if (payload.dropped) showObjectHintOnce('dropped', t('editor.objectDropped'))
+  // The sheet advertises the window-level modifier only where object data
+  // exists; it was built before this arrived.
+  if (helpOpen) buildHelpSheet()
+  // A pointer already resting on an object must not have to move to find out
+  // that picking works now.
+  reprobeObjectHover()
+}
+
+window.editorBridge.onUiaObjects((payload) => {
+  applyUiaObjects(payload)
 })
 
 // Main is the authority on the window state: every mode change lands here,
