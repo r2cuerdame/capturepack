@@ -87,8 +87,36 @@ const MAX_CELLS_PER_ELEMENT = 96
  *
  * Relative to the WINDOW, not to the snapshot: the guards above cannot catch
  * the full-window pane of a small window.
+ *
+ * MEASURED, not guessed (issue #58). At the 0.95 this started life as, the test
+ * never fired: on a real two-monitor capture the median control offered under
+ * the cursor was 1.58 Mpx — 19% of a 3840x2160 screen, 55% of the window it
+ * belonged to — because a half-window container clears 0.95 easily and, being
+ * the smallest rectangle containing the point, then beats the window level.
+ * That is what "hover select doesn't work" was: not an empty index (0.0% of
+ * 5184 probes came back empty) but an index answering with containers.
+ *
+ * Sweeping the same capture at 0.95 / 0.70 / 0.50 / 0.35 moved the median to
+ * 19.1% / 19.1% / 7.6% / 0.4% of the screen while the share of points offering
+ * a control under 100 kpx — a target precise enough to annotate — stayed at
+ * 19.6% throughout. Tightening this costs no useful target whatsoever; it only
+ * sends containers down to the window level, which names them properly.
  */
-const WINDOW_FRAME_FRACTION = 0.95
+const WINDOW_FRAME_FRACTION = 0.35
+/**
+ * The same test on a single AXIS, because area is only a proxy for what makes
+ * a rectangle a frame. A content column can span its window's full height at
+ * 30% of its width — 30% of the area, under the threshold above, and still
+ * plainly a container rather than a thing to annotate.
+ *
+ * It CANNOT stand on its own, which is what the area floor below is for: a
+ * toolbar is 100% of its window's width too, and is the most annotatable thing
+ * on screen. What separates them is that the toolbar is SHORT — it spans an
+ * axis while occupying almost none of the window.
+ */
+const WINDOW_FRAME_SIDE_FRACTION = 0.9
+/** How much of its window a full-axis control must also cover to be a frame. */
+const WINDOW_FRAME_SIDE_MIN_AREA = 0.25
 /**
  * The wallpaper is a top-level window (class Progman, or a WorkerW behind the
  * icons) covering the whole desktop. Offering it would turn every click on
@@ -147,6 +175,17 @@ export interface PickableObject {
   width: number
   height: number
   area: number
+  // CONTROL LEVEL: this control's position in the dump's tree walk. UIA exposes
+  // no z-order between siblings, but it walks them in tree order and a later
+  // sibling is painted over an earlier one — so this is the only occlusion
+  // signal there is inside a window (issue #58). 0 at the window level.
+  //
+  // Deliberately NOT the element's `depth`. Depth is how deep the WALK was, not
+  // what is in front: measured on a real capture, ordering by depth never once
+  // beat ordering by containment and lost on 31.9% of contested points, because
+  // a small control in a shallow branch and a big pane in a deep one are
+  // ordinary neighbours in a UIA tree.
+  order: number
 }
 
 /**
@@ -235,31 +274,35 @@ export class ObjectIndex {
     const maxH = height * MAX_SIDE_FRACTION
     // Windows by z, clipped once: every control looks its owner up here rather
     // than scanning the list per element.
-    const byZ = new Map<number, { window: EditorUiaWindow; clip: { area: number } | null }>()
+    const byZ = new Map<
+      number,
+      { window: EditorUiaWindow; clip: { width: number; height: number; area: number } | null }
+    >()
     for (const w of uiaWindows) byZ.set(w.z, { window: w, clip: clip(w.bounds, width, height) })
     const objects: PickableObject[] = []
     // Which windows had a control that landed on THIS display at all, before
     // the frame filters below removed any of them: that is what separates
     // "its controls are on another screen" from "its controls are all frames".
     const onThisDisplay = new Set<number>()
-    for (const element of elements) {
+    elements.forEach((element, order) => {
       const clipped = clip(element.bounds, width, height)
       // Off-screen objects (another display, a scrolled-away control) clip to
       // nothing and drop out here.
-      if (clipped === null) continue
+      if (clipped === null) return
       if (element.window >= 0) onThisDisplay.add(element.window)
-      if (clipped.area > maxArea) continue
-      if (clipped.width > maxW && clipped.height > maxH) continue
+      if (clipped.area > maxArea) return
+      if (clipped.width > maxW && clipped.height > maxH) return
       const owner = byZ.get(element.window)
-      if (owner?.clip != null && clipped.area >= owner.clip.area * WINDOW_FRAME_FRACTION) continue
+      if (owner?.clip != null && isWindowFrame(clipped, owner.clip)) return
       objects.push({
         level: 'control',
         element,
         window: owner?.window ?? null,
         refinement: 'controls',
+        order,
         ...clipped,
       })
-    }
+    })
     objects.sort((a, b) => a.area - b.area)
 
     // Which windows a finer level actually exists for, AFTER the filters above.
@@ -295,6 +338,8 @@ export class ObjectIndex {
             ? 'controls'
             : 'none'
           : refinementOf(window, refinable, recorded, onThisDisplay),
+        // Windows are ordered by z, never by tree order.
+        order: 0,
         ...clipped,
       })
     }
@@ -371,33 +416,38 @@ export class ObjectIndex {
     // the window level; contains() below still rejects a real miss.
     const c = Math.min(this.cols - 1, Math.max(0, Math.floor(x / CELL)))
     const r = Math.min(this.rows - 1, Math.max(0, Math.floor(y / CELL)))
-    const best: PickableObject | null = this.firstHit(
-      this.cells.get(r * this.cols + c),
-      x,
-      y,
-      eligible,
-    )
-    // Both lists are area-ascending, so one hit from each is enough.
-    const wideHit = this.firstHit(this.wide, x, y, eligible)
-    if (best === null) return wideHit
-    if (wideHit === null) return best
-    return wideHit.area < best.area ? wideHit : best
+    const best = this.bestHit(this.cells.get(r * this.cols + c), x, y, eligible, null)
+    return this.bestHit(this.wide, x, y, eligible, best)
   }
 
-  private firstHit(
+  /**
+   * The control at a point, scanning EVERY hit rather than stopping at the first
+   * (issue #58).
+   *
+   * Both lists are area-ascending, so the first hit is the smallest — which is
+   * the right answer for the 71% of contested points where the candidates nest
+   * cleanly, one inside the next. It is NOT the right answer for the other 29%,
+   * where two controls genuinely overlap without either containing the other:
+   * there, smallest-wins can offer the one that is visually behind. Only the
+   * window level did occlusion before this; inside a window nothing did.
+   */
+  private bestHit(
     indices: readonly number[] | undefined,
     x: number,
     y: number,
     eligible: (o: PickableObject) => boolean,
+    seed: PickableObject | null,
   ): PickableObject | null {
-    if (indices === undefined) return null
-    for (const index of indices) {
-      const o = this.objects[index]
-      if (o === undefined) continue
-      if (contains(o, x, y) && eligible(o)) return o
+    if (indices === undefined) return seed
+    let best = seed
+    for (const i of indices) {
+      const o = this.objects[i]
+      if (o === undefined || !contains(o, x, y) || !eligible(o)) continue
+      if (best === null || inFrontOf(o, best)) best = o
     }
-    return null
+    return best
   }
+
 }
 
 /**
@@ -430,6 +480,59 @@ function zOf(o: PickableObject): number {
 
 function contains(o: PickableObject, x: number, y: number): boolean {
   return x >= o.x && y >= o.y && x <= o.x + o.width && y <= o.y + o.height
+}
+
+/** Whether `a` fully encloses `b` — `b` is then the finer of the two. */
+function encloses(a: PickableObject, b: PickableObject): boolean {
+  return (
+    b.x >= a.x && b.y >= a.y && b.x + b.width <= a.x + a.width && b.y + b.height <= a.y + a.height
+  )
+}
+
+/**
+ * Which of two controls containing the same point should be offered there.
+ *
+ * NESTED — one encloses the other: the inner one wins. It is the more precise
+ * annotation and it is what is actually on top.
+ *
+ * OVERLAPPING — neither encloses the other: the one LATER in the tree walk wins,
+ * because that is the one painted over the other. UIA gives siblings no z-order,
+ * so tree order is the only occlusion signal available inside a window; the
+ * element's `depth` is not one (see PickableObject.order).
+ *
+ * Not a total order — two controls can each be "in front" of a third by
+ * different tests — so this is a scan, not a sort. That matches how a hit test
+ * works anyway: every candidate is compared against the best so far.
+ */
+function inFrontOf(a: PickableObject, best: PickableObject): boolean {
+  if (encloses(best, a)) return true
+  if (encloses(a, best)) return false
+  if (a.order !== best.order) return a.order > best.order
+  return a.area < best.area
+}
+
+/**
+ * Whether a control is really its window's frame — the client-area pane, the
+ * full-height content column, the wrapper every tree starts with (issue #58).
+ *
+ * Two ways to be one, because area alone missed the case that mattered: most of
+ * the window's AREA, or nearly all of one of its AXES while still being bulky.
+ * Either way the window level already offers that rectangle, under the window's
+ * own title, so the control is dropped and the pick falls through to it.
+ *
+ * The area floor on the axis test is what keeps a toolbar — full width, and the
+ * most annotatable thing in the window — from being read as its frame.
+ */
+function isWindowFrame(
+  control: { width: number; height: number; area: number },
+  window: { width: number; height: number; area: number },
+): boolean {
+  if (control.area >= window.area * WINDOW_FRAME_FRACTION) return true
+  if (control.area < window.area * WINDOW_FRAME_SIDE_MIN_AREA) return false
+  const spansWidth = window.width > 0 && control.width >= window.width * WINDOW_FRAME_SIDE_FRACTION
+  const spansHeight =
+    window.height > 0 && control.height >= window.height * WINDOW_FRAME_SIDE_FRACTION
+  return spansWidth || spansHeight
 }
 
 /** Snapshot-clipped rectangle, or null when nothing usable is left of it. */

@@ -757,7 +757,8 @@ simultaneously is the default** — one Ctrl+Alt+C, N displays in the pack.
   - **No display picker in the top bar.** The board already shows every display, so a
     row of monitor buttons is redundant chrome in the one place that must stay
     uncluttered. Framing a single display stays available on the keyboard (`1`..`9`,
-    `0` to fit) and is discoverable through the help tooltip, not a toolbar.
+    and the key left of `1` — backtick — to fit the whole board; `0` still does it
+    too) and is discoverable through the help tooltip, not a toolbar.
   - Annotations stay in their own display's pixel space; `annotations.json` gains an
     optional `display` index (absent = the focused display, so single-monitor packs are
     unchanged).
@@ -900,7 +901,32 @@ Automatic window/control selection ships in a static form first:
    that bridge lands (v0.2.0), the window level is what covers them: a box on a Chrome
    window still says which window it points at, and a `#save` selector will beat a UIA node
    that never existed once the extension can contribute one.
-4. Frame-by-frame tracking (bounds following the object through the replay) remains V3.
+4. **A container is not a control.** The two levels only earn their keep if the control
+   level is genuinely more precise than the window; a rectangle covering half the window
+   is the window, wearing the label "Pane". So any control that is most of its window's
+   AREA, or spans nearly a whole AXIS of it while still being bulky, is dropped and the
+   pick falls through to the window level — which names it properly. A toolbar spans its
+   window's full width too and is the most annotatable thing in it; what separates the two
+   is that the toolbar is short, so the axis test carries an area floor.
+
+   This is measured, not asserted. The rule is calibrated by rebuilding the editor's index
+   from a real multi-monitor pack and sweeping it: the median rectangle offered under the
+   cursor must stay a small fraction of the screen, and tightening the rule must not cost
+   precise targets. When it was first shipped mis-calibrated the median offer was 19% of a
+   3840x2160 screen while 0% of probes came back empty — picking looked healthy and was
+   useless, which is exactly how it was reported ("hover select doesn't work"). A pack a
+   user sends is enough to re-run that sweep, and CI can produce its own with `--capture-now`.
+5. **Picking is a hit test, so it culls.** Only the top window at a pixel may offer controls,
+   and inside that window the pick scans every candidate rather than stopping at the first:
+   where one control encloses another the inner one wins (it is the finer annotation and it
+   is what is on top), and where two genuinely overlap without nesting, the one later in the
+   tree walk wins, because that is the one painted over the other. UIA gives siblings no
+   z-order, so tree order is the only occlusion signal there is inside a window — and the
+   element's `depth` is NOT one: it is how deep the walk went, and measured against a real
+   capture, ordering by it never once beat ordering by containment while losing on 31.9% of
+   contested points. Once containers are dropped (4) genuine sibling overlap is rare, so this
+   rule is a correctness floor rather than the thing that makes picking feel right.
+6. Frame-by-frame tracking (bounds following the object through the replay) remains V3.
 
 ---
 
@@ -1192,6 +1218,14 @@ No Pin/Rectangle/Blur tool menus exist.
 box header (`[#] [1.0s] [Blur] [×]`) shows *together with* the text field, so number,
 duration, and blur can be set while typing, without committing first and re-selecting.
 Toggling a control never steals focus from the input; Enter commits the whole box.
+
+**Selecting a box is editing its description** — selecting an existing box (a click, a
+double-click, a lifetime lane on the timebar) puts the caret in its description with the
+current text SELECTED, exactly as creating one does: typing replaces it, Enter applies,
+Esc leaves it unchanged and closes the field. Moving or resizing the box never pulls
+focus back to the canvas, and the standing rule holds — keyboard shortcuts are dead
+while a text field has focus, so Delete edits the description rather than deleting the
+box (the header `[×]` deletes it, and so does Delete once Esc has left the field).
 
 - **Number toggle** — [#] click → numbered:true, shows the auto-computed number ([①]);
   click again → off; remaining numbered boxes renumber immediately. Numbers are never
