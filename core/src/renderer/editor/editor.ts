@@ -1573,14 +1573,31 @@ function pendingDraft(): Annotation | null {
 }
 
 /** The selected box, if it applies at the current scrub position. */
+/**
+ * The selected box AS STORED — the object every edit writes into.
+ *
+ * MUST NOT be the resolved view (#86). A tracked box resolves to a COPY, and a
+ * mutation applied to a copy is a mutation the user watches happen and then
+ * loses: colour, blur, numbering and duration all silently reverting on exactly
+ * the boxes that follow something. Anything GEOMETRIC wants
+ * `selectedPaintedAnnotation` instead.
+ */
 function selectedVisibleAnnotation(): Annotation | null {
   if (state.selectedId === null) return null
   const a = state.byId(state.selectedId)
-  if (a === undefined || !annotationVisibleNow(a)) return null
-  // Resolved like everything else that is drawn (#86): handles on the stored
-  // rectangle while the box renders at its tracked one would put the grab
-  // points somewhere the user cannot see a box.
-  return annotationAt(a, nowMs())
+  return a !== undefined && annotationVisibleNow(a) ? a : null
+}
+
+/**
+ * The selected box WHERE IT IS DRAWN, for chrome that has to sit on it (#86).
+ *
+ * Resize handles and the header hug the rectangle the user can see. On a
+ * tracked box that is the tracked rectangle, not the stored one — handles on
+ * the stored rect would be grab points floating where no box is.
+ */
+function selectedPaintedAnnotation(): Annotation | null {
+  const a = selectedVisibleAnnotation()
+  return a === null ? null : annotationAt(a, nowMs())
 }
 
 /**
@@ -1589,7 +1606,9 @@ function selectedVisibleAnnotation(): Annotation | null {
  * selection.
  */
 function headerAnnotation(): Annotation | null {
-  return pendingDraft() ?? selectedVisibleAnnotation()
+  // Painted, not stored (#86): this positions the header over the box, and on a
+  // tracked box those are different rectangles.
+  return pendingDraft() ?? selectedPaintedAnnotation()
 }
 
 /**
@@ -1780,10 +1799,20 @@ function positionBoxHeader(
  * commit undo the wrong step. A committed box goes through the normal
  * undoable path.
  */
+/** The lifetime a track's range is made of — compared to notice it changed. */
+function lifeKey(a: Annotation): string {
+  return `${a.start_ms ?? 'x'}..${a.end_ms ?? 'x'}`
+}
+
 function applyMutation(mutate: (a: Annotation) => void): void {
   const pending = pendingDraft()
   if (pending !== null) {
+    const before = lifeKey(pending)
     mutate(pending)
+    // A track was fetched for the lifetime the box had when it was picked. Any
+    // change to that lifetime — a preset, "until the end", "entire capture" —
+    // makes the path we hold the wrong length (#86).
+    if (lifeKey(pending) !== before) refreshTrack(pending)
     // Repaints the live preview (blur, number badge, border) and re-syncs the
     // header labels — the pending box is in neither the store nor the lanes.
     schedulePaint()
@@ -1792,9 +1821,11 @@ function applyMutation(mutate: (a: Annotation) => void): void {
   }
   const a = selectedVisibleAnnotation()
   if (a === null) return
-  const before = state.cloneAnnotations()
+  const snapshot = state.cloneAnnotations()
+  const life = lifeKey(a)
   mutate(a)
-  state.pushUndoSnapshot(before)
+  if (lifeKey(a) !== life) refreshTrack(a)
+  state.pushUndoSnapshot(snapshot)
   refresh()
 }
 
@@ -2467,9 +2498,28 @@ const pickedRects = new Map<string, Box>()
  * the picture nor the pack would say so. Shortening is the only direction this
  * ever moves an end — a user who wants less still gets less.
  */
+/**
+ * Which object each tracked box follows, by annotation id.
+ *
+ * Kept because a track is fetched for the box's lifetime AT THE MOMENT IT IS
+ * PICKED, and the lifetime is routinely changed afterwards — "until the end" is
+ * one click. Without this the path would still stop where the original
+ * one-second default did, and the box would follow for a moment and then freeze
+ * for the rest of its life. Measured on a real capture before this existed: a
+ * box alive for 15.6 s carried 0.9 s of path.
+ */
+const trackedSurfaces = new Map<string, string>()
+
+/** Re-asks for the path over the box's CURRENT lifetime (see `trackedSurfaces`). */
+function refreshTrack(a: Annotation): void {
+  const surfaceId = trackedSurfaces.get(a.annotation_id)
+  if (surfaceId !== undefined) attachTrack(a, surfaceId)
+}
+
 function attachTrack(draft: Annotation, surfaceId: string): void {
   if (contextSessionId === null) return
   const id = draft.annotation_id
+  trackedSurfaces.set(id, surfaceId)
   const start = draft.start_ms ?? 0
   const end = draft.end_ms ?? replayDurationMs
   void window.editorBridge
@@ -2515,6 +2565,10 @@ function invalidateTargetIfMoved(id: string): void {
   // continuing to fly it along the object's path would move the box out from
   // under them at the next frame. The rectangle they placed is the answer.
   if (a.tracking?.enabled === true) a.tracking = { enabled: false }
+  // ...and stays stopped. Without this, the next duration change would re-ask
+  // for the path and put the box back on the object's rails, undoing the move
+  // the user made by hand.
+  trackedSurfaces.delete(id)
   if (a.target === undefined) return
   const picked = pickedRects.get(id)
   if (picked === undefined) return
@@ -2698,7 +2752,7 @@ overlay.addEventListener('pointerdown', (e) => {
   const ui = uiOf(hit.d)
   // Corner resize handles (editor-only chrome) win over box stacking — but only
   // for a selection that lives on THIS screen.
-  const sel = selectedVisibleAnnotation()
+  const sel = selectedPaintedAnnotation()
   if (sel !== null && displayIndexOf(sel) === hit.d.index) {
     const handle = handleAt(sel, p.x, p.y, ui)
     if (handle !== null) {
@@ -2939,7 +2993,7 @@ function syncHoverCursor(e: PointerEvent): void {
     return
   }
   const ui = uiOf(hit.d)
-  const sel = selectedVisibleAnnotation()
+  const sel = selectedPaintedAnnotation()
   if (sel !== null && displayIndexOf(sel) === hit.d.index) {
     const handle = handleAt(sel, hit.x, hit.y, ui)
     if (handle !== null) {
