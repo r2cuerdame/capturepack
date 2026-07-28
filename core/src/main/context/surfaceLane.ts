@@ -96,13 +96,14 @@ export function parseHostMonitors(raw: unknown): HostMonitor[] {
   for (const entry of raw) {
     if (typeof entry !== 'object' || entry === null) continue
     const record = entry as Record<string, unknown>
+    // The host writes a rect as the ARRAY [x, y, width, height] (AppendRect in
+    // context-host.ps1), not as an object. Reading it as {x,y,width,height}
+    // silently dropped every monitor and left the layout empty, which made the
+    // whole frozen ring unreadable — the surfaces were recorded and could not be
+    // placed on any display.
     const bounds = record['b']
-    if (typeof bounds !== 'object' || bounds === null) continue
-    const rect = bounds as Record<string, unknown>
-    const x = rect['x']
-    const y = rect['y']
-    const width = rect['width']
-    const height = rect['height']
+    if (!Array.isArray(bounds) || bounds.length < 4) continue
+    const [x, y, width, height] = bounds as unknown[]
     if (
       typeof x !== 'number' ||
       typeof y !== 'number' ||
