@@ -49,7 +49,7 @@ import {
   takeDisplaySnapshots,
 } from './capture'
 import type { ReplayFetch } from './capture'
-import { freezeContext, logContextCost, releaseContext } from './context/runtime'
+import { freezeContext, frozenObservations, logContextCost, releaseContext } from './context/runtime'
 import {
   addManifestPlugin,
   savePack,
@@ -570,17 +570,46 @@ async function runFlow(settings: Settings): Promise<void> {
       // surface record and the Windows UI Automation provider both hang off it,
       // and the provider is registered through the same public registry an
       // external one would use — no private path into Core.
+      const contextDisplays = uiaTargets.map((target) => ({
+        index: target.index,
+        focused: target.focused,
+        width: target.width,
+        height: target.height,
+      }))
       const contextSession = openContextSession(editor, {
-        displays: uiaTargets.map((target) => ({
-          index: target.index,
-          focused: target.focused,
-          width: target.width,
-          height: target.height,
-        })),
+        displays: contextDisplays,
         replayDurationMs,
         observation: contextObservation(uia, uiaFocusedIndex, replayDurationMs),
         dropped: settled.ready && uiaEmpty(uia),
       })
+      // THE WHOLE FROZEN RANGE, not just the instant the hotkey was pressed.
+      //
+      // Core's surface ring holds the entire replay at 10 Hz and was frozen at
+      // capture, but nothing handed it here — so the session filed itself as
+      // `single-instant` and answered nothing anywhere except the last frame,
+      // which is exactly what was reported ("context 창 선택이 마지막 정보에만
+      // 맞아"). With the ring adopted the session becomes a `ring` and the
+      // WINDOW rung answers at every recorded moment.
+      //
+      // The capture-instant UIA dump above keeps its own job: it is the CONTROL
+      // rung, a refinement offered where a provider actually looked. The two
+      // stay separate deliberately — Core mints windows, providers refine.
+      if (contextFreezeId !== null) {
+        const ring = frozenObservations(contextFreezeId, contextDisplays, replayDurationMs)
+        if (ring.length > 1) {
+          contextSession.adoptAll(ring)
+          logInfo(
+            `[context] editor session reads ${ring.length} surface observations ` +
+              `across ${replayDurationMs} ms`,
+          )
+        } else {
+          // Honest silence: no ring means picking answers where the dump does
+          // and says so through `accuracy.coverage`, rather than pretending.
+          logWarn(
+            '[context] no surface ring for this capture — picking answers at the capture instant only',
+          )
+        }
+      }
       if (settled.ready && uiaEmpty(uia)) {
         // GOAL "Silence is not absence": the editor is about to open with
         // picking off, and until this line the only trace was an empty index.

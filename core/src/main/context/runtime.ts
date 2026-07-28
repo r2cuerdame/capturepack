@@ -18,6 +18,9 @@
 // surface at every point in its own replay: a bug that writes itself.
 
 import { randomUUID } from 'node:crypto'
+import type { ContextObservation } from './buffer'
+import { frozenRingObservations } from './ringObservations'
+import type { ContextDisplayTarget } from './session'
 import type { SurfaceStack } from '../../shared/context/protocol'
 import { logInfo, logWarn } from '../log'
 import { SessionClock } from './clock'
@@ -194,6 +197,36 @@ export function surfacesAt(freezeId: string, packTMs: number): SurfaceStack | nu
     accuracy: withClockError(result.accuracy, current.lane.clockErrorMs()),
     surfaces: result.surfaces,
   }
+}
+
+/**
+ * The frozen ring, as the observations an editor context session adopts.
+ *
+ * THE SEAM THIS CLOSES. The ring is filled at 10 Hz for the whole replay and
+ * frozen at capture; the editor's session restores a surface stack at the
+ * requested time and mints Core's WINDOW rung from it. Both halves were built
+ * and correct, and nothing carried the ring from one to the other — so the
+ * session was handed a single capture-instant observation, filed itself as
+ * `single-instant`, and answered nothing at every other time. Three hundred and
+ * sixty-four samples were recorded, frozen, and never read.
+ *
+ * Returns an empty array when there is no runtime, no freeze, or no monitor
+ * layout to translate with. Empty means the caller keeps whatever it already
+ * had — never that the desktop was empty.
+ */
+export function frozenObservations(
+  freezeId: string,
+  targets: readonly ContextDisplayTarget[],
+  replayDurationMs: number,
+): ContextObservation[] {
+  const current = runtime
+  if (current === null || !freezes.has(freezeId)) return []
+  return frozenRingObservations(
+    (packTMs) => surfacesAt(freezeId, packTMs),
+    current.lane.monitors(),
+    targets,
+    replayDurationMs,
+  )
 }
 
 export interface ContextStatus {

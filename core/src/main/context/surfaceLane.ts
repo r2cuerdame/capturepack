@@ -70,6 +70,58 @@ export interface SurfaceLaneStatus {
   lastError: string | null
 }
 
+/**
+ * One monitor as the HOST sees it, in the physical space its surface rectangles
+ * share. Reported at every hello (`scripts/context-host.ps1`, `Monitors()`), so
+ * a display hot-plug replaces the layout instead of leaving a stale one.
+ */
+export interface HostMonitor {
+  device: string
+  primary: boolean
+  bounds: { x: number; y: number; width: number; height: number }
+}
+
+/**
+ * The hello's `monitors` array, validated rather than cast.
+ *
+ * Everything crossing the host boundary is untrusted text: a truncated line, an
+ * older host, a locale that formatted a number differently. A malformed entry
+ * is dropped rather than believed, because a monitor rectangle that is wrong by
+ * a field is worse than one that is missing — it would place surfaces on a
+ * screen they were never on.
+ */
+export function parseHostMonitors(raw: unknown): HostMonitor[] {
+  if (!Array.isArray(raw)) return []
+  const monitors: HostMonitor[] = []
+  for (const entry of raw) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const record = entry as Record<string, unknown>
+    const bounds = record['b']
+    if (typeof bounds !== 'object' || bounds === null) continue
+    const rect = bounds as Record<string, unknown>
+    const x = rect['x']
+    const y = rect['y']
+    const width = rect['width']
+    const height = rect['height']
+    if (
+      typeof x !== 'number' ||
+      typeof y !== 'number' ||
+      typeof width !== 'number' ||
+      typeof height !== 'number' ||
+      width <= 0 ||
+      height <= 0
+    ) {
+      continue
+    }
+    monitors.push({
+      device: typeof record['d'] === 'string' ? record['d'] : '',
+      primary: record['primary'] === true,
+      bounds: { x, y, width, height },
+    })
+  }
+  return monitors
+}
+
 export class SurfaceLane {
   private readonly clock: SessionClock
   private readonly timeline: SurfaceTimeline
@@ -86,6 +138,20 @@ export class SurfaceLane {
   private hostDutyCycle: number | null = null
   private sampleDutyCycle: number | null = null
   private hostWorkingSet: number | null = null
+  /**
+   * The host's own monitor rectangles, in the SAME physical space its surface
+   * bounds are in. Kept because the ring stores virtual-desktop physical pixels
+   * (protocol `RectSpace`) while an annotation's coordinates are one display's
+   * SNAPSHOT pixels (SPEC 8.2) — and translating between them needs the
+   * monitor a rectangle sits on. The host reports these at every hello, so a
+   * display hot-plug replaces them rather than leaving a stale layout behind.
+   */
+  private hostMonitors: readonly HostMonitor[] = []
+
+  /** The host's monitor layout, for translating ring rectangles onto a snapshot. */
+  monitors(): readonly HostMonitor[] {
+    return this.hostMonitors
+  }
   /** Previous status event, so the duty cycle is a rate and not an average since boot. */
   private lastStatus: { tMs: number; cpuMs: number } | null = null
   private windows: number | null = null
@@ -164,6 +230,7 @@ export class SurfaceLane {
     // unknown amount rather than by a measured one.
     const helloMs = hello['hostMs']
     if (typeof helloMs === 'number') this.lastError = null
+    this.hostMonitors = parseHostMonitors(hello['monitors'])
     for (let i = 0; i < 5; i += 1) {
       const measured = await this.ping()
       if (!measured) break
