@@ -176,7 +176,12 @@ Every fix or feature updates ALL public surfaces in the same pass — none may d
   is not done until the MCP tools speak it.
 - **GitHub Milestones** — actively used: every issue belongs to a release milestone
   (vX.Y.Z), milestones mirror the roadmap, and a release closes its milestone with all
-  issues resolved or explicitly moved.
+  issues resolved or explicitly moved. Two honest exceptions, and only two: work that is
+  agreed but deliberately undated lives in **Later — not scheduled** (a version number
+  nobody intends to hit is a lie, and an orphaned issue looks forgotten), and the standing
+  **usage journal** issue is pinned rather than milestoned, because it is never "done".
+  An issue that slips out of a release is MOVED with a comment saying why — a milestone is
+  closed by finishing or by deciding, never by quietly leaving things behind.
 
 ---
 
