@@ -1,7 +1,7 @@
 {
   "name": "capturepack",
   "productName": "CapturePack",
-  "version": "0.2.0-rc.22",
+  "version": "0.2.0-rc.23",
   "description": "Capture context, not screenshots. The fastest way to explain something to an LLM.",
   "license": "MIT",
   "author": "r2cuerdame",
