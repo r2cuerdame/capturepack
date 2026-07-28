@@ -192,6 +192,8 @@ export class SurfaceTimeline {
   private lastCheckpointMs = Number.NEGATIVE_INFINITY
 
   private readonly freezes: SurfaceFreeze[] = []
+  /** True while `append` is mid-sample: the arena may grow but must not move (#85). */
+  private writing = false
   private droppedSamples = 0
   /** Governor state: store one sample in `stride`, and mark the next one degraded. */
   private stride = 1
@@ -244,6 +246,36 @@ export class SurfaceTimeline {
     const seen = new Set<string>()
     const changed: number[] = []
 
+    // A SAMPLE'S RECORDS MUST NOT MOVE WHILE IT IS BEING WRITTEN (#85).
+    //
+    // `changed` collects arena addresses as each record is appended, and the
+    // entry below stores only the FIRST of them because the run is contiguous.
+    // Both facts stop being true if the arena compacts part way through this
+    // loop: `compact` shifts every byte down and fixes up `samples` and `live`,
+    // but it cannot fix up a local array it has never heard of. The addresses
+    // gathered before the shift then point `dead` bytes too far along, and the
+    // read walks off the end of the DataView.
+    //
+    // Measured: 60 windows all moving, an 8 KB arena, pruning throughout —
+    // `RangeError: Offset is outside the bounds of the DataView`, which is
+    // exactly what a 55-second capture on a real desktop produced from inside
+    // the save path. It needs a desk's worth of windows to reach the end of the
+    // arena mid-sample, which is why one to three windows never caught it.
+    this.writing = true
+    try {
+      return this.appendSample(sample, seen, changed, forceCheckpoint, before)
+    } finally {
+      this.writing = false
+    }
+  }
+
+  private appendSample(
+    sample: SurfaceSample,
+    seen: Set<string>,
+    changed: number[],
+    forceCheckpoint: boolean,
+    before: number,
+  ): number {
     for (const win of sample.windows) {
       seen.add(win.hwnd)
       this.encode(win)
@@ -663,7 +695,12 @@ export class SurfaceTimeline {
     // Compaction first: a ring that has been pruned is mostly dead bytes at the
     // front, and growing before reclaiming them would double the footprint of a
     // buffer that is not actually getting bigger.
-    if (this.dead > 0) this.compact()
+    //
+    // NEVER MID-SAMPLE though (#85, see `append`). Growing keeps every existing
+    // address valid; compacting does not, and a sample being written is holding
+    // addresses this class cannot reach. The dead bytes are not lost — the next
+    // prune's `compactIfWorthwhile` reclaims them, one sample later.
+    if (this.dead > 0 && !this.writing) this.compact()
     if (this.used + extra <= this.arena.length) return
     let next = this.arena.length * 2
     while (next < this.used + extra) next *= 2

@@ -1271,7 +1271,15 @@ function beginPendingBox(on: BoardDisplay, b: Box, picked?: PickableObject): voi
     // "Now" (the capture instant) anchors at the end of the replay; a scrubbed
     // stamp is clamped to the manifest's wall-clock replay_duration_ms — the
     // parsed video clock can run slightly past it.
-    const anchor = scrub.atNow ? replayDurationMs : Math.min(Math.round(scrub.tMs), replayDurationMs)
+    // ON THE PICTURE'S CLOCK, like the geometry above (#81/#85). The box was
+    // drawn over a frame, and after #81 its rectangle comes from that frame's
+    // time. Stamping the lifetime with the PLAYHEAD's time instead would put the
+    // two on different clocks and the pack would contradict the screen: a reader
+    // comparing the box against the replay at the box's own time sees an error
+    // of up to one frame gap that the user never saw while drawing it.
+    const anchor = scrub.atNow
+      ? replayDurationMs
+      : Math.min(Math.round(scrub.presentedMs), replayDurationMs)
     const life = lifetimeAround(anchor, defaultManualDurationMs, replayDurationMs)
     draft.start_ms = life.start_ms
     draft.end_ms = life.end_ms

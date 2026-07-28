@@ -613,7 +613,28 @@ async function runFlow(settings: Settings): Promise<void> {
       // rung, a refinement offered where a provider actually looked. The two
       // stay separate deliberately — Core mints windows, providers refine.
       if (contextFreezeId !== null) {
-        const ring = frozenObservations(contextFreezeId, contextDisplays, replayDurationMs)
+        // RULE 1 OF OBJECT DATA: IT MAY NEVER BREAK ANYTHING ELSE (#85).
+        //
+        // The editor already obeys this — a context frame that fails to build
+        // leaves the previous one in place — but the save path did not, and it
+        // is the save path that owns the capture flow. A `RangeError` from deep
+        // inside the ring became an unhandled rejection here, the flow never
+        // closed, and every later press of the hotkey was answered with
+        // "capture requested while a flow was already open — ignored". The user
+        // pressed it seventeen times and had to restart the app.
+        //
+        // A capture is the replay, the snapshot and the annotations. Picking is
+        // a refinement on top. Losing the refinement must cost the refinement
+        // and nothing else.
+        let ring: ContextObservation[] = []
+        try {
+          ring = frozenObservations(contextFreezeId, contextDisplays, replayDurationMs)
+        } catch (err) {
+          logError(
+            `[context] the surface ring could not be read — picking answers at the capture ` +
+              `instant only: ${err instanceof Error ? err.message : String(err)}`,
+          )
+        }
         if (ring.length > 1) {
           contextSession.adoptAll(ring)
           logInfo(
@@ -712,7 +733,23 @@ async function runFlow(settings: Settings): Promise<void> {
             }
           })
       }
-    })()
+    })().catch((err: unknown) => {
+      // NOTHING IN HERE MAY STRAND THE FLOW (#85).
+      //
+      // This block is detached — `ready-to-show` cannot await it — so a throw
+      // inside it became an unhandled rejection, `editor.show()` never ran, and
+      // `runEditor` below waited forever on a window the user could not see.
+      // `flowActive` stayed true in a `finally` that was never reached, and the
+      // capture hotkey answered "a flow was already open" until the app was
+      // restarted. That is what a user hit: seventeen presses, nothing.
+      //
+      // The pack itself is already on disk by now (save-first), so the honest
+      // recovery is to close the editor rather than show one that was never
+      // initialised: `runEditor` resolves on the window closing, the flow ends,
+      // and the next press of the hotkey works.
+      logError('[capture] preparing the editor failed — closing it so the flow can end:', err)
+      if (!editor.isDestroyed()) editor.destroy()
+    })
   })
 
   let outcome: EditorOutcome
