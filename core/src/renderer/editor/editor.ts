@@ -13,6 +13,8 @@ import type {
   ContextFrameRequest,
   EditorExportPayload,
   EditorInitPayload,
+  ObjectTrackRequest,
+  ObjectTrackResult,
   RecorderFailureReason,
 } from '../../shared/ipc'
 import type { ContextFrame } from '../../shared/context/protocol'
@@ -25,6 +27,7 @@ import type {
   EditorWindowMode,
   UiaAnnotationTarget,
 } from '../../shared/types'
+import { annotationAt } from '../../shared/track'
 import { computeDisplayNumbers } from '../../shared/numbering'
 import { ObjectIndex, objectHoverLabel, objectLabel } from './objects'
 import type { PickableObject } from './objects'
@@ -66,6 +69,9 @@ interface EditorBridge {
   // capture-instant observation settling after the editor opened. The editor
   // rebuilds its per-display indexes and picking starts working mid-session.
   onContextFrame(cb: (frame: ContextFrame) => void): void
+  // WHERE A PICKED OBJECT WENT (#86). Asked once per picked box; the answer is
+  // a path the box is drawn along, so following costs nothing while scrubbing.
+  requestObjectTrack(request: ObjectTrackRequest): Promise<ObjectTrackResult | null>
   export(payload: EditorExportPayload): void
   saveAsNew(payload: EditorExportPayload): void
   cancel(): void
@@ -766,8 +772,30 @@ function annotationVisibleNow(a: Annotation): boolean {
   return visibleAt(a, Math.min(scrub.tMs, replayDurationMs), scrub.atNow, replayDurationMs)
 }
 
+/**
+ * The scrub position everything on screen is resolved at (#86).
+ *
+ * The PICTURE's clock, not the playhead's (#81): a tracked box has to agree
+ * with the frame it is drawn over, and those differ by up to one frame gap.
+ */
+function nowMs(): number {
+  if (!scrub) return replayDurationMs
+  return scrub.atNow ? replayDurationMs : Math.min(scrub.presentedMs, replayDurationMs)
+}
+
+/**
+ * The annotations to DRAW and HIT-TEST, each already resolved to where it is
+ * at the current position (#86).
+ *
+ * This is the one place a track becomes a rectangle. Everything downstream —
+ * drawing, blurring, selection chrome, hit-testing — keeps reading `bounds` and
+ * is right without knowing tracking exists. Editing writes to
+ * `state.annotations`, which is untouched by this.
+ */
 function visibleAnnotations(): readonly Annotation[] {
-  return scrub ? state.annotations.filter(annotationVisibleNow) : state.annotations
+  const t = nowMs()
+  const live = scrub ? state.annotations.filter(annotationVisibleNow) : state.annotations
+  return live.map((a) => annotationAt(a, t))
 }
 
 /** The boxes of ONE display that apply at the current board position. */
@@ -1284,6 +1312,7 @@ function beginPendingBox(on: BoardDisplay, b: Box, picked?: PickableObject): voi
     draft.start_ms = life.start_ms
     draft.end_ms = life.end_ms
   }
+  if (picked?.surface != null) attachTrack(draft, picked.surface.surfaceId)
   textSession = { kind: 'new', draft }
   // A pre-filled description opens SELECTED: keeping it is one Enter, replacing
   // it is just typing.
@@ -1547,7 +1576,11 @@ function pendingDraft(): Annotation | null {
 function selectedVisibleAnnotation(): Annotation | null {
   if (state.selectedId === null) return null
   const a = state.byId(state.selectedId)
-  return a !== undefined && annotationVisibleNow(a) ? a : null
+  if (a === undefined || !annotationVisibleNow(a)) return null
+  // Resolved like everything else that is drawn (#86): handles on the stored
+  // rectangle while the box renders at its tracked one would put the grab
+  // points somewhere the user cannot see a box.
+  return annotationAt(a, nowMs())
 }
 
 /**
@@ -2422,13 +2455,67 @@ function displayObjectHint(text: string): void {
 const pickedRects = new Map<string, Box>()
 
 /**
+ * Gives a freshly picked box the path of the object it names (#86).
+ *
+ * Asked once, for the box's own lifetime, and applied when it lands: the
+ * request is a round trip and the box has to appear immediately. Until the
+ * answer arrives the box behaves exactly as it did before tracking existed —
+ * which is also what happens for good if Core has no path to offer.
+ *
+ * `endedAtMs` CLAMPS THE LIFETIME (#77). A box may not outlive the thing it
+ * points at: past that moment it sits on whatever moved in behind, and neither
+ * the picture nor the pack would say so. Shortening is the only direction this
+ * ever moves an end — a user who wants less still gets less.
+ */
+function attachTrack(draft: Annotation, surfaceId: string): void {
+  if (contextSessionId === null) return
+  const id = draft.annotation_id
+  const start = draft.start_ms ?? 0
+  const end = draft.end_ms ?? replayDurationMs
+  void window.editorBridge
+    .requestObjectTrack({ sessionId: contextSessionId, surfaceId, startMs: start, endMs: end })
+    .then((track) => {
+      if (track === null || track.samples.length < 2) return
+      // The draft may have been committed, renamed or discarded while this was
+      // in flight; the stored annotation is the one that matters.
+      const live = state.byId(id) ?? (textSession?.kind === 'new' && textSession.draft.annotation_id === id ? textSession.draft : undefined)
+      if (live === undefined) return
+      live.tracking = {
+        enabled: true,
+        samples: track.samples.map((s) => ({
+          t_ms: s.tMs,
+          x: s.x,
+          y: s.y,
+          width: s.width,
+          height: s.height,
+        })),
+      }
+      if (track.endedAtMs !== null && live.end_ms !== undefined && live.end_ms > track.endedAtMs) {
+        live.end_ms = Math.max(live.start_ms ?? 0, track.endedAtMs)
+      }
+      schedulePaint()
+    })
+    .catch((err: unknown) => {
+      // Rule 1 of object data: a box that cannot follow is a box that does not
+      // follow, never an editor that broke.
+      console.error('capturepack: requesting an object track failed:', err)
+    })
+}
+
+/**
  * Drops `target` once the box no longer covers the element it was picked from.
  * Called after a committed move or resize; a box that still contains the
  * picked rect's centre is considered to be annotating the same object.
  */
 function invalidateTargetIfMoved(id: string): void {
   const a = state.byId(id)
-  if (!a || a.target === undefined) return
+  if (a === undefined) return
+  // A HAND-MOVED BOX STOPS FOLLOWING (#86). The track describes where the
+  // OBJECT went; once the user has put the box somewhere of their own choosing,
+  // continuing to fly it along the object's path would move the box out from
+  // under them at the next frame. The rectangle they placed is the answer.
+  if (a.tracking?.enabled === true) a.tracking = { enabled: false }
+  if (a.target === undefined) return
   const picked = pickedRects.get(id)
   if (picked === undefined) return
   const cx = picked.x + picked.w / 2

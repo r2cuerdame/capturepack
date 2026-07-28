@@ -15,6 +15,7 @@ import type { RenderFramePayload, RenderResultPayload, RenderStartPayload } from
 import type { Annotation } from '../../shared/types'
 import { computeDisplayNumbers } from '../../shared/numbering'
 import { computeKeyframeTimes } from '../../shared/keyframes'
+import { annotationAt } from '../../shared/track'
 
 interface RenderBridge {
   onStart(cb: (payload: RenderStartPayload) => void): void
@@ -92,6 +93,25 @@ function makeOverlay(job: RenderStartPayload, outputWidth: number, outputHeight:
           width: a.bounds.width * scaleX,
           height: a.bounds.height * scaleY,
         },
+        // THE TRACK SCALES WITH THE BOX (#86). Its samples are snapshot pixels
+        // like `bounds`, and a render at any other resolution that scaled one
+        // and not the other would send every tracked box to a rectangle nothing
+        // in the pack describes — worse than not following at all, because it
+        // would look deliberate.
+        ...(a.tracking?.samples === undefined
+          ? {}
+          : {
+              tracking: {
+                ...a.tracking,
+                samples: a.tracking.samples.map((s) => ({
+                  t_ms: s.t_ms,
+                  x: s.x * scaleX,
+                  y: s.y * scaleY,
+                  width: s.width * scaleX,
+                  height: s.height * scaleY,
+                })),
+              },
+            }),
       }))
       .sort((a, b) => a.z - b.z),
     // GLOBAL display numbers (SPEC §8.5) — global over the whole PACK, not just
@@ -119,7 +139,17 @@ function drawOverlay(
   overlay: Overlay,
   tMs: number | null,
 ): void {
-  const alive = tMs === null ? overlay.ordered : overlay.ordered.filter((a) => visibleAt(a, tMs))
+  // Resolved to where each box IS at this moment (#86), by the same function
+  // the editor draws with. A rendered view that placed tracked boxes any other
+  // way would make the pack disagree with its own picture of itself.
+  //
+  // A still job (`tMs === null`) has no clock to follow, so a tracked box is
+  // drawn at its stored `bounds` — the rectangle at its representative instant,
+  // which is exactly what `bounds` means.
+  const alive =
+    tMs === null
+      ? overlay.ordered
+      : overlay.ordered.filter((a) => visibleAt(a, tMs)).map((a) => annotationAt(a, tMs))
   for (const a of alive) {
     if (a.blur) pixelate(ctx, canvas, a)
   }

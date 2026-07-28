@@ -1,8 +1,8 @@
-// CapturePack format types — mirror SPEC.md (format_version 0.1.0).
+// CapturePack format types — mirror SPEC.md (format_version 0.2.0).
 // These types describe data written into a .capturepack; keep them in sync with the spec.
 
 export const FORMAT_NAME = 'capturepack'
-export const FORMAT_VERSION = '0.1.0'
+export const FORMAT_VERSION = '0.2.0'
 
 // Per-display media of an all-displays capture (SPEC §5.3, GOAL "Multi-Monitor
 // Support"). One entry per display frozen by the trigger.
@@ -109,11 +109,33 @@ export interface AnnotationBounds {
   height: number
 }
 
-// Object-tracking state (SPEC §8.3). In format 0.1.0 `enabled` is always
-// false — frame-by-frame tracking data is reserved for a future version; the
-// object shape exists so richer data can arrive without a breaking change.
+/** One rectangle the tracked object occupied, at one moment of the pack clock. */
+export interface AnnotationTrackSample {
+  t_ms: number
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+// Object-tracking state (SPEC §8.3).
+//
+// THE BOX FOLLOWS THE THING IT NAMES (#86). Until format 0.2.0 this could only
+// say `enabled: false`, and a box therefore stayed where the object had been at
+// one instant — wrong from the next frame on, with nothing in the pack to say
+// so. Measured on a real capture: a picked box held for ten seconds ended up on
+// a different window entirely, half a screen away.
+//
+// `samples` is the object's path: ascending on the pack clock, in the same
+// display's snapshot pixels as `bounds` (SPEC §8.2, §8.8). Between two samples a
+// reader interpolates linearly; outside them there is nothing to follow.
+//
+// `bounds` REMAINS the box's rectangle at its representative instant, so a
+// reader that ignores `tracking` still draws a correct box — which is what lets
+// a 0.1.0 reader open a 0.2.0 pack and be right rather than merely tolerant.
 export interface AnnotationTracking {
   enabled: boolean
+  samples?: AnnotationTrackSample[]
 }
 
 // Semantic object metadata (SPEC §8.3, §8.7): what real UI object the box

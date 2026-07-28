@@ -15,7 +15,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { inflateRawSync } from "node:zlib";
 
-const SPEC_VERSION = "0.1.0";
+const SPEC_VERSION = "0.2.0";
 
 // ---------------------------------------------------------------------------
 // Result collection
@@ -1104,6 +1104,26 @@ function validateAnnotations(a, snapshotDims, replay, replayDurationMs, displayI
         fail(`${label}.tracking MUST be an object with a boolean "enabled" (SPEC §8.3)`);
         bad++;
       } else if (ann.tracking.enabled) {
+        // FOLLOWING IS REAL FROM 0.2.0 (SPEC §8.3). `samples` is the object's
+        // path: ascending on the pack clock, in the same display's snapshot
+        // pixels as `bounds`. A tracked box that carries no path is a claim
+        // with nothing behind it, and a reader honouring `enabled` would draw
+        // it nowhere.
+        const samples = ann.tracking.samples;
+        if (!Array.isArray(samples) || samples.length === 0) {
+          fail(`${label}.tracking.enabled is true but tracking.samples is missing or empty — a tracked box MUST carry the path it follows (SPEC §8.3)`);
+        } else {
+          let previous = -Infinity;
+          let bad = 0;
+          for (const s of samples) {
+            if (!isObj(s) || ["t_ms","x","y","width","height"].some((k) => typeof s[k] !== "number" || !Number.isFinite(s[k]))) { bad += 1; continue; }
+            if (s.t_ms < previous) bad += 1;
+            previous = s.t_ms;
+          }
+          if (bad > 0) fail(`${label}.tracking.samples has ${bad} sample(s) that are not finite {t_ms,x,y,width,height} in ascending t_ms (SPEC §8.3)`);
+          else pass(`${label}.tracking: ${samples.length} sample(s), ${samples[0].t_ms}..${samples[samples.length-1].t_ms} ms — the box follows its object (SPEC §8.3)`);
+        }
+      } else if (false) {
         note(`${label}.tracking.enabled is true — tracking is reserved in format 0.1.0 (MUST be false); readers treat the box as untracked (SPEC §8.3)`);
       }
     }
