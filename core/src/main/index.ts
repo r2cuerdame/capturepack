@@ -3,19 +3,28 @@ import { app, dialog, globalShortcut, Notification, shell } from 'electron'
 import * as fs from 'node:fs'
 import type { UpdaterStatusPayload } from '../shared/ipc'
 import { openAboutWindow, pushAboutState, registerAboutIpc } from './aboutWindow'
-import { setupDisplayMediaHandler, startCapture } from './capture'
+import {
+  getRecorderState,
+  onRecorderStateChanged,
+  setupDisplayMediaHandler,
+  startCapture,
+} from './capture'
+import type { RecorderState } from './capture'
 import { disposeHistory, notifyHistoryChanged, openHistoryWindow, registerHistoryIpc } from './historyWindow'
 import { registerCaptureHotkey } from './hotkey'
 import { uiLanguage, uiT } from './locale'
 import { startMcpServer } from './mcp/server'
 import type { McpServerHandle } from './mcp/server'
 import { startCaptureFlow } from './session'
-import { loadSettings } from './settings'
+import { loadSettings, persistSettings } from './settings'
 import { openSettingsWindow, registerSettingsIpc } from './settingsWindow'
 import { createTray } from './tray'
 import type { TrayControls } from './tray'
 import { checkNow, initUpdater, restartAndUpdate, updaterState } from './updater'
 import { openWelcomeWindow, registerWelcomeIpc } from './welcomeWindow'
+
+const LOGIN_HIDDEN_ARG = '--openAsHidden'
+const LOGIN_ITEM_NAME = 'CapturePack'
 
 if (process.argv.includes('--smoke')) {
   // CI smoke test: settings load only — no windows, tray, hotkey, or MCP.
@@ -34,6 +43,7 @@ if (process.argv.includes('--smoke')) {
 
 function main(): void {
   let mcp: McpServerHandle | null = null
+  let stopRecorderStateListener: () => void = () => {}
 
   app.on('second-instance', () => {
     // Tray app with no main window: nothing to focus, the second instance quits itself.
@@ -45,6 +55,7 @@ function main(): void {
 
   app.on('will-quit', () => {
     globalShortcut.unregisterAll()
+    stopRecorderStateListener()
     disposeHistory()
     void mcp?.stop().catch(() => {})
   })
@@ -53,6 +64,26 @@ function main(): void {
     // `firstRun` is TRUE only when no settings file existed a moment ago — the
     // one honest fresh-install signal (GOAL "Welcome": never shown on update).
     const { settings, firstRun } = loadSettings()
+    // Read the launch signal BEFORE reconciling. Our Windows login entry carries
+    // --openAsHidden; wasOpenedAtLogin covers platforms where Electron can
+    // report it directly. Reconciliation happens once here (and on a settings
+    // toggle), never continuously, so disabling the item in Task Manager cannot
+    // be silently undone during that same run.
+    const loginState = readLoginItemSettings()
+    const openedAtLogin =
+      process.argv.includes(LOGIN_HIDDEN_ARG) || loginState?.wasOpenedAtLogin === true
+    reconcileLoginItem(settings.launchAtLogin, loginState)
+    if (openedAtLogin && firstRun && !settings.welcomeShown) {
+      // Loading a fresh profile writes settings.json, so the next manual launch
+      // is no longer `firstRun`. Persist a separate marker while leaving
+      // welcomeShown FALSE; the first manual launch consumes it below.
+      settings.welcomeDeferredFromLogin = true
+      try {
+        persistSettings({ ...settings })
+      } catch (err) {
+        console.error('capturepack: could not defer welcome window:', String(err))
+      }
+    }
 
     mcp = startMcpServer(settings)
 
@@ -60,11 +91,35 @@ function main(): void {
     // The capture module owns the recorder-window set (per-display in cursor
     // mode) from here on: hotplug rebuilds happen inside it, and the settings
     // GUI applies changes via restartCapture(settings).
-    await startCapture(settings)
-
     // Assigned right below; the settings-GUI hooks fire only from that window,
     // which cannot open before the tray exists.
     let tray: TrayControls | null = null
+    let recordingStartHandled = false
+    let announcedFailure: string | null = null
+
+    const handleRecorderState = (state: RecorderState): void => {
+      if (tray === null) return
+      tray.refresh()
+      if (state.status === 'recording') {
+        announcedFailure = null
+        if (recordingStartHandled) return
+        recordingStartHandled = true
+        if (settings.notifyOnRecordingStart) tray.showRecordingStarted()
+        return
+      }
+      if (state.status === 'starting') {
+        announcedFailure = null
+        return
+      }
+      const signature = `${state.reason}:${state.detail}`
+      if (signature === announcedFailure) return
+      announcedFailure = signature
+      // Failure is never suppressible (GOAL "Say that you are recording.").
+      tray.showRecordingFailure()
+    }
+    stopRecorderStateListener = onRecorderStateChanged(handleRecorderState)
+
+    await startCapture(settings)
 
     const capture = (): void => {
       void startCaptureFlow(settings)
@@ -89,6 +144,7 @@ function main(): void {
         tray?.refresh()
         notifyHistoryChanged()
       },
+      onLaunchAtLoginChanged: (enabled) => reconcileLoginItem(enabled),
     })
     // Same live settings object: History honors outputDir changes on next access.
     registerHistoryIpc(settings)
@@ -127,36 +183,63 @@ function main(): void {
       },
       () => uiLanguage(settings),
       () => settings.captureHotkey,
+      () => settings.replaySeconds,
+      () => getRecorderState(),
       () => updaterState(),
     )
     const trayControls = tray
+    // startCapture intentionally resolves while the truthful state is still
+    // "starting"; if a very fast probe completed before the tray existed, this
+    // catches up the visuals and the once-per-launch notification.
+    handleRecorderState(getRecorderState())
 
-    // Dev aid: open the settings window on launch.
-    if (process.argv.includes('--show-settings')) openSettingsWindow()
-    // Dev aid / headed testing: open the History window on launch.
-    if (process.argv.includes('--show-history')) openHistoryWindow()
-    // Dev aid / headed testing: open the About window on launch.
-    if (process.argv.includes('--show-about')) openAboutWindow()
-    // Dev aid / headed testing: open the Welcome window on launch.
-    if (process.argv.includes('--show-welcome')) {
-      openWelcomeWindow()
-    } else if (firstRun && !settings.welcomeShown) {
-      // FIRST LAUNCH ONLY (GOAL "Welcome"): a genuinely fresh install — no
-      // settings file existed when settings loaded. An update always finds one,
-      // so it never lands here; the stored flag alone would not be enough,
-      // since a settings.json written before the flag existed defaults it to
-      // false. openWelcomeWindow() persists welcomeShown, so this is once.
-      openWelcomeWindow()
+    if (!openedAtLogin) {
+      // Dev aid: open the settings window on launch.
+      if (process.argv.includes('--show-settings')) openSettingsWindow()
+      // Dev aid / headed testing: open the History window on launch.
+      if (process.argv.includes('--show-history')) openHistoryWindow()
+      // Dev aid / headed testing: open the About window on launch.
+      if (process.argv.includes('--show-about')) openAboutWindow()
+      // Dev aid / headed testing: open the Welcome window on launch.
+      if (process.argv.includes('--show-welcome')) {
+        settings.welcomeDeferredFromLogin = false
+        openWelcomeWindow()
+      } else if (
+        (firstRun || settings.welcomeDeferredFromLogin) &&
+        !settings.welcomeShown
+      ) {
+        // FIRST LAUNCH ONLY (GOAL "Welcome"): a genuinely fresh install — no
+        // settings file existed when settings loaded. An update always finds one,
+        // so it never lands here; the stored flag alone would not be enough,
+        // since a settings.json written before the flag existed defaults it to
+        // false. openWelcomeWindow() persists welcomeShown, so this is once.
+        // A login-triggered first launch skips this path WITHOUT setting
+        // welcomeShown, so the first manual launch still receives the welcome.
+        // Clearing the in-memory deferred marker before opening is persisted by
+        // openWelcomeWindow() together with welcomeShown=true.
+        settings.welcomeDeferredFromLogin = false
+        openWelcomeWindow()
+      }
     }
 
-    if (!registerCaptureHotkey(settings.captureHotkey, capture)) {
+    if (
+      !process.argv.includes('--no-global-shortcut') &&
+      !registerCaptureHotkey(settings.captureHotkey, capture)
+    ) {
       // Async on purpose: showErrorBox blocks the main-process event loop until
       // dismissed, which would freeze the always-on MCP server with it.
-      void dialog.showMessageBox({
-        type: 'error',
-        title: 'CapturePack', // product name — never translated
-        message: uiT(settings)('app.hotkeyFailed', { hotkey: settings.captureHotkey }),
-      })
+      const message = uiT(settings)('app.hotkeyFailed', { hotkey: settings.captureHotkey })
+      if (openedAtLogin) {
+        // Login launches must never steal focus. A notification still tells the
+        // user why the configured capture shortcut is unavailable.
+        new Notification({ title: 'CapturePack', body: message }).show()
+      } else {
+        void dialog.showMessageBox({
+          type: 'error',
+          title: 'CapturePack', // product name — never translated
+          message,
+        })
+      }
     }
 
     // The version the "update ready" notification has already announced. A
@@ -206,4 +289,62 @@ function main(): void {
       })
       .then(() => app.quit())
   })
+}
+
+function loginItemQuery(): { path: string; args: string[] } {
+  return { path: process.execPath, args: [LOGIN_HIDDEN_ARG] }
+}
+
+function canManageLoginItem(): boolean {
+  return (
+    process.platform === 'win32' &&
+    app.isPackaged &&
+    !process.argv.includes('--no-login-item')
+  )
+}
+
+function readLoginItemSettings(): Electron.LoginItemSettings | null {
+  if (!canManageLoginItem()) return null
+  try {
+    return app.getLoginItemSettings(loginItemQuery())
+  } catch (err) {
+    console.error('capturepack: could not read login item:', String(err))
+    return null
+  }
+}
+
+function sameArgs(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((value, index) => value === b[index])
+}
+
+function reconcileLoginItem(
+  enabled: boolean,
+  current: Electron.LoginItemSettings | null = readLoginItemSettings(),
+): void {
+  if (!canManageLoginItem()) return
+  const query = loginItemQuery()
+  const item = current?.launchItems.find(
+    (candidate) =>
+      candidate.scope === 'user' &&
+      candidate.name === LOGIN_ITEM_NAME &&
+      candidate.path.toLocaleLowerCase() === query.path.toLocaleLowerCase(),
+  )
+  const entryExists = item !== undefined || current?.openAtLogin === true
+  const entryMatches = item !== undefined ? sameArgs(item.args, query.args) : current?.openAtLogin === true
+  const entryEnabled =
+    item !== undefined ? item.enabled : current?.executableWillLaunchAtLogin === true
+  const matches = current !== null && (enabled ? entryExists && entryMatches && entryEnabled : !entryExists)
+  if (matches) return
+  try {
+    app.setLoginItemSettings({
+      openAtLogin: enabled,
+      enabled,
+      name: LOGIN_ITEM_NAME,
+      ...query,
+    })
+  } catch (err) {
+    // Keep the user's setting as the source of truth; the next manual startup
+    // reconciles again if Windows refused this attempt.
+    console.error('capturepack: could not update login item:', String(err))
+  }
 }

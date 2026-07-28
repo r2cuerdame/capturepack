@@ -121,6 +121,8 @@ type BooleanSettingsKey = {
 const TOGGLES: ReadonlyArray<BooleanSettingsKey> = [
   'copyToClipboard',
   'autoUpdateCheck',
+  'launchAtLogin',
+  'notifyOnRecordingStart',
   'showDurationLabel',
   'scrubInvert',
   'mcpEnabled',

@@ -71,6 +71,18 @@ const EN = {
   'tray.about': 'About CapturePack',
   'tray.restartUpdate': 'Restart and update (v{version})',
   'tray.quit': 'Quit CapturePack',
+  'tray.tooltipRecording': 'CapturePack — recording · last {seconds}s ready ({hotkey})',
+  'tray.tooltipStarting': 'CapturePack — starting…',
+  'tray.tooltipStopped': 'CapturePack — not recording — {reason}',
+  'tray.recordingStarted':
+    'The last {seconds} seconds are always available. Press {hotkey} to capture.',
+  'tray.recordingFailed': 'Replay buffer is not recording: {reason}',
+
+  'recorder.screenUnavailable': 'screen capture is unavailable',
+  'recorder.recorderUnavailable': 'the video recorder stopped',
+  'recorder.streamEnded': 'the screen capture stream ended',
+  'recorder.processStopped': 'the recorder process stopped',
+  'recorder.didNotStart': 'the recorder did not produce video',
 
   'app.hotkeyFailed':
     'Could not register the {hotkey} hotkey. Another application may already be using it.',
@@ -196,6 +208,8 @@ const EN = {
   'settings.openBtn': 'Open',
   'settings.copyToClipboard': 'Copy saved pack to clipboard',
   'settings.autoUpdate': 'Check for updates automatically',
+  'settings.launchAtLogin': 'Start CapturePack with Windows',
+  'settings.notifyOnRecordingStart': 'Notify when the replay buffer starts',
   'settings.captureSection': 'Capture',
   'settings.captureHotkey': 'Capture hotkey',
   'settings.captureHotkeyHint': 'click the field (or press Enter), then press the new combination',
@@ -401,6 +415,17 @@ const KO: Record<I18nKey, string> = {
   'tray.about': 'CapturePack 정보',
   'tray.restartUpdate': '재시작하고 업데이트 (v{version})',
   'tray.quit': 'CapturePack 종료',
+  'tray.tooltipRecording': 'CapturePack — 녹화 중 · 최근 {seconds}초 준비됨 ({hotkey})',
+  'tray.tooltipStarting': 'CapturePack — 시작 중…',
+  'tray.tooltipStopped': 'CapturePack — 녹화 안 됨 — {reason}',
+  'tray.recordingStarted': '최근 {seconds}초를 항상 사용할 수 있습니다. {hotkey}를 눌러 캡처하세요.',
+  'tray.recordingFailed': '리플레이 버퍼가 녹화 중이 아닙니다: {reason}',
+
+  'recorder.screenUnavailable': '화면 캡처를 사용할 수 없음',
+  'recorder.recorderUnavailable': '비디오 녹화기가 중지됨',
+  'recorder.streamEnded': '화면 캡처 스트림이 종료됨',
+  'recorder.processStopped': '녹화기 프로세스가 중지됨',
+  'recorder.didNotStart': '녹화기가 비디오를 생성하지 못함',
 
   'app.hotkeyFailed':
     '{hotkey} 단축키를 등록하지 못했습니다. 다른 프로그램이 이미 사용 중일 수 있습니다.',
@@ -519,6 +544,8 @@ const KO: Record<I18nKey, string> = {
   'settings.openBtn': '열기',
   'settings.copyToClipboard': '저장한 팩을 클립보드에 복사',
   'settings.autoUpdate': '자동으로 업데이트 확인',
+  'settings.launchAtLogin': 'Windows 로그인 시 CapturePack 시작',
+  'settings.notifyOnRecordingStart': '리플레이 버퍼 시작 시 알림',
   'settings.captureSection': '캡처',
   'settings.captureHotkey': '캡처 단축키',
   'settings.captureHotkeyHint': '입력란을 클릭(또는 Enter)한 다음 새 조합을 누르세요',
@@ -717,6 +744,18 @@ const JA: Record<I18nKey, string> = {
   'tray.about': 'CapturePack について',
   'tray.restartUpdate': '再起動して更新 (v{version})',
   'tray.quit': 'CapturePack を終了',
+  'tray.tooltipRecording': 'CapturePack — 録画中 · 直近 {seconds} 秒を準備済み ({hotkey})',
+  'tray.tooltipStarting': 'CapturePack — 起動中…',
+  'tray.tooltipStopped': 'CapturePack — 録画していません — {reason}',
+  'tray.recordingStarted':
+    '直近 {seconds} 秒をいつでも利用できます。{hotkey} を押してキャプチャしてください。',
+  'tray.recordingFailed': 'リプレイバッファーは録画していません: {reason}',
+
+  'recorder.screenUnavailable': '画面キャプチャを利用できません',
+  'recorder.recorderUnavailable': 'ビデオレコーダーが停止しました',
+  'recorder.streamEnded': '画面キャプチャストリームが終了しました',
+  'recorder.processStopped': 'レコーダープロセスが停止しました',
+  'recorder.didNotStart': 'レコーダーが映像を生成しませんでした',
 
   'app.hotkeyFailed':
     '{hotkey} ホットキーを登録できませんでした。ほかのアプリが既に使用している可能性があります。',
@@ -836,6 +875,8 @@ const JA: Record<I18nKey, string> = {
   'settings.openBtn': '開く',
   'settings.copyToClipboard': '保存したパックをクリップボードにコピー',
   'settings.autoUpdate': '更新を自動的に確認',
+  'settings.launchAtLogin': 'Windows ログイン時に CapturePack を起動',
+  'settings.notifyOnRecordingStart': 'リプレイバッファーの開始時に通知',
   'settings.captureSection': 'キャプチャ',
   'settings.captureHotkey': 'キャプチャのホットキー',
   'settings.captureHotkeyHint': '入力欄をクリック（または Enter キー）してから新しい組み合わせを押してください',
@@ -1034,6 +1075,17 @@ const ZH: Record<I18nKey, string> = {
   'tray.about': '关于 CapturePack',
   'tray.restartUpdate': '重启并更新 (v{version})',
   'tray.quit': '退出 CapturePack',
+  'tray.tooltipRecording': 'CapturePack — 正在录制 · 最近 {seconds} 秒已就绪 ({hotkey})',
+  'tray.tooltipStarting': 'CapturePack — 正在启动…',
+  'tray.tooltipStopped': 'CapturePack — 未录制 — {reason}',
+  'tray.recordingStarted': '最近 {seconds} 秒现在始终可用。按 {hotkey} 即可捕获。',
+  'tray.recordingFailed': '回放缓冲区未在录制: {reason}',
+
+  'recorder.screenUnavailable': '屏幕捕获不可用',
+  'recorder.recorderUnavailable': '视频录制器已停止',
+  'recorder.streamEnded': '屏幕捕获流已结束',
+  'recorder.processStopped': '录制器进程已停止',
+  'recorder.didNotStart': '录制器未生成视频',
 
   'app.hotkeyFailed': '无法注册 {hotkey} 快捷键。可能已被其他应用占用。',
   'app.updateReady': 'CapturePack {version} 可用 — 重启即可更新',
@@ -1149,6 +1201,8 @@ const ZH: Record<I18nKey, string> = {
   'settings.openBtn': '打开',
   'settings.copyToClipboard': '将保存的包复制到剪贴板',
   'settings.autoUpdate': '自动检查更新',
+  'settings.launchAtLogin': '登录 Windows 时启动 CapturePack',
+  'settings.notifyOnRecordingStart': '回放缓冲区启动时通知',
   'settings.captureSection': '捕获',
   'settings.captureHotkey': '捕获快捷键',
   'settings.captureHotkeyHint': '点击输入框（或按 Enter 键），然后按下新的组合键',
@@ -1347,6 +1401,18 @@ const ES: Record<I18nKey, string> = {
   'tray.about': 'Acerca de CapturePack',
   'tray.restartUpdate': 'Reiniciar y actualizar (v{version})',
   'tray.quit': 'Salir de CapturePack',
+  'tray.tooltipRecording': 'CapturePack — grabando · últimos {seconds} s listos ({hotkey})',
+  'tray.tooltipStarting': 'CapturePack — iniciando…',
+  'tray.tooltipStopped': 'CapturePack — sin grabar — {reason}',
+  'tray.recordingStarted':
+    'Los últimos {seconds} segundos están siempre disponibles. Pulsa {hotkey} para capturar.',
+  'tray.recordingFailed': 'El búfer de repetición no está grabando: {reason}',
+
+  'recorder.screenUnavailable': 'la captura de pantalla no está disponible',
+  'recorder.recorderUnavailable': 'la grabadora de vídeo se detuvo',
+  'recorder.streamEnded': 'el flujo de captura de pantalla terminó',
+  'recorder.processStopped': 'el proceso de grabación se detuvo',
+  'recorder.didNotStart': 'la grabadora no produjo vídeo',
 
   'app.hotkeyFailed':
     'No se pudo registrar el atajo {hotkey}. Puede que otra aplicación ya lo esté usando.',
@@ -1466,6 +1532,8 @@ const ES: Record<I18nKey, string> = {
   'settings.openBtn': 'Abrir',
   'settings.copyToClipboard': 'Copiar el pack guardado al portapapeles',
   'settings.autoUpdate': 'Buscar actualizaciones automáticamente',
+  'settings.launchAtLogin': 'Iniciar CapturePack con Windows',
+  'settings.notifyOnRecordingStart': 'Avisar al iniciar el búfer de repetición',
   'settings.captureSection': 'Captura',
   'settings.captureHotkey': 'Atajo de captura',
   'settings.captureHotkeyHint': 'haz clic en el campo (o pulsa Intro) y pulsa la nueva combinación',
@@ -1665,6 +1733,18 @@ const FR: Record<I18nKey, string> = {
   'tray.about': 'À propos de CapturePack',
   'tray.restartUpdate': 'Redémarrer et mettre à jour (v{version})',
   'tray.quit': 'Quitter CapturePack',
+  'tray.tooltipRecording': 'CapturePack — enregistrement · {seconds} dernières s prêtes ({hotkey})',
+  'tray.tooltipStarting': 'CapturePack — démarrage…',
+  'tray.tooltipStopped': 'CapturePack — aucun enregistrement — {reason}',
+  'tray.recordingStarted':
+    'Les {seconds} dernières secondes sont toujours disponibles. Appuyez sur {hotkey} pour capturer.',
+  'tray.recordingFailed': 'La mémoire tampon de relecture n’enregistre pas: {reason}',
+
+  'recorder.screenUnavailable': 'la capture d’écran est indisponible',
+  'recorder.recorderUnavailable': 'l’enregistreur vidéo s’est arrêté',
+  'recorder.streamEnded': 'le flux de capture d’écran s’est terminé',
+  'recorder.processStopped': 'le processus d’enregistrement s’est arrêté',
+  'recorder.didNotStart': 'l’enregistreur n’a produit aucune vidéo',
 
   'app.hotkeyFailed':
     "Impossible d'enregistrer le raccourci {hotkey}. Une autre application l'utilise peut-être déjà.",
@@ -1784,6 +1864,8 @@ const FR: Record<I18nKey, string> = {
   'settings.openBtn': 'Ouvrir',
   'settings.copyToClipboard': 'Copier le pack enregistré dans le presse-papiers',
   'settings.autoUpdate': 'Rechercher les mises à jour automatiquement',
+  'settings.launchAtLogin': 'Lancer CapturePack avec Windows',
+  'settings.notifyOnRecordingStart': 'Notifier au démarrage de la mémoire de relecture',
   'settings.captureSection': 'Capture',
   'settings.captureHotkey': 'Raccourci de capture',
   'settings.captureHotkeyHint':
@@ -1984,6 +2066,18 @@ const DE: Record<I18nKey, string> = {
   'tray.about': 'Über CapturePack',
   'tray.restartUpdate': 'Neu starten und aktualisieren (v{version})',
   'tray.quit': 'CapturePack beenden',
+  'tray.tooltipRecording': 'CapturePack — Aufnahme läuft · letzte {seconds} s bereit ({hotkey})',
+  'tray.tooltipStarting': 'CapturePack — wird gestartet…',
+  'tray.tooltipStopped': 'CapturePack — keine Aufnahme — {reason}',
+  'tray.recordingStarted':
+    'Die letzten {seconds} Sekunden sind immer verfügbar. Mit {hotkey} erfassen.',
+  'tray.recordingFailed': 'Der Replay-Puffer zeichnet nicht auf: {reason}',
+
+  'recorder.screenUnavailable': 'die Bildschirmaufnahme ist nicht verfügbar',
+  'recorder.recorderUnavailable': 'der Videorekorder wurde angehalten',
+  'recorder.streamEnded': 'der Bildschirmaufnahmestrom wurde beendet',
+  'recorder.processStopped': 'der Aufnahmeprozess wurde beendet',
+  'recorder.didNotStart': 'der Rekorder hat kein Video erzeugt',
 
   'app.hotkeyFailed':
     'Der Hotkey {hotkey} konnte nicht registriert werden. Möglicherweise verwendet ihn bereits eine andere Anwendung.',
@@ -2104,6 +2198,8 @@ const DE: Record<I18nKey, string> = {
   'settings.openBtn': 'Öffnen',
   'settings.copyToClipboard': 'Gespeichertes Pack in die Zwischenablage kopieren',
   'settings.autoUpdate': 'Automatisch nach Updates suchen',
+  'settings.launchAtLogin': 'CapturePack mit Windows starten',
+  'settings.notifyOnRecordingStart': 'Beim Start des Replay-Puffers benachrichtigen',
   'settings.captureSection': 'Aufnahme',
   'settings.captureHotkey': 'Aufnahme-Hotkey',
   'settings.captureHotkeyHint':
@@ -2305,6 +2401,18 @@ const PT: Record<I18nKey, string> = {
   'tray.about': 'Sobre o CapturePack',
   'tray.restartUpdate': 'Reiniciar e atualizar (v{version})',
   'tray.quit': 'Sair do CapturePack',
+  'tray.tooltipRecording': 'CapturePack — gravando · últimos {seconds} s disponíveis ({hotkey})',
+  'tray.tooltipStarting': 'CapturePack — iniciando…',
+  'tray.tooltipStopped': 'CapturePack — sem gravação — {reason}',
+  'tray.recordingStarted':
+    'Os últimos {seconds} segundos estão sempre disponíveis. Pressione {hotkey} para capturar.',
+  'tray.recordingFailed': 'O buffer de replay não está gravando: {reason}',
+
+  'recorder.screenUnavailable': 'a captura de tela não está disponível',
+  'recorder.recorderUnavailable': 'o gravador de vídeo parou',
+  'recorder.streamEnded': 'o fluxo de captura de tela terminou',
+  'recorder.processStopped': 'o processo de gravação parou',
+  'recorder.didNotStart': 'o gravador não produziu vídeo',
 
   'app.hotkeyFailed':
     'Não foi possível registrar o atalho {hotkey}. Outro aplicativo pode já estar usando esse atalho.',
@@ -2424,6 +2532,8 @@ const PT: Record<I18nKey, string> = {
   'settings.openBtn': 'Abrir',
   'settings.copyToClipboard': 'Copiar o pack salvo para a área de transferência',
   'settings.autoUpdate': 'Verificar atualizações automaticamente',
+  'settings.launchAtLogin': 'Iniciar o CapturePack com o Windows',
+  'settings.notifyOnRecordingStart': 'Notificar ao iniciar o buffer de replay',
   'settings.captureSection': 'Captura',
   'settings.captureHotkey': 'Atalho de captura',
   'settings.captureHotkeyHint': 'clique no campo (ou pressione Enter) e pressione a nova combinação',
@@ -2624,6 +2734,18 @@ const RU: Record<I18nKey, string> = {
   'tray.about': 'О CapturePack',
   'tray.restartUpdate': 'Перезапустить и обновить (v{version})',
   'tray.quit': 'Выйти из CapturePack',
+  'tray.tooltipRecording': 'CapturePack — запись · последние {seconds} с готовы ({hotkey})',
+  'tray.tooltipStarting': 'CapturePack — запуск…',
+  'tray.tooltipStopped': 'CapturePack — запись не идёт — {reason}',
+  'tray.recordingStarted':
+    'Последние {seconds} секунд всегда доступны. Нажмите {hotkey}, чтобы сделать захват.',
+  'tray.recordingFailed': 'Буфер повтора не записывается: {reason}',
+
+  'recorder.screenUnavailable': 'захват экрана недоступен',
+  'recorder.recorderUnavailable': 'видеорекордер остановлен',
+  'recorder.streamEnded': 'поток захвата экрана завершён',
+  'recorder.processStopped': 'процесс записи остановлен',
+  'recorder.didNotStart': 'рекордер не создал видео',
 
   'app.hotkeyFailed':
     'Не удалось зарегистрировать сочетание {hotkey}. Возможно, его уже использует другое приложение.',
@@ -2741,6 +2863,8 @@ const RU: Record<I18nKey, string> = {
   'settings.openBtn': 'Открыть',
   'settings.copyToClipboard': 'Копировать сохранённый пак в буфер обмена',
   'settings.autoUpdate': 'Проверять обновления автоматически',
+  'settings.launchAtLogin': 'Запускать CapturePack вместе с Windows',
+  'settings.notifyOnRecordingStart': 'Уведомлять о запуске буфера повтора',
   'settings.captureSection': 'Захват',
   'settings.captureHotkey': 'Сочетание для захвата',
   'settings.captureHotkeyHint': 'нажмите на поле (или клавишу Enter) и введите новое сочетание',
