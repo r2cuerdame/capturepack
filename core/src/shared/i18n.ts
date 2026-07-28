@@ -84,6 +84,21 @@ const EN = {
   'tray.recordingFailed': 'The last {seconds} seconds are not being recorded: {reason}',
   'tray.previousRunUnclean':
     'CapturePack stopped unexpectedly on {when}. Nothing was being recorded between then and now.',
+  // Recovery is never silent (issue #61): a run the watchdog brought back says
+  // so, and names the window in which the product did not exist.
+  'tray.relaunchedAfterCrash':
+    'CapturePack stopped unexpectedly on {when} and restarted itself. Nothing was being recorded between then and now.',
+  // The rate limit was hit. Stopping is the right call, but stopping QUIETLY is
+  // the bug: the accelerator is handed to the Start Menu shortcut and the user
+  // is told where it went.
+  'tray.supervisionGaveUp':
+    'CapturePack kept stopping, so it has stopped restarting itself. {hotkey} now starts it from the Start Menu instead.',
+  // The hotkey landed on a machine where CapturePack was not running. It IS the
+  // answer the user needed and never got.
+  'tray.startedByHotkey':
+    'CapturePack was not running, so {hotkey} started it. Nothing was recorded before now — press {hotkey} again in a moment.',
+  // Tooltip of the Start Menu fallback shortcut (issue #61).
+  'shortcut.captureDescription': 'Capture the last seconds with CapturePack',
 
   'recorder.screenUnavailable': 'screen capture is unavailable',
   'recorder.recorderUnavailable': 'the video recorder stopped',
@@ -235,6 +250,12 @@ const EN = {
   'settings.copyToClipboard': 'Copy saved pack to clipboard',
   'settings.autoUpdate': 'Check for updates automatically',
   'settings.launchAtLogin': 'Start CapturePack with Windows',
+  // GOAL "And do not stay gone." (issue #61): one switch for the whole promise
+  // — the watchdog AND the Start Menu shortcut that answers the hotkey while
+  // the app is not running.
+  'settings.superviseProcess': 'Keep CapturePack running and answering its hotkey',
+  'settings.superviseProcessHint':
+    'restarts CapturePack if it stops unexpectedly, and adds a Start Menu shortcut that answers the hotkey while it is not running',
   'settings.notifyOnRecordingStart': 'Notify when replay recording starts',
   'settings.captureSection': 'Capture',
   'settings.captureHotkey': 'Capture hotkey',
@@ -515,6 +536,13 @@ const KO: Record<I18nKey, string> = {
   'tray.recordingFailed': '최근 {seconds}초가 녹화되지 않고 있습니다: {reason}',
   'tray.previousRunUnclean':
     'CapturePack이 {when}에 예기치 않게 종료되었습니다. 그때부터 지금까지 아무것도 녹화되지 않았습니다.',
+  'tray.relaunchedAfterCrash':
+    'CapturePack이 {when}에 예기치 않게 종료되어 자동으로 다시 시작했습니다. 그때부터 지금까지 아무것도 녹화되지 않았습니다.',
+  'tray.supervisionGaveUp':
+    'CapturePack이 계속 종료되어 자동 재시작을 중단했습니다. 이제 {hotkey}를 누르면 시작 메뉴를 통해 실행됩니다.',
+  'tray.startedByHotkey':
+    'CapturePack이 실행 중이 아니어서 {hotkey}로 시작했습니다. 그 전에는 아무것도 녹화되지 않았으니 잠시 후 {hotkey}를 다시 누르세요.',
+  'shortcut.captureDescription': 'CapturePack으로 최근 몇 초를 캡처',
 
   'recorder.screenUnavailable': '화면 캡처를 사용할 수 없음',
   'recorder.recorderUnavailable': '비디오 녹화기가 중지됨',
@@ -651,6 +679,9 @@ const KO: Record<I18nKey, string> = {
   'settings.copyToClipboard': '저장한 팩을 클립보드에 복사',
   'settings.autoUpdate': '자동으로 업데이트 확인',
   'settings.launchAtLogin': 'Windows 로그인 시 CapturePack 시작',
+  'settings.superviseProcess': 'CapturePack을 계속 실행하고 단축키에 응답하도록 유지',
+  'settings.superviseProcessHint':
+    '예기치 않게 종료되면 CapturePack을 다시 시작하고, 실행 중이 아닐 때 단축키에 응답하는 시작 메뉴 바로 가기를 추가합니다',
   'settings.notifyOnRecordingStart': '리플레이 녹화 시작 시 알림',
   'settings.captureSection': '캡처',
   'settings.captureHotkey': '캡처 단축키',
@@ -906,6 +937,13 @@ const JA: Record<I18nKey, string> = {
   'tray.recordingFailed': '直近 {seconds} 秒が録画されていません: {reason}',
   'tray.previousRunUnclean':
     'CapturePack は {when} に予期せず終了しました。それ以降、何も録画されていません。',
+  'tray.relaunchedAfterCrash':
+    'CapturePack は {when} に予期せず終了し、自動的に再起動しました。それ以降、何も録画されていませんでした。',
+  'tray.supervisionGaveUp':
+    'CapturePack が繰り返し停止したため、自動再起動を中止しました。今後は {hotkey} を押すとスタートメニュー経由で起動します。',
+  'tray.startedByHotkey':
+    'CapturePack が実行されていなかったため、{hotkey} で起動しました。それ以前は何も録画されていません。少し待ってからもう一度 {hotkey} を押してください。',
+  'shortcut.captureDescription': 'CapturePack で直近の数秒をキャプチャ',
 
   'recorder.screenUnavailable': '画面キャプチャを利用できません',
   'recorder.recorderUnavailable': 'ビデオレコーダーが停止しました',
@@ -1044,6 +1082,9 @@ const JA: Record<I18nKey, string> = {
   'settings.copyToClipboard': '保存したパックをクリップボードにコピー',
   'settings.autoUpdate': '更新を自動的に確認',
   'settings.launchAtLogin': 'Windows ログイン時に CapturePack を起動',
+  'settings.superviseProcess': 'CapturePack を実行し続け、ショートカットキーに応答させる',
+  'settings.superviseProcessHint':
+    '予期せず停止した場合に CapturePack を再起動し、実行されていない間もショートカットキーに応答するスタートメニューのショートカットを追加します',
   'settings.notifyOnRecordingStart': 'リプレイ録画の開始時に通知',
   'settings.captureSection': 'キャプチャ',
   'settings.captureHotkey': 'キャプチャのホットキー',
@@ -1299,6 +1340,13 @@ const ZH: Record<I18nKey, string> = {
   'tray.recordingFailed': '最近 {seconds} 秒未在录制：{reason}',
   'tray.previousRunUnclean':
     'CapturePack 于 {when} 意外停止。从那时起到现在，没有录制任何内容。',
+  'tray.relaunchedAfterCrash':
+    'CapturePack 于 {when} 意外停止并已自动重新启动。从那时起到现在，没有录制任何内容。',
+  'tray.supervisionGaveUp':
+    'CapturePack 反复停止，因此已停止自动重启。现在按 {hotkey} 将通过“开始”菜单启动它。',
+  'tray.startedByHotkey':
+    'CapturePack 当时未在运行，{hotkey} 已将其启动。在此之前没有录制任何内容 — 请稍候再按一次 {hotkey}。',
+  'shortcut.captureDescription': '使用 CapturePack 捕获最近几秒',
 
   'recorder.screenUnavailable': '屏幕捕获不可用',
   'recorder.recorderUnavailable': '视频录制器已停止',
@@ -1432,6 +1480,9 @@ const ZH: Record<I18nKey, string> = {
   'settings.copyToClipboard': '将保存的包复制到剪贴板',
   'settings.autoUpdate': '自动检查更新',
   'settings.launchAtLogin': '登录 Windows 时启动 CapturePack',
+  'settings.superviseProcess': '保持 CapturePack 运行并响应其快捷键',
+  'settings.superviseProcessHint':
+    '在 CapturePack 意外停止时重新启动它，并添加一个“开始”菜单快捷方式，在它未运行时响应快捷键',
   'settings.notifyOnRecordingStart': '回放录制开始时通知',
   'settings.captureSection': '捕获',
   'settings.captureHotkey': '捕获快捷键',
@@ -1687,6 +1738,13 @@ const ES: Record<I18nKey, string> = {
   'tray.recordingFailed': 'Los últimos {seconds} segundos no se están grabando: {reason}',
   'tray.previousRunUnclean':
     'CapturePack se detuvo inesperadamente el {when}. No se grabó nada desde entonces hasta ahora.',
+  'tray.relaunchedAfterCrash':
+    'CapturePack se detuvo inesperadamente el {when} y se reinició solo. No se grabó nada desde entonces hasta ahora.',
+  'tray.supervisionGaveUp':
+    'CapturePack siguió deteniéndose, así que dejó de reiniciarse solo. Ahora {hotkey} lo inicia desde el menú Inicio.',
+  'tray.startedByHotkey':
+    'CapturePack no estaba en ejecución, así que {hotkey} lo inició. Antes de ahora no se grabó nada: pulsa {hotkey} otra vez en unos segundos.',
+  'shortcut.captureDescription': 'Capturar los últimos segundos con CapturePack',
 
   'recorder.screenUnavailable': 'la captura de pantalla no está disponible',
   'recorder.recorderUnavailable': 'la grabadora de vídeo se detuvo',
@@ -1826,6 +1884,9 @@ const ES: Record<I18nKey, string> = {
   'settings.copyToClipboard': 'Copiar el pack guardado al portapapeles',
   'settings.autoUpdate': 'Buscar actualizaciones automáticamente',
   'settings.launchAtLogin': 'Iniciar CapturePack con Windows',
+  'settings.superviseProcess': 'Mantener CapturePack en ejecución y atento a su atajo',
+  'settings.superviseProcessHint':
+    'reinicia CapturePack si se detiene inesperadamente y añade un acceso directo en el menú Inicio que responde al atajo mientras no está en ejecución',
   'settings.notifyOnRecordingStart': 'Avisar cuando empiece la grabación del replay',
   'settings.captureSection': 'Captura',
   'settings.captureHotkey': 'Atajo de captura',
@@ -2083,6 +2144,13 @@ const FR: Record<I18nKey, string> = {
   'tray.recordingFailed': 'Les {seconds} dernières secondes ne sont pas enregistrées : {reason}',
   'tray.previousRunUnclean':
     'CapturePack s’est arrêté de façon inattendue le {when}. Rien n’a été enregistré depuis.',
+  'tray.relaunchedAfterCrash':
+    'CapturePack s’est arrêté de façon inattendue le {when} et a redémarré tout seul. Rien n’a été enregistré depuis.',
+  'tray.supervisionGaveUp':
+    'CapturePack s’arrêtait sans cesse : le redémarrage automatique est désormais interrompu. {hotkey} le lance maintenant depuis le menu Démarrer.',
+  'tray.startedByHotkey':
+    'CapturePack n’était pas lancé : {hotkey} vient de le démarrer. Rien n’a été enregistré avant maintenant — appuyez de nouveau sur {hotkey} dans quelques secondes.',
+  'shortcut.captureDescription': 'Capturer les dernières secondes avec CapturePack',
 
   'recorder.screenUnavailable': 'la capture d’écran est indisponible',
   'recorder.recorderUnavailable': 'l’enregistreur vidéo s’est arrêté',
@@ -2223,6 +2291,9 @@ const FR: Record<I18nKey, string> = {
   'settings.copyToClipboard': 'Copier le pack enregistré dans le presse-papiers',
   'settings.autoUpdate': 'Rechercher les mises à jour automatiquement',
   'settings.launchAtLogin': 'Lancer CapturePack avec Windows',
+  'settings.superviseProcess': 'Maintenir CapturePack actif et à l’écoute de son raccourci',
+  'settings.superviseProcessHint':
+    'redémarre CapturePack s’il s’arrête de façon inattendue et ajoute un raccourci du menu Démarrer qui répond au raccourci clavier tant qu’il n’est pas lancé',
   'settings.notifyOnRecordingStart': 'Notifier au démarrage de l’enregistrement du replay',
   'settings.captureSection': 'Capture',
   'settings.captureHotkey': 'Raccourci de capture',
@@ -2481,6 +2552,13 @@ const DE: Record<I18nKey, string> = {
   'tray.recordingFailed': 'Die letzten {seconds} Sekunden werden nicht aufgezeichnet: {reason}',
   'tray.previousRunUnclean':
     'CapturePack wurde am {when} unerwartet beendet. Seitdem wurde nichts aufgezeichnet.',
+  'tray.relaunchedAfterCrash':
+    'CapturePack wurde am {when} unerwartet beendet und hat sich selbst neu gestartet. Seitdem wurde nichts aufgezeichnet.',
+  'tray.supervisionGaveUp':
+    'CapturePack wurde wiederholt beendet, deshalb startet es sich nicht mehr selbst neu. {hotkey} startet es jetzt über das Startmenü.',
+  'tray.startedByHotkey':
+    'CapturePack lief nicht, deshalb hat {hotkey} es gestartet. Davor wurde nichts aufgezeichnet — drücken Sie {hotkey} gleich noch einmal.',
+  'shortcut.captureDescription': 'Die letzten Sekunden mit CapturePack erfassen',
 
   'recorder.screenUnavailable': 'die Bildschirmaufnahme ist nicht verfügbar',
   'recorder.recorderUnavailable': 'der Videorekorder wurde angehalten',
@@ -2622,6 +2700,9 @@ const DE: Record<I18nKey, string> = {
   'settings.copyToClipboard': 'Gespeichertes Pack in die Zwischenablage kopieren',
   'settings.autoUpdate': 'Automatisch nach Updates suchen',
   'settings.launchAtLogin': 'CapturePack mit Windows starten',
+  'settings.superviseProcess': 'CapturePack laufen lassen und auf sein Tastenkürzel reagieren',
+  'settings.superviseProcessHint':
+    'startet CapturePack neu, wenn es unerwartet endet, und legt eine Startmenü-Verknüpfung an, die auf das Tastenkürzel reagiert, solange es nicht läuft',
   'settings.notifyOnRecordingStart': 'Benachrichtigen, wenn die Replay-Aufzeichnung startet',
   'settings.captureSection': 'Aufnahme',
   'settings.captureHotkey': 'Aufnahme-Hotkey',
@@ -2882,6 +2963,13 @@ const PT: Record<I18nKey, string> = {
   'tray.recordingFailed': 'Os últimos {seconds} segundos não estão sendo gravados: {reason}',
   'tray.previousRunUnclean':
     'O CapturePack parou inesperadamente em {when}. Nada foi gravado de lá até agora.',
+  'tray.relaunchedAfterCrash':
+    'O CapturePack parou inesperadamente em {when} e se reiniciou sozinho. Nada foi gravado de lá até agora.',
+  'tray.supervisionGaveUp':
+    'O CapturePack continuou parando, então deixou de se reiniciar sozinho. Agora {hotkey} o inicia pelo menu Iniciar.',
+  'tray.startedByHotkey':
+    'O CapturePack não estava em execução, então {hotkey} o iniciou. Nada foi gravado antes de agora — pressione {hotkey} de novo daqui a alguns segundos.',
+  'shortcut.captureDescription': 'Capturar os últimos segundos com o CapturePack',
 
   'recorder.screenUnavailable': 'a captura de tela não está disponível',
   'recorder.recorderUnavailable': 'o gravador de vídeo parou',
@@ -3021,6 +3109,9 @@ const PT: Record<I18nKey, string> = {
   'settings.copyToClipboard': 'Copiar o pack salvo para a área de transferência',
   'settings.autoUpdate': 'Verificar atualizações automaticamente',
   'settings.launchAtLogin': 'Iniciar o CapturePack com o Windows',
+  'settings.superviseProcess': 'Manter o CapturePack em execução e atendendo ao atalho',
+  'settings.superviseProcessHint':
+    'reinicia o CapturePack se ele parar inesperadamente e adiciona um atalho no menu Iniciar que atende ao atalho de teclado enquanto ele não está em execução',
   'settings.notifyOnRecordingStart': 'Notificar quando a gravação do replay começar',
   'settings.captureSection': 'Captura',
   'settings.captureHotkey': 'Atalho de captura',
@@ -3279,6 +3370,13 @@ const RU: Record<I18nKey, string> = {
   'tray.recordingFailed': 'Последние {seconds} секунд не записываются: {reason}',
   'tray.previousRunUnclean':
     'CapturePack неожиданно остановился {when}. С этого момента и до сих пор ничего не записывалось.',
+  'tray.relaunchedAfterCrash':
+    'CapturePack неожиданно остановился {when} и перезапустился сам. С этого момента и до сих пор ничего не записывалось.',
+  'tray.supervisionGaveUp':
+    'CapturePack продолжал останавливаться, поэтому автоматический перезапуск отключён. Теперь {hotkey} запускает его из меню «Пуск».',
+  'tray.startedByHotkey':
+    'CapturePack не был запущен, поэтому {hotkey} запустил его. До этого момента ничего не записывалось — нажмите {hotkey} ещё раз через несколько секунд.',
+  'shortcut.captureDescription': 'Захватить последние секунды с помощью CapturePack',
 
   'recorder.screenUnavailable': 'захват экрана недоступен',
   'recorder.recorderUnavailable': 'видеорекордер остановлен',
@@ -3416,6 +3514,9 @@ const RU: Record<I18nKey, string> = {
   'settings.copyToClipboard': 'Копировать сохранённый пак в буфер обмена',
   'settings.autoUpdate': 'Проверять обновления автоматически',
   'settings.launchAtLogin': 'Запускать CapturePack вместе с Windows',
+  'settings.superviseProcess': 'Держать CapturePack запущенным и отвечающим на сочетание клавиш',
+  'settings.superviseProcessHint':
+    'перезапускает CapturePack, если он неожиданно остановился, и добавляет ярлык в меню «Пуск», который отвечает на сочетание клавиш, пока приложение не запущено',
   'settings.notifyOnRecordingStart': 'Уведомлять о начале записи реплея',
   'settings.captureSection': 'Захват',
   'settings.captureHotkey': 'Сочетание для захвата',

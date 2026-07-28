@@ -42,6 +42,11 @@ export interface SettingsIpcHooks {
   // Applies the per-user Windows login item immediately after the validated
   // setting is persisted. Startup reconciliation uses the same callback.
   onLaunchAtLoginChanged?: (enabled: boolean) => void
+  // Supervision (GOAL "And do not stay gone.", issue #61) applies immediately
+  // too, and in BOTH directions: off stops the watchdog and deletes the Start
+  // Menu fallback, on starts them. A switch whose "off" only takes effect at
+  // the next launch would leave a process the user just refused still running.
+  onSuperviseProcessChanged?: (enabled: boolean) => void
 }
 
 // Registers the settings IPC handlers around the live settings object — the
@@ -132,6 +137,9 @@ export function registerSettingsIpc(live: Settings, hooks: SettingsIpcHooks = {}
     }
     if (live.launchAtLogin !== before.launchAtLogin) {
       hooks.onLaunchAtLoginChanged?.(live.launchAtLogin)
+    }
+    if (live.superviseProcess !== before.superviseProcess) {
+      hooks.onSuperviseProcessChanged?.(live.superviseProcess)
     }
     // Instant apply (GOAL i18n): the tray rebuilds and open windows re-render.
     if (live.language !== before.language) {

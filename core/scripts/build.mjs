@@ -26,6 +26,16 @@ const browser = {
 
 await Promise.all([
   build({ ...node, entryPoints: ['src/main/index.ts'], outfile: 'dist/main/index.js' }),
+  // The watchdog (issue #61) runs as PLAIN NODE — the app's own binary
+  // re-entered with ELECTRON_RUN_AS_NODE — so it must not link electron and
+  // must land outside the asar (asarUnpack in electron-builder.yml): a fresh
+  // Node process knows nothing about Electron's archive format.
+  build({
+    ...node,
+    external: [],
+    entryPoints: ['src/watchdog/watchdog.ts'],
+    outfile: 'dist/scripts/watchdog.js',
+  }),
   build({ ...node, entryPoints: ['src/preload/capture.ts'], outfile: 'dist/preload/capture.js' }),
   build({ ...node, entryPoints: ['src/preload/editor.ts'], outfile: 'dist/preload/editor.js' }),
   build({ ...node, entryPoints: ['src/preload/settings.ts'], outfile: 'dist/preload/settings.js' }),

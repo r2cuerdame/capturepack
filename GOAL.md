@@ -298,6 +298,47 @@ what happened. All of it local; nothing is ever uploaded.
   and then certifying the run healthy would be the same lie, told by the very feature
   built to expose it.
 
+**And do not stay gone.** Reporting a death on the next start is not enough on its own: a
+user pressed Ctrl+Alt+C, got nothing, and concluded CapturePack was not installed. It was
+installed — it had died hours earlier, and nothing brought it back until the next login.
+So the product makes one promise, and everything below exists only to keep it:
+
+> **Pressing the capture hotkey always produces a visible result — a capture, or the app
+> starting, or a message. Never silence.**
+
+- **An unintended exit is undone.** A detached watchdog process (the app's own binary
+  re-entered as plain Node, so nothing extra ships) watches the run and asks the SAME
+  marker the previous point defines: an exit that reached will-quit was meant — tray Quit,
+  an updater restart, a Windows shutdown — and is left alone. Anything else is a death, and
+  the app is relaunched **once, promptly (about four seconds), and never silently**: the
+  run that comes back says it stopped, when, and that nothing was recorded in between.
+- **A relaunch loop is worse than staying dead.** At most three relaunches in ten minutes.
+  On the fourth death supervision STOPS — and says so plainly rather than dying quietly.
+- **When the app is not there, Explorer answers.** CapturePack keeps a Start Menu shortcut,
+  "CapturePack Capture", carrying the configured hotkey as a Windows shortcut key. The
+  shortcut key is **armed the moment the app is gone** (by the watchdog) and **removed
+  while the app is running** (which is what lets the app hold the accelerator itself, so a
+  capture stays instant instead of costing a process launch). Pressing it while the app is
+  running is forwarded into the live instance through the single-instance lock and captures
+  immediately; pressing it while the app is dead starts CapturePack and says so, instead of
+  hitting nothing. A hotkey the user re-records in Settings is mirrored onto the shortcut.
+  A combination Windows cannot store on a shortcut (the Windows key, or no Ctrl and no Alt)
+  simply gets no fallback — inventing a different key would be worse than having none.
+  After supervision gives up, the accelerator is left with the shortcut on purpose: slower
+  than owning it, and it cannot crash.
+- **All of it is removable, and none of it fights setup.** One Settings → General switch,
+  **on by default**, turns the whole thing on and off; off stops the watchdog and deletes
+  the shortcut in the same click. The installer and uninstaller raise a stand-down flag
+  before closing the running app, so supervision can never resurrect CapturePack in the
+  middle of an update, and the uninstaller removes the shortcut. It never fights the login
+  item either: the login item starts the app at logon, the watchdog only acts when the app
+  is already gone, and the single-instance lock settles any overlap.
+- **The limits, stated honestly.** Supervision is a watchdog, not a service: if the
+  watchdog and the app are destroyed in the same instant (an "end process tree", a power
+  loss) nothing is left to relaunch or to arm the shortcut, and the login item is what
+  restores the app at the next sign-in. A live app notices a killed watchdog within thirty
+  seconds and starts another. There is no Scheduled Task and no admin right anywhere.
+
 **Capture must stay cheap.** CapturePack runs all day; a resident tool that eats a core is
 a tool people quit. The buffer currently encodes VP9 in software, twice over (two rotating
 recorders) and once per display — the worst possible combination on a 4K desktop.
@@ -980,7 +1021,10 @@ Settings are edited in a GUI window — never by opening settings.json in an edi
   — never at an app restart.
 - Grouped sections:
   - **General** — output folder (picker + open button), copy exported pack to clipboard,
-    auto-update check.
+    auto-update check, start with Windows, and **keep CapturePack running and answering its
+    hotkey** (GOAL "And do not stay gone.") — on by default, and a real teardown when
+    switched off: the watchdog stops and the Start Menu fallback shortcut is deleted on the
+    click, not at the next launch.
   - **Capture** — **capture hotkey** (recordable field: click, press the new combination;
     default Ctrl+Alt+C; must include a modifier; conflict with another app's global
     shortcut is detected on registration and reverts with an inline error; applies
