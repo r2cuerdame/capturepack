@@ -19,7 +19,12 @@ export class Viewport {
 
   constructor(private readonly frame: HTMLElement) {}
 
-  /** Space+drag pan applies once the view is zoomed OR has been panned off centre. */
+  /**
+   * Whether there is anything to pan: true once the view is zoomed OR has been
+   * panned off centre. Both pan gestures (Space+drag and middle-button drag,
+   * issue #55) are gated on it — a fully fitted board has nothing to move, so
+   * the press is left alone rather than swallowed.
+   */
   get panEnabled(): boolean {
     return this.zoom !== 1 || this.panX !== 0 || this.panY !== 0
   }
@@ -61,7 +66,8 @@ export class Viewport {
    * centre lands on the stage centre.
    *
    * This is how framing one display works (GOAL "Multi-Monitor Support" —
-   * `1`..`9`, with the key left of 1 (`` ` ``) or Esc fitting the board again): the whole board opens
+   * `1`..`9`, with the key left of 1 (`` ` ``) fitting the board again; Esc has
+   * no say in the framing at all, issue #53): the whole board opens
    * fitted, and one keystroke gives a single display the largest usable scale
    * without ever leaving the board — the other screens are a pan away, not a
    * mode away.
@@ -91,7 +97,8 @@ export class Viewport {
 
   /**
    * Back to 1:1, unpanned — the whole board, fitted, which is how the editor
-   * opens and what Esc returns to after focusRect() framed one display.
+   * opens and what the key left of 1 returns to after focusRect() framed one
+   * display.
    */
   reset(): void {
     if (this.zoom === 1 && this.panX === 0 && this.panY === 0) return

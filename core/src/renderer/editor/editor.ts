@@ -106,6 +106,7 @@ const colorBtn = el<HTMLButtonElement>('colorBtn')
 const colorSwatch = el<HTMLSpanElement>('colorSwatch')
 const exportBtn = el<HTMLButtonElement>('exportBtn')
 const windowModeBtn = el<HTMLButtonElement>('windowModeBtn')
+const titleBarLabel = el<HTMLSpanElement>('titleBarLabel')
 const boxHeader = el<HTMLDivElement>('boxHeader')
 const numberBtn = el<HTMLButtonElement>('numberBtn')
 const durationChip = el<HTMLButtonElement>('durationChip')
@@ -280,11 +281,6 @@ const viewport = new Viewport(frame)
 // control — invalidates it: layout() re-derives the framing from this instead
 // of leaving the board displaced by the ratio of the fit change.
 let framedDisplay: number | null = null
-// Whether the current view is one the USER navigated to. The editor OPENS
-// framed on the focused display, which no user action asked for, and Esc's
-// first rung ("give the whole desk back") must not charge a press for a view
-// nobody chose — every close, deselect and discard would cost one.
-let viewNavigated = false
 let spaceDown = false
 // Space serves two gestures: HELD it is the pan modifier, TAPPED (pressed and
 // released without ever panning) it toggles playback. This stays true from the
@@ -429,11 +425,23 @@ function displayIndexOf(a: Annotation): number {
 // header) behaves identically in both modes.
 // ---------------------------------------------------------------------------
 
+/**
+ * The windowed title bar's text (GOAL "Editor Window Mode", issue #49): the
+ * pack's own title once it has one, the app name until then. A title bar that
+ * says what the window holds is also what makes it READ as a title bar — the
+ * strip is the visible answer to "where do I grab this thing".
+ */
+function syncTitleBar(): void {
+  const title = titleInput.value.trim()
+  titleBarLabel.textContent = title !== '' ? title : t('editor.windowTitle')
+}
+
 /** Paints the mode main reported: drag region, button state, canvas re-fit. */
 function applyWindowMode(mode: EditorWindowMode): void {
   windowMode = mode
-  // The CSS drag region hangs off this: the top bar is only draggable — and
-  // only steals clicks from its own padding — while the editor is a window.
+  // The CSS drag region hangs off this: the title bar EXISTS (and the top bar's
+  // gaps become draggable) only while the editor is a window — the fullscreen
+  // overlay has nothing to move, so it carries no drag region at all.
   document.body.dataset['windowMode'] = mode
   windowModeBtn.setAttribute('aria-pressed', String(mode === 'windowed'))
   // The window size just changed under us; the resize event does this too, but
@@ -480,12 +488,9 @@ function displayLabel(d: BoardDisplay): string {
  * focused display "opens centered and at the largest scale" — here on demand,
  * for any display, because every one of them is now a place work happens).
  */
-function zoomToDisplay(index: number, byUser = true): void {
+function zoomToDisplay(index: number): void {
   if (!applyFraming(index)) return
   framedDisplay = index
-  // The editor's OWN opening framing is not a view the user backed into: Esc
-  // must not have to undo it (see the Esc ladder).
-  if (byUser) viewNavigated = true
   syncPanCursor()
   syncSelectionUi()
   schedulePaint()
@@ -509,11 +514,14 @@ function applyFraming(index: number): boolean {
   return true
 }
 
-/** Back to the whole board, unzoomed — the state the editor opens in. */
+/**
+ * Back to the whole board, unzoomed — the state the editor opens in, and the
+ * ONLY way back from a framed display (GOAL, issue #53): framing is a VIEW like
+ * zoom and pan, so ` (the key left of 1) undoes it and Esc never does.
+ */
 function fitBoard(): void {
   viewport.reset()
   framedDisplay = null
-  viewNavigated = false
   syncPanCursor()
   syncSelectionUi()
   schedulePaint()
@@ -521,13 +529,12 @@ function fitBoard(): void {
 }
 
 /**
- * A free zoom or pan (Ctrl+wheel, the zoom control, Space+drag): the view is
- * the user's own now — it is no longer the framing of any one display, so
- * layout() must stop re-deriving one, and Esc's first rung applies again.
+ * A free zoom or pan (Ctrl+wheel, the zoom control, Space/middle-button drag):
+ * the view is the user's own now — it is no longer the framing of any one
+ * display, so layout() must stop re-deriving one.
  */
 function markViewNavigated(): void {
   framedDisplay = null
-  viewNavigated = true
 }
 
 // ---------------------------------------------------------------------------
@@ -788,7 +795,12 @@ unsavedSaveBtn.addEventListener('click', () => void doExport('save'))
 unsavedSaveAsBtn.addEventListener('click', () => void doExport('saveAsNew'))
 unsavedDiscardBtn.addEventListener('click', () => window.editorBridge.cancel())
 
-titleInput.addEventListener('input', updateDirty)
+titleInput.addEventListener('input', () => {
+  updateDirty()
+  // The windowed title bar names the pack (issue #49), so it follows the field
+  // that names it — live, the way a real title bar tracks its document.
+  syncTitleBar()
+})
 noteInput.addEventListener('input', updateDirty)
 
 // Duration the lane strip was last built against; when ScrubController adopts
@@ -870,7 +882,11 @@ function helpContent(): Array<{ title: string; rows: HelpRow[] }> {
   }
   const viewRows: HelpRow[] = [
     [keys('Ctrl', t('editor.keyWheel')), t('editor.helpZoom')],
+    // Two ways to pan, listed together (issue #55): the middle-button drag is
+    // one hand and no key, and a gesture nobody is told about is a gesture
+    // nobody has.
     [keys('Space', t('editor.keyDrag')), t('editor.helpPan')],
+    [t('editor.keyMiddleDrag'), t('editor.helpPan')],
   ]
   if (board !== null && board.displays.length > 1) {
     // The key left of 1 (issue #41), with the old 0 still accepted — the sheet
@@ -1496,14 +1512,36 @@ function refocusEditing(): void {
   else if (active !== titleInput && active !== noteInput) overlay.focus()
 }
 
-/** Maps a point in ONE display's native pixels to #stage-relative screen px. */
+/**
+ * A VIEWPORT point — what getBoundingClientRect() speaks — in the space #stage's
+ * absolutely positioned chrome (#boxHeader, #durationEditor) is laid out in.
+ * THE ONE PLACE that conversion happens, because getting it wrong is issue #50.
+ *
+ * The two spaces are not the same the moment #stage can scroll: a `top`/`left`
+ * on an absolute child is measured from the padding box and rides the scroll
+ * offset, while a client rect never does — so they differ by exactly
+ * scrollTop/scrollLeft. `overflow: hidden` made #stage a scroll container, a
+ * zoomed board overflows it, and anything that scrolls an element into view
+ * (overlay.focus() on the framed board the editor opens with, the caret in a
+ * box description) scrolled it for good. That is the header landing far above
+ * its box, in open space, at no particular viewport edge.
+ *
+ * #stage is now `overflow: clip` (see editor.css) so the offset can never
+ * become non-zero; it stays in the formula because that makes the conversion
+ * correct BY CONSTRUCTION rather than by the CSS staying the way it is today.
+ */
+function toStagePoint(clientX: number, clientY: number): { x: number; y: number } {
+  const sr = stage.getBoundingClientRect()
+  return { x: clientX - sr.left + stage.scrollLeft, y: clientY - sr.top + stage.scrollTop }
+}
+
+/** Maps a point in ONE display's native pixels to #stage's positioning space. */
 function toScreen(d: BoardDisplay, x: number, y: number): { x: number; y: number } {
   const or = overlay.getBoundingClientRect()
-  const sr = stage.getBoundingClientRect()
   const p = toBoardPoint(d, x, y)
   const scale =
     board !== null && board.width > 0 && or.width > 0 ? or.width / board.width : fitScale
-  return { x: or.left - sr.left + p.x * scale, y: or.top - sr.top + p.y * scale }
+  return toStagePoint(or.left + p.x * scale, or.top + p.y * scale)
 }
 
 function chipLabel(a: Annotation): string {
@@ -1525,11 +1563,11 @@ function syncSelectionUi(): void {
   // pixels, so it stays glued to a box on any screen of the board.
   const pad = SELECTION_PAD * uiOf(on)
   const topLeft = toScreen(on, b.x - pad, b.y - pad)
-  // #stage is overflow:hidden, and the board makes "the selection is somewhere
-  // off screen" routine: zoomToDisplay (1..9) does not clear the
-  // selection, so framing another display leaves the box outside the viewport
-  // entirely. A header pinned to the stage edge then floats over a screen the
-  // box is not on and points at nothing, which is worse than no header.
+  // #stage clips, and the board makes "the selection is somewhere off screen"
+  // routine: zoomToDisplay (1..9) does not clear the selection, so framing
+  // another display leaves the box outside the viewport entirely. A header
+  // pinned to the stage edge then floats over a screen the box is not on and
+  // points at nothing, which is worse than no header.
   const bottomRight = toScreen(on, b.x + b.w + pad, b.y + b.h + pad)
   if (
     bottomRight.x < 0 ||
@@ -1545,18 +1583,11 @@ function syncSelectionUi(): void {
   // The box is not committed yet (Enter commits, Esc discards it): the header
   // says so with the same accent the dashed selection rect uses.
   boxHeader.classList.toggle('pending', pendingDraft() !== null)
-  // Clamped on BOTH edges (#stage is overflow:hidden). The fullscreen overlay
-  // almost always leaves horizontal margin, but a windowed editor can be
-  // resized until the image fills the stage — and a header pushed off the right
-  // edge takes the blur toggle, the number toggle and the duration chip with it,
-  // none of which have a keyboard fallback. offsetWidth is read after unhiding.
-  const maxLeft = Math.max(4, stage.clientWidth - boxHeader.offsetWidth - 4)
-  boxHeader.style.left = `${Math.max(4, Math.min(topLeft.x, maxLeft))}px`
-  // Clamped on BOTH edges for the same reason as `left`: a selection panned or
-  // zoomed below the viewport used to take the whole header — number, blur,
-  // duration, delete — off the bottom of an overflow:hidden stage.
-  const maxTop = Math.max(28, stage.clientHeight - boxHeader.offsetHeight - 4)
-  boxHeader.style.top = `${Math.max(28, Math.min(topLeft.y - 4, maxTop))}px`
+  // CONTENT BEFORE MEASUREMENT (issue #50). Every label here changes the
+  // header's size — [#] becomes [7], [Blur] becomes [Blur On], the duration chip
+  // appears and disappears with the replay — and the position below is computed
+  // from offsetWidth/offsetHeight. Written after them, the measurement described
+  // the PREVIOUS selection's header and the box got someone else's offset.
   // [#|N]: shows the computed display number while numbering is on — for a
   // pending box, the number it will carry the moment Enter commits it.
   const number = displayNumbers().get(a.annotation_id)
@@ -1569,7 +1600,43 @@ function syncSelectionUi(): void {
   durationChip.hidden = !showChip
   if (showChip) durationChip.textContent = chipLabel(a)
   else closeDurationEditor(false)
+  positionBoxHeader(topLeft, bottomRight)
   if (durationEditorOpen) positionDurationEditor()
+}
+
+/** Screen px between the header and the dashed selection rect it belongs to. */
+const BOX_HEADER_GAP = 4
+
+/**
+ * Places the header against the selection rect, in #stage's own positioning
+ * space (see toScreen — both corners arrive in it, not in viewport pixels).
+ *
+ * Read after the labels are written and after the element is visible, so
+ * offsetWidth/offsetHeight are this box's header and not the last one's
+ * (issue #50). The offsets are SCREEN pixels applied to a screen-space
+ * measurement, so the gap is the same 4px at every zoom.
+ */
+function positionBoxHeader(
+  topLeft: { x: number; y: number },
+  bottomRight: { x: number; y: number },
+): void {
+  const w = boxHeader.offsetWidth
+  const h = boxHeader.offsetHeight
+  // Clamped on BOTH edges (#stage clips). The fullscreen overlay almost always
+  // leaves horizontal margin, but a windowed editor can be resized until the
+  // image fills the stage — and a header pushed off the right edge takes the
+  // blur toggle, the number toggle and the duration chip with it, none of which
+  // have a keyboard fallback.
+  const maxLeft = Math.max(4, stage.clientWidth - w - 4)
+  boxHeader.style.left = `${Math.max(4, Math.min(topLeft.x, maxLeft))}px`
+  // ABOVE the box by default; BELOW it when the box is against the top of the
+  // stage and there is genuinely no room (issue #50). Flipping keeps the header
+  // touching its box, which sliding it down the top edge would not: it would
+  // sit ON the box, over the pixels being annotated.
+  const above = topLeft.y - BOX_HEADER_GAP - h
+  const below = bottomRight.y + BOX_HEADER_GAP
+  const maxTop = Math.max(0, stage.clientHeight - h)
+  boxHeader.style.top = `${Math.max(0, Math.min(above >= 0 ? above : below, maxTop))}px`
 }
 
 /**
@@ -1680,10 +1747,13 @@ function closeDurationEditor(refocus = true): void {
 }
 
 function positionDurationEditor(): void {
+  // Hangs off the chip that opened it — through toStagePoint, for the same
+  // reason the header does (issue #50): the chip is measured in the viewport
+  // and the popover is positioned inside #stage.
   const cr = durationChip.getBoundingClientRect()
-  const sr = stage.getBoundingClientRect()
-  const left = Math.max(8, Math.min(cr.left - sr.left, stage.clientWidth - durationEditor.offsetWidth - 8))
-  const top = Math.max(8, Math.min(cr.bottom - sr.top + 6, stage.clientHeight - durationEditor.offsetHeight - 8))
+  const anchor = toStagePoint(cr.left, cr.bottom + 6)
+  const left = Math.max(8, Math.min(anchor.x, stage.clientWidth - durationEditor.offsetWidth - 8))
+  const top = Math.max(8, Math.min(anchor.y, stage.clientHeight - durationEditor.offsetHeight - 8))
   durationEditor.style.left = `${left}px`
   durationEditor.style.top = `${top}px`
 }
@@ -2232,6 +2302,12 @@ function applyResize(a: Annotation, handle: HandleId, px: number, py: number): v
 
 overlay.addEventListener('pointerdown', (e) => {
   if (!loaded) return
+  // The MIDDLE button belongs to panning and to nothing else (issue #55). A
+  // press only reaches here when the board CANNOT pan — the stage's capture
+  // handler swallows the rest — and "nothing to pan" has to mean nothing
+  // happens: not a paused replay, not a dismissed duration popover, and
+  // certainly not a selection change.
+  if (e.button === 1) return
   scrub?.pause() // annotating targets a moment; freeze it
   closeDurationEditor(false) // any canvas interaction dismisses it, unapplied
   setHoverObject(null, null) // the outline has served its purpose once it is used
@@ -2541,12 +2617,11 @@ window.addEventListener(
 
 // ANY pointer press while Space is held ends the play/pause tap, whatever that
 // press turns out to be. The pan handler below cannot be the one to clear it:
-// it returns early on a non-left button and while `panEnabled` is false — and
-// `panEnabled` is false in the state the editor OPENS in (fit zoom, no pan), so
-// the very gesture the shortcut sheet advertises, performed at the default
-// zoom, would otherwise start playback on release. Same for a Space-held
-// right-drag or a drag on the timebar, neither of which reaches the stage
-// handler at all.
+// it returns early while `panEnabled` is false — and `panEnabled` is false in
+// the state the editor OPENS in (fit zoom, no pan), so the very gesture the
+// shortcut sheet advertises, performed at the default zoom, would otherwise
+// start playback on release. Same for a Space-held right-drag or a drag on the
+// timebar, neither of which reaches the stage handler at all.
 window.addEventListener(
   'pointerdown',
   () => {
@@ -2555,19 +2630,56 @@ window.addEventListener(
   { capture: true },
 )
 
-// Space+drag pan, captured on the stage so it wins over box interactions.
+/**
+ * Whether this press is a pan: Space held with the LEFT button, or the MIDDLE
+ * button on its own (GOAL "Editor Input System", issue #55 — the one-handed
+ * gesture every image and map viewer has). Both need something to pan: on a
+ * fully fitted board there is nothing to move, so the press is left to whatever
+ * else wants it rather than swallowed.
+ */
+function isPanPress(e: PointerEvent): boolean {
+  if (!viewport.panEnabled) return false
+  // Never mid-box. A mouse gives every button the same pointerId, so taking
+  // capture here would redirect the RIGHT-drag's own pointerup to the stage and
+  // leave the box being drawn hanging, uncommitted, forever.
+  if (drag !== null) return false
+  return (e.button === 0 && spaceDown) || e.button === 1
+}
+
+// Pan, captured on the stage so it wins over box interactions — a middle-button
+// press must never start a box, never move one, and never clear the selection,
+// so it can never be allowed to reach the overlay's own pointerdown.
 stage.addEventListener(
   'pointerdown',
   (e) => {
-    if (e.button !== 0 || !spaceDown || !viewport.panEnabled) return
+    if (!isPanPress(e)) return
     e.preventDefault()
     e.stopPropagation()
     panning = { pointerId: e.pointerId, x: e.clientX, y: e.clientY }
+    // Pointer capture, so a drag that leaves the window still tracks and still
+    // ENDS — the button is released out there and pointerup would otherwise
+    // never arrive, leaving the board glued to the cursor.
     stage.setPointerCapture(e.pointerId)
     syncPanCursor()
   },
   { capture: true },
 )
+
+// Chromium answers a middle press with AUTOSCROLL — the little four-way scroll
+// widget — and that is a default action of the MOUSE event, which preventing
+// the pointer event does not cancel. Suppressed on the stage only, and only for
+// the middle button, so nothing else about the wheel changes: rotating it still
+// scrubs the clock and Ctrl+wheel still zooms (issue #55).
+stage.addEventListener('mousedown', (e) => {
+  if (e.button === 1) e.preventDefault()
+})
+// A middle press that never moved must do NOTHING — not paste, not scrub, not
+// select. `auxclick` is the click the middle button fires; nothing in the
+// editor listens for it, so cancelling it only removes what the platform would
+// have added.
+stage.addEventListener('auxclick', (e) => {
+  if (e.button === 1) e.preventDefault()
+})
 stage.addEventListener(
   'pointermove',
   (e) => {
@@ -2591,8 +2703,20 @@ stage.addEventListener('pointerup', endPan, { capture: true })
 stage.addEventListener('pointercancel', endPan, { capture: true })
 
 function syncPanCursor(): void {
+  // `grab` is the STANDING offer (Space is held and there is something to move);
+  // `grabbing` says a pan is happening, which is equally true of the
+  // middle-button drag that has no modifier to advertise (issue #55).
   const canPan = spaceDown && viewport.panEnabled
-  stage.style.cursor = panning ? 'grabbing' : canPan ? 'grab' : ''
+  const cursor = panning !== null ? 'grabbing' : canPan ? 'grab' : ''
+  stage.style.cursor = cursor
+  // #overlay covers the whole board and carries its OWN hover cursor (move,
+  // resize arrows), so the stage's would never be seen over the very pixels
+  // being panned. Overridden while a pan is possible or in progress; put back
+  // on release, after which the next hover probe re-answers it.
+  if (cursor !== '') overlay.style.cursor = cursor
+  else if (overlay.style.cursor === 'grab' || overlay.style.cursor === 'grabbing') {
+    overlay.style.cursor = 'default'
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2638,11 +2762,17 @@ window.addEventListener('keydown', (e) => {
   }
   const typing = e.target === titleInput || e.target === noteInput
   if (e.key === 'Escape') {
-    // Cancel-current first: the duration editor, then a pending box, then a
-    // zoomed board, then the unsaved-changes bar, then an active selection. A
-    // bare Esc with nothing in progress closes the editor — except in edit mode
-    // with unsaved changes, where it opens the [Save] [Save As New
-    // CapturePack] [Discard] bar instead of discarding.
+    // Cancel-current first: the duration editor, then a pending box, then the
+    // unsaved-changes bar, then an active selection. A bare Esc with nothing in
+    // progress closes the editor — except in edit mode with unsaved changes,
+    // where it opens the [Save] [Save As New CapturePack] [Discard] bar instead
+    // of discarding.
+    //
+    // DISPLAY FRAMING IS NOT A RUNG (issue #53). Framing one display with 1..9
+    // is a VIEW state, exactly like zoom and pan, and Esc undoes neither of
+    // those; the key that fits the whole board (`, the key left of 1) is the
+    // way back. Giving a view state its own rung also stole the press users
+    // expect to close the editor — leaving took two.
     //
     // The shortcut sheet is deliberately NOT in this ladder (GOAL "Editor
     // Chrome": "no Esc handling"). It is a passive layer that may be left open
@@ -2659,26 +2789,6 @@ window.addEventListener('keydown', (e) => {
     // duration popover) with the box still pending.
     if (textSession !== null) {
       cancelTextEditor()
-      return
-    }
-    // A board zoomed onto one screen is a VIEW, not a mode — but it is the most
-    // current thing on screen, so Esc gives the whole desk back before it
-    // starts undoing selections or closing the editor.
-    //
-    // MULTI-DISPLAY ONLY. On a single-display capture, zoom is what it always
-    // was — a look at some pixels, not a place you can get lost in — and Esc
-    // has meant "clear the selection, then close" since the first version. A
-    // user who zoomed in to read something must not have to press Esc twice
-    // more than they used to.
-    //
-    // And only for a view the USER navigated to (viewNavigated). The editor
-    // opens framed on the focused display, which is a zoomed, panned viewport
-    // from the first frame — treating that as something to back out of would
-    // charge every multi-display capture an extra Esc for close, deselect and
-    // discard alike, which is exactly what the rung above exists to avoid. The
-    // whole board is still one keystroke away: ` (the key left of 1).
-    if (board !== null && board.displays.length > 1 && viewNavigated && viewport.panEnabled) {
-      fitBoard()
       return
     }
     if (!unsavedBar.hidden) {
@@ -3002,6 +3112,9 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
   }
   titleInput.value = payload.title
   noteInput.value = payload.note
+  // After applyDomI18n and the title prefill: a re-edited pack opens with its
+  // own name on the windowed title bar, a fresh capture with the app's.
+  syncTitleBar()
   // Kept alive: scrubbing back to "now" restores this sharpest frame, and
   // snapshot.png is composed from it at full native resolution.
   nativeBitmap = await createImageBitmap(new Blob([payload.snapshotPng], { type: 'image/png' }))
@@ -3142,9 +3255,9 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
   // the screen the capture is ABOUT by the union of every screen — measured on a
   // two-monitor desk: 0.578 -> 0.430, i.e. every control ~44% smaller by area,
   // which is precisely the resolution annotation work needs. The overview is one
-  // keystroke away (`, the key left of 1 — or Esc), and every other display is a
-  // pan away.
-  if (board.displays.length > 1) zoomToDisplay(focusedDisplayIndex, false)
+  // keystroke away (`, the key left of 1 — never Esc, issue #53), and every
+  // other display is a pan away.
+  if (board.displays.length > 1) zoomToDisplay(focusedDisplayIndex)
   schedulePaint()
   // A dump that settled while the editor was decoding its frames: apply it now
   // that there is a board to index it against.

@@ -759,6 +759,11 @@ simultaneously is the default** — one Ctrl+Alt+C, N displays in the pack.
     uncluttered. Framing a single display stays available on the keyboard (`1`..`9`,
     and the key left of `1` — backtick — to fit the whole board; `0` still does it
     too) and is discoverable through the help tooltip, not a toolbar.
+  - **Framing is a VIEW, and Esc never undoes a view.** Zoom and pan have no Esc rung
+    and neither does framing: the key that fits the whole board is the only way back.
+    Esc belongs to the editing ladder (duration editor → unsaved bar → selection →
+    close) — giving a view state its own rung stole the press users expect to close
+    the editor and made leaving cost two.
   - Annotations stay in their own display's pixel space; `annotations.json` gains an
     optional `display` index (absent = the focused display, so single-monitor packs are
     unchanged).
@@ -1060,9 +1065,19 @@ Left click      → semantic object auto-selection → type description immediat
 Right-click drag → manual rectangle → type description immediately
 
 Space + drag    → pan the zoomed view
+Middle-button drag → pan the zoomed view (one hand, no key)
 Ctrl + wheel    → zoom in/out
 Timeline drag   → coarse navigation across the buffer
 ```
+
+**Panning** has two gestures and they are the same gesture: **Space + drag** and a
+**middle-button (wheel-click) drag**, the way image and map viewers do it. Both use
+pointer capture, so a drag that leaves the window still tracks and still ends; both are
+available only while there is something to pan (a fully fitted board leaves the press
+alone instead of swallowing it). A middle-button drag never starts a box and never
+changes the selection, and a middle CLICK — pressed and released without moving — does
+nothing at all. The wheel is untouched: rotating it still scrubs time, Ctrl + wheel still
+zooms.
 
 **Wheel time navigation**
 
@@ -1092,14 +1107,18 @@ The editor's own UI must read as an editor, not a settings screen:
 - **Icons, not words**, for the recurring controls (window mode, help, save), each with a
   tooltip carrying its shortcut. Text stays where it is content: the title, the note, and
   the annotation itself.
-- **Zoom control** in the top bar: zoom-in button · slider · zoom-out button, showing the
-  current percentage. It mirrors Ctrl+wheel (same range and steps), snaps to Fit and 100%,
-  and double-clicking the slider returns to Fit. The board's zoom is a first-class control,
-  not a hidden gesture — a wheel shortcut alone leaves it undiscoverable.
+- **Zoom control** in the top bar: zoom-out button · slider · zoom-in button, showing the
+  current percentage. The order follows the SLIDER — dragging right makes the image
+  larger, so `−` is on the left and `+` on the right; a control that contradicts the track
+  it sits on is worse than no control. It mirrors Ctrl+wheel (same range and steps), snaps
+  to Fit and 100%, and double-clicking the slider returns to Fit. The board's zoom is a
+  first-class control, not a hidden gesture — a wheel shortcut alone leaves it
+  undiscoverable.
 - **Shortcut overlay**, toggled by the `?` button (and F1): a translucent panel pinned to
   the **top-right of the capture**, listing the shortcuts grouped as capture (left click,
   right drag, Shift), time (wheel, Shift/Alt wheel, I/O trim, play), view (Ctrl+wheel,
-  Space drag, `1`..`9`, `0`), and edit (Ctrl+Z, Del, Enter, Esc).
+  Space drag, middle-button drag, `1`..`9`, `` ` ``/`0`), and edit (Ctrl+Z, Del, Enter,
+  Esc).
   - **On by default**, so a new user sees the whole vocabulary without asking; the toggle
     state persists (`showShortcutOverlay`), so turning it off is permanent until turned
     back on.
@@ -1130,8 +1149,17 @@ part that matters:
 The editor opens as a fullscreen overlay by default (fastest annotation), but it is a
 real window too:
 
-- A ⧉ button in the top bar (and F11) toggles **windowed mode**: standard move (top-bar
-  drag region) and resize (edges/corners), alwaysOnTop off, canvas re-fits live.
+- A ⧉ button in the top bar (and F11) toggles **windowed mode**: standard move and resize
+  (edges/corners), alwaysOnTop off, canvas re-fits live.
+- **Windowed mode has a visible title bar.** A slim strip above the top bar naming the
+  pack (the app name until the pack has a title) is the drag handle, and double-clicking
+  it maximizes/restores like any caption. The top bar's own gaps drag too, with every
+  control in it opting out so it still takes clicks and text selection — but the strip is
+  what the user can SEE, because a frameless window whose only drag surface is the
+  leftover pixels between controls cannot be moved in practice.
+- **Fullscreen keeps no drag region and no title bar** — there is nothing to move, so the
+  strip is not rendered at all and costs the board no pixels. It is also never over the
+  canvas: it sits above the top bar in flow, so it can never take a click meant for a box.
 - The last mode and windowed bounds are remembered (`editorWindowMode` + bounds);
   the next capture opens the way the user left it.
 - Esc/Enter semantics identical in both modes.
@@ -1213,6 +1241,13 @@ Blur toggle · (right edge) Delete:
 ```
 
 No Pin/Rectangle/Blur tool menus exist.
+
+**The header is glued to its box.** It sits a few screen pixels above the selection
+rectangle at every zoom level, on whichever display the box lives on, and it flips
+*below* the box when there is genuinely no room above. It is measured after its own
+labels are written — the number chip, the blur label and the duration chip all change
+its size — and it is positioned in the same coordinate space it is measured in, so it
+never drifts away from the box it belongs to.
 
 **The header appears with the description input** — the moment a right-drag ends, the
 box header (`[#] [1.0s] [Blur] [×]`) shows *together with* the text field, so number,

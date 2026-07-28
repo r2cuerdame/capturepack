@@ -33,6 +33,43 @@ body {
   display: none !important;
 }
 
+/* ---- windowed title bar (GOAL "Editor Window Mode", issue #49) ----
+   The visible thing to grab. WINDOWED MODE ONLY: the fullscreen overlay carries
+   no drag region at all, so it stays display:none there and costs the board no
+   pixels. In normal flow above #topbar, never over the canvas, so it can never
+   take a click meant for a box. */
+
+#titleBar {
+  display: none;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  padding: 0 10px;
+  background: #16161b;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+body[data-window-mode="windowed"] #titleBar {
+  display: flex;
+  /* The whole strip is the drag handle — nothing interactive lives in it, so
+     there is no no-drag exception to make. */
+  -webkit-app-region: drag;
+  /* The OS owns the pointer over a drag region, so the arrow is what a title
+     bar shows anyway; saying `move` here would be a cursor the platform never
+     uses for a caption. */
+  cursor: default;
+}
+
+#titleBarLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ---- top bar ---- */
 
 #topbar {
@@ -206,9 +243,10 @@ body {
 }
 
 /* ---- zoom control (GOAL "Editor Chrome", issue #31) ----
-   [+] slider [-] and the live percentage, in the GOAL's order. Never shrinks:
-   like Save, it is a control, and the informational chips give way before any
-   control does. */
+   [-] slider [+] and the live percentage — the slider's own direction decides
+   the order (issue #44): right is larger, so + belongs on the right. Never
+   shrinks: like Save, it is a control, and the informational chips give way
+   before any control does. */
 
 #zoomControl {
   /* Shrinks only as far as its slider allows (the buttons and the percentage
@@ -267,9 +305,11 @@ body {
   color: var(--text);
 }
 
-/* Windowed mode: the top bar IS the window's title bar — drag it to move the
-   window (double-click maximizes, as any frameless window does). Every control
-   inside opts back out, or it could no longer be clicked at all. */
+/* Windowed mode: the top bar is drag surface TOO, so the gaps around the
+   controls behave like a caption instead of dead space. It is no longer the
+   only one — #titleBar above is (issue #49): the controls here span the whole
+   width, leaving nothing but 8px gaps to aim at. Every control opts back out,
+   or it could no longer be clicked at all. */
 body[data-window-mode="windowed"] #topbar {
   -webkit-app-region: drag;
 }
@@ -312,7 +352,20 @@ body[data-window-mode="windowed"] #topbar input {
   display: flex;
   align-items: center;
   justify-content: center;
-  overflow: hidden;
+  /* CLIP, NOT HIDDEN — this is the fix for issue #50. `overflow: hidden` makes
+     #stage a SCROLL CONTAINER, and a zoomed board overflows it, so anything
+     that scrolls an element into view scrolls the stage: overlay.focus() after
+     the editor opens framed on the focused display does it on the very first
+     frame, and so does the caret in a box description. Nothing ever scrolls it
+     back (there is no scrollbar), and from then on the two spaces that meet
+     here disagree by exactly scrollTop/scrollLeft — getBoundingClientRect()
+     measures the board in VIEWPORT space, while the absolutely positioned
+     chrome (#boxHeader, #durationEditor) is laid out in the stage's SCROLLED
+     CONTENT space. That is the "header drifts far above its box" report.
+     `clip` clips identically but is not a scroll container at all, so the
+     offset can never become non-zero and the two spaces are the same space.
+     Panning is a transform on #frame and never wanted a scrollport. */
+  overflow: clip;
 }
 
 #frame {
@@ -369,8 +422,12 @@ body[data-window-mode="windowed"] #topbar input {
   border: 1px solid var(--border);
   border-radius: 6px;
   background: rgba(20, 20, 26, 0.92);
-  /* Anchored by its bottom-left to the selection's top-left corner. */
-  transform: translateY(-100%);
+  /* `top` is the header's OWN top edge — no translate (issue #50). It used to
+     be anchored by its bottom with translateY(-100%), which put the CSS `top`
+     and the JS clamps in different boxes: the clamp reasoned about the laid-out
+     rect, the browser drew a rect one header-height higher. syncSelectionUi()
+     now subtracts the MEASURED height itself, which is also what lets the
+     header flip below the box when there is no room above it. */
   white-space: nowrap;
 }
 
@@ -535,6 +592,13 @@ body[data-window-mode="windowed"] #topbar input {
      never a modal: click-through, no focus, no Esc handling"). */
   pointer-events: none;
   transition: opacity 120ms ease;
+}
+
+/* The windowed title bar (issue #49) pushes the top bar down by its own height
+   plus its border; the sheet is fixed to the VIEWPORT, not to #stage, so it has
+   to be told, or it would sit over the controls it describes. */
+body[data-window-mode="windowed"] #helpSheet {
+  top: 74px;
 }
 
 /* ...and it dims further while the pointer is NEAR it, so it can never hide
