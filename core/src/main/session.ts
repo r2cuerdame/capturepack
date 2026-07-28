@@ -71,6 +71,7 @@ import {
   type PackHandle,
 } from './exporter'
 import { packDocLanguage, uiLanguage, uiT } from './locale'
+import { logError, logInfo, logWarn } from './log'
 import { openPack } from './mcp/store'
 import { showSaveToast, updateToastRenderStatus } from './saveToast'
 import { persistSettings } from './settings'
@@ -113,11 +114,19 @@ type EditorOutcome =
 let flowActive = false
 
 export async function startCaptureFlow(settings: Settings): Promise<void> {
-  if (flowActive) return
+  // Every capture REQUEST is recorded, including the ones that do nothing
+  // (issue #60): "I pressed the hotkey and nothing happened" has to be
+  // answerable, and "an editor was already open" is one of the answers.
+  if (flowActive) {
+    logWarn('[capture] capture requested while a flow was already open — ignored')
+    return
+  }
+  logInfo('[capture] capture requested')
   flowActive = true
   try {
     await runFlow(settings)
   } catch (err) {
+    logError('[capture] capture failed:', err)
     // 'CapturePack' is the product name — never translated.
     dialog.showErrorBox('CapturePack', uiT(settings)('app.captureFailed', { error: errorMessage(err) }))
   } finally {
@@ -132,6 +141,7 @@ export async function startEditFlow(dirPath: string, settings: Settings): Promis
   try {
     await runEditFlow(dirPath, settings)
   } catch (err) {
+    logError(`[capture] re-edit of ${path.basename(dirPath)} failed:`, err)
     dialog.showErrorBox('CapturePack', uiT(settings)('app.reeditFailed', { error: errorMessage(err) }))
   } finally {
     flowActive = false
@@ -273,7 +283,7 @@ async function freezeDisplays(settings: Settings): Promise<{
         // the muxer has not flushed yet) must not be reported as one that never
         // produced video — the tray is saying the opposite at that very moment.
         const reason = replayUnavailableReason(d.id, fetched.miss ?? 'no-recorder')
-        console.warn(
+        logWarn(
           `[capture] display ${d.id}: no replay for this capture (${reason}) — ` +
             'the pack keeps its frozen frame only',
         )
@@ -450,11 +460,21 @@ async function runFlow(settings: Settings): Promise<void> {
     screens: frozen.screens,
     docLanguage: packDocLanguage(settings),
   }
+  // The OUTCOME of the capture itself, before any editing: how many displays it
+  // froze and how many of them actually had a replay (issue #60). This is the
+  // line that turns "recording did not work" into a checkable fact.
+  const withReplay = frozen.displays.filter((d) => d.replayWebm !== null).length
+  logInfo(
+    `[capture] captured ${frozen.displays.length} display(s), ${withReplay} with a replay ` +
+      `(${Math.round(replayDurationMs)}ms on the focused display)`,
+  )
+
   let handle: PackHandle | null = null
   try {
     handle = await savePack(initialSave)
+    logInfo(`[capture] save-first wrote ${path.basename(handle.dirPath)}`)
   } catch (err) {
-    console.error('capturepack: save-first failed:', errorMessage(err))
+    logError('capturepack: save-first failed:', err)
   }
 
   // The dump's coordinates only become meaningful once the FOCUSED display is
@@ -484,7 +504,7 @@ async function runFlow(settings: Settings): Promise<void> {
   const uiaReady: Promise<UiaPluginPayload | null> = uiaDump
     .then((raw) => (raw === null ? null : mapUiaToSnapshot(raw, uiaTargets)))
     .catch((err: unknown) => {
-      console.error('capturepack: mapping the UI Automation dump failed:', errorMessage(err))
+      logError('capturepack: mapping the UI Automation dump failed:', err)
       return null
     })
   // Landing the payload in the SAVE-FIRST folder means a cancelled editor (or a
@@ -496,7 +516,7 @@ async function runFlow(settings: Settings): Promise<void> {
       await writeUiaPlugin(saved.dirPath, payload)
       await addManifestPlugin(saved, uiaPluginDeclaration())
     } catch (err) {
-      console.error(`capturepack: writing plugins/${UIA_PLUGIN_NAME} failed:`, errorMessage(err))
+      logError(`capturepack: writing plugins/${UIA_PLUGIN_NAME} failed:`, err)
     }
     return payload
   })
@@ -515,7 +535,7 @@ async function runFlow(settings: Settings): Promise<void> {
       if (settled.ready && uiaEmpty(uia)) {
         // GOAL "Silence is not absence": the editor is about to open with
         // picking off, and until this line the only trace was an empty index.
-        console.warn(
+        logWarn(
           'capturepack: object picking: the UI Automation dump produced nothing usable for this capture',
         )
       }
@@ -571,7 +591,7 @@ async function runFlow(settings: Settings): Promise<void> {
           .then((payload) => {
             if (editor.isDestroyed()) return
             if (uiaEmpty(payload)) {
-              console.warn(
+              logWarn(
                 'capturepack: object picking: the UI Automation dump produced nothing usable for this capture',
               )
             }
@@ -591,7 +611,7 @@ async function runFlow(settings: Settings): Promise<void> {
           // one thing "Silence is not absence" forbids. However this promise
           // ended, the editor gets an answer.
           .catch((err: unknown) => {
-            console.error('capturepack: pushing object data to the editor failed:', errorMessage(err))
+            logError('capturepack: pushing object data to the editor failed:', err)
             try {
               if (editor.isDestroyed()) return
               editor.webContents.send(IPC.editorUiaObjects, {
@@ -608,6 +628,7 @@ async function runFlow(settings: Settings): Promise<void> {
   })
 
   const outcome = await runEditor(editor, events, t0Ms)
+  logInfo(`[capture] editor closed: ${outcome.kind}`)
   if (outcome.kind === 'cancel') {
     // A cancelled editor still leaves the save-first pack behind. Its raw ring
     // segment may exceed N, so cut that pack in the same serialized background
@@ -626,7 +647,7 @@ async function runFlow(settings: Settings): Promise<void> {
           ),
         )
         .catch((err: unknown) =>
-          console.error('capturepack: cancelled capture finalization failed:', errorMessage(err)),
+          logError('capturepack: cancelled capture finalization failed:', err),
         )
     }
     return
@@ -710,6 +731,12 @@ async function runFlow(settings: Settings): Promise<void> {
     if (handle === null) handle = await savePack(initialSave)
     const savedHandle = handle
     const hasReplay = replayWebm !== null
+    // The SAVE result (issue #60): pack name, annotation count, and whether a
+    // replay went in — the three things every later question about a pack asks.
+    logInfo(
+      `[capture] saved ${path.basename(savedHandle.dirPath)}: ` +
+        `${input.annotations.length} annotation(s), replay ${hasReplay ? 'included' : 'MISSING'}`,
+    )
     showSaveToast({
       folderPath: savedHandle.dirPath,
       hasBlur: input.annotations.some((a) => a.blur),
@@ -765,6 +792,7 @@ async function runFlow(settings: Settings): Promise<void> {
       await finalize()
     }
   } catch (err) {
+    logError('[capture] save failed:', err)
     dialog.showErrorBox(uiT(settings)('app.saveFailedTitle'), errorMessage(err))
   }
 }
@@ -808,10 +836,7 @@ async function cutCapturedDisplays(
     } catch (err) {
       // A secondary replay must never hold up or invalidate the focused pack.
       // Drop that replay declaration; its native snapshot remains annotatable.
-      console.error(
-        `capturepack: exact replay cut failed for display ${display.index}:`,
-        errorMessage(err),
-      )
+      logError(`capturepack: exact replay cut failed for display ${display.index}:`, err)
       result.push(withoutFrozenReplay(display))
     }
   }
@@ -946,7 +971,7 @@ async function handleExactCutFailure(
 ): Promise<void> {
   // Never fall back to the oversized ring segment: screenshot-only is the
   // honest degradation and preserves the "never longer than N" guarantee.
-  console.error('capturepack: exact replay cut failed; saving screenshot-only:', errorMessage(err))
+  logError('capturepack: exact replay cut failed; saving screenshot-only:', err)
   const displays = frozen.displays.map(withoutFrozenReplay)
   const fallback: ExportInput = {
     ...input,
@@ -969,7 +994,7 @@ async function handleExactCutFailure(
     updateToastRenderStatus(handle.dirPath, 'failed')
     startFreshCaptureRenders(handle, fallback, displays, focusedIndex, settings, handle.dirPath)
   } catch (fallbackErr) {
-    console.error('capturepack: screenshot-only trim fallback failed:', errorMessage(fallbackErr))
+    logError('capturepack: screenshot-only trim fallback failed:', fallbackErr)
   }
   void dialog.showMessageBox({
     type: 'error',
@@ -998,10 +1023,7 @@ async function finalizeCancelledExactReplay(
       settings.fps,
     )
   } catch (err) {
-    console.error(
-      'capturepack: cancelled capture exact cut failed; keeping it screenshot-only:',
-      errorMessage(err),
-    )
+    logError('capturepack: cancelled capture exact cut failed; keeping it screenshot-only:', err)
     displays = frozen.displays.map(withoutFrozenReplay)
   }
   const finalFocused = displays.find((d) => d.focused) ?? withoutFrozenReplay(focused)
@@ -1322,6 +1344,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
       packDocLanguage(settings),
     )
   } catch (err) {
+    logError('[capture] re-edit save failed:', err)
     dialog.showErrorBox(uiT(settings)('app.saveFailedTitle'), errorMessage(err))
   }
 }
@@ -1800,7 +1823,7 @@ function createEditorWindow(bounds: EditorWindowBounds, settings: Settings): Edi
     try {
       persistSettings({ ...settings })
     } catch (err) {
-      console.error('capturepack: saving the editor window mode failed:', errorMessage(err))
+      logError('capturepack: saving the editor window mode failed:', err)
     }
   }
 
@@ -1895,7 +1918,7 @@ function createEditorWindow(bounds: EditorWindowBounds, settings: Settings): Edi
     try {
       persistSettings({ ...settings })
     } catch (err) {
-      console.error('capturepack: saving the shortcut overlay state failed:', errorMessage(err))
+      logError('capturepack: saving the shortcut overlay state failed:', err)
     }
   }
   ipcMain.on(IPC.editorSetShortcutOverlay, onSetShortcutOverlay)

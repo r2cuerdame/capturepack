@@ -11,6 +11,7 @@
 import { app } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import type { UpdaterStatusPayload } from '../shared/ipc'
+import { logError } from './log'
 
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000
 // How long "You're up to date" stays on the tray item after a finished check
@@ -121,8 +122,10 @@ export function initUpdater(opts: {
   })
   autoUpdater.on('error', (err) => {
     // Log and report only — a failed check or download leaves the running
-    // version untouched and the next scheduled check will retry.
-    console.error('[updater]', err)
+    // version untouched and the next scheduled check will retry. It goes to the
+    // log file too (issue #60): an updater that quietly fails for weeks is
+    // otherwise indistinguishable from one that has nothing to do.
+    logError('[updater] check/download failed:', err)
     setStatus({ state: 'error', message: err instanceof Error ? err.message : String(err) })
   })
 

@@ -6,6 +6,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { app } from 'electron'
 import * as http from 'node:http'
 import type { Settings } from '../../shared/types'
+import { logError, logInfo, logWarn } from '../log'
 import { createPackStore } from './store'
 import { registerTools } from './tools'
 
@@ -31,7 +32,7 @@ export function startMcpServer(settings: Settings): McpServerHandle | null {
   if (!settings.mcpReadOnly) {
     // The read-only guarantee is unconditional in this version; the key exists
     // so a future opt-in write mode has a stable name.
-    console.log('capturepack: mcpReadOnly=false is ignored — this version of the MCP server is always read-only.')
+    logWarn('capturepack: mcpReadOnly=false is ignored — this version of the MCP server is always read-only.')
   }
 
   // Shared across requests: the pack index and the in-memory "current pack" pin.
@@ -89,7 +90,7 @@ export function startMcpServer(settings: Settings): McpServerHandle | null {
       await server.connect(transport)
       await transport.handleRequest(req, res)
     } catch (err) {
-      console.error('capturepack: mcp request failed:', err)
+      logError('capturepack: mcp request failed:', err)
       if (!res.headersSent) {
         res.writeHead(500, { 'content-type': 'application/json' })
         res.end(
@@ -112,11 +113,11 @@ export function startMcpServer(settings: Settings): McpServerHandle | null {
   httpServer.on('error', (err: NodeJS.ErrnoException) => {
     boundEndpoint = ''
     if (err.code === 'EADDRINUSE') {
-      console.error(
+      logError(
         `capturepack: MCP port ${settings.mcpPort} is already in use — MCP server disabled for this run (the app keeps running).`,
       )
     } else {
-      console.error('capturepack: MCP server error:', err.message)
+      logError('capturepack: MCP server error:', err)
     }
   })
 
@@ -125,7 +126,7 @@ export function startMcpServer(settings: Settings): McpServerHandle | null {
     const address = httpServer.address()
     const port = typeof address === 'object' && address !== null ? address.port : settings.mcpPort
     boundEndpoint = `http://${BIND_HOST}:${port}${MCP_PATH}`
-    console.log(`capturepack: MCP server listening on ${boundEndpoint}`)
+    logInfo(`[mcp] server listening on ${boundEndpoint}`)
   })
 
   return {

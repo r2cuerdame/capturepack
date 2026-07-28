@@ -34,6 +34,7 @@ function el<T extends HTMLElement>(id: string): T {
 
 const iconEl = el<HTMLImageElement>('icon')
 const versionEl = el<HTMLElement>('version')
+const lastRunEl = el<HTMLElement>('lastRun')
 const updateStateEl = el<HTMLElement>('updateState')
 const restartBtn = el<HTMLButtonElement>('restartBtn')
 const welcomeBtn = el<HTMLButtonElement>('welcomeBtn')
@@ -46,7 +47,25 @@ function render(info: AboutInfoResult): void {
     iconEl.src = info.iconDataUrl
     iconEl.hidden = false
   }
+  renderLastRun(t, info)
   renderUpdate(t, info)
+}
+
+/**
+ * How the previous run ended (issue #61). The timestamp is formatted HERE, in
+ * the UI language, because only the renderer knows how this user reads a date —
+ * main sends the ISO instant and nothing else.
+ */
+function renderLastRun(t: TranslateFn, info: AboutInfoResult): void {
+  const { status, endedAt } = info.lastRun
+  const when = endedAt === null ? '' : new Date(endedAt).toLocaleString(info.uiLanguage)
+  lastRunEl.textContent =
+    status === 'none'
+      ? t('about.lastRunNone')
+      : status === 'unclean'
+        ? t('about.lastRunUnclean', { when })
+        : t('about.lastRunClean', { when })
+  lastRunEl.classList.toggle('unclean', status === 'unclean')
 }
 
 function renderUpdate(t: TranslateFn, info: AboutInfoResult): void {

@@ -62,6 +62,7 @@ const EN = {
   'tray.captureNow': 'Capture now  {hotkey}',
   'tray.history': 'History',
   'tray.openOutput': 'Open output folder',
+  'tray.openLogs': 'Open logs folder',
   'tray.settings': 'Settings…',
   'tray.checkUpdates': 'Check for updates…',
   'tray.checkingUpdates': 'Checking for updates…',
@@ -79,6 +80,8 @@ const EN = {
   'tray.recordingStarted':
     'The last {seconds} seconds are always available. Press {hotkey} to capture.',
   'tray.recordingFailed': 'Replay buffer is not recording: {reason}',
+  'tray.previousRunUnclean':
+    'CapturePack stopped unexpectedly on {when}. The replay buffer was not recording between then and now.',
 
   'recorder.screenUnavailable': 'screen capture is unavailable',
   'recorder.recorderUnavailable': 'the video recorder stopped',
@@ -339,6 +342,9 @@ const EN = {
 
   'about.windowTitle': 'CapturePack — About',
   'about.version': 'Version {version}',
+  'about.lastRunClean': 'Previous run: closed normally · {when}',
+  'about.lastRunUnclean': 'Previous run: stopped unexpectedly · {when}',
+  'about.lastRunNone': 'Previous run: nothing recorded yet',
   'about.stateUpToDate': 'You are up to date',
   'about.stateChecking': 'Checking…',
   'about.stateAvailable': 'Update available: v{version}',
@@ -426,6 +432,7 @@ const KO: Record<I18nKey, string> = {
   'tray.captureNow': '지금 캡처  {hotkey}',
   'tray.history': '기록',
   'tray.openOutput': '저장 폴더 열기',
+  'tray.openLogs': '로그 폴더 열기',
   'tray.settings': '설정…',
   'tray.checkUpdates': '업데이트 확인…',
   'tray.checkingUpdates': '업데이트 확인 중…',
@@ -442,6 +449,7 @@ const KO: Record<I18nKey, string> = {
   'tray.tooltipStopped': 'CapturePack — 녹화 안 됨 — {reason}',
   'tray.recordingStarted': '최근 {seconds}초를 항상 사용할 수 있습니다. {hotkey}를 눌러 캡처하세요.',
   'tray.recordingFailed': '리플레이 버퍼가 녹화 중이 아닙니다: {reason}',
+  'tray.previousRunUnclean': 'CapturePack이 {when}에 예기치 않게 종료되었습니다. 그때부터 지금까지 리플레이 버퍼는 녹화되지 않았습니다.',
 
   'recorder.screenUnavailable': '화면 캡처를 사용할 수 없음',
   'recorder.recorderUnavailable': '비디오 녹화기가 중지됨',
@@ -689,6 +697,9 @@ const KO: Record<I18nKey, string> = {
 
   'about.windowTitle': 'CapturePack — 정보',
   'about.version': '버전 {version}',
+  'about.lastRunClean': '이전 실행: 정상 종료 · {when}',
+  'about.lastRunUnclean': '이전 실행: 예기치 않게 중단됨 · {when}',
+  'about.lastRunNone': '이전 실행: 기록 없음',
   'about.stateUpToDate': '최신 버전을 사용 중입니다',
   'about.stateChecking': '확인 중…',
   'about.stateAvailable': '업데이트 있음: v{version}',
@@ -769,6 +780,7 @@ const JA: Record<I18nKey, string> = {
   'tray.captureNow': '今すぐキャプチャ  {hotkey}',
   'tray.history': '履歴',
   'tray.openOutput': '保存フォルダーを開く',
+  'tray.openLogs': 'ログフォルダーを開く',
   'tray.settings': '設定…',
   'tray.checkUpdates': 'アップデートを確認…',
   'tray.checkingUpdates': 'アップデートを確認中…',
@@ -786,6 +798,7 @@ const JA: Record<I18nKey, string> = {
   'tray.recordingStarted':
     '直近 {seconds} 秒をいつでも利用できます。{hotkey} を押してキャプチャしてください。',
   'tray.recordingFailed': 'リプレイバッファーは録画していません: {reason}',
+  'tray.previousRunUnclean': 'CapturePack は {when} に予期せず終了しました。それ以降、リプレイバッファーは録画していません。',
 
   'recorder.screenUnavailable': '画面キャプチャを利用できません',
   'recorder.recorderUnavailable': 'ビデオレコーダーが停止しました',
@@ -1035,6 +1048,9 @@ const JA: Record<I18nKey, string> = {
 
   'about.windowTitle': 'CapturePack — 情報',
   'about.version': 'バージョン {version}',
+  'about.lastRunClean': '前回の実行: 正常に終了 · {when}',
+  'about.lastRunUnclean': '前回の実行: 予期せず停止 · {when}',
+  'about.lastRunNone': '前回の実行: 記録なし',
   'about.stateUpToDate': '最新の状態です',
   'about.stateChecking': '確認中…',
   'about.stateAvailable': 'アップデートがあります: v{version}',
@@ -1115,6 +1131,7 @@ const ZH: Record<I18nKey, string> = {
   'tray.captureNow': '立即捕获  {hotkey}',
   'tray.history': '历史记录',
   'tray.openOutput': '打开输出文件夹',
+  'tray.openLogs': '打开日志文件夹',
   'tray.settings': '设置…',
   'tray.checkUpdates': '检查更新…',
   'tray.checkingUpdates': '正在检查更新…',
@@ -1131,6 +1148,7 @@ const ZH: Record<I18nKey, string> = {
   'tray.tooltipStopped': 'CapturePack — 未录制 — {reason}',
   'tray.recordingStarted': '最近 {seconds} 秒现在始终可用。按 {hotkey} 即可捕获。',
   'tray.recordingFailed': '回放缓冲区未在录制: {reason}',
+  'tray.previousRunUnclean': 'CapturePack 于 {when} 意外停止。从那时起到现在，回放缓冲区都没有录制。',
 
   'recorder.screenUnavailable': '屏幕捕获不可用',
   'recorder.recorderUnavailable': '视频录制器已停止',
@@ -1375,6 +1393,9 @@ const ZH: Record<I18nKey, string> = {
 
   'about.windowTitle': 'CapturePack — 关于',
   'about.version': '版本 {version}',
+  'about.lastRunClean': '上次运行：正常关闭 · {when}',
+  'about.lastRunUnclean': '上次运行：意外停止 · {when}',
+  'about.lastRunNone': '上次运行：暂无记录',
   'about.stateUpToDate': '已是最新版本',
   'about.stateChecking': '正在检查…',
   'about.stateAvailable': '有可用更新：v{version}',
@@ -1455,6 +1476,7 @@ const ES: Record<I18nKey, string> = {
   'tray.captureNow': 'Capturar ahora  {hotkey}',
   'tray.history': 'Historial',
   'tray.openOutput': 'Abrir carpeta de salida',
+  'tray.openLogs': 'Abrir carpeta de registros',
   'tray.settings': 'Ajustes…',
   'tray.checkUpdates': 'Buscar actualizaciones…',
   'tray.checkingUpdates': 'Buscando actualizaciones…',
@@ -1472,6 +1494,8 @@ const ES: Record<I18nKey, string> = {
   'tray.recordingStarted':
     'Los últimos {seconds} segundos están siempre disponibles. Pulsa {hotkey} para capturar.',
   'tray.recordingFailed': 'El búfer de repetición no está grabando: {reason}',
+  'tray.previousRunUnclean':
+    'CapturePack se detuvo inesperadamente el {when}. El búfer de repetición no estuvo grabando desde entonces hasta ahora.',
 
   'recorder.screenUnavailable': 'la captura de pantalla no está disponible',
   'recorder.recorderUnavailable': 'la grabadora de vídeo se detuvo',
@@ -1722,6 +1746,9 @@ const ES: Record<I18nKey, string> = {
 
   'about.windowTitle': 'CapturePack — Acerca de',
   'about.version': 'Versión {version}',
+  'about.lastRunClean': 'Ejecución anterior: cierre normal · {when}',
+  'about.lastRunUnclean': 'Ejecución anterior: detenida inesperadamente · {when}',
+  'about.lastRunNone': 'Ejecución anterior: aún sin registro',
   'about.stateUpToDate': 'Estás al día',
   'about.stateChecking': 'Comprobando…',
   'about.stateAvailable': 'Actualización disponible: v{version}',
@@ -1803,6 +1830,7 @@ const FR: Record<I18nKey, string> = {
   'tray.captureNow': 'Capturer maintenant  {hotkey}',
   'tray.history': 'Historique',
   'tray.openOutput': 'Ouvrir le dossier de sortie',
+  'tray.openLogs': 'Ouvrir le dossier des journaux',
   'tray.settings': 'Paramètres…',
   'tray.checkUpdates': 'Rechercher des mises à jour…',
   'tray.checkingUpdates': 'Recherche de mises à jour…',
@@ -1820,6 +1848,8 @@ const FR: Record<I18nKey, string> = {
   'tray.recordingStarted':
     'Les {seconds} dernières secondes sont toujours disponibles. Appuyez sur {hotkey} pour capturer.',
   'tray.recordingFailed': 'La mémoire tampon de relecture n’enregistre pas: {reason}',
+  'tray.previousRunUnclean':
+    'CapturePack s’est arrêté de façon inattendue le {when}. La mémoire tampon de relecture n’a rien enregistré depuis.',
 
   'recorder.screenUnavailable': 'la capture d’écran est indisponible',
   'recorder.recorderUnavailable': 'l’enregistreur vidéo s’est arrêté',
@@ -2071,6 +2101,9 @@ const FR: Record<I18nKey, string> = {
 
   'about.windowTitle': 'CapturePack — À propos',
   'about.version': 'Version {version}',
+  'about.lastRunClean': 'Exécution précédente : arrêt normal · {when}',
+  'about.lastRunUnclean': 'Exécution précédente : arrêt inattendu · {when}',
+  'about.lastRunNone': 'Exécution précédente : rien d’enregistré',
   'about.stateUpToDate': 'Vous êtes à jour',
   'about.stateChecking': 'Vérification…',
   'about.stateAvailable': 'Mise à jour disponible : v{version}',
@@ -2152,6 +2185,7 @@ const DE: Record<I18nKey, string> = {
   'tray.captureNow': 'Jetzt aufnehmen  {hotkey}',
   'tray.history': 'Verlauf',
   'tray.openOutput': 'Ausgabeordner öffnen',
+  'tray.openLogs': 'Protokollordner öffnen',
   'tray.settings': 'Einstellungen…',
   'tray.checkUpdates': 'Nach Updates suchen…',
   'tray.checkingUpdates': 'Suche nach Updates…',
@@ -2169,6 +2203,8 @@ const DE: Record<I18nKey, string> = {
   'tray.recordingStarted':
     'Die letzten {seconds} Sekunden sind immer verfügbar. Mit {hotkey} erfassen.',
   'tray.recordingFailed': 'Der Replay-Puffer zeichnet nicht auf: {reason}',
+  'tray.previousRunUnclean':
+    'CapturePack wurde am {when} unerwartet beendet. Der Replay-Puffer hat seitdem nicht aufgezeichnet.',
 
   'recorder.screenUnavailable': 'die Bildschirmaufnahme ist nicht verfügbar',
   'recorder.recorderUnavailable': 'der Videorekorder wurde angehalten',
@@ -2422,6 +2458,9 @@ const DE: Record<I18nKey, string> = {
 
   'about.windowTitle': 'CapturePack — Über',
   'about.version': 'Version {version}',
+  'about.lastRunClean': 'Vorheriger Lauf: normal beendet · {when}',
+  'about.lastRunUnclean': 'Vorheriger Lauf: unerwartet gestoppt · {when}',
+  'about.lastRunNone': 'Vorheriger Lauf: noch nichts aufgezeichnet',
   'about.stateUpToDate': 'Auf dem neuesten Stand',
   'about.stateChecking': 'Wird geprüft…',
   'about.stateAvailable': 'Update verfügbar: v{version}',
@@ -2503,6 +2542,7 @@ const PT: Record<I18nKey, string> = {
   'tray.captureNow': 'Capturar agora  {hotkey}',
   'tray.history': 'Histórico',
   'tray.openOutput': 'Abrir pasta de saída',
+  'tray.openLogs': 'Abrir pasta de logs',
   'tray.settings': 'Configurações…',
   'tray.checkUpdates': 'Procurar atualizações…',
   'tray.checkingUpdates': 'Procurando atualizações…',
@@ -2520,6 +2560,8 @@ const PT: Record<I18nKey, string> = {
   'tray.recordingStarted':
     'Os últimos {seconds} segundos estão sempre disponíveis. Pressione {hotkey} para capturar.',
   'tray.recordingFailed': 'O buffer de replay não está gravando: {reason}',
+  'tray.previousRunUnclean':
+    'O CapturePack parou inesperadamente em {when}. O buffer de replay não gravou de lá até agora.',
 
   'recorder.screenUnavailable': 'a captura de tela não está disponível',
   'recorder.recorderUnavailable': 'o gravador de vídeo parou',
@@ -2771,6 +2813,9 @@ const PT: Record<I18nKey, string> = {
 
   'about.windowTitle': 'CapturePack — Sobre',
   'about.version': 'Versão {version}',
+  'about.lastRunClean': 'Execução anterior: encerrada normalmente · {when}',
+  'about.lastRunUnclean': 'Execução anterior: parou inesperadamente · {when}',
+  'about.lastRunNone': 'Execução anterior: ainda sem registro',
   'about.stateUpToDate': 'Você está atualizado',
   'about.stateChecking': 'Verificando…',
   'about.stateAvailable': 'Atualização disponível: v{version}',
@@ -2852,6 +2897,7 @@ const RU: Record<I18nKey, string> = {
   'tray.captureNow': 'Захватить сейчас  {hotkey}',
   'tray.history': 'История',
   'tray.openOutput': 'Открыть папку вывода',
+  'tray.openLogs': 'Открыть папку журналов',
   'tray.settings': 'Настройки…',
   'tray.checkUpdates': 'Проверить обновления…',
   'tray.checkingUpdates': 'Проверка обновлений…',
@@ -2869,6 +2915,8 @@ const RU: Record<I18nKey, string> = {
   'tray.recordingStarted':
     'Последние {seconds} секунд всегда доступны. Нажмите {hotkey}, чтобы сделать захват.',
   'tray.recordingFailed': 'Буфер повтора не записывается: {reason}',
+  'tray.previousRunUnclean':
+    'CapturePack неожиданно остановился {when}. С этого момента и до сих пор буфер повтора не записывал.',
 
   'recorder.screenUnavailable': 'захват экрана недоступен',
   'recorder.recorderUnavailable': 'видеорекордер остановлен',
@@ -3117,6 +3165,9 @@ const RU: Record<I18nKey, string> = {
 
   'about.windowTitle': 'CapturePack — О программе',
   'about.version': 'Версия {version}',
+  'about.lastRunClean': 'Предыдущий запуск: обычное завершение · {when}',
+  'about.lastRunUnclean': 'Предыдущий запуск: неожиданно остановлен · {when}',
+  'about.lastRunNone': 'Предыдущий запуск: записей пока нет',
   'about.stateUpToDate': 'У вас последняя версия',
   'about.stateChecking': 'Проверка…',
   'about.stateAvailable': 'Доступно обновление: v{version}',
