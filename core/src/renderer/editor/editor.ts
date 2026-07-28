@@ -460,8 +460,9 @@ function toggleWindowMode(): void {
 // bar"). Every captured display is on the board, drawn with its own caption and
 // an accent frame around the focused one, so a row of monitor buttons in the
 // one place that must stay uncluttered was redundant chrome. Framing a single
-// display is a keyboard gesture — 1..9, and the key left of 1 (`, or Esc) to
-// fit the whole board — discoverable through the help sheet.
+// display is a keyboard gesture — 1..9, and the key left of 1 (`, or 0) to fit
+// the whole board — discoverable through the help sheet. NEVER Esc (issue #53):
+// framing is a VIEW state, and Esc undoes no other view state either.
 // ---------------------------------------------------------------------------
 
 /** The caption drawn inside a display's own frame on the board. */
@@ -1304,17 +1305,58 @@ function openTextEditor(
   if (selectAll) textEditor.select()
 }
 
+/**
+ * Gap between the description input and the bottom of its box, in #frame's own
+ * (untransformed) space — so it rides the viewport zoom exactly as the box does,
+ * unlike the box header's gap, which is screen px because the header is not in
+ * the frame at all.
+ */
+const TEXT_EDITOR_GAP = 6
+
 function positionTextEditor(): void {
   if (!textAnchor || textDisplay === null) return
   // The input lives in #frame (BOARD CSS space), so the box's native anchor is
   // converted through its own display first — otherwise a box on the second
   // screen would get its description input over the first one.
   const topLeft = toBoardPoint(textDisplay, textAnchor.x, textAnchor.y + textAnchor.height)
-  // Clamped inside #frame for the same reason the box header is: a 140px-min
-  // input anchored to a box near the right edge would otherwise run off it.
-  const maxLeft = Math.max(0, frame.clientWidth - textEditor.offsetWidth)
-  textEditor.style.left = `${Math.max(0, Math.min(topLeft.x * fitScale, maxLeft))}px`
-  textEditor.style.top = `${topLeft.y * fitScale + 6}px`
+  const w = textEditor.offsetWidth
+  const h = textEditor.offsetHeight
+  // THE INPUT MUST BE ON SCREEN, not merely inside the board. #frame is
+  // transformed (zoom/pan) and #stage clips it, so "inside #frame" and "visible"
+  // are two different constraints, and only the second one matters: this element
+  // is FOCUSED the instant it is shown (openTextEditor), and a focused field the
+  // user cannot see is a field they type into blind.
+  //
+  // It used to be rescued by accident. Under `overflow: hidden` #stage was a
+  // scroll container, so focus() scrolled the caret back into view — the very
+  // mechanism that turned out to be issue #50's suspect and the reason #stage is
+  // now `overflow: clip`. Nothing scrolls any more, so the band of #frame that
+  // #stage actually shows is computed here instead.
+  const fr = frame.getBoundingClientRect()
+  const sr = stage.getBoundingClientRect()
+  // Frame-local px -> viewport px: clientWidth is the UNtransformed width and the
+  // client rect is the transformed one, so their ratio is exactly the viewport
+  // zoom. Guarded because a frame with no width would divide by zero on the very
+  // first layout, before the board has been sized.
+  const scale = frame.clientWidth > 0 && fr.width > 0 ? fr.width / frame.clientWidth : 1
+  // The visible band, expressed as the range `left`/`top` may take.
+  const minLeft = Math.max(0, (sr.left - fr.left) / scale)
+  const maxLeft = Math.min(
+    // Held inside #frame horizontally for the reason it always was: a 140px-min
+    // input anchored to a box near the right edge would otherwise run off the
+    // board. There is deliberately no such limit VERTICALLY — the anchor sits
+    // below the box, and for a box on the board's bottom row that is a few px of
+    // dark stage background, which is visible and correct; pulling it back inside
+    // #frame would drop it onto the box instead.
+    Math.max(0, frame.clientWidth - w),
+    (sr.right - fr.left) / scale - w,
+  )
+  const minTop = Math.max(0, (sr.top - fr.top) / scale)
+  const maxTop = (sr.bottom - fr.top) / scale - h
+  // Math.max LAST, so the lower bound wins when the visible band is narrower than
+  // the input itself: showing the start of the field beats showing none of it.
+  textEditor.style.left = `${Math.max(minLeft, Math.min(topLeft.x * fitScale, maxLeft))}px`
+  textEditor.style.top = `${Math.max(minTop, Math.min(topLeft.y * fitScale + TEXT_EDITOR_GAP, maxTop))}px`
 }
 
 /** Enter/blur path: commits the pending box or applies the text edit. */
@@ -1633,10 +1675,21 @@ function positionBoxHeader(
   // stage and there is genuinely no room (issue #50). Flipping keeps the header
   // touching its box, which sliding it down the top edge would not: it would
   // sit ON the box, over the pixels being annotated.
+  //
+  // BELOW IS ONLY AN OPTION WHEN IT FITS. A box TALLER THAN THE STAGE has room
+  // neither above nor below, and that is not exotic: the editor opens framed on
+  // the focused display at roughly 1.9x-2.2x on a multi-display capture, where a
+  // box around a maximized window is easily taller than the stage. Taking the
+  // flip there and clamping it would park the header flush with the BOTTOM edge
+  // — deep inside the box, on the very pixels the flip exists to keep clear.
+  // The top edge is the honest answer: it covers the box's first rows instead of
+  // its middle, and it is where this landed before the flip existed.
   const above = topLeft.y - BOX_HEADER_GAP - h
   const below = bottomRight.y + BOX_HEADER_GAP
+  const fitsBelow = below + h <= stage.clientHeight
+  const top = above >= 0 ? above : fitsBelow ? below : 0
   const maxTop = Math.max(0, stage.clientHeight - h)
-  boxHeader.style.top = `${Math.max(0, Math.min(above >= 0 ? above : below, maxTop))}px`
+  boxHeader.style.top = `${Math.max(0, Math.min(top, maxTop))}px`
 }
 
 /**
@@ -2520,6 +2573,22 @@ overlay.addEventListener('dblclick', (e) => {
   schedulePaint()
 })
 
+/**
+ * The answer the last idle-hover probe gave — 'move', a resize arrow, or
+ * 'default'. Remembered because the pan modifier OVERRIDES the overlay's cursor
+ * while it is held, and letting go has to put THIS back rather than a bare arrow
+ * (issue #55): the pointer has not moved, so no probe is coming to re-answer it,
+ * and a box sitting right under the cursor would stop advertising that it can be
+ * dragged until the user jiggled the mouse.
+ */
+let hoverCursor = 'default'
+
+/** Applies an idle-hover answer and records it for syncPanCursor to restore. */
+function setHoverCursor(cursor: string): void {
+  hoverCursor = cursor
+  overlay.style.cursor = cursor
+}
+
 /** Idle-hover cursor: resize arrows over handles, move over a box, else default. */
 function syncHoverCursor(e: PointerEvent): void {
   // Space is the PAN MODIFIER only where panning is possible, which is exactly
@@ -2544,7 +2613,7 @@ function syncHoverCursor(e: PointerEvent): void {
     // nothing to pick and nothing a click could snap. Said once, because a
     // pointer that finds no outline there is otherwise indistinguishable from
     // picking being broken.
-    overlay.style.cursor = 'default'
+    setHoverCursor('default')
     probeObjectHover(null)
     if (board !== null && board.displays.length > 1 && hasObjectData()) {
       showObjectHintOnce('gutter', t('editor.objectGutter'), 'answer')
@@ -2556,7 +2625,7 @@ function syncHoverCursor(e: PointerEvent): void {
   if (sel !== null && displayIndexOf(sel) === hit.d.index) {
     const handle = handleAt(sel, hit.x, hit.y, ui)
     if (handle !== null) {
-      overlay.style.cursor = handle === 'nw' || handle === 'se' ? 'nwse-resize' : 'nesw-resize'
+      setHoverCursor(handle === 'nw' || handle === 'se' ? 'nwse-resize' : 'nesw-resize')
       probeObjectHover(null)
       return
     }
@@ -2570,7 +2639,7 @@ function syncHoverCursor(e: PointerEvent): void {
   const pickWins =
     hoverObject !== null &&
     (box === null || pickBeatsBox(hoverObject, box, { x: hit.x, y: hit.y, ui }))
-  overlay.style.cursor = box !== null && !pickWins ? 'move' : 'default'
+  setHoverCursor(box !== null && !pickWins ? 'move' : 'default')
 }
 
 // The outline must not linger once the pointer leaves the canvas.
@@ -2666,10 +2735,18 @@ stage.addEventListener(
 )
 
 // Chromium answers a middle press with AUTOSCROLL — the little four-way scroll
-// widget — and that is a default action of the MOUSE event, which preventing
-// the pointer event does not cancel. Suppressed on the stage only, and only for
-// the middle button, so nothing else about the wheel changes: rotating it still
-// scrubs the clock and Ctrl+wheel still zooms (issue #55).
+// widget — and it is the MOUSE event that carries that default action.
+//
+// This is for the presses that are NOT pans. When a pan starts, the handler
+// above already calls preventDefault() on the pointerdown, and a cancelled
+// pointerdown suppresses its compatibility mousedown outright, so this listener
+// never even runs. What is left is exactly the middle presses isPanPress()
+// turns down — a board with nothing to pan (the zoom the editor OPENS at) and a
+// press arriving mid-box-drag — where nothing else would stop the widget from
+// appearing over the capture.
+//
+// Stage only, middle button only, so nothing else about the wheel changes:
+// rotating it still scrubs the clock and Ctrl+wheel still zooms (issue #55).
 stage.addEventListener('mousedown', (e) => {
   if (e.button === 1) e.preventDefault()
 })
@@ -2711,12 +2788,12 @@ function syncPanCursor(): void {
   stage.style.cursor = cursor
   // #overlay covers the whole board and carries its OWN hover cursor (move,
   // resize arrows), so the stage's would never be seen over the very pixels
-  // being panned. Overridden while a pan is possible or in progress; put back
-  // on release, after which the next hover probe re-answers it.
-  if (cursor !== '') overlay.style.cursor = cursor
-  else if (overlay.style.cursor === 'grab' || overlay.style.cursor === 'grabbing') {
-    overlay.style.cursor = 'default'
-  }
+  // being panned. Overridden while a pan is possible or in progress, and on
+  // release the LAST HOVER ANSWER goes back — not 'default'. Releasing Space (or
+  // the middle button) over a box does not move the pointer, so nothing would
+  // re-probe: a plain 'default' left an arrow sitting on a box the user can drag
+  // until they jiggled the mouse (issue #55).
+  overlay.style.cursor = cursor !== '' ? cursor : hoverCursor
 }
 
 // ---------------------------------------------------------------------------
