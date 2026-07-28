@@ -655,13 +655,25 @@ rather than delaying the first paint.
 `open-browser` — and the user sees them before enabling it. Anything that sends pack data off the
 machine says so in those words.
 
-**What this project maintains, and what it does not.** Officially: **Chrome Web DOM**, one
-Provider. As Core platform infrastructure, not a Provider: the **Windows Surface Timeline** and
-the **Surface Resolver**. Everything else — Windows UI Automation objects, Unreal, Unity, other
-applications — is community or external. Core does not interpret a Windows UI tree or an Unreal
-object tree; keeping that line is what makes the plugin API real rather than decorative.
-(Note the tension to resolve before building: object picking ships UIA *inside Core* today. Either
-it becomes the first community Provider on this protocol, or the boundary above needs restating.)
+**What this project maintains, and what it does not.** Two official Providers — **Chrome Web DOM**
+and **Windows UI Automation** — plus, as Core platform infrastructure and explicitly *not*
+Providers, the **Windows Surface Timeline** and the **Surface Resolver**. Unreal, Unity and other
+applications are community or external, and Core does not interpret their object trees.
+
+UIA stays in Core because it is the floor under object picking on the platform CapturePack ships
+on: with no plugin installed at all, hovering any window must still offer something, and that
+guarantee cannot depend on a third party. But **being maintained by us is about who fixes it, not
+about what it is allowed to do**:
+
+> **Windows UI Automation is the reference implementation of the Provider protocol.** It consumes
+> the same public API an external Provider gets — the same clock, the same surface claims, the
+> same `hitTest`, the same timeouts, the same failure isolation. It gets no private path into
+> Core, no privileged ordering, no shortcut through the Surface Resolver.
+
+That constraint is the whole point of shipping it this way. If UIA needed something the protocol
+did not offer, the honest response would be that **the protocol has a gap** — not that UIA is
+special. A plugin API whose most important consumer does not use it is decorative, and we would
+find that out years later, from someone else's bug report.
 
 #### Export, failure, and isolation
 
