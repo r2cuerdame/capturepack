@@ -211,5 +211,55 @@ console.log('\nTwo windows an app gives the same title, whose order swaps')
     `was ${left.surfaceId}, now ${stillLeft?.surfaceId}`)
 }
 
+// ---------------------------------------------------------------------------
+// THE TWO RUNGS MUST NOT DESTROY EACH OTHER (#91).
+//
+// Core's ring says where every WINDOW was for the whole replay. The capture
+// instant's UI Automation dump says what CONTROLS were inside them, at one
+// moment. They arrive independently — the dump is budgeted and can land after
+// the editor opened — and they used to be stored in one field, so whichever
+// came second erased the first. It was always the ring, which is why no control
+// could ever be picked: 585 of them were collected, adopted, and thrown away.
+console.log('\nA control dump and a window ring, adopted in both orders')
+for (const order of ['dump first, then ring', 'ring first, then dump']) {
+  const s3 = new ContextSession(`ctx-${order}`, {
+    displays: [{ index: 2, focused: true, width: 3840, height: 2160 }],
+    replayDurationMs: REPLAY_MS,
+    observation: null,
+    dropped: false,
+  })
+  const dump = {
+    tMs: REPLAY_MS,
+    windows: windowsAt(REPLAY_MS, 1).map((w) => ({ ...w, hasControls: true, tree: 'collected' })),
+    elements: [
+      {
+        name: '저장',
+        control_type: 'Button',
+        bounds: { x: 900, y: 500, width: 120, height: 40 },
+        display: 2,
+        window_index: 0,
+      },
+    ],
+  }
+  if (order === 'dump first, then ring') {
+    s3.adopt(dump)
+    s3.adoptAll(observations)
+  } else {
+    s3.adoptAll(observations)
+    s3.adopt(dump)
+  }
+
+  const atNow = await s3.frameAt(REPLAY_MS)
+  const atPast = await s3.frameAt(5000)
+  const controls = (atNow.displays[0]?.candidates ?? []).filter((c) => c.authority !== 'window')
+  const pastWindows = (atPast.displays[0]?.candidates ?? []).length
+
+  console.log(`   ${order}: controls at the capture instant ${controls.length}, window candidates at t=5000 ${pastWindows}`)
+  check(`[${order}] controls survive`, controls.length > 0,
+    'the dump was thrown away — no control can ever be picked')
+  check(`[${order}] the window ring survives`, pastWindows > 1,
+    'the ring was thrown away — picking in the past falls back to one instant')
+}
+
 console.log(`\nresult: ${failed === 0 ? 'OK' : 'BROKEN'} — ${passed} passed, ${failed} failed\n`)
 process.exit(failed === 0 ? 0 : 1)

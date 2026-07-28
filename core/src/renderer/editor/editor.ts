@@ -902,7 +902,23 @@ let laneDurationMs = -1
 function syncLanes(): void {
   if (!scrub) return
   laneDurationMs = scrub.durationMs
-  timebar.setAnnotations(state.annotations, state.selectedId, scrub.durationMs)
+  // THE LANE APPEARS WITH THE BOX, NOT AFTER IT IS COMMITTED (#92).
+  //
+  // A box being created lives in the text session, not in the store, so a
+  // timeline drawn from the store alone stayed empty until the user pressed
+  // Enter — while the box itself was already on screen with a lifetime the
+  // header was offering to change. The lane is where that lifetime is edited,
+  // so it has to exist as soon as the lifetime does.
+  //
+  // Only the TEXT-session draft, never the rectangle being dragged out: that
+  // one has no lifetime yet and its lane would appear and vanish under the
+  // pointer.
+  const pending = pendingDraft()
+  const lanes =
+    pending === null || pending.start_ms === undefined
+      ? state.annotations
+      : [...state.annotations, pending]
+  timebar.setAnnotations(lanes, pending?.annotation_id ?? state.selectedId, scrub.durationMs)
 }
 
 // ---------------------------------------------------------------------------
@@ -1342,6 +1358,8 @@ function beginPendingBox(on: BoardDisplay, b: Box, picked?: PickableObject): voi
   }
   if (picked?.surface != null) attachTrack(draft, picked.surface.surfaceId)
   textSession = { kind: 'new', draft }
+  // The lane belongs to the box, and the box exists now (#92).
+  syncLanes()
   // A pre-filled description opens SELECTED: keeping it is one Enter, replacing
   // it is just typing.
   openTextEditor(on, draft.bounds, draft.text, draft.text !== '')
@@ -1841,8 +1859,9 @@ function applyMutation(mutate: (a: Annotation) => void): void {
     // change to that lifetime — a preset, "until the end", "entire capture" —
     // makes the path we hold the wrong length (#86).
     if (lifeKey(pending) !== before) refreshTrack(pending)
-    // Repaints the live preview (blur, number badge, border) and re-syncs the
-    // header labels — the pending box is in neither the store nor the lanes.
+    // Repaints the live preview (blur, number badge, border), re-syncs the
+    // header labels, and moves the pending box's own lane (#92).
+    syncLanes()
     schedulePaint()
     syncSelectionUi()
     return

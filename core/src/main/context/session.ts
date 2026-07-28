@@ -32,6 +32,7 @@ import {
   windowCandidatesOf,
 } from './buffer'
 import type { ContextObservation } from './buffer'
+import type { EditorUiaWindow } from '../../shared/ipc'
 import type { ObjectTrackResult, ObjectTrackSample } from '../../shared/ipc'
 import { SessionClock } from './clock'
 // THE SAME REGISTRY THE RECORDING SIDE USES (#64). Not a second, smaller one
@@ -83,6 +84,22 @@ export class ContextSession {
   private timeline: SurfaceTimeline
   private ids: ReadonlyMap<string, string> = new Map()
   private observations: readonly ContextObservation[] = []
+  /** The window ring as adopted, before the dump is folded in (#91). */
+  private ring: readonly ContextObservation[] = []
+  /**
+   * The capture-instant UI Automation dump, kept SEPARATELY from the ring (#91).
+   *
+   * The two describe different rungs of the same ladder — Core's ring says where
+   * every WINDOW was for the whole replay, the dump says what CONTROLS were
+   * inside them at one instant — and they arrive independently: the dump is
+   * budgeted and can land after the editor opened, the ring is read at save.
+   * Storing them in one field meant whichever arrived second destroyed the
+   * first, and it was always the ring: 585 controls were collected, adopted,
+   * and then thrown away by `adoptAll`. That is why no control could ever be
+   * picked. The reverse happened too — a late dump replaced the ring and took
+   * window picking in the past with it.
+   */
+  private instant: ContextObservation | null = null
   private dropped: boolean
 
   constructor(sessionId: string, options: ContextSessionOptions) {
@@ -125,12 +142,61 @@ export class ContextSession {
    * §10.1).
    */
   adopt(observation: ContextObservation | null): void {
-    this.adoptAll(observation === null ? [] : [observation])
+    this.instant = observation
+    this.rebuild()
   }
 
   /** Several observations on one clock — the shape a live buffer produces. */
   adoptAll(observations: readonly ContextObservation[]): void {
-    this.observations = [...observations].sort((a, b) => a.tMs - b.tMs)
+    this.ring = [...observations].sort((a, b) => a.tMs - b.tMs)
+    this.rebuild()
+  }
+
+  /**
+   * Folds the ring and the capture-instant dump into the one list everything
+   * below reads (#91).
+   *
+   * The dump's CONTROLS are merged into the ring observation nearest its own
+   * time, which is what makes them pickable at the capture instant while every
+   * other moment still answers from the ring. Its windows are not used: the
+   * ring's carry Core's stable surface id (#90) and are already placed on the
+   * display they belong to. What IS taken from them is `hasControls`/`tree` —
+   * the statement about whether a tree was collected for that window, which
+   * only the dump knows and which SPEC 11.3 forbids inventing.
+   */
+  private rebuild(): void {
+    const ring = this.ring
+    const instant = this.instant
+    if (instant === null) {
+      this.observations = ring
+    } else if (ring.length === 0) {
+      this.observations = [instant]
+    } else {
+      let nearest = 0
+      for (let i = 1; i < ring.length; i += 1) {
+        if (Math.abs(ring[i]!.tMs - instant.tMs) < Math.abs(ring[nearest]!.tMs - instant.tMs)) nearest = i
+      }
+      const trees = new Map<string, EditorUiaWindow>()
+      for (const w of instant.windows) trees.set(`${w.process} ${w.class_name} ${w.title}`, w)
+      this.observations = ring.map((o, i) =>
+        i !== nearest
+          ? o
+          : {
+              tMs: o.tMs,
+              windows: o.windows.map((w) => {
+                const dumped = trees.get(`${w.process} ${w.class_name} ${w.title}`)
+                return dumped === undefined
+                  ? w
+                  : { ...w, hasControls: dumped.hasControls, tree: dumped.tree }
+              }),
+              elements: instant.elements,
+            },
+      )
+    }
+    this.reindex()
+  }
+
+  private reindex(): void {
     this.ids = mintSurfaceIds(this.observations)
     const kind: TimelineKind = this.observations.length > 1 ? 'ring' : 'single-instant'
     const range = { startMs: 0, endMs: this.replayDurationMs }
