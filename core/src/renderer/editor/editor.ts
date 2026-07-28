@@ -154,6 +154,9 @@ const overlayCtx = ctx2d(overlay)
 // State
 // ---------------------------------------------------------------------------
 
+/** Blue: Core owns this rectangle (#99). Mirrors render.ts's TRACKED_COLOR. */
+const TRACKED_BOX_COLOR = '#3574F0'
+
 const MIN_DRAG = 3 // native px below which a right-drag creates nothing
 const MIN_SIZE = 2 // native px floor for resize (bounds sizes must stay > 0)
 
@@ -452,6 +455,22 @@ function displayOf(a: Annotation): BoardDisplay | null {
 }
 
 /** The index `displayOf` resolves to — the grouping key for per-display draws. */
+/**
+ * A TRACKED BOX IS NOT DRAGGED (#99).
+ *
+ * Its rectangle is Core's record of where the object actually was, at every
+ * moment of the replay. Moving or resizing it does not adjust an annotation —
+ * it replaces a measurement with a guess, and the box then follows nothing
+ * while still carrying a `target` that says which object it means. The user
+ * asked for exactly this: "파란색에 이동 크기 편집 못하게 해야지".
+ *
+ * Everything else stays available: select it, describe it, number it, blur it,
+ * change its lifetime, delete it. Only the geometry is Core's.
+ */
+function isTracked(a: Annotation): boolean {
+  return a.tracking?.enabled === true
+}
+
 function displayIndexOf(a: Annotation): number {
   return displayOf(a)?.index ?? focusedDisplayIndex
 }
@@ -1328,7 +1347,9 @@ function beginPendingBox(on: BoardDisplay, b: Box, picked?: PickableObject): voi
     numbered: false,
     blur: false,
     tracking: { enabled: false },
-    style: { color: state.color },
+    // A picked box carries the TRACKED colour explicitly (#99) rather than
+    // relying on a reader's default: the pack should say what it looks like.
+    style: { color: picked === undefined ? state.color : TRACKED_BOX_COLOR },
     created_at: stamp.created_at,
     z: stamp.z,
   }
@@ -2815,7 +2836,7 @@ overlay.addEventListener('pointerdown', (e) => {
   // Corner resize handles (editor-only chrome) win over box stacking — but only
   // for a selection that lives on THIS screen.
   const sel = selectedPaintedAnnotation()
-  if (sel !== null && displayIndexOf(sel) === hit.d.index) {
+  if (sel !== null && !isTracked(sel) && displayIndexOf(sel) === hit.d.index) {
     const handle = handleAt(sel, p.x, p.y, ui)
     if (handle !== null) {
       overlay.setPointerCapture(e.pointerId)
@@ -2879,15 +2900,18 @@ overlay.addEventListener('pointerdown', (e) => {
     ) {
       showObjectHintOnce('boxTookClick', t('editor.objectBoxTookClick'), 'answer')
     }
-    overlay.setPointerCapture(e.pointerId)
-    drag = {
-      kind: 'move',
-      d: hit.d,
-      id: box.annotation_id,
-      lastX: p.x,
-      lastY: p.y,
-      before: state.cloneAnnotations(),
-      moved: false,
+    // Selected, never dragged, when Core owns the rectangle (#99).
+    if (!isTracked(box)) {
+      overlay.setPointerCapture(e.pointerId)
+      drag = {
+        kind: 'move',
+        d: hit.d,
+        id: box.annotation_id,
+        lastX: p.x,
+        lastY: p.y,
+        before: state.cloneAnnotations(),
+        moved: false,
+      }
     }
     // Selecting a box opens its description with the text selected (issue
     // #42): the click that starts a move is also the click that says "this
@@ -3056,7 +3080,7 @@ function syncHoverCursor(e: PointerEvent): void {
   }
   const ui = uiOf(hit.d)
   const sel = selectedPaintedAnnotation()
-  if (sel !== null && displayIndexOf(sel) === hit.d.index) {
+  if (sel !== null && !isTracked(sel) && displayIndexOf(sel) === hit.d.index) {
     const handle = handleAt(sel, hit.x, hit.y, ui)
     if (handle !== null) {
       setHoverCursor(handle === 'nw' || handle === 'se' ? 'nwse-resize' : 'nesw-resize')

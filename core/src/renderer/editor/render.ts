@@ -17,7 +17,9 @@
 import type { Annotation } from '../../shared/types'
 
 const BLUR_BLOCK = 12 // native px per pixelation block (matches render/render.ts)
-const FALLBACK_COLOR = '#FF3B30' // boxes without style.color (palette default)
+const FALLBACK_COLOR = '#FF3B30'
+/** A box that FOLLOWS an object (#99) — Core's rectangle, not a drawn one. */
+const TRACKED_COLOR = '#3574F0' // boxes without style.color (palette default)
 const HANDLE_R = 4.5 // on-screen px, half the side of a corner resize handle
 const OBJECT_HOVER_COLOR = '#8ab4ff' // same accent the selection rect uses
 const FOCUSED_FRAME_COLOR = '#3574f0' // the focused display's accent
@@ -58,8 +60,20 @@ function must<T>(v: T | null): T {
   return v
 }
 
+/**
+ * BLUE MEANS THE BOX IS NOT YOURS TO PLACE (#99).
+ *
+ * A tracked box's rectangle comes from Core's record of where the object was,
+ * at every moment of the replay. Drawing it in the manual colour invited the
+ * user to drag it, and dragging it is the one thing that makes it stop being
+ * true — so the colour says which kind of box this is before anyone tries.
+ *
+ * The stored `style.color` still wins where it was set explicitly, so a user
+ * who coloured a box keeps their colour; this only replaces the default.
+ */
 export function boxColor(a: Annotation): string {
-  return a.style?.color ?? FALLBACK_COLOR
+  if (a.style?.color !== undefined) return a.style.color
+  return a.tracking?.enabled === true ? TRACKED_COLOR : FALLBACK_COLOR
 }
 
 /**
@@ -313,6 +327,15 @@ function drawSelection(ctx: CanvasRenderingContext2D, a: Annotation, ui: number)
   ctx.setLineDash([6 * ui, 4 * ui])
   ctx.strokeRect(b.x - pad, b.y - pad, b.w + pad * 2, b.h + pad * 2)
   ctx.setLineDash([])
+  // NO GRAB POINTS ON A BOX THAT CANNOT BE GRABBED (#99). A tracked box's
+  // rectangle is Core's record of where the object was; drawing handles on it
+  // would advertise an edit the editor then refuses, which is worse than
+  // refusing it plainly. The dashed selection rect still shows what is
+  // selected — everything but the geometry is still editable.
+  if (a.tracking?.enabled === true) {
+    ctx.restore()
+    return
+  }
   const r = HANDLE_R * ui
   for (const c of handleCenters(a)) {
     ctx.fillStyle = '#ffffff'

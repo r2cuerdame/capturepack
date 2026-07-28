@@ -31,23 +31,6 @@ declare global {
   }
 }
 
-/**
- * Keeps `sink` fed with the media time of the frame currently presented (#93).
- *
- * The same mechanism the editor uses (#81), and for the same reason: the frame
- * on screen is the truth, and the playhead is only where playback has got to.
- * A renderer without the callback falls back to the playhead, which is what
- * shipped before.
- */
-function trackPresentedFrames(video: HTMLVideoElement, sink: (mediaTimeMs: number) => void): void {
-  if (typeof video.requestVideoFrameCallback !== 'function') return
-  const pump: VideoFrameRequestCallback = (_now, metadata) => {
-    sink(metadata.mediaTime * 1000)
-    video.requestVideoFrameCallback(pump)
-  }
-  video.requestVideoFrameCallback(pump)
-}
-
 const BLUR_BLOCK = 12 // native px per pixelation block (matches the editor preview)
 const FALLBACK_COLOR = '#FF3B30' // boxes without style.color (editor palette default)
 
@@ -289,26 +272,8 @@ async function renderAnnotated(
     }
   }
 
-  // THE FRAME BEING DRAWN, NOT THE PLAYHEAD (#93).
-  //
-  // `video.currentTime` is where playback has got to, which is not the same as
-  // the presentation time of the frame `drawImage` is about to copy — they
-  // differ by up to one frame interval. The editor was corrected for this in
-  // #81; this renderer was not, so the box it burned into the video could be
-  // one frame's worth of motion away from the window it names. Measured on
-  // CapturePack_2026-07-29_074002: two sample points agreed with the track
-  // within 4 px and a third was 126 px out, which is one sample of a drag.
-  //
-  // `mediaTime` is the presentation timestamp of the frame the compositor
-  // actually has, reported by the browser. It needs no frame-rate assumption
-  // and is right on every machine.
-  let presentedMs: number | null = null
-  trackPresentedFrames(video, (mediaTimeMs) => {
-    presentedMs = mediaTimeMs
-  })
-
-  // Throttled so a 30 s render sends a few dozen messages, not a thousand: the
-  // bar cannot show more than the eye can read anyway.
+  // Throttled so a 30 s render sends a few dozen progress messages, not a
+  // thousand: the bar cannot show more than the eye can read anyway (#96).
   let lastProgressAt = 0
   const reportProgress = (tMs: number): void => {
     if (job.durationMs <= 0) return
@@ -318,12 +283,25 @@ async function renderAnnotated(
     window.renderBridge.progress?.(Math.max(0, Math.min(1, tMs / job.durationMs)))
   }
 
-  const drawFrame = (): number => {
+  // THE FRAME BEING DRAWN, NOT THE PLAYHEAD (#93/#98).
+  //
+  // `video.currentTime` is where playback has got to, which is not the
+  // presentation time of the frame `drawImage` is about to copy. #93 corrected
+  // that with a SECOND `requestVideoFrameCallback` chain feeding a variable —
+  // and two independent chains have no ordering guarantee between them, so the
+  // variable could still hold the previous frame's time when the draw ran.
+  // Measured on CapturePack_2026-07-29_081301: the burned-in box sat 120 px
+  // right and 44 px below its window, in a frame whose pixels and box were
+  // composited by the SAME call and therefore cannot honestly disagree.
+  //
+  // So the time comes from the callback that DRIVES the draw. One chain, one
+  // frame, one timestamp — nothing left to race.
+  const drawFrame = (mediaTimeMs?: number): number => {
     // Clamp to the manifest replay_duration_ms (the lifetime clock cap): the
     // decoded clock can run slightly past the recorder's wall clock, which
     // would hide "until end" boxes (end_ms == replay_duration_ms) on the
     // final frames. Mirrors the editor's Math.min(tMs, replayDurationMs).
-    const rawMs = presentedMs ?? video.currentTime * 1000
+    const rawMs = mediaTimeMs ?? video.currentTime * 1000
     const tMs = job.durationMs > 0 ? Math.min(rawMs, job.durationMs) : rawMs
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
     drawOverlay(ctx, canvas, overlay, tMs)
@@ -358,16 +336,18 @@ async function renderAnnotated(
     video.onended = () => resolve()
     video.onerror = () => reject(new Error('replay video failed to decode'))
   })
-  const scheduleDraw = (): void => {
+  const scheduleDraw = (mediaTimeMs?: number): void => {
     if (video.ended) return
-    captureDue(drawFrame())
+    captureDue(drawFrame(mediaTimeMs))
     // Out-point reached: stop like 'ended' would, holding the current frame.
     if (trimEndMs !== undefined && video.currentTime * 1000 >= trimEndMs) {
       video.pause()
       reachedTrimEnd()
       return
     }
-    video.requestVideoFrameCallback(() => scheduleDraw())
+    // The metadata of the frame that JUST became current, handed straight to
+    // the draw it triggers (#98).
+    video.requestVideoFrameCallback((_now, metadata) => scheduleDraw(metadata.mediaTime * 1000))
   }
   recorder.start(1000)
   scheduleDraw()
