@@ -558,6 +558,105 @@ Supported targets:
 
 Plugins generate structured events.
 
+### Plugin System, redesigned (v0.3.0)
+
+The plugin model above was written for a capture that happens at one instant. It does not
+survive contact with the product we actually built: **the user scrubs thirty seconds into the
+past**, and a structural context collected once, at the moment the hotkey was pressed, cannot
+answer a question about second 7. The redesign below replaces it in v0.3.0.
+
+**Two plugin kinds, and they share nothing but the host.**
+
+```
+CapturePack Plugin System
+├─ Temporal Context Providers   observe, record, restore
+└─ After Save Actions           consume a finished pack
+```
+
+They get separate APIs, separate lifecycles, separate permissions. A Provider runs alongside
+CapturePack all day and keeps its own temporal buffer; an Action never runs until a pack exists.
+
+#### Temporal Context Providers
+
+A Provider must be able to answer *what was here, at this time, at this point* for any time the
+replay buffer still holds — and Core never collects or interprets its data:
+
+> **Provider** — observes, records, restores.
+> **Core** — chooses the time and the screen position.
+
+**Logically restorable at any time; physically stored however the Provider likes.** Core does
+NOT demand a full DOM or UI tree per video frame. The expected shape is periodic checkpoints +
+change deltas + geometry samples, so second 0.7 is checkpoint 0.0 replayed forward through the
+deltas between them. Chrome uses DOM snapshots + MutationObserver + scroll/resize + SPA route
+changes; Windows uses UIA tree checkpoints + StructureChanged/FocusChanged + bounds and
+visibility changes; Unreal uses widget-tree checkpoints + create/destroy/transform/visibility.
+
+**One clock.** Every Provider timestamps against a monotonic session clock Core hands out
+(`sessionId`, `nowMs`, `bufferStartMs`, `bufferEndMs`) — never its own wall clock, or the
+semantic timeline drifts from the visual one and every answer is subtly wrong.
+
+**Buffer lifecycle.** `onPrune(beforeTimeMs)` drops data that has fallen out of the ring buffer
+(keeping the last checkpoint needed to restore what remains); `onFreeze(range)` pins the captured
+range so it survives until the editor closes or the pack is saved.
+
+#### Surface Timeline and the arbitration problem
+
+A numeric `pluginPriority` cannot resolve this: a Notepad window in front, a windowed Unreal game
+behind, one screen point — both Providers legitimately claim an object there, and the user is
+looking at Notepad. So **Core restores the surface stack for that time BEFORE asking any
+Provider**, from its own minimal Platform Surface Timeline: top-level windows, HWND, process,
+window/client bounds, z-order, visibility, minimized/foreground state, visible region, ownership,
+recorded on the same clock as the replay. It is not a UIA interpreter; it only answers which
+window was where, in what order, at time T — **for the past desktop, not the one behind the
+editor**.
+
+Providers then claim *regions*, not whole windows. One Chrome window is shared: the DOM Provider
+owns the web content viewport, the Windows UI Provider owns the address bar, tabs and frame.
+
+**Selection algorithm.** Restore the surface stack at T → take the topmost visible surface at the
+point → ask only the Providers holding a claim there → sort candidates by authority, depth and
+confidence → offer the first → **keep the rest as a candidate stack** (Tab / Shift+Tab cycle
+them; Alt+Click for surfaces behind, whose data model must exist even if the binding ships later)
+→ and with no candidate at all, fall back to a manual rectangle. Authority is specificity, not
+rank: Unreal beats Windows UI inside a game's render surface, DOM beats UIA inside web content.
+**The default must always match what the user was actually looking at.**
+
+**Tracked annotations** follow their object: bounds move with it, and the annotation's lifetime
+ends when the object does.
+
+#### Export, failure, and isolation
+
+A Provider's whole temporal buffer is working data and does NOT go in the pack. Saving exports
+only what the chosen range and the chosen object need: provider metadata, the context snapshot at
+the selected time, the selected object (stable id or selector, bounds, hierarchy), its track,
+temporal accuracy, and any warnings or gaps.
+
+**No plugin failure may ever cost a capture.** A disconnected Chrome extension, a timed-out UIA
+Provider, an incompatible Unreal build — replay, snapshot, manual rectangles, annotation, folder
+save and annotated replay all still work, and the save screen says which context is missing
+rather than pretending it is complete. Likewise an After Save Action that fails leaves the pack
+saved: the folder is the original, actions are what happens afterwards, each one retryable on its
+own. Actions declare the pack state they need (`captured` → `metadata-ready` → `source-ready` →
+`annotated-replay-rendering` → `annotated-replay-ready` → `complete`), because the annotated
+replay renders in the background and not every action can run at the same moment. Actions must be
+re-runnable later against a saved pack, with an idempotency key (pack id + action id + config id)
+where duplicates would otherwise be created. Secrets never enter the pack — Windows Credential
+Manager or Electron `safeStorage` — and any action that sends data off the machine says so before
+it is enabled.
+
+#### Explicitly NOT how this gets built
+
+Calling a Provider once at the capture instant. Asking every Provider about every point. Settling
+conflicts with a global priority number. Letting a Provider write Core's files. Failing a capture
+or a save because a plugin failed. Forcing a full DOM/UI tree copy per frame. Implementing Jira,
+Redmine, Slack or email inside Core. Building a marketplace, a central server, a workflow builder,
+or an AI dependency before any of the above works.
+
+> CapturePack records the visual timeline.
+> Temporal Context Providers preserve the semantic timeline.
+> The user chooses the time and target.
+> After Save Actions decide where the resulting context goes.
+
 ---
 
 ## Chrome Extension
