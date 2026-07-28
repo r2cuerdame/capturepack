@@ -281,9 +281,37 @@ function startFrameTicks(): void {
   tickVideo = video
   if (typeof video.requestVideoFrameCallback !== 'function') return
   const pump: VideoFrameRequestCallback = (_now, metadata) => {
+    // THE FRAME'S POSITION IN THE FILE BEING SAVED (#109).
+    //
+    // Which number to send took reading the spec rather than guessing, and the
+    // first guess was wrong twice over:
+    //
+    //   `mediaTime`   is the track's OWN timeline and the spec says it "may be
+    //                 zero for live streams". It starts when the STREAM did,
+    //                 not when this recorder slot did — and the saved replay is
+    //                 one slot's output, whose t=0 is that slot's start. They
+    //                 agree only until the first rotation, which is why this
+    //                 looked almost right.
+    //   `captureTime` is defined for WebRTC and getUserMedia sources. A screen
+    //                 capture is neither, so it is simply absent.
+    //
+    //   `presentationTime` IS specified for every source — "the time at which
+    //                 the user agent submitted the frame for composition", on
+    //                 the same timebase as `performance.now()`. So is
+    //                 `slot.startedAt`. The difference between them is the
+    //                 frame's exact position in the file this slot is writing.
+    //
+    // The slot that will BE the replay is the older recording one, which is
+    // what `olderRecordingSlot` already answers for the export path.
+    const base = olderRecordingSlot()
+    const submitted = metadata.presentationTime
+    if (base === null || typeof submitted !== 'number' || !Number.isFinite(submitted)) {
+      video.requestVideoFrameCallback(pump)
+      return
+    }
     window.captureBridge.sendTick?.({
       displayId: startPayload?.displayId ?? '',
-      mediaTimeMs: metadata.mediaTime * 1000,
+      mediaTimeMs: submitted - base.startedAt,
     })
     video.requestVideoFrameCallback(pump)
   }

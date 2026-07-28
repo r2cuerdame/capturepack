@@ -104,6 +104,8 @@ export interface SurfaceLaneStatus {
   clockStamped: number
   /** Median ms between asking for a ticked sample and the host taking it (#108). */
   tickLagMs: number | null
+  /** Median ms a frame was ALREADY old when its tick was sent (#109). */
+  frameAgeMs: number | null
   /** `hostClock - coreClock`, null until the first ping answered. */
   clockOffsetMs: number | null
   /** Half the measured round trip. Infinity when the clock has never been measured. */
@@ -177,6 +179,8 @@ export class SurfaceLane {
   private clockStamped = 0
   /** Core's clock when the last tick was sent — the other end of the round trip. */
   private tickCoreMs = 0
+  private tickFrameAgeMs = 0
+  private readonly frameAgeMs: number[] = []
   private readonly tickLagMs: number[] = []
   private fallbackIndex = -1
   private dutyStrikes = 0
@@ -269,6 +273,7 @@ export class SurfaceLane {
       frameStamped: this.frameStamped,
       clockStamped: this.clockStamped,
       tickLagMs: medianOf(this.tickLagMs),
+      frameAgeMs: medianOf(this.frameAgeMs),
       clockOffsetMs: this.offset.offsetMs(),
       clockErrorMs: this.offset.errorBoundMs(),
       lastError: this.lastError,
@@ -366,7 +371,7 @@ export class SurfaceLane {
    * loop will take anyway a few tens of milliseconds later; it must never make
    * the recorder wait.
    */
-  tickAt(frameMs: number): void {
+  tickAt(frameMs: number, frameAgeMs?: number): void {
     if (!this.running) return
     // ONE TIME BASE AT A TIME (#106).
     //
@@ -385,6 +390,10 @@ export class SurfaceLane {
     }
     this.lastTickAt = Date.now()
     this.tickCoreMs = this.clock.nowMs()
+    // How far behind the picture this tick already is before it goes anywhere
+    // (#109): the pixels were taken off the screen before the renderer heard
+    // about them.
+    this.tickFrameAgeMs = typeof frameAgeMs === 'number' && Number.isFinite(frameAgeMs) ? frameAgeMs : 0
     void this.host.request('surface.tick', { tMs: frameMs }).catch(() => {
       /* Rule 1: a missed observation is a gap in the ring, never a lost frame. */
     })
@@ -442,6 +451,8 @@ export class SurfaceLane {
         this.tickLagMs.push(lag)
         if (this.tickLagMs.length > 200) this.tickLagMs.shift()
       }
+      this.frameAgeMs.push(this.tickFrameAgeMs)
+      if (this.frameAgeMs.length > 200) this.frameAgeMs.shift()
       // THE SAMPLE BELONGS TO THE FRAME THAT ASKED FOR IT (#108).
       //
       // The round trip is real — the request crosses two processes before the

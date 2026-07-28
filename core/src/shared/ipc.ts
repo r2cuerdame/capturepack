@@ -318,8 +318,26 @@ export interface CaptureFramesPayload {
 /** One captured frame announcing itself (#105). */
 export interface CaptureTickPayload {
   displayId: string
-  /** The frame's presentation time on the recording's own clock, ms. */
+  /**
+   * The frame's position in the file being recorded, in ms.
+   *
+   * `presentationTime - slot.startedAt`, both on `performance.now()` — NOT the
+   * track's `mediaTime`, which starts when the stream did rather than when this
+   * recorder slot did and which the spec allows to be zero for a live source
+   * (#109).
+   */
   mediaTimeMs: number
+  /**
+   * How old the frame already was when this tick was sent, in ms — if the
+   * runtime can say (#109).
+   *
+   * `VideoFrameCallbackMetadata.captureTime` would give it, but the spec
+   * defines that field for WebRTC and getUserMedia sources only and a screen
+   * capture is neither, so it is absent in practice. Kept because a runtime
+   * that DOES report it should be believed, and absent means nothing is
+   * corrected rather than corrected by a guess.
+   */
+  frameAgeMs?: number
 }
 
 export interface CaptureReplayResultPayload {

@@ -257,8 +257,8 @@ export function frozenObservations(
  * Silent when there is no runtime, which is every non-Windows platform and any
  * session started with --no-context-host.
  */
-export function tickSurfaces(frameMs: number): void {
-  runtime?.lane.tickAt(frameMs)
+export function tickSurfaces(frameMs: number, frameAgeMs?: number): void {
+  runtime?.lane.tickAt(frameMs, frameAgeMs)
 }
 
 export interface ContextStatus {
@@ -307,7 +307,8 @@ export function logContextCost(): void {
       // WHICH CLOCK THE RING IS ON (#106). Two bases in one ring is the defect
       // that hid behind a healthy-looking sample count, so the count is split.
       `${lane.frameStamped} frame-stamped / ${lane.clockStamped} clock-stamped` +
-      (lane.tickLagMs === null ? '' : `, tick lag ${lane.tickLagMs} ms`),
+      (lane.tickLagMs === null ? '' : `, tick lag ${lane.tickLagMs} ms`) +
+      (lane.frameAgeMs === null ? '' : `, frame already ${lane.frameAgeMs} ms old`),
   )
   if (!lane.running) {
     // "Silence is not absence": a surface timeline that is not running is the

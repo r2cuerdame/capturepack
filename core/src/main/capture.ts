@@ -1113,7 +1113,7 @@ async function createCaptureWindow(display: Display, settings: Settings): Promis
     const onTick = (event: IpcMainEvent, payload: CaptureTickPayload): void => {
       if (event.sender !== win.webContents || captureWindows.get(display.id) !== win) return
       if (typeof payload?.mediaTimeMs !== 'number' || !Number.isFinite(payload.mediaTimeMs)) return
-      tickSurfaces(payload.mediaTimeMs)
+      tickSurfaces(payload.mediaTimeMs, payload.frameAgeMs)
     }
     ipcMain.on(IPC.captureTick, onTick)
     // A recorder renderer that VANISHES is a recorder failure, never silence
