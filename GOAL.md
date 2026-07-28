@@ -820,9 +820,9 @@ simultaneously is the default** — one Ctrl+Alt+C, N displays in the pack.
     too) and is discoverable through the help tooltip, not a toolbar.
   - **Framing is a VIEW, and Esc never undoes a view.** Zoom and pan have no Esc rung
     and neither does framing: the key that fits the whole board is the only way back.
-    Esc belongs to the editing ladder (duration editor → unsaved bar → selection →
-    close) — giving a view state its own rung stole the press users expect to close
-    the editor and made leaving cost two.
+    Esc belongs to the editing ladder (duration editor → the box being created →
+    unsaved bar → selection → close) — giving a view state its own rung stole the
+    press users expect to close the editor and made leaving cost two.
   - Annotations stay in their own display's pixel space; `annotations.json` gains an
     optional `display` index (absent = the focused display, so single-monitor packs are
     unchanged).
@@ -1232,9 +1232,10 @@ real window too:
 - **Windowed mode has a visible title bar.** A slim strip above the top bar naming the
   pack (the app name until the pack has a title) is the drag handle, and double-clicking
   it maximizes/restores like any caption. The top bar's own gaps drag too, with every
-  control in it opting out so it still takes clicks and text selection — but the strip is
-  what the user can SEE, because a frameless window whose only drag surface is the
-  leftover pixels between controls cannot be moved in practice.
+  control **and every status chip** in it opting out so it still takes clicks and text
+  selection — the drag region does not inherit, so anything left unnamed stays caption.
+  But the strip is what the user can SEE, because a frameless window whose only drag
+  surface is the leftover pixels between controls cannot be moved in practice.
 - **Fullscreen keeps no drag region and no title bar** — there is nothing to move, so the
   strip is not rendered at all and costs the board no pixels. It is also never over the
   canvas: it sits above the top bar in flow, so it can never take a click meant for a box.
@@ -1322,10 +1323,18 @@ No Pin/Rectangle/Blur tool menus exist.
 
 **The header is glued to its box.** It sits a few screen pixels above the selection
 rectangle at every zoom level, on whichever display the box lives on, and it flips
-*below* the box when there is genuinely no room above. It is measured after its own
-labels are written — the number chip, the blur label and the duration chip all change
-its size — and it is positioned in the same coordinate space it is measured in, so it
-never drifts away from the box it belongs to.
+*below* the box when there is genuinely no room above — but only when the header fits
+below. A box **taller than the stage** has room on neither side, and there the header
+goes to the **top** edge: covering the box's first rows is a nuisance, while the bottom
+edge would bury it in the middle of the pixels being annotated. It is measured after its
+own labels are written — the number chip, the blur label and the duration chip all
+change its size — and it is positioned in the same coordinate space it is measured in,
+so it never drifts away from the box it belongs to.
+
+**The description input is never off screen.** It is focused the instant it appears, so
+its position is held inside the part of the board the stage actually shows — at any zoom
+or pan, and for a box against the bottom edge. A focused field the user cannot see is a
+field they type into blind.
 
 **The header appears with the description input** — the moment a right-drag ends, the
 box header (`[#] [1.0s] [Blur] [×]`) shows *together with* the text field, so number,

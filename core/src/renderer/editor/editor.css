@@ -314,8 +314,21 @@ body[data-window-mode="windowed"] #topbar {
   -webkit-app-region: drag;
 }
 
+/* -webkit-app-region DOES NOT INHERIT (issue #49). An element with no rule of
+   its own computes `none`, which neither adds a drag rect nor subtracts one — so
+   it simply sits inside the drag rect its ancestor contributed and behaves as
+   caption. That is why the chips and the zoom cluster are named here and not
+   left to the parent: only `no-drag` punches a hole.
+
+   #zoomControl covers the 2px gaps BETWEEN its buttons and slider as well as
+   #zoomPct, so the whole cluster is one control instead of buttons islanded in
+   drag surface. The chips are content, not caption: the OS owns the pointer over
+   a drag region, so a press that lands on "2 boxes outside trim will be dropped"
+   would pick the window up instead of doing nothing. */
 body[data-window-mode="windowed"] #topbar button,
-body[data-window-mode="windowed"] #topbar input {
+body[data-window-mode="windowed"] #topbar input,
+body[data-window-mode="windowed"] #topbar .chip,
+body[data-window-mode="windowed"] #zoomControl {
   -webkit-app-region: no-drag;
 }
 
