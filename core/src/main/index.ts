@@ -422,7 +422,25 @@ function main(): void {
       // a keystroke (the installed CapturePack owns the real accelerator), so
       // without this the capture flow — including what a capture SAYS when a
       // display was not recording — cannot be exercised at all.
-      if (process.argv.includes('--capture-now')) capture()
+      // `--capture-now[=SECONDS]`. The delay is not a convenience: anything
+      // that depends on the replay buffer or the surface ring being FULL cannot
+      // be tested by capturing the instant the app starts, when both hold a
+      // fraction of a second. Verifying that picking follows the scrub needs a
+      // ring with real motion in it, and there is no other way to get one
+      // without synthesizing the hotkey — which no automated test may do,
+      // because the installed CapturePack owns the real accelerator.
+      const captureNow = process.argv.find((arg) => arg.startsWith('--capture-now'))
+      if (captureNow !== undefined) {
+        const seconds = Number(captureNow.split('=')[1] ?? '0')
+        const delayMs = Number.isFinite(seconds) && seconds > 0 ? seconds * 1_000 : 0
+        if (delayMs === 0) capture()
+        else {
+          logInfo(`[capture] --capture-now: capturing in ${String(seconds)}s`)
+          setTimeout(() => {
+            void capture()
+          }, delayMs)
+        }
+      }
       // Dev aid / headed testing: open the Welcome window on launch.
       if (process.argv.includes('--show-welcome')) {
         settings.welcomeDeferredFromLogin = false
