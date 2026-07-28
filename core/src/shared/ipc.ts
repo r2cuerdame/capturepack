@@ -276,6 +276,24 @@ export interface CaptureFramesPayload {
   bytes: number
   // MediaStreamTrack delivered-frame count, or 0 where the API is unavailable.
   frames: number
+  /**
+   * THE RECORDER'S OWN ACCOUNT OF ITS CADENCE (#82).
+   *
+   * A replay is the evidence a pack is built on, and until now nothing in the
+   * app knew how good it was — a capture that dropped a fifth of its frames and
+   * stalled for nearly a second twice looked exactly like a healthy one, and it
+   * took ffprobe on the saved file to find out. Two numbers make that visible
+   * from the log and from the pack itself.
+   *
+   * Absent where the runtime exposes no frame counter: a rate nobody measured
+   * must not be reported as a rate.
+   */
+  cadence?: {
+    /** Frames per second actually achieved since recording steadied. */
+    achievedFps: number
+    /** The longest the frame counter went without advancing, in ms. */
+    worstStallMs: number
+  }
 }
 
 export interface CaptureReplayResultPayload {

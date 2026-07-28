@@ -47,6 +47,7 @@ import {
   resolveCaptureTargets,
   resolveTargetDisplay,
   takeDisplaySnapshots,
+  recorderCadence,
 } from './capture'
 import type { ReplayFetch } from './capture'
 import { freezeContext, frozenObservations, logContextCost, releaseContext } from './context/runtime'
@@ -520,6 +521,24 @@ async function runFlow(settings: Settings): Promise<void> {
     `[capture] captured ${frozen.displays.length} display(s), ${withReplay} with a replay ` +
       `(${Math.round(replayDurationMs)}ms on the focused display)`,
   )
+  // WHAT THE RECORDER ACTUALLY ACHIEVED (#82), per display, on the record.
+  //
+  // The replay is the evidence a pack is built on and nothing in the app knew
+  // how good it was: a capture that stalled for nearly a second, twice, wrote
+  // exactly the same log line as a clean one, and it took ffprobe on the saved
+  // file to tell them apart. Reported next to the configured rate, because a
+  // number without the target it is being compared against says nothing.
+  for (const d of frozen.displays) {
+    const measured = recorderCadence(d.id)
+    if (measured === null) continue
+    const short = measured.achievedFps < settings.fps * 0.8
+    const stalled = measured.worstStallMs >= 400
+    const line =
+      `[capture] display ${d.index}: recorded ${measured.achievedFps} fps of ${settings.fps} ` +
+      `requested, worst stall ${measured.worstStallMs} ms`
+    if (short || stalled) logWarn(`${line} — the replay is missing time the user was looking at`)
+    else logInfo(line)
+  }
 
   let handle: PackHandle | null = null
   try {

@@ -422,8 +422,23 @@ async function probeRecorder(displayId: number, win: BrowserWindow): Promise<voi
  * healthy recorder to find out. Only the transition is logged; the heartbeat
  * itself must not fill the log file with one line every few seconds.
  */
+/**
+ * The cadence each display's recorder last reported (#82), by display id.
+ *
+ * Kept so a capture can write it into its own pack: a replay that dropped a
+ * fifth of its frames used to be indistinguishable from a healthy one without
+ * running ffprobe over the saved file.
+ */
+const displayCadence = new Map<number, { achievedFps: number; worstStallMs: number }>()
+
+/** What this display's recorder has achieved, or null if it never said. */
+export function recorderCadence(displayId: number): { achievedFps: number; worstStallMs: number } | null {
+  return displayCadence.get(displayId) ?? null
+}
+
 function onFramesProven(displayId: number, payload: CaptureFramesPayload): void {
   if (!wantedDisplayIds.has(displayId)) return
+  if (payload.cadence !== undefined) displayCadence.set(displayId, payload.cadence)
   const previous = displayRecorderStates.get(displayId)
   if (previous?.status !== 'recording') {
     logInfo(

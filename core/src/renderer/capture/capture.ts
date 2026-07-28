@@ -163,6 +163,91 @@ function deliveredFrames(): number | null {
   return typeof delivered === 'number' && Number.isFinite(delivered) ? delivered : null
 }
 
+// ---------------------------------------------------------------------------
+// THE RECORDER'S OWN ACCOUNT OF ITS CADENCE (#82).
+//
+// A replay is the evidence every pack is built on, and nothing in the app knew
+// how good it was. A capture that stalled for nearly a second, twice, looked
+// exactly like a healthy one from every log line this process writes; it took
+// ffprobe on the saved file to see it. So the recorder measures itself.
+//
+// The delivered-frame counter is polled on a short timer. It cannot see WHEN
+// each frame arrived — only that the count moved — so `worstStallMs` is
+// quantised to the poll interval and is a LOWER BOUND on the true stall. That
+// is the honest thing it can say, and it is enough to tell a stall from a
+// steady 15 fps.
+//
+// The first seconds are excluded. A recorder that has just started is warming
+// up — measured at 6.8 fps for the first three seconds of a fresh install
+// against 13.1 fps after — and reporting that as the achieved rate would blame
+// the recorder for the clock starting.
+const CADENCE_POLL_MS = 100
+const CADENCE_WARMUP_MS = 3_000
+
+interface Cadence {
+  startedAt: number
+  firstCountedAt: number
+  baseFrames: number
+  lastFrames: number
+  lastAdvanceAt: number
+  worstStallMs: number
+}
+
+let cadence: Cadence | null = null
+let cadenceTimer: number | undefined
+
+function startCadenceMonitor(): void {
+  window.clearInterval(cadenceTimer)
+  const frames = deliveredFrames()
+  if (frames === null) {
+    cadence = null
+    return
+  }
+  const now = performance.now()
+  cadence = {
+    startedAt: now,
+    firstCountedAt: 0,
+    baseFrames: 0,
+    lastFrames: frames,
+    lastAdvanceAt: now,
+    worstStallMs: 0,
+  }
+  cadenceTimer = window.setInterval(pollCadence, CADENCE_POLL_MS)
+}
+
+function pollCadence(): void {
+  const c = cadence
+  if (c === null) return
+  const frames = deliveredFrames()
+  if (frames === null) return
+  const now = performance.now()
+  if (frames > c.lastFrames) {
+    // Only count a stall once the warm-up is over; before that a gap is the
+    // pipeline starting, not the pipeline stopping.
+    if (c.firstCountedAt !== 0) c.worstStallMs = Math.max(c.worstStallMs, now - c.lastAdvanceAt)
+    c.lastFrames = frames
+    c.lastAdvanceAt = now
+  }
+  if (c.firstCountedAt === 0 && now - c.startedAt >= CADENCE_WARMUP_MS) {
+    c.firstCountedAt = now
+    c.baseFrames = frames
+    c.lastAdvanceAt = now
+  }
+}
+
+/** What this recorder has achieved, or null while nothing can honestly be said. */
+function cadenceReport(): { achievedFps: number; worstStallMs: number } | null {
+  const c = cadence
+  if (c === null || c.firstCountedAt === 0) return null
+  const elapsedMs = performance.now() - c.firstCountedAt
+  if (elapsedMs < 1_000) return null
+  const gained = c.lastFrames - c.baseFrames
+  return {
+    achievedFps: Math.round((gained / elapsedMs) * 1000 * 10) / 10,
+    worstStallMs: Math.round(c.worstStallMs),
+  }
+}
+
 function armEvidenceCheck(delayMs: number): void {
   window.clearTimeout(evidenceTimer)
   evidenceTimer = window.setTimeout(checkFrameEvidence, delayMs)
@@ -215,10 +300,14 @@ function checkFrameEvidence(): void {
     // is exactly the state #43 describes and exactly what recovery must not
     // destroy.
     if (startPayload?.simulateSlowReplayMs === undefined) {
+      const measured = cadenceReport()
       window.captureBridge.sendFrames({
         displayId: startPayload?.displayId ?? '',
         bytes,
         frames: frames ?? 0,
+        // Omitted, never zeroed, while nothing can honestly be said (#82): a
+        // rate nobody measured must not be reported as a rate.
+        ...(measured === null ? {} : { cadence: measured }),
       })
     }
     armEvidenceCheck(EVIDENCE_STALL_MS)
@@ -347,6 +436,7 @@ async function startCapture(payload: CaptureStartPayload): Promise<void> {
   evidenceStrikes = 0
   unknownFramesLogged = false
   evidenceFrames = deliveredFrames() ?? 0
+  startCadenceMonitor()
   startSlot(slots[0])
   armEvidenceCheck(EVIDENCE_DEADLINE_MS)
   slots[1].startTimer = window.setTimeout(() => startSlot(slots[1]), segmentMs)
