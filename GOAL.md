@@ -704,7 +704,10 @@ Plugins
 
 Every row tells the truth or says nothing: a shipped plugin reports what it actually did
 (and why it did not, when it failed), carries a switch that genuinely changes behavior,
-and explains itself in one line with a "?" for the long version. A row may only say
+and explains itself in one line with a "?" for the long version. **"Last capture" means
+the last capture**: a capture taken with the switch off collects nothing and therefore
+leaves no counts behind, so switching the plugin back on says what it does rather than
+quoting a capture two captures ago. A row may only say
 "coming soon" while that is still true — Windows UI Automation shipped in 0.1.4 and object
 picking has run on it ever since.
 
@@ -774,13 +777,25 @@ Settings are edited in a GUI window — never by opening settings.json in an edi
   - **MCP** — enable, start automatically, port, watch export folder, log requests, plus
     the read-only badge. The section reports the server's **live state**, not the settings:
     running on the endpoint it actually bound, starting, or not running with the reason
-    (disabled, autostart off, port in use, bind error). **Restart** stops and restarts the
-    server in place with the current settings and reports the outcome — so changing the
-    port costs a button, never an app restart (and never the recording of the last N
-    seconds). Beside the connection URL, one click copies a **ready-made setup command**
-    for the chosen client (the forms documented in docs/MCP.md) and the **ready-made
-    prompt** to hand an AI once connected — both built from the LIVE endpoint, both
-    disabled while nothing is listening.
+    (disabled, autostart off, port in use, bind error).
+    **"Enable MCP server" is the on/off switch it says it is**: unchecking it stops the
+    running server there and then and the status row says so; checking it starts one and
+    reports where it bound (or why it could not). It is never a note for the next launch —
+    a checkbox that reads "Enable MCP server" while a server keeps answering requests is
+    the same lie as a tray icon that claims to be recording. **"Start automatically"**
+    governs one thing only, and says so under its label: whether an enabled server comes
+    up with the app.
+    **Restart** stops and restarts the server in place with the current settings and
+    reports the outcome — so changing the port costs a button, never an app restart (and
+    never the recording of the last N seconds). It is the *apply* affordance, not the
+    on/off one, and it is greyed out while the server is switched off, because there is
+    nothing to restart.
+    Beside the connection URL, one click copies a **ready-made setup command** for the
+    chosen client (the forms documented in docs/MCP.md) and the **ready-made prompt** to
+    hand an AI once connected. The setup command is built from the LIVE endpoint and is
+    disabled while nothing is listening — a pasted dead URL is worse than no button. The
+    prompt is the fixed English sentence the save toast also carries; it names no endpoint,
+    so it is always copyable — there is nothing in it a dead socket could make wrong.
   - **Plugins** — the Plugin Manager surface (GOAL "Plugin Manager"): each integration with
     a status read from REALITY, a one-line description of what it does and what it costs, a
     "?" that reveals the long explanation, and a real Enable/Disable where the switch can

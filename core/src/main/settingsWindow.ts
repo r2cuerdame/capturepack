@@ -77,7 +77,7 @@ export function registerSettingsIpc(live: Settings, hooks: SettingsIpcHooks = {}
     return { ...liveStatus(live), mcp: restarted }
   })
 
-  ipcMain.handle(IPC.settingsSet, (_event, patch: unknown): SettingsSetResult => {
+  ipcMain.handle(IPC.settingsSet, async (_event, patch: unknown): Promise<SettingsSetResult> => {
     const safePatch =
       patch !== null && typeof patch === 'object' && !Array.isArray(patch)
         ? (patch as Record<string, unknown>)
@@ -136,6 +136,22 @@ export function registerSettingsIpc(live: Settings, hooks: SettingsIpcHooks = {}
     // Instant apply (GOAL i18n): the tray rebuilds and open windows re-render.
     if (live.language !== before.language) {
       hooks.onLanguageChanged?.()
+    }
+    // LAST, and the only awaited step: "Enable MCP server" is the switch it says
+    // it is (v0.1.6). Unchecking it STOPS the running server and checking it
+    // starts one, both before this reply is sent. It used to be advisory — the
+    // server kept answering requests and the status row kept saying "Running on
+    // …" with the box unchecked, which is the same lie as a tray icon that
+    // claims to be recording.
+    //
+    // AWAITED rather than fired and forgotten, because the renderer re-reads the
+    // live status the moment this resolves: the bind (or the close) has to have
+    // settled or the row would repaint from the state we just left behind. It
+    // goes last so a slow bind cannot delay any of the instant-apply hooks
+    // above. mcpAutoStart is deliberately not consulted — flipping this switch
+    // by hand IS the manual start mcpAutoStart governs.
+    if (live.mcpEnabled !== before.mcpEnabled) {
+      await restartMcpServer(live)
     }
     return { settings: { ...live }, hotkeyFailed }
   })

@@ -4,9 +4,16 @@
 // WHY this is a module of its own. server.ts knows how to bind a socket; it
 // deliberately does not know whether it SHOULD. Whether the server runs is a
 // policy question with two different answers — at app start it obeys
-// mcpEnabled AND mcpAutoStart, while [Restart] in Settings obeys mcpEnabled
-// alone, because pressing that button IS the manual start that mcpAutoStart
-// says the app must not perform on its own.
+// mcpEnabled AND mcpAutoStart, while every LATER decision (the "Enable MCP
+// server" switch, [Restart]) obeys mcpEnabled alone, because flipping that
+// switch or pressing that button IS the manual start mcpAutoStart says the app
+// must not perform on its own.
+//
+// "Enable MCP server" IS the on/off switch, not a note for next launch (v0.1.6):
+// unchecking it stops the running server now and checking it starts one now. A
+// checkbox that reads "Enable MCP server" while a server keeps answering
+// requests is the same lie as a tray icon that claims to be recording, and it is
+// what this release exists to remove.
 //
 // RESTARTING TOUCHES NOTHING ELSE. A restart closes one HTTP server and one
 // pack-index watcher and creates new ones. The replay buffer, the global hotkey
@@ -31,6 +38,25 @@ function stoppedStatus(reason: McpStoppedReason, configuredPort: number): McpSta
   return { state: 'stopped', endpoint: '', port: 0, configuredPort, reason, detail: '' }
 }
 
+// Lifecycle changes run ONE AT A TIME. [Restart] disables itself while it works,
+// but the "Enable MCP server" switch cannot: a fast off/on is two clicks, and
+// without this queue the second one would try to bind a port the first one's
+// socket has not released yet and the row would report "port {n} is already in
+// use" — the app lying about itself, which is precisely what issue #54's live
+// status row exists to prevent.
+let lifecycle: Promise<void> = Promise.resolve()
+
+function serialize<T>(op: () => Promise<T>): Promise<T> {
+  const run = lifecycle.then(op, op)
+  // The tail never rejects, or one failed transition would poison every later
+  // one. Each caller still sees its own result (or its own throw) via `run`.
+  lifecycle = run.then(
+    () => undefined,
+    () => undefined,
+  )
+  return run
+}
+
 /**
  * Starts the server at app startup, honoring both mcpEnabled and mcpAutoStart.
  * `settings` is the LIVE object main shares, so request-time reads follow the
@@ -51,25 +77,38 @@ export function startMcpAtBoot(settings: Settings): void {
 }
 
 /**
- * Stops and restarts the server with the CURRENT settings, and resolves with
- * what actually happened (bound on which port / failed and why). mcpAutoStart
- * is deliberately not consulted — see the file header.
+ * Brings the server in line with the CURRENT settings — stopping whatever runs
+ * and starting a new one when mcpEnabled says so — and resolves with what
+ * actually happened (bound on which port / stopped and why / failed and why).
+ * mcpAutoStart is deliberately not consulted; see the file header.
+ *
+ * This is BOTH [Restart] and the "Enable MCP server" switch: the two mean the
+ * same thing to the server ("make reality match these settings"), and having one
+ * implementation is what keeps the status row and the running socket from ever
+ * disagreeing about which of them won.
  */
-export async function restartMcpServer(settings: Settings): Promise<McpStatus> {
-  await stopMcpServer()
-  if (!settings.mcpEnabled) {
-    applied = { ...settings }
-    idleStatus = stoppedStatus('disabled', settings.mcpPort)
-    return mcpStatus()
-  }
-  const started = launch(settings)
-  // Waiting for the bind to settle is what turns [Restart] into an answer
-  // rather than a hope: listen() and its error are both asynchronous.
-  return started.ready()
+export function restartMcpServer(settings: Settings): Promise<McpStatus> {
+  return serialize(async () => {
+    await stopInPlace()
+    if (!settings.mcpEnabled) {
+      applied = { ...settings }
+      idleStatus = stoppedStatus('disabled', settings.mcpPort)
+      return mcpStatus()
+    }
+    const started = launch(settings)
+    // Waiting for the bind to settle is what turns the switch and [Restart] into
+    // an answer rather than a hope: listen() and its error are both asynchronous.
+    return started.ready()
+  })
 }
 
-/** Stops the server (app shutdown, or the first half of a restart). */
-export async function stopMcpServer(): Promise<void> {
+/** Stops the server (app shutdown). */
+export function stopMcpServer(): Promise<void> {
+  return serialize(stopInPlace)
+}
+
+/** The stop itself, already inside the lifecycle queue. */
+async function stopInPlace(): Promise<void> {
   const current = handle
   handle = null
   if (current === null) return
