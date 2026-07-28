@@ -17,7 +17,6 @@ import type {
   EditorDisplayPayload,
   EditorExportPayload,
   EditorInitPayload,
-  EditorUiaObjectsPayload,
   RecorderFailureReason,
   ReplayUnavailablePayload,
 } from '../shared/ipc'
@@ -70,14 +69,15 @@ import {
   type InitialSaveInput,
   type PackHandle,
 } from './exporter'
+import type { ContextObservation } from './context/buffer'
+import { editorUiaElements, editorUiaWindows } from './context/legacyPack'
+import { openContextSession, pushContextFrame } from './context/service'
 import { packDocLanguage, uiLanguage, uiT } from './locale'
 import { logError, logInfo, logWarn } from './log'
 import { openPack } from './mcp/store'
 import { showSaveToast, updateToastRenderStatus } from './saveToast'
 import { persistSettings } from './settings'
 import {
-  editorUiaElements,
-  editorUiaWindows,
   mapUiaToSnapshot,
   parseUiaPayload,
   recordUiaSkipped,
@@ -102,8 +102,8 @@ const PLUGIN_NAME_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
  * deadline was routinely already in the past, and the wait returned null WITHOUT
  * LOOKING at a promise that had resolved with a full dump hundreds of ms
  * earlier. Nothing is dropped any more either: a dump that lands after this
- * grace is PUSHED to the editor (IPC.editorUiaObjects) and picking starts
- * working mid-session.
+ * grace is PUSHED to the editor as a new context frame (IPC.contextFrame) and
+ * picking starts working mid-session.
  */
 const UIA_EDITOR_GRACE_MS = 400
 
@@ -552,6 +552,21 @@ async function runFlow(settings: Settings): Promise<void> {
       const settled = await settleWithin(uiaReady, UIA_EDITOR_GRACE_MS)
       if (editor.isDestroyed()) return
       const uia = settled.ready ? settled.value : null
+      // The Surface Resolver's session for this editor window (#66). Core's own
+      // surface record and the Windows UI Automation provider both hang off it,
+      // and the provider is registered through the same public registry an
+      // external one would use — no private path into Core.
+      const contextSession = openContextSession(editor, {
+        displays: uiaTargets.map((target) => ({
+          index: target.index,
+          focused: target.focused,
+          width: target.width,
+          height: target.height,
+        })),
+        replayDurationMs,
+        observation: contextObservation(uia, uiaFocusedIndex, replayDurationMs),
+        dropped: settled.ready && uiaEmpty(uia),
+      })
       if (settled.ready && uiaEmpty(uia)) {
         // GOAL "Silence is not absence": the editor is about to open with
         // picking off, and until this line the only trace was an empty index.
@@ -578,14 +593,11 @@ async function runFlow(settings: Settings): Promise<void> {
         // opening on a bare "No replay" chip (GOAL "Say that you are
         // recording"), so the failure is met here and not in the saved folder.
         replayUnavailableReason: replay === null ? display.replayUnavailableReason : null,
-        // Pickable objects (GOAL "Static object picking"): controls refine,
-        // windows are the floor. Both [] when the dump produced nothing, which
-        // is exactly the pre-feature editor — and [] TOO when it has not landed
-        // yet, in which case the push below carries the real lists.
-        uiaElements: editorUiaElements(uia, uiaFocusedIndex),
-        uiaWindows: editorUiaWindows(uia, uiaFocusedIndex),
-        // Attempted and empty — never "still on its way" (see the push below).
-        uiaDropped: settled.ready && uiaEmpty(uia),
+        // OBJECT PICKING AT A TIME (#64/#65/#66): the session the editor asks
+        // frames on, opened with the frame at the CAPTURE INSTANT, which is
+        // where the editor opens. Empty when the observation has not landed yet
+        // — the push below then carries the real one.
+        context: { sessionId: contextSession.sessionId, frame: await contextSession.frameAt(replayDurationMs) },
         fps: settings.fps,
         scrubInvert: settings.scrubInvert,
         scrubSensitivityMs: settings.scrubSensitivityMs,
@@ -615,12 +627,9 @@ async function runFlow(settings: Settings): Promise<void> {
                 'capturepack: object picking: the UI Automation dump produced nothing usable for this capture',
               )
             }
-            const objects: EditorUiaObjectsPayload = {
-              uiaElements: editorUiaElements(payload, uiaFocusedIndex),
-              uiaWindows: editorUiaWindows(payload, uiaFocusedIndex),
-              dropped: uiaEmpty(payload),
-            }
-            editor.webContents.send(IPC.editorUiaObjects, objects)
+            contextSession.adopt(contextObservation(payload, uiaFocusedIndex, replayDurationMs))
+            contextSession.markDropped(uiaEmpty(payload))
+            pushContextFrame(editor, contextSession, replayDurationMs)
           })
           // Rule 1 again: object data may never be able to fail a capture, and
           // an unhandled rejection here would be an uncaughtException.
@@ -634,11 +643,9 @@ async function runFlow(settings: Settings): Promise<void> {
             logError('capturepack: pushing object data to the editor failed:', err)
             try {
               if (editor.isDestroyed()) return
-              editor.webContents.send(IPC.editorUiaObjects, {
-                uiaElements: [],
-                uiaWindows: [],
-                dropped: true,
-              } satisfies EditorUiaObjectsPayload)
+              contextSession.adopt(null)
+              contextSession.markDropped(true)
+              pushContextFrame(editor, contextSession, replayDurationMs)
             } catch {
               // A window that went away mid-send: nothing left to tell.
             }
@@ -1193,7 +1200,27 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
   // (cursor/fixed), since the captured display may no longer exist.
   const display = resolveTargetDisplay(settings)
   const { win: editor, mode: windowMode } = createEditorWindow(display.bounds, settings)
+  const loadedEditorDisplayList = loadedEditorDisplays(pack, loadedDisplays, replayDurationMs)
+  // Picking works on re-edit too, from the pack's own saved observation — which
+  // for every pack written before v0.2.0 describes exactly one instant, and the
+  // frame says so for every other time rather than offering that instant's
+  // rectangles as if they were the moment on screen (#66).
+  const contextSession = openContextSession(editor, {
+    displays:
+      loadedEditorDisplayList.length === 0
+        ? [{ index: 1, focused: true, width, height }]
+        : loadedEditorDisplayList.map((d) => ({
+            index: d.index,
+            focused: d.focused,
+            width: d.width,
+            height: d.height,
+          })),
+    replayDurationMs,
+    observation: contextObservation(loadedUia, loadedFocusedIndex, replayDurationMs),
+    dropped: loadedUiaDropped,
+  })
   editor.once('ready-to-show', () => {
+    void (async () => {
     const init: EditorInitPayload = {
       snapshotPng: toArrayBuffer(snapshotPng),
       width,
@@ -1203,16 +1230,16 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
       replaySourceStartMs: 0,
       // The saved pack's other frozen displays, read back for the same BOARD a
       // fresh multi-display capture opens: all of them at once, all annotatable.
-      displays: loadedEditorDisplays(pack, loadedDisplays, replayDurationMs),
+      displays: loadedEditorDisplayList,
       replayWebm: replayWebm === null ? null : toArrayBuffer(replayWebm),
       replayMimeType: replayRel === null ? null : replayMimeType(replayRel),
       // Re-edit: a screenshot-only pack is simply what was saved; no live
       // recorder failure to report.
       replayUnavailableReason: null,
-      // Picking works on re-edit too, from the pack's own saved dump.
-      uiaElements: editorUiaElements(loadedUia, loadedFocusedIndex),
-      uiaWindows: editorUiaWindows(loadedUia, loadedFocusedIndex),
-      uiaDropped: loadedUiaDropped,
+      context: {
+        sessionId: contextSession.sessionId,
+        frame: await contextSession.frameAt(replayDurationMs),
+      },
       fps: settings.fps,
       scrubInvert: settings.scrubInvert,
       scrubSensitivityMs: settings.scrubSensitivityMs,
@@ -1227,8 +1254,15 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
       // Re-edit opens in the same remembered mode as a fresh capture.
       windowMode,
     }
+    if (editor.isDestroyed()) return
     editor.webContents.send(IPC.editorInit, init)
     editor.show()
+    })().catch((err: unknown) => {
+      // Rule 1 of object data: it may never break anything else. An editor that
+      // could not build its first frame still opens — it simply opens without
+      // picking, and the log says why.
+      logError('capturepack: opening the re-edit editor failed:', err)
+    })
   })
 
   const outcome = await runEditor(editor, events, t0Ms)
@@ -2125,6 +2159,28 @@ function withoutReplayTimes(a: Annotation): Annotation {
  */
 function uiaEmpty(payload: UiaPluginPayload | null): boolean {
   return payload === null || (payload.windows.length === 0 && payload.elements.length === 0)
+}
+
+/**
+ * The capture-instant observation, on the PACK CLOCK (SPEC §10.1).
+ *
+ * The dump describes the moment the hotkey was pressed, which is the END of the
+ * replay — so it is timestamped `replayDurationMs`, exactly where
+ * `core.capture.triggered` sits in timeline.json. Getting this wrong is wrong
+ * in a way nobody notices for months (design §3.1), which is why the mapping
+ * lives in one place instead of being re-derived per caller.
+ */
+function contextObservation(
+  payload: UiaPluginPayload | null,
+  focusedIndex: number,
+  replayDurationMs: number,
+): ContextObservation | null {
+  if (uiaEmpty(payload)) return null
+  return {
+    tMs: replayDurationMs,
+    windows: editorUiaWindows(payload, focusedIndex),
+    elements: editorUiaElements(payload, focusedIndex),
+  }
 }
 
 function settleWithin<T>(
