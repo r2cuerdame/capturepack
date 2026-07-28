@@ -3327,14 +3327,22 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
   // Dirty baseline = the loaded state exactly as restored above.
   baselineSig = editSig()
   layout()
-  // OPENS FRAMED ON THE FOCUSED DISPLAY (GOAL: the focused display "opens
-  // centered and at the largest scale"). Fitting the whole board instead sized
-  // the screen the capture is ABOUT by the union of every screen — measured on a
-  // two-monitor desk: 0.578 -> 0.430, i.e. every control ~44% smaller by area,
-  // which is precisely the resolution annotation work needs. The overview is one
-  // keystroke away (`, the key left of 1 — never Esc, issue #53), and every
-  // other display is a pan away.
-  if (board.displays.length > 1) zoomToDisplay(focusedDisplayIndex)
+  // OPENS ON THE WHOLE BOARD, every captured display visible at once.
+  //
+  // This used to open framed on the focused display, because framing is sharper
+  // — measured on a two-monitor desk, 0.578 vs 0.430 zoom, every control ~44%
+  // smaller by area on the board. That trade was wrong. A capture whose whole
+  // point is that it took EVERY screen must not open showing one of them: the
+  // first thing the editor says should be what was captured, and a user who
+  // cannot see the other screens has no reason to believe they are in the pack.
+  // Sharpness is one keystroke away (1..9 frames a display, and it is on the
+  // help sheet); the existence of the other displays is not discoverable at all
+  // if they are off screen when the editor opens.
+  //
+  // fitBoard() rather than leaving layout()'s default: it also clears
+  // framedDisplay and syncs the zoom control, so a re-edit opens in the same
+  // state a fresh capture does.
+  fitBoard()
   schedulePaint()
   // A dump that settled while the editor was decoding its frames: apply it now
   // that there is a board to index it against.

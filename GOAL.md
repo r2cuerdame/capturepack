@@ -1100,8 +1100,15 @@ simultaneously is the default** — one Ctrl+Alt+C, N displays in the pack.
   time behind a switcher. Every display is annotatable: a box belongs to the display it
   was drawn on, and the scrub timeline drives all of them together so the whole desktop
   moves through time as one moment.
-  - The focused display (cursor at trigger) opens centered and at the largest scale;
-    the others sit beside it. Zoom/pan applies to the whole board.
+  - **The editor OPENS on the whole board** — every captured display visible at once,
+    not framed on one of them. A capture whose whole point is that it took every screen
+    must not open showing a single screen: the first thing the editor says should be
+    what was captured. Opening framed is sharper (measured on a two-monitor desk, 0.578
+    against 0.430 zoom — every control ~44% smaller by area on the board), and that
+    trade is still the wrong way round, because sharpness is one keystroke away while
+    the *existence* of the other displays is not discoverable at all when they are off
+    screen. `1`..`9` frames a display when the work needs the resolution. Zoom/pan
+    applies to the whole board.
   - **No display picker in the top bar.** The board already shows every display, so a
     row of monitor buttons is redundant chrome in the one place that must stay
     uncluttered. Framing a single display stays available on the keyboard (`1`..`9`,
