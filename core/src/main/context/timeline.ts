@@ -478,7 +478,13 @@ export class SurfaceTimeline {
       // Sub-millisecond is the sample's own resolution; claiming "exact" for
       // anything coarser is the lie TemporalAccuracy exists to prevent.
       exact: errorMs < 1,
-      coverage: degraded ? 'degraded' : 'covered',
+      // A nearest sample further away than the CHECKPOINT interval means
+      // sampling was interrupted — the host died and was restarted (measured:
+      // a 1.35 s gap), the machine slept, or the governor coarsened the ring.
+      // Reporting that as plainly "covered" with a large errorMs would be true
+      // and still misleading: the consumer's staleness rule keys on coverage,
+      // and an interrupted interval is exactly what it exists to catch.
+      coverage: degraded || errorMs > CHECKPOINT_INTERVAL_MS ? 'degraded' : 'covered',
     }
   }
 

@@ -307,8 +307,21 @@ check(
 const nearest = timeline.restoreAt(first + intervalMs / 2)
 check(
   'a time between samples answers with the nearest sample AND its error',
-  nearest.accuracy.exact === false && nearest.accuracy.errorMs > 0 && nearest.accuracy.errorMs <= intervalMs,
+  nearest.accuracy.exact === false &&
+    nearest.accuracy.errorMs > 0 &&
+    nearest.accuracy.errorMs <= intervalMs &&
+    nearest.accuracy.coverage === 'covered',
   JSON.stringify(nearest.accuracy),
+)
+// A gap — a host restart, a sleeping machine — must not read as "covered".
+const gapped = new SurfaceTimeline()
+gapped.append({ timeMs: 0, windows: samples[0].w.map(toWindow) })
+gapped.append({ timeMs: 5_000, windows: samples[0].w.map(toWindow) })
+const inGap = gapped.restoreAt(3_000)
+check(
+  'a time inside a sampling gap says degraded, not covered',
+  inGap.accuracy.coverage === 'degraded' && inGap.accuracy.errorMs === 3_000,
+  JSON.stringify(inGap.accuracy),
 )
 
 // 6. The memory governor drops RESOLUTION, never RANGE — and never a frozen range.
