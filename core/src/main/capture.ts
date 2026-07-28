@@ -15,25 +15,44 @@ import { BrowserWindow, desktopCapturer, ipcMain, screen, session, webContents }
 import type { Display, IpcMainEvent } from 'electron'
 import { IPC } from '../shared/ipc'
 import type {
+  CaptureFramesPayload,
   CaptureReadyPayload,
   CaptureReplayResultPayload,
   CaptureStartPayload,
+  RecorderFailureReason,
 } from '../shared/ipc'
 import type { Settings } from '../shared/types'
 
 const HOTPLUG_DEBOUNCE_MS = 1_000
-// A recorder window loading only proves that its renderer started. The first
-// non-empty replay response proves the MediaRecorder itself is producing video.
-const RECORDER_PROBE_DELAY_MS = 2_000
+// A recorder window loading only proves that its renderer started, and
+// MediaRecorder.start() succeeding proves only that an encoder exists (issue
+// #39). The renderer therefore reports frame evidence itself, on
+// IPC.captureFrames for proof and IPC.captureError with `no-frames` for its
+// absence — both within its own few-second deadline.
+//
+// This probe is what is left: the BACKSTOP for a renderer that says neither. It
+// is deliberately no longer the fast path — asking for a replay stops and
+// restarts a recorder, and doing that to a healthy buffer on every launch cost
+// footage for nothing.
+//
+// It is armed from capture:ready, i.e. from the renderer's OWN clock, because
+// that is the only anchor that keeps it behind the renderer's verdict: a
+// machine where getDisplayMedia takes seconds to resolve (exactly the sick
+// machine this is about) would otherwise have the probe overtake it and
+// announce a vaguer failure first. Its value follows that verdict: the renderer
+// takes two 4 s windows (EVIDENCE_STRIKES), so this has to sit past 8 s.
+const RECORDER_PROBE_DELAY_MS = 10_000
+// The renderer never even got a stream: nothing will anchor the probe, so this
+// one runs from window creation.
+const RECORDER_STARTUP_PROBE_DELAY_MS = 12_000
 const RECORDER_RETRY_PROBE_DELAY_MS = 5_000
 const RECORDER_PROBE_TIMEOUT_MS = 3_000
+// Same bar the renderer applies to its own output (renderer/capture/capture.ts
+// EVIDENCE_MIN_BYTES): a container header carries no frames, so bytes alone
+// were never proof that anything was recorded.
+const RECORDER_EVIDENCE_MIN_BYTES = 4096
 
-export type RecorderFailureReason =
-  | 'screen-unavailable'
-  | 'recorder-unavailable'
-  | 'stream-ended'
-  | 'process-stopped'
-  | 'did-not-start'
+export type { RecorderFailureReason }
 
 export type RecorderState =
   | { status: 'starting' }
@@ -53,9 +72,11 @@ const captureWindows = new Map<number, BrowserWindow>()
 const captureWindowSigs = new Map<number, string>()
 // webContents.id -> display id string; the display-media handler routes by this.
 const assignedDisplays = new Map<number, string>()
-// Actual per-display recorder health. "recording" is set only after the
-// renderer returns non-empty replay bytes; window creation alone stays
-// "starting". Failures come from the renderer's existing capture:error signal.
+// Actual per-display recorder health. "recording" is EARNED: it is set only
+// once the renderer proves frames are flowing (IPC.captureFrames) or the
+// backstop probe returns real replay bytes. Window creation alone — and a
+// MediaRecorder that merely says "recording" — stays "starting". Failures come
+// from the renderer's existing capture:error signal.
 const displayRecorderStates = new Map<number, DisplayRecorderState>()
 const recorderProbeTimers = new Map<number, ReturnType<typeof setTimeout>>()
 let wantedDisplayIds = new Set<number>()
@@ -105,6 +126,12 @@ function publishRecorderState(): void {
   const next = aggregateRecorderState()
   if (sameRecorderState(publishedRecorderState, next)) return
   publishedRecorderState = next
+  // One line per REAL change of the state the tray shows, so a report that says
+  // "it told me it was not recording" carries the reason and the evidence.
+  console.info(
+    `[capture] recorder state: ${next.status}` +
+      (next.status === 'stopped' ? ` (${next.reason}) — ${next.detail}` : ''),
+  )
   for (const listener of recorderStateListeners) listener(getRecorderState())
 }
 
@@ -115,10 +142,24 @@ function setDisplayRecorderState(displayId: number, state: DisplayRecorderState)
 }
 
 function failureReason(message: string): RecorderFailureReason {
+  // FIRST: the recorder was running and lying (issue #39). Its own wording
+  // ("no video frames from the desktop capturer") is the contract.
+  if (message.includes('no video frames')) return 'no-frames'
   if (message.includes('getDisplayMedia')) return 'screen-unavailable'
   if (message.includes('capture stream ended')) return 'stream-ended'
   if (message.includes('MediaRecorder')) return 'recorder-unavailable'
   return 'process-stopped'
+}
+
+/**
+ * `--simulate-no-frames` (dev/test only, alongside --show-settings and friends):
+ * every recorder starts for real but drops its output and reports zero
+ * delivered frames — what this machine looks like when Windows Desktop
+ * Duplication is failing (issue #39). The evidence path, the `no-frames` state,
+ * the announcement and the one recovery attempt are all exercised for real.
+ */
+function simulateNoFrames(): boolean {
+  return process.argv.includes('--simulate-no-frames')
 }
 
 function clearRecorderProbe(displayId: number): void {
@@ -127,11 +168,7 @@ function clearRecorderProbe(displayId: number): void {
   recorderProbeTimers.delete(displayId)
 }
 
-function scheduleRecorderProbe(
-  displayId: number,
-  win: BrowserWindow,
-  delayMs = RECORDER_PROBE_DELAY_MS,
-): void {
+function scheduleRecorderProbe(displayId: number, win: BrowserWindow, delayMs: number): void {
   clearRecorderProbe(displayId)
   const timer = setTimeout(() => {
     recorderProbeTimers.delete(displayId)
@@ -144,23 +181,82 @@ async function probeRecorder(displayId: number, win: BrowserWindow): Promise<voi
   if (captureWindows.get(displayId) !== win || win.isDestroyed() || !wantedDisplayIds.has(displayId)) {
     return
   }
-  const result = await requestReplay(
+  const { replay: result } = await requestReplay(
     win,
     `recorder-state-${displayId}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     RECORDER_PROBE_TIMEOUT_MS,
   )
   if (captureWindows.get(displayId) !== win || !wantedDisplayIds.has(displayId)) return
-  if (result !== null && result.buffer.byteLength > 0) {
+  if (result !== null && result.buffer.byteLength >= RECORDER_EVIDENCE_MIN_BYTES) {
     setDisplayRecorderState(displayId, { status: 'recording' })
     return
   }
   // Preserve a more specific renderer-reported failure if it raced the probe.
   if (displayRecorderStates.get(displayId)?.status === 'stopped') return
+  // Bytes without frames: a container header is all an encoder produces when
+  // the desktop capturer delivers nothing, and treating "byteLength > 0" as
+  // proof is exactly how the tray used to claim a buffer it did not have.
+  const headerOnly = result !== null && result.buffer.byteLength > 0
+  const detail = headerOnly
+    ? `recorder for display ${displayId} produced ${result.buffer.byteLength} bytes of ` +
+      'container header and no video frames'
+    : `recorder for display ${displayId} did not produce replay bytes`
+  console.error(`[capture] ${detail}`)
   setDisplayRecorderState(displayId, {
     status: 'stopped',
-    reason: 'did-not-start',
-    detail: `recorder for display ${displayId} did not produce replay bytes`,
+    reason: headerOnly ? 'no-frames' : 'did-not-start',
+    detail,
   })
+}
+
+/**
+ * The renderer PROVED that video is flowing for this display (GOAL "Say that
+ * you are recording"): frames delivered, or real encoder output. This is the
+ * only fast path to "recording" — and it also confirms a recovery, so a display
+ * that was stopped comes back the moment it produces frames again.
+ */
+function onFramesProven(displayId: number, payload: CaptureFramesPayload): void {
+  if (!wantedDisplayIds.has(displayId)) return
+  const previous = displayRecorderStates.get(displayId)
+  if (previous?.status !== 'recording') {
+    console.info(
+      `[capture] display ${displayId}: frames confirmed (${payload.bytes} recorder bytes, ` +
+        `${payload.frames} delivered frames)`,
+    )
+  }
+  // Proof makes the backstop pointless: leaving it armed would stop and restart
+  // a healthy recorder and throw away buffered footage for nothing.
+  clearRecorderProbe(displayId)
+  setDisplayRecorderState(displayId, { status: 'recording' })
+}
+
+/**
+ * Why a display has no replay right now — what a capture has to SAY when it
+ * finds one missing (GOAL "Say that you are recording"). Never null: a missing
+ * replay always has a reason the user is entitled to.
+ *
+ * A STOPPED recorder's own failure reason wins — that is the honest answer and
+ * the one the tray is showing. Otherwise the display is provably still
+ * recording, and the answer is the OUTCOME OF THIS REQUEST, not a guess from
+ * recorder state: saying "the recorder did not produce video" about a display
+ * whose tray entry reads "recording · last 30s ready" is the same lie as the
+ * one issue #39 is about, only inverted.
+ */
+export function replayUnavailableReason(
+  displayId: number,
+  miss: ReplayMiss = 'no-recorder',
+): RecorderFailureReason {
+  const state = displayRecorderStates.get(displayId)
+  if (state?.status === 'stopped') return state.reason
+  switch (miss) {
+    case 'timeout':
+      return 'replay-timeout'
+    case 'empty':
+      return 'buffer-too-short'
+    case 'window-gone':
+    case 'no-recorder':
+      return 'did-not-start'
+  }
 }
 
 // Routes each capture window's getDisplayMedia call to its assigned display
@@ -389,38 +485,64 @@ function registerReplayListener(): void {
   })
 }
 
-// Asks a capture window for its current replay blob. Resolves null on timeout,
-// when the renderer reports no footage (empty buffer), or when the window is
-// destroyed mid-request (hotplug rebuild).
+/**
+ * WHY a replay request came back with no footage. Distinct outcomes, because
+ * they are distinct things to tell the user (GOAL "Say that you are
+ * recording"): a recorder that never answered is not the same as one that
+ * answered with a buffer too short to be a video.
+ */
+export type ReplayMiss =
+  // No recorder window for this display at all (hotplug rebuild in flight).
+  | 'no-recorder'
+  // The window went away mid-request.
+  | 'window-gone'
+  // The renderer did not answer inside timeoutMs.
+  | 'timeout'
+  // It answered with nothing: no recording slot, or a slot whose payload was
+  // under the evidence bar (on MP4 a freshly started/rotated slot is entirely
+  // muxer-buffered, so this is reachable on a perfectly healthy recorder).
+  | 'empty'
+
+export interface ReplayFetch {
+  replay: {
+    buffer: Buffer
+    durationMs: number
+    mimeType: string
+    replayFile: 'replay.webm' | 'replay.mp4'
+  } | null
+  // Set exactly when `replay` is null.
+  miss: ReplayMiss | null
+}
+
+// Asks a capture window for its current replay blob, reporting WHY when there
+// is none: a timeout, an empty answer, or a window destroyed mid-request.
 export function requestReplay(
   win: BrowserWindow,
   requestId: string,
   timeoutMs: number,
-): Promise<{
-  buffer: Buffer
-  durationMs: number
-  mimeType: string
-  replayFile: 'replay.webm' | 'replay.mp4'
-} | null> {
+): Promise<ReplayFetch> {
   registerReplayListener()
   return new Promise((resolve) => {
     let timer: ReturnType<typeof setTimeout> | undefined
 
     const onResult = (payload: CaptureReplayResultPayload): void => {
       cleanup()
-      if (payload.buffer.byteLength === 0) resolve(null)
+      if (payload.buffer.byteLength === 0) resolve({ replay: null, miss: 'empty' })
       else {
         resolve({
-          buffer: Buffer.from(payload.buffer),
-          durationMs: payload.durationMs,
-          mimeType: payload.mimeType,
-          replayFile: payload.replayFile,
+          replay: {
+            buffer: Buffer.from(payload.buffer),
+            durationMs: payload.durationMs,
+            mimeType: payload.mimeType,
+            replayFile: payload.replayFile,
+          },
+          miss: null,
         })
       }
     }
     const onClosed = (): void => {
       cleanup()
-      resolve(null)
+      resolve({ replay: null, miss: 'window-gone' })
     }
     const cleanup = (): void => {
       clearTimeout(timer)
@@ -429,14 +551,14 @@ export function requestReplay(
     }
 
     if (win.isDestroyed()) {
-      resolve(null)
+      resolve({ replay: null, miss: 'window-gone' })
       return
     }
     replayWaiters.set(requestId, onResult)
     win.once('closed', onClosed)
     timer = setTimeout(() => {
       cleanup()
-      resolve(null)
+      resolve({ replay: null, miss: 'timeout' })
     }, timeoutMs)
     win.webContents.send(IPC.captureRequestReplay, requestId)
   })
@@ -534,6 +656,12 @@ async function rebuild(): Promise<void> {
       settings === null ||
       display === undefined ||
       win.isDestroyed() ||
+      // A STOPPED display has no buffer left to protect, and its renderer has
+      // already spent its one recovery (renderer/capture/capture.ts): keeping
+      // the window would keep the display screenshot-only until the app is
+      // restarted. A rebuild is the one moment recorders are allowed to be
+      // recreated, so this is where it gets a fresh renderer.
+      displayRecorderStates.get(id)?.status === 'stopped' ||
       captureWindowSigs.get(id) !== recorderSignature(display, settings)
     if (!stale) continue
     // destroy() emits 'closed', whose handler releases the window's IPC
@@ -557,7 +685,7 @@ async function rebuild(): Promise<void> {
       captureWindows.set(display.id, win)
       captureWindowSigs.set(display.id, recorderSignature(display, settings))
       if (displayRecorderStates.get(display.id)?.status !== 'stopped') {
-        scheduleRecorderProbe(display.id, win)
+        scheduleRecorderProbe(display.id, win, RECORDER_STARTUP_PROBE_DELAY_MS)
       }
     } catch (err) {
       const detail = String(err)
@@ -596,8 +724,10 @@ async function createCaptureWindow(display: Display, settings: Settings): Promis
           reason: failureReason(detail),
           detail,
         })
-        // The renderer retries once after three seconds. A later non-empty
-        // replay is the only thing that moves the state back to recording.
+        // RECOVER ONCE: the renderer restarts this display's capture three
+        // seconds from now (including after `no-frames`), and this probe is the
+        // backstop that re-checks it. Proven frames — or replay bytes here —
+        // are the only things that move the state back to recording.
         scheduleRecorderProbe(display.id, win, RECORDER_RETRY_PROBE_DELAY_MS)
       }
     }
@@ -607,9 +737,23 @@ async function createCaptureWindow(display: Display, settings: Settings): Promis
         `[capture] display ${display.id}: ${ready.mimeType} -> ${ready.replayFile}, ` +
           `${ready.width}x${ready.height}`,
       )
+      // The recorder is running as of NOW, so the backstop is re-anchored here
+      // — behind the renderer's own frame-evidence deadline, and re-armed for
+      // each restart the renderer performs (see RECORDER_PROBE_DELAY_MS).
+      if (displayRecorderStates.get(display.id)?.status !== 'recording') {
+        scheduleRecorderProbe(display.id, win, RECORDER_PROBE_DELAY_MS)
+      }
+    }
+    const onFrames = (event: IpcMainEvent, payload: CaptureFramesPayload): void => {
+      // Proof from a window a rebuild has already replaced says nothing about
+      // the recorder that serves this display now: claiming "recording" on it
+      // is the very mistake this whole path exists to stop.
+      if (event.sender !== win.webContents || captureWindows.get(display.id) !== win) return
+      onFramesProven(display.id, payload)
     }
     ipcMain.on(IPC.captureError, onError)
     ipcMain.on(IPC.captureReady, onReady)
+    ipcMain.on(IPC.captureFrames, onFrames)
     win.webContents.on('render-process-gone', (_event, details) => {
       setDisplayRecorderState(display.id, {
         status: 'stopped',
@@ -620,6 +764,7 @@ async function createCaptureWindow(display: Display, settings: Settings): Promis
     win.on('closed', () => {
       ipcMain.removeListener(IPC.captureError, onError)
       ipcMain.removeListener(IPC.captureReady, onReady)
+      ipcMain.removeListener(IPC.captureFrames, onFrames)
       assignedDisplays.delete(wcId)
       clearRecorderProbe(display.id)
       if (captureWindows.get(display.id) === win) {
@@ -642,6 +787,10 @@ async function createCaptureWindow(display: Display, settings: Settings): Promis
       replayMaxWidth: settings.replayMaxWidth,
       replayWidth: replay.width,
       replayHeight: replay.height,
+      // Test path for issue #39: a real recorder over a desktop capturer that
+      // delivers nothing. Nobody can break Desktop Duplication on demand, so
+      // this is how the no-frames path stays provable.
+      ...(simulateNoFrames() ? { simulateNoFrames: true } : {}),
     }
     win.webContents.send(IPC.captureStart, payload)
     return win

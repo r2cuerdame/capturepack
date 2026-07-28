@@ -4,10 +4,10 @@
 import { app, Menu, Notification, Tray } from 'electron'
 import type { MenuItemConstructorOptions } from 'electron'
 import * as path from 'node:path'
-import { makeT } from '../shared/i18n'
+import { makeT, recorderFailureText } from '../shared/i18n'
 import type { Language, TranslateFn } from '../shared/i18n'
 import type { UpdaterStatusPayload } from '../shared/ipc'
-import type { RecorderFailureReason, RecorderState } from './capture'
+import type { RecorderState } from './capture'
 
 export interface TrayHandlers {
   onCapture: () => void
@@ -141,31 +141,17 @@ export function createTray(
       const state = getRecorderState()
       if (state.status !== 'stopped') return
       const t = makeT(getLanguage())
-      showBalloon(
-        t('tray.recordingFailed', {
-          reason: recorderFailureText(t, state.reason),
-        }),
-        'error',
-      )
+      const message = t('tray.recordingFailed', {
+        reason: recorderFailureText(t, state.reason),
+      })
+      // GOAL "A failure is always announced": logged as well as shown, so the
+      // guarantee is checkable after the balloon has faded.
+      console.warn(`[tray] announcing recorder failure (${state.reason}): ${message}`)
+      showBalloon(message, 'error')
     },
     refresh(): void {
       rebuildMenu()
     },
-  }
-}
-
-function recorderFailureText(t: TranslateFn, reason: RecorderFailureReason): string {
-  switch (reason) {
-    case 'screen-unavailable':
-      return t('recorder.screenUnavailable')
-    case 'recorder-unavailable':
-      return t('recorder.recorderUnavailable')
-    case 'stream-ended':
-      return t('recorder.streamEnded')
-    case 'process-stopped':
-      return t('recorder.processStopped')
-    case 'did-not-start':
-      return t('recorder.didNotStart')
   }
 }
 

@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../shared/ipc'
 import type {
+  CaptureFramesPayload,
   CaptureReadyPayload,
   CaptureReplayResultPayload,
   CaptureStartPayload,
@@ -18,6 +19,9 @@ contextBridge.exposeInMainWorld('captureBridge', {
   },
   sendReady(payload: CaptureReadyPayload): void {
     ipcRenderer.send(IPC.captureReady, payload)
+  },
+  sendFrames(payload: CaptureFramesPayload): void {
+    ipcRenderer.send(IPC.captureFrames, payload)
   },
   sendError(message: string): void {
     ipcRenderer.send(IPC.captureError, message)

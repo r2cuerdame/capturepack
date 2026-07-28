@@ -18,6 +18,8 @@ import type {
   EditorExportPayload,
   EditorInitPayload,
   EditorUiaObjectsPayload,
+  RecorderFailureReason,
+  ReplayUnavailablePayload,
 } from '../shared/ipc'
 import type {
   Annotation,
@@ -41,11 +43,13 @@ import {
 } from './annotatedRender'
 import {
   captureWindowForDisplay,
+  replayUnavailableReason,
   requestReplay,
   resolveCaptureTargets,
   resolveTargetDisplay,
   takeDisplaySnapshots,
 } from './capture'
+import type { ReplayFetch } from './capture'
 import {
   addManifestPlugin,
   savePack,
@@ -155,6 +159,11 @@ interface FrozenDisplay {
   replayDurationMs: number
   replayMimeType: string | null
   replayFile: 'replay.webm' | 'replay.mp4' | null
+  // Set when this display came back WITHOUT a replay: why its buffer was not
+  // running (GOAL "Say that you are recording"). A capture may never present a
+  // missing replay as if nothing were wrong — the editor and the save toast
+  // both name this reason. null = the replay is here.
+  replayUnavailableReason: RecorderFailureReason | null
 }
 
 /**
@@ -215,6 +224,9 @@ async function freezeDisplays(settings: Settings): Promise<{
     replayDurationMs: 0,
     replayMimeType: null,
     replayFile: null,
+    // Filled in by the replay fetch below; a display that never gets one keeps
+    // the reason its recorder reports.
+    replayUnavailableReason: null,
   })
 
   // ONE grouped capture for the whole trigger: desktopCapturer's thumbnail size
@@ -244,19 +256,64 @@ async function freezeDisplays(settings: Settings): Promise<{
   await Promise.all(
     displays.map(async (d, i) => {
       const win = captureWindowForDisplay(d.id)
-      const replay = win === null ? null : await requestReplay(win, randomUUID(), REPLAY_TIMEOUT_MS)
-      if (replay === null) return
+      const fetched: ReplayFetch =
+        win === null
+          ? { replay: null, miss: 'no-recorder' }
+          : await requestReplay(win, randomUUID(), REPLAY_TIMEOUT_MS)
+      const replay = fetched.replay
+      if (replay === null) {
+        // Screenshot-only for this display — and the user is told WHY, in the
+        // editor and in the save toast (GOAL "Say that you are recording"). The
+        // silent version of this line is exactly what issue #39 reported: a
+        // capture that quietly hands back a screenshot-only pack while the tray
+        // still claimed a running buffer.
+        //
+        // The OUTCOME of this request goes with the display id: a recorder that
+        // is provably still running (it just answered too late, or with a slot
+        // the muxer has not flushed yet) must not be reported as one that never
+        // produced video — the tray is saying the opposite at that very moment.
+        const reason = replayUnavailableReason(d.id, fetched.miss ?? 'no-recorder')
+        console.warn(
+          `[capture] display ${d.id}: no replay for this capture (${reason}) — ` +
+            'the pack keeps its frozen frame only',
+        )
+        displays[i] = { ...d, replayUnavailableReason: reason }
+        return
+      }
       displays[i] = {
         ...d,
         replayWebm: replay.buffer,
         replayDurationMs: replay.durationMs,
         replayMimeType: replay.mimeType,
         replayFile: replay.replayFile,
+        replayUnavailableReason: null,
       }
     }),
   )
   const focusedFrozen = displays.find((d) => d.focused) ?? focused
   return { screens, focused: focusedFrozen, displays }
+}
+
+/**
+ * What the save toast has to say about missing replays (GOAL "Say that you are
+ * recording"): how many captured displays came back without one, whether the
+ * pack itself is therefore screenshot-only, and the recorder's reason — worded
+ * exactly as the tray words it. null when every display delivered.
+ */
+function replayUnavailableForToast(
+  displays: readonly FrozenDisplay[],
+): ReplayUnavailablePayload | null {
+  const missing = displays.filter((d) => d.replayWebm === null)
+  const first = missing[0]
+  if (first === undefined) return null
+  return {
+    // A capture with several dead recorders is one failure to the user; the
+    // focused display's reason leads when it is one of them.
+    reason: (missing.find((d) => d.focused) ?? first).replayUnavailableReason ?? 'did-not-start',
+    screens: missing.length,
+    total: displays.length,
+    focused: missing.some((d) => d.focused),
+  }
 }
 
 /** The exporter's write-side view of the frozen displays (focused bytes are the top-level files). */
@@ -306,6 +363,9 @@ function toEditorDisplays(
     scale: d.scale,
     replayWebm: d.focused || d.replayWebm === null ? null : toArrayBuffer(d.replayWebm),
     replayMimeType: d.focused ? null : d.replayMimeType,
+    // The board labels a display that recorded nothing with THIS reason
+    // instead of a bare "frozen frame".
+    replayUnavailableReason: d.replayUnavailableReason,
     replayDurationMs: d.replayDurationMs,
     // Every recorder was stopped by the SAME trigger, so the replays all END at
     // the capture instant even though they started at slightly different times
@@ -474,6 +534,10 @@ async function runFlow(settings: Settings): Promise<void> {
         // never re-requests them at export time.
         replayWebm: replay === null ? null : toArrayBuffer(replay.buffer),
         replayMimeType: replay?.mimeType ?? null,
+        // No replay for the focused display: the editor says WHY rather than
+        // opening on a bare "No replay" chip (GOAL "Say that you are
+        // recording"), so the failure is met here and not in the saved folder.
+        replayUnavailableReason: replay === null ? display.replayUnavailableReason : null,
         // Pickable objects (GOAL "Static object picking"): controls refine,
         // windows are the floor. Both [] when the dump produced nothing, which
         // is exactly the pre-feature editor — and [] TOO when it has not landed
@@ -649,6 +713,10 @@ async function runFlow(settings: Settings): Promise<void> {
     showSaveToast({
       folderPath: savedHandle.dirPath,
       hasBlur: input.annotations.some((a) => a.blur),
+      // "Saved" must not read as "saved everything": a display whose buffer was
+      // not running produced no replay, and the toast is the last place the user
+      // looks before moving on (GOAL "Say that you are recording").
+      replayUnavailable: replayUnavailableForToast(frozen.displays),
       renderState: hasReplay ? (needsExactCut ? 'trimming' : 'rendering') : 'none',
       uiLanguage: uiLanguage(settings),
     })
@@ -1096,6 +1164,9 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
       displays: loadedEditorDisplays(pack, loadedDisplays, replayDurationMs),
       replayWebm: replayWebm === null ? null : toArrayBuffer(replayWebm),
       replayMimeType: replayRel === null ? null : replayMimeType(replayRel),
+      // Re-edit: a screenshot-only pack is simply what was saved; no live
+      // recorder failure to report.
+      replayUnavailableReason: null,
       // Picking works on re-edit too, from the pack's own saved dump.
       uiaElements: editorUiaElements(loadedUia, loadedFocusedIndex),
       uiaWindows: editorUiaWindows(loadedUia, loadedFocusedIndex),
@@ -1198,6 +1269,9 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
     showSaveToast({
       folderPath: handle.dirPath,
       hasBlur: savedAnnotations.some((a) => a.blur),
+      // Re-edit: nothing was recorded during this save, so there is no recorder
+      // failure to report — the pack's replay is whatever it already had.
+      replayUnavailable: null,
       renderState: hasReplay ? 'rendering' : 'none',
       uiLanguage: uiLanguage(settings),
     })
@@ -1551,6 +1625,9 @@ function loadedEditorDisplays(
       scale: d.scale,
       replayWebm: replay === null ? null : toArrayBuffer(replay),
       replayMimeType: replay === null ? null : replayMimeType(d.replayFile),
+      // Re-edit: a missing replay is a property of the SAVED pack, not a live
+      // recorder failure — there is no reason to name.
+      replayUnavailableReason: null,
       replayDurationMs: durationMs,
       replayOffsetMs: d.focused ? 0 : durationMs - focusedDurationMs,
     })

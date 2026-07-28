@@ -61,7 +61,7 @@ export class Viewport {
    * centre lands on the stage centre.
    *
    * This is how framing one display works (GOAL "Multi-Monitor Support" —
-   * `1`..`9`, with `0`/Esc fitting the board again): the whole board opens
+   * `1`..`9`, with the key left of 1 (`` ` ``) or Esc fitting the board again): the whole board opens
    * fitted, and one keystroke gives a single display the largest usable scale
    * without ever leaving the board — the other screens are a pan away, not a
    * mode away.

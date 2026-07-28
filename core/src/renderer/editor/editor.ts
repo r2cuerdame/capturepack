@@ -15,8 +15,9 @@ import type {
   EditorUiaElement,
   EditorUiaObjectsPayload,
   EditorUiaWindow,
+  RecorderFailureReason,
 } from '../../shared/ipc'
-import { applyDomI18n, makeT } from '../../shared/i18n'
+import { applyDomI18n, makeT, recorderFailureText } from '../../shared/i18n'
 import type { TranslateFn } from '../../shared/i18n'
 import type {
   Annotation,
@@ -152,6 +153,11 @@ const state = new EditorState()
 // language is fixed for the session — the editor window is transient).
 let t: TranslateFn = makeT('en')
 let hasReplay = false
+// WHY a display has no replay, per display index (GOAL "Say that you are
+// recording"): a capture taken while a buffer was not running must say the
+// replay is unavailable and name the reason, not just show a frozen frame.
+// Empty for a re-edited pack, where a missing replay is simply what was saved.
+const replayUnavailableReasons = new Map<number, RecorderFailureReason>()
 let replayDurationMs = 0 // manifest replay_duration_ms; caps every lifetime stamp
 let fitScale = 1
 let loaded = false
@@ -314,13 +320,18 @@ let drag: Drag | null = null
 
 // The inline text input serves two flows: a freshly right-dragged box waiting
 // for its description (Enter commits the box, Esc discards it) and editing the
-// text of an existing box (double-click).
+// text of an existing box — which is now every SELECTION of one (issue #42),
+// not just a double-click.
 type TextSession = { kind: 'new'; draft: Annotation } | { kind: 'edit'; id: string }
 let textSession: TextSession | null = null
 // Bounds the text input hangs under (live object: repositions track the box).
 let textAnchor: AnnotationBounds | null = null
 // The display those bounds belong to — the input is positioned in board space.
 let textDisplay: BoardDisplay | null = null
+// Whether anything has been TYPED into the description since it opened. An
+// untouched field has no text edit of its own to undo, which is what lets
+// Ctrl+Z keep meaning the board's undo there (see the keydown handler).
+let textEdited = false
 
 // ---------------------------------------------------------------------------
 // Board scales. Three spaces meet in the editor (see board.ts): NATIVE pixels
@@ -441,8 +452,8 @@ function toggleWindowMode(): void {
 // bar"). Every captured display is on the board, drawn with its own caption and
 // an accent frame around the focused one, so a row of monitor buttons in the
 // one place that must stay uncluttered was redundant chrome. Framing a single
-// display is a keyboard gesture — 1..9, and 0 (or Esc) to fit the whole board —
-// discoverable through the help sheet.
+// display is a keyboard gesture — 1..9, and the key left of 1 (`, or Esc) to
+// fit the whole board — discoverable through the help sheet.
 // ---------------------------------------------------------------------------
 
 /** The caption drawn inside a display's own frame on the board. */
@@ -451,6 +462,13 @@ function displayLabel(d: BoardDisplay): string {
     ? t('editor.displayLabelFocused', { index: d.index })
     : t('editor.displayLabel', { index: d.index })
   if (runtimes.get(d.index)?.broken === true) return `${base} · ${t('editor.displayBroken')}`
+  // A display whose recorder was not running is a FAILURE, not a layout fact:
+  // it is named here whether or not the board has a clock, because in a
+  // screenshot-only capture this caption is the only place it can be read.
+  const reason = replayUnavailableReasons.get(d.index)
+  if (reason !== undefined) {
+    return `${base} · ${t('editor.displayNotRecording', { reason: recorderFailureText(t, reason) })}`
+  }
   // Only worth saying while there IS a clock: in a screenshot-only pack every
   // display is a frozen frame and the marker would be noise on all of them.
   if (scrub !== null && !d.hasReplay) return `${base} · ${t('editor.displayFrozen')}`
@@ -855,7 +873,9 @@ function helpContent(): Array<{ title: string; rows: HelpRow[] }> {
     [keys('Space', t('editor.keyDrag')), t('editor.helpPan')],
   ]
   if (board !== null && board.displays.length > 1) {
-    viewRows.push(['1…9', t('editor.helpFrameDisplay')], ['0', t('editor.helpFitBoard')])
+    // The key left of 1 (issue #41), with the old 0 still accepted — the sheet
+    // teaches the new one and admits the alias in the same row.
+    viewRows.push(['1…9', t('editor.helpFrameDisplay')], ['` / 0', t('editor.helpFitBoard')])
   }
   groups.push({ title: t('editor.helpGroupView'), rows: viewRows })
   groups.push({
@@ -1119,14 +1139,34 @@ interface Box {
   h: number
 }
 
-/** Live right-drag preview: an ephemeral box that never enters the store. */
-function dragDraft(d: { x0: number; y0: number; x: number; y: number }): Annotation | null {
+/**
+ * Live right-drag preview: an ephemeral box that never enters the store, drawn
+ * exactly as the committed box will be (same colour, same border).
+ *
+ * IT CARRIES ITS DISPLAY, like every real box does (SPEC §8.8). Without that,
+ * `displayIndexOf` resolved the draft to the FOCUSED display and schedulePaint
+ * grouped it there — so a right-drag on any other screen of the board painted
+ * its live rectangle on the focused one (measured: a drag at x 200..400 of the
+ * left screen drew at canvas x 999..1200, i.e. on the right screen), and the
+ * rectangle only appeared under the pointer on release, where beginPendingBox
+ * stamps the display properly. That is issue #40: the drag looked like it drew
+ * nothing at all.
+ */
+function dragDraft(d: {
+  d: BoardDisplay
+  x0: number
+  y0: number
+  x: number
+  y: number
+}): Annotation | null {
   const b = normBox(d)
   if (b.w < MIN_DRAG || b.h < MIN_DRAG) return null
   return {
     annotation_id: 'draft',
     type: 'box',
     bounds: { x: b.x, y: b.y, width: b.w, height: b.h },
+    // Same rule as beginPendingBox: the focused display writes nothing.
+    ...(d.d.index === focusedDisplayIndex ? {} : { display: d.d.index }),
     text: '',
     numbered: false,
     blur: false,
@@ -1193,8 +1233,43 @@ function beginPendingBox(on: BoardDisplay, b: Box, picked?: PickableObject): voi
   schedulePaint()
 }
 
+/**
+ * SELECTS a box and puts the caret in its DESCRIPTION with the existing text
+ * selected (issue #42) — whatever the box was selected BY: a click on the
+ * canvas, a double-click, a lane on the timebar.
+ *
+ * Creating a box has always opened its description this way, and the editor is
+ * built around typing immediately; a selected box that made the user click into
+ * its text first was the one place that rhythm broke. Selected-with-text-
+ * selected means typing REPLACES the description and Esc leaves it exactly as
+ * it was, which is the same contract the pending-box input has.
+ *
+ * Two consequences, both intended and both already the editor's rule: the
+ * keyboard shortcuts are dead while a text field has focus (so Delete edits the
+ * description instead of deleting the box — the header × is what deletes a
+ * selected box now), and a move/resize drag must NOT pull focus back to the
+ * canvas (overlay's mousedown handler suppresses the focus it would otherwise
+ * take, and the drag path never focuses anything).
+ *
+ * ONE exception, because this path made it necessary: Ctrl+Z/Ctrl+Y on a
+ * description nothing has been typed into still undoes the BOARD (see the
+ * #textEditor keydown handler). Every move and resize ends here, so the undo
+ * the sheet advertises has to survive the selection it just made.
+ */
+function selectBox(id: string, on?: BoardDisplay): void {
+  const a = state.byId(id)
+  if (a === undefined) return
+  state.selectedId = id
+  const display = on ?? displayOf(a)
+  if (display === null) return
+  textSession = { kind: 'edit', id }
+  // The bounds OBJECT, not a copy: a move/resize mutates it in place and
+  // positionTextEditor re-reads it, so the input rides along with the box.
+  openTextEditor(display, a.bounds, a.text, true)
+}
+
 // ---------------------------------------------------------------------------
-// Inline text input (new-box description / double-click text edit)
+// Inline text input (new-box description / box-selection text edit)
 // ---------------------------------------------------------------------------
 
 function openTextEditor(
@@ -1206,6 +1281,7 @@ function openTextEditor(
   textAnchor = anchor
   textDisplay = on
   textEditor.value = value
+  textEdited = false
   textEditor.hidden = false
   positionTextEditor()
   textEditor.focus()
@@ -1276,12 +1352,44 @@ function closeTextEditor(refocus = true): void {
   if (refocus) overlay.focus()
 }
 
+textEditor.addEventListener('input', () => {
+  textEdited = true
+})
 textEditor.addEventListener('keydown', (e) => {
   // F11 (window mode) and F1 (the shortcut sheet) are window shortcuts, not
   // editing keys: forwarded rather than swallowed, so the advertised "works
   // from anywhere" holds while typing a box description (which is where
   // re-edit spends most of its time).
   if (e.key === 'F11' || e.key === 'F1') return
+  // Ctrl+Z / Ctrl+Y on an UNTOUCHED description of an EXISTING box is the
+  // board's undo, and is answered here.
+  //
+  // Selecting a box opens its description (issue #42) — and a move or resize
+  // drag selects it — so after the one gesture undo is most wanted for, the
+  // caret sits in a text field that swallows every shortcut. With nothing typed
+  // there is no text edit for the field's own undo to revert, so the keystroke
+  // can only mean the board's; the standing rule (shortcuts are dead while
+  // typing) takes over again the moment anything is typed, and the field keeps
+  // its native undo from then on.
+  //
+  // A box being CREATED is excluded: it is not in the store yet, so "undo"
+  // there would step past a box the user is still writing. Esc discards it,
+  // which is what the sheet says.
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !textEdited && textSession?.kind === 'edit') {
+    const k = e.key.toLowerCase()
+    if (k === 'z' || k === 'y') {
+      e.preventDefault()
+      e.stopPropagation()
+      // undo/redo swaps the whole annotation array and clears the selection, so
+      // this text session is over — and with nothing typed there is nothing to
+      // commit on the way out.
+      closeTextEditor()
+      if (k === 'y' || e.shiftKey) state.redo()
+      else state.undo()
+      refresh()
+      return
+    }
+  }
   e.stopPropagation()
   if (e.key === 'Enter') {
     // Enter commits the box WITH whatever the header toggles were set to while
@@ -1501,6 +1609,10 @@ function deleteSelected(): void {
   }
   const a = selectedVisibleAnnotation()
   if (a === null) return
+  // The description that selecting this box opened (issue #42) belongs to it:
+  // it closes with the box, and the keyboard goes back to the canvas — an input
+  // left floating over a deleted box would commit its text into nothing.
+  if (textSession?.kind === 'edit' && textSession.id === a.annotation_id) closeTextEditor()
   state.remove(a.annotation_id)
   // Same reason as cancelTextEditor: the box is gone, so its picked rect is too.
   pickedRects.delete(a.annotation_id)
@@ -2171,6 +2283,11 @@ overlay.addEventListener('pointerdown', (e) => {
         before: state.cloneAnnotations(),
         moved: false,
       }
+      // Grabbing a corner is not "leave this box": the description the
+      // selection opened stays open, with its text still selected (issue #42).
+      // commitTextEditor above closed it, so it is re-opened here rather than
+      // left behind on the canvas.
+      selectBox(sel.annotation_id, hit.d)
       return
     }
   }
@@ -2204,7 +2321,6 @@ overlay.addEventListener('pointerdown', (e) => {
     ) {
       showObjectHintOnce('boxTookClick', t('editor.objectBoxTookClick'), 'answer')
     }
-    state.selectedId = box.annotation_id
     overlay.setPointerCapture(e.pointerId)
     drag = {
       kind: 'move',
@@ -2215,6 +2331,12 @@ overlay.addEventListener('pointerdown', (e) => {
       before: state.cloneAnnotations(),
       moved: false,
     }
+    // Selecting a box opens its description with the text selected (issue
+    // #42): the click that starts a move is also the click that says "this
+    // box", and typing must land in it without a second click into the text.
+    // The move drag below never touches focus, and #overlay's mousedown
+    // handler suppresses the focus mousedown would otherwise steal back.
+    selectBox(box.annotation_id, hit.d)
     syncLanes()
     schedulePaint()
     return
@@ -2271,12 +2393,16 @@ overlay.addEventListener('pointermove', (e) => {
     }
     drag.lastX = p.x
     drag.lastY = p.y
+    // The description of the box being dragged is open (issue #42) and anchors
+    // to bounds that just moved: it rides along instead of being left behind.
+    positionTextEditor()
   } else {
     const a = state.byId(drag.id)
     if (a) {
       applyResize(a, drag.handle, p.x, p.y)
       drag.moved = true
     }
+    positionTextEditor()
   }
   schedulePaint()
 })
@@ -2301,18 +2427,19 @@ overlay.addEventListener('pointerup', endDrag)
 overlay.addEventListener('pointercancel', endDrag)
 
 // Double-click a box to edit its text inline (Enter applies, Esc abandons).
+// Since issue #42 the FIRST click already does this, so what is left here is
+// making the gesture land on the same box when the double-click's own second
+// press was answered by something else (a repeat click discarding a click-pick
+// draft), and doing it through the one selection path.
 overlay.addEventListener('dblclick', (e) => {
   if (!loaded || e.button !== 0) return
   const hit = pointAt(e)
   if (hit === null) return
   const id = hitTest(visibleAnnotationsOn(hit.d.index), hit.x, hit.y, uiOf(hit.d))
   if (id === null) return
-  const a = state.byId(id)
-  if (!a) return
+  if (state.byId(id) === undefined) return
   e.preventDefault()
-  state.selectedId = id
-  textSession = { kind: 'edit', id }
-  openTextEditor(hit.d, a.bounds, a.text)
+  selectBox(id, hit.d)
   syncLanes()
   schedulePaint()
 })
@@ -2549,7 +2676,7 @@ window.addEventListener('keydown', (e) => {
     // from the first frame — treating that as something to back out of would
     // charge every multi-display capture an extra Esc for close, deselect and
     // discard alike, which is exactly what the rung above exists to avoid. The
-    // whole board is still one keystroke away: 0.
+    // whole board is still one keystroke away: ` (the key left of 1).
     if (board !== null && board.displays.length > 1 && viewNavigated && viewport.panEnabled) {
       fitBoard()
       return
@@ -2620,13 +2747,33 @@ window.addEventListener('keydown', (e) => {
   }
   if (e.altKey) return
   // Board navigation (GOAL "Multi-Monitor Support"): 1..9 frames one captured
-  // display at the largest usable scale, 0 fits the whole board again. Free
-  // keys — the editor is toolless, so digits were never a tool selector.
-  if (board !== null && board.displays.length > 1 && /^[0-9]$/.test(e.key)) {
-    e.preventDefault()
-    if (e.key === '0') fitBoard()
-    else zoomToDisplay(Number(e.key))
-    return
+  // display at the largest usable scale, and the key LEFT OF 1 fits the whole
+  // board again. Free keys — the editor is toolless, so digits were never a
+  // tool selector.
+  //
+  // Fit is bound to the PHYSICAL key (`e.code === 'Backquote'`), not to the
+  // character it produces: it sits next to 1..9 so the whole group is under one
+  // hand, and that is only true if the binding follows the key rather than the
+  // layout — the same physical key types ` on US, ² on AZERTY, ^ on a German
+  // board. The literal backtick is accepted too (layouts that put it
+  // elsewhere), and so is 0, which is where this lived until issue #41: there
+  // is no reason to break the muscle memory of anyone who already has it.
+  if (board !== null && board.displays.length > 1) {
+    // Unmodified only, exactly like the 1..9 branch below (where Shift+1 types
+    // ! and no longer matches). Shift+` is ~ on a US/Korean board and something
+    // else again elsewhere; the sheet advertises "` / 0" precisely, so binding
+    // the shifted key too would be an undocumented shortcut on a combination
+    // the sheet describes.
+    if (!e.shiftKey && (e.code === 'Backquote' || e.key === '`' || e.key === '0')) {
+      e.preventDefault()
+      fitBoard()
+      return
+    }
+    if (/^[1-9]$/.test(e.key)) {
+      e.preventDefault()
+      zoomToDisplay(Number(e.key))
+      return
+    }
   }
   switch (e.key.toLowerCase()) {
     case 'c':
@@ -2710,11 +2857,15 @@ const timebar = new Timebar(timebarEl, {
   },
   // Clicking a lifetime bar selects the box and scrubs to its lifetime
   // midpoint (SPEC §8.4 — absent lifetime = the capture instant, i.e. "now").
+  // A box selected from the timebar is a box selected (issue #42): its
+  // description opens with the text selected, exactly as a click on the canvas
+  // does. The scrub happens FIRST so the input is positioned over the box at
+  // the moment it is actually visible.
   selectAnnotation: (id) => {
     const a = state.byId(id)
     if (!a) return
-    state.selectedId = id
     if (scrub) scrub.scrubTo(lifetimeMidpoint(a, scrub.durationMs))
+    selectBox(id)
     syncLanes()
     schedulePaint()
   },
@@ -2810,6 +2961,19 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
   applyDomI18n(t)
   timebar.setT(t)
   hasReplay = payload.hasReplay
+  // Recorders that were not running when the trigger fired (GOAL "Say that you
+  // are recording"): keyed by board/manifest display index, so both the chip
+  // and every display caption can name the reason.
+  replayUnavailableReasons.clear()
+  const focusedInitIndex = payload.displays.find((d) => d.focused)?.index ?? 1
+  if (payload.replayUnavailableReason !== null) {
+    replayUnavailableReasons.set(focusedInitIndex, payload.replayUnavailableReason)
+  }
+  for (const d of payload.displays) {
+    if (d.replayUnavailableReason !== null) {
+      replayUnavailableReasons.set(d.index, d.replayUnavailableReason)
+    }
+  }
   replayDurationMs = payload.replayDurationMs
   fps = payload.fps
   scrubInvert = payload.scrubInvert
@@ -2910,9 +3074,17 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
   resizeCanvases()
   loaded = true
   drawAllFrozen()
+  // The chip is the first thing a capture says about its replay. "No replay" on
+  // its own reads like a property of the capture; when the buffer was not
+  // running it is a FAILURE, so the reason is named and the chip is styled as
+  // the warning it is (GOAL "Say that you are recording").
+  const focusedFailure = payload.replayUnavailableReason
+  replayChip.classList.toggle('warn', focusedFailure !== null)
   replayChip.textContent = hasReplay
     ? t('editor.replaySeconds', { seconds: Math.round(payload.replayDurationMs / 1000) })
-    : t('editor.noReplay')
+    : focusedFailure === null
+      ? t('editor.noReplay')
+      : t('editor.replayUnavailableReason', { reason: recorderFailureText(t, focusedFailure) })
   // ONE CLOCK for the board: the focused display's replay is the pack clock
   // (every lifetime is on it) and every other display's replay is slaved to it,
   // so scrubbing moves the whole desktop through one moment. The replays load
@@ -2970,7 +3142,8 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
   // the screen the capture is ABOUT by the union of every screen — measured on a
   // two-monitor desk: 0.578 -> 0.430, i.e. every control ~44% smaller by area,
   // which is precisely the resolution annotation work needs. The overview is one
-  // keystroke away (0, or Esc), and every other display is a pan away.
+  // keystroke away (`, the key left of 1 — or Esc), and every other display is a
+  // pan away.
   if (board.displays.length > 1) zoomToDisplay(focusedDisplayIndex, false)
   schedulePaint()
   // A dump that settled while the editor was decoding its frames: apply it now

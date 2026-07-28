@@ -7,6 +7,7 @@ import type { IpcMainEvent, IpcMainInvokeEvent } from 'electron'
 import * as path from 'node:path'
 import { IPC } from '../shared/ipc'
 import type {
+  ReplayUnavailablePayload,
   ToastCreateZipResult,
   ToastInitPayload,
   ToastRenderState,
@@ -15,6 +16,10 @@ import { createPackZip } from './exporter'
 
 const TOAST_WIDTH = 420
 const TOAST_HEIGHT = 180
+// The replay-unavailable line is two lines of 12px text plus the column gap.
+// The window is fixed-size and clips, so the room is made here rather than
+// letting the one warning that matters fall off the bottom edge.
+const REPLAY_WARNING_HEIGHT = 44
 const TOAST_MARGIN = 16
 const AUTO_CLOSE_MS = 30_000
 // Hard ceiling for a toast held open by work in flight: a render that never
@@ -70,6 +75,10 @@ export function analyzePrompt(folderPath: string): string {
 export function showSaveToast(options: {
   folderPath: string
   hasBlur: boolean
+  // A display was not recording at the trigger (GOAL "Say that you are
+  // recording"): the toast states it instead of leaving the user to find a
+  // pack with no replay in it. null = every captured display delivered.
+  replayUnavailable: ReplayUnavailablePayload | null
   renderState: ToastRenderState
   // Resolved UI language for the toast strings (shared/i18n Language).
   uiLanguage: string
@@ -79,11 +88,12 @@ export function showSaveToast(options: {
   active = null
 
   const work = screen.getPrimaryDisplay().workArea
+  const height = TOAST_HEIGHT + (options.replayUnavailable === null ? 0 : REPLAY_WARNING_HEIGHT)
   const win = new BrowserWindow({
     x: work.x + work.width - TOAST_WIDTH - TOAST_MARGIN,
-    y: work.y + work.height - TOAST_HEIGHT - TOAST_MARGIN,
+    y: work.y + work.height - height - TOAST_MARGIN,
     width: TOAST_WIDTH,
-    height: TOAST_HEIGHT,
+    height,
     frame: false,
     alwaysOnTop: true,
     skipTaskbar: true,
@@ -114,6 +124,7 @@ export function showSaveToast(options: {
       folderName: path.basename(options.folderPath),
       folderPath: options.folderPath,
       hasBlur: options.hasBlur,
+      replayUnavailable: options.replayUnavailable,
       renderState: options.renderState,
       uiLanguage: options.uiLanguage,
     }

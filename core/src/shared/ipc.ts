@@ -12,6 +12,9 @@ export const IPC = {
   captureReplayResult: 'capture:replay-result',
   // capture window -> main: selected recorder format + negotiated stream size
   captureReady: 'capture:ready',
+  // capture window -> main: PROOF that video is actually flowing (see
+  // CaptureFramesPayload). Only this makes a display count as recording.
+  captureFrames: 'capture:frames',
   // capture window -> main: recorder failed; capture continues screenshot-only
   captureError: 'capture:error',
 
@@ -151,6 +154,34 @@ export const IPC = {
   historyRenderStatus: 'history:render-status',
 } as const
 
+/**
+ * Why a display's replay buffer is not running (GOAL "Say that you are
+ * recording"). Shared by the tray tooltip/balloon, the editor and the save
+ * toast, so a failure is worded the same wherever the user meets it.
+ *
+ * 'no-frames' is the #39 case: the recorder STARTED and reports state
+ * "recording", but the desktop capturer delivers nothing (on Windows a failing
+ * Desktop Duplication), so the buffer is empty. It is distinct from
+ * 'did-not-start', which means the recorder never answered at all.
+ *
+ * The last two belong to a recorder that is PROVABLY STILL RECORDING and simply
+ * had no replay to give for THIS capture. They exist so that case can never be
+ * worded as a dead recorder while the tray says "recording · last 30s ready":
+ *  - 'replay-timeout'    — the request did not come back in time.
+ *  - 'buffer-too-short'  — it came back with less than a decodable video (a slot
+ *    that just started or just rotated; on MP4 its payload is still entirely
+ *    inside the muxer).
+ */
+export type RecorderFailureReason =
+  | 'screen-unavailable'
+  | 'recorder-unavailable'
+  | 'stream-ended'
+  | 'process-stopped'
+  | 'did-not-start'
+  | 'no-frames'
+  | 'replay-timeout'
+  | 'buffer-too-short'
+
 export interface CaptureStartPayload {
   // Electron display id (as a string) this recorder window is assigned to.
   // Routing happens in the main process (display-media handler keyed by the
@@ -165,6 +196,12 @@ export interface CaptureStartPayload {
   // Both are 0 when replayMaxWidth is 0 (native).
   replayWidth: number
   replayHeight: number
+  // TEST PATH for the frame-evidence machinery (--simulate-no-frames, issue
+  // #39): the recorder starts for real, but every chunk it produces is dropped
+  // and the track's frame count is read as 0 — exactly what a machine with a
+  // broken Windows Desktop Duplication looks like from in here. Absent in every
+  // normal run.
+  simulateNoFrames?: boolean
 }
 
 export interface CaptureReadyPayload {
@@ -173,6 +210,24 @@ export interface CaptureReadyPayload {
   replayFile: 'replay.webm' | 'replay.mp4'
   width: number
   height: number
+}
+
+/**
+ * Frame evidence from one recorder window (GOAL "Say that you are recording",
+ * issue #39). MediaRecorder.start() succeeding proves NOTHING: with Desktop
+ * Duplication failing the recorder sits in state "recording" over an empty
+ * buffer, and the tray used to claim "recording · last 30s ready" all the same.
+ *
+ * The renderer sends this the FIRST time it can prove video is flowing —
+ * non-trivial recorder output, or a growing delivered-frame count on the video
+ * track — and main only then lets that display count as recording.
+ */
+export interface CaptureFramesPayload {
+  displayId: string
+  // Recorder bytes behind this proof; a header-only blob is not evidence.
+  bytes: number
+  // MediaStreamTrack delivered-frame count, or 0 where the API is unavailable.
+  frames: number
 }
 
 export interface CaptureReplayResultPayload {
@@ -217,6 +272,12 @@ export interface EditorDisplayPayload {
   replayWebm: ArrayBuffer | null
   // MIME type of replayWebm. null wherever replayWebm is null.
   replayMimeType: string | null
+  // WHY this display has no replay, when it has none (GOAL "Say that you are
+  // recording"): a capture taken while a display's buffer was not running must
+  // say so on that display instead of quietly handing back a frozen frame.
+  // null = the replay is present, or this is a re-edited pack (where a missing
+  // replay is a property of the pack, not a live recorder failure).
+  replayUnavailableReason: RecorderFailureReason | null
   replayDurationMs: number
   // Milliseconds to ADD to the pack clock (the focused display's replay clock,
   // which every annotation lifetime uses) to reach THIS display's own replay
@@ -309,6 +370,12 @@ export interface EditorInitPayload {
   replayWebm: ArrayBuffer | null
   // Actual MIME type of replayWebm (MP4/AVC or WebM VP8/VP9).
   replayMimeType: string | null
+  // WHY the FOCUSED display has no replay (GOAL "Say that you are recording").
+  // Set only on a fresh capture whose recorder was not running: the editor then
+  // names the reason instead of showing a bare "No replay", so a screenshot-only
+  // pack can never be mistaken for a normal one. null whenever there IS a
+  // replay, and on every re-edited pack.
+  replayUnavailableReason: RecorderFailureReason | null
   // Pickable UI objects from the capture instant (GOAL "Static object
   // picking"). BOTH lists are EMPTY whenever there is no object data — no
   // Windows UI Automation dump, a dump that timed out, or a re-edited pack
@@ -475,11 +542,30 @@ export interface RenderResultPayload {
 // the save carries an active trim.
 export type ToastRenderState = 'none' | 'trimming' | 'rendering' | 'done' | 'failed'
 
+/**
+ * A saved pack that is (partly) screenshot-only because a display's replay
+ * buffer was not running at the trigger (GOAL "Say that you are recording",
+ * issue #39). The save toast states it; null means every captured display
+ * delivered its replay.
+ */
+export interface ReplayUnavailablePayload {
+  // The recorder's own reason, worded exactly as the tray words it.
+  reason: RecorderFailureReason
+  // Captured displays with no replay, and how many were captured in total.
+  screens: number
+  total: number
+  // The FOCUSED display is one of them — i.e. the pack itself has no replay.
+  focused: boolean
+}
+
 export interface ToastInitPayload {
   folderName: string
   folderPath: string
   // Any blur box in the pack: show the unredacted-original warning line
   hasBlur: boolean
+  // A display was not recording at the trigger: the toast says the replay is
+  // unavailable rather than letting the user discover it in the folder.
+  replayUnavailable: ReplayUnavailablePayload | null
   renderState: ToastRenderState
   // Resolved UI language (shared/i18n Language) for the toast strings.
   uiLanguage: string

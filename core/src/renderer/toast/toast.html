@@ -22,6 +22,10 @@
       <button id="createZipBtn" type="button" data-i18n="toast.createZip">Create ZIP</button>
       <button id="copyPromptBtn" type="button" data-i18n="toast.copyPrompt">Copy Prompt</button>
     </div>
+    <!-- A display was not recording at the trigger (GOAL "Say that you are
+         recording"): the pack is (partly) screenshot-only and says so here,
+         with the same reason the tray gives. Text is set from i18n at runtime. -->
+    <div id="replayWarning" class="warning" hidden></div>
     <div id="blurWarning" class="warning" hidden data-i18n="toast.blurWarning">
       Original replay contains unredacted content — share replay_annotated.webm or create a sanitized ZIP.
     </div>

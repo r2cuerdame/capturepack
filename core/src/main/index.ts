@@ -200,6 +200,12 @@ function main(): void {
       if (process.argv.includes('--show-history')) openHistoryWindow()
       // Dev aid / headed testing: open the About window on launch.
       if (process.argv.includes('--show-about')) openAboutWindow()
+      // Dev aid / headed testing: fire ONE capture on launch, through the very
+      // entry point the global hotkey uses. Headed tests must never synthesize
+      // a keystroke (the installed CapturePack owns the real accelerator), so
+      // without this the capture flow — including what a capture SAYS when a
+      // display was not recording — cannot be exercised at all.
+      if (process.argv.includes('--capture-now')) capture()
       // Dev aid / headed testing: open the Welcome window on launch.
       if (process.argv.includes('--show-welcome')) {
         settings.welcomeDeferredFromLogin = false

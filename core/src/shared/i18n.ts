@@ -17,6 +17,8 @@
 // translation falls back to English at runtime (and the Record<I18nKey,string>
 // typing keeps every shipped dictionary complete at compile time).
 
+import type { RecorderFailureReason } from './ipc'
+
 export const SUPPORTED_LANGUAGES = ['en', 'ko', 'ja', 'zh', 'es', 'fr', 'de', 'pt', 'ru'] as const
 
 export type Language = (typeof SUPPORTED_LANGUAGES)[number]
@@ -83,6 +85,9 @@ const EN = {
   'recorder.streamEnded': 'the screen capture stream ended',
   'recorder.processStopped': 'the recorder process stopped',
   'recorder.didNotStart': 'the recorder did not produce video',
+  'recorder.noFrames': 'the screen delivered no video frames',
+  'recorder.replayTimeout': 'the recorder did not answer in time',
+  'recorder.bufferTooShort': 'the replay buffer had not filled yet',
 
   'app.hotkeyFailed':
     'Could not register the {hotkey} hotkey. Another application may already be using it.',
@@ -97,6 +102,7 @@ const EN = {
   'editor.notePlaceholder': 'What is wrong? (optional)',
   'editor.colorTooltip': 'Color (C)',
   'editor.noReplay': 'No replay',
+  'editor.replayUnavailableReason': 'No replay — {reason}',
   'editor.replaySeconds': 'Replay: {seconds}s',
   'editor.unsavedChanges': 'Unsaved changes',
   'editor.save': 'Save',
@@ -127,6 +133,7 @@ const EN = {
   'editor.displayLabel': 'Display {index}',
   'editor.displayLabelFocused': 'Display {index} · focused',
   'editor.displayFrozen': 'no replay — frozen frame',
+  'editor.displayNotRecording': 'no replay — {reason}',
   'editor.displayBroken': 'frame unavailable',
   'editor.objectFromCapture': 'Object data is from the capture instant',
   'editor.objectLevelControl': 'Control · {label}',
@@ -197,6 +204,8 @@ const EN = {
   'toast.copyPrompt': 'Copy Prompt',
   'toast.blurWarning':
     'Original replay contains unredacted content — share replay_annotated.webm or create a sanitized ZIP.',
+  'toast.replayUnavailable': 'No replay in this pack — {reason}.',
+  'toast.replayUnavailableScreens': 'No replay on {count} of {total} screens — {reason}.',
   'toast.trimming': 'Trimming replay…',
   'toast.rendering': 'rendering annotated replay…',
   'toast.renderReady': 'annotated replay ready',
@@ -439,6 +448,9 @@ const KO: Record<I18nKey, string> = {
   'recorder.streamEnded': '화면 캡처 스트림이 종료됨',
   'recorder.processStopped': '녹화기 프로세스가 중지됨',
   'recorder.didNotStart': '녹화기가 비디오를 생성하지 못함',
+  'recorder.noFrames': '화면에서 영상 프레임이 오지 않음',
+  'recorder.replayTimeout': '녹화기가 제때 응답하지 않음',
+  'recorder.bufferTooShort': '리플레이 버퍼가 아직 채워지지 않음',
 
   'app.hotkeyFailed':
     '{hotkey} 단축키를 등록하지 못했습니다. 다른 프로그램이 이미 사용 중일 수 있습니다.',
@@ -453,6 +465,7 @@ const KO: Record<I18nKey, string> = {
   'editor.notePlaceholder': '무엇이 문제인가요? (선택)',
   'editor.colorTooltip': '색상 (C)',
   'editor.noReplay': '리플레이 없음',
+  'editor.replayUnavailableReason': '리플레이 없음 — {reason}',
   'editor.replaySeconds': '리플레이: {seconds}초',
   'editor.unsavedChanges': '저장되지 않은 변경',
   'editor.save': '저장',
@@ -483,6 +496,7 @@ const KO: Record<I18nKey, string> = {
   'editor.displayLabel': '디스플레이 {index}',
   'editor.displayLabelFocused': '디스플레이 {index} · 기준',
   'editor.displayFrozen': '리플레이 없음 — 정지 화면',
+  'editor.displayNotRecording': '리플레이 없음 — {reason}',
   'editor.displayBroken': '화면을 불러올 수 없음',
   'editor.objectFromCapture': '개체 정보는 캡처 시점 기준입니다',
   'editor.objectLevelControl': '컨트롤 · {label}',
@@ -540,6 +554,8 @@ const KO: Record<I18nKey, string> = {
   'toast.copyPrompt': '프롬프트 복사',
   'toast.blurWarning':
     '원본 리플레이에는 가려지지 않은 내용이 있습니다 — replay_annotated.webm을 공유하거나 정리된 ZIP을 만드세요.',
+  'toast.replayUnavailable': '이 팩에는 리플레이가 없습니다 — {reason}.',
+  'toast.replayUnavailableScreens': '화면 {total}개 중 {count}개에 리플레이가 없습니다 — {reason}.',
   'toast.trimming': '리플레이 트리밍 중…',
   'toast.rendering': '주석 리플레이 렌더링 중…',
   'toast.renderReady': '주석 리플레이 준비됨',
@@ -776,6 +792,9 @@ const JA: Record<I18nKey, string> = {
   'recorder.streamEnded': '画面キャプチャストリームが終了しました',
   'recorder.processStopped': 'レコーダープロセスが停止しました',
   'recorder.didNotStart': 'レコーダーが映像を生成しませんでした',
+  'recorder.noFrames': '画面から映像フレームが届いていません',
+  'recorder.replayTimeout': 'レコーダーが時間内に応答しませんでした',
+  'recorder.bufferTooShort': 'リプレイバッファがまだ溜まっていません',
 
   'app.hotkeyFailed':
     '{hotkey} ホットキーを登録できませんでした。ほかのアプリが既に使用している可能性があります。',
@@ -790,6 +809,7 @@ const JA: Record<I18nKey, string> = {
   'editor.notePlaceholder': '何が問題ですか？（任意）',
   'editor.colorTooltip': '色 (C)',
   'editor.noReplay': 'リプレイなし',
+  'editor.replayUnavailableReason': 'リプレイなし — {reason}',
   'editor.replaySeconds': 'リプレイ: {seconds}秒',
   'editor.unsavedChanges': '未保存の変更',
   'editor.save': '保存',
@@ -820,6 +840,7 @@ const JA: Record<I18nKey, string> = {
   'editor.displayLabel': 'ディスプレイ {index}',
   'editor.displayLabelFocused': 'ディスプレイ {index} · 基準',
   'editor.displayFrozen': 'リプレイなし — 静止画',
+  'editor.displayNotRecording': 'リプレイなし — {reason}',
   'editor.displayBroken': '画面を読み込めません',
   'editor.objectFromCapture': 'オブジェクト情報はキャプチャ時点のものです',
   'editor.objectLevelControl': 'コントロール · {label}',
@@ -879,6 +900,8 @@ const JA: Record<I18nKey, string> = {
   'toast.copyPrompt': 'プロンプトをコピー',
   'toast.blurWarning':
     '元のリプレイには編集されていない内容が含まれます — replay_annotated.webm を共有するか、整理済み ZIP を作成してください。',
+  'toast.replayUnavailable': 'このパックにリプレイはありません — {reason}。',
+  'toast.replayUnavailableScreens': '{total} 画面中 {count} 画面にリプレイがありません — {reason}。',
   'toast.trimming': 'リプレイをトリム中…',
   'toast.rendering': '注釈付きリプレイをレンダリング中…',
   'toast.renderReady': '注釈付きリプレイの準備完了',
@@ -1114,6 +1137,9 @@ const ZH: Record<I18nKey, string> = {
   'recorder.streamEnded': '屏幕捕获流已结束',
   'recorder.processStopped': '录制器进程已停止',
   'recorder.didNotStart': '录制器未生成视频',
+  'recorder.noFrames': '屏幕未提供任何视频帧',
+  'recorder.replayTimeout': '录制器未及时响应',
+  'recorder.bufferTooShort': '回放缓冲区尚未填满',
 
   'app.hotkeyFailed': '无法注册 {hotkey} 快捷键。可能已被其他应用占用。',
   'app.updateReady': 'CapturePack {version} 可用 — 重启即可更新',
@@ -1127,6 +1153,7 @@ const ZH: Record<I18nKey, string> = {
   'editor.notePlaceholder': '出了什么问题？（可选）',
   'editor.colorTooltip': '颜色 (C)',
   'editor.noReplay': '无回放',
+  'editor.replayUnavailableReason': '无回放 — {reason}',
   'editor.replaySeconds': '回放：{seconds}秒',
   'editor.unsavedChanges': '未保存的更改',
   'editor.save': '保存',
@@ -1157,6 +1184,7 @@ const ZH: Record<I18nKey, string> = {
   'editor.displayLabel': '显示器 {index}',
   'editor.displayLabelFocused': '显示器 {index} · 焦点',
   'editor.displayFrozen': '无回放 — 静止画面',
+  'editor.displayNotRecording': '无回放 — {reason}',
   'editor.displayBroken': '无法加载画面',
   'editor.objectFromCapture': '对象数据来自捕获瞬间',
   'editor.objectLevelControl': '控件 · {label}',
@@ -1212,6 +1240,8 @@ const ZH: Record<I18nKey, string> = {
   'toast.copyPrompt': '复制提示词',
   'toast.blurWarning':
     '原始回放包含未遮盖的内容 — 请分享 replay_annotated.webm 或创建整理后的 ZIP。',
+  'toast.replayUnavailable': '此包没有回放 — {reason}。',
+  'toast.replayUnavailableScreens': '{total} 个屏幕中有 {count} 个没有回放 — {reason}。',
   'toast.trimming': '正在裁剪回放…',
   'toast.rendering': '正在渲染标注回放…',
   'toast.renderReady': '标注回放已就绪',
@@ -1448,6 +1478,9 @@ const ES: Record<I18nKey, string> = {
   'recorder.streamEnded': 'el flujo de captura de pantalla terminó',
   'recorder.processStopped': 'el proceso de grabación se detuvo',
   'recorder.didNotStart': 'la grabadora no produjo vídeo',
+  'recorder.noFrames': 'la pantalla no entregó fotogramas de vídeo',
+  'recorder.replayTimeout': 'la grabadora no respondió a tiempo',
+  'recorder.bufferTooShort': 'el búfer de replay aún no se había llenado',
 
   'app.hotkeyFailed':
     'No se pudo registrar el atajo {hotkey}. Puede que otra aplicación ya lo esté usando.',
@@ -1462,6 +1495,7 @@ const ES: Record<I18nKey, string> = {
   'editor.notePlaceholder': '¿Qué está mal? (opcional)',
   'editor.colorTooltip': 'Color (C)',
   'editor.noReplay': 'Sin replay',
+  'editor.replayUnavailableReason': 'Sin replay: {reason}',
   'editor.replaySeconds': 'Replay: {seconds}s',
   'editor.unsavedChanges': 'Cambios sin guardar',
   'editor.save': 'Guardar',
@@ -1492,6 +1526,7 @@ const ES: Record<I18nKey, string> = {
   'editor.displayLabel': 'Pantalla {index}',
   'editor.displayLabelFocused': 'Pantalla {index} · principal',
   'editor.displayFrozen': 'sin repetición: imagen fija',
+  'editor.displayNotRecording': 'sin repetición: {reason}',
   'editor.displayBroken': 'imagen no disponible',
   'editor.objectFromCapture': 'Los datos de objetos son del instante de la captura',
   'editor.objectLevelControl': 'Control · {label}',
@@ -1552,6 +1587,8 @@ const ES: Record<I18nKey, string> = {
   'toast.copyPrompt': 'Copiar prompt',
   'toast.blurWarning':
     'El replay original contiene contenido sin ocultar — comparte replay_annotated.webm o crea un ZIP saneado.',
+  'toast.replayUnavailable': 'Este paquete no tiene replay: {reason}.',
+  'toast.replayUnavailableScreens': 'Sin replay en {count} de {total} pantallas: {reason}.',
   'toast.trimming': 'Recortando el replay…',
   'toast.rendering': 'renderizando el replay anotado…',
   'toast.renderReady': 'replay anotado listo',
@@ -1789,6 +1826,9 @@ const FR: Record<I18nKey, string> = {
   'recorder.streamEnded': 'le flux de capture d’écran s’est terminé',
   'recorder.processStopped': 'le processus d’enregistrement s’est arrêté',
   'recorder.didNotStart': 'l’enregistreur n’a produit aucune vidéo',
+  'recorder.noFrames': 'l’écran n’a fourni aucune image vidéo',
+  'recorder.replayTimeout': 'l’enregistreur n’a pas répondu à temps',
+  'recorder.bufferTooShort': 'la mémoire tampon du replay n’était pas encore remplie',
 
   'app.hotkeyFailed':
     "Impossible d'enregistrer le raccourci {hotkey}. Une autre application l'utilise peut-être déjà.",
@@ -1803,6 +1843,7 @@ const FR: Record<I18nKey, string> = {
   'editor.notePlaceholder': 'Quel est le problème ? (facultatif)',
   'editor.colorTooltip': 'Couleur (C)',
   'editor.noReplay': 'Pas de replay',
+  'editor.replayUnavailableReason': 'Pas de replay — {reason}',
   'editor.replaySeconds': 'Replay : {seconds}s',
   'editor.unsavedChanges': 'Modifications non enregistrées',
   'editor.save': 'Enregistrer',
@@ -1833,6 +1874,7 @@ const FR: Record<I18nKey, string> = {
   'editor.displayLabel': 'Écran {index}',
   'editor.displayLabelFocused': 'Écran {index} · principal',
   'editor.displayFrozen': 'sans relecture — image figée',
+  'editor.displayNotRecording': 'sans relecture — {reason}',
   'editor.displayBroken': 'image indisponible',
   'editor.objectFromCapture': 'Les données d’objet datent de l’instant de la capture',
   'editor.objectLevelControl': 'Contrôle · {label}',
@@ -1893,6 +1935,8 @@ const FR: Record<I18nKey, string> = {
   'toast.copyPrompt': 'Copier le prompt',
   'toast.blurWarning':
     'Le replay original contient du contenu non masqué — partagez replay_annotated.webm ou créez un ZIP assaini.',
+  'toast.replayUnavailable': 'Aucun replay dans ce pack — {reason}.',
+  'toast.replayUnavailableScreens': 'Aucun replay sur {count} des {total} écrans — {reason}.',
   'toast.trimming': 'Rognage du replay…',
   'toast.rendering': 'rendu du replay annoté…',
   'toast.renderReady': 'replay annoté prêt',
@@ -2131,6 +2175,9 @@ const DE: Record<I18nKey, string> = {
   'recorder.streamEnded': 'der Bildschirmaufnahmestrom wurde beendet',
   'recorder.processStopped': 'der Aufnahmeprozess wurde beendet',
   'recorder.didNotStart': 'der Rekorder hat kein Video erzeugt',
+  'recorder.noFrames': 'der Bildschirm lieferte keine Videobilder',
+  'recorder.replayTimeout': 'der Rekorder hat nicht rechtzeitig geantwortet',
+  'recorder.bufferTooShort': 'der Replay-Puffer war noch nicht gefüllt',
 
   'app.hotkeyFailed':
     'Der Hotkey {hotkey} konnte nicht registriert werden. Möglicherweise verwendet ihn bereits eine andere Anwendung.',
@@ -2146,6 +2193,7 @@ const DE: Record<I18nKey, string> = {
   'editor.notePlaceholder': 'Was ist das Problem? (optional)',
   'editor.colorTooltip': 'Farbe (C)',
   'editor.noReplay': 'Kein Replay',
+  'editor.replayUnavailableReason': 'Kein Replay — {reason}',
   'editor.replaySeconds': 'Replay: {seconds}s',
   'editor.unsavedChanges': 'Ungespeicherte Änderungen',
   'editor.save': 'Speichern',
@@ -2176,6 +2224,7 @@ const DE: Record<I18nKey, string> = {
   'editor.displayLabel': 'Display {index}',
   'editor.displayLabelFocused': 'Display {index} · fokussiert',
   'editor.displayFrozen': 'keine Wiedergabe — Standbild',
+  'editor.displayNotRecording': 'keine Wiedergabe — {reason}',
   'editor.displayBroken': 'Bild nicht verfügbar',
   'editor.objectFromCapture': 'Objektdaten stammen vom Aufnahmezeitpunkt',
   'editor.objectLevelControl': 'Steuerelement · {label}',
@@ -2236,6 +2285,8 @@ const DE: Record<I18nKey, string> = {
   'toast.copyPrompt': 'Prompt kopieren',
   'toast.blurWarning':
     'Das Original-Replay enthält unzensierten Inhalt — teilen Sie replay_annotated.webm oder erstellen Sie ein bereinigtes ZIP.',
+  'toast.replayUnavailable': 'Kein Replay in diesem Pack — {reason}.',
+  'toast.replayUnavailableScreens': 'Kein Replay auf {count} von {total} Bildschirmen — {reason}.',
   'toast.trimming': 'Replay wird zugeschnitten…',
   'toast.rendering': 'annotiertes Replay wird gerendert…',
   'toast.renderReady': 'annotiertes Replay bereit',
@@ -2475,6 +2526,9 @@ const PT: Record<I18nKey, string> = {
   'recorder.streamEnded': 'o fluxo de captura de tela terminou',
   'recorder.processStopped': 'o processo de gravação parou',
   'recorder.didNotStart': 'o gravador não produziu vídeo',
+  'recorder.noFrames': 'a tela não entregou quadros de vídeo',
+  'recorder.replayTimeout': 'o gravador não respondeu a tempo',
+  'recorder.bufferTooShort': 'o buffer de replay ainda não havia enchido',
 
   'app.hotkeyFailed':
     'Não foi possível registrar o atalho {hotkey}. Outro aplicativo pode já estar usando esse atalho.',
@@ -2489,6 +2543,7 @@ const PT: Record<I18nKey, string> = {
   'editor.notePlaceholder': 'O que está errado? (opcional)',
   'editor.colorTooltip': 'Cor (C)',
   'editor.noReplay': 'Sem replay',
+  'editor.replayUnavailableReason': 'Sem replay — {reason}',
   'editor.replaySeconds': 'Replay: {seconds}s',
   'editor.unsavedChanges': 'Alterações não salvas',
   'editor.save': 'Salvar',
@@ -2519,6 +2574,7 @@ const PT: Record<I18nKey, string> = {
   'editor.displayLabel': 'Tela {index}',
   'editor.displayLabelFocused': 'Tela {index} · em foco',
   'editor.displayFrozen': 'sem replay — imagem congelada',
+  'editor.displayNotRecording': 'sem replay — {reason}',
   'editor.displayBroken': 'imagem indisponível',
   'editor.objectFromCapture': 'Os dados de objeto são do instante da captura',
   'editor.objectLevelControl': 'Controle · {label}',
@@ -2579,6 +2635,8 @@ const PT: Record<I18nKey, string> = {
   'toast.copyPrompt': 'Copiar prompt',
   'toast.blurWarning':
     'O replay original contém conteúdo sem ocultação — compartilhe replay_annotated.webm ou crie um ZIP sanitizado.',
+  'toast.replayUnavailable': 'Sem replay neste pacote — {reason}.',
+  'toast.replayUnavailableScreens': 'Sem replay em {count} de {total} telas — {reason}.',
   'toast.trimming': 'Aparando o replay…',
   'toast.rendering': 'renderizando o replay anotado…',
   'toast.renderReady': 'replay anotado pronto',
@@ -2817,6 +2875,9 @@ const RU: Record<I18nKey, string> = {
   'recorder.streamEnded': 'поток захвата экрана завершён',
   'recorder.processStopped': 'процесс записи остановлен',
   'recorder.didNotStart': 'рекордер не создал видео',
+  'recorder.noFrames': 'экран не выдаёт кадров видео',
+  'recorder.replayTimeout': 'рекордер не ответил вовремя',
+  'recorder.bufferTooShort': 'буфер реплея ещё не заполнился',
 
   'app.hotkeyFailed':
     'Не удалось зарегистрировать сочетание {hotkey}. Возможно, его уже использует другое приложение.',
@@ -2831,6 +2892,7 @@ const RU: Record<I18nKey, string> = {
   'editor.notePlaceholder': 'Что не так? (необязательно)',
   'editor.colorTooltip': 'Цвет (C)',
   'editor.noReplay': 'Нет реплея',
+  'editor.replayUnavailableReason': 'Нет реплея — {reason}',
   'editor.replaySeconds': 'Реплей: {seconds} с',
   'editor.unsavedChanges': 'Несохранённые изменения',
   'editor.save': 'Сохранить',
@@ -2861,6 +2923,7 @@ const RU: Record<I18nKey, string> = {
   'editor.displayLabel': 'Экран {index}',
   'editor.displayLabelFocused': 'Экран {index} · основной',
   'editor.displayFrozen': 'без записи — стоп-кадр',
+  'editor.displayNotRecording': 'без записи — {reason}',
   'editor.displayBroken': 'кадр недоступен',
   'editor.objectFromCapture': 'Данные об объектах — на момент захвата',
   'editor.objectLevelControl': 'Элемент · {label}',
@@ -2918,6 +2981,8 @@ const RU: Record<I18nKey, string> = {
   'toast.copyPrompt': 'Скопировать промпт',
   'toast.blurWarning':
     'Исходный реплей содержит незамаскированное содержимое — поделитесь replay_annotated.webm или создайте очищенный ZIP.',
+  'toast.replayUnavailable': 'В этом паке нет реплея — {reason}.',
+  'toast.replayUnavailableScreens': 'Нет реплея на {count} из {total} экранов — {reason}.',
   'toast.trimming': 'Обрезка реплея…',
   'toast.rendering': 'рендеринг аннотированного реплея…',
   'toast.renderReady': 'аннотированный реплей готов',
@@ -3161,6 +3226,33 @@ export function makeT(lang: string): TranslateFn {
   return (key, vars) => {
     const template = dict[key] ?? EN[key] ?? key
     return vars === undefined ? template : interpolate(template, vars)
+  }
+}
+
+/**
+ * ONE wording per recorder failure, for every surface that has to name it: the
+ * tray tooltip and balloon (main), the editor's replay chip and display
+ * captions, and the save toast (renderers). A user who is told "not recording"
+ * in the tray must read the SAME reason in the pack they just saved.
+ */
+export function recorderFailureText(t: TranslateFn, reason: RecorderFailureReason): string {
+  switch (reason) {
+    case 'screen-unavailable':
+      return t('recorder.screenUnavailable')
+    case 'recorder-unavailable':
+      return t('recorder.recorderUnavailable')
+    case 'stream-ended':
+      return t('recorder.streamEnded')
+    case 'process-stopped':
+      return t('recorder.processStopped')
+    case 'did-not-start':
+      return t('recorder.didNotStart')
+    case 'no-frames':
+      return t('recorder.noFrames')
+    case 'replay-timeout':
+      return t('recorder.replayTimeout')
+    case 'buffer-too-short':
+      return t('recorder.bufferTooShort')
   }
 }
 
