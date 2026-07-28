@@ -374,6 +374,7 @@ export function buildReport(
   lines.push('')
 
   const hasReplay = manifest.media.replay !== null
+  const replayName = manifest.media.replay ?? 'replay.webm'
   const replaySeconds = ((manifest.media.replay_duration_ms ?? 0) / 1000).toFixed(1)
   lines.push(`## ${t('pack.environment')}`)
   lines.push('')
@@ -448,7 +449,7 @@ export function buildReport(
     const subject = blurCount === 1 ? '1 box is' : `${blurCount} boxes are`
     lines.push('')
     lines.push(
-      `${subject} marked blur. snapshot.png${hasReplay ? ' and replay.webm' : ''} contain the ` +
+      `${subject} marked blur. snapshot.png${hasReplay ? ` and ${replayName}` : ''} contain the ` +
         'original, unredacted pixels; blur renders only into derived views ' +
         `(${hasReplay ? 'replay_annotated.webm, ' : ''}editor previews).`,
     )

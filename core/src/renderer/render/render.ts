@@ -78,10 +78,22 @@ interface Overlay {
   ui: number
 }
 
-function makeOverlay(job: RenderStartPayload): Overlay {
+function makeOverlay(job: RenderStartPayload, outputWidth: number, outputHeight: number): Overlay {
+  const scaleX = job.width > 0 ? outputWidth / job.width : 1
+  const scaleY = job.height > 0 ? outputHeight / job.height : 1
   return {
     // Stacking order for the overlay passes; z decides who draws on top.
-    ordered: [...job.annotations].sort((a, b) => a.z - b.z),
+    ordered: job.annotations
+      .map((a) => ({
+        ...a,
+        bounds: {
+          x: a.bounds.x * scaleX,
+          y: a.bounds.y * scaleY,
+          width: a.bounds.width * scaleX,
+          height: a.bounds.height * scaleY,
+        },
+      }))
+      .sort((a, b) => a.z - b.z),
     // GLOBAL display numbers (SPEC §8.5) — global over the whole PACK, not just
     // over this job's boxes: a frame where only box 2 is alive still labels it
     // 2, and so does a per-display render that received box 2 alone. The map is
@@ -95,7 +107,7 @@ function makeOverlay(job: RenderStartPayload): Overlay {
         : new Map(job.displayNumbers),
     // Overlay sizes scale with the capture resolution so a 4K replay does not
     // get hairline borders.
-    ui: Math.max(1, job.width / 1280),
+    ui: Math.max(1, outputWidth / 1280),
   }
 }
 
@@ -136,7 +148,7 @@ async function renderStill(job: RenderStartPayload): Promise<{ frameCount: numbe
     const ctx = canvas.getContext('2d')
     if (!ctx) throw new Error('canvas 2d context unavailable')
     ctx.drawImage(bitmap, 0, 0, job.width, job.height)
-    drawOverlay(ctx, canvas, makeOverlay(job), null)
+    drawOverlay(ctx, canvas, makeOverlay(job, canvas.width, canvas.height), null)
     const shipped = await shipFrame(capturePng(canvas, 0))
     return { frameCount: shipped ? 1 : 0 }
   } finally {
@@ -151,7 +163,9 @@ async function renderAnnotated(
   if (replayWebm === null) throw new Error('annotated render job carries no replay')
   const video = document.createElement('video')
   video.muted = true
-  video.src = URL.createObjectURL(new Blob([replayWebm], { type: 'video/webm' }))
+  video.src = URL.createObjectURL(
+    new Blob([replayWebm], { type: job.replayMimeType ?? 'video/webm' }),
+  )
   await videoReady(video)
 
   // Plain-trim range (GOAL "Replay Trim"): play only [trimStartMs, trimEndMs]
@@ -162,12 +176,16 @@ async function renderAnnotated(
   if (trimStartMs > 0) await videoSeek(video, trimStartMs / 1000)
 
   const canvas = document.createElement('canvas')
-  canvas.width = job.width
-  canvas.height = job.height
+  // Preserve the recorded stream's dimensions. The snapshot/reference size can
+  // be native 4K while replayMaxWidth caps this video at 1920; upscaling the
+  // canvas here would throw away the continuous-capture CPU saving during both
+  // exact cuts and annotated renders.
+  canvas.width = video.videoWidth > 0 ? video.videoWidth : job.width
+  canvas.height = video.videoHeight > 0 ? video.videoHeight : job.height
   const ctx = canvas.getContext('2d')
   if (!ctx) throw new Error('canvas 2d context unavailable')
 
-  const overlay = makeOverlay(job)
+  const overlay = makeOverlay(job, canvas.width, canvas.height)
 
   // Annotated keyframes (SPEC §7.3): the instants a still is captured at, from
   // the SHARED rule — the exporter names the files from the same list, and the
@@ -200,7 +218,7 @@ async function renderAnnotated(
     // final frames. Mirrors the editor's Math.min(tMs, replayDurationMs).
     const rawMs = video.currentTime * 1000
     const tMs = job.durationMs > 0 ? Math.min(rawMs, job.durationMs) : rawMs
-    ctx.drawImage(video, 0, 0, job.width, job.height)
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
     drawOverlay(ctx, canvas, overlay, tMs)
     return tMs
   }
@@ -247,12 +265,17 @@ async function renderAnnotated(
   scheduleDraw()
   await video.play()
   await done
-  // Final frame + a short tail so the recorder flushes the last chunk.
+  // Final frame. A plain trim must not append the old 200 ms still-frame tail:
+  // the saved replay's upper bound is the configured window, never N + 200 ms.
   drawFrame()
   // Targets the playhead never reached (the decoded clock can end just short of
   // the recorder's wall clock) resolve against this last composited frame.
   captureDue(Number.POSITIVE_INFINITY)
-  await new Promise((r) => setTimeout(r, 200))
+  const plainTrim =
+    job.annotations.length === 0 &&
+    job.keyframes !== true &&
+    (job.trimStartMs !== undefined || job.trimEndMs !== undefined)
+  if (!plainTrim) await new Promise((r) => setTimeout(r, 200))
   recorder.stop()
   await stopped
   URL.revokeObjectURL(video.src)
@@ -300,7 +323,7 @@ function videoSeek(video: HTMLVideoElement, seconds: number): Promise<void> {
 }
 
 function pickMimeType(): string {
-  for (const t of ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']) {
+  for (const t of ['video/webm;codecs=vp8', 'video/webm;codecs=vp9', 'video/webm']) {
     if (MediaRecorder.isTypeSupported(t)) return t
   }
   return ''

@@ -1,6 +1,10 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../shared/ipc'
-import type { CaptureReplayResultPayload, CaptureStartPayload } from '../shared/ipc'
+import type {
+  CaptureReadyPayload,
+  CaptureReplayResultPayload,
+  CaptureStartPayload,
+} from '../shared/ipc'
 
 contextBridge.exposeInMainWorld('captureBridge', {
   onStart(cb: (payload: CaptureStartPayload) => void): void {
@@ -11,6 +15,9 @@ contextBridge.exposeInMainWorld('captureBridge', {
   },
   sendReplayResult(payload: CaptureReplayResultPayload): void {
     ipcRenderer.send(IPC.captureReplayResult, payload)
+  },
+  sendReady(payload: CaptureReadyPayload): void {
+    ipcRenderer.send(IPC.captureReady, payload)
   },
   sendError(message: string): void {
     ipcRenderer.send(IPC.captureError, message)

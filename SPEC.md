@@ -385,17 +385,12 @@ Rules:
   and that one expression covers the trimmed case too — see the next bullet. The same offset
   applies to a non-focused display's `keyframes` times and to the lifetimes rendered into its
   `replay_annotated`: those are on that display's own clock, not the pack clock.
-- When the writer trimmed the replay (`trim_offset_ms`, [§5.3](#53-media)), only the focused
-  display's replay is trimmed — re-encoding every screen would cost a real-time render each.
-  Non-focused replays keep the ORIGINAL recording's clock. No separate rule is needed: the
-  focused entry's `replay_duration_ms` is already the TRIMMED length, so the difference above
-  equals `trim_offset_ms` plus the difference of the untrimmed lengths. Adding `trim_offset_ms`
-  ALONE is wrong whenever the displays recorded for different lengths, which is the normal case
-  — it drops the end-alignment term. Trimming the OUT-point as well moves the focused replay's
-  end away from the trigger, so end-alignment no longer holds and nothing in the pack can
-  restore it; a writer that does so accepts that a later reader re-aligning the other screens
-  is off by exactly the tail it removed, and SHOULD keep the out-point at the recording's end
-  while the pack declares per-display replays.
+- When the writer trims a multi-display capture (`trim_offset_ms`, [§5.3](#53-media)), it SHOULD
+  cut every declared per-display replay to the same end-aligned real-time interval. A secondary
+  recorder that started later MAY remain shorter and MUST NOT be padded. The duration-difference
+  expression above therefore continues to align every saved display without a special trim
+  rule. Adding `trim_offset_ms` to a reader's seek is wrong: all declared clocks are already
+  rebased, and the field is provenance only.
 - A declared per-display file MUST exist in the pack. Readers MUST ignore per-display files that
   are not declared, and MUST NOT fail when `displays` is absent.
 
@@ -510,24 +505,27 @@ screen content at (or immediately before) the capture trigger.
 
 ## 7. Replay video
 
-The replay video is OPTIONAL. When present it holds the last stretch of screen activity leading
-up to the capture — the MVP target is a ~30-second rolling buffer — so a reader can watch what
-happened *before* the frame.
+The replay video is OPTIONAL. When present it holds the last configured stretch of screen
+activity leading up to the capture — 30 seconds by default — so a reader can watch what happened
+*before* the frame. A writer with a rotating buffer MUST cut surplus footage before finalizing
+the pack: the saved replay MUST NOT be longer than the configured replay length. A buffer that
+has not filled yet stays at its real shorter duration and MUST NOT be padded. The editor or other
+authoring surface SHOULD expose this same final range, not the longer recorder segment.
 
 - The filename MUST be `replay.webm` or `replay.mp4`, and MUST match `manifest.media.replay`.
   A pack MUST NOT contain more than one replay file *of the pack's own display*. A
   multi-monitor capture MAY additionally contain one `replay-d<N>.webm` per other display, each
   declared in `manifest.media.displays` ([§5.6](#56-displays-multi-monitor-captures)).
-- `replay.webm` is the RECOMMENDED container: browser `MediaRecorder` produces WebM (VP8/VP9)
-  with no extra dependencies, which fits the minimal-dependencies principle. `replay.mp4` MAY be
-  used by tools that can produce it; H.264 video is RECOMMENDED inside MP4 for playback
-  compatibility.
+- Writers SHOULD prefer a platform H.264 encoder in `replay.mp4` when one is available, then
+  fall back to VP8 and VP9 in `replay.webm`. A writer MUST declare the filename matching the
+  bytes it actually produced; Matroska/AVC is not WebM and MUST NOT be stored as `replay.webm`.
 - `manifest.media.replay_duration_ms` MUST hold the video's duration in milliseconds.
 - Audio is OPTIONAL and typically absent.
-- **The replay is original evidence and MUST NOT be modified.** Annotations — including blur —
-  are never burned into `replay.webm`/`replay.mp4`. Annotations live in `annotations.json` as
-  editable data; the rendered view lives in the *separate* annotated replay file
-  ([§7.2](#72-the-annotated-replay)).
+- **The replay is unannotated evidence.** A writer MAY range-cut/re-encode the recorder segment
+  to enforce the configured duration (recording the source in-point in `trim_offset_ms`), but
+  annotations — including blur — are never burned into `replay.webm`/`replay.mp4`. Annotations
+  live in `annotations.json` as editable data; the rendered view lives in the *separate*
+  annotated replay file ([§7.2](#72-the-annotated-replay)).
 - **Privacy note:** because the original replay is never redacted, blurred content is visible in
   it. See the sharing rule in [§9](#9-blur-and-privacy).
 - A screenshot-only pack (`"replay": null`) is fully valid. Replay is evidence, not a

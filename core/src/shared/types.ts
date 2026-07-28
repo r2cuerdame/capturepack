@@ -462,6 +462,10 @@ export interface Settings {
   captureHotkey: string
   replaySeconds: number
   fps: number
+  // Longest edge of the continuously recorded replay stream in pixels.
+  // 0 keeps the display's native resolution; otherwise 720..3840. The native
+  // snapshot is captured separately and is never affected by this setting.
+  replayMaxWidth: number
   // Capture display (GOAL "Multi-Monitor Support"):
   //  - "all" (DEFAULT) — the trigger freezes EVERY connected display; the pack
   //    carries per-display media (manifest.media.displays) and the display

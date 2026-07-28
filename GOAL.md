@@ -719,7 +719,8 @@ Settings are edited in a GUI window — never by opening settings.json in an edi
   - **Capture** — **capture hotkey** (recordable field: click, press the new combination;
     default Ctrl+Alt+C; must include a modifier; conflict with another app's global
     shortcut is detected on registration and reverts with an inline error; applies
-    instantly and updates the tray label), replay length (seconds), capture FPS.
+    instantly and updates the tray label), replay length (seconds), capture FPS, replay maximum
+    long edge (`replayMaxWidth`, default 1920, 720..3840, or 0 for native).
   - **Annotation** — default manual duration, show duration label, scrub wheel invert,
     scrub sensitivity (ms per notch).
   - **MCP** — enable, start automatically, port, watch export folder, log requests;

@@ -144,7 +144,7 @@
           "minimum": 0
         },
         "trim_offset_ms": {
-          "description": "OPTIONAL, provenance only: when the writer trimmed the replay before saving, the position (ms) in the original captured recording of this replay's first frame (the trim in-point). Every time in the pack — annotation lifetimes, snapshot_t_ms, timeline offsets against t0 — is already on the trimmed replay's clock, so readers never apply this offset. Absent means the replay was never trimmed. SHOULD be absent when replay is null (SPEC.md §5.3). Only the FOCUSED display's replay is trimmed; non-focused per-display replays keep the original recording's clock (SPEC.md §5.6).",
+          "description": "OPTIONAL, provenance only: when the writer trimmed the replay before saving, the position (ms) in the original captured recording of this replay's first frame (the trim in-point). Every time in the pack — annotation lifetimes, snapshot_t_ms, timeline offsets against t0 — is already on the trimmed replay's clock, so readers never apply this offset. Absent means the replay was never trimmed. SHOULD be absent when replay is null (SPEC.md §5.3). In a multi-display pack, every declared per-display replay SHOULD be cut to the same end-aligned real-time interval; a shorter secondary buffer stays honestly shorter (SPEC.md §5.6).",
           "type": "integer",
           "minimum": 0
         },

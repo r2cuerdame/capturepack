@@ -34,7 +34,7 @@ export interface DisplayDeclaration {
   // 1-based position in manifest.environment.screens.
   index: number
   // Exactly one entry is focused: the display the editor annotates. Its files
-  // ARE the top-level snapshot.png/replay.webm — never duplicated bytes.
+  // ARE the top-level snapshot.png/declared replay — never duplicated bytes.
   focused: boolean
   // Virtual-desktop rectangle in device-independent pixels; x scale = physical.
   bounds: { x: number; y: number; width: number; height: number }
@@ -64,8 +64,8 @@ export interface DisplayCapture extends DisplayDeclaration {
 export function displaySnapshotName(index: number): string {
   return `snapshot-d${index}.png`
 }
-export function displayReplayName(index: number): string {
-  return `replay-d${index}.webm`
+export function displayReplayName(index: number, replayFile = 'replay.webm'): string {
+  return `replay-d${index}.${replayFile.endsWith('.mp4') ? 'mp4' : 'webm'}`
 }
 
 // The names SPEC §5.3/§5.6 permits. A declared name is read back out of a
@@ -79,6 +79,11 @@ const DISPLAY_REPLAY_NAME_RE = /^replay-d[1-9][0-9]*\.(webm|mp4)$/
 /** A declared top-level replay filename, or the default when it is not legal. */
 export function replayFileName(declared: string | null | undefined): string {
   return typeof declared === 'string' && REPLAY_NAME_RE.test(declared) ? declared : 'replay.webm'
+}
+
+/** MIME type implied by a validated replay filename. */
+export function replayMimeType(declared: string | null | undefined): string {
+  return replayFileName(declared).endsWith('.mp4') ? 'video/mp4' : 'video/webm'
 }
 
 /** A declared per-display filename, or the index-derived default. */
@@ -131,7 +136,7 @@ async function writeDisplayFiles(
   if (displays === undefined) return
   await Promise.all(
     displays.map(async (d) => {
-      if (d.focused) return // its bytes are snapshot.png / replay.webm
+      if (d.focused) return // its bytes are snapshot.png / the top-level replay
       if (d.snapshotPng !== null) {
         await writeFile(join(dirPath, d.snapshotFile), d.snapshotPng)
       }
@@ -167,7 +172,7 @@ async function clearDisplayRenderOutputs(
 
 // dirPath -> the save-first per-display write still in flight for it. savePack
 // returns as soon as the CRASH-CRITICAL bytes (manifest, snapshot.png,
-// replay.webm, annotations/timeline/docs) are down, so the editor opens without
+// declared replay, annotations/timeline/docs) are down, so the editor opens without
 // waiting for 100+ MB of other screens; every later writer for that folder
 // (updatePack, saveAsNewPack) settles this first.
 const pendingDisplayWrites = new Map<string, Promise<void>>()
@@ -326,9 +331,9 @@ export interface ExportInput {
   replayWebm: Buffer | null
   replayDurationMs: number
   // The filename the replay is DECLARED under (SPEC §5.3 allows replay.webm and
-  // replay.mp4). Absent = replay.webm, which is the only name this app writes;
-  // a re-edit of an external pack passes the loaded manifest's name so the file
-  // on disk stays declared instead of being silently orphaned.
+  // replay.mp4). Absent = replay.webm; fresh capture passes the selected
+  // recorder container, and re-edit passes the loaded manifest's name so the
+  // file on disk stays declared instead of being silently orphaned.
   replayFile?: string
   annotations: Annotation[]
   title: string
@@ -466,7 +471,12 @@ export interface InitialSaveInput {
   height: number
   capturedAt: Date
   replayWebm: Buffer | null
+  // Actual recorder container name. Absent retains the legacy replay.webm.
+  replayFile?: string
   replayDurationMs: number
+  // Provenance for an exact background cut applied to a cancelled save-first
+  // pack. Absent on the initial raw write.
+  trimOffsetMs?: number
   timeline: TimelineFile
   outputDir: string
   // All-displays capture: save-first writes EVERY display too (that is the
@@ -495,6 +505,7 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
     osVersion: release(),
     screens: input.screens ?? physicalScreens(),
     hasReplay: input.replayWebm !== null,
+    replayFile: input.replayFile,
     replayDurationMs: input.replayDurationMs,
     snapshotTMs: null,
     displays: input.displays,
@@ -517,7 +528,7 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
     await writePackFiles(dirPath, manifest, annotationsFile, input.timeline, input.docLanguage, false)
     await writeFile(join(dirPath, 'snapshot.png'), input.snapshotPng)
     if (input.replayWebm !== null) {
-      await writeFile(join(dirPath, 'replay.webm'), input.replayWebm)
+      await writeFile(join(dirPath, replayFileName(input.replayFile)), input.replayWebm)
     }
   } catch (err) {
     // Never leave a half-written pack behind.
@@ -525,7 +536,7 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
     throw err
   }
   // The OTHER displays' media (up to ~45 MB of webm each) is written in the
-  // background: the pack above is already complete and valid, and the editor
+  // background: the focused pack above is already complete and valid, and the editor
   // must not wait on 100+ MB of screens the user is not annotating. Every later
   // writer for this folder settles it first (settleDisplayWrites).
   if (input.displays !== undefined) {
@@ -546,9 +557,57 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
   return { id, dirPath }
 }
 
+/**
+ * Replaces a save-first pack's raw ring segment with its exact last-N-second
+ * background cut when the editor was cancelled. This deliberately does not add
+ * core.export.created or promise generated render outputs: cancelling still
+ * leaves a raw, unannotated pack, just with an honest replay clock.
+ */
+export async function updateInitialPack(
+  handle: PackHandle,
+  input: InitialSaveInput,
+): Promise<void> {
+  await settleDisplayWrites(handle.dirPath)
+  const previous = await readManifestIfPresent(handle.dirPath)
+  const manifest = buildManifest({
+    id: handle.id,
+    createdAt: input.capturedAt,
+    generatorVersion: app.getVersion(),
+    title: '',
+    note: '',
+    osVersion: release(),
+    screens: input.screens ?? physicalScreens(),
+    hasReplay: input.replayWebm !== null,
+    replayFile: input.replayFile,
+    replayDurationMs: input.replayDurationMs,
+    snapshotTMs: null,
+    trimOffsetMs: input.trimOffsetMs,
+    plugins: previous?.plugins,
+    displays: input.displays,
+  })
+  const annotationsFile: AnnotationsFile = {
+    reference_width: input.width,
+    reference_height: input.height,
+    annotations: [],
+  }
+  await writePackFiles(
+    handle.dirPath,
+    manifest,
+    annotationsFile,
+    input.timeline,
+    input.docLanguage,
+    false,
+  )
+  await writeDisplayFiles(handle.dirPath, input.displays)
+  const replayFile = replayFileName(input.replayFile)
+  if (input.replayWebm === null) await rm(join(handle.dirPath, replayFile), { force: true })
+  else await writeFile(join(handle.dirPath, replayFile), input.replayWebm)
+  await removeReplacedReplayFiles(handle.dirPath, previous, manifest)
+}
+
 export interface UpdatePackOptions {
-  // Re-edit mode (GOAL "History — Save after re-edit"): replay.webm is NEVER
-  // rewritten, re-encoded, or deleted — the file already on disk stays the
+  // Re-edit mode (GOAL "History — Save after re-edit"): the declared replay is
+  // NEVER rewritten, re-encoded, or deleted — the file already on disk stays the
   // original evidence. input.replayWebm is ignored (pass null); the manifest's
   // replay declaration reflects the file actually present in the folder.
   keepReplay?: boolean
@@ -567,6 +626,7 @@ export async function updatePack(
   // A save-first per-display write may still be in flight for this folder; the
   // rewrite below must not race it.
   await settleDisplayWrites(handle.dirPath)
+  const previousManifest = await readManifestIfPresent(handle.dirPath)
   const keepReplay = options.keepReplay === true
   // The replay is whatever the pack DECLARES it is (SPEC §5.3 allows .mp4):
   // testing for replay.webm here would silently orphan a legal replay.mp4 and
@@ -633,15 +693,53 @@ export async function updatePack(
       await writeFile(join(handle.dirPath, replayFile), input.replayWebm)
     }
   }
+  await removeReplacedReplayFiles(handle.dirPath, previousManifest, manifest)
 
   if (input.copyToClipboard) copyFolderToClipboard(handle.dirPath)
   return handle.dirPath
 }
 
+async function readManifestIfPresent(dirPath: string): Promise<Manifest | null> {
+  try {
+    return JSON.parse(await readFile(join(dirPath, 'manifest.json'), 'utf8')) as Manifest
+  } catch {
+    return null
+  }
+}
+
+/**
+ * A background exact-length cut can change MP4 recorder evidence into the WebM
+ * produced by the plain render path. Remove the old, now-undeclared filename so
+ * a pack never retains a stale oversized replay beside the exact one.
+ */
+async function removeReplacedReplayFiles(
+  dirPath: string,
+  previous: Manifest | null,
+  current: Manifest,
+): Promise<void> {
+  const oldTop =
+    typeof previous?.media?.replay === 'string' && REPLAY_NAME_RE.test(previous.media.replay)
+      ? previous.media.replay
+      : null
+  if (oldTop !== null && oldTop !== current.media.replay) {
+    await rm(join(dirPath, oldTop), { force: true })
+  }
+
+  const currentDisplays = new Map(
+    (current.media.displays ?? []).map((d) => [d.index, d.replay] as const),
+  )
+  for (const old of previous?.media?.displays ?? []) {
+    if (old.focused || typeof old.replay !== 'string') continue
+    if (!DISPLAY_REPLAY_NAME_RE.test(old.replay)) continue
+    if (currentDisplays.get(old.index) === old.replay) continue
+    await rm(join(dirPath, old.replay), { force: true })
+  }
+}
+
 /**
  * Save As New CapturePack (GOAL "History — Save after re-edit"): writes the
  * edited state into a NEW folder (CapturePack_<now>, collision-suffixed) with
- * a NEW manifest id, copying replay.webm from the source pack byte-for-byte.
+ * a NEW manifest id, copying the declared replay from the source pack byte-for-byte.
  * The original folder is never touched. Docs are regenerated from the edited
  * data; replay_annotated is NOT copied (it is stale relative to the edited
  * annotations — the caller starts a background render for the new folder).

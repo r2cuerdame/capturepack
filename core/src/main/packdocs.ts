@@ -79,6 +79,7 @@ export function buildReadme(
   const t = makeT(lang)
   const annotations = annotationsFile.annotations
   const hasReplay = manifest.media.replay !== null
+  const replayName = manifest.media.replay ?? 'replay.webm'
   const blurCount = annotations.filter((a) => a.blur).length
   const lines: string[] = []
 
@@ -167,7 +168,7 @@ export function buildReadme(
       blurCount === 1 ? 'one annotation box is marked blur' : `${blurCount} annotation boxes are marked blur`
     lines.push('')
     lines.push(
-      `Note: ${which}. Blur is non-destructive — \`snapshot.png\`${hasReplay ? ' and `replay.webm`' : ''} contain ` +
+      `Note: ${which}. Blur is non-destructive — \`snapshot.png\`${hasReplay ? ` and \`${replayName}\`` : ''} contain ` +
         'the original, unredacted pixels; blur renders only into derived views. Keep that in mind before',
     )
     lines.push('forwarding this folder.')
@@ -210,6 +211,7 @@ function buildOverviewSkill(
 ): string {
   const annotations = annotationsFile.annotations
   const hasReplay = manifest.media.replay !== null
+  const replayName = manifest.media.replay ?? 'replay.webm'
   const numbers = computeDisplayNumbers(annotations)
   const lines: string[] = []
 
@@ -224,7 +226,7 @@ function buildOverviewSkill(
   const size = `${annotationsFile.reference_width}×${annotationsFile.reference_height}`
   lines.push(
     hasReplay
-      ? `**Media:** ${size} snapshot.png + ${((manifest.media.replay_duration_ms ?? 0) / 1000).toFixed(1)}s replay.webm` +
+      ? `**Media:** ${size} snapshot.png + ${((manifest.media.replay_duration_ms ?? 0) / 1000).toFixed(1)}s ${replayName}` +
           '; the annotated view replay_annotated.webm is generated in the background after save.'
       : `**Media:** screenshot only (${size} snapshot.png); no replay, no annotated replay.`,
   )
@@ -308,7 +310,7 @@ function buildOverviewSkill(
     lines.push('')
     lines.push(
       `Blur present: yes — ${blurCount === 1 ? 'one box marks' : `${blurCount} boxes mark`} sensitive content. ` +
-        `snapshot.png${hasReplay ? ' and replay.webm are' : ' is'} NOT redacted (blur is non-destructive and ` +
+        `snapshot.png${hasReplay ? ` and ${replayName} are` : ' is'} NOT redacted (blur is non-destructive and ` +
         'renders only into derived views), so treat the raw media as containing that content.',
     )
   }
@@ -318,13 +320,14 @@ function buildOverviewSkill(
 
 function buildTimelineSkill(manifest: Manifest, timeline: TimelineFile, t: TranslateFn): string {
   const hasReplay = manifest.media.replay !== null
+  const replayName = manifest.media.replay ?? 'replay.webm'
   const lines: string[] = []
   lines.push(`# ${t('pack.skillTimeline')}`)
   lines.push('')
   lines.push(
     `\`t0\` = ${timeline.t0} (${
       hasReplay
-        ? 'the start of replay.webm — offsets are positions on the replay clock'
+        ? `the start of ${replayName} — offsets are positions on the replay clock`
         : 'the capture trigger — this pack has no replay, so offsets are relative to the trigger'
     }).`,
   )
@@ -512,6 +515,7 @@ function buildDomSkill(manifest: Manifest, annotationsFile: AnnotationsFile, t: 
 
 function buildProjectSkill(manifest: Manifest, t: TranslateFn): string {
   const hasReplay = manifest.media.replay !== null
+  const replayName = manifest.media.replay ?? 'replay.webm'
   const lines: string[] = []
   lines.push(`# ${t('pack.skillProject')}`)
   lines.push('')
@@ -530,7 +534,7 @@ function buildProjectSkill(manifest: Manifest, t: TranslateFn): string {
   lines.push('  pixels, never modified.')
   lines.push(
     hasReplay
-      ? '- `replay.webm` — the last seconds before the capture. Original evidence, never modified.'
+      ? `- \`${replayName}\` — the last seconds before the capture. Original evidence, never modified.`
       : '- `replay.webm` — optional last seconds before capture (absent here: screenshot-only pack).',
   )
   lines.push(
@@ -540,13 +544,13 @@ function buildProjectSkill(manifest: Manifest, t: TranslateFn): string {
   )
   lines.push(
     hasReplay
-      ? '  after save, regenerable at any time from replay.webm + annotations.json.'
+      ? `  after save, regenerable at any time from ${replayName} + annotations.json.`
       : '  (absent here — it only exists when there is a replay).',
   )
   if (manifest.media.displays !== undefined && manifest.media.displays.length > 1) {
     lines.push('- `snapshot-d<N>.png` / `replay-d<N>.webm` — the OTHER displays this capture froze, one')
     lines.push('  set per display, declared in `manifest.media.displays` (N = the display index there).')
-    lines.push('  The focused display’s media is the top-level snapshot.png/replay.webm.')
+    lines.push(`  The focused display’s media is the top-level snapshot.png/${replayName}.`)
     lines.push('- `replay_annotated-d<N>.webm` / `frames-d<N>/` — one display’s OWN annotated views,')
     lines.push('  declared in its `manifest.media.displays` entry and present only when that display')
     lines.push('  carries annotations. Every display is annotatable: a box names its screen in')

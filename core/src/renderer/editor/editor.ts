@@ -2924,7 +2924,9 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
         displayIndex: focusedDisplayIndex,
         focused: true,
         webm: payload.replayWebm,
+        mimeType: payload.replayMimeType ?? 'video/webm',
         durationMs: payload.replayDurationMs,
+        sourceStartMs: payload.replaySourceStartMs,
         offsetMs: 0,
       },
     ]
@@ -2934,7 +2936,9 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
         displayIndex: d.index,
         focused: false,
         webm: d.replayWebm,
+        mimeType: d.replayMimeType ?? 'video/webm',
         durationMs: d.replayDurationMs,
+        sourceStartMs: 0,
         offsetMs: d.replayOffsetMs,
       })
     }

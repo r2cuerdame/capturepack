@@ -144,6 +144,7 @@ interface NumberField {
   min: number
   max: number
   round(value: number): number
+  normalize?(value: number): number
   fromSettings(s: Settings): number
   patch(value: number): SettingsPatch
 }
@@ -164,6 +165,17 @@ const NUMBER_FIELDS: ReadonlyArray<NumberField> = [
     round: Math.round,
     fromSettings: (s) => s.fps,
     patch: (v) => ({ fps: v }),
+  },
+  {
+    id: 'replayMaxWidth',
+    min: 0,
+    max: 3840,
+    round: Math.round,
+    // 0 is the explicit native-resolution sentinel; every non-zero setting is
+    // in the allowed 720..3840 range.
+    normalize: (v) => (v === 0 ? 0 : Math.max(720, v)),
+    fromSettings: (s) => s.replayMaxWidth,
+    patch: (v) => ({ replayMaxWidth: v }),
   },
   {
     // Shown in seconds, stored in milliseconds.
@@ -208,7 +220,8 @@ for (const field of NUMBER_FIELDS) {
       flash(input)
       return
     }
-    const clamped = field.round(Math.min(field.max, Math.max(field.min, typed)))
+    const rounded = field.round(Math.min(field.max, Math.max(field.min, typed)))
+    const clamped = field.normalize?.(rounded) ?? rounded
     if (clamped !== typed) flash(input)
     input.value = String(clamped)
     void apply(field.patch(clamped))

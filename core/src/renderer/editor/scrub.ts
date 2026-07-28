@@ -47,14 +47,29 @@ export class ScrubController {
   // the whole buffer is in range.
   private rangeInMs = 0
   private rangeOutMs: number | null = null
+  // Exact-length replay (GOAL "The replay is exactly the configured length"):
+  // the raw recorder buffer overshoots, so the editor is handed the LOGICAL
+  // last-N-second window — sourceStartMs is where it begins in the raw file and
+  // durationCapMs is its length. The trim range above lives on top of this
+  // window, never on the raw buffer.
+  private readonly sourceStartMs: number
+  private readonly durationCapMs: number
 
-  constructor(webm: ArrayBuffer, fallbackDurationMs: number, private readonly host: ScrubHost) {
+  constructor(
+    webm: ArrayBuffer,
+    mimeType: string,
+    fallbackDurationMs: number,
+    sourceStartMs: number,
+    private readonly host: ScrubHost,
+  ) {
     this.durationMs = Math.max(1, Math.round(fallbackDurationMs))
+    this.durationCapMs = this.durationMs
+    this.sourceStartMs = Math.max(0, Math.round(sourceStartMs))
     this.tMs = this.durationMs
     const video = document.createElement('video')
     video.muted = true
     video.preload = 'auto'
-    video.src = URL.createObjectURL(new Blob([webm], { type: 'video/webm' }))
+    video.src = URL.createObjectURL(new Blob([webm], { type: mimeType }))
     video.addEventListener(
       'loadedmetadata',
       () => {
@@ -231,7 +246,9 @@ export class ScrubController {
     // playback that playbackTick clamped there).
     const trimmed = this.rangeInMs > 0 || !this.nowInRange
     if (this.showingNative || (trimmed && (this.tMs >= this.rangeEndMs - 1 || this.tMs < start))) {
-      this.video.currentTime = start / 1000
+      // Seeks are on the RAW file clock; the position model is on the logical
+      // last-N-second window, which begins at sourceStartMs.
+      this.video.currentTime = (this.sourceStartMs + start) / 1000
       this.tMs = start
     }
     this.showingNative = false
@@ -256,22 +273,32 @@ export class ScrubController {
     this.playing = false
     cancelAnimationFrame(this.rafId)
     this.video.pause()
-    this.tMs = this.clampToRange(this.video.currentTime * 1000)
+    this.tMs = this.clampToRange(this.logicalMs(this.video.currentTime * 1000))
+  }
+
+  /** Raw file position (ms) -> the logical window's clock, clamped to it. */
+  private logicalMs(rawMs: number): number {
+    return Math.min(Math.max(0, rawMs - this.sourceStartMs), this.durationMs)
   }
 
   private playbackTick(): void {
     if (!this.playing) return
-    const raw = this.video.currentTime * 1000
+    const logical = this.logicalMs(this.video.currentTime * 1000)
     // Playback STOPS at the out point (GOAL "Editor Input System"). Only when a
-    // trim is actually set: untrimmed, the tail is left to the 'ended' event
-    // exactly as before, so a video whose adopted duration undershoots the file
-    // by a few frames still plays to its real end and then snaps to "now".
-    if (!this.nowInRange && raw >= this.rangeEndMs) {
+    // trim is actually set: untrimmed, the tail is left to the end of the
+    // logical window below, exactly as before.
+    if (!this.nowInRange && logical >= this.rangeEndMs) {
       this.stopPlayback()
       this.scrubTo(this.rangeEndMs)
       return
     }
-    this.tMs = this.clampToRange(raw)
+    this.tMs = this.clampToRange(logical)
+    // The logical window ends before the raw file does (the surplus the exact
+    // -length cut will drop), so the tick — not 'ended' — is what reaches it.
+    if (this.nowInRange && this.tMs >= this.durationMs) {
+      this.snapToNow()
+      return
+    }
     this.host.drawFrame(this.video)
     this.host.onState()
     this.rafId = requestAnimationFrame(() => this.playbackTick())
@@ -300,7 +327,7 @@ export class ScrubController {
   private adoptDuration(): void {
     const seconds = this.video.duration
     if (!Number.isFinite(seconds) || seconds <= 0) return
-    const ms = seconds * 1000
+    const ms = Math.min(this.durationCapMs, Math.max(1, seconds * 1000 - this.sourceStartMs))
     // Cue-less webm re-parses can re-fire durationchange with small jitter on
     // every seek; adopting each value dragged the position toward the end
     // while the user was scrubbing. Ignore refinements once adopted.
@@ -327,7 +354,7 @@ export class ScrubController {
     const ms = this.pendingSeekMs
     this.pendingSeekMs = null
     this.seekInFlight = true
-    this.video.currentTime = ms / 1000
+    this.video.currentTime = (this.sourceStartMs + ms) / 1000
   }
 
   private onSeeked(): void {
@@ -390,6 +417,7 @@ class SlaveReplay {
 
   constructor(
     webm: ArrayBuffer,
+    mimeType: string,
     durationMs: number,
     offsetMs: number,
     draw: (source: HTMLVideoElement | 'native') => void,
@@ -400,7 +428,7 @@ class SlaveReplay {
     const video = document.createElement('video')
     video.muted = true
     video.preload = 'auto'
-    video.src = URL.createObjectURL(new Blob([webm], { type: 'video/webm' }))
+    video.src = URL.createObjectURL(new Blob([webm], { type: mimeType }))
     video.addEventListener(
       'loadedmetadata',
       () => {
@@ -533,7 +561,10 @@ export interface BoardReplayInput {
   displayIndex: number
   focused: boolean
   webm: ArrayBuffer
+  mimeType: string
   durationMs: number
+  /** Raw-source position corresponding to logical time 0 (focused input only). */
+  sourceStartMs: number
   /** ms to add to the pack clock to reach this replay's own clock. */
   offsetMs: number
 }
@@ -553,17 +584,23 @@ export class BoardScrub {
     const focused = replays.find((r) => r.focused)
     if (focused === undefined) throw new Error('the board clock needs the focused display’s replay')
     this.focusedIndex = focused.displayIndex
-    this.master = new ScrubController(focused.webm, focused.durationMs, {
-      drawFrame: (source) => host.drawFrame(focused.displayIndex, source),
-      onState: () => {
-        this.syncSlaves()
-        host.onState()
+    this.master = new ScrubController(
+      focused.webm,
+      focused.mimeType,
+      focused.durationMs,
+      focused.sourceStartMs,
+      {
+        drawFrame: (source) => host.drawFrame(focused.displayIndex, source),
+        onState: () => {
+          this.syncSlaves()
+          host.onState()
+        },
       },
-    })
+    )
     for (const r of replays) {
       if (r.focused) continue
       this.slaves.push(
-        new SlaveReplay(r.webm, r.durationMs, r.offsetMs, (source) =>
+        new SlaveReplay(r.webm, r.mimeType, r.durationMs, r.offsetMs, (source) =>
           host.drawFrame(r.displayIndex, source),
         ),
       )
