@@ -26,8 +26,9 @@ Ctrl+Alt+C  →  capture  →  5-second annotation  →  export .capturepack  �
 | **V1 — MVP + release** | Capture, annotate (scrub timeline), export + installable auto-updating Windows release | **Done — shipped v0.1.0 → v0.1.2** |
 | **V1.5 — MCP server** | Always-on read-only MCP so any AI reads packs natively | Shipped in v0.1.1 (daily-use verification ongoing) |
 | **V1.6 — Working with saved packs** | History (browse/re-edit/re-render/package), replay trim, 9 languages, configurable hotkey | Shipped in v0.1.2 |
-| **V2 — Context depth** | Timeline input events + Plugin API, Chrome extension, Plugin Manager | Extension scaffolded; rest not started |
-| **V3 — Semantic layer** | Tracked elements, object picking, AI-assisted annotation | Not started |
+| **V1.7 — Truth** | A recorder that proves frames before claiming them, picking that offers the thing under the cursor, an app that leaves a record and does not stay gone | Shipped in v0.1.6 → v0.1.7 |
+| **V2 — Temporal plugin system** | Providers that restore the PAST at any buffered time (one clock, checkpoints + deltas), a platform surface timeline that decides what the user was actually looking at, after-save actions that can never cost a capture, Chrome extension as the first web provider | Designed (GOAL.md); UIA and the extension are the two first consumers |
+| **V3 — Semantic layer** | Tracked annotations following their object through the replay, AI-assisted annotation | Not started |
 
 What exists today: SPEC.md (format 0.1.0, draft) with validating schemas; a valid example pack
 and dependency-free validator (`tools/`); the full Electron app under `core/` — replay ring
@@ -118,10 +119,25 @@ it has not yet been proven by daily use. Client setup and the full tool referenc
 
 ---
 
-## V2 — Context depth
+## V2 — Temporal plugin system
 
-`input.*` events land as format **0.2.0** (namespace already reserved in SPEC §10.2; 0.1.0
-readers skip unknown event types by design).
+The plugin model V2 was originally scoped for — call a context provider once, at the capture
+instant — does not survive contact with the product: the user scrubs thirty seconds into the
+past, and a structural context collected at one moment cannot answer a question about second 7.
+Confirmed in live use of v0.1.6, and fixed honestly rather than fully in v0.1.7 (picking is
+refused away from the capture instant instead of quietly answering for the wrong moment).
+
+So V2 is the redesign in GOAL.md > "Plugin System, redesigned": **temporal context providers**
+on the app's own monotonic clock, storing checkpoints plus deltas rather than a tree per frame;
+a **Platform Surface Timeline** in Core deciding which window was on top at time T, because a
+numeric priority cannot settle a Notepad window in front of a windowed Unreal game; and **after
+save actions**, the half that gets the stable public API, because that is where a third party's
+mistake lands visibly on whoever wrote it.
+
+Windows UI Automation moves onto that protocol as its reference implementation — same clock,
+same claims, same hitTest, no private path into Core — and the Chrome extension becomes the
+first web provider. `input.*` events land as format **0.2.0** alongside (namespace already
+reserved in SPEC §10.2; 0.1.0 readers skip unknown event types by design).
 
 ### Timeline events — Not started
 
@@ -145,7 +161,7 @@ readers skip unknown event types by design).
 
 ## V3 — Semantic layer
 
-### Tracked elements & object picking — Not started
+### Tracked elements — Not started
 
 Click actual UI objects instead of drawing rectangles; CapturePack stores the object, not
 coordinates (GOAL "Annotation Timeline & Lifetime"):

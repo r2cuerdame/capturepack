@@ -638,12 +638,14 @@ Supported targets:
 
 Plugins generate structured events.
 
-### Plugin System, redesigned (v0.3.0)
+### Plugin System, redesigned (v0.2.0)
 
 The plugin model above was written for a capture that happens at one instant. It does not
 survive contact with the product we actually built: **the user scrubs thirty seconds into the
 past**, and a structural context collected once, at the moment the hotkey was pressed, cannot
-answer a question about second 7. The redesign below replaces it in v0.3.0.
+answer a question about second 7. The redesign below replaces it in v0.2.0 — the same
+release as the Chrome extension, because a plugin API and its first real plugin are one
+body of work and shipping them apart would design the API against nothing.
 
 **Two plugin kinds, and they share nothing but the host.**
 
