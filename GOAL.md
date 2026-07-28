@@ -210,6 +210,13 @@ After a month, the journal itself becomes the best roadmap.
 - 30-second replay buffer
 - Screenshot
 
+**Start with Windows, by default.** A capture tool that is not running when the bug happens
+has already failed — the buffer only holds what it was there to record. So the app
+registers itself to launch at login (per-user, via Electron's login-item API, no admin
+rights and no scheduled task), **on by default**, with a Settings → General toggle to turn
+it off. Launching at login starts it minimized to the tray: no window, no welcome, no
+stealing focus at boot. The uninstaller removes the entry.
+
 **Capture must stay cheap.** CapturePack runs all day; a resident tool that eats a core is
 a tool people quit. The buffer currently encodes VP9 in software, twice over (two rotating
 recorders) and once per display — the worst possible combination on a 4K desktop.
