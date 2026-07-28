@@ -191,11 +191,11 @@ pack as described above.
 | `capturepack_manifest` | `id?` | Raw `manifest.json` |
 | `capturepack_report` | `id?` | Raw `report.md` |
 | `capturepack_timeline` | `id?`, `from_ms?`, `to_ms?` | Full timeline, or the slice between `from_ms` and `to_ms` |
-| `capturepack_annotations` | `id?` | The annotation list — including each box's optional `target` (the real UI object it was placed on, e.g. `{source:"uia", name:"Save", control_type:"Button"}`) |
+| `capturepack_annotations` | `id?` | The annotation list — including each box's optional `target` (the real UI object it was placed on, e.g. `{source:"uia", name:"Save", control_type:"Button"}`) and, on a multi-display capture, **which screen it is on** (`display_index` + `display_snapshot`, see below) |
 | `capturepack_find_annotations` | `keyword`, `id?` | Annotations matching the keyword |
 | `capturepack_frame` | `time_s?`, `id?` | An image of the capture: the **nearest annotated keyframe** to `time_s` when the pack has them, else `snapshot.png` — **see below** |
 | `capturepack_replay` | `id?` | Replay **metadata** only: filename, duration_ms, size_bytes — never raw video bytes |
-| `capturepack_dom` | `id?` | Generic plugin metadata under `plugins/*/` — on Windows usually `windows-uia` (the capture-instant window list + foreground control tree); DOM-ish data lives under a chrome plugin dir when present |
+| `capturepack_dom` | `id?` | Generic plugin metadata under `plugins/*/` — on Windows usually `windows-uia` (the capture-instant window list + the control trees the dump reached); DOM-ish data lives under a chrome plugin dir when present |
 | `capturepack_find_dom` | `selector`, `id?` | Plugin/DOM entries matching the selector — e.g. an `automation_id` or a control name in the `windows-uia` dump |
 | `capturepack_windows` | `id?` | Window/focus timeline events plus window-related plugin metadata (the `windows-uia` window list), when present |
 | `capturepack_search` | `keyword`, `id?` | Case-insensitive substring search across `report.md`, annotation texts, timeline event types + data, plugin JSON, and manifest title/note — hits grouped by source |
@@ -208,17 +208,32 @@ message; that is expected today.
 ### Object context (`windows-uia` + annotation `target`)
 
 A Windows capture usually carries `plugins/windows-uia/elements.json`
-([SPEC §11.3](../SPEC.md)): the top-level window list and the foreground window's UI Automation
-control tree **as they were at the capture instant**, with every rectangle already in
-`snapshot.png` pixel coordinates — the same space as the annotations. Read it with
+([SPEC §11.3](../SPEC.md)): the top-level window list and the UI Automation control trees of
+the windows the dump reached **as they were at the capture instant**, with every rectangle
+already in `snapshot.png` pixel coordinates — the same space as the annotations. Read it with
 `capturepack_dom`, search it with `capturepack_find_dom`, and get just the windows from
 `capturepack_windows`.
+
+Two fields decide how to read it. `windows[].z` is the z-order (`0` = top-most), so a question
+like *"what is at (x, y)?"* is answered by the lowest-`z` window containing the point, never by
+a control of a window that another window covers there. `windows[].tree` says what happened to
+that window's tree — `collected`, `truncated`, `unavailable`, `skipped`. **Anything but
+`collected` means no controls were recorded for that window, which is never the claim that it
+has none:** Chromium and Electron windows expose no tree until an assistive client asks, and
+the walk is budgeted. Report such a window as "no object data", not as an empty application.
 
 When the user placed a box on one of those objects, that box also carries `target`
 ([SPEC §8.7](../SPEC.md)) in `capturepack_annotations`:
 
 ```json
-"target": { "source": "uia", "name": "Save", "control_type": "Button", "automation_id": "saveButton" }
+"target": { "source": "uia", "level": "control", "name": "Save", "control_type": "Button", "automation_id": "saveButton" }
+```
+
+A box placed on a window rather than on a control carries the same `source` at the coarser
+level — a complete answer, not a degraded one:
+
+```json
+"target": { "source": "uia", "level": "window", "title": "Untitled - Notepad", "process": "notepad" }
 ```
 
 That is the difference between *"a box at (2140, 1236)"* and *"the Save button"*. Two rules
@@ -226,6 +241,27 @@ never change: the box's geometry always comes from `bounds` alone, and both the 
 target describe **one instant** — they say nothing about any other position in the replay.
 A pack without either (a non-Windows capture, a dump that ran out of budget) is complete and
 valid; the tools then simply report that there is no object data.
+
+### Which screen a box is on
+
+A capture may have frozen several displays at once ([SPEC §5.6](../SPEC.md)), and **every one of
+them can carry annotations**. A box names its screen in the stored field `display` (the 1-based
+`manifest.media.displays[].index`); an **absent `display` means the focused display**, which is
+what a single-monitor pack and every box on the focused screen write — so nothing about an
+existing pack changed.
+
+Because that stored form is sparse, `capturepack_annotations` and `capturepack_find_annotations`
+resolve it for you on a multi-display pack — additively, alongside the untouched `display`:
+
+```json
+{ "annotation_id": "ann_44a1c9", "display": 1, "bounds": { "x": 220, "y": 640, "width": 300, "height": 120 },
+  "display_index": 1, "display_focused": false, "display_snapshot": "snapshot-d1.png" }
+```
+
+**`bounds` are pixels in `display_snapshot`, never in `snapshot.png`.** Reading a second screen's
+box against `snapshot.png` puts it in the wrong place at coordinates that mean nothing there.
+Display numbers stay one global sequence across every screen, so box ② is ② wherever it sits.
+A single-display pack returns the annotations exactly as stored — one screen needs no label.
 
 ### `capturepack_frame` — annotated keyframes
 

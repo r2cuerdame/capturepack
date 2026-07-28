@@ -1,7 +1,7 @@
 // IPC contract between main, the hidden capture window, and the editor window.
 // Every channel is listed here; no module may invent channels outside this file.
 
-import type { Annotation, EditorWindowMode, Settings } from './types'
+import type { Annotation, EditorWindowMode, Settings, UiaTreeStatus } from './types'
 
 export const IPC = {
   // main -> capture window: begin recording this desktop source id
@@ -147,9 +147,11 @@ export interface CaptureReplayResultPayload {
   durationMs: number
 }
 
-// One frozen display in the editor's read-only display switcher (GOAL
-// "Multi-Monitor Support"). The focused display is the one the editor
-// annotates; the others can only be VIEWED in this version.
+// One frozen display on the editor's BOARD (GOAL "Multi-Monitor Support"):
+// every captured display is drawn at once, in its real arrangement, and every
+// one of them is annotatable. The focused display is only special in that its
+// media IS the pack's top-level media and that a box drawn on it writes no
+// `display` field.
 export interface EditorDisplayPayload {
   // 1-based manifest display index (manifest.media.displays[].index)
   index: number
@@ -160,12 +162,36 @@ export interface EditorDisplayPayload {
   // from the live base frame — a second copy would only add megabytes to the
   // editor-open message and to the renderer's retained memory.
   snapshotPng: ArrayBuffer | null
+  // Native snapshot pixel size — the annotation coordinate space of boxes that
+  // carry this display's index.
   width: number
   height: number
+  // This display's rectangle in the OS virtual-desktop space, in
+  // device-independent pixels (manifest.media.displays[].bounds). THIS is what
+  // lays the board out in the real arrangement: the offsets place the screens
+  // relative to each other, and a 1x screen next to a 1.5x one keeps its true
+  // physical proportion (which native pixel counts would not).
+  bounds: { x: number; y: number; width: number; height: number }
+  scale: number
+  // This display's OWN replay bytes, so the board's one clock can seek every
+  // screen together. NULL on the focused entry (its bytes are
+  // EditorInitPayload.replayWebm) and on a display that recorded nothing —
+  // the latter shows its frozen snapshot and is labelled as such.
+  replayWebm: ArrayBuffer | null
+  replayDurationMs: number
+  // Milliseconds to ADD to the pack clock (the focused display's replay clock,
+  // which every annotation lifetime uses) to reach THIS display's own replay
+  // clock. 0 on the focused display. Every recorder is stopped by the same
+  // trigger, so the replays are END-aligned and the offset is simply
+  // thisDuration - focusedDuration (SPEC §5.6). A trimmed focused replay needs
+  // no separate rule: its declared duration is already the trimmed one, so the
+  // same difference equals trim_offset_ms plus the difference of the untrimmed
+  // lengths.
+  replayOffsetMs: number
 }
 
 /**
- * One pickable UI object in the editor (GOAL "Static object picking (v0)"):
+ * One pickable CONTROL in the editor (GOAL "Static object picking (v0)"):
  * a Windows UI Automation element from the CAPTURE-INSTANT dump that also
  * became plugins/windows-uia/elements.json. `bounds` is already in snapshot
  * pixels — the annotation coordinate space (SPEC §8.2) — so a pick snaps a box
@@ -178,6 +204,37 @@ export interface EditorUiaElement {
   automation_id: string
   class_name: string
   bounds: { x: number; y: number; width: number; height: number }
+  // `z` of the window this control was walked from — which window covers a
+  // pixel decides which controls may be offered there. -1 when the dump did
+  // not say (a pack written before the dump covered more than one window).
+  window: number
+}
+
+/**
+ * One pickable WINDOW in the editor — the GUARANTEED FLOOR of object picking
+ * (GOAL: "windows are always selectable"). Every visible top-level window is
+ * here, including the ones that expose no control tree at all (Chromium and
+ * Electron windows typically do not), so hovering always highlights something
+ * and clicking always snaps a box.
+ */
+export interface EditorUiaWindow {
+  title: string
+  process: string
+  class_name: string
+  bounds: { x: number; y: number; width: number; height: number }
+  focused: boolean
+  // Z-order at the capture instant: 0 is the top-most window. Decides which
+  // window owns a pixel when several overlap.
+  z: number
+  // Whether the dump actually collected controls inside this window. false =
+  // "no object data for this window" — never "this window has no objects".
+  hasControls: boolean
+  // How much of this window's control tree the dump ended up with (SPEC §11.3).
+  // Carried through UNCHANGED so the editor can honour "Silence is not
+  // absence": a window whose tree is "skipped"/"unavailable" recorded NO data,
+  // which is a different statement from a collected tree that simply holds
+  // nothing pickable — and hasControls alone conflates the two.
+  tree: UiaTreeStatus
 }
 
 export interface EditorInitPayload {
@@ -188,17 +245,21 @@ export interface EditorInitPayload {
   hasReplay: boolean
   replayDurationMs: number
   // Every display this capture froze, focused included — EMPTY when only one
-  // display was captured (the switcher then never appears). The focused
-  // display's snapshot is the same frame as snapshotPng above.
+  // display was captured, in which case the editor builds a one-display board
+  // from width/height above and behaves exactly as a single-monitor editor
+  // always did. The focused display's snapshot is the same frame as
+  // snapshotPng above.
   displays: EditorDisplayPayload[]
   // webm bytes of the replay for scrubbing; null when screenshot-only
   replayWebm: ArrayBuffer | null
   // Pickable UI objects from the capture instant (GOAL "Static object
-  // picking"). EMPTY whenever there is no object data — no Windows UI
-  // Automation dump, a dump that timed out, or a re-edited pack without
-  // plugins/windows-uia — and the editor then behaves exactly as it did
-  // before the feature existed.
+  // picking"). BOTH lists are EMPTY whenever there is no object data — no
+  // Windows UI Automation dump, a dump that timed out, or a re-edited pack
+  // without plugins/windows-uia — and the editor then behaves exactly as it
+  // did before the feature existed. Controls refine; windows are the floor,
+  // so uiaWindows is routinely non-empty while uiaElements is not.
   uiaElements: EditorUiaElement[]
+  uiaWindows: EditorUiaWindow[]
   fps: number
   scrubInvert: boolean
   scrubSensitivityMs: number
@@ -264,6 +325,17 @@ export interface RenderStartPayload {
   // Still job only: the frame the keyframe is drawn from (snapshot.png bytes).
   snapshotPng?: ArrayBuffer
   annotations: Annotation[]
+  // GLOBAL display numbers (SPEC §8.5) as annotation_id -> number pairs,
+  // computed ONCE per save over the pack's WHOLE annotation set and shipped in
+  // rather than derived here.
+  //
+  // `annotations` above is a SUBSET on every multi-display job — a display's
+  // rendering may only ever carry its own boxes (SPEC §5.6) — so recomputing
+  // the numbering from it would renumber from 1 inside each view and make the
+  // badges in replay_annotated disagree with report.md, the editor and MCP,
+  // which all number globally. Absent = single-display job: the subset IS the
+  // whole set and the renderer computes it itself.
+  displayNumbers?: Array<[string, number]>
   // Canvas size = snapshot reference size (annotation coordinate space)
   width: number
   height: number

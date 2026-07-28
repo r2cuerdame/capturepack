@@ -14,20 +14,26 @@
     <button id="colorBtn" title="Color (C)" data-i18n-title="editor.colorTooltip"><span id="colorSwatch"></span></button>
     <input id="titleInput" type="text" placeholder="Title (optional)" data-i18n-placeholder="editor.titlePlaceholder" autocomplete="off" spellcheck="false" />
     <input id="noteInput" type="text" placeholder="What is wrong? (optional)" data-i18n-placeholder="editor.notePlaceholder" autocomplete="off" spellcheck="false" />
-    <!-- Read-only display switcher (GOAL "Multi-Monitor Support"): one button
-         per captured display, shown only when the capture froze more than one.
-         The focused display is marked and is the only annotatable one. -->
+    <!-- Board legend (GOAL "Multi-Monitor Support"): one chip per captured
+         display, shown only when the capture froze more than one. EVERY display
+         is on the board and annotatable at once — the chips mark which one is
+         focused and frame that screen at the largest usable scale when clicked
+         (1..9 do the same; 0 fits the whole board again). -->
     <span
-      id="displaySwitcher"
+      id="displayLegend"
       role="group"
       aria-label="Captured displays"
       data-i18n-aria-label="editor.displaysLabel"
       hidden
     ></span>
-    <span id="displayHint" class="chip" hidden></span>
-    <!-- Static object picking (GOAL "Static object picking (v0)"): shown once,
-         when the user hovers a pickable object while scrubbed away from "now" —
-         the object data is from the capture instant, not from this frame. -->
+    <!-- Static object picking (GOAL "Static object picking (v0)"): the one
+         honesty channel, each message said ONCE per session and QUEUED so none
+         replaces another mid-read — the object data is from the capture instant
+         (while scrubbed away from "now"), Shift picks the whole window, there is
+         no object data here at all, the data covers another display, or this
+         window offers nothing finer AND WHY (no tree recorded / its controls are
+         on another screen / nothing but frames — SPEC §11.3 "Silence is not
+         absence"). Text is set from i18n at runtime. -->
     <span id="objectHint" class="chip" hidden></span>
     <span id="replayChip" class="chip" data-i18n="editor.noReplay">No replay</span>
     <span id="dirtyChip" class="chip" hidden data-i18n="editor.unsavedChanges">Unsaved changes</span>

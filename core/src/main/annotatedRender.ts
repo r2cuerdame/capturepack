@@ -18,13 +18,18 @@ import * as path from 'node:path'
 import { IPC } from '../shared/ipc'
 import type { RenderFramePayload, RenderResultPayload, RenderStartPayload } from '../shared/ipc'
 import type { Language } from '../shared/i18n'
-import { keyframeFileName } from '../shared/keyframes'
+import { displayAnnotatedName, displayFramesDir, keyframeFileName } from '../shared/keyframes'
 import type { Annotation, ManifestKeyframe } from '../shared/types'
 import { refreshPackDocs, setManifestRenderOutputs, type PackHandle } from './exporter'
 
 export interface AnnotatedRenderJob {
   replayWebm: Buffer
   annotations: Annotation[]
+  // GLOBAL display numbers (SPEC §8.5) over the pack's WHOLE annotation set,
+  // as annotation_id -> number pairs. `annotations` above is this display's
+  // subset, so the renderer must not derive the numbering from it — see
+  // RenderStartPayload.displayNumbers.
+  displayNumbers?: Array<[string, number]>
   width: number
   height: number
   fps: number
@@ -32,15 +37,26 @@ export interface AnnotatedRenderJob {
   // Pack document language: the documents are REGENERATED once the stills are
   // declared, so their image links describe what the render actually wrote.
   docLanguage?: Language
+  // WHICH captured display this job renders (GOAL "Multi-Monitor Support").
+  // Absent = the focused display: replay_annotated.webm + frames/, declared as
+  // the top-level media. A 1-based index renders THAT display's own boxes into
+  // replay_annotated-d<N>.webm + frames-d<N>/, declared inside its
+  // media.displays entry — a box belongs to the screen it was drawn on, so a
+  // display's rendering may only ever carry its own.
+  display?: number
 }
 
-/** A screenshot-only pack's single annotated still, drawn from snapshot.png. */
+/** A pack's (or one display's) single annotated still, drawn from a snapshot. */
 export interface KeyframeStillJob {
   snapshotPng: Buffer
   annotations: Annotation[]
+  /** Same rule as AnnotatedRenderJob.displayNumbers. */
+  displayNumbers?: Array<[string, number]>
   width: number
   height: number
   docLanguage?: Language
+  // Same rule as AnnotatedRenderJob.display.
+  display?: number
 }
 
 // The render plays in real time; allow twice the replay plus startup slack
@@ -148,6 +164,7 @@ async function renderAnnotatedReplay(handle: PackHandle, job: AnnotatedRenderJob
   const payload: RenderStartPayload = {
     replayWebm: toArrayBuffer(job.replayWebm),
     annotations: job.annotations,
+    ...(job.displayNumbers === undefined ? {} : { displayNumbers: job.displayNumbers }),
     width: job.width,
     height: job.height,
     fps: job.fps,
@@ -159,23 +176,47 @@ async function renderAnnotatedReplay(handle: PackHandle, job: AnnotatedRenderJob
   // removes frames/ and rewrites it, so another render of the same pack landing
   // between the writes and the declaration would leave the manifest pointing at
   // files that no longer exist.
+  const video =
+    job.display === undefined ? 'replay_annotated.webm' : displayAnnotatedName(job.display)
+  const framesDir = job.display === undefined ? 'frames' : displayFramesDir(job.display)
   await enqueueRender(async () => {
     const { result, frames } = await runRenderWindow(
       payload,
       job.replayDurationMs * 2 + RENDER_TIMEOUT_SLACK_MS,
     )
     if (result.webm === undefined) throw new Error('render window returned no video')
-    await writeFile(path.join(handle.dirPath, 'replay_annotated.webm'), Buffer.from(result.webm))
+    await writeFile(path.join(handle.dirPath, video), Buffer.from(result.webm))
     // The stills are the smaller half of this job: losing them must never cost
     // the annotated replay its declaration (SPEC §5.7 — keyframes are optional).
     let keyframes: ManifestKeyframe[] = []
     try {
-      keyframes = await writeKeyframes(handle, frames)
+      keyframes = await writeKeyframes(handle, frames, framesDir)
     } catch (err) {
       console.error('capturepack: writing annotated keyframes failed:', errorMessage(err))
     }
-    await setManifestRenderOutputs(handle, { replayAnnotated: true, keyframes })
+    await setManifestRenderOutputs(handle, {
+      replayAnnotated: true,
+      keyframes,
+      ...(job.display === undefined ? {} : { display: job.display }),
+    })
     await refreshDocs(handle, job.docLanguage)
+  })
+}
+
+/**
+ * One NON-FOCUSED display's annotated replay + stills (GOAL "Multi-Monitor
+ * Support"). Deliberately NOT on the render lifecycle bus and never awaited:
+ * 'rendering'/'done' there means the PACK's annotated replay — the file the
+ * save toast's status line and History's [Retry Render] are about — and a
+ * second screen's rendering is extra, not the thing the user is waiting for.
+ * Failures are logged only; the pack is complete and valid without it.
+ */
+export function startDisplayRender(handle: PackHandle, job: AnnotatedRenderJob): void {
+  void renderAnnotatedReplay(handle, job).catch((err) => {
+    console.error(
+      `capturepack: annotated replay render for display ${job.display ?? 0} failed:`,
+      errorMessage(err),
+    )
   })
 }
 
@@ -215,17 +256,23 @@ async function renderKeyframeStill(handle: PackHandle, job: KeyframeStillJob): P
     replayWebm: null,
     snapshotPng: toArrayBuffer(job.snapshotPng),
     annotations: job.annotations,
+    ...(job.displayNumbers === undefined ? {} : { displayNumbers: job.displayNumbers }),
     width: job.width,
     height: job.height,
     fps: 1, // unused without a recorder
     durationMs: 0,
     keyframes: true,
   }
+  const framesDir = job.display === undefined ? 'frames' : displayFramesDir(job.display)
   await enqueueRender(async () => {
     const { frames } = await runRenderWindow(payload, STILL_RENDER_TIMEOUT_MS)
-    const keyframes = await writeKeyframes(handle, frames)
+    const keyframes = await writeKeyframes(handle, frames, framesDir)
     if (keyframes.length === 0) throw new Error('still render produced no keyframe')
-    await setManifestRenderOutputs(handle, { replayAnnotated: false, keyframes })
+    await setManifestRenderOutputs(handle, {
+      replayAnnotated: false,
+      keyframes,
+      ...(job.display === undefined ? {} : { display: job.display }),
+    })
     await refreshDocs(handle, job.docLanguage)
   })
 }
@@ -239,8 +286,9 @@ async function renderKeyframeStill(handle: PackHandle, job: KeyframeStillJob): P
 async function writeKeyframes(
   handle: PackHandle,
   frames: readonly RenderFramePayload[],
+  dir: string,
 ): Promise<ManifestKeyframe[]> {
-  const framesDir = path.join(handle.dirPath, 'frames')
+  const framesDir = path.join(handle.dirPath, dir)
   await rm(framesDir, { recursive: true, force: true })
   if (frames.length === 0) return []
   await mkdir(framesDir, { recursive: true })
@@ -250,7 +298,7 @@ async function writeKeyframes(
   // failed to encode.
   for (const [i, frame] of frames.entries()) {
     const t_ms = Math.max(0, Math.round(frame.t_ms))
-    const file = keyframeFileName(i + 1, t_ms)
+    const file = keyframeFileName(i + 1, t_ms, dir)
     await writeFile(path.join(handle.dirPath, file), Buffer.from(frame.png))
     declared.push({ file, t_ms })
   }

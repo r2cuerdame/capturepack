@@ -149,7 +149,7 @@
           "minimum": 0
         },
         "displays": {
-          "description": "OPTIONAL per-display media of a capture that froze MORE THAN ONE display at the same instant (SPEC.md §5.6). Absent for a single-display capture. Exactly one entry has focused: true — the display the annotations belong to — and that entry repeats the top-level media (snapshot \"snapshot.png\", the same replay filename and duration) rather than duplicating the bytes under a per-display name, so a reader that ignores this array still sees the whole pack. Every declared file must exist in the pack; index values are 1-based positions in environment.screens and must be unique.",
+          "description": "OPTIONAL per-display media of a capture that froze MORE THAN ONE display at the same instant (SPEC.md §5.6). Absent for a single-display capture. Exactly one entry has focused: true — the display whose media IS the top-level media, and the display a box without an explicit annotation.display belongs to — and that entry repeats the top-level media (snapshot \"snapshot.png\", the same replay filename and duration) rather than duplicating the bytes under a per-display name, so a reader that ignores this array still sees the whole pack. EVERY display can carry annotations (SPEC.md §8.8): a box names its screen in annotations.json's display field, its bounds are pixels in THAT display's snapshot, and a display that carries boxes gets its own rendered views here (replay_annotated / keyframes below). Every declared file must exist in the pack; index values are 1-based positions in environment.screens and must be unique.",
           "type": "array",
           "minItems": 1,
           "items": {
@@ -181,8 +181,34 @@
                 "type": "integer",
                 "minimum": 0
               },
+              "replay_annotated": {
+                "description": "OPTIONAL: this display's replay with ITS OWN annotation boxes rendered into the pixels, \"replay_annotated-d<index>.webm\" (or .mp4) — SPEC.md §5.6, §7.2. Absent on the focused entry, whose annotated replay is the top-level media.replay_annotated, and absent on any display that carries no annotations or no replay. It contains ONLY the boxes whose display is this one: the same coordinates mean something different on every screen. A generated view, regenerable from this display's replay + annotations.json.",
+                "type": "string",
+                "pattern": "^replay_annotated-d[1-9][0-9]*\\.(webm|mp4)$"
+              },
+              "keyframes": {
+                "description": "OPTIONAL: this display's annotated stills, under \"frames-d<index>/\" — same shape and rules as the top-level media.keyframes (SPEC.md §5.7), containing only this display's boxes. t_ms is on THIS display's own replay clock, not the pack clock (the two are aligned by the rule in SPEC.md §5.6). Absent on the focused entry, whose stills are the top-level media.keyframes, and on any display without annotations.",
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": ["file", "t_ms"],
+                  "properties": {
+                    "file": {
+                      "description": "Pack-relative filename \"frames-d<index>/frame-<NN>_<MM-SS.mmm>.png\", with the same NN and clock rules as the top-level keyframes.",
+                      "type": "string",
+                      "pattern": "^frames-d[1-9][0-9]*/frame-[0-9]{2,}_[0-9]{2,}-[0-9]{2}\\.[0-9]{3}\\.png$"
+                    },
+                    "t_ms": {
+                      "description": "Position on THIS display's replay clock, in milliseconds, of the frame this still shows.",
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                }
+              },
               "bounds": {
-                "description": "This display's rectangle in the OS virtual-desktop coordinate space, in device-independent pixels. Multiply by scale for physical pixels: bounds.width * scale equals the per-display snapshot's pixel width and environment.screens[index-1].width.",
+                "description": "This display's rectangle in the OS virtual-desktop coordinate space, in device-independent pixels. Multiply by scale for physical pixels: bounds.width * scale equals the per-display snapshot's pixel width and environment.screens[index-1].width. The offsets place the screens relative to each other, which is what lets a viewer lay them out in their real arrangement.",
                 "type": "object",
                 "required": ["x", "y", "width", "height"],
                 "properties": {
@@ -198,7 +224,7 @@
                 "exclusiveMinimum": 0
               },
               "focused": {
-                "description": "True on exactly one entry: the display the capture and its annotations are about. Its media is the top-level media.",
+                "description": "True on exactly one entry: the display whose media IS the top-level media, and the display a box with no explicit annotation.display belongs to.",
                 "type": "boolean"
               }
             },

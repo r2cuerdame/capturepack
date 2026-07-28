@@ -805,8 +805,13 @@ exists". A Manual Annotation is "an annotation that exists for the time the user
 Automatic window/control selection ships in a static form first:
 
 1. **At capture** (alongside save-first) a Windows UI Automation helper dumps the window
-   list + the foreground window's control tree (Name, ControlType, AutomationId, Bounds)
-   into `plugins/windows-uia/` — budgeted (sub-second, async), never delaying the editor.
+   list + the control trees of the top windows in z-order (Name, ControlType, AutomationId,
+   Bounds) into `plugins/windows-uia/` — budgeted (sub-second, async), never delaying the
+   editor. The window list is the cheap, complete level and is always collected; trees are
+   the expensive, partial level, so the foreground window is walked first with a guaranteed
+   slice of the budget and the rest follow down the z-order until the deadline. Every window
+   records what happened to its tree — collected, truncated, unavailable, skipped — so the
+   editor never has to guess whether "no controls" means "none exist" or "none were read".
 2. **In the editor**, the object tool (O / left click) highlights the UIA element under the
    cursor from that dump; clicking selects the element's exact bounds and pre-fills its
    name as the label — stored as the `"element"` annotation type with the object metadata.
@@ -815,8 +820,16 @@ Automatic window/control selection ships in a static form first:
    windows do not until an assistive client asks), hovering it highlights the WINDOW and
    clicking snaps a box to its bounds with its title as the label. Controls refine the
    selection when they exist; the window is the guaranteed floor, never "nothing
-   happens". Hovering shows which level is being offered (window vs control).
-3. In Chrome, the extension's DOM picker plays the same role (protocol v1).
+   happens". Hovering shows which level is being offered (window vs control), and holding
+   **Shift** forces the window level when a control is on top. The one exception is the
+   desktop wallpaper itself (a full-screen `Progman`/`WorkerW` window): offering it would
+   turn every click on empty space into a full-desktop box, so picking says "no object data
+   here" instead — once, quietly, rather than doing nothing without explanation.
+3. In Chrome, the extension's DOM picker plays the same role (protocol v1) — and it is the
+   REAL answer for browser and Electron windows, whose UIA trees are thin by design. Until
+   that bridge lands (v0.2.0), the window level is what covers them: a box on a Chrome
+   window still says which window it points at, and a `#save` selector will beat a UIA node
+   that never existed once the extension can contribute one.
 4. Frame-by-frame tracking (bounds following the object through the replay) remains V3.
 
 ---

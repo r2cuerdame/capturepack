@@ -82,9 +82,17 @@ function makeOverlay(job: RenderStartPayload): Overlay {
   return {
     // Stacking order for the overlay passes; z decides who draws on top.
     ordered: [...job.annotations].sort((a, b) => a.z - b.z),
-    // GLOBAL display numbers, computed once for the whole video (SPEC §8.5): a
-    // frame where only box 2 is alive still labels it 2.
-    numbers: computeDisplayNumbers(job.annotations),
+    // GLOBAL display numbers (SPEC §8.5) — global over the whole PACK, not just
+    // over this job's boxes: a frame where only box 2 is alive still labels it
+    // 2, and so does a per-display render that received box 2 alone. The map is
+    // computed once per save from the full annotation set and shipped in;
+    // recomputing it here from `job.annotations` (a subset on every
+    // multi-display job) is what would make the video's numbers disagree with
+    // report.md's. Absent = the subset IS the whole set (single-display pack).
+    numbers:
+      job.displayNumbers === undefined
+        ? computeDisplayNumbers(job.annotations)
+        : new Map(job.displayNumbers),
     // Overlay sizes scale with the capture resolution so a 4K replay does not
     // get hairline borders.
     ui: Math.max(1, job.width / 1280),

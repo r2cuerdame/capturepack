@@ -13,9 +13,9 @@ export class Viewport {
 
   constructor(private readonly frame: HTMLElement) {}
 
-  /** Space+drag pan only applies once the view is zoomed. */
+  /** Space+drag pan applies once the view is zoomed OR has been panned off centre. */
   get panEnabled(): boolean {
-    return this.zoom !== 1
+    return this.zoom !== 1 || this.panX !== 0 || this.panY !== 0
   }
 
   /** Zooms by one step, keeping the point under the cursor fixed. */
@@ -38,10 +38,41 @@ export class Viewport {
   }
 
   /**
-   * Back to 1:1, unpanned. Used when the coordinate space underneath changes
-   * (the display switcher shows a screen of a different size): a pan measured
-   * in the old frame's on-screen pixels would push the new one out of the
-   * overflow:hidden stage entirely.
+   * Frames one rectangle of the (untransformed) frame in a stage of the given
+   * size: zooms to the largest scale at which it still fits, and pans so its
+   * centre lands on the stage centre.
+   *
+   * This is how the board's legend chips work (GOAL "Multi-Monitor Support"):
+   * the whole board opens fitted, and one click gives a single display the
+   * largest usable scale without ever leaving the board — the other screens are
+   * a pan away, not a mode away.
+   *
+   * `frameW`/`frameH` are the frame's CSS size, which flex centring places at
+   * ((stageW - frameW) / 2, (stageH - frameH) / 2); the transform then applies
+   * on top of that, origin 0 0.
+   */
+  focusRect(
+    rect: { x: number; y: number; width: number; height: number },
+    frameW: number,
+    frameH: number,
+    stageW: number,
+    stageH: number,
+  ): void {
+    if (rect.width <= 0 || rect.height <= 0 || stageW <= 0 || stageH <= 0) return
+    const zoom = clamp(Math.min(stageW / rect.width, stageH / rect.height), ZOOM_MIN, ZOOM_MAX)
+    const originX = (stageW - frameW) / 2
+    const originY = (stageH - frameH) / 2
+    const cx = rect.x + rect.width / 2
+    const cy = rect.y + rect.height / 2
+    this.zoom = zoom
+    this.panX = stageW / 2 - originX - cx * zoom
+    this.panY = stageH / 2 - originY - cy * zoom
+    this.apply()
+  }
+
+  /**
+   * Back to 1:1, unpanned — the whole board, fitted, which is how the editor
+   * opens and what Esc returns to after focusRect() framed one display.
    */
   reset(): void {
     if (this.zoom === 1 && this.panX === 0 && this.panY === 0) return

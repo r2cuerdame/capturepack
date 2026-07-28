@@ -9,6 +9,7 @@
 import { makeT } from '../shared/i18n'
 import type { Language, TranslateFn } from '../shared/i18n'
 import type { Annotation, AnnotationsFile, Manifest } from '../shared/types'
+import { annotationsOnDisplay, declaredDisplayIndices, focusedDisplayIndex } from '../shared/types'
 import { computeDisplayNumbers } from '../shared/numbering'
 import { computeKeyframes, keyframeFileName } from '../shared/keyframes'
 
@@ -66,14 +67,82 @@ function displayPixels(d: NonNullable<Manifest['media']['displays']>[number]): s
   return `${Math.round(d.bounds.width * d.scale)}×${Math.round(d.bounds.height * d.scale)}`
 }
 
+/** True when this pack carries per-display media at all (SPEC §5.6). */
+export function isMultiDisplay(manifest: Manifest): boolean {
+  const displays = manifest.media.displays
+  return Array.isArray(displays) && displays.length > 1
+}
+
+/** The pack's focused display index — where a box without `display` lives. */
+export function packFocusedDisplay(manifest: Manifest): number {
+  return focusedDisplayIndex(manifest.media.displays)
+}
+
+/**
+ * The display indices this pack declares. Passed to every annotationsOnDisplay
+ * call below so a box naming a display the manifest does not have resolves to
+ * the FOCUSED display (SPEC §8.8) instead of belonging to no group at all — it
+ * would otherwise vanish from the per-display sections and the counts while the
+ * editor kept drawing it.
+ */
+function packDisplayIndices(manifest: Manifest): ReadonlySet<number> | undefined {
+  return declaredDisplayIndices(manifest.media.displays)
+}
+
+/** One display's boxes (SPEC §8.8), in array order. */
+export function boxesOnDisplay(
+  manifest: Manifest,
+  annotations: readonly Annotation[],
+  index: number,
+): Annotation[] {
+  return annotationsOnDisplay(
+    annotations,
+    index,
+    packFocusedDisplay(manifest),
+    packDisplayIndices(manifest),
+  )
+}
+
+/**
+ * The boxes of the pack grouped by the display they were drawn on (SPEC §8.8),
+ * FOCUSED display first and the rest by index — the reading order a human would
+ * pick, and the order every generated document uses.
+ *
+ * Empty for a single-display pack: there is one display, so grouping by it
+ * would only add a heading that says nothing.
+ */
+export function groupByDisplay(
+  manifest: Manifest,
+  annotations: readonly Annotation[],
+): Array<{ index: number; focused: boolean; annotations: Annotation[] }> {
+  const displays = manifest.media.displays
+  if (!Array.isArray(displays) || displays.length < 2) return []
+  const focused = packFocusedDisplay(manifest)
+  const declared = packDisplayIndices(manifest)
+  const ordered = [...displays].sort((a, b) =>
+    a.focused === b.focused ? a.index - b.index : a.focused ? -1 : 1,
+  )
+  return ordered.map((d) => ({
+    index: d.index,
+    focused: d.focused,
+    annotations: annotationsOnDisplay(annotations, d.index, focused, declared),
+  }))
+}
+
 /**
  * The captured displays as markdown bullets, e.g.
  * `- **Displays:** 2 captured` + one indented line per display.
  * Empty for a single-display pack (no media.displays).
  */
-export function displaySummaryLines(manifest: Manifest, t: TranslateFn = makeT('en')): string[] {
+export function displaySummaryLines(
+  manifest: Manifest,
+  t: TranslateFn = makeT('en'),
+  annotations: readonly Annotation[] = [],
+): string[] {
   const displays = manifest.media.displays
   if (displays === undefined || displays.length === 0) return []
+  const focusedIndex = packFocusedDisplay(manifest)
+  const declared = packDisplayIndices(manifest)
   const lines = [`- **${t('pack.displays')}:** ${displays.length} captured`]
   for (const d of displays) {
     const replay =
@@ -81,9 +150,13 @@ export function displaySummaryLines(manifest: Manifest, t: TranslateFn = makeT('
         ? 'no replay'
         : `${((d.replay_duration_ms ?? 0) / 1000).toFixed(1)}s \`${d.replay}\``
     const focused = d.focused ? ` (${t('pack.displayFocused')})` : ''
+    // How many boxes were drawn on THIS screen — the single most useful thing
+    // to know about a display once every display is annotatable (SPEC §8.8).
+    const count = annotationsOnDisplay(annotations, d.index, focusedIndex, declared).length
+    const boxes = count === 0 ? '' : `, ${count} annotation${count === 1 ? '' : 's'}`
     lines.push(
       `  - ${d.index}: ${displayPixels(d)} at ${px(d.bounds.x)},${px(d.bounds.y)} @${d.scale}x — ` +
-        `\`${d.snapshot}\`, ${replay}${focused}`,
+        `\`${d.snapshot}\`, ${replay}${boxes}${focused}`,
     )
   }
   return lines
@@ -92,7 +165,8 @@ export function displaySummaryLines(manifest: Manifest, t: TranslateFn = makeT('
 /**
  * The per-display files a single-display pack does not have: the NON-focused
  * displays' media (the focused display's files are snapshot.png/replay.webm,
- * already listed by every document).
+ * already listed by every document) and, for a screen that carries boxes, its
+ * OWN annotated views.
  */
 export function extraDisplayFiles(manifest: Manifest): Array<{ name: string; what: string }> {
   const displays = manifest.media.displays
@@ -108,6 +182,24 @@ export function extraDisplayFiles(manifest: Manifest): Array<{ name: string; wha
       files.push({
         name: d.replay,
         what: `Display ${d.index} screen recording, ${((d.replay_duration_ms ?? 0) / 1000).toFixed(1)}s — original evidence, never modified`,
+      })
+    }
+    // Declared only once the background render for that display has finished
+    // (SPEC §5.6), so naming them here is naming files that exist.
+    if (typeof d.replay_annotated === 'string') {
+      files.push({
+        name: d.replay_annotated,
+        what: `Display ${d.index} replay with ITS OWN annotation boxes rendered in — watch this one for that screen`,
+      })
+    }
+    const frames = d.keyframes
+    if (Array.isArray(frames) && frames.length > 0) {
+      const dir = frames[0]?.file.split('/')[0] ?? `frames-d${d.index}`
+      files.push({
+        name: `${dir}/`,
+        what:
+          `${frames.length} annotated still${frames.length === 1 ? '' : 's'} of display ${d.index}, ` +
+          'one per annotation state change on that screen — times are on THAT display’s replay clock',
       })
     }
   }
@@ -157,7 +249,13 @@ export function keyframeSet(
   const durationMs =
     manifest.media.replay === null ? 0 : (manifest.media.replay_duration_ms ?? 0)
   // The same input the render used, so the cap it hit is the cap reported here.
-  const { times, dropped } = computeKeyframes(annotationsFile.annotations, durationMs)
+  // The pack's OWN stills cover the FOCUSED display (SPEC §5.6): a box on
+  // another screen is rendered into that screen's own stills, so counting it
+  // here would predict filenames the render never writes.
+  const { times, dropped } = computeKeyframes(
+    boxesOnDisplay(manifest, annotationsFile.annotations, packFocusedDisplay(manifest)),
+    durationMs,
+  )
   const declared = manifest.media.keyframes
   if (Array.isArray(declared) && declared.length > 0) {
     const frames: KeyframeRef[] = []
@@ -228,6 +326,29 @@ export function keyframeFileEntry(set: KeyframeSet): { name: string; what: strin
   }
 }
 
+/**
+ * One list of boxes: numbered ones first in display-number order, then the
+ * unnumbered ones as plain bullets. Shared by the flat single-display list and
+ * by each per-display group, so the two can never drift apart.
+ */
+function annotationLines(
+  annotations: readonly Annotation[],
+  numbers: ReadonlyMap<string, number>,
+  t: TranslateFn,
+): string[] {
+  const lines: string[] = []
+  const numbered = annotations
+    .filter((a) => numbers.has(a.annotation_id))
+    .sort((a, b) => (numbers.get(a.annotation_id) ?? 0) - (numbers.get(b.annotation_id) ?? 0))
+  for (const a of numbered) {
+    lines.push(`${numbers.get(a.annotation_id)}. ${describeAnnotation(a, t)}`)
+  }
+  for (const a of annotations) {
+    if (!numbers.has(a.annotation_id)) lines.push(`- ${describeAnnotation(a, t)}`)
+  }
+  return lines
+}
+
 export function buildReport(
   manifest: Manifest,
   annotationsFile: AnnotationsFile,
@@ -262,7 +383,7 @@ export function buildReport(
     .join('; ')
   lines.push(`- **${t('pack.screens')}:** ${screens}`)
   // All-displays capture: what the trigger actually froze, per display.
-  lines.push(...displaySummaryLines(manifest, t))
+  lines.push(...displaySummaryLines(manifest, t, annotationsFile.annotations))
   if (manifest.environment.app !== undefined) {
     lines.push(`- **${t('pack.focusedApp')}:** ${manifest.environment.app}`)
   }
@@ -285,22 +406,40 @@ export function buildReport(
   if (annotations.length === 0) {
     lines.push(t('pack.none'))
   } else {
-    lines.push(
-      `Coordinates are pixels in snapshot.png (${annotationsFile.reference_width}×${annotationsFile.reference_height}). ` +
-        'Numbers are the computed display numbers (SPEC §8.5) — identical in every rendered view.',
-    )
-    lines.push('')
-    // Numbered boxes first, in display-number order; unnumbered boxes follow as
-    // plain bullets. Numbers come from the shared helper, never from storage.
+    // Numbers come from the shared helper, never from storage — and they are
+    // GLOBAL across the whole pack, so the sequence runs on through the
+    // per-display groups below rather than restarting on each screen.
     const numbers = computeDisplayNumbers(annotations)
-    const numbered = annotations
-      .filter((a) => numbers.has(a.annotation_id))
-      .sort((a, b) => (numbers.get(a.annotation_id) ?? 0) - (numbers.get(b.annotation_id) ?? 0))
-    for (const a of numbered) {
-      lines.push(`${numbers.get(a.annotation_id)}. ${describeAnnotation(a, t)}`)
-    }
-    for (const a of annotations) {
-      if (!numbers.has(a.annotation_id)) lines.push(`- ${describeAnnotation(a, t)}`)
+    const groups = groupByDisplay(manifest, annotations)
+    if (groups.length === 0) {
+      lines.push(
+        `Coordinates are pixels in snapshot.png (${annotationsFile.reference_width}×${annotationsFile.reference_height}). ` +
+          'Numbers are the computed display numbers (SPEC §8.5) — identical in every rendered view.',
+      )
+      lines.push('')
+      lines.push(...annotationLines(annotations, numbers, t))
+    } else {
+      // Multi-display pack: a box belongs to the screen it was drawn on, and
+      // its coordinates are in THAT screen's snapshot (SPEC §8.8). Listing them
+      // in one flat list would silently mix three coordinate spaces.
+      lines.push(
+        'This capture froze more than one display. Boxes are grouped by the display they were ' +
+          'drawn on; each group’s coordinates are pixels in THAT display’s snapshot (SPEC §8.2, ' +
+          '§8.8). Numbers are the computed display numbers (SPEC §8.5) — one global sequence ' +
+          'across the whole pack, identical in every rendered view.',
+      )
+      for (const g of groups) {
+        if (g.annotations.length === 0) continue
+        const snapshot = g.focused
+          ? `snapshot.png, ${annotationsFile.reference_width}×${annotationsFile.reference_height}`
+          : `snapshot-d${g.index}.png`
+        lines.push('')
+        lines.push(
+          `### ${t('pack.display')} ${g.index}${g.focused ? ` (${t('pack.displayFocused')})` : ''} — ${snapshot}`,
+        )
+        lines.push('')
+        lines.push(...annotationLines(g.annotations, numbers, t))
+      }
     }
   }
   const blurCount = annotations.filter((a) => a.blur).length

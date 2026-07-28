@@ -21,6 +21,7 @@ import type {
   UiaPluginPayload,
 } from '../shared/types'
 import { FORMAT_NAME, FORMAT_VERSION } from '../shared/types'
+import { displayAnnotatedName, displayFramesDir } from '../shared/keyframes'
 import { buildReport } from './report'
 import { buildReadme, buildSkills, SKILLS_FILES } from './packdocs'
 
@@ -141,6 +142,25 @@ async function writeDisplayFiles(
   )
 }
 
+/**
+ * Removes every non-focused display's annotated replay and stills. The
+ * derived-view rule of the top-level media (SPEC §7.2) applies per display: a
+ * rendering is only ever as current as the annotations it was made from, so a
+ * save wipes them all and the renders that follow declare exactly what still
+ * has boxes.
+ */
+async function clearDisplayRenderOutputs(
+  dirPath: string,
+  displays: readonly DisplayDeclaration[] | undefined,
+): Promise<void> {
+  if (displays === undefined) return
+  for (const d of displays) {
+    if (d.focused) continue
+    await rm(join(dirPath, displayAnnotatedName(d.index)), { force: true })
+    await rm(join(dirPath, displayFramesDir(d.index)), { recursive: true, force: true })
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Save-first per-display writes, off the editor-opening critical path
 // ---------------------------------------------------------------------------
@@ -207,8 +227,13 @@ async function dropUndeclarableDisplays(dirPath: string): Promise<void> {
 
 /** Directory name, manifest name, and meta.json name — one constant for all three. */
 export const UIA_PLUGIN_NAME = 'windows-uia'
-/** Payload schema version, not the app version (SPEC §11.1 requires both to match). */
-export const UIA_PLUGIN_VERSION = '0.1.0'
+/**
+ * Payload schema version, not the app version (SPEC §11.1 requires the
+ * manifest declaration and meta.json to agree). 0.2.0 added the per-window
+ * class_name/z/tree/element_count and the per-element window index (SPEC
+ * §11.3) — additive, so a 0.1.0 reader still reads every field it knows.
+ */
+export const UIA_PLUGIN_VERSION = '0.2.0'
 
 /** The manifest.plugins entry for the payload writeUiaPlugin() lays down. */
 export function uiaPluginDeclaration(): Manifest['plugins'][number] {
@@ -589,6 +614,11 @@ export async function updatePack(
   // render puts back exactly the current set (SPEC §5.7).
   await rm(join(handle.dirPath, 'replay_annotated.webm'), { force: true })
   await rm(join(handle.dirPath, 'frames'), { recursive: true, force: true })
+  // Same rule per display (GOAL "Multi-Monitor Support"): a screen the user
+  // just un-annotated must not keep an annotated replay showing boxes that no
+  // longer exist. Removed for EVERY declared display; the renders that follow
+  // put back only the ones that still have annotations.
+  await clearDisplayRenderOutputs(handle.dirPath, input.displays)
   if (!keepReplay) {
     if (input.replayWebm === null) {
       // The user excluded the replay at save time (e.g. privacy).
@@ -610,6 +640,25 @@ export async function updatePack(
  * data; replay_annotated is NOT copied (it is stale relative to the edited
  * annotations — the caller starts a background render for the new folder).
  */
+/**
+ * Annotations restricted to the display set a pack actually declares (SPEC
+ * §8.8): a `display` that names no declared entry is DROPPED from the box, so
+ * the box resolves to the focused display instead of carrying an index that
+ * fails validation, renders into nothing, and disappears from the documents.
+ * `undefined` declarations = a single-display pack, where no box may carry one.
+ */
+function withDeclaredDisplays(
+  annotations: readonly Annotation[],
+  displays: readonly DisplayDeclaration[] | undefined,
+): Annotation[] {
+  const declared = new Set((displays ?? []).map((d) => d.index))
+  return annotations.map((a) => {
+    if (a.display === undefined || declared.has(a.display)) return a
+    const { display: _dropped, ...rest } = a
+    return rest
+  })
+}
+
 export async function saveAsNewPack(sourceDir: string, input: ExportInput): Promise<PackHandle> {
   // The source folder may still be finishing its save-first per-display write.
   await settleDisplayWrites(sourceDir)
@@ -634,6 +683,11 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
   // Fewer than two surviving displays is a SINGLE-display pack: media.displays
   // exists only for a capture that covered more than one (SPEC §5.6).
   const displayFiles = surviving !== undefined && surviving.length > 1 ? surviving : undefined
+  // A box may only name a display this pack DECLARES (SPEC §8.8). Anything the
+  // filter above dropped resolves back to the focused display — the field is
+  // removed, which is what "absent = focused" means — rather than being written
+  // as an index nothing in the new pack can resolve.
+  const annotations = withDeclaredDisplays(input.annotations, displayFiles)
   const manifest = buildManifest({
     id,
     createdAt: input.capturedAt,
@@ -653,7 +707,7 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
   const annotationsFile: AnnotationsFile = {
     reference_width: input.width,
     reference_height: input.height,
-    annotations: input.annotations,
+    annotations,
   }
   const timeline = withExportEvent(input.timeline, new Date())
 
@@ -783,30 +837,55 @@ export async function refreshPackDocs(dirPath: string, docLanguage: Language = '
  */
 export async function setManifestRenderOutputs(
   handle: PackHandle,
-  outputs: { replayAnnotated: boolean; keyframes: readonly ManifestKeyframe[] },
+  outputs: {
+    replayAnnotated: boolean
+    keyframes: readonly ManifestKeyframe[]
+    // WHICH display these outputs belong to (GOAL "Multi-Monitor Support").
+    // Absent = the focused display, whose outputs ARE the top-level media
+    // (media.replay_annotated / media.keyframes). A 1-based index declares
+    // that display's own outputs inside its media.displays entry (SPEC §5.6) —
+    // its own boxes, burned into its own replay and its own stills.
+    display?: number
+  },
 ): Promise<void> {
   const manifestPath = join(handle.dirPath, 'manifest.json')
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Manifest
-  // Never declared without a replay (SPEC §5.3) — keyframes have no such rule:
-  // a screenshot-only pack has exactly one still, rendered from snapshot.png.
-  if (outputs.replayAnnotated && manifest.media.replay !== null) {
-    manifest.media.replay_annotated = 'replay_annotated.webm'
-  }
   // Belt and braces against a second render for the same folder having wiped
-  // frames/ between this render's writes and this declaration: a declared file
-  // MUST exist (SPEC §5.7). Renders are serialized (annotatedRender.ts), so
-  // this normally truncates nothing. A PREFIX rather than a filter: NN is the
-  // entry's 1-based position, so skipping a middle entry would be invalid too.
+  // the stills between this render's writes and this declaration: a declared
+  // file MUST exist (SPEC §5.7). Renders are serialized (annotatedRender.ts),
+  // so this normally truncates nothing. A PREFIX rather than a filter: NN is
+  // the entry's 1-based position, so skipping a middle entry would be invalid.
   const present: ManifestKeyframe[] = []
   for (const k of outputs.keyframes) {
     if (!existsSync(join(handle.dirPath, k.file))) break
     present.push(k)
   }
-  if (present.length > 0) {
-    manifest.media.keyframes = present.map((k) => ({ file: k.file, t_ms: k.t_ms }))
-  } else {
-    delete manifest.media.keyframes
+  const declared = present.map((k) => ({ file: k.file, t_ms: k.t_ms }))
+
+  if (outputs.display !== undefined) {
+    const displays = manifest.media.displays
+    const entry = Array.isArray(displays)
+      ? displays.find((d) => d !== null && typeof d === 'object' && d.index === outputs.display)
+      : undefined
+    // The pack no longer declares this display (a re-edit dropped it): its
+    // files are undeclared and readers ignore them — never invent an entry.
+    if (entry === undefined) return
+    if (outputs.replayAnnotated && entry.replay !== null) {
+      entry.replay_annotated = displayAnnotatedName(entry.index)
+    }
+    if (declared.length > 0) entry.keyframes = declared
+    else delete entry.keyframes
+    await writeFile(manifestPath, toJson(manifest))
+    return
   }
+
+  // Never declared without a replay (SPEC §5.3) — keyframes have no such rule:
+  // a screenshot-only pack has exactly one still, rendered from snapshot.png.
+  if (outputs.replayAnnotated && manifest.media.replay !== null) {
+    manifest.media.replay_annotated = 'replay_annotated.webm'
+  }
+  if (declared.length > 0) manifest.media.keyframes = declared
+  else delete manifest.media.keyframes
   await writeFile(manifestPath, toJson(manifest))
 }
 

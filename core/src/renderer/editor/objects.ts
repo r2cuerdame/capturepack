@@ -1,42 +1,117 @@
 // Static object picking (GOAL "Static object picking (v0 — before full
 // tracking)"): the editor's index over the capture-instant Windows UI
-// Automation elements that arrived in EditorInitPayload.uiaElements.
+// Automation objects that arrived in EditorInitPayload.
+//
+// TWO LEVELS, and the order between them is the whole point:
+//
+//   WINDOW  — the guaranteed floor. The dump lists every visible top-level
+//             window, so wherever a window is, picking has an answer: hovering
+//             outlines the window, clicking snaps a box to its bounds. This is
+//             what makes picking work over Chromium/Electron windows, over
+//             apps that expose no accessibility tree, and over every window the
+//             budget never reached.
+//   CONTROL — a refinement. Where a control tree was collected, the smallest
+//             control containing the cursor wins over its window, because that
+//             is the more precise annotation. Holding the modifier the editor
+//             documents forces the window level back.
+//
+// Occlusion is respected: only the controls of the TOP-MOST window at a point
+// may be offered there, so a button of a window buried behind another one is
+// never picked through it.
 //
 // Built ONCE at init; a pointer probe is then a couple of array scans, so
 // hovering costs nothing per frame (and editor.ts probes only when the pointer
 // actually moved to a new snapshot pixel).
-import type { EditorUiaElement } from '../../shared/ipc'
+import type { EditorUiaElement, EditorUiaWindow } from '../../shared/ipc'
 
 /** Uniform grid cell, in snapshot pixels. */
 const CELL = 64
-/** Elements thinner than this in either axis are noise, not pick targets. */
+/** Objects thinner than this in either axis are noise, not pick targets. */
 const MIN_SIDE = 6
 /**
- * An element covering most of the screen is a container (the window, its client
- * area, the desktop) — snapping a box onto it is never a useful annotation, and
- * including it would turn every click on empty space into a box. Left clicks on
- * anything bigger keep their old meaning: clear the selection.
+ * A CONTROL covering most of the screen is a container (the window, its client
+ * area, a full-bleed pane) — snapping a box onto it is never a useful
+ * annotation, and it would shadow every smaller control under the cursor. The
+ * window level below covers exactly that case properly, with the window's own
+ * title, so nothing is lost by dropping these.
  */
 const MAX_AREA_FRACTION = 0.8
 /**
- * A second, dimensional guard on the same idea. An element can be a window /
+ * A second, dimensional guard on the same idea. A control can be a window /
  * client area / pane without covering 80% of the SNAPSHOT — a half-screen
  * maximized 1920x2160 window on a 3840x2160 desktop is only 50% of it — and
- * snapping a box onto a whole window is never a useful annotation. An element
- * that is large in BOTH axes is a frame, not a control; large in one axis (a
+ * snapping a box onto a whole window is the WINDOW level's job. A control that
+ * is large in BOTH axes is a frame, not a control; large in one axis (a
  * toolbar, a list, a side panel) still is one.
  */
 const MAX_SIDE_FRACTION = 0.7
 /**
- * Elements spanning more cells than this go into a linear overflow list instead
- * of being written into every cell they touch — an index build is O(elements),
- * never O(elements x screen area).
+ * Controls spanning more cells than this go into a linear overflow list instead
+ * of being written into every cell they touch — an index build is O(controls),
+ * never O(controls x screen area).
  */
 const MAX_CELLS_PER_ELEMENT = 96
+/**
+ * A control this much of its OWN window is that window — the client-area pane
+ * at depth 0/1 that every tree starts with. The window level covers exactly
+ * that rectangle already, and covers it better: "Notepad" instead of "Pane".
+ * Dropping these is what keeps the two levels from being two labels for one
+ * box, and it is why a window whose whole tree is frames (Chromium, Electron)
+ * correctly reports that it has nothing finer to offer.
+ *
+ * Relative to the WINDOW, not to the snapshot: the guards above cannot catch
+ * the full-window pane of a small window.
+ */
+const WINDOW_FRAME_FRACTION = 0.95
+/**
+ * The wallpaper is a top-level window (class Progman, or a WorkerW behind the
+ * icons) covering the whole desktop. Offering it would turn every click on
+ * empty space into a full-desktop box, so the desktop is the one window picking
+ * does not offer — the editor says "no object data here" instead. The dump
+ * still records it; this is an editor-level decision.
+ *
+ * It is NOT what preserves "click empty canvas = clear the selection": on a
+ * normally tiled desk no wallpaper is visible at all and every pixel belongs to
+ * some window. That gesture is protected in the editor's pointerdown, where a
+ * modifier-free WINDOW-level pick defers to a click that had a selection to
+ * clear (Shift, and any CONTROL pick, still snap immediately).
+ */
+const DESKTOP_CLASSES = new Set(['progman', 'workerw'])
 
-/** One pickable object: the element, clipped to the snapshot, with its area. */
+export type PickLevel = 'control' | 'window'
+
+/**
+ * WINDOW LEVEL ONLY: why (or whether) a finer level exists inside this window.
+ * SPEC §11.3's "Silence is not absence" is a normative reader rule, and these
+ * are the three different statements it distinguishes — one message for all of
+ * them is exactly the misreading the spec calls out.
+ */
+export type WindowRefinement =
+  // A control of this window is pickable on this snapshot: nothing to say.
+  | 'controls'
+  // The dump never read this window's tree (past the window cap, out of budget,
+  // or a window that exposes none). NO DATA was recorded — not "no objects".
+  | 'noData'
+  // The tree WAS read and holds controls, but none of them land on this
+  // display's snapshot: they are off this screen, not absent.
+  | 'offDisplay'
+  // The tree was read, its controls are on this screen, and every one of them
+  // is a frame/pane the window level already covers better. Genuinely nothing
+  // finer to offer here.
+  | 'none'
+
+/** One pickable object: the control or window, clipped to the snapshot. */
 export interface PickableObject {
-  element: EditorUiaElement
+  level: PickLevel
+  // The control, at level 'control'; null at level 'window'.
+  element: EditorUiaElement | null
+  // The window this object IS (level 'window'), or the window whose tree the
+  // control came from (null when the dump did not say which).
+  window: EditorUiaWindow | null
+  // WINDOW LEVEL ONLY: whether a finer level exists, and if not, WHY not —
+  // which is what the editor turns into an honest one-time message. Always
+  // 'controls' at level 'control' (the finer level is what you are looking at).
+  refinement: WindowRefinement
   // Clipped to the snapshot rect — what a picked box snaps to.
   x: number
   y: number
@@ -45,10 +120,38 @@ export interface PickableObject {
   area: number
 }
 
-/** The label the hover chip shows: the element's name, else its control type. */
+/**
+ * The text a picked box is pre-filled with: the control's name (falling back to
+ * its type), or the window's title (falling back to its process).
+ */
 export function objectLabel(o: PickableObject): string {
-  const name = o.element.name.trim()
-  return name !== '' ? name : o.element.control_type.trim()
+  if (o.level === 'window') {
+    const w = o.window
+    if (w === null) return ''
+    const title = w.title.trim()
+    return title !== '' ? title : w.process.trim()
+  }
+  const e = o.element
+  if (e === null) return ''
+  const name = e.name.trim()
+  return name !== '' ? name : e.control_type.trim()
+}
+
+/**
+ * The hover chip's text: the label plus, for a window, the process behind it —
+ * "Untitled - Notepad" alone does not say WHICH app, and a window whose title
+ * is empty says nothing at all without it. Falls back to the Win32 class rather
+ * than showing an empty chip: an unnamed object is still worth naming.
+ */
+export function objectHoverLabel(o: PickableObject): string {
+  const label = objectLabel(o)
+  if (o.level !== 'window' || o.window === null) {
+    return label !== '' ? label : (o.element?.class_name.trim() ?? '')
+  }
+  const process = o.window.process.trim()
+  if (label === '') return process !== '' ? process : o.window.class_name.trim()
+  if (process === '' || label.toLowerCase().includes(process.toLowerCase())) return label
+  return `${label} — ${process}`
 }
 
 export class ObjectIndex {
@@ -57,6 +160,8 @@ export class ObjectIndex {
   private readonly wide: readonly number[]
   private readonly cols: number
   private readonly rows: number
+  // Z-ASCENDING: the first window containing a point is the one on top of it.
+  private readonly windows: readonly PickableObject[]
 
   private constructor(
     objects: readonly PickableObject[],
@@ -64,45 +169,109 @@ export class ObjectIndex {
     wide: readonly number[],
     cols: number,
     rows: number,
+    windows: readonly PickableObject[],
   ) {
     this.objects = objects
     this.cells = cells
     this.wide = wide
     this.cols = cols
     this.rows = rows
-  }
-
-  /** Number of pickable objects — 0 means picking is simply off. */
-  get size(): number {
-    return this.objects.length
+    this.windows = windows
   }
 
   /**
-   * Builds the index for one snapshot coordinate space. Elements are clipped to
-   * the snapshot, filtered (see the constants above), and sorted by area
-   * ascending so the FIRST hit of any scan is the smallest containing element.
+   * Number of pickable objects, both levels. 0 means there is no object data at
+   * all — no dump, or nothing of it landed on this display — and picking stays
+   * silently off, exactly as it behaved before the feature existed. (Silence is
+   * right ONLY here: within a dump that has data, an empty spot says so.)
    */
-  static build(elements: readonly EditorUiaElement[], width: number, height: number): ObjectIndex {
+  get size(): number {
+    return this.objects.length + this.windows.length
+  }
+
+  /**
+   * Builds the index for one snapshot coordinate space. Objects are clipped to
+   * the snapshot and filtered (see the constants above); controls are sorted by
+   * area ascending so the FIRST hit of any scan is the smallest containing one,
+   * windows by z ascending so the first hit is the top-most.
+   */
+  static build(
+    elements: readonly EditorUiaElement[],
+    uiaWindows: readonly EditorUiaWindow[],
+    width: number,
+    height: number,
+  ): ObjectIndex {
     const maxArea = width * height * MAX_AREA_FRACTION
     const maxW = width * MAX_SIDE_FRACTION
     const maxH = height * MAX_SIDE_FRACTION
+    // Windows by z, clipped once: every control looks its owner up here rather
+    // than scanning the list per element.
+    const byZ = new Map<number, { window: EditorUiaWindow; clip: { area: number } | null }>()
+    for (const w of uiaWindows) byZ.set(w.z, { window: w, clip: clip(w.bounds, width, height) })
     const objects: PickableObject[] = []
+    // Which windows had a control that landed on THIS display at all, before
+    // the frame filters below removed any of them: that is what separates
+    // "its controls are on another screen" from "its controls are all frames".
+    const onThisDisplay = new Set<number>()
     for (const element of elements) {
-      const x0 = Math.max(0, Math.round(element.bounds.x))
-      const y0 = Math.max(0, Math.round(element.bounds.y))
-      const x1 = Math.min(width, Math.round(element.bounds.x + element.bounds.width))
-      const y1 = Math.min(height, Math.round(element.bounds.y + element.bounds.height))
-      const w = x1 - x0
-      const h = y1 - y0
-      // Off-screen elements (another display, a scrolled-away control) clip to
+      const clipped = clip(element.bounds, width, height)
+      // Off-screen objects (another display, a scrolled-away control) clip to
       // nothing and drop out here.
-      if (w < MIN_SIDE || h < MIN_SIDE) continue
-      const area = w * h
-      if (area > maxArea) continue
-      if (w > maxW && h > maxH) continue
-      objects.push({ element, x: x0, y: y0, width: w, height: h, area })
+      if (clipped === null) continue
+      if (element.window >= 0) onThisDisplay.add(element.window)
+      if (clipped.area > maxArea) continue
+      if (clipped.width > maxW && clipped.height > maxH) continue
+      const owner = byZ.get(element.window)
+      if (owner?.clip != null && clipped.area >= owner.clip.area * WINDOW_FRAME_FRACTION) continue
+      objects.push({
+        level: 'control',
+        element,
+        window: owner?.window ?? null,
+        refinement: 'controls',
+        ...clipped,
+      })
     }
     objects.sort((a, b) => a.area - b.area)
+
+    // Which windows a finer level actually exists for, AFTER the filters above.
+    const legacy = elements.length > 0 && elements.every((e) => e.window < 0)
+    const refinable = new Set<number>()
+    for (const o of objects) {
+      const z = o.element?.window ?? -1
+      if (z >= 0) refinable.add(z)
+    }
+    // How many controls the dump RECORDED per window, before clipping — a
+    // window with recorded controls that all clip away has its controls on
+    // another screen, which is a different fact from having none.
+    const recorded = new Set<number>()
+    for (const e of elements) {
+      if (e.window >= 0) recorded.add(e.window)
+    }
+
+    const windows: PickableObject[] = []
+    for (const window of uiaWindows) {
+      if (DESKTOP_CLASSES.has(window.class_name.trim().toLowerCase())) continue
+      const clipped = clip(window.bounds, width, height)
+      if (clipped === null) continue
+      windows.push({
+        level: 'window',
+        element: null,
+        window,
+        refinement: legacy
+          ? // A pack whose controls do not name their window (0.1.0 payload)
+            // walked the focused window alone, and those controls are offered
+            // everywhere — so hasControls, which main derived under exactly
+            // that rule, is all such a pack can honestly say.
+            window.hasControls
+            ? 'controls'
+            : 'none'
+          : refinementOf(window, refinable, recorded, onThisDisplay),
+        ...clipped,
+      })
+    }
+    // The focused window was on top at the capture instant by definition, so it
+    // wins over whatever z the dump gave it.
+    windows.sort((a, b) => zOf(a) - zOf(b))
 
     const cols = Math.max(1, Math.ceil(width / CELL))
     const rows = Math.max(1, Math.ceil(height / CELL))
@@ -126,32 +295,127 @@ export class ObjectIndex {
         }
       }
     })
-    return new ObjectIndex(objects, cells, wide, cols, rows)
+    return new ObjectIndex(objects, cells, wide, cols, rows, windows)
   }
 
-  /** The smallest object containing the snapshot point, or null. */
-  pick(x: number, y: number): PickableObject | null {
-    if (this.objects.length === 0) return null
-    const c = Math.floor(x / CELL)
-    const r = Math.floor(y / CELL)
-    let best: PickableObject | null = null
-    if (c >= 0 && r >= 0 && c < this.cols && r < this.rows) {
-      best = this.firstHit(this.cells.get(r * this.cols + c), x, y)
+  /**
+   * The object offered at a snapshot point, or null when the dump knows nothing
+   * about it. The smallest control of the top-most window wins; `forceWindow`
+   * (the editor's modifier) skips straight to that window.
+   */
+  pick(x: number, y: number, forceWindow = false): PickableObject | null {
+    const window = this.windowAt(x, y)
+    if (!forceWindow) {
+      const control = this.controlAt(x, y, window)
+      if (control !== null) return control
     }
+    return window
+  }
+
+  /** The top-most window covering the point — the floor under every pick. */
+  windowAt(x: number, y: number): PickableObject | null {
+    for (const w of this.windows) {
+      if (contains(w, x, y)) return w
+    }
+    return null
+  }
+
+  /**
+   * The smallest control containing the point that the top window may offer.
+   * Occlusion: a control belongs to exactly one window, and only the window on
+   * top at that pixel gets to speak for it. Controls from a dump that did not
+   * record their window (window < 0, a pack written before the walk covered
+   * more than the foreground window) are always eligible — that pack's controls
+   * all came from the one window it walked.
+   */
+  private controlAt(x: number, y: number, window: PickableObject | null): PickableObject | null {
+    if (this.objects.length === 0) return null
+    const top = window?.window?.z ?? -1
+    const eligible = (o: PickableObject): boolean => {
+      const owner = o.element?.window ?? -1
+      return owner < 0 || owner === top
+    }
+    // CLAMPED into the grid, not bounds-checked out of it. A display's own
+    // right/bottom edge is a reachable probe point — board.ts toNativePoint
+    // clamps inclusively to [0, width] — and every common display width is an
+    // exact multiple of CELL, so floor(width / CELL) is one PAST the last
+    // column. Skipping the grid there silently degraded the whole last pixel
+    // column to the window level; contains() below still rejects a real miss.
+    const c = Math.min(this.cols - 1, Math.max(0, Math.floor(x / CELL)))
+    const r = Math.min(this.rows - 1, Math.max(0, Math.floor(y / CELL)))
+    const best: PickableObject | null = this.firstHit(
+      this.cells.get(r * this.cols + c),
+      x,
+      y,
+      eligible,
+    )
     // Both lists are area-ascending, so one hit from each is enough.
-    const wideHit = this.firstHit(this.wide, x, y)
+    const wideHit = this.firstHit(this.wide, x, y, eligible)
     if (best === null) return wideHit
     if (wideHit === null) return best
     return wideHit.area < best.area ? wideHit : best
   }
 
-  private firstHit(indices: readonly number[] | undefined, x: number, y: number): PickableObject | null {
+  private firstHit(
+    indices: readonly number[] | undefined,
+    x: number,
+    y: number,
+    eligible: (o: PickableObject) => boolean,
+  ): PickableObject | null {
     if (indices === undefined) return null
     for (const index of indices) {
       const o = this.objects[index]
       if (o === undefined) continue
-      if (x >= o.x && y >= o.y && x <= o.x + o.width && y <= o.y + o.height) return o
+      if (contains(o, x, y) && eligible(o)) return o
     }
     return null
   }
+}
+
+/**
+ * The honest three-way answer for one window (SPEC §11.3, "Silence is not
+ * absence"). Order matters: whether data was RECORDED beats anything about
+ * what the data contains.
+ */
+function refinementOf(
+  window: EditorUiaWindow,
+  refinable: ReadonlySet<number>,
+  recorded: ReadonlySet<number>,
+  onThisDisplay: ReadonlySet<number>,
+): WindowRefinement {
+  if (refinable.has(window.z)) return 'controls'
+  // `elements` covers only windows whose tree is "collected"/"truncated"; for
+  // any other status the payload says NOTHING about this window's contents.
+  if (window.tree !== 'collected' && window.tree !== 'truncated') return 'noData'
+  // A tree that was read, holds controls, but none of them reach this
+  // snapshot: the window straddles the board and its controls are elsewhere.
+  if (recorded.has(window.z) && !onThisDisplay.has(window.z)) return 'offDisplay'
+  return 'none'
+}
+
+/** The focused window was on top at the capture instant, whatever z it got. */
+function zOf(o: PickableObject): number {
+  const w = o.window
+  if (w === null) return Number.MAX_SAFE_INTEGER
+  return w.focused ? -1 : w.z
+}
+
+function contains(o: PickableObject, x: number, y: number): boolean {
+  return x >= o.x && y >= o.y && x <= o.x + o.width && y <= o.y + o.height
+}
+
+/** Snapshot-clipped rectangle, or null when nothing usable is left of it. */
+function clip(
+  bounds: { x: number; y: number; width: number; height: number },
+  width: number,
+  height: number,
+): { x: number; y: number; width: number; height: number; area: number } | null {
+  const x0 = Math.max(0, Math.round(bounds.x))
+  const y0 = Math.max(0, Math.round(bounds.y))
+  const x1 = Math.min(width, Math.round(bounds.x + bounds.width))
+  const y1 = Math.min(height, Math.round(bounds.y + bounds.height))
+  const w = x1 - x0
+  const h = y1 - y0
+  if (w < MIN_SIDE || h < MIN_SIDE) return null
+  return { x: x0, y: y0, width: w, height: h, area: w * h }
 }

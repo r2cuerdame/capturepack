@@ -17,6 +17,16 @@ export interface ManifestDisplayMedia {
   // display, or null when this display recorded nothing.
   replay: string | null
   replay_duration_ms?: number
+  // Per-display annotated replay (SPEC §5.6, §7.2): "replay_annotated-d<index>.webm",
+  // this display's own replay with ITS OWN annotation boxes rendered into the
+  // pixels. Written only for a NON-focused display that actually carries
+  // annotations — the focused display's annotated replay is the top-level
+  // media.replay_annotated, and a display nobody annotated needs none.
+  replay_annotated?: string
+  // Per-display annotated stills (SPEC §5.6, §5.7): files under
+  // "frames-d<index>/", ordered by t_ms ascending. Same rule as
+  // replay_annotated — only a non-focused display with annotations gets them.
+  keyframes?: ManifestKeyframe[]
   // The display's rectangle in the OS virtual-desktop coordinate space
   // (device-independent pixels); multiply by `scale` for physical pixels.
   bounds: { x: number; y: number; width: number; height: number }
@@ -116,22 +126,35 @@ export interface AnnotationTracking {
 export type AnnotationTarget = Record<string, unknown>
 
 /**
- * `target` for source "uia" (SPEC §8.7): a Windows UI Automation element the
+ * `target` for source "uia" (SPEC §8.7): a Windows UI Automation object the
  * user picked in the editor, from the capture-instant dump in
  * plugins/windows-uia/ (GOAL "Static object picking (v0 — before full
- * tracking)"). Every field but `source` is omitted when the element had no
+ * tracking)"). Every field but `source` is omitted when the object had no
  * value for it — an empty string is never written.
+ *
+ * `level` says WHICH object: a control inside a window, or the window itself.
+ * The window level is the guaranteed floor of picking (GOAL: "windows are
+ * always selectable"), so it is a first-class target, not a degraded control.
  */
 export type UiaAnnotationTarget = {
   source: 'uia'
-  // UIA Name — what the user sees (also the box's pre-filled text).
+  // "control" = a control from a window's UI Automation tree; "window" = the
+  // top-level window itself. Absent on targets written before the window level
+  // existed, which were always controls.
+  level?: 'control' | 'window'
+  // UIA Name — what the user sees (also the box's pre-filled text). Controls.
   name?: string
-  // UIA ControlType without the "ControlType." prefix, e.g. "Button".
+  // UIA ControlType without the "ControlType." prefix, e.g. "Button". Controls.
   control_type?: string
   // UIA AutomationId — the stable, non-localized id when the app provides one.
   automation_id?: string
-  // Win32 window class of the element, e.g. "Chrome_WidgetWin_1".
+  // Win32 window class, e.g. "Chrome_WidgetWin_1" — of the control, or of the
+  // window at level "window".
   class_name?: string
+  // Window title at the capture instant (level "window").
+  title?: string
+  // Process name without extension, e.g. "chrome" (level "window").
+  process?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -146,26 +169,57 @@ export interface UiaBounds {
   height: number
 }
 
+/**
+ * How much of ONE window's control tree the dump ended up with (SPEC §11.3).
+ * This is what lets a reader distinguish "this window has no objects" from "no
+ * object data was collected for this window" — the honest answer for a window
+ * the budget never reached, and for the Chromium/Electron windows that expose
+ * no usable tree at all.
+ */
+export type UiaTreeStatus =
+  // The whole control tree was collected.
+  | 'collected'
+  // The walk started but hit the budget, the depth cap, or the element cap.
+  | 'truncated'
+  // The walk was attempted and the window exposed no tree.
+  | 'unavailable'
+  // The window was never walked (past the window cap, or out of budget).
+  | 'skipped'
+
 /** One top-level window that existed at the capture instant. */
 export interface UiaWindowRecord {
   title: string
   // Process name without extension, e.g. "chrome". '' when unavailable.
   process: string
+  // Win32 window class, e.g. "Chrome_WidgetWin_1". '' when unavailable.
+  class_name: string
   bounds: UiaBounds
   // Exactly the window that had focus; false for every other window. A dump
   // that could not determine the foreground window has no focused entry.
   focused: boolean
+  // Z-order index at the capture instant: 0 is the top-most window. What
+  // decides which window covers a pixel when several overlap.
+  z: number
+  // Whether this window's control tree made it into `elements` — see above.
+  tree: UiaTreeStatus
+  // How many of `elements` belong to this window (0 for every status but
+  // "collected"/"truncated").
+  element_count: number
 }
 
-/** One control of the FOREGROUND window's UI Automation tree. */
+/** One control of a window's UI Automation tree. */
 export interface UiaElementRecord {
   name: string
   control_type: string
   automation_id: string
   class_name: string
   bounds: UiaBounds
-  // 0 = the foreground window itself; a pre-order walk of its control view.
+  // 0 = the window this control belongs to; a pre-order walk of its control view.
   depth: number
+  // Index into `windows` of the window this control was walked from. -1 when
+  // the dump did not say (a pack written before the dump covered more than the
+  // foreground window).
+  window: number
 }
 
 /** plugins/windows-uia/elements.json (SPEC §11.3). */
@@ -193,6 +247,13 @@ export interface BoxAnnotation {
   annotation_id: string
   type: 'box'
   bounds: AnnotationBounds
+  // WHICH captured display this box was drawn on (SPEC §8.8, GOAL
+  // "Multi-Monitor Support"): the 1-based manifest.media.displays[].index.
+  // ABSENT = the focused display, which is what a single-display pack (and
+  // every box drawn on the focused screen) writes — so nothing about an
+  // existing pack changes. `bounds` is always in THAT display's snapshot pixel
+  // space, never the board's.
+  display?: number
   // The description the user typed. May be empty (spec default: "").
   text: string
   // Lifetime interval [start_ms, end_ms] on the replay clock (SPEC §8.4).
@@ -255,6 +316,72 @@ export function computeDisplayNumbers(
   return numbers
 }
 
+/**
+ * WHICH display a box belongs to (SPEC §8.8): its `display` when it carries
+ * one, the FOCUSED display's index otherwise. Absent is the default because
+ * that is what a single-display pack — and every box drawn on the focused
+ * screen — writes, so nothing about an existing pack changes.
+ *
+ * A non-integer or out-of-range value is treated as absent: the box then still
+ * renders, on the focused display, instead of being silently dropped.
+ *
+ * "Out of range" needs the declared display set to be knowable, so a caller
+ * that has one passes it as `declared` (built from manifest.media.displays with
+ * declaredDisplayIndices()). A value the pack does not declare then resolves to
+ * `focusedIndex` — exactly what the editor already draws (editor.ts displayOf)
+ * and what this comment has always promised. WITHOUT the set only the shape is
+ * checked, which is all a caller that has no manifest can honestly do.
+ */
+export function annotationDisplayIndex(
+  a: Annotation,
+  focusedIndex: number,
+  declared?: ReadonlySet<number>,
+): number {
+  const value = a.display
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) return focusedIndex
+  if (declared !== undefined && !declared.has(value)) return focusedIndex
+  return value
+}
+
+/** The boxes of ONE display, in array order (SPEC §8.8). */
+export function annotationsOnDisplay(
+  annotations: readonly Annotation[],
+  index: number,
+  focusedIndex: number,
+  declared?: ReadonlySet<number>,
+): Annotation[] {
+  return annotations.filter((a) => annotationDisplayIndex(a, focusedIndex, declared) === index)
+}
+
+/**
+ * The display indices a pack DECLARES (manifest.media.displays[].index), for
+ * annotationDisplayIndex()/annotationsOnDisplay(). `undefined` for a pack that
+ * declares no per-display media: a single-display pack has exactly one screen,
+ * every box is on it, and there is no set to check against.
+ */
+export function declaredDisplayIndices(
+  displays: readonly ManifestDisplayMedia[] | undefined,
+): ReadonlySet<number> | undefined {
+  if (!Array.isArray(displays) || displays.length === 0) return undefined
+  const indices = new Set<number>()
+  for (const d of displays) {
+    if (d !== null && typeof d === 'object' && typeof d.index === 'number') indices.add(d.index)
+  }
+  return indices
+}
+
+/**
+ * The 1-based index of the pack's FOCUSED display, i.e. the display
+ * snapshot.png and every `display`-less annotation belong to. 1 for a pack that
+ * declares no per-display media, which is the single-display case: there is
+ * only one display and it is the focused one.
+ */
+export function focusedDisplayIndex(displays: readonly ManifestDisplayMedia[] | undefined): number {
+  if (!Array.isArray(displays)) return 1
+  const focused = displays.find((d) => d !== null && typeof d === 'object' && d.focused === true)
+  return typeof focused?.index === 'number' ? focused.index : 1
+}
+
 export interface TimelineEvent {
   t_ms: number
   type: string
@@ -274,6 +401,15 @@ export interface TimelineFile {
 // constant so the two can never drift.
 export const DEFAULT_CAPTURE_HOTKEY = 'Ctrl+Alt+C'
 
+/**
+ * Schema version of settings.json (GOAL "Multi-Monitor Support"). Stamped into
+ * every profile the app writes; a profile WITHOUT it predates versioning, which
+ * is what one-time migrations key off (see main/settings.ts migrateSettings).
+ * Bump only when a stored value has to be reinterpreted, never for a new key —
+ * an unknown key already falls back to its default.
+ */
+export const SETTINGS_VERSION = 2
+
 // How the annotation editor opens (GOAL "Editor Window Mode"): the fullscreen
 // overlay (DEFAULT — fastest annotation) or a real movable/resizable window.
 export type EditorWindowMode = 'fullscreen' | 'windowed'
@@ -287,6 +423,11 @@ export interface EditorWindowBounds {
 }
 
 export interface Settings {
+  // Schema version of this profile (SETTINGS_VERSION). Absent in a file written
+  // before versioning existed — the ONE signal a one-time migration may use.
+  // The app stamps the current version on every load, so a migration runs at
+  // most once and a later deliberate choice is never second-guessed.
+  settingsVersion: number
   // UI language: "system" (default — app.getLocale() at runtime) or a
   // supported language code from shared/i18n.ts (en/ko/ja/zh/es/fr/de/pt/ru).
   language: string

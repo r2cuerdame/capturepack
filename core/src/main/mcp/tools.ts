@@ -10,6 +10,11 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 import type { Annotation, Manifest, ManifestKeyframe, TimelineEvent } from '../../shared/types'
+import {
+  annotationDisplayIndex,
+  declaredDisplayIndices,
+  focusedDisplayIndex,
+} from '../../shared/types'
 import { computeDisplayNumbers } from '../../shared/numbering'
 import { errorMessage, type PackHandle, type PackStore } from './store'
 
@@ -203,7 +208,12 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
         'was placed on, e.g. {source:"uia", name:"Save", control_type:"Button", automation_id, ' +
         'class_name} from Windows UI Automation at the capture instant — that is the box\'s ' +
         'meaning ("the Save button"), while its geometry always comes from bounds alone. ' +
-        'Display numbers are computed, never stored.',
+        'MULTI-DISPLAY: when the capture froze more than one screen, every box also reports the ' +
+        'display it was drawn on. The stored field is "display" (1-based manifest ' +
+        'media.displays[].index, ABSENT = the focused display); each returned box additionally ' +
+        'carries a resolved "display_index" and the "display_snapshot" file its bounds are pixels ' +
+        'in — bounds are ALWAYS in that display\'s own snapshot, never the focused one\'s. ' +
+        'Display numbers are computed, never stored, and run as ONE sequence across all displays.',
       inputSchema: idArg,
     },
     (args) =>
@@ -217,7 +227,7 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
           reference_width: file.reference_width,
           reference_height: file.reference_height,
           count: list.length,
-          annotations: list,
+          annotations: withDisplayContext(pack, list),
         })
       }),
   )
@@ -243,7 +253,12 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
           const text = annotationText(a)
           return text !== null && text.toLowerCase().includes(kw)
         })
-        return jsonResult({ pack: pack.id, keyword: args.keyword, count: matches.length, annotations: matches })
+        return jsonResult({
+          pack: pack.id,
+          keyword: args.keyword,
+          count: matches.length,
+          annotations: withDisplayContext(pack, matches),
+        })
       }),
   )
 
@@ -358,11 +373,15 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
       description:
         'Generic plugin metadata of a CapturePack: every JSON file under plugins/*/ parsed and ' +
         'returned as-is. On Windows the "windows-uia" plugin is the usual one: elements.json holds ' +
-        'the top-level window list and the foreground window\'s UI Automation control tree at the ' +
-        'capture instant (name, control_type, automation_id, class_name, bounds in SNAPSHOT pixel ' +
-        'coordinates, depth) — that is what annotation targets are picked from. DOM data ' +
-        'contributed by the Chrome extension lives under a chrome plugin directory when present. ' +
-        'Packs without plugin data return an empty list with a message.',
+        'the top-level window list and the UI Automation control trees of the windows the dump ' +
+        'reached at the capture instant (name, control_type, automation_id, class_name, bounds in ' +
+        'SNAPSHOT pixel coordinates, depth, and window = the z of the owning window) — that is ' +
+        'what annotation targets are picked from. Each windows[] entry carries tree: "collected" | ' +
+        '"truncated" | "unavailable" | "skipped"; anything but "collected" means no controls were ' +
+        'RECORDED for that window, which never means the window had none (Chromium and Electron ' +
+        'windows expose no tree unless an assistive client asks). DOM data contributed by the ' +
+        'Chrome extension lives under a chrome plugin directory when present. Packs without ' +
+        'plugin data return an empty list with a message.',
       inputSchema: idArg,
     },
     (args) =>
@@ -423,8 +442,9 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
         'Window-related context of a CapturePack: timeline events whose type or source mentions ' +
         'window/focus, plus any window-tracking plugin metadata — on Windows that is the ' +
         '"windows-uia" payload, whose windows[] lists every top-level window at the capture ' +
-        'instant (title, process, bounds in snapshot pixels, and which one had focus). Returns ' +
-        'empty lists with a message when the pack has no window data.',
+        'instant (title, process, class_name, bounds in snapshot pixels, z-order with 0 on top, ' +
+        'which one had focus, and whether its control tree was collected). Returns empty lists ' +
+        'with a message when the pack has no window data.',
       inputSchema: idArg,
     },
     (args) =>
@@ -566,6 +586,39 @@ function annotationList(pack: PackHandle): Annotation[] {
   return Array.isArray(file?.annotations) ? file.annotations : []
 }
 
+/**
+ * Boxes with the display they belong to made EXPLICIT (SPEC §8.8).
+ *
+ * The stored form is deliberately sparse — `display` is absent on the focused
+ * display, which is every box of a single-monitor pack — but an AI reader that
+ * receives bare bounds for a multi-display capture has no way to know which
+ * screen's pixels they are. So the resolved index and the snapshot file those
+ * pixels live in travel with every box, additively; the original `display`
+ * field is untouched.
+ *
+ * A single-display pack is returned exactly as stored: there is one screen, and
+ * naming it on every box would be noise.
+ */
+function withDisplayContext(pack: PackHandle, annotations: readonly Annotation[]): Annotation[] {
+  const displays = pack.manifest()?.media?.displays
+  if (!Array.isArray(displays) || displays.length < 2) return [...annotations]
+  const focused = focusedDisplayIndex(displays)
+  // A `display` this pack does not declare resolves to the FOCUSED display
+  // (SPEC §8.8) — the same screen the editor draws such a box on — so the
+  // index and snapshot reported here always name media the pack contains.
+  const declared = declaredDisplayIndices(displays)
+  return annotations.map((a) => {
+    const index = annotationDisplayIndex(a, focused, declared)
+    const entry = displays.find((d) => d !== null && typeof d === 'object' && d.index === index)
+    return {
+      ...a,
+      display_index: index,
+      display_focused: index === focused,
+      display_snapshot: entry?.snapshot ?? 'snapshot.png',
+    } as Annotation
+  })
+}
+
 function annotationText(a: Annotation): string | null {
   return typeof a.text === 'string' && a.text.trim() !== '' ? a.text : null
 }
@@ -686,13 +739,22 @@ function exportMarkdown(pack: PackHandle): string {
     // Display numbers come from the ONE shared rule (SPEC §8.5) so MCP output
     // can never disagree with the editor, replay_annotated, or the documents.
     const numbers = computeDisplayNumbers(annotations)
+    // Multi-display packs get a Screen column: bounds are pixels in THAT
+    // display's snapshot (SPEC §8.8), so a table without it is unreadable.
+    const displays = pack.manifest()?.media?.displays
+    const multi = Array.isArray(displays) && displays.length > 1
+    const focused = focusedDisplayIndex(displays)
+    const declared = declaredDisplayIndices(displays)
     lines.push(
-      '| Display # | ID | Lifetime | Bounds | Blur | Text |',
-      '| --- | --- | --- | --- | --- | --- |',
+      multi
+        ? '| Display # | ID | Screen | Lifetime | Bounds | Blur | Text |'
+        : '| Display # | ID | Lifetime | Bounds | Blur | Text |',
+      multi ? '| --- | --- | --- | --- | --- | --- | --- |' : '| --- | --- | --- | --- | --- | --- |',
     )
     annotations.forEach((a) => {
+      const screen = multi ? `d${annotationDisplayIndex(a, focused, declared)} | ` : ''
       lines.push(
-        `| ${numbers.get(a.annotation_id) ?? '—'} | ${a.annotation_id} | ${annotationLifetime(a)} | ` +
+        `| ${numbers.get(a.annotation_id) ?? '—'} | ${a.annotation_id} | ${screen}${annotationLifetime(a)} | ` +
           `${annotationPosition(a)} | ${a.blur ? 'yes' : ''} | ${mdCell(annotationText(a) ?? '')} |`,
       )
     })

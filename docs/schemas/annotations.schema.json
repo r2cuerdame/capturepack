@@ -61,6 +61,11 @@
             }
           }
         },
+        "display": {
+          "description": "OPTIONAL: WHICH captured display this box was drawn on (SPEC.md §8.8) — the 1-based manifest.media.displays[].index. MUST be >= 1 and MUST match a declared display entry. ABSENT means the FOCUSED display, which is what a single-display pack writes (it has no media.displays at all) and what every box drawn on the focused screen writes — so every pack written before this field existed is already correct. The box's bounds are pixels in the snapshot of ITS display (snapshot-d<N>.png for a non-focused display, snapshot.png for the focused one), never in a board-wide space: a reader MUST resolve display before interpreting bounds. Lifetimes stay on the pack clock (the focused display's replay) whatever screen the box is on, and display numbers (SPEC.md §8.5) run as ONE global sequence across all displays — display takes no part in that sort. A value that is not an integer >= 1, or that names no declared display, MUST be treated as absent rather than dropping the box.",
+          "type": "integer",
+          "minimum": 1
+        },
         "text": {
           "description": "The box's description — what the user typed. MAY be empty; absent means \"\".",
           "type": "string",
@@ -113,6 +118,20 @@
               "if": { "properties": { "source": { "const": "uia" } }, "required": ["source"] },
               "then": {
                 "properties": {
+                  "level": {
+                    "description": "Which object this is: \"control\" (a control inside a window) or \"window\" (the top-level window itself). A target without level is a control — the value predates the window level and readers MUST treat its absence as \"control\". A window target is a complete answer at a coarser granularity, not a degraded control.",
+                    "enum": ["control", "window"]
+                  },
+                  "title": {
+                    "description": "The window's title at the capture instant. Level \"window\".",
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "process": {
+                    "description": "Process name without extension, e.g. \"chrome\" — of the window at level \"window\", and of the window a control was picked in when the writer knows it.",
+                    "type": "string",
+                    "minLength": 1
+                  },
                   "name": {
                     "description": "UIA Name — the accessible name the user sees, e.g. \"Save\". Localized, and not stable across UI changes.",
                     "type": "string",

@@ -3,7 +3,7 @@ import { app } from 'electron'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { isSupportedLanguage } from '../shared/i18n'
-import { DEFAULT_CAPTURE_HOTKEY } from '../shared/types'
+import { DEFAULT_CAPTURE_HOTKEY, SETTINGS_VERSION } from '../shared/types'
 import type { EditorWindowBounds, Settings } from '../shared/types'
 
 /**
@@ -20,6 +20,9 @@ export function settingsFilePath(): string {
 
 function defaultSettings(): Settings {
   return {
+    // A fresh install is born at the current version and therefore never
+    // migrates: every default below is already the current meaning.
+    settingsVersion: SETTINGS_VERSION,
     language: 'system',
     packLanguage: 'ui',
     autoUpdateCheck: true,
@@ -99,7 +102,7 @@ export function loadSettings(): LoadedSettings {
       if (text.trim() !== '') preserveFile = true
     }
   }
-  const settings = raw ? mergeSettings(base, raw) : base
+  const settings = raw ? mergeSettings(base, migrateSettings(raw)) : base
   if (!preserveFile) {
     try {
       saveSettings(settings)
@@ -115,6 +118,29 @@ export function loadSettings(): LoadedSettings {
     settings: override !== null ? { ...settings, outputDir: override } : settings,
     firstRun: !fileExisted,
   }
+}
+
+/**
+ * One-time migrations, applied to the RAW settings.json before validation.
+ *
+ * A profile carrying no `settingsVersion` predates versioning — that absence is
+ * the only signal available, and it can only ever be observed once, because
+ * every load stamps the current version back on.
+ *
+ * v1 -> v2 (GOAL "Multi-Monitor Support"): `captureDisplay: "cursor"` was the
+ * DEFAULT before 0.1.3, so a profile still on it was almost certainly never
+ * asked the question — it becomes "all" (capture every display), which is the
+ * default a fresh install gets today. A user who picks "cursor" deliberately
+ * afterwards is left alone forever: their profile is already stamped, so this
+ * never looks at it again. Any other value ("all", a fixed display id) was a
+ * real choice and is untouched here too.
+ */
+function migrateSettings(raw: Record<string, unknown>): Record<string, unknown> {
+  if (typeof raw.settingsVersion === 'number') return raw
+  const migrated = { ...raw }
+  if (migrated.captureDisplay === 'cursor') migrated.captureDisplay = 'all'
+  migrated.settingsVersion = SETTINGS_VERSION
+  return migrated
 }
 
 // Set by loadSettings when a --output-dir=<path> override is active this run.
@@ -179,6 +205,7 @@ function onDiskOutputDir(): string {
 // Exhaustive by construction: Record<keyof Settings, true> fails to compile
 // when Settings gains or loses a key, keeping GUI patch filtering in sync.
 const SETTINGS_KEY_SET: Record<keyof Settings, true> = {
+  settingsVersion: true,
   language: true,
   packLanguage: true,
   autoUpdateCheck: true,
@@ -298,6 +325,13 @@ function isPackLanguage(value: string): boolean {
 // version's settings survive a downgrade.
 function mergeSettings(base: Settings, raw: Record<string, unknown>): Settings {
   const known: Settings = {
+    // Carried through, never invented here: migrateSettings() is the only place
+    // that stamps a version, and it runs on the RAW file before this — so
+    // "there was no settingsVersion on disk" stays visible exactly once.
+    settingsVersion:
+      typeof raw.settingsVersion === 'number' && Number.isInteger(raw.settingsVersion)
+        ? raw.settingsVersion
+        : base.settingsVersion,
     language:
       typeof raw.language === 'string' && isUiLanguage(raw.language) ? raw.language : base.language,
     packLanguage:

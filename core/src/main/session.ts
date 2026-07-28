@@ -29,7 +29,15 @@ import type {
   TimelineFile,
   UiaPluginPayload,
 } from '../shared/types'
-import { renderTrimmedReplay, startAnnotatedRender, startKeyframeStill } from './annotatedRender'
+import { annotationsOnDisplay } from '../shared/types'
+import { computeDisplayNumbers } from '../shared/numbering'
+import type { Language } from '../shared/i18n'
+import {
+  renderTrimmedReplay,
+  startAnnotatedRender,
+  startDisplayRender,
+  startKeyframeStill,
+} from './annotatedRender'
 import {
   captureWindowForDisplay,
   requestReplay,
@@ -61,6 +69,7 @@ import { showSaveToast, updateToastRenderStatus } from './saveToast'
 import { persistSettings } from './settings'
 import {
   editorUiaElements,
+  editorUiaWindows,
   mapUiaToSnapshot,
   parseUiaPayload,
   startUiaDump,
@@ -247,18 +256,36 @@ function toDisplayCaptures(displays: readonly FrozenDisplay[]): DisplayCapture[]
   }))
 }
 
-/** The editor's read-only display switcher payload (empty for a single display). */
+/**
+ * The editor BOARD payload (GOAL "Multi-Monitor Support"): every frozen
+ * display's frame, geometry and replay, so the editor can draw them all at once
+ * in their real arrangement and scrub them from one clock. Empty for a
+ * single-display capture — the editor then builds a one-display board from the
+ * top-level media and behaves exactly as it always did.
+ */
 function toEditorDisplays(displays: readonly FrozenDisplay[]): EditorDisplayPayload[] {
   if (displays.length < 2) return []
+  const focusedDurationMs = displays.find((d) => d.focused)?.replayDurationMs ?? 0
   return displays.map((d) => ({
     index: d.index,
     focused: d.focused,
     // The FOCUSED display's frame is already EditorInitPayload.snapshotPng and
     // the editor never decodes this copy — sending it again would put another
-    // 3-8 MB into the editor-open critical path per 4K display.
+    // 3-8 MB into the editor-open critical path per 4K display. Its replay is
+    // EditorInitPayload.replayWebm for the same reason.
     snapshotPng: d.focused ? null : toArrayBuffer(d.snapshotPng),
     width: d.width,
     height: d.height,
+    bounds: { ...d.bounds },
+    scale: d.scale,
+    replayWebm: d.focused || d.replayWebm === null ? null : toArrayBuffer(d.replayWebm),
+    replayDurationMs: d.replayDurationMs,
+    // Every recorder was stopped by the SAME trigger, so the replays all END at
+    // the capture instant even though they started at slightly different times
+    // (independent segment rotation). End-alignment is therefore the exact
+    // conversion from the pack clock to this display's own clock. A fresh
+    // capture is never trimmed at this point — the trim is applied at save.
+    replayOffsetMs: d.focused ? 0 : d.replayDurationMs - focusedDurationMs,
   }))
 }
 
@@ -284,7 +311,7 @@ async function runFlow(settings: Settings): Promise<void> {
   const t0Ms = triggerAt - replayDurationMs
   // media.displays[] exists only when the capture actually covered more than
   // one display (SPEC §5.3): a single-display pack stays exactly what 0.1.2
-  // wrote. The editor's display switcher follows the same rule.
+  // wrote. The editor's board follows the same rule: one display, one screen.
   const multiDisplay = frozen.displays.length > 1
   const displayCaptures = multiDisplay ? toDisplayCaptures(frozen.displays) : undefined
 
@@ -372,15 +399,18 @@ async function runFlow(settings: Settings): Promise<void> {
         height: snap.height,
         hasReplay: replay !== null,
         replayDurationMs,
-        // Read-only display switcher (GOAL "Multi-Monitor Support"): the other
-        // frozen displays, viewable but not annotatable in this version.
+        // The editor BOARD (GOAL "Multi-Monitor Support"): every frozen display
+        // with its geometry and its own replay, drawn side by side in the real
+        // arrangement and all of them annotatable.
         displays: toEditorDisplays(frozen.displays),
         // Replay bytes are already in memory; the editor scrubs its own copy and
         // never re-requests them at export time.
         replayWebm: replay === null ? null : toArrayBuffer(replay.buffer),
-        // Pickable objects (GOAL "Static object picking"); [] when the dump
-        // produced nothing, which is exactly the pre-feature editor.
+        // Pickable objects (GOAL "Static object picking"): controls refine,
+        // windows are the floor. Both [] when the dump produced nothing, which
+        // is exactly the pre-feature editor.
         uiaElements: editorUiaElements(uia),
+        uiaWindows: editorUiaWindows(uia),
         fps: settings.fps,
         scrubInvert: settings.scrubInvert,
         scrubSensitivityMs: settings.scrubSensitivityMs,
@@ -543,12 +573,25 @@ async function runFlow(settings: Settings): Promise<void> {
       renderState: hasReplay ? 'rendering' : 'none',
       uiLanguage: uiLanguage(settings),
     })
+    // The pack's OWN annotated views cover the focused display: its media IS
+    // the top-level media, and a box on another screen has bounds in that
+    // screen's coordinate space (SPEC §8.8) — rendering it here would draw it
+    // somewhere meaningless.
+    const focusedIndex = display.index
+    const focusedAnnotations = annotationsOnDisplay(
+      finalInput.annotations,
+      focusedIndex,
+      focusedIndex,
+    )
     if (renderWebm !== null) {
       startAnnotatedRender(
         handle,
         {
           replayWebm: renderWebm,
-          annotations: renderAnnotations,
+          annotations: annotationsOnDisplay(renderAnnotations, focusedIndex, focusedIndex),
+          // Numbered GLOBALLY, over every box the pack saved (SPEC §8.5) — the
+          // job above carries the focused display's subset only.
+          displayNumbers: globalDisplayNumbers(renderAnnotations),
           width: snap.width,
           height: snap.height,
           fps: settings.fps,
@@ -565,11 +608,37 @@ async function runFlow(settings: Settings): Promise<void> {
       // the annotations without opening snapshot.png + annotations.json.
       startKeyframeStill(handle, {
         snapshotPng: finalInput.snapshotPng,
-        annotations: finalInput.annotations,
+        annotations: focusedAnnotations,
+        displayNumbers: globalDisplayNumbers(finalInput.annotations),
         width: snap.width,
         height: snap.height,
         docLanguage: packDocLanguage(settings),
       })
+    }
+    // Every OTHER annotated display, from the ORIGINAL (never trimmed) bytes it
+    // was recorded with — only the focused replay is trimmed (SPEC §5.6), so a
+    // trim shifts the other clocks rather than shortening them.
+    if (multiDisplay) {
+      const trimStartMs = trim !== null && finalInput.trimOffsetMs === trim.startMs ? trim.startMs : 0
+      startDisplayRenders(
+        handle,
+        frozen.displays.map((d) => ({
+          index: d.index,
+          width: d.width,
+          height: d.height,
+          snapshotPng: d.snapshotPng,
+          replayWebm: d.replayWebm,
+          replayDurationMs: d.replayDurationMs,
+          // pack clock -> original focused clock -> this display's clock. The
+          // recorders were all stopped by the same trigger, so the second step
+          // is the difference of their (untrimmed) lengths.
+          offsetMs: trimStartMs + (d.replayDurationMs - replayDurationMs),
+        })),
+        finalInput.annotations,
+        focusedIndex,
+        settings.fps,
+        packDocLanguage(settings),
+      )
     }
   } catch (err) {
     dialog.showErrorBox(uiT(settings)('app.saveFailedTitle'), errorMessage(err))
@@ -695,12 +764,13 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
       height,
       hasReplay: replayWebm !== null,
       replayDurationMs,
-      // The saved pack's other frozen displays, read back for the same
-      // read-only switcher a fresh multi-display capture shows.
-      displays: loadedEditorDisplays(pack, loadedDisplays),
+      // The saved pack's other frozen displays, read back for the same BOARD a
+      // fresh multi-display capture opens: all of them at once, all annotatable.
+      displays: loadedEditorDisplays(pack, loadedDisplays, replayDurationMs),
       replayWebm: replayWebm === null ? null : toArrayBuffer(replayWebm),
       // Picking works on re-edit too, from the pack's own saved dump.
       uiaElements: editorUiaElements(loadedUia),
+      uiaWindows: editorUiaWindows(loadedUia),
       fps: settings.fps,
       scrubInvert: settings.scrubInvert,
       scrubSensitivityMs: settings.scrubSensitivityMs,
@@ -739,15 +809,24 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
         }
       : { t0, events }
   // The declared focused replay is missing on disk: the save above rebased t0
-  // onto the capture instant and dropped trim_offset_ms, so nothing in the pack
-  // can align a per-display replay to the pack clock any more (SPEC §5.6's
-  // alignment rule is "add trim_offset_ms"). Keep the files — undeclared
-  // per-display files are explicitly ignored by readers — but stop declaring
-  // them rather than declaring a clock that no longer resolves.
+  // onto the capture instant, so there is no pack clock left for a per-display
+  // replay to be aligned against (SPEC §5.6 aligns them by the difference of
+  // the declared replay durations, and this pack will declare none). Keep the
+  // files — undeclared per-display files are explicitly ignored by readers —
+  // but stop declaring them rather than declaring a clock that cannot resolve.
   const savedDisplays =
     hasReplay || declaredDurationMs === 0
       ? loadedDisplays
       : loadedDisplays.map((d) => ({ ...d, hasReplay: false, replayFile: null, replayDurationMs: 0 }))
+  // A box may only name a display the save actually DECLARES (SPEC §8.8).
+  // loadedDisplayCaptures drops entries whose files have vanished — and
+  // collapses the whole array when fewer than two survive — so a re-edit can
+  // legitimately declare fewer displays than the boxes were drawn on. Left
+  // alone, those boxes would fail the validator, render into nothing, and
+  // disappear from report.md, while the editor happily kept showing them on the
+  // focused display. Resolving them to the focused display instead is exactly
+  // what the editor already drew, and it never loses a box.
+  const savedAnnotations = withResolvedDisplays(annotations, savedDisplays)
   const input: ExportInput = {
     snapshotPng: Buffer.from(outcome.payload.snapshotPng),
     width,
@@ -757,7 +836,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
     // The pack keeps the replay it already has, under the name it declares.
     ...(replayRel !== null ? { replayFile: replayRel } : {}),
     replayDurationMs,
-    annotations,
+    annotations: savedAnnotations,
     title: outcome.payload.title,
     note: outcome.payload.note,
     // The editor's "now" frame IS the loaded snapshot.png in edit mode, so a
@@ -788,16 +867,24 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
     // Same save pipeline as a fresh capture: toast, then background render.
     showSaveToast({
       folderPath: handle.dirPath,
-      hasBlur: annotations.some((a) => a.blur),
+      hasBlur: savedAnnotations.some((a) => a.blur),
       renderState: hasReplay ? 'rendering' : 'none',
       uiLanguage: uiLanguage(settings),
     })
+    // Same per-display rule as a fresh save: the pack's own annotated views are
+    // the FOCUSED display's, and every other annotated screen renders its own.
+    const focusedIndex = savedDisplays.find((d) => d.focused)?.index ?? 1
+    const focusedAnnotations = annotationsOnDisplay(savedAnnotations, focusedIndex, focusedIndex)
+    // GLOBAL over everything the save wrote (SPEC §8.5), never over the subset
+    // one render receives.
+    const numbers = globalDisplayNumbers(savedAnnotations)
     if (replayWebm !== null) {
       startAnnotatedRender(
         handle,
         {
           replayWebm,
-          annotations,
+          annotations: focusedAnnotations,
+          displayNumbers: numbers,
           width,
           height,
           fps: settings.fps,
@@ -811,14 +898,149 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
       // annotated still from the saved snapshot (SPEC §7.3).
       startKeyframeStill(handle, {
         snapshotPng: input.snapshotPng,
-        annotations,
+        annotations: focusedAnnotations,
+        displayNumbers: numbers,
         width,
         height,
         docLanguage: packDocLanguage(settings),
       })
     }
+    startDisplayRenders(
+      handle,
+      // Read back from the SOURCE pack (the same bytes Save As New copied), and
+      // only for displays that actually carry boxes — a re-edit must not pull
+      // 45 MB of webm per untouched screen back into memory.
+      displayRenderSources(pack, savedDisplays, savedAnnotations, focusedIndex),
+      savedAnnotations,
+      focusedIndex,
+      settings.fps,
+      packDocLanguage(settings),
+    )
   } catch (err) {
     dialog.showErrorBox(uiT(settings)('app.saveFailedTitle'), errorMessage(err))
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Per-display annotated renders (GOAL "Multi-Monitor Support"): a box belongs
+// to the display it was drawn on, so each display's rendered views carry ITS
+// OWN boxes and only those — drawing a second screen's box into the first
+// would place it at coordinates that mean something entirely different there.
+//
+// The focused display keeps the top-level outputs (replay_annotated.webm,
+// frames/); every other ANNOTATED display gets replay_annotated-d<N>.webm and
+// frames-d<N>/, declared inside its media.displays entry (SPEC §5.6). A display
+// nobody annotated gets nothing — the cost is proportional to the work done.
+// ---------------------------------------------------------------------------
+
+/** One display's media, as a render job needs it. */
+interface DisplayRenderSource {
+  index: number
+  width: number
+  height: number
+  snapshotPng: Buffer
+  replayWebm: Buffer | null
+  replayDurationMs: number
+  /**
+   * ms to ADD to a pack-clock time to reach this display's own replay clock.
+   * Lifetimes are stored on the pack clock (the focused replay, SPEC §8.4), so
+   * every one of them is rebased through this before it is rendered here.
+   */
+  offsetMs: number
+}
+
+/**
+ * The pack's display numbers (SPEC §8.5) as IPC-transferable pairs, computed
+ * ONCE per save over the WHOLE annotation set.
+ *
+ * Every rendered view — the top-level replay_annotated/frames and each
+ * per-display one — receives only the boxes of the display it draws, so none of
+ * them may derive the numbering itself: SPEC §8.5 requires one global sequence,
+ * identical in every rendered view, and report.md prints exactly that sentence.
+ */
+function globalDisplayNumbers(annotations: readonly Annotation[]): Array<[string, number]> {
+  return [...computeDisplayNumbers(annotations)]
+}
+
+/**
+ * Annotations whose `display` names a display this save DECLARES (SPEC §8.8).
+ *
+ * A re-edit can declare fewer displays than the loaded boxes were drawn on
+ * (files removed from the folder since, or the whole per-display set collapsing
+ * to a single-display pack). A box naming a display that is no longer there
+ * resolves to the FOCUSED display — the field is dropped, which is what "absent
+ * = focused" means — instead of being written as an unresolvable index that
+ * fails validation, renders nowhere, and vanishes from the documents.
+ */
+function withResolvedDisplays(
+  annotations: readonly Annotation[],
+  displays: readonly DisplayCapture[],
+): Annotation[] {
+  // Fewer than two declared displays IS a single-display pack: media.displays
+  // is not written at all, so no box may carry `display`.
+  const declared = displays.length > 1 ? new Set(displays.map((d) => d.index)) : new Set<number>()
+  return annotations.map((a) => {
+    if (a.display === undefined) return a
+    if (declared.has(a.display)) return a
+    const { display: _dropped, ...rest } = a
+    return rest
+  })
+}
+
+/** Lifetimes moved onto one display's own replay clock, clamped to it. */
+function rebaseLifetimeTo(a: Annotation, offsetMs: number, durationMs: number): Annotation {
+  if (a.start_ms === undefined || a.end_ms === undefined) return a
+  const clamp = (ms: number): number => Math.min(Math.max(0, Math.round(ms)), durationMs)
+  return { ...a, start_ms: clamp(a.start_ms + offsetMs), end_ms: clamp(a.end_ms + offsetMs) }
+}
+
+/**
+ * Starts one background render per NON-FOCUSED display that carries
+ * annotations. Fire-and-forget, serialized behind the pack's own render by the
+ * shared queue (annotatedRender.ts) so N screens never become N render windows.
+ */
+function startDisplayRenders(
+  handle: PackHandle,
+  sources: readonly DisplayRenderSource[],
+  annotations: readonly Annotation[],
+  focusedIndex: number,
+  fps: number,
+  docLanguage: Language,
+): void {
+  // The numbering is the PACK's, not this display's: box 2 is box 2 in every
+  // rendered view (SPEC §8.5). Computed from the un-rebased set, so a per-
+  // display clock shift cannot reorder it either.
+  const displayNumbers = globalDisplayNumbers(annotations)
+  for (const s of sources) {
+    if (s.index === focusedIndex) continue
+    const own = annotationsOnDisplay(annotations, s.index, focusedIndex)
+    if (own.length === 0) continue
+    if (s.replayWebm !== null && s.replayDurationMs > 0) {
+      startDisplayRender(handle, {
+        replayWebm: s.replayWebm,
+        annotations: own.map((a) => rebaseLifetimeTo(a, s.offsetMs, s.replayDurationMs)),
+        displayNumbers,
+        width: s.width,
+        height: s.height,
+        fps,
+        replayDurationMs: s.replayDurationMs,
+        docLanguage,
+        display: s.index,
+      })
+    } else {
+      // No replay on this screen: one still from its frozen frame, exactly like
+      // a screenshot-only pack (SPEC §7.3). A lifetime has nothing to anchor to
+      // without a replay, so it is dropped rather than reinterpreted.
+      startKeyframeStill(handle, {
+        snapshotPng: s.snapshotPng,
+        annotations: own.map(withoutReplayTimes),
+        displayNumbers,
+        width: s.width,
+        height: s.height,
+        docLanguage,
+        display: s.index,
+      })
+    }
   }
 }
 
@@ -907,22 +1129,82 @@ function screenFromDisplay(
   return { width: 1, height: 1, scale: 1 }
 }
 
-/** The saved pack's per-display snapshots, for the editor's read-only switcher. */
+/**
+ * The per-display render sources of a SAVED pack, read back from its files —
+ * only for the displays that actually carry annotations, since every other one
+ * would just be tens of megabytes of webm read for nothing.
+ *
+ * ALIGNMENT (SPEC §5.6): every recorder was stopped by the same trigger, so the
+ * replays are END-aligned and the offset from the pack clock onto a display's
+ * own clock is the difference of the DECLARED durations — this display's minus
+ * the focused one's. That expression already contains the trim: after an
+ * in-point trim at s the focused declaration is F - s, so D - (F - s) is
+ * exactly `trim_offset_ms + (D - F)`, which is what the fresh flow computes
+ * from the live durations. Using trim_offset_ms ALONE (SPEC §5.6's older, and
+ * for unequal-length displays incomplete, wording) dropped the end-alignment
+ * term and put every other screen seconds off — see SPEC §5.6.
+ */
+function displayRenderSources(
+  pack: { readBinary(rel: string): Buffer | null },
+  displays: readonly DisplayCapture[],
+  annotations: readonly Annotation[],
+  focusedIndex: number,
+): DisplayRenderSource[] {
+  if (displays.length < 2) return []
+  const focusedDurationMs = displays.find((d) => d.focused)?.replayDurationMs ?? 0
+  const sources: DisplayRenderSource[] = []
+  for (const d of displays) {
+    if (d.focused) continue
+    if (annotationsOnDisplay(annotations, d.index, focusedIndex).length === 0) continue
+    const png = pack.readBinary(d.snapshotFile)
+    if (png === null) continue
+    const size = nativeImage.createFromBuffer(png).getSize()
+    if (size.width <= 0 || size.height <= 0) continue
+    const replay = d.hasReplay && d.replayFile !== null ? pack.readBinary(d.replayFile) : null
+    sources.push({
+      index: d.index,
+      width: size.width,
+      height: size.height,
+      snapshotPng: png,
+      replayWebm: replay,
+      replayDurationMs: replay === null ? 0 : d.replayDurationMs,
+      offsetMs: d.replayDurationMs - focusedDurationMs,
+    })
+  }
+  return sources
+}
+
+/**
+ * The saved pack's per-display media, read back for the editor board: the same
+ * payload a fresh capture ships, so re-editing an all-displays pack gives the
+ * same board — every screen drawn at once, every screen annotatable, one clock.
+ *
+ * `focusedDurationMs` is the SAVED focused replay length, so the end-alignment
+ * below already carries any trim the pack was written with — the same
+ * expression displayRenderSources() uses, so the board and the per-display
+ * renders can never disagree about where a display's clock is (SPEC §5.6).
+ */
 function loadedEditorDisplays(
   pack: { readBinary(rel: string): Buffer | null },
   displays: readonly DisplayCapture[],
+  focusedDurationMs: number,
 ): EditorDisplayPayload[] {
   if (displays.length < 2) return []
   const result: EditorDisplayPayload[] = []
   for (const d of displays) {
     // The DECLARED filename, not one re-derived from the index — otherwise a
-    // spec-legal name the pack actually uses silently disappears from the
-    // switcher.
+    // spec-legal name the pack actually uses silently disappears from the board.
     const rel = d.focused ? 'snapshot.png' : d.snapshotFile
     const png = pack.readBinary(rel)
     if (png === null) continue
     const size = nativeImage.createFromBuffer(png).getSize()
     if (size.width <= 0 || size.height <= 0) continue
+    // This display's own replay, so the board's one clock can move it too. A
+    // declared file missing on disk degrades that display to its frozen frame,
+    // which the board labels — the same rule the focused replay follows.
+    const replay =
+      d.focused || !d.hasReplay || d.replayFile === null ? null : pack.readBinary(d.replayFile)
+    const durationMs = replay === null ? 0 : d.replayDurationMs
     result.push({
       index: d.index,
       focused: d.focused,
@@ -931,6 +1213,11 @@ function loadedEditorDisplays(
       snapshotPng: d.focused ? null : toArrayBuffer(png),
       width: size.width,
       height: size.height,
+      bounds: { ...d.bounds },
+      scale: d.scale,
+      replayWebm: replay === null ? null : toArrayBuffer(replay),
+      replayDurationMs: durationMs,
+      replayOffsetMs: d.focused ? 0 : durationMs - focusedDurationMs,
     })
   }
   return result.length > 1 ? result : []

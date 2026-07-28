@@ -111,7 +111,23 @@ export function keyframeClock(ms: number): string {
  * Pack-relative filename of the `order`-th (1-based) keyframe, e.g.
  * `frames/frame-01_00-03.200.png`. This exact string is what
  * manifest.media.keyframes[].file declares.
+ *
+ * `dir` is the stills directory: `frames/` for the pack's focused display, and
+ * `frames-d<N>/` for another captured display's own stills, which are declared
+ * in manifest.media.displays[].keyframes (SPEC §5.6, GOAL "Multi-Monitor
+ * Support" — a box belongs to the display it was drawn on, so each display's
+ * stills carry ITS OWN boxes).
  */
-export function keyframeFileName(order: number, tMs: number): string {
-  return `frames/frame-${String(Math.max(1, Math.round(order))).padStart(2, '0')}_${keyframeClock(tMs)}.png`
+export function keyframeFileName(order: number, tMs: number, dir = 'frames'): string {
+  return `${dir}/frame-${String(Math.max(1, Math.round(order))).padStart(2, '0')}_${keyframeClock(tMs)}.png`
+}
+
+/** The stills directory of one non-focused display: `frames-d<index>`. */
+export function displayFramesDir(index: number): string {
+  return `frames-d${index}`
+}
+
+/** The annotated replay of one non-focused display: `replay_annotated-d<index>.webm`. */
+export function displayAnnotatedName(index: number): string {
+  return `replay_annotated-d${index}.webm`
 }

@@ -123,12 +123,17 @@ body {
 
 /* The WARNING chips never shrink: #replayChip and the note field give way
    first. "2 boxes outside trim will be dropped" is the only thing standing
-   between the user and annotations that Save silently discards, and
-   "annotations stay on display N" is the only explanation for a canvas that
-   ignores every click. Neither may be squeezed out by window width. */
+   between the user and annotations that Save silently discards, and it may
+   never be squeezed out by window width.
+
+   #objectHint belongs here for the same reason: each of its messages is shown
+   ONCE per session and can never be re-shown, so a truncated one is lost for
+   good — and it is the only place Shift (the window-level modifier) is ever
+   mentioned, since #keysHint is hidden below 1220px. At the 720px windowed
+   minimum the longest strings would otherwise ellipsize to about half. */
 #dirtyChip,
 #trimDropChip,
-#displayHint {
+#objectHint {
   flex: none;
 }
 
@@ -143,9 +148,10 @@ body {
   background: rgba(255, 180, 84, 0.12);
 }
 
-/* Read-only display switcher (GOAL "Multi-Monitor Support"): the focused
-   display carries an accent outline, the one being viewed is filled. */
-#displaySwitcher {
+/* Board legend (GOAL "Multi-Monitor Support"): every captured display is on
+   screen and annotatable at once — these chips only mark which one is FOCUSED
+   (accent outline) and frame that screen when clicked. */
+#displayLegend {
   flex: none;
   display: inline-flex;
   gap: 2px;
@@ -154,7 +160,7 @@ body {
   background: var(--panel-hover);
 }
 
-#displaySwitcher button {
+#displayLegend button {
   min-width: 24px;
   height: 22px;
   padding: 0 5px;
@@ -166,43 +172,33 @@ body {
   cursor: pointer;
 }
 
-#displaySwitcher button:hover:not(:disabled) {
+#displayLegend button:hover {
   color: var(--text);
   background: #33333d;
 }
 
-/* A display whose frame could not be decoded is not offered. */
-#displaySwitcher button:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-#displaySwitcher button.focusedDisplay {
+#displayLegend button.focusedDisplay {
   border-color: var(--action);
   color: var(--text);
 }
 
-#displaySwitcher button.viewing {
-  background: var(--action);
-  color: #fff;
-}
-
-/* Viewing a non-focused display: view-only, annotations live elsewhere. */
-#displayHint {
+/* A display whose frozen frame could not be decoded: its board region is
+   drawn empty and labelled, and the chip says so too. */
+#displayLegend button.brokenDisplay {
   color: #ffb454;
-  background: rgba(255, 180, 84, 0.12);
+  text-decoration: line-through;
 }
 
-/* Static object picking: the objects come from the capture instant, said once
-   while the user is scrubbed away from "now" (GOAL "Static object picking"). */
+/* Static object picking: the honesty chip — stale data, a window with no
+   control data, the window-level modifier, or nothing here at all. Each said
+   once per session (GOAL "Static object picking"). */
 #objectHint {
   color: #ffb454;
   background: rgba(255, 180, 84, 0.12);
-}
-
-#timebar.readonlyDisplay {
-  opacity: 0.4;
-  pointer-events: none;
+  /* It never gives way to ANOTHER item (flex: none above) — only to its own cap,
+     so a pathologically long translation still cannot push [Save] off a 720px
+     windowed editor. The longest string in any of the nine languages fits. */
+  max-width: 70%;
 }
 
 #keysHint {
@@ -254,7 +250,7 @@ body[data-window-mode="windowed"] #topbar {
 
 body[data-window-mode="windowed"] #topbar button,
 body[data-window-mode="windowed"] #topbar input,
-body[data-window-mode="windowed"] #topbar #displaySwitcher {
+body[data-window-mode="windowed"] #topbar #displayLegend {
   -webkit-app-region: no-drag;
 }
 

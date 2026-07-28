@@ -1,7 +1,16 @@
 // Windows UI Automation dump (GOAL "Static object picking (v0 — before full
 // tracking)", SPEC §11.3): at the capture trigger a short-lived PowerShell
-// helper reads the window list and the FOREGROUND window's control tree, and
-// the result becomes plugins/windows-uia/ plus the editor's pickable objects.
+// helper reads the top-level window list and the control trees of the top few
+// windows in z-order, and the result becomes plugins/windows-uia/ plus the
+// editor's pickable objects.
+//
+// TWO LEVELS. The WINDOW LIST is the guaranteed floor (GOAL: "windows are
+// always selectable") — it covers every visible top-level window and costs one
+// cheap enumeration, so the editor can always snap a box to the window under
+// the cursor. CONTROL TREES only refine that floor where one exists, which is
+// why they are budgeted per window and why every window records whether its
+// tree was collected, truncated, unavailable, or never reached: the editor can
+// then say "no object data for this window" instead of doing nothing.
 //
 // THREE HARD RULES, in this order of importance:
 //  1. A capture must NEVER fail because of this. Every failure path — no
@@ -34,16 +43,37 @@ import type {
   UiaBounds,
   UiaElementRecord,
   UiaPluginPayload,
+  UiaTreeStatus,
   UiaWindowRecord,
 } from '../shared/types'
-import type { EditorUiaElement } from '../shared/ipc'
+import type { EditorUiaElement, EditorUiaWindow } from '../shared/ipc'
 
 /** Hard budget: the helper is killed at this age, finished or not. */
 export const UIA_BUDGET_MS = 1_200
-/** Control-tree depth cap (the foreground window itself is depth 0). */
+/** Control-tree depth cap (each walked window itself is depth 0). */
 const UIA_MAX_DEPTH = 12
-/** Element cap — an upper bound on payload size and on editor index build cost. */
+/**
+ * Soft element cap across ALL walked windows — an upper bound on payload size
+ * and on editor index build cost. The helper raises it while budget is left
+ * over, so a desktop of cheap trees is not cut off at a number chosen for the
+ * expensive case.
+ */
 const UIA_MAX_ELEMENTS = 3_000
+/**
+ * How many windows may be walked at all, top of the z-order first. The window
+ * LIST is not capped by this (it is the floor and costs one enumeration) — only
+ * the control trees are, and every window past it is reported as "skipped"
+ * rather than looking like a window without controls.
+ *
+ * Deliberately ABOVE what the budget can afford, so the TIME budget is the only
+ * thing that ever cuts: a 12-window desk measured 12 trees / ~800 elements /
+ * ~580 ms of the 1 200 ms budget — i.e. the old cap of 12 was co-binding with
+ * the deadline, and one more open window silently cost a whole tree even when
+ * there was time for it. A window the budget cannot afford is already reported
+ * as "skipped" and the editor now says so (SPEC §11.3), so the cap only needs
+ * to stop a pathological desktop from being enumerated forever.
+ */
+const UIA_MAX_WINDOWS = 24
 /** Grace after the kill signal before the promise resolves without the child. */
 const UIA_KILL_GRACE_MS = 300
 
@@ -140,6 +170,7 @@ export function startUiaDump(): Promise<UiaRawDump | null> {
             CAPTUREPACK_UIA_BUDGET_MS: String(UIA_BUDGET_MS),
             CAPTUREPACK_UIA_MAX_DEPTH: String(UIA_MAX_DEPTH),
             CAPTUREPACK_UIA_MAX_ELEMENTS: String(UIA_MAX_ELEMENTS),
+            CAPTUREPACK_UIA_MAX_WINDOWS: String(UIA_MAX_WINDOWS),
           },
         },
       )
@@ -173,8 +204,9 @@ export function startUiaDump(): Promise<UiaRawDump | null> {
     child.on('error', (err) => done(null, `helper failed (${errorMessage(err)})`))
 
     // Rule 2: the child dies at the budget whatever it is doing. Because it
-    // prints the window list BEFORE walking the control tree, a kill mid-walk
-    // still leaves usable output on stdout.
+    // prints the window list BEFORE walking any control tree, and then one line
+    // per finished window, a kill mid-walk still leaves everything collected so
+    // far on stdout — only the window in flight is lost.
     let killed = false
     killTimer = setTimeout(() => {
       killed = true
@@ -184,7 +216,8 @@ export function startUiaDump(): Promise<UiaRawDump | null> {
         /* already gone */
       }
       // Resolve from whatever was printed even if 'close' never arrives — the
-      // window list is printed before the walk, so a kill mid-walk still pays.
+      // window list and every finished window are already on stdout, so a kill
+      // mid-walk still pays.
       graceTimer = setTimeout(() => {
         const partial = parseDump(stdout, startedAt, true)
         done(partial, partial === null ? `helper exceeded its ${UIA_BUDGET_MS} ms budget` : undefined)
@@ -226,7 +259,7 @@ export function mapUiaToSnapshot(
   }
 }
 
-/** The pickable-object list the editor receives (SPEC §8.7 target fields). */
+/** The pickable CONTROLS the editor receives (SPEC §8.7 target fields). */
 export function editorUiaElements(payload: UiaPluginPayload | null): EditorUiaElement[] {
   if (payload === null) return []
   return payload.elements.map((e) => ({
@@ -235,10 +268,56 @@ export function editorUiaElements(payload: UiaPluginPayload | null): EditorUiaEl
     automation_id: e.automation_id,
     class_name: e.class_name,
     bounds: { ...e.bounds },
+    window: e.window,
   }))
 }
 
-/** Entry-level validation of a plugins/windows-uia/elements.json read back from a pack. */
+/**
+ * The pickable WINDOWS the editor receives — the floor of object picking (GOAL:
+ * "windows are always selectable").
+ *
+ * `hasControls` is derived from the elements that actually came back rather
+ * than from the recorded tree status, so it stays true for a pack written
+ * before per-window statuses existed: in such a pack every element belongs to
+ * the foreground window, which is exactly the legacy branch below.
+ *
+ * `tree` travels UNCHANGED alongside it. The two answer different questions and
+ * SPEC §11.3 requires both: hasControls says whether anything was recorded HERE,
+ * `tree` says whether the window's tree was READ at all — and a reader must
+ * report a window that was never walked as *no data recorded*, never as *no
+ * objects*.
+ */
+export function editorUiaWindows(payload: UiaPluginPayload | null): EditorUiaWindow[] {
+  if (payload === null) return []
+  const legacy = payload.elements.length > 0 && payload.elements.every((e) => e.window < 0)
+  const counts = new Map<number, number>()
+  for (const e of payload.elements) {
+    if (e.window < 0) continue
+    counts.set(e.window, (counts.get(e.window) ?? 0) + 1)
+  }
+  return payload.windows.map((w, index) => {
+    const z = Number.isInteger(w.z) && w.z >= 0 ? w.z : index
+    const controls = (counts.get(z) ?? 0) + (legacy && w.focused ? payload.elements.length : 0)
+    return {
+      title: w.title,
+      process: w.process,
+      class_name: w.class_name,
+      bounds: { ...w.bounds },
+      focused: w.focused,
+      z,
+      hasControls: controls > 0,
+      tree: w.tree,
+    }
+  })
+}
+
+/**
+ * Entry-level validation of a plugins/windows-uia/elements.json read back from
+ * a pack. Fields added after 0.1.0 (class_name/z/tree/element_count on a
+ * window, window on an element) are filled with the honest defaults for a pack
+ * that predates them, so re-editing an old pack keeps working exactly as it
+ * did — with picking now also offering its window list.
+ */
 export function parseUiaPayload(text: string | null): UiaPluginPayload | null {
   if (text === null) return null
   let parsed: unknown
@@ -249,8 +328,12 @@ export function parseUiaPayload(text: string | null): UiaPluginPayload | null {
   }
   if (parsed === null || typeof parsed !== 'object') return null
   const raw = parsed as Partial<UiaPluginPayload>
-  const windows = Array.isArray(raw.windows) ? raw.windows.filter(isWindowRecord) : []
-  const elements = Array.isArray(raw.elements) ? raw.elements.filter(isElementRecord) : []
+  // Read as unknown: the file is whatever was on disk, not a UiaPluginPayload
+  // until every entry has been checked and defaulted.
+  const rawWindows: unknown[] = Array.isArray(raw.windows) ? raw.windows : []
+  const rawElements: unknown[] = Array.isArray(raw.elements) ? raw.elements : []
+  const windows = rawWindows.filter(isWindowShape).map(toWindowRecord)
+  const elements = rawElements.filter(isElementShape).map((e) => toElementRecord(e, -1))
   if (windows.length === 0 && elements.length === 0) return null
   return {
     captured_at: typeof raw.captured_at === 'string' ? raw.captured_at : '',
@@ -421,18 +504,25 @@ function encodedHelperCommand(): string | null {
 }
 
 /**
- * The helper prints NDJSON: line 1 is `{root_bounds, monitors, windows}`
- * (always, before the expensive walk), line 2 is `{elements, truncated}`. A
- * missing or unparsable line 2 means the walk did not finish — the window list
- * still stands, and the dump is marked truncated.
+ * The helper prints NDJSON, flushing each line the moment it is complete:
+ *
+ *   1. `{root_bounds, monitors, windows}` — always, before anything expensive
+ *   2. one `{window, tree, elements}` line per window whose tree was attempted
+ *   3. `{done:true, truncated, …}`
+ *
+ * So a kill only ever costs the window in flight. A missing `done` line means
+ * the walk did not finish: every window that got no line of its own is
+ * "skipped" — no object data was collected for it, which is NOT the claim that
+ * it has no objects — and the dump as a whole is marked truncated.
  */
 function parseDump(stdout: string, capturedAt: Date, killed: boolean): UiaRawDump | null {
   let rootBounds: UiaBounds | null = null
   let monitors: UiaMonitor[] = []
   let windows: UiaWindowRecord[] = []
-  let elements: UiaElementRecord[] = []
+  const elements: UiaElementRecord[] = []
+  const trees = new Map<number, { status: UiaTreeStatus; count: number }>()
   let sawWindows = false
-  let sawElements = false
+  let sawDone = false
   let truncated = false
   for (const line of stdout.split('\n')) {
     const trimmed = line.trim()
@@ -441,26 +531,54 @@ function parseDump(stdout: string, capturedAt: Date, killed: boolean): UiaRawDum
     try {
       parsed = JSON.parse(trimmed)
     } catch {
-      continue // a partial final line from a killed helper
+      continue // a partial line from a killed helper
     }
     if (parsed === null || typeof parsed !== 'object') continue
     const record = parsed as Record<string, unknown>
     if (Array.isArray(record['windows'])) {
       sawWindows = true
-      windows = record['windows'].filter(isWindowRecord)
+      windows = record['windows'].filter(isWindowShape).map(toWindowRecord)
       rootBounds = isBounds(record['root_bounds']) ? record['root_bounds'] : null
       monitors = Array.isArray(record['monitors']) ? record['monitors'].filter(isMonitor) : []
+      continue
+    }
+    if (record['done'] === true) {
+      sawDone = true
+      if (record['truncated'] === true) truncated = true
+      continue
     }
     if (Array.isArray(record['elements'])) {
-      sawElements = true
-      elements = record['elements'].filter(isElementRecord)
-      if (record['truncated'] === true) truncated = true
+      // A helper old enough not to name its window (impossible in a shipped
+      // build — the script is copied in beside the app — but a chunk without an
+      // index is still real data) walked the foreground window only.
+      const index = typeof record['window'] === 'number' ? record['window'] : -1
+      const chunk = record['elements']
+        .filter(isElementShape)
+        .map((e) => toElementRecord(e, index))
+      for (const element of chunk) elements.push(element)
+      if (index >= 0) {
+        trees.set(index, { status: treeStatus(record['tree']), count: chunk.length })
+      }
     }
   }
-  if (!sawWindows && !sawElements) return null
-  if (!sawElements) truncated = true
+  if (!sawWindows && elements.length === 0) return null
+  if (!sawDone) truncated = true
   if (killed) truncated = true
+  // Every window the walk never reached keeps its "skipped" default: the dump
+  // says so per window, so nothing downstream has to guess.
+  windows = windows.map((w) => {
+    const tree = trees.get(w.z)
+    return tree === undefined ? w : { ...w, tree: tree.status, element_count: tree.count }
+  })
   return { capturedAt, truncated, rootBounds, monitors, windows, elements }
+}
+
+const TREE_STATUSES: readonly UiaTreeStatus[] = ['collected', 'truncated', 'unavailable', 'skipped']
+
+function treeStatus(value: unknown): UiaTreeStatus {
+  return typeof value === 'string' && (TREE_STATUSES as readonly string[]).includes(value)
+    ? (value as UiaTreeStatus)
+    : 'skipped'
 }
 
 function isMonitor(value: unknown): value is UiaMonitor {
@@ -480,13 +598,35 @@ function isBounds(value: unknown): value is UiaBounds {
   )
 }
 
-function isWindowRecord(value: unknown): value is UiaWindowRecord {
+/**
+ * The fields a window record has ALWAYS had. Everything added since (class
+ * name, z-order, tree status) is optional here and defaulted by
+ * toWindowRecord(), so one code path reads both a fresh dump and a pack written
+ * before those fields existed.
+ */
+function isWindowShape(value: unknown): value is Record<string, unknown> {
   if (value === null || typeof value !== 'object') return false
   const w = value as Record<string, unknown>
   return typeof w['title'] === 'string' && typeof w['process'] === 'string' && isBounds(w['bounds'])
 }
 
-function isElementRecord(value: unknown): value is UiaElementRecord {
+function toWindowRecord(raw: Record<string, unknown>, index: number): UiaWindowRecord {
+  const z = raw['z']
+  return {
+    title: raw['title'] as string,
+    process: raw['process'] as string,
+    class_name: typeof raw['class_name'] === 'string' ? raw['class_name'] : '',
+    bounds: raw['bounds'] as UiaBounds,
+    focused: raw['focused'] === true,
+    // The array order IS the z-order; the field only makes it explicit for
+    // readers that reorder or filter the list.
+    z: typeof z === 'number' && Number.isInteger(z) && z >= 0 ? z : index,
+    tree: treeStatus(raw['tree']),
+    element_count: countOf(raw['element_count']),
+  }
+}
+
+function isElementShape(value: unknown): value is Record<string, unknown> {
   if (value === null || typeof value !== 'object') return false
   const e = value as Record<string, unknown>
   return (
@@ -497,6 +637,24 @@ function isElementRecord(value: unknown): value is UiaElementRecord {
     typeof e['depth'] === 'number' &&
     isBounds(e['bounds'])
   )
+}
+
+/** `fallbackWindow` is used when the record does not name its window (-1 = unknown). */
+function toElementRecord(raw: Record<string, unknown>, fallbackWindow: number): UiaElementRecord {
+  const window = raw['window']
+  return {
+    name: raw['name'] as string,
+    control_type: raw['control_type'] as string,
+    automation_id: raw['automation_id'] as string,
+    class_name: raw['class_name'] as string,
+    bounds: raw['bounds'] as UiaBounds,
+    depth: raw['depth'] as number,
+    window: typeof window === 'number' && Number.isInteger(window) && window >= 0 ? window : fallbackWindow,
+  }
+}
+
+function countOf(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0
 }
 
 /** Local time as ISO 8601 with the machine's UTC offset (same shape as manifest.created_at). */

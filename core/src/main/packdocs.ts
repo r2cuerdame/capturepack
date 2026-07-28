@@ -13,15 +13,19 @@ import { makeT } from '../shared/i18n'
 import type { Language, TranslateFn } from '../shared/i18n'
 import type { Annotation, AnnotationsFile, Manifest, TimelineFile } from '../shared/types'
 import { computeDisplayNumbers } from '../shared/numbering'
+import { annotationDisplayIndex, declaredDisplayIndices } from '../shared/types'
 import {
   displaySummaryLines,
   extraDisplayFiles,
   formatClock,
+  groupByDisplay,
   humanDate,
+  isMultiDisplay,
   keyframeFileEntry,
   keyframeSectionLines,
   keyframeSet,
   lifetimeLabel,
+  packFocusedDisplay,
 } from './report'
 
 const px = (n: number): number => Math.round(n)
@@ -85,8 +89,8 @@ export function buildReadme(
   lines.push(`- **${t('pack.application')}:** ${manifest.environment.app ?? t('pack.unknown')}`)
   lines.push(`- **${t('pack.duration')}:** ${replayLabel(manifest, t)}`)
   // All-displays capture (GOAL "Multi-Monitor Support"): the pack holds every
-  // screen the trigger froze, not only the annotated one.
-  lines.push(...displaySummaryLines(manifest, t))
+  // screen the trigger froze, with the boxes drawn on each.
+  lines.push(...displaySummaryLines(manifest, t, annotations))
   lines.push('')
 
   lines.push(`## ${t('pack.description')}`)
@@ -191,7 +195,7 @@ export function buildSkills(
   return {
     overview: buildOverviewSkill(manifest, annotationsFile, timeline, t, renderPending),
     timeline: buildTimelineSkill(manifest, timeline, t),
-    annotation: buildAnnotationSkill(annotationsFile, t),
+    annotation: buildAnnotationSkill(manifest, annotationsFile, t),
     dom: buildDomSkill(manifest, annotationsFile, t),
     project: buildProjectSkill(manifest, t),
   }
@@ -224,16 +228,24 @@ function buildOverviewSkill(
           '; the annotated view replay_annotated.webm is generated in the background after save.'
       : `**Media:** screenshot only (${size} snapshot.png); no replay, no annotated replay.`,
   )
-  // All-displays capture: say plainly which screen the annotations belong to.
+  // All-displays capture: say plainly which screen each box belongs to.
   const displays = manifest.media.displays
   if (displays !== undefined && displays.length > 1) {
     const focused = displays.find((d) => d.focused)
+    const counts = groupByDisplay(manifest, annotations)
+      .filter((g) => g.annotations.length > 0)
+      .map((g) => `display ${g.index}: ${g.annotations.length}`)
+      .join(', ')
     lines.push(
       `**Displays:** ${displays.length} screens were frozen by the same trigger` +
         (focused === undefined ? '' : `; display ${focused.index} is the FOCUSED one`) +
-        '. snapshot.png, the replay, and EVERY annotation belong to the focused display; the other ' +
-        'screens ship as synchronized context (snapshot-d<N>.png / replay-d<N>.webm, declared in ' +
-        'manifest.media.displays) and carry no annotations.',
+        '. snapshot.png and the top-level replay are the FOCUSED display; the other screens ship ' +
+        'as synchronized context (snapshot-d<N>.png / replay-d<N>.webm, declared in ' +
+        'manifest.media.displays). EVERY display can carry annotations: a box names its screen in ' +
+        '`display` (1-based manifest.media.displays[].index) and an ABSENT `display` means the ' +
+        'focused one. A box’s bounds are pixels in ITS OWN display’s snapshot, never the ' +
+        'focused one’s' +
+        (counts === '' ? '.' : ` (${counts}).`),
     )
   }
   lines.push('')
@@ -266,13 +278,20 @@ function buildOverviewSkill(
       lines.push('- `frames/` holds the same annotations as stills, one per state change.')
     }
     lines.push('- `snapshot.png` shows the captured frame.')
+    const multi = isMultiDisplay(manifest)
+    const focusedIndex = packFocusedDisplay(manifest)
     const numbered = annotations
       .filter((a) => numbers.has(a.annotation_id))
       .sort((a, b) => (numbers.get(a.annotation_id) ?? 0) - (numbers.get(b.annotation_id) ?? 0))
     for (const a of numbered) {
       const text = a.text.trim() !== '' ? ` — "${a.text.trim()}"` : ''
+      // WHICH screen those coordinates are in: without it, a reader of a
+      // multi-display pack has no way to place the box at all.
+      const where = multi
+        ? ` on display ${annotationDisplayIndex(a, focusedIndex, declaredDisplayIndices(manifest.media.displays))}`
+        : ''
       lines.push(
-        `- Box ${numbers.get(a.annotation_id)} at (${px(a.bounds.x)}, ${px(a.bounds.y)}), ` +
+        `- Box ${numbers.get(a.annotation_id)}${where} at (${px(a.bounds.x)}, ${px(a.bounds.y)}), ` +
           `${px(a.bounds.width)}×${px(a.bounds.height)}${text}`,
       )
     }
@@ -345,15 +364,36 @@ function timelineEventDetail(type: string, data: Record<string, unknown> | undef
   return JSON.stringify(data).replaceAll('|', '\\|')
 }
 
-function buildAnnotationSkill(annotationsFile: AnnotationsFile, t: TranslateFn): string {
+function buildAnnotationSkill(
+  manifest: Manifest,
+  annotationsFile: AnnotationsFile,
+  t: TranslateFn,
+): string {
   const annotations = annotationsFile.annotations
   const numbers = computeDisplayNumbers(annotations)
+  const multi = isMultiDisplay(manifest)
+  const focusedIndex = packFocusedDisplay(manifest)
   const lines: string[] = []
   lines.push(`# ${t('pack.annotations')}`)
   lines.push('')
   lines.push(
     `Coordinate space: snapshot.png, ${annotationsFile.reference_width}×${annotationsFile.reference_height} pixels, origin top-left.`,
   )
+  if (multi) {
+    lines.push('')
+    lines.push(
+      `This capture froze ${manifest.media.displays?.length ?? 0} displays and boxes may sit on any of them. A box's`,
+    )
+    lines.push(
+      `\`display\` field names its screen (manifest.media.displays[].index); ABSENT means display ${focusedIndex},`,
+    )
+    lines.push(
+      'the focused one, whose snapshot is `snapshot.png`. Bounds are always pixels in THAT display’s',
+    )
+    lines.push(
+      'own snapshot — never the focused display’s — so read each box against the file named below it.',
+    )
+  }
   lines.push('')
   lines.push(
     'Display numbers are computed, never stored: boxes with `numbered: true`, sorted by start_ms',
@@ -389,6 +429,17 @@ function buildAnnotationSkill(annotationsFile: AnnotationsFile, t: TranslateFn):
     )
     lines.push('')
     if (a.text.trim() !== '') lines.push(`- **Text:** "${a.text.trim()}"`)
+    if (multi) {
+      // The DECLARED set resolves a box naming a display this pack does not
+      // have back onto the focused one (SPEC §8.8), so the file named below is
+      // always one the pack actually contains.
+      const index = annotationDisplayIndex(a, focusedIndex, declaredDisplayIndices(manifest.media.displays))
+      const entry = manifest.media.displays?.find((d) => d.index === index)
+      const file = entry?.snapshot ?? 'snapshot.png'
+      lines.push(
+        `- **Display:** ${index}${index === focusedIndex ? ' (focused)' : ''} — bounds below are pixels in \`${file}\``,
+      )
+    }
     lines.push(
       `- **Bounds:** (${px(a.bounds.x)}, ${px(a.bounds.y)}) size ${px(a.bounds.width)}×${px(a.bounds.height)}`,
     )
@@ -495,8 +546,12 @@ function buildProjectSkill(manifest: Manifest, t: TranslateFn): string {
   if (manifest.media.displays !== undefined && manifest.media.displays.length > 1) {
     lines.push('- `snapshot-d<N>.png` / `replay-d<N>.webm` — the OTHER displays this capture froze, one')
     lines.push('  set per display, declared in `manifest.media.displays` (N = the display index there).')
-    lines.push('  The focused display’s media is the top-level snapshot.png/replay.webm; annotations')
-    lines.push('  apply to the focused display only.')
+    lines.push('  The focused display’s media is the top-level snapshot.png/replay.webm.')
+    lines.push('- `replay_annotated-d<N>.webm` / `frames-d<N>/` — one display’s OWN annotated views,')
+    lines.push('  declared in its `manifest.media.displays` entry and present only when that display')
+    lines.push('  carries annotations. Every display is annotatable: a box names its screen in')
+    lines.push('  `display` (absent = the focused one) and its bounds are pixels in THAT screen’s')
+    lines.push('  snapshot. Per-display times are on that display’s own replay clock.')
   }
   lines.push('- `frames/frame-NN_MM-SS.mmm.png` — annotated STILLS, one per annotation state change,')
   lines.push('  declared in `manifest.media.keyframes` with their replay-clock time. Same overlays as the')

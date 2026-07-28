@@ -178,6 +178,8 @@ CapturePack_2026-07-27_143052/        — or the same tree zipped as a .capturep
 │                                       regenerable from replay + annotations.json
 ├── snapshot-d2.png          OPTIONAL   another display frozen by the same trigger (multi-monitor);
 ├── replay-d2.webm           OPTIONAL   its replay — both declared in manifest.media.displays
+├── replay_annotated-d2.webm OPTIONAL   that display's OWN annotations rendered in, and
+├── frames-d2/               OPTIONAL   its own stills — declared on its media.displays entry
 ├── frames/                  OPTIONAL (RECOMMENDED) annotated stills, one per annotation state
 │   ├── frame-01_00-03.200.png          change — declared in manifest.media.keyframes;
 │   └── frame-02_00-05.400.png          regenerable from the media + annotations.json
@@ -204,6 +206,7 @@ CapturePack_2026-07-27_143052/        — or the same tree zipped as a .capturep
 | `replay.webm` **or** `replay.mp4` | OPTIONAL — declared in `manifest.media.replay` | [§7](#7-replay-video) |
 | `replay_annotated.webm` **or** `replay_annotated.mp4` | OPTIONAL (RECOMMENDED when annotations exist) — declared in `manifest.media.replay_annotated` | [§7.2](#72-the-annotated-replay) |
 | `snapshot-d<N>.png`, `replay-d<N>.webm` | OPTIONAL — per-display media of a multi-monitor capture, each declared in `manifest.media.displays` | [§5.6](#56-displays-multi-monitor-captures) |
+| `replay_annotated-d<N>.webm`, `frames-d<N>/frame-…png` | OPTIONAL — one display's own annotated views, declared as `replay_annotated`/`keyframes` on its `manifest.media.displays` entry | [§5.6](#56-displays-multi-monitor-captures) |
 | `frames/frame-<NN>_<MM-SS.mmm>.png` | OPTIONAL (RECOMMENDED) — annotated keyframe stills, each declared in `manifest.media.keyframes` | [§5.7](#57-keyframes-annotated-stills) |
 | `annotations.json` | OPTIONAL — fixed name, present when annotations exist | [§8](#8-annotationsjson) |
 | `timeline.json` | OPTIONAL — fixed name, present when events were recorded | [§10](#10-timelinejson) |
@@ -333,10 +336,15 @@ snapshot (and optionally one replay) **per display**, and `media.displays` decla
 single-display capture omits it: the top-level `media` already describes the whole pack.
 
 Exactly one entry is the **focused** display — the display the user was on (cursor position) at
-the trigger. It is the display the annotations belong to, and its media *is* the top-level
-media: `snapshot.png`, `replay`, `replay_duration_ms`, `replay_annotated`. Its bytes are never
-duplicated under a per-display name, so a reader that ignores `displays` entirely still sees
-exactly the pack it would have seen without this feature.
+the trigger. Its media *is* the top-level media: `snapshot.png`, `replay`, `replay_duration_ms`,
+`replay_annotated`, `keyframes`. Its bytes are never duplicated under a per-display name, so a
+reader that ignores `displays` entirely still sees exactly the pack it would have seen without
+this feature.
+
+**Annotations may live on ANY captured display.** A box names its display in `display`
+([§8.8](#88-display-which-display-a-box-is-on)); an absent `display` means the focused one. The
+focused display is therefore not "the annotated display" — it is the display the pack's
+top-level media, and every `display`-less box, belongs to.
 
 Each entry:
 
@@ -346,23 +354,48 @@ Each entry:
 | `snapshot` | string | REQUIRED | Filename of this display's frozen frame: `"snapshot-d<index>.png"`, except the focused entry, which MUST repeat the top-level `media.snapshot` (`"snapshot.png"`). |
 | `replay` | string **or** `null` | REQUIRED | Filename of this display's replay: `"replay-d<index>.webm"` (or `.mp4`), the top-level `media.replay` on the focused entry, or `null` when this display has no replay. |
 | `replay_duration_ms` | integer | REQUIRED when `replay` is a string | Duration of this display's replay in milliseconds. |
-| `bounds` | object | REQUIRED | This display's rectangle in the OS virtual-desktop coordinate space, in **device-independent pixels**: `{ "x", "y", "width", "height" }`. Multiply by `scale` for physical pixels — `bounds.width × scale` equals the per-display snapshot's pixel width and `environment.screens[index-1].width`. The offsets place the screens relative to each other. |
+| `replay_annotated` | string | OPTIONAL | This display's replay with **its own** annotation boxes rendered into the pixels: `"replay_annotated-d<index>.webm"` (or `.mp4`). Absent on the focused entry — its annotated replay is the top-level `media.replay_annotated` — and absent on any display that carries no annotations or no replay. Regenerable from `replay` + `annotations.json`. |
+| `keyframes` | array | OPTIONAL | This display's annotated stills, same shape and rules as `media.keyframes` ([§5.7](#57-keyframes-annotated-stills)), with files under `"frames-d<index>/"`. `t_ms` is on **this display's own replay clock**, not the pack clock. Absent on the focused entry (its stills are the top-level `media.keyframes`) and on any display without annotations. |
+| `bounds` | object | REQUIRED | This display's rectangle in the OS virtual-desktop coordinate space, in **device-independent pixels**: `{ "x", "y", "width", "height" }`. Multiply by `scale` for physical pixels — `bounds.width × scale` equals the per-display snapshot's pixel width and `environment.screens[index-1].width`. The offsets place the screens relative to each other, and are what lets a viewer lay the displays out in their real arrangement. |
 | `scale` | number | REQUIRED | This display's scale factor (`1`, `1.25`, `1.5`, `2`, …). MUST be > 0. |
-| `focused` | boolean | REQUIRED | `true` on exactly one entry: the display the capture (and its annotations) is about. |
+| `focused` | boolean | REQUIRED | `true` on exactly one entry: the display whose media is the pack's top-level media, and the display a box without an explicit `display` belongs to. |
 
 Rules:
 
-- Annotations always live in the **snapshot pixel coordinate space** of the focused display
-  ([§8.2](#82-coordinate-space)). Non-focused displays carry no annotations in format 0.1.0;
-  they ship as synchronized context.
-- The annotated replay ([§7.2](#72-the-annotated-replay)) and the annotated keyframes
-  ([§5.7](#57-keyframes-annotated-stills)) cover the focused display only.
+- Annotation geometry is **per display**: a box's `bounds` are pixels in the snapshot of the
+  display its `display` field names ([§8.2](#82-coordinate-space),
+  [§8.8](#88-display-which-display-a-box-is-on)) — never in the focused display's snapshot.
+- **Rendered views are per display too.** The focused display's annotated replay and stills are
+  the top-level `media.replay_annotated` / `media.keyframes` and MUST contain only the focused
+  display's boxes; another display's are `replay_annotated` / `keyframes` on its own entry and
+  MUST contain only its own. A writer MUST NOT draw one display's box into another display's
+  rendering — the same coordinates mean something different on every screen.
 - All per-display media is frozen by the **same trigger**, so the snapshots are the same instant
-  and the replays cover the same wall-clock window.
+  and the replays cover the same wall-clock window. A viewer showing several displays at once
+  SHOULD drive them from ONE position on the pack clock (the focused display's replay clock).
+- **Aligning a non-focused replay with the pack clock.** Every per-display recorder is stopped
+  by the same trigger, so the replays are END-aligned: they finish at the same instant and can
+  differ only in how far back they reach. A reader placing pack-clock position `t` (the focused
+  display's replay clock, which every annotation lifetime uses) on display *i* therefore uses
+
+  ```
+  t_i = t + (displays[i].replay_duration_ms - media.replay_duration_ms)
+  ```
+
+  and that one expression covers the trimmed case too — see the next bullet. The same offset
+  applies to a non-focused display's `keyframes` times and to the lifetimes rendered into its
+  `replay_annotated`: those are on that display's own clock, not the pack clock.
 - When the writer trimmed the replay (`trim_offset_ms`, [§5.3](#53-media)), only the focused
   display's replay is trimmed — re-encoding every screen would cost a real-time render each.
-  Non-focused replays keep the ORIGINAL recording's clock; a reader aligning them with the pack
-  clock adds `trim_offset_ms`.
+  Non-focused replays keep the ORIGINAL recording's clock. No separate rule is needed: the
+  focused entry's `replay_duration_ms` is already the TRIMMED length, so the difference above
+  equals `trim_offset_ms` plus the difference of the untrimmed lengths. Adding `trim_offset_ms`
+  ALONE is wrong whenever the displays recorded for different lengths, which is the normal case
+  — it drops the end-alignment term. Trimming the OUT-point as well moves the focused replay's
+  end away from the trigger, so end-alignment no longer holds and nothing in the pack can
+  restore it; a writer that does so accepts that a later reader re-aligning the other screens
+  is off by exactly the tail it removed, and SHOULD keep the out-point at the recording's end
+  while the pack declares per-display replays.
 - A declared per-display file MUST exist in the pack. Readers MUST ignore per-display files that
   are not declared, and MUST NOT fail when `displays` is absent.
 
@@ -377,6 +410,8 @@ Rules:
       "snapshot": "snapshot-d1.png",
       "replay": "replay-d1.webm",
       "replay_duration_ms": 28402,
+      "replay_annotated": "replay_annotated-d1.webm",
+      "keyframes": [{ "file": "frames-d1/frame-01_00-21.475.png", "t_ms": 21475 }],
       "bounds": { "x": 0, "y": 0, "width": 1920, "height": 1080 },
       "scale": 1,
       "focused": false
@@ -429,8 +464,10 @@ Rules:
   `annotations.json`, and readers MUST NOT treat its pixels as authoritative annotation data.
 - A still shows the box lifetimes in effect at `t_ms` and the **global** display numbers
   ([§8.5](#85-display-numbers)) — identical to the annotated replay at the same instant.
-- Like the annotated replay, keyframes cover the **focused display** only in a multi-monitor
-  capture ([§5.6](#56-displays-multi-monitor-captures)).
+- Like the annotated replay, `media.keyframes` covers the **focused display** and MUST contain
+  only its boxes. In a multi-monitor capture each other annotated display has its own stills in
+  `frames-d<N>/`, declared as `keyframes` on its `media.displays` entry
+  ([§5.6](#56-displays-multi-monitor-captures)).
 - Writers MUST regenerate `frames/` from scratch when annotations change (deleting stale stills),
   exactly as they do for `replay_annotated`. Readers MUST ignore PNGs under `frames/` that are
   not declared, and MUST NOT fail when `keyframes` is absent.
@@ -546,6 +583,11 @@ CapturePack-aware tooling.
 - **Results only.** Editing controls MUST NOT appear in the annotated replay: no headers, no
   toggles, no duration chips, no delete buttons, no resize handles, no selection outlines. The
   video contains blur, borders, number badges, and text — nothing else.
+- **One display per rendering.** `replay_annotated` renders the FOCUSED display's replay and
+  MUST contain only the boxes whose display is the focused one ([§8.8](#88-display-which-display-a-box-is-on)).
+  Another captured display's annotated replay is `replay_annotated` on its own `media.displays`
+  entry, contains only its own boxes, and is rendered on its own replay clock
+  ([§5.6](#56-displays-multi-monitor-captures)).
 - Rendering MAY happen in the background after the pack is saved ([§3.1](#31-the-pack-folder-the-save-unit));
   a render failure loses the annotated replay, not the pack.
 
@@ -601,6 +643,15 @@ All annotation geometry is in **snapshot pixel coordinates**: origin at the top-
 `snapshot.png`, x grows right, y grows down, units are snapshot pixels. Coordinates MAY be
 non-integers (sub-pixel positions from freehand drawing are fine).
 
+In a **multi-display** pack ([§5.6](#56-displays-multi-monitor-captures)) each display has its
+own such space, and a box's coordinates are pixels in the snapshot of the display its `display`
+field names ([§8.8](#88-display-which-display-a-box-is-on)) — `snapshot-d<N>.png` for a
+non-focused display, `snapshot.png` for the focused one. `reference_width`/`reference_height`
+below describe `snapshot.png` (the focused display) only; a box on another display is read
+against that display's own snapshot, whose size is `bounds.width × scale` of its
+`media.displays` entry. There is no board-wide or virtual-desktop coordinate space in the
+format: every box belongs to exactly one screen.
+
 `reference_width`/`reference_height` exist so annotations survive image processing: if a reader
 finds that `snapshot.png`'s actual dimensions differ from the reference (for example the snapshot
 was recompressed or scaled by an intermediate tool), it SHOULD scale all geometry by
@@ -614,7 +665,8 @@ Every annotation object:
 |---|---|---|---|
 | `annotation_id` | string | REQUIRED | Permanent identity of the annotation. MUST match `^ann_[0-9a-f]{6}$` — the literal prefix `ann_` plus 6 lowercase hex digits, e.g. `"ann_8f21c4"`. MUST be unique within this file. Referenced by timeline events, documents, and MCP responses. The id never changes; display numbers do ([§8.5](#85-display-numbers)). |
 | `type` | string | REQUIRED | MUST be `"box"` — the only annotation type in format 0.1.0. Readers MUST skip (and SHOULD preserve on rewrite) annotations of unknown type; new types can only arrive in a future format version. |
-| `bounds` | object | REQUIRED | The box rectangle in snapshot pixel coordinates: `{ "x": number, "y": number, "width": number, "height": number }`. All four fields REQUIRED; `width` and `height` MUST be > 0. |
+| `bounds` | object | REQUIRED | The box rectangle in snapshot pixel coordinates: `{ "x": number, "y": number, "width": number, "height": number }`. All four fields REQUIRED; `width` and `height` MUST be > 0. In a multi-display pack these are pixels in the snapshot of the box's own display — see `display` below. |
+| `display` | integer | OPTIONAL | WHICH captured display this box was drawn on: the 1-based `manifest.media.displays[].index` ([§5.6](#56-displays-multi-monitor-captures)). MUST be >= 1 and MUST match a declared display. **Absent = the focused display**, which is what a single-display pack and every box on the focused screen write. See [§8.8](#88-display-which-display-a-box-is-on). |
 | `text` | string | OPTIONAL | The box's description — what the user typed. MAY be empty; absent means `""`. This is the annotation's meaning; writers SHOULD make entering it effortless. |
 | `start_ms` | number | OPTIONAL | Start of the box's **lifetime** on the replay clock, in milliseconds. MUST appear together with `end_ms` — both or neither. See [§8.4](#84-lifetime). |
 | `end_ms` | number | OPTIONAL | End of the box's lifetime, in milliseconds. MUST be >= `start_ms`. MUST appear together with `start_ms`. |
@@ -754,17 +806,26 @@ understand `target`.
 |---|---|---|---|
 | `source` | string | REQUIRED | Where the metadata came from — the discriminator for every other field in the object. Format 0.1.0 defines exactly one value: `"uia"` (see below). Readers MUST ignore a `target` whose `source` they do not know, and MUST NOT guess at its other fields. |
 
-**`source: "uia"` — Windows UI Automation.** The object is a control from the Microsoft UI
-Automation tree of the foreground window, as it was **at the capture instant**. Every field
-below is OPTIONAL and carries the UIA property of the same meaning; a field the element had no
-value for is OMITTED rather than written as an empty string.
+**`source: "uia"` — Windows UI Automation.** The object is a Microsoft UI Automation object as
+it was **at the capture instant**: either a control from a window's automation tree, or a
+top-level window itself. Every field below is OPTIONAL and carries the UIA property of the same
+meaning; a field the object had no value for is OMITTED rather than written as an empty string.
 
 | Field | Type | Description |
 |---|---|---|
-| `name` | string | UIA `Name` — the element's accessible name, i.e. what the user sees ("Save"). Localized to the captured machine's language, and not stable across UI changes. |
-| `control_type` | string | UIA `ControlType` **without** the `ControlType.` prefix, e.g. `"Button"`, `"Edit"`, `"TabItem"`. Language-independent. |
-| `automation_id` | string | UIA `AutomationId` — the application's own identifier for the control. The most stable field when the application provides one; MAY be absent, and is only unique within its container. |
-| `class_name` | string | The element's Win32 window class, e.g. `"Chrome_WidgetWin_1"`. |
+| `level` | string | Which object this is: `"control"` (a control inside a window) or `"window"` (the top-level window itself). A target without `level` is a control — the value predates the window level and readers MUST treat its absence as `"control"`. |
+| `name` | string | UIA `Name` — the control's accessible name, i.e. what the user sees ("Save"). Localized to the captured machine's language, and not stable across UI changes. Controls. |
+| `control_type` | string | UIA `ControlType` **without** the `ControlType.` prefix, e.g. `"Button"`, `"Edit"`, `"TabItem"`. Language-independent. Controls. |
+| `automation_id` | string | UIA `AutomationId` — the application's own identifier for the control. The most stable field when the application provides one; MAY be absent, and is only unique within its container. Controls. |
+| `class_name` | string | Win32 window class, e.g. `"Chrome_WidgetWin_1"` — of the control at level `"control"`, of the window at level `"window"`. |
+| `title` | string | The window's title at the capture instant. Windows. |
+| `process` | string | Process name without extension, e.g. `"chrome"` — of the window at level `"window"`, and of the window a control was picked in when the writer knows it. |
+
+**Why the window level exists.** Many applications expose no usable automation tree — Chromium
+and Electron windows build one only when an assistive client asks, and some apps have none at
+all. The window is what a writer can always identify, so a box on such an app still says *which
+window* it points at rather than nothing. A reader MUST NOT treat a `"window"` target as a
+lesser one: it is a complete answer at a coarser granularity.
 
 - **The bounds are the truth.** `target` describes the object a box was placed on; it never
   overrides, extends, or replaces `bounds`. A reader that cannot resolve the object still has
@@ -777,6 +838,53 @@ value for is OMITTED rather than written as an empty string.
   control type, automation id, and bounds. The dump is OPTIONAL: a `target` stands on its own.
 - Writers MAY define further `source` values (a DOM picker, a game engine); they MUST NOT
   redefine `"uia"`.
+
+### 8.8 `display` (which display a box is on)
+
+A capture MAY freeze several displays at once ([§5.6](#56-displays-multi-monitor-captures)), and
+a box belongs to exactly one of them: the screen it was drawn on.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `display` | integer | OPTIONAL | The 1-based `manifest.media.displays[].index` of the display this box was drawn on. MUST be >= 1 and MUST match a declared display entry. |
+
+- **Absent means the focused display.** This is the whole compatibility story: a single-display
+  pack has one screen and writes no `display` at all, and a box drawn on the focused screen of a
+  multi-display capture writes none either. Every pack written before this field existed is
+  therefore already correct under this rule, byte for byte.
+- **Bounds follow the display.** A box's `bounds` are pixels in ITS display's snapshot
+  ([§8.2](#82-coordinate-space)). A reader MUST resolve `display` before interpreting `bounds`;
+  reading them against `snapshot.png` regardless would place a box on the wrong screen at
+  coordinates that mean nothing.
+- **Unknown or malformed values.** A `display` that is not an integer >= 1, or that names no
+  declared display, MUST be treated as absent (the focused display) rather than dropping the
+  box — the box still has a text, a lifetime, and a rectangle worth showing.
+- **Lifetimes stay on the pack clock.** `start_ms`/`end_ms` are positions on the focused
+  display's replay clock ([§8.4](#84-lifetime)) whatever screen the box is on, so one scrub
+  position drives the whole capture. A writer rendering a box into a NON-focused display's
+  `replay_annotated` or `keyframes` MUST convert those times to that display's own clock (the
+  displays' replays are aligned by the same rule as everything else in
+  [§5.6](#56-displays-multi-monitor-captures)).
+- **Display numbers are global.** Numbering ([§8.5](#85-display-numbers)) runs over ALL numbered
+  boxes of the pack, across every display, as ONE sequence. It MUST NOT restart per display: the
+  numbers are the reading order of the capture, and the capture is one moment on several
+  screens. (`display` takes no part in the sort.)
+- **Blur is per display too.** A `blur` box redacts a region of ITS display's rendered views
+  ([§9](#9-blur-and-privacy)); it says nothing about the same coordinates on another screen.
+
+```json
+{
+  "annotation_id": "ann_44a1c9",
+  "type": "box",
+  "display": 1,
+  "bounds": { "x": 220, "y": 640, "width": 300, "height": 120 },
+  "text": "the log kept scrolling on the left screen",
+  "numbered": true,
+  "blur": false,
+  "tracking": { "enabled": false },
+  "z": 3
+}
+```
 
 ---
 
@@ -1005,9 +1113,23 @@ plugins/
 ### 11.3 `windows-uia` (Windows UI Automation)
 
 `plugins/windows-uia/` is the well-known payload for **what was on screen as objects** at the
-capture instant on Windows: the top-level window list and the foreground window's Microsoft UI
-Automation control tree. It is what makes an annotation box able to say *"the Save button"*
-([§8.7](#87-target-semantic-objects)) instead of only *"this rectangle"*.
+capture instant on Windows: the top-level window list and the Microsoft UI Automation control
+trees of as many of those windows as the writer's budget allowed. It is what makes an
+annotation box able to say *"the Save button"* ([§8.7](#87-target-semantic-objects)) instead of
+only *"this rectangle"*.
+
+The two arrays are not two halves of one thing — they are two LEVELS, and the difference
+matters to a reader:
+
+- `windows` is the **complete, cheap** level. Enumerating top-level windows costs almost
+  nothing, so a writer SHOULD list every visible one. This is the level that always has an
+  answer, including for the applications below.
+- `elements` is the **expensive, partial** level. Walking an automation tree is unbounded work
+  against a foreign process, so it is budgeted, and some applications expose no usable tree at
+  all: Chromium and Electron windows build one only when an assistive client asks for it, and
+  a writer that finds nothing there is looking at a normal, healthy window. Which is why each
+  window records what happened to ITS tree (`tree` below) — "no controls were recorded for this
+  window" is a statement about the dump, never about the window.
 
 Like every plugin payload it is OPTIONAL and purely additive. A pack without it is complete; a
 reader that ignores it loses no core data. It follows all of [§11.1](#111-rules).
@@ -1019,7 +1141,10 @@ plugins/
     └── elements.json
 ```
 
-`meta.json` is the standard plugin metadata (`{ "name": "windows-uia", "version": "0.1.0" }`).
+`meta.json` is the standard plugin metadata (`{ "name": "windows-uia", "version": "0.2.0" }`).
+Payload version 0.2.0 added the per-window fields `class_name`, `z`, `tree` and
+`element_count`, and the per-element field `window`; a 0.1.0 payload is still valid and is read
+by treating every added field as absent (see each row below).
 
 `elements.json`:
 
@@ -1027,9 +1152,9 @@ plugins/
 |---|---|---|---|
 | `captured_at` | string | REQUIRED | When the dump was taken — the capture instant. ISO 8601 with timezone, the same shape as `manifest.created_at`. |
 | `budget_ms` | integer | REQUIRED | The time budget the dump was given. Reading the UI Automation tree of an arbitrary application is unbounded work, so writers MUST bound it; this records the bound that was used. |
-| `truncated` | boolean | REQUIRED | `true` = the walk ran out of budget, depth, or element allowance, so `elements` is INCOMPLETE. It is never a reason to distrust the entries that ARE present — an absent element means "not recorded", never "not on screen". |
-| `windows` | array | REQUIRED | Top-level windows that existed at the capture instant. MAY be empty. |
-| `elements` | array | REQUIRED | Controls of the FOREGROUND window's UI Automation tree, in pre-order. MAY be empty. |
+| `truncated` | boolean | REQUIRED | `true` = the dump is INCOMPLETE: a walk ran out of budget, depth, or element allowance, or a window was never walked at all. It is never a reason to distrust the entries that ARE present — an absent element means "not recorded", never "not on screen". `windows[].tree` says precisely which windows are affected. |
+| `windows` | array | REQUIRED | Top-level windows that existed at the capture instant, in z-order (top-most first). MAY be empty. |
+| `elements` | array | REQUIRED | Controls from the automation trees of the walked windows: grouped by window in walk order, pre-order within a window. MAY be empty. |
 
 Each entry of `windows`:
 
@@ -1037,8 +1162,12 @@ Each entry of `windows`:
 |---|---|---|---|
 | `title` | string | REQUIRED | Window title. MAY be empty. |
 | `process` | string | REQUIRED | Process name without extension, e.g. `"chrome"`. Empty when it could not be read. |
+| `class_name` | string | REQUIRED (0.2.0) | Win32 window class, e.g. `"Chrome_WidgetWin_1"`. MAY be empty. Absent in a 0.1.0 payload. |
 | `bounds` | object | REQUIRED | `{ x, y, width, height }` — see the coordinate rule below. |
 | `focused` | boolean | REQUIRED | The window that had focus. At most one entry is `true`; a dump that could not determine the foreground window has none. |
+| `z` | integer | REQUIRED (0.2.0) | Z-order at the capture instant, `0` = top-most. This is what decides which window covers a given pixel when several overlap. Absent in a 0.1.0 payload, where the array order carries the same information. |
+| `tree` | string | REQUIRED (0.2.0) | What happened to THIS window's control tree: `"collected"` (whole tree), `"truncated"` (started, ran out of budget/depth/allowance), `"unavailable"` (walked, exposed no tree), `"skipped"` (never walked). Anything but `"collected"` means a reader MUST NOT conclude anything from the absence of this window's controls. Absent in a 0.1.0 payload, where only the focused window was ever walked. |
+| `element_count` | integer | REQUIRED (0.2.0) | How many entries of `elements` belong to this window. Absent in a 0.1.0 payload. |
 
 Each entry of `elements`:
 
@@ -1049,7 +1178,8 @@ Each entry of `elements`:
 | `automation_id` | string | REQUIRED | UIA `AutomationId`. MAY be empty. |
 | `class_name` | string | REQUIRED | Win32 window class. MAY be empty. |
 | `bounds` | object | REQUIRED | `{ x, y, width, height }` — see the coordinate rule below. |
-| `depth` | integer | REQUIRED | Depth in the foreground window's control tree; `0` is that window itself. |
+| `depth` | integer | REQUIRED | Depth in its window's control tree; `0` is that window itself. |
+| `window` | integer | REQUIRED (0.2.0) | The `z` of the window this control was walked from. Absent in a 0.1.0 payload, where every element belongs to the focused window. |
 
 Unlike `target` ([§8.7](#87-target-semantic-objects)), these fields are REQUIRED but MAY be
 empty strings: this is a dump, and an empty `name` is itself information.
@@ -1061,6 +1191,15 @@ empty strings: this is a dump, and an empty `name` is itself information.
   and the virtual desktop's origin. A window or element on ANOTHER display therefore lands
   outside the snapshot rectangle — possibly at negative coordinates. Such entries are valid and
   MUST NOT be dropped by readers: they describe the rest of the desktop.
+- **Occlusion is `z`, not order of discovery.** Windows overlap, and `bounds` alone cannot say
+  which one a pixel belongs to. A reader resolving "what is at (x, y)" MUST consider the
+  window with the lowest `z` that contains the point, and MUST NOT offer a control of a window
+  that another window covers at that point. The focused window was on top by definition.
+- **Silence is not absence.** `elements` covers only the windows whose `tree` is `"collected"`
+  or `"truncated"`. For any other window the payload says nothing about its contents, and a
+  reader MUST report that as *no data recorded*, never as *no objects*. Presenting a window
+  with no recorded controls as an empty application is the one misreading this payload can
+  cause.
 - **One instant.** The payload describes the capture instant only. It says nothing about any
   other position in the replay, and it is never updated when annotations change.
 - **Not authoritative for annotations.** An annotation's geometry always comes from
