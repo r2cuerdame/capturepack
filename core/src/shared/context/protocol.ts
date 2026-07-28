@@ -205,6 +205,19 @@ export interface TemporalAccuracy {
   /** True only when the provider actually holds the requested instant. */
   exact: boolean
   coverage: TemporalCoverage
+  /**
+   * Set when some geometry in this answer was ESTIMATED BETWEEN two observations
+   * rather than observed (#83).
+   *
+   * The other fields describe when Core last looked; this one admits that what
+   * it is handing back is not purely what it saw. A reader that must not build
+   * on an estimate — an automated regression check, a report that claims to
+   * quote the record — has no other way to tell, because an interpolated
+   * rectangle is indistinguishable from a measured one once it is a number.
+   *
+   * Absent means every rectangle here was observed.
+   */
+  interpolated?: boolean
 }
 
 // ---------------------------------------------------------------------------

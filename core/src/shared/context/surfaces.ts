@@ -70,8 +70,63 @@ export function accuracyAt(
   return { requestedTimeMs, materializedTimeMs, errorMs, exact, coverage }
 }
 
+// ---------------------------------------------------------------------------
+// BETWEEN TWO SAMPLES, A WINDOW IS STILL SOMEWHERE (#83).
+//
+// The ring is written at 10 Hz. Nearest-sample restore therefore answers on a
+// 100 ms grid, and under a dragged window every millisecond of that grid is
+// pixels: a fast drag across a 4K screen runs about 2500 px/s, so half a grid
+// step is ~125 px of error and a full one is ~250 px.
+//
+// MEASURED in 0.2.0-rc.5, after #81 had aligned the question to the frame on
+// screen: the five picked boxes in CapturePack_2026-07-29_004126 still missed
+// their window by -151, -293, -26, -236 and -33 px. The two small ones are the
+// times that happened to land near a sample; the three large ones are the grid.
+//
+// So interpolate. A window that is at A at t1 and at B at t2 was, if it was
+// being dragged, somewhere on the line between them — and the straight line is
+// a far better estimate than either endpoint.
+//
+// EXCEPT WHEN IT JUMPED. Snap-to-edge, maximise, restore and a move between
+// monitors are instantaneous: the window is at A, then at B, and never once at
+// the midpoint. There, nearest is RIGHT half the time and interpolation is
+// WRONG all of the time. The guards below exist to keep the estimate on motion
+// that was actually continuous, and every one of them fails safe to nearest.
+// ---------------------------------------------------------------------------
+
+/**
+ * How far apart two samples may be and still be joined by a straight line.
+ *
+ * Two and a half grid steps. Wide enough to bridge a sample the ring dropped
+ * under load, narrow enough that a window cannot have been dragged somewhere,
+ * stopped, and dragged back inside the gap.
+ */
+const MAX_INTERPOLATION_GAP_MS = 250
+
+/**
+ * The furthest a window may move between two samples and still be treated as
+ * having travelled continuously, as a fraction of its own width.
+ *
+ * A drag moves a window by a fraction of itself per 100 ms; a snap throws it
+ * most of a screen. This separates the two without needing to know the screen
+ * size, and a window dragged faster than this simply falls back to nearest —
+ * which is what the code did before interpolation existed.
+ */
+const MAX_CONTINUOUS_TRAVEL = 0.5
+
 export interface RestoredSurfaces {
+  /** The OBSERVATION this restore is based on — the nearest one actually taken. */
   sample: SurfaceSample | null
+  /**
+   * Where things were at the REQUESTED time: `sample.surfaces`, with any surface
+   * that can be shown to have moved continuously advanced along its path (#83).
+   *
+   * Separate from `sample` on purpose. `sample.tMs` says when Core actually
+   * looked, which is what a coverage verdict and an observation lookup need;
+   * these rectangles say where the user would have seen the window. Collapsing
+   * the two would make one of those questions unanswerable.
+   */
+  surfaces: readonly SurfaceInfo[]
   accuracy: TemporalAccuracy
 }
 
@@ -108,12 +163,82 @@ export class SurfaceTimeline {
   restore(timeMs: number, stalenessCeilingMs: number = STALENESS_CEILING_MS): RestoredSurfaces {
     const sample = this.nearest(timeMs)
     if (sample === null) {
-      return { sample: null, accuracy: accuracyAt(timeMs, null, this.kind, this.range) }
+      return {
+        sample: null,
+        surfaces: [],
+        accuracy: accuracyAt(timeMs, null, this.kind, this.range),
+      }
     }
+    const estimated = this.estimateAt(timeMs, sample)
     return {
       sample,
-      accuracy: accuracyAt(timeMs, sample.tMs, this.kind, this.range, stalenessCeilingMs),
+      surfaces: estimated.surfaces,
+      accuracy: {
+        ...accuracyAt(timeMs, sample.tMs, this.kind, this.range, stalenessCeilingMs),
+        ...(estimated.interpolated ? { interpolated: true } : {}),
+      },
     }
+  }
+
+  /**
+   * `sample`'s surfaces, advanced to `timeMs` wherever that can be justified.
+   *
+   * Every surface is carried over unchanged by default. One is moved only when
+   * the pair of samples bracketing `timeMs` both hold it, at the same size,
+   * close enough together in time, and no further apart in space than a drag
+   * could account for — see the constants above for why each of those is there.
+   */
+  private estimateAt(
+    timeMs: number,
+    sample: SurfaceSample,
+  ): { surfaces: readonly SurfaceInfo[]; interpolated: boolean } {
+    const [before, after] = this.bracket(timeMs)
+    if (before === null || after === null) return { surfaces: sample.surfaces, interpolated: false }
+    const span = after.tMs - before.tMs
+    if (span <= 0 || span > MAX_INTERPOLATION_GAP_MS) {
+      return { surfaces: sample.surfaces, interpolated: false }
+    }
+    const ratio = (timeMs - before.tMs) / span
+    const byId = new Map(after.surfaces.map((s) => [s.surfaceId, s]))
+    let interpolated = false
+    const surfaces = sample.surfaces.map((current) => {
+      const start = before.surfaces.find((s) => s.surfaceId === current.surfaceId)
+      const end = byId.get(current.surfaceId)
+      if (start === undefined || end === undefined) return current
+      // A resize is not a translation, and a maximise is not a resize. Only a
+      // window that kept its shape is known to have merely moved.
+      if (start.bounds.width !== end.bounds.width || start.bounds.height !== end.bounds.height) {
+        return current
+      }
+      const dx = end.bounds.x - start.bounds.x
+      const dy = end.bounds.y - start.bounds.y
+      if (dx === 0 && dy === 0) return current
+      const reach = Math.max(1, start.bounds.width) * MAX_CONTINUOUS_TRAVEL
+      if (Math.abs(dx) > reach || Math.abs(dy) > reach) return current
+      const x = Math.round(start.bounds.x + dx * ratio)
+      const y = Math.round(start.bounds.y + dy * ratio)
+      // Landing back on the observation is not an estimate. A time exactly on a
+      // sample takes this path (ratio 0), and flagging it would tell every
+      // reader that a measured rectangle was guessed at.
+      if (x === current.bounds.x && y === current.bounds.y) return current
+      interpolated = true
+      return { ...current, bounds: { ...current.bounds, x, y } }
+    })
+    return { surfaces, interpolated }
+  }
+
+  /** The samples immediately at-or-before and at-or-after `timeMs`. */
+  private bracket(timeMs: number): [SurfaceSample | null, SurfaceSample | null] {
+    let before: SurfaceSample | null = null
+    let after: SurfaceSample | null = null
+    for (const sample of this.samples) {
+      if (sample.tMs <= timeMs) before = sample
+      else {
+        after = sample
+        break
+      }
+    }
+    return [before, after]
   }
 
   private nearest(timeMs: number): SurfaceSample | null {

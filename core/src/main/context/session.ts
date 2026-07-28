@@ -162,7 +162,9 @@ export class ContextSession {
     // 1. restore the surface stack at T, from CORE's timeline — before any
     //    provider is asked anything at all.
     const restored = this.timeline.restore(timeMs)
-    const surfaces = restored.sample?.surfaces ?? []
+    // `restored.surfaces`, NOT `restored.sample.surfaces`: the sample says when
+    // Core looked, these say where things were at the time asked for (#83).
+    const surfaces = restored.surfaces
     // 3. who holds a claim at this time? Claims are time-varying: a window did
     //    not exist at T-20 s, and a provider that has nothing to say about a
     //    surface must not be asked about it (#66, design GAP 8).
@@ -227,7 +229,9 @@ export class ContextSession {
     display?: number,
   ): Promise<readonly ContextCandidate[]> {
     const restored = this.timeline.restore(timeMs)
-    const surfaces = restored.sample?.surfaces ?? []
+    // `restored.surfaces`, NOT `restored.sample.surfaces`: the sample says when
+    // Core looked, these say where things were at the time asked for (#83).
+    const surfaces = restored.surfaces
     const stack = surfaceStackAt(surfaces, point, display)
     const surface = stack[0]
     if (surface === undefined) return []
