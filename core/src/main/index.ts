@@ -12,6 +12,11 @@ import {
   startCapture,
 } from './capture'
 import type { RecorderState } from './capture'
+import {
+  startContextRuntime,
+  stopContextRuntime,
+  updateContextRetention,
+} from './context/runtime'
 import { disposeHistory, notifyHistoryChanged, openHistoryWindow, registerHistoryIpc } from './historyWindow'
 import { registerCaptureHotkeyWithin } from './hotkey'
 import {
@@ -127,6 +132,10 @@ function main(): void {
     // (issue #61).
     stopSupervision()
     stopRecorderStateListener()
+    // The Context Host is a child process of ours and exits on stdin EOF anyway,
+    // but stopping it here is what makes the surface timeline's final cost line
+    // land in the log before the process goes (issues #64/#65).
+    stopContextRuntime()
     disposeCapture()
     disposeHistory()
     // stopMcpServer() logs what it actually did, synchronously, before its first
@@ -221,6 +230,14 @@ function main(): void {
     stopRecorderStateListener = onRecorderStateChanged(handleRecorderState)
 
     await startCapture(settings)
+
+    // The Platform Surface Timeline (issue #65) starts WITH the recorder and
+    // for the same reason: it is the semantic half of the ring buffer, and a
+    // surface stack that only exists from the moment someone asks for it could
+    // never answer a question about thirty seconds ago. It is started AFTER the
+    // recorder so that a machine where recording itself is failing does not also
+    // pay for a context host it will never be asked about.
+    startContextRuntime({ replayMs: settings.replaySeconds * 1000 })
 
     const capture = (): void => {
       void startCaptureFlow(settings)

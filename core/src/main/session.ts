@@ -50,6 +50,7 @@ import {
   takeDisplaySnapshots,
 } from './capture'
 import type { ReplayFetch } from './capture'
+import { freezeContext, logContextCost, releaseContext } from './context/runtime'
 import {
   addManifestPlugin,
   savePack,
@@ -436,6 +437,19 @@ async function runFlow(settings: Settings): Promise<void> {
   const replayDurationMs = Math.min(rawReplayDurationMs, settings.replaySeconds * 1000)
   const replaySourceStartMs = rawReplayDurationMs - replayDurationMs
   const t0Ms = triggerAt - replayDurationMs
+  // PINS THE SURFACE TIMELINE for exactly the range this pack covers (#64
+  // `onFreeze`, #65). From here the editor can ask "which window was where at
+  // pack time T" for any T in the replay, and pruning may not touch that range
+  // until it is released below.
+  //
+  // Frozen HERE and not at the trigger, because the range's start is
+  // `trigger - replayDurationMs` and replayDurationMs is only known once the
+  // replay has been fetched: a just-started buffer is shorter than the
+  // configured length, and a range that claimed otherwise would put every pack
+  // time a few seconds off. The delay costs nothing — retention keeps the
+  // replay length plus a slack, and the prune runs at 1 Hz.
+  const contextFreezeId = freezeContext(triggerAt, replayDurationMs)
+  logContextCost()
   // media.displays[] exists only when the capture actually covered more than
   // one display (SPEC §5.3): a single-display pack stays exactly what 0.1.2
   // wrote. The editor's board follows the same rule: one display, one screen.
@@ -647,7 +661,21 @@ async function runFlow(settings: Settings): Promise<void> {
     })()
   })
 
-  const outcome = await runEditor(editor, events, t0Ms)
+  let outcome: EditorOutcome
+  try {
+    outcome = await runEditor(editor, events, t0Ms)
+  } finally {
+    // The pin comes off when the editor closes (#64 `onFreeze`: "pin the
+    // captured range so it survives until the editor closes or the pack is
+    // saved"), in a finally so a throw cannot leak it — a leaked freeze would
+    // keep the ring from ever pruning that range again.
+    //
+    // NOTE for the export step: docs/temporal-protocol.md GAP 14b wants the
+    // provider's export SET requested at freeze time and held until release, so
+    // saving from History minutes later still works. Nothing writes provider
+    // context into the pack yet, so releasing here is currently exact.
+    releaseContext(contextFreezeId)
+  }
   logInfo(`[capture] editor closed: ${outcome.kind}`)
   if (outcome.kind === 'cancel') {
     // A cancelled editor still leaves the save-first pack behind. Its raw ring
