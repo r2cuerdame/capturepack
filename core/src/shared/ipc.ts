@@ -2,6 +2,7 @@
 // Every channel is listed here; no module may invent channels outside this file.
 
 import type { Annotation, EditorWindowMode, Settings, UiaTreeStatus } from './types'
+import type { ContextFrame } from './context/protocol'
 
 export const IPC = {
   // main -> capture window: begin recording this desktop source id
@@ -21,19 +22,21 @@ export const IPC = {
 
   // main -> editor window: everything the editor needs to open
   editorInit: 'editor:init',
-  // main -> editor window: the capture-instant object dump, LATE (GOAL "Static
-  // object picking"). Payload: EditorUiaObjectsPayload.
+  // editor -> main (invoke): the candidate set at ONE time (#66, design GAP 7).
+  // Payload: ContextFrameRequest; resolves to ContextFrame, or null when the
+  // session is gone. Asked whenever the SCRUB SETTLES on a new position — never
+  // per pointer move, which is why hovering still costs nothing per frame.
+  contextRequestFrame: 'context:request-frame',
+  // main -> editor window: a REPLACEMENT frame, pushed rather than requested.
   //
-  // Object data is the one part of the editor that is allowed to arrive after
-  // the window does: the dump is budgeted and killed independently, so on a
-  // slow machine it can settle a few hundred ms after the editor is on screen.
-  // Before this channel existed the editor simply opened with an empty index
-  // and picking was dead for the whole session — a settled payload thrown away
-  // because a stopwatch started at the capture trigger had run out. The editor
-  // MUST accept this message at any time after editor:init and rebuild its
-  // object index from it; `dropped` says the dump produced nothing and none is
-  // coming, so it can say so once instead of failing silently.
-  editorUiaObjects: 'editor:uia-objects',
+  // Two things produce one: a provider that answered after its budget expired
+  // (GOAL: "late candidates update the list asynchronously rather than delaying
+  // the first paint"), and the capture-instant observation settling after the
+  // editor opened — the helper is budgeted and killed independently of the
+  // window, so on a slow machine it lands a few hundred ms late. Before this
+  // existed the editor opened with an empty index and picking was dead for the
+  // whole session. The editor MUST accept this at any time after editor:init.
+  contextFrame: 'context:frame',
   // editor -> main: user confirmed export
   editorExport: 'editor:export',
   // editor -> main: user cancelled (Esc). In edit mode this is Discard: close
@@ -417,26 +420,16 @@ export interface EditorInitPayload {
   // pack can never be mistaken for a normal one. null whenever there IS a
   // replay, and on every re-edited pack.
   replayUnavailableReason: RecorderFailureReason | null
-  // Pickable UI objects from the capture instant (GOAL "Static object
-  // picking"). BOTH lists are EMPTY whenever there is no object data — no
-  // Windows UI Automation dump, a dump that timed out, or a re-edited pack
-  // without plugins/windows-uia — and the editor then behaves exactly as it
-  // did before the feature existed. Controls refine; windows are the floor,
-  // so uiaWindows is routinely non-empty while uiaElements is not.
+  // OBJECT PICKING, AT A TIME (#64/#65/#66): the session the editor asks for
+  // candidate frames on, plus the frame at the capture instant — which is where
+  // the editor opens, so picking works from the first paint without a round
+  // trip. null when this build could not open a context session at all, and the
+  // editor then behaves exactly as it did before picking existed.
   //
-  // EMPTY IS NOT FINAL on a fresh capture: when the dump has not settled by the
-  // time the editor is ready, these open empty and the real lists arrive on
-  // IPC.editorUiaObjects moments later (see uiaDropped below).
-  uiaElements: EditorUiaElement[]
-  uiaWindows: EditorUiaWindow[]
-  // The object dump was attempted and produced NOTHING usable, so picking is
-  // off for this session and no editor:uia-objects message is coming (GOAL:
-  // "Silence is not absence" — the editor says so once instead of looking
-  // broken). FALSE both when objects are present AND when they are still on
-  // their way; it is never true for a pack that simply never had object data
-  // (a non-Windows capture, or a re-edited pack without the plugin), because
-  // nothing was dropped there.
-  uiaDropped: boolean
+  // NOT FINAL on a fresh capture: when the observation has not settled by the
+  // time the editor is ready, the initial frame is empty and a real one arrives
+  // on IPC.contextFrame moments later.
+  context: EditorContextInit | null
   fps: number
   scrubInvert: boolean
   scrubSensitivityMs: number
@@ -470,22 +463,25 @@ export interface EditorInitPayload {
 }
 
 /**
- * IPC.editorUiaObjects — the object dump, delivered after the editor opened.
+ * What the editor needs to ask Core "what was at this point, at this time".
  *
- * The editor treats this as a REPLACEMENT for the (empty) lists it opened with:
- * it rebuilds its per-display object indexes and picking starts working
- * mid-session, with no other state touched. Annotations already drawn are
- * unaffected — this only ever adds what can be picked.
- *
- * Preload bridge: expose it as `onUiaObjects(cb)` beside `onInit(cb)`.
+ * The frame is the one at the CAPTURE INSTANT, because that is where the editor
+ * opens; every other position is a `context:request-frame` away, asked when the
+ * scrub settles.
  */
-export interface EditorUiaObjectsPayload {
-  uiaElements: EditorUiaElement[]
-  uiaWindows: EditorUiaWindow[]
-  // Same meaning as EditorInitPayload.uiaDropped: the dump settled with nothing
-  // usable. Both lists are then empty and this is the LAST word on picking for
-  // the session.
-  dropped: boolean
+export interface EditorContextInit {
+  sessionId: string
+  frame: ContextFrame
+}
+
+/** IPC.contextRequestFrame — the editor asking for one scrub position. */
+export interface ContextFrameRequest {
+  sessionId: string
+  // Pack-clock ms (SPEC §10.1), the same clock the editor scrubs on and the
+  // same one annotation lifetimes use. Providers never see this number: Core
+  // converts to the session clock, because a provider guessing that mapping is
+  // wrong in a way nobody notices for months (design §3.1).
+  timeMs: number
 }
 
 export interface EditorAnnotationAddedPayload {

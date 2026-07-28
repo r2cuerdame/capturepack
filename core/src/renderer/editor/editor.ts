@@ -10,13 +10,12 @@
 // one clock scrubs every display's replay together. A single-display capture
 // builds a one-display board and behaves exactly as this editor always did.
 import type {
+  ContextFrameRequest,
   EditorExportPayload,
   EditorInitPayload,
-  EditorUiaElement,
-  EditorUiaObjectsPayload,
-  EditorUiaWindow,
   RecorderFailureReason,
 } from '../../shared/ipc'
+import type { ContextFrame } from '../../shared/context/protocol'
 import { applyDomI18n, makeT, recorderFailureText } from '../../shared/i18n'
 import type { TranslateFn } from '../../shared/i18n'
 import type {
@@ -60,10 +59,13 @@ import { clampZoom, Viewport, ZOOM_MAX, ZOOM_MIN, ZOOM_STEP } from './viewport'
 
 interface EditorBridge {
   onInit(cb: (payload: EditorInitPayload) => void): void
-  // Static object picking (GOAL): the dump, when it settles after the editor
-  // opened. The editor rebuilds its per-display object indexes from it and
-  // picking starts working mid-session.
-  onUiaObjects(cb: (payload: EditorUiaObjectsPayload) => void): void
+  // OBJECT PICKING FOLLOWS TIME (#66): the candidate set at one scrub position.
+  // Asked when the scrub settles, never per pointer move.
+  requestContextFrame(request: ContextFrameRequest): Promise<ContextFrame | null>
+  // A frame Core pushed: a provider that answered after its budget, or the
+  // capture-instant observation settling after the editor opened. The editor
+  // rebuilds its per-display indexes and picking starts working mid-session.
+  onContextFrame(cb: (frame: ContextFrame) => void): void
   export(payload: EditorExportPayload): void
   saveAsNew(payload: EditorExportPayload): void
   cancel(): void
@@ -200,26 +202,45 @@ let focusedDisplayIndex = 0
 // of every annotation that carries no `display`.
 let focusedW = 0
 let focusedH = 0
-// Static object picking (GOAL "Static object picking (v0)"): the capture-instant
-// UI Automation objects — every visible WINDOW plus the CONTROLS of the windows
-// whose tree the dump reached.
+// OBJECT PICKING, AT THE TIME ON SCREEN (#64/#65/#66): the surface stack and
+// every provider's candidates AS THEY WERE at the current scrub position, asked
+// of Core whenever that position settles somewhere new.
+//
+// This is the whole fix. The index used to be built once, at load, over the
+// capture-instant dump — so scrubbing back left it describing a moment that was
+// no longer on screen, reported from live use as "it only matches the last
+// information; I moved it and it does not match". Now the DATA moves with the
+// clock, and where it cannot (a pack that recorded one instant, an interval no
+// checkpoint covers) the frame says so and picking declines for that reason
+// rather than for the clock position.
 //
 // ONE INDEX PER CAPTURED DISPLAY, keyed by the manifest display index (GOAL
-// "Multi-Monitor Support", issue #30). Every object says which display's
-// snapshot space its bounds are in (`display`, SPEC §11.3), every screen of the
-// board is annotatable, and a pick therefore comes from the index of the display
-// UNDER THE POINTER. One index in the focused display's space — which is what
-// this was — left picking silently dead on every other screen, i.e. on most of a
-// two-monitor desk.
-//
-// Empty everywhere (no dump, a dump that produced nothing, a pack without
-// plugins/windows-uia) leaves every path below behaving exactly as it did before
-// the feature existed.
+// "Multi-Monitor Support", issue #30). Every candidate says which display's
+// snapshot space its bounds are in (SPEC §11.3), every screen of the board is
+// annotatable, and a pick therefore comes from the index of the display UNDER
+// THE POINTER.
 const objectIndexes = new Map<number, ObjectIndex>()
-// A push that arrived before initEditor finished (it awaits image decoding):
+// The frame the indexes were built from — its accuracy is what the honest
+// "nothing here" message is drawn from.
+let contextFrame: ContextFrame | null = null
+let contextSessionId: string | null = null
+// A frame that arrived before initEditor finished (it awaits image decoding):
 // held rather than dropped, and applied the moment the board exists.
-let pendingUiaObjects: EditorUiaObjectsPayload | null = null
+let pendingContextFrame: ContextFrame | null = null
+// The scrub position the current frame describes, and the request in flight.
+// A wheel burst is dozens of positions; only the one it SETTLES on is worth a
+// round trip (GOAL: a slow provider must never hold the editor shut, and a fast
+// one must not be asked sixty times a second either).
+let frameTimeMs: number | null = null
+let frameRequestSeq = 0
+let frameSettleTimer: number | null = null
 let hoverObject: PickableObject | null = null
+// THE LOSING CANDIDATES ARE KEPT (#66). Tab / Shift+Tab cycle the objects at
+// the hovered point; `hoverStack` is that list and `hoverStackIndex` is where
+// the cycle currently is. Reset whenever the probed point changes, because a
+// cycle is about ONE point.
+let hoverStack: readonly PickableObject[] = []
+let hoverStackIndex = 0
 // The board display the hovered object belongs to — the one under the pointer,
 // kept explicitly so the outline is drawn with that display's transform and
 // never on a neighbour.
@@ -257,9 +278,18 @@ type ObjectHintKind =
   | 'noData'
   | 'displayNoData'
   | 'gutter'
-  // Scrubbed away from the capture instant: the objects describe a different
-  // moment than the one on screen, so nothing is offered here (v0.3.0 #64/#66).
-  | 'scrubbedAway'
+  // COVERAGE, not clock position (#66, design GAP 16). Two different statements
+  // the old single 'scrubbedAway' refusal could not tell apart:
+  //   uncovered    — no provider has a checkpoint near THIS moment (an interval
+  //                  the buffer never covered, or one the governor degraded).
+  //   singleInstant— this pack recorded objects at the capture instant only,
+  //                  which is every pack written before v0.2.0.
+  // Both fire from the frame's own accuracy, never from a blanket rule about
+  // where the playhead is.
+  | 'uncovered'
+  | 'singleInstant'
+  // More than one object is on offer at this point, and Tab moves through them.
+  | 'cycle'
   | 'boxTookClick'
 const objectHintsShown = new Set<ObjectHintKind>()
 let objectHintTimer: number | null = null
@@ -869,6 +899,10 @@ function helpContent(): Array<{ title: string; rows: HelpRow[] }> {
   // about a modifier that can never do anything.
   if (hasObjectData()) {
     captureRows.push([keys('Shift', t('editor.keyLeftClick')), t('editor.helpForceWindow')])
+    // The candidate stack is a feature, not a debug view (#66) — a user who is
+    // never told about Tab has one object per point, which is exactly the
+    // behaviour the stack exists to replace.
+    captureRows.push([t('editor.keyTab'), t('editor.helpCycleObjects')])
   }
   captureRows.push([t('editor.keyRightDrag'), t('editor.helpNewBox')])
   groups.push({ title: t('editor.helpGroupCapture'), rows: captureRows })
@@ -1227,7 +1261,8 @@ function beginPendingBox(on: BoardDisplay, b: Box, picked?: PickableObject): voi
     z: stamp.z,
   }
   if (picked !== undefined) {
-    draft.target = uiaTargetOf(picked)
+    const target = uiaTargetOf(picked)
+    if (target !== null) draft.target = target
     // Remembered so a later move/resize can tell whether the box still
     // annotates the object it claims to.
     pickedRects.set(draft.annotation_id, { x: b.x, y: b.y, w: b.w, h: b.h })
@@ -1904,7 +1939,7 @@ function objectIndexOf(index: number): ObjectIndex | null {
   return objectIndexes.get(index) ?? null
 }
 
-/** Whether ANY display of this board has object data at all. */
+/** Whether ANY display of this board has something pickable RIGHT NOW. */
 function hasObjectData(): boolean {
   for (const index of objectIndexes.values()) {
     if (index.size > 0) return true
@@ -1913,23 +1948,40 @@ function hasObjectData(): boolean {
 }
 
 /**
- * Builds ONE index per captured display, each in ITS OWN snapshot pixel space
- * (issue #30). Every element and window carries the display its bounds belong
- * to, so the split is a filter — and an object can never be offered on a screen
+ * Whether picking has anything to SAY, which is not the same question.
+ *
+ * With no observation at all — a non-Windows capture, a re-edited pack with no
+ * plugin, a dump that never ran — picking is simply off and silence is the
+ * truth. But a pack that HAS object data and is being scrubbed to a moment that
+ * data does not cover has an empty index and a great deal to say: that is the
+ * case the v0.1.7 gate existed for, and it is exactly the case where silence
+ * would read as "picking is broken" (GOAL: "Silence is not absence").
+ */
+function objectPickingCanSpeak(): boolean {
+  if (hasObjectData()) return true
+  const coverage = contextFrame?.accuracy.coverage
+  return coverage !== undefined && coverage !== 'none'
+}
+
+/**
+ * Builds ONE index per captured display from a resolved frame, each in ITS OWN
+ * snapshot pixel space (issue #30). Core has already split the candidates per
+ * display, so this is a lookup — and an object can never be offered on a screen
  * whose image it does not describe.
  */
-function buildObjectIndexes(
-  elements: readonly EditorUiaElement[],
-  windows: readonly EditorUiaWindow[],
-): void {
+function buildObjectIndexes(frame: ContextFrame): void {
+  contextFrame = frame
   objectIndexes.clear()
   if (board === null) return
   for (const d of board.displays) {
+    const slice = frame.displays.find((s) => s.display === d.index)
     objectIndexes.set(
       d.index,
       ObjectIndex.build(
-        elements.filter((e) => e.display === d.index),
-        windows.filter((w) => w.display === d.index),
+        slice?.candidates ?? [],
+        slice?.surfaces ?? [],
+        slice?.coverage ?? [],
+        frame.claims,
         d.width,
         d.height,
       ),
@@ -1938,34 +1990,71 @@ function buildObjectIndexes(
 }
 
 /**
- * Whether object data can honestly describe the frame on screen right now.
+ * THE EDITOR RE-QUERIES AS THE SCRUB POSITION MOVES (#66).
  *
- * The UIA dump is ONE instant — the moment the hotkey was pressed, which is the
- * END of the replay. Scrub back and the windows were somewhere else, while the
- * index still holds where they ended up: reported from live use as "it only
- * matches the last information; I moved and it does not match". Offering a
- * rectangle that is quietly for a different moment is the same defect as a tray
- * icon that says "recording" — the answer looks like an answer and is wrong.
+ * Debounced on SETTLE, not on every tick: a wheel burst is dozens of positions
+ * and playback is sixty a second, and Core's answer for a position the user
+ * left 16 ms ago is work nobody asked for. Hovering itself stays free — it
+ * probes the local index, never Core.
  *
- * So picking is offered at the capture instant and nowhere else, until providers
- * can restore the past for real (v0.3.0 temporal context providers, #64/#66).
- * Refusing to answer is the honest reading of data that does not cover the
- * question.
+ * The frame in hand keeps answering while a new one is on its way, so picking
+ * never blinks off mid-scrub; a stale-but-honest offer is corrected the moment
+ * the new frame lands, and its accuracy is what says whether it was honest.
  */
-function objectsDescribeNow(): boolean {
-  return scrub === null || !scrub.ready || scrub.atNow
+const FRAME_SETTLE_MS = 120
+
+function requestContextFrame(timeMs: number): void {
+  const sessionId = contextSessionId
+  if (sessionId === null) return
+  const rounded = Math.max(0, Math.round(timeMs))
+  if (frameTimeMs === rounded) return
+  frameRequestSeq += 1
+  const seq = frameRequestSeq
+  void window.editorBridge
+    .requestContextFrame({ sessionId, timeMs: rounded })
+    .then((frame) => {
+      // A later request already answered: this one is history, and applying it
+      // would move picking BACK in time.
+      if (frame === null || seq !== frameRequestSeq) return
+      frameTimeMs = rounded
+      applyContextFrame(frame)
+    })
+    .catch((err: unknown) => {
+      // Rule 1 of object data: it may never break anything else. A frame that
+      // could not be built leaves the previous one in place.
+      console.error('capturepack: requesting a context frame failed:', err)
+    })
 }
 
-/**
- * The object under the cursor on `d`, or null when the dump knows nothing about
- * that point — asked of the index of the display the pointer is ON, so every
- * screen of the board picks (issue #30).
- */
-function objectAt(d: BoardDisplay, p: { x: number; y: number }): PickableObject | null {
-  if (!objectsDescribeNow()) return null
-  const index = objectIndexOf(d.index)
-  if (index === null || index.size === 0) return null
-  return index.pick(p.x, p.y, windowLevelKey)
+/** Schedules a re-query for the position the scrub has settled on. */
+function scheduleContextFrame(): void {
+  if (contextSessionId === null || scrub === null) return
+  if (frameSettleTimer !== null) window.clearTimeout(frameSettleTimer)
+  frameSettleTimer = window.setTimeout(() => {
+    frameSettleTimer = null
+    if (scrub === null) return
+    // "Now" is the capture instant, which is the END of the pack clock — the
+    // native snapshot, not a video position.
+    requestContextFrame(scrub.atNow ? replayDurationMs : scrub.tMs)
+  }, FRAME_SETTLE_MS)
+}
+
+/** A new frame: rebuild, and re-answer the point the pointer is already on. */
+function applyContextFrame(frame: ContextFrame): void {
+  if (!loaded || board === null) {
+    pendingContextFrame = frame
+    return
+  }
+  buildObjectIndexes(frame)
+  if (frame.dropped) showObjectHintOnce('dropped', t('editor.objectDropped'))
+  // The sheet advertises the picking modifiers only where object data exists.
+  if (helpOpen) buildHelpSheet()
+  // A pointer already resting on an object must not have to move to find out
+  // that the answer changed.
+  hoverStack = []
+  hoverStackIndex = 0
+  reprobeObjectHover()
+  schedulePaint()
 }
 
 /** The topmost box under a native point of `d` — the one a click could take. */
@@ -2065,19 +2154,42 @@ function probeObjectHover(p: { d: BoardDisplay; x: number; y: number } | null): 
 function answerProbe(d: BoardDisplay, x: number, y: number): void {
   const index = objectIndexOf(d.index)
   if (index === null || index.size === 0) {
+    hoverStack = []
+    hoverStackIndex = 0
     setHoverObject(null, null)
     // A SCREEN the dump had nothing for, on a board whose other screens do have
     // object data: hovering it is exactly when that is worth saying — the
     // outline that appears everywhere else simply never comes here, and silence
     // reads as "this screen's windows have no objects" (issue #30). With no data
     // anywhere, picking is off as a whole and silence is the truth.
-    if (hasObjectData()) {
+    if (objectPickingCanSpeak()) {
       const answer = emptyAnswer(d)
       showObjectHintOnce(answer.kind, answer.text, 'answer')
     }
     return
   }
-  const next = index.pick(x, y, windowLevelKey)
+  // THE WHOLE STACK, not just the winner (#66): the first is what a click
+  // takes, the rest is what Tab / Shift+Tab cycle through, and it is kept for
+  // exactly as long as the pointer stays on this point.
+  const stack = index.stackAt(x, y, windowLevelKey)
+  hoverStack = stack.offered
+  hoverStackIndex = 0
+  offerHover(d, x, y)
+  const next = hoverStack[0]
+  // A point with more than one object on it is where Tab means something, and
+  // a shortcut nobody is told about is a shortcut nobody has.
+  if (next !== undefined && hoverStack.length > 1) {
+    showObjectHintOnce('cycle', t('editor.objectCycle'))
+  }
+}
+
+/**
+ * Paints (and explains) whichever candidate of the current stack is on offer.
+ * Split out of answerProbe because Tab moves through the stack WITHOUT
+ * re-probing: re-probing would rebuild the stack and reset the cycle.
+ */
+function offerHover(d: BoardDisplay, x: number, y: number): void {
+  const next = hoverStack[hoverStackIndex] ?? null
   // The PROBE runs over boxes too (that is what stops a box from shadowing
   // picking), but the outline must not promise a pick the click will not make:
   // where the box under the cursor wins, only the outline is suppressed.
@@ -2091,6 +2203,21 @@ function answerProbe(d: BoardDisplay, x: number, y: number): void {
   // for a user who never touched object picking. The pointerdown path says it
   // when a click actually snapped nothing.
   if (next !== null && !shadowed) announceObject(next)
+}
+
+/**
+ * TAB / SHIFT+TAB CYCLE THE OBJECTS AT A POINT (#66: "never discard the losing
+ * candidates"). Wraps, because a cycle that stops at the end makes the user
+ * work out how long the list was.
+ */
+function cycleHoverCandidate(delta: number): boolean {
+  if (hoverStack.length < 2) return false
+  const d = displayByIndex(lastProbeDisplay)
+  if (d === null || lastProbeX < 0 || lastProbeY < 0) return false
+  const count = hoverStack.length
+  hoverStackIndex = (hoverStackIndex + delta + count) % count
+  offerHover(d, lastProbeX, lastProbeY)
+  return true
 }
 
 /** Re-probes the last point after the modifier (or the data) changed the answer. */
@@ -2171,9 +2298,18 @@ function announceObject(o: PickableObject): void {
 function emptyAnswer(on: BoardDisplay): { kind: ObjectHintKind; text: string } {
   // FIRST, because it is the reason there is nothing to offer at all — and the
   // one the user cannot work out for themselves. Everything below is about
-  // WHERE they clicked; this is about WHEN.
-  if (!objectsDescribeNow()) {
-    return { kind: 'scrubbedAway', text: t('editor.objectScrubbedAway') }
+  // WHERE they clicked; this is about whether the data COVERS the moment on
+  // screen, which is a property of the data and not of the playhead (#66,
+  // design GAP 16). The v0.1.7 stopgap asked the clock; this asks the frame.
+  const coverage = contextFrame?.accuracy.coverage ?? 'none'
+  if (coverage === 'single-instant') {
+    // Every pack written before v0.2.0: the dump describes the instant the
+    // hotkey was pressed and nothing else, so scrubbing away leaves it with
+    // nothing honest to say — and it says which, rather than looking broken.
+    return { kind: 'singleInstant', text: t('editor.objectSingleInstant') }
+  }
+  if (coverage === 'before-start' || coverage === 'pruned' || coverage === 'degraded') {
+    return { kind: 'uncovered', text: t('editor.objectUncovered') }
   }
   const index = objectIndexOf(on.index)
   if (index === null || index.size === 0) {
@@ -2289,39 +2425,45 @@ function invalidateTargetIfMoved(id: string): void {
   pickedRects.delete(id)
 }
 
-/** `target` for a picked object (SPEC §8.7): empty fields are never written. */
-function uiaTargetOf(o: PickableObject): AnnotationTarget {
+/**
+ * `target` for a picked object (SPEC §8.7): empty fields are never written.
+ *
+ * SPEC 0.1.0 defines exactly one `source` — `uia` — so a target is only stamped
+ * for candidates that really came from Windows UI Automation or from Core's own
+ * window level (which is what `uia` has always meant for a window target). A
+ * candidate from any other provider gets NO target rather than one claiming a
+ * provenance the format does not define yet: §8.7 becoming provider-general is
+ * a SPEC change, and a format change is not done until SPEC.md and the MCP
+ * tools speak it.
+ */
+function uiaTargetOf(o: PickableObject): AnnotationTarget | null {
+  if (o.providerId !== 'windows-uia' && o.providerId !== 'core') return null
+  const identity = o.candidate.identity ?? {}
   const target: UiaAnnotationTarget = { source: 'uia', level: o.level }
+  const value = (key: string): string => (identity[key] ?? '').trim()
   if (o.level === 'window') {
     // A window target names the window, not a control: title + process are what
     // identify it to a human and to an AI reader.
-    const w = o.window
-    if (w === null) return target
-    const title = w.title.trim()
-    const process = w.process.trim()
-    const className = w.class_name.trim()
+    const title = value('title')
+    const process = value('process')
+    const className = value('class_name')
     if (title !== '') target.title = title
     if (process !== '') target.process = process
     if (className !== '') target.class_name = className
     return target
   }
-  const e = o.element
-  if (e === null) return target
-  const name = e.name.trim()
-  const controlType = e.control_type.trim()
-  const automationId = e.automation_id.trim()
-  const className = e.class_name.trim()
+  const name = value('name')
+  const controlType = value('control_type')
+  const automationId = value('automation_id')
+  const className = value('class_name')
   if (name !== '') target.name = name
   if (controlType !== '') target.control_type = controlType
   if (automationId !== '') target.automation_id = automationId
   if (className !== '') target.class_name = className
   // The window a control lives in is context an AI reader cannot recover from
   // the control alone ("the Save button" — of which app?).
-  const owner = o.window
-  if (owner !== null) {
-    const process = owner.process.trim()
-    if (process !== '') target.process = process
-  }
+  const process = value('process')
+  if (process !== '') target.process = process
   return target
 }
 
@@ -2484,9 +2626,23 @@ overlay.addEventListener('pointerdown', (e) => {
   //
   // Shift is read from the EVENT, not from the tracked key state: a window that
   // has just regained focus with Shift already down never saw the keydown.
+  const shiftChanged = windowLevelKey !== e.shiftKey
   windowLevelKey = e.shiftKey
+  // The click takes whatever the hover is CURRENTLY OFFERING, which after a Tab
+  // is not the first candidate any more (#66: the candidate stack is the
+  // feature, not a debug view). Re-answer first when this point was never
+  // probed — a click with no preceding pointermove, or one whose modifier the
+  // probe never saw — so the outline and the click can never disagree.
+  const probed =
+    hit.d.index === lastProbeDisplay && p.x === lastProbeX && p.y === lastProbeY && !shiftChanged
+  if (!probed) {
+    lastProbeDisplay = hit.d.index
+    lastProbeX = p.x
+    lastProbeY = p.y
+    answerProbe(hit.d, p.x, p.y)
+  }
   const box = boxUnder(hit.d, p.x, p.y)
-  const picked = objectAt(hit.d, p)
+  const picked = hoverStack[hoverStackIndex] ?? null
   const pickWins =
     picked !== null && (box === null || pickBeatsBox(picked, box, { x: p.x, y: p.y, ui, repeat }))
   if (box !== null && !pickWins) {
@@ -2547,11 +2703,12 @@ overlay.addEventListener('pointerdown', (e) => {
     // Remembered so the SECOND click of a double-click can discard it (above)
     // rather than committing a box nobody asked for.
     clickPickDraftId = pendingDraft()?.annotation_id ?? null
-  } else if (hasObjectData()) {
+  } else if (objectPickingCanSpeak()) {
     // The click snapped nothing (it still did what it always did: cleared the
     // selection). Say why — EVERY time, under the kind that belongs to this
-    // refusal. Gated on there being object data at all: with no dump, picking is
-    // simply OFF and silence is the truth.
+    // refusal. Gated on picking having anything to say at all: with no
+    // observation, picking is simply OFF and silence is the truth; with an
+    // observation that does not cover this moment, the refusal is the answer.
     const answer = emptyAnswer(hit.d)
     showObjectAnswer(answer.kind, answer.text)
   }
@@ -2964,6 +3121,17 @@ window.addEventListener('keydown', (e) => {
     windowLevelKey = true
     reprobeObjectHover()
   }
+  // TAB / SHIFT+TAB CYCLE THE CANDIDATES AT THE HOVERED POINT (#66: the losing
+  // candidates are kept, and this is what they are kept FOR).
+  //
+  // Only taken when there IS a stack of more than one under the pointer, and
+  // never while typing (the gates above already returned) — so Tab keeps
+  // reaching the top bar's controls for a keyboard user everywhere else, which
+  // is the one thing this must not cost.
+  if (e.key === 'Tab' && cycleHoverCandidate(e.shiftKey ? -1 : 1)) {
+    e.preventDefault()
+    return
+  }
   if (e.key === ' ') {
     // A FOCUSED CONTROL owns Space: on a button it is that button's native
     // activation, and a keyboard user pressing Space on [?] or [Save] must get
@@ -3314,12 +3482,16 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
       }
     }),
   )
-  // Static object picking (GOAL): ONE index per captured display over the
-  // capture-instant UI Automation objects — windows (the floor) and controls
-  // (the refinement) — each in that display's own snapshot coordinate space
-  // (SPEC §11.3). An empty payload yields empty indexes and picking stays
-  // silently off.
-  buildObjectIndexes(payload.uiaElements, payload.uiaWindows)
+  // OBJECT PICKING (#66): ONE index per captured display over the candidates
+  // Core resolved for the CAPTURE INSTANT, which is where the editor opens.
+  // Windows are the floor, controls the refinement, each in that display's own
+  // snapshot coordinate space (SPEC §11.3). No session (or an empty frame)
+  // yields empty indexes and picking stays silently off.
+  contextSessionId = payload.context?.sessionId ?? null
+  if (payload.context !== null) {
+    frameTimeMs = payload.context.frame.requestedTimeMs
+    buildObjectIndexes(payload.context.frame)
+  }
   resizeCanvases()
   loaded = true
   drawAllFrozen()
@@ -3372,6 +3544,10 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
         // Lanes rebuild only on a duration change (webm parse resolving), not
         // per tick — setAnnotations is DOM churn unfit for the playback rAF.
         if (controller.durationMs !== laneDurationMs) syncLanes()
+        // PICKING FOLLOWS THE CLOCK (#66). Debounced on settle, so a wheel
+        // burst and a playback rAF cost one request between them, not one per
+        // tick — and the frame already in hand keeps answering meanwhile.
+        scheduleContextFrame()
         schedulePaint()
       },
     })
@@ -3403,14 +3579,14 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
   // state a fresh capture does.
   fitBoard()
   schedulePaint()
-  // A dump that settled while the editor was decoding its frames: apply it now
+  // A frame that landed while the editor was decoding its images: apply it now
   // that there is a board to index it against.
-  if (pendingUiaObjects !== null) {
-    const late = pendingUiaObjects
-    pendingUiaObjects = null
-    applyUiaObjects(late)
-  } else if (payload.uiaDropped) {
-    // GOAL "Silence is not absence": the dump was attempted and produced
+  if (pendingContextFrame !== null) {
+    const late = pendingContextFrame
+    pendingContextFrame = null
+    applyContextFrame(late)
+  } else if (payload.context?.frame.dropped === true) {
+    // GOAL "Silence is not absence": the observation was attempted and produced
     // nothing, so picking is off for this capture. Until this was said, that was
     // indistinguishable from an editor whose picking is broken.
     showObjectHintOnce('dropped', t('editor.objectDropped'))
@@ -3439,31 +3615,23 @@ window.editorBridge.onInit((payload) => {
   void initEditor(payload)
 })
 
-/**
- * The object dump, arriving AFTER the editor opened (GOAL "Static object
- * picking"): the dump is budgeted and killed independently of the window, so on
- * a slow machine it settles a few hundred ms late. Rebuilding the per-display
- * indexes from it makes picking start working mid-session; nothing else is
- * touched, so boxes already drawn are unaffected.
- */
-function applyUiaObjects(payload: EditorUiaObjectsPayload): void {
-  if (!loaded || board === null) {
-    // init has not built the board yet — hold it rather than drop it.
-    pendingUiaObjects = payload
+// A frame Core pushed on its own: an observation that settled after the editor
+// opened (the helper is budgeted and killed independently of the window), or a
+// provider that answered after its budget expired. Rebuilding the per-display
+// indexes from it makes picking start working mid-session; nothing else is
+// touched, so boxes already drawn are unaffected.
+window.editorBridge.onContextFrame((frame) => {
+  // A push for a position the editor has already left is NEWS, not an answer:
+  // an observation that settled late lands at the capture instant while the
+  // user may have scrubbed elsewhere. Applying it would move picking back in
+  // time behind their own scrub, and dropping it would leave picking dead until
+  // they scrub again — so the moment actually on screen is re-asked instead.
+  if (frameTimeMs !== null && frame.requestedTimeMs !== frameTimeMs) {
+    frameTimeMs = null
+    scheduleContextFrame()
     return
   }
-  buildObjectIndexes(payload.uiaElements, payload.uiaWindows)
-  if (payload.dropped) showObjectHintOnce('dropped', t('editor.objectDropped'))
-  // The sheet advertises the window-level modifier only where object data
-  // exists; it was built before this arrived.
-  if (helpOpen) buildHelpSheet()
-  // A pointer already resting on an object must not have to move to find out
-  // that picking works now.
-  reprobeObjectHover()
-}
-
-window.editorBridge.onUiaObjects((payload) => {
-  applyUiaObjects(payload)
+  applyContextFrame(frame)
 })
 
 // Main is the authority on the window state: every mode change lands here,

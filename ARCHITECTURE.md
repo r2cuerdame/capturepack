@@ -266,6 +266,8 @@ core/
     │   ├── tray.ts          tray menu
     │   ├── capture.ts       display-media routing, hidden capture window, snapshot
     │   ├── session.ts       capture flow orchestration + timeline event collection
+    │   ├── context/         Surface Timeline, Surface Resolver, provider host —
+    │   │                    Core platform infrastructure, NOT providers (#65/#66)
     │   ├── exporter.ts      pack writer (§2.7)
     │   ├── report.ts        report.md generation
     │   ├── settings.ts      settings.json load/save
@@ -276,6 +278,9 @@ core/
     │   └── editor/          annotation editor renderer — canvas + tools (§2.6)
     └── shared/
         ├── ipc.ts           the entire IPC contract (§2.8)
+        ├── context/         the Temporal Context Provider protocol — documented
+        │                    and explicitly UNSTABLE (#64); Windows UI Automation
+        │                    is its reference implementation, with no private path
         └── types.ts         SPEC 0.1.0 format types + Settings
 ```
 

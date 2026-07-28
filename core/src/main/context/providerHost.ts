@@ -39,6 +39,7 @@ import type {
   ProviderExportContext,
   ProviderExportResult,
   ProviderFrame,
+  ProviderFrameStatus,
   ProviderRunState,
   ProviderState,
   ProviderSurfaceClaim,
@@ -57,7 +58,6 @@ import {
   PROVIDER_TIMEOUTS,
 } from '../../shared/context/protocol'
 import type { ProviderManifest, ProviderPermission } from '../../shared/context/manifest'
-import { logInfo, logWarn } from '../log'
 import { ClockOffsetEstimator, type SessionClock } from './clock'
 
 /**
@@ -110,6 +110,15 @@ export type RegisterResult =
   | { ok: true }
   | { ok: false; reason: string }
 
+/** What one scrub position produced, across every provider that was asked. */
+export interface ProviderFrameResult {
+  frames: readonly ProviderFrame[]
+  /** One row per provider ASKED, including the ones that had nothing. */
+  statuses: readonly ProviderFrameStatus[]
+  /** A provider is still working and a replacement frame will follow. */
+  pending: boolean
+}
+
 interface Entry {
   manifest: ProviderManifest
   provider: TemporalContextProvider
@@ -126,13 +135,39 @@ interface Entry {
   started: boolean
 }
 
+/**
+ * Where this host's log lines go, INJECTED rather than imported.
+ *
+ * `src/main/log.ts` imports Electron, and this module is reachable from the two
+ * places that must run in plain Node: `context/session.ts`, whose header says it
+ * is deliberately Electron-free so the #58 regression harness can run the REAL
+ * frame assembly rather than a reimplementation of it, and the provider-host
+ * check. A static import of the logger would have made both harnesses assert
+ * nothing, which is the failure mode this project has been bitten by.
+ *
+ * The default is silent, so every Electron-side caller MUST pass a real sink —
+ * see `runtime.ts`. Silence is not absence: a disabled provider that logged
+ * nowhere is precisely the bug Settings > Plugins exists to prevent.
+ */
+export interface ProviderHostLog {
+  info(message: string): void
+  warn(message: string): void
+}
+
+const SILENT_LOG: ProviderHostLog = {
+  info: (): void => undefined,
+  warn: (): void => undefined,
+}
+
 export class ProviderHost {
   private readonly clock: SessionClock
+  private readonly log: ProviderHostLog
   private readonly entries = new Map<string, Entry>()
   private readonly executionLog: ExecutionLogEntry[] = []
 
-  constructor(clock: SessionClock) {
+  constructor(clock: SessionClock, log: ProviderHostLog = SILENT_LOG) {
     this.clock = clock
+    this.log = log
   }
 
   /**
@@ -192,7 +227,7 @@ export class ProviderHost {
       started: false,
     }
     this.entries.set(manifest.id, entry)
-    logInfo(
+    this.log.info(
       `[context] provider registered: ${manifest.id} ${manifest.version} ` +
         `(${entry.builtIn ? 'built-in' : 'installed'}, permissions: ` +
         `${manifest.permissions.length === 0 ? 'none' : manifest.permissions.join(', ')})`,
@@ -215,7 +250,7 @@ export class ProviderHost {
     if (entry === undefined) return false
     const granted = entry.manifest.permissions.includes(permission)
     if (!granted) {
-      logWarn(`[context] provider ${id} asked for "${permission}" which it did not declare — denied`)
+      this.log.warn(`[context] provider ${id} asked for "${permission}" which it did not declare — denied`)
     }
     return granted
   }
@@ -377,7 +412,7 @@ export class ProviderHost {
   // -------------------------------------------------------------------------
 
   /** Which providers claim something on this stack at this time. */
-  async claims(timeMs: number, surfaces: SurfaceInfo[]): Promise<ProviderSurfaceClaim[]> {
+  async claims(timeMs: number, surfaces: readonly SurfaceInfo[]): Promise<ProviderSurfaceClaim[]> {
     const context: SurfaceClaimContext = { sessionId: this.clock.sessionId, timeMs, surfaces }
     const results = await Promise.all(
       this.active().map((entry) =>
@@ -405,11 +440,20 @@ export class ProviderHost {
     return results.flatMap((candidates) => candidates ?? [])
   }
 
+  /**
+   * A provider that does not implement `materialize` returns null, exactly as
+   * one that failed does. The caller cannot tell the two apart AND MUST NOT
+   * NEED TO: in both cases the honest answer is "no prepared state here", and
+   * inventing an empty `ProviderState` instead would claim a provider had
+   * looked and found nothing.
+   */
   async materialize(providerId: string, context: MaterializeContext): Promise<ProviderState | null> {
     const entry = this.entries.get(providerId)
     if (entry === undefined || !this.isActive(entry)) return null
+    const method = entry.provider.materialize
+    if (method === undefined) return null
     const state = await this.invoke(entry, 'materialize', PROVIDER_TIMEOUTS.materialize, () =>
-      entry.provider.materialize(context),
+      method.call(entry.provider, context),
     )
     if (state === null) return null
     return { ...state, accuracy: this.foldClockError(entry, state.accuracy) }
@@ -436,6 +480,8 @@ export class ProviderHost {
           coverage: 'none',
         },
         candidates: [],
+        claims: [],
+        coverage: [],
         truncated: false,
         declined: true,
       }
@@ -447,11 +493,71 @@ export class ProviderHost {
     return { ...frame, accuracy: this.foldClockError(entry, frame.accuracy) }
   }
 
+  /**
+   * ONE SCRUB POSITION, EVERY CLAIMANT — the fan-out `frame()` above is the
+   * single-provider half of (#66 step 4).
+   *
+   * The editor asks for a frame once per settled scrub position, not per
+   * provider, and it needs three things back that a per-provider call cannot
+   * produce on its own: the union of the candidates, a STATUS PER PROVIDER so
+   * Settings and the save screen can say which context is missing by name
+   * rather than showing a shorter list (GOAL "Silence is not absence"), and
+   * whether anyone is still working.
+   *
+   * `pending` is what keeps "a slow Provider must never hold the editor shut"
+   * true: a provider that overran its budget is reported as `timeout` and the
+   * frame is returned WITHOUT it, with `pending` set so the editor paints what
+   * it has and knows a replacement is coming. Nothing here waits for a late
+   * answer — `invoke` has already abandoned it.
+   */
+  async frames(context: FrameContext, providerIds?: readonly string[]): Promise<ProviderFrameResult> {
+    const asked = this.active().filter(
+      (entry) => providerIds === undefined || providerIds.includes(entry.manifest.id),
+    )
+    const frames: ProviderFrame[] = []
+    const statuses: ProviderFrameStatus[] = []
+    let pending = false
+    await Promise.all(
+      asked.map(async (entry) => {
+        const startedAt = this.clock.nowMs()
+        const frame = await this.frame(entry.manifest.id, context)
+        const elapsedMs = this.clock.nowMs() - startedAt
+        // `frame()` returns null only for a call that timed out, threw, or hit a
+        // provider disabled a moment ago. `invoke` has already recorded which,
+        // so the state is read back off the entry rather than guessed here.
+        if (frame === null) {
+          const timedOut = entry.state === 'error' && entry.lastError?.includes('budget') === true
+          if (timedOut) pending = true
+          statuses.push(blankStatus(entry, timedOut ? 'timeout' : 'error', elapsedMs))
+          return
+        }
+        if (frame.declined === true) {
+          statuses.push(blankStatus(entry, 'declined', elapsedMs))
+          return
+        }
+        frames.push(frame)
+        statuses.push({
+          providerId: entry.manifest.id,
+          name: entry.manifest.name,
+          state: 'ok',
+          coverage: frame.accuracy.coverage,
+          errorMs: frame.accuracy.errorMs,
+          candidates: frame.candidates.length,
+          truncated: frame.truncated,
+          elapsedMs,
+        })
+      }),
+    )
+    return { frames, statuses, pending }
+  }
+
   async track(providerId: string, context: TrackContext): Promise<ObjectTrack | null> {
     const entry = this.entries.get(providerId)
     if (entry === undefined || !this.isActive(entry)) return null
+    const method = entry.provider.track
+    if (method === undefined) return null
     const track = await this.invoke(entry, 'track', PROVIDER_TIMEOUTS.track, () =>
-      entry.provider.track(context),
+      method.call(entry.provider, context),
     )
     if (track === null) return null
     return { ...track, accuracy: this.foldClockError(entry, track.accuracy) }
@@ -460,7 +566,11 @@ export class ProviderHost {
   async export(providerId: string, context: ProviderExportContext): Promise<ProviderExportResult | null> {
     const entry = this.entries.get(providerId)
     if (entry === undefined || !this.isActive(entry)) return null
-    return this.invoke(entry, 'export', PROVIDER_TIMEOUTS.export, () => entry.provider.export(context))
+    const method = entry.provider.export
+    if (method === undefined) return null
+    return this.invoke(entry, 'export', PROVIDER_TIMEOUTS.export, () =>
+      method.call(entry.provider, context),
+    )
   }
 
   /** Every provider that could answer right now. */
@@ -531,7 +641,7 @@ export class ProviderHost {
     entry.state = 'error'
     if (entry.failures < MAX_CONSECUTIVE_FAILURES) return
     entry.disabledReason = `disabled after ${entry.failures} consecutive failures — ${detail}`
-    logWarn(`[context] provider ${entry.manifest.id} ${entry.disabledReason}`)
+    this.log.warn(`[context] provider ${entry.manifest.id} ${entry.disabledReason}`)
   }
 
   /**
@@ -547,7 +657,7 @@ export class ProviderHost {
     }
     entry.budgetStrikes += 1
     if (entry.budgetStrikes < MAX_BUDGET_STRIKES) {
-      logWarn(
+      this.log.warn(
         `[context] provider ${entry.manifest.id} is holding ${Math.round(ack.bytes / 1024)} KB, over its ` +
           `${Math.round(entry.memoryBudgetBytes / 1024)} KB budget`,
       )
@@ -556,7 +666,7 @@ export class ProviderHost {
     entry.disabledReason =
       `disabled for holding ${Math.round(ack.bytes / 1024)} KB, over its ` +
       `${Math.round(entry.memoryBudgetBytes / 1024)} KB buffer budget`
-    logWarn(`[context] provider ${entry.manifest.id} ${entry.disabledReason}`)
+    this.log.warn(`[context] provider ${entry.manifest.id} ${entry.disabledReason}`)
   }
 
   /**
@@ -600,3 +710,26 @@ export class ProviderHost {
 
 /** Sentinel for a race the timer won. A unique object cannot collide with a result. */
 const TIMED_OUT: unique symbol = Symbol('provider-call-timeout')
+
+/**
+ * The status row for a provider that produced no frame. `coverage: 'none'` and
+ * zero candidates are the TRUTH here and not a placeholder: this provider
+ * covered nothing at this time, and the row exists so the editor can say which
+ * provider that was instead of silently showing a shorter list.
+ */
+function blankStatus(
+  entry: Entry,
+  state: ProviderFrameStatus['state'],
+  elapsedMs: number,
+): ProviderFrameStatus {
+  return {
+    providerId: entry.manifest.id,
+    name: entry.manifest.name,
+    state,
+    coverage: 'none',
+    errorMs: 0,
+    candidates: 0,
+    truncated: false,
+    elapsedMs,
+  }
+}

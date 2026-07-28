@@ -94,11 +94,30 @@ const CHECKPOINT_INTERVAL_MS = 1_000
  * real cost at 40–60 KB for a 30 s ring; this bounds the pathological desktop
  * (a window being dragged continuously across 300 samples) rather than the
  * ordinary one. Over it, RESOLUTION is dropped and never RANGE — see `degrade`.
+ *
+ * IT BOUNDS SAMPLES, AND ONLY SAMPLES — see `sampleBytesUsed` for why that
+ * distinction had to be made explicit.
  */
 const RING_BUDGET_BYTES = 512 * 1024
 
 /** Rough per-sample bookkeeping cost, counted so `bytesUsed()` is not a lie. */
 const SAMPLE_INDEX_BYTES = 96
+
+/**
+ * When the identity table is worth rebuilding from the records still alive.
+ *
+ * The table is append-only between rebuilds, so a window that retitles once a
+ * second — a downloading browser, a media player, a terminal progress line —
+ * adds an entry per second FOREVER, long after the sample that mentioned that
+ * title was pruned. Measured on exactly that shape: the table alone reached
+ * 1,551 KB, and every byte of it was unreachable from any live record.
+ *
+ * 64 KB is ~8x the measured ordinary need (393 distinct identity tuples across
+ * 451 elements on the evidence packs, ~8 KB), so an ordinary desktop never pays
+ * for the rebuild at all, and a churning one pays a walk over the live records
+ * — a few thousand of them, microseconds — at most once per prune.
+ */
+const IDENTITY_COMPACT_BYTES = 64 * 1024
 
 /**
  * Coarsest the governor may go: one stored sample per 25.6 s, checkpoints 256 s
@@ -294,7 +313,12 @@ export class SurfaceTimeline {
     // Pressure is off — full resolution comes back. Without this, one long
     // editor session would leave the ring coarse for the rest of the run, and
     // the degradation would outlive the reason for it.
-    if (this.stride > 1 && this.bytesUsed() < RING_BUDGET_BYTES / 2) {
+    //
+    // Tested against SAMPLE bytes, not the total: the identity table is not a
+    // thing `degrade()` can shrink, so including it here made the gate testable
+    // only by a number the governor could not move — which is how title churn
+    // used to pin `stride` at MAX_STRIDE permanently. See `sampleBytesUsed`.
+    if (this.stride > 1 && this.sampleBytesUsed() < RING_BUDGET_BYTES / 2) {
       this.stride = 1
       this.strideCounter = 0
     }
@@ -317,6 +341,9 @@ export class SurfaceTimeline {
     const firstKept = this.samples[0]
     if (firstKept !== undefined) this.dead = firstKept.offset
     this.compactIfWorthwhile()
+    // Records just died, so strings only they referenced did too. This is the
+    // only place they can be reclaimed — see `compactStrings`.
+    this.compactStringsIfWorthwhile()
   }
 
   /** Pins a range (#64 `onFreeze`). Ref-counted by id; `release` is the other half. */
@@ -435,11 +462,42 @@ export class SurfaceTimeline {
     }
   }
 
-  /** What the governor checks against the budget. */
+  /**
+   * EVERYTHING THIS RING HOLDS — records, index and identity table. This is the
+   * honest total, and it is what `stats()` reports and what lane S acks to the
+   * Provider Host as `bytes`. It is deliberately NOT what the governor steers
+   * on; see below.
+   */
   bytesUsed(): number {
     return (
       this.used - this.dead + this.identityBytes + this.samples.length * SAMPLE_INDEX_BYTES
     )
+  }
+
+  /**
+   * WHAT THE GOVERNOR CAN ACTUALLY SHRINK, and therefore the only thing it is
+   * allowed to steer on.
+   *
+   * THE BUG THIS SEPARATION FIXES. `enforceBudget()` used to compare the TOTAL
+   * against the 512 KB ceiling, and `prune()`'s recovery gate compared the same
+   * total against half of it. But every lever `degrade()` has — thin a delta,
+   * drop the oldest checkpoint interval, double `stride` — moves SAMPLE bytes
+   * and cannot free one byte of the identity table. So a control loop whose
+   * input included a number it had no authority over could only ratchet.
+   *
+   * Measured, on one window retitling once per second (a downloading browser, a
+   * media player, a terminal progress line): the ring reached 1,551 KB against
+   * the 512 KB ceiling, sampling collapsed from 10 Hz to about 1 Hz, and it
+   * NEVER RECOVERED once the churn stopped — the recovery gate was testing the
+   * same permanently inflated number, so `stride` climbed to MAX_STRIDE = 256
+   * and stayed there for the rest of the run.
+   *
+   * The identity table is not unwatched as a result: it is bounded by
+   * `compactStrings()`, which reclaims it, and it stays inside `bytesUsed()`
+   * above so nothing upstream is told a smaller number than the truth.
+   */
+  private sampleBytesUsed(): number {
+    return this.used - this.dead + this.samples.length * SAMPLE_INDEX_BYTES
   }
 
   // -------------------------------------------------------------------------
@@ -645,7 +703,7 @@ export class SurfaceTimeline {
    * NEVER RANGE, and mark what was thinned so `TemporalAccuracy` stays truthful.
    */
   private enforceBudget(): void {
-    if (this.bytesUsed() <= RING_BUDGET_BYTES) return
+    if (this.sampleBytesUsed() <= RING_BUDGET_BYTES) return
     this.degrade()
   }
 
@@ -711,6 +769,95 @@ export class SurfaceTimeline {
     // was recorded at, so the answers the open editor is actually asking for do
     // not degrade — only the live tail behind it does.
     if (this.stride < MAX_STRIDE) this.stride *= 2
+  }
+
+  /**
+   * Every offset in the arena that a live 72-byte record starts at.
+   *
+   * Two sources, deduplicated, because they can name the same record: a sample's
+   * record run, and `live`, which holds the most recent record per hwnd as the
+   * diff base for the next sample. Rewriting one record twice would remap its
+   * ids twice and corrupt them, which is the whole reason this returns a Set
+   * rather than being folded into the two loops that need it.
+   */
+  private liveRecordOffsets(): Set<number> {
+    const offsets = new Set<number>()
+    for (const sample of this.samples) {
+      for (let i = 0; i < sample.count; i += 1) offsets.add(sample.offset + i * RECORD_BYTES)
+    }
+    for (const offset of this.live.values()) offsets.add(offset)
+    return offsets
+  }
+
+  private compactStringsIfWorthwhile(): void {
+    if (this.identityBytes <= IDENTITY_COMPACT_BYTES) return
+    this.compactStrings()
+  }
+
+  /**
+   * REBUILDS THE IDENTITY TABLE FROM WHAT IS STILL REACHABLE.
+   *
+   * `intern()` is append-only, so the table accumulates every title a window has
+   * ever had. Pruning a sample drops its records but left its strings behind
+   * forever: measured at 1,551 KB for one window retitling once a second, none
+   * of it reachable. This is the collector for that.
+   *
+   * The roots are the three id fields of every live record, plus the `classId`
+   * held in `generations` — that map outlives the records it was minted from,
+   * and dropping a class name still referenced by it would make a later
+   * recycled-HWND comparison read the wrong string and mint a NEW surface id for
+   * a window that never changed. A stable `surfaceId` is what a provider's claim
+   * is keyed on (§6), so that would hand a claim to a stranger.
+   *
+   * Ids are renumbered, so every root is rewritten in place. Id 0 is the empty
+   * string and stays 0 — `stringAt` falls back to it, and a decoded record with
+   * a title that was never set must keep reading as "" and not as whatever
+   * landed in slot 0 after a rebuild.
+   */
+  private compactStrings(): void {
+    const view = this.view
+    const records = this.liveRecordOffsets()
+    const reachable = new Set<number>([0])
+    for (const offset of records) {
+      reachable.add(view.getUint32(offset + 60, true))
+      reachable.add(view.getUint32(offset + 64, true))
+      reachable.add(view.getUint32(offset + 68, true))
+    }
+    for (const generation of this.generations.values()) reachable.add(generation.classId)
+    if (reachable.size >= this.strings.length) return
+
+    // Ascending, so the rebuilt table keeps the order it was interned in and the
+    // rebuild is deterministic — a table that reshuffled on every collection
+    // would make a bug here reproduce only sometimes.
+    const remap = new Map<number, number>([[0, 0]])
+    const kept: string[] = ['']
+    let bytes = 0
+    for (const id of [...reachable].sort((a, b) => a - b)) {
+      if (id === 0) continue
+      const text = this.strings[id]
+      if (text === undefined) continue
+      remap.set(id, kept.length)
+      kept.push(text)
+      bytes += text.length * 2 + 48
+    }
+    const to = (id: number): number => remap.get(id) ?? 0
+    for (const offset of records) {
+      view.setUint32(offset + 60, to(view.getUint32(offset + 60, true)), true)
+      view.setUint32(offset + 64, to(view.getUint32(offset + 64, true)), true)
+      view.setUint32(offset + 68, to(view.getUint32(offset + 68, true)), true)
+    }
+    for (const [hwnd, generation] of this.generations) {
+      this.generations.set(hwnd, { ...generation, classId: to(generation.classId) })
+    }
+    this.strings.length = 0
+    this.strings.push(...kept)
+    this.stringIds.clear()
+    kept.forEach((text, id) => {
+      // First id wins, so a duplicate string (impossible via `intern`, but a
+      // rebuild must not depend on that) cannot leave a dangling second entry.
+      if (!this.stringIds.has(text)) this.stringIds.set(text, id)
+    })
+    this.identityBytes = bytes
   }
 
   private intern(text: string): number {

@@ -41,8 +41,15 @@ export class SessionClock {
   /** Highest time ever observed, so `bufferEndMs` is never behind a stored sample. */
   private observedEndMs = 0
 
-  constructor(retentionMs: number) {
-    this.sessionId = randomUUID()
+  /**
+   * `sessionId` is supplied only by a clock that replays a session which has
+   * ALREADY RUN — an editor opened on a saved pack, whose identity is the
+   * window's and not a fresh one. A live recording session mints its own, and
+   * nothing may hand it an id, because two live sessions sharing one would make
+   * every provider's buffer ambiguous.
+   */
+  constructor(retentionMs: number, sessionId?: string) {
+    this.sessionId = sessionId ?? randomUUID()
     this.originNs = process.hrtime.bigint()
     this.originWallMs = Date.now()
     this.retentionMs = Math.max(0, retentionMs)

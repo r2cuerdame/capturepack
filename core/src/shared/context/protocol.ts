@@ -43,6 +43,28 @@
 // its nearest sample TOGETHER WITH THE ERROR. An answer 80 ms off is useful; an
 // answer 80 ms off that claims to be exact is the same class of lie as a tray
 // icon that says "recording".
+//
+// ---------------------------------------------------------------------------
+// WHAT THIS FILE OWES TO THE PICKING SIDE (v0.2.0 integration)
+//
+// The recording half (#64/#65) and the picking half (#66) were written against
+// this file in parallel and both changed it. This is the reconciled version, and
+// the three places where they genuinely disagreed are resolved HERE rather than
+// papered over at a call site, because a protocol that means one thing to its
+// producer and another to its consumer is the defect, not the mismatch:
+//
+//  A. AUTHORITY. The picking side put 'manual' on the authority ladder. It is
+//     not a provider authority — see `SurfaceAuthority` vs `SemanticAuthority`
+//     below. Both exist, and the split is now type-enforced instead of asserted
+//     in a comment.
+//  B. COORDINATE SPACE. Rects are normatively virtual-desktop physical pixels
+//     (GAP 10). That is kept, and `space`/`display` are OPTIONAL declarations
+//     for the one source that provably cannot honour it — see `RectSpace`.
+//  C. WHAT A PROVIDER MUST IMPLEMENT. `materialize`, `track` and `export` are
+//     optional rather than mandatory — see `TemporalContextProvider`.
+//
+// Everything else here is the recording half's version, which was the superset,
+// including every correction the design document made to the issue as written.
 
 /**
  * The protocol version this build speaks. A manifest declaring anything else is
@@ -96,6 +118,38 @@ export interface ScreenPoint {
   x: number
   y: number
 }
+
+/**
+ * WHICH PIXELS A RECT IS COUNTED IN, for the one case where the normative answer
+ * above cannot be reconstructed.
+ *
+ * GAP 10 makes every protocol rect virtual-desktop physical pixels, and that
+ * stays the rule: a rect with no `space` IS in that space, so a live provider
+ * declares nothing and cannot get it wrong by omission.
+ *
+ * The exception is a source whose data was ALREADY mapped into a pack. A v0.1.x
+ * `plugins/windows-uia/elements.json` carries snapshot pixels, the per-display
+ * transform that produced them was never recorded, and the physical rectangle is
+ * therefore NOT RECOVERABLE from the file. Re-deriving one would mean inventing
+ * the transform, which is how a rectangle ends up on the wrong monitor.
+ *
+ * So the declaration is optional and additive, and the legacy pack reader is the
+ * only thing in the tree that sets it. Stated as a protocol field rather than as
+ * a private branch inside the built-in provider on purpose: that private path is
+ * exactly what #64 forbids, and a second provider reading old packs would hit
+ * the same wall.
+ *
+ *   virtual-desktop-physical — the live desktop's own pixels, origin at the
+ *                              primary display's top-left, DPI-unvirtualised.
+ *                              THE DEFAULT, and what absence means.
+ *   display-snapshot         — pixels of ONE captured display's snapshot image
+ *                              (SPEC §8.2), which is the annotation coordinate
+ *                              space. `display` then names which one.
+ */
+export type RectSpace = 'virtual-desktop-physical' | 'display-snapshot'
+
+/** What an omitted `space` means. Written down so no caller has to guess. */
+export const DEFAULT_RECT_SPACE: RectSpace = 'virtual-desktop-physical'
 
 /**
  * The monotonic session clock Core hands out (GOAL.md "One clock").
@@ -161,7 +215,9 @@ export interface TemporalAccuracy {
  * The authority ladder (GOAL.md). Authority is SPECIFICITY, not rank: a DOM
  * element is a more specific answer than the window that contains it, which is
  * why an Unreal widget beats a DOM element beats a UIA element beats an HWND.
- * "manual rectangle" is the editor's fallback and is not a provider authority.
+ * "manual rectangle" is the editor's fallback and is not a provider authority —
+ * a provider cannot declare it, and that is now a type error rather than a rule
+ * in a comment. See `SemanticAuthority` for the editor's full ladder.
  */
 export type SurfaceAuthority = 'application-native' | 'document-native' | 'accessibility' | 'window'
 
@@ -172,6 +228,32 @@ export const AUTHORITY_ORDER: readonly SurfaceAuthority[] = [
   'accessibility',
   'window',
 ]
+
+/**
+ * THE EDITOR'S LADDER: every provider authority, plus the one rung Core owns.
+ *
+ *   application-native → document-native → accessibility → window → manual
+ *     (Unreal widget)     (DOM element)     (UIA element)   (HWND)   (drawn)
+ *
+ * A manual rectangle is the floor of #66's step 8 and therefore has to be
+ * RANKED — the resolver sorts it against real candidates — but it is not
+ * something a provider may claim, which is why `ProviderSurfaceClaim.authority`
+ * and `ContextCandidate.authority` stay `SurfaceAuthority` and only the editor's
+ * own ordering types widen to this.
+ */
+export type SemanticAuthority = SurfaceAuthority | 'manual'
+
+/** The editor's ladder, most specific first. Index = rank; lower wins. */
+export const AUTHORITY_LADDER: readonly SemanticAuthority[] = [...AUTHORITY_ORDER, 'manual']
+
+/** Rank of an authority on the ladder. Lower is more specific, i.e. wins. */
+export function authorityRank(authority: SemanticAuthority): number {
+  const rank = AUTHORITY_LADDER.indexOf(authority)
+  // An unknown authority sorts BELOW the manual rectangle rather than above
+  // everything: a provider that invents a rung must never outrank the ones the
+  // protocol defines.
+  return rank < 0 ? AUTHORITY_LADDER.length : rank
+}
 
 /**
  * One top-level window as the Surface Timeline recorded it at one instant (#65).
@@ -199,6 +281,10 @@ export interface SurfaceInfo {
    * few pixels too big and every edge hit-test wrong.
    */
   bounds: Rect
+  /** Absent = the normative space. See `RectSpace`. */
+  space?: RectSpace
+  /** Which captured display `bounds` is in, when `space` is display-snapshot. */
+  display?: number
   /** The client area, in the same space. Empty rect when it could not be read. */
   clientBounds?: Rect
   /**
@@ -208,7 +294,7 @@ export interface SurfaceInfo {
    * something across surfaces. Absent = not computed yet (it is computed lazily
    * at query time, not stored).
    */
-  visibleRegion?: Rect[]
+  visibleRegion?: readonly Rect[]
   /** 0 = topmost. The window manager's own order at that instant. */
   zOrder: number
   visible: boolean
@@ -221,6 +307,12 @@ export interface SurfaceInfo {
   executableName?: string
   windowTitle?: string
   className?: string
+}
+
+/** The surface stack at one instant, z ascending (0 = top-most). */
+export interface SurfaceSample {
+  tMs: number
+  surfaces: readonly SurfaceInfo[]
 }
 
 /** #65's question, as a call. */
@@ -240,6 +332,19 @@ export interface SurfaceStack {
   accuracy: TemporalAccuracy
   /** Topmost first. Empty only on a bare desktop or outside the recorded range. */
   surfaces: SurfaceInfo[]
+}
+
+/**
+ * WHAT A PROVIDER RECORDED FOR ONE SURFACE — the generalisation of SPEC §11.3's
+ * "Silence is not absence" to every provider. "No candidates here" and "I never
+ * looked here" are different statements and the editor says different things
+ * about them, so the protocol has to be able to tell them apart.
+ */
+export type SurfaceDetailState = 'recorded' | 'truncated' | 'unavailable' | 'skipped'
+
+export interface SurfaceCoverage {
+  surfaceId: string
+  state: SurfaceDetailState
 }
 
 // ---------------------------------------------------------------------------
@@ -382,7 +487,7 @@ export interface SurfaceClaimContext {
    */
   timeMs: number
   /** The resolved stack at that time, so a provider can echo a `surfaceId`. */
-  surfaces: SurfaceInfo[]
+  surfaces: readonly SurfaceInfo[]
 }
 
 /**
@@ -400,6 +505,9 @@ export interface ProviderSurfaceClaim {
   hwnd?: string
   processId?: number
   region: Rect
+  /** Absent = the normative space. See `RectSpace`. */
+  space?: RectSpace
+  display?: number
   authority: SurfaceAuthority
   /** 0..1. Ordering criterion 5, and only ever a tie-break. */
   confidence: number
@@ -418,6 +526,9 @@ export interface HitTestContext {
   sessionId: string
   timeMs: number
   point: ScreenPoint
+  /** Absent = the normative space. See `RectSpace`. */
+  space?: RectSpace
+  display?: number
   surface: SurfaceInfo
 }
 
@@ -444,6 +555,9 @@ export interface ContextCandidate {
   objectType: string
   name?: string
   bounds: Rect
+  /** Absent = the normative space. See `RectSpace`. */
+  space?: RectSpace
+  display?: number
   /**
    * SEMANTIC SPECIFICITY, MONOTONE ALONG CONTAINMENT (GAP 11) — computed from
    * GEOMETRY, not from tree-walk depth.
@@ -470,6 +584,26 @@ export interface ContextCandidate {
   visible: boolean
   occluded: boolean
   parentId?: string
+  /**
+   * HOW WELL THIS CANDIDATE'S PROVIDER COVERS THE REQUESTED TIME.
+   *
+   * Per candidate and not only per frame, because that is the granularity the
+   * staleness ceiling is enforced at (GAP 16): a provider can hold one surface
+   * at the requested instant and another only from nine seconds earlier, and a
+   * single frame-level verdict would have to round that either to the worse of
+   * the two — refusing good candidates — or to the better one, which is the lie
+   * the ceiling exists to prevent. Core drops everything that is not `covered`
+   * before the editor ever sees it.
+   */
+  accuracy: TemporalAccuracy
+  /**
+   * Provider-defined identity fields, all strings so they survive IPC and so
+   * nothing downstream needs a cast (`any` is not allowed in this codebase).
+   * The Windows UI Automation provider fills name / control_type /
+   * automation_id / class_name / process / title, which is exactly what SPEC
+   * §8.7's `target` records.
+   */
+  identity?: Readonly<Record<string, string>>
   metadata?: Record<string, unknown>
 }
 
@@ -490,8 +624,21 @@ export interface ContextCandidate {
 export interface FrameContext {
   sessionId: string
   timeMs: number
-  /** The region of interest — normally one display. */
-  region: Rect
+  /**
+   * THE SURFACE STACK CORE ALREADY RESTORED at this time (#66 step 1).
+   *
+   * Providers do NOT re-derive it. The whole point of #66's ordering is that
+   * Core decides which window owns a pixel BEFORE anyone is asked, so handing
+   * the stack down is what makes "no provider can shortcut that path" true by
+   * construction rather than by convention.
+   */
+  surfaces: readonly SurfaceInfo[]
+  /**
+   * Scope hint (GAP 6) — normally one display. OPTIONAL because a frame is built
+   * for every captured display at once and there is then no single region to
+   * name; a provider MAY ignore it and stay correct either way.
+   */
+  region?: Rect
   surfaceIds?: string[]
   maxCandidates: number
 }
@@ -500,7 +647,11 @@ export interface ProviderFrame {
   providerId: string
   timeMs: number
   accuracy: TemporalAccuracy
-  candidates: ContextCandidate[]
+  candidates: readonly ContextCandidate[]
+  /** The claims that held at this time, so Core need not ask for them twice. */
+  claims: readonly ProviderSurfaceClaim[]
+  /** Per surface: recorded, truncated, unavailable, or never looked at. */
+  coverage: readonly SurfaceCoverage[]
   /** True when `maxCandidates` cut the list: the editor must not claim completeness. */
   truncated: boolean
   /** This provider does not serve frames; Core falls back to `hitTest`. */
@@ -538,11 +689,11 @@ export interface ObjectTrack {
   providerId: string
   surfaceId: string
   objectId: string
-  samples: ObjectSample[]
+  samples: readonly ObjectSample[]
   createdAtMs?: number
   /** OBSERVED REMOVAL and nothing else. Not "I stopped seeing it" — that is a gap. */
   removedAtMs?: number
-  gaps: TrackGap[]
+  gaps: readonly TrackGap[]
   accuracy: TemporalAccuracy
 }
 
@@ -610,8 +761,21 @@ export interface ProviderExportResult {
  * disabled with a named reason rather than being allowed to take Core down
  * (GOAL.md: "No plugin failure may ever cost a capture").
  *
- * The lifecycle callbacks are OPTIONAL because not every provider needs them; a
- * provider that implements none of them still works, it just never buffers.
+ * WHAT IS ACTUALLY MANDATORY: `getSurfaceClaims` and `hitTest`. Claim the pixels
+ * you know about, and answer about one of them. Everything else is optional, and
+ * a missing method is HANDLED rather than treated as a fault — `ProviderHost`
+ * already answers "this provider has nothing for you" for every kind of failure
+ * and the fallback ladder continues below it.
+ *
+ * That is not a weakening of the contract; it is the honest shape of it. The
+ * reference implementation itself observes and picks and does neither
+ * `materialize` nor `export` in this release: `export` CANNOT be specified
+ * before SPEC §11.4 exists, and requiring a method nobody can implement
+ * correctly yet would only produce stubs returning empty results — which reads
+ * to Core exactly like a provider that tried and genuinely had nothing, i.e. it
+ * would make the protocol's own status reporting lie. A provider that implements
+ * none of the optional methods still works; it just never buffers, never tracks
+ * and never writes into the pack.
  */
 export interface TemporalContextProvider {
   readonly id: string
@@ -627,12 +791,78 @@ export interface TemporalContextProvider {
   onFreeze?(context: BufferFreezeContext): Promise<void>
   onRelease?(context: BufferReleaseContext): Promise<void>
 
-  materialize(context: MaterializeContext): Promise<ProviderState>
-  getSurfaceClaims(context: SurfaceClaimContext): Promise<ProviderSurfaceClaim[]>
-  hitTest(context: HitTestContext): Promise<ContextCandidate[]>
+  getSurfaceClaims(context: SurfaceClaimContext): Promise<readonly ProviderSurfaceClaim[]>
+  hitTest(context: HitTestContext): Promise<readonly ContextCandidate[]>
+  materialize?(context: MaterializeContext): Promise<ProviderState>
   frame?(context: FrameContext): Promise<ProviderFrame>
-  track(context: TrackContext): Promise<ObjectTrack>
-  export(context: ProviderExportContext): Promise<ProviderExportResult>
+  track?(context: TrackContext): Promise<ObjectTrack>
+  export?(context: ProviderExportContext): Promise<ProviderExportResult>
+}
+
+// ---------------------------------------------------------------------------
+// What Core reports upward — the editor's side of the same frame
+// ---------------------------------------------------------------------------
+
+/** What Core reports about one provider, per frame (GAP 1). */
+export interface ProviderFrameStatus {
+  providerId: string
+  name: string
+  state: 'ok' | 'declined' | 'timeout' | 'error' | 'incompatible'
+  coverage: TemporalCoverage
+  errorMs: number
+  candidates: number
+  truncated: boolean
+  /** Wall time the provider took to answer, for the execution log. */
+  elapsedMs: number
+}
+
+/**
+ * ONE CAPTURED DISPLAY'S SLICE OF A RESOLVED FRAME.
+ *
+ * Core maps every provider's rects into the display's snapshot pixel space here
+ * (SPEC §8.2 / §11.3), because that is the annotation coordinate space and the
+ * editor must never do that conversion itself — the mapping is Core's, and it is
+ * the same for every provider.
+ */
+export interface ContextDisplayFrame {
+  display: number
+  width: number
+  height: number
+  /** z ascending, 0 = top-most, already clipped to this display's snapshot. */
+  surfaces: readonly SurfaceInfo[]
+  candidates: readonly ContextCandidate[]
+  coverage: readonly SurfaceCoverage[]
+}
+
+/**
+ * What the editor gets for one scrub position: the restored surface stack plus
+ * every provider's candidates, per display. Small enough to push (the reference
+ * capture's is 451 candidates over 2 displays), and indexed locally so hovering
+ * costs nothing per frame.
+ */
+export interface ContextFrame {
+  sessionId: string
+  protocolVersion: string
+  requestedTimeMs: number
+  accuracy: TemporalAccuracy
+  displays: readonly ContextDisplayFrame[]
+  providers: readonly ProviderFrameStatus[]
+  /** The claims that decided who was asked, kept for the editor's arbitration. */
+  claims: readonly ProviderSurfaceClaim[]
+  /**
+   * A provider has not answered yet and a replacement frame WILL follow. The
+   * editor paints what it has rather than waiting — late candidates update the
+   * list asynchronously (GOAL: "a slow provider must never hold the editor
+   * shut").
+   */
+  pending: boolean
+  /**
+   * The observation was ATTEMPTED and produced nothing usable, and none is
+   * coming (GOAL "Silence is not absence"). False both when there are candidates
+   * AND when they are still on their way; never true for a pack that simply
+   * never had object data, because nothing was dropped there.
+   */
+  dropped: boolean
 }
 
 // ---------------------------------------------------------------------------

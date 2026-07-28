@@ -2,24 +2,30 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../shared/ipc'
 import type {
+  ContextFrameRequest,
   EditorAnnotationAddedPayload,
   EditorExportPayload,
   EditorInitPayload,
-  EditorUiaObjectsPayload,
 } from '../shared/ipc'
+import type { ContextFrame } from '../shared/context/protocol'
 import type { EditorWindowMode } from '../shared/types'
 
 contextBridge.exposeInMainWorld('editorBridge', {
   onInit(cb: (payload: EditorInitPayload) => void): void {
     ipcRenderer.on(IPC.editorInit, (_event, payload: EditorInitPayload) => cb(payload))
   },
-  // Static object picking (GOAL): the capture-instant object dump, delivered
-  // LATE. The dump is budgeted and killed independently of the editor window, so
-  // on a slow machine it settles a few hundred ms after the editor is on screen;
-  // without this bridge that payload would be dropped and picking would stay
-  // dead for the whole session (the editor opens with empty lists).
-  onUiaObjects(cb: (payload: EditorUiaObjectsPayload) => void): void {
-    ipcRenderer.on(IPC.editorUiaObjects, (_event, payload: EditorUiaObjectsPayload) => cb(payload))
+  // OBJECT PICKING FOLLOWS TIME (#66): the candidate set at one scrub position.
+  // Asked when the scrub SETTLES, never per pointer move — the editor indexes
+  // the answer and hovers over its own index, which is what keeps hovering free.
+  requestContextFrame(request: ContextFrameRequest): Promise<ContextFrame | null> {
+    return ipcRenderer.invoke(IPC.contextRequestFrame, request) as Promise<ContextFrame | null>
+  },
+  // A frame Core pushed on its own: a provider that answered late, or the
+  // capture-instant observation settling after the editor opened. Without this
+  // bridge that answer would be dropped and picking would stay dead for the
+  // session.
+  onContextFrame(cb: (frame: ContextFrame) => void): void {
+    ipcRenderer.on(IPC.contextFrame, (_event, frame: ContextFrame) => cb(frame))
   },
   export(payload: EditorExportPayload): void {
     ipcRenderer.send(IPC.editorExport, payload)

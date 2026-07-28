@@ -392,6 +392,120 @@ check(
   }),
 )
 
+// 7. ORDINARY TITLE CHURN MUST NOT PERMANENTLY DEGRADE THE RING.
+//
+//    Everything above this point moves RECTANGLES and keeps titles constant,
+//    which is why none of it caught the following: the identity table is
+//    append-only, so a window that retitles once a second — a downloading
+//    browser ("37% of 1.2 GB"), a media player, a terminal progress line —
+//    added a table entry per second forever. That table was charged against the
+//    512 KB SAMPLE ceiling, and every lever the governor has moves sample bytes
+//    and cannot free one byte of it, so the loop could only ratchet: measured
+//    1,551 KB, sampling collapsed 10 Hz -> ~1 Hz, and it never came back after
+//    the churn stopped because the recovery gate tested the same inflated
+//    number.
+//
+//    Modelled on what the runtime actually does (runtime.ts): sample at 10 Hz,
+//    prune once a second to now - retention. Pruning is what makes the strings
+//    collectable, so a harness that never prunes cannot see the fix either.
+const CHURN_RETENTION_MS = 35_000
+const CHURN_HZ = 10
+
+function churnRing(seconds, { retitle }) {
+  const ring = new SurfaceTimeline()
+  const samples = seconds * CHURN_HZ
+  for (let i = 0; i < samples; i += 1) {
+    const timeMs = i * (1000 / CHURN_HZ)
+    const second = Math.floor(timeMs / 1000)
+    ring.append({
+      timeMs,
+      windows: Array.from({ length: stressWindows }, (_, w) => ({
+        hwnd: String(1000 + w),
+        ownerHwnd: '0',
+        processId: 100 + w,
+        zOrder: w,
+        // Geometry is STILL, so the only thing growing is identity. That is the
+        // isolation the old bench never had: any degradation seen here is
+        // caused by titles and by nothing else.
+        bounds: { x: w * 100, y: w * 50, width: 400, height: 300 },
+        clientBounds: { x: w * 100, y: w * 50, width: 390, height: 280 },
+        visible: true,
+        minimized: false,
+        foreground: w === 0,
+        cloaked: false,
+        // ONE window retitles once a second. Not all 24 — the report was a
+        // single downloading browser, and the fix has to hold for that.
+        windowTitle: retitle && w === 0 ? `Downloading ${second} of 4096 MB` : `window ${w}`,
+        className: `Class${w}`,
+        executableName: `app${w}.exe`,
+      })),
+    })
+    // The runtime prunes on a 1 Hz maintenance timer; so does this.
+    if (i % CHURN_HZ === 0) ring.prune(timeMs - CHURN_RETENTION_MS)
+  }
+  return ring
+}
+
+// 7a. Ten minutes of churn. The ring holds 35 s, so ~565 of the 600 titles are
+//     unreachable from any live record and must not still be charged for.
+const churned = churnRing(600, { retitle: true }).stats()
+const quiet = churnRing(600, { retitle: false }).stats()
+check(
+  `ten minutes of one window retitling once a second stays inside the ceiling ` +
+    `(${(churned.bytes / 1024).toFixed(0)} KB total, of which identity ` +
+    `${(churned.identityBytes / 1024).toFixed(0)} KB)`,
+  churned.bytes <= 512 * 1024,
+  `${churned.bytes} bytes, identity ${churned.identityBytes}`,
+)
+check(
+  `and the identity table is bounded by what is reachable, not by how long the ` +
+    `app ran (${(churned.identityBytes / 1024).toFixed(1)} KB churning vs ` +
+    `${(quiet.identityBytes / 1024).toFixed(1)} KB idle)`,
+  churned.identityBytes <= 64 * 1024,
+  `${churned.identityBytes} bytes after 600 retitles`,
+)
+check(
+  'title churn alone never coarsens the sampling rate',
+  churned.stride === 1,
+  `stride ${churned.stride}, degraded ${churned.degradedSamples}, dropped ${churned.droppedSamples}`,
+)
+
+// 7b. THE RECOVERY, which is the half that was permanent. Churn, then stop, and
+//     the ring must come back to full resolution rather than staying coarse for
+//     the rest of the run.
+const recovering = churnRing(300, { retitle: true })
+const during = recovering.stats()
+for (let i = 0; i < 300 * CHURN_HZ; i += 1) {
+  const timeMs = 300_000 + i * (1000 / CHURN_HZ)
+  recovering.append({
+    timeMs,
+    windows: Array.from({ length: stressWindows }, (_, w) => ({
+      hwnd: String(1000 + w),
+      ownerHwnd: '0',
+      processId: 100 + w,
+      zOrder: w,
+      bounds: { x: w * 100, y: w * 50, width: 400, height: 300 },
+      clientBounds: { x: w * 100, y: w * 50, width: 390, height: 280 },
+      visible: true,
+      minimized: false,
+      foreground: w === 0,
+      cloaked: false,
+      windowTitle: `window ${w}`,
+      className: `Class${w}`,
+      executableName: `app${w}.exe`,
+    })),
+  })
+  if (i % CHURN_HZ === 0) recovering.prune(timeMs - CHURN_RETENTION_MS)
+}
+const after = recovering.stats()
+check(
+  `the ring recovers full resolution once the churn stops ` +
+    `(stride ${during.stride} during -> ${after.stride} after, identity ` +
+    `${(during.identityBytes / 1024).toFixed(1)} KB -> ${(after.identityBytes / 1024).toFixed(1)} KB)`,
+  after.stride === 1,
+  `stride ${after.stride} after 5 minutes of quiet`,
+)
+
 // ---------------------------------------------------------------------------
 // The numbers
 // ---------------------------------------------------------------------------

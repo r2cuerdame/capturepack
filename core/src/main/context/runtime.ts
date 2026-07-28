@@ -80,7 +80,10 @@ export function startContextRuntime(options: ContextRuntimeOptions): void {
   const clock = new SessionClock(retentionMs)
   const timeline = new SurfaceTimeline()
   const lane = new SurfaceLane(clock, timeline)
-  const providers = new ProviderHost(clock)
+  // The real log sink. `ProviderHost` takes it by injection rather than
+  // importing it, so the same class can run in the Electron-free harnesses —
+  // this is the Electron side, so it passes the real thing.
+  const providers = new ProviderHost(clock, { info: logInfo, warn: logWarn })
   const maintenance = setInterval(() => {
     void providers.tick()
     void providers.prune(clock.bufferStartMs())
