@@ -693,6 +693,10 @@ simultaneously is the default** — one Ctrl+Alt+C, N displays in the pack.
   moves through time as one moment.
   - The focused display (cursor at trigger) opens centered and at the largest scale;
     the others sit beside it. Zoom/pan applies to the whole board.
+  - **No display picker in the top bar.** The board already shows every display, so a
+    row of monitor buttons is redundant chrome in the one place that must stay
+    uncluttered. Framing a single display stays available on the keyboard (`1`..`9`,
+    `0` to fit) and is discoverable through the help tooltip, not a toolbar.
   - Annotations stay in their own display's pixel space; `annotations.json` gains an
     optional `display` index (absent = the focused display, so single-monitor packs are
     unchanged).
@@ -983,6 +987,24 @@ Time-based movement, independent of the video's FPS:
 - Wheel direction: up = past, down = future — with an **invert option** for users with
   video-editor habits.
 - Scrubbing while playing: pause instantly and scrub to that point.
+- **The trim range is the boundary.** Once in/out points are set, scrubbing, playback and
+  the timeline drag all stay inside them — the position clamps at the handles instead of
+  wandering into footage that will not be saved. Moving a handle re-clamps the current
+  position. (Before a trim is set the whole buffer is in range, so nothing changes for
+  the common case.)
+
+### Editor Chrome
+
+The editor's own UI must read as an editor, not a settings screen:
+
+- **Icons, not words**, for the recurring controls (window mode, help, save), each with a
+  tooltip carrying its shortcut. Text stays where it is content: the title, the note, and
+  the annotation itself.
+- **One `?` help affordance** in the top bar opens a compact shortcut sheet — capture
+  interactions (left click, right drag, Shift), time (wheel, Shift/Alt wheel, I/O trim,
+  play), view (Ctrl+wheel, Space drag, `1`..`9`, `0`), and edit (Ctrl+Z, Del, Enter, Esc).
+  It replaces the long inline key hint, which was a wall of text in the one place that
+  must stay quiet.
 
 ### Replay Trim
 
