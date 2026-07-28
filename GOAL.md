@@ -169,8 +169,22 @@ Every fix or feature updates ALL public surfaces in the same pass — none may d
   user-reported pain links back to the usage journal.
 - **README** — reflects the current released behavior.
 - **Landing page** — capturepack.dev stays truthful (roadmap Now/Next, download state).
-- **Release notes** — every tag ships human-readable notes on the GitHub Release
-  (what changed, what was fixed, upgrade impact).
+- **Release notes** — every tag ships notes on the GitHub Release, and they lead with a
+  **scannable list, not an essay**. Three sections, in this order, each entry one line
+  carrying its issue number:
+
+  ```
+  ## Added        — new capability that was not there before        - Something new (#12)
+  ## Fixed        — it was broken and now is not                    - Something broken (#43)
+  ## Improved     — it worked, and now works better                 - Something better (#58)
+  ```
+
+  Omit a section that has nothing in it. A reader deciding whether to update should get the
+  answer in fifteen seconds, and **the issue is where the depth lives** — cause, measurement,
+  rejected alternatives, evidence. Notes that re-tell the whole investigation duplicate the
+  issue and bury the one line the reader came for. Anything that changes behaviour people
+  rely on, or that they must do something about, gets its own short paragraph BELOW the
+  lists; nothing else does.
 - **MCP interface** — tool descriptions, responses, and docs/MCP.md always match the
   current format and behavior; a format change (annotation model, pack layout, naming)
   is not done until the MCP tools speak it.
