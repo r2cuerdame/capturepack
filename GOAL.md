@@ -210,6 +210,26 @@ After a month, the journal itself becomes the best roadmap.
 - 30-second replay buffer
 - Screenshot
 
+**Capture must stay cheap.** CapturePack runs all day; a resident tool that eats a core is
+a tool people quit. The buffer currently encodes VP9 in software, twice over (two rotating
+recorders) and once per display — the worst possible combination on a 4K desktop.
+
+- **Use the GPU encoder when the machine has one.** On Windows that means the platform
+  H.264 encoder (Media Foundation, which is what NVENC/QuickSync/AMF sit behind — not
+  CUDA directly). Probe the hardware-friendly recorder types first and fall back in
+  order: H.264 → VP8 → VP9. The pack format already allows an mp4 replay, so a hardware
+  H.264 stream is a legal replay, not a workaround.
+- **Do not encode more pixels than the replay needs.** Cap the recorded stream's long edge
+  (setting: replay quality, default ~1920) while the SNAPSHOT stays at native resolution —
+  annotation precision comes from the snapshot, not the video. On a 4K screen this alone
+  removes most of the encode cost.
+- **Keep the concurrent encoder count as low as the ring buffer allows** — two per display
+  is the price of the rolling window; anything finer must justify its CPU.
+- The annotated-replay render and the exact-length cut ride the same encoder, so both get
+  cheaper for free.
+- Measure before and after (CPU % idle-recording, 1 display and N displays) and record the
+  numbers; "feels faster" is not a result.
+
 **The replay is exactly the configured length.** The ring buffer runs rotating recorders,
 so the raw footage on hand is always *at least* the configured window and usually more.
 That surplus must never reach the pack: what gets saved is exactly the last N seconds
