@@ -24,8 +24,15 @@ import type {
 import { CONTEXT_PROTOCOL_VERSION } from '../../shared/context/protocol'
 import { SurfaceTimeline, surfaceStackAt } from '../../shared/context/surfaces'
 import type { TimelineKind } from '../../shared/context/surfaces'
-import { ContextBuffer, mintSurfaceIds, surfaceSamplesOf, windowCandidatesOf } from './buffer'
+import {
+  ContextBuffer,
+  mintSurfaceIds,
+  surfaceIdOf,
+  surfaceSamplesOf,
+  windowCandidatesOf,
+} from './buffer'
 import type { ContextObservation } from './buffer'
+import type { ObjectTrackResult, ObjectTrackSample } from '../../shared/ipc'
 import { SessionClock } from './clock'
 // THE SAME REGISTRY THE RECORDING SIDE USES (#64). Not a second, smaller one
 // for the editor: a provider that is budgeted, isolated, clock-corrected and
@@ -148,6 +155,57 @@ export class ContextSession {
 
   markDropped(dropped: boolean): void {
     this.dropped = dropped
+  }
+
+  /**
+   * WHERE ONE OBJECT WAS, FOR AS LONG AS IT WAS THERE (#86).
+   *
+   * A box that follows its object needs two things this session already holds:
+   * a stable id per surface (`mintSurfaceIds`, keyed on identity and ordinal, so
+   * the same window is the same id in every observation), and the observations
+   * themselves. So a track is a filter over what is already here rather than a
+   * second path back to the ring — one source, one answer.
+   *
+   * Sampling STOPS at the first absence rather than skipping it. A window that
+   * vanishes and comes back is two appearances; joining them would slide a box
+   * across a stretch of replay where the thing it points at was not on screen.
+   * That stop is also what clamps a picked box's lifetime to its object (#77):
+   * a box outliving its object points at whatever moved in behind it, and no
+   * reader can tell that from a box that is still right.
+   */
+  trackOf(surfaceId: string, startMs: number, endMs: number): ObjectTrackResult | null {
+    const from = Math.min(startMs, endMs)
+    const to = Math.max(startMs, endMs)
+    const samples: ObjectTrackSample[] = []
+    let display: number | null = null
+    let endedAtMs: number | null = null
+
+    for (const observation of this.observations) {
+      if (observation.tMs < from) continue
+      if (observation.tMs > to) break
+      const window = observation.windows.find(
+        (w) => surfaceIdOf(this.ids, observation, w) === surfaceId,
+      )
+      if (window === undefined) {
+        // The observation exists and the surface is not in it. That is an
+        // absence, not a gap in the record.
+        if (samples.length > 0) endedAtMs = observation.tMs
+        break
+      }
+      // An annotation belongs to exactly one display (SPEC 8.8) and its numbers
+      // are that display's snapshot pixels. A window dragged onto another screen
+      // changes which image its coordinates mean, so the track ends where it
+      // leaves rather than silently changing what its numbers refer to.
+      if (display === null) display = window.display
+      else if (window.display !== display) {
+        endedAtMs = observation.tMs
+        break
+      }
+      samples.push({ tMs: observation.tMs, ...window.bounds })
+    }
+
+    if (display === null || samples.length === 0) return null
+    return { display, samples, endedAtMs }
   }
 
   get providerIds(): readonly string[] {

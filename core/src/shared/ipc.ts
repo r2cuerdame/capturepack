@@ -27,6 +27,10 @@ export const IPC = {
   // session is gone. Asked whenever the SCRUB SETTLES on a new position — never
   // per pointer move, which is why hovering still costs nothing per frame.
   contextRequestFrame: 'context:request-frame',
+  // editor -> main: where ONE object was, for as long as it was there (#86).
+  // Asked once when a box is picked, not per frame: the answer is a path the
+  // renderer interpolates over, so following costs nothing while scrubbing.
+  contextRequestTrack: 'context:request-track',
   // main -> editor window: a REPLACEMENT frame, pushed rather than requested.
   //
   // Two things produce one: a provider that answered after its budget expired
@@ -482,6 +486,44 @@ export interface ContextFrameRequest {
   // converts to the session clock, because a provider guessing that mapping is
   // wrong in a way nobody notices for months (design §3.1).
   timeMs: number
+}
+
+/** One rectangle on one display's snapshot, at one moment of the pack clock. */
+export interface ObjectTrackSample {
+  tMs: number
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+/**
+ * An object's path through the replay (#86) — what lets a box FOLLOW the thing
+ * it points at instead of sitting where that thing used to be.
+ *
+ * Samples are ascending on the pack clock and are pixels in `display`'s own
+ * snapshot, the same space an annotation's `bounds` is in (SPEC §8.2, §8.8).
+ * Between two samples a reader interpolates; outside them the object was not
+ * being recorded, and a box has nothing to follow.
+ */
+export interface ObjectTrackResult {
+  display: number
+  samples: ObjectTrackSample[]
+  /**
+   * When the object stopped being there, or null if it lasted the whole range.
+   *
+   * A box may not outlive this (#77): past it the box would point at whatever
+   * moved in behind, and nothing in the pack would say so.
+   */
+  endedAtMs: number | null
+}
+
+/** IPC.contextRequestTrack — the editor asking where one picked object went. */
+export interface ObjectTrackRequest {
+  sessionId: string
+  surfaceId: string
+  startMs: number
+  endMs: number
 }
 
 export interface EditorAnnotationAddedPayload {
