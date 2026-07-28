@@ -419,6 +419,19 @@ async function runFlow(settings: Settings): Promise<void> {
   // FOCUSED one. "cursor"/fixed: that display alone. Snapshot, replay, editor,
   // and annotations all target the focused display.
   const frozen = await freezeDisplays(settings)
+  // WHEN THE REPLAY ACTUALLY ENDS, which is not when the hotkey was pressed.
+  //
+  // `replay.durationMs` is measured in the RENDERER at the moment it stops the
+  // recorder and assembles the blob — after the trigger, after the IPC round
+  // trip, after however long muxing thirty seconds of H.264 takes. So the file
+  // spans [thisInstant - durationMs, thisInstant], and anchoring the pack clock
+  // to `triggerAt` instead shifts every replay time by the assembly cost.
+  //
+  // Nothing noticed while the pack clock only had to agree with itself. It
+  // stopped being invisible the moment surfaces recorded on the wall clock were
+  // compared against video frames: every window sat where it had been a moment
+  // earlier, uniformly, at every scrub position.
+  const replayEndAt = Date.now()
   const display = frozen.focused
   const snap = { png: display.snapshotPng, width: display.width, height: display.height }
   const replay =
@@ -436,7 +449,8 @@ async function runFlow(settings: Settings): Promise<void> {
   // trim cuts it; a just-started buffer stays at its honest shorter duration.
   const replayDurationMs = Math.min(rawReplayDurationMs, settings.replaySeconds * 1000)
   const replaySourceStartMs = rawReplayDurationMs - replayDurationMs
-  const t0Ms = triggerAt - replayDurationMs
+  // Anchored to the replay's own end, not the trigger — see `replayEndAt`.
+  const t0Ms = replayEndAt - replayDurationMs
   // PINS THE SURFACE TIMELINE for exactly the range this pack covers (#64
   // `onFreeze`, #65). From here the editor can ask "which window was where at
   // pack time T" for any T in the replay, and pruning may not touch that range
@@ -448,7 +462,11 @@ async function runFlow(settings: Settings): Promise<void> {
   // configured length, and a range that claimed otherwise would put every pack
   // time a few seconds off. The delay costs nothing — retention keeps the
   // replay length plus a slack, and the prune runs at 1 Hz.
-  const contextFreezeId = freezeContext(triggerAt, replayDurationMs)
+  const contextFreezeId = freezeContext(replayEndAt, replayDurationMs)
+  logInfo(
+    `[context] pack clock: replay ends ${String(replayEndAt - triggerAt)} ms after the trigger, ` +
+      `${String(replayDurationMs)} ms long (raw ${String(rawReplayDurationMs)} ms)`,
+  )
   logContextCost()
   // media.displays[] exists only when the capture actually covered more than
   // one display (SPEC §5.3): a single-display pack stays exactly what 0.1.2
@@ -482,7 +500,7 @@ async function runFlow(settings: Settings): Promise<void> {
     // declaration and clock together after the exact background cut.
     replayDurationMs: rawReplayDurationMs,
     timeline: {
-      t0: new Date(triggerAt - rawReplayDurationMs).toISOString(),
+      t0: new Date(replayEndAt - rawReplayDurationMs).toISOString(),
       events: events.map((e) =>
         e.type === 'core.capture.triggered' ? { ...e, t_ms: rawReplayDurationMs } : e,
       ),
