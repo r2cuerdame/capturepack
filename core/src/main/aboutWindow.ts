@@ -13,7 +13,8 @@ import * as path from 'node:path'
 import { IPC } from '../shared/ipc'
 import type { AboutInfoResult, AboutLinkKey } from '../shared/ipc'
 import type { Settings } from '../shared/types'
-import { previousRun, previousRunVanished } from './lifecycle'
+import { previousRun } from './lifecycle'
+import type { PreviousRunStatus } from './lifecycle'
 import { uiLanguage, uiT } from './locale'
 import { downloadedVersion, restartAndUpdate, updaterState } from './updater'
 import { openWelcomeWindow } from './welcomeWindow'
@@ -137,12 +138,31 @@ function aboutInfo(live: Settings): AboutInfoResult {
     lastRun:
       previous === null
         ? { status: 'none', endedAt: null }
-        : {
-            // The SAME rule the startup balloon uses (previousRunVanished), so
-            // the two surfaces can never tell the user different stories.
-            status: previousRunVanished() ? 'unclean' : 'clean',
-            endedAt: previous.record.lastAliveAt,
-          },
+        : { status: lastRunStatus(previous.status), endedAt: previous.record.lastAliveAt },
+  }
+}
+
+/**
+ * The SAME verdict lifecycle computes for the log and the startup balloon, just
+ * named for the wire — so no two surfaces can tell the user different stories.
+ *
+ * It used to be `previousRunVanished() ? 'unclean' : 'clean'`, which folded
+ * 'replaced' and 'faulted' into "closed normally". Neither of those runs closed
+ * normally: one was cut short by an installer with nobody watching how it ended
+ * (and a genuine crash minutes before an update landed in the same bucket), and
+ * the other kept going after errors nobody handled. Reporting either as a clean
+ * shutdown is the exact failure this release is about.
+ */
+function lastRunStatus(status: PreviousRunStatus): AboutInfoResult['lastRun']['status'] {
+  switch (status) {
+    case 'vanished':
+      return 'unclean'
+    case 'replaced':
+      return 'unknown'
+    case 'faulted':
+      return 'faulted'
+    case 'clean':
+      return 'clean'
   }
 }
 

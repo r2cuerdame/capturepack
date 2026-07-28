@@ -19,6 +19,13 @@
 //
 // Writes are SYNCHRONOUS on purpose. The lines that matter most are the last
 // ones before a crash, and an async queue is exactly what loses them.
+//
+// REDACTION RULE. ERROR lines are redacted WHOLE — message and exception alike.
+// Several callers interpolate text they did not write into the message (a
+// renderer's failure detail, an OS error string), and a guarantee that only
+// covers one argument is not a guarantee. INFO/WARN lines are composed by this
+// app from values it chose, and deliberately keep the user's OWN output paths
+// (issue #60: "where did my pack go" is a question the log should answer).
 import { app, crashReporter } from 'electron'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
@@ -57,12 +64,27 @@ function previousLogFilePath(): string {
 }
 
 /**
+ * What the caller wants told about an error nobody handled.
+ *
+ * The run marker (lifecycle.ts) is the other half of the record and this module
+ * must not reach into it directly — log.ts is what lifecycle.ts writes THROUGH,
+ * so importing it back would be a cycle. index.ts owns the wiring instead.
+ */
+export interface ForensicsHooks {
+  /**
+   * An uncaught exception or unhandled rejection happened in this run. Called
+   * once per fault, with a one-line summary already redacted for the marker.
+   */
+  onUnhandledError: (summary: string) => void
+}
+
+/**
  * Starts the crash reporter and opens the log file. Call this FIRST, before
  * app.whenReady(): Crashpad has to be installed before the processes it is
  * meant to catch exist, and a startup that throws must already have somewhere
  * to say so.
  */
-export function initForensics(): void {
+export function initForensics(hooks: ForensicsHooks): void {
   try {
     // No submitURL: with uploadToServer false nothing is ever transmitted, and
     // the dumps land in app.getPath('crashDumps') — the directory issue #60
@@ -78,23 +100,34 @@ export function initForensics(): void {
       `${process.platform} ${process.arch}, pid ${process.pid}`,
   )
   logInfo(`[app] crash dumps: ${redactHome(app.getPath('crashDumps'))}`)
-  installProcessHandlers()
+  installProcessHandlers(hooks)
 }
 
 /**
  * Catches what would otherwise be silence (issue #60, item 3).
  *
- * An uncaught exception does NOT quit the app here: CapturePack is a resident
- * buffer, and a stray error in one flow is a far smaller loss than a tray app
- * that disappears — which is the very failure #61 is about. It is recorded
- * instead, in the one place that survives the process.
+ * THE DECISION, stated plainly because installing this handler replaces Node's
+ * default of "print and exit 1": an uncaught exception does NOT end the run.
+ * CapturePack is a resident buffer, and a stray error in one flow is a far
+ * smaller loss than a tray app that disappears — which is the very failure #61
+ * is about, and the reason the product exists at all.
+ *
+ * The price of that choice is that the run continues in a state nobody
+ * designed, so it must never be able to pass itself off as healthy. Every fault
+ * is therefore ALSO written into the run marker (lifecycle.ts): will-quit still
+ * records a real exit, but the next start reads the fault count with it and
+ * reports the run as "closed after unhandled errors" rather than "closed
+ * normally". Swallowing the error and then certifying the run clean is the
+ * dishonesty this whole feature exists to remove.
  */
-function installProcessHandlers(): void {
+function installProcessHandlers(hooks: ForensicsHooks): void {
   process.on('uncaughtException', (err) => {
     logError('[app] uncaught exception', err)
+    hooks.onUnhandledError(`uncaught exception: ${redactHome(oneLine(describeError(err)))}`)
   })
   process.on('unhandledRejection', (reason) => {
     logError('[app] unhandled rejection', reason)
+    hooks.onUnhandledError(`unhandled rejection: ${redactHome(oneLine(describeError(reason)))}`)
   })
   // A vanished renderer is a recorder failure when it was a recorder (see
   // capture.ts, which owns the state transition); either way it is now on the
@@ -149,19 +182,41 @@ export function logWarn(message: string): void {
 
 /**
  * `err` is optional so the same call reads well for both "this failed, here is
- * the exception" and "this failed, and the message already says how". Its text
- * (and its stack) is redacted — an unhandled error is exactly the line a user
- * pastes into an issue.
+ * the exception" and "this failed, and the message already says how".
+ *
+ * The WHOLE line is redacted, message included. Redacting only `err` made the
+ * guarantee per-argument when what a user pastes into an issue is a LINE, and
+ * several callers build the message out of text they did not write — capture.ts
+ * embeds a recorder renderer's failure detail, which routinely carries a
+ * getDisplayMedia error naming a path. See the redaction rule at the top.
  */
 export function logError(message: string, err?: unknown): void {
-  const detail = err === undefined ? '' : ` ${redactHome(describeError(err))}`
-  console.error(message + detail)
-  write('ERROR', message + detail)
+  const detail = err === undefined ? '' : ` ${describeError(err)}`
+  const line = redactHome(message + detail)
+  console.error(line)
+  write('ERROR', line)
 }
 
 function describeError(err: unknown): string {
   if (err instanceof Error) return err.stack ?? `${err.name}: ${err.message}`
   return String(err)
+}
+
+// A marker field, not a log line: the stack is already in main.log, and the
+// marker only has to carry enough to say WHAT went wrong on the next start.
+function oneLine(text: string): string {
+  const first = text.split('\n', 1)[0] ?? ''
+  return first.length > 200 ? `${first.slice(0, 200)}…` : first
+}
+
+// Size of an existing file, or null when it is not there (or unreadable) —
+// which is a different answer from "zero bytes" everywhere it is used here.
+function fileSize(file: string): number | null {
+  try {
+    return fs.statSync(file).size
+  } catch {
+    return null
+  }
 }
 
 function write(level: LogLevel, message: string): void {
@@ -171,15 +226,29 @@ function write(level: LogLevel, message: string): void {
     const file = logFilePath()
     if (currentBytes === null) {
       fs.mkdirSync(logsDir(), { recursive: true })
-      currentBytes = fs.existsSync(file) ? fs.statSync(file).size : 0
+      currentBytes = fileSize(file) ?? 0
     }
     const size = Buffer.byteLength(line)
-    if (currentBytes + size > MAX_LOG_BYTES && fs.existsSync(file)) {
-      // ONE previous generation is kept: a rotation that happened to land right
-      // after the interesting lines must not be what erases them.
-      fs.rmSync(previousLogFilePath(), { force: true })
-      fs.renameSync(file, previousLogFilePath())
-      currentBytes = 0
+    if (currentBytes + size > MAX_LOG_BYTES) {
+      // The counter is an optimisation, so at the ONE moment it decides
+      // something destructive, check it against the file. main.log can shrink
+      // under us — a user clearing logs mid-run, a cleanup tool, an antivirus
+      // quarantine — and the tracked size then belongs to a file that no longer
+      // exists. Acting on it rotated a nearly empty log over main.1.log and
+      // destroyed the one kept generation: exactly the lines someone deleted
+      // main.log to preserve room for. One stat per megabyte, never per line.
+      const actual = fileSize(file)
+      if (actual === null) {
+        currentBytes = 0
+      } else if (actual + size > MAX_LOG_BYTES) {
+        // ONE previous generation is kept: a rotation that happened to land right
+        // after the interesting lines must not be what erases them.
+        fs.rmSync(previousLogFilePath(), { force: true })
+        fs.renameSync(file, previousLogFilePath())
+        currentBytes = 0
+      } else {
+        currentBytes = actual
+      }
     }
     fs.appendFileSync(file, line)
     currentBytes += size

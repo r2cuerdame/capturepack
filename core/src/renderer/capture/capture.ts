@@ -208,11 +208,19 @@ function checkFrameEvidence(): void {
     // believes, a recorder that is genuinely running says so again within
     // EVIDENCE_STALL_MS, and main can flip back without stopping it to check.
     // The cost is one small IPC message per display every twelve seconds.
-    window.captureBridge.sendFrames({
-      displayId: startPayload?.displayId ?? '',
-      bytes,
-      frames: frames ?? 0,
-    })
+    //
+    // Test path (--simulate-slow-replay): withheld, so main never learns from
+    // the cheap channel what this recorder can prove. Everything else about the
+    // recorder — the slots, the rotations, the ring buffer — stays real, which
+    // is exactly the state #43 describes and exactly what recovery must not
+    // destroy.
+    if (startPayload?.simulateSlowReplayMs === undefined) {
+      window.captureBridge.sendFrames({
+        displayId: startPayload?.displayId ?? '',
+        bytes,
+        frames: frames ?? 0,
+      })
+    }
     armEvidenceCheck(EVIDENCE_STALL_MS)
     return
   }
@@ -432,6 +440,19 @@ async function handleReplayRequest(requestId: string): Promise<void> {
   startSlot(slot) // restart before assembling so buffering never pauses
   restaggerSurvivor(slots[slot.index === 0 ? 1 : 0])
   const buffer = await new Blob(chunks, { type: format.mimeType }).arrayBuffer()
+  // Test path (--simulate-slow-replay): the slot really was stopped and really
+  // was restarted — the cost of the request has been paid in full — and only
+  // the ANSWER is late, the way it is on a machine muxing thirty seconds of MP4
+  // under load. Held after the assembly so the simulation cannot accidentally
+  // make the buffer look healthier than it is.
+  const slowReplayMs = startPayload?.simulateSlowReplayMs
+  if (slowReplayMs !== undefined) {
+    console.warn(
+      `[capture] display ${startPayload?.displayId ?? '?'}: --simulate-slow-replay — holding a ` +
+        `${buffer.byteLength}-byte / ${durationMs} ms replay for ${slowReplayMs} ms`,
+    )
+    await new Promise<void>((resolve) => window.setTimeout(resolve, slowReplayMs))
+  }
   // A container header with no frames in it is NOT a replay: handing those few
   // hundred bytes back would put an undecodable replay.mp4 in the pack and let
   // every reader believe a recording exists. Below the evidence bar the honest

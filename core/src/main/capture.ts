@@ -46,12 +46,20 @@ const RECORDER_PROBE_DELAY_MS = 10_000
 // The renderer never even got a stream: nothing will anchor the probe, so this
 // one runs from window creation.
 const RECORDER_STARTUP_PROBE_DELAY_MS = 12_000
-const RECORDER_RETRY_PROBE_DELAY_MS = 5_000
-const RECORDER_PROBE_TIMEOUT_MS = 3_000
+// Generous on purpose (issue #43). By the time main is waiting here, the
+// renderer has ALREADY stopped its older slot to answer — the footage is spent.
+// Giving up at three seconds bought the cost without the answer, and on the
+// loaded machine #43 describes (thirty seconds of MP4 to mux, assemble and hand
+// across an IPC boundary) three seconds was routinely too little. Waiting is
+// free; abandoning the reply is not.
+const RECORDER_PROBE_TIMEOUT_MS = 10_000
 // Same bar the renderer applies to its own output (renderer/capture/capture.ts
 // EVIDENCE_MIN_BYTES): a container header carries no frames, so bytes alone
 // were never proof that anything was recorded.
 const RECORDER_EVIDENCE_MIN_BYTES = 4096
+// Bare `--simulate-slow-replay` with no value: long enough that main gives up
+// waiting, which is the harder half of the test.
+const SIMULATED_SLOW_REPLAY_DEFAULT_MS = 15_000
 
 // --- The state has to keep AGREEING with reality (issue #43)
 //
@@ -76,16 +84,45 @@ const RECORDER_EVIDENCE_MIN_BYTES = 4096
 // re-create the very false negative this issue is about. Failures still arrive
 // the way they always did: capture:error, a dead renderer, a stream that ended,
 // or the outcome of a real capture.
+//
+// --- RECOVERY MUST NOT COST THE RECORDING (issue #43, and the reason it was
+// filed in the first place)
+//
+// Both of the watchdog's tools take something away from a running recorder:
+//
+//  - a PROBE is a replay request, and the renderer answers one by STOPPING its
+//    older MediaRecorder slot (renderer/capture/capture.ts handleReplayRequest).
+//    It restarts immediately, but the footage in that slot is gone and the
+//    1x..2x segment guarantee collapses until the stagger recovers.
+//  - a REBUILD destroys the recorder window, and the whole ring buffer with it.
+//
+// So the rules below are about what is allowed to authorise them:
+//
+//  1. A probe that TIMES OUT proves nothing. #43's own scenario is a probe that
+//     times out on a loaded machine while recording is perfectly fine; letting
+//     that condemn a display is how a wrong state used to appear, and — once a
+//     watchdog acts on the state — how the buffer would be thrown away on the
+//     strength of it. Only an ANSWER counts: real bytes prove recording, and an
+//     empty answer is real evidence too, because the renderer flushed its slot
+//     to produce it.
+//  2. A display that is provably RECORDING is never probed. Its heartbeat is
+//     the evidence, and it costs nothing.
+//  3. A window is only ever recreated when there is no buffer left to lose:
+//     the renderer is gone/crashed, or the display is in an evidence-backed
+//     'stopped'. This is exactly rebuild()'s own staleness rule, so the log can
+//     never claim a recreation that did not happen.
 const RECONCILE_INTERVAL_MS = 15_000
 // A display that is not recording gets this long to sort itself out (renderer
 // evidence, the backstop probe, the renderer's own one restart) before the
 // watchdog interferes.
 const RECOVERY_FIRST_DELAY_MS = 30_000
 const RECOVERY_MAX_DELAY_MS = 10 * 60_000
-// After this many probe-only recoveries, recreate the recorder WINDOW instead:
-// the renderer spends one restart per failure episode and then stops trying, so
-// a fresh renderer is the only thing left that can change the answer.
-const RECOVERY_PROBES_BEFORE_REBUILD = 2
+// A display that is STOPPED and whose window is still alive gets this many
+// probes before the window is recreated. One: the renderer spends a single
+// restart per failure episode, and a probe is how a restart that succeeded but
+// cannot prove itself (no delivered-frame counter on this runtime) gets to say
+// so BEFORE a rebuild throws away the buffer it just refilled.
+const RECOVERY_PROBES_BEFORE_REBUILD = 1
 
 export type { RecorderFailureReason }
 
@@ -119,6 +156,18 @@ const recorderProbeTimers = new Map<number, ReturnType<typeof setTimeout>>()
 // moment the display records again, so a later failure starts from the short
 // delay instead of inheriting a stale backoff.
 const recoveryAttempts = new Map<number, { attempts: number; nextAt: number }>()
+// display.id -> probes that came back without proving this recorder is
+// recording, since the last proof (or since its window was created). This — not
+// the watchdog's attempt counter — is what decides when a STOPPED display has
+// had its chance and the window may be recreated: a renderer that restarted
+// itself successfully but cannot prove it (no delivered-frame counter on this
+// runtime) gets to answer a probe before its buffer is thrown away.
+const probesSinceProof = new Map<number, number>()
+// Displays with a probe OUTSTANDING. The timer map above only covers a probe
+// that has not fired yet; once it has, main can be waiting up to
+// RECORDER_PROBE_TIMEOUT_MS for the answer, and a watchdog tick landing in that
+// window would stop the same recorder a second time.
+const probesInFlight = new Set<number>()
 let reconcileTimer: ReturnType<typeof setInterval> | undefined
 let wantedDisplayIds = new Set<number>()
 let publishedRecorderState: RecorderState = { status: 'starting' }
@@ -219,6 +268,34 @@ function simulateNoFrames(): boolean {
   return process.argv.includes('--simulate-no-frames')
 }
 
+/**
+ * `--simulate-slow-replay[=ms]` (dev/test only): the other half of the pair
+ * above. Every recorder runs for real and its ring buffer really does fill, but
+ * the renderer withholds its frame heartbeat and holds every replay answer back
+ * by `ms` — a machine under enough load that main cannot get a timely answer
+ * out of a recorder that is working perfectly.
+ *
+ * That is issue #43's own scenario, and the one thing no recovery path is
+ * allowed to mishandle: a probe that goes unanswered must not condemn the
+ * display, and nothing may destroy the recorder window (and the last 30
+ * seconds with it) on the strength of a verdict reached that way. The delay is
+ * settable so both sides of RECORDER_PROBE_TIMEOUT_MS can be exercised — a
+ * stall short enough to wait out has to end in "recording", one that is not has
+ * to end in no verdict rather than a lost buffer.
+ *
+ * Returns null when the flag is absent (every normal run).
+ */
+function simulateSlowReplayMs(): number | null {
+  const arg = process.argv.find(
+    (value) => value === '--simulate-slow-replay' || value.startsWith('--simulate-slow-replay='),
+  )
+  if (arg === undefined) return null
+  const raw = arg.startsWith('--simulate-slow-replay=')
+    ? Number(arg.slice('--simulate-slow-replay='.length))
+    : Number.NaN
+  return Number.isFinite(raw) && raw >= 0 ? raw : SIMULATED_SLOW_REPLAY_DEFAULT_MS
+}
+
 function clearRecorderProbe(displayId: number): void {
   const timer = recorderProbeTimers.get(displayId)
   if (timer !== undefined) clearTimeout(timer)
@@ -234,25 +311,78 @@ function scheduleRecorderProbe(displayId: number, win: BrowserWindow, delayMs: n
   recorderProbeTimers.set(displayId, timer)
 }
 
+/**
+ * The BACKSTOP: stop this display's older recorder slot, look at what comes
+ * out, and let it prove — or, only on real evidence, condemn — the recorder.
+ *
+ * It costs footage (see the recovery rules above), so it runs only while a
+ * display is not provably recording, and it is cleared the instant the renderer
+ * proves frames itself.
+ */
 async function probeRecorder(displayId: number, win: BrowserWindow): Promise<void> {
-  if (captureWindows.get(displayId) !== win || win.isDestroyed() || !wantedDisplayIds.has(displayId)) {
+  if (
+    captureWindows.get(displayId) !== win ||
+    win.isDestroyed() ||
+    !wantedDisplayIds.has(displayId) ||
+    probesInFlight.has(displayId)
+  ) {
     return
   }
-  const { replay: result } = await requestReplay(
-    win,
-    `recorder-state-${displayId}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    RECORDER_PROBE_TIMEOUT_MS,
-  )
+  probesInFlight.add(displayId)
+  let outcome: ReplayFetch
+  try {
+    outcome = await requestReplay(
+      win,
+      `recorder-state-${displayId}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      RECORDER_PROBE_TIMEOUT_MS,
+    )
+  } finally {
+    probesInFlight.delete(displayId)
+  }
+  const { replay: result, miss } = outcome
   if (captureWindows.get(displayId) !== win || !wantedDisplayIds.has(displayId)) return
+  probesSinceProof.set(displayId, (probesSinceProof.get(displayId) ?? 0) + 1)
   if (result !== null && result.buffer.byteLength >= RECORDER_EVIDENCE_MIN_BYTES) {
+    probesSinceProof.delete(displayId)
+    // The SIZE of the proof, on the record (issue #60). "The tray said it was
+    // recording" is the most disputed claim in every report so far, and this is
+    // the measurement behind it: how much footage this display's ring buffer
+    // actually handed over, at a named moment.
+    logInfo(
+      `[capture] display ${displayId}: recorder probe returned ${result.buffer.byteLength} bytes ` +
+        `of ${result.durationMs} ms footage — frames are flowing`,
+    )
     setDisplayRecorderState(displayId, { status: 'recording' })
+    return
+  }
+  // RULE 1: no answer is not an answer (issue #43). A timeout means main did
+  // not hear back inside RECORDER_PROBE_TIMEOUT_MS — from a renderer that may
+  // be busy assembling thirty seconds of MP4 on a loaded machine — and says
+  // nothing whatsoever about whether frames are flowing. Condemning on it
+  // produced the wrong state #43 was filed for, and a watchdog that acts on the
+  // state would then destroy a perfectly good ring buffer on the strength of
+  // it. The display keeps whatever status the evidence has actually earned.
+  //
+  // The price of this rule, stated so nobody mistakes it for an oversight: a
+  // display whose renderer answers NOTHING, ever, sits on 'starting…' instead
+  // of being named. That is the honest reading of no evidence, it is on the
+  // record here every time, and it is far cheaper than the alternative — which
+  // is a confident verdict that then throws a working buffer away.
+  if (miss === 'timeout' || miss === 'window-gone') {
+    logWarn(
+      `[capture] display ${displayId}: recorder probe went unanswered (${miss}) — ` +
+        'not evidence either way, leaving the state as it is',
+    )
     return
   }
   // Preserve a more specific renderer-reported failure if it raced the probe.
   if (displayRecorderStates.get(displayId)?.status === 'stopped') return
-  // Bytes without frames: a container header is all an encoder produces when
-  // the desktop capturer delivers nothing, and treating "byteLength > 0" as
-  // proof is exactly how the tray used to claim a buffer it did not have.
+  // The renderer DID answer, which means it stopped its slot and flushed the
+  // muxer to do so: after this long recording, under the evidence bar really is
+  // an empty buffer. Bytes without frames is the same verdict — a container
+  // header is all an encoder produces when the desktop capturer delivers
+  // nothing, and treating "byteLength > 0" as proof is exactly how the tray
+  // used to claim a buffer it did not have.
   const headerOnly = result !== null && result.buffer.byteLength > 0
   const detail = headerOnly
     ? `recorder for display ${displayId} produced ${result.buffer.byteLength} bytes of ` +
@@ -292,8 +422,10 @@ function onFramesProven(displayId: number, payload: CaptureFramesPayload): void 
   // a healthy recorder and throw away buffered footage for nothing.
   clearRecorderProbe(displayId)
   // A recovered display owes nothing to the watchdog any more; the next failure
-  // is entitled to the full short delay rather than this episode's backoff.
+  // is entitled to the full short delay rather than this episode's backoff, and
+  // to its own probe before anything recreates its window.
   recoveryAttempts.delete(displayId)
+  probesSinceProof.delete(displayId)
   setDisplayRecorderState(displayId, { status: 'recording' })
 }
 
@@ -301,11 +433,21 @@ function onFramesProven(displayId: number, payload: CaptureFramesPayload): void 
  * Keeps the DISPLAYED state converging on reality for as long as the app runs
  * (issue #43) — the thing a fixed number of early attempts could never do.
  *
- * Every tick, each display that is not provably recording either gets its
- * backstop probe re-armed or, once probing alone has failed twice, has its
- * recorder window recreated (the renderer's own retry is spent by then). The
- * delay doubles per attempt up to RECOVERY_MAX_DELAY_MS, so a machine whose
- * screen capture is genuinely dead costs one probe every ten minutes rather
+ * Each tick, a display that is not provably recording gets ONE recovery action
+ * per backoff step, chosen by what there is left to lose (see the recovery
+ * rules at the top of this file):
+ *
+ *  - the renderer is gone or crashed: there is no buffer and nobody to answer a
+ *    probe, so the window is recreated straight away;
+ *  - the display is in an evidence-backed 'stopped' and has already answered a
+ *    probe without proving itself: the buffer is forfeit either way, so the
+ *    window is recreated;
+ *  - otherwise: probe. A probe can prove the display healthy — that is what
+ *    rescues a recorder whose runtime cannot prove itself — and it is the only
+ *    action that leaves a window that might still be recording alone.
+ *
+ * The delay doubles per attempt up to RECOVERY_MAX_DELAY_MS, so a machine whose
+ * screen capture is genuinely dead costs one attempt every ten minutes rather
  * than a permanent lie in the tray.
  */
 function reconcileRecorders(): void {
@@ -317,7 +459,8 @@ function reconcileRecorders(): void {
     // Recognizing that here is what makes a crashed recorder come back on the
     // first attempt instead of after two dead probes.
     const alive = win !== undefined && !win.isDestroyed() && !win.webContents.isCrashed()
-    if (alive && displayRecorderStates.get(displayId)?.status === 'recording') {
+    const status = displayRecorderStates.get(displayId)?.status
+    if (alive && status === 'recording') {
       recoveryAttempts.delete(displayId)
       continue
     }
@@ -330,24 +473,35 @@ function reconcileRecorders(): void {
       continue
     }
     if (now < pending.nextAt) continue
-    // A probe is already armed for this display (the startup backstop, or the
-    // one a renderer failure schedules): that IS an attempt, and starting a
-    // second one would stop the recorder twice. Checked before the counter
-    // moves, so waiting for it costs nothing.
-    if (recorderProbeTimers.has(displayId)) continue
+    // A probe is already armed or outstanding for this display (the startup
+    // backstop, or the one the renderer's own restart re-anchors): that IS an
+    // attempt, and starting a second one would stop the recorder twice.
+    // Checked before the counter moves, so waiting for it costs nothing.
+    if (recorderProbeTimers.has(displayId) || probesInFlight.has(displayId)) continue
     pending.attempts += 1
     pending.nextAt =
       now + Math.min(RECOVERY_MAX_DELAY_MS, RECOVERY_FIRST_DELAY_MS * 2 ** pending.attempts)
-    if (alive && win !== undefined && pending.attempts <= RECOVERY_PROBES_BEFORE_REBUILD) {
+    // RULE 3: recreate the window only where rebuild() would actually treat it
+    // as stale — a dead renderer, or an evidence-backed 'stopped' that a probe
+    // has already had its chance to disprove. A display still in 'starting'
+    // may be recording perfectly well and merely unable to say so, and
+    // destroying its window would throw away the very footage the user is
+    // being promised. rebuild() would keep it anyway; announcing a recreation
+    // that will not happen is what made the log unreadable.
+    const spentProbes = probesSinceProof.get(displayId) ?? 0
+    const rebuildable = !alive || (status === 'stopped' && spentProbes >= RECOVERY_PROBES_BEFORE_REBUILD)
+    if (!rebuildable && win !== undefined) {
       logWarn(
-        `[capture] display ${displayId}: not recording — recovery attempt ${pending.attempts}, re-probing`,
+        `[capture] display ${displayId}: not recording (${status ?? 'unknown'}) — recovery ` +
+          `attempt ${pending.attempts}, probing the recorder for evidence`,
       )
       scheduleRecorderProbe(displayId, win, 0)
       continue
     }
     logWarn(
-      `[capture] display ${displayId}: not recording — recovery attempt ${pending.attempts}, ` +
-        'recreating the recorder window',
+      `[capture] display ${displayId}: not recording (${status ?? 'unknown'}, ` +
+        `${alive ? `${spentProbes} unproven probe(s)` : 'renderer gone'}) — recovery attempt ` +
+        `${pending.attempts}, recreating the recorder window`,
     )
     // rebuild() destroys the recorders that are stopped or gone and creates
     // fresh ones; every healthy display keeps its window and its buffer.
@@ -370,6 +524,8 @@ export function disposeCapture(): void {
   reconcileTimer = undefined
   for (const displayId of [...recorderProbeTimers.keys()]) clearRecorderProbe(displayId)
   recoveryAttempts.clear()
+  probesSinceProof.clear()
+  probesInFlight.clear()
 }
 
 /**
@@ -799,6 +955,9 @@ async function rebuild(): Promise<void> {
   for (const id of recoveryAttempts.keys()) {
     if (!wanted.has(id)) recoveryAttempts.delete(id)
   }
+  for (const id of probesSinceProof.keys()) {
+    if (!wanted.has(id)) probesSinceProof.delete(id)
+  }
 
   for (const [id, win] of captureWindows) {
     const display = wanted.get(id)
@@ -820,6 +979,10 @@ async function rebuild(): Promise<void> {
     captureWindowSigs.delete(id)
     displayRecorderStates.delete(id)
     clearRecorderProbe(id)
+    // A fresh renderer is owed a fresh hearing: it must get its own probe
+    // before anything recreates its window again, or a display that failed once
+    // would have every later recorder destroyed unexamined.
+    probesSinceProof.delete(id)
     if (!win.isDestroyed()) win.destroy()
   }
   if (settings === null) {
@@ -874,11 +1037,13 @@ async function createCaptureWindow(display: Display, settings: Settings): Promis
           reason: failureReason(detail),
           detail,
         })
-        // RECOVER ONCE: the renderer restarts this display's capture three
-        // seconds from now (including after `no-frames`), and this probe is the
-        // backstop that re-checks it. Proven frames — or replay bytes here —
-        // are the only things that move the state back to recording.
-        scheduleRecorderProbe(display.id, win, RECORDER_RETRY_PROBE_DELAY_MS)
+        // NO probe is armed here. The renderer restarts this display's capture
+        // three seconds from now (including after `no-frames`), and a probe
+        // five seconds out would land on a two-second-old recorder — stopping
+        // the slot it had just begun to refill, ahead of the renderer's own
+        // verdict, and truncating the recovery it was meant to check. onReady
+        // re-anchors the backstop behind that verdict when the restart gets a
+        // stream, and the watchdog above covers the case where it does not.
       }
     }
     const onReady = (event: IpcMainEvent, ready: CaptureReadyPayload): void => {
@@ -932,6 +1097,7 @@ async function createCaptureWindow(display: Display, settings: Settings): Promis
     await win.loadFile(path.join(__dirname, '../renderer/capture/capture.html'))
 
     const replay = replaySize(display, settings.replayMaxWidth)
+    const slowReplayMs = simulateSlowReplayMs()
     const payload: CaptureStartPayload = {
       displayId: String(display.id),
       fps: settings.fps,
@@ -944,6 +1110,11 @@ async function createCaptureWindow(display: Display, settings: Settings): Promis
       // delivers nothing. Nobody can break Desktop Duplication on demand, so
       // this is how the no-frames path stays provable.
       ...(simulateNoFrames() ? { simulateNoFrames: true } : {}),
+      // Test path for issue #43: a real recorder on a machine too loaded to
+      // prove itself to main. Nobody can put a desk under that load on demand
+      // either, so this is how "recovery never costs the recording" stays
+      // provable.
+      ...(slowReplayMs === null ? {} : { simulateSlowReplayMs: slowReplayMs }),
     }
     win.webContents.send(IPC.captureStart, payload)
     return win
