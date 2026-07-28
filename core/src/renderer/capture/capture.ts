@@ -195,18 +195,24 @@ function checkFrameEvidence(): void {
   if (bytes >= EVIDENCE_MIN_BYTES || (frames !== null && frames > evidenceFrames)) {
     if (frames !== null) evidenceFrames = frames
     evidenceStrikes = 0
-    if (!framesProven) {
-      framesProven = true
-      // ONE recovery per FAILURE EPISODE, not per process: frames are flowing
-      // again, so a stall an hour from now is entitled to the same single
-      // restart this one just had (failCapture).
-      retried = false
-      window.captureBridge.sendFrames({
-        displayId: startPayload?.displayId ?? '',
-        bytes,
-        frames: frames ?? 0,
-      })
-    }
+    framesProven = true
+    // ONE recovery per FAILURE EPISODE, not per process: frames are flowing
+    // again, so a stall an hour from now is entitled to the same single
+    // restart this one just had (failCapture).
+    retried = false
+    // EVERY proof is sent, not just the first (issue #43). Main's displayed
+    // state used to depend on a fixed number of early probes, so anything that
+    // latched it on "stopped" — a probe that timed out, a duplication failure
+    // that has since cleared — stayed wrong until the app was restarted (and
+    // then repeated itself). A repeated proof is a HEARTBEAT: whatever main
+    // believes, a recorder that is genuinely running says so again within
+    // EVIDENCE_STALL_MS, and main can flip back without stopping it to check.
+    // The cost is one small IPC message per display every twelve seconds.
+    window.captureBridge.sendFrames({
+      displayId: startPayload?.displayId ?? '',
+      bytes,
+      frames: frames ?? 0,
+    })
     armEvidenceCheck(EVIDENCE_STALL_MS)
     return
   }

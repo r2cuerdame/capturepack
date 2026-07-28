@@ -11,3 +11,6 @@ Thumbs.db
 !examples/**/*.capturepack
 .env
 release/
+
+# agent worktrees and scratch
+.claude/

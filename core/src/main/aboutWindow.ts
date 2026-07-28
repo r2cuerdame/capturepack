@@ -13,6 +13,7 @@ import * as path from 'node:path'
 import { IPC } from '../shared/ipc'
 import type { AboutInfoResult, AboutLinkKey } from '../shared/ipc'
 import type { Settings } from '../shared/types'
+import { previousRun, previousRunVanished } from './lifecycle'
 import { uiLanguage, uiT } from './locale'
 import { downloadedVersion, restartAndUpdate, updaterState } from './updater'
 import { openWelcomeWindow } from './welcomeWindow'
@@ -124,12 +125,24 @@ export function pushAboutState(): void {
 }
 
 function aboutInfo(live: Settings): AboutInfoResult {
+  const previous = previousRun()
   return {
     version: app.getVersion(),
     iconDataUrl: appIconDataUrl(),
     uiLanguage: uiLanguage(live),
     updater: updaterState(),
     downloadedVersion: downloadedVersion(),
+    // "Was it running?" answered without a terminal (issue #61): the startup
+    // balloon fades, this line does not.
+    lastRun:
+      previous === null
+        ? { status: 'none', endedAt: null }
+        : {
+            // The SAME rule the startup balloon uses (previousRunVanished), so
+            // the two surfaces can never tell the user different stories.
+            status: previousRunVanished() ? 'unclean' : 'clean',
+            endedAt: previous.record.lastAliveAt,
+          },
   }
 }
 

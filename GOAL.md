@@ -228,6 +228,14 @@ working. So:
   recorder never starts, the user must find out immediately, not when they press the
   hotkey and get a screenshot-only pack.
 - The tray icon itself carries the state (recording vs stopped), so a glance is enough.
+- **The state keeps agreeing with reality — it is never decided once.** "Recording" is
+  earned from proof that frames are flowing, and that proof keeps arriving, so a recorder
+  that recovers re-earns the state by itself within seconds. A display that is NOT
+  recording keeps being retried (probe, then a fresh recorder) with a backoff, for as long
+  as the app runs. A wrong state must be able to correct itself without a restart —
+  a fixed number of attempts at startup means a transient failure latches forever, and the
+  icon then lies in the one direction nobody checks: it says "not recording" while
+  recording works.
 
 **Start with Windows, by default.** A capture tool that is not running when the bug happens
 has already failed — the buffer only holds what it was there to record. So the app
@@ -235,6 +243,27 @@ registers itself to launch at login (per-user, via Electron's login-item API, no
 rights and no scheduled task), **on by default**, with a Settings → General toggle to turn
 it off. Launching at login starts it minimized to the tray: no window, no welcome, no
 stealing focus at boot. The uninstaller removes the entry.
+
+**Never disappear without a word.** The app cannot announce its own death — there is
+nothing left to announce it with — so it leaves a record instead, and the NEXT start says
+what happened. All of it local; nothing is ever uploaded.
+
+- **A crash leaves a dump.** The crash reporter runs with uploading off, so main- and
+  renderer-process crashes land as minidumps under the user data folder, where the user
+  can attach one to an issue.
+- **The app writes a log.** A rolling, size-capped `logs/main.log` in the user data folder
+  records startup and version, hotkey registration, per-display recorder state changes with
+  their reason, capture requests and outcomes, save results, MCP and updater activity, and
+  every error that would otherwise be silent — including a renderer that vanishes, which is
+  a recorder failure and must be treated as one. Reachable from the tray
+  ("Open logs folder"), because a record nobody can find is not a record.
+- **A quit and a death are different events.** Choosing Quit is recorded as such; anything
+  else leaves the run marked open. On the next start the app says plainly that the previous
+  run stopped unexpectedly, when it was last alive, and that **the buffer was not recording
+  in between** — the one sentence a user who pressed the hotkey into silence actually
+  needed. An open marker left by a DIFFERENT version is an update replacing the app, not a
+  crash, and is never reported as one. The verdict stays readable afterwards in About, so
+  "was it running?" is answerable without a terminal.
 
 **Capture must stay cheap.** CapturePack runs all day; a resident tool that eats a core is
 a tool people quit. The buffer currently encodes VP9 in software, twice over (two rotating
@@ -697,15 +726,21 @@ Open output folder
 Settings…
 ─────────────────
 Check for updates…
+Open logs folder
 About CapturePack
 ─────────────────
 Quit CapturePack
 ```
 
+- **Open logs folder** — opens the app's own log directory. It sits with the diagnostics,
+  not with the user's output folder: this is what the APP did, not what the user made. The
+  log only exists to be read when something went wrong, and a user cannot be asked to find
+  `%APPDATA%` by hand.
 - **Check for updates…** — manual check with inline feedback in the menu item
   ("Checking…", "You're up to date", "Downloading…", "Restart and update (vX)").
   The automatic check keeps working exactly as before.
 - **About CapturePack** — a small window: icon, name, version (+ "up to date" state),
+  **how the previous run ended** (closed normally, or stopped unexpectedly and when),
   the two slogans, MIT license, and links: Website · GitHub · Report an issue ·
   **♥ Sponsor**. Donation lives here, never in the capture flow — the tool must never
   interrupt the 5-second workflow to ask for money.

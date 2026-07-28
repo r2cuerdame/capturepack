@@ -4,6 +4,7 @@ import * as fs from 'node:fs'
 import type { UpdaterStatusPayload } from '../shared/ipc'
 import { openAboutWindow, pushAboutState, registerAboutIpc } from './aboutWindow'
 import {
+  disposeCapture,
   getRecorderState,
   onRecorderStateChanged,
   setupDisplayMediaHandler,
@@ -12,7 +13,9 @@ import {
 import type { RecorderState } from './capture'
 import { disposeHistory, notifyHistoryChanged, openHistoryWindow, registerHistoryIpc } from './historyWindow'
 import { registerCaptureHotkey } from './hotkey'
+import { beginRun, endRun, noteExitIntent, previousRunVanished } from './lifecycle'
 import { uiLanguage, uiT } from './locale'
+import { initForensics, logError, logInfo, logsDir, logWarn } from './log'
 import { mcpEndpoint, startMcpAtBoot, stopMcpServer } from './mcp/service'
 import { startCaptureFlow } from './session'
 import { loadSettings, persistSettings } from './settings'
@@ -41,6 +44,14 @@ if (process.argv.includes('--smoke')) {
 }
 
 function main(): void {
+  // BEFORE app.whenReady() (issue #60): Crashpad has to be installed before the
+  // processes it is meant to catch exist, and a startup that throws must
+  // already have a log file to say so in.
+  initForensics()
+  // Opens this run's marker (issue #61) and reports what happened to the last
+  // one. Its answer is announced below, once the tray exists to announce it.
+  const previous = beginRun()
+
   let stopRecorderStateListener: () => void = () => {}
 
   app.on('second-instance', () => {
@@ -51,11 +62,24 @@ function main(): void {
     // Tray app: keep running with zero windows (default behavior would quit).
   })
 
+  // No 'session-end' hook: Electron 36 exposes that on BrowserWindow, and this
+  // app can be windowless. A Windows logoff or shutdown still tears the app
+  // down through the normal quit sequence, so it reaches will-quit and is
+  // recorded as a clean exit whose cause we did not observe ('unknown') —
+  // honest, and crucially NOT reported to the user as a crash (issue #61).
   app.on('will-quit', () => {
     globalShortcut.unregisterAll()
     stopRecorderStateListener()
+    disposeCapture()
     disposeHistory()
+    // Logged BEFORE the call, synchronously: the process usually exits before
+    // stop() resolves, and a completion callback would simply never be written
+    // (issue #60 — the record has to survive the exit).
+    logInfo('[mcp] stopping server')
     void stopMcpServer()
+    // LAST: an exit that reaches here is by definition not a disappearance, and
+    // this is what tells the next run so (issue #61).
+    endRun()
   })
 
   void app.whenReady().then(async () => {
@@ -79,9 +103,13 @@ function main(): void {
       try {
         persistSettings({ ...settings })
       } catch (err) {
-        console.error('capturepack: could not defer welcome window:', String(err))
+        logError('capturepack: could not defer welcome window:', err)
       }
     }
+    logInfo(
+      `[app] launch: ${openedAtLogin ? 'at login' : 'manual'}, language ${uiLanguage(settings)}, ` +
+        `displays ${settings.captureDisplay}, replay ${settings.replaySeconds}s @ ${settings.fps}fps`,
+    )
 
     startMcpAtBoot(settings)
 
@@ -109,9 +137,14 @@ function main(): void {
         announcedFailure = null
         return
       }
-      const signature = `${state.reason}:${state.detail}`
-      if (signature === announcedFailure) return
-      announcedFailure = signature
+      // Deduped on the REASON alone, not on the detail. Recovery is continuous
+      // now (issue #43), so the same dead display is re-probed and rebuilt every
+      // few minutes; its detail carries byte counts and attempt-specific text,
+      // and announcing on that would turn one honest failure into a balloon
+      // every recovery cycle. The reason is what the user is told either way,
+      // and it re-arms as soon as the display records again.
+      if (state.reason === announcedFailure) return
+      announcedFailure = state.reason
       // Failure is never suppressible (GOAL "Say that you are recording.").
       tray.showRecordingFailure()
     }
@@ -172,12 +205,28 @@ function main(): void {
           void shell.openPath(settings.outputDir)
         },
         onOpenSettings: () => openSettingsWindow(),
+        // The log is only a record if a user can reach it without a terminal
+        // (issue #60): this is the one place that is always present.
+        onOpenLogs: () => {
+          fs.mkdirSync(logsDir(), { recursive: true })
+          void shell.openPath(logsDir())
+        },
         // Manual check (GOAL "Tray Menu"): runs even with auto-check off; the
         // menu item's label follows the state through the getter below.
         onCheckUpdates: () => void checkNow(),
         onAbout: () => openAboutWindow(),
-        onRestartUpdate: () => restartAndUpdate(),
-        onQuit: () => app.quit(),
+        onRestartUpdate: () => {
+          // Not a disappearance: the app is coming straight back (issue #61).
+          noteExitIntent('update-restart')
+          restartAndUpdate()
+        },
+        onQuit: () => {
+          // THE deliberate exit (issue #61): the only one that is allowed to
+          // leave the machine without a replay buffer, and the only one the
+          // next start must not complain about.
+          noteExitIntent('user-quit')
+          app.quit()
+        },
       },
       () => uiLanguage(settings),
       () => settings.captureHotkey,
@@ -190,6 +239,18 @@ function main(): void {
     // "starting"; if a very fast probe completed before the tray existed, this
     // catches up the visuals and the once-per-launch notification.
     handleRecorderState(getRecorderState())
+
+    // The sentence the user actually needed (issue #61). CapturePack cannot
+    // announce its own death — there is nothing left to announce it with — so
+    // the next start says it instead, plainly, including the part that matters:
+    // the buffer was not running in between. Shown at a login launch too: it
+    // does not steal focus, and it is the answer to "I pressed the hotkey and
+    // nothing happened".
+    if (previous !== null && previousRunVanished()) {
+      trayControls.showPreviousRunUnclean(
+        new Date(previous.record.lastAliveAt).toLocaleString(uiLanguage(settings)),
+      )
+    }
 
     if (!openedAtLogin) {
       // Dev aid: open the settings window on launch.
@@ -226,10 +287,14 @@ function main(): void {
       }
     }
 
-    if (
-      !process.argv.includes('--no-global-shortcut') &&
-      !registerCaptureHotkey(settings.captureHotkey, capture)
-    ) {
+    const wantsHotkey = !process.argv.includes('--no-global-shortcut')
+    const hotkeyRegistered = wantsHotkey && registerCaptureHotkey(settings.captureHotkey, capture)
+    // Whether the accelerator was taken is the first thing to check when a user
+    // says the hotkey did nothing (issues #60, #61), so it goes on the record.
+    if (!wantsHotkey) logInfo('[hotkey] not registered (--no-global-shortcut)')
+    else if (hotkeyRegistered) logInfo(`[hotkey] registered ${settings.captureHotkey}`)
+    else logWarn(`[hotkey] REFUSED ${settings.captureHotkey} — another application holds it`)
+    if (wantsHotkey && !hotkeyRegistered) {
       // Async on purpose: showErrorBox blocks the main-process event loop until
       // dismissed, which would freeze the always-on MCP server with it.
       const message = uiT(settings)('app.hotkeyFailed', { hotkey: settings.captureHotkey })
@@ -266,6 +331,13 @@ function main(): void {
           trayControls.refresh()
         }
         pushAboutState()
+        // Updater activity on the record (issue #60): "it restarted itself and
+        // then it was gone" is a question the log has to be able to answer.
+        logInfo(
+          `[updater] ${status.state}` +
+            (status.version === undefined ? '' : ` v${status.version}`) +
+            (status.message === undefined ? '' : ` — ${status.message}`),
+        )
         if (readyVersion === null || readyVersion === notifiedVersion) return
         notifiedVersion = readyVersion
         const note = new Notification({
@@ -284,14 +356,19 @@ function main(): void {
     // hotkey dialog above), and quit once acknowledged. English on purpose —
     // loadSettings() itself may be what threw, so no locale is trustworthy.
     const message = err instanceof Error ? err.message : String(err)
-    console.error('capturepack: startup failed:', message)
+    logError('capturepack: startup failed:', err)
     void dialog
       .showMessageBox({
         type: 'error',
         title: 'CapturePack', // product name — never translated
         message: `CapturePack failed to start: ${message}`,
       })
-      .then(() => app.quit())
+      .then(() => {
+        // A reported failure is not a disappearance (issue #61): the next start
+        // must not tell the user the app crashed when it explained itself.
+        noteExitIntent('startup-failure')
+        app.quit()
+      })
   })
 }
 
@@ -312,7 +389,7 @@ function readLoginItemSettings(): Electron.LoginItemSettings | null {
   try {
     return app.getLoginItemSettings(loginItemQuery())
   } catch (err) {
-    console.error('capturepack: could not read login item:', String(err))
+    logError('capturepack: could not read login item:', err)
     return null
   }
 }
@@ -349,6 +426,6 @@ function reconcileLoginItem(
   } catch (err) {
     // Keep the user's setting as the source of truth; the next manual startup
     // reconciles again if Windows refused this attempt.
-    console.error('capturepack: could not update login item:', String(err))
+    logError('capturepack: could not update login item:', err)
   }
 }
