@@ -2530,10 +2530,25 @@ function attachTrack(draft: Annotation, surfaceId: string): void {
       // in flight; the stored annotation is the one that matters.
       const live = state.byId(id) ?? (textSession?.kind === 'new' && textSession.draft.annotation_id === id ? textSession.draft : undefined)
       if (live === undefined) return
+      // What an ABSENT sample display means for THIS box (SPEC §8.8): the box's
+      // own screen, which is the focused one when the box does not name it.
+      const ownDisplay = live.display ?? focusedDisplayIndex
       live.tracking = {
         enabled: true,
+        // WHICH SCREEN EACH SAMPLE IS MEASURED IN (#86). Dropping it here was
+        // not a missing nicety: a window straddling two monitors changes which
+        // display owns it as it crosses the middle, and its rectangle is then
+        // pixels of the OTHER snapshot — different origin, and on this desk a
+        // different scale too (1443x953 on the 1.5x screen is the same window as
+        // 960x634 on the 1x one). Without the field those two spaces are mixed
+        // in one list and nothing downstream can tell them apart, so the box
+        // jumps between two readings of the same position.
+        // Written only where it SAYS something: absent means the annotation's
+        // own display (SPEC §8.3), so a capture whose object never left one
+        // screen produces exactly the samples it did before this field existed.
         samples: track.samples.map((s) => ({
           t_ms: s.tMs,
+          ...(s.display === ownDisplay ? {} : { display: s.display }),
           x: s.x,
           y: s.y,
           width: s.width,
