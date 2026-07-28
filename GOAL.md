@@ -210,6 +210,19 @@ After a month, the journal itself becomes the best roadmap.
 - 30-second replay buffer
 - Screenshot
 
+**The replay is exactly the configured length.** The ring buffer runs rotating recorders,
+so the raw footage on hand is always *at least* the configured window and usually more.
+That surplus must never reach the pack: what gets saved is exactly the last N seconds
+(N = the replay length setting), and the editor's timeline shows exactly that range, so
+what the user scrubs is what the pack contains.
+
+- Keep the surplus small at the source: rotate on a finer interval so the buffer
+  overshoots by a fraction of N instead of up to 2xN.
+- Cut the remainder to exact length through the existing trim render path, in the
+  background pass that already produces the annotated replay — saving stays instant.
+- A shorter-than-N buffer (right after launch) is reported honestly as its real length;
+  the guarantee is "never longer than N", never padding.
+
 **Annotation**
 
 - Pin
