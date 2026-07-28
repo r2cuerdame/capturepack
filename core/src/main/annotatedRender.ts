@@ -24,6 +24,7 @@ import { refreshPackDocs, setManifestRenderOutputs, type PackHandle } from './ex
 
 export interface AnnotatedRenderJob {
   replayWebm: Buffer
+  replayMimeType: string
   annotations: Annotation[]
   // GLOBAL display numbers (SPEC §8.5) over the pack's WHOLE annotation set,
   // as annotation_id -> number pairs. `annotations` above is this display's
@@ -93,10 +94,9 @@ const inFlight = new Map<string, number>()
 // renders of the SAME pack overlapping could leave the manifest declaring
 // files the other render deleted.
 //
-// The foreground plain-trim render (renderTrimmedReplay) deliberately does NOT
-// queue: the user is watching a "Trimming replay…" toast and waiting for the
-// save, and it must never sit behind a background job. At most two render
-// windows can therefore exist at once, and only one of them is background work.
+// Plain-trim renders use this queue too. Exact-length cutting is background
+// work, and serializing it with annotated renders prevents a multi-display save
+// from spawning one extra real-time encoder per screen.
 // ---------------------------------------------------------------------------
 let renderQueue: Promise<void> = Promise.resolve()
 
@@ -163,6 +163,7 @@ export function startAnnotatedRender(
 async function renderAnnotatedReplay(handle: PackHandle, job: AnnotatedRenderJob): Promise<void> {
   const payload: RenderStartPayload = {
     replayWebm: toArrayBuffer(job.replayWebm),
+    replayMimeType: job.replayMimeType,
     annotations: job.annotations,
     ...(job.displayNumbers === undefined ? {} : { displayNumbers: job.displayNumbers }),
     width: job.width,
@@ -307,6 +308,7 @@ async function writeKeyframes(
 
 export interface TrimRenderJob {
   replayWebm: Buffer
+  replayMimeType: string
   width: number
   height: number
   fps: number
@@ -322,16 +324,16 @@ export interface TrimRenderJob {
  * Plain-trim render (GOAL "Replay Trim"): the SAME hidden render pipeline with
  * an EMPTY overlay set over an arbitrary [start, end] range, returning the
  * re-encoded trimmed replay bytes for the session to write as replay.webm.
- * Unlike startAnnotatedRender this is a FOREGROUND save step: the caller
- * awaits it and reports it on the save toast ("Trimming replay…"). It never
- * touches the pack folder, the manifest, or the render lifecycle bus — those
- * track replay_annotated renders only.
+ * It never touches the pack folder, the manifest, or the render lifecycle bus;
+ * callers run it in their background finalization and then atomically update
+ * the replay declaration and clock data together.
  */
 export async function renderTrimmedReplay(job: TrimRenderJob): Promise<Buffer> {
   const endMs = job.trimEndMs ?? job.sourceDurationMs
   const lengthMs = Math.max(0, endMs - job.trimStartMs)
   const payload: RenderStartPayload = {
     replayWebm: toArrayBuffer(job.replayWebm),
+    replayMimeType: job.replayMimeType,
     annotations: [],
     width: job.width,
     height: job.height,
@@ -343,7 +345,9 @@ export async function renderTrimmedReplay(job: TrimRenderJob): Promise<Buffer> {
   // The render plays only the kept range in real time. No keyframes: the trim
   // job draws no overlays, and the annotated render that follows it produces
   // the stills from the trimmed bytes.
-  const { result } = await runRenderWindow(payload, lengthMs * 2 + RENDER_TIMEOUT_SLACK_MS)
+  const { result } = await enqueueRender(() =>
+    runRenderWindow(payload, lengthMs * 2 + RENDER_TIMEOUT_SLACK_MS),
+  )
   if (result.webm === undefined) throw new Error('render window returned no video')
   return Buffer.from(result.webm)
 }

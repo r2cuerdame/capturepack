@@ -30,14 +30,24 @@ export class ScrubController {
   // ignore: they end at the file tail and would otherwise read as user scrubs.
   private workaroundSeek = false
   private durationAdopted = false
+  private readonly sourceStartMs: number
+  private readonly durationCapMs: number
 
-  constructor(webm: ArrayBuffer, fallbackDurationMs: number, private readonly host: ScrubHost) {
+  constructor(
+    webm: ArrayBuffer,
+    mimeType: string,
+    fallbackDurationMs: number,
+    sourceStartMs: number,
+    private readonly host: ScrubHost,
+  ) {
     this.durationMs = Math.max(1, Math.round(fallbackDurationMs))
+    this.durationCapMs = this.durationMs
+    this.sourceStartMs = Math.max(0, Math.round(sourceStartMs))
     this.tMs = this.durationMs
     const video = document.createElement('video')
     video.muted = true
     video.preload = 'auto'
-    video.src = URL.createObjectURL(new Blob([webm], { type: 'video/webm' }))
+    video.src = URL.createObjectURL(new Blob([webm], { type: mimeType }))
     video.addEventListener(
       'loadedmetadata',
       () => {
@@ -140,7 +150,7 @@ export class ScrubController {
     }
     if (this.showingNative) {
       // Nothing lies ahead of "now": play restarts from the beginning.
-      this.video.currentTime = 0
+      this.video.currentTime = this.sourceStartMs / 1000
       this.tMs = 0
     }
     this.showingNative = false
@@ -165,12 +175,22 @@ export class ScrubController {
     this.playing = false
     cancelAnimationFrame(this.rafId)
     this.video.pause()
-    this.tMs = Math.min(this.video.currentTime * 1000, this.durationMs)
+    this.tMs = Math.min(
+      Math.max(0, this.video.currentTime * 1000 - this.sourceStartMs),
+      this.durationMs,
+    )
   }
 
   private playbackTick(): void {
     if (!this.playing) return
-    this.tMs = Math.min(this.video.currentTime * 1000, this.durationMs)
+    this.tMs = Math.min(
+      Math.max(0, this.video.currentTime * 1000 - this.sourceStartMs),
+      this.durationMs,
+    )
+    if (this.tMs >= this.durationMs) {
+      this.snapToNow()
+      return
+    }
     this.host.drawFrame(this.video)
     this.host.onState()
     this.rafId = requestAnimationFrame(() => this.playbackTick())
@@ -196,7 +216,7 @@ export class ScrubController {
   private adoptDuration(): void {
     const seconds = this.video.duration
     if (!Number.isFinite(seconds) || seconds <= 0) return
-    const ms = seconds * 1000
+    const ms = Math.min(this.durationCapMs, Math.max(1, seconds * 1000 - this.sourceStartMs))
     // Cue-less webm re-parses can re-fire durationchange with small jitter on
     // every seek; adopting each value dragged the position toward the end
     // while the user was scrubbing. Ignore refinements once adopted.
@@ -220,7 +240,7 @@ export class ScrubController {
     const ms = this.pendingSeekMs
     this.pendingSeekMs = null
     this.seekInFlight = true
-    this.video.currentTime = ms / 1000
+    this.video.currentTime = (this.sourceStartMs + ms) / 1000
   }
 
   private onSeeked(): void {
@@ -283,6 +303,7 @@ class SlaveReplay {
 
   constructor(
     webm: ArrayBuffer,
+    mimeType: string,
     durationMs: number,
     offsetMs: number,
     draw: (source: HTMLVideoElement | 'native') => void,
@@ -293,7 +314,7 @@ class SlaveReplay {
     const video = document.createElement('video')
     video.muted = true
     video.preload = 'auto'
-    video.src = URL.createObjectURL(new Blob([webm], { type: 'video/webm' }))
+    video.src = URL.createObjectURL(new Blob([webm], { type: mimeType }))
     video.addEventListener(
       'loadedmetadata',
       () => {
@@ -426,7 +447,10 @@ export interface BoardReplayInput {
   displayIndex: number
   focused: boolean
   webm: ArrayBuffer
+  mimeType: string
   durationMs: number
+  /** Raw-source position corresponding to logical time 0 (focused input only). */
+  sourceStartMs: number
   /** ms to add to the pack clock to reach this replay's own clock. */
   offsetMs: number
 }
@@ -446,17 +470,23 @@ export class BoardScrub {
     const focused = replays.find((r) => r.focused)
     if (focused === undefined) throw new Error('the board clock needs the focused display’s replay')
     this.focusedIndex = focused.displayIndex
-    this.master = new ScrubController(focused.webm, focused.durationMs, {
-      drawFrame: (source) => host.drawFrame(focused.displayIndex, source),
-      onState: () => {
-        this.syncSlaves()
-        host.onState()
+    this.master = new ScrubController(
+      focused.webm,
+      focused.mimeType,
+      focused.durationMs,
+      focused.sourceStartMs,
+      {
+        drawFrame: (source) => host.drawFrame(focused.displayIndex, source),
+        onState: () => {
+          this.syncSlaves()
+          host.onState()
+        },
       },
-    })
+    )
     for (const r of replays) {
       if (r.focused) continue
       this.slaves.push(
-        new SlaveReplay(r.webm, r.durationMs, r.offsetMs, (source) =>
+        new SlaveReplay(r.webm, r.mimeType, r.durationMs, r.offsetMs, (source) =>
           host.drawFrame(r.displayIndex, source),
         ),
       )

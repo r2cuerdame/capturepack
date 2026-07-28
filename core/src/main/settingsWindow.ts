@@ -102,7 +102,8 @@ export function registerSettingsIpc(live: Settings, hooks: SettingsIpcHooks = {}
     if (
       live.captureDisplay !== before.captureDisplay ||
       live.fps !== before.fps ||
-      live.replaySeconds !== before.replaySeconds
+      live.replaySeconds !== before.replaySeconds ||
+      live.replayMaxWidth !== before.replayMaxWidth
     ) {
       void restartCapture(live)
     }

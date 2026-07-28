@@ -14,7 +14,11 @@ import path from 'node:path'
 import { BrowserWindow, desktopCapturer, ipcMain, screen, session, webContents } from 'electron'
 import type { Display, IpcMainEvent } from 'electron'
 import { IPC } from '../shared/ipc'
-import type { CaptureReplayResultPayload, CaptureStartPayload } from '../shared/ipc'
+import type {
+  CaptureReadyPayload,
+  CaptureReplayResultPayload,
+  CaptureStartPayload,
+} from '../shared/ipc'
 import type { Settings } from '../shared/types'
 
 const HOTPLUG_DEBOUNCE_MS = 1_000
@@ -142,6 +146,19 @@ function sizeKey(display: Display): string {
   return `${size.width}x${size.height}`
 }
 
+function replaySize(
+  display: Display,
+  maxLongEdge: number,
+): { width: number; height: number } {
+  if (maxLongEdge === 0) return { width: 0, height: 0 }
+  const native = physicalSize(display)
+  const scale = Math.min(1, maxLongEdge / Math.max(native.width, native.height))
+  return {
+    width: Math.max(1, Math.round(native.width * scale)),
+    height: Math.max(1, Math.round(native.height * scale)),
+  }
+}
+
 /**
  * ONE desktopCapturer round trip for a group of same-sized displays.
  *
@@ -256,7 +273,12 @@ export function requestReplay(
   win: BrowserWindow,
   requestId: string,
   timeoutMs: number,
-): Promise<{ buffer: Buffer; durationMs: number } | null> {
+): Promise<{
+  buffer: Buffer
+  durationMs: number
+  mimeType: string
+  replayFile: 'replay.webm' | 'replay.mp4'
+} | null> {
   registerReplayListener()
   return new Promise((resolve) => {
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -264,7 +286,14 @@ export function requestReplay(
     const onResult = (payload: CaptureReplayResultPayload): void => {
       cleanup()
       if (payload.buffer.byteLength === 0) resolve(null)
-      else resolve({ buffer: Buffer.from(payload.buffer), durationMs: payload.durationMs })
+      else {
+        resolve({
+          buffer: Buffer.from(payload.buffer),
+          durationMs: payload.durationMs,
+          mimeType: payload.mimeType,
+          replayFile: payload.replayFile,
+        })
+      }
     }
     const onClosed = (): void => {
       cleanup()
@@ -340,6 +369,7 @@ function recorderSignature(display: Display, settings: Settings): string {
     display.scaleFactor,
     settings.fps,
     settings.replaySeconds,
+    settings.replayMaxWidth,
   ].join(':')
 }
 
@@ -412,19 +442,32 @@ async function createCaptureWindow(display: Display, settings: Settings): Promis
         )
       }
     }
+    const onReady = (event: IpcMainEvent, ready: CaptureReadyPayload): void => {
+      if (event.sender !== win.webContents) return
+      console.info(
+        `[capture] display ${display.id}: ${ready.mimeType} -> ${ready.replayFile}, ` +
+          `${ready.width}x${ready.height}`,
+      )
+    }
     ipcMain.on(IPC.captureError, onError)
+    ipcMain.on(IPC.captureReady, onReady)
     win.on('closed', () => {
       ipcMain.removeListener(IPC.captureError, onError)
+      ipcMain.removeListener(IPC.captureReady, onReady)
       assignedDisplays.delete(wcId)
     })
 
     await win.loadFile(path.join(__dirname, '../renderer/capture/capture.html'))
 
+    const replay = replaySize(display, settings.replayMaxWidth)
     const payload: CaptureStartPayload = {
       displayId: String(display.id),
       fps: settings.fps,
       // The recorder rotates segments at this interval; replay covers 1x..2x of it.
       segmentSeconds: settings.replaySeconds,
+      replayMaxWidth: settings.replayMaxWidth,
+      replayWidth: replay.width,
+      replayHeight: replay.height,
     }
     win.webContents.send(IPC.captureStart, payload)
     return win

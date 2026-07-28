@@ -10,6 +10,8 @@ export const IPC = {
   captureRequestReplay: 'capture:request-replay',
   // capture window -> main: replay bytes (webm) + duration for the pending export
   captureReplayResult: 'capture:replay-result',
+  // capture window -> main: selected recorder format + negotiated stream size
+  captureReady: 'capture:ready',
   // capture window -> main: recorder failed; capture continues screenshot-only
   captureError: 'capture:error',
 
@@ -138,13 +140,30 @@ export interface CaptureStartPayload {
   displayId: string
   fps: number
   segmentSeconds: number // recorder rotation interval (replay guarantee = 1x..2x this)
+  // Longest edge of the recorded stream; 0 = native. Snapshot capture is a
+  // separate main-process path and stays at native resolution.
+  replayMaxWidth: number
+  // Aspect-preserving target dimensions computed from the assigned display.
+  // Both are 0 when replayMaxWidth is 0 (native).
+  replayWidth: number
+  replayHeight: number
+}
+
+export interface CaptureReadyPayload {
+  displayId: string
+  mimeType: string
+  replayFile: 'replay.webm' | 'replay.mp4'
+  width: number
+  height: number
 }
 
 export interface CaptureReplayResultPayload {
   requestId: string
-  // webm bytes; empty when no replay is available (screenshot-only capture)
+  // Recorder bytes; empty when no replay is available (screenshot-only capture).
   buffer: ArrayBuffer
   durationMs: number
+  mimeType: string
+  replayFile: 'replay.webm' | 'replay.mp4'
 }
 
 // One frozen display on the editor's BOARD (GOAL "Multi-Monitor Support"):
@@ -178,6 +197,8 @@ export interface EditorDisplayPayload {
   // EditorInitPayload.replayWebm) and on a display that recorded nothing —
   // the latter shows its frozen snapshot and is labelled as such.
   replayWebm: ArrayBuffer | null
+  // MIME type of replayWebm. null wherever replayWebm is null.
+  replayMimeType: string | null
   replayDurationMs: number
   // Milliseconds to ADD to the pack clock (the focused display's replay clock,
   // which every annotation lifetime uses) to reach THIS display's own replay
@@ -244,6 +265,10 @@ export interface EditorInitPayload {
   height: number
   hasReplay: boolean
   replayDurationMs: number
+  // Position on the RAW recorder file that logical editor time 0 maps to.
+  // Fresh captures use this to expose only the last configured N seconds while
+  // the exact cut runs later in the background; saved packs use 0.
+  replaySourceStartMs: number
   // Every display this capture froze, focused included — EMPTY when only one
   // display was captured, in which case the editor builds a one-display board
   // from width/height above and behaves exactly as a single-monitor editor
@@ -252,6 +277,8 @@ export interface EditorInitPayload {
   displays: EditorDisplayPayload[]
   // webm bytes of the replay for scrubbing; null when screenshot-only
   replayWebm: ArrayBuffer | null
+  // Actual MIME type of replayWebm (MP4/AVC or WebM VP8/VP9).
+  replayMimeType: string | null
   // Pickable UI objects from the capture instant (GOAL "Static object
   // picking"). BOTH lists are EMPTY whenever there is no object data — no
   // Windows UI Automation dump, a dump that timed out, or a re-edited pack
@@ -322,6 +349,9 @@ export interface RenderStartPayload {
   // null = STILL job (SPEC §7.3): nothing is played or recorded — the single
   // annotated keyframe of a screenshot-only pack is drawn from snapshotPng.
   replayWebm: ArrayBuffer | null
+  // Actual MIME type of replayWebm. Required for MP4/AVC input; ignored by a
+  // still job where replayWebm is null.
+  replayMimeType?: string
   // Still job only: the frame the keyframe is drawn from (snapshot.png bytes).
   snapshotPng?: ArrayBuffer
   annotations: Annotation[]

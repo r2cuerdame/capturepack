@@ -29,7 +29,7 @@ import type {
 import { DEFAULT_CAPTURE_HOTKEY } from '../shared/types'
 import type { Annotation, Settings } from '../shared/types'
 import { isRenderInFlight, onRenderStateChange, startAnnotatedRender } from './annotatedRender'
-import { createPackZip } from './exporter'
+import { createPackZip, replayMimeType } from './exporter'
 import { packDocLanguage, uiLanguage, uiT } from './locale'
 import { createPackStore, openPack } from './mcp/store'
 import type { PackHandle, PackStore, RawPackEntry } from './mcp/store'
@@ -531,6 +531,7 @@ function startRerender(entry: RawPackEntry): HistoryActionResult {
     { id: manifest.id, dirPath: entry.path },
     {
       replayWebm,
+      replayMimeType: replayMimeType(replayRel),
       annotations: annotationsOf(pack),
       width: annotationsFile.reference_width,
       height: annotationsFile.reference_height,

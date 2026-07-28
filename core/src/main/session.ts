@@ -4,8 +4,8 @@
 //
 // Also owns the RE-EDIT flow (GOAL "History — Open & re-edit"): startEditFlow
 // loads a saved pack folder back into the SAME editor window and saves through
-// the same pipeline — updatePack in keepReplay mode (replay.webm is never
-// rewritten) or saveAsNewPack for [Save As New CapturePack].
+// the same pipeline — updatePack in keepReplay mode (the declared replay is
+// never rewritten) or saveAsNewPack for [Save As New CapturePack].
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, screen } from 'electron'
 import type { IpcMainEvent } from 'electron'
 import { randomUUID } from 'node:crypto'
@@ -50,12 +50,14 @@ import {
   savePack,
   saveAsNewPack,
   uiaPluginDeclaration,
+  updateInitialPack,
   updatePack,
   displayMediaName,
   displayReplayName,
   displaySnapshotName,
   isoWithOffset,
   replayFileName,
+  replayMimeType,
   writeUiaPlugin,
   UIA_PLUGIN_NAME,
   type DisplayCapture,
@@ -142,6 +144,8 @@ interface FrozenDisplay {
   height: number
   replayWebm: Buffer | null
   replayDurationMs: number
+  replayMimeType: string | null
+  replayFile: 'replay.webm' | 'replay.mp4' | null
 }
 
 /**
@@ -200,6 +204,8 @@ async function freezeDisplays(settings: Settings): Promise<{
     height: snap.height,
     replayWebm: null,
     replayDurationMs: 0,
+    replayMimeType: null,
+    replayFile: null,
   })
 
   // ONE grouped capture for the whole trigger: desktopCapturer's thumbnail size
@@ -231,7 +237,13 @@ async function freezeDisplays(settings: Settings): Promise<{
       const win = captureWindowForDisplay(d.id)
       const replay = win === null ? null : await requestReplay(win, randomUUID(), REPLAY_TIMEOUT_MS)
       if (replay === null) return
-      displays[i] = { ...d, replayWebm: replay.buffer, replayDurationMs: replay.durationMs }
+      displays[i] = {
+        ...d,
+        replayWebm: replay.buffer,
+        replayDurationMs: replay.durationMs,
+        replayMimeType: replay.mimeType,
+        replayFile: replay.replayFile,
+      }
     }),
   )
   const focusedFrozen = displays.find((d) => d.focused) ?? focused
@@ -250,7 +262,10 @@ function toDisplayCaptures(displays: readonly FrozenDisplay[]): DisplayCapture[]
     // A fresh capture writes the canonical names; they travel with the entry so
     // every writer uses the SAME string the manifest declares.
     snapshotFile: displaySnapshotName(d.index),
-    replayFile: d.replayWebm !== null ? displayReplayName(d.index) : null,
+    replayFile:
+      d.replayWebm !== null && d.replayFile !== null
+        ? displayReplayName(d.index, d.replayFile)
+        : null,
     snapshotPng: d.focused ? null : d.snapshotPng,
     replayWebm: d.focused ? null : d.replayWebm,
   }))
@@ -263,9 +278,11 @@ function toDisplayCaptures(displays: readonly FrozenDisplay[]): DisplayCapture[]
  * single-display capture — the editor then builds a one-display board from the
  * top-level media and behaves exactly as it always did.
  */
-function toEditorDisplays(displays: readonly FrozenDisplay[]): EditorDisplayPayload[] {
+function toEditorDisplays(
+  displays: readonly FrozenDisplay[],
+  focusedWindowDurationMs: number,
+): EditorDisplayPayload[] {
   if (displays.length < 2) return []
-  const focusedDurationMs = displays.find((d) => d.focused)?.replayDurationMs ?? 0
   return displays.map((d) => ({
     index: d.index,
     focused: d.focused,
@@ -279,13 +296,14 @@ function toEditorDisplays(displays: readonly FrozenDisplay[]): EditorDisplayPayl
     bounds: { ...d.bounds },
     scale: d.scale,
     replayWebm: d.focused || d.replayWebm === null ? null : toArrayBuffer(d.replayWebm),
+    replayMimeType: d.focused ? null : d.replayMimeType,
     replayDurationMs: d.replayDurationMs,
     // Every recorder was stopped by the SAME trigger, so the replays all END at
     // the capture instant even though they started at slightly different times
     // (independent segment rotation). End-alignment is therefore the exact
     // conversion from the pack clock to this display's own clock. A fresh
     // capture is never trimmed at this point — the trim is applied at save.
-    replayOffsetMs: d.focused ? 0 : d.replayDurationMs - focusedDurationMs,
+    replayOffsetMs: d.focused ? 0 : d.replayDurationMs - focusedWindowDurationMs,
   }))
 }
 
@@ -306,8 +324,18 @@ async function runFlow(settings: Settings): Promise<void> {
   const replay =
     display.replayWebm === null
       ? null
-      : { buffer: display.replayWebm, durationMs: display.replayDurationMs }
-  const replayDurationMs = replay === null ? 0 : replay.durationMs
+      : {
+          buffer: display.replayWebm,
+          durationMs: display.replayDurationMs,
+          mimeType: display.replayMimeType ?? 'video/webm',
+          replayFile: display.replayFile ?? 'replay.webm',
+        }
+  const rawReplayDurationMs = replay === null ? 0 : replay.durationMs
+  // The editor and every final pack clock expose only the last configured N
+  // seconds. The raw recorder file remains 1x..2x N until the background plain
+  // trim cuts it; a just-started buffer stays at its honest shorter duration.
+  const replayDurationMs = Math.min(rawReplayDurationMs, settings.replaySeconds * 1000)
+  const replaySourceStartMs = rawReplayDurationMs - replayDurationMs
   const t0Ms = triggerAt - replayDurationMs
   // media.displays[] exists only when the capture actually covered more than
   // one display (SPEC §5.3): a single-display pack stays exactly what 0.1.2
@@ -336,8 +364,16 @@ async function runFlow(settings: Settings): Promise<void> {
     height: snap.height,
     capturedAt: new Date(triggerAt),
     replayWebm: replay === null ? null : replay.buffer,
-    replayDurationMs,
-    timeline: { t0: new Date(t0Ms).toISOString(), events: [...events] },
+    ...(replay === null ? {} : { replayFile: replay.replayFile }),
+    // Save-first describes the raw bytes honestly. Finalization replaces this
+    // declaration and clock together after the exact background cut.
+    replayDurationMs: rawReplayDurationMs,
+    timeline: {
+      t0: new Date(triggerAt - rawReplayDurationMs).toISOString(),
+      events: events.map((e) =>
+        e.type === 'core.capture.triggered' ? { ...e, t_ms: rawReplayDurationMs } : e,
+      ),
+    },
     outputDir: settings.outputDir,
     // Save-first writes EVERY display (GOAL "Multi-Monitor Support"): a
     // cancelled editor or a crash must not lose the other screens either.
@@ -399,13 +435,15 @@ async function runFlow(settings: Settings): Promise<void> {
         height: snap.height,
         hasReplay: replay !== null,
         replayDurationMs,
+        replaySourceStartMs,
         // The editor BOARD (GOAL "Multi-Monitor Support"): every frozen display
         // with its geometry and its own replay, drawn side by side in the real
         // arrangement and all of them annotatable.
-        displays: toEditorDisplays(frozen.displays),
+        displays: toEditorDisplays(frozen.displays, replayDurationMs),
         // Replay bytes are already in memory; the editor scrubs its own copy and
         // never re-requests them at export time.
         replayWebm: replay === null ? null : toArrayBuffer(replay.buffer),
+        replayMimeType: replay?.mimeType ?? null,
         // Pickable objects (GOAL "Static object picking"): controls refine,
         // windows are the floor. Both [] when the dump produced nothing, which
         // is exactly the pre-feature editor.
@@ -431,7 +469,29 @@ async function runFlow(settings: Settings): Promise<void> {
   })
 
   const outcome = await runEditor(editor, events, t0Ms)
-  if (outcome.kind === 'cancel') return
+  if (outcome.kind === 'cancel') {
+    // A cancelled editor still leaves the save-first pack behind. Its raw ring
+    // segment may exceed N, so cut that pack in the same serialized background
+    // renderer even though there are no annotations to finalize.
+    const savedHandle = handle
+    if (savedHandle !== null && replay !== null && replaySourceStartMs > 0) {
+      void uiaWrite
+        .then(() =>
+          finalizeCancelledExactReplay(
+            savedHandle,
+            initialSave,
+            frozen,
+            replayDurationMs,
+            replaySourceStartMs,
+            settings,
+          ),
+        )
+        .catch((err: unknown) =>
+          console.error('capturepack: cancelled capture finalization failed:', errorMessage(err)),
+        )
+    }
+    return
+  }
 
   // Both writers of manifest.json must never interleave: the save-first plugin
   // declaration above patches it in place, updatePack below rewrites it whole.
@@ -445,7 +505,7 @@ async function runFlow(settings: Settings): Promise<void> {
   const replayWebm = replay !== null ? replay.buffer : null
 
   // The exporter appends the core.export.created event itself.
-  // t0 is the start of replay.webm (SPEC §10.1). No rebase is possible here:
+  // t0 is the start of the declared replay (SPEC §10.1). No rebase is possible here:
   // the replay is always kept when one exists, so a null replayWebm means the
   // capture had none, replayDurationMs is 0, and t0Ms IS the trigger instant.
   // (The re-edit flow below DOES rebase — there a declared replay can be
@@ -461,18 +521,42 @@ async function runFlow(settings: Settings): Promise<void> {
       : outcome.payload.annotations
   const snapshotTMs = replayWebm === null ? null : outcome.payload.snapshotTMs
 
+  // User trim handles operate inside the logical last-N-second editor clock.
+  // The mandatory ring-buffer cut is outside that clock: combine the two only
+  // when selecting the raw source range, and rebase metadata for the user trim
+  // alone because editor-authored times are already last-N-relative.
+  const trim = replayWebm === null ? null : resolveTrim(outcome.payload, replayDurationMs)
+  const keptRange: TrimRange =
+    trim ?? { startMs: 0, endMs: replayDurationMs, lengthMs: replayDurationMs }
+  const finalAnnotations = trim === null ? annotations : rebaseAnnotationsForTrim(annotations, trim)
+  const finalSnapshotTMs =
+    trim === null ? snapshotTMs : rebaseSnapshotTMsForTrim(snapshotTMs, trim)
+  const finalTimeline: TimelineFile =
+    trim === null
+      ? timeline
+      : {
+          t0: new Date(t0Ms + trim.startMs).toISOString(),
+          events: events.map((e) => ({ ...e, t_ms: Math.max(0, e.t_ms - trim.startMs) })),
+        }
+  const sourceTrimStartMs = replaySourceStartMs + keptRange.startMs
+  const needsExactCut =
+    replayWebm !== null &&
+    (sourceTrimStartMs > 0 || replaySourceStartMs + keptRange.endMs < rawReplayDurationMs)
+
   const input: ExportInput = {
     snapshotPng: Buffer.from(outcome.payload.snapshotPng),
     width: snap.width,
     height: snap.height,
     capturedAt: new Date(triggerAt),
     replayWebm,
-    replayDurationMs, // already 0 whenever replayWebm is null
-    annotations,
+    ...(replay === null ? {} : { replayFile: replay.replayFile }),
+    replayDurationMs: keptRange.lengthMs,
+    annotations: finalAnnotations,
     title: outcome.payload.title,
     note: outcome.payload.note,
-    snapshotTMs,
-    timeline,
+    snapshotTMs: finalSnapshotTMs,
+    ...(sourceTrimStartMs > 0 ? { trimOffsetMs: sourceTrimStartMs } : {}),
+    timeline: finalTimeline,
     displays: displayCaptures,
     screens: frozen.screens,
     // Rewritten (and declared) by the finalize save too, so a save-first that
@@ -482,173 +566,331 @@ async function runFlow(settings: Settings): Promise<void> {
     docLanguage: packDocLanguage(settings),
   }
 
-  // Replay Trim (GOAL "Replay Trim") — fresh-capture flow only. null when the
-  // capture has no replay or the payload carries no active trim: the save
-  // below is then exactly the untrimmed path.
-  const trim = replayWebm === null ? null : resolveTrim(outcome.payload, replayDurationMs)
-
   try {
     // Save-first failed earlier? Retry the initial write now, then finalize.
     if (handle === null) handle = await savePack(initialSave)
-    // What updatePack writes and what the annotated render consumes; the trim
-    // step below swaps in the trimmed bytes + the rebased (trimmed-clock) data.
-    let finalInput = input
-    let renderWebm = replayWebm
-    let renderAnnotations = annotations
-    let renderDurationMs = replayDurationMs
-    if (trim !== null && replayWebm !== null) {
-      // Trim save: the toast opens EARLY ("Trimming replay…") because the
-      // plain-trim render plays the kept range in real time before the pack
-      // can be updated; the annotated render then flips it to 'rendering'.
-      const trimmedAnnotations = rebaseAnnotationsForTrim(annotations, trim)
-      showSaveToast({
-        folderPath: handle.dirPath,
-        hasBlur: trimmedAnnotations.some((a) => a.blur),
-        renderState: 'trimming',
-        uiLanguage: uiLanguage(settings),
-      })
-      try {
-        // The TRIMMED replay bytes first, via the render pipeline in plain
-        // mode (empty overlay set, arbitrary range) — then everything else is
-        // rebased onto the trimmed clock and the normal pipeline runs.
-        //
-        // Only the FOCUSED display's replay is trimmed: re-encoding every
-        // display would cost one real-time render per screen. The non-focused
-        // replays keep the original recording's clock, which readers align by
-        // adding media.trim_offset_ms (SPEC §5.3).
-        const trimmedWebm = await renderTrimmedReplay({
-          replayWebm,
-          width: snap.width,
-          height: snap.height,
-          fps: settings.fps,
-          sourceDurationMs: replayDurationMs,
-          trimStartMs: trim.startMs,
-          trimEndMs: trim.endMs < replayDurationMs ? trim.endMs : null,
-        })
-        finalInput = {
-          ...input,
-          replayWebm: trimmedWebm,
-          replayDurationMs: trim.lengthMs,
-          annotations: trimmedAnnotations,
-          snapshotTMs: rebaseSnapshotTMsForTrim(input.snapshotTMs, trim),
-          // t0 stays the instant of the replay's first frame (SPEC §10.1) —
-          // which is now the trim in-point; events shift with it (clamped so
-          // pre-in-point events cannot go negative, like every other rebase).
-          timeline: {
-            t0: new Date(t0Ms + trim.startMs).toISOString(),
-            events: events.map((e) => ({ ...e, t_ms: Math.max(0, e.t_ms - trim.startMs) })),
-          },
-          trimOffsetMs: trim.startMs,
-        }
-        renderWebm = trimmedWebm
-        renderAnnotations = trimmedAnnotations
-        renderDurationMs = trim.lengthMs
-      } catch (err) {
-        // The trim is best-effort — never lose the capture over it: fall back
-        // to saving the full-range replay (the untrimmed path) and say so.
-        // Async on purpose (like index.ts's hotkey dialog): showErrorBox would
-        // block the main-process event loop mid-save, freezing the visible
-        // "Trimming replay…" toast, the fallback updatePack write below, and
-        // the always-on MCP server until dismissed.
-        console.error('capturepack: replay trim failed:', errorMessage(err))
-        void dialog.showMessageBox({
-          type: 'error',
-          title: 'CapturePack', // product name — never translated
-          message: uiT(settings)('app.trimFailed', { error: errorMessage(err) }),
-        })
-      }
-    }
-    const dirPath: string = await updatePack(handle, finalInput)
-    // Save pipeline (GOAL): update folder -> toast -> background render. The
-    // toast never waits for the render; its status line flips when it ends.
-    //
-    // ALWAYS a fresh toast, even when the trim path already opened one: the
-    // trim plays the kept range in REAL TIME, so a 30-60 s replay outlives the
-    // "Trimming replay…" toast, and updating a toast that closed itself would
-    // leave the save with no [Open Folder] / [Create ZIP] / [Copy Prompt] at all.
-    const hasReplay = renderWebm !== null
+    const savedHandle = handle
+    const hasReplay = replayWebm !== null
     showSaveToast({
-      folderPath: dirPath,
-      hasBlur: finalInput.annotations.some((a) => a.blur),
-      renderState: hasReplay ? 'rendering' : 'none',
+      folderPath: savedHandle.dirPath,
+      hasBlur: input.annotations.some((a) => a.blur),
+      renderState: hasReplay ? (needsExactCut ? 'trimming' : 'rendering') : 'none',
       uiLanguage: uiLanguage(settings),
     })
-    // The pack's OWN annotated views cover the focused display: its media IS
-    // the top-level media, and a box on another screen has bounds in that
-    // screen's coordinate space (SPEC §8.8) — rendering it here would draw it
-    // somewhere meaningless.
-    const focusedIndex = display.index
-    const focusedAnnotations = annotationsOnDisplay(
-      finalInput.annotations,
-      focusedIndex,
-      focusedIndex,
-    )
-    if (renderWebm !== null) {
-      startAnnotatedRender(
-        handle,
-        {
-          replayWebm: renderWebm,
-          annotations: annotationsOnDisplay(renderAnnotations, focusedIndex, focusedIndex),
-          // Numbered GLOBALLY, over every box the pack saved (SPEC §8.5) — the
-          // job above carries the focused display's subset only.
-          displayNumbers: globalDisplayNumbers(renderAnnotations),
-          width: snap.width,
-          height: snap.height,
-          fps: settings.fps,
-          replayDurationMs: renderDurationMs,
-          // The render regenerates the pack documents once it declares its
-          // stills, so it needs the pack language too.
-          docLanguage: packDocLanguage(settings),
-        },
-        (state) => updateToastRenderStatus(dirPath, state),
+
+    const finalize = async (): Promise<void> => {
+      const finalDisplays =
+        replayWebm !== null && needsExactCut
+          ? await cutCapturedDisplays(
+              frozen.displays,
+              display.index,
+              replayDurationMs,
+              keptRange,
+              settings.fps,
+            )
+          : frozen.displays
+      const finalFocused = finalDisplays.find((d) => d.focused) ?? display
+      const finalInput: ExportInput = {
+        ...input,
+        replayWebm: finalFocused.replayWebm,
+        ...(finalFocused.replayFile === null ? {} : { replayFile: finalFocused.replayFile }),
+        replayDurationMs: finalFocused.replayDurationMs,
+        displays: multiDisplay ? toDisplayCaptures(finalDisplays) : undefined,
+      }
+      const dirPath = await updatePack(savedHandle, finalInput)
+      if (needsExactCut && finalFocused.replayWebm !== null) {
+        updateToastRenderStatus(dirPath, 'rendering')
+      }
+      startFreshCaptureRenders(
+        savedHandle,
+        finalInput,
+        finalDisplays,
+        display.index,
+        settings,
+        dirPath,
+      )
+    }
+
+    if (needsExactCut) {
+      // Fire-and-forget: the editor closes and the folder toast appears before
+      // any real-time cut. The serialized render queue performs the exact cut,
+      // updates every clock-bearing file, then starts replay_annotated.
+      void finalize().catch((err: unknown) =>
+        handleExactCutFailure(savedHandle, input, frozen, display.index, settings, err),
       )
     } else {
-      // Screenshot-only pack: no video to render, but it still gets its ONE
-      // annotated still (GOAL "Annotated keyframes", SPEC §7.3) so an LLM sees
-      // the annotations without opening snapshot.png + annotations.json.
-      startKeyframeStill(handle, {
-        snapshotPng: finalInput.snapshotPng,
-        annotations: focusedAnnotations,
-        displayNumbers: globalDisplayNumbers(finalInput.annotations),
-        width: snap.width,
-        height: snap.height,
-        docLanguage: packDocLanguage(settings),
-      })
-    }
-    // Every OTHER annotated display, from the ORIGINAL (never trimmed) bytes it
-    // was recorded with — only the focused replay is trimmed (SPEC §5.6), so a
-    // trim shifts the other clocks rather than shortening them.
-    if (multiDisplay) {
-      const trimStartMs = trim !== null && finalInput.trimOffsetMs === trim.startMs ? trim.startMs : 0
-      startDisplayRenders(
-        handle,
-        frozen.displays.map((d) => ({
-          index: d.index,
-          width: d.width,
-          height: d.height,
-          snapshotPng: d.snapshotPng,
-          replayWebm: d.replayWebm,
-          replayDurationMs: d.replayDurationMs,
-          // pack clock -> original focused clock -> this display's clock. The
-          // recorders were all stopped by the same trigger, so the second step
-          // is the difference of their (untrimmed) lengths.
-          offsetMs: trimStartMs + (d.replayDurationMs - replayDurationMs),
-        })),
-        finalInput.annotations,
-        focusedIndex,
-        settings.fps,
-        packDocLanguage(settings),
-      )
+      await finalize()
     }
   } catch (err) {
     dialog.showErrorBox(uiT(settings)('app.saveFailedTitle'), errorMessage(err))
   }
 }
 
+/**
+ * Cuts every recorded display to the same end-aligned pack interval. The
+ * focused display defines the pack clock; a shorter secondary buffer remains
+ * honestly shorter rather than being padded. All jobs pass through the global
+ * render queue, so multi-display finalization never fans out encoders.
+ */
+async function cutCapturedDisplays(
+  displays: readonly FrozenDisplay[],
+  focusedIndex: number,
+  focusedWindowDurationMs: number,
+  keptRange: TrimRange,
+  fps: number,
+): Promise<FrozenDisplay[]> {
+  const focused = displays.find((d) => d.index === focusedIndex && d.focused)
+  if (focused === undefined) throw new Error('focused display is missing from exact replay cut')
+
+  const focusedSourceStart = focused.replayDurationMs - focusedWindowDurationMs
+  const cutFocused = await cutFrozenDisplay(
+    focused,
+    focusedSourceStart + keptRange.startMs,
+    focusedSourceStart + keptRange.endMs,
+    fps,
+  )
+
+  const distanceFromEndAtStart = focusedWindowDurationMs - keptRange.startMs
+  const distanceFromEndAtEnd = focusedWindowDurationMs - keptRange.endMs
+  const result: FrozenDisplay[] = []
+  for (const display of displays) {
+    if (display.index === focused.index) {
+      result.push(cutFocused)
+      continue
+    }
+    const startMs = display.replayDurationMs - distanceFromEndAtStart
+    const endMs = display.replayDurationMs - distanceFromEndAtEnd
+    try {
+      result.push(await cutFrozenDisplay(display, startMs, endMs, fps))
+    } catch (err) {
+      // A secondary replay must never hold up or invalidate the focused pack.
+      // Drop that replay declaration; its native snapshot remains annotatable.
+      console.error(
+        `capturepack: exact replay cut failed for display ${display.index}:`,
+        errorMessage(err),
+      )
+      result.push(withoutFrozenReplay(display))
+    }
+  }
+  return result
+}
+
+async function cutFrozenDisplay(
+  display: FrozenDisplay,
+  rawStartMs: number,
+  rawEndMs: number,
+  fps: number,
+): Promise<FrozenDisplay> {
+  if (
+    display.replayWebm === null ||
+    display.replayMimeType === null ||
+    display.replayFile === null ||
+    display.replayDurationMs <= 0
+  ) {
+    return display
+  }
+  const startMs = Math.min(
+    display.replayDurationMs,
+    Math.max(0, Math.round(rawStartMs)),
+  )
+  const endMs = Math.min(
+    display.replayDurationMs,
+    Math.max(0, Math.round(rawEndMs)),
+  )
+  if (endMs <= startMs) return withoutFrozenReplay(display)
+  if (startMs === 0 && endMs === display.replayDurationMs) return display
+
+  const replayWebm = await renderTrimmedReplay({
+    replayWebm: display.replayWebm,
+    replayMimeType: display.replayMimeType,
+    width: display.width,
+    height: display.height,
+    fps,
+    sourceDurationMs: display.replayDurationMs,
+    trimStartMs: startMs,
+    trimEndMs: endMs < display.replayDurationMs ? endMs : null,
+  })
+  return {
+    ...display,
+    replayWebm,
+    replayDurationMs: endMs - startMs,
+    replayMimeType: 'video/webm',
+    replayFile: 'replay.webm',
+  }
+}
+
+function withoutFrozenReplay(display: FrozenDisplay): FrozenDisplay {
+  return {
+    ...display,
+    replayWebm: null,
+    replayDurationMs: 0,
+    replayMimeType: null,
+    replayFile: null,
+  }
+}
+
+function startFreshCaptureRenders(
+  handle: PackHandle,
+  input: ExportInput,
+  displays: readonly FrozenDisplay[],
+  focusedIndex: number,
+  settings: Settings,
+  dirPath: string,
+): void {
+  const focused = displays.find((d) => d.index === focusedIndex) ?? displays.find((d) => d.focused)
+  const focusedAnnotations = annotationsOnDisplay(input.annotations, focusedIndex, focusedIndex)
+  const numbers = globalDisplayNumbers(input.annotations)
+  if (
+    input.replayWebm !== null &&
+    focused?.replayMimeType !== null &&
+    focused?.replayMimeType !== undefined
+  ) {
+    startAnnotatedRender(
+      handle,
+      {
+        replayWebm: input.replayWebm,
+        replayMimeType: focused.replayMimeType,
+        annotations: focusedAnnotations,
+        displayNumbers: numbers,
+        width: input.width,
+        height: input.height,
+        fps: settings.fps,
+        replayDurationMs: input.replayDurationMs,
+        docLanguage: packDocLanguage(settings),
+      },
+      (state) => updateToastRenderStatus(dirPath, state),
+    )
+  } else {
+    startKeyframeStill(handle, {
+      snapshotPng: input.snapshotPng,
+      annotations: focusedAnnotations,
+      displayNumbers: numbers,
+      width: input.width,
+      height: input.height,
+      docLanguage: packDocLanguage(settings),
+    })
+  }
+
+  if (displays.length > 1) {
+    const focusedDurationMs = focused?.replayDurationMs ?? 0
+    startDisplayRenders(
+      handle,
+      displays.map((d) => ({
+        index: d.index,
+        width: d.width,
+        height: d.height,
+        snapshotPng: d.snapshotPng,
+        replayWebm: d.replayWebm,
+        replayMimeType: d.replayMimeType,
+        replayDurationMs: d.replayDurationMs,
+        offsetMs: d.replayDurationMs - focusedDurationMs,
+      })),
+      input.annotations,
+      focusedIndex,
+      settings.fps,
+      packDocLanguage(settings),
+    )
+  }
+}
+
+async function handleExactCutFailure(
+  handle: PackHandle,
+  input: ExportInput,
+  frozen: { displays: FrozenDisplay[] },
+  focusedIndex: number,
+  settings: Settings,
+  err: unknown,
+): Promise<void> {
+  // Never fall back to the oversized ring segment: screenshot-only is the
+  // honest degradation and preserves the "never longer than N" guarantee.
+  console.error('capturepack: exact replay cut failed; saving screenshot-only:', errorMessage(err))
+  const displays = frozen.displays.map(withoutFrozenReplay)
+  const fallback: ExportInput = {
+    ...input,
+    replayWebm: null,
+    replayDurationMs: 0,
+    annotations: input.annotations.map(withoutReplayTimes),
+    snapshotTMs: null,
+    trimOffsetMs: null,
+    timeline: {
+      t0: isoWithOffset(input.capturedAt),
+      events: input.timeline.events.map((e) => ({
+        ...e,
+        t_ms: Math.max(0, e.t_ms - input.replayDurationMs),
+      })),
+    },
+    displays: displays.length > 1 ? toDisplayCaptures(displays) : undefined,
+  }
+  try {
+    await updatePack(handle, fallback)
+    updateToastRenderStatus(handle.dirPath, 'failed')
+    startFreshCaptureRenders(handle, fallback, displays, focusedIndex, settings, handle.dirPath)
+  } catch (fallbackErr) {
+    console.error('capturepack: screenshot-only trim fallback failed:', errorMessage(fallbackErr))
+  }
+  void dialog.showMessageBox({
+    type: 'error',
+    title: 'CapturePack',
+    message: uiT(settings)('app.trimFailed', { error: errorMessage(err) }),
+  })
+}
+
+async function finalizeCancelledExactReplay(
+  handle: PackHandle,
+  initial: InitialSaveInput,
+  frozen: { displays: FrozenDisplay[] },
+  replayDurationMs: number,
+  replaySourceStartMs: number,
+  settings: Settings,
+): Promise<void> {
+  const focused = frozen.displays.find((d) => d.focused)
+  if (focused === undefined) return
+  let displays: FrozenDisplay[]
+  try {
+    displays = await cutCapturedDisplays(
+      frozen.displays,
+      focused.index,
+      replayDurationMs,
+      { startMs: 0, endMs: replayDurationMs, lengthMs: replayDurationMs },
+      settings.fps,
+    )
+  } catch (err) {
+    console.error(
+      'capturepack: cancelled capture exact cut failed; keeping it screenshot-only:',
+      errorMessage(err),
+    )
+    displays = frozen.displays.map(withoutFrozenReplay)
+  }
+  const finalFocused = displays.find((d) => d.focused) ?? withoutFrozenReplay(focused)
+  await updateInitialPack(handle, {
+    ...initial,
+    replayWebm: finalFocused.replayWebm,
+    ...(finalFocused.replayFile === null ? {} : { replayFile: finalFocused.replayFile }),
+    replayDurationMs: finalFocused.replayDurationMs,
+    ...(finalFocused.replayWebm !== null && replaySourceStartMs > 0
+      ? { trimOffsetMs: replaySourceStartMs }
+      : {}),
+    timeline:
+      finalFocused.replayWebm === null
+        ? {
+            t0: isoWithOffset(initial.capturedAt),
+            events: initial.timeline.events.map((e) => ({ ...e, t_ms: 0 })),
+          }
+        : {
+            t0: new Date(initial.capturedAt.getTime() - replayDurationMs).toISOString(),
+            events: initial.timeline.events.map((e) => ({
+              ...e,
+              t_ms: Math.max(0, e.t_ms - replaySourceStartMs),
+            })),
+          },
+    displays: displays.length > 1 ? toDisplayCaptures(displays) : undefined,
+  })
+}
+
 // Re-edit (GOAL "History — Open & re-edit"): the Folder IS the project — no
 // conversion step. Everything is read back from the pack folder, the editor
 // restores it, and Save updates the SAME folder through the existing pipeline
-// with one hard rule: replay.webm is NEVER rewritten on re-edit.
+// with one hard rule: the declared replay file is NEVER rewritten on re-edit.
 async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
   const pack = openPack(dirPath, 'dir', path.basename(dirPath))
   const manifest = pack.manifest()
@@ -764,10 +1006,12 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
       height,
       hasReplay: replayWebm !== null,
       replayDurationMs,
+      replaySourceStartMs: 0,
       // The saved pack's other frozen displays, read back for the same BOARD a
       // fresh multi-display capture opens: all of them at once, all annotatable.
       displays: loadedEditorDisplays(pack, loadedDisplays, replayDurationMs),
       replayWebm: replayWebm === null ? null : toArrayBuffer(replayWebm),
+      replayMimeType: replayRel === null ? null : replayMimeType(replayRel),
       // Picking works on re-edit too, from the pack's own saved dump.
       uiaElements: editorUiaElements(loadedUia),
       uiaWindows: editorUiaWindows(loadedUia),
@@ -883,6 +1127,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
         handle,
         {
           replayWebm,
+          replayMimeType: replayMimeType(replayRel),
           annotations: focusedAnnotations,
           displayNumbers: numbers,
           width,
@@ -940,6 +1185,7 @@ interface DisplayRenderSource {
   height: number
   snapshotPng: Buffer
   replayWebm: Buffer | null
+  replayMimeType: string | null
   replayDurationMs: number
   /**
    * ms to ADD to a pack-clock time to reach this display's own replay clock.
@@ -1015,9 +1261,10 @@ function startDisplayRenders(
     if (s.index === focusedIndex) continue
     const own = annotationsOnDisplay(annotations, s.index, focusedIndex)
     if (own.length === 0) continue
-    if (s.replayWebm !== null && s.replayDurationMs > 0) {
+    if (s.replayWebm !== null && s.replayMimeType !== null && s.replayDurationMs > 0) {
       startDisplayRender(handle, {
         replayWebm: s.replayWebm,
+        replayMimeType: s.replayMimeType,
         annotations: own.map((a) => rebaseLifetimeTo(a, s.offsetMs, s.replayDurationMs)),
         displayNumbers,
         width: s.width,
@@ -1167,6 +1414,7 @@ function displayRenderSources(
       height: size.height,
       snapshotPng: png,
       replayWebm: replay,
+      replayMimeType: replay === null ? null : replayMimeType(d.replayFile),
       replayDurationMs: replay === null ? 0 : d.replayDurationMs,
       offsetMs: d.replayDurationMs - focusedDurationMs,
     })
@@ -1216,6 +1464,7 @@ function loadedEditorDisplays(
       bounds: { ...d.bounds },
       scale: d.scale,
       replayWebm: replay === null ? null : toArrayBuffer(replay),
+      replayMimeType: replay === null ? null : replayMimeType(d.replayFile),
       replayDurationMs: durationMs,
       replayOffsetMs: d.focused ? 0 : durationMs - focusedDurationMs,
     })

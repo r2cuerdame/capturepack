@@ -35,6 +35,7 @@ function defaultSettings(): Settings {
     captureHotkey: DEFAULT_CAPTURE_HOTKEY,
     replaySeconds: 30,
     fps: 15,
+    replayMaxWidth: 1920,
     // All displays by default (GOAL "Multi-Monitor Support"). Migration is
     // silent by construction: mergeSettings keeps any VALID stored value, so an
     // existing settings.json that says "cursor" (or a fixed display id) stays
@@ -215,6 +216,7 @@ const SETTINGS_KEY_SET: Record<keyof Settings, true> = {
   captureHotkey: true,
   replaySeconds: true,
   fps: true,
+  replayMaxWidth: true,
   captureDisplay: true,
   scrubInvert: true,
   scrubSensitivityMs: true,
@@ -357,6 +359,13 @@ function mergeSettings(base: Settings, raw: Record<string, unknown>): Settings {
         ? raw.replaySeconds
         : base.replaySeconds,
     fps: typeof raw.fps === 'number' && raw.fps > 0 ? raw.fps : base.fps,
+    replayMaxWidth:
+      typeof raw.replayMaxWidth === 'number' &&
+      Number.isInteger(raw.replayMaxWidth) &&
+      (raw.replayMaxWidth === 0 ||
+        (raw.replayMaxWidth >= 720 && raw.replayMaxWidth <= 3840))
+        ? raw.replayMaxWidth
+        : base.replayMaxWidth,
     captureDisplay:
       typeof raw.captureDisplay === 'string' && isCaptureDisplay(raw.captureDisplay)
         ? raw.captureDisplay
