@@ -73,6 +73,12 @@ await Promise.all([
   // src/main/uia.ts as a real file, so it must ship next to the bundles AND be
   // kept out of the asar — see asarUnpack in electron-builder.yml.
   cp('scripts/uia-dump.ps1', 'dist/scripts/uia-dump.ps1'),
+  // The resident Context Host (issues #64/#65): spawned by src/main/context/host.ts
+  // as a real file for the same reason, and kept standalone-runnable
+  // (`powershell -File dist/scripts/context-host.ps1 -SelfTest 100`) because
+  // that self-test is how its CPU cost stays a measured number rather than a
+  // claim.
+  cp('scripts/context-host.ps1', 'dist/scripts/context-host.ps1'),
   cp('assets', 'dist/assets', { recursive: true }),
 ])
 

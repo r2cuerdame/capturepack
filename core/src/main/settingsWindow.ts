@@ -18,6 +18,7 @@ import type {
 import { resolveLanguage } from '../shared/i18n'
 import type { Settings } from '../shared/types'
 import { restartCapture } from './capture'
+import { updateContextRetention } from './context/runtime'
 import { currentCaptureHotkey, registerCaptureHotkey } from './hotkey'
 import { uiLanguage, uiT } from './locale'
 import { mcpAppliedSettings, mcpStatus, restartMcpServer } from './mcp/service'
@@ -130,6 +131,13 @@ export function registerSettingsIpc(live: Settings, hooks: SettingsIpcHooks = {}
       live.replayMaxWidth !== before.replayMaxWidth
     ) {
       void restartCapture(live)
+    }
+    // The Surface Timeline retains as far back as the replay does, and follows a
+    // change WITHOUT a session restart (issue #64, protocol GAP 2: the retention
+    // window on every tick IS the contract, so shortening the replay must shrink
+    // the ring immediately rather than at the next launch).
+    if (live.replaySeconds !== before.replaySeconds) {
+      updateContextRetention(live.replaySeconds * 1000)
     }
     // The updater honors the toggle live (GOAL: instant apply where possible).
     if (live.autoUpdateCheck !== before.autoUpdateCheck) {
