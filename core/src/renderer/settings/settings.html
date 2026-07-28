@@ -50,7 +50,7 @@
         <input type="checkbox" id="launchAtLogin" />
       </label>
       <label class="row toggleRow">
-        <span class="label" data-i18n="settings.notifyOnRecordingStart">Notify when the replay buffer starts</span>
+        <span class="label" data-i18n="settings.notifyOnRecordingStart">Notify when replay recording starts</span>
         <input type="checkbox" id="notifyOnRecordingStart" />
       </label>
     </section>
@@ -104,16 +104,21 @@
           <span class="unit">fps</span>
         </span>
       </div>
+      <!-- A dropdown, not a free number (issue #45): the meaningful choices are
+           few and the values in between buy nothing, so each option names the
+           quality/CPU trade it actually is. The stored value stays an integer
+           width, and a width that is not one of the presets (an older profile,
+           a hand-edited settings.json) gets an option of its own rather than
+           being silently snapped — see buildReplayMaxWidthOptions(). -->
       <div class="row rowCol">
         <div class="rowTop">
           <label class="label" for="replayMaxWidth" data-i18n="settings.replayMaxWidth">Replay resolution limit</label>
           <span class="control">
-            <input type="number" id="replayMaxWidth" min="0" max="3840" step="1" />
-            <span class="unit">px</span>
+            <select id="replayMaxWidth"></select>
           </span>
         </div>
         <div class="rowFoot">
-          <span class="subhint" data-i18n="settings.replayMaxWidthHint">longest edge; 0 keeps native resolution</span>
+          <span class="subhint" data-i18n="settings.replayMaxWidthHint">Only the replay video is scaled — the snapshot always stays at native resolution.</span>
         </div>
       </div>
     </section>
@@ -144,33 +149,34 @@
       </div>
     </section>
 
+    <!-- The MCP server restarts IN PLACE (issue #54), so nothing in this
+         section costs an app restart any more: the hints point at [Restart]
+         below, and mcpAutoStart carries no hint at all because it only governs
+         what happens at the NEXT app start. -->
     <section aria-labelledby="hMcp">
       <h2 id="hMcp">MCP <span class="badge" data-i18n="settings.readOnlyBadge">read-only</span></h2>
       <label class="row toggleRow">
         <span class="labelWrap">
           <span class="label" data-i18n="settings.mcpEnable">Enable MCP server</span>
-          <span class="hint" id="mcpEnabledHint" hidden data-i18n="settings.restartToApply">restart CapturePack to apply</span>
+          <span class="hint" id="mcpEnabledHint" hidden data-i18n="settings.restartMcpToApply">press Restart to apply</span>
         </span>
         <input type="checkbox" id="mcpEnabled" />
       </label>
       <label class="row toggleRow">
-        <span class="labelWrap">
-          <span class="label" data-i18n="settings.mcpAutoStart">Start automatically</span>
-          <span class="hint" id="mcpAutoStartHint" hidden data-i18n="settings.restartToApply">restart CapturePack to apply</span>
-        </span>
+        <span class="label" data-i18n="settings.mcpAutoStart">Start automatically</span>
         <input type="checkbox" id="mcpAutoStart" />
       </label>
       <div class="row">
         <label class="label" for="mcpPort" data-i18n="settings.mcpPort">Port</label>
         <span class="control">
-          <span class="hint" id="mcpPortHint" hidden data-i18n="settings.restartToApply">restart CapturePack to apply</span>
+          <span class="hint" id="mcpPortHint" hidden data-i18n="settings.restartMcpToApply">press Restart to apply</span>
           <input type="number" id="mcpPort" min="1024" max="65535" step="1" />
         </span>
       </div>
       <label class="row toggleRow">
         <span class="labelWrap">
           <span class="label" data-i18n="settings.mcpWatch">Watch export folder</span>
-          <span class="hint" id="mcpWatchExportFolderHint" hidden data-i18n="settings.restartToApply">restart CapturePack to apply</span>
+          <span class="hint" id="mcpWatchExportFolderHint" hidden data-i18n="settings.restartMcpToApply">press Restart to apply</span>
         </span>
         <input type="checkbox" id="mcpWatchExportFolder" />
       </label>
@@ -178,11 +184,33 @@
         <span class="label" data-i18n="settings.mcpLog">Log requests</span>
         <input type="checkbox" id="mcpLogRequests" />
       </label>
+      <!-- LIVE state, read from the running server (issue #54): the settings
+           above are only a request — the port can be taken and autostart can be
+           off, and only this row can say so. -->
+      <div class="row">
+        <span class="label" id="mcpStatusLabel" data-i18n="settings.mcpStatus">Server status</span>
+        <span class="control shrink">
+          <span class="mcpDot" id="mcpDot" aria-hidden="true">⚪</span>
+          <span class="mcpState" id="mcpState" aria-labelledby="mcpStatusLabel"></span>
+          <button id="mcpRestartBtn" type="button" data-i18n="settings.mcpRestart">Restart</button>
+        </span>
+      </div>
       <div class="row">
         <span class="label" id="mcpUrlLabel" data-i18n="settings.mcpUrl">Connection URL</span>
         <span class="control">
           <code id="mcpUrl" aria-labelledby="mcpUrlLabel"></code>
           <button id="copyUrlBtn" type="button" data-i18n="settings.copy">Copy</button>
+        </span>
+      </div>
+      <!-- One click to a pasteable setup (issue #56): the client dropdown picks
+           the form docs/MCP.md documents, and both buttons use the endpoint the
+           server ACTUALLY bound, never the configured-but-unbound port. -->
+      <div class="row">
+        <label class="label" for="mcpClient" data-i18n="settings.mcpSetup">Set up a client</label>
+        <span class="control">
+          <select id="mcpClient"></select>
+          <button id="copySetupBtn" type="button" data-i18n="settings.mcpCopySetup">Copy setup command</button>
+          <button id="copyPromptBtn" type="button" data-i18n="settings.mcpCopyPrompt">Copy prompt</button>
         </span>
       </div>
     </section>
@@ -198,11 +226,32 @@
           <span class="soon" data-i18n="settings.comingSoonLower">coming soon</span>
         </span>
       </div>
+      <!-- Windows UI Automation has shipped since 0.1.4 and is what object
+           picking runs on (issue #57), so this row reports its REAL state,
+           carries a real on/off switch (settings.uiaEnabled genuinely stops the
+           helper spawn), and explains itself: a one-line summary always, the
+           long version behind the "?". -->
       <div class="pluginRow">
-        <span class="pluginIcon" aria-hidden="true">⚪</span>
-        <span class="pluginName">Windows UI Automation</span>
-        <span class="pluginStatus" data-i18n="settings.comingSoon">Coming soon</span>
+        <span class="pluginIcon" id="uiaIcon" aria-hidden="true">🟢</span>
+        <span class="pluginName" id="uiaName">Windows UI Automation</span>
+        <button
+          type="button"
+          class="pluginHelp"
+          id="uiaHelpBtn"
+          aria-expanded="false"
+          aria-controls="uiaDetail"
+          data-i18n-title="settings.pluginExplain"
+          data-i18n-aria-label="settings.pluginExplain"
+        >?</button>
+        <span class="pluginStatus" id="uiaStatus"></span>
+        <span class="pluginAction">
+          <!-- The plugin NAME is the switch's accessible name: it is the same
+               product name in every language, so it needs no dictionary key. -->
+          <input type="checkbox" id="uiaEnabled" aria-labelledby="uiaName" />
+        </span>
       </div>
+      <p class="pluginSummary" data-i18n="settings.uiaSummary">Click real buttons and windows instead of drawing boxes — costs a sub-second helper run per capture.</p>
+      <p class="pluginDetail" id="uiaDetail" hidden data-i18n="settings.uiaDetail">At the capture instant a short-lived helper reads the window list and the control tree of the visible windows, so the editor can snap a box onto a real button or window and store its name. It reads UI state only — never your keyboard or mouse input — and nothing leaves this machine.</p>
       <div class="pluginRow">
         <span class="pluginIcon" aria-hidden="true">⚪</span>
         <span class="pluginName">Unity</span>

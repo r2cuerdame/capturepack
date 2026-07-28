@@ -486,6 +486,13 @@ export interface Settings {
   // "all" and "cursor" run the same recorder set, so "all" costs export work,
   // not capture work.
   captureDisplay: string
+  // Windows UI Automation object picking (GOAL "Static object picking (v0)",
+  // issue #57). ON by default — it is what left click picks real buttons and
+  // windows with. Turning it OFF must genuinely stop the helper spawn, not grey
+  // a row out: the dump costs a sub-second PowerShell process on EVERY capture,
+  // which is exactly why the user is allowed to decline it. Off means captures
+  // carry no plugins/windows-uia/ and picking falls back to manual boxes.
+  uiaEnabled: boolean
   scrubInvert: boolean
   scrubSensitivityMs: number
   // Default lifetime duration (ms) stamped on manual annotations in the editor.

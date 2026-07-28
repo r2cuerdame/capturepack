@@ -383,7 +383,13 @@ async function runFlow(settings: Settings): Promise<void> {
   // runs concurrently with the snapshot, the replay fetch, and save-first, is
   // hard-killed at its budget, and resolves null on any failure — a capture can
   // neither fail nor slow down because of it.
-  const uiaDump = startUiaDump()
+  //
+  // The Plugins switch is REAL (issue #57): off means no helper process is
+  // spawned at all, so the sub-second cost genuinely leaves every capture. The
+  // rest of the flow needs no branch — a disabled plugin resolves exactly like
+  // a dump that produced nothing, which the editor already reports honestly as
+  // "object picking is off for this capture".
+  const uiaDump = settings.uiaEnabled ? startUiaDump() : Promise.resolve(null)
   // "all": every connected display is frozen, the cursor's display is the
   // FOCUSED one. "cursor"/fixed: that display alone. Snapshot, replay, editor,
   // and annotations all target the focused display.

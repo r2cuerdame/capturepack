@@ -12,6 +12,7 @@ import type {
   ToastInitPayload,
   ToastRenderState,
 } from '../shared/ipc'
+import { analyzePackPrompt } from '../shared/prompt'
 import { createPackZip } from './exporter'
 
 const TOAST_WIDTH = 420
@@ -61,16 +62,13 @@ function armAutoClose(toast: ActiveToast, state: ToastRenderState): void {
 let active: ActiveToast | null = null
 let ipcRegistered = false
 
-/** The exact Copy Prompt text (FIXED CONTRACT — do not reword). Deliberately
- * NOT localized: it is pasted into an LLM conversation (LLM-facing surface,
- * like the MCP tool descriptions), so it stays English in every UI language. */
-export function analyzePrompt(folderPath: string): string {
-  return (
-    `Analyze the CapturePack at ${folderPath}. Read README.md first, then skills/ and ` +
-    'report.md; annotations.json is the machine-readable source. If a CapturePack MCP ' +
-    'server is connected, call capturepack_latest instead.'
-  )
-}
+/**
+ * The exact Copy Prompt text (FIXED CONTRACT — do not reword). It lives in
+ * shared/prompt.ts because Settings > MCP copies the same instructions for a
+ * connected server (issue #56) and the two must never drift; this re-export
+ * keeps every existing main-process caller pointing at one function.
+ */
+export const analyzePrompt = analyzePackPrompt
 
 export function showSaveToast(options: {
   folderPath: string

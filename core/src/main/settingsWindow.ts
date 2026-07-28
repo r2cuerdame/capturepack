@@ -8,13 +8,21 @@ import { app, BrowserWindow, dialog, ipcMain, screen, shell } from 'electron'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { IPC } from '../shared/ipc'
-import type { SettingsDisplayOption, SettingsGetResult, SettingsSetResult } from '../shared/ipc'
+import type {
+  McpStatus,
+  SettingsDisplayOption,
+  SettingsGetResult,
+  SettingsSetResult,
+  SettingsStatusResult,
+} from '../shared/ipc'
 import { resolveLanguage } from '../shared/i18n'
 import type { Settings } from '../shared/types'
 import { restartCapture } from './capture'
 import { currentCaptureHotkey, registerCaptureHotkey } from './hotkey'
 import { uiLanguage, uiT } from './locale'
+import { mcpAppliedSettings, mcpStatus, restartMcpServer } from './mcp/service'
 import { applyPartial, clearOutputDirOverride, persistSettings } from './settings'
+import { uiaPluginStatus } from './uia'
 import { setAutoUpdateCheck } from './updater'
 
 let settingsWindow: BrowserWindow | null = null
@@ -42,23 +50,31 @@ export interface SettingsIpcHooks {
 // Call once at startup, before the window can open.
 export function registerSettingsIpc(live: Settings, hooks: SettingsIpcHooks = {}): void {
   liveSettings = live
-  // Boot-time snapshot, taken before any GUI mutation is possible: the values
-  // the running MCP server/watcher actually honor. The renderer's "restart to
-  // apply" hints compare against this so they survive window close/reopen.
-  const boot: Settings = { ...live }
 
   ipcMain.handle(IPC.settingsGet, (): SettingsGetResult => {
     return {
       settings: { ...live },
-      bootSettings: { ...boot },
       displays: listDisplays(live),
       appVersion: app.getVersion(),
-      // The RUNNING server bound the boot-time port; a changed live.mcpPort
-      // takes effect only after restart (the GUI shows the hint).
-      mcpUrl: mcpUrl(boot.mcpPort),
+      status: liveStatus(live),
       uiLanguage: uiLanguage(live),
       systemLanguage: resolveLanguage('system', app.getLocale()),
     }
+  })
+
+  // The two things settings can only ASK for, read from reality (issues #54,
+  // #57). Cheap enough to re-poll after every patch and on window focus, which
+  // is what keeps the window truthful while captures happen behind it.
+  ipcMain.handle(IPC.settingsStatus, (): SettingsStatusResult => liveStatus(live))
+
+  ipcMain.handle(IPC.settingsMcpRestart, async (): Promise<SettingsStatusResult> => {
+    // Restart in place (GOAL "Settings GUI": instant apply where possible):
+    // only the HTTP server and its pack index are recreated — the capture
+    // buffer, the global hotkey and any open editor never notice.
+    const restarted: McpStatus = await restartMcpServer(live)
+    // Read AFTER the restart, so the answer carries the settings the server now
+    // honors and the GUI's pending-change hints clear in the same message.
+    return { ...liveStatus(live), mcp: restarted }
   })
 
   ipcMain.handle(IPC.settingsSet, (_event, patch: unknown): SettingsSetResult => {
@@ -209,8 +225,19 @@ function listDisplays(live: Settings): SettingsDisplayOption[] {
   })
 }
 
-function mcpUrl(port: number): string {
-  return `http://127.0.0.1:${port}/mcp`
+/**
+ * Everything the settings window shows that is LIVE rather than configured.
+ *
+ * `mcpSettings` falls back to the live values when no start has ever been
+ * attempted: no start means nothing is pending, so showing no "press Restart"
+ * hints is the honest answer rather than hinting at every MCP key at once.
+ */
+function liveStatus(live: Settings): SettingsStatusResult {
+  return {
+    mcp: mcpStatus(),
+    mcpSettings: { ...(mcpAppliedSettings() ?? live) },
+    uia: uiaPluginStatus(live.uiaEnabled),
+  }
 }
 
 function errorMessage(err: unknown): string {

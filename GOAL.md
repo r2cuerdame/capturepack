@@ -217,9 +217,13 @@ working. So:
 - **Tray tooltip is live state**, always: "CapturePack — recording · last 30s ready
   (Ctrl+Alt+C)", "starting…", or "not recording — <reason>". The tooltip costs nothing and
   never interrupts.
-- **A brief tray notification when the buffer starts**, once per launch, saying the last N
-  seconds are now always available and naming the hotkey. Suppressible in Settings
+- **A brief tray notification when replay recording starts**, once per launch, saying the
+  last N seconds are now always available and naming the hotkey. Suppressible in Settings
   (default on).
+- **Say it in the user's words, never in ours.** "Replay buffer" is an implementation
+  detail the user never configured and cannot see; every one of these surfaces — the
+  Settings toggle, the notification, the failure balloon, the reasons — names what actually
+  happens instead: *the last N seconds are (not) being recorded*.
 - **A failure is always announced**, whether or not the start notice is suppressed: if the
   recorder never starts, the user must find out immediately, not when they press the
   hotkey and get a screenshot-only pack.
@@ -663,14 +667,17 @@ one plugin among equals, sharing the exact structure future integrations will us
 
 ```
 Plugins
-🟢 Chrome DOM
-🟢 Windows Window Tracking
-⚪ UI Automation
-⚪ Unreal
-⚪ Unity
-⚪ VSCode
-⚪ Git
+🟢 Windows UI Automation   Active — last capture: 14 windows, 812 controls   [✓]
+   Click real buttons and windows instead of drawing boxes — sub-second helper per capture.
+⚪ Chrome DOM              Not installed                                     [ Install ]
+⚪ Unreal · Unity · VSCode · Git                                             coming soon
 ```
+
+Every row tells the truth or says nothing: a shipped plugin reports what it actually did
+(and why it did not, when it failed), carries a switch that genuinely changes behavior,
+and explains itself in one line with a "?" for the long version. A row may only say
+"coming soon" while that is still true — Windows UI Automation shipped in 0.1.4 and object
+picking has run on it ever since.
 
 With this design CapturePack naturally grows into a plugin-based context platform.
 
@@ -711,23 +718,40 @@ Settings are edited in a GUI window — never by opening settings.json in an edi
 (the JSON file remains the storage; no database).
 
 - Opened from the tray ("Settings…"). One compact dark window consistent with the editor's
-  minimal design; keyboard accessible; instant apply where possible, an inline "restart to
-  apply" hint where not (e.g. MCP port).
+  minimal design; keyboard accessible; instant apply where possible, and where a running
+  subsystem has to pick a change up, an inline hint pointing at the button that applies it
+  — never at an app restart.
 - Grouped sections:
   - **General** — output folder (picker + open button), copy exported pack to clipboard,
     auto-update check.
   - **Capture** — **capture hotkey** (recordable field: click, press the new combination;
     default Ctrl+Alt+C; must include a modifier; conflict with another app's global
     shortcut is detected on registration and reverts with an inline error; applies
-    instantly and updates the tray label), replay length (seconds), capture FPS, replay maximum
-    long edge (`replayMaxWidth`, default 1920, 720..3840, or 0 for native).
+    instantly and updates the tray label), replay length (seconds), capture FPS, and the
+    **replay resolution limit** — a DROPDOWN of the few choices that matter (native/no
+    limit, 3840, 2560, 1920 default, 1280, 720), each labelled with the quality/CPU trade
+    it is rather than a bare pixel count, and each stating that only the replay video is
+    scaled while the snapshot stays native. The stored value remains an integer width
+    (`replayMaxWidth`, 0 or 720..3840), so older profiles keep loading; a stored width that
+    is not one of the presets is SHOWN as its own entry, never silently snapped.
   - **Annotation** — default manual duration, show duration label, scrub wheel invert,
     scrub sensitivity (ms per notch).
-  - **MCP** — enable, start automatically, port, watch export folder, log requests;
-    read-only badge and connection URL shown for copy-paste.
+  - **MCP** — enable, start automatically, port, watch export folder, log requests, plus
+    the read-only badge. The section reports the server's **live state**, not the settings:
+    running on the endpoint it actually bound, starting, or not running with the reason
+    (disabled, autostart off, port in use, bind error). **Restart** stops and restarts the
+    server in place with the current settings and reports the outcome — so changing the
+    port costs a button, never an app restart (and never the recording of the last N
+    seconds). Beside the connection URL, one click copies a **ready-made setup command**
+    for the chosen client (the forms documented in docs/MCP.md) and the **ready-made
+    prompt** to hand an AI once connected — both built from the LIVE endpoint, both
+    disabled while nothing is listening.
   - **Plugins** — the Plugin Manager surface (GOAL "Plugin Manager"): each integration with
-    status icon and Enable/Disable; Chrome DOM appears first (install/health-check UX per
-    "Extension Install & Management UX"); others listed as coming soon.
+    a status read from REALITY, a one-line description of what it does and what it costs, a
+    "?" that reveals the long explanation, and a real Enable/Disable where the switch can
+    genuinely change behavior. Chrome DOM appears first (install/health-check UX per
+    "Extension Install & Management UX"); only integrations that genuinely have not shipped
+    are listed as coming soon.
 - Settings values validate on input; invalid values never write to settings.json.
 
 ---
@@ -926,7 +950,15 @@ Automatic window/control selection ships in a static form first:
    capture, ordering by it never once beat ordering by containment while losing on 31.9% of
    contested points. Once containers are dropped (4) genuine sibling overlap is rare, so this
    rule is a correctness floor rather than the thing that makes picking feel right.
-6. Frame-by-frame tracking (bounds following the object through the replay) remains V3.
+6. **The user may decline it.** The dump costs a sub-second helper process on EVERY
+   capture, so Settings → Plugins carries a real switch (`uiaEnabled`, default ON — it is
+   what left click picks with). Off means the helper is never spawned: the cost genuinely
+   leaves the capture rather than the row merely greying out, packs carry no
+   `plugins/windows-uia/`, and picking falls back to manual boxes with the editor saying
+   so. The row also reports what the LAST capture actually collected (N windows /
+   M controls), or why it collected nothing (helper missing, PowerShell blocked by policy,
+   out of budget) — status from reality, never a constant.
+7. Frame-by-frame tracking (bounds following the object through the replay) remains V3.
 
 ---
 
@@ -994,7 +1026,18 @@ Settings └── MCP
   [✓] Enable MCP Server      [✓] Start Automatically   [✓] Always Running
   [✓] Read Only              [✓] Auto Discover Latest  [✓] Watch Export Folder
   Port: 39393                [ ] Log Requests
+  Server status: 🟢 Running on http://127.0.0.1:39393/mcp   [ Restart ]
+  Connection URL: http://127.0.0.1:39393/mcp               [ Copy ]
+  Set up a client: [ Claude Code ▾ ] [ Copy setup command ] [ Copy prompt ]
 ```
+
+The status line is read from the RUNNING server, never rebuilt from the settings above:
+`mcpEnabled` says nothing about whether a socket is listening (the port can be taken —
+the app logs one line and keeps running — and autostart can be off). [ Restart ] applies
+the current port and settings in place and reports what happened; the capture buffer, the
+hotkey and any open editor keep running through it. Every surface that advertises the
+endpoint — About, welcome, settings, the copied setup command — reads that one live value,
+so the three can never disagree.
 
 **Usage** — the user says only "방금 캡처한 거 분석해줘" / "Analyze the latest CapturePack."
 The AI chains `latest() → summary() → timeline() → annotations() → report() → dom()` itself.

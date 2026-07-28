@@ -141,7 +141,12 @@ export function createTray(
       const state = getRecorderState()
       if (state.status !== 'stopped') return
       const t = makeT(getLanguage())
+      // In the user's terms, not ours (issue #46): the balloon names the last N
+      // seconds it promised — the same phrasing the "recording started" balloon
+      // and the tooltip use — instead of a "replay buffer" the user never
+      // configured and cannot see.
       const message = t('tray.recordingFailed', {
+        seconds: getReplaySeconds(),
         reason: recorderFailureText(t, state.reason),
       })
       // GOAL "A failure is always announced": logged as well as shown, so the

@@ -90,6 +90,16 @@ export const IPC = {
   settingsPickOutputDir: 'settings:pick-output-dir',
   // settings window -> main (invoke): open the output folder in the file manager
   settingsOpenOutput: 'settings:open-output',
+  // settings window -> main (invoke): LIVE state of the things settings only
+  // *requests* (issues #54, #57) — the MCP server as it is actually running, and
+  // what the Windows UI Automation plugin actually did on the last capture.
+  // Re-read after every patch and whenever the window regains focus, because
+  // both change behind the window's back (a capture happens, a port frees up).
+  settingsStatus: 'settings:status',
+  // settings window -> main (invoke): stop and restart the MCP server IN PLACE
+  // with the current settings (issue #54), then report the outcome. Nothing else
+  // is touched: the capture buffer, the hotkey and any open editor keep running.
+  settingsMcpRestart: 'settings:mcp-restart',
 
   // main -> hidden render window: render replay_annotated.webm from this job
   renderStart: 'render:start',
@@ -656,18 +666,113 @@ export interface SettingsDisplayOption {
   label: string
 }
 
+// ---------------------------------------------------------------------------
+// Live MCP server state (GOAL "Always-On MCP Server", issue #54)
+// ---------------------------------------------------------------------------
+
+/**
+ * What the MCP server is ACTUALLY doing right now — never what settings ask
+ * for. `mcpEnabled` says nothing about whether a socket is listening: the port
+ * may be taken (the server logs one line and the app keeps running), autostart
+ * may be off, or a changed port may not have been applied yet.
+ */
+export type McpServerState = 'starting' | 'running' | 'stopped' | 'failed'
+
+/** WHY nothing is listening. null while the server is starting or running. */
+export type McpStoppedReason =
+  // settings.mcpEnabled is off — the master switch.
+  | 'disabled'
+  // settings.mcpAutoStart is off and nothing has started it since; the settings
+  // window's [Restart] starts it anyway (that button IS the manual start).
+  | 'autostart-off'
+  // EADDRINUSE: another process owns the configured port.
+  | 'port-in-use'
+  // Any other socket error; `detail` carries the OS message.
+  | 'bind-failed'
+  // Stopped deliberately (a restart in flight, or app shutdown).
+  | 'stopped'
+
+export interface McpStatus {
+  state: McpServerState
+  // The endpoint the socket REALLY bound, e.g. "http://127.0.0.1:39393/mcp".
+  // '' unless state is 'running' — every surface that advertises the URL (the
+  // settings window, the welcome window, the setup snippets) reads it from here
+  // so none of them can ever print an endpoint nothing is listening on.
+  endpoint: string
+  // The port really bound; 0 unless running.
+  port: number
+  // The port settings ASK for — what a restart would try next. Shown when the
+  // configured port is taken, so "port 39393 is already in use" names the port
+  // the user typed rather than the (absent) bound one.
+  configuredPort: number
+  reason: McpStoppedReason | null
+  // Raw OS error text for 'bind-failed' (never localized); '' otherwise.
+  detail: string
+}
+
+// ---------------------------------------------------------------------------
+// Windows UI Automation plugin state (GOAL "Static object picking", issue #57)
+// ---------------------------------------------------------------------------
+
+/** What the object-picking plugin is doing, from reality — never a constant. */
+export type UiaPluginState =
+  // Windows, enabled, and the last dump (if any) produced data.
+  | 'active'
+  // settings.uiaEnabled is off: the helper is not spawned at all.
+  | 'off'
+  // Not Windows — the helper is a UI Automation client and cannot exist here.
+  | 'unsupported'
+  // Enabled, but the last capture's dump produced nothing usable (`reason`).
+  | 'failing'
+
+/** Why the last dump produced nothing (SPEC §11.3 collection failures). */
+export type UiaFailureReason =
+  // dist/scripts/uia-dump.ps1 is missing from the install.
+  | 'no-helper'
+  // powershell.exe could not be started (AppLocker/WDAC, AV, shutdown).
+  | 'spawn-failed'
+  // Execution policy refused the script; the next capture retries as a command.
+  | 'policy'
+  // The helper was killed at its budget before printing anything usable.
+  | 'budget'
+  // It ran and exited, but printed nothing this side could parse.
+  | 'no-output'
+
+export interface UiaPluginStatus {
+  state: UiaPluginState
+  // What the LAST dump of this app session actually collected. null when no
+  // capture has run yet — the row then says what the plugin does rather than
+  // inventing a count.
+  lastWindows: number | null
+  lastControls: number | null
+  // That dump hit its budget or a cap, so the counts above are a floor.
+  lastTruncated: boolean
+  // Only set for state 'failing'.
+  reason: UiaFailureReason | null
+}
+
+/**
+ * Everything in the settings window that is LIVE rather than configured
+ * (issues #54, #57). Returned by settings:get, re-fetched by settings:status,
+ * and returned again by settings:mcp-restart so one code path renders it.
+ */
+export interface SettingsStatusResult {
+  mcp: McpStatus
+  // The settings the RUNNING MCP server actually honors — a snapshot taken at
+  // its last start attempt, NOT at app startup. The GUI's "press Restart to
+  // apply" hints compare against THIS, so a pending change keeps its hint when
+  // the window is closed and reopened, and loses it the moment a restart in
+  // place has actually applied it (issue #54). It travels WITH the status so a
+  // restart's answer carries both halves of the truth at once.
+  mcpSettings: Settings
+  uia: UiaPluginStatus
+}
+
 export interface SettingsGetResult {
   settings: Settings
-  // Settings as they were at app startup — what the running MCP server, watcher,
-  // and updater actually honor. The GUI's "restart to apply" hints compare
-  // against THIS (not a window-open snapshot) so a pending change keeps its
-  // hint when the window is closed and reopened without a restart.
-  bootSettings: Settings
   displays: SettingsDisplayOption[]
   appVersion: string
-  // e.g. "http://127.0.0.1:39393/mcp" — the port the RUNNING server listens on
-  // (the boot-time mcpPort), not the configured port a pending change would use
-  mcpUrl: string
+  status: SettingsStatusResult
   // Resolved UI language right now (settings.language with "system" resolved).
   uiLanguage: string
   // What "system" resolves to on this machine — lets the renderer re-resolve

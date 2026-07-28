@@ -30,9 +30,17 @@ automatically with it:
   local `http(s)://127.0.0.1`/`localhost` page, are rejected with `403`
 
 The port comes from the `mcpPort` setting (default `39393`). If `mcpEnabled` or
-`mcpAutoStart` is `false`, the server does not start.
+`mcpAutoStart` is `false`, the server does not start automatically — Settings → MCP shows
+which of the two it is, and its **Restart** button starts it on demand (and applies a
+changed port) without restarting the app.
 
 ## Connecting a client
+
+Settings → MCP does this for you: pick your client from the dropdown and press
+**Copy setup command**. The snippet is built from the endpoint the server *actually bound*,
+so it is already correct even if you changed the port. **Copy prompt** copies the sentence
+to give the AI once it is connected. The forms below are the same ones that button
+produces.
 
 ### Claude Code
 
@@ -325,21 +333,28 @@ Flat keys in the app's `settings.json` (validated like every other setting):
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `mcpEnabled` | `true` | Master switch — `false` means the server never starts |
-| `mcpPort` | `39393` | Port for `http://127.0.0.1:<port>/mcp` |
-| `mcpAutoStart` | `true` | Start the server with the app — `false` means not started |
+| `mcpPort` | `39393` | Port for `http://127.0.0.1:<port>/mcp`. Changing it applies on **Settings → MCP → Restart**, no app restart |
+| `mcpAutoStart` | `true` | Start the server with the app — `false` means it is not started automatically (Restart still starts it on demand) |
 | `mcpReadOnly` | `true` | Read-only mode. This version is **always** read-only — setting `false` is ignored (a startup log line says so); the key reserves the name for a future opt-in write mode |
 | `mcpWatchExportFolder` | `true` | Watch `outputDir` and keep the pack index fresh |
 | `mcpLogRequests` | `false` | Log one console line per tool call |
 
 ## Troubleshooting
 
+**Is it even running?** Settings → MCP shows the LIVE state, read from the server rather
+than from the settings: *Running on http://127.0.0.1:PORT/mcp*, *Starting…*, or *Not
+running* with the reason (turned off, automatic start off, port in use, bind error). The
+same live endpoint is what the About and welcome windows print.
+
 **Port already in use** — the app logs a clear one-line error and keeps running (it never
-crashes and never takes a different port on its own). Free the port or change `mcpPort`,
-then restart CapturePack.
+crashes and never takes a different port on its own), and Settings → MCP says so. Free the
+port or change `mcpPort`, then press **Restart** — the server rebinds in place and reports
+the outcome. The capture buffer, the hotkey and any open editor are untouched.
 
 **New packs not showing up** — check that `mcpWatchExportFolder` is `true` and that the pack
 actually lands in the configured `outputDir` (or the `--output-dir` you launched with).
-Filesystem watching can be unreliable on network drives; a restart forces a full rescan.
+Filesystem watching can be unreliable on network drives; **Restart** rebuilds the index
+from scratch (and is also how a newly chosen output folder gets indexed).
 
 **A pack exists but isn't listed** — the index scans the export folder and **one subfolder
 level** below it (for user-organized subfolders). A pack nested deeper, or a directory
@@ -349,5 +364,5 @@ possibly-stale distribution copy). Malformed packs appear as warning entries rat
 disappearing silently.
 
 **Client can't connect** — the server only listens on `127.0.0.1`; connect from the same
-machine, confirm CapturePack is running, and confirm `mcpEnabled` and `mcpAutoStart` are both
-`true`.
+machine, and check the live status line in Settings → MCP before anything else — it names
+the reason when nothing is listening.

@@ -89,7 +89,11 @@ h2 {
 
 .row + .row,
 .row + .pluginRow,
-.pluginRow + .pluginRow {
+.pluginRow + .pluginRow,
+/* A plugin row explained by a summary/detail paragraph still separates from
+   the NEXT row (issue #57): the paragraphs belong to the row above them. */
+.pluginSummary + .pluginRow,
+.pluginDetail + .pluginRow {
   border-top: 1px solid #22222a;
 }
 
@@ -122,6 +126,12 @@ h2 {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+}
+
+/* A control whose text can be arbitrarily long (a bind error the OS worded)
+   must give way rather than push the row off a fixed-width window. */
+.control.shrink {
+  min-width: 0;
 }
 
 .unit {
@@ -270,7 +280,7 @@ button.hotkey.recording {
   text-align: left;
 }
 
-/* ---- MCP url ---- */
+/* ---- MCP url + live status ---- */
 
 code {
   background: #111116;
@@ -280,6 +290,42 @@ code {
   color: var(--muted);
   font: 12px Consolas, "Cascadia Mono", monospace;
   user-select: text;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 320px;
+}
+
+/* Live server state (issue #54): the dot carries the state at a glance, the
+   text says exactly what it is — running where, or not running and why. */
+.mcpDot {
+  font-size: 10px;
+  flex: none;
+}
+
+.mcpState {
+  color: var(--muted);
+  font-size: 12px;
+  user-select: text;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcpState.running {
+  color: var(--text);
+}
+
+.mcpState.failed {
+  color: var(--warn-text);
+}
+
+/* The client dropdown sits next to two buttons, so it may not claim the
+   250px minimum every other select in this window uses. */
+select#mcpClient {
+  min-width: 150px;
+  max-width: 190px;
 }
 
 /* ---- plugins ---- */
@@ -314,6 +360,40 @@ code {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+}
+
+/* The "?" affordance (issue #57): a round, quiet button that reveals the long
+   explanation under the row. Sized down so it never competes with the name. */
+button.pluginHelp {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 50%;
+  line-height: 1;
+  font-size: 11px;
+  color: var(--muted);
+  background: transparent;
+}
+
+button.pluginHelp[aria-expanded="true"] {
+  background: var(--panel-hover);
+  color: var(--text);
+}
+
+/* One line of what the plugin does and what it costs, always visible; the long
+   form appears under it when the "?" is pressed. */
+.pluginSummary,
+.pluginDetail {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 0 0 6px 28px; /* aligned with the plugin name, past the icon */
+}
+
+.pluginDetail {
+  color: var(--text);
+  padding-top: 2px;
 }
 
 .soon {

@@ -13,8 +13,7 @@ import type { RecorderState } from './capture'
 import { disposeHistory, notifyHistoryChanged, openHistoryWindow, registerHistoryIpc } from './historyWindow'
 import { registerCaptureHotkey } from './hotkey'
 import { uiLanguage, uiT } from './locale'
-import { startMcpServer } from './mcp/server'
-import type { McpServerHandle } from './mcp/server'
+import { mcpEndpoint, startMcpAtBoot, stopMcpServer } from './mcp/service'
 import { startCaptureFlow } from './session'
 import { loadSettings, persistSettings } from './settings'
 import { openSettingsWindow, registerSettingsIpc } from './settingsWindow'
@@ -42,7 +41,6 @@ if (process.argv.includes('--smoke')) {
 }
 
 function main(): void {
-  let mcp: McpServerHandle | null = null
   let stopRecorderStateListener: () => void = () => {}
 
   app.on('second-instance', () => {
@@ -57,7 +55,7 @@ function main(): void {
     globalShortcut.unregisterAll()
     stopRecorderStateListener()
     disposeHistory()
-    void mcp?.stop().catch(() => {})
+    void stopMcpServer()
   })
 
   void app.whenReady().then(async () => {
@@ -85,7 +83,7 @@ function main(): void {
       }
     }
 
-    mcp = startMcpServer(settings)
+    startMcpAtBoot(settings)
 
     setupDisplayMediaHandler()
     // The capture module owns the recorder-window set (per-display in cursor
@@ -162,7 +160,7 @@ function main(): void {
         onCapture: capture,
         onOpenSettings: () => openSettingsWindow(),
       },
-      () => mcp?.endpoint() ?? '',
+      () => mcpEndpoint(),
     )
 
     tray = createTray(

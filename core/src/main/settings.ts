@@ -44,6 +44,10 @@ function defaultSettings(): Settings {
     // existing settings.json that says "cursor" (or a fixed display id) stays
     // exactly as the user chose it — only a fresh install starts at "all".
     captureDisplay: 'all',
+    // Object picking is what left click has run on since 0.1.4 (GOAL "Static
+    // object picking"), so it is on out of the box; issue #57 gives it the
+    // Settings switch its per-capture cost earns it.
+    uiaEnabled: true,
     scrubInvert: false,
     scrubSensitivityMs: 100,
     defaultManualDurationMs: 1000,
@@ -228,6 +232,7 @@ const SETTINGS_KEY_SET: Record<keyof Settings, true> = {
   fps: true,
   replayMaxWidth: true,
   captureDisplay: true,
+  uiaEnabled: true,
   scrubInvert: true,
   scrubSensitivityMs: true,
   defaultManualDurationMs: true,
@@ -390,6 +395,7 @@ function mergeSettings(base: Settings, raw: Record<string, unknown>): Settings {
       typeof raw.captureDisplay === 'string' && isCaptureDisplay(raw.captureDisplay)
         ? raw.captureDisplay
         : base.captureDisplay,
+    uiaEnabled: typeof raw.uiaEnabled === 'boolean' ? raw.uiaEnabled : base.uiaEnabled,
     scrubInvert: typeof raw.scrubInvert === 'boolean' ? raw.scrubInvert : base.scrubInvert,
     scrubSensitivityMs:
       typeof raw.scrubSensitivityMs === 'number' && raw.scrubSensitivityMs > 0

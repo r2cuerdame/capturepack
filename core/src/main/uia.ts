@@ -53,7 +53,12 @@ import type {
   UiaTreeStatus,
   UiaWindowRecord,
 } from '../shared/types'
-import type { EditorUiaElement, EditorUiaWindow } from '../shared/ipc'
+import type {
+  EditorUiaElement,
+  EditorUiaWindow,
+  UiaFailureReason,
+  UiaPluginStatus,
+} from '../shared/ipc'
 
 /** Hard budget: the helper is killed at this age, finished or not. */
 export const UIA_BUDGET_MS = 1_200
@@ -140,6 +145,55 @@ export interface UiaDisplayTarget {
 }
 
 /**
+ * What the LAST dump of this app session produced (issue #57). The Plugins row
+ * in Settings reports the plugin's state FROM REALITY — "active, last capture:
+ * 14 windows / 812 controls" or "unavailable, PowerShell policy blocked the
+ * helper" — and reality is only observable here, where the helper runs. null
+ * until the first capture: a row that has nothing to report says what the
+ * plugin does instead of inventing a count.
+ */
+let lastDump: { windows: number; controls: number; truncated: boolean } | null = null
+/** Why the last dump produced nothing; null after any dump that did. */
+let lastFailure: UiaFailureReason | null = null
+
+/**
+ * The plugin's live state for Settings > Plugins (issue #57).
+ *
+ * `enabled` is settings.uiaEnabled — passed in rather than read here, because
+ * this module deliberately knows nothing about settings: it is spawned by the
+ * capture flow, which is what actually honors the switch.
+ */
+export function uiaPluginStatus(enabled: boolean): UiaPluginStatus {
+  const last = {
+    lastWindows: lastDump?.windows ?? null,
+    lastControls: lastDump?.controls ?? null,
+    lastTruncated: lastDump?.truncated ?? false,
+  }
+  // Platform first: on a non-Windows build the switch is irrelevant — a UI
+  // Automation client cannot exist there at all.
+  if (process.platform !== 'win32') {
+    return { state: 'unsupported', ...last, reason: null }
+  }
+  if (!enabled) return { state: 'off', ...last, reason: null }
+  if (lastFailure !== null) return { state: 'failing', ...last, reason: lastFailure }
+  return { state: 'active', ...last, reason: null }
+}
+
+/** Records what a finished dump attempt actually produced (see lastDump). */
+function recordDumpOutcome(dump: UiaRawDump | null, failure: UiaFailureReason | null): void {
+  if (dump !== null) {
+    lastDump = {
+      windows: dump.windows.length,
+      controls: dump.elements.length,
+      truncated: dump.truncated,
+    }
+    lastFailure = null
+    return
+  }
+  lastFailure = failure
+}
+
+/**
  * Spawns the helper and resolves its raw dump — or null when there is nothing
  * usable. NEVER rejects and never throws: the caller starts this and forgets
  * about it until the payload is needed.
@@ -149,6 +203,7 @@ export function startUiaDump(): Promise<UiaRawDump | null> {
   const invocation = helperInvocation()
   if (invocation === null) {
     logOnce('uia: helper script not found; continuing without object data')
+    recordDumpOutcome(null, 'no-helper')
     return Promise.resolve(null)
   }
   const startedAt = new Date()
@@ -163,12 +218,19 @@ export function startUiaDump(): Promise<UiaRawDump | null> {
     let settled = false
     let killTimer: ReturnType<typeof setTimeout> | undefined
     let graceTimer: ReturnType<typeof setTimeout> | undefined
-    const done = (dump: UiaRawDump | null, reason?: string): void => {
+    // `failure` carries BOTH the human log line and the typed reason the
+    // Plugins row reports (issue #57): the log explains it once per process,
+    // the type explains it every time the settings window is opened.
+    const done = (
+      dump: UiaRawDump | null,
+      failure?: { reason: UiaFailureReason; detail: string },
+    ): void => {
       if (settled) return
       settled = true
       clearTimeout(killTimer)
       clearTimeout(graceTimer)
-      if (reason !== undefined) logOnce(`uia: ${reason}; continuing without object data`)
+      recordDumpOutcome(dump, failure?.reason ?? null)
+      if (failure !== undefined) logOnce(`uia: ${failure.detail}; continuing without object data`)
       // How long the dump ACTUALLY took to resolve, printed only when it ran
       // past what it was allowed. This is the number that explains a late or
       // empty index (the editor waits for this promise), and until it was
@@ -216,7 +278,10 @@ export function startUiaDump(): Promise<UiaRawDump | null> {
         },
       )
     } catch (err) {
-      done(null, `helper could not be started (${errorMessage(err)})`)
+      done(null, {
+        reason: 'spawn-failed',
+        detail: `helper could not be started (${errorMessage(err)})`,
+      })
       return
     }
     // Rule 1, the last hole in it: an 'error' event on a stdio stream with no
@@ -242,7 +307,9 @@ export function startUiaDump(): Promise<UiaRawDump | null> {
     child.stderr.on('data', (chunk: string) => {
       stderr += chunk
     })
-    child.on('error', (err) => done(null, `helper failed (${errorMessage(err)})`))
+    child.on('error', (err) =>
+      done(null, { reason: 'spawn-failed', detail: `helper failed (${errorMessage(err)})` }),
+    )
 
     // Rule 2: the child dies at the budget whatever it is doing. Because it
     // prints the window list BEFORE walking any control tree, and then one line
@@ -261,7 +328,12 @@ export function startUiaDump(): Promise<UiaRawDump | null> {
       // mid-walk still pays.
       graceTimer = setTimeout(() => {
         const partial = parseDump(stdout, startedAt, true)
-        done(partial, partial === null ? `helper exceeded its ${UIA_BUDGET_MS} ms budget` : undefined)
+        done(
+          partial,
+          partial === null
+            ? { reason: 'budget', detail: `helper exceeded its ${UIA_BUDGET_MS} ms budget` }
+            : undefined,
+        )
       }, UIA_KILL_GRACE_MS)
     }, UIA_BUDGET_MS)
 
@@ -275,11 +347,16 @@ export function startUiaDump(): Promise<UiaRawDump | null> {
       // -ExecutionPolicy). Nothing can be done for THIS capture — its budget is
       // spent — but the next one runs the same file as a command instead, so a
       // managed machine loses one dump rather than the feature.
-      if (!killed && isPolicyRefusal(stderr)) forcedCommandForm = true
+      const policyRefused = !killed && isPolicyRefusal(stderr)
+      if (policyRefused) forcedCommandForm = true
+      // The Plugins row names the policy case separately (issue #57): "the
+      // helper collected nothing" would send a user hunting for a bug in
+      // CapturePack when the answer is a machine policy.
+      const reason: UiaFailureReason = killed ? 'budget' : policyRefused ? 'policy' : 'no-output'
       const detail = killed
         ? `helper exceeded its ${UIA_BUDGET_MS} ms budget`
         : `helper produced no usable output (exit ${String(code)}${stderr.trim() === '' ? '' : `: ${firstLine(stderr)}`})`
-      done(null, detail)
+      done(null, { reason, detail })
     })
   })
 }
