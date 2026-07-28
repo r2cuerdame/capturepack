@@ -228,16 +228,46 @@ for (const order of ['dump first, then ring', 'ring first, then dump']) {
     observation: null,
     dropped: false,
   })
+  // The dump numbers its windows its OWN way (#94): UIA walked them in its own
+  // order, so the z it reports for a window is not the z Core's host reports.
+  // A control points at its window BY THAT NUMBER, so the merge has to
+  // translate — untranslated, every control belongs to a window that is not
+  // there and none of them can ever be offered.
+  const DUMP_Z = 77
+  const w0 = windowsAt(REPLAY_MS, 1)[0]
   const dump = {
     tMs: REPLAY_MS,
-    windows: windowsAt(REPLAY_MS, 1).map((w) => ({ ...w, hasControls: true, tree: 'collected' })),
+    windows: [
+      {
+        ...w0,
+        // Same window, seen through a different enumeration — and a rectangle
+        // that differs by the invisible resize border, as a real dump's does.
+        surface_id: undefined,
+        z: DUMP_Z,
+        bounds: {
+          x: w0.bounds.x - 9,
+          y: w0.bounds.y - 4,
+          width: w0.bounds.width + 18,
+          height: w0.bounds.height + 9,
+        },
+        hasControls: true,
+        tree: 'collected',
+      },
+    ],
     elements: [
       {
         name: '저장',
         control_type: 'Button',
-        bounds: { x: 900, y: 500, width: 120, height: 40 },
+        automation_id: 'saveBtn',
+        class_name: 'Button',
+        bounds: {
+          x: w0.bounds.x + 200,
+          y: w0.bounds.y + 200,
+          width: 120,
+          height: 40,
+        },
         display: 2,
-        window_index: 0,
+        window: DUMP_Z,
       },
     ],
   }
@@ -252,11 +282,14 @@ for (const order of ['dump first, then ring', 'ring first, then dump']) {
   const atNow = await s3.frameAt(REPLAY_MS)
   const atPast = await s3.frameAt(5000)
   const controls = (atNow.displays[0]?.candidates ?? []).filter((c) => c.authority !== 'window')
+  const named = controls.find((c) => c.name === '저장')
   const pastWindows = (atPast.displays[0]?.candidates ?? []).length
 
   console.log(`   ${order}: controls at the capture instant ${controls.length}, window candidates at t=5000 ${pastWindows}`)
   check(`[${order}] controls survive`, controls.length > 0,
     'the dump was thrown away — no control can ever be picked')
+  check(`[${order}] the control is the one the dump described`, named !== undefined,
+    `offered ${controls.map((c) => c.name).join(', ') || 'nothing'}`)
   check(`[${order}] the window ring survives`, pastWindows > 1,
     'the ring was thrown away — picking in the past falls back to one instant')
 }

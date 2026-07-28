@@ -176,20 +176,73 @@ export class ContextSession {
       for (let i = 1; i < ring.length; i += 1) {
         if (Math.abs(ring[i]!.tMs - instant.tMs) < Math.abs(ring[nearest]!.tMs - instant.tMs)) nearest = i
       }
-      const trees = new Map<string, EditorUiaWindow>()
-      for (const w of instant.windows) trees.set(`${w.process} ${w.class_name} ${w.title}`, w)
+      const host = ring[nearest]!
+      // A CONTROL POINTS AT ITS WINDOW BY Z, AND THE TWO SOURCES COUNT Z
+      // DIFFERENTLY (#94).
+      //
+      // `EditorUiaElement.window` is the z-order of the window the control was
+      // walked from, as the DUMP saw it. The observation this merges into keeps
+      // the RING's windows, whose z comes from Core's host — a different
+      // enumeration. Handing the elements over untranslated leaves every one of
+      // them pointing at a window that is not there, and a control that belongs
+      // to no window is a control that can never be offered. 756 of them, in the
+      // pack that reported "하위 컨트롤을 선택못해" against a build that had
+      // already stopped throwing the dump away.
+      //
+      // So the dump's windows are matched to the ring's and the z values are
+      // rewritten. Identity first (process + class + title); among windows that
+      // share it — which is why #90 exists — the nearest rectangle wins, since a
+      // dump taken at the same instant sees the same window in the same place
+      // give or take the invisible resize border.
+      const zOf = new Map<number, number>()
+      const used = new Set<EditorUiaWindow>()
+      for (const dumped of instant.windows) {
+        let best: EditorUiaWindow | null = null
+        let bestGap = Number.POSITIVE_INFINITY
+        for (const w of host.windows) {
+          if (used.has(w)) continue
+          if (w.process !== dumped.process) continue
+          if (w.class_name !== dumped.class_name) continue
+          if (w.title !== dumped.title) continue
+          const gap =
+            Math.abs(w.bounds.x - dumped.bounds.x) +
+            Math.abs(w.bounds.y - dumped.bounds.y) +
+            Math.abs(w.bounds.width - dumped.bounds.width) +
+            Math.abs(w.bounds.height - dumped.bounds.height)
+          if (gap < bestGap) {
+            best = w
+            bestGap = gap
+          }
+        }
+        if (best === null) continue
+        used.add(best)
+        zOf.set(dumped.z, best.z)
+      }
+      const trees = new Map<EditorUiaWindow, EditorUiaWindow>()
+      for (const [dumpZ, ringZ] of zOf) {
+        const dumped = instant.windows.find((w) => w.z === dumpZ)
+        const w = host.windows.find((x) => x.z === ringZ)
+        if (dumped !== undefined && w !== undefined) trees.set(w, dumped)
+      }
+      // An element whose window could not be matched is DROPPED rather than
+      // reassigned: a control offered on the wrong window is worse than one that
+      // is not offered, because nothing downstream can tell.
+      const elements = instant.elements.flatMap((e) => {
+        const z = zOf.get(e.window)
+        return z === undefined ? [] : [{ ...e, window: z }]
+      })
       this.observations = ring.map((o, i) =>
         i !== nearest
           ? o
           : {
               tMs: o.tMs,
               windows: o.windows.map((w) => {
-                const dumped = trees.get(`${w.process} ${w.class_name} ${w.title}`)
+                const dumped = trees.get(w)
                 return dumped === undefined
                   ? w
                   : { ...w, hasControls: dumped.hasControls, tree: dumped.tree }
               }),
-              elements: instant.elements,
+              elements,
             },
       )
     }
