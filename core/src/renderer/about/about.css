@@ -62,6 +62,17 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* Last-exit line (issue #61): quiet like the version above it — until it has to
+   report that the app vanished, which is not a quiet fact. */
+.lastRun {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.lastRun.unclean {
+  color: #ff8a80;
+}
+
 /* ---- update state ---- */
 
 .update {

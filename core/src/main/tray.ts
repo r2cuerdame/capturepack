@@ -8,12 +8,16 @@ import { makeT, recorderFailureText } from '../shared/i18n'
 import type { Language, TranslateFn } from '../shared/i18n'
 import type { UpdaterStatusPayload } from '../shared/ipc'
 import type { RecorderState } from './capture'
+import { logWarn } from './log'
 
 export interface TrayHandlers {
   onCapture: () => void
   onOpenHistory: () => void
   onOpenOutput: () => void
   onOpenSettings: () => void
+  // GOAL "Tray Menu" > Open logs folder (issue #60): the app's own record has
+  // to be reachable from the one surface that is always there.
+  onOpenLogs: () => void
   onCheckUpdates: () => void
   onAbout: () => void
   onRestartUpdate: () => void
@@ -24,6 +28,12 @@ export interface TrayControls {
   setUpdateReady(version: string | null): void
   showRecordingStarted(): void
   showRecordingFailure(): void
+  /**
+   * Says that the PREVIOUS run died rather than exited (issue #61), naming when
+   * — and that the buffer was not recording from then until now. Shown once, at
+   * startup, because the run it is about had no way to say it itself.
+   */
+  showPreviousRunUnclean(when: string): void
   /**
    * Rebuilds the menu with the current language, capture hotkey (settings GUI
    * instant apply), and updater state.
@@ -83,7 +93,7 @@ export function createTray(
     const updater = getUpdaterState()
     // Menu order (GOAL "Tray Menu"):
     // Capture now · History · Open output folder · Settings…
-    // ── Check for updates… · About CapturePack
+    // ── Check for updates… · Open logs folder · About CapturePack
     // ── (Restart and update, when ready) · Quit
     const items: MenuItemConstructorOptions[] = [
       { label: t('tray.captureNow', { hotkey: getHotkey() }), click: () => handlers.onCapture() },
@@ -98,6 +108,9 @@ export function createTray(
         enabled: canCheckUpdates(updater),
         click: () => handlers.onCheckUpdates(),
       },
+      // Next to the diagnostics group, not next to the user's own output: the
+      // log is what the app did, not what the user made (issue #60).
+      { label: t('tray.openLogs'), click: () => handlers.onOpenLogs() },
       { label: t('tray.about'), click: () => handlers.onAbout() },
       { type: 'separator' },
     ]
@@ -151,7 +164,16 @@ export function createTray(
       })
       // GOAL "A failure is always announced": logged as well as shown, so the
       // guarantee is checkable after the balloon has faded.
-      console.warn(`[tray] announcing recorder failure (${state.reason}): ${message}`)
+      logWarn(`[tray] announcing recorder failure (${state.reason}): ${message}`)
+      showBalloon(message, 'error')
+    },
+    showPreviousRunUnclean(when: string): void {
+      const t = makeT(getLanguage())
+      const message = t('tray.previousRunUnclean', { when })
+      // On the record as well as on screen (issue #60): a balloon the user
+      // dismissed is not evidence, and this one names a window of time in which
+      // the product did not exist.
+      logWarn(`[tray] announcing unclean previous shutdown: ${message}`)
       showBalloon(message, 'error')
     },
     refresh(): void {

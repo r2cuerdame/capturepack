@@ -12,8 +12,9 @@ export const IPC = {
   captureReplayResult: 'capture:replay-result',
   // capture window -> main: selected recorder format + negotiated stream size
   captureReady: 'capture:ready',
-  // capture window -> main: PROOF that video is actually flowing (see
-  // CaptureFramesPayload). Only this makes a display count as recording.
+  // capture window -> main: PROOF that video is actually flowing, repeated as a
+  // heartbeat (see CaptureFramesPayload). Only this makes a display count as
+  // recording, and its repetition is what lets that state self-heal (#43).
   captureFrames: 'capture:frames',
   // capture window -> main: recorder failed; capture continues screenshot-only
   captureError: 'capture:error',
@@ -228,9 +229,16 @@ export interface CaptureReadyPayload {
  * Duplication failing the recorder sits in state "recording" over an empty
  * buffer, and the tray used to claim "recording · last 30s ready" all the same.
  *
- * The renderer sends this the FIRST time it can prove video is flowing —
+ * The renderer sends this EVERY time it can prove video is flowing —
  * non-trivial recorder output, or a growing delivered-frame count on the video
  * track — and main only then lets that display count as recording.
+ *
+ * Repeating it makes it a HEARTBEAT (issue #43): main's state used to be able
+ * to latch on "stopped" after two early probes missed, and stayed wrong for the
+ * life of the process (and through a restart, which simply repeated them). A
+ * proof that keeps arriving lets the displayed state converge on reality
+ * on its own, in both directions, without ever stopping a healthy recorder to
+ * ask it.
  */
 export interface CaptureFramesPayload {
   displayId: string
@@ -631,6 +639,21 @@ export interface AboutInfoResult {
   // follows the same rule as the tray's "Restart and update (vX)" item instead
   // of blinking out during every scheduled re-check.
   downloadedVersion: string | null
+  /**
+   * How the PREVIOUS run ended (issue #61). "Is CapturePack actually running,
+   * and has it been?" was unanswerable without a terminal; this is the answer,
+   * in the one window that already exists to describe the app to its user.
+   *
+   * 'unclean' = the app vanished rather than exited, and `endedAt` is when it
+   * was last known to be alive — i.e. the start of a window in which the replay
+   * buffer did not exist. 'none' = nothing recorded yet (fresh install).
+   */
+  lastRun: {
+    status: 'none' | 'clean' | 'unclean'
+    // ISO timestamp; null only for 'none'. The renderer formats it in the UI
+    // locale — main must not bake a date format into an IPC payload.
+    endedAt: string | null
+  }
 }
 
 // ---------------------------------------------------------------------------

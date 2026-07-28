@@ -22,6 +22,7 @@ import type {
   RecorderFailureReason,
 } from '../shared/ipc'
 import type { Settings } from '../shared/types'
+import { logError, logInfo, logWarn } from './log'
 
 const HOTPLUG_DEBOUNCE_MS = 1_000
 // A recorder window loading only proves that its renderer started, and
@@ -52,6 +53,40 @@ const RECORDER_PROBE_TIMEOUT_MS = 3_000
 // were never proof that anything was recorded.
 const RECORDER_EVIDENCE_MIN_BYTES = 4096
 
+// --- The state has to keep AGREEING with reality (issue #43)
+//
+// Until now the only route back to 'recording' was the startup probe plus ONE
+// retry. Two misses in a row — a Desktop Duplication that was busy for twenty
+// seconds (#39), a probe that timed out on a loaded machine — latched 'stopped'
+// for the rest of the process, and restarting the app just repeated the same
+// two attempts. That is precisely the tray icon that lied THROUGH a restart on
+// the user's machine while recording worked fine.
+//
+// Convergence is now continuous, from two independent directions:
+//  - the renderer repeats its frame proof as a HEARTBEAT (renderer/capture/
+//    capture.ts), so a recorder that recovers re-earns 'recording' within one
+//    evidence window with no work from main at all, and
+//  - this watchdog keeps attempting recovery for as long as a display is not
+//    recording, with a backoff so a permanently broken display stays cheap.
+//
+// The other direction is deliberately NOT symmetric: a missing heartbeat never
+// demotes a display. On a runtime without a delivered-frame counter a healthy
+// MP4 recorder cannot prove itself between flushes (see the renderer's
+// EVIDENCE_MIN_BYTES note), so silence is not evidence — acting on it would
+// re-create the very false negative this issue is about. Failures still arrive
+// the way they always did: capture:error, a dead renderer, a stream that ended,
+// or the outcome of a real capture.
+const RECONCILE_INTERVAL_MS = 15_000
+// A display that is not recording gets this long to sort itself out (renderer
+// evidence, the backstop probe, the renderer's own one restart) before the
+// watchdog interferes.
+const RECOVERY_FIRST_DELAY_MS = 30_000
+const RECOVERY_MAX_DELAY_MS = 10 * 60_000
+// After this many probe-only recoveries, recreate the recorder WINDOW instead:
+// the renderer spends one restart per failure episode and then stops trying, so
+// a fresh renderer is the only thing left that can change the answer.
+const RECOVERY_PROBES_BEFORE_REBUILD = 2
+
 export type { RecorderFailureReason }
 
 export type RecorderState =
@@ -79,6 +114,12 @@ const assignedDisplays = new Map<number, string>()
 // from the renderer's existing capture:error signal.
 const displayRecorderStates = new Map<number, DisplayRecorderState>()
 const recorderProbeTimers = new Map<number, ReturnType<typeof setTimeout>>()
+// display.id -> recovery bookkeeping for a display that is NOT recording (issue
+// #43): how many attempts have run and when the next one may. Dropped the
+// moment the display records again, so a later failure starts from the short
+// delay instead of inheriting a stale backoff.
+const recoveryAttempts = new Map<number, { attempts: number; nextAt: number }>()
+let reconcileTimer: ReturnType<typeof setInterval> | undefined
 let wantedDisplayIds = new Set<number>()
 let publishedRecorderState: RecorderState = { status: 'starting' }
 const recorderStateListeners = new Set<(state: RecorderState) => void>()
@@ -127,8 +168,10 @@ function publishRecorderState(): void {
   if (sameRecorderState(publishedRecorderState, next)) return
   publishedRecorderState = next
   // One line per REAL change of the state the tray shows, so a report that says
-  // "it told me it was not recording" carries the reason and the evidence.
-  console.info(
+  // "it told me it was not recording" carries the reason and the evidence. It
+  // goes to the LOG FILE too (issue #60): the tray's claim is the single most
+  // disputed fact in every report so far, and it is now on the record.
+  logInfo(
     `[capture] recorder state: ${next.status}` +
       (next.status === 'stopped' ? ` (${next.reason}) — ${next.detail}` : ''),
   )
@@ -137,7 +180,21 @@ function publishRecorderState(): void {
 
 function setDisplayRecorderState(displayId: number, state: DisplayRecorderState): void {
   if (!wantedDisplayIds.has(displayId)) return
+  const previous = displayRecorderStates.get(displayId)
   displayRecorderStates.set(displayId, state)
+  // PER-DISPLAY transitions with their reason (issue #60): the aggregate above
+  // is what the tray shows, but a three-monitor desk with one dead display
+  // needs the record to say which one, and when.
+  const changed =
+    previous === undefined ||
+    previous.status !== state.status ||
+    (previous.status === 'stopped' && state.status === 'stopped' && previous.detail !== state.detail)
+  if (changed) {
+    logInfo(
+      `[capture] display ${displayId}: ${previous?.status ?? 'none'} -> ${state.status}` +
+        (state.status === 'stopped' ? ` (${state.reason}) — ${state.detail}` : ''),
+    )
+  }
   publishRecorderState()
 }
 
@@ -201,7 +258,7 @@ async function probeRecorder(displayId: number, win: BrowserWindow): Promise<voi
     ? `recorder for display ${displayId} produced ${result.buffer.byteLength} bytes of ` +
       'container header and no video frames'
     : `recorder for display ${displayId} did not produce replay bytes`
-  console.error(`[capture] ${detail}`)
+  logError(`[capture] ${detail}`)
   setDisplayRecorderState(displayId, {
     status: 'stopped',
     reason: headerOnly ? 'no-frames' : 'did-not-start',
@@ -214,12 +271,19 @@ async function probeRecorder(displayId: number, win: BrowserWindow): Promise<voi
  * you are recording"): frames delivered, or real encoder output. This is the
  * only fast path to "recording" — and it also confirms a recovery, so a display
  * that was stopped comes back the moment it produces frames again.
+ *
+ * It arrives REPEATEDLY, as a heartbeat (issue #43), which is what makes the
+ * displayed state self-healing: whatever put main on 'stopped' — a probe that
+ * timed out, a transient duplication failure, a renderer that has since
+ * restarted itself — is undone by the next proof, without main having to stop a
+ * healthy recorder to find out. Only the transition is logged; the heartbeat
+ * itself must not fill the log file with one line every few seconds.
  */
 function onFramesProven(displayId: number, payload: CaptureFramesPayload): void {
   if (!wantedDisplayIds.has(displayId)) return
   const previous = displayRecorderStates.get(displayId)
   if (previous?.status !== 'recording') {
-    console.info(
+    logInfo(
       `[capture] display ${displayId}: frames confirmed (${payload.bytes} recorder bytes, ` +
         `${payload.frames} delivered frames)`,
     )
@@ -227,7 +291,85 @@ function onFramesProven(displayId: number, payload: CaptureFramesPayload): void 
   // Proof makes the backstop pointless: leaving it armed would stop and restart
   // a healthy recorder and throw away buffered footage for nothing.
   clearRecorderProbe(displayId)
+  // A recovered display owes nothing to the watchdog any more; the next failure
+  // is entitled to the full short delay rather than this episode's backoff.
+  recoveryAttempts.delete(displayId)
   setDisplayRecorderState(displayId, { status: 'recording' })
+}
+
+/**
+ * Keeps the DISPLAYED state converging on reality for as long as the app runs
+ * (issue #43) — the thing a fixed number of early attempts could never do.
+ *
+ * Every tick, each display that is not provably recording either gets its
+ * backstop probe re-armed or, once probing alone has failed twice, has its
+ * recorder window recreated (the renderer's own retry is spent by then). The
+ * delay doubles per attempt up to RECOVERY_MAX_DELAY_MS, so a machine whose
+ * screen capture is genuinely dead costs one probe every ten minutes rather
+ * than a permanent lie in the tray.
+ */
+function reconcileRecorders(): void {
+  const now = Date.now()
+  for (const displayId of wantedDisplayIds) {
+    const win = captureWindows.get(displayId)
+    // A window whose RENDERER has crashed still exists as an object, and
+    // probing it only waits out the timeout: there is nobody left to answer.
+    // Recognizing that here is what makes a crashed recorder come back on the
+    // first attempt instead of after two dead probes.
+    const alive = win !== undefined && !win.isDestroyed() && !win.webContents.isCrashed()
+    if (alive && displayRecorderStates.get(displayId)?.status === 'recording') {
+      recoveryAttempts.delete(displayId)
+      continue
+    }
+    const pending = recoveryAttempts.get(displayId)
+    if (pending === undefined) {
+      // First tick that finds this display not recording: the normal startup
+      // path is still running (renderer evidence, then the backstop probe), and
+      // interrupting it would cost footage for nothing.
+      recoveryAttempts.set(displayId, { attempts: 0, nextAt: now + RECOVERY_FIRST_DELAY_MS })
+      continue
+    }
+    if (now < pending.nextAt) continue
+    // A probe is already armed for this display (the startup backstop, or the
+    // one a renderer failure schedules): that IS an attempt, and starting a
+    // second one would stop the recorder twice. Checked before the counter
+    // moves, so waiting for it costs nothing.
+    if (recorderProbeTimers.has(displayId)) continue
+    pending.attempts += 1
+    pending.nextAt =
+      now + Math.min(RECOVERY_MAX_DELAY_MS, RECOVERY_FIRST_DELAY_MS * 2 ** pending.attempts)
+    if (alive && win !== undefined && pending.attempts <= RECOVERY_PROBES_BEFORE_REBUILD) {
+      logWarn(
+        `[capture] display ${displayId}: not recording — recovery attempt ${pending.attempts}, re-probing`,
+      )
+      scheduleRecorderProbe(displayId, win, 0)
+      continue
+    }
+    logWarn(
+      `[capture] display ${displayId}: not recording — recovery attempt ${pending.attempts}, ` +
+        'recreating the recorder window',
+    )
+    // rebuild() destroys the recorders that are stopped or gone and creates
+    // fresh ones; every healthy display keeps its window and its buffer.
+    void queueRebuild()
+  }
+}
+
+function startReconciling(): void {
+  if (reconcileTimer !== undefined) return
+  reconcileTimer = setInterval(reconcileRecorders, RECONCILE_INTERVAL_MS)
+}
+
+/**
+ * Stops the recorder watchdog and any armed probe. index.ts calls this on
+ * will-quit: a quitting app must not still be scheduling recoveries (or
+ * requesting replays) while its windows are being torn down.
+ */
+export function disposeCapture(): void {
+  if (reconcileTimer !== undefined) clearInterval(reconcileTimer)
+  reconcileTimer = undefined
+  for (const displayId of [...recorderProbeTimers.keys()]) clearRecorderProbe(displayId)
+  recoveryAttempts.clear()
 }
 
 /**
@@ -286,6 +428,9 @@ export function setupDisplayMediaHandler(): void {
 export function startCapture(settings: Settings): Promise<void> {
   currentSettings = settings
   watchDisplays()
+  // The watchdog runs for the life of the app (issue #43): "recording" must be
+  // re-earned continuously, and "not recording" must keep being retried.
+  startReconciling()
   return queueRebuild()
 }
 
@@ -402,7 +547,7 @@ async function snapshotGroup(
     const matched = sources.find((s) => s.display_id === String(d.id))
     const source = matched ?? (d.id === fallbackFor ? sources[0] : undefined)
     if (source === undefined) {
-      console.error(`[capture] no screen source available for display ${d.id}`)
+      logError(`[capture] no screen source available for display ${d.id}`)
       continue
     }
     const size = source.thumbnail.getSize()
@@ -460,7 +605,7 @@ export async function takeDisplaySnapshots(
   await Promise.all(
     [...rest.values()].map((group) =>
       snapshotGroup(group, null, result).catch((err: unknown) => {
-        console.error('[capture] per-display snapshot group failed:', String(err))
+        logError('[capture] per-display snapshot group failed:', err)
       }),
     ),
   )
@@ -567,7 +712,7 @@ export function requestReplay(
 function resolveFixedDisplay(configuredId: string): Display {
   const found = screen.getAllDisplays().find((d) => String(d.id) === configuredId)
   if (found !== undefined) return found
-  console.warn(`[capture] configured display ${configuredId} is not connected; using primary`)
+  logWarn(`[capture] configured display ${configuredId} is not connected; using primary`)
   return screen.getPrimaryDisplay()
 }
 
@@ -603,7 +748,7 @@ function queueRebuild(): Promise<void> {
     .then(() => (gen === generation ? rebuild() : undefined))
     .catch((err) => {
       const detail = String(err)
-      console.error('[capture] recorder rebuild failed:', detail)
+      logError('[capture] recorder rebuild failed:', err)
       for (const id of wantedDisplayIds) {
         displayRecorderStates.set(id, { status: 'stopped', reason: 'process-stopped', detail })
       }
@@ -649,6 +794,11 @@ async function rebuild(): Promise<void> {
   for (const id of recorderProbeTimers.keys()) {
     if (!wanted.has(id)) clearRecorderProbe(id)
   }
+  // A disconnected display has no recorder to recover (issue #43); its backoff
+  // must not survive to slow down a display that comes back later.
+  for (const id of recoveryAttempts.keys()) {
+    if (!wanted.has(id)) recoveryAttempts.delete(id)
+  }
 
   for (const [id, win] of captureWindows) {
     const display = wanted.get(id)
@@ -689,7 +839,7 @@ async function rebuild(): Promise<void> {
       }
     } catch (err) {
       const detail = String(err)
-      console.error(`[capture] recorder for display ${display.id} failed to start: ${detail}`)
+      logError(`[capture] recorder for display ${display.id} failed to start:`, err)
       setDisplayRecorderState(display.id, { status: 'stopped', reason: 'process-stopped', detail })
     }
   }
@@ -716,7 +866,7 @@ async function createCaptureWindow(display: Display, settings: Settings): Promis
     const onError = (event: IpcMainEvent, message: unknown): void => {
       if (event.sender === win.webContents) {
         const detail = String(message)
-        console.error(
+        logError(
           `[capture] recorder for display ${display.id} failed, continuing screenshot-only: ${detail}`,
         )
         setDisplayRecorderState(display.id, {
@@ -733,7 +883,7 @@ async function createCaptureWindow(display: Display, settings: Settings): Promis
     }
     const onReady = (event: IpcMainEvent, ready: CaptureReadyPayload): void => {
       if (event.sender !== win.webContents) return
-      console.info(
+      logInfo(
         `[capture] display ${display.id}: ${ready.mimeType} -> ${ready.replayFile}, ` +
           `${ready.width}x${ready.height}`,
       )
@@ -754,11 +904,14 @@ async function createCaptureWindow(display: Display, settings: Settings): Promis
     ipcMain.on(IPC.captureError, onError)
     ipcMain.on(IPC.captureReady, onReady)
     ipcMain.on(IPC.captureFrames, onFrames)
+    // A recorder renderer that VANISHES is a recorder failure, never silence
+    // (issue #60): the state moves here — which logs it — and the watchdog
+    // above then recreates the window on its own schedule (issue #43).
     win.webContents.on('render-process-gone', (_event, details) => {
       setDisplayRecorderState(display.id, {
         status: 'stopped',
         reason: 'process-stopped',
-        detail: `recorder renderer stopped: ${details.reason}`,
+        detail: `recorder renderer stopped: ${details.reason} (exitCode ${details.exitCode})`,
       })
     })
     win.on('closed', () => {
