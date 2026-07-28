@@ -306,7 +306,8 @@ export function logContextCost(): void {
       `clock ±${Number.isFinite(lane.clockErrorMs) ? lane.clockErrorMs.toFixed(1) : '∞'} ms, ` +
       // WHICH CLOCK THE RING IS ON (#106). Two bases in one ring is the defect
       // that hid behind a healthy-looking sample count, so the count is split.
-      `${lane.frameStamped} frame-stamped / ${lane.clockStamped} clock-stamped`,
+      `${lane.frameStamped} frame-stamped / ${lane.clockStamped} clock-stamped` +
+      (lane.tickLagMs === null ? '' : `, tick lag ${lane.tickLagMs} ms`),
   )
   if (!lane.running) {
     // "Silence is not absence": a surface timeline that is not running is the

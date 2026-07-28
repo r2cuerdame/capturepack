@@ -102,6 +102,8 @@ export interface SurfaceLaneStatus {
    */
   frameStamped: number
   clockStamped: number
+  /** Median ms between asking for a ticked sample and the host taking it (#108). */
+  tickLagMs: number | null
   /** `hostClock - coreClock`, null until the first ping answered. */
   clockOffsetMs: number | null
   /** Half the measured round trip. Infinity when the clock has never been measured. */
@@ -173,6 +175,9 @@ export class SurfaceLane {
   private lastTickAt = 0
   private frameStamped = 0
   private clockStamped = 0
+  /** Core's clock when the last tick was sent — the other end of the round trip. */
+  private tickCoreMs = 0
+  private readonly tickLagMs: number[] = []
   private fallbackIndex = -1
   private dutyStrikes = 0
   private warnedWorkingSet = false
@@ -263,6 +268,7 @@ export class SurfaceLane {
       droppedSamples: this.dropped,
       frameStamped: this.frameStamped,
       clockStamped: this.clockStamped,
+      tickLagMs: medianOf(this.tickLagMs),
       clockOffsetMs: this.offset.offsetMs(),
       clockErrorMs: this.offset.errorBoundMs(),
       lastError: this.lastError,
@@ -378,6 +384,7 @@ export class SurfaceLane {
       })
     }
     this.lastTickAt = Date.now()
+    this.tickCoreMs = this.clock.nowMs()
     void this.host.request('surface.tick', { tMs: frameMs }).catch(() => {
       /* Rule 1: a missed observation is a gap in the ring, never a lost frame. */
     })
@@ -423,6 +430,30 @@ export class SurfaceLane {
     const frameMs = event['ft']
     if (typeof frameMs === 'number' && Number.isFinite(frameMs)) {
       this.frameStamped += 1
+      // WHAT THE TICK COSTS (#108). The sample is FILED under the frame's time,
+      // but it is TAKEN after a round trip — renderer to main to PowerShell —
+      // and the desk moves in between. `t` is the host's own clock at the moment
+      // it looked, so the difference between that and the frame is the residual
+      // lag, in milliseconds, measured rather than assumed. It is the number
+      // that decides whether anything is left to fix here.
+      const takenAt = this.offset.toCoreMs(hostMs)
+      const lag = takenAt === null ? 0 : Math.max(0, takenAt - this.tickCoreMs)
+      if (takenAt !== null) {
+        this.tickLagMs.push(lag)
+        if (this.tickLagMs.length > 200) this.tickLagMs.shift()
+      }
+      // THE SAMPLE BELONGS TO THE FRAME THAT ASKED FOR IT (#108).
+      //
+      // The round trip is real — the request crosses two processes before the
+      // host looks — and the desk moves while it does. It is NOT folded into
+      // the timestamp: this sample answers the question that frame asked, and
+      // filing it a few milliseconds later would put it between two frames,
+      // where no picture exists and every reader has to interpolate to use it.
+      // One frame, one observation, one number.
+      //
+      // The cost is not hidden, it is measured: `tickLagMs` above is how late
+      // the host was, and the log states it. That is the thing to make smaller,
+      // and making it smaller is a different job from writing it down.
       this.append(frameMs, rawWindows)
       return
     }
@@ -530,6 +561,13 @@ export class SurfaceLane {
  * than defaulted, because a surface with a made-up rectangle is worse than a
  * surface that is not there — it would be offered for picking.
  */
+/** The middle value, or null when nothing has been measured yet. */
+function medianOf(values: readonly number[]): number | null {
+  if (values.length === 0) return null
+  const sorted = [...values].sort((a, b) => a - b)
+  return Math.round(sorted[sorted.length >> 1] ?? 0)
+}
+
 function parseWindow(raw: unknown): SurfaceSampleWindow | null {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
   const record = raw as Record<string, unknown>

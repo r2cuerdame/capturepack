@@ -1895,10 +1895,12 @@ function applyMutation(mutate: (a: Annotation) => void): void {
     // A track was fetched for the lifetime the box had when it was picked. Any
     // change to that lifetime — a preset, "until the end", "entire capture" —
     // makes the path we hold the wrong length (#86).
-    if (lifeKey(pending) !== before) {
-      reanchorBounds(pending)
-      refreshTrack(pending)
-    }
+    // The lifetime moved, so the representative instant did. Do NOT re-anchor
+    // yet (#107): the track in hand was fetched for the OLD range and cannot
+    // reach the new midpoint, so anchoring against it clamps to the track's end
+    // — one big visible jump, and then a second one when the real track lands.
+    // `attachTrack` re-anchors once, on the path that actually has the answer.
+    if (lifeKey(pending) !== before) refreshTrack(pending)
     // Repaints the live preview (blur, number badge, border), re-syncs the
     // header labels, and moves the pending box's own lane (#92).
     syncLanes()
@@ -1911,10 +1913,8 @@ function applyMutation(mutate: (a: Annotation) => void): void {
   const snapshot = state.cloneAnnotations()
   const life = lifeKey(a)
   mutate(a)
-  if (lifeKey(a) !== life) {
-    reanchorBounds(a)
-    refreshTrack(a)
-  }
+  // Same rule as the pending path (#107): the refreshed track re-anchors it.
+  if (lifeKey(a) !== life) refreshTrack(a)
   state.pushUndoSnapshot(snapshot)
   refresh()
 }
