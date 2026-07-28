@@ -210,6 +210,21 @@ After a month, the journal itself becomes the best roadmap.
 - 30-second replay buffer
 - Screenshot
 
+**Say that you are recording.** A silent tray icon gives no reason to trust that the buffer
+is running — and today a buffer that FAILED to start looks exactly like one that is
+working. So:
+
+- **Tray tooltip is live state**, always: "CapturePack — recording · last 30s ready
+  (Ctrl+Alt+C)", "starting…", or "not recording — <reason>". The tooltip costs nothing and
+  never interrupts.
+- **A brief tray notification when the buffer starts**, once per launch, saying the last N
+  seconds are now always available and naming the hotkey. Suppressible in Settings
+  (default on).
+- **A failure is always announced**, whether or not the start notice is suppressed: if the
+  recorder never starts, the user must find out immediately, not when they press the
+  hotkey and get a screenshot-only pack.
+- The tray icon itself carries the state (recording vs stopped), so a glance is enough.
+
 **Start with Windows, by default.** A capture tool that is not running when the bug happens
 has already failed — the buffer only holds what it was there to record. So the app
 registers itself to launch at login (per-user, via Electron's login-item API, no admin
