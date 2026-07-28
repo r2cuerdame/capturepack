@@ -229,9 +229,15 @@ function validateManifest(m, pack, snapshotDims) {
 
   if (isStr(m.format_version) && SEMVER_RE.test(m.format_version)) {
     pass(`manifest.json: format_version "${m.format_version}" is valid semver`);
+    // Pre-1.0 the MINOR acts as major (SPEC §13.1), so what this validator can
+    // judge is a pack whose minor matches its own. The comparison is against
+    // SPEC_VERSION rather than a hardcoded 0.1 — the old form printed
+    // "0.2.0 differs from 0.2.0" the day the spec moved, which is a validator
+    // telling the truth about the rules and a lie about which ones it applied.
     const [maj, min] = m.format_version.split(".").map(Number);
-    if (!(maj === 0 && min === 1)) {
-      note(`manifest.json: format_version ${m.format_version} differs from ${SPEC_VERSION} — validating against 0.1.0 rules (pre-1.0: minor acts as major, SPEC §13.1)`);
+    const [specMaj, specMin] = SPEC_VERSION.split(".").map(Number);
+    if (!(maj === specMaj && min === specMin)) {
+      note(`manifest.json: format_version ${m.format_version} differs from ${SPEC_VERSION} — validating against ${specMaj}.${specMin}.x rules (pre-1.0: minor acts as major, SPEC §13.1)`);
     }
   } else {
     fail(`manifest.json: format_version ${JSON.stringify(m.format_version)} is not valid semver (SPEC §5.1)`);
