@@ -1000,6 +1000,10 @@ The editor's own UI must read as an editor, not a settings screen:
 - **Icons, not words**, for the recurring controls (window mode, help, save), each with a
   tooltip carrying its shortcut. Text stays where it is content: the title, the note, and
   the annotation itself.
+- **Zoom control** in the top bar: zoom-in button · slider · zoom-out button, showing the
+  current percentage. It mirrors Ctrl+wheel (same range and steps), snaps to Fit and 100%,
+  and double-clicking the slider returns to Fit. The board's zoom is a first-class control,
+  not a hidden gesture — a wheel shortcut alone leaves it undiscoverable.
 - **One `?` help affordance** in the top bar opens a compact shortcut sheet — capture
   interactions (left click, right drag, Shift), time (wheel, Shift/Alt wheel, I/O trim,
   play), view (Ctrl+wheel, Space drag, `1`..`9`, `0`), and edit (Ctrl+Z, Del, Enter, Esc).
