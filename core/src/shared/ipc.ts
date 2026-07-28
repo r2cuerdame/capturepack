@@ -213,6 +213,16 @@ export interface CaptureStartPayload {
   // broken Windows Desktop Duplication looks like from in here. Absent in every
   // normal run.
   simulateNoFrames?: boolean
+  // TEST PATH for the RECOVERY machinery (--simulate-slow-replay[=ms], issue
+  // #43): the recorder is genuinely healthy and its ring buffer genuinely holds
+  // footage — but the machine is too busy to tell main so. The frame heartbeat
+  // is withheld and every replay answer is held back by this many milliseconds,
+  // which is #43's own scenario: a wrong displayed state over a recording that
+  // works. The delay is a parameter because both sides of the line matter — a
+  // stall main can still wait out must end in "recording", and one it cannot
+  // must end in no verdict at all rather than a destroyed buffer.
+  // Absent in every normal run.
+  simulateSlowReplayMs?: number
 }
 
 export interface CaptureReadyPayload {
@@ -236,9 +246,22 @@ export interface CaptureReadyPayload {
  * Repeating it makes it a HEARTBEAT (issue #43): main's state used to be able
  * to latch on "stopped" after two early probes missed, and stayed wrong for the
  * life of the process (and through a restart, which simply repeated them). A
- * proof that keeps arriving lets the displayed state converge on reality
- * on its own, in both directions, without ever stopping a healthy recorder to
- * ask it.
+ * proof that keeps arriving lets the displayed state climb back to "recording"
+ * on its own, without main ever stopping a healthy recorder to ask.
+ *
+ * IT ONLY WORKS IN ONE DIRECTION, deliberately. A message that stops arriving
+ * NEVER demotes a display, because silence is not evidence: where the runtime
+ * exposes no delivered-frame counter, the only thing left is recorder bytes,
+ * and the MP4 muxer this app picks first emits ZERO of those between flushes —
+ * a healthy recorder proves itself only when something flushes it (a slot
+ * rotation, a capture, main's backstop probe), which on the default settings is
+ * roughly every segment rather than every evidence window. Demoting on a quiet
+ * heartbeat would therefore condemn perfectly good recorders on exactly the
+ * machines this was built for. Failures arrive on their own channels instead:
+ * capture:error, a renderer that vanishes, a stream that ended, or a probe that
+ * came back with a flushed and empty buffer. (The earlier wording here claimed
+ * convergence "in both directions"; the code has never done that, and saying so
+ * in the contract was the thing that needed fixing, not the asymmetry.)
  */
 export interface CaptureFramesPayload {
   displayId: string
@@ -644,12 +667,24 @@ export interface AboutInfoResult {
    * and has it been?" was unanswerable without a terminal; this is the answer,
    * in the one window that already exists to describe the app to its user.
    *
-   * 'unclean' = the app vanished rather than exited, and `endedAt` is when it
-   * was last known to be alive — i.e. the start of a window in which the replay
-   * buffer did not exist. 'none' = nothing recorded yet (fresh install).
+   * Every value main can reach is rendered on its own. Collapsing them cost the
+   * user the truth twice over: an update-replaced marker was drawn as "closed
+   * normally", which nobody had observed, and which also silently relabelled a
+   * genuine crash of the old build that happened just before the update.
+   *
+   *  - 'none'     nothing recorded yet (fresh install).
+   *  - 'clean'    exited through the app's own quit path, nothing unhandled.
+   *  - 'faulted'  exited, but ran on after errors nobody handled: not a crash,
+   *               and not a normal close either.
+   *  - 'unclean'  vanished rather than exited. `endedAt` is when it was last
+   *               known to be alive — the start of a window in which the replay
+   *               buffer did not exist.
+   *  - 'unknown'  a DIFFERENT version left the marker open: an update replaced
+   *               that build, so it is never called a crash — but how it ended
+   *               was never observed, and saying otherwise would invent it.
    */
   lastRun: {
-    status: 'none' | 'clean' | 'unclean'
+    status: 'none' | 'clean' | 'faulted' | 'unclean' | 'unknown'
     // ISO timestamp; null only for 'none'. The renderer formats it in the UI
     // locale — main must not bake a date format into an IPC payload.
     endedAt: string | null

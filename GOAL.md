@@ -224,9 +224,13 @@ working. So:
   detail the user never configured and cannot see; every one of these surfaces — the
   Settings toggle, the notification, the failure balloon, the reasons — names what actually
   happens instead: *the last N seconds are (not) being recorded*.
-- **A failure is always announced**, whether or not the start notice is suppressed: if the
-  recorder never starts, the user must find out immediately, not when they press the
-  hotkey and get a screenshot-only pack.
+- **A failure is always announced — once.** Whether or not the start notice is suppressed:
+  if the recorder never starts, the user must find out immediately, not when they press the
+  hotkey and get a screenshot-only pack. And exactly once per failure, not once per retry:
+  the announcement re-arms only when the recorder has proved it is recording again, so a
+  machine whose screen capture is genuinely broken gets one balloon, not a balloon every
+  few minutes forever. Every retry and every refined reason still reaches the log and the
+  tray tooltip; what a repeat announcement adds is nagging, not news.
 - The tray icon itself carries the state (recording vs stopped), so a glance is enough.
 - **The state keeps agreeing with reality — it is never decided once.** "Recording" is
   earned from proof that frames are flowing, and that proof keeps arriving, so a recorder
@@ -236,6 +240,14 @@ working. So:
   a fixed number of attempts at startup means a transient failure latches forever, and the
   icon then lies in the one direction nobody checks: it says "not recording" while
   recording works.
+- **Checking on the recording must never cost the recording.** Both ways of checking take
+  something from a live recorder: asking for a replay stops the older of its two rotating
+  segments, and recreating its window throws the whole ring buffer away. So neither is
+  allowed on a guess. A request that goes UNANSWERED is not evidence — a busy machine
+  failing to reply in time says nothing about whether frames are flowing — and a recorder
+  is only ever recreated when there is nothing left to lose: its renderer is gone, or it
+  has answered and the answer was empty. Losing the last 30 seconds to a wrong verdict is
+  strictly worse than displaying a wrong verdict, which is all the original bug ever did.
 
 **Start with Windows, by default.** A capture tool that is not running when the bug happens
 has already failed — the buffer only holds what it was there to record. So the app
@@ -257,13 +269,29 @@ what happened. All of it local; nothing is ever uploaded.
   every error that would otherwise be silent — including a renderer that vanishes, which is
   a recorder failure and must be treated as one. Reachable from the tray
   ("Open logs folder"), because a record nobody can find is not a record.
+- **A decision not to do something is still a decision, and it is logged.** "The MCP server
+  was never started" and "the MCP server was never mentioned" must not read the same, so
+  every branch says which it took and why — disabled, autostart off, or starting on a port
+  — and the intent is written before the socket is even attempted, so a run that dies
+  waiting for it still shows what it meant to do. The same goes for a launch that exits
+  because another instance already holds the lock: one line, then it goes.
 - **A quit and a death are different events.** Choosing Quit is recorded as such; anything
   else leaves the run marked open. On the next start the app says plainly that the previous
   run stopped unexpectedly, when it was last alive, and that **the buffer was not recording
   in between** — the one sentence a user who pressed the hotkey into silence actually
   needed. An open marker left by a DIFFERENT version is an update replacing the app, not a
-  crash, and is never reported as one. The verdict stays readable afterwards in About, so
-  "was it running?" is answerable without a terminal.
+  crash, and is never reported as one — but it is not reported as a normal shutdown either:
+  nobody watched that run end, and a genuine crash minutes before an update looks exactly
+  the same, so the honest word is *unknown*. The verdict stays readable afterwards in
+  About, so "was it running?" is answerable without a terminal.
+- **An unhandled error does not end the run — and does not get to hide.** A stray
+  programming error must not take the tray app down with it: a resident buffer that
+  disappears is the failure this whole section exists to prevent, and losing the last 30
+  seconds is a bigger loss than one broken flow. So the app logs the error and keeps
+  running. But it also stamps the run marker, and a run with a fault in it is NEVER
+  reported as having closed normally — not in the log, not in About. Surviving an error
+  and then certifying the run healthy would be the same lie, told by the very feature
+  built to expose it.
 
 **Capture must stay cheap.** CapturePack runs all day; a resident tool that eats a core is
 a tool people quit. The buffer currently encodes VP9 in software, twice over (two rotating
@@ -740,8 +768,11 @@ Quit CapturePack
   ("Checking…", "You're up to date", "Downloading…", "Restart and update (vX)").
   The automatic check keeps working exactly as before.
 - **About CapturePack** — a small window: icon, name, version (+ "up to date" state),
-  **how the previous run ended** (closed normally, or stopped unexpectedly and when),
-  the two slogans, MIT license, and links: Website · GitHub · Report an issue ·
+  **how the previous run ended** and when — closed normally, closed after unhandled
+  errors, stopped unexpectedly, or replaced by an update with its ending unknown; every
+  one of those gets its own sentence, because folding them into "closed normally" is how
+  the window came to certify runs nobody had watched end — the two slogans, MIT license,
+  and links: Website · GitHub · Report an issue ·
   **♥ Sponsor**. Donation lives here, never in the capture flow — the tool must never
   interrupt the 5-second workflow to ask for money.
 

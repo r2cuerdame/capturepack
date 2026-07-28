@@ -13,7 +13,7 @@ import {
 import type { RecorderState } from './capture'
 import { disposeHistory, notifyHistoryChanged, openHistoryWindow, registerHistoryIpc } from './historyWindow'
 import { registerCaptureHotkey } from './hotkey'
-import { beginRun, endRun, noteExitIntent, previousRunVanished } from './lifecycle'
+import { beginRun, endRun, noteExitIntent, noteUnhandledError, previousRunVanished } from './lifecycle'
 import { uiLanguage, uiT } from './locale'
 import { initForensics, logError, logInfo, logsDir, logWarn } from './log'
 import { mcpEndpoint, startMcpAtBoot, stopMcpServer } from './mcp/service'
@@ -38,6 +38,13 @@ if (process.argv.includes('--smoke')) {
     app.quit()
   })
 } else if (!app.requestSingleInstanceLock()) {
+  // ONE line before going, on purpose (issue #60). This exit produced no record
+  // at all, so a launch that "did nothing" was indistinguishable from a launch
+  // that never happened — and the same silence made "MCP was never started"
+  // impossible to tell apart from "MCP was never mentioned". Deliberately not
+  // full initForensics(): a duplicate launch is not a run, and does not deserve
+  // a crash reporter or a startup banner.
+  logInfo('[app] another instance already holds the single-instance lock — this one exits')
   app.quit()
 } else {
   main()
@@ -47,7 +54,13 @@ function main(): void {
   // BEFORE app.whenReady() (issue #60): Crashpad has to be installed before the
   // processes it is meant to catch exist, and a startup that throws must
   // already have a log file to say so in.
-  initForensics()
+  //
+  // The app SURVIVES an uncaught exception (log.ts explains why that is the
+  // right trade for a resident buffer), so the run marker has to carry the fact
+  // — otherwise will-quit records an ordinary exit and the next start certifies
+  // a broken run as healthy. lifecycle counts faults from before beginRun()
+  // too, which is why the hook can be wired here, first.
+  initForensics({ onUnhandledError: noteUnhandledError })
   // Opens this run's marker (issue #61) and reports what happened to the last
   // one. Its answer is announced below, once the tray exists to announce it.
   const previous = beginRun()
@@ -72,10 +85,11 @@ function main(): void {
     stopRecorderStateListener()
     disposeCapture()
     disposeHistory()
-    // Logged BEFORE the call, synchronously: the process usually exits before
-    // stop() resolves, and a completion callback would simply never be written
-    // (issue #60 — the record has to survive the exit).
-    logInfo('[mcp] stopping server')
+    // stopMcpServer() logs what it actually did, synchronously, before its first
+    // await (issue #60 — the record has to survive the exit, and the process
+    // usually goes before this promise settles). It used to be announced from
+    // here unconditionally, which claimed a server was being stopped on every
+    // run that never started one.
     void stopMcpServer()
     // LAST: an exit that reaches here is by definition not a disappearance, and
     // this is what tells the next run so (issue #61).
@@ -121,30 +135,42 @@ function main(): void {
     // which cannot open before the tray exists.
     let tray: TrayControls | null = null
     let recordingStartHandled = false
-    let announcedFailure: string | null = null
+    // Whether the CURRENT failure episode has already been announced. An
+    // episode ends only when the recorder proves it is recording again.
+    let failureAnnounced = false
 
     const handleRecorderState = (state: RecorderState): void => {
       if (tray === null) return
       tray.refresh()
       if (state.status === 'recording') {
-        announcedFailure = null
+        // The failure is OVER — the only thing that ends an episode, and
+        // therefore the only thing that re-arms the announcement. A later
+        // failure is genuinely new information and is announced again.
+        failureAnnounced = false
         if (recordingStartHandled) return
         recordingStartHandled = true
         if (settings.notifyOnRecordingStart) tray.showRecordingStarted()
         return
       }
       if (state.status === 'starting') {
-        announcedFailure = null
+        // NOT a recovery, and deliberately NOT a reset. Recovery is continuous
+        // now (issue #43): every retry cycle recreates the recorder window, and
+        // a fresh window is 'starting' before it fails again. Clearing here
+        // turned one unresolved failure into a balloon every few minutes,
+        // forever, on a machine whose screen capture is genuinely broken —
+        // worse than the single balloon this replaced, and impossible to
+        // dismiss for good. Only proof that frames are flowing re-arms it.
         return
       }
-      // Deduped on the REASON alone, not on the detail. Recovery is continuous
-      // now (issue #43), so the same dead display is re-probed and rebuilt every
-      // few minutes; its detail carries byte counts and attempt-specific text,
-      // and announcing on that would turn one honest failure into a balloon
-      // every recovery cycle. The reason is what the user is told either way,
-      // and it re-arms as soon as the display records again.
-      if (state.reason === announcedFailure) return
-      announcedFailure = state.reason
+      // ONE balloon per failure EPISODE (GOAL "A failure is always announced"),
+      // not per state change within it. A retry that fails again — with the
+      // same reason or a refined one, with different byte counts in its detail
+      // — is the same unresolved outage the user has already been told about,
+      // and repeating it is nagging rather than news. Every transition and
+      // reason is still on the record: capture.ts logs each one, and the tray
+      // tooltip carries the current reason for as long as it lasts.
+      if (failureAnnounced) return
+      failureAnnounced = true
       // Failure is never suppressible (GOAL "Say that you are recording.").
       tray.showRecordingFailure()
     }
@@ -239,6 +265,22 @@ function main(): void {
     // "starting"; if a very fast probe completed before the tray existed, this
     // catches up the visuals and the once-per-launch notification.
     handleRecorderState(getRecorderState())
+
+    // Dev aid / headed testing (issue #60): raise one real uncaught exception
+    // and one real unhandled rejection, from a timer, the way a genuine bug
+    // would. Nobody can produce a programming error on demand, and this is the
+    // only way the promise that follows from surviving one — that the run
+    // marker carries the fault and the next start refuses to call the run
+    // clean — can be exercised for real instead of asserted. The app is
+    // expected to KEEP RUNNING afterwards; that is the point.
+    if (process.argv.includes('--simulate-uncaught-error')) {
+      setTimeout(() => {
+        throw new Error('simulated uncaught exception (--simulate-uncaught-error)')
+      }, 1_000)
+      setTimeout(() => {
+        void Promise.reject(new Error('simulated unhandled rejection (--simulate-uncaught-error)'))
+      }, 1_500)
+    }
 
     // The sentence the user actually needed (issue #61). CapturePack cannot
     // announce its own death — there is nothing left to announce it with — so

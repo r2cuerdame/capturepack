@@ -13,8 +13,17 @@
 // and any open editor never learn that it happened — which is the whole point:
 // changing a port used to cost a full app restart, i.e. the recording of the
 // last 30 seconds.
+//
+// EVERY DECISION IS LOGGED (issue #60). Not starting the server used to be
+// completely silent, in both branches, so "MCP was never started" and "MCP was
+// never mentioned" read identically in main.log — and the log is the only place
+// a user can answer "is the endpoint even supposed to be up?" without a
+// terminal. Each branch below says what it decided and why, and launch() says
+// so BEFORE the asynchronous bind, so even a run that dies waiting for the
+// socket leaves its intent on the record.
 import type { McpStatus, McpStoppedReason } from '../../shared/ipc'
 import type { Settings } from '../../shared/types'
+import { logInfo } from '../log'
 import { startMcpServer } from './server'
 import type { McpServerHandle } from './server'
 
@@ -40,11 +49,16 @@ export function startMcpAtBoot(settings: Settings): void {
   if (!settings.mcpEnabled) {
     applied = { ...settings }
     idleStatus = stoppedStatus('disabled', settings.mcpPort)
+    logInfo('[mcp] not started at boot — the MCP server is disabled in Settings')
     return
   }
   if (!settings.mcpAutoStart) {
     applied = { ...settings }
     idleStatus = stoppedStatus('autostart-off', settings.mcpPort)
+    logInfo(
+      `[mcp] not started at boot — automatic start is off (Settings > MCP > Restart starts it ` +
+        `on port ${settings.mcpPort})`,
+    )
     return
   }
   launch(settings)
@@ -56,10 +70,12 @@ export function startMcpAtBoot(settings: Settings): void {
  * is deliberately not consulted — see the file header.
  */
 export async function restartMcpServer(settings: Settings): Promise<McpStatus> {
+  logInfo('[mcp] restart requested from Settings')
   await stopMcpServer()
   if (!settings.mcpEnabled) {
     applied = { ...settings }
     idleStatus = stoppedStatus('disabled', settings.mcpPort)
+    logInfo('[mcp] not restarted — the MCP server is disabled in Settings')
     return mcpStatus()
   }
   const started = launch(settings)
@@ -68,11 +84,23 @@ export async function restartMcpServer(settings: Settings): Promise<McpStatus> {
   return started.ready()
 }
 
-/** Stops the server (app shutdown, or the first half of a restart). */
+/**
+ * Stops the server (app shutdown, or the first half of a restart).
+ *
+ * Both outcomes are logged HERE rather than at the call site, and from the part
+ * of the body that runs synchronously — the process usually exits before this
+ * promise settles (issue #60: the record has to survive the exit). index.ts
+ * used to log "stopping server" unconditionally on will-quit, which announced a
+ * server that was never running on every launch with MCP disabled.
+ */
 export async function stopMcpServer(): Promise<void> {
   const current = handle
   handle = null
-  if (current === null) return
+  if (current === null) {
+    logInfo('[mcp] nothing to stop — no server was running')
+    return
+  }
+  logInfo('[mcp] stopping server')
   idleStatus = stoppedStatus('stopped', applied?.mcpPort ?? 0)
   try {
     await current.stop()
@@ -107,6 +135,11 @@ export function mcpAppliedSettings(): Settings | null {
 
 function launch(settings: Settings): McpServerHandle {
   applied = { ...settings }
+  // Said BEFORE the bind, which is asynchronous and may never settle: a run that
+  // is killed while the socket is still coming up must still show that the app
+  // meant to listen. Without this, "nothing was listening and the log says
+  // nothing" had no reading at all (issue #60).
+  logInfo(`[mcp] starting server on 127.0.0.1:${settings.mcpPort}`)
   const started = startMcpServer(settings)
   handle = started
   return started

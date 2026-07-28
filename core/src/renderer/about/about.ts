@@ -59,13 +59,33 @@ function render(info: AboutInfoResult): void {
 function renderLastRun(t: TranslateFn, info: AboutInfoResult): void {
   const { status, endedAt } = info.lastRun
   const when = endedAt === null ? '' : new Date(endedAt).toLocaleString(info.uiLanguage)
-  lastRunEl.textContent =
-    status === 'none'
-      ? t('about.lastRunNone')
-      : status === 'unclean'
-        ? t('about.lastRunUnclean', { when })
-        : t('about.lastRunClean', { when })
-  lastRunEl.classList.toggle('unclean', status === 'unclean')
+  // Every status gets its OWN sentence. There is no "else it closed normally"
+  // branch any more: a run that was replaced by an update, and one that ran on
+  // after unhandled errors, both used to land in it and both were misreported.
+  lastRunEl.textContent = lastRunText(t, status, when)
+  // Highlighted for everything that is not a clean shutdown — including the two
+  // that are not crashes: the point of the line is that the user can see at a
+  // glance whether the previous run is something to look into.
+  lastRunEl.classList.toggle('unclean', status !== 'none' && status !== 'clean')
+}
+
+function lastRunText(
+  t: TranslateFn,
+  status: AboutInfoResult['lastRun']['status'],
+  when: string,
+): string {
+  switch (status) {
+    case 'none':
+      return t('about.lastRunNone')
+    case 'unclean':
+      return t('about.lastRunUnclean', { when })
+    case 'faulted':
+      return t('about.lastRunFaulted', { when })
+    case 'unknown':
+      return t('about.lastRunUnknown', { when })
+    case 'clean':
+      return t('about.lastRunClean', { when })
+  }
 }
 
 function renderUpdate(t: TranslateFn, info: AboutInfoResult): void {
