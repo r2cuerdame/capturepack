@@ -2,6 +2,7 @@
 import { app, dialog, globalShortcut, Notification, shell } from 'electron'
 import * as fs from 'node:fs'
 import type { UpdaterStatusPayload } from '../shared/ipc'
+import { CAPTURE_ARG } from '../shared/startMenuLink'
 import { openAboutWindow, pushAboutState, registerAboutIpc } from './aboutWindow'
 import {
   disposeCapture,
@@ -12,14 +13,22 @@ import {
 } from './capture'
 import type { RecorderState } from './capture'
 import { disposeHistory, notifyHistoryChanged, openHistoryWindow, registerHistoryIpc } from './historyWindow'
-import { registerCaptureHotkey } from './hotkey'
-import { beginRun, endRun, noteExitIntent, previousRunVanished } from './lifecycle'
+import { registerCaptureHotkeyWithin } from './hotkey'
+import { beginRun, endRun, noteExitIntent, previousRunVanished, runStateFilePath, runStartedAt } from './lifecycle'
 import { uiLanguage, uiT } from './locale'
 import { initForensics, logError, logInfo, logsDir, logWarn } from './log'
 import { mcpEndpoint, startMcpAtBoot, stopMcpServer } from './mcp/service'
 import { startCaptureFlow } from './session'
 import { loadSettings, persistSettings } from './settings'
 import { openSettingsWindow, registerSettingsIpc } from './settingsWindow'
+import {
+  armShortcutNow,
+  readRecoveryState,
+  startSupervision,
+  stopSupervision,
+  updateSupervision,
+} from './supervisor'
+import type { SupervisionOptions } from './supervisor'
 import { createTray } from './tray'
 import type { TrayControls } from './tray'
 import { checkNow, initUpdater, restartAndUpdate, updaterState } from './updater'
@@ -53,9 +62,31 @@ function main(): void {
   const previous = beginRun()
 
   let stopRecorderStateListener: () => void = () => {}
+  // Set once the capture flow exists (after whenReady). A hotkey press can
+  // arrive through the Start Menu fallback before that — Explorer launches a
+  // whole process, which is slower than this one finishes booting — so it is
+  // remembered and run rather than dropped.
+  let captureFlow: (() => void) | null = null
+  let captureRequestedEarly = false
 
-  app.on('second-instance', () => {
-    // Tray app with no main window: nothing to focus, the second instance quits itself.
+  const requestCapture = (): void => {
+    if (captureFlow === null) {
+      captureRequestedEarly = true
+      return
+    }
+    captureFlow()
+  }
+
+  app.on('second-instance', (_event, argv) => {
+    // A tray app has no window to focus, so a second launch used to be a silent
+    // no-op — and that is exactly what the Start Menu fallback would have hit
+    // (issue #61). A launch carrying CAPTURE_ARG is a HOTKEY PRESS forwarded by
+    // Explorer: the live instance captures on it, instantly, with none of the
+    // new process's startup cost. A launch WITHOUT it is the user double
+    // clicking CapturePack in the Start Menu, which must not fire a capture.
+    if (!argv.includes(CAPTURE_ARG)) return
+    logInfo('[hotkey] capture requested by the Start Menu fallback shortcut')
+    requestCapture()
   })
 
   app.on('window-all-closed', () => {
@@ -69,6 +100,11 @@ function main(): void {
   // honest, and crucially NOT reported to the user as a crash (issue #61).
   app.on('will-quit', () => {
     globalShortcut.unregisterAll()
+    // Only the keep-alive timer stops here. The watchdog itself is left to
+    // observe this exit: it is what arms the Start Menu fallback once this
+    // process is gone, and endRun() below is what tells it the exit was meant
+    // (issue #61).
+    stopSupervision()
     stopRecorderStateListener()
     disposeCapture()
     disposeHistory()
@@ -155,6 +191,27 @@ function main(): void {
     const capture = (): void => {
       void startCaptureFlow(settings)
     }
+    // From here on a hotkey press forwarded by the Start Menu fallback (issue
+    // #61) has somewhere to go. Anything that arrived while the app was still
+    // booting is honored now rather than dropped — a press that produced
+    // nothing is the entire bug.
+    captureFlow = capture
+    if (captureRequestedEarly) {
+      captureRequestedEarly = false
+      logInfo('[hotkey] running the capture that arrived before startup finished')
+      capture()
+    }
+
+    // Everything supervision needs, read from the LIVE settings object at call
+    // time, so a re-recorded hotkey or a flipped toggle reaches the watchdog and
+    // the Start Menu fallback without a restart (issue #61).
+    const supervisionOptions = (): SupervisionOptions => ({
+      enabled: settings.superviseProcess,
+      accelerator: settings.captureHotkey,
+      runStateFile: runStateFilePath(),
+      runStartedAt: runStartedAt(),
+      shortcutDescription: uiT(settings)('shortcut.captureDescription'),
+    })
 
     // The settings GUI mutates this exact `settings` object in place, so every
     // closure below (capture flow, tray, MCP request logging) applies changes
@@ -174,8 +231,17 @@ function main(): void {
       onHotkeyChanged: () => {
         tray?.refresh()
         notifyHistoryChanged()
+        // The fallback shortcut carries a COPY of the accelerator, so a hotkey
+        // the user re-recorded has to reach it too — otherwise the key that
+        // answers while the app is not running would still be the old one
+        // (issue #61 asks explicitly whether a reconfigured hotkey can be
+        // mirrored onto the shortcut: it can, and this is where it happens).
+        updateSupervision(supervisionOptions())
       },
       onLaunchAtLoginChanged: (enabled) => reconcileLoginItem(enabled),
+      // The toggle is a real teardown: off kills the watchdog and deletes the
+      // Start Menu entry in the same call, on brings both back.
+      onSuperviseProcessChanged: () => updateSupervision(supervisionOptions()),
     })
     // Same live settings object: History honors outputDir changes on next access.
     registerHistoryIpc(settings)
@@ -240,16 +306,41 @@ function main(): void {
     // catches up the visuals and the once-per-launch notification.
     handleRecorderState(getRecorderState())
 
-    // The sentence the user actually needed (issue #61). CapturePack cannot
-    // announce its own death — there is nothing left to announce it with — so
-    // the next start says it instead, plainly, including the part that matters:
-    // the buffer was not running in between. Shown at a login launch too: it
-    // does not steal focus, and it is the answer to "I pressed the hotkey and
-    // nothing happened".
-    if (previous !== null && previousRunVanished()) {
-      trayControls.showPreviousRunUnclean(
-        new Date(previous.record.lastAliveAt).toLocaleString(uiLanguage(settings)),
-      )
+    // WHY this run exists, said out loud — and said ONCE. All four cases below
+    // are the same underlying event (the previous run is not here any more), so
+    // they are ordered by how much each one tells the user rather than stacked
+    // into a pile of balloons: issue #61 asks for recovery that is never silent,
+    // not for recovery that is noisy.
+    const recovery = readRecoveryState()
+    // A COLD start carrying CAPTURE_ARG is the hotkey landing on a machine where
+    // CapturePack was not running — the exact moment the issue is about.
+    const startedByHotkey = process.argv.includes(CAPTURE_ARG)
+    const whenPrevious = (iso: string | null): string =>
+      new Date(iso ?? Date.now()).toLocaleString(uiLanguage(settings))
+    if (recovery.gaveUp) {
+      // The rate limit was hit. This run exists to SAY that automatic restart
+      // has stopped — and, because it will not be supervised, to hand the
+      // accelerator to the one holder that cannot crash: Explorer, via the
+      // Start Menu shortcut. Armed here rather than by the watchdog, which has
+      // already exited.
+      armShortcutNow(settings.captureHotkey, uiT(settings)('shortcut.captureDescription'))
+      trayControls.showSupervisionGaveUp(settings.captureHotkey)
+    } else if (startedByHotkey) {
+      // THE answer to "I pressed Ctrl+Alt+C and nothing happened". It subsumes
+      // the unclean-shutdown line below — it already says nothing was recorded
+      // before now — and it is the one that tells the user what to do next.
+      // The start itself deliberately does NOT capture: the ring buffer is
+      // empty, so a pack made now would hold nothing.
+      logWarn('[hotkey] started BY the hotkey: CapturePack was not running when it was pressed')
+      trayControls.showStartedByHotkey(settings.captureHotkey)
+    } else if (recovery.relaunched) {
+      trayControls.showRelaunchedAfterCrash(whenPrevious(recovery.diedAt))
+    } else if (previous !== null && previousRunVanished()) {
+      // CapturePack cannot announce its own death — there is nothing left to
+      // announce it with — so the next start says it instead, plainly,
+      // including the part that matters: the buffer was not running in between.
+      // Shown at a login launch too: it does not steal focus.
+      trayControls.showPreviousRunUnclean(whenPrevious(previous.record.lastAliveAt))
     }
 
     if (!openedAtLogin) {
@@ -287,11 +378,31 @@ function main(): void {
       }
     }
 
-    const wantsHotkey = !process.argv.includes('--no-global-shortcut')
-    const hotkeyRegistered = wantsHotkey && registerCaptureHotkey(settings.captureHotkey, capture)
+    // Supervision starts BEFORE the accelerator is registered, because it is
+    // what takes the accelerator back: while CapturePack was not running, its
+    // hotkey was held by Explorer on behalf of the Start Menu fallback, and
+    // Explorer only lets go a second or two after that shortcut is deleted. The
+    // budget returned here is how long a refusal may still be that handover
+    // rather than a real conflict with another application (issue #61).
+    const acceleratorPlan = startSupervision(supervisionOptions())
+
+    const wantsHotkey =
+      !process.argv.includes('--no-global-shortcut') && acceleratorPlan.registerAccelerator
+    const hotkeyRegistered =
+      wantsHotkey &&
+      (await registerCaptureHotkeyWithin(
+        settings.captureHotkey,
+        capture,
+        acceleratorPlan.releaseBudgetMs,
+      ))
     // Whether the accelerator was taken is the first thing to check when a user
     // says the hotkey did nothing (issues #60, #61), so it goes on the record.
-    if (!wantsHotkey) logInfo('[hotkey] not registered (--no-global-shortcut)')
+    if (!acceleratorPlan.registerAccelerator) {
+      logWarn(
+        `[hotkey] deliberately NOT registered: ${settings.captureHotkey} is left with the Start Menu ` +
+          'fallback because automatic restart gave up',
+      )
+    } else if (!wantsHotkey) logInfo('[hotkey] not registered (--no-global-shortcut)')
     else if (hotkeyRegistered) logInfo(`[hotkey] registered ${settings.captureHotkey}`)
     else logWarn(`[hotkey] REFUSED ${settings.captureHotkey} — another application holds it`)
     if (wantsHotkey && !hotkeyRegistered) {

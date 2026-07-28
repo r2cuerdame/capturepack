@@ -126,6 +126,26 @@ export function previousRun(): PreviousRun | null {
 }
 
 /**
+ * The marker file itself, for the watchdog (supervisor.ts).
+ *
+ * The watchdog decides whether to relaunch by reading THIS file, so the
+ * "quit vs death" question has exactly one definition in the product and the
+ * two processes cannot drift into disagreeing about it.
+ */
+export function runStateFilePath(): string {
+  return runStateFile()
+}
+
+/**
+ * This run's `startedAt`. The watchdog compares it against the marker it reads,
+ * so it can never act on a marker written by a DIFFERENT run — relaunching on
+ * someone else's evidence would resurrect an app the user deliberately stopped.
+ */
+export function runStartedAt(): string {
+  return current?.startedAt ?? ''
+}
+
+/**
  * The previous run VANISHED — it died rather than exited, and no update
  * explains it. The single rule behind both surfaces that report it (the startup
  * balloon and the About line), so the two can never disagree.

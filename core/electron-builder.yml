@@ -10,6 +10,10 @@ files:
 # command, so it does not have to exist as a real file — unpacking it anyway
 # keeps it inspectable (READ-ONLY BY CONSTRUCTION is a claim a user can check)
 # and keeps `powershell -File dist/scripts/uia-dump.ps1` working standalone.
+#
+# dist/scripts/watchdog.js (GOAL "And do not stay gone.", issue #61) MUST be
+# unpacked: it is executed by a fresh Node process, which knows nothing about
+# Electron's archive format and could not open a path inside app.asar.
 asarUnpack:
   - dist/scripts/**
 win:

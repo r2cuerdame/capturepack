@@ -450,6 +450,14 @@ export interface Settings {
   // Per-user Windows login item (GOAL "Start with Windows, by default.").
   // Fresh profiles opt in; the Settings > General toggle applies immediately.
   launchAtLogin: boolean
+  // Keep CapturePack running and answering its hotkey (GOAL "And do not stay
+  // gone.", issue #61): a detached watchdog relaunches the app when it dies for
+  // any reason other than a deliberate Quit, and hands the accelerator to a
+  // Start Menu shortcut for as long as the app is not there to hold it. ON by
+  // default — a hotkey that does nothing is the failure the user cannot
+  // diagnose. Turning it off stops the watchdog and removes the shortcut in the
+  // same call.
+  superviseProcess: boolean
   // Show the once-per-launch "replay is ready" tray notification. Recorder
   // failures are always announced and are deliberately not controlled by it.
   notifyOnRecordingStart: boolean

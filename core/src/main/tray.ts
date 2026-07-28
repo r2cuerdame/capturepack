@@ -35,6 +35,25 @@ export interface TrayControls {
    */
   showPreviousRunUnclean(when: string): void
   /**
+   * The watchdog brought this run back (issue #61). Recovery is never silent:
+   * the user is told the app stopped, when, and that it restarted itself —
+   * otherwise a supervised relaunch is indistinguishable from nothing having
+   * gone wrong, which is how a crash loop hides.
+   */
+  showRelaunchedAfterCrash(when: string): void
+  /**
+   * Automatic restart hit its rate limit and STOPPED (issue #61: a relaunch
+   * loop is worse than staying dead). Stopping is right; stopping quietly is
+   * the bug, so this names where the hotkey went instead.
+   */
+  showSupervisionGaveUp(hotkey: string): void
+  /**
+   * The hotkey was pressed while CapturePack was not running, and the Start
+   * Menu fallback started it (issue #61). THE sentence the user needed and
+   * never got: the app is here now, and nothing was recorded before now.
+   */
+  showStartedByHotkey(hotkey: string): void
+  /**
    * Rebuilds the menu with the current language, capture hotkey (settings GUI
    * instant apply), and updater state.
    */
@@ -175,6 +194,26 @@ export function createTray(
       // the product did not exist.
       logWarn(`[tray] announcing unclean previous shutdown: ${message}`)
       showBalloon(message, 'error')
+    },
+    showRelaunchedAfterCrash(when: string): void {
+      const t = makeT(getLanguage())
+      const message = t('tray.relaunchedAfterCrash', { when })
+      // On the record as well as on screen: the balloon fades, and a user
+      // asking "why did it restart?" tomorrow has only the log (issue #60).
+      logWarn(`[tray] announcing a supervised relaunch: ${message}`)
+      showBalloon(message, 'error')
+    },
+    showSupervisionGaveUp(hotkey: string): void {
+      const t = makeT(getLanguage())
+      const message = t('tray.supervisionGaveUp', { hotkey })
+      logWarn(`[tray] announcing that automatic restart gave up: ${message}`)
+      showBalloon(message, 'error')
+    },
+    showStartedByHotkey(hotkey: string): void {
+      const t = makeT(getLanguage())
+      const message = t('tray.startedByHotkey', { hotkey })
+      logWarn(`[tray] announcing a hotkey-triggered cold start: ${message}`)
+      showBalloon(message, 'info')
     },
     refresh(): void {
       rebuildMenu()
