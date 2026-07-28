@@ -162,6 +162,10 @@ function observationOf(
     const space = spaceOf(spaces, surface.bounds)
     if (space === null) continue
     windows.push({
+      // Carried, not re-derived (#90): this id is stable across the whole
+      // session, and re-deriving one from name and list order is what let two
+      // same-titled windows trade identities when their order changed.
+      surface_id: surface.surfaceId,
       title: surface.windowTitle ?? '',
       process: surface.executableName ?? '',
       class_name: surface.className ?? '',

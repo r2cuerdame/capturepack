@@ -373,6 +373,15 @@ export interface EditorUiaElement {
  * and clicking always snaps a box.
  */
 export interface EditorUiaWindow {
+  /**
+   * Core's own surface id, when this window came from the surface ring (#90).
+   *
+   * Stable for the whole session — hwnd plus a creation ordinal, so a recycled
+   * handle becomes a new surface — and unaffected by the window's position in
+   * any list. Absent for a window that came from a UI Automation dump, which
+   * describes one instant and is identified by name and order instead.
+   */
+  surface_id?: string
   title: string
   process: string
   class_name: string
