@@ -190,7 +190,27 @@ function recordDumpOutcome(dump: UiaRawDump | null, failure: UiaFailureReason | 
     lastFailure = null
     return
   }
+  // A capture that produced no dump REPLACES the counts instead of leaving the
+  // previous ones standing. "last capture: 14 windows, 812 controls" is a claim
+  // about the LAST capture (issue #57: STATUS from reality, not a constant), so
+  // once a capture has run and collected nothing there is no count to report —
+  // and uiaPluginStatus() would otherwise hand the Plugins row numbers that
+  // describe a capture two captures ago.
+  lastDump = null
   lastFailure = failure
+}
+
+/**
+ * Records a capture that deliberately ran no dump at all because the Plugins
+ * switch was off (issue #57). Not a failure — nothing was attempted — so it
+ * clears the failure reason along with the counts, which is what makes
+ * off -> capture -> on report "Active" rather than a stale "last capture: N".
+ *
+ * The capture flow calls this instead of startUiaDump(); this module still
+ * knows nothing about settings, it is only told what happened.
+ */
+export function recordUiaSkipped(): void {
+  recordDumpOutcome(null, null)
 }
 
 /**

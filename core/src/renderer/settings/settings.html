@@ -29,7 +29,7 @@
       <div class="row rowCol">
         <div class="rowTop">
           <span class="label" id="outputDirLabel" data-i18n="settings.outputFolder">Output folder</span>
-          <span class="hint" id="outputDirHint" hidden data-i18n="settings.outputDirHint">restart CapturePack so MCP indexes the new folder</span>
+          <span class="hint" id="outputDirHint" hidden data-i18n="settings.outputDirHint">press Restart under MCP so the server indexes this folder</span>
         </div>
         <div class="pathRow">
           <div class="path" id="outputPath" aria-labelledby="outputDirLabel"></div>
@@ -150,20 +150,30 @@
     </section>
 
     <!-- The MCP server restarts IN PLACE (issue #54), so nothing in this
-         section costs an app restart any more: the hints point at [Restart]
-         below, and mcpAutoStart carries no hint at all because it only governs
-         what happens at the NEXT app start. -->
+         section costs an app restart any more: the pending-change hints point
+         at [Restart] below.
+
+         The two switches carry a PERMANENT sub-hint instead of a pending one,
+         because neither is ever pending: "Enable MCP server" stops and starts
+         the server the instant it is clicked (v0.1.6 — it used to be advisory
+         while the server kept answering), and "Start automatically" only ever
+         governs the NEXT app start, so a hint pointing at [Restart] would be a
+         lie on both. What each one actually decides is the thing worth
+         saying. -->
     <section aria-labelledby="hMcp">
       <h2 id="hMcp">MCP <span class="badge" data-i18n="settings.readOnlyBadge">read-only</span></h2>
       <label class="row toggleRow">
         <span class="labelWrap">
           <span class="label" data-i18n="settings.mcpEnable">Enable MCP server</span>
-          <span class="hint" id="mcpEnabledHint" hidden data-i18n="settings.restartMcpToApply">press Restart to apply</span>
+          <span class="subhint" data-i18n="settings.mcpEnableHint">starts and stops the server right away</span>
         </span>
         <input type="checkbox" id="mcpEnabled" />
       </label>
       <label class="row toggleRow">
-        <span class="label" data-i18n="settings.mcpAutoStart">Start automatically</span>
+        <span class="labelWrap">
+          <span class="label" data-i18n="settings.mcpAutoStart">Start automatically</span>
+          <span class="subhint" data-i18n="settings.mcpAutoStartHint">when CapturePack starts, if the server is enabled</span>
+        </span>
         <input type="checkbox" id="mcpAutoStart" />
       </label>
       <div class="row">
@@ -203,8 +213,15 @@
         </span>
       </div>
       <!-- One click to a pasteable setup (issue #56): the client dropdown picks
-           the form docs/MCP.md documents, and both buttons use the endpoint the
-           server ACTUALLY bound, never the configured-but-unbound port. -->
+           the form docs/MCP.md documents, and [Copy setup command] uses the
+           endpoint the server ACTUALLY bound, never the configured-but-unbound
+           port — which is why it greys out while nothing is listening.
+
+           [Copy prompt] does NOT, and is deliberately never disabled: it is the
+           fixed English sentence shared/prompt.ts also gives the save toast, it
+           names no endpoint, and the client it is pasted into is the thing that
+           knows where the server is. Greying it out would tie a constant to a
+           socket it does not depend on. -->
       <div class="row">
         <label class="label" for="mcpClient" data-i18n="settings.mcpSetup">Set up a client</label>
         <span class="control">

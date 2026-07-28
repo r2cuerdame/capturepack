@@ -134,10 +134,13 @@ function refreshLanguage(): void {
  * hint element `${key}Hint` pointing at the [Restart] button (issue #54).
  *
  * mcpAutoStart is deliberately absent — it decides what happens at the next APP
- * start and nothing else, so a hint on it would be a lie. outputDir is here
- * because the server indexes that folder, which is what its hint says.
+ * start and nothing else, so a hint on it would be a lie. mcpEnabled left for
+ * the same reason in v0.1.6: it now stops and starts the server the instant it
+ * is clicked, so it is never "pending" and a hint on it would be a lie too.
+ * outputDir is here because the server indexes that folder, which is what its
+ * hint says.
  */
-const MCP_HINTED_KEYS = ['outputDir', 'mcpEnabled', 'mcpPort', 'mcpWatchExportFolder'] as const
+const MCP_HINTED_KEYS = ['outputDir', 'mcpPort', 'mcpWatchExportFolder'] as const
 
 function updateHints(): void {
   if (current === null || status === null) return
@@ -694,11 +697,24 @@ copySetupBtn.addEventListener('click', () => {
 copyPromptBtn.addEventListener('click', () => {
   // The same instructions the save toast's Copy Prompt carries (shared/prompt),
   // so the two can never drift; English on purpose, like that one.
+  //
+  // Unlike its two neighbours this button is never disabled, and GOAL says so:
+  // the sentence names no endpoint, so there is nothing in it that a dead socket
+  // could make wrong. The client it is pasted into is what knows where the
+  // server is — and a user whose server is down still has a use for it, namely
+  // pasting it after switching the server back on.
   copyWithFeedback(copyPromptBtn, 'settings.mcpCopyPrompt', analyzeLatestPrompt())
 })
 
+// True while a restart is in flight. renderLive() also owns the button's
+// disabled state now, and a status refresh (window focus, a finished patch) can
+// land mid-restart — without this flag it would re-enable the button while the
+// server is still rebinding.
+let mcpRestarting = false
+
 mcpRestartBtn.addEventListener('click', () => {
   void (async () => {
+    mcpRestarting = true
     mcpRestartBtn.disabled = true
     mcpRestartBtn.textContent = t('settings.mcpRestarting')
     try {
@@ -708,6 +724,11 @@ mcpRestartBtn.addEventListener('click', () => {
       // never be left claiming "Restarting…" as if it were an answer.
       await refreshStatus()
     } finally {
+      mcpRestarting = false
+      // renderLive() below applies the real rule (off => still disabled); this
+      // is the guard for the one path that cannot reach it — a renderLive() that
+      // returns early because no status has ever arrived must not leave the
+      // button dead forever.
       mcpRestartBtn.disabled = false
       mcpRestartBtn.textContent = t('settings.mcpRestart')
     }
@@ -794,6 +815,11 @@ function renderLive(): void {
   mcpUrlEl.title = mcp.endpoint
   copyUrlBtn.disabled = mcp.endpoint === ''
   copySetupBtn.disabled = mcp.endpoint === ''
+  // [Restart] has nothing to restart while the server is switched off, and a
+  // button that can only ever answer "still off" is the kind of empty
+  // affordance this release is removing. The switch above is the Stop/Start;
+  // this button applies a changed port / watch folder to a server that may run.
+  mcpRestartBtn.disabled = mcpRestarting || (current !== null && !current.mcpEnabled)
 
   const uia = status.uia
   uiaIcon.textContent = uia.state === 'active' ? '🟢' : uia.state === 'failing' ? '🔴' : '⚪'

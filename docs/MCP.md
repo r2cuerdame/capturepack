@@ -30,9 +30,19 @@ automatically with it:
   local `http(s)://127.0.0.1`/`localhost` page, are rejected with `403`
 
 The port comes from the `mcpPort` setting (default `39393`). If `mcpEnabled` or
-`mcpAutoStart` is `false`, the server does not start automatically — Settings → MCP shows
-which of the two it is, and its **Restart** button starts it on demand (and applies a
-changed port) without restarting the app.
+`mcpAutoStart` is `false`, the server does not start with the app — Settings → MCP shows
+which of the two it is.
+
+**Settings → MCP → Enable MCP server is the live on/off switch.** Unchecking it stops the
+running server immediately (the status row then reads *Not running — the MCP server is
+turned off*); checking it starts one immediately and reports where it bound. Nothing here
+waits for an app restart. `mcpAutoStart` is not consulted when you flip that switch by
+hand — flipping it *is* the manual start `mcpAutoStart` says the app must not perform on
+its own.
+
+**Restart** applies a changed port, output folder or watch setting to the server in place,
+without restarting the app. It is greyed out while the server is switched off; when
+`mcpEnabled` is `true` but `mcpAutoStart` is `false`, it is the on-demand start.
 
 ## Connecting a client
 
@@ -332,9 +342,9 @@ Flat keys in the app's `settings.json` (validated like every other setting):
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `mcpEnabled` | `true` | Master switch — `false` means the server never starts |
+| `mcpEnabled` | `true` | Master switch — `false` means no server runs. Toggling it in Settings starts/stops the server **immediately**, no app restart |
 | `mcpPort` | `39393` | Port for `http://127.0.0.1:<port>/mcp`. Changing it applies on **Settings → MCP → Restart**, no app restart |
-| `mcpAutoStart` | `true` | Start the server with the app — `false` means it is not started automatically (Restart still starts it on demand) |
+| `mcpAutoStart` | `true` | Start an enabled server with the app — `false` means it is not started at launch (Restart, or re-ticking Enable, starts it on demand) |
 | `mcpReadOnly` | `true` | Read-only mode. This version is **always** read-only — setting `false` is ignored (a startup log line says so); the key reserves the name for a future opt-in write mode |
 | `mcpWatchExportFolder` | `true` | Watch `outputDir` and keep the pack index fresh |
 | `mcpLogRequests` | `false` | Log one console line per tool call |

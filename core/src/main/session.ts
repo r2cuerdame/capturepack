@@ -80,8 +80,10 @@ import {
   editorUiaWindows,
   mapUiaToSnapshot,
   parseUiaPayload,
+  recordUiaSkipped,
   startUiaDump,
   type UiaDisplayTarget,
+  type UiaRawDump,
 } from './uia'
 
 const REPLAY_TIMEOUT_MS = 5_000
@@ -399,7 +401,19 @@ async function runFlow(settings: Settings): Promise<void> {
   // rest of the flow needs no branch — a disabled plugin resolves exactly like
   // a dump that produced nothing, which the editor already reports honestly as
   // "object picking is off for this capture".
-  const uiaDump = settings.uiaEnabled ? startUiaDump() : Promise.resolve(null)
+  //
+  // The skip is RECORDED, because the Plugins row reports what the LAST capture
+  // did. Without this a capture taken while the switch was off left the previous
+  // capture's counts in place, and re-enabling the plugin showed "Active — last
+  // capture: 9 windows, 264 controls" about a capture two captures ago — exactly
+  // the constant #57 forbids.
+  let uiaDump: Promise<UiaRawDump | null>
+  if (settings.uiaEnabled) {
+    uiaDump = startUiaDump()
+  } else {
+    recordUiaSkipped()
+    uiaDump = Promise.resolve(null)
+  }
   // "all": every connected display is frozen, the cursor's display is the
   // FOCUSED one. "cursor"/fixed: that display alone. Snapshot, replay, editor,
   // and annotations all target the focused display.
