@@ -740,6 +740,14 @@ asks the Provider for that object's bounds over the range, and the track carries
 `removedAtMs` — so the annotation appears when the object does, moves with it, and its lifetime
 ends when the object is destroyed.
 
+**A picked box cannot outlive its object, however far the lifetime is stretched.** Its
+`start_ms`/`end_ms` are clamped to the track: drag the end handle past the moment the object
+disappears and it stops there, and says why. An annotation is a claim about a moment — *this
+thing, here, then* — and past `removedAtMs` there is no thing, so the box points at whatever
+pixels land in that rectangle afterwards. Well-formed and false, which is the same defect as a
+tray icon that says "recording". A manual box carries no such bound: it points at a rectangle
+rather than an object, and may live as long as the user wants.
+
 **A slow Provider must never hold the editor shut.** Timeouts are budgets, not suggestions:
 hitTest 100–300 ms, materialize under ~500 ms, background work may take seconds, an After Save
 Action 30 s by default and minutes if configured. Late candidates update the list asynchronously
