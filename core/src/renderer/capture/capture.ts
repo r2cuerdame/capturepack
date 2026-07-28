@@ -7,6 +7,7 @@ import type {
   CaptureReadyPayload,
   CaptureReplayResultPayload,
   CaptureStartPayload,
+  CaptureTickPayload,
 } from '../../shared/ipc'
 
 interface CaptureBridge {
@@ -15,6 +16,7 @@ interface CaptureBridge {
   sendReplayResult(payload: CaptureReplayResultPayload): void
   sendReady(payload: CaptureReadyPayload): void
   sendFrames(payload: CaptureFramesPayload): void
+  sendTick(payload: CaptureTickPayload): void
   sendError(message: string): void
 }
 
@@ -248,6 +250,51 @@ function cadenceReport(): { achievedFps: number; worstStallMs: number } | null {
   }
 }
 
+// ---------------------------------------------------------------------------
+// THE FRAME TICK DRIVES THE OBSERVER (#105).
+//
+// Core's surface ring used to sample on a timer of its own and be related to
+// the recording by clock arithmetic. That error is invisible while a window is
+// still and proportional to its speed while it moves, which is exactly how it
+// was reported — "처음과 끝 가만히 있을대만 맞아" — and it measured 232 px, about
+// 119 ms, mid-drag.
+//
+// A frame is the only instant a pack can show. So every captured frame asks
+// Core to look at the desk NOW and hands over its own presentation time; the
+// resulting sample is filed under that number. The picture and the rectangles
+// become one instant by construction, and there is no clock left to be wrong
+// about.
+//
+// Only the FOCUSED display ticks: it owns the pack clock (SPEC §10.1), and a
+// second display ticking would file samples under a different recording's
+// numbers.
+let tickVideo: HTMLVideoElement | null = null
+
+function startFrameTicks(): void {
+  if (startPayload?.focused !== true) return
+  const active = stream
+  if (active === null) return
+  const video = document.createElement('video')
+  video.muted = true
+  video.playsInline = true
+  video.srcObject = active
+  tickVideo = video
+  if (typeof video.requestVideoFrameCallback !== 'function') return
+  const pump: VideoFrameRequestCallback = (_now, metadata) => {
+    window.captureBridge.sendTick?.({
+      displayId: startPayload?.displayId ?? '',
+      mediaTimeMs: metadata.mediaTime * 1000,
+    })
+    video.requestVideoFrameCallback(pump)
+  }
+  video.requestVideoFrameCallback(pump)
+  // A <video> that is never played presents no frames; it is never shown, and
+  // it decodes the stream the recorder is already consuming.
+  void video.play().catch(() => {
+    /* No ticks from this display: the free-running loop still samples. */
+  })
+}
+
 function armEvidenceCheck(delayMs: number): void {
   window.clearTimeout(evidenceTimer)
   evidenceTimer = window.setTimeout(checkFrameEvidence, delayMs)
@@ -437,6 +484,7 @@ async function startCapture(payload: CaptureStartPayload): Promise<void> {
   unknownFramesLogged = false
   evidenceFrames = deliveredFrames() ?? 0
   startCadenceMonitor()
+  startFrameTicks()
   startSlot(slots[0])
   armEvidenceCheck(EVIDENCE_DEADLINE_MS)
   slots[1].startTimer = window.setTimeout(() => startSlot(slots[1]), segmentMs)

@@ -321,11 +321,46 @@ export class SurfaceLane {
     }
   }
 
+  /**
+   * A frame was just captured — observe the desk NOW, under that frame's time
+   * (#105).
+   *
+   * This is the whole point of the tick: the picture and the window rectangles
+   * become the same instant by construction, instead of two independent
+   * samplers related by clock arithmetic whose error is invisible at rest and
+   * proportional to speed in motion.
+   *
+   * Fire and forget. A tick that cannot be served is a sample the free-running
+   * loop will take anyway a few tens of milliseconds later; it must never make
+   * the recorder wait.
+   */
+  tickAt(frameMs: number): void {
+    if (!this.running) return
+    void this.host.request('surface.tick', { tMs: frameMs }).catch(() => {
+      /* Rule 1: a missed observation is a gap in the ring, never a lost frame. */
+    })
+  }
+
   private onSample(event: HostEvent): void {
     const hostMs = event['t']
     const rawWindows = event['w']
     if (typeof hostMs !== 'number' || !Array.isArray(rawWindows)) {
       this.dropped += 1
+      return
+    }
+    // THE FRAME'S OWN TIME WHEN THERE IS ONE (#105).
+    //
+    // A sample taken because a frame was just captured carries that frame's
+    // time, and it is filed under it. No clock is converted, so no clock error
+    // can accumulate: the sample and the picture are the same instant by
+    // construction. `t` (the host's clock) stays in the event so the round
+    // trip's cost is still measurable — it is just no longer load-bearing.
+    //
+    // The converted host clock remains for the free-running loop, which is what
+    // a display with no recorder still has.
+    const frameMs = event['ft']
+    if (typeof frameMs === 'number' && Number.isFinite(frameMs)) {
+      this.append(frameMs, rawWindows)
       return
     }
     const timeMs = this.offset.toCoreMs(hostMs)
@@ -335,6 +370,10 @@ export class SurfaceLane {
       this.dropped += 1
       return
     }
+    this.append(timeMs, rawWindows)
+  }
+
+  private append(timeMs: number, rawWindows: readonly unknown[]): void {
     const windows: SurfaceSampleWindow[] = []
     for (const raw of rawWindows) {
       const parsed = parseWindow(raw)

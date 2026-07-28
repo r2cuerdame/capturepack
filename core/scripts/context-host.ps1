@@ -512,6 +512,37 @@ while ($running) {
       $nextSampleMs = $clock.Elapsed.TotalMilliseconds
       Write-Line ('{"id":' + $id + ',"ok":true,"intervalMs":' + $intervalMs + '}')
     }
+    'surface.tick' {
+      # THE FRAME DRIVES THE OBSERVATION (#105).
+      #
+      # The free-running loop above samples on ITS OWN clock, and relating that
+      # clock to the recorder's is arithmetic — arithmetic whose error is
+      # invisible while a window is still and proportional to its speed while it
+      # moves. Measured on a real capture: the box lagged the window by 232 px,
+      # about 119 ms at the speed it was being dragged.
+      #
+      # A tick removes the arithmetic. The capture pipeline has just produced a
+      # frame; it asks for a sample NOW and hands over that frame's own time, and
+      # the sample goes out stamped with it. The two are then the same instant by
+      # construction rather than by calculation.
+      $frameMs = $null
+      if ($null -ne $request.params -and $null -ne $request.params.tMs) {
+        $frameMs = [double]$request.params.tMs
+      }
+      try {
+        # `ft` is the FRAME's time; `t` stays the host's own, so the cost of the
+        # round trip is still measurable rather than hidden.
+        $line = [CapturePack.SurfaceLane]::Sample((Get-HostMs))
+        if ($null -ne $frameMs) {
+          $line = $line.Insert(1, '"ft":' + [Math]::Round($frameMs, 3) + ',')
+        }
+        Write-Line $line
+        Write-Line ('{"id":' + $id + ',"ok":true}')
+      } catch {
+        Write-Line ('{"id":' + $id + ',"ok":false,"error":' +
+          (ConvertTo-Json ([string]$_.Exception.Message) -Compress) + '}')
+      }
+    }
     'surface.stop' {
       $sampling = $false
       Write-Line ('{"id":' + $id + ',"ok":true}')

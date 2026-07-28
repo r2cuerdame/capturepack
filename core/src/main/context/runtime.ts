@@ -250,6 +250,17 @@ export function frozenObservations(
   )
 }
 
+/**
+ * A frame was captured — observe the desk under THAT frame's time (#105).
+ *
+ * The one call that replaces relating two clocks with observing one instant.
+ * Silent when there is no runtime, which is every non-Windows platform and any
+ * session started with --no-context-host.
+ */
+export function tickSurfaces(frameMs: number): void {
+  runtime?.lane.tickAt(frameMs)
+}
+
 export interface ContextStatus {
   sessionId: string
   lane: SurfaceLaneStatus

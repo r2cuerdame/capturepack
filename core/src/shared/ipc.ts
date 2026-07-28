@@ -17,6 +17,12 @@ export const IPC = {
   // heartbeat (see CaptureFramesPayload). Only this makes a display count as
   // recording, and its repetition is what lets that state self-heal (#43).
   captureFrames: 'capture:frames',
+  // capture window -> main: A FRAME WAS JUST CAPTURED, and this is its own time
+  // on the recording's clock (#105). Core answers by observing the desk right
+  // then and filing the result under that number, so the picture and the window
+  // rectangles are the same instant by construction rather than by clock
+  // arithmetic. Payload: CaptureTickPayload. Focused display only — one clock.
+  captureTick: 'capture:tick',
   // capture window -> main: recorder failed; capture continues screenshot-only
   captureError: 'capture:error',
 
@@ -210,6 +216,14 @@ export interface CaptureStartPayload {
   // Routing happens in the main process (display-media handler keyed by the
   // requesting webContents); the renderer carries this for diagnostics only.
   displayId: string
+  /**
+   * Whether this is the display that owns the pack clock (SPEC §10.1).
+   *
+   * Only that one ticks the surface ring (#105): a second display's frames
+   * carry a different recording's numbers, and filing samples under those would
+   * put the ring on two clocks at once — which is the problem, not the fix.
+   */
+  focused?: boolean
   fps: number
   segmentSeconds: number // recorder rotation interval (replay guarantee = 1x..2x this)
   // Longest edge of the recorded stream; 0 = native. Snapshot capture is a
@@ -299,6 +313,13 @@ export interface CaptureFramesPayload {
     /** The longest the frame counter went without advancing, in ms. */
     worstStallMs: number
   }
+}
+
+/** One captured frame announcing itself (#105). */
+export interface CaptureTickPayload {
+  displayId: string
+  /** The frame's presentation time on the recording's own clock, ms. */
+  mediaTimeMs: number
 }
 
 export interface CaptureReplayResultPayload {
