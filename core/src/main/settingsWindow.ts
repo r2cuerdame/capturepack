@@ -31,6 +31,9 @@ export interface SettingsIpcHooks {
   // Fired after the capture hotkey was successfully re-registered (the tray's
   // "Capture now" label shows the accelerator).
   onHotkeyChanged?: () => void
+  // Applies the per-user Windows login item immediately after the validated
+  // setting is persisted. Startup reconciliation uses the same callback.
+  onLaunchAtLoginChanged?: (enabled: boolean) => void
 }
 
 // Registers the settings IPC handlers around the live settings object — the
@@ -110,6 +113,9 @@ export function registerSettingsIpc(live: Settings, hooks: SettingsIpcHooks = {}
     // The updater honors the toggle live (GOAL: instant apply where possible).
     if (live.autoUpdateCheck !== before.autoUpdateCheck) {
       setAutoUpdateCheck(live.autoUpdateCheck)
+    }
+    if (live.launchAtLogin !== before.launchAtLogin) {
+      hooks.onLaunchAtLoginChanged?.(live.launchAtLogin)
     }
     // Instant apply (GOAL i18n): the tray rebuilds and open windows re-render.
     if (live.language !== before.language) {

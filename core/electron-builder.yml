@@ -21,6 +21,7 @@ nsis:
   oneClick: true
   perMachine: false
   deleteAppDataOnUninstall: false
+  include: build/installer.nsh
 publish:
   provider: github
   owner: r2cuerdame

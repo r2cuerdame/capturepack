@@ -22,6 +22,28 @@ import type {
 import type { Settings } from '../shared/types'
 
 const HOTPLUG_DEBOUNCE_MS = 1_000
+// A recorder window loading only proves that its renderer started. The first
+// non-empty replay response proves the MediaRecorder itself is producing video.
+const RECORDER_PROBE_DELAY_MS = 2_000
+const RECORDER_RETRY_PROBE_DELAY_MS = 5_000
+const RECORDER_PROBE_TIMEOUT_MS = 3_000
+
+export type RecorderFailureReason =
+  | 'screen-unavailable'
+  | 'recorder-unavailable'
+  | 'stream-ended'
+  | 'process-stopped'
+  | 'did-not-start'
+
+export type RecorderState =
+  | { status: 'starting' }
+  | { status: 'recording' }
+  | { status: 'stopped'; reason: RecorderFailureReason; detail: string }
+
+type DisplayRecorderState =
+  | { status: 'starting' }
+  | { status: 'recording' }
+  | { status: 'stopped'; reason: RecorderFailureReason; detail: string }
 
 // display.id -> that display's hidden recorder window.
 const captureWindows = new Map<number, BrowserWindow>()
@@ -31,6 +53,14 @@ const captureWindows = new Map<number, BrowserWindow>()
 const captureWindowSigs = new Map<number, string>()
 // webContents.id -> display id string; the display-media handler routes by this.
 const assignedDisplays = new Map<number, string>()
+// Actual per-display recorder health. "recording" is set only after the
+// renderer returns non-empty replay bytes; window creation alone stays
+// "starting". Failures come from the renderer's existing capture:error signal.
+const displayRecorderStates = new Map<number, DisplayRecorderState>()
+const recorderProbeTimers = new Map<number, ReturnType<typeof setTimeout>>()
+let wantedDisplayIds = new Set<number>()
+let publishedRecorderState: RecorderState = { status: 'starting' }
+const recorderStateListeners = new Set<(state: RecorderState) => void>()
 
 let currentSettings: Settings | null = null
 // Bumped on every requested rebuild; queued rebuilds that lost the race bail out.
@@ -39,6 +69,99 @@ let generation = 0
 let rebuildChain: Promise<void> = Promise.resolve()
 let hotplugTimer: ReturnType<typeof setTimeout> | undefined
 let watchingDisplays = false
+
+/** The recorder state that drives the tray tooltip/icon at this instant. */
+export function getRecorderState(): RecorderState {
+  return { ...publishedRecorderState }
+}
+
+/** Subscribes to actual recorder state changes; returns an unsubscribe handle. */
+export function onRecorderStateChanged(listener: (state: RecorderState) => void): () => void {
+  recorderStateListeners.add(listener)
+  return () => recorderStateListeners.delete(listener)
+}
+
+function sameRecorderState(a: RecorderState, b: RecorderState): boolean {
+  if (a.status !== b.status) return false
+  if (a.status !== 'stopped' || b.status !== 'stopped') return true
+  return a.reason === b.reason && a.detail === b.detail
+}
+
+function aggregateRecorderState(): RecorderState {
+  for (const id of wantedDisplayIds) {
+    const state = displayRecorderStates.get(id)
+    if (state?.status === 'stopped') return { ...state }
+  }
+  if (
+    wantedDisplayIds.size > 0 &&
+    [...wantedDisplayIds].every((id) => displayRecorderStates.get(id)?.status === 'recording')
+  ) {
+    return { status: 'recording' }
+  }
+  return { status: 'starting' }
+}
+
+function publishRecorderState(): void {
+  const next = aggregateRecorderState()
+  if (sameRecorderState(publishedRecorderState, next)) return
+  publishedRecorderState = next
+  for (const listener of recorderStateListeners) listener(getRecorderState())
+}
+
+function setDisplayRecorderState(displayId: number, state: DisplayRecorderState): void {
+  if (!wantedDisplayIds.has(displayId)) return
+  displayRecorderStates.set(displayId, state)
+  publishRecorderState()
+}
+
+function failureReason(message: string): RecorderFailureReason {
+  if (message.includes('getDisplayMedia')) return 'screen-unavailable'
+  if (message.includes('capture stream ended')) return 'stream-ended'
+  if (message.includes('MediaRecorder')) return 'recorder-unavailable'
+  return 'process-stopped'
+}
+
+function clearRecorderProbe(displayId: number): void {
+  const timer = recorderProbeTimers.get(displayId)
+  if (timer !== undefined) clearTimeout(timer)
+  recorderProbeTimers.delete(displayId)
+}
+
+function scheduleRecorderProbe(
+  displayId: number,
+  win: BrowserWindow,
+  delayMs = RECORDER_PROBE_DELAY_MS,
+): void {
+  clearRecorderProbe(displayId)
+  const timer = setTimeout(() => {
+    recorderProbeTimers.delete(displayId)
+    void probeRecorder(displayId, win)
+  }, delayMs)
+  recorderProbeTimers.set(displayId, timer)
+}
+
+async function probeRecorder(displayId: number, win: BrowserWindow): Promise<void> {
+  if (captureWindows.get(displayId) !== win || win.isDestroyed() || !wantedDisplayIds.has(displayId)) {
+    return
+  }
+  const result = await requestReplay(
+    win,
+    `recorder-state-${displayId}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    RECORDER_PROBE_TIMEOUT_MS,
+  )
+  if (captureWindows.get(displayId) !== win || !wantedDisplayIds.has(displayId)) return
+  if (result !== null && result.buffer.byteLength > 0) {
+    setDisplayRecorderState(displayId, { status: 'recording' })
+    return
+  }
+  // Preserve a more specific renderer-reported failure if it raced the probe.
+  if (displayRecorderStates.get(displayId)?.status === 'stopped') return
+  setDisplayRecorderState(displayId, {
+    status: 'stopped',
+    reason: 'did-not-start',
+    detail: `recorder for display ${displayId} did not produce replay bytes`,
+  })
+}
 
 // Routes each capture window's getDisplayMedia call to its assigned display
 // without a picker: requesting webContents -> assigned display id -> matching
@@ -356,7 +479,14 @@ function queueRebuild(): Promise<void> {
   const gen = ++generation
   rebuildChain = rebuildChain
     .then(() => (gen === generation ? rebuild() : undefined))
-    .catch((err) => console.error('[capture] recorder rebuild failed:', String(err)))
+    .catch((err) => {
+      const detail = String(err)
+      console.error('[capture] recorder rebuild failed:', detail)
+      for (const id of wantedDisplayIds) {
+        displayRecorderStates.set(id, { status: 'stopped', reason: 'process-stopped', detail })
+      }
+      publishRecorderState()
+    })
   return rebuildChain
 }
 
@@ -390,6 +520,13 @@ async function rebuild(): Promise<void> {
         ? screen.getAllDisplays()
         : [resolveFixedDisplay(settings.captureDisplay)]
   const wanted = new Map<number, Display>(displays.map((d) => [d.id, d]))
+  wantedDisplayIds = new Set(wanted.keys())
+  for (const id of displayRecorderStates.keys()) {
+    if (!wanted.has(id)) displayRecorderStates.delete(id)
+  }
+  for (const id of recorderProbeTimers.keys()) {
+    if (!wanted.has(id)) clearRecorderProbe(id)
+  }
 
   for (const [id, win] of captureWindows) {
     const display = wanted.get(id)
@@ -401,21 +538,34 @@ async function rebuild(): Promise<void> {
     if (!stale) continue
     // destroy() emits 'closed', whose handler releases the window's IPC
     // listener and assignedDisplays entry — no leaks.
-    if (!win.isDestroyed()) win.destroy()
     captureWindows.delete(id)
     captureWindowSigs.delete(id)
+    displayRecorderStates.delete(id)
+    clearRecorderProbe(id)
+    if (!win.isDestroyed()) win.destroy()
   }
-  if (settings === null) return
+  if (settings === null) {
+    publishRecorderState()
+    return
+  }
 
   for (const display of displays) {
     if (captureWindows.has(display.id)) continue
+    setDisplayRecorderState(display.id, { status: 'starting' })
     try {
-      captureWindows.set(display.id, await createCaptureWindow(display, settings))
+      const win = await createCaptureWindow(display, settings)
+      captureWindows.set(display.id, win)
       captureWindowSigs.set(display.id, recorderSignature(display, settings))
+      if (displayRecorderStates.get(display.id)?.status !== 'stopped') {
+        scheduleRecorderProbe(display.id, win)
+      }
     } catch (err) {
-      console.error(`[capture] recorder for display ${display.id} failed to start: ${String(err)}`)
+      const detail = String(err)
+      console.error(`[capture] recorder for display ${display.id} failed to start: ${detail}`)
+      setDisplayRecorderState(display.id, { status: 'stopped', reason: 'process-stopped', detail })
     }
   }
+  publishRecorderState()
 }
 
 async function createCaptureWindow(display: Display, settings: Settings): Promise<BrowserWindow> {
@@ -437,9 +587,18 @@ async function createCaptureWindow(display: Display, settings: Settings): Promis
 
     const onError = (event: IpcMainEvent, message: unknown): void => {
       if (event.sender === win.webContents) {
+        const detail = String(message)
         console.error(
-          `[capture] recorder for display ${display.id} failed, continuing screenshot-only: ${String(message)}`,
+          `[capture] recorder for display ${display.id} failed, continuing screenshot-only: ${detail}`,
         )
+        setDisplayRecorderState(display.id, {
+          status: 'stopped',
+          reason: failureReason(detail),
+          detail,
+        })
+        // The renderer retries once after three seconds. A later non-empty
+        // replay is the only thing that moves the state back to recording.
+        scheduleRecorderProbe(display.id, win, RECORDER_RETRY_PROBE_DELAY_MS)
       }
     }
     const onReady = (event: IpcMainEvent, ready: CaptureReadyPayload): void => {
@@ -451,10 +610,25 @@ async function createCaptureWindow(display: Display, settings: Settings): Promis
     }
     ipcMain.on(IPC.captureError, onError)
     ipcMain.on(IPC.captureReady, onReady)
+    win.webContents.on('render-process-gone', (_event, details) => {
+      setDisplayRecorderState(display.id, {
+        status: 'stopped',
+        reason: 'process-stopped',
+        detail: `recorder renderer stopped: ${details.reason}`,
+      })
+    })
     win.on('closed', () => {
       ipcMain.removeListener(IPC.captureError, onError)
       ipcMain.removeListener(IPC.captureReady, onReady)
       assignedDisplays.delete(wcId)
+      clearRecorderProbe(display.id)
+      if (captureWindows.get(display.id) === win) {
+        setDisplayRecorderState(display.id, {
+          status: 'stopped',
+          reason: 'process-stopped',
+          detail: `recorder window for display ${display.id} closed`,
+        })
+      }
     })
 
     await win.loadFile(path.join(__dirname, '../renderer/capture/capture.html'))

@@ -26,12 +26,15 @@ function defaultSettings(): Settings {
     language: 'system',
     packLanguage: 'ui',
     autoUpdateCheck: true,
+    launchAtLogin: true,
+    notifyOnRecordingStart: true,
     outputDir: path.join(app.getPath('desktop'), 'CapturePack'),
     copyToClipboard: true,
     // The welcome window has never been shown on this machine (GOAL "Welcome
     // (first launch after install)"). Flipped — and written — the moment the
     // window opens.
     welcomeShown: false,
+    welcomeDeferredFromLogin: false,
     captureHotkey: DEFAULT_CAPTURE_HOTKEY,
     replaySeconds: 30,
     fps: 15,
@@ -69,10 +72,10 @@ export interface LoadedSettings {
    * NO settings file existed when this ran — i.e. a genuinely fresh install.
    *
    * The first-launch welcome window (GOAL "Welcome (first launch after
-   * install)") keys off THIS, never off a stored flag alone: an update always
-   * finds a settings file, so it can never show the window, while a settings.json
-   * written before `welcomeShown` existed would default the flag to false and
-   * pop the window open on the first launch after an update.
+   * install)") initially keys off THIS, never off welcomeShown alone: an update
+   * always finds a settings file, so it cannot show the window merely because
+   * an old profile lacks that flag. A hidden login launch persists
+   * welcomeDeferredFromLogin so the next manual launch can still show it.
    */
   firstRun: boolean
 }
@@ -214,9 +217,12 @@ const SETTINGS_KEY_SET: Record<keyof Settings, true> = {
   language: true,
   packLanguage: true,
   autoUpdateCheck: true,
+  launchAtLogin: true,
+  notifyOnRecordingStart: true,
   outputDir: true,
   copyToClipboard: true,
   welcomeShown: true,
+  welcomeDeferredFromLogin: true,
   captureHotkey: true,
   replaySeconds: true,
   fps: true,
@@ -346,9 +352,18 @@ function mergeSettings(base: Settings, raw: Record<string, unknown>): Settings {
         ? raw.packLanguage
         : base.packLanguage,
     autoUpdateCheck: typeof raw.autoUpdateCheck === 'boolean' ? raw.autoUpdateCheck : base.autoUpdateCheck,
+    launchAtLogin: typeof raw.launchAtLogin === 'boolean' ? raw.launchAtLogin : base.launchAtLogin,
+    notifyOnRecordingStart:
+      typeof raw.notifyOnRecordingStart === 'boolean'
+        ? raw.notifyOnRecordingStart
+        : base.notifyOnRecordingStart,
     outputDir: typeof raw.outputDir === 'string' && raw.outputDir.length > 0 ? raw.outputDir : base.outputDir,
     copyToClipboard: typeof raw.copyToClipboard === 'boolean' ? raw.copyToClipboard : base.copyToClipboard,
     welcomeShown: typeof raw.welcomeShown === 'boolean' ? raw.welcomeShown : base.welcomeShown,
+    welcomeDeferredFromLogin:
+      typeof raw.welcomeDeferredFromLogin === 'boolean'
+        ? raw.welcomeDeferredFromLogin
+        : base.welcomeDeferredFromLogin,
     captureHotkey:
       typeof raw.captureHotkey === 'string' && isCaptureHotkey(raw.captureHotkey)
         ? raw.captureHotkey

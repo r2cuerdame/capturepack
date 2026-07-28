@@ -447,15 +447,25 @@ export interface Settings {
   // follow the resolved UI language) or a supported language code.
   packLanguage: string
   autoUpdateCheck: boolean
+  // Per-user Windows login item (GOAL "Start with Windows, by default.").
+  // Fresh profiles opt in; the Settings > General toggle applies immediately.
+  launchAtLogin: boolean
+  // Show the once-per-launch "replay is ready" tray notification. Recorder
+  // failures are always announced and are deliberately not controlled by it.
+  notifyOnRecordingStart: boolean
   outputDir: string
   copyToClipboard: boolean
   // The first-launch welcome window has been shown (GOAL "Welcome (first launch
   // after install)"): written the moment the window opens, so it appears once
   // and never again on its own. Showing it is gated on a genuinely fresh
-  // install (no settings file existed at load) AND this flag — an update, which
-  // always finds a settings file, never shows it. About's "Show welcome again"
-  // re-opens it on demand.
+  // install (or a fresh profile deferred by a hidden login launch) AND this
+  // flag — an update, which has neither fresh signal, never shows it. About's
+  // "Show welcome again" re-opens it on demand.
   welcomeShown: boolean
+  // A genuinely fresh profile was first created by a hidden login launch. The
+  // next manual launch consumes this marker and shows the welcome without ever
+  // exposing a window at boot.
+  welcomeDeferredFromLogin: boolean
   // Global capture accelerator in Electron syntax, e.g. "Ctrl+Alt+C" (default
   // DEFAULT_CAPTURE_HOTKEY). At least one modifier plus exactly one key; an
   // unusable value falls back to the default when settings load.
