@@ -303,7 +303,10 @@ export function logContextCost(): void {
     `[context] lane S: ${status.timeline.samples} samples over ` +
       `${Math.round((status.timeline.rangeEndMs - status.timeline.rangeStartMs) / 1000)}s, ` +
       `${Math.round(status.timeline.bytes / 1024)} KB, host ${duty}, ${ws}, ` +
-      `clock ±${Number.isFinite(lane.clockErrorMs) ? lane.clockErrorMs.toFixed(1) : '∞'} ms`,
+      `clock ±${Number.isFinite(lane.clockErrorMs) ? lane.clockErrorMs.toFixed(1) : '∞'} ms, ` +
+      // WHICH CLOCK THE RING IS ON (#106). Two bases in one ring is the defect
+      // that hid behind a healthy-looking sample count, so the count is split.
+      `${lane.frameStamped} frame-stamped / ${lane.clockStamped} clock-stamped`,
   )
   if (!lane.running) {
     // "Silence is not absence": a surface timeline that is not running is the

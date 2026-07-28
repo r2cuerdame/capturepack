@@ -51,6 +51,15 @@ const DEFAULT_INTERVAL_MS = 100
 const MIN_INTERVAL_MS = 16
 /** Coarser steps the governor may fall back to before giving up entirely. */
 const FALLBACK_INTERVALS_MS = [200, 500]
+/**
+ * How long without a captured frame before the free-running loop comes back.
+ *
+ * Long enough that an ordinary stutter — this recorder's measured worst is
+ * about a second — does not flap the ring between two time bases, short enough
+ * that a recorder which really has stopped does not take the ring with it.
+ */
+const TICK_SILENCE_MS = 2_000
+
 /** How often Core re-measures the host clock offset. */
 const PING_INTERVAL_MS = 2_000
 /** How often the ring drops what retention no longer covers. */
@@ -84,6 +93,15 @@ export interface SurfaceLaneStatus {
   windows: number | null
   samples: number
   droppedSamples: number
+  /**
+   * Which clock the ring is on and how much of it each produced (#106).
+   *
+   * A ring holding samples from two time bases jumps exactly as badly as one on
+   * a single wrong base, and it took a pack and a log line to notice. These two
+   * numbers make it a fact the log states rather than something to work out.
+   */
+  frameStamped: number
+  clockStamped: number
   /** `hostClock - coreClock`, null until the first ping answered. */
   clockOffsetMs: number | null
   /** Half the measured round trip. Infinity when the clock has never been measured. */
@@ -150,6 +168,11 @@ export class SurfaceLane {
   private readonly host: ContextHost
   private readonly offset = new ClockOffsetEstimator()
   private intervalMs = DEFAULT_INTERVAL_MS
+  /** True while captured frames are driving the sampling (#106). */
+  private tickDriven = false
+  private lastTickAt = 0
+  private frameStamped = 0
+  private clockStamped = 0
   private fallbackIndex = -1
   private dutyStrikes = 0
   private warnedWorkingSet = false
@@ -208,6 +231,7 @@ export class SurfaceLane {
         // Retention is the ring's only shrink rule; a frozen range is exempt
         // (#64 onFreeze) and the timeline enforces that itself.
         this.timeline.prune(this.clock.bufferStartMs())
+        this.resumeIfTicksStopped()
       }, PRUNE_INTERVAL_MS)
       // The prune timer must never be what keeps the app alive at quit.
       this.pruneTimer.unref()
@@ -237,6 +261,8 @@ export class SurfaceLane {
       windows: this.windows,
       samples: this.samples,
       droppedSamples: this.dropped,
+      frameStamped: this.frameStamped,
+      clockStamped: this.clockStamped,
       clockOffsetMs: this.offset.offsetMs(),
       clockErrorMs: this.offset.errorBoundMs(),
       lastError: this.lastError,
@@ -336,8 +362,44 @@ export class SurfaceLane {
    */
   tickAt(frameMs: number): void {
     if (!this.running) return
+    // ONE TIME BASE AT A TIME (#106).
+    //
+    // The free-running loop stamps its samples with the host's clock converted
+    // to Core's; a ticked sample is stamped with the FRAME's. Leaving both on
+    // interleaves two time bases in one ring — measured: 962 samples over 36 s,
+    // which is the 15/s of ticks PLUS the 15/s of the loop — and a ring on two
+    // clocks jumps exactly as badly as a ring on one wrong one. So the first
+    // tick retires the loop.
+    if (!this.tickDriven) {
+      this.tickDriven = true
+      logInfo('[context] lane S is now driven by captured frames — free-running sampling stopped')
+      void this.host.request('surface.stop').catch(() => {
+        /* Still fine: a duplicate sample is dropped by its own timestamp. */
+      })
+    }
+    this.lastTickAt = Date.now()
     void this.host.request('surface.tick', { tMs: frameMs }).catch(() => {
       /* Rule 1: a missed observation is a gap in the ring, never a lost frame. */
+    })
+  }
+
+  /**
+   * Puts the free-running loop back when the frames stop (#106).
+   *
+   * A recorder can fail, be rebuilt, or simply have nothing to capture. Without
+   * this the ring would go silent with it — and a ring that stops recording
+   * because a DIFFERENT subsystem stopped is the kind of coupling this codebase
+   * removes rather than adds.
+   */
+  private resumeIfTicksStopped(): void {
+    if (!this.tickDriven || !this.running) return
+    if (Date.now() - this.lastTickAt < TICK_SILENCE_MS) return
+    this.tickDriven = false
+    logWarn(
+      `[context] no captured frame for ${TICK_SILENCE_MS} ms — lane S is sampling on its own clock again`,
+    )
+    void this.host.request('surface.start', { intervalMs: this.intervalMs }).catch(() => {
+      /* A host that cannot be told is about to be restarted anyway. */
     })
   }
 
@@ -360,6 +422,7 @@ export class SurfaceLane {
     // a display with no recorder still has.
     const frameMs = event['ft']
     if (typeof frameMs === 'number' && Number.isFinite(frameMs)) {
+      this.frameStamped += 1
       this.append(frameMs, rawWindows)
       return
     }
@@ -370,6 +433,7 @@ export class SurfaceLane {
       this.dropped += 1
       return
     }
+    this.clockStamped += 1
     this.append(timeMs, rawWindows)
   }
 
