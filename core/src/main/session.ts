@@ -57,7 +57,12 @@ import {
   logContextCost,
   releaseContext,
 } from './context/runtime'
-import { DOM_PROTOCOL_VERSION, domBridgeStatus, domEventsBetween } from './chrome/domBridge'
+import {
+  DOM_PROTOCOL_VERSION,
+  domBridgeStatus,
+  domEventsBetween,
+  parseDomPayload,
+} from './chrome/domBridge'
 import type { DomEvent } from './chrome/domBridge'
 import {
   addManifestPlugin,
@@ -77,6 +82,7 @@ import {
   replayMimeType,
   writeUiaPlugin,
   UIA_PLUGIN_NAME,
+  DOM_PLUGIN_NAME,
   type DisplayCapture,
   type ExportInput,
   type InitialSaveInput,
@@ -1436,6 +1442,14 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
   // the editor can say so instead of behaving like the pre-feature editor for
   // no visible reason.
   const loadedUiaDropped = loadedUiaText !== null && uiaEmpty(loadedUia)
+  // The pack's own BROWSER picks, so re-editing offers the same document rung
+  // the original session did (GAP 9). Stored on the pack clock already
+  // (`t_ms`), which is the clock the editor session runs on, so nothing is
+  // rebased here. Validated rather than trusted, like every other payload read
+  // back off disk: a pick without a viewport anchor cannot be placed and is
+  // simply not offered — the same outcome as a pack written by an extension
+  // older than 0.1.4.
+  const loadedDomEvents = parseDomPayload(pack.readText(`plugins/${DOM_PLUGIN_NAME}/elements.json`))
   // Which display an entry without a `display` field belongs to (SPEC §5.6,
   // §11.3) — the same index the editor's board gives the focused screen.
   const loadedFocusedIndex = focusedDisplayIndex(manifest.media?.displays)
@@ -1494,6 +1508,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
     replayDurationMs,
     observation: contextObservation(loadedUia, loadedFocusedIndex, replayDurationMs),
     dropped: loadedUiaDropped,
+    domEvents: loadedDomEvents,
   })
   editor.once('ready-to-show', () => {
     void (async () => {

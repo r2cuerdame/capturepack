@@ -228,6 +228,45 @@ function parse(raw: unknown): DomEvent | 'hello' | null {
 }
 
 /**
+ * A pack's `plugins/chrome-dom/elements.json`, read back as events (GAP 9).
+ *
+ * Re-editing must offer the same document rung the original session did, and
+ * the payload on disk is the same vocabulary with one difference: times are
+ * `t_ms` on the PACK clock, which is already the clock an editor session runs
+ * on, so nothing is rebased.
+ *
+ * VALIDATED, NOT TRUSTED — a pack is a file a user can edit, move between
+ * machines, or receive from someone else. It goes through the SAME `parse()`
+ * the wire uses, which is what stops the two paths from drifting into two
+ * different ideas of what a valid pick is; a pick that cannot be placed is
+ * dropped here rather than allowed to become a rectangle somewhere plausible
+ * and wrong.
+ */
+export function parseDomPayload(text: string | null): DomEvent[] {
+  if (text === null) return []
+  let raw: unknown
+  try {
+    raw = JSON.parse(text) as unknown
+  } catch {
+    return []
+  }
+  if (typeof raw !== 'object' || raw === null) return []
+  const list = (raw as Record<string, unknown>)['events']
+  if (!Array.isArray(list)) return []
+  const out: DomEvent[] = []
+  for (const entry of list) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const e = entry as Record<string, unknown>
+    const tMs = e['t_ms']
+    if (typeof tMs !== 'number' || !Number.isFinite(tMs)) continue
+    const parsed = parse({ ...e, protocol: DOM_PROTOCOL_VERSION })
+    if (parsed === null || parsed === 'hello') continue
+    out.push({ ...parsed, tMs: Math.max(0, Math.round(tMs)) })
+  }
+  return out
+}
+
+/**
  * Starts listening for native hosts.
  *
  * Rule 1 of context data applies here too: a browser that cannot be reached is
