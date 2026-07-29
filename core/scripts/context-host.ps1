@@ -164,6 +164,38 @@ namespace CapturePack {
     static readonly Dictionary<long, RECT> Inset = new Dictionary<long, RECT>();
     const int GEOMETRY_CACHE_LIMIT = 512;
 
+    /// WHAT WE LAST TOLD CORE ABOUT EACH WINDOW, as a compact signature (#110).
+    ///
+    /// A move-driven dump fires ~100 times a second while a window is dragged,
+    /// and on this desk it costs 0.878 ms — of which the win32 calls are only
+    /// 0.178 ms (measured per call: EnumWindows+IsWindowVisible 0.086,
+    /// GetWindowRect 0.023, DWM extended frame 0.018, client rect 0.024,
+    /// GetWindowTextW 0.010, GetClassNameW 0.016). The other 80% is BUILDING
+    /// JSON FOR WINDOWS THAT DID NOT MOVE: during a drag exactly one of ~30
+    /// windows changes, and the other 29 were re-serialised every 10 ms. That
+    /// is what took the host to 13.28% of a core in the field and made lane S's
+    /// governor demote sampling mid-capture — visible in the pack as 68 ms
+    /// holes in an otherwise 11 ms track.
+    ///
+    /// So a DELTA sample emits only what changed. The signature is compared
+    /// BEFORE the strings are read and before any JSON is built, so an
+    /// unchanged window costs a few integer comparisons and nothing else.
+    static readonly Dictionary<long, long> LastSig = new Dictionary<long, long>();
+    static readonly HashSet<long> SeenThisPass = new HashSet<long>();
+
+    static long SigOf(RECT f, RECT c, int z, bool minimized, bool foreground, bool cloaked) {
+      unchecked {
+        long h = 17;
+        h = h * 31 + f.Left; h = h * 31 + f.Top; h = h * 31 + f.Right; h = h * 31 + f.Bottom;
+        h = h * 31 + c.Left; h = h * 31 + c.Top; h = h * 31 + c.Right; h = h * 31 + c.Bottom;
+        h = h * 31 + z;
+        h = h * 31 + (minimized ? 1 : 0);
+        h = h * 31 + (foreground ? 2 : 0);
+        h = h * 31 + (cloaked ? 4 : 0);
+        return h;
+      }
+    }
+
     public static string DpiMode = "unaware";
     public static long SampleTicks;
     public static long SampleCount;
@@ -232,9 +264,17 @@ namespace CapturePack {
     /// because hands move windows for seconds, not hours (#110).
     public static bool MovedLastSample;
 
-    public static string Sample(double hostMs) {
+    public static string Sample(double hostMs) { return Sample(hostMs, false); }
+
+    /// `delta` = emit only windows whose signature changed since the last
+    /// sample, plus the handles that vanished. A FULL sample (delta=false)
+    /// re-states everything and resets the shared picture, so Core and the host
+    /// can never drift further apart than one scheduled interval.
+    public static string Sample(double hostMs, bool delta) {
       long started = Stopwatch.GetTimestamp();
       bool anyMoved = false;
+      SeenThisPass.Clear();
+      if (!delta) LastSig.Clear();
       if (LastRaw.Count > GEOMETRY_CACHE_LIMIT) { LastRaw.Clear(); Inset.Clear(); }
       Handles.Clear();
       EnumWindows(Collect, IntPtr.Zero);
@@ -321,6 +361,15 @@ namespace CapturePack {
         } else {
           client = frame;
         }
+        long sigKey = h.ToInt64();
+        long sig = SigOf(frame, client, z, minimized, h == foreground, cloaked);
+        SeenThisPass.Add(sigKey);
+        long lastSig;
+        bool unchanged = LastSig.TryGetValue(sigKey, out lastSig) && lastSig == sig;
+        LastSig[sigKey] = sig;
+        // The z ordinal must still advance for a window we skip: it is this
+        // window's place in the stack whether or not Core is told about it.
+        if (delta && unchanged) { z++; continue; }
         uint pid; GetWindowThreadProcessId(h, out pid);
         TitleBuf.Length = 0; GetWindowTextW(h, TitleBuf, TitleBuf.Capacity);
         ClassBuf.Length = 0; GetClassNameW(h, ClassBuf, ClassBuf.Capacity);
@@ -344,7 +393,30 @@ namespace CapturePack {
         Out.Append('}');
         kept++; z++;
       }
-      Out.Append("]}");
+      Out.Append("]");
+      // GONE SINCE THE LAST SAMPLE. A delta says nothing about a window it does
+      // not mention, so a closed window has to be named or Core would keep it
+      // on the desk forever.
+      if (delta) {
+        List<long> gone = null;
+        foreach (KeyValuePair<long, long> kv in LastSig) {
+          if (!SeenThisPass.Contains(kv.Key)) {
+            if (gone == null) gone = new List<long>();
+            gone.Add(kv.Key);
+          }
+        }
+        if (gone != null) {
+          Out.Append(",\"r\":[");
+          for (int i = 0; i < gone.Count; i++) {
+            if (i > 0) Out.Append(',');
+            Out.Append('"').Append(((ulong)gone[i]).ToString(CultureInfo.InvariantCulture)).Append('"');
+            LastSig.Remove(gone[i]);
+          }
+          Out.Append(']');
+        }
+        Out.Append(",\"d\":1");
+      }
+      Out.Append("}");
       long spent = Stopwatch.GetTimestamp() - started;
       // WHEN THIS SAMPLE WAS ACTUALLY TAKEN (#110).
       //
@@ -650,7 +722,7 @@ while ($running) {
     if ($sinceMove -ge $moveCoalesceMs) {
       [CapturePack.SurfaceLane]::MovePending = $false
       try {
-        Write-Line ([CapturePack.SurfaceLane]::Sample((Get-HostMs)))
+        Write-Line ([CapturePack.SurfaceLane]::Sample((Get-HostMs), $true))
       } catch {
         Write-Line ('{"event":"error","t":' + (Get-HostMs) + ',"where":"move-sample","message":' +
           (ConvertTo-Json ([string]$_.Exception.Message) -Compress) + '}')

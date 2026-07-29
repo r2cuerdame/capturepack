@@ -317,12 +317,32 @@ export class ObjectIndex {
       onThisDisplay.add(candidate.surfaceId)
       if (clipped.area > maxArea) continue
       if (clipped.width > maxW && clipped.height > maxH) continue
+      // A CONTROL WHOSE WINDOW IS NOT ON THIS SNAPSHOT IS NOT OFFERED HERE.
+      //
+      // The frame test below is the only thing that keeps a window's own
+      // client-area pane out of the control level, and it needs the owner's
+      // rectangle. This used to skip the test when the owner could not be
+      // resolved (`owner?.clip != null && ...`), so an unresolvable candidate
+      // was offered UNFILTERED — and what reaches the control level unfiltered
+      // is, by construction, the biggest thing in the window.
+      //
+      // Measured on CapturePack_2026-07-29_173246: a control 1914x2082 was
+      // offered and picked. Its window (Orca, 1932x2091) makes it 98.6% of that
+      // window — five times over the 0.35 frame threshold — so it could only
+      // have been offered by the owner lookup failing. The pack shows the same
+      // for a second container-sized "control".
+      //
+      // Dropping is the same rule the surrounding code already applies to a
+      // surface with nothing left of it on this snapshot (see `present`): this
+      // index is per display, and a candidate whose window is not here cannot
+      // be clipped, frame-tested or occlusion-tested against anything real.
       const owner = bySurface.get(candidate.surfaceId)
-      if (owner?.clip != null && isWindowFrame(clipped, owner.clip)) continue
+      if (owner?.clip == null) continue
+      if (isWindowFrame(clipped, owner.clip)) continue
       objects.push({
         level: 'control',
         candidate,
-        surface: owner?.surface ?? null,
+        surface: owner.surface,
         refinement: 'controls',
         providerId: candidate.providerId,
         surfaceId: candidate.surfaceId,

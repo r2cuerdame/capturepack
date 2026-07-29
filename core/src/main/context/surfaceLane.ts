@@ -300,6 +300,18 @@ export class SurfaceLane {
   // The last time actually written into the ring, so a tick whose round trip
   // was shorter than its predecessor's cannot file a sample out of order.
   private lastAppendedMs = -Infinity
+  /**
+   * THE LAST FULL PICTURE OF THE DESK, per window handle (#110).
+   *
+   * A move-driven dump fires ~100/s during a drag and 80% of its cost was
+   * re-serialising the ~29 windows that did not move. The host now sends those
+   * samples as DELTAS — only changed windows, plus `r` for handles that
+   * vanished, marked `d:1` — and this is the state they are applied to. A FULL
+   * sample (no `d`) replaces it outright, and the host emits one on every
+   * scheduled tick, so the two pictures can never drift further apart than one
+   * scheduled interval even if a line is lost.
+   */
+  private lastWindowsByHandle = new Map<string, Record<string, unknown>>()
   private readonly frameAgeMs: number[] = []
   private readonly tickLagMs: number[] = []
   private readonly tickDelayMs: number[] = []
@@ -649,6 +661,7 @@ export class SurfaceLane {
       this.dropped += 1
       return
     }
+    const windows = this.mergeDelta(event, rawWindows)
     // THE FRAME'S OWN TIME WHEN THERE IS ONE (#105).
     //
     // A sample taken because a frame was just captured carries that frame's
@@ -803,7 +816,7 @@ export class SurfaceLane {
       }
       const takenAtFrameMs = observedAtMs
       this.lastAppendedMs = takenAtFrameMs
-      this.append(takenAtFrameMs, rawWindows)
+      this.append(takenAtFrameMs, windows)
       return
     }
     const timeMs = this.offset.toCoreMs(hostMs)
@@ -821,7 +834,7 @@ export class SurfaceLane {
         // Held until a tick says which clock this ring is on. Capped: past a
         // couple of seconds no tick is coming, and settleHeldSamples has
         // already let them through on their own clock.
-        this.pendingClockSamples.push({ timeMs, rawWindows })
+        this.pendingClockSamples.push({ timeMs, rawWindows: windows })
         if (this.pendingClockSamples.length > 64) this.pendingClockSamples.shift()
         return
       }
@@ -831,7 +844,7 @@ export class SurfaceLane {
         return
       }
       this.lastAppendedMs = timeMs
-      this.append(timeMs, rawWindows)
+      this.append(timeMs, windows)
       return
     }
     // Interleaved with ticked samples on the same clock (#110), so the same
@@ -845,7 +858,7 @@ export class SurfaceLane {
       return
     }
     this.lastAppendedMs = convertedAtMs
-    this.append(convertedAtMs, rawWindows)
+    this.append(convertedAtMs, windows)
   }
 
   /**
@@ -873,6 +886,35 @@ export class SurfaceLane {
       this.lastAppendedMs = atMs
       this.append(atMs, sample.rawWindows)
     }
+  }
+
+  /**
+   * A delta sample applied to the last full picture, or a full sample adopted
+   * as the new one. Returns the whole desk either way, so nothing downstream
+   * has to know which kind arrived.
+   *
+   * A delta that arrives before ANY full sample has nothing to apply to; it is
+   * taken at face value rather than dropped — an incomplete desk is still an
+   * honest observation of the window that moved, and the next scheduled sample
+   * (at most one interval away) restates everything.
+   */
+  private mergeDelta(event: HostEvent, rawWindows: readonly unknown[]): readonly unknown[] {
+    const isDelta = event['d'] === 1
+    if (!isDelta) {
+      const full = new Map<string, Record<string, unknown>>()
+      for (const raw of rawWindows) {
+        const handle = handleOf(raw)
+        if (handle !== null) full.set(handle, raw as Record<string, unknown>)
+      }
+      this.lastWindowsByHandle = full
+      return rawWindows
+    }
+    for (const handle of removedHandles(event['r'])) this.lastWindowsByHandle.delete(handle)
+    for (const raw of rawWindows) {
+      const handle = handleOf(raw)
+      if (handle !== null) this.lastWindowsByHandle.set(handle, raw as Record<string, unknown>)
+    }
+    return [...this.lastWindowsByHandle.values()]
   }
 
   private append(timeMs: number, rawWindows: readonly unknown[]): void {
@@ -968,6 +1010,21 @@ export class SurfaceLane {
  * than defaulted, because a surface with a made-up rectangle is worse than a
  * surface that is not there — it would be offered for picking.
  */
+/** A raw window record's handle, or null when it has none (it is then unusable). */
+function handleOf(raw: unknown): string | null {
+  if (raw === null || typeof raw !== 'object') return null
+  const h = (raw as { h?: unknown }).h
+  return typeof h === 'string' && h !== '' ? h : null
+}
+
+/** The `r` array of a delta sample: handles that vanished since the last one. */
+function removedHandles(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  const out: string[] = []
+  for (const h of raw) if (typeof h === 'string' && h !== '') out.push(h)
+  return out
+}
+
 /** The middle value, or null when nothing has been measured yet. */
 function medianOf(values: readonly number[]): number | null {
   if (values.length === 0) return null

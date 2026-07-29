@@ -1,7 +1,7 @@
 {
   "name": "capturepack",
   "productName": "CapturePack",
-  "version": "0.3.0-rc.26",
+  "version": "0.3.0-rc.27",
   "description": "Capture context, not screenshots. The fastest way to explain something to an LLM.",
   "license": "MIT",
   "author": "r2cuerdame",
@@ -17,7 +17,8 @@
     "dev": "npm run build && electron .",
     "dist": "npm run build && electron-builder --win",
     "release": "npm run build && electron-builder --win --publish always",
-    "check:sync": "node scripts/surface-sync-check.mjs"
+    "check:sync": "node scripts/surface-sync-check.mjs",
+    "check:delta": "node scripts/surface-delta-check.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
