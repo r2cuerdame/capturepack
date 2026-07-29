@@ -31,7 +31,42 @@ export function lifetimeMidpoint(a: Annotation, replayDurationMs: number): numbe
   return (a.start_ms + a.end_ms) / 2
 }
 
-/** The default lifetime: `durationMs` centered on the anchor, clamped to the replay. */
+/**
+ * The lifetime a NEW box gets: `durationMs` STARTING at the anchor.
+ *
+ * It used to be centered on it, and centering is wrong for the gesture that
+ * creates it. The anchor is the frame the user was looking at when they
+ * clicked — the moment the thing they are annotating is happening. Centering
+ * put half the box's life BEFORE that, so a one-second box on a click at 17.9 s
+ * began at 17.4 s, showing the annotation over half a second in which the thing
+ * it names had not happened yet. Reported three times as "박스 만들면 시간이
+ * 가운데 정렬이야".
+ *
+ * Starting at the anchor also matches how the box is read back: `picked_at_ms`
+ * is where the track is anchored (SPEC §8.3), and a lifetime that begins there
+ * means the first frame the box is drawn on is the frame it was picked from.
+ *
+ * Clamped at the END of the replay by moving the START back, so a box created
+ * near "now" keeps its full duration instead of being silently shortened.
+ */
+export function lifetimeFrom(
+  anchorMs: number,
+  durationMs: number,
+  replayDurationMs: number,
+): { start_ms: number; end_ms: number } {
+  const duration = Math.min(durationMs, replayDurationMs)
+  const start = Math.max(0, Math.min(Math.round(anchorMs), replayDurationMs - duration))
+  return { start_ms: start, end_ms: Math.min(replayDurationMs, Math.round(start + duration)) }
+}
+
+/**
+ * `durationMs` centered on the anchor, clamped to the replay.
+ *
+ * Still used where the anchor is a box's own MIDPOINT rather than a click —
+ * changing an existing box's duration keeps it centered on where it already
+ * sits, because that is the only reading of "make this 2 seconds" that does not
+ * move the box out from under the thing it names.
+ */
 export function lifetimeAround(
   anchorMs: number,
   durationMs: number,

@@ -277,15 +277,15 @@
 
     <section aria-labelledby="hPlugins">
       <h2 id="hPlugins" data-i18n="settings.pluginsSection">Plugins</h2>
-      <div class="pluginRow">
-        <span class="pluginIcon" aria-hidden="true">🟣</span>
-        <span class="pluginName">Chrome DOM</span>
-        <span class="pluginStatus" data-i18n="settings.notInstalled">Not installed</span>
-        <span class="pluginAction">
-          <button type="button" disabled title="Coming soon" data-i18n-title="settings.comingSoon" data-i18n="settings.install">Install</button>
-          <span class="soon" data-i18n="settings.comingSoonLower">coming soon</span>
-        </span>
-      </div>
+      <!-- CHROME DOM IS NOT LISTED HERE. It used to sit at the top of this
+           section as a dead row — "Not installed", a disabled [Install], and a
+           "coming soon" that had been coming for two releases. It has since
+           shipped, and it has a section of its own (Integrations) that reads
+           its six checks off disk, the registry and the wire. Keeping the stub
+           meant the same plugin was reported twice by two different rows that
+           could disagree — and they did: it said "not installed" on a machine
+           where the extension was connected and putting DOM events into packs.
+           One place per claim. -->
       <!-- Windows UI Automation has shipped since 0.1.4 and is what object
            picking runs on (issue #57), so this row reports its REAL state,
            carries a real on/off switch (settings.uiaEnabled genuinely stops the

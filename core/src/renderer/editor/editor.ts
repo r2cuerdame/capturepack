@@ -35,6 +35,7 @@ import { EditorState } from './state'
 import {
   formatDurationLabel,
   lifetimeAround,
+  lifetimeFrom,
   lifetimeMidpoint,
   parseDurationMs,
   visibleAt,
@@ -1402,7 +1403,9 @@ function beginPendingBox(on: BoardDisplay, b: Box, picked?: PickableObject): voi
     // two on different clocks and the pack would contradict the screen: a reader
     // comparing the box against the replay at the box's own time sees an error
     // of up to one frame gap that the user never saw while drawing it.
-    const life = lifetimeAround(Math.round(pickedAt), defaultManualDurationMs, replayDurationMs)
+    // FROM the pick, not around it: the clicked frame is the first frame the
+    // box is drawn on (see lifetime.ts).
+    const life = lifetimeFrom(Math.round(pickedAt), defaultManualDurationMs, replayDurationMs)
     draft.start_ms = life.start_ms
     draft.end_ms = life.end_ms
   }

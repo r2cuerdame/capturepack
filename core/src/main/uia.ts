@@ -46,6 +46,7 @@ import { existsSync } from 'node:fs'
 import * as path from 'node:path'
 import { app, screen } from 'electron'
 import type { Rectangle } from 'electron'
+import { logInfo } from './log'
 import type {
   UiaBounds,
   UiaElementRecord,
@@ -60,8 +61,23 @@ import type {
   UiaPluginStatus,
 } from '../shared/ipc'
 
-/** Hard budget: the helper is killed at this age, finished or not. */
-export const UIA_BUDGET_MS = 1_200
+/**
+ * Hard budget: the helper is killed at this age, finished or not.
+ *
+ * RAISED FROM 1 200 ms, on a measurement from the machine that reported "큰
+ * 박스 안에서 작은 엘레멘트들이 선택이 안돼": the Plugins row read "창 14개,
+ * 컨트롤 319개 이상 (시간 제한으로 중단됨)". 319 elements over 14 windows is
+ * one modern window's worth — the walk was being cut somewhere in the second or
+ * third tree, so most windows reached the editor with no controls at all and
+ * every click on them could only land on the window. The picker was not
+ * choosing badly; there was nothing else to choose.
+ *
+ * The cost is paid ONCE, between the freeze and the editor appearing, and only
+ * by a desktop that needs it — the helper stops as soon as it runs out of
+ * windows. The pixels are already captured by then, so what this can delay is
+ * the editor opening, never the evidence.
+ */
+export const UIA_BUDGET_MS = 3_000
 /** Control-tree depth cap (each walked window itself is depth 0). */
 const UIA_MAX_DEPTH = 12
 /**
@@ -187,6 +203,16 @@ function recordDumpOutcome(dump: UiaRawDump | null, failure: UiaFailureReason | 
       controls: dump.elements.length,
       truncated: dump.truncated,
     }
+    // ON THE RECORD, not only in a settings row. Every other stage of a capture
+    // logs what it achieved, and this one — which decides whether a click can
+    // land on a button or only on a window — did not. The budget it was being
+    // cut by had to be learned from a screenshot of the Plugins panel, which is
+    // the one place a user has to go looking. `truncated` is the number that
+    // matters: it says the desktop had more to give than there was time for.
+    logInfo(
+      `[uia] dump: ${String(lastDump.windows)} window(s), ${String(lastDump.controls)} control(s)` +
+        `${lastDump.truncated ? ` — TRUNCATED at the ${String(UIA_BUDGET_MS)} ms budget, so some windows reached the editor with no controls` : ''}`,
+    )
     lastFailure = null
     return
   }
