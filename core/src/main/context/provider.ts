@@ -172,22 +172,51 @@ export class WindowsUiaProvider implements TemporalContextProvider {
     source: ContextObservation,
     surfaces: FrameContext['surfaces'],
   ): ContextCandidate[] {
-    const originOf = new Map<string, { x: number; y: number }>()
+    // KEYED ON THE SURFACE, NOT ON (surface, display).
+    //
+    // The first version of this keyed both maps on `${surfaceId}|${display}`
+    // and dropped every candidate whose key missed. It missed ALL of them: a
+    // UIA dump's ELEMENTS carry no display (SPEC §8.3 — absent means "the
+    // annotation's own display"), while ring WINDOWS always carry a number, so
+    // the lookup asked for `abc|` and the map held `abc|0`. Measured on
+    // CapturePack_2026-07-29_171046: the tracked window had 112 controls in
+    // plugins/windows-uia/elements.json and every one of the pack's 7
+    // annotations came out at WINDOW level — "하위 컨트롤이 선택되지 않아",
+    // caused by this line rather than by anything upstream of it.
+    //
+    // A surface can legitimately appear once PER DISPLAY (#103), so the entries
+    // are kept as a list and the display is a preference, not a key: match the
+    // candidate's display when it states one, otherwise take the window's own
+    // first entry and find the same display on the other side.
+    type Placed = { display: number | undefined; x: number; y: number }
+    const originOf = new Map<string, Placed[]>()
     for (const w of source.windows) {
       const id = surfaceIdOf(this.ids, source, w)
-      originOf.set(`${id}|${w.display ?? ''}`, { x: w.bounds.x, y: w.bounds.y })
+      const list = originOf.get(id)
+      const entry: Placed = { display: w.display, x: w.bounds.x, y: w.bounds.y }
+      if (list === undefined) originOf.set(id, [entry])
+      else list.push(entry)
     }
-    const nowOf = new Map<string, { x: number; y: number }>()
+    const nowOf = new Map<string, Placed[]>()
     for (const s of surfaces) {
-      nowOf.set(`${s.surfaceId}|${s.display ?? ''}`, { x: s.bounds.x, y: s.bounds.y })
+      const list = nowOf.get(s.surfaceId)
+      const entry: Placed = { display: s.display, x: s.bounds.x, y: s.bounds.y }
+      if (list === undefined) nowOf.set(s.surfaceId, [entry])
+      else list.push(entry)
+    }
+    const on = (list: Placed[] | undefined, display: number | undefined): Placed | undefined => {
+      if (list === undefined || list.length === 0) return undefined
+      if (display === undefined) return list[0]
+      return list.find((p) => p.display === display) ?? list[0]
     }
     const out: ContextCandidate[] = []
     for (const candidate of candidates) {
-      const key = `${candidate.surfaceId}|${candidate.display ?? ''}`
-      const origin = originOf.get(key)
-      const now = nowOf.get(key)
+      const origin = on(originOf.get(candidate.surfaceId), candidate.display)
+      // The SAME screen on both sides: a control shifted by another display's
+      // movement would be a rectangle nobody measured, in the wrong space.
+      const now = on(nowOf.get(candidate.surfaceId), candidate.display ?? origin?.display)
       if (origin === undefined || now === undefined) {
-        // Window unplaceable at this time on this display: not offered here.
+        // Window unplaceable at this time: not offered here.
         continue
       }
       const dx = now.x - origin.x

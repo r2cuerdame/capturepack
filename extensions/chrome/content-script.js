@@ -88,6 +88,36 @@
         selector: buildSelector(el),
         bounds: { x: r.x, y: r.y, width: r.width, height: r.height },
       },
+      // WHERE THAT RECTANGLE IS ON THE SCREEN.
+      //
+      // `bounds` above is viewport CSS pixels — the only space a page can
+      // measure itself in, and one that says nothing about where the browser
+      // window is. Sent alone it cannot be placed on a snapshot at all, which
+      // is why picking an element in Chrome produced a box around the WHOLE
+      // WINDOW: with no candidate to offer, the editor fell back to the window
+      // rung. "크롬에서 잡은건 select하면 전체창이 잡혀".
+      //
+      // The app supplies the other half from the surface ring, which already
+      // records this window's CLIENT rectangle in physical pixels. Given the
+      // viewport's size in CSS px and the device pixel ratio, the viewport's
+      // physical size is known — and a viewport is anchored to the BOTTOM of
+      // the client area (tab strip and omnibox sit above it), so the offset
+      // falls out of the two heights without the page having to guess at
+      // browser chrome. Scroll position is deliberately NOT sent:
+      // getBoundingClientRect is already viewport-relative.
+      viewport: {
+        width: window.innerWidth,
+        height: window.innerHeight,
+        dpr: window.devicePixelRatio || 1,
+        // Best-effort screen anchor for a reader that has no ring sample of
+        // this window (an older pack, a browser the host never saw). CSS px,
+        // and on a scaled display Chrome reports these in the OS's own scaled
+        // space — usable as a fallback, never preferred over the client rect.
+        screenX: typeof window.screenX === 'number' ? window.screenX : null,
+        screenY: typeof window.screenY === 'number' ? window.screenY : null,
+        outerWidth: window.outerWidth,
+        outerHeight: window.outerHeight,
+      },
     })
     cleanup()
   }
