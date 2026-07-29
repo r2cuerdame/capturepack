@@ -1,7 +1,7 @@
 {
   "name": "capturepack",
   "productName": "CapturePack",
-  "version": "0.3.0-rc.34",
+  "version": "0.3.0-rc.35",
   "description": "Capture context, not screenshots. The fastest way to explain something to an LLM.",
   "license": "MIT",
   "author": "r2cuerdame",
@@ -23,7 +23,9 @@
     "check:controls": "node scripts/control-lane-check.mjs",
     "check:identity": "node scripts/pack-identity-check.mjs",
     "check:keyframes": "node scripts/keyframe-check.mjs",
-    "check:pick": "node scripts/control-pick-check.mjs"
+    "check:pick": "node scripts/control-pick-check.mjs",
+    "check:numbering": "node scripts/numbering-check.mjs",
+    "check:motion": "node scripts/box-motion-check.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

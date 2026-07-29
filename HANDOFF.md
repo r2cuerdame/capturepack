@@ -5,7 +5,7 @@ before touching anything; the last section is the one that matters most.
 
 ## Where things stand
 
-`main` is at **rc.34** (`ed13896`), 140-odd commits ahead of `origin/main`.
+`main` is at **rc.35**, 140-odd commits ahead of `origin/main`.
 **Nothing has been pushed since v0.1.7.** The remote's newest tag is v0.1.7; the
 local `v0.2.0` tag was never pushed, and its code is already merged into main.
 
@@ -19,7 +19,7 @@ land; do not date-stamp a release that has not happened.
 
 ### Verification floor
 
-Six checks, all green as of rc.34. Run every one of them before claiming
+Nine checks, all green as of rc.35. Run every one of them before claiming
 anything works:
 
 ```
@@ -31,27 +31,55 @@ npm run check:dom         the Chrome DOM rung lands on the element
 npm run check:controls    lane A tracks, versions, and admits death
 npm run check:identity    a pack is a pack, not any folder with a manifest.json
 npm run check:keyframes   every annotation keeps at least one still
+npm run check:pick        a probe gets an object that contains the probe point
+npm run check:numbering   creation order decides the number; pins claim theirs
+npm run check:motion      an authored keyframe moves the box from there on
 ```
 
 Builds go to a fresh output dir so electron-builder cannot fight a file lock:
 `npx electron-builder --win "-c.directories.output=dist-rcNN"`. Every `dist-rc*`
 is gitignored.
 
-## What is running right now (check these first)
+## Landed since this was first written
 
-Four efforts were in flight when this was written. Each is in its own git
-worktree with a local commit; **none is pushed and none is merged**.
+All three feature branches are MERGED into main:
 
-| what | where |
-|---|---|
-| manual-box POSITION keyframes | agent worktree, branch reported on completion |
-| hover drawn in the wrong place + small elements unpickable | agent worktree |
-| box numbers: creation order + manual 1-9 | agent worktree |
-| adversarial sweep of everything written today (`2221328..HEAD`) | workflow, 6 dimensions x 3 refutation lenses |
+- **manual-box authored keyframes** (#97) — a new `keyframes[]`, deliberately
+  NOT `tracking.samples`, because the pack has to preserve what kind of claim a
+  rectangle is. Authored keyframes interpolate; observed samples still never do,
+  and `check:motion` proves interpolation did not leak across.
+- **box numbering** (#98) — `created_at` decides the order, `number_pin` lets a
+  box claim 1-9, first-created wins a conflict. `format_version` 0.2.0 -> 0.2.1;
+  a pack using keyframes declares 0.3.0.
+- **control-pick investigation** (#99) — the geometry is EXACT: 219 probes, 219
+  contained the point, 137 sub-32px controls all pickable. See the open finding
+  below; it is not a coordinate bug.
 
-`git worktree list` and `git branch --no-merged main` will show what survived.
-Merge only what you have verified yourself — several agent findings today were
-plausible and wrong.
+An adversarial sweep of `2221328..HEAD` (6 dimensions x 3 refutation lenses) was
+still running and its results were never collected. Re-run it or read
+`.claude/projects/.../workflows/` for the script.
+
+### The strongest open lead — control level goes silent, not misplaced
+
+`claimsOf` emits a region claim only for a window whose UIA tree status is
+`'collected'` or `'truncated'`; `resolveCandidates` then drops every
+control-level candidate no claim covers. So a window lane A has BLOCKED (or
+never walked) contributes zero controls at every time — pinned by the check:
+the provider offers 230 candidates, `claimsOf` emits 0, `pick()` returns null.
+From the outside that is indistinguishable from "this app has no controls".
+
+`main.log` shows lane A blocking windows with **"it took 0 ms a pass"**, which
+is not slow. The log lie is fixed (`Untrack()` destroyed the record before the
+cost was read), but whether the block itself is firing correctly is untested.
+Start here: a window whose controls the DUMP collected should keep its claim
+even when lane A is not tracking it.
+
+Also unverified: the pack carries ONE dump instant (`captured_at`, a flat
+`elements` array, no per-time series), so lane A's live re-reads reach the
+editor through `frozenRingObservations` but not the saved pack. A page that
+SCROLLED between the dump and the frame being viewed would show a control
+faithfully at where it WAS — right name, rectangle over blank space, which is
+exactly the reported screenshot.
 
 ## What is NOT done
 
