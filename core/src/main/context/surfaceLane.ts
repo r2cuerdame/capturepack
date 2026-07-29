@@ -52,6 +52,14 @@ const MIN_INTERVAL_MS = 16
 /** Coarser steps the governor may fall back to before giving up entirely. */
 const FALLBACK_INTERVALS_MS = [200, 500]
 /**
+ * The free-running cadence while ticks anchor the clock (#110): the fastest
+ * rate whose duty (~1.5 ms per dump) stays under HOST_DUTY_CYCLE_CAP, and odd
+ * so it drifts through the 67 ms tick grid instead of aliasing against it.
+ * 15 observations/s of an 8,000 px/s drag put the nearest observation up to
+ * 270 px from the frame; ~45/s combined puts it under ~125.
+ */
+const OBSERVE_INTERVAL_MS = 31
+/**
  * How long without a captured frame before the free-running loop comes back.
  *
  * Long enough that an ordinary stutter — this recorder's measured worst is
@@ -516,19 +524,36 @@ export class SurfaceLane {
       }
       return
     }
-    // ONE TIME BASE AT A TIME (#106).
+    // ONE TIME BASE, MORE OBSERVATIONS (#106 revised by #110).
     //
-    // The free-running loop stamps its samples with the host's clock converted
-    // to Core's; a ticked sample is stamped with the FRAME's. Leaving both on
-    // interleaves two time bases in one ring — measured: 962 samples over 36 s,
-    // which is the 15/s of ticks PLUS the 15/s of the loop — and a ring on two
-    // clocks jumps exactly as badly as a ring on one wrong one. So the first
-    // tick retires the loop.
+    // The first tick used to STOP the free-running loop: back then a
+    // free-running sample was stamped on a second, unrelated clock, and two
+    // time bases in one ring jump exactly as badly as one wrong one. That
+    // reason is gone — a converted sample lands on the frame clock through the
+    // per-tick mapping (frameClockOffsetMs, callback delay included), and the
+    // monotone guard files it in order or not at all.
+    //
+    // What stopping the loop actually bought, measured on
+    // CapturePack_2026-07-29_160014 with every clock leg and the read path
+    // proven clean: 15 observations/s of a desk whose windows move at up to
+    // 19,000 px/s. The nearest observation to a frame is then up to 33 ms —
+    // hundreds of pixels — away, and no rendering can recover what was never
+    // observed (linear interpolation was tried and measured WORSE: shaking at
+    // 5–7 Hz sits at 15 Hz sampling's Nyquist limit, and interpolating across
+    // a direction reversal cuts the corner, p90 163 px vs nearest's 80).
+    //
+    // So the loop now runs ALONGSIDE the ticks, at the fastest cadence the
+    // 5%-of-a-core promise allows (HOST_DUTY_CYCLE_CAP; ~1.5 ms per dump).
+    // Ticks stay the clock anchors; free-running samples fill the gaps
+    // between frames, converted onto the same clock. 31 ms, deliberately odd,
+    // so the two cadences drift through each other instead of aliasing.
     if (!this.tickDriven) {
       this.tickDriven = true
-      logInfo('[context] lane S is now driven by captured frames — free-running sampling stopped')
-      void this.host.request('surface.stop').catch(() => {
-        /* Still fine: a duplicate sample is dropped by its own timestamp. */
+      logInfo(
+        `[context] lane S anchored to captured frames — free-running observation continues at ${OBSERVE_INTERVAL_MS} ms`,
+      )
+      void this.host.request('surface.start', { intervalMs: OBSERVE_INTERVAL_MS }).catch(() => {
+        /* Still fine: ticked samples alone are yesterday's behaviour. */
       })
     }
     this.lastTickAt = Date.now()
@@ -788,11 +813,26 @@ export class SurfaceLane {
         return
       }
       this.clockStamped += 1
+      if (timeMs <= this.lastAppendedMs) {
+        this.dropped += 1
+        return
+      }
+      this.lastAppendedMs = timeMs
       this.append(timeMs, rawWindows)
       return
     }
+    // Interleaved with ticked samples on the same clock (#110), so the same
+    // monotone rule applies: an observation that would land at or before the
+    // newest one in the ring is unreachable through the nearest lookup anyway,
+    // and is dropped AND COUNTED rather than filed out of order.
     this.converted += 1
-    this.append(timeMs - offsetMs, rawWindows)
+    const convertedAtMs = timeMs - offsetMs
+    if (convertedAtMs <= this.lastAppendedMs) {
+      this.dropped += 1
+      return
+    }
+    this.lastAppendedMs = convertedAtMs
+    this.append(convertedAtMs, rawWindows)
   }
 
   /**
@@ -807,13 +847,18 @@ export class SurfaceLane {
     this.pendingClockSamples = []
     const offsetMs = this.frameClockOffsetMs
     for (const sample of held) {
-      if (offsetMs === null) {
-        this.clockStamped += 1
-        this.append(sample.timeMs, sample.rawWindows)
-      } else {
-        this.converted += 1
-        this.append(sample.timeMs - offsetMs, sample.rawWindows)
+      const atMs = offsetMs === null ? sample.timeMs : sample.timeMs - offsetMs
+      // Same monotone rule as every other append: held samples predate the
+      // tick that released them, so any that would land behind the ring's
+      // newest are unreachable and are counted out rather than filed.
+      if (atMs <= this.lastAppendedMs) {
+        this.dropped += 1
+        continue
       }
+      if (offsetMs === null) this.clockStamped += 1
+      else this.converted += 1
+      this.lastAppendedMs = atMs
+      this.append(atMs, sample.rawWindows)
     }
   }
 

@@ -2015,6 +2015,48 @@ reproduced at last — and 0 stalls, speed 1.00, with the fix. A bench that
 bypasses a production layer certifies nothing about it, and a bench whose
 numbers are rounder than production's cannot see a rounding bug.
 
+### The floor under everything: 15 observations of an 8,000 px/s hand (#110)
+
+rc.20's field pack (`_160014`) measured clean at every layer this document has
+convicted so far — repeats 0/149, data within −4 ms of the picture, the
+annotated renderer within −4 px of the data — and the user looked at it and
+said, correctly, *"박스 싱크 안맞아"*. Box against window in the annotated
+frames: p50 −8 snapshot px, p10 −112, p90 +80, single frames past 250. Frame
+`t=7095` shows the box a third of its own width off the window. The eye judges
+the worst frame, not the median.
+
+That residual is not an error in anything; it is the sampling floor. Samples
+now carry their honest times, which land BETWEEN frames, so the nearest
+observation to a frame is up to half the sampling interval away — at 15
+observations/s and a shaken window's 8,000 px/s, up to ±270 px, on exactly the
+frames that show motion.
+
+**Interpolation was tried and measured worse, and the measurement is the
+reason it is not shipped.** Drawing the box at the time-weighted point between
+the two bracketing observations: p10 −183 / p90 +163, against nearest's
+−112/+80. Shaking at 5–7 Hz sits at 15 Hz sampling's Nyquist limit — a whole
+direction reversal fits between two samples, and a straight line across a
+reversal cuts the corner by more than the nearest sample misses. No rendering
+can recover what was never observed.
+
+So the fix is observations. The first tick used to STOP the free-running host
+loop (#106) — necessary when free-running samples lived on a second clock, and
+obsolete since the tick mapping (callback delay included) converts them onto
+the frame clock with the same monotone guard as everything else. The loop now
+runs alongside the ticks at 31 ms — the fastest cadence the 5%-of-a-core
+promise (Rule 4) allows at ~1.5 ms per dump, odd so it drifts through the
+67 ms tick grid instead of aliasing. The host's own floor drops from 50 ms to
+15 ms; its old rationale ("the compositor doesn't move anything faster")
+measured false weeks ago — GetWindowRect updates every 4 ms in a drag.
+
+Live, against the real host: **479 appends in 10 s (~48 observations/s), zero
+inversions, inter-sample gap p50 29 ms / p90 42 ms** — the nearest-observation
+error budget drops from ±33 ms to ~±15 ms, ~±120 px at violent-shake speed and
+under the border's own width at ordinary drag speed. If the field pack still
+shows visible detachment at the extremes, the next step is event-driven
+observation (`EVENT_OBJECT_LOCATIONCHANGE` in the host — SetWindowPos cadence
+during drags, zero cost at rest), not more arithmetic.
+
 `npm run check:sync` asserts it: zero samples sharing an instant, and apparent
 speed 1.00 against a truth of 1.0. Against the `Math.max` version it reports 20
 of 60 colliding. That red test only worked on the second attempt — the harness's

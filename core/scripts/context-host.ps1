@@ -589,9 +589,15 @@ while ($running) {
     'surface.start' {
       if ($null -ne $request.params -and $null -ne $request.params.intervalMs) {
         $requested = [int]$request.params.intervalMs
-        # Floor of 50 ms: below that the host would be sampling more often than
-        # the compositor moves anything, for cost with no information.
-        $intervalMs = [Math]::Max(50, [Math]::Min(5000, $requested))
+        # Floor of 15 ms. This used to be 50 with the rationale "below that the
+        # host samples more often than the compositor moves anything" — measured
+        # false: during a real title-bar drag GetWindowRect changes every 4 ms
+        # (12,161 changes across a 52 s shake, p90 6 ms). 15 Hz observation is
+        # exactly why a box could not follow a shaken window (#110): the nearest
+        # observation to a frame was up to 33 ms — hundreds of pixels — away.
+        # At 15 ms a dump costing ~1.5 ms is ~10% of one core, which the
+        # governor already watches.
+        $intervalMs = [Math]::Max(15, [Math]::Min(5000, $requested))
       }
       $sampling = $true
       $nextSampleMs = $clock.Elapsed.TotalMilliseconds
