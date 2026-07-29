@@ -2300,6 +2300,36 @@ So the design that follows from the numbers is not 1:1 and not 1:N:
   10-15 MB, putting fifteen of them at 150-225 MB. That — not the process
   topology — is the change that makes the original idea cheap.
 
+### Where window tracking settled, and why that is the ceiling (#110, #111)
+
+The product owner's verdict after comparing against other tools: *"다른 프로그램
+들도 보니깐 추적은 이정도가 한계인거 같아"* — this is about as far as window
+tracking goes. The numbers behind that, all measured on this desk, are worth
+keeping because they are what any future attempt has to beat:
+
+| leg | measured |
+|---|---|
+| observation cadence during a drag | ~10 ms (100/s), event-driven off the move hook |
+| host cost of that | 1.11% of a core (delta sampling: 0.111 ms vs 0.451 ms full) |
+| box against the window in the annotated replay | p10 −10 ms / p50 −5 ms / p90 +1 ms |
+| clock legs | tick lag +1 ms, callback late 0 ms p50/p90, pixel age 1 ms, host clock ±0.3 ms |
+| what the OS itself publishes | GetWindowRect changes every 4 ms during a drag |
+
+The remaining error is the sampling floor, not a defect: observations land
+between frames, so the nearest one to a frame is up to half an interval away.
+Closing it further means observing faster than the OS publishes, which is
+nothing, or interpolating, which was tried, measured worse at 67 ms spacing, and
+then removed by decision — the record shows what was observed, never what was
+inferred (#89).
+
+The recorder is the other ceiling, and it is not 15 fps: measured on
+CapturePack_2026-07-29_181939, display 1 delivers 14.8 fps against a 15 fps
+target (99%) and display 2 delivers 13.9, losing its 7% to one 762 ms stall
+rather than to a sustained shortfall. Frame gaps are p50 67 ms on both. The ring
+already observes at 6.7x the frame rate, and raising capture to 30 fps would
+cost the host ~0.33% more of a core — so whether 30 works is a question about
+the ENCODER alone, and it has not been measured.
+
 ### Recording is a switch (privacy)
 
 `settings.recordingEnabled` — OFF resolves the recorder set to empty through
