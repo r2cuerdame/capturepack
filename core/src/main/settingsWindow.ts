@@ -7,6 +7,9 @@
 import { app, BrowserWindow, dialog, ipcMain, screen, shell } from 'electron'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+
+/** The online manual (GOAL "First-Run Tutorial"). */
+const GUIDE_URL = 'https://capturepack.dev/guide'
 import { IPC } from '../shared/ipc'
 import type {
   McpStatus,
@@ -189,6 +192,18 @@ export function registerSettingsIpc(live: Settings, hooks: SettingsIpcHooks = {}
   ipcMain.handle(IPC.settingsOpenOutput, async (): Promise<void> => {
     fs.mkdirSync(live.outputDir, { recursive: true })
     await shell.openPath(live.outputDir)
+  })
+
+  // The online manual (GOAL "First-Run Tutorial"). The address is a constant
+  // here rather than a parameter: a renderer that could name the destination
+  // could name any destination.
+  ipcMain.on(IPC.settingsOpenGuide, () => {
+    void shell.openExternal(GUIDE_URL).catch((err: unknown) => {
+      console.error(
+        'capturepack: could not open the guide:',
+        err instanceof Error ? err.message : err,
+      )
+    })
   })
 }
 

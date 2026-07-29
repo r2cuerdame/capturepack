@@ -201,6 +201,57 @@
        it, so role="dialog" would name a thing no screen-reader user could ever
        reach. aria-live carries the list instead — it is built while VISIBLE, so
        the reveal is announced. -->
+  <!-- First-run tutorial (GOAL "First-Run Tutorial"): the editor has no tool
+       palette to read, so it demonstrates its three gestures once, on the first
+       open, and then gets out of the way for good. Everything animates in CSS —
+       a panel that explains the app must not depend on the app. -->
+  <div id="tutorialScrim" hidden>
+    <section id="tutorial" role="dialog" aria-modal="true" aria-labelledby="tutorialTitle">
+      <h2 id="tutorialTitle" data-i18n="editor.tutorialTitle">Three gestures, no toolbar</h2>
+      <ul id="tutorialSteps">
+        <li>
+          <div class="demo demoClick" aria-hidden="true">
+            <span class="target"></span>
+            <span class="ring"></span>
+            <span class="cursor"></span>
+          </div>
+          <div class="say">
+            <b data-i18n="editor.tutorialClickTitle">Left click</b>
+            <span data-i18n="editor.tutorialClickBody">Select the window or control under the pointer. The box then follows it.</span>
+          </div>
+        </li>
+        <li>
+          <div class="demo demoDrag" aria-hidden="true">
+            <span class="rect"></span>
+            <span class="field"></span>
+            <span class="cursor"></span>
+          </div>
+          <div class="say">
+            <b data-i18n="editor.tutorialDragTitle">Right drag</b>
+            <span data-i18n="editor.tutorialDragBody">Draw a box anywhere. A description field opens as you release.</span>
+          </div>
+        </li>
+        <li>
+          <div class="demo demoWheel" aria-hidden="true">
+            <span class="track"></span>
+            <span class="head"></span>
+            <span class="wheel"></span>
+          </div>
+          <div class="say">
+            <b data-i18n="editor.tutorialWheelTitle">Wheel</b>
+            <span data-i18n="editor.tutorialWheelBody">Travel back through the replay to the moment the bug happened.</span>
+          </div>
+        </li>
+      </ul>
+      <div id="tutorialFoot">
+        <label id="tutorialAgain">
+          <input type="checkbox" id="tutorialDontShow" checked />
+          <span data-i18n="editor.tutorialDontShow">Don't show again</span>
+        </label>
+        <button id="tutorialGotIt" type="button" data-i18n="editor.tutorialGotIt">Got it</button>
+      </div>
+    </section>
+  </div>
   <section id="helpSheet" aria-labelledby="helpTitle" aria-live="polite" hidden>
     <h2 id="helpTitle" data-i18n="editor.helpTitle">Shortcuts</h2>
     <div id="helpGroups"></div>

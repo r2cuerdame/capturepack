@@ -84,6 +84,9 @@ interface EditorBridge {
   // as settings.showShortcutOverlay — turning it off is permanent until turned
   // back on.
   setShortcutOverlay(show: boolean): void
+  // First-run tutorial (GOAL "First-Run Tutorial"): whether it may ever appear
+  // again, persisted as settings.showEditorTutorial.
+  setTutorial(show: boolean): void
 }
 
 declare global {
@@ -127,6 +130,9 @@ const entireCaptureBtn = el<HTMLButtonElement>('entireCaptureBtn')
 const helpBtn = el<HTMLButtonElement>('helpBtn')
 const helpSheet = el<HTMLElement>('helpSheet')
 const helpGroups = el<HTMLElement>('helpGroups')
+const tutorialScrim = el<HTMLDivElement>('tutorialScrim')
+const tutorialGotIt = el<HTMLButtonElement>('tutorialGotIt')
+const tutorialDontShow = el<HTMLInputElement>('tutorialDontShow')
 const zoomControl = el<HTMLDivElement>('zoomControl')
 const zoomInBtn = el<HTMLButtonElement>('zoomInBtn')
 const zoomOutBtn = el<HTMLButtonElement>('zoomOutBtn')
@@ -2689,6 +2695,41 @@ const pickedAtMs = new Map<string, number>()
 const presentedTimes: number[] = []
 
 /** Reports where a freshly fetched track sits relative to the frames on screen. */
+/**
+ * The first-run tutorial (GOAL "First-Run Tutorial").
+ *
+ * The editor is toolless on purpose: there is no palette naming the gestures,
+ * so someone opening it for the first time has nothing to read. It says the
+ * three of them once and then stays out of the way for good — a panel that
+ * explains a five-second workflow must never be part of it twice.
+ */
+function openTutorial(): void {
+  tutorialScrim.hidden = false
+  tutorialGotIt.focus()
+}
+
+function closeTutorial(): void {
+  if (tutorialScrim.hidden) return
+  tutorialScrim.hidden = true
+  // What the checkbox means is "never again", so the unchecked case leaves the
+  // setting alone and the tutorial returns on the next capture. Written on
+  // dismissal rather than on toggle: the state that matters is the one the
+  // user left it in when they closed the panel.
+  window.editorBridge.setTutorial(!tutorialDontShow.checked)
+  overlay.focus()
+}
+
+function tutorialOpen(): boolean {
+  return !tutorialScrim.hidden
+}
+
+tutorialGotIt.addEventListener('click', closeTutorial)
+// Clicking the dimmed area behind it dismisses it the same way the button does;
+// clicking the panel itself must not.
+tutorialScrim.addEventListener('mousedown', (e) => {
+  if (e.target === tutorialScrim) closeTutorial()
+})
+
 function reportTrackAlignment(samples: readonly { t_ms: number }[]): void {
   if (presentedTimes.length < 8 || samples.length === 0) return
   // MEASURED FROM THE PICTURES, NOT FROM THE SAMPLES (#93).
@@ -3441,6 +3482,19 @@ function syncPanCursor(): void {
 // ---------------------------------------------------------------------------
 
 window.addEventListener('keydown', (e) => {
+  // The tutorial is modal, so it answers keys before anything else can: Enter,
+  // Escape and Space all mean "got it". Nothing behind it is reachable while
+  // it is up, which is the point — a first-time user pressing keys at random
+  // should not be editing a capture they have not read about yet.
+  if (tutorialOpen()) {
+    if (e.key === 'Enter' || e.key === 'Escape' || e.key === ' ') {
+      e.preventDefault()
+      closeTutorial()
+    }
+    // Tab still moves between the checkbox and the button.
+    if (e.key !== 'Tab') e.preventDefault()
+    return
+  }
   // F11 toggles windowed/fullscreen from ANYWHERE in the editor (GOAL "Editor
   // Window Mode"): it is never an editing key (nor a composition key), so it is
   // answered FIRST — before the inline-input, unsaved-bar and typing gates
@@ -4035,6 +4089,10 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
   // place first.
   if (payload.showShortcutOverlay) openHelp()
   overlay.focus()
+  // LAST, and over everything: this is the one panel that should have the
+  // user's attention before they touch anything, and it is the one panel that
+  // only ever appears once.
+  if (payload.showEditorTutorial) openTutorial()
 }
 
 // Windowed mode makes resizing a normal thing to do (GOAL "Editor Window

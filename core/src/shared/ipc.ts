@@ -71,6 +71,11 @@ export const IPC = {
   // ABSOLUTE new state. Fire-and-forget: the panel is chrome, so a failed disk
   // write costs the preference, never the capture.
   editorSetShortcutOverlay: 'editor:set-shortcut-overlay',
+  // editor -> main: remember whether the first-run tutorial should ever appear
+  // again (GOAL "First-Run Tutorial" — settings.showEditorTutorial). Payload:
+  // boolean, the ABSOLUTE new state. Fire-and-forget for the same reason as
+  // the shortcut sheet: a failed disk write costs a preference, not a capture.
+  editorSetTutorial: 'editor:set-tutorial',
 
   // about window -> main (invoke): version, icon, language, updater state
   aboutGet: 'about:get',
@@ -100,6 +105,11 @@ export const IPC = {
   // settings window -> main (invoke): partial update, validated per-key main-side;
   // returns the settings actually applied (invalid values are rejected, not written)
   settingsSet: 'settings:set',
+  // settings window -> main: open the online manual in the user's browser
+  // (GOAL "First-Run Tutorial": "Settings -> General gets a Guide link").
+  // No payload — the URL lives in main, so the renderer cannot name a
+  // destination of its own.
+  settingsOpenGuide: 'settings:open-guide',
   // settings window -> main (invoke): directory picker; resolves the chosen path or null
   settingsPickOutputDir: 'settings:pick-output-dir',
   // settings window -> main (invoke): open the output folder in the file manager
@@ -553,6 +563,9 @@ export interface EditorInitPayload {
   // on by default, and the `?`/F1 toggle is remembered) — the persisted
   // settings.showShortcutOverlay.
   showShortcutOverlay: boolean
+  // Whether to open the first-run tutorial with this editor (GOAL "First-Run
+  // Tutorial"). Main decides; the renderer only paints what it is told.
+  showEditorTutorial: boolean
   // Existing boxes to restore (GOAL "History — Open & re-edit"). Empty for a
   // fresh capture. The editor adopts them as its undo baseline and registers
   // their ids so new ann_ ids can never collide with loaded ones.

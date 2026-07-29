@@ -569,6 +569,12 @@ export interface Settings {
   // editor writes this back whenever the user toggles it, so turning it off is
   // permanent until turned back on.
   showShortcutOverlay: boolean
+  // First-run tutorial (GOAL "First-Run Tutorial"): the toolless editor has no
+  // tool palette to read, so it explains its three gestures once. ON for a new
+  // user; [Got it] with "Don't show again" left checked turns it off for good,
+  // and Settings -> General turns it back on. Never blocks the five-second
+  // workflow more than once.
+  showEditorTutorial: boolean
   // Editor window mode (GOAL "Editor Window Mode"): "fullscreen" (DEFAULT — the
   // overlay every capture opened with before this existed) or "windowed". The
   // editor writes it back whenever the user toggles (⧉ / F11), so the next

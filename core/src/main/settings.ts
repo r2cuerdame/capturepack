@@ -61,6 +61,9 @@ function defaultSettings(): Settings {
     // "so a new user sees the whole vocabulary without asking"). The `?` / F1
     // toggle writes this back, so turning it off is permanent.
     showShortcutOverlay: true,
+    // The tutorial is for someone who has never seen the editor, so it is ON
+    // until it has done its job once.
+    showEditorTutorial: true,
     // The fullscreen overlay stays the default editor (GOAL "Editor Window
     // Mode"); windowed mode is opt-in and then remembered with its rectangle.
     editorWindowMode: 'fullscreen',
@@ -244,6 +247,7 @@ const SETTINGS_KEY_SET: Record<keyof Settings, true> = {
   defaultManualDurationMs: true,
   showDurationLabel: true,
   showShortcutOverlay: true,
+  showEditorTutorial: true,
   editorWindowMode: true,
   editorWindowBounds: true,
   mcpEnabled: true,
@@ -419,6 +423,10 @@ function mergeSettings(base: Settings, raw: Record<string, unknown>): Settings {
       typeof raw.showShortcutOverlay === 'boolean'
         ? raw.showShortcutOverlay
         : base.showShortcutOverlay,
+    showEditorTutorial:
+      typeof raw.showEditorTutorial === 'boolean'
+        ? raw.showEditorTutorial
+        : base.showEditorTutorial,
     editorWindowMode: isEditorWindowMode(raw.editorWindowMode)
       ? raw.editorWindowMode
       : base.editorWindowMode,

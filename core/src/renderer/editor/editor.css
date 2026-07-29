@@ -836,3 +836,295 @@ body[data-window-mode="windowed"] #helpSheet {
   font-size: 11px;
   white-space: nowrap;
 }
+
+/* ---------------------------------------------------------------------------
+   First-run tutorial (GOAL "First-Run Tutorial")
+
+   The editor is toolless on purpose, which means a first-time user has nothing
+   to read: no palette, no mode buttons, nothing that names the three gestures
+   the whole app is made of. This panel names them once and then never appears
+   again.
+
+   Every demonstration is CSS. A panel whose job is to explain the editor must
+   not need the editor to work, and must not need a video file, a sprite sheet,
+   or a frame of JavaScript to run — so each one is three absolutely positioned
+   elements on a keyframe loop.
+   ------------------------------------------------------------------------- */
+#tutorialScrim {
+  position: fixed;
+  z-index: 40;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(8, 8, 11, 0.55);
+}
+
+#tutorialScrim[hidden] {
+  display: none;
+}
+
+#tutorial {
+  width: 460px;
+  max-width: calc(100vw - 32px);
+  padding: 20px 22px 16px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
+  color: var(--text);
+}
+
+#tutorialTitle {
+  margin-bottom: 14px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+#tutorialSteps {
+  display: grid;
+  gap: 12px;
+  list-style: none;
+}
+
+#tutorialSteps li {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 12px;
+  align-items: center;
+}
+
+#tutorialSteps .say {
+  display: grid;
+  gap: 2px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+#tutorialSteps .say b {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+#tutorialSteps .say span {
+  color: var(--muted);
+}
+
+/* The stage every demonstration plays on. */
+#tutorialSteps .demo {
+  position: relative;
+  overflow: hidden;
+  height: 58px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #17171c;
+}
+
+#tutorialSteps .demo span {
+  position: absolute;
+}
+
+#tutorialSteps .cursor {
+  z-index: 2;
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid #fff;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.28);
+}
+
+/* Left click: the pointer arrives at a window and the selection lands on it. */
+.demoClick .target {
+  top: 14px;
+  left: 26px;
+  width: 44px;
+  height: 30px;
+  border: 1px solid #3a3a44;
+  border-radius: 3px;
+  background: #232330;
+}
+
+.demoClick .ring {
+  top: 12px;
+  left: 24px;
+  width: 48px;
+  height: 34px;
+  border: 1.5px solid #22c55e;
+  border-radius: 4px;
+  opacity: 0;
+  animation: tutClickRing 3s ease-in-out infinite;
+}
+
+.demoClick .cursor {
+  top: 40px;
+  left: 68px;
+  animation: tutClickCursor 3s ease-in-out infinite;
+}
+
+@keyframes tutClickCursor {
+  0% { top: 44px; left: 74px; transform: scale(1); }
+  40% { top: 26px; left: 44px; transform: scale(1); }
+  48% { top: 26px; left: 44px; transform: scale(0.72); }
+  56% { top: 26px; left: 44px; transform: scale(1); }
+  100% { top: 26px; left: 44px; transform: scale(1); }
+}
+
+@keyframes tutClickRing {
+  0%, 46% { opacity: 0; }
+  56% { opacity: 1; }
+  92% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* Right drag: a box is drawn, and the description field opens as it is let go. */
+.demoDrag .rect {
+  top: 14px;
+  left: 18px;
+  width: 0;
+  height: 0;
+  border: 1.5px dashed var(--action);
+  border-radius: 3px;
+  animation: tutDragRect 3s ease-in-out infinite;
+}
+
+.demoDrag .field {
+  top: 40px;
+  left: 18px;
+  width: 46px;
+  height: 9px;
+  border-radius: 2px;
+  background: #2c2c38;
+  opacity: 0;
+  animation: tutDragField 3s ease-in-out infinite;
+}
+
+.demoDrag .cursor {
+  top: 12px;
+  left: 16px;
+  animation: tutDragCursor 3s ease-in-out infinite;
+}
+
+@keyframes tutDragCursor {
+  0% { top: 12px; left: 16px; }
+  15% { top: 12px; left: 16px; }
+  55% { top: 36px; left: 62px; }
+  100% { top: 36px; left: 62px; }
+}
+
+@keyframes tutDragRect {
+  0%, 15% { width: 0; height: 0; opacity: 0.9; }
+  55% { width: 46px; height: 24px; opacity: 0.9; }
+  88% { width: 46px; height: 24px; opacity: 0.9; }
+  100% { width: 46px; height: 24px; opacity: 0; }
+}
+
+@keyframes tutDragField {
+  0%, 55% { opacity: 0; }
+  64% { opacity: 1; }
+  88% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* Wheel: the playhead travels BACK through the replay. */
+.demoWheel .track {
+  top: 34px;
+  left: 12px;
+  width: 72px;
+  height: 3px;
+  border-radius: 2px;
+  background: #2c2c38;
+}
+
+.demoWheel .head {
+  top: 27px;
+  left: 80px;
+  width: 2px;
+  height: 17px;
+  border-radius: 1px;
+  background: var(--action);
+  animation: tutWheelHead 3s ease-in-out infinite;
+}
+
+.demoWheel .wheel {
+  top: 10px;
+  left: 42px;
+  width: 11px;
+  height: 16px;
+  border: 1.5px solid var(--muted);
+  border-radius: 6px;
+}
+
+.demoWheel .wheel::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 50%;
+  width: 1.5px;
+  height: 5px;
+  border-radius: 1px;
+  margin-left: -0.75px;
+  background: var(--muted);
+  animation: tutWheelNotch 3s ease-in-out infinite;
+}
+
+@keyframes tutWheelHead {
+  0%, 10% { left: 80px; }
+  70% { left: 16px; }
+  100% { left: 16px; }
+}
+
+@keyframes tutWheelNotch {
+  0%, 10% { transform: translateY(0); opacity: 1; }
+  70% { transform: translateY(8px); opacity: 0.25; }
+  100% { transform: translateY(8px); opacity: 0.25; }
+}
+
+/* Motion is decoration here; the words carry the meaning either way. */
+@media (prefers-reduced-motion: reduce) {
+  #tutorialSteps .demo span,
+  #tutorialSteps .demo span::after {
+    animation: none !important;
+  }
+
+  .demoClick .ring,
+  .demoDrag .field {
+    opacity: 1;
+  }
+
+  .demoDrag .rect {
+    width: 46px;
+    height: 24px;
+  }
+}
+
+#tutorialFoot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+#tutorialAgain {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+#tutorialGotIt {
+  padding: 6px 16px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--action);
+  color: #fff;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+#tutorialGotIt:hover {
+  filter: brightness(1.1);
+}

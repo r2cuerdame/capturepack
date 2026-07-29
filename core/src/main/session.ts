@@ -773,6 +773,7 @@ async function runFlow(settings: Settings): Promise<void> {
         defaultManualDurationMs: settings.defaultManualDurationMs,
         showDurationLabel: settings.showDurationLabel,
         showShortcutOverlay: settings.showShortcutOverlay,
+        showEditorTutorial: settings.showEditorTutorial,
         annotations: [],
         title: '',
         note: '',
@@ -1448,6 +1449,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
       defaultManualDurationMs: settings.defaultManualDurationMs,
       showDurationLabel: settings.showDurationLabel,
       showShortcutOverlay: settings.showShortcutOverlay,
+      showEditorTutorial: settings.showEditorTutorial,
       annotations: loadedAnnotations,
       title: typeof manifest.title === 'string' ? manifest.title : '',
       note: typeof manifest.note === 'string' ? manifest.note : '',
@@ -2171,6 +2173,24 @@ function createEditorWindow(bounds: EditorWindowBounds, settings: Settings): Edi
    * straight through — it is one boolean of chrome, and an unwritable settings
    * file must not disturb a capture any more than it does for the window mode.
    */
+  /**
+   * "Don't show again" on the first-run tutorial (GOAL "First-Run Tutorial").
+   *
+   * Same contract as the shortcut sheet below it: absolute state, written
+   * straight through, and a settings file that cannot be written costs the
+   * preference rather than the capture the user is in the middle of.
+   */
+  const onSetTutorial = (event: IpcMainEvent, payload: unknown): void => {
+    if (editor.isDestroyed() || event.sender !== editor.webContents) return
+    if (typeof payload !== 'boolean' || settings.showEditorTutorial === payload) return
+    settings.showEditorTutorial = payload
+    try {
+      persistSettings({ ...settings })
+    } catch (err) {
+      logError('capturepack: saving the tutorial state failed:', err)
+    }
+  }
+
   const onSetShortcutOverlay = (event: IpcMainEvent, payload: unknown): void => {
     if (editor.isDestroyed() || event.sender !== editor.webContents) return
     if (typeof payload !== 'boolean' || settings.showShortcutOverlay === payload) return
@@ -2182,10 +2202,12 @@ function createEditorWindow(bounds: EditorWindowBounds, settings: Settings): Edi
     }
   }
   ipcMain.on(IPC.editorSetShortcutOverlay, onSetShortcutOverlay)
+  ipcMain.on(IPC.editorSetTutorial, onSetTutorial)
 
   editor.on('closed', () => {
     ipcMain.removeListener(IPC.editorSetWindowMode, onSetWindowMode)
     ipcMain.removeListener(IPC.editorSetShortcutOverlay, onSetShortcutOverlay)
+    ipcMain.removeListener(IPC.editorSetTutorial, onSetTutorial)
     // Final rectangle (the move/resize listeners kept it current while the
     // window lived) — this is what the next capture opens at.
     persist()

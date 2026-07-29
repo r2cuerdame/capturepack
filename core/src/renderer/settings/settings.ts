@@ -34,6 +34,8 @@ interface SettingsBridge {
   set(patch: SettingsPatch): Promise<SettingsSetResult>
   pickOutputDir(): Promise<string | null>
   openOutput(): Promise<void>
+  // The online manual (GOAL "First-Run Tutorial"); main owns the address.
+  openGuide(): void
   status(): Promise<SettingsStatusResult>
   restartMcp(): Promise<SettingsStatusResult>
 }
@@ -60,6 +62,8 @@ function el<T extends HTMLElement>(id: string): T {
 const outputPath = el<HTMLDivElement>('outputPath')
 const changeOutputBtn = el<HTMLButtonElement>('changeOutputBtn')
 const openOutputBtn = el<HTMLButtonElement>('openOutputBtn')
+const guideBtn = el<HTMLButtonElement>('guideBtn')
+const showTutorialBtn = el<HTMLButtonElement>('showTutorialBtn')
 const captureDisplaySelect = el<HTMLSelectElement>('captureDisplay')
 const captureHotkeyBtn = el<HTMLButtonElement>('captureHotkeyBtn')
 const captureHotkeyHint = el<HTMLElement>('captureHotkeyHint')
@@ -593,6 +597,31 @@ changeOutputBtn.addEventListener('click', () => {
 
 openOutputBtn.addEventListener('click', () => {
   void bridge.openOutput()
+})
+
+guideBtn.addEventListener('click', () => {
+  bridge.openGuide()
+})
+
+/**
+ * Arms the first-run tutorial again (GOAL "First-Run Tutorial").
+ *
+ * It appears on the NEXT editor, not now — there is no editor open to put it
+ * in, and a capture is the only place the three gestures mean anything. The
+ * button says so by going quiet for a moment rather than pretending nothing
+ * happened.
+ */
+showTutorialBtn.addEventListener('click', () => {
+  void (async () => {
+    showTutorialBtn.disabled = true
+    try {
+      await bridge.set({ showEditorTutorial: true })
+    } finally {
+      window.setTimeout(() => {
+        showTutorialBtn.disabled = false
+      }, 900)
+    }
+  })()
 })
 
 // ---------------------------------------------------------------------------

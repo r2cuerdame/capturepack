@@ -18,6 +18,10 @@ contextBridge.exposeInMainWorld('settingsBridge', {
   pickOutputDir(): Promise<string | null> {
     return ipcRenderer.invoke(IPC.settingsPickOutputDir) as Promise<string | null>
   },
+  // The online manual (GOAL "First-Run Tutorial"). Main owns the address.
+  openGuide(): void {
+    ipcRenderer.send(IPC.settingsOpenGuide)
+  },
   openOutput(): Promise<void> {
     return ipcRenderer.invoke(IPC.settingsOpenOutput) as Promise<void>
   },

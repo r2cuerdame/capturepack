@@ -60,4 +60,9 @@ contextBridge.exposeInMainWorld('editorBridge', {
   setShortcutOverlay(show: boolean): void {
     ipcRenderer.send(IPC.editorSetShortcutOverlay, show)
   },
+  // First-run tutorial (GOAL "First-Run Tutorial"): remember whether it may
+  // appear again. Absolute state, never a toggle.
+  setTutorial(show: boolean): void {
+    ipcRenderer.send(IPC.editorSetTutorial, show)
+  },
 })
