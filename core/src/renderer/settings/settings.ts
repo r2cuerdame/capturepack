@@ -259,7 +259,9 @@ interface NumberField {
 const NUMBER_FIELDS: ReadonlyArray<NumberField> = [
   {
     id: 'replaySeconds',
-    min: 10,
+    // One second is a legitimate ask: the buffer is what the capture COSTS, and
+    // a user who only ever wants the last moment should not have to keep ten.
+    min: 1,
     max: 60,
     round: Math.round,
     fromSettings: (s) => s.replaySeconds,
@@ -267,8 +269,11 @@ const NUMBER_FIELDS: ReadonlyArray<NumberField> = [
   },
   {
     id: 'fps',
-    min: 5,
-    max: 30,
+    // The recorder never promises a rate it cannot reach — `achieved_fps` in the
+    // manifest is what actually happened — so the ceiling here is the ASK, and
+    // capping the ask below what a fast machine can do helps nobody.
+    min: 1,
+    max: 60,
     round: Math.round,
     fromSettings: (s) => s.fps,
     patch: (v) => ({ fps: v }),
