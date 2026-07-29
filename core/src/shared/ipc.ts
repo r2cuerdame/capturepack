@@ -533,6 +533,21 @@ export interface EditorUiaWindow {
   process: string
   class_name: string
   bounds: { x: number; y: number; width: number; height: number }
+  /**
+   * The CLIENT area in the same space as `bounds` — the drawable rectangle
+   * inside the frame, with the title bar and borders removed.
+   *
+   * Carried because a provider that measures in a document's own coordinates
+   * (a browser extension: viewport CSS pixels) has no other way onto the
+   * screen. The frame rectangle cannot do it — the distance from the frame's
+   * top to the first drawable row is the window's chrome, which varies by app,
+   * theme and DPI — while the client rectangle IS that row. The surface ring
+   * has recorded it since #65; it simply never reached this side.
+   *
+   * Absent for a window from a UI Automation dump (which reports frames only)
+   * and for a pack written before this field existed.
+   */
+  client_bounds?: { x: number; y: number; width: number; height: number }
   // The display `bounds` is in — see EditorUiaElement.display. A window is
   // reported on the display it mostly covers; a window straddling two screens
   // keeps ONE space (its controls have to stay with it) and simply reaches off

@@ -680,6 +680,10 @@ async function runFlow(settings: Settings): Promise<void> {
         type: e.type,
         tab: e.tab,
         ...(e.element === undefined ? {} : { element: e.element }),
+        // Without this a saved pick is unplaceable forever: bounds are viewport
+        // CSS pixels and this is the only thing that says where that viewport
+        // was. Absent for an event from an extension older than 0.1.4.
+        ...(e.viewport === undefined ? {} : { viewport: e.viewport }),
       })),
     })
     if (!wrote) return
@@ -725,11 +729,24 @@ async function runFlow(settings: Settings): Promise<void> {
         width: target.width,
         height: target.height,
       }))
+      // The browser's element picks, REBASED ONTO THE PACK CLOCK — the same
+      // clock the ring and the video already agree on (SPEC §10.1), which is
+      // what lets the DOM provider place an element against the very window
+      // observation Core recorded at that instant.
+      const domWindow = frozenWindow(contextFreezeId)
+      const domPicks =
+        domWindow === null
+          ? []
+          : domEventsBetween(domWindow.startMs, domWindow.endMs).map((e) => ({
+              ...e,
+              tMs: Math.max(0, Math.round(e.tMs - domWindow.startMs)),
+            }))
       const contextSession = openContextSession(editor, {
         displays: contextDisplays,
         replayDurationMs,
         observation: contextObservation(uia, uiaFocusedIndex, replayDurationMs),
         dropped: settled.ready && uiaEmpty(uia),
+        domEvents: domPicks,
       })
       // THE WHOLE FROZEN RANGE, not just the instant the hotkey was pressed.
       //
