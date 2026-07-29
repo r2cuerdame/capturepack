@@ -52,13 +52,19 @@ const MIN_INTERVAL_MS = 16
 /** Coarser steps the governor may fall back to before giving up entirely. */
 const FALLBACK_INTERVALS_MS = [200, 500]
 /**
- * The free-running cadence while ticks anchor the clock (#110): the fastest
- * rate whose duty (~1.5 ms per dump) stays under HOST_DUTY_CYCLE_CAP, and odd
- * so it drifts through the 67 ms tick grid instead of aliasing against it.
- * 15 observations/s of an 8,000 px/s drag put the nearest observation up to
- * 270 px from the frame; ~45/s combined puts it under ~125.
+ * The MOTION cadence (#110): how soon the host looks again after a dump that
+ * saw any window move. 15 observations/s of an 8,000 px/s drag put the nearest
+ * observation up to 270 px from the frame; ~45/s combined puts it under ~125.
+ * Odd, so it drifts through the 67 ms tick grid instead of aliasing.
  */
 const OBSERVE_INTERVAL_MS = 31
+/**
+ * The base free-running cadence while ticks anchor the clock: the still-desk
+ * rate. Ticks already observe 15/s, so this adds ~0.75% of a core for the
+ * stretches between motion; the motion rate above is what actually feeds a
+ * drag, and it runs only while the previous dump saw movement.
+ */
+const TICKED_BASE_INTERVAL_MS = 200
 /**
  * How long without a captured frame before the free-running loop comes back.
  *
@@ -438,7 +444,10 @@ export class SurfaceLane {
       return
     }
     try {
-      const reply = await this.host.request('surface.start', { intervalMs: this.intervalMs })
+      const reply = await this.host.request('surface.start', {
+        intervalMs: this.intervalMs,
+        fastMs: OBSERVE_INTERVAL_MS,
+      })
       const granted = reply['intervalMs']
       if (typeof granted === 'number') this.intervalMs = granted
       this.running = true
@@ -542,19 +551,31 @@ export class SurfaceLane {
     // 5–7 Hz sits at 15 Hz sampling's Nyquist limit, and interpolating across
     // a direction reversal cuts the corner, p90 163 px vs nearest's 80).
     //
-    // So the loop now runs ALONGSIDE the ticks, at the fastest cadence the
-    // 5%-of-a-core promise allows (HOST_DUTY_CYCLE_CAP; ~1.5 ms per dump).
-    // Ticks stay the clock anchors; free-running samples fill the gaps
-    // between frames, converted onto the same clock. 31 ms, deliberately odd,
-    // so the two cadences drift through each other instead of aliasing.
+    // So the loop now runs ALONGSIDE the ticks — at OBSERVE_INTERVAL_MS while
+    // the desk is IN MOTION, at a lazy base while it is still. The host picks
+    // per sample: its dump already knows whether any window moved since the
+    // last one. Field-measured why the split matters (rc.21, `_161901`): a
+    // CONSTANT 31 ms free-run is ~7% of a core with the ticks' own ~2% on
+    // top, and after three status ticks the governor — correctly — demoted it
+    // to 200 ms, taking the observation density from 48/s back to 20/s
+    // mid-capture. Hands move windows for seconds, not hours: paying the fast
+    // rate only during motion keeps the CUMULATIVE duty the promise is
+    // written against far under the cap, with nothing for the governor to
+    // object to. 31 ms, deliberately odd, drifts through the 67 ms tick grid
+    // instead of aliasing against it.
     if (!this.tickDriven) {
       this.tickDriven = true
       logInfo(
-        `[context] lane S anchored to captured frames — free-running observation continues at ${OBSERVE_INTERVAL_MS} ms`,
+        `[context] lane S anchored to captured frames — observing at ${OBSERVE_INTERVAL_MS} ms while the desk moves`,
       )
-      void this.host.request('surface.start', { intervalMs: OBSERVE_INTERVAL_MS }).catch(() => {
-        /* Still fine: ticked samples alone are yesterday's behaviour. */
-      })
+      void this.host
+        .request('surface.start', {
+          intervalMs: TICKED_BASE_INTERVAL_MS,
+          fastMs: OBSERVE_INTERVAL_MS,
+        })
+        .catch(() => {
+          /* Still fine: ticked samples alone are yesterday's behaviour. */
+        })
     }
     this.lastTickAt = Date.now()
     // Recorded AGAINST THIS FRAME rather than in a scalar the next tick would
@@ -605,7 +626,9 @@ export class SurfaceLane {
     logWarn(
       `[context] no captured frame for ${TICK_SILENCE_MS} ms — lane S is sampling on its own clock again`,
     )
-    void this.host.request('surface.start', { intervalMs: this.intervalMs }).catch(() => {
+    void this.host
+      .request('surface.start', { intervalMs: this.intervalMs, fastMs: OBSERVE_INTERVAL_MS })
+      .catch(() => {
       /* A host that cannot be told is about to be restarted anyway. */
     })
   }

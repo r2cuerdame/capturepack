@@ -2057,6 +2057,43 @@ shows visible detachment at the extremes, the next step is event-driven
 observation (`EVENT_OBJECT_LOCATIONCHANGE` in the host — SetWindowPos cadence
 during drags, zero cost at rest), not more arithmetic.
 
+### The governor was right, and the desk is usually still (#110)
+
+rc.21's field pack (`_161901`) confirmed the density fix — and then measured
+the bill being paid wrongly. The first ten seconds ran at ~48 obs/s, gaps p50
+23 ms; then the observation rate fell to ~20/s mid-capture. That was the
+GOVERNOR, correctly enforcing Rule 4: a constant 31 ms free-run is ~4.8% of a
+core and the ticks' own sampling is ~2.2% more — the budget arithmetic behind
+"31 ms fits under 5%" had forgotten the ticks. Three status ticks over the cap
+and the lane demoted itself, exactly as designed.
+
+Even at half density, the eye's error improved: box vs window p10/p90 went
+from −112/+80 (rc.20) to **−76/+56**, renderer still faithful at −4 px. (The
+first read of that measurement said the renderer was off by up to 994 px — a
+measurement artifact: this pack has boxes on several different windows, and a
+global green-pixel scan finds the leftmost box, not the asked-about one. The
+detection is now gated near the expected rectangle.)
+
+The structural fix is that the fast rate should never have been constant: a
+desk is still almost all of the time, and hands move windows for seconds, not
+hours. The host's dump already knows whether anything moved since the last
+one (`MovedLastSample`), so `surface.start` now carries two cadences — a base
+interval and a `fastMs` the resident loop switches to whenever the previous
+dump saw motion. In motion: 31 ms. At rest: 200 ms under ticks, and the duty
+the 5% promise is written against — cumulative over the host's life — stays
+far under the cap by construction. Verified against the real host: a still
+desk observes at ~20/s (ticks + base), zero inversions; the constant-rate
+version measured 479 appends in the same window.
+
+And with ~20–45 ms between observations, the interpolation verdict FLIPS,
+measured on the same pack: drawing between bracketing observations lands
+p10/p90 −52/+40 against nearest's −76/+56 — at 67 ms it was worse (163 vs 80,
+the Nyquist corner-cut). So drawing now interpolates ONLY across gaps of
+≤40 ms (`LERP_MAX_SPAN_MS`, shared/track.ts): too short to hide a direction
+reversal, and the box jumps between observations across anything wider. Both
+regimes' numbers sit in the comment on that constant; the pack keeps observed
+rectangles only, as ever (#89).
+
 `npm run check:sync` asserts it: zero samples sharing an instant, and apparent
 speed 1.00 against a truth of 1.0. Against the `Math.max` version it reports 20
 of 60 colliding. That red test only worked on the second attempt — the harness's

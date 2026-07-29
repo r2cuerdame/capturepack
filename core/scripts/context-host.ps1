@@ -225,8 +225,16 @@ namespace CapturePack {
     /// ONE lane S sample as a JSON line body. EnumWindows returns top-level
     /// windows in Z-ORDER, topmost first — that order IS the z-order recorded
     /// here, and it is the whole reason this pass is worth 0.6 ms.
+    /// Whether the LAST dump saw any visible window's rectangle differ from the
+    /// dump before it. The resident loop reads this to pick its next sleep: a
+    /// desk in motion is observed at the fast cadence, a still desk at the base
+    /// one — which is what keeps the fast rate inside the duty-cycle promise,
+    /// because hands move windows for seconds, not hours (#110).
+    public static bool MovedLastSample;
+
     public static string Sample(double hostMs) {
       long started = Stopwatch.GetTimestamp();
+      bool anyMoved = false;
       if (LastRaw.Count > GEOMETRY_CACHE_LIMIT) { LastRaw.Clear(); Inset.Clear(); }
       Handles.Clear();
       EnumWindows(Collect, IntPtr.Zero);
@@ -273,6 +281,7 @@ namespace CapturePack {
           bool stood_still = LastRaw.TryGetValue(key, out previous) &&
             previous.Left == raw.Left && previous.Top == raw.Top &&
             previous.Right == raw.Right && previous.Bottom == raw.Bottom;
+          if (!stood_still) anyMoved = true;
           if (haveDwm && stood_still) {
             RECT learned;
             learned.Left = dwm.Left - raw.Left;
@@ -361,6 +370,7 @@ namespace CapturePack {
       SampleTicks += spent;
       SampleCount++;
       LastWindowCount = kept;
+      MovedLastSample = anyMoved;
       return Out.ToString();
     }
 
@@ -523,6 +533,11 @@ function Get-NextLine([int]$waitMs) {
 
 $sampling = $false
 $intervalMs = 100
+# The MOTION cadence (#110): when the previous dump saw any window move, the
+# next sample comes this soon instead of $intervalMs later. 0 = feature off.
+# Hands move windows for seconds, not hours, so the duty-cycle promise is kept
+# by construction: the fast rate only ever runs while something is moving.
+$fastMs = 0
 $nextSampleMs = 0
 $nextStatusMs = 5000
 $running = $true
@@ -538,10 +553,13 @@ while ($running) {
         (ConvertTo-Json ([string]$_.Exception.Message) -Compress) + '}')
     }
     # Fixed cadence rather than sleep-after-work, so a slow sample does not
-    # permanently shift the sampling grid.
-    $nextSampleMs += $intervalMs
+    # permanently shift the sampling grid. The STEP adapts (#110): a desk seen
+    # moving is observed again at $fastMs, a still one at $intervalMs.
+    $step = $intervalMs
+    if ($fastMs -gt 0 -and [CapturePack.SurfaceLane]::MovedLastSample) { $step = $fastMs }
+    $nextSampleMs += $step
     if ($nextSampleMs -lt $clock.Elapsed.TotalMilliseconds) {
-      $nextSampleMs = $clock.Elapsed.TotalMilliseconds + $intervalMs
+      $nextSampleMs = $clock.Elapsed.TotalMilliseconds + $step
     }
   }
   if ($clock.Elapsed.TotalMilliseconds -ge $nextStatusMs) {
@@ -599,9 +617,17 @@ while ($running) {
         # governor already watches.
         $intervalMs = [Math]::Max(15, [Math]::Min(5000, $requested))
       }
+      # Optional motion cadence: absent or 0 keeps the single-rate behaviour.
+      $fastMs = 0
+      if ($null -ne $request.params -and $null -ne $request.params.fastMs) {
+        $requestedFast = [int]$request.params.fastMs
+        if ($requestedFast -gt 0) {
+          $fastMs = [Math]::Max(15, [Math]::Min($intervalMs, $requestedFast))
+        }
+      }
       $sampling = $true
       $nextSampleMs = $clock.Elapsed.TotalMilliseconds
-      Write-Line ('{"id":' + $id + ',"ok":true,"intervalMs":' + $intervalMs + '}')
+      Write-Line ('{"id":' + $id + ',"ok":true,"intervalMs":' + $intervalMs + ',"fastMs":' + $fastMs + '}')
     }
     'surface.tick' {
       # THE FRAME DRIVES THE OBSERVATION (#105).

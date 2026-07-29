@@ -6,13 +6,13 @@
 // with the picture of itself — which is the exact failure this project keeps
 // removing. One function, three callers.
 //
-// EVERY RECTANGLE IT RETURNS WAS OBSERVED (#89). It picks the nearest recorded
-// sample and hands it back unchanged; it never averages two of them. An average
-// is a rectangle nobody saw, written in the same numbers as a measurement, and
-// a reader has no way to tell the two apart. Since the ring samples once per
-// captured frame (#87), every picture a pack can show has an observation of its
-// own — so there is nothing left to average, and averaging anyway could only
-// move a box off the window it names.
+// THE PACK KEEPS OBSERVATIONS; THE SCREEN SHOWS THE TRAJECTORY (#89, #110).
+// annotations.json holds observed rectangles only — an average written into
+// the record would be a rectangle nobody saw, indistinguishable from a
+// measurement. DRAWING is bounded interpolation between adjacent observations
+// when they are close enough to leave no room for a hidden reversal, and a
+// jump between observations when they are not; see LERP_MAX_SPAN_MS for the
+// two measurements that set the boundary.
 import type { Annotation, AnnotationBounds, AnnotationTrackSample } from './types'
 
 /**
@@ -56,9 +56,65 @@ export function trackedSampleAt(a: Annotation, tMs: number): AnnotationTrackSamp
   return best
 }
 
+/**
+ * How close two observations must be before DRAWING between them is more
+ * honest than jumping (#110). Both regimes are measured, on the same window,
+ * the same shake, the same pipeline:
+ *
+ *   67 ms apart (rc.20, 15 obs/s): interpolation p90 163 snapshot px vs
+ *     nearest's 80 — WORSE. A 5–7 Hz shake fits a direction reversal between
+ *     two samples, and a straight line across a reversal cuts the corner.
+ *   20–45 ms apart (rc.21, ~48 obs/s): interpolation p10/p90 −52/+40 vs
+ *     nearest's −76/+56 — BETTER. Half a reversal no longer fits.
+ *
+ * So interpolation is gated on the gap it would span: under this, the segment
+ * is too short to hide a turn; over it, the box jumps between observations as
+ * it always did. 40 is under the shortest half-period a hand reaches (~70 ms)
+ * with margin for sampling phase.
+ */
+const LERP_MAX_SPAN_MS = 40
+
+/**
+ * The sample to DRAW at `tMs`: the nearest observation's screen space, with
+ * the position interpolated between the two observations bracketing `tMs`
+ * when — and only when — they are close enough (`LERP_MAX_SPAN_MS`).
+ *
+ * Pack data is untouched: annotations.json keeps observed rectangles only
+ * (#89), and this runs in the three renderers this file exists to keep in
+ * agreement. Falls back to the nearest observation outside the track, at an
+ * exact sample time, across a display change, or over a wide gap.
+ */
+function displayedSampleAt(a: Annotation, tMs: number): AnnotationTrackSample | null {
+  const nearest = trackedSampleAt(a, tMs)
+  if (nearest === null) return nearest
+  const samples = a.tracking?.samples
+  if (samples === undefined) return nearest
+  // The nearest sample decides WHICH SCREEN'S numbers the answer is in (#93);
+  // interpolation then only ever runs between two samples of that screen.
+  let prev: AnnotationTrackSample | null = null
+  let next: AnnotationTrackSample | null = null
+  for (const s of samples) {
+    if (s.display !== nearest.display) continue
+    if (s.t_ms <= tMs && (prev === null || s.t_ms > prev.t_ms)) prev = s
+    if (s.t_ms > tMs && (next === null || s.t_ms < next.t_ms)) next = s
+  }
+  if (prev === null || next === null) return nearest
+  const span = next.t_ms - prev.t_ms
+  if (span <= 0 || span > LERP_MAX_SPAN_MS) return nearest
+  const w = (tMs - prev.t_ms) / span
+  return {
+    t_ms: tMs,
+    x: prev.x + (next.x - prev.x) * w,
+    y: prev.y + (next.y - prev.y) * w,
+    width: prev.width + (next.width - prev.width) * w,
+    height: prev.height + (next.height - prev.height) * w,
+    ...(nearest.display === undefined ? {} : { display: nearest.display }),
+  }
+}
+
 /** The rectangle a tracked box occupies at `tMs`, or null when it has no track. */
 export function trackedBoundsAt(a: Annotation, tMs: number): AnnotationBounds | null {
-  const s = trackedSampleAt(a, tMs)
+  const s = displayedSampleAt(a, tMs)
   return s === null ? null : boundsOf(s)
 }
 
@@ -77,7 +133,7 @@ export function trackedBoundsAt(a: Annotation, tMs: number): AnnotationBounds | 
  * The copy is a VIEW. Editing writes to the stored annotation, never to this.
  */
 export function annotationAt(a: Annotation, tMs: number): Annotation {
-  const s = trackedSampleAt(a, tMs)
+  const s = displayedSampleAt(a, tMs)
   if (s === null) return a
   return {
     ...a,
