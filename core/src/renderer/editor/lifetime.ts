@@ -46,17 +46,21 @@ export function lifetimeMidpoint(a: Annotation, replayDurationMs: number): numbe
  * is where the track is anchored (SPEC §8.3), and a lifetime that begins there
  * means the first frame the box is drawn on is the frame it was picked from.
  *
- * Clamped at the END of the replay by moving the START back, so a box created
- * near "now" keeps its full duration instead of being silently shortened.
+ * AND IT NEVER MOVES THE START BACK TO PROTECT THE DURATION. It used to: a box
+ * created near the end of the replay had its start pulled earlier so the
+ * nominal duration survived — which is the same mistake `lifetimeExtending`
+ * was just corrected for, one function along. A box clicked at 29.5 s of a
+ * 30 s replay is a 0.5 s box starting at 29.5 s, not a 1 s box starting at
+ * 29.0 s that is drawn over half a second in which the thing it names had not
+ * happened yet. The duration shortens, honestly, and the anchor is kept.
  */
 export function lifetimeFrom(
   anchorMs: number,
   durationMs: number,
   replayDurationMs: number,
 ): { start_ms: number; end_ms: number } {
-  const duration = Math.min(durationMs, replayDurationMs)
-  const start = Math.max(0, Math.min(Math.round(anchorMs), replayDurationMs - duration))
-  return { start_ms: start, end_ms: Math.min(replayDurationMs, Math.round(start + duration)) }
+  const start = Math.max(0, Math.min(Math.round(anchorMs), replayDurationMs))
+  return { start_ms: start, end_ms: Math.min(replayDurationMs, Math.round(start + durationMs)) }
 }
 
 /**

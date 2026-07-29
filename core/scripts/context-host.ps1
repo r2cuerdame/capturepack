@@ -835,7 +835,15 @@ while ($running) {
         # the windows that actually changed since the last line.
         $line = [CapturePack.SurfaceLane]::Sample((Get-HostMs), $true)
         if ($null -ne $frameMs) {
-          $line = $line.Insert(1, '"ft":' + [Math]::Round($frameMs, 3) + ',')
+          # ROUND-TRIP, NEVER ROUNDED. `ft` is not a number Core displays — it
+          # is the exact key of the pendingTicks Map that pairs this reply with
+          # the tick that asked for it (#110). Rounding it to three decimals
+          # meant a presentationTime with more precision than that (which is
+          # most of them: 12345.678901 -> 12345.679) hit NOTHING, and the miss
+          # is silent — `asked === undefined` makes the lag and the pixel age
+          # zero and skips the frame-clock mapping entirely. The one number
+          # that must survive the wire unchanged was the one being rounded.
+          $line = $line.Insert(1, '"ft":' + $frameMs.ToString('R', [System.Globalization.CultureInfo]::InvariantCulture) + ',')
         }
         Write-Line $line
         Write-Line ('{"id":' + $id + ',"ok":true}')
