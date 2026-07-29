@@ -104,19 +104,38 @@ export function bundledExtensionVersion(): string | null {
  * no app at all.
  */
 function hostCommand(): { path: string; args: readonly string[] } {
-  return app.isPackaged
-    ? // NO ARGUMENTS. Chromium's manifest has nowhere to put them, so anything
-      // listed here would have to travel through a launcher script — and the
-      // packaged build does not need one: index.ts recognises a browser launch
-      // by the `chrome-extension://` origin Chrome passes, which is a thing only
-      // a browser sends. The manifest can therefore name the executable itself,
-      // with no cmd.exe sitting between Chrome and the process whose stdin and
-      // stdout are the protocol.
-      { path: process.execPath, args: [] }
-    : // Development runs the electron binary, which knows nothing about this app
-      // until it is told where it lives — and THAT cannot be inferred, so this
-      // one does need the launcher below.
-      { path: process.execPath, args: [app.getAppPath(), '--native-host'] }
+  // AS PLAIN NODE, NEVER AS ELECTRON. The previous revision registered the
+  // packaged exe directly, argument-free, and was proud of it ("no cmd.exe
+  // sitting between Chrome and the process whose stdin and stdout are the
+  // protocol"). Measured on that build: electron.exe writes `\r\n` to stdout
+  // ~30 ms after launch, BEFORE the main script runs, with no app loaded at
+  // all. Chrome parses a host's stdout as length-prefixed frames from byte
+  // zero, so those two bytes corrupt the length word of the first real frame
+  // and Chrome kills the port — every session, ~0.3 s after connect. The
+  // extension's 2 s retry then redials forever: seventeen hellos at 2.3 s
+  // intervals in the log that finally condemned it ("연결이 안돼").
+  //
+  // `ELECTRON_RUN_AS_NODE=1` boots the same binary with no Chromium and a
+  // measured zero bytes of unsolicited stdout, running the standalone host
+  // bundle — the exact pattern the watchdog has shipped all along. The
+  // environment variable is what makes the launcher .cmd unavoidable now:
+  // Chromium's manifest has no place for env or args.
+  const script = resolveNativeHostScript()
+  return { path: process.execPath, args: script === null ? [] : [script] }
+}
+
+/**
+ * dist/scripts/native-host.js — emitted by scripts/build.mjs, outside the asar
+ * (asarUnpack) because plain Node cannot read Electron's archive format.
+ * Mirrors supervisor.ts `resolveWatchdogScript`.
+ */
+function resolveNativeHostScript(): string | null {
+  const packed = path.join(app.getAppPath(), 'dist', 'scripts', 'native-host.js')
+  const unpacked = packed.replace(
+    `${path.sep}app.asar${path.sep}`,
+    `${path.sep}app.asar.unpacked${path.sep}`,
+  )
+  return [unpacked, packed].find((candidate) => fs.existsSync(candidate)) ?? null
 }
 
 /**
@@ -135,7 +154,15 @@ function writeLauncherIfNeeded(): string {
   if (cmd.args.length === 0) return cmd.path
   const launcher = path.join(app.getPath('userData'), 'capturepack-host.cmd')
   const quoted = cmd.args.map((a) => `"${a}"`).join(' ')
-  fs.writeFileSync(launcher, `@echo off\r\n"${cmd.path}" ${quoted} %*\r\n`, 'utf8')
+  // `set` before the exec is the entire fix for the \r\n poisoning above: with
+  // ELECTRON_RUN_AS_NODE the binary is plain Node and stdout carries protocol
+  // frames and nothing else. `@echo off` keeps cmd.exe itself silent; measured:
+  // a .cmd launcher with echo off contributes zero bytes to stdout.
+  fs.writeFileSync(
+    launcher,
+    `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${cmd.path}" ${quoted} %*\r\n`,
+    'utf8',
+  )
   return launcher
 }
 
@@ -180,6 +207,42 @@ export async function registerBrowsers(): Promise<readonly BrowserRegistration[]
     results.push({ id: browser.id, label: browser.label, registered: ok })
   }
   return results
+}
+
+/**
+ * Re-writes an EXISTING manifest and launcher with this build's paths, keeping
+ * the extension IDs the user already allowed. Called once at app start.
+ *
+ * Without this, a fix to how the host is launched reaches nobody: the manifest
+ * is only written from the Settings panel, so every already-registered machine
+ * keeps starting the host the old way until the user happens to press the
+ * install button again. That is exactly how the CRLF-poisoned exe registration
+ * would have outlived the code that fixed it — and it is one more face of
+ * "재설치할때마다 연결이 안돼": a reinstall updates the app and leaves the
+ * registration describing the previous one. A machine with no manifest is left
+ * alone; installing is still the user's decision.
+ */
+export function refreshHostManifestIfInstalled(): void {
+  const target = manifestPath()
+  let allowed: string[] = []
+  try {
+    const raw = JSON.parse(fs.readFileSync(target, 'utf8')) as Record<string, unknown>
+    const origins = raw['allowed_origins']
+    if (!Array.isArray(origins)) return
+    allowed = origins
+      .filter((o): o is string => typeof o === 'string')
+      .map((o) => o.replace(/^chrome-extension:\/\//, '').replace(/\/$/, ''))
+      .filter((o) => o !== '')
+  } catch {
+    return // Never installed (or unreadable): not ours to decide.
+  }
+  if (allowed.length === 0) return
+  try {
+    writeHostManifest(allowed)
+    logInfo('[chrome] native host manifest refreshed for this build')
+  } catch (err) {
+    logError('[chrome] could not refresh the native host manifest:', err)
+  }
 }
 
 export async function unregisterBrowsers(): Promise<void> {

@@ -19,6 +19,7 @@ import {
   updateContextRetention,
 } from './context/runtime'
 import { setDomClock, setDomRetention, startDomBridge, stopDomBridge } from './chrome/domBridge'
+import { refreshHostManifestIfInstalled } from './chrome/install'
 import { disposeHistory, notifyHistoryChanged, openHistoryWindow, registerHistoryIpc } from './historyWindow'
 import { registerCaptureHotkeyWithin } from './hotkey'
 import {
@@ -319,6 +320,12 @@ function main(): void {
     setDomClock(() => contextNowMs() ?? Date.now())
     setDomRetention(settings.replaySeconds * 1000)
     startDomBridge()
+    // A registration written by a PREVIOUS build keeps describing it — and the
+    // one this build fixes (the exe registered directly, whose pre-JS CRLF on
+    // stdout poisons Chrome's framing) would otherwise outlive its fix on
+    // every machine that already installed the extension. Refreshed, not
+    // installed: a machine with no manifest is left exactly as it was.
+    refreshHostManifestIfInstalled()
 
     const capture = (): void => {
       // Recording OFF is a privacy switch, not a broken hotkey (settings.

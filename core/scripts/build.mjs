@@ -36,6 +36,19 @@ await Promise.all([
     entryPoints: ['src/watchdog/watchdog.ts'],
     outfile: 'dist/scripts/watchdog.js',
   }),
+  // The native messaging host also runs as PLAIN NODE (ELECTRON_RUN_AS_NODE):
+  // electron.exe writes CRLF to stdout before the main script runs, and two
+  // stray bytes are enough to poison Chrome's length-prefixed framing for the
+  // whole session — Chrome kills the port, the extension redials every ~2 s,
+  // and the log fills with hellos from hosts that die young. Plain Node writes
+  // nothing it is not told to. Same rules as the watchdog: no electron import,
+  // outside the asar.
+  build({
+    ...node,
+    external: [],
+    entryPoints: ['src/main/chrome/nativeHostEntry.ts'],
+    outfile: 'dist/scripts/native-host.js',
+  }),
   build({ ...node, entryPoints: ['src/preload/capture.ts'], outfile: 'dist/preload/capture.js' }),
   build({ ...node, entryPoints: ['src/preload/editor.ts'], outfile: 'dist/preload/editor.js' }),
   build({ ...node, entryPoints: ['src/preload/settings.ts'], outfile: 'dist/preload/settings.js' }),

@@ -2328,7 +2328,23 @@ interface AimAt {
  * pixel of it holds a smaller control.
  */
 function pickBeatsBox(picked: PickableObject, a: Annotation, at: AimAt): boolean {
-  if (a.annotation_id === state.selectedId) return false
+  // THE SELECTED BOX DOES NOT SWALLOW A REFINEMENT (bug: "앱 선택하고 내부
+  // 컨트롤 클릭하면 박스가 안 그려져").
+  //
+  // This returned false for the selected box unconditionally, and the flow it
+  // killed is the most natural one there is: pick a window — which SELECTS the
+  // box it creates (commitTextEditor) — then click a control inside it. Every
+  // interior click landed on the still-selected window box and moved it a few
+  // pixels instead of drawing anything. The user had to know to press Esc
+  // first, and nothing on screen says so.
+  //
+  // A MANUAL selected box keeps its whole interior: clicking inside it is the
+  // move gesture, and a pick stealing that grab would trade one surprise for
+  // another. A TRACKED selected box has no interior gesture to protect —
+  // "Selected, never dragged, when Core owns the rectangle" (#99, the
+  // pointerdown below) — so for it the gate defended nothing and cost the
+  // refinement flow; it now applies the same area bar as every other box.
+  if (a.annotation_id === state.selectedId && !isTracked(a)) return false
   if (at.repeat === true) return false
   if (onBoxEdge(a, at.x, at.y, at.ui)) return false
   if (annotatesPick(a, picked)) return false
