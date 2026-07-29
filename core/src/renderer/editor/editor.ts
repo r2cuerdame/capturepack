@@ -2691,21 +2691,52 @@ const presentedTimes: number[] = []
 /** Reports where a freshly fetched track sits relative to the frames on screen. */
 function reportTrackAlignment(samples: readonly { t_ms: number }[]): void {
   if (presentedTimes.length < 8 || samples.length === 0) return
+  // MEASURED FROM THE PICTURES, NOT FROM THE SAMPLES (#93).
+  //
+  // The first version of this asked, for every sample, how far the nearest
+  // SHOWN frame was — and reported -855 ms on a capture whose rendered output
+  // was later measured correct to two pixels during a 5000 px/s drag. It was
+  // not measuring sync. A user who picks at 11 s and drags the lifetime out to
+  // 30 s has a track covering twenty seconds of replay they never played, and
+  // samples out in that unwatched stretch have no nearby frame by construction.
+  // The number was coverage wearing a sync number's clothes, which is worse
+  // than no number at all.
+  //
+  // Turned around, it means something: for each frame this editor actually put
+  // on screen, how far away was the nearest observation? In sync that is at
+  // most half a sample interval, whatever the rate, and it cannot be inflated
+  // by parts of the replay nobody looked at.
+  const first = samples[0]!.t_ms
+  const last = samples[samples.length - 1]!.t_ms
   const gaps: number[] = []
-  for (const s of samples) {
+  let outside = 0
+  for (const t of presentedTimes) {
+    if (t < first || t > last) {
+      // A frame from outside the track's span says nothing about alignment.
+      outside += 1
+      continue
+    }
     let best = Number.POSITIVE_INFINITY
-    for (const t of presentedTimes) {
+    for (const s of samples) {
       const d = s.t_ms - t
       if (Math.abs(d) < Math.abs(best)) best = d
     }
     if (Number.isFinite(best)) gaps.push(best)
   }
-  if (gaps.length === 0) return
+  if (gaps.length === 0) {
+    console.info(
+      `capturepack: track alignment — none of the ${presentedTimes.length} frames shown so far ` +
+        `fall inside the track (${Math.round(first)}..${Math.round(last)} ms), so there is nothing to compare yet`,
+    )
+    return
+  }
   gaps.sort((a, b) => a - b)
   const median = Math.round(gaps[gaps.length >> 1] ?? 0)
+  const worst = Math.round(Math.abs(gaps[0]!) > Math.abs(gaps[gaps.length - 1]!) ? gaps[0]! : gaps[gaps.length - 1]!)
   console.info(
-    `capturepack: track alignment — ${gaps.length} samples sit a median of ${median} ms ` +
-      `from the nearest frame this editor has shown (0 is exact)`,
+    `capturepack: track alignment — over ${gaps.length} frame(s) this editor has shown inside the track, ` +
+      `the nearest observation sits a median of ${median} ms away (worst ${worst} ms; 0 is exact). ` +
+      `${outside} shown frame(s) fell outside the track and were not counted`,
   )
 }
 

@@ -34,6 +34,23 @@ export function trackedSampleAt(a: Annotation, tMs: number): AnnotationTrackSamp
     if (gap < bestGap) {
       best = s
       bestGap = gap
+      continue
+    }
+    // TWO SAMPLES CAN SHARE AN INSTANT (#93). A window straddling two monitors
+    // is observed once per screen, each clipped to that screen — the same
+    // object, the same millisecond, two rectangles in two coordinate spaces.
+    // Measured on CapturePack_2026-07-29_110219: at 26304 ms the same window
+    // was 908x634 at (292,588) on one screen and 52x634 at (0,588) on the
+    // other. Picking by time alone leaves the choice to array order, so the box
+    // could be drawn with the OTHER screen's rectangle — a real observation, in
+    // the wrong space, off by most of a monitor.
+    //
+    // A sample carries `display` only when it is NOT on the box's own screen
+    // (SPEC §8.3), so the tie goes to the one without it: the box stays on the
+    // screen it belongs to. When the object leaves that screen entirely there
+    // is no tie left and the box follows it across.
+    if (gap === bestGap && best.display !== undefined && s.display === undefined) {
+      best = s
     }
   }
   return best

@@ -127,6 +127,47 @@ console.log('\nAn object dragged onto another monitor')
     `got display ${mid.display} x=${mid.bounds.x}`)
 }
 
+console.log('\nA window straddling two monitors: two rectangles, one instant (#93)')
+{
+  // The same window seen twice at 26304 ms, each clipped to its own screen —
+  // the shape the reported capture actually contained.
+  const straddling = box({
+    enabled: true,
+    samples: [
+      { t_ms: 26304, display: 1, x: 292, y: 588, width: 908, height: 634 },
+      { t_ms: 26304, x: 0, y: 588, width: 52, height: 634 },
+    ],
+  })
+  check('the box keeps the rectangle measured on its OWN screen',
+    trackedBoundsAt(straddling, 26304).x === 0 && trackedBoundsAt(straddling, 26304).width === 52,
+    JSON.stringify(trackedBoundsAt(straddling, 26304)))
+  check('and does not claim to have moved to the other one',
+    annotationAt(straddling, 26304).display === undefined)
+
+  // Order must not decide it: the same two samples the other way round.
+  const reversed = box({
+    enabled: true,
+    samples: [
+      { t_ms: 26304, x: 0, y: 588, width: 52, height: 634 },
+      { t_ms: 26304, display: 1, x: 292, y: 588, width: 908, height: 634 },
+    ],
+  })
+  check('array order does not change the answer',
+    trackedBoundsAt(reversed, 26304).x === 0, JSON.stringify(trackedBoundsAt(reversed, 26304)))
+
+  // Once the object is wholly on the other screen there is no tie, and the box
+  // must follow it rather than stay behind.
+  const left = box({
+    enabled: true,
+    samples: [
+      { t_ms: 1000, x: 10, y: 0, width: 100, height: 50 },
+      { t_ms: 2000, display: 1, x: 900, y: 0, width: 100, height: 50 },
+    ],
+  })
+  check('a tie-break for its own screen does not stop it crossing',
+    annotationAt(left, 2000).display === 1 && trackedBoundsAt(left, 2000).x === 900)
+}
+
 console.log('\nA track whose samples name no display (one screen)')
 {
   const plain = box({
