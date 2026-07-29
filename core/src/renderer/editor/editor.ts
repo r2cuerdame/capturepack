@@ -118,6 +118,8 @@ const exportBtn = el<HTMLButtonElement>('exportBtn')
 const titleBarLabel = el<HTMLSpanElement>('titleBarLabel')
 const boxHeader = el<HTMLDivElement>('boxHeader')
 const numberBtn = el<HTMLButtonElement>('numberBtn')
+const numberPinBtn = el<HTMLButtonElement>('numberPinBtn')
+const numberPicker = el<HTMLDivElement>('numberPicker')
 const durationChip = el<HTMLButtonElement>('durationChip')
 const blurBtn = el<HTMLButtonElement>('blurBtn')
 const deleteBtn = el<HTMLButtonElement>('deleteBtn')
@@ -1035,6 +1037,7 @@ function helpContent(): Array<{ title: string; rows: HelpRow[] }> {
       // capture accelerator is shown untranslated too); the caps that ARE
       // printed differently per locale — Enter/Esc/Del — come from i18n.
       ['Ctrl+Z / Ctrl+Y', t('editor.helpUndoRedo')],
+      ['Alt+1…9 / Alt+0', t('editor.helpPinNumber')],
       [t('editor.keyDelete'), t('editor.helpDeleteBox')],
       [t('editor.keyEnter'), t('editor.save')],
       [t('editor.keyEsc'), t('editor.helpClose')],
@@ -1646,6 +1649,7 @@ textEditor.addEventListener('keydown', (e) => {
     // Cancel-current first, like the canvas Esc ladder: an open duration
     // popover is dismissed before the box it belongs to. Otherwise Esc
     // discards the WHOLE pending box, not just the text.
+    if (numberPickerOpen) closeNumberPicker()
     if (durationEditorOpen) closeDurationEditor()
     else cancelTextEditor()
   }
@@ -1661,7 +1665,10 @@ textEditor.addEventListener('blur', (e) => {
   const next = e.relatedTarget
   if (
     next instanceof Node &&
-    (boxHeader.contains(next) || durationEditor.contains(next) || zoomControl.contains(next))
+    (boxHeader.contains(next) ||
+      durationEditor.contains(next) ||
+      numberPicker.contains(next) ||
+      zoomControl.contains(next))
   ) {
     return
   }
@@ -1680,6 +1687,7 @@ textEditor.addEventListener('blur', (e) => {
 // ---------------------------------------------------------------------------
 
 let durationEditorOpen = false
+let numberPickerOpen = false
 
 /** The box being created (right-drag released, description still open). */
 function pendingDraft(): Annotation | null {
@@ -1762,6 +1770,7 @@ function refocusEditing(): void {
   // still-open duration editor keeps what it has.
   const active = document.activeElement
   if (durationEditorOpen && active instanceof Node && durationEditor.contains(active)) return
+  if (numberPickerOpen && active instanceof Node && numberPicker.contains(active)) return
   if (textSession !== null && !textEditor.hidden) textEditor.focus()
   else if (active !== titleInput && active !== noteInput) overlay.focus()
 }
@@ -1847,6 +1856,12 @@ function syncSelectionUi(): void {
   const number = displayNumbers().get(a.annotation_id)
   numberBtn.textContent = a.numbered && number !== undefined ? String(number) : '#'
   numberBtn.classList.toggle('on', a.numbered)
+  // Choosing WHICH number is meaningless for a box that shows none, so the
+  // caret follows the toggle. A pin the user set while numbering was on is
+  // kept, not cleared, when they turn it off and on again — see `number_pin`.
+  numberPinBtn.hidden = !a.numbered
+  if (!a.numbered && numberPickerOpen) closeNumberPicker(false)
+  syncNumberPicker(a)
   blurBtn.textContent = a.blur ? t('editor.blurOn') : t('editor.blur')
   blurBtn.classList.toggle('on', a.blur)
   // Duration is only meaningful with a replay; respect settings.showDurationLabel.
@@ -1856,6 +1871,7 @@ function syncSelectionUi(): void {
   else closeDurationEditor(false)
   positionBoxHeader(topLeft, bottomRight)
   if (durationEditorOpen) positionDurationEditor()
+  if (numberPickerOpen) positionNumberPicker()
 }
 
 /** Screen px between the header and the dashed selection rect it belongs to. */
@@ -2009,6 +2025,18 @@ numberBtn.addEventListener('click', () => {
   refocusEditing()
 })
 
+numberPinBtn.addEventListener('click', () => {
+  if (numberPickerOpen) closeNumberPicker()
+  else openNumberPicker()
+})
+
+numberPicker.addEventListener('click', (e) => {
+  const btn = e.target instanceof Element ? e.target.closest<HTMLButtonElement>('button[data-pin]') : null
+  if (btn === null) return
+  const v = btn.dataset.pin
+  setSelectedNumberPin(v === 'auto' ? null : Number(v))
+})
+
 blurBtn.addEventListener('click', () => {
   applyMutation((a) => {
     a.blur = !a.blur
@@ -2040,6 +2068,60 @@ function closeDurationEditor(refocus = true): void {
   durationEditorOpen = false
   durationEditor.hidden = true
   if (refocus) refocusEditing()
+}
+
+/** Marks the picker's current answer, so it shows the state as well as offers. */
+function syncNumberPicker(a: Annotation): void {
+  const pin = typeof a.number_pin === 'number' ? a.number_pin : null
+  for (const btn of numberPicker.querySelectorAll<HTMLButtonElement>('button[data-pin]')) {
+    const v = btn.dataset.pin
+    btn.classList.toggle('on', v === 'auto' ? pin === null : Number(v) === pin)
+  }
+}
+
+function openNumberPicker(): void {
+  const a = headerAnnotation()
+  if (a === null || !a.numbered) return
+  numberPickerOpen = true
+  numberPicker.hidden = false
+  syncNumberPicker(a)
+  positionNumberPicker()
+}
+
+function closeNumberPicker(refocus = true): void {
+  if (!numberPickerOpen) return
+  numberPickerOpen = false
+  numberPicker.hidden = true
+  if (refocus) refocusEditing()
+}
+
+function positionNumberPicker(): void {
+  // Hangs off the caret that opened it, through toStagePoint, for the same
+  // reason the duration popover does (issue #50).
+  const cr = numberPinBtn.getBoundingClientRect()
+  const anchor = toStagePoint(cr.left, cr.bottom + 6)
+  const left = Math.max(8, Math.min(anchor.x, stage.clientWidth - numberPicker.offsetWidth - 8))
+  const top = Math.max(8, Math.min(anchor.y, stage.clientHeight - numberPicker.offsetHeight - 8))
+  numberPicker.style.left = `${left}px`
+  numberPicker.style.top = `${top}px`
+}
+
+/**
+ * Pins the selected box to `pin`, or back to automatic with null.
+ *
+ * Setting a pin also turns numbering ON: asking for number 3 on a box that
+ * shows no number is a request nobody means, and silently doing nothing is the
+ * worse answer.
+ */
+function setSelectedNumberPin(pin: number | null): void {
+  applyMutation((a) => {
+    if (pin === null) delete a.number_pin
+    else {
+      a.number_pin = pin
+      a.numbered = true
+    }
+  })
+  closeNumberPicker()
 }
 
 function positionDurationEditor(): void {
@@ -3540,6 +3622,7 @@ window.addEventListener('keydown', (e) => {
   // check covers focus landing on the duration editor's buttons).
   if (e.isComposing || e.target === textEditor) return
   if (e.target instanceof Node && durationEditor.contains(e.target)) return
+  if (e.target instanceof Node && numberPicker.contains(e.target)) return
   // The Esc bar's focused button owns Enter/Space: its native activation must
   // fire THAT button's click (Save / Save As New / Discard). Without this,
   // tabbing to [Save As New] or [Discard] and pressing Enter would fall
@@ -3658,6 +3741,22 @@ window.addEventListener('keydown', (e) => {
       refresh()
     }
     return
+  }
+  // PIN THE SELECTED BOX'S NUMBER (SPEC §8.5). Alt, because bare 1..9 already
+  // frames a captured display and that binding is older, documented, and used
+  // one-handed while panning — taking it would be a silent regression for a
+  // multi-display user. Matched on `e.code` so it follows the PHYSICAL key: Alt
+  // +1 produces different characters on different layouts, and the sheet
+  // advertises the digits, not whatever the layout makes of them. Alt+0 goes
+  // back to automatic, the same "0 resets" idiom the board fit already uses.
+  if (e.altKey && !e.ctrlKey && !e.metaKey && headerAnnotation() !== null) {
+    const digit = /^Digit([0-9])$/.exec(e.code)
+    if (digit !== null) {
+      e.preventDefault()
+      const n = Number(digit[1])
+      setSelectedNumberPin(n === 0 ? null : n)
+      return
+    }
   }
   if (e.altKey) return
   // Board navigation (GOAL "Multi-Monitor Support"): 1..9 frames one captured
