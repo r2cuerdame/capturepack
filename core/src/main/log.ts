@@ -32,9 +32,18 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 
 // One megabyte of lines is days of ordinary use and still small enough to
-// attach to an issue; the previous file is kept so a rotation right after a
-// crash cannot hide the crash.
+// attach to an issue; older files are kept so a rotation right after a crash
+// cannot hide the crash.
 const MAX_LOG_BYTES = 1_048_576
+// HOW MUCH HISTORY SURVIVES A ROTATION.
+//
+// This was 1 for one release, and one generation is not enough for a tray app
+// that runs for days: a chatty afternoon can push a megabyte through the file
+// twice, and the second rotation then deletes the morning the user was trying
+// to explain. Five generations is at most 6 MB in a folder nothing else writes
+// to, and it buys about a week of ordinary use. Anything past the oldest is
+// deleted at rotation, so the folder has a ceiling rather than a trend.
+const KEPT_GENERATIONS = 5
 // A log must never take the app down, and must never spin on a disk that is
 // refusing writes. A handful of consecutive failures (file locked by an editor,
 // disk full) disables file logging for the rest of the run; console output and
@@ -59,8 +68,32 @@ export function logFilePath(): string {
   return path.join(logsDir(), 'main.log')
 }
 
-function previousLogFilePath(): string {
-  return path.join(logsDir(), 'main.1.log')
+/** Generation `n` of the rotated log: main.1.log is the most recent. */
+function rotatedLogFilePath(n: number): string {
+  return path.join(logsDir(), `main.${String(n)}.log`)
+}
+
+/**
+ * Shifts main.log out to main.1.log and every generation down one, dropping
+ * whatever falls off the end.
+ *
+ * Renames, never copies: the live file is closed between appends, so a rename
+ * is atomic and costs nothing regardless of how large the file got. It runs
+ * oldest-first so no rename can land on a name still in use, and each step is
+ * guarded on its own — a generation locked by an editor or an antivirus scan
+ * costs that one file, not the rotation.
+ */
+function rotateLogFiles(file: string): void {
+  fs.rmSync(rotatedLogFilePath(KEPT_GENERATIONS), { force: true })
+  for (let n = KEPT_GENERATIONS - 1; n >= 1; n -= 1) {
+    try {
+      fs.renameSync(rotatedLogFilePath(n), rotatedLogFilePath(n + 1))
+    } catch {
+      // That generation does not exist yet, or is held open. Either way the
+      // slot it would have filled stays as it is.
+    }
+  }
+  fs.renameSync(file, rotatedLogFilePath(1))
 }
 
 /**
@@ -241,10 +274,9 @@ function write(level: LogLevel, message: string): void {
       if (actual === null) {
         currentBytes = 0
       } else if (actual + size > MAX_LOG_BYTES) {
-        // ONE previous generation is kept: a rotation that happened to land right
-        // after the interesting lines must not be what erases them.
-        fs.rmSync(previousLogFilePath(), { force: true })
-        fs.renameSync(file, previousLogFilePath())
+        // Generations are kept: a rotation that happened to land right after the
+        // interesting lines must not be what erases them.
+        rotateLogFiles(file)
         currentBytes = 0
       } else {
         currentBytes = actual

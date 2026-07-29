@@ -36,7 +36,6 @@ const folderName = el<HTMLSpanElement>('folderName')
 const closeBtn = el<HTMLButtonElement>('closeBtn')
 const openFolderBtn = el<HTMLButtonElement>('openFolderBtn')
 const copyPathBtn = el<HTMLButtonElement>('copyPathBtn')
-const createZipBtn = el<HTMLButtonElement>('createZipBtn')
 const copyPromptBtn = el<HTMLButtonElement>('copyPromptBtn')
 const blurWarning = el<HTMLDivElement>('blurWarning')
 const replayWarning = el<HTMLDivElement>('replayWarning')
@@ -143,23 +142,6 @@ copyPathBtn.addEventListener('click', () => {
 copyPromptBtn.addEventListener('click', () => {
   window.toastBridge.copyPrompt()
   flash(copyPromptBtn, t('toast.copiedFlash'))
-})
-createZipBtn.addEventListener('click', () => {
-  createZipBtn.disabled = true
-  void window.toastBridge
-    .createZip()
-    .then((result) => {
-      if (result.ok) {
-        createZipBtn.textContent = t('toast.zipCreated')
-      } else {
-        createZipBtn.disabled = false
-        flash(createZipBtn, t('toast.zipFailed'))
-      }
-    })
-    .catch(() => {
-      createZipBtn.disabled = false
-      flash(createZipBtn, t('toast.zipFailed'))
-    })
 })
 
 window.addEventListener('keydown', (e) => {

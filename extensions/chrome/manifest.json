@@ -3,11 +3,23 @@
   "name": "CapturePack",
   "description": "Sends DOM context (selector, role, bounds) to the CapturePack app. Part of CapturePack, not a separate product.",
   "version": "0.1.0",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
   "permissions": ["nativeMessaging", "activeTab", "scripting", "tabs"],
   "background": {
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "CapturePack: pick an element"
+    "default_title": "CapturePack: pick an element",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
   }
 }

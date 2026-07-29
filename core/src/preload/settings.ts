@@ -39,8 +39,10 @@ contextBridge.exposeInMainWorld('settingsBridge', {
   chromeOpenFolder(): void {
     ipcRenderer.send(IPC.settingsChromeOpenFolder)
   },
-  chromeOpenExtensionsPage(): void {
-    ipcRenderer.send(IPC.settingsChromeOpenExtensionsPage)
+  // Resolves to the browser it opened, or null when none could be started —
+  // the panel needs to know so it can show the address to type instead.
+  chromeOpenExtensionsPage(): Promise<string | null> {
+    return ipcRenderer.invoke(IPC.settingsChromeOpenExtensionsPage) as Promise<string | null>
   },
   chromeCopyPath(): void {
     ipcRenderer.send(IPC.settingsChromeCopyPath)

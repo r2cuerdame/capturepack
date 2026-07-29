@@ -74,6 +74,24 @@ body {
   flex-wrap: wrap;
 }
 
+/* Pushed to the far right by the auto margin, so it never reads as one more
+   filter chip sitting at the end of the row. */
+#settingsBtn {
+  margin-left: auto;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--muted);
+  padding: 5px 12px;
+  font: inherit;
+  cursor: pointer;
+}
+
+#settingsBtn:hover {
+  border-color: #4a4a58;
+  color: var(--text);
+}
+
 .chip {
   border: 1px solid var(--border);
   border-radius: 999px;

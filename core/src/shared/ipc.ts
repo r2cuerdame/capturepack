@@ -192,6 +192,10 @@ export const IPC = {
   historyCreateZip: 'history:create-zip',
   // history window -> main: open the pack folder in the file manager
   historyOpenFolder: 'history:open-folder',
+  // history window -> main: open Settings. History is the window a user lingers
+  // in, so it is the one place a settings change is wanted without a trip back
+  // to the tray; main owns the window, as it does for every other opener.
+  historyOpenSettings: 'history:open-settings',
   // history window -> main: copy the absolute pack folder path to the clipboard
   historyCopyPath: 'history:copy-path',
   // history window -> main: copy the analyze-this-pack prompt (same text as the

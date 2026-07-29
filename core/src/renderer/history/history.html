@@ -27,6 +27,11 @@
       <button type="button" class="chip" data-filter="renderfailed" data-i18n="history.filterRenderFailed">Render Failed</button>
       <button type="button" class="chip" data-filter="notpackaged" data-i18n="history.filterNotPackaged">Not Packaged</button>
     </nav>
+    <!-- History is the only window a user stays in, so it is the only one where
+         "I want to change a setting" happens without going back to the tray.
+         Pushed to the far right, away from the filters, because it does not
+         filter anything. -->
+    <button id="settingsBtn" type="button" data-i18n="history.settings">Settings</button>
   </header>
   <main id="list" aria-live="polite"></main>
   <footer id="statusbar">

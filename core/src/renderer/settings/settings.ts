@@ -41,7 +41,7 @@ interface SettingsBridge {
   chromeInstall(extensionId: string): Promise<ChromeIntegrationStatus>
   chromeUninstall(): Promise<ChromeIntegrationStatus>
   chromeOpenFolder(): void
-  chromeOpenExtensionsPage(): void
+  chromeOpenExtensionsPage(): Promise<string | null>
   chromeCopyPath(): void
   chromeDetect(): Promise<ChromeIntegrationStatus>
   status(): Promise<SettingsStatusResult>
@@ -71,7 +71,6 @@ const outputPath = el<HTMLDivElement>('outputPath')
 const changeOutputBtn = el<HTMLButtonElement>('changeOutputBtn')
 const openOutputBtn = el<HTMLButtonElement>('openOutputBtn')
 const guideBtn = el<HTMLButtonElement>('guideBtn')
-const showTutorialBtn = el<HTMLButtonElement>('showTutorialBtn')
 const chromeVerdict = el<HTMLElement>('chromeVerdict')
 const chromeChecks = el<HTMLUListElement>('chromeChecks')
 const chromeExtensionId = el<HTMLInputElement>('chromeExtensionId')
@@ -84,6 +83,9 @@ const chromeManualToggle = el<HTMLButtonElement>('chromeManualToggle')
 const chromeSteps = [el<HTMLLIElement>('chromeStep1'), el<HTMLLIElement>('chromeStep2'), el<HTMLLIElement>('chromeStep3')]
 const chromeStep3How = el<HTMLElement>('chromeStep3How')
 const chromeUninstallBtn = el<HTMLButtonElement>('chromeUninstallBtn')
+const chromeRefreshBtn = el<HTMLButtonElement>('chromeRefreshBtn')
+const chromeExtDir = el<HTMLElement>('chromeExtDir')
+const chromeOpenFailed = el<HTMLElement>('chromeOpenFailed')
 const captureDisplaySelect = el<HTMLSelectElement>('captureDisplay')
 const clipboardSelect = el<HTMLSelectElement>('clipboardAfterSave')
 const captureHotkeyBtn = el<HTMLButtonElement>('captureHotkeyBtn')
@@ -223,6 +225,12 @@ const TOGGLES: ReadonlyArray<BooleanSettingsKey> = [
   // The Plugins row's real on/off (issue #57) — applies to the NEXT capture
   // with no restart of anything, because the capture flow reads it at trigger.
   'uiaEnabled',
+  // The editor's first-run tutorial. It belongs in this list rather than in a
+  // handler of its own precisely BECAUSE the editor clears it: every refresh of
+  // this panel re-reads the flag, so the box falls back down on its own once a
+  // capture has shown the tutorial, and never claims an armed state that is no
+  // longer true.
+  'showEditorTutorial',
 ]
 
 for (const key of TOGGLES) {
@@ -710,6 +718,10 @@ function renderChromeStatus(status: ChromeIntegrationStatus): void {
   if (status.extensionConnected && !status.protocolCompatible) {
     chromeVerdict.textContent = t('settings.chromeMismatch')
   }
+  // The folder to load, spelled out rather than only put on the clipboard: a
+  // path the user can read is a path they can reach when the button that opens
+  // it for them does not work.
+  chromeExtDir.textContent = status.extensionDir
   if (status.allowedExtensionIds.length > 0 && chromeExtensionId.value.trim() === '') {
     chromeExtensionId.value = status.allowedExtensionIds[0] ?? ''
   }
@@ -753,15 +765,20 @@ chromeFolderBtn.addEventListener('click', () => {
 })
 
 chromeExtPageBtn.addEventListener('click', () => {
-  // One press, both errands: the page the user needs and the path they are
-  // about to be asked for.
-  bridge.chromeOpenExtensionsPage()
-  bridge.chromeCopyPath()
-  const was = chromeExtPageBtn.textContent
-  chromeExtPageBtn.textContent = t('settings.chromeCopied')
-  window.setTimeout(() => {
-    chromeExtPageBtn.textContent = was
-  }, 1400)
+  void (async () => {
+    // One press, both errands: the page the user needs and the path they are
+    // about to be asked for. And a THIRD thing if the first one fails — the
+    // address is printed under the button, because a browser that could not be
+    // started is not something the user can be left to guess at.
+    bridge.chromeCopyPath()
+    const was = chromeExtPageBtn.textContent
+    chromeExtPageBtn.textContent = t('settings.chromeCopied')
+    window.setTimeout(() => {
+      chromeExtPageBtn.textContent = was
+    }, 1400)
+    const opened = await bridge.chromeOpenExtensionsPage().catch(() => null)
+    chromeOpenFailed.hidden = opened !== null
+  })()
 })
 
 chromeDetectBtn.addEventListener('click', () => {
@@ -785,6 +802,34 @@ chromeManualToggle.addEventListener('click', () => {
   chromeManual.hidden = !chromeManual.hidden
 })
 
+/**
+ * Ask now, and ask HARDER than the poll does.
+ *
+ * The panel already re-reads its six checks every two seconds, but the poll
+ * only reads — and reading is not enough after the one manual step. Loading the
+ * folder gives the extension an ID this app has never seen, and until the host
+ * manifest names that ID the browser refuses the connection, so the checks sit
+ * at "not connected" forever with nothing on screen offering to fix it
+ * ("설치했는데 연결됨이 안됨"). This runs the detect-and-register pass, which is
+ * the same work step 3 does, and reports what it found.
+ */
+chromeRefreshBtn.addEventListener('click', () => {
+  void (async () => {
+    chromeRefreshBtn.disabled = true
+    const was = chromeRefreshBtn.textContent
+    try {
+      const status = await bridge.chromeDetect()
+      renderChromeStatus(status)
+      if (status.detected.length === 0) chromeVerdict.textContent = t('settings.chromeNotFound')
+    } catch {
+      chromeVerdict.textContent = t('settings.chromeUnavailable')
+    } finally {
+      chromeRefreshBtn.textContent = was
+      chromeRefreshBtn.disabled = false
+    }
+  })()
+})
+
 // The extension announces itself whenever the browser starts the host, which is
 // not something this window can be told about — so while it is open it asks.
 window.setInterval(() => {
@@ -798,33 +843,16 @@ guideBtn.addEventListener('click', () => {
 })
 
 /**
- * Arms the first-run tutorial again (GOAL "First-Run Tutorial").
+ * The first-run tutorial (GOAL "First-Run Tutorial"), as the state it is.
  *
- * It appears on the NEXT editor, not now — there is no editor open to put it
- * in, and a capture is the only place the three gestures mean anything. The
- * button says so by going quiet for a moment rather than pretending nothing
- * happened.
+ * It appears on the NEXT editor, never now — there is no editor open to put it
+ * in, and the three gestures mean nothing outside a capture. A button could not
+ * express that: it fired, the setting changed, and the panel looked exactly as
+ * it had a moment earlier, which is why it was reported as doing nothing. A
+ * checkbox holds the answer on screen instead, and it goes back down by itself
+ * once an editor has shown the tutorial and cleared the flag.
  */
-showTutorialBtn.addEventListener('click', () => {
-  void (async () => {
-    // IT ARMS, IT DOES NOT OPEN. Reported: "에디터 튜토리얼 다시보기 할때 아무
-    // 반응도 하지 않아" — and it was working, silently. There is no editor open
-    // to put a tutorial in, and the three gestures mean nothing outside a
-    // capture, so the button can only promise the NEXT one. A button that keeps
-    // that promise without saying so is indistinguishable from a dead one.
-    showTutorialBtn.disabled = true
-    const was = showTutorialBtn.textContent
-    try {
-      await bridge.set({ showEditorTutorial: true })
-      showTutorialBtn.textContent = t('settings.showTutorialArmed')
-    } finally {
-      window.setTimeout(() => {
-        showTutorialBtn.textContent = was
-        showTutorialBtn.disabled = false
-      }, 2200)
-    }
-  })()
-})
+// The change handler and the load are both in the TOGGLES loop above.
 
 // ---------------------------------------------------------------------------
 // MCP: live status, restart in place, one-click client setup (issues #54, #56)

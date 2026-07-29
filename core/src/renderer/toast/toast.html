@@ -16,10 +16,17 @@
       <span id="folderName" class="folder" title=""></span>
       <button id="closeBtn" type="button" aria-label="Close" data-i18n-aria-label="toast.close">×</button>
     </header>
+    <!-- NO "CREATE ZIP" HERE. Zipping belongs to History, where a pack is
+         being prepared to send and the render that would go into the archive
+         has certainly finished. On this toast it was the wrong offer at the
+         wrong moment: the annotated replay is usually still encoding a few
+         lines below, so a zip made from this button could ship the pack
+         without the very file the blur warning tells the user to share
+         instead. One place to make an archive, and it is the place that knows
+         the pack is complete. -->
     <div class="buttons">
       <button id="openFolderBtn" type="button" data-i18n="toast.openFolder">Open Folder</button>
       <button id="copyPathBtn" type="button" data-i18n="toast.copyPath">Copy Folder Path</button>
-      <button id="createZipBtn" type="button" data-i18n="toast.createZip">Create ZIP</button>
       <button id="copyPromptBtn" type="button" data-i18n="toast.copyPrompt">Copy Prompt</button>
     </div>
     <!-- A display was not recording at the trigger (GOAL "Say that you are

@@ -782,7 +782,12 @@ export async function updatePack(
   }
   await removeReplacedReplayFiles(handle.dirPath, previousManifest, manifest)
 
-  copyAfterSave(input.clipboardAfterSave, handle.dirPath)
+  // The clipboard is NOT written here. This function also runs as the tail of a
+  // background finalize that re-encodes 30 s of 4K, which took over a minute on
+  // the machine this was reported from — so a copy at this point lands long
+  // after the user has already pressed Ctrl+V and got nothing, and then
+  // overwrites whatever they copied in the meantime. The caller copies at the
+  // instant the folder exists instead (session.ts, beside the toast).
   return handle.dirPath
 }
 
@@ -1084,8 +1089,23 @@ export async function setManifestRenderOutputs(
  * On-demand distribution ZIP (toast [Create ZIP]): sibling {folder}.capturepack
  * with the folder CONTENTS at the archive root (SPEC §3.2). Returns the zip path.
  */
+/**
+ * Zips a pack folder for sending, as a `.zip`.
+ *
+ * IT USED TO WRITE `.capturepack`, AND THAT WAS A MISTAKE. The bytes were
+ * always an ordinary zip archive, so the private extension bought nothing and
+ * cost a great deal: Windows shows it as an unknown file with no icon and no
+ * "Extract All", every chat client and mail server treats it as an unrecognised
+ * binary rather than an archive it can preview, and the person on the other end
+ * has to be told to rename it before they can open it. A format that a stranger
+ * can read is the entire point of this project (GOAL "Philosophy"), and the
+ * extension was the one place the pack refused to say what it was.
+ *
+ * The FORMAT is still CapturePack — manifest.json says so, and the folder
+ * inside is unchanged. Only the wrapper now admits to being a zip.
+ */
 export async function createPackZip(dirPath: string): Promise<string> {
-  const zipPath = `${dirPath}.capturepack`
+  const zipPath = `${dirPath}.zip`
   const zip = new AdmZip()
   zip.addLocalFolder(dirPath)
   await zip.writeZipPromise(zipPath, { overwrite: true })
@@ -1136,7 +1156,7 @@ function uniquePackDir(outputDir: string, date: Date): string {
  * folder and the bare path stay available for the cases where a file manager
  * or a terminal is the destination instead.
  */
-function copyAfterSave(mode: ClipboardAfterSave, dirPath: string): void {
+export function copyAfterSave(mode: ClipboardAfterSave, dirPath: string): void {
   if (mode === 'off') return
   if (mode === 'folder') {
     copyFolderToClipboard(dirPath)

@@ -28,7 +28,7 @@ import type {
 } from '../shared/ipc'
 import { resolveLanguage } from '../shared/i18n'
 import type { Settings } from '../shared/types'
-import { logError, logInfo } from './log'
+import { logError, logInfo, logWarn } from './log'
 import { restartCapture } from './capture'
 import { updateContextRetention } from './context/runtime'
 import { currentCaptureHotkey, registerCaptureHotkey } from './hotkey'
@@ -41,31 +41,74 @@ import { setAutoUpdateCheck } from './updater'
 /** The online manual (GOAL "First-Run Tutorial"). */
 const GUIDE_URL = 'https://capturepack.dev/guide'
 
+/** The address the user needs, named once so the UI and the launcher agree. */
+const EXTENSIONS_URL = 'chrome://extensions'
+
 /**
- * Opens the browser on its extensions page.
+ * Where Windows says each browser is installed.
  *
- * Tried in the order a user is likeliest to have: whatever owns http, then the
- * Chromium browsers by name. A failure is silent on purpose — the panel already
- * shows the path to paste, and a dialog about a browser that is not installed
- * helps nobody.
+ * App Paths is the registry key the shell itself reads to turn "chrome" into an
+ * executable, so this asks the same source Explorer's Run box does — HKCU first
+ * because a per-user install shadows a machine-wide one.
  */
-async function openExtensionsPage(): Promise<void> {
+async function browserExePath(exe: string): Promise<string | null> {
   const { execFile } = await import('node:child_process')
-  const candidates = ['chrome', 'msedge', 'brave']
-  for (const exe of candidates) {
-    const ok = await new Promise<boolean>((resolve) => {
-      // `start` resolves the app the same way the shell does, so a browser
-      // installed anywhere on PATH or in the registry is found without this
-      // process knowing where.
+  const key = `Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\${exe}`
+  for (const root of ['HKCU', 'HKLM']) {
+    const found = await new Promise<string | null>((resolve) => {
       execFile(
-        'cmd',
-        ['/c', 'start', '', exe, 'chrome://extensions'],
+        'reg',
+        ['query', `${root}\\${key}`, '/ve'],
         { windowsHide: true },
-        (err) => resolve(err === null),
+        (err, stdout) => {
+          if (err) {
+            resolve(null)
+            return
+          }
+          const match = /REG_SZ\s+(.+)/.exec(stdout)
+          const value = match?.[1]?.trim().replace(/^"|"$/g, '') ?? ''
+          resolve(value !== '' && fs.existsSync(value) ? value : null)
+        },
       )
     })
-    if (ok) return
+    if (found !== null) return found
   }
+  return null
+}
+
+/**
+ * Opens the browser on its extensions page, and SAYS WHETHER IT WORKED.
+ *
+ * The first cut ran `cmd /c start "" chrome chrome://extensions` and reported
+ * nothing. `start` returns success for a browser it never found — it hands the
+ * failure to a shell dialog, not to the exit code — so a user whose browser is
+ * installed somewhere the shell does not resolve saw a button that did nothing
+ * and told them nothing ("크롬 확장페이지가 안열리는데"). This resolves the
+ * executable first and launches it directly, so "it did not open" is a fact the
+ * panel can print alongside the address to paste by hand.
+ */
+async function openExtensionsPage(): Promise<string | null> {
+  const { execFile } = await import('node:child_process')
+  const candidates: readonly { exe: string; label: string }[] = [
+    { exe: 'chrome.exe', label: 'Chrome' },
+    { exe: 'msedge.exe', label: 'Edge' },
+    { exe: 'brave.exe', label: 'Brave' },
+    { exe: 'chromium.exe', label: 'Chromium' },
+  ]
+  for (const candidate of candidates) {
+    const exePath = await browserExePath(candidate.exe)
+    if (exePath === null) continue
+    try {
+      const child = execFile(exePath, [EXTENSIONS_URL], { windowsHide: false })
+      child.unref()
+      logInfo(`[chrome] opened ${EXTENSIONS_URL} in ${candidate.label}`)
+      return candidate.label
+    } catch (err) {
+      logError(`[chrome] could not start ${candidate.label}:`, err)
+    }
+  }
+  logWarn('[chrome] no Chromium browser found in App Paths — the page must be opened by hand')
+  return null
 }
 
 /** The six-point health check, assembled from the three places it lives. */
@@ -294,8 +337,11 @@ export function registerSettingsIpc(live: Settings, hooks: SettingsIpcHooks = {}
   // the browser's own. Starting the browser WITH the page is the same thing
   // from the user's side, and asking the registry where Chrome is beats
   // guessing at Program Files.
-  ipcMain.on(IPC.settingsChromeOpenExtensionsPage, () => {
-    void openExtensionsPage()
+  //
+  // A HANDLE, not a fire-and-forget send: the panel prints the address to type
+  // when this fails, and it can only do that if it is told.
+  ipcMain.handle(IPC.settingsChromeOpenExtensionsPage, async (): Promise<string | null> => {
+    return openExtensionsPage()
   })
 
   ipcMain.handle(IPC.settingsChromeDetect, async (): Promise<ChromeIntegrationStatus> => {

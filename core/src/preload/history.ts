@@ -51,6 +51,9 @@ contextBridge.exposeInMainWorld('historyBridge', {
   remove(packPath: string): Promise<HistoryActionResult> {
     return ipcRenderer.invoke(IPC.historyDelete, packPath) as Promise<HistoryActionResult>
   },
+  openSettings(): void {
+    ipcRenderer.send(IPC.historyOpenSettings)
+  },
   onChanged(cb: () => void): void {
     ipcRenderer.on(IPC.historyChanged, () => cb())
   },

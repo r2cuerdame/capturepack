@@ -28,6 +28,7 @@ interface HistoryBridge {
   rerender(packPath: string): Promise<HistoryActionResult>
   rename(packPath: string, newName: string): Promise<HistoryRenameResult>
   remove(packPath: string): Promise<HistoryActionResult>
+  openSettings(): void
   onChanged(cb: () => void): void
   onRenderStatus(cb: (payload: HistoryRenderStatusPayload) => void): void
 }
@@ -54,6 +55,11 @@ const searchInput = el<HTMLInputElement>('search')
 const filtersNav = el<HTMLElement>('filters')
 const listEl = el<HTMLElement>('list')
 const countLabel = el<HTMLSpanElement>('countLabel')
+const settingsBtn = el<HTMLButtonElement>('settingsBtn')
+
+settingsBtn.addEventListener('click', () => {
+  bridge.openSettings()
+})
 
 // ---------------------------------------------------------------------------
 // State

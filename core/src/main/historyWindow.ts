@@ -35,13 +35,39 @@ import { createPackStore, openPack } from './mcp/store'
 import type { PackHandle, PackStore, RawPackEntry } from './mcp/store'
 import { analyzePrompt } from './saveToast'
 import { startEditFlow } from './session'
+import { openSettingsWindow } from './settingsWindow'
 
 const THUMB_WIDTH = 320
 const MAX_PACK_NAME_LENGTH = 180
 // Windows-invalid filename characters plus control chars.
 const INVALID_NAME_CHARS = /[<>:"/\\|?*\u0000-\u001f]/
 const RESERVED_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i
-const PACK_EXT = '.capturepack'
+// What "Create ZIP" writes now. `.capturepack` is still recognised for packs
+// zipped by earlier versions — see PACK_ARCHIVE_EXTS below and the note in
+// exporter.createPackZip on why the private extension had to go.
+const PACK_EXT = '.zip'
+const PACK_ARCHIVE_EXTS: readonly string[] = [PACK_EXT, '.capturepack']
+
+/** Which archive extension `p` ends with, or null when it is not one. */
+function packArchiveExt(p: string): string | null {
+  const lower = p.toLowerCase()
+  return PACK_ARCHIVE_EXTS.find((ext) => lower.endsWith(ext)) ?? null
+}
+
+/** The sibling archive of a pack FOLDER, whichever extension it was made with. */
+function siblingArchive(dirPath: string): string | null {
+  for (const ext of PACK_ARCHIVE_EXTS) {
+    const candidate = `${dirPath}${ext}`
+    if (fs.existsSync(candidate)) return candidate
+  }
+  return null
+}
+
+/** A zip entry's display name: its own basename, minus whichever suffix it has. */
+function archiveStem(p: string): string {
+  const ext = packArchiveExt(p)
+  return ext === null ? path.basename(p) : path.basename(p, ext)
+}
 
 let historyWindow: BrowserWindow | null = null
 let ipcRegistered = false
@@ -201,6 +227,12 @@ export function registerHistoryIpc(live: Settings): void {
     else shell.showItemInFolder(entry.path)
   })
 
+  // No pack ref: this one is about the app, not about a row.
+  ipcMain.on(IPC.historyOpenSettings, (event) => {
+    if (!fromHistory(event)) return
+    openSettingsWindow()
+  })
+
   ipcMain.on(IPC.historyCopyPath, (event, ref: unknown) => {
     if (!fromHistory(event)) return
     const entry = entryFor(ref)
@@ -241,8 +273,8 @@ export function registerHistoryIpc(live: Settings): void {
     // Zip twin: best-effort — the folder is already gone; a failure here must
     // not report the whole delete as failed.
     if (entry.kind === 'dir') {
-      const zip = `${entry.path}${PACK_EXT}`
-      if (fs.existsSync(zip)) {
+      const zip = siblingArchive(entry.path)
+      if (zip !== null) {
         try {
           await shell.trashItem(zip)
         } catch (err) {
@@ -385,7 +417,7 @@ function safeSummarize(entry: RawPackEntry): HistoryPackSummary {
       id: entry.id,
       path: entry.path,
       kind: entry.kind,
-      name: path.basename(entry.path, entry.kind === 'zip' ? PACK_EXT : undefined),
+      name: entry.kind === 'zip' ? archiveStem(entry.path) : path.basename(entry.path),
       title: null,
       capturedAt: null,
       app: null,
@@ -429,7 +461,7 @@ function summarize(entry: RawPackEntry): HistoryPackSummary {
     id: typeof manifest?.id === 'string' ? manifest.id : entry.id,
     path: entry.path,
     kind: entry.kind,
-    name: path.basename(entry.path, entry.kind === 'zip' ? PACK_EXT : undefined),
+    name: entry.kind === 'zip' ? archiveStem(entry.path) : path.basename(entry.path),
     title: manifestTitle !== '' ? manifestTitle : reportFirstSentence(pack.report()),
     capturedAt: typeof manifest?.created_at === 'string' ? manifest.created_at : null,
     app: typeof manifest?.environment?.app === 'string' ? manifest.environment.app : null,
@@ -450,7 +482,7 @@ function summarize(entry: RawPackEntry): HistoryPackSummary {
 
 function zipTwinPresent(entry: RawPackEntry): boolean {
   if (entry.kind === 'zip') return true
-  return fs.existsSync(`${entry.path}${PACK_EXT}`)
+  return siblingArchive(entry.path) !== null
 }
 
 /** Card title fallback (GOAL "History"): report.md's first sentence. */
@@ -554,14 +586,16 @@ async function renamePack(entry: RawPackEntry, rawName: string): Promise<History
   if (invalid !== null) return { ok: false, error: invalid }
 
   const parent = path.dirname(entry.path)
-  const currentName = path.basename(entry.path, entry.kind === 'zip' ? PACK_EXT : undefined)
+  const currentName = entry.kind === 'zip' ? archiveStem(entry.path) : path.basename(entry.path)
   if (newName === currentName) return { ok: true, path: entry.path }
 
   const target =
-    entry.kind === 'zip' ? path.join(parent, `${newName}${PACK_EXT}`) : path.join(parent, newName)
+    entry.kind === 'zip'
+      ? path.join(parent, `${newName}${packArchiveExt(entry.path) ?? PACK_EXT}`)
+      : path.join(parent, newName)
   // Case-only renames are legal on Windows; anything else must not overwrite.
   const caseOnly = target.toLowerCase() === entry.path.toLowerCase()
-  if (!caseOnly && (fs.existsSync(target) || (entry.kind === 'dir' && fs.existsSync(`${target}${PACK_EXT}`)))) {
+  if (!caseOnly && (fs.existsSync(target) || (entry.kind === 'dir' && siblingArchive(target) !== null))) {
     return { ok: false, error: liveT()('history.errNameExists') }
   }
   try {
@@ -572,10 +606,12 @@ async function renamePack(entry: RawPackEntry, rawName: string): Promise<History
   // The zip twin follows the folder (contract). Best-effort: the folder rename
   // already succeeded and must not be reported as failed.
   if (entry.kind === 'dir') {
-    const oldZip = `${entry.path}${PACK_EXT}`
-    if (fs.existsSync(oldZip)) {
+    const oldZip = siblingArchive(entry.path)
+    if (oldZip !== null) {
       try {
-        await rename(oldZip, `${target}${PACK_EXT}`)
+        // Keeps the suffix it already had: renaming a pack must not also
+        // silently convert an older `.capturepack` archive into a `.zip`.
+        await rename(oldZip, `${target}${packArchiveExt(oldZip) ?? PACK_EXT}`)
       } catch (err) {
         console.error('capturepack: could not rename zip twin:', errorMessage(err))
       }

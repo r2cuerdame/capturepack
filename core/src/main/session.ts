@@ -70,6 +70,7 @@ import {
   updatePack,
   displayMediaName,
   displayReplayName,
+  copyAfterSave,
   displaySnapshotName,
   isoWithOffset,
   replayFileName,
@@ -1017,6 +1018,12 @@ async function runFlow(settings: Settings): Promise<void> {
       renderState: hasReplay ? (needsExactCut ? 'trimming' : 'rendering') : 'none',
       uiLanguage: uiLanguage(settings),
     })
+    // NOW, not when the render finishes. The folder exists and its path is
+    // final at this line; everything after it is re-encoding that can run for
+    // minutes. Copying at the end of that was measured landing 60+ s after the
+    // save on a two-screen 4K capture — by which time the user has pressed
+    // Ctrl+V, got their old clipboard, and reported this as "복사가 안 된다".
+    copyAfterSave(settings.clipboardAfterSave, savedHandle.dirPath)
 
     const finalize = async (): Promise<void> => {
       const finalDisplays =
@@ -1587,7 +1594,13 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
       outcome.kind === 'saveAsNew'
         ? await saveAsNewPack(dirPath, input)
         : { id: manifest.id, dirPath }
-    if (outcome.kind === 'export') await updatePack(handle, input, { keepReplay: true })
+    if (outcome.kind === 'export') {
+      await updatePack(handle, input, { keepReplay: true })
+      // Save As New copied inside saveAsNewPack, which is where its folder came
+      // into existence; a re-edit save has to do it here for the same reason a
+      // fresh capture does — before the render, not after it.
+      copyAfterSave(settings.clipboardAfterSave, handle.dirPath)
+    }
     // Same save pipeline as a fresh capture: toast, then background render.
     showSaveToast({
       folderPath: handle.dirPath,

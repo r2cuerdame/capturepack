@@ -7,6 +7,38 @@ import * as path from 'node:path'
 import type { AnnotationsFile, Manifest, TimelineFile } from '../../shared/types'
 
 const PACK_EXT = '.capturepack'
+/**
+ * Archive extensions this store will open, newest convention first.
+ *
+ * `.zip` is what the app writes now — an archive should say what it is, so a
+ * stranger's Windows, mail client and chat app can all open it without being
+ * told to rename anything. `.capturepack` is still read because packs made by
+ * earlier versions carry it, and a pack that stops being readable because the
+ * app changed its mind about a file suffix would be the exact breakage this
+ * project exists to prevent.
+ */
+const PACK_ARCHIVE_EXTS: readonly string[] = ['.zip', PACK_EXT]
+
+/** Which archive extension `name` ends with, or null when it is not one. */
+function packArchiveExt(name: string): string | null {
+  const lower = name.toLowerCase()
+  return PACK_ARCHIVE_EXTS.find((ext) => lower.endsWith(ext)) ?? null
+}
+
+/**
+ * True when a zip has a manifest.json at its root.
+ *
+ * Reads the central directory only — adm-zip parses the entry table without
+ * inflating anything, so this costs one small read per candidate file.
+ */
+function zipHoldsAPack(zipPath: string): boolean {
+  try {
+    return new AdmZip(zipPath).getEntries().some((e) => e.entryName === 'manifest.json')
+  } catch {
+    return false
+  }
+}
+
 const RESCAN_DEBOUNCE_MS = 300
 const MAX_DIR_FILES = 2000
 // Folder-first exporter: packs are flat outputDir/CapturePack_YYYY-MM-DD_HHMMSS/
@@ -173,9 +205,18 @@ export function createPackStore(options: { outputDir: string; watch: boolean }):
       const full = path.join(dir, d.name)
       const rel = relPrefix === '' ? d.name : `${relPrefix}/${d.name}`
       try {
-        if (d.isFile() && d.name.toLowerCase().endsWith(PACK_EXT)) {
-          if (!dirStems.has(d.name.slice(0, -PACK_EXT.length).toLowerCase())) {
-            out.push({ id: rel.slice(0, -PACK_EXT.length), path: full, kind: 'zip', mtimeMs: fs.statSync(full).mtimeMs })
+        const ext = d.isFile() ? packArchiveExt(d.name) : null
+        if (ext !== null) {
+          const stem = d.name.slice(0, -ext.length)
+          // A `.zip` is only a pack if it CONTAINS one. `.capturepack` could be
+          // taken on its name alone because nothing else writes that extension;
+          // now that archives are ordinary zips (the name has to say what the
+          // file is), the output folder may hold zips from anywhere, and
+          // indexing a holiday photo album as a capture would be worse than
+          // missing one. The check reads the archive's central directory, not
+          // its contents.
+          if (!dirStems.has(stem.toLowerCase()) && (ext === PACK_EXT || zipHoldsAPack(full))) {
+            out.push({ id: rel.slice(0, -ext.length), path: full, kind: 'zip', mtimeMs: fs.statSync(full).mtimeMs })
           }
         } else if (d.isDirectory()) {
           if (fs.existsSync(path.join(full, 'manifest.json'))) {
@@ -269,7 +310,8 @@ export function createPackStore(options: { outputDir: string; watch: boolean }):
       const stat = fs.statSync(ref)
       if (stat.isDirectory()) return openPack(ref, 'dir', path.basename(ref))
       const base = path.basename(ref)
-      const id = base.toLowerCase().endsWith(PACK_EXT) ? base.slice(0, -PACK_EXT.length) : base
+      const ext = packArchiveExt(base)
+      const id = ext === null ? base : base.slice(0, -ext.length)
       return openPack(ref, 'zip', id)
     }
     throw new Error(

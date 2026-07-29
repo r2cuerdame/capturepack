@@ -60,12 +60,17 @@
           <button id="guideBtn" type="button" data-i18n="settings.guideBtn">Open manual</button>
         </span>
       </div>
-      <div class="row">
-        <span class="label" data-i18n="settings.showTutorial">Show the editor tutorial again</span>
-        <span class="control">
-          <button id="showTutorialBtn" type="button" data-i18n="settings.showTutorialBtn">Show again</button>
-        </span>
-      </div>
+      <!-- A CHECKBOX, BECAUSE IT IS A STATE. This was a "Show again" button,
+           which is the wrong shape twice over: it could only arm the tutorial,
+           never disarm it, and after pressing it there was nothing on screen
+           saying whether it had taken. The setting it writes is a boolean the
+           editor reads and clears when it shows the tutorial, so the box simply
+           shows that boolean — tick it and the next editor explains itself,
+           untick it and it stops. -->
+      <label class="row toggleRow">
+        <span class="label" data-i18n="settings.showTutorial">Show the editor tutorial</span>
+        <input type="checkbox" id="showEditorTutorial" />
+      </label>
       <label class="row toggleRow">
         <span class="label" data-i18n="settings.autoUpdate">Check for updates automatically</span>
         <input type="checkbox" id="autoUpdateCheck" />
@@ -325,6 +330,11 @@
         <div class="rowTop">
           <span class="label" data-i18n="settings.chromeDom">Chrome DOM capture</span>
           <span class="hint" id="chromeVerdict"></span>
+          <!-- The panel polls, but a user who just finished loading the folder
+               in another window wants to ASK, not wait — and this asks harder
+               than the poll does: it re-detects the ID the browser assigned and
+               re-registers the host before re-reading all six checks. -->
+          <button id="chromeRefreshBtn" class="quiet" type="button" data-i18n="settings.chromeRefresh">Refresh</button>
         </div>
         <p class="pluginSummary" data-i18n="settings.chromeSummary">Stores what you clicked — selector, role, text, URL — instead of the pixels it was drawn with.</p>
         <ul id="chromeChecks"></ul>
@@ -341,6 +351,17 @@
               <b data-i18n="settings.chromeStep1">Open your browser's extensions page</b>
               <span class="how" data-i18n="settings.chromeStep1How">The folder's path goes on the clipboard at the same time.</span>
               <button id="chromeExtPageBtn" type="button" data-i18n="settings.chromeStep1Btn">Open and copy the path</button>
+              <!-- BOTH ADDRESSES, ALWAYS VISIBLE. A button that opens a browser
+                   can fail for reasons this app cannot fix (no Chromium browser
+                   where Windows says one is, a policy that blocks the launch),
+                   and when it does the user is left with nothing to act on. The
+                   two strings they would need are short, so they are simply
+                   shown — the button is the shortcut, not the only route. -->
+              <div class="chromePaths">
+                <code id="chromeExtUrl">chrome://extensions</code>
+                <code id="chromeExtDir"></code>
+                <span class="how" id="chromeOpenFailed" hidden data-i18n="settings.chromeOpenFailed">No Chromium browser could be started — paste the address above into your browser instead.</span>
+              </div>
             </div>
           </li>
           <li id="chromeStep2">
