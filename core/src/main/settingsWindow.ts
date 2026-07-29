@@ -25,6 +25,8 @@ import type {
   SettingsGetResult,
   SettingsSetResult,
   SettingsStatusResult,
+  StoragePurgeResult,
+  StorageUsage,
 } from '../shared/ipc'
 import { resolveLanguage } from '../shared/i18n'
 import type { Settings } from '../shared/types'
@@ -40,6 +42,120 @@ import { setAutoUpdateCheck } from './updater'
 
 /** The online manual (GOAL "First-Run Tutorial"). */
 const GUIDE_URL = 'https://capturepack.dev/guide'
+
+/** The ages the Storage row offers, and the only ones a purge will act on. */
+const PURGE_AGES_DAYS: readonly number[] = [1, 7, 30]
+
+/** A pack folder, or an archive sitting beside one, with its size and age. */
+interface StoredPack {
+  path: string
+  bytes: number
+  mtimeMs: number
+}
+
+/**
+ * Every CapturePack in the output folder — and NOTHING else in it.
+ *
+ * A folder counts only when it holds a manifest.json, and an archive only when
+ * its name matches one of ours. The output folder is a place the user also
+ * keeps their own things (this machine's is the Desktop), and a storage tool
+ * that measured or deleted by "everything in this directory" would be a
+ * catastrophe waiting for its first Downloads folder.
+ */
+function listStoredPacks(outputDir: string): StoredPack[] {
+  let entries: fs.Dirent[]
+  try {
+    entries = fs.readdirSync(outputDir, { withFileTypes: true })
+  } catch {
+    return []
+  }
+  const packs: StoredPack[] = []
+  for (const entry of entries) {
+    const full = path.join(outputDir, entry.name)
+    try {
+      if (entry.isDirectory()) {
+        if (!fs.existsSync(path.join(full, 'manifest.json'))) continue
+        packs.push({ path: full, bytes: dirBytes(full), mtimeMs: fs.statSync(full).mtimeMs })
+      } else if (entry.isFile() && /\.(zip|capturepack)$/i.test(entry.name)) {
+        const stat = fs.statSync(full)
+        packs.push({ path: full, bytes: stat.size, mtimeMs: stat.mtimeMs })
+      }
+    } catch {
+      // Vanished or unreadable mid-scan: not counted, not deleted.
+    }
+  }
+  return packs
+}
+
+/** Recursive size, best effort — an unreadable child costs its own bytes only. */
+function dirBytes(dir: string): number {
+  let total = 0
+  let entries: fs.Dirent[]
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return 0
+  }
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name)
+    try {
+      if (entry.isDirectory()) total += dirBytes(full)
+      else total += fs.statSync(full).size
+    } catch {
+      // Skip.
+    }
+  }
+  return total
+}
+
+function storageUsage(outputDir: string): StorageUsage {
+  const packs = listStoredPacks(outputDir)
+  const now = Date.now()
+  return {
+    totalBytes: packs.reduce((sum, p) => sum + p.bytes, 0),
+    totalPacks: packs.length,
+    olderThan: PURGE_AGES_DAYS.map((days) => {
+      const cutoff = now - days * 86_400_000
+      const old = packs.filter((p) => p.mtimeMs < cutoff)
+      return { days, packs: old.length, bytes: old.reduce((sum, p) => sum + p.bytes, 0) }
+    }),
+  }
+}
+
+/**
+ * Moves packs older than `days` to the Recycle Bin.
+ *
+ * TRASH, NEVER UNLINK. These are captures the user chose to keep, and a wrong
+ * click here would otherwise be unrecoverable. shell.trashItem is what makes
+ * this a decision the user can take back — and if the shell refuses, the pack
+ * stays where it is rather than being removed some other way.
+ */
+async function purgeOlderThan(outputDir: string, days: number): Promise<StoragePurgeResult> {
+  const cutoff = Date.now() - days * 86_400_000
+  const doomed = listStoredPacks(outputDir).filter((p) => p.mtimeMs < cutoff)
+  let packsDeleted = 0
+  let bytesFreed = 0
+  let firstError: string | null = null
+  for (const pack of doomed) {
+    try {
+      await shell.trashItem(pack.path)
+      packsDeleted += 1
+      bytesFreed += pack.bytes
+    } catch (err) {
+      if (firstError === null) firstError = err instanceof Error ? err.message : String(err)
+    }
+  }
+  logInfo(
+    `[storage] purge older than ${String(days)}d: ${String(packsDeleted)} of ${String(doomed.length)} pack(s) ` +
+      `to the Recycle Bin, ${String(Math.round(bytesFreed / 1_048_576))} MB`,
+  )
+  return {
+    ok: firstError === null,
+    packsDeleted,
+    bytesFreed,
+    ...(firstError === null ? {} : { error: firstError }),
+  }
+}
 
 /** The address the user needs, named once so the UI and the launcher agree. */
 const EXTENSIONS_URL = 'chrome://extensions'
@@ -357,6 +473,28 @@ export function registerSettingsIpc(live: Settings, hooks: SettingsIpcHooks = {}
     }
     return chromeStatus()
   })
+
+  // Storage (GOAL "Settings GUI"): the app that fills the folder is the one
+  // that should be able to empty it. Both handlers walk the SAME set of
+  // entries — a pack is a folder holding a manifest, or an archive beside one —
+  // so nothing else the user keeps in that folder is ever counted or touched.
+  ipcMain.handle(IPC.settingsStorageUsage, async (): Promise<StorageUsage> => {
+    return storageUsage(live.outputDir)
+  })
+
+  ipcMain.handle(
+    IPC.settingsStoragePurge,
+    async (_event, days: unknown): Promise<StoragePurgeResult> => {
+      const olderThanDays = typeof days === 'number' && Number.isFinite(days) ? days : NaN
+      // Never zero, never negative: "delete everything older than 0 days" is
+      // "delete everything", and that is not what any of these three buttons
+      // say. A value this function does not recognise deletes nothing.
+      if (!(olderThanDays >= 1)) {
+        return { ok: false, packsDeleted: 0, bytesFreed: 0, error: 'unsupported age' }
+      }
+      return purgeOlderThan(live.outputDir, olderThanDays)
+    },
+  )
 
   ipcMain.on(IPC.settingsChromeCopyPath, () => {
     const dir = extensionDir()

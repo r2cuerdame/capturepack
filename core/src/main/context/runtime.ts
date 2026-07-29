@@ -389,7 +389,14 @@ export function logContextCost(): void {
       // that hid behind a healthy-looking sample count, so the count is split.
       `${lane.frameStamped} frame-stamped / ${lane.clockStamped} clock-stamped` +
       (lane.converted > 0 ? ` / ${lane.converted} converted onto the frame clock` : '') +
-      (lane.tickLagMs === null ? '' : `, tick lag ${lane.tickLagMs} ms`) +
+      // SIGNED, and the sign is the whole point: negative means the host had
+      // already looked before the frame's tick reached it, positive means it
+      // looked after. Either way it is the distance between the picture and the
+      // rectangle filed against it, and it is now folded into the sample's time
+      // rather than left for the box to wear as displacement.
+      (lane.tickLagMs === null
+        ? ''
+        : `, tick lag ${lane.tickLagMs > 0 ? '+' : ''}${lane.tickLagMs} ms (folded into the sample time)`) +
       (lane.frameAgeMs === null ? '' : `, frame already ${lane.frameAgeMs} ms old`),
   )
   if (!lane.running) {

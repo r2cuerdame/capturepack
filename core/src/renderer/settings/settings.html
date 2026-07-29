@@ -37,6 +37,28 @@
           <button id="openOutputBtn" type="button" data-i18n="settings.openBtn">Open</button>
         </div>
       </div>
+      <!-- Storage. Packs carry video of every screen, so the folder grows fast
+           and silently — and the app that filled it is the one that should be
+           able to empty it.
+
+           DELETION IS NOT A DROPDOWN. Every button below says how many packs
+           and how many bytes it is about to remove BEFORE it removes anything,
+           and asks once. There is no automatic expiry setting: a capture is
+           evidence someone chose to keep, and a background job that quietly
+           deletes evidence is not a feature this tool is going to have. Packs
+           go to the Recycle Bin, never to unlink. -->
+      <div class="row rowCol">
+        <div class="rowTop">
+          <span class="label" id="storageLabel" data-i18n="settings.storage">Storage</span>
+          <span class="hint" id="storageTotal"></span>
+        </div>
+        <div class="pathRow" id="storageRow">
+          <button class="quiet" type="button" data-purge="1" data-i18n="settings.purge1">Delete older than 1 day</button>
+          <button class="quiet" type="button" data-purge="7" data-i18n="settings.purge7">Older than 7 days</button>
+          <button class="quiet" type="button" data-purge="30" data-i18n="settings.purge30">Older than 30 days</button>
+        </div>
+        <span class="how" id="storageResult" hidden></span>
+      </div>
       <!-- Automatic, and not always the folder: what a pack is used for next is
            usually a sentence handed to an LLM, so that is what this copies by
            default. Nothing has to be copied by hand after a save. -->

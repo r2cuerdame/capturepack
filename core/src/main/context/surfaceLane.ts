@@ -215,6 +215,9 @@ export class SurfaceLane {
   private clockDecided = false
   /** Core's clock when the last tick was sent — the other end of the round trip. */
   private tickCoreMs = 0
+  // The last time actually written into the ring, so a tick whose round trip
+  // was shorter than its predecessor's cannot file a sample out of order.
+  private lastAppendedMs = -Infinity
   private tickFrameAgeMs = 0
   private readonly frameAgeMs: number[] = []
   private readonly tickLagMs: number[] = []
@@ -492,7 +495,16 @@ export class SurfaceLane {
       // lag, in milliseconds, measured rather than assumed. It is the number
       // that decides whether anything is left to fix here.
       const takenAt = this.offset.toCoreMs(hostMs)
-      const lag = takenAt === null ? 0 : Math.max(0, takenAt - this.tickCoreMs)
+      // SIGNED, and the clamp that used to be here is why this always read 0.
+      //
+      // `Math.max(0, ...)` was hiding the entire measurement. The host does not
+      // only answer LATE — when main reads a sample the host had already taken,
+      // it answers EARLY, and that case is the common one. Clamping turned every
+      // negative reading into a zero, the median came out 0, and the log
+      // reported "tick lag 0 ms" for a round trip nobody had ever seen the size
+      // of. A number that cannot be negative is not a measurement of a
+      // difference.
+      const lag = takenAt === null ? 0 : takenAt - this.tickCoreMs
       if (takenAt !== null) {
         // The two clocks, read at one instant. Refreshed every tick so the
         // newest mapping is the one in use.
@@ -503,19 +515,40 @@ export class SurfaceLane {
       }
       this.frameAgeMs.push(this.tickFrameAgeMs)
       if (this.frameAgeMs.length > 200) this.frameAgeMs.shift()
-      // THE SAMPLE BELONGS TO THE FRAME THAT ASKED FOR IT (#108).
+      // THE SAMPLE BELONGS TO THE MOMENT IT WAS TAKEN, NOT TO THE FRAME THAT
+      // ASKED FOR IT.
       //
-      // The round trip is real — the request crosses two processes before the
-      // host looks — and the desk moves while it does. It is NOT folded into
-      // the timestamp: this sample answers the question that frame asked, and
-      // filing it a few milliseconds later would put it between two frames,
-      // where no picture exists and every reader has to interpolate to use it.
-      // One frame, one observation, one number.
+      // This filed it under `frameMs` and defended the choice: one frame, one
+      // observation, one number. The argument was wrong, and "창을 움직였을때
+      // 따라 움직이는 싱크가 맞지 않아" is what it looks like from the outside.
       //
-      // The cost is not hidden, it is measured: `tickLagMs` above is how late
-      // the host was, and the log states it. That is the thing to make smaller,
-      // and making it smaller is a different job from writing it down.
-      this.append(frameMs, rawWindows)
+      // The host does not read the desk at the instant the frame was captured.
+      // The request crosses two processes first, and the answer may even be a
+      // rectangle the host measured before the request arrived. Either way the
+      // window is somewhere else by then — and while the user is DRAGGING a
+      // window, "somewhere else" is tens of pixels. Writing that rectangle down
+      // under the frame's time says the window was at position B in a picture
+      // that shows it at position A. The box does not lag or lead by accident;
+      // it is displaced by exactly `lag` times the drag speed, which is why it
+      // looks perfect on a still desktop and wrong the moment anything moves.
+      //
+      // So the observation goes where it was actually made: `frameMs + lag`,
+      // the read instant expressed on the frame clock (frameClockOffsetMs is
+      // tickCoreMs - frameMs, so takenAt - offset is exactly this). A reader
+      // asking "where was this window when that frame was shown" now compares
+      // against a sample whose time means what the reader thinks it means.
+      //
+      // Landing between two frames is FINE and is the honest outcome: the ring
+      // records when Core looked, and the nearest-sample lookup (shared/track.ts)
+      // was already built to answer from real observations at whatever times
+      // they carry. It never needed them pinned to frame boundaries.
+      //
+      // Monotonic by construction: lag varies from tick to tick, so a large
+      // negative one could otherwise file a sample before its predecessor and
+      // put the ring out of order.
+      const takenAtFrameMs = Math.max(this.lastAppendedMs, frameMs + lag)
+      this.lastAppendedMs = takenAtFrameMs
+      this.append(takenAtFrameMs, rawWindows)
       return
     }
     const timeMs = this.offset.toCoreMs(hostMs)

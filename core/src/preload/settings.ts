@@ -2,6 +2,8 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../shared/ipc'
 import type {
+  StoragePurgeResult,
+  StorageUsage,
   ChromeIntegrationStatus,
   SettingsGetResult,
   SettingsPatch,
@@ -43,6 +45,12 @@ contextBridge.exposeInMainWorld('settingsBridge', {
   // the panel needs to know so it can show the address to type instead.
   chromeOpenExtensionsPage(): Promise<string | null> {
     return ipcRenderer.invoke(IPC.settingsChromeOpenExtensionsPage) as Promise<string | null>
+  },
+  storageUsage(): Promise<StorageUsage> {
+    return ipcRenderer.invoke(IPC.settingsStorageUsage) as Promise<StorageUsage>
+  },
+  storagePurge(days: number): Promise<StoragePurgeResult> {
+    return ipcRenderer.invoke(IPC.settingsStoragePurge, days) as Promise<StoragePurgeResult>
   },
   chromeCopyPath(): void {
     ipcRenderer.send(IPC.settingsChromeCopyPath)

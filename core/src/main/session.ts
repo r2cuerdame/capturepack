@@ -828,6 +828,12 @@ async function runFlow(settings: Settings): Promise<void> {
         windowMode,
       }
       editor.webContents.send(IPC.editorInit, init)
+      // MAXIMIZED, not merely windowed. The editor shows a whole desktop and
+      // then asks the user to find something in it; opening at a remembered
+      // fraction of the screen makes that harder for no gain. It stays a REAL
+      // window — un-maximize, move and resize all still work — and where the
+      // user leaves it is remembered exactly as before.
+      editor.maximize()
       editor.show()
       // The dump was not back in time: hand it over the moment it is, rather
       // than throwing away a payload the capture already paid for. The editor
@@ -1510,6 +1516,12 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
     }
     if (editor.isDestroyed()) return
     editor.webContents.send(IPC.editorInit, init)
+    // MAXIMIZED, not merely windowed. The editor shows a whole desktop and
+    // then asks the user to find something in it; opening at a remembered
+    // fraction of the screen makes that harder for no gain. It stays a REAL
+    // window — un-maximize, move and resize all still work — and where the
+    // user leaves it is remembered exactly as before.
+    editor.maximize()
     editor.show()
     })().catch((err: unknown) => {
       // Rule 1 of object data: it may never break anything else. An editor that
@@ -2074,7 +2086,17 @@ function openingWindowedBounds(
  */
 function createEditorWindow(bounds: EditorWindowBounds, settings: Settings): EditorWindow {
   const openingWorkArea = screen.getDisplayMatching(bounds).workArea
-  const mode: EditorWindowMode = settings.editorWindowMode === 'windowed' ? 'windowed' : 'fullscreen'
+  // ONE MODE, AND IT IS A MAXIMIZED WINDOW.
+  //
+  // The fullscreen overlay is gone. It was the default, it was alwaysOnTop,
+  // and it could not be moved off whatever the user wanted to look at behind
+  // it — a strange thing for a tool whose job is explaining something that is
+  // on the screen. Keeping both also meant keeping two layouts honest against
+  // every change, for a choice nobody needed to make.
+  //
+  // A stored 'fullscreen' from an earlier version reads as 'windowed'
+  // (settings.ts migrates it), so this can only ever be one value now.
+  const mode: EditorWindowMode = 'windowed'
   // Resolved even when opening fullscreen: a later ⧉ / F11 has to land
   // somewhere sane too.
   let windowedBounds = openingWindowedBounds(settings.editorWindowBounds, openingWorkArea)

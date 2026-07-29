@@ -11,7 +11,7 @@
 import { app } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import type { UpdaterStatusPayload } from '../shared/ipc'
-import { logError } from './log'
+import { logError, logInfo } from './log'
 
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000
 // How long "You're up to date" stays on the tray item after a finished check
@@ -121,12 +121,27 @@ export function initUpdater(opts: {
     setStatus({ state: 'downloaded', version: info.version })
   })
   autoUpdater.on('error', (err) => {
+    const message = err instanceof Error ? err.message : String(err)
+    // AN EMPTY RELEASES PAGE IS NOT A FAILURE.
+    //
+    // electron-updater raises "No published versions on GitHub" as an error,
+    // and the tray dutifully reported "업데이트 확인 실패" — on a project that
+    // has simply not cut a release yet. The check reached GitHub, GitHub
+    // answered, and the answer was "nothing here". That is the definition of
+    // up to date, and calling it a failure trains the user to ignore the one
+    // message that should mean something when an update really cannot be
+    // fetched.
+    if (/no published versions/i.test(message)) {
+      logInfo('[updater] no releases published yet — nothing to update to')
+      setStatus({ state: 'idle' })
+      return
+    }
     // Log and report only — a failed check or download leaves the running
     // version untouched and the next scheduled check will retry. It goes to the
     // log file too (issue #60): an updater that quietly fails for weeks is
     // otherwise indistinguishable from one that has nothing to do.
     logError('[updater] check/download failed:', err)
-    setStatus({ state: 'error', message: err instanceof Error ? err.message : String(err) })
+    setStatus({ state: 'error', message })
   })
 
   const check = (): void => {

@@ -114,10 +114,7 @@ const textEditor = el<HTMLInputElement>('textEditor')
 const titleInput = el<HTMLInputElement>('titleInput')
 const noteInput = el<HTMLInputElement>('noteInput')
 const replayChip = el<HTMLSpanElement>('replayChip')
-const colorBtn = el<HTMLButtonElement>('colorBtn')
-const colorSwatch = el<HTMLSpanElement>('colorSwatch')
 const exportBtn = el<HTMLButtonElement>('exportBtn')
-const windowModeBtn = el<HTMLButtonElement>('windowModeBtn')
 const titleBarLabel = el<HTMLSpanElement>('titleBarLabel')
 const boxHeader = el<HTMLDivElement>('boxHeader')
 const numberBtn = el<HTMLButtonElement>('numberBtn')
@@ -508,7 +505,6 @@ function applyWindowMode(mode: EditorWindowMode): void {
   // gaps become draggable) only while the editor is a window — the fullscreen
   // overlay has nothing to move, so it carries no drag region at all.
   document.body.dataset['windowMode'] = mode
-  windowModeBtn.setAttribute('aria-pressed', String(mode === 'windowed'))
   // The window size just changed under us; the resize event does this too, but
   // not every platform guarantees one for a fullscreen transition.
   layout()
@@ -1238,7 +1234,6 @@ function syncTrimDropChip(): void {
 
 function cycleColor(): void {
   state.cycleColor()
-  colorSwatch.style.background = state.color
 }
 
 /** A pointer position in BOARD units, or null before the board exists. */
@@ -3503,11 +3498,6 @@ window.addEventListener('keydown', (e) => {
   // answered FIRST — before the inline-input, unsaved-bar and typing gates
   // below. The inline inputs stopPropagation their keydowns, so they forward
   // this one explicitly (see their handlers).
-  if (e.key === 'F11') {
-    e.preventDefault()
-    toggleWindowMode()
-    return
-  }
   // F1 opens/closes the shortcut sheet (GOAL "Editor Chrome"), from anywhere
   // and for the same reason F11 is answered here: it is never an editing key,
   // and "press F1 for the shortcuts" has to hold while typing a description.
@@ -3670,9 +3660,6 @@ window.addEventListener('keydown', (e) => {
     }
   }
   switch (e.key.toLowerCase()) {
-    case 'c':
-      cycleColor()
-      break
     case 'delete':
     case 'backspace':
       deleteSelected()
@@ -3726,16 +3713,8 @@ window.addEventListener('blur', () => {
 // Top bar controls
 // ---------------------------------------------------------------------------
 
-colorBtn.addEventListener('click', () => {
-  cycleColor()
-  colorBtn.blur()
-})
 exportBtn.addEventListener('click', () => void doExport())
 
-windowModeBtn.addEventListener('click', () => {
-  windowModeBtn.blur() // keyboard shortcuts belong to the canvas, not this button
-  toggleWindowMode()
-})
 
 // ---------------------------------------------------------------------------
 // Timeline bar — the board's ONE clock (GOAL "Multi-Monitor Support"): every
@@ -4138,7 +4117,6 @@ window.editorBridge.onWindowMode((mode) => {
   applyWindowMode(mode === 'windowed' ? 'windowed' : 'fullscreen')
 })
 
-colorSwatch.style.background = state.color
 // The zoom control reads true from the first paint, not from the markup's
 // placeholder value: an editor that has not loaded a board yet is at Fit.
 syncZoomUi()

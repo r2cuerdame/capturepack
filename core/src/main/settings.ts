@@ -71,7 +71,7 @@ function defaultSettings(): Settings {
     showEditorTutorial: true,
     // The fullscreen overlay stays the default editor (GOAL "Editor Window
     // Mode"); windowed mode is opt-in and then remembered with its rectangle.
-    editorWindowMode: 'fullscreen',
+    editorWindowMode: 'windowed',
     editorWindowBounds: null,
     mcpEnabled: true,
     mcpPort: 39393,
@@ -448,9 +448,10 @@ function mergeSettings(base: Settings, raw: Record<string, unknown>): Settings {
       typeof raw.showEditorTutorial === 'boolean'
         ? raw.showEditorTutorial
         : base.showEditorTutorial,
-    editorWindowMode: isEditorWindowMode(raw.editorWindowMode)
-      ? raw.editorWindowMode
-      : base.editorWindowMode,
+    // The fullscreen overlay was removed; a settings file written before that
+    // still says 'fullscreen' and must not open an editor in a mode that no
+    // longer exists. Read as 'windowed', which is now the only one.
+    editorWindowMode: 'windowed',
     // Copied field by field: whatever else a hand-edited (or newer) settings.json
     // hung on the object must never ride into the window bounds the editor
     // applies.

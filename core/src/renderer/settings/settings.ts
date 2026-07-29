@@ -10,6 +10,8 @@
 // because both move while the window is open.
 import type {
   ChromeIntegrationStatus,
+  StoragePurgeResult,
+  StorageUsage,
   McpStatus,
   SettingsDisplayOption,
   SettingsGetResult,
@@ -41,6 +43,8 @@ interface SettingsBridge {
   chromeInstall(extensionId: string): Promise<ChromeIntegrationStatus>
   chromeUninstall(): Promise<ChromeIntegrationStatus>
   chromeOpenFolder(): void
+  storageUsage(): Promise<StorageUsage>
+  storagePurge(days: number): Promise<StoragePurgeResult>
   chromeOpenExtensionsPage(): Promise<string | null>
   chromeCopyPath(): void
   chromeDetect(): Promise<ChromeIntegrationStatus>
@@ -798,6 +802,90 @@ chromeDetectBtn.addEventListener('click', () => {
   })()
 })
 
+// ---------------------------------------------------------------------------
+// Storage: how much the output folder holds, and getting some of it back.
+// ---------------------------------------------------------------------------
+
+const storageTotal = el<HTMLElement>('storageTotal')
+const storageRow = el<HTMLElement>('storageRow')
+const storageResult = el<HTMLElement>('storageResult')
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1_048_576) return `${String(Math.round(bytes / 1024))} KB`
+  if (bytes < 1_073_741_824) return `${String(Math.round(bytes / 1_048_576))} MB`
+  return `${(bytes / 1_073_741_824).toFixed(1)} GB`
+}
+
+/**
+ * Each button states its OWN consequence, and is disabled when it has none.
+ *
+ * A row of three ages where one of them would delete forty packs and another
+ * would delete nothing looks identical until it is pressed. These read the
+ * counts back from the same walk the delete will use, so the label is a
+ * promise rather than a category.
+ */
+function renderStorage(usage: StorageUsage): void {
+  storageTotal.textContent = t('settings.storageTotal', {
+    packs: String(usage.totalPacks),
+    size: formatBytes(usage.totalBytes),
+  })
+  for (const btn of storageRow.querySelectorAll<HTMLButtonElement>('[data-purge]')) {
+    const days = Number(btn.dataset['purge'])
+    const bucket = usage.olderThan.find((o) => o.days === days)
+    const packs = bucket?.packs ?? 0
+    btn.disabled = packs === 0
+    btn.title = packs === 0
+      ? t('settings.purgeNone')
+      : t('settings.purgeCount', { packs: String(packs), size: formatBytes(bucket?.bytes ?? 0) })
+  }
+}
+
+function refreshStorage(): void {
+  void bridge
+    .storageUsage()
+    .then(renderStorage)
+    .catch(() => {
+      storageTotal.textContent = ''
+    })
+}
+
+for (const btn of storageRow.querySelectorAll<HTMLButtonElement>('[data-purge]')) {
+  btn.addEventListener('click', () => {
+    void (async () => {
+      const days = Number(btn.dataset['purge'])
+      // ASK, WITH NUMBERS, EVERY TIME. Deleting captures is the one thing this
+      // window does that the user cannot undo from here, so it never happens
+      // on a single click and never happens without saying how many packs and
+      // how many bytes are going. The counts are re-read first: the panel may
+      // have been open for a while, and a capture taken since must be counted.
+      const usage = await bridge.storageUsage().catch(() => null)
+      if (usage === null) return
+      renderStorage(usage)
+      const bucket = usage.olderThan.find((o) => o.days === days)
+      if (bucket === undefined || bucket.packs === 0) return
+      const ok = window.confirm(
+        t('settings.purgeConfirm', {
+          packs: String(bucket.packs),
+          size: formatBytes(bucket.bytes),
+          days: String(days),
+        }),
+      )
+      if (!ok) return
+      btn.disabled = true
+      const result = await bridge.storagePurge(days).catch(() => null)
+      storageResult.hidden = false
+      storageResult.textContent =
+        result === null || !result.ok
+          ? t('settings.purgeFailed')
+          : t('settings.purgeDone', {
+              packs: String(result.packsDeleted),
+              size: formatBytes(result.bytesFreed),
+            })
+      refreshStorage()
+    })()
+  })
+}
+
 chromeManualToggle.addEventListener('click', () => {
   chromeManual.hidden = !chromeManual.hidden
 })
@@ -1135,7 +1223,11 @@ function pollWhileStarting(): void {
 // again, so that is when they are re-checked.
 window.addEventListener('focus', () => {
   void refreshStatus()
+  // The folder grew while this window was in the background if a capture ran.
+  refreshStorage()
 })
+
+refreshStorage()
 
 // The "?" affordance (issue #57): reveal the long explanation of what the
 // plugin does and what it costs, right under its row.

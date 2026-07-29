@@ -192,6 +192,12 @@ export const IPC = {
   historyCreateZip: 'history:create-zip',
   // history window -> main: open the pack folder in the file manager
   historyOpenFolder: 'history:open-folder',
+  // settings -> main (invoke): how much the output folder is holding, and what
+  // an "older than N days" purge WOULD remove. Read-only; asked before every
+  // delete so the confirmation can state real numbers.
+  settingsStorageUsage: 'settings:storage-usage',
+  // settings -> main (invoke): move packs older than N days to the Recycle Bin.
+  settingsStoragePurge: 'settings:storage-purge',
   // history window -> main: open Settings. History is the window a user lingers
   // in, so it is the one place a settings change is wanted without a trip back
   // to the tray; main owns the window, as it does for every other opener.
@@ -1047,6 +1053,29 @@ export interface UiaPluginStatus {
  * (issues #54, #57). Returned by settings:get, re-fetched by settings:status,
  * and returned again by settings:mcp-restart so one code path renders it.
  */
+/**
+ * What the output folder holds, and what an "older than N days" purge would
+ * take with it.
+ *
+ * The per-age counts are computed alongside the total in ONE walk of the
+ * folder, so the three buttons can each state their own consequence without
+ * three separate scans — and so the number the user is shown is from the same
+ * moment as the number the delete will act on.
+ */
+export interface StorageUsage {
+  totalBytes: number
+  totalPacks: number
+  /** Keyed by age in days: what deleting everything older than that removes. */
+  olderThan: { days: number; packs: number; bytes: number }[]
+}
+
+export interface StoragePurgeResult {
+  ok: boolean
+  packsDeleted: number
+  bytesFreed: number
+  error?: string
+}
+
 export interface SettingsStatusResult {
   mcp: McpStatus
   // The settings the RUNNING MCP server actually honors — a snapshot taken at
