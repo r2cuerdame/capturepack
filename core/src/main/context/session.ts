@@ -29,7 +29,7 @@ import {
   mintSurfaceIds,
   surfaceIdOf,
   surfaceSamplesOf,
-  windowCandidatesOf,
+  windowCandidatesFromSurfaces,
 } from './buffer'
 import type { ContextObservation } from './buffer'
 import type { EditorUiaWindow } from '../../shared/ipc'
@@ -505,11 +505,15 @@ export class ContextSession {
     // Core's own WINDOW rung, minted from the surface sample rather than from
     // any provider: the floor of the ladder, and the reason "no candidate at
     // all" only ever happens on bare desktop (#66 step 8).
-    const sample = restored.sample
+    // FROM THE RESTORED SURFACES, not from an observation looked up by its own
+    // time (#111). `restored.surfaces` is what every other line here is built
+    // on and what the comment at the top of this method insists on; minting the
+    // window rung from `observationAt(sample.tMs)` instead let the hover
+    // outline and the box that follows a window read two different rectangles
+    // for one window at one moment — measured 1443x953 against 1461x962, the
+    // DWM extended frame against GetWindowRect's invisible resize border.
     const windowCandidates =
-      sample === null
-        ? []
-        : windowCandidatesOf(this.observationAt(sample.tMs), this.ids, restored.accuracy)
+      restored.sample === null ? [] : windowCandidatesFromSurfaces(surfaces, restored.accuracy)
     // 5b. THE STALENESS CEILING (design GAP 16). Deleting the v0.1.7 gate
     //     without this would only move the lie from "picking is off" to "here is
     //     a rectangle from nine seconds ago": a candidate whose covering
@@ -570,10 +574,6 @@ export class ContextSession {
     return hits.filter((candidate) => candidate.accuracy.coverage === 'covered')
   }
 
-  private observationAt(tMs: number): ContextObservation {
-    const found = this.observations.find((o) => o.tMs === tMs)
-    return found ?? { tMs, windows: [], elements: [] }
-  }
 
   /**
    * One slice per captured display, each in THAT display's snapshot pixel space
