@@ -1,0 +1,194 @@
+# HANDOFF — CapturePack, 2026-07-29
+
+Written while there was still room to write it properly. Read this top to bottom
+before touching anything; the last section is the one that matters most.
+
+## Where things stand
+
+`main` is at **rc.34** (`ed13896`), 140-odd commits ahead of `origin/main`.
+**Nothing has been pushed since v0.1.7.** The remote's newest tag is v0.1.7; the
+local `v0.2.0` tag was never pushed, and its code is already merged into main.
+
+The plan the owner stated: **fix everything, test it bundled, then release
+0.3.0 — on their acceptance, not before.** Do not push or tag without an
+explicit go-ahead. Pushing a `v*` tag triggers `.github/workflows/release.yml`,
+which publishes an installer.
+
+`CHANGELOG.md` already carries a drafted `## 0.3.0` entry. Update it as things
+land; do not date-stamp a release that has not happened.
+
+### Verification floor
+
+Six checks, all green as of rc.34. Run every one of them before claiming
+anything works:
+
+```
+cd core
+npx tsc --noEmit
+npm run check:sync        surface ring vs a synthetic host, red/green proven
+npm run check:delta       the host's delta protocol rebuilds the whole desk
+npm run check:dom         the Chrome DOM rung lands on the element
+npm run check:controls    lane A tracks, versions, and admits death
+npm run check:identity    a pack is a pack, not any folder with a manifest.json
+npm run check:keyframes   every annotation keeps at least one still
+```
+
+Builds go to a fresh output dir so electron-builder cannot fight a file lock:
+`npx electron-builder --win "-c.directories.output=dist-rcNN"`. Every `dist-rc*`
+is gitignored.
+
+## What is running right now (check these first)
+
+Four efforts were in flight when this was written. Each is in its own git
+worktree with a local commit; **none is pushed and none is merged**.
+
+| what | where |
+|---|---|
+| manual-box POSITION keyframes | agent worktree, branch reported on completion |
+| hover drawn in the wrong place + small elements unpickable | agent worktree |
+| box numbers: creation order + manual 1-9 | agent worktree |
+| adversarial sweep of everything written today (`2221328..HEAD`) | workflow, 6 dimensions x 3 refutation lenses |
+
+`git worktree list` and `git branch --no-merged main` will show what survived.
+Merge only what you have verified yourself — several agent findings today were
+plausible and wrong.
+
+## What is NOT done
+
+### 1. Seven fixes recovered but not applied
+
+`.review-archive/codex-review-0.3.0.patch` (committed, 77 KB, 25 files) is the
+**only surviving copy** of an independent review's work. Its worktree's git
+index was locked, so it was never committed there; a checkout or cleanup in
+`C:\Users\recue\orca\workspaces\capturepack\penguin` destroys it.
+
+Applied to main already: the `ft` round-trip format, the missing `</div>`, and
+`lifetimeFrom` keeping its anchor. **Not applied, verified still open:**
+
+- **Fixed-display mode gives lane S no tick source at all.** `focused` is
+  computed per recorder from *the display under the cursor right now*
+  (`core/src/main/capture.ts` `focusedDisplayIdForTicks`), so in fixed mode with
+  the cursor elsewhere, no renderer ever ticks. Unplugging the owning monitor
+  has the same effect for the rest of the session, because ownership is not part
+  of `recorderSignature`.
+- **The pack clock and the ring are on two different renderers' `performance.now()`.**
+  Each recorder is its own process with its own `timeOrigin`. Fix is four edits
+  that must land together (normalise with `performance.timeOrigin` in the
+  renderer, convert through `SessionClock.fromWallClockMs` in
+  `context/runtime.ts`); half of it is worse than none. **Depends on the `ft`
+  round-trip fix already on main — do not revert that.**
+- **The extension treats its own outbound write as a completed handshake.**
+  `extensions/chrome/background.js` sets `handshakeAt` right after
+  `port.postMessage`, which proves only that Chrome queued bytes. That makes the
+  one-minute liveness alarm's `handshakeAt === null` branch dead code — the
+  other half of "재설치할때마다 리로드 안하면 연결이 안돼". Set it only inside an
+  `onMessage` handler that validates the app's hello.
+- **Settings says Chrome "connected" forever after the first handshake of the
+  run.** `domBridge.ts` clears `extensionVersion` only at app quit and has no
+  `socket.on('close')`. Track live handshaken sockets in a Set instead.
+- Purge counts one scan and deletes another (a capture finishing during the
+  confirm dialog is deleted although the user never saw it), and the IPC accepts
+  any age rather than the four the panel offers.
+- Enter right after a scrub can export the previous frame's pixels under the new
+  `snapshot_t_ms`: `whenSettled()` resolves on `seeked`, but a frame-driven
+  renderer has not drawn yet.
+- A negative `NativeWindowHandle` (HWND bit 31) makes `uia-dump.ps1`'s
+  visible-window filter miss, silently dropping every control in that window.
+- Plus: DWM insets learned after a drag, DOM/UIA racing whole-manifest writes,
+  DOM retention not following a live replay-length change, history archive
+  twins, aggregate render state going terminal early, a clipboard failure
+  reported as a failed save, and the updater's "no published versions" state.
+
+Suggested order: the purge/identity pair first (destructive), then the two clock
+changes as one unit gated on `check:sync`, then the independent single-file ones.
+
+### 2. Blocked on the owner
+
+The Chrome extension card shows a red **오류** in `chrome://extensions`. Nobody
+has read the error text — it needs a human at that screen. Extension 0.1.6 added
+an armed badge and `picker.failed` diagnostics; suspect those first.
+
+### 3. Designed, measured, not built
+
+Per-app control ledger plus a pool of 2-3 tracker processes with a quarantine
+for slow offenders. The measurements that shape it are in GOAL.md: threads give
+1.26x, separate processes 1.43x, and a PowerShell tracker costs 92-123 MB, so
+1:1 per app needs a lighter host before it is affordable.
+
+## How this project works
+
+**GOAL.md is the living spec.** Designs and decisions go there with the
+measurements behind them, in prose, before or with the code. It is long on
+purpose. Read the sections numbered `#110` and `#111` before touching the
+context lane — they are the record of a week-long bug and four withdrawn
+claims.
+
+**Measure before you claim.** This is enforced, repeatedly and unhappily. Today
+alone: "25% of samples collide" was an artifact of counting across coordinate
+spaces; a p90 was reported from a median that hid the failure; a jitter that
+could not invert passed its own red test; three agents' plausible findings were
+refuted on verification. If a number cannot be produced, say the claim is
+unverified.
+
+**A red test that passes proves nothing.** Every regression check here was made
+to fail against the old code before it was trusted.
+
+**The record shows what was observed, never what was inferred.** Interpolation
+between samples shipped for one release candidate, measured worse, and was
+removed by the owner's explicit decision. Do not reintroduce it for observed
+data. Authored positions (a human placing a manual box) are a different
+category and may interpolate — that distinction is live work.
+
+**Comments explain WHY, with the evidence.** Match the density of what is
+already there. A comment that says what the next line does is noise; one that
+records the measurement that forced the line is the point.
+
+**Replies to the owner are in Korean**, lead with the outcome, and always give
+the absolute installer path.
+
+## Safety rules — absolute, and one of these was violated once
+
+- **NEVER synthesize keyboard or mouse input.** Never press Ctrl+Alt+C: the
+  installed CapturePack owns that accelerator and an agent once fired a real
+  capture on the owner's desktop.
+- **NEVER run, stop, kill, modify or reconfigure the INSTALLED app** at
+  `C:/Users/recue/AppData/Local/Programs/capturepack`, and **never write to**
+  `%APPDATA%/CapturePack` (reading it and its logs is fine and often necessary).
+- **`C:/Users/recue/OneDrive/Desktop/CapturePack` is READ ONLY.** It is the
+  owner's captures.
+- **Do not push, tag, or open PRs** without explicit instruction.
+- `Add-Type -MemberDefinition` is forbidden in the PowerShell hosts — it invokes
+  the C# compiler per call. Use `-TypeDefinition`.
+- Headed testing only as a detached run with your own `--user-data-dir`,
+  `--output-dir`, `--no-global-shortcut`, `--no-login-item`. Kill only PIDs you
+  have verified as yours. `chrome-bridge-check` spawns Electron twice and will
+  fight the installed app for the `capturepack-dom-<user>` named pipe — its
+  EADDRINUSE here is environmental.
+
+## The numbers worth not re-deriving
+
+All measured on this machine, today. GOAL.md carries the reasoning.
+
+- Window observation during a drag: **~10 ms** (100/s), event-driven off
+  `SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE)`. The OS itself publishes
+  `GetWindowRect` changes every 4 ms.
+- Host cost: **1.11% of a core**, via delta sampling — 0.111 ms per delta
+  against 0.451 ms for a full dump. Before deltas it was 13.5% and the governor
+  was demoting the lane mid-capture.
+- Box against window in the annotated replay: **p10 −10 ms / p50 −5 ms /
+  p90 +1 ms**. Every clock leg is at or under 1 ms.
+- Recorder: **14.8 fps against a 15 fps target** on one display, 13.9 on the
+  other (one 762 ms stall, not a shortfall). 15 is not the ceiling; whether 30
+  works is a question about the encoder alone and is unmeasured.
+- UIA: a full desktop walk is 1580 ms; refreshing **held element references** is
+  227 ms (7x), and 17.6 vs 482.8 ms for one window (27x). `FindAllBuildCache` is
+  a **4.3-4.5x net loss** — the tree walk is 96% of the cost, not the property
+  fetch. Held references rot: 4.4% dead within 50 s with no input at all.
+  One provider (Docker Desktop) answers for ten elements in ~2050 ms.
+
+## The one thing to get right
+
+The owner tests every build on their own desktop and reports what breaks, in
+Korean, often mid-turn while you are still working. They are right more often
+than the code is. When they say something is off, it is off — the job is to find
+the measurement that shows it, not to explain why it should be fine.
