@@ -2115,6 +2115,26 @@ switches sampling to 9–16 ms gaps within one coalescing window. The error
 budget during motion drops from ±15 ms (31 ms polling) to ~±4 ms — under
 ~100 px at even the wildest measured shake.
 
+### Controls exist at every frame, anchored to their window (#111)
+
+*"매프레임 하위 컨트롤러도 저장해야지."* The UIA tree is dumped once — a full
+desktop walk costs 183.8 ms and cannot run per frame — but a control does not
+float free: it is drawn inside its window at an offset that survives the
+window being dragged, and the window's position at every frame is already in
+the ring at the move hook's exactness. So the provider now offers the dump's
+controls at EVERY requested time, each translated by how far its own window
+moved between the dump and that time. A control whose window has no surface at
+the asked time is dropped, not floated. The position is composed from two real
+observations and says so (`interpolated` on its accuracy, #83); the CONTENT is
+still the dump's.
+
+The other half of the directive — re-observing control content as it changes —
+is lane A as originally designed (temporal-protocol §1): UIA re-dumps of ONE
+window driven by lane S's dirty signal (that window moved/resized/appeared),
+budgeted per window instead of per desktop. That is the next build, not this
+one; anchoring is what makes control picking work across the whole replay
+today.
+
 ### Recording is a switch (privacy)
 
 `settings.recordingEnabled` — OFF resolves the recorder set to empty through

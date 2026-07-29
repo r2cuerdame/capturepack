@@ -27,7 +27,7 @@ import { CONTEXT_PROTOCOL_VERSION } from '../../shared/context/protocol'
 import type { ProviderManifest } from '../../shared/context/manifest'
 import { rectContains } from '../../shared/context/surfaces'
 import type { ContextBuffer, ContextObservation } from './buffer'
-import { candidatesOf, claimsOf, surfaceCoverageOf, WINDOWS_UIA_PROVIDER_ID } from './buffer'
+import { candidatesOf, claimsOf, surfaceCoverageOf, surfaceIdOf, WINDOWS_UIA_PROVIDER_ID } from './buffer'
 
 const WINDOWS_UIA_VERSION = '0.4.0'
 
@@ -80,6 +80,7 @@ export class WindowsUiaProvider implements TemporalContextProvider {
     this.buffer = buffer
     this.ids = ids
     this.restored.clear()
+    this.elementObs = undefined
   }
 
   get observations(): number {
@@ -88,13 +89,39 @@ export class WindowsUiaProvider implements TemporalContextProvider {
 
   getSurfaceClaims(c: SurfaceClaimContext): Promise<readonly ProviderSurfaceClaim[]> {
     const { observation } = this.buffer.restore(c.timeMs)
-    if (observation === null) return Promise.resolve([])
-    return Promise.resolve(claimsOf(observation, this.ids))
+    // Claims must come from the observation that HOLDS the dump (#111):
+    // anchored candidates exist at every time, so a claim answered from a
+    // ring observation with no elements would tell Core not to ask — and the
+    // whole anchored answer would silently never be offered.
+    const source = observation !== null && observation.elements.length > 0
+      ? observation
+      : this.elementObservation()
+    if (source === null) return Promise.resolve([])
+    return Promise.resolve(claimsOf(source, this.ids))
   }
 
   frame(c: FrameContext): Promise<ProviderFrame> {
     const { observation, accuracy } = this.buffer.restore(c.timeMs)
-    if (observation === null) {
+    // CONTROLS EXIST AT EVERY FRAME, ANCHORED TO THEIR WINDOW (#111,
+    // "매프레임 하위 컨트롤러도 저장해야지").
+    //
+    // The UIA tree is dumped ONCE, at the capture instant — a full desktop walk
+    // costs 183.8 ms and cannot run per frame. But a control does not float
+    // free: it is drawn INSIDE its window, at an offset that survives the
+    // window being dragged. The window's position at every frame is already in
+    // the ring, exact to the move hook's cadence. So the dump's controls are
+    // offered at EVERY requested time, each translated by how far its OWN
+    // window has moved between the dump and that time.
+    //
+    // What this claims and what it does not: the POSITION is composed from two
+    // real observations (window at T, control-in-window at dump time), and the
+    // accuracy carries `interpolated` so a strict reader can tell. The CONTENT
+    // (labels, tree shape, a list that scrolled) is still the dump's — the
+    // dirty-driven lane A re-dump is the next step, recorded in GOAL.md.
+    const source = observation !== null && observation.elements.length > 0
+      ? observation
+      : this.elementObservation()
+    if (source === null) {
       // Served, and genuinely empty. NOT `declined` — declining means "I do not
       // do frames, ask me per point instead", and answering that here would send
       // Core down the hitTest path to be told the same nothing more slowly.
@@ -108,20 +135,74 @@ export class WindowsUiaProvider implements TemporalContextProvider {
         truncated: false,
       })
     }
-    const all = this.candidatesFor(observation, accuracy)
+    const all = this.anchored(this.candidatesFor(source, accuracy), source, c.surfaces)
     const region = c.region
     const inRegion =
       region === undefined ? all : all.filter((candidate) => overlaps(candidate.bounds, region))
     const truncated = inRegion.length > c.maxCandidates
     return Promise.resolve({
       providerId: this.id,
-      timeMs: observation.tMs,
+      timeMs: source.tMs,
       accuracy,
       candidates: truncated ? inRegion.slice(0, c.maxCandidates) : inRegion,
-      claims: claimsOf(observation, this.ids),
-      coverage: surfaceCoverageOf(observation, this.ids),
+      claims: claimsOf(source, this.ids),
+      coverage: surfaceCoverageOf(source, this.ids),
       truncated,
     })
+  }
+
+  /** The one observation that carries the control dump, or null. Cached. */
+  private elementObs: ContextObservation | null | undefined
+  private elementObservation(): ContextObservation | null {
+    if (this.elementObs !== undefined) return this.elementObs
+    this.elementObs = this.buffer.all.find((o) => o.elements.length > 0) ?? null
+    return this.elementObs
+  }
+
+  /**
+   * Translates each control candidate by how far its window moved between the
+   * dump and the requested time (#111). A control whose window has no surface
+   * at the requested time is DROPPED — its window is not on this desk now, and
+   * a rectangle floating without its window is exactly the lie the staleness
+   * ceiling exists to stop. A shifted candidate's accuracy says `interpolated`:
+   * the position is composed from two observations, not read in one.
+   */
+  private anchored(
+    candidates: readonly ContextCandidate[],
+    source: ContextObservation,
+    surfaces: FrameContext['surfaces'],
+  ): ContextCandidate[] {
+    const originOf = new Map<string, { x: number; y: number }>()
+    for (const w of source.windows) {
+      const id = surfaceIdOf(this.ids, source, w)
+      originOf.set(`${id}|${w.display ?? ''}`, { x: w.bounds.x, y: w.bounds.y })
+    }
+    const nowOf = new Map<string, { x: number; y: number }>()
+    for (const s of surfaces) {
+      nowOf.set(`${s.surfaceId}|${s.display ?? ''}`, { x: s.bounds.x, y: s.bounds.y })
+    }
+    const out: ContextCandidate[] = []
+    for (const candidate of candidates) {
+      const key = `${candidate.surfaceId}|${candidate.display ?? ''}`
+      const origin = originOf.get(key)
+      const now = nowOf.get(key)
+      if (origin === undefined || now === undefined) {
+        // Window unplaceable at this time on this display: not offered here.
+        continue
+      }
+      const dx = now.x - origin.x
+      const dy = now.y - origin.y
+      if (dx === 0 && dy === 0) {
+        out.push(candidate)
+        continue
+      }
+      out.push({
+        ...candidate,
+        bounds: { ...candidate.bounds, x: candidate.bounds.x + dx, y: candidate.bounds.y + dy },
+        accuracy: { ...candidate.accuracy, interpolated: true },
+      })
+    }
+    return out
   }
 
   /**
@@ -137,8 +218,13 @@ export class WindowsUiaProvider implements TemporalContextProvider {
    */
   hitTest(c: HitTestContext): Promise<readonly ContextCandidate[]> {
     const { observation, accuracy } = this.buffer.restore(c.timeMs)
-    if (observation === null) return Promise.resolve([])
-    const hits = this.candidatesFor(observation, accuracy).filter(
+    // The same anchoring as frame() (#111): both paths must agree, and the
+    // harness cross-checks that they do.
+    const source = observation !== null && observation.elements.length > 0
+      ? observation
+      : this.elementObservation()
+    if (source === null) return Promise.resolve([])
+    const hits = this.anchored(this.candidatesFor(source, accuracy), source, [c.surface]).filter(
       (candidate) =>
         candidate.surfaceId === c.surface.surfaceId &&
         (c.display === undefined ||
