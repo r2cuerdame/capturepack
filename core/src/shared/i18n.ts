@@ -59,6 +59,7 @@ const EN = {
   'common.cancel': 'Cancel',
   'common.escCloses': 'Esc closes',
 
+  'tray.recordingEnabled': 'Live recording',
   'tray.captureNow': 'Capture now  {hotkey}',
   'tray.history': 'History',
   'tray.openOutput': 'Open output folder',
@@ -590,6 +591,7 @@ const KO: Record<I18nKey, string> = {
   'common.cancel': '취소',
   'common.escCloses': 'Esc로 닫기',
 
+  'tray.recordingEnabled': '실시간 녹화',
   'tray.captureNow': '지금 캡처  {hotkey}',
   'tray.history': '기록',
   'tray.openOutput': '저장 폴더 열기',
@@ -1066,6 +1068,7 @@ const JA: Record<I18nKey, string> = {
   'common.cancel': 'キャンセル',
   'common.escCloses': 'Escで閉じる',
 
+  'tray.recordingEnabled': 'ライブ録画',
   'tray.captureNow': '今すぐキャプチャ  {hotkey}',
   'tray.history': '履歴',
   'tray.openOutput': '保存フォルダーを開く',
@@ -1546,6 +1549,7 @@ const ZH: Record<I18nKey, string> = {
   'common.cancel': '取消',
   'common.escCloses': 'Esc 关闭',
 
+  'tray.recordingEnabled': '实时录制',
   'tray.captureNow': '立即捕获  {hotkey}',
   'tray.history': '历史记录',
   'tray.openOutput': '打开输出文件夹',
@@ -2018,6 +2022,7 @@ const ES: Record<I18nKey, string> = {
   'common.cancel': 'Cancelar',
   'common.escCloses': 'Esc cierra',
 
+  'tray.recordingEnabled': 'Grabación en vivo',
   'tray.captureNow': 'Capturar ahora  {hotkey}',
   'tray.history': 'Historial',
   'tray.openOutput': 'Abrir carpeta de salida',
@@ -2500,6 +2505,7 @@ const FR: Record<I18nKey, string> = {
   'common.cancel': 'Annuler',
   'common.escCloses': 'Échap ferme',
 
+  'tray.recordingEnabled': 'Enregistrement en direct',
   'tray.captureNow': 'Capturer maintenant  {hotkey}',
   'tray.history': 'Historique',
   'tray.openOutput': 'Ouvrir le dossier de sortie',
@@ -2984,6 +2990,7 @@ const DE: Record<I18nKey, string> = {
   'common.cancel': 'Abbrechen',
   'common.escCloses': 'Esc schließt',
 
+  'tray.recordingEnabled': 'Live-Aufnahme',
   'tray.captureNow': 'Jetzt aufnehmen  {hotkey}',
   'tray.history': 'Verlauf',
   'tray.openOutput': 'Ausgabeordner öffnen',
@@ -3471,6 +3478,7 @@ const PT: Record<I18nKey, string> = {
   'common.cancel': 'Cancelar',
   'common.escCloses': 'Esc fecha',
 
+  'tray.recordingEnabled': 'Gravação ao vivo',
   'tray.captureNow': 'Capturar agora  {hotkey}',
   'tray.history': 'Histórico',
   'tray.openOutput': 'Abrir pasta de saída',
@@ -3954,6 +3962,7 @@ const RU: Record<I18nKey, string> = {
   'common.cancel': 'Отмена',
   'common.escCloses': 'Esc — закрыть',
 
+  'tray.recordingEnabled': 'Постоянная запись',
   'tray.captureNow': 'Захватить сейчас  {hotkey}',
   'tray.history': 'История',
   'tray.openOutput': 'Открыть папку вывода',

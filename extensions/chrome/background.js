@@ -146,12 +146,41 @@ function send(message) {
 }
 
 // Toolbar click: arm the picker in the active tab.
+//
+// EVERY STEP OF THIS REPORTS ITSELF. Picking an element failed twice in the
+// field with nothing to look at: the native port was healthy (tab.updated
+// events arrived in the same capture), the extension was the current version,
+// and `dom.element.selected` simply never appeared. Arming is the one step
+// that had no observable outcome at all — an executeScript that throws on a
+// restricted page (chrome://, the Web Store, a PDF viewer) looked exactly like
+// a user who had not clicked the icon. So arming, disarming and failing all go
+// down the same wire the picks do, and land in main.log.
 chrome.action.onClicked.addListener(async (tab) => {
-  if (!tab.id) return
-  await chrome.scripting.executeScript({
-    target: { tabId: tab.id },
-    files: ['content-script.js'],
-  })
+  if (!tab.id) {
+    send({ type: 'picker.failed', protocol: PROTOCOL, timestamp: Date.now(), reason: 'no-tab' })
+    return
+  }
+  const url = tab.url || ''
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ['content-script.js'],
+    })
+  } catch (err) {
+    // A page the extension may not touch is the common case, and the user has
+    // no way to know which pages those are — so say it on the icon AND on the
+    // wire, rather than failing silently.
+    chrome.action.setBadgeBackgroundColor({ color: '#d93025' })
+    chrome.action.setBadgeText({ text: '✕', tabId: tab.id })
+    setTimeout(() => chrome.action.setBadgeText({ text: '', tabId: tab.id }), 4000)
+    send({
+      type: 'picker.failed',
+      protocol: PROTOCOL,
+      timestamp: Date.now(),
+      reason: String(err && err.message ? err.message : err).slice(0, 200),
+      tab: { url: url.slice(0, 2048), title: (tab.title || '').slice(0, 512) },
+    })
+  }
 })
 
 // Element selections from the content script.
@@ -164,6 +193,15 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
   if (msg && msg.type === 'picker.armed') {
     chrome.action.setBadgeBackgroundColor({ color: '#7c5cff' })
     chrome.action.setBadgeText({ text: '◎', ...(sender.tab ? { tabId: sender.tab.id } : {}) })
+    send({
+      type: 'picker.armed',
+      protocol: PROTOCOL,
+      timestamp: Date.now(),
+      tab: {
+        url: sender.tab && sender.tab.url ? sender.tab.url : '',
+        title: sender.tab && sender.tab.title ? sender.tab.title : '',
+      },
+    })
     return
   }
   if (msg && msg.type === 'picker.disarmed') {

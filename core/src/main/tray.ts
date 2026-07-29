@@ -12,6 +12,17 @@ import { logWarn } from './log'
 
 export interface TrayHandlers {
   onCapture: () => void
+  /**
+   * The recording switch, ON THE TRAY (settings.recordingEnabled).
+   *
+   * It already exists in Settings > Capture, and that was the wrong home for
+   * it on its own: a privacy switch is used in the moment — before a call,
+   * before a screen share — and a switch that needs a window opened and a
+   * section scrolled is a switch that does not get used. "on / off 버튼도
+   * 넣어달랬잖아." The tray is the one surface that is always there, which is
+   * the same reason the logs folder is on it.
+   */
+  onToggleRecording: (enabled: boolean) => void
   onOpenHistory: () => void
   onOpenOutput: () => void
   onOpenSettings: () => void
@@ -69,6 +80,7 @@ export function createTray(
   getReplaySeconds: () => number,
   getRecorderState: () => RecorderState,
   getUpdaterState: () => UpdaterStatusPayload,
+  isRecordingEnabled: () => boolean,
 ): TrayControls {
   const recordingIcon = path.join(app.getAppPath(), 'dist', 'assets', 'tray.png')
   const stoppedIcon = path.join(app.getAppPath(), 'dist', 'assets', 'tray-stopped.png')
@@ -114,8 +126,24 @@ export function createTray(
     // Capture now · History · Open output folder · Settings…
     // ── Check for updates… · Open logs folder · About CapturePack
     // ── (Restart and update, when ready) · Quit
+    const recording = isRecordingEnabled()
     const items: MenuItemConstructorOptions[] = [
-      { label: t('tray.captureNow', { hotkey: getHotkey() }), click: () => handlers.onCapture() },
+      // A CHECKBOX, not two items: the state IS the answer to "am I being
+      // recorded", and a menu that has to be read to work that out is a menu
+      // that gets misread.
+      {
+        label: t('tray.recordingEnabled'),
+        type: 'checkbox',
+        checked: recording,
+        click: () => handlers.onToggleRecording(!recording),
+      },
+      {
+        label: t('tray.captureNow', { hotkey: getHotkey() }),
+        // A capture with nothing recorded is not a capture. Greyed rather than
+        // hidden, so the hotkey's own answer and this agree.
+        enabled: recording,
+        click: () => handlers.onCapture(),
+      },
       { label: t('tray.history'), click: () => handlers.onOpenHistory() },
       { label: t('tray.openOutput'), click: () => handlers.onOpenOutput() },
       { label: t('tray.settings'), click: () => handlers.onOpenSettings() },

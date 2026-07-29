@@ -9,6 +9,7 @@ import {
   getRecorderState,
   onRecorderStateChanged,
   setupDisplayMediaHandler,
+  restartCapture,
   startCapture,
 } from './capture'
 import type { RecorderState } from './capture'
@@ -415,6 +416,22 @@ function main(): void {
     tray = createTray(
       {
         onCapture: capture,
+        // The privacy switch where it is actually reachable (settings.
+        // recordingEnabled). Persisted and applied through the SAME paths the
+        // Settings toggle uses, so the two can never disagree: an empty
+        // recorder set is an ordinary rebuild, and the tray re-renders from
+        // live state on its next open.
+        onToggleRecording: (enabled) => {
+          settings.recordingEnabled = enabled
+          try {
+            persistSettings({ ...settings })
+          } catch (err) {
+            logWarn(`[tray] could not save the recording switch: ${String(err)}`)
+          }
+          void restartCapture(settings)
+          logInfo(`[capture] recording ${enabled ? 'ON' : 'OFF'} (tray)`)
+          tray?.refresh()
+        },
         onOpenHistory: () => openHistoryWindow(),
         onOpenOutput: () => {
           fs.mkdirSync(settings.outputDir, { recursive: true })
@@ -449,6 +466,7 @@ function main(): void {
       () => settings.replaySeconds,
       () => getRecorderState(),
       () => updaterState(),
+      () => settings.recordingEnabled,
     )
     const trayControls = tray
     // startCapture intentionally resolves while the truthful state is still
