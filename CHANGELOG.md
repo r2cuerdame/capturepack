@@ -4,6 +4,26 @@ All notable changes to CapturePack. Format follows [Keep a Changelog](https://ke
 this project uses [semantic versioning](https://semver.org/) for the app, and the pack
 format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 
+## Unreleased
+
+### Added
+
+- **The editor explains itself once.** On its first open, a panel names the three gestures the
+  whole app is made of — left click selects the object under the pointer, right drag draws a
+  box and opens its description, the wheel travels back through the replay — and then never
+  appears again. Settings → General turns it back on, and links the manual.
+- **Chrome DOM capture (Phase 1).** CapturePack's browser extension sends what you *clicked* —
+  selector, role, text, URL — and the pack carries it in `plugins/chrome-dom/`, on the same
+  replay clock as the video and the window rectangles. The app is its own native messaging
+  host, so there is one executable and one version number; Settings → Integrations registers
+  it for every Chromium browser on the machine and reports six separate facts about the
+  connection rather than one badge that says nothing when it is false.
+
+### Fixed
+
+- **A window on two monitors gave two rectangles for one instant, and the box picked whichever
+  came first.** Array order decided which screen's coordinates a tracked box was drawn in.
+
 ## 0.2.0 — 2026-07-29
 
 Pack format **0.2.0**. A box now names an **object**, not a rectangle — and everything

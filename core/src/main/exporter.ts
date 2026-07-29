@@ -279,6 +279,79 @@ export async function writeUiaPlugin(dirPath: string, payload: UiaPluginPayload)
   await writeFile(join(dir, 'elements.json'), toJson(payload))
 }
 
+// ---------------------------------------------------------------------------
+// plugins/chrome-dom (GOAL "Chrome Extension", Phase 1)
+// ---------------------------------------------------------------------------
+
+export const DOM_PLUGIN_NAME = 'chrome-dom'
+/**
+ * Payload schema version. 0.1.0 is protocol v1's Phase 1 surface: the URL and
+ * title of the tab, and for a picked element its tag, selector, bounds and
+ * whatever of id/role/text the page actually had.
+ */
+export const DOM_PLUGIN_VERSION = '0.1.0'
+
+export interface DomPluginPayload {
+  protocol: number
+  /** Extension version, when it introduced itself; null when it never did. */
+  extension_version: string | null
+  events: readonly {
+    t_ms: number
+    type: string
+    tab: { url: string; title: string }
+    element?: {
+      tag: string
+      selector: string
+      bounds: { x: number; y: number; width: number; height: number }
+      id?: string
+      role?: string
+      text?: string
+    }
+  }[]
+}
+
+export function domPluginDeclaration(): Manifest['plugins'][number] {
+  return { name: DOM_PLUGIN_NAME, version: DOM_PLUGIN_VERSION, path: `plugins/${DOM_PLUGIN_NAME}/` }
+}
+
+/**
+ * Writes plugins/chrome-dom/{meta.json,elements.json}.
+ *
+ * Same contract as the UIA payload beside it: a plugin only APPENDS (SPEC
+ * §11.1), and the manifest declaration is the caller's job so that a
+ * declaration is only ever written for a payload that exists. A pack made
+ * while no browser was talking simply has no chrome-dom directory — which
+ * SPEC §11.3 already says is the difference between "nothing happened" and
+ * "nobody was watching".
+ */
+export async function writeDomPlugin(dirPath: string, payload: DomPluginPayload): Promise<void> {
+  const dir = join(dirPath, 'plugins', DOM_PLUGIN_NAME)
+  await mkdir(dir, { recursive: true })
+  await writeFile(
+    join(dir, 'meta.json'),
+    toJson({ name: DOM_PLUGIN_NAME, version: DOM_PLUGIN_VERSION }),
+  )
+  await writeFile(join(dir, 'elements.json'), toJson(payload))
+}
+
+/** writeDomPlugin() that can never fail a save. */
+export async function tryWriteDomPlugin(
+  dirPath: string,
+  payload: DomPluginPayload | undefined,
+): Promise<boolean> {
+  if (payload === undefined || payload.events.length === 0) return false
+  try {
+    await writeDomPlugin(dirPath, payload)
+    return true
+  } catch (err) {
+    console.error(
+      'capturepack: writing plugins/chrome-dom failed:',
+      err instanceof Error ? err.message : String(err),
+    )
+    return false
+  }
+}
+
 /**
  * Adds one plugin declaration to an ALREADY written manifest.json, the way
  * setManifestRenderOutputs() adds the render outputs: the save-first folder is

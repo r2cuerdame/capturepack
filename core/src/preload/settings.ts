@@ -2,6 +2,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../shared/ipc'
 import type {
+  ChromeIntegrationStatus,
   SettingsGetResult,
   SettingsPatch,
   SettingsSetResult,
@@ -21,6 +22,22 @@ contextBridge.exposeInMainWorld('settingsBridge', {
   // The online manual (GOAL "First-Run Tutorial"). Main owns the address.
   openGuide(): void {
     ipcRenderer.send(IPC.settingsOpenGuide)
+  },
+  // Settings > Integrations (GOAL "Extension Install & Management UX").
+  chromeStatus(): Promise<ChromeIntegrationStatus> {
+    return ipcRenderer.invoke(IPC.settingsChromeStatus) as Promise<ChromeIntegrationStatus>
+  },
+  chromeInstall(extensionId: string): Promise<ChromeIntegrationStatus> {
+    return ipcRenderer.invoke(
+      IPC.settingsChromeInstall,
+      extensionId,
+    ) as Promise<ChromeIntegrationStatus>
+  },
+  chromeUninstall(): Promise<ChromeIntegrationStatus> {
+    return ipcRenderer.invoke(IPC.settingsChromeUninstall) as Promise<ChromeIntegrationStatus>
+  },
+  chromeOpenFolder(): void {
+    ipcRenderer.send(IPC.settingsChromeOpenFolder)
   },
   openOutput(): Promise<void> {
     return ipcRenderer.invoke(IPC.settingsOpenOutput) as Promise<void>

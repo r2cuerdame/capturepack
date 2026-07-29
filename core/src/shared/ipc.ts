@@ -110,6 +110,14 @@ export const IPC = {
   // No payload — the URL lives in main, so the renderer cannot name a
   // destination of its own.
   settingsOpenGuide: 'settings:open-guide',
+  // Settings > Integrations (GOAL "Extension Install & Management UX"). The
+  // status channel reports what is ACTUALLY on disk, in the registry and on the
+  // wire — never a remembered verdict, because every one of those three can be
+  // changed by something other than this app.
+  settingsChromeStatus: 'settings:chrome-status',
+  settingsChromeInstall: 'settings:chrome-install',
+  settingsChromeUninstall: 'settings:chrome-uninstall',
+  settingsChromeOpenFolder: 'settings:chrome-open-folder',
   // settings window -> main (invoke): directory picker; resolves the chosen path or null
   settingsPickOutputDir: 'settings:pick-output-dir',
   // settings window -> main (invoke): open the output folder in the file manager
@@ -899,6 +907,32 @@ export interface WelcomeInfoResult {
 // Partial settings update from the settings GUI. Every value is validated
 // main-side with the same per-key rules as settings.json loading; invalid or
 // unknown keys are rejected and never written.
+/**
+ * The six-point health check the GOAL asks for, as facts rather than a verdict
+ * (GOAL "Integration Operations": "invaluable for bug reports").
+ */
+export interface ChromeIntegrationStatus {
+  /** The app is listening for a native host. */
+  listening: boolean
+  /** A host process has dialled in at least once this run. */
+  hostSeen: boolean
+  /** The extension completed its handshake. */
+  extensionConnected: boolean
+  extensionVersion: string | null
+  protocolVersion: number | null
+  appProtocolVersion: number
+  protocolCompatible: boolean
+  /** The native messaging manifest exists where the browsers were told. */
+  manifestWritten: boolean
+  manifestPath: string
+  allowedExtensionIds: readonly string[]
+  browsers: readonly { id: string; label: string; registered: boolean }[]
+  extensionDir: string
+  extensionDirExists: boolean
+  /** DOM events held for the current replay window. */
+  events: number
+}
+
 export type SettingsPatch = Partial<Settings>
 
 export interface SettingsDisplayOption {

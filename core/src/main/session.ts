@@ -50,12 +50,22 @@ import {
   recorderCadence,
 } from './capture'
 import type { ReplayFetch } from './capture'
-import { freezeContext, frozenObservations, logContextCost, releaseContext } from './context/runtime'
+import {
+  freezeContext,
+  frozenObservations,
+  frozenWindow,
+  logContextCost,
+  releaseContext,
+} from './context/runtime'
+import { DOM_PROTOCOL_VERSION, domBridgeStatus, domEventsBetween } from './chrome/domBridge'
+import type { DomEvent } from './chrome/domBridge'
 import {
   addManifestPlugin,
   savePack,
   saveAsNewPack,
   uiaPluginDeclaration,
+  domPluginDeclaration,
+  tryWriteDomPlugin,
   updateInitialPack,
   updatePack,
   displayMediaName,
@@ -646,6 +656,39 @@ async function runFlow(settings: Settings): Promise<void> {
     }
     return payload
   })
+
+  // The browser's half of the same instant (GOAL "Chrome Extension"). Written
+  // beside the UIA payload, into the same save-first folder, and declared only
+  // when there is something to declare — a capture made with no browser
+  // talking has no chrome-dom directory at all, which SPEC §11.3 reads as
+  // "nobody was watching" rather than "nothing happened".
+  void (async () => {
+    const saved = handle
+    if (saved === null) return
+    const window = frozenWindow(contextFreezeId)
+    if (window === null) return
+    const status = domBridgeStatus()
+    const events = domEventsBetween(window.startMs, window.endMs)
+    if (events.length === 0) return
+    const wrote = await tryWriteDomPlugin(saved.dirPath, {
+      protocol: DOM_PROTOCOL_VERSION,
+      extension_version: status.extensionVersion,
+      events: events.map((e: DomEvent) => ({
+        // On the pack's clock, like everything else drawn beside it.
+        t_ms: Math.max(0, Math.round(e.tMs - window.startMs)),
+        type: e.type,
+        tab: e.tab,
+        ...(e.element === undefined ? {} : { element: e.element }),
+      })),
+    })
+    if (!wrote) return
+    try {
+      await addManifestPlugin(saved, domPluginDeclaration())
+      logInfo(`[chrome] pack carries ${events.length} DOM event(s) from the browser`)
+    } catch (err) {
+      logError('capturepack: declaring plugins/chrome-dom failed:', err)
+    }
+  })()
 
   const { win: editor, mode: windowMode } = createEditorWindow(display.bounds, settings)
   // THE EDITOR'S OWN DIAGNOSTICS BELONG IN THE LOG (#113).

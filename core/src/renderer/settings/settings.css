@@ -411,3 +411,42 @@ button.pluginHelp[aria-expanded="true"] {
   font-size: 11px;
   padding: 0 2px;
 }
+
+/* Integrations: the six-point health check (GOAL "Integration Operations").
+   Facts, one per line, each carrying its own mark — a single "Connected"
+   badge hides which of the six is the one that is wrong, which is the only
+   thing a bug report needs. */
+#chromeChecks {
+  display: grid;
+  gap: 3px;
+  margin: 8px 0 10px;
+  list-style: none;
+  font-size: 12px;
+}
+
+#chromeChecks li {
+  display: flex;
+  gap: 7px;
+  align-items: baseline;
+  color: var(--muted, #8a8a93);
+}
+
+#chromeChecks li .mark {
+  width: 1em;
+  font-weight: 700;
+}
+
+#chromeChecks li.ok .mark {
+  color: #22c55e;
+}
+
+#chromeChecks li.bad .mark {
+  color: #ef4444;
+}
+
+#chromeExtensionId {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+}

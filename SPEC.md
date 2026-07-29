@@ -1234,6 +1234,49 @@ empty strings: this is a dump, and an empty `name` is itself information.
   `annotations.json`. This payload is context, and a `target` on a box is self-contained — the
   two are matched by a reader that wants more detail, never required to agree.
 
+### 11.4 `chrome-dom` (browser DOM context)
+
+`plugins/chrome-dom/` is the well-known payload for **what the user clicked in a browser**,
+as the page itself understood it: a selector, a role, the text on it, and the URL it was on.
+It is the browser's answer to the same question [§11.3](#113-windows-uia-windows-ui-automation)
+answers for windows — a pack should be able to say "the Save button, `#save`, on the checkout
+page", which is a sentence a person and a machine can both act on, where a screenshot of a
+button is neither.
+
+Written by CapturePack's browser extension over protocol v1. Like every plugin payload it is
+OPTIONAL and purely additive, and it follows all of [§11.1](#111-rules).
+
+```
+plugins/
+└── chrome-dom/
+    ├── meta.json
+    └── elements.json
+```
+
+`meta.json` is the standard plugin metadata (`{ "name": "chrome-dom", "version": "0.1.0" }`).
+
+`elements.json`:
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `protocol` | integer | REQUIRED | The wire protocol the events were received over. `1` is the only version defined. |
+| `extension_version` | string \| null | REQUIRED | The extension that sent them, or `null` when it never introduced itself. A reader comparing this against `generator.version` is doing the version check the app does. |
+| `events` | array | REQUIRED | The events inside the replay, in arrival order. MAY be empty only if the payload is absent — a writer with nothing to say writes no directory at all ([§11.3](#113-windows-uia-windows-ui-automation)'s rule: silence is not absence). |
+
+Each event:
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `t_ms` | number | REQUIRED | When it happened, on the **replay clock** ([§10.1](#101-the-replay-clock)) — the same clock the video and the tracking samples use, so a DOM element and the window it was in can be named at one instant. |
+| `type` | string | REQUIRED | `dom.element.selected`, `tab.updated`, or `url.changed`. Readers ignore types they do not know. |
+| `tab` | object | REQUIRED | `url` and `title`, both strings. |
+| `element` | object | OPTIONAL | REQUIRED for `dom.element.selected`, absent otherwise. `tag`, `selector` and `bounds` (`x`/`y`/`width`/`height`) are required; `id`, `role` and `text` are written only when the page had them. |
+
+**The DOM is never streamed.** These are the moments something was picked or the page changed,
+not a feed — a pack holds a handful of them, not a recording. `element.bounds` is in **CSS
+pixels of the page**, not snapshot pixels: it locates the element within its document, and is
+not a rectangle to draw on a frame.
+
 ---
 
 ## 12. report.md, README.md, and skills/

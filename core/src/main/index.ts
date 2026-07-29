@@ -13,10 +13,12 @@ import {
 } from './capture'
 import type { RecorderState } from './capture'
 import {
+  contextNowMs,
   startContextRuntime,
   stopContextRuntime,
   updateContextRetention,
 } from './context/runtime'
+import { setDomClock, setDomRetention, startDomBridge, stopDomBridge } from './chrome/domBridge'
 import { disposeHistory, notifyHistoryChanged, openHistoryWindow, registerHistoryIpc } from './historyWindow'
 import { registerCaptureHotkeyWithin } from './hotkey'
 import {
@@ -50,7 +52,20 @@ import { openWelcomeWindow, registerWelcomeIpc } from './welcomeWindow'
 const LOGIN_HIDDEN_ARG = '--openAsHidden'
 const LOGIN_ITEM_NAME = 'CapturePack'
 
-if (process.argv.includes('--smoke')) {
+if (process.argv.includes('--native-host')) {
+  // Chrome started this process as a native messaging host (GOAL "Chrome
+  // Extension"). It relays frames to the running app and exits when the
+  // browser hangs up.
+  //
+  // FIRST, and outside the single-instance lock: the app holds that lock, and
+  // a host that waited for it would hang the browser's extension port forever.
+  // No window, no tray, no settings, no log file — stdout belongs to Chrome
+  // here, and anything else written to it would be read as a protocol frame.
+  void import('./chrome/nativeHost').then(async ({ runNativeHostMode }) => {
+    await runNativeHostMode()
+    app.exit(0)
+  })
+} else if (process.argv.includes('--smoke')) {
   // CI smoke test: settings load only — no windows, tray, hotkey, or MCP.
   // Runs BEFORE (and without) the single-instance lock: an installed
   // CapturePack holding the lock would otherwise make the dev instance exit 0
@@ -159,6 +174,7 @@ function main(): void {
     // but stopping it here is what makes the surface timeline's final cost line
     // land in the log before the process goes (issues #64/#65).
     stopContextRuntime()
+    stopDomBridge()
     disposeCapture()
     disposeHistory()
     // stopMcpServer() logs what it actually did, synchronously, before its first
@@ -261,6 +277,13 @@ function main(): void {
     // recorder so that a machine where recording itself is failing does not also
     // pay for a context host it will never be asked about.
     startContextRuntime({ replayMs: settings.replaySeconds * 1000, fps: settings.fps })
+    // The browser half of the same idea (GOAL "Chrome Extension"): DOM events
+    // on the replay clock, so an element and the window it sits in can be
+    // named at one instant. Started after the runtime because it borrows that
+    // clock, and it costs nothing while no browser is talking.
+    setDomClock(() => contextNowMs() ?? Date.now())
+    setDomRetention(settings.replaySeconds * 1000)
+    startDomBridge()
 
     const capture = (): void => {
       void startCaptureFlow(settings)

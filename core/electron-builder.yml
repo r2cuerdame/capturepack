@@ -16,6 +16,13 @@ files:
 # Electron's archive format and could not open a path inside app.asar.
 asarUnpack:
   - dist/scripts/**
+# The browser extension (GOAL "Chrome Extension") ships WITH the app, unpacked
+# and as real files: the user loads this folder in their browser, so it has to
+# be a path they can open, paste, and see. Inside the asar it would be a path
+# Chrome cannot read.
+extraResources:
+  - from: ../extensions/chrome
+    to: extensions/chrome
 win:
   icon: build/icon.ico
   target:

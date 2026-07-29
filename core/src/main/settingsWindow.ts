@@ -7,11 +7,42 @@
 import { app, BrowserWindow, dialog, ipcMain, screen, shell } from 'electron'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import { DOM_PROTOCOL_VERSION, domBridgeStatus } from './chrome/domBridge'
+import {
+  extensionDir,
+  nativeHostState,
+  registerBrowsers,
+  unregisterBrowsers,
+  writeHostManifest,
+} from './chrome/install'
 
 /** The online manual (GOAL "First-Run Tutorial"). */
 const GUIDE_URL = 'https://capturepack.dev/guide'
+
+/** The six-point health check, assembled from the three places it lives. */
+async function chromeStatus(): Promise<ChromeIntegrationStatus> {
+  const bridge = domBridgeStatus()
+  const host = await nativeHostState()
+  return {
+    listening: bridge.listening,
+    hostSeen: bridge.hostSeen,
+    extensionConnected: bridge.extensionConnected,
+    extensionVersion: bridge.extensionVersion,
+    protocolVersion: bridge.protocolVersion,
+    appProtocolVersion: DOM_PROTOCOL_VERSION,
+    protocolCompatible: bridge.protocolCompatible,
+    manifestWritten: host.manifestWritten,
+    manifestPath: host.manifestPath,
+    allowedExtensionIds: host.allowedExtensionIds,
+    browsers: host.browsers,
+    extensionDir: host.extensionDir,
+    extensionDirExists: host.extensionDirExists,
+    events: bridge.events,
+  }
+}
 import { IPC } from '../shared/ipc'
 import type {
+  ChromeIntegrationStatus,
   McpStatus,
   SettingsDisplayOption,
   SettingsGetResult,
@@ -20,6 +51,7 @@ import type {
 } from '../shared/ipc'
 import { resolveLanguage } from '../shared/i18n'
 import type { Settings } from '../shared/types'
+import { logError } from './log'
 import { restartCapture } from './capture'
 import { updateContextRetention } from './context/runtime'
 import { currentCaptureHotkey, registerCaptureHotkey } from './hotkey'
@@ -192,6 +224,46 @@ export function registerSettingsIpc(live: Settings, hooks: SettingsIpcHooks = {}
   ipcMain.handle(IPC.settingsOpenOutput, async (): Promise<void> => {
     fs.mkdirSync(live.outputDir, { recursive: true })
     await shell.openPath(live.outputDir)
+  })
+
+  // Settings > Integrations (GOAL "Extension Install & Management UX").
+  //
+  // Everything reported here is READ at the moment it is asked for: the
+  // manifest off disk, the registry values out of the registry, the handshake
+  // off the wire. A remembered "installed" is worth nothing when a browser
+  // update, another profile, or the user's own cleanup can undo any of the
+  // three without telling us.
+  ipcMain.handle(IPC.settingsChromeStatus, async (): Promise<ChromeIntegrationStatus> => {
+    return chromeStatus()
+  })
+
+  ipcMain.handle(
+    IPC.settingsChromeInstall,
+    async (_event, extensionId: unknown): Promise<ChromeIntegrationStatus> => {
+      // An unpacked extension's ID is 32 lowercase letters a-p; the Web Store
+      // uses the same alphabet. Anything else is not an ID, and writing it
+      // would produce a manifest that silently allows nobody.
+      const id = typeof extensionId === 'string' ? extensionId.trim().toLowerCase() : ''
+      if (!/^[a-p]{32}$/.test(id)) throw new Error('that is not a Chrome extension ID')
+      try {
+        writeHostManifest([id])
+        await registerBrowsers()
+      } catch (err) {
+        logError('capturepack: installing the native messaging host failed:', err)
+      }
+      return chromeStatus()
+    },
+  )
+
+  ipcMain.handle(IPC.settingsChromeUninstall, async (): Promise<ChromeIntegrationStatus> => {
+    await unregisterBrowsers()
+    return chromeStatus()
+  })
+
+  ipcMain.on(IPC.settingsChromeOpenFolder, () => {
+    const dir = extensionDir()
+    if (dir === '') return
+    void shell.openPath(dir)
   })
 
   // The online manual (GOAL "First-Run Tutorial"). The address is a constant

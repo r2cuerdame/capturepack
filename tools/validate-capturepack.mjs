@@ -435,6 +435,7 @@ function validateManifest(m, pack, snapshotDims) {
         // windows-uia is a well-known payload with a defined shape (SPEC §11.3);
         // every other plugin's contents stay plugin-defined and unchecked.
         if (p.name === "windows-uia") validateWindowsUia(pack, displayInfo);
+        if (p.name === "chrome-dom") validateChromeDom(pack, replayDurationMs);
       }
       if (m.plugins.length === 0) pass(`manifest.json: plugins is [] (no plugin data)`);
     }
@@ -463,6 +464,75 @@ function validateManifest(m, pack, snapshotDims) {
     keyframeFiles,
     displayInfo,
   };
+}
+
+/**
+ * plugins/chrome-dom/elements.json (SPEC §11.4): what the user clicked in a
+ * browser, as the page understood it.
+ *
+ * The check that matters is the CLOCK. These events come from a different
+ * process, over a wire, with a timestamp of their own — and the whole promise
+ * of the payload is that `t_ms` is on the same replay clock as the video and
+ * the tracking samples, so a DOM element and the window it sat in can be named
+ * at one instant. An event outside the replay is not a small error; it is the
+ * payload failing at the only thing it claims.
+ */
+function validateChromeDom(pack, replayDurationMs) {
+  const name = "plugins/chrome-dom/elements.json";
+  const file = readJson(pack, name);
+  if (file === null) {
+    fail(`${name}: missing — the chrome-dom payload REQUIRES it (SPEC §11.4)`);
+    return;
+  }
+  const v = file.value;
+  if (!isObj(v) || !Array.isArray(v.events)) {
+    fail(`${name}: MUST be an object with an "events" array (SPEC §11.4)`);
+    return;
+  }
+  if (v.protocol !== 1) {
+    fail(`${name}.protocol MUST be 1, the only wire protocol defined (SPEC §11.4)`);
+  }
+  if (!(typeof v.extension_version === "string" || v.extension_version === null)) {
+    fail(`${name}.extension_version MUST be a string or null (SPEC §11.4)`);
+  }
+  if (v.events.length === 0) {
+    // SPEC §11.3's rule, applied here: a writer with nothing to say writes no
+    // directory at all, so an empty one is a claim that nothing happened.
+    fail(`${name}.events is empty — a payload with nothing in it MUST NOT be written at all, because an empty list reads as "the browser saw nothing" (SPEC §11.4, §11.3)`);
+    return;
+  }
+  const KNOWN = ["dom.element.selected", "tab.updated", "url.changed"];
+  let offClock = 0;
+  let malformed = 0;
+  let picked = 0;
+  for (const e of v.events) {
+    if (!isObj(e) || typeof e.type !== "string" || !isObj(e.tab)) { malformed += 1; continue; }
+    if (typeof e.tab.url !== "string" || typeof e.tab.title !== "string") { malformed += 1; continue; }
+    if (typeof e.t_ms !== "number" || !Number.isFinite(e.t_ms)) { malformed += 1; continue; }
+    if (e.t_ms < 0 || (replayDurationMs !== null && e.t_ms > replayDurationMs)) offClock += 1;
+    if (e.type === "dom.element.selected") {
+      picked += 1;
+      const el = e.element;
+      if (
+        !isObj(el) || typeof el.tag !== "string" || typeof el.selector !== "string" ||
+        !isObj(el.bounds) ||
+        ["x", "y", "width", "height"].some((k) => typeof el.bounds[k] !== "number")
+      ) {
+        malformed += 1;
+      }
+    }
+  }
+  const unknown = v.events.filter((e) => isObj(e) && !KNOWN.includes(e.type)).length;
+  if (malformed > 0) {
+    fail(`${name}: ${malformed} event(s) are not {t_ms, type, tab{url,title}} — and a "dom.element.selected" MUST carry element{tag,selector,bounds} (SPEC §11.4)`);
+  } else if (offClock > 0) {
+    fail(`${name}: ${offClock} event(s) sit outside the replay — t_ms is on the REPLAY clock, so an event the replay does not cover cannot be lined up with anything in the pack (SPEC §11.4, §10.1)`);
+  } else {
+    pass(`${name}: ${v.events.length} event(s), ${picked} picked element(s), all on the replay clock — the pack says what was clicked, not where it was drawn (SPEC §11.4)`);
+  }
+  if (unknown > 0) {
+    note(`${name}: ${unknown} event(s) of a type this validator does not know — readers ignore them (SPEC §11.4)`);
+  }
 }
 
 /**

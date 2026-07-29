@@ -9,6 +9,7 @@
 // bridge.status() and are re-read after every change and on window focus,
 // because both move while the window is open.
 import type {
+  ChromeIntegrationStatus,
   McpStatus,
   SettingsDisplayOption,
   SettingsGetResult,
@@ -36,6 +37,10 @@ interface SettingsBridge {
   openOutput(): Promise<void>
   // The online manual (GOAL "First-Run Tutorial"); main owns the address.
   openGuide(): void
+  chromeStatus(): Promise<ChromeIntegrationStatus>
+  chromeInstall(extensionId: string): Promise<ChromeIntegrationStatus>
+  chromeUninstall(): Promise<ChromeIntegrationStatus>
+  chromeOpenFolder(): void
   status(): Promise<SettingsStatusResult>
   restartMcp(): Promise<SettingsStatusResult>
 }
@@ -64,6 +69,12 @@ const changeOutputBtn = el<HTMLButtonElement>('changeOutputBtn')
 const openOutputBtn = el<HTMLButtonElement>('openOutputBtn')
 const guideBtn = el<HTMLButtonElement>('guideBtn')
 const showTutorialBtn = el<HTMLButtonElement>('showTutorialBtn')
+const chromeVerdict = el<HTMLElement>('chromeVerdict')
+const chromeChecks = el<HTMLUListElement>('chromeChecks')
+const chromeExtensionId = el<HTMLInputElement>('chromeExtensionId')
+const chromeInstallBtn = el<HTMLButtonElement>('chromeInstallBtn')
+const chromeFolderBtn = el<HTMLButtonElement>('chromeFolderBtn')
+const chromeUninstallBtn = el<HTMLButtonElement>('chromeUninstallBtn')
 const captureDisplaySelect = el<HTMLSelectElement>('captureDisplay')
 const captureHotkeyBtn = el<HTMLButtonElement>('captureHotkeyBtn')
 const captureHotkeyHint = el<HTMLElement>('captureHotkeyHint')
@@ -598,6 +609,108 @@ changeOutputBtn.addEventListener('click', () => {
 openOutputBtn.addEventListener('click', () => {
   void bridge.openOutput()
 })
+
+// ---------------------------------------------------------------------------
+// Integrations: Chrome DOM capture (GOAL "Extension Install & Management UX")
+// ---------------------------------------------------------------------------
+
+/**
+ * Renders the health check as SIX FACTS, not one badge.
+ *
+ * "Connected ✔" tells a user nothing when it is false, and a bug report needs
+ * to know WHICH of listening / registered / handshaken / compatible failed —
+ * those have four different fixes. So each is its own line with its own mark,
+ * and the summary above them only says how many are true.
+ */
+function renderChromeStatus(status: ChromeIntegrationStatus): void {
+  const registered = status.browsers.filter((b) => b.registered)
+  const checks: { ok: boolean; text: string }[] = [
+    { ok: status.extensionDirExists, text: `${t('settings.chkExtensionFiles')} — ${status.extensionDir}` },
+    {
+      ok: status.manifestWritten,
+      text: status.manifestWritten
+        ? `${t('settings.chkHostManifest')} — ${status.allowedExtensionIds.join(', ') || '—'}`
+        : t('settings.chkHostManifest'),
+    },
+    {
+      ok: registered.length > 0,
+      text:
+        registered.length > 0
+          ? `${t('settings.chkRegistered')} — ${registered.map((b) => b.label).join(', ')}`
+          : t('settings.chkRegistered'),
+    },
+    { ok: status.listening, text: t('settings.chkListening') },
+    { ok: status.hostSeen, text: t('settings.chkHostSeen') },
+    {
+      ok: status.extensionConnected && status.protocolCompatible,
+      text: status.extensionConnected
+        ? `${t('settings.chkConnected')} — ${status.extensionVersion ?? '?'}, protocol v${String(status.protocolVersion)}`
+        : t('settings.chkConnected'),
+    },
+  ]
+  chromeChecks.replaceChildren(
+    ...checks.map((c) => {
+      const li = document.createElement('li')
+      li.className = c.ok ? 'ok' : 'bad'
+      const mark = document.createElement('span')
+      mark.className = 'mark'
+      mark.textContent = c.ok ? '✔' : '✖'
+      const label = document.createElement('span')
+      label.textContent = c.text
+      li.append(mark, label)
+      return li
+    }),
+  )
+  const passed = checks.filter((c) => c.ok).length
+  chromeVerdict.textContent = `${String(passed)}/${String(checks.length)}`
+  // A protocol the app cannot speak is worth saying out loud rather than
+  // leaving as one red line among six (GOAL: "Version Mismatch").
+  if (status.extensionConnected && !status.protocolCompatible) {
+    chromeVerdict.textContent = t('settings.chromeMismatch')
+  }
+  if (status.allowedExtensionIds.length > 0 && chromeExtensionId.value.trim() === '') {
+    chromeExtensionId.value = status.allowedExtensionIds[0] ?? ''
+  }
+}
+
+function refreshChromeStatus(): void {
+  void bridge
+    .chromeStatus()
+    .then(renderChromeStatus)
+    .catch(() => {
+      chromeVerdict.textContent = t('settings.chromeUnavailable')
+    })
+}
+
+chromeInstallBtn.addEventListener('click', () => {
+  void (async () => {
+    chromeInstallBtn.disabled = true
+    try {
+      renderChromeStatus(await bridge.chromeInstall(chromeExtensionId.value))
+    } catch (err) {
+      chromeVerdict.textContent = err instanceof Error ? err.message : String(err)
+    } finally {
+      chromeInstallBtn.disabled = false
+    }
+  })()
+})
+
+chromeUninstallBtn.addEventListener('click', () => {
+  void (async () => {
+    chromeUninstallBtn.disabled = true
+    try {
+      renderChromeStatus(await bridge.chromeUninstall())
+    } finally {
+      chromeUninstallBtn.disabled = false
+    }
+  })()
+})
+
+chromeFolderBtn.addEventListener('click', () => {
+  bridge.chromeOpenFolder()
+})
+
+refreshChromeStatus()
 
 guideBtn.addEventListener('click', () => {
   bridge.openGuide()

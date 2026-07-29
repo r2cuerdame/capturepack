@@ -305,6 +305,29 @@
            so they will appear here when a plugin does, not before. -->
     </section>
 
+    <!-- Integrations (GOAL "Extension Install & Management UX"): the browser
+         half of context capture. Every line below is READ from disk, the
+         registry and the wire when the panel opens — never a remembered
+         verdict, because all three can change without this app being told. -->
+    <section aria-labelledby="hIntegrations">
+      <h2 id="hIntegrations" data-i18n="settings.integrations">Integrations</h2>
+      <div class="row rowCol">
+        <div class="rowTop">
+          <span class="label" data-i18n="settings.chromeDom">Chrome DOM capture</span>
+          <span class="hint" id="chromeVerdict"></span>
+        </div>
+        <p class="pluginSummary" data-i18n="settings.chromeSummary">Stores what you clicked — selector, role, text, URL — instead of the pixels it was drawn with.</p>
+        <ul id="chromeChecks"></ul>
+        <div class="pathRow">
+          <input type="text" id="chromeExtensionId" spellcheck="false" placeholder="extension id from chrome://extensions" data-i18n-placeholder="settings.chromeIdPlaceholder" />
+          <button id="chromeInstallBtn" type="button" data-i18n="settings.chromeInstall">Connect</button>
+          <button id="chromeFolderBtn" type="button" data-i18n="settings.chromeFolder">Extension folder</button>
+          <button id="chromeUninstallBtn" class="quiet" type="button" data-i18n="settings.chromeUninstall">Disconnect</button>
+        </div>
+        <p class="pluginDetail" id="chromeDetail" data-i18n="settings.chromeDetail">Load the extension folder in your browser once with developer mode on, paste the ID it is given, and Connect registers the native messaging host for every Chromium browser on this machine. Nothing leaves the machine, and the page is read only when you pick an element.</p>
+      </div>
+    </section>
+
     <footer id="about">
       <span id="appVersion"></span>
       <span id="escHint" data-i18n="common.escCloses">Esc closes</span>

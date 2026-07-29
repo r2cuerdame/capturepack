@@ -297,6 +297,29 @@ export function contextStatus(): ContextStatus | null {
   }
 }
 
+/**
+ * "Now" on the replay clock, or null before the runtime exists.
+ *
+ * The browser extension's events have to land on the SAME clock the surface
+ * ring and the video already agree on (SPEC §10.1) — otherwise a DOM element
+ * and the window rectangle recorded at the same instant would carry different
+ * numbers, and nothing downstream could put them beside each other.
+ */
+/**
+ * The window a freeze covers, on the context clock — the anchor anything
+ * recorded outside the ring has to be expressed against to land on the pack's
+ * clock (SPEC §10.1).
+ */
+export function frozenWindow(freezeId: string | null): { startMs: number; endMs: number } | null {
+  if (freezeId === null) return null
+  const frozen = freezes.get(freezeId)
+  return frozen === undefined ? null : { startMs: frozen.startMs, endMs: frozen.endMs }
+}
+
+export function contextNowMs(): number | null {
+  return runtime === null ? null : runtime.clock.nowMs()
+}
+
 /** The Provider Host, for the registration of built-in providers (step 4). */
 export function contextProviderHost(): ProviderHost | null {
   return runtime?.providers ?? null
