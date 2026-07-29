@@ -868,12 +868,20 @@ for (const btn of storageRow.querySelectorAll<HTMLButtonElement>('[data-purge]')
       renderStorage(usage)
       const bucket = usage.olderThan.find((o) => o.days === days)
       if (bucket === undefined || bucket.packs === 0) return
+      // "Older than 0 days" is true and would read as a mistake, so the one
+      // button that takes everything says everything. The numbers in it come
+      // from the same walk as the other three.
       const ok = window.confirm(
-        t('settings.purgeConfirm', {
-          packs: String(bucket.packs),
-          size: formatBytes(bucket.bytes),
-          days: String(days),
-        }),
+        days === 0
+          ? t('settings.purgeAllConfirm', {
+              packs: String(bucket.packs),
+              size: formatBytes(bucket.bytes),
+            })
+          : t('settings.purgeConfirm', {
+              packs: String(bucket.packs),
+              size: formatBytes(bucket.bytes),
+              days: String(days),
+            }),
       )
       if (!ok) return
       btn.disabled = true

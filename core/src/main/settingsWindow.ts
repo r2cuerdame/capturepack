@@ -44,7 +44,15 @@ import { setAutoUpdateCheck } from './updater'
 const GUIDE_URL = 'https://capturepack.dev/guide'
 
 /** The ages the Storage row offers, and the only ones a purge will act on. */
-const PURGE_AGES_DAYS: readonly number[] = [1, 7, 30]
+/**
+ * The ages the panel offers, in days — and ZERO, which means everything.
+ *
+ * Zero is not a special case anywhere below: "older than 0 days" has a cutoff
+ * of now, and every pack on disk was written before now. So one walk, one
+ * filter and one counted, confirmable delete serve all four buttons, and
+ * "delete everything" cannot drift away from the three that are dated.
+ */
+const PURGE_AGES_DAYS: readonly number[] = [0, 1, 7, 30]
 
 /** A pack folder, or an archive sitting beside one, with its size and age. */
 interface StoredPack {
@@ -146,7 +154,8 @@ async function purgeOlderThan(outputDir: string, days: number): Promise<StorageP
     }
   }
   logInfo(
-    `[storage] purge older than ${String(days)}d: ${String(packsDeleted)} of ${String(doomed.length)} pack(s) ` +
+    `[storage] purge ${days === 0 ? 'everything' : `older than ${String(days)}d`}: ` +
+      `${String(packsDeleted)} of ${String(doomed.length)} pack(s) ` +
       `to the Recycle Bin, ${String(Math.round(bytesFreed / 1_048_576))} MB`,
   )
   return {
@@ -486,10 +495,10 @@ export function registerSettingsIpc(live: Settings, hooks: SettingsIpcHooks = {}
     IPC.settingsStoragePurge,
     async (_event, days: unknown): Promise<StoragePurgeResult> => {
       const olderThanDays = typeof days === 'number' && Number.isFinite(days) ? days : NaN
-      // Never zero, never negative: "delete everything older than 0 days" is
-      // "delete everything", and that is not what any of these three buttons
-      // say. A value this function does not recognise deletes nothing.
-      if (!(olderThanDays >= 1)) {
+      // Zero is now a button of its own — "Delete everything" — and it says so
+      // before it runs. Negative is still nothing this panel can mean, and a
+      // value this function does not recognise deletes nothing.
+      if (!(olderThanDays >= 0)) {
         return { ok: false, packsDeleted: 0, bytesFreed: 0, error: 'unsupported age' }
       }
       return purgeOlderThan(live.outputDir, olderThanDays)
