@@ -20,7 +20,7 @@ import {
   updateContextRetention,
 } from './context/runtime'
 import { setDomClock, setDomRetention, startDomBridge, stopDomBridge } from './chrome/domBridge'
-import { refreshHostManifestIfInstalled } from './chrome/install'
+import { refreshHostManifestIfInstalled, syncExtensionIfChanged } from './chrome/install'
 import { disposeHistory, notifyHistoryChanged, openHistoryWindow, registerHistoryIpc } from './historyWindow'
 import { registerCaptureHotkeyWithin } from './hotkey'
 import {
@@ -326,6 +326,12 @@ function main(): void {
     // stdout poisons Chrome's framing) would otherwise outlive its fix on
     // every machine that already installed the extension. Refreshed, not
     // installed: a machine with no manifest is left exactly as it was.
+    // THE EXTENSION FOLDER FIRST, then the manifest that points at it. The
+    // loaded copy lives in userData precisely so an install cannot replace it
+    // (install.ts `extensionDir`); this brings it up to the shipped version and
+    // does nothing at all when they already match, because rewriting the files
+    // makes Chrome reload the service worker and drop the native port.
+    syncExtensionIfChanged()
     refreshHostManifestIfInstalled()
 
     const capture = (): void => {

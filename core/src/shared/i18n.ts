@@ -225,6 +225,9 @@ const EN = {
   'settings.chkExtensionStale': 'Extension is out of date — loaded {loaded}, this app ships {bundled}. Press Reload on chrome://extensions.',
   'settings.chromeStale': 'Reload the extension',
   'settings.chromeUnavailable': 'Unavailable on this platform',
+  'settings.chkExtensionLegacy':
+    'Extension loaded from the old folder — load the new one once and it will survive updates',
+  'settings.chromeLegacy': 'Reload the extension from the new folder',
   'settings.chkExtensionFiles': 'Extension files',
   'settings.chkHostManifest': 'Host manifest',
   'settings.chkRegistered': 'Registered with the browser',
@@ -733,6 +736,9 @@ const KO: Record<I18nKey, string> = {
   'settings.chkExtensionStale': '확장이 오래된 버전입니다 — 로드된 것 {loaded}, 이 앱이 포함한 것 {bundled}. chrome://extensions 에서 새로고침을 누르세요.',
   'settings.chromeStale': '확장 새로고침 필요',
   'settings.chromeUnavailable': '이 플랫폼에서는 사용할 수 없음',
+  'settings.chkExtensionLegacy':
+    '확장이 예전 폴더에서 로드됨 — 새 폴더로 한 번만 다시 로드하면 업데이트에도 유지됩니다',
+  'settings.chromeLegacy': '새 폴더에서 확장을 다시 로드하세요',
   'settings.chkExtensionFiles': '확장 파일',
   'settings.chkHostManifest': '호스트 매니페스트',
   'settings.chkRegistered': '브라우저에 등록됨',
@@ -1213,6 +1219,9 @@ const JA: Record<I18nKey, string> = {
   'settings.chkExtensionStale': '拡張機能が古いバージョンです — 読み込み済み {loaded}、このアプリの同梱 {bundled}。chrome://extensions で再読み込みしてください。',
   'settings.chromeStale': '拡張機能の再読み込みが必要',
   'settings.chromeUnavailable': 'このプラットフォームでは利用できません',
+  'settings.chkExtensionLegacy':
+    '拡張機能が以前のフォルダーから読み込まれています — 新しいフォルダーで一度読み込み直せば更新後も維持されます',
+  'settings.chromeLegacy': '新しいフォルダーから拡張機能を再読み込みしてください',
   'settings.chkExtensionFiles': '拡張ファイル',
   'settings.chkHostManifest': 'ホストマニフェスト',
   'settings.chkRegistered': 'ブラウザに登録済み',
@@ -1687,6 +1696,9 @@ const ZH: Record<I18nKey, string> = {
   'settings.chkExtensionStale': '扩展版本过旧 — 已加载 {loaded}，本应用附带 {bundled}。请在 chrome://extensions 点击"重新加载"。',
   'settings.chromeStale': '需要重新加载扩展',
   'settings.chromeUnavailable': '此平台不可用',
+  'settings.chkExtensionLegacy':
+    '扩展从旧文件夹加载 — 从新文件夹重新加载一次即可在更新后保留',
+  'settings.chromeLegacy': '请从新文件夹重新加载扩展',
   'settings.chkExtensionFiles': '扩展文件',
   'settings.chkHostManifest': '主机清单',
   'settings.chkRegistered': '已在浏览器注册',
@@ -2168,6 +2180,9 @@ const ES: Record<I18nKey, string> = {
   'settings.chkExtensionStale': 'La extensión está desactualizada: cargada {loaded}, esta app incluye {bundled}. Pulsa Recargar en chrome://extensions.',
   'settings.chromeStale': 'Recarga la extensión',
   'settings.chromeUnavailable': 'No disponible en esta plataforma',
+  'settings.chkExtensionLegacy':
+    'La extensión se cargó desde la carpeta antigua: cárgala una vez desde la nueva y sobrevivirá a las actualizaciones',
+  'settings.chromeLegacy': 'Vuelve a cargar la extensión desde la nueva carpeta',
   'settings.chkExtensionFiles': 'Archivos de la extensión',
   'settings.chkHostManifest': 'Manifiesto del host',
   'settings.chkRegistered': 'Registrado en el navegador',
@@ -2651,6 +2666,9 @@ const FR: Record<I18nKey, string> = {
   'settings.chkExtensionStale': 'Extension obsolète : version chargée {loaded}, version fournie {bundled}. Cliquez sur Recharger dans chrome://extensions.',
   'settings.chromeStale': 'Rechargez l’extension',
   'settings.chromeUnavailable': 'Indisponible sur cette plateforme',
+  'settings.chkExtensionLegacy':
+    'L’extension est chargée depuis l’ancien dossier — chargez-la une fois depuis le nouveau et elle survivra aux mises à jour',
+  'settings.chromeLegacy': 'Rechargez l’extension depuis le nouveau dossier',
   'settings.chkExtensionFiles': 'Fichiers de l’extension',
   'settings.chkHostManifest': 'Manifeste de l’hôte',
   'settings.chkRegistered': 'Enregistré auprès du navigateur',
@@ -3137,6 +3155,9 @@ const DE: Record<I18nKey, string> = {
   'settings.chkExtensionStale': 'Erweiterung ist veraltet — geladen {loaded}, diese App liefert {bundled}. Klicken Sie auf chrome://extensions auf Neu laden.',
   'settings.chromeStale': 'Erweiterung neu laden',
   'settings.chromeUnavailable': 'Auf dieser Plattform nicht verfügbar',
+  'settings.chkExtensionLegacy':
+    'Die Erweiterung wird aus dem alten Ordner geladen — einmal aus dem neuen laden, dann übersteht sie Updates',
+  'settings.chromeLegacy': 'Erweiterung aus dem neuen Ordner neu laden',
   'settings.chkExtensionFiles': 'Erweiterungsdateien',
   'settings.chkHostManifest': 'Host-Manifest',
   'settings.chkRegistered': 'Beim Browser registriert',
@@ -3624,6 +3645,9 @@ const PT: Record<I18nKey, string> = {
   'settings.chkExtensionStale': 'A extensão está desatualizada — carregada {loaded}, este app inclui {bundled}. Clique em Recarregar em chrome://extensions.',
   'settings.chromeStale': 'Recarregue a extensão',
   'settings.chromeUnavailable': 'Indisponível nesta plataforma',
+  'settings.chkExtensionLegacy':
+    'A extensão foi carregada da pasta antiga — carregue-a uma vez da nova e ela sobreviverá às atualizações',
+  'settings.chromeLegacy': 'Recarregue a extensão a partir da nova pasta',
   'settings.chkExtensionFiles': 'Ficheiros da extensão',
   'settings.chkHostManifest': 'Manifesto do anfitrião',
   'settings.chkRegistered': 'Registado no navegador',
@@ -4105,6 +4129,9 @@ const RU: Record<I18nKey, string> = {
   'settings.chkExtensionStale': 'Расширение устарело — загружено {loaded}, приложение содержит {bundled}. Нажмите «Обновить» на chrome://extensions.',
   'settings.chromeStale': 'Перезагрузите расширение',
   'settings.chromeUnavailable': 'Недоступно на этой платформе',
+  'settings.chkExtensionLegacy':
+    'Расширение загружено из старой папки — загрузите его один раз из новой, и оно переживёт обновления',
+  'settings.chromeLegacy': 'Перезагрузите расширение из новой папки',
   'settings.chkExtensionFiles': 'Файлы расширения',
   'settings.chkHostManifest': 'Манифест хоста',
   'settings.chkRegistered': 'Зарегистрировано в браузере',
