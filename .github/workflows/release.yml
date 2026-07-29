@@ -1,8 +1,25 @@
 name: Release
 
+# TRIGGERED BY HAND, NEVER BY A PUSH.
+#
+# This used to run on `push: tags: ["v*"]`, which made pushing a tag the same
+# act as publishing a release — and since a release is a decision and a push is
+# not, the safe move was to push NOTHING. That is exactly what happened:
+# 140-odd commits and a v0.2.0 tag sat unpushed while the public repository
+# stayed at v0.1.7, because there was no way to update the source without
+# shipping an installer at the same time.
+#
+# Separating them costs one button. `workflow_dispatch` takes the tag to build,
+# creates it from the chosen ref when it does not exist yet, and still refuses
+# to run unless it matches core/package.json — the check that keeps
+# electron-updater from being handed a version installed apps will never see.
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release, e.g. v0.3.0 (created from the selected ref if it does not exist)'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -12,16 +29,40 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # electron-builder derives the version (artifact names, latest.yml) from
       # core/package.json; a mismatched tag would publish an update installed
-      # apps never see, or collide with a previous release's assets.
+      # apps never see, or collide with a previous release's assets. The check
+      # is unchanged by the move to a manual trigger — it just reads the input
+      # rather than the ref that triggered the run.
       - name: Verify tag matches package version
         shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
         run: |
           $version = (Get-Content core/package.json -Raw | ConvertFrom-Json).version
-          if ("v$version" -ne $env:GITHUB_REF_NAME) {
-            throw "Tag $env:GITHUB_REF_NAME does not match core/package.json version $version"
+          if ("v$version" -ne $env:RELEASE_TAG) {
+            throw "Tag $env:RELEASE_TAG does not match core/package.json version $version"
+          }
+
+      # The tag is created here rather than pushed by hand, so the thing that
+      # gets released is exactly the ref this run checked out — a tag pushed
+      # separately can drift from what the workflow was started against.
+      - name: Create the tag if it does not exist
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if (git rev-parse -q --verify "refs/tags/$env:RELEASE_TAG") {
+            Write-Host "$env:RELEASE_TAG already exists; releasing it as-is"
+          } else {
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag "$env:RELEASE_TAG"
+            git push origin "$env:RELEASE_TAG"
           }
 
       - uses: actions/setup-node@v4
@@ -60,6 +101,7 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
         run: |
           $lines = Get-ChildItem core/release -Filter *.exe | ForEach-Object {
             $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
@@ -69,4 +111,4 @@ jobs:
           $sums = "core/release/SHA256SUMS.txt"
           $lines | Out-File $sums -Encoding utf8
           Get-Content $sums
-          gh release upload "$env:GITHUB_REF_NAME" $sums --clobber
+          gh release upload "$env:RELEASE_TAG" $sums --clobber
