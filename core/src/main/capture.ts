@@ -851,6 +851,8 @@ export interface ReplayFetch {
     durationMs: number
     mimeType: string
     replayFile: 'replay.webm' | 'replay.mp4'
+    /** The tick clock's value at these bytes' t=0 (#112); absent if unknown. */
+    originMs?: number
   } | null
   // Set exactly when `replay` is null.
   miss: ReplayMiss | null
@@ -877,6 +879,10 @@ export function requestReplay(
             durationMs: payload.durationMs,
             mimeType: payload.mimeType,
             replayFile: payload.replayFile,
+            // Where these bytes begin on the tick clock (#112).
+            ...(typeof payload.originMs === 'number' && Number.isFinite(payload.originMs)
+              ? { originMs: payload.originMs }
+              : {}),
           },
           miss: null,
         })

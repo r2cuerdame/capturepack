@@ -171,6 +171,8 @@ interface FrozenDisplay {
   height: number
   replayWebm: Buffer | null
   replayDurationMs: number
+  /** The tick clock's value at this replay's t=0 (#112); absent if unknown. */
+  replayOriginMs?: number
   replayMimeType: string | null
   replayFile: 'replay.webm' | 'replay.mp4' | null
   // Set when this display came back WITHOUT a replay: why its buffer was not
@@ -298,6 +300,7 @@ async function freezeDisplays(settings: Settings): Promise<{
         ...d,
         replayWebm: replay.buffer,
         replayDurationMs: replay.durationMs,
+        ...(replay.originMs === undefined ? {} : { replayOriginMs: replay.originMs }),
         replayMimeType: replay.mimeType,
         replayFile: replay.replayFile,
         replayUnavailableReason: null,
@@ -471,7 +474,14 @@ async function runFlow(settings: Settings): Promise<void> {
   // configured length, and a range that claimed otherwise would put every pack
   // time a few seconds off. The delay costs nothing — retention keeps the
   // replay length plus a slack, and the prune runs at 1 Hz.
-  const contextFreezeId = freezeContext(replayEndAt, replayDurationMs)
+  // The tick clock's value at the SAVED replay's t=0, plus whatever the exact
+  // -length cut drops from its head — that is where the pack clock starts (#112).
+  const focusedReplay = frozen.displays.find((d) => d.focused)
+  const tickOriginMs =
+    focusedReplay?.replayOriginMs === undefined
+      ? undefined
+      : focusedReplay.replayOriginMs + replaySourceStartMs
+  const contextFreezeId = freezeContext(replayEndAt, replayDurationMs, tickOriginMs)
   logInfo(
     `[context] pack clock: replay ends ${String(replayEndAt - triggerAt)} ms after the trigger, ` +
       `${String(replayDurationMs)} ms long (raw ${String(rawReplayDurationMs)} ms)`,

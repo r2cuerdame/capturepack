@@ -142,10 +142,27 @@ export function updateContextRetention(replayMs: number): void {
  * old, which is the only condition under which a wall-clock instant can be
  * placed on a monotonic clock without inventing precision.
  */
-export function freezeContext(triggerAtWallMs: number, replayDurationMs: number): string | null {
+export function freezeContext(
+  triggerAtWallMs: number,
+  replayDurationMs: number,
+  tickOriginMs?: number,
+): string | null {
   const current = runtime
   if (current === null) return null
-  const endMs = current.clock.fromWallClockMs(triggerAtWallMs)
+  // THE REPLAY'S OWN ORIGIN WHEN THE RECORDER GAVE ONE (#112).
+  //
+  // Ticks carry a session-monotonic `presentationTime`, so the ring is on that
+  // clock. The saved bytes begin where their recorder slot began, and the
+  // recorder reports that number with them — so the frozen range is anchored on
+  // it directly. No wall clock, no conversion, no residual.
+  //
+  // The wall-clock anchor stays for the case with no ticks at all: a display
+  // with no recorder, or a platform with no host, where the free-running loop
+  // is what filled the ring.
+  const endMs =
+    tickOriginMs === undefined
+      ? current.clock.fromWallClockMs(triggerAtWallMs)
+      : tickOriginMs + Math.max(0, replayDurationMs)
   const startMs = endMs - Math.max(0, replayDurationMs)
   const freezeId = randomUUID()
   current.timeline.freeze(freezeId, startMs, endMs)

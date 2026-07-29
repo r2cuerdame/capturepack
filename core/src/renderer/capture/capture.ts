@@ -331,9 +331,22 @@ function startFrameTicks(): void {
       video.requestVideoFrameCallback(pump)
       return
     }
+    // ONE MONOTONIC NUMBER FOR THE WHOLE SESSION (#112).
+    //
+    // This used to send the frame's position within the CURRENT recorder slot.
+    // The recorder rotates slots every `segmentSeconds`, and at each rotation
+    // that number falls back to zero — so the ring received time going
+    // BACKWARDS by up to thirty seconds. The log said it plainly once a
+    // recording lived long enough to rotate: "736 samples over -9s".
+    //
+    // `presentationTime` is `performance.now()`-based and never goes backwards,
+    // so it is sent as-is. Turning it into a position in the saved file needs
+    // to know WHICH slot was saved and where that slot began, and the only
+    // moment both are known is when the replay is handed over — so that is
+    // where the subtraction happens, not here.
     window.captureBridge.sendTick?.({
       displayId: startPayload?.displayId ?? '',
-      mediaTimeMs: submitted - base.startedAt,
+      mediaTimeMs: submitted,
     })
     video.requestVideoFrameCallback(pump)
   }
@@ -625,6 +638,9 @@ async function handleReplayRequest(requestId: string): Promise<void> {
     recorder.stop()
   })
   const durationMs = Math.round(performance.now() - startedAt)
+  // Where this file's t=0 sits on the tick clock (#112). Ticks are monotonic
+  // `presentationTime`; these bytes begin when this slot did.
+  const originMs = startedAt
   startSlot(slot) // restart before assembling so buffering never pauses
   restaggerSurvivor(slots[slot.index === 0 ? 1 : 0])
   const buffer = await new Blob(chunks, { type: format.mimeType }).arrayBuffer()
@@ -651,6 +667,7 @@ async function handleReplayRequest(requestId: string): Promise<void> {
           requestId,
           buffer,
           durationMs,
+          originMs,
           mimeType: format.mimeType,
           replayFile: format.replayFile,
         }

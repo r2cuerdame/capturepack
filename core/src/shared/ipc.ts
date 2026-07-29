@@ -342,6 +342,19 @@ export interface CaptureTickPayload {
 
 export interface CaptureReplayResultPayload {
   requestId: string
+  /**
+   * The tick clock's value at this replay's t=0 (#112).
+   *
+   * Ticks carry a session-monotonic `presentationTime`, because a per-slot
+   * number falls back to zero at every rotation and sent the ring's time
+   * BACKWARDS. Turning that into a position in THIS file needs to know which
+   * slot was saved and where it began, and this is the only moment both are
+   * known. Subtract it from a tick to get a position in these bytes.
+   *
+   * Absent where the recorder could not say, in which case the ring keeps its
+   * own clock and nothing is mis-stated.
+   */
+  originMs?: number
   // Recorder bytes; empty when no replay is available (screenshot-only capture).
   buffer: ArrayBuffer
   durationMs: number

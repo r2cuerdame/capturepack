@@ -1393,7 +1393,11 @@ function beginPendingBox(on: BoardDisplay, b: Box, picked?: PickableObject): voi
     draft.start_ms = life.start_ms
     draft.end_ms = life.end_ms
   }
-  if (picked?.surface != null) attachTrack(draft, picked.surface.surfaceId)
+  if (picked?.surface != null) {
+    // Recorded before any lifetime edit can move the midpoint (#111).
+    pickedAtMs.set(draft.annotation_id, lifetimeMidpoint(draft, replayDurationMs))
+    attachTrack(draft, picked.surface.surfaceId)
+  }
   textSession = { kind: 'new', draft }
   // The lane belongs to the box, and the box exists now (#92).
   syncLanes()
@@ -2584,7 +2588,19 @@ const pickedRects = new Map<string, Box>()
  */
 function reanchorBounds(a: Annotation): void {
   if (a.tracking?.enabled !== true) return
-  const at = trackedBoundsAt(a, lifetimeMidpoint(a, replayDurationMs))
+  // THE INSTANT THE USER PICKED IT, NOT THE MIDDLE OF ITS LIFETIME (#111).
+  //
+  // #102 anchored `bounds` to the lifetime's midpoint, which SPEC §8.4 calls
+  // the representative instant. Correct for a box someone drew, wrong for a box
+  // someone PICKED: extending the lifetime moves the midpoint, so the stored
+  // rectangle walked away from the thing the user had clicked on. Measured on
+  // CapturePack_2026-07-29_091123 — picked at 3656 ms where the window was at
+  // (1814,684), extended to the end, and `bounds` ended up at (119,271), the
+  // midpoint's rectangle, seventeen hundred pixels away.
+  //
+  // The pick instant is what the box MEANS. The track says where the object was
+  // at every other moment, so nothing is lost by holding this one still.
+  const at = trackedBoundsAt(a, pickedAtMs.get(a.annotation_id) ?? lifetimeMidpoint(a, replayDurationMs))
   if (at !== null) a.bounds = at
 }
 
@@ -2630,6 +2646,14 @@ function existingBoxFor(picked: PickableObject): Annotation | null {
  * box alive for 15.6 s carried 0.9 s of path.
  */
 const trackedSurfaces = new Map<string, string>()
+
+/**
+ * The replay instant each picked box was placed at (#111).
+ *
+ * Its lifetime moves — "until the end" is one click — but the moment the user
+ * pointed at the object does not, and that moment is what the box means.
+ */
+const pickedAtMs = new Map<string, number>()
 
 /** Re-asks for the path over the box's CURRENT lifetime (see `trackedSurfaces`). */
 function refreshTrack(a: Annotation): void {
@@ -2719,6 +2743,7 @@ function invalidateTargetIfMoved(id: string): void {
   // for the path and put the box back on the object's rails, undoing the move
   // the user made by hand.
   trackedSurfaces.delete(id)
+  pickedAtMs.delete(id)
   if (a.target === undefined) return
   const picked = pickedRects.get(id)
   if (picked === undefined) return
