@@ -60,23 +60,32 @@ export function lifetimeFrom(
 }
 
 /**
- * `durationMs` centered on the anchor, clamped to the replay.
+ * A box's lifetime RE-LENGTHENED FROM ITS OWN START.
  *
- * Still used where the anchor is a box's own MIDPOINT rather than a click —
- * changing an existing box's duration keeps it centered on where it already
- * sits, because that is the only reading of "make this 2 seconds" that does not
- * move the box out from under the thing it names.
+ * This used to centre the new duration on the box's midpoint, and the defence
+ * written here — "the only reading of 'make this 2 seconds' that does not move
+ * the box out from under the thing it names" — was wrong about the thing it
+ * names. A box STARTS when what it points at happens: that is what
+ * `lifetimeFrom` establishes at creation, and what `picked_at_ms` records
+ * (SPEC §8.3). Centering moved the start EARLIER every time the duration grew,
+ * so making a box longer walked it backwards into frames where the thing had
+ * not happened yet — and it moved the end by only half of what was asked for,
+ * which is why it read as a bug: "박스 시간 늘리면 이전과 이후로 가운데 중심
+ * 으로 시간이 늘어나는 버그".
+ *
+ * So the START is kept and the END moves. The one case the start may move is
+ * the same one `lifetimeFrom` already handles: a duration that would run past
+ * the end of the replay pulls the start back rather than silently shortening
+ * the box.
  */
-export function lifetimeAround(
-  anchorMs: number,
+export function lifetimeExtending(
+  startMs: number,
   durationMs: number,
   replayDurationMs: number,
 ): { start_ms: number; end_ms: number } {
-  const half = durationMs / 2
-  return {
-    start_ms: Math.max(0, Math.round(anchorMs - half)),
-    end_ms: Math.min(replayDurationMs, Math.round(anchorMs + half)),
-  }
+  const duration = Math.min(durationMs, replayDurationMs)
+  const start = Math.max(0, Math.min(Math.round(startMs), replayDurationMs - duration))
+  return { start_ms: start, end_ms: Math.min(replayDurationMs, Math.round(start + duration)) }
 }
 
 /** "1.0s"-style label for a lifetime duration. */

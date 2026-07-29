@@ -440,8 +440,16 @@ body[data-window-mode="windowed"] #zoomControl {
      and the JS clamps in different boxes: the clamp reasoned about the laid-out
      rect, the browser drew a rect one header-height higher. syncSelectionUi()
      now subtracts the MEASURED height itself, which is also what lets the
-     header flip below the box when there is no room above it. */
+     header sit inside the box when there is no room above it. */
   white-space: nowrap;
+}
+
+/* INSIDE the box (no room above): it is now sitting ON the annotated pixels,
+   so it says so — a touch more opaque, and a shadow that lifts it off the
+   image instead of blending into whatever is behind it. */
+#boxHeader.inside {
+  background: rgba(20, 20, 26, 0.97);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
 }
 
 #boxHeader button {

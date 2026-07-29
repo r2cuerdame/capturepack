@@ -34,7 +34,7 @@ import type { PickableObject } from './objects'
 import { EditorState } from './state'
 import {
   formatDurationLabel,
-  lifetimeAround,
+  lifetimeExtending,
   lifetimeFrom,
   lifetimeMidpoint,
   parseDurationMs,
@@ -1860,6 +1860,12 @@ function syncSelectionUi(): void {
 
 /** Screen px between the header and the dashed selection rect it belongs to. */
 const BOX_HEADER_GAP = 4
+/**
+ * How far INSIDE the box the header sits when there is no room above it — far
+ * enough to clear the 3 px border and read as inside, close enough that it is
+ * still the corner's label rather than a floating chip.
+ */
+const BOX_HEADER_INSET = 8
 
 /**
  * Places the header against the selection rect, in #stage's own positioning
@@ -1881,25 +1887,31 @@ function positionBoxHeader(
   // image fills the stage — and a header pushed off the right edge takes the
   // blur toggle, the number toggle and the duration chip with it, none of which
   // have a keyboard fallback.
-  const maxLeft = Math.max(4, stage.clientWidth - w - 4)
-  boxHeader.style.left = `${Math.max(4, Math.min(topLeft.x, maxLeft))}px`
-  // ABOVE the box by default; BELOW it when the box is against the top of the
-  // stage and there is genuinely no room (issue #50). Flipping keeps the header
-  // touching its box, which sliding it down the top edge would not: it would
-  // sit ON the box, over the pixels being annotated.
+  // ABOVE the box by default; INSIDE ITS TOP-LEFT when there is no room above.
   //
-  // BELOW IS ONLY AN OPTION WHEN IT FITS. A box TALLER THAN THE STAGE has room
-  // neither above nor below, and that is not exotic: the editor opens framed on
-  // the focused display at roughly 1.9x-2.2x on a multi-display capture, where a
-  // box around a maximized window is easily taller than the stage. Taking the
-  // flip there and clamping it would park the header flush with the BOTTOM edge
-  // — deep inside the box, on the very pixels the flip exists to keep clear.
-  // The top edge is the honest answer: it covers the box's first rows instead of
-  // its middle, and it is where this landed before the flip existed.
+  // The fallback used to be BELOW the box, and it was disorienting: the header
+  // carries the box's own controls (blur, number, duration), so flipping it to
+  // the far side of a tall box put them a whole window away from the corner the
+  // eye is on, and on a box taller than the stage the header could land off the
+  // bottom entirely and get clamped to a random edge. Reported as "박스 위에
+  // 툴팁이 위에가 가려지면 밑으로 내려오는데 내 생각에는 box 안쪽 좌상단에
+  // 있어야 맞는 거 같아", and that reading is right: the top-left corner is
+  // where the number badge already is, so the label stays with the corner that
+  // identifies the box whichever side of the edge it has to sit on.
+  //
+  // Inside means ON the annotated pixels, which is the cost — bounded to the
+  // box's first rows, never its middle, and only when the box is against the
+  // top of the stage.
   const above = topLeft.y - BOX_HEADER_GAP - h
-  const below = bottomRight.y + BOX_HEADER_GAP
-  const fitsBelow = below + h <= stage.clientHeight
-  const top = above >= 0 ? above : fitsBelow ? below : 0
+  const inside = above < 0
+  const maxLeft = Math.max(4, stage.clientWidth - w - 4)
+  const left = inside ? topLeft.x + BOX_HEADER_INSET : topLeft.x
+  boxHeader.style.left = `${Math.max(4, Math.min(left, maxLeft))}px`
+  boxHeader.classList.toggle('inside', inside)
+  // Never past the box's own bottom edge: on a box shorter than the header,
+  // sitting inside would otherwise overhang the box it belongs to.
+  const insideTop = Math.min(topLeft.y + BOX_HEADER_INSET, Math.max(topLeft.y, bottomRight.y - h))
+  const top = inside ? insideTop : above
   const maxTop = Math.max(0, stage.clientHeight - h)
   boxHeader.style.top = `${Math.max(0, Math.min(top, maxTop))}px`
 }
@@ -2042,16 +2054,16 @@ function positionDurationEditor(): void {
   durationEditor.style.top = `${top}px`
 }
 
-// The representative instant a lifetime re-centers on: the current lifetime's
-// MIDPOINT (SPEC §8.4 — the midpoint replaced the stored t_ms anchor); a box
-// without a lifetime anchors at the capture instant ("now").
-function anchorMs(a: Annotation): number {
-  return lifetimeMidpoint(a, replayDurationMs)
+// Where a re-lengthened lifetime KEEPS ITS START: the box's own start, or —
+// for a box that never had a lifetime (it applies to the whole capture) — the
+// capture instant, which is where such a box is anchored.
+function lifetimeStartMs(a: Annotation): number {
+  return a.start_ms ?? lifetimeMidpoint(a, replayDurationMs)
 }
 
 function setSelectedDuration(ms: number): void {
   applyMutation((a) => {
-    const life = lifetimeAround(anchorMs(a), ms, replayDurationMs)
+    const life = lifetimeExtending(lifetimeStartMs(a), ms, replayDurationMs)
     a.start_ms = life.start_ms
     a.end_ms = life.end_ms
   })
@@ -2081,7 +2093,7 @@ for (const btn of durationEditor.querySelectorAll<HTMLButtonElement>('button[dat
 
 untilEndBtn.addEventListener('click', () => {
   applyMutation((a) => {
-    const start = a.start_ms ?? Math.max(0, Math.min(Math.round(anchorMs(a)), replayDurationMs))
+    const start = Math.max(0, Math.min(Math.round(lifetimeStartMs(a)), replayDurationMs))
     a.start_ms = start
     a.end_ms = replayDurationMs
   })
