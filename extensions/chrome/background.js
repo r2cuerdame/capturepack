@@ -43,16 +43,22 @@ function scheduleRetry() {
 // A live native messaging port also keeps the worker from being torn down, so
 // the moment either path succeeds this stops costing anything at all.
 const RECONNECT_ALARM = 'capturepack-reconnect'
-// CREATING AN ALARM THAT ALREADY EXISTS RESETS ITS SCHEDULE.
+// UNCONDITIONAL, AND SYNCHRONOUS AT WORKER START.
 //
-// This ran unconditionally at every worker start, and the worker starts often —
-// a tab switch is enough. Each start pushed the next firing a full minute out,
-// so on a busy browser the one timer that is supposed to survive termination
-// could go a long time without ever firing. Asking first is what makes the
-// period mean a period.
-chrome.alarms.get(RECONNECT_ALARM, (existing) => {
-  if (!existing) chrome.alarms.create(RECONNECT_ALARM, { periodInMinutes: 1 })
-})
+// 0.1.2 tried to be clever here: creating an alarm that already exists resets
+// its schedule, so it asked `chrome.alarms.get` first and created the alarm only
+// when it was missing. That made the ONE timer meant to survive worker
+// termination depend on an ASYNC callback running — and a worker that starts
+// with nothing holding it open can be torn down before that callback ever fires.
+// The alarm then never exists at all. Measured: after the app restarted, the
+// extension went from redialling every 2.3 s to complete silence, and Settings
+// sat on "호스트가 접속함 ✖" until the extension was reloaded by hand.
+//
+// So it is created every time, unconditionally, in the first turn of the worker.
+// The reset it causes costs nothing: a worker start ALSO calls connect() below,
+// which is the same thing the alarm would have done, and `delayInMinutes` keeps
+// the first firing one minute out rather than a full period away.
+chrome.alarms.create(RECONNECT_ALARM, { delayInMinutes: 1, periodInMinutes: 1 })
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== RECONNECT_ALARM) return
   retryMs = RETRY_MIN_MS
