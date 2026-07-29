@@ -42,6 +42,8 @@ Post-release hotfixes found by adversarial QA against the public 0.3.0 build.
 - The manual release workflow stages the exact installer, blockmap,
   `latest.yml` and `SHA256SUMS.txt` in a draft, downloads all four assets again,
   byte/hash-verifies them, and only then makes the GitHub Release public.
+  Packaging explicitly disables electron-builder's implicit CI publishing, so
+  `npm run dist` cannot upload before the local contract passes.
 - The installer persists its integration recovery snapshot immediately after a
   previous version is removed, before electron-builder's callback-free
   extraction exits can run. Its custom close gate also initializes builder

@@ -18,7 +18,7 @@
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
     "dev": "npm run build && electron .",
-    "dist": "npm run build && electron-builder --win",
+    "dist": "npm run build && electron-builder --win --publish never",
     "release": "npm run build && electron-builder --win --publish always",
     "check:sync": "node scripts/surface-sync-check.mjs",
     "check:delta": "node scripts/surface-delta-check.mjs",

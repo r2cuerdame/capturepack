@@ -9,6 +9,8 @@ The workflow builds on a GitHub-hosted Windows runner, runs the same complete QA
 gate used for a local candidate, creates or verifies the requested tag only
 after QA passes, stages the exact installer and updater files in a draft, then
 publishes only after downloading and byte-verifying every staged asset.
+`npm run dist` passes `--publish never`; GitHub Actions must not trigger
+electron-builder's implicit CI upload before those checks.
 
 ## Before dispatch
 
