@@ -1860,21 +1860,24 @@ matching the tracked window against the actual replay frames put the recorded
 rectangle within ~0 px of the picture. And the box was still wrong while a window
 was shaken. *"움직일때 어긋나"*.
 
-It was never a time-domain error. It was **lost observations**. Counting ring
-samples that share a millisecond with another sample of the same window:
+It was never a time-domain error. What it is remains open. What follows is a
+merge that was real but small, and a **withdrawn claim** that was neither.
 
-| pack | samples sharing an instant | holding DIFFERENT rectangles |
-|---|---|---|
-| `CapturePack_2026-07-29_144311` | 44 of 173 (25%) | 22 of 22 |
-| `CapturePack_2026-07-29_143319` | 34 of 156 | 12 of 13 |
+**WITHDRAWN: "25% of samples collide."** Counting track samples that share a
+millisecond gave 44 of 173 in `_144311`, every pair holding a different
+rectangle — and that was a measuring error, not a defect. `trackOf` emits ONE
+SAMPLE PER SCREEN the window is visible on (#103, by design): the rectangles
+differ because they are pixels of DIFFERENT displays' snapshots, exactly as
+SPEC §8.2 requires. Counted per display, the number is **zero** in rc.16 and
+rc.18, and 10 samples in rc.15. The collision was already gone before the fix
+below was written for it. Three sessions of this bug have now produced three
+measurements that had to be withdrawn; the pattern in all three is the same —
+**an aggregate computed across coordinate spaces that were never comparable.**
 
-`shared/track.ts` answers with ONE rectangle per time, so the second observation
-of a colliding pair is **unreachable** — the box holds the older rectangle across
-a whole frame, and a shaken window travels ~443 px in that frame.
-
-The cause was one call. A tick's round trip varies, `frameMs` arrives on an even
+The merge that WAS real: a tick's round trip varies, `frameMs` arrives on an even
 grid, so `frameMs + lag` can go backwards; the guard against that was
 `Math.max(lastAppendedMs, ...)`, and **`Math.max` does not reorder, it merges.**
+Worth 10 samples in one rc.15 pack, not 25% of anything.
 
 Two fixes were tried and rejected on the bench before the third:
 
@@ -1889,6 +1892,31 @@ An observation that cannot be filed truthfully is **dropped and counted**. The
 ring already holds a sample from a later instant, so a reader can reach nothing
 in the dropped one — it was already unreachable under `Math.max`; the difference
 is that the loss is now visible in `dropped` instead of disguised as a rectangle.
+
+### What is still wrong, stated without a fix (#110)
+
+Measured identically in rc.15, rc.16 and rc.18, so **nothing done so far has
+touched it**: counting samples that repeat the previous rectangle EXACTLY while
+the window is demonstrably moving (both neighbours differ by >100 px), per
+display —
+
+| pack | build | repeats while moving | median travel in that frame |
+|---|---|---|---|
+| `_143319` | rc.15 | 16 of 52 | 433 px |
+| `_144311` | rc.16 | 19 of 76 | 391 px |
+| `_151348` | rc.18 | 13 of 49 | 363 px |
+
+About a quarter of the observations during a drag say the window did not move,
+while it moved a third of a screen. That is the size of the reported error and
+it is the only unexplained thing left.
+
+**It is not yet known whether that is a lost observation or a window that really
+stalled.** The distinguishing test — a lost observation makes the NEXT step twice
+a normal one, a real stall makes it one — gives 1.83x on `_151348` and 0.73x on
+`_144311`. Opposite answers, so it decides nothing, because drag speed varies
+inside a capture and a median across it compares nothing in particular. The test
+that would settle it is the one that already works: template-match the window in
+the replay frames on both sides of a repeat and see whether the picture moved.
 
 `npm run check:sync` asserts it: zero samples sharing an instant, and apparent
 speed 1.00 against a truth of 1.0. Against the `Math.max` version it reports 20
