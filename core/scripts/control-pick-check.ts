@@ -1,0 +1,256 @@
+// DOES A CONTROL LAND WHERE THE CONTROL IS? (#111)
+//
+// Reported as two symptoms at once: hovering a Chrome extension card named the
+// right control — "컨트롤 · Ghostery 개인정보 보호용 광고 차단기" — while drawing
+// its outline in the BOTTOM-LEFT of the window over blank space, and small
+// elements could not be picked at all.
+//
+// The chip and the outline cannot disagree by construction: editor.ts paints
+// both from ONE `hoverObject`, taking the rectangle from `hoverObject.x/y/w/h`
+// and the text from `hoverChipLabel(hoverObject)`. So a chip naming a control
+// whose outline is somewhere else means the OBJECT's rectangle is already
+// wrong by the time the editor has it — upstream of any drawing.
+//
+// This drives the REAL provider and the REAL ObjectIndex over a REAL dump
+// (CapturePack_2026-07-29_184934, the capture the screenshot came from: Chrome
+// on chrome://extensions, display 1, 230 elements) and asks the only question
+// that matters — probe a point inside a control, and is the object you get back
+// that control, at that rectangle?
+//
+// Run: npm run check:pick
+import { readFileSync } from 'node:fs'
+import { ContextBuffer, mintSurfaceIds, surfaceSamplesOf } from '../src/main/context/buffer'
+import type { ContextObservation } from '../src/main/context/buffer'
+import { WindowsUiaProvider } from '../src/main/context/provider'
+import { ObjectIndex } from '../src/renderer/editor/objects'
+import type { EditorUiaElement, EditorUiaWindow } from '../src/shared/ipc'
+
+const PACK = 'C:/Users/recue/OneDrive/Desktop/CapturePack/CapturePack_2026-07-29_184934'
+
+interface DumpWindow {
+  z: number
+  title: string
+  process: string
+  class_name: string
+  bounds: { x: number; y: number; width: number; height: number }
+  focused?: boolean
+  display?: number
+  hwnd?: string
+  tree?: string
+}
+interface DumpElement {
+  window: number
+  bounds: { x: number; y: number; width: number; height: number }
+  control_type: string
+  name: string
+  automation_id: string
+  class_name: string
+  depth?: number
+  display?: number
+}
+
+const dump = JSON.parse(readFileSync(`${PACK}/plugins/windows-uia/elements.json`, 'utf8')) as {
+  windows: DumpWindow[]
+  elements: DumpElement[]
+}
+
+// The Chrome window from the screenshot, and the display it is on.
+const found = dump.windows.find((w) => /확장 프로그램/.test(w.title))
+if (found === undefined) throw new Error('the screenshot window is not in this dump')
+const chrome: DumpWindow = found
+const DISPLAY = chrome.display ?? 1
+// Display 1 of this desk (manifest.environment.screens[0]).
+const SNAP_W = 1200
+const SNAP_H = 1920
+
+const els = dump.elements.filter((e) => e.window === chrome.z)
+
+/**
+ * One observation, exactly the shape session.rebuild() produces: RING windows
+ * (already in this display's snapshot space) carrying the DUMP's elements.
+ * `dx` moves the window, so the anchoring path can be exercised too.
+ */
+const observationAt = (tMs: number, dx: number, withElements: boolean): ContextObservation => ({
+  tMs,
+  windows: dump.windows.map((w) => ({
+    surface_id: `s${w.z}`,
+    hwnd: `${1000 + w.z}`,
+    title: w.title,
+    process: w.process,
+    class_name: w.class_name,
+    bounds: { x: w.bounds.x + dx, y: w.bounds.y, width: w.bounds.width, height: w.bounds.height },
+    display: w.display ?? DISPLAY,
+    focused: w.focused === true,
+    z: w.z,
+    hasControls: (w.tree === 'collected' || w.tree === 'truncated'),
+    tree: (w.tree ?? 'skipped') as EditorUiaWindow['tree'],
+  })) as EditorUiaWindow[],
+  elements: withElements ? (els.map((e) => ({ ...e })) as unknown as EditorUiaElement[]) : [],
+})
+
+const observations = [
+  observationAt(0, 0, true),
+  observationAt(500, 0, false),
+  observationAt(1000, 300, false),
+]
+const ids = mintSurfaceIds(observations)
+const buffer = new ContextBuffer(observations, 'ring', { startMs: 0, endMs: 1000 })
+const provider = new WindowsUiaProvider(buffer, ids)
+const samples = surfaceSamplesOf(observations, ids)
+
+/** Every control candidate this pipeline offers on DISPLAY at `tMs`. */
+async function indexAt(tMs: number): Promise<ObjectIndex> {
+  const sample = samples.find((s) => s.tMs === tMs)
+  if (sample === undefined) throw new Error(`no sample at ${tMs}`)
+  const surfaces = sample.surfaces.filter((s) => s.display === DISPLAY)
+  const frame = await provider.frame({
+    sessionId: 'pick-check',
+    timeMs: tMs,
+    surfaces: sample.surfaces,
+    maxCandidates: 5000,
+  } as never)
+  return ObjectIndex.build(frame.candidates, surfaces, frame.coverage, frame.claims, SNAP_W, SNAP_H)
+}
+
+let failed = 0
+const check = (ok: boolean, line: string): void => {
+  if (!ok) failed += 1
+  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${line}`)
+}
+
+async function main(): Promise<void> {
+  console.log(`dump: ${els.length} elements in "${chrome.title.slice(0, 30)}" at ${JSON.stringify(chrome.bounds)}, display ${DISPLAY}\n`)
+
+  // --- The reported control, probed at its own centre -----------------------
+  const target = els.find((e) => /Ghostery 개인정보/.test(e.name))
+  if (target === undefined) throw new Error('the Ghostery control is not in this dump')
+  const px = Math.round(target.bounds.x + target.bounds.width / 2)
+  const py = Math.round(target.bounds.y + target.bounds.height / 2)
+  console.log(`THE REPORTED CONTROL — "${target.name.slice(0, 34)}" at ${JSON.stringify(target.bounds)}`)
+  console.log(`probing its centre (${px}, ${py})`)
+
+  const idx = await indexAt(0)
+  const got = idx.pick(px, py)
+  check(got !== null, `something is offered at the control's own centre — got ${got === null ? 'NOTHING' : got.level}`)
+  if (got !== null) {
+    const inside = px >= got.x && py >= got.y && px <= got.x + got.width && py <= got.y + got.height
+    check(inside, `the offered object CONTAINS the probe point — rect (${got.x},${got.y},${got.width},${got.height})`)
+    check(
+      got.level === 'control',
+      `it is a CONTROL, not the window fallback — got ${got.level} "${String(got.candidate.name).slice(0, 30)}"`,
+    )
+    if (got.level === 'control') {
+      const exact =
+        got.x === target.bounds.x &&
+        got.y === target.bounds.y &&
+        got.width === target.bounds.width &&
+        got.height === target.bounds.height
+      check(
+        exact,
+        `its rectangle is the control's — want (${target.bounds.x},${target.bounds.y},${target.bounds.width},${target.bounds.height}) got (${got.x},${got.y},${got.width},${got.height})`,
+      )
+    }
+  }
+
+  // --- Every control, not just the reported one ----------------------------
+  console.log('\nEVERY CONTROL IN THE DUMP, probed at its own centre')
+  let offered = 0
+  let containing = 0
+  let displaced = 0
+  const worst: string[] = []
+  for (const e of els) {
+    const cx = Math.round(e.bounds.x + e.bounds.width / 2)
+    const cy = Math.round(e.bounds.y + e.bounds.height / 2)
+    if (cx < 0 || cy < 0 || cx >= SNAP_W || cy >= SNAP_H) continue
+    const o = idx.pick(cx, cy)
+    if (o === null) continue
+    offered += 1
+    const inside = cx >= o.x && cy >= o.y && cx <= o.x + o.width && cy <= o.y + o.height
+    if (inside) containing += 1
+    else {
+      displaced += 1
+      if (worst.length < 5) {
+        worst.push(`probe (${cx},${cy}) -> rect (${o.x},${o.y},${o.width},${o.height}) "${String(o.candidate.name).slice(0, 24)}"`)
+      }
+    }
+  }
+  console.log(`  ${offered} probes answered, ${containing} contained the point, ${displaced} did NOT`)
+  for (const w of worst) console.log(`     ${w}`)
+  check(displaced === 0, `no offered object is ever displaced from its probe point (${displaced} were)`)
+
+  // --- Small elements ------------------------------------------------------
+  console.log('\nSMALL ELEMENTS ("작은 엘레멘트 선택이 안되고")')
+  const small = els.filter((e) => e.bounds.width < 32 || e.bounds.height < 32)
+  let smallOffered = 0
+  for (const e of small) {
+    const cx = Math.round(e.bounds.x + e.bounds.width / 2)
+    const cy = Math.round(e.bounds.y + e.bounds.height / 2)
+    if (cx < 0 || cy < 0 || cx >= SNAP_W || cy >= SNAP_H) continue
+    const o = idx.pick(cx, cy)
+    if (o !== null && o.level === 'control') smallOffered += 1
+  }
+  console.log(`  ${small.length} controls are under 32 px on one axis; ${smallOffered} are offered as controls`)
+  check(small.length === 0 || smallOffered > 0, 'small controls can be picked at all')
+
+  // --- The anchoring path, with the window moved ---------------------------
+  console.log('\nAFTER THE WINDOW MOVES 300 px RIGHT')
+  const moved = await indexAt(1000)
+  const mx = px + 300
+  const mo = moved.pick(mx, py)
+  check(mo !== null && mo.level === 'control', `the control is still offered at its moved centre (${mx}, ${py})`)
+  if (mo !== null) {
+    check(
+      mo.x === target.bounds.x + 300 && mo.y === target.bounds.y,
+      `it moved WITH its window — want x ${target.bounds.x + 300} got ${mo.x}`,
+    )
+  }
+
+  // THE ONE WAY THIS PIPELINE GOES SILENT, pinned so it cannot return unseen.
+  //
+  // A control is offered only if its window carries a UIA tree status of
+  // 'collected' or 'truncated' — that is what claimsOf() turns into the region
+  // claim the resolver demands, and without it every control is dropped as
+  // UNCLAIMED. A ring window that failed to match its dump counterpart in
+  // session.rebuild() keeps ringObservations' own 'skipped', so the whole
+  // control level for that window disappears with no error anywhere. Worth
+  // pinning because from the outside it is indistinguishable from "this app has
+  // no controls" — and because feeding this harness a wrong tree status is what
+  // made it look, for a while, like the geometry itself was broken.
+  console.log('\nA WINDOW WHOSE TREE STATUS WAS LOST')
+  const silenced = observationAt(0, 0, true)
+  silenced.windows = silenced.windows.map((w) => ({
+    ...w,
+    tree: 'skipped',
+    hasControls: false,
+  })) as typeof silenced.windows
+  const sIds = mintSurfaceIds([silenced])
+  const sProvider = new WindowsUiaProvider(
+    new ContextBuffer([silenced], 'ring', { startMs: 0, endMs: 0 }),
+    sIds,
+  )
+  const sSample = surfaceSamplesOf([silenced], sIds)[0]
+  if (sSample !== undefined) {
+    const sFrame = await sProvider.frame({
+      sessionId: 'silent',
+      timeMs: 0,
+      surfaces: sSample.surfaces,
+      maxCandidates: 5000,
+    } as never)
+    const sIdx = ObjectIndex.build(
+      sFrame.candidates,
+      sSample.surfaces.filter((s) => s.display === DISPLAY),
+      sFrame.coverage,
+      sFrame.claims,
+      SNAP_W,
+      SNAP_H,
+    )
+    check(sFrame.candidates.length > 0, `the provider still offers ${sFrame.candidates.length} candidates`)
+    check(sFrame.claims.length === 0, `but claimsOf emits NO claim (${sFrame.claims.length})`)
+    check(sIdx.pick(px, py) === null, 'so nothing is pickable — the control level goes SILENT, not wrong')
+  }
+
+  console.log(failed === 0 ? '\ncontrol-pick-check ok' : `\ncontrol-pick-check FAILED (${failed})`)
+  process.exitCode = failed === 0 ? 0 : 1
+}
+
+void main()

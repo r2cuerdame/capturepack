@@ -364,12 +364,25 @@ namespace CapturePack {
       return Tracked.TryGetValue(hwnd, out w) && w.Elements.Count > 0;
     }
 
+    /// THE COST THAT JUSTIFIED THE BLOCK, CAPTURED BEFORE THE BLOCK DESTROYS IT.
+    ///
+    /// The caller used to log `LastPassMs(blocked)` AFTER this ran — but this
+    /// calls Untrack(), which removes the record that number lives in, so
+    /// LastPassMs fell through to its default and every dropped window was
+    /// reported as "it took 0 ms a pass". Seen in the field on four windows in
+    /// one session; 0 ms is not slow, so the log accused the blocklist of
+    /// misfiring on healthy windows when it may well have been right, and there
+    /// was no way to tell which. A lane that cannot state its cost is exactly
+    /// what Rule 4 forbids.
+    public static double LastBlockedPassMs;
+
     /// Three strikes and the window is dropped for the rest of the session, with
     /// its handles released. Returns the blocked handle for logging, or 0.
     public static long BlockIfHopeless(long hwnd, int maxStrikes) {
       TrackedWindow w;
       if (!Tracked.TryGetValue(hwnd, out w)) return 0;
       if (w.Strikes < maxStrikes) return 0;
+      LastBlockedPassMs = w.LastPassMs;
       Blocked.Add(hwnd);
       Untrack(hwnd);
       return hwnd;
@@ -599,7 +612,7 @@ while ($running) {
     if ($blocked -ne 0) {
       Write-Line ('{"event":"blocked","t":' + [CapturePack.ControlLane]::NowMs +
         ',"h":"' + $blocked + '","lastPassMs":' +
-        [Math]::Round([CapturePack.ControlLane]::LastPassMs($blocked), 1) + '}')
+        [Math]::Round([CapturePack.ControlLane]::LastBlockedPassMs, 1) + '}')
     }
   }
   $passMs = [CapturePack.ControlLane]::Busy - $passStart
