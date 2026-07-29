@@ -546,7 +546,21 @@ export class SurfaceLane {
       // Monotonic by construction: lag varies from tick to tick, so a large
       // negative one could otherwise file a sample before its predecessor and
       // put the ring out of order.
-      const takenAtFrameMs = Math.max(this.lastAppendedMs, frameMs + lag)
+      // ...AND THE PICTURE'S OWN AGE, which points the other way.
+      //
+      // `frameMs` labels a frame on the video clock, but the pixels in it show
+      // the screen as it was `tickFrameAgeMs` earlier — the gap between the
+      // capturer grabbing the screen and the renderer submitting the frame.
+      // So a reader looking at the frame labelled `frameMs` is looking at the
+      // world at `frameMs - age`, while the host measured the world at
+      // `frameMs + lag`. Expressed on the clock the reader is using, the
+      // observation therefore belongs at `frameMs + lag + age`.
+      //
+      // Both terms were previously zero: one by a clamp, the other because the
+      // renderer never sent it. They are now both measured, and the log states
+      // each separately so a future displacement can be attributed rather than
+      // argued about.
+      const takenAtFrameMs = Math.max(this.lastAppendedMs, frameMs + lag + this.tickFrameAgeMs)
       this.lastAppendedMs = takenAtFrameMs
       this.append(takenAtFrameMs, rawWindows)
       return

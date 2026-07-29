@@ -394,9 +394,33 @@ function startFrameTicks(): void {
     // to know WHICH slot was saved and where that slot began, and the only
     // moment both are known is when the replay is handed over — so that is
     // where the subtraction happens, not here.
+    // HOW OLD THE PICTURE ALREADY IS (#108), measured at last.
+    //
+    // The log has printed "frame already 0 ms old" for every capture of this
+    // project's life, and that zero was never a measurement — nothing was ever
+    // sent, so the field defaulted. It is the last unmeasured leg between the
+    // screen and the rectangle filed against it, and it is the one leg that can
+    // plausibly be large: the surface host round trip measures +1 ms, so if the
+    // box is displaced while a window is dragged, the time is being lost
+    // somewhere in here.
+    //
+    // `captureTime` is "the time the frame was captured from its source"; the
+    // comment above once claimed a screen capture does not provide it, and that
+    // was wrong — getDisplayMedia does. The distance from there to
+    // `presentationTime` is exactly the age of the pixels at the moment this
+    // callback runs, and that is what the sample's time needs shifted by.
+    //
+    // Sent as a number, never assumed: absent (or nonsensical) means the ring
+    // keeps its old behaviour rather than shifting by a guess.
+    const captured = metadata.captureTime
+    const ageMs =
+      typeof captured === 'number' && Number.isFinite(captured) && captured <= submitted
+        ? submitted - captured
+        : undefined
     window.captureBridge.sendTick?.({
       displayId: startPayload?.displayId ?? '',
       mediaTimeMs: submitted,
+      ...(ageMs === undefined ? {} : { frameAgeMs: ageMs }),
     })
     video.requestVideoFrameCallback(pump)
   }

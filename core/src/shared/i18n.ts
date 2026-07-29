@@ -83,11 +83,11 @@ const EN = {
   // what actually happens — the last N seconds are (not) being recorded.
   'tray.recordingFailed': 'The last {seconds} seconds are not being recorded: {reason}',
   'tray.previousRunUnclean':
-    'CapturePack stopped unexpectedly on {when}. Nothing was being recorded between then and now.',
+    'Stopped unexpectedly on {when}. Nothing was being recorded between then and now.',
   // Recovery is never silent (issue #61): a run the watchdog brought back says
   // so, and names the window in which the product did not exist.
   'tray.relaunchedAfterCrash':
-    'CapturePack stopped unexpectedly on {when} and restarted itself. Nothing was being recorded between then and now.',
+    'Stopped unexpectedly on {when} and restarted itself. Nothing was being recorded between then and now.',
   // The rate limit was hit. Stopping is the right call, but stopping QUIETLY is
   // the bug: the accelerator is handed to the Start Menu shortcut and the user
   // is told where it went.
@@ -96,7 +96,7 @@ const EN = {
   // The hotkey landed on a machine where CapturePack was not running. It IS the
   // answer the user needed and never got.
   'tray.startedByHotkey':
-    'CapturePack was not running, so {hotkey} started it. Nothing was recorded before now — press {hotkey} again in a moment.',
+    'Was not running, so {hotkey} started it. Nothing was recorded before now — press {hotkey} again in a moment.',
   // Tooltip of the Start Menu fallback shortcut (issue #61).
   'shortcut.captureDescription': 'Capture the last seconds with CapturePack',
 
@@ -603,13 +603,13 @@ const KO: Record<I18nKey, string> = {
   'tray.recordingStarted': '최근 {seconds}초를 항상 사용할 수 있습니다. {hotkey}를 눌러 캡처하세요.',
   'tray.recordingFailed': '최근 {seconds}초가 녹화되지 않고 있습니다: {reason}',
   'tray.previousRunUnclean':
-    'CapturePack이 {when}에 예기치 않게 종료되었습니다. 그때부터 지금까지 아무것도 녹화되지 않았습니다.',
+    '{when}에 예기치 않게 종료되었습니다. 그때부터 지금까지 아무것도 녹화되지 않았습니다.',
   'tray.relaunchedAfterCrash':
-    'CapturePack이 {when}에 예기치 않게 종료되어 자동으로 다시 시작했습니다. 그때부터 지금까지 아무것도 녹화되지 않았습니다.',
+    '{when}에 예기치 않게 종료되어 자동으로 다시 시작했습니다. 그때부터 지금까지 아무것도 녹화되지 않았습니다.',
   'tray.supervisionGaveUp':
     'CapturePack이 계속 종료되어 자동 재시작을 중단했습니다. 이제 {hotkey}를 누르면 시작 메뉴를 통해 실행됩니다.',
   'tray.startedByHotkey':
-    'CapturePack이 실행 중이 아니어서 {hotkey}로 시작했습니다. 그 전에는 아무것도 녹화되지 않았으니 잠시 후 {hotkey}를 다시 누르세요.',
+    '실행 중이 아니어서 {hotkey}로 시작했습니다. 그 전에는 아무것도 녹화되지 않았으니 잠시 후 {hotkey}를 다시 누르세요.',
   'shortcut.captureDescription': 'CapturePack으로 최근 몇 초를 캡처',
 
   'recorder.screenUnavailable': '화면 캡처를 사용할 수 없음',
