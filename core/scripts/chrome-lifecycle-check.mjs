@@ -185,6 +185,19 @@ try {
     ),
     'utf8',
   )
+  const extractionTemplate = readFileSync(
+    path.join(
+      here,
+      '..',
+      'node_modules',
+      'app-builder-lib',
+      'templates',
+      'nsis',
+      'include',
+      'extractAppPackage.nsh',
+    ),
+    'utf8',
+  )
   const uninstallerTemplate = readFileSync(
     path.join(here, '..', 'node_modules', 'app-builder-lib', 'templates', 'nsis', 'uninstaller.nsh'),
     'utf8',
@@ -202,9 +215,12 @@ try {
   const closeGate = macro('customCheckAppRunning')
   const success = macro('customInstall')
   const uninstall = macro('customUnInstall')
+  const oldUninstallResult = macro('customUnInstallCheck')
   check(
     'setup handoff starts after the installer mutex and inside the real process gate',
     !installer.includes('!macro preInit') &&
+      closeGate.indexOf('!insertmacro IS_POWERSHELL_AVAILABLE') <
+        closeGate.indexOf('!insertmacro FIND_PROCESS') &&
       closeGate.includes('!insertmacro BeginCapturePackShutdown') &&
       runningTemplate.includes('!insertmacro customCheckAppRunning') &&
       installerTemplate.indexOf('!insertmacro ALLOW_ONLY_ONE_INSTALLER_INSTANCE') <
@@ -253,10 +269,10 @@ try {
       macro('RestoreCapturePackBrowserRegistration').includes('$CapturePackChromiumReg'),
   )
   check(
-    'cancel, old-uninstaller, extraction and standalone-uninstall failures all recover',
+    'cancel, old-uninstaller and standalone-uninstall failures all recover',
     closeGate.includes('!insertmacro AbortCapturePackShutdown') &&
       installer.includes('!macro customUnInstallCheck') &&
-      macro('customUnInstallCheck').includes('${ElseIf} ${Errors}') &&
+      oldUninstallResult.includes('${ElseIf} ${Errors}') &&
       installer.includes('Function .onInstFailed') &&
       installer.includes('Function un.onUninstFailed') &&
       installer.includes('Call RestoreCapturePackAfterInstallFailure'),
@@ -266,13 +282,13 @@ try {
     macro('SnapshotCapturePackIntegration').includes(
       'ReadRegStr $0 HKCU "${UNINSTALL_REGISTRY_KEY}" "UninstallString"',
     ) &&
-      macro('customUnInstallCheck').includes(
+      oldUninstallResult.includes(
         '${If} $CapturePackHadOldUninstaller != "1"',
       ) &&
-      macro('customUnInstallCheck').indexOf(
+      oldUninstallResult.indexOf(
         '${If} $CapturePackHadOldUninstaller != "1"',
       ) <
-        macro('customUnInstallCheck').indexOf('StrCpy $CapturePackOldUninstallCompleted "1"'),
+        oldUninstallResult.indexOf('StrCpy $CapturePackOldUninstallCompleted "1"'),
   )
   check(
     'a cancelled close reports failure and restarts a previously running intact app',
@@ -282,6 +298,19 @@ try {
       macro('AbortCapturePackShutdown').includes('!insertmacro RestartCapturePackIfNeeded') &&
       macro('RestartCapturePackIfNeeded').includes('$CapturePackWasRunning') &&
       macro('RestartCapturePackIfNeeded').includes('resources\\app.asar'),
+  )
+  check(
+    'bare extraction Quit cannot bypass durable post-removal recovery',
+    extractionTemplate.includes('AbortExtract7za:') &&
+      extractionTemplate.indexOf('AbortExtract7za:') <
+        extractionTemplate.indexOf('Quit', extractionTemplate.indexOf('AbortExtract7za:')) &&
+      macro('PersistCapturePackPendingSnapshot').includes('-Mode persist-pending') &&
+      oldUninstallResult.indexOf('StrCpy $CapturePackOldUninstallCompleted "1"') <
+        oldUninstallResult.indexOf('!insertmacro PersistCapturePackPendingSnapshot') &&
+      oldUninstallResult.indexOf('!insertmacro PersistCapturePackPendingSnapshot') <
+        oldUninstallResult.indexOf('StrCpy $CapturePackLoadedPending "1"') &&
+      installSectionTemplate.indexOf('!insertmacro handleUninstallResult') <
+        installSectionTemplate.indexOf('!insertmacro installApplicationFiles'),
   )
   check(
     'post-removal extraction failure preserves data without reactivating a missing app',
@@ -295,8 +324,12 @@ try {
     installer.includes('$CapturePackLoadedPending') &&
       macro('SnapshotCapturePackIntegration').includes('installer-pending\\state.json') &&
       macro('SnapshotCapturePackIntegration').includes('-Mode save-pending') &&
-      macro('DeactivateCapturePackAfterRemovedInstall').includes('-Mode persist-pending') &&
-      macro('DeactivateCapturePackAfterRemovedInstall').includes('$CapturePackLoadedPending != "1"') &&
+      macro('DeactivateCapturePackAfterRemovedInstall').includes(
+        '!insertmacro PersistCapturePackPendingSnapshot',
+      ) &&
+      macro('PersistCapturePackPendingSnapshot').includes('-Mode persist-pending') &&
+      macro('PersistCapturePackPendingSnapshot').includes('$CapturePackLoadedPending != "1"') &&
+      oldUninstallResult.includes('StrCpy $CapturePackLoadedPending "1"') &&
       success.includes('-Mode restore-pending') &&
       success.includes('$CapturePackLoadedPending == "1"') &&
       success.indexOf('-Mode restore-pending') <

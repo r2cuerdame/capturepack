@@ -124,6 +124,13 @@ async function main(): Promise<void> {
       docLanguage: 'en',
     }
     const handle = await savePack(initial)
+    const saveFirstReadme = readFileSync(path.join(handle.dirPath, 'README.md'), 'utf8')
+    const saveFirstReport = readFileSync(path.join(handle.dirPath, 'report.md'), 'utf8')
+    check(
+      'save-first documents do not promise an undeclared annotated replay',
+      !saveFirstReadme.includes('replay_annotated.webm') &&
+        !saveFirstReport.includes('replay_annotated.webm'),
+    )
     const annotations = [
       box('ann_000001', 'first durable annotation', 1_000),
       box('ann_000002', 'second durable annotation', 4_000),
@@ -169,7 +176,18 @@ async function main(): Promise<void> {
       ],
     })
     check('DOM source payload was written', domWritten)
-    await addManifestPlugin(handle, domPluginDeclaration())
+    await addManifestPlugin(handle, domPluginDeclaration(), 'en')
+    const lateDomSkill = readFileSync(path.join(handle.dirPath, 'skills', 'dom.md'), 'utf8')
+    const lateOverview = readFileSync(path.join(handle.dirPath, 'skills', 'overview.md'), 'utf8')
+    check(
+      'a late plugin declaration refreshes its generated semantic document',
+      lateDomSkill.includes('**chrome-dom**') &&
+        !lateDomSkill.includes('No plugin contributed semantic object data'),
+    )
+    check(
+      'a late plugin declaration refreshes the generated plugin count',
+      lateOverview.includes('1 plugins.'),
+    )
 
     let releaseRender: () => void = () => {
       throw new Error('render gate was not initialized')

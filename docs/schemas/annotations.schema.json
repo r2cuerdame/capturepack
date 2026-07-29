@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "CapturePack annotations.json",
-  "description": "Schema for annotations.json, the OPTIONAL editable annotation layer of a CapturePack (format 0.1.0). Format 0.1.0 defines exactly one annotation type: the box. A box composes its roles through properties — numbered:true makes it a numbered marker, blur:true marks a sensitive region, text carries its description; any combination is valid on one box. Annotations are stored as data, editable forever, and are NEVER burned into the original media: snapshot.png and the replay always keep original pixels, and blur renders only into derived views such as replay_annotated (SPEC.md §9). Display numbers are computed from the numbered boxes (SPEC.md §8.5), never stored. All geometry is in snapshot pixel coordinates: origin at the top-left pixel of snapshot.png, x right, y down, units are snapshot pixels; coordinates may be non-integers. Unknown additional properties are deliberately allowed for forward compatibility, but this schema only accepts the \"box\" type — a pack using a newer type fails validation here while remaining readable under the defensive-reading rules (SPEC.md §13). See SPEC.md §8 for the normative definition; where schema and prose disagree, the prose wins.",
+  "description": "Schema for annotations.json, the OPTIONAL editable annotation layer of a CapturePack through format 0.3.0. The defined annotation type remains the composable box: numbered:true participates in numbering, number_pin requests 1-9, blur:true marks a sensitive region, text carries its description, tracking.samples stores observed object rectangles, and keyframes stores separately authored manual-box motion. Annotations remain editable data and are NEVER burned into original media: snapshot.png and the original replay keep their pixels, while blur renders only into derived views such as replay_annotated (SPEC.md §9). Display numbers are computed (SPEC.md §8.5), never stored. A box's bounds are pixels in its own display snapshot; every cross-display tracking sample or authored keyframe can name the display whose snapshot defines its coordinates. Unknown additional properties are deliberately allowed for forward compatibility, but this schema accepts only the \"box\" type — a pack using a newer type fails validation here while remaining readable under the defensive-reading rules (SPEC.md §13). See SPEC.md §8 for the normative definition; where schema and prose disagree, the prose wins.",
   "type": "object",
   "required": ["reference_width", "reference_height", "annotations"],
   "properties": {
@@ -22,8 +22,37 @@
     }
   },
   "$defs": {
+    "motionSample": {
+      "description": "One timed rectangle. t_ms is on the pack replay clock. x/y/width/height are pixels in the snapshot named by display; absent display means the annotation's own display.",
+      "type": "object",
+      "required": ["t_ms", "x", "y", "width", "height"],
+      "properties": {
+        "t_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "display": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
     "box": {
-      "description": "One annotation box — the only annotation type in format 0.1.0. Readers MUST skip annotations of unknown type and SHOULD preserve them when rewriting a pack.",
+      "description": "One annotation box — the only annotation type defined through format 0.3.0. Readers MUST skip annotations of unknown type and SHOULD preserve them when rewriting a pack.",
       "type": "object",
       "required": ["annotation_id", "type", "bounds"],
       "properties": {
@@ -33,7 +62,7 @@
           "pattern": "^ann_[0-9a-f]{6}$"
         },
         "type": {
-          "description": "The annotation type. MUST be \"box\" in format 0.1.0.",
+          "description": "The annotation type. MUST be \"box\" through format 0.3.0.",
           "const": "box"
         },
         "bounds": {
@@ -84,30 +113,62 @@
           "type": "boolean",
           "default": false
         },
+        "number_pin": {
+          "description": "OPTIONAL number 1-9 requested by the author (SPEC.md §8.5). It is an input to the numbering rule, not a stored display number. Inert while numbered is false. Invalid or conflicting pins are ignored by the computation rather than making the box unreadable. Added in format 0.2.1.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9
+        },
         "blur": {
           "description": "Whether the box's interior is sensitive and MUST be blurred in rendered views (SPEC.md §9). Default false. Blur is non-destructive: snapshot.png and the replay keep the original, unredacted pixels; blur renders only into derived views (replay_annotated, editor previews), during the box's lifetime, moving with the box, and before any other annotation layer is drawn.",
           "type": "boolean",
           "default": false
         },
         "tracking": {
-          "description": "Object-tracking state. In format 0.1.0 the only defined field is 'enabled', and it MUST be false — frame-by-frame tracking data (bounds following a moving object) is reserved for a future version. Absent means { \"enabled\": false }. Readers MUST ignore tracking content they do not understand and treat the box as untracked.",
+          "description": "Observed object-tracking state (SPEC.md §8.3). samples are measurements, sorted ascending by t_ms. A reader resolves between samples by using the nearer sample unchanged and MUST NOT interpolate. picked_at_ms is the replay instant at which the user selected the object; bounds is the observed rectangle at that instant. Absent means { \"enabled\": false }. Tracking samples and picked_at_ms were added in format 0.2.0.",
           "type": "object",
           "required": ["enabled"],
           "properties": {
             "enabled": {
-              "description": "Whether the box tracks a moving object. MUST be false in format 0.1.0.",
+              "description": "Whether this box is attached to captured object observations.",
               "type": "boolean"
+            },
+            "samples": {
+              "description": "OPTIONAL ascending observed rectangles on the replay clock. Every rectangle remains evidence from its named display; readers MUST use nearest-sample resolution and MUST NOT interpolate.",
+              "type": "array",
+              "minItems": 1,
+              "items": { "$ref": "#/$defs/motionSample" }
+            },
+            "picked_at_ms": {
+              "description": "OPTIONAL replay-clock instant at which the user picked the object. MUST be within the replay and SHOULD agree with bounds at the nearest tracking sample.",
+              "type": "number",
+              "minimum": 0
             }
           },
+          "allOf": [
+            {
+              "if": {
+                "properties": { "enabled": { "const": true } },
+                "required": ["enabled"]
+              },
+              "then": { "required": ["samples"] }
+            }
+          ],
           "default": { "enabled": false }
         },
+        "keyframes": {
+          "description": "OPTIONAL authored motion for a manual box (SPEC.md §8.9), sorted ascending by t_ms. Unlike tracking.samples, these positions express how the author wants the annotation presented and readers MUST interpolate between adjacent keyframes in virtual-desktop space, including across displays. Fewer than two keyframes SHOULD be collapsed back to bounds. A box carrying both tracking samples and keyframes resolves tracking first. Added in format 0.3.0.",
+          "type": "array",
+          "minItems": 2,
+          "items": { "$ref": "#/$defs/motionSample" }
+        },
         "target": {
-          "description": "OPTIONAL semantic object metadata: what real UI object the box points at (Windows UI Automation control, DOM node, engine object, ...). This is where the earlier draft's 'element'/Tracked Element concept lives — a box with a target is a semantic annotation; there is no separate element type. 'source' is the discriminator for every other field; format 0.1.0 defines the value \"uia\" (SPEC.md §8.7). Readers MUST ignore sources and fields they do not understand and MUST still render the box from bounds.",
+          "description": "OPTIONAL semantic object metadata: what real UI object the box points at (Windows UI Automation control/window, Chrome DOM node, engine object, ...). A box with a target is a semantic annotation; there is no separate element annotation type. source discriminates provider-specific fields. Readers MUST ignore sources and fields they do not understand and MUST still render the box from bounds or recognized motion data.",
           "type": "object",
           "required": ["source"],
           "properties": {
             "source": {
-              "description": "Where the metadata came from. Format 0.1.0 defines \"uia\" (Windows UI Automation); other writers MAY define further values but MUST NOT redefine this one.",
+              "description": "Where the metadata came from. \"uia\" is reserved for Windows UI Automation; providers may define further values such as Chrome DOM without redefining existing sources.",
               "type": "string",
               "minLength": 1
             }
@@ -158,7 +219,7 @@
           ]
         },
         "style": {
-          "description": "OPTIONAL display styling. In 0.1.0 the only defined field is 'color', used for the border, number badge, and text. Viewers pick their own default when absent.",
+          "description": "OPTIONAL display styling. The defined field is color, used for the border, number badge, and text. Viewers pick their own default when absent.",
           "type": "object",
           "properties": {
             "color": {

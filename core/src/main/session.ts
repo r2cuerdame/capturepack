@@ -910,7 +910,7 @@ async function runImageFlow(settings: Settings): Promise<void> {
     if (payload === null || saved === null) return payload
     try {
       await writeUiaPlugin(saved.dirPath, payload)
-      await addManifestPlugin(saved, uiaPluginDeclaration())
+      await addManifestPlugin(saved, uiaPluginDeclaration(), packDocLanguage(settings))
     } catch (err) {
       logError(`[image] writing plugins/${UIA_PLUGIN_NAME} failed:`, err)
     }
@@ -1215,12 +1215,21 @@ async function runFlow(settings: Settings): Promise<void> {
       }))
     : [{ index: 1, focused: true, bounds: display.bounds, width: snap.width, height: snap.height }]
   const uiaFocusedIndex = uiaTargets.find((target) => target.focused)?.index ?? 1
-  const contextDisplays = uiaTargets.map((target) => ({
-    index: target.index,
-    focused: target.focused,
-    width: target.width,
-    height: target.height,
-  }))
+  const snapshotScaleByIndex = new Map(
+    multiDisplay
+      ? frozen.displays.map((captured) => [captured.index, captured.scale] as const)
+      : [[1, display.scale] as const],
+  )
+  const contextDisplays = uiaTargets.map((target) => {
+    const snapshotPixelsPerDip = snapshotScaleByIndex.get(target.index)
+    return {
+      index: target.index,
+      focused: target.focused,
+      width: target.width,
+      height: target.height,
+      ...(snapshotPixelsPerDip === undefined ? {} : { snapshotPixelsPerDip }),
+    }
+  })
 
   // Freeze-to-observations happens ONCE. The fresh editor adopts this exact
   // array and the pack stores a lossless delta encoding of the same values;
@@ -1385,7 +1394,7 @@ async function runFlow(settings: Settings): Promise<void> {
     if (payload === null || saved === null) return payload
     try {
       await writeUiaPlugin(saved.dirPath, payload)
-      await addManifestPlugin(saved, uiaPluginDeclaration())
+      await addManifestPlugin(saved, uiaPluginDeclaration(), packDocLanguage(settings))
     } catch (err) {
       logError(`capturepack: writing plugins/${UIA_PLUGIN_NAME} failed:`, err)
     }
@@ -1420,7 +1429,7 @@ async function runFlow(settings: Settings): Promise<void> {
     })
     if (!wrote) return
     try {
-      await addManifestPlugin(saved, domPluginDeclaration())
+      await addManifestPlugin(saved, domPluginDeclaration(), packDocLanguage(settings))
       logInfo(`[chrome] pack carries ${capturedDomEvents.length} DOM event(s) from the browser`)
     } catch (err) {
       logError('capturepack: declaring plugins/chrome-dom failed:', err)
@@ -2369,12 +2378,21 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
     contextSession = openContextSession(editor, {
       displays:
         loadedEditorDisplayList.length === 0
-          ? [{ index: 1, focused: true, width, height }]
+          ? [{
+              index: 1,
+              focused: true,
+              width,
+              height,
+              ...(manifest.environment.screens[0]?.scale === undefined
+                ? {}
+                : { snapshotPixelsPerDip: manifest.environment.screens[0].scale }),
+            }]
           : loadedEditorDisplayList.map((d) => ({
               index: d.index,
               focused: d.focused,
               width: d.width,
               height: d.height,
+              snapshotPixelsPerDip: d.scale,
             })),
       replayDurationMs,
       observation: contextObservation(loadedUia, loadedFocusedIndex, replayDurationMs),

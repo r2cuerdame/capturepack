@@ -1,9 +1,66 @@
-# HANDOFF — CapturePack, 2026-07-29
+# HANDOFF — CapturePack, current through 0.3.1
+
+## Current state — 2026-07-30
+
+The public 0.3.0 release was published from commit `2fd6f1f1`. The active source
+and documentation baseline is **0.3.1**. Do not call 0.3.1 public until the
+manual Release workflow has completed and the GitHub Release is visible.
+
+0.3.1 is a focused post-release hotfix with three product invariants:
+
+1. Chrome DOM bounds are projected through the browser window and the display
+   that owns each observation. A 2x-to-1x monitor move must stay correct at past
+   frames and after save/reopen.
+2. Late UIA/DOM/plugin context regenerates README, report and skills from the
+   completed manifest instead of leaving the save-first documents stale.
+3. Generated guidance names annotated replay/keyframe files only when the final
+   manifest declares them.
+
+The production dependency boundary is also refreshed: `adm-zip` 0.6.0 addresses
+CVE-2026-39244; `@modelcontextprotocol/sdk` 1.30.0 plus
+`@hono/node-server` 2.0.12 addresses GHSA-frvp-7c67-39w9; Electron is 43.2.0,
+electron-builder 26.15.3 and esbuild 0.28.1. `npm audit --omit=dev` must report
+zero. The remaining 16 high advisories are confined to electron-builder's
+development-only transitive tree, with no fixed upgrade in the current release
+line at this writing (npm suggests the older 25.1.8); keep them visible in
+[DEPENDENCY-AUDIT-0.3.1.md](DEPENDENCY-AUDIT-0.3.1.md).
+
+### Current release gate
+
+From `C:\_Project\capturepack\core`:
+
+```powershell
+npm ci
+npm run qa:rc
+npm audit --omit=dev
+```
+
+`qa:rc` discovers every `check:*` regression (including `check:site`), runs
+type checking, builds production code and runs the isolated Electron smoke.
+Physical Windows QA is still required for a mixed-DPI cross-monitor recording
+and image drag, past-frame/reopened sibling-control picks, Chrome reconnection,
+process/CPU baseline, and installer close/restore behavior; see
+[QA.md](QA.md).
+
+The only publishing path is manual `workflow_dispatch`. It verifies the version
+and full QA, packages locally, validates the exact installer/updater contract,
+creates or verifies the tag only after QA, stages the EXE, blockmap,
+`latest.yml` and `SHA256SUMS.txt` in a draft, downloads and byte-verifies all
+four, then publishes the verified draft. Branch and tag pushes do not publish.
+See [RELEASING.md](RELEASING.md).
+
+### Historical record below
+
+Everything after this point is the original rc.35 handoff. It is preserved
+because its measurements, safety incidents and rejected hypotheses remain
+valuable. Its version status, open-task order, verification list and release
+instructions are superseded by the current section above; do not execute them
+as a current checklist.
 
 Written while there was still room to write it properly. Read this top to bottom
 before touching anything; the last section is the one that matters most.
 
-## Where things stand
+## Historical rc.35 snapshot — where things stood
 
 `main` is at **rc.35**, 140-odd commits ahead of `origin/main`.
 **Nothing has been pushed since v0.1.7.** The remote's newest tag is v0.1.7; the

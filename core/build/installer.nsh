@@ -208,10 +208,11 @@ Var CapturePackChromiumReg
   !insertmacro RestartCapturePackIfNeeded
 !macroend
 
-!macro DeactivateCapturePackAfterRemovedInstall
-  ; The previous uninstaller completed, so an extraction failure has no old app
-  ; to restart. Promote the pre-close snapshot to durable userData exactly once;
-  ; a retry must never replace it with this deliberately deactivated state.
+!macro PersistCapturePackPendingSnapshot
+  ; NSIS Quit intentionally invokes no failure callbacks. electron-builder's
+  ; extraction cancel/error paths use Quit, so the recovery snapshot must be
+  ; durable immediately after the previous uninstaller succeeds — waiting for
+  ; .onInstFailed would lose the only copy with $PLUGINSDIR.
   !ifndef BUILD_UNINSTALLER
     ${If} $CapturePackLoadedPending != "1"
       nsExec::ExecToStack `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\capturepack-installer-state.ps1" -Mode persist-pending -SourceDir "$PLUGINSDIR\capturepack-pending-stage" -PendingDir "$APPDATA\CapturePack\installer-pending"`
@@ -223,6 +224,13 @@ Var CapturePackChromiumReg
       ${EndIf}
     ${EndIf}
   !endif
+!macroend
+
+!macro DeactivateCapturePackAfterRemovedInstall
+  ; The previous uninstaller completed, so an extraction failure has no old app
+  ; to restart. Promote the pre-close snapshot to durable userData exactly once;
+  ; a retry must never replace it with this deliberately deactivated state.
+  !insertmacro PersistCapturePackPendingSnapshot
 
   ; Keep the human-readable integration files for forensics and the next retry,
   ; but never leave Chrome, login or a shortcut targeting a partial executable.
@@ -240,6 +248,10 @@ Var CapturePackChromiumReg
   ; scan. Begin the handoff here: a second setup can no longer kill the live
   ; app before aborting on the mutex, while Chrome cannot race the close loop by
   ; immediately spawning another native host.
+  ; electron-builder 26 leaves its process-detection variable undeclared when
+  ; a custom gate is present. Initialise the bundled detector before the first
+  ; FIND_PROCESS expansion so strict NSIS builds do not reject the installer.
+  !insertmacro IS_POWERSHELL_AVAILABLE
   !insertmacro SnapshotCapturePackBrowserRegistration
   !ifndef BUILD_UNINSTALLER
     !insertmacro SnapshotCapturePackIntegration
@@ -324,6 +336,19 @@ Var CapturePackChromiumReg
     Quit
   ${Else}
     StrCpy $CapturePackOldUninstallCompleted "1"
+    ; From this point onward electron-builder has several bare Quit paths and
+    ; NSIS guarantees that Quit calls no callbacks. Persist now, while setup is
+    ; known to be alive and the pre-removal snapshot is still in $PLUGINSDIR.
+    !insertmacro PersistCapturePackPendingSnapshot
+    ${IfNot} ${FileExists} "$APPDATA\CapturePack\installer-pending\state.json"
+      !insertmacro DeactivateCapturePackAfterRemovedInstall
+      MessageBox MB_OK|MB_ICONSTOP "CapturePack removed the previous version but could not preserve its integration state. Setup stopped before installing partial files." /SD IDOK
+      SetErrorLevel 2
+      Quit
+    ${EndIf}
+    ; The same run now follows the exact retry path: customInstall restores and
+    ; consumes the durable snapshot only after replacement files are complete.
+    StrCpy $CapturePackLoadedPending "1"
   ${EndIf}
 !macroend
 

@@ -34,14 +34,23 @@ Additional maintainers will be listed here as they join, with their roles.
 
 ## Build and release process
 
-Builds are fully reproducible from public source; no artifact is ever built or uploaded
-from a developer machine:
+Public artifacts are built from public source on GitHub-hosted Windows runners;
+release binaries are not uploaded from a developer machine:
 
-1. A maintainer bumps the version in `core/package.json` and pushes a `vX.Y.Z` tag.
-2. [`.github/workflows/release.yml`](../.github/workflows/release.yml) runs on
-   GitHub-hosted Windows runners: `npm ci` → typecheck → build → `electron-builder`.
-3. The workflow publishes the installer, `latest.yml` (used by the auto-updater), and
-   `SHA256SUMS.txt` to the GitHub Release.
+1. A maintainer updates `core/package.json` and `core/package-lock.json`, runs the
+   complete local QA gate, and pushes the reviewed source revision.
+2. A maintainer manually runs
+   [`.github/workflows/release.yml`](../.github/workflows/release.yml) with a
+   matching `vX.Y.Z` input and the exact source ref. A branch or tag push alone
+   never publishes a release.
+3. The workflow verifies the version, runs `npm ci` and `npm run qa:rc`,
+   packages locally, and verifies the exact installer/updater metadata.
+4. Only after QA, packaging and that local contract pass, it creates or
+   verifies the tag at the checked-out commit.
+5. It stages exactly the installer, its blockmap, `latest.yml` and
+   `SHA256SUMS.txt` in a draft GitHub Release.
+6. It downloads all four staged assets, compares them byte-for-byte with the
+   verified local files, and only then makes the draft public.
 
 The only source of a CapturePack binary is
 [github.com/r2cuerdame/capturepack/releases](https://github.com/r2cuerdame/capturepack/releases)
@@ -63,11 +72,16 @@ CapturePack is local-first and collects nothing:
 
 ## What the app does
 
-CapturePack keeps a rolling ~30-second screen replay buffer in memory so a user can press
-a hotkey *after* a problem occurs, annotate the frozen replay, and save a self-contained
-context folder to disk. It is a screen-capture and annotation tool: it does not scan,
-probe, or circumvent any security measure, and it does not modify system settings.
-Uninstalling is done through the standard Windows *Apps & features* entry.
+When Live recording is enabled, CapturePack keeps a rolling screen replay in
+memory (30 seconds by default) so a user can press a hotkey *after* a problem
+occurs, annotate the frozen replay, and save a self-contained context folder.
+It can also create an explicit region or full-virtual-desktop image pack.
+
+Built-in Windows UI Automation reads accessibility metadata for object picking;
+the optional Chrome preview extension reads selector/role/text/URL only for an
+explicit browser pick. CapturePack does not bypass access controls or modify
+system security settings. Uninstalling is done through the standard Windows
+*Apps & features* entry.
 
 ## Third-party components
 

@@ -1,5 +1,9 @@
 # Handoff — CapturePack v0.2.0
 
+> Historical archive. Do not use this file as current release or task status.
+> Start with [HANDOFF.md](HANDOFF.md), then consult this record only for its
+> measurements, incidents and design history.
+
 Written 2026-07-28 for whoever picks this up next. Read this before touching anything.
 
 ---

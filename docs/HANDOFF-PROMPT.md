@@ -2,6 +2,35 @@
 
 ---
 
+## Current 0.3.1 takeover prompt
+
+You are taking over CapturePack at `C:\_Project\capturepack`. Read
+`docs/HANDOFF.md` completely, beginning with its 2026-07-30 current-state
+section; preserve the historical measurements below it.
+
+The active package/docs baseline is 0.3.1. Verify the mixed-DPI Chrome DOM
+projection, late-plugin document regeneration, and manifest-declared derived
+guidance with the full gate:
+
+```powershell
+cd C:\_Project\capturepack\core
+npm ci
+npm run qa:rc
+npm audit --omit=dev
+```
+
+Then complete the physical Windows matrix in `docs/QA.md`. Do not synthesize
+the global hotkeys, touch the installed app, write to the owner's CapturePacks,
+or publish without the owner's explicit release decision. If release is
+authorized, use only the manual verified-draft workflow described in
+`docs/RELEASING.md`; a push alone never publishes.
+
+The prompt below is the original rc.35 takeover record. Keep it for its evidence
+and safety rationale, but its task order, candidate paths, 0.3.0 status and
+release instructions are superseded.
+
+---
+
 You are taking over CapturePack, an open-source Windows context-capture tool
 (Electron + strict TypeScript + esbuild) at `C:\_Project\capturepack`. The
 previous session ran out of context mid-flight.

@@ -42,7 +42,7 @@ import type {
 import { CONTEXT_PROTOCOL_VERSION } from '../../shared/context/protocol'
 import type { ProviderManifest } from '../../shared/context/manifest'
 import { rectContains } from '../../shared/context/surfaces'
-import type { DomEvent } from '../chrome/domBridge'
+import type { DomElement, DomEvent, DomViewport } from '../chrome/domBridge'
 
 export const CHROME_DOM_PROVIDER_ID = 'chrome-dom'
 const CHROME_DOM_VERSION = '0.1.0'
@@ -101,16 +101,33 @@ const BROWSER_EXECUTABLES = new Set([
  */
 const MIN_SCALE = 0.2
 const MAX_SCALE = 6
+/** Refuse side-panel/DevTools layouts where client width is not viewport width. */
+const MIN_DPR_AGREEMENT = 0.75
+const MAX_DPR_AGREEMENT = 1.25
 
 /** A pick, resolved onto one display's snapshot once, at the time it happened. */
 interface PlacedPick {
   event: DomEvent
+  /** Stable position in the persisted event stream; disambiguates same-ms re-picks. */
+  eventOrdinal: number
   surfaceId: string
   display: number | undefined
+  /**
+   * Snapshot pixels per desktop DIP on the display that owned the pick.
+   * Kept separate from client size: a window can cross a DPI boundary and be
+   * resized in the same interval, and those are not the same transform.
+   */
+  snapshotPixelsPerDip: number | null
   /** The element's rectangle in snapshot pixels, AT THE EVENT'S TIME. */
   rect: Rect
-  /** Where the browser window was then, so a later frame can translate it. */
+  /** Where the browser window was then, retained as a no-client fallback. */
   origin: { x: number; y: number }
+  /**
+   * The un-clipped client rectangle at the pick. Besides being the element's
+   * anchor, this is the scale bridge when the window crosses to a display with
+   * a different DPI.
+   */
+  client: Rect
   /** Whether the placement leaned on the ring or on the page's own screen guess. */
   exact: boolean
 }
@@ -129,14 +146,18 @@ export class ChromeDomProvider implements TemporalContextProvider {
    * lane's `SurfaceHost` uses.
    */
   private readonly surfacesAt: (timeMs: number) => readonly SurfaceInfo[]
+  /** Captured display metadata, not a live screen query. */
+  private readonly snapshotPixelsPerDipAt: (display: number) => number | null
   private placedCache: PlacedPick[] | null = null
 
   constructor(
     events: readonly DomEvent[],
     surfacesAt: (timeMs: number) => readonly SurfaceInfo[],
+    snapshotPixelsPerDipAt: (display: number) => number | null = () => null,
   ) {
     this.events = events
     this.surfacesAt = surfacesAt
+    this.snapshotPixelsPerDipAt = snapshotPixelsPerDipAt
   }
 
   /** Late-arriving events (the bridge keeps receiving during an open editor). */
@@ -155,12 +176,17 @@ export class ChromeDomProvider implements TemporalContextProvider {
     // surface", and the candidates that come back are the elements inside it.
     // Claiming a surface with no pick would cost Core a call for nothing.
     const claims: ProviderSurfaceClaim[] = []
+    const pickedSurfaces = new Set(this.placed().map((pick) => pick.surfaceId))
     const seen = new Set<string>()
-    for (const pick of this.placed()) {
-      if (seen.has(pick.surfaceId)) continue
-      const surface = this.surfacesAt(c.timeMs).find((s) => s.surfaceId === pick.surfaceId)
-      if (surface === undefined) continue
-      seen.add(pick.surfaceId)
+    for (const surface of c.surfaces) {
+      if (!pickedSurfaces.has(surface.surfaceId)) continue
+      // One window can legitimately have one clipped slice per display. Claim
+      // each slice: a provider-wide claimant flag happens to make a single
+      // claim work today, but the claim record itself must still tell the truth
+      // about which captured regions the provider can refine.
+      const key = `${surface.surfaceId}\0${String(surface.display ?? '')}`
+      if (seen.has(key)) continue
+      seen.add(key)
       claims.push({
         providerId: this.id,
         surfaceId: surface.surfaceId,
@@ -177,7 +203,7 @@ export class ChromeDomProvider implements TemporalContextProvider {
 
   frame(c: FrameContext): Promise<ProviderFrame> {
     const accuracy = this.accuracyFor(c.timeMs)
-    const candidates = this.candidatesAt(c.timeMs, c.surfaces, accuracy)
+    const candidates = this.candidatesAt(c.timeMs, c.surfaces)
     const region = c.region
     const inRegion =
       region === undefined ? candidates : candidates.filter((x) => overlaps(x.bounds, region))
@@ -197,8 +223,7 @@ export class ChromeDomProvider implements TemporalContextProvider {
     // The authoritative per-point path, answered from the SAME placement the
     // frame path uses so the two can never disagree (the protocol's harness
     // cross-checks exactly that).
-    const accuracy = this.accuracyFor(c.timeMs)
-    const hits = this.candidatesAt(c.timeMs, [c.surface], accuracy).filter(
+    const hits = this.candidatesAt(c.timeMs, [c.surface]).filter(
       (candidate) =>
         candidate.surfaceId === c.surface.surfaceId &&
         (c.display === undefined ||
@@ -223,10 +248,10 @@ export class ChromeDomProvider implements TemporalContextProvider {
   private placed(): PlacedPick[] {
     if (this.placedCache !== null) return this.placedCache
     const out: PlacedPick[] = []
-    for (const event of this.events) {
+    for (const [eventOrdinal, event] of this.events.entries()) {
       if (event.type !== 'dom.element.selected') continue
       if (event.element === undefined) continue
-      const placed = this.place(event)
+      const placed = this.place(event, eventOrdinal)
       if (placed !== null) out.push(placed)
     }
     this.placedCache = out
@@ -267,7 +292,7 @@ export class ChromeDomProvider implements TemporalContextProvider {
    * taller than the window that contains it, which is another disagreement, and
    * is refused too.
    */
-  private place(event: DomEvent): PlacedPick | null {
+  private place(event: DomEvent, eventOrdinal: number): PlacedPick | null {
     const element = event.element
     const viewport = event.viewport
     if (element === undefined || viewport === undefined) return null
@@ -283,28 +308,51 @@ export class ChromeDomProvider implements TemporalContextProvider {
     // guessing. The #103 split can legitimately produce the same surfaceId
     // twice (one entry per display), so that is not ambiguity — collapse it and
     // keep the entry whose display holds more of the window.
-    const surface = soleSurface(matches)
-    if (surface === null) return null
-    const client = surface.clientBounds
-    if (client === undefined || client.width <= 0 || client.height <= 0) return null
-    const k = client.width / viewport.width
-    if (!Number.isFinite(k) || k < MIN_SCALE || k > MAX_SCALE) return null
-    const chromeHeight = client.height - viewport.height * k
-    if (!Number.isFinite(chromeHeight) || chromeHeight < 0 || chromeHeight >= client.height) {
-      return null
+    const ids = new Set(matches.map((surface) => surface.surfaceId))
+    if (ids.size !== 1) return null
+
+    // A surface that straddles displays appears once per display. The element
+    // does not necessarily live on the largest window slice, so derive it in
+    // every slice's snapshot space and select the slice containing the largest
+    // visible part of the element. This is order-independent and keeps a pick
+    // on the monitor where the user actually saw it.
+    let selected:
+      | { surface: SurfaceInfo; client: Rect; rect: Rect; overlap: number }
+      | null = null
+    for (const surface of matches) {
+      const candidate = rectAtPick(surface, element.bounds, viewport)
+      if (candidate === null) continue
+      const overlap = intersectionArea(candidate.rect, surface.bounds)
+      if (
+        overlap > 0
+        && (
+          selected === null
+          || overlap > selected.overlap
+          || (
+            overlap === selected.overlap
+            && (surface.display ?? Number.MAX_SAFE_INTEGER)
+              < (selected.surface.display ?? Number.MAX_SAFE_INTEGER)
+          )
+        )
+      ) {
+        selected = { surface, ...candidate, overlap }
+      }
     }
-    const rect: Rect = {
-      x: Math.round(client.x + element.bounds.x * k),
-      y: Math.round(client.y + chromeHeight + element.bounds.y * k),
-      width: Math.max(1, Math.round(element.bounds.width * k)),
-      height: Math.max(1, Math.round(element.bounds.height * k)),
-    }
+    if (selected === null) return null
+    const { surface, client, rect } = selected
+    const displayScale =
+      surface.display === undefined
+        ? null
+        : validSnapshotScale(this.snapshotPixelsPerDipAt(surface.display))
     return {
       event,
+      eventOrdinal,
       surfaceId: surface.surfaceId,
       display: surface.display,
+      snapshotPixelsPerDip: displayScale,
       rect,
       origin: { x: surface.bounds.x, y: surface.bounds.y },
+      client: { ...client },
       exact: true,
     }
   }
@@ -327,39 +375,67 @@ export class ChromeDomProvider implements TemporalContextProvider {
   private candidatesAt(
     timeMs: number,
     surfaces: readonly SurfaceInfo[],
-    accuracy: TemporalAccuracy,
   ): ContextCandidate[] {
-    const now = new Map<string, SurfaceInfo>()
+    const now = new Map<string, SurfaceInfo[]>()
     for (const s of surfaces) {
       const held = now.get(s.surfaceId)
-      if (held === undefined || area(s.bounds) > area(held.bounds)) now.set(s.surfaceId, s)
+      if (held === undefined) now.set(s.surfaceId, [s])
+      else held.push(s)
     }
     const out: ContextCandidate[] = []
     const picks = this.placed()
     picks.forEach((pick, index) => {
-      const surface = now.get(pick.surfaceId)
-      if (surface === undefined) return
-      const dx = surface.bounds.x - pick.origin.x
-      const dy = surface.bounds.y - pick.origin.y
-      const moved = dx !== 0 || dy !== 0
+      const currentSurfaces = now.get(pick.surfaceId)
+      if (currentSurfaces === undefined) return
+
+      let selected:
+        | { surface: SurfaceInfo; bounds: Rect; overlap: number; crossedDisplay: boolean }
+        | null = null
+      for (const surface of currentSurfaces) {
+        const anchored = anchoredRect(pick, surface, this.snapshotPixelsPerDipAt)
+        if (anchored === null) continue
+        const overlap = intersectionArea(anchored.bounds, surface.bounds)
+        if (
+          overlap > 0
+          && (
+            selected === null
+            || overlap > selected.overlap
+            || (
+              overlap === selected.overlap
+              && (surface.display ?? Number.MAX_SAFE_INTEGER)
+                < (selected.surface.display ?? Number.MAX_SAFE_INTEGER)
+            )
+          )
+        ) {
+          selected = { surface, ...anchored, overlap }
+        }
+      }
+      if (selected === null) return
+      const { surface, bounds, crossedDisplay } = selected
+      const moved =
+        crossedDisplay
+        || bounds.x !== pick.rect.x
+        || bounds.y !== pick.rect.y
+        || bounds.width !== pick.rect.width
+        || bounds.height !== pick.rect.height
       const element = pick.event.element
       if (element === undefined) return
+      const candidateAccuracy = accuracyAtPick(timeMs, pick.event.tMs)
       out.push({
         providerId: this.id,
         surfaceId: pick.surfaceId,
         // Unique within (provider, session, surface) and stable over time: the
         // selector identifies the element inside its document, and the event's
         // own time disambiguates two picks of the same selector (GAP 12).
-        objectId: `${element.selector} @${String(pick.event.tMs)}`,
+        objectId:
+          `${element.selector} @${String(pick.event.tMs)} #${String(pick.eventOrdinal)}`,
         objectType: element.role !== undefined && element.role !== '' ? element.role : element.tag,
         ...(element.text !== undefined && element.text !== ''
           ? { name: element.text }
           : element.id !== undefined && element.id !== ''
             ? { name: `#${element.id}` }
             : {}),
-        bounds: moved
-          ? { ...pick.rect, x: pick.rect.x + dx, y: pick.rect.y + dy }
-          : { ...pick.rect },
+        bounds,
         space: 'display-snapshot',
         ...(surface.display === undefined ? {} : { display: surface.display }),
         // A picked element is the most specific thing anyone has said about
@@ -372,7 +448,10 @@ export class ChromeDomProvider implements TemporalContextProvider {
         confidence: pick.exact ? 0.95 : 0.6,
         visible: true,
         occluded: false,
-        accuracy: moved ? { ...accuracy, interpolated: true } : accuracy,
+        accuracy:
+          moved || candidateAccuracy.errorMs > 0
+            ? { ...candidateAccuracy, interpolated: true }
+            : candidateAccuracy,
         identity: {
           selector: element.selector,
           tag: element.tag,
@@ -395,18 +474,31 @@ export class ChromeDomProvider implements TemporalContextProvider {
    * window can rule out and which `interpolated` above is the honest flag for.
    */
   private accuracyFor(timeMs: number): TemporalAccuracy {
-    let nearest: number | null = null
+    let nearestTimeMs: number | null = null
+    let nearestDistanceMs: number | null = null
     for (const pick of this.placed()) {
       const d = Math.abs(pick.event.tMs - timeMs)
-      if (nearest === null || d < nearest) nearest = d
+      if (nearestDistanceMs === null || d < nearestDistanceMs) {
+        nearestTimeMs = pick.event.tMs
+        nearestDistanceMs = d
+      }
     }
-    const materialized = nearest === null ? timeMs : timeMs
+    if (nearestTimeMs === null || nearestDistanceMs === null) {
+      return {
+        requestedTimeMs: timeMs,
+        materializedTimeMs: timeMs,
+        errorMs: 0,
+        exact: false,
+        coverage: 'none',
+      }
+    }
     return {
       requestedTimeMs: timeMs,
-      materializedTimeMs: materialized,
-      errorMs: 0,
-      exact: nearest === 0,
+      materializedTimeMs: nearestTimeMs,
+      errorMs: nearestDistanceMs,
+      exact: nearestDistanceMs === 0,
       coverage: 'covered',
+      ...(nearestDistanceMs === 0 ? {} : { interpolated: true }),
     }
   }
 }
@@ -429,27 +521,151 @@ function titleMatches(windowTitle: string | undefined, tabTitle: string): boolea
   return windowTitle.includes(tab)
 }
 
-/**
- * One surface, or null when the match was ambiguous.
- *
- * Entries sharing a surfaceId are the SAME window seen on two displays (#103),
- * not two candidates: the larger slice wins, because that is the display the
- * viewport is mostly on. Two DIFFERENT surfaceIds is real ambiguity — two
- * browser windows showing the same page — and refuses.
- */
-function soleSurface(matches: readonly SurfaceInfo[]): SurfaceInfo | null {
-  if (matches.length === 0) return null
-  const ids = new Set(matches.map((s) => s.surfaceId))
-  if (ids.size > 1) return null
-  let best = matches[0] as SurfaceInfo
-  for (const s of matches) if (area(s.bounds) > area(best.bounds)) best = s
-  return best
+const MAX_DOM_COORDINATE = 10_000_000
+
+function validFinite(value: number): boolean {
+  return Number.isFinite(value) && Math.abs(value) <= MAX_DOM_COORDINATE
 }
 
-function area(r: Rect): number {
-  return Math.max(0, r.width) * Math.max(0, r.height)
+function validRect(rect: Rect): boolean {
+  return (
+    validFinite(rect.x)
+    && validFinite(rect.y)
+    && validFinite(rect.width)
+    && validFinite(rect.height)
+    && rect.width > 0
+    && rect.height > 0
+  )
+}
+
+function validSnapshotScale(value: number | null): number | null {
+  return value !== null && Number.isFinite(value) && value >= MIN_SCALE && value <= MAX_SCALE
+    ? value
+    : null
+}
+
+/**
+ * Resolves the page's viewport rectangle in one display slice's snapshot
+ * space. `k` must agree with devicePixelRatio closely enough to prove that the
+ * viewport really spans the client width. A docked DevTools or side panel
+ * violates that assumption; declining is safer than placing a plausible box
+ * in the wrong horizontal coordinate space.
+ */
+function rectAtPick(
+  surface: SurfaceInfo,
+  element: DomElement['bounds'],
+  viewport: DomViewport,
+): { client: Rect; rect: Rect } | null {
+  const client = surface.clientBounds
+  if (
+    client === undefined
+    || !validRect(client)
+    || !validFinite(element.x)
+    || !validFinite(element.y)
+    || !validFinite(element.width)
+    || !validFinite(element.height)
+    || element.width <= 0
+    || element.height <= 0
+    || !validFinite(viewport.width)
+    || !validFinite(viewport.height)
+    || !validFinite(viewport.dpr)
+    || viewport.width <= 0
+    || viewport.height <= 0
+    || viewport.dpr <= 0
+  ) {
+    return null
+  }
+  const k = client.width / viewport.width
+  const dprAgreement = k / viewport.dpr
+  if (
+    !Number.isFinite(k)
+    || k < MIN_SCALE
+    || k > MAX_SCALE
+    || dprAgreement < MIN_DPR_AGREEMENT
+    || dprAgreement > MAX_DPR_AGREEMENT
+  ) {
+    return null
+  }
+  const chromeHeight = client.height - viewport.height * k
+  if (!Number.isFinite(chromeHeight) || chromeHeight < 0 || chromeHeight >= client.height) {
+    return null
+  }
+  const rect: Rect = {
+    x: Math.round(client.x + element.x * k),
+    y: Math.round(client.y + chromeHeight + element.y * k),
+    width: Math.max(1, Math.round(element.width * k)),
+    height: Math.max(1, Math.round(element.height * k)),
+  }
+  return validRect(rect) ? { client, rect } : null
+}
+
+/**
+ * Places one observed element against one current slice of its window.
+ *
+ * Window size is intentionally absent from the scale calculation. It can
+ * change independently of DPI and cannot tell us whether the page reflowed.
+ * The only defensible cross-display transform is the ratio of the two captured
+ * displays' snapshot-pixels-per-DIP values.
+ */
+function anchoredRect(
+  pick: PlacedPick,
+  surface: SurfaceInfo,
+  snapshotPixelsPerDipAt: (display: number) => number | null,
+): { bounds: Rect; crossedDisplay: boolean } | null {
+  const crossedDisplay =
+    pick.display !== undefined
+    && surface.display !== undefined
+    && pick.display !== surface.display
+  const client = surface.clientBounds
+
+  if (client === undefined || !validRect(client)) {
+    if (crossedDisplay) return null
+    const bounds = {
+      ...pick.rect,
+      x: pick.rect.x + surface.bounds.x - pick.origin.x,
+      y: pick.rect.y + surface.bounds.y - pick.origin.y,
+    }
+    return validRect(bounds) ? { bounds, crossedDisplay } : null
+  }
+
+  let ratio = 1
+  if (crossedDisplay) {
+    const sourceScale = validSnapshotScale(pick.snapshotPixelsPerDip)
+    const targetScale =
+      surface.display === undefined
+        ? null
+        : validSnapshotScale(snapshotPixelsPerDipAt(surface.display))
+    if (sourceScale === null || targetScale === null) return null
+    ratio = targetScale / sourceScale
+  }
+  if (!Number.isFinite(ratio) || ratio <= 0) return null
+  const bounds: Rect = {
+    x: Math.round(client.x + (pick.rect.x - pick.client.x) * ratio),
+    y: Math.round(client.y + (pick.rect.y - pick.client.y) * ratio),
+    width: Math.max(1, Math.round(pick.rect.width * ratio)),
+    height: Math.max(1, Math.round(pick.rect.height * ratio)),
+  }
+  return validRect(bounds) ? { bounds, crossedDisplay } : null
+}
+
+function accuracyAtPick(requestedTimeMs: number, pickTimeMs: number): TemporalAccuracy {
+  const errorMs = Math.abs(requestedTimeMs - pickTimeMs)
+  return {
+    requestedTimeMs,
+    materializedTimeMs: pickTimeMs,
+    errorMs,
+    exact: errorMs === 0,
+    coverage: 'covered',
+    ...(errorMs === 0 ? {} : { interpolated: true }),
+  }
+}
+
+function intersectionArea(a: Rect, b: Rect): number {
+  const width = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x))
+  const height = Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y))
+  return width * height
 }
 
 function overlaps(a: Rect, b: Rect): boolean {
-  return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y
+  return intersectionArea(a, b) > 0
 }

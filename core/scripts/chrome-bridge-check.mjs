@@ -16,6 +16,7 @@
 //   node scripts/chrome-bridge-check.mjs
 
 import { spawn, spawnSync } from 'node:child_process'
+import { createRequire } from 'node:module'
 import {
   mkdtempSync,
   readFileSync,
@@ -48,9 +49,8 @@ function frame(message) {
   return Buffer.concat([head, body])
 }
 
-const electron = process.platform === 'win32'
-  ? resolve('node_modules', 'electron', 'dist', 'electron.exe')
-  : resolve('node_modules', '.bin', 'electron')
+const require = createRequire(import.meta.url)
+const electron = require('electron')
 const nativeHostScript = resolve('dist', 'scripts', 'native-host.js')
 const bridgeEnv = {
   ...process.env,

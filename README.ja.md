@@ -16,7 +16,7 @@
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [ダウンロード](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-現在のWindows版: **CapturePack 0.3.0**
+現在公開中のWindows版: **CapturePack 0.3.0** · ソース／リリース候補: **0.3.1**
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=4" alt="過去のフレームへ巻き戻し、子UIコントロールを選択し、記録済みの名前と種類を確認し、所有ウィンドウの観測済み移動を追ってAI向け構造化証拠を書き出すCapturePack" width="760">
@@ -61,7 +61,7 @@
 ```text
 CapturePack_2026-07-27_143052/
 ├── replay.mp4               # オリジナル（replay.webmの場合あり）
-├── replay_annotated.webm    # 注釈を描画した動画
+├── replay_annotated.webm    # 任意の派生ビュー（マニフェスト宣言時のみ）
 ├── snapshot.png
 ├── annotations.json         # 対象の識別情報 + 観測済み境界
 ├── timeline.json
@@ -94,6 +94,13 @@ UIオブジェクトやサンプルがなければ、パックは推測せずそ
 `capturepack_history`で履歴を探し、`capturepack_open`で選択できます。
 `capturepack_latest`は最新パックへの近道です。詳細は[docs/MCP.md](docs/MCP.md)へ。
 
+## 設定と診断
+
+- 設定 → キャプチャで動画（`Ctrl+Alt+C`）と画像（`Ctrl+Alt+S`）の
+  ショートカットを個別に変更し、リプレイ長と1～30 fpsを設定できます。
+- 情報 → **ログフォルダーを開く**でローカル診断を確認できます。
+  ログが自動送信されることはありません。
+
 ## 共有前のプライバシー確認
 
 画面のピクセル、ウィンドウタイトル、アクセシブル名、Chrome DOMのselector・
@@ -107,8 +114,9 @@ role・text・URLには機密情報が含まれる場合があります。Captur
 
 ## 状態とセキュリティ
 
-0.3.0はWindows向けの初期段階リリースです。現在のビルドは未署名のため
-SmartScreenが警告することがあり、各リリースに検証用`SHA256SUMS.txt`があります。
+0.3.0が現在の公開版で、0.3.1はGitHub Releasesに現れるまでリリース候補です。
+現在のビルドは未署名のためSmartScreenが警告することがあり、各リリースに
+検証用`SHA256SUMS.txt`があります。
 
 ローカルファースト · オフラインファースト · オープン形式 · クラウドなし ·
 ログインなし · テレメトリなし

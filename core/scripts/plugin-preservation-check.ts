@@ -102,7 +102,7 @@ async function main(): Promise<void> {
     const handle = { id: initial.id, dirPath: root }
     const finalSave = updatePack(handle, input)
     await new Promise<void>((resolve) => setImmediate(resolve))
-    const lateDomDeclaration = addManifestPlugin(handle, domPluginDeclaration())
+    const lateDomDeclaration = addManifestPlugin(handle, domPluginDeclaration(), 'en')
     await Promise.all([finalSave, lateDomDeclaration])
 
     const saved = JSON.parse(readFileSync(path.join(root, 'manifest.json'), 'utf8')) as Manifest

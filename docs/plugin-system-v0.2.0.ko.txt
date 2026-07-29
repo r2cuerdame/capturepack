@@ -1,3 +1,6 @@
+[역사 보존 문서] 이 문서는 v0.2.0 당시의 플러그인 설계 입력이다.
+현재 제품 계약과 구현 상태는 GOAL.md, SPEC.md, docs/HANDOFF.md를 우선한다.
+
 CapturePack 플러그인 시스템 재설계 프롬프트
 아래 내용을 기준으로 CapturePack의 플러그인 시스템을 설계하고 구현하라.
 기존 CapturePack 저장소의 코드, GOAL.md, SPEC.md, ROADMAP.md, 플러그인 구조, Chrome Extension 구조를 먼저 확인하고 현재 철학을 유지한 채 변경하라.

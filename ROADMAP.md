@@ -5,10 +5,13 @@ defined in [SPEC.md](SPEC.md) — spec before code, always. This roadmap tracks 
 status; it never overrides either document.
 
 **Status legend:** `Done` · `In progress` · `Not started`.
-**Shipping since 2026-07-27:** [v0.1.2](https://github.com/r2cuerdame/capturepack/releases/latest)
-is installable from GitHub Releases, and the auto-update chain has been verified end to end
-on a real install (0.1.0 → 0.1.1 → 0.1.2). What is *not* yet proven is the long-run habit —
-the one-month no-manual-reinstall criterion is still running.
+**Shipping since 2026-07-27:** the auto-update chain was first verified end to
+end on a real install (0.1.0 → 0.1.1 → 0.1.2). The active source and
+documentation baseline is **0.3.1**; public binaries remain whatever
+[GitHub Releases](https://github.com/r2cuerdame/capturepack/releases/latest)
+actually exposes until the manually dispatched release workflow completes.
+What is *not* yet proven is the long-run habit — the one-month
+no-manual-reinstall criterion is still running.
 
 The guiding constraint for every milestone: **never sacrifice the 5-second workflow.**
 
@@ -18,7 +21,35 @@ Ctrl+Alt+C  →  capture  →  5-second annotation  →  export .capturepack  �
 
 ---
 
+## Current baseline — 0.3.1
+
+The milestone narrative below is preserved as the product's design and
+verification history. These are the current additions and next gates:
+
+- Video context uses `Ctrl+Alt+C`; explicit cross-monitor region or complete
+  virtual-desktop image context uses independently configurable `Ctrl+Alt+S`.
+  Capture rate is 1–30 fps.
+- Past-frame/reopened-pack Object Pick uses captured Windows surface/control
+  history, built-in UI Automation, optional Chrome DOM preview observations and
+  an HWND fallback. Observed motion is never interpolated; authored manual-box
+  keyframes may interpolate across displays.
+- Image packs and video packs have distinct storage contracts. Image packs
+  contain no replay or top-level `timeline.json`.
+- MCP is optional, loopback-only and read-only. It reads already-saved packs
+  and cannot start a capture.
+- 0.3.1 gates mixed-DPI Chrome DOM geometry, regeneration after late plugin
+  context, and guidance that names only manifest-declared derived artifacts.
+- Next: continue physical mixed-DPI/long-running recording, save/reopen,
+  installer/update and Chrome reconnection QA; harden the preview integration;
+  and design an explicit sanitized-sharing path.
+
+---
+
 ## Where things stand
+
+The table and milestone sections below record what each historical phase meant
+at the time. Current shipped behavior is summarized above and in
+[README.md](README.md); unresolved work is tracked in GitHub Issues.
 
 | Milestone | Scope | Status |
 |---|---|---|
@@ -30,7 +61,7 @@ Ctrl+Alt+C  →  capture  →  5-second annotation  →  export .capturepack  �
 | **V2 — Temporal plugin system** | Providers that restore the PAST at any buffered time (one clock, checkpoints + deltas), a platform surface timeline that decides what the user was actually looking at, after-save actions that can never cost a capture, Chrome extension as the first web provider | Designed (GOAL.md); UIA and the extension are the two first consumers |
 | **V3 — Semantic layer** | Tracked annotations following their object through the replay, AI-assisted annotation | Not started |
 
-What exists today: SPEC.md (format 0.1.0, draft) with validating schemas; a valid example pack
+Historical v0.1.x snapshot: SPEC.md (format 0.1.0, draft) with validating schemas; a valid example pack
 and dependency-free validator (`tools/`); the full Electron app under `core/` — replay ring
 buffer, snapshot, global hotkey, unified-box annotation editor with scrub timeline,
 folder-first exporter with README/skills/annotated replay, History screen, tray, settings GUI,

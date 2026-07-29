@@ -419,6 +419,24 @@ try {
     late.findings.some((finding) => finding.code === 'annotation_time_after_replay'))
   check('timeline schema errors gate in strict mode', late.gate_status === 'failed')
 
+  const stalePluginDocsPack = makePack('stale-plugin-docs')
+  writeFileSync(
+    join(stalePluginDocsPack, 'skills', 'dom.md'),
+    'No plugin contributed semantic object data (there is no `plugins/` payload).',
+    'utf8',
+  )
+  writeFileSync(
+    join(stalePluginDocsPack, 'skills', 'overview.md'),
+    '# overview\n\nCounts: one annotation box, 0 timeline events, 0 plugins.\n',
+    'utf8',
+  )
+  const stalePluginDocs = inspectPack(stalePluginDocsPack, { strict: true })
+  check('a generated document cannot deny a manifest-declared plugin',
+    stalePluginDocs.findings.some((finding) =>
+      finding.code === 'generated_docs_plugin_contradiction'))
+  check('a manifest/document plugin contradiction gates strict pack QA',
+    stalePluginDocs.gate_status === 'failed')
+
   const missing = inspectPack(join(temporaryRoot, 'does-not-exist'))
   check('an explicitly supplied missing pack is a configuration failure', missing.configuration_error === true)
   check('a missing configured pack always fails the gate', missing.gate_status === 'failed')

@@ -21,11 +21,61 @@
 
 CapturePack is a local-first context capture toolkit designed for humans and AI.
 
-It captures not only pixels but also user intent, interaction, and application context.
+It captures pixels plus the user's explicit annotations and whatever application
+context the enabled providers actually observed. It does not claim unrecorded
+interaction or inferred object state.
 
 Instead of sending screenshots or videos, people send CapturePacks.
 
 A CapturePack should contain enough information that another human or any LLM can immediately understand the situation.
+
+---
+
+## Current release baseline — 0.3.1
+
+The long sections below preserve design history and measurements, including
+pre-release identifiers. This section is the current product truth:
+
+- Live recording is on by default, holds 30 seconds by default, is configurable
+  from 1–60 seconds at 1–30 fps, and records nothing when switched off.
+- `Ctrl+Alt+C` freezes a video-context replay. `Ctrl+Alt+S` opens explicit
+  region capture with a separate full-virtual-desktop action. The shortcuts are
+  independently configurable.
+- Video and image packs are distinct. An image pack declares
+  `capture_kind: "image"` and has no replay or top-level `timeline.json`.
+- All displays are captured by default. Per-display pixels, scale, negative
+  origins and measured replay-clock offsets remain explicit through save,
+  reopen and rendering.
+- Object Pick resolves captured past-frame evidence: the Windows surface/control
+  timeline, built-in UI Automation, optional explicit Chrome DOM picks, and an
+  HWND window fallback. Missing context stays missing; observed rectangles are
+  never interpolated or invented.
+- Manual-box keyframes are authored presentation data and do interpolate,
+  including across monitors. They never change the rule for observed tracks.
+- The MCP server is optional, loopback-only and read-only. It is enabled and
+  auto-started by default, can be stopped immediately, reads already-saved packs
+  only, and cannot start a capture.
+- Captures, telemetry and crash reports are not uploaded. The optional GitHub
+  update check can be disabled. Blur protects derived annotated views, not the
+  original media inside a full pack.
+- About / Information shows version and run diagnostics and opens the local log
+  folder. Settings independently configures video/image hotkeys.
+
+The 0.3.1 hotfix also pins three release invariants found by post-0.3.0
+adversarial QA: Chrome DOM bounds must be converted through the owning display's
+actual mixed-DPI transform; plugin data that lands after save-first must
+regenerate pack documents before completion; and generated documents must never
+recommend an annotated replay that the manifest does not declare.
+
+The same hotfix refreshes the production dependency boundary: `adm-zip` 0.6.0
+addresses CVE-2026-39244, MCP SDK 1.30.0 plus `@hono/node-server` 2.0.12
+addresses GHSA-frvp-7c67-39w9, and Electron/builder/esbuild are updated.
+`npm audit --omit=dev` is zero. The remaining 16 high advisories are confined to
+electron-builder's development-only transitive tree and have no fixed upgrade
+in the current release line at this writing (npm suggests a downgrade to
+25.1.8). They stay visible in the
+[0.3.1 dependency audit](docs/DEPENDENCY-AUDIT-0.3.1.md) rather than being
+called runtime vulnerabilities.
 
 ---
 
@@ -36,7 +86,7 @@ Build the fastest possible workflow for explaining visual problems.
 **Target workflow:**
 
 ```
-Ctrl+Alt+C
+Ctrl+Alt+C (video) or Ctrl+Alt+S (image)
     ↓
 Capture current context
     ↓
@@ -226,8 +276,15 @@ After a month, the journal itself becomes the best roadmap.
 
 **Capture**
 
-- 30-second replay buffer
-- Screenshot
+- Video context from a 30-second replay buffer by default (1–60 seconds)
+- Explicit image context: cross-monitor region or complete virtual desktop
+- Capture rate configurable from 1–30 fps
+
+`Ctrl+Alt+C` is the video flow. `Ctrl+Alt+S` freezes every display before any
+selector appears, then opens a boundary-free virtual-desktop region selector
+with an explicit **Full screen capture** action. A cancelled selection writes
+nothing. A region pack persists only the selected pixels plus crop provenance;
+the temporary whole-desktop raster is released and never hidden in the pack.
 
 **Say that you are recording.** A silent tray icon gives no reason to trust that the buffer
 is running — and today a buffer that FAILED to start looks exactly like one that is
@@ -412,7 +469,8 @@ what the user scrubs is what the pack contains.
 
 **Export**
 
-A `.capturepack` file (a standard ZIP) contains:
+A CapturePack is a folder first; a standard-ZIP `.capturepack` is an optional
+sharing copy. A video pack can contain:
 
 - `manifest.json`
 - `replay.webm` (or `replay.mp4`)
@@ -422,11 +480,14 @@ A `.capturepack` file (a standard ZIP) contains:
 
 No plugins required. Everything works locally.
 
-**Save-first capture** — the moment Ctrl+Alt+C is pressed, the raw capture (snapshot +
-replay + manifest) is saved to disk immediately, BEFORE the editor opens. Annotating then
-updates the same pack in place; **Save** (Enter) finalizes it. Cancelling the editor keeps
-the raw capture; a crash can never lose one. The UI verb is **Save**, not Export —
-"export" survives only as the SPEC's internal event name (`core.export.created`).
+**Save-first capture** — once video media is frozen, or once an image selection
+is explicit, the source capture and manifest are saved before the editor opens.
+Object/plugin data is best effort and may settle independently, but source
+completion regenerates manifest-derived README/report/skills after the final
+plugin set is known. Annotating updates the same pack in place; **Save** (Enter)
+finalizes it. Cancelling the editor keeps the already-explicit capture. The UI
+verb is **Save**, not Export — "export" survives only as the SPEC's internal
+event name (`core.export.created`).
 
 **Output layout — Folder First.** The primary save unit is always a **folder**; ZIP is not
 the original, only an optional distribution package created when the user clicks
@@ -436,13 +497,13 @@ lives in the folder name now.)
 ```
 CapturePack_2026-07-27_143052/
 ├── replay.webm              ← original evidence, never modified
-├── replay_annotated.webm    ← annotations rendered in; plays in any player
+├── replay_annotated.webm    ← OPTIONAL derived view, only when manifest-declared
 ├── snapshot.png
 ├── annotations.json         ← the true source: annotations, lifetime, DOM,
-│                              tracking, style, bounds — replay_annotated is
-│                              always regenerable from it
-├── timeline.json            ← all time info: window, DOM, focus, mouse,
-│                              keyboard, plugin metadata
+│                              tracking, style, bounds — a declared annotated
+│                              replay is regenerable from it
+├── timeline.json            ← video event index; input events are reserved,
+│                              not emitted by 0.3
 ├── report.md                ← the user's own description
 ├── manifest.json            ← format version, file inventory, plugins, created
 ├── README.md                ← the FIRST document a human reads
@@ -453,8 +514,25 @@ CapturePack_2026-07-27_143052/
 └── plugins/
 ```
 
+An image pack is deliberately different:
+
+```
+CapturePack_2026-07-27_143052/
+├── snapshot.png             ← explicit crop or complete virtual desktop
+├── annotations.json
+├── report.md
+├── manifest.json            ← capture_kind: image + image_scope
+├── README.md
+├── skills/
+└── plugins/                 ← optional capture-instant object context
+```
+
+It has no replay and no top-level `timeline.json`.
+
 **README.md (human-first)** — Created, Application, Duration, Description, Files,
-How to use (1. open replay_annotated 2. read report.md 3. open via CapturePack MCP).
+How to use (1. open a manifest-declared annotated view when present 2. read
+report.md 3. open via CapturePack MCP). Generated documents must never name a
+derived replay or keyframe that the manifest does not declare.
 Reading README alone must be enough for a person to understand the whole pack.
 
 **skills/ (AI-first)** — structured so an LLM understands the pack immediately even
@@ -479,7 +557,8 @@ frames/
   LLM reconstructs the whole story without decoding video.
 - MCP `capturepack_frame(time)` returns the nearest rendered keyframe (removing the v0
   snapshot-only limitation).
-- Screenshot-only packs still get one annotated keyframe.
+- Explicit image packs and video packs without replay can still get one
+  annotated keyframe.
 
 **Save-complete UI**
 
@@ -488,11 +567,11 @@ Saved  CapturePack_2026-07-27_143052
 [ Open Folder ] [ Copy Folder Path ] [ Create ZIP ] [ Copy Prompt ]
 ```
 
-**Principles** — the folder is the source; ZIP is distribution. replay is evidence;
-replay_annotated is the instantly-understandable result; annotations.json is the true
-original. A person should understand from replay_annotated alone; an AI should
-understand from README.md + skills/ alone. One CapturePack must carry complete context
-for both.
+**Principles** — the folder is the source; ZIP is distribution. Replay is evidence;
+`annotations.json` is the editable truth, and a manifest-declared
+`replay_annotated` is an instantly understandable optional derived result. Generated
+README/skills must work from the source media and structured data even when no derived
+replay exists. One CapturePack must carry complete context for both.
 
 ---
 
@@ -524,7 +603,8 @@ Relaunch
 - GitHub Releases only — no separate update server.
 - No forced restart while in use.
 - If an update fails, keep the existing version.
-- Hash verification (SHA-256) of update files.
+- Automatic updater verification uses the sha512 in `latest.yml`; releases also
+  publish SHA-256 for manual verification.
 - Auto-check can be disabled in settings.
 - Stable / Preview channels can be separated.
 
@@ -533,7 +613,7 @@ Relaunch
 Fully unattended updates are not the starting point. The safe initial UX:
 
 ```
-CapturePack 0.1.4 available
+CapturePack 0.3.1 available
 
 [Restart and update]  [Later]
 ```
@@ -544,33 +624,29 @@ screen replay buffer — force-killing it is not acceptable.
 **Release pipeline**
 
 ```
-Git tag: v0.1.4
+Reviewed source revision + package version 0.3.1
     ↓
-GitHub Actions
+Manual GitHub Actions dispatch (tag: v0.3.1)
     ↓
-Build + Test
+Full deterministic QA gate
     ↓
-Code sign
+Build unsigned Windows artifacts
     ↓
-Generate SHA-256
+Verify exact local artifact names, size, sha512 and SHA256SUMS contract
     ↓
-Upload GitHub Release
+Create/verify tag only after QA, packaging and local contract verification
     ↓
-Update latest.json
+Stage a draft release with EXE + blockmap + latest.yml + SHA256SUMS.txt
+    ↓
+Download every staged asset and byte/hash-verify it
+    ↓
+Publish the verified release
 ```
 
-Example `latest.json`:
-
-```json
-{
-  "version": "0.1.4",
-  "channel": "stable",
-  "url": "GitHub Release asset URL",
-  "sha256": "...",
-  "minimum_supported_version": "0.1.0",
-  "release_notes": "..."
-}
-```
+`electron-builder` writes `latest.yml` with the installer URL, version and
+sha512 used by `electron-updater`; the workflow separately publishes
+`SHA256SUMS.txt` for manual verification. A branch or tag push alone never
+publishes a release.
 
 **Update security**
 
@@ -578,9 +654,11 @@ CapturePack runs continuously and handles screen content, so update security mat
 usual. Minimum requirements:
 
 - HTTPS only.
-- SHA-256 verification.
-- Windows code signing when possible.
-- Signature verification of the update executable.
+- Updater sha512 verification from `latest.yml`, plus published SHA-256 for
+  manual verification.
+- Windows code signing when a suitable certificate becomes available.
+- Until then, updater sha512 verification plus a separately published SHA-256
+  checksum. The UI and docs state that the installer is unsigned.
 - Never update from arbitrary URLs.
 
 **V1 completion criteria**
@@ -1058,10 +1136,13 @@ Settings are edited in a GUI window — never by opening settings.json in an edi
     hotkey** (GOAL "And do not stay gone.") — on by default, and a real teardown when
     switched off: the watchdog stops and the Start Menu fallback shortcut is deleted on the
     click, not at the next launch.
-  - **Capture** — **capture hotkey** (recordable field: click, press the new combination;
-    default Ctrl+Alt+C; must include a modifier; conflict with another app's global
-    shortcut is detected on registration and reverts with an inline error; applies
-    instantly and updates the tray label), replay length (seconds), capture FPS, and the
+  - **Capture** — Live recording's real on/off switch, plus independent
+    recordable hotkey fields for video (`Ctrl+Alt+C`) and image
+    (`Ctrl+Alt+S`). Each must include a modifier; a conflict with another app's
+    global shortcut is detected on registration and rolls back only that action
+    without unregistering the other. Changes apply instantly and update the
+    tray labels. Replay length is 1–60 seconds and capture rate is 1–30 fps. The
+    section also carries the
     **replay resolution limit** — a DROPDOWN of the few choices that matter (native/no
     limit, 3840, 2560, 1920 default, 1280, 720), each labelled with the quality/CPU trade
     it is rather than a bare pixel count, and each stating that only the replay video is
@@ -1088,10 +1169,11 @@ Settings are edited in a GUI window — never by opening settings.json in an edi
     nothing to restart.
     Beside the connection URL, one click copies a **ready-made setup command** for the
     chosen client (the forms documented in docs/MCP.md) and the **ready-made prompt** to
-    hand an AI once connected. The setup command is built from the LIVE endpoint and is
-    disabled while nothing is listening — a pasted dead URL is worse than no button. The
-    prompt is the fixed English sentence the save toast also carries; it names no endpoint,
-    so it is always copyable — there is nothing in it a dead socket could make wrong.
+    hand an AI once connected. Both are built from the LIVE endpoint and are
+    disabled while nothing is listening — a pasted dead URL is worse than no
+    button. The prompt includes the selected client, actual URL, setup form,
+    reload guidance and `capturepack_latest` request. Older/specific records use
+    `capturepack_history` followed by `capturepack_open`.
   - **Plugins** — the Plugin Manager surface (GOAL "Plugin Manager"): each integration with
     a status read from REALITY, a one-line description of what it does and what it costs, a
     "?" that reveals the long explanation, and a real Enable/Disable where the switch can
@@ -1178,9 +1260,10 @@ length, annotation count (+ numbered count), blur presence, annotated-replay sta
 snapshot.png thumbnail (placeholder when missing/corrupt; external share previews must
 use a sanitized snapshot).
 
-**Search / filters** — search over title, report.md, application, URL, date, annotation
-text. Filters: All · Today · This Week · Has Blur · Render Failed · Not Packaged.
-(v0.1: search + minimal filters are enough.)
+**Search / filters** — search over title, report.md, application, URL, date and
+annotation text. Current quick filters are All · Today · This Week · Render
+Failed. Cards still show blur and packaging/render state; additional filters are
+not claimed until the UI ships them.
 
 **Open & re-edit** — Open loads the Folder back into the Editor with everything restored:
 replay, annotations (bounds/text/lifetime/numbered/blur/tracking), timeline, manifest,
@@ -1262,9 +1345,11 @@ lifetime.
 **Core philosophy** — a Tracked Element is "an annotation that lives while the object
 exists". A Manual Annotation is "an annotation that exists for the time the user chose".
 
-### Static object picking (v0 — before full tracking)
+### Historical/static object-picking foundation (v0)
 
-Automatic window/control selection ships in a static form first:
+Automatic window/control selection shipped in a static form first. Its
+measurements, filters and occlusion rules remain regression evidence for the
+temporal implementation:
 
 1. **At capture** (alongside save-first) a Windows UI Automation helper dumps the window
    list + the control trees of the top windows in z-order (Name, ControlType, AutomationId,
@@ -1325,20 +1410,64 @@ Automatic window/control selection ships in a static form first:
    so. The row also reports what the LAST capture actually collected (N windows /
    M controls), or why it collected nothing (helper missing, PowerShell blocked by policy,
    out of budget) — status from reality, never a constant.
-7. Frame-by-frame tracking (bounds following the object through the replay) remains V3.
+7. Frame-by-frame tracking (bounds following the object through the replay) remained V3
+   at this historical stage.
+
+### Temporal object picking (0.3)
+
+Object Pick resolves evidence captured on the replay clock; it never asks the
+current desktop to explain a past frame.
+
+1. **Windows have a temporal floor.** Capture starts with one `EnumWindows`
+   snapshot. A WinEvent hook then marks only changed HWNDs dirty; periodic full
+   reconciliation catches structural loss. The frozen checkpoint/delta record is
+   saved as `plugins/windows-context/timeline.json`, including display identity,
+   z/focus state and observed window/control rectangles.
+2. **UI Automation refines the floor.** The built-in provider makes a budgeted
+   capture-instant dump under `plugins/windows-uia/` and maintains observed
+   control rectangles while recording when the application exposes usable
+   accessibility objects. Every tree records `collected`, `truncated`,
+   `unavailable` or `skipped`; silence is never presented as “this app has no
+   controls.”
+3. **Chrome DOM is an optional explicit source.** The preview extension records
+   selector, role, text, URL and viewport placement for a pick the user arms. It
+   does not stream the whole DOM. Browser CSS coordinates are converted through
+   the actual owner-window client rectangle and the owning display's DPI
+   transform; 0.3.1 adds the regression that caught a 2x-to-1x cross-display
+   size/position error.
+4. **The editor resolves the viewed instant.** Hover/click at a past frame hits
+   the top captured window and the finest captured child that contains the
+   point. A real HWND window remains the fallback. The selected annotation is
+   still one `"box"` with semantic `target`, `tracking.picked_at_ms` and, when
+   observed, `tracking.samples`; there is no separate element annotation type.
+5. **Observed and authored motion never mix.** Tracking samples are measurements
+   and use the nearer recorded sample unchanged between observations. Manual-box
+   `keyframes` are authored presentation data and interpolate, including across
+   displays.
+6. **Save/reopen uses the same record.** The live editor and a History-reopened
+   editor consume the same frozen observations and coordinate projection. If a
+   legacy or degraded pack lacks temporal coverage, the editor reports that
+   limit and falls back only where real evidence exists.
+7. **The user may decline UIA.** Settings → Plugins carries a real
+   `uiaEnabled` switch (default on). Off spawns no UIA helper and writes no
+   `plugins/windows-uia/`; window history/manual annotation remain available.
+   The row reports what the latest capture actually collected rather than
+   quoting a previous capture.
 
 ---
 
-## Always-On MCP Server
+## Optional Local Read-Only MCP Server
 
-CapturePack is not only a program that creates .capturepack files — it ships an official,
-always-running **MCP (Model Context Protocol) server** so any AI can read CapturePacks in a
-standard way. The MCP server never creates captures; it reads, explores, and analyzes them.
+CapturePack is not only a program that creates `.capturepack` folders — it
+ships an optional **MCP (Model Context Protocol) server** so an AI can read
+already-saved CapturePacks in a standard way. The server binds to loopback only,
+is always read-only in this release, and never creates captures. It is enabled
+and auto-started by default but can be stopped immediately in Settings.
 
-**Core goal** — after saving a CapturePack the user does nothing. The workflow is
-Capture → Annotate → Save → done. Any AI finds and analyzes the latest CapturePack through
-MCP on its own. The user never explains the file structure, never unzips, never pastes
-report.md.
+**Core goal** — after the client is connected, the workflow is Capture →
+Annotate → Save → ask the AI. It can browse history, open a specific record or
+use the newest-pack shortcut without the user explaining the file structure or
+pasting `report.md`.
 
 **Philosophy**
 
@@ -1349,7 +1478,8 @@ CapturePack MCP    → serves Context      (the standard read interface)
 Any AI             → consumes Context    (ChatGPT, Claude, Gemini, Cursor, VSCode, Codex, …)
 ```
 
-**Always-on** — the MCP server starts automatically with the app and stays resident:
+**Default runtime** — when both Enable and Start Automatically are on, the MCP
+server starts with the app and stays resident until switched off:
 
 ```
 CapturePack.exe
@@ -1359,26 +1489,29 @@ CapturePack.exe
 └── MCP Server   (port 39393, localhost only)
 ```
 
-**Index & discovery** — MCP watches the export folder and keeps a recent-packs index
-updated automatically (no manual refresh). `latest()`, `list()`, `open()` all use this index.
+**Index & discovery** — MCP watches the export folder and keeps a recent-packs
+index updated automatically, with an access-time rescan as a dead-watcher
+fallback. `capturepack_latest`, `capturepack_history` and `capturepack_open`
+use this index.
 
 **Tools (initial, read-only)**
 
 | Tool | Purpose |
 | --- | --- |
-| `capturepack.latest()` | The most recent pack — most LLM sessions need only this |
-| `capturepack.list()` | Recent packs ("1 Chrome Login Bug / 2 Unreal Crash / …") |
-| `capturepack.open(id \| path)` | Open a pack — folder and ZIP both supported |
-| `capturepack.summary()` | App, window, URL, capture time, duration, annotation count, timeline length |
-| `capturepack.manifest()` / `report()` | Raw manifest.json / report.md |
-| `capturepack.timeline(from?, to?)` | Full timeline or a time slice |
-| `capturepack.annotations()` / `findAnnotations(keyword)` | Annotation list / keyword search |
-| `capturepack.frame(time)` | Frame at a given time (e.g. 12.4s) |
-| `capturepack.replay()` | Replay metadata (segments on demand) |
-| `capturepack.dom()` / `findDOM(selector)` | DOM metadata when the Chrome extension contributed it |
-| `capturepack.windows()` | Window focus timeline |
-| `capturepack.search(keyword)` | Search across report, annotations, timeline, DOM, window, plugin metadata |
-| `capturepack.exportMarkdown()` | Convert a pack to Markdown (HTML/Issue export later) |
+| `capturepack_latest` | Summarize and pin the most recent saved pack |
+| `capturepack_history` | Browse/search saved image and video packs without changing the current pack |
+| `capturepack_list` | Compatibility alias of `capturepack_history` |
+| `capturepack_open` | Open and pin a pack by history id or absolute folder/ZIP path |
+| `capturepack_summary` | App, capture kind, time, media, annotations and plugin counts |
+| `capturepack_manifest` / `capturepack_report` | Raw manifest.json / report.md |
+| `capturepack_timeline` | Video timeline or a time slice; image packs explain that none applies |
+| `capturepack_annotations` / `capturepack_find_annotations` | Annotation list / keyword search |
+| `capturepack_frame` | Nearest declared annotated keyframe, otherwise snapshot.png |
+| `capturepack_replay` | Replay metadata only; never raw video bytes |
+| `capturepack_dom` / `capturepack_find_dom` | Generic plugin JSON and selector/text search |
+| `capturepack_windows` | Window/focus events plus window-related plugin metadata |
+| `capturepack_search` | Search report, annotations, video timeline, manifest and plugin data |
+| `capturepack_export_markdown` | Return a Markdown summary as text; write no files |
 
 Plugin metadata is exposed generically — MCP never needs to know plugin kinds.
 
@@ -1390,8 +1523,8 @@ belongs to the application).
 
 ```
 Settings └── MCP
-  [✓] Enable MCP Server      [✓] Start Automatically   [✓] Always Running
-  [✓] Read Only              [✓] Auto Discover Latest  [✓] Watch Export Folder
+  [✓] Enable MCP Server      [✓] Start Automatically
+  Read only                 [✓] Watch Export Folder
   Port: 39393                [ ] Log Requests
   Server status: 🟢 Running on http://127.0.0.1:39393/mcp   [ Restart ]
   Connection URL: http://127.0.0.1:39393/mcp               [ Copy ]
@@ -1406,8 +1539,10 @@ hotkey and any open editor keep running through it. Every surface that advertise
 endpoint — About, welcome, settings, the copied setup command — reads that one live value,
 so the three can never disagree.
 
-**Usage** — the user says only "방금 캡처한 거 분석해줘" / "Analyze the latest CapturePack."
-The AI chains `latest() → summary() → timeline() → annotations() → report() → dom()` itself.
+**Usage** — for the newest record the user can say "방금 캡처한 거 분석해줘" /
+"Analyze the latest CapturePack." For an older record the AI calls
+`capturepack_history`, then `capturepack_open`, and uses the appropriate
+image/video tools from there.
 
 **Future tools (not in the initial version)** — compare, merge, diff, statistics,
 exportPDF/HTML/Issue, findByApplication, findByURL, findByWindowTitle,
@@ -2250,8 +2385,9 @@ Two findings that shape the design more than the speed does:
 
 Also confirming the existing split: Win32 `GetWindowRect` over 17 top-level
 windows is 0.177 ms against 13.05 ms for UIA top-level enumeration — 74x. Window
-geometry stays with lane S; lane A is for IN-WINDOW controls only, which is
-what docs/temporal-protocol.md §1 said before any of this was measured.
+geometry stays with lane S; lane A is for IN-WINDOW controls only, preserving
+the original temporal-provider separation recorded in the Plugin Architecture
+section before any of this was measured.
 
 ### One tracker per app? Measured before building it (#111)
 
@@ -2358,7 +2494,7 @@ drag speed. Now stamped at the dump's midpoint, with `dumpMs` in the event so th
 cost is visible. Measured at 1.5 ms, so this was worth ~5 px, not 443. It is
 fixed because it is wrong, and reported as small because it is small.
 
-### rc.36 interaction and capture invariants (2026-07-29)
+### 0.3.0 interaction and capture invariants (implemented during rc.36)
 
 - Moving the **start trim** changes only the kept interval. It never seeks the
   playhead or moves a selected annotation. The handle clamps at the playhead, so
@@ -2386,6 +2522,28 @@ fixed because it is wrong, and reported as small because it is small.
   arrays. That closes a verified retention path; it does **not** prove the
   steady-state encoder cost is solved. The single-recorder bounded-ring R&D and
   its measurement gate live in GitHub issue #102.
+
+### 0.3.1 post-release QA invariants (2026-07-30)
+
+Adversarial review immediately after 0.3.0 found three shipped-boundary defects.
+They are a 0.3.1 hotfix, not evidence that the broader claim should be weakened
+or hand-waved:
+
+- **Chrome DOM geometry belongs to the owning display.** CSS viewport bounds
+  are mapped through the recorded browser client rectangle and that display's
+  actual scale. Reusing the picker display's scale made both size and position
+  wrong when a browser moved from a 2x monitor to a 1x monitor. The regression
+  reopens a saved pack and probes past/current frames across that transition.
+- **Late source context regenerates generated documents.** UIA/DOM/plugin writes
+  can settle after the save-first folder exists. Once a plugin is declared, the
+  source revision must rebuild README/report/skills from the final manifest
+  before reporting completion; otherwise JSON was correct while the documents
+  an AI reads first were stale.
+- **Generated guidance follows declared artifacts.** README/report/skills must
+  recommend `replay_annotated.*` or keyframes only when the final manifest
+  declares them. A source-valid pack whose derived render is absent or failed
+  must point readers to the original replay/snapshot and structured JSON, not a
+  filename that does not exist.
 
 ---
 

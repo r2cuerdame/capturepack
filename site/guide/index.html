@@ -103,7 +103,7 @@
           <li><code>report.md</code> <span data-i18n="g_pack_report">the annotations, in order, as sentences</span></li>
           <li><code>snapshot.png</code> <span data-i18n="g_pack_snapshot">the frame you pressed on, per screen</span></li>
           <li><code>replay.mp4 / .webm</code> <span data-i18n="g_pack_replay">the original seconds before it, per screen</span></li>
-          <li><code>replay_annotated.webm</code> <span data-i18n="g_pack_annotated">the same replay with your boxes burned in</span></li>
+          <li><code>replay_annotated.webm</code> <span data-i18n="g_pack_annotated">optional derived replay, only when the final manifest declares it</span></li>
           <li><code>annotations.json</code> <span data-i18n="g_pack_annotations">the machine-readable source of truth</span></li>
           <li><code>skills/</code> <span data-i18n="g_pack_skills">how to read all of the above, for an LLM</span></li>
           <li><code>plugins/</code> <span data-i18n="g_pack_plugins">the objects on screen: windows, controls, DOM elements</span></li>
@@ -147,6 +147,7 @@
         <li data-i18n="g_set_length"><b>30 seconds is a default, not a limit.</b> Longer buffers cost memory; the setting says how much.</li>
         <li data-i18n="g_set_displays"><b>Every screen is captured by default</b>, each at its own resolution and replay clock. You can choose a fixed display instead.</li>
         <li data-i18n="g_set_history"><b>Nothing is lost by closing the editor.</b> History reopens any past capture to re-annotate or re-render.</li>
+        <li data-i18n="g_set_logs"><b>Diagnostics are under Information.</b> Open About / Information → Open logs folder. Logs stay local and are never uploaded automatically.</li>
       </ul>
     </section>
 

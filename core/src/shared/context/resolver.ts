@@ -95,9 +95,17 @@ export function claimCovers(
   providerId: string,
   surfaceId: string,
   point: ScreenPoint,
+  display?: number,
 ): boolean {
   for (const claim of claims) {
     if (claim.providerId !== providerId || claim.surfaceId !== surfaceId) continue
+    if (
+      display !== undefined
+      && claim.display !== undefined
+      && claim.display !== display
+    ) {
+      continue
+    }
     if (rectContains(claim.region, point)) return true
   }
   return false
@@ -232,7 +240,13 @@ export function resolveCandidates<C extends ResolvableCandidate>(
     //    surface, and it is the floor the ladder ends on.
     if (
       candidate.authority !== 'window' &&
-      !claimCovers(input.claims, candidate.providerId, candidate.surfaceId, input.point)
+      !claimCovers(
+        input.claims,
+        candidate.providerId,
+        candidate.surfaceId,
+        input.point,
+        input.display,
+      )
     ) {
       unclaimed += 1
       continue

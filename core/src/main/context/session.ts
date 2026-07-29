@@ -51,6 +51,12 @@ export interface ContextDisplayTarget {
   focused: boolean
   width: number
   height: number
+  /**
+   * Snapshot pixels per desktop DIP for this captured display. Optional only
+   * for legacy/test callers; cross-display DOM placement refuses to guess when
+   * either display's captured scale is absent.
+   */
+  snapshotPixelsPerDip?: number
 }
 
 export interface ContextSessionOptions {
@@ -380,8 +386,17 @@ export class ContextSession {
       this.domProvider.replace(this.domEvents)
       return
     }
-    const provider = new ChromeDomProvider(this.domEvents, (timeMs) =>
-      this.timeline.restore(timeMs).surfaces,
+    const displayScales = new Map(
+      this.displays.flatMap((display) =>
+        display.snapshotPixelsPerDip === undefined
+          ? []
+          : [[display.index, display.snapshotPixelsPerDip] as const],
+      ),
+    )
+    const provider = new ChromeDomProvider(
+      this.domEvents,
+      (timeMs) => this.timeline.restore(timeMs).surfaces,
+      (display) => displayScales.get(display) ?? null,
     )
     const outcome = this.host.register(CHROME_DOM_MANIFEST, provider, { builtIn: true })
     if (!outcome.ok) {

@@ -8,17 +8,19 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: core/package-lock.json
 
       - name: Install dependencies
         working-directory: core
+        timeout-minutes: 10
         run: npm ci
 
       # One runner owns the release-candidate floor. It discovers every
@@ -26,6 +28,7 @@ jobs:
       # while preserving a complete failure/duration summary for diagnosis.
       - name: Release-candidate QA gate
         working-directory: core
+        timeout-minutes: 15
         run: npm run qa:rc -- --artifacts "${{ runner.temp }}\capturepack-qa"
 
       - name: Upload QA reports
@@ -39,12 +42,13 @@ jobs:
 
   spec-validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Validate example pack against spec
         run: |

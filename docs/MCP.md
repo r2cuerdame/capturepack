@@ -1,8 +1,9 @@
 # CapturePack MCP Server
 
-CapturePack ships an official, always-running **MCP (Model Context Protocol) server** so any
-AI can read CapturePacks in a standard way. It never creates captures — it reads, explores,
-and analyzes them.
+CapturePack ships an optional, local **MCP (Model Context Protocol) server** so
+an AI can read saved CapturePacks in a standard way. It is read-only and never
+creates captures. The server is enabled and starts with the app by default, but
+Settings → MCP can stop it immediately or disable automatic start.
 
 ```
 CapturePack        → creates Context
@@ -11,20 +12,21 @@ CapturePack MCP    → serves Context      (the standard read interface)
 Any AI             → consumes Context    (ChatGPT, Claude, Gemini, Cursor, VSCode, Codex, …)
 ```
 
-After saving a CapturePack the user does nothing. The workflow is Capture → Annotate → Save →
-done. The AI finds and analyzes the latest pack through MCP on its own — the user never
-explains the file structure, never unzips, never pastes `report.md`.
-"Analyze the latest CapturePack." is the whole prompt.
+After the client has been connected, the workflow can be Capture → Annotate →
+Save → ask the AI. The AI can browse saved image and video packs with
+`capturepack_history`, select one with `capturepack_open`, or use
+`capturepack_latest` as the newest-pack shortcut. The user does not have to
+explain the folder structure or paste `report.md`.
 
-## Always on
+## Runtime and controls
 
-The server lives **inside the CapturePack app** (the Electron main process) and starts
-automatically with it:
+The server lives **inside the CapturePack app** (the Electron main process).
+With the default settings it starts automatically with the app:
 
 - **Endpoint:** `http://127.0.0.1:39393/mcp`
 - **Transport:** MCP Streamable HTTP
 - **Binding:** `127.0.0.1` only — never reachable from the network
-- **Access:** read-only, always
+- **Access:** read-only; saved packs only; no capture tool
 - **DNS-rebinding protection:** requests whose `Host` header is not
   `127.0.0.1`/`localhost` (on the MCP port), or whose `Origin` header is present and not a
   local `http(s)://127.0.0.1`/`localhost` page, are rejected with `403`
@@ -50,9 +52,10 @@ start.
 Settings → MCP does this for you: pick your client from the dropdown and press
 **Copy setup command**. The snippet is built from the endpoint the server *actually bound*,
 so it is already correct even if you changed the port. **Copy prompt** produces a complete
-handoff for the selected client: the live URL, the exact setup form, restart/reload guidance,
-and the instruction to call `capturepack_latest`. The forms below are the same ones those
-buttons produce.
+newest-pack handoff for the selected client: the live URL, the exact setup form,
+restart/reload guidance, and the instruction to call `capturepack_latest`. To choose
+an older or specific pack, use `capturepack_history` followed by
+`capturepack_open`. The forms below are the same ones those buttons produce.
 
 ### Claude Code
 
@@ -227,16 +230,27 @@ Plugin metadata is exposed generically — the MCP server never special-cases pl
 If a pack has no plugin data, the plugin-reading tools return empty results with a clear
 message; that is expected today.
 
-### Object context (`windows-uia` + annotation `target`)
+### Object context (`windows-context`, `windows-uia`, Chrome DOM, and `target`)
 
-A Windows capture usually carries `plugins/windows-uia/elements.json`
-([SPEC §11.3](../SPEC.md)): the top-level window list and the UI Automation control trees of
-the windows the dump reached **as they were at the capture instant**, with every rectangle
-already in `snapshot.png` pixel coordinates — the same space as the annotations. Read it with
-`capturepack_dom`, search it with `capturepack_find_dom`, and get just the windows from
-`capturepack_windows`.
+A Windows video pack can carry two complementary sources:
 
-Two fields decide how to read it. `windows[].z` is the z-order (`0` = top-most), so a question
+- `plugins/windows-context/timeline.json` is the compact checkpoint/delta history
+  of the windows and controls CapturePack actually observed across the replay.
+  It is on the pack clock and keeps each rectangle in the named display's
+  snapshot pixels. This is the source that lets a reopened pack resolve an
+  object at a past frame without querying the current desktop.
+- `plugins/windows-uia/elements.json` ([SPEC §11.3](../SPEC.md)) is the detailed
+  capture-instant UI Automation window/control snapshot. It contains accessible
+  names, control types, AutomationIds and tree-collection status where the
+  budgeted walk reached them.
+
+The optional Chrome preview extension contributes explicit DOM picks (selector,
+role, text, URL and viewport placement). `capturepack_dom` exposes plugin JSON
+generically, `capturepack_find_dom` searches it, and `capturepack_windows`
+returns window-related plugin data. Image packs can carry capture-instant UIA
+context, but intentionally have no replay-clock window timeline.
+
+Two fields decide how to read the UIA snapshot. `windows[].z` is the z-order (`0` = top-most), so a question
 like *"what is at (x, y)?"* is answered by the lowest-`z` window containing the point, never by
 a control of a window that another window covers there. `windows[].tree` says what happened to
 that window's tree — `collected`, `truncated`, `unavailable`, `skipped`. **Anything but
@@ -244,7 +258,7 @@ that window's tree — `collected`, `truncated`, `unavailable`, `skipped`. **Any
 has none:** Chromium and Electron windows expose no tree until an assistive client asks, and
 the walk is budgeted. Report such a window as "no object data", not as an empty application.
 
-When the user placed a box on one of those objects, that box also carries `target`
+When the user placed a box on one of those objects, that box can also carry `target`
 ([SPEC §8.7](../SPEC.md)) in `capturepack_annotations`:
 
 ```json
@@ -258,11 +272,18 @@ level — a complete answer, not a degraded one:
 "target": { "source": "uia", "level": "window", "title": "Untitled - Notepad", "process": "notepad" }
 ```
 
-That is the difference between *"a box at (2140, 1236)"* and *"the Save button"*. Two rules
-never change: the box's geometry always comes from `bounds` alone, and both the dump and the
-target describe **one instant** — they say nothing about any other position in the replay.
-A pack without either (a non-Windows capture, a dump that ran out of budget) is complete and
-valid; the tools then simply report that there is no object data.
+That is the difference between *"a box at (2140, 1236)"* and *"the Save
+button"*. `bounds` is the annotation's fallback rectangle and the rectangle at
+its representative/picked instant. At another replay time, an object-picked box
+uses the nearest recorded `tracking.samples` observation unchanged; observed
+samples are never interpolated. `tracking.picked_at_ms` records the frame the
+user actually picked. Authored manual-box `keyframes` are a separate claim and
+may interpolate.
+
+A pack without one of these optional sources (a non-Windows capture, disabled
+UIA, an exhausted collection budget, or a capture made before temporal context
+was stored) is still complete and valid. The tools report the missing coverage
+instead of inventing object data.
 
 ### Which screen a box is on
 

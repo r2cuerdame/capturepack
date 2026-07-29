@@ -1,14 +1,16 @@
 import { spawn } from 'node:child_process'
+import { createRequire } from 'node:module'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { terminateProcessTree } from './process-tree.mjs'
 
 const profile = mkdtempSync(join(tmpdir(), 'capturepack-smoke-'))
-const electron =
-  process.platform === 'win32'
-    ? join('node_modules', 'electron', 'dist', 'electron.exe')
-    : join('node_modules', '.bin', 'electron')
+// Electron 42+ downloads its development binary lazily when the package is
+// first resolved. Requiring the package supports both a fresh `npm ci` and an
+// already-warmed checkout; hard-coding dist/electron.exe does not.
+const require = createRequire(import.meta.url)
+const electron = require('electron')
 
 let child = null
 let timedOut = false

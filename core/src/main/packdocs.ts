@@ -81,6 +81,10 @@ export function buildReadme(
   const imageCapture = manifest.capture_kind === 'image'
   const hasReplay = manifest.media.replay !== null
   const replayName = manifest.media.replay ?? 'replay.webm'
+  const annotatedReplayName = manifest.media.replay_annotated
+  const annotatedReplayPending = hasReplay && renderPending && annotatedReplayName === undefined
+  const hasAnnotatedReplay = annotatedReplayName !== undefined || annotatedReplayPending
+  const annotatedReplayFile = annotatedReplayName ?? 'replay_annotated.webm'
   const blurCount = annotations.filter((a) => a.blur).length
   const lines: string[] = []
 
@@ -132,9 +136,13 @@ export function buildReadme(
     lines.push(
       `| ${manifest.media.replay} | ${seconds}s screen recording before the capture — original, never modified |`,
     )
-    lines.push(
-      '| replay_annotated.webm | The replay with annotations rendered in — watch this one (generated in the background; may appear shortly after save) |',
-    )
+    if (hasAnnotatedReplay) {
+      lines.push(
+        `| ${annotatedReplayFile} | The replay with annotations rendered in — watch this one` +
+          (annotatedReplayPending ? ' (generated in the background; may appear shortly after save)' : '') +
+          ' |',
+      )
+    }
   }
   for (const f of extraDisplayFiles(manifest)) {
     lines.push(`| ${f.name} | ${f.what} |`)
@@ -160,8 +168,13 @@ export function buildReadme(
       lines.push('2. Read `report.md` for the annotation details and captured context.')
       lines.push('3. AI: read the documents in `skills/`, or connect through a CapturePack MCP server.')
     }
+  } else if (hasAnnotatedReplay) {
+    lines.push(`1. Watch \`${annotatedReplayFile}\` — the annotations are rendered into the video.`)
   } else if (hasReplay) {
-    lines.push('1. Watch `replay_annotated.webm` — the annotations are rendered into the video.')
+    lines.push(
+      `1. Watch \`${replayName}\` — this source-first pack has no declared annotated replay; ` +
+        '`annotations.json` remains the editable source.',
+    )
   } else {
     lines.push(
       '1. Open `snapshot.png` — this pack is screenshot-only, so there is no `replay_annotated.webm`',
@@ -215,7 +228,7 @@ export function buildSkills(
     timeline: buildTimelineSkill(manifest, timeline, t),
     annotation: buildAnnotationSkill(manifest, annotationsFile, t),
     dom: buildDomSkill(manifest, annotationsFile, t),
-    project: buildProjectSkill(manifest, t),
+    project: buildProjectSkill(manifest, t, renderPending),
   }
 }
 
@@ -230,6 +243,10 @@ function buildOverviewSkill(
   const imageCapture = manifest.capture_kind === 'image'
   const hasReplay = manifest.media.replay !== null
   const replayName = manifest.media.replay ?? 'replay.webm'
+  const annotatedReplayName = manifest.media.replay_annotated
+  const annotatedReplayPending = hasReplay && renderPending && annotatedReplayName === undefined
+  const hasAnnotatedReplay = annotatedReplayName !== undefined || annotatedReplayPending
+  const annotatedReplayFile = annotatedReplayName ?? 'replay_annotated.webm'
   const numbers = computeDisplayNumbers(annotations)
   const lines: string[] = []
 
@@ -250,7 +267,10 @@ function buildOverviewSkill(
     lines.push(
       hasReplay
         ? `**Media:** ${size} snapshot.png + ${((manifest.media.replay_duration_ms ?? 0) / 1000).toFixed(1)}s ${replayName}` +
-            '; the annotated view replay_annotated.webm is generated in the background after save.'
+            (hasAnnotatedReplay
+              ? `; annotated view ${annotatedReplayFile}` +
+                (annotatedReplayPending ? ' is generated in the background after save.' : ' is declared in the manifest.')
+              : '; no annotated replay is declared.')
         : `**Media:** screenshot only (${size} snapshot.png); no replay, no annotated replay.`,
     )
   }
@@ -299,7 +319,9 @@ function buildOverviewSkill(
   if (annotations.length > 0) {
     lines.push('Where to look:')
     lines.push('')
-    if (hasReplay) lines.push('- `replay_annotated.webm` shows the annotations in place, in time.')
+    if (hasAnnotatedReplay) {
+      lines.push(`- \`${annotatedReplayFile}\` shows the annotations in place, in time.`)
+    }
     // Only when this pack really has (or is about to have) stills — a pointer
     // to frames/ in a pack that will never contain it is a dead end.
     if (keyframeLines.length > 0) {
@@ -552,9 +574,17 @@ function buildDomSkill(manifest: Manifest, annotationsFile: AnnotationsFile, t: 
   return lines.join('\n')
 }
 
-function buildProjectSkill(manifest: Manifest, t: TranslateFn): string {
+function buildProjectSkill(
+  manifest: Manifest,
+  t: TranslateFn,
+  renderPending: boolean,
+): string {
   const hasReplay = manifest.media.replay !== null
   const replayName = manifest.media.replay ?? 'replay.webm'
+  const annotatedReplayName = manifest.media.replay_annotated
+  const annotatedReplayPending = hasReplay && renderPending && annotatedReplayName === undefined
+  const hasAnnotatedReplay = annotatedReplayName !== undefined || annotatedReplayPending
+  const annotatedReplayFile = annotatedReplayName ?? 'replay_annotated.webm'
   const lines: string[] = []
   lines.push(`# ${t('pack.skillProject')}`)
   lines.push('')
@@ -603,16 +633,19 @@ function buildProjectSkill(manifest: Manifest, t: TranslateFn): string {
       ? `- \`${replayName}\` — the last seconds before the capture. Original evidence, never modified.`
       : '- `replay.webm` — optional last seconds before capture (absent here: screenshot-only pack).',
   )
-  lines.push(
-    hasReplay
-      ? '- `replay_annotated.webm` — the replay with annotations rendered in. Generated in the background'
-      : '- `replay_annotated.webm` — optional rendering of the replay with annotations burned in',
-  )
-  lines.push(
-    hasReplay
-      ? `  after save, regenerable at any time from ${replayName} + annotations.json.`
-      : '  (absent here — it only exists when there is a replay).',
-  )
+  if (hasAnnotatedReplay) {
+    lines.push(
+      `- \`${annotatedReplayFile}\` — the replay with annotations rendered in.` +
+        (annotatedReplayPending ? ' Generated in the background' : ''),
+    )
+    lines.push(
+      annotatedReplayPending
+        ? `  after save, regenerable at any time from ${replayName} + annotations.json.`
+        : `  Declared in manifest.json and regenerable from ${replayName} + annotations.json.`,
+    )
+  } else {
+    lines.push('- `replay_annotated.webm` — optional derived rendering, absent from this source revision.')
+  }
   if (manifest.media.displays !== undefined && manifest.media.displays.length > 1) {
     lines.push('- `snapshot-d<N>.png` / `replay-d<N>.webm` — the OTHER displays this capture froze, one')
     lines.push('  set per display, declared in `manifest.media.displays` (N = the display index there).')

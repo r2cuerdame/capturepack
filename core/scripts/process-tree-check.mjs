@@ -121,6 +121,8 @@ console.log('\nQA timeout process-tree termination')
   check(
     'RC smoke is isolated from the owner profile and cleans its process tree',
     smoke.includes("mkdtempSync(join(tmpdir(), 'capturepack-smoke-'))") &&
+      smoke.includes("const electron = require('electron')") &&
+      !smoke.includes("'electron', 'dist', 'electron.exe'") &&
       smoke.includes('`--user-data-dir=${profile}`') &&
       smoke.includes("'--no-supervision'") &&
       smoke.includes('const killer = terminateProcessTree(target)') &&

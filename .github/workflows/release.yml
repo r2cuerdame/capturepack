@@ -17,16 +17,23 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to release, e.g. v0.3.0 (created from the selected ref if it does not exist)'
+        description: 'Tag to release, e.g. vX.Y.Z (created from the selected ref if it does not exist)'
         required: true
         type: string
 
 permissions:
   contents: write
 
+# Public releases are serialized. Two different version jobs finishing out of
+# order could otherwise make an older build the repository's "latest" release.
+concurrency:
+  group: capturepack-public-release
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: windows-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
@@ -47,14 +54,38 @@ jobs:
             throw "Tag $env:RELEASE_TAG does not match core/package.json version $version"
           }
 
+      # A failed retry may legitimately find a draft, but an already-public
+      # release is immutable input here. Never let automation replace public
+      # binaries for an existing tag.
+      - name: Guard existing release state
+        shell: pwsh
+        timeout-minutes: 2
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $output = gh release view "$env:RELEASE_TAG" --json isDraft,tagName 2>&1
+          if ($LASTEXITCODE -eq 0) {
+            $release = $output | ConvertFrom-Json
+            if (-not $release.isDraft) {
+              throw "Release $env:RELEASE_TAG is already public; refusing to replace its assets."
+            }
+            Write-Host "A draft exists for $env:RELEASE_TAG; this run will verify and resume it."
+          } elseif ("$output" -match "HTTP 404|release not found|not found") {
+            Write-Host "No existing release for $env:RELEASE_TAG."
+          } else {
+            throw "Could not verify release state: $output"
+          }
+
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: core/package-lock.json
 
       - name: Install dependencies
         working-directory: core
+        timeout-minutes: 10
         run: npm ci
 
       # The public artifact must pass the same gate as the candidate the user
@@ -62,13 +93,33 @@ jobs:
       # a fresh build, and an isolated Electron smoke test.
       - name: Full RC QA gate
         working-directory: core
-        run: npm run qa:rc
+        timeout-minutes: 10
+        run: npm run qa:rc -- --fail-fast
 
-      # Create the tag only AFTER QA passes. A failed gate must not leave a tag
-      # behind, and a retry must never build one commit while publishing under
-      # a tag that points at another.
+      # Package locally first. Publishing directly from electron-builder used
+      # to make the release visible before latest.yml and SHA256SUMS were
+      # checked; a malformed or partial updater release could therefore escape.
+      - name: Package release artifacts
+        working-directory: core
+        timeout-minutes: 15
+        run: npm run dist
+
+      # Verifies the exact installer name/version, rejects stale installers in
+      # the output directory, and checks latest.yml's size + both sha512 fields
+      # against the actual bytes before writing the one-line SHA256SUMS file.
+      - name: Verify local release contract
+        working-directory: core
+        timeout-minutes: 5
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: node scripts/release-contract-check.mjs --tag "$env:RELEASE_TAG" --release-dir release --package package.json
+
+      # Create the tag only AFTER QA, packaging, and the local hash contract
+      # pass. A failed candidate must not leave a public-looking tag behind, and
+      # a retry must never publish one commit under a tag pointing elsewhere.
       - name: Create or verify the release tag
         shell: pwsh
+        timeout-minutes: 3
         env:
           RELEASE_TAG: ${{ inputs.tag }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -87,32 +138,90 @@ jobs:
             git push origin "$env:RELEASE_TAG"
           }
 
-      # Publishes CapturePack-Setup-{version}.exe + latest.yml (sha512 for
-      # electron-updater verification) to the GitHub Release for this tag.
-      #
       # Releases are UNSIGNED — accepted V1 limitation (GOAL.md: signing "when
       # possible"; no certificate is available yet). Update integrity relies on
-      # electron-updater's sha512 check via latest.yml plus SHA256SUMS.txt below.
-      # When a certificate exists, add electron-builder win signing config and
-      # the secret here.
-      - name: Package and publish
-        working-directory: core
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run release
-
-      - name: Upload SHA256SUMS.txt
+      # electron-updater's sha512 check via latest.yml plus SHA256SUMS.txt.
+      # All four files remain in a draft until the byte-for-byte remote check.
+      - name: Upload verified assets to draft
         shell: pwsh
+        timeout-minutes: 10
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
-          $lines = Get-ChildItem core/release -Filter *.exe | ForEach-Object {
-            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
-            "$hash  $($_.Name)"
+          $version = (Get-Content core/package.json -Raw | ConvertFrom-Json).version
+          $existing = gh release view "$env:RELEASE_TAG" --json isDraft,assets 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            $release = $existing | ConvertFrom-Json
+            if (-not $release.isDraft) {
+              throw "Release $env:RELEASE_TAG became public before verification."
+            }
+            # A timed-out prior attempt can leave a partial or obsolete draft.
+            # Clear only this verified draft's assets so every retry starts
+            # from the same exact four-file contract.
+            foreach ($asset in @($release.assets)) {
+              gh release delete-asset "$env:RELEASE_TAG" $asset.name --yes
+              if ($LASTEXITCODE -ne 0) {
+                throw "Could not remove stale draft asset $($asset.name)."
+              }
+            }
+          } else {
+            gh release create "$env:RELEASE_TAG" --draft --verify-tag --title "$version"
+            if ($LASTEXITCODE -ne 0) { throw "Could not create draft release." }
           }
-          if (-not $lines) { throw "No .exe artifacts found in core/release" }
-          $sums = "core/release/SHA256SUMS.txt"
-          $lines | Out-File $sums -Encoding utf8
-          Get-Content $sums
-          gh release upload "$env:RELEASE_TAG" $sums --clobber
+
+          $installer = "CapturePack-Setup-$version.exe"
+          $assets = @(
+            "core/release/$installer",
+            "core/release/$installer.blockmap",
+            "core/release/latest.yml",
+            "core/release/SHA256SUMS.txt"
+          )
+          gh release upload "$env:RELEASE_TAG" $assets --clobber
+          if ($LASTEXITCODE -ne 0) { throw "Could not upload the complete draft asset set." }
+
+      - name: Verify draft assets byte-for-byte
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          $version = (Get-Content core/package.json -Raw | ConvertFrom-Json).version
+          $installer = "CapturePack-Setup-$version.exe"
+          $names = @($installer, "$installer.blockmap", "latest.yml", "SHA256SUMS.txt")
+          $release = gh release view "$env:RELEASE_TAG" --json isDraft,tagName,assets | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw "Could not read the draft release." }
+          if (-not $release.isDraft) { throw "Release became public before remote verification." }
+          if ($release.tagName -ne $env:RELEASE_TAG) { throw "Remote release tag mismatch." }
+
+          $actualNames = @($release.assets | ForEach-Object { $_.name } | Sort-Object)
+          $expectedNames = @($names | Sort-Object)
+          if (Compare-Object $expectedNames $actualNames) {
+            throw "Remote draft assets differ from the exact expected set: $actualNames"
+          }
+
+          $downloadDirectory = Join-Path $env:RUNNER_TEMP "capturepack-release-verify"
+          New-Item -ItemType Directory -Path $downloadDirectory -Force | Out-Null
+          foreach ($name in $names) {
+            gh release download "$env:RELEASE_TAG" --dir $downloadDirectory --pattern $name --clobber
+            if ($LASTEXITCODE -ne 0) { throw "Could not download remote asset $name." }
+            $local = Join-Path "core/release" $name
+            $remote = Join-Path $downloadDirectory $name
+            $localHash = (Get-FileHash -LiteralPath $local -Algorithm SHA256).Hash
+            $remoteHash = (Get-FileHash -LiteralPath $remote -Algorithm SHA256).Hash
+            if ($localHash -ne $remoteHash) {
+              throw "Remote asset bytes do not match local verification: $name"
+            }
+          }
+
+      # This is the only step that makes the update visible to users.
+      - name: Publish verified draft
+        shell: pwsh
+        timeout-minutes: 3
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          gh release edit "$env:RELEASE_TAG" --draft=false
+          if ($LASTEXITCODE -ne 0) { throw "Could not publish the verified draft." }

@@ -24,7 +24,10 @@ folder that works without an AI, account, or cloud service.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Download](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Current Windows release: **CapturePack 0.3.0**.
+Current public Windows release: **CapturePack 0.3.0**. The source and release
+candidate baseline is **0.3.1**; it corrects Chrome DOM geometry across
+mixed-DPI displays and keeps generated pack documents in sync with the final
+manifest and the artifacts that actually exist.
 
 <p align="center">
   <!-- Absolute raw URL with a version query: GitHub proxies README images through
@@ -134,7 +137,7 @@ Video packs may contain:
 ```
 CapturePack_2026-07-27_143052/
 ├── replay.mp4               # original evidence (or replay.webm fallback)
-├── replay_annotated.webm    # annotations rendered in; plays in any player
+├── replay_annotated.webm    # optional derived view; only when manifest-declared
 ├── snapshot.png             # the captured frame (original)
 ├── annotations.json         # the true source: boxes, lifetimes, numbers, blur
 ├── timeline.json            # video packs: machine-readable event log
@@ -184,11 +187,20 @@ claude mcp add --transport http capturepack http://127.0.0.1:39393/mcp
 
 Tools, client setup, and settings: [docs/MCP.md](docs/MCP.md).
 
+## Settings and diagnostics
+
+- Settings → Capture independently configures the video (`Ctrl+Alt+C`) and image
+  (`Ctrl+Alt+S`) shortcuts, replay length and 1–30 fps capture rate.
+- About / Information → **Open logs folder** opens the local, size-capped run
+  diagnostics. Logs are never uploaded automatically.
+
 ## Status
 
-**0.3.0 is available for Windows.** CapturePack remains an early-stage project,
-so keep the original pack when reporting a problem and see [GOAL.md](GOAL.md)
-for the product vision and [ROADMAP.md](ROADMAP.md) for what comes next.
+**0.3.0 remains the public Windows download.** 0.3.1 is a release candidate,
+not a public release until it appears on GitHub Releases. CapturePack remains
+an early-stage project, so keep the original pack when reporting a problem and
+see [GOAL.md](GOAL.md) for the product vision and [ROADMAP.md](ROADMAP.md) for
+what comes next.
 
 ## Security &amp; signing
 

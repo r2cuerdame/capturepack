@@ -14,8 +14,9 @@
 //
 // Run: npm run check:dom
 import { ChromeDomProvider } from '../src/main/context/domProvider'
-import type { DomEvent } from '../src/main/chrome/domBridge'
+import { parseDomPayload, type DomEvent } from '../src/main/chrome/domBridge'
 import type { Rect, SurfaceInfo } from '../src/shared/context/protocol'
+import { claimCovers } from '../src/shared/context/resolver'
 
 // --- the synthetic desk ----------------------------------------------------
 // A 2x HiDPI display: 1 CSS px = 2 snapshot px, so a bug that silently assumes
@@ -36,7 +37,7 @@ function browserAt(x: number, y: number): SurfaceInfo {
     bounds: { ...WINDOW, x, y },
     clientBounds: { ...CLIENT, x: CLIENT.x + dx, y: CLIENT.y + dy },
     space: 'display-snapshot',
-    display: 0,
+    display: 1,
     zOrder: 0,
     visible: true,
     minimized: false,
@@ -107,6 +108,11 @@ async function candidateAt(
   } as never)
   const first = frame.candidates[0]
   return first === undefined ? null : first.bounds
+}
+
+const scaleMap = (entries: ReadonlyArray<readonly [number, number]>) => {
+  const values = new Map(entries)
+  return (display: number): number | null => values.get(display) ?? null
 }
 
 async function main(): Promise<void> {
@@ -226,6 +232,230 @@ async function main(): Promise<void> {
       'derives the scale (1x display, different chrome height)',
       got !== null && near(got, want),
       got === null ? 'no candidate' : `got ${fmt(got)} want ${fmt(want)}`,
+    )
+  }
+
+  // 8. PAST FRAMES ARE FIRST-CLASS: the pick is exact at its event time, but
+  //    its offset inside a browser tracked by the ring is still a useful,
+  //    explicitly interpolated answer before that instant too. This is the
+  //    editor path used after scrubbing away from the capture frame.
+  {
+    const ev = pick(5000, 300, 200, 120, 40)
+    const earlier = browserAt(WINDOW.x - 200, WINDOW.y - 100)
+    const atPick = browserAt(WINDOW.x, WINDOW.y)
+    const provider = new ChromeDomProvider([ev], (t) => [t < ev.tMs ? earlier : atPick])
+    const got = await candidateAt(provider, 1000, [earlier])
+    const want = truth(300, 200, 120, 40, -200, -100)
+    report(
+      'a DOM element remains pickable in a past frame',
+      got !== null && near(got, want),
+      got === null ? 'no candidate' : `got ${fmt(got)} want ${fmt(want)}`,
+    )
+  }
+
+  // 9. REOPEN USES THE DISK VOCABULARY: elements.json stores `t_ms`, while a
+  //    live bridge event uses `tMs`. The parser and provider together must
+  //    reproduce the same candidate or a reopened pack silently loses DOM.
+  {
+    const ev = pick(1000, 300, 200, 120, 40)
+    const { tMs, ...stored } = ev
+    const reopened = parseDomPayload(JSON.stringify({ events: [{ ...stored, t_ms: tMs }] }))
+    const still = browserAt(WINDOW.x, WINDOW.y)
+    const provider = new ChromeDomProvider(reopened, () => [still])
+    const got = await candidateAt(provider, 1000, [still])
+    const want = truth(300, 200, 120, 40)
+    report(
+      'a saved DOM pick survives elements.json parse and reopen',
+      reopened.length === 1 && got !== null && near(got, want),
+      `events ${String(reopened.length)}, ${got === null ? 'no candidate' : `got ${fmt(got)} want ${fmt(want)}`}`,
+    )
+  }
+
+  // 10. CROSS-DISPLAY DPI + RESIZE: a browser moved from a 2x display to a 1x
+  //     display keeps the same DIP element geometry, so the rectangle halves
+  //     even if the user independently resizes the target window. Deriving the
+  //     ratio from client width would mistake that resize for another DPI
+  //     transform and cannot pass this case.
+  {
+    const ev = pick(1000, 300, 200, 120, 40)
+    const atPick = browserAt(WINDOW.x, WINDOW.y)
+    const later: SurfaceInfo = {
+      ...browserAt(100, 50),
+      display: 2,
+      bounds: { x: 100, y: 50, width: 2000, height: 1400 },
+      clientBounds: { x: 104, y: 70, width: 1984, height: 1352 },
+    }
+    const provider = new ChromeDomProvider(
+      [ev],
+      (t) => [t <= ev.tMs ? atPick : later],
+      scaleMap([[1, 2], [2, 1]]),
+    )
+    const got = await candidateAt(provider, 5000, [later])
+    const want: Rect = { x: 404, y: 334, width: 120, height: 40 }
+    report(
+      'cross-display DPI is independent of target window resize',
+      got !== null && near(got, want),
+      got === null ? 'no candidate' : `got ${fmt(got)} want ${fmt(want)}`,
+    )
+  }
+
+  // 11. SAME SCALE, DIFFERENT DISPLAY: crossing monitor ids is not itself a
+  //     resize. A simultaneous client resize must not change the old observed
+  //     element's size when both snapshots have the same px-per-DIP scale.
+  {
+    const ev = pick(1000, 300, 200, 120, 40)
+    const atPick = browserAt(WINDOW.x, WINDOW.y)
+    const later: SurfaceInfo = {
+      ...browserAt(50, 30),
+      display: 2,
+      bounds: { x: 50, y: 30, width: 1100, height: 950 },
+      clientBounds: { x: 60, y: 50, width: 1000, height: 900 },
+    }
+    const provider = new ChromeDomProvider(
+      [ev],
+      (t) => [t <= ev.tMs ? atPick : later],
+      scaleMap([[1, 2], [2, 2]]),
+    )
+    const got = await candidateAt(provider, 5000, [later])
+    const want: Rect = { x: 660, y: 578, width: 240, height: 80 }
+    report(
+      'same-scale monitor move does not turn window resize into element scaling',
+      got !== null && near(got, want),
+      got === null ? 'no candidate' : `got ${fmt(got)} want ${fmt(want)}`,
+    )
+  }
+
+  // 12. MISSING SCALE: a legacy caller that cannot identify either captured
+  //     display's pixel scale must not guess from window dimensions.
+  {
+    const ev = pick(1000, 300, 200, 120, 40)
+    const atPick = browserAt(WINDOW.x, WINDOW.y)
+    const later: SurfaceInfo = {
+      ...browserAt(100, 50),
+      display: 2,
+      bounds: { x: 100, y: 50, width: 2000, height: 1400 },
+      clientBounds: { x: 104, y: 70, width: 1984, height: 1352 },
+    }
+    const provider = new ChromeDomProvider([ev], (t) => [t <= ev.tMs ? atPick : later])
+    const got = await candidateAt(provider, 5000, [later])
+    report('cross-display placement refuses missing DPI metadata', got === null, got === null ? '' : `offered ${fmt(got)}`)
+  }
+
+  // 13. IDENTITY + PER-CANDIDATE TIME: two picks can arrive in the same
+  //     rounded millisecond. They remain distinct, and an exact frame for the
+  //     second pick must not falsely make the older candidate exact too.
+  {
+    const first = pick(1000, 300, 200, 120, 40)
+    const second: DomEvent = {
+      ...pick(5000, 400, 260, 100, 30),
+      element: {
+        ...(pick(5000, 400, 260, 100, 30).element as NonNullable<DomEvent['element']>),
+        selector: '#save',
+      },
+    }
+    const sameMs = { ...second, tMs: first.tMs }
+    const still = browserAt(WINDOW.x, WINDOW.y)
+    const sameMsProvider = new ChromeDomProvider([first, sameMs], () => [still])
+    const sameMsFrame = await sameMsProvider.frame({
+      sessionId: 'check',
+      timeMs: first.tMs,
+      surfaces: [still],
+      maxCandidates: 100,
+    })
+    const ids = new Set(sameMsFrame.candidates.map((candidate) => candidate.objectId))
+    report(
+      'same-ms same-selector DOM picks keep distinct object ids',
+      sameMsFrame.candidates.length === 2 && ids.size === 2,
+      `${String(sameMsFrame.candidates.length)} candidates / ${String(ids.size)} ids`,
+    )
+
+    const timedProvider = new ChromeDomProvider([first, second], () => [still])
+    const timedFrame = await timedProvider.frame({
+      sessionId: 'check',
+      timeMs: second.tMs,
+      surfaces: [still],
+      maxCandidates: 100,
+    })
+    const exact = timedFrame.candidates.filter((candidate) => candidate.accuracy.exact)
+    const stale = timedFrame.candidates.find((candidate) => candidate.accuracy.errorMs === 4000)
+    report(
+      'DOM time accuracy is per candidate, not copied from the nearest pick',
+      timedFrame.accuracy.exact
+        && timedFrame.accuracy.materializedTimeMs === second.tMs
+        && exact.length === 1
+        && stale?.accuracy.interpolated === true,
+      `frame error ${String(timedFrame.accuracy.errorMs)}, exact candidates ${String(exact.length)}`,
+    )
+  }
+
+  // 14. MULTI-SLICE SURFACE: a window spanning two monitors has one surfaceId
+  //     but one clipped rectangle per display. Order and window-slice area must
+  //     not pull the DOM element onto the display where it is not visible.
+  {
+    const ev = pick(1000, 300, 200, 120, 40)
+    const firstSlice: SurfaceInfo = {
+      ...browserAt(WINDOW.x, WINDOW.y),
+      display: 1,
+      bounds: { x: 0, y: 0, width: 700, height: 700 },
+      clientBounds: { ...CLIENT, x: -1400, y: 40 },
+    }
+    const secondSlice: SurfaceInfo = {
+      ...browserAt(WINDOW.x, WINDOW.y),
+      display: 2,
+      bounds: { x: 0, y: 0, width: 500, height: 700 },
+      clientBounds: { ...CLIENT, x: -200, y: 40 },
+    }
+    const slices = [secondSlice, firstSlice]
+    const provider = new ChromeDomProvider(
+      [ev],
+      () => [firstSlice, secondSlice],
+      scaleMap([[1, 2], [2, 2]]),
+    )
+    const frame = await provider.frame({
+      sessionId: 'check',
+      timeMs: ev.tMs,
+      surfaces: slices,
+      maxCandidates: 100,
+    })
+    const claims = await provider.getSurfaceClaims({
+      sessionId: 'check',
+      timeMs: ev.tMs,
+      surfaces: slices,
+    })
+    const candidate = frame.candidates[0]
+    const displayOneClaims = claims.filter((claim) => claim.display === 1)
+    report(
+      'spanning-window DOM candidate and claims preserve the visible display slice',
+      candidate?.display === 2
+        && candidate.bounds.x === 400
+        && claims.length === 2
+        && new Set(claims.map((claim) => claim.display)).size === 2
+        && !claimCovers(
+          displayOneClaims,
+          candidate.providerId,
+          candidate.surfaceId,
+          { x: candidate.bounds.x, y: candidate.bounds.y },
+          2,
+        ),
+      candidate === undefined
+        ? 'no candidate'
+        : `display ${String(candidate.display)}, x ${String(candidate.bounds.x)}, claims ${String(claims.length)}`,
+    )
+  }
+
+  // 15. HOSTILE GEOMETRY: a local pipe or edited elements.json can carry bad
+  //     values. Negative dimensions must be rejected before arithmetic.
+  {
+    const ev = pick(1000, 300, 200, -120, 40)
+    const still = browserAt(WINDOW.x, WINDOW.y)
+    const provider = new ChromeDomProvider([ev], () => [still])
+    const got = await candidateAt(provider, ev.tMs, [still])
+    const { tMs, ...stored } = ev
+    const reopened = parseDomPayload(JSON.stringify({ events: [{ ...stored, t_ms: tMs }] }))
+    report(
+      'negative DOM geometry is rejected on the wire, reopen, and provider seams',
+      got === null && reopened.length === 0,
+      got === null ? `reopened events ${String(reopened.length)}` : `offered ${fmt(got)}`,
     )
   }
 

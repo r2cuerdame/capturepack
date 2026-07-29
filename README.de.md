@@ -16,7 +16,7 @@ damit eine KI sie nicht allein aus Pixeln erraten muss.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Herunterladen](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Aktuelle Windows-Version: **CapturePack 0.3.0**
+Aktuelle öffentliche Windows-Version: **CapturePack 0.3.0** · Quell-/Release-Kandidat: **0.3.1**
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=4" alt="CapturePack springt zu einem früheren Bild, wählt ein untergeordnetes UI-Steuerelement, zeigt erfassten Namen und Typ, folgt der beobachteten Fensterbewegung und exportiert strukturierte KI-Belege." width="760">
@@ -58,7 +58,7 @@ Pixel und Position, nie ein verborgenes Vollbild oder einen zweiten Monitor.
 ```text
 Video-Pack                        Bild-Pack
 replay.mp4 oder replay.webm       snapshot.png
-replay_annotated.webm             annotations.json
+replay_annotated.webm (optional; nur bei Manifest-Deklaration)
 snapshot.png                      report.md · README.md · skills/
 annotations.json · timeline.json  plugins/ (optional)
 plugins/ · manifest.json          manifest.json (capture_kind: image)
@@ -76,6 +76,13 @@ Unter Einstellungen → MCP lässt er sich stoppen oder vom Autostart ausschlie�
 nur bereits gespeicherte Packs und kann keine Aufnahme starten. Nutze `capturepack_history`,
 `capturepack_open` oder `capturepack_latest`. Details: [docs/MCP.md](docs/MCP.md).
 
+## Einstellungen und Diagnose
+
+- Unter Einstellungen → Aufnahme lassen sich Video- (`Ctrl+Alt+C`) und
+  Bildkürzel (`Ctrl+Alt+S`), Replay-Länge und 1–30 fps getrennt einstellen.
+- Information → **Protokollordner öffnen** öffnet die lokalen Diagnosen.
+  Protokolle werden nie automatisch hochgeladen.
+
 ## Datenschutz vor dem Teilen
 
 Pixel, Fenstertitel, barrierefreie Namen und DOM-Felder können vertraulich sein. CapturePack
@@ -88,7 +95,8 @@ das vollständige Pack nicht, wenn es private Daten enthält.
 
 ## Status, Sicherheit und Lizenz
 
-0.3.0 ist eine frühe Windows-Version. Der Build ist noch nicht signiert, daher kann
+0.3.0 bleibt die öffentliche Version; 0.3.1 ist ein Release-Kandidat, bis es in
+GitHub Releases erscheint. Der Build ist noch nicht signiert, daher kann
 SmartScreen warnen; jede Version enthält `SHA256SUMS.txt`.
 
 Local-first · keine Cloud · kein Konto · keine Telemetrie · [MIT-Lizenz](LICENSE)

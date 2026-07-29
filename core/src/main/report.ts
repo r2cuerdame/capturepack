@@ -411,6 +411,10 @@ export function buildReport(
 
   const hasReplay = manifest.media.replay !== null
   const replayName = manifest.media.replay ?? 'replay.webm'
+  const annotatedReplayName = manifest.media.replay_annotated
+  const annotatedReplayPending = hasReplay && renderPending && annotatedReplayName === undefined
+  const hasAnnotatedReplay = annotatedReplayName !== undefined || annotatedReplayPending
+  const annotatedReplayFile = annotatedReplayName ?? 'replay_annotated.webm'
   const replaySeconds = ((manifest.media.replay_duration_ms ?? 0) / 1000).toFixed(1)
   lines.push(`## ${t('pack.environment')}`)
   lines.push('')
@@ -489,7 +493,7 @@ export function buildReport(
     lines.push(
       `${subject} marked blur. snapshot.png${hasReplay ? ` and ${replayName}` : ''} contain the ` +
         'original, unredacted pixels; blur renders only into derived views ' +
-        `(${hasReplay ? 'replay_annotated.webm, ' : ''}editor previews).`,
+        `(${hasAnnotatedReplay ? `${annotatedReplayFile}, ` : ''}editor previews).`,
     )
   }
   lines.push('')
@@ -518,10 +522,14 @@ export function buildReport(
     lines.push(
       `- ${manifest.media.replay} — ${replaySeconds}s screen recording (original evidence, never modified)`,
     )
-    lines.push(
-      '- replay_annotated.webm — the replay with annotations rendered in ' +
-        '(generated in the background; may appear shortly after save)',
-    )
+    if (hasAnnotatedReplay) {
+      lines.push(
+        `- ${annotatedReplayFile} — the replay with annotations rendered in` +
+          (annotatedReplayPending
+            ? ' (generated in the background; may appear shortly after save)'
+            : ' (declared in manifest.json)'),
+      )
+    }
   }
   for (const f of extraDisplayFiles(manifest)) {
     lines.push(`- ${f.name} — ${f.what}`)

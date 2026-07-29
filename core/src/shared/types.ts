@@ -201,8 +201,11 @@ export interface AnnotationKeyframe {
 //
 // `samples` is the object's path: ascending on the pack clock, in the snapshot
 // pixels of each sample's own display (SPEC §8.2, §8.8) — which is `bounds`'s
-// display unless the sample says otherwise. Between two samples a reader
-// interpolates linearly; outside them there is nothing to follow.
+// display unless the sample says otherwise. Every sample is an OBSERVATION:
+// between two samples a reader uses the nearer one unchanged and never
+// invents an intermediate rectangle. Before/after the sample range the nearest
+// endpoint remains the observation for as long as the annotation's lifetime
+// says the box exists.
 //
 // `bounds` REMAINS the box's rectangle at its representative instant, so a
 // reader that ignores `tracking` still draws a correct box — which is what lets

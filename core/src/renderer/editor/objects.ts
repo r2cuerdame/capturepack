@@ -269,6 +269,7 @@ export class ObjectIndex {
   private readonly windows: readonly PickableObject[]
   private readonly surfaces: readonly SurfaceInfo[]
   private readonly claims: readonly ProviderSurfaceClaim[]
+  private readonly display: number | undefined
 
   private constructor(
     objects: readonly PickableObject[],
@@ -279,6 +280,7 @@ export class ObjectIndex {
     windows: readonly PickableObject[],
     surfaces: readonly SurfaceInfo[],
     claims: readonly ProviderSurfaceClaim[],
+    display?: number,
   ) {
     this.objects = objects
     this.cells = cells
@@ -288,6 +290,7 @@ export class ObjectIndex {
     this.windows = windows
     this.surfaces = surfaces
     this.claims = claims
+    this.display = display
   }
 
   /**
@@ -319,6 +322,7 @@ export class ObjectIndex {
     claims: readonly ProviderSurfaceClaim[],
     width: number,
     height: number,
+    display?: number,
   ): ObjectIndex {
     const maxArea = width * height * MAX_AREA_FRACTION
     const maxW = width * MAX_SIDE_FRACTION
@@ -460,7 +464,7 @@ export class ObjectIndex {
         }
       }
     })
-    return new ObjectIndex(objects, cells, wide, cols, rows, windows, present, claims)
+    return new ObjectIndex(objects, cells, wide, cols, rows, windows, present, claims, display)
   }
 
   /**
@@ -486,6 +490,7 @@ export class ObjectIndex {
       claims: this.claims,
       candidatesAtPoint: this.candidatesAt(x, y),
       point: { x, y },
+      ...(this.display === undefined ? {} : { display: this.display }),
       options,
     })
   }

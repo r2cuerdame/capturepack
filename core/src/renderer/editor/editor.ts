@@ -2466,6 +2466,7 @@ function buildObjectIndex(displayIndex: number, frame: ContextFrame): void {
       frame.claims,
       d.width,
       d.height,
+      displayIndex,
     ),
   )
 }

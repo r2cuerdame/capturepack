@@ -154,7 +154,7 @@
           ]
         },
         "replay_annotated": {
-          "description": "OPTIONAL filename of the annotated replay — \"replay_annotated.webm\" or \"replay_annotated.mp4\" — the replay with annotation boxes (blur, border, number badge, text) rendered into the pixels, playable in any player and always regenerable from replay + annotations.json (SPEC.md §7.2). MUST be absent when replay is null (nothing to render it from), and absent while the annotated replay has not (yet) been rendered. The annotated replay may render in the background after save, so readers MAY encounter a manifest declaring this file before the file exists — treat that as 'still rendering' and fall back to replay + annotations.json.",
+          "description": "OPTIONAL filename of the annotated replay — \"replay_annotated.webm\" or \"replay_annotated.mp4\" — the replay with annotation boxes (blur, border, number badge, text) rendered into the pixels, playable in any player and always regenerable from replay + annotations.json (SPEC.md §7.2). MUST be absent when replay is null (nothing to render it from), and absent while the annotated replay has not (yet) been rendered. Writers MUST finish the file before publishing this declaration. Defensive readers that encounter a declared but missing file in an interrupted or older pack SHOULD treat the derived view as unavailable and fall back to replay + annotations.json.",
           "type": "string",
           "pattern": "^replay_annotated\\.(webm|mp4)$"
         },

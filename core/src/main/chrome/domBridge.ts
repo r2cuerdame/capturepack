@@ -21,6 +21,7 @@ import { logError, logInfo, logWarn } from '../log'
 
 /** The protocol both halves speak (shared/protocol/protocol-v1.schema.json). */
 export const DOM_PROTOCOL_VERSION = 1
+const MAX_DOM_COORDINATE = 10_000_000
 
 export interface DomElement {
   tag: string
@@ -186,12 +187,16 @@ function parse(raw: unknown): DomEvent | DomHello | null {
     ) {
       const r = b as Record<string, unknown>
       const num = (v: unknown): number | null =>
-        typeof v === 'number' && Number.isFinite(v) ? v : null
+        typeof v === 'number'
+        && Number.isFinite(v)
+        && Math.abs(v) <= MAX_DOM_COORDINATE
+          ? v
+          : null
       const x = num(r['x'])
       const y = num(r['y'])
       const w = num(r['width'])
       const h = num(r['height'])
-      if (x !== null && y !== null && w !== null && h !== null) {
+      if (x !== null && y !== null && w !== null && h !== null && w > 0 && h > 0) {
         event.element = {
           tag: e['tag'].slice(0, 64),
           selector: e['selector'].slice(0, 512),

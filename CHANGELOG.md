@@ -8,12 +8,66 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 
 Nothing yet.
 
+## 0.3.1 — 2026-07-30
+
+Post-release hotfixes found by adversarial QA against the public 0.3.0 build.
+
+### Fixed
+
+- **Chrome DOM boxes used the wrong size and position after crossing mixed-DPI
+  displays.** Browser CSS bounds are now projected through the owner window and
+  the scale of the display that actually owns that observation. The regression
+  covers a 2x-to-1x move, past-frame picking and save/reopen. The expanded
+  16-case gate separates DPI changes from simultaneous window resize, preserves
+  resize semantics on same-scale monitor moves, fails closed when scale is
+  missing, keeps same-millisecond same-selector picks uniquely identified,
+  reports temporal accuracy per candidate, keeps spanning-window claims on the
+  candidate's visible display slice, and rejects hostile negative geometry.
+- **Late plugin context could leave generated pack documents stale.** When
+  UIA/DOM/plugin data lands after the save-first folder exists, the final source
+  publication regenerates README, report and skills from the completed manifest
+  before the pack is presented as saved.
+- **Generated guidance could point to an annotated replay that did not exist.**
+  Pack documents now recommend derived replays/keyframes only when the final
+  manifest declares them; otherwise they point readers to the source
+  replay/snapshot and structured JSON that are actually present.
+- **A clean dependency install could fail the final Electron smoke before the
+  app started.** Electron 42+ downloads its development binary on first package
+  resolution instead of `postinstall`; QA now uses that supported lazy path,
+  pins Node 22.12+ in package and CI contracts, and retains a regression against
+  the obsolete `node_modules/electron/dist` assumption.
+
+### Release safety
+
+- The manual release workflow stages the exact installer, blockmap,
+  `latest.yml` and `SHA256SUMS.txt` in a draft, downloads all four assets again,
+  byte/hash-verifies them, and only then makes the GitHub Release public.
+- The installer persists its integration recovery snapshot immediately after a
+  previous version is removed, before electron-builder's callback-free
+  extraction exits can run. Its custom close gate also initializes builder
+  26's bundled process detector before the first process lookup, so strict NSIS
+  packaging cannot ship—or silently skip—a malformed handoff.
+
+### Security
+
+- Updated `adm-zip` to 0.6.0 for CVE-2026-39244 (crafted ZIP metadata could
+  drive a multi-gigabyte allocation), and updated
+  `@modelcontextprotocol/sdk` to 1.30.0 with `@hono/node-server` 2.0.12 for
+  GHSA-frvp-7c67-39w9.
+- Refreshed Electron to 43.2.0, electron-builder to 26.15.3 and esbuild to
+  0.28.1. `npm audit --omit=dev` reports **0 production vulnerabilities**.
+  The latest electron-builder dependency tree still reports 16 high-severity
+  development-only advisories with no fixed upgrade in its current release
+  line; npm's suggested 25.1.8 is a downgrade. They are retained in the
+  [0.3.1 dependency audit](docs/DEPENDENCY-AUDIT-0.3.1.md) rather than
+  misreported as product runtime exposure.
+
 ## 0.3.0 — 2026-07-30
 
-Pack format **0.3.0**. This release is about one promise: **a box is where the
-thing is**, at every frame — including a past frame, a reopened pack, and a
-different monitor — and everything the app claims about that is measured rather
-than asserted.
+Pack format **0.3.0**. This release makes recorded object evidence available at
+past frames, after reopen and across displays. It preserves the bounds and
+movement CapturePack actually observed; unavailable or single-instant provider
+coverage stays explicit instead of being inferred.
 
 ### Added
 
@@ -124,10 +178,11 @@ than asserted.
   until that window's IPC is ready during startup, and recovers cleanly if its
   HTML fails to load instead of keeping an invisible dead window.
 - **An update could report that CapturePack could not be closed, then leave the
-  app or Chrome integration disabled.** Installer stand-down now begins only
-  after the single-installer mutex, covers the real close and old-uninstaller
-  gates, snapshots per-user native-host/login state, and restores it on cancel,
-  update, extraction failure, or a locked-file failure.
+  app or Chrome integration disabled.** Installer stand-down is now scoped to
+  the active installer, covers the real close and old-uninstaller gates, and
+  snapshots per-user native-host/login state for handled cancel/failure paths.
+  Packaged update/cancel behavior remains part of the required manual Windows
+  smoke in `docs/QA.md`.
 
 ### Changed
 

@@ -16,7 +16,7 @@
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Скачать](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Текущая версия для Windows: **CapturePack 0.3.0**
+Текущая публичная версия для Windows: **CapturePack 0.3.0** · исходный код/кандидат: **0.3.1**
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=4" alt="CapturePack возвращается к прошлому кадру, выбирает дочерний элемент, показывает сохранённые имя и тип, следует за наблюдавшимся движением окна и экспортирует структурированные доказательства для ИИ." width="760">
@@ -57,7 +57,7 @@
 ```text
 Видеопакет                       Пакет изображения
 replay.mp4 или replay.webm       snapshot.png
-replay_annotated.webm            annotations.json
+replay_annotated.webm (необяз.; только если объявлен в manifest)
 snapshot.png                     report.md · README.md · skills/
 annotations.json · timeline.json plugins/ (необязательно)
 plugins/ · manifest.json         manifest.json (capture_kind: image)
@@ -75,6 +75,13 @@ plugins/ · manifest.json         manifest.json (capture_kind: image)
 может начать захват. Используйте `capturepack_history`, `capturepack_open` или
 `capturepack_latest`. Подробнее: [docs/MCP.md](docs/MCP.md).
 
+## Настройки и диагностика
+
+- В Настройки → Захват отдельно меняются сочетания для видео
+  (`Ctrl+Alt+C`) и изображения (`Ctrl+Alt+S`), длина повтора и частота 1–30 fps.
+- Информация → **Открыть папку журналов** открывает локальную диагностику.
+  Журналы никогда не загружаются автоматически.
+
 ## Конфиденциальность перед отправкой
 
 Пиксели, заголовки окон, доступные имена и поля DOM могут содержать конфиденциальные данные.
@@ -87,7 +94,8 @@ CapturePack не загружает снимки, телеметрию или о
 
 ## Статус, безопасность и лицензия
 
-0.3.0 — ранняя версия для Windows. Сборка пока не подписана, поэтому SmartScreen может
-предупредить; в каждом выпуске есть `SHA256SUMS.txt`.
+0.3.0 остаётся публичной версией; 0.3.1 — кандидат до появления в GitHub
+Releases. Сборка пока не подписана, поэтому SmartScreen может предупредить;
+в каждом выпуске есть `SHA256SUMS.txt`.
 
 Локально · без облака · без аккаунта · без телеметрии · [Лицензия MIT](LICENSE)

@@ -441,20 +441,51 @@ export async function tryWriteDomPlugin(
  * Adds one plugin declaration to an ALREADY written manifest.json, the way
  * setManifestRenderOutputs() adds the render outputs: the save-first folder is
  * complete before the (asynchronous, budgeted) dump lands, so its payload is
- * declared in place rather than by rewriting the pack. A no-op when the plugin
- * is already declared.
+ * declared in place rather than by rewriting the pack.
+ *
+ * The generated documents are part of that same revision. Updating only the
+ * manifest left cancelled save-first packs saying "no plugin contributed
+ * semantic data" beside a declared plugins/windows-uia payload. Read the
+ * current source files under the manifest-mutation lock, write documents for
+ * the next manifest, then publish the manifest as the commit point.
  */
 export async function addManifestPlugin(
   handle: PackHandle,
   declaration: Manifest['plugins'][number],
+  docLanguage: Language,
 ): Promise<void> {
   return withManifestMutation(handle.dirPath, async () => {
     const manifestPath = join(handle.dirPath, 'manifest.json')
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Manifest
     const plugins = Array.isArray(manifest.plugins) ? manifest.plugins : []
-    if (plugins.some((p) => p !== null && typeof p === 'object' && p.name === declaration.name)) return
-    manifest.plugins = [...plugins, declaration]
-    await writeSourceFile(manifestPath, toJson(manifest))
+    const declared = plugins.some(
+      (p) => p !== null && typeof p === 'object' && p.name === declaration.name,
+    )
+    const nextManifest: Manifest = declared
+      ? manifest
+      : { ...manifest, plugins: [...plugins, declaration] }
+    const annotationsFile = JSON.parse(
+      await readFile(join(handle.dirPath, 'annotations.json'), 'utf8'),
+    ) as AnnotationsFile
+    const timeline: TimelineFile =
+      nextManifest.capture_kind === 'image'
+        ? { t0: nextManifest.created_at, events: [] }
+        : JSON.parse(
+            await readFile(join(handle.dirPath, 'timeline.json'), 'utf8'),
+          ) as TimelineFile
+
+    // A late plugin belongs to the durable source revision, not to derived
+    // rendering. Under-promising while a final render starts is safe; once the
+    // renderer declares its outputs it regenerates these documents again.
+    await writeDocs(
+      handle.dirPath,
+      nextManifest,
+      annotationsFile,
+      timeline,
+      docLanguage,
+      false,
+    )
+    if (!declared) await writeSourceFile(manifestPath, toJson(nextManifest))
   })
 }
 

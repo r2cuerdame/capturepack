@@ -262,6 +262,35 @@ export function inspectPack(inputPath, { strict = false } = {}) {
   const annotationDocument = readJson(annotationsFile, 'annotations.json')
   const timeline = readJson(timelineFile, 'timeline.json')
 
+  if (isRecord(manifest) && Array.isArray(manifest.plugins) && manifest.plugins.length > 0) {
+    const domDocument = resolve(skillsDirectory, 'dom.md')
+    const overviewDocument = resolve(skillsDirectory, 'overview.md')
+    const domText =
+      existsSync(domDocument) && statSync(domDocument).isFile()
+        ? readFileSync(domDocument, 'utf8')
+        : ''
+    const overviewText =
+      existsSync(overviewDocument) && statSync(overviewDocument).isFile()
+        ? readFileSync(overviewDocument, 'utf8')
+        : ''
+    if (
+      domText.includes('No plugin contributed semantic object data')
+      || overviewText.includes('0 plugins.')
+    ) {
+      add(
+        'error',
+        'documents',
+        'generated_docs_plugin_contradiction',
+        'Generated skills say no plugin data exists, but manifest.json declares plugin payloads',
+        {
+          declared_plugins: manifest.plugins
+            .filter((plugin) => isRecord(plugin) && typeof plugin.name === 'string')
+            .map((plugin) => plugin.name),
+        },
+      )
+    }
+  }
+
   if (!isRecord(manifest)) {
     if (manifest !== null) add('error', 'schema', 'manifest_not_object', 'manifest.json must contain an object')
   } else {

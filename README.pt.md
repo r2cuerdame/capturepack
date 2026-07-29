@@ -16,7 +16,7 @@ que a IA não precise inferir tudo apenas dos pixels.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Baixar](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Versão atual para Windows: **CapturePack 0.3.0**
+Versão pública atual para Windows: **CapturePack 0.3.0** · código/candidata: **0.3.1**
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=4" alt="O CapturePack volta a um quadro passado, seleciona um controle filho, mostra nome e tipo capturados, acompanha o movimento observado da janela e exporta evidência estruturada para IA." width="760">
@@ -57,7 +57,7 @@ tela inteira ou outro monitor ocultos.
 ```text
 Pack de vídeo                     Pack de imagem
 replay.mp4 ou replay.webm         snapshot.png
-replay_annotated.webm             annotations.json
+replay_annotated.webm (opcional; só se declarado no manifesto)
 snapshot.png                      report.md · README.md · skills/
 annotations.json · timeline.json  plugins/ (opcional)
 plugins/ · manifest.json          manifest.json (capture_kind: image)
@@ -75,6 +75,13 @@ automática em Configurações → MCP. Ele lê apenas packs já salvos e não p
 Use `capturepack_history`, `capturepack_open` ou `capturepack_latest`.
 Detalhes em [docs/MCP.md](docs/MCP.md).
 
+## Configurações e diagnóstico
+
+- Configurações → Captura permite alterar separadamente os atalhos de vídeo
+  (`Ctrl+Alt+C`) e imagem (`Ctrl+Alt+S`), a duração e a taxa de 1–30 fps.
+- Informações → **Abrir pasta de logs** abre os diagnósticos locais.
+  Os logs nunca são enviados automaticamente.
+
 ## Privacidade antes de compartilhar
 
 Pixels, títulos de janela, nomes acessíveis e campos DOM podem conter dados sensíveis. O
@@ -87,7 +94,8 @@ completo quando houver informações privadas.
 
 ## Estado, segurança e licença
 
-0.3.0 é uma versão inicial para Windows. O build ainda não é assinado, então o SmartScreen
-pode alertar; cada versão inclui `SHA256SUMS.txt`.
+0.3.0 continua a versão pública; 0.3.1 é candidata até aparecer no GitHub
+Releases. O build ainda não é assinado, então o SmartScreen pode alertar; cada
+versão inclui `SHA256SUMS.txt`.
 
 Local-first · sem nuvem · sem conta · sem telemetria · [Licença MIT](LICENSE)

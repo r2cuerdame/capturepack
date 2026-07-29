@@ -2,11 +2,9 @@
 
 **Protocol version `1`. Status: documented and explicitly UNSTABLE.**
 
-This is the reference for *implementing* a provider. The reasoning behind it —
-the measurements, the storage arithmetic, the seventeen corrections the design
-walkthrough produced — is in [`temporal-protocol.md`](temporal-protocol.md); the
-authoritative product statement is `GOAL.md` > "Plugin Architecture" > "Plugin
-System, redesigned (v0.2.0)". The types themselves are
+This is the reference for *implementing* a provider. The reasoning, measurements
+and storage tradeoffs are recorded in `GOAL.md` under "Plugin Architecture" and
+the object-model sections. The types themselves are
 `core/src/shared/context/protocol.ts` and `core/src/shared/context/manifest.ts`,
 and they are the contract: everything below is those files in prose.
 
