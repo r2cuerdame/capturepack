@@ -18,7 +18,8 @@
     "dist": "npm run build && electron-builder --win",
     "release": "npm run build && electron-builder --win --publish always",
     "check:sync": "node scripts/surface-sync-check.mjs",
-    "check:delta": "node scripts/surface-delta-check.mjs"
+    "check:delta": "node scripts/surface-delta-check.mjs",
+    "check:dom": "node scripts/dom-provider-check.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

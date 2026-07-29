@@ -42,6 +42,8 @@ import { SessionClock } from './clock'
 // window is open — which is exactly the private path this protocol forbids.
 import { ProviderHost } from './providerHost'
 import { WINDOWS_UIA_MANIFEST, WindowsUiaProvider } from './provider'
+import { CHROME_DOM_MANIFEST, ChromeDomProvider } from './domProvider'
+import type { DomEvent } from '../chrome/domBridge'
 
 /** One captured display, in the pack's own indexing (SPEC §5.6). */
 export interface ContextDisplayTarget {
@@ -59,6 +61,13 @@ export interface ContextSessionOptions {
   observation: ContextObservation | null
   /** The observation was attempted and produced nothing; none is coming. */
   dropped: boolean
+  /**
+   * Element picks the browser reported during this replay, ON THE PACK CLOCK
+   * (protocol GAP 9). Empty or absent whenever no browser was talking, which is
+   * the ordinary case and costs nothing: the provider is registered anyway so
+   * Settings can report it, and it simply claims no surface.
+   */
+  domEvents?: readonly DomEvent[]
   /** Where a provider refusal goes. Injected so this module stays Electron-free. */
   onWarn?: (message: string) => void
   /**
@@ -133,6 +142,8 @@ export class ContextSession {
   private readonly onWarn: (message: string) => void
   private readonly onInfo: (message: string) => void
   private provider: WindowsUiaProvider | null = null
+  private domProvider: ChromeDomProvider | null = null
+  private domEvents: readonly DomEvent[] = []
   private timeline: SurfaceTimeline
   private ids: ReadonlyMap<string, string> = new Map()
   private observations: readonly ContextObservation[] = []
@@ -159,6 +170,7 @@ export class ContextSession {
     this.displays = options.displays
     this.replayDurationMs = options.replayDurationMs
     this.dropped = options.dropped
+    this.domEvents = options.domEvents ?? []
     this.onWarn = options.onWarn ?? ((): void => undefined)
     this.onInfo = options.onInfo ?? ((): void => undefined)
     // The pack's clock, replayed. Retention is the whole replay because nothing
@@ -352,6 +364,34 @@ export class ContextSession {
       return
     }
     this.provider = provider
+    this.registerDomProvider()
+  }
+
+  /**
+   * The browser's rung of the ladder (GAP 9), registered through the same gate.
+   *
+   * It reads the surface stack through THIS session's timeline, so a DOM
+   * element is placed against the very same window observations every other
+   * answer here is built from — the one way the two can never disagree about
+   * where a browser window was.
+   */
+  private registerDomProvider(): void {
+    if (this.domProvider !== null) {
+      this.domProvider.replace(this.domEvents)
+      return
+    }
+    const provider = new ChromeDomProvider(this.domEvents, (timeMs) =>
+      this.timeline.restore(timeMs).surfaces,
+    )
+    const outcome = this.host.register(CHROME_DOM_MANIFEST, provider, { builtIn: true })
+    if (!outcome.ok) {
+      this.onWarn(`context: chrome-dom provider refused: ${outcome.reason}`)
+      return
+    }
+    this.domProvider = provider
+    if (provider.pickCount > 0) {
+      this.onInfo(`[context] chrome-dom: ${String(provider.pickCount)} element pick(s) placed`)
+    }
   }
 
   markDropped(dropped: boolean): void {

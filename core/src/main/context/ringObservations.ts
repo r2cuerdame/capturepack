@@ -201,6 +201,13 @@ function observationOf(
     for (const space of spacesOver(spaces, surface.bounds)) {
     const clipped = clipToSpace(space, surface.bounds)
     if (clipped === null) continue
+    // The client rectangle travels in the SAME space, and deliberately
+    // UNCLIPPED: it is a measuring stick (where does this window's drawable
+    // area begin, and how tall is it), and clipping it to the snapshot would
+    // silently shorten that stick for a window hanging off an edge — which is
+    // exactly when a DOM element's offset inside it must still be right.
+    const client =
+      surface.clientBounds === undefined ? undefined : space.toSnapshot(surface.clientBounds)
     windows.push({
       // Carried, not re-derived (#90): this id is stable across the whole
       // session, and re-deriving one from name and list order is what let two
@@ -214,6 +221,7 @@ function observationOf(
       process: surface.executableName ?? '',
       class_name: surface.className ?? '',
       bounds: clipped,
+      ...(client === undefined ? {} : { client_bounds: client }),
       display: space.index,
       focused: surface.foreground,
       z: surface.zOrder,

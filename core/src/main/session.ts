@@ -57,7 +57,12 @@ import {
   logContextCost,
   releaseContext,
 } from './context/runtime'
-import { DOM_PROTOCOL_VERSION, domBridgeStatus, domEventsBetween } from './chrome/domBridge'
+import {
+  DOM_PROTOCOL_VERSION,
+  domBridgeStatus,
+  domEventsBetween,
+  parseDomPayload,
+} from './chrome/domBridge'
 import type { DomEvent } from './chrome/domBridge'
 import {
   addManifestPlugin,
@@ -77,6 +82,7 @@ import {
   replayMimeType,
   writeUiaPlugin,
   UIA_PLUGIN_NAME,
+  DOM_PLUGIN_NAME,
   type DisplayCapture,
   type ExportInput,
   type InitialSaveInput,
@@ -680,6 +686,10 @@ async function runFlow(settings: Settings): Promise<void> {
         type: e.type,
         tab: e.tab,
         ...(e.element === undefined ? {} : { element: e.element }),
+        // Without this a saved pick is unplaceable forever: bounds are viewport
+        // CSS pixels and this is the only thing that says where that viewport
+        // was. Absent for an event from an extension older than 0.1.4.
+        ...(e.viewport === undefined ? {} : { viewport: e.viewport }),
       })),
     })
     if (!wrote) return
@@ -725,11 +735,24 @@ async function runFlow(settings: Settings): Promise<void> {
         width: target.width,
         height: target.height,
       }))
+      // The browser's element picks, REBASED ONTO THE PACK CLOCK — the same
+      // clock the ring and the video already agree on (SPEC §10.1), which is
+      // what lets the DOM provider place an element against the very window
+      // observation Core recorded at that instant.
+      const domWindow = frozenWindow(contextFreezeId)
+      const domPicks =
+        domWindow === null
+          ? []
+          : domEventsBetween(domWindow.startMs, domWindow.endMs).map((e) => ({
+              ...e,
+              tMs: Math.max(0, Math.round(e.tMs - domWindow.startMs)),
+            }))
       const contextSession = openContextSession(editor, {
         displays: contextDisplays,
         replayDurationMs,
         observation: contextObservation(uia, uiaFocusedIndex, replayDurationMs),
         dropped: settled.ready && uiaEmpty(uia),
+        domEvents: domPicks,
       })
       // THE WHOLE FROZEN RANGE, not just the instant the hotkey was pressed.
       //
@@ -1419,6 +1442,14 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
   // the editor can say so instead of behaving like the pre-feature editor for
   // no visible reason.
   const loadedUiaDropped = loadedUiaText !== null && uiaEmpty(loadedUia)
+  // The pack's own BROWSER picks, so re-editing offers the same document rung
+  // the original session did (GAP 9). Stored on the pack clock already
+  // (`t_ms`), which is the clock the editor session runs on, so nothing is
+  // rebased here. Validated rather than trusted, like every other payload read
+  // back off disk: a pick without a viewport anchor cannot be placed and is
+  // simply not offered — the same outcome as a pack written by an extension
+  // older than 0.1.4.
+  const loadedDomEvents = parseDomPayload(pack.readText(`plugins/${DOM_PLUGIN_NAME}/elements.json`))
   // Which display an entry without a `display` field belongs to (SPEC §5.6,
   // §11.3) — the same index the editor's board gives the focused screen.
   const loadedFocusedIndex = focusedDisplayIndex(manifest.media?.displays)
@@ -1477,6 +1508,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
     replayDurationMs,
     observation: contextObservation(loadedUia, loadedFocusedIndex, replayDurationMs),
     dropped: loadedUiaDropped,
+    domEvents: loadedDomEvents,
   })
   editor.once('ready-to-show', () => {
     void (async () => {

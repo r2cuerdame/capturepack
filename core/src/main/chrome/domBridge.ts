@@ -23,10 +23,43 @@ export const DOM_PROTOCOL_VERSION = 1
 export interface DomElement {
   tag: string
   selector: string
+  /** The element's rectangle in VIEWPORT CSS PIXELS, as the page measures it. */
   bounds: { x: number; y: number; width: number; height: number }
   id?: string
   role?: string
   text?: string
+}
+
+/**
+ * WHERE THE PAGE'S COORDINATES ARE ON THE SCREEN.
+ *
+ * `DomElement.bounds` is viewport CSS pixels — the only space a page can
+ * measure itself in, and one that says nothing about where the browser window
+ * is. Without this, a picked element could not be placed on a snapshot at all,
+ * and the editor fell through to the WINDOW rung: picking a button in Chrome
+ * drew a box around the whole browser. Sent by the extension since 0.1.4.
+ *
+ * The app supplies the other half from the surface ring, which records the
+ * browser window's CLIENT rectangle. Given the viewport's size in CSS px and
+ * the device pixel ratio, its physical size is known — and a viewport is
+ * anchored to the BOTTOM of the client area (tab strip and omnibox sit above
+ * it), so the vertical offset falls out of the two heights without anyone
+ * having to guess at browser chrome.
+ */
+export interface DomViewport {
+  width: number
+  height: number
+  dpr: number
+  /**
+   * The window's own screen position as the page sees it, CSS px. A FALLBACK
+   * only: on a scaled display Chrome reports these in the OS's scaled space,
+   * which is not the snapshot's space, so it is used only when the ring holds
+   * no sample of this window. Null when the browser did not report it.
+   */
+  screenX: number | null
+  screenY: number | null
+  outerWidth: number | null
+  outerHeight: number | null
 }
 
 export interface DomEvent {
@@ -35,6 +68,8 @@ export interface DomEvent {
   type: 'dom.element.selected' | 'tab.updated' | 'url.changed'
   tab: { url: string; title: string }
   element?: DomElement
+  /** Present on an element pick from extension 0.1.4 or newer. */
+  viewport?: DomViewport
 }
 
 /** What Settings > Integrations shows, and what a bug report should quote. */
@@ -157,8 +192,78 @@ function parse(raw: unknown): DomEvent | 'hello' | null {
       }
     }
   }
+  // The screen anchor, validated exactly as strictly as everything else here:
+  // a viewport with a nonsensical size or ratio is DROPPED rather than
+  // defaulted, because a default would place the element somewhere plausible
+  // and wrong. An event without it still records the pick — it simply cannot
+  // be turned into a candidate, which is the pre-0.1.4 behaviour.
+  const vp = m['viewport']
+  if (typeof vp === 'object' && vp !== null) {
+    const v = vp as Record<string, unknown>
+    const pos = (k: string): number | null => {
+      const n = v[k]
+      return typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : null
+    }
+    const opt = (k: string): number | null => {
+      const n = v[k]
+      return typeof n === 'number' && Number.isFinite(n) ? n : null
+    }
+    const width = pos('width')
+    const height = pos('height')
+    const dpr = pos('dpr')
+    if (width !== null && height !== null && dpr !== null && dpr <= 16) {
+      event.viewport = {
+        width,
+        height,
+        dpr,
+        screenX: opt('screenX'),
+        screenY: opt('screenY'),
+        outerWidth: opt('outerWidth'),
+        outerHeight: opt('outerHeight'),
+      }
+    }
+  }
   if (type === 'dom.element.selected' && event.element === undefined) return null
   return event
+}
+
+/**
+ * A pack's `plugins/chrome-dom/elements.json`, read back as events (GAP 9).
+ *
+ * Re-editing must offer the same document rung the original session did, and
+ * the payload on disk is the same vocabulary with one difference: times are
+ * `t_ms` on the PACK clock, which is already the clock an editor session runs
+ * on, so nothing is rebased.
+ *
+ * VALIDATED, NOT TRUSTED — a pack is a file a user can edit, move between
+ * machines, or receive from someone else. It goes through the SAME `parse()`
+ * the wire uses, which is what stops the two paths from drifting into two
+ * different ideas of what a valid pick is; a pick that cannot be placed is
+ * dropped here rather than allowed to become a rectangle somewhere plausible
+ * and wrong.
+ */
+export function parseDomPayload(text: string | null): DomEvent[] {
+  if (text === null) return []
+  let raw: unknown
+  try {
+    raw = JSON.parse(text) as unknown
+  } catch {
+    return []
+  }
+  if (typeof raw !== 'object' || raw === null) return []
+  const list = (raw as Record<string, unknown>)['events']
+  if (!Array.isArray(list)) return []
+  const out: DomEvent[] = []
+  for (const entry of list) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const e = entry as Record<string, unknown>
+    const tMs = e['t_ms']
+    if (typeof tMs !== 'number' || !Number.isFinite(tMs)) continue
+    const parsed = parse({ ...e, protocol: DOM_PROTOCOL_VERSION })
+    if (parsed === null || parsed === 'hello') continue
+    out.push({ ...parsed, tMs: Math.max(0, Math.round(tMs)) })
+  }
+  return out
 }
 
 /**
