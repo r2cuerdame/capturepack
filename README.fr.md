@@ -1,127 +1,93 @@
-﻿# capturepack
+# capturepack
 
 [English](README.md) · [한국어](README.ko.md) · [日本語](README.ja.md) · [中文](README.zh.md) · [Español](README.es.md) · **Français** · [Deutsch](README.de.md) · [Português](README.pt.md) · [Русский](README.ru.md)
 
 [![Release](https://img.shields.io/github/v/release/r2cuerdame/capturepack?color=7c5cff&label=release)](https://github.com/r2cuerdame/capturepack/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/r2cuerdame/capturepack/total?color=7c5cff)](https://github.com/r2cuerdame/capturepack/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Sponsor](https://img.shields.io/badge/%E2%99%A5_Sponsor-ea4aaa)](https://github.com/sponsors/r2cuerdame)
 
-## Pouvez-vous expliquer un bug en moins de 5 secondes ?
+## Remontez le bug. Choisissez l’objet. Donnez son état à l’IA.
 
-**CapturePack est le moyen le plus rapide d’expliquer quelque chose à un LLM.**
+**CapturePack transforme un replay continu — 30 secondes par défaut — en preuves structurées pour les humains et l’IA.**
 
-> Capturez le contexte, pas des captures d’écran.
->
-> De meilleures entrées. De meilleures réponses.
-
-CapturePack est un format et une boîte à outils open source de capture de contexte, qui aident les humains et l’IA à comprendre les problèmes visuels au-delà des captures d’écran et des enregistrements vidéo.
+Appuyez sur le raccourci après le problème, revenez à l’image concernée puis choisissez le
+contrôle ou la fenêtre capturés. CapturePack conserve leur identité, leur position et leur
+mouvement observés afin que l’IA n’ait pas à les déduire des seuls pixels.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Télécharger](https://github.com/r2cuerdame/capturepack/releases/latest)
 
+Version Windows actuelle : **CapturePack 0.3.0**
+
 <p align="center">
-  <!-- Absolute raw URL with a version query: GitHub proxies README images through
-       camo, which caches by source URL — without the bump a fixed demo keeps
-       rendering the stale copy for hours. Bump ?v= whenever demo.svg changes. -->
-  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=3" alt="Démo : appuyez sur Ctrl+Alt+C, les 30 dernières secondes se figent, la molette fait défiler le temps, glissez pour sélectionner l’objet, écrivez l’annotation, et le CapturePack est enregistré." width="760">
+  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=4" alt="CapturePack revient à une image passée, choisit un contrôle enfant, affiche son nom et son type capturés, suit le déplacement observé de sa fenêtre et exporte des preuves structurées pour l’IA." width="760">
 </p>
 
-Un **dossier** CapturePack rassemble tout ce qu’une capture d’écran ne peut pas contenir : les 30 dernières secondes de replay, un instantané, des annotations modifiables, une chronologie d’événements lisible par une machine, et des rapports lisibles aussi bien par un humain que par une IA — tout ce qu’il faut à un autre développeur ou à n’importe quel LLM pour comprendre la situation immédiatement. Au moment de partager, empaquetez le dossier en un seul fichier `.capturepack`.
+## Fonctionnement
 
-## Le flux en 5 secondes
+1. **Remontez** — avec l’enregistrement en direct activé par défaut, appuyez sur
+   `Ctrl+Alt+C` après le bug. La durée est réglable de 1 à 60 secondes. Une fois
+   l’enregistrement coupé, rien n’est enregistré.
+2. **Choisissez** — Object Pick enregistre les limites observées, le nom accessible, le type
+   du contrôle et l’instant choisi. Sans contrôle enfant, la vraie fenêtre sert de repli.
+3. **Suivez le mouvement** — fenêtre et contrôle sont observés sur l’horloge du replay.
+   Chaque échantillon nomme son écran : un pack multiécran rouvert conserve temps et
+   coordonnées même lorsque l’objet change de moniteur.
+4. **Transmettez le contexte** — partagez le dossier ou laissez une IA lire les packs déjà
+   sauvegardés via le serveur MCP facultatif, local et en lecture seule.
 
-```
-Ctrl+Alt+C  →  capture  →  5-second annotation  →  save  →  drop into
-                                                              ChatGPT / Claude / Codex / Cursor / Gemini
-                                                              or send to another developer
-```
+### Sources du contexte objet
 
-## Pourquoi
+- **Windows UI Automation (intégré) :** nom accessible, type sémantique, AutomationId,
+  identité processus/fenêtre et limites observées lorsque l’application les expose.
+- **Chrome DOM (extension facultative en aperçu) :** sélecteur, rôle, texte et URL de
+  l’élément explicitement choisi ; elle ne diffuse pas le DOM en continu.
+- **Fenêtre HWND en repli :** faute de contrôle enfant, enregistre la vraie fenêtre et sa
+  géométrie observée au lieu d’inventer un objet.
 
-- **Les captures d’écran conservent les pixels.** Vous perdez ce qui s’est passé avant l’image.
-- **Les vidéos conservent le mouvement.** Vous perdez l’intention et la structure.
-- **CapturePack conserve le contexte.** Le temps, l’espace, l’intention, l’environnement.
+### Besoin d’une seule image ?
 
-## 🕰 Une machine à remonter le temps
+`Ctrl+Alt+S` ouvre la sélection de zone et permet de franchir les limites entre moniteurs.
+**Capture plein écran** enregistre explicitement tous les écrans dans une seule image du
+bureau virtuel. Elle s’ouvre dans le même éditeur à 100 % natif lorsque possible. Un pack
+image ne contient ni vidéo ni `timeline.json` ; une zone ne conserve que ses pixels et sa
+position, jamais un plein écran ou un autre moniteur cachés.
 
-Le bug est déjà passé ? CapturePack **enregistrait déjà**. Appuyez sur `Ctrl+Alt+C`
-*après* que ça a déraillé — les 30 dernières secondes se figent, et la molette vous fait
-**remonter le temps** jusqu’à l’image exacte où tout a cassé. Annotez ce moment-là,
-pas une reconstitution.
+## Contenu du pack
 
-## 🤖 Conçu pour les LLM
-
-Un CapturePack, c’est une entrée qu’une IA comprend vraiment :
-
-- Déposez le pack dans **ChatGPT, Claude, Codex, Cursor, Gemini** — le rapport généré
-  et les fichiers de contexte expliquent la situation sans le moindre prompt en plus.
-- Ou n’attachez rien du tout : l’app fait tourner un **serveur MCP**, alors une IA connectée
-  entend simplement *« Analyse le dernier CapturePack »* et le lit toute seule.
-
-De meilleures entrées. De meilleures réponses.
-
-## 🌍 Langues
-
-CapturePack parle **9 langues** : English · 한국어 · 日本語 · 中文 · Español · Français · Deutsch · Português · Русский
-
-- L’app suit automatiquement la **langue de votre système** — changez-la à tout moment dans Paramètres → Général.
-- Les documents générés dans le pack (`README.md`, `report.md`, `skills/`) peuvent suivre leur propre réglage de langue ; vos descriptions à vous ne sont jamais traduites.
-- [capturepack.dev](https://capturepack.dev) détecte aussi automatiquement la langue de votre navigateur.
-
-## Principes
-
-Local d’abord · Hors ligne d’abord · Format ouvert · Basé sur des plugins · Sans cloud · Sans compte · Sans base de données · Sans dépendance à l’IA · Sans enfermement propriétaire.
-
-Les CapturePacks générés doivent rester lisibles pour toujours.
-
-## Ce que contient un CapturePack
-
-Le pack est un simple **dossier** — explorable, modifiable, honnête. Le ZIP (`.capturepack`)
-n’est créé que lorsque vous voulez partager.
-
-```
-CapturePack_2026-07-27_143052/
-├── replay.webm              # preuve d’origine — jamais modifiée
-├── replay_annotated.webm    # annotations incrustées ; se lit dans n’importe quel lecteur
-├── snapshot.png             # l’image capturée (originale)
-├── annotations.json         # la vraie source : cadres, durées, numéros, flou
-├── timeline.json            # journal d’événements lisible par une machine
-├── report.md                # votre description, prête pour un LLM
-├── manifest.json            # version du format, inventaire
-├── README.md                # le premier document que lit un humain
-├── skills/                  # contexte structuré pour l’IA (fonctionne sans MCP)
-└── plugins/                 # métadonnées structurées venues des intégrations
+```text
+Pack vidéo                       Pack image
+replay.mp4 ou replay.webm        snapshot.png
+replay_annotated.webm            annotations.json
+snapshot.png                     report.md · README.md · skills/
+annotations.json · timeline.json plugins/ (facultatif)
+plugins/ · manifest.json         manifest.json (capture_kind: image)
+                                  sans replay ni chronologie
 ```
 
-Un pack réduit à une capture d’écran — `manifest.json` + `snapshot.png`, rien d’autre — reste parfaitement valide.
+Objets et trajectoires sont des preuves facultatives : s’ils n’ont pas été observés, le pack
+le dit sans inventer de contexte.
 
-La spécification compte plus que n’importe quelle implémentation — n’importe quel langage peut générer des fichiers CapturePack. Voir [SPEC.md](SPEC.md).
+## MCP
 
-## MCP — parlez à vos captures
+Le serveur [MCP](https://modelcontextprotocol.io) facultatif et en lecture seule est activé
+et démarré par défaut sur `http://127.0.0.1:39393/mcp`. Il peut être arrêté ou ne plus
+démarrer automatiquement dans Réglages → MCP. Il lit uniquement les packs déjà enregistrés
+et ne peut lancer aucune capture. Utilisez `capturepack_history`, `capturepack_open` ou
+`capturepack_latest`. Voir [docs/MCP.md](docs/MCP.md).
 
-L’app embarque un serveur [MCP](https://modelcontextprotocol.io) toujours actif et en lecture seule sur `http://127.0.0.1:39393/mcp` (localhost uniquement) : n’importe quelle IA peut ainsi trouver et analyser votre dernier pack toute seule — « Analyse le dernier CapturePack », c’est tout le prompt.
+## Confidentialité avant partage
 
-```
-claude mcp add --transport http capturepack http://127.0.0.1:39393/mcp
-```
+Pixels, titres de fenêtres, noms accessibles et champs DOM peuvent contenir des informations
+sensibles. CapturePack n’envoie ni captures, ni télémétrie, ni rapports de plantage. Sa seule
+requête externe est la vérification facultative des mises à jour GitHub, désactivable.
 
-Outils, configuration des clients et paramètres : [docs/MCP.md](docs/MCP.md).
+Le flou est non destructif : il protège les vues annotées, mais `snapshot.png` et le replay
+original du pack complet restent non caviardés. Vérifiez l’original et ne partagez pas le
+pack complet s’il contient des informations privées.
 
-## État
+## État, sécurité et licence
 
-Tout début du développement. Voir [GOAL.md](GOAL.md) pour la vision du projet et [ROADMAP.md](ROADMAP.md) pour la suite.
+0.3.0 est une version Windows encore jeune. Le build n’est pas signé : SmartScreen peut
+avertir. Chaque version fournit `SHA256SUMS.txt`.
 
-## Sécurité &amp; signature
-
-Les builds Windows ne sont pas encore signés (SmartScreen affichera un avertissement — *Informations complémentaires → Exécuter quand même*) ;
-chaque version publie `SHA256SUMS.txt` pour vérification, et une demande de certificat de signature
-de code pour l’open source est en cours. Détails, rôles de l’équipe et pratiques de confidentialité : [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md).
-
-## ♥ Soutenir
-
-CapturePack est gratuit, open source et sans cloud — pas de compte, pas de télémétrie, rien à vendre.
-S’il vous fait gagner du temps, [**le sponsoriser sur GitHub**](https://github.com/sponsors/r2cuerdame) le fait avancer.
-
-## Licence
-
-[MIT](LICENSE)
+Local d’abord · sans cloud · sans compte · sans télémétrie · [Licence MIT](LICENSE)

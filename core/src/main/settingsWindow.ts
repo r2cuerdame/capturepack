@@ -7,13 +7,21 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, screen, shell } from 'electron'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import { DOM_PROTOCOL_VERSION, domBridgeStatus } from './chrome/domBridge'
+import {
+  DOM_PROTOCOL_VERSION,
+  domBridgeStatus,
+  setDomRetention,
+  startDomBridge,
+  stopDomBridge,
+} from './chrome/domBridge'
 import {
   extensionDir,
   bundledExtensionVersion,
   findOurExtensionIds,
   nativeHostState,
+  refreshHostManifestIfInstalled,
   registerBrowsers,
+  syncExtensionIfChanged,
   unregisterBrowsers,
   writeHostManifest,
 } from './chrome/install'
@@ -35,8 +43,13 @@ import AdmZip from 'adm-zip'
 import type { Settings } from '../shared/types'
 import { logError, logInfo, logWarn } from './log'
 import { restartCapture } from './capture'
-import { updateContextRetention } from './context/runtime'
-import { currentCaptureHotkey, registerCaptureHotkey } from './hotkey'
+import { updateContextRetention, updateContextUiaEnabled } from './context/runtime'
+import {
+  currentCaptureHotkey,
+  currentImageCaptureHotkey,
+  registerCaptureHotkey,
+  registerImageCaptureHotkey,
+} from './hotkey'
 import { uiLanguage, uiT } from './locale'
 import { mcpAppliedSettings, mcpStatus, restartMcpServer } from './mcp/service'
 import { applyPartial, clearOutputDirOverride, persistSettings } from './settings'
@@ -268,14 +281,42 @@ async function openExtensionsPage(): Promise<string | null> {
   return null
 }
 
-/** The six-point health check, assembled from the three places it lives. */
-async function chromeStatus(): Promise<ChromeIntegrationStatus> {
-  const bridge = domBridgeStatus()
-  const host = await nativeHostState()
-  // ONE browser scan per poll: it opens every profile's Secure Preferences, so
-  // the "is a browser still on the old folder" answer is derived from the same
-  // result the panel already shows rather than re-read for a boolean.
+type ChromeHostState = Awaited<ReturnType<typeof nativeHostState>>
+type DetectedChromeExtension = ReturnType<typeof findOurExtensionIds>[number]
+
+interface ChromeInstallSnapshot {
+  atMs: number
+  host: ChromeHostState
+  detected: readonly DetectedChromeExtension[]
+}
+
+// Secure Preferences can contain megabytes per profile. Connection truth is
+// in-memory and repaints every second; the disk/registry half is refreshed at a
+// human-scale cadence or immediately after an explicit setup action.
+const CHROME_INSTALL_STATUS_TTL_MS = 15_000
+let chromeInstallSnapshot: ChromeInstallSnapshot | null = null
+
+async function chromeInstallStatus(force: boolean): Promise<ChromeInstallSnapshot> {
+  const now = Date.now()
+  if (
+    !force &&
+    chromeInstallSnapshot !== null &&
+    now - chromeInstallSnapshot.atMs < CHROME_INSTALL_STATUS_TTL_MS
+  ) {
+    return chromeInstallSnapshot
+  }
+  const hostPromise = nativeHostState()
   const detected = findOurExtensionIds()
+  const host = await hostPromise
+  const snapshot: ChromeInstallSnapshot = { atMs: now, host, detected }
+  chromeInstallSnapshot = snapshot
+  return snapshot
+}
+
+/** The six-point health check, assembled from the three places it lives. */
+async function chromeStatus(forceInstallRefresh = false): Promise<ChromeIntegrationStatus> {
+  const bridge = domBridgeStatus()
+  const { host, detected } = await chromeInstallStatus(forceInstallRefresh)
   return {
     listening: bridge.listening,
     hostSeen: bridge.hostSeen,
@@ -309,9 +350,11 @@ export interface SettingsIpcHooks {
   // The capture action a re-registered hotkey must trigger — the same closure
   // index.ts bound at startup, so the accelerator swap changes nothing else.
   onCapture?: () => void
+  onImageCapture?: () => void
   // Fired after the capture hotkey was successfully re-registered (the tray's
   // "Capture now" label shows the accelerator).
   onHotkeyChanged?: () => void
+  onImageHotkeyChanged?: () => void
   // Applies the per-user Windows login item immediately after the validated
   // setting is persisted. Startup reconciliation uses the same callback.
   onLaunchAtLoginChanged?: (enabled: boolean) => void
@@ -390,6 +433,18 @@ export function registerSettingsIpc(live: Settings, hooks: SettingsIpcHooks = {}
     ) {
       hotkeyFailed = !applyCaptureHotkey(live, before.captureHotkey, hooks)
     }
+    let imageHotkeyFailed = false
+    const imageHotkeyPatched = typeof safePatch.imageCaptureHotkey === 'string'
+    if (
+      live.imageCaptureHotkey !== before.imageCaptureHotkey ||
+      (imageHotkeyPatched && currentImageCaptureHotkey() !== live.imageCaptureHotkey)
+    ) {
+      imageHotkeyFailed = !applyImageCaptureHotkey(
+        live,
+        before.imageCaptureHotkey,
+        hooks,
+      )
+    }
     try {
       persistSettings({ ...live })
     } catch (err) {
@@ -413,6 +468,28 @@ export function registerSettingsIpc(live: Settings, hooks: SettingsIpcHooks = {}
     // the ring immediately rather than at the next launch).
     if (live.replaySeconds !== before.replaySeconds) {
       updateContextRetention(live.replaySeconds * 1000)
+      setDomRetention(live.replaySeconds * 1000)
+    }
+    // The Windows UI Automation checkbox owns BOTH costs: the one-shot dump at
+    // the next capture and the resident Lane A tracker right now. Previously
+    // only the former stopped, leaving the largest plugin process running after
+    // the user explicitly switched the plugin off.
+    if (live.uiaEnabled !== before.uiaEnabled) {
+      updateContextUiaEnabled(live.uiaEnabled)
+    }
+    // Chrome DOM is a real plugin switch. OFF closes every live bridge socket
+    // and clears buffered DOM events now; ON updates the stable extension
+    // folder first and reopens the pipe, so a still-running native host redials
+    // without a browser-page reload.
+    if (live.chromeDomEnabled !== before.chromeDomEnabled) {
+      if (live.chromeDomEnabled) {
+        syncExtensionIfChanged()
+        refreshHostManifestIfInstalled()
+        startDomBridge()
+      } else {
+        stopDomBridge()
+      }
+      chromeInstallSnapshot = null
     }
     // The updater honors the toggle live (GOAL: instant apply where possible).
     if (live.autoUpdateCheck !== before.autoUpdateCheck) {
@@ -444,7 +521,7 @@ export function registerSettingsIpc(live: Settings, hooks: SettingsIpcHooks = {}
     if (live.mcpEnabled !== before.mcpEnabled) {
       await restartMcpServer(live)
     }
-    return { settings: { ...live }, hotkeyFailed }
+    return { settings: { ...live }, hotkeyFailed, imageHotkeyFailed }
   })
 
   ipcMain.handle(IPC.settingsPickOutputDir, async (): Promise<string | null> => {
@@ -491,13 +568,13 @@ export function registerSettingsIpc(live: Settings, hooks: SettingsIpcHooks = {}
       } catch (err) {
         logError('capturepack: installing the native messaging host failed:', err)
       }
-      return chromeStatus()
+      return chromeStatus(true)
     },
   )
 
   ipcMain.handle(IPC.settingsChromeUninstall, async (): Promise<ChromeIntegrationStatus> => {
     await unregisterBrowsers()
-    return chromeStatus()
+    return chromeStatus(true)
   })
 
   // chrome://extensions cannot be opened by shell.openExternal — the scheme is
@@ -522,7 +599,7 @@ export function registerSettingsIpc(live: Settings, hooks: SettingsIpcHooks = {}
         logError('capturepack: registering the detected extension failed:', err)
       }
     }
-    return chromeStatus()
+    return chromeStatus(true)
   })
 
   // Storage (GOAL "Settings GUI"): the app that fills the folder is the one
@@ -620,6 +697,22 @@ function applyCaptureHotkey(live: Settings, previous: string, hooks: SettingsIpc
   // A failure here would mean another app grabbed it in between — nothing left
   // to do but leave the app hotkey-less until the next successful change.
   registerCaptureHotkey(previous, handler)
+  return false
+}
+
+function applyImageCaptureHotkey(
+  live: Settings,
+  previous: string,
+  hooks: SettingsIpcHooks,
+): boolean {
+  const handler = hooks.onImageCapture
+  if (handler === undefined) return true
+  if (registerImageCaptureHotkey(live.imageCaptureHotkey, handler)) {
+    hooks.onImageHotkeyChanged?.()
+    return true
+  }
+  live.imageCaptureHotkey = previous
+  registerImageCaptureHotkey(previous, handler)
   return false
 }
 

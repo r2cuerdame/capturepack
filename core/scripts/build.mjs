@@ -57,6 +57,7 @@ await Promise.all([
   build({ ...node, entryPoints: ['src/preload/history.ts'], outfile: 'dist/preload/history.js' }),
   build({ ...node, entryPoints: ['src/preload/about.ts'], outfile: 'dist/preload/about.js' }),
   build({ ...node, entryPoints: ['src/preload/welcome.ts'], outfile: 'dist/preload/welcome.js' }),
+  build({ ...node, entryPoints: ['src/preload/imageRegion.ts'], outfile: 'dist/preload/image-region.js' }),
   build({ ...browser, entryPoints: ['src/renderer/capture/capture.ts'], outfile: 'dist/renderer/capture/capture.js' }),
   build({ ...browser, entryPoints: ['src/renderer/editor/editor.ts'], outfile: 'dist/renderer/editor/editor.js' }),
   build({ ...browser, entryPoints: ['src/renderer/settings/settings.ts'], outfile: 'dist/renderer/settings/settings.js' }),
@@ -65,6 +66,11 @@ await Promise.all([
   build({ ...browser, entryPoints: ['src/renderer/history/history.ts'], outfile: 'dist/renderer/history/history.js' }),
   build({ ...browser, entryPoints: ['src/renderer/about/about.ts'], outfile: 'dist/renderer/about/about.js' }),
   build({ ...browser, entryPoints: ['src/renderer/welcome/welcome.ts'], outfile: 'dist/renderer/welcome/welcome.js' }),
+  build({
+    ...browser,
+    entryPoints: ['src/renderer/image-region/image-region.ts'],
+    outfile: 'dist/renderer/image-region/image-region.js',
+  }),
 ])
 
 await Promise.all([
@@ -82,6 +88,8 @@ await Promise.all([
   cp('src/renderer/about/about.css', 'dist/renderer/about/about.css'),
   cp('src/renderer/welcome/welcome.html', 'dist/renderer/welcome/welcome.html'),
   cp('src/renderer/welcome/welcome.css', 'dist/renderer/welcome/welcome.css'),
+  cp('src/renderer/image-region/image-region.html', 'dist/renderer/image-region/image-region.html'),
+  cp('src/renderer/image-region/image-region.css', 'dist/renderer/image-region/image-region.css'),
   // Windows UI Automation helper (GOAL "Static object picking"): spawned by
   // src/main/uia.ts as a real file, so it must ship next to the bundles AND be
   // kept out of the asar — see asarUnpack in electron-builder.yml.

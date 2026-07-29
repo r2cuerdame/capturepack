@@ -23,14 +23,27 @@
 // own host processes for the lock would deadlock the browser.
 import * as fs from 'node:fs'
 import * as net from 'node:net'
+import { createReconnectBackoff, NativeHostReplayBuffer } from './lifecycle'
 
 /** The pipe the running app listens on; the host dials it. */
-export function domPipePath(): string {
+export function domPipePath(
+  environment: NodeJS.ProcessEnv = process.env,
+): string {
   // The user name keeps two accounts on one machine off each other's channel.
-  const who = process.env['USERNAME'] ?? process.env['USER'] ?? 'user'
+  const who = environment['USERNAME'] ?? environment['USER'] ?? 'user'
+  // Headed QA must coexist with the owner's installed tray app. A bounded,
+  // deliberately named suffix gives that disposable app/host pair its own
+  // pipe without stopping or contaminating the real integration. Production
+  // never sets it and therefore keeps the stable path Chrome registered.
+  const requestedSuffix = environment['CAPTUREPACK_DOM_PIPE_SUFFIX']
+  const suffix =
+    requestedSuffix !== undefined &&
+    /^[A-Za-z0-9_-]{1,64}$/u.test(requestedSuffix)
+      ? `-${requestedSuffix}`
+      : ''
   return process.platform === 'win32'
-    ? `\\\\.\\pipe\\capturepack-dom-${who}`
-    : `/tmp/capturepack-dom-${who}.sock`
+    ? `\\\\.\\pipe\\capturepack-dom-${who}${suffix}`
+    : `/tmp/capturepack-dom-${who}${suffix}.sock`
 }
 
 /** One frame out, whole, on the descriptor Chrome is reading. */
@@ -66,49 +79,61 @@ export function runNativeHostMode(): Promise<void> {
   return new Promise<void>((resolve) => {
     let pending = Buffer.alloc(0)
     let pipe: net.Socket | null = null
-    let queued: string[] = []
+    const replay = new NativeHostReplayBuffer()
     let done = false
+    let dialling = false
+
+    const reconnect = createReconnectBackoff(() => dial(), {
+      minDelayMs: 500,
+      maxDelayMs: 15_000,
+    })
 
     const finish = (): void => {
       if (done) return
       done = true
-      pipe?.end()
+      reconnect.stop()
+      pipe?.destroy()
+      pipe = null
       resolve()
     }
 
     // The app may not be running, or may start later. A host that failed hard
     // would make Chrome show the extension as broken for the rest of the
-    // session; instead the messages queue, and a dial is retried on the next
-    // one. Nothing is lost that the browser would have kept anyway.
+    // session; instead messages queue and the host redials with a bounded
+    // backoff. Nothing is lost that the browser would have kept anyway.
     const send = (line: string): void => {
       if (pipe !== null && !pipe.destroyed) {
+        replay.remember(line)
         pipe.write(`${line}\n`)
         return
       }
-      queued.push(line)
-      if (queued.length > 200) queued.shift()
+      replay.enqueue(line)
       dial()
     }
 
-    let dialling = false
     const dial = (): void => {
-      if (dialling || done) return
+      if (dialling || done || (pipe !== null && !pipe.destroyed)) return
       dialling = true
       const socket = net.connect(domPipePath())
       socket.on('connect', () => {
         dialling = false
         pipe = socket
-        const backlog = queued
-        queued = []
-        for (const line of backlog) socket.write(`${line}\n`)
+        reconnect.connected()
+        for (const line of replay.drainForConnection()) socket.write(`${line}\n`)
       })
       socket.on('error', () => {
         dialling = false
-        pipe = null
+        if (pipe === socket) pipe = null
         socket.destroy()
+        reconnect.schedule()
       })
       socket.on('close', () => {
+        dialling = false
         if (pipe === socket) pipe = null
+        // The native messaging process belongs to Chromium and normally
+        // survives an app update/restart. Redial on its own: waiting for the
+        // next tab event left an idle browser disconnected indefinitely.
+        reconnect.schedule()
       })
       // Anything the app says goes back to the extension, framed.
       let inbound = ''

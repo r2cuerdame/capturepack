@@ -772,8 +772,19 @@ export class BoardScrub {
     )
     for (const r of replays) {
       if (r.focused) continue
-      const slave = new SlaveReplay(r.webm, r.mimeType, r.durationMs, r.offsetMs, (source) =>
-        host.drawFrame(r.displayIndex, source),
+      const slave = new SlaveReplay(
+        r.webm,
+        r.mimeType,
+        r.durationMs,
+        r.offsetMs,
+        (source) => {
+          host.drawFrame(r.displayIndex, source)
+          // A secondary seek can settle after the focused frame. Its pixels and
+          // presented time changed together, so context must be re-queried from
+          // this callback too; otherwise the board keeps the object index from
+          // the secondary's previous frame until the user scrubs again.
+          host.onFrame?.()
+        },
       )
       this.byDisplay.set(r.displayIndex, slave)
       this.slaves.push(

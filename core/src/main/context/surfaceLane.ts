@@ -291,9 +291,11 @@ export class SurfaceLane {
    * reintroduced across displays.
    *
    * A tick makes the host dump the WHOLE desktop, not one screen's part of it,
-   * so a second ticking display adds no coverage whatsoever — only a second
-   * clock. The first display to tick is therefore the clock, and the others are
-   * ignored (once, loudly).
+   * so a second ticking display adds no coverage whatsoever. The first display
+   * to tick is therefore the owner and concurrent alternatives are ignored.
+   * A real hot-unplug/fixed-display change may replace that owner; after the old
+   * source has been silent for the normal recorder-silence window, the next
+   * source is accepted and its clock mapping is measured afresh.
    */
   private clockSourceDisplayId: string | null = null
   private readonly ignoredTickSources = new Set<string>()
@@ -544,6 +546,20 @@ export class SurfaceLane {
     if (this.clockSourceDisplayId === null) {
       this.clockSourceDisplayId = displayId
       logInfo(`[context] lane S is on display ${displayId}'s frame clock`)
+    } else if (
+      this.clockSourceDisplayId !== displayId &&
+      this.lastTickAt > 0 &&
+      Date.now() - this.lastTickAt >= TICK_SILENCE_MS
+    ) {
+      const previous = this.clockSourceDisplayId
+      this.clockSourceDisplayId = displayId
+      this.ignoredTickSources.clear()
+      this.pendingTicks.clear()
+      this.frameClockOffsetMs = null
+      logWarn(
+        `[context] lane S frame clock handed off from display ${previous} to ${displayId} ` +
+          `after ${TICK_SILENCE_MS} ms of silence`,
+      )
     } else if (this.clockSourceDisplayId !== displayId) {
       if (!this.ignoredTickSources.has(displayId)) {
         this.ignoredTickSources.add(displayId)

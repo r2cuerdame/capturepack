@@ -1,126 +1,116 @@
-﻿# capturepack
+# capturepack
 
 [English](README.md) · **한국어** · [日本語](README.ja.md) · [中文](README.zh.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Português](README.pt.md) · [Русский](README.ru.md)
 
 [![Release](https://img.shields.io/github/v/release/r2cuerdame/capturepack?color=7c5cff&label=release)](https://github.com/r2cuerdame/capturepack/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/r2cuerdame/capturepack/total?color=7c5cff)](https://github.com/r2cuerdame/capturepack/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Sponsor](https://img.shields.io/badge/%E2%99%A5_Sponsor-ea4aaa)](https://github.com/sponsors/r2cuerdame)
 
-## 버그를 5초 안에 설명할 수 있나요?
+## 버그를 되감고, 객체를 선택하고, 그 상태를 AI에게 전달하세요
 
-**CapturePack은 LLM에게 무언가를 설명하는 가장 빠른 방법입니다.**
+**CapturePack은 기본 30초의 순환 리플레이를 사람과 AI가 읽을 수 있는 구조화된 증거로 바꿉니다.**
 
-> 스크린샷이 아니라, 맥락을 캡처하세요.
->
-> 더 좋은 입력. 더 좋은 답변.
-
-CapturePack은 스크린샷과 화면 녹화를 넘어, 사람과 AI가 눈에 보이는 문제를 제대로 이해하도록 돕는 오픈소스 맥락 캡처 포맷이자 툴킷입니다.
+문제가 생긴 뒤 단축키를 눌러 그 순간으로 되감고, 객체 선택으로 과거 프레임의
+캡처된 컨트롤이나 창을 고르세요. CapturePack은 픽셀만 보고 추측하게 하지 않고
+대상의 식별 정보, 관측된 위치와 움직임을 보존합니다.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [다운로드](https://github.com/r2cuerdame/capturepack/releases/latest)
 
+현재 Windows 릴리스: **CapturePack 0.3.0**
+
 <p align="center">
-  <!-- Absolute raw URL with a version query: GitHub proxies README images through
-       camo, which caches by source URL — without the bump a fixed demo keeps
-       rendering the stale copy for hours. Bump ?v= whenever demo.svg changes. -->
-  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=3" alt="데모: Ctrl+Alt+C를 누르면 지난 30초가 멈추고, 마우스 휠로 시간을 거슬러 이동하고, 드래그로 개체를 선택하고, 주석을 적으면 CapturePack이 저장됩니다." width="760">
+  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=4" alt="과거 프레임으로 되감아 하위 UI 컨트롤을 선택하고, 캡처된 이름과 컨트롤 유형을 확인한 뒤, 소유 창의 관측된 움직임을 따라가며 AI용 구조화 증거를 내보내는 CapturePack" width="760">
 </p>
 
-CapturePack **폴더**에는 스크린샷이 담지 못하는 것이 들어 있습니다. 지난 30초의 리플레이, 스냅샷, 편집 가능한 주석, 기계가 읽는 이벤트 타임라인, 그리고 사람과 AI가 모두 읽는 리포트까지 — 다른 개발자든 어떤 LLM이든 상황을 바로 이해하는 데 필요한 모든 것입니다. 공유할 일이 생기면 폴더를 `.capturepack` 파일 하나로 묶으세요.
+## 사용 흐름
 
-## 5초 워크플로
+1. **되감기** — 라이브 녹화가 켜진 기본 상태에서 버그가 난 뒤 `Ctrl+Alt+C`를
+   누르세요. 리플레이 길이는 1–60초로 설정할 수 있습니다. 라이브 녹화를 끄면
+   아무것도 기록되지 않습니다.
+2. **객체 선택** — 선택한 과거 프레임에서 커서 아래의 캡처된 컨트롤을 고릅니다.
+   관측 경계, 접근성 이름, 컨트롤 유형과 선택 시점이 기록되며, 하위 컨트롤을
+   얻지 못하면 실제 창이 대체 대상이 됩니다.
+3. **움직임 추적** — 소유 창과 컨트롤의 위치는 리플레이 시계에 맞춰 관측됩니다.
+   모든 표본이 디스플레이를 명시하므로 저장 후 다시 연 멀티 모니터 팩과 화면을
+   넘어 이동한 객체도 같은 시간과 좌표를 유지합니다.
+4. **구조화된 맥락 전달** — 폴더를 개발자나 AI에게 전달하거나, 선택 사항인
+   로컬 전용 읽기 전용 MCP 서버로 이미 저장한 팩을 읽게 하세요.
 
-```
-Ctrl+Alt+C  →  capture  →  5-second annotation  →  save  →  drop into
-                                                              ChatGPT / Claude / Codex / Cursor / Gemini
-                                                              or send to another developer
-```
+### 객체 정보의 출처
 
-## 왜?
+- **Windows UI Automation(기본 내장):** 앱이 제공하는 접근성 이름, 의미 있는
+  컨트롤 유형, AutomationId, 프로세스/창 식별 정보와 관측 경계.
+- **Chrome DOM(선택 프리뷰 확장):** 사용자가 명시적으로 고른 요소의 selector,
+  역할, 텍스트와 URL. DOM을 계속 전송하지 않습니다.
+- **HWND 창 대체 경로:** 하위 컨트롤을 얻지 못하면 객체를 만들어내지 않고 실제
+  창과 관측된 위치를 기록합니다.
 
-- **스크린샷은 픽셀을 남깁니다.** 그 프레임 이전에 무슨 일이 있었는지는 사라집니다.
-- **영상은 움직임을 남깁니다.** 의도와 구조는 사라집니다.
-- **CapturePack은 맥락을 남깁니다.** 시간, 공간, 의도, 환경까지.
+### 한 장이면 충분할 때
 
-## 🕰 타임머신입니다
+`Ctrl+Alt+S`는 기본적으로 영역 선택을 엽니다. 모니터 경계를 끊김 없이 드래그할
+수 있고, 상단의 **전체 화면 캡처**는 모든 모니터를 하나의 가상 데스크톱 이미지로
+명시적으로 캡처합니다. 이미지는 같은 편집기에서 가능한 경우 원본 100%로 열립니다.
+이미지 팩에는 영상과 `timeline.json`이 없으며, 영역 팩은 선택한 픽셀과 크롭 위치만
+저장하고 숨겨진 전체 화면이나 다른 모니터 이미지를 보관하지 않습니다.
 
-버그가 이미 지나갔다고요? CapturePack은 **이미 녹화하고 있었습니다**. 뭔가 잘못된
-*뒤에* `Ctrl+Alt+C`를 누르면 지난 30초가 그대로 멈추고, 마우스 휠을 굴려
-**시간을 거슬러** 정확히 고장난 그 프레임까지 갈 수 있습니다. 재현한 장면이 아니라,
-바로 그 순간에 주석을 다세요.
+## 팩의 구성
 
-## 🤖 LLM을 위해 태어났습니다
+영상 팩:
 
-CapturePack은 AI가 실제로 이해하는 입력입니다.
-
-- 팩을 **ChatGPT, Claude, Codex, Cursor, Gemini**에 넣어 보세요 — 함께 생성된
-  리포트와 맥락 파일이 별도의 프롬프트 없이 상황을 설명합니다.
-- 아예 아무것도 첨부하지 않아도 됩니다. 앱이 **MCP 서버**를 띄워 두기 때문에, 연결된
-  AI는 *"방금 캡처한 것 분석해줘"* 한마디만 듣고 스스로 읽습니다.
-
-더 좋은 입력. 더 좋은 답변.
-
-## 🌍 언어
-
-CapturePack은 **9개 언어**를 말합니다: English · 한국어 · 日本語 · 中文 · Español · Français · Deutsch · Português · Русский
-
-- 앱은 **시스템 언어**를 자동으로 따라갑니다 — 설정 → 일반에서 언제든 바꿀 수 있습니다.
-- 생성되는 팩 문서(`README.md`, `report.md`, `skills/`)는 별도의 언어 설정을 따를 수 있고, 직접 쓴 설명은 절대 번역되지 않습니다.
-- [capturepack.dev](https://capturepack.dev)도 브라우저 언어를 자동으로 감지합니다.
-
-## 원칙
-
-로컬 우선 · 오프라인 우선 · 개방형 포맷 · 플러그인 기반 · 클라우드 없음 · 로그인 없음 · 데이터베이스 없음 · AI 의존 없음 · 벤더 종속 없음.
-
-한 번 만들어진 CapturePack은 언제까지나 읽을 수 있어야 합니다.
-
-## CapturePack 안에는 무엇이 있나요
-
-팩은 그냥 **폴더**입니다 — 열어 볼 수 있고, 고칠 수 있고, 숨기는 것이 없습니다.
-ZIP(`.capturepack`)은 공유하고 싶을 때만 만들어집니다.
-
-```
+```text
 CapturePack_2026-07-27_143052/
-├── replay.webm              # 원본 증거 — 절대 수정되지 않음
-├── replay_annotated.webm    # 주석이 입혀진 영상 — 어떤 플레이어에서도 재생
-├── snapshot.png             # 캡처된 프레임 (원본)
-├── annotations.json         # 진짜 원본: 박스, 지속 시간, 번호, 블러
-├── timeline.json            # 기계가 읽는 이벤트 로그
-├── report.md                # 직접 쓴 설명, LLM에 바로 사용
-├── manifest.json            # 포맷 버전, 파일 목록
-├── README.md                # 사람이 가장 먼저 읽는 문서
-├── skills/                  # AI를 위해 구조화된 맥락 (MCP 없이도 동작)
-└── plugins/                 # 연동에서 가져온 구조화된 메타데이터
+├── replay.mp4               # 원본(replay.webm 대체 가능)
+├── replay_annotated.webm    # 주석이 렌더링된 영상
+├── snapshot.png
+├── annotations.json         # 객체 식별 정보 + 관측 경계
+├── timeline.json
+├── report.md · README.md · skills/
+├── plugins/                 # UIA / 선택 Chrome DOM 맥락
+└── manifest.json
 ```
 
-`manifest.json`과 `snapshot.png`만 있고 나머지는 아무것도 없는 스크린샷 전용 팩도 완전히 유효합니다.
+이미지 팩:
 
-어떤 구현보다 명세가 먼저입니다 — 어떤 언어로든 CapturePack 파일을 만들 수 있습니다. [SPEC.md](SPEC.md)를 보세요.
-
-## MCP — 캡처와 대화하기
-
-앱에는 항상 켜져 있는 읽기 전용 [MCP](https://modelcontextprotocol.io) 서버가 `http://127.0.0.1:39393/mcp`(로컬호스트 전용)에 함께 들어 있습니다. 그래서 어떤 AI든 최신 팩을 스스로 찾아 분석합니다 — 프롬프트는 "방금 캡처한 것 분석해줘" 한 줄이면 끝입니다.
-
+```text
+CapturePack_2026-07-27_143052/
+├── snapshot.png             # 선택 영역 또는 전체 가상 데스크톱
+├── annotations.json
+├── report.md · README.md · skills/
+├── plugins/                 # 선택 객체 맥락
+└── manifest.json            # capture_kind: image, 영상/타임라인 없음
 ```
-claude mcp add --transport http capturepack http://127.0.0.1:39393/mcp
-```
 
-도구, 클라이언트 연결, 설정: [docs/MCP.md](docs/MCP.md).
+객체 정보와 이동 트랙은 관측된 경우에만 들어갑니다. 사용할 수 있는 UI 객체나
+표본이 없으면 팩은 그 사실을 그대로 말하며 맥락을 만들어내지 않습니다.
 
-## 상태
+## MCP
 
-초기 개발 단계입니다. 프로젝트가 향하는 곳은 [GOAL.md](GOAL.md), 다음에 만들 것은 [ROADMAP.md](ROADMAP.md)에서 확인하세요.
+앱에는 선택 가능한 읽기 전용 [MCP](https://modelcontextprotocol.io) 서버가 있으며,
+기본적으로 `http://127.0.0.1:39393/mcp`에서 활성화·자동 시작됩니다. 설정 → MCP에서
+즉시 중지하거나 자동 시작을 끌 수 있습니다. 서버는 사용자가 이미 저장한 이미지와
+영상 팩만 읽고 새 캡처를 시작할 수 없습니다.
 
-## 보안 및 서명
+`capturepack_history`로 기록을 찾고 `capturepack_open`으로 선택하거나,
+`capturepack_latest`로 최신 팩을 바로 열 수 있습니다. 자세한 설정은
+[docs/MCP.md](docs/MCP.md)를 참고하세요.
 
-현재 Windows 빌드에는 서명이 없습니다 (SmartScreen이 경고합니다 — *추가 정보 → 실행*).
-모든 릴리스에는 검증용 `SHA256SUMS.txt`가 함께 올라가며, 오픈소스용 코드 서명은 신청해 둔
-상태입니다. 자세한 내용, 팀 역할, 개인정보 처리 방식: [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md).
+## 공유 전 개인정보 확인
 
-## ♥ 후원
+화면 픽셀, 창 제목과 접근성 이름, Chrome DOM의 selector·역할·텍스트·URL에는
+민감정보가 들어갈 수 있습니다. CapturePack은 캡처, 텔레메트리, 충돌 보고서를
+업로드하지 않습니다. 앱의 유일한 외부 요청은 설정에서 끌 수 있는 선택적인
+GitHub 릴리스 업데이트 확인입니다.
 
-CapturePack은 무료이고, 오픈소스이며, 클라우드가 없습니다 — 계정도, 텔레메트리도, 팔 것도 없습니다.
-시간을 아껴 주었다면, [**GitHub 후원**](https://github.com/sponsors/r2cuerdame)이 이 프로젝트를 계속 나아가게 합니다.
+블러는 비파괴 방식입니다. 주석이 렌더링된 결과물은 보호하지만 전체 팩의
+`snapshot.png`와 원본 리플레이는 가려지지 않은 상태로 남습니다. 전체 팩을
+공유하기 전에 원본을 확인하고, 비공개 정보가 있으면 팩 전체를 공유하지 마세요.
+
+## 상태와 보안
+
+0.3.0은 Windows용 초기 단계 릴리스입니다. 현재 빌드는 서명되지 않아 SmartScreen이
+경고할 수 있으며, 모든 릴리스에는 검증용 `SHA256SUMS.txt`가 포함됩니다.
+
+로컬 우선 · 오프라인 우선 · 오픈 포맷 · 클라우드 없음 · 로그인 없음 · 텔레메트리 없음
 
 ## 라이선스
 

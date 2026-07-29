@@ -3,3 +3,4 @@
 // editor hovers over — the two halves of the chain the user's report is about.
 export { ContextSession } from '../src/main/context/session'
 export { ObjectIndex } from '../src/renderer/editor/objects'
+export { projectControlTrack } from '../src/renderer/editor/objectTrack'

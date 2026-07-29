@@ -6,8 +6,8 @@ const HOST = 'com.capturepack.host'
 const PROTOCOL = 1
 
 let port = null
-// When the hello was last written on the CURRENT port, or null when this
-// extension is not holding a connection it has proved. See the alarm below.
+// When the app's hello was received on the CURRENT port, or null when this
+// extension is not holding an end-to-end connection it has proved.
 let handshakeAt = null
 // How long to wait before dialling again after a failed or dropped connection.
 // It backs off so a browser running without CapturePack installed does not
@@ -17,6 +17,14 @@ const RETRY_MIN_MS = 2000
 const RETRY_MAX_MS = 60000
 let retryMs = RETRY_MIN_MS
 let retryTimer = null
+let helloTimer = null
+const UPDATE_ATTEMPT_KEY = 'capturepackUpdateAttempt'
+
+function clearHelloTimer() {
+  if (!helloTimer) return
+  clearTimeout(helloTimer)
+  helloTimer = null
+}
 
 function scheduleRetry() {
   if (retryTimer) return
@@ -25,6 +33,53 @@ function scheduleRetry() {
     retryMs = Math.min(retryMs * 2, RETRY_MAX_MS)
     connect()
   }, retryMs)
+}
+
+function compareManifestVersions(left, right) {
+  const parse = (value) => {
+    if (typeof value !== 'string' || !/^\d+(?:\.\d+){0,3}$/.test(value)) return null
+    return value.split('.').map((part) => Number(part))
+  }
+  const a = parse(left)
+  const b = parse(right)
+  if (!a || !b) return null
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    const difference = (a[index] || 0) - (b[index] || 0)
+    if (difference !== 0) return Math.sign(difference)
+  }
+  return 0
+}
+
+function acceptHandshake(candidate) {
+  if (port !== candidate) return
+  handshakeAt = Date.now()
+  retryMs = RETRY_MIN_MS
+  if (retryTimer) clearTimeout(retryTimer)
+  retryTimer = null
+  chrome.action.setBadgeText({ text: '' })
+}
+
+function requestOneReload(candidate, loadedVersion, targetVersion) {
+  const attempt = `${loadedVersion}->${targetVersion}`
+  chrome.storage.local.get(UPDATE_ATTEMPT_KEY, (stored) => {
+    if (port !== candidate) return
+    if (chrome.runtime.lastError || stored?.[UPDATE_ATTEMPT_KEY] === attempt) {
+      // A manually loaded or legacy folder may never acquire the app's files.
+      // Accept the old worker after one attempt instead of entering an
+      // app-hello -> reload -> app-hello loop forever. Settings still exposes
+      // the version/path mismatch so the user can load the stable folder.
+      acceptHandshake(candidate)
+      return
+    }
+    chrome.storage.local.set({ [UPDATE_ATTEMPT_KEY]: attempt }, () => {
+      if (port !== candidate) return
+      if (chrome.runtime.lastError) {
+        acceptHandshake(candidate)
+        return
+      }
+      chrome.runtime.reload()
+    })
+  })
 }
 
 // A TIMER CANNOT OUTLIVE THE WORKER THAT SET IT.
@@ -73,7 +128,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   // mid-handshake — which is exactly what an installer replacing the executable
   // does — the extension can be left holding a port it believes in and never
   // dials again. `handshakeAt` is the only proof of a LIVE connection: it is
-  // set when the hello is written and cleared on every disconnect, so a port
+  // set when the app answers hello and cleared on every disconnect, so a port
   // that has not proved itself by the time this alarm comes round is dropped
   // and redialled rather than trusted.
   if (port && handshakeAt === null) {
@@ -90,25 +145,69 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 function connect() {
   if (port) return port
   try {
-    port = chrome.runtime.connectNative(HOST)
-    port.onDisconnect.addListener(() => {
+    const candidate = chrome.runtime.connectNative(HOST)
+    port = candidate
+    candidate.onDisconnect.addListener(() => {
       // Host not installed, app not running, or this extension's ID not yet in
       // the host manifest. All three are temporary, and all three used to end
       // here — see the note on the startup connect below.
+      if (port !== candidate) return
+      clearHelloTimer()
       port = null
       handshakeAt = null
       scheduleRetry()
     })
-    port.postMessage({
+    candidate.onMessage.addListener((message) => {
+      if (port !== candidate) return
+      if (!message || message.type !== 'host.hello' || message.protocol !== PROTOCOL) return
+      clearHelloTimer()
+      const loadedVersion = chrome.runtime.getManifest().version
+      // CapturePack updates the stable unpacked folder before opening its
+      // bridge. Chromium must reload an unpacked extension to execute changed
+      // files, so current versions ask it to do that themselves. Version 0.1.8
+      // persists a one-shot guard: a legacy or manually copied folder whose
+      // files never change must not reload forever. Moving from a worker older
+      // than 0.1.7 still needs one manual Reload because that worker contains
+      // no self-update branch at all.
+      const targetVersion = typeof message.extensionVersion === 'string'
+        ? message.extensionVersion
+        : null
+      const comparison = targetVersion === null
+        ? null
+        : compareManifestVersions(targetVersion, loadedVersion)
+      if (targetVersion !== null && comparison === 1) {
+        requestOneReload(candidate, loadedVersion, targetVersion)
+        return
+      }
+      if (comparison === 0) {
+        chrome.storage.local.remove(UPDATE_ATTEMPT_KEY, () => void chrome.runtime.lastError)
+      }
+      // An extension newer than an older app is compatible at protocol v1 and
+      // must never be downgraded or bounced merely because versions differ.
+      acceptHandshake(candidate)
+    })
+    candidate.postMessage({
       type: 'host.hello',
       protocol: PROTOCOL,
       timestamp: Date.now(),
       app: 'capturepack-extension',
       version: chrome.runtime.getManifest().version,
     })
-    handshakeAt = Date.now()
-    retryMs = RETRY_MIN_MS
+    // Writing only proves Chrome accepted the bytes. The app's hello above is
+    // proof that the whole browser → host → app → host → browser path is live.
+    handshakeAt = null
+    clearHelloTimer()
+    helloTimer = setTimeout(() => {
+      helloTimer = null
+      if (port !== candidate || handshakeAt !== null) return
+      try {
+        candidate.disconnect()
+      } catch {
+        // onDisconnect owns the retry when the port is already gone.
+      }
+    }, 5000)
   } catch {
+    clearHelloTimer()
     port = null
     handshakeAt = null
     scheduleRetry()
@@ -138,6 +237,7 @@ function send(message) {
     } catch {
       port = null
       handshakeAt = null
+      scheduleRetry()
     }
   }
   // No host available: surface briefly on the toolbar icon instead of failing.

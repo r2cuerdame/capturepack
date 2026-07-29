@@ -3,6 +3,14 @@
 
 import type { Annotation, EditorWindowMode, Settings, UiaTreeStatus } from './types'
 import type { ContextFrame } from './context/protocol'
+import type { AuthoredMotionSpace } from './track'
+import type { Language } from './i18n'
+import type {
+  ImageRegionCompositeLayout,
+  ImageRegionPoint,
+  ImageRegionRect,
+  ImageRegionSelectorDisplay,
+} from './imageRegion'
 
 export const IPC = {
   // main -> capture window: begin recording this desktop source id
@@ -26,8 +34,28 @@ export const IPC = {
   // capture window -> main: recorder failed; capture continues screenshot-only
   captureError: 'capture:error',
 
+  // Image capture opens one overlay per frozen display AFTER main has already
+  // taken the screenshots. These channels carry geometry only: there is no
+  // image byte/path field through which the selector could persist an
+  // unrequested full-desktop context image.
+  imageRegionInit: 'image-region:init',
+  imageRegionFocus: 'image-region:focus',
+  imageRegionReady: 'image-region:ready',
+  imageRegionDrag: 'image-region:drag',
+  imageRegionPreview: 'image-region:preview',
+  imageRegionCommit: 'image-region:commit',
+  imageRegionCancel: 'image-region:cancel',
+
   // main -> editor window: everything the editor needs to open
   editorInit: 'editor:init',
+  // main -> editor: the native caption Close button was pressed. The renderer
+  // owns dirty state, so it either confirms unsaved edits or answers with
+  // editorCancel; main keeps the window alive until one of those answers.
+  editorCloseRequested: 'editor:close-requested',
+  // editor -> main: the unsaved-changes modal is visibly handling the native
+  // Close request. Clears only the renderer-response watchdog; Save, Discard,
+  // Cancel/Esc remain renderer-owned decisions.
+  editorClosePromptShown: 'editor:close-prompt-shown',
   // editor -> main (invoke): the candidate set at ONE time (#66, design GAP 7).
   // Payload: ContextFrameRequest; resolves to ContextFrame, or null when the
   // session is gone. Asked whenever the SCRUB SETTLES on a new position — never
@@ -85,6 +113,9 @@ export const IPC = {
   // about window -> main: open one of the hardcoded links. The renderer sends an
   // AboutLinkKey, never a URL — main maps it through its own allowlist.
   aboutOpenLink: 'about:open-link',
+  // about window -> main: open CapturePack's own log directory. No path crosses
+  // the bridge; main resolves the fixed userData/logs location itself.
+  aboutOpenLogs: 'about:open-logs',
   // about window -> main: user chose "Restart and update"
   updaterRestart: 'updater:restart',
   // about window -> main: "Show welcome again" — re-opens the first-launch
@@ -184,7 +215,7 @@ export const IPC = {
   // history window -> main (invoke): lazily loaded searchable text for one pack
   // (report.md + note + annotation texts), cached main-side until the pack changes
   historySearchText: 'history:search-text',
-  // history window -> main: open the pack for re-editing (session.startEditFlow)
+  // history window -> main (invoke): request re-editing and report accepted/busy
   historyOpenPack: 'history:open-pack',
   // history window -> main (invoke): open replay_annotated.webm in the system player
   historyPlay: 'history:play',
@@ -219,6 +250,60 @@ export const IPC = {
   // finished — pushed for EVERY render (save-time and History re-render)
   historyRenderStatus: 'history:render-status',
 } as const
+
+// ---------------------------------------------------------------------------
+// Image region selector
+
+export interface ImageRegionSelectorInitPayload {
+  requestId: string
+  /** This renderer owns exactly one native monitor-sized overlay. */
+  display: ImageRegionSelectorDisplay
+  desktopBounds: ImageRegionRect
+  /** Frozen display geometry; no pixels or filesystem paths cross this IPC. */
+  displays: ImageRegionSelectorDisplay[]
+  /** Native-pixel placement of those displays in the lossless composite. */
+  layout: ImageRegionCompositeLayout
+  focused: boolean
+  uiLanguage: Language
+}
+
+export interface ImageRegionSelectorFocusPayload {
+  requestId: string
+  focused: boolean
+}
+
+export interface ImageRegionSelectorReadyPayload {
+  requestId: string
+}
+
+export interface ImageRegionSelectorDragPayload {
+  requestId: string
+  phase: 'start' | 'move' | 'end'
+  /** Windows virtual-desktop DIP coordinates. */
+  desktopDipPoint: ImageRegionPoint
+}
+
+export interface ImageRegionSelectorPreviewPayload {
+  requestId: string
+  /** Null clears a rejected/abandoned drag on every monitor. */
+  desktopDipRect: ImageRegionRect | null
+}
+
+export type ImageRegionSelectorCommitPayload =
+  | {
+      requestId: string
+      mode: 'region'
+      /** Local to the seamless virtual-desktop overlay, in CSS/DIP units. */
+      localDipRect: ImageRegionRect
+    }
+  | {
+      requestId: string
+      mode: 'fullscreen'
+    }
+
+export interface ImageRegionSelectorCancelPayload {
+  requestId: string
+}
 
 /**
  * Why a display's replay buffer is not running (GOAL "Say that you are
@@ -367,12 +452,12 @@ export interface CaptureFramesPayload {
 export interface CaptureTickPayload {
   displayId: string
   /**
-   * The frame's position in the file being recorded, in ms.
+   * The frame's epoch-based DOMHighRes timestamp, in ms.
    *
-   * `presentationTime - slot.startedAt`, both on `performance.now()` — NOT the
-   * track's `mediaTime`, which starts when the stream did rather than when this
-   * recorder slot did and which the spec allows to be zero for a live source
-   * (#109).
+   * `performance.timeOrigin + presentationTime`, so ticks from independent
+   * capture renderers are comparable. This is NOT the track's `mediaTime`,
+   * which starts when the stream did and which the spec allows to be zero for a
+   * live source (#109).
    */
   mediaTimeMs: number
   /**
@@ -402,13 +487,12 @@ export interface CaptureTickPayload {
 export interface CaptureReplayResultPayload {
   requestId: string
   /**
-   * The tick clock's value at this replay's t=0 (#112).
+   * The epoch-based DOMHighRes timestamp at this replay's t=0 (#112).
    *
-   * Ticks carry a session-monotonic `presentationTime`, because a per-slot
-   * number falls back to zero at every rotation and sent the ring's time
-   * BACKWARDS. Turning that into a position in THIS file needs to know which
-   * slot was saved and where it began, and this is the only moment both are
-   * known. Subtract it from a tick to get a position in these bytes.
+   * `performance.timeOrigin + slot.startedAt` is comparable with ticks from
+   * another display renderer. A bare per-renderer `startedAt` is not. Turning
+   * this into a position in the file happens after Core converts both onto its
+   * one monotonic session clock.
    *
    * Absent where the recorder could not say, in which case the ring keeps its
    * own clock and nothing is mis-stated.
@@ -463,12 +547,9 @@ export interface EditorDisplayPayload {
   replayDurationMs: number
   // Milliseconds to ADD to the pack clock (the focused display's replay clock,
   // which every annotation lifetime uses) to reach THIS display's own replay
-  // clock. 0 on the focused display. Every recorder is stopped by the same
-  // trigger, so the replays are END-aligned and the offset is simply
-  // thisDuration - focusedDuration (SPEC §5.6). A trimmed focused replay needs
-  // no separate rule: its declared duration is already the trimmed one, so the
-  // same difference equals trim_offset_ms plus the difference of the untrimmed
-  // lengths.
+  // clock. 0 on the focused display. Fresh captures use the observed difference
+  // between recorder origins; reopened legacy packs fall back to the former
+  // duration-difference rule (SPEC §5.6).
   replayOffsetMs: number
 }
 
@@ -569,6 +650,7 @@ export interface EditorUiaWindow {
 }
 
 export interface EditorInitPayload {
+  captureKind: 'image' | 'video'
   // PNG bytes of the snapshot at native resolution
   snapshotPng: ArrayBuffer
   width: number
@@ -743,6 +825,9 @@ export interface RenderStartPayload {
   // Still job only: the frame the keyframe is drawn from (snapshot.png bytes).
   snapshotPng?: ArrayBuffer
   annotations: Annotation[]
+  // All display coordinate spaces for authored keyframes that cross monitors.
+  // Absent for a single-display render or an older caller.
+  motionSpace?: AuthoredMotionSpace
   // GLOBAL display numbers (SPEC §8.5) as annotation_id -> number pairs,
   // computed ONCE per save over the pack's WHOLE annotation set and shipped in
   // rather than derived here.
@@ -1152,6 +1237,9 @@ export interface SettingsSetResult {
   // app owns the combination): `settings` carries the REVERTED value, the old
   // accelerator still works, and the GUI shows its inline conflict error.
   hotkeyFailed?: boolean
+  // Same contract for the explicit still-image shortcut. Kept separate so the
+  // renderer can report the failure beside the field that actually failed.
+  imageHotkeyFailed?: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -1175,6 +1263,7 @@ export interface HistoryPackSummary {
   title: string | null
   capturedAt: string | null
   app: string | null
+  captureKind: 'image' | 'video' | 'unknown'
   hasReplay: boolean
   replayDurationMs: number | null
   annotationCount: number

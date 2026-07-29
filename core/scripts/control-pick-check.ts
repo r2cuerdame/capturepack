@@ -18,11 +18,15 @@
 // that control, at that rectangle?
 //
 // Run: npm run check:pick
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { ContextBuffer, mintSurfaceIds, surfaceSamplesOf } from '../src/main/context/buffer'
 import type { ContextObservation } from '../src/main/context/buffer'
 import { WindowsUiaProvider } from '../src/main/context/provider'
-import { ObjectIndex } from '../src/renderer/editor/objects'
+import {
+  ObjectIndex,
+  pickIdentityOf,
+  samePickIdentity,
+} from '../src/renderer/editor/objects'
 import type { EditorUiaElement, EditorUiaWindow } from '../src/shared/ipc'
 
 const PACK = 'C:/Users/recue/OneDrive/Desktop/CapturePack/CapturePack_2026-07-29_184934'
@@ -49,9 +53,76 @@ interface DumpElement {
   display?: number
 }
 
-const dump = JSON.parse(readFileSync(`${PACK}/plugins/windows-uia/elements.json`, 'utf8')) as {
+// A deterministic 18x18 target keeps the small-control regression non-vacuous
+// even when the owner's original CapturePack fixture is not present in CI.
+// It is placed inside the Chrome window, away from the two larger fixture
+// controls, and participates in the exact same provider/index path as they do.
+const syntheticSmallControl: DumpElement = {
+  window: 0,
+  bounds: { x: 600, y: 160, width: 18, height: 18 },
+  control_type: 'Button',
+  name: 'Synthetic 18px control',
+  automation_id: 'synthetic-small-control',
+  class_name: 'Button',
+  depth: 20,
+  display: 1,
+}
+
+const fixturePath = `${PACK}/plugins/windows-uia/elements.json`
+const syntheticDump = {
+  windows: [
+    {
+      z: 0,
+      title: '확장 프로그램 - Chrome',
+      process: 'chrome',
+      class_name: 'Chrome_WidgetWin_1',
+      bounds: { x: 0, y: 0, width: 1200, height: 1800 },
+      focused: true,
+      display: 1,
+      hwnd: '1000',
+      tree: 'collected',
+    },
+    {
+      z: 1,
+      title: 'Skipped window with no controls',
+      process: 'other',
+      class_name: 'OtherWindow',
+      bounds: { x: 900, y: 1400, width: 240, height: 240 },
+      focused: false,
+      display: 1,
+      hwnd: '1001',
+      tree: 'skipped',
+    },
+  ],
+  elements: [
+    {
+      window: 0,
+      bounds: { x: 100, y: 120, width: 240, height: 48 },
+      control_type: 'Button',
+      name: 'Ghostery 개인정보 보호용 광고 차단기',
+      automation_id: 'ghostery',
+      class_name: 'Button',
+      display: 1,
+    },
+    {
+      window: 0,
+      bounds: { x: 380, y: 120, width: 180, height: 48 },
+      control_type: 'Button',
+      name: '다른 확장 프로그램',
+      automation_id: 'another-extension',
+      class_name: 'Button',
+      display: 1,
+    },
+  ],
+}
+const dump = (existsSync(fixturePath)
+  ? JSON.parse(readFileSync(fixturePath, 'utf8'))
+  : syntheticDump) as {
   windows: DumpWindow[]
   elements: DumpElement[]
+}
+if (!existsSync(fixturePath)) {
+  console.log(`fixture missing: ${fixturePath}\nusing the equivalent built-in control fixture`)
 }
 
 // The Chrome window from the screenshot, and the display it is on.
@@ -63,7 +134,10 @@ const DISPLAY = chrome.display ?? 1
 const SNAP_W = 1200
 const SNAP_H = 1920
 
-const els = dump.elements.filter((e) => e.window === chrome.z)
+const els = [
+  ...dump.elements.filter((e) => e.window === chrome.z),
+  { ...syntheticSmallControl, window: chrome.z, display: DISPLAY },
+]
 
 /**
  * One observation, exactly the shape session.rebuild() produces: RING windows
@@ -190,7 +264,7 @@ async function main(): Promise<void> {
     if (o !== null && o.level === 'control') smallOffered += 1
   }
   console.log(`  ${small.length} controls are under 32 px on one axis; ${smallOffered} are offered as controls`)
-  check(small.length === 0 || smallOffered > 0, 'small controls can be picked at all')
+  check(small.length > 0 && smallOffered > 0, 'the non-empty small-control fixture can be picked')
 
   // --- The anchoring path, with the window moved ---------------------------
   console.log('\nAFTER THE WINDOW MOVES 300 px RIGHT')
@@ -205,17 +279,15 @@ async function main(): Promise<void> {
     )
   }
 
-  // THE ONE WAY THIS PIPELINE GOES SILENT, pinned so it cannot return unseen.
+  // A LOST TREE STATUS MUST NOT SILENCE DATA THAT SURVIVED.
   //
-  // A control is offered only if its window carries a UIA tree status of
-  // 'collected' or 'truncated' — that is what claimsOf() turns into the region
-  // claim the resolver demands, and without it every control is dropped as
-  // UNCLAIMED. A ring window that failed to match its dump counterpart in
-  // session.rebuild() keeps ringObservations' own 'skipped', so the whole
-  // control level for that window disappears with no error anywhere. Worth
-  // pinning because from the outside it is indistinguishable from "this app has
-  // no controls" — and because feeding this harness a wrong tree status is what
-  // made it look, for a while, like the geometry itself was broken.
+  // A ring window that failed to match its dump counterpart in
+  // session.rebuild() can keep ringObservations' own `skipped` while the dump's
+  // elements survive. Those elements are direct evidence that UIA read their
+  // owner window, so claimsOf() must retain the minimum claim for that exact
+  // owner. Otherwise the provider emits candidates and the resolver discards
+  // all of them as UNCLAIMED — indistinguishable from "this app has no
+  // controls" despite the controls sitting in memory.
   console.log('\nA WINDOW WHOSE TREE STATUS WAS LOST')
   const silenced = observationAt(0, 0, true)
   silenced.windows = silenced.windows.map((w) => ({
@@ -244,9 +316,45 @@ async function main(): Promise<void> {
       SNAP_W,
       SNAP_H,
     )
+    const picked = sIdx.pick(px, py)
     check(sFrame.candidates.length > 0, `the provider still offers ${sFrame.candidates.length} candidates`)
-    check(sFrame.claims.length === 0, `but claimsOf emits NO claim (${sFrame.claims.length})`)
-    check(sIdx.pick(px, py) === null, 'so nothing is pickable — the control level goes SILENT, not wrong')
+    check(sFrame.claims.length === 1, `claimsOf retains the one owner claim (${sFrame.claims.length})`)
+    check(
+      picked !== null && picked.level === 'control',
+      `the surviving control remains pickable — got ${picked === null ? 'NOTHING' : picked.level}`,
+    )
+  }
+
+  // ONE WINDOW CAN CONTAIN MANY DIFFERENT CONTROLS.
+  //
+  // The editor's duplicate guard used only surfaceId, so after one child
+  // control was selected every sibling in that same window was treated as the
+  // already-annotated object. The second click selected the first box instead
+  // of creating a box for the second control.
+  console.log('\nTWO DIFFERENT CONTROLS IN THE SAME WINDOW')
+  const siblingA = idx.pick(px, py)
+  const siblingTarget = els.find((e) => e !== target)
+  if (siblingA !== null && siblingTarget !== undefined) {
+    const siblingB = idx.pick(
+      Math.round(siblingTarget.bounds.x + siblingTarget.bounds.width / 2),
+      Math.round(siblingTarget.bounds.y + siblingTarget.bounds.height / 2),
+    )
+    if (siblingB !== null) {
+      const aIdentity = pickIdentityOf(siblingA)
+      const bIdentity = pickIdentityOf(siblingB)
+      check(
+        aIdentity.surfaceId === bIdentity.surfaceId,
+        'the fixture really places both controls in the same owner surface',
+      )
+      check(
+        !samePickIdentity(aIdentity, bIdentity),
+        'different child objectIds on one surface are not duplicate picks',
+      )
+      check(
+        samePickIdentity(aIdentity, pickIdentityOf(siblingA)),
+        'the exact same child remains a duplicate pick',
+      )
+    }
   }
 
   console.log(failed === 0 ? '\ncontrol-pick-check ok' : `\ncontrol-pick-check FAILED (${failed})`)

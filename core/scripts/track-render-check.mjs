@@ -23,7 +23,7 @@ const bundle = await build({
   platform: 'node',
   write: false,
 })
-const { annotationAt, trackedBoundsAt } = await import(
+const { annotationAt, renderedAnnotationAt, trackedBoundsAt } = await import(
   `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`
 )
 
@@ -86,6 +86,26 @@ console.log('\nThe view a tracked box gets')
   check('carries the resolved rectangle', view.bounds.x === 200)
   check('leaves the stored annotation alone', moving.bounds.x === 0)
   check('keeps everything else', view.annotation_id === 'a1' && view.z === 1)
+}
+
+console.log('\nThe annotated-video renderer resolves time before scaling pixels')
+{
+  const view = renderedAnnotationAt(moving, 1600, 0.5, 0.25)
+  check(
+    'the selected observed sample is scaled into encoded-video pixels',
+    view.bounds.x === 100
+      && view.bounds.y === 25
+      && view.bounds.width === 50
+      && view.bounds.height === 12.5,
+    JSON.stringify(view.bounds),
+  )
+  check(
+    'renderer scaling does not mutate the persisted native-pixel sample',
+    moving.tracking.samples[1].x === 200
+      && moving.tracking.samples[1].y === 100
+      && moving.tracking.samples[1].width === 100
+      && moving.tracking.samples[1].height === 50,
+  )
 }
 
 console.log('\nA single-sample track (an object that never moved)')

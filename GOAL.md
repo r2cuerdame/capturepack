@@ -293,7 +293,7 @@ what happened. All of it local; nothing is ever uploaded.
   records startup and version, hotkey registration, per-display recorder state changes with
   their reason, capture requests and outcomes, save results, MCP and updater activity, and
   every error that would otherwise be silent — including a renderer that vanishes, which is
-  a recorder failure and must be treated as one. Reachable from the tray
+  a recorder failure and must be treated as one. Reachable from About / Information
   ("Open logs folder"), because a record nobody can find is not a record.
 - **A decision not to do something is still a decision, and it is logged.** "The MCP server
   was never started" and "the MCP server was never mentioned" must not read the same, so
@@ -1015,22 +1015,19 @@ below is the right-click surface.
 The tray menu is the app's only always-present surface, so it stays short:
 
 ```
-Capture now   Ctrl+Alt+C
+Recording enabled                         ✓
+Capture image context   Ctrl+Alt+S
+Capture video context   Ctrl+Alt+C
 History
 Open output folder
 Settings…
 ─────────────────
 Check for updates…
-Open logs folder
 About CapturePack
 ─────────────────
 Quit CapturePack
 ```
 
-- **Open logs folder** — opens the app's own log directory. It sits with the diagnostics,
-  not with the user's output folder: this is what the APP did, not what the user made. The
-  log only exists to be read when something went wrong, and a user cannot be asked to find
-  `%APPDATA%` by hand.
 - **Check for updates…** — manual check with inline feedback in the menu item
   ("Checking…", "You're up to date", "Downloading…", "Restart and update (vX)").
   The automatic check keeps working exactly as before.
@@ -1039,7 +1036,8 @@ Quit CapturePack
   errors, stopped unexpectedly, or replaced by an update with its ending unknown; every
   one of those gets its own sentence, because folding them into "closed normally" is how
   the window came to certify runs nobody had watched end — the two slogans, MIT license,
-  and links: Website · GitHub · Report an issue ·
+  an **Open logs folder** action (the diagnostics are information about what the app did,
+  not a capture command or user output), and links: Website · GitHub · Report an issue ·
   **♥ Sponsor**. Donation lives here, never in the capture flow — the tool must never
   interrupt the 5-second workflow to ask for money.
 
@@ -1146,6 +1144,15 @@ simultaneously is the default** — one Ctrl+Alt+C, N displays in the pack.
   - Annotations stay in their own display's pixel space; `annotations.json` gains an
     optional `display` index (absent = the focused display, so single-monitor packs are
     unchanged).
+  - **One observed replay clock.** Each recorder reports where its replay t=0 lies on a
+    shared monotonic axis. The pack persists the resulting
+    `media.displays[].replay_clock_offset_ms` (`display t = pack t + offset`), and both
+    `timeline.t0` and the live/reopened board use that same measurement. Each display's
+    object index is resolved at the video frame that display actually presented, rather
+    than reusing the focused display's nearest frame for the whole board. Exact trim shifts
+    each saved origin by the source interval actually removed. Existing packs without the
+    field retain the former duration-difference fallback; a new capture never substitutes
+    that assumption for an origin it measured.
 - Existing profiles that still carry the pre-0.1.3 default (`cursor`) migrate once to
   `all`, since that value was never a deliberate choice.
 - `manifest.environment.screens` continues to list every connected display; the focused
@@ -2350,6 +2357,35 @@ every rectangle early by the dump's cost, one-directional and proportional to
 drag speed. Now stamped at the dump's midpoint, with `dumpMs` in the event so the
 cost is visible. Measured at 1.5 ms, so this was worth ~5 px, not 443. It is
 fixed because it is wrong, and reported as small because it is small.
+
+### rc.36 interaction and capture invariants (2026-07-29)
+
+- Moving the **start trim** changes only the kept interval. It never seeks the
+  playhead or moves a selected annotation. The handle clamps at the playhead, so
+  the current frame cannot end outside the kept interval. The end handle keeps
+  its existing endpoint preview.
+- A multi-display recorder set has exactly **one** Lane S frame-clock owner.
+  Rebuilds retain a surviving owner; after a real removal, a surviving display
+  may take over once the old source has been silent for 2,000 ms. Renderer
+  `timeOrigin + performance.now()` readings are converted to the shared session
+  clock before replay comparison.
+- Lane A is expected to be available throughout the rolling replay, not only at
+  finalization. If its tracker exits, Core restarts it with bounded backoff,
+  resends the remembered visible-window set, and gives the replacement tree a
+  never-reused Core ordinal so an old delta cannot mutate new history.
+- The window host takes one initial `EnumWindows` snapshot, then consumes
+  WinEvent notifications and rereads only dirty HWNDs, with structural events
+  forcing reconciliation. The deterministic check measured 0.159 ms for a
+  dirty sample versus 0.342 ms for a full pass, and 269 versus 3,281 wire bytes.
+- Capture FPS is an integer contract from **1 through 30**. Older profiles above
+  30 normalize to 30.
+- MCP output-folder and watch changes are live on the next request while the
+  explicitly selected pack remains pinned. The copied client prompt includes
+  the actual endpoint, setup command, and `capturepack_latest` request.
+- Stopped or discarded recorder slots detach handlers and release their Blob
+  arrays. That closes a verified retention path; it does **not** prove the
+  steady-state encoder cost is solved. The single-recorder bounded-ring R&D and
+  its measurement gate live in GitHub issue #102.
 
 ---
 

@@ -14,6 +14,9 @@ contextBridge.exposeInMainWorld('aboutBridge', {
   openLink(key: AboutLinkKey): void {
     ipcRenderer.send(IPC.aboutOpenLink, key)
   },
+  openLogs(): void {
+    ipcRenderer.send(IPC.aboutOpenLogs)
+  },
   restartUpdate(): void {
     ipcRenderer.send(IPC.updaterRestart)
   },

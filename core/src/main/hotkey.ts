@@ -1,10 +1,11 @@
-// The one global capture accelerator (GOAL "Settings GUI" > Capture). Both
-// registration sites go through here — startup in index.ts and the instant
-// re-register the settings GUI performs — so exactly one accelerator is ever
-// held: registering always releases the previous one first.
+// The global capture accelerators (video context and explicit image capture).
+// Each registration site goes through this module, so changing one shortcut
+// releases only its own old accelerator and can never silently disable the
+// other.
 import { globalShortcut } from 'electron'
+import { HotkeyRegistry } from './hotkeyRegistry'
 
-let registered: string | null = null
+const hotkeys = new HotkeyRegistry(globalShortcut)
 
 /**
  * Registers `accelerator` as the capture hotkey, releasing the previously
@@ -13,20 +14,15 @@ let registered: string | null = null
  * conflict and, in the settings flow, re-registers the accelerator that worked.
  */
 export function registerCaptureHotkey(accelerator: string, handler: () => void): boolean {
-  if (registered !== null) {
-    globalShortcut.unregister(registered)
-    registered = null
-  }
-  let ok = false
-  try {
-    ok = globalShortcut.register(accelerator, handler)
-  } catch {
-    // A malformed accelerator throws instead of returning false; to every
-    // caller that is the same outcome as a refused registration.
-    ok = false
-  }
-  if (ok) registered = accelerator
-  return ok
+  return hotkeys.register('video', accelerator, handler)
+}
+
+/** Registers the explicit image/region capture shortcut independently. */
+export function registerImageCaptureHotkey(
+  accelerator: string,
+  handler: () => void,
+): boolean {
+  return hotkeys.register('image', accelerator, handler)
 }
 
 /**
@@ -69,5 +65,10 @@ function delay(ms: number): Promise<void> {
  * conflicting app is gone can take it back.
  */
 export function currentCaptureHotkey(): string | null {
-  return registered
+  return hotkeys.current('video')
+}
+
+/** The image capture accelerator currently held by the app. */
+export function currentImageCaptureHotkey(): string | null {
+  return hotkeys.current('image')
 }

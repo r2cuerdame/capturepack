@@ -12,6 +12,7 @@ import { logWarn } from './log'
 
 export interface TrayHandlers {
   onCapture: () => void
+  onImageCapture: () => void
   /**
    * The recording switch, ON THE TRAY (settings.recordingEnabled).
    *
@@ -19,16 +20,12 @@ export interface TrayHandlers {
    * it on its own: a privacy switch is used in the moment — before a call,
    * before a screen share — and a switch that needs a window opened and a
    * section scrolled is a switch that does not get used. "on / off 버튼도
-   * 넣어달랬잖아." The tray is the one surface that is always there, which is
-   * the same reason the logs folder is on it.
+   * 넣어달랬잖아." The tray is the one surface that is always there.
    */
   onToggleRecording: (enabled: boolean) => void
   onOpenHistory: () => void
   onOpenOutput: () => void
   onOpenSettings: () => void
-  // GOAL "Tray Menu" > Open logs folder (issue #60): the app's own record has
-  // to be reachable from the one surface that is always there.
-  onOpenLogs: () => void
   onCheckUpdates: () => void
   onAbout: () => void
   onRestartUpdate: () => void
@@ -77,6 +74,7 @@ export function createTray(
   handlers: TrayHandlers,
   getLanguage: () => Language,
   getHotkey: () => string,
+  getImageHotkey: () => string,
   getReplaySeconds: () => number,
   getRecorderState: () => RecorderState,
   getUpdaterState: () => UpdaterStatusPayload,
@@ -124,7 +122,7 @@ export function createTray(
     const updater = getUpdaterState()
     // Menu order (GOAL "Tray Menu"):
     // Capture now · History · Open output folder · Settings…
-    // ── Check for updates… · Open logs folder · About CapturePack
+    // ── Check for updates… · About CapturePack
     // ── (Restart and update, when ready) · Quit
     const recording = isRecordingEnabled()
     const items: MenuItemConstructorOptions[] = [
@@ -138,7 +136,11 @@ export function createTray(
         click: () => handlers.onToggleRecording(!recording),
       },
       {
-        label: t('tray.captureNow', { hotkey: getHotkey() }),
+        label: t('tray.captureImage', { hotkey: getImageHotkey() }),
+        click: () => handlers.onImageCapture(),
+      },
+      {
+        label: t('tray.captureVideo', { hotkey: getHotkey() }),
         // A capture with nothing recorded is not a capture. Greyed rather than
         // hidden, so the hotkey's own answer and this agree.
         enabled: recording,
@@ -155,9 +157,6 @@ export function createTray(
         enabled: canCheckUpdates(updater),
         click: () => handlers.onCheckUpdates(),
       },
-      // Next to the diagnostics group, not next to the user's own output: the
-      // log is what the app did, not what the user made (issue #60).
-      { label: t('tray.openLogs'), click: () => handlers.onOpenLogs() },
       { label: t('tray.about'), click: () => handlers.onAbout() },
       { type: 'separator' },
     ]

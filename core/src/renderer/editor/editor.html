@@ -6,7 +6,7 @@
     http-equiv="Content-Security-Policy"
     content="default-src 'self'; script-src 'self'; style-src 'self'; media-src 'self' blob:"
   />
-  <title data-i18n="editor.windowTitle">CapturePack — Annotate</title>
+  <title>CapturePack</title>
   <link rel="stylesheet" href="./editor.css" />
 </head>
 <body>
@@ -23,7 +23,7 @@
        display:none in the fullscreen overlay, which carries no drag region at
        all because dragging there would do nothing. -->
   <div id="titleBar">
-    <span id="titleBarLabel" data-i18n="editor.windowTitle">CapturePack — Annotate</span>
+    <span id="titleBarLabel">CapturePack</span>
   </div>
   <!-- Editor Chrome (GOAL "Editor Chrome"): the bar sits above the frozen
        capture, so it stays quiet — ICONS for the recurring controls (window
@@ -101,6 +101,14 @@
           <path d="M4.5 10h11M10 4.5v11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
         </svg>
       </button>
+      <button
+        id="oneToOneBtn"
+        class="zoomExactBtn"
+        type="button"
+        title="Show at native 1:1 size"
+        data-i18n-title="editor.oneToOneTooltip"
+        hidden
+      >1:1</button>
       <span id="zoomPct">100%</span>
     </div>
     <!-- The windowed/fullscreen toggle used to sit here. The editor is a
@@ -191,13 +199,18 @@
       </div>
       <input id="durationInput" type="text" placeholder="custom: 1500ms or 1.5s" data-i18n-placeholder="editor.customDurationPlaceholder" autocomplete="off" spellcheck="false" />
     </div>
-    <!-- Edit mode only (GOAL "History — Save after re-edit"): shown by Esc
-         while there are unsaved changes. Esc again returns to editing. -->
-    <div id="unsavedBar" hidden>
-      <span id="unsavedLabel" data-i18n="editor.unsavedChanges">Unsaved changes</span>
-      <button id="unsavedSaveBtn" type="button" data-i18n="editor.save">Save</button>
-      <button id="unsavedSaveAsBtn" type="button" data-i18n="editor.saveAsNew">Save As New CapturePack</button>
-      <button id="unsavedDiscardBtn" type="button" data-i18n="editor.discard">Discard</button>
+    <!-- Edit mode only (GOAL "History — Save after re-edit"): a real centred
+         modal, not a small bar whose edge disappears into a dark capture.
+         Esc returns to editing without choosing an action. -->
+    <div id="unsavedBar" role="dialog" aria-modal="true" aria-labelledby="unsavedLabel" hidden>
+      <div id="unsavedDialog">
+        <span id="unsavedLabel" data-i18n="editor.unsavedChanges">Unsaved changes</span>
+        <div id="unsavedActions">
+          <button id="unsavedSaveBtn" type="button" data-i18n="editor.save">Save</button>
+          <button id="unsavedSaveAsBtn" type="button" data-i18n="editor.saveAsNew">Save As New CapturePack</button>
+          <button id="unsavedDiscardBtn" type="button" data-i18n="editor.discard">Discard</button>
+        </div>
+      </div>
     </div>
   </main>
   <!-- Shortcut sheet (GOAL "Editor Chrome"): ON BY DEFAULT (persisted as

@@ -15,6 +15,12 @@ contextBridge.exposeInMainWorld('editorBridge', {
   onInit(cb: (payload: EditorInitPayload) => void): void {
     ipcRenderer.on(IPC.editorInit, (_event, payload: EditorInitPayload) => cb(payload))
   },
+  onCloseRequested(cb: () => void): void {
+    ipcRenderer.on(IPC.editorCloseRequested, () => cb())
+  },
+  closePromptShown(): void {
+    ipcRenderer.send(IPC.editorClosePromptShown)
+  },
   // OBJECT PICKING FOLLOWS TIME (#66): the candidate set at one scrub position.
   // Asked when the scrub SETTLES, never per pointer move — the editor indexes
   // the answer and hovers over its own index, which is what keeps hovering free.

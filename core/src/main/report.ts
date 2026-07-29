@@ -279,8 +279,30 @@ export function keyframeSet(
  * shared by report.md, README.md and skills/overview.md so the three documents
  * can never list different stills.
  */
-export function keyframeSectionLines(set: KeyframeSet, t: TranslateFn): string[] {
+export function keyframeSectionLines(
+  set: KeyframeSet,
+  t: TranslateFn,
+  imageCapture = false,
+): string[] {
   if (set.frames.length === 0) return []
+  if (imageCapture) {
+    const frame = set.frames[0]
+    if (frame === undefined) return []
+    const lines = [
+      'An annotated rendering of the captured still image, with blur, borders, number badges and',
+      'text drawn in. `snapshot.png` remains the unmodified source image.',
+      '',
+      `![Annotated image](${frame.file})`,
+    ]
+    if (!set.declared) {
+      lines.push(
+        '',
+        'This rendering is generated in the background after save. The source image and',
+        'annotations.json are complete even if the link does not resolve yet.',
+      )
+    }
+    return lines
+  }
   const lines: string[] = [
     'Stills rendered exactly like the annotated replay — one per annotation state change (a box',
     'appearing or disappearing), with blur, borders, number badges and text drawn in. Read them in',
@@ -312,8 +334,21 @@ export function keyframeSectionLines(set: KeyframeSet, t: TranslateFn): string[]
 }
 
 /** The frames/ entry for a document's file list, or null when there are none. */
-export function keyframeFileEntry(set: KeyframeSet): { name: string; what: string } | null {
+export function keyframeFileEntry(
+  set: KeyframeSet,
+  imageCapture = false,
+): { name: string; what: string } | null {
   if (set.frames.length === 0) return null
+  if (imageCapture) {
+    return {
+      name: set.frames[0]?.file ?? 'frames/',
+      what:
+        'annotated rendering of snapshot.png — derived from the same still-image pixels' +
+        (set.declared
+          ? ', declared in manifest.media.keyframes'
+          : '; declared after the background render finishes'),
+    }
+  }
   const n = set.frames.length
   return {
     name: 'frames/',
@@ -359,6 +394,7 @@ export function buildReport(
 ): string {
   const t = makeT(lang)
   const lines: string[] = []
+  const imageCapture = manifest.capture_kind === 'image'
 
   // The user's own title is never translated; only the fallback is localized.
   lines.push(`# ${manifest.title ?? t('pack.untitled')}`)
@@ -388,15 +424,17 @@ export function buildReport(
   if (manifest.environment.app !== undefined) {
     lines.push(`- **${t('pack.focusedApp')}:** ${manifest.environment.app}`)
   }
-  lines.push(
-    hasReplay
-      ? `- **${t('pack.replay')}:** ${replaySeconds}s screen recording (${manifest.media.replay})` +
-          (manifest.media.replay_annotated !== undefined
-            ? `; annotated view: ${manifest.media.replay_annotated}`
-            : '')
-      : `- **${t('pack.replay')}:** ${t('pack.replayNone')}`,
-  )
-  if (manifest.media.snapshot_t_ms !== undefined) {
+  if (!imageCapture) {
+    lines.push(
+      hasReplay
+        ? `- **${t('pack.replay')}:** ${replaySeconds}s screen recording (${manifest.media.replay})` +
+            (manifest.media.replay_annotated !== undefined
+              ? `; annotated view: ${manifest.media.replay_annotated}`
+              : '')
+        : `- **${t('pack.replay')}:** ${t('pack.replayNone')}`,
+    )
+  }
+  if (!imageCapture && manifest.media.snapshot_t_ms !== undefined) {
     lines.push(`- **${t('pack.snapshotFrame')}:** ${formatClock(manifest.media.snapshot_t_ms)} into the replay`)
   }
   lines.push('')
@@ -459,9 +497,9 @@ export function buildReport(
   // Annotated keyframes (GOAL "Annotated keyframes"): images beat video for an
   // LLM, so they sit directly under the annotation list they illustrate.
   const keyframes = keyframeSet(manifest, annotationsFile, renderPending)
-  const keyframeLines = keyframeSectionLines(keyframes, t)
+  const keyframeLines = keyframeSectionLines(keyframes, t, imageCapture)
   if (keyframeLines.length > 0) {
-    lines.push(`## ${t('pack.keyframes')}`)
+    lines.push(imageCapture ? '## Annotated image' : `## ${t('pack.keyframes')}`)
     lines.push('')
     lines.push(...keyframeLines)
     lines.push('')
@@ -474,7 +512,7 @@ export function buildReport(
     `- snapshot.png — captured frame, ${annotationsFile.reference_width}×${annotationsFile.reference_height} (original pixels, never modified)`,
   )
   lines.push('- annotations.json — the annotation boxes above, as editable data (the true source)')
-  lines.push('- timeline.json — timestamped events from capture start to save')
+  if (!imageCapture) lines.push('- timeline.json — timestamped events from capture start to save')
   if (hasReplay) {
     // The DECLARED name (SPEC §5.3 allows replay.mp4 too) — never assumed.
     lines.push(
@@ -488,7 +526,7 @@ export function buildReport(
   for (const f of extraDisplayFiles(manifest)) {
     lines.push(`- ${f.name} — ${f.what}`)
   }
-  const framesEntry = keyframeFileEntry(keyframes)
+  const framesEntry = keyframeFileEntry(keyframes, imageCapture)
   if (framesEntry !== null) lines.push(`- ${framesEntry.name} — ${framesEntry.what}`)
   lines.push('- README.md — human-first entry point')
   lines.push('- skills/ — AI-first context documents')

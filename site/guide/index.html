@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>CapturePack — Guide</title>
-  <meta name="description" content="How to use CapturePack: press the hotkey after the bug, scroll back through the last 30 seconds, annotate in three gestures, and hand the folder to a person or an LLM.">
+  <meta name="description" content="How to use CapturePack: rewind the default 30-second replay, pick captured UI objects, or press Ctrl+Alt+S for an image pack, then hand structured local context to a person or AI.">
   <meta name="robots" content="index, follow">
   <meta name="theme-color" content="#fafafc">
   <meta property="og:type" content="article">
@@ -44,6 +44,7 @@
     <nav class="toc" aria-label="Contents">
       <a href="#install" data-i18n="g_nav_install">Install</a>
       <a href="#capture" data-i18n="g_nav_capture">Capture</a>
+      <a href="#image" data-i18n="g_nav_image">Capture an image</a>
       <a href="#annotate" data-i18n="g_nav_annotate">Annotate</a>
       <a href="#pack" data-i18n="g_nav_pack">The pack</a>
       <a href="#ai" data-i18n="g_nav_ai">Give it to an AI</a>
@@ -55,14 +56,21 @@
     <section id="install">
       <h2 data-i18n="g_install_h">Install</h2>
       <p data-i18n="g_install_b">Download the installer and run it. CapturePack lives in the tray and starts with Windows. It is unsigned for now, so Windows may warn on first run — More info → Run anyway.</p>
-      <p class="note" data-i18n="g_install_n">Nothing leaves your machine. There is no account, no cloud, and no telemetry.</p>
+      <p class="note" data-i18n="g_install_n">Captures, telemetry and crash reports are never uploaded. The only outbound app request is the optional GitHub update check, which you can disable.</p>
     </section>
 
     <section id="capture">
       <h2 data-i18n="g_capture_h">Capture</h2>
-      <p data-i18n="g_capture_b">CapturePack is already recording — the last 30 seconds of every screen, in a loop, overwritten as it goes. That is why you press the hotkey <strong>after</strong> the thing you want to show, not before.</p>
+      <p data-i18n="g_capture_b">When Live recording is on (the default), CapturePack keeps a rolling replay — 30 seconds by default and configurable from 1–60. That is why you press the hotkey <strong>after</strong> the thing you want to show. Turn recording off and nothing is recorded.</p>
       <p class="kbd"><kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>C</kbd></p>
-      <p data-i18n="g_capture_b2">The screen freezes and the editor opens on the moment you pressed it. Nothing is written to disk until you save.</p>
+      <p data-i18n="g_capture_b2">The replay freezes and its source media and captured object context are preserved before editor rendering. The editor then opens at the moment you pressed the hotkey; History can reopen the capture even if you close the editor.</p>
+    </section>
+
+    <section id="image">
+      <h2 data-i18n="g_image_h">Capture an image</h2>
+      <p class="kbd"><kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>S</kbd></p>
+      <p data-i18n="g_image_b">Region selection is the default and can cross monitor boundaries without a seam. The Full screen capture button explicitly captures every monitor as one virtual-desktop image. The image opens in the same context editor at native 100% when supported.</p>
+      <p class="note" data-i18n="g_image_n">An image pack has no replay or timeline. A region pack stores only the selected pixels and crop placement — never a hidden full-screen or second-monitor image.</p>
     </section>
 
     <section id="annotate">
@@ -70,7 +78,7 @@
       <ul class="gestures">
         <li>
           <b data-i18n="g_click_t">Left click</b>
-          <span data-i18n="g_click_b">Select the window or control under the pointer. The box then follows it.</span>
+          <span data-i18n="g_click_b">Select the captured control or window under the pointer at that past frame. The box follows observed movement.</span>
         </li>
         <li>
           <b data-i18n="g_drag_t">Right drag</b>
@@ -81,37 +89,49 @@
           <span data-i18n="g_wheel_b">Travel back through the replay to the moment the bug happened.</span>
         </li>
       </ul>
-      <p data-i18n="g_annotate_b">A box picked off an object keeps following it for as long as it lives, so it stays on the thing it names even while that thing moves. Move the box by hand and it stops following — the rectangle you placed is the answer. Press <kbd>Enter</kbd> to save, <kbd>?</kbd> for every shortcut.</p>
+      <p data-i18n="g_annotate_b">Windows UI Automation supplies accessible controls; the optional Chrome extension supplies selector, role, text and URL for an explicitly picked element; a real HWND window is the fallback. Every observation names its display, so reopened multi-monitor packs keep the same timing and coordinates. Move a tracked box by hand and it becomes a manual box. Press <kbd>Enter</kbd> to save, <kbd>?</kbd> for every shortcut.</p>
     </section>
 
     <section id="pack">
       <h2 data-i18n="g_pack_h">What you get</h2>
-      <p data-i18n="g_pack_b">A folder, not an archive — so you can open it, read it, and drop it anywhere. Zip it only when you send it.</p>
+      <p data-i18n="g_pack_b">A local folder, not an archive — so you can open it, read it, and drop it anywhere. A video pack has replay and timeline data; an image pack does not. Zip it only when you send it.</p>
       <div class="tree">
+        <b data-i18n="g_pack_video">Video pack</b>
         <code>CapturePack_2026-07-29_114804/</code>
         <ul>
           <li><code>README.md</code> <span data-i18n="g_pack_readme">what this is, for a person</span></li>
           <li><code>report.md</code> <span data-i18n="g_pack_report">the annotations, in order, as sentences</span></li>
           <li><code>snapshot.png</code> <span data-i18n="g_pack_snapshot">the frame you pressed on, per screen</span></li>
-          <li><code>replay.webm</code> <span data-i18n="g_pack_replay">the seconds before it, per screen</span></li>
+          <li><code>replay.mp4 / .webm</code> <span data-i18n="g_pack_replay">the original seconds before it, per screen</span></li>
           <li><code>replay_annotated.webm</code> <span data-i18n="g_pack_annotated">the same replay with your boxes burned in</span></li>
           <li><code>annotations.json</code> <span data-i18n="g_pack_annotations">the machine-readable source of truth</span></li>
           <li><code>skills/</code> <span data-i18n="g_pack_skills">how to read all of the above, for an LLM</span></li>
           <li><code>plugins/</code> <span data-i18n="g_pack_plugins">the objects on screen: windows, controls, DOM elements</span></li>
         </ul>
       </div>
+      <div class="tree">
+        <b data-i18n="g_pack_image">Image pack</b>
+        <code>CapturePack_2026-07-29_114804/</code>
+        <ul>
+          <li><code>snapshot.png</code> <span data-i18n="g_pack_image_snapshot">the explicit region or full virtual desktop</span></li>
+          <li><code>annotations.json</code> <span data-i18n="g_pack_annotations">the machine-readable source of truth</span></li>
+          <li><code>report.md · README.md · skills/</code> <span data-i18n="g_pack_image_docs">image-specific context, with no timeline</span></li>
+          <li><code>plugins/</code> <span data-i18n="g_pack_plugins">the objects on screen: windows, controls, DOM elements</span></li>
+        </ul>
+      </div>
+      <p class="note" data-i18n="g_pack_privacy">Blur is non-destructive. It protects annotated views, but snapshot.png and the original replay in a full pack remain unredacted. Review the original before sharing the full pack.</p>
     </section>
 
     <section id="ai">
       <h2 data-i18n="g_ai_h">Give it to an AI</h2>
       <p data-i18n="g_ai_b">Drag the folder into ChatGPT, Claude, Cursor or Gemini and ask your question. The pack explains itself — <code>skills/</code> tells the model what every file is and how the pieces relate.</p>
-      <p data-i18n="g_ai_b2">Or connect over MCP and skip the dragging. CapturePack runs a read-only MCP server on your machine; point your client at it and say:</p>
+      <p data-i18n="g_ai_b2">Or use the optional MCP server, which is local-only, read-only, enabled and auto-started by default, and switchable in Settings → MCP. It reads saved packs only and cannot start a capture. Point your client at it and say:</p>
       <p class="say" data-i18n="g_ai_say">“Analyze the latest CapturePack.”</p>
     </section>
 
     <section id="chrome">
       <h2 data-i18n="g_chrome_h">Browser context</h2>
-      <p data-i18n="g_chrome_b">With the extension connected, a click in the browser is stored as what you clicked — selector, role, text, URL — instead of the pixels it was drawn with. Settings → Integrations walks you through it in three steps:</p>
+      <p data-i18n="g_chrome_b">With the preview extension connected, a click in the browser is stored as what you clicked — selector, role, text, URL — instead of only the pixels it was drawn with. Settings → Plugins walks you through it in three steps:</p>
       <ol class="steps">
         <li><span data-i18n="g_chrome_s1">Press <b>Open and copy the path</b>. Your browser opens on its extensions page and the folder path is already on the clipboard.</span></li>
         <li><span data-i18n="g_chrome_s2">Turn on <b>Developer mode</b>, click <b>Load unpacked</b>, and paste with <kbd>Ctrl</kbd>+<kbd>V</kbd>.</span></li>
@@ -123,9 +143,9 @@
     <section id="settings">
       <h2 data-i18n="g_settings_h">Worth knowing</h2>
       <ul class="facts">
-        <li data-i18n="g_set_hotkey"><b>The hotkey is yours.</b> Settings → Capture rebinds it if Ctrl+Alt+C is taken.</li>
+        <li data-i18n="g_set_hotkey"><b>Both hotkeys are yours.</b> Settings → Capture independently rebinds video and image shortcuts if Ctrl+Alt+C or Ctrl+Alt+S is taken.</li>
         <li data-i18n="g_set_length"><b>30 seconds is a default, not a limit.</b> Longer buffers cost memory; the setting says how much.</li>
-        <li data-i18n="g_set_displays"><b>Every screen is captured</b>, each at its own resolution, and every one of them is annotatable.</li>
+        <li data-i18n="g_set_displays"><b>Every screen is captured by default</b>, each at its own resolution and replay clock. You can choose a fixed display instead.</li>
         <li data-i18n="g_set_history"><b>Nothing is lost by closing the editor.</b> History reopens any past capture to re-annotate or re-render.</li>
       </ul>
     </section>

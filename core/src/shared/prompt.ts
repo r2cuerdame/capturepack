@@ -39,3 +39,27 @@ export function analyzeLatestPrompt(): string {
     `server to open it. ${READING_ORDER}`
   )
 }
+
+/**
+ * Settings > MCP "Copy prompt": enough connection context for a new
+ * conversation to configure the selected client before it asks for the pack.
+ */
+export function connectAndAnalyzeLatestPrompt(
+  client: string,
+  endpoint: string,
+  setup: string,
+): string {
+  return [
+    'Connect this client to the CapturePack MCP server.',
+    '',
+    `Client: ${client}`,
+    `Endpoint: ${endpoint}`,
+    'Setup (skip this step if CapturePack is already connected):',
+    '```text',
+    setup,
+    '```',
+    'Restart or reload the client if it requires that after changing MCP settings.',
+    '',
+    analyzeLatestPrompt(),
+  ].join('\n')
+}

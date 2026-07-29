@@ -14,6 +14,8 @@
 // what the replay costs, not what the browsing session does.
 import * as fs from 'node:fs'
 import * as net from 'node:net'
+import { bundledExtensionVersion } from './install'
+import { ExtensionConnectionLedger } from './lifecycle'
 import { domPipePath } from './nativeHost'
 import { logError, logInfo, logWarn } from '../log'
 
@@ -87,11 +89,13 @@ export interface DomBridgeStatus {
 }
 
 let server: net.Server | null = null
+let closingServer: net.Server | null = null
+let bridgeWanted = false
 let events: DomEvent[] = []
 let retentionMs = 30_000
 let hostSeen = false
-let extensionVersion: string | null = null
-let extensionProtocol: number | null = null
+const extensionConnections = new ExtensionConnectionLedger<net.Socket>()
+const hostSockets = new Set<net.Socket>()
 let lastEventAtMs: number | null = null
 /** Supplied by the context runtime: "now" on the replay clock. */
 let clockNowMs: () => number = () => Date.now()
@@ -117,13 +121,14 @@ export function domEventsBetween(startMs: number, endMs: number): readonly DomEv
 }
 
 export function domBridgeStatus(): DomBridgeStatus {
+  const extension = extensionConnections.latest()
   return {
     listening: server !== null,
     hostSeen,
-    extensionConnected: extensionVersion !== null,
-    extensionVersion,
-    protocolVersion: extensionProtocol,
-    protocolCompatible: extensionProtocol === DOM_PROTOCOL_VERSION,
+    extensionConnected: extension !== null,
+    extensionVersion: extension?.version ?? null,
+    protocolVersion: extension?.protocol ?? null,
+    protocolCompatible: extension?.protocol === DOM_PROTOCOL_VERSION,
     events: events.length,
     lastEventAtMs,
   }
@@ -137,19 +142,25 @@ export function domBridgeStatus(): DomBridgeStatus {
  * shape and clamped for size here, so a malformed or hostile message costs a
  * dropped event rather than a corrupt pack.
  */
-function parse(raw: unknown): DomEvent | 'hello' | null {
+interface DomHello {
+  kind: 'hello'
+  protocol: number
+  version: string
+}
+
+function parse(raw: unknown): DomEvent | DomHello | null {
   if (typeof raw !== 'object' || raw === null) return null
   const m = raw as Record<string, unknown>
   const type = m['type']
-  if (m['protocol'] !== DOM_PROTOCOL_VERSION) {
-    if (typeof m['protocol'] === 'number') extensionProtocol = m['protocol']
-    return null
-  }
   if (type === 'host.hello') {
-    extensionProtocol = DOM_PROTOCOL_VERSION
-    extensionVersion = typeof m['version'] === 'string' ? m['version'].slice(0, 32) : 'unknown'
-    return 'hello'
+    if (typeof m['protocol'] !== 'number' || !Number.isFinite(m['protocol'])) return null
+    return {
+      kind: 'hello',
+      protocol: m['protocol'],
+      version: typeof m['version'] === 'string' ? m['version'].slice(0, 32) : 'unknown',
+    }
   }
+  if (m['protocol'] !== DOM_PROTOCOL_VERSION) return null
   if (type !== 'dom.element.selected' && type !== 'tab.updated' && type !== 'url.changed') {
     return null
   }
@@ -260,7 +271,7 @@ export function parseDomPayload(text: string | null): DomEvent[] {
     const tMs = e['t_ms']
     if (typeof tMs !== 'number' || !Number.isFinite(tMs)) continue
     const parsed = parse({ ...e, protocol: DOM_PROTOCOL_VERSION })
-    if (parsed === null || parsed === 'hello') continue
+    if (parsed === null || 'kind' in parsed) continue
     out.push({ ...parsed, tMs: Math.max(0, Math.round(tMs)) })
   }
   return out
@@ -274,7 +285,11 @@ export function parseDomPayload(text: string | null): DomEvent[] {
  * below is logged and swallowed.
  */
 export function startDomBridge(): void {
-  if (server !== null) return
+  bridgeWanted = true
+  // stopDomBridge closes asynchronously. A rapid OFF → ON must wait for that
+  // exact named pipe to be released or the replacement can lose EADDRINUSE and
+  // remain off until the whole app restarts.
+  if (server !== null || closingServer !== null) return
   const pipe = domPipePath()
   // A pipe left behind by a process that died (POSIX only; Windows pipes are
   // kernel objects and vanish with their owner).
@@ -287,7 +302,12 @@ export function startDomBridge(): void {
   }
   const srv = net.createServer((socket) => {
     hostSeen = true
+    hostSockets.add(socket)
     let buffer = ''
+    const disconnect = (): void => {
+      hostSockets.delete(socket)
+      extensionConnections.remove(socket)
+    }
     socket.on('data', (chunk: Buffer) => {
       buffer += chunk.toString('utf8')
       // A host that never sends a newline must not grow this without bound.
@@ -307,12 +327,21 @@ export function startDomBridge(): void {
             parsed = null
           }
           const result = parse(parsed)
-          if (result === 'hello') {
+          if (result !== null && 'kind' in result) {
+            extensionConnections.upsert(socket, {
+              version: result.version,
+              protocol: result.protocol,
+            })
             logInfo(
-              `[chrome] extension ${extensionVersion ?? 'unknown'} connected, protocol v${String(extensionProtocol)}`,
+              `[chrome] extension ${result.version} connected, protocol v${String(result.protocol)}`,
             )
             socket.write(
-              `${JSON.stringify({ type: 'host.hello', protocol: DOM_PROTOCOL_VERSION, app: 'capturepack' })}\n`,
+              `${JSON.stringify({
+                type: 'host.hello',
+                protocol: DOM_PROTOCOL_VERSION,
+                app: 'capturepack',
+                extensionVersion: bundledExtensionVersion(),
+              })}\n`,
             )
           } else if (result !== null) {
             events.push(result)
@@ -324,12 +353,13 @@ export function startDomBridge(): void {
       }
     })
     socket.on('error', () => socket.destroy())
+    socket.on('close', disconnect)
   })
   srv.on('error', (err) => {
     // EADDRINUSE means another CapturePack owns the channel — the single
     // instance lock should have prevented that, so it is worth saying.
     logWarn(`[chrome] DOM bridge could not listen: ${err.message}`)
-    server = null
+    if (server === srv) server = null
   })
   try {
     srv.listen(pipe, () => {
@@ -343,11 +373,23 @@ export function startDomBridge(): void {
 }
 
 export function stopDomBridge(): void {
-  server?.close()
+  bridgeWanted = false
+  // Includes hosts that connected but never completed hello; server.close()
+  // waits for every accepted socket, so omitting those would make rapid ON
+  // wait forever behind a half-open native host.
+  for (const socket of hostSockets) socket.destroy()
+  hostSockets.clear()
+  extensionConnections.clear()
+  const active = server
   server = null
+  if (active !== null) {
+    closingServer = active
+    active.close(() => {
+      if (closingServer === active) closingServer = null
+      if (bridgeWanted) startDomBridge()
+    })
+  }
   events = []
-  extensionVersion = null
-  extensionProtocol = null
   hostSeen = false
   lastEventAtMs = null
 }

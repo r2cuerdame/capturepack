@@ -5,6 +5,18 @@ build/
 # electron-builder buildResources (icon.ico) must ship with the repo
 !core/build/
 *.log
+*.bak
+*.backup
+*.tmp
+*.temp
+*.old
+*.orig
+*.rej
+*.swp
+*.swo
+*.dmp
+*.stackdump
+*~
 .DS_Store
 Thumbs.db
 *.capturepack
@@ -14,11 +26,18 @@ release/
 
 # agent worktrees and scratch
 .claude/
+.agents/
+.review-archive/
+# The repository-level .serena project is intentional and versioned. Old
+# per-CWD MCP launches can generate a second local project under core; it is
+# machine-local cache/config and must never become a release input.
+/core/.serena/
 release2/
 
 # Installer output: electron-builder writes hundreds of megabytes per
 # release candidate. Builds are artifacts of a commit, never part of one.
 core/rc*/
+core/release-rc*/
 dist-rc18/
 dist-rc19/
 dist-rc20/

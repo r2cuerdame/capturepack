@@ -33,7 +33,7 @@ const bundle = await build({
     },
   ],
 })
-const { ContextSession, ObjectIndex } = await import(
+const { ContextSession, ObjectIndex, projectControlTrack } = await import(
   `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`
 )
 
@@ -160,6 +160,158 @@ for (let t = 0; t <= REPLAY_MS; t += 1000) {
 }
 check('hovering the object finds it at every second of the replay', misses.length === 0,
   `nothing under the pointer at ${misses.length} time(s): ${misses.slice(0, 8).join(', ')}`)
+
+// ---------------------------------------------------------------------------
+// DESKTOP FOCUS IS NOT DESKTOP Z-ORDER.
+//
+// CapturePack_2026-07-29_194912 recorded the shell desktop as focused after the
+// user clicked the wallpaper. Its raw z was 4 — behind Orca at 3 and the
+// taskbar at 0 — but Core promoted every focused window to -1. Progman spans
+// the whole virtual desktop, so the resolver then put all 161 candidates from
+// the visible focused display behind a desktop candidate the editor correctly
+// refuses to offer. The frame was full and the index was full; every hover
+// still answered NOTHING.
+console.log('\nA focused shell desktop behind a visible app (_194912 shape)')
+{
+  const packObservation = {
+    tMs: REPLAY_MS,
+    windows: [
+      {
+        surface_id: 'sfc-taskbar',
+        hwnd: '65984',
+        title: 'Shell_TrayWnd',
+        process: 'explorer',
+        class_name: 'Shell_TrayWnd',
+        bounds: { x: 0, y: 2088, width: 3840, height: 72 },
+        display: 2,
+        focused: false,
+        z: 0,
+        hasControls: false,
+        tree: 'skipped',
+      },
+      {
+        surface_id: 'sfc-orca',
+        hwnd: '395976',
+        title: 'Orca',
+        process: 'Orca',
+        class_name: 'Chrome_WidgetWin_1',
+        bounds: { x: 0, y: 0, width: 1932, height: 2091 },
+        display: 2,
+        focused: false,
+        z: 3,
+        hasControls: true,
+        tree: 'collected',
+      },
+      {
+        surface_id: 'sfc-desktop',
+        hwnd: '66060',
+        title: 'Program Manager',
+        process: 'explorer',
+        class_name: 'Progman',
+        bounds: { x: -1200, y: 0, width: 5040, height: 2160 },
+        display: 2,
+        focused: true,
+        z: 4,
+        hasControls: false,
+        tree: 'skipped',
+      },
+    ],
+    elements: [
+      {
+        name: '명령',
+        control_type: 'Button',
+        automation_id: 'command',
+        class_name: 'Button',
+        bounds: { x: 120, y: 120, width: 240, height: 48 },
+        display: 2,
+        window: 3,
+      },
+    ],
+  }
+  const desktopSession = new ContextSession('ctx-desktop-focus', {
+    displays: [{ index: 2, focused: true, width: 3840, height: 2160 }],
+    replayDurationMs: REPLAY_MS,
+    observation: packObservation,
+    dropped: false,
+  })
+  const frame = await desktopSession.frameAt(REPLAY_MS)
+  const slice = frame.displays[0]
+  const desktop = slice.surfaces.find((s) => s.className === 'Progman')
+  const index = ObjectIndex.build(
+    slice.candidates,
+    slice.surfaces,
+    slice.coverage,
+    frame.claims,
+    3840,
+    2160,
+  )
+  const picked = index.pick(200, 140)
+
+  // Also feed the editor the exact malformed surface verdict rc.35 produced.
+  // This exercises the index's compatibility boundary independently of Core's
+  // fixed normalisation above: already-built/external frames cannot be allowed
+  // to make the desktop an occluder either.
+  const legacySurfaces = slice.surfaces.map((surface) =>
+    surface.className === 'Progman'
+      ? { ...surface, zOrder: -1, foreground: true }
+      : surface,
+  )
+  const legacyIndex = ObjectIndex.build(
+    slice.candidates,
+    legacySurfaces,
+    slice.coverage,
+    frame.claims,
+    3840,
+    2160,
+  )
+  const legacyPicked = legacyIndex.pick(200, 140)
+
+  console.log(
+    `   desktop foreground=${desktop?.foreground} z=${desktop?.zOrder}; ` +
+      `frame candidates=${slice.candidates.length}, index=${index.size}, ` +
+      `hover -> ${picked?.candidate.name ?? 'NOTHING'}`,
+  )
+  check('focused Progman keeps its enumerated bottom z',
+    desktop?.foreground === false && desktop.zOrder === 4,
+    `foreground=${desktop?.foreground}, z=${desktop?.zOrder}`)
+  check('_194912 offers a control instead of nothing',
+    picked?.level === 'control' && picked.candidate.name === '명령',
+    `offered ${picked === null ? 'nothing' : `${picked.level} ${picked.candidate.name}`}`)
+  check('the editor rejects a legacy desktop occluder too',
+    legacyPicked?.level === 'control' && legacyPicked.candidate.name === '명령',
+    `offered ${legacyPicked === null ? 'nothing' : `${legacyPicked.level} ${legacyPicked.candidate.name}`}`)
+}
+
+// The desktop exception must not weaken the ordinary foreground invariant.
+{
+  const foregroundSession = new ContextSession('ctx-real-foreground', {
+    displays: [{ index: 2, focused: true, width: 3840, height: 2160 }],
+    replayDurationMs: REPLAY_MS,
+    observation: {
+      tMs: REPLAY_MS,
+      windows: [{
+        surface_id: 'sfc-foreground',
+        hwnd: '7',
+        title: 'Actual foreground app',
+        process: 'app',
+        class_name: 'ActualWindow',
+        bounds: { x: 20, y: 20, width: 800, height: 600 },
+        display: 2,
+        focused: true,
+        z: 7,
+        hasControls: false,
+        tree: 'skipped',
+      }],
+      elements: [],
+    },
+    dropped: false,
+  })
+  const frame = await foregroundSession.frameAt(REPLAY_MS)
+  const surface = frame.displays[0].surfaces[0]
+  check('a real focused window is still promoted above its enumerated z',
+    surface?.foreground === true && surface.zOrder === -1,
+    `foreground=${surface?.foreground}, z=${surface?.zOrder}`)
+}
 
 // ---------------------------------------------------------------------------
 // A REAL DESK HAS WINDOWS THAT SHARE AN IDENTITY (#90).
@@ -341,8 +493,192 @@ console.log('\nAn older dump that reports no handle at all')
   })
   const f = await s4.frameAt(REPLAY_MS)
   const named = (f.displays[0]?.candidates ?? []).find((c) => c.name === '열기')
-  check('an older dump still resolves through the description fallback', named !== undefined,
+check('an older dump still resolves through the description fallback', named !== undefined,
     'a pack already on disk lost its controls')
+}
+
+// ---------------------------------------------------------------------------
+// A CONTROL TRACK IS NOT ITS OWNER WINDOW'S RECTANGLE.
+//
+// CapturePack_2026-07-29_210107 preserves enough evidence to prove both halves:
+// elements.json identifies two exact child controls, while annotations.json
+// stores those controls' NAMES beside their OWNER WINDOWS' rectangles. The
+// mismatch was introduced after the correct pick: attachTrack copied the
+// surface path into the annotation instead of projecting that path onto the
+// picked control.
+console.log('\nrc.36 control metadata beside owner-window bounds (_210107 exact shape)')
+{
+  const PACK_END = 10_929
+  const packWindows = () => [
+    {
+      surface_id: 'sfc-orca',
+      hwnd: '34664',
+      title: 'Orca',
+      process: 'Orca',
+      class_name: 'Chrome_WidgetWin_1',
+      bounds: { x: 9, y: 0, width: 1914, height: 2082 },
+      display: 2,
+      focused: true,
+      z: 3,
+      hasControls: true,
+      tree: 'collected',
+    },
+    {
+      surface_id: 'sfc-chrome-left',
+      hwnd: '6472',
+      title: 'CapturePack — Capture context, not screenshots - Chrome',
+      process: 'chrome.exe',
+      class_name: 'Chrome_WidgetWin_1',
+      bounds: { x: 0, y: 0, width: 1200, height: 1872 },
+      display: 1,
+      focused: false,
+      z: 4,
+      hasControls: true,
+      tree: 'collected',
+    },
+  ]
+  const dump = {
+    tMs: PACK_END,
+    windows: packWindows(),
+    elements: [
+      {
+        name: 'loopoffice loopoffice에 대한 프로젝트 작업 loopoffice에 대한 새 작업 트리 만들기',
+        control_type: 'Button',
+        automation_id: 'worktree-list-option-project%3Agithub%3Ar2cuerdame%2Floopoffice',
+        class_name: 'group relative flex h-7 w-full',
+        bounds: { x: 17, y: 650, width: 414, height: 43 },
+        // UIA points to its owner by the dump's z/index, as the real file does.
+        window: 3,
+      },
+      {
+        name: '스크린샷이 아니라, 맥락을 캡처하세요.',
+        control_type: 'Text',
+        automation_id: '',
+        class_name: '',
+        bounds: { x: 132, y: 402, width: 921, height: 139 },
+        display: 1,
+        window: 4,
+      },
+    ],
+  }
+  const packSession = new ContextSession('ctx-pack-210107', {
+    displays: [
+      // This display sits at virtual x=-1200 in the manifest. All candidate
+      // coordinates must nevertheless remain LOCAL snapshot pixels.
+      { index: 1, focused: false, width: 1200, height: 1920 },
+      { index: 2, focused: true, width: 3840, height: 2160 },
+    ],
+    replayDurationMs: PACK_END,
+    observation: dump,
+    dropped: false,
+  })
+  packSession.adoptAll(
+    [4937, 5243, 5937, 6243, PACK_END].map((tMs) => ({
+      tMs,
+      windows: packWindows(),
+      elements: [],
+    })),
+  )
+
+  const displayGeometry = [
+    { index: 1, width: 1200, height: 1920, pixelsPerDip: 1 },
+    { index: 2, width: 3840, height: 2160, pixelsPerDip: 1.5 },
+  ]
+  const rectEq = (a, b) =>
+    a?.x === b.x && a?.y === b.y && a?.width === b.width && a?.height === b.height
+
+  async function exactControlAt(timeMs, display, width, height, point, expected) {
+    const frame = await packSession.frameAt(timeMs)
+    const slice = frame.displays.find((d) => d.display === display)
+    const index = ObjectIndex.build(
+      slice?.candidates ?? [],
+      slice?.surfaces ?? [],
+      slice?.coverage ?? [],
+      frame.claims,
+      width,
+      height,
+    )
+    const picked = index.pick(point.x, point.y)
+    const track =
+      picked?.surface == null ? null : packSession.trackOf(picked.surface.surfaceId, timeMs, timeMs + 1000)
+    const projected =
+      picked?.level !== 'control' || picked.surface == null || track === null
+        ? []
+        : projectControlTrack(track.samples, {
+            display,
+            bounds: { x: picked.x, y: picked.y, width: picked.width, height: picked.height },
+            surfaceBounds: picked.surface.bounds,
+            displays: displayGeometry,
+          })
+    return { picked, track, projected, expected }
+  }
+
+  const orca = await exactControlAt(
+    4937,
+    2,
+    3840,
+    2160,
+    { x: 200, y: 670 },
+    { x: 17, y: 650, width: 414, height: 43 },
+  )
+  const chrome = await exactControlAt(
+    5243,
+    1,
+    1200,
+    1920,
+    { x: 300, y: 450 },
+    { x: 132, y: 402, width: 921, height: 139 },
+  )
+
+  check('Orca target metadata still identifies the child Button',
+    orca.picked?.level === 'control' &&
+      orca.picked.candidate.identity?.automation_id ===
+        'worktree-list-option-project%3Agithub%3Ar2cuerdame%2Floopoffice')
+  check('the raw Orca track is demonstrably the 1914x2082 OWNER window',
+    rectEq(orca.track?.samples[0], { x: 9, y: 0, width: 1914, height: 2082 }),
+    JSON.stringify(orca.track?.samples[0]))
+  check('the stored Orca control track stays 17,650 414x43',
+    orca.projected.length >= 2 && orca.projected.every((s) => rectEq(s, orca.expected)),
+    JSON.stringify(orca.projected[0]))
+
+  check('negative-X monitor target remains on display 1',
+    chrome.picked?.level === 'control' && chrome.picked.candidate.display === 1,
+    `level=${chrome.picked?.level}, display=${chrome.picked?.candidate.display}`)
+  check('the raw Chrome track is demonstrably the 1200x1872 OWNER window',
+    rectEq(chrome.track?.samples[0], { x: 0, y: 0, width: 1200, height: 1872 }),
+    JSON.stringify(chrome.track?.samples[0]))
+  check('negative-X display stores LOCAL 132,402 921x139 control bounds',
+    chrome.projected.length >= 2 && chrome.projected.every((s) =>
+      s.display === 1 && rectEq(s, chrome.expected)),
+    JSON.stringify(chrome.projected[0]))
+
+  const translated = projectControlTrack(
+    [{ tMs: 6000, display: 2, x: 109, y: 20, width: 1914, height: 2082 }],
+    {
+      display: 2,
+      bounds: orca.expected,
+      surfaceBounds: { x: 9, y: 0, width: 1914, height: 2082 },
+      displays: displayGeometry,
+    },
+  )
+  check('a control follows owner translation without becoming owner-sized',
+    rectEq(translated[0], { x: 117, y: 670, width: 414, height: 43 }),
+    JSON.stringify(translated[0]))
+
+  const crossedScale = projectControlTrack(
+    // The same 1276x1388 DIP window fully visible on the 1x display.
+    [{ tMs: 7000, display: 1, x: 400, y: 200, width: 1276, height: 1388 }],
+    {
+      display: 2,
+      bounds: orca.expected,
+      surfaceBounds: { x: 9, y: 0, width: 1914, height: 2082 },
+      displays: displayGeometry,
+    },
+  )
+  check('cross-display control geometry converts 1.5x pixels through DIPs to 1x',
+    crossedScale[0]?.display === 1 &&
+      rectEq(crossedScale[0], { x: 405, y: 633, width: 276, height: 29 }),
+    JSON.stringify(crossedScale[0]))
 }
 
 console.log(`\nresult: ${failed === 0 ? 'OK' : 'BROKEN'} — ${passed} passed, ${failed} failed\n`)

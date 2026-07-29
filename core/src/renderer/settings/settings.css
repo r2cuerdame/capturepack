@@ -88,12 +88,8 @@ h2 {
 }
 
 .row + .row,
-.row + .pluginRow,
-.pluginRow + .pluginRow,
-/* A plugin row explained by a summary/detail paragraph still separates from
-   the NEXT row (issue #57): the paragraphs belong to the row above them. */
-.pluginSummary + .pluginRow,
-.pluginDetail + .pluginRow {
+.row + .pluginEntry,
+.pluginEntry + .pluginEntry {
   border-top: 1px solid #22222a;
 }
 
@@ -330,6 +326,11 @@ select#mcpClient {
 
 /* ---- plugins ---- */
 
+.pluginEntry + .pluginEntry {
+  margin-top: 2px;
+  padding-top: 2px;
+}
+
 .pluginRow {
   display: flex;
   align-items: center;
@@ -352,6 +353,10 @@ select#mcpClient {
 
 .pluginStatus {
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--muted);
   font-size: 12px;
 }
@@ -359,11 +364,13 @@ select#mcpClient {
 .pluginAction {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
+  width: 16px;
 }
 
-/* The "?" affordance (issue #57): a round, quiet button that reveals the long
-   explanation under the row. Sized down so it never competes with the name. */
+/* "?" explains; the chevron folds operational details. They are deliberately
+   distinct affordances because Chrome's setup workflow is not help text. */
 button.pluginHelp {
   flex: none;
   width: 18px;
@@ -381,19 +388,44 @@ button.pluginHelp[aria-expanded="true"] {
   color: var(--text);
 }
 
-/* One line of what the plugin does and what it costs, always visible; the long
-   form appears under it when the "?" is pressed. */
+button.pluginFold {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-color: transparent;
+  color: var(--muted);
+  background: transparent;
+}
+
+.pluginChevron {
+  display: block;
+  font-size: 18px;
+  line-height: 1;
+  transform: rotate(0deg);
+  transition: transform 0.12s ease;
+}
+
+button.pluginFold[aria-expanded="true"] .pluginChevron {
+  transform: rotate(90deg);
+}
+
 .pluginSummary,
-.pluginDetail {
+.pluginHelpText {
   color: var(--muted);
   font-size: 11px;
   line-height: 1.5;
   padding: 0 0 6px 28px; /* aligned with the plugin name, past the icon */
 }
 
-.pluginDetail {
+.pluginHelpText {
   color: var(--text);
   padding-top: 2px;
+}
+
+.pluginHelpText[hidden],
+.pluginDetailPanel[hidden] {
+  display: none;
 }
 
 .soon {
@@ -422,6 +454,23 @@ button.pluginHelp[aria-expanded="true"] {
   margin: 8px 0 10px;
   list-style: none;
   font-size: 12px;
+}
+
+.chromeDetailPanel {
+  margin: 2px 0 4px 28px;
+  padding: 8px 10px 4px;
+  border: 1px solid var(--line, #2a2a32);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.chromeDetailHeader {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.chromeDetailPanel .pluginSummary {
+  padding-left: 0;
 }
 
 #chromeChecks li {

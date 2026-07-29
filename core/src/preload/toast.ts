@@ -23,8 +23,8 @@ contextBridge.exposeInMainWorld('toastBridge', {
   createZip(): Promise<ToastCreateZipResult> {
     return ipcRenderer.invoke(IPC.toastCreateZip) as Promise<ToastCreateZipResult>
   },
-  copyPrompt(): void {
-    ipcRenderer.send(IPC.toastCopyPrompt)
+  copyPrompt(): Promise<boolean> {
+    return ipcRenderer.invoke(IPC.toastCopyPrompt) as Promise<boolean>
   },
   close(): void {
     ipcRenderer.send(IPC.toastClose)

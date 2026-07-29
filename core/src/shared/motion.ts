@@ -19,13 +19,14 @@
 // `keyframedBoundsAt` in shared/track.ts for the drawing side of the same
 // argument.
 import type { Annotation, AnnotationBounds, AnnotationKeyframe } from './types'
+import { keyframedPlacementAt, type AuthoredMotionSpace } from './track'
 
 /**
  * How close two authored moments have to be to be the SAME moment.
  *
  * A user dragging the box twice without scrubbing means one keyframe, not two:
  * the second drag is a correction, not a second statement. 16 ms is just under
- * one frame at the fastest rate this app captures (60 fps), so two genuinely
+ * one frame at the fastest rate this app captures (30 fps), so two genuinely
  * different frames are never merged, and two drags on one frame never split.
  */
 export const KEYFRAME_SAME_MOMENT_MS = 16
@@ -83,11 +84,22 @@ function baseMomentOf(a: Annotation): number {
  * That pair is what makes the box hold still and then move, instead of jumping
  * from nowhere.
  */
-export function setKeyframe(a: Annotation, tMs: number, bounds: AnnotationBounds): number {
+export function setKeyframe(
+  a: Annotation,
+  tMs: number,
+  bounds: AnnotationBounds,
+  display?: number,
+  baseDisplay?: number,
+): number {
   const at = Math.round(tMs)
   const frames = [...keyframesOf(a)]
-  const frame = (t: number, b: AnnotationBounds): AnnotationKeyframe => ({
+  const frame = (
+    t: number,
+    b: AnnotationBounds,
+    on?: number,
+  ): AnnotationKeyframe => ({
     t_ms: Math.round(t),
+    ...(on === undefined ? {} : { display: on }),
     x: Math.round(b.x),
     y: Math.round(b.y),
     width: Math.round(b.width),
@@ -97,24 +109,36 @@ export function setKeyframe(a: Annotation, tMs: number, bounds: AnnotationBounds
   if (frames.length === 0) {
     const base = baseMomentOf(a)
     if (Math.abs(at - base) <= KEYFRAME_SAME_MOMENT_MS) return -1
-    a.keyframes = [frame(base, a.bounds), frame(at, bounds)]
+    a.keyframes = [
+      frame(base, a.bounds, baseDisplay ?? a.display),
+      frame(at, bounds, display),
+    ]
     return 1
   }
 
   const existing = keyframeIndexAt(a, at)
   if (existing >= 0) {
-    frames[existing] = frame(frames[existing]!.t_ms, bounds)
+    frames[existing] = frame(
+      frames[existing]!.t_ms,
+      bounds,
+      display ?? frames[existing]!.display,
+    )
     a.keyframes = frames
     return existing
   }
-  frames.push(frame(at, bounds))
+  frames.push(frame(at, bounds, display))
   frames.sort((p, q) => p.t_ms - q.t_ms)
   a.keyframes = frames
   return frames.findIndex((f) => f.t_ms === at)
 }
 
 /** Moves the keyframe at `index` to `bounds`, for a drag in progress. */
-export function moveKeyframe(a: Annotation, index: number, bounds: AnnotationBounds): void {
+export function moveKeyframe(
+  a: Annotation,
+  index: number,
+  bounds: AnnotationBounds,
+  display?: number,
+): void {
   const frames = a.keyframes
   const frame = frames?.[index]
   if (frame === undefined) return
@@ -122,6 +146,7 @@ export function moveKeyframe(a: Annotation, index: number, bounds: AnnotationBou
   frame.y = Math.round(bounds.y)
   frame.width = Math.round(bounds.width)
   frame.height = Math.round(bounds.height)
+  if (display !== undefined) frame.display = display
 }
 
 /**
@@ -132,7 +157,11 @@ export function moveKeyframe(a: Annotation, index: number, bounds: AnnotationBou
  * plain `bounds` and is written as one. The surviving position becomes the
  * box's rectangle, so the box does not jump when its motion is deleted.
  */
-export function removeKeyframeAt(a: Annotation, tMs: number): boolean {
+export function removeKeyframeAt(
+  a: Annotation,
+  tMs: number,
+  focusedDisplay?: number,
+): boolean {
   const index = keyframeIndexAt(a, tMs)
   if (index < 0) return false
   const frames = [...keyframesOf(a)]
@@ -145,6 +174,10 @@ export function removeKeyframeAt(a: Annotation, tMs: number): boolean {
         y: survivor.y,
         width: survivor.width,
         height: survivor.height,
+      }
+      if (survivor.display !== undefined) {
+        if (survivor.display === focusedDisplay) delete a.display
+        else a.display = survivor.display
       }
     }
     delete a.keyframes
@@ -163,15 +196,83 @@ export function removeKeyframeAt(a: Annotation, tMs: number): boolean {
  * the same purpose: forward compatibility is a promise the writer keeps, not a
  * courtesy the reader is owed.
  */
-export function syncBoundsToRepresentative(a: Annotation, replayDurationMs: number): void {
+export function syncBoundsToRepresentative(
+  a: Annotation,
+  replayDurationMs: number,
+  authoredSpace?: AuthoredMotionSpace,
+): void {
   const frames = keyframesOf(a)
   if (frames.length === 0) return
   const start = a.start_ms
   const end = a.end_ms
   const mid =
     start === undefined || end === undefined ? replayDurationMs : (start + end) / 2
+  if (authoredSpace !== undefined) {
+    const placement = keyframedPlacementAt(a, mid, authoredSpace)
+    if (placement === null) return
+    a.bounds = placement.bounds
+    if (placement.display === authoredSpace.focusedIndex) delete a.display
+    else a.display = placement.display
+    return
+  }
   const at = boundsAtAuthored(frames, mid)
   if (at !== null) a.bounds = at
+}
+
+/**
+ * Moves every replay-clock field onto one captured display's local replay
+ * clock.
+ *
+ * Per-display recordings can start at slightly different instants. Rebasing
+ * only the lifetime makes authored keyframes and observed samples drift away
+ * from the video they are rendered over, so the entire temporal annotation is
+ * shifted as one value. Keyframes clipped onto the same boundary collapse with
+ * the later source placement winning — that is the state visible at the first
+ * frame of the retained replay.
+ */
+export function rebaseAnnotationClock(
+  a: Annotation,
+  offsetMs: number,
+  durationMs: number,
+): Annotation {
+  const duration =
+    Number.isFinite(durationMs) && durationMs > 0 ? Math.round(durationMs) : 0
+  const offset = Number.isFinite(offsetMs) ? offsetMs : 0
+  const clamp = (ms: number): number =>
+    Math.min(Math.max(0, Math.round(ms + offset)), duration)
+
+  const keyframes: AnnotationKeyframe[] | undefined =
+    a.keyframes === undefined
+      ? undefined
+      : a.keyframes.reduce<AnnotationKeyframe[]>((shifted, frame) => {
+          const next = { ...frame, t_ms: clamp(frame.t_ms) }
+          const previous = shifted[shifted.length - 1]
+          if (previous?.t_ms === next.t_ms) shifted[shifted.length - 1] = next
+          else shifted.push(next)
+          return shifted
+        }, [])
+
+  return {
+    ...a,
+    ...(a.start_ms === undefined || a.end_ms === undefined
+      ? {}
+      : { start_ms: clamp(a.start_ms), end_ms: clamp(a.end_ms) }),
+    ...(keyframes === undefined ? {} : { keyframes }),
+    tracking: {
+      ...a.tracking,
+      ...(a.tracking.picked_at_ms === undefined
+        ? {}
+        : { picked_at_ms: clamp(a.tracking.picked_at_ms) }),
+      ...(a.tracking.samples === undefined
+        ? {}
+        : {
+            samples: a.tracking.samples.map((sample) => ({
+              ...sample,
+              t_ms: clamp(sample.t_ms),
+            })),
+          }),
+    },
+  }
 }
 
 /** The interpolated rectangle at `tMs`; kept beside the edits it has to agree with. */

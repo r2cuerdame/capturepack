@@ -15,8 +15,9 @@ export const FORMAT_NAME = 'capturepack'
 // normally would.
 export const FORMAT_VERSION = '0.2.1'
 /**
- * The version a pack declares once it carries AUTHORED motion (`keyframes`,
- * SPEC §8.9) — a new optional field, so MINOR under §13.1's rules.
+ * The version a pack declares once it carries 0.3 semantics: explicit
+ * `capture_kind`/image scope or AUTHORED motion (`keyframes`, SPEC §8.9).
+ * These are new optional fields, so MINOR under §13.1's rules.
  *
  * Declared only when a pack actually uses it. SPEC §13.1: "Writers SHOULD write
  * the oldest `format_version` that fully expresses their content," because
@@ -38,6 +39,10 @@ export interface ManifestDisplayMedia {
   // display, or null when this display recorded nothing.
   replay: string | null
   replay_duration_ms?: number
+  // Milliseconds to add to the pack/focused replay clock to reach this
+  // display's replay clock. Observed from the recorders' shared origin clock;
+  // optional so pre-0.3 writers remain readable. 0 on the focused entry.
+  replay_clock_offset_ms?: number
   // Per-display annotated replay (SPEC §5.6, §7.2): "replay_annotated-d<index>.webm",
   // this display's own replay with ITS OWN annotation boxes rendered into the
   // pixels. Written only for a NON-focused display that actually carries
@@ -72,6 +77,9 @@ export interface ManifestKeyframe {
 export interface Manifest {
   format: typeof FORMAT_NAME
   format_version: string
+  // Absent only in legacy packs. New writers declare the user's capture intent
+  // even when a requested video capture had no usable replay.
+  capture_kind?: 'image' | 'video'
   id: string
   created_at: string
   generator: { name: string; version: string }
@@ -111,6 +119,15 @@ export interface Manifest {
     // time in the pack is already on the trimmed replay clock — readers never
     // need to apply this offset. Absent = the replay was never trimmed.
     trim_offset_ms?: number
+    // Present only for capture_kind "image".
+    image_scope?: 'region' | 'fullscreen'
+    crop_bounds?: {
+      x: number
+      y: number
+      width: number
+      height: number
+      coordinate_space: 'virtual-desktop-dip'
+    }
   }
   plugins: Array<{ name: string; version: string; path: string }>
 }
@@ -159,6 +176,15 @@ export interface AnnotationTrackSample {
  */
 export interface AnnotationKeyframe {
   t_ms: number
+  /**
+   * Which display these coordinates are pixels of. Absent means the
+   * annotation's own display, exactly like a tracking sample.
+   *
+   * Authored motion may cross monitors. The display geometry in the manifest
+   * supplies the common desktop space used to interpolate between two
+   * different native-pixel coordinate systems.
+   */
+  display?: number
   x: number
   y: number
   width: number
@@ -269,6 +295,10 @@ export type UiaTreeStatus =
 
 /** One top-level window that existed at the capture instant. */
 export interface UiaWindowRecord {
+  // Native HWND as an unsigned decimal string. It is the only identity both
+  // the capture-instant dump and the temporal surface lane directly observe.
+  // Absent on payloads written before windows-uia 0.3.0.
+  hwnd?: string
   title: string
   // Process name without extension, e.g. "chrome". '' when unavailable.
   process: string
@@ -550,7 +580,7 @@ export function annotationsOnDisplay(
     return (
       a.tracking?.enabled === true &&
       (a.tracking.samples ?? []).some((s) => s.display === index)
-    )
+    ) || (a.keyframes ?? []).some((frame) => frame.display === index)
   })
 }
 
@@ -601,6 +631,24 @@ export interface TimelineFile {
 // the settings default and the settings GUI's reset-to-default read this one
 // constant so the two can never drift.
 export const DEFAULT_CAPTURE_HOTKEY = 'Ctrl+Alt+C'
+/** Explicit still-image/region capture; independent from the replay hotkey. */
+export const DEFAULT_IMAGE_CAPTURE_HOTKEY = 'Ctrl+Alt+S'
+/** Supported recorder request range. The achieved rate is recorded separately. */
+export const MIN_CAPTURE_FPS = 1
+export const MAX_CAPTURE_FPS = 30
+
+/** Normalizes persisted or patched recorder requests onto the supported grid. */
+export function normalizeCaptureFps(value: unknown, fallback = 15): number {
+  const clamp = (fps: number): number =>
+    Math.min(MAX_CAPTURE_FPS, Math.max(MIN_CAPTURE_FPS, Math.round(fps)))
+  const safeFallback =
+    typeof fallback === 'number' && Number.isFinite(fallback) && fallback > 0
+      ? clamp(fallback)
+      : 15
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? clamp(value)
+    : safeFallback
+}
 
 /**
  * Schema version of settings.json (GOAL "Multi-Monitor Support"). Stamped into
@@ -682,6 +730,10 @@ export interface Settings {
   // DEFAULT_CAPTURE_HOTKEY). At least one modifier plus exactly one key; an
   // unusable value falls back to the default when settings load.
   captureHotkey: string
+  // Explicit still-image capture accelerator. It opens the region selector
+  // without reading or stopping the replay recorder and must never alias the
+  // video accelerator.
+  imageCaptureHotkey: string
   replaySeconds: number
   fps: number
   // Longest edge of the continuously recorded replay stream in pixels.
@@ -694,7 +746,7 @@ export interface Settings {
   //    under the cursor becomes the focused one.
   //  - "cursor" — record every display, but keep only the cursor display.
   //  - "<displayId>" — an Electron display id as a string (fixed display; one
-  //    recorder pair, lowest CPU).
+  //    encoder, lowest CPU).
   // "all" and "cursor" run the same recorder set, so "all" costs export work,
   // not capture work.
   captureDisplay: string
@@ -705,6 +757,10 @@ export interface Settings {
   // which is exactly why the user is allowed to decline it. Off means captures
   // carry no plugins/windows-uia/ and picking falls back to manual boxes.
   uiaEnabled: boolean
+  // Chrome DOM temporal context. OFF closes the local bridge and clears its
+  // replay ring immediately; ON reopens it and lets an existing native host
+  // reconnect without reloading the browser page.
+  chromeDomEnabled: boolean
   scrubInvert: boolean
   scrubSensitivityMs: number
   // Default lifetime duration (ms) stamped on manual annotations in the editor.

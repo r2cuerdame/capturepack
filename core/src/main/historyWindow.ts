@@ -28,6 +28,7 @@ import type {
 } from '../shared/ipc'
 import { DEFAULT_CAPTURE_HOTKEY } from '../shared/types'
 import type { Annotation, Settings } from '../shared/types'
+import { captureKindOf } from '../shared/captureMedia'
 import { isRenderInFlight, onRenderStateChange, startAnnotatedRender } from './annotatedRender'
 import { createPackZip, replayMimeType } from './exporter'
 import { packDocLanguage, uiLanguage, uiT } from './locale'
@@ -36,9 +37,11 @@ import type { PackHandle, PackStore, RawPackEntry } from './mcp/store'
 import { analyzePrompt } from './saveToast'
 import { startEditFlow } from './session'
 import { openSettingsWindow } from './settingsWindow'
+import { copyTextToClipboard } from './clipboard'
 
 const THUMB_WIDTH = 320
 const MAX_PACK_NAME_LENGTH = 180
+const HISTORY_STARTUP_TIMEOUT_MS = 10_000
 // Windows-invalid filename characters plus control chars.
 const INVALID_NAME_CHARS = /[<>:"/\\|?*\u0000-\u001f]/
 const RESERVED_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i
@@ -186,14 +189,20 @@ export function registerHistoryIpc(live: Settings): void {
     return text
   })
 
-  // [Open] — re-edit: loads the pack folder back into the editor
-  // (session.startEditFlow). One flow at a time: while a capture or another
-  // re-edit is active, startEditFlow returns without opening anything.
-  ipcMain.on(IPC.historyOpenPack, (event, ref: unknown) => {
-    if (!fromHistory(event)) return
+  // [Edit] — re-edit: loads the pack folder back into the editor. This is an
+  // invoke, not fire-and-forget: a busy flow used to make the button appear to
+  // do nothing, and History stayed in front even after an editor was accepted.
+  // The renderer closes History only after this returns ok.
+  ipcMain.handle(IPC.historyOpenPack, (event, ref: unknown): HistoryActionResult => {
+    if (!fromHistory(event)) return { ok: false, error: 'not the history window' }
     const entry = entryFor(ref)
-    if (entry === null || entry.kind !== 'dir') return
-    if (liveSettings !== null) void startEditFlow(entry.path, liveSettings)
+    const t = uiT(live)
+    if (entry === null) return { ok: false, error: t('history.errPackNotFound') }
+    if (entry.kind !== 'dir') return { ok: false, error: t('history.editZipTooltip') }
+    if (liveSettings === null) return { ok: false, error: t('history.couldNotEdit') }
+    return startEditFlow(entry.path, liveSettings)
+      ? { ok: true }
+      : { ok: false, error: t('history.errFlowBusy') }
   })
 
   ipcMain.handle(IPC.historyPlay, async (event, ref: unknown): Promise<HistoryActionResult> => {
@@ -243,11 +252,12 @@ export function registerHistoryIpc(live: Settings): void {
     if (entry !== null) clipboard.writeText(entry.path)
   })
 
-  ipcMain.on(IPC.historyCopyPrompt, (event, ref: unknown) => {
-    if (!fromHistory(event)) return
+  ipcMain.handle(IPC.historyCopyPrompt, async (event, ref: unknown): Promise<boolean> => {
+    if (!fromHistory(event)) return false
     const entry = entryFor(ref)
     // Same prompt text as the save toast (FIXED CONTRACT in saveToast.ts).
-    if (entry !== null) clipboard.writeText(analyzePrompt(entry.path))
+    if (entry === null) return false
+    return copyTextToClipboard(analyzePrompt(entry.path))
   })
 
   ipcMain.handle(IPC.historyRerender, (event, ref: unknown): HistoryActionResult => {
@@ -312,8 +322,16 @@ export function openHistoryWindow(): void {
       preload: path.join(app.getAppPath(), 'dist', 'preload', 'history.js'),
     },
   })
+  // Publish ownership before loading. Any load/crash cleanup below can then
+  // clear the same singleton reference through the normal `closed` path.
+  historyWindow = win
   win.setMenuBarVisibility(false)
-  win.once('ready-to-show', () => win.show())
+  win.once('ready-to-show', () => {
+    if (!win.isDestroyed()) {
+      win.show()
+      win.focus()
+    }
+  })
   win.on('closed', () => {
     if (historyWindow === win) historyWindow = null
   })
@@ -322,8 +340,36 @@ export function openHistoryWindow(): void {
   win.on('focus', () => {
     if (!win.isDestroyed()) win.webContents.send(IPC.historyChanged)
   })
-  void win.loadFile(path.join(app.getAppPath(), 'dist', 'renderer', 'history', 'history.html'))
-  historyWindow = win
+
+  // Like the editor, History starts hidden. A failed load or a renderer that
+  // never paints must not occupy the singleton forever while every later click
+  // merely focuses an invisible window.
+  let startupTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+    startupTimer = null
+    if (win.isDestroyed() || win.isVisible()) return
+    console.error(
+      `capturepack: History did not become visible within ${HISTORY_STARTUP_TIMEOUT_MS} ms — closing it`,
+    )
+    win.destroy()
+  }, HISTORY_STARTUP_TIMEOUT_MS)
+  startupTimer.unref()
+  const clearStartupTimer = (): void => {
+    if (startupTimer === null) return
+    clearTimeout(startupTimer)
+    startupTimer = null
+  }
+  win.once('show', clearStartupTimer)
+  win.once('closed', clearStartupTimer)
+  win.webContents.once('render-process-gone', (_event, details) => {
+    console.error(`capturepack: History renderer exited (${details.reason})`)
+    if (!win.isDestroyed()) win.destroy()
+  })
+  void win
+    .loadFile(path.join(app.getAppPath(), 'dist', 'renderer', 'history', 'history.html'))
+    .catch((err: unknown) => {
+      console.error('capturepack: loading History failed:', errorMessage(err))
+      if (!win.isDestroyed()) win.destroy()
+    })
 }
 
 /** t() for the current UI language (English before IPC registration). */
@@ -425,6 +471,7 @@ function safeSummarize(entry: RawPackEntry): HistoryPackSummary {
       title: null,
       capturedAt: null,
       app: null,
+      captureKind: 'unknown',
       hasReplay: false,
       replayDurationMs: null,
       annotationCount: 0,
@@ -469,6 +516,7 @@ function summarize(entry: RawPackEntry): HistoryPackSummary {
     title: manifestTitle !== '' ? manifestTitle : reportFirstSentence(pack.report()),
     capturedAt: typeof manifest?.created_at === 'string' ? manifest.created_at : null,
     app: typeof manifest?.environment?.app === 'string' ? manifest.environment.app : null,
+    captureKind: manifest === null ? 'unknown' : captureKindOf(manifest),
     hasReplay,
     replayDurationMs,
     annotationCount: annotations.length,

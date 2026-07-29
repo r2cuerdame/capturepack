@@ -8,7 +8,7 @@ import * as http from 'node:http'
 import type { McpStatus, McpStoppedReason } from '../../shared/ipc'
 import type { Settings } from '../../shared/types'
 import { logError, logInfo, logWarn } from '../log'
-import { createPackStore } from './store'
+import { createLivePackStore } from './store'
 import { registerTools } from './tools'
 
 const MCP_PATH = '/mcp'
@@ -56,11 +56,22 @@ export function startMcpServer(settings: Settings): McpServerHandle {
     logWarn('capturepack: mcpReadOnly=false is ignored — this version of the MCP server is always read-only.')
   }
 
-  // Shared across requests: the pack index and the in-memory "current pack" pin.
-  const store = createPackStore({
+  // Shared across requests: the pack index and the in-memory "current pack"
+  // pin. Settings are live and outputDir can change while this HTTP server
+  // keeps listening, so the index cannot be a startup snapshot.
+  let indexedOutputDir = settings.outputDir
+  const stores = createLivePackStore(() => ({
     outputDir: settings.outputDir,
     watch: settings.mcpWatchExportFolder,
-  })
+  }))
+  const liveStore = (): ReturnType<typeof stores.current> => {
+    const current = stores.current()
+    if (current.outputDir !== indexedOutputDir) {
+      indexedOutputDir = current.outputDir
+      logInfo(`[mcp] pack index moved to ${indexedOutputDir}`)
+    }
+    return current
+  }
 
   const httpServer = http.createServer((req, res) => {
     // handleRequest catches everything itself; the extra catch is a last-resort
@@ -104,7 +115,7 @@ export function startMcpServer(settings: Settings): McpServerHandle {
       // Stateless mode: one short-lived McpServer + transport per request, so
       // concurrent clients never share protocol state. The store persists.
       const server = new McpServer({ name: 'capturepack', version: app.getVersion() })
-      registerTools(server, store, { logRequests: settings.mcpLogRequests })
+      registerTools(server, liveStore(), { logRequests: settings.mcpLogRequests })
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
         enableJsonResponse: true,
@@ -210,7 +221,7 @@ export function startMcpServer(settings: Settings): McpServerHandle {
       // A stop before the socket ever bound must not leave ready() hanging —
       // [Restart] awaits it, and an unresolved promise would hang the button.
       settleReady()
-      store.dispose()
+      stores.dispose()
       return new Promise((resolve) => {
         httpServer.close(() => resolve())
         // Idle keep-alive sockets would otherwise delay close on quit.

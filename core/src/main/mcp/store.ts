@@ -105,6 +105,10 @@ export interface PackStore {
   latest(): PackHandle
   /** Open by id or absolute path and pin as the session default. */
   open(idOrPath: string): PackHandle
+  /** Absolute path of the explicitly pinned pack, if any. */
+  pinnedPath(): string | null
+  /** Applies the watcher toggle without replacing the index or current pin. */
+  setWatch(enabled: boolean): void
   /** Resolve id/path, or the pinned/newest pack when omitted. Does not re-pin. */
   resolve(idOrPath?: string): PackHandle
   /**
@@ -123,6 +127,56 @@ export interface PackStore {
   dispose(): void
 }
 
+/**
+ * A pack index whose root follows live Settings without restarting MCP.
+ *
+ * The HTTP server is intentionally long-lived while Settings is mutated in
+ * place. Holding one PackStore forever leaves capturepack_latest pinned to the
+ * folder that was configured at launch. `current()` swaps the cheap index on
+ * the first request after either index setting changes.
+ */
+export interface LivePackStore {
+  current(): PackStore
+  dispose(): void
+}
+
+export function createLivePackStore(
+  options: () => { outputDir: string; watch: boolean },
+): LivePackStore {
+  let activeOptions = options()
+  let active = createPackStore(activeOptions)
+  return {
+    current(): PackStore {
+      const next = options()
+      if (next.outputDir === activeOptions.outputDir && next.watch === activeOptions.watch) {
+        return active
+      }
+      if (next.outputDir === activeOptions.outputDir) {
+        active.setWatch(next.watch)
+        activeOptions = next
+        return active
+      }
+      const previous = active
+      const pinnedPath = previous.pinnedPath()
+      activeOptions = next
+      active = createPackStore(activeOptions)
+      if (pinnedPath !== null) {
+        try {
+          active.open(pinnedPath)
+        } catch {
+          // The old pin disappeared while Settings changed; resolve() will
+          // honestly fall back to the new output folder's newest pack.
+        }
+      }
+      previous.dispose()
+      return active
+    },
+    dispose(): void {
+      active.dispose()
+    },
+  }
+}
+
 /** Index entry before manifest metadata is (lazily) attached. */
 export interface RawPackEntry {
   id: string
@@ -135,6 +189,8 @@ type RawEntry = RawPackEntry
 
 export function createPackStore(options: { outputDir: string; watch: boolean }): PackStore {
   const outputDir = options.outputDir
+  let watchEnabled = options.watch
+  let disposed = false
   let index: RawEntry[] = []
   let lastScanMs = 0
   let current: { id: string; path: string; kind: PackKind } | null = null
@@ -271,19 +327,22 @@ export function createPackStore(options: { outputDir: string; watch: boolean }):
   }
 
   function tryWatch(): void {
-    if (!options.watch || watcher) return
+    if (disposed || !watchEnabled || watcher) return
     try {
       // recursive: pack writes land inside date subfolders (outputDir/YYYY-MM-DD/),
       // which a non-recursive watch on outputDir never reports.
       watcher = fs.watch(outputDir, { persistent: false, recursive: true }, () => {
+        if (disposed) return
         if (debounce) clearTimeout(debounce)
         debounce = setTimeout(() => {
+          if (disposed) return
           debounce = null
           scan()
           notifyIfChanged()
         }, RESCAN_DEBOUNCE_MS)
       })
       watcher.on('error', () => {
+        if (disposed) return
         if (debounce) clearTimeout(debounce)
         debounce = null
         watcher?.close()
@@ -299,6 +358,7 @@ export function createPackStore(options: { outputDir: string; watch: boolean }):
   // Also rescan when the watcher was JUST attached (the pre-watcher index may
   // be stale) and when the last scan is old (dead-watcher safety net).
   function ensureFresh(): void {
+    if (disposed) return
     const hadWatcher = watcher !== null
     tryWatch()
     if (!watcher || !hadWatcher || Date.now() - lastScanMs > STALE_RESCAN_MS) scan()
@@ -373,6 +433,22 @@ export function createPackStore(options: { outputDir: string; watch: boolean }):
       current = { id: pack.id, path: pack.path, kind: pack.kind }
       return pack
     },
+    pinnedPath(): string | null {
+      return current?.path ?? null
+    },
+    setWatch(enabled: boolean): void {
+      if (disposed || watchEnabled === enabled) return
+      watchEnabled = enabled
+      if (!enabled) {
+        if (debounce) clearTimeout(debounce)
+        debounce = null
+        watcher?.close()
+        watcher = null
+        return
+      }
+      tryWatch()
+      if (watcher !== null) scan()
+    },
     resolve(idOrPath?: string): PackHandle {
       ensureFresh()
       if (idOrPath !== undefined && idOrPath.trim() !== '') return handleFor(idOrPath.trim())
@@ -387,12 +463,15 @@ export function createPackStore(options: { outputDir: string; watch: boolean }):
       return index.map((e) => ({ ...e }))
     },
     onDidChange(listener: () => void): () => void {
+      if (disposed) return () => {}
       changeListeners.add(listener)
       return () => {
         changeListeners.delete(listener)
       }
     },
     dispose(): void {
+      if (disposed) return
+      disposed = true
       if (debounce) clearTimeout(debounce)
       debounce = null
       watcher?.close()

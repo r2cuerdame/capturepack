@@ -15,7 +15,8 @@ import type { RenderFramePayload, RenderResultPayload, RenderStartPayload } from
 import type { Annotation } from '../../shared/types'
 import { computeDisplayNumbers } from '../../shared/numbering'
 import { computeKeyframeTimes } from '../../shared/keyframes'
-import { annotationAt } from '../../shared/track'
+import { renderedAnnotationAt } from '../../shared/track'
+import type { AuthoredMotionSpace } from '../../shared/track'
 
 interface RenderBridge {
   onStart(cb: (payload: RenderStartPayload) => void): void
@@ -83,6 +84,9 @@ interface Overlay {
   display: number | undefined
   /** What an absent display index MEANS. Undefined = single-display pack. */
   focused: number | undefined
+  scaleX: number
+  scaleY: number
+  motionSpace: AuthoredMotionSpace | undefined
 }
 
 /**
@@ -103,39 +107,11 @@ function makeOverlay(job: RenderStartPayload, outputWidth: number, outputHeight:
   const scaleY = job.height > 0 ? outputHeight / job.height : 1
   return {
     // Stacking order for the overlay passes; z decides who draws on top.
-    ordered: job.annotations
-      .map((a) => ({
-        ...a,
-        bounds: {
-          x: a.bounds.x * scaleX,
-          y: a.bounds.y * scaleY,
-          width: a.bounds.width * scaleX,
-          height: a.bounds.height * scaleY,
-        },
-        // THE TRACK SCALES WITH THE BOX (#86). Its samples are snapshot pixels
-        // like `bounds`, and a render at any other resolution that scaled one
-        // and not the other would send every tracked box to a rectangle nothing
-        // in the pack describes — worse than not following at all, because it
-        // would look deliberate.
-        ...(a.tracking?.samples === undefined
-          ? {}
-          : {
-              tracking: {
-                ...a.tracking,
-                samples: a.tracking.samples.map((s) => ({
-                  t_ms: s.t_ms,
-                  // Scaled coordinates, UNSCALED identity: which screen a
-                  // sample is on is not a length.
-                  ...(s.display === undefined ? {} : { display: s.display }),
-                  x: s.x * scaleX,
-                  y: s.y * scaleY,
-                  width: s.width * scaleX,
-                  height: s.height * scaleY,
-                })),
-              },
-            }),
-      }))
-      .sort((a, b) => a.z - b.z),
+    // Keep every source rectangle in its declared native-pixel space until
+    // annotationAt resolves the current sample/keyframe. Scaling first used to
+    // leave authored keyframes unscaled and overwrite the correct 0.5x bounds
+    // with 4K coordinates on a 1920px annotated replay.
+    ordered: [...job.annotations].sort((a, b) => a.z - b.z),
     // GLOBAL display numbers (SPEC §8.5) — global over the whole PACK, not just
     // over this job's boxes: a frame where only box 2 is alive still labels it
     // 2, and so does a per-display render that received box 2 alone. The map is
@@ -152,6 +128,9 @@ function makeOverlay(job: RenderStartPayload, outputWidth: number, outputHeight:
     ui: Math.max(1, outputWidth / 1280),
     display: job.display,
     focused: job.focusedDisplay,
+    scaleX,
+    scaleY,
+    motionSpace: job.motionSpace,
   }
 }
 
@@ -172,10 +151,18 @@ function drawOverlay(
   // which is exactly what `bounds` means.
   const alive =
     tMs === null
-      ? overlay.ordered
+      ? overlay.ordered.map((a) => scaleAnnotation(a, overlay.scaleX, overlay.scaleY))
       : overlay.ordered
           .filter((a) => visibleAt(a, tMs))
-          .map((a) => annotationAt(a, tMs))
+          .map((a) =>
+            renderedAnnotationAt(
+              a,
+              tMs,
+              overlay.scaleX,
+              overlay.scaleY,
+              overlay.motionSpace,
+            ),
+          )
           // A tracked box follows its object onto other screens (#86), and this
           // job draws ONE screen. A box currently on the neighbour's monitor
           // belongs in the neighbour's video, not painted at foreign
@@ -186,6 +173,22 @@ function drawOverlay(
   }
   for (const a of alive) {
     drawBox(ctx, a, overlay.numbers.get(a.annotation_id), overlay.ui)
+  }
+}
+
+function scaleAnnotation(
+  a: Annotation,
+  scaleX: number,
+  scaleY: number,
+): Annotation {
+  return {
+    ...a,
+    bounds: {
+      x: a.bounds.x * scaleX,
+      y: a.bounds.y * scaleY,
+      width: a.bounds.width * scaleX,
+      height: a.bounds.height * scaleY,
+    },
   }
 }
 

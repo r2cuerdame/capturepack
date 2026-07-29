@@ -145,6 +145,10 @@ const WINDOW_FRAME_SIDE_MIN_AREA = 0.25
  */
 const DESKTOP_CLASSES = new Set(['progman', 'workerw'])
 
+function isDesktopClass(value: string | undefined): boolean {
+  return DESKTOP_CLASSES.has((value ?? '').trim().toLowerCase())
+}
+
 export type PickLevel = 'control' | 'window'
 
 /**
@@ -185,6 +189,42 @@ export interface PickableObject extends ResolvableCandidate {
   // which is what the editor turns into an honest one-time message. Always
   // 'controls' at level 'control' (the finer level is what you are looking at).
   refinement: WindowRefinement
+}
+
+/**
+ * The stable identity used by the editor's "one box per object per moment"
+ * guard.
+ *
+ * A surface is a WINDOW, not every object inside it. Matching only surfaceId
+ * made the first picked child control shadow every sibling in that window:
+ * clicking a second child merely re-selected the first child's box. Provider
+ * + surface + object is the identity contract ContextCandidate publishes; the
+ * level stays explicit so Core's window floor can never collide with a
+ * provider control that happens to reuse an opaque id.
+ */
+export interface PickIdentity {
+  providerId: string
+  surfaceId: string
+  objectId: string
+  level: PickLevel
+}
+
+export function pickIdentityOf(o: PickableObject): PickIdentity {
+  return {
+    providerId: o.providerId,
+    surfaceId: o.surfaceId,
+    objectId: o.candidate.objectId,
+    level: o.level,
+  }
+}
+
+export function samePickIdentity(a: PickIdentity, b: PickIdentity): boolean {
+  return (
+    a.providerId === b.providerId &&
+    a.surfaceId === b.surfaceId &&
+    a.objectId === b.objectId &&
+    a.level === b.level
+  )
 }
 
 /**
@@ -297,7 +337,19 @@ export class ObjectIndex {
     // the neighbouring screen would become the "top surface" at a point and
     // silently swallow every candidate under it — which is the cross-display
     // failure MIN_VISIBLE_SIDE exists to prevent, one layer up.
-    const present = surfaces.filter((s) => bySurface.get(s.surfaceId)?.clip != null)
+    // THE SHELL DESKTOP IS BACKDROP, NEVER AN OCCLUDER.
+    //
+    // Core now preserves Progman/WorkerW's enumerated bottom z even when the
+    // shell owns keyboard focus, but an old/external frame may still mark it
+    // foreground. CapturePack_2026-07-29_194912 did: the full-desktop Progman
+    // surface became top-most and swallowed every Orca/taskbar candidate even
+    // though the desktop's own window candidate was correctly filtered below.
+    // Keeping it in the ContextFrame preserves the observation; excluding it
+    // from this editor-only resolver stack makes bare wallpaper remain a miss
+    // and prevents legacy desktop focus from hiding visible windows.
+    const present = surfaces.filter(
+      (s) => bySurface.get(s.surfaceId)?.clip != null && !isDesktopClass(s.className),
+    )
     const detail = new Map<string, SurfaceCoverage['state']>()
     for (const c of coverage) detail.set(c.surfaceId, c.state)
 
@@ -365,8 +417,7 @@ export class ObjectIndex {
     for (const candidate of candidates) {
       if (candidate.authority !== 'window') continue
       const owner = bySurface.get(candidate.surfaceId)
-      const className = (owner?.surface.className ?? '').trim().toLowerCase()
-      if (DESKTOP_CLASSES.has(className)) continue
+      if (isDesktopClass(owner?.surface.className)) continue
       const clipped = clip(candidate.bounds, width, height)
       if (clipped === null) continue
       windows.push({

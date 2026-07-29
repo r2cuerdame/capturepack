@@ -24,8 +24,8 @@ contextBridge.exposeInMainWorld('historyBridge', {
   searchText(packPath: string): Promise<string> {
     return ipcRenderer.invoke(IPC.historySearchText, packPath) as Promise<string>
   },
-  openPack(packPath: string): void {
-    ipcRenderer.send(IPC.historyOpenPack, packPath)
+  openPack(packPath: string): Promise<HistoryActionResult> {
+    return ipcRenderer.invoke(IPC.historyOpenPack, packPath) as Promise<HistoryActionResult>
   },
   play(packPath: string): Promise<HistoryActionResult> {
     return ipcRenderer.invoke(IPC.historyPlay, packPath) as Promise<HistoryActionResult>
@@ -39,8 +39,8 @@ contextBridge.exposeInMainWorld('historyBridge', {
   copyPath(packPath: string): void {
     ipcRenderer.send(IPC.historyCopyPath, packPath)
   },
-  copyPrompt(packPath: string): void {
-    ipcRenderer.send(IPC.historyCopyPrompt, packPath)
+  copyPrompt(packPath: string): Promise<boolean> {
+    return ipcRenderer.invoke(IPC.historyCopyPrompt, packPath) as Promise<boolean>
   },
   rerender(packPath: string): Promise<HistoryActionResult> {
     return ipcRenderer.invoke(IPC.historyRerender, packPath) as Promise<HistoryActionResult>

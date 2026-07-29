@@ -7,58 +7,108 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Sponsor](https://img.shields.io/badge/%E2%99%A5_Sponsor-ea4aaa)](https://github.com/sponsors/r2cuerdame)
 
-## Can you explain a bug in under 5 seconds?
+## Rewind the bug. Pick the object. Give AI the state.
 
-**CapturePack is the fastest way to explain something to an LLM.**
+**CapturePack turns a rolling replay — 30 seconds by default — into structured
+evidence for humans and AI.**
 
-> Capture context, not screenshots.
->
-> Better input. Better answers.
+Press the hotkey after something goes wrong, rewind to the frame where it happened,
+and use Object Pick to select the captured control or window under the cursor.
+CapturePack preserves the target's identity and observed movement instead of
+leaving an AI to infer everything from pixels.
 
-CapturePack is an open-source context capture format and toolkit that helps humans and AI understand visual problems beyond screenshots and screen recordings.
+The saved pack matches what the user captured: a video pack combines replay,
+frames, annotations, object context and an event timeline; an image pack contains
+the explicit still image, annotations and object context. It stays a local, open
+folder that works without an AI, account, or cloud service.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Download](https://github.com/r2cuerdame/capturepack/releases/latest)
+
+Current Windows release: **CapturePack 0.3.0**.
 
 <p align="center">
   <!-- Absolute raw URL with a version query: GitHub proxies README images through
        camo, which caches by source URL — without the bump a fixed demo keeps
        rendering the stale copy for hours. Bump ?v= whenever demo.svg changes. -->
-  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=3" alt="Demo: press Ctrl+Alt+C, the last 30 seconds freeze, the mouse wheel scrubs through time, drag to select the object, write the annotation, and the CapturePack is saved." width="760">
+  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=4" alt="CapturePack rewinds to a past frame, selects a child UI control, shows its captured name and control type, follows its owner window, and exports structured evidence for AI." width="760">
 </p>
 
-A CapturePack **folder** bundles what a screenshot cannot: the last 30 seconds of replay, a snapshot, editable annotations, a machine-readable event timeline, and human- and AI-readable reports — everything another developer or any LLM needs to immediately understand the situation. When you need to share it, package the folder as a single `.capturepack` file.
+The animation shows **Object Pick in the current editor**: rewind to a captured
+frame, hover and click a child UI Automation control, inspect the identity
+captured at that instant, then scrub while its outline follows the observed
+owner-window movement. The same evidence is saved as structured data for AI.
 
-## The 5-second workflow
+## The workflow
 
-```
-Ctrl+Alt+C  →  capture  →  5-second annotation  →  save  →  drop into
-                                                              ChatGPT / Claude / Codex / Cursor / Gemini
-                                                              or send to another developer
-```
+1. **Rewind** — while Live recording is on (the default), press `Ctrl+Alt+C`
+   after the bug, then scrub through the frozen replay to the frame where the UI
+   was wrong. Replay length is configurable from 1–60 seconds.
+2. **Pick** — Object Pick highlights captured UI controls under the cursor. Click
+   once to record the real target, observed bounds, accessible name, control
+   type, and captured instant; a window remains the fallback when control data
+   is unavailable.
+3. **Track the window** — CapturePack records window geometry on the replay clock.
+   A picked control follows the observed translation of its owner window. Richer
+   per-control movement is used only when it was actually captured; otherwise
+   CapturePack does not invent it. Each observation names its display, so saved
+   and reopened multi-monitor packs keep their timing and coordinates when an
+   object crosses screens.
+4. **Hand off structured context** — save the folder for another developer, drop
+   it into ChatGPT, Claude, Codex, Cursor, or Gemini, or let a connected AI read
+   it through the built-in, read-only MCP server.
+
+### Where object context comes from
+
+- **Windows UI Automation (built in):** accessible control name, semantic type,
+  AutomationId, process/window identity, and observed bounds when the app exposes
+  them.
+- **Chrome DOM (optional preview extension):** selector, role, text and URL for
+  the element you explicitly pick. The extension reads the page for that pick;
+  it does not stream the DOM.
+- **HWND window fallback:** when no child control is available, CapturePack still
+  records the real window and its observed geometry instead of inventing a
+  control.
+
+### Need one frame instead?
+
+Press `Ctrl+Alt+S` to open region capture. Dragging a region is the default; the
+top **Full screen capture** button explicitly captures the complete virtual
+desktop — every monitor in one image. The result opens in the same context
+editor at native 100% (or the closest supported scale for an exceptionally
+large desktop) and is pannable, but the pack is declared as an image and
+contains no replay file. A region pack stores only the selected pixels plus crop
+placement metadata — it does not keep a hidden full-screen or second-monitor
+image.
 
 ## Why
 
 - **Screenshots preserve pixels.** You lose what happened before the frame.
 - **Videos preserve motion.** You lose intent and structure.
-- **CapturePack preserves context.** Time, space, intent, environment.
+- **CapturePack preserves context.** The replay, the picked UI object, observed
+  movement, annotations, and the state that was actually captured.
 
-## 🕰 It's a time machine
+## Rewind first
 
-The bug already happened? CapturePack was **already recording**. Press `Ctrl+Alt+C`
-*after* something goes wrong — the last 30 seconds are frozen, and the mouse wheel
-scrolls you **back through time** to the exact frame where it broke. Annotate that
-moment, not a re-enactment.
+The bug already happened? If Live recording is on (the default), CapturePack has
+the recent replay ready in memory. Press `Ctrl+Alt+C` *after* something goes
+wrong, then use the mouse wheel to scroll **back through time** to the frame where
+it broke. Turning Live recording off records nothing, and the hotkey tells you
+that recording is off.
 
-## 🤖 Built for LLMs
+## What the structured context says
 
-A CapturePack is input an AI actually understands:
+A semantic annotation can identify more than a rectangle:
 
-- Drop the pack into **ChatGPT, Claude, Codex, Cursor, Gemini** — the generated
-  report and context files explain the situation with zero extra prompting.
-- Or don't even attach anything: the app runs an **MCP server**, so a connected AI
-  just hears *"Analyze the latest CapturePack."* and reads it by itself.
+- **Target identity:** UIA name, control type (the control's semantic role),
+  AutomationId, process or window identity when the application exposes them;
+  an optional Chrome DOM pick can instead carry selector, role, text and URL.
+- **Captured state in time:** the picked instant, display, observed bounds, and —
+  when tracking is available — observed movement samples.
+- **Visual and narrative evidence:** original media, editable annotations,
+  generated views and reports; video packs also carry keyframes and a timeline.
 
-Better input. Better answers.
+That context can be read from the plain folder. A connected AI can also use the
+app's **read-only MCP server** and start with: *"Analyze the latest CapturePack."*
 
 ## 🌍 Languages
 
@@ -76,30 +126,57 @@ Generated CapturePacks should remain readable forever.
 
 ## What's inside a CapturePack
 
-The pack is a plain **folder** — browsable, editable, honest. ZIP (`.capturepack`) is
-created only when you want to share.
+The pack is a plain **folder** — browsable, editable, honest. ZIP (`.capturepack`)
+is created only when you want to share.
+
+Video packs may contain:
 
 ```
 CapturePack_2026-07-27_143052/
-├── replay.webm              # original evidence — never modified
+├── replay.mp4               # original evidence (or replay.webm fallback)
 ├── replay_annotated.webm    # annotations rendered in; plays in any player
 ├── snapshot.png             # the captured frame (original)
 ├── annotations.json         # the true source: boxes, lifetimes, numbers, blur
-├── timeline.json            # machine-readable event log
+├── timeline.json            # video packs: machine-readable event log
 ├── report.md                # your description, LLM-ready
 ├── manifest.json            # format version, inventory
 ├── README.md                # the first document a human reads
 ├── skills/                  # context structured for AI (works without MCP)
-└── plugins/                 # structured metadata from integrations
+└── plugins/                 # captured UI-object metadata, when available
 ```
 
-A screenshot-only pack — `manifest.json` + `snapshot.png`, nothing else — is fully valid.
+Image packs are deliberately different:
+
+```
+CapturePack_2026-07-27_143052/
+├── snapshot.png             # the explicit region or full virtual desktop
+├── annotations.json         # image annotations
+├── report.md · README.md
+├── manifest.json            # capture_kind: image
+├── skills/                  # image-specific context; no timeline skill
+└── plugins/                 # optional object metadata
+```
+
+An image pack records `capture_kind: "image"` and either a region or full-screen
+scope. It has no replay and no `timeline.json`. A region image also records where
+the crop came from without storing pixels outside the crop.
+Object metadata and movement tracks are also optional evidence: if an application
+does not expose a usable UI object or no track was observed, the pack says so
+instead of fabricating context.
 
 The specification matters more than any implementation — any language can generate CapturePack files. See [SPEC.md](SPEC.md).
 
 ## MCP — talk to your captures
 
-The app ships an always-on, read-only [MCP](https://modelcontextprotocol.io) server at `http://127.0.0.1:39393/mcp` (localhost only), so any AI can find and analyze your latest pack by itself — "Analyze the latest CapturePack." is the whole prompt.
+The app includes an optional, read-only [MCP](https://modelcontextprotocol.io)
+server, enabled and started automatically by default at
+`http://127.0.0.1:39393/mcp` (localhost only). Settings → MCP can stop it
+immediately or disable automatic start. It reads only CapturePacks the user
+already saved and cannot start an image or video capture.
+
+An AI can call `capturepack_history` to browse/search image and video records,
+then `capturepack_open` with the selected id; `capturepack_latest` remains the
+shortcut for the newest pack.
 
 ```
 claude mcp add --transport http capturepack http://127.0.0.1:39393/mcp
@@ -109,13 +186,28 @@ Tools, client setup, and settings: [docs/MCP.md](docs/MCP.md).
 
 ## Status
 
-Early development. See [GOAL.md](GOAL.md) for the project vision and [ROADMAP.md](ROADMAP.md) for what's next.
+**0.3.0 is available for Windows.** CapturePack remains an early-stage project,
+so keep the original pack when reporting a problem and see [GOAL.md](GOAL.md)
+for the product vision and [ROADMAP.md](ROADMAP.md) for what comes next.
 
 ## Security &amp; signing
 
 Windows builds are currently unsigned (SmartScreen will warn — *More info → Run anyway*);
 every release ships `SHA256SUMS.txt` for verification, and an OSS code-signing application
 is pending. Details, team roles, and privacy practices: [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md).
+
+## Privacy before sharing
+
+Screen pixels, window titles and accessibility names — plus selector, role, text
+and URL when Chrome DOM is used — can be sensitive. CapturePack keeps captures
+and object context on this machine and uploads no captures, telemetry or crash
+reports. Its only outbound app request is the optional GitHub Releases update
+check, which can be disabled in Settings → General.
+
+Blur is non-destructive: it protects generated annotated views, but
+`snapshot.png` and the original replay inside the full pack remain unredacted.
+Review a pack before sharing it, and do not share the full pack when its original
+media contains information that must stay private.
 
 ## ♥ Support
 

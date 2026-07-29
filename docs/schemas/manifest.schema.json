@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "CapturePack manifest.json",
-  "description": "Schema for manifest.json, the REQUIRED entry point of a CapturePack (format 0.1.0). It identifies the pack, records the capture environment, and inventories the variable parts of the pack (replay video, plugin payloads). Unknown additional properties are deliberately allowed everywhere: readers MUST accept unknown optional fields for forward compatibility (SPEC.md §13). See SPEC.md §5 for the normative definition; where schema and prose disagree, the prose wins.",
+  "description": "Schema for manifest.json, the REQUIRED entry point of a CapturePack, including capture-kind semantics defined through format 0.3.0 and backward compatibility with existing manifests that omit capture_kind (including early 0.3.0 RC output). It identifies the pack, records the capture environment, and inventories the variable parts of the pack (media and plugin payloads). Unknown additional properties are deliberately allowed everywhere: readers MUST accept unknown optional fields for forward compatibility (SPEC.md §13). See SPEC.md §5 for the normative definition; where schema and prose disagree, the prose wins.",
   "type": "object",
   "required": [
     "format",
@@ -18,9 +18,13 @@
       "const": "capturepack"
     },
     "format_version": {
-      "description": "Version of the CapturePack specification this pack conforms to, as semver (e.g. \"0.1.0\"). Writers SHOULD write the oldest version that fully expresses their content. Major (pre-1.0: minor) version changes are breaking; see SPEC.md §13.",
+      "description": "Oldest version of the CapturePack specification that fully expresses this pack, as semver (for example \"0.1.0\" or \"0.3.0\"). capture_kind was introduced in 0.3.0. Major (pre-1.0: minor) version changes are breaking; see SPEC.md §13.",
       "type": "string",
       "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"
+    },
+    "capture_kind": {
+      "description": "What the user explicitly asked to capture, independent of recorder success: \"video\" for the recording workflow or \"image\" for the still-image workflow. New writers MUST include it and MUST declare format_version 0.3.0 or later. Readers and validators accept existing manifests where it is absent, including early 0.3.0 RC output; a replay filename then establishes video evidence, while replay:null alone does not distinguish an explicit still from a failed video.",
+      "enum": ["image", "video"]
     },
     "id": {
       "description": "RFC 4122 UUID uniquely identifying this pack. Version 4 (random) RECOMMENDED, lowercase RECOMMENDED.",
@@ -114,7 +118,7 @@
           "const": "snapshot.png"
         },
         "replay": {
-          "description": "Filename of the replay video — \"replay.webm\" (recommended; MediaRecorder output, no extra dependencies) or \"replay.mp4\" — or null for a screenshot-only pack. A pack contains at most one replay file.",
+          "description": "Filename of the replay video — \"replay.webm\" (recommended; MediaRecorder output, no extra dependencies) or \"replay.mp4\" — or null when no replay was persisted. capture_kind records whether that null belongs to an explicit image capture or a video workflow without a saved recording. A pack contains at most one replay file.",
           "oneOf": [
             {
               "type": "string",
@@ -122,6 +126,22 @@
             },
             { "type": "null" }
           ]
+        },
+        "image_scope": {
+          "description": "REQUIRED when capture_kind is \"image\". \"region\" means snapshot.png contains only the pixels inside crop_bounds. \"fullscreen\" means the user explicitly requested the complete virtual desktop and snapshot.png is one lossless composition containing every attached display, with no separate per-display raster. MUST be absent whenever capture_kind is not \"image\", including legacy manifests.",
+          "enum": ["region", "fullscreen"]
+        },
+        "crop_bounds": {
+          "description": "REQUIRED for a region image and forbidden otherwise. Places the selected rectangle in the OS virtual-desktop device-independent-pixel space without storing any pixels outside it. Negative x/y are valid for monitors left of or above the primary display.",
+          "type": "object",
+          "required": ["x", "y", "width", "height", "coordinate_space"],
+          "properties": {
+            "x": { "type": "number" },
+            "y": { "type": "number" },
+            "width": { "type": "number", "exclusiveMinimum": 0 },
+            "height": { "type": "number", "exclusiveMinimum": 0 },
+            "coordinate_space": { "const": "virtual-desktop-dip" }
+          }
         },
         "replay_duration_ms": {
           "description": "Duration of the replay video in milliseconds. REQUIRED (as an integer) when replay is a filename; MUST be null or absent when replay is null.",
@@ -144,7 +164,7 @@
           "minimum": 0
         },
         "trim_offset_ms": {
-          "description": "OPTIONAL, provenance only: when the writer trimmed the replay before saving, the position (ms) in the original captured recording of this replay's first frame (the trim in-point). Every time in the pack — annotation lifetimes, snapshot_t_ms, timeline offsets against t0 — is already on the trimmed replay's clock, so readers never apply this offset. Absent means the replay was never trimmed. SHOULD be absent when replay is null (SPEC.md §5.3). In a multi-display pack, every declared per-display replay SHOULD be cut to the same end-aligned real-time interval; a shorter secondary buffer stays honestly shorter (SPEC.md §5.6).",
+          "description": "OPTIONAL, provenance only: when the writer trimmed the replay before saving, the position (ms) in the original captured recording of this replay's first frame (the trim in-point). Every time in the pack — annotation lifetimes, snapshot_t_ms, timeline offsets against t0 — is already on the trimmed replay's clock, so readers never apply this offset. Absent means the replay was never trimmed. SHOULD be absent when replay is null (SPEC.md §5.3). In a multi-display pack, every declared per-display replay SHOULD be cut to the same observed real-time interval; a shorter secondary buffer stays honestly shorter (SPEC.md §5.6).",
           "type": "integer",
           "minimum": 0
         },
@@ -180,6 +200,10 @@
                 "description": "Duration of this display's replay in milliseconds. REQUIRED when this entry's replay is a filename.",
                 "type": "integer",
                 "minimum": 0
+              },
+              "replay_clock_offset_ms": {
+                "description": "OPTIONAL measured conversion from the pack/focused replay clock to this display's replay clock, in integer milliseconds: display_t = pack_t + replay_clock_offset_ms. MUST be 0 on the focused entry and MUST be absent when replay is null. Legacy entries omit it and readers fall back to replay_duration_ms - top-level replay_duration_ms (SPEC.md §5.6).",
+                "type": "integer"
               },
               "replay_annotated": {
                 "description": "OPTIONAL: this display's replay with ITS OWN annotation boxes rendered into the pixels, \"replay_annotated-d<index>.webm\" (or .mp4) — SPEC.md §5.6, §7.2. Absent on the focused entry, whose annotated replay is the top-level media.replay_annotated, and absent on any display that carries no annotations or no replay. It contains ONLY the boxes whose display is this one: the same coordinates mean something different on every screen. A generated view, regenerable from this display's replay + annotations.json.",
@@ -232,7 +256,30 @@
               "properties": { "replay": { "type": "string" } },
               "required": ["replay"]
             },
-            "then": { "required": ["replay_duration_ms"] }
+            "then": { "required": ["replay_duration_ms"] },
+            "else": {
+              "properties": {
+                "replay_clock_offset_ms": {
+                  "description": "A display without a replay has no replay clock; the offset MUST be absent.",
+                  "not": {}
+                }
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "focused": { "const": true }
+                  },
+                  "required": ["focused", "replay_clock_offset_ms"]
+                },
+                "then": {
+                  "properties": {
+                    "replay_clock_offset_ms": { "const": 0 }
+                  }
+                }
+              }
+            ]
           }
         },
         "keyframes": {
@@ -311,5 +358,83 @@
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": { "required": ["capture_kind"] },
+      "then": {
+        "properties": {
+          "format_version": {
+            "pattern": "^(?:0\\.(?:[3-9]|[1-9][0-9]+)\\.[0-9]+|[1-9][0-9]*\\.[0-9]+\\.[0-9]+)(?:-[0-9A-Za-z.-]+)?$"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "capture_kind": { "const": "image" } },
+        "required": ["capture_kind"]
+      },
+      "then": {
+        "properties": {
+          "media": {
+            "required": ["image_scope"],
+            "properties": {
+              "replay": { "type": "null" },
+              "cadence": { "not": {} },
+              "replay_duration_ms": { "type": "null" },
+              "replay_annotated": { "not": {} },
+              "snapshot_t_ms": { "not": {} },
+              "trim_offset_ms": { "not": {} },
+              "displays": { "not": {} },
+              "keyframes": {
+                "maxItems": 1,
+                "items": {
+                  "properties": {
+                    "t_ms": { "const": 0 }
+                  }
+                }
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": { "image_scope": { "const": "region" } },
+                  "required": ["image_scope"]
+                },
+                "then": { "required": ["crop_bounds"] }
+              },
+              {
+                "if": {
+                  "properties": { "image_scope": { "const": "fullscreen" } },
+                  "required": ["image_scope"]
+                },
+                "then": {
+                  "properties": { "crop_bounds": { "not": {} } }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "not": {
+          "properties": { "capture_kind": { "const": "image" } },
+          "required": ["capture_kind"]
+        }
+      },
+      "then": {
+        "properties": {
+          "media": {
+            "properties": {
+              "image_scope": { "not": {} },
+              "crop_bounds": { "not": {} }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

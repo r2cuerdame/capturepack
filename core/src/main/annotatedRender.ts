@@ -20,12 +20,18 @@ import type { RenderFramePayload, RenderResultPayload, RenderStartPayload } from
 import type { Language } from '../shared/i18n'
 import { displayAnnotatedName, displayFramesDir, keyframeFileName } from '../shared/keyframes'
 import type { Annotation, ManifestKeyframe } from '../shared/types'
+import type { AuthoredMotionSpace } from '../shared/track'
+import {
+  BoundedBackgroundMediaQueue,
+  copyBufferResponsively,
+} from './backgroundMediaQueue'
 import { refreshPackDocs, setManifestRenderOutputs, type PackHandle } from './exporter'
 
 export interface AnnotatedRenderJob {
   replayWebm: Buffer
   replayMimeType: string
   annotations: Annotation[]
+  motionSpace?: AuthoredMotionSpace
   // GLOBAL display numbers (SPEC §8.5) over the pack's WHOLE annotation set,
   // as annotation_id -> number pairs. `annotations` above is this display's
   // subset, so the renderer must not derive the numbering from it — see
@@ -55,6 +61,7 @@ export interface AnnotatedRenderJob {
 export interface KeyframeStillJob {
   snapshotPng: Buffer
   annotations: Annotation[]
+  motionSpace?: AuthoredMotionSpace
   /** Same rule as AnnotatedRenderJob.displayNumbers. */
   displayNumbers?: Array<[string, number]>
   /** Same rule as AnnotatedRenderJob.focusedDisplay. */
@@ -113,17 +120,18 @@ const inFlight = new Map<string, number>()
 // work, and serializing it with annotated renders prevents a multi-display save
 // from spawning one extra real-time encoder per screen.
 // ---------------------------------------------------------------------------
-let renderQueue: Promise<void> = Promise.resolve()
+const renderQueue = new BoundedBackgroundMediaQueue(1)
 
-function enqueueRender<T>(run: () => Promise<T>): Promise<T> {
-  const result = renderQueue.then(run, run)
-  // The queue chain must never reject or it would stop scheduling.
-  renderQueue = result.then(
-    () => undefined,
-    () => undefined,
-  )
-  return result
+function enqueueRender<T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  return renderQueue.enqueue(run)
 }
+
+// Quitting is cancellation, not a render failure that should rewrite a pack.
+// Queued buffers are released immediately and the active hidden window is
+// destroyed through its AbortSignal.
+app.on('before-quit', () => {
+  renderQueue.shutdown()
+})
 
 /** Subscribe to every render's start/terminal state. Returns unsubscribe. */
 export function onRenderStateChange(listener: RenderStateListener): () => void {
@@ -188,20 +196,6 @@ async function renderAnnotatedReplay(
   job: AnnotatedRenderJob,
   onProgress?: (ratio: number) => void,
 ): Promise<void> {
-  const payload: RenderStartPayload = {
-    replayWebm: toArrayBuffer(job.replayWebm),
-    replayMimeType: job.replayMimeType,
-    annotations: job.annotations,
-    ...(job.displayNumbers === undefined ? {} : { displayNumbers: job.displayNumbers }),
-    ...(job.display === undefined ? {} : { display: job.display }),
-    ...(job.focusedDisplay === undefined ? {} : { focusedDisplay: job.focusedDisplay }),
-    width: job.width,
-    height: job.height,
-    fps: job.fps,
-    durationMs: job.replayDurationMs,
-    // The annotated stills come out of this same pass (SPEC §7.3).
-    keyframes: true,
-  }
   // The render AND its write phase are one queued unit: writeKeyframes()
   // removes frames/ and rewrites it, so another render of the same pack landing
   // between the writes and the declaration would leave the manifest pointing at
@@ -209,14 +203,35 @@ async function renderAnnotatedReplay(
   const video =
     job.display === undefined ? 'replay_annotated.webm' : displayAnnotatedName(job.display)
   const framesDir = job.display === undefined ? 'frames' : displayFramesDir(job.display)
-  await enqueueRender(async () => {
+  await enqueueRender(async (signal) => {
+    // Allocate/copy only after this job owns the single media lane. Queued
+    // displays retain their source Buffer but create neither an ArrayBuffer nor
+    // a hidden Chromium renderer until every earlier job has released both.
+    const payload: RenderStartPayload = {
+      replayWebm: await copyBufferResponsively(job.replayWebm, signal),
+      replayMimeType: job.replayMimeType,
+      annotations: job.annotations,
+      ...(job.motionSpace === undefined ? {} : { motionSpace: job.motionSpace }),
+      ...(job.displayNumbers === undefined ? {} : { displayNumbers: job.displayNumbers }),
+      ...(job.display === undefined ? {} : { display: job.display }),
+      ...(job.focusedDisplay === undefined ? {} : { focusedDisplay: job.focusedDisplay }),
+      width: job.width,
+      height: job.height,
+      fps: job.fps,
+      durationMs: job.replayDurationMs,
+      // The annotated stills come out of this same pass (SPEC §7.3).
+      keyframes: true,
+    }
     const { result, frames } = await runRenderWindow(
       payload,
       job.replayDurationMs * 2 + RENDER_TIMEOUT_SLACK_MS,
       onProgress,
+      signal,
     )
+    throwIfRenderAborted(signal)
     if (result.webm === undefined) throw new Error('render window returned no video')
     await writeFile(path.join(handle.dirPath, video), Buffer.from(result.webm))
+    throwIfRenderAborted(signal)
     // The stills are the smaller half of this job: losing them must never cost
     // the annotated replay its declaration (SPEC §5.7 — keyframes are optional).
     let keyframes: ManifestKeyframe[] = []
@@ -282,23 +297,30 @@ export function startKeyframeStill(handle: PackHandle, job: KeyframeStillJob): v
 }
 
 async function renderKeyframeStill(handle: PackHandle, job: KeyframeStillJob): Promise<void> {
-  const payload: RenderStartPayload = {
-    // No video: the still job draws snapshot.png instead.
-    replayWebm: null,
-    snapshotPng: toArrayBuffer(job.snapshotPng),
-    annotations: job.annotations,
-    ...(job.displayNumbers === undefined ? {} : { displayNumbers: job.displayNumbers }),
-    ...(job.display === undefined ? {} : { display: job.display }),
-    ...(job.focusedDisplay === undefined ? {} : { focusedDisplay: job.focusedDisplay }),
-    width: job.width,
-    height: job.height,
-    fps: 1, // unused without a recorder
-    durationMs: 0,
-    keyframes: true,
-  }
   const framesDir = job.display === undefined ? 'frames' : displayFramesDir(job.display)
-  await enqueueRender(async () => {
-    const { frames } = await runRenderWindow(payload, STILL_RENDER_TIMEOUT_MS)
+  await enqueueRender(async (signal) => {
+    const payload: RenderStartPayload = {
+      // No video: the still job draws snapshot.png instead.
+      replayWebm: null,
+      snapshotPng: await copyBufferResponsively(job.snapshotPng, signal),
+      annotations: job.annotations,
+      ...(job.motionSpace === undefined ? {} : { motionSpace: job.motionSpace }),
+      ...(job.displayNumbers === undefined ? {} : { displayNumbers: job.displayNumbers }),
+      ...(job.display === undefined ? {} : { display: job.display }),
+      ...(job.focusedDisplay === undefined ? {} : { focusedDisplay: job.focusedDisplay }),
+      width: job.width,
+      height: job.height,
+      fps: 1, // unused without a recorder
+      durationMs: 0,
+      keyframes: true,
+    }
+    const { frames } = await runRenderWindow(
+      payload,
+      STILL_RENDER_TIMEOUT_MS,
+      undefined,
+      signal,
+    )
+    throwIfRenderAborted(signal)
     const keyframes = await writeKeyframes(handle, frames, framesDir)
     if (keyframes.length === 0) throw new Error('still render produced no keyframe')
     await setManifestRenderOutputs(handle, {
@@ -363,23 +385,30 @@ export interface TrimRenderJob {
 export async function renderTrimmedReplay(job: TrimRenderJob): Promise<Buffer> {
   const endMs = job.trimEndMs ?? job.sourceDurationMs
   const lengthMs = Math.max(0, endMs - job.trimStartMs)
-  const payload: RenderStartPayload = {
-    replayWebm: toArrayBuffer(job.replayWebm),
-    replayMimeType: job.replayMimeType,
-    annotations: [],
-    width: job.width,
-    height: job.height,
-    fps: job.fps,
-    durationMs: job.sourceDurationMs,
-    trimStartMs: job.trimStartMs,
-  }
-  if (job.trimEndMs !== null) payload.trimEndMs = job.trimEndMs
   // The render plays only the kept range in real time. No keyframes: the trim
   // job draws no overlays, and the annotated render that follows it produces
   // the stills from the trimmed bytes.
-  const { result } = await enqueueRender(() =>
-    runRenderWindow(payload, lengthMs * 2 + RENDER_TIMEOUT_SLACK_MS),
-  )
+  const { result } = await enqueueRender(async (signal) => {
+    const payload: RenderStartPayload = {
+      replayWebm: await copyBufferResponsively(job.replayWebm, signal),
+      replayMimeType: job.replayMimeType,
+      annotations: [],
+      width: job.width,
+      height: job.height,
+      fps: job.fps,
+      durationMs: job.sourceDurationMs,
+      trimStartMs: job.trimStartMs,
+    }
+    if (job.trimEndMs !== null) payload.trimEndMs = job.trimEndMs
+    const outcome = await runRenderWindow(
+      payload,
+      lengthMs * 2 + RENDER_TIMEOUT_SLACK_MS,
+      undefined,
+      signal,
+    )
+    throwIfRenderAborted(signal)
+    return outcome
+  })
   if (result.webm === undefined) throw new Error('render window returned no video')
   return Buffer.from(result.webm)
 }
@@ -395,7 +424,9 @@ async function runRenderWindow(
   payload: RenderStartPayload,
   timeoutMs: number,
   onProgress?: (ratio: number) => void,
+  signal?: AbortSignal,
 ): Promise<RenderOutcome> {
+  throwIfRenderAborted(signal)
   const win = new BrowserWindow({
     show: false,
     width: 320,
@@ -407,14 +438,25 @@ async function runRenderWindow(
       backgroundThrottling: false,
     },
   })
+  const onAbort = (): void => {
+    if (!win.isDestroyed()) win.destroy()
+  }
+  signal?.addEventListener('abort', onAbort, { once: true })
   try {
     await win.loadFile(path.join(app.getAppPath(), 'dist', 'renderer', 'render', 'render.html'))
+    throwIfRenderAborted(signal)
     const outcome = await awaitRenderResult(win, payload, timeoutMs, onProgress)
     if (!outcome.result.ok) throw new Error(outcome.result.error ?? 'render window reported a failure')
     return outcome
   } finally {
+    signal?.removeEventListener('abort', onAbort)
     if (!win.isDestroyed()) win.destroy()
   }
+}
+
+function throwIfRenderAborted(signal?: AbortSignal): void {
+  if (signal?.aborted !== true) return
+  throw signal.reason instanceof Error ? signal.reason : new Error('render cancelled')
 }
 
 function awaitRenderResult(
@@ -465,12 +507,6 @@ function awaitRenderResult(
     win.on('closed', onClosed)
     win.webContents.send(IPC.renderStart, payload)
   })
-}
-
-function toArrayBuffer(buf: Buffer): ArrayBuffer {
-  const ab = new ArrayBuffer(buf.byteLength)
-  new Uint8Array(ab).set(buf)
-  return ab
 }
 
 function errorMessage(err: unknown): string {

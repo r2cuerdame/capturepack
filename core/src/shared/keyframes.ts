@@ -80,6 +80,12 @@ export function computeKeyframes(
       // instant is the capture instant.
       raw.push(durationMs)
     }
+    // Authored motion changes the picture without changing the box's
+    // lifetime. Each explicit placement is therefore an annotation state
+    // change of its own and must be eligible for frames/ just like appearance
+    // and disappearance. (Near-identical instants are still merged below and
+    // the global cap still applies.)
+    for (const frame of a.keyframes ?? []) raw.push(frame.t_ms)
   }
   if (raw.length === 0) raw.push(durationMs)
 

@@ -73,6 +73,7 @@ export function editorUiaWindows(
     const z = Number.isInteger(w.z) && w.z >= 0 ? w.z : index
     const controls = (counts.get(z) ?? 0) + (legacy && w.focused ? payload.elements.length : 0)
     return {
+      ...(w.hwnd === undefined ? {} : { hwnd: w.hwnd }),
       title: w.title,
       process: w.process,
       class_name: w.class_name,

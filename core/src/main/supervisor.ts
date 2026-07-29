@@ -190,6 +190,11 @@ export interface AcceleratorPlan {
  */
 export function startSupervision(options: SupervisionOptions): AcceleratorPlan {
   if (process.platform !== 'win32') return { registerAccelerator: true, releaseBudgetMs: 0 }
+  // A running main process is the recovery boundary even when supervision is
+  // disabled or its relaunch budget was exhausted. Leaving an installer's
+  // stale flag in either branch would make every future Chrome native host
+  // exit immediately despite the app itself being healthy.
+  fs.rmSync(standDownFile(), { force: true })
   const recoveryState = readRecoveryState()
   if (recoveryState.gaveUp) {
     // The DEGRADED mode issue #61 asks for: automatic restart has stopped, so
@@ -214,11 +219,6 @@ export function startSupervision(options: SupervisionOptions): AcceleratorPlan {
       releaseBudgetMs: removed ? SHORTCUT_RELEASE_BUDGET_MS : 0,
     }
   }
-  // A stand-down flag left behind by an installer that never finished would
-  // silently disable supervision forever; the app starting IS the proof that
-  // setup is over.
-  fs.rmSync(standDownFile(), { force: true })
-
   // Take the accelerator back before registering it. Deleting the .lnk is what
   // makes Explorer release the shortcut key (measured — see
   // shared/startMenuLink.ts); the release is asynchronous, hence the retry

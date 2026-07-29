@@ -3,16 +3,18 @@
 // each window's getDisplayMedia call to its assigned display, takes per-display
 // screenshots, handles display hotplug, and bridges replay request/response.
 //
-// CPU note (GOAL "Multi-Monitor Support"): every capture window runs a recorder
-// PAIR — two rotating MediaRecorder sessions (see renderer/capture/capture.ts).
-// "all" and "cursor" run the SAME recorder set — one pair PER connected display
-// so the last 30 seconds exist wherever the trigger lands. Capturing all
-// displays therefore costs nothing extra at record time; what "all" adds is
-// EXPORT work (one more snapshot + replay fetch + file write per display at the
-// trigger). Fixed mode runs a single pair on the chosen display (lowest CPU).
+// CPU note (GOAL "Multi-Monitor Support"): every capture window normally owns
+// one active MP4 MediaRecorder over one display stream. Only runtimes without
+// MP4/AVC use the legal WebM fallback's two staggered encoders.
+// "all" and "cursor" run the SAME recorder set — one encoder PER connected
+// display so the last replay window exists wherever the trigger lands.
+// Capturing all displays therefore costs no additional recorder at trigger
+// time; what "all" adds is EXPORT work (one more snapshot + replay fetch + file
+// write per display). Fixed mode runs one encoder total (lowest CPU).
 import path from 'node:path'
 import { BrowserWindow, desktopCapturer, ipcMain, screen, session, webContents } from 'electron'
 import type { Display, IpcMainEvent } from 'electron'
+import { REPLAY_TIMEOUT_MS } from '../shared/captureTimeouts'
 import { IPC } from '../shared/ipc'
 import { tickSurfaces } from './context/runtime'
 import type {
@@ -25,6 +27,13 @@ import type {
 } from '../shared/ipc'
 import type { Settings } from '../shared/types'
 import { logError, logInfo, logWarn } from './log'
+import {
+  captureRecorderSignature,
+  isCurrentRecorderResource,
+  recorderTickOwnership,
+  selectRecorderTickOwner,
+} from './captureTickOwnership'
+import type { RecorderTickOwnership } from './captureTickOwnership'
 
 const HOTPLUG_DEBOUNCE_MS = 1_000
 // A recorder window loading only proves that its renderer started, and
@@ -54,7 +63,7 @@ const RECORDER_STARTUP_PROBE_DELAY_MS = 12_000
 // loaded machine #43 describes (thirty seconds of MP4 to mux, assemble and hand
 // across an IPC boundary) three seconds was routinely too little. Waiting is
 // free; abandoning the reply is not.
-const RECORDER_PROBE_TIMEOUT_MS = 10_000
+const RECORDER_PROBE_TIMEOUT_MS = REPLAY_TIMEOUT_MS
 // Same bar the renderer applies to its own output (renderer/capture/capture.ts
 // EVIDENCE_MIN_BYTES): a container header carries no frames, so bytes alone
 // were never proof that anything was recorded.
@@ -92,10 +101,10 @@ const SIMULATED_SLOW_REPLAY_DEFAULT_MS = 15_000
 //
 // Both of the watchdog's tools take something away from a running recorder:
 //
-//  - a PROBE is a replay request, and the renderer answers one by STOPPING its
-//    older MediaRecorder slot (renderer/capture/capture.ts handleReplayRequest).
-//    It restarts immediately, but the footage in that slot is gone and the
-//    1x..2x segment guarantee collapses until the stagger recovers.
+//  - a PROBE is a replay request, and the renderer answers one by flushing and
+//    replacing its current MediaRecorder (renderer/capture/capture.ts
+//    handleReplayRequest). The bounded fragment ring survives that replacement,
+//    but an unnecessary flush still costs encoder/muxer work.
 //  - a REBUILD destroys the recorder window, and the whole ring buffer with it.
 //
 // So the rules below are about what is allowed to authorise them:
@@ -177,6 +186,10 @@ const probesSinceProof = new Map<number, number>()
 const probesInFlight = new Set<number>()
 let reconcileTimer: ReturnType<typeof setInterval> | undefined
 let wantedDisplayIds = new Set<number>()
+// The surface ring stays on one recorder's frame clock across ordinary
+// rebuilds. It changes only when that display is no longer part of the wanted
+// set (hot-unplug, fixed-display change, or recording turned off).
+let tickOwnerDisplayId: number | null = null
 let publishedRecorderState: RecorderState = { status: 'starting' }
 const recorderStateListeners = new Set<(state: RecorderState) => void>()
 
@@ -312,6 +325,9 @@ function clearRecorderProbe(displayId: number): void {
 function scheduleRecorderProbe(displayId: number, win: BrowserWindow, delayMs: number): void {
   clearRecorderProbe(displayId)
   const timer = setTimeout(() => {
+    // A rebuild or capture:ready may have replaced this timer under the same
+    // display id. The stale callback owns neither the map entry nor the probe.
+    if (!isCurrentRecorderResource(recorderProbeTimers.get(displayId), timer)) return
     recorderProbeTimers.delete(displayId)
     void probeRecorder(displayId, win)
   }, delayMs)
@@ -319,8 +335,9 @@ function scheduleRecorderProbe(displayId: number, win: BrowserWindow, delayMs: n
 }
 
 /**
- * The BACKSTOP: stop this display's older recorder slot, look at what comes
- * out, and let it prove — or, only on real evidence, condemn — the recorder.
+ * The BACKSTOP: flush this display's current recorder into its bounded ring,
+ * look at what comes out, and let it prove — or, only on real evidence,
+ * condemn — the recorder.
  *
  * It costs footage (see the recovery rules above), so it runs only while a
  * display is not provably recording, and it is cleared the instant the renderer
@@ -436,17 +453,6 @@ const displayCadence = new Map<number, { achievedFps: number; worstStallMs: numb
 /** What this display's recorder has achieved, or null if it never said. */
 export function recorderCadence(displayId: number): { achievedFps: number; worstStallMs: number; discardedFrames?: number | null; sampledMs?: number; gainedFrames?: number } | null {
   return displayCadence.get(displayId) ?? null
-}
-
-/**
- * The display whose recording IS the pack clock (SPEC §10.1) — the cursor's.
- *
- * Only it ticks the surface ring (#105): a second display's frames carry
- * another recording's numbers, and filing samples under those would put the
- * ring on two clocks at once, which is the problem rather than the fix.
- */
-function focusedDisplayIdForTicks(): number {
-  return screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).id
 }
 
 function onFramesProven(displayId: number, payload: CaptureFramesPayload): void {
@@ -962,15 +968,20 @@ function queueRebuild(): Promise<void> {
 
 // Everything the running recorder depends on: a window whose signature still
 // matches can be kept across a rebuild, replay buffer intact.
-function recorderSignature(display: Display, settings: Settings): string {
-  return [
-    display.size.width,
-    display.size.height,
-    display.scaleFactor,
-    settings.fps,
-    settings.replaySeconds,
-    settings.replayMaxWidth,
-  ].join(':')
+function recorderSignature(
+  display: Display,
+  settings: Settings,
+  tickOwnership: RecorderTickOwnership,
+): string {
+  return captureRecorderSignature({
+    width: display.size.width,
+    height: display.size.height,
+    scaleFactor: display.scaleFactor,
+    fps: settings.fps,
+    replaySeconds: settings.replaySeconds,
+    replayMaxWidth: settings.replayMaxWidth,
+    tickOwnership,
+  })
 }
 
 // Diffs the recorder-window set against what the current settings + connected
@@ -994,6 +1005,36 @@ async function rebuild(): Promise<void> {
         ? screen.getAllDisplays()
         : [resolveFixedDisplay(settings.captureDisplay)]
   const wanted = new Map<number, Display>(displays.map((d) => [d.id, d]))
+  // ONE REBUILD, ONE TICK OWNER.
+  //
+  // Recorder windows are created sequentially and `loadFile()` is asynchronous.
+  // Reading the cursor inside createCaptureWindow therefore let it cross a
+  // monitor between two windows: both could receive `focused: true` (or fixed
+  // mode could receive none because its one display was not under the cursor).
+  // Snapshot the preference before the first await, then derive every role and
+  // signature from that immutable answer. A fixed-mode singleton necessarily
+  // wins even when the cursor is on another display.
+  const preferredTickDisplayId =
+    wanted.size === 0
+      ? null
+      : screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).id
+  tickOwnerDisplayId =
+    preferredTickDisplayId === null
+      ? null
+      : selectRecorderTickOwner([...wanted.keys()], preferredTickDisplayId, tickOwnerDisplayId)
+  const wantedSignatures = new Map<number, string>()
+  if (settings !== null) {
+    for (const display of wanted.values()) {
+      wantedSignatures.set(
+        display.id,
+        recorderSignature(
+          display,
+          settings,
+          recorderTickOwnership(display.id, tickOwnerDisplayId),
+        ),
+      )
+    }
+  }
   wantedDisplayIds = new Set(wanted.keys())
   for (const id of displayRecorderStates.keys()) {
     if (!wanted.has(id)) displayRecorderStates.delete(id)
@@ -1022,7 +1063,7 @@ async function rebuild(): Promise<void> {
       // restarted. A rebuild is the one moment recorders are allowed to be
       // recreated, so this is where it gets a fresh renderer.
       displayRecorderStates.get(id)?.status === 'stopped' ||
-      captureWindowSigs.get(id) !== recorderSignature(display, settings)
+      captureWindowSigs.get(id) !== wantedSignatures.get(id)
     if (!stale) continue
     // destroy() emits 'closed', whose handler releases the window's IPC
     // listener and assignedDisplays entry — no leaks.
@@ -1041,13 +1082,14 @@ async function rebuild(): Promise<void> {
     return
   }
 
-  for (const display of displays) {
+  for (const display of wanted.values()) {
     if (captureWindows.has(display.id)) continue
     setDisplayRecorderState(display.id, { status: 'starting' })
     try {
-      const win = await createCaptureWindow(display, settings)
+      const ownership = recorderTickOwnership(display.id, tickOwnerDisplayId)
+      const win = await createCaptureWindow(display, settings, ownership === 'owner')
       captureWindows.set(display.id, win)
-      captureWindowSigs.set(display.id, recorderSignature(display, settings))
+      captureWindowSigs.set(display.id, wantedSignatures.get(display.id)!)
       if (displayRecorderStates.get(display.id)?.status !== 'stopped') {
         scheduleRecorderProbe(display.id, win, RECORDER_STARTUP_PROBE_DELAY_MS)
       }
@@ -1060,7 +1102,11 @@ async function rebuild(): Promise<void> {
   publishRecorderState()
 }
 
-async function createCaptureWindow(display: Display, settings: Settings): Promise<BrowserWindow> {
+async function createCaptureWindow(
+  display: Display,
+  settings: Settings,
+  ownsTicks: boolean,
+): Promise<BrowserWindow> {
   const win = new BrowserWindow({
     show: false,
     skipTaskbar: true,
@@ -1078,7 +1124,10 @@ async function createCaptureWindow(display: Display, settings: Settings): Promis
     assignedDisplays.set(wcId, String(display.id))
 
     const onError = (event: IpcMainEvent, message: unknown): void => {
-      if (event.sender === win.webContents) {
+      if (
+        event.sender === win.webContents &&
+        isCurrentRecorderResource(captureWindows.get(display.id), win)
+      ) {
         const detail = String(message)
         logError(
           `[capture] recorder for display ${display.id} failed, continuing screenshot-only: ${detail}`,
@@ -1098,7 +1147,12 @@ async function createCaptureWindow(display: Display, settings: Settings): Promis
       }
     }
     const onReady = (event: IpcMainEvent, ready: CaptureReadyPayload): void => {
-      if (event.sender !== win.webContents) return
+      if (
+        event.sender !== win.webContents ||
+        !isCurrentRecorderResource(captureWindows.get(display.id), win)
+      ) {
+        return
+      }
       logInfo(
         `[capture] display ${display.id}: ${ready.mimeType} -> ${ready.replayFile}, ` +
           `${ready.width}x${ready.height}`,
@@ -1122,10 +1176,11 @@ async function createCaptureWindow(display: Display, settings: Settings): Promis
     ipcMain.on(IPC.captureFrames, onFrames)
     const onTick = (event: IpcMainEvent, payload: CaptureTickPayload): void => {
       if (event.sender !== win.webContents || captureWindows.get(display.id) !== win) return
+      // Enforce ownership at the process boundary too. The renderer normally
+      // creates no tick chain for a passive window, but a stale or malformed
+      // sender still cannot put a second display's clock into lane S.
+      if (!ownsTicks) return
       if (typeof payload?.mediaTimeMs !== 'number' || !Number.isFinite(payload.mediaTimeMs)) return
-      // The lane keeps ONE clock and ignores every display but the first to
-      // tick (#110) — which is what `IPC.captureTick` has always documented and
-      // nothing enforced. The display id is what lets it hold that line.
       tickSurfaces(String(display.id), payload.mediaTimeMs, payload.frameAgeMs, payload.tickDelayMs)
     }
     ipcMain.on(IPC.captureTick, onTick)
@@ -1133,6 +1188,7 @@ async function createCaptureWindow(display: Display, settings: Settings): Promis
     // (issue #60): the state moves here — which logs it — and the watchdog
     // above then recreates the window on its own schedule (issue #43).
     win.webContents.on('render-process-gone', (_event, details) => {
+      if (!isCurrentRecorderResource(captureWindows.get(display.id), win)) return
       setDisplayRecorderState(display.id, {
         status: 'stopped',
         reason: 'process-stopped',
@@ -1145,8 +1201,11 @@ async function createCaptureWindow(display: Display, settings: Settings): Promis
       ipcMain.removeListener(IPC.captureFrames, onFrames)
       ipcMain.removeListener(IPC.captureTick, onTick)
       assignedDisplays.delete(wcId)
-      clearRecorderProbe(display.id)
-      if (captureWindows.get(display.id) === win) {
+      // Electron may deliver this after rebuild() has already installed a new
+      // window for the same display. Only the window that still owns the slot
+      // may clear that replacement's probe or change its health.
+      if (isCurrentRecorderResource(captureWindows.get(display.id), win)) {
+        clearRecorderProbe(display.id)
         setDisplayRecorderState(display.id, {
           status: 'stopped',
           reason: 'process-stopped',
@@ -1161,10 +1220,11 @@ async function createCaptureWindow(display: Display, settings: Settings): Promis
     const slowReplayMs = simulateSlowReplayMs()
     const payload: CaptureStartPayload = {
       displayId: String(display.id),
-      // The pack clock's owner is the only display that ticks the ring (#105).
-      focused: display.id === focusedDisplayIdForTicks(),
+      // The rebuild's one stable clock owner is the only display that ticks the
+      // ring (#105). Never re-read the cursor on this asynchronous path.
+      focused: ownsTicks,
       fps: settings.fps,
-      // The recorder rotates segments at this interval; replay covers 1x..2x of it.
+      // Retention window and bounded maintenance-flush interval.
       segmentSeconds: settings.replaySeconds,
       replayMaxWidth: settings.replayMaxWidth,
       replayWidth: replay.width,

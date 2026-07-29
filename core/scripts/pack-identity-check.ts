@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import AdmZip from 'adm-zip'
 import { directoryHoldsCapturePack, manifestNamesCapturePack } from '../src/shared/packIdentity'
+import { createLivePackStore } from '../src/main/mcp/store'
 
 const root = mkdtempSync(path.join(tmpdir(), 'capturepack-identity-'))
 const cases: { name: string; build: () => string; pack: boolean }[] = []
@@ -85,6 +86,58 @@ zipCase('real-pack', { 'manifest.json': JSON.stringify({ format: 'capturepack' }
 zipCase('holiday-photos', { 'IMG_0001.jpg': 'x' }, false)
 zipCase('some-node-module', { 'manifest.json': JSON.stringify({ name: 'left-pad' }) }, false)
 
+console.log('LIVE MCP OUTPUT FOLDER')
+const outA = dir('output-a', {})
+const outB = dir('output-b', {})
+dir(path.join('output-a', 'CapturePack_A'), {
+  'manifest.json': JSON.stringify({
+    format: 'capturepack',
+    format_version: '0.2.1',
+    id: 'a',
+    created_at: '2026-07-29T10:00:00Z',
+  }),
+  'snapshot.png': 'a',
+})
+dir(path.join('output-b', 'CapturePack_B'), {
+  'manifest.json': JSON.stringify({
+    format: 'capturepack',
+    format_version: '0.2.1',
+    id: 'b',
+    created_at: '2026-07-29T11:00:00Z',
+  }),
+  'snapshot.png': 'b',
+})
+let liveOutputDir = outA
+let liveWatch = false
+const liveStore = createLivePackStore(() => ({ outputDir: liveOutputDir, watch: liveWatch }))
+const first = liveStore.current().latest()
+checkLive(first.path.startsWith(outA), `latest starts in the configured folder — ${first.path}`)
+const beforeWatchToggle = liveStore.current()
+liveWatch = true
+const afterWatchToggle = liveStore.current()
+checkLive(
+  beforeWatchToggle === afterWatchToggle,
+  'watch toggle keeps the same store/index instance',
+)
+checkLive(
+  afterWatchToggle.resolve().path === first.path,
+  'watch toggle preserves the explicitly pinned pack',
+)
+liveOutputDir = outB
+const movedStore = liveStore.current()
+checkLive(
+  movedStore.resolve().path === first.path,
+  'output-folder change preserves an explicit current-pack pin',
+)
+const second = movedStore.latest()
+checkLive(second.path.startsWith(outB), `next request follows a changed folder — ${second.path}`)
+liveStore.dispose()
+
 rmSync(root, { recursive: true, force: true })
 console.log(failed === 0 ? '\npack-identity-check ok' : `\npack-identity-check FAILED (${failed})`)
 process.exitCode = failed === 0 ? 0 : 1
+
+function checkLive(ok: boolean, line: string): void {
+  if (!ok) failed += 1
+  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${line}`)
+}

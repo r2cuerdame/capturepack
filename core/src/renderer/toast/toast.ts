@@ -16,7 +16,7 @@ interface ToastBridge {
   openFolder(): void
   copyPath(): void
   createZip(): Promise<ToastCreateZipResult>
-  copyPrompt(): void
+  copyPrompt(): Promise<boolean>
   close(): void
 }
 
@@ -140,8 +140,19 @@ copyPathBtn.addEventListener('click', () => {
   flash(copyPathBtn, t('toast.copiedFlash'))
 })
 copyPromptBtn.addEventListener('click', () => {
-  window.toastBridge.copyPrompt()
-  flash(copyPromptBtn, t('toast.copiedFlash'))
+  if (copyPromptBtn.disabled) return
+  copyPromptBtn.disabled = true
+  void (async () => {
+    try {
+      const copied = await window.toastBridge.copyPrompt()
+      if (copied) flash(copyPromptBtn, t('toast.copiedFlash'))
+    } catch {
+      // Main did not confirm the clipboard, so keep the original label. Most
+      // importantly, never show the optimistic "Copied!" used by rc.38.
+    } finally {
+      copyPromptBtn.disabled = false
+    }
+  })()
 })
 
 window.addEventListener('keydown', (e) => {

@@ -78,6 +78,7 @@ export function buildReadme(
 ): string {
   const t = makeT(lang)
   const annotations = annotationsFile.annotations
+  const imageCapture = manifest.capture_kind === 'image'
   const hasReplay = manifest.media.replay !== null
   const replayName = manifest.media.replay ?? 'replay.webm'
   const blurCount = annotations.filter((a) => a.blur).length
@@ -88,7 +89,13 @@ export function buildReadme(
   lines.push('')
   lines.push(`- **${t('pack.created')}:** ${humanDate(manifest.created_at)}`)
   lines.push(`- **${t('pack.application')}:** ${manifest.environment.app ?? t('pack.unknown')}`)
-  lines.push(`- **${t('pack.duration')}:** ${replayLabel(manifest, t)}`)
+  if (imageCapture) {
+    const scope =
+      manifest.media.image_scope === 'region' ? 'user-selected region' : 'user-requested full screen'
+    lines.push(`- **Capture:** Still image (${scope})`)
+  } else {
+    lines.push(`- **${t('pack.duration')}:** ${replayLabel(manifest, t)}`)
+  }
   // All-displays capture (GOAL "Multi-Monitor Support"): the pack holds every
   // screen the trigger froze, with the boxes drawn on each.
   lines.push(...displaySummaryLines(manifest, t, annotations))
@@ -104,9 +111,9 @@ export function buildReadme(
   // images, right after the description — before the reader is asked to open
   // anything at all.
   const keyframes = keyframeSet(manifest, annotationsFile, renderPending)
-  const keyframeLines = keyframeSectionLines(keyframes, t)
+  const keyframeLines = keyframeSectionLines(keyframes, t, imageCapture)
   if (keyframeLines.length > 0) {
-    lines.push(`## ${t('pack.keyframes')}`)
+    lines.push(imageCapture ? '## Annotated image' : `## ${t('pack.keyframes')}`)
     lines.push('')
     lines.push(...keyframeLines)
     lines.push('')
@@ -117,7 +124,7 @@ export function buildReadme(
   lines.push(`| ${t('pack.fileCol')} | ${t('pack.whatCol')} |`)
   lines.push('|---|---|')
   lines.push(
-    `| snapshot.png | The captured frame, ${annotationsFile.reference_width}×${annotationsFile.reference_height} — original pixels, never modified |`,
+    `| snapshot.png | The captured ${imageCapture ? 'still image' : 'frame'}, ${annotationsFile.reference_width}×${annotationsFile.reference_height} — original pixels, never modified |`,
   )
   if (hasReplay) {
     const seconds = ((manifest.media.replay_duration_ms ?? 0) / 1000).toFixed(1)
@@ -132,10 +139,10 @@ export function buildReadme(
   for (const f of extraDisplayFiles(manifest)) {
     lines.push(`| ${f.name} | ${f.what} |`)
   }
-  const framesEntry = keyframeFileEntry(keyframes)
+  const framesEntry = keyframeFileEntry(keyframes, imageCapture)
   if (framesEntry !== null) lines.push(`| ${framesEntry.name} | ${framesEntry.what} |`)
   lines.push(`| annotations.json | ${annotationCounts(annotations)} — the editable source |`)
-  lines.push('| timeline.json | When the capture and each annotation happened |')
+  if (!imageCapture) lines.push('| timeline.json | When the capture and each annotation happened |')
   lines.push('| report.md | The full generated narrative of this pack |')
   lines.push('| skills/ | Context documents structured for AI readers |')
   lines.push('| manifest.json | Pack identity, environment, and file inventory |')
@@ -143,7 +150,17 @@ export function buildReadme(
 
   lines.push(`## ${t('pack.howToUse')}`)
   lines.push('')
-  if (hasReplay) {
+  if (imageCapture) {
+    lines.push('1. Open `snapshot.png` — the original still image the user explicitly captured.')
+    if (keyframeLines.length > 0) {
+      lines.push('2. Open the annotated image above to see boxes, labels and blur rendered in place.')
+      lines.push('3. Read `report.md` for the annotation details and captured context.')
+      lines.push('4. AI: read the documents in `skills/`, or connect through a CapturePack MCP server.')
+    } else {
+      lines.push('2. Read `report.md` for the annotation details and captured context.')
+      lines.push('3. AI: read the documents in `skills/`, or connect through a CapturePack MCP server.')
+    }
+  } else if (hasReplay) {
     lines.push('1. Watch `replay_annotated.webm` — the annotations are rendered into the video.')
   } else {
     lines.push(
@@ -151,14 +168,14 @@ export function buildReadme(
     )
     lines.push('   to watch. (In packs with a replay, watch `replay_annotated.webm` first.)')
   }
-  if (keyframeLines.length > 0) {
+  if (!imageCapture && keyframeLines.length > 0) {
     lines.push(
       '2. In a hurry — or reading as an AI: the stills above (`frames/`) show every annotation state',
     )
     lines.push('   without decoding video. They are rendered in the background right after save.')
     lines.push('3. Read `report.md` for the full narrative.')
     lines.push('4. AI: read the documents in `skills/`, or connect through a CapturePack MCP server.')
-  } else {
+  } else if (!imageCapture) {
     lines.push('2. Read `report.md` for the full narrative.')
     lines.push('3. AI: read the documents in `skills/`, or connect through a CapturePack MCP server.')
   }
@@ -210,6 +227,7 @@ function buildOverviewSkill(
   renderPending: boolean,
 ): string {
   const annotations = annotationsFile.annotations
+  const imageCapture = manifest.capture_kind === 'image'
   const hasReplay = manifest.media.replay !== null
   const replayName = manifest.media.replay ?? 'replay.webm'
   const numbers = computeDisplayNumbers(annotations)
@@ -224,12 +242,18 @@ function buildOverviewSkill(
       '.',
   )
   const size = `${annotationsFile.reference_width}×${annotationsFile.reference_height}`
-  lines.push(
-    hasReplay
-      ? `**Media:** ${size} snapshot.png + ${((manifest.media.replay_duration_ms ?? 0) / 1000).toFixed(1)}s ${replayName}` +
-          '; the annotated view replay_annotated.webm is generated in the background after save.'
-      : `**Media:** screenshot only (${size} snapshot.png); no replay, no annotated replay.`,
-  )
+  if (imageCapture) {
+    const scope =
+      manifest.media.image_scope === 'region' ? 'user-selected region' : 'user-requested full screen'
+    lines.push(`**Media:** ${size} still image in snapshot.png (${scope}).`)
+  } else {
+    lines.push(
+      hasReplay
+        ? `**Media:** ${size} snapshot.png + ${((manifest.media.replay_duration_ms ?? 0) / 1000).toFixed(1)}s ${replayName}` +
+            '; the annotated view replay_annotated.webm is generated in the background after save.'
+        : `**Media:** screenshot only (${size} snapshot.png); no replay, no annotated replay.`,
+    )
+  }
   // All-displays capture: say plainly which screen each box belongs to.
   const displays = manifest.media.displays
   if (displays !== undefined && displays.length > 1) {
@@ -254,7 +278,9 @@ function buildOverviewSkill(
   lines.push(
     manifest.note ??
       manifest.title ??
-      'The user did not provide a description. The annotations and timeline below are the context.',
+      (imageCapture
+        ? 'The user did not provide a description. The still image, annotations and plugin data are the context.'
+        : 'The user did not provide a description. The annotations and timeline below are the context.'),
   )
   lines.push('')
 
@@ -262,9 +288,9 @@ function buildOverviewSkill(
   // story as images — the single most useful thing in this document for a
   // model that cannot decode video.
   const keyframes = keyframeSet(manifest, annotationsFile, renderPending)
-  const keyframeLines = keyframeSectionLines(keyframes, t)
+  const keyframeLines = keyframeSectionLines(keyframes, t, imageCapture)
   if (keyframeLines.length > 0) {
-    lines.push(`## ${t('pack.keyframes')}`)
+    lines.push(imageCapture ? '## Annotated image' : `## ${t('pack.keyframes')}`)
     lines.push('')
     lines.push(...keyframeLines)
     lines.push('')
@@ -277,7 +303,11 @@ function buildOverviewSkill(
     // Only when this pack really has (or is about to have) stills — a pointer
     // to frames/ in a pack that will never contain it is a dead end.
     if (keyframeLines.length > 0) {
-      lines.push('- `frames/` holds the same annotations as stills, one per state change.')
+      lines.push(
+        imageCapture
+          ? '- The annotated image above renders the boxes on the same captured still.'
+          : '- `frames/` holds the same annotations as stills, one per state change.',
+      )
     }
     lines.push('- `snapshot.png` shows the captured frame.')
     const multi = isMultiDisplay(manifest)
@@ -301,8 +331,10 @@ function buildOverviewSkill(
   }
 
   lines.push(
-    `Counts: ${annotationCounts(annotations)}, ${timeline.events.length} timeline events, ` +
-      `${manifest.plugins.length} plugins.`,
+    imageCapture
+      ? `Counts: ${annotationCounts(annotations)}, ${manifest.plugins.length} plugins.`
+      : `Counts: ${annotationCounts(annotations)}, ${timeline.events.length} timeline events, ` +
+          `${manifest.plugins.length} plugins.`,
   )
 
   const blurCount = annotations.filter((a) => a.blur).length
@@ -373,6 +405,7 @@ function buildAnnotationSkill(
   t: TranslateFn,
 ): string {
   const annotations = annotationsFile.annotations
+  const imageCapture = manifest.capture_kind === 'image'
   const numbers = computeDisplayNumbers(annotations)
   const multi = isMultiDisplay(manifest)
   const focusedIndex = packFocusedDisplay(manifest)
@@ -446,17 +479,23 @@ function buildAnnotationSkill(
     lines.push(
       `- **Bounds:** (${px(a.bounds.x)}, ${px(a.bounds.y)}) size ${px(a.bounds.width)}×${px(a.bounds.height)}`,
     )
-    lines.push(
-      a.start_ms !== undefined && a.end_ms !== undefined
-        ? `- **Lifetime:** ${lifetimeLabel(a, t)} on the replay clock`
-        : '- **Lifetime:** none (applies to the whole capture)',
-    )
+    if (imageCapture) {
+      lines.push('- **Applies to:** this still image')
+    } else {
+      lines.push(
+        a.start_ms !== undefined && a.end_ms !== undefined
+          ? `- **Lifetime:** ${lifetimeLabel(a, t)} on the replay clock`
+          : '- **Lifetime:** none (applies to the whole capture)',
+      )
+    }
     if (a.blur) {
       lines.push(
         '- **Blur:** true — this region is sensitive. Blur is non-destructive: the original media keeps',
       )
       lines.push(
-        '  the unredacted pixels; the blur renders only into derived views (annotated replay, editor',
+        imageCapture
+          ? '  the unredacted pixels; the blur renders only into the annotated image and editor'
+          : '  the unredacted pixels; the blur renders only into derived views (annotated replay, editor',
       )
       lines.push('  previews). Do not quote the content of this region.')
     }
@@ -527,6 +566,33 @@ function buildProjectSkill(manifest: Manifest, t: TranslateFn): string {
   lines.push(`This pack: id \`${manifest.id}\`, created ${humanDate(manifest.created_at)}, generated by`)
   lines.push(`${manifest.generator.name} ${manifest.generator.version}.`)
   lines.push('')
+  if (manifest.capture_kind === 'image') {
+    const scope =
+      manifest.media.image_scope === 'region'
+        ? 'a user-selected region'
+        : 'the user-requested full screen'
+    lines.push(`This is a still-image pack containing ${scope}. Its layout is:`)
+    lines.push('')
+    lines.push('- `manifest.json` — REQUIRED entry point: identity, environment and image provenance.')
+    lines.push('- `snapshot.png` — REQUIRED original still image; defines the annotation coordinate space.')
+    lines.push('- `annotations.json` — annotation boxes: bounds, text and optional number/blur metadata.')
+    lines.push('  This is the editable source of truth for the overlays.')
+    if ((manifest.media.keyframes?.length ?? 0) > 0) {
+      lines.push('- The file declared in `manifest.media.keyframes` — annotated rendering of snapshot.png;')
+      lines.push('  it contains no additional source pixels and is regenerable from the image + annotations.')
+    }
+    lines.push('- `report.md` — generated narrative for humans and LLMs.')
+    lines.push('- `README.md` — human-first entry point.')
+    lines.push('- `skills/` — AI-first documents for the image, annotations and semantic context.')
+    lines.push('- `plugins/` — optional structured object/context metadata from plugins.')
+    lines.push('')
+    lines.push('Trust manifest.json for filenames; JSON source data wins over any generated document.')
+    lines.push('')
+    lines.push('If a CapturePack MCP server is connected, call `capturepack_history` to browse saved packs,')
+    lines.push('then `capturepack_open` with the selected id.')
+    lines.push('')
+    return lines.join('\n')
+  }
   lines.push('How this folder is laid out:')
   lines.push('')
   lines.push('- `manifest.json` — REQUIRED entry point: identity, environment, media inventory.')
@@ -573,7 +639,7 @@ function buildProjectSkill(manifest: Manifest, t: TranslateFn): string {
   lines.push('files win over any generated document, including this one.')
   lines.push('')
   lines.push('If a CapturePack MCP server is connected, prefer it over reading files directly: call')
-  lines.push('`capturepack_latest` for the newest pack or `capturepack_open` for a specific one.')
+  lines.push('`capturepack_history` to browse saved packs, then `capturepack_open` for a specific one.')
   lines.push('')
   return lines.join('\n')
 }

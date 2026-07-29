@@ -1,7 +1,7 @@
-// Replay ring buffer: two MediaRecorder sessions over one getDisplayMedia
-// stream, started segmentSeconds apart and each rotated every 2x segmentSeconds.
-// The older session therefore always holds between 1x and 2x segmentSeconds of
-// footage as a single decodable recorder blob.
+// Replay ring buffer over one getDisplayMedia stream. Chromium's fragmented
+// MP4 path uses one encoder and a bounded moof/mdat ring. A runtime without
+// legal MP4/AVC falls back to two staggered, complete VP8/VP9 WebM sessions:
+// WebM clusters cannot be safely spliced/rebased like fragmented MP4.
 import type {
   CaptureFramesPayload,
   CaptureReadyPayload,
@@ -9,6 +9,19 @@ import type {
   CaptureStartPayload,
   CaptureTickPayload,
 } from '../../shared/ipc'
+import { RECORDER_STOP_TIMEOUT_MS } from '../../shared/captureTimeouts'
+import { wallComparableTimeMs } from '../../shared/highResolutionTime'
+import { FragmentedMp4Ring } from './fragmentedMp4Ring'
+import {
+  pickRecorderFormat,
+  type RecorderFormat,
+} from './recorderFormats'
+import {
+  recorderChunkEndAtMs,
+  releaseRecorderReferences,
+  stopRecorderWithDeadline,
+} from './recorderRetention'
+import { WebmDualSlotRing } from './webmDualSlotRing'
 
 interface CaptureBridge {
   onStart(cb: (payload: CaptureStartPayload) => void): void
@@ -50,16 +63,16 @@ const VIDEO_BITS_PER_SECOND = 6_000_000
 //
 // Evidence is gathered on the timeslice/dataavailable path that already runs
 // and from a counter the track keeps anyway; the only added machinery is ONE
-// timer per capture — not per slot — that fires a handful of times a minute and
+// timer per capture that fires a handful of times a minute and
 // polls nothing.
 
 // A single H.264/VP8 keyframe of any real screen is tens of KB; an MP4 or WebM
 // header with no frames in it is well under 2 KB.
 //
 // Bytes are POSITIVE PROOF ONLY, never the absence of it: the MP4 muxer
-// Chromium picks first batches the whole slot and hands it over on stop(), so a
-// perfectly healthy MP4 recorder reports 0 bytes on every timeslice until
-// something flushes it (a rotation, a replay request, main's backstop probe).
+// Chromium picks first emits complete fragments only at keyframe boundaries, so
+// a perfectly healthy recorder may report 0 bytes for many nominal timeslices.
+// stop() flushes the current fragment (a replay request or main's probe).
 // Measured on this desktop (Electron 36, 1 s timeslice): video/mp4;codecs=avc1
 // fired ZERO dataavailable events in 12 s and then handed over all 361,764
 // bytes on stop(), while the track had delivered 18 frames; VP8 on the same
@@ -86,46 +99,30 @@ const EVIDENCE_STALL_MS = 12000
 // seconds before a genuinely dead capture is named. Take the four seconds.
 const EVIDENCE_STRIKES = 2
 
-interface RecorderFormat {
-  mimeType: string
-  replayFile: 'replay.webm' | 'replay.mp4'
+interface ActiveRecorder {
+  recorder: MediaRecorder
+  generation: number
+  flushAtMs: number | null
+  flushBlobs: Blob[]
+  flushTimer: number | undefined
 }
-
-// Probe hardware-friendly platform AVC first. Matroska/AVC is probed in the
-// required position, but is not selected when MP4/AVC is unavailable: H.264 is
-// not WebM-compatible and the CapturePack format intentionally has no .mkv
-// replay name, so relabelling Matroska bytes as .webm would make a corrupt pack.
-const RECORDER_FORMATS: readonly RecorderFormat[] = [
-  { mimeType: 'video/mp4;codecs=avc1', replayFile: 'replay.mp4' },
-  { mimeType: 'video/x-matroska;codecs=avc1', replayFile: 'replay.webm' },
-  { mimeType: 'video/webm;codecs=vp8', replayFile: 'replay.webm' },
-  { mimeType: 'video/webm;codecs=vp9', replayFile: 'replay.webm' },
-]
-
-interface Slot {
-  index: 0 | 1
-  recorder: MediaRecorder | null
-  chunks: Blob[]
-  startedAt: number
-  rotateTimer: number | undefined
-  startTimer: number | undefined
-}
-
-function newSlot(index: 0 | 1): Slot {
-  return { index, recorder: null, chunks: [], startedAt: 0, rotateTimer: undefined, startTimer: undefined }
-}
-
-const slots: [Slot, Slot] = [newSlot(0), newSlot(1)]
 
 let stream: MediaStream | null = null
 let recorderFormat: RecorderFormat | null = null
 let segmentMs = 0
 let startPayload: CaptureStartPayload | null = null
 let retried = false
+let retryTimer: number | undefined
+let activeRecorder: ActiveRecorder | null = null
+let replayRing: FragmentedMp4Ring | null = null
+let webmRing: WebmDualSlotRing | null = null
+let captureGeneration = 0
+let ingestQueue: Promise<void> = Promise.resolve()
+let recorderQueue: Promise<void> = Promise.resolve()
 
 // Frame evidence for the CURRENT capture (reset by every startCapture).
 let evidenceTimer: number | undefined
-// Recorder bytes seen since the last evidence check, across both slots.
+// Recorder bytes seen since the last evidence check.
 let evidenceBytes = 0
 // Delivered-frame count at the last evidence check — growth is proof by itself.
 // This is NOT belt-and-braces: measured on a 4K desktop here, a perfectly
@@ -360,22 +357,15 @@ function startFrameTicks(): void {
     //
     //   `mediaTime`   is the track's OWN timeline and the spec says it "may be
     //                 zero for live streams". It starts when the STREAM did,
-    //                 not when this recorder slot did — and the saved replay is
-    //                 one slot's output, whose t=0 is that slot's start. They
-    //                 agree only until the first rotation, which is why this
-    //                 looked almost right.
+    //                 not where the bounded replay ring begins.
     //   `captureTime` is defined for WebRTC and getUserMedia sources. A screen
     //                 capture is neither, so it is simply absent.
     //
     //   `presentationTime` IS specified for every source — "the time at which
     //                 the user agent submitted the frame for composition", on
-    //                 the same timebase as `performance.now()`. So is
-    //                 `slot.startedAt`. The difference between them is the
-    //                 frame's exact position in the file this slot is writing.
+    //                 the same timebase as `performance.now()`.
     //
-    // The slot that will BE the replay is the older recording one, which is
-    // what `olderRecordingSlot` already answers for the export path.
-    const base = olderRecordingSlot()
+    const base = activeRecorder
     const submitted = metadata.presentationTime
     if (base === null || typeof submitted !== 'number' || !Number.isFinite(submitted)) {
       video.requestVideoFrameCallback(pump)
@@ -389,11 +379,12 @@ function startFrameTicks(): void {
     // BACKWARDS by up to thirty seconds. The log said it plainly once a
     // recording lived long enough to rotate: "736 samples over -9s".
     //
-    // `presentationTime` is `performance.now()`-based and never goes backwards,
-    // so it is sent as-is. Turning it into a position in the saved file needs
-    // to know WHICH slot was saved and where that slot began, and the only
-    // moment both are known is when the replay is handed over — so that is
-    // where the subtraction happens, not here.
+    // `presentationTime` is `performance.now()`-based and never goes backwards
+    // inside THIS renderer. CapturePack owns one renderer per display, though,
+    // and each has its own `performance.now()` origin. Put the tick on the
+    // epoch-based DOMHighRes axis before it crosses IPC so every display and the
+    // renderer that supplies the saved replay are comparable. Turning it into a
+    // position in the saved file still waits until that replay is handed over.
     // HOW OLD THE PICTURE ALREADY IS (#108), measured at last.
     //
     // The log has printed "frame already 0 ms old" for every capture of this
@@ -436,7 +427,7 @@ function startFrameTicks(): void {
     const delayMs = Math.max(0, now - submitted)
     window.captureBridge.sendTick?.({
       displayId: startPayload?.displayId ?? '',
-      mediaTimeMs: submitted,
+      mediaTimeMs: wallComparableTimeMs(performance.timeOrigin, submitted),
       tickDelayMs: delayMs,
       ...(ageMs === undefined ? {} : { frameAgeMs: ageMs }),
     })
@@ -467,7 +458,11 @@ function stopFrameTicks(): void {
 
 function armEvidenceCheck(delayMs: number): void {
   window.clearTimeout(evidenceTimer)
-  evidenceTimer = window.setTimeout(checkFrameEvidence, delayMs)
+  const generation = captureGeneration
+  evidenceTimer = window.setTimeout(() => {
+    if (generation !== captureGeneration) return
+    checkFrameEvidence()
+  }, delayMs)
 }
 
 /** Counts recorder output toward the next evidence check. */
@@ -513,7 +508,7 @@ function checkFrameEvidence(): void {
     //
     // Test path (--simulate-slow-replay): withheld, so main never learns from
     // the cheap channel what this recorder can prove. Everything else about the
-    // recorder — the slots, the rotations, the ring buffer — stays real, which
+    // recorder — the encoder and bounded ring buffer — stays real, which
     // is exactly the state #43 describes and exactly what recovery must not
     // destroy.
     if (startPayload?.simulateSlowReplayMs === undefined) {
@@ -533,8 +528,8 @@ function checkFrameEvidence(): void {
   // NO COUNTER, NO VERDICT. Failing here would announce "not recording" on
   // every launch of a healthy MP4 recorder, restart it for nothing, and — once
   // the one retry is spent — leave the display screenshot-only for the rest of
-  // the process. Keep watching instead: the next flush (a slot rotation, a
-  // capture, main's probe) still lands in noteRecorderBytes and proves it.
+  // the process. Keep watching instead: the next flush (a capture or main's
+  // probe) still lands in noteRecorderBytes and proves it.
   if (frames === null) {
     if (!unknownFramesLogged) {
       unknownFramesLogged = true
@@ -556,7 +551,7 @@ function checkFrameEvidence(): void {
     `[capture] display ${startPayload?.displayId ?? '?'}: no video frames — ` +
       `${bytes} recorder bytes and ${frames} delivered frames over ` +
       `${evidenceStrikes} check(s) while MediaRecorder reported ` +
-      `"${slots.map((s) => s.recorder?.state ?? 'none').join('/')}". ` +
+      `"${activeRecorder?.recorder.state ?? webmRing?.recorderStates() ?? 'none'}". ` +
       'On Windows this is typically a failing Desktop Duplication ' +
       '(DxgiDuplicatorController): another app holds the duplication, or the ' +
       'graphics driver needs a reset.',
@@ -578,28 +573,78 @@ function checkFrameEvidence(): void {
  * every one of those into a permanently screenshot-only display, because
  * nothing else recreates a torn-down capture.
  */
-function failCapture(message: string): void {
+function failCapture(message: string, generation = captureGeneration): void {
+  // A delayed failure belongs to the capture which created it. Without this
+  // guard, an old track-ended/error/deadline can tear down the replacement
+  // stream and start a second stale retry.
+  if (generation !== captureGeneration) return
   window.captureBridge.sendError(message)
   teardown()
   if (retried || startPayload === null) return
   retried = true
   const payload = startPayload
-  window.setTimeout(() => void startCapture(payload), RETRY_DELAY_MS)
+  const retryGeneration = captureGeneration
+  const timer = window.setTimeout(() => {
+    if (
+      retryTimer !== timer ||
+      retryGeneration !== captureGeneration ||
+      startPayload !== payload
+    ) {
+      return
+    }
+    retryTimer = undefined
+    void startCapture(payload)
+  }, RETRY_DELAY_MS)
+  retryTimer = timer
 }
 
 function teardown(): void {
+  captureGeneration += 1
+  // A promise chain is an owner too. Keeping the old tails here made a replay
+  // request queued before restart execute against the NEW recorder, while a
+  // slow old Blob.arrayBuffer delayed every new MP4 ingest behind it. The old
+  // operations still settle under their generation/ring checks, but the new
+  // generation gets independent queues immediately.
+  ingestQueue = Promise.resolve()
+  recorderQueue = Promise.resolve()
+  window.clearTimeout(retryTimer)
+  retryTimer = undefined
   window.clearTimeout(evidenceTimer)
   evidenceTimer = undefined
-  for (const slot of slots) {
-    window.clearTimeout(slot.rotateTimer)
-    window.clearTimeout(slot.startTimer)
-    slot.rotateTimer = undefined
-    slot.startTimer = undefined
-    const recorder = slot.recorder
-    slot.recorder = null
-    slot.chunks = []
-    if (recorder && recorder.state !== 'inactive') recorder.stop()
+  window.clearInterval(cadenceTimer)
+  cadenceTimer = undefined
+  cadence = null
+  // Release the extra one-pixel frame sink immediately. Waiting for the retry
+  // to call startFrameTicks() kept a stopped desktop stream and its callback
+  // chain alive for the whole backoff window.
+  stopFrameTicks()
+  const session = activeRecorder
+  activeRecorder = null
+  if (session !== null) {
+    window.clearTimeout(session.flushTimer)
+    session.flushTimer = undefined
+    const recorder = session.recorder
+    // A replay extraction owns a non-null onstop until its stop event lands;
+    // its continuation releases these references after assembling the ring.
+    // Every other teardown is discarding the recorder and can release now.
+    if (recorder.onstop === null) {
+      releaseRecorderReferences(recorder, session.flushBlobs)
+    }
+    if (recorder.state !== 'inactive') {
+      try {
+        recorder.stop()
+      } catch {
+        // The recorder may already have a stop task queued.
+      }
+    }
   }
+  replayRing?.clear()
+  replayRing = null
+  // The fallback owns two recorder sessions and their stagger/rotation timers.
+  // Disposing the owner first makes any synchronous final data event harmless.
+  const fallback = webmRing
+  webmRing = null
+  fallback?.clear()
   if (stream) {
     for (const track of stream.getTracks()) track.stop()
     stream = null
@@ -607,17 +652,25 @@ function teardown(): void {
 }
 
 async function startCapture(payload: CaptureStartPayload): Promise<void> {
+  // Explicit starts and guarded retries both supersede an in-flight
+  // getDisplayMedia call. Teardown retires its generation; the local stream
+  // below is installed only if this attempt still owns the renderer.
+  teardown()
+  const generation = ++captureGeneration
   startPayload = payload
   segmentMs = payload.segmentSeconds * 1000
-  recorderFormat = pickRecorderFormat()
+  recorderFormat = pickRecorderFormat((mimeType) =>
+    MediaRecorder.isTypeSupported(mimeType),
+  )
   if (recorderFormat === null) {
     failCapture('MediaRecorder has no supported CapturePack replay format')
     return
   }
+  let acquiredStream: MediaStream
   try {
     // The main process routes this to the display assigned to this window
     // (payload.displayId); no picker appears.
-    stream = await navigator.mediaDevices.getDisplayMedia({
+    acquiredStream = await navigator.mediaDevices.getDisplayMedia({
       audio: false,
       video: {
         frameRate: payload.fps,
@@ -633,11 +686,18 @@ async function startCapture(payload: CaptureStartPayload): Promise<void> {
       },
     })
   } catch (err) {
-    failCapture(`getDisplayMedia failed: ${describe(err)}`)
+    failCapture(`getDisplayMedia failed: ${describe(err)}`, generation)
     return
   }
-  const track = stream.getVideoTracks()[0]
-  track?.addEventListener('ended', () => failCapture('capture stream ended'))
+  if (generation !== captureGeneration) {
+    for (const track of acquiredStream.getTracks()) track.stop()
+    return
+  }
+  stream = acquiredStream
+  const track = acquiredStream.getVideoTracks()[0]
+  track?.addEventListener('ended', () =>
+    failCapture('capture stream ended', generation),
+  )
   const settings = track?.getSettings()
   window.captureBridge.sendReady({
     displayId: payload.displayId,
@@ -655,103 +715,288 @@ async function startCapture(payload: CaptureStartPayload): Promise<void> {
   evidenceFrames = deliveredFrames() ?? 0
   startCadenceMonitor()
   startFrameTicks()
-  startSlot(slots[0])
+  if (recorderFormat.strategy === 'fragmented-mp4') {
+    // The normal Windows path constructs exactly one encoder at a time.
+    replayRing = new FragmentedMp4Ring(segmentMs, VIDEO_BITS_PER_SECOND)
+    startRecorder(generation)
+  } else {
+    // Only fallback runtimes pay for two encoders. Each slot is a complete
+    // bounded WebM session; Matroska/AVC can never reach this branch because
+    // pickRecorderFormat deliberately skips that illegal container/name pair.
+    const format = recorderFormat
+    const fallback = new WebmDualSlotRing({
+      generation,
+      segmentMs,
+      mimeType: format.mimeType,
+      timesliceMs: CHUNK_TIMESLICE_MS,
+      stopTimeoutMs: RECORDER_STOP_TIMEOUT_MS,
+      timers: {
+        now: () => performance.now(),
+        set: (callback, delayMs) => window.setTimeout(callback, delayMs),
+        clear: (handle) => window.clearTimeout(handle as number),
+      },
+      createRecorder: () => createRecorder(format),
+      discardRecorderOutput: () => startPayload?.simulateNoFrames === true,
+      onBytes: noteRecorderBytes,
+      onFailure: failCapture,
+    })
+    webmRing = fallback
+    fallback.start()
+  }
   armEvidenceCheck(EVIDENCE_DEADLINE_MS)
-  slots[1].startTimer = window.setTimeout(() => startSlot(slots[1]), segmentMs)
 }
 
-function startSlot(slot: Slot): void {
+function createRecorder(format: RecorderFormat): MediaRecorder {
+  return new MediaRecorder(stream!, {
+    mimeType: format.mimeType,
+    videoBitsPerSecond: VIDEO_BITS_PER_SECOND,
+  })
+}
+
+function startRecorder(generation: number): void {
   const format = recorderFormat
-  if (!stream || !stream.active || format === null) return
-  // chunks is captured per recorder session; replacing slot.chunks on the next
-  // start orphans the old session's data so memory stays bounded.
-  const chunks: Blob[] = []
+  const ring = replayRing
+  if (
+    generation !== captureGeneration ||
+    !stream ||
+    !stream.active ||
+    format === null ||
+    format.strategy !== 'fragmented-mp4' ||
+    ring === null
+  ) {
+    return
+  }
   let recorder: MediaRecorder
   try {
-    recorder = new MediaRecorder(stream, {
-      mimeType: format.mimeType,
-      videoBitsPerSecond: VIDEO_BITS_PER_SECOND,
-    })
+    recorder = createRecorder(format)
   } catch (err) {
-    failCapture(`MediaRecorder unavailable: ${describe(err)}`)
+    failCapture(`MediaRecorder unavailable: ${describe(err)}`, generation)
     return
+  }
+  const session: ActiveRecorder = {
+    recorder,
+    generation,
+    flushAtMs: null,
+    flushBlobs: [],
+    flushTimer: undefined,
   }
   recorder.ondataavailable = (event) => {
     // Test path (--simulate-no-frames): behave exactly like a recorder whose
     // desktop capturer delivers nothing — the encoder output is dropped on the
     // floor, so the buffer stays empty and no evidence ever accumulates.
     if (startPayload?.simulateNoFrames === true) return
-    if (event.data.size > 0) chunks.push(event.data)
     noteRecorderBytes(event.data.size)
+    if (event.data.size === 0) return
+    // stop() changes the recorder to inactive before it emits the final data
+    // event. Only that final flush is anchored to the request instant; an
+    // already-queued ordinary timeslice keeps its own delivery time.
+    const deliveredAtMs = performance.now()
+    const endAtMs = recorderChunkEndAtMs(
+      event.timeStamp,
+      deliveredAtMs,
+      session.flushAtMs,
+      recorder.state === 'inactive',
+    )
+    const blob = event.data
+    if (session.flushAtMs !== null && recorder.state === 'inactive') {
+      // stop() can overtake a timeslice task already queued by MediaRecorder.
+      // Stage every data event from that point through the final flush; once
+      // onstop proves the batch is complete, one parser call backfills each
+      // fragment by its encoded duration from the exact capture instant.
+      session.flushBlobs.push(blob)
+      return
+    }
+    queueRecorderBlobs([blob], endAtMs, generation, ring)
   }
-  recorder.onerror = () => failCapture(`MediaRecorder error (slot ${slot.index})`)
-  slot.recorder = recorder
-  slot.chunks = chunks
-  slot.startedAt = performance.now()
-  recorder.start(CHUNK_TIMESLICE_MS)
-  slot.rotateTimer = window.setTimeout(() => rotateSlot(slot), 2 * segmentMs)
-}
-
-function rotateSlot(slot: Slot): void {
-  const recorder = slot.recorder
-  if (recorder && recorder.state !== 'inactive') recorder.stop()
-  startSlot(slot)
-}
-
-function olderRecordingSlot(): Slot | null {
-  const recording = slots.filter((s) => s.recorder !== null && s.recorder.state === 'recording')
-  recording.sort((a, b) => a.startedAt - b.startedAt)
-  return recording[0] ?? null
-}
-
-// Restarting only the extracted slot would leave the two rotation schedules an
-// arbitrary offset apart, converging toward lockstep with repeated captures and
-// shrinking later replays toward zero. Forcing the surviving slot onto a
-// rotation (or first start) segmentMs from now restores the 1x segmentSeconds
-// stagger, so the 1x..2x footage guarantee holds for every later capture.
-function restaggerSurvivor(other: Slot): void {
-  window.clearTimeout(other.rotateTimer)
-  window.clearTimeout(other.startTimer)
-  other.rotateTimer = undefined
-  other.startTimer = undefined
-  if (other.recorder !== null && other.recorder.state === 'recording') {
-    other.rotateTimer = window.setTimeout(() => rotateSlot(other), segmentMs)
-  } else {
-    other.startTimer = window.setTimeout(() => startSlot(other), segmentMs)
+  recorder.onerror = () => {
+    if (activeRecorder !== session) return
+    failCapture('MediaRecorder error', session.generation)
   }
-}
-
-async function handleReplayRequest(requestId: string): Promise<void> {
-  const slot = olderRecordingSlot()
-  const recorder = slot?.recorder
-  const format = recorderFormat
-  if (!slot || !recorder || !stream?.active || format === null) {
-    window.captureBridge.sendReplayResult({
-      requestId,
-      buffer: new ArrayBuffer(0),
-      durationMs: 0,
-      mimeType: 'video/webm',
-      replayFile: 'replay.webm',
-    })
+  activeRecorder = session
+  try {
+    recorder.start(CHUNK_TIMESLICE_MS)
+  } catch (err) {
+    failCapture(`MediaRecorder start failed: ${describe(err)}`, generation)
     return
   }
-  const chunks = slot.chunks
-  const startedAt = slot.startedAt
-  window.clearTimeout(slot.rotateTimer)
-  // stop() flushes the final dataavailable before firing onstop, so chunks is
-  // complete once this resolves.
-  await new Promise<void>((resolve) => {
-    recorder.onstop = () => resolve()
-    recorder.stop()
-  })
-  const durationMs = Math.round(performance.now() - startedAt)
-  // Where this file's t=0 sits on the tick clock (#112). Ticks are monotonic
-  // `presentationTime`; these bytes begin when this slot did.
-  const originMs = startedAt
-  startSlot(slot) // restart before assembling so buffering never pauses
-  restaggerSurvivor(slots[slot.index === 0 ? 1 : 0])
-  const buffer = await new Blob(chunks, { type: format.mimeType }).arrayBuffer()
-  // Test path (--simulate-slow-replay): the slot really was stopped and really
+  scheduleMaintenanceFlush(session)
+}
+
+function queueRecorderBlobs(
+  blobs: readonly Blob[],
+  endAtMs: number,
+  generation: number,
+  ring: FragmentedMp4Ring,
+): void {
+  if (blobs.length === 0) return
+  const source = blobs.length === 1 ? blobs[0]! : new Blob([...blobs])
+  ingestQueue = ingestQueue
+    .catch(() => {
+      // A prior malformed chunk must not permanently poison later sessions.
+    })
+    .then(async () => {
+      const bytes = new Uint8Array(await source.arrayBuffer())
+      if (generation !== captureGeneration || replayRing !== ring) return
+      ring.pushBytes(bytes, endAtMs)
+    })
+    .catch((err: unknown) => {
+      console.error(
+        `[capture] display ${startPayload?.displayId ?? '?'}: fragmented MP4 ingest failed: ${describe(err)}`,
+      )
+    })
+}
+
+function scheduleMaintenanceFlush(session: ActiveRecorder): void {
+  window.clearTimeout(session.flushTimer)
+  session.flushTimer = window.setTimeout(() => {
+    session.flushTimer = undefined
+    recorderQueue = recorderQueue
+      .catch(() => {
+        // A failed request must not disable bounded maintenance flushes.
+      })
+      .then(async () => {
+        if (activeRecorder !== session) return
+        await flushRecorderSession(session, performance.now())
+      })
+      .catch((err: unknown) => {
+        console.error(
+          `[capture] display ${startPayload?.displayId ?? '?'}: maintenance flush failed: ${describe(err)}`,
+        )
+        failCapture(
+          `MediaRecorder maintenance flush failed: ${describe(err)}`,
+          session.generation,
+        )
+      })
+  }, Math.max(CHUNK_TIMESLICE_MS, segmentMs))
+}
+
+/**
+ * Flush one exact recorder session into the ring and immediately replace it.
+ *
+ * Both the maintenance timer and replay requests enter through recorderQueue.
+ * Identity is checked as well: a timer queued for an old session becomes a
+ * no-op after a replay request has already replaced that session.
+ */
+async function flushRecorderSession(
+  session: ActiveRecorder,
+  endAtMs: number,
+): Promise<boolean> {
+  const ring = replayRing
+  if (activeRecorder !== session || ring === null) return false
+  const recorder = session.recorder
+  window.clearTimeout(session.flushTimer)
+  session.flushTimer = undefined
+  session.flushAtMs = endAtMs
+  activeRecorder = null
+  let replacementStarted = false
+  const startReplacement = (): void => {
+    if (session.generation !== captureGeneration || !stream?.active) return
+    startRecorder(session.generation)
+    replacementStarted = true
+  }
+  if (recorder.state !== 'inactive') {
+    // stop() flushes the final dataavailable before firing onstop.
+    const stopped = await stopRecorderWithDeadline(
+      recorder,
+      RECORDER_STOP_TIMEOUT_MS,
+      {
+        set: (callback, delayMs) => window.setTimeout(callback, delayMs),
+        clear: (handle) => window.clearTimeout(handle as number),
+      },
+      // A timeout/throw abandons this failed flush and severs the recorder ->
+      // Blob closure chain immediately; a stop event that never arrives must
+      // not retain the old session forever.
+      () => releaseRecorderReferences(recorder, session.flushBlobs),
+      // stop() has accepted the old session. Start its replacement now instead
+      // of after muxing finishes, so each 30-second maintenance boundary does
+      // not punch a visible gap into the desktop timeline.
+      startReplacement,
+    )
+    if (!stopped) {
+      // If stop() threw before accepting the request, there is no replacement
+      // for teardown to find; put the old recorder back so recovery can stop it.
+      if (!replacementStarted && session.generation === captureGeneration) {
+        activeRecorder = session
+      }
+      failCapture(
+        `MediaRecorder stop timed out after ${RECORDER_STOP_TIMEOUT_MS} ms`,
+        session.generation,
+      )
+      return false
+    }
+  } else {
+    startReplacement()
+  }
+  if (session.flushBlobs.length > 0) {
+    queueRecorderBlobs(
+      session.flushBlobs.splice(0),
+      endAtMs,
+      session.generation,
+      ring,
+    )
+  }
+  await ingestQueue
+  releaseRecorderReferences(recorder, session.flushBlobs)
+  if (!replacementStarted) startReplacement()
+  return true
+}
+
+async function handleReplayRequest(
+  requestId: string,
+  requestGeneration: number,
+): Promise<void> {
+  const format = recorderFormat
+  if (
+    requestGeneration !== captureGeneration ||
+    !stream?.active ||
+    format === null
+  ) {
+    sendEmptyReplay(requestId, format)
+    return
+  }
+  const requestedAt = performance.now()
+  let buffer = new ArrayBuffer(0)
+  let durationMs = 0
+  let originMs: number | undefined
+  if (format.strategy === 'dual-slot-webm') {
+    const fallback = webmRing
+    if (fallback !== null) {
+      const replay = await fallback.capture(requestedAt)
+      if (replay !== null) {
+        buffer = replay.buffer
+        durationMs = replay.durationMs
+        originMs = wallComparableTimeMs(
+          performance.timeOrigin,
+          replay.startAtMs,
+        )
+      }
+    }
+  } else {
+    const session = activeRecorder
+    const ring = replayRing
+    if (session !== null && ring !== null) {
+      const flushed = await flushRecorderSession(session, requestedAt)
+      if (flushed) {
+        const replay = ring.assemble(requestedAt)
+        buffer = replay?.buffer ?? new ArrayBuffer(0)
+        durationMs = replay?.durationMs ?? 0
+        // Where this file's t=0 sits on the shared renderer clock (#112). The
+        // replay can be supplied by another display renderer, so put the ring's
+        // measured start on the one wall-comparable axis.
+        originMs =
+          replay === null
+            ? undefined
+            : wallComparableTimeMs(performance.timeOrigin, replay.startAtMs)
+      }
+      // A rejected/timed-out stop is not a capture instant. Leaving buffer
+      // empty prevents older bytes being presented as though they ended now.
+    }
+  }
+  if (requestGeneration !== captureGeneration) {
+    sendEmptyReplay(requestId, format)
+    return
+  }
+  // Test path (--simulate-slow-replay): the recorder really was stopped and
   // was restarted — the cost of the request has been paid in full — and only
   // the ANSWER is late, the way it is on a machine muxing thirty seconds of MP4
   // under load. Held after the assembly so the simulation cannot accidentally
@@ -769,12 +1014,13 @@ async function handleReplayRequest(requestId: string): Promise<void> {
   // every reader believe a recording exists. Below the evidence bar the honest
   // answer is the same one a dead recorder gives — no footage.
   window.captureBridge.sendReplayResult(
-    buffer.byteLength >= EVIDENCE_MIN_BYTES
+    requestGeneration === captureGeneration &&
+      buffer.byteLength >= EVIDENCE_MIN_BYTES
       ? {
           requestId,
           buffer,
           durationMs,
-          originMs,
+          ...(originMs === undefined ? {} : { originMs }),
           mimeType: format.mimeType,
           replayFile: format.replayFile,
         }
@@ -788,24 +1034,39 @@ async function handleReplayRequest(requestId: string): Promise<void> {
   )
 }
 
-function pickRecorderFormat(): RecorderFormat | null {
-  for (const candidate of RECORDER_FORMATS) {
-    if (!MediaRecorder.isTypeSupported(candidate.mimeType)) continue
-    if (candidate.mimeType.startsWith('video/x-matroska')) {
-      // We did probe it in order. Do not lie about the container: AVC inside
-      // Matroska is not a WebM-compatible stream, and replay.mkv is not a legal
-      // CapturePack media name. Continue to the legal VP8/VP9 fallbacks.
-      console.warn('[capture] Matroska/AVC is supported but cannot be stored as a CapturePack replay')
-      continue
-    }
-    return candidate
-  }
-  return null
+function sendEmptyReplay(
+  requestId: string,
+  format: RecorderFormat | null,
+): void {
+  window.captureBridge.sendReplayResult({
+    requestId,
+    buffer: new ArrayBuffer(0),
+    durationMs: 0,
+    mimeType: format?.mimeType ?? 'video/webm',
+    replayFile: format?.replayFile ?? 'replay.webm',
+  })
 }
 
 window.captureBridge.onStart((payload) => {
+  // A fresh command is a new recovery episode and cancels any retry owned by
+  // the prior command through startCapture()->teardown().
+  retried = false
   void startCapture(payload)
 })
 window.captureBridge.onRequestReplay((requestId) => {
-  void handleReplayRequest(requestId)
+  // Capture ownership is fixed when IPC arrives, not when an earlier queued
+  // stop/assembly eventually lets this callback run.
+  const requestGeneration = captureGeneration
+  const requestFormat = recorderFormat
+  recorderQueue = recorderQueue
+    .catch(() => {
+      // One failed request must not block every later capture.
+    })
+    .then(() => {
+      if (requestGeneration !== captureGeneration) {
+        sendEmptyReplay(requestId, requestFormat)
+        return
+      }
+      return handleReplayRequest(requestId, requestGeneration)
+    })
 })

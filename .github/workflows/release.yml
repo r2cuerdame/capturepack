@@ -47,24 +47,6 @@ jobs:
             throw "Tag $env:RELEASE_TAG does not match core/package.json version $version"
           }
 
-      # The tag is created here rather than pushed by hand, so the thing that
-      # gets released is exactly the ref this run checked out — a tag pushed
-      # separately can drift from what the workflow was started against.
-      - name: Create the tag if it does not exist
-        shell: pwsh
-        env:
-          RELEASE_TAG: ${{ inputs.tag }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if (git rev-parse -q --verify "refs/tags/$env:RELEASE_TAG") {
-            Write-Host "$env:RELEASE_TAG already exists; releasing it as-is"
-          } else {
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git tag "$env:RELEASE_TAG"
-            git push origin "$env:RELEASE_TAG"
-          }
-
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -75,13 +57,35 @@ jobs:
         working-directory: core
         run: npm ci
 
-      - name: Typecheck
+      # The public artifact must pass the same gate as the candidate the user
+      # confirmed locally: all deterministic regressions, site/spec validation,
+      # a fresh build, and an isolated Electron smoke test.
+      - name: Full RC QA gate
         working-directory: core
-        run: npm run typecheck
+        run: npm run qa:rc
 
-      - name: Build
-        working-directory: core
-        run: npm run build
+      # Create the tag only AFTER QA passes. A failed gate must not leave a tag
+      # behind, and a retry must never build one commit while publishing under
+      # a tag that points at another.
+      - name: Create or verify the release tag
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tagRef = "refs/tags/$env:RELEASE_TAG"
+          if (git rev-parse -q --verify "$tagRef^{commit}") {
+            $tagCommit = (git rev-list -n 1 $tagRef).Trim()
+            if ($tagCommit -ne $env:GITHUB_SHA) {
+              throw "Tag $env:RELEASE_TAG points at $tagCommit, not checked-out commit $env:GITHUB_SHA"
+            }
+            Write-Host "$env:RELEASE_TAG already points at the checked-out commit"
+          } else {
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag "$env:RELEASE_TAG" $env:GITHUB_SHA
+            git push origin "$env:RELEASE_TAG"
+          }
 
       # Publishes CapturePack-Setup-{version}.exe + latest.yml (sha512 for
       # electron-updater verification) to the GitHub Release for this tag.

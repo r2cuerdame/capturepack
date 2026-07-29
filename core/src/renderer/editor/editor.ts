@@ -27,18 +27,27 @@ import type {
   EditorWindowMode,
   UiaAnnotationTarget,
 } from '../../shared/types'
-import { annotationAt, keyframedBoundsAt, trackedBoundsAt } from '../../shared/track'
+import { annotationAt, trackedBoundsAt } from '../../shared/track'
+import type { AuthoredMotionSpace } from '../../shared/track'
 import {
   hasMotion,
   keyframeIndexAt,
   keyframesOf,
+  moveKeyframe,
   removeKeyframeAt,
   setKeyframe,
   syncBoundsToRepresentative,
 } from '../../shared/motion'
 import { computeDisplayNumbers } from '../../shared/numbering'
-import { ObjectIndex, objectHoverLabel, objectLabel } from './objects'
-import type { PickableObject } from './objects'
+import { contextFrameRequestsForDisplays } from '../../shared/displayClock'
+import {
+  ObjectIndex,
+  objectHoverLabel,
+  objectLabel,
+  pickIdentityOf,
+  samePickIdentity,
+} from './objects'
+import type { PickableObject, PickIdentity } from './objects'
 import { EditorState } from './state'
 import {
   formatDurationLabel,
@@ -67,10 +76,19 @@ import type { BoardDisplay, BoardInput, BoardLayout } from './board'
 import { BoardScrub, wheelScrubDeltaMs } from './scrub'
 import type { BoardReplayInput } from './scrub'
 import { Timebar } from './timebar'
+import { planTrimDrag } from './trimDrag'
+import { projectControlTrack } from './objectTrack'
+import type { ControlTrackAnchor } from './objectTrack'
 import { clampZoom, Viewport, ZOOM_MAX, ZOOM_MIN, ZOOM_STEP } from './viewport'
 
 interface EditorBridge {
   onInit(cb: (payload: EditorInitPayload) => void): void
+  // Native caption Close is only a request until the renderer has checked its
+  // dirty edit state.
+  onCloseRequested(cb: () => void): void
+  // The unsaved modal is visible, so main can stop treating the renderer as
+  // unresponsive while Save / Discard / Esc remains the user's decision.
+  closePromptShown(): void
   // OBJECT PICKING FOLLOWS TIME (#66): the candidate set at one scrub position.
   // Asked when the scrub settles, never per pointer move.
   requestContextFrame(request: ContextFrameRequest): Promise<ContextFrame | null>
@@ -146,6 +164,7 @@ const zoomInBtn = el<HTMLButtonElement>('zoomInBtn')
 const zoomOutBtn = el<HTMLButtonElement>('zoomOutBtn')
 const zoomSlider = el<HTMLInputElement>('zoomSlider')
 const zoomPct = el<HTMLSpanElement>('zoomPct')
+const oneToOneBtn = el<HTMLButtonElement>('oneToOneBtn')
 const objectHint = el<HTMLSpanElement>('objectHint')
 const dirtyChip = el<HTMLSpanElement>('dirtyChip')
 const trimDropChip = el<HTMLSpanElement>('trimDropChip')
@@ -179,11 +198,16 @@ const state = new EditorState()
 // language is fixed for the session — the editor window is transient).
 let t: TranslateFn = makeT('en')
 let hasReplay = false
+let captureKind: 'image' | 'video' = 'video'
 // WHY a display has no replay, per display index (GOAL "Say that you are
 // recording"): a capture taken while a buffer was not running must say the
 // replay is unavailable and name the reason, not just show a frozen frame.
 // Empty for a re-edited pack, where a missing replay is simply what was saved.
 const replayUnavailableReasons = new Map<number, RecorderFailureReason>()
+// Which displays actually move when the board scrubs. A display without replay
+// keeps showing its capture-instant bitmap and must keep querying context at
+// that instant too, not at the focused video's historical time.
+const replayDisplayIndices = new Set<number>()
 let replayDurationMs = 0 // manifest replay_duration_ms; caps every lifetime stamp
 let fitScale = 1
 let loaded = false
@@ -243,18 +267,20 @@ let focusedH = 0
 // annotatable, and a pick therefore comes from the index of the display UNDER
 // THE POINTER.
 const objectIndexes = new Map<number, ObjectIndex>()
-// The frame the indexes were built from — its accuracy is what the honest
-// "nothing here" message is drawn from.
-let contextFrame: ContextFrame | null = null
+// The frame EACH display's index was built from. Secondary replays can present
+// a different nearest frame than the focused one, so one global accuracy/frame
+// would describe pixels that are not actually on that screen.
+const contextFramesByDisplay = new Map<number, ContextFrame>()
 let contextSessionId: string | null = null
 // A frame that arrived before initEditor finished (it awaits image decoding):
 // held rather than dropped, and applied the moment the board exists.
 let pendingContextFrame: ContextFrame | null = null
+const pendingDisplayContextFrames = new Map<number, ContextFrame>()
 // The scrub position the current frame describes, and the request in flight.
 // A wheel burst is dozens of positions; only the one it SETTLES on is worth a
 // round trip (GOAL: a slow provider must never hold the editor shut, and a fast
 // one must not be asked sixty times a second either).
-let frameTimeMs: number | null = null
+const frameTimesByDisplay = new Map<number, number>()
 let frameRequestSeq = 0
 let frameSettleTimer: number | null = null
 let hoverObject: PickableObject | null = null
@@ -339,6 +365,10 @@ const viewport = new Viewport(frame)
 // control — invalidates it: layout() re-derives the framing from this instead
 // of leaving the board displaced by the ratio of the fit change.
 let framedDisplay: number | null = null
+// True while an image is deliberately shown at native 100%. Unlike a free
+// zoom factor, that is an ABSOLUTE on-screen scale and must be re-derived when
+// a maximize/window-mode change changes fitScale.
+let nativeImageView = false
 let spaceDown = false
 // Space serves two gestures: HELD it is the pan modifier, TAPPED (pressed and
 // released without ever panning) it toggles playback. This stays true from the
@@ -346,19 +376,18 @@ let spaceDown = false
 let spaceTap = false
 let panning: { pointerId: number; x: number; y: number } | null = null
 
-// Every drag remembers the DISPLAY it started on: a box belongs to one screen,
-// so the pointer is mapped into that screen's native pixels (clamped at its
-// edges) for the whole gesture. Dragging past the edge stops at it instead of
-// teleporting the box onto the neighbour, where its bounds would mean something
-// entirely different.
+// A draw/resize belongs to one display. A MOVE carries a desktop-DIP rectangle
+// as well: the same authored box can cross from one monitor to another even
+// when their native-pixel scales differ.
 type Drag =
   | { kind: 'draw'; d: BoardDisplay; x0: number; y0: number; x: number; y: number }
   | {
       kind: 'move'
       d: BoardDisplay
       id: string
-      lastX: number
-      lastY: number
+      lastBx: number
+      lastBy: number
+      boardBounds: AnnotationBounds
       before: Annotation[]
       moved: boolean
       /**
@@ -450,6 +479,7 @@ function layout(): void {
   // would shove the framed screen off the stage with nothing but the zoom
   // percentage to explain it.
   if (framedDisplay !== null) applyFraming(framedDisplay)
+  else if (nativeImageView) showNativeImageView()
   positionTextEditor()
   // The percentage is fitScale x zoom, so a resize changes it without the
   // viewport moving at all — and the help sheet's proximity box just moved.
@@ -513,15 +543,9 @@ function displayIndexOf(a: Annotation): number {
 // header) behaves identically in both modes.
 // ---------------------------------------------------------------------------
 
-/**
- * The windowed title bar's text (GOAL "Editor Window Mode", issue #49): the
- * pack's own title once it has one, the app name until then. A title bar that
- * says what the window holds is also what makes it READ as a title bar — the
- * strip is the visible answer to "where do I grab this thing".
- */
+/** The caption is the product name; the editable pack title belongs below. */
 function syncTitleBar(): void {
-  const title = titleInput.value.trim()
-  titleBarLabel.textContent = title !== '' ? title : t('editor.windowTitle')
+  titleBarLabel.textContent = 'CapturePack'
 }
 
 /** Paints the mode main reported: drag region, button state, canvas re-fit. */
@@ -578,6 +602,7 @@ function displayLabel(d: BoardDisplay): string {
  */
 function zoomToDisplay(index: number): void {
   if (!applyFraming(index)) return
+  nativeImageView = false
   framedDisplay = index
   syncPanCursor()
   syncSelectionUi()
@@ -603,12 +628,13 @@ function applyFraming(index: number): boolean {
 }
 
 /**
- * Back to the whole board, unzoomed — the state the editor opens in, and the
- * ONLY way back from a framed display (GOAL, issue #53): framing is a VIEW like
- * zoom and pan, so ` (the key left of 1) undoes it and Esc never does.
+ * Back to the whole board, unzoomed — the state a video editor opens in, and
+ * the ONLY way back from a framed display (GOAL, issue #53): framing is a VIEW
+ * like zoom and pan, so ` (the key left of 1) undoes it and Esc never does.
  */
 function fitBoard(): void {
   viewport.reset()
+  nativeImageView = false
   framedDisplay = null
   syncPanCursor()
   syncSelectionUi()
@@ -622,6 +648,7 @@ function fitBoard(): void {
  * display, so layout() must stop re-deriving one.
  */
 function markViewNavigated(): void {
+  nativeImageView = false
   framedDisplay = null
 }
 
@@ -677,9 +704,10 @@ function sliderToZoom(position: number): number {
  * the stage centre — there is no cursor to keep fixed, and the middle of the
  * view is what the user is looking at.
  */
-function applyControlZoom(target: number): void {
+function applyControlZoom(target: number, snap = true): void {
   if (!loaded) return
-  const next = snapZoom(clampZoom(target), viewport.zoom)
+  const clamped = clampZoom(target)
+  const next = snap ? snapZoom(clamped, viewport.zoom) : clamped
   // Fit is the whole board, centred: snapping to it has to undo the pan too, or
   // "Fit" would leave the board pushed half off screen at fit scale.
   if (next === 1) {
@@ -693,6 +721,29 @@ function applyControlZoom(target: number): void {
   syncSelectionUi()
   schedulePaint()
   syncZoomUi()
+}
+
+/**
+ * Images open at native size whenever the zoom range can represent it.
+ *
+ * "Fit" is still one click/double-click away, but silently enlarging a small
+ * crop or shrinking a screenshot merely to fill the editor makes the first
+ * view lie about its pixels. Oversized images clamp at the closest supported
+ * scale and remain pannable. Video keeps its whole-board opening unchanged.
+ */
+function openInitialView(): void {
+  if (captureKind === 'image') {
+    showNativeImageView()
+    return
+  }
+  fitBoard()
+}
+
+function showNativeImageView(): void {
+  // Programmatic 1:1 is exact: the control's 5% magnetic fit snap is useful
+  // for a hand-operated slider, but would turn a 99%-fit image back into 99%.
+  applyControlZoom(hundredPercentZoom(), false)
+  nativeImageView = true
 }
 
 /** Paints the control from the viewport — the single source of the zoom. */
@@ -713,6 +764,7 @@ zoomOutBtn.addEventListener('click', () => applyControlZoom(viewport.zoom / ZOOM
 zoomSlider.addEventListener('input', () => applyControlZoom(sliderToZoom(Number(zoomSlider.value))))
 // Double-click the slider returns to Fit (GOAL).
 zoomSlider.addEventListener('dblclick', () => fitBoard())
+oneToOneBtn.addEventListener('click', showNativeImageView)
 
 // Same rule as the box header: adjusting the zoom must never end the box
 // description being typed. The buttons never take focus at all; the slider has
@@ -855,9 +907,10 @@ function presentedOn(displayIndex: number): number {
  */
 function resolveForBoard(a: Annotation): Annotation {
   const stored = displayIndexOf(a)
-  const first = annotationAt(a, presentedOn(stored))
+  const motionSpace = authoredMotionSpace()
+  const first = annotationAt(a, presentedOn(stored), motionSpace)
   const landed = displayIndexOf(first)
-  return landed === stored ? first : annotationAt(a, presentedOn(landed))
+  return landed === stored ? first : annotationAt(a, presentedOn(landed), motionSpace)
 }
 
 /**
@@ -918,7 +971,50 @@ function updateDirty(): void {
   if (!d) hideUnsavedBar(false)
 }
 
+let unsavedReturnFocus: HTMLElement | null = null
+const unsavedInertBefore = new Map<HTMLElement, boolean>()
+
+/**
+ * Makes the centred confirmation a real modal. `#unsavedBar` lives inside
+ * `#stage`, so the stage itself must stay live while its siblings and every
+ * other body child become inert.
+ */
+function setUnsavedBackgroundInert(inert: boolean): void {
+  if (inert) {
+    unsavedInertBefore.clear()
+    const background: HTMLElement[] = []
+    for (const child of Array.from(document.body.children)) {
+      if (!(child instanceof HTMLElement)) continue
+      if (child === stage) {
+        for (const stageChild of Array.from(stage.children)) {
+          if (stageChild instanceof HTMLElement && stageChild !== unsavedBar) {
+            background.push(stageChild)
+          }
+        }
+      } else {
+        background.push(child)
+      }
+    }
+    for (const node of background) {
+      unsavedInertBefore.set(node, node.inert)
+      node.inert = true
+    }
+    return
+  }
+  for (const [node, wasInert] of unsavedInertBefore) {
+    if (node.isConnected) node.inert = wasInert
+  }
+  unsavedInertBefore.clear()
+}
+
 function showUnsavedBar(): void {
+  if (!unsavedBar.hidden) {
+    unsavedSaveBtn.focus()
+    return
+  }
+  unsavedReturnFocus =
+    document.activeElement instanceof HTMLElement ? document.activeElement : null
+  setUnsavedBackgroundInert(true)
   unsavedBar.hidden = false
   unsavedSaveBtn.focus()
 }
@@ -926,19 +1022,38 @@ function showUnsavedBar(): void {
 function hideUnsavedBar(refocus = true): void {
   if (unsavedBar.hidden) return
   unsavedBar.hidden = true
-  if (refocus) overlay.focus()
+  setUnsavedBackgroundInert(false)
+  const target = unsavedReturnFocus
+  unsavedReturnFocus = null
+  if (refocus) {
+    if (target?.isConnected && !target.inert) target.focus()
+    else overlay.focus()
+  }
 }
 
 unsavedSaveBtn.addEventListener('click', () => void doExport('save'))
 unsavedSaveAsBtn.addEventListener('click', () => void doExport('saveAsNew'))
 unsavedDiscardBtn.addEventListener('click', () => window.editorBridge.cancel())
-
-titleInput.addEventListener('input', () => {
-  updateDirty()
-  // The windowed title bar names the pack (issue #49), so it follows the field
-  // that names it — live, the way a real title bar tracks its document.
-  syncTitleBar()
+unsavedBar.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    e.stopPropagation()
+    hideUnsavedBar()
+    return
+  }
+  if (e.key !== 'Tab') return
+  const first = unsavedSaveBtn
+  const last = unsavedDiscardBtn
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault()
+    last.focus()
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault()
+    first.focus()
+  }
 })
+
+titleInput.addEventListener('input', updateDirty)
 noteInput.addEventListener('input', updateDirty)
 
 // Duration the lane strip was last built against; when ScrubController adopts
@@ -1401,6 +1516,7 @@ function beginPendingBox(on: BoardDisplay, b: Box, picked?: PickableObject): voi
   if (picked !== undefined) {
     const target = uiaTargetOf(picked)
     if (target !== null) draft.target = target
+    pickedObjectIdentities.set(draft.annotation_id, pickIdentityOf(picked))
     // Remembered so a later move/resize can tell whether the box still
     // annotates the object it claims to.
     pickedRects.set(draft.annotation_id, { x: b.x, y: b.y, w: b.w, h: b.h })
@@ -1448,7 +1564,21 @@ function beginPendingBox(on: BoardDisplay, b: Box, picked?: PickableObject): voi
     // The frame the box was drawn over is the only instant that means anything
     // here, and it is the same clock the rectangle itself came from (#81).
     pickedAtMs.set(draft.annotation_id, pickedAt)
-    attachTrack(draft, picked.surface.surfaceId)
+    const controlAnchor: ControlTrackAnchor | null =
+      picked.level === 'control' && board !== null
+        ? {
+            display: on.index,
+            bounds: { x: b.x, y: b.y, width: b.w, height: b.h },
+            surfaceBounds: { ...picked.surface.bounds },
+            displays: board.displays.map((d) => ({
+              index: d.index,
+              width: d.width,
+              height: d.height,
+              pixelsPerDip: d.bw > 0 ? d.width / d.bw : 1,
+            })),
+          }
+        : null
+    attachTrack(draft, picked.surface.surfaceId, controlAnchor)
   }
   textSession = { kind: 'new', draft }
   // The lane belongs to the box, and the box exists now (#92).
@@ -1529,10 +1659,28 @@ const TEXT_EDITOR_GAP = 6
 
 function positionTextEditor(): void {
   if (!textAnchor || textDisplay === null) return
+  // A selected annotation may be somewhere other than its stored base bounds
+  // at the frame on screen (authored keyframes, object tracking, or a
+  // cross-display move). The dashed selection and header already use that
+  // resolved rectangle; the description input must use the same one or it
+  // appears detached at the old/base position.
+  let anchor = textAnchor
+  let display = textDisplay
+  if (textSession?.kind === 'edit') {
+    const stored = state.byId(textSession.id)
+    if (stored !== undefined) {
+      const painted = resolveForBoard(stored)
+      anchor = painted.bounds
+      display = displayOf(painted) ?? display
+    }
+  } else if (textSession?.kind === 'new') {
+    anchor = textSession.draft.bounds
+    display = displayOf(textSession.draft) ?? display
+  }
   // The input lives in #frame (BOARD CSS space), so the box's native anchor is
   // converted through its own display first — otherwise a box on the second
   // screen would get its description input over the first one.
-  const topLeft = toBoardPoint(textDisplay, textAnchor.x, textAnchor.y + textAnchor.height)
+  const topLeft = toBoardPoint(display, anchor.x, anchor.y + anchor.height)
   const w = textEditor.offsetWidth
   const h = textEditor.offsetHeight
   // THE INPUT MUST BE ON SCREEN, not merely inside the board. #frame is
@@ -1604,7 +1752,13 @@ function cancelTextEditor(): void {
   // it belonged to never reaches the store, so nothing would ever clean up the
   // entry beginPendingBox registered under an id that now means nothing.
   const pending = pendingDraft()
-  if (pending !== null) pickedRects.delete(pending.annotation_id)
+  if (pending !== null) {
+    pickedRects.delete(pending.annotation_id)
+    trackedSurfaces.delete(pending.annotation_id)
+    pickedObjectIdentities.delete(pending.annotation_id)
+    trackedControlAnchors.delete(pending.annotation_id)
+    pickedAtMs.delete(pending.annotation_id)
+  }
   // The pending box's own chrome goes with it (the duration editor may have
   // been opened from the header while typing).
   closeDurationEditor(false)
@@ -1672,7 +1826,7 @@ textEditor.addEventListener('keydown', (e) => {
     // popover is dismissed before the box it belongs to. Otherwise Esc
     // discards the WHOLE pending box, not just the text.
     if (numberPickerOpen) closeNumberPicker()
-    if (durationEditorOpen) closeDurationEditor()
+    else if (durationEditorOpen) closeDurationEditor()
     else cancelTextEditor()
   }
 })
@@ -2017,6 +2171,10 @@ function deleteSelected(): void {
   state.remove(a.annotation_id)
   // Same reason as cancelTextEditor: the box is gone, so its picked rect is too.
   pickedRects.delete(a.annotation_id)
+  trackedSurfaces.delete(a.annotation_id)
+  pickedObjectIdentities.delete(a.annotation_id)
+  trackedControlAnchors.delete(a.annotation_id)
+  pickedAtMs.delete(a.annotation_id)
   refresh()
 }
 
@@ -2058,6 +2216,11 @@ numberPicker.addEventListener('click', (e) => {
   const v = btn.dataset.pin
   setSelectedNumberPin(v === 'auto' ? null : Number(v))
 })
+numberPicker.addEventListener('keydown', (e) => {
+  if (e.key === 'F11' || e.key === 'F1') return
+  e.stopPropagation()
+  if (e.key === 'Escape') closeNumberPicker()
+})
 
 blurBtn.addEventListener('click', () => {
   applyMutation((a) => {
@@ -2074,6 +2237,11 @@ deleteBtn.addEventListener('click', deleteSelected)
 
 function openDurationEditor(): void {
   if (headerAnnotation() === null || !scrub) return
+  // ONE QUESTION AT A TIME. The number and lifetime popovers share the same
+  // box-header anchor; leaving both open put the number grid behind the larger
+  // lifetime panel. Opening the thing the user just asked for dismisses the
+  // other one instead of making z-index decide which question is visible.
+  closeNumberPicker(false)
   durationEditorOpen = true
   durationInput.value = ''
   durationEditor.hidden = false
@@ -2104,6 +2272,9 @@ function syncNumberPicker(a: Annotation): void {
 function openNumberPicker(): void {
   const a = headerAnnotation()
   if (a === null || !a.numbered) return
+  // Symmetric with openDurationEditor(): the last header control clicked owns
+  // the one popover slot, so neither panel can obscure the other.
+  closeDurationEditor(false)
   numberPickerOpen = true
   numberPicker.hidden = false
   syncNumberPicker(a)
@@ -2268,34 +2439,43 @@ function hasObjectData(): boolean {
  */
 function objectPickingCanSpeak(): boolean {
   if (hasObjectData()) return true
-  const coverage = contextFrame?.accuracy.coverage
-  return coverage !== undefined && coverage !== 'none'
+  for (const frame of contextFramesByDisplay.values()) {
+    if (frame.accuracy.coverage !== 'none') return true
+  }
+  return false
 }
 
 /**
- * Builds ONE index per captured display from a resolved frame, each in ITS OWN
- * snapshot pixel space (issue #30). Core has already split the candidates per
- * display, so this is a lookup — and an object can never be offered on a screen
- * whose image it does not describe.
+ * Builds one display's index from the ContextFrame resolved at the time of the
+ * frame THAT display actually presented. Core splits candidates into native
+ * display spaces; claims and accuracy must come from the same temporal frame as
+ * the selected slice.
  */
-function buildObjectIndexes(frame: ContextFrame): void {
-  contextFrame = frame
-  objectIndexes.clear()
+function buildObjectIndex(displayIndex: number, frame: ContextFrame): void {
   if (board === null) return
-  for (const d of board.displays) {
-    const slice = frame.displays.find((s) => s.display === d.index)
-    objectIndexes.set(
-      d.index,
-      ObjectIndex.build(
-        slice?.candidates ?? [],
-        slice?.surfaces ?? [],
-        slice?.coverage ?? [],
-        frame.claims,
-        d.width,
-        d.height,
-      ),
-    )
-  }
+  const d = board.displays.find((display) => display.index === displayIndex)
+  if (d === undefined) return
+  const slice = frame.displays.find((candidate) => candidate.display === displayIndex)
+  contextFramesByDisplay.set(displayIndex, frame)
+  objectIndexes.set(
+    displayIndex,
+    ObjectIndex.build(
+      slice?.candidates ?? [],
+      slice?.surfaces ?? [],
+      slice?.coverage ?? [],
+      frame.claims,
+      d.width,
+      d.height,
+    ),
+  )
+}
+
+/** Initial/capture-instant frame: every native snapshot shows this one time. */
+function buildObjectIndexes(frame: ContextFrame): void {
+  objectIndexes.clear()
+  contextFramesByDisplay.clear()
+  if (board === null) return
+  for (const d of board.displays) buildObjectIndex(d.index, frame)
 }
 
 /**
@@ -2312,26 +2492,80 @@ function buildObjectIndexes(frame: ContextFrame): void {
  */
 const FRAME_SETTLE_MS = 120
 
-function requestContextFrame(timeMs: number): void {
+/** The context clock of the pixels currently shown on every board display. */
+function displayedContextFrameRequests(): Array<{ display: number; timeMs: number }> {
+  if (scrub === null || board === null) return []
+  return contextFrameRequestsForDisplays(
+    scrub.atNow,
+    replayDurationMs,
+    board.displays.map((display) => ({
+      display: display.index,
+      hasReplay: replayDisplayIndices.has(display.index),
+      presentedMs: scrub?.presentedMsFor(display.index) ?? replayDurationMs,
+    })),
+  )
+}
+
+function requestContextFrames(
+  requests: readonly { display: number; timeMs: number }[],
+): void {
   const sessionId = contextSessionId
   if (sessionId === null) return
-  const rounded = Math.max(0, Math.round(timeMs))
-  if (frameTimeMs === rounded) return
+  const wanted = requests
+    .map((request) => ({
+      display: request.display,
+      timeMs: Math.max(0, Math.round(request.timeMs)),
+    }))
+    .filter((request) => frameTimesByDisplay.get(request.display) !== request.timeMs)
+  if (wanted.length === 0) return
+  // Most displays usually present the same pack instant. Query each UNIQUE
+  // time once and reuse its frame slices, while still allowing a lagging slave
+  // replay to request its own time.
+  const displaysByTime = new Map<number, number[]>()
+  for (const request of wanted) {
+    const displays = displaysByTime.get(request.timeMs) ?? []
+    displays.push(request.display)
+    displaysByTime.set(request.timeMs, displays)
+  }
   frameRequestSeq += 1
   const seq = frameRequestSeq
-  void window.editorBridge
-    .requestContextFrame({ sessionId, timeMs: rounded })
-    .then((frame) => {
+  void Promise.all(
+    [...displaysByTime].map(async ([timeMs, displays]) => {
+      try {
+        const frame = await window.editorBridge.requestContextFrame({
+          sessionId,
+          timeMs,
+        })
+        return { displays, timeMs, frame }
+      } catch (err) {
+        // One display's object provider may never take the rest of the board
+        // down with it. Its previous honest index stays in place.
+        console.error(
+          `capturepack: requesting display(s) ${displays.join(', ')} context frame failed:`,
+          err,
+        )
+        return { displays, timeMs, frame: null }
+      }
+    }),
+  )
+    .then((answers) => {
       // A later request already answered: this one is history, and applying it
       // would move picking BACK in time.
-      if (frame === null || seq !== frameRequestSeq) return
-      frameTimeMs = rounded
-      applyContextFrame(frame)
+      if (seq !== frameRequestSeq) return
+      const resolved: Array<{ display: number; timeMs: number; frame: ContextFrame }> = []
+      for (const answer of answers) {
+        if (answer.frame === null) continue
+        for (const display of answer.displays) {
+          frameTimesByDisplay.set(display, answer.timeMs)
+          resolved.push({ display, timeMs: answer.timeMs, frame: answer.frame })
+        }
+      }
+      if (resolved.length > 0) applyDisplayContextFrames(resolved)
     })
     .catch((err: unknown) => {
-      // Rule 1 of object data: it may never break anything else. A frame that
-      // could not be built leaves the previous one in place.
-      console.error('capturepack: requesting a context frame failed:', err)
+      // Promise.all above catches every per-display request. This is only a
+      // defensive boundary against an error in the composition itself.
+      console.error('capturepack: composing display context frames failed:', err)
     })
 }
 
@@ -2351,18 +2585,15 @@ function scheduleContextFrame(): void {
     // lands beside the window the user can see. Measured in rc.4: the displayed
     // frame ran up to 498 ms behind the playhead, worth 1304 px on a dragged
     // window, while the boxes themselves were accurate to a median of 9 ms.
-    requestContextFrame(scrub.atNow ? replayDurationMs : scrub.presentedMs)
+    requestContextFrames(displayedContextFrameRequests())
   }, FRAME_SETTLE_MS)
 }
 
-/** A new frame: rebuild, and re-answer the point the pointer is already on. */
-function applyContextFrame(frame: ContextFrame): void {
-  if (!loaded || board === null) {
-    pendingContextFrame = frame
-    return
+/** Shared repaint after either one full frame or per-display frame updates. */
+function contextFramesApplied(frames: readonly ContextFrame[]): void {
+  if (frames.some((frame) => frame.dropped)) {
+    showObjectHintOnce('dropped', t('editor.objectDropped'))
   }
-  buildObjectIndexes(frame)
-  if (frame.dropped) showObjectHintOnce('dropped', t('editor.objectDropped'))
   // The sheet advertises the picking modifiers only where object data exists.
   if (helpOpen) buildHelpSheet()
   // A pointer already resting on an object must not have to move to find out
@@ -2371,6 +2602,30 @@ function applyContextFrame(frame: ContextFrame): void {
   hoverStackIndex = 0
   reprobeObjectHover()
   schedulePaint()
+}
+
+/** A capture-instant frame applies to every display's native snapshot. */
+function applyContextFrame(frame: ContextFrame): void {
+  if (!loaded || board === null) {
+    pendingContextFrame = frame
+    return
+  }
+  buildObjectIndexes(frame)
+  contextFramesApplied([frame])
+}
+
+/** Historical updates, each resolved at that display's presented frame time. */
+function applyDisplayContextFrames(
+  updates: readonly { display: number; frame: ContextFrame }[],
+): void {
+  if (!loaded || board === null) {
+    for (const update of updates) {
+      pendingDisplayContextFrames.set(update.display, update.frame)
+    }
+    return
+  }
+  for (const update of updates) buildObjectIndex(update.display, update.frame)
+  contextFramesApplied(updates.map((update) => update.frame))
 }
 
 /** The topmost box under a native point of `d` — the one a click could take. */
@@ -2633,7 +2888,7 @@ function emptyAnswer(on: BoardDisplay): { kind: ObjectHintKind; text: string } {
   // WHERE they clicked; this is about whether the data COVERS the moment on
   // screen, which is a property of the data and not of the playhead (#66,
   // design GAP 16). The v0.1.7 stopgap asked the clock; this asks the frame.
-  const coverage = contextFrame?.accuracy.coverage ?? 'none'
+  const coverage = contextFramesByDisplay.get(on.index)?.accuracy.coverage ?? 'none'
   if (coverage === 'single-instant') {
     // Every pack written before v0.2.0: the dump describes the instant the
     // hotkey was pressed and nothing else, so scrubbing away leaves it with
@@ -2771,10 +3026,10 @@ function reanchorBounds(a: Annotation): void {
  * window that has moved since is still the same window.
  */
 function existingBoxFor(picked: PickableObject): Annotation | null {
-  const surfaceId = picked.surface?.surfaceId
-  if (surfaceId === undefined) return null
+  const identity = pickIdentityOf(picked)
   for (const a of state.annotations) {
-    if (trackedSurfaces.get(a.annotation_id) !== surfaceId) continue
+    const existing = pickedObjectIdentities.get(a.annotation_id)
+    if (existing === undefined || !samePickIdentity(existing, identity)) continue
     if (!annotationVisibleNow(a)) continue
     return a
   }
@@ -2805,6 +3060,18 @@ function existingBoxFor(picked: PickableObject): Annotation | null {
  * box alive for 15.6 s carried 0.9 s of path.
  */
 const trackedSurfaces = new Map<string, string>()
+
+/**
+ * Which exact object each snapped box names.
+ *
+ * trackedSurfaces remains the owner-window key used to request geometry, but
+ * it is intentionally too coarse for duplicate detection: one surface can
+ * contain hundreds of independently pickable controls.
+ */
+const pickedObjectIdentities = new Map<string, PickIdentity>()
+
+/** The picked control's rectangle within its owner window, retained on refresh. */
+const trackedControlAnchors = new Map<string, ControlTrackAnchor>()
 
 /**
  * The replay instant each picked box was placed at (#111).
@@ -2916,19 +3183,76 @@ function reportTrackAlignment(samples: readonly { t_ms: number }[]): void {
 /** Re-asks for the path over the box's CURRENT lifetime (see `trackedSurfaces`). */
 function refreshTrack(a: Annotation): void {
   const surfaceId = trackedSurfaces.get(a.annotation_id)
-  if (surfaceId !== undefined) attachTrack(a, surfaceId)
+  if (surfaceId !== undefined) {
+    attachTrack(a, surfaceId, trackedControlAnchors.get(a.annotation_id) ?? null)
+  }
 }
 
-function attachTrack(draft: Annotation, surfaceId: string): void {
+/** One native annotation rectangle expressed in the board's common DIP space. */
+function nativeRectOnBoard(d: BoardDisplay, b: AnnotationBounds): AnnotationBounds {
+  const origin = toBoardPoint(d, b.x, b.y)
+  return {
+    x: origin.x,
+    y: origin.y,
+    width: b.width * (d.width > 0 ? d.bw / d.width : 1),
+    height: b.height * (d.height > 0 ? d.bh / d.height : 1),
+  }
+}
+
+/** A board-DIP rectangle projected into one display's native snapshot pixels. */
+function boardRectOnDisplay(d: BoardDisplay, b: AnnotationBounds): AnnotationBounds {
+  const sx = d.bw > 0 ? d.width / d.bw : 1
+  const sy = d.bh > 0 ? d.height / d.bh : 1
+  return {
+    x: Math.round((b.x - d.bx) * sx),
+    y: Math.round((b.y - d.by) * sy),
+    width: Math.round(b.width * sx),
+    height: Math.round(b.height * sy),
+  }
+}
+
+/** The manifest/board geometry shared with authored-motion interpolation. */
+function authoredMotionSpace(): AuthoredMotionSpace | undefined {
+  if (board === null) return undefined
+  return {
+    focusedIndex: focusedDisplayIndex,
+    displays: board.displays.map((d) => ({
+      index: d.index,
+      width: d.width,
+      height: d.height,
+      bounds: { x: d.bx, y: d.by, width: d.bw, height: d.bh },
+    })),
+  }
+}
+
+function setAnnotationDisplay(a: Annotation, index: number): void {
+  if (index === focusedDisplayIndex) delete a.display
+  else a.display = index
+}
+
+function attachTrack(
+  draft: Annotation,
+  surfaceId: string,
+  controlAnchor: ControlTrackAnchor | null,
+): void {
   if (contextSessionId === null) return
   const id = draft.annotation_id
   trackedSurfaces.set(id, surfaceId)
+  if (controlAnchor === null) trackedControlAnchors.delete(id)
+  else trackedControlAnchors.set(id, controlAnchor)
   const start = draft.start_ms ?? 0
   const end = draft.end_ms ?? replayDurationMs
   void window.editorBridge
     .requestObjectTrack({ sessionId: contextSessionId, surfaceId, startMs: start, endMs: end })
     .then((track) => {
-      if (track === null || track.samples.length < 2) return
+      if (track === null) return
+      // requestObjectTrack records the owner HWND. That IS the picked object
+      // for a window, but it is only the moving coordinate frame for a control.
+      // Copying those samples verbatim produced rc.36's exact contradiction:
+      // target={level:"control", name:"..."} beside a window-sized bounds box.
+      const samples =
+        controlAnchor === null ? track.samples : projectControlTrack(track.samples, controlAnchor)
+      if (samples.length < 2) return
       // The draft may have been committed, renamed or discarded while this was
       // in flight; the stored annotation is the one that matters.
       const live = state.byId(id) ?? (textSession?.kind === 'new' && textSession.draft.annotation_id === id ? textSession.draft : undefined)
@@ -2952,7 +3276,7 @@ function attachTrack(draft: Annotation, surfaceId: string): void {
         // Written only where it SAYS something: absent means the annotation's
         // own display (SPEC §8.3), so a capture whose object never left one
         // screen produces exactly the samples it did before this field existed.
-        samples: track.samples.map((s) => ({
+        samples: samples.map((s) => ({
           t_ms: s.tMs,
           ...(s.display === ownDisplay ? {} : { display: s.display }),
           x: s.x,
@@ -3005,6 +3329,8 @@ function invalidateTargetIfMoved(id: string): void {
   // for the path and put the box back on the object's rails, undoing the move
   // the user made by hand.
   trackedSurfaces.delete(id)
+  pickedObjectIdentities.delete(id)
+  trackedControlAnchors.delete(id)
   pickedAtMs.delete(id)
   if (a.target === undefined) return
   const picked = pickedRects.get(id)
@@ -3269,13 +3595,22 @@ overlay.addEventListener('pointerdown', (e) => {
       // already moves is its interpolated position and not `bounds` (that is
       // the rectangle at its representative instant, somewhere else entirely).
       // A keyframe inserted mid-drag must start under the pointer.
-      const keyframe = setKeyframe(box, atMs, keyframedBoundsAt(box, atMs) ?? box.bounds)
+      const painted = resolveForBoard(box)
+      const keyframe = setKeyframe(
+        box,
+        atMs,
+        painted.bounds,
+        hit.d.index,
+        displayIndexOf(box),
+      )
+      const pointerBoard = toBoardPoint(hit.d, p.x, p.y)
       drag = {
         kind: 'move',
         d: hit.d,
         id: box.annotation_id,
-        lastX: p.x,
-        lastY: p.y,
+        lastBx: pointerBoard.x,
+        lastBy: pointerBoard.y,
+        boardBounds: nativeRectOnBoard(hit.d, painted.bounds),
         before: state.cloneAnnotations(),
         moved: false,
         keyframe,
@@ -3332,33 +3667,43 @@ overlay.addEventListener('pointermove', (e) => {
     if (loaded) syncHoverCursor(e)
     return
   }
-  const p = pointOn(drag.d, e)
   if (drag.kind === 'draw') {
+    const p = pointOn(drag.d, e)
     drag.x = p.x
     drag.y = p.y
   } else if (drag.kind === 'move') {
+    const point = toBoardUnits(e)
     const a = state.byId(drag.id)
-    if (a && (p.x !== drag.lastX || p.y !== drag.lastY)) {
-      // The rectangle this gesture owns: the keyframe it authored, or `bounds`
-      // when the box carries no motion (SPEC §8.9). Moving `bounds` on a box
-      // that HAS keyframes would move it at every moment — the whole defect
-      // this replaced — and would then be overwritten by the keyframed
-      // position anyway.
-      const moving = drag.keyframe >= 0 ? (a.keyframes?.[drag.keyframe] ?? a.bounds) : a.bounds
-      moving.x += p.x - drag.lastX
-      moving.y += p.y - drag.lastY
-      // The pointer is clamped to the display; the DELTA is not. Grab a box by
-      // its right edge, drag past the screen, and the pointer stops while the
-      // delta keeps pushing the origin negative (issue #74).
-      clampBoxTo(moving, drag.d)
+    if (a && point !== null && (point.x !== drag.lastBx || point.y !== drag.lastBy)) {
+      drag.boardBounds.x += point.x - drag.lastBx
+      drag.boardBounds.y += point.y - drag.lastBy
+      const target =
+        board === null ? drag.d : (displayAtBoardPoint(board, point.x, point.y) ?? drag.d)
+      const moving = boardRectOnDisplay(target, drag.boardBounds)
+      // The endpoint is a rectangle in TARGET-display pixels. Clamping there
+      // keeps the authored data valid while still allowing the gesture to cross
+      // the seam; the board-space copy is then synchronized to that clamp so
+      // the next pointer delta cannot reintroduce an off-screen origin.
+      clampBoxTo(moving, target)
+      drag.boardBounds = nativeRectOnBoard(target, moving)
+      if (drag.keyframe >= 0) {
+        moveKeyframe(a, drag.keyframe, moving, target.index)
+      } else {
+        a.bounds = moving
+        setAnnotationDisplay(a, target.index)
+      }
+      drag.d = target
       drag.moved = true
     }
-    drag.lastX = p.x
-    drag.lastY = p.y
+    if (point !== null) {
+      drag.lastBx = point.x
+      drag.lastBy = point.y
+    }
     // The description of the box being dragged is open (issue #42) and anchors
     // to bounds that just moved: it rides along instead of being left behind.
     positionTextEditor()
   } else {
+    const p = pointOn(drag.d, e)
     const a = state.byId(drag.id)
     if (a) {
       applyResize(a, drag.handle, p.x, p.y, drag.d)
@@ -3384,7 +3729,7 @@ function endDrag(): void {
     // draws it somewhere the box genuinely is. Cheap, and only for a box that
     // actually carries motion.
     const moved = state.byId(d.id)
-    if (moved) syncBoundsToRepresentative(moved, replayDurationMs)
+    if (moved) syncBoundsToRepresentative(moved, replayDurationMs, authoredMotionSpace())
     state.pushUndoSnapshot(d.before)
   } else if (d.kind === 'move' && d.keyframe >= 0) {
     // A press that authored a keyframe and then never moved has added a
@@ -3393,8 +3738,8 @@ function endDrag(): void {
     // meaning the user actually moved it somewhere.
     const touched = state.byId(d.id)
     if (touched) {
-      removeKeyframeAt(touched, d.atMs)
-      syncBoundsToRepresentative(touched, replayDurationMs)
+      removeKeyframeAt(touched, d.atMs, focusedDisplayIndex)
+      syncBoundsToRepresentative(touched, replayDurationMs, authoredMotionSpace())
     }
   }
   schedulePaint()
@@ -3713,6 +4058,10 @@ window.addEventListener('keydown', (e) => {
     // Chrome": "no Esc handling"). It is a passive layer that may be left open
     // for the whole session, so answering Esc would cost every user a second
     // press to close the editor for a panel they were not interacting with.
+    if (numberPickerOpen) {
+      closeNumberPicker()
+      return
+    }
     if (durationEditorOpen) {
       closeDurationEditor()
       return
@@ -3887,8 +4236,8 @@ function removeSelectedKeyframe(): void {
   const atMs = presentedOn(displayIndexOf(selected))
   if (keyframeIndexAt(selected, atMs) < 0) return
   applyMutation((box) => {
-    removeKeyframeAt(box, atMs)
-    syncBoundsToRepresentative(box, replayDurationMs)
+    removeKeyframeAt(box, atMs, focusedDisplayIndex)
+    syncBoundsToRepresentative(box, replayDurationMs, authoredMotionSpace())
   })
   syncLanes()
   schedulePaint()
@@ -3962,19 +4311,26 @@ const timebar = new Timebar(timebarEl, {
   },
   // Trim handle drags (GOAL "Replay Trim"): fraction of the track -> ms.
   //
-  // THE PREVIEW FOLLOWS THE HANDLE. Before this, dragging the out handle left
-  // of a playhead sitting at "now" left the playhead stranded OUTSIDE the
-  // trimmed range — clampIntoRange deliberately never moves it off the native
-  // frame (the export guarantee), and nothing else moved it either. Following
-  // the handle shows the exact frame the capture will now end on, which is
-  // also the feedback a hand adjusting an end point is asking for; the native
-  // position is restored on release below, so the guarantee survives.
+  // A TRIM HANDLE EDITS THE RANGE, NOT THE FRAME. planTrimDrag requests no
+  // preview seek, so moving either end while the current frame remains kept
+  // cannot drag the playhead or a selected moving box along with it. If a
+  // scrubbed frame is genuinely cut away, syncTrim/setRange performs the one
+  // necessary clamp. The native capture frame stays native by design.
   trimTo: (kind, fraction) => {
     if (!scrub) return
-    const ms = fraction * scrub.durationMs
-    if (kind === 'in') setTrimIn(ms)
-    else setTrimOut(ms)
-    scrub.scrubTo(kind === 'in' ? trimInMs : (trimOutMs ?? scrub.durationMs))
+    const plan = planTrimDrag({
+      kind,
+      requestedMs: fraction * scrub.durationMs,
+      durationMs: scrub.durationMs,
+      currentMs: scrub.atNow ? scrub.durationMs : scrub.tMs,
+      inMs: trimInMs,
+      outMs: trimOutMs,
+      minGapMs: TRIM_MIN_GAP_MS,
+    })
+    trimInMs = plan.inMs
+    trimOutMs = plan.outMs
+    syncTrim()
+    if (plan.previewMs !== null) scrub.scrubTo(plan.previewMs)
   },
   trimDragStart: () => {
     trimDragWasAtNow = scrub?.atNow ?? false
@@ -4067,16 +4423,21 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
   t = makeT(payload.uiLanguage)
   applyDomI18n(t)
   timebar.setT(t)
+  captureKind = payload.captureKind
   hasReplay = payload.hasReplay
+  oneToOneBtn.hidden = captureKind !== 'image'
   // Recorders that were not running when the trigger fired (GOAL "Say that you
   // are recording"): keyed by board/manifest display index, so both the chip
   // and every display caption can name the reason.
   replayUnavailableReasons.clear()
+  replayDisplayIndices.clear()
   const focusedInitIndex = payload.displays.find((d) => d.focused)?.index ?? 1
+  if (payload.replayWebm !== null) replayDisplayIndices.add(focusedInitIndex)
   if (payload.replayUnavailableReason !== null) {
     replayUnavailableReasons.set(focusedInitIndex, payload.replayUnavailableReason)
   }
   for (const d of payload.displays) {
+    if (!d.focused && d.replayWebm !== null) replayDisplayIndices.add(d.index)
     if (d.replayUnavailableReason !== null) {
       replayUnavailableReasons.set(d.index, d.replayUnavailableReason)
     }
@@ -4098,6 +4459,7 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
   // bounds, so those bounds are the picked rect: dragging it away in this
   // session drops the claim, exactly as it would for a freshly picked box.
   pickedRects.clear()
+  pickedObjectIdentities.clear()
   for (const a of payload.annotations) {
     if (a.target === undefined) continue
     pickedRects.set(a.annotation_id, {
@@ -4181,9 +4543,12 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
   // snapshot coordinate space (SPEC §11.3). No session (or an empty frame)
   // yields empty indexes and picking stays silently off.
   contextSessionId = payload.context?.sessionId ?? null
+  frameTimesByDisplay.clear()
   if (payload.context !== null) {
-    frameTimeMs = payload.context.frame.requestedTimeMs
     buildObjectIndexes(payload.context.frame)
+    for (const display of board?.displays ?? []) {
+      frameTimesByDisplay.set(display.index, payload.context.frame.requestedTimeMs)
+    }
   }
   resizeCanvases()
   loaded = true
@@ -4193,12 +4558,18 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
   // running it is a FAILURE, so the reason is named and the chip is styled as
   // the warning it is (GOAL "Say that you are recording").
   const focusedFailure = payload.replayUnavailableReason
-  replayChip.classList.toggle('warn', focusedFailure !== null)
-  replayChip.textContent = hasReplay
-    ? t('editor.replaySeconds', { seconds: Math.round(payload.replayDurationMs / 1000) })
-    : focusedFailure === null
-      ? t('editor.noReplay')
-      : t('editor.replayUnavailableReason', { reason: recorderFailureText(t, focusedFailure) })
+  replayChip.classList.toggle(
+    'warn',
+    captureKind === 'video' && focusedFailure !== null,
+  )
+  replayChip.textContent =
+    captureKind === 'image'
+      ? t('editor.imageCapture')
+      : hasReplay
+        ? t('editor.replaySeconds', { seconds: Math.round(payload.replayDurationMs / 1000) })
+        : focusedFailure === null
+          ? t('editor.noReplay')
+          : t('editor.replayUnavailableReason', { reason: recorderFailureText(t, focusedFailure) })
   // ONE CLOCK for the board: the focused display's replay is the pack clock
   // (every lifetime is on it) and every other display's replay is slaved to it,
   // so scrubbing moves the whole desktop through one moment. The replays load
@@ -4269,7 +4640,9 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
   // Dirty baseline = the loaded state exactly as restored above.
   baselineSig = editSig()
   layout()
-  // OPENS ON THE WHOLE BOARD, every captured display visible at once.
+  // VIDEO opens on the whole board, every captured display visible at once.
+  // IMAGE opens at (or, for an exceptionally large raster, as close as the
+  // supported zoom range permits to) native 1:1.
   //
   // This used to open framed on the focused display, because framing is sharper
   // — measured on a two-monitor desk, 0.578 vs 0.430 zoom, every control ~44%
@@ -4281,10 +4654,9 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
   // help sheet); the existence of the other displays is not discoverable at all
   // if they are off screen when the editor opens.
   //
-  // fitBoard() rather than leaving layout()'s default: it also clears
-  // framedDisplay and syncs the zoom control, so a re-edit opens in the same
-  // state a fresh capture does.
-  fitBoard()
+  // openInitialView() also clears/synchronizes the relevant view state, so a
+  // re-edit opens in the same state as a fresh capture.
+  openInitialView()
   schedulePaint()
   // A frame that landed while the editor was decoding its images: apply it now
   // that there is a board to index it against.
@@ -4297,6 +4669,14 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
     // nothing, so picking is off for this capture. Until this was said, that was
     // indistinguishable from an editor whose picking is broken.
     showObjectHintOnce('dropped', t('editor.objectDropped'))
+  }
+  if (pendingDisplayContextFrames.size > 0) {
+    const late = [...pendingDisplayContextFrames].map(([display, frame]) => ({
+      display,
+      frame,
+    }))
+    pendingDisplayContextFrames.clear()
+    applyDisplayContextFrames(late)
   }
   // The shortcut sheet is ON BY DEFAULT (GOAL "Editor Chrome"), and remembers
   // being turned off. Opened LAST: its rows describe what this capture can
@@ -4326,23 +4706,52 @@ window.editorBridge.onInit((payload) => {
   void initEditor(payload)
 })
 
+window.editorBridge.onCloseRequested(() => {
+  // Caption X/Alt+F4 does not guarantee that the inline input blurs first.
+  // Commit an edit-mode draft before comparing against the loaded baseline so
+  // typed text or a newly picked box cannot be discarded as "not dirty".
+  if (editMode && textSession !== null) commitTextEditor(false)
+  if (editMode) updateDirty()
+  if (editMode && dirty) {
+    showUnsavedBar()
+    window.editorBridge.closePromptShown()
+  } else {
+    window.editorBridge.cancel()
+  }
+})
+
 // A frame Core pushed on its own: an observation that settled after the editor
 // opened (the helper is budgeted and killed independently of the window), or a
 // provider that answered after its budget expired. Rebuilding the per-display
 // indexes from it makes picking start working mid-session; nothing else is
 // touched, so boxes already drawn are unaffected.
 window.editorBridge.onContextFrame((frame) => {
+  // A re-edit opens after a short deadline even when its initial provider frame
+  // is still pending. That late push is also the hand-off of the session id,
+  // enabling all subsequent scrub requests without making first paint wait.
+  if (contextSessionId === null) contextSessionId = frame.sessionId
+  else if (contextSessionId !== frame.sessionId) return
+  // A pushed replacement supersedes every outstanding batch assembled from an
+  // older view of the board clock.
+  frameRequestSeq += 1
   // A push for a position the editor has already left is NEWS, not an answer:
   // an observation that settled late lands at the capture instant while the
   // user may have scrubbed elsewhere. Applying it would move picking back in
   // time behind their own scrub, and dropping it would leave picking dead until
   // they scrub again — so the moment actually on screen is re-asked instead.
-  if (frameTimeMs !== null && frame.requestedTimeMs !== frameTimeMs) {
-    frameTimeMs = null
+  const desired = displayedContextFrameRequests()
+  if (
+    desired.length > 0 &&
+    desired.some((request) => request.timeMs !== frame.requestedTimeMs)
+  ) {
+    frameTimesByDisplay.clear()
     scheduleContextFrame()
     return
   }
   applyContextFrame(frame)
+  for (const display of board?.displays ?? []) {
+    frameTimesByDisplay.set(display.index, frame.requestedTimeMs)
+  }
 })
 
 // Main is the authority on the window state: every mode change lands here,

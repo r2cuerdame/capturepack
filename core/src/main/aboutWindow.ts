@@ -16,6 +16,7 @@ import type { Settings } from '../shared/types'
 import { previousRun } from './lifecycle'
 import type { PreviousRunStatus } from './lifecycle'
 import { uiLanguage, uiT } from './locale'
+import { logsDir, logWarn } from './log'
 import { downloadedVersion, restartAndUpdate, updaterState } from './updater'
 import { openWelcomeWindow } from './welcomeWindow'
 
@@ -59,6 +60,29 @@ export function registerAboutIpc(live: Settings): void {
     void shell.openExternal(url).catch((err: unknown) => {
       console.error('capturepack: could not open link:', err instanceof Error ? err.message : err)
     })
+  })
+
+  // Diagnostics belong in About/Information, not in the frequently used tray
+  // capture menu. The renderer never supplies a path: main owns the one fixed
+  // log location and applies the same About-window sender check as every other
+  // action in this window.
+  ipcMain.on(IPC.aboutOpenLogs, (event) => {
+    if (!fromAboutWindow(event)) return
+    const directory = logsDir()
+    try {
+      fs.mkdirSync(directory, { recursive: true })
+    } catch (err) {
+      logWarn(`[about] could not create the logs folder: ${String(err)}`)
+      return
+    }
+    void shell
+      .openPath(directory)
+      .then((error) => {
+        if (error !== '') logWarn(`[about] could not open the logs folder: ${error}`)
+      })
+      .catch((err: unknown) => {
+        logWarn(`[about] could not open the logs folder: ${String(err)}`)
+      })
   })
 
   // The one way back to the first-launch introduction (GOAL "Welcome":
@@ -107,12 +131,31 @@ export function openAboutWindow(): void {
     },
   })
   win.setMenuBarVisibility(false)
-  win.once('ready-to-show', () => win.show())
+  let revealed = false
+  const reveal = (): void => {
+    if (revealed || win.isDestroyed()) return
+    revealed = true
+    win.show()
+    win.focus()
+  }
+  // `ready-to-show` is normally first. `did-finish-load` is an independent
+  // fallback for installed builds where Windows/GPU startup can omit that
+  // paint notification; the Information action must never become a silent
+  // no-op merely because an initially hidden window missed one event.
+  win.once('ready-to-show', reveal)
+  win.webContents.once('did-finish-load', reveal)
   win.on('closed', () => {
     if (aboutWindow === win) aboutWindow = null
   })
-  void win.loadFile(path.join(app.getAppPath(), 'dist', 'renderer', 'about', 'about.html'))
   aboutWindow = win
+  void win
+    .loadFile(path.join(app.getAppPath(), 'dist', 'renderer', 'about', 'about.html'))
+    .catch((err: unknown) => {
+      if (win.isDestroyed()) return
+      logWarn(`[about] could not load the Information window: ${String(err)}`)
+      if (aboutWindow === win) aboutWindow = null
+      win.destroy()
+    })
 }
 
 /**

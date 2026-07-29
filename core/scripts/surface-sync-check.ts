@@ -30,8 +30,10 @@
 import { SurfaceLane, type SurfaceHost } from '../src/main/context/surfaceLane'
 import { SurfaceTimeline } from '../src/main/context/timeline'
 import { frozenRingObservations } from '../src/main/context/ringObservations'
+import { SessionClock } from '../src/main/context/clock'
 import type { HostMonitor } from '../src/main/context/surfaceLane'
 import type { HostReply } from '../src/main/context/host'
+import { wallComparableTimeMs } from '../src/shared/highResolutionTime'
 
 /** Ground truth: one window sliding at exactly 1 px/ms, plus a static neighbour. */
 function deskAt(tMs: number): unknown[] {
@@ -273,6 +275,93 @@ function report(title: string, r: Result): boolean {
   return ok
 }
 
+function crossRendererClockReport(): boolean {
+  // Same real 30-second interval, observed by two renderer processes whose
+  // performance.now() origins are 95 seconds apart. This is exactly the field
+  // failure: lane S was ticked by one display renderer while the focused replay
+  // (and therefore its slot origin) came from another.
+  const realStartWallMs = Date.now() - 30_000
+  const realEndWallMs = realStartWallMs + 30_000
+  const tickRendererOrigin = realStartWallMs - 100_000
+  const replayRendererOrigin = realStartWallMs - 5_000
+  const rawTickAtEnd = 130_000
+  const rawReplayStart = 5_000
+  const rawGapMs = Math.abs(rawTickAtEnd - (rawReplayStart + 30_000))
+
+  const tickEndWallMs = wallComparableTimeMs(tickRendererOrigin, rawTickAtEnd)
+  const replayStartWallMs = wallComparableTimeMs(replayRendererOrigin, rawReplayStart)
+  const clock = new SessionClock(35_000)
+  const tickEndSessionMs = clock.fromWallClockMs(tickEndWallMs)
+  const replayEndSessionMs = clock.fromWallClockMs(replayStartWallMs) + 30_000
+  const normalizedGapMs = Math.abs(tickEndSessionMs - replayEndSessionMs)
+  const wallErrorMs = Math.max(
+    Math.abs(tickEndWallMs - realEndWallMs),
+    Math.abs(replayStartWallMs - realStartWallMs),
+  )
+  const ok = rawGapMs === 95_000 && normalizedGapMs < 0.001 && wallErrorMs < 0.001
+
+  console.log('C: focused replay and lane-S ticks come from different renderer clocks')
+  console.log(`  raw renderer-clock gap: ${rawGapMs} ms`)
+  console.log(`  shared session-clock gap: ${normalizedGapMs.toFixed(3)} ms`)
+  console.log(ok ? '  PASS — past surfaces remain inside the replay range\n' : '  FAIL — replay and surfaces do not overlap\n')
+  return ok
+}
+
+async function ownerHandoffReport(): Promise<boolean> {
+  let wallNow = 1_000
+  let coreNow = 0
+  let acceptedTicks = 0
+  let onReady: (hello: HostReply) => void = () => {}
+  const originalDateNow = Date.now
+  Date.now = () => wallNow
+  const host: SurfaceHost = {
+    start() {},
+    stop() {},
+    request(method) {
+      if (method === 'ping') return Promise.resolve({ id: 1, ok: true, hostMs: coreNow })
+      if (method === 'surface.start') {
+        return Promise.resolve({ id: 1, ok: true, intervalMs: D2_FRAME_MS })
+      }
+      if (method === 'surface.tick') acceptedTicks += 1
+      return Promise.resolve({ id: 1, ok: true })
+    },
+  }
+  const clock = {
+    nowMs: () => coreNow,
+    bufferStartMs: () => 0,
+    observe: () => {},
+  } as never
+  const lane = new SurfaceLane(clock, new SurfaceTimeline(), D2_FRAME_MS, (options) => {
+    onReady = options.onReady
+    return host
+  })
+  try {
+    lane.start()
+    onReady({ id: 0, ok: true, hostMs: 0, monitors: [] })
+    await new Promise((resolve) => setImmediate(resolve))
+    await new Promise((resolve) => setImmediate(resolve))
+
+    lane.tickAt('display-a', 100)
+    wallNow = 1_500
+    coreNow = 500
+    lane.tickAt('display-b', 500)
+    const rejectedConcurrentSource = acceptedTicks === 1
+
+    wallNow = 3_100
+    coreNow = 2_100
+    lane.tickAt('display-b', 2_100)
+    const acceptedReplacement = acceptedTicks === 2
+    const ok = rejectedConcurrentSource && acceptedReplacement
+    console.log('D: recorder owner disappears and a surviving display takes over')
+    console.log(`  accepted surface ticks: ${acceptedTicks} (want 2)`)
+    console.log(ok ? '  PASS — concurrent clocks are rejected, silent owners can hand off\n' : '  FAIL — owner handoff is stuck or duplicates clocks\n')
+    return ok
+  } finally {
+    lane.stop()
+    Date.now = originalDateNow
+  }
+}
+
 async function main(): Promise<void> {
   // Two recorder renderers have independent media clocks with independent zero
   // points, so their frame times are thousands of ms apart. Scenario B removes
@@ -285,7 +374,9 @@ async function main(): Promise<void> {
     'B: two displays whose media clocks happen to agree (tick/reply mismatch alone)',
     await run(0),
   )
-  if (!a || !b) {
+  const c = crossRendererClockReport()
+  const d = await ownerHandoffReport()
+  if (!a || !b || !c || !d) {
     console.error('surface-sync-check FAILED')
     process.exitCode = 1
     return

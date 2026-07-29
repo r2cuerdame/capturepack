@@ -113,7 +113,10 @@ body {
    than on .links) keeps the whole bottom block anchored as one group. */
 .actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
+  gap: 8px;
+  width: 100%;
   margin-top: auto;
   padding-top: 14px;
 }

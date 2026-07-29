@@ -58,7 +58,7 @@ let currentBytes: number | null = null
 let writeFailures = 0
 let fileLoggingEnabled = true
 
-/** %APPDATA%/CapturePack/logs — what the tray's "Open logs folder" opens. */
+/** %APPDATA%/CapturePack/logs — what About's "Open logs folder" opens. */
 export function logsDir(): string {
   return path.join(app.getPath('userData'), 'logs')
 }

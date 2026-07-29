@@ -271,6 +271,18 @@ body {
   color: #7fd89b;
 }
 
+.badge.media.image {
+  border-color: #2b5f78;
+  background: #122733;
+  color: #8bd5f5;
+}
+
+.badge.media.video {
+  border-color: #4f4380;
+  background: #211b38;
+  color: #b9a8ff;
+}
+
 .badge.missing {
   border-color: var(--warn-border);
   background: var(--warn-bg);

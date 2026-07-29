@@ -3,11 +3,10 @@
 // numbers on commit with a brief highlight, and shows inline "press Restart to
 // apply" hints for the MCP keys the running server has not picked up yet.
 //
-// Two things in this window are LIVE rather than configured (issues #54, #57):
-// whether the MCP server is actually listening, and what the Windows UI
-// Automation plugin actually did on the last capture. Both come from
-// bridge.status() and are re-read after every change and on window focus,
-// because both move while the window is open.
+// Three things in this window are LIVE rather than configured (issues #54,
+// #57): whether the MCP server is listening, what Windows UI Automation did on
+// the last capture, and whether a Chrome extension has an active handshake.
+// They are re-read while the window is open because all can change elsewhere.
 import type {
   ChromeIntegrationStatus,
   StoragePurgeResult,
@@ -28,8 +27,13 @@ import {
   SUPPORTED_LANGUAGES,
 } from '../../shared/i18n'
 import type { I18nKey, TranslateFn } from '../../shared/i18n'
-import { analyzeLatestPrompt } from '../../shared/prompt'
-import { DEFAULT_CAPTURE_HOTKEY } from '../../shared/types'
+import { connectAndAnalyzeLatestPrompt } from '../../shared/prompt'
+import {
+  DEFAULT_CAPTURE_HOTKEY,
+  DEFAULT_IMAGE_CAPTURE_HOTKEY,
+  MAX_CAPTURE_FPS,
+  MIN_CAPTURE_FPS,
+} from '../../shared/types'
 import type { Settings } from '../../shared/types'
 
 interface SettingsBridge {
@@ -90,12 +94,22 @@ const chromeUninstallBtn = el<HTMLButtonElement>('chromeUninstallBtn')
 const chromeRefreshBtn = el<HTMLButtonElement>('chromeRefreshBtn')
 const chromeExtDir = el<HTMLElement>('chromeExtDir')
 const chromeOpenFailed = el<HTMLElement>('chromeOpenFailed')
+const chromeIcon = el<HTMLElement>('chromeIcon')
+const chromeEnabledInput = el<HTMLInputElement>('chromeDomEnabled')
+const chromeHelpBtn = el<HTMLButtonElement>('chromeHelpBtn')
+const chromeHelpEl = el<HTMLElement>('chromeHelp')
+const chromeFoldBtn = el<HTMLButtonElement>('chromeFoldBtn')
+const chromeDetailPanel = el<HTMLElement>('chromeDetailPanel')
 const captureDisplaySelect = el<HTMLSelectElement>('captureDisplay')
 const clipboardSelect = el<HTMLSelectElement>('clipboardAfterSave')
 const captureHotkeyBtn = el<HTMLButtonElement>('captureHotkeyBtn')
 const captureHotkeyHint = el<HTMLElement>('captureHotkeyHint')
 const captureHotkeyRecordHint = el<HTMLElement>('captureHotkeyRecordHint')
 const captureHotkeyError = el<HTMLElement>('captureHotkeyError')
+const imageCaptureHotkeyBtn = el<HTMLButtonElement>('imageCaptureHotkeyBtn')
+const imageCaptureHotkeyHint = el<HTMLElement>('imageCaptureHotkeyHint')
+const imageCaptureHotkeyRecordHint = el<HTMLElement>('imageCaptureHotkeyRecordHint')
+const imageCaptureHotkeyError = el<HTMLElement>('imageCaptureHotkeyError')
 const mcpUrlEl = el<HTMLElement>('mcpUrl')
 const copyUrlBtn = el<HTMLButtonElement>('copyUrlBtn')
 const mcpDot = el<HTMLElement>('mcpDot')
@@ -109,7 +123,9 @@ const uiaIcon = el<HTMLElement>('uiaIcon')
 const uiaStatusEl = el<HTMLElement>('uiaStatus')
 const uiaEnabledInput = el<HTMLInputElement>('uiaEnabled')
 const uiaHelpBtn = el<HTMLButtonElement>('uiaHelpBtn')
-const uiaDetailEl = el<HTMLElement>('uiaDetail')
+const uiaHelpEl = el<HTMLElement>('uiaHelp')
+const uiaFoldBtn = el<HTMLButtonElement>('uiaFoldBtn')
+const uiaDetailPanel = el<HTMLElement>('uiaDetailPanel')
 const appVersionEl = el<HTMLSpanElement>('appVersion')
 const languageSelect = el<HTMLSelectElement>('language')
 const packLanguageSelect = el<HTMLSelectElement>('packLanguage')
@@ -153,7 +169,11 @@ function refreshLanguage(): void {
   captureHotkeyRecordHint.textContent = t('settings.hotkeyResetHint', {
     hotkey: DEFAULT_CAPTURE_HOTKEY,
   })
+  imageCaptureHotkeyRecordHint.textContent = t('settings.hotkeyResetHint', {
+    hotkey: DEFAULT_IMAGE_CAPTURE_HOTKEY,
+  })
   syncHotkeyField()
+  syncImageHotkeyField()
   // The client dropdown is NOT rebuilt here: its entries are product names and
   // config paths, identical in every language, and rebuilding it would throw
   // away the client the user just picked.
@@ -168,10 +188,10 @@ function refreshLanguage(): void {
  * start and nothing else, so a hint on it would be a lie. mcpEnabled left for
  * the same reason in v0.1.6: it now stops and starts the server the instant it
  * is clicked, so it is never "pending" and a hint on it would be a lie too.
- * outputDir is here because the server indexes that folder, which is what its
- * hint says.
+ * outputDir and mcpWatchExportFolder follow live Settings on the next request;
+ * replacing the store for those values used to be the stale-folder bug.
  */
-const MCP_HINTED_KEYS = ['outputDir', 'mcpPort', 'mcpWatchExportFolder'] as const
+const MCP_HINTED_KEYS = ['mcpPort'] as const
 
 function updateHints(): void {
   if (current === null || status === null) return
@@ -229,9 +249,13 @@ const TOGGLES: ReadonlyArray<BooleanSettingsKey> = [
   // The recording privacy switch: applied live main-side through the same
   // recorder rebuild every other capture change uses.
   'recordingEnabled',
-  // The Plugins row's real on/off (issue #57) — applies to the NEXT capture
-  // with no restart of anything, because the capture flow reads it at trigger.
+  // The Plugins row's real on/off (issue #57): main applies it immediately to
+  // the resident control lane, and the capture flow reads the same value for
+  // its one-shot dump at the next trigger.
   'uiaEnabled',
+  // The browser integration's equivalent switch. Main closes/reopens the pipe
+  // immediately, and the native host redials without a page reload.
+  'chromeDomEnabled',
   // The editor's first-run tutorial. It belongs in this list rather than in a
   // handler of its own precisely BECAUSE the editor clears it: every refresh of
   // this panel re-reads the flag, so the box falls back down on its own once a
@@ -243,7 +267,9 @@ const TOGGLES: ReadonlyArray<BooleanSettingsKey> = [
 for (const key of TOGGLES) {
   el<HTMLInputElement>(key).addEventListener('change', (event) => {
     const input = event.currentTarget as HTMLInputElement
-    void apply({ [key]: input.checked } as SettingsPatch)
+    void apply({ [key]: input.checked } as SettingsPatch).then(() => {
+      if (key === 'chromeDomEnabled') refreshChromeStatus()
+    })
   })
 }
 
@@ -272,11 +298,10 @@ const NUMBER_FIELDS: ReadonlyArray<NumberField> = [
   },
   {
     id: 'fps',
-    // The recorder never promises a rate it cannot reach — `achieved_fps` in the
-    // manifest is what actually happened — so the ceiling here is the ASK, and
-    // capping the ask below what a fast machine can do helps nobody.
-    min: 1,
-    max: 60,
+    // Keep the request intentionally bounded: the achieved rate is still
+    // reported separately in the manifest when the machine cannot sustain it.
+    min: MIN_CAPTURE_FPS,
+    max: MAX_CAPTURE_FPS,
     round: Math.round,
     fromSettings: (s) => s.fps,
     patch: (v) => ({ fps: v }),
@@ -420,6 +445,8 @@ let recordingHotkey = false
 // rendered text) so an instant language switch re-renders a visible error.
 type HotkeyErrorKey = 'settings.hotkeyConflict' | 'settings.hotkeyInvalid'
 let hotkeyErrorKey: HotkeyErrorKey | null = null
+let recordingImageHotkey = false
+let imageHotkeyErrorKey: HotkeyErrorKey | null = null
 
 /** The accelerator key name for a keydown, or null when it has none we can use. */
 function acceleratorKey(event: KeyboardEvent): string | null {
@@ -549,6 +576,77 @@ captureHotkeyBtn.addEventListener('keydown', (event) => {
   if (accelerator === null) return
   stopRecording()
   void applyHotkey(accelerator)
+})
+
+function syncImageHotkeyField(): void {
+  imageCaptureHotkeyBtn.textContent = recordingImageHotkey
+    ? t('settings.hotkeyRecording')
+    : (current?.imageCaptureHotkey ?? DEFAULT_IMAGE_CAPTURE_HOTKEY)
+  imageCaptureHotkeyBtn.classList.toggle('recording', recordingImageHotkey)
+  imageCaptureHotkeyHint.hidden = recordingImageHotkey
+  imageCaptureHotkeyRecordHint.hidden = !recordingImageHotkey
+  if (imageHotkeyErrorKey === null) {
+    imageCaptureHotkeyError.hidden = true
+  } else {
+    imageCaptureHotkeyError.textContent = t(imageHotkeyErrorKey)
+    imageCaptureHotkeyError.hidden = false
+  }
+}
+
+function startImageHotkeyRecording(): void {
+  if (recordingImageHotkey) return
+  recordingImageHotkey = true
+  imageHotkeyErrorKey = null
+  syncImageHotkeyField()
+}
+
+function stopImageHotkeyRecording(): void {
+  if (!recordingImageHotkey) return
+  recordingImageHotkey = false
+  syncImageHotkeyField()
+}
+
+async function applyImageHotkey(accelerator: string): Promise<void> {
+  const result = await apply({ imageCaptureHotkey: accelerator })
+  imageHotkeyErrorKey =
+    result.imageHotkeyFailed === true
+      ? 'settings.hotkeyConflict'
+      : result.settings.imageCaptureHotkey === accelerator
+        ? null
+        : 'settings.hotkeyInvalid'
+  syncImageHotkeyField()
+}
+
+imageCaptureHotkeyBtn.addEventListener('click', startImageHotkeyRecording)
+imageCaptureHotkeyBtn.addEventListener('blur', stopImageHotkeyRecording)
+imageCaptureHotkeyBtn.addEventListener('keydown', (event) => {
+  if (event.key === 'Tab') {
+    stopImageHotkeyRecording()
+    return
+  }
+  if (!recordingImageHotkey) {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      startImageHotkeyRecording()
+    }
+    return
+  }
+  event.preventDefault()
+  event.stopPropagation()
+  if (event.key === 'Escape') {
+    stopImageHotkeyRecording()
+    return
+  }
+  if (event.key === 'Backspace' || event.key === 'Delete') {
+    stopImageHotkeyRecording()
+    void applyImageHotkey(DEFAULT_IMAGE_CAPTURE_HOTKEY)
+    return
+  }
+  if (MODIFIER_KEYS.has(event.key)) return
+  const accelerator = toAccelerator(event)
+  if (accelerator === null) return
+  stopImageHotkeyRecording()
+  void applyImageHotkey(accelerator)
 })
 
 // ---------------------------------------------------------------------------
@@ -710,15 +808,13 @@ function renderChromeStatus(status: ChromeIntegrationStatus): void {
         : t('settings.chkConnected'),
     },
   ]
-  // AN UNPACKED EXTENSION DOES NOT UPDATE WITH THE APP.
+  // AN ALREADY-LOADED UNPACKED EXTENSION DOES NOT EXECUTE CHANGED FILES YET.
   //
-  // "Load unpacked" makes the browser take its own copy, so updating
-  // CapturePack replaces the folder on disk and leaves the browser running
-  // whatever it loaded that day. The two then drift apart in silence, and a
-  // stale extension fails in ways that look like a broken app. This check only
-  // appears once there is something to compare — a handshake and a readable
-  // bundled manifest — so it never accuses an install that simply has not
-  // connected yet.
+  // CapturePack updates the same stable folder, but Chromium keeps the worker
+  // code it already loaded. Version 0.1.7+ can ask Chromium to reload itself
+  // after the app hello; getting FROM an older worker to 0.1.7 still takes one
+  // manual Reload because that old code cannot implement a new instruction.
+  // This visible row is that one-time migration path.
   const stale =
     status.extensionConnected &&
     status.bundledExtensionVersion !== null &&
@@ -731,6 +827,17 @@ function renderChromeStatus(status: ChromeIntegrationStatus): void {
         loaded: status.extensionVersion ?? '?',
         bundled: status.bundledExtensionVersion ?? '?',
       }),
+    })
+  }
+  // LOADED FROM THE FOLDER AN UPDATE REPLACES. This is not a failure — it is
+  // working right now — but it is one update away from not working, and from
+  // the outside it looks identical to a healthy install. The row is the only
+  // place that difference exists. Listed last so it never displaces a check
+  // that is actually broken.
+  if (status.legacyExtensionLoaded) {
+    checks.push({
+      ok: false,
+      text: `${t('settings.chkExtensionLegacy')} — ${status.extensionDir}`,
     })
   }
   chromeChecks.replaceChildren(
@@ -746,17 +853,6 @@ function renderChromeStatus(status: ChromeIntegrationStatus): void {
       return li
     }),
   )
-  // LOADED FROM THE FOLDER AN UPDATE REPLACES. This is not a failure — it is
-  // working right now — but it is one update away from not working, and from
-  // the outside it looks identical to a healthy install. The row is the only
-  // place that difference exists. Listed last so it never displaces a check
-  // that is actually broken.
-  if (status.legacyExtensionLoaded) {
-    checks.push({
-      ok: false,
-      text: `${t('settings.chkExtensionLegacy')} — ${status.extensionDir}`,
-    })
-  }
   const passed = checks.filter((c) => c.ok).length
   chromeVerdict.textContent = `${String(passed)}/${String(checks.length)}`
   // A protocol the app cannot speak is worth saying out loud rather than
@@ -780,6 +876,14 @@ function renderChromeStatus(status: ChromeIntegrationStatus): void {
   if (status.allowedExtensionIds.length > 0 && chromeExtensionId.value.trim() === '') {
     chromeExtensionId.value = status.allowedExtensionIds[0] ?? ''
   }
+  const enabled = current?.chromeDomEnabled ?? true
+  chromeIcon.textContent = !enabled
+    ? '⚪'
+    : status.extensionConnected && status.protocolCompatible
+      ? '🟢'
+      : '🔴'
+  chromeEnabledInput.disabled = false
+  if (!enabled) chromeVerdict.textContent = t('settings.chromeOff')
 }
 
 function refreshChromeStatus(): void {
@@ -998,11 +1102,12 @@ chromeRefreshBtn.addEventListener('click', () => {
   })()
 })
 
-// The extension announces itself whenever the browser starts the host, which is
-// not something this window can be told about — so while it is open it asks.
+// Connection truth is in-memory and cheap; main caches the expensive
+// registry/profile scan. Poll quickly enough that a recovered port repaints
+// without a manual Refresh while keeping Secure Preferences off the hot path.
 window.setInterval(() => {
   if (!document.hidden) refreshChromeStatus()
-}, 2000)
+}, 1000)
 
 refreshChromeStatus()
 
@@ -1126,15 +1231,16 @@ copySetupBtn.addEventListener('click', () => {
 })
 
 copyPromptBtn.addEventListener('click', () => {
-  // The same instructions the save toast's Copy Prompt carries (shared/prompt),
-  // so the two can never drift; English on purpose, like that one.
-  //
-  // Unlike its two neighbours this button is never disabled, and GOAL says so:
-  // the sentence names no endpoint, so there is nothing in it that a dead socket
-  // could make wrong. The client it is pasted into is what knows where the
-  // server is — and a user whose server is down still has a use for it, namely
-  // pasting it after switching the server back on.
-  copyWithFeedback(copyPromptBtn, 'settings.mcpCopyPrompt', analyzeLatestPrompt())
+  const form = MCP_CLIENT_FORMS[Number.parseInt(mcpClientSelect.value, 10)]
+  const url = liveEndpoint()
+  if (form === undefined || url === '') return
+  // A complete handoff: selected client, the actual live endpoint, its exact
+  // setup form, and the shared analyze-latest instructions.
+  copyWithFeedback(
+    copyPromptBtn,
+    'settings.mcpCopyPrompt',
+    connectAndAnalyzeLatestPrompt(form.label, url, form.snippet(url)),
+  )
 })
 
 // True while a restart is in flight. renderLive() also owns the button's
@@ -1246,6 +1352,7 @@ function renderLive(): void {
   mcpUrlEl.title = mcp.endpoint
   copyUrlBtn.disabled = mcp.endpoint === ''
   copySetupBtn.disabled = mcp.endpoint === ''
+  copyPromptBtn.disabled = mcp.endpoint === ''
   // [Restart] has nothing to restart while the server is switched off, and a
   // button that can only ever answer "still off" is the kind of empty
   // affordance this release is removing. The switch above is the Stop/Start;
@@ -1282,19 +1389,28 @@ function pollWhileStarting(): void {
 // again, so that is when they are re-checked.
 window.addEventListener('focus', () => {
   void refreshStatus()
+  refreshChromeStatus()
   // The folder grew while this window was in the background if a capture ran.
   refreshStorage()
 })
 
 refreshStorage()
 
-// The "?" affordance (issue #57): reveal the long explanation of what the
-// plugin does and what it costs, right under its row.
-uiaHelpBtn.addEventListener('click', () => {
-  const open = uiaDetailEl.hidden
-  uiaDetailEl.hidden = !open
-  uiaHelpBtn.setAttribute('aria-expanded', String(open))
-})
+// Help and operational detail are deliberately separate disclosures. Asking
+// what a plugin does must never also open/close Chrome's setup workflow, and
+// status polling must never overwrite the user's fold state.
+function bindDisclosure(button: HTMLButtonElement, panel: HTMLElement): void {
+  button.addEventListener('click', () => {
+    const open = panel.hidden
+    panel.hidden = !open
+    button.setAttribute('aria-expanded', String(open))
+  })
+}
+
+bindDisclosure(uiaHelpBtn, uiaHelpEl)
+bindDisclosure(uiaFoldBtn, uiaDetailPanel)
+bindDisclosure(chromeHelpBtn, chromeHelpEl)
+bindDisclosure(chromeFoldBtn, chromeDetailPanel)
 
 // ---------------------------------------------------------------------------
 // Sync + init
@@ -1314,6 +1430,7 @@ function syncControls(): void {
   clipboardSelect.value = s.clipboardAfterSave
   replayMaxWidthSelect.value = String(s.replayMaxWidth)
   syncHotkeyField()
+  syncImageHotkeyField()
   languageSelect.value = s.language
   packLanguageSelect.value = s.packLanguage
 }

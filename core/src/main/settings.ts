@@ -3,17 +3,22 @@ import { app } from 'electron'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { isSupportedLanguage } from '../shared/i18n'
-import { DEFAULT_CAPTURE_HOTKEY, SETTINGS_VERSION } from '../shared/types'
+import {
+  DEFAULT_CAPTURE_HOTKEY,
+  DEFAULT_IMAGE_CAPTURE_HOTKEY,
+  normalizeCaptureFps,
+  SETTINGS_VERSION,
+} from '../shared/types'
 import type { ClipboardAfterSave, EditorWindowBounds, Settings } from '../shared/types'
 
 /** The four things a saved pack can put on the clipboard. */
 const CLIPBOARD_MODES: readonly ClipboardAfterSave[] = ['off', 'folder', 'path', 'prompt']
 
 /**
- * Longest replay buffer that may be configured (10 minutes). The recorder holds
- * 1x-2x of this in memory per display, every render replays it in REAL TIME,
- * and the annotated-keyframe filename format spells the replay clock as
- * MM-SS.mmm (SPEC §5.7) — the bound is what keeps all three honest.
+ * Longest replay buffer that may be configured (10 minutes). The bounded
+ * fragment ring holds this window in memory per display, every render replays
+ * it in REAL TIME, and the annotated-keyframe filename format spells the
+ * replay clock as MM-SS.mmm (SPEC §5.7) — this bound keeps all three honest.
  */
 export const MAX_REPLAY_SECONDS = 600
 
@@ -47,6 +52,7 @@ function defaultSettings(): Settings {
     welcomeShown: false,
     welcomeDeferredFromLogin: false,
     captureHotkey: DEFAULT_CAPTURE_HOTKEY,
+    imageCaptureHotkey: DEFAULT_IMAGE_CAPTURE_HOTKEY,
     replaySeconds: 30,
     fps: 15,
     replayMaxWidth: 1920,
@@ -59,6 +65,7 @@ function defaultSettings(): Settings {
     // object picking"), so it is on out of the box; issue #57 gives it the
     // Settings switch its per-capture cost earns it.
     uiaEnabled: true,
+    chromeDomEnabled: true,
     scrubInvert: false,
     scrubSensitivityMs: 100,
     defaultManualDurationMs: 1000,
@@ -243,12 +250,14 @@ const SETTINGS_KEY_SET: Record<keyof Settings, true> = {
   welcomeShown: true,
   welcomeDeferredFromLogin: true,
   captureHotkey: true,
+  imageCaptureHotkey: true,
   replaySeconds: true,
   fps: true,
   replayMaxWidth: true,
   captureDisplay: true,
   recordingEnabled: true,
   uiaEnabled: true,
+  chromeDomEnabled: true,
   scrubInvert: true,
   scrubSensitivityMs: true,
   defaultManualDurationMs: true,
@@ -408,17 +417,24 @@ function mergeSettings(base: Settings, raw: Record<string, unknown>): Settings {
       typeof raw.captureHotkey === 'string' && isCaptureHotkey(raw.captureHotkey)
         ? raw.captureHotkey
         : base.captureHotkey,
-    // Upper bound as well as lower: the replay is held in memory by the
-    // recorder pair and re-encoded in real time by every render, and the
-    // keyframe filename clock (frames/frame-NN_MM-SS.mmm.png, SPEC §5.7) spells
-    // minutes. A hand-edited settings.json must not be able to ask for hours.
+    imageCaptureHotkey:
+      typeof raw.imageCaptureHotkey === 'string' && isCaptureHotkey(raw.imageCaptureHotkey)
+        ? raw.imageCaptureHotkey
+        : base.imageCaptureHotkey,
+    // Upper bound as well as lower: the replay fragment ring is held in memory
+    // and every final render is re-encoded in real time, while the keyframe
+    // filename clock (frames/frame-NN_MM-SS.mmm.png, SPEC §5.7) spells minutes.
+    // A hand-edited settings.json must not be able to ask for hours.
     replaySeconds:
       typeof raw.replaySeconds === 'number' &&
       raw.replaySeconds > 0 &&
       raw.replaySeconds <= MAX_REPLAY_SECONDS
         ? raw.replaySeconds
         : base.replaySeconds,
-    fps: typeof raw.fps === 'number' && raw.fps > 0 ? raw.fps : base.fps,
+    // Keep hand-edited and older profiles inside the supported recorder range.
+    // In particular, profiles saved before the 30 fps ceiling are normalized
+    // on their next read instead of silently continuing to request 60 fps.
+    fps: normalizeCaptureFps(raw.fps, base.fps),
     replayMaxWidth:
       typeof raw.replayMaxWidth === 'number' &&
       Number.isInteger(raw.replayMaxWidth) &&
@@ -433,6 +449,8 @@ function mergeSettings(base: Settings, raw: Record<string, unknown>): Settings {
     recordingEnabled:
       typeof raw.recordingEnabled === 'boolean' ? raw.recordingEnabled : base.recordingEnabled,
     uiaEnabled: typeof raw.uiaEnabled === 'boolean' ? raw.uiaEnabled : base.uiaEnabled,
+    chromeDomEnabled:
+      typeof raw.chromeDomEnabled === 'boolean' ? raw.chromeDomEnabled : base.chromeDomEnabled,
     scrubInvert: typeof raw.scrubInvert === 'boolean' ? raw.scrubInvert : base.scrubInvert,
     scrubSensitivityMs:
       typeof raw.scrubSensitivityMs === 'number' && raw.scrubSensitivityMs > 0

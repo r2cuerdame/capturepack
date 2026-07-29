@@ -70,7 +70,9 @@
 param(
   # Standalone benchmark: track the foreground window, refresh N times, print
   # the cost, exit. This is how the numbers in this header are checked.
-  [int]$SelfTest = 0
+  [int]$SelfTest = 0,
+  # Deterministic protocol-wake check. No window, UIA provider, or input.
+  [switch]$WakeSelfTest
 )
 
 $ErrorActionPreference = 'Stop'
@@ -86,10 +88,13 @@ Add-Type -AssemblyName UIAutomationTypes
 
 Add-Type -TypeDefinition @'
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 using System.Windows.Automation;
 
 namespace CapturePack {
@@ -116,24 +121,290 @@ namespace CapturePack {
   }
 
   public static class ControlLane {
+    [DllImport("user32.dll")]
+    static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+    [DllImport("user32.dll")]
+    static extern bool SetProcessDPIAware();
+    [DllImport("shcore.dll")]
+    static extern int SetProcessDpiAwareness(int value);
+    [DllImport("user32.dll")]
+    static extern IntPtr SetWinEventHook(
+      uint eventMin,
+      uint eventMax,
+      IntPtr module,
+      WinEventDelegate callback,
+      uint processId,
+      uint threadId,
+      uint flags);
+    [DllImport("user32.dll")]
+    static extern bool UnhookWinEvent(IntPtr hook);
+    [DllImport("user32.dll")]
+    static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
+    [DllImport("kernel32.dll")]
+    static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")]
+    static extern int GetMessage(out NativeMessage message, IntPtr hwnd, uint min, uint max);
+    [DllImport("user32.dll")]
+    static extern bool PeekMessage(
+      out NativeMessage message,
+      IntPtr hwnd,
+      uint min,
+      uint max,
+      uint remove);
+    [DllImport("user32.dll")]
+    static extern bool PostThreadMessage(uint threadId, uint message, UIntPtr wParam, IntPtr lParam);
+
+    delegate void WinEventDelegate(
+      IntPtr hook,
+      uint eventType,
+      IntPtr hwnd,
+      int objectId,
+      int childId,
+      uint eventThread,
+      uint eventTime);
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct NativePoint {
+      public int X;
+      public int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct NativeMessage {
+      public IntPtr Hwnd;
+      public uint Message;
+      public UIntPtr WParam;
+      public IntPtr LParam;
+      public uint Time;
+      public NativePoint Point;
+    }
+
     static readonly Dictionary<long, TrackedWindow> Tracked = new Dictionary<long, TrackedWindow>();
     /// Windows that repeatedly blew the timeout. Measured motivation: Docker
     /// Desktop, 10 elements, ~2050 ms per pass, every pass. One provider like
     /// that defines the whole lane's latency unless it is dropped.
     static readonly HashSet<long> Blocked = new HashSet<long>();
+    /// Native accessibility events replace UIA's managed StructureChanged
+    /// callback. Field crash evidence from rc.37:
+    ///
+    ///   System.ArgumentNullException
+    ///   Windows.Automation.StructureChangedEventArgs..ctor
+    ///
+    /// That exception happens while UIAutomationClient constructs the callback
+    /// argument, before our delegate can catch it, and terminates powershell.exe.
+    /// SetWinEventHook only delivers primitive Win32 values, so a malformed UIA
+    /// provider cannot construct an object in this process at all.
+    static readonly ConcurrentDictionary<long, byte> Wanted =
+      new ConcurrentDictionary<long, byte>();
+    static readonly ConcurrentDictionary<long, byte> DirtySignals =
+      new ConcurrentDictionary<long, byte>();
+    static readonly AutoResetEvent DirtyWake = new AutoResetEvent(false);
+    static readonly ManualResetEventSlim WinEventReady = new ManualResetEventSlim(false);
+    static readonly WinEventDelegate WinEventCallback = OnWinEvent;
+    static GCHandle WinEventCallbackHandle;
+    static Thread WinEventThread;
+    static IntPtr WinEventHook;
+    static uint WinEventThreadId;
+    const uint EventObjectCreate = 0x8000;
+    const uint EventObjectDestroy = 0x8001;
+    const uint EventObjectShow = 0x8002;
+    const uint EventObjectHide = 0x8003;
+    const uint EventObjectReorder = 0x8004;
+    const uint EventObjectNameChange = 0x800C;
+    const uint WineventOutOfContext = 0x0000;
+    const uint WineventSkipOwnProcess = 0x0002;
+    const uint GaRoot = 2;
+    const uint WmQuit = 0x0012;
+    const uint PmNoRemove = 0x0000;
     static readonly Stopwatch Clock = Stopwatch.StartNew();
     /// Total time spent INSIDE walks and refreshes — the only number that can
     /// honestly be called this lane's cost, and what the duty cycle divides.
     static double BusyMs;
     static readonly StringBuilder Out = new StringBuilder(1 << 16);
-    /// Handlers are held so the GC cannot collect what UIA still calls.
-    static readonly Dictionary<long, StructureChangedEventHandler> Handlers =
-      new Dictionary<long, StructureChangedEventHandler>();
+    static int ReleasedReferences;
+    static double LastReferenceCollectionMs;
+    static int ReferenceCollections;
 
     public static double NowMs { get { return Math.Round(Clock.Elapsed.TotalMilliseconds, 1); } }
     public static double Busy { get { return BusyMs; } }
     public static int TrackedCount { get { return Tracked.Count; } }
     public static int BlockedCount { get { return Blocked.Count; } }
+    public static string DpiMode = "unaware";
+    public static volatile string ChangeSignalMode = "starting";
+    public static int ReferenceCollectionCount { get { return ReferenceCollections; } }
+
+    /// UIA BoundingRectangle follows this PROCESS's DPI coordinate space.
+    ///
+    /// Lane S is PMv2 and ringObservations combines its physical window
+    /// rectangles with Lane A controls. If Lane A stays unaware, Windows
+    /// virtualizes every control through the primary monitor's scale: on the
+    /// reported 1x left / 1.5x primary desk, the real (-580,51,153,24) became
+    /// (-870,77,230,36), and subtracting the physical -1200 monitor origin
+    /// wrote the exact bad annotation (330,77,230,36). Declare the same
+    /// coordinate contract before the first AutomationElement access.
+    public static void InitDpi() {
+      try {
+        if (SetProcessDpiAwarenessContext(new IntPtr(-4))) {
+          DpiMode = "per-monitor-v2";
+          return;
+        }
+      } catch { }
+      try {
+        if (SetProcessDpiAwareness(2) == 0) {
+          DpiMode = "per-monitor";
+          return;
+        }
+      } catch { }
+      try {
+        if (SetProcessDPIAware()) {
+          DpiMode = "system";
+          return;
+        }
+      } catch { }
+    }
+
+    public static void StartChangeSignal() {
+      if (WinEventThread != null) return;
+      WinEventReady.Reset();
+      WinEventThread = new Thread(delegate() {
+        try {
+          WinEventThreadId = GetCurrentThreadId();
+          // Microsoft requires managed WinEvent delegates to be held by a
+          // GCHandle for the entire native hook lifetime.
+          WinEventCallbackHandle = GCHandle.Alloc(WinEventCallback);
+          // PostThreadMessage is only reliable after the target created its queue.
+          NativeMessage ignored;
+          PeekMessage(out ignored, IntPtr.Zero, 0, 0, PmNoRemove);
+          WinEventHook = SetWinEventHook(
+            EventObjectCreate,
+            EventObjectNameChange,
+            IntPtr.Zero,
+            WinEventCallback,
+            0,
+            0,
+            WineventOutOfContext | WineventSkipOwnProcess);
+          ChangeSignalMode = WinEventHook == IntPtr.Zero ? "poll" : "winevent";
+          WinEventReady.Set();
+          if (WinEventHook == IntPtr.Zero) return;
+          NativeMessage message;
+          while (GetMessage(out message, IntPtr.Zero, 0, 0) > 0) { }
+        } catch {
+          // A missing/blocked Win32 facility degrades to sparse polling. No
+          // exception is allowed to escape a background thread: .NET Framework
+          // would terminate the entire PowerShell helper.
+          ChangeSignalMode = "poll";
+        } finally {
+          if (WinEventHook != IntPtr.Zero) {
+            try { UnhookWinEvent(WinEventHook); } catch { }
+          }
+          WinEventHook = IntPtr.Zero;
+          if (WinEventCallbackHandle.IsAllocated) WinEventCallbackHandle.Free();
+          WinEventReady.Set();
+        }
+      });
+      WinEventThread.IsBackground = true;
+      WinEventThread.Name = "CapturePack lane A WinEvent";
+      WinEventThread.SetApartmentState(ApartmentState.STA);
+      WinEventThread.Start();
+      if (!WinEventReady.Wait(1000)) ChangeSignalMode = "poll";
+    }
+
+    static void OnWinEvent(
+      IntPtr hook,
+      uint eventType,
+      IntPtr hwnd,
+      int objectId,
+      int childId,
+      uint eventThread,
+      uint eventTime) {
+      try {
+        if (hwnd == IntPtr.Zero) return;
+        if (eventType != EventObjectCreate &&
+            eventType != EventObjectDestroy &&
+            eventType != EventObjectShow &&
+            eventType != EventObjectHide &&
+            eventType != EventObjectReorder &&
+            eventType != EventObjectNameChange) return;
+        IntPtr root = GetAncestor(hwnd, GaRoot);
+        long target = (root == IntPtr.Zero ? hwnd : root).ToInt64();
+        if (Wanted.ContainsKey(target)) {
+          DirtySignals[target] = 0;
+          // Wake only the resident owner thread. UIA remains exclusively on
+          // that thread; the callback never walks or refreshes a control.
+          NotifyChangeWaiters();
+        }
+      } catch {
+        // A native notification is only a hint. It can never take down lane A.
+      }
+    }
+
+    public static void DrainChangeSignals() {
+      foreach (long hwnd in DirtySignals.Keys) {
+        byte ignored;
+        if (!DirtySignals.TryRemove(hwnd, out ignored)) continue;
+        TrackedWindow window;
+        if (Tracked.TryGetValue(hwnd, out window)) window.Dirty = true;
+      }
+    }
+
+    public static int NextDirtyDueInMs(int floorMs) {
+      double now = NowMs;
+      int next = Int32.MaxValue;
+      foreach (TrackedWindow window in Tracked.Values) {
+        if (!window.Dirty) continue;
+        double remaining = floorMs - (now - window.LastWalkMs);
+        if (remaining <= 0) return 0;
+        next = Math.Min(next, (int)Math.Ceiling(remaining));
+      }
+      return next;
+    }
+
+    public static WaitHandle ChangeWakeHandle { get { return DirtyWake; } }
+
+    public static void NotifyChangeWaiters() {
+      DirtyWake.Set();
+    }
+
+    static void StopChangeSignal() {
+      Thread thread = WinEventThread;
+      if (thread == null) return;
+      uint threadId = WinEventThreadId;
+      if (threadId != 0) {
+        try { PostThreadMessage(threadId, WmQuit, UIntPtr.Zero, IntPtr.Zero); } catch { }
+      }
+      if (thread != Thread.CurrentThread) {
+        try { thread.Join(1000); } catch { }
+      }
+      WinEventThread = null;
+      WinEventThreadId = 0;
+      WinEventHook = IntPtr.Zero;
+      Wanted.Clear();
+      DirtySignals.Clear();
+      ChangeSignalMode = "stopped";
+    }
+
+    static void NoteReleasedReferences(int count) {
+      if (count <= 0) return;
+      if (ReleasedReferences > Int32.MaxValue - count) ReleasedReferences = Int32.MaxValue;
+      else ReleasedReferences += count;
+    }
+
+    /// AutomationElement wrappers are tiny managed objects around comparatively
+    /// expensive COM/UIA state. A re-walk can release thousands of wrappers
+    /// without creating enough managed pressure for the CLR to collect them.
+    /// Collect only after both a reference and time floor; current trees remain
+    /// strongly held, so this cannot change a historical control observation.
+    public static bool CollectReleasedReferences(int threshold, int floorMs) {
+      double now = NowMs;
+      if (ReleasedReferences < threshold || now - LastReferenceCollectionMs < floorMs) {
+        return false;
+      }
+      GC.Collect(2, GCCollectionMode.Forced, false);
+      ReleasedReferences = 0;
+      LastReferenceCollectionMs = now;
+      ReferenceCollections++;
+      return true;
+    }
 
     public static int ElementCount {
       get {
@@ -149,6 +420,11 @@ namespace CapturePack {
     /// lane's dirty signal, never the other way round".
     public static void SetTracked(long[] hwnds) {
       HashSet<long> wanted = new HashSet<long>(hwnds);
+      foreach (long h in Wanted.Keys) {
+        byte ignored;
+        if (!wanted.Contains(h)) Wanted.TryRemove(h, out ignored);
+      }
+      foreach (long h in hwnds) if (!Blocked.Contains(h)) Wanted[h] = 0;
       List<long> drop = new List<long>();
       foreach (long h in Tracked.Keys) if (!wanted.Contains(h)) drop.Add(h);
       foreach (long h in drop) Untrack(h);
@@ -158,48 +434,26 @@ namespace CapturePack {
         w.Hwnd = h;
         w.Dirty = true;              // walked on the next pass
         Tracked[h] = w;
-        Subscribe(h, w);
       }
     }
 
     static void Untrack(long h) {
-      Unsubscribe(h);
-      Tracked.Remove(h);
-    }
-
-    /// A window's tree really changed — re-walk THAT window, instead of
-    /// re-walking everything on a timer. Registration is 16-19 ms per window
-    /// (measured), and delivery was confirmed passively: 186 StructureChanged
-    /// in 20 s at desktop root, 0 in 10 s scoped to one idle window.
-    static void Subscribe(long hwnd, TrackedWindow w) {
-      try {
-        AutomationElement root = AutomationElement.FromHandle(new IntPtr(hwnd));
-        if (root == null) return;
-        StructureChangedEventHandler handler = delegate(object sender, StructureChangedEventArgs e) {
-          w.Dirty = true;
-        };
-        Automation.AddStructureChangedEventHandler(root, TreeScope.Subtree, handler);
-        Handlers[hwnd] = handler;
-      } catch {
-        // A window that refuses the subscription is still tracked; it just
-        // re-walks on the slow rotation instead of on its own signal.
+      byte ignored;
+      Wanted.TryRemove(h, out ignored);
+      TrackedWindow window;
+      if (Tracked.TryGetValue(h, out window)) {
+        NoteReleasedReferences(window.Elements.Count);
+        window.Elements.Clear();
+        window.LastRects.Clear();
+        window.Dead.Clear();
       }
-    }
-
-    static void Unsubscribe(long hwnd) {
-      StructureChangedEventHandler handler;
-      if (!Handlers.TryGetValue(hwnd, out handler)) return;
-      Handlers.Remove(hwnd);
-      try {
-        AutomationElement root = AutomationElement.FromHandle(new IntPtr(hwnd));
-        if (root != null) Automation.RemoveStructureChangedEventHandler(root, handler);
-      } catch { }
+      Tracked.Remove(h);
     }
 
     public static void Shutdown() {
       List<long> all = new List<long>(Tracked.Keys);
       foreach (long h in all) Untrack(h);
-      try { Automation.RemoveAllEventHandlers(); } catch { }
+      StopChangeSignal();
     }
 
     /// Walks ONE window and HOLDS what it finds. Returns the `tree` line, or
@@ -224,6 +478,7 @@ namespace CapturePack {
       }
       double walkMs = Elapsed(t0);
       w.Version++;
+      NoteReleasedReferences(w.Elements.Count);
       w.Elements.Clear();
       w.LastRects.Clear();
       w.Dead.Clear();
@@ -265,6 +520,9 @@ namespace CapturePack {
         // walk: a provider can be slow per property, not only per FindAll.
         if ((kept & 31) == 0 && Elapsed(t0) > timeoutMs) break;
       }
+      // FindAll materialises wrappers for every result. Only `kept` remains in
+      // the live tree; the suffix is unmanaged pressure the CLR cannot measure.
+      NoteReleasedReferences(Math.Max(0, n - kept));
       Out.Append("]}");
       double totalMs = Elapsed(t0);
       w.LastPassMs = totalMs;
@@ -352,11 +610,17 @@ namespace CapturePack {
 
     /// Dirty AND allowed to be re-walked yet. A window that changed again
     /// within the floor stays dirty and is walked when the floor expires.
-    public static bool NeedsWalk(long hwnd, int floorMs) {
+    public static bool NeedsWalk(long hwnd, int floorMs, int safetyMs) {
       TrackedWindow w;
       if (!Tracked.TryGetValue(hwnd, out w)) return false;
       if (w.Elements.Count == 0) return true;          // never walked: no floor
-      return w.Dirty && (NowMs - w.LastWalkMs) >= floorMs;
+      double age = NowMs - w.LastWalkMs;
+      if (w.Dirty) return age >= floorMs;
+      // A process where SetWinEventHook is unavailable still remains correct,
+      // just slower. With the hook active, a sparse safety walk heals providers
+      // that fail to raise accessibility events without turning polling into the
+      // normal path again.
+      return age >= (ChangeSignalMode == "winevent" ? safetyMs : floorMs);
     }
 
     public static bool HasTree(long hwnd) {
@@ -440,6 +704,8 @@ namespace CapturePack {
       new System.Collections.Concurrent.ConcurrentQueue<string>();
     static readonly System.Threading.AutoResetEvent Signal =
       new System.Threading.AutoResetEvent(false);
+    static readonly System.Threading.WaitHandle[] WaitSignals =
+      new System.Threading.WaitHandle[] { Signal, ControlLane.ChangeWakeHandle };
     public static volatile bool Closed;
 
     public static void Start() {
@@ -462,7 +728,9 @@ namespace CapturePack {
     public static bool Wait(int ms) {
       if (!Lines.IsEmpty) return true;
       if (Closed) return true;
-      return Signal.WaitOne(ms < 0 ? 0 : ms);
+      return System.Threading.WaitHandle.WaitAny(
+        WaitSignals,
+        ms < 0 ? 0 : ms) != System.Threading.WaitHandle.WaitTimeout;
     }
 
     public static string TryRead() {
@@ -474,6 +742,8 @@ namespace CapturePack {
   }
 }
 '@ -ReferencedAssemblies UIAutomationClient, UIAutomationTypes, WindowsBase, PresentationCore
+
+[CapturePack.ControlLane]::InitDpi()
 
 # ---------------------------------------------------------------------------
 # Budget
@@ -490,7 +760,7 @@ namespace CapturePack {
 # here would put the two lanes together over the one number the design actually
 # promises. 3% leaves headroom and still buys ~2.4 refreshes a second on a
 # 163-element window — and control geometry inside a window changes at human
-# speed, not at drag speed, with StructureChanged catching the discrete jumps
+# speed, not at drag speed, with WinEvent catching the discrete jumps
 # in between.
 #
 # MEASURED END TO END, driving the real tracker against four real windows
@@ -510,7 +780,7 @@ $DutyTarget = 0.03
 $WindowTimeoutMs = 120
 # THE FLOOR BETWEEN RE-WALKS OF ONE WINDOW.
 #
-# StructureChanged is generous: 186 of them arrived in 20 s at desktop root on
+# Accessibility change events are generous: 186 arrived in 20 s at desktop root on
 # an IDLE desktop. A window whose tree churns would otherwise be re-walked on
 # every pass, and a walk is ~980 ms for 400 elements against ~32 ms to refresh
 # the same set — three orders of magnitude of difference between the two things
@@ -520,8 +790,11 @@ $WindowTimeoutMs = 120
 # re-layout; they only die when the element does), so the cost of waiting is
 # bounded and the cost of not waiting is not.
 $ReWalkFloorMs = 3000
+$SafetyReWalkMs = 300000
 $MaxStrikes = 3
 $MaxElementsPerWindow = 400
+$ReferenceCollectionThreshold = 2000
+$ReferenceCollectionFloorMs = 15000
 # The floor and ceiling on the self-paced sleep, so the lane neither spins nor
 # disappears for a minute after one pathological pass.
 $MinSleepMs = 20
@@ -532,6 +805,20 @@ function Write-Line([string]$line) {
   [Console]::Out.Write("`n")
   [Console]::Out.Flush()
 }
+
+if ($WakeSelfTest) {
+  # Signal BEFORE waiting: this pins the lost-wake race as well as latency.
+  [CapturePack.ControlLane]::NotifyChangeWaiters()
+  $wakeClock = [System.Diagnostics.Stopwatch]::StartNew()
+  $woke = [CapturePack.TrackInput]::Wait(2000)
+  $wakeClock.Stop()
+  Write-Line ('{"event":"wake-selftest","woke":' +
+    $(if ($woke) { 'true' } else { 'false' }) +
+    ',"elapsedMs":' + [Math]::Round($wakeClock.Elapsed.TotalMilliseconds, 3) + '}')
+  exit $(if ($woke) { 0 } else { 1 })
+}
+
+[CapturePack.ControlLane]::StartChangeSignal()
 
 $self = [System.Diagnostics.Process]::GetCurrentProcess()
 
@@ -591,12 +878,13 @@ $wallStart = [CapturePack.ControlLane]::NowMs
 
 while ($running) {
   $passStart = [CapturePack.ControlLane]::Busy
+  [CapturePack.ControlLane]::DrainChangeSignals()
   $due = [CapturePack.ControlLane]::Due($focus, $rotation)
   $rotation++
   foreach ($h in $due) {
     try {
-      if ([CapturePack.ControlLane]::NeedsWalk($h, $ReWalkFloorMs)) {
-        # The tree really changed (StructureChanged) or was never read: walk it.
+      if ([CapturePack.ControlLane]::NeedsWalk($h, $ReWalkFloorMs, $SafetyReWalkMs)) {
+        # The tree really changed (WinEvent) or was never read: walk it.
         $line = [CapturePack.ControlLane]::Walk($h, $MaxElementsPerWindow, $WindowTimeoutMs)
         if ($null -ne $line) { Write-Line $line }
       } else {
@@ -616,6 +904,9 @@ while ($running) {
     }
   }
   $passMs = [CapturePack.ControlLane]::Busy - $passStart
+  [void][CapturePack.ControlLane]::CollectReleasedReferences(
+    $ReferenceCollectionThreshold,
+    $ReferenceCollectionFloorMs)
 
   # SELF-PACED TO THE BUDGET. Sleeping (1/duty - 1) times what the pass cost
   # makes the duty cycle a property of the loop rather than a hope about the
@@ -626,6 +917,13 @@ while ($running) {
     $sleepMs = [int][Math]::Max($MinSleepMs, [Math]::Min($MaxSleepMs, $passMs * ((1 / $DutyTarget) - 1)))
   } else {
     $sleepMs = $MinSleepMs
+  }
+  # A structural event can arrive inside the 3 s re-walk floor. Its AutoReset
+  # wake is intentionally consumed immediately, so arm the blocking wait for
+  # the exact remaining floor rather than adding another arbitrary 2 s.
+  $dirtyDueMs = [CapturePack.ControlLane]::NextDirtyDueInMs($ReWalkFloorMs)
+  if ($dirtyDueMs -ne [int]::MaxValue) {
+    $sleepMs = [Math]::Min($sleepMs, $dirtyDueMs)
   }
 
   $now = [CapturePack.ControlLane]::NowMs
@@ -639,6 +937,8 @@ while ($running) {
       ',"tracked":' + [CapturePack.ControlLane]::TrackedCount +
       ',"blocked":' + [CapturePack.ControlLane]::BlockedCount +
       ',"elements":' + [CapturePack.ControlLane]::ElementCount +
+      ',"signal":"' + [CapturePack.ControlLane]::ChangeSignalMode + '"' +
+      ',"gc":' + [CapturePack.ControlLane]::ReferenceCollectionCount +
       ',"ws":' + $self.WorkingSet64 + '}')
     $nextStatusMs = $now + 5000
   }
@@ -660,7 +960,8 @@ while ($running) {
   switch ([string]$request.method) {
     'hello' {
       Write-Line ('{"id":' + $id + ',"ok":true,"hostMs":' + [CapturePack.ControlLane]::NowMs +
-        ',"pid":' + $self.Id + ',"lane":"A"}')
+        ',"pid":' + $self.Id + ',"lane":"A","dpi":"' + [CapturePack.ControlLane]::DpiMode +
+        '","signal":"' + [CapturePack.ControlLane]::ChangeSignalMode + '"}')
     }
     'track' {
       # Lane S decides what is visible; this lane is told. An empty list is a

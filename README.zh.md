@@ -1,120 +1,107 @@
-﻿# capturepack
+# capturepack
 
 [English](README.md) · [한국어](README.ko.md) · [日本語](README.ja.md) · **中文** · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Português](README.pt.md) · [Русский](README.ru.md)
 
 [![Release](https://img.shields.io/github/v/release/r2cuerdame/capturepack?color=7c5cff&label=release)](https://github.com/r2cuerdame/capturepack/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/r2cuerdame/capturepack/total?color=7c5cff)](https://github.com/r2cuerdame/capturepack/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Sponsor](https://img.shields.io/badge/%E2%99%A5_Sponsor-ea4aaa)](https://github.com/sponsors/r2cuerdame)
 
-## 你能在 5 秒内说清一个 bug 吗？
+## 回溯 bug，选择对象，把当时的状态交给 AI
 
-**CapturePack 是向 LLM 解释问题的最快方式。**
+**CapturePack 把默认 30 秒的循环回放变成人和 AI 都能读取的结构化证据。**
 
-> 捕捉上下文，而不是截图。
->
-> 更好的输入。更好的回答。
-
-CapturePack 是一套开源的上下文捕捉格式与工具集，让人类和 AI 理解截图、录屏之外的视觉问题。
+问题发生后按下快捷键，回到出错时刻，再用对象选择挑出过去画面里已捕获的控件或
+窗口。CapturePack 保存目标身份、观测位置和移动，不让 AI 只凭像素猜测。
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [下载](https://github.com/r2cuerdame/capturepack/releases/latest)
 
+当前 Windows 版本：**CapturePack 0.3.0**
+
 <p align="center">
-  <!-- Absolute raw URL with a version query: GitHub proxies README images through
-       camo, which caches by source URL — without the bump a fixed demo keeps
-       rendering the stale copy for hours. Bump ?v= whenever demo.svg changes. -->
-  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=3" alt="演示：按下 Ctrl+Alt+C，最后 30 秒被冻结，滚动滚轮在时间中穿梭，拖拽框选对象，写下标注，CapturePack 就保存好了。" width="760">
+  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=4" alt="CapturePack 回到过去画面，选择子 UI 控件，显示捕获时的名称和控件类型，跟随所属窗口的观测移动，并导出 AI 可读的结构化证据" width="760">
 </p>
 
-一个 CapturePack **文件夹**装下了截图装不下的东西：最后 30 秒的回放、一张快照、可编辑的标注、机器可读的事件时间线，还有人和 AI 都读得懂的报告 — 另一位开发者或任何 LLM 立刻看懂现场所需的一切。需要分享时，把文件夹打包成一个 `.capturepack` 文件就行。
+## 使用流程
 
-## 5 秒工作流
+1. **回溯** — 实时录制默认开启时，在问题发生后按 `Ctrl+Alt+C`。回放长度可设为
+   1–60 秒。关闭实时录制后不会记录任何内容。
+2. **选择对象** — 在过去画面中选择光标下已捕获的控件。记录观测边界、无障碍
+   名称、控件类型和选择时刻；无法取得子控件时，以真实窗口为备用目标。
+3. **追踪移动** — 所属窗口和控件的位置按回放时钟观测。每个样本都标明显示器，
+   因此保存并重新打开后，跨显示器对象仍保持相同时间和坐标。
+4. **交付结构化上下文** — 把文件夹交给开发者或 AI，也可使用可选的本机只读
+   MCP 服务器读取已经保存的包。
 
-```
-Ctrl+Alt+C  →  capture  →  5-second annotation  →  save  →  drop into
-                                                              ChatGPT / Claude / Codex / Cursor / Gemini
-                                                              or send to another developer
-```
+### 对象信息来源
 
-## 为什么
+- **Windows UI Automation（内置）：** 应用公开的无障碍名称、语义控件类型、
+  AutomationId、进程/窗口身份和观测边界。
+- **Chrome DOM（可选预览扩展）：** 你明确选择的元素的 selector、角色、文本和
+  URL；不会持续传输 DOM。
+- **HWND 窗口备用方案：** 取得不到子控件时，不虚构对象，而是记录真实窗口及其
+  观测位置。
 
-- **截图留住像素。** 这一帧之前发生了什么，全没了。
-- **视频留住动作。** 意图和结构，全没了。
-- **CapturePack 留住上下文。** 时间、空间、意图、环境。
+### 只需要一张图片
 
-## 🕰 这是一台时光机
+`Ctrl+Alt+S` 默认打开区域选择，可无缝跨越显示器边界拖动。顶部的**全屏捕获**
+会把所有显示器明确保存为一张虚拟桌面图片。图片在同一编辑器中打开，支持时使用
+原生 100% 比例。图片包没有视频和 `timeline.json`。区域包只保存所选像素和裁剪
+位置，不会暗中保留全屏或其他显示器图片。
 
-bug 已经发生了？CapturePack **早就在录了**。出问题*之后*再按 `Ctrl+Alt+C` — 最后 30 秒被冻结，滚动滚轮就能**回到过去**，停在出错的那一帧。标注真正发生的那一刻，而不是重演一遍。
+## 包内内容
 
-## 🤖 为 LLM 而生
+视频包：
 
-CapturePack 是 AI 真正读得懂的输入：
-
-- 把包扔给 **ChatGPT、Claude、Codex、Cursor、Gemini** — 生成的报告和上下文文件会把情况讲清楚，不用你再多写一句提示词。
-- 或者干脆什么都不用附：应用内置 **MCP 服务器**，连接上的 AI 只要听到一句*“分析最新的 CapturePack”*，就会自己去读。
-
-更好的输入。更好的回答。
-
-## 🌍 多语言
-
-CapturePack 会说 **9 种语言**：English · 한국어 · 日本語 · 中文 · Español · Français · Deutsch · Português · Русский
-
-- 应用自动跟随你的**系统语言** — 也可以随时在 设置 → 常规 里更改。
-- 生成的包文档（`README.md`、`report.md`、`skills/`）可以有自己的语言设置；你亲手写的描述永远不会被翻译。
-- [capturepack.dev](https://capturepack.dev) 同样会自动识别你的浏览器语言。
-
-## 原则
-
-本地优先 · 离线优先 · 开放格式 · 插件化 · 无云端 · 无登录 · 无数据库 · 不依赖 AI · 不绑定厂商。
-
-生成的 CapturePack 应当永远可读。
-
-## CapturePack 里装了什么
-
-包就是一个普通**文件夹** — 可浏览、可编辑、坦坦荡荡。只有要分享时才会生成 ZIP（`.capturepack`）。
-
-```
+```text
 CapturePack_2026-07-27_143052/
-├── replay.webm              # 原始证据 — 永不修改
-├── replay_annotated.webm    # 标注已烧录进画面；任何播放器都能播
-├── snapshot.png             # 捕获到的那一帧（原图）
-├── annotations.json         # 真正的源数据：方框、持续时间、编号、模糊
-├── timeline.json            # 机器可读的事件日志
-├── report.md                # 你的描述，LLM 就绪
-├── manifest.json            # 格式版本、文件清单
-├── README.md                # 人类最先读的那份文档
-├── skills/                  # 为 AI 结构化的上下文（没有 MCP 也能用）
-└── plugins/                 # 来自集成插件的结构化元数据
+├── replay.mp4               # 原始证据（也可能是 replay.webm）
+├── replay_annotated.webm    # 已渲染标注的视频
+├── snapshot.png
+├── annotations.json         # 对象身份 + 观测边界
+├── timeline.json
+├── report.md · README.md · skills/
+├── plugins/                 # UIA / 可选 Chrome DOM 上下文
+└── manifest.json
 ```
 
-只有截图的包 — `manifest.json` + `snapshot.png`，别的什么都没有 — 也完全有效。
+图片包：
 
-规范比任何实现都重要 — 任何语言都可以生成 CapturePack 文件。参见 [SPEC.md](SPEC.md)。
-
-## MCP — 和你的捕获对话
-
-应用内置一个常驻、只读的 [MCP](https://modelcontextprotocol.io) 服务器，地址是 `http://127.0.0.1:39393/mcp`（仅限本机），任何 AI 都能自己找到并分析你最新的包 — 提示词只有一句：“分析最新的 CapturePack”。
-
+```text
+CapturePack_2026-07-27_143052/
+├── snapshot.png             # 所选区域或完整虚拟桌面
+├── annotations.json
+├── report.md · README.md · skills/
+├── plugins/                 # 可选对象上下文
+└── manifest.json            # capture_kind: image，无视频/时间线
 ```
-claude mcp add --transport http capturepack http://127.0.0.1:39393/mcp
-```
 
-工具、客户端配置与各项设置：[docs/MCP.md](docs/MCP.md)。
+对象信息和移动轨迹只在确实观测到时保存。没有可用 UI 对象或样本时，包会如实说明，
+不会编造上下文。
 
-## 状态
+## MCP
 
-开发早期。项目愿景见 [GOAL.md](GOAL.md)，接下来的计划见 [ROADMAP.md](ROADMAP.md)。
+应用内置可选的只读 [MCP](https://modelcontextprotocol.io) 服务器，默认在
+`http://127.0.0.1:39393/mcp` 启用并自动启动。可在设置 → MCP 中立即停止或关闭
+自动启动。它只读取用户已经保存的图片包和视频包，不能发起新捕获。
 
-## 安全与签名
+使用 `capturepack_history` 搜索历史记录，再用 `capturepack_open` 打开所选包；
+`capturepack_latest` 可直接打开最新包。详见 [docs/MCP.md](docs/MCP.md)。
 
-Windows 版本目前尚未签名（SmartScreen 会警告 — *更多信息 → 仍要运行*）；
-每个发布版本都附带 `SHA256SUMS.txt` 供校验，开源代码签名的申请正在处理中。
-详情、团队角色与隐私实践：[docs/CODE_SIGNING.md](docs/CODE_SIGNING.md)。
+## 分享前检查隐私
 
-## ♥ 支持
+屏幕像素、窗口标题、无障碍名称以及 Chrome DOM 的 selector、角色、文本和 URL
+可能包含敏感信息。CapturePack 不会上传捕获内容、遥测或崩溃报告。应用唯一的
+外部请求是可在设置中关闭的 GitHub Releases 更新检查。
 
-CapturePack 免费、开源、无云端 — 没有账号，没有遥测，也没有什么要卖给你。
-如果它帮你省下了时间，[**在 GitHub 上赞助**](https://github.com/sponsors/r2cuerdame) 能让它一直走下去。
+模糊是非破坏性的：它保护标注后的派生视图，但完整包中的 `snapshot.png` 和原始
+回放仍保留未遮挡内容。分享前请检查原始文件；存在私密信息时不要分享完整包。
+
+## 状态与安全
+
+0.3.0 是面向 Windows 的早期版本。当前构建未签名，SmartScreen 可能警告；
+每个版本都附带用于验证的 `SHA256SUMS.txt`。
+
+本地优先 · 离线优先 · 开放格式 · 无云端 · 无登录 · 无遥测
 
 ## 许可证
 

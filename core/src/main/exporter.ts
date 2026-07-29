@@ -5,10 +5,20 @@
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { copyFile, cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import {
+  copyFile,
+  cp,
+  lstat,
+  mkdir,
+  open,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from 'node:fs/promises'
 import { release } from 'node:os'
-import { dirname, join } from 'node:path'
-import { app, clipboard, screen } from 'electron'
+import { dirname, extname, join } from 'node:path'
+import { app, screen } from 'electron'
 import AdmZip from 'adm-zip'
 import type { Language } from '../shared/i18n'
 import type {
@@ -22,10 +32,20 @@ import type {
 } from '../shared/types'
 import { analyzePackPrompt } from '../shared/prompt'
 import type { ClipboardAfterSave } from '../shared/types'
-import { FORMAT_NAME, FORMAT_VERSION, FORMAT_VERSION_KEYFRAMES } from '../shared/types'
+import type {
+  CaptureKind,
+  ImageCaptureScope,
+  ImageCropBounds,
+} from '../shared/captureMedia'
+import { FORMAT_NAME, FORMAT_VERSION_KEYFRAMES } from '../shared/types'
 import { displayAnnotatedName, displayFramesDir } from '../shared/keyframes'
 import { buildReport } from './report'
 import { buildReadme, buildSkills, SKILLS_FILES } from './packdocs'
+import { copyTextToClipboard } from './clipboard'
+import {
+  WINDOWS_CONTEXT_TIMELINE_SCHEMA,
+  type WindowsContextTimelineV1,
+} from './context/windowsContextTimeline'
 
 // ---------------------------------------------------------------------------
 // All-displays capture (GOAL "Multi-Monitor Support", SPEC §5.3)
@@ -43,6 +63,9 @@ export interface DisplayDeclaration {
   scale: number
   hasReplay: boolean
   replayDurationMs: number
+  // Observed conversion from the pack clock to this replay's clock. Optional
+  // for legacy packs whose only available alignment fact is replay duration.
+  replayClockOffsetMs?: number
   /**
    * What this display's recorder achieved, when it could measure itself (#82).
    *
@@ -121,12 +144,23 @@ function buildDisplayMedia(
     const durationMs = d.focused
       ? media.replay_duration_ms
       : Math.max(0, Math.round(d.replayDurationMs))
+    const replayClockOffsetMs =
+      replay === null
+        ? undefined
+        : d.focused
+          ? 0
+          : Number.isSafeInteger(d.replayClockOffsetMs)
+            ? d.replayClockOffsetMs
+            : undefined
     return {
       index: d.index,
       snapshot: d.focused ? media.snapshot : d.snapshotFile,
       replay,
       // Written only alongside a replay, and next to it (SPEC §5.6).
       ...(replay !== null && durationMs !== undefined ? { replay_duration_ms: durationMs } : {}),
+      ...(replayClockOffsetMs !== undefined
+        ? { replay_clock_offset_ms: replayClockOffsetMs }
+        : {}),
       // Only where there IS a replay and it measured itself: a rate reported
       // next to no recording, or one nobody measured, says nothing true.
       ...(replay !== null && d.cadence !== undefined ? { cadence: d.cadence } : {}),
@@ -191,6 +225,49 @@ async function clearDisplayRenderOutputs(
 // (updatePack, saveAsNewPack) settles this first.
 const pendingDisplayWrites = new Map<string, Promise<void>>()
 
+// Every read-modify-write of one pack's manifest shares this queue. UIA/DOM
+// providers finish on independent budgets while final save and background
+// renders rewrite the same file; without serialization, the last stale writer
+// silently removes declarations written by the others.
+const manifestMutationTails = new Map<string, Promise<void>>()
+
+/**
+ * Publishes one source document as a complete file.
+ *
+ * CapturePack's MCP watcher can read a pack while a save is in progress. A
+ * direct write briefly exposes a truncated JSON/Markdown file; writing beside
+ * it and renaming keeps readers on either the previous complete revision or
+ * the next complete revision. Derived media is intentionally not routed
+ * through this helper — only the small, authoritative source documents are.
+ */
+async function writeSourceFile(filePath: string, contents: string): Promise<void> {
+  const temporaryPath = `${filePath}.${String(process.pid)}.${randomUUID()}.tmp`
+  try {
+    await writeFile(temporaryPath, contents, 'utf8')
+    await rename(temporaryPath, filePath)
+  } finally {
+    await rm(temporaryPath, { force: true }).catch(() => {})
+  }
+}
+
+async function withManifestMutation<T>(
+  dirPath: string,
+  mutation: () => Promise<T>,
+): Promise<T> {
+  const previous = manifestMutationTails.get(dirPath) ?? Promise.resolve()
+  const run = previous.then(mutation, mutation)
+  const tail = run.then(
+    () => undefined,
+    () => undefined,
+  )
+  manifestMutationTails.set(dirPath, tail)
+  try {
+    return await run
+  } finally {
+    if (manifestMutationTails.get(dirPath) === tail) manifestMutationTails.delete(dirPath)
+  }
+}
+
 /** Waits for a save-first per-display write to finish. Never rejects. */
 export async function settleDisplayWrites(dirPath: string): Promise<void> {
   const pending = pendingDisplayWrites.get(dirPath)
@@ -209,35 +286,41 @@ export async function settleDisplayWrites(dirPath: string): Promise<void> {
  * §5.6). Keeps a save-first folder valid even when the editor is cancelled.
  */
 async function dropUndeclarableDisplays(dirPath: string): Promise<void> {
-  const manifestPath = join(dirPath, 'manifest.json')
-  const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Manifest
-  const displays = manifest.media.displays
-  if (!Array.isArray(displays)) return
-  let changed = false
-  const kept: ManifestDisplayMedia[] = []
-  for (const d of displays) {
-    if (d.focused) {
+  return withManifestMutation(dirPath, async () => {
+    const manifestPath = join(dirPath, 'manifest.json')
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Manifest
+    const displays = manifest.media.displays
+    if (!Array.isArray(displays)) return
+    let changed = false
+    const kept: ManifestDisplayMedia[] = []
+    for (const d of displays) {
+      if (d.focused) {
+        kept.push(d)
+        continue
+      }
+      if (!existsSync(join(dirPath, d.snapshot))) {
+        changed = true
+        continue // no frame for this display: it is not in the pack at all
+      }
+      if (d.replay !== null && !existsSync(join(dirPath, d.replay))) {
+        // The frame landed, the recording did not — a screenshot-only display is
+        // a legal entry (SPEC §5.6); a declared missing file is not.
+        const {
+          replay_duration_ms: _droppedDuration,
+          replay_clock_offset_ms: _droppedClock,
+          ...rest
+        } = d
+        kept.push({ ...rest, replay: null })
+        changed = true
+        continue
+      }
       kept.push(d)
-      continue
     }
-    if (!existsSync(join(dirPath, d.snapshot))) {
-      changed = true
-      continue // no frame for this display: it is not in the pack at all
-    }
-    if (d.replay !== null && !existsSync(join(dirPath, d.replay))) {
-      // The frame landed, the recording did not — a screenshot-only display is
-      // a legal entry (SPEC §5.6); a declared missing file is not.
-      const { replay_duration_ms: _dropped, ...rest } = d
-      kept.push({ ...rest, replay: null })
-      changed = true
-      continue
-    }
-    kept.push(d)
-  }
-  if (!changed) return
-  if (kept.length > 1) manifest.media.displays = kept
-  else delete manifest.media.displays
-  await writeFile(manifestPath, toJson(manifest))
+    if (!changed) return
+    if (kept.length > 1) manifest.media.displays = kept
+    else delete manifest.media.displays
+    await writeSourceFile(manifestPath, toJson(manifest))
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -274,11 +357,11 @@ export function uiaPluginDeclaration(): Manifest['plugins'][number] {
 export async function writeUiaPlugin(dirPath: string, payload: UiaPluginPayload): Promise<void> {
   const dir = join(dirPath, 'plugins', UIA_PLUGIN_NAME)
   await mkdir(dir, { recursive: true })
-  await writeFile(
+  await writeSourceFile(
     join(dir, 'meta.json'),
     toJson({ name: UIA_PLUGIN_NAME, version: UIA_PLUGIN_VERSION }),
   )
-  await writeFile(join(dir, 'elements.json'), toJson(payload))
+  await writeSourceFile(join(dir, 'elements.json'), toJson(payload))
 }
 
 // ---------------------------------------------------------------------------
@@ -329,11 +412,11 @@ export function domPluginDeclaration(): Manifest['plugins'][number] {
 export async function writeDomPlugin(dirPath: string, payload: DomPluginPayload): Promise<void> {
   const dir = join(dirPath, 'plugins', DOM_PLUGIN_NAME)
   await mkdir(dir, { recursive: true })
-  await writeFile(
+  await writeSourceFile(
     join(dir, 'meta.json'),
     toJson({ name: DOM_PLUGIN_NAME, version: DOM_PLUGIN_VERSION }),
   )
-  await writeFile(join(dir, 'elements.json'), toJson(payload))
+  await writeSourceFile(join(dir, 'elements.json'), toJson(payload))
 }
 
 /** writeDomPlugin() that can never fail a save. */
@@ -365,12 +448,49 @@ export async function addManifestPlugin(
   handle: PackHandle,
   declaration: Manifest['plugins'][number],
 ): Promise<void> {
-  const manifestPath = join(handle.dirPath, 'manifest.json')
-  const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Manifest
-  const plugins = Array.isArray(manifest.plugins) ? manifest.plugins : []
-  if (plugins.some((p) => p !== null && typeof p === 'object' && p.name === declaration.name)) return
-  manifest.plugins = [...plugins, declaration]
-  await writeFile(manifestPath, toJson(manifest))
+  return withManifestMutation(handle.dirPath, async () => {
+    const manifestPath = join(handle.dirPath, 'manifest.json')
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Manifest
+    const plugins = Array.isArray(manifest.plugins) ? manifest.plugins : []
+    if (plugins.some((p) => p !== null && typeof p === 'object' && p.name === declaration.name)) return
+    manifest.plugins = [...plugins, declaration]
+    await writeSourceFile(manifestPath, toJson(manifest))
+  })
+}
+
+// ---------------------------------------------------------------------------
+// plugins/windows-context — Lane S + Lane A over the replay clock
+// ---------------------------------------------------------------------------
+
+export const WINDOWS_CONTEXT_PLUGIN_NAME = 'windows-context'
+export const WINDOWS_CONTEXT_PLUGIN_VERSION = '0.1.0'
+
+export function windowsContextPluginDeclaration(): Manifest['plugins'][number] {
+  return {
+    name: WINDOWS_CONTEXT_PLUGIN_NAME,
+    version: WINDOWS_CONTEXT_PLUGIN_VERSION,
+    path: `plugins/${WINDOWS_CONTEXT_PLUGIN_NAME}/`,
+  }
+}
+
+/** Writes the already-validated compact checkpoint/delta timeline. */
+export async function writeWindowsContextPlugin(
+  dirPath: string,
+  timeline: WindowsContextTimelineV1,
+): Promise<void> {
+  const dir = join(dirPath, 'plugins', WINDOWS_CONTEXT_PLUGIN_NAME)
+  await mkdir(dir, { recursive: true })
+  await writeSourceFile(
+    join(dir, 'meta.json'),
+    toJson({
+      name: WINDOWS_CONTEXT_PLUGIN_NAME,
+      version: WINDOWS_CONTEXT_PLUGIN_VERSION,
+      schema: WINDOWS_CONTEXT_TIMELINE_SCHEMA,
+      clock: 'pack_ms',
+      timeline: 'timeline.json',
+    }),
+  )
+  await writeSourceFile(join(dir, 'timeline.json'), toJson(timeline))
 }
 
 /**
@@ -394,6 +514,38 @@ async function tryWriteUiaPlugin(
   }
 }
 
+type WindowsContextDisposition = 'preserve' | 'written' | 'drop'
+
+/**
+ * `undefined` is the re-edit contract: leave a pack-backed plugin untouched.
+ * `null` is an explicit removal after a clock-changing degradation. A concrete
+ * timeline replaces it. Every filesystem failure becomes `drop`, never a save
+ * failure or a declaration that points at incomplete object data.
+ */
+async function reconcileWindowsContextPlugin(
+  dirPath: string,
+  timeline: WindowsContextTimelineV1 | null | undefined,
+): Promise<WindowsContextDisposition> {
+  if (timeline === undefined) return 'preserve'
+  const dir = join(dirPath, 'plugins', WINDOWS_CONTEXT_PLUGIN_NAME)
+  if (timeline === null) {
+    await rm(dir, { recursive: true, force: true }).catch(() => {})
+    return 'drop'
+  }
+  try {
+    await writeWindowsContextPlugin(dirPath, timeline)
+    return 'written'
+  } catch (err) {
+    console.error(
+      `capturepack: writing plugins/${WINDOWS_CONTEXT_PLUGIN_NAME} failed:`,
+      err instanceof Error ? err.message : String(err),
+    )
+    // A previous raw-clock payload is worse than no payload after a trim.
+    await rm(dir, { recursive: true, force: true }).catch(() => {})
+    return 'drop'
+  }
+}
+
 /** Declares the UIA payload alongside whatever plugins the caller carries. */
 function withUiaPlugin(
   plugins: Manifest['plugins'] | undefined,
@@ -407,12 +559,58 @@ function withUiaPlugin(
   return [...existing, uiaPluginDeclaration()]
 }
 
+function withWindowsContextPlugin(
+  plugins: Manifest['plugins'] | undefined,
+  disposition: WindowsContextDisposition,
+): Manifest['plugins'] | undefined {
+  if (disposition === 'preserve') return plugins
+  const withoutContext = (plugins ?? []).filter(
+    (plugin) =>
+      plugin === null
+      || typeof plugin !== 'object'
+      || plugin.name !== WINDOWS_CONTEXT_PLUGIN_NAME,
+  )
+  return disposition === 'written'
+    ? [...withoutContext, windowsContextPluginDeclaration()]
+    : withoutContext.length === 0 ? undefined : withoutContext
+}
+
+/**
+ * A final in-place save must keep declarations that landed after save-first.
+ *
+ * Fresh-capture ExportInput does not carry plugin metadata, while the browser
+ * bridge appends chrome-dom to the already-written manifest asynchronously.
+ * Rebuilding from input alone therefore orphaned a physical chrome-dom payload
+ * at final save. Incoming declarations win by name (re-edit may deliberately
+ * carry newer metadata); everything else already declared stays declared.
+ */
+function withPreservedPlugins(
+  previous: Manifest['plugins'] | undefined,
+  incoming: Manifest['plugins'] | undefined,
+): Manifest['plugins'] {
+  const merged = [...(previous ?? [])]
+  for (const declaration of incoming ?? []) {
+    const index = merged.findIndex(
+      (plugin) =>
+        plugin !== null &&
+        typeof plugin === 'object' &&
+        plugin.name === declaration.name,
+    )
+    if (index < 0) merged.push(declaration)
+    else merged[index] = declaration
+  }
+  return merged
+}
+
 export interface ExportInput {
   // The exported snapshot frame. Blur is NEVER burned in (SPEC §9) — this is
   // original pixels of the chosen frame (native snapshot or scrubbed replay frame).
   snapshotPng: Buffer
   width: number
   height: number
+  captureKind?: CaptureKind
+  imageScope?: ImageCaptureScope
+  cropBounds?: ImageCropBounds
   // Capture trigger instant — manifest.created_at is the capture, not the save
   capturedAt: Date
   replayWebm: Buffer | null
@@ -442,6 +640,10 @@ export interface ExportInput {
   // payload files stay untouched and only their declaration travels, through
   // `plugins` (and, for Save As New, the byte-for-byte plugins/ copy).
   uia?: UiaPluginPayload
+  // Temporal Lane S + Lane A context. undefined preserves a pack-backed plugin
+  // on re-edit; null explicitly removes a stale raw-clock payload after a
+  // replay is dropped; a value atomically replaces it before manifest rewrite.
+  windowsContext?: WindowsContextTimelineV1 | null
   // All-displays capture: every display the trigger froze, focused included.
   // Absent = a single-display pack (no media.displays). On re-edit the entries
   // carry null buffers: the declaration survives, the files stay untouched.
@@ -463,6 +665,9 @@ export interface ManifestInput {
   note: string
   osVersion: string
   screens: Array<{ width: number; height: number; scale: number }>
+  captureKind?: CaptureKind
+  imageScope?: ImageCaptureScope
+  cropBounds?: ImageCropBounds
   hasReplay: boolean
   // Declared name of the replay file; absent = replay.webm (SPEC §5.3).
   replayFile?: string
@@ -486,11 +691,40 @@ export interface ManifestInput {
   usesKeyframes?: boolean
 }
 
+function validImageCropBounds(value: ImageCropBounds | undefined): value is ImageCropBounds {
+  return (
+    value !== undefined &&
+    Number.isFinite(value.x) &&
+    Number.isFinite(value.y) &&
+    Number.isFinite(value.width) &&
+    value.width > 0 &&
+    Number.isFinite(value.height) &&
+    value.height > 0 &&
+    value.coordinate_space === 'virtual-desktop-dip'
+  )
+}
+
 export function buildManifest(input: ManifestInput): Manifest {
+  const captureKind = input.captureKind ?? 'video'
+  if (captureKind === 'image') {
+    if (input.imageScope !== 'region' && input.imageScope !== 'fullscreen') {
+      throw new Error('image capture requires an explicit region or fullscreen scope')
+    }
+    if (input.imageScope === 'region' && !validImageCropBounds(input.cropBounds)) {
+      throw new Error('region image capture requires valid virtual-desktop crop bounds')
+    }
+    if (input.imageScope === 'fullscreen' && input.cropBounds !== undefined) {
+      throw new Error('fullscreen image capture must not declare crop bounds')
+    }
+  }
   const manifest: Manifest = {
     format: FORMAT_NAME,
-    // The OLDEST version that fully expresses this pack (SPEC §13.1).
-    format_version: input.usesKeyframes === true ? FORMAT_VERSION_KEYFRAMES : FORMAT_VERSION,
+    // Every pack written here declares capture_kind, a 0.3.0 field (SPEC §5.1,
+    // §13.1). Legacy 0.2.1 packs remain readable because they omit the field;
+    // a new video cannot claim that older contract merely because it has no
+    // authored keyframes.
+    format_version: FORMAT_VERSION_KEYFRAMES,
+    capture_kind: captureKind,
     id: input.id,
     created_at: isoWithOffset(input.createdAt),
     generator: { name: 'capturepack', version: input.generatorVersion },
@@ -510,11 +744,18 @@ export function buildManifest(input: ManifestInput): Manifest {
     },
     plugins: input.plugins ?? [],
   }
+  if (captureKind === 'image') {
+    manifest.media.replay = null
+    manifest.media.image_scope = input.imageScope
+    if (input.imageScope === 'region' && input.cropBounds !== undefined) {
+      manifest.media.crop_bounds = input.cropBounds
+    }
+  }
   const title = input.title.trim()
   if (title !== '') manifest.title = title
   const note = input.note.trim()
   if (note !== '') manifest.note = note
-  if (input.hasReplay) {
+  if (captureKind === 'video' && input.hasReplay) {
     manifest.media.replay_duration_ms = input.replayDurationMs
     // snapshot_t_ms is only written alongside a replay (SPEC §5.3), clamped to
     // replay_duration_ms: the editor's scrub position lives on the parsed
@@ -537,7 +778,11 @@ export function buildManifest(input: ManifestInput): Manifest {
   // (replay filename + duration, trimmed or not). Present ONLY for a capture
   // that covered more than one display — a single-display capture omits it and
   // the top-level media already describes the whole pack (SPEC §5.6).
-  if (input.displays !== undefined && input.displays.length > 1) {
+  if (
+    captureKind === 'video' &&
+    input.displays !== undefined &&
+    input.displays.length > 1
+  ) {
     manifest.media.displays = buildDisplayMedia(input.displays, manifest.media)
   }
   return manifest
@@ -566,6 +811,9 @@ export interface InitialSaveInput {
   snapshotPng: Buffer
   width: number
   height: number
+  captureKind?: CaptureKind
+  imageScope?: ImageCaptureScope
+  cropBounds?: ImageCropBounds
   capturedAt: Date
   replayWebm: Buffer | null
   // Actual recorder container name. Absent retains the legacy replay.webm.
@@ -580,6 +828,9 @@ export interface InitialSaveInput {
   // point of the feature — a crash must not lose the other screens).
   displays?: DisplayCapture[]
   screens?: Array<{ width: number; height: number; scale: number }>
+  // Save-first is aligned to the raw recorder clock. Cancel/finalize replaces
+  // this with the exact cut/rebased clock through updateInitialPack().
+  windowsContext?: WindowsContextTimelineV1 | null
   // Pack document language for the save-first docs (same as ExportInput's).
   docLanguage?: Language
 }
@@ -592,21 +843,8 @@ export interface InitialSaveInput {
  * folder is a complete, honest pack even if the editor never finishes.
  */
 export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
+  const imageCapture = input.captureKind === 'image'
   const id = randomUUID()
-  const manifest = buildManifest({
-    id,
-    createdAt: input.capturedAt,
-    generatorVersion: app.getVersion(),
-    title: '',
-    note: '',
-    osVersion: release(),
-    screens: input.screens ?? physicalScreens(),
-    hasReplay: input.replayWebm !== null,
-    replayFile: input.replayFile,
-    replayDurationMs: input.replayDurationMs,
-    snapshotTMs: null,
-    displays: input.displays,
-  })
   const annotationsFile: AnnotationsFile = {
     reference_width: input.width,
     reference_height: input.height,
@@ -620,11 +858,35 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
   const dirPath = uniquePackDir(input.outputDir, input.capturedAt)
   try {
     await mkdir(dirPath)
+    // Optional context lands before the manifest that declares it. Its writer
+    // swallows every failure, so save-first remains a media-first guarantee.
+    const contextDisposition = await reconcileWindowsContextPlugin(
+      dirPath,
+      imageCapture ? null : input.windowsContext,
+    )
+    const manifest = buildManifest({
+      id,
+      createdAt: input.capturedAt,
+      generatorVersion: app.getVersion(),
+      title: '',
+      note: '',
+      osVersion: release(),
+      screens: input.screens ?? physicalScreens(),
+      captureKind: input.captureKind,
+      imageScope: input.imageScope,
+      cropBounds: input.cropBounds,
+      hasReplay: !imageCapture && input.replayWebm !== null,
+      replayFile: input.replayFile,
+      replayDurationMs: input.replayDurationMs,
+      snapshotTMs: null,
+      plugins: withWindowsContextPlugin(undefined, contextDisposition),
+      displays: imageCapture ? undefined : input.displays,
+    })
     // No render follows a save-first folder — the editor may never finish — so
     // the documents must not promise stills nothing will ever write.
     await writePackFiles(dirPath, manifest, annotationsFile, input.timeline, input.docLanguage, false)
     await writeFile(join(dirPath, 'snapshot.png'), input.snapshotPng)
-    if (input.replayWebm !== null) {
+    if (!imageCapture && input.replayWebm !== null) {
       await writeFile(join(dirPath, replayFileName(input.replayFile)), input.replayWebm)
     }
   } catch (err) {
@@ -636,7 +898,7 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
   // background: the focused pack above is already complete and valid, and the editor
   // must not wait on 100+ MB of screens the user is not annotating. Every later
   // writer for this folder settles it first (settleDisplayWrites).
-  if (input.displays !== undefined) {
+  if (!imageCapture && input.displays !== undefined) {
     const write = writeDisplayFiles(dirPath, input.displays)
       .catch(async (err: unknown) => {
         console.error(
@@ -664,8 +926,14 @@ export async function updateInitialPack(
   handle: PackHandle,
   input: InitialSaveInput,
 ): Promise<void> {
+  const imageCapture = input.captureKind === 'image'
   await settleDisplayWrites(handle.dirPath)
+  return withManifestMutation(handle.dirPath, async () => {
   const previous = await readManifestIfPresent(handle.dirPath)
+  const contextDisposition = await reconcileWindowsContextPlugin(
+    handle.dirPath,
+    imageCapture ? null : input.windowsContext,
+  )
   const manifest = buildManifest({
     id: handle.id,
     createdAt: input.capturedAt,
@@ -674,13 +942,16 @@ export async function updateInitialPack(
     note: '',
     osVersion: release(),
     screens: input.screens ?? physicalScreens(),
-    hasReplay: input.replayWebm !== null,
+    captureKind: input.captureKind,
+    imageScope: input.imageScope,
+    cropBounds: input.cropBounds,
+    hasReplay: !imageCapture && input.replayWebm !== null,
     replayFile: input.replayFile,
     replayDurationMs: input.replayDurationMs,
     snapshotTMs: null,
     trimOffsetMs: input.trimOffsetMs,
-    plugins: previous?.plugins,
-    displays: input.displays,
+    plugins: withWindowsContextPlugin(previous?.plugins, contextDisposition),
+    displays: imageCapture ? undefined : input.displays,
   })
   const annotationsFile: AnnotationsFile = {
     reference_width: input.width,
@@ -695,11 +966,14 @@ export async function updateInitialPack(
     input.docLanguage,
     false,
   )
-  await writeDisplayFiles(handle.dirPath, input.displays)
+  await writeDisplayFiles(handle.dirPath, imageCapture ? undefined : input.displays)
   const replayFile = replayFileName(input.replayFile)
-  if (input.replayWebm === null) await rm(join(handle.dirPath, replayFile), { force: true })
+  if (imageCapture || input.replayWebm === null) {
+    await rm(join(handle.dirPath, replayFile), { force: true })
+  }
   else await writeFile(join(handle.dirPath, replayFile), input.replayWebm)
   await removeReplacedReplayFiles(handle.dirPath, previous, manifest)
+  })
 }
 
 export interface UpdatePackOptions {
@@ -723,20 +997,26 @@ export async function updatePack(
   // A save-first per-display write may still be in flight for this folder; the
   // rewrite below must not race it.
   await settleDisplayWrites(handle.dirPath)
+  return withManifestMutation(handle.dirPath, async () => {
   const previousManifest = await readManifestIfPresent(handle.dirPath)
-  const keepReplay = options.keepReplay === true
+  const imageCapture = input.captureKind === 'image'
+  const keepReplay = !imageCapture && options.keepReplay === true
   // The replay is whatever the pack DECLARES it is (SPEC §5.3 allows .mp4):
   // testing for replay.webm here would silently orphan a legal replay.mp4 and
   // drop replay_duration_ms / snapshot_t_ms / every annotation lifetime with it.
   const replayFile = replayFileName(input.replayFile)
-  const hasReplay = keepReplay
+  const hasReplay = !imageCapture && (keepReplay
     ? existsSync(join(handle.dirPath, replayFile))
-    : input.replayWebm !== null
+    : input.replayWebm !== null)
   // The plugin payload goes down BEFORE the manifest that declares it, and its
   // failure is swallowed: object data is a best-effort extra and must never
   // cost the user a save (GOAL "Static object picking"). A payload that did not
   // land is simply not declared.
   const uiaWritten = await tryWriteUiaPlugin(handle.dirPath, input.uia)
+  const contextDisposition = await reconcileWindowsContextPlugin(
+    handle.dirPath,
+    imageCapture ? null : input.windowsContext,
+  )
   const manifest = buildManifest({
     id: handle.id,
     createdAt: input.capturedAt,
@@ -745,13 +1025,22 @@ export async function updatePack(
     note: input.note,
     osVersion: release(),
     screens: input.screens ?? physicalScreens(),
+    captureKind: input.captureKind,
+    imageScope: input.imageScope,
+    cropBounds: input.cropBounds,
     hasReplay,
     replayFile,
     replayDurationMs: input.replayDurationMs,
     snapshotTMs: input.snapshotTMs,
     trimOffsetMs: input.trimOffsetMs,
-    plugins: withUiaPlugin(input.plugins, uiaWritten),
-    displays: input.displays,
+    plugins: withWindowsContextPlugin(
+      withUiaPlugin(
+        withPreservedPlugins(previousManifest?.plugins, input.plugins),
+        uiaWritten,
+      ),
+      contextDisposition,
+    ),
+    displays: imageCapture ? undefined : input.displays,
     usesKeyframes: input.annotations.some((a) => (a.keyframes?.length ?? 0) > 0),
   })
   const annotationsFile: AnnotationsFile = {
@@ -770,7 +1059,7 @@ export async function updatePack(
   // Non-focused displays: rewritten from the same bytes save-first used (a
   // failed save-first retries the whole write here). Re-edit passes null
   // buffers, so the files already on disk are left alone.
-  await writeDisplayFiles(handle.dirPath, input.displays)
+  await writeDisplayFiles(handle.dirPath, imageCapture ? undefined : input.displays)
   // A stale annotated replay must never outlive the annotations that produced
   // it: the background render rewrites it (and re-declares it in the manifest)
   // after this save. The annotated keyframe stills follow the same rule — the
@@ -782,9 +1071,9 @@ export async function updatePack(
   // just un-annotated must not keep an annotated replay showing boxes that no
   // longer exist. Removed for EVERY declared display; the renders that follow
   // put back only the ones that still have annotations.
-  await clearDisplayRenderOutputs(handle.dirPath, input.displays)
+  await clearDisplayRenderOutputs(handle.dirPath, imageCapture ? undefined : input.displays)
   if (!keepReplay) {
-    if (input.replayWebm === null) {
+    if (imageCapture || input.replayWebm === null) {
       // The user excluded the replay at save time (e.g. privacy).
       await rm(join(handle.dirPath, replayFile), { force: true })
     } else {
@@ -800,6 +1089,7 @@ export async function updatePack(
   // overwrites whatever they copied in the meantime. The caller copies at the
   // instant the folder exists instead (session.ts, beside the toast).
   return handle.dirPath
+  })
 }
 
 async function readManifestIfPresent(dirPath: string): Promise<Manifest | null> {
@@ -839,6 +1129,126 @@ async function removeReplacedReplayFiles(
   }
 }
 
+const PLUGIN_DIRECTORY_NAME_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
+const IMAGE_PACK_BLOCKED_PLUGIN_EXTENSIONS = new Set([
+  '.avi',
+  '.avif',
+  '.bmp',
+  '.dib',
+  '.gif',
+  '.heic',
+  '.heif',
+  '.ico',
+  '.jpeg',
+  '.jpg',
+  '.jpe',
+  '.m4v',
+  '.mkv',
+  '.mov',
+  '.mp4',
+  '.mpeg',
+  '.mpg',
+  '.png',
+  '.tif',
+  '.tiff',
+  '.webm',
+  '.webp',
+  '.wmv',
+])
+
+function startsWithBytes(value: Buffer, bytes: readonly number[], offset = 0): boolean {
+  if (value.length < offset + bytes.length) return false
+  return bytes.every((byte, index) => value[offset + index] === byte)
+}
+
+/**
+ * Extension checks are only a convenience; a renamed `context.json` can still
+ * be a complete PNG or MP4. Image Save As New therefore sniffs the small,
+ * format-identifying prefix and fails closed for every common raster/video
+ * container the pack validator recognises.
+ */
+function hasRasterOrVideoMagic(value: Buffer): boolean {
+  return (
+    startsWithBytes(value, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) ||
+    startsWithBytes(value, [0xff, 0xd8, 0xff]) ||
+    value.subarray(0, 6).toString('ascii') === 'GIF87a' ||
+    value.subarray(0, 6).toString('ascii') === 'GIF89a' ||
+    value.subarray(0, 2).toString('ascii') === 'BM' ||
+    startsWithBytes(value, [0x49, 0x49, 0x2a, 0x00]) ||
+    startsWithBytes(value, [0x4d, 0x4d, 0x00, 0x2a]) ||
+    (
+      value.subarray(0, 4).toString('ascii') === 'RIFF' &&
+      ['WEBP', 'AVI '].includes(value.subarray(8, 12).toString('ascii'))
+    ) ||
+    value.subarray(4, 8).toString('ascii') === 'ftyp' ||
+    startsWithBytes(value, [0x1a, 0x45, 0xdf, 0xa3]) ||
+    startsWithBytes(value, [0x00, 0x00, 0x01, 0xba]) ||
+    startsWithBytes(value, [0x00, 0x00, 0x01, 0xb3]) ||
+    startsWithBytes(value, [0x00, 0x00, 0x00, 0x01])
+  )
+}
+
+async function imagePluginEntryIsMetadata(sourcePath: string): Promise<boolean> {
+  try {
+    const info = await lstat(sourcePath)
+    // A symlink can point outside the pack, and cp() otherwise preserves it.
+    // Metadata preservation never needs links or special filesystem nodes.
+    if (info.isSymbolicLink()) return false
+    if (info.isDirectory()) return true
+    if (!info.isFile()) return false
+    if (IMAGE_PACK_BLOCKED_PLUGIN_EXTENSIONS.has(extname(sourcePath).toLowerCase())) {
+      return false
+    }
+    const handle = await open(sourcePath, 'r')
+    try {
+      const header = Buffer.alloc(16)
+      const { bytesRead } = await handle.read(header, 0, header.length, 0)
+      return !hasRasterOrVideoMagic(header.subarray(0, bytesRead))
+    } finally {
+      await handle.close()
+    }
+  } catch {
+    // Plugin data is optional. An entry that cannot be inspected must not cross
+    // the image privacy boundary merely because the filesystem raced us.
+    return false
+  }
+}
+
+async function copyImagePluginMetadata(
+  sourceDir: string,
+  targetDir: string,
+  plugins: Manifest['plugins'] | undefined,
+): Promise<Manifest['plugins']> {
+  const copied: Manifest['plugins'] = []
+  const seen = new Set<string>()
+  for (const declaration of plugins ?? []) {
+    if (
+      declaration === null ||
+      typeof declaration !== 'object' ||
+      typeof declaration.name !== 'string' ||
+      !PLUGIN_DIRECTORY_NAME_RE.test(declaration.name) ||
+      seen.has(declaration.name)
+    ) {
+      continue
+    }
+    seen.add(declaration.name)
+    const source = join(sourceDir, 'plugins', declaration.name)
+    const target = join(targetDir, 'plugins', declaration.name)
+    if (!existsSync(source)) continue
+    await cp(source, target, {
+      recursive: true,
+      filter: imagePluginEntryIsMetadata,
+    })
+    try {
+      const meta = await lstat(join(target, 'meta.json'))
+      if (meta.isFile()) copied.push(declaration)
+    } catch {
+      // A declaration without ordinary meta.json is not a copied plugin.
+    }
+  }
+  return copied
+}
+
 /**
  * Save As New CapturePack (GOAL "History — Save after re-edit"): writes the
  * edited state into a NEW folder (CapturePack_<now>, collision-suffixed) with
@@ -870,12 +1280,13 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
   // The source folder may still be finishing its save-first per-display write.
   await settleDisplayWrites(sourceDir)
   const id = randomUUID()
+  const imageCapture = input.captureKind === 'image'
   const replayFile = replayFileName(input.replayFile)
   const srcReplay = join(sourceDir, replayFile)
-  const hasReplay = existsSync(srcReplay)
+  const hasReplay = !imageCapture && existsSync(srcReplay)
   // All-displays pack: only the per-display files actually present in the
   // source can travel, so the new pack declares exactly what it will contain.
-  const displays = input.displays?.filter(
+  const displays = (imageCapture ? undefined : input.displays)?.filter(
     (d) => d.focused || existsSync(join(sourceDir, d.snapshotFile)),
   )
   const surviving: DisplayCapture[] | undefined = displays?.map((d) =>
@@ -895,23 +1306,6 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
   // removed, which is what "absent = focused" means — rather than being written
   // as an index nothing in the new pack can resolve.
   const annotations = withDeclaredDisplays(input.annotations, displayFiles)
-  const manifest = buildManifest({
-    id,
-    createdAt: input.capturedAt,
-    generatorVersion: app.getVersion(),
-    title: input.title,
-    note: input.note,
-    osVersion: release(),
-    screens: input.screens ?? physicalScreens(),
-    hasReplay,
-    replayFile,
-    replayDurationMs: input.replayDurationMs,
-    snapshotTMs: input.snapshotTMs,
-    trimOffsetMs: input.trimOffsetMs,
-    plugins: input.plugins,
-    displays: displayFiles,
-    usesKeyframes: annotations.some((a) => (a.keyframes?.length ?? 0) > 0),
-  })
   const annotationsFile: AnnotationsFile = {
     reference_width: input.width,
     reference_height: input.height,
@@ -924,6 +1318,47 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
   const dirPath = uniquePackDir(dirname(sourceDir), new Date())
   try {
     await mkdir(dirPath)
+    // Copy pack-backed plugins first, then apply the caller's temporal-context
+    // disposition. For video, plugin payloads remain byte-for-byte. An image
+    // pack has a stricter boundary: only DECLARED plugin metadata may cross,
+    // and neither a media extension nor renamed raster/video magic is copied.
+    // Otherwise Save As New could turn plugins/hidden.png from a malformed
+    // source into an undeclared full-screen image in a newly trusted pack.
+    const srcPlugins = join(sourceDir, 'plugins')
+    let copiedPlugins = input.plugins
+    if (existsSync(srcPlugins)) {
+      if (imageCapture) {
+        copiedPlugins = await copyImagePluginMetadata(sourceDir, dirPath, input.plugins)
+      } else {
+        await cp(srcPlugins, join(dirPath, 'plugins'), { recursive: true })
+      }
+    } else if (imageCapture) {
+      copiedPlugins = []
+    }
+    const contextDisposition = await reconcileWindowsContextPlugin(
+      dirPath,
+      imageCapture ? null : input.windowsContext,
+    )
+    const manifest = buildManifest({
+      id,
+      createdAt: input.capturedAt,
+      generatorVersion: app.getVersion(),
+      title: input.title,
+      note: input.note,
+      osVersion: release(),
+      screens: input.screens ?? physicalScreens(),
+      captureKind: input.captureKind,
+      imageScope: input.imageScope,
+      cropBounds: input.cropBounds,
+      hasReplay,
+      replayFile,
+      replayDurationMs: input.replayDurationMs,
+      snapshotTMs: input.snapshotTMs,
+      trimOffsetMs: input.trimOffsetMs,
+      plugins: withWindowsContextPlugin(copiedPlugins, contextDisposition),
+      displays: displayFiles,
+      usesKeyframes: annotations.some((a) => (a.keyframes?.length ?? 0) > 0),
+    })
     // A background render for the NEW folder always follows this save.
     await writePackFiles(dirPath, manifest, annotationsFile, timeline, input.docLanguage, true)
     await writeFile(join(dirPath, 'snapshot.png'), input.snapshotPng)
@@ -940,19 +1375,13 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
       if (d.replayWebm !== null) await writeFile(join(dirPath, replayName), d.replayWebm)
       else await copyFile(join(sourceDir, replayName), join(dirPath, replayName))
     }
-    // Plugin payloads (external packs): the files travel with their manifest
-    // declaration — Save As New must not silently strip plugins/.
-    const srcPlugins = join(sourceDir, 'plugins')
-    if (existsSync(srcPlugins)) {
-      await cp(srcPlugins, join(dirPath, 'plugins'), { recursive: true })
-    }
   } catch (err) {
     // Never leave a half-written pack behind.
     await rm(dirPath, { recursive: true, force: true })
     throw err
   }
 
-  copyAfterSave(input.clipboardAfterSave, dirPath)
+  await copyAfterSave(input.clipboardAfterSave, dirPath)
   return { id, dirPath }
 }
 
@@ -975,10 +1404,22 @@ async function writePackFiles(
 ): Promise<void> {
   await mkdir(join(dirPath, 'skills'), { recursive: true })
   await mkdir(join(dirPath, 'plugins'), { recursive: true })
-  await writeFile(join(dirPath, 'manifest.json'), toJson(manifest))
-  await writeFile(join(dirPath, 'annotations.json'), toJson(annotationsFile))
-  await writeFile(join(dirPath, 'timeline.json'), toJson(timeline))
+  // The manifest is the pack's discovery/identity commit point. Publish every
+  // source it describes first, then publish the manifest last. On an initial
+  // save this prevents History/MCP from indexing a half-written folder; on an
+  // update it prevents a new manifest from pointing at the old annotations.
+  await writeSourceFile(join(dirPath, 'annotations.json'), toJson(annotationsFile))
+  if (manifest.capture_kind === 'image') {
+    // A still image has no capture/replay clock. Keeping the editor's internal
+    // event buffer here made image packs look like truncated video packs and
+    // sent readers toward a timeline that has no meaning for the artifact.
+    // Remove a stale copy as well (for packs rewritten by a newer build).
+    await rm(join(dirPath, 'timeline.json'), { force: true })
+  } else {
+    await writeSourceFile(join(dirPath, 'timeline.json'), toJson(timeline))
+  }
   await writeDocs(dirPath, manifest, annotationsFile, timeline, docLanguage, renderPending)
+  await writeSourceFile(join(dirPath, 'manifest.json'), toJson(manifest))
 }
 
 /** report.md + README.md + skills/ — the three generated documents, one writer. */
@@ -991,18 +1432,23 @@ async function writeDocs(
   renderPending: boolean,
 ): Promise<void> {
   const skills = buildSkills(manifest, annotationsFile, timeline, docLanguage, renderPending)
-  await writeFile(
+  await writeSourceFile(
     join(dirPath, 'report.md'),
     buildReport(manifest, annotationsFile, docLanguage, renderPending),
-    'utf8',
   )
-  await writeFile(
+  await writeSourceFile(
     join(dirPath, 'README.md'),
     buildReadme(manifest, annotationsFile, docLanguage, renderPending),
-    'utf8',
   )
-  for (const name of SKILLS_FILES) {
-    await writeFile(join(dirPath, 'skills', `${name}.md`), skills[name], 'utf8')
+  const skillFiles =
+    manifest.capture_kind === 'image'
+      ? SKILLS_FILES.filter((name) => name !== 'timeline')
+      : SKILLS_FILES
+  if (manifest.capture_kind === 'image') {
+    await rm(join(dirPath, 'skills', 'timeline.md'), { force: true })
+  }
+  for (const name of skillFiles) {
+    await writeSourceFile(join(dirPath, 'skills', `${name}.md`), skills[name])
   }
 }
 
@@ -1021,16 +1467,21 @@ async function writeDocs(
  * Never fatal: a pack whose documents could not be refreshed is still valid.
  */
 export async function refreshPackDocs(dirPath: string, docLanguage: Language = 'en'): Promise<void> {
-  const manifest = JSON.parse(await readFile(join(dirPath, 'manifest.json'), 'utf8')) as Manifest
-  const annotationsFile = JSON.parse(
-    await readFile(join(dirPath, 'annotations.json'), 'utf8'),
-  ) as AnnotationsFile
-  if (!Array.isArray(annotationsFile.annotations)) return
-  const timeline = JSON.parse(await readFile(join(dirPath, 'timeline.json'), 'utf8')) as TimelineFile
-  if (!Array.isArray(timeline.events)) return
-  // The render has already run: nothing further will write stills, so an
-  // undeclared keyframe set is an ABSENT one, not a pending one.
-  await writeDocs(dirPath, manifest, annotationsFile, timeline, docLanguage, false)
+  return withManifestMutation(dirPath, async () => {
+    const manifest = JSON.parse(await readFile(join(dirPath, 'manifest.json'), 'utf8')) as Manifest
+    const annotationsFile = JSON.parse(
+      await readFile(join(dirPath, 'annotations.json'), 'utf8'),
+    ) as AnnotationsFile
+    if (!Array.isArray(annotationsFile.annotations)) return
+    let timeline: TimelineFile = { t0: manifest.created_at, events: [] }
+    if (manifest.capture_kind !== 'image') {
+      timeline = JSON.parse(await readFile(join(dirPath, 'timeline.json'), 'utf8')) as TimelineFile
+      if (!Array.isArray(timeline.events)) return
+    }
+    // The render has already run: nothing further will write stills, so an
+    // undeclared keyframe set is an ABSENT one, not a pending one.
+    await writeDocs(dirPath, manifest, annotationsFile, timeline, docLanguage, false)
+  })
 }
 
 /**
@@ -1056,6 +1507,7 @@ export async function setManifestRenderOutputs(
     display?: number
   },
 ): Promise<void> {
+  return withManifestMutation(handle.dirPath, async () => {
   const manifestPath = join(handle.dirPath, 'manifest.json')
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Manifest
   // Belt and braces against a second render for the same folder having wiped
@@ -1083,7 +1535,7 @@ export async function setManifestRenderOutputs(
     }
     if (declared.length > 0) entry.keyframes = declared
     else delete entry.keyframes
-    await writeFile(manifestPath, toJson(manifest))
+    await writeSourceFile(manifestPath, toJson(manifest))
     return
   }
 
@@ -1094,7 +1546,8 @@ export async function setManifestRenderOutputs(
   }
   if (declared.length > 0) manifest.media.keyframes = declared
   else delete manifest.media.keyframes
-  await writeFile(manifestPath, toJson(manifest))
+  await writeSourceFile(manifestPath, toJson(manifest))
+  })
 }
 
 /**
@@ -1168,13 +1621,16 @@ function uniquePackDir(outputDir: string, date: Date): string {
  * folder and the bare path stay available for the cases where a file manager
  * or a terminal is the destination instead.
  */
-export function copyAfterSave(mode: ClipboardAfterSave, dirPath: string): void {
-  if (mode === 'off') return
+export async function copyAfterSave(
+  mode: ClipboardAfterSave,
+  dirPath: string,
+): Promise<boolean> {
+  if (mode === 'off') return true
   if (mode === 'folder') {
     copyFolderToClipboard(dirPath)
-    return
+    return true
   }
-  clipboard.writeText(mode === 'path' ? dirPath : analyzePackPrompt(dirPath))
+  return await copyTextToClipboard(mode === 'path' ? dirPath : analyzePackPrompt(dirPath))
 }
 
 function copyFolderToClipboard(dirPath: string): void {

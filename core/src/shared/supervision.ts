@@ -77,6 +77,7 @@ export const NON_RELAUNCHABLE_ARGS: readonly string[] = [
   '--show-about',
   '--show-welcome',
   '--smoke',
+  '--no-supervision',
 ]
 
 export function emptyJournal(): SupervisionJournal {

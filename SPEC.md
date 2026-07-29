@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Format** | `capturepack` |
-| **Version** | `0.1.0` |
+| **Version** | `0.3.0` |
 | **Status** | Draft |
-| **Date** | 2026-07-27 |
+| **Date** | 2026-07-29 |
 | **License** | MIT (same as the repository) |
 
 > Capture context, not screenshots.
@@ -184,12 +184,13 @@ CapturePack_2026-07-27_143052/        — or the same tree zipped as a .capturep
 │   ├── frame-01_00-03.200.png          change — declared in manifest.media.keyframes;
 │   └── frame-02_00-05.400.png          regenerable from the media + annotations.json
 ├── annotations.json         OPTIONAL   annotation boxes — the true source of annotation data
-├── timeline.json            OPTIONAL   machine-readable event log
+├── timeline.json            OPTIONAL   video-pack machine-readable event log;
+│                                       MUST be absent for explicit image packs
 ├── report.md                OPTIONAL (RECOMMENDED) generated narrative
 ├── README.md                OPTIONAL (RECOMMENDED) human-first entry point
 ├── skills/                  OPTIONAL (RECOMMENDED) AI-first context documents
 │   ├── overview.md                     whole-pack summary
-│   ├── timeline.md                     the timeline, narrated
+│   ├── timeline.md                     video packs only: the timeline, narrated
 │   ├── annotation.md                   the annotations, narrated
 │   ├── dom.md                          DOM/object metadata, when present
 │   └── project.md                      what a CapturePack is, for cold-start readers
@@ -209,7 +210,7 @@ CapturePack_2026-07-27_143052/        — or the same tree zipped as a .capturep
 | `replay_annotated-d<N>.webm`, `frames-d<N>/frame-…png` | OPTIONAL — one display's own annotated views, declared as `replay_annotated`/`keyframes` on its `manifest.media.displays` entry | [§5.6](#56-displays-multi-monitor-captures) |
 | `frames/frame-<NN>_<MM-SS.mmm>.png` | OPTIONAL (RECOMMENDED) — annotated keyframe stills, each declared in `manifest.media.keyframes` | [§5.7](#57-keyframes-annotated-stills) |
 | `annotations.json` | OPTIONAL — fixed name, present when annotations exist | [§8](#8-annotationsjson) |
-| `timeline.json` | OPTIONAL — fixed name, present when events were recorded | [§10](#10-timelinejson) |
+| `timeline.json` | OPTIONAL for video packs — fixed name, present when events were recorded; MUST be absent when `capture_kind` is `"image"` | [§10](#10-timelinejson) |
 | `report.md` | OPTIONAL (RECOMMENDED) — fixed name | [§12.1](#121-reportmd) |
 | `README.md` | OPTIONAL (RECOMMENDED) — fixed name | [§12.2](#122-readmemd) |
 | `skills/` | OPTIONAL (RECOMMENDED) — fixed names inside | [§12.3](#123-skills) |
@@ -237,7 +238,8 @@ inventories the variable parts of the pack.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `format` | string | REQUIRED | MUST be the literal string `"capturepack"`. The first thing a reader checks. |
-| `format_version` | string | REQUIRED | Version of this specification the pack conforms to, as [semver](https://semver.org/) (`"0.1.0"`). See [§13](#13-versioning-and-compatibility). |
+| `format_version` | string | REQUIRED | Oldest version of this specification that fully expresses the pack, as [semver](https://semver.org/). See [§13](#13-versioning-and-compatibility). |
+| `capture_kind` | `"image"` or `"video"` | REQUIRED for new writers; OPTIONAL when reading legacy packs, including early 0.3.0 RC output | What the user asked to capture, independent of whether a video recorder succeeded. New writers MUST declare it for both image and video captures. When it is absent in an existing pack, readers MAY infer video when `media.replay` is a filename and otherwise MUST NOT pretend to know whether a null replay was an explicit still or a failed video. **Added in 0.3.0.** |
 | `id` | string | REQUIRED | RFC 4122 UUID uniquely identifying this pack. Version 4 (random) RECOMMENDED. Lowercase RECOMMENDED. |
 | `created_at` | string | REQUIRED | Capture instant as ISO 8601 with a timezone offset (`"2026-07-27T14:03:21+09:00"` or `...Z`). A timezone designator MUST be present — local wall-clock time is context. |
 | `generator` | object | REQUIRED | The software that wrote the pack: `{ "name": string, "version": string }`. Both fields REQUIRED. |
@@ -279,8 +281,26 @@ of screen count or scaling.
 | `replay_annotated` | string | OPTIONAL | Filename of the **annotated replay** — `"replay_annotated.webm"` or `"replay_annotated.mp4"` ([§7.2](#72-the-annotated-replay)). MUST be absent when `replay` is `null` (there is nothing to render it from). Absent while the annotated replay has not (yet) been rendered. The annotated replay may render in the background after save, so a reader MAY encounter a manifest that declares this file before the file exists — it SHOULD treat that as "still rendering" and fall back to `replay` + `annotations.json`. |
 | `snapshot_t_ms` | integer | OPTIONAL | Position on the replay clock, in milliseconds, of the frame shown in `snapshot.png` — the same clock as annotation lifetimes ([§8.4](#84-lifetime)) and timeline `t_ms` offsets relative to `t0` ([§10.1](#101-structure)). MUST be >= 0. **Absent means the snapshot is the capture instant** — the native "now" frame. SHOULD be absent when `replay` is `null`: without a replay there is no timeline to anchor the value to. See [§7.1](#71-frame-accurate-captures). |
 | `trim_offset_ms` | integer | OPTIONAL | **Provenance only.** When the writer trimmed the replay before saving, the position (ms) in the original captured recording of this replay's first frame — the trim in-point. MUST be >= 0. Purely informational: every time in the pack (annotation lifetimes, `snapshot_t_ms`, timeline offsets against `t0`) is already on the trimmed replay's clock, so readers never apply this offset to anything. Absent means the replay was never trimmed. SHOULD be absent when `replay` is `null`. |
+| `image_scope` | `"region"` or `"fullscreen"` | REQUIRED when `capture_kind` is `"image"`; otherwise MUST be absent | The explicit still-image choice. `"region"` means `snapshot.png` contains only the selected pixels. `"fullscreen"` means the user explicitly requested the complete virtual desktop: every attached display is composed into the single `snapshot.png`, with no separate per-display raster. **Added in 0.3.0.** |
+| `crop_bounds` | object | REQUIRED for a region image; otherwise MUST be absent | Places the selected crop in OS virtual-desktop DIP coordinates: `{ x, y, width, height, coordinate_space: "virtual-desktop-dip" }`. `x`/`y` are finite numbers and MAY be negative; `width`/`height` MUST be finite and > 0. This is placement provenance, not an authorization to store pixels outside the crop. **Added in 0.3.0.** |
 | `displays` | array | OPTIONAL | Per-display media of a capture that froze MORE THAN ONE display at the same instant. Absent for a single-display capture — which is the whole pack in that case. See [§5.6](#56-displays-multi-monitor-captures). |
 | `keyframes` | array | OPTIONAL (RECOMMENDED) | The **annotated keyframe stills** in `frames/`: one PNG per annotation state change, with the annotations rendered into the pixels. Absent until the render that produces them completes (the same background render as `replay_annotated`), and absent in a pack that was never rendered. See [§5.7](#57-keyframes-annotated-stills). |
+
+For `capture_kind: "image"`, `media.replay` MUST be `null` and
+`cadence`, `replay_duration_ms`, `replay_annotated`, `snapshot_t_ms`, `trim_offset_ms`, and
+`displays` MUST be absent (a null `replay_duration_ms` remains tolerated for
+generic legacy tooling). A conforming image writer MUST NOT persist another
+source raster or video anywhere in the pack. It MAY render declared annotated
+stills, but each such still MUST have exactly the same pixel dimensions as the
+selected `snapshot.png`; it cannot be used to smuggle a larger context image. When
+`media.keyframes` is present, the screenshot-only rule in [§5.7](#57-keyframes-annotated-stills)
+permits exactly one entry at `t_ms: 0`.
+
+An explicit image pack is a still-image artifact, not a zero-duration video
+artifact. Its writer MUST omit the top-level `timeline.json` and
+`skills/timeline.md`; annotation and plugin context remain available through
+`annotations.json`, the other image-specific `skills/` documents, and declared
+plugin payloads.
 
 ### 5.4 `plugins`
 
@@ -302,7 +322,8 @@ An empty `plugins/` directory (no payloads, no declarations) is fine. Readers MU
 ```json
 {
   "format": "capturepack",
-  "format_version": "0.1.0",
+  "format_version": "0.3.0",
+  "capture_kind": "video",
   "id": "5f0c1e0a-8f7e-4c2b-9d3a-1b2c3d4e5f6a",
   "created_at": "2026-07-27T14:03:21+09:00",
   "generator": { "name": "capturepack", "version": "0.1.0" },
@@ -355,6 +376,7 @@ Each entry:
 | `snapshot` | string | REQUIRED | Filename of this display's frozen frame: `"snapshot-d<index>.png"`, except the focused entry, which MUST repeat the top-level `media.snapshot` (`"snapshot.png"`). |
 | `replay` | string **or** `null` | REQUIRED | Filename of this display's replay: `"replay-d<index>.webm"` (or `.mp4`), the top-level `media.replay` on the focused entry, or `null` when this display has no replay. |
 | `replay_duration_ms` | integer | REQUIRED when `replay` is a string | Duration of this display's replay in milliseconds. |
+| `replay_clock_offset_ms` | integer | OPTIONAL when `replay` is a string | Milliseconds to add to the pack clock to reach this display's replay clock: `t_i = t + replay_clock_offset_ms`. `0` on the focused display. A writer SHOULD include it when the recorder reported a shared-clock origin; readers of a legacy entry that omits it use the duration-difference fallback below. MUST be absent when `replay` is `null`. |
 | `replay_annotated` | string | OPTIONAL | This display's replay with **its own** annotation boxes rendered into the pixels: `"replay_annotated-d<index>.webm"` (or `.mp4`). Absent on the focused entry — its annotated replay is the top-level `media.replay_annotated` — and absent on any display that carries no annotations or no replay. Regenerable from `replay` + `annotations.json`. |
 | `keyframes` | array | OPTIONAL | This display's annotated stills, same shape and rules as `media.keyframes` ([§5.7](#57-keyframes-annotated-stills)), with files under `"frames-d<index>/"`. `t_ms` is on **this display's own replay clock**, not the pack clock. Absent on the focused entry (its stills are the top-level `media.keyframes`) and on any display without annotations. |
 | `bounds` | object | REQUIRED | This display's rectangle in the OS virtual-desktop coordinate space, in **device-independent pixels**: `{ "x", "y", "width", "height" }`. Multiply by `scale` for physical pixels — `bounds.width × scale` equals the per-display snapshot's pixel width and `environment.screens[index-1].width`. The offsets place the screens relative to each other, and are what lets a viewer lay the displays out in their real arrangement. |
@@ -371,27 +393,36 @@ Rules:
   display's boxes; another display's are `replay_annotated` / `keyframes` on its own entry and
   MUST contain only its own. A writer MUST NOT draw one display's box into another display's
   rendering — the same coordinates mean something different on every screen.
-- All per-display media is frozen by the **same trigger**, so the snapshots are the same instant
-  and the replays cover the same wall-clock window. A viewer showing several displays at once
-  SHOULD drive them from ONE position on the pack clock (the focused display's replay clock).
-- **Aligning a non-focused replay with the pack clock.** Every per-display recorder is stopped
-  by the same trigger, so the replays are END-aligned: they finish at the same instant and can
-  differ only in how far back they reach. A reader placing pack-clock position `t` (the focused
-  display's replay clock, which every annotation lifetime uses) on display *i* therefore uses
+- All per-display media is frozen by the **same trigger**, so the snapshots are the same instant.
+  A viewer showing several displays at once SHOULD drive them from ONE position on the pack clock
+  (the focused display's replay clock).
+- **Aligning a non-focused replay with the pack clock.** When
+  `replay_clock_offset_ms` is present, a reader placing pack-clock position `t` (the focused
+  display's replay clock, which every annotation lifetime uses) on display *i* uses
+
+  ```
+  t_i = t + displays[i].replay_clock_offset_ms
+  ```
+
+  The value is an observed difference between recorder origins on one shared monotonic clock.
+  It remains valid when recorder stop/flush completion times differ and when an exact cut rebases
+  each replay independently. The focused entry's value is `0`.
+
+  A legacy entry may omit the field. Only then, readers use the former end-alignment fallback:
 
   ```
   t_i = t + (displays[i].replay_duration_ms - media.replay_duration_ms)
   ```
 
-  and that one expression covers the trimmed case too — see the next bullet. The same offset
-  applies to a non-focused display's `keyframes` times and to the lifetimes rendered into its
-  `replay_annotated`: those are on that display's own clock, not the pack clock.
+  The same resolved offset applies to a non-focused display's `keyframes` times and to the
+  lifetimes rendered into its `replay_annotated`: those are on that display's own clock, not the
+  pack clock.
 - When the writer trims a multi-display capture (`trim_offset_ms`, [§5.3](#53-media)), it SHOULD
-  cut every declared per-display replay to the same end-aligned real-time interval. A secondary
-  recorder that started later MAY remain shorter and MUST NOT be padded. The duration-difference
-  expression above therefore continues to align every saved display without a special trim
-  rule. Adding `trim_offset_ms` to a reader's seek is wrong: all declared clocks are already
-  rebased, and the field is provenance only.
+  cut every declared per-display replay to the same observed real-time interval. A secondary
+  recorder that started later MAY remain shorter and MUST NOT be padded. The saved
+  `replay_clock_offset_ms` reflects any clamping/rebasing performed by that cut. Adding
+  `trim_offset_ms` to a reader's seek is wrong: all declared clocks are already rebased, and the
+  field is provenance only.
 - A declared per-display file MUST exist in the pack. Readers MUST ignore per-display files that
   are not declared, and MUST NOT fail when `displays` is absent.
 
@@ -406,6 +437,7 @@ Rules:
       "snapshot": "snapshot-d1.png",
       "replay": "replay-d1.webm",
       "replay_duration_ms": 28402,
+      "replay_clock_offset_ms": -35,
       "replay_annotated": "replay_annotated-d1.webm",
       "keyframes": [{ "file": "frames-d1/frame-01_00-21.475.png", "t_ms": 21475 }],
       "bounds": { "x": 0, "y": 0, "width": 1920, "height": 1080 },
@@ -417,6 +449,7 @@ Rules:
       "snapshot": "snapshot.png",
       "replay": "replay.webm",
       "replay_duration_ms": 28437,
+      "replay_clock_offset_ms": 0,
       "bounds": { "x": 1920, "y": 0, "width": 2560, "height": 1440 },
       "scale": 1,
       "focused": true
@@ -496,11 +529,21 @@ screen content at (or immediately before) the capture trigger.
   and MUST equal `reference_width` × `reference_height` in `annotations.json` when that file is
   present ([§8.2](#82-coordinate-space)).
 - What the snapshot shows — one screen, a region, a window, the whole virtual desktop — is the
-  writer's choice. The format does not care; annotations are relative to the image itself.
+  writer's choice for a legacy pack. When `capture_kind` is present, the writer MUST follow its
+  declared image/video intent and the `image_scope` rules in [§5.3](#53-media).
+- In a `capture_kind: "image"` region pack, `snapshot.png` is the crop itself. A writer MUST NOT
+  also store the uncropped display, another display's snapshot, or any hidden context raster.
+  `crop_bounds` preserves where the crop came from without preserving those unselected pixels.
+- In a `capture_kind: "image"` fullscreen pack, `snapshot.png` is the complete virtual-desktop
+  frame the user explicitly requested. It MUST include every attached display captured by that
+  trigger; a writer MUST fail rather than label a partial set as fullscreen. Fullscreen MUST NOT
+  be inferred merely because no crop was supplied.
 - **The snapshot is original evidence and MUST NOT be modified.** No annotation is ever burned
   into `snapshot.png` — including blur. Blur renders only into derived views
   ([§9](#9-blur-and-privacy)). The snapshot is pixels; annotations are data drawn on top of it by
-  viewers.
+  viewers. A fullscreen image MAY losslessly arrange native per-display rasters into one PNG
+  (including blank pixels where the virtual layout has a gap), but MUST NOT resample or alter
+  the source pixels.
 
 ---
 
@@ -931,7 +974,7 @@ a box belongs to exactly one of them: the screen it was drawn on.
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `keyframes[]` | array | OPTIONAL | Where the **user put this box**, at the moments they put it there. Each entry has `t_ms` (number, on the replay clock — [§10.1](#101-the-replay-clock)), `x`, `y`, `width`, `height` (numbers, pixels in this box's own display's snapshot, [§8.2](#82-coordinate-space)). MUST be in ascending `t_ms`. **Added in 0.3.0.** |
+| `keyframes[]` | array | OPTIONAL | Where the **user put this box**, at the moments they put it there. Each entry has `t_ms` (number, on the replay clock — [§10.1](#101-the-replay-clock)), `x`, `y`, `width`, `height` (numbers, pixels in the snapshot named by its OPTIONAL `display`; absent means the annotation's own display, [§8.8](#88-display-which-display-a-box-is-on)). `display`, when present, MUST name a declared captured display. Entries MUST be in ascending `t_ms`. **Added in 0.3.0.** |
 
 **These are AUTHORED, not observed, and that is the whole reason they are not
 `tracking.samples`.** A sample in [§8.3](#83-the-box) is a measurement of a real window, which is
@@ -941,6 +984,14 @@ where their own annotation belongs at that moment. The path between two such sta
 annotation's presentation, not a claim about the world — so readers **MUST interpolate linearly
 between keyframes**, and MUST hold the box flat before the first and after the last. Keeping the
 two in separate fields is what makes each rule safe: neither can ever be applied to the other kind.
+
+A user MAY move one manual box across captured displays. When adjacent keyframes name different
+displays, a reader MUST first project both native-pixel rectangles through
+`manifest.media.displays[].bounds` and `scale` into the common virtual-desktop DIP space,
+interpolate there, then project the result into the captured display containing most of the
+interpolated rectangle. This keeps one continuous authored object across mixed-DPI monitors
+without mixing the pixels of two unrelated images. The rectangle written in each keyframe MUST
+still lie within the snapshot of that keyframe's own display.
 
 A box with **fewer than two** keyframes MUST NOT write the field: one authored position is not
 motion, it is simply where the box is, and that is `bounds`.
@@ -967,8 +1018,8 @@ declare it on a pack that does not ([§13.1](#131-format_version-policy)).
   "blur": false,
   "tracking": { "enabled": false },
   "keyframes": [
-    { "t_ms": 10000, "x": 100, "y": 200, "width": 300, "height": 150 },
-    { "t_ms": 10600, "x": 900, "y": 200, "width": 300, "height": 150 }
+    { "t_ms": 10000, "display": 1, "x": 100, "y": 200, "width": 300, "height": 150 },
+    { "t_ms": 10600, "display": 2, "x": 900, "y": 200, "width": 300, "height": 150 }
   ],
   "z": 4
 }
@@ -999,7 +1050,12 @@ Blur is a **box property** (`blur: true`, [§8.3](#83-the-box)), not an annotati
    resizable, removable — and rewriting the pack regenerates the derived views accordingly.
 4. **Obscure strongly.** In rendered views, strong pixelation (large blocks) or a solid fill is
    RECOMMENDED. A weak Gaussian blur SHOULD NOT be used: lightly blurred text can sometimes be
-   reconstructed.
+    reconstructed.
+5. **Explicit image selection bounds source pixels.** A region image pack contains only the
+   selected source pixels. Neither plugins, multi-display media, a generated keyframe, nor an
+   undeclared file may carry the uncropped display or another monitor. A fullscreen source image
+   is valid only after the user explicitly selected the fullscreen scope; that one image contains
+   the complete captured virtual desktop and replaces, rather than accompanies, per-display files.
 
 ### 9.2 The sharing rule
 
@@ -1046,7 +1102,8 @@ guidance.
 
 ## 10. timeline.json
 
-`timeline.json` is OPTIONAL. It is the machine-readable record of *when things happened*:
+`timeline.json` is OPTIONAL for video packs and MUST be absent when
+`manifest.capture_kind` is `"image"`. It is the machine-readable record of *when things happened*:
 append-only during capture, ordered, and replayable — a reader can step through events against
 the replay video or reconstruct the session's story without watching anything.
 
@@ -1521,7 +1578,7 @@ Well-known filenames (all OPTIONAL; RECOMMENDED as a set):
 | File | Content |
 |---|---|
 | `skills/overview.md` | Whole-pack summary: what happened, where to look first, counts (annotations, events, plugins), whether blur is present. SHOULD embed the annotated keyframes ([§5.7](#57-keyframes-annotated-stills)) as markdown images — an LLM then reconstructs the capture from this one file. |
-| `skills/timeline.md` | The timeline narrated: notable events in order with timestamps, or "no timeline recorded". |
+| `skills/timeline.md` | Video packs only: the timeline narrated, with notable events in order. MUST be absent from an explicit image pack. |
 | `skills/annotation.md` | Every annotation box: display number (when numbered), text, bounds, lifetime, blur flag — plus a one-line statement of the numbering rule. |
 | `skills/dom.md` | DOM/semantic object metadata when a browser or UIA plugin contributed it; otherwise a one-line "no DOM metadata in this pack" so the LLM stops looking. |
 | `skills/project.md` | What a CapturePack is and how this folder is laid out — for a model that has never seen the format. |
@@ -1554,6 +1611,13 @@ that major versions normally do; the rules above apply with `0.x` minor acting a
 **Writers SHOULD write the oldest `format_version` that fully expresses their content.** If a
 pack uses nothing introduced after 0.1.0, declare `"0.1.0"` even if the tool knows a newer spec.
 This maximizes the packs' audience — old readers keep working.
+
+`capture_kind` was introduced in 0.3.0. A writer that emits it MUST declare
+`format_version` 0.3.0 or later, and new writers MUST include it for both image and video
+captures. Readers and validators MUST continue accepting existing manifests where it is absent,
+including early 0.3.0 RC packs that used authored keyframes before `capture_kind` was written. A
+replay filename establishes legacy video evidence, while a null replay alone is intentionally
+ambiguous.
 
 **Readers MUST accept unknown optional fields and unknown files.** Forward compatibility is a
 requirement, not a courtesy:
@@ -1653,11 +1717,17 @@ repository:
 - [`docs/schemas/annotations.schema.json`](docs/schemas/annotations.schema.json)
 - [`docs/schemas/timeline.schema.json`](docs/schemas/timeline.schema.json)
 
-The schemas validate what format 0.1.0 **defines**. Deliberately, they do not forbid unknown
-properties — forward compatibility ([§13](#13-versioning-and-compatibility)) requires readers to
-accept fields the schemas don't know about, so a 0.2.0 pack with additive fields still validates.
-A pack using an annotation or event *type* unknown to 0.1.0 will fail these schemas while still
-being readable under the defensive-reading rules; that is the expected difference between
-"validates as 0.1.0" and "readable by a 0.1.0 reader".
+The manifest schema models the capture-kind and still-image media rules defined through 0.3.0
+when `capture_kind` is present. It also accepts existing manifests without that discriminator,
+including early 0.3.0 RC packs; compatibility does not make a null replay unambiguous. The
+annotation and timeline schemas validate the fields and discriminator values they explicitly
+define. All three deliberately allow unknown properties — forward compatibility
+([§13](#13-versioning-and-compatibility)) requires readers to accept additive data they do not
+know. A pack using a newer annotation or event *type* can therefore fail the corresponding schema
+while still being readable under the defensive-reading rules.
+
+JSON Schema cannot verify archive inventory, image dimensions, declared-file existence, ordering
+across arrays, or every cross-file relationship. Those requirements remain normative in the prose
+and in a full-pack validator.
 
 Where the prose of this specification and the schemas disagree, the prose wins.

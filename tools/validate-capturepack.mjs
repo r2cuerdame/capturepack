@@ -2,7 +2,7 @@
 /**
  * validate-capturepack.mjs — dependency-free CapturePack validator.
  *
- * Validates a pack against SPEC.md (format 0.1.0). Accepts either form of a
+ * Validates a pack against SPEC.md (through format 0.3.0). Accepts either form of a
  * pack (SPEC §3): an extracted directory, or a `.capturepack` / `.zip` file.
  * ZIP reading is implemented here directly (end-of-central-directory + central
  * directory + node:zlib inflateRawSync) — no npm dependencies, Node 18+ only.
@@ -15,7 +15,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { inflateRawSync } from "node:zlib";
 
-const SPEC_VERSION = "0.2.0";
+const SPEC_VERSION = "0.3.0";
 
 // ---------------------------------------------------------------------------
 // Result collection
@@ -66,6 +66,47 @@ const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 
 function isIsoWithTz(s) {
   return isStr(s) && ISO_TZ_RE.test(s) && !Number.isNaN(Date.parse(s));
+}
+
+function formatAtLeast(version, wantedMajor, wantedMinor) {
+  if (!isStr(version) || !SEMVER_RE.test(version)) return false;
+  const [major, minor] = version.split(".").map(Number);
+  return major > wantedMajor || (major === wantedMajor && minor >= wantedMinor);
+}
+
+function cropBoundsValid(value) {
+  return isObj(value)
+    && isNum(value.x)
+    && isNum(value.y)
+    && isNum(value.width)
+    && value.width > 0
+    && isNum(value.height)
+    && value.height > 0
+    && value.coordinate_space === "virtual-desktop-dip";
+}
+
+function sourceMediaKind(name, bytes) {
+  if (/\.(png|jpe?g|webp|bmp|gif|tiff?|avif)$/i.test(name)) return "raster";
+  if (/\.(webm|mkv|mp4|mov|avi)$/i.test(name)) return "video";
+  if (!bytes || bytes.length < 2) return null;
+  if (bytes.length >= 8
+      && bytes.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex"))) return "raster";
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "raster";
+  if (bytes.length >= 6 && (bytes.subarray(0, 6).toString("ascii") === "GIF87a"
+      || bytes.subarray(0, 6).toString("ascii") === "GIF89a")) return "raster";
+  if (bytes.length >= 12 && bytes.subarray(0, 4).toString("ascii") === "RIFF"
+      && bytes.subarray(8, 12).toString("ascii") === "WEBP") return "raster";
+  if (bytes.subarray(0, 2).toString("ascii") === "BM") return "raster";
+  if (bytes.length >= 4) {
+    const four = bytes.subarray(0, 4).toString("hex");
+    if (four === "49492a00" || four === "4d4d002a") return "raster";
+    if (four === "1a45dfa3") return "video";
+  }
+  if (bytes.length >= 12 && bytes.subarray(4, 8).toString("ascii") === "ftyp") {
+    const brand = bytes.subarray(8, 12).toString("ascii");
+    return brand === "avif" || brand === "avis" ? "raster" : "video";
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -243,6 +284,19 @@ function validateManifest(m, pack, snapshotDims) {
     fail(`manifest.json: format_version ${JSON.stringify(m.format_version)} is not valid semver (SPEC §5.1)`);
   }
 
+  let captureKind = null;
+  if (m.capture_kind === undefined) {
+    note(`manifest.json: capture_kind is absent — legal legacy evidence; a null replay does not prove whether the user requested an image or video (SPEC §5.1)`);
+  } else if (m.capture_kind === "image" || m.capture_kind === "video") {
+    captureKind = m.capture_kind;
+    pass(`manifest.json: capture_kind is "${captureKind}"`);
+    if (!formatAtLeast(m.format_version, 0, 3)) {
+      fail(`manifest.json: capture_kind is a 0.3.0 field but format_version is ${JSON.stringify(m.format_version)} (SPEC §5.1, §13.1)`);
+    }
+  } else {
+    fail(`manifest.json: capture_kind ${JSON.stringify(m.capture_kind)} MUST be "image" or "video" when present (SPEC §5.1)`);
+  }
+
   // id
   if (isStr(m.id) && UUID_RE.test(m.id)) {
     pass(`manifest.json: id is an RFC 4122 UUID`);
@@ -371,6 +425,34 @@ function validateManifest(m, pack, snapshotDims) {
       }
     }
 
+    if (captureKind === "video") {
+      if (media.image_scope !== undefined || media.crop_bounds !== undefined) {
+        fail(`manifest.json: a video capture MUST NOT declare media.image_scope or media.crop_bounds (SPEC §5.3)`);
+      }
+    } else if (captureKind === "image") {
+      if (media.replay !== null) {
+        fail(`manifest.json: an image capture MUST declare media.replay as null (SPEC §5.3)`);
+      }
+      if ((media.replay_duration_ms !== undefined && media.replay_duration_ms !== null)
+          || media.replay_annotated !== undefined
+          || media.snapshot_t_ms !== undefined
+          || media.trim_offset_ms !== undefined) {
+        fail(`manifest.json: an image capture MUST NOT carry replay-only metadata (SPEC §5.3)`);
+      }
+      if (media.displays !== undefined) {
+        fail(`manifest.json: an image capture has one explicit source snapshot and MUST NOT declare media.displays (SPEC §5.3)`);
+      }
+      if (media.image_scope !== "region" && media.image_scope !== "fullscreen") {
+        fail(`manifest.json: an image capture MUST declare media.image_scope as "region" or "fullscreen" (SPEC §5.3)`);
+      } else if (media.image_scope === "region" && !cropBoundsValid(media.crop_bounds)) {
+        fail(`manifest.json: a region image requires valid virtual-desktop media.crop_bounds (SPEC §5.3)`);
+      } else if (media.image_scope === "fullscreen" && media.crop_bounds !== undefined) {
+        fail(`manifest.json: a fullscreen image MUST NOT declare media.crop_bounds (SPEC §5.3)`);
+      } else {
+        pass(`manifest.json: image scope/provenance is explicit and valid`);
+      }
+    }
+
     // media.displays[] — multi-monitor capture (SPEC §5.6)
     if (media.displays !== undefined && media.displays !== null) {
       validateDisplays(media, env, pack, displayFiles, keyframeFiles, displayInfo);
@@ -378,7 +460,15 @@ function validateManifest(m, pack, snapshotDims) {
 
     // media.keyframes[] — annotated stills (SPEC §5.7)
     if (media.keyframes !== undefined && media.keyframes !== null) {
-      validateKeyframes(media.keyframes, pack, keyframeFiles, replay, replayDurationMs, snapshotDims);
+      validateKeyframes(
+        media.keyframes,
+        pack,
+        keyframeFiles,
+        replay,
+        replayDurationMs,
+        snapshotDims,
+        { requireSnapshotSize: captureKind === "image" },
+      );
     }
   }
 
@@ -463,6 +553,7 @@ function validateManifest(m, pack, snapshotDims) {
     displayFiles,
     keyframeFiles,
     displayInfo,
+    imageCapture: captureKind === "image",
   };
 }
 
@@ -479,12 +570,14 @@ function validateManifest(m, pack, snapshotDims) {
  */
 function validateChromeDom(pack, replayDurationMs) {
   const name = "plugins/chrome-dom/elements.json";
-  const file = readJson(pack, name);
-  if (file === null) {
+  const buf = pack.files.get(name);
+  if (!buf) {
     fail(`${name}: missing — the chrome-dom payload REQUIRES it (SPEC §11.4)`);
     return;
   }
-  const v = file.value;
+  const parsed = parseJsonFile(name, buf);
+  if (parsed.error) return;
+  const v = parsed.value;
   if (!isObj(v) || !Array.isArray(v.events)) {
     fail(`${name}: MUST be an object with an "events" array (SPEC §11.4)`);
     return;
@@ -748,8 +841,15 @@ function validateKeyframes(keyframes, pack, keyframeFiles, replay, replayDuratio
     return;
   }
   if (keyframes.length === 0) {
-    note(`${where} is [] — omit it entirely when there are no annotated stills (${ref})`);
+    if (!replay) {
+      fail(`${where} is [] — without a replay, declared keyframes MUST contain exactly one still at t_ms 0 (${ref}, §7.3)`);
+    } else {
+      note(`${where} is [] — omit it entirely when there are no annotated stills (${ref})`);
+    }
     return;
+  }
+  if (!replay && keyframes.length !== 1) {
+    fail(`${where} has ${keyframes.length} entries — without a replay there MUST be exactly one still at t_ms 0 (${ref}, §7.3)`);
   }
   let ok = true;
   let lastT = null;
@@ -780,7 +880,8 @@ function validateKeyframes(keyframes, pack, keyframeFiles, replay, replayDuratio
         note(`${label}.t_ms ${k.t_ms} lies past the replay end (${replayDurationMs} ms) — a keyframe is a position on ${clock} (${ref})`);
       }
       if (!replay && k.t_ms !== 0) {
-        note(`${label}.t_ms is ${k.t_ms} but there is no replay here — without one there is exactly one still at t_ms 0, drawn from the snapshot (${ref}, §7.3)`);
+        fail(`${label}.t_ms is ${k.t_ms} but there is no replay here — the one declared still MUST be at t_ms 0, drawn from the snapshot (${ref}, §7.3)`);
+        ok = false;
       }
     }
 
@@ -814,7 +915,13 @@ function validateKeyframes(keyframes, pack, keyframeFiles, replay, replayDuratio
       fail(`${short}: "${k.file}" is not a valid PNG (bad signature or IHDR) (${ref}, §7.3)`);
       ok = false;
     } else if (snapshotDims && (dims.width !== snapshotDims.width || dims.height !== snapshotDims.height)) {
-      note(`${short}: "${k.file}" is ${dims.width}x${dims.height} but ${snapshotName} is ${snapshotDims.width}x${snapshotDims.height} — stills SHOULD use that display's annotation coordinate space so box bounds map onto them directly (SPEC §7.3)`);
+      const detail = `${short}: "${k.file}" is ${dims.width}x${dims.height} but ${snapshotName} is ${snapshotDims.width}x${snapshotDims.height}`;
+      if (opts.requireSnapshotSize === true) {
+        fail(`${detail} — an image pack's only derived raster MUST preserve the source snapshot coordinate space (SPEC §5.3, §7.3)`);
+        ok = false;
+      } else {
+        note(`${detail} — stills SHOULD use that display's annotation coordinate space so box bounds map onto them directly (SPEC §7.3)`);
+      }
     }
   });
 
@@ -957,6 +1064,22 @@ function validateDisplays(media, env, pack, displayFiles, keyframeFiles, display
       }
     }
 
+    // This is an observed clock conversion, not a duration estimate. It stays
+    // optional so legacy packs remain readable, but it cannot describe a replay
+    // that does not exist; the focused replay IS the pack clock.
+    if (d.replay_clock_offset_ms !== undefined) {
+      if (d.replay === null) {
+        fail(`${label}.replay_clock_offset_ms MUST be absent when replay is null — there is no display replay clock to align (SPEC §5.6)`);
+        ok = false;
+      } else if (!isInt(d.replay_clock_offset_ms)) {
+        fail(`${label}.replay_clock_offset_ms MUST be an integer number of milliseconds (SPEC §5.6)`);
+        ok = false;
+      } else if (isFocused && d.replay_clock_offset_ms !== 0) {
+        fail(`${label}.replay_clock_offset_ms MUST be 0 on the focused display — it IS the pack clock (SPEC §5.6)`);
+        ok = false;
+      }
+    }
+
     // This display's OWN annotated views (SPEC §5.6, §8.8): its boxes rendered
     // into its own replay and its own stills. Present only on a NON-focused
     // display that carries annotations — the focused display's are the
@@ -975,8 +1098,11 @@ function validateDisplays(media, env, pack, displayFiles, keyframeFiles, display
   if (ok) {
     pass(`manifest.json: media.displays declares ${displays.length} display(s), display ${focusedIndex} focused and matching the top-level media (SPEC §5.6)`);
   }
-  if (nonFocusedReplays > 0 && isInt(media.trim_offset_ms)) {
-    note(`media.displays: the replay was trimmed (trim_offset_ms ${media.trim_offset_ms}) but non-focused per-display replays keep the ORIGINAL recording's clock — add trim_offset_ms to align them with the pack clock (SPEC §5.6)`);
+  if (
+    nonFocusedReplays > 0
+    && displays.some((d) => isObj(d) && isStr(d.replay) && !d.focused && d.replay_clock_offset_ms === undefined)
+  ) {
+    note(`media.displays: one or more non-focused replays omit replay_clock_offset_ms — using the legacy duration-difference alignment fallback (SPEC §5.6)`);
   }
 }
 
@@ -1047,7 +1173,7 @@ function validateDisplayRenders(d, i, label, isFocused, indexOk, pack, displayFi
   return ok;
 }
 
-function validateAnnotations(a, snapshotDims, replay, replayDurationMs, displayInfo) {
+function validateAnnotations(a, snapshotDims, replay, replayDurationMs, displayInfo, pack) {
   const knownIds = new Set();
   if (!isInt(a.reference_width) || a.reference_width < 1 || !isInt(a.reference_height) || a.reference_height < 1) {
     fail(`annotations.json: reference_width/reference_height MUST be positive integers (SPEC §8.1)`);
@@ -1067,6 +1193,20 @@ function validateAnnotations(a, snapshotDims, replay, replayDurationMs, displayI
   const numberedBoxes = []; // { id, startMs, z, index } for display-number computation
   const targetedBoxes = []; // annotation ids carrying a source:"uia" target (SPEC §8.7)
   const displayBoxes = new Map(); // display index -> how many boxes name it (SPEC §8.8)
+  const frameForDisplay = (display) => {
+    if (isInt(display) && displayInfo.snapshots.has(display)) {
+      const file = displayInfo.snapshots.get(display);
+      const snapshot = pack.files.get(file);
+      const dims = snapshot ? pngDimensions(snapshot) : null;
+      if (dims) return { frame: dims, frameName: file };
+    } else if (display === undefined && isInt(a.reference_width) && isInt(a.reference_height)) {
+      return {
+        frame: { width: a.reference_width, height: a.reference_height },
+        frameName: `the ${a.reference_width}x${a.reference_height} reference space`,
+      };
+    }
+    return { frame: null, frameName: "the coordinate space" };
+  };
   a.annotations.forEach((ann, i) => {
     const label = `annotations.json: annotations[${i}]`;
     if (!isObj(ann)) { fail(`${label} MUST be an object`); bad++; return; }
@@ -1109,16 +1249,7 @@ function validateAnnotations(a, snapshotDims, replay, replayDurationMs, displayI
       boundsOk = true;
       // The frame this box DECLARES: its own display's snapshot when it names
       // one, the reference space otherwise (SPEC §8.2, §8.8).
-      let frame = null;
-      let frameName = "the coordinate space";
-      if (isInt(ann.display) && displayInfo.snapshots.has(ann.display)) {
-        const file = displayInfo.snapshots.get(ann.display);
-        const dims = pngDimensions(readBinary(file));
-        if (dims) { frame = dims; frameName = file; }
-      } else if (ann.display === undefined && isInt(a.reference_width) && isInt(a.reference_height)) {
-        frame = { width: a.reference_width, height: a.reference_height };
-        frameName = `the ${a.reference_width}x${a.reference_height} reference space`;
-      }
+      const { frame, frameName } = frameForDisplay(ann.display);
       // A box's coordinates ARE that snapshot's pixels. An origin outside it, or
       // an edge past it, is not a position in the space the annotation declares:
       // report.md and the MCP tools print these numbers as facts, and "box at
@@ -1257,6 +1388,106 @@ function validateAnnotations(a, snapshotDims, replay, replayDurationMs, displayI
         }
       } else if (false) {
         note(`${label}.tracking.enabled is true — tracking is reserved in format 0.1.0 (MUST be false); readers treat the box as untracked (SPEC §8.3)`);
+      }
+    }
+
+    // keyframes — authored motion, not observed tracking (SPEC §8.9).
+    // Each entry can cross to another captured display. Its rectangle must be
+    // checked against THAT display's snapshot, never against the annotation's
+    // original screen merely because bounds lives there.
+    if (ann.keyframes !== undefined) {
+      if (!Array.isArray(ann.keyframes)) {
+        fail(`${label}.keyframes MUST be an array when present (SPEC §8.9)`);
+        bad++;
+      } else {
+        let keyframeBad = 0;
+        if (ann.keyframes.length < 2) {
+          fail(`${label}.keyframes has ${ann.keyframes.length} entry — fewer than two authored positions is not motion and MUST be stored only in bounds (SPEC §8.9)`);
+          bad++;
+          keyframeBad++;
+        }
+        let previous = -Infinity;
+        ann.keyframes.forEach((keyframe, keyframeIndex) => {
+          const keyframeLabel = `${label}.keyframes[${keyframeIndex}]`;
+          if (!isObj(keyframe)) {
+            fail(`${keyframeLabel} MUST be an object (SPEC §8.9)`);
+            bad++;
+            keyframeBad++;
+            return;
+          }
+
+          if (!isNum(keyframe.t_ms) || keyframe.t_ms < 0) {
+            fail(`${keyframeLabel}.t_ms MUST be a non-negative finite number on the replay clock (SPEC §8.9)`);
+            bad++;
+            keyframeBad++;
+          } else {
+            if (keyframe.t_ms < previous) {
+              fail(`${keyframeLabel}.t_ms ${keyframe.t_ms} is earlier than the previous keyframe — entries MUST be ascending (SPEC §8.9)`);
+              bad++;
+              keyframeBad++;
+            }
+            if (replayDurationMs !== null && keyframe.t_ms > replayDurationMs) {
+              fail(`${keyframeLabel}.t_ms ${keyframe.t_ms} lies after the replay at ${replayDurationMs} ms (SPEC §8.9)`);
+              bad++;
+              keyframeBad++;
+            }
+            previous = keyframe.t_ms;
+          }
+
+          let displayOk = true;
+          if (keyframe.display !== undefined) {
+            if (!isInt(keyframe.display) || keyframe.display < 1) {
+              fail(`${keyframeLabel}.display ${JSON.stringify(keyframe.display)} MUST be an integer >= 1 naming a captured display (SPEC §8.9, §8.8)`);
+              bad++;
+              keyframeBad++;
+              displayOk = false;
+            } else if (!displayInfo.declared) {
+              fail(`${keyframeLabel}.display ${keyframe.display} is set but this pack declares no manifest.media.displays (SPEC §8.9, §8.8)`);
+              bad++;
+              keyframeBad++;
+              displayOk = false;
+            } else if (!displayInfo.indices.has(keyframe.display)) {
+              fail(`${keyframeLabel}.display ${keyframe.display} names no display declared in manifest.media.displays (${[...displayInfo.indices].join(", ") || "none"}) (SPEC §8.9, §8.8)`);
+              bad++;
+              keyframeBad++;
+              displayOk = false;
+            }
+          }
+
+          const rectOk = ["x", "y", "width", "height"].every((key) => isNum(keyframe[key]))
+            && keyframe.width > 0
+            && keyframe.height > 0;
+          if (!rectOk) {
+            fail(`${keyframeLabel} MUST carry finite x/y/width/height with width and height > 0 (SPEC §8.9)`);
+            bad++;
+            keyframeBad++;
+          } else if (displayOk) {
+            const effectiveDisplay = keyframe.display ?? ann.display;
+            const { frame, frameName } = frameForDisplay(effectiveDisplay);
+            if (frame) {
+              const over = [];
+              if (keyframe.x < 0) over.push(`x ${keyframe.x} < 0`);
+              if (keyframe.y < 0) over.push(`y ${keyframe.y} < 0`);
+              if (keyframe.x + keyframe.width > frame.width) {
+                over.push(`right edge ${keyframe.x + keyframe.width} > ${frame.width}`);
+              }
+              if (keyframe.y + keyframe.height > frame.height) {
+                over.push(`bottom edge ${keyframe.y + keyframe.height} > ${frame.height}`);
+              }
+              if (over.length > 0) {
+                fail(`${keyframeLabel} leaves ${frameName} (${over.join(", ")}) — authored coordinates are pixels in that keyframe's own display snapshot (SPEC §8.9, §8.2)`);
+                bad++;
+                keyframeBad++;
+              }
+            }
+          }
+        });
+        if (keyframeBad === 0) {
+          pass(`${label}.keyframes: ${ann.keyframes.length} authored position(s), ascending and within each keyframe's own display snapshot (SPEC §8.9)`);
+        }
+        if (ann.tracking?.enabled === true && Array.isArray(ann.tracking.samples)) {
+          note(`${label} carries both tracking.samples and keyframes — readers MUST prefer observed tracking; writers SHOULD NOT combine them (SPEC §8.9)`);
+        }
       }
     }
 
@@ -1458,6 +1689,7 @@ function validatePack(pack) {
     displayFiles,
     keyframeFiles,
     displayInfo,
+    imageCapture,
   } = validateManifest(manifest, pack, snapshotDims);
 
   // --- optional JSON files ---
@@ -1465,7 +1697,16 @@ function validatePack(pack) {
   const annBuf = pack.files.get("annotations.json");
   if (annBuf) {
     const parsed = parseJsonFile("annotations.json", annBuf);
-    if (!parsed.error && isObj(parsed.value)) annotationIds = validateAnnotations(parsed.value, snapshotDims, replay, replayDurationMs, displayInfo);
+    if (!parsed.error && isObj(parsed.value)) {
+      annotationIds = validateAnnotations(
+        parsed.value,
+        snapshotDims,
+        replay,
+        replayDurationMs,
+        displayInfo,
+        pack,
+      );
+    }
     else if (!parsed.error) fail(`annotations.json: MUST be a JSON object (SPEC §8.1)`);
   } else {
     note(`annotations.json: absent (OPTIONAL — a pack without annotations is valid)`);
@@ -1473,11 +1714,16 @@ function validatePack(pack) {
 
   const tlBuf = pack.files.get("timeline.json");
   if (tlBuf) {
-    const parsed = parseJsonFile("timeline.json", tlBuf);
-    if (!parsed.error && isObj(parsed.value)) validateTimeline(parsed.value, declaredPlugins, annotationIds);
-    else if (!parsed.error) fail(`timeline.json: MUST be a JSON object (SPEC §10.1)`);
+    if (imageCapture) {
+      fail(`timeline.json: MUST be absent from an explicit still-image pack; it has no video event clock (SPEC §5.3, §10)`);
+    } else {
+      const parsed = parseJsonFile("timeline.json", tlBuf);
+      if (!parsed.error && isObj(parsed.value)) validateTimeline(parsed.value, declaredPlugins, annotationIds);
+      else if (!parsed.error) fail(`timeline.json: MUST be a JSON object (SPEC §10.1)`);
+    }
   } else {
-    note(`timeline.json: absent (OPTIONAL — a pack without a timeline is valid)`);
+    if (imageCapture) pass(`timeline.json: absent as required for an explicit still-image pack`);
+    else note(`timeline.json: absent (OPTIONAL — a video pack without recorded events is valid)`);
   }
 
   // --- generated views (SPEC §12): recommended, never required ---
@@ -1490,9 +1736,15 @@ function validatePack(pack) {
   const skillsFiles = [...pack.files.keys()].filter((f) => f.startsWith("skills/"));
   if (skillsFiles.length > 0) {
     pass(`skills/: present with ${skillsFiles.length} document(s) (RECOMMENDED; AI-first context, readable without MCP — SPEC §12.3)`);
-    const missing = SKILLS_DOCS.filter((d) => !pack.files.has(`skills/${d}`));
+    const expectedSkills = imageCapture
+      ? SKILLS_DOCS.filter((d) => d !== "timeline.md")
+      : SKILLS_DOCS;
+    const missing = expectedSkills.filter((d) => !pack.files.has(`skills/${d}`));
     if (missing.length > 0) {
       note(`skills/: missing recommended document(s): ${missing.join(", ")} (the well-known set is RECOMMENDED, not required — SPEC §12.3)`);
+    }
+    if (imageCapture && pack.files.has("skills/timeline.md")) {
+      fail(`skills/timeline.md: MUST be absent from an explicit still-image pack (SPEC §12.3)`);
     }
   } else {
     note(`skills/: absent (OPTIONAL, but RECOMMENDED — AI-first context documents — SPEC §12.3)`);
@@ -1531,6 +1783,16 @@ function validatePack(pack) {
       continue;
     }
     note(`${name}: unknown file — ignored (readers MUST ignore unknown files, SPEC §13.1)`);
+  }
+
+  if (imageCapture) {
+    const allowedRasters = new Set(["snapshot.png", ...keyframeFiles]);
+    for (const [name, bytes] of pack.files) {
+      const kind = sourceMediaKind(name, bytes);
+      if (kind === null) continue;
+      if (kind === "raster" && allowedRasters.has(name)) continue;
+      fail(`${name}: explicit image packs may contain only snapshot.png and declared same-size annotated stills; hidden raster/video source media are forbidden (SPEC §5.3, §6, §9.1)`);
+    }
   }
 }
 

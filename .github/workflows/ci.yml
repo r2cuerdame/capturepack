@@ -21,26 +21,21 @@ jobs:
         working-directory: core
         run: npm ci
 
-      - name: Typecheck
+      # One runner owns the release-candidate floor. It discovers every
+      # package.json check:* script, then typechecks and builds sequentially,
+      # while preserving a complete failure/duration summary for diagnosis.
+      - name: Release-candidate QA gate
         working-directory: core
-        run: npm run typecheck
+        run: npm run qa:rc -- --artifacts "${{ runner.temp }}\capturepack-qa"
 
-      - name: Build
-        working-directory: core
-        run: npm run build
-
-      # Object picking follows time (#66), and it still picks as well as it did
-      # (#58). Both are measured against checked-in evidence — four real packs,
-      # geometry and identity only — and the second is compared probe for probe
-      # against the PREVIOUS release's index, taken from git.
-      - name: Temporal picking + #58 regression
-        working-directory: core
-        run: node test/temporal/check.mjs
-
-      - name: Smoke test (electron --smoke)
-        working-directory: core
-        timeout-minutes: 3
-        run: npx electron . --smoke
+      - name: Upload QA reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: capturepack-qa-${{ github.run_id }}
+          path: ${{ runner.temp }}\capturepack-qa
+          if-no-files-found: error
+          retention-days: 14
 
   spec-validate:
     runs-on: ubuntu-latest

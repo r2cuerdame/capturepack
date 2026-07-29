@@ -11,12 +11,19 @@
 // failure this project keeps removing.
 //
 // Run: npm run check:motion
-import { annotationAt, trackedBoundsAt } from '../src/shared/track'
+import {
+  annotationAt,
+  keyframedPlacementAt,
+  renderedAnnotationAt,
+  trackedBoundsAt,
+  type AuthoredMotionSpace,
+} from '../src/shared/track'
 import {
   hasMotion,
   keyframeIndexAt,
   keyframesOf,
   moveKeyframe,
+  rebaseAnnotationClock,
   removeKeyframeAt,
   setKeyframe,
   syncBoundsToRepresentative,
@@ -192,6 +199,98 @@ console.log('\nROUND TRIP THROUGH THE PACK')
   const reloaded = JSON.parse(JSON.stringify(a)) as Annotation
   check('keyframes survive save and re-open', keyframesOf(reloaded).length, 2)
   check('and draw identically', at(reloaded, 10_300), at(a, 10_300))
+}
+
+// The exact desk behind CapturePack_2026-07-29_223519: a 1x portrait display
+// at the left of a 1.5x 4K display. Board/display bounds are DIPs; annotation
+// rectangles are each display's native snapshot pixels.
+const MIXED_DPI_BOARD: AuthoredMotionSpace = {
+  focusedIndex: 2,
+  displays: [
+    {
+      index: 1,
+      width: 1200,
+      height: 1920,
+      bounds: { x: 0, y: 0, width: 1200, height: 1920 },
+    },
+    {
+      index: 2,
+      width: 3840,
+      height: 2160,
+      bounds: { x: 1200, y: 0, width: 2560, height: 1440 },
+    },
+  ],
+}
+
+console.log('\nONE MANUAL BOX MOVES FROM THE 1X DISPLAY TO THE 1.5X DISPLAY')
+{
+  const a = { ...manualBox(), display: 1 }
+  const first = setKeyframe(a, 10_000, a.bounds, 1)
+  check('moving at its own start remains an ordinary placement', first, -1)
+  const second = setKeyframe(
+    a,
+    10_600,
+    { x: 300, y: 300, width: 450, height: 225 },
+    2,
+  )
+  check('a later placement creates the cross-display keyframe', second, 1)
+  check('the source keyframe remembers display 1', keyframesOf(a)[0]?.display, 1)
+  check('the destination keyframe remembers display 2', keyframesOf(a)[1]?.display, 2)
+  check('the path begins on display 1', keyframedPlacementAt(a, 10_000, MIXED_DPI_BOARD), {
+    display: 1,
+    bounds: { x: 100, y: 200, width: 300, height: 150 },
+  })
+  check('the path ends on display 2', keyframedPlacementAt(a, 10_600, MIXED_DPI_BOARD), {
+    display: 2,
+    bounds: { x: 300, y: 300, width: 450, height: 225 },
+  })
+  const middle = keyframedPlacementAt(a, 10_300, MIXED_DPI_BOARD)
+  check('the midpoint is interpolated in one desktop space', middle, {
+    display: 1,
+    bounds: { x: 750, y: 200, width: 300, height: 150 },
+  })
+  const reopened = JSON.parse(JSON.stringify(a)) as Annotation
+  check(
+    'cross-display interpolation survives save and re-open',
+    keyframedPlacementAt(reopened, 10_300, MIXED_DPI_BOARD),
+    middle,
+  )
+}
+
+console.log('\nAUTHORED KEYFRAMES SCALE WITH A DOWNSAMPLED ANNOTATED VIDEO')
+{
+  const a = manualBox()
+  dragTo(a, 10_600, 900, 200)
+  check(
+    'a 0.5x render scales the interpolated keyframe, not only stored bounds',
+    renderedAnnotationAt(a, 10_300, 0.5, 0.5).bounds,
+    { x: 250, y: 100, width: 150, height: 75 },
+  )
+}
+
+console.log('\nONE DISPLAY REPLAY CLOCK SHIFTS THE WHOLE ANNOTATION')
+{
+  const a = pickedBox()
+  a.keyframes = [
+    { t_ms: 10_000, x: 100, y: 200, width: 300, height: 150 },
+    { t_ms: 10_600, x: 900, y: 200, width: 300, height: 150 },
+  ]
+  a.tracking.picked_at_ms = 10_500
+  const shifted = rebaseAnnotationClock(a, -10_200, 1_000)
+  check('lifetime shifts and clamps', [shifted.start_ms, shifted.end_ms], [0, 800])
+  check(
+    'authored placements use the same local clock',
+    shifted.keyframes?.map((frame) => frame.t_ms),
+    [0, 400],
+  )
+  check(
+    'observed samples and picked instant use the same local clock',
+    {
+      picked: shifted.tracking.picked_at_ms,
+      samples: shifted.tracking.samples?.map((sample) => sample.t_ms),
+    },
+    { picked: 300, samples: [0, 300] },
+  )
 }
 
 console.log(failed === 0 ? '\nbox-motion-check ok' : `\nbox-motion-check FAILED (${failed})`)

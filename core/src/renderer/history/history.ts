@@ -19,12 +19,12 @@ interface HistoryBridge {
   thumb(packPath: string): Promise<string | null>
   size(packPath: string): Promise<number | null>
   searchText(packPath: string): Promise<string>
-  openPack(packPath: string): void
+  openPack(packPath: string): Promise<HistoryActionResult>
   play(packPath: string): Promise<HistoryActionResult>
   createZip(packPath: string): Promise<ToastCreateZipResult>
   openFolder(packPath: string): void
   copyPath(packPath: string): void
-  copyPrompt(packPath: string): void
+  copyPrompt(packPath: string): Promise<boolean>
   rerender(packPath: string): Promise<HistoryActionResult>
   rename(packPath: string, newName: string): Promise<HistoryRenameResult>
   remove(packPath: string): Promise<HistoryActionResult>
@@ -43,7 +43,7 @@ const bridge = window.historyBridge
 
 const SEARCH_DEBOUNCE_MS = 150
 
-type FilterId = 'all' | 'today' | 'week' | 'blur' | 'renderfailed' | 'notpackaged'
+type FilterId = 'all' | 'today' | 'week' | 'renderfailed'
 
 function el<T extends HTMLElement>(id: string): T {
   const node = document.getElementById(id)
@@ -242,13 +242,9 @@ function matchesFilter(p: HistoryPackSummary): boolean {
       return isToday(p.capturedAt)
     case 'week':
       return isThisWeek(p.capturedAt)
-    case 'blur':
-      return p.hasBlur
     case 'renderfailed':
       // Render Failed = replay present, annotated missing (contract)
       return p.annotated === 'missing'
-    case 'notpackaged':
-      return !p.zipTwin
   }
 }
 
@@ -392,6 +388,11 @@ function buildCard(p: HistoryPackSummary): HTMLElement {
     warn.title = p.warning
     badges.append(warn)
   }
+  if (p.captureKind === 'image') {
+    badges.append(elc('span', 'badge media image', t('history.badgeImage')))
+  } else if (p.captureKind === 'video') {
+    badges.append(elc('span', 'badge media video', t('history.badgeVideo')))
+  }
   if (p.hasBlur) badges.append(elc('span', 'badge blur', t('history.badgeBlur')))
   if (p.annotated === 'ready') badges.append(elc('span', 'badge ready', t('history.badgeAnnotated')))
   else if (p.annotated === 'missing') {
@@ -440,7 +441,25 @@ function buildActions(p: HistoryPackSummary): HTMLElement {
   editBtn.type = 'button'
   editBtn.disabled = p.kind !== 'dir'
   editBtn.title = p.kind === 'dir' ? t('history.editTooltip') : t('history.editZipTooltip')
-  editBtn.addEventListener('click', () => bridge.openPack(p.path))
+  editBtn.addEventListener('click', () => {
+    editBtn.disabled = true
+    void bridge
+      .openPack(p.path)
+      .then((result) => {
+        if (result.ok) {
+          // Do not leave History obscuring the editor it just opened. The next
+          // tray/shortcut request recreates this single-instance window.
+          window.close()
+          return
+        }
+        editBtn.disabled = false
+        showCardError(p.path, result.error ?? t('history.couldNotEdit'))
+      })
+      .catch((err: unknown) => {
+        editBtn.disabled = false
+        showCardError(p.path, err instanceof Error ? err.message : t('history.couldNotEdit'))
+      })
+  })
   row.append(editBtn)
 
   // Enabled for zip packs too: main reveals the .capturepack in Explorer
@@ -527,7 +546,7 @@ function buildMenu(p: HistoryPackSummary): HTMLElement {
     render()
   })
   item(t('toast.copyPrompt'), {}, () => {
-    bridge.copyPrompt(p.path)
+    void bridge.copyPrompt(p.path).catch(() => {})
     render()
   })
   menu.append(elc('div', 'menuSep'))

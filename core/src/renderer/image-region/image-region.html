@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:"
+  />
+  <meta name="color-scheme" content="dark" />
+  <title>CapturePack</title>
+  <link rel="stylesheet" href="./image-region.css" />
+</head>
+<body>
+  <!-- Four masks leave the current selection genuinely clear. A single dark
+       full-screen layer plus a translucent rectangle only LOOKS like a hole
+       while still tinting the pixels the user is trying to inspect. -->
+  <div id="shadeTop" class="shade shade-initial" aria-hidden="true"></div>
+  <div id="shadeLeft" class="shade" aria-hidden="true"></div>
+  <div id="shadeRight" class="shade" aria-hidden="true"></div>
+  <div id="shadeBottom" class="shade" aria-hidden="true"></div>
+
+  <div id="selection" aria-hidden="true" hidden>
+    <output id="size"></output>
+  </div>
+
+  <div
+    id="toolbar"
+    role="toolbar"
+    aria-label="Image capture"
+    data-i18n-aria-label="imageRegion.ariaLabel"
+    hidden
+  >
+    <span class="brand">CapturePack</span>
+    <span class="instruction" data-i18n="imageRegion.instruction">Drag to select a region</span>
+    <button id="fullscreenBtn" type="button" data-i18n="imageRegion.fullscreen">
+      Capture full screen
+    </button>
+    <span class="escape" data-i18n="imageRegion.escape">Esc cancel</span>
+  </div>
+
+  <script src="./image-region.js"></script>
+</body>
+</html>

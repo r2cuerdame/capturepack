@@ -8,27 +8,31 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 
 Nothing yet.
 
-## 0.3.0 — 2026-07-29
+## 0.3.0 — 2026-07-30
 
-Pack format **0.2.0** (unchanged). This release is about one promise: **a box is
-where the thing is**, at every frame, and everything the app claims about that
-is measured rather than asserted.
+Pack format **0.3.0**. This release is about one promise: **a box is where the
+thing is**, at every frame — including a past frame, a reopened pack, and a
+different monitor — and everything the app claims about that is measured rather
+than asserted.
 
 ### Added
 
 - **The OS says when a window moved.** The context host subscribes to
   `EVENT_OBJECT_LOCATIONCHANGE` instead of guessing when to look, so a dragged
-  window is observed roughly every 10 ms — 100 observations a second, against
-  the 4 ms cadence Windows itself publishes. Polling remains the fallback where
-  a hook cannot be installed, and the log says which regime a session ran under.
+  window is observed roughly every 10 ms — 100 observations a second. On the
+  measured 52-second drag trace documented in `GOAL.md`, `GetWindowRect` changed
+  every 4 ms at the median. Polling remains the fallback where a hook cannot be
+  installed, and the log says which regime a session ran under.
 - **Only what moved goes on the wire.** A move-driven sample now carries just the
   windows whose geometry, z or flags changed, with vanished handles named and a
-  delta marker; scheduled samples stay full and resync the shared picture. The
-  host went from 13.5% of a core to 1.11%, which is why the observation rate
-  survives a whole capture instead of being throttled halfway through.
+  delta marker; scheduled samples stay full and resync the shared picture. In
+  the checked-in benchmark described in `GOAL.md`, host cost fell from 13.5% of
+  one core to 1.11%, which is why the observation rate survives a whole capture
+  instead of being throttled halfway through.
 - **Controls are tracked, not frozen.** A second resident lane holds UI
-  Automation element references and re-reads their rectangles — 30x cheaper than
-  re-walking a window's tree — so a control that scrolls inside a window that
+  Automation element references and re-reads their rectangles. The foreground
+  400-control benchmark in `GOAL.md` measured that path at 30.2x less work than
+  re-walking the window's tree, so a control that scrolls inside a window that
   never moved is still in the right place. Dead references remove their control
   rather than freezing it, and a provider that hangs is timed out and blocked
   rather than allowed to define the app's latency.
@@ -38,14 +42,34 @@ is measured rather than asserted.
   rectangle, deriving display scale, device pixel ratio and zoom as one measured
   number. A pick it cannot place confidently is refused rather than placed
   plausibly and wrongly.
+- **Past frames keep their object context.** The Windows surface/control timeline
+  is frozen with the replay and restored from the pack, so Object Pick can resolve
+  the window or child control that occupied an early frame instead of consulting
+  only the live desktop or the final frame.
+- **Still-image capture uses the same context editor.** `Ctrl+Alt+S` opens region
+  selection by default, with an explicit full-screen action. Image packs contain
+  no replay; a region pack stores only the selected pixels and crop placement,
+  never a hidden full-screen or second-monitor raster.
+- **Manual boxes have authored keyframes.** Their geometry interpolates between
+  the positions the user placed, in virtual-desktop space, including movement
+  from one monitor to another. Observed UI-object tracks remain observations and
+  are never interpolated.
+- **Every recorded display can declare its measured replay-clock offset.** Saved,
+  cut, reopened, and rendered multi-monitor packs therefore resolve the same pack
+  time to the same frame on each display; older packs keep the duration-based
+  fallback.
 - **Live recording is a switch.** Settings → Capture and the tray menu both carry
   it. Off records nothing at all, and the hotkey answers with a notification
   instead of silence.
 - **Delete everything**, alongside the 1 / 7 / 30-day options in Settings →
   Capture, with the same counted confirmation and the same Recycle Bin.
-- **Replay length 1–60 s and capture 1–60 fps.**
+- **Replay length 1–60 s and capture 1–30 fps.**
 - **Settings warns when the loaded extension is older than the one this build
   ships**, because nothing updates an unpacked extension when the app updates.
+- **The editor has a first-run guided tour.** It explains rewind, object
+  picking, annotation, and export with keyboard navigation, a persistent
+  “do not show again” choice, and a Settings action that opens it again in all
+  nine supported languages.
 
 ### Fixed
 
@@ -77,6 +101,9 @@ is measured rather than asserted.
   starts when the thing it names happens; the duration is what changes.
 - **The trim handle stranded the playhead outside the trimmed range**, and the
   chip that describes the trim competed for width with the slider it describes.
+- **Moving either trim boundary moved editor state that did not belong to it.**
+  The playhead and selected box now stay where they are; only the retained range
+  changes, with the playhead clamped only when it would otherwise be outside it.
 - **The box header flipped below the box** when there was no room above, taking
   that box's own controls a window away from the corner the eye is on. It sits
   inside the box's top-left instead.
@@ -84,6 +111,23 @@ is measured rather than asserted.
   selected box swallowed the click.
 - **A window on two monitors gave two rectangles for one instant**, and array
   order decided which screen's coordinates a tracked box was drawn in.
+- **Editor popovers could cover each other or fall behind a box header.** Opening
+  one now closes the other, both clamp inside the stage, and the unsaved-changes
+  decision is a centered modal that stays legible on a dark desktop.
+- **Changing one capture shortcut could unregister the other.** Video and image
+  hotkeys now have independent registration and rollback.
+- **History could appear to ignore Edit.** Pack I/O is detached from the click
+  handler, replay bytes are resolved from the manifest, and the editor is shown
+  only after its captured context is ready.
+- **Launching the installed app could appear to do nothing.** A manual second
+  launch now opens Information (or the explicitly requested window), waits
+  until that window's IPC is ready during startup, and recovers cleanly if its
+  HTML fails to load instead of keeping an invisible dead window.
+- **An update could report that CapturePack could not be closed, then leave the
+  app or Chrome integration disabled.** Installer stand-down now begins only
+  after the single-installer mutex, covers the real close and old-uninstaller
+  gates, snapshots per-user native-host/login state, and restores it on cancel,
+  update, extraction failure, or a locked-file failure.
 
 ### Changed
 
@@ -91,6 +135,34 @@ is measured rather than asserted.
   shipped for one release candidate and was removed: at the sample spacing this
   app records, it measured *worse* than showing the nearest observation, and a
   rectangle nobody measured is a claim the pack cannot back.
+- **Diagnostics moved out of the capture menu.** “Open logs folder” now lives in
+  About / Information, where run and version diagnostics belong.
+- **UI Automation change detection no longer subscribes to the crashing managed
+  structure event.** A rooted out-of-context WinEvent hook marks only affected
+  windows dirty; wrapper release and helper replacement are bounded so repeated
+  capture cycles do not grow without limit.
+- **The normal MP4 replay path now uses one encoder per display and a bounded
+  fragmented-media ring.** Runtimes without legal MP4/AVC support fall back to
+  complete staggered VP8/VP9 WebM sessions instead of silently losing video.
+  Stop deadlines, generation ownership, and queue detachment prevent an old or
+  hung recorder from retaining blobs or stopping its replacement.
+- **A failed focused recorder can no longer leave an orphaned secondary
+  replay.** Because the focused display owns the pack clock and scrubber, an
+  all-displays capture now degrades every display to its frozen frame when that
+  clock master is unavailable, instead of saving an untrimmable secondary ring.
+- **Product documentation now describes the privacy boundary directly.** Live
+  recording is conditional and records nothing when switched off; the optional
+  localhost MCP server can be stopped and reads only packs the user already
+  saved; image packs contain no replay or timeline; and blur protects derived
+  annotated views without redacting the original media inside a full pack.
+
+### Format
+
+`format_version` **0.2.0 → 0.3.0**. New writers declare whether the user asked
+for an image or video with `capture_kind`; image packs declare `image_scope` and
+region crops declare `crop_bounds`. Per-display media may declare
+`replay_clock_offset_ms`, and manually positioned boxes may carry authored
+`keyframes`. Readers still accept legacy packs that omit these additive fields.
 
 ## 0.2.0 — 2026-07-29
 

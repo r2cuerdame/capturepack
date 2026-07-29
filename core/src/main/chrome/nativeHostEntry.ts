@@ -19,9 +19,22 @@
 //
 // This file must therefore never import from 'electron', and lands in
 // dist/scripts/ (asarUnpack) because plain Node cannot read an asar.
+import * as fs from 'node:fs'
+import * as path from 'node:path'
 import { runNativeHostMode } from './nativeHost'
 
-void runNativeHostMode().then(
-  () => process.exit(0),
-  () => process.exit(0),
-)
+const appData = process.env['APPDATA']
+const installerStandingDown =
+  appData !== undefined &&
+  fs.existsSync(path.join(appData, 'CapturePack', 'supervision-standdown'))
+
+if (installerStandingDown) {
+  // Chrome may have cached the registration just before setup removed it.
+  // Never reconnect or keep CapturePack.exe alive while its files are replaced.
+  process.exit(0)
+} else {
+  void runNativeHostMode().then(
+    () => process.exit(0),
+    () => process.exit(0),
+  )
+}

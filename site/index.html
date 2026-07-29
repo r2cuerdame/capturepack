@@ -3,21 +3,21 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>CapturePack — Capture context, not screenshots</title>
-  <meta name="description" content="Free open-source screen capture for bug reports and AI. A 30-second time machine: press Ctrl+Alt+C after the bug, scroll back in time, annotate in 5 seconds, and share a context pack any LLM understands — ChatGPT, Claude, Cursor, Gemini.">
+  <title>CapturePack — Rewind 30 seconds and pick the real UI object</title>
+  <meta name="description" content="Rewind the last 30 seconds, pick the real UI control at that past frame, record its window's movement, and save structured object context for humans and AI. Free, open source, and local-first.">
   <meta name="robots" content="index, follow">
   <meta name="theme-color" content="#fafafc">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="CapturePack">
-  <meta property="og:title" content="CapturePack — Capture context, not screenshots">
-  <meta property="og:description" content="A 30-second time machine for bug reports. Annotate in 5 seconds, share a pack any human or LLM understands. Free, open source, local-first.">
+  <meta property="og:title" content="CapturePack — Rewind 30 seconds and pick the real UI object">
+  <meta property="og:description" content="Find the UI control in a past frame, record its window's movement, and save names, bounds, and captured state as structured context for AI.">
   <meta property="og:url" content="https://capturepack.dev/">
   <meta property="og:image" content="https://capturepack.dev/assets/og.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="CapturePack — Capture context, not screenshots">
-  <meta name="twitter:description" content="A 30-second time machine for bug reports. Annotate in 5 seconds, share a pack any human or LLM understands.">
+  <meta name="twitter:title" content="CapturePack — Rewind 30 seconds and pick the real UI object">
+  <meta name="twitter:description" content="Find the UI control in a past frame, record its window's movement, and save structured object context for AI.">
   <meta name="twitter:image" content="https://capturepack.dev/assets/og.png">
   <link rel="canonical" href="https://capturepack.dev/">
   <link rel="icon" type="image/png" href="assets/icon.png">
@@ -29,7 +29,8 @@
     "name": "CapturePack",
     "operatingSystem": "Windows",
     "applicationCategory": "DeveloperApplication",
-    "description": "Open-source context capture toolkit. Records the last 30 seconds, lets you scrub back in time and annotate in 5 seconds, then exports a context pack any human or LLM understands.",
+    "softwareVersion": "0.3.0",
+    "description": "Open-source context capture toolkit. Rewind the last 30 seconds, pick a real UI control at that past frame, preserve its window movement, and export structured object context for humans and AI.",
     "url": "https://capturepack.dev/",
     "downloadUrl": "https://github.com/r2cuerdame/capturepack/releases/latest",
     "license": "https://opensource.org/licenses/MIT",
@@ -56,8 +57,9 @@
   <main>
     <section class="hero">
       <img class="logo" src="assets/icon.png" alt="" width="56" height="56">
-      <h1 data-i18n="h1">Capture context,<br>not screenshots.</h1>
-      <p class="sub" data-i18n="sub">The fastest way to explain something to humans and AI.</p>
+      <h1 data-i18n="h1">Rewind 30 seconds.<br>Pick the real UI object.</h1>
+      <p class="sub" data-i18n="sub">With Live recording on (the default), CapturePack finds UI controls at a past
+      frame, records observed movement through the replay, and saves names plus captured state as structured data for AI.</p>
 
       <div class="buttons">
         <a class="btn primary" id="download-btn" href="https://github.com/r2cuerdame/capturepack/releases/latest">
@@ -66,8 +68,10 @@
         <a class="btn" href="https://github.com/r2cuerdame/capturepack">GitHub</a>
         <a class="btn" href="https://github.com/sponsors/r2cuerdame" rel="noopener" data-i18n="btn_sponsor">♥ Sponsor</a>
       </div>
+      <p class="output-note" data-i18n="release_note">Unsigned Windows build — SmartScreen may warn. Every release includes SHA256 checksums.</p>
       <p class="badges">
         <span class="badge">Windows</span>
+        <span class="badge">v0.3.0</span>
         <span class="badge" data-i18n="badge_foss">Free &amp; open source</span>
         <span class="badge">MIT</span>
         <span class="badge" data-i18n="badge_local">Local-first · no cloud</span>
@@ -75,35 +79,111 @@
       </p>
     </section>
 
-    <section class="demo">
-      <img src="assets/demo.svg" alt="Demo: press Ctrl+Alt+C, the last 30 seconds freeze, the mouse wheel scrubs through time, drag to select the object, write the annotation, and the CapturePack is saved." loading="lazy">
+    <section class="demo" aria-labelledby="demo-title">
+      <figure>
+        <img src="assets/demo.svg"
+          alt="Animated CapturePack editor: rewind to a past frame, select a child button, inspect its captured identity, follow its owner window, and export structured data."
+          data-i18n-alt="demo_alt" loading="lazy">
+        <figcaption class="output-note">
+          <strong id="demo-title" data-i18n="demo_title">Rewind first, then pick.</strong>
+          <span data-i18n="demo_body">This is Object Pick in the current editor: rewind to a captured frame,
+          hover and click the child control, inspect its captured identity and state, then scrub while
+          its outline follows the observed owner-window movement. The same evidence is exported as
+          structured data for AI.</span>
+        </figcaption>
+      </figure>
     </section>
 
     <section class="features">
       <div class="feature">
-        <h3 data-i18n="f1_title">🕰 It's a time machine</h3>
-        <p data-i18n="f1_body">CapturePack was already recording. Press the hotkey <em>after</em> the bug
-        happens, then scroll the wheel to travel back through the last 30 seconds to
-        the exact frame where it broke.</p>
+        <h3 data-i18n="f1_title">1 · Rewind the last 30 seconds</h3>
+        <p data-i18n="f1_body">With Live recording on (the default), press <em>Ctrl+Alt+C after the bug</em>.
+        CapturePack freezes the rolling replay so you can scrub back to the frame where the interface was actually wrong.
+        Turn recording off and nothing is recorded.</p>
       </div>
       <div class="feature">
-        <h3 data-i18n="f2_title">🤖 Built for LLMs</h3>
-        <p data-i18n="f2_body">Drop a pack into ChatGPT, Claude, Cursor, or Gemini — it explains itself.
-        Or connect over MCP and just say <em>"Analyze the latest CapturePack."</em></p>
+        <h3 data-i18n="f2_title">2 · Pick an object, not pixels</h3>
+        <p data-i18n="f2_body">At the chosen frame, Object Pick highlights captured controls under the cursor.
+        One click records observed bounds, accessible name and control type; the real window is the fallback when child-control data is unavailable.</p>
+      </div>
+      <div class="feature">
+        <h3 data-i18n="f3_title">3 · Track it across windows and monitors</h3>
+        <p data-i18n="f3_body">Owner-window and control geometry is recorded on the replay clock. Every observation
+        names its display, so saved and reopened multi-monitor packs keep the right timing and coordinates even across screens.</p>
+      </div>
+      <div class="feature">
+        <h3 data-i18n="f4_title">4 · Give AI structured evidence</h3>
+        <p data-i18n="f4_body">The pack can carry the target's name, role, AutomationId or selector, picked time,
+        display, and observed bounds. Read the folder directly or use the optional, local-only, read-only MCP server.</p>
       </div>
     </section>
 
-    <section class="output">
-      <pre aria-label="Contents of a saved CapturePack">CapturePack_2026-07-27_143052/
-├─ replay.webm             original
+    <section class="roadmap" aria-labelledby="sources-title">
+      <h2 id="sources-title" data-i18n="sources_title">Object context, with honest fallbacks</h2>
+      <div class="cols">
+        <div>
+          <h3 data-i18n="source_uia_title">Windows UI Automation</h3>
+          <p data-i18n="source_uia_body">Built in. Captures accessible names, semantic control types, AutomationId and observed bounds when an app exposes them.</p>
+        </div>
+        <div>
+          <h3 data-i18n="source_dom_title">Chrome DOM preview</h3>
+          <p data-i18n="source_dom_body">Optional extension. Records selector, role, text and URL for the element you explicitly pick; it does not stream the DOM.</p>
+        </div>
+        <div>
+          <h3 data-i18n="source_hwnd_title">HWND window fallback</h3>
+          <p data-i18n="source_hwnd_body">If no child control is available, CapturePack records the real window and its observed geometry instead of inventing an object.</p>
+        </div>
+      </div>
+    </section>
+
+    <aside class="still-capture" aria-labelledby="still-title">
+      <div>
+        <span class="still-kicker" data-i18n="still_kicker">ONE FRAME, SAME CONTEXT EDITOR</span>
+        <h2 id="still-title" data-i18n="still_title">Need a still? Press Ctrl+Alt+S.</h2>
+      </div>
+      <p data-i18n="still_body">Region selection is the default. The explicit Full screen capture
+      button captures every monitor in one virtual-desktop image. The image opens
+      at native 100% in the same editor and saves no video. A region pack keeps only
+      the selected pixels and crop placement metadata — never a hidden full-screen
+      or second-monitor image.</p>
+    </aside>
+
+    <section class="output" aria-labelledby="out-title">
+      <h2 id="out-title" data-i18n="out_title">The pack matches what you captured</h2>
+      <div>
+        <strong data-i18n="out_video_title">Video pack</strong><br>
+        <pre aria-label="Contents of a saved video CapturePack" data-i18n="out_tree">CapturePack_2026-07-27_143052/
+├─ replay.mp4              original (or replay.webm fallback)
 ├─ replay_annotated.webm   annotations rendered in
 ├─ snapshot.png
-├─ annotations.json
-├─ timeline.json
+├─ annotations.json        target identity + observed bounds
+├─ timeline.json           events on the replay clock
+├─ plugins/                UIA / optional Chrome DOM context
 ├─ report.md · README.md · skills/
 └─ manifest.json</pre>
-      <p class="output-note" data-i18n="out_note">One folder. Enough context for any developer — or any LLM.<br>Zip it only when you share.</p>
+      </div>
+      <div>
+        <strong data-i18n="out_image_title">Image pack</strong><br>
+        <pre aria-label="Contents of a saved image CapturePack" data-i18n="out_image_tree">CapturePack_2026-07-27_143052/
+├─ snapshot.png            explicit region or virtual desktop
+├─ annotations.json        image annotations
+├─ plugins/                optional object context
+├─ report.md · README.md · skills/
+└─ manifest.json           capture_kind: image
+                           no replay or timeline</pre>
+      </div>
+      <p class="output-note" data-i18n="out_note">One local folder: visual evidence plus machine-readable object context.<br>Zip it only when you share.</p>
     </section>
+
+    <aside class="still-capture" aria-labelledby="privacy-title">
+      <div>
+        <span class="still-kicker" data-i18n="privacy_kicker">LOCAL DOES NOT MEAN REDACTED</span>
+        <h2 id="privacy-title" data-i18n="privacy_title">Review the original before sharing.</h2>
+      </div>
+      <p data-i18n="privacy_body">CapturePack uploads no captures, telemetry or crash reports; the optional GitHub
+      update check can be disabled, and MCP can be stopped in Settings. Blur is non-destructive: annotated views are
+      protected, but snapshot.png and the original replay in a full pack remain unredacted.</p>
+    </aside>
 
     <section class="roadmap">
       <h2 data-i18n="rm_title">Roadmap</h2>
@@ -112,28 +192,25 @@
           <h3 data-i18n="rm_now">Now</h3>
           <ul>
             <li data-i18n="now1">30-second replay capture + trim</li>
-            <li data-i18n="now2">Toolless annotation, scrub through time</li>
-            <li data-i18n="now3">Folder packs + annotated replay</li>
+            <li data-i18n="now2">Every display captured at once</li>
+            <li data-i18n="now3">Object Pick with Windows UI Automation</li>
+            <li data-i18n="now5">Observed owner-window tracks</li>
+            <li data-i18n="now6">Annotated keyframes for LLMs</li>
             <li data-i18n="now4">History, 9 languages, MCP server</li>
           </ul>
         </div>
         <div>
           <h3 data-i18n="rm_next">Next</h3>
           <ul>
-            <li data-i18n="next1">Capture every display at once</li>
-            <li data-i18n="next2">Semantic object picking (UIA)</li>
-            <li data-i18n="next3">Chrome DOM capture extension</li>
-            <li data-i18n="next4">Annotated keyframes for LLMs</li>
+            <li data-i18n="next1">Chrome DOM integration hardening (preview available)</li>
+            <li data-i18n="next2">Prompt builder</li>
           </ul>
         </div>
         <div>
           <h3 data-i18n="rm_later">Later</h3>
           <ul>
-            <li data-i18n="later1">Unity · Unreal · VS Code · Git plugins</li>
-            <li data-i18n="later2">Frame-accurate element tracking</li>
-            <li data-i18n="later3">Prompt builder</li>
-            <li data-i18n="later4">Sanitized sharing</li>
-            <li data-i18n="later5">Plugin manager</li>
+            <li data-i18n="later1">Sanitized sharing</li>
+            <li data-i18n="later2">Plugin manager</li>
           </ul>
         </div>
       </div>

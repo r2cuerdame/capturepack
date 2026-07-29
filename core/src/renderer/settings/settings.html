@@ -164,6 +164,24 @@
           <span class="error" id="captureHotkeyError" hidden>That shortcut is in use by another app</span>
         </div>
       </div>
+      <div class="row rowCol">
+        <div class="rowTop">
+          <span class="label" id="imageCaptureHotkeyLabel" data-i18n="settings.imageCaptureHotkey">Image capture hotkey</span>
+          <span class="control">
+            <button
+              id="imageCaptureHotkeyBtn"
+              type="button"
+              class="hotkey"
+              aria-labelledby="imageCaptureHotkeyLabel imageCaptureHotkeyBtn"
+            >Ctrl+Alt+S</button>
+          </span>
+        </div>
+        <div class="rowFoot">
+          <span class="subhint" id="imageCaptureHotkeyHint" data-i18n="settings.imageCaptureHotkeyHint">Opens the region selector; use the top button for a full-screen still.</span>
+          <span class="subhint" id="imageCaptureHotkeyRecordHint" hidden>Esc cancels · Backspace resets to Ctrl+Alt+S</span>
+          <span class="error" id="imageCaptureHotkeyError" hidden>That shortcut is in use by another app</span>
+        </div>
+      </div>
       <div class="row">
         <label class="label" for="captureDisplay" data-i18n="settings.captureDisplay">Capture display</label>
         <span class="control">
@@ -180,7 +198,7 @@
       <div class="row">
         <label class="label" for="fps" data-i18n="settings.captureFps">Capture FPS</label>
         <span class="control">
-          <input type="number" id="fps" min="1" max="60" step="1" />
+          <input type="number" id="fps" min="1" max="30" step="1" />
           <span class="unit">fps</span>
         </span>
       </div>
@@ -297,11 +315,9 @@
            endpoint the server ACTUALLY bound, never the configured-but-unbound
            port — which is why it greys out while nothing is listening.
 
-           [Copy prompt] does NOT, and is deliberately never disabled: it is the
-           fixed English sentence shared/prompt.ts also gives the save toast, it
-           names no endpoint, and the client it is pasted into is the thing that
-           knows where the server is. Greying it out would tie a constant to a
-           socket it does not depend on. -->
+           [Copy prompt] includes the selected client, the live endpoint, its
+           exact setup form and the capturepack_latest instruction. It greys out
+           while no endpoint is listening because a stale URL would be harmful. -->
       <div class="row">
         <label class="label" for="mcpClient" data-i18n="settings.mcpSetup">Set up a client</label>
         <span class="control">
@@ -314,124 +330,145 @@
 
     <section aria-labelledby="hPlugins">
       <h2 id="hPlugins" data-i18n="settings.pluginsSection">Plugins</h2>
-      <!-- CHROME DOM IS NOT LISTED HERE. It used to sit at the top of this
-           section as a dead row — "Not installed", a disabled [Install], and a
-           "coming soon" that had been coming for two releases. It has since
-           shipped, and it has a section of its own (Integrations) that reads
-           its six checks off disk, the registry and the wire. Keeping the stub
-           meant the same plugin was reported twice by two different rows that
-           could disagree — and they did: it said "not installed" on a machine
-           where the extension was connected and putting DOM events into packs.
-           One place per claim. -->
-      <!-- Windows UI Automation has shipped since 0.1.4 and is what object
-           picking runs on (issue #57), so this row reports its REAL state,
-           carries a real on/off switch (settings.uiaEnabled genuinely stops the
-           helper spawn), and explains itself: a one-line summary always, the
-           long version behind the "?". -->
-      <div class="pluginRow">
-        <span class="pluginIcon" id="uiaIcon" aria-hidden="true">🟢</span>
-        <span class="pluginName" id="uiaName">Windows UI Automation</span>
-        <button
-          type="button"
-          class="pluginHelp"
-          id="uiaHelpBtn"
-          aria-expanded="false"
-          aria-controls="uiaDetail"
-          data-i18n-title="settings.pluginExplain"
-          data-i18n-aria-label="settings.pluginExplain"
-        >?</button>
-        <span class="pluginStatus" id="uiaStatus"></span>
-        <span class="pluginAction">
-          <!-- The plugin NAME is the switch's accessible name: it is the same
-               product name in every language, so it needs no dictionary key. -->
-          <input type="checkbox" id="uiaEnabled" aria-labelledby="uiaName" />
-        </span>
-      </div>
-      <p class="pluginSummary" data-i18n="settings.uiaSummary">Click real buttons and windows instead of drawing boxes — costs a sub-second helper run per capture.</p>
-      <p class="pluginDetail" id="uiaDetail" hidden data-i18n="settings.uiaDetail">At the capture instant a short-lived helper reads the window list and the control tree of the visible windows, so the editor can snap a box onto a real button or window and store its name. It reads UI state only — never your keyboard or mouse input — and nothing leaves this machine.</p>
-      <!-- Unity / Unreal / VS Code / Git used to sit here as "Coming soon" rows.
-           They are gone: nothing was being built, no date was ever attached, and
-           a permanent "coming soon" is the same lie the Windows UI Automation row
-           told for two releases. This list now shows only what exists. Unreal and
-           Unity are community/external in the v0.3.0 plugin design (GOAL.md),
-           so they will appear here when a plugin does, not before. -->
-    </section>
+      <!-- Both shipped context providers are peers: the row owns live status
+           and its real switch; "?" owns explanation only; the chevron owns
+           operational detail only. Keeping those controls independent prevents
+           asking for help from unexpectedly opening or closing a setup wizard. -->
+      <article class="pluginEntry" data-plugin="windows-uia">
+        <div class="pluginRow">
+          <span class="pluginIcon" id="uiaIcon" aria-hidden="true">🟢</span>
+          <span class="pluginName" id="uiaName">Windows UI Automation</span>
+          <button
+            type="button"
+            class="pluginHelp"
+            id="uiaHelpBtn"
+            aria-expanded="false"
+            aria-controls="uiaHelp"
+            data-i18n-title="settings.pluginExplain"
+            data-i18n-aria-label="settings.pluginExplain"
+          >?</button>
+          <span class="pluginStatus" id="uiaStatus"></span>
+          <button
+            type="button"
+            class="pluginFold"
+            id="uiaFoldBtn"
+            aria-expanded="true"
+            aria-controls="uiaDetailPanel"
+            data-i18n-title="settings.pluginToggleDetails"
+            data-i18n-aria-label="settings.pluginToggleDetails"
+          ><span class="pluginChevron" aria-hidden="true">›</span></button>
+          <span class="pluginAction">
+            <!-- The plugin NAME is the switch's accessible name: it is the same
+                 product name in every language, so it needs no dictionary key. -->
+            <input type="checkbox" id="uiaEnabled" aria-labelledby="uiaName" />
+          </span>
+        </div>
+        <p class="pluginHelpText" id="uiaHelp" hidden data-i18n="settings.uiaDetail">While enabled, a local background helper watches visible window and control changes and keeps the bounded history used by Object Pick. It reads UI state only — never your keyboard or mouse input — and nothing leaves this machine. Turning it off stops the helper and clears the collected control history.</p>
+        <div class="pluginDetailPanel" id="uiaDetailPanel">
+          <p class="pluginSummary" data-i18n="settings.uiaSummary">Tracks visible Windows controls in the background so past frames can select real objects. Turning it off stops the helper and clears its cache.</p>
+        </div>
+      </article>
 
-    <!-- Integrations (GOAL "Extension Install & Management UX"): the browser
-         half of context capture. Every line below is READ from disk, the
-         registry and the wire when the panel opens — never a remembered
-         verdict, because all three can change without this app being told. -->
-    <section aria-labelledby="hIntegrations">
-      <h2 id="hIntegrations" data-i18n="settings.integrations">Integrations</h2>
-      <div class="row rowCol">
-        <div class="rowTop">
-          <span class="label" data-i18n="settings.chromeDom">Chrome DOM capture</span>
-          <span class="hint" id="chromeVerdict"></span>
+      <article class="pluginEntry" data-plugin="chrome-dom">
+        <div class="pluginRow">
+          <span class="pluginIcon" id="chromeIcon" aria-hidden="true">⚪</span>
+          <span class="pluginName" id="chromeName" data-i18n="settings.chromeDom">Chrome DOM capture</span>
+          <button
+            type="button"
+            class="pluginHelp"
+            id="chromeHelpBtn"
+            aria-expanded="false"
+            aria-controls="chromeHelp"
+            data-i18n-title="settings.pluginExplain"
+            data-i18n-aria-label="settings.pluginExplain"
+          >?</button>
+          <span class="pluginStatus" id="chromeVerdict"></span>
+          <button
+            type="button"
+            class="pluginFold"
+            id="chromeFoldBtn"
+            aria-expanded="false"
+            aria-controls="chromeDetailPanel"
+            data-i18n-title="settings.pluginToggleDetails"
+            data-i18n-aria-label="settings.pluginToggleDetails"
+          ><span class="pluginChevron" aria-hidden="true">›</span></button>
+          <span class="pluginAction">
+            <input type="checkbox" id="chromeDomEnabled" aria-labelledby="chromeName" />
+          </span>
+        </div>
+        <p class="pluginHelpText" id="chromeHelp" hidden data-i18n="settings.chromeDetail">Load the extension folder in your browser once with developer mode on, paste the ID it is given, and Connect registers the native messaging host for every Chromium browser on this machine. Nothing leaves the machine, and the page is read only when you pick an element.</p>
+        <!-- Setup is operational detail, not the normal state of the plugin.
+             It starts folded, while polling updates its contents without
+             changing the user's open/closed choice. -->
+        <div id="chromeDetailPanel" class="pluginDetailPanel chromeDetailPanel" hidden>
+          <p class="pluginSummary" data-i18n="settings.chromeSummary">Stores what you clicked — selector, role, text, URL — instead of the pixels it was drawn with.</p>
+          <div class="chromeDetailHeader">
           <!-- The panel polls, but a user who just finished loading the folder
-               in another window wants to ASK, not wait — and this asks harder
-               than the poll does: it re-detects the ID the browser assigned and
-               re-registers the host before re-reading all six checks. -->
-          <button id="chromeRefreshBtn" class="quiet" type="button" data-i18n="settings.chromeRefresh">Refresh</button>
-        </div>
-        <p class="pluginSummary" data-i18n="settings.chromeSummary">Stores what you clicked — selector, role, text, URL — instead of the pixels it was drawn with.</p>
-        <ul id="chromeChecks"></ul>
-        <!-- THREE STEPS, AND ONLY ONE OF THEM IS THE USER'S (GOAL "Extension
-             Install & Management UX"). Chrome will not let a program load an
-             unpacked extension, so step 2 has to be done by hand — everything
-             around it is done here: the page is opened, the path is already on
-             the clipboard, and the ID the browser assigns is found rather than
-             asked for. -->
-        <ol id="chromeWizard">
-          <li id="chromeStep1">
-            <span class="num">1</span>
-            <div class="body">
-              <b data-i18n="settings.chromeStep1">Open your browser's extensions page</b>
-              <span class="how" data-i18n="settings.chromeStep1How">The folder's path goes on the clipboard at the same time.</span>
-              <button id="chromeExtPageBtn" type="button" data-i18n="settings.chromeStep1Btn">Open and copy the path</button>
-              <!-- BOTH ADDRESSES, ALWAYS VISIBLE. A button that opens a browser
-                   can fail for reasons this app cannot fix (no Chromium browser
-                   where Windows says one is, a policy that blocks the launch),
-                   and when it does the user is left with nothing to act on. The
-                   two strings they would need are short, so they are simply
-                   shown — the button is the shortcut, not the only route. -->
-              <div class="chromePaths">
-                <div class="chromePathRow">
-                  <code id="chromeExtUrl">chrome://extensions</code>
-                  <button class="copyBtn" type="button" data-copy="chromeExtUrl" data-i18n="settings.copy">Copy</button>
+               in another window wants to force detection immediately. -->
+            <button id="chromeRefreshBtn" class="quiet" type="button" data-i18n="settings.chromeRefresh">Refresh</button>
+          </div>
+          <ul id="chromeChecks"></ul>
+          <!-- THREE STEPS, AND ONLY ONE OF THEM IS THE USER'S (GOAL "Extension
+               Install & Management UX"). Chrome will not let a program load an
+               unpacked extension, so step 2 has to be done by hand — everything
+               around it is done here: the page is opened, the path is already on
+               the clipboard, and the ID the browser assigns is found rather than
+               asked for. -->
+          <ol id="chromeWizard">
+            <li id="chromeStep1">
+              <span class="num">1</span>
+              <div class="body">
+                <b data-i18n="settings.chromeStep1">Open your browser's extensions page</b>
+                <span class="how" data-i18n="settings.chromeStep1How">The folder's path goes on the clipboard at the same time.</span>
+                <button id="chromeExtPageBtn" type="button" data-i18n="settings.chromeStep1Btn">Open and copy the path</button>
+                <!-- BOTH ADDRESSES, ALWAYS VISIBLE. A button that opens a browser
+                     can fail for reasons this app cannot fix (no Chromium browser
+                     where Windows says one is, a policy that blocks the launch),
+                     and when it does the user is left with nothing to act on. The
+                     two strings they would need are short, so they are simply
+                     shown — the button is the shortcut, not the only route. -->
+                <div class="chromePaths">
+                  <div class="chromePathRow">
+                    <code id="chromeExtUrl">chrome://extensions</code>
+                    <button class="copyBtn" type="button" data-copy="chromeExtUrl" data-i18n="settings.copy">Copy</button>
+                  </div>
+                  <div class="chromePathRow">
+                    <code id="chromeExtDir"></code>
+                    <button class="copyBtn" type="button" data-copy="chromeExtDir" data-i18n="settings.copy">Copy</button>
+                  </div>
+                  <span class="how" id="chromeOpenFailed" hidden data-i18n="settings.chromeOpenFailed">No Chromium browser could be started — paste the address above into your browser instead.</span>
                 </div>
-                <div class="chromePathRow">
-                  <code id="chromeExtDir"></code>
-                  <button class="copyBtn" type="button" data-copy="chromeExtDir" data-i18n="settings.copy">Copy</button>
-                </div>
-                <span class="how" id="chromeOpenFailed" hidden data-i18n="settings.chromeOpenFailed">No Chromium browser could be started — paste the address above into your browser instead.</span>
               </div>
-            </div>
-          </li>
-          <li id="chromeStep2">
-            <span class="num">2</span>
-            <div class="body">
-              <b data-i18n="settings.chromeStep2">Turn on Developer mode, then "Load unpacked"</b>
-              <span class="how" data-i18n="settings.chromeStep2How">Paste with Ctrl+V in the folder box and confirm.</span>
-              <button id="chromeDetectBtn" type="button" data-i18n="settings.chromeStep2Btn">I did that — find it</button>
-            </div>
-          </li>
-          <li id="chromeStep3">
-            <span class="num">3</span>
-            <div class="body">
-              <b data-i18n="settings.chromeStep3">Connected</b>
-              <span class="how" id="chromeStep3How" data-i18n="settings.chromeStep3How">CapturePack registers itself with the browser and waits for the extension to say hello.</span>
-            </div>
-          </li>
-        </ol>
-        <div class="pathRow" id="chromeManual" hidden>
-          <input type="text" id="chromeExtensionId" spellcheck="false" placeholder="extension id from chrome://extensions" data-i18n-placeholder="settings.chromeIdPlaceholder" />
-          <button id="chromeInstallBtn" type="button" data-i18n="settings.chromeInstall">Connect</button>
-          <button id="chromeFolderBtn" type="button" data-i18n="settings.chromeFolder">Extension folder</button>
-          <button id="chromeUninstallBtn" class="quiet" type="button" data-i18n="settings.chromeUninstall">Disconnect</button>
+            </li>
+            <li id="chromeStep2">
+              <span class="num">2</span>
+              <div class="body">
+                <b data-i18n="settings.chromeStep2">Turn on Developer mode, then "Load unpacked"</b>
+                <span class="how" data-i18n="settings.chromeStep2How">Paste with Ctrl+V in the folder box and confirm.</span>
+                <button id="chromeDetectBtn" type="button" data-i18n="settings.chromeStep2Btn">I did that — find it</button>
+              </div>
+            </li>
+            <li id="chromeStep3">
+              <span class="num">3</span>
+              <div class="body">
+                <b data-i18n="settings.chromeStep3">Connected</b>
+                <span class="how" id="chromeStep3How" data-i18n="settings.chromeStep3How">CapturePack registers itself with the browser and waits for the extension to say hello.</span>
+              </div>
+            </li>
+          </ol>
+          <div class="pathRow" id="chromeManual" hidden>
+            <input type="text" id="chromeExtensionId" spellcheck="false" placeholder="extension id from chrome://extensions" data-i18n-placeholder="settings.chromeIdPlaceholder" />
+            <button id="chromeInstallBtn" type="button" data-i18n="settings.chromeInstall">Connect</button>
+            <button id="chromeFolderBtn" type="button" data-i18n="settings.chromeFolder">Extension folder</button>
+            <button id="chromeUninstallBtn" class="quiet" type="button" data-i18n="settings.chromeUninstall">Disconnect</button>
+          </div>
+          <button id="chromeManualToggle" class="quiet" type="button" data-i18n="settings.chromeManual">Do it by hand</button>
         </div>
-        <button id="chromeManualToggle" class="quiet" type="button" data-i18n="settings.chromeManual">Do it by hand</button>
-        <p class="pluginDetail" id="chromeDetail" data-i18n="settings.chromeDetail">Load the extension folder in your browser once with developer mode on, paste the ID it is given, and Connect registers the native messaging host for every Chromium browser on this machine. Nothing leaves the machine, and the page is read only when you pick an element.</p>
-      </div>
+      </article>
+
+      <!-- Unity / Unreal / VS Code / Git used to sit here as "Coming soon" rows.
+           They return only when a real plugin exists, with this same truthful
+           status/switch/help/detail structure. -->
     </section>
 
     <footer id="about">

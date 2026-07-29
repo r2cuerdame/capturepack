@@ -22,7 +22,10 @@ import {
 import { setDomClock, setDomRetention, startDomBridge, stopDomBridge } from './chrome/domBridge'
 import { refreshHostManifestIfInstalled, syncExtensionIfChanged } from './chrome/install'
 import { disposeHistory, notifyHistoryChanged, openHistoryWindow, registerHistoryIpc } from './historyWindow'
-import { registerCaptureHotkeyWithin } from './hotkey'
+import {
+  registerCaptureHotkeyWithin,
+  registerImageCaptureHotkey,
+} from './hotkey'
 import {
   beginRun,
   endRun,
@@ -33,9 +36,9 @@ import {
   runStartedAt,
 } from './lifecycle'
 import { uiLanguage, uiT } from './locale'
-import { initForensics, logError, logInfo, logsDir, logWarn } from './log'
+import { initForensics, logError, logInfo, logWarn } from './log'
 import { mcpEndpoint, startMcpAtBoot, stopMcpServer } from './mcp/service'
-import { startCaptureFlow } from './session'
+import { startCaptureFlow, startImageCaptureFlow } from './session'
 import { loadSettings, persistSettings } from './settings'
 import { openSettingsWindow, registerSettingsIpc } from './settingsWindow'
 import {
@@ -166,6 +169,8 @@ function main(): void {
   // remembered and run rather than dropped.
   let captureFlow: (() => void) | null = null
   let captureRequestedEarly = false
+  let launchUiReady = false
+  let queuedLaunchArgv: readonly string[] | null = null
 
   const requestCapture = (): void => {
     if (captureFlow === null) {
@@ -175,6 +180,23 @@ function main(): void {
     captureFlow()
   }
 
+  const openSecondLaunchUi = (argv: readonly string[]): void => {
+    if (argv.includes('--show-settings')) {
+      openSettingsWindow()
+      return
+    }
+    if (argv.includes('--show-history')) {
+      openHistoryWindow()
+      return
+    }
+    if (argv.includes('--show-welcome')) {
+      openWelcomeWindow()
+      return
+    }
+    logInfo('[app] manual second launch: opening About')
+    openAboutWindow()
+  }
+
   app.on('second-instance', (_event, argv) => {
     // A tray app has no window to focus, so a second launch used to be a silent
     // no-op — and that is exactly what the Start Menu fallback would have hit
@@ -182,9 +204,28 @@ function main(): void {
     // Explorer: the live instance captures on it, instantly, with none of the
     // new process's startup cost. A launch WITHOUT it is the user double
     // clicking CapturePack in the Start Menu, which must not fire a capture.
-    if (!argv.includes(CAPTURE_ARG)) return
-    logInfo('[hotkey] capture requested by the Start Menu fallback shortcut')
-    requestCapture()
+    if (argv.includes(CAPTURE_ARG)) {
+      logInfo('[hotkey] capture requested by the Start Menu fallback shortcut')
+      requestCapture()
+      return
+    }
+    // A login/recovery launch is intentionally silent. Every manual second
+    // launch, however, must produce a visible result: packaged shortcuts and
+    // headed checks both land here while the tray instance is already alive.
+    // Previously --show-about (and an ordinary shortcut double-click) vanished
+    // at this boundary, which made the installed app appear broken.
+    if (argv.includes(LOGIN_HIDDEN_ARG)) return
+    if (!launchUiReady) {
+      // app.whenReady() can have fired while recorder startup is still awaiting
+      // its first frames. Window IPC is registered later in that same startup
+      // path, so opening here would render an empty Information window that
+      // never retries. Coalesce repeated shortcut clicks and dispatch the last
+      // request as soon as every window bridge is ready.
+      queuedLaunchArgv = argv
+      logInfo('[app] manual second launch queued until window IPC is ready')
+      return
+    }
+    openSecondLaunchUi(argv)
   })
 
   app.on('window-all-closed', () => {
@@ -313,26 +354,27 @@ function main(): void {
     // never answer a question about thirty seconds ago. It is started AFTER the
     // recorder so that a machine where recording itself is failing does not also
     // pay for a context host it will never be asked about.
-    startContextRuntime({ replayMs: settings.replaySeconds * 1000, fps: settings.fps })
+    startContextRuntime({
+      replayMs: settings.replaySeconds * 1000,
+      fps: settings.fps,
+      uiaEnabled: settings.uiaEnabled,
+    })
     // The browser half of the same idea (GOAL "Chrome Extension"): DOM events
     // on the replay clock, so an element and the window it sits in can be
     // named at one instant. Started after the runtime because it borrows that
     // clock, and it costs nothing while no browser is talking.
     setDomClock(() => contextNowMs() ?? Date.now())
     setDomRetention(settings.replaySeconds * 1000)
-    startDomBridge()
-    // A registration written by a PREVIOUS build keeps describing it — and the
-    // one this build fixes (the exe registered directly, whose pre-JS CRLF on
-    // stdout poisons Chrome's framing) would otherwise outlive its fix on
-    // every machine that already installed the extension. Refreshed, not
-    // installed: a machine with no manifest is left exactly as it was.
-    // THE EXTENSION FOLDER FIRST, then the manifest that points at it. The
-    // loaded copy lives in userData precisely so an install cannot replace it
-    // (install.ts `extensionDir`); this brings it up to the shipped version and
-    // does nothing at all when they already match, because rewriting the files
-    // makes Chrome reload the service worker and drop the native port.
-    syncExtensionIfChanged()
-    refreshHostManifestIfInstalled()
+    if (settings.chromeDomEnabled) {
+      // Update the stable unpacked folder BEFORE answering the extension's
+      // hello. Version 0.1.7+ compares the reply with its loaded version and
+      // asks Chromium to reload itself when the folder is newer.
+      syncExtensionIfChanged()
+      // A registration written by a previous build keeps describing it. This
+      // refreshes an existing install but deliberately does not create one.
+      refreshHostManifestIfInstalled()
+      startDomBridge()
+    }
 
     const capture = (): void => {
       // Recording OFF is a privacy switch, not a broken hotkey (settings.
@@ -347,6 +389,12 @@ function main(): void {
         return
       }
       void startCaptureFlow(settings)
+    }
+    const imageCapture = (): void => {
+      // Explicit still capture is independent from the replay privacy switch:
+      // it freezes pixels only after this user action and never queries or
+      // restarts the always-on recorder.
+      void startImageCaptureFlow(settings)
     }
     // From here on a hotkey press forwarded by the Start Menu fallback (issue
     // #61) has somewhere to go. Anything that arrived while the app was still
@@ -363,7 +411,12 @@ function main(): void {
     // time, so a re-recorded hotkey or a flipped toggle reaches the watchdog and
     // the Start Menu fallback without a restart (issue #61).
     const supervisionOptions = (): SupervisionOptions => ({
-      enabled: settings.superviseProcess,
+      // A headed integration harness owns its whole process tree. Letting the
+      // watchdog supervise that profile turns an intentional test shutdown
+      // into a relaunch loop after the harness has already moved on.
+      enabled:
+        settings.superviseProcess &&
+        !process.argv.includes('--no-supervision'),
       accelerator: settings.captureHotkey,
       runStateFile: runStateFilePath(),
       runStartedAt: runStartedAt(),
@@ -383,6 +436,7 @@ function main(): void {
       },
       // What a re-registered capture hotkey has to trigger.
       onCapture: capture,
+      onImageCapture: imageCapture,
       // The tray's "Capture now" label and the History empty state both carry
       // the accelerator: same refresh path as a language change.
       onHotkeyChanged: () => {
@@ -394,6 +448,9 @@ function main(): void {
         // (issue #61 asks explicitly whether a reconfigured hotkey can be
         // mirrored onto the shortcut: it can, and this is where it happens).
         updateSupervision(supervisionOptions())
+      },
+      onImageHotkeyChanged: () => {
+        tray?.refresh()
       },
       onLaunchAtLoginChanged: (enabled) => reconcileLoginItem(enabled),
       // The toggle is a real teardown: off kills the watchdog and deletes the
@@ -418,10 +475,17 @@ function main(): void {
       },
       () => mcpEndpoint(),
     )
+    launchUiReady = true
+    if (queuedLaunchArgv !== null) {
+      const argv = queuedLaunchArgv
+      queuedLaunchArgv = null
+      openSecondLaunchUi(argv)
+    }
 
     tray = createTray(
       {
         onCapture: capture,
+        onImageCapture: imageCapture,
         // The privacy switch where it is actually reachable (settings.
         // recordingEnabled). Persisted and applied through the SAME paths the
         // Settings toggle uses, so the two can never disagree: an empty
@@ -444,12 +508,6 @@ function main(): void {
           void shell.openPath(settings.outputDir)
         },
         onOpenSettings: () => openSettingsWindow(),
-        // The log is only a record if a user can reach it without a terminal
-        // (issue #60): this is the one place that is always present.
-        onOpenLogs: () => {
-          fs.mkdirSync(logsDir(), { recursive: true })
-          void shell.openPath(logsDir())
-        },
         // Manual check (GOAL "Tray Menu"): runs even with auto-check off; the
         // menu item's label follows the state through the getter below.
         onCheckUpdates: () => void checkNow(),
@@ -469,6 +527,7 @@ function main(): void {
       },
       () => uiLanguage(settings),
       () => settings.captureHotkey,
+      () => settings.imageCaptureHotkey,
       () => settings.replaySeconds,
       () => getRecorderState(),
       () => updaterState(),
@@ -603,6 +662,10 @@ function main(): void {
         capture,
         acceleratorPlan.releaseBudgetMs,
       ))
+    const wantsImageHotkey = !process.argv.includes('--no-global-shortcut')
+    const imageHotkeyRegistered =
+      wantsImageHotkey &&
+      registerImageCaptureHotkey(settings.imageCaptureHotkey, imageCapture)
     // Whether the accelerator was taken is the first thing to check when a user
     // says the hotkey did nothing (issues #60, #61), so it goes on the record.
     if (!acceleratorPlan.registerAccelerator) {
@@ -625,6 +688,28 @@ function main(): void {
         void dialog.showMessageBox({
           type: 'error',
           title: 'CapturePack', // product name — never translated
+          message,
+        })
+      }
+    }
+    if (!wantsImageHotkey) {
+      logInfo('[hotkey] image capture not registered (--no-global-shortcut)')
+    } else if (imageHotkeyRegistered) {
+      logInfo(`[hotkey] registered image capture ${settings.imageCaptureHotkey}`)
+    } else {
+      logWarn(
+        `[hotkey] REFUSED image capture ${settings.imageCaptureHotkey} — ` +
+          'another application or the video action holds it',
+      )
+      const message = uiT(settings)('app.hotkeyFailed', {
+        hotkey: settings.imageCaptureHotkey,
+      })
+      if (openedAtLogin) {
+        new Notification({ title: 'CapturePack', body: message }).show()
+      } else {
+        void dialog.showMessageBox({
+          type: 'error',
+          title: 'CapturePack',
           message,
         })
       }

@@ -7,11 +7,12 @@
 // the same pipeline — updatePack in keepReplay mode (the declared replay is
 // never rewritten) or saveAsNewPack for [Save As New CapturePack].
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, screen } from 'electron'
-import type { IpcMainEvent } from 'electron'
+import type { Event as ElectronEvent, IpcMainEvent } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import * as path from 'node:path'
 import { IPC } from '../shared/ipc'
+import { REPLAY_TIMEOUT_MS } from '../shared/captureTimeouts'
 import type {
   EditorAnnotationAddedPayload,
   EditorDisplayPayload,
@@ -33,6 +34,20 @@ import type {
 } from '../shared/types'
 import { annotationsOnDisplay, focusedDisplayIndex } from '../shared/types'
 import { computeDisplayNumbers } from '../shared/numbering'
+import type {
+  CaptureKind,
+  ImageCaptureScope,
+  ImageCropBounds,
+} from '../shared/captureMedia'
+import { rebaseAnnotationClock } from '../shared/motion'
+import {
+  displayReplayRangeMs,
+  observedReplayClockOffsetMs,
+  retainedDisplayReplayMask,
+  resolveFocusedReplayTimelineClock,
+  resolvedReplayClockOffsetMs,
+} from '../shared/displayClock'
+import type { AuthoredMotionSpace } from '../shared/track'
 import type { Language } from '../shared/i18n'
 import {
   renderTrimmedReplay,
@@ -49,7 +64,7 @@ import {
   takeDisplaySnapshots,
   recorderCadence,
 } from './capture'
-import type { ReplayFetch } from './capture'
+import type { DisplaySnapshot, ReplayFetch } from './capture'
 import {
   freezeContext,
   frozenObservations,
@@ -83,6 +98,7 @@ import {
   writeUiaPlugin,
   UIA_PLUGIN_NAME,
   DOM_PLUGIN_NAME,
+  WINDOWS_CONTEXT_PLUGIN_NAME,
   type DisplayCapture,
   type ExportInput,
   type InitialSaveInput,
@@ -90,12 +106,34 @@ import {
 } from './exporter'
 import type { ContextObservation } from './context/buffer'
 import { editorUiaElements, editorUiaWindows } from './context/legacyPack'
+import {
+  exportWindowsContextTimeline,
+  loadWindowsContextHistory,
+  trimWindowsContextTimeline,
+  type WindowsContextTimelineV1,
+} from './context/windowsContextTimeline'
 import { openContextSession, pushContextFrame } from './context/service'
+import { createEditorCloseWatchdog } from './editorCloseWatchdog'
 import { packDocLanguage, uiLanguage, uiT } from './locale'
 import { logError, logInfo, logWarn } from './log'
 import { openPack } from './mcp/store'
 import { showSaveToast, updateToastRenderStatus } from './saveToast'
+import { startSourceFirstFinalSave } from './sourceFirstFinalSave'
 import { persistSettings } from './settings'
+import {
+  selectImageRegion,
+  type ImageRegionSelection,
+} from './imageRegionSelector'
+import {
+  composeUiaForImageDesktop,
+  cropUiaForImage,
+} from './imageContext'
+import {
+  createImageDesktopBitmap,
+  layoutImageDesktop,
+  placeImageDesktopBitmap,
+  type ImageDesktopLayout,
+} from './imageDesktop'
 import {
   mapUiaToSnapshot,
   parseUiaPayload,
@@ -105,7 +143,21 @@ import {
   type UiaRawDump,
 } from './uia'
 
-const REPLAY_TIMEOUT_MS = 5_000
+const EDITOR_CLOSE_RESPONSE_TIMEOUT_MS = 5_000
+// A hidden editor must never own the global capture/edit gate forever. This is
+// deliberately much longer than a normal load, but finite: if the renderer
+// never reaches its first show (load failure, crash, or a preparation promise
+// that accidentally hangs), destroying the hidden window lets runEditor settle
+// and releases Ctrl+Alt+C for the next request.
+const EDITOR_STARTUP_TIMEOUT_MS = 10_000
+
+// Electron emits before-quit before it starts closing BrowserWindows. Native
+// close interception is for the user's X/Alt+F4 only; blocking app.quit() or an
+// updater restart would turn a confirmation affordance into an exit deadlock.
+let appIsQuitting = false
+app.on('before-quit', () => {
+  appIsQuitting = true
+})
 
 /** Plugin name pattern from SPEC §5.4 — also what makes a name path-safe. */
 const PLUGIN_NAME_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
@@ -133,13 +185,36 @@ type EditorOutcome =
 // One flow at a time, shared across capture AND re-edit: two fullscreen
 // editors (or an editor over a capture in progress) must never coexist.
 let flowActive = false
+let activeEditor: BrowserWindow | null = null
+
+/**
+ * Makes a repeated request useful while an editor is already open. Starting a
+ * second capture would destroy the first flow's ownership, but silently doing
+ * nothing made a background/covered editor indistinguishable from a broken
+ * hotkey. A visible editor is restored and focused; a still-hidden preparation
+ * is left to the startup deadline below.
+ */
+function focusActiveEditor(): boolean {
+  const editor = activeEditor
+  if (editor === null || editor.isDestroyed()) return false
+  if (editor.isMinimized()) editor.restore()
+  if (!editor.isVisible()) return false
+  editor.show()
+  editor.focus()
+  return true
+}
 
 export async function startCaptureFlow(settings: Settings): Promise<void> {
   // Every capture REQUEST is recorded, including the ones that do nothing
   // (issue #60): "I pressed the hotkey and nothing happened" has to be
   // answerable, and "an editor was already open" is one of the answers.
   if (flowActive) {
-    logWarn('[capture] capture requested while a flow was already open — ignored')
+    const focused = focusActiveEditor()
+    logWarn(
+      focused
+        ? '[capture] capture requested while an editor was already open — focused that editor'
+        : '[capture] capture requested while another flow was still preparing — ignored',
+    )
     return
   }
   logInfo('[capture] capture requested')
@@ -155,15 +230,64 @@ export async function startCaptureFlow(settings: Settings): Promise<void> {
   }
 }
 
-/** Re-edit entry point (History [Open]): loads dirPath into the editor. */
-export async function startEditFlow(dirPath: string, settings: Settings): Promise<void> {
-  if (flowActive) return
+/**
+ * Re-edit entry point (History [Edit]).
+ *
+ * Returns synchronously so History can distinguish "accepted" from "another
+ * editor/capture already owns the gate". The actual editor lifetime stays
+ * detached; awaiting it from an IPC invoke would leave the card button pending
+ * until the user eventually closed the editor.
+ */
+export function startEditFlow(dirPath: string, settings: Settings): boolean {
+  if (flowActive) {
+    focusActiveEditor()
+    logWarn(`[capture] re-edit of ${path.basename(dirPath)} requested while a flow was already open`)
+    return false
+  }
+  logInfo(`[capture] re-edit requested: ${path.basename(dirPath)}`)
+  flowActive = true
+  // Let the invoke response reach History before reading replay files and
+  // rebuilding provider indexes. runEditFlow necessarily does some synchronous
+  // pack I/O before its first await; starting it on this call stack made the
+  // Edit button look dead and kept History painted over the new window.
+  setImmediate(() => {
+    void runEditFlow(dirPath, settings)
+      .catch((err: unknown) => {
+        logError(`[capture] re-edit of ${path.basename(dirPath)} failed:`, err)
+        dialog.showErrorBox('CapturePack', uiT(settings)('app.reeditFailed', { error: errorMessage(err) }))
+      })
+      .finally(() => {
+        flowActive = false
+      })
+  })
+  return true
+}
+
+/**
+ * Explicit still-image capture. Source frames are frozen before the selector
+ * appears, but only the user-selected raster is ever handed to a pack writer.
+ * The replay recorder is neither queried nor stopped by this flow.
+ */
+export async function startImageCaptureFlow(settings: Settings): Promise<void> {
+  if (flowActive) {
+    const focused = focusActiveEditor()
+    logWarn(
+      focused
+        ? '[image] capture requested while an editor was already open — focused that editor'
+        : '[image] capture requested while another flow was still preparing — ignored',
+    )
+    return
+  }
+  logInfo('[image] capture requested')
   flowActive = true
   try {
-    await runEditFlow(dirPath, settings)
+    await runImageFlow(settings)
   } catch (err) {
-    logError(`[capture] re-edit of ${path.basename(dirPath)} failed:`, err)
-    dialog.showErrorBox('CapturePack', uiT(settings)('app.reeditFailed', { error: errorMessage(err) }))
+    logError('[image] capture failed:', err)
+    dialog.showErrorBox(
+      'CapturePack',
+      uiT(settings)('app.captureFailed', { error: errorMessage(err) }),
+    )
   } finally {
     flowActive = false
   }
@@ -190,6 +314,8 @@ interface FrozenDisplay {
   replayDurationMs: number
   /** The tick clock's value at this replay's t=0 (#112); absent if unknown. */
   replayOriginMs?: number
+  /** Main's wall time immediately before requesting this display's replay. */
+  replayRequestWallMs?: number
   replayMimeType: string | null
   replayFile: 'replay.webm' | 'replay.mp4' | null
   // Set when this display came back WITHOUT a replay: why its buffer was not
@@ -289,6 +415,10 @@ async function freezeDisplays(settings: Settings): Promise<{
   await Promise.all(
     displays.map(async (d, i) => {
       const win = captureWindowForDisplay(d.id)
+      // Fallback end anchor for a renderer too old to report originMs. Captured
+      // BEFORE awaiting stop/flush/IPC, so a slow mux or another display cannot
+      // move the focused pack clock merely by replying late.
+      const replayRequestWallMs = Date.now()
       const fetched: ReplayFetch =
         win === null
           ? { replay: null, miss: 'no-recorder' }
@@ -310,7 +440,7 @@ async function freezeDisplays(settings: Settings): Promise<{
           `[capture] display ${d.id}: no replay for this capture (${reason}) — ` +
             'the pack keeps its frozen frame only',
         )
-        displays[i] = { ...d, replayUnavailableReason: reason }
+        displays[i] = { ...d, replayRequestWallMs, replayUnavailableReason: reason }
         return
       }
       displays[i] = {
@@ -318,6 +448,7 @@ async function freezeDisplays(settings: Settings): Promise<{
         replayWebm: replay.buffer,
         replayDurationMs: replay.durationMs,
         ...(replay.originMs === undefined ? {} : { replayOriginMs: replay.originMs }),
+        replayRequestWallMs,
         replayMimeType: replay.mimeType,
         replayFile: replay.replayFile,
         replayUnavailableReason: null,
@@ -351,7 +482,19 @@ function replayUnavailableForToast(
 }
 
 /** The exporter's write-side view of the frozen displays (focused bytes are the top-level files). */
-function toDisplayCaptures(displays: readonly FrozenDisplay[]): DisplayCapture[] {
+function toDisplayCaptures(
+  displays: readonly FrozenDisplay[],
+  focusedSourceStartMs = 0,
+): DisplayCapture[] {
+  const focused = displays.find((d) => d.focused)
+  // Fresh editor time zero may start inside the focused recorder's raw ring.
+  // Put that exact source in-point on the shared origin axis before comparing
+  // it with the other recorders; duration difference only approximated this
+  // when every recorder happened to stop on precisely the same instant.
+  const packOriginMs =
+    focused?.replayOriginMs === undefined
+      ? undefined
+      : focused.replayOriginMs + focusedSourceStartMs
   return displays.map((d) => ({
     index: d.index,
     focused: d.focused,
@@ -359,6 +502,14 @@ function toDisplayCaptures(displays: readonly FrozenDisplay[]): DisplayCapture[]
     scale: d.scale,
     hasReplay: d.replayWebm !== null,
     replayDurationMs: d.replayDurationMs,
+    ...(d.replayWebm === null
+      ? {}
+      : d.focused
+        ? { replayClockOffsetMs: 0 }
+        : (() => {
+            const offsetMs = observedReplayClockOffsetMs(packOriginMs, d.replayOriginMs)
+            return offsetMs === undefined ? {} : { replayClockOffsetMs: offsetMs }
+          })()),
     // The recorder's own account of what it managed (#82), carried into the
     // pack so the replay's quality is a fact a reader can see.
     ...(() => {
@@ -399,6 +550,15 @@ function toEditorDisplays(
   focusedWindowDurationMs: number,
 ): EditorDisplayPayload[] {
   if (displays.length < 2) return []
+  const focused = displays.find((d) => d.focused)
+  const focusedSourceStartMs = Math.max(
+    0,
+    (focused?.replayDurationMs ?? focusedWindowDurationMs) - focusedWindowDurationMs,
+  )
+  const packOriginMs =
+    focused?.replayOriginMs === undefined
+      ? undefined
+      : focused.replayOriginMs + focusedSourceStartMs
   return displays.map((d) => ({
     index: d.index,
     focused: d.focused,
@@ -417,13 +577,489 @@ function toEditorDisplays(
     // instead of a bare "frozen frame".
     replayUnavailableReason: d.replayUnavailableReason,
     replayDurationMs: d.replayDurationMs,
-    // Every recorder was stopped by the SAME trigger, so the replays all END at
-    // the capture instant even though they started at slightly different times
-    // (independent segment rotation). End-alignment is therefore the exact
-    // conversion from the pack clock to this display's own clock. A fresh
-    // capture is never trimmed at this point — the trim is applied at save.
-    replayOffsetMs: d.focused ? 0 : d.replayDurationMs - focusedWindowDurationMs,
+    // Prefer the recorders' OBSERVED shared-clock origins. Only a recorder that
+    // could not report an origin falls back to the legacy end-alignment rule.
+    replayOffsetMs: d.focused
+      ? 0
+      : resolvedReplayClockOffsetMs(
+          observedReplayClockOffsetMs(packOriginMs, d.replayOriginMs),
+          d.replayDurationMs,
+          focusedWindowDurationMs,
+        ),
   }))
+}
+
+function imageCropBounds(
+  selection: ImageRegionSelection,
+): ImageCropBounds | undefined {
+  if (selection.mode !== 'region') return undefined
+  return {
+    ...selection.desktopDipRect,
+    coordinate_space: 'virtual-desktop-dip',
+  }
+}
+
+function captureMetadataFromManifest(manifest: Manifest): {
+  captureKind: CaptureKind
+  imageScope?: ImageCaptureScope
+  cropBounds?: ImageCropBounds
+} {
+  // Packs predating explicit image capture came from the video hotkey, even if
+  // their recorder failed and only snapshot.png survived. Do not rewrite that
+  // ambiguous legacy evidence as an explicitly requested full-screen still.
+  if (manifest.capture_kind !== 'image') return { captureKind: 'video' }
+  if (manifest.media.replay !== null || manifest.media.displays !== undefined) {
+    throw new Error('image CapturePack must not declare replay or per-display media')
+  }
+  const scope = manifest.media.image_scope
+  if (scope !== 'region' && scope !== 'fullscreen') {
+    throw new Error('image CapturePack has no valid media.image_scope')
+  }
+  if (scope === 'fullscreen') {
+    if (manifest.media.crop_bounds !== undefined) {
+      throw new Error('fullscreen image CapturePack must not declare crop_bounds')
+    }
+    return { captureKind: 'image', imageScope: scope }
+  }
+  const crop = manifest.media.crop_bounds
+  if (
+    crop === undefined ||
+    !Number.isFinite(crop.x) ||
+    !Number.isFinite(crop.y) ||
+    !Number.isFinite(crop.width) ||
+    crop.width <= 0 ||
+    !Number.isFinite(crop.height) ||
+    crop.height <= 0 ||
+    crop.coordinate_space !== 'virtual-desktop-dip'
+  ) {
+    throw new Error('region image CapturePack has invalid media.crop_bounds')
+  }
+  return {
+    captureKind: 'image',
+    imageScope: scope,
+    cropBounds: { ...crop },
+  }
+}
+
+function cropSnapshot(
+  png: Buffer,
+  selection: ImageRegionSelection,
+): Buffer {
+  const source = nativeImage.createFromBuffer(png)
+  if (source.isEmpty()) throw new Error('captured image could not be decoded')
+  const rect = selection.pixelRect
+  const cropped = source.crop({
+    x: Math.round(rect.x),
+    y: Math.round(rect.y),
+    width: Math.round(rect.width),
+    height: Math.round(rect.height),
+  })
+  const size = cropped.getSize()
+  if (
+    cropped.isEmpty() ||
+    size.width !== rect.width ||
+    size.height !== rect.height
+  ) {
+    throw new Error(
+      `captured image crop mismatch: expected ${rect.width}x${rect.height}, ` +
+        `got ${size.width}x${size.height}`,
+    )
+  }
+  return cropped.toPNG()
+}
+
+/**
+ * Joins every frozen display into one native-pixel PNG.
+ *
+ * The placement helper has already resolved mixed-DPI topology without
+ * resampling. This copier therefore moves complete BGRA scanlines only: every
+ * source pixel reaches the pack unchanged and uncovered virtual-desktop gaps
+ * are opaque black, matching the Windows full-screen capture surface.
+ */
+function composeImageDesktop(
+  layout: ImageDesktopLayout,
+  snapshots: ReadonlyMap<number, DisplaySnapshot>,
+): Buffer {
+  const bitmap = createImageDesktopBitmap(layout)
+  for (const placement of layout.placements) {
+    const displayId = Number(placement.id)
+    const snapshot = Number.isFinite(displayId)
+      ? snapshots.get(displayId)
+      : undefined
+    if (snapshot === undefined) {
+      throw new Error(`captured display ${placement.id} disappeared before composition`)
+    }
+    const source = nativeImage.createFromBuffer(snapshot.png)
+    const size = source.getSize()
+    if (
+      source.isEmpty() ||
+      size.width !== placement.width ||
+      size.height !== placement.height
+    ) {
+      throw new Error(
+        `captured display ${placement.index} size mismatch: expected ` +
+          `${placement.width}x${placement.height}, got ${size.width}x${size.height}`,
+      )
+    }
+    const sourceBitmap = source.toBitmap()
+    placeImageDesktopBitmap(
+      layout,
+      placement,
+      {
+        id: placement.id,
+        width: size.width,
+        height: size.height,
+        bgra: sourceBitmap,
+      },
+      bitmap,
+    )
+  }
+
+  const composed = nativeImage.createFromBitmap(bitmap, {
+    width: layout.width,
+    height: layout.height,
+  })
+  const size = composed.getSize()
+  if (
+    composed.isEmpty() ||
+    size.width !== layout.width ||
+    size.height !== layout.height
+  ) {
+    throw new Error(
+      `full-desktop image composition mismatch: expected ` +
+        `${layout.width}x${layout.height}, got ${size.width}x${size.height}`,
+    )
+  }
+  return composed.toPNG()
+}
+
+async function runImageFlow(settings: Settings): Promise<void> {
+  const triggerAt = Date.now()
+  let uiaDump: Promise<UiaRawDump | null>
+  if (settings.uiaEnabled) {
+    uiaDump = startUiaDump()
+  } else {
+    recordUiaSkipped()
+    uiaDump = Promise.resolve(null)
+  }
+
+  // Freeze first, reveal overlays second. No selector pixel can therefore
+  // appear in the image, and a cancelled selection never reaches persistence.
+  const allDisplays = screen.getAllDisplays()
+  if (allDisplays.length === 0) throw new Error('no display is available')
+  const focused = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+  const snapshots = await takeDisplaySnapshots(allDisplays, focused)
+  const indexById = new Map(allDisplays.map((display, index) => [display.id, index + 1]))
+  const selectable = allDisplays.flatMap((display) => {
+    const snapshot = snapshots.get(display.id)
+    if (snapshot === undefined) return []
+    return [{
+      id: String(display.id),
+      index: indexById.get(display.id) ?? 1,
+      bounds: { ...display.bounds },
+      scaleFactor: display.scaleFactor,
+      pixelSize: { width: snapshot.width, height: snapshot.height },
+    }]
+  })
+  if (selectable.length === 0) throw new Error('no screen source is available')
+  const desktop = layoutImageDesktop(selectable)
+  const selection = await selectImageRegion({
+    displays: selectable,
+    focusedDisplayId: String(focused.id),
+    uiLanguage: uiLanguage(settings),
+  })
+  if (selection === null) {
+    snapshots.clear()
+    logInfo('[image] selection cancelled — no pack was written')
+    return
+  }
+
+  const focusedDisplay =
+    allDisplays.find((display) => display.id === focused.id) ?? allDisplays[0]
+  if (focusedDisplay === undefined) throw new Error('the focused display disappeared')
+  const focusedPlacement =
+    desktop.placements.find((placement) => placement.id === String(focused.id)) ??
+    desktop.placements[0]
+  const contextFocusedDisplay = focusedPlacement?.index ?? 1
+  const displayById = new Map(
+    allDisplays.map((display) => [String(display.id), display]),
+  )
+  const targets: UiaDisplayTarget[] = desktop.placements.flatMap((placement) => {
+    const display = displayById.get(placement.id)
+    if (display === undefined) return []
+    return [{
+      index: placement.index,
+      focused: placement.index === contextFocusedDisplay,
+      bounds: { ...display.bounds },
+      width: placement.width,
+      height: placement.height,
+    }]
+  })
+  const desktopUia = uiaDump
+    .then((raw) => {
+      if (raw === null) return null
+      return composeUiaForImageDesktop(
+        mapUiaToSnapshot(raw, targets),
+        desktop.placements,
+        contextFocusedDisplay,
+      )
+    })
+    .catch((err: unknown) => {
+      logError('[image] mapping full-desktop UI Automation context failed:', err)
+      return null
+    })
+
+  let desktopPng: Buffer | null = composeImageDesktop(desktop, snapshots)
+  let snapshotPng: Buffer
+  let width: number
+  let height: number
+  const screenDeclaration = desktop.placements.map((placement) => ({
+    width: placement.pixelSize.width,
+    height: placement.pixelSize.height,
+    scale: placement.scaleFactor,
+  }))
+  let uiaReady: Promise<UiaPluginPayload | null>
+
+  if (selection.mode === 'fullscreen') {
+    if (selectable.length !== allDisplays.length) {
+      snapshots.clear()
+      throw new Error(
+        `full-desktop image needs every display: captured ` +
+          `${selectable.length} of ${allDisplays.length}`,
+      )
+    }
+    // "Full screen" follows Windows' snipping semantics: the complete virtual
+    // desktop, not only the monitor that held the toolbar.
+    snapshotPng = desktopPng
+    width = desktop.width
+    height = desktop.height
+    uiaReady = desktopUia
+  } else {
+    // Cross-monitor drags crop the lossless all-display composition. Only this
+    // explicit rectangle survives; the temporary full desktop is released
+    // before save/editor IPC and is never written to the CapturePack.
+    snapshotPng = cropSnapshot(desktopPng, selection)
+    width = selection.pixelRect.width
+    height = selection.pixelRect.height
+    uiaReady = desktopUia
+      .then((mapped) => {
+        return cropUiaForImage(
+          mapped,
+          {
+            display: 1,
+            ...selection.pixelRect,
+          },
+          1,
+        )
+      })
+      .catch((err: unknown) => {
+        logError('[image] mapping/cropping UI Automation context failed:', err)
+        return null
+      })
+  }
+  // From this point onward the only reachable raster is the explicit crop or
+  // the explicitly requested all-display composition.
+  desktopPng = null
+  snapshots.clear()
+
+  const capturedAt = new Date(triggerAt)
+  const events: TimelineEvent[] = [{
+    t_ms: 0,
+    type: 'core.image.capture.triggered',
+    source: 'core',
+    data: {
+      hotkey: settings.imageCaptureHotkey,
+      scope: selection.mode,
+    },
+  }]
+  const timeline: TimelineFile = {
+    t0: isoWithOffset(capturedAt),
+    events,
+  }
+  const cropBounds = imageCropBounds(selection)
+  const initialSave: InitialSaveInput = {
+    captureKind: 'image',
+    imageScope: selection.mode,
+    ...(cropBounds === undefined ? {} : { cropBounds }),
+    snapshotPng,
+    width,
+    height,
+    capturedAt,
+    replayWebm: null,
+    replayDurationMs: 0,
+    timeline,
+    outputDir: settings.outputDir,
+    screens: screenDeclaration,
+    windowsContext: null,
+    docLanguage: packDocLanguage(settings),
+  }
+
+  let handle: PackHandle | null = null
+  try {
+    handle = await savePack(initialSave)
+    logInfo(
+      `[image] save-first wrote ${path.basename(handle.dirPath)} ` +
+        `(${selection.mode}, ${width}x${height})`,
+    )
+  } catch (err) {
+    logError('[image] save-first failed; Save will retry:', err)
+  }
+
+  const uiaWrite: Promise<UiaPluginPayload | null> = uiaReady.then(async (payload) => {
+    const saved = handle
+    if (payload === null || saved === null) return payload
+    try {
+      await writeUiaPlugin(saved.dirPath, payload)
+      await addManifestPlugin(saved, uiaPluginDeclaration())
+    } catch (err) {
+      logError(`[image] writing plugins/${UIA_PLUGIN_NAME} failed:`, err)
+    }
+    return payload
+  })
+
+  const { win: editor, mode: windowMode } = createEditorWindow(
+    focusedDisplay.bounds,
+    settings,
+  )
+  editor.webContents.on('console-message', (_event, level, message) => {
+    if (!message.startsWith('capturepack:')) return
+    if (level >= 2) logWarn(`[editor] ${message}`)
+    else logInfo(`[editor] ${message}`)
+  })
+  editor.once('ready-to-show', () => {
+    void (async () => {
+      const settled = await settleWithin(uiaReady, UIA_EDITOR_GRACE_MS)
+      if (editor.isDestroyed()) return
+      const uia = settled.ready ? settled.value : null
+      const contextSession = openContextSession(editor, {
+        displays: [{ index: 1, focused: true, width, height }],
+        replayDurationMs: 0,
+        observation: contextObservation(uia, 1, 0),
+        dropped: settled.ready && uiaEmpty(uia),
+        domEvents: [],
+      })
+      const init: EditorInitPayload = {
+        captureKind: 'image',
+        snapshotPng: toArrayBuffer(snapshotPng),
+        width,
+        height,
+        hasReplay: false,
+        replayDurationMs: 0,
+        replaySourceStartMs: 0,
+        displays: [],
+        replayWebm: null,
+        replayMimeType: null,
+        replayUnavailableReason: null,
+        context: {
+          sessionId: contextSession.sessionId,
+          frame: await contextSession.frameAt(0),
+        },
+        fps: settings.fps,
+        scrubInvert: settings.scrubInvert,
+        scrubSensitivityMs: settings.scrubSensitivityMs,
+        defaultManualDurationMs: settings.defaultManualDurationMs,
+        showDurationLabel: settings.showDurationLabel,
+        showShortcutOverlay: settings.showShortcutOverlay,
+        showEditorTutorial: settings.showEditorTutorial,
+        annotations: [],
+        title: '',
+        note: '',
+        editMode: false,
+        uiLanguage: uiLanguage(settings),
+        windowMode,
+      }
+      if (editor.isDestroyed()) return
+      editor.webContents.send(IPC.editorInit, init)
+      editor.maximize()
+      editor.show()
+      editor.focus()
+
+      if (!settled.ready) {
+        void uiaReady.then(
+          (payload) => {
+            if (editor.isDestroyed()) return
+            contextSession.adopt(contextObservation(payload, 1, 0))
+            contextSession.markDropped(uiaEmpty(payload))
+            pushContextFrame(editor, contextSession, 0)
+          },
+          (err: unknown) => {
+            logError('[image] pushing delayed object context failed:', err)
+          },
+        )
+      }
+    })().catch((err: unknown) => {
+      logError('[image] preparing the editor failed — closing it:', err)
+      if (!editor.isDestroyed()) editor.destroy()
+    })
+  })
+
+  const outcome = await runEditor(editor, events, triggerAt)
+  logInfo(`[image] editor closed: ${outcome.kind}`)
+  if (outcome.kind === 'cancel') {
+    // The explicit image choice is already a valid save-first pack. Its only
+    // source raster is the selected crop/fullscreen image.
+    void uiaWrite.catch((err: unknown) =>
+      logError('[image] finishing cancelled image context failed:', err),
+    )
+    return
+  }
+
+  const uiaPayload = await uiaWrite
+  const annotations = outcome.payload.annotations.map(withoutReplayTimes)
+  const input: ExportInput = {
+    captureKind: 'image',
+    imageScope: selection.mode,
+    ...(cropBounds === undefined ? {} : { cropBounds }),
+    snapshotPng: Buffer.from(outcome.payload.snapshotPng),
+    width,
+    height,
+    capturedAt,
+    replayWebm: null,
+    replayDurationMs: 0,
+    annotations,
+    title: outcome.payload.title,
+    note: outcome.payload.note,
+    snapshotTMs: null,
+    timeline,
+    screens: screenDeclaration,
+    uia: uiaPayload ?? undefined,
+    windowsContext: null,
+    clipboardAfterSave: settings.clipboardAfterSave,
+    docLanguage: packDocLanguage(settings),
+  }
+
+  try {
+    if (handle === null) handle = await savePack(initialSave)
+    const savedHandle = handle
+    await updatePack(savedHandle, input)
+    logInfo(
+      `[image] saved ${path.basename(savedHandle.dirPath)}: ` +
+        `${annotations.length} annotation(s), no video`,
+    )
+    // Confirm the configured automatic copy before presenting "Saved". This is
+    // bounded to 80 ms under clipboard contention and avoids a visible toast
+    // winning the race with the clipboard write.
+    await copyAfterSave(settings.clipboardAfterSave, savedHandle.dirPath)
+    showSaveToast({
+      folderPath: savedHandle.dirPath,
+      hasBlur: annotations.some((annotation) => annotation.blur),
+      replayUnavailable: null,
+      renderState: 'none',
+      uiLanguage: uiLanguage(settings),
+    })
+    startKeyframeStill(savedHandle, {
+      snapshotPng: input.snapshotPng,
+      annotations,
+      displayNumbers: globalDisplayNumbers(annotations),
+      focusedDisplay: 1,
+      width,
+      height,
+      docLanguage: packDocLanguage(settings),
+    })
+  } catch (err) {
+    logError('[image] save failed:', err)
+    dialog.showErrorBox(uiT(settings)('app.saveFailedTitle'), errorMessage(err))
+  }
 }
 
 async function runFlow(settings: Settings): Promise<void> {
@@ -455,20 +1091,39 @@ async function runFlow(settings: Settings): Promise<void> {
   // "all": every connected display is frozen, the cursor's display is the
   // FOCUSED one. "cursor"/fixed: that display alone. Snapshot, replay, editor,
   // and annotations all target the focused display.
-  const frozen = await freezeDisplays(settings)
-  // WHEN THE REPLAY ACTUALLY ENDS, which is not when the hotkey was pressed.
-  //
-  // `replay.durationMs` is measured in the RENDERER at the moment it stops the
-  // recorder and assembles the blob — after the trigger, after the IPC round
-  // trip, after however long muxing thirty seconds of H.264 takes. So the file
-  // spans [thisInstant - durationMs, thisInstant], and anchoring the pack clock
-  // to `triggerAt` instead shifts every replay time by the assembly cost.
-  //
-  // Nothing noticed while the pack clock only had to agree with itself. It
-  // stopped being invisible the moment surfaces recorded on the wall clock were
-  // compared against video frames: every window sat where it had been a moment
-  // earlier, uniformly, at every scrub position.
-  const replayEndAt = Date.now()
+  let frozen = await freezeDisplays(settings)
+  // Every display replay is expressed on the focused recorder's pack clock.
+  // If that clock master failed while a secondary recorder succeeded, keeping
+  // the secondary would write an unclocked, unscrubbable and potentially
+  // oversized ring segment. This RC intentionally degrades the whole capture
+  // to its frozen frames instead of silently promoting a different monitor.
+  const retainedReplays = retainedDisplayReplayMask(
+    frozen.displays.map((candidate) => ({
+      focused: candidate.focused,
+      hasReplay: candidate.replayWebm !== null,
+    })),
+  )
+  const orphanedSecondaryReplays = frozen.displays.reduce(
+    (count, candidate, index) =>
+      count + (candidate.replayWebm !== null && retainedReplays[index] !== true ? 1 : 0),
+    0,
+  )
+  if (orphanedSecondaryReplays > 0) {
+    const displays = frozen.displays.map((candidate, index) =>
+      retainedReplays[index] === true ? candidate : withoutFrozenReplay(candidate),
+    )
+    logWarn(
+      `[capture] focused replay unavailable — discarded ${orphanedSecondaryReplays} ` +
+        'secondary replay(s) and kept a multi-display screenshot-only capture',
+    )
+    frozen = {
+      ...frozen,
+      displays,
+      focused: displays.find((candidate) => candidate.focused) ??
+        withoutFrozenReplay(frozen.focused),
+    }
+  }
+  const allReplaysReadyAt = Date.now()
   const display = frozen.focused
   const snap = { png: display.snapshotPng, width: display.width, height: display.height }
   const replay =
@@ -486,8 +1141,24 @@ async function runFlow(settings: Settings): Promise<void> {
   // trim cuts it; a just-started buffer stays at its honest shorter duration.
   const replayDurationMs = Math.min(rawReplayDurationMs, settings.replaySeconds * 1000)
   const replaySourceStartMs = rawReplayDurationMs - replayDurationMs
-  // Anchored to the replay's own end, not the trigger — see `replayEndAt`.
-  const t0Ms = replayEndAt - replayDurationMs
+  // PIXELS OWN THE CLOCK (#112). The renderer measured where the focused
+  // replay's first byte lies on the shared wall-comparable axis before it began
+  // stop/flush assembly. Receiving those bytes later — or waiting for a slower
+  // secondary recorder in Promise.all — cannot move time already recorded.
+  //
+  // Save-first declares the raw ring, while the editor/final pack exposes its
+  // logical last-N window. Resolve both from the same measured origin and add
+  // the source in-point exactly once. Only an origin-less legacy renderer uses
+  // main's pre-request wall time as an end anchor.
+  const replayClock = resolveFocusedReplayTimelineClock({
+    replayOriginMs: display.replayOriginMs,
+    replayRequestWallMs: display.replayRequestWallMs,
+    captureWallMs: triggerAt,
+    rawDurationMs: rawReplayDurationMs,
+    logicalDurationMs: replayDurationMs,
+  })
+  const rawT0Ms = replayClock.rawT0Ms
+  const t0Ms = replayClock.packT0Ms
   // PINS THE SURFACE TIMELINE for exactly the range this pack covers (#64
   // `onFreeze`, #65). From here the editor can ask "which window was where at
   // pack time T" for any T in the replay, and pruning may not touch that range
@@ -501,22 +1172,94 @@ async function runFlow(settings: Settings): Promise<void> {
   // replay length plus a slack, and the prune runs at 1 Hz.
   // The tick clock's value at the SAVED replay's t=0, plus whatever the exact
   // -length cut drops from its head — that is where the pack clock starts (#112).
-  const focusedReplay = frozen.displays.find((d) => d.focused)
-  const tickOriginMs =
-    focusedReplay?.replayOriginMs === undefined
-      ? undefined
-      : focusedReplay.replayOriginMs + replaySourceStartMs
-  const contextFreezeId = freezeContext(replayEndAt, replayDurationMs, tickOriginMs)
+  const replayOriginWallMs =
+    replayClock.measured ? replayClock.packT0Ms : undefined
+  const contextFreezeId = freezeContext(
+    replayClock.packEndMs,
+    replayDurationMs,
+    replayOriginWallMs,
+  )
   logInfo(
-    `[context] pack clock: replay ends ${String(replayEndAt - triggerAt)} ms after the trigger, ` +
-      `${String(replayDurationMs)} ms long (raw ${String(rawReplayDurationMs)} ms)`,
+    `[context] pack clock: ${replayClock.measured ? 'measured recorder origin' : 'wall fallback'}, ` +
+      `end ${String(replayClock.packEndMs - triggerAt)} ms from trigger, ` +
+      `${String(replayDurationMs)} ms long (raw ${String(rawReplayDurationMs)} ms); ` +
+      `all display replies ready ${String(allReplaysReadyAt - triggerAt)} ms from trigger`,
   )
   logContextCost()
   // media.displays[] exists only when the capture actually covered more than
   // one display (SPEC §5.3): a single-display pack stays exactly what 0.1.2
   // wrote. The editor's board follows the same rule: one display, one screen.
   const multiDisplay = frozen.displays.length > 1
-  const displayCaptures = multiDisplay ? toDisplayCaptures(frozen.displays) : undefined
+  // Save-first writes the uncut recorder files, so its per-display offsets are
+  // measured from the focused RAW origin. The editor/final declaration starts
+  // at the logical source in-point instead. Keeping both prevents a transient
+  // save-first manifest from mixing a raw replay with the last-N pack clock.
+  const rawDisplayCaptures = multiDisplay
+    ? toDisplayCaptures(frozen.displays)
+    : undefined
+  const displayCaptures = multiDisplay
+    ? toDisplayCaptures(frozen.displays, replaySourceStartMs)
+    : undefined
+
+  // ONE MAPPING SPACE PER CAPTURED DISPLAY (GOAL "Multi-Monitor Support").
+  // These targets are shared by all three consumers — UIA dump mapping, the
+  // live editor ring, and the persisted ring — so save/reopen cannot drift into
+  // a different monitor or DPI conversion.
+  const uiaTargets: UiaDisplayTarget[] = multiDisplay
+    ? frozen.displays.map((d) => ({
+        index: d.index,
+        focused: d.focused,
+        bounds: d.bounds,
+        width: d.focused ? snap.width : d.width,
+        height: d.focused ? snap.height : d.height,
+      }))
+    : [{ index: 1, focused: true, bounds: display.bounds, width: snap.width, height: snap.height }]
+  const uiaFocusedIndex = uiaTargets.find((target) => target.focused)?.index ?? 1
+  const contextDisplays = uiaTargets.map((target) => ({
+    index: target.index,
+    focused: target.focused,
+    width: target.width,
+    height: target.height,
+  }))
+
+  // Freeze-to-observations happens ONCE. The fresh editor adopts this exact
+  // array and the pack stores a lossless delta encoding of the same values;
+  // reopening therefore cannot rerun coordinate projection through a different
+  // path. Object history remains best effort — a failure yields no plugin and
+  // cannot fail or delay the media save beyond this bounded in-memory read.
+  let windowsContextObservations: ContextObservation[] = []
+  let saveFirstWindowsContext: WindowsContextTimelineV1 | null = null
+  if (contextFreezeId !== null) {
+    try {
+      windowsContextObservations = frozenObservations(
+        contextFreezeId,
+        contextDisplays,
+        replayDurationMs,
+      )
+      // Save-first still declares the recorder's RAW file. Its last-N context
+      // therefore begins at replaySourceStartMs on that raw clock. Final save
+      // and cancel-finalize both trim/rebase this payload alongside the media.
+      saveFirstWindowsContext = exportWindowsContextTimeline(
+        windowsContextObservations,
+        {
+          startMs: 0,
+          endMs: replayDurationMs,
+          rebaseToMs: replaySourceStartMs,
+        },
+      )
+      if (windowsContextObservations.length > 0 && saveFirstWindowsContext === null) {
+        logWarn('[context] Windows history could not be encoded; capture continues without it')
+      }
+    } catch (err) {
+      logError(
+        `[context] Windows history could not be frozen; capture continues without it: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      )
+      windowsContextObservations = []
+      saveFirstWindowsContext = null
+    }
+  }
 
   // SPEC §10.2: the trigger event carries the accelerator that fired it in
   // `data.hotkey` (report.md renders it). It is configurable, so it is read
@@ -534,6 +1277,7 @@ async function runFlow(settings: Settings): Promise<void> {
   // cancelled editor or a crash never loses it. Failure is non-fatal — the
   // editor still opens and Save retries the write from scratch.
   const initialSave: InitialSaveInput = {
+    captureKind: 'video',
     snapshotPng: snap.png,
     width: snap.width,
     height: snap.height,
@@ -544,7 +1288,7 @@ async function runFlow(settings: Settings): Promise<void> {
     // declaration and clock together after the exact background cut.
     replayDurationMs: rawReplayDurationMs,
     timeline: {
-      t0: new Date(replayEndAt - rawReplayDurationMs).toISOString(),
+      t0: new Date(rawT0Ms).toISOString(),
       events: events.map((e) =>
         e.type === 'core.capture.triggered' ? { ...e, t_ms: rawReplayDurationMs } : e,
       ),
@@ -552,8 +1296,11 @@ async function runFlow(settings: Settings): Promise<void> {
     outputDir: settings.outputDir,
     // Save-first writes EVERY display (GOAL "Multi-Monitor Support"): a
     // cancelled editor or a crash must not lose the other screens either.
-    displays: displayCaptures,
+    displays: rawDisplayCaptures,
     screens: frozen.screens,
+    ...(saveFirstWindowsContext === null
+      ? {}
+      : { windowsContext: saveFirstWindowsContext }),
     docLanguage: packDocLanguage(settings),
   }
   // The OUTCOME of the capture itself, before any editing: how many displays it
@@ -625,25 +1372,6 @@ async function runFlow(settings: Settings): Promise<void> {
   // Neither promise may EVER reject: a rejection here would surface as
   // "Capture failed", and object data must never be able to fail a capture.
   //
-  // ONE MAPPING SPACE PER CAPTURED DISPLAY (GOAL "Multi-Monitor Support"): the
-  // editor draws every frozen screen and every one of them is annotatable, so
-  // every one of them gets its objects in ITS OWN snapshot pixels. The indices
-  // are the ones the PACK declares (SPEC §5.6) — which for a single-display
-  // capture is 1 and nothing else, exactly what the editor's one-display board
-  // calls it, so the payload it writes is byte-for-byte what it always was.
-  const uiaTargets: UiaDisplayTarget[] = multiDisplay
-    ? frozen.displays.map((d) => ({
-        index: d.index,
-        focused: d.focused,
-        bounds: d.bounds,
-        // The snapshot's ACTUAL pixel size — the annotation coordinate space
-        // the picked bounds have to land in (SPEC §8.2).
-        width: d.focused ? snap.width : d.width,
-        height: d.focused ? snap.height : d.height,
-      }))
-    : [{ index: 1, focused: true, bounds: display.bounds, width: snap.width, height: snap.height }]
-  // What an entry WITHOUT a `display` field means, here and in the editor.
-  const uiaFocusedIndex = uiaTargets.find((t) => t.focused)?.index ?? 1
   const uiaReady: Promise<UiaPluginPayload | null> = uiaDump
     .then((raw) => (raw === null ? null : mapUiaToSnapshot(raw, uiaTargets)))
     .catch((err: unknown) => {
@@ -669,20 +1397,18 @@ async function runFlow(settings: Settings): Promise<void> {
   // when there is something to declare — a capture made with no browser
   // talking has no chrome-dom directory at all, which SPEC §11.3 reads as
   // "nobody was watching" rather than "nothing happened".
-  void (async () => {
-    const saved = handle
-    if (saved === null) return
-    const window = frozenWindow(contextFreezeId)
-    if (window === null) return
-    const status = domBridgeStatus()
-    const events = domEventsBetween(window.startMs, window.endMs)
-    if (events.length === 0) return
+  const domWindow = frozenWindow(contextFreezeId)
+  const capturedDomEvents =
+    domWindow === null ? [] : domEventsBetween(domWindow.startMs, domWindow.endMs)
+  const domStatus = domBridgeStatus()
+  const writeCapturedDomPlugin = async (saved: PackHandle | null): Promise<void> => {
+    if (saved === null || domWindow === null || capturedDomEvents.length === 0) return
     const wrote = await tryWriteDomPlugin(saved.dirPath, {
       protocol: DOM_PROTOCOL_VERSION,
-      extension_version: status.extensionVersion,
-      events: events.map((e: DomEvent) => ({
+      extension_version: domStatus.extensionVersion,
+      events: capturedDomEvents.map((e: DomEvent) => ({
         // On the pack's clock, like everything else drawn beside it.
-        t_ms: Math.max(0, Math.round(e.tMs - window.startMs)),
+        t_ms: Math.max(0, Math.round(e.tMs - domWindow.startMs)),
         type: e.type,
         tab: e.tab,
         ...(e.element === undefined ? {} : { element: e.element }),
@@ -695,11 +1421,18 @@ async function runFlow(settings: Settings): Promise<void> {
     if (!wrote) return
     try {
       await addManifestPlugin(saved, domPluginDeclaration())
-      logInfo(`[chrome] pack carries ${events.length} DOM event(s) from the browser`)
+      logInfo(`[chrome] pack carries ${capturedDomEvents.length} DOM event(s) from the browser`)
     } catch (err) {
       logError('capturepack: declaring plugins/chrome-dom failed:', err)
     }
-  })()
+  }
+  const saveFirstHandle = handle
+  const domWrite = writeCapturedDomPlugin(saveFirstHandle).catch((err: unknown) => {
+    // Browser context is a source refinement, never permission to fail the
+    // capture. Final save still waits for this settled result before publishing
+    // its manifest, so a successful payload cannot race behind the save toast.
+    logError('capturepack: saving plugins/chrome-dom failed:', err)
+  })
 
   const { win: editor, mode: windowMode } = createEditorWindow(display.bounds, settings)
   // THE EDITOR'S OWN DIAGNOSTICS BELONG IN THE LOG (#113).
@@ -729,12 +1462,6 @@ async function runFlow(settings: Settings): Promise<void> {
       // surface record and the Windows UI Automation provider both hang off it,
       // and the provider is registered through the same public registry an
       // external one would use — no private path into Core.
-      const contextDisplays = uiaTargets.map((target) => ({
-        index: target.index,
-        focused: target.focused,
-        width: target.width,
-        height: target.height,
-      }))
       // The browser's element picks, REBASED ONTO THE PACK CLOCK — the same
       // clock the ring and the video already agree on (SPEC §10.1), which is
       // what lets the DOM provider place an element against the very window
@@ -780,15 +1507,7 @@ async function runFlow(settings: Settings): Promise<void> {
         // A capture is the replay, the snapshot and the annotations. Picking is
         // a refinement on top. Losing the refinement must cost the refinement
         // and nothing else.
-        let ring: ContextObservation[] = []
-        try {
-          ring = frozenObservations(contextFreezeId, contextDisplays, replayDurationMs)
-        } catch (err) {
-          logError(
-            `[context] the surface ring could not be read — picking answers at the capture ` +
-              `instant only: ${err instanceof Error ? err.message : String(err)}`,
-          )
-        }
+        const ring = windowsContextObservations
         if (ring.length > 1) {
           contextSession.adoptAll(ring)
           logInfo(
@@ -811,6 +1530,7 @@ async function runFlow(settings: Settings): Promise<void> {
         )
       }
       const init: EditorInitPayload = {
+        captureKind: 'video',
         snapshotPng: toArrayBuffer(snap.png),
         width: snap.width,
         height: snap.height,
@@ -953,10 +1673,13 @@ async function runFlow(settings: Settings): Promise<void> {
     return
   }
 
-  // Both writers of manifest.json must never interleave: the save-first plugin
-  // declaration above patches it in place, updatePack below rewrites it whole.
-  // Awaiting here costs nothing — the dump resolved long before the user saved.
-  const uiaPayload = await uiaWrite
+  // Every source plugin must settle before final source publication. UIA and
+  // Chrome write on independent capture-time paths; allowing either manifest
+  // declaration to trail updatePack made a just-saved pack look randomly
+  // under-captured through MCP until that detached write happened to finish.
+  // Awaiting here normally costs nothing — both capture budgets elapsed while
+  // the user was editing.
+  const [uiaPayload] = await Promise.all([uiaWrite, domWrite])
 
   // The replay is ALWAYS kept when one exists (GOAL "No include-replay
   // toggle"): what leaves the machine is decided at share time, not here. It
@@ -1002,8 +1725,28 @@ async function runFlow(settings: Settings): Promise<void> {
   const needsExactCut =
     replayWebm !== null &&
     (sourceTrimStartMs > 0 || replaySourceStartMs + keptRange.endMs < rawReplayDurationMs)
+  let finalWindowsContext: WindowsContextTimelineV1 | null = null
+  try {
+    if (windowsContextObservations.length > 0) {
+      finalWindowsContext = exportWindowsContextTimeline(
+        windowsContextObservations,
+        {
+          startMs: keptRange.startMs,
+          endMs: keptRange.endMs,
+          rebaseToMs: 0,
+        },
+      )
+    }
+  } catch (err) {
+    logError(
+      `[context] Windows history could not be trimmed; final save omits it: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    )
+  }
 
   const input: ExportInput = {
+    captureKind: 'video',
     snapshotPng: Buffer.from(outcome.payload.snapshotPng),
     width: snap.width,
     height: snap.height,
@@ -1022,81 +1765,132 @@ async function runFlow(settings: Settings): Promise<void> {
     // Rewritten (and declared) by the finalize save too, so a save-first that
     // failed and had to be retried below still ends up with the object data.
     uia: uiaPayload ?? undefined,
+    // Concrete value replaces the raw-clock save-first payload; null removes
+    // it so an encoding failure can never leave stale coordinates declared.
+    windowsContext: finalWindowsContext,
     clipboardAfterSave: settings.clipboardAfterSave,
     docLanguage: packDocLanguage(settings),
   }
 
   try {
-    // Save-first failed earlier? Retry the initial write now, then finalize.
+    // Save-first failed earlier? Retry the initial write now. Final source
+    // publication below is still the visible save boundary.
     if (handle === null) handle = await savePack(initialSave)
     const savedHandle = handle
+    if (saveFirstHandle === null) {
+      // The detached save-first attempt had no folder to enrich. The DOM
+      // snapshot itself was already frozen above, so land that exact source in
+      // the retry folder before its final manifest is published.
+      await writeCapturedDomPlugin(savedHandle)
+    }
     const hasReplay = replayWebm !== null
-    // The SAVE result (issue #60): pack name, annotation count, and whether a
-    // replay went in — the three things every later question about a pack asks.
-    logInfo(
-      `[capture] saved ${path.basename(savedHandle.dirPath)}: ` +
-        `${input.annotations.length} annotation(s), replay ${hasReplay ? 'included' : 'MISSING'}`,
-    )
-    showSaveToast({
-      folderPath: savedHandle.dirPath,
-      hasBlur: input.annotations.some((a) => a.blur),
-      // "Saved" must not read as "saved everything": a display whose buffer was
-      // not running produced no replay, and the toast is the last place the user
-      // looks before moving on (GOAL "Say that you are recording").
-      replayUnavailable: replayUnavailableForToast(frozen.displays),
-      renderState: hasReplay ? (needsExactCut ? 'trimming' : 'rendering') : 'none',
-      uiLanguage: uiLanguage(settings),
+    // Save-first already owns every raw display byte. Final source publication
+    // only needs their declarations, not another tens-of-megabytes rewrite.
+    // Keeping the buffers null also makes this completion time independent of
+    // replay size — annotations, timeline, docs and plugins become readable
+    // before any exact trim or annotated render can begin.
+    const sourceInput: ExportInput = {
+      ...input,
+      displays: input.displays?.map((candidate) => ({
+        ...candidate,
+        snapshotPng: null,
+        replayWebm: null,
+      })),
+    }
+
+    await startSourceFirstFinalSave({
+      persistSource: async () => {
+        // keepReplay preserves the raw save-first media while publishing the
+        // final authored source revision. A later exact cut replaces only the
+        // derived media declaration/bytes; it does not create the annotations.
+        await updatePack(savedHandle, sourceInput, { keepReplay: true })
+        logInfo(
+          `[capture] source saved ${path.basename(savedHandle.dirPath)}: ` +
+            `${input.annotations.length} annotation(s), replay ${hasReplay ? 'included' : 'MISSING'}; ` +
+            `derived media ${needsExactCut ? 'trim pending' : 'render pending'}`,
+        )
+        // The prompt/path and every source document are readable before the
+        // visible completion signal. copyAfterSave verifies/retries clipboard.
+        await copyAfterSave(settings.clipboardAfterSave, savedHandle.dirPath)
+        showSaveToast({
+          folderPath: savedHandle.dirPath,
+          hasBlur: input.annotations.some((a) => a.blur),
+          // "Saved" means the source is durable, never that a minute-long
+          // derived render has already completed.
+          replayUnavailable: replayUnavailableForToast(frozen.displays),
+          renderState: hasReplay ? (needsExactCut ? 'trimming' : 'rendering') : 'none',
+          uiLanguage: uiLanguage(settings),
+        })
+        return savedHandle.dirPath
+      },
+      renderDerived: async (sourceDirPath) => {
+        logInfo(
+          `[capture] derived media started ${path.basename(savedHandle.dirPath)}: ` +
+            `${needsExactCut ? 'exact trim then annotated render' : 'annotated render'}`,
+        )
+        const finalDisplays =
+          replayWebm !== null && needsExactCut
+            ? await cutCapturedDisplays(
+                frozen.displays,
+                display.index,
+                replayDurationMs,
+                keptRange,
+                settings.fps,
+              )
+            : frozen.displays
+        const finalFocused = finalDisplays.find((candidate) => candidate.focused) ?? display
+        const finalInput: ExportInput = {
+          ...input,
+          replayWebm: finalFocused.replayWebm,
+          ...(finalFocused.replayFile === null
+            ? {}
+            : { replayFile: finalFocused.replayFile }),
+          replayDurationMs: finalFocused.replayDurationMs,
+          displays: multiDisplay ? toDisplayCaptures(finalDisplays) : undefined,
+        }
+        if (needsExactCut) {
+          // The source revision is already durable. This second update only
+          // swaps the raw media declaration/bytes for the exact cut result.
+          await updatePack(savedHandle, finalInput)
+          if (finalFocused.replayWebm !== null) {
+            updateToastRenderStatus(sourceDirPath, 'rendering')
+          }
+        }
+        startFreshCaptureRenders(
+          savedHandle,
+          finalInput,
+          finalDisplays,
+          display.index,
+          settings,
+          sourceDirPath,
+        )
+      },
+      onDerivedFailure: async (err) => {
+        if (appIsQuitting) {
+          // The source revision is already durable. Queue shutdown on app quit
+          // is intentional cancellation, not permission to rewrite that source
+          // into the screenshot-only trim-failure fallback while Windows is
+          // tearing the process down.
+          logInfo(
+            `[capture] derived media cancelled during shutdown: ${path.basename(savedHandle.dirPath)}`,
+          )
+          return
+        }
+        if (needsExactCut) {
+          await handleExactCutFailure(
+            savedHandle,
+            input,
+            frozen,
+            display.index,
+            settings,
+            err,
+          )
+          return
+        }
+        logError('capturepack: derived annotated render failed after source save:', err)
+        updateToastRenderStatus(savedHandle.dirPath, 'failed')
+      },
     })
-    // NOW, not when the render finishes. The folder exists and its path is
-    // final at this line; everything after it is re-encoding that can run for
-    // minutes. Copying at the end of that was measured landing 60+ s after the
-    // save on a two-screen 4K capture — by which time the user has pressed
-    // Ctrl+V, got their old clipboard, and reported this as "복사가 안 된다".
-    copyAfterSave(settings.clipboardAfterSave, savedHandle.dirPath)
-
-    const finalize = async (): Promise<void> => {
-      const finalDisplays =
-        replayWebm !== null && needsExactCut
-          ? await cutCapturedDisplays(
-              frozen.displays,
-              display.index,
-              replayDurationMs,
-              keptRange,
-              settings.fps,
-            )
-          : frozen.displays
-      const finalFocused = finalDisplays.find((d) => d.focused) ?? display
-      const finalInput: ExportInput = {
-        ...input,
-        replayWebm: finalFocused.replayWebm,
-        ...(finalFocused.replayFile === null ? {} : { replayFile: finalFocused.replayFile }),
-        replayDurationMs: finalFocused.replayDurationMs,
-        displays: multiDisplay ? toDisplayCaptures(finalDisplays) : undefined,
-      }
-      const dirPath = await updatePack(savedHandle, finalInput)
-      if (needsExactCut && finalFocused.replayWebm !== null) {
-        updateToastRenderStatus(dirPath, 'rendering')
-      }
-      startFreshCaptureRenders(
-        savedHandle,
-        finalInput,
-        finalDisplays,
-        display.index,
-        settings,
-        dirPath,
-      )
-    }
-
-    if (needsExactCut) {
-      // Fire-and-forget: the editor closes and the folder toast appears before
-      // any real-time cut. The serialized render queue performs the exact cut,
-      // updates every clock-bearing file, then starts replay_annotated.
-      void finalize().catch((err: unknown) =>
-        handleExactCutFailure(savedHandle, input, frozen, display.index, settings, err),
-      )
-    } else {
-      await finalize()
-    }
   } catch (err) {
     logError('[capture] save failed:', err)
     dialog.showErrorBox(uiT(settings)('app.saveFailedTitle'), errorMessage(err))
@@ -1104,10 +1898,11 @@ async function runFlow(settings: Settings): Promise<void> {
 }
 
 /**
- * Cuts every recorded display to the same end-aligned pack interval. The
- * focused display defines the pack clock; a shorter secondary buffer remains
- * honestly shorter rather than being padded. All jobs pass through the global
- * render queue, so multi-display finalization never fans out encoders.
+ * Cuts every recorded display to the same observed wall-clock interval. The
+ * focused display defines the pack clock; an origin-less legacy recorder falls
+ * back to end-alignment, and a shorter secondary remains honestly shorter
+ * rather than being padded. All jobs pass through the global render queue, so
+ * multi-display finalization never fans out encoders.
  */
 async function cutCapturedDisplays(
   displays: readonly FrozenDisplay[],
@@ -1120,6 +1915,10 @@ async function cutCapturedDisplays(
   if (focused === undefined) throw new Error('focused display is missing from exact replay cut')
 
   const focusedSourceStart = focused.replayDurationMs - focusedWindowDurationMs
+  const packOriginMs =
+    focused.replayOriginMs === undefined
+      ? undefined
+      : focused.replayOriginMs + focusedSourceStart
   const cutFocused = await cutFrozenDisplay(
     focused,
     focusedSourceStart + keptRange.startMs,
@@ -1127,16 +1926,20 @@ async function cutCapturedDisplays(
     fps,
   )
 
-  const distanceFromEndAtStart = focusedWindowDurationMs - keptRange.startMs
-  const distanceFromEndAtEnd = focusedWindowDurationMs - keptRange.endMs
   const result: FrozenDisplay[] = []
   for (const display of displays) {
     if (display.index === focused.index) {
       result.push(cutFocused)
       continue
     }
-    const startMs = display.replayDurationMs - distanceFromEndAtStart
-    const endMs = display.replayDurationMs - distanceFromEndAtEnd
+    const observedOffsetMs = observedReplayClockOffsetMs(packOriginMs, display.replayOriginMs)
+    const { startMs, endMs } = displayReplayRangeMs(
+      keptRange.startMs,
+      keptRange.endMs,
+      observedOffsetMs,
+      display.replayDurationMs,
+      focusedWindowDurationMs,
+    )
     try {
       result.push(await cutFrozenDisplay(display, startMs, endMs, fps))
     } catch (err) {
@@ -1188,6 +1991,9 @@ async function cutFrozenDisplay(
     ...display,
     replayWebm,
     replayDurationMs: endMs - startMs,
+    ...(display.replayOriginMs === undefined
+      ? {}
+      : { replayOriginMs: display.replayOriginMs + startMs }),
     replayMimeType: 'video/webm',
     replayFile: 'replay.webm',
   }
@@ -1214,6 +2020,7 @@ function startFreshCaptureRenders(
   const focused = displays.find((d) => d.index === focusedIndex) ?? displays.find((d) => d.focused)
   const focusedAnnotations = annotationsOnDisplay(input.annotations, focusedIndex, focusedIndex)
   const numbers = globalDisplayNumbers(input.annotations)
+  const motionSpace = motionSpaceFromFrozenDisplays(displays, focusedIndex)
   if (
     input.replayWebm !== null &&
     focused?.replayMimeType !== null &&
@@ -1225,6 +2032,7 @@ function startFreshCaptureRenders(
         replayWebm: input.replayWebm,
         replayMimeType: focused.replayMimeType,
         annotations: focusedAnnotations,
+        motionSpace,
         displayNumbers: numbers,
         focusedDisplay: focusedIndex,
         width: input.width,
@@ -1240,6 +2048,7 @@ function startFreshCaptureRenders(
     startKeyframeStill(handle, {
       snapshotPng: input.snapshotPng,
       annotations: focusedAnnotations,
+      motionSpace,
       displayNumbers: numbers,
       focusedDisplay: focusedIndex,
       width: input.width,
@@ -1250,6 +2059,7 @@ function startFreshCaptureRenders(
 
   if (displays.length > 1) {
     const focusedDurationMs = focused?.replayDurationMs ?? 0
+    const packOriginMs = focused?.replayOriginMs
     startDisplayRenders(
       handle,
       displays.map((d) => ({
@@ -1260,10 +2070,15 @@ function startFreshCaptureRenders(
         replayWebm: d.replayWebm,
         replayMimeType: d.replayMimeType,
         replayDurationMs: d.replayDurationMs,
-        offsetMs: d.replayDurationMs - focusedDurationMs,
+        offsetMs: resolvedReplayClockOffsetMs(
+          observedReplayClockOffsetMs(packOriginMs, d.replayOriginMs),
+          d.replayDurationMs,
+          focusedDurationMs,
+        ),
       })),
       input.annotations,
       focusedIndex,
+      motionSpace,
       settings.fps,
       packDocLanguage(settings),
     )
@@ -1297,6 +2112,14 @@ async function handleExactCutFailure(
       })),
     },
     displays: displays.length > 1 ? toDisplayCaptures(displays) : undefined,
+    windowsContext:
+      input.windowsContext === undefined || input.windowsContext === null
+        ? null
+        : trimWindowsContextTimeline(
+            input.windowsContext,
+            input.snapshotTMs ?? input.replayDurationMs,
+            input.snapshotTMs ?? input.replayDurationMs,
+          ),
   }
   try {
     await updatePack(handle, fallback)
@@ -1336,6 +2159,22 @@ async function finalizeCancelledExactReplay(
     displays = frozen.displays.map(withoutFrozenReplay)
   }
   const finalFocused = displays.find((d) => d.focused) ?? withoutFrozenReplay(focused)
+  const initialRawT0Ms = Date.parse(initial.timeline.t0)
+  const finalReplayT0Ms =
+    finalFocused.replayOriginMs ??
+    (Number.isFinite(initialRawT0Ms)
+      ? initialRawT0Ms + replaySourceStartMs
+      : initial.capturedAt.getTime() - replayDurationMs)
+  const finalWindowsContext =
+    initial.windowsContext === undefined
+      ? undefined
+      : initial.windowsContext === null
+        ? null
+        : trimWindowsContextTimeline(
+            initial.windowsContext,
+            finalFocused.replayWebm === null ? initial.replayDurationMs : replaySourceStartMs,
+            initial.replayDurationMs,
+          )
   await updateInitialPack(handle, {
     ...initial,
     replayWebm: finalFocused.replayWebm,
@@ -1351,13 +2190,18 @@ async function finalizeCancelledExactReplay(
             events: initial.timeline.events.map((e) => ({ ...e, t_ms: 0 })),
           }
         : {
-            t0: new Date(initial.capturedAt.getTime() - replayDurationMs).toISOString(),
+            // Exact-cut media and timeline share the same rebased origin. When
+            // the renderer measured it, cutFrozenDisplay already advanced that
+            // origin by the removed source interval; old origin-less saves
+            // advance their persisted raw t0 by the same amount.
+            t0: new Date(finalReplayT0Ms).toISOString(),
             events: initial.timeline.events.map((e) => ({
               ...e,
               t_ms: Math.max(0, e.t_ms - replaySourceStartMs),
             })),
           },
     displays: displays.length > 1 ? toDisplayCaptures(displays) : undefined,
+    windowsContext: finalWindowsContext,
   })
 }
 
@@ -1371,6 +2215,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
   if (manifest === null || typeof manifest.id !== 'string') {
     throw new Error('manifest.json is missing or malformed')
   }
+  const loadedCapture = captureMetadataFromManifest(manifest)
   const snapshotPng = pack.readBinary('snapshot.png')
   if (snapshotPng === null) throw new Error('snapshot.png is missing')
 
@@ -1433,6 +2278,27 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
           existsSync(path.join(dirPath, 'plugins', p.name, 'meta.json')),
       )
     : []
+  const loadedWindowsContextDeclared = loadedPlugins.some(
+    (plugin) =>
+      plugin !== null
+      && typeof plugin === 'object'
+      && plugin.name === WINDOWS_CONTEXT_PLUGIN_NAME,
+  )
+  let loadedWindowsContext: WindowsContextTimelineV1 | null = null
+  let loadedWindowsContextObservations: ContextObservation[] = []
+  if (loadedWindowsContextDeclared) {
+    const history = loadWindowsContextHistory(pack, declaredDurationMs)
+    if (history.status === 'loaded') {
+      loadedWindowsContext = history.timeline
+      loadedWindowsContextObservations = history.observations
+    } else {
+      logWarn(
+        `[context] plugins/${WINDOWS_CONTEXT_PLUGIN_NAME}/timeline.json was dropped ` +
+          `(${history.reason}${history.bytes === null ? '' : `, ${String(history.bytes)} bytes`}); ` +
+          're-edit continues without temporal object history',
+      )
+    }
+  }
   // The pack's own capture-instant object data (GOAL "Static object picking"):
   // re-editing offers exactly the same picking as the original session.
   const loadedUiaText = pack.readText(`plugins/${UIA_PLUGIN_NAME}/elements.json`)
@@ -1489,81 +2355,131 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
   // The SAME editor window flow as a fresh capture; display per settings
   // (cursor/fixed), since the captured display may no longer exist.
   const display = resolveTargetDisplay(settings)
-  const { win: editor, mode: windowMode } = createEditorWindow(display.bounds, settings)
+  // Resolve every pack-backed display before creating a native window. Reading
+  // a malformed/missing per-display file may throw; doing that first means a
+  // failed History edit cannot leave an ownerless hidden BrowserWindow behind.
   const loadedEditorDisplayList = loadedEditorDisplays(pack, loadedDisplays, replayDurationMs)
+  const { win: editor, mode: windowMode } = createEditorWindow(display.bounds, settings)
   // Picking works on re-edit too, from the pack's own saved observation — which
   // for every pack written before v0.2.0 describes exactly one instant, and the
   // frame says so for every other time rather than offering that instant's
   // rectangles as if they were the moment on screen (#66).
-  const contextSession = openContextSession(editor, {
-    displays:
-      loadedEditorDisplayList.length === 0
-        ? [{ index: 1, focused: true, width, height }]
-        : loadedEditorDisplayList.map((d) => ({
-            index: d.index,
-            focused: d.focused,
-            width: d.width,
-            height: d.height,
-          })),
-    replayDurationMs,
-    observation: contextObservation(loadedUia, loadedFocusedIndex, replayDurationMs),
-    dropped: loadedUiaDropped,
-    domEvents: loadedDomEvents,
-  })
+  let contextSession: ReturnType<typeof openContextSession>
+  try {
+    contextSession = openContextSession(editor, {
+      displays:
+        loadedEditorDisplayList.length === 0
+          ? [{ index: 1, focused: true, width, height }]
+          : loadedEditorDisplayList.map((d) => ({
+              index: d.index,
+              focused: d.focused,
+              width: d.width,
+              height: d.height,
+            })),
+      replayDurationMs,
+      observation: contextObservation(loadedUia, loadedFocusedIndex, replayDurationMs),
+      dropped: loadedUiaDropped,
+      domEvents: loadedDomEvents,
+    })
+    if (loadedWindowsContextObservations.length > 1) {
+      try {
+        contextSession.adoptAll(loadedWindowsContextObservations)
+        logInfo(
+          `[context] reopened editor adopted ${loadedWindowsContextObservations.length} ` +
+            `persisted Windows observations across ${declaredDurationMs} ms`,
+        )
+      } catch (err) {
+        // Object history is an optional refinement; a corrupt provider payload
+        // must never strand or prevent the editor window.
+        logError(
+          `[context] persisted Windows history could not be adopted; re-edit continues ` +
+            `capture-instant-only: ${err instanceof Error ? err.message : String(err)}`,
+        )
+      }
+    }
+  } catch (err) {
+    // From this line on the BrowserWindow exists. Any synchronous context/setup
+    // failure must destroy it before the detached re-edit flow reports failure,
+    // otherwise it survives without a runEditor owner or visible close path.
+    if (!editor.isDestroyed()) editor.destroy()
+    throw err
+  }
   editor.once('ready-to-show', () => {
     void (async () => {
-    const init: EditorInitPayload = {
-      snapshotPng: toArrayBuffer(snapshotPng),
-      width,
-      height,
-      hasReplay: replayWebm !== null,
-      replayDurationMs,
-      replaySourceStartMs: 0,
-      // The saved pack's other frozen displays, read back for the same BOARD a
-      // fresh multi-display capture opens: all of them at once, all annotatable.
-      displays: loadedEditorDisplayList,
-      replayWebm: replayWebm === null ? null : toArrayBuffer(replayWebm),
-      replayMimeType: replayRel === null ? null : replayMimeType(replayRel),
-      // Re-edit: a screenshot-only pack is simply what was saved; no live
-      // recorder failure to report.
-      replayUnavailableReason: null,
-      context: {
-        sessionId: contextSession.sessionId,
-        frame: await contextSession.frameAt(replayDurationMs),
-      },
-      fps: settings.fps,
-      scrubInvert: settings.scrubInvert,
-      scrubSensitivityMs: settings.scrubSensitivityMs,
-      defaultManualDurationMs: settings.defaultManualDurationMs,
-      showDurationLabel: settings.showDurationLabel,
-      showShortcutOverlay: settings.showShortcutOverlay,
-      showEditorTutorial: settings.showEditorTutorial,
-      annotations: loadedAnnotations,
-      title: typeof manifest.title === 'string' ? manifest.title : '',
-      note: typeof manifest.note === 'string' ? manifest.note : '',
-      editMode: true,
-      uiLanguage: uiLanguage(settings),
-      // Re-edit opens in the same remembered mode as a fresh capture.
-      windowMode,
-    }
-    if (editor.isDestroyed()) return
-    editor.webContents.send(IPC.editorInit, init)
-    // MAXIMIZED, not merely windowed. The editor shows a whole desktop and
-    // then asks the user to find something in it; opening at a remembered
-    // fraction of the screen makes that harder for no gain. It stays a REAL
-    // window — un-maximize, move and resize all still work — and where the
-    // user leaves it is remembered exactly as before.
-    editor.maximize()
-    editor.show()
+      // Context enriches the editor; it may never be the price of opening it.
+      // rc.36 awaited this promise without an outer deadline. A History click
+      // could therefore create a hidden editor, keep flowActive true forever,
+      // and make every later Ctrl+Alt+C log "flow already open". Open on time
+      // with no initial frame, then push the same answer when it arrives.
+      const initialFramePromise = contextSession.frameAt(replayDurationMs)
+      const settledFrame = await settleWithin(initialFramePromise, UIA_EDITOR_GRACE_MS)
+      const init: EditorInitPayload = {
+        captureKind: loadedCapture.captureKind,
+        snapshotPng: toArrayBuffer(snapshotPng),
+        width,
+        height,
+        hasReplay: replayWebm !== null,
+        replayDurationMs,
+        replaySourceStartMs: 0,
+        // The saved pack's other frozen displays, read back for the same BOARD a
+        // fresh multi-display capture opens: all of them at once, all annotatable.
+        displays: loadedEditorDisplayList,
+        replayWebm: replayWebm === null ? null : toArrayBuffer(replayWebm),
+        replayMimeType: replayRel === null ? null : replayMimeType(replayRel),
+        // Re-edit: a screenshot-only pack is simply what was saved; no live
+        // recorder failure to report.
+        replayUnavailableReason: null,
+        context: settledFrame.ready
+          ? { sessionId: contextSession.sessionId, frame: settledFrame.value }
+          : null,
+        fps: settings.fps,
+        scrubInvert: settings.scrubInvert,
+        scrubSensitivityMs: settings.scrubSensitivityMs,
+        defaultManualDurationMs: settings.defaultManualDurationMs,
+        showDurationLabel: settings.showDurationLabel,
+        showShortcutOverlay: settings.showShortcutOverlay,
+        showEditorTutorial: settings.showEditorTutorial,
+        annotations: loadedAnnotations,
+        title: typeof manifest.title === 'string' ? manifest.title : '',
+        note: typeof manifest.note === 'string' ? manifest.note : '',
+        editMode: true,
+        uiLanguage: uiLanguage(settings),
+        // Re-edit opens in the same remembered mode as a fresh capture.
+        windowMode,
+      }
+      if (editor.isDestroyed()) return
+      editor.webContents.send(IPC.editorInit, init)
+      // MAXIMIZED, not merely windowed. The editor shows a whole desktop and
+      // then asks the user to find something in it; opening at a remembered
+      // fraction of the screen makes that harder for no gain. It stays a REAL
+      // window — un-maximize, move and resize all still work — and where the
+      // user leaves it is remembered exactly as before.
+      editor.maximize()
+      editor.show()
+      editor.focus()
+      logInfo(`[capture] re-edit editor shown: ${path.basename(dirPath)}`)
+
+      if (!settledFrame.ready) {
+        void initialFramePromise.then(
+          (frame) => {
+            if (!editor.isDestroyed()) editor.webContents.send(IPC.contextFrame, frame)
+          },
+          (err: unknown) => {
+            logError('capturepack: building the delayed re-edit context frame failed:', err)
+          },
+        )
+      }
     })().catch((err: unknown) => {
-      // Rule 1 of object data: it may never break anything else. An editor that
-      // could not build its first frame still opens — it simply opens without
-      // picking, and the log says why.
-      logError('capturepack: opening the re-edit editor failed:', err)
+      // A detached ready-to-show failure used to strand an invisible
+      // BrowserWindow and the global flow gate. Destroying it makes runEditor
+      // resolve, so the error is visible and the next hotkey works.
+      logError('capturepack: opening the re-edit editor failed — closing the hidden editor:', err)
+      if (!editor.isDestroyed()) editor.destroy()
     })
   })
 
   const outcome = await runEditor(editor, events, t0Ms)
+  logInfo(`[capture] re-edit editor closed: ${outcome.kind}`)
   if (outcome.kind === 'cancel') return // Discard: close without writing
 
   const hasReplay = replayWebm !== null
@@ -1602,7 +2518,34 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
   // focused display. Resolving them to the focused display instead is exactly
   // what the editor already drew, and it never loses a box.
   const savedAnnotations = withResolvedDisplays(annotations, savedDisplays)
+  const savedContextInstant =
+    loadedWindowsContext === null
+      ? null
+      : Math.max(
+          loadedWindowsContext.range.start_ms,
+          Math.min(
+            loadedSnapshotTMs ?? declaredDurationMs,
+            loadedWindowsContext.range.end_ms,
+          ),
+        )
+  const savedWindowsContext: WindowsContextTimelineV1 | null | undefined =
+    loadedWindowsContextDeclared && loadedWindowsContext === null
+      ? null
+      : !hasReplay && loadedWindowsContext !== null && savedContextInstant !== null
+        ? trimWindowsContextTimeline(
+            loadedWindowsContext,
+            savedContextInstant,
+            savedContextInstant,
+          )
+        : undefined
   const input: ExportInput = {
+    captureKind: loadedCapture.captureKind,
+    ...(loadedCapture.imageScope === undefined
+      ? {}
+      : { imageScope: loadedCapture.imageScope }),
+    ...(loadedCapture.cropBounds === undefined
+      ? {}
+      : { cropBounds: loadedCapture.cropBounds }),
     snapshotPng: Buffer.from(outcome.payload.snapshotPng),
     width,
     height,
@@ -1624,9 +2567,13 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
     // carry the declaration through a re-edit save (the plugins/ files on disk
     // stay untouched and must not become undeclared).
     plugins: loadedPlugins,
+    windowsContext: savedWindowsContext,
     // Same rule for per-display media: the files stay, the declaration is
     // regenerated from what the folder actually holds.
-    displays: savedDisplays.length > 0 ? savedDisplays : undefined,
+    displays:
+      loadedCapture.captureKind === 'video' && savedDisplays.length > 0
+        ? savedDisplays
+        : undefined,
     screens: loadedScreens.length > 0 ? loadedScreens : undefined,
     clipboardAfterSave: settings.clipboardAfterSave,
     // Re-edit saves regenerate the docs too — in the CURRENT pack language.
@@ -1643,7 +2590,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
       // Save As New copied inside saveAsNewPack, which is where its folder came
       // into existence; a re-edit save has to do it here for the same reason a
       // fresh capture does — before the render, not after it.
-      copyAfterSave(settings.clipboardAfterSave, handle.dirPath)
+      await copyAfterSave(settings.clipboardAfterSave, handle.dirPath)
     }
     // Same save pipeline as a fresh capture: toast, then background render.
     showSaveToast({
@@ -1662,6 +2609,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
     // GLOBAL over everything the save wrote (SPEC §8.5), never over the subset
     // one render receives.
     const numbers = globalDisplayNumbers(savedAnnotations)
+    const motionSpace = motionSpaceFromDisplayCaptures(savedDisplays, focusedIndex)
     if (replayWebm !== null) {
       startAnnotatedRender(
         handle,
@@ -1669,6 +2617,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
           replayWebm,
           replayMimeType: replayMimeType(replayRel),
           annotations: focusedAnnotations,
+          motionSpace,
           displayNumbers: numbers,
           focusedDisplay: focusedIndex,
           width,
@@ -1685,6 +2634,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
       startKeyframeStill(handle, {
         snapshotPng: input.snapshotPng,
         annotations: focusedAnnotations,
+        motionSpace,
         displayNumbers: numbers,
         focusedDisplay: focusedIndex,
         width,
@@ -1692,17 +2642,20 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
         docLanguage: packDocLanguage(settings),
       })
     }
-    startDisplayRenders(
-      handle,
-      // Read back from the SOURCE pack (the same bytes Save As New copied), and
-      // only for displays that actually carry boxes — a re-edit must not pull
-      // 45 MB of webm per untouched screen back into memory.
-      displayRenderSources(pack, savedDisplays, savedAnnotations, focusedIndex),
-      savedAnnotations,
-      focusedIndex,
-      settings.fps,
-      packDocLanguage(settings),
-    )
+    if (loadedCapture.captureKind === 'video') {
+      startDisplayRenders(
+        handle,
+        // Read back from the SOURCE pack (the same bytes Save As New copied),
+        // and only for displays that actually carry boxes — a re-edit must not
+        // pull 45 MB of webm per untouched screen back into memory.
+        displayRenderSources(pack, savedDisplays, savedAnnotations, focusedIndex),
+        savedAnnotations,
+        focusedIndex,
+        motionSpace,
+        settings.fps,
+        packDocLanguage(settings),
+      )
+    }
   } catch (err) {
     logError('[capture] re-edit save failed:', err)
     dialog.showErrorBox(uiT(settings)('app.saveFailedTitle'), errorMessage(err))
@@ -1751,6 +2704,38 @@ function globalDisplayNumbers(annotations: readonly Annotation[]): Array<[string
   return [...computeDisplayNumbers(annotations)]
 }
 
+function motionSpaceFromFrozenDisplays(
+  displays: readonly FrozenDisplay[],
+  focusedIndex: number,
+): AuthoredMotionSpace | undefined {
+  if (displays.length < 2) return undefined
+  return {
+    focusedIndex,
+    displays: displays.map((display) => ({
+      index: display.index,
+      width: display.width,
+      height: display.height,
+      bounds: { ...display.bounds },
+    })),
+  }
+}
+
+function motionSpaceFromDisplayCaptures(
+  displays: readonly DisplayCapture[],
+  focusedIndex: number,
+): AuthoredMotionSpace | undefined {
+  if (displays.length < 2) return undefined
+  return {
+    focusedIndex,
+    displays: displays.map((display) => ({
+      index: display.index,
+      width: Math.max(1, Math.round(display.bounds.width * display.scale)),
+      height: Math.max(1, Math.round(display.bounds.height * display.scale)),
+      bounds: { ...display.bounds },
+    })),
+  }
+}
+
 /**
  * Annotations whose `display` names a display this save DECLARES (SPEC §8.8).
  *
@@ -1776,11 +2761,9 @@ function withResolvedDisplays(
   })
 }
 
-/** Lifetimes moved onto one display's own replay clock, clamped to it. */
+/** Every temporal field moved onto one display's own replay clock, clamped to it. */
 function rebaseLifetimeTo(a: Annotation, offsetMs: number, durationMs: number): Annotation {
-  if (a.start_ms === undefined || a.end_ms === undefined) return a
-  const clamp = (ms: number): number => Math.min(Math.max(0, Math.round(ms)), durationMs)
-  return { ...a, start_ms: clamp(a.start_ms + offsetMs), end_ms: clamp(a.end_ms + offsetMs) }
+  return rebaseAnnotationClock(a, offsetMs, durationMs)
 }
 
 /**
@@ -1793,6 +2776,7 @@ function startDisplayRenders(
   sources: readonly DisplayRenderSource[],
   annotations: readonly Annotation[],
   focusedIndex: number,
+  motionSpace: AuthoredMotionSpace | undefined,
   fps: number,
   docLanguage: Language,
 ): void {
@@ -1809,6 +2793,7 @@ function startDisplayRenders(
         replayWebm: s.replayWebm,
         replayMimeType: s.replayMimeType,
         annotations: own.map((a) => rebaseLifetimeTo(a, s.offsetMs, s.replayDurationMs)),
+        motionSpace,
         displayNumbers,
         focusedDisplay: focusedIndex,
         width: s.width,
@@ -1825,6 +2810,7 @@ function startDisplayRenders(
       startKeyframeStill(handle, {
         snapshotPng: s.snapshotPng,
         annotations: own.map(withoutReplayTimes),
+        motionSpace,
         displayNumbers,
         focusedDisplay: focusedIndex,
         width: s.width,
@@ -1888,6 +2874,10 @@ function loadedDisplayCaptures(manifest: Manifest, dirPath: string): DisplayCapt
       scale: typeof e.scale === 'number' && e.scale > 0 ? e.scale : 1,
       hasReplay,
       replayDurationMs: typeof e.replay_duration_ms === 'number' ? Math.max(0, e.replay_duration_ms) : 0,
+      ...(typeof e.replay_clock_offset_ms === 'number' &&
+      Number.isSafeInteger(e.replay_clock_offset_ms)
+        ? { replayClockOffsetMs: e.replay_clock_offset_ms }
+        : {}),
       snapshotFile,
       replayFile: hasReplay ? replayFile : null,
       snapshotPng: null,
@@ -1926,15 +2916,10 @@ function screenFromDisplay(
  * only for the displays that actually carry annotations, since every other one
  * would just be tens of megabytes of webm read for nothing.
  *
- * ALIGNMENT (SPEC §5.6): every recorder was stopped by the same trigger, so the
- * replays are END-aligned and the offset from the pack clock onto a display's
- * own clock is the difference of the DECLARED durations — this display's minus
- * the focused one's. That expression already contains the trim: after an
- * in-point trim at s the focused declaration is F - s, so D - (F - s) is
- * exactly `trim_offset_ms + (D - F)`, which is what the fresh flow computes
- * from the live durations. Using trim_offset_ms ALONE (SPEC §5.6's older, and
- * for unequal-length displays incomplete, wording) dropped the end-alignment
- * term and put every other screen seconds off — see SPEC §5.6.
+ * ALIGNMENT (SPEC §5.6): a current pack persists the observed recorder-origin
+ * conversion. That survives reopen and exact cutting without assuming the
+ * independent stop/flush operations ended together. A legacy pack has no such
+ * measurement, so and only so it uses the declared duration difference.
  */
 function displayRenderSources(
   pack: { readBinary(rel: string): Buffer | null },
@@ -1961,7 +2946,11 @@ function displayRenderSources(
       replayWebm: replay,
       replayMimeType: replay === null ? null : replayMimeType(d.replayFile),
       replayDurationMs: replay === null ? 0 : d.replayDurationMs,
-      offsetMs: d.replayDurationMs - focusedDurationMs,
+      offsetMs: resolvedReplayClockOffsetMs(
+        d.replayClockOffsetMs,
+        d.replayDurationMs,
+        focusedDurationMs,
+      ),
     })
   }
   return sources
@@ -1972,10 +2961,9 @@ function displayRenderSources(
  * payload a fresh capture ships, so re-editing an all-displays pack gives the
  * same board — every screen drawn at once, every screen annotatable, one clock.
  *
- * `focusedDurationMs` is the SAVED focused replay length, so the end-alignment
- * below already carries any trim the pack was written with — the same
- * expression displayRenderSources() uses, so the board and the per-display
- * renders can never disagree about where a display's clock is (SPEC §5.6).
+ * Both this board path and displayRenderSources() resolve the saved observed
+ * offset first and use the legacy duration difference only when it is absent,
+ * so reopened pixels and regenerated views cannot disagree (SPEC §5.6).
  */
 function loadedEditorDisplays(
   pack: { readBinary(rel: string): Buffer | null },
@@ -2014,7 +3002,13 @@ function loadedEditorDisplays(
       // recorder failure — there is no reason to name.
       replayUnavailableReason: null,
       replayDurationMs: durationMs,
-      replayOffsetMs: d.focused ? 0 : durationMs - focusedDurationMs,
+      replayOffsetMs: d.focused
+        ? 0
+        : resolvedReplayClockOffsetMs(
+            d.replayClockOffsetMs,
+            durationMs,
+            focusedDurationMs,
+          ),
     })
   }
   return result.length > 1 ? result : []
@@ -2135,7 +3129,18 @@ function createEditorWindow(bounds: EditorWindowBounds, settings: Settings): Edi
   const windowed = mode === 'windowed'
   const editor = new BrowserWindow({
     ...(windowed ? windowedBounds : bounds),
-    frame: false,
+    // A FRAMELESS title strip looked like a caption but removed the Windows
+    // contract that matters: Minimize / Maximize / Close. Keep the web content
+    // in the title-bar area while letting Windows own those three buttons.
+    // The renderer reserves this exact 32 px strip and draws only the product
+    // name in it; native hit targets stay native (#113).
+    title: 'CapturePack',
+    titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: '#16161b',
+      symbolColor: '#e8e8ea',
+      height: 32,
+    },
     // Windowed mode is a REAL window: movable, resizable, and not hovering over
     // everything else — the user may want to look at the app behind it.
     fullscreen: !windowed,
@@ -2150,6 +3155,7 @@ function createEditorWindow(bounds: EditorWindowBounds, settings: Settings): Edi
       preload: path.join(app.getAppPath(), 'dist', 'preload', 'editor.js'),
     },
   })
+  activeEditor = editor
   // The default application menu binds F11 to "Toggle Full Screen" on Windows
   // and Linux. The editor owns F11 itself, and two handlers racing over one key
   // would flip the window twice — so this window carries no menu at all.
@@ -2315,6 +3321,7 @@ function createEditorWindow(bounds: EditorWindowBounds, settings: Settings): Edi
   ipcMain.on(IPC.editorSetTutorial, onSetTutorial)
 
   editor.on('closed', () => {
+    if (activeEditor === editor) activeEditor = null
     ipcMain.removeListener(IPC.editorSetWindowMode, onSetWindowMode)
     ipcMain.removeListener(IPC.editorSetShortcutOverlay, onSetShortcutOverlay)
     ipcMain.removeListener(IPC.editorSetTutorial, onSetTutorial)
@@ -2323,7 +3330,37 @@ function createEditorWindow(bounds: EditorWindowBounds, settings: Settings): Edi
     persist()
   })
 
-  void editor.loadFile(path.join(app.getAppPath(), 'dist', 'renderer', 'editor', 'editor.html'))
+  // Last-resort lifecycle guard for BOTH fresh captures and History re-edits.
+  // The editor starts hidden; if loading or first-paint initialization never
+  // reaches show(), there is otherwise no native window the user can close and
+  // the exclusive flow gate can remain held indefinitely.
+  let startupTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+    startupTimer = null
+    if (editor.isDestroyed() || editor.isVisible()) return
+    logError(
+      `capturepack: editor did not become visible within ${EDITOR_STARTUP_TIMEOUT_MS} ms — closing the hidden editor`,
+    )
+    editor.destroy()
+  }, EDITOR_STARTUP_TIMEOUT_MS)
+  startupTimer.unref()
+  const clearStartupTimer = (): void => {
+    if (startupTimer === null) return
+    clearTimeout(startupTimer)
+    startupTimer = null
+  }
+  editor.once('show', clearStartupTimer)
+  editor.once('closed', clearStartupTimer)
+  editor.webContents.once('render-process-gone', (_event, details) => {
+    logError(`capturepack: editor renderer exited (${details.reason})`)
+    if (!editor.isDestroyed()) editor.destroy()
+  })
+
+  void editor
+    .loadFile(path.join(app.getAppPath(), 'dist', 'renderer', 'editor', 'editor.html'))
+    .catch((err: unknown) => {
+      logError('capturepack: loading the editor failed:', err)
+      if (!editor.isDestroyed()) editor.destroy()
+    })
   return { win: editor, mode }
 }
 
@@ -2331,15 +3368,33 @@ function createEditorWindow(bounds: EditorWindowBounds, settings: Settings): Edi
 // Annotation events are appended to `events` as they arrive.
 function runEditor(editor: BrowserWindow, events: TimelineEvent[], t0Ms: number): Promise<EditorOutcome> {
   return new Promise((resolve) => {
+    // loadFile/startup guards can close the hidden window before the caller has
+    // finished assembling init data and reaches runEditor(). Waiting for a
+    // `closed` event that already happened would recreate the same permanent
+    // flow lock those guards are meant to prevent.
+    if (editor.isDestroyed()) {
+      resolve({ kind: 'cancel' })
+      return
+    }
     let settled = false
+    const closeResponseWatchdog = createEditorCloseWatchdog(
+      EDITOR_CLOSE_RESPONSE_TIMEOUT_MS,
+      () => {
+        logWarn('[editor] close confirmation timed out; closing the unresponsive editor')
+        settle({ kind: 'cancel' })
+      },
+    )
 
     const settle = (outcome: EditorOutcome): void => {
       if (settled) return
       settled = true
+      closeResponseWatchdog.dispose()
       ipcMain.removeListener(IPC.editorAnnotationAdded, onAnnotation)
       ipcMain.removeListener(IPC.editorExport, onExport)
       ipcMain.removeListener(IPC.editorSaveAsNew, onSaveAsNew)
       ipcMain.removeListener(IPC.editorCancel, onCancel)
+      ipcMain.removeListener(IPC.editorClosePromptShown, onClosePromptShown)
+      editor.removeListener('close', onCloseAttempt)
       editor.removeListener('closed', onClosed)
       if (!editor.isDestroyed()) editor.close()
       resolve(outcome)
@@ -2380,12 +3435,36 @@ function runEditor(editor: BrowserWindow, events: TimelineEvent[], t0Ms: number)
       settle({ kind: 'cancel' })
     }
 
+    const onClosePromptShown = (event: IpcMainEvent): void => {
+      if (!fromEditor(event)) return
+      // The renderer is responsive and the modal is visible. This is not a
+      // close decision: Save/Discard settle later, and Esc deliberately keeps
+      // the editor open. A later native Close request arms a fresh deadline.
+      closeResponseWatchdog.acknowledge()
+    }
+
+    const onCloseAttempt = (event: ElectronEvent): void => {
+      if (settled || editor.isDestroyed() || appIsQuitting) return
+      event.preventDefault()
+      if (editor.webContents.isDestroyed()) {
+        settle({ kind: 'cancel' })
+        return
+      }
+      // A crashed or wedged renderer cannot answer the IPC. Do not leave a
+      // native window that can never be closed; five seconds is deliberately
+      // much longer than the synchronous dirty-state/modal-shown response.
+      closeResponseWatchdog.arm()
+      editor.webContents.send(IPC.editorCloseRequested)
+    }
+
     const onClosed = (): void => settle({ kind: 'cancel' })
 
     ipcMain.on(IPC.editorAnnotationAdded, onAnnotation)
     ipcMain.on(IPC.editorExport, onExport)
     ipcMain.on(IPC.editorSaveAsNew, onSaveAsNew)
     ipcMain.on(IPC.editorCancel, onCancel)
+    ipcMain.on(IPC.editorClosePromptShown, onClosePromptShown)
+    editor.on('close', onCloseAttempt)
     editor.on('closed', onClosed)
   })
 }

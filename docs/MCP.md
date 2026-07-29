@@ -40,17 +40,19 @@ waits for an app restart. `mcpAutoStart` is not consulted when you flip that swi
 hand — flipping it *is* the manual start `mcpAutoStart` says the app must not perform on
 its own.
 
-**Restart** applies a changed port, output folder or watch setting to the server in place,
-without restarting the app. It is greyed out while the server is switched off; when
-`mcpEnabled` is `true` but `mcpAutoStart` is `false`, it is the on-demand start.
+**Restart** applies a changed port without restarting the app. Output-folder and folder-watch
+changes are live and take effect on the next MCP request. Restart is greyed out while the server
+is switched off; when `mcpEnabled` is `true` but `mcpAutoStart` is `false`, it is the on-demand
+start.
 
 ## Connecting a client
 
 Settings → MCP does this for you: pick your client from the dropdown and press
 **Copy setup command**. The snippet is built from the endpoint the server *actually bound*,
-so it is already correct even if you changed the port. **Copy prompt** copies the sentence
-to give the AI once it is connected. The forms below are the same ones that button
-produces.
+so it is already correct even if you changed the port. **Copy prompt** produces a complete
+handoff for the selected client: the live URL, the exact setup form, restart/reload guidance,
+and the instruction to call `capturepack_latest`. The forms below are the same ones those
+buttons produce.
 
 ### Claude Code
 
@@ -189,13 +191,14 @@ When omitted (the normal case), the tool reads the **current** pack:
 - `capturepack_open` pins a specific pack as the current one for the rest of the app session.
 - `capturepack_latest` re-pins the current pack to the newest one.
 
-Most sessions never pass an argument: `capturepack_latest` → `capturepack_summary` →
-`capturepack_timeline` → `capturepack_annotations` → … all just work on the newest pack.
+To select an older record, call `capturepack_history` with an optional text query or
+image/video filter, then pass the returned id to `capturepack_open`. For the newest record,
+`capturepack_latest` remains the one-call shortcut.
 
 ## Tools
 
 All tools are read-only. `id` always means: pack id (the pack's path relative to the export
-folder, as shown by `capturepack_list` — e.g. `CapturePack_2026-07-27_140309`; the plain base
+folder, as shown by `capturepack_history` / `capturepack_list` — e.g. `CapturePack_2026-07-27_140309`; the plain base
 name is also accepted and resolves to the newest match) or an absolute path to a
 `.capturepack` file or an extracted pack directory. Optional `id` defaults to the current
 pack as described above.
@@ -203,12 +206,13 @@ pack as described above.
 | Tool | Arguments | Returns |
 | --- | --- | --- |
 | `capturepack_latest` | — | Summary of the newest pack; re-pins it as the current pack |
-| `capturepack_list` | `limit?` | Recent packs (newest first, default 20 — `total` reports the full count): id, title, capture time |
+| `capturepack_history` | `limit?`, `query?`, `kind?` (`image`/`video`) | Searchable saved-record history, newest first: stable id/path/captured_at, capture kind, storage kind, title, note, focused app and situational counts |
+| `capturepack_list` | `limit?`, `query?`, `kind?` | Compatibility alias of `capturepack_history` |
 | `capturepack_open` | `id` — pack id or absolute path (folder and ZIP both supported) | The pack's summary; pins it as the current pack for subsequent calls |
-| `capturepack_summary` | `id?` | Title, note, captured_at, environment (os/screens/app), replay duration (or screenshot-only), `snapshot_t_ms` when present, annotated-keyframe count + times when present, annotation count (+ per-type), timeline event count, plugin list |
+| `capturepack_summary` | `id?` | Title, note, captured_at, environment (os/screens/app), explicit/inferred `capture_kind`, image scope/crop provenance, annotation/plugin counts; video packs also report replay, timeline and frame-time details |
 | `capturepack_manifest` | `id?` | Raw `manifest.json` |
 | `capturepack_report` | `id?` | Raw `report.md` |
-| `capturepack_timeline` | `id?`, `from_ms?`, `to_ms?` | Full timeline, or the slice between `from_ms` and `to_ms` |
+| `capturepack_timeline` | `id?`, `from_ms?`, `to_ms?` | Video timeline or a slice; explicit image packs return a non-error explanation that no timeline applies |
 | `capturepack_annotations` | `id?` | The annotation list — including each box's optional `target` (the real UI object it was placed on, e.g. `{source:"uia", name:"Save", control_type:"Button"}`) and, on a multi-display capture, **which screen it is on** (`display_index` + `display_snapshot`, see below) |
 | `capturepack_find_annotations` | `keyword`, `id?` | Annotations matching the keyword |
 | `capturepack_frame` | `time_s?`, `id?` | An image of the capture: the **nearest annotated keyframe** to `time_s` when the pack has them, else `snapshot.png` — **see below** |
@@ -216,8 +220,8 @@ pack as described above.
 | `capturepack_dom` | `id?` | Generic plugin metadata under `plugins/*/` — on Windows usually `windows-uia` (the capture-instant window list + the control trees the dump reached); DOM-ish data lives under a chrome plugin dir when present |
 | `capturepack_find_dom` | `selector`, `id?` | Plugin/DOM entries matching the selector — e.g. an `automation_id` or a control name in the `windows-uia` dump |
 | `capturepack_windows` | `id?` | Window/focus timeline events plus window-related plugin metadata (the `windows-uia` window list), when present |
-| `capturepack_search` | `keyword`, `id?` | Case-insensitive substring search across `report.md`, annotation texts, timeline event types + data, plugin JSON, and manifest title/note — hits grouped by source |
-| `capturepack_export_markdown` | `id?` | One Markdown document: `report.md` + annotations table (with computed display numbers / lifetimes) + timeline listing + plugin inventory. Returned as text; **writes no files** |
+| `capturepack_search` | `keyword`, `id?` | Case-insensitive substring search across `report.md`, annotation texts, video timeline when present, plugin JSON, and manifest title/note — hits grouped by source |
+| `capturepack_export_markdown` | `id?` | One Markdown document: `report.md` + annotations table + plugin inventory, plus the timeline only for video packs. Returned as text; **writes no files** |
 
 Plugin metadata is exposed generically — the MCP server never special-cases plugin kinds.
 If a pack has no plugin data, the plugin-reading tools return empty results with a clear
@@ -294,7 +298,19 @@ Which image depends on the pack:
 - **No keyframes, or `time_s` omitted** — `snapshot.png` is returned (original pixels, never
   annotated), with a note giving its frame time (`media.snapshot_t_ms`, or the capture instant)
   and, when keyframes exist, the times available. Keyframes render in the background right
-  after a save, so a pack saved seconds ago may not have them yet.
+   after a save, so a pack saved seconds ago may not have them yet.
+
+For an explicit image pack, the note also reports `capture_kind` and
+`image_scope`. A region image returns the selected crop itself and its
+virtual-desktop placement metadata; it has no hidden full-context image route.
+For a fullscreen image, `snapshot.png` is the explicitly requested complete
+virtual desktop — every display is already present in that one image and MCP
+does not read any undeclared per-display raster.
+Image packs expose annotations and plugin context but intentionally contain no
+top-level `timeline.json`; `capturepack_timeline` reports that shape without
+treating the pack as damaged.
+`capturepack_replay` returns `null` for every image pack. MCP analyzes only
+packs the user already created — it cannot start an image or video capture.
 
 Frames are never decoded out of the replay video at arbitrary times: what a pack ships as
 images is what MCP serves. `capturepack_summary` (and `capturepack_latest`) announce the

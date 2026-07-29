@@ -124,5 +124,25 @@ check('screenshot-only pack', [box('a', undefined, undefined)], 0)
 // 6. Zero-length box (start === end) — a click with no duration.
 check('a zero-length box', [box('w', 5000, 6000), box('point', 6010, 6010)], 12_000)
 
+// 7. Authored motion changes the visible state even while the box remains
+//    alive. The midpoint placement must therefore have its own still; otherwise
+//    frames/ can show the start and end positions while omitting the position
+//    the user explicitly authored between them.
+{
+  const moving = box('moving-manual', 1000, 9000)
+  moving.keyframes = [
+    { t_ms: 1000, x: 0, y: 0, width: 10, height: 10 },
+    { t_ms: 5000, x: 50, y: 60, width: 10, height: 10 },
+    { t_ms: 9000, x: 100, y: 120, width: 10, height: 10 },
+  ]
+  const { times } = computeKeyframes([moving], 10_000)
+  const ok = times.includes(5000)
+  if (!ok) failures += 1
+  console.log(
+    `  ${ok ? 'PASS' : 'FAIL'}  an authored motion keyframe gets an annotated still` +
+      (ok ? '' : ` — got ${times.join(', ')}`),
+  )
+}
+
 console.log(failures === 0 ? '\nkeyframe-check ok' : `\nkeyframe-check FAILED (${failures})`)
 process.exitCode = failures === 0 ? 0 : 1

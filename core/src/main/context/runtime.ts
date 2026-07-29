@@ -44,6 +44,8 @@ interface Runtime {
   lane: SurfaceLane
   /** Lane A (#111) — the resident control tracker. Optional in behaviour, not in shape. */
   controls: ControlLane
+  controlsEnabled: boolean
+  readVisibleWindows: () => { hwnds: readonly string[]; focusHwnd: string | null }
   providers: ProviderHost
   maintenance: ReturnType<typeof setInterval>
 }
@@ -68,6 +70,23 @@ export interface ContextRuntimeOptions {
    * leaves frames whose box is an interpolation rather than an observation.
    */
   fps?: number
+  /** Whether the resident Windows UI Automation control lane may run. */
+  uiaEnabled?: boolean
+  /**
+   * Deterministic dependency seams for the in-process runtime harness. The app
+   * never supplies these; keeping them here lets the OFF privacy boundary be
+   * exercised through the same public functions Settings calls.
+   */
+  testing?: {
+    platform?: NodeJS.Platform
+    createControls?: (nowMs: () => number, retentionMs: number) => ControlLane
+    createSurfaceLane?: (
+      clock: SessionClock,
+      timeline: SurfaceTimeline,
+      intervalMs?: number,
+    ) => SurfaceLane
+    readVisibleWindows?: () => { hwnds: readonly string[]; focusHwnd: string | null }
+  }
 }
 
 /**
@@ -81,7 +100,7 @@ export function startContextRuntime(options: ContextRuntimeOptions): void {
   if (runtime !== null) return
   // Lane S is Win32. On any other platform the Surface Timeline has no source,
   // and an empty ring answering "no coverage" is the honest behaviour.
-  if (process.platform !== 'win32') return
+  if ((options.testing?.platform ?? process.platform) !== 'win32') return
   // Headed testing and incident response: one flag turns the resident host off
   // without touching settings or rebuilding.
   if (process.argv.includes('--no-context-host')) {
@@ -95,7 +114,15 @@ export function startContextRuntime(options: ContextRuntimeOptions): void {
   // and the ring exists to say where things were in it.
   const intervalMs =
     options.fps !== undefined && options.fps > 0 ? 1000 / options.fps : undefined
-  const lane = new SurfaceLane(clock, timeline, intervalMs)
+  const lane =
+    options.testing?.createSurfaceLane?.(clock, timeline, intervalMs) ??
+    new SurfaceLane(clock, timeline, intervalMs)
+  const readVisibleWindows =
+    options.testing?.readVisibleWindows ??
+    (() => ({
+      hwnds: visibleWindowHandlesNow(),
+      focusHwnd: foregroundWindowHandleNow(),
+    }))
   // The real log sink. `ProviderHost` takes it by injection rather than
   // importing it, so the same class can run in the Electron-free harnesses —
   // this is the Electron side, so it passes the real thing.
@@ -109,9 +136,9 @@ export function startContextRuntime(options: ContextRuntimeOptions): void {
     // pure cost. Sent on the maintenance tick rather than per sample: the set
     // changes when windows open, close or come forward, not at 100 Hz.
     const current = runtime
-    if (current !== null) {
-      const handles = visibleWindowHandlesNow()
-      current.controls.setVisible(handles, foregroundWindowHandleNow())
+    if (current !== null && current.controlsEnabled) {
+      const visible = current.readVisibleWindows()
+      current.controls.setVisible(visible.hwnds, visible.focusHwnd)
     }
   }, TICK_INTERVAL_MS)
   // Never the reason the process stays alive at quit.
@@ -121,9 +148,25 @@ export function startContextRuntime(options: ContextRuntimeOptions): void {
   // lane is already failing should not also pay for the expensive one — and it
   // is entirely optional: every reader below treats its absence as "nobody
   // looked inside the windows", which is what was true before it existed.
-  const controls = new ControlLane(() => clock.nowMs(), retentionMs)
-  runtime = { clock, timeline, lane, controls, providers, maintenance }
-  controls.start()
+  const controls =
+    options.testing?.createControls?.(() => clock.nowMs(), retentionMs) ??
+    new ControlLane(() => clock.nowMs(), retentionMs)
+  const controlsEnabled = options.uiaEnabled !== false
+  runtime = {
+    clock,
+    timeline,
+    lane,
+    controls,
+    controlsEnabled,
+    readVisibleWindows,
+    providers,
+    maintenance,
+  }
+  if (controlsEnabled) {
+    const visible = readVisibleWindows()
+    controls.setVisible(visible.hwnds, visible.focusHwnd)
+    controls.start()
+  }
   lane.start()
   void providers.bufferStart()
   logInfo(
@@ -164,6 +207,31 @@ export function updateContextRetention(replayMs: number): void {
 }
 
 /**
+ * Applies the Windows UI Automation switch immediately without restarting the
+ * cheap surface lane. OFF terminates Lane A and erases its retained control
+ * history; ON starts a fresh helper and seeds it with the current visible
+ * windows. Thus the checkbox controls both capture-time dumps and continuous
+ * recording cost, rather than only the next hotkey press.
+ */
+export function updateContextUiaEnabled(enabled: boolean): void {
+  const current = runtime
+  if (current === null || current.controlsEnabled === enabled) return
+  current.controlsEnabled = enabled
+  if (!enabled) {
+    current.controls.stop()
+    current.controls.clearObservations()
+    logInfo('[context] lane A stopped and cleared — Windows UI Automation is off')
+    return
+  }
+  // Seed before start so a replacement receives one current track command,
+  // never a stale remembered set followed by a correction.
+  const visible = current.readVisibleWindows()
+  current.controls.setVisible(visible.hwnds, visible.focusHwnd)
+  current.controls.start()
+  logInfo('[context] lane A enabled — Windows UI Automation control tracking resumed')
+}
+
+/**
  * Pins the captured range (#64 `onFreeze`) and returns the handle the editor
  * asks its questions with. Everything about the mapping from pack time to
  * session time is decided here and nowhere else.
@@ -174,26 +242,25 @@ export function updateContextRetention(replayMs: number): void {
  * placed on a monotonic clock without inventing precision.
  */
 export function freezeContext(
-  triggerAtWallMs: number,
+  fallbackEndAtWallMs: number,
   replayDurationMs: number,
-  tickOriginMs?: number,
+  replayOriginWallMs?: number,
 ): string | null {
   const current = runtime
   if (current === null) return null
   // THE REPLAY'S OWN ORIGIN WHEN THE RECORDER GAVE ONE (#112).
   //
-  // Ticks carry a session-monotonic `presentationTime`, so the ring is on that
-  // clock. The saved bytes begin where their recorder slot began, and the
-  // recorder reports that number with them — so the frozen range is anchored on
-  // it directly. No wall clock, no conversion, no residual.
+  // Ticks and replay origins carry epoch-based DOMHighRes timestamps. They are
+  // comparable across renderer processes, but the resident ring itself uses
+  // this runtime's monotonic SessionClock. Convert at this one boundary.
   //
   // The wall-clock anchor stays for the case with no ticks at all: a display
   // with no recorder, or a platform with no host, where the free-running loop
   // is what filled the ring.
   const endMs =
-    tickOriginMs === undefined
-      ? current.clock.fromWallClockMs(triggerAtWallMs)
-      : tickOriginMs + Math.max(0, replayDurationMs)
+    replayOriginWallMs === undefined
+      ? current.clock.fromWallClockMs(fallbackEndAtWallMs)
+      : current.clock.fromWallClockMs(replayOriginWallMs) + Math.max(0, replayDurationMs)
   const startMs = endMs - Math.max(0, replayDurationMs)
   const freezeId = randomUUID()
   current.timeline.freeze(freezeId, startMs, endMs)
@@ -301,6 +368,7 @@ export function frozenObservations(
     (packTMs) => {
       const at = new Map<string, readonly TrackedControl[]>()
       if (freeze === undefined) return at
+      if (!current.controlsEnabled) return at
       for (const entry of current.controls.controlsAt(freeze.startMs + packTMs)) {
         at.set(entry.hwnd, entry.controls)
       }
@@ -318,11 +386,18 @@ export function frozenObservations(
  */
 export function tickSurfaces(
   displayId: string,
-  frameMs: number,
+  frameWallMs: number,
   frameAgeMs?: number,
   tickDelayMs?: number,
 ): void {
-  runtime?.lane.tickAt(displayId, frameMs, frameAgeMs, tickDelayMs)
+  const current = runtime
+  if (current === null) return
+  current.lane.tickAt(
+    displayId,
+    current.clock.fromWallClockMs(frameWallMs),
+    frameAgeMs,
+    tickDelayMs,
+  )
 }
 
 export interface ContextStatus {

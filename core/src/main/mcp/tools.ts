@@ -15,6 +15,7 @@ import {
   declaredDisplayIndices,
   focusedDisplayIndex,
 } from '../../shared/types'
+import { captureMediaForMcp, type McpCaptureMedia } from '../../shared/captureMedia'
 import { computeDisplayNumbers } from '../../shared/numbering'
 import { errorMessage, type PackHandle, type PackStore } from './store'
 
@@ -32,11 +33,104 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
       .string()
       .optional()
       .describe(
-        'Which pack to read: a pack id from capturepack_list, or an absolute path to a ' +
+        'Which pack to read: a pack id from capturepack_history / capturepack_list, or an absolute path to a ' +
           '.capturepack file or extracted pack folder. Omit to use the current default pack ' +
           '(the one pinned by capturepack_open / capturepack_latest, otherwise the most recent ' +
           'pack in the export folder).',
       ),
+  }
+  const historyInputSchema = {
+    limit: z.number().int().min(1).max(100).optional().describe('Maximum matching packs to return (default 20).'),
+    query: z
+      .string()
+      .trim()
+      .min(1)
+      .optional()
+      .describe('Case-insensitive search across id, title, note, focused app and path.'),
+    kind: z
+      .enum(['image', 'video'])
+      .optional()
+      .describe('Return only still-image packs or only video packs.'),
+  }
+
+  function historyResult(args: {
+    limit?: number
+    query?: string
+    kind?: 'image' | 'video'
+  }): CallToolResult {
+    const limit = args.limit ?? 20
+    const filtered = args.query !== undefined || args.kind !== undefined
+    // Without filters only the rows the caller requested are opened. A filtered
+    // history has to inspect each manifest because title/note/capture_kind live
+    // inside the pack rather than in a filename.
+    const { total, packs } = store.list(filtered ? Number.MAX_SAFE_INTEGER : limit)
+    const query = args.query?.toLocaleLowerCase()
+    const matches: Array<Record<string, unknown>> = []
+    for (const entry of packs) {
+      try {
+        const pack = store.resolve(entry.id)
+        const manifest = pack.manifest()
+        const captureMedia = captureMediaForMcp(manifest)
+        const annotations = annotationList(pack)
+        const plugins = pack.plugins()
+        const timeline = pack.timeline()
+        const events = Array.isArray(timeline?.events) ? timeline.events : []
+        const title = manifest?.title ?? entry.title
+        const note = manifest?.note ?? null
+        const app = manifest?.environment?.app ?? null
+        const haystack = [entry.id, title, note, app, entry.path]
+          .filter((value): value is string => typeof value === 'string')
+          .join('\n')
+          .toLocaleLowerCase()
+        if (args.kind !== undefined && captureMedia.capture_kind !== args.kind) continue
+        if (query !== undefined && !haystack.includes(query)) continue
+        matches.push({
+          id: entry.id,
+          path: entry.path,
+          captured_at: manifest?.created_at ?? entry.capturedAt,
+          kind: captureMedia.capture_kind,
+          capture_kind: captureMedia.capture_kind,
+          capture_kind_inferred: captureMedia.legacy_inferred,
+          storage_kind: entry.kind,
+          title,
+          note,
+          focused_app: app,
+          counts: {
+            annotations: annotations.length,
+            plugins: plugins.length,
+            ...(captureMedia.capture_kind === 'video' ? { timeline_events: events.length } : {}),
+          },
+          ...(entry.warning !== null ? { warning: entry.warning } : {}),
+        })
+      } catch (err) {
+        const haystack = [entry.id, entry.title, entry.path]
+          .filter((value): value is string => typeof value === 'string')
+          .join('\n')
+          .toLocaleLowerCase()
+        if (args.kind !== undefined || (query !== undefined && !haystack.includes(query))) continue
+        matches.push({
+          id: entry.id,
+          path: entry.path,
+          captured_at: entry.capturedAt,
+          kind: null,
+          capture_kind: null,
+          storage_kind: entry.kind,
+          title: entry.title,
+          note: null,
+          counts: null,
+          warning: entry.warning ?? `unreadable pack: ${errorMessage(err)}`,
+        })
+      }
+    }
+    const returned = matches.slice(0, limit).map((pack, index) => ({ n: index + 1, ...pack }))
+    return jsonResult({
+      output_dir: store.outputDir,
+      total,
+      matched_total: filtered ? matches.length : total,
+      returned: returned.length,
+      packs: returned,
+      next: 'Pass a pack id to capturepack_open, or as id to any capturepack_* reader.',
+    })
   }
 
   async function run(
@@ -61,13 +155,25 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
       title: 'Latest CapturePack',
       description:
         'Summary of the MOST RECENT CapturePack in the export folder, and pin it as the default ' +
-        'pack for all other capturepack_* tools. Start here: most sessions only need this, then ' +
-        'capturepack_report / capturepack_timeline / capturepack_annotations without arguments. ' +
-        'A CapturePack is a local context capture (screenshot + optional screen replay + ' +
-        'annotations + event timeline) exported by the CapturePack app.',
+        'pack for all other capturepack_* tools. Use capturepack_history when the requested pack ' +
+        'may not be newest. A CapturePack is a user-created local still-image or video context ' +
+        'capture with annotations. Video packs may have an event timeline; image packs do not.',
       inputSchema: {},
     },
     (args) => run('capturepack_latest', args, () => jsonResult(summarize(store.latest()))),
+  )
+
+  server.registerTool(
+    'capturepack_history',
+    {
+      title: 'Browse CapturePack history',
+      description:
+        'Browse saved CapturePacks newest first without changing the current pack. Returns stable ' +
+        'id/path/captured_at, image-or-video kind, title, note, focused app and situational counts. ' +
+        'Filter by text or capture kind, then pass an id to capturepack_open or any other tool.',
+      inputSchema: historyInputSchema,
+    },
+    (args) => run('capturepack_history', args, () => historyResult(args)),
   )
 
   server.registerTool(
@@ -75,30 +181,11 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
     {
       title: 'List CapturePacks',
       description:
-        'List recent CapturePacks in the export folder, newest first: id, title, capture time, ' +
-        'kind (zip or extracted folder) and absolute path. Use an id from this list as the "id" ' +
-        'argument of any other capturepack_* tool, or pass it to capturepack_open to pin it.',
-      inputSchema: {
-        limit: z.number().int().min(1).max(100).optional().describe('Maximum packs to return (default 20).'),
-      },
+        'Alias of capturepack_history for compatibility. Lists saved packs newest first with ' +
+        'search/kind filters, notes and counts; use capturepack_open on the selected id.',
+      inputSchema: historyInputSchema,
     },
-    (args) =>
-      run('capturepack_list', args, () => {
-        const { total, packs } = store.list(args.limit ?? 20)
-        return jsonResult({
-          output_dir: store.outputDir,
-          total,
-          packs: packs.map((e, i) => ({
-            n: i + 1,
-            id: e.id,
-            title: e.title,
-            captured_at: e.capturedAt,
-            kind: e.kind,
-            path: e.path,
-            ...(e.warning !== null ? { warning: e.warning } : {}),
-          })),
-        })
-      }),
+    (args) => run('capturepack_list', args, () => historyResult(args)),
   )
 
   server.registerTool(
@@ -106,14 +193,14 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
     {
       title: 'Open a CapturePack',
       description:
-        'Open a specific CapturePack by id (from capturepack_list) or absolute path (.capturepack ' +
+        'Open a specific CapturePack by id (from capturepack_history / capturepack_list) or absolute path (.capturepack ' +
         'zip file or extracted pack folder), pin it as the default pack for subsequent ' +
         'capturepack_* calls in this session, and return its summary.',
       inputSchema: {
         id: z
           .string()
           .min(1)
-          .describe('Pack id from capturepack_list, or an absolute path to a .capturepack file or pack folder.'),
+          .describe('Pack id from capturepack_history / capturepack_list, or an absolute path to a .capturepack file or pack folder.'),
       },
     },
     (args) => run('capturepack_open', args, () => jsonResult(summarize(store.open(args.id)))),
@@ -125,8 +212,9 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
       title: 'Pack summary',
       description:
         'Compact summary of a CapturePack: title, note, capture time, environment (OS, screens, ' +
-        'focused app), replay duration or screenshot-only, snapshot frame time, annotation count ' +
-        'per type, timeline event count and plugin list. Does not change the pinned default pack.',
+        'focused app), explicit/inferred capture_kind, snapshot scope/crop provenance, annotations ' +
+        'and plugin list; video summaries also include replay/timeline details. Does not ' +
+        'change the pinned default pack.',
       inputSchema: idArg,
     },
     (args) => run('capturepack_summary', args, () => jsonResult(summarize(store.resolve(args.id)))),
@@ -174,9 +262,10 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
     {
       title: 'Event timeline',
       description:
-        'Machine-readable timeline events of a CapturePack (capture trigger, annotations added, ' +
+        'Machine-readable timeline events of a VIDEO CapturePack (capture trigger, annotations added, ' +
         'plugin events, export). Each event has t_ms (milliseconds since capture start t0), type, ' +
-        'source, and optional data. Optionally slice by from_ms/to_ms.',
+        'source, and optional data. Optionally slice by from_ms/to_ms. Explicit still-image packs ' +
+        'intentionally have no timeline and return an explanatory empty result.',
       inputSchema: {
         ...idArg,
         from_ms: z.number().min(0).optional().describe('Only events with t_ms >= from_ms.'),
@@ -187,7 +276,19 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
       run('capturepack_timeline', args, () => {
         const pack = store.resolve(args.id)
         const timeline = pack.timeline()
-        if (!timeline) return errorResult(`timeline.json missing or malformed in pack "${pack.id}"`)
+        if (!timeline) {
+          const captureMedia = captureMediaForMcp(pack.manifest())
+          if (captureMedia.capture_kind === 'image' && !captureMedia.legacy_inferred) {
+            return jsonResult({
+              pack: pack.id,
+              capture_kind: 'image',
+              available: false,
+              message:
+                'This is a still-image CapturePack. timeline.json is intentionally absent; read snapshot.png, annotations and plugin context.',
+            })
+          }
+          return errorResult(`timeline.json missing or malformed in video pack "${pack.id}"`)
+        }
         const all = Array.isArray(timeline.events) ? timeline.events : []
         const events = all.filter(
           (e) => (args.from_ms === undefined || e.t_ms >= args.from_ms) && (args.to_ms === undefined || e.t_ms <= args.to_ms),
@@ -283,6 +384,7 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
       run('capturepack_frame', args, () => {
         const pack = store.resolve(args.id)
         const manifest = pack.manifest()
+        const captureMedia = captureMediaForMcp(manifest)
         const keyframes = keyframeList(manifest)
         const times = keyframes.map((k) => `${(k.t_ms / 1000).toFixed(3)}s`).join(', ')
 
@@ -297,6 +399,11 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
           const framePng = pack.readBinary(best.file)
           if (framePng) {
             const n = keyframes.indexOf(best) + 1
+            const imageBoundary =
+              captureMedia.capture_kind === 'image' &&
+              captureMedia.snapshot.scope === 'region'
+                ? ' It is derived only from the user-selected crop; no outside pixels are stored.'
+                : ''
             return {
               content: [
                 { type: 'image', data: framePng.toString('base64'), mimeType: 'image/png' },
@@ -306,14 +413,17 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
                     `Annotated keyframe ${n}/${keyframes.length} (${best.file}) at ` +
                     `${(best.t_ms / 1000).toFixed(3)}s — the nearest state change to the requested ` +
                     `${args.time_s}s. Annotations (blur, borders, numbers, text) are rendered into ` +
-                    `this image; snapshot.png is never annotated. Keyframe times: ${times}.`,
+                    `this image; snapshot.png is never annotated. Keyframe times: ${times}.` +
+                    imageBoundary,
                 },
               ],
             }
           }
         }
 
-        const snapshotFile = manifest?.media?.snapshot ?? 'snapshot.png'
+        // The current format has exactly one source image name. In particular,
+        // never probe for a "context-full" sibling of a region capture.
+        const snapshotFile = captureMedia.snapshot.file
         const png = pack.readBinary(snapshotFile)
         if (!png) return errorResult(`${snapshotFile} not found in pack "${pack.id}"`)
         const snapT = manifest?.media?.snapshot_t_ms
@@ -326,7 +436,7 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
               'the nearest one, with the annotations rendered in.'
         const note =
           args.time_s === undefined
-            ? `Snapshot frame from ${snapDesc} (original pixels, no annotations).${keyframeNote}`
+            ? `${snapshotDescription(captureMedia)}. Frame time: ${snapDesc} (original pixels, no annotations).${keyframeNote}`
             : `Requested ${args.time_s}s; returned the exported snapshot frame, which is from ${snapDesc}.` +
               keyframeNote
         return {
@@ -351,16 +461,26 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
       run('capturepack_replay', args, () => {
         const pack = store.resolve(args.id)
         const manifest = pack.manifest()
-        const replay = manifest?.media?.replay
-        if (typeof replay !== 'string' || replay === '') {
-          return jsonResult({ pack: pack.id, replay: null, message: 'Screenshot-only capture: this pack has no replay video.' })
+        const captureMedia = captureMediaForMcp(manifest)
+        const replay = captureMedia.replay
+        if (replay === null) {
+          return jsonResult({
+            pack: pack.id,
+            capture_kind: captureMedia.capture_kind,
+            replay: null,
+            message:
+              captureMedia.capture_kind === 'image'
+                ? 'Image capture: this user-created pack has no replay video.'
+                : 'No valid replay is declared by this pack.',
+          })
         }
         return jsonResult({
           pack: pack.id,
+          capture_kind: captureMedia.capture_kind,
           replay: {
-            filename: replay,
-            duration_ms: manifest?.media?.replay_duration_ms ?? null,
-            size_bytes: pack.fileSize(replay),
+            filename: replay.filename,
+            duration_ms: replay.duration_ms,
+            size_bytes: pack.fileSize(replay.filename),
           },
         })
       }),
@@ -439,7 +559,7 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
     {
       title: 'Window focus timeline',
       description:
-        'Window-related context of a CapturePack: timeline events whose type or source mentions ' +
+        'Window-related context of a CapturePack: video timeline events whose type or source mentions ' +
         'window/focus, plus any window-tracking plugin metadata — on Windows that is the ' +
         '"windows-uia" payload, whose windows[] lists every top-level window at the capture ' +
         'instant (title, process, class_name, bounds in the snapshot pixels of the display in ' +
@@ -471,7 +591,7 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
       title: 'Search a pack',
       description:
         'Case-insensitive substring search across everything in a CapturePack: report.md lines, ' +
-        'annotation texts, timeline event types and data, plugin JSON metadata, and the ' +
+        'annotation texts, video timeline events when present, plugin JSON metadata, and the ' +
         'manifest title/note. Returns hits grouped by source.',
       inputSchema: {
         keyword: z.string().min(1).describe('Substring to search for (case-insensitive).'),
@@ -487,8 +607,8 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
       title: 'Export pack as Markdown',
       description:
         'A single self-contained Markdown document for a CapturePack: report.md followed by an ' +
-        'annotations table (with computed display numbers and lifetimes), the full timeline ' +
-        'listing, and the plugin inventory. Returns the Markdown as text; writes no files.',
+        'annotations table (with computed display numbers and lifetimes), the plugin inventory, ' +
+        'and—for video packs only—the timeline. Returns the Markdown as text; writes no files.',
       inputSchema: idArg,
     },
     (args) => run('capturepack_export_markdown', args, () => textResult(exportMarkdown(store.resolve(args.id)))),
@@ -513,8 +633,28 @@ function errorResult(message: string): CallToolResult {
 // ---------------------------------------------------------------------------
 // Pack views
 
+function snapshotDescription(media: McpCaptureMedia): string {
+  const snapshot = media.snapshot
+  if (snapshot.scope === 'region') {
+    const bounds = snapshot.crop_bounds
+    const placement =
+      bounds === undefined
+        ? ''
+        : ` at (${bounds.x}, ${bounds.y}) ${bounds.width}×${bounds.height} ${bounds.coordinate_space}`
+    return `User-selected region image${placement}; only the selected pixels are stored`
+  }
+  if (snapshot.scope === 'fullscreen') {
+    return 'User-requested full-screen image; snapshot.png itself is the complete explicit capture'
+  }
+  if (snapshot.scope === 'legacy_screenshot') {
+    return 'Legacy screenshot-only capture'
+  }
+  return 'Snapshot frame'
+}
+
 function summarize(pack: PackHandle): Record<string, unknown> {
   const manifest = pack.manifest()
+  const captureMedia = captureMediaForMcp(manifest)
   const annotations = annotationList(pack)
   const byType: Record<string, number> = {}
   for (const a of annotations) {
@@ -524,6 +664,8 @@ function summarize(pack: PackHandle): Record<string, unknown> {
   const timeline = pack.timeline()
   const events = Array.isArray(timeline?.events) ? timeline.events : []
   const media = manifest?.media
+  const imageCapture =
+    captureMedia.capture_kind === 'image' && !captureMedia.legacy_inferred
   const summary: Record<string, unknown> = {
     id: pack.id,
     path: pack.path,
@@ -531,6 +673,9 @@ function summarize(pack: PackHandle): Record<string, unknown> {
     title: manifest?.title ?? null,
     note: manifest?.note ?? null,
     captured_at: manifest?.created_at ?? null,
+    capture_kind: captureMedia.capture_kind,
+    capture_kind_inferred: captureMedia.legacy_inferred,
+    snapshot: captureMedia.snapshot,
     environment: manifest
       ? {
           os: [manifest.environment?.os, manifest.environment?.os_version].filter(Boolean).join(' ') || null,
@@ -538,14 +683,16 @@ function summarize(pack: PackHandle): Record<string, unknown> {
           app: manifest.environment?.app ?? null,
         }
       : null,
-    replay:
-      typeof media?.replay === 'string' && media.replay !== ''
-        ? { file: media.replay, duration_ms: media.replay_duration_ms ?? null }
-        : { screenshot_only: true },
     annotation_count: annotations.length,
     annotations_by_type: byType,
-    timeline_event_count: events.length,
     plugins: pack.plugins().map((p) => p.name),
+  }
+  if (!imageCapture) {
+    summary.replay =
+      captureMedia.replay !== null
+        ? { file: captureMedia.replay.filename, duration_ms: captureMedia.replay.duration_ms }
+        : { unavailable: true }
+    summary.timeline_event_count = events.length
   }
   if (typeof media?.snapshot_t_ms === 'number') summary.snapshot_t_ms = media.snapshot_t_ms
   // Annotated keyframes (SPEC §5.7): announce them here so a session that only
@@ -576,7 +723,15 @@ function keyframeList(manifest: Manifest | null): ManifestKeyframe[] {
   for (const item of raw as unknown[]) {
     if (item === null || typeof item !== 'object') continue
     const k = item as Partial<ManifestKeyframe>
-    if (typeof k.file !== 'string' || k.file === '' || typeof k.t_ms !== 'number') continue
+    if (
+      typeof k.file !== 'string' ||
+      !/^frames\/frame-[0-9]{2,}_[0-9]{2,}-[0-9]{2}\.[0-9]{3}\.png$/.test(k.file) ||
+      typeof k.t_ms !== 'number' ||
+      !Number.isInteger(k.t_ms) ||
+      k.t_ms < 0
+    ) {
+      continue
+    }
     frames.push({ file: k.file, t_ms: k.t_ms })
   }
   return frames.sort((a, b) => a.t_ms - b.t_ms)
@@ -761,12 +916,15 @@ function exportMarkdown(pack: PackHandle): string {
     })
   }
 
-  const timeline = pack.timeline()
-  const events = Array.isArray(timeline?.events) ? timeline.events : []
-  lines.push('', `## Timeline (${events.length} events${timeline?.t0 ? `, t0 = ${timeline.t0}` : ''})`, '')
-  if (events.length === 0) lines.push('No timeline events.')
-  for (const e of events) {
-    lines.push(`- ${e.t_ms} ms — \`${e.type}\` (${e.source})${e.data !== undefined ? ' ' + cap(JSON.stringify(e.data), 200) : ''}`)
+  const captureMedia = captureMediaForMcp(pack.manifest())
+  if (captureMedia.capture_kind !== 'image' || captureMedia.legacy_inferred) {
+    const timeline = pack.timeline()
+    const events = Array.isArray(timeline?.events) ? timeline.events : []
+    lines.push('', `## Timeline (${events.length} events${timeline?.t0 ? `, t0 = ${timeline.t0}` : ''})`, '')
+    if (events.length === 0) lines.push('No timeline events.')
+    for (const e of events) {
+      lines.push(`- ${e.t_ms} ms — \`${e.type}\` (${e.source})${e.data !== undefined ? ' ' + cap(JSON.stringify(e.data), 200) : ''}`)
+    }
   }
 
   const plugins = pack.plugins()

@@ -26,6 +26,25 @@ import type {
   AnnotationTrackSample,
 } from './types'
 
+/** One captured display, with native pixels and its desktop rectangle in DIPs. */
+export interface AuthoredMotionDisplay {
+  index: number
+  width: number
+  height: number
+  bounds: AnnotationBounds
+}
+
+/** The common desktop space needed when authored motion crosses displays. */
+export interface AuthoredMotionSpace {
+  focusedIndex: number
+  displays: readonly AuthoredMotionDisplay[]
+}
+
+export interface AuthoredPlacement {
+  display: number
+  bounds: AnnotationBounds
+}
+
 /**
  * The nearest RECORDED sample to `tMs`, unchanged, or null when the box has no
  * track.
@@ -115,6 +134,78 @@ export function keyframedBoundsAt(a: Annotation, tMs: number): AnnotationBounds 
 }
 
 /**
+ * An authored rectangle plus the display whose native pixels it currently
+ * occupies.
+ *
+ * Within one display, interpolation is the classic local-pixel lerp. Across
+ * displays, local pixels cannot be mixed (the reported desk is 1x beside
+ * 1.5x), so both endpoints are first mapped into the manifest's desktop DIP
+ * space, interpolated there, then projected onto the display containing most
+ * of the moving rectangle.
+ */
+export function keyframedPlacementAt(
+  a: Annotation,
+  tMs: number,
+  space?: AuthoredMotionSpace,
+): AuthoredPlacement | null {
+  const frames = a.keyframes
+  if (frames === undefined || frames.length === 0) return null
+  const first = frames[0]!
+  const last = frames[frames.length - 1]!
+  if (frames.length === 1 || tMs <= first.t_ms) {
+    return placementOf(a, first, space)
+  }
+  if (tMs >= last.t_ms) return placementOf(a, last, space)
+
+  let prev = first
+  let next = last
+  for (let i = 1; i < frames.length; i += 1) {
+    const candidate = frames[i]!
+    if (candidate.t_ms >= tMs) {
+      prev = frames[i - 1]!
+      next = candidate
+      break
+    }
+  }
+  const span = next.t_ms - prev.t_ms
+  if (span <= 0) return placementOf(a, next, space)
+  const weight = (tMs - prev.t_ms) / span
+  const prevDisplay = displayOfFrame(a, prev, space)
+  const nextDisplay = displayOfFrame(a, next, space)
+
+  if (space === undefined || prevDisplay === nextDisplay) {
+    return {
+      display: weight < 0.5 ? prevDisplay : nextDisplay,
+      bounds: lerpBounds(boundsOf(prev), boundsOf(next), weight),
+    }
+  }
+
+  const fromSpace = space.displays.find((display) => display.index === prevDisplay)
+  const toSpace = space.displays.find((display) => display.index === nextDisplay)
+  if (fromSpace === undefined || toSpace === undefined) {
+    return {
+      display: weight < 0.5 ? prevDisplay : nextDisplay,
+      bounds: lerpBounds(boundsOf(prev), boundsOf(next), weight),
+    }
+  }
+
+  const desktop = lerpBounds(
+    toDesktop(boundsOf(prev), fromSpace),
+    toDesktop(boundsOf(next), toSpace),
+    weight,
+  )
+  const landed = displayForDesktopRect(
+    desktop,
+    space.displays,
+    weight < 0.5 ? fromSpace : toSpace,
+  )
+  return {
+    display: landed.index,
+    bounds: fromDesktop(desktop, landed),
+  }
+}
+
+/**
  * The rectangle a box occupies at `tMs` from whichever path it has, or null
  * when it has neither.
  *
@@ -143,7 +234,11 @@ export function trackedBoundsAt(a: Annotation, tMs: number): AnnotationBounds | 
  *
  * The copy is a VIEW. Editing writes to the stored annotation, never to this.
  */
-export function annotationAt(a: Annotation, tMs: number): Annotation {
+export function annotationAt(
+  a: Annotation,
+  tMs: number,
+  authoredSpace?: AuthoredMotionSpace,
+): Annotation {
   const s = trackedSampleAt(a, tMs)
   if (s !== null) {
     return {
@@ -152,13 +247,48 @@ export function annotationAt(a: Annotation, tMs: number): Annotation {
       ...(s.display === undefined ? {} : { display: s.display }),
     }
   }
-  // An authored path never crosses screens: the user drew this box on one
-  // display and it is theirs to place, so `display` is left exactly as it was
-  // (§8.9). A box with neither path is returned unchanged, which is what keeps
-  // the ordinary untracked case byte-identical and free.
-  const authored = keyframedBoundsAt(a, tMs)
+  // An authored path may cross screens. `keyframedPlacementAt` resolves each
+  // endpoint through the captured display geometry, then returns native pixels
+  // for the screen the interpolated rectangle currently occupies (§8.9). A box
+  // with neither path is returned unchanged, which keeps the ordinary
+  // untracked case byte-identical and free.
+  const authored = keyframedPlacementAt(a, tMs, authoredSpace)
   if (authored === null) return a
-  return { ...a, bounds: authored }
+  const view: Annotation = { ...a, bounds: authored.bounds }
+  const ownDisplay = a.display ?? authoredSpace?.focusedIndex
+  if (authored.display === ownDisplay) {
+    if (a.display === undefined) delete view.display
+  } else {
+    view.display = authored.display
+  }
+  return view
+}
+
+/**
+ * Resolves first, then scales the resulting rectangle for an encoded render.
+ *
+ * Scaling stored `bounds` before resolution left authored keyframes in native
+ * 4K pixels; annotationAt then replaced the scaled rectangle with an unscaled
+ * keyframe on a 1920px replay. This ordering makes every motion source use the
+ * same output coordinate space.
+ */
+export function renderedAnnotationAt(
+  a: Annotation,
+  tMs: number,
+  scaleX: number,
+  scaleY: number,
+  authoredSpace?: AuthoredMotionSpace,
+): Annotation {
+  const resolved = annotationAt(a, tMs, authoredSpace)
+  return {
+    ...resolved,
+    bounds: {
+      x: resolved.bounds.x * scaleX,
+      y: resolved.bounds.y * scaleY,
+      width: resolved.bounds.width * scaleX,
+      height: resolved.bounds.height * scaleY,
+    },
+  }
 }
 
 function boundsOf(s: AnnotationTrackSample | AnnotationKeyframe): AnnotationBounds {
@@ -168,4 +298,102 @@ function boundsOf(s: AnnotationTrackSample | AnnotationKeyframe): AnnotationBoun
     width: Math.round(s.width),
     height: Math.round(s.height),
   }
+}
+
+function displayOfFrame(
+  a: Annotation,
+  frame: AnnotationKeyframe,
+  space: AuthoredMotionSpace | undefined,
+): number {
+  return frame.display ?? a.display ?? space?.focusedIndex ?? 1
+}
+
+function placementOf(
+  a: Annotation,
+  frame: AnnotationKeyframe,
+  space: AuthoredMotionSpace | undefined,
+): AuthoredPlacement {
+  return { display: displayOfFrame(a, frame, space), bounds: boundsOf(frame) }
+}
+
+function lerpBounds(
+  from: AnnotationBounds,
+  to: AnnotationBounds,
+  weight: number,
+): AnnotationBounds {
+  return {
+    x: Math.round(from.x + (to.x - from.x) * weight),
+    y: Math.round(from.y + (to.y - from.y) * weight),
+    width: Math.round(from.width + (to.width - from.width) * weight),
+    height: Math.round(from.height + (to.height - from.height) * weight),
+  }
+}
+
+function toDesktop(bounds: AnnotationBounds, display: AuthoredMotionDisplay): AnnotationBounds {
+  const sx = display.width > 0 ? display.bounds.width / display.width : 1
+  const sy = display.height > 0 ? display.bounds.height / display.height : 1
+  return {
+    x: display.bounds.x + bounds.x * sx,
+    y: display.bounds.y + bounds.y * sy,
+    width: bounds.width * sx,
+    height: bounds.height * sy,
+  }
+}
+
+function fromDesktop(bounds: AnnotationBounds, display: AuthoredMotionDisplay): AnnotationBounds {
+  const sx = display.bounds.width > 0 ? display.width / display.bounds.width : 1
+  const sy = display.bounds.height > 0 ? display.height / display.bounds.height : 1
+  return {
+    x: Math.round((bounds.x - display.bounds.x) * sx),
+    y: Math.round((bounds.y - display.bounds.y) * sy),
+    width: Math.round(bounds.width * sx),
+    height: Math.round(bounds.height * sy),
+  }
+}
+
+function displayForDesktopRect(
+  rect: AnnotationBounds,
+  displays: readonly AuthoredMotionDisplay[],
+  fallback: AuthoredMotionDisplay,
+): AuthoredMotionDisplay {
+  let best = fallback
+  let bestArea = -1
+  for (const display of displays) {
+    const area = overlapArea(rect, display.bounds)
+    if (area > bestArea) {
+      best = display
+      bestArea = area
+    }
+  }
+  if (bestArea > 0) return best
+
+  const cx = rect.x + rect.width / 2
+  const cy = rect.y + rect.height / 2
+  let bestDistance = Number.POSITIVE_INFINITY
+  for (const display of displays) {
+    const dx =
+      cx < display.bounds.x
+        ? display.bounds.x - cx
+        : cx > display.bounds.x + display.bounds.width
+          ? cx - (display.bounds.x + display.bounds.width)
+          : 0
+    const dy =
+      cy < display.bounds.y
+        ? display.bounds.y - cy
+        : cy > display.bounds.y + display.bounds.height
+          ? cy - (display.bounds.y + display.bounds.height)
+          : 0
+    const distance = dx * dx + dy * dy
+    if (distance < bestDistance) {
+      best = display
+      bestDistance = distance
+    }
+  }
+  return best
+}
+
+function overlapArea(a: AnnotationBounds, b: AnnotationBounds): number {
+  const width = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x)
+  const height = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y)
+  return width > 0 && height > 0 ? width * height : 0
 }

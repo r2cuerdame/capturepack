@@ -1,0 +1,142 @@
+// A START-TRIM DRAG EDITS THE KEPT RANGE, NOT THE FRAME BEING ANNOTATED.
+//
+// Field report, 2026-07-29:
+//   "시작 트림 움직이면 현재커서 함께 움직이는 버그"
+//   "객체 선택 박스는 움직이면 안되는데 움직여지는 버그"
+//
+// This drives the SAME plan the timebar callback applies, then reads a moving
+// annotation through the SAME function the editor uses to draw it. No pointer
+// input is synthesized on the owner's desktop.
+import { planTrimDrag } from '../src/renderer/editor/trimDrag'
+import { annotationAt } from '../src/shared/track'
+import type { Annotation } from '../src/shared/types'
+
+let failed = 0
+
+function check(name: string, got: unknown, want: unknown): void {
+  const g = JSON.stringify(got)
+  const w = JSON.stringify(want)
+  const ok = g === w
+  if (!ok) failed += 1
+  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}`)
+  if (!ok) console.log(`        got  ${g}\n        want ${w}`)
+}
+
+function movingBox(): Annotation {
+  return {
+    annotation_id: 'ann_trim_cursor',
+    type: 'box',
+    bounds: { x: 500, y: 200, width: 300, height: 150 },
+    text: '',
+    start_ms: 0,
+    end_ms: 30_000,
+    numbered: false,
+    blur: false,
+    tracking: {
+      enabled: true,
+      samples: [
+        { t_ms: 8_000, x: 100, y: 200, width: 300, height: 150 },
+        { t_ms: 20_000, x: 500, y: 200, width: 300, height: 150 },
+      ],
+    },
+    created_at: '2026-07-29T00:00:00+09:00',
+    z: 0,
+  }
+}
+
+console.log('START HANDLE MOVES, CURRENT FRAME DOES NOT')
+{
+  const currentMs = 20_000
+  const plan = planTrimDrag({
+    kind: 'in',
+    requestedMs: 8_000,
+    durationMs: 30_000,
+    currentMs,
+    inMs: 0,
+    outMs: null,
+    minGapMs: 100,
+  })
+  const displayedMs = plan.previewMs ?? currentMs
+  check('start trim lands at the requested frame', plan.inMs, 8_000)
+  check('start trim requests no preview seek', plan.previewMs, null)
+  check('playhead delta is 0 ms', displayedMs - currentMs, 0)
+  check(
+    'selected box delta is 0 px',
+    annotationAt(movingBox(), displayedMs).bounds.x - annotationAt(movingBox(), currentMs).bounds.x,
+    0,
+  )
+}
+
+console.log('\nSTART HANDLE CANNOT LEAVE THE PLAYHEAD OUTSIDE THE KEPT RANGE')
+{
+  const currentMs = 20_000
+  const plan = planTrimDrag({
+    kind: 'in',
+    requestedMs: 25_000,
+    durationMs: 30_000,
+    currentMs,
+    inMs: 0,
+    outMs: null,
+    minGapMs: 100,
+  })
+  check('handle stops at the current frame', plan.inMs, currentMs)
+  check('current frame remains inside the range', plan.inMs <= currentMs, true)
+  check('crossing attempt still requests no seek', plan.previewMs, null)
+}
+
+console.log('\nEND HANDLE MOVES, CURRENT FRAME DOES NOT')
+{
+  const currentMs = 10_000
+  const plan = planTrimDrag({
+    kind: 'out',
+    requestedMs: 18_000,
+    durationMs: 30_000,
+    currentMs,
+    inMs: 2_000,
+    outMs: null,
+    minGapMs: 100,
+  })
+  check('out trim lands at the requested frame', plan.outMs, 18_000)
+  check('end trim requests no preview seek', plan.previewMs, null)
+  check('playhead delta is 0 ms', (plan.previewMs ?? currentMs) - currentMs, 0)
+  check(
+    'selected box delta is 0 px',
+    annotationAt(movingBox(), plan.previewMs ?? currentMs).bounds.x -
+      annotationAt(movingBox(), currentMs).bounds.x,
+    0,
+  )
+}
+
+console.log('\nEND HANDLE CROSSING USES THE RANGE CLAMP, NOT A PREVIEW SEEK')
+{
+  const currentMs = 20_000
+  const plan = planTrimDrag({
+    kind: 'out',
+    requestedMs: 12_000,
+    durationMs: 30_000,
+    currentMs,
+    inMs: 2_000,
+    outMs: null,
+    minGapMs: 100,
+  })
+  check('end handle can still set the requested out point', plan.outMs, 12_000)
+  check('crossing does not add a second preview seek', plan.previewMs, null)
+}
+
+console.log('\nNATIVE CAPTURE FRAME STAYS NATIVE WHILE THE END IS TRIMMED')
+{
+  const plan = planTrimDrag({
+    kind: 'out',
+    requestedMs: 18_000,
+    durationMs: 30_000,
+    currentMs: 30_000,
+    inMs: 0,
+    outMs: null,
+    minGapMs: 100,
+  })
+  check('out point can be set while current is the native capture instant', plan.outMs, 18_000)
+  check('native now is not preview-seeked into encoded footage', plan.previewMs, null)
+}
+
+console.log(failed === 0 ? '\ntrim-drag-check ok' : `\ntrim-drag-check FAILED (${failed})`)
+process.exitCode = failed === 0 ? 0 : 1

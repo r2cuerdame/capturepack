@@ -43,9 +43,12 @@ body {
   display: none;
   flex: none;
   align-items: center;
-  justify-content: center;
-  height: 26px;
-  padding: 0 10px;
+  justify-content: flex-start;
+  height: 32px;
+  /* Windows owns three caption buttons in the overlay's right edge. The label
+     never runs under their hit targets, even with a long translated document
+     title left over in an older pack. */
+  padding: 0 148px 0 12px;
   background: #16161b;
   border-bottom: 1px solid var(--border);
   color: var(--muted);
@@ -576,32 +579,70 @@ body[data-window-mode="windowed"] #zoomControl {
   color: #6a6a74;
 }
 
-/* ---- unsaved-changes bar (edit mode, opened by Esc while dirty) ---- */
+/* ---- unsaved-changes modal (edit mode, opened by Esc while dirty) ---- */
 
 #unsavedBar {
-  position: absolute;
-  z-index: 8;
-  top: 14px;
-  left: 50%;
-  transform: translateX(-50%);
+  position: fixed;
+  z-index: 20;
+  inset: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(4, 4, 8, 0.68);
+}
+
+.zoomExactBtn {
+  min-width: 34px;
+  height: 24px;
+  padding: 0 6px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--panel);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font: 700 11px/1 "Segoe UI", system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.zoomExactBtn:hover {
+  color: var(--text);
+  border-color: var(--action);
+}
+
+.zoomExactBtn:focus-visible {
+  outline: 1px solid var(--action);
+  outline-offset: 2px;
+}
+
+#unsavedDialog {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 16px;
+  max-width: min(620px, calc(100vw - 48px));
+  padding: 20px;
+  border: 1px solid #474752;
+  border-radius: 12px;
+  background: #202027;
+  box-shadow:
+    0 20px 64px rgba(0, 0, 0, 0.72),
+    0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+
+#unsavedActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
   white-space: nowrap;
 }
 
 #unsavedLabel {
   color: #ffb454;
-  font: 600 12px "Segoe UI", system-ui, sans-serif;
-  margin-right: 4px;
+  font: 600 14px "Segoe UI", system-ui, sans-serif;
 }
 
-#unsavedBar button {
+#unsavedActions button {
   border: 1px solid var(--border);
   border-radius: 6px;
   background: transparent;
@@ -612,7 +653,7 @@ body[data-window-mode="windowed"] #zoomControl {
   white-space: nowrap;
 }
 
-#unsavedBar button:hover {
+#unsavedActions button:hover {
   background: var(--panel-hover);
 }
 

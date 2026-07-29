@@ -68,7 +68,10 @@ param(
   # This is the measurement the design's numbers have to be checked against, and
   # it is deliberately runnable without Electron.
   [int]$SelfTest = 0,
-  [int]$Interval = 100
+  [int]$Interval = 100,
+  # Regression/benchmark for the event-driven one-HWND path. Kept separate
+  # from SelfTest so the full-enumeration baseline stays directly comparable.
+  [int]$DirtySelfTest = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -86,6 +89,7 @@ $ProgressPreference = 'SilentlyContinue'
 # report; the PowerShell loop around it does one string write per sample.
 Add-Type -TypeDefinition @'
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -182,6 +186,30 @@ namespace CapturePack {
     /// unchanged window costs a few integer comparisons and nothing else.
     static readonly Dictionary<long, long> LastSig = new Dictionary<long, long>();
     static readonly HashSet<long> SeenThisPass = new HashSet<long>();
+    // The last FULL enumeration's z-order. A dirty window can be emitted alone
+    // only while this ordering is still valid; structural/order events request
+    // a full scan instead.
+    static readonly Dictionary<long, int> LastZ = new Dictionary<long, int>();
+    static readonly ConcurrentDictionary<long, byte> KnownTopLevels =
+      new ConcurrentDictionary<long, byte>();
+
+    // A SET, not an event log: 200 location notifications for one dragged
+    // window still mean "read this HWND once." This also bounds memory while
+    // sampling is stopped.
+    static readonly ConcurrentDictionary<long, long> DirtyWindows =
+      new ConcurrentDictionary<long, long>();
+    static int FullRefreshPending;
+    static IntPtr LastForeground = IntPtr.Zero;
+
+    // Published in status and exercised by scripts/context-host-dirty-check.mjs.
+    // FullScanCount is the expensive number: one EnumWindows pass.
+    public static long FullScanCount;
+    public static long DirtySampleCount;
+    public static long DirtyWindowReadCount;
+    public static long DirtyFallbackCount;
+    public static long DirtySampleTicks;
+    public static long DirtyEventLagTicks;
+    public static long DirtyEventLagCount;
 
     static long SigOf(RECT f, RECT c, int z, bool minimized, bool foreground, bool cloaked) {
       unchecked {
@@ -194,6 +222,168 @@ namespace CapturePack {
         h = h * 31 + (cloaked ? 4 : 0);
         return h;
       }
+    }
+
+    struct WindowGeometry {
+      public IntPtr Handle;
+      public RECT Frame;
+      public RECT Client;
+      public int Z;
+      public bool Minimized;
+      public bool Foreground;
+      public bool Cloaked;
+      public long Signature;
+    }
+
+    /// Reads the mutable facts for ONE visible top-level window. Keeping this
+    /// common between full and dirty samples is what makes the optimization a
+    /// change in selection cost, not a second geometry implementation.
+    static bool TryReadGeometry(
+      IntPtr h,
+      int z,
+      IntPtr foreground,
+      out WindowGeometry item,
+      out bool moved
+    ) {
+      item = new WindowGeometry();
+      moved = false;
+      if (!IsWindowVisible(h)) return false;
+      int cloakedValue = 0;
+      bool cloaked =
+        DwmGetInt(h, DWMWA_CLOAKED, out cloakedValue, 4) == 0 && cloakedValue != 0;
+
+      // THE DWM FRAME IS A CACHE, AND A DRAGGED WINDOW OUTRUNS IT.
+      //
+      // DWMWA_EXTENDED_FRAME_BOUNDS is what the compositor last published, so
+      // it is exact on a window standing still and BEHIND one being moved.
+      // GetWindowRect is the window manager's own answer and updates with the
+      // drag, but it includes the invisible resize border this whole branch
+      // exists to remove.
+      //
+      // Measured on CapturePack_2026-07-29_143319 (rc.15, every clock leg
+      // already at 1 ms): while a File Explorer window was shaken, the box was
+      // drawn ~300 px behind it in the direction of travel, and the recorded
+      // rectangle held one position for three consecutive samples while the
+      // frames showed it already elsewhere. At rest the same window matched
+      // for 26 samples without a pixel of error. "흔들면 싱크가 안맞아".
+      //
+      // So POSITION comes from GetWindowRect and the BORDER comes from DWM —
+      // and the border is only learned from samples where the window did not
+      // move between the two reads, which is the only time the difference
+      // between them is the border rather than the border plus however far it
+      // travelled. The inset is a property of the window's frame style, so one
+      // learned at rest stays right while it moves.
+      RECT frame;
+      RECT raw;
+      RECT dwm;
+      bool haveRaw = GetWindowRect(h, out raw);
+      bool haveDwm =
+        DwmGetRect(h, DWMWA_EXTENDED_FRAME_BOUNDS, out dwm, Marshal.SizeOf(typeof(RECT))) == 0;
+      if (haveRaw) {
+        long key = h.ToInt64();
+        RECT previous;
+        bool stoodStill = LastRaw.TryGetValue(key, out previous) &&
+          previous.Left == raw.Left && previous.Top == raw.Top &&
+          previous.Right == raw.Right && previous.Bottom == raw.Bottom;
+        moved = !stoodStill;
+        if (haveDwm && stoodStill) {
+          RECT learned;
+          learned.Left = dwm.Left - raw.Left;
+          learned.Top = dwm.Top - raw.Top;
+          learned.Right = dwm.Right - raw.Right;
+          learned.Bottom = dwm.Bottom - raw.Bottom;
+          Inset[key] = learned;
+        }
+        LastRaw[key] = raw;
+        RECT known;
+        if (Inset.TryGetValue(key, out known)) {
+          frame.Left = raw.Left + known.Left;
+          frame.Top = raw.Top + known.Top;
+          frame.Right = raw.Right + known.Right;
+          frame.Bottom = raw.Bottom + known.Bottom;
+        } else if (haveDwm) {
+          // Never seen at rest yet: the DWM frame is still the better of the
+          // two, and one sample from now the inset will be known.
+          frame = dwm;
+        } else {
+          frame = raw;
+        }
+      } else if (haveDwm) {
+        frame = dwm;
+      } else {
+        return false;
+      }
+
+      bool minimized = IsIconic(h);
+      int width = frame.Right - frame.Left, height = frame.Bottom - frame.Top;
+      if (!minimized && (width <= 0 || height <= 0)) return false;
+      RECT client;
+      POINT origin;
+      client.Left = 0; client.Top = 0; client.Right = 0; client.Bottom = 0;
+      origin.X = 0; origin.Y = 0;
+      if (GetClientRect(h, out client) && ClientToScreen(h, ref origin)) {
+        client.Left += origin.X; client.Top += origin.Y;
+        client.Right += origin.X; client.Bottom += origin.Y;
+      } else {
+        client = frame;
+      }
+
+      item.Handle = h;
+      item.Frame = frame;
+      item.Client = client;
+      item.Z = z;
+      item.Minimized = minimized;
+      item.Foreground = h == foreground;
+      item.Cloaked = cloaked;
+      item.Signature = SigOf(frame, client, z, minimized, item.Foreground, cloaked);
+      return true;
+    }
+
+    /// Appends identity only for a window Core actually needs to hear about.
+    /// A dirty pass therefore pays title/class/process cost for its one changed
+    /// HWND, never for the rest of the desktop.
+    static void AppendWindow(WindowGeometry item, ref int kept) {
+      IntPtr h = item.Handle;
+      uint pid;
+      GetWindowThreadProcessId(h, out pid);
+      TitleBuf.Length = 0;
+      GetWindowTextW(h, TitleBuf, TitleBuf.Capacity);
+      ClassBuf.Length = 0;
+      GetClassNameW(h, ClassBuf, ClassBuf.Capacity);
+      IntPtr owner = GetWindow(h, GW_OWNER);
+      if (kept > 0) Out.Append(',');
+      Out.Append("{\"h\":\"").Append(((ulong)h.ToInt64()).ToString(CultureInfo.InvariantCulture))
+         .Append("\",\"o\":\"").Append(((ulong)owner.ToInt64()).ToString(CultureInfo.InvariantCulture))
+         .Append("\",\"p\":").Append(pid.ToString(CultureInfo.InvariantCulture))
+         .Append(",\"z\":").Append(item.Z.ToString(CultureInfo.InvariantCulture))
+         .Append(",\"v\":1")
+         .Append(",\"m\":").Append(item.Minimized ? '1' : '0')
+         .Append(",\"g\":").Append(item.Foreground ? '1' : '0')
+         .Append(",\"k\":").Append(item.Cloaked ? '1' : '0')
+         .Append(",\"b\":");
+      AppendRect(
+        Out,
+        item.Frame.Left,
+        item.Frame.Top,
+        item.Frame.Right,
+        item.Frame.Bottom
+      );
+      Out.Append(",\"c\":");
+      AppendRect(
+        Out,
+        item.Client.Left,
+        item.Client.Top,
+        item.Client.Right,
+        item.Client.Bottom
+      );
+      Out.Append(",\"t\":");
+      AppendJsonString(Out, TitleBuf.ToString());
+      Out.Append(",\"cl\":");
+      AppendJsonString(Out, ClassBuf.ToString());
+      Out.Append(",\"e\":");
+      AppendJsonString(Out, ExeName(pid));
+      Out.Append('}');
+      kept++;
     }
 
     public static string DpiMode = "unaware";
@@ -273,7 +463,17 @@ namespace CapturePack {
     public static string Sample(double hostMs, bool delta) {
       long started = Stopwatch.GetTimestamp();
       bool anyMoved = false;
+      // This scan covers every event already queued. An event arriving after
+      // these clears sets the flag/queue again and is handled by the next pass.
+      MovePending = false;
+      System.Threading.Interlocked.Exchange(ref FullRefreshPending, 0);
+      foreach (long dirtyKey in DirtyWindows.Keys) {
+        long ignoredDirtyQpc;
+        DirtyWindows.TryRemove(dirtyKey, out ignoredDirtyQpc);
+      }
+      FullScanCount++;
       SeenThisPass.Clear();
+      LastZ.Clear();
       if (!delta) LastSig.Clear();
       if (LastRaw.Count > GEOMETRY_CACHE_LIMIT) { LastRaw.Clear(); Inset.Clear(); }
       Handles.Clear();
@@ -285,113 +485,29 @@ namespace CapturePack {
       int z = 0;
       for (int i = 0; i < Handles.Count; i++) {
         IntPtr h = Handles[i];
-        bool visible = IsWindowVisible(h);
-        if (!visible) continue;            // invisible top-levels are 96% of the list
-        int cloakedValue = 0;
-        bool cloaked = DwmGetInt(h, DWMWA_CLOAKED, out cloakedValue, 4) == 0 && cloakedValue != 0;
-        // THE DWM FRAME IS A CACHE, AND A DRAGGED WINDOW OUTRUNS IT.
-        //
-        // DWMWA_EXTENDED_FRAME_BOUNDS is what the compositor last published, so
-        // it is exact on a window standing still and BEHIND one being moved.
-        // GetWindowRect is the window manager's own answer and updates with the
-        // drag, but it includes the invisible resize border this whole branch
-        // exists to remove.
-        //
-        // Measured on CapturePack_2026-07-29_143319 (rc.15, every clock leg
-        // already at 1 ms): while a File Explorer window was shaken, the box was
-        // drawn ~300 px behind it in the direction of travel, and the recorded
-        // rectangle held one position for three consecutive samples while the
-        // frames showed it already elsewhere. At rest the same window matched
-        // for 26 samples without a pixel of error. "흔들면 싱크가 안맞아".
-        //
-        // So POSITION comes from GetWindowRect and the BORDER comes from DWM —
-        // and the border is only learned from samples where the window did not
-        // move between the two reads, which is the only time the difference
-        // between them is the border rather than the border plus however far it
-        // travelled. The inset is a property of the window's frame style, so one
-        // learned at rest stays right while it moves.
-        RECT frame;
-        RECT raw;
-        RECT dwm;
-        bool haveRaw = GetWindowRect(h, out raw);
-        bool haveDwm = DwmGetRect(h, DWMWA_EXTENDED_FRAME_BOUNDS, out dwm, Marshal.SizeOf(typeof(RECT))) == 0;
-        if (haveRaw) {
-          long key = h.ToInt64();
-          RECT previous;
-          bool stood_still = LastRaw.TryGetValue(key, out previous) &&
-            previous.Left == raw.Left && previous.Top == raw.Top &&
-            previous.Right == raw.Right && previous.Bottom == raw.Bottom;
-          if (!stood_still) anyMoved = true;
-          if (haveDwm && stood_still) {
-            RECT learned;
-            learned.Left = dwm.Left - raw.Left;
-            learned.Top = dwm.Top - raw.Top;
-            learned.Right = dwm.Right - raw.Right;
-            learned.Bottom = dwm.Bottom - raw.Bottom;
-            Inset[key] = learned;
-          }
-          LastRaw[key] = raw;
-          RECT known;
-          if (Inset.TryGetValue(key, out known)) {
-            frame.Left = raw.Left + known.Left;
-            frame.Top = raw.Top + known.Top;
-            frame.Right = raw.Right + known.Right;
-            frame.Bottom = raw.Bottom + known.Bottom;
-          } else if (haveDwm) {
-            // Never seen at rest yet: the DWM frame is still the better of the
-            // two, and one sample from now the inset will be known.
-            frame = dwm;
-          } else {
-            frame = raw;
-          }
-        } else if (haveDwm) {
-          frame = dwm;
-        } else {
-          continue;
-        }
-        bool minimized = IsIconic(h);
-        int width = frame.Right - frame.Left, height = frame.Bottom - frame.Top;
-        if (!minimized && (width <= 0 || height <= 0)) continue;
-        RECT client; POINT origin;
-        client.Left = 0; client.Top = 0; client.Right = 0; client.Bottom = 0;
-        origin.X = 0; origin.Y = 0;
-        if (GetClientRect(h, out client) && ClientToScreen(h, ref origin)) {
-          client.Left += origin.X; client.Top += origin.Y;
-          client.Right += origin.X; client.Bottom += origin.Y;
-        } else {
-          client = frame;
-        }
+        WindowGeometry item;
+        bool moved;
+        if (!TryReadGeometry(h, z, foreground, out item, out moved)) continue;
+        if (moved) anyMoved = true;
         long sigKey = h.ToInt64();
-        long sig = SigOf(frame, client, z, minimized, h == foreground, cloaked);
         SeenThisPass.Add(sigKey);
+        KnownTopLevels[sigKey] = 0;
+        LastZ[sigKey] = z;
         long lastSig;
-        bool unchanged = LastSig.TryGetValue(sigKey, out lastSig) && lastSig == sig;
-        LastSig[sigKey] = sig;
+        bool unchanged =
+          LastSig.TryGetValue(sigKey, out lastSig) && lastSig == item.Signature;
+        LastSig[sigKey] = item.Signature;
         // The z ordinal must still advance for a window we skip: it is this
         // window's place in the stack whether or not Core is told about it.
         if (delta && unchanged) { z++; continue; }
-        uint pid; GetWindowThreadProcessId(h, out pid);
-        TitleBuf.Length = 0; GetWindowTextW(h, TitleBuf, TitleBuf.Capacity);
-        ClassBuf.Length = 0; GetClassNameW(h, ClassBuf, ClassBuf.Capacity);
-        IntPtr owner = GetWindow(h, GW_OWNER);
-        if (kept > 0) Out.Append(',');
-        Out.Append("{\"h\":\"").Append(((ulong)h.ToInt64()).ToString(CultureInfo.InvariantCulture))
-           .Append("\",\"o\":\"").Append(((ulong)owner.ToInt64()).ToString(CultureInfo.InvariantCulture))
-           .Append("\",\"p\":").Append(pid.ToString(CultureInfo.InvariantCulture))
-           .Append(",\"z\":").Append(z.ToString(CultureInfo.InvariantCulture))
-           .Append(",\"v\":1")
-           .Append(",\"m\":").Append(minimized ? '1' : '0')
-           .Append(",\"g\":").Append(h == foreground ? '1' : '0')
-           .Append(",\"k\":").Append(cloaked ? '1' : '0')
-           .Append(",\"b\":");
-        AppendRect(Out, frame.Left, frame.Top, frame.Right, frame.Bottom);
-        Out.Append(",\"c\":");
-        AppendRect(Out, client.Left, client.Top, client.Right, client.Bottom);
-        Out.Append(",\"t\":"); AppendJsonString(Out, TitleBuf.ToString());
-        Out.Append(",\"cl\":"); AppendJsonString(Out, ClassBuf.ToString());
-        Out.Append(",\"e\":"); AppendJsonString(Out, ExeName(pid));
-        Out.Append('}');
-        kept++; z++;
+        AppendWindow(item, ref kept);
+        z++;
+      }
+      LastForeground = foreground;
+      foreach (long known in KnownTopLevels.Keys) {
+        if (SeenThisPass.Contains(known)) continue;
+        byte ignored;
+        KnownTopLevels.TryRemove(known, out ignored);
       }
       Out.Append("]");
       // GONE SINCE THE LAST SAMPLE. A delta says nothing about a window it does
@@ -446,6 +562,116 @@ namespace CapturePack {
       return Out.ToString();
     }
 
+    /// Emits only HWNDs named by WinEvent since the preceding pass. This is a
+    /// true dirty read: no EnumWindows, no visibility/DWM/client/title work for
+    /// the other windows. Structural events never come here — they set
+    /// FullRefreshPending and force Sample(false), because membership,
+    /// foreground and z-order are properties of the whole stack.
+    public static string SampleDirty(double hostMs) {
+      long started = Stopwatch.GetTimestamp();
+      DirtySampleCount++;
+      MovePending = false;
+
+      if (System.Threading.Interlocked.Exchange(ref FullRefreshPending, 0) != 0) {
+        DirtyFallbackCount++;
+        return Sample(hostMs, false);
+      }
+
+      List<long> dirty = new List<long>();
+      long newestEventQpc = 0;
+      foreach (long dirtyKey in DirtyWindows.Keys) {
+        long eventQpc;
+        if (!DirtyWindows.TryRemove(dirtyKey, out eventQpc)) continue;
+        dirty.Add(dirtyKey);
+        if (eventQpc > newestEventQpc) newestEventQpc = eventQpc;
+      }
+
+      IntPtr foreground = GetForegroundWindow();
+      if (foreground != LastForeground) {
+        // Foreground affects TWO records (old and new) and usually the stack.
+        // A missed/delayed system event therefore repairs through one full
+        // sample rather than publishing one locally-correct HWND.
+        DirtyFallbackCount++;
+        return Sample(hostMs, false);
+      }
+
+      Out.Length = 0;
+      Out.Append("{\"event\":\"surface\",\"w\":[");
+      int kept = 0;
+      bool anyMoved = false;
+      foreach (long key in dirty) {
+        int z;
+        if (!LastZ.TryGetValue(key, out z)) {
+          DirtyFallbackCount++;
+          return Sample(hostMs, false);
+        }
+        IntPtr h = new IntPtr(key);
+        // A hide/destroy can race the structural callback. A dirty omission
+        // would leave a ghost window in Core, so inability to read is a full
+        // reconciliation, never an empty delta.
+        if (GetAncestor(h, GA_ROOT) != h) {
+          DirtyFallbackCount++;
+          return Sample(hostMs, false);
+        }
+        WindowGeometry item;
+        bool moved;
+        if (!TryReadGeometry(h, z, foreground, out item, out moved)) {
+          DirtyFallbackCount++;
+          return Sample(hostMs, false);
+        }
+        LastSig[key] = item.Signature;
+        AppendWindow(item, ref kept);
+        if (moved) anyMoved = true;
+      }
+
+      // A create/destroy/show/hide/reorder/foreground event may have arrived
+      // while the dirty HWNDs were being read. Discard the partial JSON and
+      // reconcile the whole stack immediately.
+      if (System.Threading.Volatile.Read(ref FullRefreshPending) != 0) {
+        DirtyFallbackCount++;
+        return Sample(hostMs, false);
+      }
+
+      Out.Append("],\"d\":1}");
+      long spent = Stopwatch.GetTimestamp() - started;
+      double dumpMs = (double)spent * 1000.0 / (double)Stopwatch.Frequency;
+      Out.Insert(1, "\"t\":" +
+        (hostMs + dumpMs / 2.0).ToString("F1", CultureInfo.InvariantCulture) +
+        ",\"dumpMs\":" + dumpMs.ToString("F1", CultureInfo.InvariantCulture) + ",");
+      SampleTicks += spent;
+      DirtySampleTicks += spent;
+      SampleCount++;
+      DirtyWindowReadCount += kept;
+      MovedLastSample = anyMoved;
+      if (newestEventQpc > 0 && started >= newestEventQpc) {
+        DirtyEventLagTicks += started - newestEventQpc;
+        DirtyEventLagCount++;
+      }
+      return Out.ToString();
+    }
+
+    /// Deterministic entry point for the standalone regression: after one full
+    /// snapshot, name one cached HWND exactly as a location event would.
+    public static bool QueueKnownWindowForTest() {
+      long foreground = LastForeground.ToInt64();
+      if (foreground != 0 && LastZ.ContainsKey(foreground)) {
+        DirtyWindows[foreground] = Stopwatch.GetTimestamp();
+        MovePending = true;
+        return true;
+      }
+      foreach (long key in LastZ.Keys) {
+        DirtyWindows[key] = Stopwatch.GetTimestamp();
+        MovePending = true;
+        return true;
+      }
+      return false;
+    }
+
+    public static void RequestFullRefreshForTest() {
+      System.Threading.Interlocked.Exchange(ref FullRefreshPending, 1);
+      MovePending = true;
+    }
+
     /// Every display's rectangle in the SAME physical space as the windows
     /// above — the yardstick that maps a surface onto one display's snapshot
     /// pixels (SPEC §8.2). Cheap and read-only; refreshed with every status
@@ -479,6 +705,16 @@ namespace CapturePack {
       return (double)SampleTicks * 1000.0 / (double)Stopwatch.Frequency;
     }
 
+    public static double DirtySampleMs() {
+      return (double)DirtySampleTicks * 1000.0 / (double)Stopwatch.Frequency;
+    }
+
+    public static double DirtyEventLagMs() {
+      if (DirtyEventLagCount == 0) return 0.0;
+      return (double)DirtyEventLagTicks * 1000.0 /
+        ((double)Stopwatch.Frequency * (double)DirtyEventLagCount);
+    }
+
     // -----------------------------------------------------------------------
     // EXACT OBSERVATION (#110): Windows tells us when a window moves.
     //
@@ -490,12 +726,13 @@ namespace CapturePack {
     // (measured: 12,161 changes in one 52 s shake). This hook subscribes to
     // that instead of guessing when to look.
     //
-    // The callback does almost nothing: filter to visible top-level WINDOWS
-    // (the same event fires for the CARET and the CURSOR — the cursor alone
-    // would fire on every mouse move), set a flag, wake the resident loop.
-    // The loop then dumps the desk, coalesced to MOVE_COALESCE_MS, so the
-    // cost is paid only while something is actually moving and the sample's
-    // stamp is within a few ms of the change it records.
+    // The callback does almost nothing: filter to top-level WINDOWS (the same
+    // event fires for the CARET and CURSOR), enqueue the changed HWND, wake the
+    // resident loop. Location/name events read only those HWNDs. Events that
+    // invalidate membership, foreground, or z-order request EnumWindows;
+    // the scheduled full sample remains the bounded repair for a missed hook.
+    // Dirty reads are coalesced to MOVE_COALESCE_MS, so burst cost is paid only
+    // while something changes.
     //
     // OUT-OF-CONTEXT events are delivered through the message queue of the
     // thread that called SetWinEventHook, so the hook is installed FROM the
@@ -508,21 +745,38 @@ namespace CapturePack {
     [StructLayout(LayoutKind.Sequential)] struct POINT { public int X; public int Y; }
     [DllImport("user32.dll")] static extern int GetMessageW(out MSG msg, IntPtr hwnd, uint min, uint max);
     [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr h, uint flags);
+    const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
+    const uint EVENT_SYSTEM_MOVESIZESTART = 0x000A;
+    const uint EVENT_SYSTEM_MOVESIZEEND = 0x000B;
+    const uint EVENT_OBJECT_CREATE = 0x8000;
+    const uint EVENT_OBJECT_DESTROY = 0x8001;
+    const uint EVENT_OBJECT_SHOW = 0x8002;
+    const uint EVENT_OBJECT_HIDE = 0x8003;
+    const uint EVENT_OBJECT_REORDER = 0x8004;
     const uint EVENT_OBJECT_LOCATIONCHANGE = 0x800B;
+    const uint EVENT_OBJECT_NAMECHANGE = 0x800C;
     const uint WINEVENT_SKIPOWNPROCESS = 0x0002;
     const uint GA_ROOT = 2;
 
-    static WinEventDelegate MoveCallbackKeepAlive;
+    static WinEventDelegate EventCallbackKeepAlive;
     public static volatile bool MovePending;
     public static volatile bool HookActive;
 
     public static void StartMoveHook() {
       System.Threading.Thread pump = new System.Threading.Thread(delegate() {
-        MoveCallbackKeepAlive = OnMoveEvent;
-        IntPtr hook = SetWinEventHook(
-          EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE,
-          IntPtr.Zero, MoveCallbackKeepAlive, 0, 0, WINEVENT_SKIPOWNPROCESS);
-        if (hook == IntPtr.Zero) return;      // no hook: polling remains the truth
+        EventCallbackKeepAlive = OnWindowEvent;
+        // One object-range hook is cheaper and simpler than seven callbacks;
+        // OnWindowEvent accepts only the events named below.
+        IntPtr objectHook = SetWinEventHook(
+          EVENT_OBJECT_CREATE, EVENT_OBJECT_NAMECHANGE,
+          IntPtr.Zero, EventCallbackKeepAlive, 0, 0, WINEVENT_SKIPOWNPROCESS);
+        if (objectHook == IntPtr.Zero) return; // no hook: polling remains the truth
+        // Optional correctness accelerators. If this hook fails, SampleDirty's
+        // foreground comparison and the scheduled full checkpoint still repair
+        // the picture.
+        IntPtr systemHook = SetWinEventHook(
+          EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MOVESIZEEND,
+          IntPtr.Zero, EventCallbackKeepAlive, 0, 0, WINEVENT_SKIPOWNPROCESS);
         HookActive = true;
         MSG msg;
         while (GetMessageW(out msg, IntPtr.Zero, 0, 0) > 0) { /* deliver events */ }
@@ -531,13 +785,65 @@ namespace CapturePack {
       pump.Start();
     }
 
-    static void OnMoveEvent(IntPtr hook, uint ev, IntPtr hwnd, int idObject, int idChild, uint thread, uint time) {
-      if (idObject != 0 || idChild != 0) return;          // OBJID_WINDOW itself only
-      if (hwnd == IntPtr.Zero) return;
-      if (GetAncestor(hwnd, GA_ROOT) != hwnd) return;     // top-level only
-      if (!IsWindowVisible(hwnd)) return;
+    static void RequestFullRefresh() {
+      System.Threading.Interlocked.Exchange(ref FullRefreshPending, 1);
       MovePending = true;
       HostInput.Poke();
+    }
+
+    static void RequestDirtyWindow(IntPtr hwnd) {
+      // This QPC reading measures CALLBACK-to-read delay only. WinEventProc's
+      // `time` is a different millisecond clock, and, more importantly, the
+      // rectangle below is read after coalescing. Backdating that later read to
+      // the event would turn a measured position into an inferred one. Surface
+      // timestamps therefore remain the geometry-read midpoint.
+      DirtyWindows[hwnd.ToInt64()] = Stopwatch.GetTimestamp();
+      MovePending = true;
+      HostInput.Poke();
+    }
+
+    static bool IsKnownOrTopLevel(IntPtr hwnd) {
+      if (hwnd == IntPtr.Zero) return false;
+      if (KnownTopLevels.ContainsKey(hwnd.ToInt64())) return true;
+      return GetAncestor(hwnd, GA_ROOT) == hwnd;
+    }
+
+    static void OnWindowEvent(
+      IntPtr hook,
+      uint ev,
+      IntPtr hwnd,
+      int idObject,
+      int idChild,
+      uint thread,
+      uint time
+    ) {
+      // Foreground and move/size boundaries can alter multiple records or their
+      // order. They are deliberately full reconciliations.
+      if (ev == EVENT_SYSTEM_FOREGROUND ||
+          ev == EVENT_SYSTEM_MOVESIZESTART ||
+          ev == EVENT_SYSTEM_MOVESIZEEND) {
+        RequestFullRefresh();
+        return;
+      }
+      if (idObject != 0 || idChild != 0) return; // OBJID_WINDOW itself only
+      // EVENT_OBJECT_REORDER may name the desktop with hwnd=0. It still means
+      // every cached z ordinal is suspect.
+      if (ev == EVENT_OBJECT_REORDER && hwnd == IntPtr.Zero) {
+        RequestFullRefresh();
+        return;
+      }
+      if (!IsKnownOrTopLevel(hwnd)) return;
+      if (ev == EVENT_OBJECT_LOCATIONCHANGE || ev == EVENT_OBJECT_NAMECHANGE) {
+        RequestDirtyWindow(hwnd);
+        return;
+      }
+      if (ev == EVENT_OBJECT_CREATE ||
+          ev == EVENT_OBJECT_DESTROY ||
+          ev == EVENT_OBJECT_SHOW ||
+          ev == EVENT_OBJECT_HIDE ||
+          ev == EVENT_OBJECT_REORDER) {
+        RequestFullRefresh();
+      }
     }
   }
 
@@ -618,9 +924,66 @@ function Write-Status {
     ',"sampleMs":' + [Math]::Round($sample, 1) +
     ',"samples":' + [CapturePack.SurfaceLane]::SampleCount +
     ',"windows":' + [CapturePack.SurfaceLane]::LastWindowCount +
+    ',"fullScans":' + [CapturePack.SurfaceLane]::FullScanCount +
+    ',"dirtySamples":' + [CapturePack.SurfaceLane]::DirtySampleCount +
+    ',"dirtyWindows":' + [CapturePack.SurfaceLane]::DirtyWindowReadCount +
+    ',"dirtyFallbacks":' + [CapturePack.SurfaceLane]::DirtyFallbackCount +
+    ',"dirtyEventLagMs":' + [Math]::Round([CapturePack.SurfaceLane]::DirtyEventLagMs(), 3) +
     ',"cpuMs":' + [Math]::Round($self.TotalProcessorTime.TotalMilliseconds, 0) +
     ',"ws":' + $self.WorkingSet64 +
     ',"monitors":' + [CapturePack.SurfaceLane]::Monitors() + '}')
+}
+
+# ---------------------------------------------------------------------------
+# Dirty-HWND regression/benchmark (-DirtySelfTest N)
+# ---------------------------------------------------------------------------
+if ($DirtySelfTest -gt 0) {
+  # Establish the membership/z-order cache once, exactly as surface.start does.
+  [CapturePack.SurfaceLane]::Sample((Get-HostMs)) | Out-Null
+  $queued = 0
+  $bytes = 0
+  for ($i = 0; $i -lt $DirtySelfTest; $i++) {
+    if ([CapturePack.SurfaceLane]::QueueKnownWindowForTest()) { $queued++ }
+    $line = [CapturePack.SurfaceLane]::SampleDirty((Get-HostMs))
+    $bytes += $line.Length
+  }
+  $benchDirtyMs = [CapturePack.SurfaceLane]::DirtySampleMs()
+  # A WinEvent storm for one HWND is still one geometry read.
+  $burstEvents = 100
+  $burstQueued = 0
+  $readsBeforeBurst = [CapturePack.SurfaceLane]::DirtyWindowReadCount
+  for ($i = 0; $i -lt $burstEvents; $i++) {
+    if ([CapturePack.SurfaceLane]::QueueKnownWindowForTest()) { $burstQueued++ }
+  }
+  [CapturePack.SurfaceLane]::SampleDirty((Get-HostMs)) | Out-Null
+  $burstWindowReads =
+    [CapturePack.SurfaceLane]::DirtyWindowReadCount - $readsBeforeBurst
+  $fullScansBeforeStructural = [CapturePack.SurfaceLane]::FullScanCount
+  $dirtySamplesBeforeStructural = [CapturePack.SurfaceLane]::DirtySampleCount
+  $dirtyFallbacksBeforeStructural = [CapturePack.SurfaceLane]::DirtyFallbackCount
+  [CapturePack.SurfaceLane]::RequestFullRefreshForTest()
+  $structural = [CapturePack.SurfaceLane]::SampleDirty((Get-HostMs))
+  $structuralWasFull = -not $structural.Contains('"d":1')
+  Write-Line ('{"event":"dirtyselftest","samples":' + $DirtySelfTest +
+    ',"queued":' + $queued +
+    ',"burstEvents":' + $burstEvents +
+    ',"burstQueued":' + $burstQueued +
+    ',"burstWindowReads":' + $burstWindowReads +
+    ',"fullScansBeforeStructural":' + $fullScansBeforeStructural +
+    ',"dirtySamplesBeforeStructural":' + $dirtySamplesBeforeStructural +
+    ',"dirtyFallbacksBeforeStructural":' + $dirtyFallbacksBeforeStructural +
+    ',"fullScans":' + [CapturePack.SurfaceLane]::FullScanCount +
+    ',"dirtySamples":' + [CapturePack.SurfaceLane]::DirtySampleCount +
+    ',"dirtyWindows":' + [CapturePack.SurfaceLane]::DirtyWindowReadCount +
+    ',"dirtyFallbacks":' + [CapturePack.SurfaceLane]::DirtyFallbackCount +
+    ',"structuralWasFull":' + $(if ($structuralWasFull) { 'true' } else { 'false' }) +
+    ',"perDirtyMs":' + [Math]::Round(
+      $benchDirtyMs / [Math]::Max(1, $DirtySelfTest), 3) +
+    ',"eventToReadMs":' + [Math]::Round([CapturePack.SurfaceLane]::DirtyEventLagMs(), 3) +
+    ',"bytesPerDirty":' + [int]($bytes / [Math]::Max(1, $DirtySelfTest)) +
+    ',"windows":' + [CapturePack.SurfaceLane]::LastWindowCount +
+    ',"dpi":"' + [CapturePack.SurfaceLane]::DpiMode + '"}')
+  exit 0
 }
 
 # ---------------------------------------------------------------------------
@@ -674,7 +1037,7 @@ function Get-NextLine([int]$waitMs) {
 
 # The floor between move-driven samples. Events arrive at ~4 ms during a drag;
 # dumping on every one would cost ~40% of a core for positions the replay
-# cannot even show. 8 ms halves the finest replay cadence a 60 fps capture
+# cannot even show. 8 ms is well below the finest replay cadence a 30 fps capture
 # could want and keeps the burst duty bounded while paying nothing at rest.
 $moveCoalesceMs = 8
 $lastMoveSampleMs = -1e9
@@ -726,7 +1089,11 @@ while ($running) {
     if ($sinceMove -ge $moveCoalesceMs) {
       [CapturePack.SurfaceLane]::MovePending = $false
       try {
-        Write-Line ([CapturePack.SurfaceLane]::Sample((Get-HostMs), $true))
+        if ([CapturePack.SurfaceLane]::HookActive) {
+          Write-Line ([CapturePack.SurfaceLane]::SampleDirty((Get-HostMs)))
+        } else {
+          Write-Line ([CapturePack.SurfaceLane]::Sample((Get-HostMs), $true))
+        }
       } catch {
         Write-Line ('{"event":"error","t":' + (Get-HostMs) + ',"where":"move-sample","message":' +
           (ConvertTo-Json ([string]$_.Exception.Message) -Compress) + '}')
@@ -854,7 +1221,11 @@ while ($running) {
         # deltas. The scheduled sample is still full and still resyncs the
         # shared picture every interval, so a tick delta costs Core nothing but
         # the windows that actually changed since the last line.
-        $line = [CapturePack.SurfaceLane]::Sample((Get-HostMs), $true)
+        if ([CapturePack.SurfaceLane]::HookActive) {
+          $line = [CapturePack.SurfaceLane]::SampleDirty((Get-HostMs))
+        } else {
+          $line = [CapturePack.SurfaceLane]::Sample((Get-HostMs), $true)
+        }
         if ($null -ne $frameMs) {
           # ROUND-TRIP, NEVER ROUNDED. `ft` is not a number Core displays — it
           # is the exact key of the pendingTicks Map that pairs this reply with

@@ -72,6 +72,25 @@ function Get-EnvLong([string]$name) {
   return 0L
 }
 
+function ConvertTo-NormalizedHwnd([object]$value) {
+  try {
+    # UI Automation exposes NativeWindowHandle as a signed Int32. Lane S gets
+    # the same HWND from Win32 as an unsigned decimal string, so values with
+    # bit 31 set must be zero-extended before the two lanes can match.
+    $bits = ([int64]$value) -band 0xffffffffL
+    return ([uint32]$bits).ToString([System.Globalization.CultureInfo]::InvariantCulture)
+  } catch {
+    return '0'
+  }
+}
+
+# Fast, read-only contract hook used by check:controls. It exits before loading
+# UI Automation or enumerating the desktop.
+if ($null -ne $env:CAPTUREPACK_UIA_SELFTEST_HWND) {
+  Write-Output (ConvertTo-NormalizedHwnd $env:CAPTUREPACK_UIA_SELFTEST_HWND)
+  exit 0
+}
+
 $MaxDepth = Get-EnvInt 'CAPTUREPACK_UIA_MAX_DEPTH' 12
 $MaxElements = Get-EnvInt 'CAPTUREPACK_UIA_MAX_ELEMENTS' 3000
 # Defaults match src/main/uia.ts (which always sets these explicitly); the cap
@@ -246,7 +265,7 @@ try {
 # ancestor. (GetForegroundWindow would need Add-Type -MemberDefinition, i.e. a
 # C# compile, which costs more than the whole budget.)
 $foreground = $null
-$foregroundHandle = 0
+$foregroundHandle = '0'
 try {
   $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
   $node = $AE::FocusedElement
@@ -259,10 +278,12 @@ try {
     $guard++
   }
   $foreground = $node
-  if ($null -ne $foreground) { $foregroundHandle = [int]$foreground.Current.NativeWindowHandle }
+  if ($null -ne $foreground) {
+    $foregroundHandle = ConvertTo-NormalizedHwnd $foreground.Current.NativeWindowHandle
+  }
 } catch {
   $foreground = $null
-  $foregroundHandle = 0
+  $foregroundHandle = '0'
 }
 
 $processNames = @{}
@@ -290,13 +311,13 @@ foreach ($win in $topLevel) {
     $bounds = $win.Cached.BoundingRectangle
     if (-not (Test-UsableRect $bounds)) { continue }
     if ($win.Cached.IsOffscreen) { continue }
-    $handle = 0
-    try { $handle = [int]$win.Cached.NativeWindowHandle } catch { $handle = 0 }
+    $handle = '0'
+    try { $handle = ConvertTo-NormalizedHwnd $win.Cached.NativeWindowHandle } catch { $handle = '0' }
     $className = [string]$win.Cached.ClassName
     $title = [string]$win.Cached.Name
     if ([string]::IsNullOrWhiteSpace($title)) { $title = $className }
     $processName = Get-ProcessNameById ([int]$win.Cached.ProcessId)
-    $isFocused = ($foregroundHandle -ne 0 -and $handle -eq $foregroundHandle)
+    $isFocused = ($foregroundHandle -ne '0' -and $handle -eq $foregroundHandle)
     $z = $windowRecords.Count
     if ($z -gt 0) { [void]$windowJson.Append(',') }
     # THE WINDOW'S OWN IDENTITY (#97). Everything else about a window is a
@@ -305,7 +326,7 @@ foreach ($win in $topLevel) {
     # an untitled window has its CLASS put in `title` a few lines above. The
     # handle is the one thing both are looking at. Decimal string, because a
     # Win64 HWND does not fit a JS number safely.
-    [void]$windowJson.Append('{"hwnd":').Append((ConvertTo-JsonString ([string]$handle)))
+    [void]$windowJson.Append('{"hwnd":').Append((ConvertTo-JsonString $handle))
     [void]$windowJson.Append(',"title":').Append((ConvertTo-JsonString $title))
     [void]$windowJson.Append(',"process":').Append((ConvertTo-JsonString $processName))
     [void]$windowJson.Append(',"class_name":').Append((ConvertTo-JsonString $className))
@@ -321,7 +342,7 @@ foreach ($win in $topLevel) {
       # test buys more than raising the budget ever could.
       Walkable = (
         (-not ($desktopClasses -contains $className)) -and
-        ($VisibleHandles.Count -eq 0 -or $VisibleHandles.ContainsKey([string]$handle))
+        ($VisibleHandles.Count -eq 0 -or $VisibleHandles.ContainsKey($handle))
       )
     })
   } catch { continue }

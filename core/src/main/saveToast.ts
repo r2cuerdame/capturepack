@@ -13,6 +13,7 @@ import type {
   ToastRenderState,
 } from '../shared/ipc'
 import { analyzePackPrompt } from '../shared/prompt'
+import { copyTextToClipboard } from './clipboard'
 import { createPackZip } from './exporter'
 
 const TOAST_WIDTH = 420
@@ -176,10 +177,10 @@ function registerToastIpc(): void {
     clipboard.writeText(toast.folderPath)
   })
 
-  ipcMain.on(IPC.toastCopyPrompt, (event) => {
+  ipcMain.handle(IPC.toastCopyPrompt, async (event): Promise<boolean> => {
     const toast = fromActiveToast(event)
-    if (toast === null) return
-    clipboard.writeText(analyzePrompt(toast.folderPath))
+    if (toast === null) return false
+    return copyTextToClipboard(analyzePrompt(toast.folderPath))
   })
 
   ipcMain.on(IPC.toastClose, (event) => {
