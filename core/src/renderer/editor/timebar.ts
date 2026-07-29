@@ -4,6 +4,7 @@
 import { makeT } from '../../shared/i18n'
 import type { TranslateFn } from '../../shared/i18n'
 import type { Annotation } from '../../shared/types'
+import { keyframesOf } from '../../shared/motion'
 import { boxColor } from './render'
 
 // Lane strip geometry: 3px bars on a 5px pitch, greedily packed so
@@ -248,6 +249,22 @@ export class Timebar {
         e.stopPropagation()
         this.cb.selectAnnotation(a.annotation_id)
       })
+      // AUTHORED MOTION, WHERE IT WAS AUTHORED (SPEC §8.9). A box that carries
+      // keyframes is a box whose position depends on when you look at it, and
+      // nothing else on screen says so — the box itself looks identical to a
+      // static one at any single frame. A tick per keyframe on the box's own
+      // lane bar is the smallest thing that makes "this moves, and here is
+      // where I said so" visible, and it is what tells the user whether K has
+      // anything to remove at the playhead.
+      for (const k of keyframesOf(a)) {
+        if (k.t_ms < start || k.t_ms > end) continue
+        const tick = document.createElement('div')
+        tick.className = 'laneKeyframe'
+        // Positioned within the bar, so it stays on its box when lanes reflow.
+        const span = Math.max(1, Math.min(end, durationMs) - start)
+        tick.style.left = `${((Math.min(k.t_ms, durationMs) - start) / span) * 100}%`
+        bar.appendChild(tick)
+      }
       this.lanes.appendChild(bar)
     }
     this.lanes.style.height = `${laneEnds.length * LANE_STEP - LANE_GAP}px`
