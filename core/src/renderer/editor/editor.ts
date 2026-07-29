@@ -1376,6 +1376,11 @@ function beginPendingBox(on: BoardDisplay, b: Box, picked?: PickableObject): voi
     // annotates the object it claims to.
     pickedRects.set(draft.annotation_id, { x: b.x, y: b.y, w: b.w, h: b.h })
   }
+  // THE FRAME THE USER CLICKED ON (#90).
+  //
+  // Everything below anchors to this one number, so it is computed once, from
+  // the picture, before any lifetime exists to be a midpoint of.
+  const pickedAt = nowMs()
   if (scrub) {
     // "Now" (the capture instant) anchors at the end of the replay; a scrubbed
     // stamp is clamped to the manifest's wall-clock replay_duration_ms — the
@@ -1386,16 +1391,27 @@ function beginPendingBox(on: BoardDisplay, b: Box, picked?: PickableObject): voi
     // two on different clocks and the pack would contradict the screen: a reader
     // comparing the box against the replay at the box's own time sees an error
     // of up to one frame gap that the user never saw while drawing it.
-    const anchor = scrub.atNow
-      ? replayDurationMs
-      : Math.min(Math.round(scrub.presentedMs), replayDurationMs)
-    const life = lifetimeAround(anchor, defaultManualDurationMs, replayDurationMs)
+    const life = lifetimeAround(Math.round(pickedAt), defaultManualDurationMs, replayDurationMs)
     draft.start_ms = life.start_ms
     draft.end_ms = life.end_ms
   }
   if (picked?.surface != null) {
-    // Recorded before any lifetime edit can move the midpoint (#111).
-    pickedAtMs.set(draft.annotation_id, lifetimeMidpoint(draft, replayDurationMs))
+    // THE PICK INSTANT IS THE FRAME, NOT THE MIDDLE OF ANYTHING (#90).
+    //
+    // #111 moved `bounds` off the lifetime midpoint because editing the
+    // lifetime moved it — but it then recorded the pick instant AS that
+    // midpoint, so the anchor was still a derived number and still not the
+    // moment the user clicked. When the default lifetime is a second wide and
+    // the track therefore spans a second, an anchor even slightly outside it
+    // clamps to the track's FIRST sample: measured on
+    // CapturePack_2026-07-29_092305, the track ran 15648–16589 ms and `bounds`
+    // was the 15648 ms rectangle — the window as it had been before the frame
+    // on screen, which is exactly the "it locks onto a time ahead of my pick"
+    // the report describes.
+    //
+    // The frame the box was drawn over is the only instant that means anything
+    // here, and it is the same clock the rectangle itself came from (#81).
+    pickedAtMs.set(draft.annotation_id, pickedAt)
     attachTrack(draft, picked.surface.surfaceId)
   }
   textSession = { kind: 'new', draft }
@@ -2713,6 +2729,9 @@ function attachTrack(draft: Annotation, surfaceId: string): void {
       const ownDisplay = live.display ?? focusedDisplayIndex
       live.tracking = {
         enabled: true,
+        // Recorded, not derived: a reader can now check `bounds` against the
+        // track without guessing which instant the box was anchored at (#90).
+        ...(pickedAtMs.has(id) ? { picked_at_ms: Math.round(pickedAtMs.get(id)!) } : {}),
         // WHICH SCREEN EACH SAMPLE IS MEASURED IN (#86). Dropping it here was
         // not a missing nicety: a window straddling two monitors changes which
         // display owns it as it crosses the middle, and its rectangle is then

@@ -348,7 +348,15 @@ function toDisplayCaptures(displays: readonly FrozenDisplay[]): DisplayCapture[]
       const measured = recorderCadence(d.id)
       return measured === null
         ? {}
-        : { cadence: { achieved_fps: measured.achievedFps, worst_stall_ms: measured.worstStallMs } }
+        : {
+            cadence: {
+              achieved_fps: measured.achievedFps,
+              worst_stall_ms: measured.worstStallMs,
+              ...(measured.discardedFrames === undefined || measured.discardedFrames === null
+                ? {}
+                : { discarded_frames: measured.discardedFrames }),
+            },
+          }
     })(),
     // A fresh capture writes the canonical names; they travel with the entry so
     // every writer uses the SAME string the manifest declares.
@@ -551,11 +559,24 @@ async function runFlow(settings: Settings): Promise<void> {
     if (measured === null) continue
     const short = measured.achievedFps < settings.fps * 0.8
     const stalled = measured.worstStallMs >= 400
+    // A LOW RATE IS TWO DIFFERENT FACTS (#82). A screen capture makes a frame
+    // when the screen changes, so a monitor nobody touched delivers almost
+    // nothing and has lost nothing. Frames MADE and thrown away are the case
+    // where the replay really is missing time. `discardedFrames` is the only
+    // thing that tells them apart, so the verdict waits on it rather than
+    // calling every quiet monitor a fault.
+    const discarded = measured.discardedFrames
     const line =
       `[capture] display ${d.index}: recorded ${measured.achievedFps} fps of ${settings.fps} ` +
-      `requested, worst stall ${measured.worstStallMs} ms`
-    if (short || stalled) logWarn(`${line} — the replay is missing time the user was looking at`)
-    else logInfo(line)
+      `requested, worst stall ${measured.worstStallMs} ms` +
+      (discarded === undefined || discarded === null ? '' : `, ${discarded} frame(s) discarded`)
+    if (discarded === 0 && (short || stalled)) {
+      logInfo(`${line} — nothing was dropped, so this screen simply did not change`)
+    } else if (short || stalled) {
+      logWarn(`${line} — the replay is missing time the user was looking at`)
+    } else {
+      logInfo(line)
+    }
   }
 
   let handle: PackHandle | null = null

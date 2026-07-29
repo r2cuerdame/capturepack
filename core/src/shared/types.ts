@@ -149,6 +149,17 @@ export interface AnnotationTrackSample {
 export interface AnnotationTracking {
   enabled: boolean
   samples?: AnnotationTrackSample[]
+  /**
+   * The instant the box MEANS, on the replay clock (SPEC §8.4, #90).
+   *
+   * A drawn box's representative instant is the midpoint of its lifetime. A
+   * PICKED box's is the frame the user was looking at when they clicked, which
+   * is not the same number and does not move when the lifetime is edited — so
+   * it cannot be derived and has to be recorded. `bounds` is the observed
+   * rectangle at this instant, which makes the pair checkable: nearest sample
+   * to `picked_at_ms` must be `bounds`.
+   */
+  picked_at_ms?: number
 }
 
 // Semantic object metadata (SPEC §8.3, §8.7): what real UI object the box

@@ -158,11 +158,28 @@ function describe(err: unknown): string {
  */
 function deliveredFrames(): number | null {
   if (startPayload?.simulateNoFrames === true) return 0
-  const track = stream?.getVideoTracks()[0]
-  const stats = (track as (MediaStreamTrack & { stats?: { deliveredFrames?: number } }) | undefined)
-    ?.stats
-  const delivered = stats?.deliveredFrames
+  const delivered = videoStats()?.deliveredFrames
   return typeof delivered === 'number' && Number.isFinite(delivered) ? delivered : null
+}
+
+/**
+ * WHY A LOW FRAME RATE IS NOT YET A FAULT (#82).
+ *
+ * The cadence figure is `deliveredFrames`, which counts what the SOURCE handed
+ * over — and a screen capture only produces a frame when the screen changes.
+ * On this desk display 1 reads about 2 fps of 15 in every capture, which reads
+ * as a broken recorder and may simply be a monitor nobody touched.
+ *
+ * `discardedFrames` separates the two, and only it can: frames made and thrown
+ * away are a starved pipeline; frames never made are a still screen, and a
+ * still screen is missing nothing. Reported rather than concluded from — which
+ * of the two this desk has is a measurement the next capture makes.
+ */
+function videoStats(): { deliveredFrames?: number; discardedFrames?: number; totalFrames?: number } | null {
+  const track = stream?.getVideoTracks()[0] as
+    | (MediaStreamTrack & { stats?: { deliveredFrames?: number; discardedFrames?: number; totalFrames?: number } })
+    | undefined
+  return track?.stats ?? null
 }
 
 // ---------------------------------------------------------------------------
@@ -193,6 +210,8 @@ interface Cadence {
   lastFrames: number
   lastAdvanceAt: number
   worstStallMs: number
+  /** `discardedFrames` when counting began, so the report is a delta (#82). */
+  baseDiscarded: number
 }
 
 let cadence: Cadence | null = null
@@ -213,6 +232,7 @@ function startCadenceMonitor(): void {
     lastFrames: frames,
     lastAdvanceAt: now,
     worstStallMs: 0,
+    baseDiscarded: videoStats()?.discardedFrames ?? 0,
   }
   cadenceTimer = window.setInterval(pollCadence, CADENCE_POLL_MS)
 }
@@ -238,15 +258,21 @@ function pollCadence(): void {
 }
 
 /** What this recorder has achieved, or null while nothing can honestly be said. */
-function cadenceReport(): { achievedFps: number; worstStallMs: number } | null {
+function cadenceReport(): { achievedFps: number; worstStallMs: number; discardedFrames: number | null } | null {
   const c = cadence
   if (c === null || c.firstCountedAt === 0) return null
   const elapsedMs = performance.now() - c.firstCountedAt
   if (elapsedMs < 1_000) return null
   const gained = c.lastFrames - c.baseFrames
+  const discarded = videoStats()?.discardedFrames
   return {
     achievedFps: Math.round((gained / elapsedMs) * 1000 * 10) / 10,
     worstStallMs: Math.round(c.worstStallMs),
+    // Made and thrown away — the half of a low frame rate that IS a fault
+    // (#82). Null when the browser does not keep the counter.
+    discardedFrames: typeof discarded === 'number' && Number.isFinite(discarded)
+      ? Math.max(0, discarded - c.baseDiscarded)
+      : null,
   }
 }
 
@@ -269,11 +295,28 @@ function cadenceReport(): { achievedFps: number; worstStallMs: number } | null {
 // second display ticking would file samples under a different recording's
 // numbers.
 let tickVideo: HTMLVideoElement | null = null
+/**
+ * Which tick chain is current (#91).
+ *
+ * `startFrameTicks` runs on every recorder start, and a recorder restarts:
+ * recovery, a rebuilt window, a settings change. Each call used to add ANOTHER
+ * self-re-arming callback chain and ANOTHER <video> sink on the same 4K stream,
+ * and nothing ever removed the old ones. Measured after a few restarts: 3515
+ * ticks over 35 seconds — a hundred a second where fifteen were intended —
+ * which buried the ring's budget until the governor coarsened it to 279 samples
+ * and left the replay PARTIAL, while the extra decoders starved the recorder
+ * they were supposed to be timing.
+ *
+ * A generation counter retires the old chain on the first callback it gets.
+ */
+let tickGeneration = 0
 
 function startFrameTicks(): void {
+  stopFrameTicks()
   if (startPayload?.focused !== true) return
   const active = stream
   if (active === null) return
+  const generation = ++tickGeneration
   // THE TICK MUST NOT COST THE RECORDING (#110).
   //
   // This is a SECOND sink on a stream the recorder is already consuming, and
@@ -303,6 +346,8 @@ function startFrameTicks(): void {
   tickVideo = video
   if (typeof video.requestVideoFrameCallback !== 'function') return
   const pump: VideoFrameRequestCallback = (_now, metadata) => {
+    // A chain from a previous start stops here rather than running forever.
+    if (generation !== tickGeneration) return
     // THE FRAME'S POSITION IN THE FILE BEING SAVED (#109).
     //
     // Which number to send took reading the spec rather than guessing, and the
@@ -356,6 +401,21 @@ function startFrameTicks(): void {
   void video.play().catch(() => {
     /* No ticks from this display: the free-running loop still samples. */
   })
+}
+
+/** Retires the current chain and releases its sink (#91). */
+function stopFrameTicks(): void {
+  tickGeneration += 1
+  const video = tickVideo
+  tickVideo = null
+  if (video === null) return
+  try {
+    video.pause()
+  } catch {
+    // Already detached; nothing to stop.
+  }
+  video.srcObject = null
+  video.remove()
 }
 
 function armEvidenceCheck(delayMs: number): void {

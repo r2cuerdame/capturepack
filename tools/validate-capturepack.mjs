@@ -1157,6 +1157,30 @@ function validateAnnotations(a, snapshotDims, replay, replayDurationMs, displayI
               fail(`${label}.bounds (${ann.bounds.x},${ann.bounds.y}) is not any rectangle this box's own track observed — a tracked box's bounds MUST be one of them (SPEC §8.3)`);
             }
           }
+          // THE ANCHOR IS CHECKABLE (SPEC 8.4, #90). A picked box says which
+          // frame it means; `bounds` must be the rectangle observed at that
+          // frame. The bug this catches shipped for weeks: the anchor was
+          // computed from the lifetime, drifted outside the track, and clamped
+          // to its FIRST sample — so the box showed the window as it had been
+          // before the frame the user clicked on, and every rendered view
+          // agreed with it.
+          const pickedAt = ann.tracking.picked_at_ms;
+          if (pickedAt !== undefined) {
+            if (typeof pickedAt !== "number" || !Number.isFinite(pickedAt)) {
+              fail(`${label}.tracking.picked_at_ms MUST be a finite number of milliseconds on the replay clock (SPEC 8.4)`);
+            } else {
+              let nearest = samples[0];
+              for (const smp of samples) {
+                if (Math.abs(smp.t_ms - pickedAt) < Math.abs(nearest.t_ms - pickedAt)) nearest = smp;
+              }
+              const at = Math.round(nearest.x) === ann.bounds.x && Math.round(nearest.y) === ann.bounds.y;
+              if (!at) {
+                fail(`${label}.bounds (${ann.bounds.x},${ann.bounds.y}) is not the rectangle observed at picked_at_ms=${pickedAt} ms, which is (${Math.round(nearest.x)},${Math.round(nearest.y)}) at ${nearest.t_ms} ms — a picked box MUST show its object as it was in the frame that was picked (SPEC 8.4)`);
+              } else {
+                pass(`${label}.bounds is the rectangle observed at the picked frame (${pickedAt} ms, sample ${nearest.t_ms} ms) — the box means the moment it was picked (SPEC 8.4)`);
+              }
+            }
+          }
           if (bad > 0) fail(`${label}.tracking.samples has ${bad} sample(s) that are not finite {t_ms,x,y,width,height} in ascending t_ms (SPEC §8.3)`);
           else if (offscreen > 0) fail(`${label}.tracking.samples has ${offscreen} sample(s) outside their own display's snapshot — a box marks something a reader can look at, and the part of a window past the screen edge is in no image (SPEC §8.2)`);
           else pass(`${label}.tracking: ${samples.length} sample(s), ${samples[0].t_ms}..${samples[samples.length-1].t_ms} ms across ${screens.size} display(s) — the box follows its object (SPEC §8.3)`);

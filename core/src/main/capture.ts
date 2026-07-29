@@ -431,10 +431,10 @@ async function probeRecorder(displayId: number, win: BrowserWindow): Promise<voi
  * fifth of its frames used to be indistinguishable from a healthy one without
  * running ffprobe over the saved file.
  */
-const displayCadence = new Map<number, { achievedFps: number; worstStallMs: number }>()
+const displayCadence = new Map<number, { achievedFps: number; worstStallMs: number; discardedFrames?: number | null }>()
 
 /** What this display's recorder has achieved, or null if it never said. */
-export function recorderCadence(displayId: number): { achievedFps: number; worstStallMs: number } | null {
+export function recorderCadence(displayId: number): { achievedFps: number; worstStallMs: number; discardedFrames?: number | null } | null {
   return displayCadence.get(displayId) ?? null
 }
 

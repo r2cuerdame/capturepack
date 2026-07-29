@@ -312,6 +312,13 @@ export interface CaptureFramesPayload {
     achievedFps: number
     /** The longest the frame counter went without advancing, in ms. */
     worstStallMs: number
+    /**
+     * Frames the source made and threw away, or null when unknown (#82).
+     *
+     * Zero next to a low `achievedFps` means the screen produced no frames —
+     * nobody touched that monitor — and a still screen is missing nothing.
+     */
+    discardedFrames?: number | null
   }
 }
 
