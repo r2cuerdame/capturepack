@@ -29,10 +29,11 @@
 // None of that correction belongs here, and copying it would introduce the very
 // error it exists to undo.
 import type { SurfaceInfo } from '../../shared/context/protocol'
-import type { EditorUiaWindow } from '../../shared/ipc'
+import type { EditorUiaElement, EditorUiaWindow } from '../../shared/ipc'
 import type { HostMonitor } from './surfaceLane'
 import type { ContextObservation } from './buffer'
 import type { ContextDisplayTarget } from './session'
+import type { TrackedControl } from './controlLane'
 
 /**
  * The fallback cadence for reading the ring back, when the caller cannot say
@@ -44,6 +45,9 @@ import type { ContextDisplayTarget } from './session'
  * frame, so its own times are exactly the moments a pack can show.
  */
 const READ_INTERVAL_MS = 100
+
+/** Shared empty lookup, so the no-lane-A path allocates nothing per observation. */
+const EMPTY_CONTROLS: ReadonlyMap<string, readonly TrackedControl[]> = new Map()
 
 /** A display's mapping space: which host monitor it is, and how to get onto its image. */
 interface DisplaySpace {
@@ -182,10 +186,13 @@ function observationOf(
   tMs: number,
   surfaces: readonly SurfaceInfo[],
   spaces: readonly DisplaySpace[],
+  controlsByHwnd: ReadonlyMap<string, readonly TrackedControl[]>,
 ): ContextObservation {
   const windows: EditorUiaWindow[] = []
+  const elements: EditorUiaElement[] = []
   for (const surface of surfaces) {
     if (surface.minimized || !surface.visible) continue
+    const tracked = surface.hwnd === undefined ? [] : (controlsByHwnd.get(surface.hwnd) ?? [])
     // ONE ENTRY PER SCREEN THE SURFACE IS ON (#103).
     //
     // A window dragged between monitors is visible on BOTH, and a single entry
@@ -225,12 +232,40 @@ function observationOf(
       display: space.index,
       focused: surface.foreground,
       z: surface.zOrder,
-      hasControls: false,
-      tree: 'skipped',
+      hasControls: tracked.length > 0,
+      tree: tracked.length > 0 ? 'collected' : 'skipped',
     })
+    // LANE A'S CONTROLS, PLACED IN THE SAME SPACE AS THEIR WINDOW (#111).
+    //
+    // The tracker reports physical virtual-desktop pixels, exactly as lane S
+    // does, so a control maps onto a snapshot through the same space its own
+    // window was just mapped through — never through a space chosen for it
+    // separately, which is how a control and its window end up disagreeing
+    // about which screen they are on.
+    //
+    // A control clipped to nothing on this screen is not emitted HERE, which
+    // is not the same as dropping it: the window loop above runs once per
+    // screen the window is on, so a control on the other half of a straddling
+    // window is emitted on that screen's pass instead.
+    for (const control of tracked) {
+      const box = clipToSpace(space, control)
+      if (box === null) continue
+      elements.push({
+        name: control.name,
+        control_type: control.controlType,
+        automation_id: control.automationId,
+        class_name: control.className,
+        bounds: box,
+        display: space.index,
+        // Which window this control was walked from. `candidatesOf` resolves a
+        // control's owner by this number, and an owner it cannot resolve is a
+        // control it silently drops.
+        window: surface.zOrder,
+      })
+    }
     }
   }
-  return { tMs, windows, elements: [] }
+  return { tMs, windows, elements }
 }
 
 /**
@@ -249,6 +284,11 @@ export function frozenRingObservations(
   targets: readonly ContextDisplayTarget[],
   replayDurationMs: number,
   sampleTimesMs?: readonly number[],
+  // LANE A, OPTIONAL BY CONSTRUCTION (#111). Absent — no tracker, a platform
+  // without one, a harness — means every observation carries no elements and
+  // the capture-instant dump answers exactly as it did before this lane
+  // existed. Silence here is "nobody looked", never "there was nothing".
+  controlsAt?: (packTMs: number) => ReadonlyMap<string, readonly TrackedControl[]>,
 ): ContextObservation[] {
   const spaces = buildSpaces(monitors, targets)
   if (spaces.length === 0) return []
@@ -289,7 +329,7 @@ export function frozenRingObservations(
     const label = Math.round(t)
     if (label === previousLabel) continue
     previousLabel = label
-    observations.push(observationOf(label, stack.surfaces, spaces))
+    observations.push(observationOf(label, stack.surfaces, spaces, controlsAt?.(t) ?? EMPTY_CONTROLS))
   }
   // The capture instant itself, which the walk only lands on when a sample
   // happened to fall exactly there. It is the one moment the user is guaranteed
@@ -297,7 +337,7 @@ export function frozenRingObservations(
   if (times[times.length - 1] !== end) {
     const last = surfacesAt(end)
     if (last !== null && last.surfaces.length > 0) {
-      observations.push(observationOf(end, last.surfaces, spaces))
+      observations.push(observationOf(end, last.surfaces, spaces, controlsAt?.(end) ?? EMPTY_CONTROLS))
     }
   }
   return observations
