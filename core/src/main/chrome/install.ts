@@ -209,6 +209,42 @@ export async function registerBrowsers(): Promise<readonly BrowserRegistration[]
   return results
 }
 
+/**
+ * Re-writes an EXISTING manifest and launcher with this build's paths, keeping
+ * the extension IDs the user already allowed. Called once at app start.
+ *
+ * Without this, a fix to how the host is launched reaches nobody: the manifest
+ * is only written from the Settings panel, so every already-registered machine
+ * keeps starting the host the old way until the user happens to press the
+ * install button again. That is exactly how the CRLF-poisoned exe registration
+ * would have outlived the code that fixed it — and it is one more face of
+ * "재설치할때마다 연결이 안돼": a reinstall updates the app and leaves the
+ * registration describing the previous one. A machine with no manifest is left
+ * alone; installing is still the user's decision.
+ */
+export function refreshHostManifestIfInstalled(): void {
+  const target = manifestPath()
+  let allowed: string[] = []
+  try {
+    const raw = JSON.parse(fs.readFileSync(target, 'utf8')) as Record<string, unknown>
+    const origins = raw['allowed_origins']
+    if (!Array.isArray(origins)) return
+    allowed = origins
+      .filter((o): o is string => typeof o === 'string')
+      .map((o) => o.replace(/^chrome-extension:\/\//, '').replace(/\/$/, ''))
+      .filter((o) => o !== '')
+  } catch {
+    return // Never installed (or unreadable): not ours to decide.
+  }
+  if (allowed.length === 0) return
+  try {
+    writeHostManifest(allowed)
+    logInfo('[chrome] native host manifest refreshed for this build')
+  } catch (err) {
+    logError('[chrome] could not refresh the native host manifest:', err)
+  }
+}
+
 export async function unregisterBrowsers(): Promise<void> {
   for (const browser of BROWSERS) {
     try {
