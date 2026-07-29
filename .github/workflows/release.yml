@@ -76,6 +76,10 @@ jobs:
           } else {
             throw "Could not verify release state: $output"
           }
+          # PowerShell preserves the expected failed `gh release view` native
+          # exit code even after the branch handles it. Reset it explicitly or
+          # the otherwise-successful step still exits 1 on a brand-new tag.
+          $global:LASTEXITCODE = 0
 
       - uses: actions/setup-node@v4
         with:

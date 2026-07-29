@@ -347,6 +347,7 @@ check(
     && releaseWorkflow.includes('Upload verified assets to draft')
     && releaseWorkflow.includes('Verify draft assets byte-for-byte')
     && releaseWorkflow.includes('Publish verified draft')
+    && releaseWorkflow.includes('$global:LASTEXITCODE = 0')
     && releaseWorkflow.indexOf('Package release artifacts') < releaseWorkflow.indexOf('Create or verify the release tag'),
 )
 check(
