@@ -339,6 +339,14 @@ function toDisplayCaptures(displays: readonly FrozenDisplay[]): DisplayCapture[]
     scale: d.scale,
     hasReplay: d.replayWebm !== null,
     replayDurationMs: d.replayDurationMs,
+    // The recorder's own account of what it managed (#82), carried into the
+    // pack so the replay's quality is a fact a reader can see.
+    ...(() => {
+      const measured = recorderCadence(d.id)
+      return measured === null
+        ? {}
+        : { cadence: { achieved_fps: measured.achievedFps, worst_stall_ms: measured.worstStallMs } }
+    })(),
     // A fresh capture writes the canonical names; they travel with the entry so
     // every writer uses the SAME string the manifest declares.
     snapshotFile: displaySnapshotName(d.index),

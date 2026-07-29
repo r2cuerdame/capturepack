@@ -41,6 +41,15 @@ export interface DisplayDeclaration {
   scale: number
   hasReplay: boolean
   replayDurationMs: number
+  /**
+   * What this display's recorder achieved, when it could measure itself (#82).
+   *
+   * Written into the pack so a reader can see the replay's quality without
+   * running ffprobe over it — a recording with a one-second hole in it looks
+   * exactly like a clean one otherwise, and the moment being annotated may
+   * simply not be in the file.
+   */
+  cadence?: { achieved_fps: number; worst_stall_ms: number }
   // The filenames this display's media is DECLARED under, carried rather than
   // re-derived from `index`: SPEC §5.6 allows `replay-d<N>.mp4` just as much as
   // `.webm`, so a re-edit save of an external pack must keep the names the
@@ -116,6 +125,9 @@ function buildDisplayMedia(
       replay,
       // Written only alongside a replay, and next to it (SPEC §5.6).
       ...(replay !== null && durationMs !== undefined ? { replay_duration_ms: durationMs } : {}),
+      // Only where there IS a replay and it measured itself: a rate reported
+      // next to no recording, or one nobody measured, says nothing true.
+      ...(replay !== null && d.cadence !== undefined ? { cadence: d.cadence } : {}),
       bounds: { ...d.bounds },
       scale: d.scale,
       focused: d.focused,
