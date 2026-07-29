@@ -2246,6 +2246,60 @@ windows is 0.177 ms against 13.05 ms for UIA top-level enumeration — 74x. Wind
 geometry stays with lane S; lane A is for IN-WINDOW controls only, which is
 what docs/temporal-protocol.md §1 said before any of this was measured.
 
+### One tracker per app? Measured before building it (#111)
+
+The proposal: instead of one process tracking every window, run a tracker **per
+program**, each keeping its own ledger, and fit the ledgers onto frames. Three
+claims were worth testing, and they do not all hold.
+
+**Parallelism: much weaker than it looks.** Refreshing five windows' held
+references (1940 elements) on this desk:
+
+| | wall clock |
+|---|---|
+| one thread, all five windows | 172.6 ms |
+| five threads, one per window | 136.6 ms (**1.26x**) |
+| perfect parallelism would be | 74.9 ms (the slowest window alone) |
+
+CPU busy was 24% sequential and 53% parallel — three quarters of the time is
+WAITING, and threads recover almost none of it, because the serialisation is
+inside the CLIENT process (UIA marshalling), not in the target apps.
+
+Separate PROCESSES do bypass that, and measurably less than hoped. Two
+gate-synchronised processes, each holding one window:
+
+| | solo | simultaneous |
+|---|---|---|
+| YouTube, 788 elements | 67.6 ms | 84.6 ms |
+| ChatGPT, 593 elements | 53.1 ms | 68.5 ms |
+
+Sequential total 120.7 ms against 84.6 ms wall together — **1.43x for two
+processes**, with each paying ~27% more. Better than threads, nowhere near N.
+
+**Memory is what kills 1:1.** A PowerShell tracker holding UIAutomation is
+**92 MB solo and 123 MB while working**. Fifteen visible windows at one process
+each is 1.4-1.8 GB — against a product promise that a resident tool must be
+cheaper than the thing it observes.
+
+**Isolation is the claim that survives, and it is the strongest one.** Docker
+Desktop answers for ten elements in ~2050 ms, reproducibly — more than the rest
+of the desktop combined. In a single tracker that stalls every other app's
+controls; in its own process it stalls only its own ledger and can be killed.
+That argument does not need parallelism to be worth acting on.
+
+So the design that follows from the numbers is not 1:1 and not 1:N:
+
+- **Per-app LEDGER as a data structure — adopt regardless.** Identity,
+  continuity and "where was this control at T" are per-app questions, and a
+  global snapshot list answers them by accident.
+- **A small POOL of trackers (2-3) with apps assigned to them**, plus a
+  quarantine process for anything that has hit the slow-strike limit. That buys
+  the isolation and the ~1.4x, at bounded memory.
+- **1:1 becomes affordable only with a lighter host.** PowerShell plus the
+  UIAutomation assemblies is the 92 MB; a small native tracker would be
+  10-15 MB, putting fifteen of them at 150-225 MB. That — not the process
+  topology — is the change that makes the original idea cheap.
+
 ### Recording is a switch (privacy)
 
 `settings.recordingEnabled` — OFF resolves the recorder set to empty through
