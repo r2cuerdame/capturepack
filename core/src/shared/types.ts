@@ -520,6 +520,11 @@ export interface Settings {
   // Show the once-per-launch "replay is ready" tray notification. Recorder
   // failures are always announced and are deliberately not controlled by it.
   notifyOnRecordingStart: boolean
+  // The always-on replay buffer itself (GOAL "Replay Buffer"). OFF stops the
+  // recorders and the hotkey answers with a notification instead of a capture
+  // — a privacy switch, not a pause: nothing is recorded while it is off, so
+  // there is nothing a capture could show. ON is the product's default state.
+  recordingEnabled: boolean
   outputDir: string
   // WHAT lands on the clipboard the moment a pack is saved (GOAL "Folder-first
   // export"). Was a boolean; a boolean could only answer "the folder", and the

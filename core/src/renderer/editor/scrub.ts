@@ -407,6 +407,17 @@ export class ScrubController {
     this.rafId = requestAnimationFrame(() => this.playbackTick())
   }
 
+  /**
+   * Back to the capture instant, publicly: the trim-handle drag borrows the
+   * preview to show the frame under the handle, and a drag that STARTED at
+   * "now" returns there on release so the export still ships the native grab
+   * (the guarantee clampIntoRange protects).
+   */
+  toNow(): void {
+    if (!this.ready) return
+    this.snapToNow()
+  }
+
   private snapToNow(): void {
     this.stopPlayback()
     this.showingNative = true
@@ -836,6 +847,11 @@ export class BoardScrub {
 
   scrubBy(deltaMs: number): void {
     this.master.scrubBy(deltaMs)
+  }
+
+  /** Back to the capture instant on every display (see ScrubController.toNow). */
+  toNow(): void {
+    this.master.toNow()
   }
 
   scrubTo(ms: number): void {

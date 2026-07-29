@@ -435,6 +435,15 @@ export class SurfaceLane {
     const helloMs = hello['hostMs']
     if (typeof helloMs === 'number') this.lastError = null
     this.hostMonitors = parseHostMonitors(hello['monitors'])
+    // Whether movement is observed EXACTLY (the OS pushes every change) or by
+    // polling (the fastMs fallback). Stated once per session because the two
+    // behave differently under a shake, and a pack from a hook-less machine
+    // should be readable as such.
+    if (hello['moveHook'] === true) {
+      logInfo('[context] host move hook active — window movement observed event-driven')
+    } else {
+      logWarn('[context] host move hook unavailable — movement observed by polling fallback')
+    }
     for (let i = 0; i < 5; i += 1) {
       const measured = await this.ping()
       if (!measured) break

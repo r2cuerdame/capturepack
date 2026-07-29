@@ -300,6 +300,9 @@ function main(): void {
     }
     stopRecorderStateListener = onRecorderStateChanged(handleRecorderState)
 
+    // With recording disabled this builds an EMPTY recorder set — the same
+    // reconcile path, zero recorders — so flipping the setting later is an
+    // ordinary rebuild rather than a special boot.
     await startCapture(settings)
 
     // The Platform Surface Timeline (issue #65) starts WITH the recorder and
@@ -318,6 +321,17 @@ function main(): void {
     startDomBridge()
 
     const capture = (): void => {
+      // Recording OFF is a privacy switch, not a broken hotkey (settings.
+      // recordingEnabled): there is no buffer, so there is nothing a capture
+      // could truthfully show — and silence here would read as the app being
+      // dead, which is the failure #61 exists to prevent. Say why, instead.
+      if (!settings.recordingEnabled) {
+        new Notification({
+          title: 'CapturePack', // product name — never translated
+          body: uiT(settings)('app.recordingOff'),
+        }).show()
+        return
+      }
       void startCaptureFlow(settings)
     }
     // From here on a hotkey press forwarded by the Start Menu fallback (issue

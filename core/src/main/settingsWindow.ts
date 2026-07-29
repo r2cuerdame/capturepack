@@ -359,11 +359,14 @@ export function registerSettingsIpc(live: Settings, hooks: SettingsIpcHooks = {}
     }
     // The recorder-window set is built from these three; rebuild applies them live.
     if (
+      live.recordingEnabled !== before.recordingEnabled ||
       live.captureDisplay !== before.captureDisplay ||
       live.fps !== before.fps ||
       live.replaySeconds !== before.replaySeconds ||
       live.replayMaxWidth !== before.replayMaxWidth
     ) {
+      // recordingEnabled rides the same rebuild: OFF resolves to an empty
+      // recorder set and every capture window closes; ON rebuilds the set.
       void restartCapture(live)
     }
     // The Surface Timeline retains as far back as the replay does, and follows a

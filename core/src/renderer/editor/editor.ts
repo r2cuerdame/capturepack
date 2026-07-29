@@ -315,6 +315,8 @@ const objectHintQueue: string[] = []
 // the original evidence).
 let trimInMs = 0
 let trimOutMs: number | null = null
+// Whether the current trim-handle drag began on the native capture instant.
+let trimDragWasAtNow = false
 // Editor Window Mode (GOAL "Editor Window Mode"): mirrors the window state main
 // reports. The fullscreen overlay is the default; windowed mode is a real
 // movable/resizable window whose top bar is the drag region.
@@ -3743,11 +3745,27 @@ const timebar = new Timebar(timebarEl, {
     schedulePaint()
   },
   // Trim handle drags (GOAL "Replay Trim"): fraction of the track -> ms.
+  //
+  // THE PREVIEW FOLLOWS THE HANDLE. Before this, dragging the out handle left
+  // of a playhead sitting at "now" left the playhead stranded OUTSIDE the
+  // trimmed range — clampIntoRange deliberately never moves it off the native
+  // frame (the export guarantee), and nothing else moved it either. Following
+  // the handle shows the exact frame the capture will now end on, which is
+  // also the feedback a hand adjusting an end point is asking for; the native
+  // position is restored on release below, so the guarantee survives.
   trimTo: (kind, fraction) => {
     if (!scrub) return
     const ms = fraction * scrub.durationMs
     if (kind === 'in') setTrimIn(ms)
     else setTrimOut(ms)
+    scrub.scrubTo(kind === 'in' ? trimInMs : (trimOutMs ?? scrub.durationMs))
+  },
+  trimDragStart: () => {
+    trimDragWasAtNow = scrub?.atNow ?? false
+  },
+  trimDragEnd: () => {
+    if (trimDragWasAtNow) scrub?.toNow()
+    trimDragWasAtNow = false
   },
   // Double-click a handle: reset that side to the track edge.
   resetTrim: (kind) => {

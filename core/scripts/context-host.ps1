@@ -406,6 +406,67 @@ namespace CapturePack {
     public static double SampleMs() {
       return (double)SampleTicks * 1000.0 / (double)Stopwatch.Frequency;
     }
+
+    // -----------------------------------------------------------------------
+    // EXACT OBSERVATION (#110): Windows tells us when a window moves.
+    //
+    // Every polling design measured this year has the same floor: the nearest
+    // observation to a frame is half the polling interval away, and a shaken
+    // window crosses hundreds of pixels inside that. The window manager knows
+    // the exact moment every rectangle changes — SetWindowPos fires
+    // EVENT_OBJECT_LOCATIONCHANGE at ~4 ms cadence during a real drag
+    // (measured: 12,161 changes in one 52 s shake). This hook subscribes to
+    // that instead of guessing when to look.
+    //
+    // The callback does almost nothing: filter to visible top-level WINDOWS
+    // (the same event fires for the CARET and the CURSOR — the cursor alone
+    // would fire on every mouse move), set a flag, wake the resident loop.
+    // The loop then dumps the desk, coalesced to MOVE_COALESCE_MS, so the
+    // cost is paid only while something is actually moving and the sample's
+    // stamp is within a few ms of the change it records.
+    //
+    // OUT-OF-CONTEXT events are delivered through the message queue of the
+    // thread that called SetWinEventHook, so the hook is installed FROM the
+    // pump thread, and the delegate is held in a static so the GC cannot
+    // collect what the OS still calls.
+    // -----------------------------------------------------------------------
+    delegate void WinEventDelegate(IntPtr hook, uint ev, IntPtr hwnd, int idObject, int idChild, uint thread, uint time);
+    [DllImport("user32.dll")] static extern IntPtr SetWinEventHook(uint min, uint max, IntPtr mod, WinEventDelegate proc, uint pid, uint tid, uint flags);
+    [StructLayout(LayoutKind.Sequential)] struct MSG { public IntPtr hwnd; public uint message; public IntPtr wParam; public IntPtr lParam; public uint time; public POINT pt; }
+    [StructLayout(LayoutKind.Sequential)] struct POINT { public int X; public int Y; }
+    [DllImport("user32.dll")] static extern int GetMessageW(out MSG msg, IntPtr hwnd, uint min, uint max);
+    [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr h, uint flags);
+    const uint EVENT_OBJECT_LOCATIONCHANGE = 0x800B;
+    const uint WINEVENT_SKIPOWNPROCESS = 0x0002;
+    const uint GA_ROOT = 2;
+
+    static WinEventDelegate MoveCallbackKeepAlive;
+    public static volatile bool MovePending;
+    public static volatile bool HookActive;
+
+    public static void StartMoveHook() {
+      System.Threading.Thread pump = new System.Threading.Thread(delegate() {
+        MoveCallbackKeepAlive = OnMoveEvent;
+        IntPtr hook = SetWinEventHook(
+          EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE,
+          IntPtr.Zero, MoveCallbackKeepAlive, 0, 0, WINEVENT_SKIPOWNPROCESS);
+        if (hook == IntPtr.Zero) return;      // no hook: polling remains the truth
+        HookActive = true;
+        MSG msg;
+        while (GetMessageW(out msg, IntPtr.Zero, 0, 0) > 0) { /* deliver events */ }
+      });
+      pump.IsBackground = true;               // never keeps this process alive
+      pump.Start();
+    }
+
+    static void OnMoveEvent(IntPtr hook, uint ev, IntPtr hwnd, int idObject, int idChild, uint thread, uint time) {
+      if (idObject != 0 || idChild != 0) return;          // OBJID_WINDOW itself only
+      if (hwnd == IntPtr.Zero) return;
+      if (GetAncestor(hwnd, GA_ROOT) != hwnd) return;     // top-level only
+      if (!IsWindowVisible(hwnd)) return;
+      MovePending = true;
+      HostInput.Poke();
+    }
   }
 
   /// Requests from Core, read on a BACKGROUND THREAD.
@@ -453,6 +514,11 @@ namespace CapturePack {
     }
 
     public static bool Drained() { return Lines.IsEmpty; }
+
+    /// Wakes the resident loop for something that is NOT an input line — the
+    /// move hook uses it so a window's first movement is observed within the
+    /// coalescing window instead of at the next scheduled sample.
+    public static void Poke() { Signal.Set(); }
   }
 }
 '@
@@ -525,11 +591,21 @@ if ($SelfTest -gt 0) {
 # sampling instant OR a request, whichever comes first — see the class for the
 # measured trap that made a background thread necessary.
 [CapturePack.HostInput]::Start()
+# Exact observation (#110): the OS reports window movement; polling is the
+# fallback for systems where the hook cannot be installed.
+[CapturePack.SurfaceLane]::StartMoveHook()
 
 function Get-NextLine([int]$waitMs) {
   if (-not [CapturePack.HostInput]::Wait($waitMs)) { return $null }
   return [CapturePack.HostInput]::TryRead()
 }
+
+# The floor between move-driven samples. Events arrive at ~4 ms during a drag;
+# dumping on every one would cost ~40% of a core for positions the replay
+# cannot even show. 8 ms halves the finest replay cadence a 60 fps capture
+# could want and keeps the burst duty bounded while paying nothing at rest.
+$moveCoalesceMs = 8
+$lastMoveSampleMs = -1e9
 
 $sampling = $false
 $intervalMs = 100
@@ -554,12 +630,35 @@ while ($running) {
     }
     # Fixed cadence rather than sleep-after-work, so a slow sample does not
     # permanently shift the sampling grid. The STEP adapts (#110): a desk seen
-    # moving is observed again at $fastMs, a still one at $intervalMs.
+    # moving is observed again at $fastMs, a still one at $intervalMs — but
+    # only where the move HOOK could not be installed. With the hook active,
+    # movement is event-driven and exact, and stepping fast here as well would
+    # only double-observe what the hook already caught.
     $step = $intervalMs
-    if ($fastMs -gt 0 -and [CapturePack.SurfaceLane]::MovedLastSample) { $step = $fastMs }
+    if ($fastMs -gt 0 -and -not [CapturePack.SurfaceLane]::HookActive -and [CapturePack.SurfaceLane]::MovedLastSample) { $step = $fastMs }
     $nextSampleMs += $step
     if ($nextSampleMs -lt $clock.Elapsed.TotalMilliseconds) {
       $nextSampleMs = $clock.Elapsed.TotalMilliseconds + $step
+    }
+  }
+  # A window moved (#110): observe NOW rather than at the next scheduled tick,
+  # coalesced so an event storm costs one dump per $moveCoalesceMs. The flag is
+  # cleared BEFORE sampling: an event that lands mid-dump sets it again and is
+  # answered by the next pass, so no movement is ever silently absorbed.
+  if ($sampling -and [CapturePack.SurfaceLane]::MovePending) {
+    $sinceMove = $clock.Elapsed.TotalMilliseconds - $lastMoveSampleMs
+    if ($sinceMove -ge $moveCoalesceMs) {
+      [CapturePack.SurfaceLane]::MovePending = $false
+      try {
+        Write-Line ([CapturePack.SurfaceLane]::Sample((Get-HostMs)))
+      } catch {
+        Write-Line ('{"event":"error","t":' + (Get-HostMs) + ',"where":"move-sample","message":' +
+          (ConvertTo-Json ([string]$_.Exception.Message) -Compress) + '}')
+      }
+      $lastMoveSampleMs = $clock.Elapsed.TotalMilliseconds
+      # A move-driven sample IS a sample: push the scheduled one out a full
+      # step so the two cadences do not double-observe the same instant.
+      $nextSampleMs = $clock.Elapsed.TotalMilliseconds + $intervalMs
     }
   }
   if ($clock.Elapsed.TotalMilliseconds -ge $nextStatusMs) {
@@ -572,6 +671,11 @@ while ($running) {
   $budget = 250
   if ($sampling) {
     $budget = [int][Math]::Max(0, [Math]::Min(250, $nextSampleMs - $clock.Elapsed.TotalMilliseconds))
+    # A deferred move is waiting out its coalescing window — wake for it.
+    if ([CapturePack.SurfaceLane]::MovePending) {
+      $waitLeft = [int][Math]::Max(0, $moveCoalesceMs - ($clock.Elapsed.TotalMilliseconds - $lastMoveSampleMs))
+      $budget = [Math]::Min($budget, $waitLeft)
+    }
   }
   $line = Get-NextLine $budget
   # EOF on stdin means Core has exited, and this process must not outlive it —
@@ -594,6 +698,7 @@ while ($running) {
     'hello' {
       Write-Line ('{"id":' + $id + ',"ok":true,"hostMs":' + (Get-HostMs) +
         ',"pid":' + $self.Id +
+        ',"moveHook":' + $(if ([CapturePack.SurfaceLane]::HookActive) { 'true' } else { 'false' }) +
         ',"dpi":"' + [CapturePack.SurfaceLane]::DpiMode + '"' +
         ',"psVersion":"' + $PSVersionTable.PSVersion.ToString() + '"' +
         ',"lanes":["surface"]' +

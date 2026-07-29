@@ -125,6 +125,18 @@
 
     <section aria-labelledby="hCapture">
       <h2 id="hCapture" data-i18n="settings.captureSection">Capture</h2>
+      <!-- The privacy switch (settings.recordingEnabled): the always-on replay
+           buffer itself. OFF closes every recorder window through the ordinary
+           rebuild — nothing is captured, and the hotkey answers with a
+           notification instead of a pack. First in the section because every
+           row below it describes what this one turns on. -->
+      <label class="row rowCol toggleRow">
+        <div class="rowTop">
+          <span class="label" data-i18n="settings.recordingName">Live recording</span>
+          <input type="checkbox" id="recordingEnabled" />
+        </div>
+        <p class="hint" data-i18n="settings.recordingSummary">Keeps the last moments of your screen ready to capture. Off records nothing, and the hotkey only reminds you.</p>
+      </label>
       <!-- Recordable field (GOAL "Settings GUI" > Capture): click (or Enter /
            Space when focused) arms it, the next key combination is captured,
            formatted as an Electron accelerator, and saved instantly. Tabbing

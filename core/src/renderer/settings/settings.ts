@@ -226,6 +226,9 @@ const TOGGLES: ReadonlyArray<BooleanSettingsKey> = [
   'mcpAutoStart',
   'mcpWatchExportFolder',
   'mcpLogRequests',
+  // The recording privacy switch: applied live main-side through the same
+  // recorder rebuild every other capture change uses.
+  'recordingEnabled',
   // The Plugins row's real on/off (issue #57) — applies to the NEXT capture
   // with no restart of anything, because the capture flow reads it at trigger.
   'uiaEnabled',

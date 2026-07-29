@@ -2088,11 +2088,40 @@ version measured 479 appends in the same window.
 And with ~20–45 ms between observations, the interpolation verdict FLIPS,
 measured on the same pack: drawing between bracketing observations lands
 p10/p90 −52/+40 against nearest's −76/+56 — at 67 ms it was worse (163 vs 80,
-the Nyquist corner-cut). So drawing now interpolates ONLY across gaps of
-≤40 ms (`LERP_MAX_SPAN_MS`, shared/track.ts): too short to hide a direction
-reversal, and the box jumps between observations across anything wider. Both
-regimes' numbers sit in the comment on that constant; the pack keeps observed
-rectangles only, as ever (#89).
+the Nyquist corner-cut). So drawing briefly interpolated across gaps ≤40 ms.
+
+**Interpolation was then removed by decision, not by measurement**
+(*"보간하면 안되지.. 왜 정확히 못얻어오는지가 중요하지"*): a drawn rectangle
+nobody measured is a statement the record cannot back, however plausible its
+position — and it papers over the actual defect, which is that the
+observations are not exact enough at the moments that matter. #89 stands for
+DRAWING as well as for the pack.
+
+### The OS says when — the move hook (#110)
+
+The remedy for inexact observation is exact observation. `context-host.ps1`
+now installs `SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE)` on a pump thread:
+the window manager announces every rectangle change (measured at ~4 ms cadence
+through a real drag), the callback filters to visible top-level WINDOWS (the
+same event fires for the cursor — on every mouse move — and the caret), and
+the resident loop dumps the desk at once, coalesced to 8 ms. Position still
+comes from direct `GetWindowRect` — the hook is WHEN to look, never HOW.
+
+The polling ladder becomes the fallback: `fastMs` stepping only runs where the
+hook could not install, and the hello reply carries `moveHook` so main.log
+states which regime a session observed under. Verified standalone: hook
+installs, a still desk stays at the base cadence, and the first movement
+switches sampling to 9–16 ms gaps within one coalescing window. The error
+budget during motion drops from ±15 ms (31 ms polling) to ~±4 ms — under
+~100 px at even the wildest measured shake.
+
+### Recording is a switch (privacy)
+
+`settings.recordingEnabled` — OFF resolves the recorder set to empty through
+the ordinary rebuild (no special teardown path to rot), the hotkey answers
+with a notification saying recording is off instead of silently doing nothing,
+and Settings > Capture leads with the switch because every row below it
+describes what it turns on. Nine languages, applied live.
 
 `npm run check:sync` asserts it: zero samples sharing an instant, and apparent
 speed 1.00 against a truth of 1.0. Against the `Math.max` version it reports 20

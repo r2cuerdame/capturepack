@@ -982,9 +982,13 @@ function recorderSignature(display: Display, settings: Settings): string {
 async function rebuild(): Promise<void> {
   const settings = currentSettings
   // "all" and "cursor" record every connected display (see the CPU note at the
-  // top of this file); only fixed mode narrows the recorder set.
+  // top of this file); only fixed mode narrows the recorder set. Recording
+  // switched OFF wants ZERO recorders — the empty set below closes every
+  // capture window through the same reconciliation every other change uses,
+  // so "off" is not a special path that can rot, it is the ordinary path with
+  // nothing left to keep alive.
   const displays =
-    settings === null
+    settings === null || !settings.recordingEnabled
       ? []
       : settings.captureDisplay === 'all' || settings.captureDisplay === 'cursor'
         ? screen.getAllDisplays()

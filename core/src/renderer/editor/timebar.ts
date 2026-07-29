@@ -28,6 +28,9 @@ export interface TimebarCallbacks {
   selectAnnotation(id: string): void
   /** A trim handle was dragged to a fraction (0..1) of the replay duration. */
   trimTo(kind: 'in' | 'out', fraction: number): void
+  /** A trim-handle drag began / ended (pointer capture on the handle). */
+  trimDragStart(kind: 'in' | 'out'): void
+  trimDragEnd(kind: 'in' | 'out'): void
   /** A trim handle was double-clicked: reset that side to the track edge. */
   resetTrim(kind: 'in' | 'out'): void
 }
@@ -145,6 +148,7 @@ export class Timebar {
       e.stopPropagation() // the track underneath must not start a scrub drag
       handle.setPointerCapture(e.pointerId)
       this.trimDrag = { kind, pointerId: e.pointerId }
+      this.cb.trimDragStart(kind)
       this.cb.trimTo(kind, this.trackFraction(e))
     })
     handle.addEventListener('pointermove', (e) => {
@@ -153,7 +157,10 @@ export class Timebar {
       }
     })
     const endDrag = (e: PointerEvent): void => {
-      if (this.trimDrag?.pointerId === e.pointerId) this.trimDrag = null
+      if (this.trimDrag?.pointerId !== e.pointerId) return
+      this.trimDrag = null
+      this.cb.trimDragEnd(kind)
+      this.renderTrim() // the chip goes back to showing the kept length
     }
     handle.addEventListener('pointerup', endDrag)
     handle.addEventListener('pointercancel', endDrag)
@@ -180,10 +187,19 @@ export class Timebar {
     this.trimDimOut.hidden = !active || outF >= 1
     this.trimDimOut.style.left = `${outF * 100}%`
     this.trimDimOut.style.width = `${(1 - outF) * 100}%`
-    this.trimChip.hidden = !active
-    if (active) {
-      const lengthMs = Math.max(0, (this.trimOutMs ?? d) - this.trimInMs)
-      this.trimChip.textContent = this.t('editor.trimChip', { seconds: (lengthMs / 1000).toFixed(1) })
+    // WHILE A HANDLE IS HELD, the chip is a readout of the handle itself —
+    // the time the capture will now start or stop at — because that is the
+    // question the hand is asking. At rest it shows the kept length, as ever.
+    if (this.trimDrag !== null) {
+      const at = this.trimDrag.kind === 'in' ? this.trimInMs : (this.trimOutMs ?? d)
+      this.trimChip.hidden = false
+      this.trimChip.textContent = `${(at / 1000).toFixed(1)}s / ${(d / 1000).toFixed(1)}s`
+    } else {
+      this.trimChip.hidden = !active
+      if (active) {
+        const lengthMs = Math.max(0, (this.trimOutMs ?? d) - this.trimInMs)
+        this.trimChip.textContent = this.t('editor.trimChip', { seconds: (lengthMs / 1000).toFixed(1) })
+      }
     }
   }
 

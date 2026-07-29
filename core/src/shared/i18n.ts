@@ -109,6 +109,10 @@ const EN = {
   'recorder.replayTimeout': 'the recorder did not answer in time',
   'recorder.bufferTooShort': 'not enough had been recorded yet',
 
+  'app.recordingOff': 'Recording is off — turn it on in Settings to capture.',
+  'settings.recordingName': 'Live recording',
+  'settings.recordingSummary':
+    'Keeps the last moments of your screen ready to capture. Off records nothing, and the hotkey only reminds you.',
   'app.hotkeyFailed':
     'Could not register the {hotkey} hotkey. Another application may already be using it.',
   'app.updateReady': 'CapturePack {version} available — restart to update',
@@ -625,6 +629,10 @@ const KO: Record<I18nKey, string> = {
   'recorder.replayTimeout': '녹화기가 제때 응답하지 않음',
   'recorder.bufferTooShort': '아직 충분히 녹화되지 않음',
 
+  'app.recordingOff': '녹화가 꺼져 있습니다 — 캡처하려면 설정에서 켜세요.',
+  'settings.recordingName': '실시간 녹화',
+  'settings.recordingSummary':
+    '화면의 마지막 순간을 항상 캡처할 수 있게 유지합니다. 끄면 아무것도 녹화되지 않고, 단축키는 알림만 띄웁니다.',
   'app.hotkeyFailed':
     '{hotkey} 단축키를 등록하지 못했습니다. 다른 프로그램이 이미 사용 중일 수 있습니다.',
   'app.updateReady': 'CapturePack {version} 사용 가능 — 재시작하면 업데이트됩니다',
@@ -1098,6 +1106,10 @@ const JA: Record<I18nKey, string> = {
   'recorder.replayTimeout': 'レコーダーが時間内に応答しませんでした',
   'recorder.bufferTooShort': 'まだ十分に録画されていません',
 
+  'app.recordingOff': '録画はオフです — キャプチャするには設定でオンにしてください。',
+  'settings.recordingName': 'ライブ録画',
+  'settings.recordingSummary':
+    '画面の直近の瞬間をいつでもキャプチャできるよう保持します。オフの間は何も録画されず、ホットキーは通知のみ表示します。',
   'app.hotkeyFailed':
     '{hotkey} ホットキーを登録できませんでした。ほかのアプリが既に使用している可能性があります。',
   'app.updateReady': 'CapturePack {version} が利用可能 — 再起動で更新されます',
@@ -1573,6 +1585,10 @@ const ZH: Record<I18nKey, string> = {
   'recorder.replayTimeout': '录制器未及时响应',
   'recorder.bufferTooShort': '录制的内容还不够',
 
+  'app.recordingOff': '录制已关闭 — 若要截取，请在设置中开启。',
+  'settings.recordingName': '实时录制',
+  'settings.recordingSummary':
+    '让屏幕的最近片段随时可以截取。关闭后不录制任何内容，快捷键只会给出提示。',
   'app.hotkeyFailed': '无法注册 {hotkey} 快捷键。可能已被其他应用占用。',
   'app.updateReady': 'CapturePack {version} 可用 — 重启即可更新',
   'app.captureFailed': '捕获失败：{error}',
@@ -2042,6 +2058,10 @@ const ES: Record<I18nKey, string> = {
   'recorder.replayTimeout': 'la grabadora no respondió a tiempo',
   'recorder.bufferTooShort': 'aún no se había grabado lo suficiente',
 
+  'app.recordingOff': 'La grabación está desactivada: actívala en Ajustes para capturar.',
+  'settings.recordingName': 'Grabación en vivo',
+  'settings.recordingSummary':
+    'Mantiene los últimos momentos de tu pantalla listos para capturar. Apagada no graba nada y el atajo solo avisa.',
   'app.hotkeyFailed':
     'No se pudo registrar el atajo {hotkey}. Puede que otra aplicación ya lo esté usando.',
   'app.updateReady': 'CapturePack {version} disponible — reinicia para actualizar',
@@ -2520,6 +2540,10 @@ const FR: Record<I18nKey, string> = {
   'recorder.replayTimeout': 'l’enregistreur n’a pas répondu à temps',
   'recorder.bufferTooShort': 'pas encore assez d’enregistrement',
 
+  'app.recordingOff': 'L’enregistrement est désactivé — activez-le dans les Réglages pour capturer.',
+  'settings.recordingName': 'Enregistrement en direct',
+  'settings.recordingSummary':
+    'Garde les derniers instants de votre écran prêts à capturer. Désactivé, rien n’est enregistré et le raccourci ne fait que prévenir.',
   'app.hotkeyFailed':
     "Impossible d'enregistrer le raccourci {hotkey}. Une autre application l'utilise peut-être déjà.",
   'app.updateReady': 'CapturePack {version} disponible — redémarrez pour mettre à jour',
@@ -3000,6 +3024,10 @@ const DE: Record<I18nKey, string> = {
   'recorder.replayTimeout': 'der Rekorder hat nicht rechtzeitig geantwortet',
   'recorder.bufferTooShort': 'es war noch nicht genug aufgezeichnet',
 
+  'app.recordingOff': 'Die Aufnahme ist ausgeschaltet — zum Erfassen in den Einstellungen aktivieren.',
+  'settings.recordingName': 'Live-Aufnahme',
+  'settings.recordingSummary':
+    'Hält die letzten Momente des Bildschirms zum Erfassen bereit. Aus zeichnet nichts auf, der Hotkey erinnert nur.',
   'app.hotkeyFailed':
     'Der Hotkey {hotkey} konnte nicht registriert werden. Möglicherweise verwendet ihn bereits eine andere Anwendung.',
   'app.updateReady': 'CapturePack {version} verfügbar — zum Aktualisieren neu starten',
@@ -3483,6 +3511,10 @@ const PT: Record<I18nKey, string> = {
   'recorder.replayTimeout': 'o gravador não respondeu a tempo',
   'recorder.bufferTooShort': 'ainda não havia gravação suficiente',
 
+  'app.recordingOff': 'A gravação está desligada — ative-a nas Configurações para capturar.',
+  'settings.recordingName': 'Gravação ao vivo',
+  'settings.recordingSummary':
+    'Mantém os últimos momentos da tela prontos para capturar. Desligada, nada é gravado e o atalho apenas avisa.',
   'app.hotkeyFailed':
     'Não foi possível registrar o atalho {hotkey}. Outro aplicativo pode já estar usando esse atalho.',
   'app.updateReady': 'CapturePack {version} disponível — reinicie para atualizar',
@@ -3962,6 +3994,10 @@ const RU: Record<I18nKey, string> = {
   'recorder.replayTimeout': 'рекордер не ответил вовремя',
   'recorder.bufferTooShort': 'записано ещё недостаточно',
 
+  'app.recordingOff': 'Запись выключена — включите её в настройках, чтобы сделать захват.',
+  'settings.recordingName': 'Постоянная запись',
+  'settings.recordingSummary':
+    'Хранит последние моменты экрана готовыми к захвату. В выключенном состоянии ничего не записывается, а горячая клавиша лишь напоминает.',
   'app.hotkeyFailed':
     'Не удалось зарегистрировать сочетание {hotkey}. Возможно, его уже использует другое приложение.',
   'app.updateReady': 'Доступен CapturePack {version} — перезапустите для обновления',

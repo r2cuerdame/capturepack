@@ -36,6 +36,7 @@ function defaultSettings(): Settings {
     // know the feature exists to be protected by it.
     superviseProcess: true,
     notifyOnRecordingStart: true,
+    recordingEnabled: true,
     outputDir: path.join(app.getPath('desktop'), 'CapturePack'),
     // The prompt, not the folder: what a saved pack is for, nine times out of
     // ten, is the next sentence typed into an LLM.
@@ -246,6 +247,7 @@ const SETTINGS_KEY_SET: Record<keyof Settings, true> = {
   fps: true,
   replayMaxWidth: true,
   captureDisplay: true,
+  recordingEnabled: true,
   uiaEnabled: true,
   scrubInvert: true,
   scrubSensitivityMs: true,
@@ -428,6 +430,8 @@ function mergeSettings(base: Settings, raw: Record<string, unknown>): Settings {
       typeof raw.captureDisplay === 'string' && isCaptureDisplay(raw.captureDisplay)
         ? raw.captureDisplay
         : base.captureDisplay,
+    recordingEnabled:
+      typeof raw.recordingEnabled === 'boolean' ? raw.recordingEnabled : base.recordingEnabled,
     uiaEnabled: typeof raw.uiaEnabled === 'boolean' ? raw.uiaEnabled : base.uiaEnabled,
     scrubInvert: typeof raw.scrubInvert === 'boolean' ? raw.scrubInvert : base.scrubInvert,
     scrubSensitivityMs:
