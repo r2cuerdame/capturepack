@@ -678,6 +678,7 @@ Every annotation object:
 | `start_ms` | number | OPTIONAL | Start of the box's **lifetime** on the replay clock, in milliseconds. MUST appear together with `end_ms` — both or neither. See [§8.4](#84-lifetime). |
 | `end_ms` | number | OPTIONAL | End of the box's lifetime, in milliseconds. MUST be >= `start_ms`. MUST appear together with `start_ms`. |
 | `numbered` | boolean | OPTIONAL | Whether the box takes part in display numbering ([§8.5](#85-display-numbers)). Default `false`. The number itself is **never stored** — it is computed. |
+| `number_pin` | integer | OPTIONAL | The display number this box's author asked for, **1-9** ([§8.5](#85-display-numbers)). Absent = automatic. An INPUT to the numbering rule, not a stored display number: a reader that ignores it still computes valid numbers. Values outside 1-9 and non-integers are ignored. Inert while `numbered` is `false`. Introduced in `format_version` 0.2.1. |
 | `blur` | boolean | OPTIONAL | Whether the box's interior is sensitive and MUST be blurred in rendered views ([§9](#9-blur-and-privacy)). Default `false`. Blur is a box property, never a separate annotation type. |
 | `tracking` | object | OPTIONAL | Object-tracking state. `enabled` (boolean) is REQUIRED inside `tracking`. When `true`, `samples` (array, non-empty) is REQUIRED and carries the path the box follows — see below. When `false` or absent, the box is a fixed rectangle and `bounds` is all there is. Absent means `{ "enabled": false }`. Readers MUST ignore tracking content they do not understand and treat the box as untracked, which is always safe: `bounds` remains correct on its own. |
 | `tracking.samples[]` | object | see above | One rectangle the tracked object occupied: `t_ms` (number, on the replay clock — [§10.1](#101-the-replay-clock)), `x`, `y`, `width`, `height` (numbers, pixels in the snapshot of the sample's own display), and OPTIONAL `display` (number — the [§5.6](#56-per-display-media) index whose snapshot these numbers are pixels of; absent means the annotation's own `display`, [§8.8](#88-which-display-a-box-belongs-to)). Samples MUST be in ascending `t_ms`, and each MUST lie within its own display's snapshot — a window may hang off a screen edge, but the part past it is in no image, so a sample is the VISIBLE rectangle (the same rule `bounds` obeys, [§8.2](#82-coordinate-space)). **Every sample is an OBSERVATION.** A reader resolving a time between two samples MUST use the NEARER sample unchanged, and MUST NOT interpolate: an interpolated rectangle is a position the object never occupied, written in the same numbers as a measured one, and nothing in the pack distinguishes them. Writers SHOULD record one sample per captured frame, which is what makes that rule cost nothing — a pack cannot show a moment finer than a frame. Before the first sample and after the last, the box is held at that end. A box's LIFETIME ([§8.4](#84-lifetime)) — not the sample range — is what says when it stops being drawn. **Added in 0.2.0.** |
@@ -723,13 +724,38 @@ Numbered boxes carry visible numbers — ①, ②, ③ — in every rendered vie
 
 - A box's permanent identity is its immutable `annotation_id`. The display number is derived at
   display/render time and is not a source-data identifier. Writers MUST NOT store display
-  numbers in the pack; readers MUST NOT parse them back out of rendered views.
-- **The rule.** Take every box with `numbered: true`. Sort by:
-  1. `start_ms` ascending, treating an absent lifetime as `start_ms = 0`;
-  2. then `z` ascending (absent `z` = array position);
-  3. then `annotation_id` ascending (lexicographic).
-  Number them contiguously from **1** in that order. No gaps, ever: adding, deleting, or
-  re-timing a box renumbers the rest immediately.
+  numbers in the pack; readers MUST NOT parse them back out of rendered views. A box MAY carry
+  `number_pin`, which is the number its author ASKED for — an input the rule below honours, never
+  a record of what was rendered.
+- **The order is CREATION order.** Take every box with `numbered: true`. Sort by:
+  1. `created_at` ascending, compared as an **instant**, not as text — it carries a UTC offset
+     ([§8.3](#83-the-box)), so `…T18:22+09:00` and `…T10:22+01:00` are the same moment and a
+     lexicographic comparison would order them wrongly;
+  2. a box with no parseable `created_at` sorts **after** every box that has one, and among
+     those the pre-existing chain decides: `z` ascending (absent `z` = array position), then
+     `annotation_id` ascending (lexicographic).
+
+  Numbers follow the order the person made the boxes in, because that is what a number is for.
+  Where a box sits on the replay clock is a different question, and the documents already answer
+  it by printing each box's time beside its number ([§12](#12-reportmd-readmemd-and-skills)).
+- **A box MAY pin its own number.** `number_pin` ([§8.3](#83-the-box)) is an integer **1-9** that
+  the user chose. It is an **input to this rule, not a stored display number** — the number
+  itself is still computed, and a reader that ignores `number_pin` computes valid, self-consistent
+  numbers the automatic way, exactly as [§13.1](#131-format_version-policy) requires of an unknown
+  optional field.
+  - Pins are honoured **first**, in creation order. Everyone else then takes the smallest number
+    still free, ascending, also in creation order.
+  - **Two boxes pinned to the same number:** the one created **first** keeps it; the other falls
+    back to automatic. It still receives a number — a numbered box without one could not be
+    referenced by the documents.
+  - **A pin MAY leave a gap.** Pin the only box to `5` and the pack has a ⑤ and no ①-④; that is
+    what pinning is for. Automatic numbers remain contiguous among themselves.
+  - **Only 1-9 may be pinned**, but automatic numbering does not stop at 9: a capture with twelve
+    numbered boxes numbers all twelve. A `number_pin` outside 1-9, or a non-integer, is ignored
+    and the box numbers automatically.
+  - `number_pin` on a box with `numbered: false` is inert, not an error — toggling numbering off
+    and on again MUST NOT discard the number the user picked.
+  Apart from pins, adding, deleting or re-ordering a box renumbers the rest immediately.
 - **Consistency scope.** Every consumer MUST use exactly this rule, so the same box shows the
   same number everywhere: editor canvas, annotated replay, `report.md`, `README.md`, `skills/`
   documents, and MCP responses. Video numbers and document numbers never differ.

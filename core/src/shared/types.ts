@@ -1,8 +1,16 @@
-// CapturePack format types — mirror SPEC.md (format_version 0.2.0).
+// CapturePack format types — mirror SPEC.md (format_version 0.2.1).
 // These types describe data written into a .capturepack; keep them in sync with the spec.
+//
+// 0.2.1 adds one OPTIONAL field, `number_pin` on a box (SPEC §8.5): the display
+// number its author asked for. A PATCH, not a minor, and §13.1 is what decides
+// that — while the major version is 0, minor carries the promises major
+// normally does, so an additive optional field is a patch. A 0.2.0 reader
+// ignores the field and computes numbers the automatic way, which is a valid,
+// self-consistent pack; that is precisely the forward compatibility §13.1
+// requires, so nothing older breaks.
 
 export const FORMAT_NAME = 'capturepack'
-export const FORMAT_VERSION = '0.2.0'
+export const FORMAT_VERSION = '0.2.1'
 
 // Per-display media of an all-displays capture (SPEC §5.3, GOAL "Multi-Monitor
 // Support"). One entry per display frozen by the trigger.
@@ -323,6 +331,21 @@ export interface BoxAnnotation {
   // Whether the box takes part in display numbering (SPEC §8.5). The number is
   // computed via computeDisplayNumbers(), never stored.
   numbered: boolean
+  /**
+   * A number the USER chose for this box, 1-9 (SPEC §8.5). Absent = automatic.
+   *
+   * NAMED `number_pin`, NOT `display_number`, and the name is the design. §8.5's
+   * invariant is that display numbers are computed and never stored, and that
+   * stays literally true: this is an INPUT to the rule, not its output. A reader
+   * that ignores this field computes numbers the old way and still gets a valid,
+   * self-consistent pack — which is exactly what §13.1 asks of an unknown
+   * optional field.
+   *
+   * Only meaningful with `numbered: true`; a pin on an unnumbered box is inert
+   * rather than an error, so turning numbering off and back on does not silently
+   * discard the number the user picked.
+   */
+  number_pin?: number
   // Whether the interior is blurred in RENDERED views only (SPEC §9): the
   // original snapshot.png and replay are never modified.
   blur: boolean
@@ -346,10 +369,45 @@ export interface AnnotationsFile {
 // documents, MCP responses — MUST derive them from this one function so video
 // numbers and document numbers can never differ.
 //
-// Rule: take the boxes with numbered:true and sort by start_ms ascending
-// (absent lifetime = 0), then z ascending (absent z = array position, for
-// externally written packs), then annotation_id ascending; number contiguously
-// from 1. Returns annotation_id -> display number; unnumbered boxes are absent.
+// ORDER IS CREATION ORDER, and it used to be timeline order. Sorting by
+// `start_ms` first meant a box drawn LAST but scrubbed back to an earlier frame
+// took number 1 and renumbered everything made before it — reported as
+// "버튼 숫자도 버그가 있네 마지막에 누른게 뒤로 가야지". A number is how a person
+// refers to the boxes THEY made, in the order they made them; where a box
+// happens to sit on the replay clock is a different question, and the documents
+// already answer it by printing each box's time beside its number.
+//
+// `created_at` is parsed to an instant rather than compared as text: it carries
+// a UTC offset (SPEC §8.3), so "…T18:22+09:00" and "…T10:22+01:00" are the same
+// moment and lexicographic order would put them in the wrong sequence. A box
+// with no parseable `created_at` — an externally written pack — sorts AFTER
+// every box that has one and falls back to the old z / array-position / id
+// chain, so such a pack numbers exactly as it always did.
+//
+// PINS. `number_pin` is a number the user chose, 1-9. Pins are honoured first,
+// in creation order; everyone else fills the smallest still-free number,
+// ascending, also in creation order. Three consequences, all deliberate:
+//
+//  - TWO BOXES PINNED TO THE SAME NUMBER: the one created FIRST keeps it, the
+//    other falls back to automatic. Creation order is already the primary key
+//    for everything else here, so resolving with it needs no new concept — and
+//    the loser still gets A number, because a numbered box without one is a box
+//    the documents cannot reference.
+//  - A PIN MAY LEAVE A GAP. Pin the only box to 5 and the pack has a ⑤ and no
+//    ①-④. That is what pinning is for; automatic numbers stay contiguous among
+//    themselves.
+//  - ONLY 1-9 CAN BE PINNED, but automatic numbering does not stop at 9: a
+//    capture with twelve numbered boxes numbers all twelve.
+//
+// Returns annotation_id -> display number; unnumbered boxes are absent.
+
+/** The pin a box actually carries: an integer 1-9, or null for automatic. */
+function pinOf(a: Annotation): number | null {
+  const raw = a.number_pin
+  if (typeof raw !== 'number' || !Number.isInteger(raw)) return null
+  return raw >= 1 && raw <= 9 ? raw : null
+}
+
 export function computeDisplayNumbers(
   annotations: readonly Annotation[],
 ): Map<string, number> {
@@ -357,9 +415,14 @@ export function computeDisplayNumbers(
     .map((a, index) => ({ a, index }))
     .filter(({ a }) => a.numbered)
   numbered.sort((p, q) => {
-    const pStart = typeof p.a.start_ms === 'number' ? p.a.start_ms : 0
-    const qStart = typeof q.a.start_ms === 'number' ? q.a.start_ms : 0
-    if (pStart !== qStart) return pStart - qStart
+    const pAt = Date.parse(p.a.created_at)
+    const qAt = Date.parse(q.a.created_at)
+    const pDated = Number.isFinite(pAt)
+    const qDated = Number.isFinite(qAt)
+    // A known creation moment beats an unknown one; among known ones, earlier
+    // first. Undated boxes keep the ordering they have always had.
+    if (pDated !== qDated) return pDated ? -1 : 1
+    if (pDated && qDated && pAt !== qAt) return pAt - qAt
     const pZ = typeof p.a.z === 'number' ? p.a.z : p.index
     const qZ = typeof q.a.z === 'number' ? q.a.z : q.index
     if (pZ !== qZ) return pZ - qZ
@@ -370,7 +433,22 @@ export function computeDisplayNumbers(
         : 0
   })
   const numbers = new Map<string, number>()
-  numbered.forEach(({ a }, i) => numbers.set(a.annotation_id, i + 1))
+  const claimed = new Set<number>()
+  // Pass 1: the numbers the user asked for, first come first served.
+  for (const { a } of numbered) {
+    const pin = pinOf(a)
+    if (pin === null || claimed.has(pin)) continue
+    claimed.add(pin)
+    numbers.set(a.annotation_id, pin)
+  }
+  // Pass 2: everyone else takes the smallest number still free.
+  let next = 1
+  for (const { a } of numbered) {
+    if (numbers.has(a.annotation_id)) continue
+    while (claimed.has(next)) next += 1
+    claimed.add(next)
+    numbers.set(a.annotation_id, next)
+  }
   return numbers
 }
 

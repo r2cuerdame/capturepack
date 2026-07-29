@@ -154,9 +154,30 @@
          #50). -->
     <div id="boxHeader" hidden>
       <button id="numberBtn" title="Toggle number" data-i18n-title="editor.numberTooltip">#</button>
+      <!-- PIN, not rename (SPEC 8.5). The caret only appears once the box is
+           numbered, because choosing WHICH number is meaningless for a box that
+           shows none — and it is a separate control from the toggle so a click
+           can never mean two things. -->
+      <button id="numberPinBtn" hidden title="Choose the number" data-i18n-title="editor.numberPinTooltip">&#9662;</button>
       <button id="durationChip" title="Edit duration" data-i18n-title="editor.durationTooltip">1.0s</button>
       <button id="blurBtn" title="Toggle blur" data-i18n-title="editor.blurTooltip" data-i18n="editor.blur">Blur</button>
       <button id="deleteBtn" title="Delete (Del)" data-i18n-title="editor.deleteTooltip">×</button>
+    </div>
+    <!-- 1-9, plus a way back to automatic. Small on purpose: this is an
+         affordance for the number the user wants, not a numbering panel. -->
+    <div id="numberPicker" hidden>
+      <div id="numberPinChoices">
+        <button type="button" data-pin="1">1</button>
+        <button type="button" data-pin="2">2</button>
+        <button type="button" data-pin="3">3</button>
+        <button type="button" data-pin="4">4</button>
+        <button type="button" data-pin="5">5</button>
+        <button type="button" data-pin="6">6</button>
+        <button type="button" data-pin="7">7</button>
+        <button type="button" data-pin="8">8</button>
+        <button type="button" data-pin="9">9</button>
+        <button type="button" data-pin="auto" id="numberAutoBtn" data-i18n="editor.numberAuto">Auto</button>
+      </div>
     </div>
     <div id="durationEditor" hidden>
       <div id="durationPresets">

@@ -485,6 +485,45 @@ body[data-window-mode="windowed"] #zoomControl {
   font-variant-numeric: tabular-nums;
 }
 
+/* Same popover shape as #durationEditor — one visual idiom for "the header
+   asked you a small question". */
+#numberPicker {
+  position: absolute;
+  z-index: 7;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+}
+
+#numberPinChoices {
+  display: flex;
+  gap: 4px;
+}
+
+#numberPinChoices button {
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  padding: 3px 8px;
+  font: 600 11px "Segoe UI", system-ui, sans-serif;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+#numberPinChoices button:hover {
+  background: var(--panel-hover);
+}
+
+/* The number this box is PINNED to, so the popover shows the current answer
+   rather than only offering new ones. */
+#numberPinChoices button.on {
+  border-color: #3574f0;
+  background: rgba(53, 116, 240, 0.22);
+}
+
 #durationEditor {
   position: absolute;
   z-index: 7;
