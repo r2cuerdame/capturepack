@@ -24,8 +24,7 @@ folder that works without an AI, account, or cloud service.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Download](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Current public Windows release: **CapturePack 0.3.0**. The source and release
-candidate baseline is **0.3.1**; it corrects Chrome DOM geometry across
+Current public Windows release: **CapturePack 0.3.1**. It corrects Chrome DOM geometry across
 mixed-DPI displays and keeps generated pack documents in sync with the final
 manifest and the artifacts that actually exist.
 
@@ -196,11 +195,10 @@ Tools, client setup, and settings: [docs/MCP.md](docs/MCP.md).
 
 ## Status
 
-**0.3.0 remains the public Windows download.** 0.3.1 is a release candidate,
-not a public release until it appears on GitHub Releases. CapturePack remains
-an early-stage project, so keep the original pack when reporting a problem and
-see [GOAL.md](GOAL.md) for the product vision and [ROADMAP.md](ROADMAP.md) for
-what comes next.
+**0.3.1 is the current public Windows download.** CapturePack remains an
+early-stage project, so keep the original pack when reporting a problem and see
+[GOAL.md](GOAL.md) for the product vision and [ROADMAP.md](ROADMAP.md) for what
+comes next.
 
 ## Security &amp; signing
 

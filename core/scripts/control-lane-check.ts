@@ -65,6 +65,12 @@ const inject = (message: Record<string, unknown>): void => {
 const rect = (x: number, y: number) => ({ b: [x, y, 100, 40], n: 'Save', c: 'Button', a: 'save', k: 'Btn' })
 
 let failures = 0
+// GitHub's Windows image can spend more than ten seconds starting the first
+// powershell.exe while Defender scans the freshly checked-out scripts. The
+// behavior under test still has its own <250 ms assertion below; this outer
+// allowance measures process startup, not the wake path's latency.
+const POWERSHELL_PROBE_TIMEOUT_MS = 30_000
+
 function check(what: string, got: unknown, want: unknown): void {
   const ok = JSON.stringify(got) === JSON.stringify(want)
   if (!ok) failures += 1
@@ -90,7 +96,7 @@ const hwndNormalization = spawnSync(
   {
     encoding: 'utf8',
     env: { ...process.env, CAPTUREPACK_UIA_SELFTEST_HWND: '-1' },
-    timeout: 5_000,
+    timeout: POWERSHELL_PROBE_TIMEOUT_MS,
     windowsHide: true,
   },
 )
@@ -248,7 +254,7 @@ async function main(): Promise<void> {
       {
         cwd: process.cwd(),
         encoding: 'utf8',
-        timeout: 10_000,
+        timeout: POWERSHELL_PROBE_TIMEOUT_MS,
         windowsHide: true,
       },
     )

@@ -16,7 +16,7 @@ que una IA no tenga que inferirlos solo a partir de píxeles.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Descargar](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Versión pública actual para Windows: **CapturePack 0.3.0** · código/candidata: **0.3.1**
+Versión pública actual para Windows: **CapturePack 0.3.1**
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=4" alt="CapturePack vuelve a un fotograma pasado, selecciona un control hijo, muestra su nombre y tipo capturados, sigue el movimiento observado de su ventana y exporta evidencia estructurada para IA." width="760">
@@ -94,8 +94,7 @@ el pack completo si contiene información privada.
 
 ## Estado, seguridad y licencia
 
-0.3.0 sigue siendo la versión pública; 0.3.1 es candidata hasta que aparezca
-en GitHub Releases. La compilación aún no está firmada, por lo que SmartScreen
+0.3.1 es la versión pública actual. La compilación aún no está firmada, por lo que SmartScreen
 puede avisar; cada versión incluye `SHA256SUMS.txt`.
 
 Local primero · sin nube · sin cuenta · sin telemetría · [Licencia MIT](LICENSE)

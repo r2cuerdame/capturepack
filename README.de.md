@@ -16,7 +16,7 @@ damit eine KI sie nicht allein aus Pixeln erraten muss.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Herunterladen](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Aktuelle öffentliche Windows-Version: **CapturePack 0.3.0** · Quell-/Release-Kandidat: **0.3.1**
+Aktuelle öffentliche Windows-Version: **CapturePack 0.3.1**
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=4" alt="CapturePack springt zu einem früheren Bild, wählt ein untergeordnetes UI-Steuerelement, zeigt erfassten Namen und Typ, folgt der beobachteten Fensterbewegung und exportiert strukturierte KI-Belege." width="760">
@@ -95,8 +95,7 @@ das vollständige Pack nicht, wenn es private Daten enthält.
 
 ## Status, Sicherheit und Lizenz
 
-0.3.0 bleibt die öffentliche Version; 0.3.1 ist ein Release-Kandidat, bis es in
-GitHub Releases erscheint. Der Build ist noch nicht signiert, daher kann
+0.3.1 ist die aktuelle öffentliche Version. Der Build ist noch nicht signiert, daher kann
 SmartScreen warnen; jede Version enthält `SHA256SUMS.txt`.
 
 Local-first · keine Cloud · kein Konto · keine Telemetrie · [MIT-Lizenz](LICENSE)

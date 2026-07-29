@@ -16,7 +16,7 @@ que a IA não precise inferir tudo apenas dos pixels.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Baixar](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Versão pública atual para Windows: **CapturePack 0.3.0** · código/candidata: **0.3.1**
+Versão pública atual para Windows: **CapturePack 0.3.1**
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=4" alt="O CapturePack volta a um quadro passado, seleciona um controle filho, mostra nome e tipo capturados, acompanha o movimento observado da janela e exporta evidência estruturada para IA." width="760">
@@ -94,8 +94,7 @@ completo quando houver informações privadas.
 
 ## Estado, segurança e licença
 
-0.3.0 continua a versão pública; 0.3.1 é candidata até aparecer no GitHub
-Releases. O build ainda não é assinado, então o SmartScreen pode alertar; cada
+0.3.1 é a versão pública atual. O build ainda não é assinado, então o SmartScreen pode alertar; cada
 versão inclui `SHA256SUMS.txt`.
 
 Local-first · sem nuvem · sem conta · sem telemetria · [Licença MIT](LICENSE)

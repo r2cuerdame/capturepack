@@ -16,7 +16,7 @@
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [다운로드](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-현재 공개 Windows 릴리스: **CapturePack 0.3.0** · 소스/릴리스 후보: **0.3.1**
+현재 공개 Windows 릴리스: **CapturePack 0.3.1**
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=4" alt="과거 프레임으로 되감아 하위 UI 컨트롤을 선택하고, 캡처된 이름과 컨트롤 유형을 확인한 뒤, 소유 창의 관측된 움직임을 따라가며 AI용 구조화 증거를 내보내는 CapturePack" width="760">
@@ -114,8 +114,7 @@ GitHub 릴리스 업데이트 확인입니다.
 
 ## 상태와 보안
 
-0.3.0이 현재 공개 버전이며 0.3.1은 GitHub Releases에 나타나기 전까지 릴리스
-후보입니다. 현재 빌드는 서명되지 않아 SmartScreen이
+0.3.1이 현재 공개 버전입니다. 현재 빌드는 서명되지 않아 SmartScreen이
 경고할 수 있으며, 모든 릴리스에는 검증용 `SHA256SUMS.txt`가 포함됩니다.
 
 로컬 우선 · 오프라인 우선 · 오픈 포맷 · 클라우드 없음 · 로그인 없음 · 텔레메트리 없음

@@ -113,8 +113,8 @@ for (const lang of supported) {
     missingText.length === 0
       && missingAlt.length === 0
       && document.documentElement.lang === lang
-      && releaseNote.includes('0.3.0')
-      && releaseNote.includes('0.3.1'),
+      && releaseNote.includes('0.3.1')
+      && !releaseNote.includes('0.3.0'),
     [...missingText, ...missingAlt].join(', '),
   )
 }
@@ -161,23 +161,24 @@ for (const lang of supported.filter((candidate) => candidate !== 'en')) {
 
 console.log('\nProduct demo contract')
 check(
-  'landing keeps the public release at 0.3.0 while 0.3.1 is a candidate',
-  html.includes('"softwareVersion": "0.3.0"')
-    && html.includes('>v0.3.0</span>')
-    && html.includes('Public download: 0.3.0')
-    && html.includes('0.3.1 source/release candidate'),
+  'landing names 0.3.1 as the public release',
+  html.includes('"softwareVersion": "0.3.1"')
+    && html.includes('>v0.3.1</span>')
+    && html.includes('Public download: 0.3.1')
+    && !html.includes('source/release candidate'),
 )
 check(
-  'package and lock declare the 0.3.1 candidate',
+  'package and lock declare the public 0.3.1 release',
   packageJson.version === '0.3.1'
     && packageLock.version === '0.3.1'
     && packageLock.packages?.['']?.version === '0.3.1',
 )
 check(
-  'README separates public 0.3.0 from candidate 0.3.1',
-  readme.includes('Current public Windows release: **CapturePack 0.3.0**')
-    && readme.includes('candidate baseline is **0.3.1**')
-    && readme.includes('not a public release until it appears on GitHub Releases'),
+  'README names 0.3.1 as the public release',
+  readme.includes('Current public Windows release: **CapturePack 0.3.1**')
+    && readme.includes('**0.3.1 is the current public Windows download.**')
+    && !readme.includes('candidate baseline')
+    && !readme.includes('not a public release until it appears on GitHub Releases'),
 )
 check('five-step rewind → pick → inspect → follow → export sequence', [1, 2, 3, 4, 5].every((n) => svg.includes(`id="caption${n}"`)))
 check('child control name is visible', svg.includes('Save changes') && svg.includes('CHILD CONTROL'))
@@ -234,10 +235,10 @@ check(
 )
 for (const { lang, text: localized } of localizedReadmes) {
   check(
-    `${lang}: README public/candidate and product/privacy contract`,
+    `${lang}: README public-release and product/privacy contract`,
     localized.includes('demo.svg?v=4')
-      && localized.includes('0.3.0')
       && localized.includes('0.3.1')
+      && !localized.includes('0.3.0')
       && localized.includes('Ctrl+Alt+S')
       && localized.includes('capture_kind: image')
       && localized.includes('MCP')
