@@ -826,7 +826,14 @@ while ($running) {
       try {
         # `ft` is the FRAME's time; `t` stays the host's own, so the cost of the
         # round trip is still measurable rather than hidden.
-        $line = [CapturePack.SurfaceLane]::Sample((Get-HostMs))
+        # A DELTA HERE TOO (#110). A tick fires once per captured frame — 15/s
+        # at the default rate — and each one was a FULL dump: measured in the
+        # field at 13.48% of a core with the move hook also running, which is
+        # what kept demoting lane S mid-capture even after move samples became
+        # deltas. The scheduled sample is still full and still resyncs the
+        # shared picture every interval, so a tick delta costs Core nothing but
+        # the windows that actually changed since the last line.
+        $line = [CapturePack.SurfaceLane]::Sample((Get-HostMs), $true)
         if ($null -ne $frameMs) {
           $line = $line.Insert(1, '"ft":' + [Math]::Round($frameMs, 3) + ',')
         }

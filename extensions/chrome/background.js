@@ -156,6 +156,20 @@ chrome.action.onClicked.addListener(async (tab) => {
 
 // Element selections from the content script.
 chrome.runtime.onMessage.addListener((msg, sender) => {
+  // ARMED IS A STATE THE USER CAN SEE. Clicking the toolbar icon used to do
+  // nothing visible at all, so a picker that failed to arm and a picker
+  // waiting for a click looked identical — and when the injection guard was
+  // stuck (see content-script.js) the user had no way to tell which they were
+  // looking at. The badge is that difference.
+  if (msg && msg.type === 'picker.armed') {
+    chrome.action.setBadgeBackgroundColor({ color: '#7c5cff' })
+    chrome.action.setBadgeText({ text: '◎', ...(sender.tab ? { tabId: sender.tab.id } : {}) })
+    return
+  }
+  if (msg && msg.type === 'picker.disarmed') {
+    chrome.action.setBadgeText({ text: '', ...(sender.tab ? { tabId: sender.tab.id } : {}) })
+    return
+  }
   if (msg && msg.type === 'dom.element.selected') {
     send({
       ...msg,

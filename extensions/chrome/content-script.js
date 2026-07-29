@@ -1,7 +1,21 @@
 // CapturePack element picker. Injected on demand when the user clicks the
 // toolbar action; picks ONE element, reports it, and removes itself.
 ;(() => {
-  if (window.__capturepackPickerActive) return
+  // RE-ARMING RE-ARMS. This used to `return` when the flag was already set, so
+  // any injection that did not reach its own cleanup — an Escape that raced a
+  // navigation, a page that swapped the DOM under it, an exception — left the
+  // flag true and the picker SILENTLY never armed again. The user clicks the
+  // toolbar icon, nothing visible happens, they click an element, nothing
+  // happens: "크롬 dom 에 element가 안잡혀", with no error anywhere to find.
+  // A second click now tears the old one down and starts fresh, which is also
+  // what a user pressing the button twice means.
+  if (window.__capturepackPickerActive && typeof window.__capturepackPickerCleanup === 'function') {
+    try {
+      window.__capturepackPickerCleanup()
+    } catch {
+      // The old picker is beyond saving; taking its flag is the point.
+    }
+  }
   window.__capturepackPickerActive = true
 
   const highlight = document.createElement('div')
@@ -70,6 +84,20 @@
     document.removeEventListener('keydown', onKey, true)
     highlight.remove()
     window.__capturepackPickerActive = false
+    window.__capturepackPickerCleanup = null
+    // The toolbar badge is the only thing that says the picker was ever armed;
+    // clearing it is how "armed" stops being a claim nobody can check.
+    try {
+      chrome.runtime.sendMessage({ type: 'picker.disarmed' })
+    } catch {
+      // The worker may be gone; the badge expires on its own.
+    }
+  }
+  window.__capturepackPickerCleanup = cleanup
+  try {
+    chrome.runtime.sendMessage({ type: 'picker.armed' })
+  } catch {
+    // No worker: the picker still works, it just cannot light the badge.
   }
 
   function onClick(e) {
