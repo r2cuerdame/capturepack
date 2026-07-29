@@ -24,6 +24,29 @@ function scheduleRetry() {
   }, retryMs)
 }
 
+// A TIMER CANNOT OUTLIVE THE WORKER THAT SET IT.
+//
+// The retry above is the fast path and it is not enough on its own. An MV3
+// service worker is TERMINATED when it goes idle, and every setTimeout in it
+// dies with it — so once the port dropped and the worker went to sleep, nothing
+// remained to dial again and Settings sat on "확장 핸드셰이크 ✖" until the user
+// happened to switch tabs. That is the state this was reported in twice.
+//
+// chrome.alarms is the one timer that survives, because firing it is what WAKES
+// the worker. One minute is the practical floor for a persistent alarm, which is
+// the right cadence for "the app was restarted, try again" — the fast backoff
+// above still covers the seconds after a drop, while the worker is still alive.
+//
+// A live native messaging port also keeps the worker from being torn down, so
+// the moment either path succeeds this stops costing anything at all.
+const RECONNECT_ALARM = 'capturepack-reconnect'
+chrome.alarms.create(RECONNECT_ALARM, { periodInMinutes: 1 })
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== RECONNECT_ALARM) return
+  retryMs = RETRY_MIN_MS
+  connect()
+})
+
 function connect() {
   if (port) return port
   try {
