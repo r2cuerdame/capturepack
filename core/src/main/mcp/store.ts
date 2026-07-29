@@ -2,6 +2,7 @@
 // pack directories), kept fresh by fs.watch, and reads pack contents lazily via
 // adm-zip (zip) or fs (dir). Read-only: nothing here writes to disk.
 import AdmZip from 'adm-zip'
+import { directoryHoldsCapturePack, manifestNamesCapturePack } from '../../shared/packIdentity'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import type { AnnotationsFile, Manifest, TimelineFile } from '../../shared/types'
@@ -33,7 +34,14 @@ function packArchiveExt(name: string): string | null {
  */
 function zipHoldsAPack(zipPath: string): boolean {
   try {
-    return new AdmZip(zipPath).getEntries().some((e) => e.entryName === 'manifest.json')
+    // NAMED `manifest.json` IS NOT ENOUGH. Any npm, Electron or Rust archive
+    // carries one; this index is what History renames and deletes through, so
+    // it asks the manifest whether it names this format (SPEC 13.1) rather
+    // than trusting the entry name. Still one small read — adm-zip parses the
+    // central directory without inflating the body.
+    const entry = new AdmZip(zipPath).getEntry('manifest.json')
+    if (entry === null || entry.isDirectory) return false
+    return manifestNamesCapturePack(entry.getData().toString('utf8'))
   } catch {
     return false
   }
@@ -194,7 +202,7 @@ export function createPackStore(options: { outputDir: string; watch: boolean }):
     const dirStems = new Set<string>()
     for (const d of dirents) {
       try {
-        if (d.isDirectory() && fs.existsSync(path.join(dir, d.name, 'manifest.json'))) {
+        if (d.isDirectory() && directoryHoldsCapturePack(path.join(dir, d.name))) {
           dirStems.add(d.name.toLowerCase())
         }
       } catch {
@@ -215,11 +223,15 @@ export function createPackStore(options: { outputDir: string; watch: boolean }):
           // indexing a holiday photo album as a capture would be worse than
           // missing one. The check reads the archive's central directory, not
           // its contents.
-          if (!dirStems.has(stem.toLowerCase()) && (ext === PACK_EXT || zipHoldsAPack(full))) {
+          // `.capturepack` is NO LONGER taken on its name either: an archive
+          // renamed to that extension, or one copied in from elsewhere, would
+          // otherwise be indexed as a capture and become renameable and
+          // deletable through History. Both extensions now have to prove it.
+          if (!dirStems.has(stem.toLowerCase()) && zipHoldsAPack(full)) {
             out.push({ id: rel.slice(0, -ext.length), path: full, kind: 'zip', mtimeMs: fs.statSync(full).mtimeMs })
           }
         } else if (d.isDirectory()) {
-          if (fs.existsSync(path.join(full, 'manifest.json'))) {
+          if (directoryHoldsCapturePack(full)) {
             out.push({ id: rel, path: full, kind: 'dir', mtimeMs: fs.statSync(full).mtimeMs })
           } else if (depth < MAX_SCAN_DEPTH) {
             scanDir(full, rel, depth + 1, out)

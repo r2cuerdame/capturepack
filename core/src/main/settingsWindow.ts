@@ -30,6 +30,8 @@ import type {
   StorageUsage,
 } from '../shared/ipc'
 import { resolveLanguage } from '../shared/i18n'
+import { directoryHoldsCapturePack, manifestNamesCapturePack } from '../shared/packIdentity'
+import AdmZip from 'adm-zip'
 import type { Settings } from '../shared/types'
 import { logError, logInfo, logWarn } from './log'
 import { restartCapture } from './capture'
@@ -81,10 +83,24 @@ function listStoredPacks(outputDir: string): StoredPack[] {
   for (const entry of entries) {
     const full = path.join(outputDir, entry.name)
     try {
+      // A NAME IS NOT AN IDENTITY, AND THIS LIST FEEDS A DELETE.
+      //
+      // This counted any directory holding a file called manifest.json, and any
+      // file whose name ended in .zip. `purgeOlderThan` then hands every entry
+      // to the Recycle Bin. The output folder is the user's to choose, and the
+      // Settings GUI lets them choose Downloads, Documents or the Desktop
+      // itself — where "delete older than 30 days" would have taken every
+      // unrelated archive, and every npm, Electron or Rust project folder,
+      // because those all carry a manifest.json too.
+      //
+      // So a pack is now something that SAYS it is a pack: its manifest must
+      // parse and must name this format. The cost is one small read per
+      // candidate, on a path that is about to delete things.
       if (entry.isDirectory()) {
-        if (!fs.existsSync(path.join(full, 'manifest.json'))) continue
+        if (!directoryHoldsCapturePack(full)) continue
         packs.push({ path: full, bytes: dirBytes(full), mtimeMs: fs.statSync(full).mtimeMs })
       } else if (entry.isFile() && /\.(zip|capturepack)$/i.test(entry.name)) {
+        if (!archiveHoldsCapturePack(full)) continue
         const stat = fs.statSync(full)
         packs.push({ path: full, bytes: stat.size, mtimeMs: stat.mtimeMs })
       }
@@ -96,6 +112,22 @@ function listStoredPacks(outputDir: string): StoredPack[] {
 }
 
 /** Recursive size, best effort — an unreadable child costs its own bytes only. */
+/**
+ * A pack ARCHIVE: the zip's central directory holds a `manifest.json` that
+ * parses and names this format. adm-zip reads the entry table without
+ * inflating the body, so this is one small read even for a large pack.
+ */
+function archiveHoldsCapturePack(zipPath: string): boolean {
+  try {
+    const entry = new AdmZip(zipPath).getEntry('manifest.json')
+    if (entry === null || entry.isDirectory) return false
+    return manifestNamesCapturePack(entry.getData().toString('utf8'))
+  } catch {
+    // Not a zip, truncated, or unreadable — not a pack, and not deleted.
+    return false
+  }
+}
+
 function dirBytes(dir: string): number {
   let total = 0
   let entries: fs.Dirent[]
