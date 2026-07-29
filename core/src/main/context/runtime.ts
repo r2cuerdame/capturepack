@@ -19,6 +19,7 @@
 
 import { randomUUID } from 'node:crypto'
 import type { ContextObservation } from './buffer'
+import { ControlLane, type TrackedControl } from './controlLane'
 import { frozenRingObservations } from './ringObservations'
 import type { ContextDisplayTarget } from './session'
 import type { SurfaceStack } from '../../shared/context/protocol'
@@ -41,6 +42,8 @@ interface Runtime {
   clock: SessionClock
   timeline: SurfaceTimeline
   lane: SurfaceLane
+  /** Lane A (#111) — the resident control tracker. Optional in behaviour, not in shape. */
+  controls: ControlLane
   providers: ProviderHost
   maintenance: ReturnType<typeof setInterval>
 }
@@ -100,10 +103,27 @@ export function startContextRuntime(options: ContextRuntimeOptions): void {
   const maintenance = setInterval(() => {
     void providers.tick()
     void providers.prune(clock.bufferStartMs())
+    // WHICH WINDOWS LANE A LOOKS INSIDE — lane S's answer, not lane A's.
+    // `visibleWindowHandlesNow` already excludes a window occluded to nothing,
+    // and a control that cannot be seen cannot be hovered, so walking it is
+    // pure cost. Sent on the maintenance tick rather than per sample: the set
+    // changes when windows open, close or come forward, not at 100 Hz.
+    const current = runtime
+    if (current !== null) {
+      const handles = visibleWindowHandlesNow()
+      current.controls.setVisible(handles, foregroundWindowHandleNow())
+    }
   }, TICK_INTERVAL_MS)
   // Never the reason the process stays alive at quit.
   maintenance.unref()
-  runtime = { clock, timeline, lane, providers, maintenance }
+  // LANE A (#111): the resident control tracker. Started AFTER lane S for the
+  // same reason lane S starts after the recorder — a machine where the cheap
+  // lane is already failing should not also pay for the expensive one — and it
+  // is entirely optional: every reader below treats its absence as "nobody
+  // looked inside the windows", which is what was true before it existed.
+  const controls = new ControlLane(() => clock.nowMs(), retentionMs)
+  runtime = { clock, timeline, lane, controls, providers, maintenance }
+  controls.start()
   lane.start()
   void providers.bufferStart()
   logInfo(
@@ -118,6 +138,16 @@ export function stopContextRuntime(): void {
   runtime = null
   clearInterval(current.maintenance)
   current.lane.stop()
+  current.controls.stop()
+  const controlStatus = current.controls.status()
+  if (controlStatus.trees > 0) {
+    logInfo(
+      `[context] lane A: ${controlStatus.trees} tree(s), ${controlStatus.moves} rectangle change(s), ` +
+        `${controlStatus.deaths} element(s) gone, ` +
+        `${controlStatus.dutyCycle === null ? 'duty unmeasured' : `${(controlStatus.dutyCycle * 100).toFixed(2)}% of a core`}` +
+        `${controlStatus.blockedWindows > 0 ? `, ${controlStatus.blockedWindows} window(s) blocked` : ''}`,
+    )
+  }
   const stats = current.timeline.stats()
   // The cost, on the record, once per run (GOAL "Capture must stay cheap" is a
   // promise this subsystem has to be able to be checked against).
@@ -130,6 +160,7 @@ export function stopContextRuntime(): void {
 /** Settings changed the replay length mid-session (GAP 2: no restart needed). */
 export function updateContextRetention(replayMs: number): void {
   runtime?.clock.setRetentionMs(Math.max(1_000, replayMs) + RETENTION_SLACK_MS)
+  runtime?.controls.setRetentionMs(Math.max(1_000, replayMs) + RETENTION_SLACK_MS)
 }
 
 /**
@@ -264,6 +295,17 @@ export function frozenObservations(
     targets,
     replayDurationMs,
     times,
+    // Pack time -> session time is the freeze's own mapping, and lane A files
+    // on the session clock, so the conversion happens HERE rather than inside
+    // a lane that has no idea a freeze exists.
+    (packTMs) => {
+      const at = new Map<string, readonly TrackedControl[]>()
+      if (freeze === undefined) return at
+      for (const entry of current.controls.controlsAt(freeze.startMs + packTMs)) {
+        at.set(entry.hwnd, entry.controls)
+      }
+      return at
+    },
   )
 }
 
@@ -349,6 +391,23 @@ export function contextNowMs(): number | null {
  * Returns an empty list when the lane has nothing yet, which the caller must
  * read as "no opinion" — never as "the desktop is empty".
  */
+/**
+ * The FOREGROUND window's handle right now, or null.
+ *
+ * Lane A visits this window every pass and rotates through the rest: it is the
+ * one the user is working in, so it is the one whose controls are most likely
+ * to have moved since they were last read.
+ */
+export function foregroundWindowHandleNow(): string | null {
+  const current = runtime
+  if (current === null) return null
+  const { surfaces } = current.timeline.surfacesAt(current.clock.nowMs())
+  for (const surface of surfaces) {
+    if (surface.foreground && surface.hwnd !== undefined) return surface.hwnd
+  }
+  return null
+}
+
 export function visibleWindowHandlesNow(): string[] {
   const current = runtime
   if (current === null) return []

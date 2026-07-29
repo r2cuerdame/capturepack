@@ -2128,12 +2128,60 @@ the asked time is dropped, not floated. The position is composed from two real
 observations and says so (`interpolated` on its accuracy, #83); the CONTENT is
 still the dump's.
 
-The other half of the directive — re-observing control content as it changes —
-is lane A as originally designed (temporal-protocol §1): UIA re-dumps of ONE
-window driven by lane S's dirty signal (that window moved/resized/appeared),
-budgeted per window instead of per desktop. That is the next build, not this
-one; anchoring is what makes control picking work across the whole replay
-today.
+### Lane A: the tracker holds the references (#111)
+
+The other half of that directive — a control that moves INSIDE its window, which
+anchoring cannot see — is now built, and the measurements decided its shape
+rather than the design sketch doing it.
+
+**The walk is the cost, not the property fetch.** A bare `FindAll(Subtree)`
+reading NOTHING is already 95.1 ms of Explorer's 98.7 ms one-property total.
+So `FindAllBuildCache`, the obvious optimisation, is a NET LOSS — measured
+4.4x worse on ChatGPT (147.2 → 652.8 ms), 4.5x on Explorer, 4.3x desktop-wide.
+It batches property round trips, and property round trips are the minority.
+It is not used.
+
+**What wins is holding the element references.** Re-reading `BoundingRectangle`
+off refs from a previous walk:
+
+| | walk | refresh held refs | |
+|---|---|---|---|
+| whole desktop, 2782 elements | 1580.6 ms | 227.2 ms | 7.0x |
+| Explorer, 234 elements | 482.8 ms | 17.6 ms | 27x |
+| this lane's own foreground window, 400 | 976.9 ms | 32.4 ms | **30.2x** |
+
+Per-element refresh is also UNIFORM at 55–105 µs across Qt, Chromium and
+Explorer, where the walk varies 20x by provider. The incremental path is
+predictable; the walk is not.
+
+A short-lived helper can hold nothing, so lane A is RESIDENT — and a SEPARATE
+process from lane S, because UI Automation blocks: Docker Desktop answers for
+ten elements in ~2050 ms, reproducibly, more than the rest of the desktop
+combined. Inside the context host that would freeze window sampling, which is
+the one lane the box actually follows. Separate processes mean lane A can hang
+and be killed while lane S keeps its 10 ms cadence.
+
+**Its budget is structural, not aspirational.** After every pass the loop sleeps
+(1/duty − 1) times what that pass cost, so the duty cycle is a property of the
+loop rather than a hope about the desktop. Target 3% — not 5%, because 5% is the
+whole context subsystem's budget and lane S now spends 1.11% of it. Measured
+driving four real windows (195 held elements) for 45 s: cumulative duty falls
+7.92% → 3.54% as the one-time walks amortise, and the MARGINAL rate settles at
+2.8–3.0%, reading 3.02% across the last interval.
+
+Three things the measurements said would bite, all handled and all pinned by
+`npm run check:controls`: held references ROT (4.4% of 3140 dead within 50 s
+with nothing driven at all) so a dead ref REMOVES its control rather than
+freezing it; a re-walk starts a new tree VERSION so a delta can never be applied
+to a tree it does not belong to; and a chatty `StructureChanged` (186 events in
+20 s at desktop root, idle) cannot drive re-walks — there is a 3 s floor between
+them, because a walk costs three orders of magnitude more than the refresh that
+serves the same window meanwhile.
+
+Anchoring stays as the FALLBACK: with lane A running, the nearest observation to
+a requested time already carries the right rectangles, so what anchoring has
+left to correct is the residual window movement since that observation rather
+than the whole replay's worth.
 
 ### Recording is a switch (privacy)
 

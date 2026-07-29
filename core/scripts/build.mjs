@@ -92,6 +92,11 @@ await Promise.all([
   // that self-test is how its CPU cost stays a measured number rather than a
   // claim.
   cp('scripts/context-host.ps1', 'dist/scripts/context-host.ps1'),
+  // Lane A's resident control tracker (#111). Same reasons as the two above:
+  // powershell.exe cannot read inside an asar, and keeping it a real file keeps
+  // `powershell -File dist/scripts/uia-track.ps1 -SelfTest 20` runnable by hand
+  // — which is how its cost numbers are checked.
+  cp('scripts/uia-track.ps1', 'dist/scripts/uia-track.ps1'),
   cp('assets', 'dist/assets', { recursive: true }),
 ])
 
