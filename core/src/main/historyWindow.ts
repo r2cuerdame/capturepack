@@ -97,9 +97,13 @@ export function registerHistoryIpc(live: Settings): void {
   // re-renders) is pushed to the window: after a re-edit save deletes the
   // stale replay_annotated.webm, the card must show "Rendering…" — not an
   // enabled [Retry Render] that would start a second concurrent render.
-  onRenderStateChange((dirPath, state) => {
+  onRenderStateChange((dirPath, state, ratio) => {
     if (historyWindow !== null && !historyWindow.isDestroyed()) {
-      const payload: HistoryRenderStatusPayload = { path: dirPath, state }
+      const payload: HistoryRenderStatusPayload = {
+        path: dirPath,
+        state,
+        ...(ratio === undefined ? {} : { ratio }),
+      }
       historyWindow.webContents.send(IPC.historyRenderStatus, payload)
     }
   })

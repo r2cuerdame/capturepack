@@ -1145,4 +1145,8 @@ export interface HistoryRenderStatusPayload {
   // 'rendering' marks a render start (save-time renders included) so the card
   // shows "Rendering…" instead of an enabled [Retry Render] while in flight
   state: 'rendering' | 'done' | 'failed'
+  // 0..1 while the render reports a real playhead. ABSENT means "no measurement
+  // yet" — queued behind another render, or a stage that cannot say — and the
+  // card draws an indeterminate bar rather than inventing a fraction.
+  ratio?: number
 }

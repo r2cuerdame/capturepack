@@ -78,7 +78,16 @@ const STILL_RENDER_TIMEOUT_MS = 30_000
 // [Retry Render], and isRenderInFlight lets it join a running render rather
 // than stack a second hidden render window for the same pack.
 export type RenderLifecycleState = 'rendering' | 'done' | 'failed'
-type RenderStateListener = (dirPath: string, state: RenderLifecycleState) => void
+// `ratio` rides along on the 'rendering' state so a subscriber can draw a
+// progress bar without a second channel to keep in sync with this one. It is
+// undefined while a render is queued or has no measurable playhead — an
+// indeterminate bar is the honest picture there, and a filled fraction nobody
+// measured is a lie the eye believes.
+type RenderStateListener = (
+  dirPath: string,
+  state: RenderLifecycleState,
+  ratio?: number,
+) => void
 const renderStateListeners = new Set<RenderStateListener>()
 // In-flight render count per resolved pack dir (a re-edit save can ask for a
 // render while an older one is still queued or running — they are SERIALIZED
@@ -129,10 +138,10 @@ export function isRenderInFlight(dirPath: string): boolean {
   return (inFlight.get(path.resolve(dirPath)) ?? 0) > 0
 }
 
-function emitRenderState(dirPath: string, state: RenderLifecycleState): void {
+function emitRenderState(dirPath: string, state: RenderLifecycleState, ratio?: number): void {
   for (const listener of [...renderStateListeners]) {
     try {
-      listener(dirPath, state)
+      listener(dirPath, state, ratio)
     } catch (err) {
       console.error('capturepack: render state listener failed:', errorMessage(err))
     }
@@ -159,7 +168,14 @@ export function startAnnotatedRender(
     emitRenderState(handle.dirPath, state)
     onDone(state)
   }
-  void renderAnnotatedReplay(handle, job, onProgress)
+  // Progress goes BOTH ways: to the caller that asked for it (the save toast)
+  // and to every lifecycle subscriber (the History window), so closing the
+  // toast mid-render does not lose the only view of how far it got.
+  const relay = (ratio: number): void => {
+    emitRenderState(handle.dirPath, 'rendering', ratio)
+    onProgress?.(ratio)
+  }
+  void renderAnnotatedReplay(handle, job, relay)
     .then(() => finish('done'))
     .catch((err) => {
       console.error('capturepack: annotated replay render failed:', errorMessage(err))

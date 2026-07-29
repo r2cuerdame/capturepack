@@ -196,7 +196,21 @@ const ready = await waitFor(
 
 let host2 = null
 if (ready) {
-  host2 = spawn(electron, ['.', '--native-host'], { stdio: ['pipe', 'pipe', 'ignore'] })
+  // LAUNCHED THE WAY CHROME LAUNCHES IT, not the way we would.
+  //
+  // The first host above uses --native-host, which is how the app and this
+  // script start one deliberately. Chrome cannot: a native messaging manifest
+  // names an executable and has nowhere to put a flag, so the browser starts
+  // the exe with arguments of its OWN — the calling extension's origin, plus a
+  // --parent-window handle on Windows. This check passed 8/8 for a release in
+  // which the browser path was completely dead, because both of its hosts were
+  // started with the flag. The second one now arrives the way the real one
+  // does, so a process that only recognises the flag fails here first.
+  host2 = spawn(
+    electron,
+    ['.', 'chrome-extension://hkkjpjijojljlboonbkfjcmmlljbgkik/', '--parent-window=0'],
+    { stdio: ['pipe', 'pipe', 'ignore'] },
+  )
   host2.stdin.write(frame({ type: 'host.hello', protocol: 1, timestamp: Date.now(), version: '0.1.0' }))
   await new Promise((r) => setTimeout(r, 1500))
   host2.stdin.write(

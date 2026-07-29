@@ -52,7 +52,27 @@ import { openWelcomeWindow, registerWelcomeIpc } from './welcomeWindow'
 const LOGIN_HIDDEN_ARG = '--openAsHidden'
 const LOGIN_ITEM_NAME = 'CapturePack'
 
-if (process.argv.includes('--native-host')) {
+/**
+ * True when THIS process was started by a browser as a native messaging host.
+ *
+ * TWO WAYS TO KNOW, AND THE SECOND IS THE ONE THAT MATTERS. `--native-host` is
+ * how the app and the bridge test start a host on purpose. Chrome cannot pass
+ * it: a native messaging manifest names an executable and nothing else, and
+ * Chrome supplies its OWN arguments — the calling extension's origin, and on
+ * Windows a --parent-window handle. So a host registered as CapturePack.exe was
+ * launched with no flag at all, fell through to the single-instance branch
+ * below, saw the running app's lock and exited within milliseconds. Every check
+ * in Settings passed except the two that need a live host, which is exactly
+ * what "설치했는데 연결됨이 안됨" looks like from the outside.
+ *
+ * The origin argument is the tell, and it is one only a browser sends.
+ */
+function startedAsNativeHost(): boolean {
+  if (process.argv.includes('--native-host')) return true
+  return process.argv.some((arg) => arg.startsWith('chrome-extension://'))
+}
+
+if (startedAsNativeHost()) {
   // Chrome started this process as a native messaging host (GOAL "Chrome
   // Extension"). It relays frames to the running app and exits when the
   // browser hangs up.
@@ -110,6 +130,18 @@ function main(): void {
   // A hidden window is occluded by definition, and an occluded window's
   // compositor can be told to stop producing frames — which is the capture.
   app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')
+
+  // WHOSE NOTIFICATION IS THIS. Windows does not take the sender's name from the
+  // toast — it takes it from the process's App User Model ID, and an Electron
+  // app that never sets one is attributed to "Electron", complete with Electron's
+  // icon. So the recording-started and recorder-failed toasts, whose entire job
+  // is to say that CAPTUREPACK is or is not recording, arrived signed by a
+  // program the user never installed. This is the same id electron-builder
+  // stamps on the Start Menu shortcut (electron-builder.yml appId), so the toast
+  // and the shortcut are one identity as far as Windows is concerned.
+  if (process.platform === 'win32') {
+    app.setAppUserModelId('io.github.r2cuerdame.capturepack')
+  }
 
   // BEFORE app.whenReady() (issue #60): Crashpad has to be installed before the
   // processes it is meant to catch exist, and a startup that throws must

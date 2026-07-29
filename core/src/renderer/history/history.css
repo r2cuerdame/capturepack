@@ -229,6 +229,42 @@ body {
   white-space: nowrap;
 }
 
+/* The render bar sits in the badge row, pushed to the far right of the card by
+   the auto margin so it reads as a status track rather than one more label. */
+.renderBar {
+  margin-left: auto;
+  position: relative;
+  flex: 0 1 140px;
+  min-width: 60px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--panel-hover);
+  overflow: hidden;
+}
+
+.renderBarFill {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: #7c5cff;
+  transition: width 140ms linear;
+}
+
+/* NO FRACTION UNTIL ONE IS MEASURED. A queued render, or one whose stage
+   cannot report a playhead, gets a sweep — a bar sitting at some invented
+   percentage is a claim, and the eye believes it. */
+.renderBar.indeterminate .renderBarFill {
+  width: 40%;
+  transition: none;
+  animation: renderSweep 1.1s ease-in-out infinite;
+}
+
+@keyframes renderSweep {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}
+
 .badge.ready {
   border-color: #245c37;
   background: #142a1c;

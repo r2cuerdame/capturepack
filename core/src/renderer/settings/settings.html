@@ -358,8 +358,14 @@
                    two strings they would need are short, so they are simply
                    shown — the button is the shortcut, not the only route. -->
               <div class="chromePaths">
-                <code id="chromeExtUrl">chrome://extensions</code>
-                <code id="chromeExtDir"></code>
+                <div class="chromePathRow">
+                  <code id="chromeExtUrl">chrome://extensions</code>
+                  <button class="copyBtn" type="button" data-copy="chromeExtUrl" data-i18n="settings.copy">Copy</button>
+                </div>
+                <div class="chromePathRow">
+                  <code id="chromeExtDir"></code>
+                  <button class="copyBtn" type="button" data-copy="chromeExtDir" data-i18n="settings.copy">Copy</button>
+                </div>
                 <span class="how" id="chromeOpenFailed" hidden data-i18n="settings.chromeOpenFailed">No Chromium browser could be started — paste the address above into your browser instead.</span>
               </div>
             </div>

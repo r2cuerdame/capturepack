@@ -802,6 +802,27 @@ chromeManualToggle.addEventListener('click', () => {
   chromeManual.hidden = !chromeManual.hidden
 })
 
+// One button per address. Selecting a path with the mouse and hitting Ctrl+C is
+// a thing that works right up until the selection misses a character, and the
+// consequence here is a "Load unpacked" dialog that silently opens the wrong
+// folder. The clipboard write is the renderer's own — these are two strings
+// this window already has, not something main has to be asked for.
+for (const btn of document.querySelectorAll<HTMLButtonElement>('.copyBtn')) {
+  btn.addEventListener('click', () => {
+    const sourceId = btn.dataset['copy']
+    if (sourceId === undefined) return
+    const text = document.getElementById(sourceId)?.textContent ?? ''
+    if (text === '') return
+    void navigator.clipboard.writeText(text).then(() => {
+      const was = btn.textContent
+      btn.textContent = t('settings.copied')
+      window.setTimeout(() => {
+        btn.textContent = was
+      }, 1200)
+    })
+  })
+}
+
 /**
  * Ask now, and ask HARDER than the poll does.
  *

@@ -82,18 +82,34 @@ export function extensionDir(): string {
  */
 function hostCommand(): { path: string; args: readonly string[] } {
   return app.isPackaged
-    ? { path: process.execPath, args: ['--native-host'] }
-    : { path: process.execPath, args: [app.getAppPath(), '--native-host'] }
+    ? // NO ARGUMENTS. Chromium's manifest has nowhere to put them, so anything
+      // listed here would have to travel through a launcher script — and the
+      // packaged build does not need one: index.ts recognises a browser launch
+      // by the `chrome-extension://` origin Chrome passes, which is a thing only
+      // a browser sends. The manifest can therefore name the executable itself,
+      // with no cmd.exe sitting between Chrome and the process whose stdin and
+      // stdout are the protocol.
+      { path: process.execPath, args: [] }
+    : // Development runs the electron binary, which knows nothing about this app
+      // until it is told where it lives — and THAT cannot be inferred, so this
+      // one does need the launcher below.
+      { path: process.execPath, args: [app.getAppPath(), '--native-host'] }
 }
 
 /**
  * Chromium's manifest has no place for extra arguments — it starts `path` and
- * nothing else. In development, where an argument IS needed, a one-line
- * launcher supplies it.
+ * nothing else. When an argument IS needed, a one-line launcher supplies it.
+ *
+ * The test was `args.length === 1` and it had the packaged case exactly
+ * backwards: one argument meant `['--native-host']`, the flag that made the
+ * process a host at all, and the launcher was skipped precisely when it was
+ * needed. Chrome then started the app normally, the single-instance lock ended
+ * it, and the extension's port closed on a host that had never spoken. Now: no
+ * arguments, no launcher.
  */
 function writeLauncherIfNeeded(): string {
   const cmd = hostCommand()
-  if (cmd.args.length === 1) return cmd.path
+  if (cmd.args.length === 0) return cmd.path
   const launcher = path.join(app.getPath('userData'), 'capturepack-host.cmd')
   const quoted = cmd.args.map((a) => `"${a}"`).join(' ')
   fs.writeFileSync(launcher, `@echo off\r\n"${cmd.path}" ${quoted} %*\r\n`, 'utf8')

@@ -88,6 +88,37 @@ let searchTextsLoading = false
 // In-flight renders (paths) — re-renders AND save-time renders; kept in sync
 // by history:render-status pushes ('rendering' adds, terminal states clear).
 const rendering = new Set<string>()
+// 0..1 for the packs whose render has reported a real playhead. A path in
+// `rendering` but NOT here is rendering without a measurement — queued, or a
+// stage that cannot say — and its bar runs indeterminate.
+const renderRatio = new Map<string, number>()
+
+/** The bar for one card, built at the fill its render last reported. */
+function renderProgressBar(packPath: string): HTMLElement {
+  const bar = elc('span', 'renderBar')
+  bar.dataset['progressFor'] = packPath
+  bar.append(elc('span', 'renderBarFill'))
+  applyProgress(bar, renderRatio.get(packPath))
+  return bar
+}
+
+function applyProgress(bar: HTMLElement, ratio: number | undefined): void {
+  const fill = bar.firstElementChild as HTMLElement | null
+  if (fill === null) return
+  const known = ratio !== undefined && Number.isFinite(ratio)
+  bar.classList.toggle('indeterminate', !known)
+  fill.style.width = known ? `${String(Math.round(Math.min(1, Math.max(0, ratio)) * 100))}%` : ''
+  bar.title = known ? `${String(Math.round(ratio * 100))}%` : ''
+}
+
+/** Moves an existing bar without rebuilding the card it sits in. */
+function paintRenderProgress(packPath: string): void {
+  const bar = document.querySelector<HTMLElement>(
+    `.renderBar[data-progress-for="${CSS.escape(packPath)}"]`,
+  )
+  if (bar === null) return
+  applyProgress(bar, renderRatio.get(packPath))
+}
 // Per-card transient error lines, keyed by path.
 const cardErrors = new Map<string, string>()
 
@@ -372,6 +403,11 @@ function buildCard(p: HistoryPackSummary): HTMLElement {
       ),
     )
   }
+  // The bar the toast has, on the card that outlives it. Closing the toast used
+  // to be the end of any view of a render that runs for minutes; History said
+  // "Rendering…" and nothing more, so there was no way to tell a job that was
+  // progressing from one that had wedged.
+  if (rendering.has(p.path)) badges.append(renderProgressBar(p.path))
   if (p.zipTwin) badges.append(elc('span', 'badge', t('history.badgeZip')))
   if (p.kind === 'zip') badges.append(elc('span', 'badge', t('history.badgeZipPack')))
   body.append(badges)
@@ -766,9 +802,21 @@ bridge.onRenderStatus((payload) => {
   // 'rendering' flips the card to "Rendering…" so an in-flight render can
   // never be doubled up via an enabled retry button.
   if (payload.state === 'rendering') {
+    // A PROGRESS TICK IS NOT A LIST CHANGE. These arrive several times a second
+    // per render, and rebuilding every card for each one would throw away
+    // scroll position, hover, and any open rename box. The bar is moved where
+    // it stands; only a card that was not already rendering needs a rebuild.
+    const known = rendering.has(payload.path)
     rendering.add(payload.path)
     cardErrors.delete(payload.path)
+    if (payload.ratio !== undefined) renderRatio.set(payload.path, payload.ratio)
+    else renderRatio.delete(payload.path)
+    if (known) {
+      paintRenderProgress(payload.path)
+      return
+    }
   } else {
+    renderRatio.delete(payload.path)
     rendering.delete(payload.path)
     if (payload.state === 'failed') {
       cardErrors.set(payload.path, t('history.renderFailedCard'))
