@@ -320,6 +320,47 @@ export function contextNowMs(): number | null {
   return runtime === null ? null : runtime.clock.nowMs()
 }
 
+/**
+ * The windows a user can actually SEE right now, top of the z-order first.
+ *
+ * WHY THIS EXISTS, in the reporter's words: "창이 14개라 하는데 실제로 보이는
+ * 창은 몇개 안돼". They were both right — UI Automation's top-level list really
+ * did hold fourteen windows, and only a handful of them were on screen. The
+ * rest were the ordinary furniture of a Windows desktop: suspended store apps,
+ * windows parked on another virtual desktop, background windows that keep a
+ * real rectangle while being drawn nowhere. UI Automation reports them as
+ * on-screen, and walking one costs the same as walking a window in front of the
+ * user — sometimes far more, because a suspended app answers slowly.
+ *
+ * That is where the control budget was going, and it is why most windows
+ * reached the editor with no controls to pick inside them.
+ *
+ * The surface lane already answers this question better than the helper can. It
+ * samples every window rectangle in z-order once per captured frame and
+ * subtracts what covers what, so it knows not just which windows exist but
+ * which are visible AND unoccluded. That is exactly the set worth spending a
+ * control walk on: a window nobody can see is a window nobody can click.
+ *
+ * Returns an empty list when the lane has nothing yet, which the caller must
+ * read as "no opinion" — never as "the desktop is empty".
+ */
+export function visibleWindowHandlesNow(): string[] {
+  const current = runtime
+  if (current === null) return []
+  const nowMs = current.clock.nowMs()
+  const { surfaces } = current.timeline.surfacesAt(nowMs)
+  const handles: string[] = []
+  for (const surface of surfaces) {
+    if (surface.hwnd === undefined) continue
+    // Occluded to nothing = behind another window at every pixel. It is on
+    // screen in the sense that it has a rectangle, and invisible in the sense
+    // that matters.
+    if (surface.visibleRegion !== undefined && surface.visibleRegion.length === 0) continue
+    if (!handles.includes(surface.hwnd)) handles.push(surface.hwnd)
+  }
+  return handles
+}
+
 /** The Provider Host, for the registration of built-in providers (step 4). */
 export function contextProviderHost(): ProviderHost | null {
   return runtime?.providers ?? null

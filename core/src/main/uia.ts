@@ -47,6 +47,7 @@ import * as path from 'node:path'
 import { app, screen } from 'electron'
 import type { Rectangle } from 'electron'
 import { logInfo } from './log'
+import { visibleWindowHandlesNow } from './context/runtime'
 import type {
   UiaBounds,
   UiaElementRecord,
@@ -316,6 +317,10 @@ export function startUiaDump(): Promise<UiaRawDump | null> {
           env: {
             ...process.env,
             CAPTUREPACK_UIA_DEADLINE: String(deadlineAtMs),
+            // WHICH WINDOWS ARE WORTH WALKING, from the one subsystem that
+            // already knows. Empty means "no opinion" — the helper then walks
+            // what it finds, exactly as it did before this existed.
+            CAPTUREPACK_UIA_VISIBLE_HWNDS: visibleWindowHandlesNow().join(','),
             CAPTUREPACK_UIA_BUDGET_MS: String(UIA_BUDGET_MS),
             CAPTUREPACK_UIA_MAX_DEPTH: String(UIA_MAX_DEPTH),
             CAPTUREPACK_UIA_MAX_ELEMENTS: String(UIA_MAX_ELEMENTS),

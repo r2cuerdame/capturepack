@@ -79,6 +79,26 @@ $MaxElements = Get-EnvInt 'CAPTUREPACK_UIA_MAX_ELEMENTS' 3000
 # thing that ever cuts, and every window past it is reported as "skipped".
 $MaxWindows = Get-EnvInt 'CAPTUREPACK_UIA_MAX_WINDOWS' 24
 $BudgetMs = Get-EnvInt 'CAPTUREPACK_UIA_BUDGET_MS' 1200
+# THE WINDOWS THE USER CAN ACTUALLY SEE, as a comma-separated list of HWNDs in
+# z-order, supplied by the surface lane (main/context/runtime.ts). UI Automation
+# happily reports a suspended store app, a window on another virtual desktop and
+# a fully covered background window as on-screen — the desktop that reported
+# "창 14개" had only a handful visible — and walking one of those costs as much
+# as walking the window in front of the user, sometimes much more.
+#
+# ADVISORY, NOT AUTHORITATIVE. An empty value means the caller had no opinion
+# (no runtime yet, first capture of a session) and everything is walked as
+# before. A window NOT in a non-empty list still appears in the window list —
+# this is a dump, and the window level can still name it — it is only passed
+# over for the expensive part.
+$visibleRaw = [string]$env:CAPTUREPACK_UIA_VISIBLE_HWNDS
+$VisibleHandles = @{}
+if (-not [string]::IsNullOrWhiteSpace($visibleRaw)) {
+  foreach ($h in $visibleRaw.Split(',')) {
+    $trimmed = $h.Trim()
+    if ($trimmed -ne '') { $VisibleHandles[$trimmed] = $true }
+  }
+}
 # Leftover budget buys a bigger dump (see the emit loop): a desktop of cheap
 # trees must not be cut off at a number chosen for the expensive case.
 $MaxElementsHard = $MaxElements * 2
@@ -296,7 +316,13 @@ foreach ($win in $topLevel) {
       Element = $win
       Z = $z
       Focused = $isFocused
-      Walkable = (-not ($desktopClasses -contains $className))
+      # Not the wallpaper, and — when the caller supplied a list — actually
+      # visible to the user. See $VisibleHandles at the top for why the second
+      # test buys more than raising the budget ever could.
+      Walkable = (
+        (-not ($desktopClasses -contains $className)) -and
+        ($VisibleHandles.Count -eq 0 -or $VisibleHandles.ContainsKey([string]$handle))
+      )
     })
   } catch { continue }
 }
