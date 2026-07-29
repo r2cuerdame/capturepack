@@ -984,6 +984,14 @@ export interface ChromeIntegrationStatus {
   browsers: readonly { id: string; label: string; registered: boolean }[]
   extensionDir: string
   extensionDirExists: boolean
+  /**
+   * A browser is still loading the extension from inside the INSTALL directory
+   * — the folder an update replaces (see install.ts `extensionDir`). It works
+   * right now and breaks at the next update, and nothing about the outside
+   * distinguishes the two states, so the panel has to say it.
+   */
+  legacyExtensionLoaded: boolean
+  legacyExtensionDir: string
   /** DOM events held for the current replay window. */
   events: number
   /** IDs the browser assigned to our extension folder, if it has loaded it. */

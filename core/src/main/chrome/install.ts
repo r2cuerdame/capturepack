@@ -46,6 +46,12 @@ export interface NativeHostInstallState {
   /** Where an unpacked extension can be loaded from, for developer mode. */
   extensionDir: string
   extensionDirExists: boolean
+  /**
+   * The OLD in-install-directory path — the home an update replaces. A
+   * registration still pointing here works now and breaks at the next update;
+   * `findOurExtensionIds()` flags those entries `legacy`.
+   */
+  legacyExtensionDir: string
 }
 
 /** The manifest lives in userData: per-user, writable without elevation. */
@@ -54,13 +60,13 @@ export function manifestPath(): string {
 }
 
 /**
- * The unpacked extension that ships with the app.
+ * The unpacked extension AS THIS BUILD SHIPS IT — the read-only source.
  *
  * Packaged, `extensions/` is copied next to the asar; in development it is two
- * levels up from `core/`. Both are checked rather than guessed at, because the
- * answer is shown to the user as a path they are about to paste into Chrome.
+ * levels up from `core/`. Both are checked rather than guessed at. This is NOT
+ * the folder the user loads into Chrome — see `extensionDir()` for why.
  */
-export function extensionDir(): string {
+export function bundledExtensionDir(): string {
   const candidates = app.isPackaged
     ? [path.join(process.resourcesPath, 'extensions', 'chrome')]
     : [
@@ -71,6 +77,98 @@ export function extensionDir(): string {
     if (fs.existsSync(dir)) return dir
   }
   return candidates[0] ?? ''
+}
+
+/**
+ * The folder Chrome is told to load, and it is NOT inside the app.
+ *
+ * THE INSTALLER USED TO PULL THE RUG OUT. An unpacked extension is loaded by
+ * PATH: Chrome keeps that absolute path, derives the extension's ID from it,
+ * and re-reads the files from it forever. The path handed out was
+ * `resources/extensions/chrome` INSIDE the install directory — and an NSIS
+ * install replaces that directory wholesale. Every reinstall therefore swapped
+ * out the very folder the browser had loaded, and the extension stopped
+ * dialling until the user went to chrome://extensions and pressed Reload.
+ * Reported after every single update: "재설치할때마다 캡쳐팩 다시 리로드 안하면
+ * 연결이 안돼".
+ *
+ * Measured while diagnosing it, and worth keeping because it ruled out the
+ * obvious suspect: the native host was healthy the whole time. Driven exactly
+ * as Chrome drives it, the launcher answered a length-prefixed hello with one
+ * valid 54-byte frame and stayed alive. The host never stopped working — the
+ * folder was moved out from under the browser.
+ *
+ * So the loaded copy lives in userData, beside the native host manifest and the
+ * launcher that are already there for the same reason: per-user, writable
+ * without elevation, and nothing in the installer knows it exists.
+ * `syncExtensionIfChanged()` keeps it current.
+ */
+export function extensionDir(): string {
+  return path.join(app.getPath('userData'), 'extension')
+}
+
+/**
+ * The version sitting in a folder, or null when there is none.
+ *
+ * Reads the manifest rather than remembering what was written: an unpacked
+ * extension folder is a real directory a user can edit, delete or restore from
+ * a backup, and a remembered version would disagree with it silently.
+ */
+function versionIn(dir: string): string | null {
+  try {
+    const raw = fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8')
+    const version = (JSON.parse(raw) as { version?: unknown }).version
+    return typeof version === 'string' && version !== '' ? version.slice(0, 32) : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Brings the stable copy up to this build's extension — AND ONLY WHEN IT MUST.
+ *
+ * The point of the stable location is that Chrome's loaded files stop changing
+ * under it, so rewriting them on every launch would reintroduce the same
+ * problem in a slower form: Chrome watches an unpacked extension and reloads
+ * its service worker when the files change, which drops the native port. An
+ * unchanged version therefore touches NOTHING — not a copy, not an mtime.
+ */
+export function syncExtensionIfChanged(): void {
+  const source = bundledExtensionDir()
+  const target = extensionDir()
+  if (source === '' || !fs.existsSync(source)) return
+  const bundled = versionIn(source)
+  const installed = versionIn(target)
+  if (bundled !== null && bundled === installed) return
+  try {
+    // Copied into place rather than swapped: a rename would delete the
+    // directory Chrome has open, which is the failure being fixed.
+    fs.mkdirSync(target, { recursive: true })
+    copyTree(source, target)
+    logInfo(
+      installed === null
+        ? `[chrome] extension ${bundled ?? '?'} installed to ${target}`
+        : `[chrome] extension ${installed} -> ${bundled ?? '?'} in ${target}`,
+    )
+  } catch (err) {
+    // Rule 1: the browser integration may never be why the app fails to start.
+    // A copy that did not happen leaves the previous copy working.
+    logError('[chrome] could not update the extension folder:', err)
+  }
+}
+
+/** Recursive copy that overwrites files in place and leaves extras alone. */
+function copyTree(from: string, to: string): void {
+  for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
+    const src = path.join(from, entry.name)
+    const dst = path.join(to, entry.name)
+    if (entry.isDirectory()) {
+      fs.mkdirSync(dst, { recursive: true })
+      copyTree(src, dst)
+    } else if (entry.isFile()) {
+      fs.copyFileSync(src, dst)
+    }
+  }
 }
 
 /**
@@ -86,7 +184,7 @@ export function extensionDir(): string {
  */
 export function bundledExtensionVersion(): string | null {
   try {
-    const raw = fs.readFileSync(path.join(extensionDir(), 'manifest.json'), 'utf8')
+    const raw = fs.readFileSync(path.join(bundledExtensionDir(), 'manifest.json'), 'utf8')
     const version = (JSON.parse(raw) as { version?: unknown }).version
     return typeof version === 'string' && version !== '' ? version.slice(0, 32) : null
   } catch {
@@ -297,6 +395,11 @@ export async function nativeHostState(): Promise<NativeHostInstallState> {
     browsers,
     extensionDir: dir,
     extensionDirExists: fs.existsSync(dir),
+    // The PATH only. Whether a browser is actually still loading from it is
+    // read off `findOurExtensionIds()`, which the caller already runs — that
+    // scan opens every browser profile's Secure Preferences, and doing it twice
+    // per status poll would cost megabytes of JSON for one boolean.
+    legacyExtensionDir: bundledExtensionDir(),
   }
 }
 
@@ -317,8 +420,21 @@ export async function nativeHostState(): Promise<NativeHostInstallState> {
  * READ ONLY, and never while claiming to be the browser: this opens a JSON file
  * the user already owns and looks for one path in it.
  */
-export function findOurExtensionIds(): readonly { id: string; browser: string; profile: string }[] {
+export function findOurExtensionIds(): readonly {
+  id: string
+  browser: string
+  profile: string
+  /** True when this registration points at the OLD in-install-directory copy. */
+  legacy?: boolean
+}[] {
+  // BOTH HOMES ARE OURS. The extension used to be loaded from inside the
+  // install directory, and a browser that loaded it there is still pointing
+  // there — matching only the new path would report "not loaded" on exactly
+  // the machines that have been using this the longest. So both are matched
+  // and the stale one is flagged, which is what lets Settings say "load the
+  // new folder once" instead of "we cannot find it".
   const target = path.normalize(extensionDir()).toLowerCase()
+  const legacyTarget = path.normalize(bundledExtensionDir()).toLowerCase()
   if (target === '') return []
   const local = process.env['LOCALAPPDATA']
   if (local === undefined) return []
@@ -352,10 +468,12 @@ export function findOurExtensionIds(): readonly { id: string; browser: string; p
         for (const [id, raw] of Object.entries(settings)) {
           const where = (raw as { path?: unknown }).path
           if (typeof where !== 'string') continue
-          if (path.normalize(where).toLowerCase() !== target) continue
+          const at = path.normalize(where).toLowerCase()
+          const isLegacy = legacyTarget !== '' && at === legacyTarget
+          if (at !== target && !isLegacy) continue
           if (!/^[a-p]{32}$/.test(id)) continue
           if (!found.some((f) => f.id === id)) {
-            found.push({ id, browser: root.label, profile })
+            found.push({ id, browser: root.label, profile, ...(isLegacy ? { legacy: true } : {}) })
           }
         }
       }

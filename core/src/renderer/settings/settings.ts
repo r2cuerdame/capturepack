@@ -746,12 +746,28 @@ function renderChromeStatus(status: ChromeIntegrationStatus): void {
       return li
     }),
   )
+  // LOADED FROM THE FOLDER AN UPDATE REPLACES. This is not a failure — it is
+  // working right now — but it is one update away from not working, and from
+  // the outside it looks identical to a healthy install. The row is the only
+  // place that difference exists. Listed last so it never displaces a check
+  // that is actually broken.
+  if (status.legacyExtensionLoaded) {
+    checks.push({
+      ok: false,
+      text: `${t('settings.chkExtensionLegacy')} — ${status.extensionDir}`,
+    })
+  }
   const passed = checks.filter((c) => c.ok).length
   chromeVerdict.textContent = `${String(passed)}/${String(checks.length)}`
   // A protocol the app cannot speak is worth saying out loud rather than
   // leaving as one red line among six (GOAL: "Version Mismatch").
   if (status.extensionConnected && !status.protocolCompatible) {
     chromeVerdict.textContent = t('settings.chromeMismatch')
+  } else if (status.legacyExtensionLoaded) {
+    // Ahead of the stale-version verdict: reloading from the new folder fixes
+    // both at once, and telling someone to update an extension they are about
+    // to replace anyway is a wasted instruction.
+    chromeVerdict.textContent = t('settings.chromeLegacy')
   } else if (stale) {
     // Same reasoning as the protocol verdict: the one line that says what to do
     // should not be one red row among seven.

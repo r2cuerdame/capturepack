@@ -272,6 +272,10 @@ async function openExtensionsPage(): Promise<string | null> {
 async function chromeStatus(): Promise<ChromeIntegrationStatus> {
   const bridge = domBridgeStatus()
   const host = await nativeHostState()
+  // ONE browser scan per poll: it opens every profile's Secure Preferences, so
+  // the "is a browser still on the old folder" answer is derived from the same
+  // result the panel already shows rather than re-read for a boolean.
+  const detected = findOurExtensionIds()
   return {
     listening: bridge.listening,
     hostSeen: bridge.hostSeen,
@@ -287,8 +291,10 @@ async function chromeStatus(): Promise<ChromeIntegrationStatus> {
     bundledExtensionVersion: bundledExtensionVersion(),
     extensionDir: host.extensionDir,
     extensionDirExists: host.extensionDirExists,
+    legacyExtensionLoaded: detected.some((d) => d.legacy === true),
+    legacyExtensionDir: host.legacyExtensionDir,
     events: bridge.events,
-    detected: findOurExtensionIds(),
+    detected,
   }
 }
 
