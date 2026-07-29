@@ -1970,6 +1970,51 @@ with the delay folded in it passes at 0 stalls and apparent speed 1.00. The
 next shaken pack is the field verdict: if its repeats are gone and the log
 shows a fat callback p90, the conviction stands.
 
+**The field verdict came back: acquitted.** rc.19's first shaken pack
+(`_155020`) logs `callback late 0 ms p50 / 0 ms p90` — the compositor delivers
+callbacks on time even under load — and the repeats sat at 27/101, unchanged
+through the fifth consecutive fix. The delay measurement stays (a leg measured
+at 0 is knowledge; a leg assumed 0 was this bug's whole biography), but the
+burst hypothesis is dead.
+
+### `Math.round` of a query is not the query (#110) — the actual cause
+
+What was different about production was never the clocks, the host, the load or
+the callbacks. It was that the bench read the ring back with the ring's own
+EXACT sample times, and production reads it through `frozenRingObservations` —
+which rounded the query to integer milliseconds because pack times are integer
+milliseconds.
+
+The ring's sample times are fractional (`frameMs + lag + age`, and
+`presentationTime` is never whole). `restoreAt` answers with the newest sample
+AT OR BEFORE the asked time — deliberately, so a frozen query can never see the
+editor's own window. Round a fractional sample time DOWN by even 0.2 ms and the
+query lands just before the sample it names; the at-or-before answer is then
+the PREVIOUS sample. A rectangle from a whole frame earlier, republished under
+this frame's label.
+
+The arithmetic convicts it: a repeat surfaces when a round-up is followed by a
+round-down — **P = 1/4 for uniform fractions — and the shaken packs measured
+25%, 27%, 31%.** The same miss also explains the physically impossible
+apparent speeds the very first analysis found (a whole frame's travel divided
+by a sub-millisecond label gap). One mechanism, both signatures, present in
+every build since the ring was first read back.
+
+The fix keeps both truths: the QUERY uses the exact fractional time, so the
+answer is the sample being named; only the LABEL is rounded, because SPEC pack
+times are integer ms and half a millisecond of label error is bounded and
+harmless. Two samples that would share a label publish once, not twice.
+
+`check:sync` was passing while all of this shipped, and the reason is a bench
+lesson worth the price: **it read the ring directly, bypassing the layer that
+contained the bug — and its clocks were all integers, so the rounding was the
+identity.** It now reads back through the real `frozenRingObservations` with
+fractional frame times like the real clock's. Against the rounded query it
+reports 17 stalls and 19,000 px/s — both measured production signatures,
+reproduced at last — and 0 stalls, speed 1.00, with the fix. A bench that
+bypasses a production layer certifies nothing about it, and a bench whose
+numbers are rounder than production's cannot see a rounding bug.
+
 `npm run check:sync` asserts it: zero samples sharing an instant, and apparent
 speed 1.00 against a truth of 1.0. Against the `Math.max` version it reports 20
 of 60 colliding. That red test only worked on the second attempt — the harness's

@@ -247,16 +247,41 @@ export function frozenRingObservations(
   const observations: ContextObservation[] = []
   const end = Math.max(0, Math.round(replayDurationMs))
   // THE RING'S OWN TIMES WHEN THEY ARE KNOWN (#87), a grid only as a fallback.
+  //
+  // KEPT EXACT, AND ONLY THE LABEL IS ROUNDED (#110). The ring's times are
+  // fractional — a sample's time is frameMs + measured lag + measured age —
+  // and `restoreAt` answers with the newest sample AT OR BEFORE the asked
+  // time, deliberately (the past desktop, never the live one). So a query
+  // rounded DOWN by even 0.2 ms lands just before the very sample it names,
+  // and the answer is the PREVIOUS sample: a rectangle from a whole frame
+  // earlier, republished under this frame's time.
+  //
+  // That is not a corner case, it is a coin flip per sample, and consecutive
+  // flips repeat a rectangle whenever a round-up is followed by a round-down:
+  // P = 1/4 for uniform fractions. Measured in the packs: 25%, 27%, 31% of
+  // moving samples repeated — while the OS (4 ms updates through a 52 s
+  // shake), the host (0 repeats in 644 driven samples), and the lane + ring
+  // read back with EXACT times (0 in 433) all measured clean, which is what
+  // finally cornered the fault here. This one line — `Math.round(t)` where
+  // `t` went on to be the QUERY — was the whole "움직일때 어긋나" bug.
   const times: number[] = []
   if (sampleTimesMs !== undefined && sampleTimesMs.length > 0) {
-    for (const t of sampleTimesMs) if (t >= 0 && t <= end) times.push(Math.round(t))
+    for (const t of sampleTimesMs) if (t >= 0 && t <= end) times.push(t)
   } else {
     for (let t = 0; t <= end; t += READ_INTERVAL_MS) times.push(t)
   }
+  let previousLabel = -1
   for (const t of times) {
     const stack = surfacesAt(t)
     if (stack === null || stack.surfaces.length === 0) continue
-    observations.push(observationOf(t, stack.surfaces, spaces))
+    // The label is an integer because pack times are integer ms (SPEC §8.7);
+    // half a millisecond of label error is bounded and harmless. Two samples
+    // under 1 ms apart would round to one label — the first keeps it, the
+    // other is skipped rather than published twice under one instant.
+    const label = Math.round(t)
+    if (label === previousLabel) continue
+    previousLabel = label
+    observations.push(observationOf(label, stack.surfaces, spaces))
   }
   // The capture instant itself, which the walk only lands on when a sample
   // happened to fall exactly there. It is the one moment the user is guaranteed

@@ -29,6 +29,8 @@
 // Run: npm run check:sync
 import { SurfaceLane, type SurfaceHost } from '../src/main/context/surfaceLane'
 import { SurfaceTimeline } from '../src/main/context/timeline'
+import { frozenRingObservations } from '../src/main/context/ringObservations'
+import type { HostMonitor } from '../src/main/context/surfaceLane'
 import type { HostReply } from '../src/main/context/host'
 
 /** Ground truth: one window sliding at exactly 1 px/ms, plus a static neighbour. */
@@ -153,7 +155,14 @@ async function run(skewMs: number): Promise<Result> {
     if (ms % D2_FRAME_MS === 0) {
       const k = ms / D2_FRAME_MS
       const delayMs = k % 2 === 1 && k >= 10 && k < 40 ? 55 : 0
-      scheduled.push({ fireAt: ms + delayMs, frameMs: ms, delayMs })
+      // FRACTIONAL, LIKE THE REAL CLOCK (#110). Production frame times are
+      // `presentationTime` — x.933, x.867, never whole — and the ring's sample
+      // times inherit the fraction. An all-integer bench rounds every query
+      // onto its own sample exactly and CANNOT produce the floor-miss that
+      // shipped: `Math.round` of a fractional sample time lands just before
+      // the sample half the time, and `restoreAt` answers at-or-before. The
+      // varying fraction below is what lets the red test catch it.
+      scheduled.push({ fireAt: ms + delayMs, frameMs: ms + ((k * 0.617) % 1), delayMs })
     }
     for (let i = scheduled.length - 1; i >= 0; i -= 1) {
       const tick = scheduled[i]!
@@ -175,37 +184,62 @@ async function run(skewMs: number): Promise<Result> {
   await new Promise((r) => setImmediate(r))
 
   const times = timeline.sampleTimesBetween(0, DURATION_MS)
+  // READ BACK THROUGH THE PRODUCTION PATH, NOT AROUND IT (#110).
+  //
+  // This used to call `timeline.surfacesAt(t)` with the ring's exact float
+  // sample times — and that read is one the shipped code never performs. The
+  // save path goes through `frozenRingObservations`, which labels pack times in
+  // integer ms; its original `Math.round(t)` on the QUERY landed half the
+  // queries a fraction of a millisecond BEFORE the sample they named, and
+  // `restoreAt` answers at-or-before, so the answer was the PREVIOUS frame's
+  // rectangle. 25-31% of moving samples repeated in every shaken pack while
+  // this check read the ring directly and reported it clean. A bench that
+  // bypasses a production layer certifies nothing about it.
+  const MONITORS: HostMonitor[] = [
+    { device: 'BENCH', primary: true, bounds: { x: 0, y: 0, width: 3840, height: 2160 } },
+  ]
+  const observations = frozenRingObservations(
+    (packTMs) => timeline.surfacesAt(packTMs, DURATION_MS),
+    MONITORS,
+    [{ index: 0, focused: true, width: 3840, height: 2160 }],
+    DURATION_MS,
+    times,
+  )
   const speeds: number[] = []
   let worstSpeed = 0
   let stalls = 0
   let previous: { tMs: number; x: number } | null = null
-  for (const tMs of times) {
-    const window = timeline.surfacesAt(tMs).surfaces.find((s) => s.hwnd === '1')
+  for (const observation of observations) {
+    const window = observation.windows.find((w) => w.hwnd === '1')
     if (window === undefined) continue
-    if (previous !== null && tMs > previous.tMs) {
-      const speed = Math.abs(window.bounds.x - previous.x) / (tMs - previous.tMs)
+    if (previous !== null && observation.tMs > previous.tMs) {
+      const speed = Math.abs(window.bounds.x - previous.x) / (observation.tMs - previous.tMs)
       speeds.push(speed)
       worstSpeed = Math.max(worstSpeed, speed)
       // Only pairs a frame apart can stall honestly-never: two reads filed a
       // few ms apart SHOULD show tiny displacement, and that is correct. A
       // stall is a near-frozen rectangle across a real frame interval.
-      if (tMs - previous.tMs > 30 && speed < 0.3) stalls += 1
+      if (observation.tMs - previous.tMs > 30 && speed < 0.3) stalls += 1
     }
-    previous = { tMs, x: window.bounds.x }
+    previous = { tMs: observation.tMs, x: window.bounds.x }
   }
   speeds.sort((a, b) => a - b)
+  // Collisions counted on the PUBLISHED times — the integer labels the pack
+  // will carry — not on the ring's internal floats.
   const perTime = new Map<number, number>()
-  for (const tMs of times) perTime.set(tMs, (perTime.get(tMs) ?? 0) + 1)
+  for (const observation of observations) {
+    perTime.set(observation.tMs, (perTime.get(observation.tMs) ?? 0) + 1)
+  }
   let collided = 0
   for (const n of perTime.values()) if (n > 1) collided += n
   return {
-    coverage: times.length / (Math.floor(DURATION_MS / D2_FRAME_MS) + 1),
+    coverage: observations.length / (Math.floor(DURATION_MS / D2_FRAME_MS) + 1),
     collided,
     stalls,
     worstSpeed,
     medianSpeed: speeds[speeds.length >> 1] ?? null,
     reportedLagMs: lane.status().tickLagMs,
-    samples: times.length,
+    samples: observations.length,
   }
 }
 
