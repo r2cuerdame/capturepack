@@ -611,6 +611,19 @@ async function runFlow(settings: Settings): Promise<void> {
   })
 
   const { win: editor, mode: windowMode } = createEditorWindow(display.bounds, settings)
+  // THE EDITOR'S OWN DIAGNOSTICS BELONG IN THE LOG (#113).
+  //
+  // The editor is the only place that sees both a track and the frames actually
+  // being shown, so it is the only place that can say whether they line up. It
+  // has been saying so to a console nobody reads, which is why every one of
+  // these questions has needed a pack sent back and forth and ffprobe run over
+  // it. Only its own lines are taken: a renderer's console is otherwise full of
+  // Chromium's business.
+  editor.webContents.on('console-message', (_event, level, message) => {
+    if (!message.startsWith('capturepack:')) return
+    if (level >= 2) logWarn(`[editor] ${message}`)
+    else logInfo(`[editor] ${message}`)
+  })
   editor.once('ready-to-show', () => {
     void (async () => {
       // The dump was started at the trigger and can never outlive its budget,

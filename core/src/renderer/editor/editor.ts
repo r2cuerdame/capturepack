@@ -2655,6 +2655,39 @@ const trackedSurfaces = new Map<string, string>()
  */
 const pickedAtMs = new Map<string, number>()
 
+/**
+ * The replay times the editor has actually SHOWN, most recent last (#113).
+ *
+ * Kept so the app can answer, for itself, the question every one of these
+ * captures has been sent back and forth to settle: does a track's sample sit on
+ * a frame, or between two? A sample was produced BY a frame, so the distance to
+ * the nearest frame the editor has presented should be zero. Anything else is
+ * the residual, in milliseconds, and it belongs in the log rather than in a
+ * measurement someone has to run ffprobe for.
+ */
+const presentedTimes: number[] = []
+
+/** Reports where a freshly fetched track sits relative to the frames on screen. */
+function reportTrackAlignment(samples: readonly { t_ms: number }[]): void {
+  if (presentedTimes.length < 8 || samples.length === 0) return
+  const gaps: number[] = []
+  for (const s of samples) {
+    let best = Number.POSITIVE_INFINITY
+    for (const t of presentedTimes) {
+      const d = s.t_ms - t
+      if (Math.abs(d) < Math.abs(best)) best = d
+    }
+    if (Number.isFinite(best)) gaps.push(best)
+  }
+  if (gaps.length === 0) return
+  gaps.sort((a, b) => a - b)
+  const median = Math.round(gaps[gaps.length >> 1] ?? 0)
+  console.info(
+    `capturepack: track alignment — ${gaps.length} samples sit a median of ${median} ms ` +
+      `from the nearest frame this editor has shown (0 is exact)`,
+  )
+}
+
 /** Re-asks for the path over the box's CURRENT lifetime (see `trackedSurfaces`). */
 function refreshTrack(a: Annotation): void {
   const surfaceId = trackedSurfaces.get(a.annotation_id)
@@ -2717,6 +2750,7 @@ function attachTrack(draft: Annotation, surfaceId: string): void {
       // object actually was. Nothing is estimated: this is the nearest OBSERVED
       // sample (#89), the same one the editor draws.
       reanchorBounds(live)
+      reportTrackAlignment(live.tracking.samples ?? [])
       schedulePaint()
     })
     .catch((err: unknown) => {
@@ -3888,7 +3922,16 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
       // timer above, so the frame that arrives afterwards must re-ask — the
       // request is time-keyed and de-duplicated, so when the timer was already
       // right this costs nothing.
-      onFrame: () => scheduleContextFrame(),
+      onFrame: () => {
+        // Every frame the editor actually shows, remembered so a track can be
+        // checked against the pictures it was built from (#113).
+        const shown = Math.round(controller.presentedMs)
+        if (Number.isFinite(shown)) {
+          presentedTimes.push(shown)
+          if (presentedTimes.length > 400) presentedTimes.shift()
+        }
+        scheduleContextFrame()
+      },
     })
     scrub = controller
     timebar.show()
