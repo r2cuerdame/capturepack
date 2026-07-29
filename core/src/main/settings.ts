@@ -380,14 +380,21 @@ function mergeSettings(base: Settings, raw: Record<string, unknown>): Settings {
         ? raw.notifyOnRecordingStart
         : base.notifyOnRecordingStart,
     outputDir: typeof raw.outputDir === 'string' && raw.outputDir.length > 0 ? raw.outputDir : base.outputDir,
-    // v2 -> v3: the boolean became a mode. `true` meant "copy the folder", so
-    // that is what a machine upgrading keeps — a setting must never change
-    // meaning under a user who never touched it.
+    // v2 -> v3: the boolean became a mode.
+    //
+    // `true` LITERALLY meant "copy the folder", and the first cut of this
+    // migration preserved that. It was the wrong reading: a folder on the
+    // clipboard pastes as nothing at all into a chat box, which is where a
+    // saved pack actually goes — reported as "저장후 클립보드 동작하지 않아"
+    // by someone whose clipboard was in fact being written to. What the switch
+    // MEANT was "put the pack somewhere I can hand it over", and the prompt is
+    // that intent with the path already in the sentence. `false` still means
+    // off, which was never ambiguous.
     clipboardAfterSave: CLIPBOARD_MODES.includes(raw.clipboardAfterSave as ClipboardAfterSave)
       ? (raw.clipboardAfterSave as ClipboardAfterSave)
       : typeof raw.copyToClipboard === 'boolean'
         ? raw.copyToClipboard
-          ? 'folder'
+          ? 'prompt'
           : 'off'
         : base.clipboardAfterSave,
     welcomeShown: typeof raw.welcomeShown === 'boolean' ? raw.welcomeShown : base.welcomeShown,
