@@ -678,6 +678,9 @@ function Get-NextLine([int]$waitMs) {
 # could want and keeps the burst duty bounded while paying nothing at rest.
 $moveCoalesceMs = 8
 $lastMoveSampleMs = -1e9
+# When the desk was last RESTATED in full — the ceiling the move branch may
+# not push the scheduled sample past.
+$lastFullSampleMs = -1e9
 
 $sampling = $false
 $intervalMs = 100
@@ -695,6 +698,7 @@ while ($running) {
   if ($sampling -and $nowMs -ge $nextSampleMs) {
     try {
       Write-Line ([CapturePack.SurfaceLane]::Sample((Get-HostMs)))
+      $lastFullSampleMs = $clock.Elapsed.TotalMilliseconds
     } catch {
       # Rule 1: a failed sample is a gap in the ring, never the end of the host.
       Write-Line ('{"event":"error","t":' + (Get-HostMs) + ',"where":"sample","message":' +
@@ -728,9 +732,26 @@ while ($running) {
           (ConvertTo-Json ([string]$_.Exception.Message) -Compress) + '}')
       }
       $lastMoveSampleMs = $clock.Elapsed.TotalMilliseconds
-      # A move-driven sample IS a sample: push the scheduled one out a full
-      # step so the two cadences do not double-observe the same instant.
-      $nextSampleMs = $clock.Elapsed.TotalMilliseconds + $intervalMs
+      # A move-driven sample IS a sample, so the scheduled one is pushed out to
+      # avoid double-observing the same instant — but NEVER past its own period.
+      #
+      # This used to be an absolute reset, and move events arrive every ~4 ms
+      # while the period is 200 ms, so every delta pushed the grid further than
+      # the loop could ever reach: the scheduled FULL never ran again until the
+      # motion stopped. Measured twice against the real host with a probe moving
+      # its OWN window — 363 consecutive deltas and a 6.3 SECOND gap with no
+      # FULL at all, against a 200 ms cadence on a quiet desk.
+      #
+      # That silently voided the delta protocol's whole safety story. The FULL
+      # is the only thing that restates title, class and exe (they are read
+      # after the signature early-out, so a geometrically stable window never
+      # re-sends them) and the only repair for a line lost in transit. The
+      # comments claiming "the two pictures can never drift further apart than
+      # one scheduled interval" were false for exactly as long as anything on
+      # the desk was moving — which is the entire time this lane matters.
+      $nextSampleMs = [Math]::Min(
+        $clock.Elapsed.TotalMilliseconds + $intervalMs,
+        $lastFullSampleMs + $intervalMs)
     }
   }
   if ($clock.Elapsed.TotalMilliseconds -ge $nextStatusMs) {
