@@ -386,6 +386,17 @@ export interface CaptureTickPayload {
    * corrected rather than corrected by a guess.
    */
   frameAgeMs?: number
+  /**
+   * How late the frame callback itself ran, in ms: the callback's own
+   * timestamp minus `presentationTime` (#110).
+   *
+   * Under encoder load the compositor delivers frame callbacks in bursts, so a
+   * tick can be sent tens of ms after the frame it names. The desk is read at
+   * SEND time, and without this number that read is filed against the frame's
+   * time — a one-frame-stale rectangle whenever callbacks bunch, which is 25 to
+   * 40% of samples during a fast drag. Measured per frame; never assumed.
+   */
+  tickDelayMs?: number
 }
 
 export interface CaptureReplayResultPayload {

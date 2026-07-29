@@ -125,6 +125,14 @@ export interface SurfaceLaneStatus {
   converted: number
   /** Median ms between asking for a ticked sample and the host taking it (#108). */
   tickLagMs: number | null
+  /**
+   * How late frame callbacks run after the frame they name (#110), median and
+   * p90 ms. The p90 is the load-bearing one: callback BURSTS are the failure
+   * mode, and a median hides a burst the same way it hid every fault in this
+   * bug's history.
+   */
+  tickDelayMs: number | null
+  tickDelayP90Ms: number | null
   /** Median ms a frame was ALREADY old when its tick was sent (#109). */
   frameAgeMs: number | null
   /** `hostClock - coreClock`, null until the first ping answered. */
@@ -253,7 +261,10 @@ export class SurfaceLane {
    * The reply echoes the frame time the tick was sent with (`ft`), so the pair
    * is recoverable exactly. Keyed on it, nothing is correlated by luck.
    */
-  private readonly pendingTicks = new Map<number, { coreMs: number; ageMs: number }>()
+  private readonly pendingTicks = new Map<
+    number,
+    { coreMs: number; ageMs: number; delayMs: number }
+  >()
   /**
    * ONE RING, ONE CLOCK (#110) — the display whose frame clock this ring is on.
    *
@@ -277,6 +288,7 @@ export class SurfaceLane {
   private lastAppendedMs = -Infinity
   private readonly frameAgeMs: number[] = []
   private readonly tickLagMs: number[] = []
+  private readonly tickDelayMs: number[] = []
   private fallbackIndex = -1
   private dutyStrikes = 0
   private warnedWorkingSet = false
@@ -384,6 +396,11 @@ export class SurfaceLane {
       clockStamped: this.clockStamped,
       converted: this.converted,
       tickLagMs: medianOf(this.tickLagMs),
+      tickDelayMs: medianOf(this.tickDelayMs),
+      // The p90, not just the median: bursts are the failure mode, and a burst
+      // is invisible in a median — most callbacks are on time even on a loaded
+      // machine. This is the number that convicts or acquits the compositor.
+      tickDelayP90Ms: p90Of(this.tickDelayMs),
       frameAgeMs: medianOf(this.frameAgeMs),
       clockOffsetMs: this.offset.offsetMs(),
       clockErrorMs: this.offset.errorBoundMs(),
@@ -483,7 +500,7 @@ export class SurfaceLane {
    * loop will take anyway a few tens of milliseconds later; it must never make
    * the recorder wait.
    */
-  tickAt(displayId: string, frameMs: number, frameAgeMs?: number): void {
+  tickAt(displayId: string, frameMs: number, frameAgeMs?: number, tickDelayMs?: number): void {
     if (!this.running) return
     // ONE RING, ONE CLOCK (#110) — see `clockSourceDisplayId`.
     if (this.clockSourceDisplayId === null) {
@@ -519,9 +536,18 @@ export class SurfaceLane {
     // overwrite (#110). `ageMs` is how far behind the picture this tick already
     // is before it goes anywhere (#109): the pixels were taken off the screen
     // before the renderer heard about them.
+    // `delayMs` is how long AFTER the frame this callback got to run (#110):
+    // the renderer measures it as callback-timestamp minus presentationTime.
+    // Under load the compositor delivers callbacks in bursts, so this swings
+    // from ~0 to most of a frame — and it is exactly the distance between the
+    // frame's time and the instant the host is about to be asked.
     this.pendingTicks.set(frameMs, {
       coreMs: this.clock.nowMs(),
       ageMs: typeof frameAgeMs === 'number' && Number.isFinite(frameAgeMs) ? frameAgeMs : 0,
+      delayMs:
+        typeof tickDelayMs === 'number' && Number.isFinite(tickDelayMs) && tickDelayMs > 0
+          ? tickDelayMs
+          : 0,
     })
     while (this.pendingTicks.size > MAX_PENDING_TICKS) {
       const oldest = this.pendingTicks.keys().next().value
@@ -603,13 +629,33 @@ export class SurfaceLane {
       // difference.
       const lag = takenAt === null || asked === undefined ? 0 : takenAt - asked.coreMs
       const ageMs = asked?.ageMs ?? 0
+      // HOW LATE THE CALLBACK RAN (#110) — the leg every other measurement
+      // missed, and the one that was carrying the whole error.
+      //
+      // `lag` is tick-send to host-read: +1 ms, measured, innocent. `ageMs` is
+      // screen to frame: 1 ms, measured, innocent. This is frame to CALLBACK —
+      // and under encoder load the compositor delivers frame callbacks in
+      // bursts, so a tick fires tens of ms after the frame it names, reads a
+      // desk that has moved on, and files the answer under the frame's time.
+      // Two ticks in one burst read the desk ~3 ms apart and file IDENTICAL
+      // rectangles 67 ms apart: the "repeats while moving" that survived three
+      // fixes (25–40% of moving samples in every shaken pack) after the OS
+      // (4 ms updates, probed during a real 52 s shake), the host (0 repeats
+      // in 644 driven samples), and the lane+ring (0 in 433) were each proven
+      // clean. The only unmeasured sender left was this delay.
+      const delayMs = asked?.delayMs ?? 0
       if (takenAt !== null && asked !== undefined) {
         // The two clocks, read at ONE instant — this tick's, not the newest
         // one's. Refreshed every tick, so the mapping stays current without
-        // ever pairing readings that were taken apart.
-        this.frameClockOffsetMs = asked.coreMs - frameMs
+        // ever pairing readings that were taken apart. The tick was SENT at
+        // frameMs + delayMs on the frame clock, so the delay belongs in the
+        // mapping too — without it every held sample converts a burst's width
+        // too early.
+        this.frameClockOffsetMs = asked.coreMs - (frameMs + delayMs)
         this.tickLagMs.push(lag)
         if (this.tickLagMs.length > 200) this.tickLagMs.shift()
+        this.tickDelayMs.push(delayMs)
+        if (this.tickDelayMs.length > 200) this.tickDelayMs.shift()
       }
       if (this.frameClockOffsetMs !== null) this.settleHeldSamples()
       this.frameAgeMs.push(ageMs)
@@ -684,7 +730,12 @@ export class SurfaceLane {
       // sample time; its per-tick jitter is not a measurement of anything, it is
       // scheduling noise, and it was the only thing making the grid non-monotone.
       // So the median of the recent lags goes in and the jitter stays out.
-      const observedAtMs = frameMs + lag + ageMs
+      // The full chain, every leg measured: the frame exists at `frameMs`; the
+      // callback ran `delayMs` later; the host read the desk `lag` after that;
+      // and the picture itself is `ageMs` older than its label. The observation
+      // happened at frameMs + delayMs + lag on the frame clock, and the age
+      // shifts it onto the clock the reader's eyes are on.
+      const observedAtMs = frameMs + delayMs + lag + ageMs
       // AN OBSERVATION THAT CANNOT BE FILED TRUTHFULLY IS NOT FILED.
       //
       // Two wrong answers were tried here first, and both are worth naming.
@@ -864,6 +915,12 @@ function medianOf(values: readonly number[]): number | null {
   if (values.length === 0) return null
   const sorted = [...values].sort((a, b) => a - b)
   return Math.round(sorted[sorted.length >> 1] ?? 0)
+}
+
+function p90Of(values: readonly number[]): number | null {
+  if (values.length === 0) return null
+  const sorted = [...values].sort((a, b) => a - b)
+  return Math.round(sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.9))] ?? 0)
 }
 
 function parseWindow(raw: unknown): SurfaceSampleWindow | null {

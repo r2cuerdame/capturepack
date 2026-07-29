@@ -66,6 +66,18 @@ interface Result {
    * fix, every collision holding two DIFFERENT rectangles. This must be zero.
    */
   collided: number
+  /**
+   * Consecutive-sample pairs whose apparent speed is under 0.3 while the truth
+   * is 1.0 — the box FREEZING for a frame while the window moves.
+   *
+   * This is what callback bursts produce (#110): frame N's callback fires tens
+   * of ms late, frame N+1's fires right after, both ticks read the desk at
+   * nearly the same instant, and the two nearly-identical rectangles are filed
+   * a full frame apart. Measured at 25–40% of moving samples in every shaken
+   * pack while the OS, the host, the lane and the ring each measured clean.
+   * Must be zero.
+   */
+  stalls: number
   worstSpeed: number
   medianSpeed: number | null
   reportedLagMs: number | null
@@ -105,7 +117,11 @@ async function run(skewMs: number): Promise<Result> {
         // modulus, so its step is one of two constants and — checked the hard
         // way, by watching the red test pass — it never fell far enough to
         // reorder anything. A jitter that cannot invert proves nothing.
-        const readDelay = HOST_READ_DELAY_MS + ((Math.imul(ft, 2_654_435_761) >>> 0) % 200)
+        // Spread just under one frame: wide enough that late reads cross the
+        // next frame's early ones (the inversion the drop guard exists for),
+        // narrow enough not to torture the ring into dropping a fifth of its
+        // samples — the real host's read delay is ~2 ms with rare spikes.
+        const readDelay = HOST_READ_DELAY_MS + ((Math.imul(ft, 2_654_435_761) >>> 0) % 60)
         inflight.push({ ft, takenCoreMs: coreNow + readDelay, deliverAt: coreNow + jitter })
         return Promise.resolve({ id: 1, ok: true } as HostReply)
       }
@@ -125,9 +141,26 @@ async function run(skewMs: number): Promise<Result> {
   await new Promise((r) => setImmediate(r))
   await new Promise((r) => setImmediate(r))
 
+  // CALLBACK BURSTS (#110). The recorder's frame callbacks do not fire on the
+  // frame grid — under encoder load the compositor delivers them late and in
+  // bunches. Modelled here as every other frame's callback running 55 ms late
+  // through the middle of the run: frame k's tick then fires ~12 ms before
+  // frame k+1's, the two reads see the desk ~12 ms apart, and without the
+  // delay in the filing arithmetic the ring records a stall every other frame.
+  const scheduled: { fireAt: number; frameMs: number; delayMs: number }[] = []
   for (let ms = 0; ms <= DURATION_MS; ms += 1) {
     coreNow = ms
-    if (ms % D2_FRAME_MS === 0) lane.tickAt('display-2', ms)
+    if (ms % D2_FRAME_MS === 0) {
+      const k = ms / D2_FRAME_MS
+      const delayMs = k % 2 === 1 && k >= 10 && k < 40 ? 55 : 0
+      scheduled.push({ fireAt: ms + delayMs, frameMs: ms, delayMs })
+    }
+    for (let i = scheduled.length - 1; i >= 0; i -= 1) {
+      const tick = scheduled[i]!
+      if (tick.fireAt !== ms) continue
+      scheduled.splice(i, 1)
+      lane.tickAt('display-2', tick.frameMs, undefined, tick.delayMs)
+    }
     if (ms % D1_FRAME_MS === 0) lane.tickAt('display-1', ms + skewMs)
     // Deliver whatever is due, NEWEST FIRST — replies are not ordered.
     const due = inflight
@@ -144,6 +177,7 @@ async function run(skewMs: number): Promise<Result> {
   const times = timeline.sampleTimesBetween(0, DURATION_MS)
   const speeds: number[] = []
   let worstSpeed = 0
+  let stalls = 0
   let previous: { tMs: number; x: number } | null = null
   for (const tMs of times) {
     const window = timeline.surfacesAt(tMs).surfaces.find((s) => s.hwnd === '1')
@@ -152,6 +186,10 @@ async function run(skewMs: number): Promise<Result> {
       const speed = Math.abs(window.bounds.x - previous.x) / (tMs - previous.tMs)
       speeds.push(speed)
       worstSpeed = Math.max(worstSpeed, speed)
+      // Only pairs a frame apart can stall honestly-never: two reads filed a
+      // few ms apart SHOULD show tiny displacement, and that is correct. A
+      // stall is a near-frozen rectangle across a real frame interval.
+      if (tMs - previous.tMs > 30 && speed < 0.3) stalls += 1
     }
     previous = { tMs, x: window.bounds.x }
   }
@@ -163,6 +201,7 @@ async function run(skewMs: number): Promise<Result> {
   return {
     coverage: times.length / (Math.floor(DURATION_MS / D2_FRAME_MS) + 1),
     collided,
+    stalls,
     worstSpeed,
     medianSpeed: speeds[speeds.length >> 1] ?? null,
     reportedLagMs: lane.status().tickLagMs,
@@ -178,12 +217,17 @@ function report(title: string, r: Result): boolean {
     r.coverage <= 1.2 &&
     r.medianSpeed !== null &&
     r.worstSpeed <= 3 &&
-    r.collided === 0
+    r.collided === 0 &&
+    r.stalls === 0
   console.log(title)
   console.log(`  ring samples ${r.samples} (${(r.coverage * 100).toFixed(0)}% of the ticks sent)`)
   console.log(
     `  samples sharing an instant with another: ${r.collided}` +
       (r.collided === 0 ? '' : ' — one of each pair is unreachable'),
+  )
+  console.log(
+    `  frame-length stalls while the window moves: ${r.stalls}` +
+      (r.stalls === 0 ? '' : ' — the box freezes while the window travels'),
   )
   console.log(`  reported tick lag ${r.reportedLagMs} ms (the host answered ${HOST_READ_DELAY_MS} ms after being asked)`)
   console.log(

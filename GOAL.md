@@ -1918,6 +1918,58 @@ inside a capture and a median across it compares nothing in particular. The test
 that would settle it is the one that already works: template-match the window in
 the replay frames on both sides of a repeat and see whether the picture moved.
 
+### The elimination, and the leg nobody measured (#110)
+
+The question above was settled by measurement, then the sender was found by
+eliminating every innocent layer in order. All on 2026-07-29, pack `_151348`
+plus three live probes with a human shaking a real window:
+
+1. **The picture kept moving through every repeat.** Whole-frame mean-abs-diff
+   between the two frames of each repeated rectangle: median 12.4 — the same as
+   normal moving pairs (10.8) and nothing like true stillness (0.0–0.75, the
+   capture's tail measures it in the same run). The record is wrong, not the
+   window.
+2. **The OS publishes fresh positions.** A 1 kHz probe gated on
+   `GUI_INMOVESIZE` (so ordinary mousing cannot false-trigger — the first two
+   probe designs false-triggered and measured nothing), during a real 52 s
+   shake: `GetWindowRect` changed 12,161 times, every 4 ms at the median, only
+   2 gaps over one frame. DWM extended bounds: identical cadence.
+3. **The host is clean.** The real `context-host.ps1` driven exactly like
+   production — `surface.tick` every 67 ms — while the same File Explorer
+   window was shaken 292,274 px: **0 repeats in 644 moving samples**.
+4. **The lane and the ring are clean.** The real `SurfaceLane` + real
+   `SurfaceTimeline` + real host, three taps recording every rectangle (as the
+   host event delivers it, as `append` receives it, as the ring reads back):
+   **0 / 0 / 0 repeats in 433 moving samples**.
+
+Every layer that MAKES rectangles measured innocent, so the fault had to be in
+what ASSIGNS THEM TIMES — and the only unmeasured quantity left in the whole
+chain was when the `requestVideoFrameCallback` callback actually runs. Under
+encoder load the compositor delivers those callbacks in bursts: frame N's fires
+tens of ms late, frame N+1's fires a few ms after it, both ticks read a desk
+4 ms fresh at nearly the same instant, and the two nearly-identical rectangles
+are filed under frame times 67 ms apart. A box frozen for a frame while the
+window travels ~400 px — the exact measured defect, manufactured by tick
+timing, invisible to `lag` (which starts at tick-SEND) and to `frameAgeMs`
+(which ends at frame submission).
+
+The missing leg was always measurable: the callback's own timestamp minus
+`metadata.presentationTime`, same clock, per frame. It is now the fourth
+measured term in the sample's time —
+
+    observedAt = frameMs + callbackDelay + hostLag + pixelAge
+
+and the lane logs it as `callback late N ms p50 / M ms p90` — the p90, because
+bursts are the failure mode and a median of a bursty series reads healthy, which
+is how every earlier number in this bug's history managed to look innocent.
+
+`check:sync` now models bursty callbacks (every other frame 55 ms late through
+the middle of the run) and counts frame-length stalls of a window that is truly
+moving. Delay-blind arithmetic — what rc.18 shipped — fails it with 4 stalls;
+with the delay folded in it passes at 0 stalls and apparent speed 1.00. The
+next shaken pack is the field verdict: if its repeats are gone and the log
+shows a fat callback p90, the conviction stands.
+
 `npm run check:sync` asserts it: zero samples sharing an instant, and apparent
 speed 1.00 against a truth of 1.0. Against the `Math.max` version it reports 20
 of 60 colliding. That red test only worked on the second attempt — the harness's

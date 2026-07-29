@@ -20,3 +20,4 @@ release2/
 # release candidate. Builds are artifacts of a commit, never part of one.
 core/rc*/
 dist-rc18/
+dist-rc19/

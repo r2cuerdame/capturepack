@@ -274,8 +274,13 @@ export function frozenObservations(
  * Silent when there is no runtime, which is every non-Windows platform and any
  * session started with --no-context-host.
  */
-export function tickSurfaces(displayId: string, frameMs: number, frameAgeMs?: number): void {
-  runtime?.lane.tickAt(displayId, frameMs, frameAgeMs)
+export function tickSurfaces(
+  displayId: string,
+  frameMs: number,
+  frameAgeMs?: number,
+  tickDelayMs?: number,
+): void {
+  runtime?.lane.tickAt(displayId, frameMs, frameAgeMs, tickDelayMs)
 }
 
 export interface ContextStatus {
@@ -397,6 +402,12 @@ export function logContextCost(): void {
       (lane.tickLagMs === null
         ? ''
         : `, tick lag ${lane.tickLagMs > 0 ? '+' : ''}${lane.tickLagMs} ms (folded into the sample time)`) +
+      // The compositor's callback delay (#110): median AND p90, because the
+      // failure mode is bursts and a median of a bursty series reads healthy.
+      // This line is what convicts or acquits the compositor in the next pack.
+      (lane.tickDelayMs === null || lane.tickDelayP90Ms === null
+        ? ''
+        : `, callback late ${lane.tickDelayMs} ms p50 / ${lane.tickDelayP90Ms} ms p90 (folded in)`) +
       (lane.frameAgeMs === null ? '' : `, frame already ${lane.frameAgeMs} ms old`),
   )
   if (!lane.running) {

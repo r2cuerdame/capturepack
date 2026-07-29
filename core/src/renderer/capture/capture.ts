@@ -350,7 +350,7 @@ function startFrameTicks(): void {
   document.body.appendChild(video)
   tickVideo = video
   if (typeof video.requestVideoFrameCallback !== 'function') return
-  const pump: VideoFrameRequestCallback = (_now, metadata) => {
+  const pump: VideoFrameRequestCallback = (now, metadata) => {
     // A chain from a previous start stops here rather than running forever.
     if (generation !== tickGeneration) return
     // THE FRAME'S POSITION IN THE FILE BEING SAVED (#109).
@@ -417,9 +417,27 @@ function startFrameTicks(): void {
       typeof captured === 'number' && Number.isFinite(captured) && captured <= submitted
         ? submitted - captured
         : undefined
+    // HOW LATE THIS CALLBACK IS (#110) — the leg that was never measured.
+    //
+    // Everything sent below says "frame `submitted` exists"; nothing said WHEN
+    // this code got to run. Under encoder load the compositor delivers these
+    // callbacks in BURSTS: frame N's callback fires tens of ms late and frame
+    // N+1's fires a few ms after it. Both ticks then read the desk at nearly
+    // the same instant — and the host, having a fresh answer for each ask,
+    // returns the same rectangle twice. Filed under two frame times 67 ms
+    // apart, that is a box frozen for a frame while the window travels — the
+    // exact defect measured in every shaken pack, 25–40% of moving samples,
+    // after the OS, the host, the lane and the ring were each proven innocent.
+    //
+    // `now` (this callback's own timestamp) and `presentationTime` share the
+    // renderer's clock, so their difference IS the delay, measured per frame.
+    // Clamped at zero: a presentation submitted after the callback timestamp
+    // would be a clock artifact, not a negative delay.
+    const delayMs = Math.max(0, now - submitted)
     window.captureBridge.sendTick?.({
       displayId: startPayload?.displayId ?? '',
       mediaTimeMs: submitted,
+      tickDelayMs: delayMs,
       ...(ageMs === undefined ? {} : { frameAgeMs: ageMs }),
     })
     video.requestVideoFrameCallback(pump)

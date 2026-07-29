@@ -1122,7 +1122,7 @@ async function createCaptureWindow(display: Display, settings: Settings): Promis
       // The lane keeps ONE clock and ignores every display but the first to
       // tick (#110) — which is what `IPC.captureTick` has always documented and
       // nothing enforced. The display id is what lets it hold that line.
-      tickSurfaces(String(display.id), payload.mediaTimeMs, payload.frameAgeMs)
+      tickSurfaces(String(display.id), payload.mediaTimeMs, payload.frameAgeMs, payload.tickDelayMs)
     }
     ipcMain.on(IPC.captureTick, onTick)
     // A recorder renderer that VANISHES is a recorder failure, never silence
