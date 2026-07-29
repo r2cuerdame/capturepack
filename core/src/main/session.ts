@@ -570,8 +570,24 @@ async function runFlow(settings: Settings): Promise<void> {
       `[capture] display ${d.index}: recorded ${measured.achievedFps} fps of ${settings.fps} ` +
       `requested, worst stall ${measured.worstStallMs} ms` +
       (discarded === undefined || discarded === null ? '' : `, ${discarded} frame(s) discarded`)
-    if (discarded === 0 && (short || stalled)) {
-      logInfo(`${line} — nothing was dropped, so this screen simply did not change`)
+    // Frames that were never made are not frames that were lost. The shortfall
+    // is what the target rate would have produced over the same window; if
+    // almost none of it was discarded, it was never produced — measured on this
+    // desk, display 1 came up 486 frames short and discarded two of them.
+    const expected =
+      measured.sampledMs === undefined ? null : (settings.fps * measured.sampledMs) / 1000
+    const shortfall =
+      expected === null || measured.gainedFrames === undefined
+        ? null
+        : Math.max(0, expected - measured.gainedFrames)
+    const still =
+      discarded !== undefined && discarded !== null && shortfall !== null && shortfall >= 1
+        ? discarded < shortfall * 0.2
+        : discarded === 0
+    if (still && (short || stalled)) {
+      logInfo(
+        `${line} — the missing frames were never made, not dropped, so this screen simply did not change`,
+      )
     } else if (short || stalled) {
       logWarn(`${line} — the replay is missing time the user was looking at`)
     } else {

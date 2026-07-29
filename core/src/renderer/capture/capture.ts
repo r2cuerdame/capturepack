@@ -258,7 +258,7 @@ function pollCadence(): void {
 }
 
 /** What this recorder has achieved, or null while nothing can honestly be said. */
-function cadenceReport(): { achievedFps: number; worstStallMs: number; discardedFrames: number | null } | null {
+function cadenceReport(): { achievedFps: number; worstStallMs: number; discardedFrames: number | null; sampledMs: number; gainedFrames: number } | null {
   const c = cadence
   if (c === null || c.firstCountedAt === 0) return null
   const elapsedMs = performance.now() - c.firstCountedAt
@@ -273,6 +273,11 @@ function cadenceReport(): { achievedFps: number; worstStallMs: number; discarded
     discardedFrames: typeof discarded === 'number' && Number.isFinite(discarded)
       ? Math.max(0, discarded - c.baseDiscarded)
       : null,
+    // The window the two counts above were measured over, so a reader can ask
+    // how many frames were MISSING and compare that against how many were
+    // thrown away (#82).
+    sampledMs: Math.round(elapsedMs),
+    gainedFrames: gained,
   }
 }
 

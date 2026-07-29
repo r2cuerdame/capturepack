@@ -319,6 +319,10 @@ export interface CaptureFramesPayload {
      * nobody touched that monitor — and a still screen is missing nothing.
      */
     discardedFrames?: number | null
+    /** How long the counts above were measured over, in ms. */
+    sampledMs?: number
+    /** Frames delivered during that window. */
+    gainedFrames?: number
   }
 }
 

@@ -1380,7 +1380,12 @@ function beginPendingBox(on: BoardDisplay, b: Box, picked?: PickableObject): voi
   //
   // Everything below anchors to this one number, so it is computed once, from
   // the picture, before any lifetime exists to be a midpoint of.
-  const pickedAt = nowMs()
+  //
+  // From the screen the click LANDED on, not the focused one: the board shows
+  // every captured display at once and they present independently, so a click
+  // on the second monitor's picture must be timed by that monitor's picture —
+  // the same frame the rectangle above was read out of.
+  const pickedAt = presentedOn(on.index)
   if (scrub) {
     // "Now" (the capture instant) anchors at the end of the replay; a scrubbed
     // stamp is clamped to the manifest's wall-clock replay_duration_ms — the

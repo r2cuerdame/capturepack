@@ -102,6 +102,8 @@ export interface SurfaceLaneStatus {
    */
   frameStamped: number
   clockStamped: number
+  /** Free-running samples put onto the frame clock through a tick's mapping. */
+  converted: number
   /** Median ms between asking for a ticked sample and the host taking it (#108). */
   tickLagMs: number | null
   /** Median ms a frame was ALREADY old when its tick was sent (#109). */
@@ -177,6 +179,40 @@ export class SurfaceLane {
   private lastTickAt = 0
   private frameStamped = 0
   private clockStamped = 0
+  /**
+   * Core clock minus frame clock, in ms — or null until a tick has shown both.
+   *
+   * TWO CLOCKS IN ONE RING (#92). A ticked sample is filed under the RENDERER's
+   * presentation time; a sample from the free-running loop is filed under the
+   * host's clock converted to MAIN's. Those two origins are different processes
+   * and differ by however long apart the processes started, so a ring holding
+   * both is a ring where some windows are placed seconds from where they
+   * belong — and the frozen range straddles the seam, which is why the same
+   * capture reported PARTIAL on one run and not the next.
+   *
+   * A tick carries BOTH readings of one instant: `ft` from the renderer and the
+   * host's own `t`, taken a measured 0-1 ms apart. That is the mapping, and it
+   * costs nothing to keep. Free-running samples are converted through it, so
+   * the ring has one clock and keeps its coverage.
+   */
+  private frameClockOffsetMs: number | null = null
+  private converted = 0
+  /**
+   * Free-running samples taken before it was known which clock the ring is on.
+   *
+   * The first tick may still be seconds away — the recorder starts after the
+   * lane does — and a sample appended in the meantime is on MAIN's clock, in a
+   * ring that a moment later is on the RENDERER's. One such sample is enough to
+   * put the ring's earliest time in the wrong space, which is what made the
+   * same capture report PARTIAL on one run and not the next.
+   *
+   * So the first few are held rather than guessed at. The first tick supplies
+   * the mapping and they go in converted; if no tick ever comes there is no
+   * other clock to conflict with and they go in as they are. Either way none
+   * is lost and none is mis-stamped.
+   */
+  private pendingClockSamples: { timeMs: number; rawWindows: readonly unknown[] }[] = []
+  private clockDecided = false
   /** Core's clock when the last tick was sent — the other end of the round trip. */
   private tickCoreMs = 0
   private tickFrameAgeMs = 0
@@ -211,6 +247,8 @@ export class SurfaceLane {
   private windows: number | null = null
   private lastError: string | null = null
   private running = false
+  /** When sampling began, so "no tick has ever come" can be given a deadline. */
+  private startedAtMs = 0
 
   constructor(clock: SessionClock, timeline: SurfaceTimeline, intervalMs?: number) {
     this.clock = clock
@@ -272,6 +310,7 @@ export class SurfaceLane {
       droppedSamples: this.dropped,
       frameStamped: this.frameStamped,
       clockStamped: this.clockStamped,
+      converted: this.converted,
       tickLagMs: medianOf(this.tickLagMs),
       frameAgeMs: medianOf(this.frameAgeMs),
       clockOffsetMs: this.offset.offsetMs(),
@@ -306,6 +345,7 @@ export class SurfaceLane {
       const granted = reply['intervalMs']
       if (typeof granted === 'number') this.intervalMs = granted
       this.running = true
+      this.startedAtMs = Date.now()
       logInfo(
         `[context] lane S sampling every ${this.intervalMs} ms ` +
           `(clock offset ${formatMs(this.offset.offsetMs())}, ±${formatMs(this.offset.errorBoundMs())})`,
@@ -408,7 +448,13 @@ export class SurfaceLane {
    * removes rather than adds.
    */
   private resumeIfTicksStopped(): void {
-    if (!this.tickDriven || !this.running) return
+    if (!this.running) return
+    // No tick within the silence window and none ever seen: this lane has no
+    // recorder behind it, so its own clock is the only one there is.
+    if (!this.clockDecided && this.lastTickAt === 0 && Date.now() - this.startedAtMs >= TICK_SILENCE_MS) {
+      this.settleHeldSamples()
+    }
+    if (!this.tickDriven) return
     if (Date.now() - this.lastTickAt < TICK_SILENCE_MS) return
     this.tickDriven = false
     logWarn(
@@ -448,6 +494,10 @@ export class SurfaceLane {
       const takenAt = this.offset.toCoreMs(hostMs)
       const lag = takenAt === null ? 0 : Math.max(0, takenAt - this.tickCoreMs)
       if (takenAt !== null) {
+        // The two clocks, read at one instant. Refreshed every tick so the
+        // newest mapping is the one in use.
+        this.frameClockOffsetMs = this.tickCoreMs - frameMs
+        this.settleHeldSamples()
         this.tickLagMs.push(lag)
         if (this.tickLagMs.length > 200) this.tickLagMs.shift()
       }
@@ -475,8 +525,46 @@ export class SurfaceLane {
       this.dropped += 1
       return
     }
-    this.clockStamped += 1
-    this.append(timeMs, rawWindows)
+    // Onto the frame clock when a tick has ever established the mapping, so
+    // this sample sits in the same space as the ticked ones around it.
+    const offsetMs = this.frameClockOffsetMs
+    if (offsetMs === null) {
+      if (!this.clockDecided) {
+        // Held until a tick says which clock this ring is on. Capped: past a
+        // couple of seconds no tick is coming, and settleHeldSamples has
+        // already let them through on their own clock.
+        this.pendingClockSamples.push({ timeMs, rawWindows })
+        if (this.pendingClockSamples.length > 64) this.pendingClockSamples.shift()
+        return
+      }
+      this.clockStamped += 1
+      this.append(timeMs, rawWindows)
+      return
+    }
+    this.converted += 1
+    this.append(timeMs - offsetMs, rawWindows)
+  }
+
+  /**
+   * Lets the held samples into the ring, once it is known which clock they
+   * belong on. Called from the first tick (converted) and from the silence
+   * check (as they are — no ticks means no second clock to disagree with).
+   */
+  private settleHeldSamples(): void {
+    this.clockDecided = true
+    const held = this.pendingClockSamples
+    if (held.length === 0) return
+    this.pendingClockSamples = []
+    const offsetMs = this.frameClockOffsetMs
+    for (const sample of held) {
+      if (offsetMs === null) {
+        this.clockStamped += 1
+        this.append(sample.timeMs, sample.rawWindows)
+      } else {
+        this.converted += 1
+        this.append(sample.timeMs - offsetMs, sample.rawWindows)
+      }
+    }
   }
 
   private append(timeMs: number, rawWindows: readonly unknown[]): void {

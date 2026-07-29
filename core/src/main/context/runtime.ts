@@ -324,6 +324,7 @@ export function logContextCost(): void {
       // WHICH CLOCK THE RING IS ON (#106). Two bases in one ring is the defect
       // that hid behind a healthy-looking sample count, so the count is split.
       `${lane.frameStamped} frame-stamped / ${lane.clockStamped} clock-stamped` +
+      (lane.converted > 0 ? ` / ${lane.converted} converted onto the frame clock` : '') +
       (lane.tickLagMs === null ? '' : `, tick lag ${lane.tickLagMs} ms`) +
       (lane.frameAgeMs === null ? '' : `, frame already ${lane.frameAgeMs} ms old`),
   )
