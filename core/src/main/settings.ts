@@ -4,7 +4,10 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { isSupportedLanguage } from '../shared/i18n'
 import { DEFAULT_CAPTURE_HOTKEY, SETTINGS_VERSION } from '../shared/types'
-import type { EditorWindowBounds, Settings } from '../shared/types'
+import type { ClipboardAfterSave, EditorWindowBounds, Settings } from '../shared/types'
+
+/** The four things a saved pack can put on the clipboard. */
+const CLIPBOARD_MODES: readonly ClipboardAfterSave[] = ['off', 'folder', 'path', 'prompt']
 
 /**
  * Longest replay buffer that may be configured (10 minutes). The recorder holds
@@ -34,7 +37,9 @@ function defaultSettings(): Settings {
     superviseProcess: true,
     notifyOnRecordingStart: true,
     outputDir: path.join(app.getPath('desktop'), 'CapturePack'),
-    copyToClipboard: true,
+    // The prompt, not the folder: what a saved pack is for, nine times out of
+    // ten, is the next sentence typed into an LLM.
+    clipboardAfterSave: 'prompt',
     // The welcome window has never been shown on this machine (GOAL "Welcome
     // (first launch after install)"). Flipped — and written — the moment the
     // window opens.
@@ -233,7 +238,7 @@ const SETTINGS_KEY_SET: Record<keyof Settings, true> = {
   superviseProcess: true,
   notifyOnRecordingStart: true,
   outputDir: true,
-  copyToClipboard: true,
+  clipboardAfterSave: true,
   welcomeShown: true,
   welcomeDeferredFromLogin: true,
   captureHotkey: true,
@@ -375,7 +380,16 @@ function mergeSettings(base: Settings, raw: Record<string, unknown>): Settings {
         ? raw.notifyOnRecordingStart
         : base.notifyOnRecordingStart,
     outputDir: typeof raw.outputDir === 'string' && raw.outputDir.length > 0 ? raw.outputDir : base.outputDir,
-    copyToClipboard: typeof raw.copyToClipboard === 'boolean' ? raw.copyToClipboard : base.copyToClipboard,
+    // v2 -> v3: the boolean became a mode. `true` meant "copy the folder", so
+    // that is what a machine upgrading keeps — a setting must never change
+    // meaning under a user who never touched it.
+    clipboardAfterSave: CLIPBOARD_MODES.includes(raw.clipboardAfterSave as ClipboardAfterSave)
+      ? (raw.clipboardAfterSave as ClipboardAfterSave)
+      : typeof raw.copyToClipboard === 'boolean'
+        ? raw.copyToClipboard
+          ? 'folder'
+          : 'off'
+        : base.clipboardAfterSave,
     welcomeShown: typeof raw.welcomeShown === 'boolean' ? raw.welcomeShown : base.welcomeShown,
     welcomeDeferredFromLogin:
       typeof raw.welcomeDeferredFromLogin === 'boolean'

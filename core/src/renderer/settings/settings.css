@@ -450,3 +450,99 @@ button.pluginHelp[aria-expanded="true"] {
   font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
   font-size: 12px;
 }
+
+/* The connect wizard (GOAL "Extension Install & Management UX").
+
+   Three steps, and the middle one is the only one the user performs: Chrome
+   will not let a program load an unpacked extension. So the steps are shown as
+   a path with a clear current position, rather than a row of buttons that all
+   look equally pressable — a user who cannot tell which is next has been given
+   a puzzle, not an installer. */
+#chromeWizard {
+  display: grid;
+  gap: 2px;
+  margin: 10px 0 8px;
+  list-style: none;
+  counter-reset: none;
+}
+
+#chromeWizard li {
+  display: grid;
+  grid-template-columns: 24px 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+}
+
+#chromeWizard li.current {
+  border-color: var(--border, #2c2c34);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+#chromeWizard li.done .num {
+  border-color: #22c55e;
+  color: #22c55e;
+}
+
+#chromeWizard li.done .num::before {
+  content: "\2714";
+}
+
+#chromeWizard li.done .num span,
+#chromeWizard li.done .num {
+  font-size: 11px;
+}
+
+#chromeWizard .num {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1.5px solid var(--muted, #8a8a93);
+  border-radius: 50%;
+  color: var(--muted, #8a8a93);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+#chromeWizard li.done .num {
+  font-size: 0;
+}
+
+#chromeWizard li.done .num::before {
+  font-size: 12px;
+}
+
+#chromeWizard .body {
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+}
+
+#chromeWizard b {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+#chromeWizard .how {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--muted, #8a8a93);
+}
+
+#chromeWizard button {
+  margin-top: 4px;
+}
+
+/* A step that is not the current one keeps its button out of the way rather
+   than removing it: going back a step must always be possible. */
+#chromeWizard li:not(.current) button {
+  opacity: 0.55;
+}
+
+#chromeManualToggle {
+  margin-top: 2px;
+  font-size: 11.5px;
+}

@@ -43,6 +43,7 @@ interface SettingsBridge {
   chromeOpenFolder(): void
   chromeOpenExtensionsPage(): void
   chromeCopyPath(): void
+  chromeDetect(): Promise<ChromeIntegrationStatus>
   status(): Promise<SettingsStatusResult>
   restartMcp(): Promise<SettingsStatusResult>
 }
@@ -77,9 +78,14 @@ const chromeExtensionId = el<HTMLInputElement>('chromeExtensionId')
 const chromeInstallBtn = el<HTMLButtonElement>('chromeInstallBtn')
 const chromeFolderBtn = el<HTMLButtonElement>('chromeFolderBtn')
 const chromeExtPageBtn = el<HTMLButtonElement>('chromeExtPageBtn')
-const chromeCopyPathBtn = el<HTMLButtonElement>('chromeCopyPathBtn')
+const chromeDetectBtn = el<HTMLButtonElement>('chromeDetectBtn')
+const chromeManual = el<HTMLDivElement>('chromeManual')
+const chromeManualToggle = el<HTMLButtonElement>('chromeManualToggle')
+const chromeSteps = [el<HTMLLIElement>('chromeStep1'), el<HTMLLIElement>('chromeStep2'), el<HTMLLIElement>('chromeStep3')]
+const chromeStep3How = el<HTMLElement>('chromeStep3How')
 const chromeUninstallBtn = el<HTMLButtonElement>('chromeUninstallBtn')
 const captureDisplaySelect = el<HTMLSelectElement>('captureDisplay')
+const clipboardSelect = el<HTMLSelectElement>('clipboardAfterSave')
 const captureHotkeyBtn = el<HTMLButtonElement>('captureHotkeyBtn')
 const captureHotkeyHint = el<HTMLElement>('captureHotkeyHint')
 const captureHotkeyRecordHint = el<HTMLElement>('captureHotkeyRecordHint')
@@ -201,7 +207,6 @@ type BooleanSettingsKey = {
 }[keyof Settings]
 
 const TOGGLES: ReadonlyArray<BooleanSettingsKey> = [
-  'copyToClipboard',
   'autoUpdateCheck',
   'launchAtLogin',
   // GOAL "And do not stay gone." (issue #61): main stops the watchdog and
@@ -596,6 +601,10 @@ packLanguageSelect.addEventListener('change', () => {
   void apply({ packLanguage: packLanguageSelect.value })
 })
 
+clipboardSelect.addEventListener('change', () => {
+  void apply({ clipboardAfterSave: clipboardSelect.value as Settings['clipboardAfterSave'] })
+})
+
 captureDisplaySelect.addEventListener('change', () => {
   void apply({ captureDisplay: captureDisplaySelect.value })
 })
@@ -626,7 +635,36 @@ openOutputBtn.addEventListener('click', () => {
  * those have four different fixes. So each is its own line with its own mark,
  * and the summary above them only says how many are true.
  */
+/**
+ * Which step the user is on — derived from what is TRUE, never from what they
+ * last clicked. Closing the window, restarting the app or loading the extension
+ * from another browser all move this forward on their own, and a wizard that
+ * remembered its own progress instead would disagree with the machine.
+ */
+function renderChromeWizard(status: ChromeIntegrationStatus): void {
+  const loaded = status.detected.length > 0
+  const connected = status.extensionConnected && status.protocolCompatible
+  const at = connected ? 2 : loaded ? 2 : 0
+  chromeSteps.forEach((li, i) => {
+    li.classList.toggle('current', i === at && !connected)
+    li.classList.toggle('done', connected ? true : i < at)
+  })
+  if (connected) {
+    chromeStep3How.textContent = t('settings.chromeStep3Done', {
+      version: status.extensionVersion ?? '?',
+    })
+  } else if (loaded) {
+    const first = status.detected[0]
+    chromeStep3How.textContent = t('settings.chromeStep3Waiting', {
+      browser: first === undefined ? '' : first.browser,
+    })
+  } else {
+    chromeStep3How.textContent = t('settings.chromeStep3How')
+  }
+}
+
 function renderChromeStatus(status: ChromeIntegrationStatus): void {
+  renderChromeWizard(status)
   const registered = status.browsers.filter((b) => b.registered)
   const checks: { ok: boolean; text: string }[] = [
     { ok: status.extensionDirExists, text: `${t('settings.chkExtensionFiles')} — ${status.extensionDir}` },
@@ -715,19 +753,43 @@ chromeFolderBtn.addEventListener('click', () => {
 })
 
 chromeExtPageBtn.addEventListener('click', () => {
+  // One press, both errands: the page the user needs and the path they are
+  // about to be asked for.
   bridge.chromeOpenExtensionsPage()
+  bridge.chromeCopyPath()
+  const was = chromeExtPageBtn.textContent
+  chromeExtPageBtn.textContent = t('settings.chromeCopied')
+  window.setTimeout(() => {
+    chromeExtPageBtn.textContent = was
+  }, 1400)
 })
 
-chromeCopyPathBtn.addEventListener('click', () => {
-  bridge.chromeCopyPath()
-  // The path is now on the clipboard and the next thing to do is paste it, so
-  // the button says so rather than flashing and leaving the user guessing.
-  const was = chromeCopyPathBtn.textContent
-  chromeCopyPathBtn.textContent = t('settings.chromeCopied')
-  window.setTimeout(() => {
-    chromeCopyPathBtn.textContent = was
-  }, 1200)
+chromeDetectBtn.addEventListener('click', () => {
+  void (async () => {
+    chromeDetectBtn.disabled = true
+    try {
+      const status = await bridge.chromeDetect()
+      renderChromeStatus(status)
+      if (status.detected.length === 0) {
+        // Nothing found is a real answer, not a failure to report: the folder
+        // has not been loaded yet, or it was loaded from somewhere else.
+        chromeVerdict.textContent = t('settings.chromeNotFound')
+      }
+    } finally {
+      chromeDetectBtn.disabled = false
+    }
+  })()
 })
+
+chromeManualToggle.addEventListener('click', () => {
+  chromeManual.hidden = !chromeManual.hidden
+})
+
+// The extension announces itself whenever the browser starts the host, which is
+// not something this window can be told about — so while it is open it asks.
+window.setInterval(() => {
+  if (!document.hidden) refreshChromeStatus()
+}, 2000)
 
 refreshChromeStatus()
 
@@ -745,13 +807,21 @@ guideBtn.addEventListener('click', () => {
  */
 showTutorialBtn.addEventListener('click', () => {
   void (async () => {
+    // IT ARMS, IT DOES NOT OPEN. Reported: "에디터 튜토리얼 다시보기 할때 아무
+    // 반응도 하지 않아" — and it was working, silently. There is no editor open
+    // to put a tutorial in, and the three gestures mean nothing outside a
+    // capture, so the button can only promise the NEXT one. A button that keeps
+    // that promise without saying so is indistinguishable from a dead one.
     showTutorialBtn.disabled = true
+    const was = showTutorialBtn.textContent
     try {
       await bridge.set({ showEditorTutorial: true })
+      showTutorialBtn.textContent = t('settings.showTutorialArmed')
     } finally {
       window.setTimeout(() => {
+        showTutorialBtn.textContent = was
         showTutorialBtn.disabled = false
-      }, 900)
+      }, 2200)
     }
   })()
 })
@@ -1041,6 +1111,7 @@ function syncControls(): void {
     el<HTMLInputElement>(field.id).value = String(field.fromSettings(s))
   }
   captureDisplaySelect.value = s.captureDisplay
+  clipboardSelect.value = s.clipboardAfterSave
   replayMaxWidthSelect.value = String(s.replayMaxWidth)
   syncHotkeyField()
   languageSelect.value = s.language

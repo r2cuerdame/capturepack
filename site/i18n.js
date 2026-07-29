@@ -24,6 +24,7 @@
       ft_why: 'Made because explaining bugs to AI<br>was taking too much time.'
     },
     ko: {
+      ft_guide: '사용 안내',
       h1: '스크린샷이 아니라,<br>맥락을 캡처하세요.',
       sub: '사람과 AI에게 무언가를 설명하는 가장 빠른 방법.',
       btn_download: '다운로드',
@@ -45,6 +46,7 @@
       ft_why: 'AI에게 버그를 설명하는 데<br>시간이 너무 걸려서 만들었습니다.'
     },
     ja: {
+      ft_guide: '使い方',
       h1: 'スクリーンショットではなく、<br>コンテキストをキャプチャ。',
       sub: '人にもAIにも、何かを説明する最速の方法。',
       btn_download: 'ダウンロード',
@@ -66,6 +68,7 @@
       ft_why: 'AIにバグを説明する時間が<br>長すぎたので作りました。'
     },
     zh: {
+      ft_guide: '使用指南',
       h1: '捕捉上下文，<br>而不是截图。',
       sub: '向人类和 AI 解释问题的最快方式。',
       btn_download: '下载',
@@ -87,6 +90,7 @@
       ft_why: '因为向 AI 解释 bug 太费时间，<br>所以做了它。'
     },
     es: {
+      ft_guide: 'Guía',
       h1: 'Captura contexto,<br>no capturas de pantalla.',
       sub: 'La forma más rápida de explicar algo a humanos y a la IA.',
       btn_download: 'Descargar',
@@ -108,6 +112,7 @@
       ft_why: 'Creado porque explicar bugs a la IA<br>llevaba demasiado tiempo.'
     },
     fr: {
+      ft_guide: 'Guide',
       h1: 'Capturez le contexte,<br>pas des captures d’écran.',
       sub: 'Le moyen le plus rapide d’expliquer quelque chose aux humains et à l’IA.',
       btn_download: 'Télécharger',
@@ -129,6 +134,7 @@
       ft_why: 'Créé parce qu’expliquer des bugs à l’IA<br>prenait trop de temps.'
     },
     de: {
+      ft_guide: 'Anleitung',
       h1: 'Erfasse Kontext,<br>keine Screenshots.',
       sub: 'Der schnellste Weg, Menschen und KI etwas zu erklären.',
       btn_download: 'Herunterladen',
@@ -150,6 +156,7 @@
       ft_why: 'Entstanden, weil es zu lange dauerte,<br>KI Bugs zu erklären.'
     },
     pt: {
+      ft_guide: 'Guia',
       h1: 'Capture contexto,<br>não capturas de tela.',
       sub: 'O jeito mais rápido de explicar algo para humanos e para a IA.',
       btn_download: 'Baixar',
@@ -171,6 +178,7 @@
       ft_why: 'Feito porque explicar bugs para a IA<br>tomava tempo demais.'
     },
     ru: {
+      ft_guide: 'Руководство',
       h1: 'Захватывайте контекст,<br>а не скриншоты.',
       sub: 'Самый быстрый способ объяснить что-то людям и ИИ.',
       btn_download: 'Скачать',

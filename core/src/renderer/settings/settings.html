@@ -37,10 +37,20 @@
           <button id="openOutputBtn" type="button" data-i18n="settings.openBtn">Open</button>
         </div>
       </div>
-      <label class="row toggleRow">
-        <span class="label" data-i18n="settings.copyToClipboard">Copy saved pack to clipboard</span>
-        <input type="checkbox" id="copyToClipboard" />
-      </label>
+      <!-- Automatic, and not always the folder: what a pack is used for next is
+           usually a sentence handed to an LLM, so that is what this copies by
+           default. Nothing has to be copied by hand after a save. -->
+      <div class="row">
+        <label class="label" for="clipboardAfterSave" data-i18n="settings.clipboardAfterSave">On save, copy to clipboard</label>
+        <span class="control">
+          <select id="clipboardAfterSave">
+            <option value="prompt" data-i18n="settings.clipPrompt">LLM prompt with the path</option>
+            <option value="folder" data-i18n="settings.clipFolder">The folder itself</option>
+            <option value="path" data-i18n="settings.clipPath">The folder path</option>
+            <option value="off" data-i18n="settings.clipOff">Nothing</option>
+          </select>
+        </span>
+      </div>
       <!-- The two ways back to the explanation (GOAL "First-Run Tutorial"):
            the manual for the long answer, the tutorial for the three gestures
            the editor is made of. -->
@@ -318,14 +328,44 @@
         </div>
         <p class="pluginSummary" data-i18n="settings.chromeSummary">Stores what you clicked — selector, role, text, URL — instead of the pixels it was drawn with.</p>
         <ul id="chromeChecks"></ul>
-        <div class="pathRow">
+        <!-- THREE STEPS, AND ONLY ONE OF THEM IS THE USER'S (GOAL "Extension
+             Install & Management UX"). Chrome will not let a program load an
+             unpacked extension, so step 2 has to be done by hand — everything
+             around it is done here: the page is opened, the path is already on
+             the clipboard, and the ID the browser assigns is found rather than
+             asked for. -->
+        <ol id="chromeWizard">
+          <li id="chromeStep1">
+            <span class="num">1</span>
+            <div class="body">
+              <b data-i18n="settings.chromeStep1">Open your browser's extensions page</b>
+              <span class="how" data-i18n="settings.chromeStep1How">The folder's path goes on the clipboard at the same time.</span>
+              <button id="chromeExtPageBtn" type="button" data-i18n="settings.chromeStep1Btn">Open and copy the path</button>
+            </div>
+          </li>
+          <li id="chromeStep2">
+            <span class="num">2</span>
+            <div class="body">
+              <b data-i18n="settings.chromeStep2">Turn on Developer mode, then "Load unpacked"</b>
+              <span class="how" data-i18n="settings.chromeStep2How">Paste with Ctrl+V in the folder box and confirm.</span>
+              <button id="chromeDetectBtn" type="button" data-i18n="settings.chromeStep2Btn">I did that — find it</button>
+            </div>
+          </li>
+          <li id="chromeStep3">
+            <span class="num">3</span>
+            <div class="body">
+              <b data-i18n="settings.chromeStep3">Connected</b>
+              <span class="how" id="chromeStep3How" data-i18n="settings.chromeStep3How">CapturePack registers itself with the browser and waits for the extension to say hello.</span>
+            </div>
+          </li>
+        </ol>
+        <div class="pathRow" id="chromeManual" hidden>
           <input type="text" id="chromeExtensionId" spellcheck="false" placeholder="extension id from chrome://extensions" data-i18n-placeholder="settings.chromeIdPlaceholder" />
           <button id="chromeInstallBtn" type="button" data-i18n="settings.chromeInstall">Connect</button>
-          <button id="chromeExtPageBtn" type="button" data-i18n="settings.chromeExtPage">Open chrome://extensions</button>
-          <button id="chromeCopyPathBtn" type="button" data-i18n="settings.chromeCopyPath">Copy path</button>
           <button id="chromeFolderBtn" type="button" data-i18n="settings.chromeFolder">Extension folder</button>
           <button id="chromeUninstallBtn" class="quiet" type="button" data-i18n="settings.chromeUninstall">Disconnect</button>
         </div>
+        <button id="chromeManualToggle" class="quiet" type="button" data-i18n="settings.chromeManual">Do it by hand</button>
         <p class="pluginDetail" id="chromeDetail" data-i18n="settings.chromeDetail">Load the extension folder in your browser once with developer mode on, paste the ID it is given, and Connect registers the native messaging host for every Chromium browser on this machine. Nothing leaves the machine, and the page is read only when you pick an element.</p>
       </div>
     </section>

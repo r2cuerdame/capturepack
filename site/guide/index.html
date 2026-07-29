@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CapturePack — Guide</title>
+  <meta name="description" content="How to use CapturePack: press the hotkey after the bug, scroll back through the last 30 seconds, annotate in three gestures, and hand the folder to a person or an LLM.">
+  <meta name="robots" content="index, follow">
+  <meta name="theme-color" content="#fafafc">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="CapturePack">
+  <meta property="og:title" content="CapturePack — Guide">
+  <meta property="og:description" content="Press the hotkey after the bug. Scroll back. Annotate in three gestures. Hand over a folder anyone — or any LLM — can read.">
+  <meta property="og:url" content="https://capturepack.dev/guide/">
+  <meta property="og:image" content="https://capturepack.dev/assets/og.png">
+  <link rel="canonical" href="https://capturepack.dev/guide/">
+  <link rel="icon" type="image/png" href="../assets/icon.png">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="stylesheet" href="guide.css">
+</head>
+<body>
+
+  <div class="lang-pick">
+    <select id="langSel" aria-label="Language">
+      <option value="en">English</option>
+      <option value="ko">한국어</option>
+      <option value="ja">日本語</option>
+      <option value="zh">中文</option>
+      <option value="es">Español</option>
+      <option value="fr">Français</option>
+      <option value="de">Deutsch</option>
+      <option value="pt">Português</option>
+      <option value="ru">Русский</option>
+    </select>
+  </div>
+
+  <main class="guide">
+    <header class="guide-head">
+      <a class="home" href="../">← CapturePack</a>
+      <h1 data-i18n="g_title">Guide</h1>
+      <p class="sub" data-i18n="g_sub">Press the hotkey <em>after</em> the bug. Everything else takes about five seconds.</p>
+    </header>
+
+    <nav class="toc" aria-label="Contents">
+      <a href="#install" data-i18n="g_nav_install">Install</a>
+      <a href="#capture" data-i18n="g_nav_capture">Capture</a>
+      <a href="#annotate" data-i18n="g_nav_annotate">Annotate</a>
+      <a href="#pack" data-i18n="g_nav_pack">The pack</a>
+      <a href="#ai" data-i18n="g_nav_ai">Give it to an AI</a>
+      <a href="#chrome" data-i18n="g_nav_chrome">Browser</a>
+      <a href="#settings" data-i18n="g_nav_settings">Settings</a>
+      <a href="#trouble" data-i18n="g_nav_trouble">If something is wrong</a>
+    </nav>
+
+    <section id="install">
+      <h2 data-i18n="g_install_h">Install</h2>
+      <p data-i18n="g_install_b">Download the installer and run it. CapturePack lives in the tray and starts with Windows. It is unsigned for now, so Windows may warn on first run — More info → Run anyway.</p>
+      <p class="note" data-i18n="g_install_n">Nothing leaves your machine. There is no account, no cloud, and no telemetry.</p>
+    </section>
+
+    <section id="capture">
+      <h2 data-i18n="g_capture_h">Capture</h2>
+      <p data-i18n="g_capture_b">CapturePack is already recording — the last 30 seconds of every screen, in a loop, overwritten as it goes. That is why you press the hotkey <strong>after</strong> the thing you want to show, not before.</p>
+      <p class="kbd"><kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>C</kbd></p>
+      <p data-i18n="g_capture_b2">The screen freezes and the editor opens on the moment you pressed it. Nothing is written to disk until you save.</p>
+    </section>
+
+    <section id="annotate">
+      <h2 data-i18n="g_annotate_h">Three gestures, no toolbar</h2>
+      <ul class="gestures">
+        <li>
+          <b data-i18n="g_click_t">Left click</b>
+          <span data-i18n="g_click_b">Select the window or control under the pointer. The box then follows it.</span>
+        </li>
+        <li>
+          <b data-i18n="g_drag_t">Right drag</b>
+          <span data-i18n="g_drag_b">Draw a box anywhere. A description field opens as you release.</span>
+        </li>
+        <li>
+          <b data-i18n="g_wheel_t">Wheel</b>
+          <span data-i18n="g_wheel_b">Travel back through the replay to the moment the bug happened.</span>
+        </li>
+      </ul>
+      <p data-i18n="g_annotate_b">A box picked off an object keeps following it for as long as it lives, so it stays on the thing it names even while that thing moves. Move the box by hand and it stops following — the rectangle you placed is the answer. Press <kbd>Enter</kbd> to save, <kbd>?</kbd> for every shortcut.</p>
+    </section>
+
+    <section id="pack">
+      <h2 data-i18n="g_pack_h">What you get</h2>
+      <p data-i18n="g_pack_b">A folder, not an archive — so you can open it, read it, and drop it anywhere. Zip it only when you send it.</p>
+      <div class="tree">
+        <code>CapturePack_2026-07-29_114804/</code>
+        <ul>
+          <li><code>README.md</code> <span data-i18n="g_pack_readme">what this is, for a person</span></li>
+          <li><code>report.md</code> <span data-i18n="g_pack_report">the annotations, in order, as sentences</span></li>
+          <li><code>snapshot.png</code> <span data-i18n="g_pack_snapshot">the frame you pressed on, per screen</span></li>
+          <li><code>replay.webm</code> <span data-i18n="g_pack_replay">the seconds before it, per screen</span></li>
+          <li><code>replay_annotated.webm</code> <span data-i18n="g_pack_annotated">the same replay with your boxes burned in</span></li>
+          <li><code>annotations.json</code> <span data-i18n="g_pack_annotations">the machine-readable source of truth</span></li>
+          <li><code>skills/</code> <span data-i18n="g_pack_skills">how to read all of the above, for an LLM</span></li>
+          <li><code>plugins/</code> <span data-i18n="g_pack_plugins">the objects on screen: windows, controls, DOM elements</span></li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="ai">
+      <h2 data-i18n="g_ai_h">Give it to an AI</h2>
+      <p data-i18n="g_ai_b">Drag the folder into ChatGPT, Claude, Cursor or Gemini and ask your question. The pack explains itself — <code>skills/</code> tells the model what every file is and how the pieces relate.</p>
+      <p data-i18n="g_ai_b2">Or connect over MCP and skip the dragging. CapturePack runs a read-only MCP server on your machine; point your client at it and say:</p>
+      <p class="say" data-i18n="g_ai_say">“Analyze the latest CapturePack.”</p>
+    </section>
+
+    <section id="chrome">
+      <h2 data-i18n="g_chrome_h">Browser context</h2>
+      <p data-i18n="g_chrome_b">With the extension connected, a click in the browser is stored as what you clicked — selector, role, text, URL — instead of the pixels it was drawn with. Settings → Integrations walks you through it in three steps:</p>
+      <ol class="steps">
+        <li><span data-i18n="g_chrome_s1">Press <b>Open and copy the path</b>. Your browser opens on its extensions page and the folder path is already on the clipboard.</span></li>
+        <li><span data-i18n="g_chrome_s2">Turn on <b>Developer mode</b>, click <b>Load unpacked</b>, and paste with <kbd>Ctrl</kbd>+<kbd>V</kbd>.</span></li>
+        <li><span data-i18n="g_chrome_s3">Press <b>I did that — find it</b>. CapturePack finds the ID your browser assigned and registers itself.</span></li>
+      </ol>
+      <p class="note" data-i18n="g_chrome_n">The extension reads a page only when you pick an element from it. It never streams the DOM, and it talks to nothing but CapturePack on your own machine.</p>
+    </section>
+
+    <section id="settings">
+      <h2 data-i18n="g_settings_h">Worth knowing</h2>
+      <ul class="facts">
+        <li data-i18n="g_set_hotkey"><b>The hotkey is yours.</b> Settings → Capture rebinds it if Ctrl+Alt+C is taken.</li>
+        <li data-i18n="g_set_length"><b>30 seconds is a default, not a limit.</b> Longer buffers cost memory; the setting says how much.</li>
+        <li data-i18n="g_set_displays"><b>Every screen is captured</b>, each at its own resolution, and every one of them is annotatable.</li>
+        <li data-i18n="g_set_history"><b>Nothing is lost by closing the editor.</b> History reopens any past capture to re-annotate or re-render.</li>
+      </ul>
+    </section>
+
+    <section id="trouble">
+      <h2 data-i18n="g_trouble_h">If something is wrong</h2>
+      <ul class="facts">
+        <li data-i18n="g_tr_hotkey"><b>The hotkey does nothing.</b> Another app has claimed it. Rebind it in Settings → Capture.</li>
+        <li data-i18n="g_tr_fps"><b>A screen reports a low frame rate.</b> A screen capture only makes a frame when the screen changes, so an untouched monitor delivers almost nothing and has lost nothing. The pack records both numbers so a reader can tell which happened.</li>
+        <li data-i18n="g_tr_report"><b>Something else.</b> Open an issue — and attach the pack. It was built for exactly this.</li>
+      </ul>
+      <p class="buttons">
+        <a class="btn primary" href="https://github.com/r2cuerdame/capturepack/issues/new" data-i18n="g_tr_issue">Report an issue</a>
+        <a class="btn" href="https://github.com/r2cuerdame/capturepack/blob/main/SPEC.md" data-i18n="g_tr_spec">Read the format spec</a>
+      </p>
+    </section>
+  </main>
+
+  <footer>
+    <nav>
+      <a href="../">CapturePack</a>
+      <a href="https://github.com/r2cuerdame/capturepack">GitHub</a>
+      <a href="https://github.com/r2cuerdame/capturepack/releases">Releases</a>
+      <a href="https://github.com/sponsors/r2cuerdame">Sponsor</a>
+    </nav>
+    <p>MIT License · Open Source</p>
+  </footer>
+
+  <script src="guide-i18n.js"></script>
+</body>
+</html>

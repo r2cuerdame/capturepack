@@ -10,11 +10,33 @@ import * as path from 'node:path'
 import { DOM_PROTOCOL_VERSION, domBridgeStatus } from './chrome/domBridge'
 import {
   extensionDir,
+  findOurExtensionIds,
   nativeHostState,
   registerBrowsers,
   unregisterBrowsers,
   writeHostManifest,
 } from './chrome/install'
+
+import { IPC } from '../shared/ipc'
+import type {
+  ChromeIntegrationStatus,
+  McpStatus,
+  SettingsDisplayOption,
+  SettingsGetResult,
+  SettingsSetResult,
+  SettingsStatusResult,
+} from '../shared/ipc'
+import { resolveLanguage } from '../shared/i18n'
+import type { Settings } from '../shared/types'
+import { logError, logInfo } from './log'
+import { restartCapture } from './capture'
+import { updateContextRetention } from './context/runtime'
+import { currentCaptureHotkey, registerCaptureHotkey } from './hotkey'
+import { uiLanguage, uiT } from './locale'
+import { mcpAppliedSettings, mcpStatus, restartMcpServer } from './mcp/service'
+import { applyPartial, clearOutputDirOverride, persistSettings } from './settings'
+import { uiaPluginStatus } from './uia'
+import { setAutoUpdateCheck } from './updater'
 
 /** The online manual (GOAL "First-Run Tutorial"). */
 const GUIDE_URL = 'https://capturepack.dev/guide'
@@ -65,28 +87,9 @@ async function chromeStatus(): Promise<ChromeIntegrationStatus> {
     extensionDir: host.extensionDir,
     extensionDirExists: host.extensionDirExists,
     events: bridge.events,
+    detected: findOurExtensionIds(),
   }
 }
-import { IPC } from '../shared/ipc'
-import type {
-  ChromeIntegrationStatus,
-  McpStatus,
-  SettingsDisplayOption,
-  SettingsGetResult,
-  SettingsSetResult,
-  SettingsStatusResult,
-} from '../shared/ipc'
-import { resolveLanguage } from '../shared/i18n'
-import type { Settings } from '../shared/types'
-import { logError } from './log'
-import { restartCapture } from './capture'
-import { updateContextRetention } from './context/runtime'
-import { currentCaptureHotkey, registerCaptureHotkey } from './hotkey'
-import { uiLanguage, uiT } from './locale'
-import { mcpAppliedSettings, mcpStatus, restartMcpServer } from './mcp/service'
-import { applyPartial, clearOutputDirOverride, persistSettings } from './settings'
-import { uiaPluginStatus } from './uia'
-import { setAutoUpdateCheck } from './updater'
 
 let settingsWindow: BrowserWindow | null = null
 // The live settings object, for pre-load window chrome (title) localization.
@@ -293,6 +296,20 @@ export function registerSettingsIpc(live: Settings, hooks: SettingsIpcHooks = {}
   // guessing at Program Files.
   ipcMain.on(IPC.settingsChromeOpenExtensionsPage, () => {
     void openExtensionsPage()
+  })
+
+  ipcMain.handle(IPC.settingsChromeDetect, async (): Promise<ChromeIntegrationStatus> => {
+    const found = findOurExtensionIds()
+    if (found.length > 0) {
+      try {
+        writeHostManifest(found.map((f) => f.id))
+        await registerBrowsers()
+        logInfo(`[chrome] found this extension as ${found.map((f) => f.id).join(', ')}`)
+      } catch (err) {
+        logError('capturepack: registering the detected extension failed:', err)
+      }
+    }
+    return chromeStatus()
   })
 
   ipcMain.on(IPC.settingsChromeCopyPath, () => {

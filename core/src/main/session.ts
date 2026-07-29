@@ -992,7 +992,7 @@ async function runFlow(settings: Settings): Promise<void> {
     // Rewritten (and declared) by the finalize save too, so a save-first that
     // failed and had to be retried below still ends up with the object data.
     uia: uiaPayload ?? undefined,
-    copyToClipboard: settings.copyToClipboard,
+    clipboardAfterSave: settings.clipboardAfterSave,
     docLanguage: packDocLanguage(settings),
   }
 
@@ -1577,7 +1577,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
     // regenerated from what the folder actually holds.
     displays: savedDisplays.length > 0 ? savedDisplays : undefined,
     screens: loadedScreens.length > 0 ? loadedScreens : undefined,
-    copyToClipboard: settings.copyToClipboard,
+    clipboardAfterSave: settings.clipboardAfterSave,
     // Re-edit saves regenerate the docs too — in the CURRENT pack language.
     docLanguage: packDocLanguage(settings),
   }

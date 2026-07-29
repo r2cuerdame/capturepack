@@ -491,6 +491,8 @@ export interface EditorWindowBounds {
   height: number
 }
 
+export type ClipboardAfterSave = 'off' | 'folder' | 'path' | 'prompt'
+
 export interface Settings {
   // Schema version of this profile (SETTINGS_VERSION). Absent in a file written
   // before versioning existed — the ONE signal a one-time migration may use.
@@ -519,7 +521,15 @@ export interface Settings {
   // failures are always announced and are deliberately not controlled by it.
   notifyOnRecordingStart: boolean
   outputDir: string
-  copyToClipboard: boolean
+  // WHAT lands on the clipboard the moment a pack is saved (GOAL "Folder-first
+  // export"). Was a boolean; a boolean could only answer "the folder", and the
+  // thing most often wanted next is not the folder — it is the sentence that
+  // hands the folder to an LLM.
+  //   "off"    nothing
+  //   "folder" the folder itself, to paste into a chat or a file manager
+  //   "path"   its path as text
+  //   "prompt" the ready-made "Analyze the CapturePack at <path>..." sentence
+  clipboardAfterSave: ClipboardAfterSave
   // The first-launch welcome window has been shown (GOAL "Welcome (first launch
   // after install)"): written the moment the window opens, so it appears once
   // and never again on its own. Showing it is gated on a genuinely fresh

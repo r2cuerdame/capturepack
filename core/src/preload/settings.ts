@@ -45,6 +45,9 @@ contextBridge.exposeInMainWorld('settingsBridge', {
   chromeCopyPath(): void {
     ipcRenderer.send(IPC.settingsChromeCopyPath)
   },
+  chromeDetect(): Promise<ChromeIntegrationStatus> {
+    return ipcRenderer.invoke(IPC.settingsChromeDetect) as Promise<ChromeIntegrationStatus>
+  },
   openOutput(): Promise<void> {
     return ipcRenderer.invoke(IPC.settingsOpenOutput) as Promise<void>
   },

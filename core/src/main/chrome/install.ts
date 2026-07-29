@@ -198,6 +198,70 @@ export async function nativeHostState(): Promise<NativeHostInstallState> {
   }
 }
 
+/**
+ * Finds the ID the browser gave OUR extension folder (GOAL "Extension Install
+ * & Management UX": "Users must never hunt through browser settings").
+ *
+ * An unpacked extension's ID is derived from its path, so it is assigned by the
+ * browser at load time and there is nowhere for the user to read it except the
+ * extensions page — which is exactly the hunting this is meant to remove.
+ *
+ * But the browser writes it down. Each profile's `Secure Preferences` lists
+ * every installed extension under its ID, and for an unpacked one the entry
+ * carries the absolute path it was loaded from. Measured on this machine:
+ * Preferences held none and Secure Preferences held seventeen with real paths,
+ * so both are read and the paths are compared, not the names.
+ *
+ * READ ONLY, and never while claiming to be the browser: this opens a JSON file
+ * the user already owns and looks for one path in it.
+ */
+export function findOurExtensionIds(): readonly { id: string; browser: string; profile: string }[] {
+  const target = path.normalize(extensionDir()).toLowerCase()
+  if (target === '') return []
+  const local = process.env['LOCALAPPDATA']
+  if (local === undefined) return []
+  const roots: readonly { label: string; dir: string }[] = [
+    { label: 'Chrome', dir: path.join(local, 'Google', 'Chrome', 'User Data') },
+    { label: 'Edge', dir: path.join(local, 'Microsoft', 'Edge', 'User Data') },
+    { label: 'Brave', dir: path.join(local, 'BraveSoftware', 'Brave-Browser', 'User Data') },
+    { label: 'Chromium', dir: path.join(local, 'Chromium', 'User Data') },
+  ]
+  const found: { id: string; browser: string; profile: string }[] = []
+  for (const root of roots) {
+    let profiles: string[]
+    try {
+      profiles = fs
+        .readdirSync(root.dir)
+        .filter((d) => d === 'Default' || /^Profile \d+$/.test(d))
+    } catch {
+      continue
+    }
+    for (const profile of profiles) {
+      for (const file of ['Secure Preferences', 'Preferences']) {
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(fs.readFileSync(path.join(root.dir, profile, file), 'utf8'))
+        } catch {
+          continue
+        }
+        const settings = (parsed as { extensions?: { settings?: Record<string, unknown> } })
+          ?.extensions?.settings
+        if (settings === undefined) continue
+        for (const [id, raw] of Object.entries(settings)) {
+          const where = (raw as { path?: unknown }).path
+          if (typeof where !== 'string') continue
+          if (path.normalize(where).toLowerCase() !== target) continue
+          if (!/^[a-p]{32}$/.test(id)) continue
+          if (!found.some((f) => f.id === id)) {
+            found.push({ id, browser: root.label, profile })
+          }
+        }
+      }
+    }
+  }
+  return found
+}
+
 // ---------------------------------------------------------------------------
 // The registry, through reg.exe.
 //

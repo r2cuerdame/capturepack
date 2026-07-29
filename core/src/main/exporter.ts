@@ -8,7 +8,7 @@ import { existsSync } from 'node:fs'
 import { copyFile, cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { release } from 'node:os'
 import { dirname, join } from 'node:path'
-import { app, screen } from 'electron'
+import { app, clipboard, screen } from 'electron'
 import AdmZip from 'adm-zip'
 import type { Language } from '../shared/i18n'
 import type {
@@ -20,6 +20,8 @@ import type {
   TimelineFile,
   UiaPluginPayload,
 } from '../shared/types'
+import { analyzePackPrompt } from '../shared/prompt'
+import type { ClipboardAfterSave } from '../shared/types'
 import { FORMAT_NAME, FORMAT_VERSION } from '../shared/types'
 import { displayAnnotatedName, displayFramesDir } from '../shared/keyframes'
 import { buildReport } from './report'
@@ -447,7 +449,7 @@ export interface ExportInput {
   // The displays present at capture time, in the order media.displays indices
   // refer to. Absent = enumerate the CURRENT displays (single-display packs).
   screens?: Array<{ width: number; height: number; scale: number }>
-  copyToClipboard: boolean
+  clipboardAfterSave: ClipboardAfterSave
   // Pack document language (GOAL i18n, packLanguage setting): the language the
   // regenerated README/report/skills templates are written in. Absent = en.
   docLanguage?: Language
@@ -780,7 +782,7 @@ export async function updatePack(
   }
   await removeReplacedReplayFiles(handle.dirPath, previousManifest, manifest)
 
-  if (input.copyToClipboard) copyFolderToClipboard(handle.dirPath)
+  copyAfterSave(input.clipboardAfterSave, handle.dirPath)
   return handle.dirPath
 }
 
@@ -933,7 +935,7 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
     throw err
   }
 
-  if (input.copyToClipboard) copyFolderToClipboard(dirPath)
+  copyAfterSave(input.clipboardAfterSave, dirPath)
   return { id, dirPath }
 }
 
@@ -1124,6 +1126,25 @@ function uniquePackDir(outputDir: string, date: Date): string {
 // Set-Clipboard -LiteralPath puts the folder itself (not its path as text) on
 // the clipboard, so it pastes into Explorer or chat apps that accept folders.
 // Best-effort only: clipboard failure must never fail the save.
+/**
+ * Puts the saved pack on the clipboard, in whichever form the user asked for.
+ *
+ * AUTOMATIC, AND NOT ALWAYS THE FOLDER. This runs the instant the pack lands,
+ * so nothing has to be copied by hand afterwards — and the default is the
+ * PROMPT, because the next thing a pack is used for is almost always being
+ * handed to an LLM, and that is a sentence with the path already in it. The
+ * folder and the bare path stay available for the cases where a file manager
+ * or a terminal is the destination instead.
+ */
+function copyAfterSave(mode: ClipboardAfterSave, dirPath: string): void {
+  if (mode === 'off') return
+  if (mode === 'folder') {
+    copyFolderToClipboard(dirPath)
+    return
+  }
+  clipboard.writeText(mode === 'path' ? dirPath : analyzePackPrompt(dirPath))
+}
+
 function copyFolderToClipboard(dirPath: string): void {
   const escaped = dirPath.replace(/'/g, "''")
   const child = spawn(

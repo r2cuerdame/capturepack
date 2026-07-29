@@ -123,6 +123,10 @@ export const IPC = {
   // and the typing: open the page, and put the path on the clipboard.
   settingsChromeOpenExtensionsPage: 'settings:chrome-open-extensions-page',
   settingsChromeCopyPath: 'settings:chrome-copy-path',
+  // Ask the browser what ID it gave our folder, then register with it. The one
+  // step a user cannot be spared is loading the folder; finding out what came
+  // of it is not their job.
+  settingsChromeDetect: 'settings:chrome-detect',
   // settings window -> main (invoke): directory picker; resolves the chosen path or null
   settingsPickOutputDir: 'settings:pick-output-dir',
   // settings window -> main (invoke): open the output folder in the file manager
@@ -936,6 +940,8 @@ export interface ChromeIntegrationStatus {
   extensionDirExists: boolean
   /** DOM events held for the current replay window. */
   events: number
+  /** IDs the browser assigned to our extension folder, if it has loaded it. */
+  detected: readonly { id: string; browser: string; profile: string }[]
 }
 
 export type SettingsPatch = Partial<Settings>
