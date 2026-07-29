@@ -2135,6 +2135,69 @@ budgeted per window instead of per desktop. That is the next build, not this
 one; anchoring is what makes control picking work across the whole replay
 today.
 
+### Can UIA be TRACKED after the first dump? Measured: yes — 7-27x (#111)
+
+*"UIA 전체덤프는 힘들겠지 하지만 첫덤프 이후에 추적이나 업데이트는 가능하지
+않을까?"* Yes. The intuition was right and the reason was not the expected one,
+so the numbers are here rather than the assumption. All measured on this
+machine, live desktop of 3111 elements across 17 windows.
+
+**The tree WALK is the cost, not the property fetch.** A bare
+`FindAll(Subtree)` reading ZERO properties is 95.1 ms of Explorer's 98.7 ms
+one-property total — 96% of it. So the obvious optimisation is the wrong one:
+
+| what | uncached | `FindAllBuildCache` |
+|---|---|---|
+| ChatGPT, 593 elements, 1 prop | 147.2 ms | **652.8 ms** (4.4x worse) |
+| Explorer, 234 elements, 1 prop | 98.7 ms | **445.8 ms** (4.5x worse) |
+| whole desktop | 1580 ms | **6787 ms** (4.3x worse) |
+
+`IUIAutomationCacheRequest` batches property round-trips, which are the
+minority of the cost, and pays per-node cache construction on top. It won in
+exactly one case (an in-process-ish Qt provider, 1.2x). **Do not build on it.**
+
+**Holding the element references IS the win.** Keep the `AutomationElement`
+handles from one walk and re-read only `BoundingRectangle`:
+
+| | refresh held refs | re-find by walking |
+|---|---|---|
+| all 2782 desktop elements | **227.2 ms** | 1580.6 ms (7.0x) |
+| Explorer, 234 | **17.6 ms** | 482.8 ms (27x) |
+| ChatGPT, 593 | **43.6 ms** | 599.9 ms (14x) |
+
+And it is PREDICTABLE where the walk is not: per-element cost is 55-105 us
+across Qt, Chromium and Explorer alike, while the full walk varies 20x by
+provider (0.14 ms/elem to 3 ms/elem).
+
+Frame budget, n=200 each: K=20 p99 3.08 ms, K=50 p99 5.95 ms — both inside a
+16 ms frame. K=100 p99 18.57 ms — does not fit. K=728 (a real dump) p50 58.0 /
+p99 82.8 ms — not per frame, but comfortable at 2-4 Hz. So: a tracked subset of
+~50 per frame, everything else at a few hertz, and a full desktop re-dump per
+frame stays impossible.
+
+**Events work and are cheap**, so the refresh does not have to be a timer.
+StructureChanged on one window/Subtree registers in 16-19 ms,
+PropertyChanged(BoundingRectangle) in 3.5-8.0 ms, desktop root in 43-106 ms.
+Delivery confirmed with nothing driven: 186 StructureChanged + 5
+BoundingRectangleChanged in 20 s at root scope; scoped to one idle window, 0
+events in 10 s — correctly quiet.
+
+Two findings that shape the design more than the speed does:
+
+- **Held references rot.** 3140 refs, no input synthesized: 0 dead at 5 s and
+  20 s, **138 dead (4.4%) by ~50 s**. A tracked set decays by itself, so it
+  must be reconciled — a dead reference has to remove its candidate, never
+  freeze it.
+- **One provider can dominate everything.** Docker Desktop: 10 elements,
+  ~2050 ms per pass, reproducible across three passes — more than the entire
+  rest of the desktop combined. Any walk needs a per-window timeout and a
+  repeat-offender blocklist, or one hung provider defines the latency.
+
+Also confirming the existing split: Win32 `GetWindowRect` over 17 top-level
+windows is 0.177 ms against 13.05 ms for UIA top-level enumeration — 74x. Window
+geometry stays with lane S; lane A is for IN-WINDOW controls only, which is
+what docs/temporal-protocol.md §1 said before any of this was measured.
+
 ### Recording is a switch (privacy)
 
 `settings.recordingEnabled` — OFF resolves the recorder set to empty through
