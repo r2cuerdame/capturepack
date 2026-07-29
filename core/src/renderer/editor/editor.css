@@ -743,6 +743,22 @@ body[data-window-mode="windowed"] #helpSheet {
   outline: 1px solid #fff;
 }
 
+/* One tick per AUTHORED keyframe (SPEC §8.9), on the box's own lane bar. The
+   lane is 3 px tall, so the tick reaches above and below it to be findable at
+   a glance without making the strip taller. White because the bar is the box's
+   own colour and a tick has to read against any of them. */
+.laneKeyframe {
+  position: absolute;
+  top: -2px;
+  width: 2px;
+  height: 7px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+
 #track {
   position: relative;
   height: 18px;

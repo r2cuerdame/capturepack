@@ -22,7 +22,8 @@
     "check:dom": "node scripts/dom-provider-check.mjs",
     "check:controls": "node scripts/control-lane-check.mjs",
     "check:identity": "node scripts/pack-identity-check.mjs",
-    "check:keyframes": "node scripts/keyframe-check.mjs"
+    "check:keyframes": "node scripts/keyframe-check.mjs",
+    "check:motion": "node scripts/box-motion-check.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

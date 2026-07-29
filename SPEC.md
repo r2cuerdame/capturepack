@@ -901,6 +901,53 @@ a box belongs to exactly one of them: the screen it was drawn on.
 }
 ```
 
+### 8.9 `keyframes` (authored motion)
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `keyframes[]` | array | OPTIONAL | Where the **user put this box**, at the moments they put it there. Each entry has `t_ms` (number, on the replay clock — [§10.1](#101-the-replay-clock)), `x`, `y`, `width`, `height` (numbers, pixels in this box's own display's snapshot, [§8.2](#82-coordinate-space)). MUST be in ascending `t_ms`. **Added in 0.3.0.** |
+
+**These are AUTHORED, not observed, and that is the whole reason they are not
+`tracking.samples`.** A sample in [§8.3](#83-the-box) is a measurement of a real window, which is
+why readers MUST NOT interpolate between two of them: a position between two measurements is one
+the object never occupied, written in the same numbers as a fact. A keyframe is the user stating
+where their own annotation belongs at that moment. The path between two such statements is the
+annotation's presentation, not a claim about the world — so readers **MUST interpolate linearly
+between keyframes**, and MUST hold the box flat before the first and after the last. Keeping the
+two in separate fields is what makes each rule safe: neither can ever be applied to the other kind.
+
+A box with **fewer than two** keyframes MUST NOT write the field: one authored position is not
+motion, it is simply where the box is, and that is `bounds`.
+
+`bounds` REMAINS the box's rectangle at its representative instant — the lifetime midpoint,
+[§8.4](#84-lifetime) — so a reader that ignores `keyframes` still draws the box somewhere it
+genuinely is. This is the same promise [§8.3](#83-the-box) makes for a tracked box.
+
+A box SHOULD NOT carry both `tracking.samples` and `keyframes`. A reader that meets both MUST
+prefer `tracking.samples`: a measurement outranks a preference.
+
+Writers MUST declare `format_version` **0.3.0** on a pack that uses this field, and MUST NOT
+declare it on a pack that does not ([§13.1](#131-format_version-policy)).
+
+```json
+{
+  "annotation_id": "ann_7c1e44",
+  "type": "box",
+  "bounds": { "x": 500, "y": 200, "width": 300, "height": 150 },
+  "start_ms": 10000,
+  "end_ms": 11000,
+  "text": "the dialog slid in from the left",
+  "numbered": true,
+  "blur": false,
+  "tracking": { "enabled": false },
+  "keyframes": [
+    { "t_ms": 10000, "x": 100, "y": 200, "width": 300, "height": 150 },
+    { "t_ms": 10600, "x": 900, "y": 200, "width": 300, "height": 150 }
+  ],
+  "z": 4
+}
+```
+
 ---
 
 ## 9. Blur and privacy

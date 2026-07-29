@@ -22,7 +22,7 @@ import type {
 } from '../shared/types'
 import { analyzePackPrompt } from '../shared/prompt'
 import type { ClipboardAfterSave } from '../shared/types'
-import { FORMAT_NAME, FORMAT_VERSION } from '../shared/types'
+import { FORMAT_NAME, FORMAT_VERSION, FORMAT_VERSION_KEYFRAMES } from '../shared/types'
 import { displayAnnotatedName, displayFramesDir } from '../shared/keyframes'
 import { buildReport } from './report'
 import { buildReadme, buildSkills, SKILLS_FILES } from './packdocs'
@@ -475,12 +475,22 @@ export interface ManifestInput {
   plugins?: Manifest['plugins']
   // media.displays[] source (all-displays capture); absent = single display.
   displays?: readonly DisplayDeclaration[]
+  /**
+   * Whether any box carries AUTHORED motion (SPEC §8.9), which is the only
+   * thing that lifts this pack's declared format version. Absent = no.
+   *
+   * Passed in rather than derived here because the save-first path builds a
+   * manifest before any annotation exists, and a manifest that claimed 0.3.0
+   * for an empty pack would cost it older readers for a field it does not use.
+   */
+  usesKeyframes?: boolean
 }
 
 export function buildManifest(input: ManifestInput): Manifest {
   const manifest: Manifest = {
     format: FORMAT_NAME,
-    format_version: FORMAT_VERSION,
+    // The OLDEST version that fully expresses this pack (SPEC §13.1).
+    format_version: input.usesKeyframes === true ? FORMAT_VERSION_KEYFRAMES : FORMAT_VERSION,
     id: input.id,
     created_at: isoWithOffset(input.createdAt),
     generator: { name: 'capturepack', version: input.generatorVersion },
@@ -742,6 +752,7 @@ export async function updatePack(
     trimOffsetMs: input.trimOffsetMs,
     plugins: withUiaPlugin(input.plugins, uiaWritten),
     displays: input.displays,
+    usesKeyframes: input.annotations.some((a) => (a.keyframes?.length ?? 0) > 0),
   })
   const annotationsFile: AnnotationsFile = {
     reference_width: input.width,
@@ -899,6 +910,7 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
     trimOffsetMs: input.trimOffsetMs,
     plugins: input.plugins,
     displays: displayFiles,
+    usesKeyframes: annotations.some((a) => (a.keyframes?.length ?? 0) > 0),
   })
   const annotationsFile: AnnotationsFile = {
     reference_width: input.width,

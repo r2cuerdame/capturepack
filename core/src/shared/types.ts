@@ -3,6 +3,16 @@
 
 export const FORMAT_NAME = 'capturepack'
 export const FORMAT_VERSION = '0.2.0'
+/**
+ * The version a pack declares once it carries AUTHORED motion (`keyframes`,
+ * SPEC §8.9) — a new optional field, so MINOR under §13.1's rules.
+ *
+ * Declared only when a pack actually uses it. SPEC §13.1: "Writers SHOULD write
+ * the oldest `format_version` that fully expresses their content," because
+ * every unnecessary bump costs the pack an audience of older readers for
+ * nothing.
+ */
+export const FORMAT_VERSION_KEYFRAMES = '0.3.0'
 
 // Per-display media of an all-displays capture (SPEC §5.3, GOAL "Multi-Monitor
 // Support"). One entry per display frozen by the trigger.
@@ -124,6 +134,20 @@ export interface AnnotationTrackSample {
    * tracking puts it.
    */
   display?: number
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+/**
+ * One AUTHORED position of a manual box, at one moment of the pack clock
+ * (SPEC §8.9). Same shape as an observed sample so every consumer reads it the
+ * same way — the difference is which field it lives in, and therefore whether
+ * a reader may interpolate.
+ */
+export interface AnnotationKeyframe {
+  t_ms: number
   x: number
   y: number
   width: number
@@ -327,6 +351,33 @@ export interface BoxAnnotation {
   // original snapshot.png and replay are never modified.
   blur: boolean
   tracking: AnnotationTracking
+  /**
+   * AUTHORED motion for a MANUAL box (SPEC §8.9) — where the user put it, at
+   * the moments they put it there.
+   *
+   * NOT `tracking.samples`, and the separation is the whole point. A tracked
+   * box's samples are OBSERVATIONS of a real window, and SPEC §8.3 forbids
+   * interpolating between them in as many words: an interpolated rectangle is
+   * a position the object never occupied, written in the same numbers as a
+   * measured one. That rule was reaffirmed by decision this release after
+   * interpolation shipped once and was measured worse ("보간하면 안되지").
+   *
+   * These are a different kind of claim. A user placing the box at 100 ms and
+   * again at 400 ms is not reporting where anything WAS — they are saying
+   * where their own annotation should be at those two moments, and the path
+   * between is the annotation's presentation, not a statement about the world.
+   * So these DO interpolate, and putting them in a separate field is what makes
+   * that safe: no reader can mistake one for the other, and the observed path's
+   * drawing rule cannot be changed by anything done here.
+   *
+   * A box that never moved at a second moment has NONE of these — a single
+   * authored position carries no motion and is just `bounds`, which is why the
+   * editor collapses a lone keyframe away. Ascending on the pack clock.
+   * `bounds` stays the rectangle at the box's representative instant, so a
+   * reader that ignores this field still draws the box correctly (§8.3's rule
+   * for `tracking`, applied to the same purpose).
+   */
+  keyframes?: AnnotationKeyframe[]
   target?: AnnotationTarget
   style?: AnnotationStyle
   created_at: string

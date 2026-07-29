@@ -27,7 +27,15 @@ import type {
   EditorWindowMode,
   UiaAnnotationTarget,
 } from '../../shared/types'
-import { annotationAt, trackedBoundsAt } from '../../shared/track'
+import { annotationAt, keyframedBoundsAt, trackedBoundsAt } from '../../shared/track'
+import {
+  hasMotion,
+  keyframeIndexAt,
+  keyframesOf,
+  removeKeyframeAt,
+  setKeyframe,
+  syncBoundsToRepresentative,
+} from '../../shared/motion'
 import { computeDisplayNumbers } from '../../shared/numbering'
 import { ObjectIndex, objectHoverLabel, objectLabel } from './objects'
 import type { PickableObject } from './objects'
@@ -351,6 +359,20 @@ type Drag =
       lastY: number
       before: Annotation[]
       moved: boolean
+      /**
+       * WHICH RECTANGLE THIS DRAG IS MOVING (SPEC §8.9).
+       *
+       * A manual box used to carry one `bounds` for its whole life, so dragging
+       * it at a later frame moved it at EVERY frame — reported as "수동으로
+       * 박스 만들고 몇프레임 뒤에 박스를 움직였는데 통째로 옴겨지던데?". A drag
+       * at a moment the box has not been placed at before now authors a
+       * keyframe there, and this is its index; -1 means the box is still a
+       * plain constant rectangle and `bounds` is what moves, which is what a
+       * drag at the box's own starting moment means.
+       */
+      keyframe: number
+      /** The moment this drag is authoring, on the pack clock. */
+      atMs: number
     }
   | {
       kind: 'resize'
@@ -3153,6 +3175,19 @@ overlay.addEventListener('pointerdown', (e) => {
     // Selected, never dragged, when Core owns the rectangle (#99).
     if (!isTracked(box)) {
       overlay.setPointerCapture(e.pointerId)
+      // The moment being authored is the frame ON SCREEN for this display, not
+      // the playhead (#81): the user is placing the box over what they can see.
+      const atMs = presentedOn(hit.d.index)
+      // Established BEFORE the first pointermove, because for a box that
+      // already has motion the drag has to move that keyframe rather than
+      // `bounds` — otherwise the drawn position would be recomputed from the
+      // untouched keyframes and the box would sit still under the cursor.
+      //
+      // Seeded with where the box IS at this moment, which for a box that
+      // already moves is its interpolated position and not `bounds` (that is
+      // the rectangle at its representative instant, somewhere else entirely).
+      // A keyframe inserted mid-drag must start under the pointer.
+      const keyframe = setKeyframe(box, atMs, keyframedBoundsAt(box, atMs) ?? box.bounds)
       drag = {
         kind: 'move',
         d: hit.d,
@@ -3161,6 +3196,8 @@ overlay.addEventListener('pointerdown', (e) => {
         lastY: p.y,
         before: state.cloneAnnotations(),
         moved: false,
+        keyframe,
+        atMs,
       }
     }
     // Selecting a box opens its description with the text selected (issue
@@ -3220,12 +3257,18 @@ overlay.addEventListener('pointermove', (e) => {
   } else if (drag.kind === 'move') {
     const a = state.byId(drag.id)
     if (a && (p.x !== drag.lastX || p.y !== drag.lastY)) {
-      a.bounds.x += p.x - drag.lastX
-      a.bounds.y += p.y - drag.lastY
+      // The rectangle this gesture owns: the keyframe it authored, or `bounds`
+      // when the box carries no motion (SPEC §8.9). Moving `bounds` on a box
+      // that HAS keyframes would move it at every moment — the whole defect
+      // this replaced — and would then be overwritten by the keyframed
+      // position anyway.
+      const moving = drag.keyframe >= 0 ? (a.keyframes?.[drag.keyframe] ?? a.bounds) : a.bounds
+      moving.x += p.x - drag.lastX
+      moving.y += p.y - drag.lastY
       // The pointer is clamped to the display; the DELTA is not. Grab a box by
       // its right edge, drag past the screen, and the pointer stops while the
       // delta keeps pushing the origin negative (issue #74).
-      clampBoxTo(a.bounds, drag.d)
+      clampBoxTo(moving, drag.d)
       drag.moved = true
     }
     drag.lastX = p.x
@@ -3254,7 +3297,23 @@ function endDrag(): void {
   } else if (d.moved) {
     // A box dragged off the UI object it was snapped to stops claiming it.
     invalidateTargetIfMoved(d.id)
+    // `bounds` goes back to meaning the box's rectangle at its representative
+    // instant (SPEC §8.4, §8.9), so a reader that ignores `keyframes` still
+    // draws it somewhere the box genuinely is. Cheap, and only for a box that
+    // actually carries motion.
+    const moved = state.byId(d.id)
+    if (moved) syncBoundsToRepresentative(moved, replayDurationMs)
     state.pushUndoSnapshot(d.before)
+  } else if (d.kind === 'move' && d.keyframe >= 0) {
+    // A press that authored a keyframe and then never moved has added a
+    // rectangle identical to the one already there. Taking it back keeps a
+    // click from quietly growing the pack — and keeps "this box has motion"
+    // meaning the user actually moved it somewhere.
+    const touched = state.byId(d.id)
+    if (touched) {
+      removeKeyframeAt(touched, d.atMs)
+      syncBoundsToRepresentative(touched, replayDurationMs)
+    }
   }
   schedulePaint()
   updateDirty() // move/resize commits bypass refresh()
@@ -3703,8 +3762,38 @@ window.addEventListener('keydown', (e) => {
     case 'o':
       if (scrub?.ready) setTrimOut(scrub.atNow ? scrub.durationMs : scrub.tMs)
       break
+    // AUTHORED MOTION HAS TO BE REMOVABLE (SPEC §8.9). A drag can add a
+    // keyframe; without this the only way to take one back is undo, which also
+    // takes back everything else done since. K drops the keyframe at the frame
+    // on screen, and dropping the second-to-last drops the motion entirely —
+    // one authored position is not motion, so the box becomes a plain
+    // rectangle again where it currently sits.
+    case 'k':
+      removeSelectedKeyframe()
+      break
   }
 })
+
+/**
+ * Drops the selected box's keyframe at the frame on screen, if it has one.
+ *
+ * SILENT WHEN THERE IS NOTHING THERE, and that is legible rather than mute: the
+ * timebar draws a mark at every keyframe of the selected box, so whether the
+ * playhead is on one is visible before the key is pressed. A transient toast
+ * would say less, later.
+ */
+function removeSelectedKeyframe(): void {
+  const selected = state.selectedId === null ? undefined : state.byId(state.selectedId)
+  if (selected === undefined || !hasMotion(selected)) return
+  const atMs = presentedOn(displayIndexOf(selected))
+  if (keyframeIndexAt(selected, atMs) < 0) return
+  applyMutation((box) => {
+    removeKeyframeAt(box, atMs)
+    syncBoundsToRepresentative(box, replayDurationMs)
+  })
+  syncLanes()
+  schedulePaint()
+}
 
 window.addEventListener('keyup', (e) => {
   if (e.key === ' ') {
