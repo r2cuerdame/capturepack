@@ -110,12 +110,10 @@ if (listening) {
 
   // The app answers a hello, so the extension can tell a live app from a
   // registered-but-dead one. The reply comes back framed the same way.
-  let replied = false
-  host.stdout.on('data', (chunk) => {
-    if (chunk.length > 4) replied = true
-  })
-  const gotReply = await waitFor(() => replied, 10_000)
+  const gotReply = await waitFor(() => stdoutBytes.length > 4 || !framingClean, 10_000)
   check('the app answers, so the extension knows it is live', gotReply, 'nothing came back on stdout')
+  check('every stdout byte parses as protocol framing (no \r\n poison)', framingClean,
+    'stray bytes before or between frames — Chrome would kill this port')
 
   console.log('\nA picked element')
   host.stdin.write(
