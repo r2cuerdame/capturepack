@@ -279,7 +279,14 @@ foreach ($win in $topLevel) {
     $isFocused = ($foregroundHandle -ne 0 -and $handle -eq $foregroundHandle)
     $z = $windowRecords.Count
     if ($z -gt 0) { [void]$windowJson.Append(',') }
-    [void]$windowJson.Append('{"title":').Append((ConvertTo-JsonString $title))
+    # THE WINDOW'S OWN IDENTITY (#97). Everything else about a window is a
+    # description that two sources can disagree about: this dump reports the
+    # process as "explorer" where the surface host reports "explorer.exe", and
+    # an untitled window has its CLASS put in `title` a few lines above. The
+    # handle is the one thing both are looking at. Decimal string, because a
+    # Win64 HWND does not fit a JS number safely.
+    [void]$windowJson.Append('{"hwnd":').Append((ConvertTo-JsonString ([string]$handle)))
+    [void]$windowJson.Append(',"title":').Append((ConvertTo-JsonString $title))
     [void]$windowJson.Append(',"process":').Append((ConvertTo-JsonString $processName))
     [void]$windowJson.Append(',"class_name":').Append((ConvertTo-JsonString $className))
     [void]$windowJson.Append(',"bounds":').Append((ConvertTo-JsonBounds $bounds))

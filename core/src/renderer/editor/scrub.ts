@@ -17,11 +17,62 @@
 // editor off it (see clampIntoRange). Scrubbing away is the user's choice; a
 // trim alone must never change which pixels snapshot.png is made of.
 
+// ---------------------------------------------------------------------------
+// THE FRAME ON SCREEN IS THE TRUTH, NOT THE PLAYHEAD (#81).
+//
+// A seek to T does not produce a frame at T. It produces the last frame at or
+// before T, because that is the only picture that exists. Meanwhile the surface
+// ring answers T exactly. Ask one for a rectangle and paint it over the other
+// and the box sits beside the window instead of on it — which is what the user
+// reported: "창위치랑 선택하는 위치랑 안맞잖아".
+//
+// MEASURED on CapturePack_2026-07-29_001952 (0.2.0-rc.4, 15 fps requested):
+// the replay holds 264 frames over 22.2 s — 11.9 fps actual — and the gap
+// between consecutive frames reaches 1009 ms. Across the seven picked boxes in
+// that pack, each box matched the true picture to a median of 9 ms, but the
+// frame the editor was DISPLAYING at the box's own time was up to 498 ms old,
+// and that alone put one box 1304 px away from its window.
+//
+// So the box was right and the picture was late. The correction cannot be a
+// constant: the frame rate a machine actually achieves depends on the machine,
+// the encoder and what else is running, and the user said so — "프레임 레이트랑
+// 컴퓨터에 따라 다를 수 있으니까 자동 보정이 들어가야 해". `mediaTime` is the
+// presentation timestamp of the frame the compositor put on screen, reported by
+// the browser itself, so it needs no frame-rate assumption at all and is right
+// on every machine by construction.
+// ---------------------------------------------------------------------------
+
+/**
+ * Keeps `sink` fed with the media time of the frame currently on screen.
+ *
+ * Re-arms itself after every frame, so it tracks playback and seeks alike. The
+ * `typeof` guard is not defensive noise: the callback is typed as present but a
+ * renderer that lacks it must fall back to the playhead rather than throw, and
+ * that fallback is exactly the behaviour that shipped before #81.
+ */
+function trackPresentedFrames(video: HTMLVideoElement, sink: (mediaTimeMs: number) => void): void {
+  if (typeof video.requestVideoFrameCallback !== 'function') return
+  const pump: VideoFrameRequestCallback = (_now, metadata) => {
+    sink(metadata.mediaTime * 1000)
+    video.requestVideoFrameCallback(pump)
+  }
+  video.requestVideoFrameCallback(pump)
+}
+
 export interface ScrubHost {
   /** Paint the base image: the current video frame or the native snapshot. */
   drawFrame(source: HTMLVideoElement | 'native'): void
   /** Time/duration/play/ready state changed; refresh dependent UI. */
   onState(): void
+  /**
+   * A new video frame reached the screen (#81).
+   *
+   * Optional, and only worth implementing for things that must agree with the
+   * PICTURE rather than the playhead. It exists because a seek can outlast the
+   * editor's settle timer: without it, whoever reads `presentedMs` on that timer
+   * reads the frame the seek was leaving, not the one it arrived at.
+   */
+  onFrame?(): void
 }
 
 export class ScrubController {
@@ -54,6 +105,9 @@ export class ScrubController {
   // window, never on the raw buffer.
   private readonly sourceStartMs: number
   private readonly durationCapMs: number
+  // Raw-file time of the frame the compositor last presented (#81). Null until
+  // the first frame is painted, or forever on a renderer without the callback.
+  private presentedRawMs: number | null = null
 
   constructor(
     webm: ArrayBuffer,
@@ -101,12 +155,35 @@ export class ScrubController {
       this.notifySettled() // in-flight seeks will never complete; release waiters
       this.host.onState()
     })
+    trackPresentedFrames(video, (mediaTimeMs) => {
+      if (this.presentedRawMs === mediaTimeMs) return
+      this.presentedRawMs = mediaTimeMs
+      this.host.onFrame?.()
+    })
     this.video = video
   }
 
   /** True when the native snapshot (the capture instant) is displayed. */
   get atNow(): boolean {
     return this.showingNative
+  }
+
+  /**
+   * The position of the frame the user is LOOKING AT, for anything that has to
+   * agree with the picture (#81) — object picking above all.
+   *
+   * `tMs` is where the playhead was asked to go; this is where the replay could
+   * actually go. They differ by up to one frame gap, which this recorder lets
+   * reach a full second, and every millisecond of that difference becomes pixels
+   * of error under a moving window. The playhead keeps `tMs`: the timeline must
+   * not jump backwards under the user's hand just because the footage is sparse.
+   *
+   * Falls back to `tMs` while showing the native snapshot (which is not a video
+   * frame at all) and on any renderer that cannot report a presentation time.
+   */
+  get presentedMs(): number {
+    if (this.showingNative || this.presentedRawMs === null) return this.tMs
+    return this.clampToRange(this.logicalMs(this.presentedRawMs))
   }
 
   /** First position inside the kept range (0 while untrimmed). */
@@ -411,6 +488,8 @@ class SlaveReplay {
   private pendingSeekMs: number | null = null
   private seekInFlight = false
   private lastTargetMs: number | null = null
+  /** Raw media time of the frame this screen is actually showing (#88). */
+  private presentedRawMs: number | null = null
   private settleWaiters: Array<() => void> = []
   private workaroundSeek = false
   private durationAdopted = false
@@ -429,6 +508,9 @@ class SlaveReplay {
     video.muted = true
     video.preload = 'auto'
     video.src = URL.createObjectURL(new Blob([webm], { type: mimeType }))
+    trackPresentedFrames(video, (mediaTimeMs) => {
+      this.presentedRawMs = mediaTimeMs
+    })
     video.addEventListener(
       'loadedmetadata',
       () => {
@@ -465,6 +547,20 @@ class SlaveReplay {
   }
 
   /** Seeks to a PACK-clock position. Repeated identical targets are free. */
+  /**
+   * The pack time of the frame THIS SCREEN is showing, or null when it has not
+   * presented one (#88).
+   *
+   * EVERY SCREEN HAS ITS OWN FRAMES. The recorders are independent, so seeking
+   * two replays to the same pack time lands them on two different moments — up
+   * to a frame apart, and this recorder's gaps have been measured at up to a
+   * second. A box drawn on this screen has to be resolved on THIS clock, or it
+   * is placed for a picture the neighbour is showing.
+   */
+  get presentedMs(): number | null {
+    return this.presentedRawMs === null ? null : this.presentedRawMs - this.offsetMs
+  }
+
   seekTo(packMs: number): void {
     const target = this.clamp(packMs + this.offsetMs)
     if (!this.showingNative && this.lastTargetMs === target) return
@@ -554,6 +650,8 @@ export interface BoardScrubHost {
   drawFrame(displayIndex: number, source: HTMLVideoElement | 'native'): void
   /** Time/duration/play/ready state changed; refresh dependent UI. */
   onState(): void
+  /** The focused display put a new frame on screen; see `ScrubHost.onFrame` (#81). */
+  onFrame?(): void
 }
 
 /** One display's replay as the board receives it. */
@@ -578,6 +676,8 @@ export interface BoardReplayInput {
 export class BoardScrub {
   private readonly master: ScrubController
   private readonly slaves: SlaveReplay[] = []
+  /** displayIndex -> that screen's replay, for its own frame clock (#88). */
+  private readonly byDisplay = new Map<number, SlaveReplay>()
   private readonly focusedIndex: number
 
   constructor(replays: readonly BoardReplayInput[], host: BoardScrubHost) {
@@ -595,20 +695,53 @@ export class BoardScrub {
           this.syncSlaves()
           host.onState()
         },
+        onFrame: () => host.onFrame?.(),
       },
     )
     for (const r of replays) {
       if (r.focused) continue
+      const slave = new SlaveReplay(r.webm, r.mimeType, r.durationMs, r.offsetMs, (source) =>
+        host.drawFrame(r.displayIndex, source),
+      )
+      this.byDisplay.set(r.displayIndex, slave)
       this.slaves.push(
-        new SlaveReplay(r.webm, r.mimeType, r.durationMs, r.offsetMs, (source) =>
-          host.drawFrame(r.displayIndex, source),
-        ),
+        slave,
       )
     }
   }
 
   get tMs(): number {
     return this.master.tMs
+  }
+
+  /**
+   * The board's position as the PICTURE has it (#81).
+   *
+   * The focused display's replay is the pack clock (see "ONE CLOCK" above), so
+   * its presented frame is the board's. The slaves are seeked from this same
+   * clock and land on their own nearest frames; making each display answer on
+   * its own presented time is #38's business, not this one's.
+   */
+  get presentedMs(): number {
+    return this.master.presentedMs
+  }
+
+  /**
+   * The pack time THIS SCREEN is showing (#88).
+   *
+   * EVERY SCREEN HAS ITS OWN FRAMES. The recorders run independently, so
+   * seeking two replays to the same pack position lands them on two different
+   * moments — and this recorder's gaps have been measured at up to a second. A
+   * box drawn on a screen must be resolved on THAT screen's clock, or it is
+   * placed for a picture the neighbour is showing.
+   *
+   * Falls back to the board's own position for a display with no replay of its
+   * own (it shows a frozen snapshot, which has no clock to differ on) and for a
+   * renderer that cannot report a presentation time.
+   */
+  presentedMsFor(displayIndex: number): number {
+    if (displayIndex === this.focusedIndex) return this.master.presentedMs
+    return this.byDisplay.get(displayIndex)?.presentedMs ?? this.master.presentedMs
   }
 
   get durationMs(): number {

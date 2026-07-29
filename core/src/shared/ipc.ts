@@ -2,6 +2,7 @@
 // Every channel is listed here; no module may invent channels outside this file.
 
 import type { Annotation, EditorWindowMode, Settings, UiaTreeStatus } from './types'
+import type { ContextFrame } from './context/protocol'
 
 export const IPC = {
   // main -> capture window: begin recording this desktop source id
@@ -16,24 +17,36 @@ export const IPC = {
   // heartbeat (see CaptureFramesPayload). Only this makes a display count as
   // recording, and its repetition is what lets that state self-heal (#43).
   captureFrames: 'capture:frames',
+  // capture window -> main: A FRAME WAS JUST CAPTURED, and this is its own time
+  // on the recording's clock (#105). Core answers by observing the desk right
+  // then and filing the result under that number, so the picture and the window
+  // rectangles are the same instant by construction rather than by clock
+  // arithmetic. Payload: CaptureTickPayload. Focused display only — one clock.
+  captureTick: 'capture:tick',
   // capture window -> main: recorder failed; capture continues screenshot-only
   captureError: 'capture:error',
 
   // main -> editor window: everything the editor needs to open
   editorInit: 'editor:init',
-  // main -> editor window: the capture-instant object dump, LATE (GOAL "Static
-  // object picking"). Payload: EditorUiaObjectsPayload.
+  // editor -> main (invoke): the candidate set at ONE time (#66, design GAP 7).
+  // Payload: ContextFrameRequest; resolves to ContextFrame, or null when the
+  // session is gone. Asked whenever the SCRUB SETTLES on a new position — never
+  // per pointer move, which is why hovering still costs nothing per frame.
+  contextRequestFrame: 'context:request-frame',
+  // editor -> main: where ONE object was, for as long as it was there (#86).
+  // Asked once when a box is picked, not per frame: the answer is a path the
+  // renderer interpolates over, so following costs nothing while scrubbing.
+  contextRequestTrack: 'context:request-track',
+  // main -> editor window: a REPLACEMENT frame, pushed rather than requested.
   //
-  // Object data is the one part of the editor that is allowed to arrive after
-  // the window does: the dump is budgeted and killed independently, so on a
-  // slow machine it can settle a few hundred ms after the editor is on screen.
-  // Before this channel existed the editor simply opened with an empty index
-  // and picking was dead for the whole session — a settled payload thrown away
-  // because a stopwatch started at the capture trigger had run out. The editor
-  // MUST accept this message at any time after editor:init and rebuild its
-  // object index from it; `dropped` says the dump produced nothing and none is
-  // coming, so it can say so once instead of failing silently.
-  editorUiaObjects: 'editor:uia-objects',
+  // Two things produce one: a provider that answered after its budget expired
+  // (GOAL: "late candidates update the list asynchronously rather than delaying
+  // the first paint"), and the capture-instant observation settling after the
+  // editor opened — the helper is budgeted and killed independently of the
+  // window, so on a slow machine it lands a few hundred ms late. Before this
+  // existed the editor opened with an empty index and picking was dead for the
+  // whole session. The editor MUST accept this at any time after editor:init.
+  contextFrame: 'context:frame',
   // editor -> main: user confirmed export
   editorExport: 'editor:export',
   // editor -> main: user cancelled (Esc). In edit mode this is Discard: close
@@ -111,6 +124,11 @@ export const IPC = {
   // structured-cloning them in one message — is a spike in two processes at
   // once (and the classic way to lose a renderer with no error surfaced).
   renderFrame: 'render:frame',
+  // render window -> main: how far through the replay this render has played.
+  // The annotated render is REAL-TIME playback, so the only honest source of a
+  // progress number is the playhead itself — main cannot compute one without
+  // guessing, and a progress bar that guesses is a progress bar that lies.
+  renderProgress: 'render:progress',
   // render window -> main: rendered webm bytes (or failure) for the job
   renderResult: 'render:result',
 
@@ -198,6 +216,14 @@ export interface CaptureStartPayload {
   // Routing happens in the main process (display-media handler keyed by the
   // requesting webContents); the renderer carries this for diagnostics only.
   displayId: string
+  /**
+   * Whether this is the display that owns the pack clock (SPEC §10.1).
+   *
+   * Only that one ticks the surface ring (#105): a second display's frames
+   * carry a different recording's numbers, and filing samples under those would
+   * put the ring on two clocks at once — which is the problem, not the fix.
+   */
+  focused?: boolean
   fps: number
   segmentSeconds: number // recorder rotation interval (replay guarantee = 1x..2x this)
   // Longest edge of the recorded stream; 0 = native. Snapshot capture is a
@@ -269,10 +295,77 @@ export interface CaptureFramesPayload {
   bytes: number
   // MediaStreamTrack delivered-frame count, or 0 where the API is unavailable.
   frames: number
+  /**
+   * THE RECORDER'S OWN ACCOUNT OF ITS CADENCE (#82).
+   *
+   * A replay is the evidence a pack is built on, and until now nothing in the
+   * app knew how good it was — a capture that dropped a fifth of its frames and
+   * stalled for nearly a second twice looked exactly like a healthy one, and it
+   * took ffprobe on the saved file to find out. Two numbers make that visible
+   * from the log and from the pack itself.
+   *
+   * Absent where the runtime exposes no frame counter: a rate nobody measured
+   * must not be reported as a rate.
+   */
+  cadence?: {
+    /** Frames per second actually achieved since recording steadied. */
+    achievedFps: number
+    /** The longest the frame counter went without advancing, in ms. */
+    worstStallMs: number
+    /**
+     * Frames the source made and threw away, or null when unknown (#82).
+     *
+     * Zero next to a low `achievedFps` means the screen produced no frames —
+     * nobody touched that monitor — and a still screen is missing nothing.
+     */
+    discardedFrames?: number | null
+    /** How long the counts above were measured over, in ms. */
+    sampledMs?: number
+    /** Frames delivered during that window. */
+    gainedFrames?: number
+  }
+}
+
+/** One captured frame announcing itself (#105). */
+export interface CaptureTickPayload {
+  displayId: string
+  /**
+   * The frame's position in the file being recorded, in ms.
+   *
+   * `presentationTime - slot.startedAt`, both on `performance.now()` — NOT the
+   * track's `mediaTime`, which starts when the stream did rather than when this
+   * recorder slot did and which the spec allows to be zero for a live source
+   * (#109).
+   */
+  mediaTimeMs: number
+  /**
+   * How old the frame already was when this tick was sent, in ms — if the
+   * runtime can say (#109).
+   *
+   * `VideoFrameCallbackMetadata.captureTime` would give it, but the spec
+   * defines that field for WebRTC and getUserMedia sources only and a screen
+   * capture is neither, so it is absent in practice. Kept because a runtime
+   * that DOES report it should be believed, and absent means nothing is
+   * corrected rather than corrected by a guess.
+   */
+  frameAgeMs?: number
 }
 
 export interface CaptureReplayResultPayload {
   requestId: string
+  /**
+   * The tick clock's value at this replay's t=0 (#112).
+   *
+   * Ticks carry a session-monotonic `presentationTime`, because a per-slot
+   * number falls back to zero at every rotation and sent the ring's time
+   * BACKWARDS. Turning that into a position in THIS file needs to know which
+   * slot was saved and where it began, and this is the only moment both are
+   * known. Subtract it from a tick to get a position in these bytes.
+   *
+   * Absent where the recorder could not say, in which case the ring keeps its
+   * own clock and nothing is mis-stated.
+   */
+  originMs?: number
   // Recorder bytes; empty when no replay is available (screenshot-only capture).
   buffer: ArrayBuffer
   durationMs: number
@@ -366,6 +459,28 @@ export interface EditorUiaElement {
  * and clicking always snaps a box.
  */
 export interface EditorUiaWindow {
+  /**
+   * The OS window handle, decimal — the one identifier every source of window
+   * data is looking at the same value of (#97).
+   *
+   * Everything else is a description two sources can disagree about: the
+   * surface host reports a process as "explorer.exe" and the UI Automation dump
+   * as "explorer"; an untitled window has its class written into its title by
+   * the dump and left empty by the host. Matching on those is guesswork, and it
+   * silently matched nothing at all.
+   *
+   * Absent on a pack written before the dump reported it.
+   */
+  hwnd?: string
+  /**
+   * Core's own surface id, when this window came from the surface ring (#90).
+   *
+   * Stable for the whole session — hwnd plus a creation ordinal, so a recycled
+   * handle becomes a new surface — and unaffected by the window's position in
+   * any list. Absent for a window that came from a UI Automation dump, which
+   * describes one instant and is identified by name and order instead.
+   */
+  surface_id?: string
   title: string
   process: string
   class_name: string
@@ -417,26 +532,16 @@ export interface EditorInitPayload {
   // pack can never be mistaken for a normal one. null whenever there IS a
   // replay, and on every re-edited pack.
   replayUnavailableReason: RecorderFailureReason | null
-  // Pickable UI objects from the capture instant (GOAL "Static object
-  // picking"). BOTH lists are EMPTY whenever there is no object data — no
-  // Windows UI Automation dump, a dump that timed out, or a re-edited pack
-  // without plugins/windows-uia — and the editor then behaves exactly as it
-  // did before the feature existed. Controls refine; windows are the floor,
-  // so uiaWindows is routinely non-empty while uiaElements is not.
+  // OBJECT PICKING, AT A TIME (#64/#65/#66): the session the editor asks for
+  // candidate frames on, plus the frame at the capture instant — which is where
+  // the editor opens, so picking works from the first paint without a round
+  // trip. null when this build could not open a context session at all, and the
+  // editor then behaves exactly as it did before picking existed.
   //
-  // EMPTY IS NOT FINAL on a fresh capture: when the dump has not settled by the
-  // time the editor is ready, these open empty and the real lists arrive on
-  // IPC.editorUiaObjects moments later (see uiaDropped below).
-  uiaElements: EditorUiaElement[]
-  uiaWindows: EditorUiaWindow[]
-  // The object dump was attempted and produced NOTHING usable, so picking is
-  // off for this session and no editor:uia-objects message is coming (GOAL:
-  // "Silence is not absence" — the editor says so once instead of looking
-  // broken). FALSE both when objects are present AND when they are still on
-  // their way; it is never true for a pack that simply never had object data
-  // (a non-Windows capture, or a re-edited pack without the plugin), because
-  // nothing was dropped there.
-  uiaDropped: boolean
+  // NOT FINAL on a fresh capture: when the observation has not settled by the
+  // time the editor is ready, the initial frame is empty and a real one arrives
+  // on IPC.contextFrame moments later.
+  context: EditorContextInit | null
   fps: number
   scrubInvert: boolean
   scrubSensitivityMs: number
@@ -470,22 +575,66 @@ export interface EditorInitPayload {
 }
 
 /**
- * IPC.editorUiaObjects — the object dump, delivered after the editor opened.
+ * What the editor needs to ask Core "what was at this point, at this time".
  *
- * The editor treats this as a REPLACEMENT for the (empty) lists it opened with:
- * it rebuilds its per-display object indexes and picking starts working
- * mid-session, with no other state touched. Annotations already drawn are
- * unaffected — this only ever adds what can be picked.
- *
- * Preload bridge: expose it as `onUiaObjects(cb)` beside `onInit(cb)`.
+ * The frame is the one at the CAPTURE INSTANT, because that is where the editor
+ * opens; every other position is a `context:request-frame` away, asked when the
+ * scrub settles.
  */
-export interface EditorUiaObjectsPayload {
-  uiaElements: EditorUiaElement[]
-  uiaWindows: EditorUiaWindow[]
-  // Same meaning as EditorInitPayload.uiaDropped: the dump settled with nothing
-  // usable. Both lists are then empty and this is the LAST word on picking for
-  // the session.
-  dropped: boolean
+export interface EditorContextInit {
+  sessionId: string
+  frame: ContextFrame
+}
+
+/** IPC.contextRequestFrame — the editor asking for one scrub position. */
+export interface ContextFrameRequest {
+  sessionId: string
+  // Pack-clock ms (SPEC §10.1), the same clock the editor scrubs on and the
+  // same one annotation lifetimes use. Providers never see this number: Core
+  // converts to the session clock, because a provider guessing that mapping is
+  // wrong in a way nobody notices for months (design §3.1).
+  timeMs: number
+}
+
+/** One rectangle on one display's snapshot, at one moment of the pack clock. */
+export interface ObjectTrackSample {
+  tMs: number
+  /** Which display these numbers are pixels of — a window can cross screens (#86). */
+  display: number
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+/**
+ * An object's path through the replay (#86) — what lets a box FOLLOW the thing
+ * it points at instead of sitting where that thing used to be.
+ *
+ * Samples are ascending on the pack clock and are pixels in `display`'s own
+ * snapshot, the same space an annotation's `bounds` is in (SPEC §8.2, §8.8).
+ * Between two samples a reader interpolates; outside them the object was not
+ * being recorded, and a box has nothing to follow.
+ */
+export interface ObjectTrackResult {
+  /** The display the object STARTED on; individual samples may name another. */
+  display: number
+  samples: ObjectTrackSample[]
+  /**
+   * When the object stopped being there, or null if it lasted the whole range.
+   *
+   * A box may not outlive this (#77): past it the box would point at whatever
+   * moved in behind, and nothing in the pack would say so.
+   */
+  endedAtMs: number | null
+}
+
+/** IPC.contextRequestTrack — the editor asking where one picked object went. */
+export interface ObjectTrackRequest {
+  sessionId: string
+  surfaceId: string
+  startMs: number
+  endMs: number
 }
 
 export interface EditorAnnotationAddedPayload {
@@ -539,6 +688,16 @@ export interface RenderStartPayload {
   // which all number globally. Absent = single-display job: the subset IS the
   // whole set and the renderer computes it itself.
   displayNumbers?: Array<[string, number]>
+  // WHICH display this job is drawing (SPEC §5.6 index), absent = the focused
+  // one. Only tracked boxes need it: a box follows its object onto another
+  // screen (#86), so a job has to know which rectangles are its own to draw and
+  // which belong to the neighbour's video.
+  display?: number
+  // The pack's focused display index, which is what an ABSENT `display` means —
+  // on the job above and on an annotation alike (SPEC §8.8). Carried so the two
+  // can be compared without the renderer guessing. Absent in a single-display
+  // pack, where every box is on the one screen and there is nothing to compare.
+  focusedDisplay?: number
   // Canvas size = snapshot reference size (annotation coordinate space)
   width: number
   height: number
@@ -582,6 +741,18 @@ export interface RenderResultPayload {
 // (GOAL "Replay Trim") — it precedes 'rendering' (the annotated render) when
 // the save carries an active trim.
 export type ToastRenderState = 'none' | 'trimming' | 'rendering' | 'done' | 'failed'
+
+/** What the toast is told about a render in flight (#96). */
+export interface ToastRenderStatusPayload {
+  state: ToastRenderState
+  /**
+   * How far through, 0..1 — ABSENT while nothing real is known.
+   *
+   * The bar is indeterminate until the render reports a playhead, rather than
+   * animating from a number nobody measured.
+   */
+  progress?: number
+}
 
 /**
  * A saved pack that is (partly) screenshot-only because a display's replay

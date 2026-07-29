@@ -15,10 +15,13 @@ import type { RenderFramePayload, RenderResultPayload, RenderStartPayload } from
 import type { Annotation } from '../../shared/types'
 import { computeDisplayNumbers } from '../../shared/numbering'
 import { computeKeyframeTimes } from '../../shared/keyframes'
+import { annotationAt } from '../../shared/track'
 
 interface RenderBridge {
   onStart(cb: (payload: RenderStartPayload) => void): void
   frame(payload: RenderFramePayload): void
+  /** How far through the replay this render has played, 0..1 (#96). */
+  progress?(ratio: number): void
   result(payload: RenderResultPayload): void
 }
 
@@ -76,6 +79,23 @@ interface Overlay {
   ordered: Annotation[]
   numbers: Map<string, number>
   ui: number
+  /** Which display this job draws; undefined = the focused one. */
+  display: number | undefined
+  /** What an absent display index MEANS. Undefined = single-display pack. */
+  focused: number | undefined
+}
+
+/**
+ * Whether a RESOLVED annotation is on the screen this job renders.
+ *
+ * An absent `display` means the FOCUSED one — on the job and on the annotation
+ * alike (SPEC §8.8) — so both are resolved through `focused` before comparing.
+ * Getting that wrong would silently drop every tracked box from the focused
+ * display's own video, which is the one most people watch.
+ */
+function onThisDisplay(a: Annotation, overlay: Overlay): boolean {
+  if (overlay.focused === undefined) return true // single-display pack: one screen, every box
+  return (a.display ?? overlay.focused) === (overlay.display ?? overlay.focused)
 }
 
 function makeOverlay(job: RenderStartPayload, outputWidth: number, outputHeight: number): Overlay {
@@ -92,6 +112,28 @@ function makeOverlay(job: RenderStartPayload, outputWidth: number, outputHeight:
           width: a.bounds.width * scaleX,
           height: a.bounds.height * scaleY,
         },
+        // THE TRACK SCALES WITH THE BOX (#86). Its samples are snapshot pixels
+        // like `bounds`, and a render at any other resolution that scaled one
+        // and not the other would send every tracked box to a rectangle nothing
+        // in the pack describes — worse than not following at all, because it
+        // would look deliberate.
+        ...(a.tracking?.samples === undefined
+          ? {}
+          : {
+              tracking: {
+                ...a.tracking,
+                samples: a.tracking.samples.map((s) => ({
+                  t_ms: s.t_ms,
+                  // Scaled coordinates, UNSCALED identity: which screen a
+                  // sample is on is not a length.
+                  ...(s.display === undefined ? {} : { display: s.display }),
+                  x: s.x * scaleX,
+                  y: s.y * scaleY,
+                  width: s.width * scaleX,
+                  height: s.height * scaleY,
+                })),
+              },
+            }),
       }))
       .sort((a, b) => a.z - b.z),
     // GLOBAL display numbers (SPEC §8.5) — global over the whole PACK, not just
@@ -108,6 +150,8 @@ function makeOverlay(job: RenderStartPayload, outputWidth: number, outputHeight:
     // Overlay sizes scale with the capture resolution so a 4K replay does not
     // get hairline borders.
     ui: Math.max(1, outputWidth / 1280),
+    display: job.display,
+    focused: job.focusedDisplay,
   }
 }
 
@@ -119,7 +163,24 @@ function drawOverlay(
   overlay: Overlay,
   tMs: number | null,
 ): void {
-  const alive = tMs === null ? overlay.ordered : overlay.ordered.filter((a) => visibleAt(a, tMs))
+  // Resolved to where each box IS at this moment (#86), by the same function
+  // the editor draws with. A rendered view that placed tracked boxes any other
+  // way would make the pack disagree with its own picture of itself.
+  //
+  // A still job (`tMs === null`) has no clock to follow, so a tracked box is
+  // drawn at its stored `bounds` — the rectangle at its representative instant,
+  // which is exactly what `bounds` means.
+  const alive =
+    tMs === null
+      ? overlay.ordered
+      : overlay.ordered
+          .filter((a) => visibleAt(a, tMs))
+          .map((a) => annotationAt(a, tMs))
+          // A tracked box follows its object onto other screens (#86), and this
+          // job draws ONE screen. A box currently on the neighbour's monitor
+          // belongs in the neighbour's video, not painted at foreign
+          // coordinates into this one.
+          .filter((a) => onThisDisplay(a, overlay))
   for (const a of alive) {
     if (a.blur) pixelate(ctx, canvas, a)
   }
@@ -211,15 +272,40 @@ async function renderAnnotated(
     }
   }
 
-  const drawFrame = (): number => {
+  // Throttled so a 30 s render sends a few dozen progress messages, not a
+  // thousand: the bar cannot show more than the eye can read anyway (#96).
+  let lastProgressAt = 0
+  const reportProgress = (tMs: number): void => {
+    if (job.durationMs <= 0) return
+    const now = performance.now()
+    if (now - lastProgressAt < 200) return
+    lastProgressAt = now
+    window.renderBridge.progress?.(Math.max(0, Math.min(1, tMs / job.durationMs)))
+  }
+
+  // THE FRAME BEING DRAWN, NOT THE PLAYHEAD (#93/#98).
+  //
+  // `video.currentTime` is where playback has got to, which is not the
+  // presentation time of the frame `drawImage` is about to copy. #93 corrected
+  // that with a SECOND `requestVideoFrameCallback` chain feeding a variable —
+  // and two independent chains have no ordering guarantee between them, so the
+  // variable could still hold the previous frame's time when the draw ran.
+  // Measured on CapturePack_2026-07-29_081301: the burned-in box sat 120 px
+  // right and 44 px below its window, in a frame whose pixels and box were
+  // composited by the SAME call and therefore cannot honestly disagree.
+  //
+  // So the time comes from the callback that DRIVES the draw. One chain, one
+  // frame, one timestamp — nothing left to race.
+  const drawFrame = (mediaTimeMs?: number): number => {
     // Clamp to the manifest replay_duration_ms (the lifetime clock cap): the
     // decoded clock can run slightly past the recorder's wall clock, which
     // would hide "until end" boxes (end_ms == replay_duration_ms) on the
     // final frames. Mirrors the editor's Math.min(tMs, replayDurationMs).
-    const rawMs = video.currentTime * 1000
+    const rawMs = mediaTimeMs ?? video.currentTime * 1000
     const tMs = job.durationMs > 0 ? Math.min(rawMs, job.durationMs) : rawMs
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
     drawOverlay(ctx, canvas, overlay, tMs)
+    reportProgress(tMs)
     return tMs
   }
 
@@ -250,16 +336,18 @@ async function renderAnnotated(
     video.onended = () => resolve()
     video.onerror = () => reject(new Error('replay video failed to decode'))
   })
-  const scheduleDraw = (): void => {
+  const scheduleDraw = (mediaTimeMs?: number): void => {
     if (video.ended) return
-    captureDue(drawFrame())
+    captureDue(drawFrame(mediaTimeMs))
     // Out-point reached: stop like 'ended' would, holding the current frame.
     if (trimEndMs !== undefined && video.currentTime * 1000 >= trimEndMs) {
       video.pause()
       reachedTrimEnd()
       return
     }
-    video.requestVideoFrameCallback(() => scheduleDraw())
+    // The metadata of the frame that JUST became current, handed straight to
+    // the draw it triggers (#98).
+    video.requestVideoFrameCallback((_now, metadata) => scheduleDraw(metadata.mediaTime * 1000))
   }
   recorder.start(1000)
   scheduleDraw()

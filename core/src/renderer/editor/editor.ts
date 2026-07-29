@@ -10,13 +10,14 @@
 // one clock scrubs every display's replay together. A single-display capture
 // builds a one-display board and behaves exactly as this editor always did.
 import type {
+  ContextFrameRequest,
   EditorExportPayload,
   EditorInitPayload,
-  EditorUiaElement,
-  EditorUiaObjectsPayload,
-  EditorUiaWindow,
+  ObjectTrackRequest,
+  ObjectTrackResult,
   RecorderFailureReason,
 } from '../../shared/ipc'
+import type { ContextFrame } from '../../shared/context/protocol'
 import { applyDomI18n, makeT, recorderFailureText } from '../../shared/i18n'
 import type { TranslateFn } from '../../shared/i18n'
 import type {
@@ -26,6 +27,7 @@ import type {
   EditorWindowMode,
   UiaAnnotationTarget,
 } from '../../shared/types'
+import { annotationAt, trackedBoundsAt } from '../../shared/track'
 import { computeDisplayNumbers } from '../../shared/numbering'
 import { ObjectIndex, objectHoverLabel, objectLabel } from './objects'
 import type { PickableObject } from './objects'
@@ -60,10 +62,16 @@ import { clampZoom, Viewport, ZOOM_MAX, ZOOM_MIN, ZOOM_STEP } from './viewport'
 
 interface EditorBridge {
   onInit(cb: (payload: EditorInitPayload) => void): void
-  // Static object picking (GOAL): the dump, when it settles after the editor
-  // opened. The editor rebuilds its per-display object indexes from it and
-  // picking starts working mid-session.
-  onUiaObjects(cb: (payload: EditorUiaObjectsPayload) => void): void
+  // OBJECT PICKING FOLLOWS TIME (#66): the candidate set at one scrub position.
+  // Asked when the scrub settles, never per pointer move.
+  requestContextFrame(request: ContextFrameRequest): Promise<ContextFrame | null>
+  // A frame Core pushed: a provider that answered after its budget, or the
+  // capture-instant observation settling after the editor opened. The editor
+  // rebuilds its per-display indexes and picking starts working mid-session.
+  onContextFrame(cb: (frame: ContextFrame) => void): void
+  // WHERE A PICKED OBJECT WENT (#86). Asked once per picked box; the answer is
+  // a path the box is drawn along, so following costs nothing while scrubbing.
+  requestObjectTrack(request: ObjectTrackRequest): Promise<ObjectTrackResult | null>
   export(payload: EditorExportPayload): void
   saveAsNew(payload: EditorExportPayload): void
   cancel(): void
@@ -146,6 +154,9 @@ const overlayCtx = ctx2d(overlay)
 // State
 // ---------------------------------------------------------------------------
 
+/** Green: Core owns this rectangle (#99). Mirrors render.ts's TRACKED_COLOR. */
+const TRACKED_BOX_COLOR = '#22C55E'
+
 const MIN_DRAG = 3 // native px below which a right-drag creates nothing
 const MIN_SIZE = 2 // native px floor for resize (bounds sizes must stay > 0)
 
@@ -200,26 +211,45 @@ let focusedDisplayIndex = 0
 // of every annotation that carries no `display`.
 let focusedW = 0
 let focusedH = 0
-// Static object picking (GOAL "Static object picking (v0)"): the capture-instant
-// UI Automation objects — every visible WINDOW plus the CONTROLS of the windows
-// whose tree the dump reached.
+// OBJECT PICKING, AT THE TIME ON SCREEN (#64/#65/#66): the surface stack and
+// every provider's candidates AS THEY WERE at the current scrub position, asked
+// of Core whenever that position settles somewhere new.
+//
+// This is the whole fix. The index used to be built once, at load, over the
+// capture-instant dump — so scrubbing back left it describing a moment that was
+// no longer on screen, reported from live use as "it only matches the last
+// information; I moved it and it does not match". Now the DATA moves with the
+// clock, and where it cannot (a pack that recorded one instant, an interval no
+// checkpoint covers) the frame says so and picking declines for that reason
+// rather than for the clock position.
 //
 // ONE INDEX PER CAPTURED DISPLAY, keyed by the manifest display index (GOAL
-// "Multi-Monitor Support", issue #30). Every object says which display's
-// snapshot space its bounds are in (`display`, SPEC §11.3), every screen of the
-// board is annotatable, and a pick therefore comes from the index of the display
-// UNDER THE POINTER. One index in the focused display's space — which is what
-// this was — left picking silently dead on every other screen, i.e. on most of a
-// two-monitor desk.
-//
-// Empty everywhere (no dump, a dump that produced nothing, a pack without
-// plugins/windows-uia) leaves every path below behaving exactly as it did before
-// the feature existed.
+// "Multi-Monitor Support", issue #30). Every candidate says which display's
+// snapshot space its bounds are in (SPEC §11.3), every screen of the board is
+// annotatable, and a pick therefore comes from the index of the display UNDER
+// THE POINTER.
 const objectIndexes = new Map<number, ObjectIndex>()
-// A push that arrived before initEditor finished (it awaits image decoding):
+// The frame the indexes were built from — its accuracy is what the honest
+// "nothing here" message is drawn from.
+let contextFrame: ContextFrame | null = null
+let contextSessionId: string | null = null
+// A frame that arrived before initEditor finished (it awaits image decoding):
 // held rather than dropped, and applied the moment the board exists.
-let pendingUiaObjects: EditorUiaObjectsPayload | null = null
+let pendingContextFrame: ContextFrame | null = null
+// The scrub position the current frame describes, and the request in flight.
+// A wheel burst is dozens of positions; only the one it SETTLES on is worth a
+// round trip (GOAL: a slow provider must never hold the editor shut, and a fast
+// one must not be asked sixty times a second either).
+let frameTimeMs: number | null = null
+let frameRequestSeq = 0
+let frameSettleTimer: number | null = null
 let hoverObject: PickableObject | null = null
+// THE LOSING CANDIDATES ARE KEPT (#66). Tab / Shift+Tab cycle the objects at
+// the hovered point; `hoverStack` is that list and `hoverStackIndex` is where
+// the cycle currently is. Reset whenever the probed point changes, because a
+// cycle is about ONE point.
+let hoverStack: readonly PickableObject[] = []
+let hoverStackIndex = 0
 // The board display the hovered object belongs to — the one under the pointer,
 // kept explicitly so the outline is drawn with that display's transform and
 // never on a neighbour.
@@ -257,9 +287,18 @@ type ObjectHintKind =
   | 'noData'
   | 'displayNoData'
   | 'gutter'
-  // Scrubbed away from the capture instant: the objects describe a different
-  // moment than the one on screen, so nothing is offered here (v0.3.0 #64/#66).
-  | 'scrubbedAway'
+  // COVERAGE, not clock position (#66, design GAP 16). Two different statements
+  // the old single 'scrubbedAway' refusal could not tell apart:
+  //   uncovered    — no provider has a checkpoint near THIS moment (an interval
+  //                  the buffer never covered, or one the governor degraded).
+  //   singleInstant— this pack recorded objects at the capture instant only,
+  //                  which is every pack written before v0.2.0.
+  // Both fire from the frame's own accuracy, never from a blanket rule about
+  // where the playhead is.
+  | 'uncovered'
+  | 'singleInstant'
+  // More than one object is on offer at this point, and Tab moves through them.
+  | 'cycle'
   | 'boxTookClick'
 const objectHintsShown = new Set<ObjectHintKind>()
 let objectHintTimer: number | null = null
@@ -416,6 +455,22 @@ function displayOf(a: Annotation): BoardDisplay | null {
 }
 
 /** The index `displayOf` resolves to — the grouping key for per-display draws. */
+/**
+ * A TRACKED BOX IS NOT DRAGGED (#99).
+ *
+ * Its rectangle is Core's record of where the object actually was, at every
+ * moment of the replay. Moving or resizing it does not adjust an annotation —
+ * it replaces a measurement with a guess, and the box then follows nothing
+ * while still carrying a `target` that says which object it means. The user
+ * asked for exactly this: "파란색에 이동 크기 편집 못하게 해야지".
+ *
+ * Everything else stays available: select it, describe it, number it, blur it,
+ * change its lifetime, delete it. Only the geometry is Core's.
+ */
+function isTracked(a: Annotation): boolean {
+  return a.tracking?.enabled === true
+}
+
 function displayIndexOf(a: Annotation): number {
   return displayOf(a)?.index ?? focusedDisplayIndex
 }
@@ -736,8 +791,58 @@ function annotationVisibleNow(a: Annotation): boolean {
   return visibleAt(a, Math.min(scrub.tMs, replayDurationMs), scrub.atNow, replayDurationMs)
 }
 
+/**
+ * The scrub position everything on screen is resolved at (#86).
+ *
+ * The PICTURE's clock, not the playhead's (#81): a tracked box has to agree
+ * with the frame it is drawn over, and those differ by up to one frame gap.
+ */
+function nowMs(): number {
+  return presentedOn(focusedDisplayIndex)
+}
+
+/**
+ * The pack time ONE SCREEN is showing (#88).
+ *
+ * Every screen has its own frames: the recorders run independently, so two
+ * replays seeked to the same position land on two different moments. A box
+ * drawn on a screen is resolved on THAT screen's clock or it is placed for a
+ * picture the neighbour is showing.
+ */
+function presentedOn(displayIndex: number): number {
+  if (!scrub) return replayDurationMs
+  if (scrub.atNow) return replayDurationMs
+  return Math.min(scrub.presentedMsFor(displayIndex), replayDurationMs)
+}
+
+/**
+ * One annotation as it should be DRAWN, on the clock of the screen it is on.
+ *
+ * Two passes, because a tracked box can MOVE between screens: resolving it
+ * needs a clock, and which clock depends on where it resolved to. The first
+ * pass asks the screen it is stored on, and if that says it is somewhere else
+ * now, the second asks that screen instead. Both clocks are within a frame of
+ * each other, so this converges immediately and never oscillates.
+ */
+function resolveForBoard(a: Annotation): Annotation {
+  const stored = displayIndexOf(a)
+  const first = annotationAt(a, presentedOn(stored))
+  const landed = displayIndexOf(first)
+  return landed === stored ? first : annotationAt(a, presentedOn(landed))
+}
+
+/**
+ * The annotations to DRAW and HIT-TEST, each already resolved to where it is
+ * at the current position (#86).
+ *
+ * This is the one place a track becomes a rectangle. Everything downstream —
+ * drawing, blurring, selection chrome, hit-testing — keeps reading `bounds` and
+ * is right without knowing tracking exists. Editing writes to
+ * `state.annotations`, which is untouched by this.
+ */
 function visibleAnnotations(): readonly Annotation[] {
-  return scrub ? state.annotations.filter(annotationVisibleNow) : state.annotations
+  const live = scrub ? state.annotations.filter(annotationVisibleNow) : state.annotations
+  return live.map(resolveForBoard)
 }
 
 /** The boxes of ONE display that apply at the current board position. */
@@ -816,7 +921,23 @@ let laneDurationMs = -1
 function syncLanes(): void {
   if (!scrub) return
   laneDurationMs = scrub.durationMs
-  timebar.setAnnotations(state.annotations, state.selectedId, scrub.durationMs)
+  // THE LANE APPEARS WITH THE BOX, NOT AFTER IT IS COMMITTED (#92).
+  //
+  // A box being created lives in the text session, not in the store, so a
+  // timeline drawn from the store alone stayed empty until the user pressed
+  // Enter — while the box itself was already on screen with a lifetime the
+  // header was offering to change. The lane is where that lifetime is edited,
+  // so it has to exist as soon as the lifetime does.
+  //
+  // Only the TEXT-session draft, never the rectangle being dragged out: that
+  // one has no lifetime yet and its lane would appear and vanish under the
+  // pointer.
+  const pending = pendingDraft()
+  const lanes =
+    pending === null || pending.start_ms === undefined
+      ? state.annotations
+      : [...state.annotations, pending]
+  timebar.setAnnotations(lanes, pending?.annotation_id ?? state.selectedId, scrub.durationMs)
 }
 
 // ---------------------------------------------------------------------------
@@ -869,6 +990,10 @@ function helpContent(): Array<{ title: string; rows: HelpRow[] }> {
   // about a modifier that can never do anything.
   if (hasObjectData()) {
     captureRows.push([keys('Shift', t('editor.keyLeftClick')), t('editor.helpForceWindow')])
+    // The candidate stack is a feature, not a debug view (#66) — a user who is
+    // never told about Tab has one object per point, which is exactly the
+    // behaviour the stack exists to replace.
+    captureRows.push([t('editor.keyTab'), t('editor.helpCycleObjects')])
   }
   captureRows.push([t('editor.keyRightDrag'), t('editor.helpNewBox')])
   groups.push({ title: t('editor.helpGroupCapture'), rows: captureRows })
@@ -1210,6 +1335,22 @@ function dragDraft(d: {
  * to what this editor wrote before the board existed (SPEC §8.8).
  */
 function beginPendingBox(on: BoardDisplay, b: Box, picked?: PickableObject): void {
+  // ONE BOX PER OBJECT PER MOMENT (#101).
+  //
+  // "같은프레임에 같은 윈도우는 셀렉트 또 안생기게 해줘". Clicking a window that
+  // is already annotated at this position produced a SECOND box on top of the
+  // first — same rectangle, same target, indistinguishable in the pack, and the
+  // one underneath unreachable. The click means "this object", and this object
+  // already has a box here, so the click SELECTS it instead of duplicating it.
+  //
+  // Scoped to the moment, not the whole replay: the same window annotated at
+  // 4 s and again at 20 s is two statements about two different times, which is
+  // the entire point of a lifetime.
+  const already = picked === undefined ? null : existingBoxFor(picked)
+  if (already !== null) {
+    selectBox(already.annotation_id, on)
+    return
+  }
   const stamp = state.nextStamp()
   const draft: Annotation = {
     annotation_id: stamp.annotation_id,
@@ -1222,26 +1363,65 @@ function beginPendingBox(on: BoardDisplay, b: Box, picked?: PickableObject): voi
     numbered: false,
     blur: false,
     tracking: { enabled: false },
-    style: { color: state.color },
+    // A picked box carries the TRACKED colour explicitly (#99) rather than
+    // relying on a reader's default: the pack should say what it looks like.
+    style: { color: picked === undefined ? state.color : TRACKED_BOX_COLOR },
     created_at: stamp.created_at,
     z: stamp.z,
   }
   if (picked !== undefined) {
-    draft.target = uiaTargetOf(picked)
+    const target = uiaTargetOf(picked)
+    if (target !== null) draft.target = target
     // Remembered so a later move/resize can tell whether the box still
     // annotates the object it claims to.
     pickedRects.set(draft.annotation_id, { x: b.x, y: b.y, w: b.w, h: b.h })
   }
+  // THE FRAME THE USER CLICKED ON (#90).
+  //
+  // Everything below anchors to this one number, so it is computed once, from
+  // the picture, before any lifetime exists to be a midpoint of.
+  //
+  // From the screen the click LANDED on, not the focused one: the board shows
+  // every captured display at once and they present independently, so a click
+  // on the second monitor's picture must be timed by that monitor's picture —
+  // the same frame the rectangle above was read out of.
+  const pickedAt = presentedOn(on.index)
   if (scrub) {
     // "Now" (the capture instant) anchors at the end of the replay; a scrubbed
     // stamp is clamped to the manifest's wall-clock replay_duration_ms — the
     // parsed video clock can run slightly past it.
-    const anchor = scrub.atNow ? replayDurationMs : Math.min(Math.round(scrub.tMs), replayDurationMs)
-    const life = lifetimeAround(anchor, defaultManualDurationMs, replayDurationMs)
+    // ON THE PICTURE'S CLOCK, like the geometry above (#81/#85). The box was
+    // drawn over a frame, and after #81 its rectangle comes from that frame's
+    // time. Stamping the lifetime with the PLAYHEAD's time instead would put the
+    // two on different clocks and the pack would contradict the screen: a reader
+    // comparing the box against the replay at the box's own time sees an error
+    // of up to one frame gap that the user never saw while drawing it.
+    const life = lifetimeAround(Math.round(pickedAt), defaultManualDurationMs, replayDurationMs)
     draft.start_ms = life.start_ms
     draft.end_ms = life.end_ms
   }
+  if (picked?.surface != null) {
+    // THE PICK INSTANT IS THE FRAME, NOT THE MIDDLE OF ANYTHING (#90).
+    //
+    // #111 moved `bounds` off the lifetime midpoint because editing the
+    // lifetime moved it — but it then recorded the pick instant AS that
+    // midpoint, so the anchor was still a derived number and still not the
+    // moment the user clicked. When the default lifetime is a second wide and
+    // the track therefore spans a second, an anchor even slightly outside it
+    // clamps to the track's FIRST sample: measured on
+    // CapturePack_2026-07-29_092305, the track ran 15648–16589 ms and `bounds`
+    // was the 15648 ms rectangle — the window as it had been before the frame
+    // on screen, which is exactly the "it locks onto a time ahead of my pick"
+    // the report describes.
+    //
+    // The frame the box was drawn over is the only instant that means anything
+    // here, and it is the same clock the rectangle itself came from (#81).
+    pickedAtMs.set(draft.annotation_id, pickedAt)
+    attachTrack(draft, picked.surface.surfaceId)
+  }
   textSession = { kind: 'new', draft }
+  // The lane belongs to the box, and the box exists now (#92).
+  syncLanes()
   // A pre-filled description opens SELECTED: keeping it is one Enter, replacing
   // it is just typing.
   openTextEditor(on, draft.bounds, draft.text, draft.text !== '')
@@ -1501,10 +1681,31 @@ function pendingDraft(): Annotation | null {
 }
 
 /** The selected box, if it applies at the current scrub position. */
+/**
+ * The selected box AS STORED — the object every edit writes into.
+ *
+ * MUST NOT be the resolved view (#86). A tracked box resolves to a COPY, and a
+ * mutation applied to a copy is a mutation the user watches happen and then
+ * loses: colour, blur, numbering and duration all silently reverting on exactly
+ * the boxes that follow something. Anything GEOMETRIC wants
+ * `selectedPaintedAnnotation` instead.
+ */
 function selectedVisibleAnnotation(): Annotation | null {
   if (state.selectedId === null) return null
   const a = state.byId(state.selectedId)
   return a !== undefined && annotationVisibleNow(a) ? a : null
+}
+
+/**
+ * The selected box WHERE IT IS DRAWN, for chrome that has to sit on it (#86).
+ *
+ * Resize handles and the header hug the rectangle the user can see. On a
+ * tracked box that is the tracked rectangle, not the stored one — handles on
+ * the stored rect would be grab points floating where no box is.
+ */
+function selectedPaintedAnnotation(): Annotation | null {
+  const a = selectedVisibleAnnotation()
+  return a === null ? null : resolveForBoard(a)
 }
 
 /**
@@ -1513,7 +1714,9 @@ function selectedVisibleAnnotation(): Annotation | null {
  * selection.
  */
 function headerAnnotation(): Annotation | null {
-  return pendingDraft() ?? selectedVisibleAnnotation()
+  // Painted, not stored (#86): this positions the header over the box, and on a
+  // tracked box those are different rectangles.
+  return pendingDraft() ?? selectedPaintedAnnotation()
 }
 
 /**
@@ -1704,21 +1907,40 @@ function positionBoxHeader(
  * commit undo the wrong step. A committed box goes through the normal
  * undoable path.
  */
+/** The lifetime a track's range is made of — compared to notice it changed. */
+function lifeKey(a: Annotation): string {
+  return `${a.start_ms ?? 'x'}..${a.end_ms ?? 'x'}`
+}
+
 function applyMutation(mutate: (a: Annotation) => void): void {
   const pending = pendingDraft()
   if (pending !== null) {
+    const before = lifeKey(pending)
     mutate(pending)
-    // Repaints the live preview (blur, number badge, border) and re-syncs the
-    // header labels — the pending box is in neither the store nor the lanes.
+    // A track was fetched for the lifetime the box had when it was picked. Any
+    // change to that lifetime — a preset, "until the end", "entire capture" —
+    // makes the path we hold the wrong length (#86).
+    // The lifetime moved, so the representative instant did. Do NOT re-anchor
+    // yet (#107): the track in hand was fetched for the OLD range and cannot
+    // reach the new midpoint, so anchoring against it clamps to the track's end
+    // — one big visible jump, and then a second one when the real track lands.
+    // `attachTrack` re-anchors once, on the path that actually has the answer.
+    if (lifeKey(pending) !== before) refreshTrack(pending)
+    // Repaints the live preview (blur, number badge, border), re-syncs the
+    // header labels, and moves the pending box's own lane (#92).
+    syncLanes()
     schedulePaint()
     syncSelectionUi()
     return
   }
   const a = selectedVisibleAnnotation()
   if (a === null) return
-  const before = state.cloneAnnotations()
+  const snapshot = state.cloneAnnotations()
+  const life = lifeKey(a)
   mutate(a)
-  state.pushUndoSnapshot(before)
+  // Same rule as the pending path (#107): the refreshed track re-anchors it.
+  if (lifeKey(a) !== life) refreshTrack(a)
+  state.pushUndoSnapshot(snapshot)
   refresh()
 }
 
@@ -1904,7 +2126,7 @@ function objectIndexOf(index: number): ObjectIndex | null {
   return objectIndexes.get(index) ?? null
 }
 
-/** Whether ANY display of this board has object data at all. */
+/** Whether ANY display of this board has something pickable RIGHT NOW. */
 function hasObjectData(): boolean {
   for (const index of objectIndexes.values()) {
     if (index.size > 0) return true
@@ -1913,23 +2135,40 @@ function hasObjectData(): boolean {
 }
 
 /**
- * Builds ONE index per captured display, each in ITS OWN snapshot pixel space
- * (issue #30). Every element and window carries the display its bounds belong
- * to, so the split is a filter — and an object can never be offered on a screen
+ * Whether picking has anything to SAY, which is not the same question.
+ *
+ * With no observation at all — a non-Windows capture, a re-edited pack with no
+ * plugin, a dump that never ran — picking is simply off and silence is the
+ * truth. But a pack that HAS object data and is being scrubbed to a moment that
+ * data does not cover has an empty index and a great deal to say: that is the
+ * case the v0.1.7 gate existed for, and it is exactly the case where silence
+ * would read as "picking is broken" (GOAL: "Silence is not absence").
+ */
+function objectPickingCanSpeak(): boolean {
+  if (hasObjectData()) return true
+  const coverage = contextFrame?.accuracy.coverage
+  return coverage !== undefined && coverage !== 'none'
+}
+
+/**
+ * Builds ONE index per captured display from a resolved frame, each in ITS OWN
+ * snapshot pixel space (issue #30). Core has already split the candidates per
+ * display, so this is a lookup — and an object can never be offered on a screen
  * whose image it does not describe.
  */
-function buildObjectIndexes(
-  elements: readonly EditorUiaElement[],
-  windows: readonly EditorUiaWindow[],
-): void {
+function buildObjectIndexes(frame: ContextFrame): void {
+  contextFrame = frame
   objectIndexes.clear()
   if (board === null) return
   for (const d of board.displays) {
+    const slice = frame.displays.find((s) => s.display === d.index)
     objectIndexes.set(
       d.index,
       ObjectIndex.build(
-        elements.filter((e) => e.display === d.index),
-        windows.filter((w) => w.display === d.index),
+        slice?.candidates ?? [],
+        slice?.surfaces ?? [],
+        slice?.coverage ?? [],
+        frame.claims,
         d.width,
         d.height,
       ),
@@ -1938,34 +2177,78 @@ function buildObjectIndexes(
 }
 
 /**
- * Whether object data can honestly describe the frame on screen right now.
+ * THE EDITOR RE-QUERIES AS THE SCRUB POSITION MOVES (#66).
  *
- * The UIA dump is ONE instant — the moment the hotkey was pressed, which is the
- * END of the replay. Scrub back and the windows were somewhere else, while the
- * index still holds where they ended up: reported from live use as "it only
- * matches the last information; I moved and it does not match". Offering a
- * rectangle that is quietly for a different moment is the same defect as a tray
- * icon that says "recording" — the answer looks like an answer and is wrong.
+ * Debounced on SETTLE, not on every tick: a wheel burst is dozens of positions
+ * and playback is sixty a second, and Core's answer for a position the user
+ * left 16 ms ago is work nobody asked for. Hovering itself stays free — it
+ * probes the local index, never Core.
  *
- * So picking is offered at the capture instant and nowhere else, until providers
- * can restore the past for real (v0.3.0 temporal context providers, #64/#66).
- * Refusing to answer is the honest reading of data that does not cover the
- * question.
+ * The frame in hand keeps answering while a new one is on its way, so picking
+ * never blinks off mid-scrub; a stale-but-honest offer is corrected the moment
+ * the new frame lands, and its accuracy is what says whether it was honest.
  */
-function objectsDescribeNow(): boolean {
-  return scrub === null || !scrub.ready || scrub.atNow
+const FRAME_SETTLE_MS = 120
+
+function requestContextFrame(timeMs: number): void {
+  const sessionId = contextSessionId
+  if (sessionId === null) return
+  const rounded = Math.max(0, Math.round(timeMs))
+  if (frameTimeMs === rounded) return
+  frameRequestSeq += 1
+  const seq = frameRequestSeq
+  void window.editorBridge
+    .requestContextFrame({ sessionId, timeMs: rounded })
+    .then((frame) => {
+      // A later request already answered: this one is history, and applying it
+      // would move picking BACK in time.
+      if (frame === null || seq !== frameRequestSeq) return
+      frameTimeMs = rounded
+      applyContextFrame(frame)
+    })
+    .catch((err: unknown) => {
+      // Rule 1 of object data: it may never break anything else. A frame that
+      // could not be built leaves the previous one in place.
+      console.error('capturepack: requesting a context frame failed:', err)
+    })
 }
 
-/**
- * The object under the cursor on `d`, or null when the dump knows nothing about
- * that point — asked of the index of the display the pointer is ON, so every
- * screen of the board picks (issue #30).
- */
-function objectAt(d: BoardDisplay, p: { x: number; y: number }): PickableObject | null {
-  if (!objectsDescribeNow()) return null
-  const index = objectIndexOf(d.index)
-  if (index === null || index.size === 0) return null
-  return index.pick(p.x, p.y, windowLevelKey)
+/** Schedules a re-query for the position the scrub has settled on. */
+function scheduleContextFrame(): void {
+  if (contextSessionId === null || scrub === null) return
+  if (frameSettleTimer !== null) window.clearTimeout(frameSettleTimer)
+  frameSettleTimer = window.setTimeout(() => {
+    frameSettleTimer = null
+    if (scrub === null) return
+    // "Now" is the capture instant, which is the END of the pack clock — the
+    // native snapshot, not a video position.
+    //
+    // Otherwise ask for the time of the frame ON SCREEN, not the playhead's
+    // (#81). A seek to T shows the last frame at or before T; asking the ring
+    // for T instead returns where the window HAD GOT TO by then, and the box
+    // lands beside the window the user can see. Measured in rc.4: the displayed
+    // frame ran up to 498 ms behind the playhead, worth 1304 px on a dragged
+    // window, while the boxes themselves were accurate to a median of 9 ms.
+    requestContextFrame(scrub.atNow ? replayDurationMs : scrub.presentedMs)
+  }, FRAME_SETTLE_MS)
+}
+
+/** A new frame: rebuild, and re-answer the point the pointer is already on. */
+function applyContextFrame(frame: ContextFrame): void {
+  if (!loaded || board === null) {
+    pendingContextFrame = frame
+    return
+  }
+  buildObjectIndexes(frame)
+  if (frame.dropped) showObjectHintOnce('dropped', t('editor.objectDropped'))
+  // The sheet advertises the picking modifiers only where object data exists.
+  if (helpOpen) buildHelpSheet()
+  // A pointer already resting on an object must not have to move to find out
+  // that the answer changed.
+  hoverStack = []
+  hoverStackIndex = 0
+  reprobeObjectHover()
+  schedulePaint()
 }
 
 /** The topmost box under a native point of `d` — the one a click could take. */
@@ -2065,19 +2348,42 @@ function probeObjectHover(p: { d: BoardDisplay; x: number; y: number } | null): 
 function answerProbe(d: BoardDisplay, x: number, y: number): void {
   const index = objectIndexOf(d.index)
   if (index === null || index.size === 0) {
+    hoverStack = []
+    hoverStackIndex = 0
     setHoverObject(null, null)
     // A SCREEN the dump had nothing for, on a board whose other screens do have
     // object data: hovering it is exactly when that is worth saying — the
     // outline that appears everywhere else simply never comes here, and silence
     // reads as "this screen's windows have no objects" (issue #30). With no data
     // anywhere, picking is off as a whole and silence is the truth.
-    if (hasObjectData()) {
+    if (objectPickingCanSpeak()) {
       const answer = emptyAnswer(d)
       showObjectHintOnce(answer.kind, answer.text, 'answer')
     }
     return
   }
-  const next = index.pick(x, y, windowLevelKey)
+  // THE WHOLE STACK, not just the winner (#66): the first is what a click
+  // takes, the rest is what Tab / Shift+Tab cycle through, and it is kept for
+  // exactly as long as the pointer stays on this point.
+  const stack = index.stackAt(x, y, windowLevelKey)
+  hoverStack = stack.offered
+  hoverStackIndex = 0
+  offerHover(d, x, y)
+  const next = hoverStack[0]
+  // A point with more than one object on it is where Tab means something, and
+  // a shortcut nobody is told about is a shortcut nobody has.
+  if (next !== undefined && hoverStack.length > 1) {
+    showObjectHintOnce('cycle', t('editor.objectCycle'))
+  }
+}
+
+/**
+ * Paints (and explains) whichever candidate of the current stack is on offer.
+ * Split out of answerProbe because Tab moves through the stack WITHOUT
+ * re-probing: re-probing would rebuild the stack and reset the cycle.
+ */
+function offerHover(d: BoardDisplay, x: number, y: number): void {
+  const next = hoverStack[hoverStackIndex] ?? null
   // The PROBE runs over boxes too (that is what stops a box from shadowing
   // picking), but the outline must not promise a pick the click will not make:
   // where the box under the cursor wins, only the outline is suppressed.
@@ -2091,6 +2397,21 @@ function answerProbe(d: BoardDisplay, x: number, y: number): void {
   // for a user who never touched object picking. The pointerdown path says it
   // when a click actually snapped nothing.
   if (next !== null && !shadowed) announceObject(next)
+}
+
+/**
+ * TAB / SHIFT+TAB CYCLE THE OBJECTS AT A POINT (#66: "never discard the losing
+ * candidates"). Wraps, because a cycle that stops at the end makes the user
+ * work out how long the list was.
+ */
+function cycleHoverCandidate(delta: number): boolean {
+  if (hoverStack.length < 2) return false
+  const d = displayByIndex(lastProbeDisplay)
+  if (d === null || lastProbeX < 0 || lastProbeY < 0) return false
+  const count = hoverStack.length
+  hoverStackIndex = (hoverStackIndex + delta + count) % count
+  offerHover(d, lastProbeX, lastProbeY)
+  return true
 }
 
 /** Re-probes the last point after the modifier (or the data) changed the answer. */
@@ -2171,9 +2492,18 @@ function announceObject(o: PickableObject): void {
 function emptyAnswer(on: BoardDisplay): { kind: ObjectHintKind; text: string } {
   // FIRST, because it is the reason there is nothing to offer at all — and the
   // one the user cannot work out for themselves. Everything below is about
-  // WHERE they clicked; this is about WHEN.
-  if (!objectsDescribeNow()) {
-    return { kind: 'scrubbedAway', text: t('editor.objectScrubbedAway') }
+  // WHERE they clicked; this is about whether the data COVERS the moment on
+  // screen, which is a property of the data and not of the playhead (#66,
+  // design GAP 16). The v0.1.7 stopgap asked the clock; this asks the frame.
+  const coverage = contextFrame?.accuracy.coverage ?? 'none'
+  if (coverage === 'single-instant') {
+    // Every pack written before v0.2.0: the dump describes the instant the
+    // hotkey was pressed and nothing else, so scrubbing away leaves it with
+    // nothing honest to say — and it says which, rather than looking broken.
+    return { kind: 'singleInstant', text: t('editor.objectSingleInstant') }
+  }
+  if (coverage === 'before-start' || coverage === 'pruned' || coverage === 'degraded') {
+    return { kind: 'uncovered', text: t('editor.objectUncovered') }
   }
   const index = objectIndexOf(on.index)
   if (index === null || index.size === 0) {
@@ -2271,13 +2601,239 @@ function displayObjectHint(text: string): void {
 const pickedRects = new Map<string, Box>()
 
 /**
+ * Puts `bounds` back on the object's rectangle at this box's representative
+ * instant (#102) — the lifetime's midpoint, per SPEC §8.4.
+ *
+ * A no-op for a box with no track: a hand-drawn rectangle IS the answer, and
+ * there is nothing to re-anchor it to.
+ */
+function reanchorBounds(a: Annotation): void {
+  if (a.tracking?.enabled !== true) return
+  // THE INSTANT THE USER PICKED IT, NOT THE MIDDLE OF ITS LIFETIME (#111).
+  //
+  // #102 anchored `bounds` to the lifetime's midpoint, which SPEC §8.4 calls
+  // the representative instant. Correct for a box someone drew, wrong for a box
+  // someone PICKED: extending the lifetime moves the midpoint, so the stored
+  // rectangle walked away from the thing the user had clicked on. Measured on
+  // CapturePack_2026-07-29_091123 — picked at 3656 ms where the window was at
+  // (1814,684), extended to the end, and `bounds` ended up at (119,271), the
+  // midpoint's rectangle, seventeen hundred pixels away.
+  //
+  // The pick instant is what the box MEANS. The track says where the object was
+  // at every other moment, so nothing is lost by holding this one still.
+  const at = trackedBoundsAt(a, pickedAtMs.get(a.annotation_id) ?? lifetimeMidpoint(a, replayDurationMs))
+  if (at !== null) a.bounds = at
+}
+
+/**
+ * The box that already annotates this object AT THIS MOMENT, if there is one.
+ *
+ * Matched on the surface the object IS (#90's stable id), not on its rectangle:
+ * two clicks a few pixels apart on the same window are the same window, and a
+ * window that has moved since is still the same window.
+ */
+function existingBoxFor(picked: PickableObject): Annotation | null {
+  const surfaceId = picked.surface?.surfaceId
+  if (surfaceId === undefined) return null
+  for (const a of state.annotations) {
+    if (trackedSurfaces.get(a.annotation_id) !== surfaceId) continue
+    if (!annotationVisibleNow(a)) continue
+    return a
+  }
+  return null
+}
+
+/**
+ * Gives a freshly picked box the path of the object it names (#86).
+ *
+ * Asked once, for the box's own lifetime, and applied when it lands: the
+ * request is a round trip and the box has to appear immediately. Until the
+ * answer arrives the box behaves exactly as it did before tracking existed —
+ * which is also what happens for good if Core has no path to offer.
+ *
+ * `endedAtMs` CLAMPS THE LIFETIME (#77). A box may not outlive the thing it
+ * points at: past that moment it sits on whatever moved in behind, and neither
+ * the picture nor the pack would say so. Shortening is the only direction this
+ * ever moves an end — a user who wants less still gets less.
+ */
+/**
+ * Which object each tracked box follows, by annotation id.
+ *
+ * Kept because a track is fetched for the box's lifetime AT THE MOMENT IT IS
+ * PICKED, and the lifetime is routinely changed afterwards — "until the end" is
+ * one click. Without this the path would still stop where the original
+ * one-second default did, and the box would follow for a moment and then freeze
+ * for the rest of its life. Measured on a real capture before this existed: a
+ * box alive for 15.6 s carried 0.9 s of path.
+ */
+const trackedSurfaces = new Map<string, string>()
+
+/**
+ * The replay instant each picked box was placed at (#111).
+ *
+ * Its lifetime moves — "until the end" is one click — but the moment the user
+ * pointed at the object does not, and that moment is what the box means.
+ */
+const pickedAtMs = new Map<string, number>()
+
+/**
+ * The replay times the editor has actually SHOWN, most recent last (#113).
+ *
+ * Kept so the app can answer, for itself, the question every one of these
+ * captures has been sent back and forth to settle: does a track's sample sit on
+ * a frame, or between two? A sample was produced BY a frame, so the distance to
+ * the nearest frame the editor has presented should be zero. Anything else is
+ * the residual, in milliseconds, and it belongs in the log rather than in a
+ * measurement someone has to run ffprobe for.
+ */
+const presentedTimes: number[] = []
+
+/** Reports where a freshly fetched track sits relative to the frames on screen. */
+function reportTrackAlignment(samples: readonly { t_ms: number }[]): void {
+  if (presentedTimes.length < 8 || samples.length === 0) return
+  // MEASURED FROM THE PICTURES, NOT FROM THE SAMPLES (#93).
+  //
+  // The first version of this asked, for every sample, how far the nearest
+  // SHOWN frame was — and reported -855 ms on a capture whose rendered output
+  // was later measured correct to two pixels during a 5000 px/s drag. It was
+  // not measuring sync. A user who picks at 11 s and drags the lifetime out to
+  // 30 s has a track covering twenty seconds of replay they never played, and
+  // samples out in that unwatched stretch have no nearby frame by construction.
+  // The number was coverage wearing a sync number's clothes, which is worse
+  // than no number at all.
+  //
+  // Turned around, it means something: for each frame this editor actually put
+  // on screen, how far away was the nearest observation? In sync that is at
+  // most half a sample interval, whatever the rate, and it cannot be inflated
+  // by parts of the replay nobody looked at.
+  const first = samples[0]!.t_ms
+  const last = samples[samples.length - 1]!.t_ms
+  const gaps: number[] = []
+  let outside = 0
+  for (const t of presentedTimes) {
+    if (t < first || t > last) {
+      // A frame from outside the track's span says nothing about alignment.
+      outside += 1
+      continue
+    }
+    let best = Number.POSITIVE_INFINITY
+    for (const s of samples) {
+      const d = s.t_ms - t
+      if (Math.abs(d) < Math.abs(best)) best = d
+    }
+    if (Number.isFinite(best)) gaps.push(best)
+  }
+  if (gaps.length === 0) {
+    console.info(
+      `capturepack: track alignment — none of the ${presentedTimes.length} frames shown so far ` +
+        `fall inside the track (${Math.round(first)}..${Math.round(last)} ms), so there is nothing to compare yet`,
+    )
+    return
+  }
+  gaps.sort((a, b) => a - b)
+  const median = Math.round(gaps[gaps.length >> 1] ?? 0)
+  const worst = Math.round(Math.abs(gaps[0]!) > Math.abs(gaps[gaps.length - 1]!) ? gaps[0]! : gaps[gaps.length - 1]!)
+  console.info(
+    `capturepack: track alignment — over ${gaps.length} frame(s) this editor has shown inside the track, ` +
+      `the nearest observation sits a median of ${median} ms away (worst ${worst} ms; 0 is exact). ` +
+      `${outside} shown frame(s) fell outside the track and were not counted`,
+  )
+}
+
+/** Re-asks for the path over the box's CURRENT lifetime (see `trackedSurfaces`). */
+function refreshTrack(a: Annotation): void {
+  const surfaceId = trackedSurfaces.get(a.annotation_id)
+  if (surfaceId !== undefined) attachTrack(a, surfaceId)
+}
+
+function attachTrack(draft: Annotation, surfaceId: string): void {
+  if (contextSessionId === null) return
+  const id = draft.annotation_id
+  trackedSurfaces.set(id, surfaceId)
+  const start = draft.start_ms ?? 0
+  const end = draft.end_ms ?? replayDurationMs
+  void window.editorBridge
+    .requestObjectTrack({ sessionId: contextSessionId, surfaceId, startMs: start, endMs: end })
+    .then((track) => {
+      if (track === null || track.samples.length < 2) return
+      // The draft may have been committed, renamed or discarded while this was
+      // in flight; the stored annotation is the one that matters.
+      const live = state.byId(id) ?? (textSession?.kind === 'new' && textSession.draft.annotation_id === id ? textSession.draft : undefined)
+      if (live === undefined) return
+      // What an ABSENT sample display means for THIS box (SPEC §8.8): the box's
+      // own screen, which is the focused one when the box does not name it.
+      const ownDisplay = live.display ?? focusedDisplayIndex
+      live.tracking = {
+        enabled: true,
+        // Recorded, not derived: a reader can now check `bounds` against the
+        // track without guessing which instant the box was anchored at (#90).
+        ...(pickedAtMs.has(id) ? { picked_at_ms: Math.round(pickedAtMs.get(id)!) } : {}),
+        // WHICH SCREEN EACH SAMPLE IS MEASURED IN (#86). Dropping it here was
+        // not a missing nicety: a window straddling two monitors changes which
+        // display owns it as it crosses the middle, and its rectangle is then
+        // pixels of the OTHER snapshot — different origin, and on this desk a
+        // different scale too (1443x953 on the 1.5x screen is the same window as
+        // 960x634 on the 1x one). Without the field those two spaces are mixed
+        // in one list and nothing downstream can tell them apart, so the box
+        // jumps between two readings of the same position.
+        // Written only where it SAYS something: absent means the annotation's
+        // own display (SPEC §8.3), so a capture whose object never left one
+        // screen produces exactly the samples it did before this field existed.
+        samples: track.samples.map((s) => ({
+          t_ms: s.tMs,
+          ...(s.display === ownDisplay ? {} : { display: s.display }),
+          x: s.x,
+          y: s.y,
+          width: s.width,
+          height: s.height,
+        })),
+      }
+      if (track.endedAtMs !== null && live.end_ms !== undefined && live.end_ms > track.endedAtMs) {
+        live.end_ms = Math.max(live.start_ms ?? 0, track.endedAtMs)
+      }
+      // `bounds` IS THE RECTANGLE AT THIS BOX'S OWN MOMENT (#102).
+      //
+      // SPEC §8.3 defines it that way and §8.4 says the moment is the lifetime's
+      // MIDPOINT — but it was left as the rectangle the object had when the user
+      // clicked, and the midpoint moves the instant the lifetime is changed.
+      // Measured on CapturePack_2026-07-29_081922: `bounds` was (1784,608),
+      // the object's rectangle at that box's own midpoint was (75,941), and
+      // every reader that honours `bounds` — a 0.1.0 reader, our own still
+      // renderer, report.md — placed the box 1709 px from the thing it names.
+      //
+      // So it is re-anchored from the track, which is the record of where the
+      // object actually was. Nothing is estimated: this is the nearest OBSERVED
+      // sample (#89), the same one the editor draws.
+      reanchorBounds(live)
+      reportTrackAlignment(live.tracking.samples ?? [])
+      schedulePaint()
+    })
+    .catch((err: unknown) => {
+      // Rule 1 of object data: a box that cannot follow is a box that does not
+      // follow, never an editor that broke.
+      console.error('capturepack: requesting an object track failed:', err)
+    })
+}
+
+/**
  * Drops `target` once the box no longer covers the element it was picked from.
  * Called after a committed move or resize; a box that still contains the
  * picked rect's centre is considered to be annotating the same object.
  */
 function invalidateTargetIfMoved(id: string): void {
   const a = state.byId(id)
-  if (!a || a.target === undefined) return
+  if (a === undefined) return
+  // A HAND-MOVED BOX STOPS FOLLOWING (#86). The track describes where the
+  // OBJECT went; once the user has put the box somewhere of their own choosing,
+  // continuing to fly it along the object's path would move the box out from
+  // under them at the next frame. The rectangle they placed is the answer.
+  if (a.tracking?.enabled === true) a.tracking = { enabled: false }
+  // ...and stays stopped. Without this, the next duration change would re-ask
+  // for the path and put the box back on the object's rails, undoing the move
+  // the user made by hand.
+  trackedSurfaces.delete(id)
+  pickedAtMs.delete(id)
+  if (a.target === undefined) return
   const picked = pickedRects.get(id)
   if (picked === undefined) return
   const cx = picked.x + picked.w / 2
@@ -2289,39 +2845,45 @@ function invalidateTargetIfMoved(id: string): void {
   pickedRects.delete(id)
 }
 
-/** `target` for a picked object (SPEC §8.7): empty fields are never written. */
-function uiaTargetOf(o: PickableObject): AnnotationTarget {
+/**
+ * `target` for a picked object (SPEC §8.7): empty fields are never written.
+ *
+ * SPEC 0.1.0 defines exactly one `source` — `uia` — so a target is only stamped
+ * for candidates that really came from Windows UI Automation or from Core's own
+ * window level (which is what `uia` has always meant for a window target). A
+ * candidate from any other provider gets NO target rather than one claiming a
+ * provenance the format does not define yet: §8.7 becoming provider-general is
+ * a SPEC change, and a format change is not done until SPEC.md and the MCP
+ * tools speak it.
+ */
+function uiaTargetOf(o: PickableObject): AnnotationTarget | null {
+  if (o.providerId !== 'windows-uia' && o.providerId !== 'core') return null
+  const identity = o.candidate.identity ?? {}
   const target: UiaAnnotationTarget = { source: 'uia', level: o.level }
+  const value = (key: string): string => (identity[key] ?? '').trim()
   if (o.level === 'window') {
     // A window target names the window, not a control: title + process are what
     // identify it to a human and to an AI reader.
-    const w = o.window
-    if (w === null) return target
-    const title = w.title.trim()
-    const process = w.process.trim()
-    const className = w.class_name.trim()
+    const title = value('title')
+    const process = value('process')
+    const className = value('class_name')
     if (title !== '') target.title = title
     if (process !== '') target.process = process
     if (className !== '') target.class_name = className
     return target
   }
-  const e = o.element
-  if (e === null) return target
-  const name = e.name.trim()
-  const controlType = e.control_type.trim()
-  const automationId = e.automation_id.trim()
-  const className = e.class_name.trim()
+  const name = value('name')
+  const controlType = value('control_type')
+  const automationId = value('automation_id')
+  const className = value('class_name')
   if (name !== '') target.name = name
   if (controlType !== '') target.control_type = controlType
   if (automationId !== '') target.automation_id = automationId
   if (className !== '') target.class_name = className
   // The window a control lives in is context an AI reader cannot recover from
   // the control alone ("the Save button" — of which app?).
-  const owner = o.window
-  if (owner !== null) {
-    const process = owner.process.trim()
-    if (process !== '') target.process = process
-  }
+  const process = value('process')
+  if (process !== '') target.process = process
   return target
 }
 
@@ -2454,8 +3016,8 @@ overlay.addEventListener('pointerdown', (e) => {
   const ui = uiOf(hit.d)
   // Corner resize handles (editor-only chrome) win over box stacking — but only
   // for a selection that lives on THIS screen.
-  const sel = selectedVisibleAnnotation()
-  if (sel !== null && displayIndexOf(sel) === hit.d.index) {
+  const sel = selectedPaintedAnnotation()
+  if (sel !== null && !isTracked(sel) && displayIndexOf(sel) === hit.d.index) {
     const handle = handleAt(sel, p.x, p.y, ui)
     if (handle !== null) {
       overlay.setPointerCapture(e.pointerId)
@@ -2484,9 +3046,23 @@ overlay.addEventListener('pointerdown', (e) => {
   //
   // Shift is read from the EVENT, not from the tracked key state: a window that
   // has just regained focus with Shift already down never saw the keydown.
+  const shiftChanged = windowLevelKey !== e.shiftKey
   windowLevelKey = e.shiftKey
+  // The click takes whatever the hover is CURRENTLY OFFERING, which after a Tab
+  // is not the first candidate any more (#66: the candidate stack is the
+  // feature, not a debug view). Re-answer first when this point was never
+  // probed — a click with no preceding pointermove, or one whose modifier the
+  // probe never saw — so the outline and the click can never disagree.
+  const probed =
+    hit.d.index === lastProbeDisplay && p.x === lastProbeX && p.y === lastProbeY && !shiftChanged
+  if (!probed) {
+    lastProbeDisplay = hit.d.index
+    lastProbeX = p.x
+    lastProbeY = p.y
+    answerProbe(hit.d, p.x, p.y)
+  }
   const box = boxUnder(hit.d, p.x, p.y)
-  const picked = objectAt(hit.d, p)
+  const picked = hoverStack[hoverStackIndex] ?? null
   const pickWins =
     picked !== null && (box === null || pickBeatsBox(picked, box, { x: p.x, y: p.y, ui, repeat }))
   if (box !== null && !pickWins) {
@@ -2505,15 +3081,18 @@ overlay.addEventListener('pointerdown', (e) => {
     ) {
       showObjectHintOnce('boxTookClick', t('editor.objectBoxTookClick'), 'answer')
     }
-    overlay.setPointerCapture(e.pointerId)
-    drag = {
-      kind: 'move',
-      d: hit.d,
-      id: box.annotation_id,
-      lastX: p.x,
-      lastY: p.y,
-      before: state.cloneAnnotations(),
-      moved: false,
+    // Selected, never dragged, when Core owns the rectangle (#99).
+    if (!isTracked(box)) {
+      overlay.setPointerCapture(e.pointerId)
+      drag = {
+        kind: 'move',
+        d: hit.d,
+        id: box.annotation_id,
+        lastX: p.x,
+        lastY: p.y,
+        before: state.cloneAnnotations(),
+        moved: false,
+      }
     }
     // Selecting a box opens its description with the text selected (issue
     // #42): the click that starts a move is also the click that says "this
@@ -2547,11 +3126,12 @@ overlay.addEventListener('pointerdown', (e) => {
     // Remembered so the SECOND click of a double-click can discard it (above)
     // rather than committing a box nobody asked for.
     clickPickDraftId = pendingDraft()?.annotation_id ?? null
-  } else if (hasObjectData()) {
+  } else if (objectPickingCanSpeak()) {
     // The click snapped nothing (it still did what it always did: cleared the
     // selection). Say why — EVERY time, under the kind that belongs to this
-    // refusal. Gated on there being object data at all: with no dump, picking is
-    // simply OFF and silence is the truth.
+    // refusal. Gated on picking having anything to say at all: with no
+    // observation, picking is simply OFF and silence is the truth; with an
+    // observation that does not cover this moment, the refusal is the answer.
     const answer = emptyAnswer(hit.d)
     showObjectAnswer(answer.kind, answer.text)
   }
@@ -2680,8 +3260,8 @@ function syncHoverCursor(e: PointerEvent): void {
     return
   }
   const ui = uiOf(hit.d)
-  const sel = selectedVisibleAnnotation()
-  if (sel !== null && displayIndexOf(sel) === hit.d.index) {
+  const sel = selectedPaintedAnnotation()
+  if (sel !== null && !isTracked(sel) && displayIndexOf(sel) === hit.d.index) {
     const handle = handleAt(sel, hit.x, hit.y, ui)
     if (handle !== null) {
       setHoverCursor(handle === 'nw' || handle === 'se' ? 'nwse-resize' : 'nesw-resize')
@@ -2963,6 +3543,17 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Shift' && !windowLevelKey) {
     windowLevelKey = true
     reprobeObjectHover()
+  }
+  // TAB / SHIFT+TAB CYCLE THE CANDIDATES AT THE HOVERED POINT (#66: the losing
+  // candidates are kept, and this is what they are kept FOR).
+  //
+  // Only taken when there IS a stack of more than one under the pointer, and
+  // never while typing (the gates above already returned) — so Tab keeps
+  // reaching the top bar's controls for a keyboard user everywhere else, which
+  // is the one thing this must not cost.
+  if (e.key === 'Tab' && cycleHoverCandidate(e.shiftKey ? -1 : 1)) {
+    e.preventDefault()
+    return
   }
   if (e.key === ' ') {
     // A FOCUSED CONTROL owns Space: on a button it is that button's native
@@ -3314,12 +3905,16 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
       }
     }),
   )
-  // Static object picking (GOAL): ONE index per captured display over the
-  // capture-instant UI Automation objects — windows (the floor) and controls
-  // (the refinement) — each in that display's own snapshot coordinate space
-  // (SPEC §11.3). An empty payload yields empty indexes and picking stays
-  // silently off.
-  buildObjectIndexes(payload.uiaElements, payload.uiaWindows)
+  // OBJECT PICKING (#66): ONE index per captured display over the candidates
+  // Core resolved for the CAPTURE INSTANT, which is where the editor opens.
+  // Windows are the floor, controls the refinement, each in that display's own
+  // snapshot coordinate space (SPEC §11.3). No session (or an empty frame)
+  // yields empty indexes and picking stays silently off.
+  contextSessionId = payload.context?.sessionId ?? null
+  if (payload.context !== null) {
+    frameTimeMs = payload.context.frame.requestedTimeMs
+    buildObjectIndexes(payload.context.frame)
+  }
   resizeCanvases()
   loaded = true
   drawAllFrozen()
@@ -3372,7 +3967,25 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
         // Lanes rebuild only on a duration change (webm parse resolving), not
         // per tick — setAnnotations is DOM churn unfit for the playback rAF.
         if (controller.durationMs !== laneDurationMs) syncLanes()
+        // PICKING FOLLOWS THE CLOCK (#66). Debounced on settle, so a wheel
+        // burst and a playback rAF cost one request between them, not one per
+        // tick — and the frame already in hand keeps answering meanwhile.
+        scheduleContextFrame()
         schedulePaint()
+      },
+      // AND PICKING FOLLOWS THE PICTURE (#81). A seek can outlast the settle
+      // timer above, so the frame that arrives afterwards must re-ask — the
+      // request is time-keyed and de-duplicated, so when the timer was already
+      // right this costs nothing.
+      onFrame: () => {
+        // Every frame the editor actually shows, remembered so a track can be
+        // checked against the pictures it was built from (#113).
+        const shown = Math.round(controller.presentedMs)
+        if (Number.isFinite(shown)) {
+          presentedTimes.push(shown)
+          if (presentedTimes.length > 400) presentedTimes.shift()
+        }
+        scheduleContextFrame()
       },
     })
     scrub = controller
@@ -3403,14 +4016,14 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
   // state a fresh capture does.
   fitBoard()
   schedulePaint()
-  // A dump that settled while the editor was decoding its frames: apply it now
+  // A frame that landed while the editor was decoding its images: apply it now
   // that there is a board to index it against.
-  if (pendingUiaObjects !== null) {
-    const late = pendingUiaObjects
-    pendingUiaObjects = null
-    applyUiaObjects(late)
-  } else if (payload.uiaDropped) {
-    // GOAL "Silence is not absence": the dump was attempted and produced
+  if (pendingContextFrame !== null) {
+    const late = pendingContextFrame
+    pendingContextFrame = null
+    applyContextFrame(late)
+  } else if (payload.context?.frame.dropped === true) {
+    // GOAL "Silence is not absence": the observation was attempted and produced
     // nothing, so picking is off for this capture. Until this was said, that was
     // indistinguishable from an editor whose picking is broken.
     showObjectHintOnce('dropped', t('editor.objectDropped'))
@@ -3439,31 +4052,23 @@ window.editorBridge.onInit((payload) => {
   void initEditor(payload)
 })
 
-/**
- * The object dump, arriving AFTER the editor opened (GOAL "Static object
- * picking"): the dump is budgeted and killed independently of the window, so on
- * a slow machine it settles a few hundred ms late. Rebuilding the per-display
- * indexes from it makes picking start working mid-session; nothing else is
- * touched, so boxes already drawn are unaffected.
- */
-function applyUiaObjects(payload: EditorUiaObjectsPayload): void {
-  if (!loaded || board === null) {
-    // init has not built the board yet — hold it rather than drop it.
-    pendingUiaObjects = payload
+// A frame Core pushed on its own: an observation that settled after the editor
+// opened (the helper is budgeted and killed independently of the window), or a
+// provider that answered after its budget expired. Rebuilding the per-display
+// indexes from it makes picking start working mid-session; nothing else is
+// touched, so boxes already drawn are unaffected.
+window.editorBridge.onContextFrame((frame) => {
+  // A push for a position the editor has already left is NEWS, not an answer:
+  // an observation that settled late lands at the capture instant while the
+  // user may have scrubbed elsewhere. Applying it would move picking back in
+  // time behind their own scrub, and dropping it would leave picking dead until
+  // they scrub again — so the moment actually on screen is re-asked instead.
+  if (frameTimeMs !== null && frame.requestedTimeMs !== frameTimeMs) {
+    frameTimeMs = null
+    scheduleContextFrame()
     return
   }
-  buildObjectIndexes(payload.uiaElements, payload.uiaWindows)
-  if (payload.dropped) showObjectHintOnce('dropped', t('editor.objectDropped'))
-  // The sheet advertises the window-level modifier only where object data
-  // exists; it was built before this arrived.
-  if (helpOpen) buildHelpSheet()
-  // A pointer already resting on an object must not have to move to find out
-  // that picking works now.
-  reprobeObjectHover()
-}
-
-window.editorBridge.onUiaObjects((payload) => {
-  applyUiaObjects(payload)
+  applyContextFrame(frame)
 })
 
 // Main is the authority on the window state: every mode change lands here,

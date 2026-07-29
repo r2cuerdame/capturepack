@@ -5,6 +5,7 @@ import type {
   CaptureReadyPayload,
   CaptureReplayResultPayload,
   CaptureStartPayload,
+  CaptureTickPayload,
 } from '../shared/ipc'
 
 contextBridge.exposeInMainWorld('captureBridge', {
@@ -22,6 +23,10 @@ contextBridge.exposeInMainWorld('captureBridge', {
   },
   sendFrames(payload: CaptureFramesPayload): void {
     ipcRenderer.send(IPC.captureFrames, payload)
+  },
+  // One captured frame, announcing its own time (#105).
+  sendTick(payload: CaptureTickPayload): void {
+    ipcRenderer.send(IPC.captureTick, payload)
   },
   sendError(message: string): void {
     ipcRenderer.send(IPC.captureError, message)

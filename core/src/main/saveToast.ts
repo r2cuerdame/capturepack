@@ -140,10 +140,17 @@ export function showSaveToast(options: {
  * render for `folderPath` finishes. No-op when the toast already closed or a
  * newer save replaced it.
  */
-export function updateToastRenderStatus(folderPath: string, state: ToastRenderState): void {
+export function updateToastRenderStatus(
+  folderPath: string,
+  state: ToastRenderState,
+  progress?: number,
+): void {
   if (active === null || active.win.isDestroyed()) return
   if (active.folderPath !== folderPath) return
-  active.win.webContents.send(IPC.toastRenderStatus, { state })
+  active.win.webContents.send(IPC.toastRenderStatus, {
+    state,
+    ...(progress === undefined ? {} : { progress }),
+  })
   // A terminal state is when the countdown may finally start.
   armAutoClose(active, state)
 }

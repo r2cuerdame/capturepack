@@ -1751,6 +1751,63 @@ Future versions should understand actual interface objects.
 
 CapturePack should remember objects instead of pixels whenever possible.
 
+### The picture is the clock (#81)
+
+**A box goes where the user can see the thing it points at.** Not where the
+thing was at some correct-but-invisible instant.
+
+Those come apart because a video cannot be seeked to an arbitrary moment. Ask a
+replay for time T and it shows the last frame at or before T — that is the only
+picture that exists. The surface ring, being a list of samples rather than a
+film, answers T exactly. Draw one over the other and the box sits beside the
+window.
+
+Measured in 0.2.0-rc.4 on a 15 fps capture that actually achieved 11.9 fps: the
+picked boxes were accurate to a median of 9 ms, while the frame on screen at
+each box's own time was up to 498 ms old — 1304 px of error on a dragged window.
+The box was right and the picture was late.
+
+So **anything that has to agree with the image asks on the image's clock**: the
+presentation timestamp of the frame the compositor actually put on screen. The
+playhead keeps its own nominal time, because a timeline that jumps backwards
+under the user's hand is worse than one that is a frame off.
+
+**No frame rate is ever assumed.** The rate a machine achieves depends on the
+machine, the encoder and whatever else is running, so a constant correction
+would be right on one desk and wrong on the next. The browser reports the
+presented frame's time; that number is correct everywhere by construction.
+
+Recording faster is a separate obligation (#82) and does not replace this one.
+A capture that drops to 1 fps for a second still owes the user a box on the
+window they are looking at.
+
+**A low frame rate is two different facts.** A screen capture makes a frame when
+the screen CHANGES, so a monitor nobody touched delivers almost nothing and has
+lost nothing at all. Frames that were made and thrown away are the case where
+the replay is genuinely missing time. Only `discarded_frames` tells them apart,
+so the app reports it beside the rate and does not call a still screen a fault.
+Measured on the reference desk: display 1 came up 486 frames short and had
+discarded two of them.
+
+### A picked box means the frame it was picked on (#90)
+
+A box someone DREW covers a stretch of time, and the middle of that stretch is
+a fair thing to call its moment. A box someone PICKED OFF AN OBJECT is a
+different statement: *this window, as it was in the frame I was looking at.*
+Editing its lifetime must not change what it says.
+
+So the pick instant is read from the picture at the click, from the screen the
+click landed on, and it is **recorded** — `tracking.picked_at_ms` — rather than
+derived later from whatever the lifetime happens to be. `bounds` is the observed
+rectangle at that instant.
+
+Recording it is what makes it checkable. Both halves are in the pack, so the
+validator can assert that `bounds` IS the sample nearest `picked_at_ms`, and the
+failure this replaced — an anchor computed from the lifetime, drifting outside a
+one-second track and clamping to its first sample, so the box showed the window
+as it had been *before* the frame the user clicked — would now fail validation
+instead of shipping.
+
 ---
 
 ## Event Timeline

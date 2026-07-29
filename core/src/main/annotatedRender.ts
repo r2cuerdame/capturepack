@@ -31,6 +31,10 @@ export interface AnnotatedRenderJob {
   // subset, so the renderer must not derive the numbering from it — see
   // RenderStartPayload.displayNumbers.
   displayNumbers?: Array<[string, number]>
+  // The pack's focused display index — what an ABSENT `display` means, here and
+  // on an annotation (SPEC §8.8). Only needed once a box can follow its object
+  // onto another screen (#86); absent in a single-display pack.
+  focusedDisplay?: number
   width: number
   height: number
   fps: number
@@ -53,6 +57,8 @@ export interface KeyframeStillJob {
   annotations: Annotation[]
   /** Same rule as AnnotatedRenderJob.displayNumbers. */
   displayNumbers?: Array<[string, number]>
+  /** Same rule as AnnotatedRenderJob.focusedDisplay. */
+  focusedDisplay?: number
   width: number
   height: number
   docLanguage?: Language
@@ -141,6 +147,7 @@ export function startAnnotatedRender(
   handle: PackHandle,
   job: AnnotatedRenderJob,
   onDone: (state: 'done' | 'failed') => void,
+  onProgress?: (ratio: number) => void,
 ): void {
   const key = path.resolve(handle.dirPath)
   inFlight.set(key, (inFlight.get(key) ?? 0) + 1)
@@ -152,7 +159,7 @@ export function startAnnotatedRender(
     emitRenderState(handle.dirPath, state)
     onDone(state)
   }
-  void renderAnnotatedReplay(handle, job)
+  void renderAnnotatedReplay(handle, job, onProgress)
     .then(() => finish('done'))
     .catch((err) => {
       console.error('capturepack: annotated replay render failed:', errorMessage(err))
@@ -160,12 +167,18 @@ export function startAnnotatedRender(
     })
 }
 
-async function renderAnnotatedReplay(handle: PackHandle, job: AnnotatedRenderJob): Promise<void> {
+async function renderAnnotatedReplay(
+  handle: PackHandle,
+  job: AnnotatedRenderJob,
+  onProgress?: (ratio: number) => void,
+): Promise<void> {
   const payload: RenderStartPayload = {
     replayWebm: toArrayBuffer(job.replayWebm),
     replayMimeType: job.replayMimeType,
     annotations: job.annotations,
     ...(job.displayNumbers === undefined ? {} : { displayNumbers: job.displayNumbers }),
+    ...(job.display === undefined ? {} : { display: job.display }),
+    ...(job.focusedDisplay === undefined ? {} : { focusedDisplay: job.focusedDisplay }),
     width: job.width,
     height: job.height,
     fps: job.fps,
@@ -184,6 +197,7 @@ async function renderAnnotatedReplay(handle: PackHandle, job: AnnotatedRenderJob
     const { result, frames } = await runRenderWindow(
       payload,
       job.replayDurationMs * 2 + RENDER_TIMEOUT_SLACK_MS,
+      onProgress,
     )
     if (result.webm === undefined) throw new Error('render window returned no video')
     await writeFile(path.join(handle.dirPath, video), Buffer.from(result.webm))
@@ -258,6 +272,8 @@ async function renderKeyframeStill(handle: PackHandle, job: KeyframeStillJob): P
     snapshotPng: toArrayBuffer(job.snapshotPng),
     annotations: job.annotations,
     ...(job.displayNumbers === undefined ? {} : { displayNumbers: job.displayNumbers }),
+    ...(job.display === undefined ? {} : { display: job.display }),
+    ...(job.focusedDisplay === undefined ? {} : { focusedDisplay: job.focusedDisplay }),
     width: job.width,
     height: job.height,
     fps: 1, // unused without a recorder
@@ -362,6 +378,7 @@ interface RenderOutcome {
 async function runRenderWindow(
   payload: RenderStartPayload,
   timeoutMs: number,
+  onProgress?: (ratio: number) => void,
 ): Promise<RenderOutcome> {
   const win = new BrowserWindow({
     show: false,
@@ -376,7 +393,7 @@ async function runRenderWindow(
   })
   try {
     await win.loadFile(path.join(app.getAppPath(), 'dist', 'renderer', 'render', 'render.html'))
-    const outcome = await awaitRenderResult(win, payload, timeoutMs)
+    const outcome = await awaitRenderResult(win, payload, timeoutMs, onProgress)
     if (!outcome.result.ok) throw new Error(outcome.result.error ?? 'render window reported a failure')
     return outcome
   } finally {
@@ -388,6 +405,7 @@ function awaitRenderResult(
   win: BrowserWindow,
   payload: RenderStartPayload,
   timeoutMs: number,
+  onProgress?: (ratio: number) => void,
 ): Promise<RenderOutcome> {
   return new Promise((resolve, reject) => {
     let settled = false
@@ -399,6 +417,7 @@ function awaitRenderResult(
       clearTimeout(timer)
       ipcMain.removeListener(IPC.renderResult, onResult)
       ipcMain.removeListener(IPC.renderFrame, onFrame)
+      ipcMain.removeListener(IPC.renderProgress, onProgressMsg)
       win.removeListener('closed', onClosed)
       fn()
     }
@@ -406,6 +425,11 @@ function awaitRenderResult(
       if (win.isDestroyed() || event.sender !== win.webContents) return
       if (frame === null || typeof frame !== 'object') return
       frames.push(frame)
+    }
+    const onProgressMsg = (event: IpcMainEvent, ratio: unknown): void => {
+      if (win.isDestroyed() || event.sender !== win.webContents) return
+      if (typeof ratio !== 'number' || !Number.isFinite(ratio)) return
+      onProgress?.(Math.max(0, Math.min(1, ratio)))
     }
     const onResult = (event: IpcMainEvent, result: RenderResultPayload): void => {
       if (win.isDestroyed() || event.sender !== win.webContents) return
@@ -421,6 +445,7 @@ function awaitRenderResult(
     )
     ipcMain.on(IPC.renderResult, onResult)
     ipcMain.on(IPC.renderFrame, onFrame)
+    ipcMain.on(IPC.renderProgress, onProgressMsg)
     win.on('closed', onClosed)
     win.webContents.send(IPC.renderStart, payload)
   })

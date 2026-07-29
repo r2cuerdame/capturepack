@@ -15,7 +15,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { inflateRawSync } from "node:zlib";
 
-const SPEC_VERSION = "0.1.0";
+const SPEC_VERSION = "0.2.0";
 
 // ---------------------------------------------------------------------------
 // Result collection
@@ -229,9 +229,15 @@ function validateManifest(m, pack, snapshotDims) {
 
   if (isStr(m.format_version) && SEMVER_RE.test(m.format_version)) {
     pass(`manifest.json: format_version "${m.format_version}" is valid semver`);
+    // Pre-1.0 the MINOR acts as major (SPEC §13.1), so what this validator can
+    // judge is a pack whose minor matches its own. The comparison is against
+    // SPEC_VERSION rather than a hardcoded 0.1 — the old form printed
+    // "0.2.0 differs from 0.2.0" the day the spec moved, which is a validator
+    // telling the truth about the rules and a lie about which ones it applied.
     const [maj, min] = m.format_version.split(".").map(Number);
-    if (!(maj === 0 && min === 1)) {
-      note(`manifest.json: format_version ${m.format_version} differs from ${SPEC_VERSION} — validating against 0.1.0 rules (pre-1.0: minor acts as major, SPEC §13.1)`);
+    const [specMaj, specMin] = SPEC_VERSION.split(".").map(Number);
+    if (!(maj === specMaj && min === specMin)) {
+      note(`manifest.json: format_version ${m.format_version} differs from ${SPEC_VERSION} — validating against ${specMaj}.${specMin}.x rules (pre-1.0: minor acts as major, SPEC §13.1)`);
     }
   } else {
     fail(`manifest.json: format_version ${JSON.stringify(m.format_version)} is not valid semver (SPEC §5.1)`);
@@ -1104,6 +1110,82 @@ function validateAnnotations(a, snapshotDims, replay, replayDurationMs, displayI
         fail(`${label}.tracking MUST be an object with a boolean "enabled" (SPEC §8.3)`);
         bad++;
       } else if (ann.tracking.enabled) {
+        // FOLLOWING IS REAL FROM 0.2.0 (SPEC §8.3). `samples` is the object's
+        // path: ascending on the pack clock, in the snapshot pixels of each
+        // sample's own display. A tracked box that carries no path is a claim
+        // with nothing behind it, and a reader honouring `enabled` would draw
+        // it nowhere.
+        //
+        // `annDisplay` is what an absent sample display means — the box's own
+        // screen, which is the focused one when the box does not say (SPEC §8.8).
+        const annDisplay = typeof ann.display === "number" ? ann.display : null;
+        const samples = ann.tracking.samples;
+        if (!Array.isArray(samples) || samples.length === 0) {
+          fail(`${label}.tracking.enabled is true but tracking.samples is missing or empty — a tracked box MUST carry the path it follows (SPEC §8.3)`);
+        } else {
+          let previous = -Infinity;
+          let bad = 0;
+          let screens = new Set();
+          let offscreen = 0;
+          for (const s of samples) {
+            if (!isObj(s) || ["t_ms","x","y","width","height"].some((k) => typeof s[k] !== "number" || !Number.isFinite(s[k]))) { bad += 1; continue; }
+            if (s.t_ms < previous) bad += 1;
+            // A sample may name the display its numbers are pixels of: a window
+            // dragged to another monitor is still the same window (SPEC §8.3).
+            if (s.display !== undefined && (!Number.isInteger(s.display) || s.display < 1)) bad += 1;
+            else screens.add(s.display ?? annDisplay);
+            // A SAMPLE STAYS ON ITS SCREEN (SPEC §8.2, and the same rule
+            // `bounds` already obeys). A window really can hang off an edge —
+            // but the part past it is in no image, so a rectangle reaching
+            // there marks something no reader can look at.
+            if (s.x < 0 || s.y < 0 || s.width <= 0 || s.height <= 0) offscreen += 1;
+            previous = s.t_ms;
+          }
+          // `bounds` IS ONE OF THE RECTANGLES THE OBJECT ACTUALLY HELD.
+          //
+          // Not necessarily the one at the lifetime's midpoint: a picked box
+          // means the instant the user pointed at the object, and its lifetime
+          // is routinely extended afterwards ("until the end" is one click).
+          // What must hold is that the box's own rectangle is a rectangle the
+          // track observed — otherwise `bounds` names a position the object
+          // never occupied, and every reader that honours it draws there.
+          if (bad === 0) {
+            const onTrack = samples.some(
+              (s) => Math.abs(s.x - ann.bounds.x) + Math.abs(s.y - ann.bounds.y) <= 2,
+            );
+            if (!onTrack) {
+              fail(`${label}.bounds (${ann.bounds.x},${ann.bounds.y}) is not any rectangle this box's own track observed — a tracked box's bounds MUST be one of them (SPEC §8.3)`);
+            }
+          }
+          // THE ANCHOR IS CHECKABLE (SPEC 8.4, #90). A picked box says which
+          // frame it means; `bounds` must be the rectangle observed at that
+          // frame. The bug this catches shipped for weeks: the anchor was
+          // computed from the lifetime, drifted outside the track, and clamped
+          // to its FIRST sample — so the box showed the window as it had been
+          // before the frame the user clicked on, and every rendered view
+          // agreed with it.
+          const pickedAt = ann.tracking.picked_at_ms;
+          if (pickedAt !== undefined) {
+            if (typeof pickedAt !== "number" || !Number.isFinite(pickedAt)) {
+              fail(`${label}.tracking.picked_at_ms MUST be a finite number of milliseconds on the replay clock (SPEC 8.4)`);
+            } else {
+              let nearest = samples[0];
+              for (const smp of samples) {
+                if (Math.abs(smp.t_ms - pickedAt) < Math.abs(nearest.t_ms - pickedAt)) nearest = smp;
+              }
+              const at = Math.round(nearest.x) === ann.bounds.x && Math.round(nearest.y) === ann.bounds.y;
+              if (!at) {
+                fail(`${label}.bounds (${ann.bounds.x},${ann.bounds.y}) is not the rectangle observed at picked_at_ms=${pickedAt} ms, which is (${Math.round(nearest.x)},${Math.round(nearest.y)}) at ${nearest.t_ms} ms — a picked box MUST show its object as it was in the frame that was picked (SPEC 8.4)`);
+              } else {
+                pass(`${label}.bounds is the rectangle observed at the picked frame (${pickedAt} ms, sample ${nearest.t_ms} ms) — the box means the moment it was picked (SPEC 8.4)`);
+              }
+            }
+          }
+          if (bad > 0) fail(`${label}.tracking.samples has ${bad} sample(s) that are not finite {t_ms,x,y,width,height} in ascending t_ms (SPEC §8.3)`);
+          else if (offscreen > 0) fail(`${label}.tracking.samples has ${offscreen} sample(s) outside their own display's snapshot — a box marks something a reader can look at, and the part of a window past the screen edge is in no image (SPEC §8.2)`);
+          else pass(`${label}.tracking: ${samples.length} sample(s), ${samples[0].t_ms}..${samples[samples.length-1].t_ms} ms across ${screens.size} display(s) — the box follows its object (SPEC §8.3)`);
+        }
+      } else if (false) {
         note(`${label}.tracking.enabled is true — tracking is reserved in format 0.1.0 (MUST be false); readers treat the box as untracked (SPEC §8.3)`);
       }
     }

@@ -12,6 +12,11 @@ import {
   startCapture,
 } from './capture'
 import type { RecorderState } from './capture'
+import {
+  startContextRuntime,
+  stopContextRuntime,
+  updateContextRetention,
+} from './context/runtime'
 import { disposeHistory, notifyHistoryChanged, openHistoryWindow, registerHistoryIpc } from './historyWindow'
 import { registerCaptureHotkeyWithin } from './hotkey'
 import {
@@ -68,6 +73,29 @@ if (process.argv.includes('--smoke')) {
 }
 
 function main(): void {
+  // A HIDDEN RECORDER IS STILL A RECORDER (#95).
+  //
+  // The capture windows already set `backgroundThrottling: false`, which stops
+  // their TIMERS being throttled. It does not stop Chromium BACKGROUNDING the
+  // renderer process itself: a window that is hidden — which every capture
+  // window is, by design — has its process priority lowered, and on Windows a
+  // lowered renderer loses the CPU to whatever is in the foreground.
+  //
+  // Measured, with the recorder finally reporting its own cadence (#82): BOTH
+  // displays stall together, 806 ms and 892 ms in one 16 s recording, at 12.8
+  // and 10.3 fps against 15 requested. Two independent recorders in two
+  // separate renderers stalling by the same amount at the same time is a shared
+  // cause, and the thing they share is the scheduler's opinion of how important
+  // a hidden window is. The same stalls are in packs from before the surface
+  // ring sampled per frame, so it is not that either.
+  //
+  // These must be set before whenReady: Chromium reads them once, at startup.
+  app.commandLine.appendSwitch('disable-renderer-backgrounding')
+  app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
+  // A hidden window is occluded by definition, and an occluded window's
+  // compositor can be told to stop producing frames — which is the capture.
+  app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')
+
   // BEFORE app.whenReady() (issue #60): Crashpad has to be installed before the
   // processes it is meant to catch exist, and a startup that throws must
   // already have a log file to say so in.
@@ -127,6 +155,10 @@ function main(): void {
     // (issue #61).
     stopSupervision()
     stopRecorderStateListener()
+    // The Context Host is a child process of ours and exits on stdin EOF anyway,
+    // but stopping it here is what makes the surface timeline's final cost line
+    // land in the log before the process goes (issues #64/#65).
+    stopContextRuntime()
     disposeCapture()
     disposeHistory()
     // stopMcpServer() logs what it actually did, synchronously, before its first
@@ -221,6 +253,14 @@ function main(): void {
     stopRecorderStateListener = onRecorderStateChanged(handleRecorderState)
 
     await startCapture(settings)
+
+    // The Platform Surface Timeline (issue #65) starts WITH the recorder and
+    // for the same reason: it is the semantic half of the ring buffer, and a
+    // surface stack that only exists from the moment someone asks for it could
+    // never answer a question about thirty seconds ago. It is started AFTER the
+    // recorder so that a machine where recording itself is failing does not also
+    // pay for a context host it will never be asked about.
+    startContextRuntime({ replayMs: settings.replaySeconds * 1000, fps: settings.fps })
 
     const capture = (): void => {
       void startCaptureFlow(settings)
@@ -405,7 +445,25 @@ function main(): void {
       // a keystroke (the installed CapturePack owns the real accelerator), so
       // without this the capture flow — including what a capture SAYS when a
       // display was not recording — cannot be exercised at all.
-      if (process.argv.includes('--capture-now')) capture()
+      // `--capture-now[=SECONDS]`. The delay is not a convenience: anything
+      // that depends on the replay buffer or the surface ring being FULL cannot
+      // be tested by capturing the instant the app starts, when both hold a
+      // fraction of a second. Verifying that picking follows the scrub needs a
+      // ring with real motion in it, and there is no other way to get one
+      // without synthesizing the hotkey — which no automated test may do,
+      // because the installed CapturePack owns the real accelerator.
+      const captureNow = process.argv.find((arg) => arg.startsWith('--capture-now'))
+      if (captureNow !== undefined) {
+        const seconds = Number(captureNow.split('=')[1] ?? '0')
+        const delayMs = Number.isFinite(seconds) && seconds > 0 ? seconds * 1_000 : 0
+        if (delayMs === 0) capture()
+        else {
+          logInfo(`[capture] --capture-now: capturing in ${String(seconds)}s`)
+          setTimeout(() => {
+            void capture()
+          }, delayMs)
+        }
+      }
       // Dev aid / headed testing: open the Welcome window on launch.
       if (process.argv.includes('--show-welcome')) {
         settings.welcomeDeferredFromLogin = false

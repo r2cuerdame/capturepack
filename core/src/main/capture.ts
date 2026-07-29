@@ -14,12 +14,14 @@ import path from 'node:path'
 import { BrowserWindow, desktopCapturer, ipcMain, screen, session, webContents } from 'electron'
 import type { Display, IpcMainEvent } from 'electron'
 import { IPC } from '../shared/ipc'
+import { tickSurfaces } from './context/runtime'
 import type {
   CaptureFramesPayload,
   CaptureReadyPayload,
   CaptureReplayResultPayload,
   CaptureStartPayload,
   RecorderFailureReason,
+  CaptureTickPayload,
 } from '../shared/ipc'
 import type { Settings } from '../shared/types'
 import { logError, logInfo, logWarn } from './log'
@@ -422,8 +424,34 @@ async function probeRecorder(displayId: number, win: BrowserWindow): Promise<voi
  * healthy recorder to find out. Only the transition is logged; the heartbeat
  * itself must not fill the log file with one line every few seconds.
  */
+/**
+ * The cadence each display's recorder last reported (#82), by display id.
+ *
+ * Kept so a capture can write it into its own pack: a replay that dropped a
+ * fifth of its frames used to be indistinguishable from a healthy one without
+ * running ffprobe over the saved file.
+ */
+const displayCadence = new Map<number, { achievedFps: number; worstStallMs: number; discardedFrames?: number | null; sampledMs?: number; gainedFrames?: number }>()
+
+/** What this display's recorder has achieved, or null if it never said. */
+export function recorderCadence(displayId: number): { achievedFps: number; worstStallMs: number; discardedFrames?: number | null; sampledMs?: number; gainedFrames?: number } | null {
+  return displayCadence.get(displayId) ?? null
+}
+
+/**
+ * The display whose recording IS the pack clock (SPEC §10.1) — the cursor's.
+ *
+ * Only it ticks the surface ring (#105): a second display's frames carry
+ * another recording's numbers, and filing samples under those would put the
+ * ring on two clocks at once, which is the problem rather than the fix.
+ */
+function focusedDisplayIdForTicks(): number {
+  return screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).id
+}
+
 function onFramesProven(displayId: number, payload: CaptureFramesPayload): void {
   if (!wantedDisplayIds.has(displayId)) return
+  if (payload.cadence !== undefined) displayCadence.set(displayId, payload.cadence)
   const previous = displayRecorderStates.get(displayId)
   if (previous?.status !== 'recording') {
     logInfo(
@@ -823,6 +851,8 @@ export interface ReplayFetch {
     durationMs: number
     mimeType: string
     replayFile: 'replay.webm' | 'replay.mp4'
+    /** The tick clock's value at these bytes' t=0 (#112); absent if unknown. */
+    originMs?: number
   } | null
   // Set exactly when `replay` is null.
   miss: ReplayMiss | null
@@ -849,6 +879,10 @@ export function requestReplay(
             durationMs: payload.durationMs,
             mimeType: payload.mimeType,
             replayFile: payload.replayFile,
+            // Where these bytes begin on the tick clock (#112).
+            ...(typeof payload.originMs === 'number' && Number.isFinite(payload.originMs)
+              ? { originMs: payload.originMs }
+              : {}),
           },
           miss: null,
         })
@@ -1082,6 +1116,12 @@ async function createCaptureWindow(display: Display, settings: Settings): Promis
     ipcMain.on(IPC.captureError, onError)
     ipcMain.on(IPC.captureReady, onReady)
     ipcMain.on(IPC.captureFrames, onFrames)
+    const onTick = (event: IpcMainEvent, payload: CaptureTickPayload): void => {
+      if (event.sender !== win.webContents || captureWindows.get(display.id) !== win) return
+      if (typeof payload?.mediaTimeMs !== 'number' || !Number.isFinite(payload.mediaTimeMs)) return
+      tickSurfaces(payload.mediaTimeMs, payload.frameAgeMs)
+    }
+    ipcMain.on(IPC.captureTick, onTick)
     // A recorder renderer that VANISHES is a recorder failure, never silence
     // (issue #60): the state moves here — which logs it — and the watchdog
     // above then recreates the window on its own schedule (issue #43).
@@ -1096,6 +1136,7 @@ async function createCaptureWindow(display: Display, settings: Settings): Promis
       ipcMain.removeListener(IPC.captureError, onError)
       ipcMain.removeListener(IPC.captureReady, onReady)
       ipcMain.removeListener(IPC.captureFrames, onFrames)
+      ipcMain.removeListener(IPC.captureTick, onTick)
       assignedDisplays.delete(wcId)
       clearRecorderProbe(display.id)
       if (captureWindows.get(display.id) === win) {
@@ -1113,6 +1154,8 @@ async function createCaptureWindow(display: Display, settings: Settings): Promis
     const slowReplayMs = simulateSlowReplayMs()
     const payload: CaptureStartPayload = {
       displayId: String(display.id),
+      // The pack clock's owner is the only display that ticks the ring (#105).
+      focused: display.id === focusedDisplayIdForTicks(),
       fps: settings.fps,
       // The recorder rotates segments at this interval; replay covers 1x..2x of it.
       segmentSeconds: settings.replaySeconds,

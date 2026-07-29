@@ -17,7 +17,6 @@ import type {
   EditorDisplayPayload,
   EditorExportPayload,
   EditorInitPayload,
-  EditorUiaObjectsPayload,
   RecorderFailureReason,
   ReplayUnavailablePayload,
 } from '../shared/ipc'
@@ -48,8 +47,10 @@ import {
   resolveCaptureTargets,
   resolveTargetDisplay,
   takeDisplaySnapshots,
+  recorderCadence,
 } from './capture'
 import type { ReplayFetch } from './capture'
+import { freezeContext, frozenObservations, logContextCost, releaseContext } from './context/runtime'
 import {
   addManifestPlugin,
   savePack,
@@ -70,14 +71,15 @@ import {
   type InitialSaveInput,
   type PackHandle,
 } from './exporter'
+import type { ContextObservation } from './context/buffer'
+import { editorUiaElements, editorUiaWindows } from './context/legacyPack'
+import { openContextSession, pushContextFrame } from './context/service'
 import { packDocLanguage, uiLanguage, uiT } from './locale'
 import { logError, logInfo, logWarn } from './log'
 import { openPack } from './mcp/store'
 import { showSaveToast, updateToastRenderStatus } from './saveToast'
 import { persistSettings } from './settings'
 import {
-  editorUiaElements,
-  editorUiaWindows,
   mapUiaToSnapshot,
   parseUiaPayload,
   recordUiaSkipped,
@@ -102,8 +104,8 @@ const PLUGIN_NAME_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
  * deadline was routinely already in the past, and the wait returned null WITHOUT
  * LOOKING at a promise that had resolved with a full dump hundreds of ms
  * earlier. Nothing is dropped any more either: a dump that lands after this
- * grace is PUSHED to the editor (IPC.editorUiaObjects) and picking starts
- * working mid-session.
+ * grace is PUSHED to the editor as a new context frame (IPC.contextFrame) and
+ * picking starts working mid-session.
  */
 const UIA_EDITOR_GRACE_MS = 400
 
@@ -169,6 +171,8 @@ interface FrozenDisplay {
   height: number
   replayWebm: Buffer | null
   replayDurationMs: number
+  /** The tick clock's value at this replay's t=0 (#112); absent if unknown. */
+  replayOriginMs?: number
   replayMimeType: string | null
   replayFile: 'replay.webm' | 'replay.mp4' | null
   // Set when this display came back WITHOUT a replay: why its buffer was not
@@ -296,6 +300,7 @@ async function freezeDisplays(settings: Settings): Promise<{
         ...d,
         replayWebm: replay.buffer,
         replayDurationMs: replay.durationMs,
+        ...(replay.originMs === undefined ? {} : { replayOriginMs: replay.originMs }),
         replayMimeType: replay.mimeType,
         replayFile: replay.replayFile,
         replayUnavailableReason: null,
@@ -337,6 +342,22 @@ function toDisplayCaptures(displays: readonly FrozenDisplay[]): DisplayCapture[]
     scale: d.scale,
     hasReplay: d.replayWebm !== null,
     replayDurationMs: d.replayDurationMs,
+    // The recorder's own account of what it managed (#82), carried into the
+    // pack so the replay's quality is a fact a reader can see.
+    ...(() => {
+      const measured = recorderCadence(d.id)
+      return measured === null
+        ? {}
+        : {
+            cadence: {
+              achieved_fps: measured.achievedFps,
+              worst_stall_ms: measured.worstStallMs,
+              ...(measured.discardedFrames === undefined || measured.discardedFrames === null
+                ? {}
+                : { discarded_frames: measured.discardedFrames }),
+            },
+          }
+    })(),
     // A fresh capture writes the canonical names; they travel with the entry so
     // every writer uses the SAME string the manifest declares.
     snapshotFile: displaySnapshotName(d.index),
@@ -418,6 +439,19 @@ async function runFlow(settings: Settings): Promise<void> {
   // FOCUSED one. "cursor"/fixed: that display alone. Snapshot, replay, editor,
   // and annotations all target the focused display.
   const frozen = await freezeDisplays(settings)
+  // WHEN THE REPLAY ACTUALLY ENDS, which is not when the hotkey was pressed.
+  //
+  // `replay.durationMs` is measured in the RENDERER at the moment it stops the
+  // recorder and assembles the blob — after the trigger, after the IPC round
+  // trip, after however long muxing thirty seconds of H.264 takes. So the file
+  // spans [thisInstant - durationMs, thisInstant], and anchoring the pack clock
+  // to `triggerAt` instead shifts every replay time by the assembly cost.
+  //
+  // Nothing noticed while the pack clock only had to agree with itself. It
+  // stopped being invisible the moment surfaces recorded on the wall clock were
+  // compared against video frames: every window sat where it had been a moment
+  // earlier, uniformly, at every scrub position.
+  const replayEndAt = Date.now()
   const display = frozen.focused
   const snap = { png: display.snapshotPng, width: display.width, height: display.height }
   const replay =
@@ -435,7 +469,32 @@ async function runFlow(settings: Settings): Promise<void> {
   // trim cuts it; a just-started buffer stays at its honest shorter duration.
   const replayDurationMs = Math.min(rawReplayDurationMs, settings.replaySeconds * 1000)
   const replaySourceStartMs = rawReplayDurationMs - replayDurationMs
-  const t0Ms = triggerAt - replayDurationMs
+  // Anchored to the replay's own end, not the trigger — see `replayEndAt`.
+  const t0Ms = replayEndAt - replayDurationMs
+  // PINS THE SURFACE TIMELINE for exactly the range this pack covers (#64
+  // `onFreeze`, #65). From here the editor can ask "which window was where at
+  // pack time T" for any T in the replay, and pruning may not touch that range
+  // until it is released below.
+  //
+  // Frozen HERE and not at the trigger, because the range's start is
+  // `trigger - replayDurationMs` and replayDurationMs is only known once the
+  // replay has been fetched: a just-started buffer is shorter than the
+  // configured length, and a range that claimed otherwise would put every pack
+  // time a few seconds off. The delay costs nothing — retention keeps the
+  // replay length plus a slack, and the prune runs at 1 Hz.
+  // The tick clock's value at the SAVED replay's t=0, plus whatever the exact
+  // -length cut drops from its head — that is where the pack clock starts (#112).
+  const focusedReplay = frozen.displays.find((d) => d.focused)
+  const tickOriginMs =
+    focusedReplay?.replayOriginMs === undefined
+      ? undefined
+      : focusedReplay.replayOriginMs + replaySourceStartMs
+  const contextFreezeId = freezeContext(replayEndAt, replayDurationMs, tickOriginMs)
+  logInfo(
+    `[context] pack clock: replay ends ${String(replayEndAt - triggerAt)} ms after the trigger, ` +
+      `${String(replayDurationMs)} ms long (raw ${String(rawReplayDurationMs)} ms)`,
+  )
+  logContextCost()
   // media.displays[] exists only when the capture actually covered more than
   // one display (SPEC §5.3): a single-display pack stays exactly what 0.1.2
   // wrote. The editor's board follows the same rule: one display, one screen.
@@ -468,7 +527,7 @@ async function runFlow(settings: Settings): Promise<void> {
     // declaration and clock together after the exact background cut.
     replayDurationMs: rawReplayDurationMs,
     timeline: {
-      t0: new Date(triggerAt - rawReplayDurationMs).toISOString(),
+      t0: new Date(replayEndAt - rawReplayDurationMs).toISOString(),
       events: events.map((e) =>
         e.type === 'core.capture.triggered' ? { ...e, t_ms: rawReplayDurationMs } : e,
       ),
@@ -488,6 +547,53 @@ async function runFlow(settings: Settings): Promise<void> {
     `[capture] captured ${frozen.displays.length} display(s), ${withReplay} with a replay ` +
       `(${Math.round(replayDurationMs)}ms on the focused display)`,
   )
+  // WHAT THE RECORDER ACTUALLY ACHIEVED (#82), per display, on the record.
+  //
+  // The replay is the evidence a pack is built on and nothing in the app knew
+  // how good it was: a capture that stalled for nearly a second, twice, wrote
+  // exactly the same log line as a clean one, and it took ffprobe on the saved
+  // file to tell them apart. Reported next to the configured rate, because a
+  // number without the target it is being compared against says nothing.
+  for (const d of frozen.displays) {
+    const measured = recorderCadence(d.id)
+    if (measured === null) continue
+    const short = measured.achievedFps < settings.fps * 0.8
+    const stalled = measured.worstStallMs >= 400
+    // A LOW RATE IS TWO DIFFERENT FACTS (#82). A screen capture makes a frame
+    // when the screen changes, so a monitor nobody touched delivers almost
+    // nothing and has lost nothing. Frames MADE and thrown away are the case
+    // where the replay really is missing time. `discardedFrames` is the only
+    // thing that tells them apart, so the verdict waits on it rather than
+    // calling every quiet monitor a fault.
+    const discarded = measured.discardedFrames
+    const line =
+      `[capture] display ${d.index}: recorded ${measured.achievedFps} fps of ${settings.fps} ` +
+      `requested, worst stall ${measured.worstStallMs} ms` +
+      (discarded === undefined || discarded === null ? '' : `, ${discarded} frame(s) discarded`)
+    // Frames that were never made are not frames that were lost. The shortfall
+    // is what the target rate would have produced over the same window; if
+    // almost none of it was discarded, it was never produced — measured on this
+    // desk, display 1 came up 486 frames short and discarded two of them.
+    const expected =
+      measured.sampledMs === undefined ? null : (settings.fps * measured.sampledMs) / 1000
+    const shortfall =
+      expected === null || measured.gainedFrames === undefined
+        ? null
+        : Math.max(0, expected - measured.gainedFrames)
+    const still =
+      discarded !== undefined && discarded !== null && shortfall !== null && shortfall >= 1
+        ? discarded < shortfall * 0.2
+        : discarded === 0
+    if (still && (short || stalled)) {
+      logInfo(
+        `${line} — the missing frames were never made, not dropped, so this screen simply did not change`,
+      )
+    } else if (short || stalled) {
+      logWarn(`${line} — the replay is missing time the user was looking at`)
+    } else {
+      logInfo(line)
+    }
+  }
 
   let handle: PackHandle | null = null
   try {
@@ -542,6 +648,19 @@ async function runFlow(settings: Settings): Promise<void> {
   })
 
   const { win: editor, mode: windowMode } = createEditorWindow(display.bounds, settings)
+  // THE EDITOR'S OWN DIAGNOSTICS BELONG IN THE LOG (#113).
+  //
+  // The editor is the only place that sees both a track and the frames actually
+  // being shown, so it is the only place that can say whether they line up. It
+  // has been saying so to a console nobody reads, which is why every one of
+  // these questions has needed a pack sent back and forth and ffprobe run over
+  // it. Only its own lines are taken: a renderer's console is otherwise full of
+  // Chromium's business.
+  editor.webContents.on('console-message', (_event, level, message) => {
+    if (!message.startsWith('capturepack:')) return
+    if (level >= 2) logWarn(`[editor] ${message}`)
+    else logInfo(`[editor] ${message}`)
+  })
   editor.once('ready-to-show', () => {
     void (async () => {
       // The dump was started at the trigger and can never outlive its budget,
@@ -552,6 +671,71 @@ async function runFlow(settings: Settings): Promise<void> {
       const settled = await settleWithin(uiaReady, UIA_EDITOR_GRACE_MS)
       if (editor.isDestroyed()) return
       const uia = settled.ready ? settled.value : null
+      // The Surface Resolver's session for this editor window (#66). Core's own
+      // surface record and the Windows UI Automation provider both hang off it,
+      // and the provider is registered through the same public registry an
+      // external one would use — no private path into Core.
+      const contextDisplays = uiaTargets.map((target) => ({
+        index: target.index,
+        focused: target.focused,
+        width: target.width,
+        height: target.height,
+      }))
+      const contextSession = openContextSession(editor, {
+        displays: contextDisplays,
+        replayDurationMs,
+        observation: contextObservation(uia, uiaFocusedIndex, replayDurationMs),
+        dropped: settled.ready && uiaEmpty(uia),
+      })
+      // THE WHOLE FROZEN RANGE, not just the instant the hotkey was pressed.
+      //
+      // Core's surface ring holds the entire replay at 10 Hz and was frozen at
+      // capture, but nothing handed it here — so the session filed itself as
+      // `single-instant` and answered nothing anywhere except the last frame,
+      // which is exactly what was reported ("context 창 선택이 마지막 정보에만
+      // 맞아"). With the ring adopted the session becomes a `ring` and the
+      // WINDOW rung answers at every recorded moment.
+      //
+      // The capture-instant UIA dump above keeps its own job: it is the CONTROL
+      // rung, a refinement offered where a provider actually looked. The two
+      // stay separate deliberately — Core mints windows, providers refine.
+      if (contextFreezeId !== null) {
+        // RULE 1 OF OBJECT DATA: IT MAY NEVER BREAK ANYTHING ELSE (#85).
+        //
+        // The editor already obeys this — a context frame that fails to build
+        // leaves the previous one in place — but the save path did not, and it
+        // is the save path that owns the capture flow. A `RangeError` from deep
+        // inside the ring became an unhandled rejection here, the flow never
+        // closed, and every later press of the hotkey was answered with
+        // "capture requested while a flow was already open — ignored". The user
+        // pressed it seventeen times and had to restart the app.
+        //
+        // A capture is the replay, the snapshot and the annotations. Picking is
+        // a refinement on top. Losing the refinement must cost the refinement
+        // and nothing else.
+        let ring: ContextObservation[] = []
+        try {
+          ring = frozenObservations(contextFreezeId, contextDisplays, replayDurationMs)
+        } catch (err) {
+          logError(
+            `[context] the surface ring could not be read — picking answers at the capture ` +
+              `instant only: ${err instanceof Error ? err.message : String(err)}`,
+          )
+        }
+        if (ring.length > 1) {
+          contextSession.adoptAll(ring)
+          logInfo(
+            `[context] editor session reads ${ring.length} surface observations ` +
+              `across ${replayDurationMs} ms`,
+          )
+        } else {
+          // Honest silence: no ring means picking answers where the dump does
+          // and says so through `accuracy.coverage`, rather than pretending.
+          logWarn(
+            '[context] no surface ring for this capture — picking answers at the capture instant only',
+          )
+        }
+      }
       if (settled.ready && uiaEmpty(uia)) {
         // GOAL "Silence is not absence": the editor is about to open with
         // picking off, and until this line the only trace was an empty index.
@@ -578,14 +762,11 @@ async function runFlow(settings: Settings): Promise<void> {
         // opening on a bare "No replay" chip (GOAL "Say that you are
         // recording"), so the failure is met here and not in the saved folder.
         replayUnavailableReason: replay === null ? display.replayUnavailableReason : null,
-        // Pickable objects (GOAL "Static object picking"): controls refine,
-        // windows are the floor. Both [] when the dump produced nothing, which
-        // is exactly the pre-feature editor — and [] TOO when it has not landed
-        // yet, in which case the push below carries the real lists.
-        uiaElements: editorUiaElements(uia, uiaFocusedIndex),
-        uiaWindows: editorUiaWindows(uia, uiaFocusedIndex),
-        // Attempted and empty — never "still on its way" (see the push below).
-        uiaDropped: settled.ready && uiaEmpty(uia),
+        // OBJECT PICKING AT A TIME (#64/#65/#66): the session the editor asks
+        // frames on, opened with the frame at the CAPTURE INSTANT, which is
+        // where the editor opens. Empty when the observation has not landed yet
+        // — the push below then carries the real one.
+        context: { sessionId: contextSession.sessionId, frame: await contextSession.frameAt(replayDurationMs) },
         fps: settings.fps,
         scrubInvert: settings.scrubInvert,
         scrubSensitivityMs: settings.scrubSensitivityMs,
@@ -615,12 +796,9 @@ async function runFlow(settings: Settings): Promise<void> {
                 'capturepack: object picking: the UI Automation dump produced nothing usable for this capture',
               )
             }
-            const objects: EditorUiaObjectsPayload = {
-              uiaElements: editorUiaElements(payload, uiaFocusedIndex),
-              uiaWindows: editorUiaWindows(payload, uiaFocusedIndex),
-              dropped: uiaEmpty(payload),
-            }
-            editor.webContents.send(IPC.editorUiaObjects, objects)
+            contextSession.adopt(contextObservation(payload, uiaFocusedIndex, replayDurationMs))
+            contextSession.markDropped(uiaEmpty(payload))
+            pushContextFrame(editor, contextSession, replayDurationMs)
           })
           // Rule 1 again: object data may never be able to fail a capture, and
           // an unhandled rejection here would be an uncaughtException.
@@ -634,20 +812,48 @@ async function runFlow(settings: Settings): Promise<void> {
             logError('capturepack: pushing object data to the editor failed:', err)
             try {
               if (editor.isDestroyed()) return
-              editor.webContents.send(IPC.editorUiaObjects, {
-                uiaElements: [],
-                uiaWindows: [],
-                dropped: true,
-              } satisfies EditorUiaObjectsPayload)
+              contextSession.adopt(null)
+              contextSession.markDropped(true)
+              pushContextFrame(editor, contextSession, replayDurationMs)
             } catch {
               // A window that went away mid-send: nothing left to tell.
             }
           })
       }
-    })()
+    })().catch((err: unknown) => {
+      // NOTHING IN HERE MAY STRAND THE FLOW (#85).
+      //
+      // This block is detached — `ready-to-show` cannot await it — so a throw
+      // inside it became an unhandled rejection, `editor.show()` never ran, and
+      // `runEditor` below waited forever on a window the user could not see.
+      // `flowActive` stayed true in a `finally` that was never reached, and the
+      // capture hotkey answered "a flow was already open" until the app was
+      // restarted. That is what a user hit: seventeen presses, nothing.
+      //
+      // The pack itself is already on disk by now (save-first), so the honest
+      // recovery is to close the editor rather than show one that was never
+      // initialised: `runEditor` resolves on the window closing, the flow ends,
+      // and the next press of the hotkey works.
+      logError('[capture] preparing the editor failed — closing it so the flow can end:', err)
+      if (!editor.isDestroyed()) editor.destroy()
+    })
   })
 
-  const outcome = await runEditor(editor, events, t0Ms)
+  let outcome: EditorOutcome
+  try {
+    outcome = await runEditor(editor, events, t0Ms)
+  } finally {
+    // The pin comes off when the editor closes (#64 `onFreeze`: "pin the
+    // captured range so it survives until the editor closes or the pack is
+    // saved"), in a finally so a throw cannot leak it — a leaked freeze would
+    // keep the ring from ever pruning that range again.
+    //
+    // NOTE for the export step: docs/temporal-protocol.md GAP 14b wants the
+    // provider's export SET requested at freeze time and held until release, so
+    // saving from History minutes later still works. Nothing writes provider
+    // context into the pack yet, so releasing here is currently exact.
+    releaseContext(contextFreezeId)
+  }
   logInfo(`[capture] editor closed: ${outcome.kind}`)
   if (outcome.kind === 'cancel') {
     // A cancelled editor still leaves the save-first pack behind. Its raw ring
@@ -940,6 +1146,7 @@ function startFreshCaptureRenders(
         replayMimeType: focused.replayMimeType,
         annotations: focusedAnnotations,
         displayNumbers: numbers,
+        focusedDisplay: focusedIndex,
         width: input.width,
         height: input.height,
         fps: settings.fps,
@@ -947,12 +1154,14 @@ function startFreshCaptureRenders(
         docLanguage: packDocLanguage(settings),
       },
       (state) => updateToastRenderStatus(dirPath, state),
+      (ratio) => updateToastRenderStatus(dirPath, 'rendering', ratio),
     )
   } else {
     startKeyframeStill(handle, {
       snapshotPng: input.snapshotPng,
       annotations: focusedAnnotations,
       displayNumbers: numbers,
+      focusedDisplay: focusedIndex,
       width: input.width,
       height: input.height,
       docLanguage: packDocLanguage(settings),
@@ -1193,7 +1402,27 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
   // (cursor/fixed), since the captured display may no longer exist.
   const display = resolveTargetDisplay(settings)
   const { win: editor, mode: windowMode } = createEditorWindow(display.bounds, settings)
+  const loadedEditorDisplayList = loadedEditorDisplays(pack, loadedDisplays, replayDurationMs)
+  // Picking works on re-edit too, from the pack's own saved observation — which
+  // for every pack written before v0.2.0 describes exactly one instant, and the
+  // frame says so for every other time rather than offering that instant's
+  // rectangles as if they were the moment on screen (#66).
+  const contextSession = openContextSession(editor, {
+    displays:
+      loadedEditorDisplayList.length === 0
+        ? [{ index: 1, focused: true, width, height }]
+        : loadedEditorDisplayList.map((d) => ({
+            index: d.index,
+            focused: d.focused,
+            width: d.width,
+            height: d.height,
+          })),
+    replayDurationMs,
+    observation: contextObservation(loadedUia, loadedFocusedIndex, replayDurationMs),
+    dropped: loadedUiaDropped,
+  })
   editor.once('ready-to-show', () => {
+    void (async () => {
     const init: EditorInitPayload = {
       snapshotPng: toArrayBuffer(snapshotPng),
       width,
@@ -1203,16 +1432,16 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
       replaySourceStartMs: 0,
       // The saved pack's other frozen displays, read back for the same BOARD a
       // fresh multi-display capture opens: all of them at once, all annotatable.
-      displays: loadedEditorDisplays(pack, loadedDisplays, replayDurationMs),
+      displays: loadedEditorDisplayList,
       replayWebm: replayWebm === null ? null : toArrayBuffer(replayWebm),
       replayMimeType: replayRel === null ? null : replayMimeType(replayRel),
       // Re-edit: a screenshot-only pack is simply what was saved; no live
       // recorder failure to report.
       replayUnavailableReason: null,
-      // Picking works on re-edit too, from the pack's own saved dump.
-      uiaElements: editorUiaElements(loadedUia, loadedFocusedIndex),
-      uiaWindows: editorUiaWindows(loadedUia, loadedFocusedIndex),
-      uiaDropped: loadedUiaDropped,
+      context: {
+        sessionId: contextSession.sessionId,
+        frame: await contextSession.frameAt(replayDurationMs),
+      },
       fps: settings.fps,
       scrubInvert: settings.scrubInvert,
       scrubSensitivityMs: settings.scrubSensitivityMs,
@@ -1227,8 +1456,15 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
       // Re-edit opens in the same remembered mode as a fresh capture.
       windowMode,
     }
+    if (editor.isDestroyed()) return
     editor.webContents.send(IPC.editorInit, init)
     editor.show()
+    })().catch((err: unknown) => {
+      // Rule 1 of object data: it may never break anything else. An editor that
+      // could not build its first frame still opens — it simply opens without
+      // picking, and the log says why.
+      logError('capturepack: opening the re-edit editor failed:', err)
+    })
   })
 
   const outcome = await runEditor(editor, events, t0Ms)
@@ -1332,6 +1568,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
           replayMimeType: replayMimeType(replayRel),
           annotations: focusedAnnotations,
           displayNumbers: numbers,
+          focusedDisplay: focusedIndex,
           width,
           height,
           fps: settings.fps,
@@ -1347,6 +1584,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
         snapshotPng: input.snapshotPng,
         annotations: focusedAnnotations,
         displayNumbers: numbers,
+        focusedDisplay: focusedIndex,
         width,
         height,
         docLanguage: packDocLanguage(settings),
@@ -1470,6 +1708,7 @@ function startDisplayRenders(
         replayMimeType: s.replayMimeType,
         annotations: own.map((a) => rebaseLifetimeTo(a, s.offsetMs, s.replayDurationMs)),
         displayNumbers,
+        focusedDisplay: focusedIndex,
         width: s.width,
         height: s.height,
         fps,
@@ -1485,6 +1724,7 @@ function startDisplayRenders(
         snapshotPng: s.snapshotPng,
         annotations: own.map(withoutReplayTimes),
         displayNumbers,
+        focusedDisplay: focusedIndex,
         width: s.width,
         height: s.height,
         docLanguage,
@@ -2125,6 +2365,28 @@ function withoutReplayTimes(a: Annotation): Annotation {
  */
 function uiaEmpty(payload: UiaPluginPayload | null): boolean {
   return payload === null || (payload.windows.length === 0 && payload.elements.length === 0)
+}
+
+/**
+ * The capture-instant observation, on the PACK CLOCK (SPEC §10.1).
+ *
+ * The dump describes the moment the hotkey was pressed, which is the END of the
+ * replay — so it is timestamped `replayDurationMs`, exactly where
+ * `core.capture.triggered` sits in timeline.json. Getting this wrong is wrong
+ * in a way nobody notices for months (design §3.1), which is why the mapping
+ * lives in one place instead of being re-derived per caller.
+ */
+function contextObservation(
+  payload: UiaPluginPayload | null,
+  focusedIndex: number,
+  replayDurationMs: number,
+): ContextObservation | null {
+  if (uiaEmpty(payload)) return null
+  return {
+    tMs: replayDurationMs,
+    windows: editorUiaWindows(payload, focusedIndex),
+    elements: editorUiaElements(payload, focusedIndex),
+  }
 }
 
 function settleWithin<T>(

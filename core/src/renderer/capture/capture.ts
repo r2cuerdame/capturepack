@@ -7,6 +7,7 @@ import type {
   CaptureReadyPayload,
   CaptureReplayResultPayload,
   CaptureStartPayload,
+  CaptureTickPayload,
 } from '../../shared/ipc'
 
 interface CaptureBridge {
@@ -15,6 +16,7 @@ interface CaptureBridge {
   sendReplayResult(payload: CaptureReplayResultPayload): void
   sendReady(payload: CaptureReadyPayload): void
   sendFrames(payload: CaptureFramesPayload): void
+  sendTick(payload: CaptureTickPayload): void
   sendError(message: string): void
 }
 
@@ -156,11 +158,269 @@ function describe(err: unknown): string {
  */
 function deliveredFrames(): number | null {
   if (startPayload?.simulateNoFrames === true) return 0
-  const track = stream?.getVideoTracks()[0]
-  const stats = (track as (MediaStreamTrack & { stats?: { deliveredFrames?: number } }) | undefined)
-    ?.stats
-  const delivered = stats?.deliveredFrames
+  const delivered = videoStats()?.deliveredFrames
   return typeof delivered === 'number' && Number.isFinite(delivered) ? delivered : null
+}
+
+/**
+ * WHY A LOW FRAME RATE IS NOT YET A FAULT (#82).
+ *
+ * The cadence figure is `deliveredFrames`, which counts what the SOURCE handed
+ * over — and a screen capture only produces a frame when the screen changes.
+ * On this desk display 1 reads about 2 fps of 15 in every capture, which reads
+ * as a broken recorder and may simply be a monitor nobody touched.
+ *
+ * `discardedFrames` separates the two, and only it can: frames made and thrown
+ * away are a starved pipeline; frames never made are a still screen, and a
+ * still screen is missing nothing. Reported rather than concluded from — which
+ * of the two this desk has is a measurement the next capture makes.
+ */
+function videoStats(): { deliveredFrames?: number; discardedFrames?: number; totalFrames?: number } | null {
+  const track = stream?.getVideoTracks()[0] as
+    | (MediaStreamTrack & { stats?: { deliveredFrames?: number; discardedFrames?: number; totalFrames?: number } })
+    | undefined
+  return track?.stats ?? null
+}
+
+// ---------------------------------------------------------------------------
+// THE RECORDER'S OWN ACCOUNT OF ITS CADENCE (#82).
+//
+// A replay is the evidence every pack is built on, and nothing in the app knew
+// how good it was. A capture that stalled for nearly a second, twice, looked
+// exactly like a healthy one from every log line this process writes; it took
+// ffprobe on the saved file to see it. So the recorder measures itself.
+//
+// The delivered-frame counter is polled on a short timer. It cannot see WHEN
+// each frame arrived — only that the count moved — so `worstStallMs` is
+// quantised to the poll interval and is a LOWER BOUND on the true stall. That
+// is the honest thing it can say, and it is enough to tell a stall from a
+// steady 15 fps.
+//
+// The first seconds are excluded. A recorder that has just started is warming
+// up — measured at 6.8 fps for the first three seconds of a fresh install
+// against 13.1 fps after — and reporting that as the achieved rate would blame
+// the recorder for the clock starting.
+const CADENCE_POLL_MS = 100
+const CADENCE_WARMUP_MS = 3_000
+
+interface Cadence {
+  startedAt: number
+  firstCountedAt: number
+  baseFrames: number
+  lastFrames: number
+  lastAdvanceAt: number
+  worstStallMs: number
+  /** `discardedFrames` when counting began, so the report is a delta (#82). */
+  baseDiscarded: number
+}
+
+let cadence: Cadence | null = null
+let cadenceTimer: number | undefined
+
+function startCadenceMonitor(): void {
+  window.clearInterval(cadenceTimer)
+  const frames = deliveredFrames()
+  if (frames === null) {
+    cadence = null
+    return
+  }
+  const now = performance.now()
+  cadence = {
+    startedAt: now,
+    firstCountedAt: 0,
+    baseFrames: 0,
+    lastFrames: frames,
+    lastAdvanceAt: now,
+    worstStallMs: 0,
+    baseDiscarded: videoStats()?.discardedFrames ?? 0,
+  }
+  cadenceTimer = window.setInterval(pollCadence, CADENCE_POLL_MS)
+}
+
+function pollCadence(): void {
+  const c = cadence
+  if (c === null) return
+  const frames = deliveredFrames()
+  if (frames === null) return
+  const now = performance.now()
+  if (frames > c.lastFrames) {
+    // Only count a stall once the warm-up is over; before that a gap is the
+    // pipeline starting, not the pipeline stopping.
+    if (c.firstCountedAt !== 0) c.worstStallMs = Math.max(c.worstStallMs, now - c.lastAdvanceAt)
+    c.lastFrames = frames
+    c.lastAdvanceAt = now
+  }
+  if (c.firstCountedAt === 0 && now - c.startedAt >= CADENCE_WARMUP_MS) {
+    c.firstCountedAt = now
+    c.baseFrames = frames
+    c.lastAdvanceAt = now
+  }
+}
+
+/** What this recorder has achieved, or null while nothing can honestly be said. */
+function cadenceReport(): { achievedFps: number; worstStallMs: number; discardedFrames: number | null; sampledMs: number; gainedFrames: number } | null {
+  const c = cadence
+  if (c === null || c.firstCountedAt === 0) return null
+  const elapsedMs = performance.now() - c.firstCountedAt
+  if (elapsedMs < 1_000) return null
+  const gained = c.lastFrames - c.baseFrames
+  const discarded = videoStats()?.discardedFrames
+  return {
+    achievedFps: Math.round((gained / elapsedMs) * 1000 * 10) / 10,
+    worstStallMs: Math.round(c.worstStallMs),
+    // Made and thrown away — the half of a low frame rate that IS a fault
+    // (#82). Null when the browser does not keep the counter.
+    discardedFrames: typeof discarded === 'number' && Number.isFinite(discarded)
+      ? Math.max(0, discarded - c.baseDiscarded)
+      : null,
+    // The window the two counts above were measured over, so a reader can ask
+    // how many frames were MISSING and compare that against how many were
+    // thrown away (#82).
+    sampledMs: Math.round(elapsedMs),
+    gainedFrames: gained,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// THE FRAME TICK DRIVES THE OBSERVER (#105).
+//
+// Core's surface ring used to sample on a timer of its own and be related to
+// the recording by clock arithmetic. That error is invisible while a window is
+// still and proportional to its speed while it moves, which is exactly how it
+// was reported — "처음과 끝 가만히 있을대만 맞아" — and it measured 232 px, about
+// 119 ms, mid-drag.
+//
+// A frame is the only instant a pack can show. So every captured frame asks
+// Core to look at the desk NOW and hands over its own presentation time; the
+// resulting sample is filed under that number. The picture and the rectangles
+// become one instant by construction, and there is no clock left to be wrong
+// about.
+//
+// Only the FOCUSED display ticks: it owns the pack clock (SPEC §10.1), and a
+// second display ticking would file samples under a different recording's
+// numbers.
+let tickVideo: HTMLVideoElement | null = null
+/**
+ * Which tick chain is current (#91).
+ *
+ * `startFrameTicks` runs on every recorder start, and a recorder restarts:
+ * recovery, a rebuilt window, a settings change. Each call used to add ANOTHER
+ * self-re-arming callback chain and ANOTHER <video> sink on the same 4K stream,
+ * and nothing ever removed the old ones. Measured after a few restarts: 3515
+ * ticks over 35 seconds — a hundred a second where fifteen were intended —
+ * which buried the ring's budget until the governor coarsened it to 279 samples
+ * and left the replay PARTIAL, while the extra decoders starved the recorder
+ * they were supposed to be timing.
+ *
+ * A generation counter retires the old chain on the first callback it gets.
+ */
+let tickGeneration = 0
+
+function startFrameTicks(): void {
+  stopFrameTicks()
+  if (startPayload?.focused !== true) return
+  const active = stream
+  if (active === null) return
+  const generation = ++tickGeneration
+  // THE TICK MUST NOT COST THE RECORDING (#110).
+  //
+  // This is a SECOND sink on a stream the recorder is already consuming, and
+  // the measurement is unambiguous: whichever display ticks is the one that
+  // stalls. Display 2 ticked and managed 10.1 fps with an 897 ms worst stall
+  // while display 1 sat at 14.8; the cursor moved, the roles swapped, and so
+  // did the numbers.
+  //
+  // A hidden element still composites what it is given, and what it is given
+  // here is 4K fifteen times a second. One pixel is enough: the frame CALLBACK
+  // does not care about the element's size, and it is the callback — its
+  // presentation time — that this exists for. The stream is not re-encoded and
+  // the recorder's own path is untouched.
+  const video = document.createElement('video')
+  video.muted = true
+  video.playsInline = true
+  video.disableRemotePlayback = true
+  video.width = 1
+  video.height = 1
+  video.style.position = 'fixed'
+  video.style.width = '1px'
+  video.style.height = '1px'
+  video.style.opacity = '0'
+  video.style.pointerEvents = 'none'
+  video.srcObject = active
+  document.body.appendChild(video)
+  tickVideo = video
+  if (typeof video.requestVideoFrameCallback !== 'function') return
+  const pump: VideoFrameRequestCallback = (_now, metadata) => {
+    // A chain from a previous start stops here rather than running forever.
+    if (generation !== tickGeneration) return
+    // THE FRAME'S POSITION IN THE FILE BEING SAVED (#109).
+    //
+    // Which number to send took reading the spec rather than guessing, and the
+    // first guess was wrong twice over:
+    //
+    //   `mediaTime`   is the track's OWN timeline and the spec says it "may be
+    //                 zero for live streams". It starts when the STREAM did,
+    //                 not when this recorder slot did — and the saved replay is
+    //                 one slot's output, whose t=0 is that slot's start. They
+    //                 agree only until the first rotation, which is why this
+    //                 looked almost right.
+    //   `captureTime` is defined for WebRTC and getUserMedia sources. A screen
+    //                 capture is neither, so it is simply absent.
+    //
+    //   `presentationTime` IS specified for every source — "the time at which
+    //                 the user agent submitted the frame for composition", on
+    //                 the same timebase as `performance.now()`. So is
+    //                 `slot.startedAt`. The difference between them is the
+    //                 frame's exact position in the file this slot is writing.
+    //
+    // The slot that will BE the replay is the older recording one, which is
+    // what `olderRecordingSlot` already answers for the export path.
+    const base = olderRecordingSlot()
+    const submitted = metadata.presentationTime
+    if (base === null || typeof submitted !== 'number' || !Number.isFinite(submitted)) {
+      video.requestVideoFrameCallback(pump)
+      return
+    }
+    // ONE MONOTONIC NUMBER FOR THE WHOLE SESSION (#112).
+    //
+    // This used to send the frame's position within the CURRENT recorder slot.
+    // The recorder rotates slots every `segmentSeconds`, and at each rotation
+    // that number falls back to zero — so the ring received time going
+    // BACKWARDS by up to thirty seconds. The log said it plainly once a
+    // recording lived long enough to rotate: "736 samples over -9s".
+    //
+    // `presentationTime` is `performance.now()`-based and never goes backwards,
+    // so it is sent as-is. Turning it into a position in the saved file needs
+    // to know WHICH slot was saved and where that slot began, and the only
+    // moment both are known is when the replay is handed over — so that is
+    // where the subtraction happens, not here.
+    window.captureBridge.sendTick?.({
+      displayId: startPayload?.displayId ?? '',
+      mediaTimeMs: submitted,
+    })
+    video.requestVideoFrameCallback(pump)
+  }
+  video.requestVideoFrameCallback(pump)
+  // A <video> that is never played presents no frames; it is never shown, and
+  // it decodes the stream the recorder is already consuming.
+  void video.play().catch(() => {
+    /* No ticks from this display: the free-running loop still samples. */
+  })
+}
+
+/** Retires the current chain and releases its sink (#91). */
+function stopFrameTicks(): void {
+  tickGeneration += 1
+  const video = tickVideo
+  tickVideo = null
+  if (video === null) return
+  try {
+    video.pause()
+  } catch {
+    // Already detached; nothing to stop.
+  }
+  video.srcObject = null
+  video.remove()
 }
 
 function armEvidenceCheck(delayMs: number): void {
@@ -215,10 +475,14 @@ function checkFrameEvidence(): void {
     // is exactly the state #43 describes and exactly what recovery must not
     // destroy.
     if (startPayload?.simulateSlowReplayMs === undefined) {
+      const measured = cadenceReport()
       window.captureBridge.sendFrames({
         displayId: startPayload?.displayId ?? '',
         bytes,
         frames: frames ?? 0,
+        // Omitted, never zeroed, while nothing can honestly be said (#82): a
+        // rate nobody measured must not be reported as a rate.
+        ...(measured === null ? {} : { cadence: measured }),
       })
     }
     armEvidenceCheck(EVIDENCE_STALL_MS)
@@ -347,6 +611,8 @@ async function startCapture(payload: CaptureStartPayload): Promise<void> {
   evidenceStrikes = 0
   unknownFramesLogged = false
   evidenceFrames = deliveredFrames() ?? 0
+  startCadenceMonitor()
+  startFrameTicks()
   startSlot(slots[0])
   armEvidenceCheck(EVIDENCE_DEADLINE_MS)
   slots[1].startTimer = window.setTimeout(() => startSlot(slots[1]), segmentMs)
@@ -437,6 +703,9 @@ async function handleReplayRequest(requestId: string): Promise<void> {
     recorder.stop()
   })
   const durationMs = Math.round(performance.now() - startedAt)
+  // Where this file's t=0 sits on the tick clock (#112). Ticks are monotonic
+  // `presentationTime`; these bytes begin when this slot did.
+  const originMs = startedAt
   startSlot(slot) // restart before assembling so buffering never pauses
   restaggerSurvivor(slots[slot.index === 0 ? 1 : 0])
   const buffer = await new Blob(chunks, { type: format.mimeType }).arrayBuffer()
@@ -463,6 +732,7 @@ async function handleReplayRequest(requestId: string): Promise<void> {
           requestId,
           buffer,
           durationMs,
+          originMs,
           mimeType: format.mimeType,
           replayFile: format.replayFile,
         }

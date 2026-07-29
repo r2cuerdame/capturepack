@@ -29,6 +29,14 @@ jobs:
         working-directory: core
         run: npm run build
 
+      # Object picking follows time (#66), and it still picks as well as it did
+      # (#58). Both are measured against checked-in evidence — four real packs,
+      # geometry and identity only — and the second is compared probe for probe
+      # against the PREVIOUS release's index, taken from git.
+      - name: Temporal picking + #58 regression
+        working-directory: core
+        run: node test/temporal/check.mjs
+
       - name: Smoke test (electron --smoke)
         working-directory: core
         timeout-minutes: 3

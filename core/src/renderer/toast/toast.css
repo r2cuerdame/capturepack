@@ -101,3 +101,38 @@ header {
 .status.failed {
   color: #ff6b6b;
 }
+
+
+/* Render progress (#96). The bar exists only while a render is in flight; a
+   terminal state is a colour on the label, not a bar frozen at some fraction. */
+.bar {
+  margin-top: 6px;
+  height: 4px;
+  border-radius: 2px;
+  background: #2a2a33;
+  overflow: hidden;
+}
+
+.bar > div {
+  height: 100%;
+  width: 0;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #6b8dff, #9a6bff);
+  transition: width 180ms linear;
+}
+
+/* Nothing measured yet: sweep rather than sit at 0, which reads as stuck. */
+.bar.indeterminate > div {
+  width: 35%;
+  animation: sweep 1.1s ease-in-out infinite;
+  transition: none;
+}
+
+@keyframes sweep {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(285%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bar.indeterminate > div { animation: none; width: 100%; opacity: 0.45; }
+}

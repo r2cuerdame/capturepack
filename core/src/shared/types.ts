@@ -1,8 +1,8 @@
-// CapturePack format types — mirror SPEC.md (format_version 0.1.0).
+// CapturePack format types — mirror SPEC.md (format_version 0.2.0).
 // These types describe data written into a .capturepack; keep them in sync with the spec.
 
 export const FORMAT_NAME = 'capturepack'
-export const FORMAT_VERSION = '0.1.0'
+export const FORMAT_VERSION = '0.2.0'
 
 // Per-display media of an all-displays capture (SPEC §5.3, GOAL "Multi-Monitor
 // Support"). One entry per display frozen by the trigger.
@@ -109,11 +109,57 @@ export interface AnnotationBounds {
   height: number
 }
 
-// Object-tracking state (SPEC §8.3). In format 0.1.0 `enabled` is always
-// false — frame-by-frame tracking data is reserved for a future version; the
-// object shape exists so richer data can arrive without a breaking change.
+/** One rectangle the tracked object occupied, at one moment of the pack clock. */
+export interface AnnotationTrackSample {
+  t_ms: number
+  /**
+   * Which display these numbers are pixels of — absent = the annotation's own
+   * `display`.
+   *
+   * A window dragged to another monitor is still the same window, so a track
+   * follows it there (#86). Each sample therefore says which image it is
+   * measured in, and the box moves between screens with the object while every
+   * rectangle stays unambiguous. The ANNOTATION's `display` is unchanged by
+   * this: it is where the box was drawn, and where a reader that ignores
+   * tracking puts it.
+   */
+  display?: number
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+// Object-tracking state (SPEC §8.3).
+//
+// THE BOX FOLLOWS THE THING IT NAMES (#86). Until format 0.2.0 this could only
+// say `enabled: false`, and a box therefore stayed where the object had been at
+// one instant — wrong from the next frame on, with nothing in the pack to say
+// so. Measured on a real capture: a picked box held for ten seconds ended up on
+// a different window entirely, half a screen away.
+//
+// `samples` is the object's path: ascending on the pack clock, in the snapshot
+// pixels of each sample's own display (SPEC §8.2, §8.8) — which is `bounds`'s
+// display unless the sample says otherwise. Between two samples a reader
+// interpolates linearly; outside them there is nothing to follow.
+//
+// `bounds` REMAINS the box's rectangle at its representative instant, so a
+// reader that ignores `tracking` still draws a correct box — which is what lets
+// a 0.1.0 reader open a 0.2.0 pack and be right rather than merely tolerant.
 export interface AnnotationTracking {
   enabled: boolean
+  samples?: AnnotationTrackSample[]
+  /**
+   * The instant the box MEANS, on the replay clock (SPEC §8.4, #90).
+   *
+   * A drawn box's representative instant is the midpoint of its lifetime. A
+   * PICKED box's is the frame the user was looking at when they clicked, which
+   * is not the same number and does not move when the lifetime is edited — so
+   * it cannot be derived and has to be recorded. `bounds` is the observed
+   * rectangle at this instant, which makes the pair checkable: nearest sample
+   * to `picked_at_ms` must be `bounds`.
+   */
+  picked_at_ms?: number
 }
 
 // Semantic object metadata (SPEC §8.3, §8.7): what real UI object the box
@@ -362,7 +408,18 @@ export function annotationsOnDisplay(
   focusedIndex: number,
   declared?: ReadonlySet<number>,
 ): Annotation[] {
-  return annotations.filter((a) => annotationDisplayIndex(a, focusedIndex, declared) === index)
+  return annotations.filter((a) => {
+    if (annotationDisplayIndex(a, focusedIndex, declared) === index) return true
+    // A TRACKED BOX BELONGS TO EVERY SCREEN ITS OBJECT VISITS (#86). The window
+    // was dragged onto this display, so this display's rendering has to carry
+    // the box — otherwise the video of the screen the window moved TO is the
+    // one view of the capture where the annotation is missing. Each renderer
+    // still draws it only while the resolved sample is on its own screen.
+    return (
+      a.tracking?.enabled === true &&
+      (a.tracking.samples ?? []).some((s) => s.display === index)
+    )
+  })
 }
 
 /**
