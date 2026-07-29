@@ -812,11 +812,29 @@ body[data-window-mode="windowed"] #helpSheet {
   background: #fff;
 }
 
-/* Trimmed-length chip, shown only while a trim is active. */
+#trackArea {
+  position: relative;
+}
+
+/* Trimmed-length chip, shown only while a trim is active.
+ *
+ * FLOATED, NOT LAID OUT. It used to sit in the footer row beside the track, so
+ * showing it took width away from the very slider the user was dragging and the
+ * handle moved out from under the pointer. Absolute inside the track area, it
+ * costs no layout at all — and it sits ABOVE the track and inset from the right
+ * edge, so it stays on screen and never covers a handle. */
 #trimChip {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  pointer-events: none;
+  z-index: 3;
   padding: 2px 8px;
   border-radius: 999px;
-  background: rgba(53, 116, 240, 0.18);
+  /* Opaque: it now floats over the replay rather than over the panel, and a
+     translucent chip on video is a chip nobody can read. */
+  background: rgba(24, 26, 32, 0.92);
+  border: 1px solid rgba(53, 116, 240, 0.55);
   color: var(--text);
   font-size: 11px;
   font-variant-numeric: tabular-nums;

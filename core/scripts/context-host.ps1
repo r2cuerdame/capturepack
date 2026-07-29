@@ -155,6 +155,15 @@ namespace CapturePack {
     static readonly List<IntPtr> Handles = new List<IntPtr>(512);
     static readonly EnumWindowsProc Collect = CollectHandle;
 
+    /// Last GetWindowRect per window, and the invisible-border inset learned
+    /// from a sample where it had not moved. See the frame branch in Sample().
+    /// Both are cleared wholesale when they grow past a desk's worth of windows
+    /// — a handle that is gone costs one stale entry until then, and the next
+    /// two samples rebuild everything that is still there.
+    static readonly Dictionary<long, RECT> LastRaw = new Dictionary<long, RECT>();
+    static readonly Dictionary<long, RECT> Inset = new Dictionary<long, RECT>();
+    const int GEOMETRY_CACHE_LIMIT = 512;
+
     public static string DpiMode = "unaware";
     public static long SampleTicks;
     public static long SampleCount;
@@ -218,6 +227,7 @@ namespace CapturePack {
     /// here, and it is the whole reason this pass is worth 0.6 ms.
     public static string Sample(double hostMs) {
       long started = Stopwatch.GetTimestamp();
+      if (LastRaw.Count > GEOMETRY_CACHE_LIMIT) { LastRaw.Clear(); Inset.Clear(); }
       Handles.Clear();
       EnumWindows(Collect, IntPtr.Zero);
       IntPtr foreground = GetForegroundWindow();
@@ -233,9 +243,64 @@ namespace CapturePack {
         if (!visible) continue;            // invisible top-levels are 96% of the list
         int cloakedValue = 0;
         bool cloaked = DwmGetInt(h, DWMWA_CLOAKED, out cloakedValue, 4) == 0 && cloakedValue != 0;
+        // THE DWM FRAME IS A CACHE, AND A DRAGGED WINDOW OUTRUNS IT.
+        //
+        // DWMWA_EXTENDED_FRAME_BOUNDS is what the compositor last published, so
+        // it is exact on a window standing still and BEHIND one being moved.
+        // GetWindowRect is the window manager's own answer and updates with the
+        // drag, but it includes the invisible resize border this whole branch
+        // exists to remove.
+        //
+        // Measured on CapturePack_2026-07-29_143319 (rc.15, every clock leg
+        // already at 1 ms): while a File Explorer window was shaken, the box was
+        // drawn ~300 px behind it in the direction of travel, and the recorded
+        // rectangle held one position for three consecutive samples while the
+        // frames showed it already elsewhere. At rest the same window matched
+        // for 26 samples without a pixel of error. "흔들면 싱크가 안맞아".
+        //
+        // So POSITION comes from GetWindowRect and the BORDER comes from DWM —
+        // and the border is only learned from samples where the window did not
+        // move between the two reads, which is the only time the difference
+        // between them is the border rather than the border plus however far it
+        // travelled. The inset is a property of the window's frame style, so one
+        // learned at rest stays right while it moves.
         RECT frame;
-        if (DwmGetRect(h, DWMWA_EXTENDED_FRAME_BOUNDS, out frame, Marshal.SizeOf(typeof(RECT))) != 0) {
-          if (!GetWindowRect(h, out frame)) continue;
+        RECT raw;
+        RECT dwm;
+        bool haveRaw = GetWindowRect(h, out raw);
+        bool haveDwm = DwmGetRect(h, DWMWA_EXTENDED_FRAME_BOUNDS, out dwm, Marshal.SizeOf(typeof(RECT))) == 0;
+        if (haveRaw) {
+          long key = h.ToInt64();
+          RECT previous;
+          bool stood_still = LastRaw.TryGetValue(key, out previous) &&
+            previous.Left == raw.Left && previous.Top == raw.Top &&
+            previous.Right == raw.Right && previous.Bottom == raw.Bottom;
+          if (haveDwm && stood_still) {
+            RECT learned;
+            learned.Left = dwm.Left - raw.Left;
+            learned.Top = dwm.Top - raw.Top;
+            learned.Right = dwm.Right - raw.Right;
+            learned.Bottom = dwm.Bottom - raw.Bottom;
+            Inset[key] = learned;
+          }
+          LastRaw[key] = raw;
+          RECT known;
+          if (Inset.TryGetValue(key, out known)) {
+            frame.Left = raw.Left + known.Left;
+            frame.Top = raw.Top + known.Top;
+            frame.Right = raw.Right + known.Right;
+            frame.Bottom = raw.Bottom + known.Bottom;
+          } else if (haveDwm) {
+            // Never seen at rest yet: the DWM frame is still the better of the
+            // two, and one sample from now the inset will be known.
+            frame = dwm;
+          } else {
+            frame = raw;
+          }
+        } else if (haveDwm) {
+          frame = dwm;
+        } else {
+          continue;
         }
         bool minimized = IsIconic(h);
         int width = frame.Right - frame.Left, height = frame.Bottom - frame.Top;

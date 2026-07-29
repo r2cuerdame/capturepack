@@ -262,8 +262,12 @@
         <div id="trimIn" class="trimHandle" title="Trim in (I) — double-click to reset" data-i18n-title="editor.trimInTooltip" hidden></div>
         <div id="trimOut" class="trimHandle" title="Trim out (O) — double-click to reset" data-i18n-title="editor.trimOutTooltip" hidden></div>
       </div>
-    </div>
-    <span id="trimChip" hidden></span>
+      <!-- INSIDE the track, not beside it. As a footer sibling this chip only
+           existed while a trim was active, so setting one made the track it was
+           describing narrower — the handle jumped out from under the pointer at
+           the moment of the drag. Floated over the track it costs no width at
+           all, and it can never push the slider around. -->
+      <span id="trimChip" hidden></span>
     <span id="timeLabel" data-i18n="editor.now">now</span>
     <span id="scrubHint" data-i18n="editor.loadingReplay">loading replay…</span>
   </footer>
