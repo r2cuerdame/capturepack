@@ -1119,7 +1119,10 @@ async function createCaptureWindow(display: Display, settings: Settings): Promis
     const onTick = (event: IpcMainEvent, payload: CaptureTickPayload): void => {
       if (event.sender !== win.webContents || captureWindows.get(display.id) !== win) return
       if (typeof payload?.mediaTimeMs !== 'number' || !Number.isFinite(payload.mediaTimeMs)) return
-      tickSurfaces(payload.mediaTimeMs, payload.frameAgeMs)
+      // The lane keeps ONE clock and ignores every display but the first to
+      // tick (#110) — which is what `IPC.captureTick` has always documented and
+      // nothing enforced. The display id is what lets it hold that line.
+      tickSurfaces(String(display.id), payload.mediaTimeMs, payload.frameAgeMs)
     }
     ipcMain.on(IPC.captureTick, onTick)
     // A recorder renderer that VANISHES is a recorder failure, never silence

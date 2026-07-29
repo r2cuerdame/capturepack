@@ -1808,6 +1808,50 @@ one-second track and clamping to its first sample, so the box showed the window
 as it had been *before* the frame the user clicked — would now fail validation
 instead of shipping.
 
+### One ring, one clock, and no correlation by luck (#110)
+
+Everything above assumes a sample's TIME means what it says. Twice it did not,
+and the result was reported as *"한 화면에서도 못따라온다"* — a box that will not
+follow its window even on a single screen, with no second monitor and no scaling
+anywhere in the picture.
+
+**A reply belongs to the request that asked for it.** `surface.tick` is fire and
+forget, so several are outstanding at once and their answers need not come back
+in order. The lane kept the tick's two readings — Core's clock at the ask, and
+how old the frame already was — in two fields that the NEXT tick overwrote. A
+reply arriving later was therefore differenced against a stranger's numbers, and
+the sample was filed at `frameMs + (a difference between two unrelated
+instants)`. The error is unbounded and changes sign. Measured on
+CapturePack_2026-07-29_135650: one window of constant size 1443x953 appeared to
+move 96–900 px between consecutive 67 ms samples, alternating direction, up to
+13,000 px/s. No hand drags a window like that — the rectangles were right and
+their timestamps were fiction. The readings are now keyed on the frame time the
+reply echoes back, so a pair is a pair or there is no pair.
+
+**A ring holds one clock.** Each display's recorder is its own renderer with its
+own media clock and its own zero point, and every one of them was ticking into
+the single lane — so consecutive samples landed in unrelated time bases seconds
+apart. `IPC.captureTick` had documented "Focused display only — one clock" from
+the beginning and nothing enforced it. A tick makes the host dump the WHOLE
+desk, not one screen's part of it, so a second ticking display adds no coverage
+at all — only a second clock. The first display to tick is the clock; the rest
+are ignored, and the log says so once.
+
+**Neither fault is reachable at a schedule.** Both need several ticks in flight
+with replies out of order, which a real host on a timer will not produce on
+demand. `npm run check:sync` drives the real lane against a synthetic host that
+does, and asserts what a reader actually cares about: a window moving at a known
+speed must appear to move at that speed. Against the code before this fix it
+reports 2% ring coverage in one scenario and 17,250 px/s of apparent motion in
+the other.
+
+**A median is not a measurement of correctness.** The lane reported "tick lag
++1 ms" throughout, and that number was true and useless: the median of a set of
+mismatched pairs sits near zero while the individual values swing hundreds of
+milliseconds either way. Three release candidates were spent chasing clock legs
+that were each already correct. A statistic that cannot show the failure is not
+evidence the failure is absent.
+
 ---
 
 ## Event Timeline

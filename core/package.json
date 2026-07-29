@@ -16,7 +16,8 @@
     "typecheck": "tsc --noEmit",
     "dev": "npm run build && electron .",
     "dist": "npm run build && electron-builder --win",
-    "release": "npm run build && electron-builder --win --publish always"
+    "release": "npm run build && electron-builder --win --publish always",
+    "check:sync": "node scripts/surface-sync-check.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

@@ -274,8 +274,8 @@ export function frozenObservations(
  * Silent when there is no runtime, which is every non-Windows platform and any
  * session started with --no-context-host.
  */
-export function tickSurfaces(frameMs: number, frameAgeMs?: number): void {
-  runtime?.lane.tickAt(frameMs, frameAgeMs)
+export function tickSurfaces(displayId: string, frameMs: number, frameAgeMs?: number): void {
+  runtime?.lane.tickAt(displayId, frameMs, frameAgeMs)
 }
 
 export interface ContextStatus {

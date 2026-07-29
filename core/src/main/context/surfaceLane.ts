@@ -23,7 +23,7 @@
 
 import { logInfo, logWarn } from '../log'
 import { ClockOffsetEstimator, type SessionClock } from './clock'
-import { ContextHost, type HostEvent, type HostReply } from './host'
+import { ContextHost, type ContextHostOptions, type HostEvent, type HostReply } from './host'
 import { SurfaceTimeline, type SurfaceSampleWindow } from './timeline'
 
 /**
@@ -60,6 +60,18 @@ const FALLBACK_INTERVALS_MS = [200, 500]
  */
 const TICK_SILENCE_MS = 2_000
 
+/**
+ * How many ticks may be in flight before the oldest is forgotten.
+ *
+ * A tick is FIRE AND FORGET, so several are outstanding at once and their
+ * replies do not have to come back in order. Each one's reply is matched to the
+ * tick that asked for it (`pendingTicks`), and this is the bound on that table:
+ * a couple of seconds of frames at any rate a recorder can reach. A reply older
+ * than that has lost its partner and is filed at its frame's own time rather
+ * than against a stranger's.
+ */
+const MAX_PENDING_TICKS = 128
+
 /** How often Core re-measures the host clock offset. */
 const PING_INTERVAL_MS = 2_000
 /** How often the ring drops what retention no longer covers. */
@@ -81,6 +93,13 @@ const DUTY_CYCLE_STRIKES = 3
  * and a warning in main.log is what makes it observable at all.
  */
 const HOST_WORKING_SET_WARN_BYTES = 120 * 1024 * 1024
+
+/** The part of the Context Host this lane actually uses — the seam a test stands in on. */
+export interface SurfaceHost {
+  start(): void
+  stop(): void
+  request(method: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<HostReply>
+}
 
 export interface SurfaceLaneStatus {
   running: boolean
@@ -171,7 +190,7 @@ export function parseHostMonitors(raw: unknown): HostMonitor[] {
 export class SurfaceLane {
   private readonly clock: SessionClock
   private readonly timeline: SurfaceTimeline
-  private readonly host: ContextHost
+  private readonly host: SurfaceHost
   private readonly offset = new ClockOffsetEstimator()
   private intervalMs = DEFAULT_INTERVAL_MS
   /** True while captured frames are driving the sampling (#106). */
@@ -213,12 +232,49 @@ export class SurfaceLane {
    */
   private pendingClockSamples: { timeMs: number; rawWindows: readonly unknown[] }[] = []
   private clockDecided = false
-  /** Core's clock when the last tick was sent — the other end of the round trip. */
-  private tickCoreMs = 0
+  /**
+   * THE TICK THAT ASKED, NOT WHICHEVER TICK WAS LAST (#110).
+   *
+   * `surface.tick` is fire and forget, and a recorder ticks every frame — so
+   * several requests are outstanding at once and their replies need not come
+   * back in the order they were sent. This used to be TWO SCALAR FIELDS,
+   * `tickCoreMs` and `tickFrameAgeMs`, overwritten by every new tick. By the
+   * time a reply arrived they held a LATER tick's numbers, so the lag was
+   * computed by subtracting two instants that were never a pair, and the sample
+   * was filed at `frameMs + (a difference between strangers)`.
+   *
+   * That error is unbounded and changes sign, which is exactly what the ring
+   * showed: measured on CapturePack_2026-07-29_135650, one window of constant
+   * size 1443x953 on ONE screen appeared to move 96-900 px between consecutive
+   * 67 ms samples, alternating direction — up to 13,000 px/s, which no hand can
+   * drag. The rectangles were right; the times they were filed under were not.
+   * "한 화면에서도 못따라온다" is what that looks like from the outside.
+   *
+   * The reply echoes the frame time the tick was sent with (`ft`), so the pair
+   * is recoverable exactly. Keyed on it, nothing is correlated by luck.
+   */
+  private readonly pendingTicks = new Map<number, { coreMs: number; ageMs: number }>()
+  /**
+   * ONE RING, ONE CLOCK (#110) — the display whose frame clock this ring is on.
+   *
+   * `IPC.captureTick` has always been documented "Focused display only — one
+   * clock", and nothing enforced it: `capture.ts` registers the tick listener
+   * per capture window, so EVERY display's recorder ticked into this one lane.
+   * Each recorder renderer has its own media clock with its own zero point, so
+   * the ring was being stamped alternately in two unrelated time bases — the
+   * same #106 failure this lane already fixed for the free-running loop,
+   * reintroduced across displays.
+   *
+   * A tick makes the host dump the WHOLE desktop, not one screen's part of it,
+   * so a second ticking display adds no coverage whatsoever — only a second
+   * clock. The first display to tick is therefore the clock, and the others are
+   * ignored (once, loudly).
+   */
+  private clockSourceDisplayId: string | null = null
+  private readonly ignoredTickSources = new Set<string>()
   // The last time actually written into the ring, so a tick whose round trip
   // was shorter than its predecessor's cannot file a sample out of order.
   private lastAppendedMs = -Infinity
-  private tickFrameAgeMs = 0
   private readonly frameAgeMs: number[] = []
   private readonly tickLagMs: number[] = []
   private fallbackIndex = -1
@@ -253,13 +309,26 @@ export class SurfaceLane {
   /** When sampling began, so "no tick has ever come" can be given a deadline. */
   private startedAtMs = 0
 
-  constructor(clock: SessionClock, timeline: SurfaceTimeline, intervalMs?: number) {
+  /**
+   * `createHost` exists so the tick/reply correlation can be TESTED (#110). The
+   * fault it now guards against — a reply matched against the wrong tick — only
+   * appears when several ticks are in flight and their replies come back out of
+   * order, which is unreachable through a real PowerShell host on a schedule.
+   * Production passes nothing and gets the real `ContextHost`.
+   */
+  constructor(
+    clock: SessionClock,
+    timeline: SurfaceTimeline,
+    intervalMs?: number,
+    createHost?: (options: ContextHostOptions) => SurfaceHost,
+  ) {
     this.clock = clock
     this.timeline = timeline
     if (intervalMs !== undefined && Number.isFinite(intervalMs)) {
       this.intervalMs = Math.max(MIN_INTERVAL_MS, Math.round(intervalMs))
     }
-    this.host = new ContextHost({
+    const make = createHost ?? ((options: ContextHostOptions): SurfaceHost => new ContextHost(options))
+    this.host = make({
       onEvent: (event) => this.onEvent(event),
       onReady: (hello) => {
         void this.onReady(hello)
@@ -414,8 +483,22 @@ export class SurfaceLane {
    * loop will take anyway a few tens of milliseconds later; it must never make
    * the recorder wait.
    */
-  tickAt(frameMs: number, frameAgeMs?: number): void {
+  tickAt(displayId: string, frameMs: number, frameAgeMs?: number): void {
     if (!this.running) return
+    // ONE RING, ONE CLOCK (#110) — see `clockSourceDisplayId`.
+    if (this.clockSourceDisplayId === null) {
+      this.clockSourceDisplayId = displayId
+      logInfo(`[context] lane S is on display ${displayId}'s frame clock`)
+    } else if (this.clockSourceDisplayId !== displayId) {
+      if (!this.ignoredTickSources.has(displayId)) {
+        this.ignoredTickSources.add(displayId)
+        logInfo(
+          `[context] ignoring frame ticks from display ${displayId} — the ring is on ` +
+            `display ${this.clockSourceDisplayId}'s clock, and a tick already samples every screen`,
+        )
+      }
+      return
+    }
     // ONE TIME BASE AT A TIME (#106).
     //
     // The free-running loop stamps its samples with the host's clock converted
@@ -432,11 +515,19 @@ export class SurfaceLane {
       })
     }
     this.lastTickAt = Date.now()
-    this.tickCoreMs = this.clock.nowMs()
-    // How far behind the picture this tick already is before it goes anywhere
-    // (#109): the pixels were taken off the screen before the renderer heard
-    // about them.
-    this.tickFrameAgeMs = typeof frameAgeMs === 'number' && Number.isFinite(frameAgeMs) ? frameAgeMs : 0
+    // Recorded AGAINST THIS FRAME rather than in a scalar the next tick would
+    // overwrite (#110). `ageMs` is how far behind the picture this tick already
+    // is before it goes anywhere (#109): the pixels were taken off the screen
+    // before the renderer heard about them.
+    this.pendingTicks.set(frameMs, {
+      coreMs: this.clock.nowMs(),
+      ageMs: typeof frameAgeMs === 'number' && Number.isFinite(frameAgeMs) ? frameAgeMs : 0,
+    })
+    while (this.pendingTicks.size > MAX_PENDING_TICKS) {
+      const oldest = this.pendingTicks.keys().next().value
+      if (oldest === undefined) break
+      this.pendingTicks.delete(oldest)
+    }
     void this.host.request('surface.tick', { tMs: frameMs }).catch(() => {
       /* Rule 1: a missed observation is a gap in the ring, never a lost frame. */
     })
@@ -494,6 +585,12 @@ export class SurfaceLane {
       // it looked, so the difference between that and the frame is the residual
       // lag, in milliseconds, measured rather than assumed. It is the number
       // that decides whether anything is left to fix here.
+      // THE TICK THAT ASKED FOR THIS SAMPLE (#110). The reply echoes the frame
+      // time it was sent with, so the pair is exact; a reply whose tick has
+      // aged out of the table has no partner and claims no lag rather than
+      // borrowing a stranger's.
+      const asked = this.pendingTicks.get(frameMs)
+      this.pendingTicks.delete(frameMs)
       const takenAt = this.offset.toCoreMs(hostMs)
       // SIGNED, and the clamp that used to be here is why this always read 0.
       //
@@ -504,16 +601,18 @@ export class SurfaceLane {
       // reported "tick lag 0 ms" for a round trip nobody had ever seen the size
       // of. A number that cannot be negative is not a measurement of a
       // difference.
-      const lag = takenAt === null ? 0 : takenAt - this.tickCoreMs
-      if (takenAt !== null) {
-        // The two clocks, read at one instant. Refreshed every tick so the
-        // newest mapping is the one in use.
-        this.frameClockOffsetMs = this.tickCoreMs - frameMs
-        this.settleHeldSamples()
+      const lag = takenAt === null || asked === undefined ? 0 : takenAt - asked.coreMs
+      const ageMs = asked?.ageMs ?? 0
+      if (takenAt !== null && asked !== undefined) {
+        // The two clocks, read at ONE instant — this tick's, not the newest
+        // one's. Refreshed every tick, so the mapping stays current without
+        // ever pairing readings that were taken apart.
+        this.frameClockOffsetMs = asked.coreMs - frameMs
         this.tickLagMs.push(lag)
         if (this.tickLagMs.length > 200) this.tickLagMs.shift()
       }
-      this.frameAgeMs.push(this.tickFrameAgeMs)
+      if (this.frameClockOffsetMs !== null) this.settleHeldSamples()
+      this.frameAgeMs.push(ageMs)
       if (this.frameAgeMs.length > 200) this.frameAgeMs.shift()
       // THE SAMPLE BELONGS TO THE MOMENT IT WAS TAKEN, NOT TO THE FRAME THAT
       // ASKED FOR IT.
@@ -560,7 +659,7 @@ export class SurfaceLane {
       // renderer never sent it. They are now both measured, and the log states
       // each separately so a future displacement can be attributed rather than
       // argued about.
-      const takenAtFrameMs = Math.max(this.lastAppendedMs, frameMs + lag + this.tickFrameAgeMs)
+      const takenAtFrameMs = Math.max(this.lastAppendedMs, frameMs + lag + ageMs)
       this.lastAppendedMs = takenAtFrameMs
       this.append(takenAtFrameMs, rawWindows)
       return
