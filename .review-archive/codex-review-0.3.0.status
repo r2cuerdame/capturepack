@@ -1,0 +1,26 @@
+ M core/scripts/context-host.ps1
+ M core/scripts/surface-sync-check.mjs
+ M core/scripts/surface-sync-check.ts
+ M core/scripts/uia-dump.ps1
+ M core/src/main/annotatedRender.ts
+ M core/src/main/capture.ts
+ M core/src/main/chrome/domBridge.ts
+ M core/src/main/context/ringObservations.ts
+ M core/src/main/context/runtime.ts
+ M core/src/main/context/surfaceLane.ts
+ M core/src/main/exporter.ts
+ M core/src/main/historyWindow.ts
+ M core/src/main/mcp/store.ts
+ M core/src/main/session.ts
+ M core/src/main/settingsWindow.ts
+ M core/src/main/updater.ts
+ M core/src/preload/settings.ts
+ M core/src/renderer/capture/capture.ts
+ M core/src/renderer/editor/editor.html
+ M core/src/renderer/editor/editor.ts
+ M core/src/renderer/editor/lifetime.ts
+ M core/src/renderer/editor/scrub.ts
+ M core/src/renderer/settings/settings.ts
+ M core/src/shared/ipc.ts
+ M extensions/chrome/background.js
+?? .serena.pre-review-backup/
