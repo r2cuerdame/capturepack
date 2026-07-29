@@ -50,13 +50,33 @@
  * renderer that lacks it must fall back to the playhead rather than throw, and
  * that fallback is exactly the behaviour that shipped before #81.
  */
-function trackPresentedFrames(video: HTMLVideoElement, sink: (mediaTimeMs: number) => void): void {
-  if (typeof video.requestVideoFrameCallback !== 'function') return
+/**
+ * ONE EVENT CARRIES BOTH THE PIXELS AND THEIR TIME (#95).
+ *
+ * The base image used to be drawn from the playback rAF and the seek handler,
+ * while the presented time was updated separately by this callback. That is
+ * two clocks sampling one video: between the rAF that draws frame N and the
+ * callback that files frame N+1, a box resolved from the time lands on pixels
+ * from the other frame. Standing still that is invisible; on a window being
+ * dragged at 5000 px/s one frame is 340 px, which is the report — "the box
+ * moves and the picture arrives afterwards".
+ *
+ * The annotated render never had this: it draws the frame and its boxes from
+ * one `metadata`. So does this now. `drawFrame` is called HERE, with the time
+ * that describes exactly the pixels the video is holding, and whoever reads
+ * `presentedMs` afterwards reads the same frame that was drawn.
+ *
+ * Returns whether the callback exists at all — a renderer without it keeps the
+ * old rAF-driven draw, because a stale picture beats no picture.
+ */
+function trackPresentedFrames(video: HTMLVideoElement, sink: (mediaTimeMs: number) => void): boolean {
+  if (typeof video.requestVideoFrameCallback !== 'function') return false
   const pump: VideoFrameRequestCallback = (_now, metadata) => {
     sink(metadata.mediaTime * 1000)
     video.requestVideoFrameCallback(pump)
   }
   video.requestVideoFrameCallback(pump)
+  return true
 }
 
 export interface ScrubHost {
@@ -108,6 +128,9 @@ export class ScrubController {
   // Raw-file time of the frame the compositor last presented (#81). Null until
   // the first frame is painted, or forever on a renderer without the callback.
   private presentedRawMs: number | null = null
+  /** Whether the frame callback drives the base draw (see trackPresentedFrames). */
+  private frameDriven = false
+  private frameGuard = 0
 
   constructor(
     webm: ArrayBuffer,
@@ -155,9 +178,10 @@ export class ScrubController {
       this.notifySettled() // in-flight seeks will never complete; release waiters
       this.host.onState()
     })
-    trackPresentedFrames(video, (mediaTimeMs) => {
-      if (this.presentedRawMs === mediaTimeMs) return
+    this.frameDriven = trackPresentedFrames(video, (mediaTimeMs) => {
       this.presentedRawMs = mediaTimeMs
+      // The picture and its time, together, before anything can read either.
+      if (!this.showingNative) this.host.drawFrame(video)
       this.host.onFrame?.()
     })
     this.video = video
@@ -376,7 +400,9 @@ export class ScrubController {
       this.snapToNow()
       return
     }
-    this.host.drawFrame(this.video)
+    // Frame-driven: the callback above draws, on the frame's own event. The
+    // tick still advances the playhead and refreshes the timebar.
+    if (!this.frameDriven) this.host.drawFrame(this.video)
     this.host.onState()
     this.rafId = requestAnimationFrame(() => this.playbackTick())
   }
@@ -389,6 +415,16 @@ export class ScrubController {
     this.notifySettled()
     this.host.drawFrame('native')
     this.host.onState()
+  }
+
+  /** Draws from the seek if the frame callback has not, within a beat. */
+  private guardFrameDraw(): void {
+    const before = this.presentedRawMs
+    window.clearTimeout(this.frameGuard)
+    this.frameGuard = window.setTimeout(() => {
+      if (this.presentedRawMs !== before || this.showingNative) return
+      this.host.drawFrame(this.video)
+    }, 250)
   }
 
   private markReady(): void {
@@ -444,7 +480,16 @@ export class ScrubController {
     }
     this.seekInFlight = false
     if (!this.showingNative && !this.playing) {
-      this.host.drawFrame(this.video)
+      // A seek's frame arrives at the callback too, with its own time; drawing
+      // it here as well would put the OLD time beside the NEW pixels for one
+      // paint, which is the seam this whole change removes.
+      //
+      // A frozen picture is a worse failure than a box one frame out, so the
+      // callback is given a moment and then overruled. It has never been
+      // observed to miss a seeked frame; this exists so that if it ever does,
+      // the editor is stale rather than blank.
+      if (this.frameDriven) this.guardFrameDraw()
+      else this.host.drawFrame(this.video)
       this.pumpSeek() // may put another seek in flight; settled stays false then
     }
     this.notifySettled()
@@ -483,6 +528,9 @@ class SlaveReplay {
 
   private readonly video: HTMLVideoElement
   private readonly offsetMs: number
+  /** Whether the frame callback drives this screen's draw (see the master). */
+  private frameDriven = false
+  private frameGuard = 0
   private readonly draw: (source: HTMLVideoElement | 'native') => void
   private showingNative = true
   private pendingSeekMs: number | null = null
@@ -508,8 +556,12 @@ class SlaveReplay {
     video.muted = true
     video.preload = 'auto'
     video.src = URL.createObjectURL(new Blob([webm], { type: mimeType }))
-    trackPresentedFrames(video, (mediaTimeMs) => {
+    // Same binding as the master (#95): this screen's pixels and this screen's
+    // frame time leave one event together, so a box resolved on this clock is
+    // resolved for the picture this screen is actually showing.
+    this.frameDriven = trackPresentedFrames(video, (mediaTimeMs) => {
       this.presentedRawMs = mediaTimeMs
+      if (!this.showingNative) this.draw(video)
     })
     video.addEventListener(
       'loadedmetadata',
@@ -637,7 +689,16 @@ class SlaveReplay {
     }
     this.seekInFlight = false
     if (!this.showingNative && this.video.paused) {
-      this.draw(this.video)
+      if (this.frameDriven) {
+        const before = this.presentedRawMs
+        window.clearTimeout(this.frameGuard)
+        this.frameGuard = window.setTimeout(() => {
+          if (this.presentedRawMs !== before || this.showingNative) return
+          this.draw(this.video)
+        }, 250)
+      } else {
+        this.draw(this.video)
+      }
       this.pump()
     }
     this.notifySettled()
