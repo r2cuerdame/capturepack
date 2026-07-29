@@ -19,3 +19,4 @@ release2/
 # Installer output: electron-builder writes hundreds of megabytes per
 # release candidate. Builds are artifacts of a commit, never part of one.
 core/rc*/
+dist-rc18/

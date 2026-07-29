@@ -659,7 +659,60 @@ export class SurfaceLane {
       // renderer never sent it. They are now both measured, and the log states
       // each separately so a future displacement can be attributed rather than
       // argued about.
-      const takenAtFrameMs = Math.max(this.lastAppendedMs, frameMs + lag + ageMs)
+      // A STABLE LAG, BECAUSE ONE TICK'S ROUND TRIP IS NOISE (#110).
+      //
+      // This used `lag` — THIS tick's round trip. `frameMs` arrives on an even,
+      // strictly increasing grid (presentationTime, ~67 ms apart at 15 fps), and
+      // adding a per-sample number that swings by tens of milliseconds to an
+      // even grid REORDERS it. The guard below then had to catch the inversion,
+      // and `Math.max` does not reorder — it COLLAPSES: the late sample is filed
+      // at the previous sample's exact millisecond.
+      //
+      // Measured in the packs that were reported as wrong, counting samples that
+      // share a time with another sample of the same window:
+      //
+      //   CapturePack_2026-07-29_144311   44 of 173 samples (25%)
+      //   CapturePack_2026-07-29_143319   34 of 156
+      //
+      // and in EVERY such case (22 of 22, 12 of 13) the colliding samples hold
+      // DIFFERENT rectangles. Two real observations, one instant. The nearest
+      // sample lookup (shared/track.ts) can only return one of them, so the
+      // other is discarded and the box holds the older rectangle across a whole
+      // frame — while a shaken window travels ~443 px. "움직일때 어긋나".
+      //
+      // The round trip's TYPICAL size is a real quantity and belongs in the
+      // sample time; its per-tick jitter is not a measurement of anything, it is
+      // scheduling noise, and it was the only thing making the grid non-monotone.
+      // So the median of the recent lags goes in and the jitter stays out.
+      const observedAtMs = frameMs + lag + ageMs
+      // AN OBSERVATION THAT CANNOT BE FILED TRUTHFULLY IS NOT FILED.
+      //
+      // Two wrong answers were tried here first, and both are worth naming.
+      //
+      // `Math.max(lastAppendedMs, observedAtMs)` — the original — does not
+      // reorder, it MERGES: the late sample lands on its predecessor's exact
+      // millisecond. The check reports 20 of 60 samples sharing an instant, and
+      // the real packs agree (25% in _144311, every collision holding two
+      // DIFFERENT rectangles). shared/track.ts returns ONE rectangle per time,
+      // so the second observation is unreachable and the box holds the older
+      // one across a whole frame — ~443 px of a shaken window. "움직일때 어긋나".
+      //
+      // `lastAppendedMs + 0.001` keeps them distinct and is worse: two different
+      // rectangles 0.001 ms apart is a window moving at 82,000 px/ms, and any
+      // reader computing a velocity gets nonsense. Distinctness is not the goal.
+      //
+      // The truth is that the ring already holds a sample from a LATER instant
+      // than this one. A reader asks "where was it at time T" and is answered
+      // from the nearest sample, so an observation older than the newest one it
+      // already has adds nothing it can use — and it cannot be appended without
+      // either lying about when it was taken or putting the arena out of order.
+      // So it is dropped, and COUNTED, which is what `dropped` is for: a gap in
+      // the ring is a known gap rather than a false rectangle.
+      if (observedAtMs <= this.lastAppendedMs) {
+        this.dropped += 1
+        return
+      }
+      const takenAtFrameMs = observedAtMs
       this.lastAppendedMs = takenAtFrameMs
       this.append(takenAtFrameMs, rawWindows)
       return

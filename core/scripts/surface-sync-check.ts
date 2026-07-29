@@ -56,6 +56,16 @@ const D1_FRAME_MS = 86
 
 interface Result {
   coverage: number
+  /**
+   * Ring samples that share their millisecond with another ring sample.
+   *
+   * Two observations at one instant is not a rounding detail: the nearest
+   * sample lookup returns ONE rectangle for a time, so the other observation is
+   * discarded and the box holds its predecessor across a whole frame. Measured
+   * at 25% of samples in CapturePack_2026-07-29_144311 before the stable-lag
+   * fix, every collision holding two DIFFERENT rectangles. This must be zero.
+   */
+  collided: number
   worstSpeed: number
   medianSpeed: number | null
   reportedLagMs: number | null
@@ -82,7 +92,21 @@ async function run(skewMs: number): Promise<Result> {
         // reply then takes anywhere from 20 to 200 ms to come back. The spread
         // is what puts several ticks in flight at once.
         const jitter = 20 + ((ft * 7919) % 180)
-        inflight.push({ ft, takenCoreMs: coreNow + HOST_READ_DELAY_MS, deliverAt: coreNow + jitter })
+        // AND THE HOST DOES NOT LOOK AT A FIXED DELAY EITHER.
+        //
+        // This used a constant HOST_READ_DELAY_MS, which made the per-tick lag a
+        // constant — so the old code's `frameMs + thisTick'sLag` was monotone by
+        // accident and the harness could not produce the collision that the real
+        // packs are full of. The swing is not invented: collisions only happen
+        // when the lag varies by more than the frame interval, and 25% of the
+        // samples in CapturePack_2026-07-29_144311 collided, so in production it
+        // does. Modelled here as a spread wider than one 67 ms frame.
+        // Hashed, not `ft * prime % n`: the obvious form is a fixed stride mod a
+        // modulus, so its step is one of two constants and — checked the hard
+        // way, by watching the red test pass — it never fell far enough to
+        // reorder anything. A jitter that cannot invert proves nothing.
+        const readDelay = HOST_READ_DELAY_MS + ((Math.imul(ft, 2_654_435_761) >>> 0) % 200)
+        inflight.push({ ft, takenCoreMs: coreNow + readDelay, deliverAt: coreNow + jitter })
         return Promise.resolve({ id: 1, ok: true } as HostReply)
       }
       return Promise.resolve({ id: 1, ok: true } as HostReply)
@@ -132,8 +156,13 @@ async function run(skewMs: number): Promise<Result> {
     previous = { tMs, x: window.bounds.x }
   }
   speeds.sort((a, b) => a - b)
+  const perTime = new Map<number, number>()
+  for (const tMs of times) perTime.set(tMs, (perTime.get(tMs) ?? 0) + 1)
+  let collided = 0
+  for (const n of perTime.values()) if (n > 1) collided += n
   return {
     coverage: times.length / (Math.floor(DURATION_MS / D2_FRAME_MS) + 1),
+    collided,
     worstSpeed,
     medianSpeed: speeds[speeds.length >> 1] ?? null,
     reportedLagMs: lane.status().tickLagMs,
@@ -144,9 +173,18 @@ async function run(skewMs: number): Promise<Result> {
 function report(title: string, r: Result): boolean {
   // A window really moving at 1 px/ms may be observed a few ms off its frame,
   // so a little over 1 is fine. Three times the truth is not.
-  const ok = r.coverage >= 0.8 && r.coverage <= 1.2 && r.medianSpeed !== null && r.worstSpeed <= 3
+  const ok =
+    r.coverage >= 0.8 &&
+    r.coverage <= 1.2 &&
+    r.medianSpeed !== null &&
+    r.worstSpeed <= 3 &&
+    r.collided === 0
   console.log(title)
   console.log(`  ring samples ${r.samples} (${(r.coverage * 100).toFixed(0)}% of the ticks sent)`)
+  console.log(
+    `  samples sharing an instant with another: ${r.collided}` +
+      (r.collided === 0 ? '' : ' — one of each pair is unreachable'),
+  )
   console.log(`  reported tick lag ${r.reportedLagMs} ms (the host answered ${HOST_READ_DELAY_MS} ms after being asked)`)
   console.log(
     `  apparent speed px/ms, truth ${TRUE_SPEED_PX_PER_MS.toFixed(1)}: ` +

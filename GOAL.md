@@ -1852,6 +1852,57 @@ milliseconds either way. Three release candidates were spent chasing clock legs
 that were each already correct. A statistic that cannot show the failure is not
 evidence the failure is absent.
 
+### Two observations cannot share one instant (#110)
+
+The clock legs were then all measured and all small — tick lag +1 ms, frame age
+1 ms, host clock ±0.3 ms, and the host's own desktop dump 1.5 ms. Template
+matching the tracked window against the actual replay frames put the recorded
+rectangle within ~0 px of the picture. And the box was still wrong while a window
+was shaken. *"움직일때 어긋나"*.
+
+It was never a time-domain error. It was **lost observations**. Counting ring
+samples that share a millisecond with another sample of the same window:
+
+| pack | samples sharing an instant | holding DIFFERENT rectangles |
+|---|---|---|
+| `CapturePack_2026-07-29_144311` | 44 of 173 (25%) | 22 of 22 |
+| `CapturePack_2026-07-29_143319` | 34 of 156 | 12 of 13 |
+
+`shared/track.ts` answers with ONE rectangle per time, so the second observation
+of a colliding pair is **unreachable** — the box holds the older rectangle across
+a whole frame, and a shaken window travels ~443 px in that frame.
+
+The cause was one call. A tick's round trip varies, `frameMs` arrives on an even
+grid, so `frameMs + lag` can go backwards; the guard against that was
+`Math.max(lastAppendedMs, ...)`, and **`Math.max` does not reorder, it merges.**
+
+Two fixes were tried and rejected on the bench before the third:
+
+- *Smooth the lag* (use the median round trip instead of this tick's). Removes
+  the collisions and destroys the measurement: apparent speed fell to 0.45
+  against a truth of 1.0, because every rectangle was filed at the typical
+  instant rather than the one it was read at.
+- *Nudge to `lastAppendedMs + 0.001`*. Keeps them distinct, which was never the
+  point: two different rectangles 0.001 ms apart is 82,000 px/ms.
+
+An observation that cannot be filed truthfully is **dropped and counted**. The
+ring already holds a sample from a later instant, so a reader can reach nothing
+in the dropped one — it was already unreachable under `Math.max`; the difference
+is that the loss is now visible in `dropped` instead of disguised as a rectangle.
+
+`npm run check:sync` asserts it: zero samples sharing an instant, and apparent
+speed 1.00 against a truth of 1.0. Against the `Math.max` version it reports 20
+of 60 colliding. That red test only worked on the second attempt — the harness's
+first jitter was `ft * prime % n`, whose step is one of two constants, and it
+never fell far enough to invert anything. **A jitter that cannot invert proves
+nothing**, and it passed the red test, which is the only reason it was caught.
+
+The host's `t` was stamped by the caller, *before* the dump it labels — filing
+every rectangle early by the dump's cost, one-directional and proportional to
+drag speed. Now stamped at the dump's midpoint, with `dumpMs` in the event so the
+cost is visible. Measured at 1.5 ms, so this was worth ~5 px, not 443. It is
+fixed because it is wrong, and reported as small because it is small.
+
 ---
 
 ## Event Timeline

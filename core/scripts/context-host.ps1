@@ -232,9 +232,7 @@ namespace CapturePack {
       EnumWindows(Collect, IntPtr.Zero);
       IntPtr foreground = GetForegroundWindow();
       Out.Length = 0;
-      Out.Append("{\"event\":\"surface\",\"t\":")
-         .Append(hostMs.ToString("F1", CultureInfo.InvariantCulture))
-         .Append(",\"w\":[");
+      Out.Append("{\"event\":\"surface\",\"w\":[");
       int kept = 0;
       int z = 0;
       for (int i = 0; i < Handles.Count; i++) {
@@ -338,7 +336,29 @@ namespace CapturePack {
         kept++; z++;
       }
       Out.Append("]}");
-      SampleTicks += Stopwatch.GetTimestamp() - started;
+      long spent = Stopwatch.GetTimestamp() - started;
+      // WHEN THIS SAMPLE WAS ACTUALLY TAKEN (#110).
+      //
+      // `t` used to be stamped by the CALLER, before this method ran — so it was
+      // the instant the host DECIDED to look, not the instant it looked. Every
+      // geometry read in the loop above happens after it. Core files the sample
+      // at `frameMs + (t - askedAt)`, so a dump costing D ms filed every
+      // rectangle D ms EARLY: a one-directional error, invisible on a still
+      // desktop and exactly proportional to drag speed. The same shape of
+      // mistake as #105, one layer further down.
+      //
+      // The dump is not an instant, it is an interval, and no single number is
+      // right for every window in it — the first window read is at `started` and
+      // the last at `started + D`. The MIDPOINT is the least wrong one number,
+      // and it is honest: worst case half the dump instead of all of it.
+      //
+      // `dumpMs` goes out too, because a cost nobody can see is a cost nobody
+      // fixes — that is how this one survived to be found by arithmetic.
+      double dumpMs = (double)spent * 1000.0 / (double)Stopwatch.Frequency;
+      Out.Insert(1, "\"t\":" +
+        (hostMs + dumpMs / 2.0).ToString("F1", CultureInfo.InvariantCulture) +
+        ",\"dumpMs\":" + dumpMs.ToString("F1", CultureInfo.InvariantCulture) + ",");
+      SampleTicks += spent;
       SampleCount++;
       LastWindowCount = kept;
       return Out.ToString();
