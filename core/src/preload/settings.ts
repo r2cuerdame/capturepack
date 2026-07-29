@@ -39,6 +39,12 @@ contextBridge.exposeInMainWorld('settingsBridge', {
   chromeOpenFolder(): void {
     ipcRenderer.send(IPC.settingsChromeOpenFolder)
   },
+  chromeOpenExtensionsPage(): void {
+    ipcRenderer.send(IPC.settingsChromeOpenExtensionsPage)
+  },
+  chromeCopyPath(): void {
+    ipcRenderer.send(IPC.settingsChromeCopyPath)
+  },
   openOutput(): Promise<void> {
     return ipcRenderer.invoke(IPC.settingsOpenOutput) as Promise<void>
   },

@@ -4,7 +4,7 @@
 // (applyPartial, same per-key rules as settings.json loading), written to disk,
 // applied to the live settings object index.ts shares with every flow, and the
 // recorder-window set is rebuilt when a change affects it.
-import { app, BrowserWindow, dialog, ipcMain, screen, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, screen, shell } from 'electron'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { DOM_PROTOCOL_VERSION, domBridgeStatus } from './chrome/domBridge'
@@ -18,6 +18,33 @@ import {
 
 /** The online manual (GOAL "First-Run Tutorial"). */
 const GUIDE_URL = 'https://capturepack.dev/guide'
+
+/**
+ * Opens the browser on its extensions page.
+ *
+ * Tried in the order a user is likeliest to have: whatever owns http, then the
+ * Chromium browsers by name. A failure is silent on purpose — the panel already
+ * shows the path to paste, and a dialog about a browser that is not installed
+ * helps nobody.
+ */
+async function openExtensionsPage(): Promise<void> {
+  const { execFile } = await import('node:child_process')
+  const candidates = ['chrome', 'msedge', 'brave']
+  for (const exe of candidates) {
+    const ok = await new Promise<boolean>((resolve) => {
+      // `start` resolves the app the same way the shell does, so a browser
+      // installed anywhere on PATH or in the registry is found without this
+      // process knowing where.
+      execFile(
+        'cmd',
+        ['/c', 'start', '', exe, 'chrome://extensions'],
+        { windowsHide: true },
+        (err) => resolve(err === null),
+      )
+    })
+    if (ok) return
+  }
+}
 
 /** The six-point health check, assembled from the three places it lives. */
 async function chromeStatus(): Promise<ChromeIntegrationStatus> {
@@ -258,6 +285,19 @@ export function registerSettingsIpc(live: Settings, hooks: SettingsIpcHooks = {}
   ipcMain.handle(IPC.settingsChromeUninstall, async (): Promise<ChromeIntegrationStatus> => {
     await unregisterBrowsers()
     return chromeStatus()
+  })
+
+  // chrome://extensions cannot be opened by shell.openExternal — the scheme is
+  // the browser's own. Starting the browser WITH the page is the same thing
+  // from the user's side, and asking the registry where Chrome is beats
+  // guessing at Program Files.
+  ipcMain.on(IPC.settingsChromeOpenExtensionsPage, () => {
+    void openExtensionsPage()
+  })
+
+  ipcMain.on(IPC.settingsChromeCopyPath, () => {
+    const dir = extensionDir()
+    if (dir !== '') clipboard.writeText(dir)
   })
 
   ipcMain.on(IPC.settingsChromeOpenFolder, () => {

@@ -41,6 +41,8 @@ interface SettingsBridge {
   chromeInstall(extensionId: string): Promise<ChromeIntegrationStatus>
   chromeUninstall(): Promise<ChromeIntegrationStatus>
   chromeOpenFolder(): void
+  chromeOpenExtensionsPage(): void
+  chromeCopyPath(): void
   status(): Promise<SettingsStatusResult>
   restartMcp(): Promise<SettingsStatusResult>
 }
@@ -74,6 +76,8 @@ const chromeChecks = el<HTMLUListElement>('chromeChecks')
 const chromeExtensionId = el<HTMLInputElement>('chromeExtensionId')
 const chromeInstallBtn = el<HTMLButtonElement>('chromeInstallBtn')
 const chromeFolderBtn = el<HTMLButtonElement>('chromeFolderBtn')
+const chromeExtPageBtn = el<HTMLButtonElement>('chromeExtPageBtn')
+const chromeCopyPathBtn = el<HTMLButtonElement>('chromeCopyPathBtn')
 const chromeUninstallBtn = el<HTMLButtonElement>('chromeUninstallBtn')
 const captureDisplaySelect = el<HTMLSelectElement>('captureDisplay')
 const captureHotkeyBtn = el<HTMLButtonElement>('captureHotkeyBtn')
@@ -708,6 +712,21 @@ chromeUninstallBtn.addEventListener('click', () => {
 
 chromeFolderBtn.addEventListener('click', () => {
   bridge.chromeOpenFolder()
+})
+
+chromeExtPageBtn.addEventListener('click', () => {
+  bridge.chromeOpenExtensionsPage()
+})
+
+chromeCopyPathBtn.addEventListener('click', () => {
+  bridge.chromeCopyPath()
+  // The path is now on the clipboard and the next thing to do is paste it, so
+  // the button says so rather than flashing and leaving the user guessing.
+  const was = chromeCopyPathBtn.textContent
+  chromeCopyPathBtn.textContent = t('settings.chromeCopied')
+  window.setTimeout(() => {
+    chromeCopyPathBtn.textContent = was
+  }, 1200)
 })
 
 refreshChromeStatus()

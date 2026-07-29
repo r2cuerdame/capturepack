@@ -118,6 +118,11 @@ export const IPC = {
   settingsChromeInstall: 'settings:chrome-install',
   settingsChromeUninstall: 'settings:chrome-uninstall',
   settingsChromeOpenFolder: 'settings:chrome-open-folder',
+  // Chrome forbids a program from installing an unpacked extension, so the one
+  // manual step cannot be removed — only made short. These two do the fetching
+  // and the typing: open the page, and put the path on the clipboard.
+  settingsChromeOpenExtensionsPage: 'settings:chrome-open-extensions-page',
+  settingsChromeCopyPath: 'settings:chrome-copy-path',
   // settings window -> main (invoke): directory picker; resolves the chosen path or null
   settingsPickOutputDir: 'settings:pick-output-dir',
   // settings window -> main (invoke): open the output folder in the file manager
