@@ -707,6 +707,29 @@ function renderChromeStatus(status: ChromeIntegrationStatus): void {
         : t('settings.chkConnected'),
     },
   ]
+  // AN UNPACKED EXTENSION DOES NOT UPDATE WITH THE APP.
+  //
+  // "Load unpacked" makes the browser take its own copy, so updating
+  // CapturePack replaces the folder on disk and leaves the browser running
+  // whatever it loaded that day. The two then drift apart in silence, and a
+  // stale extension fails in ways that look like a broken app. This check only
+  // appears once there is something to compare — a handshake and a readable
+  // bundled manifest — so it never accuses an install that simply has not
+  // connected yet.
+  const stale =
+    status.extensionConnected &&
+    status.bundledExtensionVersion !== null &&
+    status.extensionVersion !== null &&
+    status.extensionVersion !== status.bundledExtensionVersion
+  if (stale) {
+    checks.push({
+      ok: false,
+      text: t('settings.chkExtensionStale', {
+        loaded: status.extensionVersion ?? '?',
+        bundled: status.bundledExtensionVersion ?? '?',
+      }),
+    })
+  }
   chromeChecks.replaceChildren(
     ...checks.map((c) => {
       const li = document.createElement('li')
@@ -726,6 +749,10 @@ function renderChromeStatus(status: ChromeIntegrationStatus): void {
   // leaving as one red line among six (GOAL: "Version Mismatch").
   if (status.extensionConnected && !status.protocolCompatible) {
     chromeVerdict.textContent = t('settings.chromeMismatch')
+  } else if (stale) {
+    // Same reasoning as the protocol verdict: the one line that says what to do
+    // should not be one red row among seven.
+    chromeVerdict.textContent = t('settings.chromeStale')
   }
   // The folder to load, spelled out rather than only put on the clipboard: a
   // path the user can read is a path they can reach when the button that opens

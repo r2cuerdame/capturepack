@@ -938,6 +938,16 @@ export interface ChromeIntegrationStatus {
   /** The extension completed its handshake. */
   extensionConnected: boolean
   extensionVersion: string | null
+  /**
+   * The version of the extension folder THIS BUILD ships, or null when it
+   * cannot be read.
+   *
+   * The extension is loaded unpacked, so nothing updates it when the app
+   * updates: the browser keeps running whatever was on disk the day it was
+   * loaded. Carrying both halves is what lets Settings say "reload it" instead
+   * of leaving a stale extension to fail in ways that look like a broken app.
+   */
+  bundledExtensionVersion: string | null
   protocolVersion: number | null
   appProtocolVersion: number
   protocolCompatible: boolean

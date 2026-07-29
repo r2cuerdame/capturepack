@@ -6,6 +6,9 @@ const HOST = 'com.capturepack.host'
 const PROTOCOL = 1
 
 let port = null
+// When the hello was last written on the CURRENT port, or null when this
+// extension is not holding a connection it has proved. See the alarm below.
+let handshakeAt = null
 // How long to wait before dialling again after a failed or dropped connection.
 // It backs off so a browser running without CapturePack installed does not
 // spend its life starting a process that is not there, and it resets the
@@ -40,10 +43,41 @@ function scheduleRetry() {
 // A live native messaging port also keeps the worker from being torn down, so
 // the moment either path succeeds this stops costing anything at all.
 const RECONNECT_ALARM = 'capturepack-reconnect'
-chrome.alarms.create(RECONNECT_ALARM, { periodInMinutes: 1 })
+// CREATING AN ALARM THAT ALREADY EXISTS RESETS ITS SCHEDULE.
+//
+// This ran unconditionally at every worker start, and the worker starts often —
+// a tab switch is enough. Each start pushed the next firing a full minute out,
+// so on a busy browser the one timer that is supposed to survive termination
+// could go a long time without ever firing. Asking first is what makes the
+// period mean a period.
+chrome.alarms.get(RECONNECT_ALARM, (existing) => {
+  if (!existing) chrome.alarms.create(RECONNECT_ALARM, { periodInMinutes: 1 })
+})
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== RECONNECT_ALARM) return
   retryMs = RETRY_MIN_MS
+  // A PORT OBJECT IS NOT A CONNECTION.
+  //
+  // Reported as "재설치할때마다 캡쳐팩 다시 리로드 안하면 연결이 안돼": reinstalling
+  // the app kills the host it was talking to, and the extension then sat
+  // disconnected until the user pressed Reload in chrome://extensions.
+  //
+  // `connect()` returns early whenever `port` is non-null, so everything
+  // depends on `onDisconnect` having fired and nulled it. When the host dies
+  // mid-handshake — which is exactly what an installer replacing the executable
+  // does — the extension can be left holding a port it believes in and never
+  // dials again. `handshakeAt` is the only proof of a LIVE connection: it is
+  // set when the hello is written and cleared on every disconnect, so a port
+  // that has not proved itself by the time this alarm comes round is dropped
+  // and redialled rather than trusted.
+  if (port && handshakeAt === null) {
+    try {
+      port.disconnect()
+    } catch {
+      // Already gone; the point was only to stop believing in it.
+    }
+    port = null
+  }
   connect()
 })
 
@@ -56,6 +90,7 @@ function connect() {
       // the host manifest. All three are temporary, and all three used to end
       // here — see the note on the startup connect below.
       port = null
+      handshakeAt = null
       scheduleRetry()
     })
     port.postMessage({
@@ -65,9 +100,11 @@ function connect() {
       app: 'capturepack-extension',
       version: chrome.runtime.getManifest().version,
     })
+    handshakeAt = Date.now()
     retryMs = RETRY_MIN_MS
   } catch {
     port = null
+    handshakeAt = null
     scheduleRetry()
   }
   return port
@@ -94,6 +131,7 @@ function send(message) {
       return
     } catch {
       port = null
+      handshakeAt = null
     }
   }
   // No host available: surface briefly on the toolbar icon instead of failing.

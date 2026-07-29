@@ -74,6 +74,29 @@ export function extensionDir(): string {
 }
 
 /**
+ * The version in the extension folder this build ships, or null if unreadable.
+ *
+ * An unpacked extension is a COPY the browser made when the user pressed "Load
+ * unpacked", and an app update replaces the folder without touching that copy.
+ * So the two versions drift apart silently, and the symptom of a stale
+ * extension — a handshake that connects and then behaves like an older
+ * protocol — is indistinguishable from a broken app unless someone compares
+ * them. This is the half the app can read; the extension reports the other in
+ * its hello.
+ */
+export function bundledExtensionVersion(): string | null {
+  try {
+    const raw = fs.readFileSync(path.join(extensionDir(), 'manifest.json'), 'utf8')
+    const version = (JSON.parse(raw) as { version?: unknown }).version
+    return typeof version === 'string' && version !== '' ? version.slice(0, 32) : null
+  } catch {
+    // Missing or malformed: the "extension files are present" check already
+    // reports that, and guessing a version here would only make it disagree.
+    return null
+  }
+}
+
+/**
  * The executable Chrome should start, with the flag that puts it in host mode.
  *
  * In development that is Electron itself plus the app directory, because

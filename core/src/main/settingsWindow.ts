@@ -10,6 +10,7 @@ import * as path from 'node:path'
 import { DOM_PROTOCOL_VERSION, domBridgeStatus } from './chrome/domBridge'
 import {
   extensionDir,
+  bundledExtensionVersion,
   findOurExtensionIds,
   nativeHostState,
   registerBrowsers,
@@ -43,7 +44,6 @@ import { setAutoUpdateCheck } from './updater'
 /** The online manual (GOAL "First-Run Tutorial"). */
 const GUIDE_URL = 'https://capturepack.dev/guide'
 
-/** The ages the Storage row offers, and the only ones a purge will act on. */
 /**
  * The ages the panel offers, in days — and ZERO, which means everything.
  *
@@ -252,6 +252,7 @@ async function chromeStatus(): Promise<ChromeIntegrationStatus> {
     manifestPath: host.manifestPath,
     allowedExtensionIds: host.allowedExtensionIds,
     browsers: host.browsers,
+    bundledExtensionVersion: bundledExtensionVersion(),
     extensionDir: host.extensionDir,
     extensionDirExists: host.extensionDirExists,
     events: bridge.events,
