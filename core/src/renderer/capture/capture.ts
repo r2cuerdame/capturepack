@@ -274,10 +274,32 @@ function startFrameTicks(): void {
   if (startPayload?.focused !== true) return
   const active = stream
   if (active === null) return
+  // THE TICK MUST NOT COST THE RECORDING (#110).
+  //
+  // This is a SECOND sink on a stream the recorder is already consuming, and
+  // the measurement is unambiguous: whichever display ticks is the one that
+  // stalls. Display 2 ticked and managed 10.1 fps with an 897 ms worst stall
+  // while display 1 sat at 14.8; the cursor moved, the roles swapped, and so
+  // did the numbers.
+  //
+  // A hidden element still composites what it is given, and what it is given
+  // here is 4K fifteen times a second. One pixel is enough: the frame CALLBACK
+  // does not care about the element's size, and it is the callback — its
+  // presentation time — that this exists for. The stream is not re-encoded and
+  // the recorder's own path is untouched.
   const video = document.createElement('video')
   video.muted = true
   video.playsInline = true
+  video.disableRemotePlayback = true
+  video.width = 1
+  video.height = 1
+  video.style.position = 'fixed'
+  video.style.width = '1px'
+  video.style.height = '1px'
+  video.style.opacity = '0'
+  video.style.pointerEvents = 'none'
   video.srcObject = active
+  document.body.appendChild(video)
   tickVideo = video
   if (typeof video.requestVideoFrameCallback !== 'function') return
   const pump: VideoFrameRequestCallback = (_now, metadata) => {
