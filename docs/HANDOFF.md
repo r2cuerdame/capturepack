@@ -161,8 +161,9 @@ npm run qa:rc
 npm audit --omit=dev
 ```
 
-`qa:rc` currently runs 62 discovered `check:*` regressions plus type checking,
-the production build, and isolated Electron smoke: **65 gate steps**. Reports
+`qa:rc` currently runs 65 discovered `check:*` regressions plus type checking,
+the production build, and isolated Electron smoke: **68 gate steps** (66 with
+`--skip-build`). Reports
 are written under `%TEMP%\capturepack-qa` unless an artifact directory is
 provided.
 
@@ -174,6 +175,11 @@ npm run qa:checks
 
 # Video/context checks only.
 npm run qa:video
+
+# The browser-to-pack end-to-end run. NOT in the gate: it records the desktop
+# for twelve seconds, so it needs a real display. The gate runs its wire half
+# (`check:chrome-bridge`, --wire-only) and says so out loud when it skips.
+npm run qa:chrome-bridge
 
 # Audit a real pack without mutating it.
 npm run qa:rc -- --pack C:\_CapturePack\CapturePack_YYYY-MM-DD_HHMMSS

@@ -315,7 +315,28 @@ await stopTracked(app)
 // delivered and then looks for them in plugins/chrome-dom/elements.json. The
 // payload is written into the save-first folder before the editor opens, so
 // this needs no click — which is the whole reason that folder exists.
+//
+// THIS HALF NEEDS A REAL SCREEN, AND THE OTHER HALF DOES NOT.
+//
+// Everything above speaks the wire and reads the log: no capture, no display,
+// no encoder. Below this line the app records the desktop for twelve seconds,
+// which is a hardware fact a build agent may simply not have — the same reason
+// `qa:native-replay-field` and `qa:dxgi-timing-reference` are not `check:`
+// scripts. So `--wire-only` runs the part a gate can honestly hold, and the
+// full run stays available as `npm run qa:chrome-bridge`.
+//
+// The skip is LOUD. A silently shortened check is how the whole harness came to
+// be failing without anyone knowing.
 // ---------------------------------------------------------------------------
+if (process.argv.includes('--wire-only')) {
+  console.log(
+    '\nSKIPPED the pack half (--wire-only): it records the desktop for 12 s.'
+    + '\n        Run `npm run qa:chrome-bridge` on a machine with a display.',
+  )
+  console.log(`\nresult: ${failed === 0 ? 'OK' : 'BROKEN'} — ${passed} passed, ${failed} failed\n`)
+  if (failed > 0) process.exitCode = 1
+  return
+}
 console.log('\nAnd into the pack')
 packProfile = mkdtempSync(join(tmpdir(), 'capturepack-chrome-pack-'))
 const packData = join(packProfile, 'data')

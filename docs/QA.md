@@ -9,6 +9,14 @@ does not hide later failures unless fail-fast is requested.
 The smoke process uses a unique temporary Electron profile, disables
 supervision, terminates its whole process tree, and removes that profile; it
 does not read or rewrite the owner's installed CapturePack settings.
+
+A check that needs hardware the gate cannot promise does not belong in the
+gate — it belongs under a `qa:` script that says what it needs. `qa:chrome-bridge`
+is the browser-to-pack end-to-end run and records the desktop for twelve
+seconds; the gate runs its wire half as `check:chrome-bridge --wire-only`, which
+prints the skip rather than quietly running less. That harness spent a release
+cycle wired to nothing and failing, so a silent shortening is the exact failure
+this convention exists to prevent.
 Use Node.js 22.12 or newer. Electron 42+ no longer downloads its development
 binary during `npm ci`; the smoke resolves the package so its supported,
 first-run download path is exercised before the isolated app starts.
