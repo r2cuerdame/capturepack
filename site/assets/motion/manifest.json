@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "locales": {
+    "en": "English",
+    "ko": "한국어",
+    "ja": "日本語",
+    "zh": "简体中文",
+    "es": "Español",
+    "fr": "Français",
+    "de": "Deutsch",
+    "pt": "Português",
+    "ru": "Русский"
+  },
+  "videos": {
+    "timeMachine": {
+      "basename": "capturepack-time-machine",
+      "message": "Rewind a past bug without reproducing it, then attach object or manual context.",
+      "durationSeconds": 9.0,
+      "width": 1280,
+      "height": 720,
+      "fps": 30
+    },
+    "stillContext": {
+      "basename": "capturepack-still-context",
+      "message": "Keep the original screenshot pixels intact while storing editable context beside it.",
+      "durationSeconds": 9.2,
+      "width": 1280,
+      "height": 720,
+      "fps": 30
+    }
+  },
+  "filesPerVideo": [".webm", ".mp4", "-poster.webp"],
+  "pathPattern": "<locale>/<basename><suffix>"
+}

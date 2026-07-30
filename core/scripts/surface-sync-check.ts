@@ -362,6 +362,57 @@ async function ownerHandoffReport(): Promise<boolean> {
   }
 }
 
+async function stillRefreshReport(): Promise<boolean> {
+  let onReady: (hello: HostReply) => void = () => {}
+  let onEvent: (event: Record<string, unknown> & { event: string }) => void = () => {}
+  let emitSnapshot = true
+  let refresh:
+    | { method: string; params?: Record<string, unknown>; timeoutMs?: number }
+    | undefined
+  const host: SurfaceHost = {
+    start() {},
+    stop() {},
+    request(method, params, timeoutMs) {
+      if (method === 'ping') return Promise.resolve({ id: 1, ok: true, hostMs: 0 })
+      if (method === 'surface.tick' && params?.full === true) {
+        refresh = { method, params, timeoutMs }
+        if (emitSnapshot) {
+          // Production writes this complete event before the request reply.
+          onEvent({ event: 'surface', sf: 1, t: 0, w: deskAt(0) })
+        }
+      }
+      return Promise.resolve({ id: 1, ok: true })
+    },
+  }
+  const clock = { nowMs: () => 0, bufferStartMs: () => 0, observe: () => {} } as never
+  const lane = new SurfaceLane(clock, new SurfaceTimeline(), D2_FRAME_MS, (options) => {
+    onReady = options.onReady
+    onEvent = options.onEvent as typeof onEvent
+    return host
+  })
+  lane.start()
+  onReady({ id: 0, ok: true, hostMs: 0, monitors: [] })
+  await new Promise((resolve) => setImmediate(resolve))
+  await new Promise((resolve) => setImmediate(resolve))
+  const refreshed = await lane.sampleNow()
+  emitSnapshot = false
+  const replyWithoutSnapshot = await lane.sampleNow()
+  lane.stop()
+  const ok =
+    refreshed?.[0]?.hwnd === '1' &&
+    replyWithoutSnapshot === null &&
+    refresh?.method === 'surface.tick' &&
+    refresh.params?.full === true &&
+    refresh.timeoutMs === 250
+  console.log('E: a still trigger refreshes full window membership before freezing')
+  console.log(
+    ok
+      ? '  PASS — the pre-reply window set is returned with a 250 ms fail-open bound\n'
+      : '  FAIL — still capture can reuse a stale cadence sample\n',
+  )
+  return ok
+}
+
 async function main(): Promise<void> {
   // Two recorder renderers have independent media clocks with independent zero
   // points, so their frame times are thousands of ms apart. Scenario B removes
@@ -376,7 +427,8 @@ async function main(): Promise<void> {
   )
   const c = crossRendererClockReport()
   const d = await ownerHandoffReport()
-  if (!a || !b || !c || !d) {
+  const e = await stillRefreshReport()
+  if (!a || !b || !c || !d || !e) {
     console.error('surface-sync-check FAILED')
     process.exitCode = 1
     return

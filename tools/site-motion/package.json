@@ -1,0 +1,25 @@
+{
+  "name": "capturepack-motion-samples",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "remotion studio src/index.tsx",
+    "typecheck": "tsc --noEmit",
+    "render:time": "remotion render src/index.tsx TimeMachine out/capturepack-time-machine.mp4 --codec=h264 --crf=17 --pixel-format=yuv420p",
+    "render:still": "remotion render src/index.tsx StillContext out/capturepack-still-context.mp4 --codec=h264 --crf=17 --pixel-format=yuv420p",
+    "render": "npm run render:time && npm run render:still",
+    "render:i18n": "node scripts/render-locales.mjs",
+    "publish:assets": "node scripts/publish-assets.mjs"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.501",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "remotion": "4.0.501"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "typescript": "5.9.3"
+  }
+}

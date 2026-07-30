@@ -19,7 +19,7 @@ damit eine KI sie nicht allein aus Pixeln erraten muss.
 Aktuelle öffentliche Windows-Version: **CapturePack 0.3.2**
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=5" alt="CapturePack startet rechts bei JETZT, bewegt den Abspielkopf nach links zu vor 5 Sekunden, stellt das dort vorhandene untergeordnete UI-Steuerelement wieder her, wählt es aus und exportiert strukturierte KI-Belege." width="760">
+  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/motion/de/capturepack-time-machine-poster.webp" alt="CapturePack startet rechts bei JETZT, bewegt den Abspielkopf nach links zu vor 5 Sekunden, stellt das dort vorhandene untergeordnete UI-Steuerelement wieder her, wählt es aus und exportiert strukturierte KI-Belege." width="760">
 </p>
 
 ## Ablauf

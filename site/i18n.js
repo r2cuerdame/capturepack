@@ -32,7 +32,7 @@
       source_hwnd_body: 'If no child control is available, CapturePack records the real window and its observed geometry instead of inventing an object.',
       still_kicker: 'ONE FRAME, SAME CONTEXT EDITOR',
       still_title: 'Need a still? Press Ctrl+Alt+S.',
-      still_body: 'Region selection is the default. The explicit Full screen capture button captures every monitor in one virtual-desktop image. The image opens at native 100% in the same editor and saves no video. A region pack keeps only the selected pixels and crop placement metadata — never a hidden full-screen or second-monitor image.',
+      still_body: 'Region selection is the default. The explicit Full screen capture button captures every monitor in one virtual-desktop image. Images that fit open at native 100%; oversized captures open fitted so the whole image is visible. No video is saved. A region pack keeps only the selected pixels and crop placement metadata — never a hidden full-screen or second-monitor image.',
       out_title: 'The pack matches what you captured',
       out_video_title: 'Video pack',
       out_tree: 'CapturePack_2026-07-27_143052/\n├─ replay.mp4              original (or replay.webm fallback)\n├─ replay_annotated.webm   optional; only when manifest-declared\n├─ snapshot.png\n├─ annotations.json        target identity + observed bounds\n├─ timeline.json           events on the replay clock\n├─ plugins/                UIA / optional Chrome DOM context\n├─ report.md · README.md · skills/\n└─ manifest.json',
@@ -76,7 +76,7 @@
       source_hwnd_body: '하위 컨트롤을 얻지 못하면 객체를 만들어내지 않고 실제 창과 관측된 위치를 기록합니다.',
       still_kicker: '한 장의 이미지, 같은 맥락 편집기',
       still_title: '한 장이면 충분할 때는 Ctrl+Alt+S.',
-      still_body: '기본은 영역 선택입니다. 상단의 전체 화면 캡처 버튼은 모든 모니터를 하나의 가상 데스크톱 이미지로 담습니다. 이미지는 같은 편집기에서 기본 100%로 열리고 영상은 저장되지 않습니다. 영역 팩은 선택한 픽셀과 크롭 위치 정보만 보관하며 숨겨진 전체 화면이나 다른 모니터 이미지를 남기지 않습니다.',
+      still_body: '기본은 영역 선택입니다. 상단의 전체 화면 캡처 버튼은 모든 모니터를 하나의 가상 데스크톱 이미지로 담습니다. 편집기에 들어오는 이미지는 화면 안에 들어오면 원본 100%로, 더 크면 전체가 한눈에 보이도록 맞춰 열립니다. 영상은 저장되지 않습니다. 영역 팩은 선택한 픽셀과 크롭 위치 정보만 보관하며 숨겨진 전체 화면이나 다른 모니터 이미지를 남기지 않습니다.',
       out_title: '캡처한 종류에 맞는 팩',
       out_video_title: '영상 팩',
       out_tree: 'CapturePack_2026-07-27_143052/\n├─ replay.mp4              원본(replay.webm 대체 가능)\n├─ replay_annotated.webm   선택 항목; 매니페스트 선언 시에만\n├─ snapshot.png\n├─ annotations.json        대상 식별 정보 + 관측 경계\n├─ timeline.json           리플레이 시계의 이벤트\n├─ plugins/                UIA / 선택 Chrome DOM 맥락\n├─ report.md · README.md · skills/\n└─ manifest.json',
@@ -120,7 +120,7 @@
       source_hwnd_body: '子コントロールが得られなければ、オブジェクトを捏造せず、実際のウィンドウと観測済みの位置を記録します。',
       still_kicker: '1枚でも、同じコンテキストエディター',
       still_title: '静止画ならCtrl+Alt+S。',
-      still_body: '初期状態は範囲選択です。上部の「全画面キャプチャ」ボタンは、すべてのモニターを1枚の仮想デスクトップ画像にまとめます。画像は同じエディターでネイティブ100%表示で開き、動画は保存しません。範囲パックは選択したピクセルと切り抜き位置だけを保持し、隠れた全画面画像や別モニター画像は残しません。',
+      still_body: '初期状態は範囲選択です。上部の「全画面キャプチャ」ボタンは、すべてのモニターを1枚の仮想デスクトップ画像にまとめます。エディター内に収まる画像はネイティブ100%で、大きな画像は全体が見えるようにフィット表示で開きます。動画は保存しません。範囲パックは選択したピクセルと切り抜き位置だけを保持し、隠れた全画面画像や別モニター画像は残しません。',
       out_title: 'キャプチャした種類に合うパック',
       out_video_title: '動画パック',
       out_tree: 'CapturePack_2026-07-27_143052/\n├─ replay.mp4              オリジナル（replay.webmの場合あり）\n├─ replay_annotated.webm   任意・マニフェスト宣言時のみ\n├─ snapshot.png\n├─ annotations.json        対象の識別情報 + 観測済み境界\n├─ timeline.json           リプレイ時計上のイベント\n├─ plugins/                UIA / 任意のChrome DOMコンテキスト\n├─ report.md · README.md · skills/\n└─ manifest.json',
@@ -164,7 +164,7 @@
       source_hwnd_body: '无法取得子控件时，CapturePack 会记录真实窗口及其观测位置，而不会虚构对象。',
       still_kicker: '一张图片，同一个上下文编辑器',
       still_title: '只需静态图时，按Ctrl+Alt+S。',
-      still_body: '默认是区域选择。顶部的“全屏捕获”按钮会把所有显示器合成一张虚拟桌面图片。图片在同一个编辑器中以原生100%打开，并且不保存视频。区域包只保留所选像素和裁剪位置元数据，不会暗中保存全屏或另一台显示器的图像。',
+      still_body: '默认是区域选择。顶部的“全屏捕获”按钮会把所有显示器合成一张虚拟桌面图片。能放入编辑器的图片以原生 100% 打开；更大的图片会自适应显示完整内容。不会保存视频。区域包只保留所选像素和裁剪位置元数据，不会暗中保存全屏或另一台显示器的图像。',
       out_title: '包与所选捕获类型一致',
       out_video_title: '视频包',
       out_tree: 'CapturePack_2026-07-27_143052/\n├─ replay.mp4              原始回放（或 replay.webm）\n├─ replay_annotated.webm   可选；仅在清单声明时存在\n├─ snapshot.png\n├─ annotations.json        目标标识 + 观测边界\n├─ timeline.json           回放时钟上的事件\n├─ plugins/                UIA / 可选 Chrome DOM 上下文\n├─ report.md · README.md · skills/\n└─ manifest.json',
@@ -208,7 +208,7 @@
       source_hwnd_body: 'Si no hay control hijo, CapturePack registra la ventana real y su geometría observada en vez de inventar un objeto.',
       still_kicker: 'UNA IMAGEN, EL MISMO EDITOR DE CONTEXTO',
       still_title: '¿Solo necesitas una imagen? Pulsa Ctrl+Alt+S.',
-      still_body: 'La selección de región es la opción predeterminada. El botón Capturar pantalla completa reúne todos los monitores en una sola imagen del escritorio virtual. La imagen se abre al 100% nativo en el mismo editor y no guarda vídeo. Un pack de región conserva solo los píxeles elegidos y la posición del recorte, nunca una imagen oculta de toda la pantalla ni de otro monitor.',
+      still_body: 'La selección de región es la opción predeterminada. El botón Capturar pantalla completa reúne todos los monitores en una sola imagen del escritorio virtual. Las imágenes que caben se abren al 100% nativo; las más grandes se ajustan para mostrar la captura completa. No se guarda vídeo. Un pack de región conserva solo los píxeles elegidos y la posición del recorte, nunca una imagen oculta de toda la pantalla ni de otro monitor.',
       out_title: 'El pack coincide con lo que capturaste',
       out_video_title: 'Pack de vídeo',
       out_tree: 'CapturePack_2026-07-27_143052/\n├─ replay.mp4              original (o replay.webm)\n├─ replay_annotated.webm   opcional; solo si lo declara el manifiesto\n├─ snapshot.png\n├─ annotations.json        identidad + límites observados\n├─ timeline.json           eventos del reloj de repetición\n├─ plugins/                contexto UIA / Chrome DOM opcional\n├─ report.md · README.md · skills/\n└─ manifest.json',
@@ -252,7 +252,7 @@
       source_hwnd_body: 'Sans contrôle enfant, CapturePack enregistre la vraie fenêtre et sa géométrie observée au lieu d’inventer un objet.',
       still_kicker: 'UNE IMAGE, LE MÊME ÉDITEUR DE CONTEXTE',
       still_title: 'Besoin d’une image fixe ? Ctrl+Alt+S.',
-      still_body: 'La sélection de zone est le choix par défaut. Le bouton Capture plein écran réunit tous les moniteurs dans une seule image du bureau virtuel. L’image s’ouvre à 100 % natif dans le même éditeur et aucune vidéo n’est enregistrée. Un pack de zone ne conserve que les pixels choisis et la position du recadrage, jamais une image plein écran cachée ni celle d’un autre moniteur.',
+      still_body: 'La sélection de zone est le choix par défaut. Le bouton Capture plein écran réunit tous les moniteurs dans une seule image du bureau virtuel. Une image qui tient dans l’éditeur s’ouvre à 100 % natif ; une image plus grande est ajustée pour rester entièrement visible. Aucune vidéo n’est enregistrée. Un pack de zone ne conserve que les pixels choisis et la position du recadrage, jamais une image plein écran cachée ni celle d’un autre moniteur.',
       out_title: 'Le pack correspond à votre capture',
       out_video_title: 'Pack vidéo',
       out_tree: 'CapturePack_2026-07-27_143052/\n├─ replay.mp4              original (ou replay.webm)\n├─ replay_annotated.webm   facultatif ; déclaré par le manifeste\n├─ snapshot.png\n├─ annotations.json        identité + limites observées\n├─ timeline.json           événements de l’horloge du replay\n├─ plugins/                contexte UIA / Chrome DOM facultatif\n├─ report.md · README.md · skills/\n└─ manifest.json',
@@ -296,7 +296,7 @@
       source_hwnd_body: 'Ist kein untergeordnetes Element verfügbar, speichert CapturePack das echte Fenster und seine beobachtete Geometrie, statt ein Objekt zu erfinden.',
       still_kicker: 'EIN BILD, DERSELBE KONTEXTEDITOR',
       still_title: 'Nur ein Standbild? Drücke Ctrl+Alt+S.',
-      still_body: 'Die Bereichsauswahl ist voreingestellt. Die Schaltfläche Vollbildaufnahme vereint alle Monitore in einem Bild des virtuellen Desktops. Das Bild öffnet sich in nativen 100 % im selben Editor und es wird kein Video gespeichert. Ein Bereichs-Pack behält nur die ausgewählten Pixel und die Zuschnittposition, niemals ein verborgenes Vollbild oder das Bild eines zweiten Monitors.',
+      still_body: 'Die Bereichsauswahl ist voreingestellt. Die Schaltfläche Vollbildaufnahme vereint alle Monitore in einem Bild des virtuellen Desktops. Bilder, die in den Editor passen, öffnen sich in nativen 100 %; größere Bilder werden vollständig eingepasst. Es wird kein Video gespeichert. Ein Bereichs-Pack behält nur die ausgewählten Pixel und die Zuschnittposition, niemals ein verborgenes Vollbild oder das Bild eines zweiten Monitors.',
       out_title: 'Das Pack entspricht der Aufnahmeart',
       out_video_title: 'Video-Pack',
       out_tree: 'CapturePack_2026-07-27_143052/\n├─ replay.mp4              Original (oder replay.webm)\n├─ replay_annotated.webm   optional; nur bei Manifest-Deklaration\n├─ snapshot.png\n├─ annotations.json        Identität + beobachtete Grenzen\n├─ timeline.json           Ereignisse der Replay-Uhr\n├─ plugins/                UIA / optionaler Chrome-DOM-Kontext\n├─ report.md · README.md · skills/\n└─ manifest.json',
@@ -340,7 +340,7 @@
       source_hwnd_body: 'Sem controle filho, o CapturePack registra a janela real e sua geometria observada em vez de inventar um objeto.',
       still_kicker: 'UMA IMAGEM, O MESMO EDITOR DE CONTEXTO',
       still_title: 'Precisa só de uma imagem? Pressione Ctrl+Alt+S.',
-      still_body: 'A seleção de região é o padrão. O botão Capturar tela inteira reúne todos os monitores em uma única imagem da área de trabalho virtual. A imagem abre em 100% nativo no mesmo editor e nenhum vídeo é salvo. Um pack de região mantém apenas os pixels escolhidos e a posição do recorte, nunca uma imagem oculta da tela inteira ou de outro monitor.',
+      still_body: 'A seleção de região é o padrão. O botão Capturar tela inteira reúne todos os monitores em uma única imagem da área de trabalho virtual. Imagens que cabem no editor abrem em 100% nativo; imagens maiores são ajustadas para aparecer por inteiro. Nenhum vídeo é salvo. Um pack de região mantém apenas os pixels escolhidos e a posição do recorte, nunca uma imagem oculta da tela inteira ou de outro monitor.',
       out_title: 'O pack corresponde ao que foi capturado',
       out_video_title: 'Pack de vídeo',
       out_tree: 'CapturePack_2026-07-27_143052/\n├─ replay.mp4              original (ou replay.webm)\n├─ replay_annotated.webm   opcional; só se declarado no manifesto\n├─ snapshot.png\n├─ annotations.json        identidade + limites observados\n├─ timeline.json           eventos do relógio do replay\n├─ plugins/                contexto UIA / Chrome DOM opcional\n├─ report.md · README.md · skills/\n└─ manifest.json',
@@ -384,7 +384,7 @@
       source_hwnd_body: 'Если дочерний элемент недоступен, CapturePack записывает настоящее окно и его наблюдавшуюся геометрию, а не выдумывает объект.',
       still_kicker: 'ОДИН СНИМОК, ТОТ ЖЕ РЕДАКТОР КОНТЕКСТА',
       still_title: 'Нужен только снимок? Нажмите Ctrl+Alt+S.',
-      still_body: 'По умолчанию выбирается область. Кнопка полноэкранного снимка объединяет все мониторы в одно изображение виртуального рабочего стола. Изображение открывается в том же редакторе в исходном масштабе 100%, а видео не сохраняется. Пакет области хранит только выбранные пиксели и положение кадрирования — без скрытого полного экрана или изображения другого монитора.',
+      still_body: 'По умолчанию выбирается область. Кнопка полноэкранного снимка объединяет все мониторы в одно изображение виртуального рабочего стола. Изображение, которое помещается в редакторе, открывается в исходном масштабе 100%; более крупное вписывается целиком. Видео не сохраняется. Пакет области хранит только выбранные пиксели и положение кадрирования — без скрытого полного экрана или изображения другого монитора.',
       out_title: 'Пакет соответствует виду захвата',
       out_video_title: 'Видеопакет',
       out_tree: 'CapturePack_2026-07-27_143052/\n├─ replay.mp4              оригинал (или replay.webm)\n├─ replay_annotated.webm   необязательно; только если заявлен\n├─ snapshot.png\n├─ annotations.json        идентичность + наблюдавшиеся границы\n├─ timeline.json           события часов повтора\n├─ plugins/                UIA / необязательный контекст Chrome DOM\n├─ report.md · README.md · skills/\n└─ manifest.json',
@@ -422,6 +422,30 @@
       var altKey = altNodes[j].getAttribute('data-i18n-alt')
       if (dict[altKey]) altNodes[j].setAttribute('alt', dict[altKey])
     }
+    var videos = document.querySelectorAll('video[data-motion]')
+    for (var k = 0; k < videos.length; k++) {
+      var motion = videos[k].getAttribute('data-motion')
+      if (!motion) continue
+      var base = 'assets/motion/' + lang + '/' + motion
+      videos[k].setAttribute('poster', base + '-poster.webp')
+      var sources = videos[k].querySelectorAll('[data-motion-source]')
+      for (var s = 0; s < sources.length; s++) {
+        var format = sources[s].getAttribute('data-motion-source')
+        if (format === 'webm' || format === 'mp4') {
+          sources[s].setAttribute('src', base + '.' + format)
+        }
+      }
+      if (typeof videos[k].load === 'function') videos[k].load()
+      var reduce = typeof matchMedia === 'function'
+        && matchMedia('(prefers-reduced-motion: reduce)').matches
+      if (reduce) {
+        videos[k].removeAttribute('autoplay')
+        if (typeof videos[k].pause === 'function') videos[k].pause()
+      } else if (typeof videos[k].play === 'function') {
+        var started = videos[k].play()
+        if (started && typeof started.catch === 'function') started.catch(function () {})
+      }
+    }
     document.documentElement.lang = lang
     try { localStorage.setItem('cp_lang', lang) } catch (e) {}
   }
@@ -429,6 +453,6 @@
   var sel = document.getElementById('langSel')
   var lang = detect()
   sel.value = lang
-  if (lang !== 'en') apply(lang)
+  apply(lang)
   sel.addEventListener('change', function () { apply(sel.value) })
 })()

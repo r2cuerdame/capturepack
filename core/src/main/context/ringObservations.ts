@@ -33,7 +33,7 @@ import type { EditorUiaElement, EditorUiaWindow } from '../../shared/ipc'
 import type { HostMonitor } from './surfaceLane'
 import type { ContextObservation } from './buffer'
 import type { ContextDisplayTarget } from './session'
-import type { TrackedControl } from './controlLane'
+import type { ControlsAt, TrackedControl } from './controlLane'
 
 /**
  * The fallback cadence for reading the ring back, when the caller cannot say
@@ -47,7 +47,25 @@ import type { TrackedControl } from './controlLane'
 const READ_INTERVAL_MS = 100
 
 /** Shared empty lookup, so the no-lane-A path allocates nothing per observation. */
-const EMPTY_CONTROLS: ReadonlyMap<string, readonly TrackedControl[]> = new Map()
+type ControlSample = ControlsAt | readonly TrackedControl[]
+
+const EMPTY_CONTROLS: ReadonlyMap<string, ControlSample> = new Map()
+
+function controlSample(
+  value: ControlSample | undefined,
+): { controls: readonly TrackedControl[]; tree: EditorUiaWindow['tree'] } | undefined {
+  if (value === undefined) return undefined
+  // Keep the old array-only test/external seam source-compatible. Production
+  // supplies ControlsAt so completeness survives; an array can only state the
+  // historical convention that a non-empty tree was collected.
+  if (Array.isArray(value)) {
+    return value.length === 0
+      ? undefined
+      : { controls: value as readonly TrackedControl[], tree: 'collected' }
+  }
+  const observed = value as ControlsAt
+  return { controls: observed.controls, tree: observed.tree }
+}
 
 /** A display's mapping space: which host monitor it is, and how to get onto its image. */
 interface DisplaySpace {
@@ -63,18 +81,38 @@ interface DisplaySpace {
 /**
  * The host monitor that IS this display.
  *
- * Matched by SIZE in physical pixels rather than by name or order: the host
- * enumerates in Windows' order and Electron in its own, device names are not
- * stable across a hot-plug, and the one thing both agree on is how many pixels
- * a screen has. A display whose physical size matches no monitor gets no space
- * and its surfaces are left where they were, which is honest — a rectangle
- * placed on a guess is worse than one that was never placed.
+ * Fresh captures carry the display's physical virtual-desktop rectangle, which
+ * is the only unambiguous identity when two monitors have the same size and
+ * Electron/the helper enumerate them in different orders. Legacy/test callers
+ * without that rectangle retain the old size match. A target that cannot be
+ * identified gets no space; a missing rectangle is safer than one confidently
+ * placed on the opposite monitor.
  */
 function monitorFor(
   monitors: readonly HostMonitor[],
   target: ContextDisplayTarget,
   taken: ReadonlySet<HostMonitor>,
 ): HostMonitor | null {
+  if (target.desktopBounds !== undefined) {
+    let exact: HostMonitor | null = null
+    let exactError = Number.POSITIVE_INFINITY
+    for (const monitor of monitors) {
+      if (taken.has(monitor)) continue
+      const error =
+        Math.abs(monitor.bounds.x - target.desktopBounds.x) +
+        Math.abs(monitor.bounds.y - target.desktopBounds.y) +
+        Math.abs(monitor.bounds.width - target.desktopBounds.width) +
+        Math.abs(monitor.bounds.height - target.desktopBounds.height)
+      if (error < exactError) {
+        exact = monitor
+        exactError = error
+      }
+    }
+    // dipToScreenRect and the Win32 helper can disagree by a rounded edge.
+    // Anything larger is not this physical display and must not fall back to
+    // an order-dependent equal-size guess.
+    return exact !== null && exactError <= 8 ? exact : null
+  }
   let best: HostMonitor | null = null
   let bestError = Number.POSITIVE_INFINITY
   for (const monitor of monitors) {
@@ -186,13 +224,15 @@ function observationOf(
   tMs: number,
   surfaces: readonly SurfaceInfo[],
   spaces: readonly DisplaySpace[],
-  controlsByHwnd: ReadonlyMap<string, readonly TrackedControl[]>,
+  controlsByHwnd: ReadonlyMap<string, ControlSample>,
 ): ContextObservation {
   const windows: EditorUiaWindow[] = []
   const elements: EditorUiaElement[] = []
   for (const surface of surfaces) {
     if (surface.minimized || !surface.visible) continue
-    const tracked = surface.hwnd === undefined ? [] : (controlsByHwnd.get(surface.hwnd) ?? [])
+    const trackedAt =
+      surface.hwnd === undefined ? undefined : controlSample(controlsByHwnd.get(surface.hwnd))
+    const tracked = trackedAt?.controls ?? []
     // ONE ENTRY PER SCREEN THE SURFACE IS ON (#103).
     //
     // A window dragged between monitors is visible on BOTH, and a single entry
@@ -233,7 +273,7 @@ function observationOf(
       focused: surface.foreground,
       z: surface.zOrder,
       hasControls: tracked.length > 0,
-      tree: tracked.length > 0 ? 'collected' : 'skipped',
+      tree: trackedAt?.tree ?? 'skipped',
     })
     // LANE A'S CONTROLS, PLACED IN THE SAME SPACE AS THEIR WINDOW (#111).
     //
@@ -288,7 +328,7 @@ export function frozenRingObservations(
   // without one, a harness — means every observation carries no elements and
   // the capture-instant dump answers exactly as it did before this lane
   // existed. Silence here is "nobody looked", never "there was nothing".
-  controlsAt?: (packTMs: number) => ReadonlyMap<string, readonly TrackedControl[]>,
+  controlsAt?: (packTMs: number) => ReadonlyMap<string, ControlSample>,
 ): ContextObservation[] {
   const spaces = buildSpaces(monitors, targets)
   if (spaces.length === 0) return []

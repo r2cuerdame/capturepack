@@ -155,10 +155,26 @@ export interface UiaDisplayTarget {
   focused: boolean
   // Electron display.bounds (device-independent pixels).
   bounds: Rectangle
+  // The same display in Win32 virtual-desktop physical pixels. UIA mapping can
+  // derive this from `bounds`; Lane S consumes it directly so two identical
+  // monitors cannot be paired by enumeration order.
+  desktopBounds?: Rectangle
   // This display's snapshot size in pixels — literally what its snapshot PNG
   // is, so the mapped coordinates are that display's annotation coordinate space.
   width: number
   height: number
+}
+
+/**
+ * The small part of Electron's `screen` API used by coordinate mapping.
+ *
+ * Keeping this structural lets the deterministic QA harness supply a fixed
+ * mixed-DPI desktop. Production always uses Electron's live `screen` object.
+ */
+export interface UiaScreenAccess {
+  getAllDisplays(): Array<{ id: number; bounds: Rectangle }>
+  getPrimaryDisplay(): { id: number; bounds: Rectangle }
+  dipToScreenRect(window: null, bounds: Rectangle): Rectangle
 }
 
 /**
@@ -420,9 +436,10 @@ export function startUiaDump(): Promise<UiaRawDump | null> {
  *
  * WHICH display an entry belongs to is decided in the HELPER's coordinate space
  * (matchMonitor already pairs a helper monitor rectangle with each Electron
- * display): a window goes to the display it overlaps most, and its controls
- * ALWAYS follow their window — a control mapped into a different space than the
- * window that owns it could never be offered under that window's pixels.
+ * display): a window goes to the display it overlaps most. A child normally
+ * lands there too, but a straddling window can own a child wholly visible on
+ * the other monitor; that child's own rectangle selects its display while the
+ * stable `window` index keeps the ownership relationship intact.
  *
  * An entry on a display this capture did not freeze (or on a desktop the helper
  * could not enumerate monitors for) falls back to the focused display's
@@ -437,8 +454,9 @@ export function mapUiaToSnapshot(
   raw: UiaRawDump,
   targets: readonly UiaDisplayTarget[],
   budgetMs: number = UIA_BUDGET_MS,
+  screenAccess: UiaScreenAccess = screen,
 ): UiaPluginPayload {
-  const spaces = targets.map((target) => buildSpace(raw, target))
+  const spaces = targets.map((target) => buildSpace(raw, target, screenAccess))
   const fallback = spaces.find((s) => s.focused) ?? spaces[0]
   const spaceOf = (b: UiaBounds): DisplaySpace | undefined => coveringSpace(spaces, b) ?? fallback
   // z -> the space its window was placed in, so every control can be mapped
@@ -449,7 +467,15 @@ export function mapUiaToSnapshot(
     if (space !== undefined) windowSpaces.set(w.z, space)
     return place(w, space)
   })
-  const elements = raw.elements.map((e) => place(e, windowSpaces.get(e.window) ?? spaceOf(e.bounds)))
+  const elements = raw.elements.map((e) => {
+    // A window can straddle two monitors. Its child can be wholly visible on
+    // the smaller side, so forcing every child through the window's dominant
+    // display maps that child outside the snapshot and the composer drops it.
+    // Prefer the child's own physical rectangle; retain the owner/focused
+    // fallback only for off-desktop or monitor-less helper output.
+    const space = coveringSpace(spaces, e.bounds) ?? windowSpaces.get(e.window) ?? fallback
+    return place(e, space)
+  })
   return {
     captured_at: isoWithOffset(raw.capturedAt),
     budget_ms: budgetMs,
@@ -522,13 +548,17 @@ interface DisplaySpace {
   map: (b: UiaBounds) => UiaBounds
 }
 
-function buildSpace(raw: UiaRawDump, target: UiaDisplayTarget): DisplaySpace {
-  const monitor = matchMonitor(raw.monitors, target.bounds)
+function buildSpace(
+  raw: UiaRawDump,
+  target: UiaDisplayTarget,
+  screenAccess: UiaScreenAccess,
+): DisplaySpace {
+  const monitor = matchMonitor(raw.monitors, target.bounds, screenAccess)
   return {
     index: target.index,
     focused: target.focused,
     monitor,
-    map: buildMapper(raw, target, monitor),
+    map: buildMapper(raw, target, monitor, screenAccess),
   }
 }
 
@@ -588,6 +618,7 @@ function buildMapper(
   raw: UiaRawDump,
   target: UiaDisplayTarget,
   monitor: UiaMonitor | null,
+  screenAccess: UiaScreenAccess,
 ): (b: UiaBounds) => UiaBounds {
   if (monitor !== null && target.width > 0 && target.height > 0) {
     const sx = target.width / monitor.bounds.width
@@ -599,10 +630,10 @@ function buildMapper(
       height: Math.max(0, Math.round(b.height * sy)),
     })
   }
-  const targetPhysical = toPhysicalRect(target.bounds)
+  const targetPhysical = toPhysicalRect(target.bounds, screenAccess)
   let scale = 1
   if (raw.rootBounds !== null && raw.rootBounds.width > 0) {
-    const primaryPhysical = toPhysicalRect(screen.getPrimaryDisplay().bounds)
+    const primaryPhysical = toPhysicalRect(screenAccess.getPrimaryDisplay().bounds, screenAccess)
     const candidate = primaryPhysical.width / raw.rootBounds.width
     // A sane virtualization factor only; anything else means the assumption
     // broke and 1:1 is the safer answer than a wildly wrong one.
@@ -626,11 +657,15 @@ function buildMapper(
  * then checked as a guard: a mismatch means the assumption broke and the caller
  * gets the cruder fallback rather than confidently wrong coordinates.
  */
-function matchMonitor(monitors: readonly UiaMonitor[], displayBounds: Rectangle): UiaMonitor | null {
+function matchMonitor(
+  monitors: readonly UiaMonitor[],
+  displayBounds: Rectangle,
+  screenAccess: UiaScreenAccess,
+): UiaMonitor | null {
   const usable = monitors.filter((m) => m.bounds.width > 0 && m.bounds.height > 0)
   if (usable.length === 0) return null
-  const displays = screen.getAllDisplays()
-  const primaryId = screen.getPrimaryDisplay().id
+  const displays = screenAccess.getAllDisplays()
+  const primaryId = screenAccess.getPrimaryDisplay().id
   const target = displays.find(
     (d) => d.bounds.x === displayBounds.x && d.bounds.y === displayBounds.y,
   )
@@ -665,9 +700,9 @@ function aspectMatches(monitor: UiaMonitor, bounds: Rectangle): boolean {
 }
 
 /** A display's device-independent rectangle in physical screen pixels. */
-function toPhysicalRect(bounds: Rectangle): Rectangle {
+function toPhysicalRect(bounds: Rectangle, screenAccess: UiaScreenAccess): Rectangle {
   try {
-    return screen.dipToScreenRect(null, bounds)
+    return screenAccess.dipToScreenRect(null, bounds)
   } catch {
     // Non-Windows (where this module never runs) or an Electron without the
     // Windows-only conversion: the DIP rect is the best available answer.

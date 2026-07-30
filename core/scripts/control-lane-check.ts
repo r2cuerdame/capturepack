@@ -193,6 +193,80 @@ async function main(): Promise<void> {
     /"dpi":/.test(trackerScript),
     true,
   )
+  check(
+    'a budget-limited tree reports truncation instead of posing as complete',
+    trackerScript.includes('\\"truncated\\":') &&
+      /ScanBudgetExpired\(scanned, Elapsed\(t0\), timeoutMs\)/.test(trackerScript) &&
+      /WalkTruncationReason\(\s*walkMs,\s*totalMs,\s*timeoutMs/.test(trackerScript) &&
+      trackerScript.includes('\\"scanned\\":') &&
+      trackerScript.includes('\\"total\\":'),
+    true,
+  )
+  const walkStart = trackerScript.indexOf('public static string Walk(')
+  const walkEnd = trackerScript.indexOf('/// Re-reads BoundingRectangle', walkStart)
+  const walkBody =
+    walkStart >= 0 && walkEnd > walkStart
+      ? trackerScript.slice(walkStart, walkEnd)
+      : ''
+  check(
+    'every production walk exit accounts for failures and the measured FindAll phase',
+    walkBody.includes('AutomationElement.FromHandle') &&
+      walkBody.includes('long findAllStart = Stopwatch.GetTimestamp()') &&
+      (walkBody.match(/RecordWalkOutcome\(/g) ?? []).length >= 4 &&
+      /Walk\(\s*\$h,\s*\$MaxElementsPerWindow,\s*\$WindowTimeoutMs,\s*\$MaxStrikes\)/.test(
+        trackerScript,
+      ),
+    true,
+  )
+  check(
+    'the owner loop retains global and per-HWND debt and autonomously expires quarantines',
+    trackerScript.includes('static double GlobalNextPassMs') &&
+      trackerScript.includes('public double NextPassMs') &&
+      trackerScript.includes('UrgentTokenCapacityMs') &&
+      trackerScript.includes('RefillUrgentTokens(') &&
+      trackerScript.includes('GlobalNextPassMs += passMs + cooldownMs') &&
+      trackerScript.includes('[void][CapturePack.ControlLane]::RestoreExpiredQuarantines()') &&
+      trackerScript.includes('$statusDueMs'),
+    true,
+  )
+  const progressEmitAt = trackerScript.indexOf('{"event":"walking"')
+  const emptySkipAt = trackerScript.indexOf('if (-not $needsWalk -and -not $canRefresh)')
+  check(
+    'empty/backoff windows sleep to retry due without progress-line or UIA spin',
+    emptySkipAt >= 0 &&
+      progressEmitAt > emptySkipAt &&
+      trackerScript.includes('$nextOperationDueMs = [CapturePack.ControlLane]::NextOperationDueInMs(') &&
+      trackerScript.includes('[CapturePack.TrackInput]::Wait($sleepMs)'),
+    true,
+  )
+  check(
+    'each due HWND is rechecked, charged independently, and blocked debt survives Untrack',
+    trackerScript.indexOf('foreach ($h in $due)') >= 0 &&
+      trackerScript.includes('[CapturePack.ControlLane]::IsOperationDue(') &&
+      trackerScript.includes('[CapturePack.ControlLane]::DeferWindow(') &&
+      trackerScript.includes('BlockedUntil[hwnd] = Math.Max(') &&
+      trackerScript.includes('w.NextPassMs'),
+    true,
+  )
+  check(
+    'child/client location changes wake lane A while top-level window drags stay in lane S',
+    trackerScript.includes('const uint EventObjectLocationChange = 0x800B') &&
+      trackerScript.includes('ShouldQueueWinEvent(eventType, objectId, childId, isTopLevel)') &&
+      trackerScript.includes('return !(objectId == 0 && childId == 0 && isTopLevel);'),
+    true,
+  )
+  check(
+    'element-cap remains honest truncation without retry/quarantine strikes',
+    trackerScript.includes('reason != "element-cap"') &&
+      trackerScript.includes('false, retryableTruncation, findAllMs'),
+    true,
+  )
+  check(
+    'both tree scan and held-reference refresh check budget after each provider return',
+    /return scanned > 0 && elapsedMs > timeoutMs;/.test(trackerScript) &&
+      /if \(i > 0 && Elapsed\(t0\) > timeoutMs\) break;/.test(trackerScript),
+    true,
+  )
   const changeSignalAt = trackerScript.indexOf('[CapturePack.ControlLane]::StartChangeSignal()')
   check(
     'native change signaling starts before the resident request loop',
@@ -233,10 +307,10 @@ async function main(): Promise<void> {
   )
   check(
     'dirty and stdin signals share one blocking wait instead of polling',
-    /WaitHandle\.WaitAny\([\s\S]*WaitSignals/.test(trackerScript) &&
+      /WaitHandle\.WaitAny\([\s\S]*WaitSignals/.test(trackerScript) &&
       /WaitSignals[\s\S]*Signal,\s*ControlLane\.ChangeWakeHandle/.test(trackerScript) &&
       /DirtySignals\[target\] = 0;[\s\S]*NotifyChangeWaiters\(\)/.test(trackerScript) &&
-      /NextDirtyDueInMs\(\$ReWalkFloorMs\)/.test(trackerScript),
+      /NextOperationDueInMs\(\s*\$ReWalkFloorMs,\s*\$SafetyReWalkMs\)/.test(trackerScript),
     true,
   )
   if (process.platform === 'win32') {
@@ -273,9 +347,183 @@ async function main(): Promise<void> {
     check('the wake self-test exits successfully', wakeProbe.status, 0)
     check('a dirty signal issued before Wait is not lost', wakeResult?.woke, true)
     check(
-      'a dirty signal bypasses the two-second sleep ceiling',
+      'a dirty signal wakes a long budget cooldown promptly',
       typeof wakeResult?.elapsedMs === 'number' && wakeResult.elapsedMs < 250,
       true,
+    )
+
+    const budgetProbe = spawnSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        'scripts/uia-track.ps1',
+        '-BudgetSelfTest',
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: 'utf8',
+        timeout: POWERSHELL_PROBE_TIMEOUT_MS,
+        windowsHide: true,
+      },
+    )
+    const budgetLine = budgetProbe.stdout
+      .split(/\r?\n/)
+      .find((line) => line.includes('"event":"budget-selftest"'))
+    let budgetResult: Record<string, unknown> | null = null
+    try {
+      budgetResult =
+        budgetLine === undefined
+          ? null
+          : JSON.parse(budgetLine) as Record<string, unknown>
+    } catch {
+      budgetResult = null
+    }
+    check('the walk-budget PowerShell probe exits successfully', budgetProbe.status, 0)
+    check(
+      'the property deadline is checked after every returned element',
+      [budgetResult?.cadenceBefore, budgetResult?.cadenceAt],
+      [false, true],
+    )
+    check(
+      'the wire diagnostic distinguishes every budget truncation phase',
+      [
+        budgetResult?.findAllReason,
+        budgetResult?.scanReason,
+        budgetResult?.totalReason,
+        budgetResult?.capReason,
+        budgetResult?.completeReason,
+      ],
+      ['findall-timeout', 'scan-timeout', 'total-timeout', 'element-cap', ''],
+    )
+    check(
+      'provider failures record cost, strike, and exponential retry cadence',
+      [
+        budgetResult?.firstWalkDue,
+        budgetResult?.failedStrikesAfterOne,
+        budgetResult?.failedLastPassMs,
+        budgetResult?.failedDueImmediately,
+        budgetResult?.failedRetryMs,
+        typeof budgetResult?.failedNextDueMs === 'number' &&
+          budgetResult.failedNextDueMs > 5000,
+        budgetResult?.failureBlocked,
+      ],
+      [true, 1, 1, false, 6000, true, 910001],
+    )
+    check(
+      'an empty tree is a completed pass and respects the normal re-walk cadence',
+      [
+        budgetResult?.emptyDueImmediately,
+        budgetResult?.emptyRetryMs,
+        typeof budgetResult?.emptyNextDueMs === 'number' &&
+          budgetResult.emptyNextDueMs > 2000,
+      ],
+      [false, 3000, true],
+    )
+    check(
+      'failed/incomplete structure walks stay retry-due across a cheap refresh',
+      [
+        budgetResult?.incompleteRetryPending,
+        budgetResult?.incompleteStrikes,
+        budgetResult?.retryAfterRefresh,
+        budgetResult?.strikesAfterRefresh,
+      ],
+      [true, 1, true, 1],
+    )
+    check(
+      'a deterministic element cap stays truncated without becoming a failure strike',
+      [
+        budgetResult?.capReason,
+        budgetResult?.capRetryPending,
+        budgetResult?.capStrikes,
+      ],
+      ['element-cap', false, 0],
+    )
+    check(
+      '100 ms, 120 ms, and multi-window passes retain enough cooldown for 3% duty',
+      [
+        budgetResult?.cooldown100,
+        budgetResult?.cooldown120,
+        budgetResult?.cooldownMulti,
+        typeof budgetResult?.duty100 === 'number' && budgetResult.duty100 <= 0.03,
+        typeof budgetResult?.duty120 === 'number' && budgetResult.duty120 <= 0.03,
+        typeof budgetResult?.dutyMulti === 'number' && budgetResult.dutyMulti <= 0.03,
+      ],
+      [3234, 3881, 11640, true, true, true],
+    )
+    check(
+      'one uninterruptible FindAll that spends all strike budgets quarantines immediately',
+      [
+        budgetResult?.severeBefore,
+        budgetResult?.severeAt,
+        budgetResult?.severeStrikes,
+        budgetResult?.severeBlocked,
+      ],
+      [false, true, 3, 920003],
+    )
+    check(
+      'foreground is first, focus switches immediately, and its failure leaves visible peers due',
+      [
+        budgetResult?.foregroundFirst,
+        budgetResult?.switchedForegroundFirst,
+        budgetResult?.remainingAfterForegroundBlock,
+        budgetResult?.hostilePeerSamePass,
+      ],
+      [920003, 920004, 920004, true],
+    )
+    check(
+      'a 2050 ms offender cannot spend or defer ten healthy dirty peers',
+      [
+        budgetResult?.healthyPeersDuringDebt,
+        budgetResult?.healthyExecutedDuringHostileDebt,
+        budgetResult?.hostileExcludedDuringDebt,
+        typeof budgetResult?.hostileDebtMs === 'number' &&
+          budgetResult.hostileDebtMs > 60_000,
+        typeof budgetResult?.hostileBlockedDebtMs === 'number' &&
+          budgetResult.hostileBlockedDebtMs > 60_000,
+      ],
+      [10, 10, true, true, true],
+    )
+    check(
+      '32-100 ms dirty peers stay near the 3 s floor while idle work repays aggregate 3% debt',
+      [
+        typeof budgetResult?.maxHealthyWindowDebtMs === 'number' &&
+          budgetResult.maxHealthyWindowDebtMs <= 3500,
+        typeof budgetResult?.globalDebtAfterDirtyBurstMs === 'number' &&
+          budgetResult.globalDebtAfterDirtyBurstMs > 80_000,
+        typeof budgetResult?.nextDirtyOperationDueMs === 'number' &&
+          budgetResult.nextDirtyOperationDueMs > 2900 &&
+          budgetResult.nextDirtyOperationDueMs <= 3500,
+        typeof budgetResult?.steadyIdleDuty === 'number' &&
+          budgetResult.steadyIdleDuty <= 0.03,
+        budgetResult?.urgentRefillAfter3sMs,
+        typeof budgetResult?.urgentTokensAfterHealthyMs === 'number' &&
+          typeof budgetResult?.urgentAdmissionMs === 'number' &&
+          budgetResult.urgentTokensAfterHealthyMs >= budgetResult.urgentAdmissionMs,
+      ],
+      [true, true, true, true, 90, true],
+    )
+    check(
+      'location-change routing keeps client and child-HWND moves but excludes root window drags',
+      [
+        budgetResult?.locationChildQueued,
+        budgetResult?.locationChildHwndQueued,
+        budgetResult?.locationWindowQueued,
+      ],
+      [true, true, false],
+    )
+    check(
+      'occlusion keeps quarantine, then owner-loop TTL restores the same visible HWND',
+      [
+        budgetResult?.omissionKeepsQuarantine,
+        budgetResult?.reusedBeforeTtl,
+        typeof budgetResult?.ttlRestored === 'number' && budgetResult.ttlRestored >= 1,
+        budgetResult?.reusedAfterTtl,
+      ],
+      [true, false, true, true],
     )
   }
 
@@ -454,6 +702,48 @@ async function main(): Promise<void> {
     ['collected'],
   )
 
+  // A COMMON 32-ELEMENT PREFIX IS NOT A COMPLETE TREE.
+  //
+  // The resident helper checks its window budget every 32 kept elements. It
+  // used to break there, emit an ordinary tree line, and Core persisted
+  // `collected`; that false completeness then suppressed the richer
+  // capture-instant fallback. Pin the wire bit through both the lane log and
+  // the observation the editor reads.
+  let truncatedNow = 100
+  const truncatedLane = new ControlLane(() => truncatedNow, 30_000)
+  ;(truncatedLane as unknown as Injectable).onMessage({
+    event: 'tree',
+    h: '4242',
+    v: 1,
+    truncated: true,
+    scanned: 32,
+    total: 480,
+    reason: 'timeout',
+    e: [rect(10, 20)],
+  })
+  check(
+    'the lane retains the helper truncation verdict',
+    truncatedLane.controlsAt(truncatedNow)[0]?.tree,
+    'truncated',
+  )
+  const truncatedObservations = frozenRingObservations(
+    surfaceAt,
+    MONITORS,
+    [{ index: 1, focused: true, width: 1920, height: 1080 }],
+    100,
+    [100],
+    (packTMs) => {
+      const map = new Map()
+      for (const entry of truncatedLane.controlsAt(packTMs)) map.set(entry.hwnd, entry)
+      return map
+    },
+  )
+  check(
+    'the editor observation never upgrades a truncated prefix to collected',
+    truncatedObservations[0]?.windows[0]?.tree,
+    'truncated',
+  )
+
   // The reported two-monitor geometry, end to end in the shared physical
   // virtual-desktop space. This complements the helper-contract assertion
   // above: the helper must emit this physical rectangle, and the existing
@@ -563,7 +853,8 @@ async function main(): Promise<void> {
   const watchdogScheduler = new FakeRestartScheduler()
   const watchdogRestartScheduler = new FakeRestartScheduler()
   const watchdogChildren: FakeChild[] = []
-  const watched = new ControlLane(() => 0, 30_000, {
+  let watchdogNow = 0
+  const watched = new ControlLane(() => watchdogNow, 30_000, {
     resolveTrackerScript: () => 'fake-uia-track.ps1',
     spawnTracker: () => {
       const child = new FakeChild()
@@ -575,6 +866,7 @@ async function main(): Promise<void> {
     scheduleWatchdog: watchdogScheduler.schedule,
     cancelWatchdog: watchdogScheduler.cancel,
   })
+  watched.setVisible(['111', '222'], '111')
   watched.start()
   const watchedChild = watchdogChildren[0] as FakeChild
   check(
@@ -611,6 +903,9 @@ async function main(): Promise<void> {
     watched.status().lastError,
     'fatal provider diagnostic',
   )
+  watchedChild.stdout.write(
+    `${JSON.stringify({ event: 'walking', h: '222' })}\n`,
+  )
   watchdogScheduler.fireNext()
   check('20 s with no output terminates the silent helper', watchedChild.kills, 1)
   check(
@@ -624,8 +919,200 @@ async function main(): Promise<void> {
     watchdogRestartScheduler.active().map((job) => job.delayMs),
     [250],
   )
+  watchdogRestartScheduler.fireNext()
+  const recoveredWatchdogChild = watchdogChildren[1] as FakeChild
+  const recoveredTrack = recoveredWatchdogChild.writes
+    .map((line) => JSON.parse(line) as {
+      method?: string
+      params?: { hwnds?: string[]; focus?: string }
+    })
+    .find((message) => message.method === 'track')
+  check(
+    'watchdog recovery quarantines the exact in-flight HWND but keeps healthy peers',
+    recoveredTrack?.params,
+    { hwnds: ['111'], focus: '111' },
+  )
+  watchdogNow = 300_000
+  watched.setVisible(['111', '222'], '111')
+  const recoveredTracks = recoveredWatchdogChild.writes
+    .map((line) => JSON.parse(line) as {
+      method?: string
+      params?: { hwnds?: string[]; focus?: string }
+    })
+    .filter((message) => message.method === 'track')
+  check(
+    'Core watchdog quarantine expires and restores the HWND on the unchanged visible set',
+    recoveredTracks.at(-1)?.params,
+    { hwnds: ['111', '222'], focus: '111' },
+  )
+
+  // The unchanged offender hangs again after its first retry. The strike lives
+  // in Core, not the disposable PowerShell process, so the second replacement
+  // starts with the healthy peer only and the retry interval doubles.
+  recoveredWatchdogChild.stdout.write(
+    `${JSON.stringify({ event: 'walking', h: '222' })}\n`,
+  )
+  watchdogNow = 320_000
+  watchdogScheduler.fireNext()
+  check(
+    'the unchanged offender can hang a second helper without losing its HWND strike',
+    recoveredWatchdogChild.kills,
+    1,
+  )
+  recoveredWatchdogChild.close(null)
+  check(
+    'the second watchdog failure uses bounded process restart backoff',
+    watchdogRestartScheduler.active().map((job) => job.delayMs),
+    [1000],
+  )
+  watchdogRestartScheduler.fireNext()
+  const secondRecoveredWatchdogChild = watchdogChildren[2] as FakeChild
+  const secondRecoveredTrack = secondRecoveredWatchdogChild.writes
+    .map((line) => JSON.parse(line) as {
+      method?: string
+      params?: { hwnds?: string[]; focus?: string }
+    })
+    .find((message) => message.method === 'track')
+  check(
+    'the second replacement immediately resumes every healthy peer',
+    secondRecoveredTrack?.params,
+    { hwnds: ['111'], focus: '111' },
+  )
+  watchdogNow = 919_999
+  watched.setVisible(['111', '222'], '111')
+  const beforeSecondExpiry = secondRecoveredWatchdogChild.writes
+    .map((line) => JSON.parse(line) as {
+      method?: string
+      params?: { hwnds?: string[]; focus?: string }
+    })
+    .filter((message) => message.method === 'track')
+  check(
+    'the second HWND quarantine doubles the five-minute first backoff',
+    beforeSecondExpiry.at(-1)?.params,
+    { hwnds: ['111'], focus: '111' },
+  )
+  watchdogNow = 920_000
+  watched.setVisible(['111', '222'], '111')
+  const afterSecondExpiry = secondRecoveredWatchdogChild.writes
+    .map((line) => JSON.parse(line) as {
+      method?: string
+      params?: { hwnds?: string[]; focus?: string }
+    })
+    .filter((message) => message.method === 'track')
+  check(
+    'the doubled HWND quarantine eventually permits one bounded retry',
+    afterSecondExpiry.at(-1)?.params,
+    { hwnds: ['111', '222'], focus: '111' },
+  )
+
+  // One valid provider result is only a recovery candidate. It must then stay
+  // alive for 30 s; this prevents "tree succeeded, first rect refresh hung"
+  // from erasing the strike.
+  secondRecoveredWatchdogChild.stdout.write(
+    `${JSON.stringify({ event: 'tree', h: '222', v: 1, e: [rect(1, 1)] })}\n`,
+  )
+  watchdogNow = 949_999
+  secondRecoveredWatchdogChild.stdout.write(
+    `${JSON.stringify({ event: 'status', dutyCycle: 0, tracked: 2, elements: 1 })}\n`,
+  )
+  secondRecoveredWatchdogChild.stdout.write(
+    `${JSON.stringify({ event: 'walking', h: '222' })}\n`,
+  )
+  watchdogNow = 969_999
+  watchdogScheduler.fireNext()
+  secondRecoveredWatchdogChild.close(null)
+  watchdogRestartScheduler.fireNext()
+  const notYetStableChild = watchdogChildren[3] as FakeChild
+  watchdogNow = 2_169_998
+  watched.setVisible(['111', '222'], '111')
+  const notYetStableTrack = notYetStableChild.writes
+    .map((line) => JSON.parse(line) as {
+      method?: string
+      params?: { hwnds?: string[]; focus?: string }
+    })
+    .filter((message) => message.method === 'track')
+  check(
+    'a result without 30 s stable liveness does not pardon the offender',
+    notYetStableTrack.at(-1)?.params,
+    { hwnds: ['111'], focus: '111' },
+  )
+  watchdogNow = 2_169_999
+  watched.setVisible(['111', '222'], '111')
+  notYetStableChild.stdout.write(
+    `${JSON.stringify({ event: 'tree', h: '222', v: 1, e: [rect(2, 2)] })}\n`,
+  )
+  watchdogNow = 2_199_999
+  notYetStableChild.stdout.write(
+    `${JSON.stringify({ event: 'status', dutyCycle: 0, tracked: 2, elements: 1 })}\n`,
+  )
+  notYetStableChild.stdout.write(
+    `${JSON.stringify({ event: 'walking', h: '222' })}\n`,
+  )
+  watchdogNow = 2_219_999
+  watchdogScheduler.fireNext()
+  notYetStableChild.close(null)
+  watchdogRestartScheduler.fireNext()
+  const stablyRecoveredChild = watchdogChildren[4] as FakeChild
+  watchdogNow = 2_519_999
+  watched.setVisible(['111', '222'], '111')
+  const stablyRecoveredTracks = stablyRecoveredChild.writes
+    .map((line) => JSON.parse(line) as {
+      method?: string
+      params?: { hwnds?: string[]; focus?: string }
+    })
+    .filter((message) => message.method === 'track')
+  check(
+    'a valid result plus 30 s stable liveness resets the HWND backoff to five minutes',
+    stablyRecoveredTracks.at(-1)?.params,
+    { hwnds: ['111', '222'], focus: '111' },
+  )
   watched.stop()
   check('stop cancels the pending watchdog restart', watchdogRestartScheduler.active().length, 0)
+
+  // A native provider can crash the helper immediately after `walking`,
+  // before the 20 s watchdog fires. That close boundary must preserve the
+  // exact HWND and restart healthy peers without replaying the crash victim.
+  const providerCrashScheduler = new FakeRestartScheduler()
+  const providerCrashWatchdog = new FakeRestartScheduler()
+  const providerCrashChildren: FakeChild[] = []
+  const providerCrashLane = new ControlLane(() => 0, 30_000, {
+    resolveTrackerScript: () => 'fake-uia-track.ps1',
+    spawnTracker: () => {
+      const child = new FakeChild()
+      providerCrashChildren.push(child)
+      return child.asChild()
+    },
+    scheduleRestart: providerCrashScheduler.schedule,
+    cancelRestart: providerCrashScheduler.cancel,
+    scheduleWatchdog: providerCrashWatchdog.schedule,
+    cancelWatchdog: providerCrashWatchdog.cancel,
+  })
+  providerCrashLane.setVisible(['111', '222'], '111')
+  providerCrashLane.start()
+  const providerCrashChild = providerCrashChildren[0] as FakeChild
+  providerCrashChild.stdout.write(
+    `${JSON.stringify({ event: 'walking', h: '222' })}\n`,
+  )
+  providerCrashChild.close(-1073741819)
+  check(
+    'an immediate provider crash schedules one bounded helper replacement',
+    providerCrashScheduler.active().map((job) => job.delayMs),
+    [250],
+  )
+  providerCrashScheduler.fireNext()
+  const providerCrashReplacement = providerCrashChildren[1] as FakeChild
+  const providerCrashTrack = providerCrashReplacement.writes
+    .map((line) => JSON.parse(line) as {
+      method?: string
+      params?: { hwnds?: string[]; focus?: string }
+    })
+    .find((message) => message.method === 'track')
+  check(
+    'walking then immediate close quarantines only the offender and resumes healthy peers',
+    providerCrashTrack?.params,
+    { hwnds: ['111'], focus: '111' },
+  )
+  providerCrashLane.stop()
 
   // UIA allocates unmanaged provider caches behind small managed wrappers. A
   // status heartbeat is the only reliable cross-process resource measurement;

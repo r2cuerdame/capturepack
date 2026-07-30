@@ -238,6 +238,9 @@ export class SurfaceLane {
    */
   private frameClockOffsetMs: number | null = null
   private converted = 0
+  /** One-shot full membership returned directly to a still-image trigger. */
+  private stillSampleRequested = false
+  private stillSample: SurfaceSampleWindow[] | null = null
   /**
    * Free-running samples taken before it was known which clock the ring is on.
    *
@@ -528,6 +531,31 @@ export class SurfaceLane {
   }
 
   /**
+   * Takes one bounded, complete surface sample for a still-image trigger.
+   *
+   * Unlike recorder ticks this is awaited: the caller is about to freeze a
+   * zero-duration context floor and needs newly created windows to be in it.
+   * The host emits the surface event before its request reply, so a resolved
+   * promise means onSample has already updated the timeline. Failure is an
+   * honest fallback to the resident ring and never blocks image capture beyond
+   * the supplied deadline.
+   */
+  async sampleNow(timeoutMs: number = 250): Promise<readonly SurfaceSampleWindow[] | null> {
+    if (!this.running || this.stillSampleRequested) return null
+    this.stillSampleRequested = true
+    this.stillSample = null
+    try {
+      const reply = await this.host.request('surface.tick', { full: true }, timeoutMs)
+      return reply.ok ? this.stillSample : null
+    } catch {
+      return null
+    } finally {
+      this.stillSampleRequested = false
+      this.stillSample = null
+    }
+  }
+
+  /**
    * A frame was just captured — observe the desk NOW, under that frame's time
    * (#105).
    *
@@ -678,6 +706,20 @@ export class SurfaceLane {
       return
     }
     const windows = this.mergeDelta(event, rawWindows)
+    if (event['sf'] === 1) {
+      if (this.stillSampleRequested) {
+        const parsed: SurfaceSampleWindow[] = []
+        for (const raw of windows) {
+          const window = parseWindow(raw)
+          if (window !== null) parsed.push(window)
+        }
+        this.stillSample = parsed
+      }
+      // A still snapshot has no recorder-frame clock yet on a fresh launch.
+      // Return it directly instead of mixing a core-clock sample into a ring
+      // that a later video tick can establish on another origin.
+      return
+    }
     // THE FRAME'S OWN TIME WHEN THERE IS ONE (#105).
     //
     // A sample taken because a frame was just captured carries that frame's

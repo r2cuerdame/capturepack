@@ -722,6 +722,36 @@ export function imageRegionSelectorActive(): boolean {
   return active !== null && !active.settled
 }
 
+/**
+ * Native HWNDs of the temporary selector overlays currently covering the desk.
+ *
+ * The screenshot pixels are frozen before these windows exist, but an
+ * asynchronous UIA dump can finish afterward. Main captures this exact list
+ * immediately after opening the selector and removes only these HWNDs from the
+ * semantic payload, including when the trigger-time window floor is unavailable.
+ */
+export function imageRegionSelectorWindowHandles(): string[] {
+  const flow = active
+  if (flow === null || flow.settled) return []
+  const handles: string[] = []
+  for (const record of flow.records) {
+    if (record.win.isDestroyed()) continue
+    try {
+      const raw = record.win.getNativeWindowHandle()
+      const value =
+        raw.length >= 8
+          ? raw.readBigUInt64LE(0)
+          : raw.length >= 4
+            ? BigInt(raw.readUInt32LE(0))
+            : 0n
+      if (value > 0n) handles.push(String(value))
+    } catch {
+      // No native handle means there is nothing reliable to exclude.
+    }
+  }
+  return handles
+}
+
 // Re-export the result type from the integration module so callers need one
 // import for the function and its return value.
 export type { ImageRegionSelection }

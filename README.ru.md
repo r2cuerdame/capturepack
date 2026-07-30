@@ -19,7 +19,7 @@
 Текущая публичная версия для Windows: **CapturePack 0.3.2**
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=5" alt="CapturePack начинает справа на отметке СЕЙЧАС, перемещает ползунок влево к моменту 5 секунд назад, возвращает и выбирает дочерний UI-элемент из этого исторического кадра и экспортирует структурированные доказательства для ИИ." width="760">
+  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/motion/ru/capturepack-time-machine-poster.webp" alt="CapturePack начинает справа на отметке СЕЙЧАС, перемещает ползунок влево к моменту 5 секунд назад, возвращает и выбирает дочерний UI-элемент из этого исторического кадра и экспортирует структурированные доказательства для ИИ." width="760">
 </p>
 
 ## Процесс

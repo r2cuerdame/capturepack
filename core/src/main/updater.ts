@@ -105,6 +105,12 @@ export function initUpdater(opts: {
   initialized = true
   autoCheckEnabled = opts.autoCheck
 
+  // Stable installs must never discover a public RC through GitHub's update
+  // channel, and an RC install must graduate to the next stable build instead
+  // of remaining pinned to prerelease-only updates. electron-updater otherwise
+  // derives allowPrerelease from the running app's own prerelease version.
+  autoUpdater.allowPrerelease = false
+  autoUpdater.allowDowngrade = false
   autoUpdater.autoDownload = true
   // Kept in sync with the setting (here and in setAutoUpdateCheck) so opting
   // out also stops a previously downloaded update from installing on quit.

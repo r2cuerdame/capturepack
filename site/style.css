@@ -171,8 +171,12 @@ h1 { color: var(--text); }
 
 .demo figure { margin: 0; }
 
-.demo img {
+.motion-video {
   width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  object-fit: contain;
+  background: #111217;
   border-radius: 18px;
   border: 1px solid rgba(23, 23, 28, 0.1);
   box-shadow: 0 24px 64px rgba(23, 23, 28, 0.16);
@@ -195,7 +199,7 @@ h1 { color: var(--text); }
   margin: 2.5rem 0 1rem;
   padding: 1.4rem 1.6rem;
   display: grid;
-  grid-template-columns: minmax(220px, .8fr) minmax(280px, 1.2fr);
+  grid-template-columns: minmax(260px, .8fr) minmax(360px, 1.2fr);
   gap: 1.6rem;
   align-items: center;
   border: 1px solid var(--line);
@@ -210,10 +214,19 @@ h1 { color: var(--text); }
   font-size: clamp(1.25rem, 3vw, 1.7rem);
 }
 
-.still-capture p {
+.still-copy p {
   margin: 0;
   color: var(--muted);
   line-height: 1.65;
+}
+
+.still-copy {
+  min-width: 0;
+}
+
+.still-motion {
+  border-radius: 14px;
+  box-shadow: 0 14px 38px rgba(23, 23, 28, 0.14);
 }
 
 .still-kicker {
@@ -253,6 +266,10 @@ h1 { color: var(--text); }
     grid-template-columns: 1fr;
     gap: .8rem;
     padding: 1.2rem;
+  }
+
+  .motion-video {
+    border-radius: 12px;
   }
 
   .features { grid-template-columns: 1fr; }

@@ -34,7 +34,18 @@ const manifestSchemaText = read('docs/schemas/manifest.schema.json')
 const spec = read('SPEC.md')
 const packageJson = JSON.parse(read('core/package.json'))
 const packageLock = JSON.parse(read('core/package-lock.json'))
+const packageVersion = String(packageJson.version ?? '')
+const packageIsCurrentPublicOrNextRc =
+  packageVersion === '0.3.2' || /^0\.3\.3-rc\.\d+$/.test(packageVersion)
 const supported = ['en', 'ko', 'ja', 'zh', 'es', 'fr', 'de', 'pt', 'ru']
+const motionStems = ['capturepack-time-machine', 'capturepack-still-context']
+const motionFiles = supported.flatMap((lang) =>
+  motionStems.flatMap((stem) => [
+    `site/assets/motion/${lang}/${stem}.webm`,
+    `site/assets/motion/${lang}/${stem}.mp4`,
+    `site/assets/motion/${lang}/${stem}-poster.webp`,
+  ]),
+)
 const localizedReadmes = supported
   .filter((lang) => lang !== 'en')
   .map((lang) => ({ lang, text: read(`README.${lang}.md`) }))
@@ -92,6 +103,7 @@ for (const lang of supported) {
   const document = {
     documentElement: { lang: 'en' },
     querySelectorAll(selector) {
+      if (selector === 'video[data-motion]') return []
       return selector === '[data-i18n-alt]' ? altNodes : textNodes
     },
     getElementById(id) {
@@ -162,6 +174,29 @@ for (const lang of supported.filter((candidate) => candidate !== 'en')) {
 
 console.log('\nProduct demo contract')
 check(
+  'landing uses localized, user-controllable motion instead of the legacy SVG',
+  html.includes('data-motion="capturepack-time-machine"')
+    && html.includes('data-motion="capturepack-still-context"')
+    && (html.match(/<video class="motion-video/g) ?? []).length === 2
+    && (html.match(/controls muted loop playsinline autoplay/g) ?? []).length === 2
+    && !html.includes('<img src="assets/demo.svg"'),
+)
+check(
+  'every locale publishes both WebM/MP4 motions and WebP posters',
+  motionFiles.length === 54
+    && motionFiles.every((relative) => {
+      const absolute = path.join(root, relative)
+      return fs.existsSync(absolute) && fs.statSync(absolute).size > 0
+    }),
+)
+check(
+  'language changes rewrite poster and both source formats',
+  i18n.includes("'assets/motion/' + lang + '/' + motion")
+    && i18n.includes("base + '-poster.webp'")
+    && i18n.includes("base + '.' + format")
+    && i18n.includes("prefers-reduced-motion: reduce"),
+)
+check(
   'landing names 0.3.2 as the public release',
   html.includes('"softwareVersion": "0.3.2"')
     && html.includes('>v0.3.2</span>')
@@ -173,10 +208,10 @@ check(
   !/\bsha(?:-?256)?\b|checksum|체크섬|校验和|Prüfsumme/i.test(`${html}\n${i18n}`),
 )
 check(
-  'package and lock declare the public 0.3.2 release',
-  packageJson.version === '0.3.2'
-    && packageLock.version === '0.3.2'
-    && packageLock.packages?.['']?.version === '0.3.2',
+  'package and lock agree on public 0.3.2 or the next 0.3.3 release candidate',
+  packageIsCurrentPublicOrNextRc
+    && packageLock.version === packageVersion
+    && packageLock.packages?.['']?.version === packageVersion,
 )
 check(
   'README names 0.3.2 as the public release',
@@ -234,8 +269,9 @@ check(
     && svg.includes('#playhead { transform:translateX(-302px) }'),
 )
 check(
-  'README cache key and alt describe the right-to-left historical demo',
-  readme.includes('demo.svg?v=5')
+  'README poster links to the localized motion demo and describes its direction',
+  readme.includes('motion/en/capturepack-time-machine-poster.webp')
+    && readme.includes('https://capturepack.dev/')
     && readme.includes('starts at NOW on the right')
     && readme.includes('moves the playhead left to 5 seconds ago')
     && readme.includes('historical frame'),
@@ -291,7 +327,7 @@ check(
 for (const { lang, text: localized } of localizedReadmes) {
   check(
     `${lang}: README public-release and product/privacy contract`,
-    localized.includes('demo.svg?v=5')
+    localized.includes(`motion/${lang}/capturepack-time-machine-poster.webp`)
       && localized.includes('0.3.2')
       && !localized.includes('0.3.0')
       && localized.includes('Ctrl+Alt+S')
@@ -410,6 +446,8 @@ check(
     && releaseWorkflow.includes('Upload verified assets to draft')
     && releaseWorkflow.includes('Verify draft assets byte-for-byte')
     && releaseWorkflow.includes('Publish verified draft')
+    && releaseWorkflow.includes('--prerelease --latest=false')
+    && releaseWorkflow.includes('--prerelease=false --latest')
     && releaseWorkflow.includes('$global:LASTEXITCODE = 0')
     && packageJson.scripts?.dist?.includes('--publish never')
     && releaseWorkflow.indexOf('Package release artifacts') < releaseWorkflow.indexOf('Create or verify the release tag')

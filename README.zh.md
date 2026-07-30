@@ -18,7 +18,7 @@
 当前公开 Windows 版本：**CapturePack 0.3.2**
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=5" alt="CapturePack 从右侧 NOW 开始，把播放头向左移动到 5 秒前，恢复并选择只存在于该历史画面的子 UI 控件，再导出 AI 可读的结构化证据" width="760">
+  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/motion/zh/capturepack-time-machine-poster.webp" alt="CapturePack 从右侧 NOW 开始，把播放头向左移动到 5 秒前，恢复并选择只存在于该历史画面的子 UI 控件，再导出 AI 可读的结构化证据" width="760">
 </p>
 
 ## 使用流程

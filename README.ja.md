@@ -19,7 +19,7 @@
 現在公開中のWindows版: **CapturePack 0.3.2**
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=5" alt="右側のNOWから再生ヘッドを左の5秒前へ動かし、その過去フレームに存在した子UIコントロールを復元して選択し、AI向け構造化証拠を書き出すCapturePack" width="760">
+  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/motion/ja/capturepack-time-machine-poster.webp" alt="右側のNOWから再生ヘッドを左の5秒前へ動かし、その過去フレームに存在した子UIコントロールを復元して選択し、AI向け構造化証拠を書き出すCapturePack" width="760">
 </p>
 
 ## ワークフロー

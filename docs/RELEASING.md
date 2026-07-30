@@ -14,9 +14,13 @@ electron-builder's implicit CI upload before those checks.
 
 ## Before dispatch
 
-1. Update `core/package.json` and `core/package-lock.json` to the same stable
-   version. Do not leave an `-rc.*` suffix in a public release.
-2. Update `CHANGELOG.md`, every product README and the website version/copy.
+1. Update `core/package.json` and `core/package-lock.json` to the same version.
+   Stable releases must not retain an `-rc.*` suffix. An external test candidate
+   uses the next patch version, for example `0.3.3-rc.1` after stable `0.3.2`;
+   reusing `0.3.2-rc.*` would sort below the already-published stable version.
+2. For a stable release, update `CHANGELOG.md`, every product README and the
+   website version/copy. For an RC, add its changelog/release notes but keep the
+   README and website on the current stable version until promotion.
 3. From a clean checkout, run:
 
    ```powershell
@@ -65,12 +69,16 @@ The workflow:
    - `latest.yml` (including the sha512 used by `electron-updater`)
    - `SHA256SUMS.txt` for manual verification
 7. Downloads all four draft assets, compares their bytes with the verified
-   local files, and only then changes the draft to a public release.
+   local files, and only then changes the draft to a public release. A package
+   version containing a SemVer prerelease suffix is published with
+   `prerelease=true` and `latest=false`; a stable version becomes the latest
+   release.
 
 The draft is never an availability claim. The release becomes visible only
 after the remote four-file contract passes. After it is public, verify its tag,
 commit and asset names before deploying website copy that calls the version
-available.
+available. A prerelease may be shared by direct URL for testing, but the website
+and `/releases/latest` continue to name the stable release.
 
 ## Verify a published download
 

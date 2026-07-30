@@ -15,11 +15,19 @@ import {
   buildManifest,
   savePack,
   saveAsNewPack,
+  uiaPluginDeclaration,
   updatePack,
+  writeUiaPlugin,
   type DisplayCapture,
   type ExportInput,
   type InitialSaveInput,
 } from '../src/main/exporter'
+import { mergeImageWindowFloor } from '../src/main/imageContext'
+import { parseUiaPayload } from '../src/main/uia'
+import { editorUiaElements, editorUiaWindows } from '../src/main/context/legacyPack'
+import { ContextSession } from '../src/main/context/session'
+import type { ContextObservation } from '../src/main/context/buffer'
+import { ObjectIndex } from '../src/renderer/editor/objects'
 import type { Manifest } from '../src/shared/types'
 
 let failed = 0
@@ -254,18 +262,28 @@ async function main(): Promise<void> {
     writeFileSync(path.join(handle.dirPath, 'replay.webm'), 'STALE VIDEO')
     writeFileSync(path.join(handle.dirPath, 'timeline.json'), '{"events":[{"type":"stale"}]}')
     writeFileSync(path.join(handle.dirPath, 'skills', 'timeline.md'), '# stale video timeline')
-    const plugin = {
-      name: 'windows-uia',
-      version: '0.3.0',
-      path: 'plugins/windows-uia/',
+    const windowFloor: ContextObservation = {
+      tMs: 0,
+      windows: [{
+        surface_id: 'image-window-floor',
+        hwnd: '4242',
+        title: 'Frozen app',
+        process: 'frozen.exe',
+        class_name: 'FrozenWindow',
+        bounds: { x: 120, y: 80, width: 400, height: 300 },
+        display: 1,
+        focused: true,
+        z: 0,
+        hasControls: false,
+        tree: 'skipped',
+      }],
+      elements: [],
     }
+    const floorPayload = mergeImageWindowFloor(null, windowFloor, createdAt.toISOString())
+    if (floorPayload === null) throw new Error('window floor unexpectedly disappeared')
+    const plugin = uiaPluginDeclaration()
     const pluginDir = path.join(handle.dirPath, 'plugins', plugin.name)
-    mkdirSync(pluginDir, { recursive: true })
-    writeFileSync(path.join(pluginDir, 'meta.json'), JSON.stringify({
-      name: plugin.name,
-      version: plugin.version,
-    }))
-    writeFileSync(path.join(pluginDir, 'elements.json'), '{"windows":[],"elements":[]}')
+    await writeUiaPlugin(handle.dirPath, floorPayload)
     const final: ExportInput = {
     captureKind: 'image',
     imageScope: 'region',
@@ -300,6 +318,56 @@ async function main(): Promise<void> {
     !existsSync(path.join(handle.dirPath, 'timeline.json')) &&
       !existsSync(path.join(handle.dirPath, 'skills', 'timeline.md')),
   )
+
+  console.log('\nIMAGE UIA PACK ROUND TRIP')
+  const reopenedManifest = manifestAt(handle.dirPath)
+  const reopenedUia = parseUiaPayload(
+    readFileSync(path.join(pluginDir, 'elements.json'), 'utf8'),
+  )
+  check(
+    'production writer declares and restores the null-UIA window floor',
+    reopenedManifest.plugins.some((entry) => entry.name === plugin.name) &&
+      reopenedUia?.windows[0]?.hwnd === '4242' &&
+      reopenedUia.windows[0]?.tree === 'skipped' &&
+      reopenedUia.elements.length === 0,
+  )
+  const reopenedObservation: ContextObservation | null =
+    reopenedUia === null
+      ? null
+      : {
+          tMs: 0,
+          windows: editorUiaWindows(reopenedUia, 1),
+          elements: editorUiaElements(reopenedUia, 1),
+        }
+  const reopenedSession = new ContextSession('image-pack-writer-round-trip', {
+    displays: [{ index: 1, focused: true, width: 720, height: 480 }],
+    replayDurationMs: 0,
+    observation: reopenedObservation,
+    dropped: false,
+  })
+  const pickedWindow = async (): Promise<string | null> => {
+    const frame = await reopenedSession.frameAt(0)
+    const slice = frame.displays.find((entry) => entry.display === 1)
+    const picked = ObjectIndex.build(
+      slice?.candidates ?? [],
+      slice?.surfaces ?? [],
+      slice?.coverage ?? [],
+      frame.claims,
+      720,
+      480,
+      1,
+    ).pick(320, 230)
+    return picked?.level === 'window' ? (picked.candidate.name ?? null) : null
+  }
+  const beforeReopen = await pickedWindow()
+  reopenedSession.adoptAll(reopenedObservation === null ? [] : [reopenedObservation])
+  const afterReopen = await pickedWindow()
+  check(
+    'one-checkpoint reopen preserves selection of an image window floor',
+    beforeReopen === 'Frozen app' && afterReopen === beforeReopen,
+    `before=${String(beforeReopen)}, after=${String(afterReopen)}`,
+  )
+
   const imageDocs = [
     'README.md',
     'report.md',

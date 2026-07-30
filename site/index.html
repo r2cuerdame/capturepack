@@ -81,9 +81,15 @@
 
     <section class="demo" aria-labelledby="demo-title">
       <figure>
-        <img src="assets/demo.svg"
-          alt="Animated CapturePack editor: the playhead starts at NOW on the right, moves left to 5 seconds ago, restores the historical Save changes button, selects it, and exports structured data."
-          data-i18n-alt="demo_alt" loading="lazy">
+        <video class="motion-video" data-motion="capturepack-time-machine"
+          controls muted loop playsinline autoplay preload="metadata"
+          poster="assets/motion/en/capturepack-time-machine-poster.webp"
+          aria-labelledby="demo-title">
+          <source data-motion-source="webm"
+            src="assets/motion/en/capturepack-time-machine.webm" type="video/webm">
+          <source data-motion-source="mp4"
+            src="assets/motion/en/capturepack-time-machine.mp4" type="video/mp4">
+        </video>
         <figcaption class="output-note">
           <strong id="demo-title" data-i18n="demo_title">At NOW, rewind left 5 seconds—then pick.</strong>
           <span data-i18n="demo_body">Watch the playhead start at NOW on the right and travel left to 5s AGO.
@@ -136,15 +142,25 @@
     </section>
 
     <aside class="still-capture" aria-labelledby="still-title">
-      <div>
+      <div class="still-copy">
         <span class="still-kicker" data-i18n="still_kicker">ONE FRAME, SAME CONTEXT EDITOR</span>
         <h2 id="still-title" data-i18n="still_title">Need a still? Press Ctrl+Alt+S.</h2>
+        <p data-i18n="still_body">Region selection is the default. The explicit Full screen capture
+        button captures every monitor in one virtual-desktop image. The image opens
+        at native 100% when it fits; oversized captures open fitted so the whole image
+        is visible. It saves no video. A region pack keeps only
+        the selected pixels and crop placement metadata — never a hidden full-screen
+        or second-monitor image.</p>
       </div>
-      <p data-i18n="still_body">Region selection is the default. The explicit Full screen capture
-      button captures every monitor in one virtual-desktop image. The image opens
-      at native 100% in the same editor and saves no video. A region pack keeps only
-      the selected pixels and crop placement metadata — never a hidden full-screen
-      or second-monitor image.</p>
+      <video class="motion-video still-motion" data-motion="capturepack-still-context"
+        controls muted loop playsinline autoplay preload="metadata"
+        poster="assets/motion/en/capturepack-still-context-poster.webp"
+        aria-labelledby="still-title">
+        <source data-motion-source="webm"
+          src="assets/motion/en/capturepack-still-context.webm" type="video/webm">
+        <source data-motion-source="mp4"
+          src="assets/motion/en/capturepack-still-context.mp4" type="video/mp4">
+      </video>
     </aside>
 
     <section class="output" aria-labelledby="out-title">

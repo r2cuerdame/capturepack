@@ -81,6 +81,10 @@ const releaseWorkflow = readFileSync(
   path.join(root, '.github', 'workflows', 'release.yml'),
   'utf8',
 )
+const updaterSource = readFileSync(
+  path.join(root, 'core', 'src', 'main', 'updater.ts'),
+  'utf8',
+)
 const contractPosition = releaseWorkflow.indexOf('release-contract-check.mjs')
 const tagPosition = releaseWorkflow.indexOf('Create or verify the release tag')
 const draftCleanupPosition = releaseWorkflow.indexOf('gh release delete-asset')
@@ -123,6 +127,16 @@ check(
     releaseWorkflow.includes('Get-FileHash -LiteralPath $local') &&
     releaseWorkflow.includes('Get-FileHash -LiteralPath $remote'),
   'an existing public tag is immutable and every staged asset is downloaded for comparison',
+)
+check(
+  releaseWorkflow.includes('--prerelease --latest=false') &&
+    releaseWorkflow.includes('--prerelease=false --latest'),
+  'release candidates cannot replace the latest stable GitHub release',
+)
+check(
+  updaterSource.includes('autoUpdater.allowPrerelease = false') &&
+    updaterSource.includes('autoUpdater.allowDowngrade = false'),
+  'stable installs ignore RCs and RC installs can graduate to the next stable version',
 )
 
 const releaseProbe = mkdtempSync(path.join(tmpdir(), 'capturepack-release-contract-'))

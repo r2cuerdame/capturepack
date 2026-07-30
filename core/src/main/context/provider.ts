@@ -27,7 +27,7 @@ import { CONTEXT_PROTOCOL_VERSION } from '../../shared/context/protocol'
 import type { ProviderManifest } from '../../shared/context/manifest'
 import { rectContains } from '../../shared/context/surfaces'
 import type { ContextBuffer, ContextObservation } from './buffer'
-import { candidatesOf, claimsOf, surfaceCoverageOf, surfaceIdOf, WINDOWS_UIA_PROVIDER_ID } from './buffer'
+import { candidatesOf, surfaceIdOf, WINDOWS_UIA_PROVIDER_ID } from './buffer'
 
 const WINDOWS_UIA_VERSION = '0.4.0'
 
@@ -64,10 +64,19 @@ export class WindowsUiaProvider implements TemporalContextProvider {
   // to must not pay it again. Keyed by the OBSERVATION, not by the requested
   // time, because every time in a covered interval restores the same one.
   private readonly restored = new Map<number, readonly ContextCandidate[]>()
+  /**
+   * Best control-bearing checkpoint per surface. Lane A is intentionally
+   * budgeted per window, so one observation can be complete for A, truncated
+   * for B and skipped for C. A single global "this observation has elements"
+   * bit cannot describe that shape.
+   */
+  private readonly bestBySurface = new Map<string, ContextObservation>()
+  private readonly countsByObservation = new Map<ContextObservation, ReadonlyMap<string, number>>()
 
   constructor(buffer: ContextBuffer, ids: ReadonlyMap<string, string>) {
     this.buffer = buffer
     this.ids = ids
+    this.reindexSources()
   }
 
   /**
@@ -80,7 +89,7 @@ export class WindowsUiaProvider implements TemporalContextProvider {
     this.buffer = buffer
     this.ids = ids
     this.restored.clear()
-    this.elementObs = undefined
+    this.reindexSources()
   }
 
   get observations(): number {
@@ -89,15 +98,7 @@ export class WindowsUiaProvider implements TemporalContextProvider {
 
   getSurfaceClaims(c: SurfaceClaimContext): Promise<readonly ProviderSurfaceClaim[]> {
     const { observation } = this.buffer.restore(c.timeMs)
-    // Claims must come from the observation that HOLDS the dump (#111):
-    // anchored candidates exist at every time, so a claim answered from a
-    // ring observation with no elements would tell Core not to ask — and the
-    // whole anchored answer would silently never be offered.
-    const source = observation !== null && observation.elements.length > 0
-      ? observation
-      : this.elementObservation()
-    if (source === null) return Promise.resolve([])
-    return Promise.resolve(claimsOf(source, this.ids))
+    return Promise.resolve(this.materialization(observation, c.surfaces).claims)
   }
 
   frame(c: FrameContext): Promise<ProviderFrame> {
@@ -118,10 +119,8 @@ export class WindowsUiaProvider implements TemporalContextProvider {
     // accuracy carries `interpolated` so a strict reader can tell. The CONTENT
     // (labels, tree shape, a list that scrolled) is still the dump's — the
     // dirty-driven lane A re-dump is the next step, recorded in GOAL.md.
-    const source = observation !== null && observation.elements.length > 0
-      ? observation
-      : this.elementObservation()
-    if (source === null) {
+    const materialized = this.materialization(observation, c.surfaces, accuracy)
+    if (materialized.sources.size === 0) {
       // Served, and genuinely empty. NOT `declined` — declining means "I do not
       // do frames, ask me per point instead", and answering that here would send
       // Core down the hitTest path to be told the same nothing more slowly.
@@ -135,28 +134,228 @@ export class WindowsUiaProvider implements TemporalContextProvider {
         truncated: false,
       })
     }
-    const all = this.anchored(this.candidatesFor(source, accuracy), source, c.surfaces)
+    const all = materialized.candidates
     const region = c.region
     const inRegion =
       region === undefined ? all : all.filter((candidate) => overlaps(candidate.bounds, region))
     const truncated = inRegion.length > c.maxCandidates
+    const offered = truncated ? fairPrefix(inRegion, c.maxCandidates) : inRegion
     return Promise.resolve({
       providerId: this.id,
-      timeMs: source.tMs,
+      // Different surfaces can legitimately come from different checkpoints;
+      // the frame's clock is the requested/materialized window-stack instant.
+      timeMs: c.timeMs,
       accuracy,
-      candidates: truncated ? inRegion.slice(0, c.maxCandidates) : inRegion,
-      claims: claimsOf(source, this.ids),
-      coverage: surfaceCoverageOf(source, this.ids),
+      candidates: offered,
+      claims: materialized.claims,
+      coverage: materialized.coverage,
       truncated,
     })
   }
 
-  /** The one observation that carries the control dump, or null. Cached. */
-  private elementObs: ContextObservation | null | undefined
-  private elementObservation(): ContextObservation | null {
-    if (this.elementObs !== undefined) return this.elementObs
-    this.elementObs = this.buffer.all.find((o) => o.elements.length > 0) ?? null
-    return this.elementObs
+  /**
+   * Index control coverage per surface, never per observation.
+   *
+   * The capture-instant dump is normally the richest source, while Lane A
+   * contributes temporally exact complete trees where it can and honest
+   * prefixes where it cannot. A collected tree at the requested instant wins
+   * even when empty; otherwise the richest available source for THAT surface
+   * fills only that surface.
+   */
+  private reindexSources(): void {
+    this.bestBySurface.clear()
+    this.countsByObservation.clear()
+    for (const observation of this.buffer.all) {
+      const counts = this.elementCounts(observation)
+      this.countsByObservation.set(observation, counts)
+      for (const [surfaceId, count] of counts) {
+        if (count <= 0) continue
+        const previous = this.bestBySurface.get(surfaceId)
+        if (previous === undefined || this.sourceScore(observation, surfaceId) > this.sourceScore(previous, surfaceId)) {
+          this.bestBySurface.set(surfaceId, observation)
+        }
+      }
+    }
+  }
+
+  private elementCounts(observation: ContextObservation): ReadonlyMap<string, number> {
+    const ownerByZ = new Map<number, string>()
+    let fallbackOwner: string | undefined
+    for (const window of observation.windows) {
+      const surfaceId = surfaceIdOf(this.ids, observation, window)
+      ownerByZ.set(window.z, surfaceId)
+      if (fallbackOwner === undefined || window.focused) fallbackOwner = surfaceId
+    }
+    const counts = new Map<string, number>()
+    for (const element of observation.elements) {
+      const surfaceId =
+        element.window >= 0
+          ? ownerByZ.get(element.window)
+          : fallbackOwner
+      if (surfaceId === undefined) continue
+      counts.set(surfaceId, (counts.get(surfaceId) ?? 0) + 1)
+    }
+    return counts
+  }
+
+  private sourceScore(observation: ContextObservation, surfaceId: string): number {
+    const count = this.countsByObservation.get(observation)?.get(surfaceId) ?? 0
+    const state = this.treeState(observation, surfaceId)
+    // A truly collected tree dominates every prefix. Otherwise candidate data
+    // is evidence even when an older payload lost its tree bit, so choose the
+    // richest non-complete source instead of preferring a known 32-element
+    // truncation over a larger capture-instant dump.
+    const completeness = state === 'collected' ? 2 : count > 0 ? 1 : 0
+    return completeness * 1_000_000 + count
+  }
+
+  private treeState(
+    observation: ContextObservation,
+    surfaceId: string,
+  ): 'collected' | 'truncated' | 'unavailable' | 'skipped' {
+    let state: 'collected' | 'truncated' | 'unavailable' | 'skipped' = 'skipped'
+    for (const window of observation.windows) {
+      if (surfaceIdOf(this.ids, observation, window) !== surfaceId) continue
+      if (window.tree === 'collected') return 'collected'
+      if (window.tree === 'truncated') state = 'truncated'
+      else if (window.tree === 'unavailable' && state === 'skipped') state = 'unavailable'
+    }
+    return state
+  }
+
+  private sourcesFor(
+    current: ContextObservation | null,
+    surfaceId: string,
+  ): readonly ContextObservation[] {
+    const fallback = this.bestBySurface.get(surfaceId)
+    if (current !== null) {
+      const state = this.treeState(current, surfaceId)
+      const currentCount = this.countsByObservation.get(current)?.get(surfaceId) ?? 0
+      // A fully walked tree is authoritative even when it honestly contains
+      // zero offerable controls. Older ring payloads, however, copied
+      // `hasControls: true/tree: collected` onto samples without carrying the
+      // elements; that internally inconsistent shape means "data omitted",
+      // not an empty tree, and still needs the per-surface fallback.
+      if (
+        state === 'collected' &&
+        (currentCount > 0 || !this.surfaceClaimsControls(current, surfaceId))
+      ) {
+        return [current]
+      }
+      // A prefix observed at the requested checkpoint is temporal truth, but a
+      // timeout after (say) 32 elements must not make controls 33..247 vanish.
+      // Put the exact prefix first, then fill only missing object identities
+      // from the richest capture checkpoint. Per-candidate accuracy below marks
+      // those supplements as interpolated; duplicates keep the exact current
+      // candidate, so future labels cannot overwrite the observed prefix.
+      if (currentCount > 0) {
+        return fallback === undefined || fallback === current
+          ? [current]
+          : [current, fallback]
+      }
+      if (fallback !== undefined) return [fallback]
+      // Preserve an honest empty truncated/unavailable observation so coverage
+      // can say "looked, incomplete" instead of pretending nobody looked.
+      if (state === 'truncated' || state === 'unavailable') return [current]
+    }
+    return fallback === undefined ? [] : [fallback]
+  }
+
+  private surfaceClaimsControls(observation: ContextObservation, surfaceId: string): boolean {
+    return observation.windows.some(
+      (window) =>
+        surfaceIdOf(this.ids, observation, window) === surfaceId && window.hasControls,
+    )
+  }
+
+  private materialization(
+    current: ContextObservation | null,
+    surfaces: readonly FrameContext['surfaces'][number][],
+    accuracy?: TemporalAccuracy,
+  ): {
+    sources: ReadonlyMap<string, readonly ContextObservation[]>
+    candidates: ContextCandidate[]
+    claims: ProviderSurfaceClaim[]
+    coverage: Array<{ surfaceId: string; state: 'recorded' | 'truncated' | 'unavailable' | 'skipped' }>
+  } {
+    const sources = new Map<string, readonly ContextObservation[]>()
+    for (const surface of surfaces) {
+      if (sources.has(surface.surfaceId)) continue
+      const selected = this.sourcesFor(current, surface.surfaceId)
+      if (selected.length > 0) sources.set(surface.surfaceId, selected)
+    }
+
+    const candidates: ContextCandidate[] = []
+    if (accuracy !== undefined) {
+      for (const [surfaceId, selected] of sources) {
+        // A UIA AutomationId is not unique: measured trees contain 17–24
+        // controls sharing every identity field. Deduplicate as an ordered
+        // multiset, not a Set. If the exact prefix contains 32 repeated row
+        // buttons and the fallback contains 40, skip the first 32 fallback
+        // occurrences and retain 33..40.
+        const priorCounts = new Map<string, number>()
+        for (let sourceIndex = 0; sourceIndex < selected.length; sourceIndex += 1) {
+          const source = selected[sourceIndex]!
+          const sourceAccuracy =
+            source === current ? accuracy : { ...accuracy, interpolated: true }
+          const fromSource = this.candidatesFor(source, sourceAccuracy).filter(
+            (candidate) => candidate.surfaceId === surfaceId,
+          )
+          const sourceCounts = new Map<string, number>()
+          for (const candidate of this.anchored(fromSource, source, surfaces)) {
+            const key = fallbackMergeKey(candidate)
+            const occurrence = (sourceCounts.get(key) ?? 0) + 1
+            sourceCounts.set(key, occurrence)
+            if (sourceIndex > 0 && occurrence <= (priorCounts.get(key) ?? 0)) continue
+            candidates.push(candidate)
+          }
+          for (const [key, count] of sourceCounts) {
+            priorCounts.set(key, Math.max(priorCounts.get(key) ?? 0, count))
+          }
+        }
+      }
+    }
+
+    // Claims live on the CURRENT surface rectangle. Anchoring only candidates
+    // left claims behind at the dump rectangle, so a window moved farther than
+    // its own width had every real control rejected as unclaimed.
+    const claims: ProviderSurfaceClaim[] = []
+    const coverage: Array<{
+      surfaceId: string
+      state: 'recorded' | 'truncated' | 'unavailable' | 'skipped'
+    }> = []
+    const covered = new Set<string>()
+    for (const surface of surfaces) {
+      const selected = sources.get(surface.surfaceId)
+      const source = selected?.[0]
+      if (source === undefined) continue
+      claims.push({
+        providerId: this.id,
+        surfaceId: surface.surfaceId,
+        region: { ...surface.bounds },
+        ...(surface.space === undefined ? {} : { space: surface.space }),
+        ...(surface.display === undefined ? {} : { display: surface.display }),
+        authority: 'accessibility',
+        confidence: 1,
+        ...(surface.executableName === undefined
+          ? {}
+          : { executableHint: surface.executableName }),
+      })
+      if (covered.has(surface.surfaceId)) continue
+      covered.add(surface.surfaceId)
+      const tree = this.treeState(source, surface.surfaceId)
+      const count = this.countsByObservation.get(source)?.get(surface.surfaceId) ?? 0
+      coverage.push({
+        surfaceId: surface.surfaceId,
+        state:
+          tree === 'collected'
+            ? 'recorded'
+            : tree === 'truncated' || count > 0
+              ? 'truncated'
+              : tree,
+      })
+    }
+    return { sources, candidates, claims, coverage }
   }
 
   /**
@@ -193,14 +392,21 @@ export class WindowsUiaProvider implements TemporalContextProvider {
     for (const w of source.windows) {
       const id = surfaceIdOf(this.ids, source, w)
       const list = originOf.get(id)
-      const entry: Placed = { display: w.display, x: w.bounds.x, y: w.bounds.y }
+      // Frame bounds are clipped independently on every display. Their x/y
+      // therefore stop at zero while a straddling window is still hundreds of
+      // pixels off that monitor, which under-counts the later movement by the
+      // clipped amount. Client bounds are deliberately retained un-clipped by
+      // ringObservations and provide the stable physical origin.
+      const origin = w.client_bounds ?? w.bounds
+      const entry: Placed = { display: w.display, x: origin.x, y: origin.y }
       if (list === undefined) originOf.set(id, [entry])
       else list.push(entry)
     }
     const nowOf = new Map<string, Placed[]>()
     for (const s of surfaces) {
       const list = nowOf.get(s.surfaceId)
-      const entry: Placed = { display: s.display, x: s.bounds.x, y: s.bounds.y }
+      const origin = s.clientBounds ?? s.bounds
+      const entry: Placed = { display: s.display, x: origin.x, y: origin.y }
       if (list === undefined) nowOf.set(s.surfaceId, [entry])
       else list.push(entry)
     }
@@ -221,13 +427,17 @@ export class WindowsUiaProvider implements TemporalContextProvider {
       }
       const dx = now.x - origin.x
       const dy = now.y - origin.y
-      if (dx === 0 && dy === 0) {
+      if (dx === 0 && dy === 0 && now.display === candidate.display) {
         out.push(candidate)
         continue
       }
       out.push({
         ...candidate,
         bounds: { ...candidate.bounds, x: candidate.bounds.x + dx, y: candidate.bounds.y + dy },
+        // A window can cross displays. Its candidate must cross with it;
+        // retaining the dump display sends the shifted rectangle to the wrong
+        // per-display index even when its coordinates are otherwise correct.
+        ...(now.display === undefined ? {} : { display: now.display }),
         accuracy: { ...candidate.accuracy, interpolated: true },
       })
     }
@@ -249,11 +459,8 @@ export class WindowsUiaProvider implements TemporalContextProvider {
     const { observation, accuracy } = this.buffer.restore(c.timeMs)
     // The same anchoring as frame() (#111): both paths must agree, and the
     // harness cross-checks that they do.
-    const source = observation !== null && observation.elements.length > 0
-      ? observation
-      : this.elementObservation()
-    if (source === null) return Promise.resolve([])
-    const hits = this.anchored(this.candidatesFor(source, accuracy), source, [c.surface]).filter(
+    const materialized = this.materialization(observation, [c.surface], accuracy)
+    const hits = materialized.candidates.filter(
       (candidate) =>
         candidate.surfaceId === c.surface.surfaceId &&
         (c.display === undefined ||
@@ -278,6 +485,56 @@ export class WindowsUiaProvider implements TemporalContextProvider {
     this.restored.set(observation.tMs, built)
     return built
   }
+}
+
+/**
+ * Exact checkpoint candidates are appended before fallback supplements.
+ *
+ * This is intentionally a BASE identity, consumed as an ordered multiset by
+ * materialization(). AutomationId is not unique, and neither are class/type;
+ * the occurrence number in UIA's stable pre-order is what distinguishes 40
+ * same-id row buttons while still letting an exact prefix suppress the same
+ * first N fallback entries.
+ */
+function fallbackMergeKey(candidate: ContextCandidate): string {
+  const automationId = candidate.identity?.['automation_id']?.trim() ?? ''
+  const className = candidate.identity?.['class_name']?.trim() ?? ''
+  return `${candidate.surfaceId}\u0000${candidate.objectType}\u0000${className}\u0000${automationId}`
+}
+
+/**
+ * A global candidate cap must not let one enormous accessibility tree consume
+ * every slot before later applications receive even one. Preserve each
+ * surface's own order while taking one candidate per surface per round.
+ */
+function fairPrefix(
+  candidates: readonly ContextCandidate[],
+  limit: number,
+): ContextCandidate[] {
+  if (limit <= 0) return []
+  if (candidates.length <= limit) return [...candidates]
+  const buckets = new Map<string, ContextCandidate[]>()
+  for (const candidate of candidates) {
+    const bucket = buckets.get(candidate.surfaceId)
+    if (bucket === undefined) buckets.set(candidate.surfaceId, [candidate])
+    else bucket.push(candidate)
+  }
+  const offsets = new Map<string, number>()
+  const out: ContextCandidate[] = []
+  while (out.length < limit) {
+    let added = false
+    for (const [surfaceId, bucket] of buckets) {
+      const index = offsets.get(surfaceId) ?? 0
+      const candidate = bucket[index]
+      if (candidate === undefined) continue
+      out.push(candidate)
+      offsets.set(surfaceId, index + 1)
+      added = true
+      if (out.length >= limit) break
+    }
+    if (!added) break
+  }
+  return out
 }
 
 function overlaps(

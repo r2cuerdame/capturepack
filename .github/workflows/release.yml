@@ -219,7 +219,9 @@ jobs:
             }
           }
 
-      # This is the only step that makes the update visible to users.
+      # This is the only step that makes the update visible to users. A SemVer
+      # prerelease is public for direct testing, but must never replace the
+      # stable /releases/latest response used by installed 0.3.2 clients.
       - name: Publish verified draft
         shell: pwsh
         timeout-minutes: 3
@@ -227,5 +229,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
-          gh release edit "$env:RELEASE_TAG" --draft=false
+          $version = (Get-Content core/package.json -Raw | ConvertFrom-Json).version
+          if ($version -match '-') {
+            gh release edit "$env:RELEASE_TAG" --draft=false --prerelease --latest=false
+          } else {
+            gh release edit "$env:RELEASE_TAG" --draft=false --prerelease=false --latest
+          }
           if ($LASTEXITCODE -ne 0) { throw "Could not publish the verified draft." }

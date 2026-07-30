@@ -8,6 +8,7 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { transform } from 'esbuild'
 
 const core = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 let failed = 0
@@ -34,7 +35,7 @@ console.log('IMAGE TRIGGER + PRIVACY ORDER')
 const session = source('src/main/session.ts')
 const imageFlow = section(session, 'async function runImageFlow(', 'async function runFlow(')
 const freezeAt = imageFlow.indexOf('await takeDisplaySnapshots(')
-const selectorAt = imageFlow.indexOf('await selectImageRegion(')
+const selectorAt = imageFlow.indexOf('selectionPending = selectImageRegion(')
 const cropAt = imageFlow.indexOf('cropSnapshot(desktopPng, selection)')
 const desktopAt = imageFlow.indexOf('composeImageDesktop(desktop, snapshots)')
 const detachAt = imageFlow.indexOf('desktopPng = null')
@@ -85,6 +86,14 @@ check(
   session.includes(
     "if (manifest.capture_kind !== 'image') return { captureKind: 'video' }",
   ),
+)
+check(
+  'reopen adopts a valid one-checkpoint Windows context instead of discarding it',
+  session.includes('loadedWindowsContextObservations.length > 0') &&
+    session.includes(
+      'loadedWindowsContextObservations.some((observation) => observation.windows.length > 0)',
+    ) &&
+    !session.includes('loadedWindowsContextObservations.length > 1'),
 )
 
 console.log('\nSELECTOR UX + TRUST SURFACE')
@@ -180,6 +189,15 @@ const settingsHtml = source('src/renderer/settings/settings.html')
 const settingsRenderer = source('src/renderer/settings/settings.ts')
 const history = source('src/renderer/history/history.ts')
 const editor = source('src/renderer/editor/editor.ts')
+const viewport = source('src/renderer/editor/viewport.ts')
+const compiledViewport = await transform(viewport, {
+  loader: 'ts',
+  format: 'esm',
+  target: 'node20',
+})
+const viewportApi = await import(
+  `data:text/javascript;base64,${Buffer.from(compiledViewport.code).toString('base64')}`
+)
 const initialImageView = section(
   editor,
   'function openInitialView(): void {',
@@ -215,16 +233,32 @@ check(
     history.includes("t('history.badgeVideo')"),
 )
 check(
-  'the same editor opens images at native 1:1 while video still opens fitted',
+  'the same editor opens fitting images at 1:1, oversized images contained, and video fitted',
     editor.includes('Math.min(availW / board.width, availH / board.height, 1)') &&
     editor.includes("oneToOneBtn.hidden = captureKind !== 'image'") &&
     initialImageView.includes("captureKind === 'image'") &&
+    initialImageView.includes("initialImageViewMode(fitScale) === 'native'") &&
     initialImageView.includes('showNativeImageView()') &&
     nativeImageView.includes('applyControlZoom(hundredPercentZoom(), false)') &&
     nativeImageView.includes('nativeImageView = true') &&
     editor.includes('else if (nativeImageView) showNativeImageView()') &&
     initialImageView.includes('fitBoard()') &&
     editor.includes('openInitialView()'),
+)
+check(
+  'initial still-image zoom is native at or below the viewport and fit when oversized',
+  viewportApi.initialImageViewMode(1) === 'native' &&
+    viewportApi.initialImageViewMode(0.999) === 'fit' &&
+    viewportApi.initialImageViewMode(0.25) === 'fit',
+)
+check(
+  'large-image 1:1 can exceed 4x fit zoom while video/default zoom remains capped at 4x',
+  viewportApi.nativeImageZoomCeiling(0.1) === 10 &&
+    viewportApi.clampZoom(10, viewportApi.nativeImageZoomCeiling(0.1)) === 10 &&
+    viewportApi.clampZoom(10) === 4 &&
+    editor.includes("captureKind === 'image' ? nativeImageZoomCeiling(fitScale) : ZOOM_MAX") &&
+    editor.includes('viewport.zoomTo(next, r.left + r.width / 2, r.top + r.height / 2, ceiling)') &&
+    editor.includes('viewport.zoomAt(e.clientX, e.clientY, e.deltaY < 0, zoomCeiling())'),
 )
 
 console.log(

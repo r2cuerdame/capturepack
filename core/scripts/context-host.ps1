@@ -1221,7 +1221,17 @@ while ($running) {
         # deltas. The scheduled sample is still full and still resyncs the
         # shared picture every interval, so a tick delta costs Core nothing but
         # the windows that actually changed since the last line.
-        if ([CapturePack.SurfaceLane]::HookActive) {
+        $forceFull = (
+          $null -ne $request.params -and
+          $null -ne $request.params.full -and
+          [bool]$request.params.full
+        )
+        if ($forceFull) {
+          # Still-image capture asks for one complete membership snapshot just
+          # before its pixels freeze. A dirty delta cannot discover a CREATE
+          # whose WinEvent has not reached the pump yet.
+          $line = [CapturePack.SurfaceLane]::Sample((Get-HostMs))
+        } elseif ([CapturePack.SurfaceLane]::HookActive) {
           $line = [CapturePack.SurfaceLane]::SampleDirty((Get-HostMs))
         } else {
           $line = [CapturePack.SurfaceLane]::Sample((Get-HostMs), $true)
@@ -1236,6 +1246,11 @@ while ($running) {
           # zero and skips the frame-clock mapping entirely. The one number
           # that must survive the wire unchanged was the one being rounded.
           $line = $line.Insert(1, '"ft":' + $frameMs.ToString('R', [System.Globalization.CultureInfo]::InvariantCulture) + ',')
+        } elseif ($forceFull) {
+          # Identifies the one-shot still-image membership snapshot. Core reads
+          # it directly instead of filing it into a timeline whose frame-clock
+          # origin may not have been established yet.
+          $line = $line.Insert(1, '"sf":1,')
         }
         Write-Line $line
         Write-Line ('{"id":' + $id + ',"ok":true}')

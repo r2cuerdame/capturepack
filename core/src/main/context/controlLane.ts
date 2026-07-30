@@ -57,6 +57,8 @@ interface WindowLog {
     ordinal: number
     version: number
     elements: TrackedControl[]
+    /** The helper stopped at its time/element ceiling before scanning the tree. */
+    truncated: boolean
     /**
      * Element indexes already dead at this tree's checkpoint instant.
      *
@@ -84,6 +86,8 @@ interface WindowLog {
 export interface ControlsAt {
   hwnd: string
   controls: TrackedControl[]
+  /** Completeness of the tree the controls came from. */
+  tree: 'collected' | 'truncated'
 }
 
 export interface ControlLaneStatus {
@@ -110,10 +114,23 @@ export interface ControlLaneStatus {
  */
 const PRUNE_INTERVAL_MS = 2_000
 const RESTART_DELAYS_MS = [250, 1_000, 5_000, 15_000, 30_000] as const
-// The helper reports status every 5 s and sleeps at most 2 s. Twenty seconds
-// therefore tolerates a slow-but-recovering UIA pass (6.4 s has been observed)
-// while putting a hard ceiling on a provider call that never returns.
+// The helper splits long CPU-budget cooldowns to report status every 5 s.
+// Twenty seconds therefore tolerates a slow-but-recovering UIA pass (6.4 s has
+// been observed) while putting a hard ceiling on a provider call that never
+// returns.
 const TRACKER_SILENCE_LIMIT_MS = 20_000
+// If a provider call outlives the silence watchdog, replaying the identical
+// visible set into every replacement recreates the same hang forever. Exclude
+// the exact in-flight HWND (foreground fallback if progress was unavailable)
+// for a bounded five-minute first quarantine while the remaining windows
+// recover; repeated hangs back off exponentially up to one hour.
+const WATCHDOG_HWND_QUARANTINE_MS = 5 * 60_000
+const WATCHDOG_HWND_MAX_QUARANTINE_MS = 60 * 60_000
+// A single returned UIA result is encouraging but not enough to pardon an HWND:
+// a provider can return its tree and then hang on the first rectangle refresh.
+// Keep its strike until a valid tree/rects result is followed by one stable
+// maximum-restart window of helper liveness.
+const WATCHDOG_HWND_RECOVERY_MS = 30_000
 // A process that merely parses hello can still be in a deterministic crash
 // loop. Forgive that history only after it has emitted a valid UIA tree and
 // then stayed alive for one whole maximum-backoff window.
@@ -141,6 +158,12 @@ export interface ControlLaneOptions {
     delayMs: number,
   ) => ReturnType<typeof setTimeout>
   cancelWatchdog?: (timer: ReturnType<typeof setTimeout>) => void
+}
+
+interface WatchdogHwndState {
+  strikes: number
+  untilMs: number
+  successfulResultAtMs: number | null
 }
 
 export class ControlLane {
@@ -178,6 +201,9 @@ export class ControlLane {
   private trackerHealthySinceMs: number | null = null
   private trackerStderrReported = false
   private resourceRestartRequested = false
+  private activeHwnd: string | null = null
+  private providerFailureQuarantinedForChild = false
+  private readonly watchdogHwndState = new Map<string, WatchdogHwndState>()
 
   /**
    * `nowMs` is the SESSION clock — the same one lane S files against and the
@@ -249,6 +275,8 @@ export class ControlLane {
     this.trackerHealthySinceMs = null
     this.trackerStderrReported = false
     this.resourceRestartRequested = false
+    this.activeHwnd = null
+    this.providerFailureQuarantinedForChild = false
     this.buffer = ''
     this.lastSent = null
     child.stdout.setEncoding('utf8')
@@ -284,8 +312,20 @@ export class ControlLane {
       const healthyForMs =
         this.trackerHealthySinceMs === null ? 0 : this.nowMs() - this.trackerHealthySinceMs
       this.disarmTrackerWatchdog()
+      // Native/UIA providers can terminate PowerShell immediately instead of
+      // hanging until the 20 s watchdog. Preserve the walking HWND through the
+      // close boundary and apply the same per-HWND backoff. Watchdog kills have
+      // already charged it; memory-limit replacements are intentional.
+      if (
+        this.activeHwnd !== null &&
+        !this.resourceRestartRequested &&
+        !this.providerFailureQuarantinedForChild
+      ) {
+        this.quarantineWatchdogSuspect('provider process exited during UIA call')
+      }
       this.child = null
       this.buffer = ''
+      this.activeHwnd = null
       if (!this.desiredRunning) return
       // The counter is consulted only when a process dies, so resetting here
       // needs no extra timer. ACK/status/malformed lines never reach this gate,
@@ -319,6 +359,8 @@ export class ControlLane {
     this.pruneTimer = null
     this.disarmTrackerWatchdog()
     const child = this.child
+    this.activeHwnd = null
+    this.watchdogHwndState.clear()
     if (child === null) return
     // Detach synchronously, before asking the process to exit. Settings can
     // flip OFF and back ON before PowerShell closes; keeping this child current
@@ -387,7 +429,14 @@ export class ControlLane {
 
   private sendVisible(): void {
     if (!this.desiredRunning || this.child === null || this.visible === null) return
-    const { hwnds, focusHwnd } = this.visible
+    const now = this.nowMs()
+    const hwnds = this.visible.hwnds.filter(
+      (hwnd) => (this.watchdogHwndState.get(hwnd)?.untilMs ?? 0) <= now,
+    )
+    const focusHwnd =
+      this.visible.focusHwnd !== null && hwnds.includes(this.visible.focusHwnd)
+        ? this.visible.focusHwnd
+        : null
     const key = `${hwnds.join(',')}|${focusHwnd ?? ''}`
     if (key === this.lastSent) return
     this.lastSent = key
@@ -456,7 +505,14 @@ export class ControlLane {
         target.height = move.height
       }
       const live = controls.filter((_, i) => !dead.has(i))
-      if (live.length > 0) out.push({ hwnd, controls: live })
+      // Keep an empty, fully walked tree too. Omitting it changes the meaning
+      // from "there were no pickable controls" to "this window was never
+      // inspected", which makes the editor invent a stale fallback.
+      out.push({
+        hwnd,
+        controls: live,
+        tree: tree.truncated ? 'truncated' : 'collected',
+      })
     }
     return out
   }
@@ -494,10 +550,15 @@ export class ControlLane {
 
   private onMessage(message: Record<string, unknown>): void {
     const event = message['event']
+    if (event === 'walking') {
+      this.activeHwnd = asHandle(message['h'])
+      return
+    }
     if (event === 'tree') return this.onTree(message)
     if (event === 'rects') return this.onRects(message)
     if (event === 'status') return this.onStatus(message)
     if (event === 'blocked') {
+      this.activeHwnd = null
       logWarn(
         `[context] lane A: window ${String(message['h'])} dropped — it took ` +
           `${String(message['lastPassMs'])} ms a pass and would define this lane's latency`,
@@ -505,6 +566,7 @@ export class ControlLane {
       return
     }
     if (event === 'error') {
+      this.activeHwnd = null
       this.lastError = String(message['message'] ?? 'unknown')
       return
     }
@@ -515,6 +577,8 @@ export class ControlLane {
     const version = asInt(message['v'])
     const raw = message['e']
     if (hwnd === null || version === null || !Array.isArray(raw)) return
+    const truncated = message['truncated'] === true
+    if (this.activeHwnd === hwnd) this.activeHwnd = null
     const elements: TrackedControl[] = []
     for (const item of raw) {
       const control = parseControl(item)
@@ -522,13 +586,20 @@ export class ControlLane {
     }
     const log = this.logFor(hwnd)
     const tMs = this.nowMs()
-    log.trees.push({ tMs, ordinal: this.nextTreeOrdinal++, version, elements })
+    log.trees.push({
+      tMs,
+      ordinal: this.nextTreeOrdinal++,
+      version,
+      elements,
+      truncated,
+    })
     // A syntactically valid tree is the first line that proves the helper did
     // real UIA work. An empty tree is still an honest observation of a window
     // with no offerable controls; ACK and status lines are not observations.
     if (this.child !== null && this.trackerHealthySinceMs === null) {
       this.trackerHealthySinceMs = tMs
     }
+    this.noteWatchdogProviderSuccess(hwnd, tMs)
     this.trees += 1
   }
 
@@ -536,6 +607,7 @@ export class ControlLane {
     const hwnd = asHandle(message['h'])
     const version = asInt(message['v'])
     if (hwnd === null || version === null) return
+    if (this.activeHwnd === hwnd) this.activeHwnd = null
     const log = this.logs.get(hwnd)
     if (log === undefined) return
     // Tracker versions restart at 1 after a process replacement (and after a
@@ -552,6 +624,7 @@ export class ControlLane {
     }
     if (treeOrdinal === null) return
     const tMs = this.nowMs()
+    this.noteWatchdogProviderSuccess(hwnd, tMs)
     const moved = message['e']
     if (Array.isArray(moved)) {
       for (const entry of moved) {
@@ -589,6 +662,8 @@ export class ControlLane {
   }
 
   private onStatus(message: Record<string, unknown>): void {
+    this.activeHwnd = null
+    this.clearRecoveredWatchdogStrikes(this.nowMs())
     const duty = message['dutyCycle']
     if (typeof duty === 'number' && Number.isFinite(duty)) this.dutyCycle = duty
     const ws = message['ws']
@@ -727,6 +802,7 @@ export class ControlLane {
       if (!this.desiredRunning || this.child !== child) return
       this.lastError =
         `tracker produced no output for ${String(TRACKER_SILENCE_LIMIT_MS)} ms`
+      this.quarantineWatchdogSuspect('stuck provider call')
       logWarn(`[context] lane A: ${this.lastError}; replacing it`)
       try {
         child.kill()
@@ -740,6 +816,56 @@ export class ControlLane {
       }
     }, TRACKER_SILENCE_LIMIT_MS)
     this.watchdogTimer = timer
+  }
+
+  private quarantineWatchdogSuspect(reason: string): void {
+    const visible = this.visible
+    if (visible === null || visible.hwnds.length === 0) return
+    const suspect =
+      this.activeHwnd !== null && visible.hwnds.includes(this.activeHwnd)
+        ? this.activeHwnd
+        : visible.focusHwnd !== null && visible.hwnds.includes(visible.focusHwnd)
+          ? visible.focusHwnd
+          : visible.hwnds[0] ?? null
+    if (suspect === null) return
+    const now = this.nowMs()
+    const previous = this.watchdogHwndState.get(suspect)
+    const strikes = Math.min(16, (previous?.strikes ?? 0) + 1)
+    const quarantineMs = Math.min(
+      WATCHDOG_HWND_MAX_QUARANTINE_MS,
+      WATCHDOG_HWND_QUARANTINE_MS * 2 ** (strikes - 1),
+    )
+    this.watchdogHwndState.set(suspect, {
+      strikes,
+      untilMs: now + quarantineMs,
+      successfulResultAtMs: null,
+    })
+    this.providerFailureQuarantinedForChild = true
+    logWarn(
+      `[context] lane A: excluding window ${suspect} for ${String(quarantineMs)} ms ` +
+        `after ${reason} #${String(strikes)}`,
+    )
+  }
+
+  private noteWatchdogProviderSuccess(hwnd: string, now: number): void {
+    const state = this.watchdogHwndState.get(hwnd)
+    if (state === undefined || now < state.untilMs) return
+    if (state.successfulResultAtMs === null) state.successfulResultAtMs = now
+  }
+
+  private clearRecoveredWatchdogStrikes(now: number): void {
+    for (const [hwnd, state] of this.watchdogHwndState) {
+      if (
+        state.successfulResultAtMs !== null &&
+        now - state.successfulResultAtMs >= WATCHDOG_HWND_RECOVERY_MS
+      ) {
+        this.watchdogHwndState.delete(hwnd)
+        logInfo(
+          `[context] lane A: window ${hwnd} stayed healthy after a valid UIA result; ` +
+            'watchdog strikes cleared',
+        )
+      }
+    }
   }
 
   private disarmTrackerWatchdog(): void {

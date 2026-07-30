@@ -19,7 +19,7 @@
 현재 공개 Windows 릴리스: **CapturePack 0.3.2**
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=5" alt="오른쪽 NOW에서 시작해 재생 헤드를 왼쪽 5초 전으로 이동하고, 그 과거 프레임에 존재했던 하위 UI 컨트롤을 복원해 선택한 뒤 AI용 구조화 증거를 내보내는 CapturePack" width="760">
+  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/motion/ko/capturepack-time-machine-poster.webp" alt="오른쪽 NOW에서 시작해 재생 헤드를 왼쪽 5초 전으로 이동하고, 그 과거 프레임에 존재했던 하위 UI 컨트롤을 복원해 선택한 뒤 AI용 구조화 증거를 내보내는 CapturePack" width="760">
 </p>
 
 방향을 보세요. 재생 헤드는 **오른쪽 NOW**에서 시작해 **왼쪽 5초 전**으로

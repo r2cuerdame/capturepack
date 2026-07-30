@@ -8,6 +8,25 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 
 Nothing yet.
 
+## 0.3.3-rc.1 — 2026-07-30
+
+External test candidate for temporal object picking, still-image capture and
+Windows context collection.
+
+### Fixed
+
+- Past and reopened frames retain selectable window, UI Automation and Chrome
+  DOM objects instead of falling back to the last frame.
+- Mixed-DPI and negative-origin monitor geometry is matched by physical display
+  bounds for video, still images and cross-monitor region capture.
+- Still images open at native 1:1 when they fit and contain the complete image
+  when they are larger than the editor.
+- UI Automation prioritizes changed and foreground windows, accounts for a 3%
+  steady-state CPU budget, and quarantines a hanging or crashing provider per
+  HWND without starving healthy applications.
+- The landing page uses localized time-machine and still-context motion demos
+  in all nine supported languages.
+
 ## 0.3.2 — 2026-07-30
 
 Focused Windows editor and multi-monitor correctness patch.

@@ -29,10 +29,9 @@ region coverage, editor placement and bootstrap, and makes manual rectangles red
 while semantic UI objects remain blue and geometry-owned after save/reopen.
 
 <p align="center">
-  <!-- Absolute raw URL with a version query: GitHub proxies README images through
-       camo, which caches by source URL — without the bump a fixed demo keeps
-       rendering the stale copy for hours. Bump ?v= whenever demo.svg changes. -->
-  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=5" alt="CapturePack starts at NOW on the right, moves the playhead left to 5 seconds ago, restores and selects the child UI control that existed in that historical frame, and exports structured evidence for AI." width="760">
+  <a href="https://capturepack.dev/">
+    <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/motion/en/capturepack-time-machine-poster.webp" alt="CapturePack starts at NOW on the right, moves the playhead left to 5 seconds ago, restores and selects the child UI control that existed in that historical frame, and exports structured evidence for AI." width="760">
+  </a>
 </p>
 
 Watch the direction: the playhead starts at **NOW on the right**, travels

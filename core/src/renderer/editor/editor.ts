@@ -84,7 +84,15 @@ import { Timebar } from './timebar'
 import { planTrimDrag } from './trimDrag'
 import { projectControlTrack } from './objectTrack'
 import type { ControlTrackAnchor } from './objectTrack'
-import { clampZoom, Viewport, ZOOM_MAX, ZOOM_MIN, ZOOM_STEP } from './viewport'
+import {
+  clampZoom,
+  initialImageViewMode,
+  nativeImageZoomCeiling,
+  Viewport,
+  ZOOM_MAX,
+  ZOOM_MIN,
+  ZOOM_STEP,
+} from './viewport'
 
 interface EditorBridge {
   onInit(cb: (payload: EditorInitPayload) => void): void
@@ -685,7 +693,15 @@ const ZOOM_SNAP_RATIO = 0.05
 
 /** Viewport factor at which the board is drawn 1:1 ("100%"), inside the range. */
 function hundredPercentZoom(): number {
-  return clampZoom(fitScale > 0 ? 1 / fitScale : 1)
+  return clampZoom(
+    fitScale > 0 ? 1 / fitScale : 1,
+    captureKind === 'image' ? nativeImageZoomCeiling(fitScale) : ZOOM_MAX,
+  )
+}
+
+/** Images may reach native 1:1; video and normal-sized images retain 4x. */
+function zoomCeiling(): number {
+  return captureKind === 'image' ? nativeImageZoomCeiling(fitScale) : ZOOM_MAX
 }
 
 /**
@@ -703,13 +719,20 @@ function snapZoom(target: number, from: number): number {
 
 /** Slider position <-> zoom factor: logarithmic, so each pixel is a ratio. */
 function zoomToSlider(zoom: number): number {
-  const span = Math.log(ZOOM_MAX / ZOOM_MIN)
-  return Math.round((Math.log(clampZoom(zoom) / ZOOM_MIN) / span) * ZOOM_SLIDER_MAX)
+  const ceiling = zoomCeiling()
+  const span = Math.log(ceiling / ZOOM_MIN)
+  return Math.round(
+    (Math.log(clampZoom(zoom, ceiling) / ZOOM_MIN) / span) * ZOOM_SLIDER_MAX,
+  )
 }
 
 function sliderToZoom(position: number): number {
   const t = Math.max(0, Math.min(1, position / ZOOM_SLIDER_MAX))
-  return clampZoom(ZOOM_MIN * Math.exp(t * Math.log(ZOOM_MAX / ZOOM_MIN)))
+  const ceiling = zoomCeiling()
+  return clampZoom(
+    ZOOM_MIN * Math.exp(t * Math.log(ceiling / ZOOM_MIN)),
+    ceiling,
+  )
 }
 
 /**
@@ -719,7 +742,8 @@ function sliderToZoom(position: number): number {
  */
 function applyControlZoom(target: number, snap = true): void {
   if (!loaded) return
-  const clamped = clampZoom(target)
+  const ceiling = zoomCeiling()
+  const clamped = clampZoom(target, ceiling)
   const next = snap ? snapZoom(clamped, viewport.zoom) : clamped
   // Fit is the whole board, centred: snapping to it has to undo the pan too, or
   // "Fit" would leave the board pushed half off screen at fit scale.
@@ -728,7 +752,7 @@ function applyControlZoom(target: number, snap = true): void {
     return
   }
   const r = stage.getBoundingClientRect()
-  viewport.zoomTo(next, r.left + r.width / 2, r.top + r.height / 2)
+  viewport.zoomTo(next, r.left + r.width / 2, r.top + r.height / 2, ceiling)
   markViewNavigated()
   syncPanCursor()
   syncSelectionUi()
@@ -737,16 +761,15 @@ function applyControlZoom(target: number, snap = true): void {
 }
 
 /**
- * Images open at native size whenever the zoom range can represent it.
- *
- * "Fit" is still one click/double-click away, but silently enlarging a small
- * crop or shrinking a screenshot merely to fill the editor makes the first
- * view lie about its pixels. Oversized images clamp at the closest supported
- * scale and remain pannable. Video keeps its whole-board opening unchanged.
+ * Images no larger than the content viewport open at native 1:1. Oversized
+ * images open contained, like video, so the complete captured resource is
+ * visible at a glance instead of beginning cropped and requiring a pan.
+ * Neither branch upscales or crops. Video keeps its whole-board fit opening.
  */
 function openInitialView(): void {
   if (captureKind === 'image') {
-    showNativeImageView()
+    if (initialImageViewMode(fitScale) === 'native') showNativeImageView()
+    else fitBoard()
     return
   }
   fitBoard()
@@ -769,7 +792,7 @@ function syncZoomUi(): void {
   // screen reader must read out.
   zoomSlider.setAttribute('aria-valuetext', label)
   zoomOutBtn.disabled = viewport.zoom <= ZOOM_MIN + 1e-6
-  zoomInBtn.disabled = viewport.zoom >= ZOOM_MAX - 1e-6
+  zoomInBtn.disabled = viewport.zoom >= zoomCeiling() - 1e-6
 }
 
 zoomInBtn.addEventListener('click', () => applyControlZoom(viewport.zoom * ZOOM_STEP))
@@ -3884,7 +3907,7 @@ window.addEventListener(
     }
     e.preventDefault()
     if (e.ctrlKey || e.metaKey) {
-      viewport.zoomAt(e.clientX, e.clientY, e.deltaY < 0)
+      viewport.zoomAt(e.clientX, e.clientY, e.deltaY < 0, zoomCeiling())
       markViewNavigated()
       syncPanCursor()
       schedulePaint() // stroke/handle sizes are zoom-dependent
@@ -4664,8 +4687,9 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
   baselineSig = editSig()
   layout()
   // VIDEO opens on the whole board, every captured display visible at once.
-  // IMAGE opens at (or, for an exceptionally large raster, as close as the
-  // supported zoom range permits to) native 1:1.
+  // IMAGE opens at native 1:1 only when it fits the content viewport; an
+  // oversized raster opens contained so none of the captured resource begins
+  // outside the viewport.
   //
   // This used to open framed on the focused display, because framing is sharper
   // — measured on a two-monitor desk, 0.578 vs 0.430 zoom, every control ~44%

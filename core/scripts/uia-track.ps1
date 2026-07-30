@@ -72,7 +72,10 @@ param(
   # the cost, exit. This is how the numbers in this header are checked.
   [int]$SelfTest = 0,
   # Deterministic protocol-wake check. No window, UIA provider, or input.
-  [switch]$WakeSelfTest
+  [switch]$WakeSelfTest,
+  # Deterministic walk-budget check. Exercises the exact production helpers
+  # without depending on a live accessibility provider.
+  [switch]$BudgetSelfTest
 )
 
 $ErrorActionPreference = 'Stop'
@@ -118,6 +121,9 @@ namespace CapturePack {
     /// When this window was last walked, on the lane's own clock — the floor
     /// between re-walks is enforced against this.
     public double LastWalkMs = -1e9;
+    /// Per-window CPU debt. A hostile provider delays only itself; healthy
+    /// foreground/peers remain independently eligible.
+    public double NextPassMs;
   }
 
   public static class ControlLane {
@@ -183,7 +189,25 @@ namespace CapturePack {
     /// Windows that repeatedly blew the timeout. Measured motivation: Docker
     /// Desktop, 10 elements, ~2050 ms per pass, every pass. One provider like
     /// that defines the whole lane's latency unless it is dropped.
-    static readonly HashSet<long> Blocked = new HashSet<long>();
+    /// Quarantine is deliberately time-bounded. A visible-set omission can be
+    /// mere occlusion, so only TTL expiry pardons it; unlike a session-long
+    /// HashSet this also bounds harm if Windows later reuses the handle value.
+    static readonly Dictionary<long, double> BlockedUntil =
+      new Dictionary<long, double>();
+    /// Virtual finish time for the whole lane's 3% CPU budget. Every UIA
+    /// operation adds its full cost here. Event-driven/initial structure walks
+    /// may temporarily borrow against it after their per-window 3 s floor, but
+    /// idle refresh and safety polling repay the debt before doing more work.
+    static double GlobalNextPassMs;
+    // Dirty work can borrow a bounded one-second CPU burst. Credit refills
+    // continuously at the lane duty rate; a storm therefore converges back to
+    // 3% instead of either running forever or freezing changes for the whole
+    // (possibly minutes-long) global debt horizon.
+    const double UrgentTokenCapacityMs = 1000.0;
+    const double UrgentAdmissionMs = 100.0;
+    static double UrgentTokensMs = UrgentTokenCapacityMs;
+    static double UrgentTokenRefillRate = 0.03;
+    static double LastUrgentTokenMs;
     /// Native accessibility events replace UIA's managed StructureChanged
     /// callback. Field crash evidence from rc.37:
     ///
@@ -196,6 +220,10 @@ namespace CapturePack {
     /// provider cannot construct an object in this process at all.
     static readonly ConcurrentDictionary<long, byte> Wanted =
       new ConcurrentDictionary<long, byte>();
+    /// The last complete visible set lane S requested. Unlike Wanted this keeps
+    /// quarantined handles, so the owner loop can retry one after its TTL
+    /// without requiring Core to resend an otherwise identical track command.
+    static readonly HashSet<long> Desired = new HashSet<long>();
     static readonly ConcurrentDictionary<long, byte> DirtySignals =
       new ConcurrentDictionary<long, byte>();
     static readonly AutoResetEvent DirtyWake = new AutoResetEvent(false);
@@ -210,6 +238,7 @@ namespace CapturePack {
     const uint EventObjectShow = 0x8002;
     const uint EventObjectHide = 0x8003;
     const uint EventObjectReorder = 0x8004;
+    const uint EventObjectLocationChange = 0x800B;
     const uint EventObjectNameChange = 0x800C;
     const uint WineventOutOfContext = 0x0000;
     const uint WineventSkipOwnProcess = 0x0002;
@@ -228,7 +257,7 @@ namespace CapturePack {
     public static double NowMs { get { return Math.Round(Clock.Elapsed.TotalMilliseconds, 1); } }
     public static double Busy { get { return BusyMs; } }
     public static int TrackedCount { get { return Tracked.Count; } }
-    public static int BlockedCount { get { return Blocked.Count; } }
+    public static int BlockedCount { get { return BlockedUntil.Count; } }
     public static string DpiMode = "unaware";
     public static volatile string ChangeSignalMode = "starting";
     public static int ReferenceCollectionCount { get { return ReferenceCollections; } }
@@ -319,13 +348,9 @@ namespace CapturePack {
       uint eventTime) {
       try {
         if (hwnd == IntPtr.Zero) return;
-        if (eventType != EventObjectCreate &&
-            eventType != EventObjectDestroy &&
-            eventType != EventObjectShow &&
-            eventType != EventObjectHide &&
-            eventType != EventObjectReorder &&
-            eventType != EventObjectNameChange) return;
         IntPtr root = GetAncestor(hwnd, GaRoot);
+        bool isTopLevel = root == IntPtr.Zero || root == hwnd;
+        if (!ShouldQueueWinEvent(eventType, objectId, childId, isTopLevel)) return;
         long target = (root == IntPtr.Zero ? hwnd : root).ToInt64();
         if (Wanted.ContainsKey(target)) {
           DirtySignals[target] = 0;
@@ -338,21 +363,47 @@ namespace CapturePack {
       }
     }
 
+    /// Top-level OBJID_WINDOW location events are ordinary window drags and
+    /// lane S already anchors every control to those deltas. Child/client
+    /// location changes are scroll/layout changes inside the window and must
+    /// wake lane A or historical picking goes stale.
+    public static bool ShouldQueueWinEvent(
+      uint eventType, int objectId, int childId, bool isTopLevel) {
+      if (eventType == EventObjectLocationChange) {
+        // Only the root HWND's own OBJID_WINDOW move is lane-S territory.
+        // A child HWND also reports OBJID_WINDOW/CHILDID_SELF, but its movement
+        // changes control geometry inside the root and must dirty lane A.
+        return !(objectId == 0 && childId == 0 && isTopLevel);
+      }
+      return eventType == EventObjectCreate ||
+        eventType == EventObjectDestroy ||
+        eventType == EventObjectShow ||
+        eventType == EventObjectHide ||
+        eventType == EventObjectReorder ||
+        eventType == EventObjectNameChange;
+    }
+
     public static void DrainChangeSignals() {
       foreach (long hwnd in DirtySignals.Keys) {
         byte ignored;
         if (!DirtySignals.TryRemove(hwnd, out ignored)) continue;
-        TrackedWindow window;
-        if (Tracked.TryGetValue(hwnd, out window)) window.Dirty = true;
+        MarkDirty(hwnd);
       }
     }
 
-    public static int NextDirtyDueInMs(int floorMs) {
+    public static void MarkDirty(long hwnd) {
+      TrackedWindow window;
+      if (Tracked.TryGetValue(hwnd, out window)) window.Dirty = true;
+    }
+
+    public static int NextWalkDueInMs(int floorMs) {
       double now = NowMs;
       int next = Int32.MaxValue;
       foreach (TrackedWindow window in Tracked.Values) {
-        if (!window.Dirty) continue;
-        double remaining = floorMs - (now - window.LastWalkMs);
+        if (!window.Dirty && window.Elements.Count > 0) continue;
+        if (window.LastWalkMs < 0) return 0;
+        int retryFloor = WalkRetryDelayMs(floorMs, window.Strikes);
+        double remaining = retryFloor - (now - window.LastWalkMs);
         if (remaining <= 0) return 0;
         next = Math.Min(next, (int)Math.Ceiling(remaining));
       }
@@ -414,27 +465,62 @@ namespace CapturePack {
       }
     }
 
+    static bool IsBlocked(long hwnd) {
+      double until;
+      if (!BlockedUntil.TryGetValue(hwnd, out until)) return false;
+      if (NowMs < until) return true;
+      BlockedUntil.Remove(hwnd);
+      return false;
+    }
+
     /// The tracked set, replaced wholesale. Lane S owns the question of which
     /// windows the user can actually see, so this lane never enumerates: it is
     /// TOLD, which is the design's "the expensive lane is driven by the cheap
     /// lane's dirty signal, never the other way round".
     public static void SetTracked(long[] hwnds) {
       HashSet<long> wanted = new HashSet<long>(hwnds);
+      Desired.Clear();
+      foreach (long h in hwnds) Desired.Add(h);
+      // A visible-set omission can mean occlusion, not destruction. Never
+      // pardon a pathological provider on omission alone; the bounded TTL is
+      // the reuse-safe authority when Win32 identity is unavailable here.
       foreach (long h in Wanted.Keys) {
         byte ignored;
         if (!wanted.Contains(h)) Wanted.TryRemove(h, out ignored);
       }
-      foreach (long h in hwnds) if (!Blocked.Contains(h)) Wanted[h] = 0;
+      foreach (long h in hwnds) if (!IsBlocked(h)) Wanted[h] = 0;
       List<long> drop = new List<long>();
       foreach (long h in Tracked.Keys) if (!wanted.Contains(h)) drop.Add(h);
       foreach (long h in drop) Untrack(h);
       foreach (long h in hwnds) {
-        if (Blocked.Contains(h) || Tracked.ContainsKey(h)) continue;
+        if (IsBlocked(h) || Tracked.ContainsKey(h)) continue;
         TrackedWindow w = new TrackedWindow();
         w.Hwnd = h;
         w.Dirty = true;              // walked on the next pass
         Tracked[h] = w;
       }
+    }
+
+    /// Re-admits expired quarantines from the last lane-S desired set. Core
+    /// intentionally suppresses duplicate visible-set messages, so TTL expiry
+    /// must be owned here rather than hidden inside SetTracked/IsBlocked.
+    public static int RestoreExpiredQuarantines() {
+      double now = NowMs;
+      List<long> restore = new List<long>();
+      foreach (KeyValuePair<long, double> entry in BlockedUntil) {
+        if (entry.Value <= now) restore.Add(entry.Key);
+      }
+      foreach (long h in restore) {
+        BlockedUntil.Remove(h);
+        if (!Desired.Contains(h)) continue;
+        Wanted[h] = 0;
+        if (Tracked.ContainsKey(h)) continue;
+        TrackedWindow w = new TrackedWindow();
+        w.Hwnd = h;
+        w.Dirty = true;
+        Tracked[h] = w;
+      }
+      return restore.Count;
     }
 
     static void Untrack(long h) {
@@ -453,6 +539,12 @@ namespace CapturePack {
     public static void Shutdown() {
       List<long> all = new List<long>(Tracked.Keys);
       foreach (long h in all) Untrack(h);
+      Desired.Clear();
+      BlockedUntil.Clear();
+      GlobalNextPassMs = 0;
+      UrgentTokensMs = UrgentTokenCapacityMs;
+      UrgentTokenRefillRate = 0.03;
+      LastUrgentTokenMs = NowMs;
       StopChangeSignal();
     }
 
@@ -461,22 +553,51 @@ namespace CapturePack {
     ///
     /// FindAll with no cache request on purpose — see the file header for the
     /// A/B that rules FindAllBuildCache out.
-    public static string Walk(long hwnd, int maxElements, int timeoutMs) {
+    public static string Walk(long hwnd, int maxElements, int timeoutMs, int maxStrikes) {
       TrackedWindow w;
       if (!Tracked.TryGetValue(hwnd, out w)) return null;
       long t0 = Stopwatch.GetTimestamp();
       w.Dirty = false;
-      w.LastWalkMs = NowMs;
       AutomationElementCollection found = null;
+      AutomationElement root = null;
       try {
-        AutomationElement root = AutomationElement.FromHandle(new IntPtr(hwnd));
-        if (root == null) { Charge(t0); return null; }
-        found = root.FindAll(TreeScope.Subtree, Condition.TrueCondition);
+        root = AutomationElement.FromHandle(new IntPtr(hwnd));
       } catch {
+        double failedMs = Elapsed(t0);
+        RecordWalkOutcome(hwnd, failedMs, timeoutMs, true, false, 0, maxStrikes);
         Charge(t0);
         return null;
       }
+      if (root == null) {
+        double failedMs = Elapsed(t0);
+        RecordWalkOutcome(hwnd, failedMs, timeoutMs, true, false, 0, maxStrikes);
+        Charge(t0);
+        return null;
+      }
+      long findAllStart = Stopwatch.GetTimestamp();
+      double findAllMs;
+      try {
+        found = root.FindAll(TreeScope.Subtree, Condition.TrueCondition);
+      } catch {
+        findAllMs = Elapsed(findAllStart);
+        double failedMs = Elapsed(t0);
+        RecordWalkOutcome(
+          hwnd, failedMs, timeoutMs, true, false, findAllMs, maxStrikes);
+        Charge(t0);
+        return null;
+      }
+      findAllMs = Elapsed(findAllStart);
       double walkMs = Elapsed(t0);
+      int n;
+      try {
+        n = found.Count;
+      } catch {
+        double failedMs = Elapsed(t0);
+        RecordWalkOutcome(
+          hwnd, failedMs, timeoutMs, true, false, findAllMs, maxStrikes);
+        Charge(t0);
+        return null;
+      }
       w.Version++;
       NoteReleasedReferences(w.Elements.Count);
       w.Elements.Clear();
@@ -489,8 +610,21 @@ namespace CapturePack {
          .Append("\",\"v\":").Append(w.Version)
          .Append(",\"e\":[");
       int kept = 0;
-      int n = found.Count;
-      for (int i = 0; i < n && kept < maxElements; i++) {
+      int scanned = 0;
+      bool scanTimedOut = false;
+      // FindAll is a provider call and cannot be interrupted safely in this
+      // process. Once it returns over budget, do not compound the stall with
+      // hundreds or thousands of property reads.
+      bool walkTimedOut = walkMs > timeoutMs;
+      for (int i = 0; !walkTimedOut && i < n && kept < maxElements; i++) {
+        // This is deliberately based on SCANNED elements, not kept elements.
+        // Offscreen, invalid, and throwing wrappers do not increment `kept`;
+        // checking kept every 32 let pathological trees run to completion.
+        if (ScanBudgetExpired(scanned, Elapsed(t0), timeoutMs)) {
+          scanTimedOut = true;
+          break;
+        }
+        scanned = i + 1;
         AutomationElement el;
         try { el = found[i]; } catch { continue; }
         if (el == null) continue;
@@ -516,17 +650,41 @@ namespace CapturePack {
         w.Elements.Add(el);
         w.LastRects.Add(r);
         kept++;
-        // The timeout is checked INSIDE the emit loop as well as around the
-        // walk: a provider can be slow per property, not only per FindAll.
-        if ((kept & 31) == 0 && Elapsed(t0) > timeoutMs) break;
       }
       // FindAll materialises wrappers for every result. Only `kept` remains in
       // the live tree; the suffix is unmanaged pressure the CLR cannot measure.
       NoteReleasedReferences(Math.Max(0, n - kept));
-      Out.Append("]}");
       double totalMs = Elapsed(t0);
-      w.LastPassMs = totalMs;
-      if (totalMs > timeoutMs) w.Strikes++; else w.Strikes = 0;
+      string reason = WalkTruncationReason(
+        walkMs,
+        totalMs,
+        timeoutMs,
+        scanTimedOut,
+        scanned,
+        n,
+        kept,
+        maxElements);
+      bool truncated = reason.Length > 0;
+      // A prefix is not a complete tree. Core must be able to distinguish the
+      // common 32-element timeout from an honest, fully walked window; without
+      // this bit the prefix was persisted as `tree: collected` and silently
+      // suppressed every later fallback for the same window.
+      Out.Append("],\"truncated\":").Append(truncated ? "true" : "false")
+         .Append(",\"scanned\":").Append(scanned)
+         .Append(",\"total\":").Append(n)
+         .Append(",\"elapsedMs\":").Append(F(totalMs));
+      if (reason.Length > 0) {
+        Out.Append(",\"reason\":");
+        AppendString(reason);
+      }
+      Out.Append('}');
+      // A deterministic element cap cannot improve by retrying the identical
+      // tree and is not provider failure. Keep its honest truncated wire bit,
+      // but reserve retry/backoff/quarantine for timeout or genuinely
+      // incomplete observations.
+      bool retryableTruncation = truncated && reason != "element-cap";
+      RecordWalkOutcome(
+        hwnd, totalMs, timeoutMs, false, retryableTruncation, findAllMs, maxStrikes);
       Charge(t0);
       return Out.ToString();
     }
@@ -547,7 +705,10 @@ namespace CapturePack {
       int movedCount = 0, diedCount = 0;
       for (int i = 0; i < w.Elements.Count; i++) {
         if (w.Dead.Contains(i)) continue;
-        if ((i & 31) == 0 && Elapsed(t0) > timeoutMs) break;
+        // Current is a provider call and cannot itself be interrupted. Check
+        // after every returned element so a slow one cannot authorize another
+        // batch of 31 calls beyond the deadline.
+        if (i > 0 && Elapsed(t0) > timeoutMs) break;
         double[] last = w.LastRects[i];
         try {
           System.Windows.Rect b = w.Elements[i].Current.BoundingRectangle;
@@ -579,8 +740,7 @@ namespace CapturePack {
         }
       }
       double totalMs = Elapsed(t0);
-      w.LastPassMs = totalMs;
-      if (totalMs > timeoutMs) w.Strikes++; else w.Strikes = 0;
+      RecordRefreshOutcome(hwnd, totalMs, timeoutMs);
       Charge(t0);
       if (movedCount == 0 && diedCount == 0) return null;
       Out.Length = 0;
@@ -595,17 +755,134 @@ namespace CapturePack {
 
     /// Windows to visit this pass, worst-offender-first protection applied.
     /// `focus` is visited every pass; the rest rotate.
-    public static long[] Due(long focus, int rotation) {
+    public static long[] Due(long focus, int rotation, int floorMs, int safetyMs) {
       List<long> order = new List<long>();
-      if (focus != 0 && Tracked.ContainsKey(focus)) order.Add(focus);
+      if (focus != 0 && OperationDue(focus, focus, floorMs, safetyMs)) order.Add(focus);
       List<long> others = new List<long>();
       foreach (long h in Tracked.Keys) {
         if (h == focus) continue;
         TrackedWindow w = Tracked[h];
+        if (!OperationDue(h, focus, floorMs, safetyMs)) continue;
         if (w.Dirty) order.Add(h); else others.Add(h);
       }
       if (others.Count > 0) order.Add(others[rotation % others.Count]);
       return order.ToArray();
+    }
+
+    static void RefillUrgentTokens(double now) {
+      double elapsed = Math.Max(0, now - LastUrgentTokenMs);
+      if (elapsed > 0) {
+        UrgentTokensMs = Math.Min(
+          UrgentTokenCapacityMs,
+          UrgentTokensMs + elapsed * UrgentTokenRefillRate);
+        LastUrgentTokenMs = now;
+      }
+    }
+
+    static bool OperationDue(long hwnd, long focus, int floorMs, int safetyMs) {
+      TrackedWindow w;
+      double now = NowMs;
+      RefillUrgentTokens(now);
+      if (!Tracked.TryGetValue(hwnd, out w) || now < w.NextPassMs) return false;
+      bool needsWalk = NeedsWalk(hwnd, floorMs, safetyMs);
+      // A real structure signal, a never-walked window, and a due foreground
+      // structure walk are latency-sensitive. They may borrow against the
+      // global token debt; their measured cost is still charged afterwards.
+      bool urgentWalk =
+        needsWalk && (w.Dirty || w.LastWalkMs < 0 || hwnd == focus);
+      if (urgentWalk && UrgentTokensMs >= UrgentAdmissionMs) return true;
+      if (now < GlobalNextPassMs) return false;
+      return w.Elements.Count > 0 || needsWalk;
+    }
+
+    /// Re-check a Due snapshot immediately before provider entry. A large
+    /// initial dirty burst can consume its urgent allowance within one array;
+    /// without this check every remaining HWND in that stale snapshot could
+    /// overdraw the ceiling.
+    public static bool IsOperationDue(
+      long hwnd, long focus, int floorMs, int safetyMs) {
+      return OperationDue(hwnd, focus, floorMs, safetyMs);
+    }
+
+    /// Earliest real UIA operation, combining per-window CPU debt with the
+    /// structural retry floor for empty/failed trees.
+    public static int NextOperationDueInMs(int floorMs, int safetyMs) {
+      double now = NowMs;
+      RefillUrgentTokens(now);
+      int next = Int32.MaxValue;
+      foreach (TrackedWindow w in Tracked.Values) {
+        bool needsWalk = NeedsWalk(w.Hwnd, floorMs, safetyMs);
+        double remaining = Math.Max(0, w.NextPassMs - now);
+        bool urgentIntent = w.Dirty || w.LastWalkMs < 0;
+        if ((w.Elements.Count == 0 || w.Dirty) && w.LastWalkMs >= 0) {
+          int retryFloor = WalkRetryDelayMs(floorMs, w.Strikes);
+          remaining = Math.Max(remaining, retryFloor - (now - w.LastWalkMs));
+        }
+        if (urgentIntent) {
+          double tokenWait =
+            Math.Max(0, UrgentAdmissionMs - UrgentTokensMs) /
+            Math.Max(0.000001, UrgentTokenRefillRate);
+          remaining = Math.Max(remaining, tokenWait);
+        } else {
+          remaining = Math.Max(remaining, GlobalNextPassMs - now);
+        }
+        if (remaining <= 0) return 0;
+        next = Math.Min(next, (int)Math.Ceiling(remaining));
+      }
+      return next;
+    }
+
+    /// Charge both the provider and the lane. The per-window clock isolates a
+    /// hostile provider. The global virtual finish time makes quiet
+    /// refresh/safety work repay every burst at the configured aggregate duty.
+    /// An event-driven structure walk can bypass this global clock, but never
+    /// escapes accounting: borrowing appends its complete duty slot.
+    public static int DeferWindow(long hwnd, double passMs, double dutyTarget) {
+      TrackedWindow w;
+      if (!Tracked.TryGetValue(hwnd, out w) || passMs <= 0) return 0;
+      double now = NowMs;
+      int cooldownMs = DutyCooldownMs(passMs, dutyTarget);
+      RefillUrgentTokens(now);
+      UrgentTokenRefillRate = dutyTarget > 0 && dutyTarget < 1
+        ? dutyTarget
+        : UrgentTokenRefillRate;
+      w.NextPassMs = now + cooldownMs;
+      if (GlobalNextPassMs > now) {
+        UrgentTokensMs = Math.Max(0, UrgentTokensMs - passMs);
+        GlobalNextPassMs += passMs + cooldownMs;
+      } else {
+        GlobalNextPassMs = now + cooldownMs;
+      }
+      return cooldownMs;
+    }
+
+    public static int WindowDebtRemainingMs(long hwnd) {
+      TrackedWindow w;
+      if (!Tracked.TryGetValue(hwnd, out w)) return 0;
+      return (int)Math.Max(0, Math.Ceiling(w.NextPassMs - NowMs));
+    }
+
+    public static int GlobalDebtRemainingMs {
+      get { return (int)Math.Max(0, Math.Ceiling(GlobalNextPassMs - NowMs)); }
+    }
+
+    public static double UrgentTokens {
+      get {
+        RefillUrgentTokens(NowMs);
+        return UrgentTokensMs;
+      }
+    }
+
+    public static double UrgentTokenCapacity {
+      get { return UrgentTokenCapacityMs; }
+    }
+
+    public static double UrgentAdmission {
+      get { return UrgentAdmissionMs; }
+    }
+
+    public static double UrgentRefillFor(double elapsedMs, double dutyTarget) {
+      return Math.Max(0, elapsedMs) * Math.Max(0, dutyTarget);
     }
 
     /// Dirty AND allowed to be re-walked yet. A window that changed again
@@ -613,9 +890,14 @@ namespace CapturePack {
     public static bool NeedsWalk(long hwnd, int floorMs, int safetyMs) {
       TrackedWindow w;
       if (!Tracked.TryGetValue(hwnd, out w)) return false;
-      if (w.Elements.Count == 0) return true;          // never walked: no floor
+      if (w.LastWalkMs < 0) return true;               // genuinely never tried
       double age = NowMs - w.LastWalkMs;
-      if (w.Dirty) return age >= floorMs;
+      int retryFloor = WalkRetryDelayMs(floorMs, w.Strikes);
+      // A successful empty tree and a failed provider both have no held
+      // references to refresh. They still obey cadence; failures exponentially
+      // back off instead of calling FromHandle/FindAll every 20 ms.
+      if (w.Elements.Count == 0) return age >= retryFloor;
+      if (w.Dirty) return age >= retryFloor;
       // A process where SetWinEventHook is unavailable still remains correct,
       // just slower. With the hook active, a sparse safety walk heals providers
       // that fail to raise accessibility events without turning polling into the
@@ -640,21 +922,139 @@ namespace CapturePack {
     /// what Rule 4 forbids.
     public static double LastBlockedPassMs;
 
-    /// Three strikes and the window is dropped for the rest of the session, with
-    /// its handles released. Returns the blocked handle for logging, or 0.
-    public static long BlockIfHopeless(long hwnd, int maxStrikes) {
+    /// Three strikes quarantine a window and release its handles. Only the
+    /// bounded TTL clears it: omission from the visible set may be temporary
+    /// occlusion rather than destruction, while TTL bounds HWND-reuse harm.
+    public static long BlockIfHopeless(long hwnd, int maxStrikes, int blockTtlMs) {
       TrackedWindow w;
       if (!Tracked.TryGetValue(hwnd, out w)) return 0;
       if (w.Strikes < maxStrikes) return 0;
       LastBlockedPassMs = w.LastPassMs;
-      Blocked.Add(hwnd);
+      // Do not forget a provider's earned CPU debt when Untrack destroys its
+      // TrackedWindow. Otherwise a 2050 ms offender returns every fixed TTL
+      // and recreates the same expensive call indefinitely.
+      BlockedUntil[hwnd] = Math.Max(
+        NowMs + Math.Max(1, blockTtlMs),
+        w.NextPassMs);
       Untrack(hwnd);
       return hwnd;
+    }
+
+    public static int BlockedRemainingMs(long hwnd) {
+      double until;
+      if (!BlockedUntil.TryGetValue(hwnd, out until)) return 0;
+      return (int)Math.Max(0, Math.Ceiling(until - NowMs));
     }
 
     public static double LastPassMs(long hwnd) {
       TrackedWindow w;
       return Tracked.TryGetValue(hwnd, out w) ? w.LastPassMs : 0;
+    }
+
+    public static int StrikeCount(long hwnd) {
+      TrackedWindow w;
+      return Tracked.TryGetValue(hwnd, out w) ? w.Strikes : 0;
+    }
+
+    /// A failed walk backs off exponentially. A healthy empty tree uses the
+    /// ordinary re-walk floor (strike zero), so "empty" is an observation, not
+    /// a synonym for "never attempted".
+    public static int WalkRetryDelayMs(int floorMs, int strikes) {
+      long multiplier = 1L << Math.Min(4, Math.Max(0, strikes));
+      return (int)Math.Min(Int32.MaxValue, Math.Max(0L, (long)floorMs) * multiplier);
+    }
+
+    /// FindAll cannot be cancelled. If one call has already consumed the whole
+    /// allowance represented by all normal strikes, repeating it cannot add
+    /// enough evidence to justify the CPU cost: make it immediately hopeless.
+    public static bool SevereFindAllOverrun(
+      double findAllMs,
+      int timeoutMs,
+      int maxStrikes) {
+      return findAllMs >= (double)Math.Max(1, timeoutMs) * Math.Max(1, maxStrikes);
+    }
+
+    /// Every walk outcome, including a null root and provider exception, passes
+    /// through this one accounting path. It records the retry epoch as well as
+    /// cost, so NeedsWalk can enforce cadence even when no tree was produced.
+    public static void RecordWalkOutcome(
+      long hwnd,
+      double passMs,
+      int timeoutMs,
+      bool failed,
+      bool incomplete,
+      double findAllMs,
+      int maxStrikes) {
+      TrackedWindow w;
+      if (!Tracked.TryGetValue(hwnd, out w)) return;
+      w.LastWalkMs = NowMs;
+      w.LastPassMs = passMs;
+      int ceiling = Math.Max(1, maxStrikes);
+      bool retryRequired = failed || incomplete || passMs > timeoutMs;
+      // Preserve retry intent even when a failed re-walk still has an older
+      // complete set of held references. Refresh may keep those rectangles
+      // useful, but it cannot discover the new controls that prompted re-walk.
+      w.Dirty = retryRequired;
+      if (!retryRequired) {
+        w.Strikes = 0;
+      } else if (SevereFindAllOverrun(findAllMs, timeoutMs, ceiling)) {
+        w.Strikes = ceiling;
+      } else {
+        w.Strikes = Math.Min(ceiling, w.Strikes + 1);
+      }
+    }
+
+    /// A cheap successful rectangle refresh must not pardon a failed or
+    /// incomplete structure walk: refresh can move old references but cannot
+    /// discover the missing new controls. Only a complete Walk clears Dirty.
+    public static void RecordRefreshOutcome(long hwnd, double passMs, int timeoutMs) {
+      TrackedWindow w;
+      if (!Tracked.TryGetValue(hwnd, out w)) return;
+      w.LastPassMs = passMs;
+      if (passMs > timeoutMs) {
+        w.Strikes++;
+      } else if (!w.Dirty) {
+        w.Strikes = 0;
+      }
+    }
+
+    public static bool RetryPending(long hwnd) {
+      TrackedWindow w;
+      return Tracked.TryGetValue(hwnd, out w) && w.Dirty;
+    }
+
+    /// Check after every attempted element. One provider property call itself
+    /// cannot be cancelled, but once it returns no second Current access is
+    /// allowed to begin after the deadline.
+    public static bool ScanBudgetExpired(int scanned, double elapsedMs, int timeoutMs) {
+      return scanned > 0 && elapsedMs > timeoutMs;
+    }
+
+    /// Work/sleep ratio required for an actual rolling duty target. The owner
+    /// loop retains this cooldown across heartbeat-only iterations instead of
+    /// losing its debt when a long wait is split to emit status.
+    public static int DutyCooldownMs(double passMs, double dutyTarget) {
+      if (passMs <= 0 || dutyTarget <= 0 || dutyTarget >= 1) return 0;
+      return (int)Math.Ceiling(passMs * ((1.0 / dutyTarget) - 1.0));
+    }
+
+    /// One source of truth for both the wire verdict and the deterministic
+    /// PowerShell probe. Earlier phases take precedence in the diagnostic.
+    public static string WalkTruncationReason(
+      double walkMs,
+      double totalMs,
+      int timeoutMs,
+      bool scanTimedOut,
+      int scanned,
+      int total,
+      int kept,
+      int maxElements) {
+      if (walkMs > timeoutMs) return "findall-timeout";
+      if (scanTimedOut) return "scan-timeout";
+      if (totalMs > timeoutMs) return "total-timeout";
+      if (scanned < total && kept >= maxElements) return "element-cap";
+      if (scanned < total) return "incomplete";
+      return "";
     }
 
     static void Charge(long t0) { BusyMs += Elapsed(t0); }
@@ -792,13 +1192,17 @@ $WindowTimeoutMs = 120
 $ReWalkFloorMs = 3000
 $SafetyReWalkMs = 300000
 $MaxStrikes = 3
+# A quarantined provider gets another chance after one minute even if lane S
+# never observed a missing-handle sample between destruction and HWND reuse.
+$BlockedTtlMs = 60000
 $MaxElementsPerWindow = 400
 $ReferenceCollectionThreshold = 2000
 $ReferenceCollectionFloorMs = 15000
-# The floor and ceiling on the self-paced sleep, so the lane neither spins nor
-# disappears for a minute after one pathological pass.
+# The floor and ceiling on one blocking wait. Cooldown debt itself is retained
+# independently and status heartbeats split a long wait, so this ceiling no
+# longer weakens the 3% duty target.
 $MinSleepMs = 20
-$MaxSleepMs = 2000
+$MaxSleepMs = 120000
 
 function Write-Line([string]$line) {
   [Console]::Out.Write($line)
@@ -816,6 +1220,307 @@ if ($WakeSelfTest) {
     $(if ($woke) { 'true' } else { 'false' }) +
     ',"elapsedMs":' + [Math]::Round($wakeClock.Elapsed.TotalMilliseconds, 3) + '}')
   exit $(if ($woke) { 0 } else { 1 })
+}
+
+if ($BudgetSelfTest) {
+  $cadenceBefore = [CapturePack.ControlLane]::ScanBudgetExpired(0, 121, 120)
+  $cadenceAt = [CapturePack.ControlLane]::ScanBudgetExpired(1, 121, 120)
+  $findAllReason = [CapturePack.ControlLane]::WalkTruncationReason(
+    121, 121, 120, $false, 0, 5000, 0, 400)
+  $scanReason = [CapturePack.ControlLane]::WalkTruncationReason(
+    10, 121, 120, $true, 1, 5000, 0, 400)
+  $totalReason = [CapturePack.ControlLane]::WalkTruncationReason(
+    10, 121, 120, $false, 7, 7, 0, 400)
+  $capReason = [CapturePack.ControlLane]::WalkTruncationReason(
+    10, 20, 120, $false, 400, 5000, 400, 400)
+  $completeReason = [CapturePack.ControlLane]::WalkTruncationReason(
+    10, 20, 120, $false, 7, 7, 0, 400)
+  $severeBefore = [CapturePack.ControlLane]::SevereFindAllOverrun(359, 120, 3)
+  $severeAt = [CapturePack.ControlLane]::SevereFindAllOverrun(360, 120, 3)
+  $cooldown100 = [CapturePack.ControlLane]::DutyCooldownMs(100, 0.03)
+  $cooldown120 = [CapturePack.ControlLane]::DutyCooldownMs(120, 0.03)
+  $cooldownMulti = [CapturePack.ControlLane]::DutyCooldownMs(360, 0.03)
+  $duty100 = 100 / (100 + $cooldown100)
+  $duty120 = 120 / (120 + $cooldown120)
+  $dutyMulti = 360 / (360 + $cooldownMulti)
+
+  # Fast FromHandle/null/throw-equivalent failures still count, back off, and
+  # eventually quarantine. No real HWND or accessibility provider is touched.
+  $failureHwnd = [long]910001
+  [CapturePack.ControlLane]::SetTracked([long[]]@($failureHwnd))
+  $firstWalkDue = [CapturePack.ControlLane]::NeedsWalk($failureHwnd, 3000, 300000)
+  [CapturePack.ControlLane]::RecordWalkOutcome(
+    $failureHwnd, 1, 120, $true, $false, 0, 3)
+  $failedStrikesAfterOne = [CapturePack.ControlLane]::StrikeCount($failureHwnd)
+  $failedLastPassMs = [CapturePack.ControlLane]::LastPassMs($failureHwnd)
+  $failedDueImmediately = [CapturePack.ControlLane]::NeedsWalk(
+    $failureHwnd, 3000, 300000)
+  $failedRetryMs = [CapturePack.ControlLane]::WalkRetryDelayMs(
+    3000, $failedStrikesAfterOne)
+  $failedNextDueMs = [CapturePack.ControlLane]::NextWalkDueInMs(3000)
+  [CapturePack.ControlLane]::RecordWalkOutcome(
+    $failureHwnd, 1, 120, $true, $false, 0, 3)
+  [CapturePack.ControlLane]::RecordWalkOutcome(
+    $failureHwnd, 1, 120, $true, $false, 0, 3)
+  $failureBlocked = [CapturePack.ControlLane]::BlockIfHopeless(
+    $failureHwnd, 3, 1)
+
+  # An honest empty result is a completed pass too: it retries at the ordinary
+  # cadence rather than hammering NeedsWalk on every 20 ms owner loop.
+  $emptyHwnd = [long]910002
+  [CapturePack.ControlLane]::SetTracked([long[]]@($emptyHwnd))
+  [CapturePack.ControlLane]::RecordWalkOutcome(
+    $emptyHwnd, 1, 120, $false, $false, 0, 3)
+  $emptyDueImmediately = [CapturePack.ControlLane]::NeedsWalk(
+    $emptyHwnd, 3000, 300000)
+  $emptyRetryMs = [CapturePack.ControlLane]::WalkRetryDelayMs(3000, 0)
+  $emptyNextDueMs = [CapturePack.ControlLane]::NextWalkDueInMs(3000)
+
+  # A failed/incomplete re-walk keeps retry intent even if old references can
+  # still be refreshed cheaply. Refresh is not structural discovery and must
+  # not clear that walk's strike.
+  $retryHwnd = [long]910005
+  [CapturePack.ControlLane]::SetTracked([long[]]@($retryHwnd))
+  [CapturePack.ControlLane]::RecordWalkOutcome(
+    $retryHwnd, 1, 120, $false, $false, 0, 3)
+  [CapturePack.ControlLane]::RecordWalkOutcome(
+    $retryHwnd, 20, 120, $false, $true, 20, 3)
+  $incompleteRetryPending = [CapturePack.ControlLane]::RetryPending($retryHwnd)
+  $incompleteStrikes = [CapturePack.ControlLane]::StrikeCount($retryHwnd)
+  [CapturePack.ControlLane]::RecordRefreshOutcome($retryHwnd, 1, 120)
+  $retryAfterRefresh = [CapturePack.ControlLane]::RetryPending($retryHwnd)
+  $strikesAfterRefresh = [CapturePack.ControlLane]::StrikeCount($retryHwnd)
+  $capHwnd = [long]910006
+  [CapturePack.ControlLane]::SetTracked([long[]]@($capHwnd))
+  [CapturePack.ControlLane]::RecordWalkOutcome(
+    $capHwnd, 20, 120, $false, $false, 20, 3)
+  $capRetryPending = [CapturePack.ControlLane]::RetryPending($capHwnd)
+  $capStrikes = [CapturePack.ControlLane]::StrikeCount($capHwnd)
+
+  # Foreground is always the first visit. Switching focus changes the next
+  # pass immediately, and quarantining a hopeless foreground leaves the other
+  # visible tracker due in the same owner loop.
+  # Fresh handles avoid inheriting the retry/cap fixtures above.
+  $foregroundHwnd = [long]920003
+  $peerHwnds = [long[]](920004..920013)
+  $otherHwnd = $peerHwnds[0]
+  [CapturePack.ControlLane]::SetTracked(
+    [long[]](@($foregroundHwnd) + $peerHwnds))
+  $foregroundOrder = [CapturePack.ControlLane]::Due(
+    $foregroundHwnd, 0, 3000, 300000)
+  $switchedOrder = [CapturePack.ControlLane]::Due(
+    $otherHwnd, 0, 3000, 300000)
+  $hostilePeerSamePass =
+    $foregroundOrder.Length -gt 1 -and $foregroundOrder[1] -eq $otherHwnd
+  $hostileDebtMs = [CapturePack.ControlLane]::DeferWindow(
+    $foregroundHwnd, 2050, 0.03)
+  $peerOrderDuringHostileDebt = [CapturePack.ControlLane]::Due(
+    $foregroundHwnd, 0, 3000, 300000)
+  $healthyPeersDuringDebt = @(
+    $peerOrderDuringHostileDebt |
+      Where-Object { $_ -in $peerHwnds }
+  ).Count
+  $hostileExcludedDuringDebt =
+    $foregroundHwnd -notin $peerOrderDuringHostileDebt
+  [CapturePack.ControlLane]::RecordWalkOutcome(
+    $foregroundHwnd, 500, 120, $false, $false, 500, 3)
+  $severeStrikes = [CapturePack.ControlLane]::StrikeCount($foregroundHwnd)
+  $severeBlocked = [CapturePack.ControlLane]::BlockIfHopeless(
+    $foregroundHwnd, 3, 250)
+  $hostileBlockedDebtMs =
+    [CapturePack.ControlLane]::BlockedRemainingMs($foregroundHwnd)
+  $remainingOrder = [CapturePack.ControlLane]::Due(
+    $foregroundHwnd, 0, 3000, 300000)
+
+  # Exercise the real scheduler with ten healthy dirty windows after the
+  # 2050 ms offender has put the global lane deeply in debt. Alternating the
+  # measured 32/100 ms classes pins both sides of the latency contract.
+  $healthyCosts = [double[]](32,100,32,100,32,100,32,100,32,100)
+  $maxHealthyWindowDebtMs = 0
+  $healthyExecutedDuringHostileDebt = 0
+  $healthyCostMs = 0.0
+  for ($i = 0; $i -lt $peerHwnds.Length; $i++) {
+    $peer = $peerHwnds[$i]
+    if (-not [CapturePack.ControlLane]::IsOperationDue(
+      $peer, $foregroundHwnd, 3000, 300000)) { continue }
+    $cost = $healthyCosts[$i]
+    $healthyCostMs += $cost
+    [void][CapturePack.ControlLane]::DeferWindow($peer, $cost, 0.03)
+    [CapturePack.ControlLane]::RecordWalkOutcome(
+      $peer, $cost, 120, $false, $false, 0, 3)
+    [CapturePack.ControlLane]::MarkDirty($peer)
+    $windowDebt = [CapturePack.ControlLane]::WindowDebtRemainingMs($peer)
+    $maxHealthyWindowDebtMs = [Math]::Max(
+      $maxHealthyWindowDebtMs, $windowDebt)
+    $healthyExecutedDuringHostileDebt++
+  }
+  $globalDebtAfterDirtyBurstMs =
+    [CapturePack.ControlLane]::GlobalDebtRemainingMs
+  $nextDirtyOperationDueMs =
+    [CapturePack.ControlLane]::NextOperationDueInMs(3000, 300000)
+  $burstCpuMs = 2050.0 + $healthyCostMs
+  $steadyIdleDuty = $burstCpuMs / (
+    $burstCpuMs + [Math]::Max(1, $globalDebtAfterDirtyBurstMs))
+  $urgentTokensAfterHealthyMs =
+    [CapturePack.ControlLane]::UrgentTokens
+  $urgentTokenCapacityMs =
+    [CapturePack.ControlLane]::UrgentTokenCapacity
+  $urgentAdmissionMs =
+    [CapturePack.ControlLane]::UrgentAdmission
+  $urgentRefillAfter3sMs =
+    [CapturePack.ControlLane]::UrgentRefillFor(3000, 0.03)
+  $locationChildQueued =
+    [CapturePack.ControlLane]::ShouldQueueWinEvent(0x800B, -4, 0, $true)
+  $locationChildHwndQueued =
+    [CapturePack.ControlLane]::ShouldQueueWinEvent(0x800B, 0, 0, $false)
+  $locationWindowQueued =
+    [CapturePack.ControlLane]::ShouldQueueWinEvent(0x800B, 0, 0, $true)
+
+  # Omission may be occlusion, so it does not pardon a slow provider. With the
+  # same desired set restored before expiry, the owner loop itself re-admits
+  # the HWND after TTL without needing another Core track message.
+  # Use a debt-free fixture here: the offender above intentionally must NOT
+  # return at this short TTL because its longer per-HWND debt survives Untrack.
+  [CapturePack.ControlLane]::Shutdown()
+  $ttlHwnd = [long]930001
+  [CapturePack.ControlLane]::SetTracked([long[]]@($ttlHwnd))
+  [CapturePack.ControlLane]::RecordWalkOutcome(
+    $ttlHwnd, 1, 120, $true, $false, 0, 3)
+  [CapturePack.ControlLane]::RecordWalkOutcome(
+    $ttlHwnd, 1, 120, $true, $false, 0, 3)
+  [CapturePack.ControlLane]::RecordWalkOutcome(
+    $ttlHwnd, 1, 120, $true, $false, 0, 3)
+  [void][CapturePack.ControlLane]::BlockIfHopeless($ttlHwnd, 3, 250)
+  [CapturePack.ControlLane]::SetTracked([long[]]@())
+  $omissionKeepsQuarantine = [CapturePack.ControlLane]::BlockedCount -gt 0
+  [CapturePack.ControlLane]::SetTracked([long[]]@($ttlHwnd))
+  $reusedBeforeTtl = [CapturePack.ControlLane]::NeedsWalk(
+    $ttlHwnd, 3000, 300000)
+  Start-Sleep -Milliseconds 300
+  $ttlRestored = [CapturePack.ControlLane]::RestoreExpiredQuarantines()
+  $reusedAfterTtl = [CapturePack.ControlLane]::NeedsWalk(
+    $ttlHwnd, 3000, 300000)
+
+  Write-Line (([ordered]@{
+    event = 'budget-selftest'
+    cadenceBefore = $cadenceBefore
+    cadenceAt = $cadenceAt
+    findAllReason = $findAllReason
+    scanReason = $scanReason
+    totalReason = $totalReason
+    capReason = $capReason
+    completeReason = $completeReason
+    severeBefore = $severeBefore
+    severeAt = $severeAt
+    cooldown100 = $cooldown100
+    cooldown120 = $cooldown120
+    cooldownMulti = $cooldownMulti
+    duty100 = $duty100
+    duty120 = $duty120
+    dutyMulti = $dutyMulti
+    firstWalkDue = $firstWalkDue
+    failedStrikesAfterOne = $failedStrikesAfterOne
+    failedLastPassMs = $failedLastPassMs
+    failedDueImmediately = $failedDueImmediately
+    failedRetryMs = $failedRetryMs
+    failedNextDueMs = $failedNextDueMs
+    failureBlocked = $failureBlocked
+    emptyDueImmediately = $emptyDueImmediately
+    emptyRetryMs = $emptyRetryMs
+    emptyNextDueMs = $emptyNextDueMs
+    incompleteRetryPending = $incompleteRetryPending
+    incompleteStrikes = $incompleteStrikes
+    retryAfterRefresh = $retryAfterRefresh
+    strikesAfterRefresh = $strikesAfterRefresh
+    capRetryPending = $capRetryPending
+    capStrikes = $capStrikes
+    foregroundFirst = $(if ($foregroundOrder.Length -gt 0) {
+      $foregroundOrder[0]
+    } else { 0 })
+    switchedForegroundFirst = $(if ($switchedOrder.Length -gt 0) {
+      $switchedOrder[0]
+    } else { 0 })
+    hostilePeerSamePass = $hostilePeerSamePass
+    hostileDebtMs = $hostileDebtMs
+    hostileBlockedDebtMs = $hostileBlockedDebtMs
+    healthyPeersDuringDebt = $healthyPeersDuringDebt
+    healthyExecutedDuringHostileDebt = $healthyExecutedDuringHostileDebt
+    hostileExcludedDuringDebt = $hostileExcludedDuringDebt
+    maxHealthyWindowDebtMs = $maxHealthyWindowDebtMs
+    globalDebtAfterDirtyBurstMs = $globalDebtAfterDirtyBurstMs
+    nextDirtyOperationDueMs = $nextDirtyOperationDueMs
+    steadyIdleDuty = $steadyIdleDuty
+    urgentTokensAfterHealthyMs = $urgentTokensAfterHealthyMs
+    urgentTokenCapacityMs = $urgentTokenCapacityMs
+    urgentAdmissionMs = $urgentAdmissionMs
+    urgentRefillAfter3sMs = $urgentRefillAfter3sMs
+    locationChildQueued = $locationChildQueued
+    locationChildHwndQueued = $locationChildHwndQueued
+    locationWindowQueued = $locationWindowQueued
+    severeStrikes = $severeStrikes
+    severeBlocked = $severeBlocked
+    remainingAfterForegroundBlock = $(if ($remainingOrder.Length -gt 0) {
+      $remainingOrder[0]
+    } else { 0 })
+    omissionKeepsQuarantine = $omissionKeepsQuarantine
+    reusedBeforeTtl = $reusedBeforeTtl
+    ttlRestored = $ttlRestored
+    reusedAfterTtl = $reusedAfterTtl
+  }) | ConvertTo-Json -Compress)
+  $passed = -not $cadenceBefore -and $cadenceAt -and
+    $findAllReason -eq 'findall-timeout' -and
+    $scanReason -eq 'scan-timeout' -and
+    $totalReason -eq 'total-timeout' -and
+    $capReason -eq 'element-cap' -and
+    $completeReason -eq '' -and
+    -not $severeBefore -and $severeAt -and
+    $duty100 -le 0.03 -and
+    $duty120 -le 0.03 -and
+    $dutyMulti -le 0.03 -and
+    $firstWalkDue -and
+    $failedStrikesAfterOne -eq 1 -and
+    $failedLastPassMs -eq 1 -and
+    -not $failedDueImmediately -and
+    $failedRetryMs -eq 6000 -and
+    $failedNextDueMs -gt 5000 -and
+    $failureBlocked -eq $failureHwnd -and
+    -not $emptyDueImmediately -and
+    $emptyRetryMs -eq 3000 -and
+    $emptyNextDueMs -gt 2000 -and
+    $incompleteRetryPending -and
+    $incompleteStrikes -eq 1 -and
+    $retryAfterRefresh -and
+    $strikesAfterRefresh -eq 1 -and
+    -not $capRetryPending -and
+    $capStrikes -eq 0 -and
+    $foregroundOrder[0] -eq $foregroundHwnd -and
+    $switchedOrder[0] -eq $otherHwnd -and
+    $hostilePeerSamePass -and
+    $hostileDebtMs -gt 60000 -and
+    $hostileBlockedDebtMs -gt 60000 -and
+    $healthyPeersDuringDebt -eq 10 -and
+    $healthyExecutedDuringHostileDebt -eq 10 -and
+    $hostileExcludedDuringDebt -and
+    $maxHealthyWindowDebtMs -le 3500 -and
+    $globalDebtAfterDirtyBurstMs -gt 80000 -and
+    $nextDirtyOperationDueMs -gt 2900 -and
+    $nextDirtyOperationDueMs -le 3500 -and
+    $steadyIdleDuty -le 0.03 -and
+    $urgentTokensAfterHealthyMs -ge $urgentAdmissionMs -and
+    $urgentTokensAfterHealthyMs -lt $urgentTokenCapacityMs -and
+    $urgentRefillAfter3sMs -eq 90 -and
+    $locationChildQueued -and
+    $locationChildHwndQueued -and
+    -not $locationWindowQueued -and
+    $severeStrikes -eq 3 -and
+    $severeBlocked -eq $foregroundHwnd -and
+    $remainingOrder[0] -eq $otherHwnd -and
+    $omissionKeepsQuarantine -and
+    -not $reusedBeforeTtl -and
+    $ttlRestored -ge 1 -and
+    $reusedAfterTtl
+  [CapturePack.ControlLane]::Shutdown()
+  exit $(if ($passed) { 0 } else { 1 })
 }
 
 [CapturePack.ControlLane]::StartChangeSignal()
@@ -842,7 +1547,8 @@ if ($SelfTest -gt 0) {
   if ($hwnd -eq 0) { Write-Line '{"event":"selftest","error":"no foreground window"}'; exit 0 }
   [CapturePack.ControlLane]::SetTracked(@([long]$hwnd))
   $walkStart = [CapturePack.ControlLane]::Busy
-  $tree = [CapturePack.ControlLane]::Walk([long]$hwnd, $MaxElementsPerWindow, 5000)
+  $tree = [CapturePack.ControlLane]::Walk(
+    [long]$hwnd, $MaxElementsPerWindow, 5000, $MaxStrikes)
   $walkMs = [CapturePack.ControlLane]::Busy - $walkStart
   $elements = [CapturePack.ControlLane]::ElementCount
   $refreshStart = [CapturePack.ControlLane]::Busy
@@ -877,15 +1583,35 @@ $sleepMs = $MinSleepMs
 $wallStart = [CapturePack.ControlLane]::NowMs
 
 while ($running) {
-  $passStart = [CapturePack.ControlLane]::Busy
+  [void][CapturePack.ControlLane]::RestoreExpiredQuarantines()
   [CapturePack.ControlLane]::DrainChangeSignals()
-  $due = [CapturePack.ControlLane]::Due($focus, $rotation)
+  $due = [CapturePack.ControlLane]::Due(
+    $focus, $rotation, $ReWalkFloorMs, $SafetyReWalkMs)
   $rotation++
   foreach ($h in $due) {
+    if (-not [CapturePack.ControlLane]::IsOperationDue(
+      $h, $focus, $ReWalkFloorMs, $SafetyReWalkMs)) {
+      continue
+    }
+    $needsWalk = [CapturePack.ControlLane]::NeedsWalk(
+      $h, $ReWalkFloorMs, $SafetyReWalkMs)
+    $canRefresh = [CapturePack.ControlLane]::HasTree($h)
+    if (-not $needsWalk -and -not $canRefresh) {
+      # A failed or honestly empty tree is between retry deadlines. Do not
+      # emit progress or enter UIA merely because it is foreground.
+      continue
+    }
+    # Flush the exact provider about to be called before entering UIA. If a
+    # Current/FromHandle/FindAll call never returns, Core can quarantine this
+    # HWND on watchdog recovery instead of replaying the same hang forever.
+    Write-Line ('{"event":"walking","t":' +
+      [CapturePack.ControlLane]::NowMs + ',"h":"' + $h + '"}')
+    $operationStart = [CapturePack.ControlLane]::Busy
     try {
-      if ([CapturePack.ControlLane]::NeedsWalk($h, $ReWalkFloorMs, $SafetyReWalkMs)) {
+      if ($needsWalk) {
         # The tree really changed (WinEvent) or was never read: walk it.
-        $line = [CapturePack.ControlLane]::Walk($h, $MaxElementsPerWindow, $WindowTimeoutMs)
+        $line = [CapturePack.ControlLane]::Walk(
+          $h, $MaxElementsPerWindow, $WindowTimeoutMs, $MaxStrikes)
         if ($null -ne $line) { Write-Line $line }
       } else {
         $line = [CapturePack.ControlLane]::Refresh($h, $WindowTimeoutMs)
@@ -896,37 +1622,35 @@ while ($running) {
         ',"where":"pass","h":"' + $h + '","message":' +
         (ConvertTo-Json ([string]$_.Exception.Message) -Compress) + '}')
     }
-    $blocked = [CapturePack.ControlLane]::BlockIfHopeless($h, $MaxStrikes)
+    $operationMs = [CapturePack.ControlLane]::Busy - $operationStart
+    [void][CapturePack.ControlLane]::DeferWindow(
+      $h, $operationMs, $DutyTarget)
+    $blocked = [CapturePack.ControlLane]::BlockIfHopeless(
+      $h, $MaxStrikes, $BlockedTtlMs)
     if ($blocked -ne 0) {
       Write-Line ('{"event":"blocked","t":' + [CapturePack.ControlLane]::NowMs +
         ',"h":"' + $blocked + '","lastPassMs":' +
         [Math]::Round([CapturePack.ControlLane]::LastBlockedPassMs, 1) + '}')
     }
   }
-  $passMs = [CapturePack.ControlLane]::Busy - $passStart
   [void][CapturePack.ControlLane]::CollectReleasedReferences(
     $ReferenceCollectionThreshold,
     $ReferenceCollectionFloorMs)
 
-  # SELF-PACED TO THE BUDGET. Sleeping (1/duty - 1) times what the pass cost
-  # makes the duty cycle a property of the loop rather than a hope about the
-  # desktop: a 17.6 ms Explorer pass sleeps 334 ms, a 3 ms pass sleeps 57 ms,
-  # and a provider that somehow takes 2 s is simply not visited again for a
-  # very long time — which is what the blocklist above is for.
-  if ($passMs -gt 0) {
-    $sleepMs = [int][Math]::Max($MinSleepMs, [Math]::Min($MaxSleepMs, $passMs * ((1 / $DutyTarget) - 1)))
+  # SELF-PACED PER HWND. Each provider owns its debt; a 2 s hostile FindAll can
+  # be quarantined without imposing ~66 s silence on ten healthy windows. The
+  # target is divided by tracked count, keeping aggregate steady-state budget
+  # near 3% while preserving bounded foreground/dirty-peer latency.
+  $now = [CapturePack.ControlLane]::NowMs
+  $nextOperationDueMs = [CapturePack.ControlLane]::NextOperationDueInMs(
+    $ReWalkFloorMs, $SafetyReWalkMs)
+  if ($nextOperationDueMs -eq [int]::MaxValue) {
+    $sleepMs = $MaxSleepMs
   } else {
-    $sleepMs = $MinSleepMs
-  }
-  # A structural event can arrive inside the 3 s re-walk floor. Its AutoReset
-  # wake is intentionally consumed immediately, so arm the blocking wait for
-  # the exact remaining floor rather than adding another arbitrary 2 s.
-  $dirtyDueMs = [CapturePack.ControlLane]::NextDirtyDueInMs($ReWalkFloorMs)
-  if ($dirtyDueMs -ne [int]::MaxValue) {
-    $sleepMs = [Math]::Min($sleepMs, $dirtyDueMs)
+    $sleepMs = [Math]::Max(
+      $MinSleepMs, [Math]::Min($MaxSleepMs, $nextOperationDueMs))
   }
 
-  $now = [CapturePack.ControlLane]::NowMs
   if ($now -ge $nextStatusMs) {
     $self.Refresh()
     $wall = $now - $wallStart
@@ -942,6 +1666,11 @@ while ($running) {
       ',"ws":' + $self.WorkingSet64 + '}')
     $nextStatusMs = $now + 5000
   }
+  # Keep the status heartbeat below Core's silence watchdog even when one pass
+  # legitimately earned a long cooldown.
+  $statusDueMs = [int][Math]::Max(
+    0, [Math]::Ceiling($nextStatusMs - [CapturePack.ControlLane]::NowMs))
+  $sleepMs = [Math]::Min($sleepMs, $statusDueMs)
 
   $line = [CapturePack.TrackInput]::TryRead()
   if ($null -eq $line) {

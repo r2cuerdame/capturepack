@@ -19,7 +19,7 @@
 
 import { randomUUID } from 'node:crypto'
 import type { ContextObservation } from './buffer'
-import { ControlLane, type TrackedControl } from './controlLane'
+import { ControlLane, type ControlsAt } from './controlLane'
 import { frozenRingObservations } from './ringObservations'
 import type { ContextDisplayTarget } from './session'
 import type { SurfaceStack } from '../../shared/context/protocol'
@@ -28,6 +28,7 @@ import { SessionClock } from './clock'
 import { ProviderHost, TICK_INTERVAL_MS } from './providerHost'
 import { SurfaceLane, type SurfaceLaneStatus } from './surfaceLane'
 import { SurfaceTimeline, type SurfaceTimelineStats } from './timeline'
+import type { SurfaceSampleWindow } from './timeline'
 
 /**
  * How much longer than the replay the ring keeps. The editor can only scrub the
@@ -287,6 +288,41 @@ export function releaseContext(freezeId: string | null): void {
 }
 
 /**
+ * Refreshes the complete Win32 window floor immediately before a still image.
+ *
+ * The ordinary resident cadence is enough for video history, but a window can
+ * be created between its last sample and Ctrl+Alt+S. Waiting at most 250 ms for
+ * one full resident-host sample closes that omission window without starting a
+ * second helper or making a failed context provider hold the capture flow.
+ */
+export async function refreshContextSurfaceSample(): Promise<
+  readonly SurfaceSampleWindow[] | null
+> {
+  const current = runtime
+  return current === null ? null : current.lane.sampleNow(250)
+}
+
+export function contextObservationFromSurfaceSample(
+  windows: readonly SurfaceSampleWindow[] | null,
+  targets: readonly ContextDisplayTarget[],
+): Promise<ContextObservation | null> {
+  const current = runtime
+  if (current === null || windows === null) return Promise.resolve(null)
+  const snapshot = new SurfaceTimeline()
+  snapshot.append({ timeMs: 0, windows: [...windows] })
+  const surfaces = snapshot.surfacesAt(0).surfaces
+  return Promise.resolve(
+    frozenRingObservations(
+      () => ({ surfaces }),
+      current.lane.monitors(),
+      targets,
+      0,
+      [0],
+    )[0] ?? null,
+  )
+}
+
+/**
  * #65's one question, asked in PACK time: which top-level window was where, in
  * what order, at time T.
  *
@@ -366,11 +402,11 @@ export function frozenObservations(
     // on the session clock, so the conversion happens HERE rather than inside
     // a lane that has no idea a freeze exists.
     (packTMs) => {
-      const at = new Map<string, readonly TrackedControl[]>()
+      const at = new Map<string, ControlsAt>()
       if (freeze === undefined) return at
       if (!current.controlsEnabled) return at
       for (const entry of current.controls.controlsAt(freeze.startMs + packTMs)) {
-        at.set(entry.hwnd, entry.controls)
+        at.set(entry.hwnd, entry)
       }
       return at
     },

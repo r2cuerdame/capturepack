@@ -32,7 +32,7 @@ import {
   windowCandidatesFromSurfaces,
 } from './buffer'
 import type { ContextObservation } from './buffer'
-import type { EditorUiaWindow } from '../../shared/ipc'
+import type { EditorUiaElement, EditorUiaWindow } from '../../shared/ipc'
 import type { ObjectTrackResult, ObjectTrackSample } from '../../shared/ipc'
 import { SessionClock } from './clock'
 // THE SAME REGISTRY THE RECORDING SIDE USES (#64). Not a second, smaller one
@@ -51,6 +51,16 @@ export interface ContextDisplayTarget {
   focused: boolean
   width: number
   height: number
+  /**
+   * This display in the Win32 host's virtual-desktop physical pixels.
+   *
+   * Width/height alone cannot identify two identical monitors: Electron and
+   * the helper are allowed to enumerate them in different orders. Fresh
+   * captures provide this rectangle so the temporal window ring is paired by
+   * desktop identity; reopened packs no longer need it because their
+   * observations are already stored in snapshot coordinates.
+   */
+  desktopBounds?: { x: number; y: number; width: number; height: number }
   /**
    * Snapshot pixels per desktop DIP for this captured display. Optional only
    * for legacy/test callers; cross-display DOM placement refuses to guess when
@@ -140,6 +150,134 @@ function rectGap(a: EditorUiaWindow['bounds'], b: EditorUiaWindow['bounds']): nu
   )
 }
 
+/**
+ * Controls owned by each window object in one observation.
+ *
+ * Ownership is resolved before sources are merged. In particular, a legacy
+ * `window: -1` control belongs to that source's focused window; treating -1 as
+ * a z value would silently discard every old-pack control as soon as a ring
+ * arrived.
+ */
+function controlsByOwner(
+  observation: ContextObservation,
+): ReadonlyMap<EditorUiaWindow, readonly EditorUiaElement[]> {
+  const byZ = new Map<number, EditorUiaWindow>()
+  for (const window of observation.windows) byZ.set(window.z, window)
+  const fallback = observation.windows.find((window) => window.focused) ?? observation.windows[0]
+  const controls = new Map<EditorUiaWindow, EditorUiaElement[]>()
+  for (const element of observation.elements) {
+    const owner = element.window >= 0 ? byZ.get(element.window) : fallback
+    if (owner === undefined) continue
+    const existing = controls.get(owner)
+    if (existing === undefined) controls.set(owner, [element])
+    else existing.push(element)
+  }
+  return controls
+}
+
+/**
+ * A stable BASE identity for one owner's UIA pre-order.
+ *
+ * AutomationId/class/type are not unique: real trees contain dozens of rows
+ * sharing all three. The merge below therefore treats this key as an ordered
+ * multiset and compares occurrence N, rather than collapsing it into a Set.
+ * Name and bounds deliberately stay out of the key because dynamic labels and
+ * a moving window can change both between the resident checkpoint and dump.
+ */
+function controlOccurrenceKey(element: EditorUiaElement): string {
+  return (
+    `${element.control_type.trim()}\u0000` +
+    `${element.class_name.trim()}\u0000` +
+    element.automation_id.trim()
+  )
+}
+
+function mergeControlOccurrences(
+  primary: readonly EditorUiaElement[],
+  supplement: readonly EditorUiaElement[],
+): EditorUiaElement[] {
+  const retained = new Map<string, number>()
+  for (const element of primary) {
+    const key = controlOccurrenceKey(element)
+    retained.set(key, (retained.get(key) ?? 0) + 1)
+  }
+  const seen = new Map<string, number>()
+  const merged = [...primary]
+  for (const element of supplement) {
+    const key = controlOccurrenceKey(element)
+    const occurrence = (seen.get(key) ?? 0) + 1
+    seen.set(key, occurrence)
+    if (occurrence > (retained.get(key) ?? 0)) merged.push(element)
+  }
+  return merged
+}
+
+interface OwnerTree {
+  window: EditorUiaWindow
+  controls: readonly EditorUiaElement[]
+}
+
+/**
+ * Whether this source is an authoritative whole tree.
+ *
+ * `collected + hasControls + zero elements` is an old inconsistent payload
+ * shape meaning the elements were omitted, not an honestly empty tree. It must
+ * not outrank a source that carries real controls.
+ */
+function completeOwnerTree(source: OwnerTree): boolean {
+  return (
+    source.window.tree === 'collected' &&
+    (source.controls.length > 0 || !source.window.hasControls)
+  )
+}
+
+function ownerTreeRank(source: OwnerTree): number {
+  if (completeOwnerTree(source)) return 3
+  if (source.window.tree === 'truncated' || source.controls.length > 0) return 2
+  if (source.window.tree === 'unavailable' || source.window.hasControls) return 1
+  return 0
+}
+
+/**
+ * Merges two readings of ONE matched owner.
+ *
+ * A whole tree is authoritative. If neither source is whole, keep the richer
+ * prefix first and add only missing ordered occurrences from the other. Equal
+ * sources prefer the capture-instant dump because it is the exact trigger
+ * reading; a more complete resident checkpoint still wins over a truncated
+ * dump, so a 32-item timeout can never erase controls 33..N.
+ */
+function mergeOwnerTrees(existing: OwnerTree, instant: OwnerTree): OwnerTree {
+  const existingComplete = completeOwnerTree(existing)
+  const instantComplete = completeOwnerTree(instant)
+  if (existingComplete || instantComplete) {
+    if (instantComplete) return instant
+    return existing
+  }
+
+  const existingRank = ownerTreeRank(existing)
+  const instantRank = ownerTreeRank(instant)
+  const preferInstant =
+    instantRank > existingRank ||
+    (instantRank === existingRank && instant.controls.length >= existing.controls.length)
+  const primary = preferInstant ? instant : existing
+  const supplement = preferInstant ? existing : instant
+  return {
+    window: {
+      ...primary.window,
+      hasControls: primary.window.hasControls || primary.controls.length > 0,
+      tree:
+        primary.window.tree === 'truncated' ||
+        supplement.window.tree === 'truncated' ||
+        primary.controls.length > 0 ||
+        supplement.controls.length > 0
+          ? 'truncated'
+          : primary.window.tree,
+    },
+    controls: mergeControlOccurrences(primary.controls, supplement.controls),
+  }
+}
+
 export class ContextSession {
   readonly sessionId: string
   private readonly displays: readonly ContextDisplayTarget[]
@@ -218,7 +356,16 @@ export class ContextSession {
 
   /** Several observations on one clock — the shape a live buffer produces. */
   adoptAll(observations: readonly ContextObservation[]): void {
-    this.ring = [...observations].sort((a, b) => a.tMs - b.tMs)
+    const ordered = [...observations].sort((a, b) => a.tMs - b.tMs)
+    // A decoded singleton with no windows is not evidence of an empty desktop:
+    // it is a malformed/filtered history floor. Letting it replace a valid
+    // capture-instant UIA observation makes every program/control disappear on
+    // reopen. Multi-sample rings may legitimately contain an empty instant, but
+    // an all-empty ring has no surface timeline to refine.
+    this.ring =
+      this.instant !== null && ordered.every((observation) => observation.windows.length === 0)
+        ? []
+        : ordered
     this.rebuild()
   }
 
@@ -230,9 +377,10 @@ export class ContextSession {
    * time, which is what makes them pickable at the capture instant while every
    * other moment still answers from the ring. Its windows are not used: the
    * ring's carry Core's stable surface id (#90) and are already placed on the
-   * display they belong to. What IS taken from them is `hasControls`/`tree` —
-   * the statement about whether a tree was collected for that window, which
-   * only the dump knows and which SPEC 11.3 forbids inventing.
+   * display they belong to. For each matched owner, the more complete control
+   * tree wins; partial trees are merged as ordered occurrences. This keeps an
+   * exact Lane-A tree from regressing to the dump's timeout prefix while still
+   * using the exact capture-instant tree when it is complete.
    */
   private rebuild(): void {
     const ring = this.ring
@@ -324,24 +472,48 @@ export class ContextSession {
         const w = host.windows.find((x) => x.z === ringZ)
         if (dumped !== undefined && w !== undefined) trees.set(w, dumped)
       }
-      // An element whose window could not be matched is DROPPED rather than
-      // reassigned: a control offered on the wrong window is worse than one that
-      // is not offered, because nothing downstream can tell.
-      const elements = instant.elements.flatMap((e) => {
-        const z = zOf.get(e.window)
-        return z === undefined ? [] : [{ ...e, window: z }]
+      const existingByOwner = controlsByOwner(host)
+      const instantByOwner = controlsByOwner(instant)
+      const elements: EditorUiaElement[] = []
+      const windows = host.windows.map((window) => {
+        const dumped = trees.get(window)
+        const existing: OwnerTree = {
+          window,
+          controls: existingByOwner.get(window) ?? [],
+        }
+        // The dump did not mention this owner. Its Lane-A controls are not
+        // stale duplicates of another window; they are the only evidence for
+        // this one and must survive unchanged.
+        if (dumped === undefined) {
+          elements.push(
+            ...existing.controls.map((element) => ({ ...element, window: window.z })),
+          )
+          return window
+        }
+
+        const merged = mergeOwnerTrees(existing, {
+          window: dumped,
+          controls: instantByOwner.get(dumped) ?? [],
+        })
+        const remapped = merged.controls.map((element) => ({
+          ...element,
+          // A control points at its owner's z in the RING observation retained
+          // below, never at the dump's independent enumeration number.
+          window: window.z,
+        }))
+        elements.push(...remapped)
+        return {
+          ...window,
+          hasControls: merged.window.hasControls || remapped.length > 0,
+          tree: merged.window.tree,
+        }
       })
       this.observations = ring.map((o, i) =>
         i !== nearest
           ? o
           : {
               tMs: o.tMs,
-              windows: o.windows.map((w) => {
-                const dumped = trees.get(w)
-                return dumped === undefined
-                  ? w
-                  : { ...w, hasControls: dumped.hasControls, tree: dumped.tree }
-              }),
+              windows,
               elements,
             },
       )
@@ -357,6 +529,17 @@ export class ContextSession {
     const buffer = new ContextBuffer(this.observations, kind, range)
     if (this.provider !== null) {
       this.provider.replace(buffer, this.ids)
+      // Chrome DOM placement reads this session's surface timeline. A session
+      // commonly opens with only the capture-instant UIA result (or no result
+      // after the UIA grace) and adopts the full replay ring a moment later.
+      // Replacing only the Windows provider left ChromeDomProvider's placed
+      // cache permanently based on that initial empty/single-instant timeline,
+      // so every DOM pick stayed missing even though the ring arrived.
+      //
+      // registerDomProvider() is also the cache-invalidation path for an
+      // existing provider: replace() keeps the events but clears every placed
+      // result so they are rebuilt against the new timeline.
+      this.registerDomProvider()
       return
     }
     // The built-in provider is registered through the SAME registry an external

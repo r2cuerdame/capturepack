@@ -19,7 +19,7 @@ mouvement observés afin que l’IA n’ait pas à les déduire des seuls pixels
 Version Windows publique actuelle : **CapturePack 0.3.2**
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=5" alt="CapturePack part de MAINTENANT à droite, déplace la tête de lecture vers la gauche jusqu’à 5 secondes plus tôt, restaure et sélectionne le contrôle enfant présent dans cette image historique, puis exporte des preuves structurées pour l’IA." width="760">
+  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/motion/fr/capturepack-time-machine-poster.webp" alt="CapturePack part de MAINTENANT à droite, déplace la tête de lecture vers la gauche jusqu’à 5 secondes plus tôt, restaure et sélectionne le contrôle enfant présent dans cette image historique, puis exporte des preuves structurées pour l’IA." width="760">
 </p>
 
 ## Fonctionnement

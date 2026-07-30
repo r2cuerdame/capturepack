@@ -118,6 +118,54 @@ check('every answer is reported as covered',
   rows.every((r) => r.coverage === 'covered'),
   rows.filter((r) => r.coverage !== 'covered').map((r) => `${r.t}:${r.coverage}`).slice(0, 6).join(' '))
 
+// A syntactically valid but empty singleton history used to replace the richer
+// capture-instant UIA payload when a pack was reopened. The session now treats
+// an all-empty ring as no refinement and keeps the selectable instant floor.
+console.log('\nreopening with one empty persisted checkpoint:')
+{
+  const instantWindow = {
+    surface_id: 'reopen-window',
+    hwnd: '9001',
+    title: 'Reopen app',
+    process: 'reopen.exe',
+    class_name: 'ReopenWindow',
+    bounds: { x: 100, y: 100, width: 800, height: 600 },
+    display: 1,
+    focused: true,
+    z: 0,
+    hasControls: true,
+    tree: 'collected',
+  }
+  const reopenSession = new ContextSession('ctx-empty-singleton', {
+    displays: [{ index: 1, focused: true, width: 1920, height: 1080 }],
+    replayDurationMs: 0,
+    observation: {
+      tMs: 0,
+      windows: [instantWindow],
+      elements: [{
+        window: 0,
+        bounds: { x: 160, y: 160, width: 120, height: 40 },
+        control_type: 'Button',
+        name: 'Still selectable',
+        automation_id: 'reopen-action',
+        class_name: 'Button',
+        display: 1,
+      }],
+    },
+    dropped: false,
+  })
+  reopenSession.adoptAll([{ tMs: 0, windows: [], elements: [] }])
+  const reopenedFrame = await reopenSession.frameAt(0)
+  const reopenedCandidate = reopenedFrame.displays[0]?.candidates.find(
+    (candidate) => candidate.name === 'Still selectable',
+  )
+  check(
+    'an empty singleton history cannot erase the capture-instant UIA floor',
+    reopenedCandidate !== undefined,
+    'the valid UIA window/control disappeared after adoptAll([empty])',
+  )
+}
+
 // The point of picking: the candidate must be WHERE THE WINDOW WAS, not where
 // it ended up. The sliding window is at a different x at every time.
 const early = await session.frameAt(2000)
@@ -125,6 +173,78 @@ const late = await session.frameAt(28_000)
 const xOf = (f) => f.displays.find((d) => d.display === 2)?.candidates[0]?.bounds.x
 check('the answer MOVES with the object across the replay', xOf(early) !== xOf(late),
   `t=2000 -> x=${xOf(early)}, t=28000 -> x=${xOf(late)}`)
+
+// ---------------------------------------------------------------------------
+// A DOM PICK MAY ARRIVE BEFORE THE WINDOW RING (#112).
+//
+// An editor is constructed while the UIA grace is still open.  That first
+// construction registers ChromeDomProvider and asks for its pick count, which
+// deliberately fills the provider's placement cache.  At that moment there is
+// no surface timeline yet, so the honest answer is no placed DOM pick.  The
+// full ring is adopted moments later.  It MUST invalidate that first empty
+// placement rather than leave every past Chrome frame permanently window-only.
+console.log('\nA Chrome DOM pick whose surface ring arrives after the editor opens')
+{
+  const domEvent = {
+    tMs: 1000,
+    type: 'dom.element.selected',
+    tab: { url: 'https://capturepack.dev/docs', title: 'CapturePack docs' },
+    element: {
+      tag: 'button',
+      selector: '#save',
+      bounds: { x: 200, y: 100, width: 120, height: 40 },
+      id: 'save',
+      role: 'button',
+      text: 'Save',
+    },
+    viewport: {
+      width: 1000,
+      height: 600,
+      dpr: 1,
+      screenX: null,
+      screenY: null,
+      outerWidth: null,
+      outerHeight: null,
+    },
+  }
+  const chromeWindowAt = (tMs) => ({
+    surface_id: 'sfc-dom-chrome',
+    hwnd: '4242',
+    title: 'CapturePack docs - Google Chrome',
+    process: 'chrome.exe',
+    class_name: 'Chrome_WidgetWin_1',
+    bounds: { x: 100 + Math.round(tMs / 10), y: 200, width: 1020, height: 680 },
+    client_bounds: { x: 110 + Math.round(tMs / 10), y: 230, width: 1000, height: 650 },
+    display: 1,
+    focused: true,
+    z: 0,
+    hasControls: false,
+    tree: 'skipped',
+  })
+  const domSession = new ContextSession('ctx-dom-late-ring', {
+    displays: [{ index: 1, focused: true, width: 1920, height: 1080, snapshotPixelsPerDip: 1 }],
+    replayDurationMs: 2000,
+    // The production race: the editor opens with no UIA observation/ring.
+    observation: null,
+    dropped: false,
+    domEvents: [domEvent],
+  })
+  // This is deliberately after construction: registration above has already
+  // cached the DOM pick against the empty timeline.
+  domSession.adoptAll([0, 1000, 2000].map((tMs) => ({
+    tMs,
+    windows: [chromeWindowAt(tMs)],
+    elements: [],
+  })))
+  const past = await domSession.frameAt(250)
+  const domCandidate = past.displays[0]?.candidates.find(
+    (candidate) => candidate.providerId === 'chrome-dom' && candidate.name === 'Save',
+  )
+  console.log(`   past t=250 -> ${domCandidate === undefined ? 'window only' : `${domCandidate.providerId} ${domCandidate.name}`}`)
+  check('a late ring invalidates the initial empty DOM placement cache',
+    domCandidate !== undefined,
+    'the Chrome DOM pick remained cached as absent after adoptAll()')
+}
 
 // ---------------------------------------------------------------------------
 // AND THE HALF THE USER ACTUALLY TOUCHES: hovering the editor's own index.
@@ -451,6 +571,234 @@ for (const order of ['dump first, then ring', 'ring first, then dump']) {
     `offered ${controls.map((c) => c.name).join(', ') || 'nothing'}`)
   check(`[${order}] the window ring survives`, pastWindows > 1,
     'the ring was thrown away — picking in the past falls back to one instant')
+}
+
+// The nearest Lane-A checkpoint can already contain controls for several
+// owners. A capture-instant dump commonly reaches only the foreground one;
+// replacing the checkpoint's whole element array with that one dump made every
+// background app become window-only at the final frame.
+console.log('\nCapture-instant UIA merges per owner, never as one global element array')
+{
+  const windowA = {
+    surface_id: 'sfc-owner-a',
+    hwnd: '8101',
+    title: 'Owner A',
+    process: 'a.exe',
+    class_name: 'AppWindow',
+    bounds: { x: 50, y: 50, width: 400, height: 300 },
+    display: 1,
+    focused: true,
+    z: 0,
+    hasControls: true,
+    tree: 'collected',
+  }
+  const windowB = {
+    surface_id: 'sfc-owner-b',
+    hwnd: '8102',
+    title: 'Owner B',
+    process: 'b.exe',
+    class_name: 'AppWindow',
+    bounds: { x: 550, y: 50, width: 400, height: 300 },
+    display: 1,
+    focused: false,
+    z: 1,
+    hasControls: true,
+    tree: 'collected',
+  }
+  const ring = [{
+    tMs: 1000,
+    windows: [windowA, windowB],
+    elements: [
+      {
+        name: 'A from Lane A',
+        control_type: 'Button',
+        automation_id: 'a-action',
+        class_name: 'Button',
+        bounds: { x: 100, y: 100, width: 120, height: 40 },
+        display: 1,
+        window: 0,
+      },
+      {
+        name: 'B from Lane A',
+        control_type: 'Button',
+        automation_id: 'b-action',
+        class_name: 'Button',
+        bounds: { x: 600, y: 100, width: 120, height: 40 },
+        display: 1,
+        window: 1,
+      },
+    ],
+  }]
+  const asymmetric = new ContextSession('ctx-owner-asymmetry', {
+    displays: [{ index: 1, focused: true, width: 1000, height: 500 }],
+    replayDurationMs: 1000,
+    observation: {
+      tMs: 1000,
+      windows: [{
+        ...windowA,
+        surface_id: undefined,
+        z: 77,
+      }],
+      elements: [{
+        name: 'A from capture instant',
+        control_type: 'Button',
+        automation_id: 'a-action',
+        class_name: 'Button',
+        bounds: { x: 105, y: 105, width: 120, height: 40 },
+        display: 1,
+        window: 77,
+      }],
+    },
+    dropped: false,
+  })
+  asymmetric.adoptAll(ring)
+  const frame = await asymmetric.frameAt(1000)
+  const slice = frame.displays[0]
+  const names = (slice?.candidates ?? [])
+    .filter((candidate) => candidate.authority !== 'window')
+    .map((candidate) => candidate.name)
+  check('a dump of owner A preserves owner B Lane-A controls',
+    names.includes('A from capture instant') && names.includes('B from Lane A'),
+    `offered ${names.join(', ') || 'nothing'}`)
+  const index = ObjectIndex.build(
+    slice?.candidates ?? [],
+    slice?.surfaces ?? [],
+    slice?.coverage ?? [],
+    frame.claims,
+    1000,
+    500,
+    1,
+  )
+  const ownerBPick = index.pick(660, 120)
+  check('the real editor index still selects owner B after the asymmetric merge',
+    ownerBPick?.level === 'control' && ownerBPick.candidate.name === 'B from Lane A',
+    `picked ${ownerBPick?.level ?? 'nothing'} ${ownerBPick?.candidate.name ?? ''}`)
+  check('an equally complete capture-instant tree remains authoritative for its owner',
+    !names.includes('A from Lane A'),
+    `offered stale owner-A controls: ${names.join(', ')}`)
+}
+
+// A timed-out capture dump is only a prefix. It must never replace a whole
+// exact Lane-A tree for the same owner; AutomationId is deliberately repeated
+// to ensure the decision does not accidentally rely on unique ids.
+console.log('\nA truncated capture dump cannot regress a complete Lane-A owner tree')
+{
+  const owner = {
+    surface_id: 'sfc-complete-owner',
+    hwnd: '8201',
+    title: 'Rows',
+    process: 'rows.exe',
+    class_name: 'RowsWindow',
+    bounds: { x: 20, y: 20, width: 600, height: 700 },
+    display: 1,
+    focused: true,
+    z: 0,
+    hasControls: true,
+    tree: 'collected',
+  }
+  const row = (index, prefix, window) => ({
+    name: `${prefix} row ${index + 1}`,
+    control_type: 'Button',
+    automation_id: 'repeated-row',
+    class_name: 'RowButton',
+    bounds: { x: 60, y: 50 + index * 15, width: 140, height: 12 },
+    display: 1,
+    window,
+  })
+  const exact = Array.from({ length: 40 }, (_, index) => row(index, 'Lane', 0))
+  const truncated = Array.from({ length: 32 }, (_, index) => row(index, 'Dump', 91))
+  const session = new ContextSession('ctx-complete-beats-truncated', {
+    displays: [{ index: 1, focused: true, width: 800, height: 800 }],
+    replayDurationMs: 1000,
+    observation: {
+      tMs: 1000,
+      windows: [{
+        ...owner,
+        surface_id: undefined,
+        z: 91,
+        tree: 'truncated',
+      }],
+      elements: truncated,
+    },
+    dropped: false,
+  })
+  session.adoptAll([{ tMs: 1000, windows: [owner], elements: exact }])
+  const frame = await session.frameAt(1000)
+  const rows = (frame.displays[0]?.candidates ?? []).filter(
+    (candidate) => candidate.identity?.automation_id === 'repeated-row',
+  )
+  check('all 40 exact occurrences survive a 32-control capture timeout',
+    rows.length === 40 && rows.some((candidate) => candidate.name === 'Lane row 40'),
+    `offered ${rows.length} rows; last=${rows.at(-1)?.name ?? 'none'}`)
+}
+
+// When BOTH sources are partial, preserve their ordered multiset union. A Set
+// would collapse the three repeated rows to one; concatenation would produce
+// five. The correct result is max(3, 2) repeated occurrences plus the unique
+// capture-instant action.
+console.log('\nTwo partial owner trees merge controls as ordered occurrences')
+{
+  const owner = {
+    surface_id: 'sfc-partial-owner',
+    hwnd: '8301',
+    title: 'Partial rows',
+    process: 'partial.exe',
+    class_name: 'RowsWindow',
+    bounds: { x: 20, y: 20, width: 500, height: 400 },
+    display: 1,
+    focused: true,
+    z: 0,
+    hasControls: true,
+    tree: 'truncated',
+  }
+  const repeat = (name, y, window) => ({
+    name,
+    control_type: 'Button',
+    automation_id: 'same-row',
+    class_name: 'RowButton',
+    bounds: { x: 60, y, width: 140, height: 24 },
+    display: 1,
+    window,
+  })
+  const partial = new ContextSession('ctx-partial-occurrences', {
+    displays: [{ index: 1, focused: true, width: 800, height: 600 }],
+    replayDurationMs: 1000,
+    observation: {
+      tMs: 1000,
+      windows: [{ ...owner, surface_id: undefined, z: 88 }],
+      elements: [
+        repeat('Instant repeated 1', 60, 88),
+        repeat('Instant repeated 2', 100, 88),
+        {
+          ...repeat('Instant unique', 180, 88),
+          automation_id: 'instant-unique',
+        },
+      ],
+    },
+    dropped: false,
+  })
+  partial.adoptAll([{
+    tMs: 1000,
+    windows: [owner],
+    elements: [
+      repeat('Lane repeated 1', 60, 0),
+      repeat('Lane repeated 2', 100, 0),
+      repeat('Lane repeated 3', 140, 0),
+    ],
+  }])
+  const frame = await partial.frameAt(1000)
+  const controls = (frame.displays[0]?.candidates ?? []).filter(
+    (candidate) => candidate.authority !== 'window',
+  )
+  const repeated = controls.filter(
+    (candidate) => candidate.identity?.automation_id === 'same-row',
+  )
+  check('partial trees retain three repeated occurrences without concatenating duplicates',
+    repeated.length === 3,
+    `offered ${repeated.length} repeated rows`)
+  check('partial trees retain a unique capture-instant control',
+    controls.some((candidate) => candidate.name === 'Instant unique'),
+    `offered ${controls.map((candidate) => candidate.name).join(', ')}`)
 }
 
 // A pack whose dump predates the handle (#97) must still resolve its controls.

@@ -67,9 +67,11 @@ import {
 import type { DisplaySnapshot, ReplayFetch } from './capture'
 import {
   freezeContext,
+  contextObservationFromSurfaceSample,
   frozenObservations,
   frozenWindow,
   logContextCost,
+  refreshContextSurfaceSample,
   releaseContext,
 } from './context/runtime'
 import {
@@ -121,12 +123,15 @@ import { showSaveToast, updateToastRenderStatus } from './saveToast'
 import { startSourceFirstFinalSave } from './sourceFirstFinalSave'
 import { persistSettings } from './settings'
 import {
+  imageRegionSelectorWindowHandles,
   selectImageRegion,
   type ImageRegionSelection,
 } from './imageRegionSelector'
 import {
   composeUiaForImageDesktop,
   cropUiaForImage,
+  imageWindowObservation,
+  mergeImageWindowFloor,
 } from './imageContext'
 import {
   createImageDesktopBitmap,
@@ -735,6 +740,41 @@ function composeImageDesktop(
 
 async function runImageFlow(settings: Settings): Promise<void> {
   const triggerAt = Date.now()
+  // Read full Win32 membership immediately before the pixels. Projection waits
+  // until the native snapshot sizes are known, but the observed geometry does
+  // not move to a post-screenshot instant.
+  const triggerSurfaceSample = await refreshContextSurfaceSample()
+  const contextFreezeId = freezeContext(triggerAt, 0)
+  try {
+    await runImageFlowWithContext(
+      settings,
+      triggerAt,
+      contextFreezeId,
+      triggerSurfaceSample,
+    )
+  } finally {
+    releaseContext(contextFreezeId)
+  }
+}
+
+function physicalContextBounds(
+  bounds: { x: number; y: number; width: number; height: number },
+): { x: number; y: number; width: number; height: number } | undefined {
+  try {
+    return screen.dipToScreenRect(null, bounds)
+  } catch {
+    // Windows production exposes dipToScreenRect. Non-Windows and deterministic
+    // harnesses can omit the identity and use their explicit fixture mapping.
+    return undefined
+  }
+}
+
+async function runImageFlowWithContext(
+  settings: Settings,
+  triggerAt: number,
+  contextFreezeId: string | null,
+  triggerSurfaceSample: Awaited<ReturnType<typeof refreshContextSurfaceSample>>,
+): Promise<void> {
   let uiaDump: Promise<UiaRawDump | null>
   if (settings.uiaEnabled) {
     uiaDump = startUiaDump()
@@ -763,23 +803,9 @@ async function runImageFlow(settings: Settings): Promise<void> {
   })
   if (selectable.length === 0) throw new Error('no screen source is available')
   const desktop = layoutImageDesktop(selectable)
-  const selection = await selectImageRegion({
-    displays: selectable,
-    focusedDisplayId: String(focused.id),
-    uiLanguage: uiLanguage(settings),
-  })
-  if (selection === null) {
-    snapshots.clear()
-    logInfo('[image] selection cancelled — no pack was written')
-    return
-  }
-
   const focusedDisplay =
     allDisplays.find((display) => display.id === focused.id) ?? allDisplays[0]
   if (focusedDisplay === undefined) throw new Error('the focused display disappeared')
-  const selectedDisplay =
-    allDisplays.find((display) => String(display.id) === selection.displayId) ??
-    focusedDisplay
   const focusedPlacement =
     desktop.placements.find((placement) => placement.id === String(focused.id)) ??
     desktop.placements[0]
@@ -790,14 +816,43 @@ async function runImageFlow(settings: Settings): Promise<void> {
   const targets: UiaDisplayTarget[] = desktop.placements.flatMap((placement) => {
     const display = displayById.get(placement.id)
     if (display === undefined) return []
+    const desktopBounds = physicalContextBounds(display.bounds)
     return [{
       index: placement.index,
       focused: placement.index === contextFocusedDisplay,
       bounds: { ...display.bounds },
+      ...(desktopBounds === undefined ? {} : { desktopBounds }),
       width: placement.width,
       height: placement.height,
     }]
   })
+  const frozenImageWindows =
+    contextFreezeId === null
+      ? []
+      : frozenObservations(contextFreezeId, targets, 0)
+  // The source pixels are already frozen and the selector does not exist yet.
+  // Ask the resident Win32 host for one complete membership snapshot now, so a
+  // program created since the last cadence sample is not omitted. This direct
+  // result avoids depending on whether the video frame clock has started.
+  const exactImageWindows = await contextObservationFromSurfaceSample(
+    triggerSurfaceSample,
+    targets,
+  )
+  const selectionPending = selectImageRegion({
+    displays: selectable,
+    focusedDisplayId: String(focused.id),
+    uiLanguage: uiLanguage(settings),
+  })
+  const selectorHwnds = imageRegionSelectorWindowHandles()
+  const selection = await selectionPending
+  if (selection === null) {
+    snapshots.clear()
+    logInfo('[image] selection cancelled — no pack was written')
+    return
+  }
+  const selectedDisplay =
+    allDisplays.find((display) => String(display.id) === selection.displayId) ??
+    focusedDisplay
   const desktopUia = uiaDump
     .then((raw) => {
       if (raw === null) return null
@@ -822,6 +877,7 @@ async function runImageFlow(settings: Settings): Promise<void> {
     scale: placement.scaleFactor,
   }))
   let uiaReady: Promise<UiaPluginPayload | null>
+  let imageWindows: ContextObservation | null
 
   if (selection.mode === 'fullscreen') {
     if (selectable.length !== allDisplays.length) {
@@ -837,6 +893,10 @@ async function runImageFlow(settings: Settings): Promise<void> {
     width = desktop.width
     height = desktop.height
     uiaReady = desktopUia
+    imageWindows = imageWindowObservation(
+      exactImageWindows ?? frozenImageWindows[frozenImageWindows.length - 1],
+      desktop.placements,
+    )
   } else {
     // Cross-monitor drags crop the lossless all-display composition. Only this
     // explicit rectangle survives; the temporary full desktop is released
@@ -859,7 +919,20 @@ async function runImageFlow(settings: Settings): Promise<void> {
         logError('[image] mapping/cropping UI Automation context failed:', err)
         return null
       })
+    imageWindows = imageWindowObservation(
+      exactImageWindows ?? frozenImageWindows[frozenImageWindows.length - 1],
+      desktop.placements,
+      selection.pixelRect,
+    )
   }
+  uiaReady = uiaReady.then((payload) =>
+    mergeImageWindowFloor(
+      payload,
+      imageWindows,
+      isoWithOffset(new Date(triggerAt)),
+      selectorHwnds,
+    ),
+  )
   // From this point onward the only reachable raster is the explicit crop or
   // the explicitly requested all-display composition.
   desktopPng = null
@@ -1222,11 +1295,13 @@ async function runFlow(settings: Settings): Promise<void> {
   )
   const contextDisplays = uiaTargets.map((target) => {
     const snapshotPixelsPerDip = snapshotScaleByIndex.get(target.index)
+    const desktopBounds = physicalContextBounds(target.bounds)
     return {
       index: target.index,
       focused: target.focused,
       width: target.width,
       height: target.height,
+      ...(desktopBounds === undefined ? {} : { desktopBounds }),
       ...(snapshotPixelsPerDip === undefined ? {} : { snapshotPixelsPerDip }),
     }
   })
@@ -2392,7 +2467,13 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
       dropped: loadedUiaDropped,
       domEvents: loadedDomEvents,
     })
-    if (loadedWindowsContextObservations.length > 1) {
+    // A zero-duration image, a very short video, or an exact trim can
+    // legitimately contain one checkpoint. Dropping it here made the Core
+    // window floor present in the fresh editor and absent after reopen.
+    if (
+      loadedWindowsContextObservations.length > 0 &&
+      loadedWindowsContextObservations.some((observation) => observation.windows.length > 0)
+    ) {
       try {
         contextSession.adoptAll(loadedWindowsContextObservations)
         logInfo(

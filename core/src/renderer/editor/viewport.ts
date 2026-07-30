@@ -7,9 +7,31 @@ export const ZOOM_MAX = 4
 /** One notch of Ctrl+wheel — and one press of the top bar's [-] / [+]. */
 export const ZOOM_STEP = 1.2
 
-/** The zoom range is a hard wall: nothing may set a factor outside it. */
-export function clampZoom(zoom: number): number {
-  return clamp(zoom, ZOOM_MIN, ZOOM_MAX)
+/**
+ * The normal zoom range is a hard wall. Still-image native 1:1 may explicitly
+ * supply a higher ceiling when a very large raster needs more than 4x from its
+ * fitted opening; video and every ordinary caller retain the 4x limit.
+ */
+export function clampZoom(zoom: number, maxZoom = ZOOM_MAX): number {
+  return clamp(zoom, ZOOM_MIN, Math.max(ZOOM_MIN, maxZoom))
+}
+
+/** Zoom ceiling that can always represent native 1:1 for a fitted image. */
+export function nativeImageZoomCeiling(fitScale: number): number {
+  return Math.max(ZOOM_MAX, fitScale > 0 ? 1 / fitScale : ZOOM_MAX)
+}
+
+/**
+ * The first view for a still image.
+ *
+ * `fitScale` is the contain scale already computed by the editor layout and is
+ * capped at 1. A raster that fits the content viewport therefore opens at
+ * native 1:1, while an oversized raster opens contained so every captured
+ * pixel is visible. This decision is kept pure so the opening contract can be
+ * regression-tested without launching Electron.
+ */
+export function initialImageViewMode(fitScale: number): 'fit' | 'native' {
+  return fitScale < 1 ? 'fit' : 'native'
 }
 
 export class Viewport {
@@ -30,8 +52,18 @@ export class Viewport {
   }
 
   /** Zooms by one step, keeping the point under the cursor fixed. */
-  zoomAt(clientX: number, clientY: number, zoomIn: boolean): void {
-    this.zoomTo(this.zoom * (zoomIn ? ZOOM_STEP : 1 / ZOOM_STEP), clientX, clientY)
+  zoomAt(
+    clientX: number,
+    clientY: number,
+    zoomIn: boolean,
+    maxZoom = ZOOM_MAX,
+  ): void {
+    this.zoomTo(
+      this.zoom * (zoomIn ? ZOOM_STEP : 1 / ZOOM_STEP),
+      clientX,
+      clientY,
+      maxZoom,
+    )
   }
 
   /**
@@ -42,8 +74,13 @@ export class Viewport {
    * the stage centre there, on the cursor for Ctrl+wheel. Same range, same
    * transform, one implementation, so the two can never disagree.
    */
-  zoomTo(zoom: number, clientX: number, clientY: number): void {
-    const next = clampZoom(zoom)
+  zoomTo(
+    zoom: number,
+    clientX: number,
+    clientY: number,
+    maxZoom = ZOOM_MAX,
+  ): void {
+    const next = clampZoom(zoom, maxZoom)
     if (next === this.zoom) return
     // rect.left = untransformedLeft + panX, so the cursor-fixed pan update
     // only needs the current on-screen rect.

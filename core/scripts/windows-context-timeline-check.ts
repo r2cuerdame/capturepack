@@ -186,6 +186,81 @@ function cloneAt(observation: ContextObservation, tMs: number): ContextObservati
 async function main(): Promise<void> {
   console.log('Windows context timeline: fresh -> JSON -> reopen\n')
 
+  const identicalMonitorObservation = frozenRingObservations(
+    () => ({
+      surfaces: [
+        {
+          surfaceId: 'left-window',
+          hwnd: '100',
+          bounds: { x: -1920, y: 0, width: 800, height: 600 },
+          zOrder: 0,
+          visible: true,
+          minimized: false,
+          foreground: false,
+          executableName: 'left.exe',
+          windowTitle: 'Left',
+          className: 'LeftWindow',
+        },
+        {
+          surfaceId: 'right-window',
+          hwnd: '200',
+          bounds: { x: 100, y: 0, width: 800, height: 600 },
+          zOrder: 1,
+          visible: true,
+          minimized: false,
+          foreground: true,
+          executableName: 'right.exe',
+          windowTitle: 'Right',
+          className: 'RightWindow',
+        },
+      ],
+    }),
+    [
+      // Deliberately reverse the helper enumeration. A greedy size-only match
+      // swaps these two indistinguishable 1920x1080 monitors.
+      {
+        device: 'RIGHT',
+        primary: true,
+        bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+      },
+      {
+        device: 'LEFT',
+        primary: false,
+        bounds: { x: -1920, y: 0, width: 1920, height: 1080 },
+      },
+    ],
+    [
+      {
+        index: 1,
+        focused: false,
+        width: 1920,
+        height: 1080,
+        desktopBounds: { x: -1920, y: 0, width: 1920, height: 1080 },
+      },
+      {
+        index: 2,
+        focused: true,
+        width: 1920,
+        height: 1080,
+        desktopBounds: { x: 0, y: 0, width: 1920, height: 1080 },
+      },
+    ],
+    0,
+    [0],
+  )[0]
+  check(
+    'identical monitors bind by physical origin, not helper enumeration',
+    identicalMonitorObservation?.windows.map((window) => ({
+      title: window.title,
+      display: window.display,
+      x: window.bounds.x,
+    })),
+    [
+      { title: 'Left', display: 1, x: 0 },
+      { title: 'Right', display: 2, x: 100 },
+    ],
+  )
+
   const fresh = frozenRingObservations(
     (tMs) => surfacesAt(tMs),
     monitors,

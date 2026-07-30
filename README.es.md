@@ -19,7 +19,7 @@ que una IA no tenga que inferirlos solo a partir de píxeles.
 Versión pública actual para Windows: **CapturePack 0.3.2**
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=5" alt="CapturePack parte de AHORA a la derecha, mueve el cabezal a la izquierda hasta 5 segundos atrás, restaura y selecciona el control hijo que existía en ese fotograma histórico y exporta evidencia estructurada para IA." width="760">
+  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/motion/es/capturepack-time-machine-poster.webp" alt="CapturePack parte de AHORA a la derecha, mueve el cabezal a la izquierda hasta 5 segundos atrás, restaura y selecciona el control hijo que existía en ese fotograma histórico y exporta evidencia estructurada para IA." width="760">
 </p>
 
 ## Flujo de trabajo
