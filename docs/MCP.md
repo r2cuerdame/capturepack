@@ -250,6 +250,17 @@ generically, `capturepack_find_dom` searches it, and `capturepack_windows`
 returns window-related plugin data. Image packs can carry capture-instant UIA
 context, but intentionally have no replay-clock window timeline.
 
+Read a DOM pick's `element.bounds` as **viewport CSS pixels of the top
+document**, not as snapshot pixels, and `viewport` as what makes them
+placeable — the browser window's position is not something a page can know, so
+the application derives the rest from the window's observed client rectangle.
+An element picked inside an iframe is measured in its own frame and translated
+up the frame chain before it is recorded; `element.frameDepth` says how far down
+it was found (`0` = the top document, absent in packs written before extension
+0.1.9). A pack contains only picks the user explicitly made — the DOM is never
+streamed — so an absent `chrome-dom` directory means nobody was watching, not
+that nothing happened.
+
 Two fields decide how to read the UIA snapshot. `windows[].z` is the z-order (`0` = top-most), so a question
 like *"what is at (x, y)?"* is answered by the lowest-`z` window containing the point, never by
 a control of a window that another window covers there. `windows[].tree` says what happened to

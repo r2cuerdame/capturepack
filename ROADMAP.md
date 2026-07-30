@@ -47,9 +47,23 @@ verification history. These are the current additions and next gates:
   Per-display source-to-encoded-video alignment remains tracked in
   [#89](https://github.com/r2cuerdame/capturepack/issues/89) when motion evidence
   is insufficient; the writer does not invent a fixed correction.
-- Next: continue physical mixed-DPI/long-running recording, save/reopen,
-  installer/update and Chrome reconnection QA; harden the preview integration;
-  and design an explicit sanitized-sharing path.
+- 0.3.4 is **in progress and unreleased**, on `agent/0.3.4`
+  ([PR #105](https://github.com/r2cuerdame/capturepack/pull/105)): element
+  picking that reports arming, failure and every refusal instead of failing
+  silently; picking inside iframes with a measured frame offset; an explicitly
+  picked document element no longer filtered by a threshold measured for UI
+  Automation enumerations ([#104](https://github.com/r2cuerdame/capturepack/issues/104));
+  a routine update notice held over a locked screen
+  ([#103](https://github.com/r2cuerdame/capturepack/issues/103)); and the
+  measurement that narrows #89 — renderer-to-main transport and the memory
+  governor are ruled out, and 95% of samples take a path that does not carry the
+  frame-age term.
+- Next: carry the frame-age term onto the converted and held sample paths before
+  anything makes that term carry a real exposure latency; then the moving #89
+  fixture and a measured per-display source-to-encoded-PTS mapping. Alongside
+  that, continue physical mixed-DPI/long-running recording, save/reopen,
+  installer/update and Chrome reconnection QA, and design an explicit
+  sanitized-sharing path.
 
 ---
 
@@ -193,7 +207,11 @@ not frozen, and top-level `input.*` events remain reserved.
       native host and installer registration
 - [x] Built-in UIA and Chrome settings expose enable/disable and live health
 - [ ] General third-party plugin manager and stable after-save API
-- [ ] Extension Phase 2: DOM snapshot, Shadow DOM, iframes, SPA route detection
+- [x] Element picking inside iframes, with the frame offset measured by
+      cooperating frames rather than assumed (0.3.4, unreleased)
+- [x] The picker reports arming, failure and every refusal, so a pick that does
+      not arrive says where it stopped (0.3.4, unreleased)
+- [ ] Extension Phase 2: DOM snapshot, Shadow DOM, SPA route detection
 - [x] Chromium-family registration (Chrome, Edge, Brave and Chromium)
 - [x] Built-in Windows UI Automation context provider
 - [ ] Git plugin · Console plugin

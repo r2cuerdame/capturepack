@@ -35,6 +35,14 @@ record preserved later in this document:
 - The editor authors unified boxes and can bind them to captured UIA, Chrome
   DOM or HWND evidence. Observed object tracks use the nearest real sample and
   are never interpolated; authored manual-box keyframes may interpolate.
+- The browser integration is explicit-pick only and crosses three processes:
+  page → extension service worker → native messaging host → a per-user named
+  pipe the running application listens on. The DOM is never streamed. A pick
+  made inside an iframe is carried up the frame chain and therefore passes
+  through the ancestor pages that already host it — an accepted exposure, and
+  the reason a pick is only ever accepted from a frame the receiving document
+  actually hosts, and only while the user has armed the picker. Nothing on this
+  path may cost a capture: every failure is logged and swallowed.
 - Export is source-first. Original snapshot/replay media are never modified;
   blur is applied only to declared derived views. `viewer.html`, pack
   documents and rendered media are regenerated atomically without being

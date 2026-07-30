@@ -84,6 +84,7 @@
     "check:temporal": "node test/temporal/check.mjs",
     "check:validator": "node ../tools/validate-capturepack-check.mjs",
     "check:spec": "node ../tools/validate-capturepack.mjs ../examples/minimal",
+    "check:docs": "node scripts/docs-contract-check.mjs",
     "check:site": "node ../site/validate.mjs",
     "smoke": "node scripts/smoke-check.mjs",
     "qa:checks": "node scripts/qa-gate.mjs --skip-build",
