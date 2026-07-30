@@ -21,6 +21,17 @@ application `0.3.3` can generate packs using newer additive format versions;
 the optional offline viewer is defined for compatible packs at format `0.5.0`
 or newer.
 
+**Work in progress.** `0.3.3` is the public release and `main` carries it.
+Unreleased 0.3.4 work lives on `agent/0.3.4`
+([PR #105](https://github.com/r2cuerdame/capturepack/pull/105)): element picking
+that reports itself, cross-frame element picking
+([#104](https://github.com/r2cuerdame/capturepack/issues/104)), the lock-screen
+update notice ([#103](https://github.com/r2cuerdame/capturepack/issues/103)),
+and the measurement that narrows
+[#89](https://github.com/r2cuerdame/capturepack/issues/89). No version bump, no
+tag, no binaries. `GOAL.md`'s "0.3.4 in progress" section is the design record;
+[Handoff](HANDOFF.md) carries the state and the next order.
+
 ## Development and QA
 
 | Document | Purpose |
