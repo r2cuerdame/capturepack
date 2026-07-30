@@ -15,6 +15,7 @@ import type { RenderFramePayload, RenderResultPayload, RenderStartPayload } from
 import type { Annotation } from '../../shared/types'
 import { computeDisplayNumbers } from '../../shared/numbering'
 import { computeKeyframeTimes } from '../../shared/keyframes'
+import { annotationColor } from '../../shared/annotationStyle'
 import { renderedAnnotationAt } from '../../shared/track'
 import type { AuthoredMotionSpace } from '../../shared/track'
 
@@ -33,7 +34,6 @@ declare global {
 }
 
 const BLUR_BLOCK = 12 // native px per pixelation block (matches the editor preview)
-const FALLBACK_COLOR = '#FF3B30' // boxes without style.color (editor palette default)
 
 window.renderBridge.onStart((payload) => {
   void run(payload)
@@ -453,7 +453,7 @@ function drawBox(
   ui: number,
 ): void {
   const { x, y, width: w, height: h } = a.bounds
-  const color = a.style?.color ?? FALLBACK_COLOR
+  const color = annotationColor(a)
 
   ctx.save()
   ctx.strokeStyle = color

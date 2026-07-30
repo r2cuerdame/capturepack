@@ -16,10 +16,10 @@
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [ダウンロード](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-現在公開中のWindows版: **CapturePack 0.3.1**
+現在公開中のWindows版: **CapturePack 0.3.2**
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=4" alt="過去のフレームへ巻き戻し、子UIコントロールを選択し、記録済みの名前と種類を確認し、所有ウィンドウの観測済み移動を追ってAI向け構造化証拠を書き出すCapturePack" width="760">
+  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=5" alt="右側のNOWから再生ヘッドを左の5秒前へ動かし、その過去フレームに存在した子UIコントロールを復元して選択し、AI向け構造化証拠を書き出すCapturePack" width="760">
 </p>
 
 ## ワークフロー
@@ -114,7 +114,7 @@ role・text・URLには機密情報が含まれる場合があります。Captur
 
 ## 状態とセキュリティ
 
-0.3.1が現在の公開版です。現在のビルドは未署名のためSmartScreenが警告することがあり、各リリースに
+0.3.2が現在の公開版です。現在のビルドは未署名のためSmartScreenが警告することがあり、各リリースに
 検証用`SHA256SUMS.txt`があります。
 
 ローカルファースト · オフラインファースト · オープン形式 · クラウドなし ·

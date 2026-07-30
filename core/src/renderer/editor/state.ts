@@ -1,28 +1,17 @@
-// Box-annotation store with snapshot-based undo/redo and the shared palette.
+// Box-annotation store with snapshot-based undo/redo.
 // The editor works directly in format 0.1.0 BoxAnnotations (SPEC §8) — what it
 // holds is exactly what gets saved into annotations.json.
 import type { Annotation } from '../../shared/types'
 
-export const PALETTE = ['#FF3B30', '#FF9500', '#FFD60A', '#34C759', '#0A84FF'] as const
-
 export class EditorState {
   annotations: Annotation[] = []
   selectedId: string | null = null
-  private colorIndex = 0
   private undoStack: Annotation[][] = []
   private redoStack: Annotation[][] = []
   // Every annotation_id ever handed out this session, so an id freed by undo
   // is never reissued — core.annotation.added timeline events (sent at commit
   // time) must stay unambiguous.
   private usedIds = new Set<string>()
-
-  get color(): string {
-    return PALETTE[this.colorIndex] ?? PALETTE[0]
-  }
-
-  cycleColor(): void {
-    this.colorIndex = (this.colorIndex + 1) % PALETTE.length
-  }
 
   /** Identity + stacking stamp for a new box: "ann_" + 6 lowercase hex (SPEC §8.3). */
   nextStamp(): { annotation_id: string; z: number; created_at: string } {

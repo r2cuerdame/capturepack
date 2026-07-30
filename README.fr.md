@@ -16,10 +16,10 @@ mouvement observés afin que l’IA n’ait pas à les déduire des seuls pixels
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Télécharger](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Version Windows publique actuelle : **CapturePack 0.3.1**
+Version Windows publique actuelle : **CapturePack 0.3.2**
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=4" alt="CapturePack revient à une image passée, choisit un contrôle enfant, affiche son nom et son type capturés, suit le déplacement observé de sa fenêtre et exporte des preuves structurées pour l’IA." width="760">
+  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=5" alt="CapturePack part de MAINTENANT à droite, déplace la tête de lecture vers la gauche jusqu’à 5 secondes plus tôt, restaure et sélectionne le contrôle enfant présent dans cette image historique, puis exporte des preuves structurées pour l’IA." width="760">
 </p>
 
 ## Fonctionnement
@@ -94,7 +94,7 @@ pack complet s’il contient des informations privées.
 
 ## État, sécurité et licence
 
-0.3.1 est la version publique actuelle. Le build n’est pas signé : SmartScreen peut avertir. Chaque
+0.3.2 est la version publique actuelle. Le build n’est pas signé : SmartScreen peut avertir. Chaque
 version fournit `SHA256SUMS.txt`.
 
 Local d’abord · sans cloud · sans compte · sans télémétrie · [Licence MIT](LICENSE)

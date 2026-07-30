@@ -48,6 +48,12 @@ export const IPC = {
 
   // main -> editor window: everything the editor needs to open
   editorInit: 'editor:init',
+  // editor -> main: the bootstrap payload decoded and the first annotation
+  // frame reached a paint boundary. Main does not reveal the window before it.
+  editorInitialized: 'editor:initialized',
+  // editor -> main: bootstrap/decode failed. Main logs and closes the still
+  // hidden editor instead of showing an unrecoverable dark shell.
+  editorInitFailed: 'editor:init-failed',
   // main -> editor: the native caption Close button was pressed. The renderer
   // owns dirty state, so it either confirms unsaved edits or answers with
   // editorCancel; main keeps the window alive until one of those answers.

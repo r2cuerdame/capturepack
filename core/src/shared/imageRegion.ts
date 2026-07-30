@@ -44,9 +44,14 @@ export type ImageRegionIntent =
 
 export interface ImageRegionSelection {
   mode: 'region' | 'fullscreen'
+  /**
+   * Display that owns the editor placement for this selection. A region may
+   * cross several displays; in that case this is the display with the largest
+   * DIP overlap (the trigger/focused display wins an exact tie).
+   */
   displayId: string
   displayIndex: number
-  /** Crop inside this display's already-frozen raster. */
+  /** Crop inside the already-frozen all-display composite. */
   pixelRect: ImageRegionRect
   /**
    * The same exact pixel edges projected back onto the virtual desktop.
@@ -364,6 +369,52 @@ export function resolveImageDesktopRegion(
     displayIds: orderedDisplays.map(([, id]) => id),
     displayIndices: orderedDisplays.map(([index]) => index),
   }
+}
+
+/**
+ * Chooses where a region editor should open.
+ *
+ * The shortcut can be pressed on one monitor and the drag completed on
+ * another. Placing the editor on the shortcut monitor made a landscape crop
+ * appear on an unrelated portrait display. The display containing the most of
+ * the chosen rectangle is the one the user was actually working on; the
+ * focused display is only a deterministic tie-breaker for a seam-spanning
+ * selection.
+ */
+export function preferredImageRegionDisplay(
+  displays: readonly ImageRegionSelectorDisplay[],
+  desktopDipRect: ImageRegionRect,
+  focusedDisplayId: string,
+): ImageRegionSelectorDisplay | null {
+  const requested = normalizedRect(desktopDipRect)
+  if (requested === null) return null
+
+  let best: ImageRegionSelectorDisplay | null = null
+  let bestArea = 0
+  for (const display of displays) {
+    if (!validImageRegionDisplay(display)) return null
+    const intersection = intersectRect(requested, display.bounds)
+    if (intersection === null) continue
+    const area = intersection.width * intersection.height
+    const winsArea = area > bestArea
+    const winsFocusedTie =
+      area === bestArea &&
+      display.id === focusedDisplayId &&
+      best?.id !== focusedDisplayId
+    const winsStableTie =
+      area === bestArea &&
+      !winsFocusedTie &&
+      best !== null &&
+      display.id !== focusedDisplayId &&
+      best.id !== focusedDisplayId &&
+      (display.index < best.index ||
+        (display.index === best.index && display.id.localeCompare(best.id) < 0))
+    if (best === null || winsArea || winsFocusedTie || winsStableTie) {
+      best = display
+      bestArea = area
+    }
+  }
+  return best
 }
 
 /**

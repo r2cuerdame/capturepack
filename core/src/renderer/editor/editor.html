@@ -9,7 +9,7 @@
   <title>CapturePack</title>
   <link rel="stylesheet" href="./editor.css" />
 </head>
-<body>
+<body data-window-mode="windowed">
   <!-- Windowed title bar (GOAL "Editor Window Mode", issue #49): WINDOWED MODE
        ONLY. The top bar was already the drag region, but its controls stretch
        across the whole width, so the only draggable pixels were the few of gap
@@ -33,10 +33,9 @@
        fit the board again; never Esc, issue #53), documented in the help
        sheet rather than in a row of toolbar buttons. -->
   <header id="topbar">
-    <!-- The colour picker is gone. A box colour is decoration, not evidence:
-         it carried no meaning into the pack, nothing read it back, and it was
-         one more thing to choose while the point of this editor is that there
-         is nothing left to choose. -->
+    <!-- The colour picker is gone. Colour is automatic provenance, not a user
+         preference: manual geometry is red and a semantically picked object is
+         blue. The same rule is shared by the editor and final renderer. -->
     <input id="titleInput" type="text" placeholder="Title (optional)" data-i18n-placeholder="editor.titlePlaceholder" autocomplete="off" spellcheck="false" />
     <input id="noteInput" type="text" placeholder="What is wrong? (optional)" data-i18n-placeholder="editor.notePlaceholder" autocomplete="off" spellcheck="false" />
     <!-- Static object picking (GOAL "Static object picking (v0)"): the one

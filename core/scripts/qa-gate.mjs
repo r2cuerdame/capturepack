@@ -30,6 +30,7 @@ const VIDEO_PROFILE_CHECKS = new Set([
   'check:numbering',
   'check:motion',
   'check:render',
+  'check:annotation-style',
   'check:trim',
   'check:plugins',
   'check:past',

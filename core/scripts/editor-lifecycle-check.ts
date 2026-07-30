@@ -9,6 +9,7 @@ import {
 } from '../src/main/editorCloseWatchdog'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
+import { replayOnce } from '../src/preload/replayOnce'
 
 interface FakeTimer extends WatchdogTimer {
   id: number
@@ -104,6 +105,89 @@ console.log('\nEditor native-close response watchdog')
   check('disposed flow can never arm again', !watchdog.isArmed() && scheduler.pending.size === 0)
 }
 
+// `ready-to-show` is a paint milestone, not a renderer-listener handshake.
+// The reported blank image editor was the untouched HTML shell: Main sent
+// editor:init before editor.ts subscribed, so the snapshot, locale and
+// window-mode title strip were never initialized. Exercise both event orders.
+console.log('\nEditor bootstrap IPC mailbox')
+{
+  const beforeSubscribe = replayOnce<{ id: number }>()
+  const beforeReceived: number[] = []
+  beforeSubscribe.push({ id: 1 })
+  beforeSubscribe.subscribe((value) => beforeReceived.push(value.id))
+  check(
+    'init sent before renderer subscription is replayed exactly once',
+    JSON.stringify(beforeReceived) === JSON.stringify([1]),
+  )
+
+  const afterSubscribe = replayOnce<{ id: number }>()
+  const afterReceived: number[] = []
+  afterSubscribe.subscribe((value) => afterReceived.push(value.id))
+  afterSubscribe.push({ id: 2 })
+  check(
+    'init sent after renderer subscription is delivered directly',
+    JSON.stringify(afterReceived) === JSON.stringify([2]),
+  )
+
+  const replacedPending = replayOnce<{ id: number }>()
+  const replacedReceived: number[] = []
+  replacedPending.push({ id: 3 })
+  replacedPending.push({ id: 4 })
+  replacedPending.subscribe((value) => replacedReceived.push(value.id))
+  check(
+    'only the latest pre-subscription bootstrap can initialize the page',
+    JSON.stringify(replacedReceived) === JSON.stringify([4]),
+  )
+  replacedPending.push({ id: 5 })
+  replacedPending.subscribe((value) => replacedReceived.push(value.id))
+  check(
+    'a delivered bootstrap cannot initialize the editor a second time',
+    JSON.stringify(replacedReceived) === JSON.stringify([4]),
+  )
+
+  const preload = source('src/preload/editor.ts')
+  const renderer = source('src/renderer/editor/editor.ts')
+  const session = source('src/main/session.ts')
+  const html = source('src/renderer/editor/editor.html')
+  const listenerAt = preload.indexOf('ipcRenderer.on(IPC.editorInit')
+  const bridgeAt = preload.indexOf("contextBridge.exposeInMainWorld('editorBridge'")
+  check(
+    'preload owns editor:init before exposing the renderer bridge',
+    listenerAt >= 0 &&
+      bridgeAt > listenerAt &&
+      preload.includes('editorInit.push(payload)') &&
+      preload.includes('editorInit.subscribe(cb)'),
+  )
+  check(
+    'windowed title strip reserves native caption space before init arrives',
+    html.includes('<body data-window-mode="windowed">'),
+  )
+  check(
+    'renderer acknowledges only after decode and a paint boundary, and reports rejection',
+    renderer.includes('.then(() => window.editorBridge.initialized())') &&
+      renderer.includes('requestAnimationFrame(() => requestAnimationFrame(() => resolve()))') &&
+      renderer.includes('window.editorBridge.initializationFailed(message)') &&
+      preload.includes('ipcRenderer.send(IPC.editorInitialized)') &&
+      preload.includes('ipcRenderer.send(IPC.editorInitFailed'),
+  )
+  const handshake = sectionBetween(
+    session,
+    'function initializeAndShowEditor(',
+    '// Resolves when the editor session ends:',
+  )
+  check(
+    'Main listens before sending init and reveals only after renderer success',
+    handshake.indexOf('ipcMain.on(IPC.editorInitialized') <
+      handshake.indexOf('editor.webContents.send(IPC.editorInit') &&
+      handshake.indexOf('editor.webContents.send(IPC.editorInit') <
+        handshake.indexOf('editor.show()') &&
+      handshake.includes('ipcMain.on(IPC.editorInitFailed') &&
+      handshake.includes("editor.once('closed', onClosed)") &&
+      (session.match(/await initializeAndShowEditor\(editor, init\)/g) ?? []).length === 3 &&
+      (session.match(/editor\.webContents\.send\(IPC\.editorInit/g) ?? []).length === 1,
+  )
+}
+
 // History's Edit button and the main re-edit flow are an asynchronous contract.
 // The rc.36 failure was not a malformed pack: the invoke stayed pending while
 // main synchronously entered the long-lived editor flow, so History remained
@@ -170,8 +254,8 @@ console.log('\nHistory -> replay editor reopen contract')
     '// The editor window',
   )
   const replayReadAt = runEdit.indexOf('pack.readBinary(replayRel)')
-  const sendAt = runEdit.indexOf('editor.webContents.send(IPC.editorInit, init)')
-  const showAt = runEdit.indexOf('editor.show()', sendAt)
+  const editModeAt = runEdit.indexOf('editMode: true')
+  const initializeAt = runEdit.indexOf('await initializeAndShowEditor(editor, init)')
   check(
     'a reopened replay is read from the manifest-declared media path',
     runEdit.includes('replayFileName(manifest.media.replay)')
@@ -180,9 +264,9 @@ console.log('\nHistory -> replay editor reopen contract')
       && runEdit.includes('replayWebm: replayWebm === null ? null : toArrayBuffer(replayWebm)'),
   )
   check(
-    'the replay editor receives editMode before its native window is shown',
-    runEdit.includes('editMode: true') && sendAt >= 0 && showAt > sendAt,
-    `send=${sendAt}, show=${showAt}`,
+    'the replay editor receives editMode before the acknowledged initialization flow starts',
+    editModeAt >= 0 && initializeAt > editModeAt,
+    `editMode=${editModeAt}, initialize=${initializeAt}`,
   )
   check(
     'slow context restoration cannot keep the replay editor hidden forever',

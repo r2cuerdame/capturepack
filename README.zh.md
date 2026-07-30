@@ -15,10 +15,10 @@
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [下载](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-当前公开 Windows 版本：**CapturePack 0.3.1**
+当前公开 Windows 版本：**CapturePack 0.3.2**
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=4" alt="CapturePack 回到过去画面，选择子 UI 控件，显示捕获时的名称和控件类型，跟随所属窗口的观测移动，并导出 AI 可读的结构化证据" width="760">
+  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=5" alt="CapturePack 从右侧 NOW 开始，把播放头向左移动到 5 秒前，恢复并选择只存在于该历史画面的子 UI 控件，再导出 AI 可读的结构化证据" width="760">
 </p>
 
 ## 使用流程
@@ -104,7 +104,7 @@ CapturePack_2026-07-27_143052/
 
 ## 状态与安全
 
-0.3.1 是当前公开版本。当前构建未签名，SmartScreen 可能警告；
+0.3.2 是当前公开版本。当前构建未签名，SmartScreen 可能警告；
 每个版本都附带用于验证的 `SHA256SUMS.txt`。
 
 本地优先 · 离线优先 · 开放格式 · 无云端 · 无登录 · 无遥测

@@ -86,31 +86,6 @@ body[data-window-mode="windowed"] #titleBar {
   border-bottom: 1px solid var(--border);
 }
 
-#colorBtn {
-  flex: none;
-  width: 28px;
-  height: 28px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: transparent;
-  cursor: pointer;
-}
-
-#colorBtn:hover {
-  background: var(--panel-hover);
-}
-
-#colorSwatch {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.5);
-  background: #ff3b30;
-}
-
 #topbar input[type="text"] {
   background: #111116;
   border: 1px solid var(--border);

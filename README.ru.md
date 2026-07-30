@@ -16,10 +16,10 @@
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Скачать](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Текущая публичная версия для Windows: **CapturePack 0.3.1**
+Текущая публичная версия для Windows: **CapturePack 0.3.2**
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=4" alt="CapturePack возвращается к прошлому кадру, выбирает дочерний элемент, показывает сохранённые имя и тип, следует за наблюдавшимся движением окна и экспортирует структурированные доказательства для ИИ." width="760">
+  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=5" alt="CapturePack начинает справа на отметке СЕЙЧАС, перемещает ползунок влево к моменту 5 секунд назад, возвращает и выбирает дочерний UI-элемент из этого исторического кадра и экспортирует структурированные доказательства для ИИ." width="760">
 </p>
 
 ## Процесс
@@ -94,7 +94,7 @@ CapturePack не загружает снимки, телеметрию или о
 
 ## Статус, безопасность и лицензия
 
-0.3.1 — текущая публичная версия. Сборка пока не подписана, поэтому SmartScreen может предупредить;
+0.3.2 — текущая публичная версия. Сборка пока не подписана, поэтому SmartScreen может предупредить;
 в каждом выпуске есть `SHA256SUMS.txt`.
 
 Локально · без облака · без аккаунта · без телеметрии · [Лицензия MIT](LICENSE)

@@ -7,6 +7,7 @@
 // a 1x portrait display at negative X next to a 1.5x 4K display.
 import {
   imageVirtualDesktopDipBounds,
+  preferredImageRegionDisplay,
   resolveImageDesktopRegion,
   resolveImageDesktopRegionFromLocalRect,
   resolveImageRegionIntent,
@@ -64,6 +65,31 @@ const acrossSeam = resolveImageDesktopRegion(
   mixedDesktop,
   { x: -300, y: 100, width: 600, height: 400 },
 )
+
+const portraitLowerTail = resolveImageDesktopRegion(
+  [left, primary],
+  mixedDesktop,
+  { x: -1000, y: 1500, width: 500, height: 300 },
+)
+same(
+  portraitLowerTail,
+  {
+    desktopDipRect: { x: -1000, y: 1500, width: 500, height: 300 },
+    compositePixelRect: { x: 200, y: 1500, width: 500, height: 300 },
+    displayIds: ['left-negative'],
+    displayIndices: [1],
+  },
+  'the portrait-only area below the primary work area remains selectable',
+)
+same(
+  preferredImageRegionDisplay(
+    [left, primary],
+    portraitLowerTail?.desktopDipRect ?? { x: 0, y: 0, width: 0, height: 0 },
+    primary.id,
+  )?.id,
+  left.id,
+  'a portrait-tail capture opens its editor on the selected portrait display',
+)
 same(
   acrossSeam,
   {
@@ -73,6 +99,24 @@ same(
     displayIndices: [1, 2],
   },
   'one drag crosses the 1x/1.5x seam and crops both native rasters without a monitor boundary',
+)
+same(
+  preferredImageRegionDisplay(
+    [left, primary],
+    acrossSeam?.desktopDipRect ?? { x: 0, y: 0, width: 0, height: 0 },
+    primary.id,
+  )?.id,
+  primary.id,
+  'the trigger display wins an exact overlap tie for a seam-spanning capture',
+)
+same(
+  preferredImageRegionDisplay(
+    [left, primary],
+    { x: 100, y: 100, width: 800, height: 600 },
+    left.id,
+  )?.id,
+  primary.id,
+  'a landscape capture opens on landscape even when the shortcut began on portrait',
 )
 same(
   resolveImageDesktopRegion(

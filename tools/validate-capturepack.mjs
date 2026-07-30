@@ -1191,7 +1191,8 @@ function validateAnnotations(a, snapshotDims, replay, replayDurationMs, displayI
   let bad = 0;
   let blurCount = 0;
   const numberedBoxes = []; // { id, startMs, z, index } for display-number computation
-  const targetedBoxes = []; // annotation ids carrying a source:"uia" target (SPEC §8.7)
+  const targetedBoxes = []; // annotation ids carrying any recognized semantic target (SPEC §8.7)
+  const domTargetedBoxes = [];
   const displayBoxes = new Map(); // display index -> how many boxes name it (SPEC §8.8)
   const frameForDisplay = (display) => {
     if (isInt(display) && displayInfo.snapshots.has(display)) {
@@ -1518,8 +1519,31 @@ function validateAnnotations(a, snapshotDims, replay, replayDurationMs, displayI
             note(`${label}.target.${f} is an empty string — a UIA property the element had no value for MUST be omitted, not written empty (SPEC §8.7)`);
           }
         }
+      } else if (ann.target.source === "chrome-dom") {
+        const targetId = isStr(ann.annotation_id) ? ann.annotation_id : `(annotations[${i}])`;
+        targetedBoxes.push(targetId);
+        domTargetedBoxes.push(targetId);
+        if (ann.target.level !== "control") {
+          fail(`${label}.target.level MUST be "control" for source "chrome-dom" (SPEC §8.7)`);
+          bad++;
+        }
+        for (const f of ["object_id", "selector"]) {
+          if (!isStr(ann.target[f]) || ann.target[f].length === 0) {
+            fail(`${label}.target.${f} MUST be a non-empty string for source "chrome-dom" (SPEC §8.7)`);
+            bad++;
+          }
+        }
+        for (const f of ["tag", "dom_id", "role", "url", "title", "name"]) {
+          if (ann.target[f] === undefined) continue;
+          if (!isStr(ann.target[f])) {
+            fail(`${label}.target.${f} MUST be a string (SPEC §8.7)`);
+            bad++;
+          } else if (ann.target[f].length === 0) {
+            note(`${label}.target.${f} is empty and SHOULD be omitted (SPEC §8.7)`);
+          }
+        }
       } else {
-        note(`${label}.target.source "${ann.target.source}" is not defined in format 0.1.0 — skipped (readers MUST ignore target sources they do not understand and render the box from bounds, SPEC §8.7)`);
+        note(`${label}.target.source "${ann.target.source}" is not defined by this validator — skipped (readers MUST ignore target sources they do not understand and render the box from bounds, SPEC §8.7)`);
       }
     }
 
@@ -1582,7 +1606,10 @@ function validateAnnotations(a, snapshotDims, replay, replayDurationMs, displayI
     note(`annotations.json: ${blurCount} box(es) are marked blur — snapshot.png and the replay keep the ORIGINAL unredacted pixels; blur renders only into derived views such as replay_annotated (SPEC §9)`);
   }
   if (targetedBoxes.length > 0) {
-    pass(`annotations.json: ${targetedBoxes.length} box(es) carry a semantic target with source "uia" (${targetedBoxes.join(", ")}) — the box's geometry still comes from bounds alone (SPEC §8.7)`);
+    pass(`annotations.json: ${targetedBoxes.length} box(es) carry recognized semantic target metadata (${targetedBoxes.join(", ")}) — the box's geometry still comes from bounds alone (SPEC §8.7)`);
+  }
+  if (domTargetedBoxes.length > 0) {
+    pass(`annotations.json: ${domTargetedBoxes.length} Chrome DOM target(s) preserve provider identity across save/reopen (${domTargetedBoxes.join(", ")})`);
   }
   // Multi-display packs: say which screens carry boxes, and against which
   // snapshot each group's coordinates are read (SPEC §8.8).

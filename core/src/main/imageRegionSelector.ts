@@ -20,6 +20,7 @@ import type {
 import type { Language } from '../shared/i18n'
 import {
   imageVirtualDesktopDipBounds,
+  preferredImageRegionDisplay,
   resolveImageDesktopRegion,
   validImageRegionDisplay,
 } from '../shared/imageRegion'
@@ -169,6 +170,38 @@ function broadcastFocus(flow: ActiveSelector): void {
   }
 }
 
+function revalidateFocusedBounds(flow: ActiveSelector): void {
+  // `showInactive()` is not a focus activation. Windows may run another
+  // DPI/non-client sizing pass when `show(); focus()` follows, so inspect all
+  // HWNDs on the next turn and fail the whole selector closed if one moved.
+  setImmediate(() => {
+    if (active !== flow || flow.settled) return
+    for (const record of flow.records) {
+      if (record.win.isDestroyed()) {
+        settle(flow, null)
+        return
+      }
+      const actual = record.win.getBounds()
+      const expected = record.display.bounds
+      if (
+        actual.x !== expected.x ||
+        actual.y !== expected.y ||
+        actual.width !== expected.width ||
+        actual.height !== expected.height
+      ) {
+        console.error(
+          'capturepack: focused image selector changed display bounds ' +
+            `${record.display.index}: expected ` +
+            `${expected.x},${expected.y} ${expected.width}x${expected.height}; got ` +
+            `${actual.x},${actual.y} ${actual.width}x${actual.height}`,
+        )
+        settle(flow, null)
+        return
+      }
+    }
+  })
+}
+
 function focusCurrent(flow: ActiveSelector): void {
   // A rapid second hotkey may arrive while preload scripts are still loading.
   // Do not let that convenience focus punch one visible/click-blocking window
@@ -180,6 +213,7 @@ function focusCurrent(flow: ActiveSelector): void {
   if (record === undefined || record.win.isDestroyed()) return
   record.win.show()
   record.win.focus()
+  revalidateFocusedBounds(flow)
 }
 
 function dragRect(flow: ActiveSelector): ImageRegionRect | null {
@@ -211,11 +245,69 @@ function allReady(flow: ActiveSelector): void {
     flow.startupTimer = null
   }
 
+  // Windows/Electron can clamp a frameless window created non-resizable to the
+  // PRIMARY work area. On the reported desk that changed BOTH overlays to
+  // 1392 px high, leaving the bottom 528 px of the 1200x1920 portrait display
+  // uncovered and impossible to select. Creation stays resizable (manual
+  // resizing is vetoed below), and every native window must prove it covers
+  // its complete Display bounds — taskbar included — before any of them show.
+  for (const record of flow.records) {
+    if (record.win.isDestroyed()) {
+      settle(flow, null)
+      return
+    }
+    record.win.setBounds(record.display.bounds)
+    const actual = record.win.getBounds()
+    const expected = record.display.bounds
+    if (
+      actual.x !== expected.x ||
+      actual.y !== expected.y ||
+      actual.width !== expected.width ||
+      actual.height !== expected.height
+    ) {
+      console.error(
+        'capturepack: image selector did not cover display ' +
+          `${record.display.index}: expected ` +
+          `${expected.x},${expected.y} ${expected.width}x${expected.height}; got ` +
+          `${actual.x},${actual.y} ${actual.width}x${actual.height}`,
+      )
+      settle(flow, null)
+      return
+    }
+  }
+
   // Reveal the whole virtual desk as one visual operation. Progressive showing
   // used to leave a real desktop strip clickable while another renderer was
   // still loading; all overlays must prove their listeners are installed first.
   for (const record of flow.records) {
     if (!record.win.isDestroyed()) record.win.showInactive()
+  }
+  // Activation can run a second Windows sizing pass. Re-read the native
+  // bounds after showInactive as well; if DPI/window-manager activation changed
+  // even one overlay, close the complete selector instead of leaving a visible
+  // but clickable desktop hole.
+  for (const record of flow.records) {
+    if (record.win.isDestroyed()) {
+      settle(flow, null)
+      return
+    }
+    const actual = record.win.getBounds()
+    const expected = record.display.bounds
+    if (
+      actual.x !== expected.x ||
+      actual.y !== expected.y ||
+      actual.width !== expected.width ||
+      actual.height !== expected.height
+    ) {
+      console.error(
+        'capturepack: visible image selector changed display bounds ' +
+          `${record.display.index}: expected ` +
+          `${expected.x},${expected.y} ${expected.width}x${expected.height}; got ` +
+          `${actual.x},${actual.y} ${actual.width}x${actual.height}`,
+      )
+      settle(flow, null)
+      return
+    }
   }
   broadcastFocus(flow)
   focusCurrent(flow)
@@ -299,10 +391,16 @@ function registerIpc(): void {
       found.flow.displays.find((display) => display.id === found.flow.focusedDisplayId) ??
       found.flow.displays[0]
     if (focused === undefined) return
+    const preferred =
+      preferredImageRegionDisplay(
+        found.flow.displays,
+        region.desktopDipRect,
+        focused.id,
+      ) ?? focused
     settle(found.flow, {
       mode: 'region',
-      displayId: focused.id,
-      displayIndex: focused.index,
+      displayId: preferred.id,
+      displayIndex: preferred.index,
       pixelRect: region.compositePixelRect,
       desktopDipRect: region.desktopDipRect,
     })
@@ -344,13 +442,21 @@ function registerIpc(): void {
             )
             return region === null
               ? null
-              : {
-                  mode: 'region',
-                  displayId: focused.id,
-                  displayIndex: focused.index,
-                  pixelRect: region.compositePixelRect,
-                  desktopDipRect: region.desktopDipRect,
-                }
+              : (() => {
+                  const preferred =
+                    preferredImageRegionDisplay(
+                      found.flow.displays,
+                      region.desktopDipRect,
+                      focused.id,
+                    ) ?? focused
+                  return {
+                    mode: 'region' as const,
+                    displayId: preferred.id,
+                    displayIndex: preferred.index,
+                    pixelRect: region.compositePixelRect,
+                    desktopDipRect: region.desktopDipRect,
+                  }
+                })()
           })()
     // Ignore an empty rectangle and leave the selector usable. Only explicit
     // Esc or a valid choice may close the seamless virtual-desktop overlay.
@@ -405,7 +511,15 @@ function makeOverlay(
     alwaysOnTop: true,
     skipTaskbar: true,
     movable: false,
-    resizable: false,
+    // IMPORTANT: keep this true at the native-window layer. Electron's Windows
+    // implementation can shrink a frameless `resizable: false` window to the
+    // primary work area while applying its min/max constraints (electron#13043).
+    // `will-resize` below vetoes user resizing without corrupting the initial
+    // per-monitor bounds.
+    resizable: true,
+    // Preserve that construction path without WS_THICKFRAME stealing pointer
+    // hits at an outer monitor edge or the seam between selector HWNDs.
+    thickFrame: false,
     minimizable: false,
     maximizable: false,
     fullscreenable: false,
@@ -423,6 +537,7 @@ function makeOverlay(
     },
   })
   win.setMenuBarVisibility(false)
+  win.on('will-resize', (event) => event.preventDefault())
   // `screen-saver` is the documented cross-fullscreen level. A normal
   // always-on-top window can fall behind a fullscreen app on only one monitor,
   // leaving a misleading hole in the selection surface.

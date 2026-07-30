@@ -729,7 +729,7 @@ Every annotation object:
 | `tracking` | object | OPTIONAL | Object-tracking state. `enabled` (boolean) is REQUIRED inside `tracking`. When `true`, `samples` (array, non-empty) is REQUIRED and carries the path the box follows — see below. When `false` or absent, the box is a fixed rectangle and `bounds` is all there is. Absent means `{ "enabled": false }`. Readers MUST ignore tracking content they do not understand and treat the box as untracked, which is always safe: `bounds` remains correct on its own. |
 | `tracking.samples[]` | object | see above | One rectangle the tracked object occupied: `t_ms` (number, on the replay clock — [§10.1](#101-the-replay-clock)), `x`, `y`, `width`, `height` (numbers, pixels in the snapshot of the sample's own display), and OPTIONAL `display` (number — the [§5.6](#56-per-display-media) index whose snapshot these numbers are pixels of; absent means the annotation's own `display`, [§8.8](#88-which-display-a-box-belongs-to)). Samples MUST be in ascending `t_ms`, and each MUST lie within its own display's snapshot — a window may hang off a screen edge, but the part past it is in no image, so a sample is the VISIBLE rectangle (the same rule `bounds` obeys, [§8.2](#82-coordinate-space)). **Every sample is an OBSERVATION.** A reader resolving a time between two samples MUST use the NEARER sample unchanged, and MUST NOT interpolate: an interpolated rectangle is a position the object never occupied, written in the same numbers as a measured one, and nothing in the pack distinguishes them. Writers SHOULD record one sample per captured frame, which is what makes that rule cost nothing — a pack cannot show a moment finer than a frame. Before the first sample and after the last, the box is held at that end. A box's LIFETIME ([§8.4](#84-lifetime)) — not the sample range — is what says when it stops being drawn. **Added in 0.2.0.** |
 | `target` | object | OPTIONAL | Semantic object metadata: what real UI object the box points at (DOM selector, role and text; Windows UI Automation `AutomationId`/`ControlType`; engine object ids…). This is where the earlier draft's "element"/Tracked Element concept lives now — a box *with a target* is a semantic annotation; there is no separate element type. Its `source` field says where the metadata came from; see [§8.7](#87-target-semantic-objects). Readers MUST ignore sources and fields they do not understand and MUST still render the box from `bounds`. |
-| `style` | object | OPTIONAL | Display styling. In 0.1.0 the only defined field is `color`: CSS-style hex, `"#RRGGBB"` or `"#RRGGBBAA"`, used for the border, badge, and text. Viewers pick their own default when absent. |
+| `style` | object | OPTIONAL | Display styling. In 0.1.0 the only defined field is `color`: CSS-style hex, `"#RRGGBB"` or `"#RRGGBBAA"`, used for the border, badge, and text. CapturePack writers use red `"#FF3B30"` for a newly authored manual rectangle and blue `"#0A84FF"` for a newly picked semantic object. When `style.color` is absent, viewers SHOULD use that same semantic rule (`target` present or `tracking.enabled: true` = blue; otherwise red). When it is present, readers MUST preserve and render the stored value so existing/custom packs are never silently recoloured. |
 | `created_at` | string | OPTIONAL | When the annotation was made, ISO 8601 with timezone. |
 | `z` | integer | OPTIONAL | Stacking order for rendering; higher draws on top. Also a tiebreaker in display numbering ([§8.5](#85-display-numbers)). Default: the annotation's array position (later entries on top). |
 
@@ -850,7 +850,7 @@ Numbered boxes carry visible numbers — ①, ②, ③ — in every rendered vie
         "automation_id": "saveButton",
         "class_name": "Chrome_WidgetWin_1"
       },
-      "style": { "color": "#FF3B30" },
+      "style": { "color": "#0A84FF" },
       "created_at": "2026-07-27T14:03:29+09:00",
       "z": 2
     },
@@ -913,6 +913,12 @@ and Electron windows build one only when an assistive client asks, and some apps
 all. The window is what a writer can always identify, so a box on such an app still says *which
 window* it points at rather than nothing. A reader MUST NOT treat a `"window"` target as a
 lesser one: it is a complete answer at a coarser granularity.
+
+**`source: "chrome-dom"` — Chrome DOM capture.** A selected document element carries
+`level: "control"`, its provider-stable `object_id`, and every non-empty identity field the
+provider observed: `selector`, `tag`, `dom_id`, `role`, `url`, `title`, and `name`. This target
+persists the meaning of a DOM pick across save/reopen; it does not authorize a later live DOM
+query. Readers that do not understand this source ignore its fields and render `bounds`.
 
 - **The bounds are the truth.** `target` describes the object a box was placed on; it never
   overrides, extends, or replaces `bounds`. A reader that cannot resolve the object still has

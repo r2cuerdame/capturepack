@@ -10,10 +10,26 @@ import type {
 import type { ContextFrame } from '../shared/context/protocol'
 import type { ObjectTrackRequest, ObjectTrackResult } from '../shared/ipc'
 import type { EditorWindowMode } from '../shared/types'
+import { replayOnce } from './replayOnce'
+
+// Installed before the page module runs. `ready-to-show` can precede the
+// renderer's `onInit()` subscription; without this mailbox that race leaves a
+// visible but completely blank editor with the native caption buttons sitting
+// over the uninitialized toolbar.
+const editorInit = replayOnce<EditorInitPayload>()
+ipcRenderer.on(IPC.editorInit, (_event, payload: EditorInitPayload) => {
+  editorInit.push(payload)
+})
 
 contextBridge.exposeInMainWorld('editorBridge', {
   onInit(cb: (payload: EditorInitPayload) => void): void {
-    ipcRenderer.on(IPC.editorInit, (_event, payload: EditorInitPayload) => cb(payload))
+    editorInit.subscribe(cb)
+  },
+  initialized(): void {
+    ipcRenderer.send(IPC.editorInitialized)
+  },
+  initializationFailed(message: string): void {
+    ipcRenderer.send(IPC.editorInitFailed, message.slice(0, 2_000))
   },
   onCloseRequested(cb: () => void): void {
     ipcRenderer.on(IPC.editorCloseRequested, () => cb())

@@ -27,6 +27,11 @@ import type {
   EditorWindowMode,
   UiaAnnotationTarget,
 } from '../../shared/types'
+import {
+  annotationHasSemanticGeometry,
+  MANUAL_BOX_COLOR,
+  SEMANTIC_BOX_COLOR,
+} from '../../shared/annotationStyle'
 import { annotationAt, trackedBoundsAt } from '../../shared/track'
 import type { AuthoredMotionSpace } from '../../shared/track'
 import {
@@ -83,6 +88,10 @@ import { clampZoom, Viewport, ZOOM_MAX, ZOOM_MIN, ZOOM_STEP } from './viewport'
 
 interface EditorBridge {
   onInit(cb: (payload: EditorInitPayload) => void): void
+  // Main reveals the native window only after image decode and one paint
+  // boundary succeed. A failure closes the still-hidden editor.
+  initialized(): void
+  initializationFailed(message: string): void
   // Native caption Close is only a request until the renderer has checked its
   // dirty edit state.
   onCloseRequested(cb: () => void): void
@@ -186,9 +195,6 @@ const overlayCtx = ctx2d(overlay)
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
-
-/** Green: Core owns this rectangle (#99). Mirrors render.ts's TRACKED_COLOR. */
-const TRACKED_BOX_COLOR = '#22C55E'
 
 const MIN_DRAG = 3 // native px below which a right-drag creates nothing
 const MIN_SIZE = 2 // native px floor for resize (bounds sizes must stay > 0)
@@ -516,7 +522,7 @@ function displayOf(a: Annotation): BoardDisplay | null {
 
 /** The index `displayOf` resolves to — the grouping key for per-display draws. */
 /**
- * A TRACKED BOX IS NOT DRAGGED (#99).
+ * A SEMANTIC BOX IS NOT DRAGGED (#52, #99).
  *
  * Its rectangle is Core's record of where the object actually was, at every
  * moment of the replay. Moving or resizing it does not adjust an annotation —
@@ -527,8 +533,15 @@ function displayOf(a: Annotation): BoardDisplay | null {
  * Everything else stays available: select it, describe it, number it, blur it,
  * change its lifetime, delete it. Only the geometry is Core's.
  */
-function isTracked(a: Annotation): boolean {
-  return a.tracking?.enabled === true
+function coreOwnsGeometry(a: Annotation): boolean {
+  // `target` and active tracking survive a save/reopen. The in-memory identity
+  // covers a freshly picked provider object whose provenance cannot yet be
+  // represented by SPEC §8.7 (for example Chrome DOM) without falsely calling
+  // it UIA. Either way, blue object geometry never becomes a manual keyframe.
+  return (
+    annotationHasSemanticGeometry(a) ||
+    pickedObjectIdentities.has(a.annotation_id)
+  )
 }
 
 function displayIndexOf(a: Annotation): number {
@@ -1374,10 +1387,6 @@ function syncTrimDropChip(): void {
 // Box creation (right-drag) + commit
 // ---------------------------------------------------------------------------
 
-function cycleColor(): void {
-  state.cycleColor()
-}
-
 /** A pointer position in BOARD units, or null before the board exists. */
 function toBoardUnits(e: PointerEvent | MouseEvent): { x: number; y: number } | null {
   if (board === null) return null
@@ -1460,7 +1469,7 @@ function dragDraft(d: {
     numbered: false,
     blur: false,
     tracking: { enabled: false },
-    style: { color: state.color },
+    style: { color: MANUAL_BOX_COLOR },
     created_at: '',
     z: Number.MAX_SAFE_INTEGER,
   }
@@ -1507,15 +1516,14 @@ function beginPendingBox(on: BoardDisplay, b: Box, picked?: PickableObject): voi
     numbered: false,
     blur: false,
     tracking: { enabled: false },
-    // A picked box carries the TRACKED colour explicitly (#99) rather than
+    // A picked box carries the SEMANTIC colour explicitly (#52) rather than
     // relying on a reader's default: the pack should say what it looks like.
-    style: { color: picked === undefined ? state.color : TRACKED_BOX_COLOR },
+    style: { color: picked === undefined ? MANUAL_BOX_COLOR : SEMANTIC_BOX_COLOR },
     created_at: stamp.created_at,
     z: stamp.z,
   }
   if (picked !== undefined) {
-    const target = uiaTargetOf(picked)
-    if (target !== null) draft.target = target
+    draft.target = annotationTargetOf(picked)
     pickedObjectIdentities.set(draft.annotation_id, pickIdentityOf(picked))
     // Remembered so a later move/resize can tell whether the box still
     // annotates the object it claims to.
@@ -1935,7 +1943,7 @@ function paintedSelectionId(): string | null {
  * "Otherwise" excludes the top bar's title/note fields: the header is also
  * shown for a merely SELECTED box, so [#]/[Blur] can be clicked mid-sentence in
  * the pack title. Yanking focus to the canvas there would feed the rest of the
- * sentence to the shortcut ladder (c cycles the colour, Delete deletes the box).
+ * sentence to the shortcut ladder (Delete deletes the box).
  * The header's mousedown preventDefault already keeps focus out of the buttons
  * themselves, so leaving it exactly where it is, is right.
  */
@@ -2716,7 +2724,7 @@ function pickBeatsBox(picked: PickableObject, a: Annotation, at: AimAt): boolean
   // "Selected, never dragged, when Core owns the rectangle" (#99, the
   // pointerdown below) — so for it the gate defended nothing and cost the
   // refinement flow; it now applies the same area bar as every other box.
-  if (a.annotation_id === state.selectedId && !isTracked(a)) return false
+  if (a.annotation_id === state.selectedId && !coreOwnsGeometry(a)) return false
   if (at.repeat === true) return false
   if (onBoxEdge(a, at.x, at.y, at.ui)) return false
   if (annotatesPick(a, picked)) return false
@@ -3348,16 +3356,28 @@ function invalidateTargetIfMoved(id: string): void {
 /**
  * `target` for a picked object (SPEC §8.7): empty fields are never written.
  *
- * SPEC 0.1.0 defines exactly one `source` — `uia` — so a target is only stamped
- * for candidates that really came from Windows UI Automation or from Core's own
- * window level (which is what `uia` has always meant for a window target). A
- * candidate from any other provider gets NO target rather than one claiming a
- * provenance the format does not define yet: §8.7 becoming provider-general is
- * a SPEC change, and a format change is not done until SPEC.md and the MCP
- * tools speak it.
+ * UIA and Core's window floor keep the established `source:"uia"` shape.
+ * Other providers retain their own source and stable identity. That additive
+ * target is what lets a Chrome DOM box remain semantic (blue and
+ * geometry-owned) after save/reopen instead of silently becoming a manual
+ * rectangle just because the editor process forgot its in-memory pick map.
  */
-function uiaTargetOf(o: PickableObject): AnnotationTarget | null {
-  if (o.providerId !== 'windows-uia' && o.providerId !== 'core') return null
+function annotationTargetOf(o: PickableObject): AnnotationTarget {
+  if (o.providerId !== 'windows-uia' && o.providerId !== 'core') {
+    const target: AnnotationTarget = {
+      source: o.providerId,
+      level: o.level,
+      object_id: o.candidate.objectId,
+    }
+    const identity = o.candidate.identity ?? {}
+    for (const key of ['selector', 'tag', 'dom_id', 'role', 'url', 'title']) {
+      const value = (identity[key] ?? '').trim()
+      if (value !== '') target[key] = value
+    }
+    const name = (o.candidate.name ?? '').trim()
+    if (name !== '') target.name = name
+    return target
+  }
   const identity = o.candidate.identity ?? {}
   const target: UiaAnnotationTarget = { source: 'uia', level: o.level }
   const value = (key: string): string => (identity[key] ?? '').trim()
@@ -3517,7 +3537,7 @@ overlay.addEventListener('pointerdown', (e) => {
   // Corner resize handles (editor-only chrome) win over box stacking — but only
   // for a selection that lives on THIS screen.
   const sel = selectedPaintedAnnotation()
-  if (sel !== null && !isTracked(sel) && displayIndexOf(sel) === hit.d.index) {
+  if (sel !== null && !coreOwnsGeometry(sel) && displayIndexOf(sel) === hit.d.index) {
     const handle = handleAt(sel, p.x, p.y, ui)
     if (handle !== null) {
       overlay.setPointerCapture(e.pointerId)
@@ -3582,7 +3602,7 @@ overlay.addEventListener('pointerdown', (e) => {
       showObjectHintOnce('boxTookClick', t('editor.objectBoxTookClick'), 'answer')
     }
     // Selected, never dragged, when Core owns the rectangle (#99).
-    if (!isTracked(box)) {
+    if (!coreOwnsGeometry(box)) {
       overlay.setPointerCapture(e.pointerId)
       // The moment being authored is the frame ON SCREEN for this display, not
       // the playhead (#81): the user is placing the box over what they can see.
@@ -3817,7 +3837,7 @@ function syncHoverCursor(e: PointerEvent): void {
   }
   const ui = uiOf(hit.d)
   const sel = selectedPaintedAnnotation()
-  if (sel !== null && !isTracked(sel) && displayIndexOf(sel) === hit.d.index) {
+  if (sel !== null && !coreOwnsGeometry(sel) && displayIndexOf(sel) === hit.d.index) {
     const handle = handleAt(sel, hit.x, hit.y, ui)
     if (handle !== null) {
       setHoverCursor(handle === 'nw' || handle === 'se' ? 'nwse-resize' : 'nesw-resize')
@@ -3834,7 +3854,9 @@ function syncHoverCursor(e: PointerEvent): void {
   const pickWins =
     hoverObject !== null &&
     (box === null || pickBeatsBox(hoverObject, box, { x: hit.x, y: hit.y, ui }))
-  setHoverCursor(box !== null && !pickWins ? 'move' : 'default')
+  setHoverCursor(
+    box !== null && !pickWins && !coreOwnsGeometry(box) ? 'move' : 'default',
+  )
 }
 
 // The outline must not linger once the pointer leaves the canvas.
@@ -4233,7 +4255,7 @@ window.addEventListener('keydown', (e) => {
  */
 function removeSelectedKeyframe(): void {
   const selected = state.selectedId === null ? undefined : state.byId(state.selectedId)
-  if (selected === undefined || !hasMotion(selected)) return
+  if (selected === undefined || coreOwnsGeometry(selected) || !hasMotion(selected)) return
   const atMs = presentedOn(displayIndexOf(selected))
   if (keyframeIndexAt(selected, atMs) < 0) return
   applyMutation((box) => {
@@ -4705,6 +4727,20 @@ window.addEventListener('resize', () => {
 
 window.editorBridge.onInit((payload) => {
   void initEditor(payload)
+    .then(
+      () =>
+        new Promise<void>((resolve) => {
+          // The first callback runs the paint scheduled by initEditor; the
+          // second proves a frame boundary passed with decoded pixels ready.
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+        }),
+    )
+    .then(() => window.editorBridge.initialized())
+    .catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error('capturepack: editor initialization failed:', err)
+      window.editorBridge.initializationFailed(message)
+    })
 })
 
 window.editorBridge.onCloseRequested(() => {

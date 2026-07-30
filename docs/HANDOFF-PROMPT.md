@@ -2,15 +2,16 @@
 
 ---
 
-## Current 0.3.1 takeover prompt
+## Current 0.3.2 takeover prompt
 
 You are taking over CapturePack at `C:\_Project\capturepack`. Read
 `docs/HANDOFF.md` completely, beginning with its 2026-07-30 current-state
 section; preserve the historical measurements below it.
 
-The active package/docs baseline is 0.3.1. Verify the mixed-DPI Chrome DOM
-projection, late-plugin document regeneration, and manifest-declared derived
-guidance with the full gate:
+The active package/docs baseline is 0.3.2. Verify exact native selector coverage,
+selection-owned editor placement, lossless editor bootstrap, persistent
+manual/semantic box ownership, mixed-DPI Chrome DOM projection, late-plugin
+document regeneration, and manifest-declared derived guidance with the full gate:
 
 ```powershell
 cd C:\_Project\capturepack\core

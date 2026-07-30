@@ -8,6 +8,50 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 
 Nothing yet.
 
+## 0.3.2 — 2026-07-30
+
+Focused Windows editor and multi-monitor correctness patch.
+
+### Fixed
+
+- **The still-image selector could lose the lower 528 pixels of a left portrait
+  monitor.** Electron was constraining a frameless, non-resizable overlay to
+  the primary work area. Selector windows now keep native resize capability
+  during construction without a native thick-frame hit zone, veto user
+  resizing, reapply every display's exact bounds, and fail closed unless the
+  actual HWND bounds match while hidden, after reveal and after focus
+  activation.
+- **A region selected on one monitor could open its editor on another.** The
+  selected rectangle's largest display overlap now owns editor placement;
+  shortcut focus is only the tie-breaker for an exact cross-monitor split.
+- **A still-image editor could open as a blank dark page with Windows caption
+  buttons covering the toolbar.** The preload now buffers the one-shot
+  `editor:init` message before renderer subscription. Main now keeps the native
+  editor hidden until the renderer has decoded its media, crossed a paint
+  boundary and acknowledged success. Hidden-window throttling is disabled only
+  for this bootstrap and restored before reveal; decode failure closes the
+  hidden window instead of revealing a blank shell. The initial document also
+  reserves native caption space before initialization.
+- **Manual and semantic boxes no longer share an arbitrary colour picker.**
+  New manual rectangles are red, picked objects are blue, all renderers use one
+  colour rule, and stored legacy/custom colours remain unchanged. Semantic
+  rectangles cannot be moved into manual keyframes. Chrome DOM picks persist
+  provider target identity so that rule survives save and reopen. Selection
+  handles and move cursors now follow the same ownership rule instead of
+  advertising gestures that semantic boxes reject.
+- **The landing demo could read as forward playback.** Its rail, playhead,
+  labels and reduced-motion frame now explicitly start at `NOW` on the right,
+  move left to the past, then reveal and select the historical child control.
+
+### Verification
+
+- The RC gate passes all 50 sequential checks, including actual hidden and
+  activated Electron windows on every attached display, mixed-DPI/negative-origin
+  region fixtures, a hidden two-frame paint probe, editor
+  bootstrap/acknowledgement event-order tests, DOM target round trips, build,
+  isolated Electron smoke, and strict forensic validation of the reported pack
+  with zero errors and zero warnings.
+
 ## 0.3.1 — 2026-07-30
 
 Post-release hotfixes found by adversarial QA against the public 0.3.0 build.

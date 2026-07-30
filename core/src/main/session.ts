@@ -777,6 +777,9 @@ async function runImageFlow(settings: Settings): Promise<void> {
   const focusedDisplay =
     allDisplays.find((display) => display.id === focused.id) ?? allDisplays[0]
   if (focusedDisplay === undefined) throw new Error('the focused display disappeared')
+  const selectedDisplay =
+    allDisplays.find((display) => String(display.id) === selection.displayId) ??
+    focusedDisplay
   const focusedPlacement =
     desktop.placements.find((placement) => placement.id === String(focused.id)) ??
     desktop.placements[0]
@@ -918,7 +921,7 @@ async function runImageFlow(settings: Settings): Promise<void> {
   })
 
   const { win: editor, mode: windowMode } = createEditorWindow(
-    focusedDisplay.bounds,
+    selectedDisplay.bounds,
     settings,
   )
   editor.webContents.on('console-message', (_event, level, message) => {
@@ -969,10 +972,7 @@ async function runImageFlow(settings: Settings): Promise<void> {
         windowMode,
       }
       if (editor.isDestroyed()) return
-      editor.webContents.send(IPC.editorInit, init)
-      editor.maximize()
-      editor.show()
-      editor.focus()
+      await initializeAndShowEditor(editor, init)
 
       if (!settled.ready) {
         void uiaReady.then(
@@ -1579,14 +1579,7 @@ async function runFlow(settings: Settings): Promise<void> {
         // the user left it last time.
         windowMode,
       }
-      editor.webContents.send(IPC.editorInit, init)
-      // MAXIMIZED, not merely windowed. The editor shows a whole desktop and
-      // then asks the user to find something in it; opening at a remembered
-      // fraction of the screen makes that harder for no gain. It stays a REAL
-      // window — un-maximize, move and resize all still work — and where the
-      // user leaves it is remembered exactly as before.
-      editor.maximize()
-      editor.show()
+      await initializeAndShowEditor(editor, init)
       // The dump was not back in time: hand it over the moment it is, rather
       // than throwing away a payload the capture already paid for. The editor
       // rebuilds its object indexes and picking simply starts working.
@@ -2466,15 +2459,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
         windowMode,
       }
       if (editor.isDestroyed()) return
-      editor.webContents.send(IPC.editorInit, init)
-      // MAXIMIZED, not merely windowed. The editor shows a whole desktop and
-      // then asks the user to find something in it; opening at a remembered
-      // fraction of the screen makes that harder for no gain. It stays a REAL
-      // window — un-maximize, move and resize all still work — and where the
-      // user leaves it is remembered exactly as before.
-      editor.maximize()
-      editor.show()
-      editor.focus()
+      await initializeAndShowEditor(editor, init)
       logInfo(`[capture] re-edit editor shown: ${path.basename(dirPath)}`)
 
       if (!settledFrame.ready) {
@@ -3171,6 +3156,10 @@ function createEditorWindow(bounds: EditorWindowBounds, settings: Settings): Edi
     show: false,
     webPreferences: {
       preload: path.join(app.getAppPath(), 'dist', 'preload', 'editor.js'),
+      // Chromium may throttle requestAnimationFrame in a hidden native window.
+      // Initialization deliberately crosses two paint boundaries before ACK,
+      // so keep only this short bootstrap interval unthrottled.
+      backgroundThrottling: false,
     },
   })
   activeEditor = editor
@@ -3380,6 +3369,72 @@ function createEditorWindow(bounds: EditorWindowBounds, settings: Settings): Edi
       if (!editor.isDestroyed()) editor.destroy()
     })
   return { win: editor, mode }
+}
+
+/**
+ * Sends the one-shot editor payload and reveals the native window only after
+ * the renderer has decoded its pixels and crossed a paint boundary.
+ *
+ * The createEditorWindow startup timer remains the outer bound. If the
+ * renderer rejects, crashes or never answers, the hidden window is destroyed
+ * and this promise rejects through `closed`; callers already catch that path
+ * and release the capture flow.
+ */
+function initializeAndShowEditor(
+  editor: BrowserWindow,
+  init: EditorInitPayload,
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    if (editor.isDestroyed()) {
+      reject(new Error('editor closed before initialization'))
+      return
+    }
+    let settled = false
+    const cleanup = (): void => {
+      ipcMain.removeListener(IPC.editorInitialized, onInitialized)
+      ipcMain.removeListener(IPC.editorInitFailed, onFailed)
+      editor.removeListener('closed', onClosed)
+    }
+    const finish = (error: Error | null): void => {
+      if (settled) return
+      settled = true
+      cleanup()
+      if (error === null) resolve()
+      else reject(error)
+    }
+    const fromEditor = (event: IpcMainEvent): boolean =>
+      !editor.isDestroyed() && event.sender === editor.webContents
+    const onInitialized = (event: IpcMainEvent): void => {
+      if (!fromEditor(event)) return
+      finish(null)
+    }
+    const onFailed = (event: IpcMainEvent, payload: unknown): void => {
+      if (!fromEditor(event)) return
+      const detail =
+        typeof payload === 'string' && payload.trim() !== ''
+          ? `: ${payload.trim().slice(0, 2_000)}`
+          : ''
+      finish(new Error(`editor renderer initialization failed${detail}`))
+    }
+    const onClosed = (): void => finish(new Error('editor closed before initialization'))
+
+    ipcMain.on(IPC.editorInitialized, onInitialized)
+    ipcMain.on(IPC.editorInitFailed, onFailed)
+    editor.once('closed', onClosed)
+    try {
+      editor.webContents.send(IPC.editorInit, init)
+    } catch (err) {
+      finish(err instanceof Error ? err : new Error(String(err)))
+    }
+  }).then(() => {
+    if (editor.isDestroyed()) throw new Error('editor closed after initialization')
+    // Restore the normal minimized/background CPU policy before the user sees
+    // the window; the exception above exists only for the hidden paint ACK.
+    editor.webContents.setBackgroundThrottling(true)
+    editor.maximize()
+    editor.show()
+    editor.focus()
+  })
 }
 
 // Resolves when the editor session ends: export, cancel, or the window closing.

@@ -45,7 +45,7 @@ electron-builder's implicit CI upload before those checks.
 1. Open **GitHub → Actions → Release → Run workflow**.
 2. Select the branch/ref containing the exact reviewed commit. The dispatched
    run pins its `GITHUB_SHA`; verify that SHA before publication.
-3. Enter a tag matching the package version, for example `v0.3.1`.
+3. Enter a tag matching the package version, for example `vX.Y.Z`.
 4. Run the workflow and wait for every step to succeed.
 
 The workflow:
@@ -74,16 +74,17 @@ available.
 
 ## Verify a published download
 
-For 0.3.1:
+Set the version you just published:
 
 ```powershell
-Get-FileHash .\CapturePack-Setup-0.3.1.exe -Algorithm SHA256
+$Version = '0.3.2'
+Get-FileHash ".\CapturePack-Setup-$Version.exe" -Algorithm SHA256
 ```
 
-Once 0.3.1 is public, compare the lowercase hash with the matching line in
+Once that version is public, compare the lowercase hash with the matching line in
 `SHA256SUMS.txt` on
-[GitHub Releases](https://github.com/r2cuerdame/capturepack/releases). Until
-that release appears there, 0.3.1 is a candidate rather than a public download.
+[GitHub Releases](https://github.com/r2cuerdame/capturepack/releases). Until the
+matching release appears there, it is a candidate rather than a public download.
 
 ## How users receive updates
 

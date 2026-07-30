@@ -64,6 +64,20 @@ try {
     name: 'chrome-dom',
     version: '0.1.0',
   })
+  const annotationsFile = join(pack, 'annotations.json')
+  const annotations = JSON.parse(readFileSync(annotationsFile, 'utf8'))
+  annotations.annotations[0].target = {
+    source: 'chrome-dom',
+    level: 'control',
+    object_id: '#save @0 #0',
+    selector: '#save',
+    tag: 'button',
+    role: 'button',
+    url: 'https://example.test/',
+    title: 'Fixture',
+    name: 'Save',
+  }
+  writeJson(annotationsFile, annotations)
 
   const elementsFile = join(pack, 'plugins', 'chrome-dom', 'elements.json')
   writeJson(elementsFile, {
@@ -86,6 +100,8 @@ try {
     valid.status === 0 && valid.stdout.includes('result: VALID'))
   check('the valid payload reaches Chrome DOM validation',
     valid.stdout.includes('1 event(s), 1 picked element(s), all on the replay clock'))
+  check('a persisted Chrome DOM annotation target is recognized',
+    valid.stdout.includes('1 Chrome DOM target(s) preserve provider identity across save/reopen'))
   check('the validator never emits an uncaught ReferenceError',
     !`${valid.stdout}\n${valid.stderr}`.includes('ReferenceError'))
 

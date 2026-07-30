@@ -31,7 +31,7 @@ A CapturePack should contain enough information that another human or any LLM ca
 
 ---
 
-## Current release baseline — 0.3.1
+## Current release baseline — 0.3.2
 
 The long sections below preserve design history and measurements, including
 pre-release identifiers. This section is the current product truth:
@@ -66,6 +66,13 @@ adversarial QA: Chrome DOM bounds must be converted through the owning display's
 actual mixed-DPI transform; plugin data that lands after save-first must
 regenerate pack documents before completion; and generated documents must never
 recommend an annotated replay that the manifest does not declare.
+
+The 0.3.2 patch pins the next measured Windows boundary: every selector HWND
+must cover its complete display bounds (including a portrait tail below the
+primary work area); a region editor opens on the display that owns most of the
+selection; one-shot editor initialization cannot be lost between Main and the
+renderer; and manual versus semantic geometry remains explicit across
+save/reopen (red author-owned rectangles, blue provider-owned objects).
 
 The same hotfix refreshes the production dependency boundary: `adm-zip` 0.6.0
 addresses CVE-2026-39244, MCP SDK 1.30.0 plus `@hono/node-server` 2.0.12
@@ -613,7 +620,7 @@ Relaunch
 Fully unattended updates are not the starting point. The safe initial UX:
 
 ```
-CapturePack 0.3.1 available
+CapturePack 0.3.2 available
 
 [Restart and update]  [Later]
 ```
@@ -624,9 +631,9 @@ screen replay buffer — force-killing it is not acceptable.
 **Release pipeline**
 
 ```
-Reviewed source revision + package version 0.3.1
+Reviewed source revision + package version 0.3.2
     ↓
-Manual GitHub Actions dispatch (tag: v0.3.1)
+Manual GitHub Actions dispatch (tag: v0.3.2)
     ↓
 Full deterministic QA gate
     ↓
@@ -1772,6 +1779,15 @@ Pin, Rectangle, and Blur are NOT separate annotation types. Every annotation is 
   `numbered` (bool), `blur` (bool), `tracking`, `target`, `style`.
 - Plain description box: numbered:false, blur:false · Numbered box: numbered:true ·
   Sensitive-content box: blur:true · Both: numbered+blur true.
+- **Colour carries provenance, not preference.** A newly drawn manual box is red
+  (`#FF3B30`); a box picked from a captured semantic object is blue (`#0A84FF`).
+  There is no colour picker. Every editor and rendered view resolves the same
+  rule, while a stored `style.color` from an older or third-party pack is
+  preserved exactly and continues to win.
+- **Geometry follows the same ownership rule.** Red manual boxes can be moved
+  and resized at multiple replay times to author interpolated position
+  keyframes. Blue semantic boxes can still be selected and described, but
+  their measured object rectangle cannot be moved or resized by hand.
 
 **Box header** — minimal inline controls only, left to right: Number toggle · Duration ·
 Blur toggle · (right edge) Delete:
@@ -2522,6 +2538,22 @@ fixed because it is wrong, and reported as small because it is small.
   arrays. That closes a verified retention path; it does **not** prove the
   steady-state encoder cost is solved. The single-recorder bounded-ring R&D and
   its measurement gate live in GitHub issue #102.
+
+### 0.3.2 Windows editor QA invariants (2026-07-30)
+
+- **Native selector coverage is measured, not inferred.** Pure mixed-DPI math
+  already passed while Electron silently reduced a 1200x1920 overlay to
+  1200x1392. A hidden real BrowserWindow now proves exact bounds on every
+  attached display before a release can pass.
+- **Selection owns placement.** Starting the shortcut on a portrait monitor and
+  selecting a landscape region opens the editor on landscape; largest overlap
+  wins and shortcut focus breaks only an exact tie.
+- **Editor bootstrap is lossless.** Preload receives and buffers the one-shot
+  initialization message before the renderer subscribes, and the initial HTML
+  reserves Windows caption space before any payload arrives.
+- **Box provenance survives reopen.** Manual geometry is red and keyframeable;
+  semantic UIA/DOM geometry is blue and provider-owned. Chrome DOM identity is
+  persisted as a target instead of reverting to a draggable manual rectangle.
 
 ### 0.3.1 post-release QA invariants (2026-07-30)
 

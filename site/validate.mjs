@@ -113,8 +113,8 @@ for (const lang of supported) {
     missingText.length === 0
       && missingAlt.length === 0
       && document.documentElement.lang === lang
-      && releaseNote.includes('0.3.1')
-      && !releaseNote.includes('0.3.0'),
+      && releaseNote.includes('0.3.2')
+      && !releaseNote.includes('0.3.1'),
     [...missingText, ...missingAlt].join(', '),
   )
 }
@@ -161,35 +161,89 @@ for (const lang of supported.filter((candidate) => candidate !== 'en')) {
 
 console.log('\nProduct demo contract')
 check(
-  'landing names 0.3.1 as the public release',
-  html.includes('"softwareVersion": "0.3.1"')
-    && html.includes('>v0.3.1</span>')
-    && html.includes('Public download: 0.3.1')
+  'landing names 0.3.2 as the public release',
+  html.includes('"softwareVersion": "0.3.2"')
+    && html.includes('>v0.3.2</span>')
+    && html.includes('Public download: 0.3.2')
     && !html.includes('source/release candidate'),
 )
 check(
-  'package and lock declare the public 0.3.1 release',
-  packageJson.version === '0.3.1'
-    && packageLock.version === '0.3.1'
-    && packageLock.packages?.['']?.version === '0.3.1',
+  'landing keeps release-verification jargon out of product copy',
+  !/\bsha(?:-?256)?\b|checksum|체크섬|校验和|Prüfsumme/i.test(`${html}\n${i18n}`),
 )
 check(
-  'README names 0.3.1 as the public release',
-  readme.includes('Current public Windows release: **CapturePack 0.3.1**')
-    && readme.includes('**0.3.1 is the current public Windows download.**')
+  'package and lock declare the public 0.3.2 release',
+  packageJson.version === '0.3.2'
+    && packageLock.version === '0.3.2'
+    && packageLock.packages?.['']?.version === '0.3.2',
+)
+check(
+  'README names 0.3.2 as the public release',
+  readme.includes('Current public Windows release: **CapturePack 0.3.2**')
+    && readme.includes('**0.3.2 is the current public Windows download.**')
     && !readme.includes('candidate baseline')
     && !readme.includes('not a public release until it appears on GitHub Releases'),
 )
 check('five-step rewind → pick → inspect → follow → export sequence', [1, 2, 3, 4, 5].every((n) => svg.includes(`id="caption${n}"`)))
-check('child control name is visible', svg.includes('Save changes') && svg.includes('CHILD CONTROL'))
+const rewindPath = svg.match(
+  /<path id="rewindArrow" d="M\s*([\d.]+)\s+[\d.]+\s+H\s*([\d.]+)"[^>]*marker-end="url\(#arrowLeft\)"/,
+)
+check(
+  'rewind rail is geometrically right-to-left',
+  svg.includes('id="rewindRail" data-direction="right-to-left"')
+    && rewindPath
+    && Number(rewindPath[1]) > Number(rewindPath[2]),
+)
+check(
+  'animated playhead starts at NOW and settles on a negative past offset',
+  /@keyframes rewindPlayhead\s*\{[\s\S]*0%,12%\s*\{\s*transform:\s*translateX\(0\)[\s\S]*29%,98%\s*\{\s*transform:\s*translateX\(-302px\)/.test(svg),
+)
+check(
+  'the persistent timeline names both temporal endpoints',
+  svg.includes('id="nowMarker"')
+    && svg.includes('NOW · 00:12.4')
+    && svg.includes('id="pastMarker"')
+    && svg.includes('5s AGO · 00:07.4')
+    && svg.includes('RIGHT TO LEFT'),
+)
+check(
+  'the current bug state changes into a selectable historical control',
+  svg.includes('id="nowControlState"')
+    && svg.includes('Save button missing')
+    && /id="historicalControl" data-frame="past"[\s\S]*id="selectedOutline"/.test(svg)
+    && svg.indexOf('STEP 1 · BUG NOTICED · NOW') < svg.indexOf('STEP 2 · REWIND ← 5 SECONDS')
+    && svg.indexOf('STEP 2 · REWIND ← 5 SECONDS') < svg.indexOf('STEP 3 · PAST FRAME · 5s AGO'),
+)
+check('historical child control name is visible', svg.includes('Save changes') && svg.includes('PAST-FRAME CONTROL'))
+check(
+  'historical semantic selection uses the product blue provenance colour',
+  /id="selectedOutline"[^>]*fill="#0A84FF"[^>]*stroke="#0A84FF"/.test(svg)
+    && /id="objectBadge"[\s\S]*?fill="#0A84FF"/.test(svg),
+)
 check('captured role/type and state are visible', svg.includes('ROLE / TYPE') && svg.includes('CAPTURED STATE'))
 check(
   'selection outline moves inside its owner window',
   /id="movingWindow"[\s\S]*id="selectedOutline"[\s\S]*<\/g>\s*<g id="motionArrow"/.test(svg),
 )
 check('AI result uses real annotation fields', svg.includes('control_type') && svg.includes('picked_at_ms') && svg.includes('&quot;enabled&quot;: true'))
-check('reduced-motion fallback stays informative', svg.includes('prefers-reduced-motion'))
-check('README cache key and alt describe the new demo', readme.includes('demo.svg?v=4') && readme.includes('selects a child UI control'))
+check(
+  'reduced-motion fallback preserves direction and historical selection',
+  svg.includes('prefers-reduced-motion')
+    && /#caption5, #pastChip, #historicalControl, #selectedOutline, #objectBadge,[\s\S]*#jsonPanel, #rewindGuide \{ opacity: 1 \}/.test(svg)
+    && svg.includes('#playhead { transform:translateX(-302px) }'),
+)
+check(
+  'README cache key and alt describe the right-to-left historical demo',
+  readme.includes('demo.svg?v=5')
+    && readme.includes('starts at NOW on the right')
+    && readme.includes('moves the playhead left to 5 seconds ago')
+    && readme.includes('historical frame'),
+)
+check(
+  'landing copy explains the visible temporal direction',
+  html.includes('start at NOW on the right and travel left to 5s AGO')
+    && i18n.includes('오른쪽 NOW에서 시작해 왼쪽 5초 전으로 이동'),
+)
 check(
   'still capture is subordinate, explicit, and privacy-bounded',
   html.indexOf('data-i18n="still_title"') > html.indexOf('class="features"')
@@ -236,8 +290,8 @@ check(
 for (const { lang, text: localized } of localizedReadmes) {
   check(
     `${lang}: README public-release and product/privacy contract`,
-    localized.includes('demo.svg?v=4')
-      && localized.includes('0.3.1')
+    localized.includes('demo.svg?v=5')
+      && localized.includes('0.3.2')
       && !localized.includes('0.3.0')
       && localized.includes('Ctrl+Alt+S')
       && localized.includes('capture_kind: image')
@@ -271,7 +325,7 @@ check(
 )
 
 const legacyManualCopy =
-  /manual rectangle|manual fallback|수동 사각형|手動矩形|手动画框|rectángulo manual|rectangle manuel|manuelle Rechteck|retângulo manual|ручным прямоугольником/i
+  /manual fallback|수동 대체 사각형|手動の代替矩形|手动画框作为回退|rectángulo manual de respaldo|rectangle manuelle de secours|manuelles Ausweichrechteck|retângulo manual alternativo|ручной прямоугольник вместо объекта/i
 check('old manual-fallback demo copy is gone', !legacyManualCopy.test(`${readme}\n${html}\n${i18n}`))
 check(
   'English product copy does not overclaim exact or always-on state',
@@ -280,26 +334,30 @@ check(
   ),
 )
 
-console.log('\nRoadmap truth')
-for (const key of ['now2', 'now3', 'now4', 'now5', 'now6']) {
-  check(`${key} is shown as current`, html.includes(`data-i18n="${key}"`))
-}
 check(
-  'Chrome DOM is described as a preview being hardened',
-  html.includes('Chrome DOM integration hardening (preview available)'),
+  'landing omits product-roadmap sections and links',
+  !html.includes('data-i18n="rm_title"')
+    && !html.includes('data-i18n="rm_full"')
+    && !html.includes('data-i18n="ft_roadmap"')
+    && !html.includes('blob/main/ROADMAP.md'),
 )
 
-console.log('\n0.3.1 release and documentation contract')
+console.log('\n0.3.2 release and documentation contract')
 check(
   'roadmap preserves history and adds the current baseline',
-  roadmap.includes('## Current baseline — 0.3.1')
+  roadmap.includes('## Current baseline — 0.3.2')
     && roadmap.includes('## V1 — MVP + installable, self-updating release')
     && roadmap.includes('## V2 — Temporal plugin system')
     && roadmap.includes('## Success criteria (from GOAL.md)'),
 )
 check(
-  'hotfix and dependency audit are documented',
-  changelog.includes('## 0.3.1 — 2026-07-30')
+  'current patch and dependency audit are documented',
+  changelog.includes('## 0.3.2 — 2026-07-30')
+    && changelog.includes('lower 528 pixels')
+    && changelog.includes('editor:init')
+    && changelog.includes('manual rectangles are red')
+    && changelog.includes('all 50 sequential checks')
+    && changelog.includes('## 0.3.1 — 2026-07-30')
     && changelog.includes('2x-to-1x')
     && changelog.includes('Late plugin context')
     && changelog.includes('manifest declares')
@@ -319,12 +377,15 @@ check(
     && dependencyAudit.includes('GHSA-frvp-7c67-39w9'),
 )
 check(
-  'QA pins every 0.3.1 regression',
+  'QA pins every current regression',
   qaDocs.includes('2x-to-1x move')
     && qaDocs.includes('Late UIA/DOM/plugin context')
     && qaDocs.includes('never produced')
     && qaDocs.includes('check:dom')
     && qaDocs.includes('check:source-first-save')
+    && qaDocs.includes('check:image-region-window')
+    && qaDocs.includes('still-image editor opens as an empty dark page')
+    && qaDocs.includes('reopened DOM pick becomes draggable')
     && qaDocs.includes('check:site'),
 )
 check(
@@ -350,7 +411,9 @@ check(
     && releaseWorkflow.includes('Publish verified draft')
     && releaseWorkflow.includes('$global:LASTEXITCODE = 0')
     && packageJson.scripts?.dist?.includes('--publish never')
-    && releaseWorkflow.indexOf('Package release artifacts') < releaseWorkflow.indexOf('Create or verify the release tag'),
+    && releaseWorkflow.indexOf('Package release artifacts') < releaseWorkflow.indexOf('Create or verify the release tag')
+    && !releasing.includes('CapturePack-Setup-0.3.1.exe')
+    && !releasing.includes('for example `v0.3.1`'),
 )
 check(
   'MCP remains optional, loopback-only and read-only',
@@ -362,10 +425,10 @@ check(
     && !/\balways[- ](?:on|running)\b/i.test(mcpDocs),
 )
 check(
-  'handoff starts with current 0.3.1 state while retaining rc evidence',
+  'handoff starts with current 0.3.2 state while retaining rc evidence',
   handoff.includes('## Current state — 2026-07-30')
-    && handoff.includes('public 0.3.0 release')
-    && handoff.includes('0.3.1')
+    && handoff.includes('public 0.3.1 release')
+    && handoff.includes('0.3.2')
     && handoff.includes('## Historical rc.35 snapshot'),
 )
 

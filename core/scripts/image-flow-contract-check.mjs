@@ -73,6 +73,11 @@ check(
     imageFlow.includes('composeUiaForImageDesktop('),
 )
 check(
+  'region editor placement follows the selected display rather than shortcut focus',
+  imageFlow.includes('String(display.id) === selection.displayId') &&
+    imageFlow.includes('selectedDisplay.bounds'),
+)
+check(
   'reopen treats capture_kind-absent 0.3 packs as legacy video evidence',
   session.includes(
     "if (manifest.capture_kind !== 'image') return { captureKind: 'video' }",
@@ -84,6 +89,16 @@ const selectorMain = source('src/main/imageRegionSelector.ts')
 const selectorRenderer = source('src/renderer/image-region/image-region.ts')
 const selectorHtml = source('src/renderer/image-region/image-region.html')
 const selectorCss = source('src/renderer/image-region/image-region.css')
+const makeOverlay = section(
+  selectorMain,
+  'function makeOverlay(',
+  '/**\n * Opens one native overlay per frozen display',
+)
+const revealOverlays = section(
+  selectorMain,
+  'function allReady(',
+  'function settle(',
+)
 const initPayload = section(
   source('src/shared/ipc.ts'),
   'export interface ImageRegionSelectorInitPayload',
@@ -99,7 +114,8 @@ check(
 check(
   'main validates sender ownership and recomputes renderer geometry',
   selectorMain.includes('const found = senderRecord(event)') &&
-    selectorMain.includes('resolveImageDesktopRegion('),
+    selectorMain.includes('resolveImageDesktopRegion(') &&
+    selectorMain.includes('preferredImageRegionDisplay('),
 )
 check(
   'native per-monitor overlays coordinate one drag without mixed-DPI window scaling',
@@ -109,6 +125,27 @@ check(
     selectorRenderer.includes("sendDrag('start', event)") &&
     selectorRenderer.includes("sendDrag((event.buttons & 1) === 0 ? 'end' : 'move', event)") &&
     !selectorRenderer.includes('document.body.setPointerCapture('),
+)
+check(
+  'Windows selector windows prove full display bounds before reveal and after focus activation',
+  /^\s*resizable:\s*true,/mu.test(makeOverlay) &&
+    /^\s*thickFrame:\s*false,/mu.test(makeOverlay) &&
+    !/^\s*resizable:\s*false,/mu.test(makeOverlay) &&
+    makeOverlay.includes("win.on('will-resize', (event) => event.preventDefault())") &&
+    revealOverlays.includes('record.win.setBounds(record.display.bounds)') &&
+    revealOverlays.includes('const actual = record.win.getBounds()') &&
+    revealOverlays.includes('actual.height !== expected.height') &&
+    revealOverlays.indexOf('record.win.getBounds()') <
+      revealOverlays.indexOf('record.win.showInactive()') &&
+    revealOverlays.indexOf(
+      'record.win.getBounds()',
+      revealOverlays.indexOf('record.win.showInactive()'),
+    ) > revealOverlays.indexOf('record.win.showInactive()'),
+    selectorMain.includes('function revalidateFocusedBounds(flow: ActiveSelector): void') &&
+    selectorMain.includes('focused image selector changed display bounds') &&
+    selectorMain.includes('record.win.focus()') &&
+    selectorMain.indexOf('record.win.focus()') <
+      selectorMain.indexOf('revalidateFocusedBounds(flow)', selectorMain.indexOf('record.win.focus()')),
 )
 check(
   'drag is the default region action and Esc is explicit cancel',

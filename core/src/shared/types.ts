@@ -230,9 +230,10 @@ export interface AnnotationTracking {
 // points at. The old "element" annotation concept lives here — a box WITH a
 // target is a semantic annotation; there is no separate element type.
 //
-// `source` is the discriminator. Format 0.1.0 defines exactly one source,
-// "uia" (see UiaAnnotationTarget); readers ignore sources they do not know and
-// still render the box from `bounds`.
+// `source` is the discriminator. "uia" is the standardized source (see
+// UiaAnnotationTarget); providers may add their own additive source shapes.
+// Readers ignore sources they do not know and still render the box from
+// `bounds`.
 export type AnnotationTarget = Record<string, unknown>
 
 /**

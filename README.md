@@ -24,21 +24,22 @@ folder that works without an AI, account, or cloud service.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Download](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Current public Windows release: **CapturePack 0.3.1**. It corrects Chrome DOM geometry across
-mixed-DPI displays and keeps generated pack documents in sync with the final
-manifest and the artifacts that actually exist.
+Current public Windows release: **CapturePack 0.3.2**. It fixes portrait-monitor
+region coverage, editor placement and bootstrap, and makes manual rectangles red
+while semantic UI objects remain blue and geometry-owned after save/reopen.
 
 <p align="center">
   <!-- Absolute raw URL with a version query: GitHub proxies README images through
        camo, which caches by source URL — without the bump a fixed demo keeps
        rendering the stale copy for hours. Bump ?v= whenever demo.svg changes. -->
-  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=4" alt="CapturePack rewinds to a past frame, selects a child UI control, shows its captured name and control type, follows its owner window, and exports structured evidence for AI." width="760">
+  <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/demo.svg?v=5" alt="CapturePack starts at NOW on the right, moves the playhead left to 5 seconds ago, restores and selects the child UI control that existed in that historical frame, and exports structured evidence for AI." width="760">
 </p>
 
-The animation shows **Object Pick in the current editor**: rewind to a captured
-frame, hover and click a child UI Automation control, inspect the identity
-captured at that instant, then scrub while its outline follows the observed
-owner-window movement. The same evidence is saved as structured data for AI.
+Watch the direction: the playhead starts at **NOW on the right**, travels
+**left to 5 seconds ago**, and only then does the missing **Save changes**
+control return and become selectable. Object Pick records the identity captured
+at that past instant; later scrubbing can follow observed owner-window movement.
+The same evidence is saved as structured data for AI.
 
 ## The workflow
 
@@ -195,7 +196,7 @@ Tools, client setup, and settings: [docs/MCP.md](docs/MCP.md).
 
 ## Status
 
-**0.3.1 is the current public Windows download.** CapturePack remains an
+**0.3.2 is the current public Windows download.** CapturePack remains an
 early-stage project, so keep the original pack when reporting a problem and see
 [GOAL.md](GOAL.md) for the product vision and [ROADMAP.md](ROADMAP.md) for what
 comes next.

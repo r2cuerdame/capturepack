@@ -215,6 +215,24 @@
                   }
                 }
               }
+            },
+            {
+              "description": "source \"chrome-dom\": a Chrome DOM element identity persisted when the user picked it. It remains semantic across save/reopen and does not authorize a later live DOM query.",
+              "if": { "properties": { "source": { "const": "chrome-dom" } }, "required": ["source"] },
+              "then": {
+                "required": ["level", "object_id", "selector"],
+                "properties": {
+                  "level": { "const": "control" },
+                  "object_id": { "type": "string", "minLength": 1 },
+                  "selector": { "type": "string", "minLength": 1 },
+                  "tag": { "type": "string", "minLength": 1 },
+                  "dom_id": { "type": "string", "minLength": 1 },
+                  "role": { "type": "string", "minLength": 1 },
+                  "url": { "type": "string", "minLength": 1 },
+                  "title": { "type": "string", "minLength": 1 },
+                  "name": { "type": "string", "minLength": 1 }
+                }
+              }
             }
           ]
         },

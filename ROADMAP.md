@@ -7,7 +7,7 @@ status; it never overrides either document.
 **Status legend:** `Done` · `In progress` · `Not started`.
 **Shipping since 2026-07-27:** the auto-update chain was first verified end to
 end on a real install (0.1.0 → 0.1.1 → 0.1.2). The active source and
-documentation baseline is **0.3.1**; public binaries remain whatever
+documentation baseline is **0.3.2**; public binaries remain whatever
 [GitHub Releases](https://github.com/r2cuerdame/capturepack/releases/latest)
 actually exposes until the manually dispatched release workflow completes.
 What is *not* yet proven is the long-run habit — the one-month
@@ -21,7 +21,7 @@ Ctrl+Alt+C  →  capture  →  5-second annotation  →  export .capturepack  �
 
 ---
 
-## Current baseline — 0.3.1
+## Current baseline — 0.3.2
 
 The milestone narrative below is preserved as the product's design and
 verification history. These are the current additions and next gates:
@@ -39,6 +39,9 @@ verification history. These are the current additions and next gates:
   and cannot start a capture.
 - 0.3.1 gates mixed-DPI Chrome DOM geometry, regeneration after late plugin
   context, and guidance that names only manifest-declared derived artifacts.
+- 0.3.2 gates exact native selector coverage on portrait/mixed-monitor desks,
+  selection-owned editor placement, lossless editor bootstrap, and persistent
+  manual/semantic box ownership.
 - Next: continue physical mixed-DPI/long-running recording, save/reopen,
   installer/update and Chrome reconnection QA; harden the preview integration;
   and design an explicit sanitized-sharing path.

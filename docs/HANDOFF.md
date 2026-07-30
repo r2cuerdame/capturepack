@@ -1,12 +1,23 @@
-# HANDOFF — CapturePack, current through 0.3.1
+# HANDOFF — CapturePack, current through 0.3.2
 
 ## Current state — 2026-07-30
 
-The public 0.3.0 release was published from commit `2fd6f1f1`. The active source
-and documentation baseline is **0.3.1**. Do not call 0.3.1 public until the
+The public 0.3.1 release was published from commit `8535747c`. The active source
+and documentation baseline is **0.3.2**. Do not call 0.3.2 public until the
 manual Release workflow has completed and the GitHub Release is visible.
 
-0.3.1 is a focused post-release hotfix with three product invariants:
+0.3.2 is a focused Windows editor correctness patch:
+
+1. Every native image-selector window must exactly cover its display before and
+   after activation, including a portrait tail below the primary work area.
+2. The selected region's largest display overlap owns editor placement.
+3. Preload buffers the one-shot editor initialization message; Main reveals the
+   editor only after renderer decode, a paint boundary and success
+   acknowledgement, so a still editor cannot open as an uninitialized dark shell.
+4. Manual boxes are red and author-keyframeable; semantic UIA/DOM boxes are blue,
+   geometry-owned, and retain provider target identity after save/reopen.
+
+0.3.1 remains the dependency and post-0.3.0 hotfix baseline with three product invariants:
 
 1. Chrome DOM bounds are projected through the browser window and the display
    that owns each observation. A 2x-to-1x monitor move must stay correct at past

@@ -29,7 +29,7 @@
     "name": "CapturePack",
     "operatingSystem": "Windows",
     "applicationCategory": "DeveloperApplication",
-    "softwareVersion": "0.3.1",
+    "softwareVersion": "0.3.2",
     "description": "Open-source context capture toolkit. Rewind the last 30 seconds, pick a real UI control at that past frame, preserve its window movement, and export structured object context for humans and AI.",
     "url": "https://capturepack.dev/",
     "downloadUrl": "https://github.com/r2cuerdame/capturepack/releases/latest",
@@ -68,10 +68,10 @@
         <a class="btn" href="https://github.com/r2cuerdame/capturepack">GitHub</a>
         <a class="btn" href="https://github.com/sponsors/r2cuerdame" rel="noopener" data-i18n="btn_sponsor">♥ Sponsor</a>
       </div>
-      <p class="output-note" data-i18n="release_note">Public download: 0.3.1. This release fixes mixed-DPI Chrome DOM geometry and generated pack-document sync. The Windows build is unsigned; every release includes SHA256 checksums.</p>
+          <p class="output-note" data-i18n="release_note">Public download: 0.3.2. This release fixes portrait/cross-monitor selection, editor startup and placement, and semantic box ownership after reopen.</p>
       <p class="badges">
         <span class="badge">Windows</span>
-        <span class="badge">v0.3.1</span>
+        <span class="badge">v0.3.2</span>
         <span class="badge" data-i18n="badge_foss">Free &amp; open source</span>
         <span class="badge">MIT</span>
         <span class="badge" data-i18n="badge_local">Local-first · no cloud</span>
@@ -82,14 +82,13 @@
     <section class="demo" aria-labelledby="demo-title">
       <figure>
         <img src="assets/demo.svg"
-          alt="Animated CapturePack editor: rewind to a past frame, select a child button, inspect its captured identity, follow its owner window, and export structured data."
+          alt="Animated CapturePack editor: the playhead starts at NOW on the right, moves left to 5 seconds ago, restores the historical Save changes button, selects it, and exports structured data."
           data-i18n-alt="demo_alt" loading="lazy">
         <figcaption class="output-note">
-          <strong id="demo-title" data-i18n="demo_title">Rewind first, then pick.</strong>
-          <span data-i18n="demo_body">This is Object Pick in the current editor: rewind to a captured frame,
-          hover and click the child control, inspect its captured identity and state, then scrub while
-          its outline follows the observed owner-window movement. The same evidence is exported as
-          structured data for AI.</span>
+          <strong id="demo-title" data-i18n="demo_title">At NOW, rewind left 5 seconds—then pick.</strong>
+          <span data-i18n="demo_body">Watch the playhead start at NOW on the right and travel left to 5s AGO.
+          The missing Save changes button returns only in that past frame; Object Pick then selects it
+          and exports its captured identity and state for AI.</span>
         </figcaption>
       </figure>
     </section>
@@ -185,44 +184,12 @@
       protected, but snapshot.png and the original replay in a full pack remain unredacted.</p>
     </aside>
 
-    <section class="roadmap">
-      <h2 data-i18n="rm_title">Roadmap</h2>
-      <div class="cols">
-        <div>
-          <h3 data-i18n="rm_now">Now</h3>
-          <ul>
-            <li data-i18n="now1">30-second replay capture + trim</li>
-            <li data-i18n="now2">Every display captured at once</li>
-            <li data-i18n="now3">Object Pick with Windows UI Automation</li>
-            <li data-i18n="now5">Observed owner-window tracks</li>
-            <li data-i18n="now6">Annotated keyframes for LLMs</li>
-            <li data-i18n="now4">History, 9 languages, MCP server</li>
-          </ul>
-        </div>
-        <div>
-          <h3 data-i18n="rm_next">Next</h3>
-          <ul>
-            <li data-i18n="next1">Chrome DOM integration hardening (preview available)</li>
-            <li data-i18n="next2">Prompt builder</li>
-          </ul>
-        </div>
-        <div>
-          <h3 data-i18n="rm_later">Later</h3>
-          <ul>
-            <li data-i18n="later1">Sanitized sharing</li>
-            <li data-i18n="later2">Plugin manager</li>
-          </ul>
-        </div>
-      </div>
-      <p class="roadmap-link"><a href="https://github.com/r2cuerdame/capturepack/blob/main/ROADMAP.md" data-i18n="rm_full">Full roadmap →</a></p>
-    </section>
   </main>
 
   <footer>
     <nav class="footer-nav">
       <a href="https://github.com/r2cuerdame/capturepack">GitHub</a>
       <a href="https://github.com/r2cuerdame/capturepack/blob/main/SPEC.md">Spec</a>
-      <a href="https://github.com/r2cuerdame/capturepack/blob/main/ROADMAP.md" data-i18n="ft_roadmap">Roadmap</a>
       <a href="https://github.com/r2cuerdame/capturepack/blob/main/docs/MCP.md">MCP</a>
       <a href="guide/" data-i18n="ft_guide">Guide</a>
       <a href="https://github.com/r2cuerdame/capturepack/releases" data-i18n="ft_releases">Releases</a>

@@ -15,11 +15,9 @@
 // label are EDITOR-ONLY: they live on the overlay canvas, which is never part
 // of any exported pixels.
 import type { Annotation } from '../../shared/types'
+import { annotationColor, annotationHasSemanticGeometry } from '../../shared/annotationStyle'
 
 const BLUR_BLOCK = 12 // native px per pixelation block (matches render/render.ts)
-const FALLBACK_COLOR = '#FF3B30'
-/** A box that FOLLOWS an object (#99) — Core's rectangle, not a drawn one. */
-const TRACKED_COLOR = '#22C55E' // boxes without style.color (palette default)
 const HANDLE_R = 4.5 // on-screen px, half the side of a corner resize handle
 const OBJECT_HOVER_COLOR = '#8ab4ff' // same accent the selection rect uses
 const FOCUSED_FRAME_COLOR = '#3574f0' // the focused display's accent
@@ -71,10 +69,7 @@ function must<T>(v: T | null): T {
  * The stored `style.color` still wins where it was set explicitly, so a user
  * who coloured a box keeps their colour; this only replaces the default.
  */
-export function boxColor(a: Annotation): string {
-  if (a.style?.color !== undefined) return a.style.color
-  return a.tracking?.enabled === true ? TRACKED_COLOR : FALLBACK_COLOR
-}
+export const boxColor = annotationColor
 
 /**
  * Puts one display's coordinate space on the context: native snapshot pixels,
@@ -332,7 +327,7 @@ function drawSelection(ctx: CanvasRenderingContext2D, a: Annotation, ui: number)
   // would advertise an edit the editor then refuses, which is worse than
   // refusing it plainly. The dashed selection rect still shows what is
   // selected — everything but the geometry is still editable.
-  if (a.tracking?.enabled === true) {
+  if (annotationHasSemanticGeometry(a)) {
     ctx.restore()
     return
   }
