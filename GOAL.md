@@ -233,7 +233,7 @@ Every fix or feature updates ALL public surfaces in the same pass — none may d
 - **GitHub Issues** — bugs get an issue (cause, fix, commit) even when fixed immediately;
   user-reported pain links back to the usage journal.
 - **README** — reflects the current released behavior.
-- **Landing page** — capturepack.dev stays truthful (roadmap Now/Next, download state).
+- **Landing page** — capturepack.dev stays truthful about the current product and download state.
 - **Release notes** — every tag ships notes on the GitHub Release, and they lead with a
   **scannable list, not an essay**. Three sections, in this order, each entry one line
   carrying its issue number:

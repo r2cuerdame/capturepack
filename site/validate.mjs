@@ -27,6 +27,8 @@ const codeSigning = read('docs/CODE_SIGNING.md')
 const mcpDocs = read('docs/MCP.md')
 const qaDocs = read('docs/QA.md')
 const handoff = read('docs/HANDOFF.md')
+const handoffPrompt = read('docs/HANDOFF-PROMPT.md')
+const docsReadme = read('docs/README.md')
 const dependencyAudit = read('docs/DEPENDENCY-AUDIT-0.3.1.md')
 const releaseWorkflow = read('.github/workflows/release.yml')
 const annotationsSchema = JSON.parse(read('docs/schemas/annotations.schema.json'))
@@ -467,11 +469,13 @@ check(
     && !/\balways[- ](?:on|running)\b/i.test(mcpDocs),
 )
 check(
-  'handoff starts with the published 0.3.2 state while retaining rc evidence',
-  handoff.includes('## Current state — 2026-07-30')
-    && handoff.includes('public 0.3.2 release')
-    && handoff.includes('3aa8b361')
-    && handoff.includes('## Historical rc.35 snapshot'),
+  'handoff records the stable 0.3.3 baton without presenting the sync issue as fixed',
+  handoff.includes('# CapturePack handoff — after v0.3.3')
+    && handoff.includes('b7e0c695d5f2c018e2c10fcf83936d1d42f7a0d4')
+    && handoff.includes('Issue #89')
+    && handoff.includes('Do not hard-code 125 ms')
+    && !handoff.includes('public 0.3.2 release')
+    && !handoff.includes('## Historical rc.35 snapshot'),
 )
 
 const localLinkDocuments = [
@@ -482,6 +486,8 @@ const localLinkDocuments = [
   ['docs/MCP.md', mcpDocs],
   ['docs/QA.md', qaDocs],
   ['docs/HANDOFF.md', handoff],
+  ['docs/HANDOFF-PROMPT.md', handoffPrompt],
+  ['docs/README.md', docsReadme],
   ['docs/DEPENDENCY-AUDIT-0.3.1.md', dependencyAudit],
 ]
 const missingLocalLinks = []

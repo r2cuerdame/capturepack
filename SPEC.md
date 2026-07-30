@@ -30,7 +30,7 @@ this repository — follows this spec, never the other way around.
 9. [Blur and privacy](#9-blur-and-privacy)
 10. [timeline.json](#10-timelinejson)
 11. [plugins/](#11-plugins)
-12. [report.md, README.md, and skills/](#12-reportmd-readmemd-and-skills)
+12. [Generated document views](#12-generated-document-views)
 13. [Versioning and compatibility](#13-versioning-and-compatibility)
 14. [Minimal valid pack](#14-minimal-valid-pack)
 - [Appendix A: JSON Schemas](#appendix-a-json-schemas)
@@ -741,7 +741,7 @@ Every annotation object:
 | `number_pin` | integer | OPTIONAL | The display number this box's author asked for, **1-9** ([§8.5](#85-display-numbers)). Absent = automatic. An INPUT to the numbering rule, not a stored display number: a reader that ignores it still computes valid numbers. Values outside 1-9 and non-integers are ignored. Inert while `numbered` is `false`. Introduced in `format_version` 0.2.1. |
 | `blur` | boolean | OPTIONAL | Whether the box's interior is sensitive and MUST be blurred in rendered views ([§9](#9-blur-and-privacy)). Default `false`. Blur is a box property, never a separate annotation type. |
 | `tracking` | object | OPTIONAL | Object-tracking state. `enabled` (boolean) is REQUIRED inside `tracking`. When `true`, `samples` (array, non-empty) is REQUIRED and carries the path the box follows — see below. When `false` or absent, the box is a fixed rectangle and `bounds` is all there is. Absent means `{ "enabled": false }`. Readers MUST ignore tracking content they do not understand and treat the box as untracked, which is always safe: `bounds` remains correct on its own. |
-| `tracking.samples[]` | object | see above | One rectangle the tracked object occupied: `t_ms` (number, on the replay clock — [§10.1](#101-the-replay-clock)), `x`, `y`, `width`, `height` (numbers, pixels in the snapshot of the sample's own display), and OPTIONAL `display` (number — the [§5.6](#56-per-display-media) index whose snapshot these numbers are pixels of; absent means the annotation's own `display`, [§8.8](#88-which-display-a-box-belongs-to)). Samples MUST be in ascending `t_ms`, and each MUST lie within its own display's snapshot — a window may hang off a screen edge, but the part past it is in no image, so a sample is the VISIBLE rectangle (the same rule `bounds` obeys, [§8.2](#82-coordinate-space)). **Every sample is an OBSERVATION.** A reader resolving a time between two samples MUST use the NEARER sample unchanged, and MUST NOT interpolate: an interpolated rectangle is a position the object never occupied, written in the same numbers as a measured one, and nothing in the pack distinguishes them. Writers SHOULD record one sample per captured frame, which is what makes that rule cost nothing — a pack cannot show a moment finer than a frame. Before the first sample and after the last, the box is held at that end. A box's LIFETIME ([§8.4](#84-lifetime)) — not the sample range — is what says when it stops being drawn. **Added in 0.2.0.** |
+| `tracking.samples[]` | object | see above | One rectangle the tracked object occupied: `t_ms` (number, on the replay clock — [§10.1](#101-structure)), `x`, `y`, `width`, `height` (numbers, pixels in the snapshot of the sample's own display), and OPTIONAL `display` (number — the [§5.6](#56-displays-multi-monitor-captures) index whose snapshot these numbers are pixels of; absent means the annotation's own `display`, [§8.8](#88-display-which-display-a-box-is-on)). Samples MUST be in ascending `t_ms`, and each MUST lie within its own display's snapshot — a window may hang off a screen edge, but the part past it is in no image, so a sample is the VISIBLE rectangle (the same rule `bounds` obeys, [§8.2](#82-coordinate-space)). **Every sample is an OBSERVATION.** A reader resolving a time between two samples MUST use the NEARER sample unchanged, and MUST NOT interpolate: an interpolated rectangle is a position the object never occupied, written in the same numbers as a measured one, and nothing in the pack distinguishes them. Writers SHOULD record one sample per captured frame, which is what makes that rule cost nothing — a pack cannot show a moment finer than a frame. Before the first sample and after the last, the box is held at that end. A box's LIFETIME ([§8.4](#84-lifetime)) — not the sample range — is what says when it stops being drawn. **Added in 0.2.0.** |
 | `target` | object | OPTIONAL | Semantic object metadata: what real UI object the box points at (DOM selector, role and text; Windows UI Automation `AutomationId`/`ControlType`; engine object ids…). This is where the earlier draft's "element"/Tracked Element concept lives now — a box *with a target* is a semantic annotation; there is no separate element type. Its `source` field says where the metadata came from; see [§8.7](#87-target-semantic-objects). Readers MUST ignore sources and fields they do not understand and MUST still render the box from `bounds`. |
 | `style` | object | OPTIONAL | Display styling. In 0.1.0 the only defined field is `color`: CSS-style hex, `"#RRGGBB"` or `"#RRGGBBAA"`, used for the border, badge, and text. CapturePack writers use red `"#FF3B30"` for a newly authored manual rectangle and blue `"#0A84FF"` for a newly picked semantic object. When `style.color` is absent, viewers SHOULD use that same semantic rule (`target` present or `tracking.enabled: true` = blue; otherwise red). When it is present, readers MUST preserve and render the stored value so existing/custom packs are never silently recoloured. |
 | `created_at` | string | OPTIONAL | When the annotation was made, ISO 8601 with timezone. |
@@ -797,7 +797,7 @@ Numbered boxes carry visible numbers — ①, ②, ③ — in every rendered vie
 
   Numbers follow the order the person made the boxes in, because that is what a number is for.
   Where a box sits on the replay clock is a different question, and the documents already answer
-  it by printing each box's time beside its number ([§12](#12-reportmd-readmemd-and-skills)).
+  it by printing each box's time beside its number ([§12](#12-generated-document-views)).
 - **A box MAY pin its own number.** `number_pin` ([§8.3](#83-the-box)) is an integer **1-9** that
   the user chose. It is an **input to this rule, not a stored display number** — the number
   itself is still computed, and a reader that ignores `number_pin` computes valid, self-consistent
@@ -823,7 +823,7 @@ Numbered boxes carry visible numbers — ①, ②, ③ — in every rendered vie
   that time, but with their global numbers: if only box ② is visible in a frame, it renders as
   ② — numbers are never re-compressed per frame ([§7.2](#72-the-annotated-replay)).
 - Documents list numbered boxes in display order, e.g. `1. 00:03.200 — "renamed the document
-  here"` ([§12](#12-reportmd-readmemd-and-skills)); if annotations change after generation, the
+  here"` ([§12](#12-generated-document-views)); if annotations change after generation, the
   documents are regenerated on the next save.
 
 ### 8.6 Example
@@ -997,7 +997,7 @@ a box belongs to exactly one of them: the screen it was drawn on.
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `keyframes[]` | array | OPTIONAL | Where the **user put this box**, at the moments they put it there. Each entry has `t_ms` (number, on the replay clock — [§10.1](#101-the-replay-clock)), `x`, `y`, `width`, `height` (numbers, pixels in the snapshot named by its OPTIONAL `display`; absent means the annotation's own display, [§8.8](#88-display-which-display-a-box-is-on)). `display`, when present, MUST name a declared captured display. Entries MUST be in ascending `t_ms`. **Added in 0.3.0.** |
+| `keyframes[]` | array | OPTIONAL | Where the **user put this box**, at the moments they put it there. Each entry has `t_ms` (number, on the replay clock — [§10.1](#101-structure)), `x`, `y`, `width`, `height` (numbers, pixels in the snapshot named by its OPTIONAL `display`; absent means the annotation's own display, [§8.8](#88-display-which-display-a-box-is-on)). `display`, when present, MUST name a declared captured display. Entries MUST be in ascending `t_ms`. **Added in 0.3.0.** |
 
 **These are AUTHORED, not observed, and that is the whole reason they are not
 `tracking.samples`.** A sample in [§8.3](#83-the-box) is a measurement of a real window, which is
@@ -1420,7 +1420,7 @@ Each event:
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `t_ms` | number | REQUIRED | When it happened, on the **replay clock** ([§10.1](#101-the-replay-clock)) — the same clock the video and the tracking samples use, so a DOM element and the window it was in can be named at one instant. |
+| `t_ms` | number | REQUIRED | When it happened, on the **replay clock** ([§10.1](#101-structure)) — the same clock the video and the tracking samples use, so a DOM element and the window it was in can be named at one instant. |
 | `type` | string | REQUIRED | `dom.element.selected`, `tab.updated`, or `url.changed`. Readers ignore types they do not know. |
 | `tab` | object | REQUIRED | `url` and `title`, both strings. |
 | `element` | object | OPTIONAL | REQUIRED for `dom.element.selected`, absent otherwise. `tag`, `selector` and `bounds` (`x`/`y`/`width`/`height`) are required; `id`, `role` and `text` are written only when the page had them. |

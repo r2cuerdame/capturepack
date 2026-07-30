@@ -382,7 +382,7 @@ Flat keys in the app's `settings.json` (validated like every other setting):
 | `mcpEnabled` | `true` | Master switch — `false` means no server runs. Toggling it in Settings starts/stops the server **immediately**, no app restart |
 | `mcpPort` | `39393` | Port for `http://127.0.0.1:<port>/mcp`. Changing it applies on **Settings → MCP → Restart**, no app restart |
 | `mcpAutoStart` | `true` | Start an enabled server with the app — `false` means it is not started at launch (Restart, or re-ticking Enable, starts it on demand) |
-| `mcpReadOnly` | `true` | Read-only mode. This version is **always** read-only — setting `false` is ignored (a startup log line says so); the key reserves the name for a future opt-in write mode |
+| `mcpReadOnly` | `true` | Compatibility setting for the permanent read-only boundary. Setting `false` is ignored (a startup log line says so); no write mode is defined |
 | `mcpWatchExportFolder` | `true` | Watch `outputDir` and keep the pack index fresh |
 | `mcpLogRequests` | `false` | Log one console line per tool call |
 

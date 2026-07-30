@@ -16,6 +16,40 @@ sacrifice the 5-second workflow.
 
 ---
 
+## Current implementation baseline — 0.3.3
+
+The current Electron reference app has moved beyond the original MVP design
+record preserved later in this document:
+
+- Main owns one hidden capture window per recorded display. MP4/AVC uses one
+  active `MediaRecorder` and a bounded fragmented-MP4 ring; runtimes without
+  legal MP4 support use an explicitly different dual-slot WebM fallback.
+- Recovery state is isolated per display: Chromium stream reacquisition and
+  alternate constraints can be attempted without discarding healthy display
+  rings. A native Windows fallback may be declared only when it is actually
+  producing frames, with its degraded backend and quality recorded honestly;
+  real failing-backend field proof remains open in issue #62.
+- Video capture and explicit region/full-virtual-desktop image capture are
+  distinct contracts. Multi-display pixels, scale, negative origins and
+  measured replay-clock evidence remain explicit through save and reopen.
+- The editor authors unified boxes and can bind them to captured UIA, Chrome
+  DOM or HWND evidence. Observed object tracks use the nearest real sample and
+  are never interpolated; authored manual-box keyframes may interpolate.
+- Export is source-first. Original snapshot/replay media are never modified;
+  blur is applied only to declared derived views. `viewer.html`, pack
+  documents and rendered media are regenerated atomically without being
+  authoritative over the source JSON.
+- The optional MCP server is loopback-only and read-only. It reads saved packs
+  and cannot initiate capture or modify evidence.
+
+The detailed MVP rationale in §§2–3 is retained as an **original 0.1.x design
+record**. Its present-tense implementation details (dual recorders, WebM-only
+output, destructive blur and an unfinished editor) are historical and are not
+the current runtime contract. The baseline above, [SPEC.md](SPEC.md), and the
+current source take precedence.
+
+---
+
 ## 1. Format architecture
 
 ### 1.1 Specification over implementation
@@ -76,7 +110,7 @@ interface — it is far easier to add a stable method later than to remove a mis
 
 ---
 
-## 2. MVP app architecture (`core/`)
+## 2. Historical MVP app architecture (`core/`, original 0.1.x design)
 
 ### 2.1 Why Electron + TypeScript
 
@@ -95,7 +129,7 @@ else — capture, encoding, drawing, hotkeys — is platform capability, not a l
 minimal-dependencies principle applied: Electron is one large dependency traded for zero native
 modules, no ffmpeg, and no GPU/encoder code of our own.
 
-The honest cost of this choice is in [§3](#3-honest-tradeoffs).
+The original tradeoff record is in [§3](#3-historical-mvp-tradeoffs).
 
 ### 2.2 Component diagram
 
@@ -300,7 +334,7 @@ Conventions, from GOAL.md's coding guidelines:
 
 ---
 
-## 3. Honest tradeoffs
+## 3. Historical MVP tradeoffs
 
 Deliberate MVP compromises, stated plainly so nobody has to discover them:
 

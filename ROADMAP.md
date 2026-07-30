@@ -7,9 +7,9 @@ status; it never overrides either document.
 **Status legend:** `Done` · `In progress` · `Not started`.
 **Shipping since 2026-07-27:** the auto-update chain was first verified end to
 end on a real install (0.1.0 → 0.1.1 → 0.1.2). The active source and
-documentation baseline is **0.3.3**; public binaries remain whatever
-[GitHub Releases](https://github.com/r2cuerdame/capturepack/releases/latest)
-actually exposes until the manually dispatched release workflow completes.
+documentation baseline and current public
+[GitHub Release](https://github.com/r2cuerdame/capturepack/releases/latest) are
+**0.3.3**.
 What is *not* yet proven is the long-run habit — the one-month
 no-manual-reinstall criterion is still running.
 
@@ -61,22 +61,16 @@ at the time. Current shipped behavior is summarized above and in
 
 | Milestone | Scope | Status |
 |---|---|---|
-| Format spec 0.1.0 | SPEC.md + JSON Schemas (`docs/schemas/`) | Done (draft) |
+| Format spec 0.5.0 | SPEC.md + JSON Schemas (`docs/schemas/`) | Draft; additive 0.1–0.5 contracts implemented by the reference writer |
 | **V1 — MVP + release** | Capture, annotate (scrub timeline), export + installable auto-updating Windows release | **Done — shipped v0.1.0 → v0.1.2** |
 | **V1.5 — MCP server** | Always-on read-only MCP so any AI reads packs natively | Shipped in v0.1.1 (daily-use verification ongoing) |
 | **V1.6 — Working with saved packs** | History (browse/re-edit/re-render/package), replay trim, 9 languages, configurable hotkey | Shipped in v0.1.2 |
 | **V1.7 — Truth** | A recorder that proves frames before claiming them, picking that offers the thing under the cursor, an app that leaves a record and does not stay gone | Shipped in v0.1.6 → v0.1.7 |
-| **V2 — Temporal plugin system** | Providers that restore the PAST at any buffered time (one clock, checkpoints + deltas), a platform surface timeline that decides what the user was actually looking at, after-save actions that can never cost a capture, Chrome extension as the first web provider | Designed (GOAL.md); UIA and the extension are the two first consumers |
-| **V3 — Semantic layer** | Tracked annotations following their object through the replay, AI-assisted annotation | Not started |
+| **V2 — Temporal plugin system** | Providers that restore the PAST at any buffered time (one clock, checkpoints + deltas), a platform surface timeline that decides what the user was actually looking at, after-save actions that can never cost a capture, Chrome extension as the first web provider | Partially implemented — Core surface timeline, UIA history and Chrome preview shipped; general API pending |
+| **V3 — Semantic layer** | Tracked annotations following their object through the replay, AI-assisted annotation | Partially implemented — semantic targets and observed tracks shipped; app/engine providers pending |
 
-Historical v0.1.x snapshot: SPEC.md (format 0.1.0, draft) with validating schemas; a valid example pack
-and dependency-free validator (`tools/`); the full Electron app under `core/` — replay ring
-buffer, snapshot, global hotkey, unified-box annotation editor with scrub timeline,
-folder-first exporter with README/skills/annotated replay, History screen, tray, settings GUI,
-GitHub-Releases updater, always-on MCP server — **released and auto-updating**; CI +
-tag-triggered release workflows proven twice; the landing page live at
-**[capturepack.dev](https://capturepack.dev)**; the Chrome extension Phase 1 scaffold
-(`extensions/chrome/`) and protocol v1 (`shared/protocol/`).
+The milestone narrative below is a historical sequence, not a second statement
+of the current contract. Current shipped behavior is the baseline above.
 
 ---
 
@@ -87,31 +81,37 @@ release half is deployment infrastructure: **auto-update is required in V1, not 
 creator uses CapturePack daily while fixing it frequently, and hand-replacing files breaks the
 usage habit that the whole project is measured by.
 
-### Capture — Implemented (field verification pending)
+### Capture — Implemented (continued field verification)
 
-- [x] 30-second rolling replay buffer (two staggered recorders; exported as `replay.webm`)
-- [x] Screenshot (`snapshot.png` at native resolution)
-- [x] Global hotkey `Ctrl+Alt+C` triggers capture from anywhere
+- [x] Bounded per-display replay ring: one fragmented-MP4 recorder when
+      supported, with an honest dual-slot WebM fallback
+- [x] Native-resolution per-display video snapshots plus explicit region/full
+      virtual-desktop image capture
+- [x] Independently configurable global video and image hotkeys
 
-### Annotation — Implemented; scrub timeline in progress
+### Annotation — Implemented; temporal accuracy remains under field QA
 
-- [x] Pin, Arrow, Rectangle, Blur, Text — exactly the five types of format 0.1.0 (SPEC §8)
-- [x] Keyboard-first, instant undo, editable data — never burned into the replay video
-- [ ] **Scrub-timeline editor** (GOAL "Editor Input System"): wheel ±100 ms / Shift ±1 s /
+- [x] One unified box annotation; numbering, text, lifetime and blur are box
+      properties, not separate annotation types
+- [x] Keyboard-first editing, instant undo and editable source data
+- [x] **Scrub-timeline editor** (GOAL "Editor Input System"): wheel ±100 ms / Shift ±1 s /
       Alt ±1 frame (up = past, invert option), Ctrl+wheel zoom, Space+drag pan, timeline drag,
       right-click-drag rect with immediate description — the chosen frame becomes the snapshot
       (`media.snapshot_t_ms`)
-- [ ] **Annotation lifetime** (GOAL "Annotation Timeline & Lifetime"): manual annotations get a
+- [x] **Annotation lifetime** (GOAL "Annotation Timeline & Lifetime"): manual annotations get a
       default 1.0 s duration (±0.5 s, clamped), duration label + editor with presets, × delete,
       lifetime bars on the timeline (`t_start_ms` / `t_end_ms`)
+- [x] Object Pick binds a box to captured UIA/Chrome DOM/HWND evidence; observed
+      tracks use measured samples without interpolation
 
 ### Export — Implemented
 
-- [x] Valid `.capturepack` per SPEC: manifest + snapshot + replay + annotations + report.md
-- [x] Blur applied destructively to `snapshot.png`; unredacted frame never ships (SPEC §9)
-- [x] Blur + replay warning with one-step replay exclusion (SPEC §9.4)
-- [x] `report.md` generated from the SPEC §12 template — LLM-readable with no tooling
-- [x] `timeline.json` with `core.*` events; `input.*` recording is V2
+- [x] Folder-first `.capturepack` source files plus optional ZIP distribution
+- [x] Original snapshot/replay media remain untouched; blur renders only into
+      declared derived views and the pack warns that originals remain sensitive
+- [x] `viewer.html`, `README.md`, `report.md` and `skills/` generated from the
+      source contract
+- [x] Video packs may contain `timeline.json`; explicit image packs never do
 
 ### Release & auto-update — PROVEN (v0.1.0 → v0.1.1 update delivered end-to-end, 2026-07-27)
 
@@ -142,7 +142,7 @@ Implemented ahead of the first release (GOAL "Always-On MCP Server"). The MCP se
 inside CapturePack.exe (Streamable HTTP at `http://127.0.0.1:39393/mcp`, localhost only),
 watches the export folder, and lets any AI analyze packs without the user explaining
 anything — "Analyze the latest CapturePack." is the whole prompt. Like the rest of the app,
-it has not yet been proven by daily use. Client setup and the full tool reference:
+continued field verification remains ongoing. Client setup and the full tool reference:
 [docs/MCP.md](docs/MCP.md).
 
 - [x] Recent-pack index + export-folder watcher (no manual refresh)
@@ -150,8 +150,9 @@ it has not yet been proven by daily use. Client setup and the full tool referenc
       `report` · `timeline(from_ms,to_ms)` · `annotations` · `find_annotations` ·
       `frame(time_s)` · `replay` · `dom` / `find_dom` · `windows` · `search` ·
       `export_markdown` — exposed as `capturepack_*` tool names; every pack-reading tool
-      defaults to the latest pack. `frame` is v0: it returns the snapshot frame with a note;
-      true replay-frame extraction is future work
+      defaults to the current pack. `frame` returns the nearest declared
+      annotated keyframe when available, otherwise `snapshot.png`; arbitrary
+      replay-frame extraction remains future work
 - [x] Generic plugin-metadata exposure (MCP never special-cases plugin kinds)
 - [x] Settings → MCP (enable, autostart, read-only, watch, port, request log)
 - [x] Never creates/edits captures — capture always belongs to the application
@@ -160,55 +161,58 @@ it has not yet been proven by daily use. Client setup and the full tool referenc
 
 ## V2 — Temporal plugin system
 
+Status: **Partially implemented.** Core temporal context is shipped; the
+general third-party provider and after-save APIs are not frozen.
+
 The plugin model V2 was originally scoped for — call a context provider once, at the capture
 instant — does not survive contact with the product: the user scrubs thirty seconds into the
 past, and a structural context collected at one moment cannot answer a question about second 7.
 Confirmed in live use of v0.1.6, and fixed honestly rather than fully in v0.1.7 (picking is
 refused away from the capture instant instead of quietly answering for the wrong moment).
 
-So V2 is the redesign in GOAL.md > "Plugin System, redesigned": **temporal context providers**
+V2 is the redesign in GOAL.md > "Plugin System, redesigned": **temporal context providers**
 on the app's own monotonic clock, storing checkpoints plus deltas rather than a tree per frame;
 a **Platform Surface Timeline** in Core deciding which window was on top at time T, because a
 numeric priority cannot settle a Notepad window in front of a windowed Unreal game; and **after
 save actions**, the half that gets the stable public API, because that is where a third party's
 mistake lands visibly on whoever wrote it.
 
-Windows UI Automation moves onto that protocol as its reference implementation — same clock,
-same claims, same hitTest, no private path into Core — and the Chrome extension becomes the
-first web provider. `input.*` events land as format **0.2.0** alongside (namespace already
-reserved in SPEC §10.2; 0.1.0 readers skip unknown event types by design).
+The Core surface timeline, bounded Windows UIA history and Chrome preview
+provider are implemented. The general third-party provider/after-save API is
+not frozen, and top-level `input.*` events remain reserved.
 
-### Timeline events — Not started
+### Timeline events
 
-- [ ] Mouse · Keyboard · Window · Application focus · Window resize
+- [x] Window/focus/control observations in provider-owned temporal context
+- [ ] Top-level mouse and keyboard `input.*` events
 
-### Plugin API & integrations — Extension scaffolded, rest not started
+### Plugin API & integrations
 
 - [ ] Plugin API — core owns capture; plugins only append metadata under `plugins/<name>/`
-- [x] Chrome extension Phase 1 scaffold: element picker, selector generation, protocol v1,
-      native-host manifest (`extensions/chrome/`, `shared/protocol/`)
-- [ ] Native messaging host in the app + installer registration (registry, cleanup on uninstall)
-- [ ] **Plugin Manager** (GOAL "Plugin Manager"): Settings treats every integration identically —
-      install/health-check/test-connection/enable/disable per plugin, status icons on the main
-      surface, extension auto-update with protocol version check
+- [x] Chrome preview extension: element picker, selector generation, protocol v1,
+      native host and installer registration
+- [x] Built-in UIA and Chrome settings expose enable/disable and live health
+- [ ] General third-party plugin manager and stable after-save API
 - [ ] Extension Phase 2: DOM snapshot, Shadow DOM, iframes, SPA route detection
-- [ ] Edge/Brave (Chromium reuse), then Firefox
-- [ ] Windows UI Automation plugin · Git plugin · Console plugin
+- [x] Chromium-family registration (Chrome, Edge, Brave and Chromium)
+- [x] Built-in Windows UI Automation context provider
+- [ ] Git plugin · Console plugin
 - [ ] Unreal plugin · Unity plugin
 
 ---
 
 ## V3 — Semantic layer
 
-### Tracked elements — Not started
+### Semantic object picking — Partially implemented
 
 Click actual UI objects instead of drawing rectangles; CapturePack stores the object, not
 coordinates (GOAL "Annotation Timeline & Lifetime"):
 
-- [ ] Tracked Element annotations (`"element"` type): alive while the object exists, bounds
-      follow the object frame by frame, auto-end on removal
-- [ ] DOM elements (via the extension) · Windows UI Automation (AutomationId, ControlType,
-      Name, Bounds) · application objects · engine plugins (Unreal widgets, Unity UI)
+- [x] A box can carry a semantic `target` from UIA, Chrome DOM or HWND evidence
+- [x] Observed target bounds can follow captured samples across displays without
+      inventing intermediate object state
+- [ ] App-specific object lifecycles beyond observed provider evidence
+- [ ] Engine providers (Unreal widgets, Unity UI)
 
 ### AI-assisted annotation — Not started
 
@@ -222,8 +226,7 @@ less complete without them, and nothing becomes an AI API integration (a stated 
 ## Later — noted, not scheduled
 
 - **Sanitized sharing** — an export option that leaves the unredacted original replay and
-  snapshot out of the shared ZIP (blur already renders into `replay_annotated` only).
-- **mp4 replay** — optional ffmpeg-based export alongside webm.
+  snapshot out of the shared ZIP (blur already renders into declared derived views).
 - **Open specification adoption** — other tools reading and writing `.capturepack`.
 - **Future MCP tools** — compare, merge, diff, statistics, exportPDF/HTML/Issue,
   findByApplication/URL/WindowTitle; true replay-frame extraction for `frame(time_s)`

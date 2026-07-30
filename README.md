@@ -204,6 +204,27 @@ early-stage project, so keep the original pack when reporting a problem and see
 [GOAL.md](GOAL.md) for the product vision and [ROADMAP.md](ROADMAP.md) for what
 comes next.
 
+Known limitation: per-display video/context PTS alignment remains under
+measurement in [issue #89](https://github.com/r2cuerdame/capturepack/issues/89).
+CapturePack records ambiguous timing evidence instead of hiding it behind a
+hard-coded global offset.
+
+## Documentation
+
+- [Documentation index](docs/README.md) — the best entry point for engineering,
+  integrations, QA, releases, schemas, and historical material.
+- [Pack specification](SPEC.md) and [architecture](ARCHITECTURE.md) — the open
+  format contract and current implementation boundaries.
+- [Release QA](docs/QA.md), [current handoff](docs/HANDOFF.md), and
+  [release process](docs/RELEASING.md) — how changes are verified, handed over,
+  and published.
+- [MCP](docs/MCP.md) and [temporal provider API](docs/temporal-provider-api.md)
+  — read-only saved-pack access and context-provider integration.
+
+CapturePack `0.3.3` is the application version. Pack `format_version` evolves
+independently through additive format changes; readers must follow
+[SPEC.md](SPEC.md) rather than infer format support from the app version.
+
 ## Security &amp; signing
 
 Windows builds are currently unsigned (SmartScreen will warn — *More info → Run anyway*);
