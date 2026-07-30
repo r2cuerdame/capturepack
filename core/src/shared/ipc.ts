@@ -1423,6 +1423,24 @@ export interface ChromeIntegrationStatus {
   legacyExtensionDir: string
   /** DOM events held for the current replay window. */
   events: number
+  /**
+   * THE PICKER'S OWN STATE, BECAUSE A HANDSHAKE IS NOT A PICK (#104).
+   *
+   * Every light on this panel could be green while element picking was
+   * completely dead: the extension connects, tab events flow, and the pick that
+   * never happens leaves no mark. These three carry the other half — how many
+   * picks actually arrived, how many messages were refused and why, and what
+   * the picker last reported doing.
+   */
+  elementPicks: number
+  rejected: number
+  lastRejection: string | null
+  picker: {
+    phase: 'armed' | 'disarmed' | 'failed'
+    atMs: number
+    reason: string | null
+    tab: { url: string; title: string } | null
+  } | null
   /** IDs the browser assigned to our extension folder, if it has loaded it. */
   detected: readonly { id: string; browser: string; profile: string }[]
 }

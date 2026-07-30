@@ -75,6 +75,33 @@ export interface DomEvent {
   viewport?: DomViewport
 }
 
+/**
+ * WHAT THE ELEMENT PICKER LAST DID, AS THE APP SAW IT (#104).
+ *
+ * The extension has reported arming, disarming and failing to arm since 0.1.5,
+ * on the same wire the picks travel — and this file threw all three away,
+ * because `parse()` only recognised the three event types that belong in a
+ * pack. The comment in `background.js` promising they "land in main.log" was
+ * simply not true, so the one question a stuck pick asks — did the picker ever
+ * arm? — had no answer anywhere on the machine.
+ *
+ * Measured before the fix: across every pack in the owner's capture root and
+ * the whole of `main.log`, `tab.updated` and `url.changed` arrive normally and
+ * `dom.element.selected` appears ZERO times. The app half is proved by
+ * `chrome-bridge-check`, so the break is upstream in the browser — exactly what
+ * these three signals describe, and exactly what was being discarded.
+ */
+export type DomPickerPhase = 'armed' | 'disarmed' | 'failed'
+
+export interface DomPickerState {
+  phase: DomPickerPhase
+  /** Milliseconds on the replay clock, at arrival. */
+  atMs: number
+  /** Why arming failed — a restricted page, no tab, an injection error. */
+  reason: string | null
+  tab: { url: string; title: string } | null
+}
+
 /** What Settings > Integrations shows, and what a bug report should quote. */
 export interface DomBridgeStatus {
   listening: boolean
@@ -87,6 +114,13 @@ export interface DomBridgeStatus {
   protocolCompatible: boolean
   events: number
   lastEventAtMs: number | null
+  /** Element picks accepted this run, retained or already pruned. */
+  elementPicks: number
+  /** Messages that looked like a pick and were refused, with the last reason. */
+  rejected: number
+  lastRejection: string | null
+  /** The picker's last reported lifecycle signal, or null if it never armed. */
+  picker: DomPickerState | null
 }
 
 let server: net.Server | null = null
@@ -98,6 +132,10 @@ let hostSeen = false
 const extensionConnections = new ExtensionConnectionLedger<net.Socket>()
 const hostSockets = new Set<net.Socket>()
 let lastEventAtMs: number | null = null
+let elementPicks = 0
+let rejected = 0
+let lastRejection: string | null = null
+let pickerState: DomPickerState | null = null
 /** Supplied by the context runtime: "now" on the replay clock. */
 let clockNowMs: () => number = () => Date.now()
 
@@ -132,6 +170,10 @@ export function domBridgeStatus(): DomBridgeStatus {
     protocolCompatible: extension?.protocol === DOM_PROTOCOL_VERSION,
     events: events.length,
     lastEventAtMs,
+    elementPicks,
+    rejected,
+    lastRejection,
+    picker: pickerState === null ? null : { ...pickerState },
   }
 }
 
@@ -149,32 +191,92 @@ interface DomHello {
   version: string
 }
 
-function parse(raw: unknown): DomEvent | DomHello | null {
+interface DomPickerMessage {
+  kind: 'picker'
+  phase: DomPickerPhase
+  reason: string | null
+  tab: { url: string; title: string } | null
+}
+
+/**
+ * A REFUSAL IS AN ANSWER, AND IT HAS TO BE SAYABLE (#104).
+ *
+ * This used to be `DomEvent | DomHello | null`, and every one of the dozen ways
+ * a message can be wrong collapsed into that single `null` — dropped on a
+ * socket, in a `while` loop, with nothing written down. A pick refused for a
+ * zero-height rectangle and a pick that never happened looked identical from
+ * outside the process, which is the whole reason #104 stayed open for two
+ * release cycles.
+ */
+type ParseOutcome =
+  | { ok: true; value: DomEvent | DomHello | DomPickerMessage }
+  | { ok: false; reason: string }
+
+function refuse(reason: string): ParseOutcome {
+  return { ok: false, reason }
+}
+
+/** The tab a browser message names, bounded because a page controls both. */
+function parseTab(raw: unknown): { url: string; title: string } | null {
   if (typeof raw !== 'object' || raw === null) return null
+  const t = raw as Record<string, unknown>
+  if (typeof t['url'] !== 'string' || typeof t['title'] !== 'string') return null
+  return { url: t['url'].slice(0, 2048), title: t['title'].slice(0, 512) }
+}
+
+function parse(raw: unknown): ParseOutcome {
+  if (typeof raw !== 'object' || raw === null) return refuse('not-an-object')
   const m = raw as Record<string, unknown>
   const type = m['type']
   if (type === 'host.hello') {
-    if (typeof m['protocol'] !== 'number' || !Number.isFinite(m['protocol'])) return null
+    if (typeof m['protocol'] !== 'number' || !Number.isFinite(m['protocol'])) {
+      return refuse('hello-without-protocol')
+    }
     return {
-      kind: 'hello',
-      protocol: m['protocol'],
-      version: typeof m['version'] === 'string' ? m['version'].slice(0, 32) : 'unknown',
+      ok: true,
+      value: {
+        kind: 'hello',
+        protocol: m['protocol'],
+        version: typeof m['version'] === 'string' ? m['version'].slice(0, 32) : 'unknown',
+      },
     }
   }
-  if (m['protocol'] !== DOM_PROTOCOL_VERSION) return null
-  if (type !== 'dom.element.selected' && type !== 'tab.updated' && type !== 'url.changed') {
-    return null
+  if (m['protocol'] !== DOM_PROTOCOL_VERSION) {
+    return refuse(`protocol-mismatch:${String(m['protocol'])}`)
   }
-  const tab = m['tab']
-  if (typeof tab !== 'object' || tab === null) return null
-  const t = tab as Record<string, unknown>
-  if (typeof t['url'] !== 'string' || typeof t['title'] !== 'string') return null
+  // THE PICKER'S OWN LIFECYCLE. Not pack content — a pack records what the
+  // browser showed, not which buttons the user pressed in it — but the only
+  // evidence that says whether a missing pick is a picker that never armed, a
+  // page the extension may not touch, or a click that went somewhere else.
+  if (type === 'picker.armed' || type === 'picker.disarmed' || type === 'picker.failed') {
+    const reason = m['reason']
+    return {
+      ok: true,
+      value: {
+        kind: 'picker',
+        phase: type === 'picker.armed'
+          ? 'armed'
+          : type === 'picker.disarmed'
+            ? 'disarmed'
+            : 'failed',
+        reason: typeof reason === 'string' ? reason.slice(0, 200) : null,
+        tab: parseTab(m['tab']),
+      },
+    }
+  }
+  if (type !== 'dom.element.selected' && type !== 'tab.updated' && type !== 'url.changed') {
+    return refuse(`unknown-type:${typeof type === 'string' ? type.slice(0, 64) : typeof type}`)
+  }
+  const tabValue = parseTab(m['tab'])
+  if (tabValue === null) return refuse('missing-or-malformed-tab')
   const event: DomEvent = {
     tMs: Math.round(clockNowMs()),
     type,
-    // Bounded because a page controls both of these.
-    tab: { url: t['url'].slice(0, 2048), title: t['title'].slice(0, 512) },
+    tab: tabValue,
   }
+  // Why an element was not taken, kept so a refused pick can say which of the
+  // half-dozen validation rules it broke instead of vanishing.
+  let elementRefusal = 'element-absent'
   const el = m['element']
   if (typeof el === 'object' && el !== null) {
     const e = el as Record<string, unknown>
@@ -196,7 +298,14 @@ function parse(raw: unknown): DomEvent | DomHello | null {
       const y = num(r['y'])
       const w = num(r['width'])
       const h = num(r['height'])
-      if (x !== null && y !== null && w !== null && h !== null && w > 0 && h > 0) {
+      if (x === null || y === null || w === null || h === null) {
+        elementRefusal = 'element-bounds-not-finite'
+      } else if (w <= 0 || h <= 0) {
+        // A collapsed element measures 0 in one axis. Real, and unplaceable —
+        // an invisible box is not an annotation target, so it is refused out
+        // loud rather than silently.
+        elementRefusal = `element-zero-size:${String(w)}x${String(h)}`
+      } else {
         event.element = {
           tag: e['tag'].slice(0, 64),
           selector: e['selector'].slice(0, 512),
@@ -206,6 +315,8 @@ function parse(raw: unknown): DomEvent | DomHello | null {
           ...(typeof e['text'] === 'string' ? { text: e['text'].slice(0, 200) } : {}),
         }
       }
+    } else {
+      elementRefusal = 'element-missing-tag-selector-or-bounds'
     }
   }
   // The screen anchor, validated exactly as strictly as everything else here:
@@ -239,8 +350,10 @@ function parse(raw: unknown): DomEvent | DomHello | null {
       }
     }
   }
-  if (type === 'dom.element.selected' && event.element === undefined) return null
-  return event
+  if (type === 'dom.element.selected' && event.element === undefined) {
+    return refuse(elementRefusal)
+  }
+  return { ok: true, value: event }
 }
 
 /**
@@ -276,8 +389,8 @@ export function parseDomPayload(text: string | null): DomEvent[] {
     const tMs = e['t_ms']
     if (typeof tMs !== 'number' || !Number.isFinite(tMs)) continue
     const parsed = parse({ ...e, protocol: DOM_PROTOCOL_VERSION })
-    if (parsed === null || 'kind' in parsed) continue
-    out.push({ ...parsed, tMs: Math.max(0, Math.round(tMs)) })
+    if (!parsed.ok || 'kind' in parsed.value) continue
+    out.push({ ...parsed.value, tMs: Math.max(0, Math.round(tMs)) })
   }
   // Temporal readers keep the earlier observation on an exact distance tie.
   // A pack is untrusted input and may reorder otherwise valid events, so make
@@ -337,13 +450,21 @@ export function startDomBridge(): void {
             parsed = null
           }
           const result = parse(parsed)
-          if (result !== null && 'kind' in result) {
+          if (!result.ok) {
+            // EVERY REFUSAL SAYS SO (#104). One line per refused message, and
+            // the reason kept for Settings, so a pick that never became a box
+            // can be told from a pick that never happened.
+            rejected += 1
+            lastRejection = result.reason
+            logWarn(`[chrome] refused a browser message: ${result.reason}`)
+          } else if ('kind' in result.value && result.value.kind === 'hello') {
+            const hello = result.value
             extensionConnections.upsert(socket, {
-              version: result.version,
-              protocol: result.protocol,
+              version: hello.version,
+              protocol: hello.protocol,
             })
             logInfo(
-              `[chrome] extension ${result.version} connected, protocol v${String(result.protocol)}`,
+              `[chrome] extension ${hello.version} connected, protocol v${String(hello.protocol)}`,
             )
             socket.write(
               `${JSON.stringify({
@@ -353,9 +474,36 @@ export function startDomBridge(): void {
                 extensionVersion: bundledExtensionVersion(),
               })}\n`,
             )
-          } else if (result !== null) {
-            events.push(result)
-            lastEventAtMs = result.tMs
+          } else if ('kind' in result.value) {
+            const signal = result.value
+            pickerState = {
+              phase: signal.phase,
+              atMs: Math.round(clockNowMs()),
+              reason: signal.reason,
+              tab: signal.tab,
+            }
+            const where = signal.tab === null ? '' : ` on ${signal.tab.url.slice(0, 200)}`
+            if (signal.phase === 'failed') {
+              logWarn(
+                `[chrome] element picker could not arm: ${signal.reason ?? 'unknown'}${where}`,
+              )
+            } else {
+              logInfo(`[chrome] element picker ${signal.phase}${where}`)
+            }
+          } else {
+            const event = result.value
+            events.push(event)
+            lastEventAtMs = event.tMs
+            if (event.type === 'dom.element.selected') {
+              elementPicks += 1
+              const element = event.element
+              logInfo(
+                `[chrome] element pick at ${String(event.tMs)}ms: `
+                + `${element?.selector ?? '?'} `
+                + `${String(element?.bounds.width ?? 0)}x${String(element?.bounds.height ?? 0)}`
+                + `${event.viewport === undefined ? ' WITHOUT a viewport (unplaceable)' : ''}`,
+              )
+            }
             prune()
           }
         }
@@ -402,4 +550,8 @@ export function stopDomBridge(): void {
   events = []
   hostSeen = false
   lastEventAtMs = null
+  elementPicks = 0
+  rejected = 0
+  lastRejection = null
+  pickerState = null
 }

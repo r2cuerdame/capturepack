@@ -67,8 +67,10 @@ The same evidence is saved as structured data for AI.
   AutomationId, process/window identity, and observed bounds when the app exposes
   them.
 - **Chrome DOM (optional preview extension):** selector, role, text and URL for
-  the element you explicitly pick. The extension reads the page for that pick;
-  it does not stream the DOM.
+  the element you explicitly pick — click the CapturePack toolbar icon, then
+  click the element. It works inside iframes, reads the page only for that pick,
+  and does not stream the DOM. Settings › Plugins › Chrome DOM reports what the
+  picker last did, so a pick that does not arrive says why.
 - **HWND window fallback:** when no child control is available, CapturePack still
   records the real window and its observed geometry instead of inventing a
   control.

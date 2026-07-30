@@ -52,6 +52,25 @@ function frame(message) {
 const require = createRequire(import.meta.url)
 const electron = require('electron')
 const nativeHostScript = resolve('dist', 'scripts', 'native-host.js')
+
+// THIS CHECK STARTS THE REAL APP, SO IT NEEDS THE REAL BUNDLE.
+//
+// `qa-gate.mjs` runs every `check:*` BEFORE `build`, and `dist/` is gitignored,
+// so on a fresh clone this would spawn an Electron that has no main script and
+// then spend 45 seconds waiting for a log line that can never appear. Building
+// once here is the difference between a check that is honest everywhere and one
+// that only passes on a machine that happened to build already.
+const mainBundle = resolve('dist', 'main', 'index.js')
+if (!existsSync(mainBundle) || !existsSync(nativeHostScript)) {
+  console.log('\nNo build to test — building it first')
+  const built = spawnSync(process.execPath, [resolve('scripts', 'build.mjs')], {
+    stdio: 'inherit',
+  })
+  if (built.status !== 0 || !existsSync(mainBundle) || !existsSync(nativeHostScript)) {
+    console.log('\nresult: BROKEN — the app bundle could not be built\n')
+    process.exit(1)
+  }
+}
 const bridgeEnv = {
   ...process.env,
   CAPTUREPACK_DOM_PIPE_SUFFIX: `qa-${process.pid}`,
@@ -240,12 +259,48 @@ if (listening) {
   // A protocol we do not speak.
   host.stdin.write(frame({ type: 'dom.element.selected', protocol: 99, timestamp: Date.now() }))
 
-  // Nothing above is supposed to produce a log line — the DOM is not streamed
+  // THE PICKER'S OWN LIFECYCLE (#104). The extension has reported these three
+  // since 0.1.5 and the app discarded all of them, so the only question a
+  // missing pick asks — did the picker ever arm? — had no answer anywhere on
+  // the machine. They are diagnostics, never pack content.
+  console.log('\nThe picker reporting itself')
+  host.stdin.write(frame({
+    type: 'picker.armed',
+    protocol: 1,
+    timestamp: Date.now(),
+    tab: { url: 'https://example.com/armed', title: 'Armed' },
+  }))
+  host.stdin.write(frame({
+    type: 'picker.failed',
+    protocol: 1,
+    timestamp: Date.now(),
+    reason: 'Cannot access a chrome:// URL',
+    tab: { url: 'chrome://extensions/', title: 'Extensions' },
+  }))
+
+  await new Promise((r) => setTimeout(r, 1500))
+  const log = logText()
+  check('an accepted pick is written down as it arrives',
+    /\[chrome\] element pick at \d+ms: #save 120x40/.test(log),
+    'no element-pick line in main.log')
+  check('a refused pick says which rule it broke',
+    /\[chrome\] refused a browser message: element-absent/.test(log),
+    'a pick without an element was dropped silently')
+  check('a future protocol is refused out loud',
+    /\[chrome\] refused a browser message: protocol-mismatch:99/.test(log),
+    'an unspeakable protocol was dropped silently')
+  check('an armed picker is visible to the app',
+    /\[chrome\] element picker armed on https:\/\/example\.com\/armed/.test(log),
+    'picker.armed never reached main.log')
+  check('a picker that could not arm says why',
+    /\[chrome\] element picker could not arm: Cannot access a chrome:\/\/ URL/.test(log),
+    'picker.failed never reached main.log')
+
+  // Nothing above is supposed to take the app down — the DOM is not streamed
   // to the log either — so the proof is that the app is still healthy and
   // still listening after being sent two malformed messages.
-  await new Promise((r) => setTimeout(r, 1500))
   check('malformed and future-protocol messages do not take the app down',
-    !/DOM bridge could not listen/.test(logText()) && app.exitCode === null)
+    !/DOM bridge could not listen/.test(log) && app.exitCode === null)
 }
 
 host?.stdin.end()
@@ -333,6 +388,22 @@ if (ready) {
     // Preserve that ordering so this remains a browser-shaped integration
     // check instead of a race against app-side connection registration.
     await new Promise((resolve) => setTimeout(resolve, 1_500))
+    // AND AFTER THE RECORDER IS ACTUALLY RECORDING.
+    //
+    // A pack carries the DOM events inside its frozen replay window, and
+    // nothing else — a pick from before the first frame was retained points at
+    // a moment the pack does not contain. This check used to fire its pick
+    // about two seconds after launch, while the recorder needed three, so the
+    // event landed BEFORE the replay began and was correctly excluded. The
+    // check then reported the product as broken. Measured on the failing run:
+    // pick at 1991 ms, replay starting at 3067 ms.
+    const recording = await waitFor(
+      () => readFileSync(join(packData, 'logs', 'main.log'), 'utf8')
+        .includes('[capture] recorder state: recording'),
+      45_000,
+    )
+    check('the recorder is running before the browser speaks', recording,
+      'no "recorder state: recording" line, so any pick would fall outside the replay')
     host2.stdin.write(
       frame({
         type: 'dom.element.selected',
@@ -342,6 +413,13 @@ if (ready) {
         element: {
           tag: 'button', id: 'save', role: 'button', text: 'Save',
           selector: '#save', bounds: { x: 100, y: 200, width: 120, height: 40 },
+        },
+        // Extension 0.1.4 and newer always send this, and without it a pick is
+        // recorded but can never become a candidate. A fixture that omits it
+        // is not a fixture of anything a browser sends.
+        viewport: {
+          width: 1280, height: 720, dpr: 1,
+          screenX: 0, screenY: 0, outerWidth: 1280, outerHeight: 820,
         },
       }),
     )
@@ -375,9 +453,24 @@ if (wrote) {
   check('the event is on the pack clock, inside the replay',
     typeof picked?.t_ms === 'number' && picked.t_ms >= 0 && picked.t_ms <= 30_000,
     `t_ms=${String(picked?.t_ms)}`)
-  check('the manifest declares the plugin that wrote it',
-    JSON.parse(readFileSync(join(packDir, 'manifest.json'), 'utf8'))
-      .plugins.some((p) => p.name === 'chrome-dom'))
+  // DECLARED AFTER IT IS WRITTEN, SO IT IS WAITED FOR.
+  //
+  // `writeCapturedDomPlugin` writes `elements.json` and only then calls
+  // `addManifestPlugin`, and the loop above stops at the first of those two.
+  // Reading the manifest in the same turn therefore raced the second, and this
+  // check went red once in a gate run and green standalone — the exact shape of
+  // a flake that teaches people to re-run instead of to look.
+  const declared = await waitFor(() => {
+    try {
+      return JSON.parse(readFileSync(join(packDir, 'manifest.json'), 'utf8'))
+        .plugins.some((p) => p.name === 'chrome-dom')
+    } catch {
+      // A manifest being rewritten atomically can be briefly unreadable.
+      return false
+    }
+  }, 30_000)
+  check('the manifest declares the plugin that wrote it', declared,
+    'plugins[] never listed chrome-dom')
 
   // REAL MEDIA, NOT ONLY BOX SHAPES. This is the release-desk E2E the
   // deterministic ring unit cannot provide: Chromium encoded these files

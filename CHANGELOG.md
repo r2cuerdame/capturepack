@@ -6,6 +6,40 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 
 ## Unreleased
 
+### Fixed
+
+- Picking an element in a browser works on pages whose interface lives inside an
+  iframe. The picker previously ran only in the top document, so a click inside
+  a frame reached nothing and was swallowed without a message, a failure or any
+  visible change ([#104](https://github.com/r2cuerdame/capturepack/issues/104)).
+- An explicitly picked document element is no longer discarded by the filter
+  written for enumerated window controls. A picked `<main>`, `<nav>` or content
+  column covering more than a third of a browser window was dropped outright,
+  leaving only the whole-window box.
+
+### Added
+
+- The application records what the element picker did: arming, failing to arm
+  with the browser's own reason, disarming, every pick that arrived, and every
+  message it refused together with the rule that refused it. Settings ›
+  Plugins › Chrome DOM shows the last state, and the log carries the rest.
+- A pick that cannot be placed on a display now says why — no visible browser
+  window, a window whose title does not match the tab, more than one candidate
+  window, or a viewport that disagrees with the observed client rectangle.
+- Deterministic checks for the cross-frame arithmetic (`check:frame-geometry`)
+  and for a picked element surviving all the way into the editor's pick index
+  (`check:dom-pick`). The end-to-end browser-to-pack harness
+  (`check:chrome-bridge`) now runs as part of the release gate.
+
+### Changed
+
+- Protocol v1 documents the picker lifecycle messages the extension has sent
+  since 0.1.5 and the `viewport` block it has sent since 0.1.4, and corrects the
+  advice to multiply element bounds by `devicePixelRatio`: the snapshot scale is
+  measured from the window's observed client rectangle, and the device pixel
+  ratio is the cross-check.
+- Chrome extension 0.1.9.
+
 ## 0.3.3 — 2026-07-30
 
 Replay reliability, past-object picking, multi-display capture and portable

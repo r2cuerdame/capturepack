@@ -335,6 +335,10 @@ async function chromeStatus(forceInstallRefresh = false): Promise<ChromeIntegrat
     legacyExtensionLoaded: detected.some((d) => d.legacy === true),
     legacyExtensionDir: host.legacyExtensionDir,
     events: bridge.events,
+    elementPicks: bridge.elementPicks,
+    rejected: bridge.rejected,
+    lastRejection: bridge.lastRejection,
+    picker: bridge.picker,
     detected,
   }
 }

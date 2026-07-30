@@ -1,6 +1,27 @@
 // CapturePack element picker. Injected on demand when the user clicks the
 // toolbar action; picks ONE element, reports it, and removes itself.
+//
+// IT RUNS IN EVERY FRAME (#104). It used to be injected into the top document
+// only, and a click inside a cross-origin iframe never reaches the top
+// document's listener at all — so on any page that puts its UI in a frame the
+// picker armed, highlighted nothing, and swallowed the click. No message, no
+// failure, no cleanup: exactly the "nothing happens" that was reported.
+//
+// A frame can only measure itself, so a pick made below the top document is
+// carried UP the frame chain, and each host frame translates the rectangle into
+// its own viewport using the iframe element it can see. Every term is measured
+// there — the frame's position, its borders and padding, and the scale implied
+// by its rendered width against the child's own viewport width. Nothing is
+// assumed, and a hop whose numbers do not agree refuses instead of guessing.
+//
+// The payload passes through the ancestor pages on its way up. That is a real
+// exposure and it is accepted deliberately: the picker only ever runs after the
+// user clicks the toolbar icon on that tab, and the element they picked is
+// being written into a pack of that very page. It is never sent to a page that
+// was not already hosting the element.
 ;(() => {
+  const IS_TOP = window.top === window
+
   // RE-ARMING RE-ARMS. This used to `return` when the flag was already set, so
   // any injection that did not reach its own cleanup — an Escape that raced a
   // navigation, a page that swapped the DOM under it, an exception — left the
@@ -78,15 +99,32 @@
     highlight.style.height = r.height + 'px'
   }
 
+  function childFrames() {
+    return Array.from(document.querySelectorAll('iframe, frame'))
+  }
+
+  function postDown(message) {
+    for (const frame of childFrames()) {
+      try {
+        if (frame.contentWindow) frame.contentWindow.postMessage(message, '*')
+      } catch {
+        // A frame that cannot be addressed is a frame that has no picker in it.
+      }
+    }
+  }
+
   function cleanup() {
     document.removeEventListener('mousemove', onMove, true)
     document.removeEventListener('click', onClick, true)
     document.removeEventListener('keydown', onKey, true)
+    window.removeEventListener('message', onFrameMessage, true)
     highlight.remove()
     window.__capturepackPickerActive = false
     window.__capturepackPickerCleanup = null
     // The toolbar badge is the only thing that says the picker was ever armed;
-    // clearing it is how "armed" stops being a claim nobody can check.
+    // clearing it is how "armed" stops being a claim nobody can check. Only the
+    // top frame speaks, or a page with forty ad frames would report forty times.
+    if (!IS_TOP) return
     try {
       chrome.runtime.sendMessage({ type: 'picker.disarmed' })
     } catch {
@@ -94,27 +132,85 @@
     }
   }
   window.__capturepackPickerCleanup = cleanup
-  try {
-    chrome.runtime.sendMessage({ type: 'picker.armed' })
-  } catch {
-    // No worker: the picker still works, it just cannot light the badge.
+
+  /** Tear every frame down, from wherever the pick or the Escape happened. */
+  function disarmEverywhere() {
+    if (IS_TOP) {
+      postDown({ __capturepack: 'disarm' })
+      cleanup()
+      return
+    }
+    try {
+      window.top.postMessage({ __capturepack: 'disarm' }, '*')
+    } catch {
+      // Nothing above will hear it; this frame still stops.
+    }
+    cleanup()
   }
 
-  function onClick(e) {
-    e.preventDefault()
-    e.stopPropagation()
-    const el = current || e.target
-    const r = el.getBoundingClientRect()
+  if (IS_TOP) {
+    try {
+      chrome.runtime.sendMessage({ type: 'picker.armed' })
+    } catch {
+      // No worker: the picker still works, it just cannot light the badge.
+    }
+  }
+
+  /**
+   * A child frame's pick, in THIS frame's viewport coordinates.
+   *
+   * Reads the DOM here and hands numbers to `frame-geometry.js`, which owns the
+   * arithmetic and is the part a test can reach. A null answer from it is a
+   * refusal — the two measurements are not describing the same box — and a
+   * refused pick is reported rather than placed somewhere plausible.
+   */
+  function translateFromFrame(payload, host) {
+    const geometry = window.__capturepackFrameGeometry
+    if (!geometry) return null
+    const rect = host.getBoundingClientRect()
+    const style = window.getComputedStyle(host)
+    const px = (value) => {
+      const n = parseFloat(value)
+      return Number.isFinite(n) ? n : 0
+    }
+    const translated = geometry.translateFrameRect({
+      hostRect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
+      hostInsets: {
+        left: px(style.borderLeftWidth) + px(style.paddingLeft),
+        top: px(style.borderTopWidth) + px(style.paddingTop),
+        right: px(style.borderRightWidth) + px(style.paddingRight),
+        bottom: px(style.borderBottomWidth) + px(style.paddingBottom),
+      },
+      childViewportWidth: payload.viewportWidth,
+      bounds: payload.bounds,
+    })
+    if (translated === null) return null
+    return {
+      element: payload.element,
+      frameDepth: payload.frameDepth + 1,
+      viewportWidth: window.innerWidth,
+      bounds: {
+        x: translated.x,
+        y: translated.y,
+        width: translated.width,
+        height: translated.height,
+      },
+    }
+  }
+
+  function sendPick(payload) {
     chrome.runtime.sendMessage({
       type: 'dom.element.selected',
       timestamp: Date.now(),
       element: {
-        tag: el.tagName.toLowerCase(),
-        id: el.id || '',
-        role: implicitRole(el),
-        text: (el.innerText || '').trim().slice(0, 200),
-        selector: buildSelector(el),
-        bounds: { x: r.x, y: r.y, width: r.width, height: r.height },
+        ...payload.element,
+        frameDepth: payload.frameDepth,
+        bounds: {
+          x: payload.bounds.x,
+          y: payload.bounds.y,
+          width: payload.bounds.width,
+          height: payload.bounds.height,
+        },
       },
       // WHERE THAT RECTANGLE IS ON THE SCREEN.
       //
@@ -133,6 +229,9 @@
       // falls out of the two heights without the page having to guess at
       // browser chrome. Scroll position is deliberately NOT sent:
       // getBoundingClientRect is already viewport-relative.
+      //
+      // Only the TOP frame ever sends this, because only the top frame's
+      // viewport is the one the window's client rectangle describes.
       viewport: {
         width: window.innerWidth,
         height: window.innerHeight,
@@ -147,17 +246,88 @@
         outerHeight: window.outerHeight,
       },
     })
-    cleanup()
+  }
+
+  function reportFailure(reason) {
+    try {
+      chrome.runtime.sendMessage({ type: 'picker.failed', reason })
+    } catch {
+      // Nothing to report to; the pick is lost either way, loudly is better.
+    }
+  }
+
+  /** Hand a pick to the frame above, or send it if this frame is the top. */
+  function deliver(payload) {
+    if (IS_TOP) {
+      sendPick(payload)
+      disarmEverywhere()
+      return
+    }
+    try {
+      window.parent.postMessage({ __capturepack: 'pick', payload }, '*')
+    } catch {
+      reportFailure('frame-chain-unreachable')
+      disarmEverywhere()
+    }
+  }
+
+  function onFrameMessage(e) {
+    const data = e.data
+    if (!data || typeof data !== 'object') return
+    if (data.__capturepack === 'disarm') {
+      // Propagates the whole way down; the flag check stops it looping.
+      if (!window.__capturepackPickerActive) return
+      postDown({ __capturepack: 'disarm' })
+      cleanup()
+      return
+    }
+    if (data.__capturepack !== 'pick') return
+    // ONLY WHILE ARMED, AND ONLY FROM A FRAME THIS DOCUMENT ACTUALLY HOSTS.
+    // A page can post whatever it likes; a pick is accepted only when the user
+    // has armed the picker AND the sender is one of this document's own frames.
+    if (!window.__capturepackPickerActive) return
+    const payload = data.payload
+    if (!payload || typeof payload !== 'object' || !payload.bounds || !payload.element) return
+    const host = childFrames().find((frame) => frame.contentWindow === e.source)
+    if (host === undefined) return
+    const translated = translateFromFrame(payload, host)
+    if (translated === null) {
+      reportFailure(`frame-geometry-disagrees (depth ${String(payload.frameDepth)})`)
+      disarmEverywhere()
+      return
+    }
+    deliver(translated)
+  }
+
+  function onClick(e) {
+    e.preventDefault()
+    e.stopPropagation()
+    const el = current || e.target
+    const r = el.getBoundingClientRect()
+    deliver({
+      element: {
+        tag: el.tagName.toLowerCase(),
+        id: el.id || '',
+        role: implicitRole(el),
+        text: (el.innerText || '').trim().slice(0, 200),
+        selector: buildSelector(el),
+      },
+      frameDepth: 0,
+      viewportWidth: window.innerWidth,
+      bounds: { x: r.x, y: r.y, width: r.width, height: r.height },
+    })
+    if (!IS_TOP) cleanup()
   }
 
   function onKey(e) {
     if (e.key === 'Escape') {
       e.preventDefault()
-      cleanup()
+      disarmEverywhere()
     }
   }
 
   document.addEventListener('mousemove', onMove, true)
   document.addEventListener('click', onClick, true)
   document.addEventListener('keydown', onKey, true)
+  window.addEventListener('message', onFrameMessage, true)
 })()

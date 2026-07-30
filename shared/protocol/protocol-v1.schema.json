@@ -7,7 +7,15 @@
   "properties": {
     "type": {
       "type": "string",
-      "enum": ["dom.element.selected", "tab.updated", "url.changed", "host.hello"]
+      "enum": [
+        "dom.element.selected",
+        "tab.updated",
+        "url.changed",
+        "host.hello",
+        "picker.armed",
+        "picker.disarmed",
+        "picker.failed"
+      ]
     },
     "protocol": { "const": 1 },
     "timestamp": { "type": "number", "description": "Milliseconds, sender-relative" },
@@ -29,6 +37,7 @@
         "selector": { "type": "string" },
         "bounds": {
           "type": "object",
+          "description": "Viewport CSS pixels, as the page measures itself. Frame-local rectangles are translated into the TOP frame's viewport before being sent.",
           "properties": {
             "x": { "type": "number" },
             "y": { "type": "number" },
@@ -36,21 +45,58 @@
             "height": { "type": "number" }
           },
           "required": ["x", "y", "width", "height"]
+        },
+        "frameDepth": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many nested browsing contexts the element sits below the top document. 0 for the top frame. Present from extension 0.1.9."
         }
       },
       "required": ["tag", "selector", "bounds"]
+    },
+    "viewport": {
+      "type": "object",
+      "description": "Where the page's coordinate space is. Required to place an element on a snapshot; sent by extension 0.1.4 and newer.",
+      "properties": {
+        "width": { "type": "number", "exclusiveMinimum": 0 },
+        "height": { "type": "number", "exclusiveMinimum": 0 },
+        "dpr": { "type": "number", "exclusiveMinimum": 0, "maximum": 16 },
+        "screenX": { "type": ["number", "null"] },
+        "screenY": { "type": ["number", "null"] },
+        "outerWidth": { "type": ["number", "null"] },
+        "outerHeight": { "type": ["number", "null"] }
+      },
+      "required": ["width", "height", "dpr"]
+    },
+    "reason": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "Why picker.failed happened: a restricted page, no tab, or an injection error."
     },
     "app": { "type": "string" },
     "version": { "type": "string" }
   },
   "allOf": [
     {
-      "if": { "properties": { "type": { "const": "dom.element.selected" } } },
-      "then": { "required": ["tab", "element"] }
+      "if": {
+        "required": ["type"],
+        "properties": { "type": { "const": "dom.element.selected" } }
+      },
+      "then": { "required": ["tab", "element", "viewport"] }
     },
     {
-      "if": { "properties": { "type": { "enum": ["tab.updated", "url.changed"] } } },
+      "if": {
+        "required": ["type"],
+        "properties": { "type": { "enum": ["tab.updated", "url.changed"] } }
+      },
       "then": { "required": ["tab"] }
+    },
+    {
+      "if": {
+        "required": ["type"],
+        "properties": { "type": { "const": "picker.failed" } }
+      },
+      "then": { "required": ["reason"] }
     }
   ]
 }

@@ -92,6 +92,56 @@ in the current release line at this writing (npm suggests a downgrade to
 [0.3.1 dependency audit](docs/DEPENDENCY-AUDIT-0.3.1.md) rather than being
 called runtime vulnerabilities.
 
+### 0.3.4 in progress — element picking, and saying so
+
+Two reports drive this release: picking an element in Chrome does nothing, and a
+window moved quickly leaves its box ahead of the picture ([#89](https://github.com/r2cuerdame/capturepack/issues/89)).
+
+**The measurement that opened it.** Across every pack in the owner's capture
+root and the whole of `main.log`, `tab.updated` and `url.changed` arrive
+normally and `dom.element.selected` appears **zero times**. The app half is
+proved by an end-to-end harness that starts the real app and the real native
+host, so the break is upstream in the browser — and nothing on the machine could
+say where, because the three signals designed to answer exactly that
+(`picker.armed` / `picker.disarmed` / `picker.failed`, sent by the extension
+since 0.1.5) were discarded by the bridge's parser without a log line, a counter
+or a status field. The comment promising they "land in main.log" was untrue.
+
+**What 0.3.4 changes** ([#104](https://github.com/r2cuerdame/capturepack/issues/104)):
+
+- Every browser message that is refused says which rule it broke, every
+  accepted pick is written down as it arrives, and the picker's last state is
+  visible in Settings › Plugins › Chrome DOM. A missing box can now be told
+  apart from a picker that never armed.
+- A pick that cannot be placed reports the reason — no visible browser window,
+  a window whose title does not match the tab, more than one candidate window,
+  a viewport that does not agree with the observed client rectangle.
+- The picker runs in **every frame**. A click inside a cross-origin iframe never
+  reached the top document, so on any page whose UI lives in a frame the picker
+  armed, saw nothing and swallowed the click. A pick now travels up the frame
+  chain, each host frame translating it with a **measured** scale — the frame's
+  rendered content width against the width the child reports for its own
+  viewport — and refusing when those two cannot describe the same box.
+- An explicitly picked document element is no longer filtered as if it were an
+  enumerated window frame. The 0.35 area threshold was measured against UI
+  Automation dumps, where the anonymous client-area wrapper has to be told from
+  the button; a DOM pick is one element a human pointed at, and at that
+  threshold `<main>`, `<nav>` and any content column were deleted outright with
+  no deferred rung. A picked `<body>` is still the viewport and still yields to
+  the window rung — at a viewport-like threshold, and one rung back rather than
+  deleted.
+
+**Verification.** `check:frame-geometry` holds the cross-frame arithmetic
+without a browser; `check:dom-pick` drives the real Chrome DOM provider into the
+real editor index and fails without the filter fix; `check:chrome-bridge` — an
+end-to-end harness that existed but was never wired into the gate, and was
+failing — now runs in it.
+
+One thing remains unproved and needs the machine: a single run with the picker
+deliberately armed on an ordinary page, so the log says whether it arms, fails
+to arm, or arms and the click goes elsewhere. Until that run exists, #104 is
+diagnosable, not closed.
+
 ---
 
 ## Mission

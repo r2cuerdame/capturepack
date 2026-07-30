@@ -35,7 +35,26 @@ try {
   let failed = 0
   let connected = 0
   let reloads = 0
-  let loadedExtensionVersion = '0.1.8'
+  // THE SHIPPED MANIFEST IS THE VERSION UNDER TEST.
+  //
+  // This used to hard-code '0.1.8' and then assert the manifest still said so,
+  // which turned every legitimate extension bump into a red check about
+  // nothing. The scenarios below need three versions — what the worker has
+  // loaded, something strictly newer, and something newer still — so they are
+  // derived from the one number that is real.
+  const shippedManifest = JSON.parse(
+    readFileSync(path.join(here, '..', '..', 'extensions', 'chrome', 'manifest.json'), 'utf8'),
+  )
+  const bumped = (version, by) => {
+    const parts = String(version).split('.').map((part) => Number(part) || 0)
+    while (parts.length < 3) parts.push(0)
+    parts[parts.length - 1] += by
+    return parts.join('.')
+  }
+  const shippedVersion = shippedManifest.version
+  const newerVersion = bumped(shippedVersion, 1)
+  const newestVersion = bumped(shippedVersion, 2)
+  let loadedExtensionVersion = shippedVersion
   let runtimeLastError = null
   let runtimeLastErrorReads = 0
   let nextTimer = 1
@@ -126,9 +145,7 @@ try {
   }
 
   console.log('\nChrome extension service worker')
-  const manifest = JSON.parse(
-    readFileSync(path.join(here, '..', '..', 'extensions', 'chrome', 'manifest.json'), 'utf8'),
-  )
+  const manifest = shippedManifest
   check('manifest ships the worker version under test', manifest.version === loadedExtensionVersion)
   check('manifest grants persistence for the one-shot reload guard',
     manifest.permissions?.includes('storage') === true)
@@ -137,7 +154,7 @@ try {
   ports[0].deliver({
     type: 'host.hello',
     protocol: 1,
-    extensionVersion: '0.1.8',
+    extensionVersion: shippedVersion,
   })
   check('a matching app hello keeps the current worker', reloads === 0)
 
@@ -157,21 +174,21 @@ try {
   ports[1].deliver({
     type: 'host.hello',
     protocol: 1,
-    extensionVersion: '0.1.9',
+    extensionVersion: newerVersion,
   })
   check('a newer bundled folder asks Chromium for one reload', reloads === 1)
   ports[1].deliver({
     type: 'host.hello',
     protocol: 1,
-    extensionVersion: '0.1.9',
+    extensionVersion: newerVersion,
   })
   check('an unchanged manual folder cannot enter a reload loop', reloads === 1)
 
-  loadedExtensionVersion = '0.2.0'
+  loadedExtensionVersion = newestVersion
   ports[1].deliver({
     type: 'host.hello',
     protocol: 1,
-    extensionVersion: '0.1.9',
+    extensionVersion: newerVersion,
   })
   check('an extension newer than the app is never reloaded or downgraded', reloads === 1)
 

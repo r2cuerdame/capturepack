@@ -814,6 +814,30 @@ function renderChromeStatus(status: ChromeIntegrationStatus): void {
         ? `${t('settings.chkConnected')} — ${status.extensionVersion ?? '?'}, protocol v${String(status.protocolVersion)}`
         : t('settings.chkConnected'),
     },
+    // A HANDSHAKE IS NOT A PICK (#104). Every row above can be green while
+    // element picking is completely dead — that is the state the bug was
+    // reported in. `armed` and `never used` are both fine, so neither is a
+    // failure; only a picker that could not arm is, and it says why.
+    status.picker === null
+      ? { ok: true, text: t('settings.chkPickerIdle') }
+      : status.picker.phase === 'failed'
+        ? {
+            ok: false,
+            text:
+              `${t('settings.chkPickerFailed')} — ${status.picker.reason ?? '?'}`
+              + `${status.picker.tab === null ? '' : ` (${status.picker.tab.url.slice(0, 60)})`}`,
+          }
+        : { ok: true, text: t('settings.chkPickerArmed') },
+    {
+      // Counts, not a verdict: zero picks is the normal state of a fresh run.
+      ok: status.rejected === 0,
+      text:
+        t('settings.chkPicks', {
+          picks: String(status.elementPicks),
+          rejected: String(status.rejected),
+        })
+        + (status.lastRejection === null ? '' : ` — ${status.lastRejection}`),
+    },
   ]
   // AN ALREADY-LOADED UNPACKED EXTENSION DOES NOT EXECUTE CHANGED FILES YET.
   //

@@ -287,6 +287,8 @@ export class ContextSession {
   private readonly onInfo: (message: string) => void
   private provider: WindowsUiaProvider | null = null
   private domProvider: ChromeDomProvider | null = null
+  /** Last placed/refused outcome reported, so an unchanged one stays quiet. */
+  private domPlacementSignature: string | null = null
   private domEvents: readonly DomEvent[] = []
   private timeline: SurfaceTimeline
   private ids: ReadonlyMap<string, string> = new Map()
@@ -567,6 +569,11 @@ export class ContextSession {
   private registerDomProvider(): void {
     if (this.domProvider !== null) {
       this.domProvider.replace(this.domEvents)
+      // The first registration commonly runs against a single-instant timeline
+      // and refuses everything; the answer that matters is the one after the
+      // replay ring is adopted. Reporting on replace is therefore the point,
+      // and the signature keeps an unchanged outcome from repeating itself.
+      this.reportDomPlacement(this.domProvider)
       return
     }
     const displayScales = new Map(
@@ -587,8 +594,37 @@ export class ContextSession {
       return
     }
     this.domProvider = provider
-    if (provider.pickCount > 0) {
-      this.onInfo(`[context] chrome-dom: ${String(provider.pickCount)} element pick(s) placed`)
+    this.reportDomPlacement(provider)
+  }
+
+  /**
+   * WHAT THE BROWSER RUNG DID WITH WHAT IT WAS GIVEN (#104).
+   *
+   * This used to speak only when it succeeded, and only then — so a session
+   * holding three picks that all refused looked exactly like a session holding
+   * none, which is the state the field bug was reported in for two release
+   * cycles. Counting the events as well as the placements separates the three
+   * different failures a missing box can be.
+   */
+  private reportDomPlacement(provider: ChromeDomProvider): void {
+    const picks = this.domEvents.filter((e) => e.type === 'dom.element.selected').length
+    const refusals = provider.placementRefusals
+    if (picks === 0 && refusals.length === 0) return
+    const signature = [
+      String(provider.pickCount),
+      String(picks),
+      ...refusals.map((r) => `${String(r.tMs)}:${r.reason}`),
+    ].join('|')
+    if (signature === this.domPlacementSignature) return
+    this.domPlacementSignature = signature
+    this.onInfo(
+      `[context] chrome-dom: ${String(provider.pickCount)}/${String(picks)} element pick(s) placed`,
+    )
+    for (const refusal of refusals) {
+      this.onWarn(
+        `[context] chrome-dom: pick "${refusal.selector}" at ${String(refusal.tMs)}ms `
+        + `not placed — ${refusal.reason} (tab "${refusal.tabTitle.slice(0, 80)}")`,
+      )
     }
   }
 

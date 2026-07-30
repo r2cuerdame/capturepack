@@ -105,6 +105,23 @@ const MAX_SCALE = 6
 const MIN_DPR_AGREEMENT = 0.75
 const MAX_DPR_AGREEMENT = 1.25
 
+/**
+ * A PICK THAT WAS NOT OFFERED, AND WHY (#104).
+ *
+ * `place()` refuses rather than guesses, which is right — a box on the wrong
+ * window is worse than no box. What was wrong is that the refusal left no
+ * trace: a session that placed nothing logged nothing, so "the extension never
+ * sent it", "no browser window matched the tab title" and "the ring holds no
+ * client rectangle for that window" were one indistinguishable silence.
+ */
+export interface DomPlacementRefusal {
+  /** The pick's own time on the pack clock. */
+  tMs: number
+  reason: string
+  tabTitle: string
+  selector: string
+}
+
 /** A pick, resolved onto one display's snapshot once, at the time it happened. */
 interface PlacedPick {
   event: DomEvent
@@ -135,6 +152,7 @@ export class ChromeDomProvider implements TemporalContextProvider {
    */
   private readonly surfacesAt: (timeMs: number) => readonly SurfaceInfo[]
   private placedCache: PlacedPick[] | null = null
+  private refusalCache: DomPlacementRefusal[] = []
 
   constructor(
     events: readonly DomEvent[],
@@ -153,6 +171,12 @@ export class ChromeDomProvider implements TemporalContextProvider {
 
   get pickCount(): number {
     return this.placed().length
+  }
+
+  /** Every pick this session holds that could not be placed, and why (#104). */
+  get placementRefusals(): readonly DomPlacementRefusal[] {
+    this.placed()
+    return this.refusalCache
   }
 
   getSurfaceClaims(c: SurfaceClaimContext): Promise<readonly ProviderSurfaceClaim[]> {
@@ -237,14 +261,33 @@ export class ChromeDomProvider implements TemporalContextProvider {
   private placed(): PlacedPick[] {
     if (this.placedCache !== null) return this.placedCache
     const out: PlacedPick[] = []
+    const refusals: DomPlacementRefusal[] = []
     for (const [eventOrdinal, event] of this.events.entries()) {
       if (event.type !== 'dom.element.selected') continue
       if (event.element === undefined) continue
       const placed = this.place(event, eventOrdinal)
-      if (placed !== null) out.push(placed)
+      if (placed !== null) {
+        out.push(placed)
+        continue
+      }
+      refusals.push({
+        tMs: event.tMs,
+        reason: this.lastRefusal,
+        tabTitle: event.tab.title,
+        selector: event.element.selector,
+      })
     }
     this.placedCache = out
+    this.refusalCache = refusals
     return out
+  }
+
+  /** Set by `place()` on the way out; read only by `placed()`, immediately. */
+  private lastRefusal = 'unknown'
+
+  private refuse(reason: string): null {
+    this.lastRefusal = reason
+    return null
   }
 
   /**
@@ -284,21 +327,32 @@ export class ChromeDomProvider implements TemporalContextProvider {
   private place(event: DomEvent, eventOrdinal: number): PlacedPick | null {
     const element = event.element
     const viewport = event.viewport
-    if (element === undefined || viewport === undefined) return null
+    if (element === undefined) return this.refuse('no-element')
+    if (viewport === undefined) {
+      // Extension older than 0.1.4: the pick was recorded but the page never
+      // said where its viewport was, so nothing can place it.
+      return this.refuse('no-viewport-in-event')
+    }
     const surfaces = this.surfacesAt(event.tMs)
-    const matches = surfaces.filter(
-      (s) =>
-        !s.minimized &&
-        s.visible &&
-        BROWSER_EXECUTABLES.has(normalizeExe(s.executableName)) &&
-        titleMatches(s.windowTitle, event.tab.title),
+    const browsers = surfaces.filter(
+      (s) => !s.minimized && s.visible && BROWSER_EXECUTABLES.has(normalizeExe(s.executableName)),
     )
+    const matches = browsers.filter((s) => titleMatches(s.windowTitle, event.tab.title))
     // Exactly one, or nothing. See the note above on refusing rather than
     // guessing. The #103 split can legitimately produce the same surfaceId
     // twice (one entry per display), so that is not ambiguity — collapse it and
     // keep the entry whose display holds more of the window.
     const ids = new Set(matches.map((surface) => surface.surfaceId))
-    if (ids.size !== 1) return null
+    if (ids.size === 0) {
+      return this.refuse(
+        browsers.length === 0
+          ? `no-visible-browser-window-at-${String(Math.round(event.tMs))}ms`
+          : `no-browser-window-titled-like-the-tab (${String(browsers.length)} browser window(s) seen)`,
+      )
+    }
+    if (ids.size !== 1) {
+      return this.refuse(`ambiguous-browser-windows:${String(ids.size)}`)
+    }
 
     // A surface that straddles displays appears once per display. The element
     // does not necessarily live on the largest window slice, so derive it in
@@ -308,9 +362,11 @@ export class ChromeDomProvider implements TemporalContextProvider {
     let selected:
       | { surface: SurfaceInfo; client: Rect; rect: Rect; overlap: number }
       | null = null
+    let derived = 0
     for (const surface of matches) {
       const candidate = rectAtPick(surface, element.bounds, viewport)
       if (candidate === null) continue
+      derived += 1
       const overlap = intersectionArea(candidate.rect, surface.bounds)
       if (
         overlap > 0
@@ -327,7 +383,16 @@ export class ChromeDomProvider implements TemporalContextProvider {
         selected = { surface, ...candidate, overlap }
       }
     }
-    if (selected === null) return null
+    if (selected === null) {
+      return this.refuse(
+        derived === 0
+          // The window is there and the numbers do not describe it: no client
+          // rectangle in the ring, a docked DevTools or side panel, or a window
+          // that resized between the pick and the observation.
+          ? 'viewport-does-not-agree-with-the-window (client bounds, scale or chrome height)'
+          : 'element-lies-outside-every-slice-of-the-window',
+      )
+    }
     const { surface, rect } = selected
     return {
       event,

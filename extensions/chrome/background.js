@@ -267,9 +267,16 @@ chrome.action.onClicked.addListener(async (tab) => {
   }
   const url = tab.url || ''
   try {
+    // EVERY FRAME, NOT JUST THE TOP ONE (#104). A click inside a cross-origin
+    // iframe never reaches the top document, so a top-only injection armed a
+    // picker that could not see the click at all — silently, on every page that
+    // puts its UI in a frame. The content script carries a pick up the frame
+    // chain from wherever it happened.
     await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      files: ['content-script.js'],
+      target: { tabId: tab.id, allFrames: true },
+      // Both files share one isolated world, in this order: the geometry is
+      // already defined by the time the picker looks for it.
+      files: ['frame-geometry.js', 'content-script.js'],
     })
   } catch (err) {
     // A page the extension may not touch is the common case, and the user has
@@ -311,6 +318,32 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
   }
   if (msg && msg.type === 'picker.disarmed') {
     chrome.action.setBadgeText({ text: '', ...(sender.tab ? { tabId: sender.tab.id } : {}) })
+    send({
+      type: 'picker.disarmed',
+      protocol: PROTOCOL,
+      timestamp: Date.now(),
+      tab: {
+        url: sender.tab && sender.tab.url ? sender.tab.url : '',
+        title: sender.tab && sender.tab.title ? sender.tab.title : '',
+      },
+    })
+    return
+  }
+  // A PICK THAT DIED IN THE FRAME CHAIN STILL REPORTS. The content script can
+  // fail after arming — a frame whose geometry does not agree, a parent that
+  // cannot be reached — and that is the one outcome the user experiences as
+  // "I clicked and nothing happened".
+  if (msg && msg.type === 'picker.failed') {
+    send({
+      type: 'picker.failed',
+      protocol: PROTOCOL,
+      timestamp: Date.now(),
+      reason: String(msg.reason || 'unknown').slice(0, 200),
+      tab: {
+        url: sender.tab && sender.tab.url ? sender.tab.url : '',
+        title: sender.tab && sender.tab.title ? sender.tab.title : '',
+      },
+    })
     return
   }
   if (msg && msg.type === 'dom.element.selected') {

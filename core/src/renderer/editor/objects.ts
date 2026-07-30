@@ -15,7 +15,10 @@
 // numbers are an assertion now, not taste, so the temporal work happens
 // UNDERNEATH them — and they now filter every provider's candidates, not only
 // UI Automation's. A Chrome DOM provider offering <body> is the same bug as UIA
-// offering a client-area pane, and it gets caught by the same constant.
+// offering a client-area pane, and it is caught by the same RULE — at its own
+// threshold since #104, because a UI Automation dump enumerates a window while
+// a DOM pick is one element a human pointed at, and the enumeration threshold
+// deleted every one of them that happened to be a content column.
 //
 // TWO LEVELS, and the order between them is still the whole point:
 //
@@ -129,6 +132,24 @@ const WINDOW_FRAME_FRACTION = 0.35
 const WINDOW_FRAME_SIDE_FRACTION = 0.9
 /** How much of its window a full-axis control must also cover to be a frame. */
 const WINDOW_FRAME_SIDE_MIN_AREA = 0.25
+/**
+ * The same question for an EXPLICIT document pick, at the only threshold that
+ * still means something for one (#104).
+ *
+ * The constants above were measured against UI Automation ENUMERATIONS, where
+ * every window arrives with its anonymous client-area wrapper and area is the
+ * only thing telling the wrapper from the button. A `document-native` candidate
+ * is not enumerated: there is exactly one per click, and it is the element a
+ * human pointed at. At 0.35 the enumeration threshold deleted `<main>`, `<nav>`
+ * and any content column — the ordinary furniture of a web page, and precisely
+ * what someone picking an element in a browser is pointing at.
+ *
+ * What remains true is the header's rule: a picked `<body>` or `<html>` IS the
+ * viewport, and the window rung names it better. That is what this catches. No
+ * side test either — a full-width toolbar is the most annotatable thing on a
+ * page, and on a page it is usually also a full-width `<header>`.
+ */
+const DOCUMENT_PICK_FRAME_FRACTION = 0.9
 /**
  * Large controls whose ROLE is itself the thing a user can meaningfully point
  * at. A document, list or tree routinely owns most of its window; area alone
@@ -443,8 +464,36 @@ export class ObjectIndex {
       // be clipped, frame-tested or occlusion-tested against anything real.
       const owner = bySurface.get(candidate.surfaceId)
       if (owner?.clip == null) continue
-      const frameLike = isWindowFrame(clipped, owner.clip)
-      if ((oversized || frameLike) && !largeSemantic) continue
+      // AN EXPLICIT DOCUMENT PICK IS A DIFFERENT KIND OF EVIDENCE (#104).
+      //
+      // Everything above this line is about rectangles Core INFERRED: a UI
+      // Automation dump enumerates a window's client-area wrapper alongside its
+      // buttons, and area is the only thing that separates the two. A
+      // `document-native` candidate is the opposite kind of fact — a human
+      // pointed at one element and the browser measured it — so a 35% area test
+      // built for enumerations does not filter a container here, it deletes the
+      // answer.
+      //
+      // And it did. `isLargeSemanticControl` reads a UI AUTOMATION vocabulary
+      // (`document`, `list`, `table`, `tree`, a named `pane`), while a DOM
+      // candidate's type is its ARIA role or its tag — `main`, `nav`, `div`.
+      // A `<main>` covering 35% of a browser window therefore matched
+      // `isWindowFrame`, matched nothing in that set, and was dropped with no
+      // deferred rung at all — leaving the window reporting
+      // `refinement: 'none'`, i.e. "everything in it is a frame the window
+      // level covers better", about the one element the user had explicitly
+      // picked.
+      //
+      // The rule the header states still holds: a picked `<body>` IS the
+      // viewport and the window rung names it better. It is enforced at the
+      // viewport-like threshold below instead of the enumeration one, and an
+      // explicit pick is never deleted — at worst it is offered one rung back,
+      // like any other giant, which is a question of ordering, not existence.
+      const explicitDocumentPick = candidate.authority === 'document-native'
+      const frameLike = explicitDocumentPick
+        ? isDocumentPickFrame(clipped, owner.clip)
+        : isWindowFrame(clipped, owner.clip)
+      if ((oversized || frameLike) && !largeSemantic && !explicitDocumentPick) continue
       const object: PickableObject = {
         level: 'control',
         candidate,
@@ -695,6 +744,19 @@ function isWindowFrame(
   const spansHeight =
     window.height > 0 && control.height >= window.height * WINDOW_FRAME_SIDE_FRACTION
   return spansWidth || spansHeight
+}
+
+/**
+ * Whether an explicitly picked document element is really just the viewport.
+ *
+ * Area only — see `DOCUMENT_PICK_FRAME_FRACTION`. A pick that trips this is
+ * still offered, one rung back, never dropped.
+ */
+function isDocumentPickFrame(
+  element: { width: number; height: number; area: number },
+  window: { width: number; height: number; area: number },
+): boolean {
+  return element.area >= window.area * DOCUMENT_PICK_FRAME_FRACTION
 }
 
 /**
