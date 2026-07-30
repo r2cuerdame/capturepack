@@ -142,6 +142,36 @@ deliberately armed on an ordinary page, so the log says whether it arms, fails
 to arm, or arms and the click goes elsewhere. Until that run exists, #104 is
 diagnosable, not closed.
 
+**The sync half, measured before it is designed.** Three terms that move a
+sample in time had been computed since the frame clock landed and printed
+nowhere, so every argument about #89 was settled by reasoning. They are now on
+the lane's cost line, and one run answers them:
+
+```
+frame->core +4.1 ms, 1 dropped, stride 1
+10 frame-stamped / 0 clock-stamped / 160 converted onto the frame clock
+```
+
+- `frame->core` is renderer-to-main IPC transport, subtracted from every
+  converted sample. **4.1 ms** — real, uniform, and far too small to be the
+  reported lead. Removing it is worth doing and is not the fix.
+- **95% of samples are converted**, not frame-stamped, and the converted path
+  does not carry the frame-age term at all. That is invisible today because the
+  age reads ~1 ms; it becomes a 53–125 ms error the moment a real exposure
+  latency is fed in, so carrying age onto the converted path must land *before*
+  any such change.
+- `stride 1`, `1 dropped`: the memory governor never coarsened the ring and the
+  lane is not thinning it. Both are ruled out.
+
+What is left is the term nothing in the product represents: **desktop pixel
+exposure**. The pack clock anchors on frame presentation, the ring anchors on
+frame presentation, and `frameAgeMs` — the one axis designated to bridge
+presentation to exposure — reads 1 ms where this repo's own decoded-pixel match
+measured 53–76 ms. No fixed offset will be introduced; the acceptance boundary
+stays a measured per-display source-to-encoded-PTS mapping, recalibrated when
+motion evidence appears, with a moving fixture that fails at more than one frame
+of correlation error.
+
 ---
 
 ## Mission

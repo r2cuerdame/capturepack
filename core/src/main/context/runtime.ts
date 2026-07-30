@@ -679,7 +679,21 @@ export function logContextCost(): void {
       (lane.tickDelayMs === null || lane.tickDelayP90Ms === null
         ? ''
         : `, callback late ${lane.tickDelayMs} ms p50 / ${lane.tickDelayP90Ms} ms p90 (folded in)`) +
-      (lane.frameAgeMs === null ? '' : `, frame already ${lane.frameAgeMs} ms old`),
+      (lane.frameAgeMs === null ? '' : `, frame already ${lane.frameAgeMs} ms old`) +
+      // THE THREE NUMBERS THAT MAKE THE REST ATTRIBUTABLE (#89).
+      //
+      // All three have been measured for releases and printed nowhere, so every
+      // question about them has been answered with a guess. `frame->core` is
+      // subtracted from every converted sample — the ~90% majority — and is
+      // renderer-to-main IPC transport, not a clock conversion; `dropped` says
+      // whether the lane is silently thinning the ring; `stride` says whether
+      // the memory governor coarsened the timeline under the answer.
+      `, frame->core ${lane.frameClockOffsetMs === null ? 'unmeasured' : `${lane.frameClockOffsetMs > 0 ? '+' : ''}${lane.frameClockOffsetMs.toFixed(1)} ms`}` +
+      `, ${lane.droppedSamples} dropped` +
+      `, stride ${String(status.timeline.stride)}`
+      + (status.timeline.degradedSamples > 0
+        ? ` (${String(status.timeline.degradedSamples)} degraded)`
+        : ''),
   )
   if (!lane.running) {
     // "Silence is not absence": a surface timeline that is not running is the

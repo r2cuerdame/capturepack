@@ -149,6 +149,19 @@ export interface SurfaceLaneStatus {
   tickDelayP90Ms: number | null
   /** Median ms a frame was ALREADY old when its tick was sent (#109). */
   frameAgeMs: number | null
+  /**
+   * `asked.coreMs - (frameMs + delayMs)` — the term that puts a free-running
+   * sample onto the frame clock (#89).
+   *
+   * Both operands are already on the session's monotonic axis, so this is NOT a
+   * clock-basis conversion: it is renderer-to-main IPC transport latency plus
+   * the wall/monotonic anchor error, and it is subtracted from EVERY converted
+   * sample. It has been computed since the frame clock landed and printed
+   * nowhere, which is why its size is still unknown — and it applies to the
+   * ~90% of samples that are free-running, so its size decides whether it
+   * matters to #89 at all.
+   */
+  frameClockOffsetMs: number | null
   /** `hostClock - coreClock`, null until the first ping answered. */
   clockOffsetMs: number | null
   /** Half the measured round trip. Infinity when the clock has never been measured. */
@@ -433,6 +446,7 @@ export class SurfaceLane {
       // machine. This is the number that convicts or acquits the compositor.
       tickDelayP90Ms: p90Of(this.tickDelayMs),
       frameAgeMs: medianOf(this.frameAgeMs),
+      frameClockOffsetMs: this.frameClockOffsetMs,
       clockOffsetMs: this.offset.offsetMs(),
       clockErrorMs: this.offset.errorBoundMs(),
       lastError: this.lastError,

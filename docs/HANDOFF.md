@@ -85,11 +85,25 @@ Measured evidence from
 
 - focused-display motion correlation was about **−125 ms**;
 - sampled spatial errors included **526 px, 178 px, and 776 px**;
-- display 2 retained about **140–165 ms** of error after the existing 51 ms
-  duration-derived shift;
+- the **non-focused** display retained about **140–165 ms** of error after the
+  51 ms duration-derived shift;
 - startup calibration reported `insufficient-motion-transitions`;
 - replay pixel matching reported `weak-pixel-match`;
 - the pack clock therefore fell back to wall-clock evidence.
+
+**Which display is which, because the numbering has already been mixed up
+once.** Read it from that pack's `manifest.json` rather than from prose:
+
+| `index` | replay | `replay_duration_ms` | `replay_clock_offset_ms` | `focused` | bounds |
+|---|---|---|---|---|---|
+| 1 | `replay-d1.mp4` | 12418 | *(absent)* | false | 1200×1920 at −1200,0 |
+| 2 | `replay.mp4` | 12367 | 0 | true | 2560×1440 at 0,0 |
+
+So the 51 ms is `12418 − 12367` and belongs to **index 1**, the non-focused
+portrait display; index 2 is the focused display and its offset is `0` by
+definition. Any sentence of the form "display 2 needs another 140 ms after the
+51 ms shift" is mixing the owner's informal "the other screen" with the pack's
+`index`, and will validate a fix against the wrong replay.
 
 Do not hard-code 125 ms or any other global correction. The acceptance boundary
 is a measured source-to-encoded-PTS mapping per display, recalibration when
@@ -228,12 +242,50 @@ Never overwrite a public version. A product hotfix after 0.3.3 must use a higher
 version and fix forward. Documentation-only commits may follow the release on
 `main`, but they do not alter the binaries identified by the `v0.3.3` tag.
 
+## 0.3.4 in progress
+
+Work on `agent/0.3.4`, not released. See [GOAL.md](../GOAL.md) for the design
+record and [#104](https://github.com/r2cuerdame/capturepack/issues/104) /
+[#89](https://github.com/r2cuerdame/capturepack/issues/89) for the evidence.
+
+- Element picking now reports itself end to end: the picker's arming, failure
+  and disarming, every pick that arrives, every message refused with the rule
+  that refused it, and every placement refused with its reason. Settings >
+  Plugins > Chrome DOM shows the last state.
+- The picker runs in every frame; a pick inside an iframe is carried up the
+  frame chain with a measured scale, and refused rather than guessed when the
+  measurements disagree.
+- An explicitly picked document element is no longer filtered by the threshold
+  measured for UI Automation enumerations. It is judged at a viewport-like
+  threshold and is never deleted.
+- The gate is **66 steps**: `check:frame-geometry` and `check:dom-pick` are new,
+  and `check:chrome-bridge` — an end-to-end harness that existed, had never been
+  wired in, and was failing — now runs.
+- The lane cost line now prints `frame->core`, dropped samples and stride.
+  First measurement on the reporting machine: **`frame->core +4.1 ms`,
+  1 dropped, stride 1**, with **160 of 170 samples converted rather than
+  frame-stamped**. IPC transport and the memory governor are therefore ruled
+  out as causes of #89, and the age term — which the converted majority does not
+  carry at all — becomes a 53-125 ms error the moment a real exposure latency is
+  fed into it.
+
+Not proved, and it needs the machine: one run with the element picker
+deliberately armed on an ordinary `https://` page, so `main.log` says whether it
+armed, could not arm, or armed and the click went elsewhere.
+
 ## Suggested next order
 
-1. Build a deterministic moving visual/context fixture for #89 and make the
+1. Carry the frame-age term onto the converted and held sample paths. This is
+   invisible today (age reads 1 ms) and must land BEFORE anything makes that
+   term carry a real exposure latency, or #89 gets visibly worse for 95% of
+   samples.
+2. Build a deterministic moving visual/context fixture for #89 and make the
    current display-specific drift fail quantitatively.
-2. Measure the source-frame clock and encoded PTS per display; do not infer the
-   mapping from flush completion, IPC response, or a stationary frame.
+3. Measure the source-frame clock and encoded PTS per display; do not infer the
+   mapping from flush completion, IPC response, or a stationary frame. Publish
+   it as its own per-display quantity — never by overloading
+   `replay_clock_offset_ms`, whose `focused => 0` is correct by definition — and
+   apply it at exactly one place, or it double-corrects.
 3. Exercise #62 on a genuinely failing backend and require a decodable replay,
    not a screenshot-only result or a recreated recorder on the same dead stream.
 4. Add the real Electron/Windows E2E layer tracked by #63 while preserving the

@@ -126,3 +126,18 @@ under an existing release.
   full gate again, and publish a new release.
 - Removing a bad GitHub Release can stop new discovery, but it is not a rollback
   for machines that already downloaded it.
+
+## Milestone hygiene at release
+
+A published version closes its milestone, and a milestone is closed only when it
+is empty. Before closing it, move every still-open issue in it to a **named
+later milestone** — never leave it in the milestone of a version that has
+already shipped, and never leave it with no milestone at all.
+
+This was written after `v0.2.0 - temporal plugin system and Chrome extension`
+was found holding **16 open issues** while 0.3.3 was the public release: the one
+list that is supposed to say what a version contains had come to mean nothing,
+and four issues had no milestone at all. Renaming a shipped milestone is not the
+repair — 15 issues closed under that name and renaming rewrites their history.
+Move the open ones out, then close it with a description saying what superseded
+it.

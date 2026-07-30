@@ -396,5 +396,35 @@ check(
     && !sessionSource.includes('e.tMs - domWindow.startMs'),
 )
 
+// THE TERMS THAT MOVE A SAMPLE IN TIME MUST BE PRINTED (#89).
+//
+// Three numbers decide how much of the reported lead each stage owns, all three
+// have been measured since the frame clock landed, and none of them was ever
+// written down: `frameClockOffsetMs`, which is subtracted from every converted
+// sample and is the ~90% majority path; the lane's dropped-sample count; and the
+// memory governor's stride, which silently coarsens the ring under the answer.
+// Without them every question about #89 is settled by argument instead of by
+// reading a log line.
+const runtimeSource = readFileSync('src/main/context/runtime.ts', 'utf8')
+const costStart = runtimeSource.indexOf('export function logContextCost(')
+const costEnd = runtimeSource.indexOf('function sessionTimeOf(', costStart)
+const costSource = runtimeSource.slice(costStart, costEnd)
+check(
+  'the lane cost line reports the frame-clock offset, dropped samples and stride',
+  costStart >= 0
+    && costEnd > costStart
+    && costSource.includes('frame->core')
+    && costSource.includes('lane.frameClockOffsetMs')
+    && costSource.includes('lane.droppedSamples')
+    && costSource.includes('status.timeline.stride'),
+)
+
+const laneSource = readFileSync('src/main/context/surfaceLane.ts', 'utf8')
+check(
+  'the lane publishes the frame-clock offset it applies',
+  laneSource.includes('frameClockOffsetMs: number | null')
+    && laneSource.includes('frameClockOffsetMs: this.frameClockOffsetMs'),
+)
+
 console.log(`\nresult: ${failed === 0 ? 'OK' : 'FAILED'} — ${passed} passed, ${failed} failed`)
 if (failed > 0) process.exitCode = 1
