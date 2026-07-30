@@ -13,7 +13,10 @@ const core = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 let failed = 0
 
 function source(relative) {
-  return readFileSync(path.join(core, relative), 'utf8')
+  // GitHub's Windows checkout may materialize CRLF even when the developer
+  // worktree uses LF. Source contracts compare structural markers, not a
+  // platform's newline convention.
+  return readFileSync(path.join(core, relative), 'utf8').replace(/\r\n?/g, '\n')
 }
 
 function check(name, condition) {
