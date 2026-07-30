@@ -275,10 +275,13 @@
     const data = e.data
     if (!data || typeof data !== 'object') return
     if (data.__capturepack === 'disarm') {
-      // Propagates the whole way down; the flag check stops it looping.
-      if (!window.__capturepackPickerActive) return
+      // FORWARDED FIRST, TORN DOWN SECOND. The frame that made the pick has
+      // already cleaned itself up, so gating the forward on "am I still armed"
+      // would stop the broadcast dead at it and leave every frame nested INSIDE
+      // it armed forever — listeners and a highlight on a page that thinks the
+      // picker is gone. Forwarding only ever goes downward, so it cannot loop.
       postDown({ __capturepack: 'disarm' })
-      cleanup()
+      if (window.__capturepackPickerActive) cleanup()
       return
     }
     if (data.__capturepack !== 'pick') return
