@@ -156,10 +156,15 @@ frame->core +4.1 ms, 1 dropped, stride 1
   converted sample. **4.1 ms** — real, uniform, and far too small to be the
   reported lead. Removing it is worth doing and is not the fix.
 - **95% of samples are converted**, not frame-stamped, and the converted path
-  does not carry the frame-age term at all. That is invisible today because the
-  age reads ~1 ms; it becomes a 53–125 ms error the moment a real exposure
-  latency is fed in, so carrying age onto the converted path must land *before*
-  any such change.
+  did not carry the frame-age term at all. That was invisible at a 1 ms age and
+  would have become a 53–125 ms error on the majority population the moment a
+  real exposure latency reached that term — #89 getting visibly worse while
+  looking like progress. **Fixed:** the converted and held paths now apply the
+  same age shift the ticked path always did, and `check:sync` drives a
+  deliberately large age to hold it. Without the fix the two paths file the same
+  world instant exactly one age apart; with it they agree to 0.0 ms. The shift
+  is kept separate from the transport offset so the two stay separately
+  attributable.
 - `stride 1`, `1 dropped`: the memory governor never coarsened the ring and the
   lane is not thinning it. Both are ruled out.
 

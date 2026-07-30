@@ -362,6 +362,96 @@ async function ownerHandoffReport(): Promise<boolean> {
   }
 }
 
+/**
+ * DO A TICKED AND A FREE-RUNNING OBSERVATION OF THE SAME INSTANT AGREE? (#89)
+ *
+ * An observation is of the LIVE desktop, while the frame it is filed against
+ * shows pixels exposed `age` ms earlier — so it belongs at a LATER point on the
+ * video's timeline. `onTick` has added that term since it was measured; the
+ * converted path, which carried 160 of 170 samples in the field, never did.
+ *
+ * At the 1 ms this machine measures, the difference is invisible. This check
+ * drives a deliberately LARGE age so the asymmetry is a fact rather than a
+ * rounding artifact: without the fix the two paths file the same world instant
+ * a full `age` apart, which is the shape #89 would take on the majority of
+ * samples the moment a real desktop-exposure latency reached that term.
+ */
+async function agePathAgreementReport(): Promise<boolean> {
+  const AGE_MS = 60
+  const FRAME_MS = 1_000
+  const DELAY_MS = 0
+  let coreNow = 0
+  let onReady: (hello: HostReply) => void = () => {}
+  let onEvent: (event: Record<string, unknown> & { event: string }) => void = () => {}
+  const host: SurfaceHost = {
+    start() {},
+    stop() {},
+    request(method) {
+      if (method === 'ping') return Promise.resolve({ id: 1, ok: true, hostMs: coreNow })
+      if (method === 'surface.start') {
+        return Promise.resolve({ id: 1, ok: true, intervalMs: D2_FRAME_MS })
+      }
+      return Promise.resolve({ id: 1, ok: true })
+    },
+  }
+  const clock = {
+    nowMs: () => coreNow,
+    bufferStartMs: () => 0,
+    observe: () => {},
+  } as never
+  const timeline = new SurfaceTimeline()
+  const lane = new SurfaceLane(clock, timeline, D2_FRAME_MS, (options) => {
+    onReady = options.onReady
+    onEvent = options.onEvent as typeof onEvent
+    return host
+  })
+  try {
+    lane.start()
+    onReady({ id: 0, ok: true, hostMs: 0, monitors: [] })
+    await new Promise((resolve) => setImmediate(resolve))
+    await new Promise((resolve) => setImmediate(resolve))
+
+    // A tick establishes both the frame-clock mapping and the age. Core's clock
+    // and the frame clock are deliberately identical here so the ONLY term
+    // separating the two paths is the one under test.
+    coreNow = FRAME_MS
+    lane.tickAt('display-a', FRAME_MS, AGE_MS, DELAY_MS)
+    onEvent({ event: 'surface', ft: FRAME_MS, t: FRAME_MS, w: deskAt(FRAME_MS) })
+    await new Promise((resolve) => setImmediate(resolve))
+    const afterTick = timeline.sampleTimesBetween(0, 10_000)
+    const ticked = afterTick[afterTick.length - 1] ?? Number.NaN
+
+    // The same world instant, arriving free-running instead of under a tick.
+    const freeInstant = FRAME_MS + 200
+    coreNow = freeInstant
+    onEvent({ event: 'surface', t: freeInstant, w: deskAt(freeInstant) })
+    await new Promise((resolve) => setImmediate(resolve))
+    const afterFree = timeline.sampleTimesBetween(0, 10_000)
+    const converted = afterFree[afterFree.length - 1] ?? Number.NaN
+
+    // Ticked: frameMs + delay + lag + age. Free-running: t - offset + age, and
+    // offset is zero here. Both therefore sit `age` past their own instant, so
+    // the gap between them is exactly the gap between the instants.
+    const tickedShift = ticked - FRAME_MS
+    const convertedShift = converted - freeInstant
+    const agreement = Math.abs(tickedShift - convertedShift)
+    const ok = agreement <= 1 && Math.abs(convertedShift - AGE_MS) <= 1
+
+    console.log('F: a ticked and a free-running observation of the same instant')
+    console.log(`  ticked filed ${tickedShift.toFixed(1)} ms past its instant`)
+    console.log(`  free-running filed ${convertedShift.toFixed(1)} ms past its instant (age ${AGE_MS} ms)`)
+    console.log(`  disagreement: ${agreement.toFixed(1)} ms`)
+    console.log(
+      ok
+        ? '  PASS — both paths carry the age of the picture\n'
+        : `  FAIL — the two paths file the same instant ${agreement.toFixed(1)} ms apart\n`,
+    )
+    return ok
+  } finally {
+    lane.stop()
+  }
+}
+
 async function stillRefreshReport(): Promise<boolean> {
   let onReady: (hello: HostReply) => void = () => {}
   let onEvent: (event: Record<string, unknown> & { event: string }) => void = () => {}
@@ -428,7 +518,8 @@ async function main(): Promise<void> {
   const c = crossRendererClockReport()
   const d = await ownerHandoffReport()
   const e = await stillRefreshReport()
-  if (!a || !b || !c || !d || !e) {
+  const f = await agePathAgreementReport()
+  if (!a || !b || !c || !d || !e || !f) {
     console.error('surface-sync-check FAILED')
     process.exitCode = 1
     return

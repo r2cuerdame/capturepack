@@ -250,6 +250,21 @@ export class SurfaceLane {
    * the ring has one clock and keeps its coverage.
    */
   private frameClockOffsetMs: number | null = null
+  /**
+   * How far the picture lags the desk, from the newest tick that measured it.
+   *
+   * THE TICKED PATH CARRIED THIS AND THE OTHER TWO DID NOT (#89). An
+   * observation is of the LIVE desktop; the frame it is filed against shows
+   * pixels exposed `age` ms earlier, so the observation belongs at a LATER
+   * point on the video's timeline. `onTick` has always added it; the converted
+   * and held paths never did — and 160 of 170 samples in the field take the
+   * converted path. At today's measured 1 ms that asymmetry is invisible, which
+   * is exactly why it survived: the moment a real desktop-exposure latency
+   * reaches this term (this repository's own decoded-pixel match puts it at
+   * 53–76 ms) the majority population would move the wrong way by that whole
+   * amount, and #89 would get visibly worse while looking like progress.
+   */
+  private frameAgeShiftMs: number | null = null
   private converted = 0
   /** One-shot full membership returned directly to a still-image trigger. */
   private stillSampleRequested = false
@@ -598,6 +613,9 @@ export class SurfaceLane {
       this.ignoredTickSources.clear()
       this.pendingTicks.clear()
       this.frameClockOffsetMs = null
+      // The age belongs to the display that measured it; a handoff invalidates
+      // it exactly as it invalidates the offset.
+      this.frameAgeShiftMs = null
       logWarn(
         `[context] lane S frame clock handed off from display ${previous} to ${displayId} ` +
           `after ${TICK_SILENCE_MS} ms of silence`,
@@ -799,6 +817,14 @@ export class SurfaceLane {
         // mapping too — without it every held sample converts a burst's width
         // too early.
         this.frameClockOffsetMs = asked.coreMs - (frameMs + delayMs)
+        // THE AGE LEG BELONGS TO EVERY SAMPLE, NOT ONLY THE TICKED ONES (#89).
+        //
+        // Kept SEPARATE from the offset above rather than folded into it, so
+        // the two remain separately attributable: the offset is renderer-to-
+        // main transport (measured at +4.1 ms), and this is how far the picture
+        // lags the desk. Folding them would make one number that answers
+        // neither question.
+        if (ageMs !== null) this.frameAgeShiftMs = ageMs
         this.tickLagMs.push(lag)
         if (this.tickLagMs.length > 200) this.tickLagMs.shift()
         this.tickDelayMs.push(delayMs)
@@ -933,7 +959,10 @@ export class SurfaceLane {
     // newest one in the ring is unreachable through the nearest lookup anyway,
     // and is dropped AND COUNTED rather than filed out of order.
     this.converted += 1
-    const convertedAtMs = timeMs - offsetMs
+    // Same chain the ticked path files: onto the frame clock, then shifted by
+    // the age of the picture, so a ticked and a free-running observation of the
+    // same instant land on the same time instead of one age apart (#89).
+    const convertedAtMs = timeMs - offsetMs + (this.frameAgeShiftMs ?? 0)
     if (convertedAtMs <= this.lastAppendedMs) {
       this.dropped += 1
       return
@@ -954,7 +983,13 @@ export class SurfaceLane {
     this.pendingClockSamples = []
     const offsetMs = this.frameClockOffsetMs
     for (const sample of held) {
-      const atMs = offsetMs === null ? sample.timeMs : sample.timeMs - offsetMs
+      // A held sample converts exactly as a live one does — see the note in
+      // `onSample`. Without the age term the two paths file the same instant at
+      // two different times (#89).
+      const atMs =
+        offsetMs === null
+          ? sample.timeMs
+          : sample.timeMs - offsetMs + (this.frameAgeShiftMs ?? 0)
       // Same monotone rule as every other append: held samples predate the
       // tick that released them, so any that would land behind the ring's
       // newest are unreachable and are counted out rather than filed.

@@ -43,11 +43,11 @@ cost line (`frame->core +4.1 ms, 1 dropped, stride 1`, with
 - renderer-to-main IPC transport is **4.1 ms** — real, uniform, not the cause;
 - the memory governor never coarsened the ring and the lane is not thinning it —
   both ruled out;
-- **95% of samples take the converted path, which does not carry the frame-age
-  term at all.** Invisible at today's ~1 ms age, and a 53–125 ms error on the
-  majority population the moment a real exposure latency is fed in. **Carry the
-  age term onto the converted and held paths BEFORE any change that makes it
-  carry a real number**, or #89 gets visibly worse.
+- **95% of samples take the converted path, which did not carry the frame-age
+  term at all** — invisible at a ~1 ms age, a 53–125 ms error on the majority
+  population the moment a real exposure latency reached it. Fixed: every path
+  now applies the same shift, and `check:sync` fails by exactly one age without
+  it. Keep it that way; the next change to that term is the dangerous one.
 
 What is left is the term nothing in the product represents: desktop pixel
 exposure. Publish a measured per-display mapping as its own quantity — never by

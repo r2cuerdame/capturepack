@@ -271,9 +271,12 @@ record and [#104](https://github.com/r2cuerdame/capturepack/issues/104) /
   First measurement on the reporting machine: **`frame->core +4.1 ms`,
   1 dropped, stride 1**, with **160 of 170 samples converted rather than
   frame-stamped**. IPC transport and the memory governor are therefore ruled
-  out as causes of #89, and the age term — which the converted majority does not
-  carry at all — becomes a 53-125 ms error the moment a real exposure latency is
-  fed into it.
+  out as causes of #89. The age term, which the converted majority did NOT carry
+  at all, now applies on every path: at today's 1 ms age that changes nothing
+  visible, and it is what stops the majority population from moving the wrong
+  way by 53-125 ms the moment a real exposure latency reaches that term.
+  `check:sync` drives a deliberately large age and fails by exactly one age
+  without it.
 
 Not proved, and it needs the machine: one run with the element picker
 deliberately armed on an ordinary `https://` page, so `main.log` says whether it
@@ -281,11 +284,7 @@ armed, could not arm, or armed and the click went elsewhere.
 
 ## Suggested next order
 
-1. Carry the frame-age term onto the converted and held sample paths. This is
-   invisible today (age reads 1 ms) and must land BEFORE anything makes that
-   term carry a real exposure latency, or #89 gets visibly worse for 95% of
-   samples.
-2. Build a deterministic moving visual/context fixture for #89 and make the
+1. Build a deterministic moving visual/context fixture for #89 and make the
    current display-specific drift fail quantitatively.
 3. Measure the source-frame clock and encoded PTS per display; do not infer the
    mapping from flush completion, IPC response, or a stationary frame. Publish
