@@ -1,5 +1,5 @@
 // Main-process entry: single-instance tray app; wires hotkey, tray, capture, updater.
-import { app, dialog, globalShortcut, Notification, shell } from 'electron'
+import { app, dialog, globalShortcut, Notification, powerMonitor, shell } from 'electron'
 import * as fs from 'node:fs'
 import type { UpdaterStatusPayload } from '../shared/ipc'
 import { CAPTURE_ARG } from '../shared/startMenuLink'
@@ -719,6 +719,40 @@ function main(): void {
     // scheduled re-check re-emits 'update-downloaded' for the cached file, and
     // the same toast every 4 hours would be nagging, not news.
     let notifiedVersion: string | null = null
+    // A ROUTINE TOAST ON A LOCKED SCREEN READS AS A FAILURE (#103).
+    //
+    // Windows hides notification content on the lock screen when the user asked
+    // it to, and what is left is the app name, a generic red badge and the word
+    // "비공개". Observed 2026-07-30: the pending v0.3.2 update-ready toast
+    // appeared exactly like a recording error, and the only way to find out
+    // otherwise was to read the Windows notification database.
+    //
+    // The cure is not to shout differently — it is not to shout at a screen
+    // nobody is reading. An available update is not urgent, the tray already
+    // carries it, and the toast is held until the session comes back. A REAL
+    // capture failure is a different message and is deliberately untouched
+    // here: "a capture failure must not be presented as success" outranks this.
+    let sessionLocked = false
+    let deferredUpdateToast: string | null = null
+    const showUpdateToast = (version: string): void => {
+      const note = new Notification({
+        title: 'CapturePack', // product name — never translated
+        body: uiT(settings)('app.updateReady', { version }),
+      })
+      note.on('click', () => restartAndUpdate())
+      note.show()
+    }
+    powerMonitor.on('lock-screen', () => {
+      sessionLocked = true
+    })
+    powerMonitor.on('unlock-screen', () => {
+      sessionLocked = false
+      const held = deferredUpdateToast
+      if (held === null) return
+      deferredUpdateToast = null
+      logInfo(`[updater] showing the update-ready notice held over the lock screen (v${held})`)
+      showUpdateToast(held)
+    })
     initUpdater({
       autoCheck: settings.autoUpdateCheck,
       onStatus: (status: UpdaterStatusPayload) => {
@@ -744,12 +778,14 @@ function main(): void {
         )
         if (readyVersion === null || readyVersion === notifiedVersion) return
         notifiedVersion = readyVersion
-        const note = new Notification({
-          title: 'CapturePack', // product name — never translated
-          body: uiT(settings)('app.updateReady', { version: readyVersion }),
-        })
-        note.on('click', () => restartAndUpdate())
-        note.show()
+        if (sessionLocked) {
+          // Held, not dropped: the user still learns about the update, at the
+          // moment they can act on it. The tray carries it in the meantime.
+          deferredUpdateToast = readyVersion
+          logInfo(`[updater] update-ready notice held while the screen is locked (v${readyVersion})`)
+          return
+        }
+        showUpdateToast(readyVersion)
       },
     })
   }).catch((err: unknown) => {

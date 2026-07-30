@@ -16,6 +16,11 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   written for enumerated window controls. A picked `<main>`, `<nav>` or content
   column covering more than a third of a browser window was dropped outright,
   leaving only the whole-window box.
+- A routine "update ready" notification is held while the screen is locked and
+  shown when the session returns. With lock-screen content set to private,
+  Windows reduced it to the app name and a red badge, which reads as a recording
+  failure ([#103](https://github.com/r2cuerdame/capturepack/issues/103)). A real
+  capture failure still announces itself immediately.
 
 ### Added
 

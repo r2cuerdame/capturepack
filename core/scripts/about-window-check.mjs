@@ -49,6 +49,29 @@ const checks = [
   ],
   ['Every locale contains the About label', (i18n.match(/'about\.openLogs':/gu) ?? []).length === 9],
   ['Obsolete tray localization key is gone', !i18n.includes("'tray.openLogs':")],
+  // #103: a lock screen with private notification content turns the routine
+  // update toast into an app name, a red badge and the word "비공개", which
+  // reads as a recording failure. It is HELD, not dropped — the user still
+  // learns about the update, at a moment they can act on it.
+  [
+    'A routine update notice is held over a locked screen, not shown to it',
+    index.includes("powerMonitor.on('lock-screen'") &&
+      index.includes("powerMonitor.on('unlock-screen'") &&
+      index.includes('if (sessionLocked)') &&
+      index.includes('deferredUpdateToast = readyVersion'),
+  ],
+  [
+    'and it is released when the session comes back',
+    /deferredUpdateToast = null[\s\S]{0,300}showUpdateToast\(held\)/u.test(index),
+  ],
+  [
+    // One construction, so the held path and the immediate path cannot drift.
+    // Other notifications here are capture/hotkey failures and are deliberately
+    // untouched: a real failure still announces itself, locked screen or not.
+    'the update toast has exactly one implementation',
+    (index.match(/'app\.updateReady'/gu) ?? []).length === 1 &&
+      index.includes('const showUpdateToast = (version: string): void =>'),
+  ],
 ]
 
 let failed = 0
