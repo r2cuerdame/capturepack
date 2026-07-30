@@ -2,9 +2,10 @@
 
 ## Current state — 2026-07-30
 
-The public 0.3.1 release was published from commit `8535747c`. The active source
-and documentation baseline is **0.3.2**. Do not call 0.3.2 public until the
-manual Release workflow has completed and the GitHub Release is visible.
+The public 0.3.2 release was published from commit
+`3aa8b36148da8e1af8c353c6b16b0380f4a15ff5`. The release workflow, remote
+asset verification, main-branch CI and Pages deployment all completed
+successfully.
 
 0.3.2 is a focused Windows editor correctness patch:
 

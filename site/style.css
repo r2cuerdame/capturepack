@@ -322,10 +322,10 @@ h1 { color: var(--text); }
   font-size: 0.97rem;
 }
 
-/* Roadmap */
-.roadmap { padding: 1vh 0 7vh; }
+/* Context sources */
+.context-sources { padding: 1vh 0 7vh; }
 
-.roadmap h2 {
+.context-sources h2 {
   text-align: center;
   font-size: 1.5rem;
   font-weight: 750;
@@ -333,25 +333,23 @@ h1 { color: var(--text); }
   margin-bottom: 26px;
 }
 
-.roadmap .cols {
+.context-sources .cols {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 16px;
 }
 
-/* Column = heading + card. The card grows to fill the row so all three cards
-   end level, without the heading's height pushing it past the row (which used
-   to overlap the "Full roadmap" link below). */
-.roadmap .cols > div {
+/* Keep the three source descriptions aligned as one row. */
+.context-sources .cols > div {
   display: flex;
   flex-direction: column;
 }
 
 @media (max-width: 640px) {
-  .roadmap .cols { grid-template-columns: 1fr; }
+  .context-sources .cols { grid-template-columns: 1fr; }
 }
 
-.roadmap h3 {
+.context-sources h3 {
   font-size: 0.8rem;
   text-transform: uppercase;
   letter-spacing: 0.1em;
@@ -359,43 +357,9 @@ h1 { color: var(--text); }
   margin-bottom: 10px;
 }
 
-.roadmap .cols > div:nth-child(1) h3 { color: var(--accent); }
-.roadmap .cols > div:nth-child(2) h3 { color: var(--accent-2); }
-.roadmap .cols > div:nth-child(3) h3 { color: #6b7280; }
-
-.roadmap ul {
-  list-style: none;
-  background: var(--card);
-  backdrop-filter: blur(12px);
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  padding: 16px 18px;
-  flex: 1;
-  box-shadow: var(--shadow);
-}
-
-.roadmap li {
-  color: var(--muted);
-  font-size: 0.93rem;
-  padding: 5px 0;
-}
-
-.roadmap li code {
-  font-family: ui-monospace, Consolas, monospace;
-  font-size: 0.88em;
-  background: rgba(124, 92, 255, 0.08);
-  border-radius: 6px;
-  padding: 1px 6px;
-}
-
-.roadmap-link {
-  text-align: center;
-  margin-top: 20px;
-  font-size: 0.93rem;
-}
-
-.roadmap-link a { color: var(--muted); }
-.roadmap-link a:hover { color: var(--text); }
+.context-sources .cols > div:nth-child(1) h3 { color: var(--accent); }
+.context-sources .cols > div:nth-child(2) h3 { color: var(--accent-2); }
+.context-sources .cols > div:nth-child(3) h3 { color: #6b7280; }
 
 /* Footer */
 footer {

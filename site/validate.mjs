@@ -15,6 +15,7 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8')
 
 const html = read('site/index.html')
 const i18n = read('site/i18n.js')
+const style = read('site/style.css')
 const svg = read('site/assets/demo.svg')
 const readme = read('README.md')
 const guideHtml = read('site/guide/index.html')
@@ -335,10 +336,10 @@ check(
 )
 
 check(
-  'landing omits product-roadmap sections and links',
-  !html.includes('data-i18n="rm_title"')
-    && !html.includes('data-i18n="rm_full"')
-    && !html.includes('data-i18n="ft_roadmap"')
+  'landing has no roadmap content, links, translations or styles',
+  !/\broadmap\b|로드맵|ロードマップ|路线图|hoja de ruta|feuille de route|roteiro|дорожная карта/i.test(
+    `${html}\n${i18n}\n${style}`,
+  )
     && !html.includes('blob/main/ROADMAP.md'),
 )
 
@@ -425,10 +426,10 @@ check(
     && !/\balways[- ](?:on|running)\b/i.test(mcpDocs),
 )
 check(
-  'handoff starts with current 0.3.2 state while retaining rc evidence',
+  'handoff starts with the published 0.3.2 state while retaining rc evidence',
   handoff.includes('## Current state — 2026-07-30')
-    && handoff.includes('public 0.3.1 release')
-    && handoff.includes('0.3.2')
+    && handoff.includes('public 0.3.2 release')
+    && handoff.includes('3aa8b361')
     && handoff.includes('## Historical rc.35 snapshot'),
 )
 
