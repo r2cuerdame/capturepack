@@ -25,6 +25,7 @@ import type {
   Annotation,
   AnnotationsFile,
   Manifest,
+  ManifestCadence,
   ManifestDisplayMedia,
   ManifestKeyframe,
   TimelineFile,
@@ -37,10 +38,15 @@ import type {
   ImageCaptureScope,
   ImageCropBounds,
 } from '../shared/captureMedia'
-import { FORMAT_NAME, FORMAT_VERSION_KEYFRAMES } from '../shared/types'
+import {
+  FORMAT_NAME,
+  FORMAT_VERSION_CAPTURE_DIAGNOSTICS,
+  FORMAT_VERSION_KEYFRAMES,
+} from '../shared/types'
 import { displayAnnotatedName, displayFramesDir } from '../shared/keyframes'
 import { buildReport } from './report'
 import { buildReadme, buildSkills, SKILLS_FILES } from './packdocs'
+import { buildViewerHtml, manifestWithViewerFormat } from './viewer'
 import { copyTextToClipboard } from './clipboard'
 import {
   WINDOWS_CONTEXT_TIMELINE_SCHEMA,
@@ -74,7 +80,7 @@ export interface DisplayDeclaration {
    * exactly like a clean one otherwise, and the moment being annotated may
    * simply not be in the file.
    */
-  cadence?: { achieved_fps: number; worst_stall_ms: number }
+  cadence?: ManifestCadence
   // The filenames this display's media is DECLARED under, carried rather than
   // re-derived from `index`: SPEC §5.6 allows `replay-d<N>.mp4` just as much as
   // `.webm`, so a re-edit save of an external pack must keep the names the
@@ -247,6 +253,45 @@ async function writeSourceFile(filePath: string, contents: string): Promise<void
     await rename(temporaryPath, filePath)
   } finally {
     await rm(temporaryPath, { force: true }).catch(() => {})
+  }
+}
+
+/**
+ * viewer.html is useful but derived. A broken browser view must never cost the
+ * source pack; an older viewer describing a previous revision is removed.
+ *
+ * Returns true only when this revision's viewer was atomically published.
+ * On success the in-memory manifest is raised to the viewer's minimum format
+ * version so the caller can publish that manifest as its commit point.
+ */
+async function writeViewerNonFatal(
+  dirPath: string,
+  manifest: Manifest,
+  annotationsFile: AnnotationsFile,
+  timeline: TimelineFile,
+  docLanguage: Language,
+): Promise<boolean> {
+  const viewerPath = join(dirPath, 'viewer.html')
+  try {
+    const viewerManifest = manifestWithViewerFormat(manifest)
+    const html = buildViewerHtml(viewerManifest, annotationsFile, timeline, docLanguage)
+    await writeSourceFile(viewerPath, html)
+    manifest.format_version = viewerManifest.format_version
+    return true
+  } catch (err) {
+    console.error(
+      'capturepack: writing viewer.html failed; source pack remains valid:',
+      err instanceof Error ? err.message : String(err),
+    )
+    try {
+      await rm(viewerPath, { force: true })
+    } catch (cleanupError) {
+      console.error(
+        'capturepack: removing stale viewer.html failed:',
+        cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+      )
+    }
+    return false
   }
 }
 
@@ -477,6 +522,14 @@ export async function addManifestPlugin(
     // A late plugin belongs to the durable source revision, not to derived
     // rendering. Under-promising while a final render starts is safe; once the
     // renderer declares its outputs it regenerates these documents again.
+    const previousFormatVersion = nextManifest.format_version
+    const viewerWritten = await writeViewerNonFatal(
+      handle.dirPath,
+      nextManifest,
+      annotationsFile,
+      timeline,
+      docLanguage,
+    )
     await writeDocs(
       handle.dirPath,
       nextManifest,
@@ -484,8 +537,11 @@ export async function addManifestPlugin(
       timeline,
       docLanguage,
       false,
+      viewerWritten,
     )
-    if (!declared) await writeSourceFile(manifestPath, toJson(nextManifest))
+    if (!declared || nextManifest.format_version !== previousFormatVersion) {
+      await writeSourceFile(manifestPath, toJson(nextManifest))
+    }
   })
 }
 
@@ -651,6 +707,7 @@ export interface ExportInput {
   // recorder container, and re-edit passes the loaded manifest's name so the
   // file on disk stays declared instead of being silently orphaned.
   replayFile?: string
+  cadence?: ManifestCadence
   annotations: Annotation[]
   title: string
   note: string
@@ -711,6 +768,9 @@ export interface ManifestInput {
   plugins?: Manifest['plugins']
   // media.displays[] source (all-displays capture); absent = single display.
   displays?: readonly DisplayDeclaration[]
+  // Focused/single-display replay diagnostics. Capture provenance members
+  // require format 0.4.0; basic achieved cadence remains valid in 0.2.0+.
+  cadence?: ManifestCadence
   /**
    * Whether any box carries AUTHORED motion (SPEC §8.9), which is the only
    * thing that lifts this pack's declared format version. Absent = no.
@@ -748,13 +808,43 @@ export function buildManifest(input: ManifestInput): Manifest {
       throw new Error('fullscreen image capture must not declare crop bounds')
     }
   }
+  // Version from what this manifest will actually DECLARE, not from stale
+  // recorder state a screenshot/no-replay caller happened to carry. A
+  // single-display declaration is omitted entirely; a failed display emits no
+  // replay beside which cadence could truthfully live.
+  const emittedCadences: Array<ManifestCadence | undefined> = []
+  if (captureKind === 'video' && input.hasReplay) {
+    emittedCadences.push(input.cadence)
+    emittedCadences.push(
+      input.displays?.find((display) => display.focused)?.cadence,
+    )
+  }
+  if (
+    captureKind === 'video' &&
+    input.displays !== undefined &&
+    input.displays.length > 1
+  ) {
+    for (const display of input.displays) {
+      const emitsReplay = display.focused ? input.hasReplay : display.hasReplay
+      if (emitsReplay) emittedCadences.push(display.cadence)
+    }
+  }
+  const hasCaptureDiagnostics = emittedCadences.some(
+    (cadence) =>
+      cadence?.backend !== undefined ||
+      cadence?.quality !== undefined ||
+      cadence?.requested_fps !== undefined ||
+      cadence?.recorder_count !== undefined,
+  )
   const manifest: Manifest = {
     format: FORMAT_NAME,
     // Every pack written here declares capture_kind, a 0.3.0 field (SPEC §5.1,
     // §13.1). Legacy 0.2.1 packs remain readable because they omit the field;
     // a new video cannot claim that older contract merely because it has no
     // authored keyframes.
-    format_version: FORMAT_VERSION_KEYFRAMES,
+    format_version: hasCaptureDiagnostics
+      ? FORMAT_VERSION_CAPTURE_DIAGNOSTICS
+      : FORMAT_VERSION_KEYFRAMES,
     capture_kind: captureKind,
     id: input.id,
     created_at: isoWithOffset(input.createdAt),
@@ -788,6 +878,16 @@ export function buildManifest(input: ManifestInput): Manifest {
   if (note !== '') manifest.note = note
   if (captureKind === 'video' && input.hasReplay) {
     manifest.media.replay_duration_ms = input.replayDurationMs
+    if (input.cadence !== undefined) manifest.media.cadence = { ...input.cadence }
+    // The focused display IS the top-level media object (SPEC §5.3/§5.6).
+    // Its measured recorder cadence therefore belongs here even when this was
+    // a single-display capture and media.displays is correctly absent.
+    const focusedCadence = input.displays?.find(
+      (display) => display.focused,
+    )?.cadence
+    if (focusedCadence !== undefined) {
+      manifest.media.cadence = { ...focusedCadence }
+    }
     // snapshot_t_ms is only written alongside a replay (SPEC §5.3), clamped to
     // replay_duration_ms: the editor's scrub position lives on the parsed
     // video clock, which can run slightly past the recorder's wall clock.
@@ -850,6 +950,9 @@ export interface InitialSaveInput {
   // Actual recorder container name. Absent retains the legacy replay.webm.
   replayFile?: string
   replayDurationMs: number
+  // Focused/single-display measured replay diagnostics. Capture provenance
+  // members require format 0.4.0; omitted for image captures.
+  cadence?: ManifestCadence
   // Provenance for an exact background cut applied to a cancelled save-first
   // pack. Absent on the initial raw write.
   trimOffsetMs?: number
@@ -912,6 +1015,7 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
       snapshotTMs: null,
       plugins: withWindowsContextPlugin(undefined, contextDisposition),
       displays: imageCapture ? undefined : input.displays,
+      cadence: imageCapture ? undefined : input.cadence,
     })
     // No render follows a save-first folder — the editor may never finish — so
     // the documents must not promise stills nothing will ever write.
@@ -983,6 +1087,7 @@ export async function updateInitialPack(
     trimOffsetMs: input.trimOffsetMs,
     plugins: withWindowsContextPlugin(previous?.plugins, contextDisposition),
     displays: imageCapture ? undefined : input.displays,
+    cadence: imageCapture ? undefined : input.cadence ?? previous?.media.cadence,
   })
   const annotationsFile: AnnotationsFile = {
     reference_width: input.width,
@@ -1072,6 +1177,10 @@ export async function updatePack(
       contextDisposition,
     ),
     displays: imageCapture ? undefined : input.displays,
+    cadence:
+      imageCapture
+        ? undefined
+        : input.cadence ?? previousManifest?.media.cadence,
     usesKeyframes: input.annotations.some((a) => (a.keyframes?.length ?? 0) > 0),
   })
   const annotationsFile: AnnotationsFile = {
@@ -1310,6 +1419,7 @@ function withDeclaredDisplays(
 export async function saveAsNewPack(sourceDir: string, input: ExportInput): Promise<PackHandle> {
   // The source folder may still be finishing its save-first per-display write.
   await settleDisplayWrites(sourceDir)
+  const sourceManifest = await readManifestIfPresent(sourceDir)
   const id = randomUUID()
   const imageCapture = input.captureKind === 'image'
   const replayFile = replayFileName(input.replayFile)
@@ -1388,6 +1498,7 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
       trimOffsetMs: input.trimOffsetMs,
       plugins: withWindowsContextPlugin(copiedPlugins, contextDisposition),
       displays: displayFiles,
+      cadence: imageCapture ? undefined : input.cadence ?? sourceManifest?.media.cadence,
       usesKeyframes: annotations.some((a) => (a.keyframes?.length ?? 0) > 0),
     })
     // A background render for the NEW folder always follows this save.
@@ -1449,11 +1560,26 @@ async function writePackFiles(
   } else {
     await writeSourceFile(join(dirPath, 'timeline.json'), toJson(timeline))
   }
-  await writeDocs(dirPath, manifest, annotationsFile, timeline, docLanguage, renderPending)
+  const viewerWritten = await writeViewerNonFatal(
+    dirPath,
+    manifest,
+    annotationsFile,
+    timeline,
+    docLanguage,
+  )
+  await writeDocs(
+    dirPath,
+    manifest,
+    annotationsFile,
+    timeline,
+    docLanguage,
+    renderPending,
+    viewerWritten,
+  )
   await writeSourceFile(join(dirPath, 'manifest.json'), toJson(manifest))
 }
 
-/** report.md + README.md + skills/ — the three generated documents, one writer. */
+/** report.md + README.md + skills/ — Markdown generated documents, one writer. */
 async function writeDocs(
   dirPath: string,
   manifest: Manifest,
@@ -1461,15 +1587,16 @@ async function writeDocs(
   timeline: TimelineFile,
   docLanguage: Language,
   renderPending: boolean,
+  includeViewer: boolean,
 ): Promise<void> {
   const skills = buildSkills(manifest, annotationsFile, timeline, docLanguage, renderPending)
   await writeSourceFile(
     join(dirPath, 'report.md'),
-    buildReport(manifest, annotationsFile, docLanguage, renderPending),
+    buildReport(manifest, annotationsFile, docLanguage, renderPending, includeViewer),
   )
   await writeSourceFile(
     join(dirPath, 'README.md'),
-    buildReadme(manifest, annotationsFile, docLanguage, renderPending),
+    buildReadme(manifest, annotationsFile, docLanguage, renderPending, includeViewer),
   )
   const skillFiles =
     manifest.capture_kind === 'image'
@@ -1511,7 +1638,26 @@ export async function refreshPackDocs(dirPath: string, docLanguage: Language = '
     }
     // The render has already run: nothing further will write stills, so an
     // undeclared keyframe set is an ABSENT one, not a pending one.
-    await writeDocs(dirPath, manifest, annotationsFile, timeline, docLanguage, false)
+    const previousFormatVersion = manifest.format_version
+    const viewerWritten = await writeViewerNonFatal(
+      dirPath,
+      manifest,
+      annotationsFile,
+      timeline,
+      docLanguage,
+    )
+    if (manifest.format_version !== previousFormatVersion) {
+      await writeSourceFile(join(dirPath, 'manifest.json'), toJson(manifest))
+    }
+    await writeDocs(
+      dirPath,
+      manifest,
+      annotationsFile,
+      timeline,
+      docLanguage,
+      false,
+      viewerWritten,
+    )
   })
 }
 

@@ -1,7 +1,21 @@
+import { normalizeCaptureFps } from '../../shared/types'
+
 export interface RecorderFormat {
   mimeType: string
   replayFile: 'replay.webm' | 'replay.mp4'
   strategy: 'fragmented-mp4' | 'dual-slot-webm'
+}
+
+/**
+ * Keep each independently muxed MP4 fragment inside the same three-frame
+ * uncertainty budget used by the field cadence gate. Every supported rate
+ * retains three nominal frames per fragment, with a 100 ms floor at 30 fps.
+ * That avoids an every-frame IDR while keeping a full ring from losing more
+ * than three frames at its privacy-safe whole-fragment cutoff.
+ */
+export function mp4FragmentIntervalMs(fps: number): number {
+  const boundedFps = normalizeCaptureFps(fps)
+  return Math.max(100, Math.floor(3_000 / boundedFps))
 }
 
 interface UnsupportedRecorderFormat {

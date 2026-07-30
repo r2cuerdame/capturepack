@@ -391,6 +391,8 @@ export function buildReport(
   // True only when a background render really is about to write the stills the
   // keyframe section names — see keyframeSet().
   renderPending = false,
+  // The exporter passes true only after viewer.html was written successfully.
+  includeViewer = false,
 ): string {
   const t = makeT(lang)
   const lines: string[] = []
@@ -538,6 +540,9 @@ export function buildReport(
   if (framesEntry !== null) lines.push(`- ${framesEntry.name} — ${framesEntry.what}`)
   lines.push('- README.md — human-first entry point')
   lines.push('- skills/ — AI-first context documents')
+  if (includeViewer) {
+    lines.push('- viewer.html — double-clickable offline view (no install or server)')
+  }
   lines.push('- report.md — this file')
   lines.push('')
 

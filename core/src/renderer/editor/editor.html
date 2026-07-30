@@ -147,11 +147,15 @@
     </button>
   </header>
   <main id="stage">
-    <div id="frame">
-      <canvas id="snapshot"></canvas>
-      <canvas id="overlay" tabindex="-1"></canvas>
-      <input id="textEditor" type="text" placeholder="Describe… (Enter)" data-i18n-placeholder="editor.describePlaceholder" autocomplete="off" spellcheck="false" hidden />
+    <!-- The media remains clipped under zoom/pan, while editor-only chrome is
+         a sibling below and may paint into the surrounding editor UI. -->
+    <div id="mediaViewport">
+      <div id="frame">
+        <canvas id="snapshot"></canvas>
+        <canvas id="overlay" tabindex="-1"></canvas>
+      </div>
     </div>
+    <input id="textEditor" type="text" placeholder="Describe… (Enter)" data-i18n-placeholder="editor.describePlaceholder" autocomplete="off" spellcheck="false" hidden />
     <!-- Box header: floats above the box in screen space, glued to it under
          zoom/pan. Shown for the selected box AND, from the instant a right-drag
          ends, for the box being created — together with the description input

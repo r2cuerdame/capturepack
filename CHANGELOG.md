@@ -6,7 +6,70 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 
 ## Unreleased
 
-Nothing yet.
+## 0.3.3 — 2026-07-30
+
+Replay reliability, past-object picking, multi-display capture and portable
+offline pack viewing.
+
+### Added
+
+- CapturePack folders can include a generated, script-free `viewer.html` that
+  opens directly from disk without a server, network, account or installation.
+- Replay diagnostics now preserve measured cadence, source/backend health and
+  per-display clock evidence instead of filling unknown values with guesses.
+- Release QA covers bounded recorder retention, fallback health, temporal
+  alignment, semantic objects crossing display boundaries and offline viewer
+  safety.
+
+### Changed
+
+- Capture rate choices are bounded to 5–30 fps. Existing 1–4 fps settings
+  migrate to 5 on load while historical pack provenance remains readable.
+- Context collection prioritizes active and changed windows, contains slow
+  providers, and keeps plugin failure from blocking source-first pack saves.
+- Image and video editors preserve native media aspect, make oversized captures
+  fit in one view, and retain annotation placement through save and reopen.
+
+### Fixed
+
+- Past and reopened frames retain available Windows UI Automation and Chrome
+  DOM evidence instead of silently substituting the latest frame.
+- Mixed-DPI, portrait, negative-origin and cross-monitor capture paths use the
+  owning display geometry consistently.
+- Replay rings are bounded, recorder/flush ownership is explicit, and failed
+  displays can recover without discarding healthy display state.
+- The Chrome extension consumes expected native-port disconnect errors before
+  its bounded retry, so transient host startup no longer accumulates misleading
+  `Unchecked runtime.lastError` entries.
+- Generated documentation and the offline viewer are regenerated with late
+  plugin and annotated-render revisions and name only manifest-declared media.
+
+### Known issues
+
+- [#89](https://github.com/r2cuerdame/capturepack/issues/89): when startup
+  calibration has insufficient motion evidence, context overlays can still
+  lead encoded video by a display-specific amount. CapturePack records the
+  ambiguous state rather than applying a guessed fixed offset; measured
+  per-display source-to-encoded-PTS alignment remains open.
+
+## 0.3.3-rc.2 — 2026-07-30
+
+External test candidate for measured replay timing and the offline pack viewer.
+
+### Changed
+
+- Capture rate choices are now bounded to 5–30 fps. Existing 1–4 fps settings
+  migrate to 5 on load; historical pack provenance remains readable.
+- CapturePack folders can include a generated, script-free `viewer.html` that
+  opens directly from disk without a server, network, account or installation.
+
+### Fixed
+
+- Past object samples are aligned to the observed same-frame screen
+  `captureTime`, with measured media-clock calibration as a fallback instead
+  of a fixed timing correction.
+- Replay clock mapping rejects sink resets and unstable or non-monotonic
+  anchors rather than inventing object states between observations.
 
 ## 0.3.3-rc.1 — 2026-07-30
 

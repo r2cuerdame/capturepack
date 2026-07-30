@@ -19,7 +19,12 @@
 //
 // Run: npm run check:pick
 import { existsSync, readFileSync } from 'node:fs'
-import { ContextBuffer, mintSurfaceIds, surfaceSamplesOf } from '../src/main/context/buffer'
+import {
+  ContextBuffer,
+  mintSurfaceIds,
+  surfaceSamplesOf,
+  windowCandidatesFromSurfaces,
+} from '../src/main/context/buffer'
 import type { ContextObservation } from '../src/main/context/buffer'
 import { WindowsUiaProvider } from '../src/main/context/provider'
 import {
@@ -27,7 +32,15 @@ import {
   pickIdentityOf,
   samePickIdentity,
 } from '../src/renderer/editor/objects'
+import type { PickableObject } from '../src/renderer/editor/objects'
+import {
+  annotationAlreadyAnnotatesPick,
+  boundedObservedPickFallback,
+  existingAnnotationForPick,
+  pickBeatsBoxPolicy,
+} from '../src/renderer/editor/objectPickPolicy'
 import type { EditorUiaElement, EditorUiaWindow } from '../src/shared/ipc'
+import type { Annotation, AnnotationTarget } from '../src/shared/types'
 
 const PACK = 'C:/Users/recue/OneDrive/Desktop/CapturePack/CapturePack_2026-07-29_184934'
 
@@ -186,6 +199,82 @@ async function indexAt(tMs: number): Promise<ObjectIndex> {
   return ObjectIndex.build(frame.candidates, surfaces, frame.coverage, frame.claims, SNAP_W, SNAP_H)
 }
 
+/**
+ * One deliberately large child control.
+ *
+ * A Document/List or a named Pane routinely occupies most of its owner window.
+ * It is still a semantic child (the content the user is trying to point at),
+ * not the anonymous client-area wrapper that the window level replaces.
+ */
+async function largeControlIndex(
+  controlType: string,
+  name: string,
+  automationId: string,
+): Promise<ObjectIndex> {
+  const observation: ContextObservation = {
+    tMs: 0,
+    windows: [
+      {
+        surface_id: 'large-semantic-owner',
+        hwnd: '1900',
+        title: 'Large semantic control',
+        process: 'semantic-app',
+        class_name: 'SemanticWindow',
+        bounds: { x: 0, y: 0, width: 1000, height: 800 },
+        display: 1,
+        focused: true,
+        z: 0,
+        hasControls: true,
+        tree: 'collected',
+      },
+    ],
+    elements: [
+      {
+        name,
+        control_type: controlType,
+        automation_id: automationId,
+        class_name: '',
+        // 85.1% of a maximized owner/snapshot: this crosses the independent
+        // whole-display 80%-area and both-axes 70% container guards as well as
+        // WINDOW_FRAME_FRACTION (35%).
+        bounds: { x: 40, y: 30, width: 920, height: 740 },
+        display: 1,
+        window: 0,
+      },
+    ],
+  }
+  const ownIds = mintSurfaceIds([observation])
+  const ownBuffer = new ContextBuffer([observation], 'single-instant', {
+    startMs: 0,
+    endMs: 0,
+  })
+  const ownProvider = new WindowsUiaProvider(ownBuffer, ownIds)
+  const surfaceSample = surfaceSamplesOf([observation], ownIds)[0]
+  if (surfaceSample === undefined) throw new Error('large-control fixture has no surface sample')
+  const frame = await ownProvider.frame({
+    sessionId: 'large-control-pick-check',
+    timeMs: 0,
+    surfaces: surfaceSample.surfaces,
+    maxCandidates: 10,
+  } as never)
+  const windowCandidates = windowCandidatesFromSurfaces(surfaceSample.surfaces, {
+    requestedTimeMs: 0,
+    materializedTimeMs: 0,
+    errorMs: 0,
+    exact: true,
+    coverage: 'covered',
+  })
+  return ObjectIndex.build(
+    [...frame.candidates, ...windowCandidates],
+    surfaceSample.surfaces,
+    frame.coverage,
+    frame.claims,
+    1000,
+    800,
+    1,
+  )
+}
+
 /** A deliberately small two-window observation for temporal fallback checks. */
 function regressionObservation(
   tMs: number,
@@ -338,6 +427,22 @@ const check = (ok: boolean, line: string): void => {
   console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${line}`)
 }
 
+const storedBox = (
+  annotationId: string,
+  target: AnnotationTarget,
+): Annotation => ({
+  annotation_id: annotationId,
+  type: 'box',
+  bounds: { x: 100, y: 120, width: 240, height: 48 },
+  text: '',
+  numbered: false,
+  blur: false,
+  tracking: { enabled: false },
+  target,
+  created_at: '2026-07-30T00:00:00.000Z',
+  z: 1,
+})
+
 async function main(): Promise<void> {
   console.log(`dump: ${els.length} elements in "${chrome.title.slice(0, 30)}" at ${JSON.stringify(chrome.bounds)}, display ${DISPLAY}\n`)
 
@@ -412,18 +517,98 @@ async function main(): Promise<void> {
   console.log(`  ${small.length} controls are under 32 px on one axis; ${smallOffered} are offered as controls`)
   check(small.length > 0 && smallOffered > 0, 'the non-empty small-control fixture can be picked')
 
-  // --- The anchoring path, with the window moved ---------------------------
+  // --- Large semantic children ---------------------------------------------
+  console.log('\nLARGE SEMANTIC CHILD CONTROLS')
+  for (const fixture of [
+    { type: 'Document', name: 'Editor contents', id: '' },
+    { type: 'List', name: 'Issue list', id: '' },
+    { type: 'Pane', name: 'Contents', id: 'contents-pane' },
+    { type: 'Contents', name: 'Document contents', id: '' },
+  ]) {
+    const semantic = await largeControlIndex(fixture.type, fixture.name, fixture.id)
+    const firstClick = semantic.pick(500, 380)
+    check(
+      firstClick?.level === 'window',
+      `${fixture.type} stays deferred on the first click instead of covering the whole app`,
+    )
+    const picked = semantic.stackAt(500, 380, false, 0, true).offered[0] ?? null
+    check(
+      picked?.level === 'control' && picked.candidate.objectType === fixture.type,
+      `${fixture.type} becomes the selectable window refinement even above 35% of its owner — got ${
+        picked === null ? 'NOTHING' : `${picked.level} ${picked.candidate.objectType}`
+      }`,
+    )
+  }
+  const anonymousPane = await largeControlIndex('Pane', '', '')
+  const anonymousPick = anonymousPane.pick(500, 380)
+  check(
+    anonymousPick?.level === 'window',
+    `an anonymous client-area Pane still falls through to its window — got ${
+      anonymousPick === null ? 'NOTHING' : `${anonymousPick.level} ${anonymousPick.candidate.objectType}`
+    }`,
+  )
+  const windowWrapper = await largeControlIndex('Window', 'Embedded wrapper', 'wrapper')
+  const wrapperPick = windowWrapper.pick(500, 380)
+  check(
+    wrapperPick?.level === 'window' && wrapperPick.providerId === 'core',
+    `a provider Window wrapper still falls through to Core's window — got ${
+      wrapperPick === null ? 'NOTHING' : `${wrapperPick.level} ${wrapperPick.providerId}`
+    }`,
+  )
+
+  // A semantic window box is selected as soon as it is created. Its large
+  // Document/Contents child can occupy far more than half of that window and
+  // is still a real refinement, so the old 50%-area gate must not swallow it.
+  console.log('\nSEMANTIC WINDOW BOX VS LARGE CHILD PICK')
+  const largeChildPolicy = {
+    selectedManualBox: false,
+    repeat: false,
+    onEdge: false,
+    alreadyAnnotatesPick: false,
+    boxTargetLevel: 'window' as const,
+    pickedLevel: 'control' as const,
+    pickedArea: 70,
+    boxArea: 100,
+  }
+  check(
+    pickBeatsBoxPolicy(largeChildPolicy),
+    'a semantic window box yields its interior to a control even when the child is over 50%',
+  )
+  check(
+    !pickBeatsBoxPolicy({ ...largeChildPolicy, selectedManualBox: true }),
+    'a selected manual box keeps its interior drag gesture',
+  )
+  check(
+    !pickBeatsBoxPolicy({ ...largeChildPolicy, repeat: true }),
+    'a repeat click still selects the existing box',
+  )
+  check(
+    !pickBeatsBoxPolicy({ ...largeChildPolicy, onEdge: true }),
+    'a click on the existing box edge still selects that box',
+  )
+  check(
+    !pickBeatsBoxPolicy({ ...largeChildPolicy, alreadyAnnotatesPick: true }),
+    'a box that already annotates this exact pick keeps the click',
+  )
+  check(
+    !pickBeatsBoxPolicy({ ...largeChildPolicy, boxTargetLevel: 'control' }),
+    'the 50% refinement gate still applies between ordinary overlapping controls',
+  )
+
+  // --- Owner motion is not child evidence ----------------------------------
   console.log('\nAFTER THE WINDOW MOVES 300 px RIGHT')
   const moved = await indexAt(1000)
   const mx = px + 300
-  const mo = moved.pick(mx, py)
-  check(mo !== null && mo.level === 'control', `the control is still offered at its moved centre (${mx}, ${py})`)
-  if (mo !== null) {
-    check(
-      mo.x === target.bounds.x + 300 && mo.y === target.bounds.y,
-      `it moved WITH its window — want x ${target.bounds.x + 300} got ${mo.x}`,
-    )
-  }
+  const observedAtOldPoint = moved.pick(px, py)
+  const atProjectedPoint = moved.pick(mx, py)
+  check(
+    observedAtOldPoint?.candidate.name !== target.name,
+    'a stale observed control is not detached from its current owner surface',
+  )
+  check(
+    atProjectedPoint?.candidate.name !== target.name,
+    `owner motion does not project that control to (${mx}, ${py})`,
+  )
 
   // A PARTIAL TREE IN APP A MUST NOT HIDE A FULL FALLBACK FOR APP B.
   //
@@ -543,14 +728,9 @@ async function main(): Promise<void> {
     }`,
   )
 
-  // CLAIMS MUST MOVE WITH THEIR ANCHORED CONTROLS.
-  //
-  // A capture-time UIA dump belongs to the window, not to its old desktop
-  // rectangle. After an 800px window moves 1200px, the candidate is correctly
-  // anchored at the new rect but a stale source claim remains at the old rect.
-  // The resolver then drops the real candidate as "unclaimed". Keep this at a
-  // distance where the two rects do not overlap, otherwise the defect hides.
-  console.log('\nANCHORED CONTROL CLAIM MOVES WITH AN 800 PX WINDOW')
+  // Claims and candidates must remain on the same observed geometry. Moving
+  // only the claim would make an unobserved projected control pickable.
+  console.log('\nOWNER MOTION DOES NOT MOVE AN OBSERVED CONTROL CLAIM')
   const movedFar = [
     regressionObservation(0, { aX: 0, aElements: true, bElements: false }),
     regressionObservation(1000, { aX: 1200, aElements: false, bElements: false }),
@@ -558,11 +738,11 @@ async function main(): Promise<void> {
   const movedFarAtEnd = await regressionIndexAt(movedFar, 1000)
   const movedFarPick = movedFarAtEnd.index.pick(1360, 160)
   check(
-    movedFarPick !== null && movedFarPick.level === 'control' && movedFarPick.candidate.name === 'A control',
-    `the moved control remains claimed and selectable — got ${movedFarPick === null ? 'NOTHING' : `${movedFarPick.level} ${movedFarPick.candidate.name}`}`,
+    movedFarPick?.candidate.name !== 'A control',
+    'a far owner move does not create a projected child at the destination',
   )
 
-  console.log('\nANCHORED CONTROL CROSSES FROM DISPLAY 1 TO DISPLAY 2')
+  console.log('\nOWNER MOTION DOES NOT MOVE AN OBSERVED CONTROL ACROSS DISPLAYS')
   const movedDisplay = [
     regressionObservation(0, {
       aX: 0,
@@ -586,17 +766,11 @@ async function main(): Promise<void> {
   )
   const movedDisplayPick = movedDisplayAtEnd.index.pick(160, 160)
   check(
-    movedDisplayPick !== null &&
-      movedDisplayPick.level === 'control' &&
-      movedDisplayPick.candidate.display === 2,
-    `the control and its claim enter display 2 together — got ${
-      movedDisplayPick === null
-        ? 'NOTHING'
-        : `${movedDisplayPick.level} display ${String(movedDisplayPick.candidate.display)}`
-    }`,
+    movedDisplayPick?.candidate.name !== 'A control',
+    'an owner display change does not rewrite the child observation display',
   )
 
-  console.log('\nA STRADDLING WINDOW USES ITS UNCLIPPED CLIENT ORIGIN')
+  console.log('\nA STRADDLING WINDOW DOES NOT PROJECT CHILD GEOMETRY')
   const movedFromSeam = [
     regressionObservation(0, {
       aX: 0,
@@ -626,12 +800,8 @@ async function main(): Promise<void> {
   )
   const seamMovedPick = movedFromSeamAtEnd.index.pick(1380, 160)
   check(
-    seamMovedPick !== null &&
-      seamMovedPick.level === 'control' &&
-      seamMovedPick.x === 1340,
-    `the control includes the 920 px clipped seam offset — got ${
-      seamMovedPick === null ? 'NOTHING' : `x=${seamMovedPick.x}`
-    }`,
+    seamMovedPick?.candidate.name !== 'A control',
+    'an unclipped owner origin does not invent a child rectangle across the seam',
   )
 
   // A LOST TREE STATUS MUST NOT SILENCE DATA THAT SURVIVED.
@@ -709,6 +879,378 @@ async function main(): Promise<void> {
         samePickIdentity(aIdentity, pickIdentityOf(siblingA)),
         'the exact same child remains a duplicate pick',
       )
+
+      // A STATIC-START SOURCE CAN HAVE AN AMBIGUOUS VIDEO↔CONTEXT LATENCY.
+      //
+      // The displayed frame can therefore contain the control at the bounds
+      // from one adjacent *observed* context sample even though the exact
+      // ContextFrame resolves that same identity at its next position. The
+      // editor may bridge that uncertainty only inside two real video frame
+      // intervals, without interpolating, and only while the exact frame proves
+      // that the same semantic object is still alive.
+      console.log('\nBOUNDED OBSERVED CONTROL PICK FALLBACK')
+      const frameIntervalMs = 1000 / 15
+      const accuracyAt = (
+        requestedTimeMs: number,
+        materializedTimeMs = requestedTimeMs,
+        coverage: 'covered' | 'before-start' = 'covered',
+        interpolated = false,
+      ) => ({
+        requestedTimeMs,
+        materializedTimeMs,
+        errorMs: Math.abs(materializedTimeMs - requestedTimeMs),
+        exact: requestedTimeMs === materializedTimeMs,
+        coverage,
+        ...(interpolated ? { interpolated: true } : {}),
+      })
+      const observed = (
+        source: PickableObject,
+        requestedTimeMs: number,
+        materializedTimeMs = requestedTimeMs,
+        interpolated = false,
+      ): PickableObject => ({
+        ...source,
+        candidate: {
+          ...source.candidate,
+          accuracy: accuracyAt(
+            requestedTimeMs,
+            materializedTimeMs,
+            'covered',
+            interpolated,
+          ),
+        },
+      })
+      const exactAnchor = observed(siblingA, 1000)
+      const priorSameIdentity = observed(siblingA, 933)
+      const safeFallback = boundedObservedPickFallback({
+        requestedTimeMs: 1000,
+        frameIntervalMs,
+        exactPointPick: siblingA,
+        exactControls: [exactAnchor],
+        observations: [
+          {
+            coverage: 'covered',
+            pointPicks: [priorSameIdentity],
+          },
+        ],
+      })
+      check(
+        safeFallback === null,
+        'an exact semantic point hit always wins; fallback never replaces it',
+      )
+      const adjacentFallback = boundedObservedPickFallback({
+        requestedTimeMs: 1000,
+        frameIntervalMs,
+        exactPointPick: null,
+        exactControls: [exactAnchor],
+        observations: [
+          {
+            coverage: 'covered',
+            pointPicks: [priorSameIdentity],
+          },
+        ],
+      })
+      check(
+        adjacentFallback !== null &&
+          samePickIdentity(pickIdentityOf(adjacentFallback.picked), aIdentity) &&
+          adjacentFallback.observedAtMs === 933,
+        `one adjacent observed sample of the same live identity is selectable — got ${
+          adjacentFallback === null
+            ? 'NOTHING'
+            : `${adjacentFallback.picked.candidate.name}@${adjacentFallback.observedAtMs}`
+        }`,
+      )
+      if (wrapperPick !== null) {
+        const movedOffPointFallback = boundedObservedPickFallback({
+          requestedTimeMs: 1000,
+          frameIntervalMs,
+          // At the exact context time the target window has moved away. The
+          // point now belongs to a different background window, but target A
+          // remains alive elsewhere in the same exact frame.
+          exactPointPick: wrapperPick,
+          exactControls: [exactAnchor],
+          observations: [
+            {
+              coverage: 'covered',
+              pointPicks: [priorSameIdentity],
+            },
+          ],
+        })
+        check(
+          movedOffPointFallback !== null &&
+            samePickIdentity(
+              pickIdentityOf(movedOffPointFallback.picked),
+              aIdentity,
+            ) &&
+            !samePickIdentity(
+              pickIdentityOf(movedOffPointFallback.picked),
+              pickIdentityOf(wrapperPick),
+            ),
+          'a moved-away target is recovered from all exact-frame live identities, not the background window at the point',
+        )
+      }
+      check(
+        boundedObservedPickFallback({
+          requestedTimeMs: 1000,
+          frameIntervalMs,
+          exactPointPick: null,
+          exactControls: [exactAnchor],
+          observations: [
+            {
+              coverage: 'covered',
+              pointPicks: [priorSameIdentity, observed(siblingB, 934)],
+            },
+          ],
+        }) === null,
+        'two different semantic identities competing at the point are refused',
+      )
+      check(
+        boundedObservedPickFallback({
+          requestedTimeMs: 1000,
+          frameIntervalMs,
+          exactPointPick: null,
+          exactControls: [exactAnchor],
+          observations: [
+            {
+              coverage: 'covered',
+              pointPicks: [observed(siblingA, 800)],
+            },
+          ],
+        }) === null,
+        'an observation beyond two video frame intervals is refused',
+      )
+      check(
+        boundedObservedPickFallback({
+          requestedTimeMs: 1000,
+          frameIntervalMs,
+          exactPointPick: null,
+          exactControls: [exactAnchor],
+          observations: [
+            {
+              coverage: 'before-start',
+              pointPicks: [priorSameIdentity],
+            },
+          ],
+        }) === null,
+        'a coverage gap is refusal, never permission to borrow another frame',
+      )
+      check(
+        boundedObservedPickFallback({
+          requestedTimeMs: 1000,
+          frameIntervalMs,
+          exactPointPick: null,
+          exactControls: [exactAnchor],
+          observations: [
+            {
+              coverage: 'covered',
+              pointPicks: [observed(siblingA, 933, 933, true)],
+            },
+          ],
+        }) === null,
+        'interpolated geometry is never accepted as an observed fallback',
+      )
+      check(
+        boundedObservedPickFallback({
+          requestedTimeMs: 1000,
+          frameIntervalMs,
+          exactPointPick: null,
+          exactControls: [],
+          observations: [
+            {
+              coverage: 'covered',
+              pointPicks: [priorSameIdentity],
+            },
+          ],
+        }) === null,
+        'an adjacent object outside its exact-frame lifetime is refused',
+      )
+
+      const savedUia = storedBox('ann_000001', {
+        source: 'uia',
+        level: 'control',
+        automation_id: siblingA.candidate.identity?.['automation_id'] ?? '',
+        control_type: siblingA.candidate.identity?.['control_type'] ?? '',
+        name: siblingA.candidate.identity?.['name'] ?? '',
+        class_name: siblingA.candidate.identity?.['class_name'] ?? '',
+        process: siblingA.candidate.identity?.['process'] ?? '',
+      })
+      const remembered = new Map([['ann_000001', aIdentity]])
+      check(
+        existingAnnotationForPick([savedUia], remembered, siblingA, () => true)
+          ?.annotation_id === 'ann_000001',
+        'the same live child selects its existing box',
+      )
+      check(
+        existingAnnotationForPick([savedUia], remembered, siblingB, () => true)
+          === null,
+        'a different child in the same window remains a new pick',
+      )
+      const sameGeometryWindow = storedBox('ann_000005', {
+        source: 'uia',
+        level: 'window',
+        title: 'Same rectangle is not same identity',
+        process: 'semantic-app',
+        class_name: 'SemanticWindow',
+      })
+      sameGeometryWindow.bounds = {
+        x: siblingA.x,
+        y: siblingA.y,
+        width: siblingA.width,
+        height: siblingA.height,
+      }
+      check(
+        !annotationAlreadyAnnotatesPick(
+          sameGeometryWindow,
+          new Map(),
+          siblingA,
+        ),
+        'identical geometry does not make a window target equal its child control',
+      )
+      check(
+        pickBeatsBoxPolicy({
+          ...largeChildPolicy,
+          pickedArea: largeChildPolicy.boxArea,
+          alreadyAnnotatesPick: annotationAlreadyAnnotatesPick(
+            sameGeometryWindow,
+            new Map(),
+            siblingA,
+          ),
+        }),
+        'a same-rectangle child still refines a semantic window by level',
+      )
+      const manualExact: Annotation = {
+        ...savedUia,
+        bounds: { ...sameGeometryWindow.bounds },
+      }
+      delete manualExact.target
+      check(
+        annotationAlreadyAnnotatesPick(manualExact, new Map(), siblingA),
+        'a manual box keeps the established same-geometry fallback',
+      )
+      const reusedAutomationIdSibling: PickableObject = {
+        ...siblingB,
+        candidate: {
+          ...siblingB.candidate,
+          identity: siblingA.candidate.identity,
+        },
+      }
+      check(
+        existingAnnotationForPick(
+          [savedUia],
+          remembered,
+          reusedAutomationIdSibling,
+          () => true,
+        ) === null,
+        'a live sibling objectId wins over a reused AutomationId',
+      )
+
+      // Save/reopen clears the in-memory identity map. The persisted target is
+      // the only durable identity available to duplicate prevention.
+      const reopened = new Map()
+      check(
+        existingAnnotationForPick([savedUia], reopened, siblingA, () => true)
+          ?.annotation_id === 'ann_000001',
+        'after reopen, the same UIA automation target selects its stored box',
+      )
+      check(
+        existingAnnotationForPick([savedUia], reopened, siblingA, () => false)
+          === null,
+        'a matching target outside its lifetime does not block a new annotation',
+      )
+      check(
+        existingAnnotationForPick([savedUia], reopened, siblingB, () => true)
+          === null,
+        'after reopen, a different UIA target creates a new pick',
+      )
+      const weakUia = storedBox('ann_000002', {
+        source: 'uia',
+        level: 'control',
+        name: siblingA.candidate.identity?.['name'] ?? 'Save',
+      })
+      check(
+        existingAnnotationForPick([weakUia], reopened, siblingA, () => true)
+          === null,
+        'a descriptive UIA label without AutomationId is not treated as identity',
+      )
+
+      const domPick: PickableObject = {
+        ...siblingA,
+        providerId: 'chrome-dom',
+        candidate: {
+          ...siblingA.candidate,
+          providerId: 'chrome-dom',
+          objectId: 'dom:save-button',
+        },
+      }
+      const savedDom = storedBox('ann_000003', {
+        source: 'chrome-dom',
+        level: 'control',
+        object_id: 'dom:save-button',
+      })
+      check(
+        existingAnnotationForPick([savedDom], reopened, domPick, () => true)
+          ?.annotation_id === 'ann_000003',
+        'after reopen, a provider object_id selects its stored box',
+      )
+      check(
+        existingAnnotationForPick(
+          [savedDom],
+          reopened,
+          {
+            ...domPick,
+            candidate: {
+              ...domPick.candidate,
+              objectId: 'dom:other-button',
+            },
+          },
+          () => true,
+        ) === null,
+        'after reopen, a different provider object_id remains a new pick',
+      )
+
+      const pickedWindow = wrapperPick
+      if (pickedWindow !== null) {
+        const savedWindow = storedBox('ann_000004', {
+          source: 'uia',
+          level: 'window',
+          title: pickedWindow.candidate.identity?.['title'] ?? '',
+          process: pickedWindow.candidate.identity?.['process'] ?? '',
+          class_name: pickedWindow.candidate.identity?.['class_name'] ?? '',
+        })
+        check(
+          existingAnnotationForPick(
+            [savedWindow],
+            reopened,
+            pickedWindow,
+            () => true,
+          )?.annotation_id === 'ann_000004',
+          'after reopen, the same complete UIA window target selects its stored box',
+        )
+        const otherWindow: PickableObject = {
+          ...pickedWindow,
+          surfaceId: 'another-window-surface',
+          candidate: {
+            ...pickedWindow.candidate,
+            surfaceId: 'another-window-surface',
+            objectId: 'another-window',
+            identity: {
+              ...pickedWindow.candidate.identity,
+              title: 'Another window',
+              process: 'another-app',
+              class_name: 'AnotherWindow',
+            },
+          },
+        }
+        check(
+          existingAnnotationForPick(
+            [savedWindow],
+            reopened,
+            otherWindow,
+            () => true,
+          ) === null,
+          'after reopen, another window remains a new pick',
+        )
+      }
     }
   }
 

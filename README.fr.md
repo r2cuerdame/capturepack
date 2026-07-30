@@ -16,7 +16,7 @@ mouvement observés afin que l’IA n’ait pas à les déduire des seuls pixels
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Télécharger](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Version Windows publique actuelle : **CapturePack 0.3.2**
+Version Windows publique actuelle : **CapturePack 0.3.3**
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/motion/fr/capturepack-time-machine-poster.webp" alt="CapturePack part de MAINTENANT à droite, déplace la tête de lecture vers la gauche jusqu’à 5 secondes plus tôt, restaure et sélectionne le contrôle enfant présent dans cette image historique, puis exporte des preuves structurées pour l’IA." width="760">
@@ -78,7 +78,7 @@ et ne peut lancer aucune capture. Utilisez `capturepack_history`, `capturepack_o
 ## Réglages et diagnostics
 
 - Réglages → Capture permet de modifier séparément les raccourcis vidéo
-  (`Ctrl+Alt+C`) et image (`Ctrl+Alt+S`), la durée et la cadence de 1–30 fps.
+  (`Ctrl+Alt+C`) et image (`Ctrl+Alt+S`), la durée et la cadence de 5–30 fps.
 - Informations → **Ouvrir le dossier des journaux** ouvre les diagnostics
   locaux. Ils ne sont jamais envoyés automatiquement.
 
@@ -94,7 +94,7 @@ pack complet s’il contient des informations privées.
 
 ## État, sécurité et licence
 
-0.3.2 est la version publique actuelle. Le build n’est pas signé : SmartScreen peut avertir. Chaque
+0.3.3 est la version publique actuelle. Le build n’est pas signé : SmartScreen peut avertir. Chaque
 version fournit `SHA256SUMS.txt`.
 
 Local d’abord · sans cloud · sans compte · sans télémétrie · [Licence MIT](LICENSE)

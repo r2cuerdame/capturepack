@@ -2,7 +2,9 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import {
   CLIPBOARD_RETRY_DELAYS_MS,
+  writeClipboardImageVerified,
   writeClipboardTextVerified,
+  type ClipboardImagePort,
   type ClipboardTextPort,
 } from '../src/shared/clipboard'
 
@@ -70,12 +72,41 @@ async function run(): Promise<void> {
       rejectedWrites === CLIPBOARD_RETRY_DELAYS_MS.length,
   )
 
+  console.log('\nVERIFIED FINAL-IMAGE WRITE')
+  const expectedPixels = new Uint8Array([10, 20, 30, 255])
+  let imageWrites = 0
+  const imagePort: ClipboardImagePort = {
+    writeImage() {
+      imageWrites += 1
+    },
+    readImage() {
+      return imageWrites === 1
+        ? { width: 2, height: 1, pixels: expectedPixels }
+        : { width: 1, height: 1, pixels: expectedPixels }
+    },
+  }
+  const imageResult = await writeClipboardImageVerified(
+    imagePort,
+    { width: 1, height: 1, pixels: expectedPixels },
+    async () => {},
+  )
+  check(
+    'a contested final image is retried and verified by dimensions plus pixels',
+    imageResult.ok && imageResult.attempts === 2 && imageWrites === 2,
+  )
+
   console.log('\nAUTOMATIC AND MANUAL COPY CONTRACT')
   const exporter = source('src/main/exporter.ts')
   const session = source('src/main/session.ts')
+  const settingsMain = source('src/main/settings.ts')
+  const settingsHtml = source('src/renderer/settings/settings.html')
+  const settingsRenderer = source('src/renderer/settings/settings.ts')
+  const annotatedRender = source('src/main/annotatedRender.ts')
+  const clipboardMain = source('src/main/clipboard.ts')
   const toastMain = source('src/main/saveToast.ts')
   const toastPreload = source('src/preload/toast.ts')
   const toastRenderer = source('src/renderer/toast/toast.ts')
+  const ipc = source('src/shared/ipc.ts')
   const historyMain = source('src/main/historyWindow.ts')
   const historyPreload = source('src/preload/history.ts')
   const imageFlow = session.slice(
@@ -99,7 +130,7 @@ async function run(): Promise<void> {
     ['re-edit save', editFlow],
   ] as const) {
     check(
-      `${name} awaits copy before showing the success toast`,
+      `${name} awaits any pack-oriented copy before showing the saved-pack toast`,
       flow.indexOf('await copyAfterSave(') >= 0 &&
         flow.indexOf('await copyAfterSave(') < flow.indexOf('showSaveToast({'),
     )
@@ -121,6 +152,44 @@ async function run(): Promise<void> {
     historyMain.includes('ipcMain.handle(IPC.historyCopyPrompt') &&
       historyMain.includes('return copyTextToClipboard(analyzePrompt(entry.path))') &&
       historyPreload.includes('ipcRenderer.invoke(IPC.historyCopyPrompt, packPath)'),
+  )
+  check(
+    'settings expose an independent image post-capture action with final image',
+    settingsHtml.includes('id="imageClipboardAfterSave"') &&
+      settingsHtml.includes('value="image"') &&
+      settingsRenderer.includes("el<HTMLSelectElement>('imageClipboardAfterSave')") &&
+      settingsMain.includes("imageClipboardAfterSave: 'image'"),
+  )
+  check(
+    'image final-image mode copies only the completed derived PNG',
+    imageFlow.includes("settings.imageClipboardAfterSave === 'image'") &&
+      imageFlow.includes('onRendered: async (png) =>') &&
+      imageFlow.includes('await copyPngToClipboard(png)') &&
+      imageFlow.indexOf('await copyPngToClipboard(png)') >
+        imageFlow.indexOf('startKeyframeStill('),
+  )
+  check(
+    'still rendering publishes the manifest before handing the final PNG to the action',
+    annotatedRender.includes('onRendered?: (png: Buffer) => Promise<void> | void') &&
+      annotatedRender.indexOf('await setManifestRenderOutputs(handle, {') <
+        annotatedRender.indexOf('await callbacks.onRendered?.(renderedPng)'),
+  )
+  check(
+    'the image action reports rendering, copied, and honest failure states in the save toast',
+      ipc.includes("'image-rendering'") &&
+      ipc.includes("'image-copied'") &&
+      ipc.includes("'image-copy-failed'") &&
+      imageFlow.includes("'image-rendering'") &&
+      imageFlow.includes("updateToastRenderStatus(savedHandle.dirPath, 'image-copied')") &&
+      imageFlow.includes("updateToastRenderStatus(savedHandle.dirPath, 'image-copy-failed')") &&
+      annotatedRender.includes('onFailed?: (error: Error) => Promise<void> | void') &&
+      toastRenderer.includes("state === 'image-copy-failed'"),
+  )
+  check(
+    'main clipboard image verification compares decoded dimensions and pixels',
+    clipboardMain.includes('writeClipboardImageVerified') &&
+      clipboardMain.includes('readBack.getSize()') &&
+      clipboardMain.includes('readBack.toBitmap()'),
   )
 
   console.log(failed === 0 ? '\nclipboard-contract-check ok' : `\nclipboard-contract-check FAILED (${failed})`)

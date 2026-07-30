@@ -19,6 +19,35 @@ const functionBody = (name, nextName) => {
 
 const openDuration = functionBody('openDurationEditor', 'closeDurationEditor')
 const openNumber = functionBody('openNumberPicker', 'closeNumberPicker')
+const indexFreshness = functionBody(
+  'objectIndexMatchesPresentedFrame',
+  'requestContextFrameNow',
+)
+const immediateContextRequest = functionBody(
+  'requestContextFrameNow',
+  'requestContextFrames',
+)
+const boundedObservedRequest = functionBody(
+  'requestBoundedObservedControlPick',
+  'scheduleContextFrame',
+)
+const beginPending = functionBody('beginPendingBox', 'selectBox')
+const answerProbe = functionBody('answerProbe', 'offerHover')
+const pointerDownStart = renderer.indexOf("overlay.addEventListener('pointerdown'")
+const pointerDownEnd = renderer.indexOf("overlay.addEventListener('pointermove'", pointerDownStart)
+const pointerDown =
+  pointerDownStart >= 0 && pointerDownEnd > pointerDownStart
+    ? renderer.slice(pointerDownStart, pointerDownEnd)
+    : ''
+const staleClickStart = pointerDown.indexOf(
+  'if (!objectIndexMatchesPresentedFrame(hit.d.index))',
+)
+const staleClickEnd =
+  staleClickStart < 0 ? -1 : pointerDown.indexOf('\n  }', staleClickStart)
+const staleClickBranch =
+  staleClickStart >= 0 && staleClickEnd > staleClickStart
+    ? pointerDown.slice(staleClickStart, staleClickEnd)
+    : ''
 
 const checks = [
   [
@@ -79,6 +108,79 @@ const checks = [
       !historyHtml.includes('data-filter="notpackaged"') &&
       !historyRenderer.includes("case 'blur':") &&
       !historyRenderer.includes("case 'notpackaged':"),
+  ],
+  [
+    'object index freshness is keyed to each display actual presented time',
+    indexFreshness.includes('displayedContextFrameRequests()') &&
+      indexFreshness.includes('frameTimesByDisplay.get(displayIndex) === wanted'),
+  ],
+  [
+    'hover cannot advertise an object index from a previous displayed frame',
+    answerProbe.indexOf('objectIndexMatchesPresentedFrame(d.index)') >= 0 &&
+      answerProbe.indexOf('objectIndexMatchesPresentedFrame(d.index)') <
+        answerProbe.indexOf('objectIndexOf(d.index)'),
+  ],
+  [
+    'a click before the 120 ms settle deadline cannot commit the cached object',
+    staleClickStart >= 0 &&
+      staleClickBranch.includes('requestContextFrameNow(hit.d.index)') &&
+      staleClickBranch.includes('return') &&
+      staleClickStart < pointerDown.indexOf('const picked = hoverStack'),
+  ],
+  [
+    'the click-triggered context query bypasses and cancels the settle timer',
+    immediateContextRequest.includes('window.clearTimeout(frameSettleTimer)') &&
+      immediateContextRequest.includes('requestContextFrames(requests)') &&
+      !immediateContextRequest.includes('window.setTimeout'),
+  ],
+  [
+    'adjacent observed picking is bounded by two configured video-frame intervals',
+    boundedObservedRequest.includes('const frameIntervalMs = 1000 / fps') &&
+      boundedObservedRequest.includes('requestedTimeMs - frameIntervalMs * 2') &&
+      boundedObservedRequest.includes('requestedTimeMs + frameIntervalMs * 2') &&
+      !boundedObservedRequest.includes('30'),
+  ],
+  [
+    'adjacent picking inspects frames without replacing hover or the current index',
+    boundedObservedRequest.includes('objectIndexForFrame(on.index, frame)') &&
+      boundedObservedRequest.includes('boundedObservedPickFallback({') &&
+      boundedObservedRequest.includes(
+        'exactControls: exactIndex.controlObjects(',
+      ) &&
+      !boundedObservedRequest.includes('exactWindow.surfaceId') &&
+      !boundedObservedRequest.includes('buildObjectIndex(') &&
+      !boundedObservedRequest.includes('setHoverObject('),
+  ],
+  [
+    'exact semantic hits, Shift/window picks, repeat clicks and manual boxes bypass fallback',
+    pointerDown.includes("candidate.level === 'control'") &&
+      pointerDown.includes("(picked === null || picked.level === 'window')") &&
+      pointerDown.includes('!windowLevelKey') &&
+      pointerDown.includes('!semanticPointHit') &&
+      pointerDown.includes('!repeat') &&
+      pointerDown.includes('safeDelayedBox'),
+  ],
+  [
+    'a moved-away target may recover when the exact point is background or empty',
+    pointerDown.includes("(picked === null || picked.level === 'window')") &&
+      pointerDown.includes('exactIndex.controlObjects(') &&
+      !pointerDown.includes('picked.surfaceId'),
+  ],
+  [
+    'a stale adjacent-pick answer cannot move selection after click, seek, or session change',
+    pointerDown.includes('observedPickSeq !== observedPickRequestSeq') &&
+      pointerDown.includes('contextSessionId !== sessionId') &&
+      pointerDown.includes('objectIndexOf(hit.d.index) !== exactIndex') &&
+      pointerDown.includes('!objectIndexMatchesPresentedFrame(hit.d.index)') &&
+      pointerDown.includes('state.selectedId !== selectedId'),
+  ],
+  [
+    'the selected observed sample time uses existing picked_at_ms provenance',
+    renderer.includes('fallback?.observedAtMs') &&
+      beginPending.includes(
+        'const pickedAt = observedPickedAtMs ?? presentedOn(on.index)',
+      ) &&
+      beginPending.includes('pickedAtMs.set(draft.annotation_id, pickedAt)'),
   ],
 ]
 

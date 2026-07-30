@@ -19,6 +19,12 @@ import {
   type AuthoredMotionSpace,
 } from '../src/shared/track'
 import {
+  buildBoard,
+  displayAtBoardPoint,
+  toBoardPoint,
+  toNativePoint,
+} from '../src/renderer/editor/board'
+import {
   hasMotion,
   keyframeIndexAt,
   keyframesOf,
@@ -182,6 +188,36 @@ console.log('\nAN OBSERVED BOX IS UNAFFECTED — NEAREST, NEVER INTERPOLATED (#8
   check('no keyframes were invented', keyframesOf(a).length, 0)
 }
 
+console.log('\nAN EXACT DISTANCE TIE IS TEMPORAL BEFORE IT IS DISPLAY-LOCAL')
+{
+  const a: Annotation = {
+    ...pickedBox(),
+    display: 1,
+    tracking: {
+      enabled: true,
+      samples: [
+        { t_ms: 10_100, display: 2, x: 100, y: 40, width: 80, height: 30 },
+        { t_ms: 10_300, x: 700, y: 40, width: 80, height: 30 },
+      ],
+    },
+  }
+  check(
+    'the earlier observation wins a midpoint tie even when the future sample is on the own display',
+    annotationAt(a, 10_200),
+    {
+      ...a,
+      display: 2,
+      bounds: { x: 100, y: 40, width: 80, height: 30 },
+    },
+  )
+  const reopened = JSON.parse(JSON.stringify(a)) as Annotation
+  check(
+    'save, reopen and render preserve the temporal tie before the display tie-break',
+    renderedAnnotationAt(reopened, 10_200, 1, 1),
+    renderedAnnotationAt(a, 10_100, 1, 1),
+  )
+}
+
 console.log('\nWHAT A READER THAT IGNORES KEYFRAMES SEES')
 {
   const a = manualBox()
@@ -220,6 +256,142 @@ const MIXED_DPI_BOARD: AuthoredMotionSpace = {
       bounds: { x: 1200, y: 0, width: 2560, height: 1440 },
     },
   ],
+}
+
+// The minimum N-monitor fixture the product contract calls for: a portrait
+// monitor at a negative origin, a 1.5x centre display, and a 1.25x display
+// above/right. The focused display is deliberately index 3 — index 1 is not a
+// synonym for focus anywhere in the board, annotation, or replay contracts.
+const THREE_MONITOR_BOARD: AuthoredMotionSpace = {
+  focusedIndex: 3,
+  displays: [
+    {
+      index: 1,
+      width: 1200,
+      height: 1920,
+      bounds: { x: -1200, y: -480, width: 1200, height: 1920 },
+    },
+    {
+      index: 2,
+      width: 3840,
+      height: 2160,
+      bounds: { x: 0, y: 0, width: 2560, height: 1440 },
+    },
+    {
+      index: 3,
+      width: 2400,
+      height: 1350,
+      bounds: { x: 2560, y: -360, width: 1920, height: 1080 },
+    },
+  ],
+}
+
+console.log('\nTHREE MONITORS: NEGATIVE ORIGIN, PORTRAIT, MIXED DPI, FOCUS INDEX 3')
+{
+  const board = buildBoard(
+    THREE_MONITOR_BOARD.displays.map((display) => ({
+      ...display,
+      focused: display.index === THREE_MONITOR_BOARD.focusedIndex,
+      hasReplay: display.index !== 2,
+    })),
+  )
+  check('the board keeps all three displays', board.displays.map((d) => d.index), [1, 2, 3])
+  check('focus is the declared third display, never array index one', board.focusedIndex, 3)
+  check(
+    'negative virtual-desktop origins are normalized without changing arrangement',
+    board.displays.map((d) => ({ index: d.index, x: d.bx, y: d.by, w: d.bw, h: d.bh })),
+    [
+      { index: 1, x: 0, y: 0, w: 1200, h: 1920 },
+      { index: 2, x: 1200, y: 480, w: 2560, h: 1440 },
+      { index: 3, x: 3760, y: 120, w: 1920, h: 1080 },
+    ],
+  )
+  const third = board.displays.find((d) => d.index === 3)!
+  const native = { x: 300, y: 450 }
+  const boardPoint = toBoardPoint(third, native.x, native.y)
+  check('mixed-DPI native -> board -> native is stable on display 3', toNativePoint(
+    third,
+    boardPoint.x,
+    boardPoint.y,
+  ), native)
+  check(
+    'a point on display 3 is owned by display 3',
+    displayAtBoardPoint(board, boardPoint.x, boardPoint.y)?.index,
+    3,
+  )
+}
+
+console.log('\nONE MANUAL BOX CROSSES DISPLAY 1 -> 2 -> 3')
+{
+  const a: Annotation = {
+    ...manualBox(),
+    display: 1,
+    bounds: { x: 100, y: 800, width: 200, height: 100 },
+  }
+  check('the source placement is display 1', setKeyframe(a, 10_000, a.bounds, 1), -1)
+  check(
+    'the destination authors one cross-display keyframe',
+    setKeyframe(a, 10_600, { x: 300, y: 450, width: 250, height: 125 }, 3),
+    1,
+  )
+  check('the path begins on display 1', keyframedPlacementAt(a, 10_000, THREE_MONITOR_BOARD), {
+    display: 1,
+    bounds: { x: 100, y: 800, width: 200, height: 100 },
+  })
+  check('the path crosses the centre display in desktop space', keyframedPlacementAt(
+    a,
+    10_300,
+    THREE_MONITOR_BOARD,
+  ), {
+    display: 2,
+    bounds: { x: 1275, y: 240, width: 300, height: 150 },
+  })
+  check('the path ends on focused display 3', keyframedPlacementAt(
+    a,
+    10_600,
+    THREE_MONITOR_BOARD,
+  ), {
+    display: 3,
+    bounds: { x: 300, y: 450, width: 250, height: 125 },
+  })
+  const reopened = JSON.parse(JSON.stringify(a)) as Annotation
+  check(
+    'save, close, reopen and render preserve the same three-display midpoint',
+    renderedAnnotationAt(reopened, 10_300, 1, 1, THREE_MONITOR_BOARD),
+    renderedAnnotationAt(a, 10_300, 1, 1, THREE_MONITOR_BOARD),
+  )
+}
+
+console.log('\nONE OBSERVED OBJECT CROSSES DISPLAY 1 -> 2 -> 3 WITHOUT INTERPOLATION')
+{
+  const a: Annotation = {
+    ...manualBox(),
+    display: 1,
+    tracking: {
+      enabled: true,
+      samples: [
+        { t_ms: 10_000, x: 100, y: 800, width: 200, height: 100 },
+        { t_ms: 10_300, display: 2, x: 1275, y: 240, width: 300, height: 150 },
+        { t_ms: 10_600, display: 3, x: 300, y: 450, width: 250, height: 125 },
+      ],
+    },
+  }
+  check('before the midpoint the exact display-2 observation wins', annotationAt(a, 10_440), {
+    ...a,
+    display: 2,
+    bounds: { x: 1275, y: 240, width: 300, height: 150 },
+  })
+  check('after the midpoint the exact display-3 observation wins', annotationAt(a, 10_460), {
+    ...a,
+    display: 3,
+    bounds: { x: 300, y: 450, width: 250, height: 125 },
+  })
+  const reopened = JSON.parse(JSON.stringify(a)) as Annotation
+  check(
+    'the observed display and rectangle survive save and reopen unchanged',
+    annotationAt(reopened, 10_460),
+    annotationAt(a, 10_460),
+  )
 }
 
 console.log('\nONE MANUAL BOX MOVES FROM THE 1X DISPLAY TO THE 1.5X DISPLAY')

@@ -16,7 +16,7 @@ que una IA no tenga que inferirlos solo a partir de píxeles.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Descargar](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Versión pública actual para Windows: **CapturePack 0.3.2**
+Versión pública actual para Windows: **CapturePack 0.3.3**
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/motion/es/capturepack-time-machine-poster.webp" alt="CapturePack parte de AHORA a la derecha, mueve el cabezal a la izquierda hasta 5 segundos atrás, restaura y selecciona el control hijo que existía en ese fotograma histórico y exporta evidencia estructurada para IA." width="760">
@@ -78,7 +78,7 @@ Consulta [docs/MCP.md](docs/MCP.md).
 ## Ajustes y diagnóstico
 
 - Ajustes → Captura permite cambiar por separado los atajos de vídeo
-  (`Ctrl+Alt+C`) e imagen (`Ctrl+Alt+S`), la duración y la tasa de 1–30 fps.
+  (`Ctrl+Alt+C`) e imagen (`Ctrl+Alt+S`), la duración y la tasa de 5–30 fps.
 - Información → **Abrir carpeta de registros** abre los diagnósticos locales.
   Los registros nunca se suben automáticamente.
 
@@ -94,7 +94,7 @@ el pack completo si contiene información privada.
 
 ## Estado, seguridad y licencia
 
-0.3.2 es la versión pública actual. La compilación aún no está firmada, por lo que SmartScreen
+0.3.3 es la versión pública actual. La compilación aún no está firmada, por lo que SmartScreen
 puede avisar; cada versión incluye `SHA256SUMS.txt`.
 
 Local primero · sin nube · sin cuenta · sin telemetría · [Licencia MIT](LICENSE)

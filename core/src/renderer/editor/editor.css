@@ -339,23 +339,22 @@ body[data-window-mode="windowed"] #zoomControl {
 
 #stage {
   flex: 1;
+  min-height: 0;
   position: relative;
+  /* Editor-only annotation chrome is allowed outside the media rectangle. */
+  overflow: visible;
+}
+
+#mediaViewport {
+  position: absolute;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  /* CLIP, NOT HIDDEN — this is the fix for issue #50. `overflow: hidden` makes
-     #stage a SCROLL CONTAINER, and a zoomed board overflows it, so anything
-     that scrolls an element into view scrolls the stage: overlay.focus() after
-     the editor opens framed on the focused display does it on the very first
-     frame, and so does the caret in a box description. Nothing ever scrolls it
-     back (there is no scrollbar), and from then on the two spaces that meet
-     here disagree by exactly scrollTop/scrollLeft — getBoundingClientRect()
-     measures the board in VIEWPORT space, while the absolutely positioned
-     chrome (#boxHeader, #durationEditor) is laid out in the stage's SCROLLED
-     CONTENT space. That is the "header drifts far above its box" report.
-     `clip` clips identically but is not a scroll container at all, so the
-     offset can never become non-zero and the two spaces are the same space.
-     Panning is a transform on #frame and never wanted a scrollport. */
+  /* CLIP, NOT HIDDEN: hidden would make this a scroll container and let
+     focus/zoom create an invisible offset. Panning is exclusively #frame's
+     transform. Editor chrome is a #stage sibling outside this clipped layer,
+     so media clipping cannot translate or detach it. */
   overflow: clip;
 }
 
@@ -415,19 +414,9 @@ body[data-window-mode="windowed"] #zoomControl {
   background: rgba(20, 20, 26, 0.92);
   /* `top` is the header's OWN top edge — no translate (issue #50). It used to
      be anchored by its bottom with translateY(-100%), which put the CSS `top`
-     and the JS clamps in different boxes: the clamp reasoned about the laid-out
-     rect, the browser drew a rect one header-height higher. syncSelectionUi()
-     now subtracts the MEASURED height itself, which is also what lets the
-     header sit inside the box when there is no room above it. */
+     and JS anchor in different boxes. The shared stage-space helper subtracts
+     the measured height once and never moves the annotation to make room. */
   white-space: nowrap;
-}
-
-/* INSIDE the box (no room above): it is now sitting ON the annotated pixels,
-   so it says so — a touch more opaque, and a shadow that lifts it off the
-   image instead of blending into whatever is behind it. */
-#boxHeader.inside {
-  background: rgba(20, 20, 26, 0.97);
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
 }
 
 #boxHeader button {

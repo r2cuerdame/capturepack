@@ -35,8 +35,7 @@ const spec = read('SPEC.md')
 const packageJson = JSON.parse(read('core/package.json'))
 const packageLock = JSON.parse(read('core/package-lock.json'))
 const packageVersion = String(packageJson.version ?? '')
-const packageIsCurrentPublicOrNextRc =
-  packageVersion === '0.3.2' || /^0\.3\.3-rc\.\d+$/.test(packageVersion)
+const packageIsCurrentPublic = packageVersion === '0.3.3'
 const supported = ['en', 'ko', 'ja', 'zh', 'es', 'fr', 'de', 'pt', 'ru']
 const motionStems = ['capturepack-time-machine', 'capturepack-still-context']
 const motionFiles = supported.flatMap((lang) =>
@@ -126,8 +125,8 @@ for (const lang of supported) {
     missingText.length === 0
       && missingAlt.length === 0
       && document.documentElement.lang === lang
-      && releaseNote.includes('0.3.2')
-      && !releaseNote.includes('0.3.1'),
+      && releaseNote.includes('0.3.3')
+      && !releaseNote.includes('0.3.2'),
     [...missingText, ...missingAlt].join(', '),
   )
 }
@@ -197,10 +196,10 @@ check(
     && i18n.includes("prefers-reduced-motion: reduce"),
 )
 check(
-  'landing names 0.3.2 as the public release',
-  html.includes('"softwareVersion": "0.3.2"')
-    && html.includes('>v0.3.2</span>')
-    && html.includes('Public download: 0.3.2')
+  'landing names 0.3.3 as the public release',
+  html.includes('"softwareVersion": "0.3.3"')
+    && html.includes('>v0.3.3</span>')
+    && html.includes('Public download: 0.3.3')
     && !html.includes('source/release candidate'),
 )
 check(
@@ -208,15 +207,15 @@ check(
   !/\bsha(?:-?256)?\b|checksum|체크섬|校验和|Prüfsumme/i.test(`${html}\n${i18n}`),
 )
 check(
-  'package and lock agree on public 0.3.2 or the next 0.3.3 release candidate',
-  packageIsCurrentPublicOrNextRc
+  'package and lock agree on public 0.3.3',
+  packageIsCurrentPublic
     && packageLock.version === packageVersion
     && packageLock.packages?.['']?.version === packageVersion,
 )
 check(
-  'README names 0.3.2 as the public release',
-  readme.includes('Current public Windows release: **CapturePack 0.3.2**')
-    && readme.includes('**0.3.2 is the current public Windows download.**')
+  'README names 0.3.3 as the public release',
+  readme.includes('Current public Windows release: **CapturePack 0.3.3**')
+    && readme.includes('**0.3.3 is the current public Windows download.**')
     && !readme.includes('candidate baseline')
     && !readme.includes('not a public release until it appears on GitHub Releases'),
 )
@@ -328,7 +327,7 @@ for (const { lang, text: localized } of localizedReadmes) {
   check(
     `${lang}: README public-release and product/privacy contract`,
     localized.includes(`motion/${lang}/capturepack-time-machine-poster.webp`)
-      && localized.includes('0.3.2')
+      && localized.includes('0.3.3')
       && !localized.includes('0.3.0')
       && localized.includes('Ctrl+Alt+S')
       && localized.includes('capture_kind: image')
@@ -340,7 +339,7 @@ for (const { lang, text: localized } of localizedReadmes) {
 check(
   'settings and local diagnostics are visible',
   readme.includes('Open logs folder')
-    && readme.includes('1–30 fps')
+    && readme.includes('5–30 fps')
     && readme.includes('independently configures the video')
     && readme.includes('(`Ctrl+Alt+C`)')
     && readme.includes('(`Ctrl+Alt+S`)')
@@ -379,17 +378,21 @@ check(
     && !html.includes('blob/main/ROADMAP.md'),
 )
 
-console.log('\n0.3.2 release and documentation contract')
+console.log('\n0.3.3 release and documentation contract')
 check(
   'roadmap preserves history and adds the current baseline',
-  roadmap.includes('## Current baseline — 0.3.2')
+  roadmap.includes('## Current baseline — 0.3.3')
     && roadmap.includes('## V1 — MVP + installable, self-updating release')
     && roadmap.includes('## V2 — Temporal plugin system')
     && roadmap.includes('## Success criteria (from GOAL.md)'),
 )
 check(
-  'current patch and dependency audit are documented',
-  changelog.includes('## 0.3.2 — 2026-07-30')
+  'current release, known issue and dependency audit are documented',
+  changelog.includes('## 0.3.3 — 2026-07-30')
+    && changelog.includes('viewer.html')
+    && changelog.includes('Known issues')
+    && changelog.includes('issues/89')
+    && changelog.includes('## 0.3.2 — 2026-07-30')
     && changelog.includes('lower 528 pixels')
     && changelog.includes('editor:init')
     && changelog.includes('manual rectangles are red')

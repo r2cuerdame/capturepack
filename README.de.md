@@ -16,7 +16,7 @@ damit eine KI sie nicht allein aus Pixeln erraten muss.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Herunterladen](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Aktuelle öffentliche Windows-Version: **CapturePack 0.3.2**
+Aktuelle öffentliche Windows-Version: **CapturePack 0.3.3**
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/motion/de/capturepack-time-machine-poster.webp" alt="CapturePack startet rechts bei JETZT, bewegt den Abspielkopf nach links zu vor 5 Sekunden, stellt das dort vorhandene untergeordnete UI-Steuerelement wieder her, wählt es aus und exportiert strukturierte KI-Belege." width="760">
@@ -79,7 +79,7 @@ nur bereits gespeicherte Packs und kann keine Aufnahme starten. Nutze `capturepa
 ## Einstellungen und Diagnose
 
 - Unter Einstellungen → Aufnahme lassen sich Video- (`Ctrl+Alt+C`) und
-  Bildkürzel (`Ctrl+Alt+S`), Replay-Länge und 1–30 fps getrennt einstellen.
+  Bildkürzel (`Ctrl+Alt+S`), Replay-Länge und 5–30 fps getrennt einstellen.
 - Information → **Protokollordner öffnen** öffnet die lokalen Diagnosen.
   Protokolle werden nie automatisch hochgeladen.
 
@@ -95,7 +95,7 @@ das vollständige Pack nicht, wenn es private Daten enthält.
 
 ## Status, Sicherheit und Lizenz
 
-0.3.2 ist die aktuelle öffentliche Version. Der Build ist noch nicht signiert, daher kann
+0.3.3 ist die aktuelle öffentliche Version. Der Build ist noch nicht signiert, daher kann
 SmartScreen warnen; jede Version enthält `SHA256SUMS.txt`.
 
 Local-first · keine Cloud · kein Konto · keine Telemetrie · [MIT-Lizenz](LICENSE)

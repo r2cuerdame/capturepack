@@ -73,6 +73,13 @@ export interface KeyframeStillJob {
   display?: number
 }
 
+export interface KeyframeStillCallbacks {
+  /** Runs only after the final PNG and manifest declaration are durable. */
+  onRendered?: (png: Buffer) => Promise<void> | void
+  /** Reports a missing final image without relabelling the already-saved pack. */
+  onFailed?: (error: Error) => Promise<void> | void
+}
+
 // The render plays in real time; allow twice the replay plus startup slack
 // before declaring the hidden window stuck.
 const RENDER_TIMEOUT_SLACK_MS = 60_000
@@ -290,15 +297,37 @@ async function refreshDocs(handle: PackHandle, docLanguage: Language | undefined
  * and a pack without a replay has none. Fire-and-forget, failures logged only —
  * the pack is already complete and valid without frames/.
  */
-export function startKeyframeStill(handle: PackHandle, job: KeyframeStillJob): void {
-  void renderKeyframeStill(handle, job).catch((err) => {
-    console.error('capturepack: annotated keyframe render failed:', errorMessage(err))
-  })
+export function startKeyframeStill(
+  handle: PackHandle,
+  job: KeyframeStillJob,
+  callbacks: KeyframeStillCallbacks = {},
+): void {
+  void renderKeyframeStill(handle, job)
+    .then(async (renderedPng) => {
+      try {
+        await callbacks.onRendered?.(renderedPng)
+      } catch (err) {
+        console.error('capturepack: annotated keyframe post-save action failed:', errorMessage(err))
+      }
+    })
+    .catch(async (err) => {
+      console.error('capturepack: annotated keyframe render failed:', errorMessage(err))
+      try {
+        await callbacks.onFailed?.(
+          err instanceof Error ? err : new Error(errorMessage(err)),
+        )
+      } catch (callbackError) {
+        console.error(
+          'capturepack: annotated keyframe failure action failed:',
+          errorMessage(callbackError),
+        )
+      }
+    })
 }
 
-async function renderKeyframeStill(handle: PackHandle, job: KeyframeStillJob): Promise<void> {
+async function renderKeyframeStill(handle: PackHandle, job: KeyframeStillJob): Promise<Buffer> {
   const framesDir = job.display === undefined ? 'frames' : displayFramesDir(job.display)
-  await enqueueRender(async (signal) => {
+  return await enqueueRender(async (signal) => {
     const payload: RenderStartPayload = {
       // No video: the still job draws snapshot.png instead.
       replayWebm: null,
@@ -329,6 +358,9 @@ async function renderKeyframeStill(handle: PackHandle, job: KeyframeStillJob): P
       ...(job.display === undefined ? {} : { display: job.display }),
     })
     await refreshDocs(handle, job.docLanguage)
+    const rendered = frames[0]
+    if (rendered === undefined) throw new Error('still render produced no final image')
+    return Buffer.from(rendered.png)
   })
 }
 

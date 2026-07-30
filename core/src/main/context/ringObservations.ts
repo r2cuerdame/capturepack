@@ -53,7 +53,12 @@ const EMPTY_CONTROLS: ReadonlyMap<string, ControlSample> = new Map()
 
 function controlSample(
   value: ControlSample | undefined,
-): { controls: readonly TrackedControl[]; tree: EditorUiaWindow['tree'] } | undefined {
+): {
+  controls: readonly TrackedControl[]
+  tree: EditorUiaWindow['tree']
+  geometryRevision?: string
+  controlGeometryInvalidated?: true
+} | undefined {
   if (value === undefined) return undefined
   // Keep the old array-only test/external seam source-compatible. Production
   // supplies ControlsAt so completeness survives; an array can only state the
@@ -64,7 +69,82 @@ function controlSample(
       : { controls: value as readonly TrackedControl[], tree: 'collected' }
   }
   const observed = value as ControlsAt
-  return { controls: observed.controls, tree: observed.tree }
+  return {
+    controls: observed.controls,
+    tree: observed.tree,
+    geometryRevision: observed.geometryRevision,
+  }
+}
+
+interface ControlOwnerAnchor {
+  geometryRevision: string
+  x: number
+  y: number
+  width: number
+  height: number
+  invalidated: boolean
+}
+
+type ControlOwnerAnchors = Map<string, ControlOwnerAnchor>
+
+/**
+ * Places one cached UIA reading under an owner surface observed at this frame.
+ *
+ * UIA rectangles are absolute virtual-desktop pixels. Re-publishing the same
+ * cached array after its owner moved therefore publishes old geometry unless
+ * we carry it by the owner's measured delta. This is not interpolation: both
+ * endpoints are observations, and only the rigid x/y translation they prove is
+ * applied. A resize could reflow children, so without a new UIA geometry
+ * revision it is deliberately reported as skipped instead of asserted exact.
+ */
+function controlsOnObservedOwner(
+  surface: SurfaceInfo,
+  sample: ReturnType<typeof controlSample>,
+  anchors: ControlOwnerAnchors,
+): ReturnType<typeof controlSample> {
+  if (sample === undefined || sample.geometryRevision === undefined) return sample
+  const owner = surface.clientBounds ?? surface.bounds
+  const key = `${surface.surfaceId}\u0000${surface.hwnd ?? ''}`
+  const anchor = anchors.get(key)
+  if (anchor === undefined || anchor.geometryRevision !== sample.geometryRevision) {
+    anchors.set(key, {
+      geometryRevision: sample.geometryRevision,
+      x: owner.x,
+      y: owner.y,
+      width: owner.width,
+      height: owner.height,
+      invalidated: false,
+    })
+    return sample
+  }
+  if (anchor.invalidated) {
+    return {
+      controls: [],
+      tree: 'skipped',
+      geometryRevision: sample.geometryRevision,
+      controlGeometryInvalidated: true,
+    }
+  }
+  if (anchor.width !== owner.width || anchor.height !== owner.height) {
+    anchor.invalidated = true
+    return {
+      controls: [],
+      tree: 'skipped',
+      geometryRevision: sample.geometryRevision,
+      controlGeometryInvalidated: true,
+    }
+  }
+  const dx = owner.x - anchor.x
+  const dy = owner.y - anchor.y
+  if (dx === 0 && dy === 0) return sample
+  return {
+    ...sample,
+    controls: sample.controls.map((control) => ({
+      ...control,
+      x: control.x + dx,
+      y: control.y + dy,
+    })),
+  }
 }
 
 /** A display's mapping space: which host monitor it is, and how to get onto its image. */
@@ -225,13 +305,15 @@ function observationOf(
   surfaces: readonly SurfaceInfo[],
   spaces: readonly DisplaySpace[],
   controlsByHwnd: ReadonlyMap<string, ControlSample>,
+  controlOwnerAnchors: ControlOwnerAnchors,
 ): ContextObservation {
   const windows: EditorUiaWindow[] = []
   const elements: EditorUiaElement[] = []
   for (const surface of surfaces) {
     if (surface.minimized || !surface.visible) continue
-    const trackedAt =
+    const rawTrackedAt =
       surface.hwnd === undefined ? undefined : controlSample(controlsByHwnd.get(surface.hwnd))
+    const trackedAt = controlsOnObservedOwner(surface, rawTrackedAt, controlOwnerAnchors)
     const tracked = trackedAt?.controls ?? []
     // ONE ENTRY PER SCREEN THE SURFACE IS ON (#103).
     //
@@ -274,6 +356,9 @@ function observationOf(
       z: surface.zOrder,
       hasControls: tracked.length > 0,
       tree: trackedAt?.tree ?? 'skipped',
+      ...(trackedAt?.controlGeometryInvalidated === true
+        ? { control_geometry_invalidated: true }
+        : {}),
     })
     // LANE A'S CONTROLS, PLACED IN THE SAME SPACE AS THEIR WINDOW (#111).
     //
@@ -333,6 +418,7 @@ export function frozenRingObservations(
   const spaces = buildSpaces(monitors, targets)
   if (spaces.length === 0) return []
   const observations: ContextObservation[] = []
+  const controlOwnerAnchors: ControlOwnerAnchors = new Map()
   const end = Math.max(0, Math.round(replayDurationMs))
   // THE RING'S OWN TIMES WHEN THEY ARE KNOWN (#87), a grid only as a fallback.
   //
@@ -369,7 +455,13 @@ export function frozenRingObservations(
     const label = Math.round(t)
     if (label === previousLabel) continue
     previousLabel = label
-    observations.push(observationOf(label, stack.surfaces, spaces, controlsAt?.(t) ?? EMPTY_CONTROLS))
+    observations.push(observationOf(
+      label,
+      stack.surfaces,
+      spaces,
+      controlsAt?.(t) ?? EMPTY_CONTROLS,
+      controlOwnerAnchors,
+    ))
   }
   // The capture instant itself, which the walk only lands on when a sample
   // happened to fall exactly there. It is the one moment the user is guaranteed
@@ -377,7 +469,13 @@ export function frozenRingObservations(
   if (times[times.length - 1] !== end) {
     const last = surfacesAt(end)
     if (last !== null && last.surfaces.length > 0) {
-      observations.push(observationOf(end, last.surfaces, spaces, controlsAt?.(end) ?? EMPTY_CONTROLS))
+      observations.push(observationOf(
+        end,
+        last.surfaces,
+        spaces,
+        controlsAt?.(end) ?? EMPTY_CONTROLS,
+        controlOwnerAnchors,
+      ))
     }
   }
   return observations

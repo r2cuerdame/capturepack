@@ -33,7 +33,12 @@ const bundle = await build({
     },
   ],
 })
-const { ContextSession, ObjectIndex, projectControlTrack } = await import(
+const {
+  ContextSession,
+  ObjectIndex,
+  boundedObservedPickFallback,
+  projectControlTrack,
+} = await import(
   `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`
 )
 
@@ -173,6 +178,120 @@ const late = await session.frameAt(28_000)
 const xOf = (f) => f.displays.find((d) => d.display === 2)?.candidates[0]?.bounds.x
 check('the answer MOVES with the object across the replay', xOf(early) !== xOf(late),
   `t=2000 -> x=${xOf(early)}, t=28000 -> x=${xOf(late)}`)
+
+// A static-start capture may safely report its video↔context latency as
+// ambiguous: the picture at video t=67 can still be the pixels observed at
+// context t=0. The exact ContextFrame proves the SAME control is alive at t=67
+// but puts it at its next observed position; only the bounded prior observation
+// contains the clicked pixel. Exercise the shipping session + index + policy,
+// not a synthetic rectangle-only helper.
+console.log('\nAn ambiguous static-start frame uses one adjacent observed control sample')
+{
+  const targetWindowAt = (x) => ({
+    surface_id: 'sfc-static-start',
+    hwnd: '8801',
+    title: 'Static start fixture',
+    process: 'fixture.exe',
+    class_name: 'FixtureWindow',
+    bounds: { x, y: 80, width: 260, height: 240 },
+    display: 1,
+    focused: true,
+    z: 0,
+    hasControls: true,
+    tree: 'collected',
+  })
+  const backgroundWindow = {
+    surface_id: 'sfc-static-background',
+    hwnd: '8802',
+    title: 'Background fixture',
+    process: 'background.exe',
+    class_name: 'BackgroundWindow',
+    bounds: { x: 0, y: 0, width: 800, height: 600 },
+    display: 1,
+    focused: false,
+    z: 1,
+    hasControls: false,
+    tree: 'skipped',
+  }
+  const observationAt = (tMs, windowX, controlX) => ({
+    tMs,
+    windows: [targetWindowAt(windowX), backgroundWindow],
+    elements: [{
+      window: 0,
+      bounds: { x: controlX, y: 120, width: 100, height: 44 },
+      control_type: 'Button',
+      name: 'Moving action',
+      automation_id: 'moving-action',
+      class_name: 'Button',
+      display: 1,
+    }],
+  })
+  const staticSession = new ContextSession('ctx-static-start', {
+    displays: [{ index: 1, focused: true, width: 800, height: 600 }],
+    replayDurationMs: 134,
+    observation: null,
+    dropped: false,
+  })
+  staticSession.adoptAll([
+    observationAt(0, 80, 100),
+    observationAt(67, 480, 500),
+    observationAt(134, 500, 520),
+  ])
+  const exactFrame = await staticSession.frameAt(67)
+  const priorFrame = await staticSession.frameAt(0)
+  const indexOf = (frame) => {
+    const display = frame.displays.find((candidate) => candidate.display === 1)
+    return ObjectIndex.build(
+      display?.candidates ?? [],
+      display?.surfaces ?? [],
+      display?.coverage ?? [],
+      frame.claims,
+      800,
+      600,
+      1,
+    )
+  }
+  const exactIndex = indexOf(exactFrame)
+  const priorIndex = indexOf(priorFrame)
+  const point = { x: 150, y: 142 }
+  const exactStack = exactIndex.stackAt(point.x, point.y).offered
+  const exactWindow = exactStack.find((picked) => picked.level === 'window')
+  const exactControl = exactStack.find((picked) => picked.level === 'control')
+  const priorControls = priorIndex
+    .stackAt(point.x, point.y)
+    .offered
+    .filter((picked) => picked.level === 'control')
+  const fallback = exactWindow === undefined
+    ? null
+    : boundedObservedPickFallback({
+        requestedTimeMs: 67,
+        frameIntervalMs: 67,
+        exactPointPick: exactControl ?? null,
+        exactControls: exactIndex.controlObjects(),
+        observations: [{
+          coverage: priorFrame.accuracy.coverage,
+          pointPicks: priorControls,
+        }],
+      })
+  check(
+    'the exact displayed-time point is background while the target identity remains alive elsewhere',
+    exactWindow?.surfaceId === 'sfc-static-background' &&
+      exactControl === undefined &&
+      exactIndex.controlObjects().some(
+        (picked) => picked.candidate.name === 'Moving action',
+      ),
+    `point=${exactWindow?.surfaceId ?? 'empty'}, offered ${exactStack.map((picked) => picked.level).join(',')}`,
+  )
+  check(
+    'the same live identity is selected from the directly observed prior sample',
+    fallback?.picked.candidate.name === 'Moving action' &&
+      fallback.picked.x === 100 &&
+      fallback.observedAtMs === 0,
+    fallback === null
+      ? 'fallback refused'
+      : `${fallback.picked.candidate.name} x=${fallback.picked.x} @${fallback.observedAtMs}`,
+  )
+}
 
 // ---------------------------------------------------------------------------
 // A DOM PICK MAY ARRIVE BEFORE THE WINDOW RING (#112).
@@ -402,7 +521,84 @@ console.log('\nA focused shell desktop behind a visible app (_194912 shape)')
     `offered ${legacyPicked === null ? 'nothing' : `${legacyPicked.level} ${legacyPicked.candidate.name}`}`)
 }
 
-// The desktop exception must not weaken the ordinary foreground invariant.
+// FOCUS IS NOT A LICENSE TO REWRITE A PERSISTED WINDOW STACK.
+//
+// An always-on-top window can remain above the ordinary window which owns
+// keyboard focus. EnumWindows already persisted that fact as the lower raw z.
+// Promoting the focused window to -1 corrupts both live and reopened frames.
+console.log('\nA non-focused always-on-top window above the focused app')
+{
+  const zOrderSession = new ContextSession('ctx-topmost-vs-focus', {
+    displays: [{ index: 1, focused: true, width: 1200, height: 800 }],
+    replayDurationMs: REPLAY_MS,
+    observation: {
+      tMs: REPLAY_MS,
+      windows: [
+        {
+          surface_id: 'sfc-topmost',
+          hwnd: '7001',
+          title: 'Always on top palette',
+          process: 'palette.exe',
+          class_name: 'PaletteWindow',
+          bounds: { x: 100, y: 100, width: 500, height: 400 },
+          display: 1,
+          focused: false,
+          z: 0,
+          hasControls: false,
+          tree: 'skipped',
+        },
+        {
+          surface_id: 'sfc-focused-normal',
+          hwnd: '7002',
+          title: 'Focused normal app',
+          process: 'normal.exe',
+          class_name: 'NormalWindow',
+          bounds: { x: 100, y: 100, width: 800, height: 600 },
+          display: 1,
+          focused: true,
+          z: 1,
+          hasControls: true,
+          tree: 'collected',
+        },
+      ],
+      elements: [{
+        name: 'Covered focused action',
+        control_type: 'Button',
+        automation_id: 'covered-action',
+        class_name: 'Button',
+        bounds: { x: 180, y: 180, width: 180, height: 50 },
+        display: 1,
+        window: 1,
+      }],
+    },
+    dropped: false,
+  })
+  const frame = await zOrderSession.frameAt(REPLAY_MS)
+  const slice = frame.displays[0]
+  const surfaces = slice.surfaces
+  const focusedSurface = surfaces.find((surface) => surface.surfaceId === 'sfc-focused-normal')
+  const index = ObjectIndex.build(
+    slice.candidates,
+    surfaces,
+    slice.coverage,
+    frame.claims,
+    1200,
+    800,
+    1,
+  )
+  const picked = index.pick(220, 200)
+  check(
+    'raw persisted z keeps the non-focused topmost window above focused normal content',
+    surfaces[0]?.surfaceId === 'sfc-topmost'
+      && focusedSurface?.foreground === true
+      && focusedSurface.zOrder === 1
+      && picked?.level === 'window'
+      && picked.candidate.name === 'Always on top palette',
+    `stack=${surfaces.map((surface) => `${surface.surfaceId}:${surface.zOrder}`).join(',')}; ` +
+      `picked=${picked?.level ?? 'nothing'} ${picked?.candidate.name ?? ''}`,
+  )
+}
+
 {
   const foregroundSession = new ContextSession('ctx-real-foreground', {
     displays: [{ index: 2, focused: true, width: 3840, height: 2160 }],
@@ -428,8 +624,8 @@ console.log('\nA focused shell desktop behind a visible app (_194912 shape)')
   })
   const frame = await foregroundSession.frameAt(REPLAY_MS)
   const surface = frame.displays[0].surfaces[0]
-  check('a real focused window is still promoted above its enumerated z',
-    surface?.foreground === true && surface.zOrder === -1,
+  check('a lone focused window keeps foreground semantics without rewriting z',
+    surface?.foreground === true && surface.zOrder === 7,
     `foreground=${surface?.foreground}, z=${surface?.zOrder}`)
 }
 
@@ -985,9 +1181,9 @@ console.log('\nrc.36 control metadata beside owner-window bounds (_210107 exact 
   check('the raw Orca track is demonstrably the 1914x2082 OWNER window',
     rectEq(orca.track?.samples[0], { x: 9, y: 0, width: 1914, height: 2082 }),
     JSON.stringify(orca.track?.samples[0]))
-  check('the stored Orca control track stays 17,650 414x43',
-    orca.projected.length >= 2 && orca.projected.every((s) => rectEq(s, orca.expected)),
-    JSON.stringify(orca.projected[0]))
+  check('the observed Orca owner anchor preserves the exact picked control rectangle',
+    rectEq(orca.projected[0], orca.expected),
+    JSON.stringify(orca.projected))
 
   check('negative-X monitor target remains on display 1',
     chrome.picked?.level === 'control' && chrome.picked.candidate.display === 1,
@@ -995,10 +1191,9 @@ console.log('\nrc.36 control metadata beside owner-window bounds (_210107 exact 
   check('the raw Chrome track is demonstrably the 1200x1872 OWNER window',
     rectEq(chrome.track?.samples[0], { x: 0, y: 0, width: 1200, height: 1872 }),
     JSON.stringify(chrome.track?.samples[0]))
-  check('negative-X display stores LOCAL 132,402 921x139 control bounds',
-    chrome.projected.length >= 2 && chrome.projected.every((s) =>
-      s.display === 1 && rectEq(s, chrome.expected)),
-    JSON.stringify(chrome.projected[0]))
+  check('the observed Chrome owner anchor preserves the exact picked control rectangle',
+    rectEq(chrome.projected[0], chrome.expected),
+    JSON.stringify(chrome.projected))
 
   const translated = projectControlTrack(
     [{ tMs: 6000, display: 2, x: 109, y: 20, width: 1914, height: 2082 }],
@@ -1009,9 +1204,10 @@ console.log('\nrc.36 control metadata beside owner-window bounds (_210107 exact 
       displays: displayGeometry,
     },
   )
-  check('a control follows owner translation without becoming owner-sized',
-    rectEq(translated[0], { x: 117, y: 670, width: 414, height: 43 }),
-    JSON.stringify(translated[0]))
+  check('same-size observed owner translation rigidly carries the picked control',
+    translated.length === 1 &&
+      rectEq(translated[0], { x: 117, y: 670, width: 414, height: 43 }),
+    JSON.stringify(translated))
 
   const crossedScale = projectControlTrack(
     // The same 1276x1388 DIP window fully visible on the 1x display.
@@ -1023,10 +1219,65 @@ console.log('\nrc.36 control metadata beside owner-window bounds (_210107 exact 
       displays: displayGeometry,
     },
   )
-  check('cross-display control geometry converts 1.5x pixels through DIPs to 1x',
-    crossedScale[0]?.display === 1 &&
-      rectEq(crossedScale[0], { x: 405, y: 633, width: 276, height: 29 }),
-    JSON.stringify(crossedScale[0]))
+  check('same-size owner motion across display scales preserves the control in desktop space',
+    crossedScale.length === 1 &&
+      rectEq(crossedScale[0], { x: 405, y: 633, width: 276, height: 29 }) &&
+      crossedScale[0]?.display === 1,
+    JSON.stringify(crossedScale))
+
+  const invalidatedByResize = projectControlTrack(
+    [
+      { tMs: 9000, display: 2, x: 9, y: 0, width: 1914, height: 2082 },
+      { tMs: 9100, display: 2, x: 9, y: 0, width: 2014, height: 2082 },
+      { tMs: 9200, display: 2, x: 109, y: 20, width: 1914, height: 2082 },
+    ],
+    {
+      display: 2,
+      bounds: orca.expected,
+      surfaceBounds: { x: 9, y: 0, width: 1914, height: 2082 },
+      displays: displayGeometry,
+    },
+  )
+  check('a resize stops rigid control projection even if the owner later returns to its old size',
+    invalidatedByResize.map((sample) => sample.tMs).join(',') === '9000',
+    JSON.stringify(invalidatedByResize))
+
+  const observedOnly = projectControlTrack(
+    [{ tMs: 8000, display: 2, x: 200, y: 40, width: 1914, height: 2082 }],
+    {
+      display: 2,
+      bounds: orca.expected,
+      surfaceBounds: { x: 9, y: 0, width: 1914, height: 2082 },
+      displays: displayGeometry,
+      controlSamples: [
+        {
+          provenance: 'estimated',
+          tMs: 8000,
+          display: 2,
+          x: 208,
+          y: 690,
+          width: 414,
+          height: 43,
+        },
+        {
+          provenance: 'observed',
+          tMs: 8017,
+          display: 2,
+          x: 211,
+          y: 692,
+          width: 414,
+          height: 43,
+        },
+      ],
+    },
+  )
+  check('only a direct UIA observation can enter the persisted control track',
+    observedOnly.length === 1 &&
+      rectEq(observedOnly[0], { x: 211, y: 692, width: 414, height: 43 }) &&
+      observedOnly[0]?.tMs === 8017 &&
+      observedOnly[0]?.display === 2 &&
+      !Object.hasOwn(observedOnly[0], 'provenance'),
+    JSON.stringify(observedOnly))
 }
 
 console.log(`\nresult: ${failed === 0 ? 'OK' : 'BROKEN'} — ${passed} passed, ${failed} failed\n`)

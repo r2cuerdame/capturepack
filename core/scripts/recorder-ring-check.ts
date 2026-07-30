@@ -6,7 +6,11 @@ import {
   REPLAY_TIMEOUT_MS,
 } from '../src/shared/captureTimeouts'
 import { FragmentedMp4Ring } from '../src/renderer/capture/fragmentedMp4Ring'
-import { pickRecorderFormat } from '../src/renderer/capture/recorderFormats'
+import {
+  mp4FragmentIntervalMs,
+  pickRecorderFormat,
+} from '../src/renderer/capture/recorderFormats'
+import { ReplayResumeTokenLedger } from '../src/renderer/capture/replayResumeTokenLedger'
 import {
   WebmDualSlotRing,
   type WebmDualSlotTimers,
@@ -24,6 +28,81 @@ function check(name: string, condition: boolean, detail?: string): void {
     console.log(`  FAIL  ${name}${detail === undefined ? '' : ` — ${detail}`}`)
   }
 }
+
+function checkReplayResumeTokenLedger(): void {
+  console.log('\nReplay HOLD/RESUME reverse-order ownership')
+  let now = 1_000
+  const ledger = new ReplayResumeTokenLedger({
+    maxEntries: 4,
+    ttlMs: 1_000,
+    now: () => now,
+  })
+
+  ledger.note('resume-before-hold', 7)
+  check(
+    'RESUME-before-HOLD is consumed exactly once by the matching generation',
+    ledger.consume('resume-before-hold', 7) &&
+      !ledger.consume('resume-before-hold', 7),
+  )
+
+  ledger.note('stale-generation', 8)
+  check(
+    'a late token from another generation cannot resume the current recorder',
+    !ledger.consume('stale-generation', 9) && ledger.size === 0,
+  )
+
+  ledger.note('expired', 10)
+  now += 1_001
+  check(
+    'a pre-resume token expires instead of retaining renderer ownership',
+    !ledger.consume('expired', 10) && ledger.size === 0,
+  )
+
+  for (let index = 1; index <= 5; index += 1) {
+    ledger.note(`bounded-${index}`, 11)
+  }
+  check(
+    'the pre-resume ledger retains at most four newest request tokens',
+    ledger.size === 4 &&
+      !ledger.consume('bounded-1', 11) &&
+      ledger.consume('bounded-2', 11),
+    `${ledger.size}`,
+  )
+  ledger.clear()
+
+  check(
+    'normal FIFO has no pre-resume token and therefore leaves HOLD/watchdog ownership intact',
+    !ledger.consume('normal-fifo', 12) && ledger.size === 0,
+  )
+  ledger.note('lost-resume', 12)
+  ledger.clear()
+  check(
+    'teardown clears pre-resume tokens so a later generation keeps its watchdog',
+    !ledger.consume('lost-resume', 12) && ledger.size === 0,
+  )
+}
+
+checkReplayResumeTokenLedger()
+
+function checkMp4FragmentIntervalPolicy(): void {
+  check(
+    '5 fps keeps three frames per MP4 fragment instead of an every-frame IDR',
+    mp4FragmentIntervalMs(5) === 600,
+  )
+  check(
+    '15 and 30 fps retain three frames per MP4 fragment',
+    mp4FragmentIntervalMs(15) === 200 &&
+      mp4FragmentIntervalMs(30) === 100,
+  )
+  check(
+    'every supported FPS keeps a whole-fragment cutoff within three nominal frames',
+    Array.from({ length: 26 }, (_, index) => index + 5).every((fps) =>
+      mp4FragmentIntervalMs(fps) <= (3_000 / fps),
+    ),
+  )
+}
+
+checkMp4FragmentIntervalPolicy()
 
 function u32(value: number): Uint8Array {
   const bytes = new Uint8Array(4)
@@ -336,6 +415,56 @@ console.log('\nSingle-recorder fragmented MP4 ring')
   )
 }
 
+{
+  const ring = new FragmentedMp4Ring(30_000)
+  // A replay request one second after a 30 s maintenance boundary used to
+  // include the whole boundary-crossing fragment plus the current fragment.
+  // That made a "last 30 seconds" raw MP4 physically contain 59 seconds. The
+  // ring must not guess at sample/keyframe boundaries inside an opaque mdat:
+  // retain only independently muxed fragments wholly inside the cutoff.
+  ring.pushBytes(
+    join([initialization(), fragment(0n, 450_000)]),
+    30_000,
+  )
+  ring.pushBytes(
+    join([initialization(), fragment(0n, 435_000)]),
+    59_000,
+  )
+  const replay = ring.assemble(59_000)
+  check(
+    'an off-boundary replay never exposes raw media older than the configured window',
+    replay !== null &&
+      replay.durationMs <= 30_000 &&
+      replay.startAtMs >= 29_000 &&
+      replay.fragmentCount === 1,
+    replay === null
+      ? 'no replay'
+      : `${replay.durationMs} ms / start ${replay.startAtMs} / ${replay.fragmentCount} fragments`,
+  )
+}
+
+{
+  const ring = new FragmentedMp4Ring(30_000)
+  // Delivery clocks can overlap when a delayed timeslice and a later stop
+  // flush are timestamped independently. Individual wall-clock intervals may
+  // both fit the cutoff even though their encoded durations add past N.
+  ring.pushBytes(
+    join([initialization(), fragment(0n, 300_000)]),
+    30_000,
+  )
+  ring.pushBytes(fragment(300_000n, 300_000), 40_000)
+  const replay = ring.assemble(40_000)
+  check(
+    'overlapping fragment clocks cannot make assembled media exceed the byte-time window',
+    replay !== null &&
+      replay.durationMs <= 30_000 &&
+      replay.fragmentCount === 1,
+    replay === null
+      ? 'no replay'
+      : `${replay.durationMs} ms / ${replay.fragmentCount} fragments`,
+  )
+}
+
 class SimulatedTimers implements WebmDualSlotTimers {
   private nextHandle = 1
   private readonly scheduled = new Map<
@@ -576,6 +705,45 @@ async function checkWebmFallbackLifecycle(): Promise<void> {
         recorder.onerror === null &&
         recorder.onstop === null,
     ),
+  )
+
+  const constructorsBeforeFreshBoundary = recorders.length
+  const freshBoundary = new WebmDualSlotRing({
+    generation: 42,
+    segmentMs: 1_000,
+    mimeType: webmFallback?.mimeType ?? 'video/webm;codecs=vp8',
+    timesliceMs: 100,
+    stopTimeoutMs: RECORDER_STOP_TIMEOUT_MS,
+    timers,
+    createRecorder: () => {
+      const recorder = new SimulatedMediaRecorder()
+      recorders.push(recorder)
+      return recorder as unknown as MediaRecorder
+    },
+    discardRecorderOutput: () => false,
+    onBytes: () => undefined,
+    onFailure: (message) => failures.push(message),
+  })
+  freshBoundary.start()
+  check(
+    'WebM resume starts one empty epoch only after both held slots were disposed',
+    recorders.length === constructorsBeforeFreshBoundary + 1 &&
+      recorders
+        .slice(0, constructorsBeforeFreshBoundary)
+        .every((recorder) => recorder.state === 'inactive') &&
+      timers.pendingCount === 2,
+  )
+  freshBoundary.clear()
+  check(
+    'repeated WebM hold/resume leaves no recorder callback or timer growth',
+    timers.pendingCount === 0 &&
+      recorders.every(
+        (recorder) =>
+          recorder.state === 'inactive' &&
+          recorder.ondataavailable === null &&
+          recorder.onerror === null &&
+          recorder.onstop === null,
+      ),
   )
 
   const deadlineTimers = new SimulatedTimers()
@@ -851,7 +1019,7 @@ async function checkWebmFallbackLifecycle(): Promise<void> {
     ring.pushBytes(
       join([
         ...(index === 0 ? [initialization()] : []),
-        fragment(BigInt(index * 150_000), 150_000, payloadBytes),
+        fragment(BigInt(index * 1_500), 1_500, payloadBytes),
       ]),
       1_000 + index * 100,
     )
@@ -1022,6 +1190,73 @@ async function checkWebmFallbackLifecycle(): Promise<void> {
 
 {
   const ring = new FragmentedMp4Ring(30_000)
+  // The old recorder stopped at wall t=10 s. Its replacement did not produce
+  // pixels until t=12 s, then recorded ten seconds. A contiguous tfdt rewrite
+  // would hide that real two-second hole and make every context observation
+  // after the rotation appear two seconds early.
+  ring.pushBytes(
+    join([
+      initialization(90_000, 1_000, 1, 1n, true),
+      fragment(0n, 900_000),
+    ]),
+    10_000,
+  )
+  ring.pushBytes(
+    join([
+      initialization(90_000, 1_000, 1, 1n, true),
+      fragment(0n, 900_000),
+    ]),
+    22_000,
+  )
+  const replay = ring.assemble(22_000)
+  const replayBytes =
+    replay === null ? new Uint8Array(0) : new Uint8Array(replay.buffer)
+  const decodeTimes =
+    replay === null ? [] : topLevelTfdtValues(replayBytes)
+  const timeline = headerTimeline(replayBytes)
+  check(
+    'maintenance rotation preserves an observed two-second wall-clock frame gap',
+    replay?.durationMs === 22_000 &&
+      replay.startAtMs === 0 &&
+      replay.endAtMs === 22_000 &&
+      decodeTimes.join(',') === '0,1080000' &&
+      timeline.mvhd?.duration === 22_000n &&
+      timeline.mdhd?.duration === 1_980_000n,
+    replay === null
+      ? 'no replay'
+      : `${replay.startAtMs}..${replay.endAtMs} / ${replay.durationMs} ms / tfdt ${decodeTimes.join(',')}`,
+  )
+}
+
+{
+  const ring = new FragmentedMp4Ring(30_000)
+  ring.pushBytes(
+    join([
+      initialization(),
+      fragment(0n, 75_000),
+    ]),
+    5_000,
+  )
+  // A later BlobEvent from the SAME MediaRecorder was delivered two seconds
+  // late. Its encoded clock is continuous; JS task backlog is not a pixel gap.
+  ring.pushBytes(fragment(75_000n, 75_000), 12_000)
+  const replay = ring.assemble(12_000)
+  const replayBytes =
+    replay === null ? new Uint8Array(0) : new Uint8Array(replay.buffer)
+  const decodeTimes =
+    replay === null ? [] : topLevelTfdtValues(replayBytes)
+  check(
+    'timeslice delivery jitter inside one recorder does not invent a frame gap',
+    replay?.durationMs === 10_000 &&
+      decodeTimes.join(',') === '0,75000',
+    replay === null
+      ? 'no replay'
+      : `${replay.durationMs} ms / tfdt ${decodeTimes.join(',')}`,
+  )
+}
+
+{
+  const ring = new FragmentedMp4Ring(30_000)
   ring.pushBytes(join([initialization(1_000), fragment(0n, 1_000)]), 1_000)
   ring.pushBytes(join([initialization(90_000), fragment(0n, 90_000)]), 2_000)
   const replay = ring.assemble(2_000)
@@ -1118,6 +1353,14 @@ async function checkWebmFallbackLifecycle(): Promise<void> {
     path.join(process.cwd(), 'src', 'main', 'capture.ts'),
     'utf8',
   )
+  const capturePreloadSource = readFileSync(
+    path.join(process.cwd(), 'src', 'preload', 'capture.ts'),
+    'utf8',
+  )
+  const ipcSource = readFileSync(
+    path.join(process.cwd(), 'src', 'shared', 'ipc.ts'),
+    'utf8',
+  )
   const constructors = captureSource.match(/new MediaRecorder\s*\(/g)?.length ?? 0
   check(
     'production capture keeps one MediaRecorder construction site',
@@ -1126,28 +1369,51 @@ async function checkWebmFallbackLifecycle(): Promise<void> {
   )
   check(
     'dual slots are isolated behind the WebM fallback strategy',
-    captureSource.includes("recorderFormat.strategy === 'fragmented-mp4'") &&
+    captureSource.includes("format.strategy === 'fragmented-mp4'") &&
       captureSource.includes('new WebmDualSlotRing({') &&
       !/\bconst\s+slots\b|\bfunction\s+rotateSlot\b|\bfunction\s+startSlot\b/.test(
         captureSource,
       ),
   )
-  const restart = captureSource.indexOf('startRecorder(session.generation)')
+  const holdAwareFlush =
+    captureSource.match(
+      /flushRecorderSession\(\s*session,\s*requestedAt,\s*!holdAfterCapture,\s*\)/,
+    )?.index ?? -1
   const assemble = captureSource.indexOf('ring.assemble(requestedAt)')
   check(
-    'capture restarts its single encoder before replay assembly',
-    restart >= 0 && assemble > restart,
+    'a held MP4 replay flushes and assembles without starting its replacement encoder',
+    holdAwareFlush >= 0 &&
+      assemble > holdAwareFlush &&
+      captureSource.includes('if (restartAfterFlush) startRecorder(session.generation)'),
   )
   check(
     'maintenance flush and replay requests share one serialized queue',
-    captureSource.includes('recorderQueue = recorderQueue') &&
-      captureSource.includes('flushRecorderSession(session, performance.now())') &&
-      captureSource.includes('flushRecorderSession(session, requestedAt)'),
+      captureSource.includes('recorderQueue = recorderQueue') &&
+      captureSource.includes('recorderMaintenanceDecision({') &&
+      captureSource.includes('await flushRecorderSession(session, nowMs)') &&
+      /flushRecorderSession\(\s*session,\s*requestedAt,\s*!holdAfterCapture,\s*\)/.test(
+        captureSource,
+      ),
+  )
+  check(
+    'only completed MP4 fragments refresh maintenance freshness; recurring partial boxes cannot defer flush forever',
+    /const completedFragments = payload\.ring\.pushBytes\(\s*bytes,\s*payload\.endAtMs,\s*\)/.test(
+      captureSource,
+    ) &&
+      captureSource.includes('if (completedFragments > 0)') &&
+      captureSource.includes(
+        'payload.session.lastFragmentAtMs = payload.endAtMs',
+      ) &&
+      !captureSource.includes('session.lastOutputAtMs = endAtMs') &&
+      captureSource.includes("if (maintenance.action === 'reschedule')") &&
+      captureSource.includes('scheduleMaintenanceFlush(session, maintenance.delayMs)') &&
+      captureSource.includes("if (maintenance.action === 'retired') return") &&
+      captureSource.includes('window.clearTimeout(session.flushTimer)'),
   )
   check(
     'replay assembly is skipped when the capture-instant flush fails',
-    captureSource.includes(
-      'const flushed = await flushRecorderSession(session, requestedAt)',
+    /const flushed = await flushRecorderSession\(\s*session,\s*requestedAt,\s*!holdAfterCapture,\s*\)/.test(
+      captureSource,
     ) &&
       captureSource.indexOf('if (flushed) {') <
         captureSource.indexOf('const replay = ring.assemble(requestedAt)'),
@@ -1155,13 +1421,46 @@ async function checkWebmFallbackLifecycle(): Promise<void> {
   check(
     'each recorder session schedules a bounded maintenance flush',
     captureSource.includes('scheduleMaintenanceFlush(session)') &&
-      captureSource.includes('Math.max(CHUNK_TIMESLICE_MS, segmentMs)'),
+      captureSource.includes(
+        'Math.max(currentMp4FragmentIntervalMs(), segmentMs)',
+      ),
+  )
+  check(
+    'fragmented MP4 timeslices are backed by matching keyframe requests',
+    captureSource.includes(
+      'videoKeyFrameIntervalDuration: currentMp4FragmentIntervalMs()',
+    ) &&
+      captureSource.includes('recorder.start(currentMp4FragmentIntervalMs())') &&
+      captureSource.includes('timesliceMs: WEBM_CHUNK_TIMESLICE_MS'),
   )
   check(
     'parser memory budget follows the configured encoder bitrate',
     captureSource.includes(
       'new FragmentedMp4Ring(segmentMs, VIDEO_BITS_PER_SECOND)',
     ),
+  )
+  check(
+    'capture-time field diagnostics report bounded retained and selected fragment ownership',
+    captureSource.includes('ringDiagnostics = {') &&
+      captureSource.includes('retainedFragmentCount: stats.fragmentCount') &&
+      mainCaptureSource.includes('payload.ringDiagnostics') &&
+      mainCaptureSource.includes('ring retained'),
+  )
+  check(
+    'Blob conversion backlog shares the ring retained-byte budget',
+    captureSource.includes(
+      'new BoundedBlobIngestQueue<RecorderIngestPayload>(',
+    ) &&
+      captureSource.includes('ring.stats().retainedBudgetBytes'),
+  )
+  check(
+    'MP4 ingest capacity rejection fails the recorder session instead of continuing after a byte hole',
+    captureSource.includes(
+      'fragmented MP4 ingest budget exceeded; refusing to skip bytes in the recorder stream',
+    ) &&
+      captureSource.includes(
+        'recorder stop batch exceeded the bounded ingest budget; refusing a discontinuous MP4 stream',
+      ),
   )
   check(
     'recorder chunks use event time to distinguish backlog from the final flush',
@@ -1172,11 +1471,35 @@ async function checkWebmFallbackLifecycle(): Promise<void> {
   )
   check(
     'stop-time backlog is staged and ingested as one capture-anchored batch',
-    captureSource.includes('session.flushBlobs.push(blob)') &&
-      captureSource.includes('session.flushBlobs.splice(0)') &&
-      captureSource.includes(
-        'queueRecorderBlobs(',
-      ),
+    captureSource.includes('session.flushBatch = queue.createBatch()') &&
+      captureSource.includes('batch.append(blob)') &&
+      captureSource.includes('commitRecorderBatchBeforeReplacement('),
+  )
+  const flushRecorderStart = captureSource.indexOf(
+    'async function flushRecorderSession(',
+  )
+  const replayRequestStart = captureSource.indexOf(
+    'async function handleReplayRequest(',
+    flushRecorderStart,
+  )
+  const flushRecorderSource = captureSource.slice(
+    flushRecorderStart,
+    replayRequestStart,
+  )
+  const oldBatchCommit = flushRecorderSource.indexOf(
+    'commitRecorderBatchBeforeReplacement(',
+  )
+  const earlyReplacementArgument = flushRecorderSource.indexOf(
+    'stopRecorderWithDeadline(',
+  ) >= 0 && /stopRecorderWithDeadline\([\s\S]*?startReplacement[\s\S]*?\)/.test(
+    flushRecorderSource.slice(
+      flushRecorderSource.indexOf('stopRecorderWithDeadline('),
+      flushRecorderSource.indexOf('if (!stopped)'),
+    ),
+  )
+  check(
+    'a delayed old stop commits its complete batch before replacement timeslices can enter the ingest queue',
+    oldBatchCommit >= 0 && !earlyReplacementArgument,
   )
   const startCaptureAt = captureSource.indexOf(
     'async function startCapture(payload: CaptureStartPayload)',
@@ -1199,11 +1522,12 @@ async function checkWebmFallbackLifecycle(): Promise<void> {
       ),
   )
   check(
-    'the one automatic retry is handle- and generation-owned',
-    captureSource.includes('let retryTimer: number | undefined') &&
-      captureSource.includes('retryTimer !== timer') &&
-      captureSource.includes('retryGeneration !== captureGeneration') &&
-      captureSource.includes('window.clearTimeout(retryTimer)'),
+    'the one alternate-backend recovery is generation-owned and circuit-broken',
+    captureSource.includes('let nativeFallbackCircuitOpen = false') &&
+      captureSource.includes('generation !== captureGeneration') &&
+      captureSource.includes('nativeFallbackCircuitOpen = true') &&
+      captureSource.includes('void startNativeFallbackCapture(payload, generation)') &&
+      captureSource.includes("captureBackend === 'windows-gdi-bitblt'"),
   )
   check(
     'a missing recorder stop event cannot lock the queue forever',
@@ -1220,12 +1544,14 @@ async function checkWebmFallbackLifecycle(): Promise<void> {
   check(
     'stale MP4 ingest work is generation and ring-identity guarded',
     captureSource.includes(
-      'generation !== captureGeneration || replayRing !== ring',
-    ),
+      'payload.generation !== captureGeneration',
+    ) &&
+      captureSource.includes('replayRing !== payload.ring'),
   )
   check(
-    'a new capture severs both stale promise-queue tails',
-    captureSource.includes('ingestQueue = Promise.resolve()') &&
+    'a new capture severs both stale ownership queues',
+    captureSource.includes('ingestQueue?.cancel()') &&
+      captureSource.includes('ingestQueue = null') &&
       captureSource.includes('recorderQueue = Promise.resolve()') &&
       captureSource.includes('const requestGeneration = captureGeneration') &&
       captureSource.includes('requestGeneration !== captureGeneration'),
@@ -1238,6 +1564,86 @@ async function checkWebmFallbackLifecycle(): Promise<void> {
       webmSource.includes(
         'releaseRecorderReferences(recorder, session.chunks)',
       ),
+  )
+  const freezeStart = mainSessionSource.indexOf('async function freezeDisplays(')
+  const freezeEnd = mainSessionSource.indexOf(
+    'function physicalContextBounds(',
+    freezeStart,
+  )
+  const freezeSource = mainSessionSource.slice(freezeStart, freezeEnd)
+  const freezeReplayAt = freezeSource.indexOf('holdAfterCapture: true')
+  const freezeSnapshotAt = freezeSource.indexOf('await takeDisplaySnapshots(')
+  const freezeFinallyAt = freezeSource.indexOf('finally {')
+  const freezeResumeAt = freezeSource.indexOf('resumeReplay(')
+  check(
+    'every display replay is held before the grouped full-native snapshot starts',
+    freezeReplayAt >= 0 &&
+      freezeSnapshotAt > freezeReplayAt &&
+      freezeSource.includes('await Promise.all('),
+  )
+  check(
+    'snapshot failure and cancellation resume every requested display in finally',
+    freezeFinallyAt > freezeSnapshotAt && freezeResumeAt > freezeFinallyAt,
+  )
+  check(
+    'the replay hold/resume token crosses the declared IPC and preload boundary',
+    ipcSource.includes("captureResumeReplay: 'capture:resume-replay'") &&
+      ipcSource.includes('export interface CaptureReplayRequestPayload') &&
+      ipcSource.includes('export interface CaptureReplayResumePayload') &&
+      capturePreloadSource.includes('onResumeReplay(') &&
+      captureSource.includes('window.captureBridge.onResumeReplay('),
+  )
+  check(
+    'a lost main-process resume is bounded by a renderer watchdog',
+    captureSource.includes('REPLAY_HOLD_WATCHDOG_MS') &&
+      captureSource.includes('resumeHeldReplay(requestId, requestGeneration') &&
+      captureSource.includes('window.setTimeout('),
+  )
+  const resumeHandlerStart = captureSource.indexOf(
+    'window.captureBridge.onResumeReplay(',
+  )
+  const resumeHandlerSource = captureSource.slice(resumeHandlerStart)
+  const preResumeNoteAt = resumeHandlerSource.indexOf(
+    'replayResumeTokens.note(requestId, requestGeneration)',
+  )
+  const resumeQueueAt = resumeHandlerSource.indexOf(
+    'recorderQueue = recorderQueue',
+  )
+  check(
+    'RESUME records its bounded tombstone synchronously before async recorderQueue work',
+    captureSource.includes('new ReplayResumeTokenLedger({') &&
+      captureSource.includes('maxEntries: 4') &&
+      captureSource.includes('ttlMs: REPLAY_HOLD_WATCHDOG_MS') &&
+      preResumeNoteAt >= 0 &&
+      resumeQueueAt > preResumeNoteAt,
+  )
+  const enterHoldStart = captureSource.indexOf('function enterReplayHold(')
+  const resumeHoldStart = captureSource.indexOf(
+    'function resumeHeldReplay(',
+    enterHoldStart,
+  )
+  const enterHoldSource = captureSource.slice(enterHoldStart, resumeHoldStart)
+  const preResumeConsumeAt = enterHoldSource.indexOf(
+    'replayResumeTokens.consume(requestId, requestGeneration)',
+  )
+  const watchdogArmAt = enterHoldSource.indexOf('hold.watchdog = window.setTimeout(')
+  check(
+    'a matching pre-resume is consumed before HOLD/watchdog and starts one fresh boundary',
+    preResumeConsumeAt >= 0 &&
+      watchdogArmAt > preResumeConsumeAt &&
+      enterHoldSource.includes('discardHeldReplayStorage()') &&
+      enterHoldSource.includes('installFreshReplayStorage(requestGeneration)'),
+  )
+  check(
+    'capture teardown retires every pre-resume token with its generation',
+    captureSource.includes('replayResumeTokens.clear()'),
+  )
+  check(
+    'resume discards the held MP4/WebM owners before starting one empty fresh boundary',
+    captureSource.includes('discardHeldReplayStorage()') &&
+      captureSource.includes('installFreshReplayStorage(requestGeneration)') &&
+      captureSource.indexOf('discardHeldReplayStorage()') <
+        captureSource.indexOf('installFreshReplayStorage(requestGeneration)'),
   )
   check(
     'main imports the shared replay deadline instead of racing a local constant',

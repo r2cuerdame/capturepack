@@ -36,6 +36,8 @@ try {
   let connected = 0
   let reloads = 0
   let loadedExtensionVersion = '0.1.8'
+  let runtimeLastError = null
+  let runtimeLastErrorReads = 0
   let nextTimer = 1
   const timers = new Map()
   const ports = []
@@ -72,6 +74,10 @@ try {
       getManifest: () => ({ version: loadedExtensionVersion }),
       reload() {
         reloads += 1
+      },
+      get lastError() {
+        if (runtimeLastError !== null) runtimeLastErrorReads += 1
+        return runtimeLastError
       },
       onInstalled: event(),
       onStartup: event(),
@@ -135,7 +141,14 @@ try {
   })
   check('a matching app hello keeps the current worker', reloads === 0)
 
+  runtimeLastError = { message: 'Specified native messaging host not found.' }
+  const lastErrorReadsBeforeDisconnect = runtimeLastErrorReads
   ports[0].disconnect()
+  runtimeLastError = null
+  check(
+    'an expected native disconnect consumes runtime.lastError before retrying',
+    runtimeLastErrorReads === lastErrorReadsBeforeDisconnect + 1,
+  )
   const reconnectTimer = [...timers.values()].find((timer) => timer.delay === 2_000)
   check('a dropped native port schedules a reconnect', reconnectTimer !== undefined)
   reconnectTimer?.callback()

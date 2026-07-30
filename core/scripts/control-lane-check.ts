@@ -32,11 +32,22 @@ import {
 import {
   freezeContext,
   frozenObservations,
+  frozenPackTimeAt,
+  frozenWindow,
+  releaseContext,
+  surfaceStackAt,
+  surfacesAt,
   startContextRuntime,
   stopContextRuntime,
   updateContextUiaEnabled,
 } from '../src/main/context/runtime'
 import { frozenRingObservations } from '../src/main/context/ringObservations'
+import { ContextSession } from '../src/main/context/session'
+import {
+  exportWindowsContextTimeline,
+  importWindowsContextTimeline,
+} from '../src/main/context/windowsContextTimeline'
+import { ObjectIndex } from '../src/renderer/editor/objects'
 import type { HostMonitor, SurfaceLane } from '../src/main/context/surfaceLane'
 import type { SurfaceInfo } from '../src/shared/context/protocol'
 
@@ -661,8 +672,8 @@ async function main(): Promise<void> {
     1000,
     [100, 250, 500, 900],
     (packTMs) => {
-      const map = new Map<string, readonly TrackedControl[]>()
-      for (const entry of lane.controlsAt(packTMs)) map.set(entry.hwnd, entry.controls)
+      const map = new Map()
+      for (const entry of lane.controlsAt(packTMs)) map.set(entry.hwnd, entry)
       return map
     },
   )
@@ -700,6 +711,285 @@ async function main(): Promise<void> {
     'the window reports that its tree WAS collected',
     observations[0]?.windows.map((w) => w.tree),
     ['collected'],
+  )
+
+  // A CACHED TREE MOVES ONLY BY AN OBSERVED OWNER-WINDOW DELTA.
+  //
+  // Lane A deliberately avoids polling every control on every video frame.
+  // Therefore a quiet control tree is commonly returned unchanged while Lane
+  // S observes its owner moving. The old ring copied those old absolute
+  // control coordinates into every new observation. Persistence correctly
+  // emitted an `element_transforms` entry for the owner movement, then an
+  // `elements.patch` put the control back at its stale coordinate. Fresh and
+  // reopened editors consequently offered the control under the place the
+  // window used to be.
+  //
+  // This is the complete shipping seam: real ControlLane protocol, moving
+  // surface samples, compact timeline, reopen, ContextSession, and ObjectIndex.
+  // No intermediate control position is invented: each expected position is
+  // the one observed control rectangle plus the owner delta observed at that
+  // exact ring sample.
+  console.log()
+  console.log('cached lane A tree follows only observed owner-window movement')
+  let movingNow = 100
+  const movingLane = new ControlLane(() => movingNow, 30_000)
+  ;(movingLane as unknown as Injectable).onMessage({
+    event: 'tree',
+    h: '5151',
+    v: 1,
+    e: [rect(120, 140)],
+  })
+  const movingSurfaceAt = (tMs: number): { surfaces: SurfaceInfo[] } => {
+    const x = 100 + Math.max(0, tMs - 100) * 2
+    return {
+      surfaces: [{
+        surfaceId: 'moving-owner',
+        hwnd: '5151',
+        bounds: { x, y: 100, width: 800, height: 600 },
+        clientBounds: { x: x + 8, y: 132, width: 784, height: 560 },
+        zOrder: 0,
+        visible: true,
+        minimized: false,
+        foreground: true,
+        executableName: 'moving.exe',
+        windowTitle: 'Moving owner',
+        className: 'MovingOwner',
+      }],
+    }
+  }
+  const movingObservations = frozenRingObservations(
+    movingSurfaceAt,
+    MONITORS,
+    [{ index: 1, focused: true, width: 1920, height: 1080 }],
+    300,
+    [100, 200, 300],
+    (packTMs) => {
+      const map = new Map()
+      for (const entry of movingLane.controlsAt(packTMs)) map.set(entry.hwnd, entry)
+      return map
+    },
+  )
+  check(
+    'one polled control follows the owner at each actually observed surface sample',
+    movingObservations.map((observation) => [
+      observation.tMs,
+      observation.elements[0]?.bounds.x ?? null,
+    ]),
+    [[100, 120], [200, 320], [300, 520]],
+  )
+  const movingTimeline = exportWindowsContextTimeline(movingObservations)
+  check('the moving-owner history exports', movingTimeline !== null, true)
+  check(
+    'a stale elements.patch never overwrites the newer owner transform',
+    movingTimeline?.deltas.map((delta) => ({
+      t: delta.t_ms,
+      transforms: delta.element_transforms?.map((transform) => [
+        transform.dx,
+        transform.dy,
+      ]) ?? [],
+      elements: delta.elements ?? null,
+    })),
+    [
+      { t: 200, transforms: [[200, 0]], elements: null },
+      { t: 300, transforms: [[200, 0]], elements: null },
+    ],
+  )
+  const reopenedMoving = movingTimeline === null
+    ? []
+    : (importWindowsContextTimeline(
+        JSON.parse(JSON.stringify(movingTimeline)) as unknown,
+      ) ?? [])
+  const movingSession = new ContextSession('moving-owner-check', {
+    displays: [{ index: 1, focused: true, width: 1920, height: 1080 }],
+    replayDurationMs: 300,
+    observation: null,
+    dropped: false,
+  })
+  movingSession.adoptAll(reopenedMoving)
+  for (const [tMs, expectedX] of [[100, 120], [200, 320], [300, 520]] as const) {
+    const frame = await movingSession.frameAt(tMs)
+    const display = frame.displays.find((candidate) => candidate.display === 1)
+    const index = ObjectIndex.build(
+      display?.candidates ?? [],
+      display?.surfaces ?? [],
+      display?.coverage ?? [],
+      frame.claims,
+      1920,
+      1080,
+    )
+    const picked = index.pick(expectedX + 50, 160)
+    check(
+      `reopened exact pick follows the observed owner transform at t=${String(tMs)}`,
+      picked === null
+        ? null
+        : {
+            level: picked.level,
+            name: picked.candidate.name,
+            bounds: [picked.x, picked.y, picked.width, picked.height],
+            exact: picked.candidate.accuracy.exact,
+            interpolated: picked.candidate.accuracy.interpolated ?? false,
+          },
+      {
+        level: 'control',
+        name: 'Save',
+        bounds: [expectedX, 140, 100, 40],
+        exact: true,
+        interpolated: false,
+      },
+    )
+    if (tMs > 100) {
+      const stale = index.pick(170, 160)
+      check(
+        `the stale pre-move control rectangle is not offered at t=${String(tMs)}`,
+        stale?.level === 'control' && stale.candidate.name === 'Save',
+        false,
+      )
+    }
+  }
+  const freshMovingSession = new ContextSession('fresh-moving-owner-tie-check', {
+    displays: [{ index: 1, focused: true, width: 1920, height: 1080 }],
+    replayDurationMs: 300,
+    observation: null,
+    dropped: false,
+  })
+  freshMovingSession.adoptAll(movingObservations)
+  for (const [label, session] of [
+    ['fresh', freshMovingSession],
+    ['reopened', movingSession],
+  ] as const) {
+    const frame = await session.frameAt(150)
+    const display = frame.displays.find((candidate) => candidate.display === 1)
+    const index = ObjectIndex.build(
+      display?.candidates ?? [],
+      display?.surfaces ?? [],
+      display?.coverage ?? [],
+      frame.claims,
+      1920,
+      1080,
+    )
+    const picked = index.pick(170, 160)
+    check(
+      `${label} UIA exact-distance tie keeps the earlier observed control`,
+      {
+        materialized: frame.accuracy.materializedTimeMs,
+        name: picked?.candidate.name ?? null,
+        bounds: picked === null ? null : [picked.x, picked.y, picked.width, picked.height],
+      },
+      {
+        materialized: 100,
+        name: 'Save',
+        bounds: [120, 140, 100, 40],
+      },
+    )
+  }
+  movingNow = 400
+  ;(movingLane as unknown as Injectable).onMessage({
+    event: 'rects',
+    h: '5151',
+    v: 1,
+    e: [[0, 720, 140, 100, 40]],
+  })
+  const resizedObservations = frozenRingObservations(
+    (tMs) => {
+      const sampled = movingSurfaceAt(tMs)
+      const owner = sampled.surfaces[0]
+      if (owner !== undefined && tMs === 200) {
+        owner.bounds.width += 100
+        if (owner.clientBounds !== undefined) owner.clientBounds.width += 100
+      }
+      return sampled
+    },
+    MONITORS,
+    [{ index: 1, focused: true, width: 1920, height: 1080 }],
+    400,
+    [100, 200, 300, 400],
+    (packTMs) => {
+      const map = new Map()
+      for (const entry of movingLane.controlsAt(packTMs)) map.set(entry.hwnd, entry)
+      return map
+    },
+  )
+  check(
+    'a resized owner without a newer UIA geometry reading is skipped, not asserted exact',
+    resizedObservations.map((observation) => ({
+      t: observation.tMs,
+      controls: observation.elements.length,
+      tree: observation.windows[0]?.tree,
+      invalidated: observation.windows[0]?.control_geometry_invalidated === true,
+    })),
+    [
+      { t: 100, controls: 1, tree: 'collected', invalidated: false },
+      { t: 200, controls: 0, tree: 'skipped', invalidated: true },
+      { t: 300, controls: 0, tree: 'skipped', invalidated: true },
+      { t: 400, controls: 1, tree: 'collected', invalidated: false },
+    ],
+  )
+  const resizedTimeline = exportWindowsContextTimeline(resizedObservations)
+  const reopenedResized = resizedTimeline === null
+    ? []
+    : (importWindowsContextTimeline(
+        JSON.parse(JSON.stringify(resizedTimeline)) as unknown,
+      ) ?? [])
+  const resizedSession = new ContextSession('resized-owner-check', {
+    displays: [{ index: 1, focused: true, width: 1920, height: 1080 }],
+    replayDurationMs: 300,
+    observation: null,
+    dropped: false,
+  })
+  resizedSession.adoptAll(reopenedResized)
+  for (const tMs of [200, 300, 400]) {
+    const frame = await resizedSession.frameAt(tMs)
+    const display = frame.displays.find((candidate) => candidate.display === 1)
+    const index = ObjectIndex.build(
+      display?.candidates ?? [],
+      display?.surfaces ?? [],
+      display?.coverage ?? [],
+      frame.claims,
+      1920,
+      1080,
+    )
+    if (tMs < 400) {
+      const staleAtOldPoint = index.pick(170, 160)
+      const staleAtOwnerPoint = index.pick(370 + (tMs - 200) * 2, 160)
+      check(
+        `resize-invalidated control stays absent from reopened ObjectIndex at t=${String(tMs)}`,
+        [
+          staleAtOldPoint?.level === 'control' && staleAtOldPoint.candidate.name === 'Save',
+          staleAtOwnerPoint?.level === 'control' && staleAtOwnerPoint.candidate.name === 'Save',
+        ],
+        [false, false],
+      )
+    } else {
+      const restored = index.pick(770, 160)
+      check(
+        'fresh geometry revision restores the control through timeline reopen and ObjectIndex',
+        restored === null
+          ? null
+          : {
+              level: restored.level,
+              name: restored.candidate.name,
+              bounds: [restored.x, restored.y, restored.width, restored.height],
+            },
+        {
+          level: 'control',
+          name: 'Save',
+          bounds: [720, 140, 100, 40],
+        },
+      )
+    }
+  }
+
+  check(
+    'a fresh Lane-A geometry revision re-enables the control after resize invalidation',
+    resizedObservations.slice(-2).map((observation) => ({
+      t: observation.tMs,
+      controls: observation.elements.length,
+      invalidated: observation.windows[0]?.control_geometry_invalidated === true,
+    })),
+    [
+      { t: 300, controls: 0, invalidated: true },
+      { t: 400, controls: 1, invalidated: false },
+    ],
   )
 
   // A COMMON 32-ELEMENT PREFIX IS NOT A COMPLETE TREE.
@@ -1437,6 +1727,146 @@ async function main(): Promise<void> {
     `${JSON.stringify({ event: 'tree', h: '4242', v: 1, e: [rect(40, 40)] })}\n`,
   )
   check('the replacement accepts new observations', liveControls?.hasObservations, true)
+  stopContextRuntime()
+
+  // A replay clock may have a changing measured rate. Only the clock axis is
+  // interpolated: every window below is still one exact timeline observation.
+  const mappedWallBaseMs = Date.now() + 1_000
+  const mappedControlQueries: number[] = []
+  const mappedControls = {
+    setVisible: () => {},
+    start: () => {},
+    stop: () => {},
+    status: () => ({ trees: 0 }),
+    controlsAt: (sessionMs: number) => {
+      mappedControlQueries.push(sessionMs)
+      return []
+    },
+  } as unknown as ControlLane
+  startContextRuntime({
+    replayMs: 2_000,
+    uiaEnabled: true,
+    testing: {
+      platform: 'win32',
+      readVisibleWindows: () => ({ hwnds: ['clock-map'], focusHwnd: 'clock-map' }),
+      createControls: () => mappedControls,
+      createSurfaceLane: (clock, timeline) => {
+        for (const sample of [
+          { wallOffsetMs: 50, x: 50 },
+          { wallOffsetMs: 100, x: 100 },
+          { wallOffsetMs: 150, x: 125 },
+          { wallOffsetMs: 200, x: 150 },
+        ]) {
+          timeline.append({
+            timeMs: clock.fromWallClockMs(
+              mappedWallBaseMs + sample.wallOffsetMs,
+            ),
+            windows: [{
+              hwnd: 'clock-map',
+              ownerHwnd: '0',
+              processId: 43,
+              zOrder: 0,
+              bounds: { x: sample.x, y: 0, width: 100, height: 100 },
+              clientBounds: { x: sample.x, y: 0, width: 100, height: 100 },
+              visible: true,
+              minimized: false,
+              foreground: true,
+              cloaked: false,
+              executableName: 'clock-map.exe',
+              windowTitle: 'Clock map',
+              className: 'ClockMap',
+            }],
+          })
+        }
+        return {
+          start: () => {},
+          stop: () => {},
+          monitors: () => MONITORS,
+          clockErrorMs: () => 0,
+        } as unknown as SurfaceLane
+      },
+    },
+  })
+  const mappedFreezeId = freezeContext(
+    mappedWallBaseMs + 200,
+    100,
+    undefined,
+    {
+      anchors: [
+        { ptsMs: 0, wallMs: mappedWallBaseMs },
+        { ptsMs: 100, wallMs: mappedWallBaseMs + 100 },
+        { ptsMs: 200, wallMs: mappedWallBaseMs + 300 },
+      ],
+      sourceStartPtsMs: 50,
+      maxExtrapolationMs: 0,
+    },
+  )
+  const mappedWindow = frozenWindow(mappedFreezeId)
+  check(
+    'piecewise replay clock maps pack 75 to its exact observed surface',
+    mappedFreezeId === null
+      ? null
+      : surfacesAt(mappedFreezeId, 75)?.surfaces[0]?.bounds.x,
+    125,
+  )
+  check(
+    'piecewise replay clock maps point picking through the same observed surface',
+    mappedFreezeId === null
+      ? null
+      : surfaceStackAt(
+          mappedFreezeId,
+          75,
+          { x: 130, y: 10 },
+        )?.surfaces[0]?.bounds.x,
+    125,
+  )
+  const mappedTargets = [{
+    index: 1,
+    focused: true,
+    width: 1920,
+    height: 1080,
+  }]
+  const mappedObservations =
+    mappedFreezeId === null
+      ? []
+      : frozenObservations(mappedFreezeId, mappedTargets, 100)
+  check(
+    'surface observations retain measured geometry while only their clock is inverted',
+    mappedObservations.map((observation) => ({
+      t: Math.round(observation.tMs),
+      x: observation.windows[0]?.bounds.x,
+    })),
+    [
+      { t: 0, x: 50 },
+      { t: 50, x: 100 },
+      { t: 75, x: 125 },
+      { t: 100, x: 150 },
+    ],
+  )
+  check(
+    'Lane A queries use the same piecewise session clock',
+    mappedWindow === null
+      ? []
+      : mappedControlQueries.map((sessionMs) =>
+          Math.round(sessionMs - mappedWindow.startMs),
+        ),
+    [0, 50, 100, 150],
+  )
+  check(
+    'DOM/session observations invert onto encoded pack PTS',
+    mappedWindow === null || mappedFreezeId === null
+      ? []
+      : [
+          mappedWindow.startMs,
+          mappedWindow.startMs + 50,
+          mappedWindow.startMs + 100,
+          mappedWindow.endMs,
+        ].map((sessionMs) =>
+          Math.round(frozenPackTimeAt(mappedFreezeId, sessionMs) ?? -1),
+        ),
+    [0, 50, 75, 100],
+  )
+  releaseContext(mappedFreezeId)
   stopContextRuntime()
 
   // A replacement begins its remote tree versions at 1 again. Past samples

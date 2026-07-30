@@ -20,6 +20,71 @@ export interface StopDeadlineTimers {
   clear(handle: unknown): void
 }
 
+export interface RecorderMaintenanceDecision {
+  action: 'flush' | 'reschedule' | 'retired'
+  delayMs: number
+  outputAgeMs: number | null
+}
+
+/**
+ * Keep a healthy fragmented-MP4 encoder alive while it is already publishing
+ * bounded timeslice output. Stopping a live H.264 encoder merely to flush it
+ * creates a fresh encoder epoch; measured on Windows, that replacement can
+ * omit two frames even while the desktop source continues without a stall.
+ *
+ * A recorder which has produced no output, or whose last output is older than
+ * the retention interval, still takes the existing bounded stop/flush path.
+ * Retired sessions never arm another timer.
+ */
+export function recorderMaintenanceDecision({
+  nowMs,
+  startedAtMs,
+  lastFragmentAtMs,
+  intervalMs,
+  minimumDelayMs,
+  sessionActive,
+}: {
+  nowMs: number
+  startedAtMs: number
+  /** End time of the last fully parsed moof/mdat fragment, not any Blob byte. */
+  lastFragmentAtMs: number | null
+  intervalMs: number
+  minimumDelayMs: number
+  sessionActive: boolean
+}): RecorderMaintenanceDecision {
+  if (!sessionActive) {
+    return { action: 'retired', delayMs: 0, outputAgeMs: null }
+  }
+  const now = Number.isFinite(nowMs) ? nowMs : 0
+  const started =
+    Number.isFinite(startedAtMs) && startedAtMs <= now ? startedAtMs : now
+  const interval =
+    Number.isFinite(intervalMs) ? Math.max(0, intervalMs) : 0
+  const minimumDelay =
+    Number.isFinite(minimumDelayMs) ? Math.max(0, minimumDelayMs) : 0
+  const comparableFragmentAt =
+    lastFragmentAtMs !== null
+    && Number.isFinite(lastFragmentAtMs)
+    && lastFragmentAtMs >= started
+    && lastFragmentAtMs <= now
+      ? lastFragmentAtMs
+      : null
+  const anchor = comparableFragmentAt ?? started
+  const age = Math.max(0, now - anchor)
+  if (age >= interval) {
+    return {
+      action: 'flush',
+      delayMs: 0,
+      outputAgeMs: comparableFragmentAt === null ? null : age,
+    }
+  }
+  return {
+    action: 'reschedule',
+    delayMs: Math.max(minimumDelay, interval - age),
+    outputAgeMs: comparableFragmentAt === null ? null : age,
+  }
+}
+
 /**
  * Timestamp a recorder Blob on the media event's own clock.
  *

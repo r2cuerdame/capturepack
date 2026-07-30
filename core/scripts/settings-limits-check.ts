@@ -16,13 +16,33 @@ function check(name: string, condition: boolean, detail = ''): void {
 }
 
 console.log('CAPTURE FPS')
-check('minimum is 1', MIN_CAPTURE_FPS === 1)
+check('minimum is 5', MIN_CAPTURE_FPS === 5)
 check('maximum is 30', MAX_CAPTURE_FPS === 30)
 check('an older 60 fps profile normalizes to 30', normalizeCaptureFps(60) === 30)
 check('30 stays 30', normalizeCaptureFps(30) === 30)
-check('a positive fraction rounds and clamps onto the integer grid', normalizeCaptureFps(0.2) === 1)
+check('an older 1 fps profile migrates to 5', normalizeCaptureFps(1) === 5)
+check('an older 4 fps profile migrates to 5', normalizeCaptureFps(4) === 5)
+check('a positive fraction rounds and clamps onto the integer grid', normalizeCaptureFps(0.2) === 5)
 check('zero preserves the current valid value', normalizeCaptureFps(0, 12) === 12)
 check('non-finite input preserves the current valid value', normalizeCaptureFps(Infinity, 12) === 12)
+
+const captureSettingsHtml = readFileSync(
+  path.join(process.cwd(), 'src/renderer/settings/settings.html'),
+  'utf8',
+)
+const captureSettingsStore = readFileSync(
+  path.join(process.cwd(), 'src/main/settings.ts'),
+  'utf8',
+)
+check(
+  'the Settings numeric input advertises the same 5..30 contract',
+  /id="fps"\s+min="5"\s+max="30"/u.test(captureSettingsHtml),
+)
+check(
+  'IPC settings patches and loaded profiles share the normalizer',
+  captureSettingsStore.includes('return mergeSettings(current, raw)') &&
+    captureSettingsStore.includes('fps: normalizeCaptureFps(raw.fps, base.fps)'),
+)
 
 console.log('\nINDEPENDENT CAPTURE SHORTCUTS')
 const settingsHtmlForHotkeys = readFileSync(

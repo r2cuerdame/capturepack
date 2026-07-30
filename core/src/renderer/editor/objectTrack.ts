@@ -16,17 +16,35 @@ export interface TrackDisplayGeometry {
 }
 
 /**
+ * A control rectangle supplied by a temporal UIA provider.
+ *
+ * `estimated` is accepted at this boundary so callers can keep diagnostic
+ * geometry, but it is deliberately never returned as an ObjectTrackSample:
+ * the persisted track schema represents observations, not predictions.
+ */
+export interface ControlTrackSample extends ObjectTrackSample {
+  provenance: 'observed' | 'estimated'
+}
+
+/**
  * Geometry captured with a control pick.
  *
- * The tracking IPC returns the owning WINDOW's path. A control must retain its
- * offset and size within that window; copying the surface samples verbatim
- * turns a correctly identified Button/Text target into a window-sized box.
+ * `bounds` is the one control observation underneath the pointer. It remains
+ * the annotation's static fallback. It does NOT license projecting that shape
+ * through the owning window's temporal path: scrolling, layout, visibility,
+ * resize and DPI changes can all move a child independently.
  */
 export interface ControlTrackAnchor {
   display: number
   bounds: TrackRect
   surfaceBounds: TrackRect
   displays: readonly TrackDisplayGeometry[]
+  /**
+   * Optional temporal UIA samples. Current owner-window tracking does not
+   * provide these; an empty value therefore means "static observed bounds",
+   * not "derive a path from the owner".
+   */
+  controlSamples?: readonly ControlTrackSample[]
 }
 
 function positiveScale(value: number | undefined): number {
@@ -38,10 +56,6 @@ function inferredSurfaceOrigin(
   visibleSize: number,
   expectedSize: number,
 ): number {
-  // A surface piece touching a display's leading edge may be the RIGHT/BOTTOM
-  // part of a window whose origin is outside that display. Reconstruct that
-  // origin before applying the control's in-window offset. At the trailing
-  // edge the visible piece starts at the real origin already.
   if (position <= 1 && visibleSize + 1 < expectedSize) {
     return position - (expectedSize - visibleSize)
   }
@@ -66,20 +80,44 @@ function clipped(
   }
 }
 
+function compatibleVisibleAxis(
+  position: number,
+  visibleSize: number,
+  expectedSize: number,
+  displaySize: number | undefined,
+): boolean {
+  if (Math.abs(visibleSize - expectedSize) <= 1) return true
+  if (visibleSize > expectedSize + 1 || displaySize === undefined) return false
+  return position <= 1 || position + visibleSize >= displaySize - 1
+}
+
 /**
- * Projects an owning-window path onto the control that was actually picked.
+ * Returns directly observed UIA samples when Lane A supplied them. Otherwise
+ * the picked observation may follow only rigid, same-size owner translation.
  *
- * UIA's capture-instant control rectangle is static; the temporal lane records
- * the owner HWND. Translation is therefore the honest operation (resizing or
- * scrolling would require another UIA observation). When the owner crosses
- * monitors, offsets and sizes are converted through each display's native-pixel
- * scale, then clipped into that display's snapshot space.
+ * A size change is positive evidence that child layout may have changed, so it
+ * ends this projection permanently. Returning to the old size cannot revive
+ * the stale child; only a later direct control geometry revision can do that.
  */
 export function projectControlTrack(
   samples: readonly ObjectTrackSample[],
   anchor: ControlTrackAnchor,
 ): ObjectTrackSample[] {
-  const sourceDisplay = anchor.displays.find((d) => d.index === anchor.display)
+  if (anchor.controlSamples !== undefined) {
+    return anchor.controlSamples.flatMap((sample) =>
+      sample.provenance === 'observed'
+        ? [{
+            tMs: sample.tMs,
+            display: sample.display,
+            x: sample.x,
+            y: sample.y,
+            width: sample.width,
+            height: sample.height,
+          }]
+        : [])
+  }
+
+  const sourceDisplay = anchor.displays.find((display) => display.index === anchor.display)
   const sourceScale = positiveScale(sourceDisplay?.pixelsPerDip)
   const offsetDipX = (anchor.bounds.x - anchor.surfaceBounds.x) / sourceScale
   const offsetDipY = (anchor.bounds.y - anchor.surfaceBounds.y) / sourceScale
@@ -90,10 +128,26 @@ export function projectControlTrack(
   const projected: ObjectTrackSample[] = []
 
   for (const sample of samples) {
-    const targetDisplay = anchor.displays.find((d) => d.index === sample.display)
+    const targetDisplay = anchor.displays.find((display) => display.index === sample.display)
     const targetScale = positiveScale(targetDisplay?.pixelsPerDip)
     const expectedSurfaceWidth = surfaceWidthDip * targetScale
     const expectedSurfaceHeight = surfaceHeightDip * targetScale
+    if (
+      !compatibleVisibleAxis(
+        sample.x,
+        sample.width,
+        expectedSurfaceWidth,
+        targetDisplay?.width,
+      )
+      || !compatibleVisibleAxis(
+        sample.y,
+        sample.height,
+        expectedSurfaceHeight,
+        targetDisplay?.height,
+      )
+    ) {
+      break
+    }
     const surfaceX = inferredSurfaceOrigin(sample.x, sample.width, expectedSurfaceWidth)
     const surfaceY = inferredSurfaceOrigin(sample.y, sample.height, expectedSurfaceHeight)
     const rect = clipped(
@@ -105,9 +159,9 @@ export function projectControlTrack(
       },
       targetDisplay,
     )
-    if (rect === null) continue
-    projected.push({ tMs: sample.tMs, display: sample.display, ...rect })
+    if (rect !== null) {
+      projected.push({ tMs: sample.tMs, display: sample.display, ...rect })
+    }
   }
-
   return projected
 }

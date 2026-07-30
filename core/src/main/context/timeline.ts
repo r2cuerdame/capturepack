@@ -98,7 +98,28 @@ const CHECKPOINT_INTERVAL_MS = 1_000
  * IT BOUNDS SAMPLES, AND ONLY SAMPLES — see `sampleBytesUsed` for why that
  * distinction had to be made explicit.
  */
-const RING_BUDGET_BYTES = 512 * 1024
+const BASE_RING_BUDGET_BYTES = 512 * 1024
+const BASE_RING_RETENTION_MS = 30_000
+const MAX_RING_BUDGET_BYTES = 16 * 1024 * 1024
+
+/**
+ * The original 512-KB governor was measured for a 30-second replay. Settings
+ * allow up to ten minutes, so a fixed 30-second budget silently pruned a
+ * five-minute physical run to 65 seconds before capture could freeze it.
+ *
+ * Scale the same measured allowance with the configured retention and keep a
+ * hard 16-MB ceiling. At the supported 605-second maximum this is 10.5 MB;
+ * context therefore stays small beside video while RANGE remains truthful.
+ */
+export function surfaceTimelineBudgetForRetention(retentionMs: number): number {
+  const boundedRetention = Number.isFinite(retentionMs)
+    ? Math.max(BASE_RING_RETENTION_MS, retentionMs)
+    : BASE_RING_RETENTION_MS
+  return Math.min(
+    MAX_RING_BUDGET_BYTES,
+    Math.ceil(boundedRetention / BASE_RING_RETENTION_MS) * BASE_RING_BUDGET_BYTES,
+  )
+}
 
 /** Rough per-sample bookkeeping cost, counted so `bytesUsed()` is not a lie. */
 const SAMPLE_INDEX_BYTES = 96
@@ -201,11 +222,28 @@ export class SurfaceTimeline {
   private pendingDegraded = false
   private readonly scratch = new Uint8Array(RECORD_BYTES)
   private readonly scratchView: DataView
+  private budgetBytes: number
 
-  constructor(initialBytes = 64 * 1024) {
+  constructor(
+    initialBytes = 64 * 1024,
+    budgetBytes = BASE_RING_BUDGET_BYTES,
+  ) {
     this.arena = new Uint8Array(Math.max(RECORD_BYTES, initialBytes))
     this.view = new DataView(this.arena.buffer)
     this.scratchView = new DataView(this.scratch.buffer)
+    this.budgetBytes = Math.max(
+      BASE_RING_BUDGET_BYTES,
+      Math.min(MAX_RING_BUDGET_BYTES, Math.floor(budgetBytes)),
+    )
+  }
+
+  setBudgetBytes(budgetBytes: number): void {
+    if (!Number.isFinite(budgetBytes)) return
+    this.budgetBytes = Math.max(
+      BASE_RING_BUDGET_BYTES,
+      Math.min(MAX_RING_BUDGET_BYTES, Math.floor(budgetBytes)),
+    )
+    this.enforceBudget()
   }
 
   /** Oldest / newest time the ring can restore. Both 0 when it is empty. */
@@ -350,7 +388,7 @@ export class SurfaceTimeline {
     // thing `degrade()` can shrink, so including it here made the gate testable
     // only by a number the governor could not move — which is how title churn
     // used to pin `stride` at MAX_STRIDE permanently. See `sampleBytesUsed`.
-    if (this.stride > 1 && this.sampleBytesUsed() < RING_BUDGET_BYTES / 2) {
+    if (this.stride > 1 && this.sampleBytesUsed() < this.budgetBytes / 2) {
       this.stride = 1
       this.strideCounter = 0
     }
@@ -758,7 +796,7 @@ export class SurfaceTimeline {
    * NEVER RANGE, and mark what was thinned so `TemporalAccuracy` stays truthful.
    */
   private enforceBudget(): void {
-    if (this.sampleBytesUsed() <= RING_BUDGET_BYTES) return
+    if (this.sampleBytesUsed() <= this.budgetBytes) return
     this.degrade()
   }
 

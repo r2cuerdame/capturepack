@@ -9,10 +9,22 @@ import {
   normalizeCaptureFps,
   SETTINGS_VERSION,
 } from '../shared/types'
-import type { ClipboardAfterSave, EditorWindowBounds, Settings } from '../shared/types'
+import type {
+  ClipboardAfterSave,
+  EditorWindowBounds,
+  ImageClipboardAfterSave,
+  Settings,
+} from '../shared/types'
 
 /** The four things a saved pack can put on the clipboard. */
 const CLIPBOARD_MODES: readonly ClipboardAfterSave[] = ['off', 'folder', 'path', 'prompt']
+const IMAGE_CLIPBOARD_MODES: readonly ImageClipboardAfterSave[] = [
+  'off',
+  'folder',
+  'path',
+  'prompt',
+  'image',
+]
 
 /**
  * Longest replay buffer that may be configured (10 minutes). The bounded
@@ -46,6 +58,9 @@ function defaultSettings(): Settings {
     // The prompt, not the folder: what a saved pack is for, nine times out of
     // ten, is the next sentence typed into an LLM.
     clipboardAfterSave: 'prompt',
+    // Screenshot-tool convention: the pixels the user just annotated are
+    // ready to paste. This waits for the derived still, never the raw source.
+    imageClipboardAfterSave: 'image',
     // The welcome window has never been shown on this machine (GOAL "Welcome
     // (first launch after install)"). Flipped — and written — the moment the
     // window opens.
@@ -247,6 +262,7 @@ const SETTINGS_KEY_SET: Record<keyof Settings, true> = {
   notifyOnRecordingStart: true,
   outputDir: true,
   clipboardAfterSave: true,
+  imageClipboardAfterSave: true,
   welcomeShown: true,
   welcomeDeferredFromLogin: true,
   captureHotkey: true,
@@ -408,6 +424,11 @@ function mergeSettings(base: Settings, raw: Record<string, unknown>): Settings {
           ? 'prompt'
           : 'off'
         : base.clipboardAfterSave,
+    imageClipboardAfterSave: IMAGE_CLIPBOARD_MODES.includes(
+      raw.imageClipboardAfterSave as ImageClipboardAfterSave,
+    )
+      ? (raw.imageClipboardAfterSave as ImageClipboardAfterSave)
+      : base.imageClipboardAfterSave,
     welcomeShown: typeof raw.welcomeShown === 'boolean' ? raw.welcomeShown : base.welcomeShown,
     welcomeDeferredFromLogin:
       typeof raw.welcomeDeferredFromLogin === 'boolean'
@@ -432,8 +453,9 @@ function mergeSettings(base: Settings, raw: Record<string, unknown>): Settings {
         ? raw.replaySeconds
         : base.replaySeconds,
     // Keep hand-edited and older profiles inside the supported recorder range.
-    // In particular, profiles saved before the 30 fps ceiling are normalized
-    // on their next read instead of silently continuing to request 60 fps.
+    // Profiles from the former 1..30 range migrate to the 5 fps floor, while
+    // profiles saved before the 30 fps ceiling normalize down to that ceiling.
+    // loadSettings writes this normalized value back on the same read.
     fps: normalizeCaptureFps(raw.fps, base.fps),
     replayMaxWidth:
       typeof raw.replayMaxWidth === 'number' &&

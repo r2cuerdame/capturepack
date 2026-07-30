@@ -16,6 +16,11 @@
 // of any exported pixels.
 import type { Annotation } from '../../shared/types'
 import { annotationColor, annotationHasSemanticGeometry } from '../../shared/annotationStyle'
+import {
+  drawAnnotationBox,
+  drawAnnotationLabel,
+  type AnnotationLabelStyle,
+} from '../../shared/annotationCanvas'
 
 const BLUR_BLOCK = 12 // native px per pixelation block (matches render/render.ts)
 const HANDLE_R = 4.5 // on-screen px, half the side of a corner resize handle
@@ -192,12 +197,48 @@ export function drawDisplayScene(
   }
   for (const a of ordered) {
     ctx.save()
-    drawBox(ctx, a, numbers.get(a.annotation_id), ui, region)
+    drawBox(ctx, a, numbers.get(a.annotation_id), ui)
     ctx.restore()
   }
   if (selectedId !== null) {
     const sel = annotations.find((a) => a.annotation_id === selectedId)
     if (sel) drawSelection(ctx, sel, ui)
+  }
+  ctx.restore()
+}
+
+function editorLabelStyle(text: string, ui: number): AnnotationLabelStyle {
+  return {
+    text,
+    font: `700 ${Math.round(14 * ui)}px "Segoe UI", system-ui, sans-serif`,
+    lineHeight: 18 * ui,
+    padding: 5 * ui,
+    gap: 2.5 * ui,
+  }
+}
+
+/**
+ * Text callouts are a result layer, not display pixels. Draw them after every
+ * clipped display scene so a bottom label can occupy the board's result-only
+ * gutter and a seam label is not overwritten by the neighbouring display.
+ */
+export function drawDisplayLabels(
+  ctx: CanvasRenderingContext2D,
+  region: DrawRegion,
+  annotations: readonly Annotation[],
+  ui: number,
+): void {
+  ctx.save()
+  ctx.setTransform(region.cscale, 0, 0, region.cscale, region.cx, region.cy)
+  for (const annotation of [...annotations].sort((a, b) => a.z - b.z)) {
+    const text = annotation.text.trim()
+    if (text === '') continue
+    drawAnnotationLabel(
+      ctx,
+      annotation.bounds,
+      editorLabelStyle(text, ui),
+      { width: region.width, height: region.height },
+    )
   }
   ctx.restore()
 }
@@ -251,50 +292,29 @@ function drawBox(
   a: Annotation,
   displayNumber: number | undefined,
   ui: number,
-  region: DrawRegion,
 ): void {
-  const { x, y, width: w, height: h } = a.bounds
   const color = boxColor(a)
-
-  ctx.strokeStyle = color
-  ctx.lineWidth = 3 * ui
-  ctx.strokeRect(x, y, w, h)
-
-  if (a.numbered) {
-    const r = 12 * ui
-    ctx.beginPath()
-    ctx.arc(x, y, r, 0, Math.PI * 2)
-    ctx.fillStyle = color
-    ctx.fill()
-    ctx.lineWidth = 2 * ui
-    ctx.strokeStyle = '#ffffff'
-    ctx.stroke()
-    ctx.fillStyle = '#ffffff'
-    ctx.font = `700 ${Math.round(13 * ui)}px "Segoe UI", system-ui, sans-serif`
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(displayNumber !== undefined ? String(displayNumber) : '·', x, y + ui)
-  }
-
-  const text = a.text.trim()
-  if (text !== '') {
-    ctx.font = `700 ${Math.round(14 * ui)}px "Segoe UI", system-ui, sans-serif`
-    ctx.textAlign = 'left'
-    ctx.textBaseline = 'top'
-    const pad = 5 * ui
-    const metrics = ctx.measureText(text)
-    const lineH = 18 * ui
-    // Below the box when it fits, above otherwise; clamped into THIS DISPLAY —
-    // the board's other screens are not this box's canvas.
-    let ty = y + h + pad
-    if (ty + lineH + pad > region.height) ty = y - lineH - pad * 2
-    ty = Math.max(pad, ty)
-    const tx = Math.min(Math.max(pad, x), Math.max(pad, region.width - metrics.width - pad * 2))
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.65)'
-    ctx.fillRect(tx - pad, ty - pad * 0.5, metrics.width + pad * 2, lineH + pad)
-    ctx.fillStyle = '#ffffff'
-    ctx.fillText(text, tx, ty)
-  }
+  // The result label is drawn later, without the display clip. Keeping the
+  // border/badge here preserves display isolation for actual source geometry.
+  drawAnnotationBox(
+    ctx,
+    a.bounds,
+    {
+      color,
+      borderWidth: 3 * ui,
+      badge:
+        a.numbered
+          ? {
+              text: displayNumber !== undefined ? String(displayNumber) : '·',
+              radius: 12 * ui,
+              borderWidth: 2 * ui,
+              font: `700 ${Math.round(13 * ui)}px "Segoe UI", system-ui, sans-serif`,
+              baselineOffset: ui,
+            }
+          : null,
+      label: null,
+    },
+  )
 }
 
 /** Native-pixel bounding box of a box annotation. */

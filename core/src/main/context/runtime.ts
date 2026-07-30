@@ -23,11 +23,21 @@ import { ControlLane, type ControlsAt } from './controlLane'
 import { frozenRingObservations } from './ringObservations'
 import type { ContextDisplayTarget } from './session'
 import type { SurfaceStack } from '../../shared/context/protocol'
+import {
+  createObservedReplayClockMap,
+  ptsToSessionMs,
+  sessionToPtsMs,
+} from '../../shared/replayClockMap'
+import type { ObservedReplayClockMap } from '../../shared/replayClockMap'
 import { logInfo, logWarn } from '../log'
 import { SessionClock } from './clock'
 import { ProviderHost, TICK_INTERVAL_MS } from './providerHost'
 import { SurfaceLane, type SurfaceLaneStatus } from './surfaceLane'
-import { SurfaceTimeline, type SurfaceTimelineStats } from './timeline'
+import {
+  SurfaceTimeline,
+  surfaceTimelineBudgetForRetention,
+  type SurfaceTimelineStats,
+} from './timeline'
 import type { SurfaceSampleWindow } from './timeline'
 
 /**
@@ -58,6 +68,9 @@ interface Freeze {
   freezeId: string
   startMs: number
   endMs: number
+  packDurationMs: number
+  sourceStartPtsMs: number
+  replayClockMap?: ObservedReplayClockMap
 }
 
 const freezes = new Map<string, Freeze>()
@@ -90,6 +103,18 @@ export interface ContextRuntimeOptions {
   }
 }
 
+export interface FrozenReplayClockInput {
+  /** Exact same-frame observations on the renderer's epoch-based clock. */
+  anchors: readonly {
+    ptsMs: number
+    wallMs: number
+  }[]
+  /** Raw replay PTS at pack t=0 after the logical last-N cut. */
+  sourceStartPtsMs: number
+  /** Maximum measured-edge distance that may use the nearest clock segment. */
+  maxExtrapolationMs: number
+}
+
 /**
  * Starts the runtime. Safe to call when it is already running, on a platform
  * that has no host, or with the escape hatch on — in every one of those cases it
@@ -110,7 +135,10 @@ export function startContextRuntime(options: ContextRuntimeOptions): void {
   }
   const retentionMs = Math.max(1_000, options.replayMs) + RETENTION_SLACK_MS
   const clock = new SessionClock(retentionMs)
-  const timeline = new SurfaceTimeline()
+  const timeline = new SurfaceTimeline(
+    64 * 1024,
+    surfaceTimelineBudgetForRetention(retentionMs),
+  )
   // ONE SAMPLE PER FRAME. Not a cadence of its own: the replay is the evidence,
   // and the ring exists to say where things were in it.
   const intervalMs =
@@ -203,8 +231,10 @@ export function stopContextRuntime(): void {
 
 /** Settings changed the replay length mid-session (GAP 2: no restart needed). */
 export function updateContextRetention(replayMs: number): void {
-  runtime?.clock.setRetentionMs(Math.max(1_000, replayMs) + RETENTION_SLACK_MS)
-  runtime?.controls.setRetentionMs(Math.max(1_000, replayMs) + RETENTION_SLACK_MS)
+  const retentionMs = Math.max(1_000, replayMs) + RETENTION_SLACK_MS
+  runtime?.clock.setRetentionMs(retentionMs)
+  runtime?.controls.setRetentionMs(retentionMs)
+  runtime?.timeline.setBudgetBytes(surfaceTimelineBudgetForRetention(retentionMs))
 }
 
 /**
@@ -246,9 +276,51 @@ export function freezeContext(
   fallbackEndAtWallMs: number,
   replayDurationMs: number,
   replayOriginWallMs?: number,
+  replayClock?: FrozenReplayClockInput,
 ): string | null {
   const current = runtime
   if (current === null) return null
+  const packDurationMs = Math.max(0, replayDurationMs)
+  let replayClockMap: ObservedReplayClockMap | undefined
+  let mappedStartMs: number | undefined
+  let mappedEndMs: number | undefined
+  if (
+    replayClock !== undefined
+    && Number.isFinite(replayClock.sourceStartPtsMs)
+  ) {
+    const mapped = createObservedReplayClockMap(
+      replayClock.anchors.map((anchor) => ({
+        ptsMs: anchor.ptsMs,
+        sessionMs: current.clock.fromWallClockMs(anchor.wallMs),
+      })),
+      replayClock.maxExtrapolationMs,
+    )
+    if (mapped.status === 'ready') {
+      const coverageStartPtsMs = replayClock.sourceStartPtsMs
+      const coverageEndPtsMs =
+        replayClock.sourceStartPtsMs + packDurationMs
+      mappedStartMs = ptsToSessionMs(
+        mapped.map,
+        coverageStartPtsMs,
+      )
+      mappedEndMs = ptsToSessionMs(
+        mapped.map,
+        coverageEndPtsMs,
+      )
+      if (
+        coverageEndPtsMs >= coverageStartPtsMs
+        &&
+        mappedStartMs !== undefined
+        && mappedEndMs !== undefined
+        && mappedEndMs >= mappedStartMs
+      ) {
+        replayClockMap = mapped.map
+      } else {
+        mappedStartMs = undefined
+        mappedEndMs = undefined
+      }
+    }
+  }
   // THE REPLAY'S OWN ORIGIN WHEN THE RECORDER GAVE ONE (#112).
   //
   // Ticks and replay origins carry epoch-based DOMHighRes timestamps. They are
@@ -259,18 +331,28 @@ export function freezeContext(
   // with no recorder, or a platform with no host, where the free-running loop
   // is what filled the ring.
   const endMs =
-    replayOriginWallMs === undefined
-      ? current.clock.fromWallClockMs(fallbackEndAtWallMs)
-      : current.clock.fromWallClockMs(replayOriginWallMs) + Math.max(0, replayDurationMs)
-  const startMs = endMs - Math.max(0, replayDurationMs)
+    mappedEndMs
+    ?? (
+      replayOriginWallMs === undefined
+        ? current.clock.fromWallClockMs(fallbackEndAtWallMs)
+        : current.clock.fromWallClockMs(replayOriginWallMs) + packDurationMs
+    )
+  const startMs = mappedStartMs ?? (endMs - packDurationMs)
   const freezeId = randomUUID()
   current.timeline.freeze(freezeId, startMs, endMs)
-  freezes.set(freezeId, { freezeId, startMs, endMs })
+  freezes.set(freezeId, {
+    freezeId,
+    startMs,
+    endMs,
+    packDurationMs,
+    sourceStartPtsMs: replayClock?.sourceStartPtsMs ?? 0,
+    ...(replayClockMap === undefined ? {} : { replayClockMap }),
+  })
   void current.providers.freeze(freezeId, startMs, endMs)
   const stats = current.timeline.stats()
   const covered = stats.rangeStartMs <= startMs && stats.rangeEndMs >= endMs - 200
   logInfo(
-    `[context] froze ${Math.round(replayDurationMs)}ms of surface timeline ` +
+    `[context] froze ${Math.round(packDurationMs)}ms of surface timeline ` +
       `(${stats.samples} samples, ${Math.round(stats.bytes / 1024)} KB` +
       `${covered ? '' : ', PARTIAL — the ring does not cover the whole replay'})`,
   )
@@ -338,6 +420,7 @@ export function surfaceStackAt(
   const freeze = freezes.get(freezeId)
   if (current === null || freeze === undefined) return null
   const timeMs = sessionTimeOf(freeze, packTMs)
+  if (timeMs === null) return null
   const result = current.timeline.stackAt(timeMs, point, freeze.endMs)
   return {
     timeMs: packTMs,
@@ -352,6 +435,7 @@ export function surfacesAt(freezeId: string, packTMs: number): SurfaceStack | nu
   const freeze = freezes.get(freezeId)
   if (current === null || freeze === undefined) return null
   const timeMs = sessionTimeOf(freeze, packTMs)
+  if (timeMs === null) return null
   const result = current.timeline.surfacesAt(timeMs, freeze.endMs)
   return {
     timeMs: packTMs,
@@ -391,7 +475,8 @@ export function frozenObservations(
       ? []
       : current.timeline
           .sampleTimesBetween(freeze.startMs, freeze.endMs)
-          .map((sessionMs) => sessionMs - freeze.startMs)
+          .map((sessionMs) => packTimeOf(freeze, sessionMs))
+          .filter((packTMs): packTMs is number => packTMs !== null)
   return frozenRingObservations(
     (packTMs) => surfacesAt(freezeId, packTMs),
     current.lane.monitors(),
@@ -405,7 +490,9 @@ export function frozenObservations(
       const at = new Map<string, ControlsAt>()
       if (freeze === undefined) return at
       if (!current.controlsEnabled) return at
-      for (const entry of current.controls.controlsAt(freeze.startMs + packTMs)) {
+      const sessionMs = sessionTimeOf(freeze, packTMs)
+      if (sessionMs === null) return at
+      for (const entry of current.controls.controlsAt(sessionMs)) {
         at.set(entry.hwnd, entry)
       }
       return at
@@ -472,6 +559,20 @@ export function frozenWindow(freezeId: string | null): { startMs: number; endMs:
   if (freezeId === null) return null
   const frozen = freezes.get(freezeId)
   return frozen === undefined ? null : { startMs: frozen.startMs, endMs: frozen.endMs }
+}
+
+/**
+ * Convert one observed context/DOM session timestamp onto the pack's encoded
+ * PTS axis. This maps clocks only; the associated object sample remains the
+ * exact observation made at `sessionMs`.
+ */
+export function frozenPackTimeAt(
+  freezeId: string | null,
+  sessionMs: number,
+): number | null {
+  if (freezeId === null) return null
+  const frozen = freezes.get(freezeId)
+  return frozen === undefined ? null : packTimeOf(frozen, sessionMs)
 }
 
 export function contextNowMs(): number | null {
@@ -587,9 +688,37 @@ export function logContextCost(): void {
   }
 }
 
-function sessionTimeOf(freeze: Freeze, packTMs: number): number {
-  const clamped = Math.min(Math.max(packTMs, 0), Math.max(0, freeze.endMs - freeze.startMs))
+function sessionTimeOf(freeze: Freeze, packTMs: number): number | null {
+  const finitePackTMs = Number.isFinite(packTMs) ? packTMs : 0
+  const clamped = Math.min(
+    Math.max(finitePackTMs, 0),
+    freeze.packDurationMs,
+  )
+  if (freeze.replayClockMap !== undefined) {
+    const mapped = ptsToSessionMs(
+      freeze.replayClockMap,
+      freeze.sourceStartPtsMs + clamped,
+    )
+    if (mapped !== undefined) return mapped
+    return null
+  }
   return freeze.startMs + clamped
+}
+
+function packTimeOf(freeze: Freeze, sessionMs: number): number | null {
+  if (!Number.isFinite(sessionMs)) return null
+  if (freeze.replayClockMap !== undefined) {
+    const ptsMs = sessionToPtsMs(freeze.replayClockMap, sessionMs)
+    if (ptsMs === undefined) return null
+    return Math.min(
+      Math.max(ptsMs - freeze.sourceStartPtsMs, 0),
+      freeze.packDurationMs,
+    )
+  }
+  return Math.min(
+    Math.max(sessionMs - freeze.startMs, 0),
+    freeze.packDurationMs,
+  )
 }
 
 /**

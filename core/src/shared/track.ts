@@ -79,7 +79,12 @@ export function trackedSampleAt(a: Annotation, tMs: number): AnnotationTrackSamp
     // (SPEC §8.3), so the tie goes to the one without it: the box stays on the
     // screen it belongs to. When the object leaves that screen entirely there
     // is no tie left and the box follows it across.
-    if (gap === bestGap && best.display !== undefined && s.display === undefined) {
+    if (
+      gap === bestGap
+      && s.t_ms === best.t_ms
+      && best.display !== undefined
+      && s.display === undefined
+    ) {
       best = s
     }
   }

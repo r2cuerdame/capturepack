@@ -16,7 +16,7 @@
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [ダウンロード](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-現在公開中のWindows版: **CapturePack 0.3.2**
+現在公開中のWindows版: **CapturePack 0.3.3**
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/motion/ja/capturepack-time-machine-poster.webp" alt="右側のNOWから再生ヘッドを左の5秒前へ動かし、その過去フレームに存在した子UIコントロールを復元して選択し、AI向け構造化証拠を書き出すCapturePack" width="760">
@@ -97,7 +97,7 @@ UIオブジェクトやサンプルがなければ、パックは推測せずそ
 ## 設定と診断
 
 - 設定 → キャプチャで動画（`Ctrl+Alt+C`）と画像（`Ctrl+Alt+S`）の
-  ショートカットを個別に変更し、リプレイ長と1～30 fpsを設定できます。
+  ショートカットを個別に変更し、リプレイ長と5～30 fpsを設定できます。
 - 情報 → **ログフォルダーを開く**でローカル診断を確認できます。
   ログが自動送信されることはありません。
 
@@ -114,7 +114,7 @@ role・text・URLには機密情報が含まれる場合があります。Captur
 
 ## 状態とセキュリティ
 
-0.3.2が現在の公開版です。現在のビルドは未署名のためSmartScreenが警告することがあり、各リリースに
+0.3.3が現在の公開版です。現在のビルドは未署名のためSmartScreenが警告することがあり、各リリースに
 検証用`SHA256SUMS.txt`があります。
 
 ローカルファースト · オフラインファースト · オープン形式 · クラウドなし ·

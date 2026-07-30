@@ -272,6 +272,54 @@ console.log('\nHistory -> replay editor reopen contract')
     'slow context restoration cannot keep the replay editor hidden forever',
     runEdit.includes('settleWithin(initialFramePromise, UIA_EDITOR_GRACE_MS)'),
   )
+
+  const delayedAttachAt = runEdit.indexOf('if (!settledFrame.ready)')
+  const delayedSendAt = runEdit.indexOf('editor.webContents.send(IPC.contextFrame, frame)')
+  check(
+    'a context frame that misses the open deadline is pushed after acknowledged editor init',
+    delayedAttachAt > initializeAt && delayedSendAt > delayedAttachAt,
+    `initialize=${initializeAt}, delayed attach=${delayedAttachAt}, send=${delayedSendAt}`,
+  )
+
+  const editorSource = source('src/renderer/editor/editor.ts')
+  const initEditor = sectionBetween(
+    editorSource,
+    'async function initEditor',
+    '// Windowed mode makes resizing',
+  )
+  const pushedFrame = sectionBetween(
+    editorSource,
+    'window.editorBridge.onContextFrame',
+    '// Main is the authority on the window state',
+  )
+  const frameRequest = sectionBetween(
+    editorSource,
+    'function requestContextFrames',
+    '/** Schedules a re-query',
+  )
+  check(
+    'a null init context cannot erase a session adopted from a delayed frame',
+    initEditor.includes('if (payload.context !== null) {')
+      && initEditor.includes('contextSessionId = payload.context.sessionId')
+      && !initEditor.includes('contextSessionId = payload.context?.sessionId ?? null'),
+  )
+  check(
+    'the delayed frame adopts only the first session and rejects another session',
+    pushedFrame.includes('if (!adoptPushedContextSession(frame.sessionId)) return')
+      && editorSource.includes('function adoptPushedContextSession(')
+      && editorSource.includes('return contextSessionId === sessionId'),
+  )
+  check(
+    'late or requested frames from another session cannot replace active indexes',
+    editorSource.includes('function contextFrameBelongsToActiveSession(')
+      && editorSource.includes('if (!contextFrameBelongsToActiveSession(frame)) return false')
+      && frameRequest.includes('answer.frame.sessionId !== sessionId'),
+  )
+  check(
+    'a delayed capture-instant push at another shown time immediately re-queries that time',
+    pushedFrame.includes('requestContextFrameNow()')
+      && !pushedFrame.includes('scheduleContextFrame()'),
+  )
 }
 
 console.log(`\n${passed} passed, ${failed} failed`)

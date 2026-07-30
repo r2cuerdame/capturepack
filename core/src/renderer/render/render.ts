@@ -16,6 +16,11 @@ import type { Annotation } from '../../shared/types'
 import { computeDisplayNumbers } from '../../shared/numbering'
 import { computeKeyframeTimes } from '../../shared/keyframes'
 import { annotationColor } from '../../shared/annotationStyle'
+import {
+  annotationLabelBottomOutset,
+  drawAnnotationBox,
+  type AnnotationLabelStyle,
+} from '../../shared/annotationCanvas'
 import { renderedAnnotationAt } from '../../shared/track'
 import type { AuthoredMotionSpace } from '../../shared/track'
 
@@ -176,6 +181,37 @@ function drawOverlay(
   }
 }
 
+function renderedLabelStyle(text: string, ui: number): AnnotationLabelStyle {
+  return {
+    text,
+    font: `700 ${Math.round(16 * ui)}px "Segoe UI", system-ui, sans-serif`,
+    lineHeight: 20 * ui,
+    padding: 6 * ui,
+    gap: 3 * ui,
+  }
+}
+
+/**
+ * Derived results may grow below the source viewport, never by relocating a
+ * bottom-edge box or flipping its callout above. The source frame remains at
+ * (0, 0); this is result-only space and does not alter annotation coordinates.
+ */
+function renderedLabelBottomGutter(
+  annotations: readonly Annotation[],
+  ui: number,
+): number {
+  if (!annotations.some((annotation) => annotation.text.trim() !== '')) return 0
+  return Math.ceil(annotationLabelBottomOutset(renderedLabelStyle('', ui)))
+}
+
+function renderedCanvasHeight(mediaHeight: number, bottomGutter: number): number {
+  const requested = Math.max(1, Math.ceil(mediaHeight + bottomGutter))
+  // Canvas MediaRecorder encoders are least surprising on 2-pixel chroma
+  // boundaries. One spare dark result row is cheaper than a codec-specific
+  // odd-height render failure.
+  return requested % 2 === 0 ? requested : requested + 1
+}
+
 function scaleAnnotation(
   a: Annotation,
   scaleX: number,
@@ -207,12 +243,20 @@ async function renderStill(job: RenderStartPayload): Promise<{ frameCount: numbe
   const bitmap = await createImageBitmap(new Blob([snapshotPng], { type: 'image/png' }))
   try {
     const canvas = document.createElement('canvas')
-    canvas.width = job.width
-    canvas.height = job.height
+    const mediaWidth = job.width
+    const mediaHeight = job.height
+    const overlay = makeOverlay(job, mediaWidth, mediaHeight)
+    canvas.width = mediaWidth
+    canvas.height = renderedCanvasHeight(
+      mediaHeight,
+      renderedLabelBottomGutter(overlay.ordered, overlay.ui),
+    )
     const ctx = canvas.getContext('2d')
     if (!ctx) throw new Error('canvas 2d context unavailable')
-    ctx.drawImage(bitmap, 0, 0, job.width, job.height)
-    drawOverlay(ctx, canvas, makeOverlay(job, canvas.width, canvas.height), null)
+    ctx.fillStyle = '#0b0b0f'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    ctx.drawImage(bitmap, 0, 0, mediaWidth, mediaHeight)
+    drawOverlay(ctx, canvas, overlay, null)
     const shipped = await shipFrame(capturePng(canvas, 0))
     return { frameCount: shipped ? 1 : 0 }
   } finally {
@@ -244,12 +288,16 @@ async function renderAnnotated(
   // be native 4K while replayMaxWidth caps this video at 1920; upscaling the
   // canvas here would throw away the continuous-capture CPU saving during both
   // exact cuts and annotated renders.
-  canvas.width = video.videoWidth > 0 ? video.videoWidth : job.width
-  canvas.height = video.videoHeight > 0 ? video.videoHeight : job.height
+  const mediaWidth = video.videoWidth > 0 ? video.videoWidth : job.width
+  const mediaHeight = video.videoHeight > 0 ? video.videoHeight : job.height
+  const overlay = makeOverlay(job, mediaWidth, mediaHeight)
+  canvas.width = mediaWidth
+  canvas.height = renderedCanvasHeight(
+    mediaHeight,
+    renderedLabelBottomGutter(overlay.ordered, overlay.ui),
+  )
   const ctx = canvas.getContext('2d')
   if (!ctx) throw new Error('canvas 2d context unavailable')
-
-  const overlay = makeOverlay(job, canvas.width, canvas.height)
 
   // Annotated keyframes (SPEC §7.3): the instants a still is captured at, from
   // the SHARED rule — the exporter names the files from the same list, and the
@@ -306,7 +354,9 @@ async function renderAnnotated(
     // final frames. Mirrors the editor's Math.min(tMs, replayDurationMs).
     const rawMs = mediaTimeMs ?? video.currentTime * 1000
     const tMs = job.durationMs > 0 ? Math.min(rawMs, job.durationMs) : rawMs
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+    ctx.fillStyle = '#0b0b0f'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    ctx.drawImage(video, 0, 0, mediaWidth, mediaHeight)
     drawOverlay(ctx, canvas, overlay, tMs)
     reportProgress(tMs)
     return tMs
@@ -452,48 +502,21 @@ function drawBox(
   displayNumber: number | undefined,
   ui: number,
 ): void {
-  const { x, y, width: w, height: h } = a.bounds
   const color = annotationColor(a)
-
-  ctx.save()
-  ctx.strokeStyle = color
-  ctx.lineWidth = 3 * ui
-  ctx.strokeRect(x, y, w, h)
-
-  if (displayNumber !== undefined) {
-    const r = 14 * ui
-    ctx.beginPath()
-    ctx.arc(x, y, r, 0, Math.PI * 2)
-    ctx.fillStyle = color
-    ctx.fill()
-    ctx.lineWidth = 2 * ui
-    ctx.strokeStyle = '#ffffff'
-    ctx.stroke()
-    ctx.fillStyle = '#ffffff'
-    ctx.font = `700 ${Math.round(14 * ui)}px "Segoe UI", system-ui, sans-serif`
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(String(displayNumber), x, y + ui)
-  }
-
   const text = a.text.trim()
-  if (text !== '') {
-    const font = `700 ${Math.round(16 * ui)}px "Segoe UI", system-ui, sans-serif`
-    ctx.font = font
-    ctx.textAlign = 'left'
-    ctx.textBaseline = 'top'
-    const pad = 6 * ui
-    const metrics = ctx.measureText(text)
-    const lineH = 20 * ui
-    // Below the box when it fits, above otherwise; clamped into the frame.
-    let ty = y + h + pad
-    if (ty + lineH + pad > ctx.canvas.height) ty = y - lineH - pad * 2
-    ty = Math.max(pad, ty)
-    const tx = Math.min(Math.max(pad, x), Math.max(pad, ctx.canvas.width - metrics.width - pad * 2))
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.65)'
-    ctx.fillRect(tx - pad, ty - pad * 0.5, metrics.width + pad * 2, lineH + pad)
-    ctx.fillStyle = '#ffffff'
-    ctx.fillText(text, tx, ty)
-  }
-  ctx.restore()
+  drawAnnotationBox(ctx, a.bounds, {
+    color,
+    borderWidth: 3 * ui,
+    badge:
+      displayNumber === undefined
+        ? null
+        : {
+            text: String(displayNumber),
+            radius: 14 * ui,
+            borderWidth: 2 * ui,
+            font: `700 ${Math.round(14 * ui)}px "Segoe UI", system-ui, sans-serif`,
+            baselineOffset: ui,
+          },
+    label: text === '' ? null : renderedLabelStyle(text, ui),
+  })
 }

@@ -2,7 +2,7 @@
 /**
  * validate-capturepack.mjs — dependency-free CapturePack validator.
  *
- * Validates a pack against SPEC.md (through format 0.3.0). Accepts either form of a
+ * Validates a pack against SPEC.md (through format 0.5.0). Accepts either form of a
  * pack (SPEC §3): an extracted directory, or a `.capturepack` / `.zip` file.
  * ZIP reading is implemented here directly (end-of-central-directory + central
  * directory + node:zlib inflateRawSync) — no npm dependencies, Node 18+ only.
@@ -15,7 +15,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { inflateRawSync } from "node:zlib";
 
-const SPEC_VERSION = "0.3.0";
+const SPEC_VERSION = "0.5.0";
 
 // ---------------------------------------------------------------------------
 // Result collection
@@ -83,6 +83,58 @@ function cropBoundsValid(value) {
     && isNum(value.height)
     && value.height > 0
     && value.coordinate_space === "virtual-desktop-dip";
+}
+
+function validateCadence(value, label, formatVersion, hasReplay) {
+  if (value === undefined) return true;
+  if (!hasReplay) {
+    fail(`${label} MUST be absent when replay is null (SPEC §5.3, §5.6)`);
+    return false;
+  }
+  if (!isObj(value)
+      || !isNum(value.achieved_fps) || value.achieved_fps < 0
+      || !isNum(value.worst_stall_ms) || value.worst_stall_ms < 0) {
+    fail(`${label} MUST contain non-negative achieved_fps and worst_stall_ms (SPEC §5.3)`);
+    return false;
+  }
+  let ok = true;
+  if (value.discarded_frames !== undefined
+      && (!isNum(value.discarded_frames) || value.discarded_frames < 0)) {
+    fail(`${label}.discarded_frames MUST be a non-negative number when present (SPEC §5.3)`);
+    ok = false;
+  }
+  const provenance = ["requested_fps", "backend", "quality", "recorder_count"]
+    .some((key) => value[key] !== undefined);
+  if (provenance && !formatAtLeast(formatVersion, 0, 4)) {
+    fail(`${label} capture provenance requires format_version 0.4.0 or later (SPEC §5.3, §13.1)`);
+    ok = false;
+  }
+  if (value.requested_fps !== undefined
+      && (!isNum(value.requested_fps) || value.requested_fps < 1 || value.requested_fps > 30)) {
+    fail(`${label}.requested_fps MUST be a number in 1..30 (SPEC §5.3)`);
+    ok = false;
+  }
+  if (value.backend !== undefined
+      && value.backend !== "chromium-desktop-capture"
+      && value.backend !== "windows-gdi-bitblt") {
+    fail(`${label}.backend is not a defined CapturePack replay backend (SPEC §5.3)`);
+    ok = false;
+  }
+  if (value.quality !== undefined && value.quality !== "full" && value.quality !== "degraded") {
+    fail(`${label}.quality MUST be "full" or "degraded" (SPEC §5.3)`);
+    ok = false;
+  }
+  if (value.backend === "windows-gdi-bitblt" && value.quality !== "degraded") {
+    fail(`${label}: windows-gdi-bitblt MUST be declared degraded (SPEC §5.3)`);
+    ok = false;
+  }
+  if (value.recorder_count !== undefined
+      && (!isInt(value.recorder_count) || value.recorder_count < 1)) {
+    fail(`${label}.recorder_count MUST be an integer >= 1 (SPEC §5.3)`);
+    ok = false;
+  }
+  if (ok) pass(`${label} is measured and capture provenance is honest`);
+  return ok;
 }
 
 function sourceMediaKind(name, bytes) {
@@ -389,6 +441,12 @@ function validateManifest(m, pack, snapshotDims) {
     } else {
       fail(`manifest.json: media.replay ${JSON.stringify(media.replay)} MUST be "replay.webm", "replay.mp4", or null (SPEC §5.3)`);
     }
+    validateCadence(
+      media.cadence,
+      "manifest.json: media.cadence",
+      m.format_version,
+      media.replay !== null,
+    );
 
     // replay_annotated (annotated replay, SPEC §5.3, §7.2)
     if (media.replay_annotated !== undefined && media.replay_annotated !== null) {
@@ -455,7 +513,7 @@ function validateManifest(m, pack, snapshotDims) {
 
     // media.displays[] — multi-monitor capture (SPEC §5.6)
     if (media.displays !== undefined && media.displays !== null) {
-      validateDisplays(media, env, pack, displayFiles, keyframeFiles, displayInfo);
+      validateDisplays(media, env, pack, displayFiles, keyframeFiles, displayInfo, m.format_version);
     }
 
     // media.keyframes[] — annotated stills (SPEC §5.7)
@@ -914,12 +972,20 @@ function validateKeyframes(keyframes, pack, keyframeFiles, replay, replayDuratio
     if (!dims) {
       fail(`${short}: "${k.file}" is not a valid PNG (bad signature or IHDR) (${ref}, §7.3)`);
       ok = false;
-    } else if (snapshotDims && (dims.width !== snapshotDims.width || dims.height !== snapshotDims.height)) {
-      const detail = `${short}: "${k.file}" is ${dims.width}x${dims.height} but ${snapshotName} is ${snapshotDims.width}x${snapshotDims.height}`;
+    } else if (snapshotDims) {
+      const dimensionsDiffer = dims.width !== snapshotDims.width || dims.height !== snapshotDims.height;
       if (opts.requireSnapshotSize === true) {
-        fail(`${detail} — an image pack's only derived raster MUST preserve the source snapshot coordinate space (SPEC §5.3, §7.3)`);
-        ok = false;
-      } else {
+        const preservesSourceViewport =
+          dims.width === snapshotDims.width && dims.height >= snapshotDims.height;
+        if (!preservesSourceViewport) {
+          const detail = `${short}: "${k.file}" is ${dims.width}x${dims.height} but ${snapshotName} is ${snapshotDims.width}x${snapshotDims.height}`;
+          fail(`${detail} — an image pack's only derived raster MUST preserve the source width and top-left viewport; only a result-only bottom callout gutter may make it taller (SPEC §5.3, §7.2, §7.3)`);
+          ok = false;
+        } else if (dims.height > snapshotDims.height) {
+          pass(`${short}: "${k.file}" preserves the ${snapshotDims.width}x${snapshotDims.height} source viewport at top-left and adds only a declared result gutter below it (SPEC §5.3, §7.2, §7.3)`);
+        }
+      } else if (dimensionsDiffer) {
+        const detail = `${short}: "${k.file}" is ${dims.width}x${dims.height} but ${snapshotName} is ${snapshotDims.width}x${snapshotDims.height}`;
         note(`${detail} — stills SHOULD use that display's annotation coordinate space so box bounds map onto them directly (SPEC §7.3)`);
       }
     }
@@ -936,7 +1002,7 @@ function validateKeyframes(keyframes, pack, keyframeFiles, replay, replayDuratio
  * one entry is focused and repeats the top-level media, and that every declared
  * file exists. A display without a replay is a NOTE, never a failure.
  */
-function validateDisplays(media, env, pack, displayFiles, keyframeFiles, displayInfo) {
+function validateDisplays(media, env, pack, displayFiles, keyframeFiles, displayInfo, formatVersion) {
   const displays = media.displays;
   if (!Array.isArray(displays)) {
     fail(`manifest.json: media.displays MUST be an array (SPEC §5.6)`);
@@ -1078,6 +1144,16 @@ function validateDisplays(media, env, pack, displayFiles, keyframeFiles, display
         fail(`${label}.replay_clock_offset_ms MUST be 0 on the focused display — it IS the pack clock (SPEC §5.6)`);
         ok = false;
       }
+    }
+    validateCadence(
+      d.cadence,
+      `${label}.cadence`,
+      formatVersion,
+      d.replay !== null,
+    );
+    if (isFocused && JSON.stringify(d.cadence) !== JSON.stringify(media.cadence)) {
+      fail(`${label}.cadence MUST equal top-level media.cadence on the focused display (SPEC §5.6)`);
+      ok = false;
     }
 
     // This display's OWN annotated views (SPEC §5.6, §8.8): its boxes rendered
@@ -1760,6 +1836,16 @@ function validatePack(pack) {
   if (pack.files.has("README.md")) pass(`README.md: present (RECOMMENDED; the human-first entry point — SPEC §12.2)`);
   else note(`README.md: absent (OPTIONAL, but RECOMMENDED — the first document a human reads — SPEC §12.2)`);
 
+  if (pack.files.has("viewer.html")) {
+    if (formatAtLeast(manifest.format_version, 0, 5)) {
+      pass(`viewer.html: present (fixed-name offline generated view, format 0.5.0 — SPEC §12.4)`);
+    } else {
+      fail(`viewer.html: present but format_version ${JSON.stringify(manifest.format_version)} is older than 0.5.0 (SPEC §12.4, §13.1)`);
+    }
+  } else {
+    note(`viewer.html: absent (OPTIONAL; the pack remains fully valid — SPEC §12.4)`);
+  }
+
   const skillsFiles = [...pack.files.keys()].filter((f) => f.startsWith("skills/"));
   if (skillsFiles.length > 0) {
     pass(`skills/: present with ${skillsFiles.length} document(s) (RECOMMENDED; AI-first context, readable without MCP — SPEC §12.3)`);
@@ -1778,7 +1864,7 @@ function validatePack(pack) {
   }
 
   // --- unknown files: ignored, with a note (forward compatibility, SPEC §13) ---
-  const known = new Set(["manifest.json", "snapshot.png", "annotations.json", "timeline.json", "report.md", "README.md"]);
+  const known = new Set(["manifest.json", "snapshot.png", "annotations.json", "timeline.json", "viewer.html", "report.md", "README.md"]);
   if (replay) known.add(replay);
   // Per-display media of a multi-monitor capture (SPEC §5.6); undeclared
   // snapshot-d*/replay-d* files fall through to the unknown-file note below.

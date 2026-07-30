@@ -32,12 +32,16 @@ release/
 # per-CWD MCP launches can generate a second local project under core; it is
 # machine-local cache/config and must never become a release input.
 /core/.serena/
+# Standalone DXGI feasibility-probe compiler output. Product builds compile the
+# inspectable core/scripts source into ignored dist/ and never ship this object.
+/capturepack-dxgi-qpc-probe.obj
 release2/
 
 # Installer output: electron-builder writes hundreds of megabytes per
 # release candidate. Builds are artifacts of a commit, never part of one.
 core/rc*/
 core/release-rc*/
+core/release-*/
 dist-rc18/
 dist-rc19/
 dist-rc20/

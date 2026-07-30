@@ -1,4 +1,8 @@
 import { buildManifest } from '../src/main/exporter'
+import {
+  reopenedContextDisplayTargets,
+  reopenedSnapshotPixelsPerDip,
+} from '../src/main/reopenDisplay'
 import { readFileSync } from 'node:fs'
 import {
   contextFrameRequestsForDisplays,
@@ -112,6 +116,14 @@ check(
   ]).join(',') === 'true,true,false',
 )
 check(
+  'focus index 3 keeps healthy peers while one non-focused recorder fails',
+  retainedDisplayReplayMask([
+    { focused: false, hasReplay: true },
+    { focused: false, hasReplay: false },
+    { focused: true, hasReplay: true },
+  ]).join(',') === 'true,false,true',
+)
+check(
   'a capture with no declared focused clock never retains a display replay',
   retainedDisplayReplayMask([
     { focused: false, hasReplay: true },
@@ -164,6 +176,7 @@ const manifest = buildManifest({
       replayDurationMs: 25_000,
       snapshotFile: 'snapshot.png',
       replayFile: 'replay.webm',
+      cadence: { achieved_fps: 14.8, worst_stall_ms: 114 },
     },
     {
       index: 2,
@@ -175,10 +188,160 @@ const manifest = buildManifest({
       replayClockOffsetMs: measuredOffsetMs,
       snapshotFile: 'snapshot-d2.png',
       replayFile: 'replay-d2.webm',
+      cadence: { achieved_fps: 14.6, worst_stall_ms: 132 },
     },
   ],
 })
 const declared = manifest.media.displays ?? []
+check(
+  'top-level focused replay preserves its measured cadence',
+  manifest.media.cadence?.achieved_fps === 14.8 &&
+    manifest.media.cadence.worst_stall_ms === 114,
+)
+const singleDisplayManifest = buildManifest({
+  id: 'single-display-cadence-check',
+  createdAt: new Date('2026-07-30T00:00:00.000Z'),
+  generatorVersion: 'check',
+  title: '',
+  note: '',
+  osVersion: 'check',
+  screens: [{ width: 1_920, height: 1_080, scale: 1.5 }],
+  captureKind: 'video',
+  hasReplay: true,
+  replayFile: 'replay.mp4',
+  replayDurationMs: 10_000,
+  snapshotTMs: 10_000,
+  cadence: {
+    achieved_fps: 14.8,
+    worst_stall_ms: 114,
+    discarded_frames: 1,
+  },
+})
+check(
+  'single-display replay keeps focused cadence without declaring media.displays',
+  singleDisplayManifest.media.cadence?.achieved_fps === 14.8 &&
+    singleDisplayManifest.media.cadence.discarded_frames === 1 &&
+    singleDisplayManifest.media.displays === undefined,
+)
+const secondaryOnlyDiagnosticsManifest = buildManifest({
+  id: 'secondary-only-capture-diagnostics-check',
+  createdAt: new Date('2026-07-30T00:00:00.000Z'),
+  generatorVersion: 'check',
+  title: '',
+  note: '',
+  osVersion: 'check',
+  screens: [
+    { width: 1_920, height: 1_080, scale: 1 },
+    { width: 1_280, height: 720, scale: 1 },
+  ],
+  captureKind: 'video',
+  hasReplay: true,
+  replayFile: 'replay.mp4',
+  replayDurationMs: 10_000,
+  snapshotTMs: 10_000,
+  displays: [
+    {
+      index: 1,
+      focused: true,
+      bounds: { x: 0, y: 0, width: 1_920, height: 1_080 },
+      scale: 1,
+      hasReplay: true,
+      replayDurationMs: 10_000,
+      replayClockOffsetMs: 0,
+      snapshotFile: 'snapshot.png',
+      replayFile: 'replay.mp4',
+    },
+    {
+      index: 2,
+      focused: false,
+      bounds: { x: 1_920, y: 0, width: 1_280, height: 720 },
+      scale: 1,
+      hasReplay: true,
+      replayDurationMs: 9_900,
+      replayClockOffsetMs: -100,
+      cadence: {
+        achieved_fps: 5,
+        worst_stall_ms: 250,
+        requested_fps: 15,
+        backend: 'windows-gdi-bitblt',
+        quality: 'degraded',
+        recorder_count: 1,
+      },
+      snapshotFile: 'snapshot-d2.png',
+      replayFile: 'replay-d2.mp4',
+    },
+  ],
+})
+check(
+  'capture diagnostics on any replay display raise the additive format version',
+  secondaryOnlyDiagnosticsManifest.format_version === '0.4.0',
+)
+const imageWithStaleCadence = buildManifest({
+  id: 'image-stale-cadence-check',
+  createdAt: new Date('2026-07-30T00:00:00.000Z'),
+  generatorVersion: 'check',
+  title: '',
+  note: '',
+  osVersion: 'check',
+  screens: [{ width: 1_920, height: 1_080, scale: 1 }],
+  captureKind: 'image',
+  imageScope: 'fullscreen',
+  hasReplay: false,
+  replayDurationMs: 0,
+  snapshotTMs: null,
+  cadence: {
+    achieved_fps: 15,
+    worst_stall_ms: 100,
+    requested_fps: 15,
+    backend: 'chromium-desktop-capture',
+    quality: 'full',
+    recorder_count: 1,
+  },
+})
+check(
+  'stale recorder diagnostics cannot raise a screenshot-only pack to format 0.4',
+  imageWithStaleCadence.format_version === '0.3.0' &&
+    imageWithStaleCadence.media.cadence === undefined,
+)
+const failedReplayDisplayWithStaleCadence = buildManifest({
+  id: 'failed-display-stale-cadence-check',
+  createdAt: new Date('2026-07-30T00:00:00.000Z'),
+  generatorVersion: 'check',
+  title: '',
+  note: '',
+  osVersion: 'check',
+  screens: [{ width: 1_920, height: 1_080, scale: 1 }],
+  captureKind: 'video',
+  hasReplay: false,
+  replayDurationMs: 0,
+  snapshotTMs: null,
+  displays: [
+    {
+      index: 1,
+      focused: true,
+      bounds: { x: 0, y: 0, width: 1_920, height: 1_080 },
+      scale: 1,
+      hasReplay: false,
+      replayDurationMs: 0,
+      snapshotFile: 'snapshot.png',
+      replayFile: 'replay.mp4',
+      cadence: {
+        achieved_fps: 15,
+        worst_stall_ms: 100,
+        requested_fps: 15,
+        backend: 'chromium-desktop-capture',
+        quality: 'full',
+        recorder_count: 1,
+      },
+    },
+  ],
+})
+check(
+  'a failed display cannot raise a no-replay video pack to format 0.4',
+  failedReplayDisplayWithStaleCadence.format_version === '0.3.0' &&
+    failedReplayDisplayWithStaleCadence.media.cadence === undefined &&
+    failedReplayDisplayWithStaleCadence.media.displays?.[0]?.cadence === undefined,
+)
 check(
   'writer persists focused zero and the measured secondary offset',
   declared[0]?.replay_clock_offset_ms === 0 &&
@@ -220,6 +383,23 @@ check(
     { display: 2, hasReplay: true, presentedMs: 12_250 },
   ]).every((request) => request.timeMs === 25_000),
 )
+
+const threeDisplayOffsets = [-37, 84, 0] as const
+const threeDisplayRequests = contextFrameRequestsForDisplays(false, 25_000, [
+  // Slave replay presented times have already been converted from their own
+  // source PTS to the common pack clock using each manifest offset.
+  { display: 1, hasReplay: true, presentedMs: 9_963 - threeDisplayOffsets[0] },
+  // The failed recorder is showing its capture-instant bitmap, regardless of
+  // where the two surviving replay clocks are.
+  { display: 2, hasReplay: false, presentedMs: 10_084 - threeDisplayOffsets[1] },
+  { display: 3, hasReplay: true, presentedMs: 10_000 - threeDisplayOffsets[2] },
+])
+check(
+  'three displays retain independent observed clocks with focus at index 3',
+  threeDisplayRequests.map((request) => [request.display, request.timeMs])
+    .map((value) => value.join(':'))
+    .join(',') === '1:10000,2:25000,3:10000',
+)
 const editorSource = readFileSync('src/renderer/editor/editor.ts', 'utf8')
 const scrubSource = readFileSync('src/renderer/editor/scrub.ts', 'utf8')
 const sessionSource = readFileSync('src/main/session.ts', 'utf8')
@@ -237,6 +417,96 @@ check(
     sessionSource.includes('withoutFrozenReplay(candidate)'),
 )
 check(
+  'fresh single-display capture transports focused cadence through save-first and finalization',
+  sessionSource.includes('const focusedCadence = manifestCadence(display.id)') &&
+    sessionSource.includes('cadence: focusedCadence,') &&
+    sessionSource.match(/cadence:\s*focusedCadence,/g)?.length === 2,
+)
+check(
+  're-edit preserves the cadence declared by the saved source manifest',
+  sessionSource.includes('cadence: manifest.media.cadence,'),
+)
+{
+  const screens = [
+    { width: 1_200, height: 1_920, scale: 1 },
+    { width: 3_840, height: 2_160, scale: 1.5 },
+  ]
+  check(
+    'single-display reopen follows the focused persisted bounds after pack reindexing',
+    reopenedSnapshotPixelsPerDip({
+      snapshotWidth: 3_840,
+      snapshotHeight: 2_160,
+      screens,
+      displays: [{
+        index: 1,
+        focused: true,
+        bounds: { x: 0, y: 0, width: 2_560, height: 1_440 },
+        scale: 1.5,
+      }],
+    }) === 1.5,
+  )
+  check(
+    'single-display reopen identifies environment screen 2 from persisted raster bounds',
+    reopenedSnapshotPixelsPerDip({
+      snapshotWidth: 3_840,
+      snapshotHeight: 2_160,
+      screens,
+      displays: undefined,
+    }) === 1.5,
+  )
+  check(
+    'ambiguous equal-size screens with different scales are not guessed',
+    reopenedSnapshotPixelsPerDip({
+      snapshotWidth: 1_920,
+      snapshotHeight: 1_080,
+      screens: [
+        { width: 1_920, height: 1_080, scale: 1 },
+        { width: 1_920, height: 1_080, scale: 1.25 },
+      ],
+      displays: undefined,
+    }) === undefined,
+  )
+  check(
+    'reopen context uses persisted display identity instead of environment.screens[0]',
+    sessionSource.includes('reopenedContextDisplayTargets({')
+      && !sessionSource.includes('manifest.environment.screens[0].scale'),
+  )
+  check(
+    'degraded two-display reopen preserves the surviving focused display index',
+    reopenedContextDisplayTargets({
+      snapshotWidth: 3_840,
+      snapshotHeight: 2_160,
+      screens,
+      displays: [
+        {
+          index: 1,
+          focused: false,
+          bounds: { x: -1_200, y: 0, width: 1_200, height: 1_920 },
+          scale: 1,
+        },
+        {
+          index: 2,
+          focused: true,
+          bounds: { x: 0, y: 0, width: 2_560, height: 1_440 },
+          scale: 1.5,
+        },
+      ],
+      loadedDisplays: [{
+        index: 2,
+        focused: true,
+        width: 3_840,
+        height: 2_160,
+        scale: 1.5,
+      }],
+    }).map((display) => display.index).join(',') === '2',
+  )
+  check(
+    'reopen editor retains a single surviving declared display instead of reindexing it',
+    sessionSource.includes('return result') &&
+      !sessionSource.includes('return result.length > 1 ? result : []'),
+  )
+}
+check(
   'editor wires every display request to that display’s presented frame',
   editorSource.includes('presentedMs: scrub?.presentedMsFor(display.index)') &&
     editorSource.includes('contextFramesByDisplay.set(displayIndex, frame)'),
@@ -245,6 +515,74 @@ check(
   'a secondary frame settling late schedules a fresh context query',
   scrubSource.includes('host.drawFrame(r.displayIndex, source)') &&
     scrubSource.includes('host.onFrame?.()'),
+)
+
+const threeDisplayManifest = buildManifest({
+  id: 'display-clock-three-monitor-check',
+  createdAt: new Date('2026-07-30T00:00:00.000Z'),
+  generatorVersion: 'check',
+  title: '',
+  note: '',
+  osVersion: 'check',
+  screens: [
+    { width: 1_200, height: 1_920, scale: 1 },
+    { width: 3_840, height: 2_160, scale: 1.5 },
+    { width: 2_400, height: 1_350, scale: 1.25 },
+  ],
+  captureKind: 'video',
+  hasReplay: true,
+  replayDurationMs: 25_000,
+  snapshotTMs: null,
+  displays: [
+    {
+      index: 1,
+      focused: false,
+      bounds: { x: -1_200, y: -480, width: 1_200, height: 1_920 },
+      scale: 1,
+      hasReplay: true,
+      replayDurationMs: 24_963,
+      replayClockOffsetMs: threeDisplayOffsets[0],
+      snapshotFile: 'snapshot-d1.png',
+      replayFile: 'replay-d1.webm',
+    },
+    {
+      index: 2,
+      focused: false,
+      bounds: { x: 0, y: 0, width: 2_560, height: 1_440 },
+      scale: 1.5,
+      hasReplay: false,
+      replayDurationMs: 0,
+      snapshotFile: 'snapshot-d2.png',
+      replayFile: null,
+    },
+    {
+      index: 3,
+      focused: true,
+      bounds: { x: 2_560, y: -360, width: 1_920, height: 1_080 },
+      scale: 1.25,
+      hasReplay: true,
+      replayDurationMs: 25_000,
+      replayClockOffsetMs: threeDisplayOffsets[2],
+      snapshotFile: 'snapshot.png',
+      replayFile: 'replay.webm',
+    },
+  ],
+})
+const reopenedThreeDisplays = threeDisplayManifest.media.displays ?? []
+check(
+  'three-display manifest preserves portrait/negative/mixed-DPI geometry and focus 3',
+  reopenedThreeDisplays.length === 3 &&
+    reopenedThreeDisplays[0]?.bounds?.x === -1_200 &&
+    reopenedThreeDisplays[0]?.bounds?.height === 1_920 &&
+    reopenedThreeDisplays[1]?.scale === 1.5 &&
+    reopenedThreeDisplays[2]?.focused === true,
+)
+check(
+  'three-display manifest preserves measured offsets and omits one failed recorder clock',
+  reopenedThreeDisplays[0]?.replay_clock_offset_ms === threeDisplayOffsets[0] &&
+    reopenedThreeDisplays[1]?.replay === null &&
+    reopenedThreeDisplays[1]?.replay_clock_offset_ms === undefined &&
+    reopenedThreeDisplays[2]?.replay_clock_offset_ms === 0,
 )
 
 const noReplayManifest = buildManifest({

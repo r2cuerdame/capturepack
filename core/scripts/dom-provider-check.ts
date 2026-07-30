@@ -14,6 +14,13 @@
 //
 // Run: npm run check:dom
 import { ChromeDomProvider } from '../src/main/context/domProvider'
+import {
+  ContextBuffer,
+  mintSurfaceIds,
+  surfaceSamplesOf,
+  type ContextObservation,
+} from '../src/main/context/buffer'
+import { WindowsUiaProvider } from '../src/main/context/provider'
 import { parseDomPayload, type DomEvent } from '../src/main/chrome/domBridge'
 import type { Rect, SurfaceInfo } from '../src/shared/context/protocol'
 import { claimCovers } from '../src/shared/context/resolver'
@@ -153,17 +160,18 @@ async function main(): Promise<void> {
     )
   }
 
-  // 3. ANCHORED IN TIME: the window is dragged 400 x 250 after the pick; the
-  //    element must travel with it, because it is drawn inside it.
+  // 3. OBSERVED MEANS OBSERVED: owner-window motion is not an observation of
+  //    the child. A page can scroll or reflow independently, so the nearest DOM
+  //    rectangle must be returned byte-for-byte instead of translated.
   {
     const ev = pick(1000, 300, 200, 120, 40)
     const atPick = browserAt(WINDOW.x, WINDOW.y)
     const later = browserAt(WINDOW.x + 400, WINDOW.y + 250)
     const provider = new ChromeDomProvider([ev], (t) => [t <= 1000 ? atPick : later])
     const got = await candidateAt(provider, 5000, [later])
-    const want = truth(300, 200, 120, 40, 400, 250)
+    const want = truth(300, 200, 120, 40)
     report(
-      'the element follows its window',
+      'owner motion does not invent a new DOM element rectangle',
       got !== null && near(got, want),
       got === null ? 'no candidate' : `got ${fmt(got)} want ${fmt(want)}`,
     )
@@ -235,19 +243,18 @@ async function main(): Promise<void> {
     )
   }
 
-  // 8. PAST FRAMES ARE FIRST-CLASS: the pick is exact at its event time, but
-  //    its offset inside a browser tracked by the ring is still a useful,
-  //    explicitly interpolated answer before that instant too. This is the
-  //    editor path used after scrubbing away from the capture frame.
+  // 8. PAST FRAMES ARE FIRST-CLASS: the nearest observed DOM rectangle remains
+  //    useful before its event, with temporal error attached. Its coordinates
+  //    are still the observation, never a spatial estimate.
   {
     const ev = pick(5000, 300, 200, 120, 40)
     const earlier = browserAt(WINDOW.x - 200, WINDOW.y - 100)
     const atPick = browserAt(WINDOW.x, WINDOW.y)
     const provider = new ChromeDomProvider([ev], (t) => [t < ev.tMs ? earlier : atPick])
     const got = await candidateAt(provider, 1000, [earlier])
-    const want = truth(300, 200, 120, 40, -200, -100)
+    const want = truth(300, 200, 120, 40)
     report(
-      'a DOM element remains pickable in a past frame',
+      'a past frame reuses the nearest DOM observation unchanged',
       got !== null && near(got, want),
       got === null ? 'no candidate' : `got ${fmt(got)} want ${fmt(want)}`,
     )
@@ -271,11 +278,35 @@ async function main(): Promise<void> {
     )
   }
 
-  // 10. CROSS-DISPLAY DPI + RESIZE: a browser moved from a 2x display to a 1x
-  //     display keeps the same DIP element geometry, so the rectangle halves
-  //     even if the user independently resizes the target window. Deriving the
-  //     ratio from client width would mistake that resize for another DPI
-  //     transform and cannot pass this case.
+  // 10. CROSS-DISPLAY DPI + RESIZE: neither a new display nor a new DPI scale
+  //     licenses rewriting an old element observation.
+  {
+    const past = pick(1000, 300, 200, 120, 40)
+    const future = pick(3000, 500, 240, 120, 40)
+    const stored = [future, past].map(({ tMs, ...event }) => ({
+      ...event,
+      t_ms: tMs,
+    }))
+    const reopened = parseDomPayload(JSON.stringify({ events: stored }))
+    const still = browserAt(WINDOW.x, WINDOW.y)
+    const provider = new ChromeDomProvider(reopened, () => [still])
+    const frame = await provider.frame({
+      sessionId: 'dom-temporal-tie',
+      timeMs: 2000,
+      surfaces: [still],
+      maxCandidates: 100,
+    })
+    report(
+      'reopened DOM observations are chronological and an exact distance tie keeps the past',
+      reopened.map((event) => event.tMs).join(',') === '1000,3000'
+        && frame.accuracy.materializedTimeMs === 1000
+        && frame.accuracy.errorMs === 1000,
+      `events ${reopened.map((event) => event.tMs).join(',')}, materialized ${String(frame.accuracy.materializedTimeMs)}`,
+    )
+  }
+
+  // 11. CROSS-DISPLAY DPI + RESIZE: neither a new display nor a new DPI scale
+  //     licenses rewriting an old element observation.
   {
     const ev = pick(1000, 300, 200, 120, 40)
     const atPick = browserAt(WINDOW.x, WINDOW.y)
@@ -291,17 +322,16 @@ async function main(): Promise<void> {
       scaleMap([[1, 2], [2, 1]]),
     )
     const got = await candidateAt(provider, 5000, [later])
-    const want: Rect = { x: 404, y: 334, width: 120, height: 40 }
+    const want = truth(300, 200, 120, 40)
     report(
-      'cross-display DPI is independent of target window resize',
+      'cross-display owner motion leaves the DOM observation unchanged',
       got !== null && near(got, want),
       got === null ? 'no candidate' : `got ${fmt(got)} want ${fmt(want)}`,
     )
   }
 
-  // 11. SAME SCALE, DIFFERENT DISPLAY: crossing monitor ids is not itself a
-  //     resize. A simultaneous client resize must not change the old observed
-  //     element's size when both snapshots have the same px-per-DIP scale.
+  // 11. SAME SCALE, DIFFERENT DISPLAY: the no-invention rule is independent of
+  //     whether the two displays happen to share a scale.
   {
     const ev = pick(1000, 300, 200, 120, 40)
     const atPick = browserAt(WINDOW.x, WINDOW.y)
@@ -317,16 +347,15 @@ async function main(): Promise<void> {
       scaleMap([[1, 2], [2, 2]]),
     )
     const got = await candidateAt(provider, 5000, [later])
-    const want: Rect = { x: 660, y: 578, width: 240, height: 80 }
+    const want = truth(300, 200, 120, 40)
     report(
-      'same-scale monitor move does not turn window resize into element scaling',
+      'same-scale owner motion leaves the DOM observation unchanged',
       got !== null && near(got, want),
       got === null ? 'no candidate' : `got ${fmt(got)} want ${fmt(want)}`,
     )
   }
 
-  // 12. MISSING SCALE: a legacy caller that cannot identify either captured
-  //     display's pixel scale must not guess from window dimensions.
+  // 12. MISSING SCALE: no transform is needed to quote the observed rectangle.
   {
     const ev = pick(1000, 300, 200, 120, 40)
     const atPick = browserAt(WINDOW.x, WINDOW.y)
@@ -338,7 +367,12 @@ async function main(): Promise<void> {
     }
     const provider = new ChromeDomProvider([ev], (t) => [t <= ev.tMs ? atPick : later])
     const got = await candidateAt(provider, 5000, [later])
-    report('cross-display placement refuses missing DPI metadata', got === null, got === null ? '' : `offered ${fmt(got)}`)
+    const want = truth(300, 200, 120, 40)
+    report(
+      'missing target-display DPI still preserves the observed rectangle',
+      got !== null && near(got, want),
+      got === null ? 'no candidate' : `got ${fmt(got)} want ${fmt(want)}`,
+    )
   }
 
   // 13. IDENTITY + PER-CANDIDATE TIME: two picks can arrive in the same
@@ -383,7 +417,8 @@ async function main(): Promise<void> {
       timedFrame.accuracy.exact
         && timedFrame.accuracy.materializedTimeMs === second.tMs
         && exact.length === 1
-        && stale?.accuracy.interpolated === true,
+        && stale?.accuracy.errorMs === 4000
+        && stale.accuracy.interpolated !== true,
       `frame error ${String(timedFrame.accuracy.errorMs)}, exact candidates ${String(exact.length)}`,
     )
   }
@@ -428,8 +463,8 @@ async function main(): Promise<void> {
       'spanning-window DOM candidate and claims preserve the visible display slice',
       candidate?.display === 2
         && candidate.bounds.x === 400
-        && claims.length === 2
-        && new Set(claims.map((claim) => claim.display)).size === 2
+        && claims.length === 1
+        && claims[0]?.display === 2
         && !claimCovers(
           displayOneClaims,
           candidate.providerId,
@@ -456,6 +491,81 @@ async function main(): Promise<void> {
       'negative DOM geometry is rejected on the wire, reopen, and provider seams',
       got === null && reopened.length === 0,
       got === null ? `reopened events ${String(reopened.length)}` : `offered ${fmt(got)}`,
+    )
+  }
+
+  // 16. UIA USES THE SAME POLICY: a legacy/capture checkpoint can be the
+  //     nearest control observation even when the owner window later moved.
+  //     The control rectangle itself must not be carried by that window delta.
+  {
+    const observed: ContextObservation = {
+      tMs: 1000,
+      windows: [
+        {
+          surface_id: 'uia-owner',
+          hwnd: '7001',
+          title: 'Observed UIA owner',
+          process: 'observed-app',
+          class_name: 'ObservedWindow',
+          bounds: { x: 100, y: 80, width: 800, height: 600 },
+          client_bounds: { x: 108, y: 112, width: 784, height: 560 },
+          display: 1,
+          focused: true,
+          z: 0,
+          hasControls: true,
+          tree: 'collected',
+        },
+      ],
+      elements: [
+        {
+          name: 'Observed button',
+          control_type: 'Button',
+          automation_id: 'observed-button',
+          class_name: 'Button',
+          bounds: { x: 220, y: 260, width: 120, height: 40 },
+          display: 1,
+          window: 0,
+        },
+      ],
+    }
+    const ids = mintSurfaceIds([observed])
+    const buffer = new ContextBuffer([observed], 'single-instant', {
+      startMs: observed.tMs,
+      endMs: observed.tMs,
+    })
+    const provider = new WindowsUiaProvider(buffer, ids)
+    const sourceSurface = surfaceSamplesOf([observed], ids)[0]?.surfaces[0]
+    if (sourceSurface === undefined) throw new Error('UIA observation fixture has no surface')
+    const movedSurface: SurfaceInfo = {
+      ...sourceSurface,
+      bounds: { ...sourceSurface.bounds, x: sourceSurface.bounds.x + 300 },
+      clientBounds:
+        sourceSurface.clientBounds === undefined
+          ? undefined
+          : {
+              ...sourceSurface.clientBounds,
+              x: sourceSurface.clientBounds.x + 300,
+            },
+    }
+    const frame = await provider.frame({
+      sessionId: 'semantic-observation-policy',
+      timeMs: 5000,
+      surfaces: [movedSurface],
+      maxCandidates: 100,
+    } as never)
+    const candidate = frame.candidates.find(
+      (item) => item.identity?.['automation_id'] === 'observed-button',
+    )
+    const want = observed.elements[0]?.bounds
+    report(
+      'owner motion does not invent a new UIA control rectangle',
+      candidate !== undefined
+        && want !== undefined
+        && near(candidate.bounds, want)
+        && candidate.accuracy.interpolated !== true,
+      candidate === undefined
+        ? 'no candidate'
+        : `got ${fmt(candidate.bounds)} want ${want === undefined ? 'missing' : fmt(want)}`,
     )
   }
 

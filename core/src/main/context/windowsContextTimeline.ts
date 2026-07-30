@@ -36,6 +36,7 @@ export interface PersistedWindowPatch {
   z?: number
   hasControls?: boolean
   tree?: EditorUiaWindow['tree']
+  control_geometry_invalidated?: true | null
 }
 
 export interface PersistedElementPatch {
@@ -259,6 +260,7 @@ function readWindow(
   const z = value['z']
   const hasControls = value['hasControls']
   const tree = value['tree']
+  const controlGeometryInvalidated = value['control_geometry_invalidated']
   if (
     (hwnd !== undefined && !stringValue(hwnd, budget))
     || (surfaceId !== undefined && !stringValue(surfaceId, budget))
@@ -273,6 +275,10 @@ function readWindow(
     || typeof hasControls !== 'boolean'
     || !stringValue(tree, budget)
     || !TREE_STATUSES.has(tree as EditorUiaWindow['tree'])
+    || (
+      controlGeometryInvalidated !== undefined
+      && controlGeometryInvalidated !== true
+    )
   ) {
     return null
   }
@@ -289,6 +295,9 @@ function readWindow(
     z,
     hasControls,
     tree: tree as EditorUiaWindow['tree'],
+    ...(controlGeometryInvalidated === true
+      ? { control_geometry_invalidated: true }
+      : {}),
   }
 }
 
@@ -371,6 +380,7 @@ function sameWindow(left: EditorUiaWindow, right: EditorUiaWindow): boolean {
     && left.z === right.z
     && left.hasControls === right.hasControls
     && left.tree === right.tree
+    && left.control_geometry_invalidated === right.control_geometry_invalidated
   )
 }
 
@@ -410,6 +420,13 @@ function windowPatch(
   if (previous.z !== next.z) patch.z = next.z
   if (previous.hasControls !== next.hasControls) patch.hasControls = next.hasControls
   if (previous.tree !== next.tree) patch.tree = next.tree
+  if (
+    previous.control_geometry_invalidated
+    !== next.control_geometry_invalidated
+  ) {
+    patch.control_geometry_invalidated =
+      next.control_geometry_invalidated === true ? true : null
+  }
   return Object.keys(patch).length === 0 ? null : patch
 }
 
@@ -756,6 +773,12 @@ function readWindowPatch(
       return null
     }
     patch.tree = tree as EditorUiaWindow['tree']
+    fields += 1
+  }
+  if ('control_geometry_invalidated' in value) {
+    const invalidated = value['control_geometry_invalidated']
+    if (invalidated !== true && invalidated !== null) return null
+    patch.control_geometry_invalidated = invalidated
     fields += 1
   }
   return fields === 0 ? null : patch

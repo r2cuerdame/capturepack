@@ -62,13 +62,25 @@
         </div>
         <span class="how" id="storageResult" hidden></span>
       </div>
-      <!-- Automatic, and not always the folder: what a pack is used for next is
-           usually a sentence handed to an LLM, so that is what this copies by
-           default. Nothing has to be copied by hand after a save. -->
+      <!-- Video and still capture deliberately have separate post-capture
+           actions. A still can put its completed annotated image directly on
+           the clipboard; video keeps the existing pack-oriented actions. -->
       <div class="row">
-        <label class="label" for="clipboardAfterSave" data-i18n="settings.clipboardAfterSave">On save, copy to clipboard</label>
+        <label class="label" for="clipboardAfterSave" data-i18n="settings.clipboardAfterSave">After video capture</label>
         <span class="control">
           <select id="clipboardAfterSave">
+            <option value="prompt" data-i18n="settings.clipPrompt">LLM prompt with the path</option>
+            <option value="folder" data-i18n="settings.clipFolder">The folder itself</option>
+            <option value="path" data-i18n="settings.clipPath">The folder path</option>
+            <option value="off" data-i18n="settings.clipOff">Nothing</option>
+          </select>
+        </span>
+      </div>
+      <div class="row">
+        <label class="label" for="imageClipboardAfterSave" data-i18n="settings.imageClipboardAfterSave">After image capture</label>
+        <span class="control">
+          <select id="imageClipboardAfterSave">
+            <option value="image" data-i18n="settings.clipImage">Final image (recommended)</option>
             <option value="prompt" data-i18n="settings.clipPrompt">LLM prompt with the path</option>
             <option value="folder" data-i18n="settings.clipFolder">The folder itself</option>
             <option value="path" data-i18n="settings.clipPath">The folder path</option>
@@ -198,7 +210,7 @@
       <div class="row">
         <label class="label" for="fps" data-i18n="settings.captureFps">Capture FPS</label>
         <span class="control">
-          <input type="number" id="fps" min="1" max="30" step="1" />
+          <input type="number" id="fps" min="5" max="30" step="1" />
           <span class="unit">fps</span>
         </span>
       </div>

@@ -26,6 +26,7 @@ import type {
   EditorWindowBounds,
   EditorWindowMode,
   Manifest,
+  ManifestCadence,
   ManifestDisplayMedia,
   Settings,
   TimelineEvent,
@@ -47,6 +48,13 @@ import {
   resolveFocusedReplayTimelineClock,
   resolvedReplayClockOffsetMs,
 } from '../shared/displayClock'
+import {
+  createObservedReplayClockMap,
+  measuredEdgeExtrapolationMs,
+  ptsToSessionMs,
+  sessionToPtsMs,
+} from '../shared/replayClockMap'
+import type { ObservedReplayClockMap } from '../shared/replayClockMap'
 import type { AuthoredMotionSpace } from '../shared/track'
 import type { Language } from '../shared/i18n'
 import {
@@ -59,6 +67,7 @@ import {
   captureWindowForDisplay,
   replayUnavailableReason,
   requestReplay,
+  resumeReplay,
   resolveCaptureTargets,
   resolveTargetDisplay,
   takeDisplaySnapshots,
@@ -69,6 +78,7 @@ import {
   freezeContext,
   contextObservationFromSurfaceSample,
   frozenObservations,
+  frozenPackTimeAt,
   frozenWindow,
   logContextCost,
   refreshContextSurfaceSample,
@@ -116,7 +126,9 @@ import {
 } from './context/windowsContextTimeline'
 import { openContextSession, pushContextFrame } from './context/service'
 import { createEditorCloseWatchdog } from './editorCloseWatchdog'
+import { reopenedContextDisplayTargets } from './reopenDisplay'
 import { packDocLanguage, uiLanguage, uiT } from './locale'
+import { copyPngToClipboard } from './clipboard'
 import { logError, logInfo, logWarn } from './log'
 import { openPack } from './mcp/store'
 import { showSaveToast, updateToastRenderStatus } from './saveToast'
@@ -319,6 +331,16 @@ interface FrozenDisplay {
   replayDurationMs: number
   /** The tick clock's value at this replay's t=0 (#112); absent if unknown. */
   replayOriginMs?: number
+  /** Exact same-frame encoded PTS -> shared presentation-clock observations. */
+  replayClockAnchors?: readonly {
+    ptsMs: number
+    wallMs: number
+  }[]
+  /** Encoded PTS -> independently measured desktop-pixel exposure clock. */
+  replaySourceClockAnchors?: readonly {
+    ptsMs: number
+    wallMs: number
+  }[]
   /** Main's wall time immediately before requesting this display's replay. */
   replayRequestWallMs?: number
   replayMimeType: string | null
@@ -331,18 +353,71 @@ interface FrozenDisplay {
 }
 
 /**
+ * Validate renderer observations. Interior interpolation and the bounded
+ * projection of at most one observed edge segment map clocks only; UIA, DOM
+ * and window geometry remain nearest observed samples without interpolation.
+ */
+function observedReplayClockMap(
+  display: FrozenDisplay,
+  axis: 'presentation' | 'source' = 'presentation',
+): ObservedReplayClockMap | null {
+  const anchors =
+    axis === 'source'
+      ? display.replaySourceClockAnchors
+      : display.replayClockAnchors
+  if (anchors === undefined || anchors.length < 2) return null
+  const mappedAnchors = anchors.map((anchor) => ({
+      ptsMs: anchor.ptsMs,
+      // At this boundary the renderer clock is epoch-based and comparable
+      // across processes. context/runtime converts it to SessionClock later.
+      sessionMs: anchor.wallMs,
+    }))
+  const decision = createObservedReplayClockMap(
+    mappedAnchors,
+    measuredEdgeExtrapolationMs(mappedAnchors),
+  )
+  return decision.status === 'ready' ? decision.map : null
+}
+
+function observedReplayWallTimeAt(
+  display: FrozenDisplay | undefined,
+  ptsMs: number,
+): number | undefined {
+  if (display === undefined || !Number.isFinite(ptsMs)) return undefined
+  const map = observedReplayClockMap(display)
+  const mapped = map === null ? undefined : ptsToSessionMs(map, ptsMs)
+  if (mapped !== undefined) return mapped
+  return display.replayOriginMs === undefined
+    ? undefined
+    : display.replayOriginMs + ptsMs
+}
+
+function observedReplayPtsAtWallTime(
+  display: FrozenDisplay | undefined,
+  wallMs: number,
+): number | undefined {
+  if (display === undefined || !Number.isFinite(wallMs)) return undefined
+  const map = observedReplayClockMap(display)
+  const mapped = map === null
+    ? undefined
+    : sessionToPtsMs(map, wallMs)
+  if (mapped !== undefined) return mapped
+  return display.replayOriginMs === undefined
+    ? undefined
+    : wallMs - display.replayOriginMs
+}
+
+/**
  * Freezes what the trigger covers: every connected display in "all" mode, the
  * cursor/fixed display otherwise.
  *
- * The FOCUSED display is snapshotted first and alone, so its frame stays as
- * close to the trigger instant as it was before all-displays capture existed —
- * and that one call already carries every same-sized display's frame, so an
- * ordinary desk of identical monitors costs exactly ONE screen capture round
- * trip (see takeDisplaySnapshots). Differently-sized displays follow
- * concurrently (recording already runs for them — "all" costs export work, not
- * capture work). A per-display failure is logged and that display simply drops
- * out of the pack; the focused display's failure is fatal to the capture,
- * exactly as before.
+ * Every display's replay boundary is acquired in parallel first. Only then is
+ * the FOCUSED display snapshotted first and alone; that one call already carries
+ * every same-sized display's frame, so an ordinary desk of identical monitors
+ * costs exactly ONE screen capture round trip (see takeDisplaySnapshots).
+ * Differently-sized groups follow concurrently while each old replay epoch is
+ * held/discard-only. A per-display failure is logged and that display stays
+ * screenshot-only; the focused display's snapshot failure remains fatal.
  */
 async function freezeDisplays(settings: Settings): Promise<{
   screens: Array<{ width: number; height: number; scale: number }>
@@ -371,97 +446,139 @@ async function freezeDisplays(settings: Settings): Promise<{
     indexById.set(focused.id, screens.length)
   }
 
-  const frozen = (
-    display: (typeof targets.displays)[number],
-    focused: boolean,
-    snap: { png: Buffer; width: number; height: number },
-  ): FrozenDisplay => ({
-    id: display.id,
-    index: indexById.get(display.id) ?? 1,
-    focused,
-    bounds: { ...display.bounds },
-    scale: display.scaleFactor,
-    snapshotPng: snap.png,
-    width: snap.width,
-    height: snap.height,
-    replayWebm: null,
-    replayDurationMs: 0,
-    replayMimeType: null,
-    replayFile: null,
-    // Filled in by the replay fetch below; a display that never gets one keeps
-    // the reason its recorder reports.
-    replayUnavailableReason: null,
+  // Acquire every recorder boundary before touching desktopCapturer. This is a
+  // barrier, not a serial loop: one slow/failed display cannot move another
+  // display's replay end to the far side of the full-native snapshot.
+  const heldRequests = targets.displays.map((display) => {
+    const win = captureWindowForDisplay(display.id)
+    const requestId = win === null ? null : randomUUID()
+    // Fallback end anchor for a renderer too old to report originMs. Captured
+    // before stop/flush/IPC so mux latency cannot become pixel time.
+    const replayRequestWallMs = Date.now()
+    const result: Promise<ReplayFetch> =
+      win === null || requestId === null
+        ? Promise.resolve({ replay: null, miss: 'no-recorder' })
+        : requestReplay(win, requestId, REPLAY_TIMEOUT_MS, {
+            holdAfterCapture: true,
+          }).catch((error: unknown) => {
+            logError(
+              `[capture] display ${display.id}: replay freeze failed independently:`,
+              error,
+            )
+            return { replay: null, miss: 'window-gone' }
+          })
+    return { display, win, requestId, replayRequestWallMs, result }
   })
 
-  // ONE grouped capture for the whole trigger: desktopCapturer's thumbnail size
-  // is global, so a call per display would grab every screen N times over (see
-  // takeDisplaySnapshots). The focused display's frame is still taken first and
-  // alone; a display whose frame did not come back drops out of the pack, and
-  // the focused display's failure is fatal to the capture, exactly as before.
-  const snaps = await takeDisplaySnapshots(targets.displays, targets.focused)
-  const focusedSnap = snaps.get(targets.focused.id)
-  if (focusedSnap === undefined) {
-    throw new Error(`no screen source available for display ${targets.focused.id}`)
-  }
-  const focused = frozen(targets.focused, true, focusedSnap)
-  const others: FrozenDisplay[] = []
-  for (const d of targets.displays) {
-    if (d.id === targets.focused.id) continue
-    const snap = snaps.get(d.id)
-    if (snap === undefined) continue
-    others.push(frozen(d, false, snap))
-  }
-  const displays = [focused, ...others].sort((a, b) => a.index - b.index)
+  try {
+    const replayResults = await Promise.all(
+      heldRequests.map(async (request) => ({
+        request,
+        fetched: await request.result,
+      })),
+    )
+    const replayByDisplay = new Map(
+      replayResults.map(({ request, fetched }) => [
+        request.display.id,
+        {
+          fetched,
+          replayRequestWallMs: request.replayRequestWallMs,
+        },
+      ]),
+    )
 
-  // Replay fetch runs in parallel: each request is an independent round trip to
-  // that display's own recorder window. On timeout, recorder failure, or no
-  // recorder window (hotplug rebuild in progress) the display stays
-  // screenshot-only.
-  await Promise.all(
-    displays.map(async (d, i) => {
-      const win = captureWindowForDisplay(d.id)
-      // Fallback end anchor for a renderer too old to report originMs. Captured
-      // BEFORE awaiting stop/flush/IPC, so a slow mux or another display cannot
-      // move the focused pack clock merely by replying late.
-      const replayRequestWallMs = Date.now()
-      const fetched: ReplayFetch =
-        win === null
-          ? { replay: null, miss: 'no-recorder' }
-          : await requestReplay(win, randomUUID(), REPLAY_TIMEOUT_MS)
+    // ONE grouped full-native observation after every replay is frozen.
+    // Snapshot-time pixels are therefore in neither the returned replay nor
+    // the fresh ring that RESUME creates.
+    const snaps = await takeDisplaySnapshots(targets.displays, targets.focused)
+    const focusedSnap = snaps.get(targets.focused.id)
+    if (focusedSnap === undefined) {
+      throw new Error(`no screen source available for display ${targets.focused.id}`)
+    }
+
+    const frozen = (
+      display: (typeof targets.displays)[number],
+      isFocused: boolean,
+      snap: { png: Buffer; width: number; height: number },
+    ): FrozenDisplay => {
+      const request = replayByDisplay.get(display.id)
+      const fetched = request?.fetched ?? {
+        replay: null,
+        miss: 'no-recorder' as const,
+      }
       const replay = fetched.replay
       if (replay === null) {
-        // Screenshot-only for this display — and the user is told WHY, in the
-        // editor and in the save toast (GOAL "Say that you are recording"). The
-        // silent version of this line is exactly what issue #39 reported: a
-        // capture that quietly hands back a screenshot-only pack while the tray
-        // still claimed a running buffer.
-        //
-        // The OUTCOME of this request goes with the display id: a recorder that
-        // is provably still running (it just answered too late, or with a slot
-        // the muxer has not flushed yet) must not be reported as one that never
-        // produced video — the tray is saying the opposite at that very moment.
-        const reason = replayUnavailableReason(d.id, fetched.miss ?? 'no-recorder')
+        const reason = replayUnavailableReason(
+          display.id,
+          fetched.miss ?? 'no-recorder',
+        )
         logWarn(
-          `[capture] display ${d.id}: no replay for this capture (${reason}) — ` +
+          `[capture] display ${display.id}: no replay for this capture (${reason}) — ` +
             'the pack keeps its frozen frame only',
         )
-        displays[i] = { ...d, replayRequestWallMs, replayUnavailableReason: reason }
-        return
+        return {
+          id: display.id,
+          index: indexById.get(display.id) ?? 1,
+          focused: isFocused,
+          bounds: { ...display.bounds },
+          scale: display.scaleFactor,
+          snapshotPng: snap.png,
+          width: snap.width,
+          height: snap.height,
+          replayWebm: null,
+          replayDurationMs: 0,
+          replayMimeType: null,
+          replayFile: null,
+          replayRequestWallMs: request?.replayRequestWallMs,
+          replayUnavailableReason: reason,
+        }
       }
-      displays[i] = {
-        ...d,
+      return {
+        id: display.id,
+        index: indexById.get(display.id) ?? 1,
+        focused: isFocused,
+        bounds: { ...display.bounds },
+        scale: display.scaleFactor,
+        snapshotPng: snap.png,
+        width: snap.width,
+        height: snap.height,
         replayWebm: replay.buffer,
         replayDurationMs: replay.durationMs,
         ...(replay.originMs === undefined ? {} : { replayOriginMs: replay.originMs }),
-        replayRequestWallMs,
+        ...(replay.clockAnchors === undefined
+          ? {}
+          : { replayClockAnchors: replay.clockAnchors }),
+        ...(replay.sourceClockAnchors === undefined
+          ? {}
+          : { replaySourceClockAnchors: replay.sourceClockAnchors }),
+        replayRequestWallMs: request?.replayRequestWallMs,
         replayMimeType: replay.mimeType,
         replayFile: replay.replayFile,
         replayUnavailableReason: null,
       }
-    }),
-  )
-  const focusedFrozen = displays.find((d) => d.focused) ?? focused
-  return { screens, focused: focusedFrozen, displays }
+    }
+
+    const focused = frozen(targets.focused, true, focusedSnap)
+    const others: FrozenDisplay[] = []
+    for (const display of targets.displays) {
+      if (display.id === targets.focused.id) continue
+      const snap = snaps.get(display.id)
+      if (snap === undefined) continue
+      others.push(frozen(display, false, snap))
+    }
+    const displays = [focused, ...others].sort((a, b) => a.index - b.index)
+    const focusedFrozen = displays.find((display) => display.focused) ?? focused
+    return { screens, focused: focusedFrozen, displays }
+  } finally {
+    // Includes snapshot exceptions, per-display replay timeout and callers that
+    // abandon/cancel after freeze. A dead renderer is a safe no-op; a lost main
+    // resume is independently bounded by the renderer watchdog.
+    for (const request of heldRequests) {
+      if (request.win !== null && request.requestId !== null) {
+        resumeReplay(request.win, request.requestId)
+      }
+    }
+  }
 }
 
 /**
@@ -497,9 +614,7 @@ function toDisplayCaptures(
   // it with the other recorders; duration difference only approximated this
   // when every recorder happened to stop on precisely the same instant.
   const packOriginMs =
-    focused?.replayOriginMs === undefined
-      ? undefined
-      : focused.replayOriginMs + focusedSourceStartMs
+    observedReplayWallTimeAt(focused, focusedSourceStartMs)
   return displays.map((d) => ({
     index: d.index,
     focused: d.focused,
@@ -512,24 +627,17 @@ function toDisplayCaptures(
       : d.focused
         ? { replayClockOffsetMs: 0 }
         : (() => {
-            const offsetMs = observedReplayClockOffsetMs(packOriginMs, d.replayOriginMs)
+            const offsetMs = observedReplayClockOffsetMs(
+              packOriginMs,
+              observedReplayWallTimeAt(d, 0),
+            )
             return offsetMs === undefined ? {} : { replayClockOffsetMs: offsetMs }
           })()),
     // The recorder's own account of what it managed (#82), carried into the
     // pack so the replay's quality is a fact a reader can see.
     ...(() => {
-      const measured = recorderCadence(d.id)
-      return measured === null
-        ? {}
-        : {
-            cadence: {
-              achieved_fps: measured.achievedFps,
-              worst_stall_ms: measured.worstStallMs,
-              ...(measured.discardedFrames === undefined || measured.discardedFrames === null
-                ? {}
-                : { discarded_frames: measured.discardedFrames }),
-            },
-          }
+      const cadence = manifestCadence(d.id)
+      return cadence === undefined ? {} : { cadence }
     })(),
     // A fresh capture writes the canonical names; they travel with the entry so
     // every writer uses the SAME string the manifest declares.
@@ -560,10 +668,10 @@ function toEditorDisplays(
     0,
     (focused?.replayDurationMs ?? focusedWindowDurationMs) - focusedWindowDurationMs,
   )
-  const packOriginMs =
-    focused?.replayOriginMs === undefined
-      ? undefined
-      : focused.replayOriginMs + focusedSourceStartMs
+  const packOriginMs = observedReplayWallTimeAt(
+    focused,
+    focusedSourceStartMs,
+  )
   return displays.map((d) => ({
     index: d.index,
     focused: d.focused,
@@ -586,12 +694,35 @@ function toEditorDisplays(
     // could not report an origin falls back to the legacy end-alignment rule.
     replayOffsetMs: d.focused
       ? 0
-      : resolvedReplayClockOffsetMs(
-          observedReplayClockOffsetMs(packOriginMs, d.replayOriginMs),
+        : resolvedReplayClockOffsetMs(
+          observedReplayClockOffsetMs(
+            packOriginMs,
+            observedReplayWallTimeAt(d, 0),
+          ),
           d.replayDurationMs,
           focusedWindowDurationMs,
         ),
   }))
+}
+
+function manifestCadence(displayId: number): ManifestCadence | undefined {
+  const measured = recorderCadence(displayId)
+  if (measured === null) return undefined
+  return {
+    achieved_fps: measured.achievedFps,
+    worst_stall_ms: measured.worstStallMs,
+    ...(measured.discardedFrames === undefined || measured.discardedFrames === null
+      ? {}
+      : { discarded_frames: measured.discardedFrames }),
+    ...(measured.requestedFps === undefined
+      ? {}
+      : { requested_fps: measured.requestedFps }),
+    ...(measured.backend === undefined ? {} : { backend: measured.backend }),
+    ...(measured.quality === undefined ? {} : { quality: measured.quality }),
+    ...(measured.recorderCount === undefined
+      ? {}
+      : { recorder_count: measured.recorderCount }),
+  }
 }
 
 function imageCropBounds(
@@ -1079,6 +1210,10 @@ async function runImageFlowWithContext(
 
   const uiaPayload = await uiaWrite
   const annotations = outcome.payload.annotations.map(withoutReplayTimes)
+  const imagePackClipboardMode =
+    settings.imageClipboardAfterSave === 'image'
+      ? 'off'
+      : settings.imageClipboardAfterSave
   const input: ExportInput = {
     captureKind: 'image',
     imageScope: selection.mode,
@@ -1097,7 +1232,7 @@ async function runImageFlowWithContext(
     screens: screenDeclaration,
     uia: uiaPayload ?? undefined,
     windowsContext: null,
-    clipboardAfterSave: settings.clipboardAfterSave,
+    clipboardAfterSave: imagePackClipboardMode,
     docLanguage: packDocLanguage(settings),
   }
 
@@ -1112,23 +1247,43 @@ async function runImageFlowWithContext(
     // Confirm the configured automatic copy before presenting "Saved". This is
     // bounded to 80 ms under clipboard contention and avoids a visible toast
     // winning the race with the clipboard write.
-    await copyAfterSave(settings.clipboardAfterSave, savedHandle.dirPath)
+    await copyAfterSave(imagePackClipboardMode, savedHandle.dirPath)
     showSaveToast({
       folderPath: savedHandle.dirPath,
       hasBlur: annotations.some((annotation) => annotation.blur),
       replayUnavailable: null,
-      renderState: 'none',
+      renderState:
+        settings.imageClipboardAfterSave === 'image' ? 'image-rendering' : 'none',
       uiLanguage: uiLanguage(settings),
     })
-    startKeyframeStill(savedHandle, {
-      snapshotPng: input.snapshotPng,
-      annotations,
-      displayNumbers: globalDisplayNumbers(annotations),
-      focusedDisplay: 1,
-      width,
-      height,
-      docLanguage: packDocLanguage(settings),
-    })
+    startKeyframeStill(
+      savedHandle,
+      {
+        snapshotPng: input.snapshotPng,
+        annotations,
+        displayNumbers: globalDisplayNumbers(annotations),
+        focusedDisplay: 1,
+        width,
+        height,
+        docLanguage: packDocLanguage(settings),
+      },
+      settings.imageClipboardAfterSave === 'image'
+        ? {
+            onRendered: async (png) => {
+              const copied = await copyPngToClipboard(png)
+              if (copied) {
+                updateToastRenderStatus(savedHandle.dirPath, 'image-copied')
+              } else {
+                logWarn('[image] final annotated image could not be copied to the clipboard')
+                updateToastRenderStatus(savedHandle.dirPath, 'image-copy-failed')
+              }
+            },
+            onFailed: () => {
+              updateToastRenderStatus(savedHandle.dirPath, 'image-copy-failed')
+            },
+          }
+        : {},
+    )
   } catch (err) {
     logError('[image] save failed:', err)
     dialog.showErrorBox(uiT(settings)('app.saveFailedTitle'), errorMessage(err))
@@ -1223,15 +1378,59 @@ async function runFlow(settings: Settings): Promise<void> {
   // logical last-N window. Resolve both from the same measured origin and add
   // the source in-point exactly once. Only an origin-less legacy renderer uses
   // main's pre-request wall time as an end anchor.
-  const replayClock = resolveFocusedReplayTimelineClock({
+  let replayClock = resolveFocusedReplayTimelineClock({
     replayOriginMs: display.replayOriginMs,
     replayRequestWallMs: display.replayRequestWallMs,
     captureWallMs: triggerAt,
     rawDurationMs: rawReplayDurationMs,
     logicalDurationMs: replayDurationMs,
   })
+  const presentationClockMap = observedReplayClockMap(display)
+  const sourceClockMap = observedReplayClockMap(display, 'source')
+  const contextClockMap = sourceClockMap ?? presentationClockMap
+  let measuredClockCoversMediaEdges = false
+  if (presentationClockMap !== null) {
+    const mappedRawT0Ms = ptsToSessionMs(presentationClockMap, 0)
+    const mappedPackT0Ms = ptsToSessionMs(
+      presentationClockMap,
+      replaySourceStartMs,
+    )
+    const mappedPackEndMs = ptsToSessionMs(
+      presentationClockMap,
+      replaySourceStartMs + replayDurationMs,
+    )
+    if (
+      mappedRawT0Ms === undefined
+      || mappedPackT0Ms === undefined
+      || mappedPackEndMs === undefined
+    ) {
+      logWarn(
+        '[context] replay pixel-clock anchors do not cover the saved media edges — ' +
+          'absolute t0 uses the recorder-origin/wall fallback while observed ' +
+          'context remains mapped inside the measured interval',
+      )
+    } else {
+      measuredClockCoversMediaEdges = true
+      replayClock = {
+        rawT0Ms: mappedRawT0Ms,
+        packT0Ms: mappedPackT0Ms,
+        packEndMs: mappedPackEndMs,
+        measured: true,
+      }
+    }
+  }
   const rawT0Ms = replayClock.rawT0Ms
   const t0Ms = replayClock.packT0Ms
+  const packWallTimeAt = (packTMs: number): number => {
+    if (presentationClockMap !== null) {
+      const measured = ptsToSessionMs(
+        presentationClockMap,
+        replaySourceStartMs + packTMs,
+      )
+      if (measured !== undefined) return measured
+    }
+    return t0Ms + packTMs
+  }
   // PINS THE SURFACE TIMELINE for exactly the range this pack covers (#64
   // `onFreeze`, #65). From here the editor can ask "which window was where at
   // pack time T" for any T in the replay, and pruning may not touch that range
@@ -1251,9 +1450,28 @@ async function runFlow(settings: Settings): Promise<void> {
     replayClock.packEndMs,
     replayDurationMs,
     replayOriginWallMs,
+    contextClockMap === null
+      ? undefined
+      : {
+          anchors: contextClockMap.anchors.map((anchor) => ({
+            ptsMs: anchor.ptsMs,
+            wallMs: anchor.sessionMs,
+          })),
+          sourceStartPtsMs: replaySourceStartMs,
+          maxExtrapolationMs: contextClockMap.maxExtrapolationMs,
+        },
   )
   logInfo(
-    `[context] pack clock: ${replayClock.measured ? 'measured recorder origin' : 'wall fallback'}, ` +
+    `[context] pack clock: ${
+      contextClockMap !== null
+        ? `measured ${contextClockMap.anchors.length}-anchor ${
+            sourceClockMap === null ? 'presentation' : 'source-exposure'
+          } pixel map` +
+          `${measuredClockCoversMediaEdges ? '' : ' (partial; absolute t0 fallback)'}`
+        : replayClock.measured
+          ? 'measured recorder origin'
+          : 'wall fallback'
+    }, ` +
       `end ${String(replayClock.packEndMs - triggerAt)} ms from trigger, ` +
       `${String(replayDurationMs)} ms long (raw ${String(rawReplayDurationMs)} ms); ` +
       `all display replies ready ${String(allReplaysReadyAt - triggerAt)} ms from trigger`,
@@ -1263,6 +1481,10 @@ async function runFlow(settings: Settings): Promise<void> {
   // one display (SPEC §5.3): a single-display pack stays exactly what 0.1.2
   // wrote. The editor's board follows the same rule: one display, one screen.
   const multiDisplay = frozen.displays.length > 1
+  // The focused recorder is the top-level media object even for a one-display
+  // pack. Snapshot its measured cadence now: the recorder registry may rotate
+  // or be torn down before the detached exact-cut/render finalizer runs.
+  const focusedCadence = manifestCadence(display.id)
   // Save-first writes the uncut recorder files, so its per-display offsets are
   // measured from the focused RAW origin. The editor/final declaration starts
   // at the logical source in-point instead. Keeping both prevents a transient
@@ -1371,6 +1593,7 @@ async function runFlow(settings: Settings): Promise<void> {
     // Save-first describes the raw bytes honestly. Finalization replaces this
     // declaration and clock together after the exact background cut.
     replayDurationMs: rawReplayDurationMs,
+    cadence: focusedCadence,
     timeline: {
       t0: new Date(rawT0Ms).toISOString(),
       events: events.map((e) =>
@@ -1490,17 +1713,21 @@ async function runFlow(settings: Settings): Promise<void> {
     const wrote = await tryWriteDomPlugin(saved.dirPath, {
       protocol: DOM_PROTOCOL_VERSION,
       extension_version: domStatus.extensionVersion,
-      events: capturedDomEvents.map((e: DomEvent) => ({
-        // On the pack's clock, like everything else drawn beside it.
-        t_ms: Math.max(0, Math.round(e.tMs - domWindow.startMs)),
-        type: e.type,
-        tab: e.tab,
-        ...(e.element === undefined ? {} : { element: e.element }),
-        // Without this a saved pick is unplaceable forever: bounds are viewport
-        // CSS pixels and this is the only thing that says where that viewport
-        // was. Absent for an event from an extension older than 0.1.4.
-        ...(e.viewport === undefined ? {} : { viewport: e.viewport }),
-      })),
+      events: capturedDomEvents.flatMap((e: DomEvent) => {
+        const packTMs = frozenPackTimeAt(contextFreezeId, e.tMs)
+        if (packTMs === null) return []
+        return [{
+          // On the encoded replay's pack clock, like everything drawn beside it.
+          t_ms: Math.max(0, Math.round(packTMs)),
+          type: e.type,
+          tab: e.tab,
+          ...(e.element === undefined ? {} : { element: e.element }),
+          // Without this a saved pick is unplaceable forever: bounds are viewport
+          // CSS pixels and this is the only thing that says where that viewport
+          // was. Absent for an event from an extension older than 0.1.4.
+          ...(e.viewport === undefined ? {} : { viewport: e.viewport }),
+        }]
+      }),
     })
     if (!wrote) return
     try {
@@ -1554,10 +1781,15 @@ async function runFlow(settings: Settings): Promise<void> {
       const domPicks =
         domWindow === null
           ? []
-          : domEventsBetween(domWindow.startMs, domWindow.endMs).map((e) => ({
-              ...e,
-              tMs: Math.max(0, Math.round(e.tMs - domWindow.startMs)),
-            }))
+          : domEventsBetween(domWindow.startMs, domWindow.endMs).flatMap((e) => {
+              const packTMs = frozenPackTimeAt(contextFreezeId, e.tMs)
+              return packTMs === null
+                ? []
+                : [{
+                    ...e,
+                    tMs: Math.max(0, Math.round(packTMs)),
+                  }]
+            })
       const contextSession = openContextSession(editor, {
         displays: contextDisplays,
         replayDurationMs,
@@ -1795,7 +2027,7 @@ async function runFlow(settings: Settings): Promise<void> {
     trim === null
       ? timeline
       : {
-          t0: new Date(t0Ms + trim.startMs).toISOString(),
+          t0: new Date(packWallTimeAt(trim.startMs)).toISOString(),
           events: events.map((e) => ({ ...e, t_ms: Math.max(0, e.t_ms - trim.startMs) })),
         }
   const sourceTrimStartMs = replaySourceStartMs + keptRange.startMs
@@ -1831,6 +2063,7 @@ async function runFlow(settings: Settings): Promise<void> {
     replayWebm,
     ...(replay === null ? {} : { replayFile: replay.replayFile }),
     replayDurationMs: keptRange.lengthMs,
+    cadence: focusedCadence,
     annotations: finalAnnotations,
     title: outcome.payload.title,
     note: outcome.payload.note,
@@ -1992,10 +2225,18 @@ async function cutCapturedDisplays(
   if (focused === undefined) throw new Error('focused display is missing from exact replay cut')
 
   const focusedSourceStart = focused.replayDurationMs - focusedWindowDurationMs
-  const packOriginMs =
-    focused.replayOriginMs === undefined
-      ? undefined
-      : focused.replayOriginMs + focusedSourceStart
+  const packOriginMs = observedReplayWallTimeAt(
+    focused,
+    focusedSourceStart,
+  )
+  const keptStartWallMs = observedReplayWallTimeAt(
+    focused,
+    focusedSourceStart + keptRange.startMs,
+  )
+  const keptEndWallMs = observedReplayWallTimeAt(
+    focused,
+    focusedSourceStart + keptRange.endMs,
+  )
   const cutFocused = await cutFrozenDisplay(
     focused,
     focusedSourceStart + keptRange.startMs,
@@ -2009,14 +2250,29 @@ async function cutCapturedDisplays(
       result.push(cutFocused)
       continue
     }
-    const observedOffsetMs = observedReplayClockOffsetMs(packOriginMs, display.replayOriginMs)
-    const { startMs, endMs } = displayReplayRangeMs(
-      keptRange.startMs,
-      keptRange.endMs,
-      observedOffsetMs,
-      display.replayDurationMs,
-      focusedWindowDurationMs,
-    )
+    const mappedStartMs =
+      keptStartWallMs === undefined
+        ? undefined
+        : observedReplayPtsAtWallTime(display, keptStartWallMs)
+    const mappedEndMs =
+      keptEndWallMs === undefined
+        ? undefined
+        : observedReplayPtsAtWallTime(display, keptEndWallMs)
+    const { startMs, endMs } =
+      mappedStartMs !== undefined
+      && mappedEndMs !== undefined
+      && mappedEndMs >= mappedStartMs
+        ? { startMs: mappedStartMs, endMs: mappedEndMs }
+        : displayReplayRangeMs(
+            keptRange.startMs,
+            keptRange.endMs,
+            observedReplayClockOffsetMs(
+              packOriginMs,
+              observedReplayWallTimeAt(display, 0),
+            ),
+            display.replayDurationMs,
+            focusedWindowDurationMs,
+          )
     try {
       result.push(await cutFrozenDisplay(display, startMs, endMs, fps))
     } catch (err) {
@@ -2064,21 +2320,41 @@ async function cutFrozenDisplay(
     trimStartMs: startMs,
     trimEndMs: endMs < display.replayDurationMs ? endMs : null,
   })
+  const measuredMap = observedReplayClockMap(display)
+  const mappedOriginMs =
+    measuredMap === null ? undefined : ptsToSessionMs(measuredMap, startMs)
+  // renderTrimmedReplay re-encodes onto a new WebM PTS grid. Raw MP4
+  // same-frame anchors cannot be relabelled as observations of those newly
+  // encoded frames, so retain only the mapped cut-boundary origin when it was
+  // actually inside the measured range.
+  const {
+    replayClockAnchors: _discardedRawClockAnchors,
+    replaySourceClockAnchors: _discardedRawSourceClockAnchors,
+    ...displayWithoutRawClockAnchors
+  } = display
   return {
-    ...display,
+    ...displayWithoutRawClockAnchors,
     replayWebm,
     replayDurationMs: endMs - startMs,
-    ...(display.replayOriginMs === undefined
-      ? {}
-      : { replayOriginMs: display.replayOriginMs + startMs }),
+    ...(mappedOriginMs !== undefined
+      ? { replayOriginMs: mappedOriginMs }
+      : display.replayOriginMs === undefined
+        ? {}
+        : { replayOriginMs: display.replayOriginMs + startMs }),
     replayMimeType: 'video/webm',
     replayFile: 'replay.webm',
   }
 }
 
 function withoutFrozenReplay(display: FrozenDisplay): FrozenDisplay {
+  const {
+    replayOriginMs: _discardedReplayOrigin,
+    replayClockAnchors: _discardedReplayClockAnchors,
+    replaySourceClockAnchors: _discardedReplaySourceClockAnchors,
+    ...displayWithoutReplayClock
+  } = display
   return {
-    ...display,
+    ...displayWithoutReplayClock,
     replayWebm: null,
     replayDurationMs: 0,
     replayMimeType: null,
@@ -2136,7 +2412,7 @@ function startFreshCaptureRenders(
 
   if (displays.length > 1) {
     const focusedDurationMs = focused?.replayDurationMs ?? 0
-    const packOriginMs = focused?.replayOriginMs
+    const packOriginMs = observedReplayWallTimeAt(focused, 0)
     startDisplayRenders(
       handle,
       displays.map((d) => ({
@@ -2148,7 +2424,10 @@ function startFreshCaptureRenders(
         replayMimeType: d.replayMimeType,
         replayDurationMs: d.replayDurationMs,
         offsetMs: resolvedReplayClockOffsetMs(
-          observedReplayClockOffsetMs(packOriginMs, d.replayOriginMs),
+          observedReplayClockOffsetMs(
+            packOriginMs,
+            observedReplayWallTimeAt(d, 0),
+          ),
           d.replayDurationMs,
           focusedDurationMs,
         ),
@@ -2436,6 +2715,13 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
   // a malformed/missing per-display file may throw; doing that first means a
   // failed History edit cannot leave an ownerless hidden BrowserWindow behind.
   const loadedEditorDisplayList = loadedEditorDisplays(pack, loadedDisplays, replayDurationMs)
+  const reopenedContextDisplays = reopenedContextDisplayTargets({
+    snapshotWidth: width,
+    snapshotHeight: height,
+    screens: manifest.environment.screens,
+    displays: manifest.media.displays,
+    loadedDisplays: loadedEditorDisplayList,
+  })
   const { win: editor, mode: windowMode } = createEditorWindow(display.bounds, settings)
   // Picking works on re-edit too, from the pack's own saved observation — which
   // for every pack written before v0.2.0 describes exactly one instant, and the
@@ -2444,24 +2730,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
   let contextSession: ReturnType<typeof openContextSession>
   try {
     contextSession = openContextSession(editor, {
-      displays:
-        loadedEditorDisplayList.length === 0
-          ? [{
-              index: 1,
-              focused: true,
-              width,
-              height,
-              ...(manifest.environment.screens[0]?.scale === undefined
-                ? {}
-                : { snapshotPixelsPerDip: manifest.environment.screens[0].scale }),
-            }]
-          : loadedEditorDisplayList.map((d) => ({
-              index: d.index,
-              focused: d.focused,
-              width: d.width,
-              height: d.height,
-              snapshotPixelsPerDip: d.scale,
-            })),
+      displays: reopenedContextDisplays,
       replayDurationMs,
       observation: contextObservation(loadedUia, loadedFocusedIndex, replayDurationMs),
       dropped: loadedUiaDropped,
@@ -2622,6 +2891,12 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
             savedContextInstant,
           )
         : undefined
+  const editAfterSaveMode =
+    loadedCapture.captureKind === 'image'
+      ? settings.imageClipboardAfterSave
+      : settings.clipboardAfterSave
+  const editPackClipboardMode =
+    editAfterSaveMode === 'image' ? 'off' : editAfterSaveMode
   const input: ExportInput = {
     captureKind: loadedCapture.captureKind,
     ...(loadedCapture.imageScope === undefined
@@ -2638,6 +2913,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
     // The pack keeps the replay it already has, under the name it declares.
     ...(replayRel !== null ? { replayFile: replayRel } : {}),
     replayDurationMs,
+    cadence: manifest.media.cadence,
     annotations: savedAnnotations,
     title: outcome.payload.title,
     note: outcome.payload.note,
@@ -2659,7 +2935,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
         ? savedDisplays
         : undefined,
     screens: loadedScreens.length > 0 ? loadedScreens : undefined,
-    clipboardAfterSave: settings.clipboardAfterSave,
+    clipboardAfterSave: editPackClipboardMode,
     // Re-edit saves regenerate the docs too — in the CURRENT pack language.
     docLanguage: packDocLanguage(settings),
   }
@@ -2674,7 +2950,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
       // Save As New copied inside saveAsNewPack, which is where its folder came
       // into existence; a re-edit save has to do it here for the same reason a
       // fresh capture does — before the render, not after it.
-      await copyAfterSave(settings.clipboardAfterSave, handle.dirPath)
+      await copyAfterSave(editPackClipboardMode, handle.dirPath)
     }
     // Same save pipeline as a fresh capture: toast, then background render.
     showSaveToast({
@@ -2683,7 +2959,11 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
       // Re-edit: nothing was recorded during this save, so there is no recorder
       // failure to report — the pack's replay is whatever it already had.
       replayUnavailable: null,
-      renderState: hasReplay ? 'rendering' : 'none',
+      renderState: hasReplay
+        ? 'rendering'
+        : editAfterSaveMode === 'image'
+          ? 'image-rendering'
+          : 'none',
       uiLanguage: uiLanguage(settings),
     })
     // Same per-display rule as a fresh save: the pack's own annotated views are
@@ -2715,16 +2995,35 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
     } else {
       // Same rule on re-edit: a pack without a replay re-renders its single
       // annotated still from the saved snapshot (SPEC §7.3).
-      startKeyframeStill(handle, {
-        snapshotPng: input.snapshotPng,
-        annotations: focusedAnnotations,
-        motionSpace,
-        displayNumbers: numbers,
-        focusedDisplay: focusedIndex,
-        width,
-        height,
-        docLanguage: packDocLanguage(settings),
-      })
+      startKeyframeStill(
+        handle,
+        {
+          snapshotPng: input.snapshotPng,
+          annotations: focusedAnnotations,
+          motionSpace,
+          displayNumbers: numbers,
+          focusedDisplay: focusedIndex,
+          width,
+          height,
+          docLanguage: packDocLanguage(settings),
+        },
+        editAfterSaveMode === 'image'
+          ? {
+              onRendered: async (png) => {
+                const copied = await copyPngToClipboard(png)
+                if (copied) {
+                  updateToastRenderStatus(handle.dirPath, 'image-copied')
+                } else {
+                  logWarn('[image] re-rendered final image could not be copied to the clipboard')
+                  updateToastRenderStatus(handle.dirPath, 'image-copy-failed')
+                }
+              },
+              onFailed: () => {
+                updateToastRenderStatus(handle.dirPath, 'image-copy-failed')
+              },
+            }
+          : {},
+      )
     }
     if (loadedCapture.captureKind === 'video') {
       startDisplayRenders(
@@ -2968,7 +3267,7 @@ function loadedDisplayCaptures(manifest: Manifest, dirPath: string): DisplayCapt
       replayWebm: null,
     })
   }
-  return result.length > 1 ? result : []
+  return result
 }
 
 /**
@@ -3054,7 +3353,6 @@ function loadedEditorDisplays(
   displays: readonly DisplayCapture[],
   focusedDurationMs: number,
 ): EditorDisplayPayload[] {
-  if (displays.length < 2) return []
   const result: EditorDisplayPayload[] = []
   for (const d of displays) {
     // The DECLARED filename, not one re-derived from the index — otherwise a
@@ -3095,7 +3393,7 @@ function loadedEditorDisplays(
           ),
     })
   }
-  return result.length > 1 ? result : []
+  return result
 }
 
 // ---------------------------------------------------------------------------

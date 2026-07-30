@@ -38,7 +38,7 @@ interface ActiveToast {
 
 /** True while the toast is reporting work the user is waiting on. */
 function isWorking(state: ToastRenderState): boolean {
-  return state === 'trimming' || state === 'rendering'
+  return state === 'trimming' || state === 'rendering' || state === 'image-rendering'
 }
 
 /**

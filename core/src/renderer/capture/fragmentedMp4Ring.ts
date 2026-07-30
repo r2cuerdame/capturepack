@@ -32,6 +32,7 @@ interface StoredFragment {
   durationMs: number
   startAtMs: number
   endAtMs: number
+  recorderSession: number
 }
 
 export interface FragmentedMp4Replay {
@@ -309,6 +310,68 @@ function scaledDuration(
   return (durationTicks * target + source / 2n) / source
 }
 
+function millisecondsToTicks(milliseconds: number, timescale: number): bigint {
+  if (
+    !Number.isFinite(milliseconds) ||
+    milliseconds <= 0 ||
+    !Number.isFinite(timescale) ||
+    timescale <= 0
+  ) {
+    return 0n
+  }
+  return BigInt(Math.round((milliseconds * timescale) / 1_000))
+}
+
+interface ObservedFragmentTimeline {
+  decodeTimes: bigint[]
+  durationTicks: bigint
+}
+
+/**
+ * Put independently restarted recorder fragments on their observed wall-clock
+ * timeline. A positive stop/restart hole stays a positive media PTS gap.
+ * Overlapping delivery anchors are never allowed to move decode time backward;
+ * in that ambiguous case the already-encoded fragment duration wins.
+ */
+function observedFragmentTimeline(
+  fragments: readonly StoredFragment[],
+  targetTimescale: number,
+): ObservedFragmentTimeline {
+  const first = fragments[0]
+  if (first === undefined) return { decodeTimes: [], durationTicks: 0n }
+  const decodeTimes: bigint[] = []
+  let previousEndTicks = 0n
+  let previousSession = first.recorderSession
+  for (const fragment of fragments) {
+    // BlobEvent delivery jitter is not a pixel gap. Inside one recorder,
+    // encoded sample durations remain authoritative. A fresh ftyp/moov is the
+    // observed boundary where stop/restart latency can create a real hole.
+    const observedStartTicks =
+      fragment.recorderSession === previousSession
+        ? previousEndTicks
+        : millisecondsToTicks(
+            fragment.startAtMs - first.startAtMs,
+            targetTimescale,
+          )
+    const decodeTime =
+      observedStartTicks > previousEndTicks
+        ? observedStartTicks
+        : previousEndTicks
+    decodeTimes.push(decodeTime)
+    const durationTicks =
+      fragment.timescale > 0
+        ? scaledDuration(
+            fragment.durationTicks,
+            fragment.timescale,
+            targetTimescale,
+          )
+        : millisecondsToTicks(fragment.durationMs, targetTimescale)
+    previousEndTicks = decodeTime + durationTicks
+    previousSession = fragment.recorderSession
+  }
+  return { decodeTimes, durationTicks: previousEndTicks }
+}
+
 function patchHeaderDuration(
   data: Uint8Array<ArrayBufferLike>,
   box: LocatedBox,
@@ -570,6 +633,7 @@ export class FragmentedMp4Ring {
   private trackDefaultDurations: ReadonlyMap<number, number> =
     EMPTY_TRACK_DEFAULT_DURATIONS
   private initializationCompatibility: string | null = null
+  private recorderSession = 0
   private readonly maxRetainedBytes: number
   private readonly maxWorkingSetBytes: number
 
@@ -612,6 +676,7 @@ export class FragmentedMp4Ring {
     this.timescale = 0
     this.trackDefaultDurations = EMPTY_TRACK_DEFAULT_DURATIONS
     this.initializationCompatibility = null
+    this.recorderSession = 0
   }
 
   pushBytes(data: Uint8Array<ArrayBufferLike>, endAtMs: number): number {
@@ -620,12 +685,14 @@ export class FragmentedMp4Ring {
     const committedTimescale = this.timescale
     const committedTrackDefaultDurations = this.trackDefaultDurations
     const committedInitializationCompatibility = this.initializationCompatibility
+    const committedRecorderSession = this.recorderSession
     let resetFragmentsForInitialization = false
     const completed: Array<{
       bytes: Uint8Array<ArrayBufferLike>
       durationTicks: bigint
       timescale: number
       durationMs: number
+      recorderSession: number
     }> = []
     let consumed = 0
     try {
@@ -670,6 +737,7 @@ export class FragmentedMp4Ring {
               compatibility !== null &&
               this.initializationCompatibility !== compatibility)
           this.initializationCompatibility = compatibility
+          this.recorderSession += 1
           this.awaitingInitializationMoov = false
           continue
         }
@@ -693,6 +761,7 @@ export class FragmentedMp4Ring {
               durationTicks,
               timescale: this.timescale,
               durationMs,
+              recorderSession: this.recorderSession,
             })
             this.currentFragmentParts = []
             this.currentFragmentDurationTicks = 0n
@@ -723,6 +792,7 @@ export class FragmentedMp4Ring {
       this.timescale = committedTimescale
       this.trackDefaultDurations = committedTrackDefaultDurations
       this.initializationCompatibility = committedInitializationCompatibility
+      this.recorderSession = committedRecorderSession
       throw error
     }
     this.pending =
@@ -757,11 +827,46 @@ export class FragmentedMp4Ring {
   assemble(endAtMs: number): FragmentedMp4Replay | null {
     if (this.initialization.byteLength === 0 || this.timescale <= 0) return null
     const cutoff = endAtMs - this.retentionMs
-    const selected = this.fragments.filter(
-      (fragment) => fragment.endAtMs > cutoff && fragment.startAtMs < endAtMs,
+    // A moof/mdat is the smallest independently muxed unit we can preserve
+    // without parsing sample tables, finding a keyframe and rewriting both the
+    // trun and mdat. Including the first fragment merely because it overlaps
+    // `cutoff` made an off-boundary 30 s replay physically expose as much as
+    // 59 s of pixels. Keep only whole fragments inside the requested window.
+    // This may return slightly less than N when the muxer emits coarse
+    // fragments, but it never guesses at media boundaries or relies on a later
+    // background exact-cut to remove already-persisted private footage.
+    const candidates = this.fragments.filter(
+      (fragment) =>
+        fragment.startAtMs >= cutoff && fragment.endAtMs <= endAtMs,
     )
+    let selectedDurationMs = 0
+    let selectedStart = candidates.length
+    for (let index = candidates.length - 1; index >= 0; index -= 1) {
+      const fragment = candidates[index]
+      if (
+        fragment === undefined ||
+        selectedDurationMs + fragment.durationMs > this.retentionMs
+      ) {
+        break
+      }
+      selectedDurationMs += fragment.durationMs
+      selectedStart = index
+    }
+    let selected = candidates.slice(selectedStart)
+    let timeline = observedFragmentTimeline(selected, this.timescale)
+    const retentionTicks = millisecondsToTicks(this.retentionMs, this.timescale)
+    // A delayed session can add a real wall gap even when fragment durations
+    // alone fit N. Keep the newest complete suffix whose actual encoded
+    // timeline, including that gap, remains inside the configured privacy
+    // window.
+    while (
+      selected.length > 0 &&
+      timeline.durationTicks > retentionTicks
+    ) {
+      selected = selected.slice(1)
+      timeline = observedFragmentTimeline(selected, this.timescale)
+    }
     if (selected.length === 0) return null
-    let decodeTime = 0n
     const totalBytes =
       this.initialization.byteLength +
       selected.reduce((sum, fragment) => sum + fragment.bytes.byteLength, 0)
@@ -774,6 +879,7 @@ export class FragmentedMp4Ring {
     const bytes = new Uint8Array(totalBytes)
     let writeOffset = this.initialization.byteLength
     selected.forEach((fragment, index) => {
+      const decodeTime = timeline.decodeTimes[index] ?? 0n
       const patched = bytes.subarray(
         writeOffset,
         writeOffset + fragment.bytes.byteLength,
@@ -786,24 +892,17 @@ export class FragmentedMp4Ring {
         fragment.timescale,
         this.timescale,
       )
-      const patchedMoof = boxAt(patched, 0)
-      decodeTime +=
-        patchedMoof !== null && patchedMoof.box.type === 'moof'
-          ? fragmentDurationTicks(
-              patchedMoof.box,
-              this.trackDefaultDurations,
-            )
-          : scaledDuration(fragment.durationTicks, fragment.timescale, this.timescale)
       writeOffset += fragment.bytes.byteLength
     })
     const initialization = bytes.subarray(0, this.initialization.byteLength)
     initialization.set(this.initialization)
     patchInitializationTimeline(
       initialization,
-      decodeTime,
+      timeline.durationTicks,
       this.timescale,
     )
-    const durationMs = selected.reduce((sum, fragment) => sum + fragment.durationMs, 0)
+    const durationMs =
+      (Number(timeline.durationTicks) * 1_000) / this.timescale
     return {
       buffer: bytes.buffer,
       durationMs: Math.max(1, Math.round(durationMs)),

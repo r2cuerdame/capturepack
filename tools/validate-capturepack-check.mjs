@@ -18,6 +18,7 @@ const temporaryRoot = mkdtempSync(join(tmpdir(), 'capturepack-validator-'))
 const pack = join(temporaryRoot, 'chrome-dom.capturepack')
 const motionPack = join(temporaryRoot, 'mixed-display-motion.capturepack')
 const imagePack = join(temporaryRoot, 'region-image.capturepack')
+const viewerPack = join(temporaryRoot, 'offline-viewer.capturepack')
 let checks = 0
 
 function check(message, condition) {
@@ -127,6 +128,21 @@ try {
     !`${invalidJson.stdout}\n${invalidJson.stderr}`.includes('ReferenceError')
       && !invalidJson.stderr.includes('SyntaxError'))
 
+  cpSync(join(repositoryRoot, 'examples', 'minimal'), viewerPack, { recursive: true })
+  writeFileSync(join(viewerPack, 'viewer.html'), '<!doctype html><title>CapturePack</title>', 'utf8')
+  const viewerManifestFile = join(viewerPack, 'manifest.json')
+  const viewerManifest = JSON.parse(readFileSync(viewerManifestFile, 'utf8'))
+  const viewerOnOldFormat = runValidator(viewerPack)
+  check('viewer.html requires format 0.5 or later',
+    viewerOnOldFormat.status === 1
+      && viewerOnOldFormat.stdout.includes('older than 0.5.0'))
+  viewerManifest.format_version = '0.5.0'
+  writeJson(viewerManifestFile, viewerManifest)
+  const viewerOnCurrentFormat = runValidator(viewerPack)
+  check('format 0.5 accepts the fixed-name optional viewer',
+    viewerOnCurrentFormat.status === 0
+      && viewerOnCurrentFormat.stdout.includes('fixed-name offline generated view'))
+
   cpSync(join(repositoryRoot, 'examples', 'minimal'), motionPack, { recursive: true })
   writeFileSync(join(motionPack, 'snapshot-d1.png'), pngHeader(800, 600))
   writeFileSync(join(motionPack, 'replay.webm'), Buffer.alloc(0))
@@ -177,6 +193,86 @@ try {
     validMotion.status === 0
       && validMotion.stdout.includes('2 authored position(s), ascending and within each keyframe'))
 
+  motionManifest.format_version = '0.4.0'
+  motionManifest.media.cadence = {
+    achieved_fps: 14.8,
+    worst_stall_ms: 114,
+    discarded_frames: 1,
+    requested_fps: 15,
+    backend: 'chromium-desktop-capture',
+    quality: 'full',
+    recorder_count: 1,
+  }
+  motionManifest.media.displays[0].cadence = {
+    achieved_fps: 5,
+    worst_stall_ms: 250,
+    requested_fps: 15,
+    backend: 'windows-gdi-bitblt',
+    quality: 'degraded',
+    recorder_count: 1,
+  }
+  motionManifest.media.displays[1].cadence = {
+    ...motionManifest.media.cadence,
+  }
+  writeJson(motionManifestFile, motionManifest)
+  const validCaptureDiagnostics = runValidator(motionPack)
+  check('format 0.4 accepts honest per-display capture diagnostics',
+    validCaptureDiagnostics.status === 0
+      && validCaptureDiagnostics.stdout.includes('capture provenance is honest'))
+
+  motionManifest.media.cadence.requested_fps = 1
+  motionManifest.media.displays[1].cadence.requested_fps = 1
+  writeJson(motionManifestFile, motionManifest)
+  const validLegacyRequestedFps = runValidator(motionPack)
+  check('legacy requested_fps=1 provenance remains readable',
+    validLegacyRequestedFps.status === 0
+      && validLegacyRequestedFps.stdout.includes('capture provenance is honest'))
+
+  motionManifest.media.cadence.requested_fps = 0
+  motionManifest.media.displays[1].cadence.requested_fps = 0
+  writeJson(motionManifestFile, motionManifest)
+  const invalidLowRequestedFps = runValidator(motionPack)
+  check('requested_fps=0 remains outside the legacy reader range',
+    invalidLowRequestedFps.status === 1
+      && invalidLowRequestedFps.stdout.includes('requested_fps MUST be a number in 1..30'))
+
+  motionManifest.media.cadence.requested_fps = 15
+  motionManifest.media.displays[1].cadence.requested_fps = 15
+  motionManifest.media.displays[0].cadence.quality = 'full'
+  writeJson(motionManifestFile, motionManifest)
+  const dishonestFallback = runValidator(motionPack)
+  check('a native GDI fallback cannot claim full quality',
+    dishonestFallback.status === 1
+      && dishonestFallback.stdout.includes('windows-gdi-bitblt MUST be declared degraded'))
+
+  motionManifest.media.displays[0].cadence.quality = 'degraded'
+  motionManifest.media.cadence.requested_fps = 31
+  motionManifest.media.displays[1].cadence.requested_fps = 31
+  writeJson(motionManifestFile, motionManifest)
+  const invalidRequestedFps = runValidator(motionPack)
+  check('capture diagnostics enforce the supported 1..30 requested FPS range',
+    invalidRequestedFps.status === 1
+      && invalidRequestedFps.stdout.includes('requested_fps MUST be a number in 1..30'))
+
+  motionManifest.media.cadence.requested_fps = 15
+  motionManifest.media.displays[1].cadence.requested_fps = 30
+  writeJson(motionManifestFile, motionManifest)
+  const divergentFocusedCadence = runValidator(motionPack)
+  check('focused display diagnostics must equal top-level cadence',
+    divergentFocusedCadence.status === 1
+      && divergentFocusedCadence.stdout.includes('cadence MUST equal top-level media.cadence'))
+
+  motionManifest.media.displays[1].cadence.requested_fps = 15
+  motionManifest.format_version = '0.3.0'
+  writeJson(motionManifestFile, motionManifest)
+  const diagnosticsOnOldFormat = runValidator(motionPack)
+  check('capture provenance requires format 0.4 or later',
+    diagnosticsOnOldFormat.status === 1
+      && diagnosticsOnOldFormat.stdout.includes('requires format_version 0.4.0 or later'))
+
+  delete motionManifest.media.cadence
+  delete motionManifest.media.displays[0].cadence
+  delete motionManifest.media.displays[1].cadence
   motionManifest.media.displays[1].replay_clock_offset_ms = 7
   writeJson(motionManifestFile, motionManifest)
   const nonzeroFocusedClock = runValidator(motionPack)
@@ -275,12 +371,24 @@ try {
     file: 'frames/frame-01_00-00.000.png',
     t_ms: 0,
   }]
-  writeFileSync(join(imagePack, 'frames', 'frame-01_00-00.000.png'), pngHeader(1, 1))
+  writeFileSync(join(imagePack, 'frames', 'frame-01_00-00.000.png'), pngHeader(640, 448))
   writeJson(imageManifestFile, imageManifest)
-  const resizedImageStill = runValidator(imagePack)
-  check('an image pack rejects a derived still in a different coordinate space',
-    resizedImageStill.status === 1
-      && resizedImageStill.stdout.includes("MUST preserve the source snapshot coordinate space"))
+  const bottomGutterStill = runValidator(imagePack)
+  check('an image pack accepts a same-width derived still with a result-only bottom gutter',
+    bottomGutterStill.status === 0
+      && bottomGutterStill.stdout.includes('preserves the 640x400 source viewport at top-left'))
+
+  writeFileSync(join(imagePack, 'frames', 'frame-01_00-00.000.png'), pngHeader(641, 448))
+  const widerImageStill = runValidator(imagePack)
+  check('an image pack rejects a derived still whose source-width coordinate space changed',
+    widerImageStill.status === 1
+      && widerImageStill.stdout.includes('MUST preserve the source width and top-left viewport'))
+
+  writeFileSync(join(imagePack, 'frames', 'frame-01_00-00.000.png'), pngHeader(640, 399))
+  const shorterImageStill = runValidator(imagePack)
+  check('an image pack rejects a derived still shorter than its source viewport',
+    shorterImageStill.status === 1
+      && shorterImageStill.stdout.includes('MUST preserve the source width and top-left viewport'))
 
   rmSync(join(imagePack, 'frames', 'frame-01_00-00.000.png'))
   delete imageManifest.media.keyframes

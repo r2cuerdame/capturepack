@@ -148,6 +148,11 @@ function connect() {
     const candidate = chrome.runtime.connectNative(HOST)
     port = candidate
     candidate.onDisconnect.addListener(() => {
+      // Chrome reports expected connectNative failures through lastError only
+      // for the lifetime of this callback. Reading it marks the error handled;
+      // leaving it unread pollutes chrome://extensions even though the bounded
+      // retry below is the intended recovery path.
+      void chrome.runtime.lastError
       // Host not installed, app not running, or this extension's ID not yet in
       // the host manifest. All three are temporary, and all three used to end
       // here — see the note on the startup connect below.

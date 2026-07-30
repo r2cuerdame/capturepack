@@ -17,6 +17,10 @@ export const IPC = {
   captureStart: 'capture:start',
   // main -> capture window: deliver the replay blob for an export in progress
   captureRequestReplay: 'capture:request-replay',
+  // main -> capture window: the full-native snapshot phase is complete. A held
+  // replay boundary must discard every post-request byte and start an empty
+  // recorder/ring immediately.
+  captureResumeReplay: 'capture:resume-replay',
   // capture window -> main: replay bytes (webm) + duration for the pending export
   captureReplayResult: 'capture:replay-result',
   // capture window -> main: selected recorder format + negotiated stream size
@@ -33,6 +37,27 @@ export const IPC = {
   captureTick: 'capture:tick',
   // capture window -> main: recorder failed; capture continues screenshot-only
   captureError: 'capture:error',
+  // capture window -> main (invoke): one bounded Desktop Duplication timing
+  // reference for this sender's assigned display. Available pixels and
+  // LastPresentTime come from the same acquired DXGI resource.
+  captureDxgiTimingReference: 'capture:dxgi-timing-reference',
+  // capture window -> main (invoke): Chromium's display stream explicitly
+  // failed or proved empty; start the per-display Windows GDI replay source.
+  captureNativeFallbackStart: 'capture:native-fallback-start',
+  // main -> capture window: one timestamped JPEG from that native source.
+  captureNativeFallbackFrame: 'capture:native-fallback-frame',
+  // capture window -> main: the JPEG was decoded/dropped; release at most one
+  // pending latest frame. This bounds main-to-renderer IPC under renderer load.
+  captureNativeFallbackFrameAck: 'capture:native-fallback-frame-ack',
+  // capture window -> main: first CanvasCaptureMediaStreamTrack frame was
+  // actually presented. Separate from ACK so a throttled hidden compositor
+  // cannot throttle the bounded GDI producer itself.
+  captureNativeFallbackFramePresented:
+    'capture:native-fallback-frame-presented',
+  // main -> capture window: the native source exited unexpectedly.
+  captureNativeFallbackError: 'capture:native-fallback-error',
+  // capture window -> main: this generation no longer owns the native source.
+  captureNativeFallbackStop: 'capture:native-fallback-stop',
 
   // Image capture opens one overlay per frozen display AFTER main has already
   // taken the screenshots. These channels carry geometry only: there is no
@@ -385,6 +410,210 @@ export interface CaptureReadyPayload {
   replayFile: 'replay.webm' | 'replay.mp4'
   width: number
   height: number
+  backend?: CaptureReplayBackend
+  quality?: CaptureReplayQuality
+  requestedFps?: number
+  recorderCount?: number
+  /** Browser-reported source latency, only when the track exposes it. */
+  sourceLatencyMs?: number
+  sourceLatencyCalibration?: {
+    status: 'measured' | 'ambiguous' | 'unavailable'
+    /** Conservative matcher verdict; never inferred from requested FPS. */
+    reason?: string
+    /** Source latency is measured only by the independent decoded-pixel match. */
+    method?: 'pixel-match'
+    /** Provenance of the sampled pixels used by the matcher. */
+    sampleSource?:
+      | 'media-stream-track-processor'
+      | 'image-capture'
+      | 'video-presentation-callback'
+      | 'unknown'
+    latencyMs?: number
+    sampleCount: number
+    confidence?: number
+    bestDelta?: number
+    observedChange?: number
+    motionTransitions?: number
+    candidates?: Array<{ latencyMs: number; delta: number }>
+    /**
+     * Processor clock/delivery diagnostic. This may refine pixel sample times,
+     * but is never itself desktop pixel/source latency.
+     */
+    qpc?: {
+      method: 'processor-qpc-clock'
+      status: 'measured' | 'ambiguous' | 'unavailable'
+      reason: string
+      sampleCount: number
+      timestampMonotonic?: boolean
+      nativeQpcBracketed?: boolean
+      timestampSpanMs?: number
+      observedSpanMs?: number
+      spanErrorRatio?: number
+      deliveryLatencyMs?: number
+      deliveryLatencyP05Ms?: number
+      deliveryLatencyP50Ms?: number
+      deliveryLatencyP95Ms?: number
+      deliveryLatencyMadMs?: number
+      deliveryLatencyBoundMs?: number
+    }
+    /** Independent decoded-pixel verdict used as fallback and conflict witness. */
+    pixel?: {
+      status: 'measured' | 'ambiguous' | 'unavailable'
+      reason: string
+      latencyMs?: number
+    }
+    /**
+     * Direct same-pixel join from the independent desktop-exposure reference
+     * to the startup rVFC presentation sink. No configured FPS or frame delay
+     * participates in this measurement.
+     */
+    presentation?: {
+      status: 'measured' | 'ambiguous' | 'unavailable'
+      reason: string
+      method?: 'dxgi-processor-rvfc-pixel-join'
+      sampleCount: number
+      latencyMs?: number
+      matchedPairCount?: number
+      processorToPresentationMs?: number
+      dispersionMs?: number
+      observedProcessorSpacingMs?: number
+      bestDelta?: number
+      contrast?: number
+      /** Exact DXGI exposure wall time minus the matched rVFC mediaTime. */
+      sourceMediaTimeOriginMs?: number
+      direct?: {
+        status: 'measured' | 'ambiguous' | 'unavailable'
+        reason: string
+        sampleCount: number
+        latencyMs?: number
+        bestDelta?: number
+        contrast?: number
+        matchedMediaTimeMs?: number
+        sourceMediaTimeOriginMs?: number
+      }
+    }
+    reference?: {
+      source: 'dxgi-desktop-duplication' | 'windows-gdi-bitblt'
+      timing: 'pixel-exposure' | 'post-bitblt-completion'
+      /** Full QPC bracket retained from the helper, when DXGI was available. */
+      anchorSpanQpc?: string
+      anchorSpanMs?: number
+      /** Midpoint projection uncertainty, equal to half the full bracket. */
+      anchorUncertaintyMs?: number
+      presentedAtUnixNs?: string
+    }
+    detail?: string
+  }
+  /**
+   * Measured primary-source startup exclusion. The recorder is intentionally
+   * created only after this observation, so the value belongs in the main log
+   * rather than being inferred later from IPC arrival or flush time.
+   */
+  startupReadiness?: {
+    observedWaitMs: number
+    presentedFrames: number
+    timedOut: boolean
+    excludedBeforeRecorderMs: number
+    observedSpanMs: number
+  }
+}
+
+export type CaptureReplayBackend =
+  | 'chromium-desktop-capture'
+  | 'windows-gdi-bitblt'
+
+export type CaptureReplayQuality = 'full' | 'degraded'
+
+export interface CaptureDxgiTimingBounds {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface CaptureDxgiTimingMetadataPayload {
+  deviceName: string
+  adapterIndex: number
+  outputIndex: number
+  bounds: CaptureDxgiTimingBounds
+  /** BigInt values cross Electron IPC only as exact base-10 strings. */
+  qpcFrequency: string
+  anchor: {
+    qpc: string
+    unixNs: string
+    /** Full before↔after QPC bracket around the Unix clock read. */
+    spanQpc: string
+  }
+}
+
+export interface CaptureDxgiTimingAvailablePayload
+  extends CaptureDxgiTimingMetadataPayload {
+  status: 'available'
+  referenceTiming: 'pixel-exposure'
+  resourceProvenance: 'same-acquired-dxgi-resource'
+  clockProvenance: 'windows-qpc'
+  width: 128
+  height: 72
+  channels: 3
+  lastPresentQpc: string
+  accumulatedFrames: number
+  rgb: ArrayBuffer
+}
+
+export interface CaptureDxgiTimingUnavailablePayload {
+  status: 'unavailable'
+  reason: string
+  detail?: string
+  deviceName?: string
+  adapterIndex?: number
+  outputIndex?: number
+  bounds?: CaptureDxgiTimingBounds
+  qpcFrequency?: string
+  anchor?: {
+    qpc: string
+    unixNs: string
+    spanQpc: string
+  }
+}
+
+export type CaptureDxgiTimingReferencePayload =
+  | CaptureDxgiTimingAvailablePayload
+  | CaptureDxgiTimingUnavailablePayload
+
+export interface CaptureNativeFallbackRequest {
+  requestedFps: number
+  width: number
+  height: number
+  purpose?: 'fallback' | 'health-probe'
+}
+
+export interface CaptureNativeFallbackFramePayload {
+  sessionId: string
+  sequence: number
+  /** Stamped only by the Windows helper protocol parser. */
+  clockProvenance: 'windows-qpc'
+  capturedQpc: number
+  qpcFrequency: number
+  capturedAtMs: number
+  width: number
+  height: number
+  jpeg: ArrayBuffer
+}
+
+export interface CaptureNativeFallbackStartPayload {
+  sessionId: string
+  backend: 'windows-gdi-bitblt'
+  quality: 'degraded'
+  requestedFps: number
+  fps: number
+  width: number
+  height: number
+  firstFrame: CaptureNativeFallbackFramePayload
+}
+
+export interface CaptureNativeFallbackErrorPayload {
+  sessionId: string
+  message: string
 }
 
 /**
@@ -423,6 +652,15 @@ export interface CaptureFramesPayload {
   bytes: number
   // MediaStreamTrack delivered-frame count, or 0 where the API is unavailable.
   frames: number
+  /** Exact native request↔presentation accounting, absent on Chromium capture. */
+  nativePresentation?: {
+    requestedFrames: number
+    exactCallbacks: number
+    unreportedPresented: number
+    ambiguousDropped: number
+    capacityDropped: number
+    pending: number
+  }
   /**
    * THE RECORDER'S OWN ACCOUNT OF ITS CADENCE (#82).
    *
@@ -451,6 +689,14 @@ export interface CaptureFramesPayload {
     sampledMs?: number
     /** Frames delivered during that window. */
     gainedFrames?: number
+    /** The source that supplied pixels to this recorder. */
+    backend?: CaptureReplayBackend
+    /** `degraded` is an explicit alternate capture path, never full quality. */
+    quality?: CaptureReplayQuality
+    /** User-configured target, kept distinct from achievedFps. */
+    requestedFps?: number
+    /** Active MediaRecorder encoders for this display. */
+    recorderCount?: number
   }
 }
 
@@ -470,11 +716,10 @@ export interface CaptureTickPayload {
    * How old the frame already was when this tick was sent, in ms — if the
    * runtime can say (#109).
    *
-   * `VideoFrameCallbackMetadata.captureTime` would give it, but the spec
-   * defines that field for WebRTC and getUserMedia sources only and a screen
-   * capture is neither, so it is absent in practice. Kept because a runtime
-   * that DOES report it should be believed, and absent means nothing is
-   * corrected rather than corrected by a guess.
+   * Primary Chromium capture uses `VideoFrameCallbackMetadata.captureTime`
+   * when available. Native fallback anchors the helper's first wall/QPC pair
+   * onto this renderer's DOMHighRes axis, then advances only by QPC deltas.
+   * Absent means unknown end-to-end — never a measured zero.
    */
   frameAgeMs?: number
   /**
@@ -502,13 +747,89 @@ export interface CaptureReplayResultPayload {
    *
    * Absent where the recorder could not say, in which case the ring keeps its
    * own clock and nothing is mis-stated.
-   */
+  */
   originMs?: number
+  /**
+   * Exact same-frame observations joining encoded PTS to the epoch-based
+   * presentation clock. Unlike `originMs`, this can represent a measured clock
+   * whose rate changes slightly across the retained replay.
+   *
+   * The main process validates monotonicity again before using these. They map
+   * clocks only; they never authorize interpolation of object geometry/state.
+   */
+  clockAnchors?: readonly {
+    ptsMs: number
+    wallMs: number
+  }[]
+  /**
+   * Same PTS anchors translated onto independently measured desktop-pixel
+   * exposure time. Present only when the DXGI/QPC/pixel calibration is proved;
+   * context uses these while the media clock above remains unchanged.
+   */
+  sourceClockAnchors?: readonly {
+    ptsMs: number
+    wallMs: number
+  }[]
   // Recorder bytes; empty when no replay is available (screenshot-only capture).
   buffer: ArrayBuffer
   durationMs: number
   mimeType: string
   replayFile: 'replay.webm' | 'replay.mp4'
+  /** Bounded in-memory ownership measured at the exact replay request. */
+  ringDiagnostics?: {
+    retainedFragmentCount: number
+    retainedBytes: number
+    retainedDurationMs: number
+    selectedFragmentCount: number
+    /** Async source/presentation comparison; diagnostic until measured. */
+    sourceLatencyCalibration?: CaptureReadyPayload['sourceLatencyCalibration']
+    /**
+     * Encoded PTS -> shared presentation clock evidence. Only an exact
+     * same-frame pixel match may report a measured origin.
+     */
+    replayPixelClock?: {
+      status: 'measured' | 'ambiguous' | 'unavailable'
+      reason: string
+      presentedSampleCount: number
+      decodedSampleCount: number
+      matchCount: number
+      originMs?: number
+      originSpreadMs?: number
+      motionTransitions?: number
+      bestDelta?: number
+      minimumContrast?: number
+      candidateOriginsMs?: readonly number[]
+      clockAnchors?: readonly {
+        ptsMs: number
+        presentedAtMs: number
+        mediaTimeMs?: number
+      }[]
+    }
+    /** Measured renderer-clock samples used to audit encoder delivery latency. */
+    clockSamples?: Array<{
+      recorderStartedAtMs: number
+      eventTimeStampMs: number
+      blobTimecodeMs: number
+      deliveredAtMs: number
+      latestPresentationTimeMs?: number
+      latestCaptureTimeMs?: number
+      latestMediaTimeMs?: number
+    }>
+  }
+}
+
+export interface CaptureReplayRequestPayload {
+  requestId: string
+  /**
+   * Stop at the exact replay boundary and wait for captureResumeReplay instead
+   * of starting a replacement encoder. Health probes leave this false.
+   */
+  holdAfterCapture?: boolean
+}
+
+export interface CaptureReplayResumePayload {
+  /** Matches the request that owns the held recorder boundary. */
+  requestId: string
 }
 
 // One frozen display on the editor's BOARD (GOAL "Multi-Monitor Support"):
@@ -653,6 +974,15 @@ export interface EditorUiaWindow {
   // which is a different statement from a collected tree that simply holds
   // nothing pickable — and hasControls alone conflates the two.
   tree: UiaTreeStatus
+  /**
+   * A prior control tree exists, but an observed owner resize invalidated its
+   * cached absolute rectangles before Lane A supplied a newer geometry revision.
+   *
+   * This is distinct from ordinary `tree: "skipped"`: skipped normally permits
+   * a richer checkpoint fallback, while invalidated geometry must remain absent
+   * through save/reopen until a fresh UIA tree/rectangle observation arrives.
+   */
+  control_geometry_invalidated?: true
 }
 
 export interface EditorInitPayload {
@@ -897,7 +1227,15 @@ export interface RenderResultPayload {
 // 'trimming' = the plain-trim render is producing the trimmed replay bytes
 // (GOAL "Replay Trim") — it precedes 'rendering' (the annotated render) when
 // the save carries an active trim.
-export type ToastRenderState = 'none' | 'trimming' | 'rendering' | 'done' | 'failed'
+export type ToastRenderState =
+  | 'none'
+  | 'trimming'
+  | 'rendering'
+  | 'done'
+  | 'failed'
+  | 'image-rendering'
+  | 'image-copied'
+  | 'image-copy-failed'
 
 /** What the toast is told about a render in flight (#96). */
 export interface ToastRenderStatusPayload {

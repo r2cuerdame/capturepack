@@ -13,3 +13,12 @@ export const RECORDER_STOP_TIMEOUT_MS = 8_000
 export const REPLAY_ASSEMBLY_IPC_SLACK_MS = 4_000
 export const REPLAY_TIMEOUT_MS =
   RECORDER_STOP_TIMEOUT_MS + REPLAY_ASSEMBLY_IPC_SLACK_MS
+
+/**
+ * Safety net for a renderer that received HOLD but never receives RESUME
+ * because main exited, its snapshot path wedged, or IPC was lost.
+ *
+ * Normal main-process ownership resumes in `finally`; this longer bound exists
+ * only to prevent a live capture stream from remaining encoder-less forever.
+ */
+export const REPLAY_HOLD_WATCHDOG_MS = REPLAY_TIMEOUT_MS + 8_000

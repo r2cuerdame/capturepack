@@ -103,22 +103,11 @@ export class WindowsUiaProvider implements TemporalContextProvider {
 
   frame(c: FrameContext): Promise<ProviderFrame> {
     const { observation, accuracy } = this.buffer.restore(c.timeMs)
-    // CONTROLS EXIST AT EVERY FRAME, ANCHORED TO THEIR WINDOW (#111,
-    // "매프레임 하위 컨트롤러도 저장해야지").
-    //
-    // The UIA tree is dumped ONCE, at the capture instant — a full desktop walk
-    // costs 183.8 ms and cannot run per frame. But a control does not float
-    // free: it is drawn INSIDE its window, at an offset that survives the
-    // window being dragged. The window's position at every frame is already in
-    // the ring, exact to the move hook's cadence. So the dump's controls are
-    // offered at EVERY requested time, each translated by how far its OWN
-    // window has moved between the dump and that time.
-    //
-    // What this claims and what it does not: the POSITION is composed from two
-    // real observations (window at T, control-in-window at dump time), and the
-    // accuracy carries `interpolated` so a strict reader can tell. The CONTENT
-    // (labels, tree shape, a list that scrolled) is still the dump's — the
-    // dirty-driven lane A re-dump is the next step, recorded in GOAL.md.
+    // A UIA rectangle is quoted only from an observation. Owner-window motion
+    // does not prove child motion: scrolling, layout, visibility and DPI can
+    // all change independently. Lane A's own location-change observations
+    // provide denser truth; a sparse/legacy dump remains sparse rather than
+    // being projected into a rectangle nobody observed.
     const materialized = this.materialization(observation, c.surfaces, accuracy)
     if (materialized.sources.size === 0) {
       // Served, and genuinely empty. NOT `declined` — declining means "I do not
@@ -229,6 +218,11 @@ export class WindowsUiaProvider implements TemporalContextProvider {
   ): readonly ContextObservation[] {
     const fallback = this.bestBySurface.get(surfaceId)
     if (current !== null) {
+      // An observed owner resize invalidates cached absolute child rectangles.
+      // Unlike an ordinary skipped tree, this is positive evidence that an
+      // older fallback is unsafe; keep the empty current source authoritative
+      // until Lane A publishes a new geometry revision.
+      if (this.controlGeometryInvalidated(current, surfaceId)) return [current]
       const state = this.treeState(current, surfaceId)
       const currentCount = this.countsByObservation.get(current)?.get(surfaceId) ?? 0
       // A fully walked tree is authoritative even when it honestly contains
@@ -259,6 +253,17 @@ export class WindowsUiaProvider implements TemporalContextProvider {
       if (state === 'truncated' || state === 'unavailable') return [current]
     }
     return fallback === undefined ? [] : [fallback]
+  }
+
+  private controlGeometryInvalidated(
+    observation: ContextObservation,
+    surfaceId: string,
+  ): boolean {
+    return observation.windows.some(
+      (window) =>
+        surfaceIdOf(this.ids, observation, window) === surfaceId
+        && window.control_geometry_invalidated === true,
+    )
   }
 
   private surfaceClaimsControls(observation: ContextObservation, surfaceId: string): boolean {
@@ -302,7 +307,7 @@ export class WindowsUiaProvider implements TemporalContextProvider {
             (candidate) => candidate.surfaceId === surfaceId,
           )
           const sourceCounts = new Map<string, number>()
-          for (const candidate of this.anchored(fromSource, source, surfaces)) {
+          for (const candidate of fromSource) {
             const key = fallbackMergeKey(candidate)
             const occurrence = (sourceCounts.get(key) ?? 0) + 1
             sourceCounts.set(key, occurrence)
@@ -316,9 +321,9 @@ export class WindowsUiaProvider implements TemporalContextProvider {
       }
     }
 
-    // Claims live on the CURRENT surface rectangle. Anchoring only candidates
-    // left claims behind at the dump rectangle, so a window moved farther than
-    // its own width had every real control rejected as unclaimed.
+    // Claims use the same observed surface geometry as their candidates. The
+    // current owner window is a different observation and must not silently
+    // move a semantic sample.
     const claims: ProviderSurfaceClaim[] = []
     const coverage: Array<{
       surfaceId: string
@@ -329,12 +334,22 @@ export class WindowsUiaProvider implements TemporalContextProvider {
       const selected = sources.get(surface.surfaceId)
       const source = selected?.[0]
       if (source === undefined) continue
+      const observedWindow =
+        source.windows.find(
+          (window) =>
+            surfaceIdOf(this.ids, source, window) === surface.surfaceId
+            && window.display === surface.display,
+        )
+        ?? source.windows.find(
+          (window) => surfaceIdOf(this.ids, source, window) === surface.surfaceId,
+        )
+      if (observedWindow === undefined) continue
       claims.push({
         providerId: this.id,
         surfaceId: surface.surfaceId,
-        region: { ...surface.bounds },
+        region: { ...observedWindow.bounds },
         ...(surface.space === undefined ? {} : { space: surface.space }),
-        ...(surface.display === undefined ? {} : { display: surface.display }),
+        ...(observedWindow.display === undefined ? {} : { display: observedWindow.display }),
         authority: 'accessibility',
         confidence: 1,
         ...(surface.executableName === undefined
@@ -356,92 +371,6 @@ export class WindowsUiaProvider implements TemporalContextProvider {
       })
     }
     return { sources, candidates, claims, coverage }
-  }
-
-  /**
-   * Translates each control candidate by how far its window moved between the
-   * dump and the requested time (#111). A control whose window has no surface
-   * at the requested time is DROPPED — its window is not on this desk now, and
-   * a rectangle floating without its window is exactly the lie the staleness
-   * ceiling exists to stop. A shifted candidate's accuracy says `interpolated`:
-   * the position is composed from two observations, not read in one.
-   */
-  private anchored(
-    candidates: readonly ContextCandidate[],
-    source: ContextObservation,
-    surfaces: FrameContext['surfaces'],
-  ): ContextCandidate[] {
-    // KEYED ON THE SURFACE, NOT ON (surface, display).
-    //
-    // The first version of this keyed both maps on `${surfaceId}|${display}`
-    // and dropped every candidate whose key missed. It missed ALL of them: a
-    // UIA dump's ELEMENTS carry no display (SPEC §8.3 — absent means "the
-    // annotation's own display"), while ring WINDOWS always carry a number, so
-    // the lookup asked for `abc|` and the map held `abc|0`. Measured on
-    // CapturePack_2026-07-29_171046: the tracked window had 112 controls in
-    // plugins/windows-uia/elements.json and every one of the pack's 7
-    // annotations came out at WINDOW level — "하위 컨트롤이 선택되지 않아",
-    // caused by this line rather than by anything upstream of it.
-    //
-    // A surface can legitimately appear once PER DISPLAY (#103), so the entries
-    // are kept as a list and the display is a preference, not a key: match the
-    // candidate's display when it states one, otherwise take the window's own
-    // first entry and find the same display on the other side.
-    type Placed = { display: number | undefined; x: number; y: number }
-    const originOf = new Map<string, Placed[]>()
-    for (const w of source.windows) {
-      const id = surfaceIdOf(this.ids, source, w)
-      const list = originOf.get(id)
-      // Frame bounds are clipped independently on every display. Their x/y
-      // therefore stop at zero while a straddling window is still hundreds of
-      // pixels off that monitor, which under-counts the later movement by the
-      // clipped amount. Client bounds are deliberately retained un-clipped by
-      // ringObservations and provide the stable physical origin.
-      const origin = w.client_bounds ?? w.bounds
-      const entry: Placed = { display: w.display, x: origin.x, y: origin.y }
-      if (list === undefined) originOf.set(id, [entry])
-      else list.push(entry)
-    }
-    const nowOf = new Map<string, Placed[]>()
-    for (const s of surfaces) {
-      const list = nowOf.get(s.surfaceId)
-      const origin = s.clientBounds ?? s.bounds
-      const entry: Placed = { display: s.display, x: origin.x, y: origin.y }
-      if (list === undefined) nowOf.set(s.surfaceId, [entry])
-      else list.push(entry)
-    }
-    const on = (list: Placed[] | undefined, display: number | undefined): Placed | undefined => {
-      if (list === undefined || list.length === 0) return undefined
-      if (display === undefined) return list[0]
-      return list.find((p) => p.display === display) ?? list[0]
-    }
-    const out: ContextCandidate[] = []
-    for (const candidate of candidates) {
-      const origin = on(originOf.get(candidate.surfaceId), candidate.display)
-      // The SAME screen on both sides: a control shifted by another display's
-      // movement would be a rectangle nobody measured, in the wrong space.
-      const now = on(nowOf.get(candidate.surfaceId), candidate.display ?? origin?.display)
-      if (origin === undefined || now === undefined) {
-        // Window unplaceable at this time: not offered here.
-        continue
-      }
-      const dx = now.x - origin.x
-      const dy = now.y - origin.y
-      if (dx === 0 && dy === 0 && now.display === candidate.display) {
-        out.push(candidate)
-        continue
-      }
-      out.push({
-        ...candidate,
-        bounds: { ...candidate.bounds, x: candidate.bounds.x + dx, y: candidate.bounds.y + dy },
-        // A window can cross displays. Its candidate must cross with it;
-        // retaining the dump display sends the shifted rectangle to the wrong
-        // per-display index even when its coordinates are otherwise correct.
-        ...(now.display === undefined ? {} : { display: now.display }),
-        accuracy: { ...candidate.accuracy, interpolated: true },
-      })
-    }
-    return out
   }
 
   /**

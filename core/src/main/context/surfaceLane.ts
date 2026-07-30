@@ -280,7 +280,7 @@ export class SurfaceLane {
    */
   private readonly pendingTicks = new Map<
     number,
-    { coreMs: number; ageMs: number; delayMs: number }
+    { coreMs: number; ageMs: number | null; delayMs: number }
   >()
   /**
    * ONE RING, ONE CLOCK (#110) — the display whose frame clock this ring is on.
@@ -654,7 +654,12 @@ export class SurfaceLane {
     // frame's time and the instant the host is about to be asked.
     this.pendingTicks.set(frameMs, {
       coreMs: this.clock.nowMs(),
-      ageMs: typeof frameAgeMs === 'number' && Number.isFinite(frameAgeMs) ? frameAgeMs : 0,
+      ageMs:
+        typeof frameAgeMs === 'number' &&
+        Number.isFinite(frameAgeMs) &&
+        frameAgeMs >= 0
+          ? frameAgeMs
+          : null,
       delayMs:
         typeof tickDelayMs === 'number' && Number.isFinite(tickDelayMs) && tickDelayMs > 0
           ? tickDelayMs
@@ -756,7 +761,7 @@ export class SurfaceLane {
       // of. A number that cannot be negative is not a measurement of a
       // difference.
       const lag = takenAt === null || asked === undefined ? 0 : takenAt - asked.coreMs
-      const ageMs = asked?.ageMs ?? 0
+      const ageMs = asked?.ageMs ?? null
       // HOW LATE THE CALLBACK RAN (#110) — the leg every other measurement
       // missed, and the one that was carrying the whole error.
       //
@@ -786,8 +791,10 @@ export class SurfaceLane {
         if (this.tickDelayMs.length > 200) this.tickDelayMs.shift()
       }
       if (this.frameClockOffsetMs !== null) this.settleHeldSamples()
-      this.frameAgeMs.push(ageMs)
-      if (this.frameAgeMs.length > 200) this.frameAgeMs.shift()
+      if (ageMs !== null) {
+        this.frameAgeMs.push(ageMs)
+        if (this.frameAgeMs.length > 200) this.frameAgeMs.shift()
+      }
       // THE SAMPLE BELONGS TO THE MOMENT IT WAS TAKEN, NOT TO THE FRAME THAT
       // ASKED FOR IT.
       //
@@ -841,10 +848,12 @@ export class SurfaceLane {
       // records both attempts.)
       // The full chain, every leg measured: the frame exists at `frameMs`; the
       // callback ran `delayMs` later; the host read the desk `lag` after that;
-      // and the picture itself is `ageMs` older than its label. The observation
-      // happened at frameMs + delayMs + lag on the frame clock, and the age
-      // shifts it onto the clock the reader's eyes are on.
-      const observedAtMs = frameMs + delayMs + lag + ageMs
+      // and the picture itself is `ageMs` older than its label when that leg was
+      // measured. The observation happened at frameMs + delayMs + lag on the
+      // frame clock; a known age shifts it onto the clock the reader's eyes are
+      // on. Unknown remains null and contributes no invented correction.
+      const observedAtMs =
+        frameMs + delayMs + lag + (ageMs ?? 0)
       // AN OBSERVATION THAT CANNOT BE FILED TRUTHFULLY IS NOT FILED.
       //
       // Two wrong answers were tried here first, and both are worth naming.

@@ -8,12 +8,14 @@
 // This runs the real PowerShell/C# host. It never creates, moves, focuses, or
 // closes a window and starts no resident process.
 import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const core = path.join(here, '..')
 const host = path.join(here, 'context-host.ps1')
+const hostSource = readFileSync(host, 'utf8')
 const samples = 300
 
 function run(args) {
@@ -45,6 +47,16 @@ function check(label, condition, detail) {
 }
 
 console.log('Context host dirty-HWND check')
+check(
+  'a newly moving captionless window uses its visible client bounds instead of stale DWM or invisible borders',
+  hostSource.includes('GetWindowLong') &&
+    hostSource.includes('GetDpiForWindow') &&
+    hostSource.includes('captionless') &&
+    hostSource.includes('compactNonClient') &&
+    hostSource.includes('if (clientOwnsFrame) {') &&
+    hostSource.includes('frame = client;'),
+  'captionless/custom-titlebar client-frame branch is missing',
+)
 check('full baseline completed', full.event === 'selftest' && full.samples === samples, JSON.stringify(full))
 check(
   'one initial EnumWindows snapshot only',

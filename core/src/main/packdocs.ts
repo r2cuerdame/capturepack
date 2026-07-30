@@ -75,6 +75,8 @@ export function buildReadme(
   // True only when a background render really is about to write the annotated
   // stills this document names — see report.ts keyframeSet().
   renderPending = false,
+  // The exporter passes true only after viewer.html was written successfully.
+  includeViewer = false,
 ): string {
   const t = makeT(lang)
   const annotations = annotationsFile.annotations
@@ -153,6 +155,9 @@ export function buildReadme(
   if (!imageCapture) lines.push('| timeline.json | When the capture and each annotation happened |')
   lines.push('| report.md | The full generated narrative of this pack |')
   lines.push('| skills/ | Context documents structured for AI readers |')
+  if (includeViewer) {
+    lines.push('| viewer.html | Double-clickable offline view — no install or server required |')
+  }
   lines.push('| manifest.json | Pack identity, environment, and file inventory |')
   lines.push('')
 

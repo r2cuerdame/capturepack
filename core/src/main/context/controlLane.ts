@@ -88,6 +88,16 @@ export interface ControlsAt {
   controls: TrackedControl[]
   /** Completeness of the tree the controls came from. */
   tree: 'collected' | 'truncated'
+  /**
+   * Opaque identity of the last UIA geometry observation represented here.
+   *
+   * Repeated values mean `controls` is the same cached absolute-coordinate
+   * reading. The ring may then carry that reading through an owner-window
+   * translation actually observed by Lane S. A new tree or rectangle delta
+   * changes the token and establishes a fresh anchor; deaths do not pretend to
+   * be geometry observations.
+   */
+  geometryRevision: string
 }
 
 export interface ControlLaneStatus {
@@ -494,6 +504,7 @@ export class ControlLane {
         if (death.tMs > tMs) break
         if (death.treeOrdinal === tree.ordinal) dead.add(death.index)
       }
+      let appliedMoves = 0
       for (const move of log.moves) {
         if (move.tMs > tMs) break
         if (move.treeOrdinal !== tree.ordinal) continue
@@ -503,6 +514,7 @@ export class ControlLane {
         target.y = move.y
         target.width = move.width
         target.height = move.height
+        appliedMoves += 1
       }
       const live = controls.filter((_, i) => !dead.has(i))
       // Keep an empty, fully walked tree too. Omitting it changes the meaning
@@ -512,6 +524,7 @@ export class ControlLane {
         hwnd,
         controls: live,
         tree: tree.truncated ? 'truncated' : 'collected',
+        geometryRevision: `${String(tree.ordinal)}:${String(appliedMoves)}`,
       })
     }
     return out

@@ -89,6 +89,17 @@ function setRenderStatus(state: string, progress?: number): void {
     renderStatus.hidden = false
     renderStatus.classList.add('failed')
     renderLabel.textContent = t('toast.renderFailed')
+  } else if (state === 'image-rendering') {
+    renderStatus.hidden = false
+    renderLabel.textContent = t('toast.imageRendering')
+  } else if (state === 'image-copied') {
+    renderStatus.hidden = false
+    renderStatus.classList.add('done')
+    renderLabel.textContent = t('toast.imageCopied')
+  } else if (state === 'image-copy-failed') {
+    renderStatus.hidden = false
+    renderStatus.classList.add('failed')
+    renderLabel.textContent = t('toast.imageCopyFailed')
   } else {
     renderStatus.hidden = true
   }

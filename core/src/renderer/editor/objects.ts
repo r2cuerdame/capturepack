@@ -130,6 +130,20 @@ const WINDOW_FRAME_SIDE_FRACTION = 0.9
 /** How much of its window a full-axis control must also cover to be a frame. */
 const WINDOW_FRAME_SIDE_MIN_AREA = 0.25
 /**
+ * Large controls whose ROLE is itself the thing a user can meaningfully point
+ * at. A document, list or tree routinely owns most of its window; area alone
+ * cannot turn it into the anonymous client-area wrapper beneath it.
+ */
+const LARGE_SEMANTIC_CONTROL_TYPES = new Set([
+  'content',
+  'contents',
+  'datagrid',
+  'document',
+  'list',
+  'table',
+  'tree',
+])
+/**
  * The wallpaper is a top-level window (class Progman, or a WorkerW behind the
  * icons) covering the whole desktop. Offering it would turn every click on
  * empty space into a full-desktop box, so the desktop is the one window picking
@@ -261,6 +275,12 @@ export function objectHoverLabel(o: PickableObject): string {
 
 export class ObjectIndex {
   private readonly objects: readonly PickableObject[]
+  /**
+   * Meaningful Document/List/Contents-style controls whose geometry is also a
+   * window frame. They stay available for an explicit window -> control
+   * refinement, but do not replace the normal first-click precision baseline.
+   */
+  private readonly deferredLargeSemantics: readonly PickableObject[]
   private readonly cells: ReadonlyMap<number, number[]>
   private readonly wide: readonly number[]
   private readonly cols: number
@@ -273,6 +293,7 @@ export class ObjectIndex {
 
   private constructor(
     objects: readonly PickableObject[],
+    deferredLargeSemantics: readonly PickableObject[],
     cells: ReadonlyMap<number, number[]>,
     wide: readonly number[],
     cols: number,
@@ -283,6 +304,7 @@ export class ObjectIndex {
     display?: number,
   ) {
     this.objects = objects
+    this.deferredLargeSemantics = deferredLargeSemantics
     this.cells = cells
     this.wide = wide
     this.cols = cols
@@ -301,12 +323,36 @@ export class ObjectIndex {
    * that has data, an empty spot says so.)
    */
   get size(): number {
-    return this.objects.length + this.windows.length
+    return (
+      this.objects.length +
+      this.deferredLargeSemantics.length +
+      this.windows.length
+    )
   }
 
   /** The surface stack this index was built over, z ascending. */
   get surfaceStack(): readonly SurfaceInfo[] {
     return this.surfaces
+  }
+
+  /**
+   * Semantic controls known to exist in this exact frame.
+   *
+   * Adjacent-time picking uses this only as an identity/lifetime guard. It
+   * never substitutes these rectangles for the point hit, and callers opt in
+   * to the deliberately deferred Document/Contents rung exactly as normal
+   * point probing does.
+   */
+  controlObjects(
+    surfaceId?: string,
+    includeLargeSemanticRefinements = false,
+  ): readonly PickableObject[] {
+    const source = includeLargeSemanticRefinements
+      ? [...this.objects, ...this.deferredLargeSemantics]
+      : this.objects
+    return surfaceId === undefined
+      ? source
+      : source.filter((object) => object.surfaceId === surfaceId)
   }
 
   /**
@@ -358,6 +404,7 @@ export class ObjectIndex {
     for (const c of coverage) detail.set(c.surfaceId, c.state)
 
     const objects: PickableObject[] = []
+    const deferredLargeSemantics: PickableObject[] = []
     // Which surfaces had a candidate that landed on THIS display at all, before
     // the frame filters below removed any of them: that is what separates "its
     // controls are on another screen" from "its controls are all frames".
@@ -371,8 +418,10 @@ export class ObjectIndex {
       // nothing and drop out here.
       if (clipped === null) continue
       onThisDisplay.add(candidate.surfaceId)
-      if (clipped.area > maxArea) continue
-      if (clipped.width > maxW && clipped.height > maxH) continue
+      const largeSemantic = isLargeSemanticControl(candidate)
+      const oversized =
+        clipped.area > maxArea ||
+        (clipped.width > maxW && clipped.height > maxH)
       // A CONTROL WHOSE WINDOW IS NOT ON THIS SNAPSHOT IS NOT OFFERED HERE.
       //
       // The frame test below is the only thing that keeps a window's own
@@ -394,8 +443,9 @@ export class ObjectIndex {
       // be clipped, frame-tested or occlusion-tested against anything real.
       const owner = bySurface.get(candidate.surfaceId)
       if (owner?.clip == null) continue
-      if (isWindowFrame(clipped, owner.clip)) continue
-      objects.push({
+      const frameLike = isWindowFrame(clipped, owner.clip)
+      if ((oversized || frameLike) && !largeSemantic) continue
+      const object: PickableObject = {
         level: 'control',
         candidate,
         surface: owner.surface,
@@ -409,7 +459,18 @@ export class ObjectIndex {
         visible: candidate.visible,
         occluded: candidate.occluded,
         ...clipped,
-      })
+      }
+      if (oversized || frameLike) {
+        // A root Document or named Contents Pane is a real semantic target,
+        // but offering it on every first hover makes an entire maximized app
+        // look like one giant control and hides the measured precise-control
+        // behavior. Keep it one rung behind the normal index. The editor asks
+        // for this rung automatically when a semantic window box is already
+        // under the pointer.
+        deferredLargeSemantics.push(object)
+      } else {
+        objects.push(object)
+      }
     }
     objects.sort((a, b) => a.area - b.area)
 
@@ -464,7 +525,19 @@ export class ObjectIndex {
         }
       }
     })
-    return new ObjectIndex(objects, cells, wide, cols, rows, windows, present, claims, display)
+    deferredLargeSemantics.sort((a, b) => a.area - b.area)
+    return new ObjectIndex(
+      objects,
+      deferredLargeSemantics,
+      cells,
+      wide,
+      cols,
+      rows,
+      windows,
+      present,
+      claims,
+      display,
+    )
   }
 
   /**
@@ -482,13 +555,23 @@ export class ObjectIndex {
    * the rest is what Tab / Shift+Tab cycle through, and `surfaces` is what
    * Alt+Click would cycle when it ships.
    */
-  stackAt(x: number, y: number, forceWindow = false, surfaceDepth = 0): ResolvedStack<PickableObject> {
+  stackAt(
+    x: number,
+    y: number,
+    forceWindow = false,
+    surfaceDepth = 0,
+    includeLargeSemanticRefinements = false,
+  ): ResolvedStack<PickableObject> {
     const options: ResolveOptions = { surfaceDepth }
     if (forceWindow) options.forceAuthority = 'window'
     return resolveCandidates<PickableObject>({
       surfaces: this.surfaces,
       claims: this.claims,
-      candidatesAtPoint: this.candidatesAt(x, y),
+      candidatesAtPoint: this.candidatesAt(
+        x,
+        y,
+        includeLargeSemanticRefinements,
+      ),
       point: { x, y },
       ...(this.display === undefined ? {} : { display: this.display }),
       options,
@@ -515,13 +598,22 @@ export class ObjectIndex {
    * skipping the grid there would silently degrade that point to the window
    * level; contains() still rejects a real miss.
    */
-  private candidatesAt(x: number, y: number): PickableObject[] {
+  private candidatesAt(
+    x: number,
+    y: number,
+    includeLargeSemanticRefinements = false,
+  ): PickableObject[] {
     const out: PickableObject[] = []
     if (this.objects.length > 0) {
       const c = Math.min(this.cols - 1, Math.max(0, Math.floor(x / CELL)))
       const r = Math.min(this.rows - 1, Math.max(0, Math.floor(y / CELL)))
       collect(this.objects, this.cells.get(r * this.cols + c), x, y, out)
       collect(this.objects, this.wide, x, y, out)
+    }
+    if (includeLargeSemanticRefinements) {
+      for (const object of this.deferredLargeSemantics) {
+        if (contains(object, x, y)) out.push(object)
+      }
     }
     for (const w of this.windows) {
       if (contains(w, x, y)) out.push(w)
@@ -603,6 +695,23 @@ function isWindowFrame(
   const spansHeight =
     window.height > 0 && control.height >= window.height * WINDOW_FRAME_SIDE_FRACTION
   return spansWidth || spansHeight
+}
+
+/**
+ * Whether a large rectangle carries enough semantic identity to remain a
+ * control instead of being collapsed into the window floor.
+ *
+ * `Pane` is special: an anonymous Pane is UIA's usual client-area wrapper and
+ * must still be filtered, while a named/id-bearing Pane is an actual region the
+ * user or application chose to identify.
+ */
+function isLargeSemanticControl(candidate: ContextCandidate): boolean {
+  const type = candidate.objectType.trim().toLowerCase()
+  if (LARGE_SEMANTIC_CONTROL_TYPES.has(type)) return true
+  if (type !== 'pane') return false
+  const name = (candidate.name ?? '').trim()
+  const automationId = (candidate.identity?.['automation_id'] ?? '').trim()
+  return name !== '' || automationId !== ''
 }
 
 /** Snapshot-clipped rectangle, or null when nothing usable is left of it. */

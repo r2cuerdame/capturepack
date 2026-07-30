@@ -31,13 +31,13 @@ A CapturePack should contain enough information that another human or any LLM ca
 
 ---
 
-## Current release baseline — 0.3.2
+## Current release baseline — 0.3.3
 
 The long sections below preserve design history and measurements, including
 pre-release identifiers. This section is the current product truth:
 
 - Live recording is on by default, holds 30 seconds by default, is configurable
-  from 1–60 seconds at 1–30 fps, and records nothing when switched off.
+  from 1–60 seconds at 5–30 fps, and records nothing when switched off.
 - `Ctrl+Alt+C` freezes a video-context replay. `Ctrl+Alt+S` opens explicit
   region capture with a separate full-virtual-desktop action. The shortcuts are
   independently configurable.
@@ -73,6 +73,14 @@ primary work area); a region editor opens on the display that owns most of the
 selection; one-shot editor initialization cannot be lost between Main and the
 renderer; and manual versus semantic geometry remains explicit across
 save/reopen (red author-owned rectangles, blue provider-owned objects).
+
+The 0.3.3 release adds the offline, script-free `viewer.html`; bounds replay
+retention and recorder ownership; preserves measured cadence/backend/clock
+evidence; and expands past-frame, multi-display and provider failure QA.
+Display-specific source-to-encoded-video alignment remains an explicit known
+issue when calibration cannot observe enough motion
+([#89](https://github.com/r2cuerdame/capturepack/issues/89)); no fixed timing
+offset is guessed.
 
 The same hotfix refreshes the production dependency boundary: `adm-zip` 0.6.0
 addresses CVE-2026-39244, MCP SDK 1.30.0 plus `@hono/node-server` 2.0.12
@@ -285,7 +293,7 @@ After a month, the journal itself becomes the best roadmap.
 
 - Video context from a 30-second replay buffer by default (1–60 seconds)
 - Explicit image context: cross-monitor region or complete virtual desktop
-- Capture rate configurable from 1–30 fps
+- Capture rate configurable from 5–30 fps
 
 `Ctrl+Alt+C` is the video flow. `Ctrl+Alt+S` freezes every display before any
 selector appears, then opens a boundary-free virtual-desktop region selector
@@ -490,7 +498,7 @@ No plugins required. Everything works locally.
 **Save-first capture** — once video media is frozen, or once an image selection
 is explicit, the source capture and manifest are saved before the editor opens.
 Object/plugin data is best effort and may settle independently, but source
-completion regenerates manifest-derived README/report/skills after the final
+completion regenerates manifest-derived viewer/README/report/skills after the final
 plugin set is known. Annotating updates the same pack in place; **Save** (Enter)
 finalizes it. Cancelling the editor keeps the already-explicit capture. The UI
 verb is **Save**, not Export — "export" survives only as the SPEC's internal
@@ -511,6 +519,7 @@ CapturePack_2026-07-27_143052/
 │                              replay is regenerable from it
 ├── timeline.json            ← video event index; input events are reserved,
 │                              not emitted by 0.3
+├── viewer.html              ← double-clickable offline view; no install/server
 ├── report.md                ← the user's own description
 ├── manifest.json            ← format version, file inventory, plugins, created
 ├── README.md                ← the FIRST document a human reads
@@ -527,6 +536,7 @@ An image pack is deliberately different:
 CapturePack_2026-07-27_143052/
 ├── snapshot.png             ← explicit crop or complete virtual desktop
 ├── annotations.json
+├── viewer.html              ← double-clickable offline view; no install/server
 ├── report.md
 ├── manifest.json            ← capture_kind: image + image_scope
 ├── README.md
@@ -535,6 +545,13 @@ CapturePack_2026-07-27_143052/
 ```
 
 It has no replay and no top-level `timeline.json`.
+
+**viewer.html (offline human view)** — opening this fixed-name generated view
+directly from the pack folder works through `file://`, without CapturePack,
+localhost, an account, or a network connection. It renders only manifest-declared
+media, escapes pack strings, and clearly distinguishes derived annotations from
+the original pixels. It is not a sanitized share: blur never removes sensitive
+pixels from `snapshot.png` or the original replay.
 
 **README.md (human-first)** — Created, Application, Duration, Description, Files,
 How to use (1. open a manifest-declared annotated view when present 2. read
@@ -620,7 +637,7 @@ Relaunch
 Fully unattended updates are not the starting point. The safe initial UX:
 
 ```
-CapturePack 0.3.2 available
+CapturePack X.Y.Z available
 
 [Restart and update]  [Later]
 ```
@@ -631,9 +648,9 @@ screen replay buffer — force-killing it is not acceptable.
 **Release pipeline**
 
 ```
-Reviewed source revision + package version 0.3.2
+Reviewed source revision + package version X.Y.Z
     ↓
-Manual GitHub Actions dispatch (tag: v0.3.2)
+Manual GitHub Actions dispatch (tag: vX.Y.Z)
     ↓
 Full deterministic QA gate
     ↓
@@ -1138,17 +1155,23 @@ Settings are edited in a GUI window — never by opening settings.json in an edi
   subsystem has to pick a change up, an inline hint pointing at the button that applies it
   — never at an app restart.
 - Grouped sections:
-  - **General** — output folder (picker + open button), copy exported pack to clipboard,
-    auto-update check, start with Windows, and **keep CapturePack running and answering its
+  - **General** — output folder (picker + open button), independent post-capture actions for
+    video and image, auto-update check, start with Windows, and **keep CapturePack running and answering its
     hotkey** (GOAL "And do not stay gone.") — on by default, and a real teardown when
     switched off: the watchdog stops and the Start Menu fallback shortcut is deleted on the
     click, not at the next launch.
+    The video action may copy the prompt, folder, or path (or do nothing). The image action
+    additionally defaults to **copy final image**: only the completed derived PNG, after
+    annotation/blur rendering, durable file write, and manifest declaration, is copied.
+    Generated-document refresh is attempted first but remains best-effort, as it is for every
+    derived render. The raw `snapshot.png` is never substituted when that render or the verified
+    clipboard write fails, and such a failure is never reported as a successful copy.
   - **Capture** — Live recording's real on/off switch, plus independent
     recordable hotkey fields for video (`Ctrl+Alt+C`) and image
     (`Ctrl+Alt+S`). Each must include a modifier; a conflict with another app's
     global shortcut is detected on registration and rolls back only that action
     without unregistering the other. Changes apply instantly and update the
-    tray labels. Replay length is 1–60 seconds and capture rate is 1–30 fps. The
+    tray labels. Replay length is 1–60 seconds and capture rate is 5–30 fps. The
     section also carries the
     **replay resolution limit** — a DROPDOWN of the few choices that matter (native/no
     limit, 3840, 2560, 1920 default, 1280, 720), each labelled with the quality/CPU trade
@@ -1799,20 +1822,20 @@ Blur toggle · (right edge) Delete:
 
 No Pin/Rectangle/Blur tool menus exist.
 
-**The header is glued to its box.** It sits a few screen pixels above the selection
-rectangle at every zoom level, on whichever display the box lives on, and it flips
-*below* the box when there is genuinely no room above — but only when the header fits
-below. A box **taller than the stage** has room on neither side, and there the header
-goes to the **top** edge: covering the box's first rows is a nuisance, while the bottom
-edge would bury it in the middle of the pixels being annotated. It is measured after its
-own labels are written — the number chip, the blur label and the duration chip all
-change its size — and it is positioned in the same coordinate space it is measured in,
-so it never drifts away from the box it belongs to.
+**The header is glued to its box and never relocates it.** It stays a few screen pixels
+above the selection rectangle at every zoom level, on whichever display the box lives
+on. The header does not flip, clamp, or pull the box inward at a media edge: editor-only
+chrome may paint into the dark area outside the captured pixels (and may overlap the
+surrounding editor chrome at an application-window edge). The description input follows
+the same rule below the box. Both are measured and positioned in one stage coordinate
+space, so typing, zooming, panning, or changing a chip cannot make either control drift
+to a different edge.
 
-**The description input is never off screen.** It is focused the instant it appears, so
-its position is held inside the part of the board the stage actually shows — at any zoom
-or pan, and for a box against the bottom edge. A focused field the user cannot see is a
-field they type into blind.
+**The description label keeps the same below-box anchor in derived media.** If that
+anchor lies below the last source row, the generated annotated replay/keyframe adds a
+small result-only gutter below the source viewport. It never moves the evidence pixels,
+the box, or the label to manufacture room. Original replay and snapshot dimensions are
+unchanged.
 
 **The header appears with the description input** — the moment a right-drag ends, the
 box header (`[#] [1.0s] [Blur] [×]`) shows *together with* the text field, so number,
@@ -2529,8 +2552,9 @@ fixed because it is wrong, and reported as small because it is small.
   WinEvent notifications and rereads only dirty HWNDs, with structural events
   forcing reconciliation. The deterministic check measured 0.159 ms for a
   dirty sample versus 0.342 ms for a full pass, and 269 versus 3,281 wire bytes.
-- Capture FPS is an integer contract from **1 through 30**. Older profiles above
-  30 normalize to 30.
+- Capture FPS is an integer contract from **5 through 30**. Profiles from the
+  former 1–30 range normalize 1–4 to 5 on load; older profiles above 30
+  normalize to 30.
 - MCP output-folder and watch changes are live on the next request while the
   explicitly selected pack remains pinned. The copied client prompt includes
   the actual endpoint, setup command, and `capturepack_latest` request.

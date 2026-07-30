@@ -1,11 +1,55 @@
 // Builds main, preload, and renderer bundles into dist/ and copies static assets.
 import { build } from 'esbuild'
+import { spawnSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { cp, mkdir, rm } from 'node:fs/promises'
+import { join } from 'node:path'
+import { compileDxgiTimingHelper } from './build-dxgi-timing-helper.mjs'
 
 const watch = process.argv.includes('--watch')
 
 await rm('dist', { recursive: true, force: true })
 await mkdir('dist', { recursive: true })
+await mkdir('dist/scripts', { recursive: true })
+
+function compileNativeReplayHelper() {
+  if (process.platform !== 'win32') {
+    console.warn('native replay helper skipped: Windows build host required')
+    return
+  }
+  const windows = process.env.WINDIR ?? 'C:\\Windows'
+  const candidates = [
+    join(windows, 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe'),
+    join(windows, 'Microsoft.NET', 'Framework', 'v4.0.30319', 'csc.exe'),
+  ]
+  const compiler = candidates.find((candidate) => existsSync(candidate))
+  if (compiler === undefined) {
+    throw new Error('native replay helper compiler not found (Windows .NET Framework csc.exe)')
+  }
+  const result = spawnSync(
+    compiler,
+    [
+      '/nologo',
+      '/optimize+',
+      '/target:exe',
+      '/reference:System.Drawing.dll',
+      `/out:${join(process.cwd(), 'dist', 'scripts', 'native-replay-capture.exe')}`,
+      join(process.cwd(), 'scripts', 'native-replay-capture.cs'),
+    ],
+    { encoding: 'utf8', windowsHide: true },
+  )
+  if (result.status !== 0) {
+    throw new Error(
+      `native replay helper compile failed (${String(result.status)}): ` +
+        `${String(result.stderr || result.stdout || result.error)}`,
+    )
+  }
+}
+
+compileNativeReplayHelper()
+compileDxgiTimingHelper({
+  required: process.argv.includes('--require-dxgi-helper'),
+})
 
 const node = {
   bundle: true,

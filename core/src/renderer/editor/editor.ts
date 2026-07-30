@@ -50,9 +50,14 @@ import {
   objectHoverLabel,
   objectLabel,
   pickIdentityOf,
-  samePickIdentity,
 } from './objects'
-import type { PickableObject, PickIdentity } from './objects'
+import type { PickableObject, PickIdentity, PickLevel } from './objects'
+import {
+  annotationAlreadyAnnotatesPick,
+  boundedObservedPickFallback,
+  existingAnnotationForPick,
+  pickBeatsBoxPolicy,
+} from './objectPickPolicy'
 import { EditorState } from './state'
 import {
   formatDurationLabel,
@@ -68,6 +73,7 @@ import {
   composeExportPng,
   drawDisplayBase,
   drawDisplayFrame,
+  drawDisplayLabels,
   drawDisplayScene,
   drawObjectHover,
   handleAt,
@@ -84,6 +90,7 @@ import { Timebar } from './timebar'
 import { planTrimDrag } from './trimDrag'
 import { projectControlTrack } from './objectTrack'
 import type { ControlTrackAnchor } from './objectTrack'
+import { placeFloatingChrome } from './chromePlacement'
 import {
   clampZoom,
   initialImageViewMode,
@@ -297,6 +304,10 @@ const pendingDisplayContextFrames = new Map<number, ContextFrame>()
 const frameTimesByDisplay = new Map<number, number>()
 let frameRequestSeq = 0
 let frameSettleTimer: number | null = null
+// A bounded adjacent-sample click is asynchronous. Any later click/Esc/seek
+// invalidates it so an old answer can never create a box after the user moved
+// on.
+let observedPickRequestSeq = 0
 let hoverObject: PickableObject | null = null
 // THE LOSING CANDIDATES ARE KEPT (#66). Tab / Shift+Tab cycle the objects at
 // the hovered point; `hoverStack` is that list and `hoverStackIndex` is where
@@ -475,9 +486,34 @@ function uiBoard(): number {
 // Layout + painting
 // ---------------------------------------------------------------------------
 
+const EDITOR_LABEL_GUTTER_SCREEN_PX = 32
+
+function resizeOverlayForLabelOverflow(): void {
+  if (board === null) return
+  // Reserve enough backing-store rows for a constant-size callout even at the
+  // smallest supported viewport zoom. The base snapshot stays exactly the
+  // source size; only the transparent result overlay grows below it.
+  const minimumScale = Math.max(0.001, fitScale * ZOOM_MIN)
+  // A transient 1 px resize must not allocate a monitor-wide × 32k canvas.
+  // Normal editor minimum sizes need far less than this bounded ceiling.
+  const extraCanvasRows = Math.min(
+    1024,
+    Math.ceil((EDITOR_LABEL_GUTTER_SCREEN_PX * board.ratio) / minimumScale),
+  )
+  const targetHeight = board.canvasHeight + extraCanvasRows
+  if (overlay.width !== board.canvasWidth || overlay.height !== targetHeight) {
+    overlay.width = board.canvasWidth
+    overlay.height = targetHeight
+  }
+  const overlayBoardHeight = board.height + extraCanvasRows / board.ratio
+  overlay.style.height = `${overlayBoardHeight * fitScale}px`
+}
+
 function layout(): void {
   if (!loaded || board === null) return
-  const pad = 24
+  // Dark stage margin is result space: enough for the fixed header above and
+  // description/callout below without translating the captured pixels.
+  const pad = 40
   const availW = Math.max(1, stage.clientWidth - pad * 2)
   const availH = Math.max(1, stage.clientHeight - pad * 2)
   // The WHOLE board is fitted, never one display: seeing both screens at once
@@ -487,6 +523,7 @@ function layout(): void {
   fitScale = Math.min(availW / board.width, availH / board.height, 1)
   frame.style.width = `${board.width * fitScale}px`
   frame.style.height = `${board.height * fitScale}px`
+  resizeOverlayForLabelOverflow()
   // A FRAMED display is a pan computed from the fit scale and the stage size,
   // both of which just changed: re-derive it, or the first resize (and the
   // window-mode toggle, which resizes without a resize event on every platform)
@@ -818,6 +855,7 @@ function resizeCanvases(): void {
   snapshot.height = board.canvasHeight
   overlay.width = board.canvasWidth
   overlay.height = board.canvasHeight
+  overlay.style.height = '100%'
 }
 
 /**
@@ -877,6 +915,12 @@ function schedulePaint(): void {
       const own = scene.filter((a) => displayIndexOf(a) === d.index)
       drawDisplayScene(overlayCtx, snapshot, d, own, selected, numbers, uiOf(d))
       drawDisplayFrame(overlayCtx, d, displayLabel(d), d.focused, chrome)
+    }
+    // Result callouts intentionally run after every clipped display scene: the
+    // label stays below its box and may paint into the media-exterior gutter.
+    for (const d of board.displays) {
+      const own = scene.filter((a) => displayIndexOf(a) === d.index)
+      drawDisplayLabels(overlayCtx, d, own, uiOf(d))
     }
     // Object hover last, on top of everything (GOAL "Static object picking") —
     // and never while a drag is in progress (the box being dragged is what the
@@ -1417,9 +1461,11 @@ function toBoardUnits(e: PointerEvent | MouseEvent): { x: number; y: number } | 
   // viewport's zoom/pan transform.
   const r = overlay.getBoundingClientRect()
   if (r.width <= 0 || r.height <= 0) return null
+  const scale = r.width / board.width
+  if (scale <= 0) return null
   return {
-    x: ((e.clientX - r.left) * board.width) / r.width,
-    y: ((e.clientY - r.top) * board.height) / r.height,
+    x: (e.clientX - r.left) / scale,
+    y: (e.clientY - r.top) / scale,
   }
 }
 
@@ -1510,7 +1556,12 @@ function dragDraft(d: {
  * single-monitor pack (and every box on the focused screen) is byte-identical
  * to what this editor wrote before the board existed (SPEC §8.8).
  */
-function beginPendingBox(on: BoardDisplay, b: Box, picked?: PickableObject): void {
+function beginPendingBox(
+  on: BoardDisplay,
+  b: Box,
+  picked?: PickableObject,
+  observedPickedAtMs?: number,
+): void {
   // ONE BOX PER OBJECT PER MOMENT (#101).
   //
   // "같은프레임에 같은 윈도우는 셀렉트 또 안생기게 해줘". Clicking a window that
@@ -1561,7 +1612,11 @@ function beginPendingBox(on: BoardDisplay, b: Box, picked?: PickableObject): voi
   // every captured display at once and they present independently, so a click
   // on the second monitor's picture must be timed by that monitor's picture —
   // the same frame the rectangle above was read out of.
-  const pickedAt = presentedOn(on.index)
+  // Ordinarily the object is observed in the exact displayed ContextFrame.
+  // An ambiguous source-start clock may use one bounded adjacent observation;
+  // keep that actual sample time as the existing picked_at_ms provenance
+  // instead of inventing and persisting a clock correction.
+  const pickedAt = observedPickedAtMs ?? presentedOn(on.index)
   if (scrub) {
     // "Now" (the capture instant) anchors at the end of the replay; a scrubbed
     // stamp is clamped to the manifest's wall-clock replay_duration_ms — the
@@ -1681,10 +1736,9 @@ function openTextEditor(
 }
 
 /**
- * Gap between the description input and the bottom of its box, in #frame's own
- * (untransformed) space — so it rides the viewport zoom exactly as the box does,
- * unlike the box header's gap, which is screen px because the header is not in
- * the frame at all.
+ * Screen-pixel gap between the description input and the bottom of its box.
+ * Input and header are both #stage siblings, so neither receives #frame's
+ * transform or a second edge clamp.
  */
 const TEXT_EDITOR_GAP = 6
 
@@ -1708,48 +1762,32 @@ function positionTextEditor(): void {
     anchor = textSession.draft.bounds
     display = displayOf(textSession.draft) ?? display
   }
-  // The input lives in #frame (BOARD CSS space), so the box's native anchor is
-  // converted through its own display first — otherwise a box on the second
-  // screen would get its description input over the first one.
-  const topLeft = toBoardPoint(display, anchor.x, anchor.y + anchor.height)
-  const w = textEditor.offsetWidth
-  const h = textEditor.offsetHeight
-  // THE INPUT MUST BE ON SCREEN, not merely inside the board. #frame is
-  // transformed (zoom/pan) and #stage clips it, so "inside #frame" and "visible"
-  // are two different constraints, and only the second one matters: this element
-  // is FOCUSED the instant it is shown (openTextEditor), and a focused field the
-  // user cannot see is a field they type into blind.
-  //
-  // It used to be rescued by accident. Under `overflow: hidden` #stage was a
-  // scroll container, so focus() scrolled the caret back into view — the very
-  // mechanism that turned out to be issue #50's suspect and the reason #stage is
-  // now `overflow: clip`. Nothing scrolls any more, so the band of #frame that
-  // #stage actually shows is computed here instead.
-  const fr = frame.getBoundingClientRect()
-  const sr = stage.getBoundingClientRect()
-  // Frame-local px -> viewport px: clientWidth is the UNtransformed width and the
-  // client rect is the transformed one, so their ratio is exactly the viewport
-  // zoom. Guarded because a frame with no width would divide by zero on the very
-  // first layout, before the board has been sized.
-  const scale = frame.clientWidth > 0 && fr.width > 0 ? fr.width / frame.clientWidth : 1
-  // The visible band, expressed as the range `left`/`top` may take.
-  const minLeft = Math.max(0, (sr.left - fr.left) / scale)
-  const maxLeft = Math.min(
-    // Held inside #frame horizontally for the reason it always was: a 140px-min
-    // input anchored to a box near the right edge would otherwise run off the
-    // board. There is deliberately no such limit VERTICALLY — the anchor sits
-    // below the box, and for a box on the board's bottom row that is a few px of
-    // dark stage background, which is visible and correct; pulling it back inside
-    // #frame would drop it onto the box instead.
-    Math.max(0, frame.clientWidth - w),
-    (sr.right - fr.left) / scale - w,
+  // Input and header now share ONE space: screen pixels relative to #stage.
+  // The input used to be a transformed #frame child and then received its own
+  // viewport clamp. At a bottom/right edge that clamp moved only the input,
+  // making the unchanged annotation rectangle look as if it jumped away.
+  const topLeft = toScreen(display, anchor.x, anchor.y)
+  const bottomRight = toScreen(
+    display,
+    anchor.x + anchor.width,
+    anchor.y + anchor.height,
   )
-  const minTop = Math.max(0, (sr.top - fr.top) / scale)
-  const maxTop = (sr.bottom - fr.top) / scale - h
-  // Math.max LAST, so the lower bound wins when the visible band is narrower than
-  // the input itself: showing the start of the field beats showing none of it.
-  textEditor.style.left = `${Math.max(minLeft, Math.min(topLeft.x * fitScale, maxLeft))}px`
-  textEditor.style.top = `${Math.max(minTop, Math.min(topLeft.y * fitScale + TEXT_EDITOR_GAP, maxTop))}px`
+  const placed = placeFloatingChrome({
+    anchor: {
+      x: topLeft.x,
+      y: topLeft.y,
+      width: bottomRight.x - topLeft.x,
+      height: bottomRight.y - topLeft.y,
+    },
+    chrome: {
+      width: textEditor.offsetWidth,
+      height: textEditor.offsetHeight,
+    },
+    preferredSide: 'below',
+    gap: TEXT_EDITOR_GAP,
+  })
+  textEditor.style.left = `${placed.x}px`
+  textEditor.style.top = `${placed.y}px`
 }
 
 /** Enter/blur path: commits the pending box or applies the text edit. */
@@ -2083,12 +2121,6 @@ function syncSelectionUi(): void {
 
 /** Screen px between the header and the dashed selection rect it belongs to. */
 const BOX_HEADER_GAP = 4
-/**
- * How far INSIDE the box the header sits when there is no room above it — far
- * enough to clear the 3 px border and read as inside, close enough that it is
- * still the corner's label rather than a floating chip.
- */
-const BOX_HEADER_INSET = 8
 
 /**
  * Places the header against the selection rect, in #stage's own positioning
@@ -2103,40 +2135,22 @@ function positionBoxHeader(
   topLeft: { x: number; y: number },
   bottomRight: { x: number; y: number },
 ): void {
-  const w = boxHeader.offsetWidth
-  const h = boxHeader.offsetHeight
-  // Clamped on BOTH edges (#stage clips). The fullscreen overlay almost always
-  // leaves horizontal margin, but a windowed editor can be resized until the
-  // image fills the stage — and a header pushed off the right edge takes the
-  // blur toggle, the number toggle and the duration chip with it, none of which
-  // have a keyboard fallback.
-  // ABOVE the box by default; INSIDE ITS TOP-LEFT when there is no room above.
-  //
-  // The fallback used to be BELOW the box, and it was disorienting: the header
-  // carries the box's own controls (blur, number, duration), so flipping it to
-  // the far side of a tall box put them a whole window away from the corner the
-  // eye is on, and on a box taller than the stage the header could land off the
-  // bottom entirely and get clamped to a random edge. Reported as "박스 위에
-  // 툴팁이 위에가 가려지면 밑으로 내려오는데 내 생각에는 box 안쪽 좌상단에
-  // 있어야 맞는 거 같아", and that reading is right: the top-left corner is
-  // where the number badge already is, so the label stays with the corner that
-  // identifies the box whichever side of the edge it has to sit on.
-  //
-  // Inside means ON the annotated pixels, which is the cost — bounded to the
-  // box's first rows, never its middle, and only when the box is against the
-  // top of the stage.
-  const above = topLeft.y - BOX_HEADER_GAP - h
-  const inside = above < 0
-  const maxLeft = Math.max(4, stage.clientWidth - w - 4)
-  const left = inside ? topLeft.x + BOX_HEADER_INSET : topLeft.x
-  boxHeader.style.left = `${Math.max(4, Math.min(left, maxLeft))}px`
-  boxHeader.classList.toggle('inside', inside)
-  // Never past the box's own bottom edge: on a box shorter than the header,
-  // sitting inside would otherwise overhang the box it belongs to.
-  const insideTop = Math.min(topLeft.y + BOX_HEADER_INSET, Math.max(topLeft.y, bottomRight.y - h))
-  const top = inside ? insideTop : above
-  const maxTop = Math.max(0, stage.clientHeight - h)
-  boxHeader.style.top = `${Math.max(0, Math.min(top, maxTop))}px`
+  const placed = placeFloatingChrome({
+    anchor: {
+      x: topLeft.x,
+      y: topLeft.y,
+      width: bottomRight.x - topLeft.x,
+      height: bottomRight.y - topLeft.y,
+    },
+    chrome: {
+      width: boxHeader.offsetWidth,
+      height: boxHeader.offsetHeight,
+    },
+    preferredSide: 'above',
+    gap: BOX_HEADER_GAP,
+  })
+  boxHeader.style.left = `${placed.x}px`
+  boxHeader.style.top = `${placed.y}px`
 }
 
 /**
@@ -2482,24 +2496,30 @@ function objectPickingCanSpeak(): boolean {
  * display spaces; claims and accuracy must come from the same temporal frame as
  * the selected slice.
  */
-function buildObjectIndex(displayIndex: number, frame: ContextFrame): void {
-  if (board === null) return
+function objectIndexForFrame(
+  displayIndex: number,
+  frame: ContextFrame,
+): ObjectIndex | null {
+  if (board === null) return null
   const d = board.displays.find((display) => display.index === displayIndex)
-  if (d === undefined) return
+  if (d === undefined) return null
   const slice = frame.displays.find((candidate) => candidate.display === displayIndex)
-  contextFramesByDisplay.set(displayIndex, frame)
-  objectIndexes.set(
+  return ObjectIndex.build(
+    slice?.candidates ?? [],
+    slice?.surfaces ?? [],
+    slice?.coverage ?? [],
+    frame.claims,
+    d.width,
+    d.height,
     displayIndex,
-    ObjectIndex.build(
-      slice?.candidates ?? [],
-      slice?.surfaces ?? [],
-      slice?.coverage ?? [],
-      frame.claims,
-      d.width,
-      d.height,
-      displayIndex,
-    ),
   )
+}
+
+function buildObjectIndex(displayIndex: number, frame: ContextFrame): void {
+  const index = objectIndexForFrame(displayIndex, frame)
+  if (index === null) return
+  contextFramesByDisplay.set(displayIndex, frame)
+  objectIndexes.set(displayIndex, index)
 }
 
 /** Initial/capture-instant frame: every native snapshot shows this one time. */
@@ -2518,9 +2538,10 @@ function buildObjectIndexes(frame: ContextFrame): void {
  * left 16 ms ago is work nobody asked for. Hovering itself stays free — it
  * probes the local index, never Core.
  *
- * The frame in hand keeps answering while a new one is on its way, so picking
- * never blinks off mid-scrub; a stale-but-honest offer is corrected the moment
- * the new frame lands, and its accuracy is what says whether it was honest.
+ * The frame in hand may stay allocated while a new one is on its way, but it
+ * cannot answer hover or click for different pixels. The frame time beside each
+ * index is the commit gate below: after a seek, picking resumes only when the
+ * index for the frame actually presented on that display arrives.
  */
 const FRAME_SETTLE_MS = 120
 
@@ -2538,6 +2559,40 @@ function displayedContextFrameRequests(): Array<{ display: number; timeMs: numbe
   )
 }
 
+function normalizedContextTimeMs(timeMs: number): number {
+  return Math.max(0, Math.round(timeMs))
+}
+
+/**
+ * Whether this display's local ObjectIndex describes the pixels on screen.
+ *
+ * A 120 ms settle debounce is useful for provider load, but it is not authority
+ * to reuse the previous index. In that interval the old bounds are facts about
+ * another frame; offering or committing them would manufacture a selection the
+ * user did not click.
+ */
+function objectIndexMatchesPresentedFrame(displayIndex: number): boolean {
+  if (scrub === null) return true
+  const request = displayedContextFrameRequests().find(
+    (candidate) => candidate.display === displayIndex,
+  )
+  if (request === undefined) return false
+  const wanted = normalizedContextTimeMs(request.timeMs)
+  return frameTimesByDisplay.get(displayIndex) === wanted
+}
+
+/** A user click bypasses the playback/wheel settle debounce for its display. */
+function requestContextFrameNow(displayIndex?: number): void {
+  if (frameSettleTimer !== null) {
+    window.clearTimeout(frameSettleTimer)
+    frameSettleTimer = null
+  }
+  const requests = displayedContextFrameRequests().filter(
+    (request) => displayIndex === undefined || request.display === displayIndex,
+  )
+  requestContextFrames(requests)
+}
+
 function requestContextFrames(
   requests: readonly { display: number; timeMs: number }[],
 ): void {
@@ -2546,7 +2601,7 @@ function requestContextFrames(
   const wanted = requests
     .map((request) => ({
       display: request.display,
-      timeMs: Math.max(0, Math.round(request.timeMs)),
+      timeMs: normalizedContextTimeMs(request.timeMs),
     }))
     .filter((request) => frameTimesByDisplay.get(request.display) !== request.timeMs)
   if (wanted.length === 0) return
@@ -2583,10 +2638,13 @@ function requestContextFrames(
     .then((answers) => {
       // A later request already answered: this one is history, and applying it
       // would move picking BACK in time.
-      if (seq !== frameRequestSeq) return
+      if (seq !== frameRequestSeq || contextSessionId !== sessionId) return
       const resolved: Array<{ display: number; timeMs: number; frame: ContextFrame }> = []
       for (const answer of answers) {
         if (answer.frame === null) continue
+        // Main validates the id too, but a renderer response from a closing or
+        // replaced editor must never become the current local index.
+        if (answer.frame.sessionId !== sessionId) continue
         for (const display of answer.displays) {
           frameTimesByDisplay.set(display, answer.timeMs)
           resolved.push({ display, timeMs: answer.timeMs, frame: answer.frame })
@@ -2599,6 +2657,110 @@ function requestContextFrames(
       // defensive boundary against an error in the composition itself.
       console.error('capturepack: composing display context frames failed:', err)
     })
+}
+
+interface ObservedPickSearchResult {
+  readonly picked: PickableObject
+  readonly observedAtMs: number
+}
+
+/**
+ * Search no farther than two actual video frames around the displayed one.
+ *
+ * This is a click-only escape hatch for a source whose video↔context start
+ * latency was ambiguous. It does not update the current ObjectIndex, hover,
+ * playhead or selection; each returned frame is inspected off to the side and
+ * the pure policy below decides whether one directly observed control is safe.
+ */
+async function requestBoundedObservedControlPick(
+  on: BoardDisplay,
+  point: { x: number; y: number },
+  exactIndex: ObjectIndex,
+  requestedTimeMs: number,
+  includeLargeSemanticRefinements: boolean,
+): Promise<ObservedPickSearchResult | null> {
+  const sessionId = contextSessionId
+  if (
+    sessionId === null ||
+    captureKind !== 'video' ||
+    !Number.isFinite(fps) ||
+    fps <= 0
+  ) {
+    return null
+  }
+  const frameIntervalMs = 1000 / fps
+  const times = [
+    requestedTimeMs - frameIntervalMs * 2,
+    requestedTimeMs - frameIntervalMs,
+    requestedTimeMs + frameIntervalMs,
+    requestedTimeMs + frameIntervalMs * 2,
+  ]
+    .map(normalizedContextTimeMs)
+    .filter(
+      (timeMs, index, all) =>
+        timeMs >= 0 &&
+        timeMs <= replayDurationMs &&
+        timeMs !== requestedTimeMs &&
+        all.indexOf(timeMs) === index,
+    )
+  if (times.length === 0) return null
+
+  const answers = await Promise.all(
+    times.map(async (timeMs) => {
+      try {
+        const frame = await window.editorBridge.requestContextFrame({
+          sessionId,
+          timeMs,
+        })
+        if (
+          frame === null ||
+          frame.sessionId !== sessionId ||
+          normalizedContextTimeMs(frame.requestedTimeMs) !== timeMs
+        ) {
+          return null
+        }
+        return frame
+      } catch (err) {
+        console.error(
+          `capturepack: adjacent observed-pick frame ${timeMs} failed:`,
+          err,
+        )
+        return null
+      }
+    }),
+  )
+  const observations = answers.map((frame) => {
+    if (frame === null) {
+      return {
+        coverage: 'none' as const,
+        pointPicks: [] as readonly PickableObject[],
+      }
+    }
+    const index = objectIndexForFrame(on.index, frame)
+    return {
+      coverage: frame.accuracy.coverage,
+      pointPicks:
+        index
+          ?.stackAt(
+            point.x,
+            point.y,
+            false,
+            0,
+            includeLargeSemanticRefinements,
+          )
+          .offered.filter((picked) => picked.level === 'control') ?? [],
+    }
+  })
+  return boundedObservedPickFallback({
+    requestedTimeMs,
+    frameIntervalMs,
+    exactPointPick: null,
+    exactControls: exactIndex.controlObjects(
+      undefined,
+      includeLargeSemanticRefinements,
+    ),
+    observations,
+  })
 }
 
 /** Schedules a re-query for the position the scrub has settled on. */
@@ -2636,28 +2798,50 @@ function contextFramesApplied(frames: readonly ContextFrame[]): void {
   schedulePaint()
 }
 
+/** Bind the first delayed push; every later frame must belong to that session. */
+function adoptPushedContextSession(sessionId: string): boolean {
+  if (contextSessionId === null) contextSessionId = sessionId
+  return contextSessionId === sessionId
+}
+
+function contextFrameBelongsToActiveSession(frame: ContextFrame): boolean {
+  return contextSessionId !== null && frame.sessionId === contextSessionId
+}
+
 /** A capture-instant frame applies to every display's native snapshot. */
-function applyContextFrame(frame: ContextFrame): void {
+function applyContextFrame(frame: ContextFrame): boolean {
+  if (!contextFrameBelongsToActiveSession(frame)) return false
   if (!loaded || board === null) {
     pendingContextFrame = frame
-    return
+    return true
   }
   buildObjectIndexes(frame)
+  for (const display of board.displays) {
+    frameTimesByDisplay.set(
+      display.index,
+      normalizedContextTimeMs(frame.requestedTimeMs),
+    )
+  }
   contextFramesApplied([frame])
+  return true
 }
 
 /** Historical updates, each resolved at that display's presented frame time. */
 function applyDisplayContextFrames(
   updates: readonly { display: number; frame: ContextFrame }[],
 ): void {
+  const accepted = updates.filter((update) =>
+    contextFrameBelongsToActiveSession(update.frame),
+  )
+  if (accepted.length === 0) return
   if (!loaded || board === null) {
-    for (const update of updates) {
+    for (const update of accepted) {
       pendingDisplayContextFrames.set(update.display, update.frame)
     }
     return
   }
-  for (const update of updates) buildObjectIndex(update.display, update.frame)
-  contextFramesApplied(updates.map((update) => update.frame))
+  for (const update of accepted) buildObjectIndex(update.display, update.frame)
+  contextFramesApplied(accepted.map((update) => update.frame))
 }
 
 /** The topmost box under a native point of `d` — the one a click could take. */
@@ -2667,31 +2851,15 @@ function boxUnder(d: BoardDisplay, x: number, y: number): Annotation | null {
   return state.byId(id) ?? null
 }
 
-/** Two rectangles that are the same object, within a pixel of rounding. */
-function sameRect(b: Box, o: PickableObject): boolean {
-  return (
-    Math.abs(b.x - o.x) <= 1 &&
-    Math.abs(b.y - o.y) <= 1 &&
-    Math.abs(b.w - o.width) <= 1 &&
-    Math.abs(b.h - o.height) <= 1
-  )
-}
-
 /** Whether `a` is the box that already annotates exactly `picked`. */
 function annotatesPick(a: Annotation, picked: PickableObject): boolean {
-  const b = a.bounds
-  if (sameRect({ x: b.x, y: b.y, w: b.width, h: b.height }, picked)) return true
-  // The rect the box was SNAPPED to, which a resize may have moved it off.
-  const snapped = pickedRects.get(a.annotation_id)
-  return snapped !== undefined && sameRect(snapped, picked)
+  return annotationAlreadyAnnotatesPick(
+    a,
+    pickedObjectIdentities,
+    picked,
+    pickedRects.get(a.annotation_id),
+  )
 }
-
-/**
- * A pick has to be a REAL refinement of the box to take its click: half its area
- * or less. A control within a hair of the box's own rectangle refines nothing,
- * and the box is the thing the user drew.
- */
-const PICK_REFINE_RATIO = 2
 
 /** Everything about the click (or hover) that decides box-vs-pick precedence. */
 interface AimAt {
@@ -2718,10 +2886,10 @@ interface AimAt {
  *       with anything under it could never have its text edited),
  *     · the pointer is on its OUTLINE (render.ts onBoxEdge) — a box is a
  *       rectangle drawn around something, so its stroke is always a grip on it,
- *     · or the pick is the object it already annotates / not meaningfully
- *       smaller than it.
- *   The PICK wins in the box's empty middle, where it genuinely refines it —
- *     one click per control inside an already-boxed window.
+ *     · or the pick is the object it already annotates.
+ *   The PICK wins in the box's empty middle when it refines by geometry, and
+ *     always when it refines a semantic WINDOW to a CONTROL. A Document or
+ *     Contents control can fill most of its app and still be the finer level.
  *
  * Both halves are load-bearing. Letting the box win over its whole AREA turned
  * the first box ever drawn into a permanent hole in picking (snapping a window
@@ -2731,27 +2899,32 @@ interface AimAt {
  * pixel of it holds a smaller control.
  */
 function pickBeatsBox(picked: PickableObject, a: Annotation, at: AimAt): boolean {
-  // THE SELECTED BOX DOES NOT SWALLOW A REFINEMENT (bug: "앱 선택하고 내부
-  // 컨트롤 클릭하면 박스가 안 그려져").
-  //
-  // This returned false for the selected box unconditionally, and the flow it
-  // killed is the most natural one there is: pick a window — which SELECTS the
-  // box it creates (commitTextEditor) — then click a control inside it. Every
-  // interior click landed on the still-selected window box and moved it a few
-  // pixels instead of drawing anything. The user had to know to press Esc
-  // first, and nothing on screen says so.
-  //
-  // A MANUAL selected box keeps its whole interior: clicking inside it is the
-  // move gesture, and a pick stealing that grab would trade one surprise for
-  // another. A TRACKED selected box has no interior gesture to protect —
-  // "Selected, never dragged, when Core owns the rectangle" (#99, the
-  // pointerdown below) — so for it the gate defended nothing and cost the
-  // refinement flow; it now applies the same area bar as every other box.
-  if (a.annotation_id === state.selectedId && !coreOwnsGeometry(a)) return false
-  if (at.repeat === true) return false
-  if (onBoxEdge(a, at.x, at.y, at.ui)) return false
-  if (annotatesPick(a, picked)) return false
-  return picked.area * PICK_REFINE_RATIO <= Math.max(1, a.bounds.width * a.bounds.height)
+  const storedLevel = a.target?.['level']
+  const rememberedLevel = pickedObjectIdentities.get(a.annotation_id)?.level
+  const boxTargetLevel =
+    storedLevel === 'control' || storedLevel === 'window'
+      ? storedLevel
+      : rememberedLevel
+  return pickBeatsBoxPolicy({
+    // A selected MANUAL box keeps its interior move gesture. A semantic box
+    // owns no editable geometry, so selection alone cannot make a permanent
+    // picking hole over its children.
+    selectedManualBox:
+      a.annotation_id === state.selectedId && !coreOwnsGeometry(a),
+    repeat: at.repeat === true,
+    onEdge: onBoxEdge(a, at.x, at.y, at.ui),
+    alreadyAnnotatesPick: annotatesPick(a, picked),
+    ...(boxTargetLevel === undefined ? {} : { boxTargetLevel }),
+    pickedLevel: picked.level,
+    pickedArea: picked.area,
+    boxArea: a.bounds.width * a.bounds.height,
+  })
+}
+
+function semanticPickLevel(a: Annotation): PickLevel | undefined {
+  const stored = a.target?.['level']
+  if (stored === 'control' || stored === 'window') return stored
+  return pickedObjectIdentities.get(a.annotation_id)?.level
 }
 
 /** Hover probe. Cheap by design: nothing happens until the pointer moves. */
@@ -2771,6 +2944,15 @@ function probeObjectHover(p: { d: BoardDisplay; x: number; y: number } | null): 
 
 /** The outline (and its one-time explanations) for one probed point. */
 function answerProbe(d: BoardDisplay, x: number, y: number): void {
+  // A cached index may still exist during the 120 ms settle interval, but its
+  // rectangles belong to the previous video frame. Do not advertise a click
+  // that the commit path must (and does) refuse.
+  if (!objectIndexMatchesPresentedFrame(d.index)) {
+    hoverStack = []
+    hoverStackIndex = 0
+    setHoverObject(null, null)
+    return
+  }
   const index = objectIndexOf(d.index)
   if (index === null || index.size === 0) {
     hoverStack = []
@@ -2790,7 +2972,26 @@ function answerProbe(d: BoardDisplay, x: number, y: number): void {
   // THE WHOLE STACK, not just the winner (#66): the first is what a click
   // takes, the rest is what Tab / Shift+Tab cycle through, and it is kept for
   // exactly as long as the pointer stays on this point.
-  const stack = index.stackAt(x, y, windowLevelKey)
+  const existingBox = boxUnder(d, x, y)
+  const storedLevel = existingBox?.target?.['level']
+  const rememberedLevel =
+    existingBox === null
+      ? undefined
+      : pickedObjectIdentities.get(existingBox.annotation_id)?.level
+  // Large Document/Contents controls are intentionally deferred on the first
+  // hover so a maximized app does not become one giant low-precision target.
+  // Once its semantic window box is present, this is the exact refinement flow
+  // the user requested: window first, then its large child on the next click.
+  const includeLargeSemanticRefinements =
+    !windowLevelKey &&
+    (storedLevel === 'window' || rememberedLevel === 'window')
+  const stack = index.stackAt(
+    x,
+    y,
+    windowLevelKey,
+    0,
+    includeLargeSemanticRefinements,
+  )
   hoverStack = stack.offered
   hoverStackIndex = 0
   offerHover(d, x, y)
@@ -3053,19 +3254,18 @@ function reanchorBounds(a: Annotation): void {
 /**
  * The box that already annotates this object AT THIS MOMENT, if there is one.
  *
- * Matched on the surface the object IS (#90's stable id), not on its rectangle:
- * two clicks a few pixels apart on the same window are the same window, and a
- * window that has moved since is still the same window.
+ * A live session uses the provider's full stable identity. After save/reopen,
+ * that map is intentionally empty, so only a strong durable SPEC target
+ * (provider object_id, UIA AutomationId, or the complete UIA window tuple) may
+ * recover the same object. Geometry and display labels never count as identity.
  */
 function existingBoxFor(picked: PickableObject): Annotation | null {
-  const identity = pickIdentityOf(picked)
-  for (const a of state.annotations) {
-    const existing = pickedObjectIdentities.get(a.annotation_id)
-    if (existing === undefined || !samePickIdentity(existing, identity)) continue
-    if (!annotationVisibleNow(a)) continue
-    return a
-  }
-  return null
+  return existingAnnotationForPick(
+    state.annotations,
+    pickedObjectIdentities,
+    picked,
+    annotationVisibleNow,
+  )
 }
 
 /**
@@ -3513,6 +3713,66 @@ function applyResize(
   }
 }
 
+/**
+ * Completes the click that paused for an adjacent observed-sample query.
+ *
+ * Eligibility guarantees an existing box, if any, is semantic and therefore
+ * never starts a drag. This delayed path can select it or create a semantic
+ * box, but it cannot move manual geometry or the timeline cursor.
+ */
+function finishObservedPickClick(
+  on: BoardDisplay,
+  point: { x: number; y: number },
+  ui: number,
+  box: Annotation | null,
+  exactPick: PickableObject | null,
+  fallback: ObservedPickSearchResult | null,
+): void {
+  const picked = fallback?.picked ?? exactPick
+  if (picked === null) {
+    if (box !== null) {
+      selectBox(box.annotation_id, on)
+    } else {
+      state.selectedId = null
+      if (objectPickingCanSpeak()) {
+        const answer = emptyAnswer(on)
+        showObjectAnswer(answer.kind, answer.text)
+      }
+    }
+    syncLanes()
+    schedulePaint()
+    return
+  }
+  const pickWins =
+    box === null ||
+    pickBeatsBox(picked, box, {
+      x: point.x,
+      y: point.y,
+      ui,
+      repeat: false,
+    })
+  if (box !== null && !pickWins) {
+    if (!annotatesPick(box, picked)) {
+      showObjectHintOnce('boxTookClick', t('editor.objectBoxTookClick'), 'answer')
+    }
+    selectBox(box.annotation_id, on)
+    syncLanes()
+    schedulePaint()
+    return
+  }
+
+  state.selectedId = null
+  beginPendingBox(
+    on,
+    { x: picked.x, y: picked.y, w: picked.width, h: picked.height },
+    picked,
+    fallback?.observedAtMs,
+  )
+  clickPickDraftId = pendingDraft()?.annotation_id ?? null
+  syncLanes()
+  schedulePaint()
+}
+
 overlay.addEventListener('pointerdown', (e) => {
   if (!loaded) return
   // The MIDDLE button belongs to panning and to nothing else (issue #55). A
@@ -3521,6 +3781,8 @@ overlay.addEventListener('pointerdown', (e) => {
   // happens: not a paused replay, not a dismissed duration popover, and
   // certainly not a selection change.
   if (e.button === 1) return
+  // Any new canvas gesture supersedes an adjacent-frame pick still in flight.
+  observedPickRequestSeq += 1
   scrub?.pause() // annotating targets a moment; freeze it
   closeDurationEditor(false) // any canvas interaction dismisses it, unapplied
   setHoverObject(null, null) // the outline has served its purpose once it is used
@@ -3536,6 +3798,7 @@ overlay.addEventListener('pointerdown', (e) => {
     return
   }
   if (e.button !== 0) return
+  const observedPickSeq = observedPickRequestSeq
   const repeat = isRepeatClick(e)
   // A REPEAT click is the second half of one gesture, and the pending box the
   // FIRST half opened was never asked for: "double-click a box to edit its
@@ -3580,6 +3843,19 @@ overlay.addEventListener('pointerdown', (e) => {
       return
     }
   }
+  // Pausing immediately after a seek can happen before the normal 120 ms
+  // context settle query. The cached hover/index then names the previous
+  // picture, so it is not evidence for an annotation on this one. Re-query the
+  // clicked display immediately and leave this click otherwise untouched; the
+  // refreshed frame re-probes the resting pointer when it arrives.
+  if (!objectIndexMatchesPresentedFrame(hit.d.index)) {
+    hoverStack = []
+    hoverStackIndex = 0
+    setHoverObject(null, null)
+    requestContextFrameNow(hit.d.index)
+    schedulePaint()
+    return
+  }
   // LEFT CLICK: the box under the cursor and the UI object under it are BOTH
   // offers, and pickBeatsBox decides between them — the box keeps its outline,
   // its selected state and any repeat click; the pick gets the box's empty
@@ -3606,6 +3882,70 @@ overlay.addEventListener('pointerdown', (e) => {
   }
   const box = boxUnder(hit.d, p.x, p.y)
   const picked = hoverStack[hoverStackIndex] ?? null
+  const exactIndex = objectIndexOf(hit.d.index)
+  const requestedTimeMs = frameTimesByDisplay.get(hit.d.index)
+  const semanticPointHit = hoverStack.some(
+    (candidate) => candidate.level === 'control',
+  )
+  const includeLargeSemanticRefinements =
+    box !== null && semanticPickLevel(box) === 'window'
+  const safeDelayedBox =
+    box === null ||
+    (semanticPickLevel(box) === 'window' && coreOwnsGeometry(box))
+  // When the exact frame has no CONTROL at this pixel, a static-start source
+  // with ambiguous latency may have the pixels one observed frame either side
+  // of its context sample. Search off-thread before accepting the window floor,
+  // but never delay a deliberate Shift/window pick, a repeat, an edge grab, a
+  // manual box, or an exact semantic hit.
+  if (
+    (picked === null || picked.level === 'window') &&
+    exactIndex !== null &&
+    requestedTimeMs !== undefined &&
+    !windowLevelKey &&
+    !semanticPointHit &&
+    !repeat &&
+    safeDelayedBox &&
+    (box === null || !onBoxEdge(box, p.x, p.y, ui)) &&
+    exactIndex.controlObjects(
+      undefined,
+      includeLargeSemanticRefinements,
+    ).length > 0
+  ) {
+    const sessionId = contextSessionId
+    const selectedId = state.selectedId
+    void requestBoundedObservedControlPick(
+      hit.d,
+      p,
+      exactIndex,
+      requestedTimeMs,
+      includeLargeSemanticRefinements,
+    )
+      .then((fallback) => {
+        // The answer belongs only to this untouched click and displayed frame.
+        // A seek, later click, context refresh, selection change or session
+        // replacement makes it stale even when its own provider answer is good.
+        if (
+          observedPickSeq !== observedPickRequestSeq ||
+          contextSessionId !== sessionId ||
+          objectIndexOf(hit.d.index) !== exactIndex ||
+          frameTimesByDisplay.get(hit.d.index) !== requestedTimeMs ||
+          !objectIndexMatchesPresentedFrame(hit.d.index) ||
+          state.selectedId !== selectedId ||
+          drag !== null ||
+          textSession !== null
+        ) {
+          return
+        }
+        finishObservedPickClick(hit.d, p, ui, box, picked, fallback)
+      })
+      .catch((err: unknown) => {
+        // Context is optional and cannot take the editor down. The exact window
+        // remains available on the next click if this bounded query itself
+        // failed unexpectedly.
+        console.error('capturepack: bounded observed control pick failed:', err)
+      })
+    return
+  }
   const pickWins =
     picked !== null && (box === null || pickBeatsBox(picked, box, { x: p.x, y: p.y, ui, repeat }))
   if (box !== null && !pickWins) {
@@ -4042,6 +4382,7 @@ function syncPanCursor(): void {
 // ---------------------------------------------------------------------------
 
 window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') observedPickRequestSeq += 1
   // The tutorial is modal, so it answers keys before anything else can: Enter,
   // Escape and Space all mean "got it". Nothing behind it is reachable while
   // it is up, which is the point — a first-time user pressing keys at random
@@ -4467,6 +4808,12 @@ async function doExport(kind: 'save' | 'saveAsNew' = 'save'): Promise<void> {
 async function initEditor(payload: EditorInitPayload): Promise<void> {
   // Language first: everything below may render user-visible text.
   t = makeT(payload.uiLanguage)
+  // An init-delivered session is authoritative before image decoding begins.
+  // When init has no context (the bounded re-open path), do NOT assign null:
+  // a delayed push may already have bound the same window while decoding.
+  if (payload.context !== null) {
+    contextSessionId = payload.context.sessionId
+  }
   applyDomI18n(t)
   timebar.setT(t)
   captureKind = payload.captureKind
@@ -4588,12 +4935,17 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
   // Windows are the floor, controls the refinement, each in that display's own
   // snapshot coordinate space (SPEC §11.3). No session (or an empty frame)
   // yields empty indexes and picking stays silently off.
-  contextSessionId = payload.context?.sessionId ?? null
   frameTimesByDisplay.clear()
-  if (payload.context !== null) {
+  if (
+    payload.context !== null &&
+    contextFrameBelongsToActiveSession(payload.context.frame)
+  ) {
     buildObjectIndexes(payload.context.frame)
     for (const display of board?.displays ?? []) {
-      frameTimesByDisplay.set(display.index, payload.context.frame.requestedTimeMs)
+      frameTimesByDisplay.set(
+        display.index,
+        normalizedContextTimeMs(payload.context.frame.requestedTimeMs),
+      )
     }
   }
   resizeCanvases()
@@ -4790,8 +5142,7 @@ window.editorBridge.onContextFrame((frame) => {
   // A re-edit opens after a short deadline even when its initial provider frame
   // is still pending. That late push is also the hand-off of the session id,
   // enabling all subsequent scrub requests without making first paint wait.
-  if (contextSessionId === null) contextSessionId = frame.sessionId
-  else if (contextSessionId !== frame.sessionId) return
+  if (!adoptPushedContextSession(frame.sessionId)) return
   // A pushed replacement supersedes every outstanding batch assembled from an
   // older view of the board clock.
   frameRequestSeq += 1
@@ -4803,16 +5154,16 @@ window.editorBridge.onContextFrame((frame) => {
   const desired = displayedContextFrameRequests()
   if (
     desired.length > 0 &&
-    desired.some((request) => request.timeMs !== frame.requestedTimeMs)
+    desired.some(
+      (request) =>
+        normalizedContextTimeMs(request.timeMs) !==
+        normalizedContextTimeMs(frame.requestedTimeMs),
+    )
   ) {
-    frameTimesByDisplay.clear()
-    scheduleContextFrame()
+    requestContextFrameNow()
     return
   }
   applyContextFrame(frame)
-  for (const display of board?.displays ?? []) {
-    frameTimesByDisplay.set(display.index, frame.requestedTimeMs)
-  }
 })
 
 // Main is the authority on the window state: every mode change lands here,

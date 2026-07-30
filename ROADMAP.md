@@ -7,7 +7,7 @@ status; it never overrides either document.
 **Status legend:** `Done` · `In progress` · `Not started`.
 **Shipping since 2026-07-27:** the auto-update chain was first verified end to
 end on a real install (0.1.0 → 0.1.1 → 0.1.2). The active source and
-documentation baseline is **0.3.2**; public binaries remain whatever
+documentation baseline is **0.3.3**; public binaries remain whatever
 [GitHub Releases](https://github.com/r2cuerdame/capturepack/releases/latest)
 actually exposes until the manually dispatched release workflow completes.
 What is *not* yet proven is the long-run habit — the one-month
@@ -21,14 +21,14 @@ Ctrl+Alt+C  →  capture  →  5-second annotation  →  export .capturepack  �
 
 ---
 
-## Current baseline — 0.3.2
+## Current baseline — 0.3.3
 
 The milestone narrative below is preserved as the product's design and
 verification history. These are the current additions and next gates:
 
 - Video context uses `Ctrl+Alt+C`; explicit cross-monitor region or complete
   virtual-desktop image context uses independently configurable `Ctrl+Alt+S`.
-  Capture rate is 1–30 fps.
+  Capture rate is 5–30 fps.
 - Past-frame/reopened-pack Object Pick uses captured Windows surface/control
   history, built-in UI Automation, optional Chrome DOM preview observations and
   an HWND fallback. Observed motion is never interpolated; authored manual-box
@@ -42,6 +42,11 @@ verification history. These are the current additions and next gates:
 - 0.3.2 gates exact native selector coverage on portrait/mixed-monitor desks,
   selection-owned editor placement, lossless editor bootstrap, and persistent
   manual/semantic box ownership.
+- 0.3.3 adds the offline pack viewer, bounded replay/recorder ownership,
+  measured capture-health evidence and expanded temporal/multi-display QA.
+  Per-display source-to-encoded-video alignment remains tracked in
+  [#89](https://github.com/r2cuerdame/capturepack/issues/89) when motion evidence
+  is insufficient; the writer does not invent a fixed correction.
 - Next: continue physical mixed-DPI/long-running recording, save/reopen,
   installer/update and Chrome reconnection QA; harden the preview integration;
   and design an explicit sanitized-sharing path.

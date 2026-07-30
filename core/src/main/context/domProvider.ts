@@ -112,22 +112,10 @@ interface PlacedPick {
   eventOrdinal: number
   surfaceId: string
   display: number | undefined
-  /**
-   * Snapshot pixels per desktop DIP on the display that owned the pick.
-   * Kept separate from client size: a window can cross a DPI boundary and be
-   * resized in the same interval, and those are not the same transform.
-   */
-  snapshotPixelsPerDip: number | null
+  /** The owner slice observed with the element; claims share this geometry. */
+  surfaceBounds: Rect
   /** The element's rectangle in snapshot pixels, AT THE EVENT'S TIME. */
   rect: Rect
-  /** Where the browser window was then, retained as a no-client fallback. */
-  origin: { x: number; y: number }
-  /**
-   * The un-clipped client rectangle at the pick. Besides being the element's
-   * anchor, this is the scale bridge when the window crosses to a display with
-   * a different DPI.
-   */
-  client: Rect
   /** Whether the placement leaned on the ring or on the page's own screen guess. */
   exact: boolean
 }
@@ -146,18 +134,15 @@ export class ChromeDomProvider implements TemporalContextProvider {
    * lane's `SurfaceHost` uses.
    */
   private readonly surfacesAt: (timeMs: number) => readonly SurfaceInfo[]
-  /** Captured display metadata, not a live screen query. */
-  private readonly snapshotPixelsPerDipAt: (display: number) => number | null
   private placedCache: PlacedPick[] | null = null
 
   constructor(
     events: readonly DomEvent[],
     surfacesAt: (timeMs: number) => readonly SurfaceInfo[],
-    snapshotPixelsPerDipAt: (display: number) => number | null = () => null,
+    _snapshotPixelsPerDipAt: (display: number) => number | null = () => null,
   ) {
     this.events = events
     this.surfacesAt = surfacesAt
-    this.snapshotPixelsPerDipAt = snapshotPixelsPerDipAt
   }
 
   /** Late-arriving events (the bridge keeps receiving during an open editor). */
@@ -176,24 +161,28 @@ export class ChromeDomProvider implements TemporalContextProvider {
     // surface", and the candidates that come back are the elements inside it.
     // Claiming a surface with no pick would cost Core a call for nothing.
     const claims: ProviderSurfaceClaim[] = []
-    const pickedSurfaces = new Set(this.placed().map((pick) => pick.surfaceId))
     const seen = new Set<string>()
+    const present = new Map<string, SurfaceInfo>()
     for (const surface of c.surfaces) {
-      if (!pickedSurfaces.has(surface.surfaceId)) continue
-      // One window can legitimately have one clipped slice per display. Claim
-      // each slice: a provider-wide claimant flag happens to make a single
-      // claim work today, but the claim record itself must still tell the truth
-      // about which captured regions the provider can refine.
-      const key = `${surface.surfaceId}\0${String(surface.display ?? '')}`
+      present.set(`${surface.surfaceId}\0${String(surface.display ?? '')}`, surface)
+    }
+    for (const pick of this.placed()) {
+      const surface =
+        present.get(`${pick.surfaceId}\0${String(pick.display ?? '')}`)
+        ?? c.surfaces.find((candidate) => candidate.surfaceId === pick.surfaceId)
+      if (surface === undefined) continue
+      const key =
+        `${pick.surfaceId}\0${String(pick.display ?? '')}`
+        + `\0${String(pick.surfaceBounds.x)},${String(pick.surfaceBounds.y)}`
       if (seen.has(key)) continue
       seen.add(key)
       claims.push({
         providerId: this.id,
-        surfaceId: surface.surfaceId,
+        surfaceId: pick.surfaceId,
         ...(surface.hwnd === undefined ? {} : { hwnd: surface.hwnd }),
-        region: { ...surface.bounds },
+        region: { ...pick.surfaceBounds },
         space: 'display-snapshot',
-        ...(surface.display === undefined ? {} : { display: surface.display }),
+        ...(pick.display === undefined ? {} : { display: pick.display }),
         authority: 'document-native',
         confidence: 0.9,
       })
@@ -339,38 +328,25 @@ export class ChromeDomProvider implements TemporalContextProvider {
       }
     }
     if (selected === null) return null
-    const { surface, client, rect } = selected
-    const displayScale =
-      surface.display === undefined
-        ? null
-        : validSnapshotScale(this.snapshotPixelsPerDipAt(surface.display))
+    const { surface, rect } = selected
     return {
       event,
       eventOrdinal,
       surfaceId: surface.surfaceId,
       display: surface.display,
-      snapshotPixelsPerDip: displayScale,
+      surfaceBounds: { ...surface.bounds },
       rect,
-      origin: { x: surface.bounds.x, y: surface.bounds.y },
-      client: { ...client },
       exact: true,
     }
   }
 
   /**
-   * The placed picks as candidates at `timeMs`, translated by how far their own
-   * browser window moved since the pick.
+   * The placed picks as candidates at `timeMs`.
    *
-   * The same reasoning as the UI Automation provider's `anchored()`: an element
-   * is drawn INSIDE its window, so its offset within that window survives the
-   * window being dragged, and the window's position at every frame is in the
-   * ring. A pick whose window is not on this desk at this time is DROPPED, not
-   * floated.
-   *
-   * NEVER KEYED ON DISPLAY. That mistake cost a release: a provider's elements
-   * carry no display (SPEC §8.3 — absent means "the annotation's own display")
-   * while ring surfaces always carry a number, so a map keyed on the pair
-   * matches nothing and silently drops every candidate.
+   * Bounds and display are copied from the observation unchanged. Window motion
+   * cannot prove element motion because the page may scroll, reflow or hide the
+   * element independently. Temporal distance is reported in `accuracy`; it is
+   * not permission to manufacture spatial geometry.
    */
   private candidatesAt(
     timeMs: number,
@@ -388,36 +364,11 @@ export class ChromeDomProvider implements TemporalContextProvider {
       const currentSurfaces = now.get(pick.surfaceId)
       if (currentSurfaces === undefined) return
 
-      let selected:
-        | { surface: SurfaceInfo; bounds: Rect; overlap: number; crossedDisplay: boolean }
-        | null = null
-      for (const surface of currentSurfaces) {
-        const anchored = anchoredRect(pick, surface, this.snapshotPixelsPerDipAt)
-        if (anchored === null) continue
-        const overlap = intersectionArea(anchored.bounds, surface.bounds)
-        if (
-          overlap > 0
-          && (
-            selected === null
-            || overlap > selected.overlap
-            || (
-              overlap === selected.overlap
-              && (surface.display ?? Number.MAX_SAFE_INTEGER)
-                < (selected.surface.display ?? Number.MAX_SAFE_INTEGER)
-            )
-          )
-        ) {
-          selected = { surface, ...anchored, overlap }
-        }
-      }
-      if (selected === null) return
-      const { surface, bounds, crossedDisplay } = selected
-      const moved =
-        crossedDisplay
-        || bounds.x !== pick.rect.x
-        || bounds.y !== pick.rect.y
-        || bounds.width !== pick.rect.width
-        || bounds.height !== pick.rect.height
+      const surface =
+        currentSurfaces.find((candidate) => candidate.display === pick.display)
+        ?? currentSurfaces[0]
+      if (surface === undefined) return
+      const bounds = { ...pick.rect }
       const element = pick.event.element
       if (element === undefined) return
       const candidateAccuracy = accuracyAtPick(timeMs, pick.event.tMs)
@@ -437,7 +388,7 @@ export class ChromeDomProvider implements TemporalContextProvider {
             : {}),
         bounds,
         space: 'display-snapshot',
-        ...(surface.display === undefined ? {} : { display: surface.display }),
+        ...(pick.display === undefined ? {} : { display: pick.display }),
         // A picked element is the most specific thing anyone has said about
         // that pixel, so it must out-depth every UI Automation control that
         // encloses it. Those are geometric containment depths within one
@@ -448,10 +399,7 @@ export class ChromeDomProvider implements TemporalContextProvider {
         confidence: pick.exact ? 0.95 : 0.6,
         visible: true,
         occluded: false,
-        accuracy:
-          moved || candidateAccuracy.errorMs > 0
-            ? { ...candidateAccuracy, interpolated: true }
-            : candidateAccuracy,
+        accuracy: candidateAccuracy,
         identity: {
           selector: element.selector,
           tag: element.tag,
@@ -466,12 +414,9 @@ export class ChromeDomProvider implements TemporalContextProvider {
   }
 
   /**
-   * A DOM pick is EXACT at the instant it happened and an anchored estimate
-   * elsewhere — the same shape of statement the UI Automation provider makes
-   * about its dump. `covered` throughout because the pick's window is tracked
-   * continuously by the ring; the staleness that matters is the element's
-   * CONTENT (a page that scrolled or re-laid out), which no observation of the
-   * window can rule out and which `interpolated` above is the honest flag for.
+   * A DOM pick is exact at its own instant and otherwise the nearest observed
+   * sample with a non-zero temporal error. Its bounds remain observed; inexact
+   * time is not reported as spatial interpolation.
    */
   private accuracyFor(timeMs: number): TemporalAccuracy {
     let nearestTimeMs: number | null = null
@@ -498,7 +443,6 @@ export class ChromeDomProvider implements TemporalContextProvider {
       errorMs: nearestDistanceMs,
       exact: nearestDistanceMs === 0,
       coverage: 'covered',
-      ...(nearestDistanceMs === 0 ? {} : { interpolated: true }),
     }
   }
 }
@@ -536,12 +480,6 @@ function validRect(rect: Rect): boolean {
     && rect.width > 0
     && rect.height > 0
   )
-}
-
-function validSnapshotScale(value: number | null): number | null {
-  return value !== null && Number.isFinite(value) && value >= MIN_SCALE && value <= MAX_SCALE
-    ? value
-    : null
 }
 
 /**
@@ -599,55 +537,6 @@ function rectAtPick(
   return validRect(rect) ? { client, rect } : null
 }
 
-/**
- * Places one observed element against one current slice of its window.
- *
- * Window size is intentionally absent from the scale calculation. It can
- * change independently of DPI and cannot tell us whether the page reflowed.
- * The only defensible cross-display transform is the ratio of the two captured
- * displays' snapshot-pixels-per-DIP values.
- */
-function anchoredRect(
-  pick: PlacedPick,
-  surface: SurfaceInfo,
-  snapshotPixelsPerDipAt: (display: number) => number | null,
-): { bounds: Rect; crossedDisplay: boolean } | null {
-  const crossedDisplay =
-    pick.display !== undefined
-    && surface.display !== undefined
-    && pick.display !== surface.display
-  const client = surface.clientBounds
-
-  if (client === undefined || !validRect(client)) {
-    if (crossedDisplay) return null
-    const bounds = {
-      ...pick.rect,
-      x: pick.rect.x + surface.bounds.x - pick.origin.x,
-      y: pick.rect.y + surface.bounds.y - pick.origin.y,
-    }
-    return validRect(bounds) ? { bounds, crossedDisplay } : null
-  }
-
-  let ratio = 1
-  if (crossedDisplay) {
-    const sourceScale = validSnapshotScale(pick.snapshotPixelsPerDip)
-    const targetScale =
-      surface.display === undefined
-        ? null
-        : validSnapshotScale(snapshotPixelsPerDipAt(surface.display))
-    if (sourceScale === null || targetScale === null) return null
-    ratio = targetScale / sourceScale
-  }
-  if (!Number.isFinite(ratio) || ratio <= 0) return null
-  const bounds: Rect = {
-    x: Math.round(client.x + (pick.rect.x - pick.client.x) * ratio),
-    y: Math.round(client.y + (pick.rect.y - pick.client.y) * ratio),
-    width: Math.max(1, Math.round(pick.rect.width * ratio)),
-    height: Math.max(1, Math.round(pick.rect.height * ratio)),
-  }
-  return validRect(bounds) ? { bounds, crossedDisplay } : null
-}
-
 function accuracyAtPick(requestedTimeMs: number, pickTimeMs: number): TemporalAccuracy {
   const errorMs = Math.abs(requestedTimeMs - pickTimeMs)
   return {
@@ -656,7 +545,6 @@ function accuracyAtPick(requestedTimeMs: number, pickTimeMs: number): TemporalAc
     errorMs,
     exact: errorMs === 0,
     coverage: 'covered',
-    ...(errorMs === 0 ? {} : { interpolated: true }),
   }
 }
 

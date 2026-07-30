@@ -25,6 +25,19 @@ export const FORMAT_VERSION = '0.2.1'
  * nothing.
  */
 export const FORMAT_VERSION_KEYFRAMES = '0.3.0'
+/** Capture backend/quality provenance in media.cadence (SPEC §5.3). */
+export const FORMAT_VERSION_CAPTURE_DIAGNOSTICS = '0.4.0'
+
+/** Measured replay cadence written beside the replay it describes (SPEC §5.3). */
+export interface ManifestCadence {
+  achieved_fps: number
+  worst_stall_ms: number
+  discarded_frames?: number
+  requested_fps?: number
+  backend?: 'chromium-desktop-capture' | 'windows-gdi-bitblt'
+  quality?: 'full' | 'degraded'
+  recorder_count?: number
+}
 
 // Per-display media of an all-displays capture (SPEC §5.3, GOAL "Multi-Monitor
 // Support"). One entry per display frozen by the trigger.
@@ -39,6 +52,7 @@ export interface ManifestDisplayMedia {
   // display, or null when this display recorded nothing.
   replay: string | null
   replay_duration_ms?: number
+  cadence?: ManifestCadence
   // Milliseconds to add to the pack/focused replay clock to reach this
   // display's replay clock. Observed from the recorders' shared origin clock;
   // optional so pre-0.3 writers remain readable. 0 on the focused entry.
@@ -95,6 +109,7 @@ export interface Manifest {
     snapshot: string
     replay: string | null
     replay_duration_ms?: number
+    cadence?: ManifestCadence
     // All-displays capture (SPEC §5.3): the media of EVERY display the trigger
     // froze, focused one included. Absent when only one display was captured
     // (settings.captureDisplay "cursor"/"<id>"), which is exactly the 0.1.2
@@ -637,8 +652,11 @@ export interface TimelineFile {
 export const DEFAULT_CAPTURE_HOTKEY = 'Ctrl+Alt+C'
 /** Explicit still-image/region capture; independent from the replay hotkey. */
 export const DEFAULT_IMAGE_CAPTURE_HOTKEY = 'Ctrl+Alt+S'
-/** Supported recorder request range. The achieved rate is recorded separately. */
-export const MIN_CAPTURE_FPS = 1
+/**
+ * Supported recorder request range. The achieved rate is recorded separately.
+ * Persisted 1..4 fps profiles are legacy input and normalize to this floor.
+ */
+export const MIN_CAPTURE_FPS = 5
 export const MAX_CAPTURE_FPS = 30
 
 /** Normalizes persisted or patched recorder requests onto the supported grid. */
@@ -676,6 +694,7 @@ export interface EditorWindowBounds {
 }
 
 export type ClipboardAfterSave = 'off' | 'folder' | 'path' | 'prompt'
+export type ImageClipboardAfterSave = ClipboardAfterSave | 'image'
 
 export interface Settings {
   // Schema version of this profile (SETTINGS_VERSION). Absent in a file written
@@ -719,6 +738,10 @@ export interface Settings {
   //   "path"   its path as text
   //   "prompt" the ready-made "Analyze the CapturePack at <path>..." sentence
   clipboardAfterSave: ClipboardAfterSave
+  // Image capture has its own post-save action. "image" waits for the derived
+  // annotated PNG (box/text/blur included) and copies that result; it never
+  // substitutes the unannotated snapshot when rendering fails.
+  imageClipboardAfterSave: ImageClipboardAfterSave
   // The first-launch welcome window has been shown (GOAL "Welcome (first launch
   // after install)"): written the moment the window opens, so it appears once
   // and never again on its own. Showing it is gated on a genuinely fresh

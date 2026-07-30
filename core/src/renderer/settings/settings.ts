@@ -102,6 +102,7 @@ const chromeFoldBtn = el<HTMLButtonElement>('chromeFoldBtn')
 const chromeDetailPanel = el<HTMLElement>('chromeDetailPanel')
 const captureDisplaySelect = el<HTMLSelectElement>('captureDisplay')
 const clipboardSelect = el<HTMLSelectElement>('clipboardAfterSave')
+const imageClipboardSelect = el<HTMLSelectElement>('imageClipboardAfterSave')
 const captureHotkeyBtn = el<HTMLButtonElement>('captureHotkeyBtn')
 const captureHotkeyHint = el<HTMLElement>('captureHotkeyHint')
 const captureHotkeyRecordHint = el<HTMLElement>('captureHotkeyRecordHint')
@@ -721,6 +722,12 @@ packLanguageSelect.addEventListener('change', () => {
 
 clipboardSelect.addEventListener('change', () => {
   void apply({ clipboardAfterSave: clipboardSelect.value as Settings['clipboardAfterSave'] })
+})
+
+imageClipboardSelect.addEventListener('change', () => {
+  void apply({
+    imageClipboardAfterSave: imageClipboardSelect.value as Settings['imageClipboardAfterSave'],
+  })
 })
 
 captureDisplaySelect.addEventListener('change', () => {
@@ -1428,6 +1435,7 @@ function syncControls(): void {
   }
   captureDisplaySelect.value = s.captureDisplay
   clipboardSelect.value = s.clipboardAfterSave
+  imageClipboardSelect.value = s.imageClipboardAfterSave
   replayMaxWidthSelect.value = String(s.replayMaxWidth)
   syncHotkeyField()
   syncImageHotkeyField()

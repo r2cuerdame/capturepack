@@ -35,11 +35,13 @@
 # comment about. Declaring awareness up front makes every rectangle below
 # physical by construction, on every monitor, whatever their scale factors are.
 #
-# WHY THE DWM EXTENDED FRAME AND NOT GetWindowRect. Windows 10/11 add an
-# invisible resize border outside the visible frame, and GetWindowRect includes
-# it — every surface would be a few pixels too big, and every edge hit-test
-# wrong. DwmGetWindowAttribute(DWMWA_EXTENDED_FRAME_BOUNDS) is what the user
-# actually sees. GetWindowRect remains the fallback for a window DWM refuses.
+# WHY THE DWM EXTENDED FRAME AND GetWindowRect ARE BOTH NEEDED. Windows 10/11
+# add an invisible resize border outside the visible frame, and GetWindowRect
+# includes it. DWM gives the visible inset at rest, but can lag behind a window
+# that is moving. The host therefore learns a stable DWM/raw inset and applies
+# it to the current raw position. Captionless/custom-titlebar windows instead
+# use their client rectangle because that is the surface the app actually
+# paints. DWM and raw remain honest fallbacks when an inset is not known yet.
 #
 # PROTOCOL. One JSON document per line, both directions (JSON cannot contain a
 # raw newline, so a line is a frame). Requests carry an integer `id`; responses
@@ -121,6 +123,8 @@ namespace CapturePack {
     [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
     [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr h, out RECT r);
     [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr h, ref POINT p);
+    [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr h, int index);
+    [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr h);
     [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr h, uint cmd);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowTextW(IntPtr h, StringBuilder s, int max);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassNameW(IntPtr h, StringBuilder s, int max);
@@ -143,6 +147,8 @@ namespace CapturePack {
 
     const int DWMWA_EXTENDED_FRAME_BOUNDS = 9;
     const int DWMWA_CLOAKED = 14;
+    const int GWL_STYLE = -16;
+    const int WS_CAPTION = 0x00C00000;
     const uint GW_OWNER = 4;
     const int PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
 
@@ -271,7 +277,10 @@ namespace CapturePack {
       // and the border is only learned from samples where the window did not
       // move between the two reads, which is the only time the difference
       // between them is the border rather than the border plus however far it
-      // travelled. The inset is a property of the window's frame style, so one
+      // travelled. Captionless and compact custom-titlebar windows are the
+      // exception: their client rectangle is the painted top-level surface, so
+      // using the DWM frame would add non-content pixels around Object Pick.
+      // Either learned inset is a property of the window's frame style, so one
       // learned at rest stays right while it moves.
       RECT frame;
       RECT raw;
@@ -279,6 +288,25 @@ namespace CapturePack {
       bool haveRaw = GetWindowRect(h, out raw);
       bool haveDwm =
         DwmGetRect(h, DWMWA_EXTENDED_FRAME_BOUNDS, out dwm, Marshal.SizeOf(typeof(RECT))) == 0;
+      RECT client;
+      POINT origin;
+      client.Left = 0; client.Top = 0; client.Right = 0; client.Bottom = 0;
+      origin.X = 0; origin.Y = 0;
+      bool haveClient = GetClientRect(h, out client) && ClientToScreen(h, ref origin);
+      if (haveClient) {
+        client.Left += origin.X; client.Top += origin.Y;
+        client.Right += origin.X; client.Bottom += origin.Y;
+      }
+      int style = GetWindowLong(h, GWL_STYLE);
+      uint dpi = GetDpiForWindow(h);
+      if (dpi == 0) dpi = 96;
+      int compactLimit = Math.Max(2, (int)Math.Ceiling(12.0 * dpi / 96.0));
+      bool captionless = (style & WS_CAPTION) == 0;
+      bool compactNonClient = haveRaw && haveClient &&
+        Math.Abs(client.Left - raw.Left) <= compactLimit &&
+        Math.Abs(client.Top - raw.Top) <= compactLimit &&
+        Math.Abs(raw.Right - client.Right) <= compactLimit &&
+        Math.Abs(raw.Bottom - client.Bottom) <= compactLimit;
       if (haveRaw) {
         long key = h.ToInt64();
         RECT previous;
@@ -286,28 +314,39 @@ namespace CapturePack {
           previous.Left == raw.Left && previous.Top == raw.Top &&
           previous.Right == raw.Right && previous.Bottom == raw.Bottom;
         moved = !stoodStill;
-        if (haveDwm && stoodStill) {
+        bool clientOwnsFrame = (captionless || compactNonClient) && haveClient;
+        if (clientOwnsFrame) {
+          frame = client;
           RECT learned;
-          learned.Left = dwm.Left - raw.Left;
-          learned.Top = dwm.Top - raw.Top;
-          learned.Right = dwm.Right - raw.Right;
-          learned.Bottom = dwm.Bottom - raw.Bottom;
+          learned.Left = client.Left - raw.Left;
+          learned.Top = client.Top - raw.Top;
+          learned.Right = client.Right - raw.Right;
+          learned.Bottom = client.Bottom - raw.Bottom;
           Inset[key] = learned;
+        } else {
+          if (haveDwm && stoodStill) {
+            RECT learned;
+            learned.Left = dwm.Left - raw.Left;
+            learned.Top = dwm.Top - raw.Top;
+            learned.Right = dwm.Right - raw.Right;
+            learned.Bottom = dwm.Bottom - raw.Bottom;
+            Inset[key] = learned;
+          }
+          RECT known;
+          if (Inset.TryGetValue(key, out known)) {
+            frame.Left = raw.Left + known.Left;
+            frame.Top = raw.Top + known.Top;
+            frame.Right = raw.Right + known.Right;
+            frame.Bottom = raw.Bottom + known.Bottom;
+          } else if (haveDwm) {
+            // Never seen at rest yet: the DWM frame is still the better of the
+            // two, and one sample from now the inset will be known.
+            frame = dwm;
+          } else {
+            frame = raw;
+          }
         }
         LastRaw[key] = raw;
-        RECT known;
-        if (Inset.TryGetValue(key, out known)) {
-          frame.Left = raw.Left + known.Left;
-          frame.Top = raw.Top + known.Top;
-          frame.Right = raw.Right + known.Right;
-          frame.Bottom = raw.Bottom + known.Bottom;
-        } else if (haveDwm) {
-          // Never seen at rest yet: the DWM frame is still the better of the
-          // two, and one sample from now the inset will be known.
-          frame = dwm;
-        } else {
-          frame = raw;
-        }
       } else if (haveDwm) {
         frame = dwm;
       } else {
@@ -317,16 +356,7 @@ namespace CapturePack {
       bool minimized = IsIconic(h);
       int width = frame.Right - frame.Left, height = frame.Bottom - frame.Top;
       if (!minimized && (width <= 0 || height <= 0)) return false;
-      RECT client;
-      POINT origin;
-      client.Left = 0; client.Top = 0; client.Right = 0; client.Bottom = 0;
-      origin.X = 0; origin.Y = 0;
-      if (GetClientRect(h, out client) && ClientToScreen(h, ref origin)) {
-        client.Left += origin.X; client.Top += origin.Y;
-        client.Right += origin.X; client.Bottom += origin.Y;
-      } else {
-        client = frame;
-      }
+      if (!haveClient) client = frame;
 
       item.Handle = h;
       item.Frame = frame;

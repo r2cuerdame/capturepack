@@ -279,6 +279,11 @@ export function parseDomPayload(text: string | null): DomEvent[] {
     if (parsed === null || 'kind' in parsed) continue
     out.push({ ...parsed, tMs: Math.max(0, Math.round(tMs)) })
   }
+  // Temporal readers keep the earlier observation on an exact distance tie.
+  // A pack is untrusted input and may reorder otherwise valid events, so make
+  // that rule independent of JSON array order. Modern JS sort is stable: two
+  // events at the same instant retain their persisted ordinal identity.
+  out.sort((left, right) => left.tMs - right.tMs)
   return out
 }
 

@@ -16,8 +16,8 @@ electron-builder's implicit CI upload before those checks.
 
 1. Update `core/package.json` and `core/package-lock.json` to the same version.
    Stable releases must not retain an `-rc.*` suffix. An external test candidate
-   uses the next patch version, for example `0.3.3-rc.1` after stable `0.3.2`;
-   reusing `0.3.2-rc.*` would sort below the already-published stable version.
+   uses the next patch version, for example `0.3.4-rc.1` after stable `0.3.3`;
+   reusing `0.3.3-rc.*` would sort below the already-published stable version.
 2. For a stable release, update `CHANGELOG.md`, every product README and the
    website version/copy. For an RC, add its changelog/release notes but keep the
    README and website on the current stable version until promotion.
@@ -85,7 +85,7 @@ and `/releases/latest` continue to name the stable release.
 Set the version you just published:
 
 ```powershell
-$Version = '0.3.2'
+$Version = '0.3.3'
 Get-FileHash ".\CapturePack-Setup-$Version.exe" -Algorithm SHA256
 ```
 

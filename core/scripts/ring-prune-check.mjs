@@ -47,7 +47,7 @@ const bundle = await build({
     },
   ],
 })
-const { SurfaceTimeline } = await import(
+const { SurfaceTimeline, surfaceTimelineBudgetForRetention } = await import(
   `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`
 )
 
@@ -214,6 +214,34 @@ check('60 windows all moving, small arena, pruning throughout', () => {
   const stacks = readEverything(ring, range.startMs, range.endMs)
   if (stacks === 0) throw new Error('the ring answered nothing anywhere')
   return `${stacks} stacks read over ${range.endMs - range.startMs} ms`
+})
+
+console.log('\nA configured five-minute replay keeps five minutes of surface range')
+check('300 s at measured field cadence stays bounded without pruning away history', () => {
+  const retentionMs = 305_000
+  const budget = surfaceTimelineBudgetForRetention(retentionMs)
+  const ring = new SurfaceTimeline(64 * 1024, budget)
+  // The failed physical run delivered ~36 lane-S writes/s: one moving fixture
+  // plus 15 stable windows. This exact density used to exhaust the fixed
+  // 512-KB/30-s budget and silently retain only 65 seconds of a 300-second
+  // replay before the freeze could pin it.
+  const stepMs = 28
+  const endMs = 310_000
+  for (let tMs = 0; tMs <= endMs; tMs += stepMs) {
+    const windows = [win(1, 100 + Math.floor(tMs / stepMs))]
+    for (let w = 2; w <= 16; w += 1) windows.push(win(w, 300 + w * 80))
+    ring.append({ timeMs: tMs, windows })
+    ring.prune(tMs - retentionMs)
+  }
+  const range = ring.rangeMs()
+  const span = range.endMs - range.startMs
+  if (span < 300_000) {
+    throw new Error(`only ${span} ms survived of the configured five-minute range`)
+  }
+  if (ring.stats().bytes > budget * 1.25) {
+    throw new Error(`ring exceeded its scaled budget: ${ring.stats().bytes} > ${budget}`)
+  }
+  return `${span} ms retained in ${Math.round(ring.stats().bytes / 1024)} KB`
 })
 
 console.log(`\nresult: ${failed === 0 ? 'OK' : 'BROKEN'} — ${passed} passed, ${failed} failed\n`)

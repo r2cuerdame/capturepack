@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Format** | `capturepack` |
-| **Version** | `0.3.0` |
+| **Version** | `0.5.0` |
 | **Status** | Draft |
-| **Date** | 2026-07-29 |
+| **Date** | 2026-07-30 |
 | **License** | MIT (same as the repository) |
 
 > Capture context, not screenshots.
@@ -105,7 +105,7 @@ capitals.
 | **Writer** (or **exporter**) | Software that produces a pack. The reference app is a writer; so is any script that assembles the files by hand. |
 | **Reader** | Software that consumes a pack: viewers, editors, converters, indexers, LLM ingestion pipelines. |
 | **Source files** | The files annotations and views are derived *from*: `manifest.json`, `snapshot.png`, the replay video, `annotations.json`, `timeline.json`. |
-| **Generated views** | Files derived from the source files for a specific audience: `replay_annotated` (video players), `report.md` (narrative), `README.md` (humans), `skills/` (LLMs). Regenerating any of them from the source files SHOULD produce an equivalent result; none of them is ever authoritative over the source files. |
+| **Generated views** | Files derived from the source files for a specific audience: `replay_annotated` (video players), `viewer.html` (offline browsers), `report.md` (narrative), `README.md` (humans), `skills/` (LLMs). Regenerating any of them from the source files SHOULD produce an equivalent result; none of them is ever authoritative over the source files. |
 | **Plugin** | An extension that appends structured metadata under `plugins/<name>/`. Plugins never modify core files. |
 | **Snapshot pixel coordinates** | The coordinate space of `snapshot.png`: origin at the top-left pixel, x grows right, y grows down, units are pixels of the snapshot image. |
 | **Replay clock** | The millisecond clock of the replay timeline: `0` at the replay's first frame. Annotation lifetimes ([§8.4](#84-lifetime)), `manifest.media.snapshot_t_ms`, and (when `t0` is the replay start) timeline `t_ms` offsets all use it. |
@@ -186,6 +186,7 @@ CapturePack_2026-07-27_143052/        — or the same tree zipped as a .capturep
 ├── annotations.json         OPTIONAL   annotation boxes — the true source of annotation data
 ├── timeline.json            OPTIONAL   video-pack machine-readable event log;
 │                                       MUST be absent for explicit image packs
+├── viewer.html              OPTIONAL (RECOMMENDED) self-contained offline browser view
 ├── report.md                OPTIONAL (RECOMMENDED) generated narrative
 ├── README.md                OPTIONAL (RECOMMENDED) human-first entry point
 ├── skills/                  OPTIONAL (RECOMMENDED) AI-first context documents
@@ -211,6 +212,7 @@ CapturePack_2026-07-27_143052/        — or the same tree zipped as a .capturep
 | `frames/frame-<NN>_<MM-SS.mmm>.png` | OPTIONAL (RECOMMENDED) — annotated keyframe stills, each declared in `manifest.media.keyframes` | [§5.7](#57-keyframes-annotated-stills) |
 | `annotations.json` | OPTIONAL — fixed name, present when annotations exist | [§8](#8-annotationsjson) |
 | `timeline.json` | OPTIONAL for video packs — fixed name, present when events were recorded; MUST be absent when `capture_kind` is `"image"` | [§10](#10-timelinejson) |
+| `viewer.html` | OPTIONAL (RECOMMENDED) — fixed-name, self-contained offline generated view | [§12.4](#124-viewerhtml) |
 | `report.md` | OPTIONAL (RECOMMENDED) — fixed name | [§12.1](#121-reportmd) |
 | `README.md` | OPTIONAL (RECOMMENDED) — fixed name | [§12.2](#122-readmemd) |
 | `skills/` | OPTIONAL (RECOMMENDED) — fixed names inside | [§12.3](#123-skills) |
@@ -277,7 +279,7 @@ of screen count or scaling.
 | `snapshot` | string | REQUIRED | Filename of the snapshot. In format 0.1.0 this MUST be `"snapshot.png"`. Declared explicitly so future versions can vary it without breaking readers that trust the manifest. |
 | `replay` | string **or** `null` | REQUIRED | Filename of the original replay video — `"replay.webm"` or `"replay.mp4"` — or `null` for a screenshot-only pack. Readers MUST take the replay filename from this field rather than probing the pack. |
 | `replay_duration_ms` | integer **or** `null` | REQUIRED when `replay` is a string | Duration of the replay video in milliseconds. MUST be `null` (or absent) when `replay` is `null`. |
-| `cadence` | object | OPTIONAL | What this display's recorder ACHIEVED: `achieved_fps` (number) and `worst_stall_ms` (number, the longest the frame counter went without advancing — quantised to the writer's sampling interval and therefore a LOWER bound). Written only beside a replay, and only where the writer could measure itself: a rate nobody measured MUST NOT be reported as a rate. Also OPTIONAL `discarded_frames` (number): frames the source produced and threw away. A LOW `achieved_fps` means two different things, and only this tells them apart — a screen capture makes a frame when the screen CHANGES, so a monitor nobody touched delivers almost nothing and has lost nothing, while frames made and discarded are a replay that really is missing time. A reader uses it to know that a moment being annotated may simply not be in the file. **Added in 0.2.0.** |
+| `cadence` | object | OPTIONAL | What this display's recorder ACHIEVED: `achieved_fps` (number) and `worst_stall_ms` (number, the longest the frame counter went without advancing — quantised to the writer's sampling interval and therefore a LOWER bound). Written only beside a replay, and only where the writer could measure itself: a rate nobody measured MUST NOT be reported as a rate. Also OPTIONAL `discarded_frames` (number): frames the source produced and threw away. A LOW `achieved_fps` means two different things, and only this tells them apart — a screen capture makes a frame when the screen CHANGES, so a monitor nobody touched delivers almost nothing and has lost nothing, while frames made and discarded are a replay that really is missing time. A reader uses it to know that a moment being annotated may simply not be in the file. Format 0.4.0 adds OPTIONAL capture provenance: `requested_fps` (number in 1..30), `backend` (`"chromium-desktop-capture"` or `"windows-gdi-bitblt"`), `quality` (`"full"` or `"degraded"`), and `recorder_count` (integer >= 1). A current writer MUST request 5..30 fps; readers keep accepting 1..30 here because this field is historical provenance and existing packs may record a former 1..4 fps request. These fields MUST describe the source and encoder(s) that produced the declared replay; a fallback MUST NOT call itself full quality. The original achieved fields were added in 0.2.0; capture provenance is added in 0.4.0. |
 | `replay_annotated` | string | OPTIONAL | Filename of the **annotated replay** — `"replay_annotated.webm"` or `"replay_annotated.mp4"` ([§7.2](#72-the-annotated-replay)). MUST be absent when `replay` is `null` (there is nothing to render it from), and absent while the annotated replay has not (yet) been rendered. A writer MUST finish the file before publishing this declaration. A defensive reader that encounters a declared but missing file in an interrupted or older pack SHOULD treat the derived view as unavailable and fall back to `replay` + `annotations.json`. |
 | `snapshot_t_ms` | integer | OPTIONAL | Position on the replay clock, in milliseconds, of the frame shown in `snapshot.png` — the same clock as annotation lifetimes ([§8.4](#84-lifetime)) and timeline `t_ms` offsets relative to `t0` ([§10.1](#101-structure)). MUST be >= 0. **Absent means the snapshot is the capture instant** — the native "now" frame. SHOULD be absent when `replay` is `null`: without a replay there is no timeline to anchor the value to. See [§7.1](#71-frame-accurate-captures). |
 | `trim_offset_ms` | integer | OPTIONAL | **Provenance only.** When the writer trimmed the replay before saving, the position (ms) in the original captured recording of this replay's first frame — the trim in-point. MUST be >= 0. Purely informational: every time in the pack (annotation lifetimes, `snapshot_t_ms`, timeline offsets against `t0`) is already on the trimmed replay's clock, so readers never apply this offset to anything. Absent means the replay was never trimmed. SHOULD be absent when `replay` is `null`. |
@@ -291,8 +293,12 @@ For `capture_kind: "image"`, `media.replay` MUST be `null` and
 `displays` MUST be absent (a null `replay_duration_ms` remains tolerated for
 generic legacy tooling). A conforming image writer MUST NOT persist another
 source raster or video anywhere in the pack. It MAY render declared annotated
-stills, but each such still MUST have exactly the same pixel dimensions as the
-selected `snapshot.png`; it cannot be used to smuggle a larger context image. When
+stills. Each such still MUST keep the selected `snapshot.png`'s exact width and
+its complete source viewport unchanged at derived coordinate `(0, 0)`. Its height
+MUST be at least the source height and MAY exceed it only by the result-only bottom
+callout gutter defined in [§7.2](#72-the-annotated-replay); the added rows MUST NOT
+contain pixels captured outside the selected source. This exception cannot be used
+to smuggle a larger context image. When
 `media.keyframes` is present, the screenshot-only rule in [§5.7](#57-keyframes-annotated-stills)
 permits exactly one entry at `t_ms: 0`.
 
@@ -377,6 +383,7 @@ Each entry:
 | `replay` | string **or** `null` | REQUIRED | Filename of this display's replay: `"replay-d<index>.webm"` (or `.mp4`), the top-level `media.replay` on the focused entry, or `null` when this display has no replay. |
 | `replay_duration_ms` | integer | REQUIRED when `replay` is a string | Duration of this display's replay in milliseconds. |
 | `replay_clock_offset_ms` | integer | OPTIONAL when `replay` is a string | Milliseconds to add to the pack clock to reach this display's replay clock: `t_i = t + replay_clock_offset_ms`. `0` on the focused display. A writer SHOULD include it when the recorder reported a shared-clock origin; readers of a legacy entry that omits it use the duration-difference fallback below. MUST be absent when `replay` is `null`. |
+| `cadence` | object | OPTIONAL when `replay` is a string | This display's measured cadence and capture provenance, with the same fields and rules as top-level `media.cadence` ([§5.3](#53-media)). On the focused entry it MUST equal top-level `media.cadence`. MUST be absent when `replay` is `null`. |
 | `replay_annotated` | string | OPTIONAL | This display's replay with **its own** annotation boxes rendered into the pixels: `"replay_annotated-d<index>.webm"` (or `.mp4`). Absent on the focused entry — its annotated replay is the top-level `media.replay_annotated` — and absent on any display that carries no annotations or no replay. Regenerable from `replay` + `annotations.json`. |
 | `keyframes` | array | OPTIONAL | This display's annotated stills, same shape and rules as `media.keyframes` ([§5.7](#57-keyframes-annotated-stills)), with files under `"frames-d<index>/"`. `t_ms` is on **this display's own replay clock**, not the pack clock. Absent on the focused entry (its stills are the top-level `media.keyframes`) and on any display without annotations. |
 | `bounds` | object | REQUIRED | This display's rectangle in the OS virtual-desktop coordinate space, in **device-independent pixels**: `{ "x", "y", "width", "height" }`. Multiply by `scale` for physical pixels — `bounds.width × scale` equals the per-display snapshot's pixel width and `environment.screens[index-1].width`. The offsets place the screens relative to each other, and are what lets a viewer lay the displays out in their real arrangement. |
@@ -625,6 +632,12 @@ CapturePack-aware tooling.
 - **Results only.** Editing controls MUST NOT appear in the annotated replay: no headers, no
   toggles, no duration chips, no delete buttons, no resize handles, no selection outlines. The
   video contains blur, borders, number badges, and text — nothing else.
+- **Callout placement does not rewrite evidence geometry.** Annotation text keeps its declared
+  below-box anchor. A renderer MUST NOT translate a box or flip its label to another edge merely
+  to fit the source frame. A generated annotated view MAY extend its canvas below the original
+  frame with a result-only gutter large enough for that callout. When it does, the original
+  source pixels remain unchanged at `(0, 0)` with their original width and height; only the
+  derived canvas is taller. The original replay and `snapshot.png` are never resized.
 - **One display per rendering.** `replay_annotated` renders the FOCUSED display's replay and
   MUST contain only the boxes whose display is the focused one ([§8.8](#88-display-which-display-a-box-is-on)).
   Another captured display's annotated replay is `replay_annotated` on its own `media.displays`
@@ -655,9 +668,10 @@ the reader that cannot — or will not — decode video, which today is every LL
   drawn.
 - **Derived and disposable.** Keyframes are regenerated from scratch whenever annotations change,
   MAY render in the background after save, and a failed render loses the stills, not the pack.
-- The stills are PNG. Their pixel dimensions SHOULD equal `snapshot.png`'s — the annotation
-  coordinate space ([§8.2](#82-coordinate-space)) — so a reader can map box bounds onto them
-  directly.
+- The stills are PNG. Their source viewport SHOULD equal `snapshot.png`'s annotation coordinate
+  space ([§8.2](#82-coordinate-space)). A still MAY be taller only by the result-only bottom
+  callout gutter allowed in [§7.2](#72-the-annotated-replay); source pixel `(0, 0)` remains
+  derived pixel `(0, 0)`, so box bounds still map directly without an offset.
 
 ---
 
@@ -1418,10 +1432,10 @@ not a rectangle to draw on a frame.
 
 ---
 
-## 12. report.md, README.md, and skills/
+## 12. Generated document views
 
-Three generated, audience-specific views live beside the source files. All three are OPTIONAL
-(RECOMMENDED for every pack that will be shared), all three are **generated views, not sources of
+Four generated, audience-specific views live beside the source files. All four are OPTIONAL
+(RECOMMENDED for every pack that will be shared), all four are **generated views, not sources of
 truth**: regenerating them from the source files SHOULD produce an equivalent result, writers
 SHOULD regenerate them on every save, and readers MUST NOT treat any of them as authoritative
 when they disagree with the JSON. Display numbers appearing in any of them MUST come from the
@@ -1432,6 +1446,7 @@ rule of [§8.5](#85-display-numbers).
 | `report.md` | Humans *and* LLMs | The narrative of the capture: note, environment, annotations, files. |
 | `README.md` | Humans first | The folder's front door: what this is, what happened, how to use it. |
 | `skills/*.md` | LLMs first | Focused context documents an AI can consume directly, without MCP. |
+| `viewer.html` | Humans first | A double-clickable, server-free view with declared media and context. |
 
 ### 12.1 report.md
 
@@ -1596,6 +1611,44 @@ Writers MAY add further documents under `skills/`; readers MUST ignore names the
 Like every generated view, `skills/` documents are regenerated on save and are never
 authoritative over the JSON files.
 
+### 12.4 viewer.html
+
+`viewer.html` is the fixed-name offline browser view introduced in format 0.5.0. Its presence is
+its declaration. It is OPTIONAL: a pack without it remains fully valid, and an older reader
+ignores it as an unknown file.
+
+The viewer is generated from the same manifest, annotations, timeline and plugin inventory as
+the other documents. It MUST be regenerated when those sources change, including after a late
+plugin declaration or a background render declaration. It is never authoritative over those
+sources. If generation fails, the writer MUST preserve the source pack and MUST NOT leave an
+older `viewer.html` describing a previous revision.
+
+A conforming `viewer.html`:
+
+- works when opened directly with `file://`; it needs no application install, local server,
+  account, login or network;
+- is a self-contained HTML document with inline presentation, no external fonts, stylesheets,
+  scripts, frames, APIs, CDN assets or `fetch`;
+- uses only safe pack-relative paths for media it renders and never constructs a path from `..`,
+  an absolute path, a drive path, a URL scheme or an undeclared media guess;
+- HTML-escapes every user- or plugin-controlled string, including title, note, annotation text,
+  target fields and plugin inventory;
+- renders only artifacts declared by `manifest.json`: annotated media first, then the declared
+  original as an explicitly unannotated fallback; it MUST NOT advertise a pending or merely
+  conventional filename as if it existed;
+- presents image/video capture kind, environment, note, native video controls, declared
+  keyframes, annotations with display and target context, per-display media, plugins and a file
+  inventory; legacy packs degrade to the evidence they actually declare;
+- distinguishes original evidence from derived annotated views; and
+- visibly warns that the viewer is not a sanitized share. If any annotation has `blur: true`,
+  it MUST state that blur applies only to derived views and that `snapshot.png` and original
+  replay media can still contain sensitive pixels.
+
+The document SHOULD use the pack language for its short labels through the same localization
+layer as `report.md`, `README.md` and `skills/`. Native controls, semantic HTML, readable focus
+styles, wrapping long strings and a layout that remains usable at 390 CSS pixels are
+RECOMMENDED.
+
 ---
 
 ## 13. Versioning and compatibility
@@ -1627,6 +1680,17 @@ captures. Readers and validators MUST continue accepting existing manifests wher
 including early 0.3.0 RC packs that used authored keyframes before `capture_kind` was written. A
 replay filename establishes legacy video evidence, while a null replay alone is intentionally
 ambiguous.
+
+The optional capture-provenance members of `media.cadence` and
+`media.displays[].cadence` (`requested_fps`, `backend`, `quality`, and
+`recorder_count`) were introduced in 0.4.0. A writer that emits any of them MUST declare
+`format_version` 0.4.0 or later. Packs that have only the 0.2.0 achieved-cadence fields keep
+their older version; readers that do not understand the provenance ignore those optional
+members and still read the replay.
+
+The fixed-name optional `viewer.html` generated view was introduced in 0.5.0. A writer that
+includes it MUST declare `format_version` 0.5.0 or later. Its absence is normal and never makes a
+pack invalid.
 
 **Readers MUST accept unknown optional fields and unknown files.** Forward compatibility is a
 requirement, not a courtesy:
@@ -1726,7 +1790,7 @@ repository:
 - [`docs/schemas/annotations.schema.json`](docs/schemas/annotations.schema.json)
 - [`docs/schemas/timeline.schema.json`](docs/schemas/timeline.schema.json)
 
-The manifest schema models the capture-kind and still-image media rules defined through 0.3.0
+The manifest schema models the capture-kind, still-image, and capture-diagnostics media rules defined through 0.4.0
 when `capture_kind` is present. It also accepts existing manifests without that discriminator,
 including early 0.3.0 RC packs; compatibility does not make a null replay unambiguous. The
 annotation and timeline schemas validate the fields and discriminator values they explicitly

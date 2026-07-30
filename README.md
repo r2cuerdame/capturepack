@@ -19,14 +19,16 @@ leaving an AI to infer everything from pixels.
 
 The saved pack matches what the user captured: a video pack combines replay,
 frames, annotations, object context and an event timeline; an image pack contains
-the explicit still image, annotations and object context. It stays a local, open
-folder that works without an AI, account, or cloud service.
+the explicit still image, annotations and object context. Double-click
+`viewer.html` to inspect either kind offline, without installing CapturePack or
+starting a server. It stays a local, open folder that works without an AI,
+account, or cloud service.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Download](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Current public Windows release: **CapturePack 0.3.2**. It fixes portrait-monitor
-region coverage, editor placement and bootstrap, and makes manual rectangles red
-while semantic UI objects remain blue and geometry-owned after save/reopen.
+Current public Windows release: **CapturePack 0.3.3**. It adds the offline pack
+viewer and improves replay reliability, past-object picking and multi-display
+context capture.
 
 <p align="center">
   <a href="https://capturepack.dev/">
@@ -117,7 +119,7 @@ app's **read-only MCP server** and start with: *"Analyze the latest CapturePack.
 CapturePack speaks **9 languages**: English · 한국어 · 日本語 · 中文 · Español · Français · Deutsch · Português · Русский
 
 - The app follows your **system language** automatically — change it any time in Settings → General.
-- Generated pack documents (`README.md`, `report.md`, `skills/`) can follow their own language setting; your own descriptions are never translated.
+- Generated pack documents (`viewer.html`, `README.md`, `report.md`, `skills/`) can follow their own language setting; your own descriptions are never translated.
 - [capturepack.dev](https://capturepack.dev) auto-detects your browser language too.
 
 ## Principles
@@ -140,6 +142,7 @@ CapturePack_2026-07-27_143052/
 ├── snapshot.png             # the captured frame (original)
 ├── annotations.json         # the true source: boxes, lifetimes, numbers, blur
 ├── timeline.json            # video packs: machine-readable event log
+├── viewer.html              # double-clickable offline view; no server
 ├── report.md                # your description, LLM-ready
 ├── manifest.json            # format version, inventory
 ├── README.md                # the first document a human reads
@@ -153,6 +156,7 @@ Image packs are deliberately different:
 CapturePack_2026-07-27_143052/
 ├── snapshot.png             # the explicit region or full virtual desktop
 ├── annotations.json         # image annotations
+├── viewer.html              # double-clickable offline view; no server
 ├── report.md · README.md
 ├── manifest.json            # capture_kind: image
 ├── skills/                  # image-specific context; no timeline skill
@@ -189,13 +193,13 @@ Tools, client setup, and settings: [docs/MCP.md](docs/MCP.md).
 ## Settings and diagnostics
 
 - Settings → Capture independently configures the video (`Ctrl+Alt+C`) and image
-  (`Ctrl+Alt+S`) shortcuts, replay length and 1–30 fps capture rate.
+  (`Ctrl+Alt+S`) shortcuts, replay length and 5–30 fps capture rate.
 - About / Information → **Open logs folder** opens the local, size-capped run
   diagnostics. Logs are never uploaded automatically.
 
 ## Status
 
-**0.3.2 is the current public Windows download.** CapturePack remains an
+**0.3.3 is the current public Windows download.** CapturePack remains an
 early-stage project, so keep the original pack when reporting a problem and see
 [GOAL.md](GOAL.md) for the product vision and [ROADMAP.md](ROADMAP.md) for what
 comes next.

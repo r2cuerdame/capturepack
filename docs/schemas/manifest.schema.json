@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "CapturePack manifest.json",
-  "description": "Schema for manifest.json, the REQUIRED entry point of a CapturePack, including capture-kind semantics defined through format 0.3.0 and backward compatibility with existing manifests that omit capture_kind (including early 0.3.0 RC output). It identifies the pack, records the capture environment, and inventories the variable parts of the pack (media and plugin payloads). Unknown additional properties are deliberately allowed everywhere: readers MUST accept unknown optional fields for forward compatibility (SPEC.md §13). See SPEC.md §5 for the normative definition; where schema and prose disagree, the prose wins.",
+  "description": "Schema for manifest.json, the REQUIRED entry point of a CapturePack, including semantics defined through format 0.5.0 and backward compatibility with existing manifests that omit capture_kind (including early 0.3.0 RC output). Format 0.5.0 adds the fixed-name optional viewer.html generated view; its presence is outside manifest.json and is validated at the pack-container layer. This schema identifies the pack, records the capture environment, and inventories the variable parts of the pack (media and plugin payloads). Unknown additional properties are deliberately allowed everywhere: readers MUST accept unknown optional fields for forward compatibility (SPEC.md §13). See SPEC.md §5 for the normative definition; where schema and prose disagree, the prose wins.",
   "type": "object",
   "required": [
     "format",
@@ -12,13 +12,31 @@
     "environment",
     "media"
   ],
+  "$defs": {
+    "cadence": {
+      "description": "Measured replay cadence. Capture provenance fields were added in format 0.4.0.",
+      "type": "object",
+      "required": ["achieved_fps", "worst_stall_ms"],
+      "properties": {
+        "achieved_fps": { "type": "number", "minimum": 0 },
+        "worst_stall_ms": { "type": "number", "minimum": 0 },
+        "discarded_frames": { "type": "number", "minimum": 0 },
+        "requested_fps": { "type": "number", "minimum": 1, "maximum": 30 },
+        "backend": {
+          "enum": ["chromium-desktop-capture", "windows-gdi-bitblt"]
+        },
+        "quality": { "enum": ["full", "degraded"] },
+        "recorder_count": { "type": "integer", "minimum": 1 }
+      }
+    }
+  },
   "properties": {
     "format": {
       "description": "Format marker. MUST be the literal string \"capturepack\". The first thing a reader checks to identify the file.",
       "const": "capturepack"
     },
     "format_version": {
-      "description": "Oldest version of the CapturePack specification that fully expresses this pack, as semver (for example \"0.1.0\" or \"0.3.0\"). capture_kind was introduced in 0.3.0. Major (pre-1.0: minor) version changes are breaking; see SPEC.md §13.",
+      "description": "Oldest version of the CapturePack specification that fully expresses this pack, as semver (for example \"0.1.0\", \"0.4.0\" or \"0.5.0\"). capture_kind was introduced in 0.3.0, capture diagnostics in 0.4.0, and the fixed-name optional viewer.html generated view in 0.5.0. Major (pre-1.0: minor) version changes are breaking; see SPEC.md §13.",
       "type": "string",
       "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"
     },
@@ -153,6 +171,7 @@
             { "type": "null" }
           ]
         },
+        "cadence": { "$ref": "#/$defs/cadence" },
         "replay_annotated": {
           "description": "OPTIONAL filename of the annotated replay — \"replay_annotated.webm\" or \"replay_annotated.mp4\" — the replay with annotation boxes (blur, border, number badge, text) rendered into the pixels, playable in any player and always regenerable from replay + annotations.json (SPEC.md §7.2). MUST be absent when replay is null (nothing to render it from), and absent while the annotated replay has not (yet) been rendered. Writers MUST finish the file before publishing this declaration. Defensive readers that encounter a declared but missing file in an interrupted or older pack SHOULD treat the derived view as unavailable and fall back to replay + annotations.json.",
           "type": "string",
@@ -205,6 +224,7 @@
                 "description": "OPTIONAL measured conversion from the pack/focused replay clock to this display's replay clock, in integer milliseconds: display_t = pack_t + replay_clock_offset_ms. MUST be 0 on the focused entry and MUST be absent when replay is null. Legacy entries omit it and readers fall back to replay_duration_ms - top-level replay_duration_ms (SPEC.md §5.6).",
                 "type": "integer"
               },
+              "cadence": { "$ref": "#/$defs/cadence" },
               "replay_annotated": {
                 "description": "OPTIONAL: this display's replay with ITS OWN annotation boxes rendered into the pixels, \"replay_annotated-d<index>.webm\" (or .mp4) — SPEC.md §5.6, §7.2. Absent on the focused entry, whose annotated replay is the top-level media.replay_annotated, and absent on any display that carries no annotations or no replay. It contains ONLY the boxes whose display is this one: the same coordinates mean something different on every screen. A generated view, regenerable from this display's replay + annotations.json.",
                 "type": "string",

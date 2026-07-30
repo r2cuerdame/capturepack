@@ -15,7 +15,7 @@
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [下载](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-当前公开 Windows 版本：**CapturePack 0.3.2**
+当前公开 Windows 版本：**CapturePack 0.3.3**
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/motion/zh/capturepack-time-machine-poster.webp" alt="CapturePack 从右侧 NOW 开始，把播放头向左移动到 5 秒前，恢复并选择只存在于该历史画面的子 UI 控件，再导出 AI 可读的结构化证据" width="760">
@@ -90,7 +90,7 @@ CapturePack_2026-07-27_143052/
 ## 设置与诊断
 
 - 在设置 → 捕获中可分别修改视频（`Ctrl+Alt+C`）与图像（`Ctrl+Alt+S`）
-  快捷键，并设置回放长度和1–30 fps捕获速率。
+  快捷键，并设置回放长度和5–30 fps捕获速率。
 - 信息 → **打开日志文件夹**可查看本地运行诊断；日志不会自动上传。
 
 ## 分享前检查隐私
@@ -104,7 +104,7 @@ CapturePack_2026-07-27_143052/
 
 ## 状态与安全
 
-0.3.2 是当前公开版本。当前构建未签名，SmartScreen 可能警告；
+0.3.3 是当前公开版本。当前构建未签名，SmartScreen 可能警告；
 每个版本都附带用于验证的 `SHA256SUMS.txt`。
 
 本地优先 · 离线优先 · 开放格式 · 无云端 · 无登录 · 无遥测

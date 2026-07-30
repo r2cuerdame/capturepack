@@ -13,19 +13,30 @@
 // write per display). Fixed mode runs one encoder total (lowest CPU).
 import path from 'node:path'
 import { BrowserWindow, desktopCapturer, ipcMain, screen, session, webContents } from 'electron'
-import type { Display, IpcMainEvent } from 'electron'
+import type { Display, IpcMainEvent, WebContents } from 'electron'
 import { REPLAY_TIMEOUT_MS } from '../shared/captureTimeouts'
 import { IPC } from '../shared/ipc'
 import { tickSurfaces } from './context/runtime'
 import type {
+  CaptureDxgiTimingReferencePayload,
   CaptureFramesPayload,
+  CaptureNativeFallbackFramePayload,
+  CaptureNativeFallbackRequest,
+  CaptureNativeFallbackStartPayload,
   CaptureReadyPayload,
+  CaptureReplayRequestPayload,
+  CaptureReplayResumePayload,
   CaptureReplayResultPayload,
   CaptureStartPayload,
   RecorderFailureReason,
   CaptureTickPayload,
 } from '../shared/ipc'
-import type { Settings } from '../shared/types'
+import {
+  MIN_CAPTURE_FPS,
+  normalizeCaptureFps,
+  type Settings,
+} from '../shared/types'
+import { CaptureCadenceRegistry } from '../shared/captureCadence'
 import { logError, logInfo, logWarn } from './log'
 import {
   captureRecorderSignature,
@@ -34,6 +45,18 @@ import {
   selectRecorderTickOwner,
 } from './captureTickOwnership'
 import type { RecorderTickOwnership } from './captureTickOwnership'
+import {
+  selectDisplayMediaSource,
+  shouldSimulateNoFrames,
+} from './displayMediaPolicy'
+import {
+  NativeReplayFallbackManager,
+  type NativeReplayFrame,
+} from './nativeReplayFallback'
+import {
+  captureDxgiTimingReference,
+  dxgiTimingReferenceToIpc,
+} from './dxgiTimingReference'
 
 const HOTPLUG_DEBOUNCE_MS = 1_000
 // A recorder window loading only proves that its renderer started, and
@@ -160,6 +183,23 @@ const captureWindows = new Map<number, BrowserWindow>()
 const captureWindowSigs = new Map<number, string>()
 // webContents.id -> display id string; the display-media handler routes by this.
 const assignedDisplays = new Map<number, string>()
+const nativeReplayFallback = new NativeReplayFallbackManager(
+  path.join(__dirname, '../scripts/native-replay-capture.exe'),
+)
+let nativeReplayFallbackIpcInstalled = false
+const NATIVE_PRESENTABLE_SEQUENCE_LIMIT = 32
+interface NativeReplayFrameDelivery {
+  sessionId: string
+  inFlight: boolean
+  /** Exact frame awaiting its one valid renderer ACK; null before invoke reply. */
+  inFlightSequence: number | null
+  pending: NativeReplayFrame | null
+  /** Bounded proof that a presentation report names a frame we actually sent. */
+  presentableSequences: Set<number>
+  fallbackStartedAtMs?: number
+  firstPresentedLogged: boolean
+}
+const nativeReplayFrameDelivery = new Map<number, NativeReplayFrameDelivery>()
 // Actual per-display recorder health. "recording" is EARNED: it is set only
 // once the renderer proves frames are flowing (IPC.captureFrames) or the
 // backstop probe returns real replay bytes. Window creation alone — and a
@@ -275,17 +315,6 @@ function failureReason(message: string): RecorderFailureReason {
   if (message.includes('capture stream ended')) return 'stream-ended'
   if (message.includes('MediaRecorder')) return 'recorder-unavailable'
   return 'process-stopped'
-}
-
-/**
- * `--simulate-no-frames` (dev/test only, alongside --show-settings and friends):
- * every recorder starts for real but drops its output and reports zero
- * delivered frames — what this machine looks like when Windows Desktop
- * Duplication is failing (issue #39). The evidence path, the `no-frames` state,
- * the announcement and the one recovery attempt are all exercised for real.
- */
-function simulateNoFrames(): boolean {
-  return process.argv.includes('--simulate-no-frames')
 }
 
 /**
@@ -448,11 +477,21 @@ async function probeRecorder(displayId: number, win: BrowserWindow): Promise<voi
  * fifth of its frames used to be indistinguishable from a healthy one without
  * running ffprobe over the saved file.
  */
-const displayCadence = new Map<number, { achievedFps: number; worstStallMs: number; discardedFrames?: number | null; sampledMs?: number; gainedFrames?: number }>()
+const displayCadence = new CaptureCadenceRegistry()
 
 /** What this display's recorder has achieved, or null if it never said. */
-export function recorderCadence(displayId: number): { achievedFps: number; worstStallMs: number; discardedFrames?: number | null; sampledMs?: number; gainedFrames?: number } | null {
-  return displayCadence.get(displayId) ?? null
+export function recorderCadence(displayId: number): {
+  achievedFps: number
+  worstStallMs: number
+  discardedFrames?: number | null
+  sampledMs?: number
+  gainedFrames?: number
+  backend?: 'chromium-desktop-capture' | 'windows-gdi-bitblt'
+  quality?: 'full' | 'degraded'
+  requestedFps?: number
+  recorderCount?: number
+} | null {
+  return displayCadence.get(displayId)
 }
 
 function onFramesProven(displayId: number, payload: CaptureFramesPayload): void {
@@ -464,6 +503,16 @@ function onFramesProven(displayId: number, payload: CaptureFramesPayload): void 
       `[capture] display ${displayId}: frames confirmed (${payload.bytes} recorder bytes, ` +
         `${payload.frames} delivered frames)`,
     )
+    const native = payload.nativePresentation
+    if (native !== undefined) {
+      logInfo(
+        `[capture] display ${displayId}: native presentation accounting ` +
+          `requested=${native.requestedFrames}, exact=${native.exactCallbacks}, ` +
+          `unreported-presented=${native.unreportedPresented}, ` +
+          `ambiguous-dropped=${native.ambiguousDropped}, ` +
+          `capacity-dropped=${native.capacityDropped}, pending=${native.pending}`,
+      )
+    }
   }
   // Proof makes the backstop pointless: leaving it armed would stop and restart
   // a healthy recorder and throw away buffered footage for nothing.
@@ -573,6 +622,303 @@ export function disposeCapture(): void {
   recoveryAttempts.clear()
   probesSinceProof.clear()
   probesInFlight.clear()
+  displayCadence.retain(new Set())
+  nativeReplayFallback.stopAll()
+  nativeReplayFrameDelivery.clear()
+}
+
+function sendNativeReplayFrame(
+  sender: WebContents,
+  sessionId: string,
+  frame: NativeReplayFrame,
+): boolean {
+  if (sender.isDestroyed()) return false
+  try {
+    const payload: CaptureNativeFallbackFramePayload = {
+      sessionId,
+      sequence: frame.sequence,
+      clockProvenance: frame.clockProvenance,
+      capturedQpc: frame.capturedQpc,
+      qpcFrequency: frame.qpcFrequency,
+      capturedAtMs: frame.capturedAtMs,
+      width: frame.width,
+      height: frame.height,
+      jpeg: Uint8Array.from(frame.jpeg).buffer,
+    }
+    sender.send(IPC.captureNativeFallbackFrame, payload)
+    return true
+  } catch (error) {
+    logWarn(
+      `[capture] native replay frame delivery failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    )
+    return false
+  }
+}
+
+function rememberPresentableSequence(
+  delivery: NativeReplayFrameDelivery,
+  sequence: number,
+): void {
+  delivery.presentableSequences.delete(sequence)
+  delivery.presentableSequences.add(sequence)
+  while (
+    delivery.presentableSequences.size > NATIVE_PRESENTABLE_SEQUENCE_LIMIT
+  ) {
+    const oldest = delivery.presentableSequences.values().next().value
+    if (oldest === undefined) break
+    delivery.presentableSequences.delete(oldest)
+  }
+}
+
+function sendTrackedNativeReplayFrame(
+  delivery: NativeReplayFrameDelivery,
+  sender: WebContents,
+  frame: NativeReplayFrame,
+): void {
+  const sent = sendNativeReplayFrame(sender, delivery.sessionId, frame)
+  delivery.inFlight = sent
+  delivery.inFlightSequence = sent ? frame.sequence : null
+  if (sent) rememberPresentableSequence(delivery, frame.sequence)
+}
+
+function setupNativeReplayFallbackIpc(): void {
+  if (nativeReplayFallbackIpcInstalled) return
+  nativeReplayFallbackIpcInstalled = true
+  ipcMain.handle(
+    IPC.captureDxgiTimingReference,
+    async (event): Promise<CaptureDxgiTimingReferencePayload> => {
+      const wantedId = assignedDisplays.get(event.sender.id)
+      if (wantedId === undefined) {
+        return {
+          status: 'unavailable',
+          reason: 'unassigned-display',
+          detail: 'DXGI timing sender has no assigned display',
+        }
+      }
+      const display = screen
+        .getAllDisplays()
+        .find((candidate) => String(candidate.id) === wantedId)
+      if (display === undefined) {
+        return {
+          status: 'unavailable',
+          reason: 'display-disconnected',
+          detail: `assigned display ${wantedId} is no longer connected`,
+        }
+      }
+      // Electron usually exposes a friendly monitor label, not the DXGI
+      // "\\.\DISPLAYn" identity. Never turn that label into an extra
+      // contradictory selector; exact physical bounds are authoritative.
+      const dxgiDeviceName = /^\\\\\.\\DISPLAY\d+$/i.test(display.label.trim())
+        ? display.label.trim()
+        : undefined
+      const result = await captureDxgiTimingReference({
+        ...(dxgiDeviceName === undefined
+          ? {}
+          : { deviceName: dxgiDeviceName }),
+        bounds: screen.dipToScreenRect(null, display.bounds),
+        timeoutMs: 250,
+        processTimeoutMs: 1_000,
+      })
+      if (assignedDisplays.get(event.sender.id) !== wantedId) {
+        return {
+          status: 'unavailable',
+          reason: 'display-assignment-changed',
+          detail: 'capture generation changed during DXGI timing reference',
+        }
+      }
+      return dxgiTimingReferenceToIpc(result)
+    },
+  )
+  ipcMain.handle(
+    IPC.captureNativeFallbackStart,
+    async (event, request: CaptureNativeFallbackRequest): Promise<CaptureNativeFallbackStartPayload> => {
+      const wantedId = assignedDisplays.get(event.sender.id)
+      if (wantedId === undefined) throw new Error('native replay fallback sender has no assigned display')
+      const display = screen.getAllDisplays().find((candidate) => String(candidate.id) === wantedId)
+      if (display === undefined) throw new Error(`assigned display ${wantedId} is no longer connected`)
+      const requestedFps = normalizeCaptureFps(
+        request?.requestedFps,
+        currentSettings?.fps ?? MIN_CAPTURE_FPS,
+      )
+      const nativeSize = physicalSize(display)
+      const width =
+        typeof request?.width === 'number' && Number.isFinite(request.width) && request.width > 0
+          ? request.width
+          : nativeSize.width
+      const height =
+        typeof request?.height === 'number' && Number.isFinite(request.height) && request.height > 0
+          ? request.height
+          : nativeSize.height
+      const sender = event.sender
+      const isHealthProbe = request?.purpose === 'health-probe'
+      const isTransition = !isHealthProbe
+      const fallbackStartedAtMs = Date.now()
+      if (isTransition) {
+        logWarn(
+          `[capture] display ${wantedId}: primary replay failure confirmed; ` +
+            'starting the independent windows-gdi-bitblt source',
+        )
+      }
+      const result = await nativeReplayFallback.start(
+        {
+          webContentsId: sender.id,
+          display,
+          nativeBounds: screen.dipToScreenRect(null, display.bounds),
+          requestedFps,
+          width,
+          height,
+        },
+        (sessionId, frame) => {
+          if (
+            sender.isDestroyed() ||
+            assignedDisplays.get(sender.id) !== wantedId
+          ) {
+            nativeReplayFallback.stop(sender.id, sessionId)
+            return
+          }
+          const delivery = nativeReplayFrameDelivery.get(sender.id)
+          if (delivery === undefined || delivery.sessionId !== sessionId) {
+            // The invoke's first frame has not been acknowledged yet. Retain
+            // only the newest successor; every older JPEG is unreachable.
+            nativeReplayFrameDelivery.set(sender.id, {
+              sessionId,
+              inFlight: true,
+              inFlightSequence: null,
+              pending: frame,
+              presentableSequences: new Set(),
+              ...(isTransition ? { fallbackStartedAtMs } : {}),
+              firstPresentedLogged: false,
+            })
+            return
+          }
+          if (delivery.inFlight) {
+            delivery.pending = frame
+            return
+          }
+          sendTrackedNativeReplayFrame(delivery, sender, frame)
+        },
+        (sessionId, message) => {
+          if (sender.isDestroyed()) return
+          try {
+            sender.send(IPC.captureNativeFallbackError, {
+              sessionId,
+              message,
+            })
+          } catch {
+            nativeReplayFallback.stop(sender.id, sessionId)
+          }
+        },
+      )
+      const queued = nativeReplayFrameDelivery.get(sender.id)
+      if (queued === undefined || queued.sessionId !== result.sessionId) {
+        nativeReplayFrameDelivery.set(sender.id, {
+          sessionId: result.sessionId,
+          inFlight: true,
+          inFlightSequence: result.firstFrame.sequence,
+          pending: null,
+          presentableSequences: new Set([result.firstFrame.sequence]),
+          ...(isTransition ? { fallbackStartedAtMs } : {}),
+          firstPresentedLogged: false,
+        })
+      } else {
+        // Success returns the first frame over invoke rather than sender.send().
+        // Publish its exact ACK/presentation ownership after every successor
+        // that may already have been reduced into `pending`.
+        queued.inFlight = true
+        queued.inFlightSequence = result.firstFrame.sequence
+        rememberPresentableSequence(queued, result.firstFrame.sequence)
+        if (isTransition) queued.fallbackStartedAtMs = fallbackStartedAtMs
+      }
+      const firstJpeg = Uint8Array.from(result.firstFrame.jpeg).buffer
+      if (isTransition) {
+        logWarn(
+          `[capture] display ${wantedId}: switched to ${result.backend} ` +
+            `(${result.quality}, ${result.width}x${result.height} @ ${result.fps}fps); ` +
+            `native source first frame acquired after ${Date.now() - fallbackStartedAtMs} ms`,
+        )
+      } else {
+        logInfo(
+          `[capture] display ${wantedId}: native replay health probe acquired ` +
+            `${result.width}x${result.height} witness via ${result.backend}`,
+        )
+      }
+      return {
+        sessionId: result.sessionId,
+        backend: result.backend,
+        quality: result.quality,
+        requestedFps: result.requestedFps,
+        fps: result.fps,
+        width: result.width,
+        height: result.height,
+        firstFrame: {
+          sessionId: result.sessionId,
+          sequence: result.firstFrame.sequence,
+          clockProvenance: result.firstFrame.clockProvenance,
+          capturedQpc: result.firstFrame.capturedQpc,
+          qpcFrequency: result.firstFrame.qpcFrequency,
+          capturedAtMs: result.firstFrame.capturedAtMs,
+          width: result.firstFrame.width,
+          height: result.firstFrame.height,
+          jpeg: firstJpeg,
+        },
+      }
+    },
+  )
+  ipcMain.on(IPC.captureNativeFallbackStop, (event, sessionId: string) => {
+    const delivery = nativeReplayFrameDelivery.get(event.sender.id)
+    if (delivery?.sessionId === sessionId) {
+      nativeReplayFrameDelivery.delete(event.sender.id)
+    }
+    nativeReplayFallback.stop(event.sender.id, sessionId)
+  })
+  ipcMain.on(
+    IPC.captureNativeFallbackFrameAck,
+    (event, sessionId: string, sequence: number) => {
+      const delivery = nativeReplayFrameDelivery.get(event.sender.id)
+      if (
+        delivery === undefined ||
+        delivery.sessionId !== sessionId ||
+        !Number.isSafeInteger(sequence) ||
+        !delivery.inFlight ||
+        delivery.inFlightSequence !== sequence
+      ) {
+        return
+      }
+      const next = delivery.pending
+      delivery.pending = null
+      delivery.inFlight = false
+      delivery.inFlightSequence = null
+      if (next === null) {
+        return
+      }
+      sendTrackedNativeReplayFrame(delivery, event.sender, next)
+    },
+  )
+  ipcMain.on(
+    IPC.captureNativeFallbackFramePresented,
+    (event, sessionId: string, sequence: number) => {
+      const delivery = nativeReplayFrameDelivery.get(event.sender.id)
+      if (
+        delivery === undefined ||
+        delivery.sessionId !== sessionId ||
+        !Number.isSafeInteger(sequence) ||
+        delivery.firstPresentedLogged ||
+        delivery.fallbackStartedAtMs === undefined ||
+        !delivery.presentableSequences.delete(sequence)
+      ) {
+        return
+      }
+      delivery.firstPresentedLogged = true
+      delivery.presentableSequences.clear()
+      const displayId = assignedDisplays.get(event.sender.id) ?? 'unknown'
+      logInfo(
+        `[capture] display ${displayId}: native first frame presented after ` +
+          `${Date.now() - delivery.fallbackStartedAtMs} ms`,
+      )
+    },
+  )
 }
 
 /**
@@ -608,6 +954,7 @@ export function replayUnavailableReason(
 // without a picker: requesting webContents -> assigned display id -> matching
 // screen source (desktopCapturer display_id).
 export function setupDisplayMediaHandler(): void {
+  setupNativeReplayFallbackIpc()
   session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
     const requester = request.frame === null ? undefined : webContents.fromFrame(request.frame)
     const wantedId = requester === undefined ? undefined : assignedDisplays.get(requester.id)
@@ -615,10 +962,13 @@ export function setupDisplayMediaHandler(): void {
       .getSources({ types: ['screen'] })
       .then((sources) => {
         const primaryId = String(screen.getPrimaryDisplay().id)
-        const source =
-          sources.find((s) => s.display_id === wantedId) ??
-          sources.find((s) => s.display_id === primaryId) ??
-          sources[0]
+        const source = selectDisplayMediaSource(sources, wantedId, primaryId)
+        if (wantedId !== undefined && source === undefined) {
+          logWarn(
+            `[capture] assigned display ${wantedId} has no desktopCapturer source; ` +
+              'rejecting the request instead of substituting another display',
+          )
+        }
         callback(source ? { video: source } : {})
       })
       .catch(() => callback({}))
@@ -859,9 +1209,76 @@ export interface ReplayFetch {
     replayFile: 'replay.webm' | 'replay.mp4'
     /** The tick clock's value at these bytes' t=0 (#112); absent if unknown. */
     originMs?: number
+    /** Measured encoded PTS -> shared presentation-clock observations. */
+    clockAnchors?: readonly {
+      ptsMs: number
+      wallMs: number
+    }[]
+    /** Encoded PTS -> independently measured desktop-pixel exposure clock. */
+    sourceClockAnchors?: readonly {
+      ptsMs: number
+      wallMs: number
+    }[]
   } | null
   // Set exactly when `replay` is null.
   miss: ReplayMiss | null
+}
+
+const MAX_REPLAY_CLOCK_ANCHORS = 64
+const MIN_REPLAY_CLOCK_RATE = 0.8
+const MAX_REPLAY_CLOCK_RATE = 1.2
+
+function validatedReplayClockAnchors(
+  anchors: CaptureReplayResultPayload['clockAnchors'],
+  durationMs: number,
+): readonly { ptsMs: number; wallMs: number }[] | undefined {
+  if (
+    anchors === undefined
+    || anchors.length < 2
+    || anchors.length > MAX_REPLAY_CLOCK_ANCHORS
+    || !Number.isFinite(durationMs)
+    || durationMs <= 0
+  ) {
+    return undefined
+  }
+  const validated: Array<{ ptsMs: number; wallMs: number }> = []
+  for (const anchor of anchors) {
+    if (
+      !Number.isFinite(anchor.ptsMs)
+      || !Number.isFinite(anchor.wallMs)
+      || anchor.ptsMs < 0
+      || anchor.ptsMs > durationMs
+    ) {
+      return undefined
+    }
+    const previous = validated[validated.length - 1]
+    if (
+      previous !== undefined
+      && (
+        anchor.ptsMs <= previous.ptsMs
+        || anchor.wallMs <= previous.wallMs
+      )
+    ) {
+      return undefined
+    }
+    if (previous !== undefined) {
+      const rate =
+        (anchor.wallMs - previous.wallMs)
+        / (anchor.ptsMs - previous.ptsMs)
+      if (
+        !Number.isFinite(rate)
+        || rate < MIN_REPLAY_CLOCK_RATE
+        || rate > MAX_REPLAY_CLOCK_RATE
+      ) {
+        return undefined
+      }
+    }
+    validated.push({
+      ptsMs: anchor.ptsMs,
+      wallMs: anchor.wallMs,
+    })
+  }
+  return validated
 }
 
 // Asks a capture window for its current replay blob, reporting WHY when there
@@ -870,6 +1287,7 @@ export function requestReplay(
   win: BrowserWindow,
   requestId: string,
   timeoutMs: number,
+  options: { holdAfterCapture?: boolean } = {},
 ): Promise<ReplayFetch> {
   registerReplayListener()
   return new Promise((resolve) => {
@@ -877,8 +1295,50 @@ export function requestReplay(
 
     const onResult = (payload: CaptureReplayResultPayload): void => {
       cleanup()
+      const ring = payload.ringDiagnostics
+      if (ring !== undefined) {
+        const displayId = assignedDisplays.get(win.webContents.id) ?? 'unknown'
+        logInfo(
+          `[capture] display ${displayId}: ring retained ` +
+            `${ring.retainedFragmentCount} fragment(s), ${ring.retainedBytes} bytes / ` +
+            `${Math.round(ring.retainedDurationMs)} ms; selected ` +
+            `${ring.selectedFragmentCount} fragment(s)`,
+        )
+        if (ring.sourceLatencyCalibration !== undefined) {
+          logInfo(
+            `[capture] display ${displayId}: source latency calibration ` +
+              `${JSON.stringify(ring.sourceLatencyCalibration)}`,
+          )
+        }
+        if (ring.replayPixelClock !== undefined) {
+          logInfo(
+            `[capture] display ${displayId}: replay pixel clock ` +
+              `${JSON.stringify(ring.replayPixelClock)}`,
+          )
+        }
+        for (const sample of ring.clockSamples ?? []) {
+          logInfo(
+            `[capture-clock] display ${displayId}: ` +
+              `start=${sample.recorderStartedAtMs.toFixed(3)} ` +
+              `event=${sample.eventTimeStampMs.toFixed(3)} ` +
+              `timecode=${sample.blobTimecodeMs.toFixed(3)} ` +
+              `delivered=${sample.deliveredAtMs.toFixed(3)} ` +
+              `presentation=${sample.latestPresentationTimeMs?.toFixed(3) ?? 'unknown'} ` +
+              `capture=${sample.latestCaptureTimeMs?.toFixed(3) ?? 'unknown'} ` +
+              `media=${sample.latestMediaTimeMs?.toFixed(3) ?? 'unknown'}`,
+          )
+        }
+      }
       if (payload.buffer.byteLength === 0) resolve({ replay: null, miss: 'empty' })
       else {
+        const clockAnchors = validatedReplayClockAnchors(
+          payload.clockAnchors,
+          payload.durationMs,
+        )
+        const sourceClockAnchors = validatedReplayClockAnchors(
+          payload.sourceClockAnchors,
+          payload.durationMs,
+        )
         resolve({
           replay: {
             buffer: Buffer.from(payload.buffer),
@@ -889,6 +1349,10 @@ export function requestReplay(
             ...(typeof payload.originMs === 'number' && Number.isFinite(payload.originMs)
               ? { originMs: payload.originMs }
               : {}),
+            ...(clockAnchors === undefined ? {} : { clockAnchors }),
+            ...(sourceClockAnchors === undefined
+              ? {}
+              : { sourceClockAnchors }),
           },
           miss: null,
         })
@@ -914,8 +1378,35 @@ export function requestReplay(
       cleanup()
       resolve({ replay: null, miss: 'timeout' })
     }, timeoutMs)
-    win.webContents.send(IPC.captureRequestReplay, requestId)
+    const request: CaptureReplayRequestPayload = {
+      requestId,
+      ...(options.holdAfterCapture === true ? { holdAfterCapture: true } : {}),
+    }
+    try {
+      win.webContents.send(IPC.captureRequestReplay, request)
+    } catch {
+      cleanup()
+      resolve({ replay: null, miss: 'window-gone' })
+    }
   })
+}
+
+/**
+ * Releases a renderer boundary previously acquired with holdAfterCapture.
+ *
+ * This is intentionally safe after timeout/window loss: the renderer matches
+ * the request id, while a destroyed window simply has no recorder left to
+ * resume. Session owns calling it from `finally`.
+ */
+export function resumeReplay(win: BrowserWindow, requestId: string): void {
+  if (win.isDestroyed()) return
+  const payload: CaptureReplayResumePayload = { requestId }
+  try {
+    win.webContents.send(IPC.captureResumeReplay, payload)
+  } catch {
+    // A renderer that vanished owns no live held recorder. Its replacement
+    // window is created by the normal per-display reconciliation path.
+  }
 }
 
 function resolveFixedDisplay(configuredId: string): Display {
@@ -1036,6 +1527,9 @@ async function rebuild(): Promise<void> {
     }
   }
   wantedDisplayIds = new Set(wanted.keys())
+  // A disconnected or no-longer-requested display cannot lend its last
+  // renderer's cadence to a future recorder that happens to reuse the id.
+  displayCadence.retain(wantedDisplayIds)
   for (const id of displayRecorderStates.keys()) {
     if (!wanted.has(id)) displayRecorderStates.delete(id)
   }
@@ -1070,6 +1564,9 @@ async function rebuild(): Promise<void> {
     captureWindows.delete(id)
     captureWindowSigs.delete(id)
     displayRecorderStates.delete(id)
+    // Signature/recovery replacement starts a new measurement generation.
+    // Keeping the old report would write stale FPS beside the new replay.
+    displayCadence.reset(id)
     clearRecorderProbe(id)
     // A fresh renderer is owed a fresh hearing: it must get its own probe
     // before anything recreates its window again, or a display that failed once
@@ -1155,14 +1652,37 @@ async function createCaptureWindow(
       }
       logInfo(
         `[capture] display ${display.id}: ${ready.mimeType} -> ${ready.replayFile}, ` +
-          `${ready.width}x${ready.height}`,
+          `${ready.width}x${ready.height}` +
+          (ready.sourceLatencyMs === undefined
+            ? ', source latency unknown'
+            : `, source latency ${Math.round(ready.sourceLatencyMs)} ms`),
       )
+      const startupReadiness = ready.startupReadiness
+      if (startupReadiness !== undefined) {
+        logInfo(
+          `[capture] display ${display.id}: primary recorder readiness after ` +
+            `${Math.round(startupReadiness.observedWaitMs)} ms ` +
+            `(${startupReadiness.presentedFrames} presented frames, ` +
+            `timeout=${String(startupReadiness.timedOut)}, ` +
+            `excluded-before-recorder=${Math.round(startupReadiness.excludedBeforeRecorderMs)} ms, ` +
+            `presentation-span=${Math.round(startupReadiness.observedSpanMs)} ms)`,
+        )
+      }
+      if (ready.sourceLatencyCalibration !== undefined) {
+        logInfo(
+          `[capture] display ${display.id}: source latency calibration ` +
+            `${JSON.stringify(ready.sourceLatencyCalibration)}`,
+        )
+      }
+      // sendReady describes a new source generation, including an in-window
+      // Chromium -> GDI transition. Old primary cadence/quality and "recording"
+      // proof must not survive into bytes produced by the replacement backend.
+      displayCadence.reset(display.id)
+      setDisplayRecorderState(display.id, { status: 'starting' })
       // The recorder is running as of NOW, so the backstop is re-anchored here
       // — behind the renderer's own frame-evidence deadline, and re-armed for
       // each restart the renderer performs (see RECORDER_PROBE_DELAY_MS).
-      if (displayRecorderStates.get(display.id)?.status !== 'recording') {
-        scheduleRecorderProbe(display.id, win, RECORDER_PROBE_DELAY_MS)
-      }
+      scheduleRecorderProbe(display.id, win, RECORDER_PROBE_DELAY_MS)
     }
     const onFrames = (event: IpcMainEvent, payload: CaptureFramesPayload): void => {
       // Proof from a window a rebuild has already replaced says nothing about
@@ -1201,6 +1721,8 @@ async function createCaptureWindow(
       ipcMain.removeListener(IPC.captureFrames, onFrames)
       ipcMain.removeListener(IPC.captureTick, onTick)
       assignedDisplays.delete(wcId)
+      nativeReplayFallback.stop(wcId)
+      nativeReplayFrameDelivery.delete(wcId)
       // Electron may deliver this after rebuild() has already installed a new
       // window for the same display. Only the window that still owns the slot
       // may clear that replacement's probe or change its health.
@@ -1232,7 +1754,9 @@ async function createCaptureWindow(
       // Test path for issue #39: a real recorder over a desktop capturer that
       // delivers nothing. Nobody can break Desktop Duplication on demand, so
       // this is how the no-frames path stays provable.
-      ...(simulateNoFrames() ? { simulateNoFrames: true } : {}),
+      ...(shouldSimulateNoFrames(process.argv, String(display.id))
+        ? { simulateNoFrames: true }
+        : {}),
       // Test path for issue #43: a real recorder on a machine too loaded to
       // prove itself to main. Nobody can put a desk under that load on demand
       // either, so this is how "recovery never costs the recording" stays
