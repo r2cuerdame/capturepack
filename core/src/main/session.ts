@@ -1776,6 +1776,33 @@ async function runFlow(settings: Settings): Promise<void> {
           // CSS pixels and this is the only thing that says where that viewport
           // was. Absent for an event from an extension older than 0.1.4.
           ...(e.viewport === undefined ? {} : { viewport: e.viewport }),
+          // THE INTERFACE THE PICK SAT IN (GOAL "The still carries the context").
+          //
+          // Snake_case on the way out, like every other field the pack writes,
+          // and carried whole rather than re-filtered: the extension already
+          // decided what may leave the page, and `omitted` is its statement of
+          // that decision. Re-deciding here would mean two rules for one
+          // question, and the one a reader can check is the one in the file.
+          ...(e.document === undefined
+            ? {}
+            : {
+                document: {
+                  viewport: {
+                    width: e.document.viewport.width,
+                    height: e.document.viewport.height,
+                    device_pixel_ratio: e.document.viewport.devicePixelRatio,
+                    scroll_x: e.document.viewport.scrollX,
+                    scroll_y: e.document.viewport.scrollY,
+                  },
+                  url: e.document.url,
+                  title: e.document.title,
+                  elements: e.document.elements,
+                  truncated: e.document.truncated,
+                  visited_count: e.document.visitedCount,
+                  elapsed_ms: e.document.elapsedMs,
+                  omitted: e.document.omitted,
+                },
+              }),
         }]
       }),
     })

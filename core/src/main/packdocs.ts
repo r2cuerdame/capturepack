@@ -567,6 +567,26 @@ function buildDomSkill(manifest: Manifest, annotationsFile: AnnotationsFile, t: 
       lines.push(`- **${p.name}** v${p.version} — files under \`${p.path}\``)
     }
     lines.push('')
+    // WHAT THE BROWSER PAYLOAD DOES AND DOES NOT HOLD.
+    //
+    // An LLM reading this file is about to reason from a page's structure, and
+    // what is ABSENT from that structure changes what it may conclude. A model
+    // that does not know field values were withheld will read an empty form as
+    // an empty form; a model that does knows it is looking at a redaction.
+    const dom = manifest.plugins.find((p) => p.name === 'chrome-dom')
+    if (dom !== undefined) {
+      lines.push(
+        'A `chrome-dom` pick from extension 0.2.0 or newer carries a `document`: every element',
+      )
+      lines.push(
+        'the user could see in the top document at that instant, with its role, rectangle and',
+      )
+      lines.push('own visible text. Read `omitted` in that payload before concluding anything from')
+      lines.push('what is missing — field values, password boxes and anything the user could not')
+      lines.push('see are refused deliberately, so an empty-looking form is a redaction and not')
+      lines.push('an empty form. `truncated: true` means the list is a prefix of the page.')
+      lines.push('')
+    }
   }
   if (targeted.length > 0) {
     lines.push('Annotation boxes carrying semantic `target` metadata:')

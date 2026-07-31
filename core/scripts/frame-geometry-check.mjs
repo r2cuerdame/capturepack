@@ -12,7 +12,7 @@
 //
 //   node scripts/frame-geometry-check.mjs
 
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runInNewContext } from 'node:vm'
@@ -156,8 +156,13 @@ console.log('\nThe picker actually uses it, in every frame')
   check('a failed hop reports itself', contentScript.includes("type: 'picker.failed'"))
   check('the background forwards a content-script failure',
     background.includes("msg.type === 'picker.failed'"))
+  // The app asks Chromium to reload an unpacked extension when this number
+  // moves, so a wire change that leaves it alone ships a worker that cannot
+  // speak the new payload. 0.2.0 is a pick carrying the document it sat in.
   check('the manifest version moved with the protocol change',
-    manifest.version === '0.1.9', manifest.version)
+    manifest.version === '0.2.0', manifest.version)
+  check('and the document walker ships with it',
+    existsSync(resolve(EXTENSION, 'document-snapshot.js')))
 }
 
 console.log(`\nresult: ${failed === 0 ? 'OK' : 'BROKEN'} — ${passed} passed, ${failed} failed\n`)

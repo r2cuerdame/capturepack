@@ -416,11 +416,65 @@ export async function writeUiaPlugin(dirPath: string, payload: UiaPluginPayload)
 
 export const DOM_PLUGIN_NAME = 'chrome-dom'
 /**
- * Payload schema version. 0.1.0 is protocol v1's Phase 1 surface: the URL and
- * title of the tab, and for a picked element its tag, selector, bounds and
- * whatever of id/role/text the page actually had.
+ * Payload schema version.
+ *
+ * 0.1.0 was protocol v1's Phase 1 surface: the URL and title of the tab, and
+ * for a picked element its tag, selector, bounds and whatever of id/role/text
+ * the page actually had.
+ *
+ * 0.2.0 adds `document` on a pick — the whole interface that was visible when
+ * the user picked, which the freed per-frame budget is what pays for (GOAL "The
+ * still carries the context"). Absent on a pick from an older extension, and on
+ * one made inside an iframe; a reader treats its absence as "nobody looked",
+ * never as "the page was empty".
  */
-export const DOM_PLUGIN_VERSION = '0.1.0'
+export const DOM_PLUGIN_VERSION = '0.2.0'
+
+/**
+ * WHAT WAS ON SCREEN, AND WHAT WAS DELIBERATELY LEFT OFF IT.
+ *
+ * `omitted` is part of the record rather than a comment: a reader of the pack
+ * learns what is missing without reading our source. The extension refuses the
+ * value of every field, everything but the presence of a password box, the text
+ * of anything the user could not see, and any attribute outside its allowlist —
+ * because the licence for writing down visible text is that `snapshot.png`
+ * already contains those pixels, and that argument covers nothing else.
+ */
+export interface DomPluginDocument {
+  viewport: {
+    width: number
+    height: number
+    device_pixel_ratio: number
+    scroll_x: number
+    scroll_y: number
+  }
+  url: string
+  title: string
+  elements: readonly {
+    i: number
+    tag: string
+    role: string
+    bounds: { x: number; y: number; width: number; height: number }
+    id?: string
+    class?: string
+    name?: string
+    type?: string
+    placeholder?: string
+    alt?: string
+    title?: string
+    href?: string
+    text?: string
+    /** A field held something. Never what it held. */
+    filled?: boolean
+    /** A password box was here. Nothing else about it is recorded. */
+    secret?: boolean
+  }[]
+  /** The walk hit its cap: this is a prefix of the page, not the page. */
+  truncated: boolean
+  visited_count: number
+  elapsed_ms: number
+  omitted: readonly string[]
+}
 
 export interface DomPluginPayload {
   protocol: number
@@ -438,6 +492,8 @@ export interface DomPluginPayload {
       role?: string
       text?: string
     }
+    /** Added in payload 0.2.0. Absent means nobody looked, not an empty page. */
+    document?: DomPluginDocument
   }[]
 }
 
