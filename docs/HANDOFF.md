@@ -91,6 +91,14 @@ Measured evidence from
 - replay pixel matching reported `weak-pixel-match`;
 - the pack clock therefore fell back to wall-clock evidence.
 
+**Why the existing measurements never saw it.** Everything the product compares
+is a *timestamp*, and on this failure the timestamps agree. `check:exposure-alignment`
+builds a landmark moving at 2 px/ms whose pixels are exposed 60 ms late and puts
+it through both measurements: the existing clock comparison calls it aligned to
+**2.0 ms**, while correlating position names **60.0 ms ± 0.5**. The disagreement
+does not live on the time axis. Any future claim that #89 is fixed has to move
+that second number, not the first.
+
 **Which display is which, because the numbering has already been mixed up
 once.** Read it from that pack's `manifest.json` rather than from prose:
 
@@ -161,8 +169,8 @@ npm run qa:rc
 npm audit --omit=dev
 ```
 
-`qa:rc` currently runs 66 discovered `check:*` regressions plus type checking,
-the production build, and isolated Electron smoke: **69 gate steps** (67 with
+`qa:rc` currently runs 67 discovered `check:*` regressions plus type checking,
+the production build, and isolated Electron smoke: **70 gate steps** (68 with
 `--skip-build`). Reports
 are written under `%TEMP%\capturepack-qa` unless an artifact directory is
 provided.
@@ -264,8 +272,9 @@ record and [#104](https://github.com/r2cuerdame/capturepack/issues/104) /
 - An explicitly picked document element is no longer filtered by the threshold
   measured for UI Automation enumerations. It is judged at a viewport-like
   threshold and is never deleted.
-- The gate is **66 steps**: `check:frame-geometry` and `check:dom-pick` are new,
-  and `check:chrome-bridge` — an end-to-end harness that existed, had never been
+- The gate discovers **67 checks**: `check:frame-geometry`, `check:dom-pick`,
+  `check:docs` and `check:exposure-alignment` are new, and
+  `check:chrome-bridge` — an end-to-end harness that existed, had never been
   wired in, and was failing — now runs.
 - The lane cost line now prints `frame->core`, dropped samples and stride.
   First measurement on the reporting machine: **`frame->core +4.1 ms`,
@@ -277,6 +286,15 @@ record and [#104](https://github.com/r2cuerdame/capturepack/issues/104) /
   way by 53-125 ms the moment a real exposure latency reaches that term.
   `check:sync` drives a deliberately large age and fails by exactly one age
   without it.
+- `check:exposure-alignment` is the moving fixture #89 was missing. It measures
+  desktop pixel exposure by correlating *position* rather than time, recovers an
+  injected 60 ms to **60.0 ms ± 0.5**, keeps two displays on 60 ms and 95 ms
+  independently, and shows one global constant failing on both at once by about
+  17 ms. It refuses on stationary evidence, on evidence that travels too little
+  to time anything, and on a replay whose declared PTS regresses. Applying the
+  correction twice is measured to be exactly as wrong as not applying it, and
+  applying it backwards twice as wrong; the check counts the application sites
+  in `src/` and fails above one.
 
 Not proved, and it needs the machine: one run with the element picker
 deliberately armed on an ordinary `https://` page, so `main.log` says whether it
@@ -284,18 +302,24 @@ armed, could not arm, or armed and the click went elsewhere.
 
 ## Suggested next order
 
-1. Build a deterministic moving visual/context fixture for #89 and make the
-   current display-specific drift fail quantitatively.
-3. Measure the source-frame clock and encoded PTS per display; do not infer the
-   mapping from flush completion, IPC response, or a stationary frame. Publish
-   it as its own per-display quantity — never by overloading
-   `replay_clock_offset_ms`, whose `focused => 0` is correct by definition — and
-   apply it at exactly one place, or it double-corrects.
-3. Exercise #62 on a genuinely failing backend and require a decodable replay,
+1. Feed real evidence into `measureExposureLatency`. The fixture proves the
+   arithmetic and the refusals; nothing yet reads a landmark out of decoded
+   replay pixels and a moving window out of the context ring on this machine.
+   That harness is the next thing that produces a number for a real display.
+2. Publish the measured mapping as its own per-display quantity — never by
+   overloading `replay_clock_offset_ms`, whose `focused => 0` is correct by
+   definition — and apply it through `exposureCorrectedContextTimeMs` at exactly
+   one place. `check:exposure-alignment` counts the application sites and fails
+   above one. Do not infer the mapping from flush completion, IPC response, or a
+   stationary frame.
+3. Make the one-shot startup calibration retry when motion evidence appears. It
+   runs once against a still desktop today, which is why both displays reported
+   `insufficient-motion-transitions`.
+4. Exercise #62 on a genuinely failing backend and require a decodable replay,
    not a screenshot-only result or a recreated recorder on the same dead stream.
-4. Add the real Electron/Windows E2E layer tracked by #63 while preserving the
-   existing 65-step deterministic gate.
-5. Re-run the manual matrix in `docs/QA.md` and record actual hardware, duration,
+5. Add the real Electron/Windows E2E layer tracked by #63 while preserving the
+   existing deterministic gate.
+6. Re-run the manual matrix in `docs/QA.md` and record actual hardware, duration,
    FPS, gaps, CPU, memory, process, and media-decode evidence.
 
 Lead reports to the owner with the measured outcome in Korean. If something

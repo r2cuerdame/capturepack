@@ -56,14 +56,16 @@ verification history. These are the current additions and next gates:
   a routine update notice held over a locked screen
   ([#103](https://github.com/r2cuerdame/capturepack/issues/103)); and the
   measurement that narrows #89 — renderer-to-main transport and the memory
-  governor are ruled out, and 95% of samples take a path that does not carry the
-  frame-age term.
-- Next: carry the frame-age term onto the converted and held sample paths before
-  anything makes that term carry a real exposure latency; then the moving #89
-  fixture and a measured per-display source-to-encoded-PTS mapping. Alongside
-  that, continue physical mixed-DPI/long-running recording, save/reopen,
-  installer/update and Chrome reconnection QA, and design an explicit
-  sanitized-sharing path.
+  governor are ruled out, the frame-age term now reaches every sample path
+  instead of 6% of them, and a deterministic moving fixture measures desktop
+  pixel exposure by correlating position, which is the only axis on which the
+  failure is visible at all.
+- Next: read a real moving landmark out of decoded replay pixels and the context
+  ring, publish the resulting per-display exposure latency as its own quantity,
+  and apply it at exactly one place; recalibrate when motion evidence appears.
+  Alongside that, continue physical mixed-DPI/long-running recording,
+  save/reopen, installer/update and Chrome reconnection QA, and design an
+  explicit sanitized-sharing path.
 
 ---
 

@@ -177,6 +177,48 @@ stays a measured per-display source-to-encoded-PTS mapping, recalibrated when
 motion evidence appears, with a moving fixture that fails at more than one frame
 of correlation error.
 
+**The moving fixture, and why nothing caught this before.** Every measurement
+the product runs compares two *timestamps*, and on this failure the timestamps
+agree — both clocks anchor on the same event, frame presentation, and neither
+knows when the compositor put those pixels on the glass. The disagreement is
+only visible in **position**.
+
+So `check:exposure-alignment` builds one landmark moving at 2 px/ms whose pixels
+are exposed 60 ms late, and runs it through both measurements:
+
+```
+existing clock comparison   aligned to 2.0 ms
+correlating position        60.0 ms +/- 0.5
+```
+
+That is #89 in two lines. The measurement inverts the landmark's observed track
+at the pixel position each decoded frame shows, over a scan of candidate
+latencies, and reports the centre of the argmin plateau with its half-width as
+`resolutionMs` — never a precision the sampling interval cannot support. A ring
+locked to the frame rate still brackets 60 ms but admits it resolves eight times
+more coarsely, which is itself a finding: the field harness must not sample the
+ring at exactly the recorder's rate.
+
+The refusals matter as much as the number, because #89 is easy to "fix" wrongly:
+
+- a stationary landmark returns `insufficient-motion`, never 0 ms;
+- so does one that travels too little to express the latency in whole pixels,
+  even when every step it takes is clean;
+- a replay whose declared PTS regresses is not measurable;
+- two displays keep 60 ms and 95 ms independently, and one global constant of
+  77.5 ms is measured failing on **both** at once by about 17 ms;
+- applying the correction twice is exactly as wrong as not applying it (60 ms
+  either way), and applying it backwards is twice as wrong (120 ms). The check
+  counts `exposureCorrectedContextTimeMs` call sites in `src/` and fails above
+  one, so the double correction cannot land quietly;
+- nothing in the module reads `replay_clock_offset_ms`. Exposure is its own
+  quantity, or `focused => 0` stops being true.
+
+What the fixture does **not** do is produce a number for a real display. It
+proves the arithmetic and the refusals. Reading a landmark out of decoded replay
+pixels and out of the context ring on this machine is the next step, and until
+that exists #89 stays open.
+
 ---
 
 ## Mission

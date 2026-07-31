@@ -79,6 +79,7 @@
     "check:pack-forensics": "node scripts/pack-forensics-check.mjs",
     "check:display-clock": "node scripts/display-clock-check.mjs",
     "check:temporal-alignment": "node scripts/temporal-alignment-check.mjs",
+    "check:exposure-alignment": "node scripts/exposure-alignment-check.mjs",
     "check:semantic-multidisplay-roundtrip": "node scripts/semantic-multidisplay-roundtrip-check.mjs",
     "check:windows-replay-field-fixture": "node scripts/windows-replay-field-fixture-check.mjs",
     "check:temporal": "node test/temporal/check.mjs",

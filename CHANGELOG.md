@@ -35,8 +35,23 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   and for a picked element surviving all the way into the editor's pick index
   (`check:dom-pick`). The end-to-end browser-to-pack harness
   (`check:chrome-bridge`) now runs as part of the release gate.
+- A deterministic moving fixture for video/context alignment
+  (`check:exposure-alignment`). It measures how late a display puts pixels on
+  the glass by correlating a moving landmark's *position* between the recorded
+  context and the decoded replay, rather than comparing timestamps that already
+  agree. It refuses to produce a number from a stationary or barely-moving
+  capture, keeps each display's latency separate, and fails if the correction is
+  ever applied in more than one place
+  ([#89](https://github.com/r2cuerdame/capturepack/issues/89)).
 
 ### Changed
+
+- Every recorded context sample now carries the age of the picture it describes.
+  The correction had only ever been applied to samples stamped directly by the
+  frame clock, which is about 6% of them; the remaining majority was converted
+  without it ([#89](https://github.com/r2cuerdame/capturepack/issues/89)). At the
+  age this machine currently reports nothing moves, and it is what keeps the fix
+  for #89 from pushing most samples the wrong way.
 
 - Protocol v1 documents the picker lifecycle messages the extension has sent
   since 0.1.5 and the `viewport` block it has sent since 0.1.4, and corrects the

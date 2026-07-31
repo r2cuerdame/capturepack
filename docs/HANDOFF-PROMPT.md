@@ -50,9 +50,21 @@ cost line (`frame->core +4.1 ms, 1 dropped, stride 1`, with
   it. Keep it that way; the next change to that term is the dangerous one.
 
 What is left is the term nothing in the product represents: desktop pixel
-exposure. Publish a measured per-display mapping as its own quantity — never by
-overloading `replay_clock_offset_ms`, whose `focused => 0` is correct by
-definition — and apply it at exactly one place, or it double-corrects.
+exposure. `check:exposure-alignment` is the moving fixture that makes it a
+number instead of an argument — one landmark at a known speed, its pixels
+exposed a known amount late — and it shows why nothing caught this before: the
+clock comparison the product already runs calls that fixture aligned to 2.0 ms
+while correlating position names 60.0 ms. The disagreement is not on the time
+axis.
+
+Read a real landmark out of decoded replay pixels and the context ring, feed it
+to `measureExposureLatency`, publish the result as its own per-display quantity
+— never by overloading `replay_clock_offset_ms`, whose `focused => 0` is correct
+by definition — and apply it through `exposureCorrectedContextTimeMs` at exactly
+one place. The check counts application sites and fails above one, because
+applying it twice is measured to be exactly as wrong as not applying it.
+A stationary or barely-moving capture must keep returning `insufficient-motion`
+rather than 0 ms.
 
 Before claiming a change works:
 
@@ -63,7 +75,7 @@ npm run qa:rc
 npm audit --omit=dev
 ```
 
-The automated gate has 69 steps (67 with `--skip-build`), but it does not replace
+The automated gate has 70 steps (68 with `--skip-build`), but it does not replace
 the physical Windows matrix in `docs/QA.md`. A real Desktop Duplication
 fallback, sustained FPS/gap measurements, physical three-display behavior, and
 full hotkey-to-pack E2E remain field work unless you produce new evidence.
