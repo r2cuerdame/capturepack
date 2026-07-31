@@ -1,7 +1,7 @@
 {
   "name": "capturepack",
   "productName": "CapturePack",
-  "version": "0.3.4-rc.1",
+  "version": "0.3.4-rc.2",
   "description": "Rewind recent screen activity, pick captured UI objects, and save structured local evidence for humans and AI.",
   "license": "MIT",
   "author": "r2cuerdame",
