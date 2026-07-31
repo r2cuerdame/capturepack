@@ -33,6 +33,15 @@ interface StoredFragment {
   startAtMs: number
   endAtMs: number
   recorderSession: number
+  /**
+   * The `tfdt` this fragment ARRIVED with, on the encoder's own clock.
+   *
+   * Chromium stamps every `moof` with a base media decode time, and it is the
+   * only record of when the SOURCE produced these samples rather than when the
+   * encoder got round to them. `null` when the fragment carried none, which is
+   * a fallback and never an assumption of zero.
+   */
+  sourceDecodeTicks: bigint | null
 }
 
 export interface FragmentedMp4Replay {
@@ -328,10 +337,61 @@ interface ObservedFragmentTimeline {
 }
 
 /**
- * Put independently restarted recorder fragments on their observed wall-clock
- * timeline. A positive stop/restart hole stays a positive media PTS gap.
- * Overlapping delivery anchors are never allowed to move decode time backward;
- * in that ambiguous case the already-encoded fragment duration wins.
+ * A SOURCE THAT STOPS PRODUCING IS NOT A RECORDING THAT RAN FAST (#116).
+ *
+ * Whether one recorder session's `tfdt` may be believed. Believing it is what
+ * lets a real stall survive into the file; believing a bad one would place
+ * frames at wildly wrong times, which is a worse failure than compression
+ * because nothing downstream can see it. So the test is deliberately strict and
+ * the fallback is the arithmetic that shipped:
+ *
+ *  - every fragment in the session carried a `tfdt` (a mixed session is refused
+ *    whole rather than half-placed);
+ *  - they never go backwards;
+ *  - and the span they claim does not exceed the span the ring itself OBSERVED
+ *    these blobs arriving over. That last one is the real guard: delivery time
+ *    is a poor clock, but it is an independent one, and no honest encoder
+ *    timeline can outrun the wall by more than the jitter of the final blob.
+ */
+const TFDT_WALL_TOLERANCE_MS = 1_000
+
+function sessionTfdtIsTrustworthy(session: readonly StoredFragment[]): boolean {
+  const first = session[0]
+  const last = session[session.length - 1]
+  if (first === undefined || last === undefined) return false
+  if (first.timescale <= 0) return false
+  let previous: bigint | null = null
+  for (const fragment of session) {
+    const ticks = fragment.sourceDecodeTicks
+    if (ticks === null) return false
+    if (previous !== null && ticks < previous) return false
+    previous = ticks
+  }
+  const firstTicks = first.sourceDecodeTicks
+  const lastTicks = last.sourceDecodeTicks
+  if (firstTicks === null || lastTicks === null) return false
+  const claimedMs = (Number(lastTicks - firstTicks) * 1_000) / first.timescale
+  // The wall span the ring watched these fragments arrive over. `endAtMs` of the
+  // last already includes its own duration, so the comparison is span-to-span.
+  const observedMs = last.endAtMs - first.startAtMs
+  return claimedMs <= observedMs + TFDT_WALL_TOLERANCE_MS
+}
+
+/**
+ * Put recorder fragments on their observed timeline. A positive hole - whether
+ * from a stop/restart or from a source that simply stopped producing frames -
+ * stays a positive media PTS gap. Overlapping anchors are never allowed to move
+ * decode time backward.
+ *
+ * Inside one recorder session this used to butt-join fragments, on the reasoning
+ * that "BlobEvent delivery jitter is not a pixel gap" and that encoded sample
+ * durations are therefore authoritative. The first half is still true. The
+ * second is not, and the case it misses is the one that matters: when the SOURCE
+ * starves, MediaRecorder keeps emitting fragments whose encoded durations do not
+ * account for the wall time nobody drew anything in. Measured on
+ * CapturePack_2026-07-31_202834, display 1: 17.6 s of desk written as 5.29 s of
+ * media, gaps of at most 197 ms in a file whose own cadence report admits a
+ * 903 ms stall. Chromium had said so all along, in the `tfdt` this discarded.
  */
 function observedFragmentTimeline(
   fragments: readonly StoredFragment[],
@@ -339,20 +399,68 @@ function observedFragmentTimeline(
 ): ObservedFragmentTimeline {
   const first = fragments[0]
   if (first === undefined) return { decodeTimes: [], durationTicks: 0n }
+
+  // Trust is decided per SESSION, over the whole session, before any fragment
+  // is placed. A per-fragment decision could believe the first half of a
+  // session and disbelieve the second, which would put a seam in the middle of
+  // one continuous recording.
+  const trusted = new Map<number, StoredFragment | null>()
+  {
+    let session: StoredFragment[] = []
+    const settle = (): void => {
+      const head = session[0]
+      if (head === undefined) return
+      trusted.set(
+        head.recorderSession,
+        sessionTfdtIsTrustworthy(session) ? head : null,
+      )
+    }
+    for (const fragment of fragments) {
+      const head = session[0]
+      if (head !== undefined && head.recorderSession !== fragment.recorderSession) {
+        settle()
+        session = []
+      }
+      session.push(fragment)
+    }
+    settle()
+  }
+
   const decodeTimes: bigint[] = []
   let previousEndTicks = 0n
   let previousSession = first.recorderSession
+  // Where the current session's own clock is pinned on the output timeline.
+  let sessionOriginTicks = 0n
   for (const fragment of fragments) {
-    // BlobEvent delivery jitter is not a pixel gap. Inside one recorder,
-    // encoded sample durations remain authoritative. A fresh ftyp/moov is the
-    // observed boundary where stop/restart latency can create a real hole.
-    const observedStartTicks =
-      fragment.recorderSession === previousSession
-        ? previousEndTicks
-        : millisecondsToTicks(
-            fragment.startAtMs - first.startAtMs,
-            targetTimescale,
-          )
+    const sessionStart = trusted.get(fragment.recorderSession) ?? null
+    const newSession = fragment.recorderSession !== previousSession
+    // A fresh ftyp/moov is the observed boundary where stop/restart latency can
+    // create a real hole; delivery time is the only clock that spans it,
+    // because `tfdt` restarts at zero in every recorder session.
+    const boundaryTicks = millisecondsToTicks(
+      fragment.startAtMs - first.startAtMs,
+      targetTimescale,
+    )
+    if (newSession || decodeTimes.length === 0) {
+      sessionOriginTicks =
+        boundaryTicks > previousEndTicks ? boundaryTicks : previousEndTicks
+    }
+    const anchor = sessionStart?.sourceDecodeTicks ?? null
+    let observedStartTicks: bigint
+    if (anchor !== null) {
+      const ticks = fragment.sourceDecodeTicks ?? anchor
+      observedStartTicks =
+        sessionOriginTicks +
+        scaledDuration(
+          ticks - anchor,
+          fragment.timescale > 0 ? fragment.timescale : targetTimescale,
+          targetTimescale,
+        )
+    } else if (newSession) {
+      observedStartTicks = boundaryTicks
+    } else {
+      observedStartTicks = previousEndTicks
+    }
     const decodeTime =
       observedStartTicks > previousEndTicks
         ? observedStartTicks
@@ -463,6 +571,44 @@ function patchInitializationTimeline(
       )
     }
   }
+}
+
+/**
+ * The decode time a `moof` arrived carrying, or null if it carried none.
+ *
+ * The other parser has its own reader for this box (`fmp4SampleTimeline.ts`),
+ * but it walks a different representation; this file has always used its own
+ * `childBoxes` view, and one small local reader is cheaper than making the two
+ * agree.
+ *
+ * Multiple `traf` boxes are a multi-track fragment. The EARLIEST decode time is
+ * taken: a track that starts later inside the same fragment cannot move the
+ * fragment's own start, and taking the first traf's would make the answer
+ * depend on box order.
+ */
+function fragmentDecodeTicks(moof: Box): bigint | null {
+  let earliest: bigint | null = null
+  for (const traf of childBoxes(moof).filter((box) => box.type === 'traf')) {
+    const tfdt = childBoxes(traf).find((box) => box.type === 'tfdt')
+    if (tfdt === undefined) continue
+    const version = tfdt.bytes[tfdt.headerSize] ?? 0
+    const valueOffset = tfdt.headerSize + 4
+    const view = new DataView(
+      tfdt.bytes.buffer,
+      tfdt.bytes.byteOffset,
+      tfdt.bytes.byteLength,
+    )
+    let value: bigint
+    if (version === 1) {
+      if (valueOffset + 8 > tfdt.bytes.byteLength) continue
+      value = view.getBigUint64(valueOffset)
+    } else {
+      if (valueOffset + 4 > tfdt.bytes.byteLength) continue
+      value = BigInt(view.getUint32(valueOffset))
+    }
+    if (earliest === null || value < earliest) earliest = value
+  }
+  return earliest
 }
 
 function fragmentDurationTicks(
@@ -628,6 +774,7 @@ export class FragmentedMp4Ring {
   private awaitingInitializationMoov = false
   private currentFragmentParts: Uint8Array<ArrayBufferLike>[] = []
   private currentFragmentDurationTicks = 0n
+  private currentFragmentDecodeTicks: bigint | null = null
   private fragments: StoredFragment[] = []
   private timescale = 0
   private trackDefaultDurations: ReadonlyMap<number, number> =
@@ -693,6 +840,7 @@ export class FragmentedMp4Ring {
       timescale: number
       durationMs: number
       recorderSession: number
+      sourceDecodeTicks: bigint | null
     }> = []
     let consumed = 0
     try {
@@ -749,6 +897,8 @@ export class FragmentedMp4Ring {
             box,
             this.trackDefaultDurations,
           )
+          // Read BEFORE patchFragmentTimeline overwrites it on the way out.
+          this.currentFragmentDecodeTicks = fragmentDecodeTicks(box)
           continue
         }
         if (this.currentFragmentParts.length > 0) {
@@ -756,15 +906,18 @@ export class FragmentedMp4Ring {
             const durationTicks = this.currentFragmentDurationTicks
             const durationMs =
               this.timescale > 0 ? (Number(durationTicks) * 1000) / this.timescale : 0
+            const sourceDecodeTicks = this.currentFragmentDecodeTicks
             completed.push({
               bytes: concatBytes([...this.currentFragmentParts, box.bytes]),
               durationTicks,
               timescale: this.timescale,
               durationMs,
               recorderSession: this.recorderSession,
+              sourceDecodeTicks,
             })
             this.currentFragmentParts = []
             this.currentFragmentDurationTicks = 0n
+            this.currentFragmentDecodeTicks = null
           } else {
             // Non-mdat boxes between moof and mdat are normally tiny. Copying
             // them prevents a retained view from pinning the full input Blob.
@@ -789,6 +942,7 @@ export class FragmentedMp4Ring {
       this.awaitingInitializationMoov = false
       this.currentFragmentParts = []
       this.currentFragmentDurationTicks = 0n
+      this.currentFragmentDecodeTicks = null
       this.timescale = committedTimescale
       this.trackDefaultDurations = committedTrackDefaultDurations
       this.initializationCompatibility = committedInitializationCompatibility

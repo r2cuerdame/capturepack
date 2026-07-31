@@ -228,6 +228,19 @@ function fragment(
   ])
 }
 
+/** A fragment whose `traf` carries no `tfdt` at all. */
+function trexDurationFragmentWithoutTfdt(
+  durationTicks = 15_000,
+  payloadBytes = 16,
+): Uint8Array {
+  const tfhd = box('tfhd', Uint8Array.from([0, 0, 0, 8]), u32(1), u32(durationTicks))
+  const trun = box('trun', Uint8Array.from([0, 0, 1, 0]), u32(1), u32(durationTicks))
+  return join([
+    box('moof', box('mfhd', u32(0), u32(1)), box('traf', tfhd, trun)),
+    box('mdat', new Uint8Array(payloadBytes)),
+  ])
+}
+
 function trexDurationFragment(
   decodeTime: bigint,
   sampleCount = 1,
@@ -1249,6 +1262,82 @@ async function checkWebmFallbackLifecycle(): Promise<void> {
     'timeslice delivery jitter inside one recorder does not invent a frame gap',
     replay?.durationMs === 10_000 &&
       decodeTimes.join(',') === '0,75000',
+    replay === null
+      ? 'no replay'
+      : `${replay.durationMs} ms / tfdt ${decodeTimes.join(',')}`,
+  )
+}
+
+// A SOURCE THAT STOPPED PRODUCING IS NOT A RECORDING THAT RAN FAST (#116).
+//
+// The case above and the case below arrive through the SAME code path and used
+// to be indistinguishable, so the ring treated both as jitter and butt-joined
+// them. That is why display 1 of CapturePack_2026-07-31_202834 wrote 17.6 s of
+// desk as 5.29 s of media: 77 frames at an even 66.7 ms, largest gap 197 ms, in
+// a pack whose own cadence report admits a 903 ms stall.
+//
+// `tfdt` tells them apart, and always could. Delivery jitter leaves the
+// encoder's clock continuous; a source that stopped drawing leaves a hole in it.
+{
+  const ring = new FragmentedMp4Ring(30_000)
+  ring.pushBytes(join([initialization(), fragment(0n, 15_000)]), 1_000)
+  // One second of encoded media, then the desk went still. The next fragment
+  // arrives a further 900 ms later AND says so on the encoder's own clock:
+  // 15000 ticks of content ended at 15000, and the next starts at 28500.
+  ring.pushBytes(fragment(28_500n, 15_000), 2_900)
+  const replay = ring.assemble(2_900)
+  const replayBytes =
+    replay === null ? new Uint8Array(0) : new Uint8Array(replay.buffer)
+  const decodeTimes = replay === null ? [] : topLevelTfdtValues(replayBytes)
+  check(
+    'a stalled source keeps its hole instead of being compressed away',
+    decodeTimes.join(',') === '0,28500',
+    replay === null
+      ? 'no replay'
+      : `${replay.durationMs} ms / tfdt ${decodeTimes.join(',')}`,
+  )
+}
+
+// FAIL CLOSED: an encoder clock that outruns the wall is not believed.
+//
+// Placing frames at wildly wrong times is a worse failure than compressing
+// them, because compression is visible in the duration and a bad placement is
+// not. So the ring checks the span tfdt CLAIMS against the span it watched the
+// blobs arrive over, and falls back to the arithmetic that shipped.
+{
+  const ring = new FragmentedMp4Ring(30_000)
+  ring.pushBytes(join([initialization(), fragment(0n, 15_000)]), 1_000)
+  // 60 s of encoder time claimed inside 1.9 s of wall time. Impossible.
+  ring.pushBytes(fragment(900_000n, 15_000), 2_900)
+  const replay = ring.assemble(2_900)
+  const replayBytes =
+    replay === null ? new Uint8Array(0) : new Uint8Array(replay.buffer)
+  const decodeTimes = replay === null ? [] : topLevelTfdtValues(replayBytes)
+  check(
+    'an impossible encoder timeline is refused, not written',
+    decodeTimes.join(',') === '0,15000',
+    replay === null
+      ? 'no replay'
+      : `${replay.durationMs} ms / tfdt ${decodeTimes.join(',')}`,
+  )
+}
+
+// A fragment carrying no tfdt refuses the WHOLE session rather than placing
+// half of it. Half-placed is the failure nobody can see, so the two fragments
+// that DO carry a hole must lose it too — proving the refusal is session-wide
+// and not per-fragment.
+{
+  const ring = new FragmentedMp4Ring(30_000)
+  ring.pushBytes(join([initialization(), fragment(0n, 15_000)]), 1_000)
+  ring.pushBytes(fragment(28_500n, 15_000), 2_900)
+  ring.pushBytes(trexDurationFragmentWithoutTfdt(15_000), 3_900)
+  const replay = ring.assemble(3_900)
+  const replayBytes =
+    replay === null ? new Uint8Array(0) : new Uint8Array(replay.buffer)
+  const decodeTimes = replay === null ? [] : topLevelTfdtValues(replayBytes)
+  check(
+    'one tfdt-less fragment refuses the whole session, hole and all',
+    decodeTimes.join(',') === '0,15000',
     replay === null
       ? 'no replay'
       : `${replay.durationMs} ms / tfdt ${decodeTimes.join(',')}`,

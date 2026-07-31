@@ -8,6 +8,20 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 
 ### Fixed
 
+- A replay that stalled says so, instead of being compressed into a shorter one
+  that looks fine. Measured on a two-display capture: a 17.6 second recording
+  was written as 5.29 seconds of video — 77 frames spaced an even 66.7 ms apart,
+  largest gap 197 ms — in a pack whose own cadence report admitted a 903
+  millisecond stall. The holes had been folded out. Chromium had recorded them
+  all along, in a per-fragment timestamp the ring read past and then overwrote;
+  it assumed that inside one recorder the encoded durations were authoritative,
+  which is true only while the screen keeps changing. A late delivery still does
+  not invent a gap — the encoder's own clock is what tells the two apart, and it
+  always could ([#116](https://github.com/r2cuerdame/capturepack/issues/116)).
+  Two consequences worth stating: replays of a mostly-still screen are now
+  several times longer and contain real pauses, and the retention window — which
+  was being enforced against that fast clock — now keeps the number of seconds
+  it says it keeps.
 - A measured source latency outlives the capture that found it. The calibration
   succeeds only when the desk happens to move during the two seconds after a
   recorder starts, and every capture in this machine's log before one on
