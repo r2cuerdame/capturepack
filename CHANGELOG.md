@@ -50,6 +50,12 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   back, and it refuses rather than reporting a number when too few frames can be
   identified.
 
+- A pack's recorded cadence describes the replay it contains again. On a
+  multi-display capture the numbers were re-read after the editor closed and the
+  trim finished, so a capture that ran at 14.5 fps with a 16 ms worst stall
+  reached the pack as 14.2 fps and 1417 ms — measured 47 seconds later, while
+  the recorder was still running behind the open editor
+  ([#112](https://github.com/r2cuerdame/capturepack/issues/112)).
 - A display whose screen barely changed now says that its replay is not on the
   capture's clock. Such a screen makes almost no frames and the ones it makes
   are laid end to end, so 18.7 s of capture came back as 3.7 s of media whose

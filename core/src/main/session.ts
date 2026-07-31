@@ -330,6 +330,22 @@ interface FrozenDisplay {
   height: number
   replayWebm: Buffer | null
   replayDurationMs: number
+  /**
+   * WHAT THE RECORDER HAD ACHIEVED WHEN THIS REPLAY WAS TAKEN (#112).
+   *
+   * The renderer's cadence sampler is a lifetime accumulator started once at
+   * recorder start and deliberately kept alive across captures, so its
+   * `worstStallMs` is a running max and its `achievedFps` covers everything
+   * since warm-up. Reading it at finalize time therefore described the editing
+   * session: a capture whose log said 14.5 fps and a 16 ms stall was written to
+   * the pack as 14.2 fps and 1417 ms, measured 47 seconds later while the
+   * editor was open over the desktop it was still recording.
+   *
+   * SPEC 5.3 requires the opposite - "These fields MUST describe the source and
+   * encoder(s) that produced the declared replay" - so the value is frozen
+   * beside the bytes it describes and carried, never re-read.
+   */
+  cadence?: ManifestCadence
   /** The tick clock's value at this replay's t=0 (#112); absent if unknown. */
   replayOriginMs?: number
   /** Exact same-frame encoded PTS -> shared presentation-clock observations. */
@@ -528,6 +544,10 @@ async function freezeDisplays(settings: Settings): Promise<{
           height: snap.height,
           replayWebm: null,
           replayDurationMs: 0,
+          ...(() => {
+            const cadence = manifestCadence(display.id)
+            return cadence === undefined ? {} : { cadence }
+          })(),
           replayMimeType: null,
           replayFile: null,
           replayRequestWallMs: request?.replayRequestWallMs,
@@ -545,6 +565,10 @@ async function freezeDisplays(settings: Settings): Promise<{
         height: snap.height,
         replayWebm: replay.buffer,
         replayDurationMs: replay.durationMs,
+        ...(() => {
+          const cadence = manifestCadence(display.id)
+          return cadence === undefined ? {} : { cadence }
+        })(),
         ...(replay.originMs === undefined ? {} : { replayOriginMs: replay.originMs }),
         ...(replay.clockAnchors === undefined
           ? {}
@@ -635,11 +659,9 @@ function toDisplayCaptures(
             return offsetMs === undefined ? {} : { replayClockOffsetMs: offsetMs }
           })()),
     // The recorder's own account of what it managed (#82), carried into the
-    // pack so the replay's quality is a fact a reader can see.
-    ...(() => {
-      const cadence = manifestCadence(d.id)
-      return cadence === undefined ? {} : { cadence }
-    })(),
+    // pack so the replay's quality is a fact a reader can see — as it stood
+    // when this replay was taken, not when the finalizer happened to run (#112).
+    ...(d.cadence === undefined ? {} : { cadence: d.cadence }),
     // A fresh capture writes the canonical names; they travel with the entry so
     // every writer uses the SAME string the manifest declares.
     snapshotFile: displaySnapshotName(d.index),

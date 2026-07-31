@@ -201,5 +201,48 @@ console.log('\nSupported capture-rate floor')
   )
 }
 
+
+// THE PACK MUST DESCRIBE THE REPLAY IT CONTAINS, NOT THE SESSION THAT FOLLOWED (#112).
+//
+// The renderer's sampler is a lifetime accumulator started once at recorder
+// start and deliberately kept alive across captures, so worstStallMs is a
+// running max and achievedFps covers everything since warm-up. Reading it at
+// finalize time described the editing session instead: a capture whose log
+// said 14.5 fps and a 16 ms stall reached the pack as 14.2 fps and 1417 ms,
+// measured 47 seconds later with the editor open over the desktop it was
+// still recording. Measured on CapturePack_2026-07-31_185602.
+//
+// SPEC 5.3: "These fields MUST describe the source and encoder(s) that
+// produced the declared replay."
+console.log('\nCadence is frozen beside the replay it describes')
+{
+  const session = readFileSync(path.join(process.cwd(), 'src/main/session.ts'), 'utf8')
+  check(
+    'a frozen display carries the cadence measured when its replay was taken',
+    session.includes('cadence?: ManifestCadence')
+      && (session.match(/const cadence = manifestCadence\(display\.id\)/gu) ?? []).length === 2,
+  )
+  check(
+    'the display captures read that frozen value rather than the live registry',
+    session.includes('...(d.cadence === undefined ? {} : { cadence: d.cadence })')
+      && !session.includes('const cadence = manifestCadence(d.id)'),
+  )
+  // manifestCadence itself still exists for the one caller that legitimately
+  // reads at capture time - the top-level focused value.
+  check(
+    'the live read survives only where it is taken at the capture instant',
+    session.includes('const focusedCadence = manifestCadence(display.id)'),
+  )
+  const renderer = readFileSync(
+    path.join(process.cwd(), 'src/renderer/capture/capture.ts'),
+    'utf8',
+  )
+  check(
+    'the sampler really is a lifetime accumulator, which is why freezing matters',
+    // Two matches: the declaration and its single call site at recorder start.
+    (renderer.match(/startCadenceMonitor\(\)/gu) ?? []).length === 2
+      && renderer.includes('cadence sampler and context clock deliberately survive'),
+  )
+}
 console.log(`\n${passed} passed, ${failed} failed`)
 if (failed > 0) process.exitCode = 1
