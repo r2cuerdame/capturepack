@@ -14,6 +14,7 @@ import * as path from 'node:path'
 import { IPC } from '../shared/ipc'
 import { REPLAY_TIMEOUT_MS } from '../shared/captureTimeouts'
 import { manifestSourceLatencyFrom } from '../shared/types'
+import { isApplicableExposureLatency } from '../shared/exposureAlignment'
 import type {
   EditorAnnotationAddedPayload,
   EditorDisplayPayload,
@@ -42,7 +43,8 @@ import type {
   ImageCaptureScope,
   ImageCropBounds,
 } from '../shared/captureMedia'
-import { rebaseAnnotationClock } from '../shared/motion'
+import { rebaseAnnotationClock,
+  shiftAnnotationToPicture } from '../shared/motion'
 import {
   displayReplayRangeMs,
   observedReplayClockOffsetMs,
@@ -76,6 +78,7 @@ import {
   takeDisplaySnapshots,
   recorderCadence,
   recorderSourceLatency,
+  recorderPictureLatency,
 } from './capture'
 import type { DisplaySnapshot, ReplayFetch } from './capture'
 import {
@@ -2070,7 +2073,40 @@ async function runFlow(settings: Settings): Promise<void> {
   const trim = replayWebm === null ? null : resolveTrim(outcome.payload, replayDurationMs)
   const keptRange: TrimRange =
     trim ?? { startMs: 0, endMs: replayDurationMs, lengthMs: replayDurationMs }
-  const finalAnnotations = trim === null ? annotations : rebaseAnnotationsForTrim(annotations, trim)
+  const trimmedAnnotations =
+    trim === null ? annotations : rebaseAnnotationsForTrim(annotations, trim)
+  // PUT THE OBSERVATIONS ON THE PICTURE'S CLOCK (#89).
+  //
+  // GOAL "The box sits on the picture": a tracked box must sit on the window as
+  // the PICTURE shows it. The recorder puts pixels on the glass late, so every
+  // observation moves later by that measured amount.
+  //
+  // AFTER the trim, deliberately. The trim rebases onto the kept range's clock
+  // and this rebases onto the picture's; doing them in the other order would
+  // shift observations and then cut against times that no longer meant what the
+  // cut assumed.
+  //
+  // The value comes from the PREVIOUS capture of this display, measured from
+  // that pack's own pixels once it was written — see measureExposureLatency in
+  // annotatedRender.ts for why every placement that measures the current one
+  // was refused. So the first capture on a machine is uncorrected, which is
+  // exactly the case SPEC §5.3's `age_ms` exists to declare.
+  const pictureLatency = recorderPictureLatency(display.id)
+  const appliedLatency =
+    pictureLatency !== null && isApplicableExposureLatency(pictureLatency.latencyMs)
+      ? pictureLatency
+      : null
+  const finalAnnotations =
+    appliedLatency === null
+      ? trimmedAnnotations
+      : trimmedAnnotations.map((a) => shiftAnnotationToPicture(a, appliedLatency.latencyMs))
+  if (appliedLatency !== null) {
+    logInfo(
+      `[capture] annotations placed on the picture's clock: ` +
+        `+${appliedLatency.latencyMs.toFixed(1)} ms measured ` +
+        `${String(Math.round((Date.now() - appliedLatency.measuredAtMs) / 1000))}s ago`,
+    )
+  }
   const finalSnapshotTMs =
     trim === null ? snapshotTMs : rebaseSnapshotTMsForTrim(snapshotTMs, trim)
   const finalTimeline: TimelineFile =

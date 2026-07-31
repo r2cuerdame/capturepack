@@ -28,6 +28,8 @@ import {
   type ExposureAlignmentInput,
   type FrameScoreRow,
 } from '../src/shared/exposureAlignment'
+import { shiftAnnotationToPicture } from '../src/shared/motion'
+import type { Annotation } from '../src/shared/types'
 
 let passed = 0
 let failed = 0
@@ -907,6 +909,103 @@ console.log('\nN. the edge scorer, on either kind of plane')
     'the measurement job draws and records nothing',
     render.includes("payload.measure !== undefined")
       && render.includes('a measurement job needs a replay'),
+  )
+}
+
+// O. WHAT MOVES ONTO THE PICTURE'S CLOCK, AND WHAT MUST NOT (#89).
+//
+// Only the OBSERVATIONS. A lifetime is when the author wanted the box shown and
+// a keyframe is where the author put it - neither is a measurement of the
+// recorder, so neither is the recorder's to move. `picked_at_ms` does move,
+// because it names the instant an observation was taken from and has to keep
+// naming the same one; `bounds` is left alone for the same reason, since it is
+// the rectangle at that moment and the moment moved with its samples.
+console.log('\nO. shifting one annotation onto the picture')
+{
+  const authored = {
+    annotation_id: 'ann_pic',
+    type: 'box',
+    bounds: { x: 10, y: 20, width: 30, height: 40 },
+    text: '',
+    numbered: false,
+    blur: false,
+    created_at: '2026-08-01T00:00:00.000Z',
+    z: 1,
+    start_ms: 1_000,
+    end_ms: 5_000,
+    keyframes: [{ t_ms: 2_000, x: 0, y: 0, width: 10, height: 10 }],
+    tracking: {
+      enabled: true,
+      picked_at_ms: 1_500,
+      samples: [
+        { t_ms: 1_000, x: 0, y: 0, width: 10, height: 10 },
+        { t_ms: 1_500, x: 50, y: 0, width: 10, height: 10 },
+        { t_ms: 4_900, x: 90, y: 0, width: 10, height: 10 },
+      ],
+    },
+  } as unknown as Annotation
+  const moved = shiftAnnotationToPicture(authored, 127)
+  check(
+    'every observation moves by the measured latency',
+    (moved.tracking.samples ?? []).map((s) => s.t_ms).join(',') === '1127,1627,5027',
+    (moved.tracking.samples ?? []).map((s) => s.t_ms).join(','),
+  )
+  check(
+    'the pick instant moves with the sample it names',
+    moved.tracking.picked_at_ms === 1_627,
+    String(moved.tracking.picked_at_ms),
+  )
+  check(
+    'the authored lifetime does not move — it is not a measurement',
+    moved.start_ms === 1_000 && moved.end_ms === 5_000,
+    `${String(moved.start_ms)}-${String(moved.end_ms)}`,
+  )
+  check(
+    'nor do authored keyframes, which are where the AUTHOR put the box',
+    (moved.keyframes ?? []).map((k) => k.t_ms).join(',') === '2000',
+  )
+  check(
+    'and bounds is untouched, because the moment it belongs to moved with it',
+    JSON.stringify(moved.bounds) === JSON.stringify(authored.bounds),
+  )
+  // A sample pushed past the declared end is MOVED, not dropped. Clamping is a
+  // trim's job; doing it here as well would be a deletion disguised as an
+  // alignment.
+  check(
+    'an observation pushed past the lifetime survives',
+    (moved.tracking.samples ?? []).some((s) => s.t_ms > (moved.end_ms ?? 0)),
+  )
+  const untracked = { ...authored, tracking: { enabled: false } } as unknown as Annotation
+  check(
+    'a hand-drawn box is returned unchanged',
+    shiftAnnotationToPicture(untracked, 127) === untracked,
+  )
+  check(
+    'and so is any box when there is nothing measured to apply',
+    shiftAnnotationToPicture(authored, 0) === authored,
+  )
+}
+{
+  const session = readFileSync(path.join(process.cwd(), 'src/main/session.ts'), 'utf8')
+  check(
+    'the shift happens AFTER the trim, on the kept range',
+    session.indexOf('rebaseAnnotationsForTrim(annotations, trim)')
+      < session.indexOf('shiftAnnotationToPicture(a, appliedLatency.latencyMs)'),
+  )
+  check(
+    'and only from a value that passed the applicability test',
+    session.includes('isApplicableExposureLatency(pictureLatency.latencyMs)')
+      && session.includes('recorderPictureLatency(display.id)'),
+  )
+  const render = readFileSync(
+    path.join(process.cwd(), 'src/main/annotatedRender.ts'),
+    'utf8',
+  )
+  check(
+    'the measurement refuses a still capture rather than inventing a number',
+    render.includes('MINIMUM_MEASURE_CANDIDATES')
+      && render.includes('MINIMUM_MEASURE_SPAN_MS')
+      && render.includes('if (fit === null || !isApplicableExposureLatency(fit.latencyMs)) return null'),
   )
 }
 
