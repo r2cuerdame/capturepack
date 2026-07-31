@@ -121,6 +121,7 @@ const EN = {
   'app.hotkeyFailed':
     'Could not register the {hotkey} hotkey. Another application may already be using it.',
   'app.updateReady': 'CapturePack {version} available — restart to update',
+  'app.upToDate': 'CapturePack is up to date ({version})',
   'app.captureFailed': 'Capture failed: {error}',
   'app.reeditFailed': 'Re-edit failed: {error}',
   'app.saveFailedTitle': 'CapturePack save failed',
@@ -672,6 +673,7 @@ const KO: Record<I18nKey, string> = {
   'app.hotkeyFailed':
     '{hotkey} 단축키를 등록하지 못했습니다. 다른 프로그램이 이미 사용 중일 수 있습니다.',
   'app.updateReady': 'CapturePack {version} 사용 가능 — 재시작하면 업데이트됩니다',
+  'app.upToDate': 'CapturePack은 최신 버전입니다 ({version})',
   'app.captureFailed': '캡처 실패: {error}',
   'app.reeditFailed': '다시 편집 실패: {error}',
   'app.saveFailedTitle': 'CapturePack 저장 실패',
@@ -1180,6 +1182,7 @@ const JA: Record<I18nKey, string> = {
   'app.hotkeyFailed':
     '{hotkey} ホットキーを登録できませんでした。ほかのアプリが既に使用している可能性があります。',
   'app.updateReady': 'CapturePack {version} が利用可能 — 再起動で更新されます',
+  'app.upToDate': 'CapturePack は最新です ({version})',
   'app.captureFailed': 'キャプチャに失敗しました: {error}',
   'app.reeditFailed': '再編集に失敗しました: {error}',
   'app.saveFailedTitle': 'CapturePack の保存に失敗しました',
@@ -1689,6 +1692,7 @@ const ZH: Record<I18nKey, string> = {
     '让屏幕的最近片段随时可以截取。关闭后不录制任何内容，快捷键只会给出提示。',
   'app.hotkeyFailed': '无法注册 {hotkey} 快捷键。可能已被其他应用占用。',
   'app.updateReady': 'CapturePack {version} 可用 — 重启即可更新',
+  'app.upToDate': 'CapturePack 已是最新版本 ({version})',
   'app.captureFailed': '捕获失败：{error}',
   'app.reeditFailed': '重新编辑失败：{error}',
   'app.saveFailedTitle': 'CapturePack 保存失败',
@@ -2193,6 +2197,7 @@ const ES: Record<I18nKey, string> = {
   'app.hotkeyFailed':
     'No se pudo registrar el atajo {hotkey}. Puede que otra aplicación ya lo esté usando.',
   'app.updateReady': 'CapturePack {version} disponible — reinicia para actualizar',
+  'app.upToDate': 'CapturePack está actualizado ({version})',
   'app.captureFailed': 'Fallo al capturar: {error}',
   'app.reeditFailed': 'Fallo al reeditar: {error}',
   'app.saveFailedTitle': 'Fallo al guardar el CapturePack',
@@ -2706,6 +2711,7 @@ const FR: Record<I18nKey, string> = {
   'app.hotkeyFailed':
     "Impossible d'enregistrer le raccourci {hotkey}. Une autre application l'utilise peut-être déjà.",
   'app.updateReady': 'CapturePack {version} disponible — redémarrez pour mettre à jour',
+  'app.upToDate': 'CapturePack est à jour ({version})',
   'app.captureFailed': 'Échec de la capture : {error}',
   'app.reeditFailed': 'Échec de la réédition : {error}',
   'app.saveFailedTitle': "Échec de l'enregistrement du CapturePack",
@@ -3221,6 +3227,7 @@ const DE: Record<I18nKey, string> = {
   'app.hotkeyFailed':
     'Der Hotkey {hotkey} konnte nicht registriert werden. Möglicherweise verwendet ihn bereits eine andere Anwendung.',
   'app.updateReady': 'CapturePack {version} verfügbar — zum Aktualisieren neu starten',
+  'app.upToDate': 'CapturePack ist aktuell ({version})',
   'app.captureFailed': 'Aufnahme fehlgeschlagen: {error}',
   'app.reeditFailed': 'Erneutes Bearbeiten fehlgeschlagen: {error}',
   'app.saveFailedTitle': 'Speichern des CapturePacks fehlgeschlagen',
@@ -3739,6 +3746,7 @@ const PT: Record<I18nKey, string> = {
   'app.hotkeyFailed':
     'Não foi possível registrar o atalho {hotkey}. Outro aplicativo pode já estar usando esse atalho.',
   'app.updateReady': 'CapturePack {version} disponível — reinicie para atualizar',
+  'app.upToDate': 'O CapturePack está atualizado ({version})',
   'app.captureFailed': 'Falha na captura: {error}',
   'app.reeditFailed': 'Falha ao reeditar: {error}',
   'app.saveFailedTitle': 'Falha ao salvar o CapturePack',
@@ -4253,6 +4261,7 @@ const RU: Record<I18nKey, string> = {
   'app.hotkeyFailed':
     'Не удалось зарегистрировать сочетание {hotkey}. Возможно, его уже использует другое приложение.',
   'app.updateReady': 'Доступен CapturePack {version} — перезапустите для обновления',
+  'app.upToDate': 'CapturePack обновлён до последней версии ({version})',
   'app.captureFailed': 'Сбой захвата: {error}',
   'app.reeditFailed': 'Сбой повторного редактирования: {error}',
   'app.saveFailedTitle': 'Не удалось сохранить CapturePack',

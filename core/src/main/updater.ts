@@ -41,7 +41,24 @@ let upToDateTimer: NodeJS.Timeout | null = null
 // follows THIS value rather than the transient state so the two never disagree.
 let lastDownloadedVersion: string | null = null
 
-function setStatus(next: UpdaterStatusPayload): void {
+/**
+ * A check the user asked for is owed an answer (#111).
+ *
+ * The four-hourly automatic check is not: "you are up to date" every four hours
+ * is the routine toast #103 removed, which a locked screen reduces to an app
+ * name and a red badge and which then reads as a failed capture. So the flag
+ * rides from the button press to the state that answers it, and is consumed
+ * whatever that answer turns out to be.
+ */
+let manualCheckPending = false
+
+function setStatus(incoming: UpdaterStatusPayload): void {
+  // 'checking' and 'downloading' are progress, not answers; anything else ends
+  // the question the user asked.
+  const answersTheUser =
+    manualCheckPending && incoming.state !== 'checking' && incoming.state !== 'downloading'
+  if (answersTheUser) manualCheckPending = false
+  const next = answersTheUser ? { ...incoming, userRequested: true } : incoming
   // No-op transitions are dropped: 'download-progress' fires once per second
   // with a byte-identical payload, and every notify() costs a full tray menu
   // rebuild (replacing the native menu model under an OPEN context menu) plus
@@ -49,7 +66,8 @@ function setStatus(next: UpdaterStatusPayload): void {
   if (
     next.state === status.state &&
     next.version === status.version &&
-    next.message === status.message
+    next.message === status.message &&
+    next.userRequested === status.userRequested
   ) {
     return
   }
@@ -177,12 +195,19 @@ export function initUpdater(opts: {
  * item and the About window follow along.
  */
 export async function checkNow(): Promise<void> {
+  // From here on this is the user's question, and whatever comes back is its
+  // answer (#111). Set before the early returns so a dev build still answers.
+  manualCheckPending = true
   if (!app.isPackaged) {
     // Dev build: report the state instead of touching electron-updater.
     setStatus({ state: 'dev' })
+    manualCheckPending = false
     return
   }
-  if (!initialized) return
+  if (!initialized) {
+    manualCheckPending = false
+    return
+  }
   // A check/download already in flight, or an update already waiting for the
   // "Restart and update" item, needs no second request. 'available' counts as
   // in flight: autoDownload has already started fetching, it just has not
@@ -194,6 +219,8 @@ export async function checkNow(): Promise<void> {
     status.state === 'downloading' ||
     status.state === 'downloaded'
   ) {
+    // Nothing new is being asked, so nothing new will answer.
+    manualCheckPending = false
     return
   }
   try {

@@ -12,6 +12,7 @@ const html = read('src/renderer/about/about.html')
 const tray = read('src/main/tray.ts')
 const index = read('src/main/index.ts')
 const i18n = read('src/shared/i18n.ts')
+const updater = read('src/main/updater.ts')
 
 const checks = [
   ['About owns a dedicated log action', ipc.includes("aboutOpenLogs: 'about:open-logs'")],
@@ -71,6 +72,38 @@ const checks = [
     'the update toast has exactly one implementation',
     (index.match(/'app\.updateReady'/gu) ?? []).length === 1 &&
       index.includes('const showUpdateToast = (version: string): void =>'),
+  ],
+  [
+    // A CHECK THE USER ASKED FOR IS OWED AN ANSWER (#111).
+    //
+    // "Check for updates…" with nothing to report changed a tray label for a
+    // few seconds and did nothing else, so pressing it looked the same as
+    // pressing it while it was broken.
+    'pressing Check for updates says so when there is nothing to update',
+    index.includes("status.state === 'up-to-date' && status.userRequested === true") &&
+      (index.match(/'app\.upToDate'/gu) ?? []).length === 1,
+  ],
+  [
+    // The four-hourly automatic check must NOT toast: that is exactly the
+    // routine update noise #103 removed, which a locked screen reduces to an
+    // app name and a red badge indistinguishable from a failed capture.
+    'the automatic check stays silent, because only a question gets an answer',
+    updater.includes('let manualCheckPending = false') &&
+      updater.includes('manualCheckPending = true') &&
+      /answersTheUser[\s\S]{0,200}manualCheckPending = false/u.test(updater) &&
+      // Progress is not an answer; the flag survives 'checking' and waits.
+      updater.includes("incoming.state !== 'checking' && incoming.state !== 'downloading'"),
+  ],
+  [
+    // A flag that outlives its question would attach the user's answer to the
+    // next automatic result instead.
+    'a request that cannot produce a new answer clears itself',
+    (updater.match(/manualCheckPending = false/gu) ?? []).length >= 4,
+  ],
+  [
+    'every locale answers, not just the one that was tested',
+    (i18n.match(/'app\.upToDate'/gu) ?? []).length ===
+      (i18n.match(/'app\.updateReady'/gu) ?? []).length,
   ],
 ]
 

@@ -1304,6 +1304,17 @@ export interface UpdaterStatusPayload {
     | 'dev'
   version?: string
   message?: string
+  /**
+   * This state is the answer to a check the USER asked for, from the tray or
+   * About (#111).
+   *
+   * "Already up to date" is worth saying exactly once, to the person who just
+   * pressed the button and is waiting to hear something. On the four-hourly
+   * automatic check it is the noise #103 removed: a routine toast that the lock
+   * screen reduces to a red badge and an app name, indistinguishable from a
+   * capture that failed. So the answer travels with the question.
+   */
+  userRequested?: boolean
 }
 
 // ---------------------------------------------------------------------------

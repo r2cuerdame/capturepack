@@ -50,6 +50,10 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   back, and it refuses rather than reporting a number when too few frames can be
   identified.
 
+- Pressing Check for updates now says so when there is nothing to update, instead
+  of changing a tray label for a few seconds and otherwise looking identical to a
+  broken updater ([#111](https://github.com/r2cuerdame/capturepack/issues/111)).
+  The four-hourly automatic check stays silent.
 - Extending a box's lifetime to the end of the replay no longer drags its start
   backwards. A ten-second lifetime asked for on a box starting at 12.0 s of a
   14.7 s replay became 4.7 s–14.7 s, drawing the box over seven seconds in which

@@ -776,6 +776,21 @@ function main(): void {
             (status.version === undefined ? '' : ` v${status.version}`) +
             (status.message === undefined ? '' : ` — ${status.message}`),
         )
+        // A CHECK THE USER ASKED FOR IS OWED AN ANSWER (#111).
+        //
+        // "Check for updates…" with nothing to report changed a tray label for
+        // a few seconds and otherwise did nothing, so pressing it looked
+        // identical to pressing it while it was broken. The toast is only for a
+        // check the user actually requested — `userRequested` does not travel
+        // with the four-hourly automatic one, which is precisely the routine
+        // update noise #103 removed.
+        if (status.state === 'up-to-date' && status.userRequested === true) {
+          new Notification({
+            title: 'CapturePack', // product name — never translated
+            body: uiT(settings)('app.upToDate', { version: app.getVersion() }),
+          }).show()
+          return
+        }
         if (readyVersion === null || readyVersion === notifiedVersion) return
         notifiedVersion = readyVersion
         if (sessionLocked) {
