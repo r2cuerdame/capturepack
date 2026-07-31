@@ -298,72 +298,79 @@ That last point has no obviously right answer and is the owner's call.
 
 ---
 
-## The box sits on the picture (0.4.0, decided 2026-08-01)
+## The still carries the context; the video carries the time (decided 2026-08-01)
 
-Owner's requirement, in their words: *"이미지에 맞춰야돼"* — it has to match the
-image — and *"내가 원하는건 제대로 싱크가 맞는거야"*. This is the same principle
-[The picture is the clock](#the-picture-is-the-clock-81) already states, now
-with a number behind it and a place to apply it.
+Owner's decision, final: **a box in a replay no longer follows a moving object.**
+Video keeps hand-placed boxes with lifetimes. Everything the product spends on
+precision goes to the captured instant instead, where it can be spent honestly.
 
-### What is left, measured
+This supersedes both the removal of 2026-07-31 and its reversal, and it is
+recorded with the reasoning because the reasoning is what makes it stick.
 
-Two things made a box disagree with the window it names. The first was a
-recorder that wrote a stalled screen as a shorter one, and it is fixed — see
-[#116](https://github.com/r2cuerdame/capturepack/issues/116). What remains is
-one constant:
+### What was actually wrong, in the end
 
-| capture | display | measured |
-|---|---|---|
-| CapturePack_2026-08-01_011147 | 2, focused | 126.5, 125.5, 129.0 ms |
-| | 1 | 107.5, 108.0 ms |
+Not one thing. Two, and only one of them was ours.
 
-Three independent segments of the focused display agree, and agree with the
-118–127 ms an entirely different estimator found on earlier packs. The picture
-is about **127 ms behind its own timestamp**: a frame stamped `t` shows the
-desktop as it was at `t - 127`. The box is at the true position and the picture
-is late, so the box appears to run ahead — at 0.3 px/ms that is 38 px, which is
-why it is visible even when dragging slowly.
+**The recorder lied about its own duration.** A quiet screen was written as a
+shorter recording — 17.6 s of desk as 5.29 s of media. That was a defect in this
+repository, it is fixed, and it is fixed for good reasons that have nothing to
+do with tracking: `report.md`, the MCP answers, DOM event times and every
+annotation lifetime ride that clock. See
+[#116](https://github.com/r2cuerdame/capturepack/issues/116). Keep it whatever
+else changes.
 
-**It is not per-display.** An earlier reading of 242 ms on display 1 was the
-harness measuring on a clock it had guessed at; the two displays are 19 ms
-apart, less than a third of a frame.
+**The picture is about 100 ms behind its own timestamp**, and that one is not a
+defect. It is the sum of a desktop compositor, a capture pipeline and an
+encoder, and no arrangement of this code removes it. Correcting for it needs a
+number, and the number would not settle: the same capture answered 51 ms scored
+against the annotation's own samples and 92 ms against the context timeline, and
+across captures the offline harness returned 92, 94, 109, 121 and 127. Five
+separate confounds were found and fixed on the way to those figures — a decoder
+inventing frames, a sweep clipped at its own boundary, a clock assumed to be
+zero, still frames averaged in, and two records of the same window disagreeing.
+Each fix was right and the answer moved every time.
 
-### The decision
+### Why that ends the feature rather than delaying it
 
-**Correct at save time, on the samples themselves.**
+A tracked box asks the picture to be precise to a fraction of a frame. The
+picture is 15 frames a second on the display being worked on and 2 to 5 on a
+quiet one, where a correctly placed box still freezes for a second at a time.
+The precision the feature needs is not in the medium it is drawn on.
 
-The alternative — correcting where the box is drawn — was rejected for a reason
-already recorded above: it needs at least two application sites, which the
-one-application-site rule forbids, and it would still leave the annotated
-replay, `report.md` and every third-party SPEC reader uncorrected. A pack that
-is only right inside our own editor is not a pack that explains anything.
+The last design that could have worked measured one capture and corrected the
+next. The owner killed it on the only ground that mattered, and it was not
+technical: *"첫 캡처는 측정용이라 버리는 겁니다"* is not a sentence anyone can be
+told about their own screenshot.
 
-The objection to save time was that it is irreversible per pack. It is answered
-by writing down what was applied: `media.cadence.source_latency` exists for
-exactly this, and a reader that wants the raw observation can undo it.
+### What is kept, and why it is the better half
 
-### Where the number comes from
+A **still** has no clock to disagree with. There is no exposure latency between
+a snapshot and itself, no second display's origin, no compressed time base and
+no per-frame budget — every hard problem above is a property of matching moving
+geometry to a moving picture, and a single instant has neither.
 
-**Each pack measures itself, from its own pixels, at save time.** No per-machine
-calibration, no shipped constant, no setting to get wrong. The value is
-evidence about that capture, produced by the same estimator the offline harness
-uses — one source, one answer.
+So the captured instant gets everything: the full UIA tree and the Chromium DOM,
+including the Electron windows a frame budget written for 15 fps had been
+excluding ([#117](https://github.com/r2cuerdame/capturepack/issues/117)). That
+budget existed to feed per-frame tracking. It is now free.
 
-A capture whose landmark never moves cannot be measured, and is then not
-corrected, and says so. That is the same rule the cadence fields already obey:
-a quantity nobody measured is not reported as one.
+**Video keeps** the replay, the frozen snapshot with its deep context, boxes
+with lifetimes, blur, trim, the annotated replay and keyframe stills. It answers
+*what happened, and when*.
 
-### What this does and does not fix
+**Video loses** `tracking.samples` and object selection at an arbitrary past
+frame. It stops claiming to know where a control was eight seconds ago, which it
+never reliably did.
 
-**The focused display will agree with its picture to within a frame.** That is
-where annotation actually happens.
+`tracking` is not removed from the specification. Packs already in the world
+carry it and §13.1 obliges readers to keep reading them.
 
-**A non-focused display will improve but not converge**, because it carries a
-second, independent error: its replay clock origin is often unobserved, and the
-fallback assumption was worth ±134 ms in the capture above. That is not exposure
-and no exposure correction touches it. Measuring it properly costs the recording
-about a third of its frame rate — 14.8 fps against 10.1, measured twice with the
-roles swapped — so it stays a deliberate non-goal, revisitable as a setting.
+### The rule this cost
+
+**Measure before diagnosing, make the measurement readable before trusting it,
+and check what a design asks of the person using it before checking whether it
+compiles.** Every wrong turn here came from one of those three, and the third
+one is the one that ended it.
 
 ---
 

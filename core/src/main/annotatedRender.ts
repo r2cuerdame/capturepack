@@ -17,10 +17,6 @@ import { mkdir, rm, writeFile } from 'node:fs/promises'
 import * as path from 'node:path'
 import { IPC } from '../shared/ipc'
 import type { RenderFramePayload, RenderResultPayload, RenderStartPayload } from '../shared/ipc'
-import {
-  fitOffsetByPixelScore,
-  isApplicableExposureLatency,
-} from '../shared/exposureAlignment'
 import type { Language } from '../shared/i18n'
 import { displayAnnotatedName, displayFramesDir, keyframeFileName } from '../shared/keyframes'
 import type { Annotation, ManifestKeyframe } from '../shared/types'
@@ -459,124 +455,6 @@ export async function renderTrimmedReplay(
         ? 'video/webm'
         : result.producedMimeType,
   }
-}
-
-/**
- * MEASURE THE EXPOSURE LATENCY OF A PACK'S OWN REPLAY (#89).
- *
- * Runs AFTER the pack is written, so the save pays nothing, and only when the
- * pack carries a track — a capture with no moving box has neither anything to
- * measure against nor anything to correct. The answer belongs to the NEXT
- * capture of that display, which is what `media.cadence.source_latency`'s
- * `age_ms` was designed to declare.
- *
- * Every other placement for this was evaluated against the real flow and
- * refuted: the editor holds no usable pixels, a pass before the save costs the
- * save-first promise about a second on every capture to buy something most
- * captures cannot deliver, the annotated render draws the very boxes in
- * question and decodes the trim's output rather than the capture, and the
- * per-machine value that already exists is a different leg of the same journey.
- *
- * Returns null whenever the evidence will not support a number. That is not a
- * failure path, it is the normal one: a still screen produces no fit, and this
- * repo does not report a quantity nobody measured.
- */
-export async function measureExposureLatency(
-  job: ExposureMeasureJob,
-): Promise<{
-  latencyMs: number
-  resolutionMs: number
-  frames: number
-  contrast: number
-} | null> {
-  const candidates = job.candidates
-  if (candidates.length < MINIMUM_MEASURE_CANDIDATES) return null
-  const spanMs =
-    (candidates[candidates.length - 1]?.tMs ?? 0) - (candidates[0]?.tMs ?? 0)
-  if (spanMs < MINIMUM_MEASURE_SPAN_MS) return null
-
-  const { result } = await enqueueRender(async (signal) => {
-    const payload: RenderStartPayload = {
-      replayWebm: await copyBufferResponsively(job.replayWebm, signal),
-      replayMimeType: job.replayMimeType,
-      annotations: [],
-      width: job.width,
-      height: job.height,
-      fps: job.fps,
-      durationMs: job.durationMs,
-      measure: {
-        candidates: candidates.map((c) => ({ ...c })),
-        candidateWidth: job.candidateWidth,
-        sampleCount: MEASURE_SAMPLE_COUNT,
-        candidateWindowMs: MEASURE_CANDIDATE_WINDOW_MS,
-      },
-    }
-    // Seeks, not playback: the budget is per seek, not per second of replay.
-    const outcome = await runRenderWindow(
-      payload,
-      MEASURE_SAMPLE_COUNT * 2_000 + RENDER_TIMEOUT_SLACK_MS,
-      undefined,
-      signal,
-    )
-    throwIfRenderAborted(signal)
-    return outcome
-  })
-
-  const rows = result.scoreRows ?? []
-  const fit = fitOffsetByPixelScore(
-    rows,
-    { minMs: -MEASURE_SEARCH_MS, maxMs: MEASURE_SEARCH_MS },
-    1,
-    job.replayClockOffsetMs,
-    MEASURE_CANDIDATE_WINDOW_MS,
-  )
-  if (fit === null || !isApplicableExposureLatency(fit.latencyMs)) return null
-  return {
-    latencyMs: fit.latencyMs,
-    resolutionMs: fit.resolutionMs,
-    frames: fit.comparedFrames,
-    // How sharply the sweep decided. A flat total is an answer the evidence did
-    // not really give, and reporting the number without it would hide that.
-    contrast: fit.contrast,
-  }
-}
-
-/** A window that never moved is not evidence, and neither is a twitch. */
-const MINIMUM_MEASURE_CANDIDATES = 12
-const MINIMUM_MEASURE_SPAN_MS = 500
-/**
- * Frames to seek to. The estimator has been measured to resolve to a few
- * milliseconds on twelve frames and to ±1 ms on a hundred, so this buys most of
- * the precision for a fraction of the decode.
- */
-const MEASURE_SAMPLE_COUNT = 40
-const MEASURE_CANDIDATE_WINDOW_MS = 350
-/**
- * Symmetric and far wider than any answer it may give. A sweep that cannot
- * reach past its own answer has no way to say it was clipped — the first field
- * run reported -59 ms with a ±1.5 ms resolution, one step from its boundary.
- */
-const MEASURE_SEARCH_MS = 400
-
-export interface ExposureMeasureJob {
-  replayWebm: Buffer
-  replayMimeType?: string
-  width: number
-  height: number
-  fps: number
-  durationMs: number
-  /** The width the candidate rectangles are expressed in (snapshot pixels). */
-  candidateWidth: number
-  /** SPEC §5.6: display time from pack time. Zero on the focused display. */
-  replayClockOffsetMs: number
-  /** The observed rectangles, ascending, in this display's own pixels. */
-  candidates: ReadonlyArray<{
-    tMs: number
-    x: number
-    y: number
-    width: number
-    height: number
-  }>
 }
 
 /** A finished render: the video plus the stills that were streamed in. */

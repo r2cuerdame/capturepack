@@ -38,7 +38,6 @@ import {
 import { resolvedReplayClockOffsetMs } from '../src/shared/displayClock'
 import {
   fitOffsetByPixelScore,
-  rectangleEdgeScore,
   type FrameScoreRow,
   type PixelScoreFit,
 } from '../src/shared/exposureAlignment'
@@ -641,16 +640,44 @@ async function invertFrames(
  * merely lands on busy content scores no better than its surroundings and a
  * genuine window boundary stands out.
  */
-/** The harness's pixels are an ffmpeg gray plane; the scorer is shared. */
 function edgeScore(
   frame: Buffer,
   video: ProbedVideo,
   scale: number,
   bounds: Bounds,
 ): number | null {
-  return rectangleEdgeScore(
-    { data: frame, width: video.width, height: video.height },
-    scale,
-    bounds,
-  )
+  const x0 = Math.round(bounds.x * scale)
+  const y0 = Math.round(bounds.y * scale)
+  const x1 = Math.round((bounds.x + bounds.width) * scale)
+  const y1 = Math.round((bounds.y + bounds.height) * scale)
+  let edge = 0
+  let reference = 0
+  let samples = 0
+  for (let y = Math.max(1, y0 + 4); y < Math.min(video.height - 1, y1 - 4); y += 3) {
+    const row = y * video.width
+    for (const x of [x0, x1]) {
+      if (x < 2 || x >= video.width - 2) continue
+      edge += Math.abs((frame[row + x] as number) - (frame[row + x - 2] as number))
+      const inside = x === x0 ? x + 12 : x - 12
+      if (inside > 1 && inside < video.width - 1) {
+        reference += Math.abs((frame[row + inside] as number) - (frame[row + inside - 2] as number))
+      }
+      samples += 1
+    }
+  }
+  for (let x = Math.max(1, x0 + 4); x < Math.min(video.width - 1, x1 - 4); x += 3) {
+    for (const y of [y0, y1]) {
+      if (y < 2 || y >= video.height - 2) continue
+      edge += Math.abs((frame[y * video.width + x] as number) - (frame[(y - 2) * video.width + x] as number))
+      const inside = y === y0 ? y + 12 : y - 12
+      if (inside > 1 && inside < video.height - 1) {
+        reference += Math.abs(
+          (frame[inside * video.width + x] as number) - (frame[(inside - 2) * video.width + x] as number),
+        )
+      }
+      samples += 1
+    }
+  }
+  if (samples < 40) return null
+  return (edge - reference) / samples
 }

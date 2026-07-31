@@ -230,36 +230,6 @@ export function syncBoundsToRepresentative(
  * the later source placement winning — that is the state visible at the first
  * frame of the retained replay.
  */
-/**
- * Move one annotation's OBSERVATIONS onto the picture's clock (#89).
- *
- * Only the observations. A lifetime is when the author wanted the box shown and
- * a keyframe is where the author put it — neither is a measurement of the
- * recorder, so neither moves. `picked_at_ms` does move, because it names the
- * instant an observation was taken from and must keep naming the same one.
- *
- * `bounds` is left alone: it is the rectangle at the box's own moment, and that
- * moment is `picked_at_ms`, which moved with the samples it indexes.
- */
-export function shiftAnnotationToPicture(a: Annotation, latencyMs: number): Annotation {
-  const tracking = a.tracking
-  if (tracking?.enabled !== true) return a
-  const samples = tracking.samples
-  if (samples === undefined || samples.length === 0) return a
-  const shift = Math.round(latencyMs)
-  if (!Number.isFinite(shift) || shift === 0) return a
-  return {
-    ...a,
-    tracking: {
-      ...tracking,
-      ...(tracking.picked_at_ms === undefined
-        ? {}
-        : { picked_at_ms: tracking.picked_at_ms + shift }),
-      samples: samples.map((sample) => ({ ...sample, t_ms: sample.t_ms + shift })),
-    },
-  }
-}
-
 export function rebaseAnnotationClock(
   a: Annotation,
   offsetMs: number,

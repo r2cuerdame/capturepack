@@ -523,90 +523,6 @@ interface RememberedSourceLatency {
 }
 const displaySourceLatency = new Map<number, RememberedSourceLatency>()
 
-/**
- * WHAT THE PICTURE OWES THE CLOCK, MEASURED FROM A PACK'S OWN PIXELS (#89).
- *
- * Distinct from `displaySourceLatency` above, and the distinction is the whole
- * point: that one is the DXGI leg — desktop glass to a decoded source frame,
- * 37.7 ms measured once — while this is the whole journey, from the context
- * ring to the pixels a viewer sees, measured at ~127 ms. Setting them beside
- * each other was the stated reason `media.cadence.source_latency` exists.
- *
- * Measured AFTER a pack is written, from that pack's own replay, and applied to
- * the NEXT capture of the same display. So the first capture on a machine is
- * uncorrected and every one after it is not — which SPEC §5.3 already
- * anticipated by requiring a carried measurement to declare its `age_ms`.
- */
-interface MeasuredPictureLatency {
-  latencyMs: number
-  resolutionMs: number
-  frames: number
-  contrast: number
-  measuredAtMs: number
-  backend: string | undefined
-}
-const displayPictureLatency = new Map<number, MeasuredPictureLatency>()
-
-/** The last measured picture latency for this display, or null if never. */
-export function recorderPictureLatency(
-  displayId: number,
-): MeasuredPictureLatency | null {
-  return displayPictureLatency.get(displayId) ?? null
-}
-
-/**
- * Records one, and returns the line to log beside it.
- *
- * A backend change voids what is remembered, for the same reason it voids the
- * DXGI leg: a Chromium capture and a GDI blit are different paths to the glass,
- * and a number measured on one says nothing about the other.
- */
-export function rememberPictureLatency(
-  displayId: number,
-  measured: {
-    latencyMs: number
-    resolutionMs: number
-    frames: number
-    contrast: number
-  },
-  nowMs: number,
-  backend: string | undefined,
-): string {
-  const previous = displayPictureLatency.get(displayId)
-  displayPictureLatency.set(displayId, {
-    latencyMs: measured.latencyMs,
-    resolutionMs: measured.resolutionMs,
-    frames: measured.frames,
-    contrast: measured.contrast,
-    measuredAtMs: nowMs,
-    backend,
-  })
-  return (
-    `${measured.latencyMs.toFixed(1)} ms +/- ${measured.resolutionMs.toFixed(1)} ` +
-    `over ${String(measured.frames)} frame(s), ` +
-    `contrast ${(measured.contrast * 100).toFixed(1)}%` +
-    (previous === undefined
-      ? ' (first for this display)'
-      : `, was ${previous.latencyMs.toFixed(1)} ms`)
-  )
-}
-
-/** A different path to the glass makes the old number meaningless. */
-export function forgetPictureLatencyOnBackendChange(
-  displayId: number,
-  backend: string | undefined,
-): void {
-  const remembered = displayPictureLatency.get(displayId)
-  if (remembered === undefined) return
-  if (
-    backend !== undefined &&
-    remembered.backend !== undefined &&
-    remembered.backend !== backend
-  ) {
-    displayPictureLatency.delete(displayId)
-  }
-}
-
 /** The last MEASURED source latency for this display, or null if never. */
 export function recorderSourceLatency(
   displayId: number,
@@ -1784,9 +1700,6 @@ async function rebuild(): Promise<void> {
   displayCadence.retain(wantedDisplayIds)
   for (const id of [...displaySourceLatency.keys()]) {
     if (!wantedDisplayIds.has(id)) displaySourceLatency.delete(id)
-  }
-  for (const id of [...displayPictureLatency.keys()]) {
-    if (!wantedDisplayIds.has(id)) displayPictureLatency.delete(id)
   }
   for (const id of displayRecorderStates.keys()) {
     if (!wanted.has(id)) displayRecorderStates.delete(id)

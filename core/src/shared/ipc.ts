@@ -1195,8 +1195,6 @@ export interface RenderStartPayload {
   replayMimeType?: string
   // Still job only: the frame the keyframe is drawn from (snapshot.png bytes).
   snapshotPng?: ArrayBuffer
-  /** Present = measure, do not draw. See ExposureMeasureRequest. */
-  measure?: ExposureMeasureRequest
   annotations: Annotation[]
   // All display coordinate spaces for authored keyframes that cross monitors.
   // Absent for a single-display render or an older caller.
@@ -1252,44 +1250,8 @@ export interface RenderFramePayload {
   png: ArrayBuffer
 }
 
-/**
- * A MEASUREMENT JOB, NOT A DRAWING ONE (#89).
- *
- * Present = this render window decodes frames and scores them, and draws and
- * records nothing. It exists because the pixels the correction is measured
- * against are the pack's OWN replay, and this window is the only place in the
- * app that can decode one.
- *
- * It runs AFTER the pack is written, so it costs the save nothing, and its
- * answer is applied to the NEXT capture of the same display — which is what
- * `media.cadence.source_latency`'s `age_ms` was designed to declare.
- */
-export interface ExposureMeasureRequest {
-  /** The observed rectangles, in the replay's own display pixels. */
-  candidates: Array<{
-    tMs: number
-    x: number
-    y: number
-    width: number
-    height: number
-  }>
-  /**
-   * The width the candidate rectangles are expressed in — the display's own
-   * snapshot pixels. The renderer divides its decoded frame width by this to
-   * get the recorder's downscale, because only it has decoded the video and so
-   * only it knows what that width is.
-   */
-  candidateWidth: number
-  /** How many frames to sample across the moving range. */
-  sampleCount: number
-  /** Only rectangles this close to a frame are scored against it. */
-  candidateWindowMs: number
-}
-
 export interface RenderResultPayload {
   ok: boolean
-  /** Measurement job only: one row per frame that could be decoded and scored. */
-  scoreRows?: Array<{ ptsMs: number; scores: Array<{ tMs: number; score: number }> }>
   // webm bytes of replay_annotated when ok; absent on a still job
   webm?: ArrayBuffer
   /** The container/codec the encoder actually produced (#113). */
