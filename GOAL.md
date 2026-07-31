@@ -358,9 +358,29 @@ budget existed to feed per-frame tracking. It is now free.
 with lifetimes, blur, trim, the annotated replay and keyframe stills. It answers
 *what happened, and when*.
 
-**Video loses** `tracking.samples` and object selection at an arbitrary past
-frame. It stops claiming to know where a control was eight seconds ago, which it
-never reliably did.
+**Video loses** `tracking.samples` and **object selection entirely**. Not only
+at an arbitrary past frame — at every frame, the captured instant included.
+
+That last part was settled on 2026-08-01, after the owner asked the question that
+mattered: *"영상에서 tracking만 꺼지는게 아니고 성능이 안돼서 선택도 못하는거 아니였어?"* It
+was right, and the honest answer is worse than "selection still works":
+
+- **Window-level picking works at any frame.** Lane S samples window geometry
+  about a hundred times a second; it can answer for any moment in the replay.
+- **Control-level picking cannot.** Lane A paces itself to a 3% duty and skips
+  Chromium windows deliberately, because one walk of them costs 326 ms against
+  13.9 ms for the entire rest of the desktop. So inside a browser — inside most
+  of what anyone captures — a scrubbed frame offers the window and never the
+  thing in it, while the same click at the capture instant offers both.
+
+A feature that works on the frame you captured and not on the frame beside it,
+with nothing on screen to tell you which one you are on, teaches nobody anything
+except not to trust it. So the owner's ruling: *"영상은 셀렉션 안되고 이미지는 셀렉션
+되야지"* — **a video gets the boxes you draw, and a still gets everything.**
+
+Lane A keeps recording into the pack's windows-context timeline. Removing an
+affordance from the editor is not permission to stop writing down what was
+there.
 
 `tracking` is not removed from the specification. Packs already in the world
 carry it and §13.1 obliges readers to keep reading them.

@@ -134,6 +134,11 @@ export interface UiaRawDump {
   monitors: UiaMonitor[]
   windows: UiaWindowRecord[]
   elements: UiaElementRecord[]
+  // Web-content roots dropped for measuring themselves against a display their
+  // window no longer sits on (see refuseDisplacedRenderers). Nonzero means this
+  // desktop HAS controls the pick cannot offer — a different claim from a page
+  // that exposed none, and one the pack says out loud.
+  geometryRefused: number
 }
 
 /**
@@ -480,6 +485,9 @@ export function mapUiaToSnapshot(
     captured_at: isoWithOffset(raw.capturedAt),
     budget_ms: budgetMs,
     truncated: raw.truncated,
+    // Always written, 0 included: "we looked and found none" is a claim, and
+    // absent already means "this walk could not tell" (payload 0.4.0).
+    geometry_refused: raw.geometryRefused,
     windows,
     elements,
   }
@@ -521,7 +529,17 @@ export function parseUiaPayload(text: string | null): UiaPluginPayload | null {
   const rawWindows: unknown[] = Array.isArray(raw.windows) ? raw.windows : []
   const rawElements: unknown[] = Array.isArray(raw.elements) ? raw.elements : []
   const windows = rawWindows.filter(isWindowShape).map(toWindowRecord)
-  const elements = rawElements.filter(isElementShape).map((e) => toElementRecord(e, -1))
+  const walked = rawElements.filter(isElementShape).map((e) => toElementRecord(e, -1))
+  // Per window, because depth is a pre-order walk of ONE window's control view
+  // and the file keeps each window's elements contiguous. Re-opening a pack
+  // written before this test is what makes its bad boxes stop being offered.
+  const elements: UiaElementRecord[] = []
+  for (let i = 0; i < walked.length; ) {
+    let j = i
+    while (j < walked.length && (walked[j] as UiaElementRecord).window === (walked[i] as UiaElementRecord).window) j++
+    elements.push(...refuseDisplacedRenderers(walked.slice(i, j)).kept)
+    i = j
+  }
   if (windows.length === 0 && elements.length === 0) return null
   return {
     captured_at: typeof raw.captured_at === 'string' ? raw.captured_at : '',
@@ -821,6 +839,7 @@ function parseDump(stdout: string, capturedAt: Date, killed: boolean): UiaRawDum
   let sawWindows = false
   let sawDone = false
   let truncated = false
+  let geometryRefused = 0
   for (const line of stdout.split('\n')) {
     const trimmed = line.trim()
     if (trimmed === '') continue
@@ -849,9 +868,13 @@ function parseDump(stdout: string, capturedAt: Date, killed: boolean): UiaRawDum
       // build — the script is copied in beside the app — but a chunk without an
       // index is still real data) walked the foreground window only.
       const index = typeof record['window'] === 'number' ? record['window'] : -1
-      const chunk = record['elements']
+      const walked = record['elements']
         .filter(isElementShape)
         .map((e) => toElementRecord(e, index))
+      // The helper drops these during the walk; repeating the test here is what
+      // makes an older helper's dump safe too. Both counts are reported.
+      const { kept: chunk, refused } = refuseDisplacedRenderers(walked)
+      geometryRefused += countOf(record['geometry_refused']) + refused
       for (const element of chunk) elements.push(element)
       if (index >= 0) {
         trees.set(index, { status: treeStatus(record['tree']), count: chunk.length })
@@ -867,7 +890,80 @@ function parseDump(stdout: string, capturedAt: Date, killed: boolean): UiaRawDum
     const tree = trees.get(w.z)
     return tree === undefined ? w : { ...w, tree: tree.status, element_count: tree.count }
   })
-  return { capturedAt, truncated, rootBounds, monitors, windows, elements }
+  return { capturedAt, truncated, rootBounds, monitors, windows, elements, geometryRefused }
+}
+
+/**
+ * A WEB-CONTENT ROOT MUST STILL COVER THE SURFACE IT WAS DRAWN INTO.
+ *
+ * Chromium paints pages in a renderer process carrying its own device scale
+ * factor. Drag a window between displays of different scales and the browser
+ * frame re-lays out at once while the renderer can still answer with the OLD
+ * display's scale, so one window arrives in two coordinate spaces: the toolbar
+ * exact, the page inside it off by the ratio between the two displays.
+ *
+ * Measured (CapturePack_2026-08-01_075525): two Chrome windows moved onto a
+ * 1200x1920 @1x display reported web content covering 0.67 and 0.50 of the pane
+ * they were drawn in — 1/1.5 and 1/2, the two scales involved. Discord, never
+ * moved off its own display, reported 1.00. The payload itself says nothing
+ * about which of those you are holding, so a box drawn from the bad one lands on
+ * a neighbouring tile and the pack asserts the user pointed at something they
+ * did not.
+ *
+ * `uia-dump.ps1` already drops these subtrees during the walk, where skipping
+ * one also spares the budget. This is the same test on the parsed side, so a
+ * dump from an older helper — or a pack written by one, read back through
+ * `parseUiaPayload` — cannot smuggle a displaced rectangle in. It reads a
+ * pre-order chunk, so the host of an element is the nearest preceding element of
+ * lower depth.
+ *
+ * Coverage, never containment: scrolled content legitimately overflows its
+ * viewport. And a refusal, never a correction — the ratio proves the numbers are
+ * wrong, it does not reveal what the right ones were.
+ */
+export const UIA_DOCUMENT_COVERAGE_MIN = 0.9
+
+export function refuseDisplacedRenderers(chunk: readonly UiaElementRecord[]): {
+  kept: UiaElementRecord[]
+  refused: number
+} {
+  const kept: UiaElementRecord[] = []
+  const hosts: UiaElementRecord[] = []
+  let refused = 0
+  // Set while inside a refused subtree: everything deeper than this was measured
+  // by the same renderer and is just as displaced.
+  let cutDepth: number | null = null
+  for (const element of chunk) {
+    if (cutDepth !== null && element.depth > cutDepth) continue
+    cutDepth = null
+    while (hosts.length > 0 && (hosts[hosts.length - 1] as UiaElementRecord).depth >= element.depth) {
+      hosts.pop()
+    }
+    const host = hosts[hosts.length - 1]
+    if (
+      element.control_type === 'Document' &&
+      element.depth > 0 &&
+      host !== undefined &&
+      !documentCoversHost(element.bounds, host.bounds)
+    ) {
+      refused++
+      cutDepth = element.depth
+      continue
+    }
+    hosts.push(element)
+    kept.push(element)
+  }
+  return { kept, refused }
+}
+
+function documentCoversHost(rect: UiaBounds, host: UiaBounds): boolean {
+  // An unmeasurable host proves nothing either way, so it accuses nobody.
+  if (!(host.width > 0) || !(host.height > 0)) return true
+  if (!(rect.width > 0) || !(rect.height > 0)) return true
+  return (
+    rect.width / host.width >= UIA_DOCUMENT_COVERAGE_MIN &&
+    rect.height / host.height >= UIA_DOCUMENT_COVERAGE_MIN
+  )
 }
 
 const TREE_STATUSES: readonly UiaTreeStatus[] = ['collected', 'truncated', 'unavailable', 'skipped']

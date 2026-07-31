@@ -190,6 +190,46 @@ function Test-UsableRect($rect) {
   return ($rect.Width -gt 0 -and $rect.Height -gt 0)
 }
 
+<#
+WHEN A BROWSER'S CONTENT IS MEASURED FOR A MONITOR IT NO LONGER SITS ON.
+
+Chromium paints web content in a separate renderer process that carries its own
+device scale factor. Drag a window from a 150% display to a 100% one and the
+browser frame — the tab strip, the toolbar, the bookmarks bar, all of it drawn
+by the browser process — re-lays out immediately, while the renderer can still
+be answering with the OLD display's scale. UI Automation then reports one window
+in two coordinate spaces at once: the frame correct to the pixel, the page
+inside it off by the ratio between the two displays.
+
+Measured on this desk (CapturePack_2026-08-01_075525): two Chrome windows moved
+onto the 1200x1920 @1x display reported their web content at 0.67 and 0.50 of
+the host they were drawn in — 1/1.5 and 1/2, the two scale factors involved.
+Discord, never moved off its own display, reported 1.00. Nothing in the payload
+says which one you are holding.
+
+A rectangle from another monitor's layout is not a worse answer than none. It is
+a WRONG one: the box lands on a neighbouring tile and the pack asserts, in
+writing, that the user pointed at something they did not point at. So the test
+below is on the web-content root, where the coordinate space changes hands, and
+it is the only place it can be made cheaply: the root must still COVER the
+surface it was drawn into. When it does not, this walk refuses the document and
+everything beneath it, and the pick falls back to the window — a coarser box,
+but one that is where it says it is.
+
+Deliberately not clamped, scaled or "corrected": the ratio tells us the numbers
+are wrong, not what the right ones were. Scrolled content legitimately overflows
+its viewport, so this asks for coverage and never for containment.
+#>
+$script:DOCUMENT_COVERAGE_MIN = 0.9
+
+function Test-DocumentCoversHost($rect, $hostRect) {
+  if (-not (Test-UsableRect $rect) -or -not (Test-UsableRect $hostRect)) { return $true }
+  if ($hostRect.Width -le 0 -or $hostRect.Height -le 0) { return $true }
+  $coverW = $rect.Width / $hostRect.Width
+  $coverH = $rect.Height / $hostRect.Height
+  return ($coverW -ge $script:DOCUMENT_COVERAGE_MIN -and $coverH -ge $script:DOCUMENT_COVERAGE_MIN)
+}
+
 # Assembly loading only — never Add-Type -MemberDefinition, which would invoke
 # the C# compiler and eat most of the budget before any UI is read.
 Add-Type -AssemblyName UIAutomationClient
@@ -377,6 +417,11 @@ foreach ($prop in @(
 $script:emitted = 0
 $script:visited = 0
 $script:truncated = $false
+# Web-content roots dropped for measuring themselves against a display their
+# window no longer sits on. Reported rather than swallowed: a pack that quietly
+# lost a page's controls looks exactly like a page that had none.
+$script:geometryRefused = 0
+$script:geometryRefusedTotal = 0
 # Visiting is cheap (the tree is already in memory) but not free: cap it so a
 # pathological tree cannot spin past the budget between stopwatch checks.
 $maxVisits = [Math]::Max(2000, $MaxElements * 8)
@@ -396,6 +441,7 @@ pipeline.
 function Invoke-WindowTree($element, [int]$windowIndex, [double]$windowDeadlineMs, [int]$windowCap) {
   $script:treeStatus = 'unavailable'
   $script:treeCount = 0
+  $script:geometryRefused = 0
   $json = New-Object System.Text.StringBuilder
   # ONE cross-process call fetches the whole cached subtree; walking it
   # afterwards is pure in-process work. (Walking with live TreeWalker calls
@@ -415,13 +461,17 @@ function Invoke-WindowTree($element, [int]$windowIndex, [double]$windowDeadlineM
   $windowTruncated = $false
   # Explicit stack — recursion depth 12 x thousands of nodes is not worth the
   # PowerShell function-call overhead.
+  # Frame layout: @(node, depth, hostRect). `hostRect` is the parent's rectangle,
+  # carried so a web-content root can be checked against the surface it was
+  # drawn into (see Test-DocumentCoversHost). $null for the window itself.
   $stack = New-Object System.Collections.Stack
-  $stack.Push(@($cachedRoot, 0))
+  $stack.Push(@($cachedRoot, 0, $null))
 
   while ($stack.Count -gt 0) {
     $frame = $stack.Pop()
     $node = $frame[0]
     $depth = [int]$frame[1]
+    $hostRect = $frame[2]
     $script:visited++
     if ($script:visited -ge $maxVisits) { $windowTruncated = $true; break }
     if (($script:visited % 64) -eq 0 -and $stopwatch.ElapsedMilliseconds -ge $windowDeadlineMs) {
@@ -429,10 +479,30 @@ function Invoke-WindowTree($element, [int]$windowIndex, [double]$windowDeadlineM
       break
     }
 
+    # Cleared every iteration: the child push below reads it, and a throw on the
+    # next line would otherwise hand the previous node's rectangle to this
+    # node's children.
+    $bounds = $null
     try {
       $bounds = $node.Cached.BoundingRectangle
       $offscreen = $false
       try { $offscreen = [bool]$node.Cached.IsOffscreen } catch { $offscreen = $false }
+
+      # THE COORDINATE SPACE CHANGES HANDS HERE, so this is where it is checked.
+      # A Document nested inside a window is a renderer's view of itself; every
+      # rectangle below it was measured by that renderer. If it no longer covers
+      # the surface it was drawn into, its whole subtree is from another
+      # monitor's layout and is dropped — subtree and all, which also spares the
+      # budget the walk would have spent on it.
+      if ((Test-UsableRect $bounds) -and $depth -gt 0 -and $null -ne $hostRect) {
+        $ct = ''
+        try { $ct = ([string]$node.Cached.ControlType.ProgrammaticName) -replace '^ControlType\.', '' } catch { $ct = '' }
+        if ($ct -eq 'Document' -and -not (Test-DocumentCoversHost $bounds $hostRect)) {
+          $script:geometryRefused++
+          continue
+        }
+      }
+
       if ((Test-UsableRect $bounds) -and -not $offscreen) {
         if ($count -ge $windowCap) { $windowTruncated = $true; break }
         if ($script:emitted -ge $MaxElements) {
@@ -477,18 +547,23 @@ function Invoke-WindowTree($element, [int]$windowIndex, [double]$windowDeadlineM
     # three-element array whose [1] is the PARENT's depth (i.e. depth never
     # grows).
     $childDepth = $depth + 1
+    # A node with no usable rectangle of its own passes its own host down, so a
+    # single unmeasurable wrapper cannot hide a renderer boundary from the check.
+    $childHost = if (Test-UsableRect $bounds) { $bounds } else { $hostRect }
     for ($i = $children.Count - 1; $i -ge 0; $i--) {
-      $stack.Push(@($children[$i], $childDepth))
+      $stack.Push(@($children[$i], $childDepth, $childHost))
     }
   }
 
   $script:treeCount = $count
   $script:treeStatus = if ($windowTruncated) { 'truncated' } else { 'collected' }
   if ($windowTruncated) { $script:truncated = $true }
+  $script:geometryRefusedTotal += $script:geometryRefused
   $line = New-Object System.Text.StringBuilder
   [void]$line.Append('{"window":').Append($windowIndex)
   [void]$line.Append(',"tree":"').Append($script:treeStatus).Append('"')
   [void]$line.Append(',"elements":[').Append($json.ToString()).Append(']')
+  [void]$line.Append(',"geometry_refused":').Append($script:geometryRefused)
   [void]$line.Append(',"elapsed_ms":').Append($stopwatch.ElapsedMilliseconds).Append('}')
   Write-JsonLine $line.ToString()
 }
@@ -540,5 +615,6 @@ Write-JsonLine ('{"done":true,"truncated":' + $(if ($script:truncated) { 'true' 
   ',"windows_walked":' + $attempted +
   ',"elements":' + $script:emitted +
   ',"visited":' + $script:visited +
+  ',"geometry_refused":' + $script:geometryRefusedTotal +
   ',"elapsed_ms":' + $stopwatch.ElapsedMilliseconds + '}')
 exit 0

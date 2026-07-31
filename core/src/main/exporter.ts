@@ -386,8 +386,13 @@ export const UIA_PLUGIN_NAME = 'windows-uia'
  *    of forcing the whole desktop through the focused display's transform.
  *    Absent = the focused display, which is what a single-display pack writes,
  *    so its payload is unchanged.
+ *  - 0.4.0 added `geometry_refused`: how many web-content roots the walk threw
+ *    away for still measuring themselves against a display their window had
+ *    left. Absent = a walk that could not tell, which is what every earlier
+ *    version wrote; 0 = it looked and found none. The difference matters,
+ *    because a refused window is not a window without controls.
  */
-export const UIA_PLUGIN_VERSION = '0.3.0'
+export const UIA_PLUGIN_VERSION = '0.4.0'
 
 /** The manifest.plugins entry for the payload writeUiaPlugin() lays down. */
 export function uiaPluginDeclaration(): Manifest['plugins'][number] {

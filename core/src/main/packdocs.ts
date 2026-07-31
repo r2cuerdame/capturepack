@@ -587,6 +587,29 @@ function buildDomSkill(manifest: Manifest, annotationsFile: AnnotationsFile, t: 
       lines.push('an empty form. `truncated: true` means the list is a prefix of the page.')
       lines.push('')
     }
+    // THE SAME RULE FOR THE DESKTOP PAYLOAD, AND FOR THE SAME REASON.
+    //
+    // A browser paints pages in a renderer process carrying its own device
+    // scale factor, so a window moved between displays of different scales can
+    // report its frame in one coordinate space and its page in another. Those
+    // page rectangles land on the neighbouring thing, so the walk throws them
+    // away — and a model that does not know they were thrown away will read a
+    // window with no controls as a window that HAD no controls.
+    const uia = manifest.plugins.find((p) => p.name === 'windows-uia')
+    if (uia !== undefined) {
+      lines.push(
+        'In `windows-uia` 0.4.0 or newer, read `geometry_refused` before concluding anything from',
+      )
+      lines.push(
+        'a window that lists no controls. A nonzero count means this desktop had windows whose web',
+      )
+      lines.push('content was still measuring itself against a display it had already been dragged off,')
+      lines.push('and those controls were dropped rather than placed wrongly — so the pack can point at')
+      lines.push('the window but not inside it. The field being absent means the walk could not tell;')
+      lines.push('`0` means it looked and found none. `truncated: true` is the separate claim that the')
+      lines.push('walk ran out of budget.')
+      lines.push('')
+    }
   }
   if (targeted.length > 0) {
     lines.push('Annotation boxes carrying semantic `target` metadata:')

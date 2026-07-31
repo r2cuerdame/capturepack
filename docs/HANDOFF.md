@@ -220,8 +220,8 @@ npm run qa:rc
 npm audit --omit=dev
 ```
 
-`qa:rc` currently runs 70 discovered `check:*` regressions plus type checking,
-the production build, and isolated Electron smoke: **73 gate steps** (71 with
+`qa:rc` currently runs 72 discovered `check:*` regressions plus type checking,
+the production build, and isolated Electron smoke: **75 gate steps** (73 with
 `--skip-build`). Reports
 are written under `%TEMP%\capturepack-qa` unless an artifact directory is
 provided.
@@ -315,14 +315,14 @@ version and fix forward. Documentation-only commits may follow the release on
 ## 0.3.4 in progress
 
 Work on `agent/0.3.4`, not released. `core/package.json` is
-**`0.3.4-rc.18`** — a release *candidate* version so a locally built installer can
+**`0.3.4-rc.19`** — a release *candidate* version so a locally built installer can
 never be confused with the public `0.3.3`, not a release. There is no tag and no
 published binary, and `v0.3.3` stays where it is. See [GOAL.md](../GOAL.md) for
 the design record and [#104](https://github.com/r2cuerdame/capturepack/issues/104) /
 [#89](https://github.com/r2cuerdame/capturepack/issues/89) for the evidence.
 
 An RC installer is built with `npm run dist` and appears at
-`core/release-rc18b/CapturePack-Setup-0.3.4-rc.18.exe`. It is unsigned and gitignored:
+`core/release-rc18b/CapturePack-Setup-0.3.4-rc.19.exe`. It is unsigned and gitignored:
 builds are artifacts of a commit, never part of one.
 
 - Element picking now reports itself end to end: the picker's arming, failure

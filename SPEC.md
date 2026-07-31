@@ -945,6 +945,15 @@ query. Readers that do not understand this source ignore its fields and render `
   control type, automation id, and bounds. The dump is OPTIONAL: a `target` stands on its own.
 - Writers MAY define further `source` values (a DOM picker, a game engine); they MUST NOT
   redefine `"uia"`.
+- **Picking is a STILL-image affordance.** A `target` may be written by any writer, and every
+  reader renders one wherever it finds it — but a writer SHOULD offer picking only where it can
+  answer at every level it offers, which in practice is a still (`capture_kind: "image"`). A
+  video's window geometry is cheap enough to sample continuously, while walking a window's
+  controls is not: a writer that offers picking at an arbitrary replay frame will answer some
+  frames with the control and some with only the window it sits in, and nothing in the pack
+  distinguishes the two. A box drawn on a video is then a manual rectangle, which is exactly
+  what `bounds` already is. This is a writer's rule and changes no format: a video pack that
+  carries `target` from an earlier writer stays valid and MUST still render.
 
 ### 8.8 `display` (which display a box is on)
 
@@ -1299,6 +1308,23 @@ matters to a reader:
   window records what happened to ITS tree (`tree` below) — "no controls were recorded for this
   window" is a statement about the dump, never about the window.
 
+**A rectangle measured for a display the window has left (0.4.0).** A browser paints web
+content in a renderer process that carries its own device scale factor. Drag the window from a
+150% display to a 100% one and the browser frame re-lays out at once, while the renderer can
+still be answering with the OLD display's scale — so UI Automation reports one window in two
+coordinate spaces: the toolbar exact to the pixel, the page inside it off by the ratio between
+the two displays. Measured in the field: two Chrome windows moved onto a 1200x1920 @1x display
+reported web content covering **0.67** and **0.50** of the surface it was drawn into (1/1.5 and
+1/2, the two scales involved), while a window that had never left its own display reported
+1.00.
+
+A writer therefore MUST NOT emit a control whose web-content root does not still COVER the
+surface it was drawn into, and MUST count what it dropped in `geometry_refused`. Coverage and
+not containment: scrolled content legitimately overflows its viewport, and is correct. A
+refusal and not a correction: the ratio proves the numbers are wrong without revealing what the
+right ones were. The window itself is unaffected — it was never measured wrongly — so a pick
+still lands, one level coarser and in the right place.
+
 Like every plugin payload it is OPTIONAL and purely additive. A pack without it is complete; a
 reader that ignores it loses no core data. It follows all of [§11.1](#111-rules).
 
@@ -1327,6 +1353,7 @@ added field as absent (see each row below):
 | `captured_at` | string | REQUIRED | When the dump was taken — the capture instant. ISO 8601 with timezone, the same shape as `manifest.created_at`. |
 | `budget_ms` | integer | REQUIRED | The time budget the dump was given. Reading the UI Automation tree of an arbitrary application is unbounded work, so writers MUST bound it; this records the bound that was used. |
 | `truncated` | boolean | REQUIRED | `true` = the dump is INCOMPLETE: a walk ran out of budget, depth, or element allowance, or a window was never walked at all. It is never a reason to distrust the entries that ARE present — an absent element means "not recorded", never "not on screen". `windows[].tree` says precisely which windows are affected. |
+| `geometry_refused` | integer | OPTIONAL (0.4.0) | How many web-content roots the writer THREW AWAY because they were still measuring themselves against a display their window had already left (see below). Absent = the writer could not tell, which is every payload before 0.4.0; `0` = it looked and found none. Nonzero means those windows HAVE controls this payload cannot point at, and a reader MUST NOT present them as windows without controls. |
 | `windows` | array | REQUIRED | Top-level windows that existed at the capture instant, in z-order (top-most first). MAY be empty. |
 | `elements` | array | REQUIRED | Controls from the automation trees of the walked windows: grouped by window in walk order, pre-order within a window. MAY be empty. |
 

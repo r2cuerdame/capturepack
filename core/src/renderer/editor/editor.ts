@@ -1203,7 +1203,13 @@ function keys(...parts: string[]): string {
  */
 function helpContent(): Array<{ title: string; rows: HelpRow[] }> {
   const groups: Array<{ title: string; rows: HelpRow[] }> = []
-  const captureRows: HelpRow[] = [[t('editor.keyLeftClick'), t('editor.helpPickObject')]]
+  const captureRows: HelpRow[] = []
+  // A video does not pick at all (see objectPickingApplies), so its sheet must
+  // not open by naming a left click as the way to pick one — the first line of
+  // the help is the last place to leave a promise the capture cannot keep.
+  if (objectPickingApplies()) {
+    captureRows.push([t('editor.keyLeftClick'), t('editor.helpPickObject')])
+  }
   // The window-level modifier only means something where there IS object data
   // (GOAL "Static object picking"); a pack without a UIA dump would be told
   // about a modifier that can never do anything.
@@ -2439,8 +2445,39 @@ durationInput.addEventListener('keydown', (e) => {
 // always says which level a click would take.
 // ---------------------------------------------------------------------------
 
+/**
+ * PICKING IS A STILL-IMAGE FEATURE. A VIDEO GETS BOXES YOU DRAW.
+ *
+ * Decided 2026-08-01, by the owner, after a week of trying to make it work: "영상은
+ * 셀렉션 안되고 이미지는 셀렉션 되야지". The reasoning is not that picking in a video
+ * was hard — it is that it was only ever HALF true, and a half-true pick is worse
+ * than none.
+ *
+ * Window-level picking works at any frame, because lane S samples geometry ~100
+ * times a second and can answer for any moment. Control-level picking cannot: the
+ * lane that walks controls paces itself to a 3% duty and deliberately skips
+ * Chromium windows, because one walk of them costs 326 ms against 13.9 ms for the
+ * rest of the desktop combined. So inside a browser — inside most of what anyone
+ * captures — a scrubbed frame could offer the window and never the thing in it,
+ * while the same click one second earlier, at the capture instant, offered both.
+ * A feature that works on the frame you captured and not on the frame beside it
+ * teaches nobody anything except not to trust it.
+ *
+ * A still has no such split. It has one instant, the full one-shot walk ran at
+ * it, and every control on the desktop is on offer. That is where the effort
+ * goes now (GOAL "The still carries the context; the video carries the time").
+ *
+ * This is the ONLY gate: no index is built for a video, so hover offers nothing,
+ * the commit path finds nothing, and nothing downstream needs its own copy of the
+ * rule. Manual boxes, blur, numbering and tracking-off annotations are untouched.
+ */
+function objectPickingApplies(): boolean {
+  return captureKind === 'image'
+}
+
 /** This display's object index — empty (or absent) means picking is off there. */
 function objectIndexOf(index: number): ObjectIndex | null {
+  if (!objectPickingApplies()) return null
   return objectIndexes.get(index) ?? null
 }
 
@@ -2463,6 +2500,10 @@ function hasObjectData(): boolean {
  * would read as "picking is broken" (GOAL: "Silence is not absence").
  */
 function objectPickingCanSpeak(): boolean {
+  // A video has nothing to say about picking because picking is not offered
+  // there at all — that is a decision, not a gap, so it gets silence and not an
+  // explanation of why this frame came up empty.
+  if (!objectPickingApplies()) return false
   if (hasObjectData()) return true
   for (const frame of contextFramesByDisplay.values()) {
     if (frame.accuracy.coverage !== 'none') return true
@@ -2496,6 +2537,9 @@ function objectIndexForFrame(
 }
 
 function buildObjectIndex(displayIndex: number, frame: ContextFrame): void {
+  // Nothing to build for a video: see objectPickingApplies(). Stopping here also
+  // stops the editor paying for an index nobody will ever be offered.
+  if (!objectPickingApplies()) return
   const index = objectIndexForFrame(displayIndex, frame)
   if (index === null) return
   contextFramesByDisplay.set(displayIndex, frame)

@@ -454,6 +454,17 @@ export interface UiaPluginPayload {
   // true = the walk hit the budget, the element cap, or the depth cap, so the
   // tree below is INCOMPLETE. Never a reason to distrust what IS there.
   truncated: boolean
+  // Web-content roots the walk REFUSED, because they were still measuring
+  // themselves against a display their window had already left (payload 0.4.0).
+  // A browser paints pages in a renderer carrying its own device scale factor;
+  // move the window between displays of different scales and the frame re-lays
+  // out while the renderer can still answer in the old one's coordinates. Such
+  // rectangles land on the neighbouring thing, so they are dropped.
+  //
+  // Nonzero is a claim with teeth: those windows HAVE controls that this pack
+  // cannot point at, which is a different statement from a page that exposed
+  // none. Readers must not present a refused window as controlless.
+  geometry_refused?: number
   windows: UiaWindowRecord[]
   elements: UiaElementRecord[]
 }

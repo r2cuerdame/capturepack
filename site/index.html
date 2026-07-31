@@ -57,9 +57,10 @@
   <main>
     <section class="hero">
       <img class="logo" src="assets/icon.png" alt="" width="56" height="56">
-      <h1 data-i18n="h1">Rewind 30 seconds.<br>Pick the real UI object.</h1>
-      <p class="sub" data-i18n="sub">With Live recording on (the default), CapturePack finds UI controls at a past
-      frame, records observed movement through the replay, and saves names plus captured state as structured data for AI.</p>
+      <h1 data-i18n="h1">Rewind 30 seconds.<br>Mark what broke.</h1>
+      <p class="sub" data-i18n="sub">With Live recording on (the default), CapturePack freezes the last 30 seconds so
+      you can go back to the frame where the interface was actually wrong &mdash; and on a still, pick the real control
+      and save its name and captured state as structured data for AI.</p>
 
       <div class="buttons">
         <a class="btn primary" id="download-btn" href="https://github.com/r2cuerdame/capturepack/releases/latest">
@@ -91,10 +92,10 @@
             src="assets/motion/en/capturepack-time-machine.mp4" type="video/mp4">
         </video>
         <figcaption class="output-note">
-          <strong id="demo-title" data-i18n="demo_title">At NOW, rewind left 5 seconds—then pick.</strong>
+          <strong id="demo-title" data-i18n="demo_title">At NOW, rewind left 5 seconds&mdash;then mark it.</strong>
           <span data-i18n="demo_body">Watch the playhead start at NOW on the right and travel left to 5s AGO.
-          The missing Save changes button returns only in that past frame; Object Pick then selects it
-          and exports its captured identity and state for AI.</span>
+          By the time you notice, the Save changes failure is gone from the screen &mdash; in that past frame it is
+          still there to box and explain, and the pack carries it, with the desktop&rsquo;s recorded window geometry, to AI.</span>
         </figcaption>
       </figure>
     </section>
@@ -107,13 +108,15 @@
         Turn recording off and nothing is recorded.</p>
       </div>
       <div class="feature">
-        <h3 data-i18n="f2_title">2 · Pick an object, not pixels</h3>
-        <p data-i18n="f2_body">At the chosen frame, Object Pick highlights captured controls under the cursor.
-        One click records observed bounds, accessible name and control type; the real window is the fallback when child-control data is unavailable.</p>
+        <h3 data-i18n="f2_title">2 · Mark it &mdash; or pick the real object on a still</h3>
+        <p data-i18n="f2_body">In a replay you box what broke and say what you meant; the box has a lifetime, so it
+        appears with the moment it explains. On a still, Object Pick highlights the real control under the cursor and one
+        click records its accessible name, control type and observed bounds &mdash; the window is the fallback when
+        child-control data is unavailable.</p>
       </div>
       <div class="feature">
         <h3 data-i18n="f3_title">3 · Keep what the frame contained</h3>
-        <p data-i18n="f3_body">The pack records the controls that were on screen at the instant you picked — and in a browser, the page itself: every element you could see, with its role, rectangle and text. Values you typed, password boxes and anything hidden are refused on purpose, and the pack says so in its own payload.</p>
+        <p data-i18n="f3_body">The pack records the controls that were on screen at the instant you captured &mdash; and in a browser, the page itself: every element you could see, with its role, rectangle and text. Values you typed, password boxes and anything hidden are refused on purpose, and the pack says so in its own payload.</p>
       </div>
       <div class="feature">
         <h3 data-i18n="f4_title">4 · Give AI structured evidence</h3>

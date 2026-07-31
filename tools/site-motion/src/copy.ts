@@ -11,6 +11,14 @@ export type MotionCopy = {
   pickReal: string;
   objectOrManual: string;
   objectPick: string;
+  // A REPLAY DOES NOT PICK (decided 2026-08-01). `objectPick` stays, because
+  // the still-image film still shows exactly that. These four are what the
+  // TimeMachine film says instead: you draw the box, and the pack already
+  // recorded what was under it.
+  markMoment: string;
+  markedBox: string;
+  recordedContext: string;
+  boxOrNote: string;
   manualNote: string;
   saveChanges: string;
   button: string;
@@ -56,6 +64,10 @@ export const COPY: Record<MotionLocale, MotionCopy> = {
     pickReal: 'PICK THE REAL OBJECT',
     objectOrManual: 'OBJECT OR MANUAL · BOTH STAY EDITABLE',
     objectPick: 'OBJECT PICK',
+    markMoment: 'BOX WHAT BROKE',
+    markedBox: 'MARKED',
+    recordedContext: 'RECORDED CONTEXT',
+    boxOrNote: 'BOX + NOTE · BOTH STAY EDITABLE',
     manualNote: 'MANUAL NOTE',
     saveChanges: 'Save',
     button: 'Button',
@@ -99,6 +111,10 @@ export const COPY: Record<MotionLocale, MotionCopy> = {
     pickReal: '실제 UI 객체 선택',
     objectOrManual: '객체 선택 또는 수동 메모 · 모두 편집 가능',
     objectPick: '객체 선택',
+    markMoment: '망가진 곳에 상자를',
+    markedBox: '표시함',
+    recordedContext: '기록된 컨텍스트',
+    boxOrNote: '상자 + 메모 · 둘 다 편집 가능',
     manualNote: '수동 메모',
     saveChanges: '저장',
     button: '버튼',
@@ -142,6 +158,10 @@ export const COPY: Record<MotionLocale, MotionCopy> = {
     pickReal: '本物のUIオブジェクトを選択',
     objectOrManual: 'オブジェクト選択も手動メモも編集可能',
     objectPick: 'オブジェクト選択',
+    markMoment: '壊れた箇所を囲む',
+    markedBox: '印を付けた',
+    recordedContext: '記録されたコンテキスト',
+    boxOrNote: 'ボックス + メモ · どちらも編集可能',
     manualNote: '手動メモ',
     saveChanges: '保存',
     button: 'ボタン',
@@ -185,6 +205,10 @@ export const COPY: Record<MotionLocale, MotionCopy> = {
     pickReal: '选择真实的UI对象',
     objectOrManual: '对象选择或手动备注 · 均可编辑',
     objectPick: '对象选择',
+    markMoment: '框出出问题的地方',
+    markedBox: '已标记',
+    recordedContext: '已记录的上下文',
+    boxOrNote: '方框 + 备注 · 均可编辑',
     manualNote: '手动备注',
     saveChanges: '保存',
     button: '按钮',
@@ -228,6 +252,10 @@ export const COPY: Record<MotionLocale, MotionCopy> = {
     pickReal: 'ELIGE EL OBJETO REAL',
     objectOrManual: 'OBJETO O NOTA · TODO SIGUE EDITABLE',
     objectPick: 'ELEGIR OBJETO',
+    markMoment: 'ENCUADRA LO QUE FALLÓ',
+    markedBox: 'MARCADO',
+    recordedContext: 'CONTEXTO REGISTRADO',
+    boxOrNote: 'RECUADRO + NOTA · AMBOS EDITABLES',
     manualNote: 'NOTA MANUAL',
     saveChanges: 'Guardar',
     button: 'Botón',
@@ -271,6 +299,10 @@ export const COPY: Record<MotionLocale, MotionCopy> = {
     pickReal: 'SÉLECTIONNEZ LE VRAI OBJET',
     objectOrManual: 'OBJET OU NOTE · TOUT RESTE MODIFIABLE',
     objectPick: 'CHOIX DE L’OBJET',
+    markMoment: 'ENCADREZ CE QUI A CASSÉ',
+    markedBox: 'MARQUÉ',
+    recordedContext: 'CONTEXTE ENREGISTRÉ',
+    boxOrNote: 'CADRE + NOTE · TOUS DEUX MODIFIABLES',
     manualNote: 'NOTE MANUELLE',
     saveChanges: 'Enregistrer',
     button: 'Bouton',
@@ -314,6 +346,10 @@ export const COPY: Record<MotionLocale, MotionCopy> = {
     pickReal: 'DAS ECHTE OBJEKT WÄHLEN',
     objectOrManual: 'OBJEKT ODER NOTIZ · ALLES BLEIBT EDITIERBAR',
     objectPick: 'OBJEKT WÄHLEN',
+    markMoment: 'UMRAHMEN, WAS KAPUTTGING',
+    markedBox: 'MARKIERT',
+    recordedContext: 'AUFGEZEICHNETER KONTEXT',
+    boxOrNote: 'RAHMEN + NOTIZ · BEIDE EDITIERBAR',
     manualNote: 'MANUELLE NOTIZ',
     saveChanges: 'Speichern',
     button: 'Schaltfläche',
@@ -357,6 +393,10 @@ export const COPY: Record<MotionLocale, MotionCopy> = {
     pickReal: 'SELECIONE O OBJETO REAL',
     objectOrManual: 'OBJETO OU NOTA · TUDO CONTINUA EDITÁVEL',
     objectPick: 'SELECIONAR OBJETO',
+    markMoment: 'MARQUE O QUE QUEBROU',
+    markedBox: 'MARCADO',
+    recordedContext: 'CONTEXTO REGISTRADO',
+    boxOrNote: 'CAIXA + NOTA · AMBOS EDITÁVEIS',
     manualNote: 'NOTA MANUAL',
     saveChanges: 'Salvar',
     button: 'Botão',
@@ -400,6 +440,10 @@ export const COPY: Record<MotionLocale, MotionCopy> = {
     pickReal: 'ВЫБЕРИТЕ РЕАЛЬНЫЙ ОБЪЕКТ',
     objectOrManual: 'ОБЪЕКТ ИЛИ ЗАМЕТКА · ВСЁ РЕДАКТИРУЕТСЯ',
     objectPick: 'ВЫБОР ОБЪЕКТА',
+    markMoment: 'ОБВЕДИТЕ ТО, ЧТО СЛОМАЛОСЬ',
+    markedBox: 'ОТМЕЧЕНО',
+    recordedContext: 'ЗАПИСАННЫЙ КОНТЕКСТ',
+    boxOrNote: 'РАМКА + ЗАМЕТКА · ОБЕ РЕДАКТИРУЕМЫ',
     manualNote: 'РУЧНАЯ ЗАМЕТКА',
     saveChanges: 'Сохранить',
     button: 'Кнопка',

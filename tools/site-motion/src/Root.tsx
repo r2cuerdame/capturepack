@@ -161,9 +161,12 @@ const AppMock: React.FC<{
           <div style={{fontSize: 13, color: '#9a263b', fontWeight: 780}}>Save failed</div>
           <div style={{fontSize: 11.5, color: '#a45c69', marginTop: 5}}>Changes were not written.</div>
         </div>
+        {/* A REPLAY DOES NOT PICK (decided 2026-08-01). This box is DRAWN, so it
+            says so; the still-image film below still shows a real object pick,
+            because there it is still true. */}
         {(selection === 'object' || selection === 'both') && (
           <div style={{position: 'absolute', right: 28, bottom: 20, width: 143, height: 54, borderRadius: 12, border: `3px solid ${C.blue}`, boxShadow: `0 0 0 5px rgba(10,132,255,.12), 0 0 28px rgba(10,132,255,.38)`}}>
-            <span style={{position: 'absolute', top: -28, right: 0, color: '#fff', background: C.blue, padding: '5px 9px', borderRadius: 6, fontSize: 10.5, fontWeight: 800, letterSpacing: '.06em'}}>{t.objectPick}</span>
+            <span style={{position: 'absolute', top: -28, right: 0, color: '#fff', background: C.blue, padding: '5px 9px', borderRadius: 6, fontSize: 10.5, fontWeight: 800, letterSpacing: '.06em'}}>{t.markedBox}</span>
           </div>
         )}
         {(selection === 'manual' || selection === 'both') && (
@@ -282,7 +285,7 @@ const RewindPick: React.FC<{duration: number}> = ({duration}) => {
       <Timeline rewind={rewind} left={100} top={615} width={790} />
       <div style={{position: 'absolute', left: 956, top: 162, width: 270, opacity: picked, transform: `translateX(${(1 - picked) * 44}px)`}}>
         <div style={{padding: '18px 18px 20px', background: '#12121a', border: `1px solid ${C.blue}88`, borderRadius: 16, boxShadow: '0 28px 70px rgba(0,0,0,.32)'}}>
-          <div style={{display: 'flex', alignItems: 'center', gap: 10, color: '#cfe8ff', fontSize: 12, fontWeight: 820, letterSpacing: '.09em'}}><span style={{width: 9, height: 9, background: C.blue, borderRadius: '50%', boxShadow: `0 0 15px ${C.blue}`}} /> {t.objectPick}</div>
+          <div style={{display: 'flex', alignItems: 'center', gap: 10, color: '#cfe8ff', fontSize: 12, fontWeight: 820, letterSpacing: '.09em'}}><span style={{width: 9, height: 9, background: C.blue, borderRadius: '50%', boxShadow: `0 0 15px ${C.blue}`}} /> {t.recordedContext}</div>
           {[['NAME', t.saveChanges], ['ROLE', t.button], ['STATE', t.visibleAgo]].map(([k, v]) => (
             <div key={k} style={{marginTop: 18}}><div style={{fontSize: 10, color: '#777384', fontWeight: 800, letterSpacing: '.12em'}}>{k}</div><div style={{fontSize: 16, color: C.text, fontWeight: 680, marginTop: 4}}>{v}</div></div>
           ))}
@@ -292,7 +295,7 @@ const RewindPick: React.FC<{duration: number}> = ({duration}) => {
           <div style={{fontSize: 14.5, color: '#fff0f2', marginTop: 7, lineHeight: 1.35}}>{t.manualQuote}</div>
         </div>
       </div>
-      <div style={{position: 'absolute', right: 58, bottom: 34, color: manual > 0.45 ? C.red : C.blue, fontWeight: 790, fontSize: 18, letterSpacing: '-.02em'}}>{manual > 0.45 ? t.objectOrManual : t.pickReal}</div>
+      <div style={{position: 'absolute', right: 58, bottom: 34, color: manual > 0.45 ? C.red : C.blue, fontWeight: 790, fontSize: 18, letterSpacing: '-.02em'}}>{manual > 0.45 ? t.boxOrNote : t.markMoment}</div>
     </AbsoluteFill>
   );
 };

@@ -1,6 +1,7 @@
 import {mkdirSync, renameSync, rmSync, unlinkSync} from 'node:fs';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
+import {createRequire} from 'node:module';
 
 const ALL_LOCALES = ['en', 'ko', 'ja', 'zh', 'es', 'fr', 'de', 'pt', 'ru'];
 const requested = process.argv.slice(2);
@@ -10,7 +11,12 @@ if (unknown.length) {
   throw new Error(`Unsupported locale(s): ${unknown.join(', ')}`);
 }
 
-const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+// Remotion's CLI is invoked as its own JS entry point rather than through
+// `npx`, because Node 24 refuses to spawn a `.cmd` shim with `shell: false`
+// (EINVAL, the CVE-2024-27980 mitigation) and turning the shell ON here would
+// put a JSON `--props` argument through cmd.exe quoting. Resolving the bin the
+// package declares keeps one process, no shell, and the arguments intact.
+const remotionCli = createRequire(import.meta.url).resolve('@remotion/cli/remotion-cli.js');
 const compositions = [
   {id: 'TimeMachine', file: 'capturepack-time-machine', posterFrame: 22},
   {id: 'StillContext', file: 'capturepack-still-context', posterFrame: 100},
@@ -46,8 +52,8 @@ for (const locale of locales) {
     const posterPng = join(dir, `${composition.file}-poster.png`);
     const posterWebp = join(dir, `${composition.file}-poster.webp`);
 
-    run(npx, [
-      'remotion', 'render', 'src/index.tsx', composition.id, rawMp4,
+    run(process.execPath, [
+      remotionCli, 'render', 'src/index.tsx', composition.id, rawMp4,
       '--props', props,
       '--codec=h264', '--crf=20', '--pixel-format=yuv420p',
     ]);
@@ -64,8 +70,8 @@ for (const locale of locales) {
       '-deadline', 'good', '-cpu-used', '4', '-row-mt', '1', webm,
     ]);
 
-    run(npx, [
-      'remotion', 'still', 'src/index.tsx', composition.id, posterPng,
+    run(process.execPath, [
+      remotionCli, 'still', 'src/index.tsx', composition.id, posterPng,
       `--frame=${composition.posterFrame}`, '--props', props,
     ]);
     run('ffmpeg', [

@@ -7,15 +7,21 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Sponsor](https://img.shields.io/badge/%E2%99%A5_Sponsor-ea4aaa)](https://github.com/sponsors/r2cuerdame)
 
-## Rewind the bug. Pick the object. Give AI the state.
+## Rewind the bug. Mark the moment. Give AI the state.
 
 **CapturePack turns a rolling replay — 30 seconds by default — into structured
 evidence for humans and AI.**
 
-Press the hotkey after something goes wrong, rewind to the frame where it happened,
-and use Object Pick to select the captured control or window under the cursor.
-CapturePack preserves the target's identity and observed movement instead of
-leaving an AI to infer everything from pixels.
+Press the hotkey after something goes wrong and rewind to the frame where it
+happened. Box what broke, say what you meant, and save. The pack carries the
+replay, the desktop's recorded window and control geometry through time, and
+your annotations — instead of leaving an AI to infer everything from pixels.
+
+**Object Pick is a still-image feature.** Capture a screenshot and you can click
+the actual control under the cursor: CapturePack records its name, role,
+automation id and process, and in a browser the whole visible page. A replay
+cannot offer the same thing honestly — see
+[why](#why-picking-belongs-to-the-still) — so a video gets the boxes you draw.
 
 The saved pack matches what the user captured: a video pack combines replay,
 frames, annotations, object context and an event timeline; an image pack contains
@@ -36,31 +42,50 @@ context capture.
   </a>
 </p>
 
-Watch the direction: the playhead starts at **NOW on the right**, travels
-**left to 5 seconds ago**, and only then does the missing **Save changes**
-control return and become selectable. Object Pick records the identity captured
-at that past instant; later scrubbing can follow observed owner-window movement.
-The same evidence is saved as structured data for AI.
+Watch the direction: the playhead starts at **NOW on the right** and travels
+**left to 5 seconds ago**, where the failure that is already gone from the screen
+is still there to be marked. The same evidence is saved as structured data for
+AI.
 
 ## The workflow
 
 1. **Rewind** — while Live recording is on (the default), press `Ctrl+Alt+C`
    after the bug, then scrub through the frozen replay to the frame where the UI
    was wrong. Replay length is configurable from 1–60 seconds.
-2. **Pick** — Object Pick highlights the UI controls that were on screen in the
-   frame you scrubbed to. Click once to record the real target, observed bounds,
-   accessible name, control type, and that instant; a window remains the
-   fallback when control data is unavailable.
-3. **Keep what the frame contained** — the pack records the controls that were on
-   screen at that instant, and in a browser the page itself: every element you
-   could see, with its role, rectangle and text. What you typed, password boxes
-   and anything hidden are refused deliberately, and the payload lists what it
-   left out so a reader knows an empty-looking form is a redaction. A box marks
-   the moment it was picked at; it does not follow the object afterwards, because
-   a replay cannot show a moment finer than a frame.
+2. **Mark it** — right-drag a box over what broke and type what you meant. The
+   box has a lifetime, so it appears and disappears with the moment it explains.
+3. **Or capture the still and pick the object** — press the screenshot hotkey
+   and Object Pick highlights the real control under the cursor. One click
+   records its accessible name, control type, AutomationId, process and observed
+   bounds; a window remains the fallback when control data is unavailable. In a
+   browser the pack also keeps the page itself: every element you could see, with
+   its role, rectangle and text. What you typed, password boxes and anything
+   hidden are refused deliberately, and the payload lists what it left out so a
+   reader knows an empty-looking form is a redaction.
 4. **Hand off structured context** — save the folder for another developer, drop
    it into ChatGPT, Claude, Codex, Cursor, or Gemini, or let a connected AI read
    it through the built-in, read-only MCP server.
+
+### Why picking belongs to the still
+
+Not because a replay is not worth picking in, but because it can only be picked
+in *half*.
+
+Window geometry is cheap: CapturePack samples it about a hundred times a second,
+so it can tell you which window was where at any frame. Walking a window's
+**controls** is not cheap — one walk of the Chromium windows on a normal desk
+costs 326 ms against 13.9 ms for everything else combined — so the tracker that
+runs during a recording paces itself to a 3% CPU duty and skips them. The result
+was a feature that offered the button inside the browser at the instant you
+captured, and only the browser window one second either side, with nothing on
+screen to tell you which one you had.
+
+A still has no such split. It is one instant, the full walk runs at it, and every
+control on the desktop is on offer. So that is where the precision goes.
+
+A video still *records* what was there — window and control geometry through
+time lands in the pack's context timeline for an AI to read. What it no longer
+does is invite you to click it.
 
 ### Where object context comes from
 

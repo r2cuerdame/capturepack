@@ -216,6 +216,7 @@ const fixedScreens: UiaScreenAccess = {
 const seamRaw: UiaRawDump = {
   capturedAt: new Date('2026-07-30T02:00:00.000Z'),
   truncated: false,
+  geometryRefused: 0,
   rootBounds: { x: 0, y: 0, width: 2560, height: 1440 },
   monitors: [
     {

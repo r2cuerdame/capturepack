@@ -1,7 +1,7 @@
 {
   "name": "capturepack",
   "productName": "CapturePack",
-  "version": "0.3.4-rc.18",
+  "version": "0.3.4-rc.19",
   "description": "Rewind recent screen activity, pick captured UI objects, and save structured local evidence for humans and AI.",
   "license": "MIT",
   "author": "r2cuerdame",
@@ -43,6 +43,8 @@
     "check:plugins": "node scripts/plugin-preservation-check.mjs",
     "check:windows-context": "node scripts/windows-context-timeline-check.mjs",
     "check:image-context": "node scripts/image-context-check.mjs",
+    "check:renderer-geometry": "node scripts/renderer-geometry-check.mjs",
+    "check:video-no-picking": "node scripts/video-no-picking-check.mjs",
     "check:image-region-selector": "node scripts/image-region-selector-check.mjs",
     "check:image-region-window": "electron scripts/image-region-window-check.cjs",
     "check:image-desktop": "node scripts/image-desktop-check.mjs",
