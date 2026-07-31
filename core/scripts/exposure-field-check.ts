@@ -36,6 +36,11 @@ import {
   type LandmarkObservation,
 } from '../src/shared/exposureAlignment'
 import { resolvedReplayClockOffsetMs } from '../src/shared/displayClock'
+import {
+  fitOffsetByPixelScore,
+  type FrameScoreRow,
+  type PixelScoreFit,
+} from '../src/shared/exposureAlignment'
 
 interface Bounds { x: number; y: number; width: number; height: number }
 interface ContextWindow {
@@ -277,7 +282,13 @@ async function measureDisplay(display: DisplayEntry): Promise<void> {
     // Deliberately wider than the identification path's range and symmetric about
     // zero: an answer pinned to a boundary is not a peak, and a sweep that cannot
     // go past its own answer has no way to say so.
-    const fit = fitOffsetByPixelScore(frames, { minMs: -400, maxMs: 400 }, 1, offsetMs)
+    const fit = fitOffsetByPixelScore(
+      frames,
+      { minMs: -400, maxMs: 400 },
+      1,
+      offsetMs,
+      CANDIDATE_WINDOW_MS,
+    )
     const fitLine = fit === null
       ? '    pixel-score fit: no usable signal'
       : `    pixel-score fit: latency ${round(fit.latencyMs)} ms +/- ${round(fit.resolutionMs)}`
@@ -365,123 +376,6 @@ async function measureDisplay(display: DisplayEntry): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-
-/**
- * THE OFFSET A SLOW DRAG CAN STILL SHOW (#89).
- *
- * The measurement above asks each frame which rectangle it is showing, then
- * fits an offset to the answers. That needs consecutive observations to be
- * TELLABLE APART, and a slow drag moves the window a few pixels between them —
- * so no candidate clears the confidence margin, almost nothing survives, and
- * the whole segment refuses. Three field packs in a row refused exactly that
- * way while the owner was dragging deliberately slowly to look at the problem.
- *
- * This asks the question the other way round, in pixel space, and never
- * identifies anything: for each hypothesised offset, score every decoded frame
- * against the rectangle the context says was there at that frame's time plus
- * the offset, and total it. One frame's row is nearly flat on a slow drag; a
- * hundred of them summed is not, because the true offset is the only one that
- * lines up all of them at once.
- *
- * It is a different estimator, not a relaxed gate. Where the identification
- * path can answer, both are reported and they are expected to agree; where it
- * cannot, this one still can, and its own plateau says how sharply.
- */
-interface PixelScoreFit {
-  /**
-   * Positive = the picture is BEHIND its own timestamp, i.e. the frame stamped
-   * t shows the desktop as it was at t - latencyMs. Same sign as
-   * `measureExposureLatency`, so the two can be read against each other.
-   */
-  latencyMs: number
-  resolutionMs: number
-  comparedFrames: number
-  /** Peak total against the flattest total in the sweep — 0 means no signal. */
-  contrast: number
-}
-
-function fitOffsetByPixelScore(
-  frames: readonly InvertedFrame[],
-  search: { minMs: number; maxMs: number },
-  stepMs: number,
-  replayClockOffsetMs: number,
-): PixelScoreFit | null {
-  const usable = frames.filter((frame) => frame.scores.length > 0)
-  if (usable.length < 8 || !(stepMs > 0) || !(search.maxMs > search.minMs)) return null
-
-  const totals: Array<{ offsetMs: number; total: number; count: number }> = []
-  const steps = Math.round((search.maxMs - search.minMs) / stepMs)
-  for (let index = 0; index <= steps; index += 1) {
-    const offsetMs = search.minMs + index * stepMs
-    let total = 0
-    let count = 0
-    for (const frame of usable) {
-      // SPEC 5.6 defines the offset as `t_i = t + offset` — display time from
-      // PACK time — so reaching pack time from a decoded frame subtracts it.
-      const wanted = frame.ptsMs - replayClockOffsetMs + offsetMs
-      // The nearest OBSERVED rectangle to the hypothesised instant. Nearest,
-      // never interpolated: an interpolated rectangle is a position the window
-      // never occupied, and scoring pixels against one would invent evidence.
-      let nearest: { tMs: number; score: number } | null = null
-      let nearestGap = Number.POSITIVE_INFINITY
-      for (const entry of frame.scores) {
-        const gap = Math.abs(entry.tMs - wanted)
-        if (gap < nearestGap) {
-          nearestGap = gap
-          nearest = entry
-        }
-      }
-      // Outside the scored window this frame has no opinion, and counting it as
-      // zero would reward offsets that simply run off the end of the evidence.
-      if (nearest === null || nearestGap > CANDIDATE_WINDOW_MS) continue
-      total += nearest.score
-      count += 1
-    }
-    if (count >= 8) totals.push({ offsetMs, total, count })
-  }
-  if (totals.length < 3) return null
-
-  // Only offsets every frame could be compared over. A sweep whose ends drop
-  // frames would otherwise prefer whichever end kept the easiest ones.
-  let maxCount = 0
-  for (const entry of totals) if (entry.count > maxCount) maxCount = entry.count
-  const level = totals.filter((entry) => entry.count === maxCount)
-  if (level.length < 3) return null
-
-  let best = level[0] as { offsetMs: number; total: number; count: number }
-  let worst = best
-  for (const entry of level) {
-    if (entry.total > best.total) best = entry
-    if (entry.total < worst.total) worst = entry
-  }
-  const span = best.total - worst.total
-  if (!(span > 0)) return null
-
-  // The plateau is every offset within 2% of the peak, which is the same
-  // "how sharply is this decided" question the identification path answers with
-  // its own plateau. A wide one is a real answer that says it is imprecise.
-  const threshold = best.total - span * 0.02
-  let firstIndex = -1
-  let lastIndex = -1
-  for (let index = 0; index < level.length; index += 1) {
-    const entry = level[index]
-    if (entry === undefined || entry.total < threshold) continue
-    if (firstIndex < 0) firstIndex = index
-    lastIndex = index
-  }
-  const low = level[firstIndex]
-  const high = level[lastIndex]
-  if (low === undefined || high === undefined) return null
-  return {
-    // The sweep hypothesises "this frame shows the rectangle from ptsMs +
-    // offset"; a match at a NEGATIVE offset is a picture lagging its stamp,
-    // which is a POSITIVE latency.
-    latencyMs: -((low.offsetMs + high.offsetMs) / 2),
-    resolutionMs: (high.offsetMs - low.offsetMs) / 2 + stepMs / 2,
-    comparedFrames: maxCount,
-    contrast: span / Math.max(1, Math.abs(best.total)),
-  }
-}
 
 function argValue(flag: string): string | null {
   const index = process.argv.indexOf(flag)

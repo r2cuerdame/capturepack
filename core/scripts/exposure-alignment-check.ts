@@ -20,7 +20,9 @@ import {
   measureExposureLatency,
   residualAfterExposureCorrection,
   syntheticMovingLandmark,
+  fitOffsetByPixelScore,
   type ExposureAlignmentInput,
+  type FrameScoreRow,
 } from '../src/shared/exposureAlignment'
 
 let passed = 0
@@ -560,64 +562,207 @@ check(
 // was there. One frame's row is nearly flat on a slow drag; a hundred summed is
 // not, because only the true offset lines all of them up at once.
 //
-// Measured on CapturePack_2026-08-01_011147, three independent segments of one
-// focused display: 126.5, 125.5 and 129.0 ms — agreeing with the 118-127 ms an
-// entirely different estimator found on earlier packs.
+// It lives in `shared/` because the app must reach the same answer as the
+// offline harness on the same capture — the harness has ffmpeg and the app has
+// a canvas, but the fit itself may not be two implementations.
+console.log('\nL. the pixel-score fit, which never identifies a frame')
+
+/**
+ * Score rows for a landmark moving at a known speed, exposed a known amount
+ * late. Score falls off with the DISTANCE between where the candidate says the
+ * window was and where the frame actually shows it, which is what an edge
+ * scorer measures — so a slow drag makes every row flatter without moving the
+ * peak, exactly as it does in the field.
+ */
+function syntheticRows(options: {
+  latencyMs: number
+  pxPerMs: number
+  frames: number
+  frameIntervalMs: number
+  contextIntervalMs: number
+  candidateWindowMs: number
+}): FrameScoreRow[] {
+  const rows: FrameScoreRow[] = []
+  const falloffPx = 40
+  for (let index = 0; index < options.frames; index += 1) {
+    const ptsMs = index * options.frameIntervalMs
+    // What this frame actually shows: the desktop as it was `latencyMs` ago.
+    const shownAtMs = ptsMs - options.latencyMs
+    const scores: Array<{ tMs: number; score: number }> = []
+    const first = Math.ceil((ptsMs - options.candidateWindowMs) / options.contextIntervalMs)
+    const last = Math.floor((ptsMs + options.candidateWindowMs) / options.contextIntervalMs)
+    for (let step = first; step <= last; step += 1) {
+      const tMs = step * options.contextIntervalMs
+      const offBy = Math.abs(tMs - shownAtMs) * options.pxPerMs
+      scores.push({ tMs, score: Math.max(0, 1 - offBy / falloffPx) })
+    }
+    rows.push({ ptsMs, scores })
+  }
+  return rows
+}
+
+const SWEEP = { minMs: -400, maxMs: 400 }
+
+{
+  // A brisk drag: 2 px/ms. Each row already has a clear peak.
+  const fast = fitOffsetByPixelScore(
+    syntheticRows({
+      latencyMs: 127,
+      pxPerMs: 2,
+      frames: 120,
+      frameIntervalMs: 67,
+      contextIntervalMs: 10,
+      candidateWindowMs: 350,
+    }),
+    SWEEP,
+    1,
+    0,
+    350,
+  )
+  check(
+    'a brisk drag names the injected latency',
+    fast !== null && Math.abs(fast.latencyMs - 127) <= fast.resolutionMs,
+    fast === null ? 'null' : `${round(fast.latencyMs)} +/- ${round(fast.resolutionMs)}`,
+  )
+}
+{
+  // The case the identification path cannot do: 0.05 px/ms means consecutive
+  // observations are half a pixel apart, so no single frame can tell them
+  // apart. The total over 120 of them still can.
+  const slow = fitOffsetByPixelScore(
+    syntheticRows({
+      latencyMs: 127,
+      pxPerMs: 0.05,
+      frames: 120,
+      frameIntervalMs: 67,
+      contextIntervalMs: 10,
+      candidateWindowMs: 350,
+    }),
+    SWEEP,
+    1,
+    0,
+    350,
+  )
+  check(
+    'and so does a drag too slow for any single frame to resolve',
+    slow !== null && Math.abs(slow.latencyMs - 127) <= slow.resolutionMs + 10,
+    slow === null ? 'null' : `${round(slow.latencyMs)} +/- ${round(slow.resolutionMs)}`,
+  )
+}
+{
+  // The offset is subtracted, per SPEC 5.6 (`t_i = t + offset`): a display
+  // whose replay clock runs 134 ms ahead of the pack must not report that as
+  // 134 ms of extra exposure. Measured for real on
+  // CapturePack_2026-08-01_011147, where assuming zero turned 108 ms into 242.
+  const rows = syntheticRows({
+    latencyMs: 127,
+    pxPerMs: 2,
+    frames: 120,
+    frameIntervalMs: 67,
+    contextIntervalMs: 10,
+    candidateWindowMs: 350,
+  })
+  const shifted = rows.map((row) => ({ ...row, ptsMs: row.ptsMs + 134 }))
+  const withOffset = fitOffsetByPixelScore(shifted, SWEEP, 1, 134, 350)
+  const withoutOffset = fitOffsetByPixelScore(shifted, SWEEP, 1, 0, 350)
+  check(
+    'a display clock offset is removed, not reported as exposure',
+    withOffset !== null && Math.abs(withOffset.latencyMs - 127) <= withOffset.resolutionMs,
+    withOffset === null ? 'null' : `${round(withOffset.latencyMs)}`,
+  )
+  check(
+    'and ignoring it puts the whole offset into the answer',
+    withoutOffset !== null && Math.abs(withoutOffset.latencyMs - 261) <= 10,
+    withoutOffset === null ? 'null' : `${round(withoutOffset.latencyMs)}`,
+  )
+}
+{
+  // The lesson that cost a wrong report: the first field run answered -59 ms
+  // with a +/-1.5 ms resolution, one step from its own search boundary. A
+  // confident answer pinned to the edge of a sweep is not a peak.
+  // A SLOW drag, which is what the field case was: its scores fall off gently
+  // enough that a too-narrow sweep still sees a gradient, climbs it, and stops
+  // at its own edge with a tight resolution. A brisk drag would score zero
+  // everywhere in range and correctly return nothing — it is the plausible
+  // answer that is dangerous, not the absent one.
+  const rows = syntheticRows({
+    latencyMs: 127,
+    pxPerMs: 0.05,
+    frames: 120,
+    frameIntervalMs: 67,
+    contextIntervalMs: 10,
+    candidateWindowMs: 350,
+  })
+  const narrow = fitOffsetByPixelScore(rows, { minMs: -60, maxMs: 60 }, 1, 0, 350)
+  const wide = fitOffsetByPixelScore(rows, SWEEP, 1, 0, 350)
+  check(
+    'a sweep that cannot reach the answer returns its own boundary',
+    narrow !== null && narrow.latencyMs >= 55 && narrow.latencyMs <= 60,
+    narrow === null ? 'null' : `${round(narrow.latencyMs)} from a +/-60 ms sweep`,
+  )
+  check(
+    'so the range must be wider than any answer it is allowed to give',
+    wide !== null && Math.abs(wide.latencyMs - 127) <= wide.resolutionMs,
+    wide === null ? 'null' : `${round(wide.latencyMs)} from a +/-400 ms sweep`,
+  )
+}
+{
+  const flat = fitOffsetByPixelScore(
+    syntheticRows({
+      latencyMs: 127,
+      pxPerMs: 0,
+      frames: 120,
+      frameIntervalMs: 67,
+      contextIntervalMs: 10,
+      candidateWindowMs: 350,
+    }),
+    SWEEP,
+    1,
+    0,
+    350,
+  )
+  check(
+    'a window that never moved yields nothing rather than a number',
+    flat === null,
+    flat === null ? 'null' : `${round(flat.latencyMs)}`,
+  )
+}
+{
+  const thin = fitOffsetByPixelScore(
+    syntheticRows({
+      latencyMs: 127,
+      pxPerMs: 2,
+      frames: 4,
+      frameIntervalMs: 67,
+      contextIntervalMs: 10,
+      candidateWindowMs: 350,
+    }),
+    SWEEP,
+    1,
+    0,
+    350,
+  )
+  check(
+    'and too few frames yield nothing, rather than a confident coincidence',
+    thin === null,
+    thin === null ? 'null' : `${round(thin.latencyMs)}`,
+  )
+}
 {
   const field = readFileSync(
     path.join(process.cwd(), 'scripts', 'exposure-field-check.ts'),
     'utf8',
   )
   check(
-    'the field harness carries an estimator that needs no identified frame',
-    field.includes('function fitOffsetByPixelScore(')
-      && field.includes('frame.scores'),
+    'the harness uses the shared estimator rather than its own copy',
+    field.includes("fitOffsetByPixelScore,")
+      && field.includes("from '../src/shared/exposureAlignment'")
+      && !field.includes('function fitOffsetByPixelScore('),
   )
   check(
-    'it never interpolates a rectangle the window did not occupy',
-    field.includes('never interpolated')
-      && field.includes('if (nearest === null || nearestGap > CANDIDATE_WINDOW_MS) continue'),
-  )
-  // The first run of this reported -59 ms with a +/-1.5 ms resolution, one step
-  // from its own search boundary. A confident answer pinned to the edge of the
-  // sweep is not a peak; widening it moved the same segment to 129 ms.
-  check(
-    'its sweep is symmetric and wide enough that a boundary cannot pose as a peak',
-    field.includes('{ minMs: -400, maxMs: 400 }')
-      && field.includes('an answer pinned to a boundary is not a peak'),
-  )
-  check(
-    'it reports a latency in the same sign as the estimator it sits beside',
-    field.includes('latencyMs: -((low.offsetMs + high.offsetMs) / 2)')
-      && field.includes('Positive = the picture is BEHIND its own timestamp'),
-  )
-  // A HARNESS THAT GUESSES A CLOCK REPORTS THE GUESS AS PHYSICS.
-  //
-  // A non-focused display often has no MEASURED clock origin, and the app falls
-  // back to assuming both recordings ended together. The harness assumed ZERO
-  // instead, so that whole fallback landed in the answer as if it were exposure.
-  //
-  // On CapturePack_2026-08-01_011147 it produced 127 ms for the focused display
-  // and 242 ms for the other, and I reported the gap as proof that exposure is
-  // per-display. Display 1's fallback offset is +134 ms and the gap was +115.
-  // Using the app's own offset, the two displays read 127 and 108 — nineteen
-  // milliseconds apart, less than a third of a frame, with the remainder inside
-  // the uncertainty of the guess itself. The displays were never disagreeing.
-  check(
-    'the harness measures on the clock the app uses, not on zero',
+    'and measures on the clock the app uses, saying so when it is a fallback',
     field.includes('resolvedReplayClockOffsetMs(')
-      && field.includes("using the app's own fallback")
       && field.includes('which is itself an assumption'),
-  )
-  check(
-    'and reaches pack time by SUBTRACTING the offset, as SPEC 5.6 defines it',
-    field.includes('const wanted = frame.ptsMs - replayClockOffsetMs + offsetMs')
-      && field.includes('`t_i = t + offset`'),
-  )
-  check(
-    'and a refusal by identification no longer ends the measurement',
-    field.includes('identification REFUSED')
-      && field.includes('the slow drag still yields an offset'),
   )
 }
 

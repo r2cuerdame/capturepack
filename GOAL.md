@@ -298,6 +298,75 @@ That last point has no obviously right answer and is the owner's call.
 
 ---
 
+## The box sits on the picture (0.4.0, decided 2026-08-01)
+
+Owner's requirement, in their words: *"이미지에 맞춰야돼"* — it has to match the
+image — and *"내가 원하는건 제대로 싱크가 맞는거야"*. This is the same principle
+[The picture is the clock](#the-picture-is-the-clock-81) already states, now
+with a number behind it and a place to apply it.
+
+### What is left, measured
+
+Two things made a box disagree with the window it names. The first was a
+recorder that wrote a stalled screen as a shorter one, and it is fixed — see
+[#116](https://github.com/r2cuerdame/capturepack/issues/116). What remains is
+one constant:
+
+| capture | display | measured |
+|---|---|---|
+| CapturePack_2026-08-01_011147 | 2, focused | 126.5, 125.5, 129.0 ms |
+| | 1 | 107.5, 108.0 ms |
+
+Three independent segments of the focused display agree, and agree with the
+118–127 ms an entirely different estimator found on earlier packs. The picture
+is about **127 ms behind its own timestamp**: a frame stamped `t` shows the
+desktop as it was at `t - 127`. The box is at the true position and the picture
+is late, so the box appears to run ahead — at 0.3 px/ms that is 38 px, which is
+why it is visible even when dragging slowly.
+
+**It is not per-display.** An earlier reading of 242 ms on display 1 was the
+harness measuring on a clock it had guessed at; the two displays are 19 ms
+apart, less than a third of a frame.
+
+### The decision
+
+**Correct at save time, on the samples themselves.**
+
+The alternative — correcting where the box is drawn — was rejected for a reason
+already recorded above: it needs at least two application sites, which the
+one-application-site rule forbids, and it would still leave the annotated
+replay, `report.md` and every third-party SPEC reader uncorrected. A pack that
+is only right inside our own editor is not a pack that explains anything.
+
+The objection to save time was that it is irreversible per pack. It is answered
+by writing down what was applied: `media.cadence.source_latency` exists for
+exactly this, and a reader that wants the raw observation can undo it.
+
+### Where the number comes from
+
+**Each pack measures itself, from its own pixels, at save time.** No per-machine
+calibration, no shipped constant, no setting to get wrong. The value is
+evidence about that capture, produced by the same estimator the offline harness
+uses — one source, one answer.
+
+A capture whose landmark never moves cannot be measured, and is then not
+corrected, and says so. That is the same rule the cadence fields already obey:
+a quantity nobody measured is not reported as one.
+
+### What this does and does not fix
+
+**The focused display will agree with its picture to within a frame.** That is
+where annotation actually happens.
+
+**A non-focused display will improve but not converge**, because it carries a
+second, independent error: its replay clock origin is often unobserved, and the
+fallback assumption was worth ±134 ms in the capture above. That is not exposure
+and no exposure correction touches it. Measuring it properly costs the recording
+about a third of its frame rate — 14.8 fps against 10.1, measured twice with the
+roles swapped — so it stays a deliberate non-goal, revisitable as a setting.
+
+---
+
 ## Object tracking was removed, and put back (2026-07-31)
 
 Recorded because the reasoning was wrong in an instructive way, and because the
