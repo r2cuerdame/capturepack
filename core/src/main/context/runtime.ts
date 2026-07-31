@@ -212,14 +212,18 @@ export function stopContextRuntime(): void {
   current.lane.stop()
   current.controls.stop()
   const controlStatus = current.controls.status()
-  if (controlStatus.trees > 0) {
+  if (controlStatus.trees > 0 || chromiumWindowsNotWalked > 0) {
     logInfo(
       `[context] lane A: ${controlStatus.trees} tree(s), ${controlStatus.moves} rectangle change(s), ` +
         `${controlStatus.deaths} element(s) gone, ` +
         `${controlStatus.dutyCycle === null ? 'duty unmeasured' : `${(controlStatus.dutyCycle * 100).toFixed(2)}% of a core`}` +
-        `${controlStatus.blockedWindows > 0 ? `, ${controlStatus.blockedWindows} window(s) blocked` : ''}`,
+        `${controlStatus.blockedWindows > 0 ? `, ${controlStatus.blockedWindows} window(s) blocked` : ''}` +
+        // Not walking a window is a choice with a consequence, so it is counted
+        // where the rest of this lane's cost is counted (#108).
+        `${chromiumWindowsNotWalked > 0 ? `, ${chromiumWindowsNotWalked} Chromium window(s) left to their own document rung` : ''}`,
     )
   }
+  chromiumWindowsNotWalked = 0
   const stats = current.timeline.stats()
   // The cost, on the record, once per run (GOAL "Capture must stay cheap" is a
   // promise this subsystem has to be able to be checked against).
@@ -620,20 +624,52 @@ export function foregroundWindowHandleNow(): string | null {
   return null
 }
 
+/**
+ * CHROMIUM'S TREE IS NOT LANE A'S TO WALK (#108).
+ *
+ * Measured on the reporting machine: one `FindAll(Subtree)` per visible window
+ * costs 1672.6 ms across the desktop, and 1534 of those milliseconds — 92% —
+ * are windows of this one class. ChatGPT 565, Discord 347, Chrome 238 and 151,
+ * Orca 231. Every window that is NOT this class, added together, is 138 ms.
+ *
+ * They are also what breaks the lane rather than merely slowing it: `FindAll`
+ * is a provider call that cannot be interrupted, so one of these stalling took
+ * the whole lane down for 20 s in CapturePack_2026-07-31_173159 and that
+ * capture saved with no control geometry at all — including for the cheap
+ * windows it never got to.
+ *
+ * Depth-capping them was measured and rejected: it is 10-45x faster and returns
+ * 6 to 12 of 749 controls, because these trees are narrow and deep.
+ *
+ * What is given up, plainly: a real browser has a document-native rung and
+ * loses nothing, while an Electron application has no such source and is
+ * reduced to its window. That is what it already got — these are precisely the
+ * windows the per-pass budget was dropping — but now it is a decision instead
+ * of an accident, and the count is on the record below.
+ */
+const CHROMIUM_WINDOW_CLASS = 'Chrome_WidgetWin_1'
+let chromiumWindowsNotWalked = 0
+
 export function visibleWindowHandlesNow(): string[] {
   const current = runtime
   if (current === null) return []
   const nowMs = current.clock.nowMs()
   const { surfaces } = current.timeline.surfacesAt(nowMs)
   const handles: string[] = []
+  const skipped = new Set<string>()
   for (const surface of surfaces) {
     if (surface.hwnd === undefined) continue
     // Occluded to nothing = behind another window at every pixel. It is on
     // screen in the sense that it has a rectangle, and invisible in the sense
     // that matters.
     if (surface.visibleRegion !== undefined && surface.visibleRegion.length === 0) continue
+    if (surface.className === CHROMIUM_WINDOW_CLASS) {
+      skipped.add(surface.hwnd)
+      continue
+    }
     if (!handles.includes(surface.hwnd)) handles.push(surface.hwnd)
   }
+  if (skipped.size > chromiumWindowsNotWalked) chromiumWindowsNotWalked = skipped.size
   return handles
 }
 

@@ -1926,6 +1926,36 @@ async function main(): Promise<void> {
   recovering.stop()
   replacement.close(0)
 
+  // CHROMIUM WINDOWS ARE NOT WALKED, AND THAT IS SAID OUT LOUD (#108).
+  //
+  // Measured on the reporting machine: 1534 ms of a 1672.6 ms desktop pass is
+  // windows of this one class, and one of them stalling took the whole lane
+  // down for 20 s — a capture then saved with no control geometry at all,
+  // including for the cheap windows the lane never reached. The decision to
+  // leave them to their own document rung is only defensible while it is
+  // visible, so the count travels with the rest of this lane's cost.
+  const runtimeSource = readFileSync('src/main/context/runtime.ts', 'utf8')
+  check(
+    'the visible set lane A is given excludes Chromium windows',
+    runtimeSource.includes("const CHROMIUM_WINDOW_CLASS = 'Chrome_WidgetWin_1'")
+      && runtimeSource.includes('surface.className === CHROMIUM_WINDOW_CLASS'),
+    true,
+  )
+  check(
+    'windows left unwalked are counted, not silently skipped',
+    runtimeSource.includes('chromiumWindowsNotWalked')
+      && runtimeSource.includes('Chromium window(s) left to their own document rung'),
+    true,
+  )
+  // The decision belongs where the class is known. Lane A is handed handles and
+  // must not start second-guessing which of them are worth its time.
+  const laneSource = readFileSync('src/main/context/controlLane.ts', 'utf8')
+  check(
+    'lane A itself does not know or care which class a window is',
+    !laneSource.includes('Chrome_WidgetWin_1'),
+    true,
+  )
+
   console.log(
     `\nlane A status: ${lane.status().trees} tree(s), ${lane.status().moves} move(s), ` +
       `${lane.status().deaths} death(s)`,
