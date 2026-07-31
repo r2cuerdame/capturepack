@@ -1,5 +1,5 @@
 import {mkdirSync, renameSync, rmSync, unlinkSync} from 'node:fs';
-import {join} from 'node:path';
+import {dirname, join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {createRequire} from 'node:module';
 
@@ -16,7 +16,12 @@ if (unknown.length) {
 // (EINVAL, the CVE-2024-27980 mitigation) and turning the shell ON here would
 // put a JSON `--props` argument through cmd.exe quoting. Resolving the bin the
 // package declares keeps one process, no shell, and the arguments intact.
-const remotionCli = createRequire(import.meta.url).resolve('@remotion/cli/remotion-cli.js');
+// Built from the package root rather than require.resolve()'d, because the
+// package's `exports` map does not publish its own bin as a subpath.
+const remotionCli = join(
+  dirname(createRequire(import.meta.url).resolve('@remotion/cli/package.json')),
+  'remotion-cli.js',
+);
 const compositions = [
   {id: 'TimeMachine', file: 'capturepack-time-machine', posterFrame: 22},
   {id: 'StillContext', file: 'capturepack-still-context', posterFrame: 100},
