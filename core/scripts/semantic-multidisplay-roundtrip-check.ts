@@ -1,11 +1,4 @@
-// Semantic multi-display persistence contract, and the legacy-read contract.
-//
-// 0.4.0 stopped WRITING `tracking` (GOAL "The still is the context"), and did
-// not stop reading it: SPEC §13.1 obliges every reader to keep reading packs
-// already in the world, and 0.2.0-0.3.x wrote tracks. So the annotation below
-// is a FIXTURE of what those writers produced - the exact output the projector
-// used to generate, inlined now that the projector is gone - and everything it
-// asserts is about a current app opening an older pack.
+// Semantic multi-display persistence contract.
 //
 // This deliberately goes through the production folder writer and directory
 // reader before asking the same render helper used by the editor and annotated
@@ -26,6 +19,7 @@ import {
   renderedAnnotationAt,
   type AuthoredMotionSpace,
 } from '../src/shared/track'
+import { projectControlTrack } from '../src/renderer/editor/objectTrack'
 import type { Annotation, AnnotationTarget } from '../src/shared/types'
 
 let passed = 0
@@ -100,15 +94,24 @@ const target: AnnotationTarget = {
   process: 'fixture-app',
 }
 
-// What a 0.3.x writer put on disk for a control picked on display 1 and
-// dragged across two DPI boundaries: the owner window's observed rectangles,
-// projected into each display's own snapshot pixels. Verified against the
-// projector's real output before it was removed.
-const legacyControlSamples = [
-  { tMs: 100, display: 1, x: 100, y: 800, width: 200, height: 100 },
-  { tMs: 400, display: 2, x: 1_275, y: 240, width: 300, height: 150 },
-  { tMs: 700, display: 3, x: 300, y: 450, width: 250, height: 125 },
-]
+const generatedControlSamples = projectControlTrack(
+  [
+    { tMs: 100, display: 1, x: 0, y: 0, width: 1_000, height: 1_000 },
+    { tMs: 400, display: 2, x: 1_125, y: -960, width: 1_500, height: 1_500 },
+    { tMs: 700, display: 3, x: 175, y: -550, width: 1_250, height: 1_250 },
+  ],
+  {
+    display: 1,
+    bounds: { x: 100, y: 800, width: 200, height: 100 },
+    surfaceBounds: { x: 0, y: 0, width: 1_000, height: 1_000 },
+    displays: screens.map((screen, index) => ({
+      index: index + 1,
+      width: screen.width,
+      height: screen.height,
+      pixelsPerDip: screen.scale,
+    })),
+  },
+)
 
 const semantic: Annotation = {
   annotation_id: 'ann_a3d15f',
@@ -123,7 +126,7 @@ const semantic: Annotation = {
   tracking: {
     enabled: true,
     picked_at_ms: 100,
-    samples: legacyControlSamples.map((sample) => ({
+    samples: generatedControlSamples.map((sample) => ({
       t_ms: sample.tMs,
       ...(sample.display === 1 ? {} : { display: sample.display }),
       x: sample.x,
@@ -272,6 +275,104 @@ async function main(): Promise<void> {
     )
   } finally {
     await rm(outputDir, { recursive: true, force: true })
+  }
+
+  // A WINDOW BEING DRAGGED ACROSS A DPI BOUNDARY HAS NOT BEEN RESCALED YET (#107).
+  //
+  // The samples above are already what a settled window looks like: 1000 px on a
+  // 1x screen, 1500 on 1.5x, 1250 on 1.25x — one DIP size, re-expressed. Windows
+  // only applies that rescale when the drag ENDS, so while the window straddles
+  // the seam it is observed on the new screen at the size it still physically
+  // is. Read as a re-layout, that ends the projection permanently and takes
+  // every later sample with it.
+  //
+  // Measured on CapturePack_2026-07-31_170906: an Explorer window 1439x951 on
+  // the 1.5x display, dragged left onto the 1x display. Its track stopped at
+  // 11782 ms — the last instant before the seam — while the window itself went
+  // on being observed to 16307 ms. 4525 ms of a 10 s box had nothing to draw
+  // from, and the editor counted it: "229 shown frame(s) fell outside the track".
+  console.log('\nA window crossing a DPI boundary mid-drag')
+  {
+    const crossingDisplays = [
+      { index: 1, width: 1_200, height: 1_920, pixelsPerDip: 1 },
+      { index: 2, width: 3_840, height: 2_160, pixelsPerDip: 1.5 },
+    ]
+    const crossingAnchor = {
+      display: 2,
+      bounds: { x: 1_512, y: 1_313, width: 1_439, height: 39 },
+      surfaceBounds: { x: 1_512, y: 401, width: 1_439, height: 951 },
+      displays: crossingDisplays,
+    }
+    // The observations exactly as that capture recorded them: the last instant
+    // on the 1.5x screen, the drag across the seam (one sample per screen,
+    // sharing tMs, each clipped to its own), and the moment the window is
+    // genuinely resized on the other side.
+    const observed = [
+      { tMs: 11_782, display: 2, x: 5, y: 673, width: 1_439, height: 951 },
+      { tMs: 11_793, display: 1, x: 1_084, y: 673, width: 116, height: 951 },
+      { tMs: 11_793, display: 2, x: 0, y: 673, width: 1_323, height: 951 },
+      { tMs: 11_849, display: 1, x: 489, y: 675, width: 711, height: 951 },
+      { tMs: 11_849, display: 2, x: 0, y: 675, width: 728, height: 951 },
+      { tMs: 12_045, display: 1, x: 489, y: 675, width: 711, height: 951 },
+      { tMs: 12_045, display: 2, x: 0, y: 675, width: 728, height: 951 },
+      // 951 -> 633 is not a resize: it is Windows finally applying the 1x
+      // display's DPI when the drag settles. 951 px at 1.5x IS 633 px at 1x.
+      { tMs: 12_058, display: 1, x: 654, y: 690, width: 546, height: 633 },
+      { tMs: 12_058, display: 2, x: 0, y: 690, width: 412, height: 633 },
+      // Fully on the 1x screen, rescaled. 958 px where the arithmetic expects
+      // 959.33 — the rounding a one-pixel tolerance used to call a resize.
+      { tMs: 12_175, display: 1, x: 228, y: 669, width: 958, height: 633 },
+      { tMs: 13_110, display: 1, x: 304, y: 670, width: 896, height: 633 },
+      { tMs: 13_110, display: 2, x: 0, y: 670, width: 62, height: 633 },
+      // Dragged back: the same rescale in reverse, 633 -> 951 while straddling.
+      { tMs: 13_192, display: 1, x: 519, y: 643, width: 681, height: 951 },
+      { tMs: 13_192, display: 2, x: 0, y: 643, width: 758, height: 951 },
+      // Home again, at the size and screen it was picked on.
+      { tMs: 13_228, display: 2, x: 2_000, y: 562, width: 1_439, height: 951 },
+      { tMs: 16_307, display: 2, x: 2_028, y: 737, width: 1_439, height: 951 },
+    ]
+    const crossed = projectControlTrack(observed, crossingAnchor)
+    const lastProjectedMs = crossed[crossed.length - 1]?.tMs ?? null
+    check(
+      'the seam is not the end of a control track',
+      lastProjectedMs !== null && lastProjectedMs > 11_782,
+      `the projection stops at ${lastProjectedMs ?? 'nothing'}, the last sample before the seam is 11782`,
+    )
+    check(
+      'the control follows its window onto the other screen',
+      crossed.some((sample) => sample.display === 1),
+      JSON.stringify(crossed.filter((sample) => sample.display === 1).slice(0, 2)),
+    )
+    check(
+      'both halves of a straddling window carry the control',
+      crossed.filter((sample) => sample.tMs === 11_793).length === 2,
+      JSON.stringify(crossed.filter((sample) => sample.tMs === 11_793)),
+    )
+    check(
+      'the whole round trip is tracked, so a box lives out its lifetime',
+      lastProjectedMs === 16_307,
+      `observations run to 16307 ms, the projection stops at ${lastProjectedMs ?? 'nothing'}`,
+    )
+    check(
+      'the DPI rescale on arrival is not read as a resize',
+      crossed.some((sample) => sample.tMs === 12_175 && sample.display === 1),
+      JSON.stringify(crossed.find((sample) => sample.tMs === 12_175)),
+    )
+    // The rule this must not weaken: a window that genuinely resizes may have
+    // re-laid its children out, and that still ends the projection.
+    const resized = projectControlTrack(
+      [
+        { tMs: 11_782, display: 2, x: 5, y: 673, width: 1_439, height: 951 },
+        { tMs: 11_900, display: 2, x: 5, y: 673, width: 1_439, height: 1_400 },
+        { tMs: 12_000, display: 2, x: 5, y: 673, width: 1_439, height: 1_400 },
+      ],
+      crossingAnchor,
+    )
+    check(
+      'a genuine resize still ends the projection rather than guessing',
+      resized.length === 1 && resized[0]?.tMs === 11_782,
+      JSON.stringify(resized.map((s) => s.tMs)),
+    )
   }
 
   console.log(`\nresult: ${failed === 0 ? 'OK' : 'FAILED'} — ${passed} passed, ${failed} failed`)

@@ -8,6 +8,7 @@ import type {
   EditorInitPayload,
 } from '../shared/ipc'
 import type { ContextFrame } from '../shared/context/protocol'
+import type { ObjectTrackRequest, ObjectTrackResult } from '../shared/ipc'
 import type { EditorWindowMode } from '../shared/types'
 import { replayOnce } from './replayOnce'
 
@@ -52,6 +53,9 @@ contextBridge.exposeInMainWorld('editorBridge', {
   // WHERE A PICKED OBJECT WENT (#86). Asked ONCE, when a box is picked — the
   // answer is a path, and the renderer interpolates over it, so a box that
   // follows its object costs nothing per scrub tick.
+  requestObjectTrack(request: ObjectTrackRequest): Promise<ObjectTrackResult | null> {
+    return ipcRenderer.invoke(IPC.contextRequestTrack, request) as Promise<ObjectTrackResult | null>
+  },
   export(payload: EditorExportPayload): void {
     ipcRenderer.send(IPC.editorExport, payload)
   },

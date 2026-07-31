@@ -298,95 +298,82 @@ That last point has no obviously right answer and is the owner's call.
 
 ---
 
-## The still is the context (0.4.0 direction, decided 2026-07-31)
+## Object tracking was removed, and put back (2026-07-31)
 
-**Video stops collecting context frame by frame. The captured instant collects
-everything.** Owner's decision, taken after the evidence below.
+Recorded because the reasoning was wrong in an instructive way, and because the
+next person to propose removing it deserves the measurement rather than the
+argument.
 
-### What the evidence said
+### What was decided, and why
 
-Every hard defect of the last two weeks lives in one place: the join between
-moving geometry and a video frame. Not one of them is a bug in the geometry, and
-not one is a bug in the video.
+On 2026-07-31 video object tracking was removed. Three defects were cited, all
+living in the join between moving geometry and a video frame:
 
-- **#89** — the recorder puts pixels on the glass late. Measured 118–127 ms on
-  one desk, and the correction turns 551 px of error into 97 px. Where to apply
-  it has no right answer (see above), and no answer at all for a display whose
-  latency could not be measured.
-- **Multi-monitor** — a second display's replay has its own clock. When its
-  origin cannot be observed the alignment falls back to assuming both recordings
-  ended together, which is arithmetic wearing the clothes of a measurement.
-- **Time-axis compression** — measured on `CapturePack_2026-07-31_202834`:
-  display 1 recorded 17.6 s of wall time into 5.29 s of media, frames evenly
-  spaced at 66.7 ms with a largest gap of 197 ms, while its own cadence report
-  admits a 903 ms stall. The gaps were not preserved. **No single offset can
-  repair that** — time is compressed non-linearly, so a box is wrong in a
-  different amount in every stretch.
-- **Cost** — 15 fps control geometry is reachable only by excluding Chromium
-  windows, which are 92% of the cost. The thing users most want to select is the
-  thing the budget cannot afford to watch.
+1. **Exposure latency (#89)** — 118-127 ms measured, correctable only at a site
+   nobody could agree on.
+2. **Multi-monitor clock origin** — often unobservable, so alignment fell back
+   to assuming both recordings ended together.
+3. **Time-axis compression** — a 17.6 s capture written as 5.29 s of media,
+   frames evenly spaced, with the display's own 903 ms stall nowhere in the
+   file. This was called unfixable: *"no single offset can repair that, because
+   time is compressed non-linearly."*
 
-Each of those is fixable. Together they are a standing tax on every capture, paid
-so that a box can follow a window that the user is dragging — which is the rarest
-thing they do and the least of what they are trying to explain.
+Point 3 was the decisive one, and it was **wrong**.
 
-### The decision
+### What the measurement said
 
-A single instant has no clock to disagree with. There is no exposure latency
-between a snapshot and itself, no second display's origin to observe, no
-compressed time base, and no per-frame budget. Everything that was hard becomes
-either trivial or absent.
+Not wrong in principle - wrong in fact. The compression was a bug in this
+repository, and finding it took three rounds of being mistaken:
 
-So:
+- The first diagnosis blamed the ring for discarding Chromium's per-fragment
+  `tfdt`. It was committed and filed **before** being verified.
+- Verification appeared to refute it: two probes against a real MediaRecorder
+  could not make the shipped ring lose a gap, and dissecting a field replay
+  found a single fragment - nothing to join. The fix was reverted.
+- That dissection read the **wrong artifact**. The file had an `mfra`; it was a
+  re-encode, not the recorder's output. The real output for the same shape has
+  34 fragments.
+- Instrumentation was added to answer it from ingest instead of by argument -
+  and shipped in the renderer, whose console never reaches the log, so it
+  measured nothing at all.
+- Routed properly, the first capture answered it in one line.
 
-**Video keeps** — the replay, the frozen snapshot at the trigger, hand-drawn
-annotations with lifetimes, blur, trim, the annotated replay and keyframe stills.
-It still answers *"what happened, and when."*
+`CapturePack_2026-07-31_233324`, one capture, two displays, same code, same
+instant:
 
-**Video loses** — `tracking.samples`, boxes that follow a moving object, and
-object selection at an arbitrary past frame. It no longer claims to know where a
-control was 8 seconds ago, because it never reliably did.
+| display | encoder span (`tfdt`) | media written | |
+|---|---|---|---|
+| 2, busy | 11,972 ms | 11,917 ms | agree |
+| 1, quiet | 11,908 ms | **3,501 ms** | 8.4 s lost |
 
-**The captured instant gains** — everything the machine can say about that one
-frame. The full UIA tree, and the Chromium DOM: every element's tag, role, id,
-class, screen rectangle and visible text. This is what `Ctrl+Alt+S` was always
-for, and it is now the deep half of `Ctrl+Alt+C` too — a video capture's
-`snapshot.png` gets the same treatment, because it is a still.
+Every one of display 1's 24 fragments carried a `tfdt`, and its longest held
+frame was 72.2 ms - so the sample durations did not carry the stall either.
+Only `tfdt` ever knew. Verified fixed in the field on
+`CapturePack_2026-07-31_235237`: the same quiet display now writes 11.884 s with
+nine gaps over 500 ms and one of 1,144 ms.
 
-### What the DOM carries, and what it must not
+### What that leaves
 
-Structure, geometry, and the text a person could read off the screen. **Not**
-the value of any `input` or `textarea`, **not** any `type="password"`, **not**
-the text of hidden elements.
+Two of the three points stand, and they are real:
 
-The rule behind it: `snapshot.png` already contains every pixel the user could
-see, so recording the visible text adds no exposure the pack did not already
-have. A typed-but-unsubmitted password, a token in a `data-` attribute, or the
-text of a collapsed panel are all things the picture does *not* contain, and a
-pack that quietly adds them is a pack that is more dangerous to forward than it
-looks. README already warns that blur is non-destructive; that warning must not
-have to grow a second paragraph about text.
+- **The clock origin is still unobserved** on a non-focused display, so its
+  alignment is still a fallback. It is a far better fallback now - the
+  end-alignment estimate moved from -12,347 ms to -892 ms - because both
+  durations are finally honest.
+- **A starved display still produces about 5 fps.** A box there freezes for
+  roughly a second at a time. No clock work changes that; only more frames
+  would, and that is a capture-rate problem.
 
-### Format consequence
+But the focused display - the one people actually annotate - recorded 14.7 fps
+with a 5 ms worst stall in the same capture. Tracking there is both smooth and,
+now, correctly placed.
 
-`tracking` is **not removed from the specification.** Packs already in the world
-carry it, and §13.1 requires readers to keep reading them; removing it would be
-a breaking change bought for nothing. New writers simply stop emitting it, and
-the field is documented as legacy — written by 0.2.0–0.3.x, read forever.
+### The rule this cost
 
-`target` stays and matters more than before: the identity of the object a box
-was picked from is exactly the durable half of what tracking was trying to say.
-
-### What this costs
-
-An honest list, because it is a real loss:
-
-- A dragged window in a replay can no longer be followed by a box.
-- "Select this control as it was at 00:08" is gone from video.
-- The time-machine narrative on the landing page is no longer true and has to be
-  rewritten, along with its localized motion assets in nine languages.
-
-The trade is that everything remaining is something the app can prove.
+**Measure before diagnosing, and make the measurement readable before trusting
+it.** Every wrong turn above came from reasoning about a mechanism instead of
+observing it, and the one that wasted a whole release came from a diagnostic
+that was correct and invisible. A number nobody can read is not a measurement.
 
 ---
 

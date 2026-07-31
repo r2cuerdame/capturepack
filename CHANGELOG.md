@@ -20,6 +20,13 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   expect: replays of a mostly-still screen are now several times longer and
   contain real pauses, and the retention window — which had been counting that
   fast clock — now keeps the number of seconds it says it keeps.
+- Boxes follow their object again on a replay whose screen went quiet. Nothing
+  about the following was broken; the clock underneath it was, and a box drawn
+  against a video that had lost eight seconds could not be right no matter where
+  it was placed. Object tracking was briefly removed on the belief that this was
+  unfixable, and is restored now that it is fixed. On a display producing about
+  five frames a second the box still stops for as long as that screen does —
+  that is the screen, not the box.
 - A trim whose out-point lands inside a held frame cuts where it was asked to.
   The render only tested the out-point when a new frame was presented, so
   across a frame the replay holds — up to 197 ms in a measured capture, and far
