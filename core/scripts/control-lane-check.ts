@@ -1939,7 +1939,49 @@ async function main(): Promise<void> {
   check(
     'the visible set lane A is given excludes Chromium windows',
     runtimeSource.includes("const CHROMIUM_WINDOW_CLASS = 'Chrome_WidgetWin_1'")
-      && runtimeSource.includes('surface.className === CHROMIUM_WINDOW_CLASS'),
+      && runtimeSource.includes('className !== CHROMIUM_WINDOW_CLASS'),
+    true,
+  )
+  // A FRAME BUDGET MUST NOT REACH A WALK THAT HAS NO FRAMES (#117).
+  //
+  // The exclusion above is a statement about what 15 fps can afford. It was
+  // reached through one shared helper, so it also governed the ONE-SHOT walk at
+  // the capture instant — which carries its own 3000 ms budget and no frame
+  // rate at all.
+  //
+  // Measured on CapturePack_2026-08-01_000034, a still capture of a region
+  // filled by an Electron application: the FOCUSED window recorded
+  // "tree": "skipped", "element_count": 0, while 82 elements were collected
+  // from a File Explorer behind it. The capture reported truncated: false and
+  // used almost none of its budget. The window the user had actually selected
+  // was the only thing the semantic layer could not see — and the applications
+  // people capture most (an editor, a chat client, a browser, this app's own
+  // editor) are all Chromium.
+  check(
+    'the exclusion lives in exactly one function, named for its constraint',
+    runtimeSource.includes('export function budgetedWindowHandlesNow()')
+      && (runtimeSource.match(/CHROMIUM_WINDOW_CLASS/gu) ?? []).length === 2,
+    true,
+  )
+  check(
+    'the per-frame lane takes the budgeted set',
+    runtimeSource.includes('hwnds: budgetedWindowHandlesNow(),'),
+    true,
+  )
+  check(
+    'and a one-shot walk takes every visible window, Chromium included',
+    runtimeSource.includes('export function visibleWindowHandlesNow()')
+      && runtimeSource.includes('return visibleSurfaceHandles(() => true)')
+      && readFileSync('src/main/uia.ts', 'utf8')
+        .includes('CAPTUREPACK_UIA_VISIBLE_HWNDS: visibleWindowHandlesNow().join(\',\')'),
+    true,
+  )
+  // Order is what makes the wider set safe: the shared budget can run out, and
+  // when it does the window the user was looking at must already be walked.
+  check(
+    'the one-shot walk spends its budget on the foreground window first',
+    readFileSync('scripts/uia-dump.ps1', 'utf8')
+      .includes('Control trees — foreground first, then z-order, in ONE shared budget'),
     true,
   )
   check(

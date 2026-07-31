@@ -149,7 +149,7 @@ export function startContextRuntime(options: ContextRuntimeOptions): void {
   const readVisibleWindows =
     options.testing?.readVisibleWindows ??
     (() => ({
-      hwnds: visibleWindowHandlesNow(),
+      hwnds: budgetedWindowHandlesNow(),
       focusHwnd: foregroundWindowHandleNow(),
     }))
   // The real log sink. `ProviderHost` takes it by injection rather than
@@ -160,7 +160,7 @@ export function startContextRuntime(options: ContextRuntimeOptions): void {
     void providers.tick()
     void providers.prune(clock.bufferStartMs())
     // WHICH WINDOWS LANE A LOOKS INSIDE — lane S's answer, not lane A's.
-    // `visibleWindowHandlesNow` already excludes a window occluded to nothing,
+    // `budgetedWindowHandlesNow` already excludes a window occluded to nothing,
     // and a control that cannot be seen cannot be hovered, so walking it is
     // pure cost. Sent on the maintenance tick rather than per sample: the set
     // changes when windows open, close or come forward, not at 100 Hz.
@@ -690,25 +690,68 @@ export function controlRefreshBudget(
   return Math.floor(1_000_000 / fps / refreshUsPerControl)
 }
 
-export function visibleWindowHandlesNow(): string[] {
+/**
+ * Every window a user can currently see.
+ *
+ * Occluded to nothing = behind another window at every pixel. It is on screen
+ * in the sense that it has a rectangle, and invisible in the sense that
+ * matters.
+ */
+function visibleSurfaceHandles(
+  keep: (className: string | undefined, hwnd: string) => boolean,
+): string[] {
   const current = runtime
   if (current === null) return []
   const nowMs = current.clock.nowMs()
   const { surfaces } = current.timeline.surfacesAt(nowMs)
   const handles: string[] = []
-  const skipped = new Set<string>()
   for (const surface of surfaces) {
     if (surface.hwnd === undefined) continue
-    // Occluded to nothing = behind another window at every pixel. It is on
-    // screen in the sense that it has a rectangle, and invisible in the sense
-    // that matters.
     if (surface.visibleRegion !== undefined && surface.visibleRegion.length === 0) continue
-    if (surface.className === CHROMIUM_WINDOW_CLASS) {
-      skipped.add(surface.hwnd)
-      continue
-    }
+    if (!keep(surface.className, surface.hwnd)) continue
     if (!handles.includes(surface.hwnd)) handles.push(surface.hwnd)
   }
+  return handles
+}
+
+/**
+ * EVERY visible window, Chromium included.
+ *
+ * For a walk that happens ONCE and carries its own budget — the capture
+ * instant, and a still image, which has no frame rate to keep up with at all.
+ *
+ * Measured on CapturePack_2026-08-01_000034: a still capture of a region filled
+ * by an Electron application recorded `"tree": "skipped", "element_count": 0`
+ * for the FOCUSED window and 82 elements belonging to a File Explorer behind
+ * it. That capture used almost none of its 3000 ms budget and reported
+ * `truncated: false`. The window the user had selected was the one thing the
+ * semantic layer could not see.
+ *
+ * The cause was `budgetedWindowHandlesNow` below, whose exclusion is a
+ * statement about what a 15 fps lane can afford. Reusing it here applied a
+ * frame budget to something that has no frames — and the applications people
+ * capture most (an editor, a chat client, a browser, this app's own editor) are
+ * exactly the ones it hid.
+ */
+export function visibleWindowHandlesNow(): string[] {
+  return visibleSurfaceHandles(() => true)
+}
+
+/**
+ * What a PER-FRAME lane can afford to walk (#108).
+ *
+ * Chromium windows are excluded here and only here. A real browser has a
+ * document-native rung and loses nothing; an Electron application is reduced to
+ * its window, which is what the per-pass budget was already doing to it by
+ * accident. The count is on the record in the lane's own cost line.
+ */
+export function budgetedWindowHandlesNow(): string[] {
+  const skipped = new Set<string>()
+  const handles = visibleSurfaceHandles((className, hwnd) => {
+    if (className !== CHROMIUM_WINDOW_CLASS) return true
+    skipped.add(hwnd)
+    return false
+  })
   if (skipped.size > chromiumWindowsNotWalked) chromiumWindowsNotWalked = skipped.size
   return handles
 }

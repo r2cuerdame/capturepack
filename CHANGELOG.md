@@ -20,6 +20,14 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   expect: replays of a mostly-still screen are now several times longer and
   contain real pauses, and the retention window — which had been counting that
   fast clock — now keeps the number of seconds it says it keeps.
+- A capture now records what is inside an Electron window — an editor, a chat
+  client, a browser, or this app's own editor. Their controls were being skipped
+  wholesale, including on the window the user had just selected: a still capture
+  of one such application recorded nothing at all about it, while collecting 82
+  elements from a File Explorer behind it. The skip was a frame-rate budget
+  meant for the recording lane, and it had been reaching a walk that happens
+  once and has no frame rate to keep up with
+  ([#117](https://github.com/r2cuerdame/capturepack/issues/117)).
 - Boxes follow their object again on a replay whose screen went quiet. Nothing
   about the following was broken; the clock underneath it was, and a box drawn
   against a video that had lost eight seconds could not be right no matter where
