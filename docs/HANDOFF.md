@@ -314,9 +314,16 @@ version and fix forward. Documentation-only commits may follow the release on
 
 ## 0.3.4 in progress
 
-Work on `agent/0.3.4`, not released. See [GOAL.md](../GOAL.md) for the design
-record and [#104](https://github.com/r2cuerdame/capturepack/issues/104) /
+Work on `agent/0.3.4`, not released. `core/package.json` is
+**`0.3.4-rc.1`** — a release *candidate* version so a locally built installer can
+never be confused with the public `0.3.3`, not a release. There is no tag and no
+published binary, and `v0.3.3` stays where it is. See [GOAL.md](../GOAL.md) for
+the design record and [#104](https://github.com/r2cuerdame/capturepack/issues/104) /
 [#89](https://github.com/r2cuerdame/capturepack/issues/89) for the evidence.
+
+An RC installer is built with `npm run dist` and appears at
+`core/release/CapturePack-Setup-0.3.4-rc.1.exe`. It is unsigned and gitignored:
+builds are artifacts of a commit, never part of one.
 
 - Element picking now reports itself end to end: the picker's arming, failure
   and disarming, every pick that arrives, every message refused with the rule

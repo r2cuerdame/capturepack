@@ -37,7 +37,24 @@ const spec = read('SPEC.md')
 const packageJson = JSON.parse(read('core/package.json'))
 const packageLock = JSON.parse(read('core/package-lock.json'))
 const packageVersion = String(packageJson.version ?? '')
-const packageIsCurrentPublic = packageVersion === '0.3.3'
+// The application version may be the public release, or a release CANDIDATE for
+// a later one. What it may never be is a different build wearing the public
+// version's number: a locally built installer named like the published 0.3.3
+// cannot be told apart from it once it leaves this folder.
+const PUBLIC_VERSION = '0.3.3'
+const packageIsCurrentPublic = packageVersion === PUBLIC_VERSION
+const candidateBase = /^(\d+\.\d+\.\d+)-rc\.\d+$/.exec(packageVersion)?.[1]
+/** Negative, zero or positive, comparing major.minor.patch left to right. */
+function compareVersions(left, right) {
+  const a = left.split('.').map(Number)
+  const b = right.split('.').map(Number)
+  for (let i = 0; i < 3; i += 1) {
+    if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) - (b[i] ?? 0)
+  }
+  return 0
+}
+const packageIsCandidateAhead =
+  candidateBase !== undefined && compareVersions(candidateBase, PUBLIC_VERSION) > 0
 const supported = ['en', 'ko', 'ja', 'zh', 'es', 'fr', 'de', 'pt', 'ru']
 const motionStems = ['capturepack-time-machine', 'capturepack-still-context']
 const motionFiles = supported.flatMap((lang) =>
@@ -209,10 +226,11 @@ check(
   !/\bsha(?:-?256)?\b|checksum|체크섬|校验和|Prüfsumme/i.test(`${html}\n${i18n}`),
 )
 check(
-  'package and lock agree on public 0.3.3',
-  packageIsCurrentPublic
+  'package and lock agree, on the public release or a candidate ahead of it',
+  (packageIsCurrentPublic || packageIsCandidateAhead)
     && packageLock.version === packageVersion
     && packageLock.packages?.['']?.version === packageVersion,
+  `${packageVersion} (public ${PUBLIC_VERSION}), lock ${packageLock.version}`,
 )
 check(
   'README names 0.3.3 as the public release',

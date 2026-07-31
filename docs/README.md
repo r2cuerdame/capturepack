@@ -28,8 +28,10 @@ that reports itself, cross-frame element picking
 ([#104](https://github.com/r2cuerdame/capturepack/issues/104)), the lock-screen
 update notice ([#103](https://github.com/r2cuerdame/capturepack/issues/103)),
 and the measurement that narrows
-[#89](https://github.com/r2cuerdame/capturepack/issues/89). No version bump, no
-tag, no binaries. `GOAL.md`'s "0.3.4 in progress" section is the design record;
+[#89](https://github.com/r2cuerdame/capturepack/issues/89). The application
+version there is `0.3.4-rc.1`, a candidate so a locally built installer cannot be
+mistaken for the public `0.3.3`; there is no tag and no published binary.
+`GOAL.md`'s "0.3.4 in progress" section is the design record;
 [Handoff](HANDOFF.md) carries the state and the next order.
 
 ## Development and QA
