@@ -156,6 +156,7 @@ export function displaySummaryLines(
     const coverage = replayCoverage(
       d.replay_duration_ms ?? 0,
       manifest.media.replay_duration_ms ?? 0,
+      d.replay_clock_offset_ms,
     )
     const compressed =
       d.replay !== null && coverage.compressed

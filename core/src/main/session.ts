@@ -1661,7 +1661,12 @@ async function runFlow(settings: Settings): Promise<void> {
     // frames which WERE made are laid end to end, so the media is shorter than
     // the capture and its timeline is no longer the capture's — the thing that
     // actually puts a box in the wrong second.
-    const coverage = replayCoverage(d.replayDurationMs ?? 0, replayDurationMs)
+    // The offset is what pays for a shorter secondary (SPEC 5.3), so it is
+    // read from the captures already built above rather than guessed at.
+    const declaredOffsetMs = displayCaptures?.find(
+      (capture) => capture.index === d.index,
+    )?.replayClockOffsetMs
+    const coverage = replayCoverage(d.replayDurationMs ?? 0, replayDurationMs, declaredOffsetMs)
     const axis = coverage.compressed
       ? `, and ${(coverage.mediaMs / 1000).toFixed(1)}s of media for a ` +
         `${(coverage.captureMs / 1000).toFixed(1)}s capture is not this capture's clock`

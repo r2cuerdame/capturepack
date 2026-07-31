@@ -192,6 +192,8 @@ export interface ReplayCoverage {
   ratio: number
   /** Capture time with no media behind it at all. */
   missingMs: number
+  /** Missing time a declared `replay_clock_offset_ms` does NOT account for. */
+  unexplainedMs: number
   /** The media is short enough that its timeline is not the capture's. */
   compressed: boolean
 }
@@ -201,19 +203,44 @@ const REPLAY_COVERAGE_TOLERANCE_MS = 1_000
 /** Below this share of the capture, the gaps are the story, not the edges. */
 const REPLAY_COVERAGE_MIN_RATIO = 0.9
 
-export function replayCoverage(mediaMs: number, captureMs: number): ReplayCoverage {
+export function replayCoverage(
+  mediaMs: number,
+  captureMs: number,
+  declaredOffsetMs?: number,
+): ReplayCoverage {
   const media = Number.isFinite(mediaMs) ? Math.max(0, mediaMs) : 0
   const capture = Number.isFinite(captureMs) ? Math.max(0, captureMs) : 0
   const missingMs = Math.max(0, capture - media)
   const ratio = capture > 0 ? Math.min(1, media / capture) : 1
+  // A SHORTER SECONDARY IS NORMAL WHEN IT SAYS WHERE IT STARTS.
+  //
+  // SPEC 5.3: "A secondary recorder that started later MAY remain shorter and
+  // MUST NOT be padded. The saved `replay_clock_offset_ms` reflects any
+  // clamping/rebasing performed by that cut", and 5.6 places it exactly:
+  // `t_i = t + displays[i].replay_clock_offset_ms`. Judging on duration alone
+  // accused that display of the very thing the offset rules out — a recorder
+  // two seconds late on an 10895 ms capture came out "compressed" with its
+  // placement fully declared.
+  //
+  // A DECLARED offset is an observed measurement and pays for the head it
+  // names. An ABSENT one pays for nothing: the reader's fallback there is
+  // end-alignment, which is a guess, and treating a guess as an explanation is
+  // exactly how a time-compressed replay would talk its way out of being
+  // reported.
+  const headMs =
+    declaredOffsetMs === undefined || !Number.isFinite(declaredOffsetMs)
+      ? 0
+      : Math.max(0, -declaredOffsetMs)
+  const unexplainedMs = Math.max(0, missingMs - headMs)
   return {
     mediaMs: media,
     captureMs: capture,
     ratio,
     missingMs,
+    unexplainedMs,
     compressed:
       capture > 0
-      && missingMs > REPLAY_COVERAGE_TOLERANCE_MS
+      && unexplainedMs > REPLAY_COVERAGE_TOLERANCE_MS
       && ratio < REPLAY_COVERAGE_MIN_RATIO,
   }
 }

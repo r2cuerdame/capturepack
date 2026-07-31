@@ -685,6 +685,40 @@ console.log('\nReplay coverage')
     replayCoverage(20_000, 18_691).ratio === 1
       && replayCoverage(20_000, 18_691).missingMs === 0,
   )
+  // A SHORTER SECONDARY THAT SAYS WHERE IT STARTS IS NOT ACCUSED (SPEC 5.3).
+  //
+  // "A secondary recorder that started later MAY remain shorter and MUST NOT
+  // be padded. The saved replay_clock_offset_ms reflects any clamping or
+  // rebasing performed by that cut" - and 5.6 places it exactly. Judging on
+  // duration alone called such a display off-clock while its placement was
+  // fully declared, which is the opposite of what the offset is for.
+  check(
+    'a late-starting secondary with a declared offset is on-clock',
+    !replayCoverage(8_895, 10_895, -2_000).compressed
+      && replayCoverage(8_895, 10_895, -2_000).unexplainedMs === 0,
+    JSON.stringify(replayCoverage(8_895, 10_895, -2_000)),
+  )
+  check(
+    'the same shortfall with NO declared offset is still reported',
+    replayCoverage(8_895, 10_895).compressed
+      && replayCoverage(8_895, 10_895).unexplainedMs === 2_000,
+    'an absent offset explains nothing; the reader falls back to a guess',
+  )
+  check(
+    'an offset only pays for the head it names, never for the rest',
+    replayCoverage(3_688, 18_691, -2_000).compressed
+      && replayCoverage(3_688, 18_691, -2_000).unexplainedMs === 13_003,
+    JSON.stringify(replayCoverage(3_688, 18_691, -2_000)),
+  )
+  check(
+    'a positive offset buys nothing, and neither does a broken one',
+    replayCoverage(8_895, 10_895, 2_000).compressed
+      && replayCoverage(8_895, 10_895, Number.NaN).compressed,
+  )
+  check(
+    'missingMs still reports the raw shortfall beside the explained one',
+    replayCoverage(8_895, 10_895, -2_000).missingMs === 2_000,
+  )
   check(
     'nonsense input is not an accusation',
     !replayCoverage(Number.NaN, 18_691).compressed === false
