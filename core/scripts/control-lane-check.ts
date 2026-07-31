@@ -30,6 +30,7 @@ import {
   type TrackedControl,
 } from '../src/main/context/controlLane'
 import {
+  controlRefreshBudget,
   freezeContext,
   frozenObservations,
   frozenPackTimeAt,
@@ -1953,6 +1954,39 @@ async function main(): Promise<void> {
   check(
     'lane A itself does not know or care which class a window is',
     !laneSource.includes('Chrome_WidgetWin_1'),
+    true,
+  )
+
+  // WHAT THE LANE CAN AFFORD IS A NUMBER, NOT A FEELING (#108).
+  //
+  // Measured: a rectangle refresh costs about 80 us a control, so 13.9 ms
+  // covered the whole 202-control non-Chromium desktop while the 3504 controls
+  // of the Chromium windows would have cost 326 ms — 2.9 fps, which is why
+  // position was all that could keep up before they were excluded.
+  check(
+    'the refresh budget is derived from the measured per-control cost',
+    controlRefreshBudget(80, 15) === 833,
+    true,
+  )
+  check(
+    'a faster capture rate buys fewer controls, proportionally',
+    controlRefreshBudget(80, 30) === 416 && controlRefreshBudget(80, 5) === 2500,
+    true,
+  )
+  check(
+    'a cheaper control provider raises the ceiling',
+    controlRefreshBudget(40, 15) === 1666,
+    true,
+  )
+  check(
+    'nonsense inputs buy nothing rather than infinity',
+    controlRefreshBudget(0, 15) === 0 && controlRefreshBudget(80, 0) === 0,
+    true,
+  )
+  check(
+    'the budget and the tracked count are reported together, and being over it is said',
+    runtimeSource.includes('estimated ${CONTROL_BUDGET_FPS} fps refresh budget')
+      && runtimeSource.includes('cannot have kept up with the picture'),
     true,
   )
 

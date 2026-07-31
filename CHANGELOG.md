@@ -50,6 +50,14 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   back, and it refuses rather than reporting a number when too few frames can be
   identified.
 
+- Control geometry keeps up with the picture instead of being crowded out.
+  Walking a Chromium window's accessibility tree cost 92% of everything the
+  control lane did on the reporting machine — 1534 ms of a 1673 ms pass — and
+  one of them stalling took the whole lane down for 20 s, so a capture could
+  save with no control geometry at all, including for the cheap windows it never
+  reached. Those windows are no longer walked: a real browser already reports its
+  own document, and the lane says on its cost line how many it left alone and how
+  many controls it could afford ([#108](https://github.com/r2cuerdame/capturepack/issues/108)).
 - A picked object keeps its box when its window is dragged to another monitor.
   The box used to stop following at the seam and sit there for the rest of its
   lifetime while the video carried the window away, and the object could not be

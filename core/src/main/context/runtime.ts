@@ -220,8 +220,19 @@ export function stopContextRuntime(): void {
         `${controlStatus.blockedWindows > 0 ? `, ${controlStatus.blockedWindows} window(s) blocked` : ''}` +
         // Not walking a window is a choice with a consequence, so it is counted
         // where the rest of this lane's cost is counted (#108).
-        `${chromiumWindowsNotWalked > 0 ? `, ${chromiumWindowsNotWalked} Chromium window(s) left to their own document rung` : ''}`,
+        `${chromiumWindowsNotWalked > 0 ? `, ${chromiumWindowsNotWalked} Chromium window(s) left to their own document rung` : ''}` +
+        // What was affordable, beside what was tracked. Over budget is not an
+        // error — it is the one fact that explains a thin capture (#108).
+        `, ${controlStatus.liveElements} control(s) against a ${controlRefreshBudget()} ` +
+        `estimated ${CONTROL_BUDGET_FPS} fps refresh budget`,
     )
+    if (controlStatus.liveElements > controlRefreshBudget()) {
+      logWarn(
+        `[context] lane A: ${controlStatus.liveElements} control(s) is past the ` +
+          `${controlRefreshBudget()} that fit a ${CONTROL_BUDGET_FPS} fps rectangle refresh — ` +
+          `their geometry cannot have kept up with the picture`,
+      )
+    }
   }
   chromiumWindowsNotWalked = 0
   const stats = current.timeline.stats()
@@ -649,6 +660,35 @@ export function foregroundWindowHandleNow(): string | null {
  */
 const CHROMIUM_WINDOW_CLASS = 'Chrome_WidgetWin_1'
 let chromiumWindowsNotWalked = 0
+
+/**
+ * WHAT THIS LANE CAN AFFORD, AS A NUMBER OF CONTROLS (#108).
+ *
+ * Structural discovery and rectangle refresh are separate costs, and only the
+ * second one has to keep up with the picture. Measured on the reporting
+ * machine, re-reading `BoundingRectangle` on held references costs about
+ * **80 µs a control** — 13.9 ms for the 202 controls of the whole non-Chromium
+ * desktop, against 326 ms for the 3504 controls of the Chromium windows that
+ * are no longer walked. One Chrome window alone carried 1033.
+ *
+ * So the ceiling is a control count, and it is worth writing down: a capture
+ * that quietly tracks fewer controls than it should is otherwise
+ * indistinguishable from a desktop that has fewer.
+ *
+ * This is a model built from one measurement on one machine, not a promise.
+ * It is here to make the budget legible, and the number it prints is an
+ * estimate labelled as one.
+ */
+const CONTROL_RECT_REFRESH_US = 80
+const CONTROL_BUDGET_FPS = 15
+
+export function controlRefreshBudget(
+  refreshUsPerControl = CONTROL_RECT_REFRESH_US,
+  fps = CONTROL_BUDGET_FPS,
+): number {
+  if (!(refreshUsPerControl > 0) || !(fps > 0)) return 0
+  return Math.floor(1_000_000 / fps / refreshUsPerControl)
+}
 
 export function visibleWindowHandlesNow(): string[] {
   const current = runtime
