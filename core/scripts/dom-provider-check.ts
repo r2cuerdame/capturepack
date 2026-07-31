@@ -569,7 +569,156 @@ async function main(): Promise<void> {
     )
   }
 
-  console.log(failures === 0 ? '\ndom-provider-check ok' : `\ndom-provider-check FAILED (${String(failures)})`)
+  // THE DOCUMENT A PICK CARRIES IS UNTRUSTED INPUT (GOAL "The still carries the
+// context").
+//
+// It comes from a browser extension over a native-messaging pipe, so nothing is
+// trusted into a pack: unknown keys are dropped rather than carried, every
+// string is clipped, and an element without a usable rectangle is refused
+// rather than defaulted. A malformed document costs the pack its document,
+// never its pick.
+console.log('\nA picked document is parsed, not believed')
+{
+  const check = (name: string, ok: boolean, detail = ''): void => { report(name, ok, detail) }
+  const wire = (document_: unknown): string =>
+    JSON.stringify({
+      events: [
+        {
+          t_ms: 1000,
+          type: 'dom.element.selected',
+          protocol: 1,
+          tab: { url: 'https://example.invalid/', title: 'Fixture' },
+          element: {
+            tag: 'button',
+            selector: '#go',
+            bounds: { x: 1, y: 2, width: 3, height: 4 },
+          },
+          viewport: { width: 1000, height: 800, dpr: 1 },
+          document: document_,
+        },
+      ],
+    })
+
+  const good = {
+    viewport: { width: 1000, height: 800, devicePixelRatio: 1, scrollX: 0, scrollY: 0 },
+    url: 'https://example.invalid/',
+    title: 'Fixture',
+    elements: [
+      { i: 0, tag: 'button', role: 'button', bounds: { x: 1, y: 2, width: 30, height: 12 }, text: 'Go' },
+      { i: 1, tag: 'input', role: 'textbox', bounds: { x: 1, y: 20, width: 30, height: 12 }, type: 'password', secret: true },
+    ],
+    truncated: false,
+    visitedCount: 9,
+    elapsedMs: 3,
+    omitted: ['the value of every input, textarea and select'],
+  }
+
+  const parsed = parseDomPayload(wire(good))
+  const doc = parsed[0]?.document
+  check(
+    'a well-formed document reaches the event',
+    doc !== undefined && doc.elements.length === 2 && doc.url === 'https://example.invalid/',
+    JSON.stringify(doc?.elements.length),
+  )
+  check(
+    "the extension's own statement of what it left out is carried, not dropped",
+    doc?.omitted[0]?.includes('value of every input') === true,
+    JSON.stringify(doc?.omitted),
+  )
+  check(
+    'and a password box arrives as presence only',
+    doc?.elements[1]?.secret === true && doc.elements[1]?.name === undefined,
+    JSON.stringify(doc?.elements[1]),
+  )
+
+  // A key nobody defined must not ride into a pack just because it was sent.
+  const smuggled = parseDomPayload(
+    wire({
+      ...good,
+      elements: [
+        {
+          tag: 'input',
+          role: 'textbox',
+          bounds: { x: 1, y: 2, width: 3, height: 4 },
+          value: 'hunter2',
+          'data-token': 'eyJhbGciOiJIUzI1NiJ9',
+          onclick: 'steal()',
+        },
+      ],
+    }),
+  )
+  check(
+    'an unknown key is dropped rather than carried through',
+    !JSON.stringify(smuggled).includes('hunter2')
+      && !JSON.stringify(smuggled).includes('eyJhbGciOiJIUzI1NiJ9')
+      && !JSON.stringify(smuggled).includes('steal'),
+    JSON.stringify(smuggled[0]?.document?.elements),
+  )
+
+  // Every refusal below keeps the pick and loses only the document.
+  const broken: Array<[string, unknown]> = [
+    ['a viewport of zero size', { ...good, viewport: { ...good.viewport, width: 0 } }],
+    ['an impossible device pixel ratio', { ...good, viewport: { ...good.viewport, devicePixelRatio: 99 } }],
+    ['no elements array at all', { ...good, elements: undefined }],
+    ['not an object', 'a string'],
+  ]
+  for (const [label, document_] of broken) {
+    const out = parseDomPayload(wire(document_))
+    check(
+      `${label}: the pick survives and the document does not`,
+      out.length === 1 && out[0]?.element !== undefined && out[0]?.document === undefined,
+      `${String(out.length)} event(s), document ${String(out[0]?.document !== undefined)}`,
+    )
+  }
+
+  const noRect = parseDomPayload(
+    wire({ ...good, elements: [{ tag: 'div', role: '', bounds: { x: 1, y: 2 } }] }),
+  )
+  check(
+    'an element with no usable rectangle is skipped, not placed at zero',
+    noRect[0]?.document?.elements.length === 0,
+    JSON.stringify(noRect[0]?.document?.elements),
+  )
+
+  // More than the host will hold is a prefix, and the pack has to say so rather
+  // than look like the whole page.
+  const many = Array.from({ length: 5000 }, (_v, i) => ({
+    tag: 'span',
+    role: '',
+    bounds: { x: i, y: 0, width: 1, height: 1 },
+  }))
+  const capped = parseDomPayload(wire({ ...good, elements: many, truncated: false }))
+  check(
+    'a document larger than the cap is truncated and says so',
+    capped[0]?.document?.elements.length === 4000
+      && capped[0]?.document?.truncated === true,
+    `${String(capped[0]?.document?.elements.length)} kept, truncated ${String(capped[0]?.document?.truncated)}`,
+  )
+
+  const older = parseDomPayload(
+    JSON.stringify({
+      events: [
+        {
+          t_ms: 1000,
+          type: 'dom.element.selected',
+          protocol: 1,
+          tab: { url: 'https://example.invalid/', title: 'Fixture' },
+          element: {
+            tag: 'button',
+            selector: '#go',
+            bounds: { x: 1, y: 2, width: 3, height: 4 },
+          },
+        },
+      ],
+    }),
+  )
+  check(
+    'an extension too old to send one is not a broken pick',
+    older.length === 1 && older[0]?.element !== undefined && older[0]?.document === undefined,
+  )
+}
+
+console.log(failures === 0 ? '\ndom-provider-check ok' : `\ndom-provider-check FAILED (${String(failures)})`)
   if (failures > 0) process.exitCode = 1
 }
 

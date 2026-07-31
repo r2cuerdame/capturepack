@@ -140,8 +140,11 @@ console.log('\nThe picker actually uses it, in every frame')
   const background = readFileSync(resolve(EXTENSION, 'background.js'), 'utf8')
   const manifest = JSON.parse(readFileSync(resolve(EXTENSION, 'manifest.json'), 'utf8'))
   check('the picker is injected into every frame', background.includes('allFrames: true'), background.slice(0, 0))
+  // Order is load order in one isolated world: the geometry and the document
+  // walker must both be defined before the picker looks for them. The walker
+  // joined this list when a pick started carrying the interface it sat in.
   check('the geometry is injected before the picker',
-    /files:\s*\[\s*'frame-geometry\.js',\s*'content-script\.js'\s*\]/.test(background))
+    /files:\s*\[\s*'frame-geometry\.js',\s*'document-snapshot\.js',\s*'content-script\.js'\s*\]/.test(background))
   check('the picker calls the shared geometry',
     contentScript.includes('__capturepackFrameGeometry'))
   check('a pick travels up the frame chain',

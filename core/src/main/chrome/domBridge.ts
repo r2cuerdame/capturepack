@@ -65,6 +65,62 @@ export interface DomViewport {
   outerHeight: number | null
 }
 
+/**
+ * THE INTERFACE THE PICKED ELEMENT SAT IN (GOAL "The still carries the context").
+ *
+ * Everything the user could see in the top document at the instant they picked:
+ * what each element is, where it sat, and what it said. It arrives on the pick
+ * because the pick is the gesture Chrome grants `activeTab` for — the app's own
+ * capture hotkey is not a gesture the browser can see, and asking for
+ * `<all_urls>` would buy a standing right to read every page in order to avoid a
+ * click the user has already made.
+ *
+ * `omitted` is not documentation, it is part of the record: a reader of the pack
+ * learns what is missing without reading our source. The extension refuses the
+ * value of every field, everything but the presence of a password box, the text
+ * of anything the user could not see, and any attribute outside its allowlist —
+ * because the licence for writing down visible text is that `snapshot.png`
+ * already contains those pixels, and that argument covers nothing else.
+ */
+/** What the host will accept from one document, however much is offered. */
+const DOM_SNAPSHOT_MAX_ELEMENTS = 4000
+
+export interface DomDocumentSnapshot {
+  viewport: {
+    width: number
+    height: number
+    devicePixelRatio: number
+    scrollX: number
+    scrollY: number
+  }
+  url: string
+  title: string
+  elements: Array<{
+    i: number
+    tag: string
+    role: string
+    bounds: { x: number; y: number; width: number; height: number }
+    id?: string
+    class?: string
+    name?: string
+    type?: string
+    placeholder?: string
+    alt?: string
+    title?: string
+    href?: string
+    text?: string
+    /** A field held something. Never what it held. */
+    filled?: boolean
+    /** A password box was here. Nothing else about it is recorded. */
+    secret?: boolean
+  }>
+  /** The walk hit its element cap; what is here is a prefix, not the page. */
+  truncated: boolean
+  visitedCount: number
+  elapsedMs: number
+  omitted: string[]
+}
+
 export interface DomEvent {
   /** Milliseconds on the replay clock, at arrival. */
   tMs: number
@@ -73,6 +129,13 @@ export interface DomEvent {
   element?: DomElement
   /** Present on an element pick from extension 0.1.4 or newer. */
   viewport?: DomViewport
+  /**
+   * Present on a pick made in the TOP document by extension 0.2.0 or newer.
+   * Absent from an older extension, and from a pick made inside an iframe —
+   * that element still reports itself, but the document it names is the frame's
+   * and not the one whose client rectangle the app can translate.
+   */
+  document?: DomDocumentSnapshot
 }
 
 /**
@@ -317,6 +380,92 @@ function parse(raw: unknown): ParseOutcome {
       }
     } else {
       elementRefusal = 'element-missing-tag-selector-or-bounds'
+    }
+  }
+  // THE DOCUMENT THE PICK CAME FROM, VALIDATED LIKE EVERYTHING ELSE HERE.
+  //
+  // This is untrusted input from a browser extension, so nothing is trusted
+  // into the pack: unknown keys are dropped rather than carried, every string
+  // is clipped, and an element without a usable rectangle is refused instead of
+  // defaulted. A malformed document costs the pack its document, never its pick.
+  //
+  // `omitted` is carried through verbatim because it is the extension's own
+  // statement of what it refused to record, and a pack that quietly lost that
+  // line would be claiming more completeness than it has.
+  const doc = m['document']
+  if (typeof doc === 'object' && doc !== null) {
+    const d = doc as Record<string, unknown>
+    const dv = d['viewport']
+    const rawElements = d['elements']
+    if (typeof dv === 'object' && dv !== null && Array.isArray(rawElements)) {
+      const v = dv as Record<string, unknown>
+      const num = (source: Record<string, unknown>, k: string): number | null => {
+        const n = source[k]
+        return typeof n === 'number' && Number.isFinite(n) ? n : null
+      }
+      const width = num(v, 'width')
+      const height = num(v, 'height')
+      const dpr = num(v, 'devicePixelRatio')
+      if (width !== null && width > 0 && height !== null && height > 0
+        && dpr !== null && dpr > 0 && dpr <= 16) {
+        const elements: NonNullable<DomEvent['document']>['elements'] = []
+        for (const entry of rawElements.slice(0, DOM_SNAPSHOT_MAX_ELEMENTS)) {
+          if (typeof entry !== 'object' || entry === null) continue
+          const el = entry as Record<string, unknown>
+          const b = el['bounds']
+          if (typeof el['tag'] !== 'string' || typeof b !== 'object' || b === null) continue
+          const bb = b as Record<string, unknown>
+          const x = num(bb, 'x')
+          const y = num(bb, 'y')
+          const w = num(bb, 'width')
+          const h = num(bb, 'height')
+          if (x === null || y === null || w === null || h === null) continue
+          const text = (k: string, max: number): Record<string, string> =>
+            typeof el[k] === 'string' && el[k] !== ''
+              ? { [k]: (el[k] as string).slice(0, max) }
+              : {}
+          elements.push({
+            i: elements.length,
+            tag: el['tag'].slice(0, 64),
+            role: typeof el['role'] === 'string' ? el['role'].slice(0, 64) : '',
+            bounds: { x, y, width: w, height: h },
+            ...text('id', 256),
+            ...text('class', 256),
+            ...text('name', 256),
+            ...text('type', 64),
+            ...text('placeholder', 200),
+            ...text('alt', 200),
+            ...text('title', 200),
+            ...text('href', 2048),
+            ...text('text', 200),
+            ...(el['filled'] === true ? { filled: true } : {}),
+            ...(el['filled'] === false ? { filled: false } : {}),
+            ...(el['secret'] === true ? { secret: true } : {}),
+          })
+        }
+        const omitted = Array.isArray(d['omitted'])
+          ? d['omitted'].filter((o): o is string => typeof o === 'string').map((o) => o.slice(0, 200))
+          : []
+        event.document = {
+          viewport: {
+            width,
+            height,
+            devicePixelRatio: dpr,
+            scrollX: num(v, 'scrollX') ?? 0,
+            scrollY: num(v, 'scrollY') ?? 0,
+          },
+          url: typeof d['url'] === 'string' ? d['url'].slice(0, 2048) : '',
+          title: typeof d['title'] === 'string' ? d['title'].slice(0, 512) : '',
+          elements,
+          // The extension's own cap, or ours: either way the pack says the list
+          // is a prefix rather than the page.
+          truncated: d['truncated'] === true
+            || rawElements.length > DOM_SNAPSHOT_MAX_ELEMENTS,
+          visitedCount: num(d, 'visitedCount') ?? elements.length,
+          elapsedMs: num(d, 'elapsedMs') ?? 0,
+          omitted,
+        }
+      }
     }
   }
   // The screen anchor, validated exactly as strictly as everything else here:

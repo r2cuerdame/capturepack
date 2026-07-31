@@ -318,6 +318,22 @@
       frameDepth: 0,
       viewportWidth: window.innerWidth,
       bounds: { x: r.x, y: r.y, width: r.width, height: r.height },
+      // THE INTERFACE THE PICKED ELEMENT SAT IN (GOAL "The still carries the
+      // context").
+      //
+      // Taken here, on the click, and not on a request from the app — because
+      // this is the one moment Chrome has granted permission to read the page.
+      // `activeTab` is given for a user gesture on the extension, and the app's
+      // own capture hotkey is not a gesture Chrome can see. Asking for
+      // `<all_urls>` instead would buy a standing right to read every page in
+      // order to avoid a click the user has already made.
+      //
+      // Only the TOP document, and only once: a pick inside an iframe still
+      // reports its element up the chain, but the snapshot belongs to the frame
+      // whose client rectangle the app can translate.
+      document: IS_TOP && window.__capturepackDocumentSnapshot
+        ? window.__capturepackDocumentSnapshot()
+        : undefined,
     })
     if (!IS_TOP) cleanup()
   }

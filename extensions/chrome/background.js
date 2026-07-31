@@ -274,9 +274,10 @@ chrome.action.onClicked.addListener(async (tab) => {
     // chain from wherever it happened.
     await chrome.scripting.executeScript({
       target: { tabId: tab.id, allFrames: true },
-      // Both files share one isolated world, in this order: the geometry is
-      // already defined by the time the picker looks for it.
-      files: ['frame-geometry.js', 'content-script.js'],
+      // All three share one isolated world, in this order: the geometry and
+      // the document walker are already defined by the time the picker looks
+      // for them.
+      files: ['frame-geometry.js', 'document-snapshot.js', 'content-script.js'],
     })
   } catch (err) {
     // A page the extension may not touch is the common case, and the user has
