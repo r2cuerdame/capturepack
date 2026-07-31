@@ -1351,6 +1351,109 @@ async function checkWebmFallbackLifecycle(): Promise<void> {
 // measurement that should have come first, and these cases pin it, because a
 // diagnostic that lies is worse than none: the next person reads it to decide
 // whether the encoder or the sample durations flattened a capture.
+// A SOURCE THAT STOPPED PRODUCING IS NOT A RECORDING THAT RAN FAST (#116).
+//
+// Measured, in one capture, on two displays at once -
+// CapturePack_2026-07-31_233324:
+//
+//   display 2, healthy  encoder span 11972 ms   media 11917 ms   agree
+//   display 1, starved  encoder span 11908 ms   media  3501 ms   8.4 s lost
+//
+// Its longest held frame was 72.2 ms, so the sample durations do not carry the
+// stall either; only `tfdt` ever knew, and 24 of 24 fragments carried one. The
+// ring joined them end to end because it could not tell a starved source from
+// a late delivery. `tfdt` tells them apart, and always could: a late BlobEvent
+// leaves the encoder's clock continuous, a source that stopped drawing leaves a
+// hole in it. The delivery-jitter regression above passes unchanged, and now
+// passes for that reason rather than by a blanket assumption.
+console.log('\nA stalled source keeps its hole')
+{
+  const ring = new FragmentedMp4Ring(30_000)
+  ring.pushBytes(join([initialization(), fragment(0n, 15_000)]), 1_000)
+  // One second of encoded media, then the desk went still: the next fragment
+  // arrives 900 ms later and says so on the encoder's own clock.
+  ring.pushBytes(fragment(28_500n, 15_000), 2_900)
+  const replay = ring.assemble(2_900)
+  const decodeTimes =
+    replay === null ? [] : topLevelTfdtValues(new Uint8Array(replay.buffer))
+  check(
+    'a stalled source keeps its hole instead of being compressed away',
+    decodeTimes.join(',') === '0,28500',
+    replay === null ? 'no replay' : `tfdt ${decodeTimes.join(',')}`,
+  )
+}
+{
+  const ring = new FragmentedMp4Ring(60_000)
+  ring.pushBytes(join([initialization(), fragment(0n, 15_000)]), 1_000)
+  // The flush path: several fragments handed over at ONE delivery instant.
+  ring.pushBytes(
+    join([
+      fragment(60_000n, 15_000),
+      fragment(120_000n, 15_000),
+      fragment(180_000n, 15_000),
+      fragment(240_000n, 15_000),
+    ]),
+    20_000,
+  )
+  const replay = ring.assemble(20_000)
+  const decodeTimes =
+    replay === null ? [] : topLevelTfdtValues(new Uint8Array(replay.buffer))
+  check(
+    'fragments sharing one delivery keep the holes their encoder reported',
+    decodeTimes.join(',') === '0,60000,120000,180000,240000',
+    replay === null ? 'no replay' : `tfdt ${decodeTimes.join(',')}`,
+  )
+}
+// FAIL CLOSED. A wrong placement is worse than a compression: a compression is
+// visible in the duration and a bad placement is not.
+{
+  const ring = new FragmentedMp4Ring(30_000)
+  ring.pushBytes(join([initialization(), fragment(0n, 15_000)]), 1_000)
+  // 60 s of encoder time claimed inside 1.9 s of wall. Impossible.
+  ring.pushBytes(fragment(900_000n, 15_000), 2_900)
+  const replay = ring.assemble(2_900)
+  const decodeTimes =
+    replay === null ? [] : topLevelTfdtValues(new Uint8Array(replay.buffer))
+  check(
+    'an impossible encoder timeline is refused, not written',
+    decodeTimes.join(',') === '0,15000',
+    replay === null ? 'no replay' : `tfdt ${decodeTimes.join(',')}`,
+  )
+}
+{
+  const ring = new FragmentedMp4Ring(60_000)
+  ring.pushBytes(join([initialization(), fragment(0n, 15_000)]), 1_000)
+  ring.pushBytes(fragment(28_500n, 15_000), 2_900)
+  // One fragment with no tfdt refuses the WHOLE session - the two that DO
+  // carry a hole lose it too, proving the refusal is session-wide and not
+  // per-fragment. Half-placed is the failure nobody can see.
+  ring.pushBytes(trexDurationFragmentWithoutTfdt(15_000), 3_900)
+  const replay = ring.assemble(3_900)
+  const decodeTimes =
+    replay === null ? [] : topLevelTfdtValues(new Uint8Array(replay.buffer))
+  check(
+    'one tfdt-less fragment refuses the whole session, hole and all',
+    decodeTimes.join(',') === '0,15000',
+    replay === null ? 'no replay' : `tfdt ${decodeTimes.join(',')}`,
+  )
+}
+{
+  const ring = new FragmentedMp4Ring(60_000)
+  // A session delivered at ONE instant has no independent wall evidence at all.
+  ring.pushBytes(
+    join([initialization(), fragment(0n, 15_000), fragment(60_000n, 15_000)]),
+    5_000,
+  )
+  const replay = ring.assemble(5_000)
+  const decodeTimes =
+    replay === null ? [] : topLevelTfdtValues(new Uint8Array(replay.buffer))
+  check(
+    'one delivery instant is not evidence of a four-second hole',
+    decodeTimes.join(',') === '0,15000',
+    replay === null ? 'no replay' : `tfdt ${decodeTimes.join(',')}`,
+  )
+}
+
 // AND IT HAS TO REACH THE LOG (#116).
 //
 // The first version of this measured correctly and printed from the RENDERER,

@@ -8,6 +8,18 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 
 ### Fixed
 
+- A replay whose screen stopped changing now says so, instead of being written
+  as a shorter recording that looks fine. Measured in one capture across two
+  displays: the busy screen's video ran 11.9 seconds for an 11.9 second
+  capture, while the quiet one came back as 3.5 seconds — 8.4 seconds of desk
+  missing, with no held frame longer than 72 ms to show where it went. The
+  browser had recorded the pauses all along, in a per-fragment timestamp the
+  recorder read past. A late-arriving chunk still does not invent a pause; the
+  encoder's own clock is what tells the two apart
+  ([#116](https://github.com/r2cuerdame/capturepack/issues/116)). Two things to
+  expect: replays of a mostly-still screen are now several times longer and
+  contain real pauses, and the retention window — which had been counting that
+  fast clock — now keeps the number of seconds it says it keeps.
 - A trim whose out-point lands inside a held frame cuts where it was asked to.
   The render only tested the out-point when a new frame was presented, so
   across a frame the replay holds — up to 197 ms in a measured capture, and far

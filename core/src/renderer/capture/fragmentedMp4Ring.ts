@@ -360,10 +360,86 @@ interface ObservedFragmentTimeline {
 }
 
 /**
- * Put independently restarted recorder fragments on their observed wall-clock
- * timeline. A positive stop/restart hole stays a positive media PTS gap.
- * Overlapping delivery anchors are never allowed to move decode time backward;
- * in that ambiguous case the already-encoded fragment duration wins.
+ * A SOURCE THAT STOPPED PRODUCING IS NOT A RECORDING THAT RAN FAST (#116).
+ *
+ * Whether one recorder session's `tfdt` may be believed. Believing a bad one
+ * would place frames at wildly wrong times, which is worse than compressing
+ * them because a compression is visible in the duration and a bad placement is
+ * not. So the test is strict and the fallback is the arithmetic that shipped:
+ *
+ *  - every fragment in the session carried a `tfdt` (a mixed session is refused
+ *    whole rather than half-placed);
+ *  - they never go backwards;
+ *  - and the span they claim does not exceed the wall time the ring watched
+ *    these blobs ARRIVE over, which is an independent clock.
+ */
+const TFDT_WALL_TOLERANCE_MS = 1_000
+
+function sessionTfdtIsTrustworthy(
+  session: readonly StoredFragment[],
+  wallSpanMs: number,
+): boolean {
+  const first = session[0]
+  const last = session[session.length - 1]
+  if (first === undefined || last === undefined) return false
+  if (first.timescale <= 0) return false
+  let previous: bigint | null = null
+  for (const fragment of session) {
+    const ticks = fragment.sourceDecodeTicks
+    if (ticks === null) return false
+    if (previous !== null && ticks < previous) return false
+    previous = ticks
+  }
+  const firstTicks = first.sourceDecodeTicks
+  const lastTicks = last.sourceDecodeTicks
+  if (firstTicks === null || lastTicks === null) return false
+  const claimedMs = (Number(lastTicks - firstTicks) * 1_000) / first.timescale
+  return claimedMs <= wallSpanMs + TFDT_WALL_TOLERANCE_MS
+}
+
+/**
+ * The wall time the ring watched THIS selection arrive over.
+ *
+ * DELIVERY instants only. `endAtMs - startAtMs` would be the very bug this
+ * guard exists to catch: those are back-dated by media duration, so on a
+ * starved display the span collapses toward the compressed sum and the guard
+ * would be checking `tfdt` against the number `tfdt` is correcting.
+ *
+ * Measured on CapturePack_2026-07-31_233324, display 1: 24 fragments arriving
+ * over 23 distinct delivery instants. There is nearly always one per fragment.
+ */
+function deliveredWallSpanMs(fragments: readonly StoredFragment[]): number {
+  let earliest = Number.POSITIVE_INFINITY
+  let latest = Number.NEGATIVE_INFINITY
+  for (const fragment of fragments) {
+    if (fragment.deliveredAtMs < earliest) earliest = fragment.deliveredAtMs
+    if (fragment.deliveredAtMs > latest) latest = fragment.deliveredAtMs
+  }
+  if (!Number.isFinite(earliest) || !Number.isFinite(latest)) return 0
+  return Math.max(0, latest - earliest)
+}
+
+/**
+ * Put recorder fragments on their observed timeline. A positive hole - whether
+ * from a stop/restart or from a source that simply stopped producing frames -
+ * stays a positive media PTS gap. Overlapping anchors never move decode time
+ * backward.
+ *
+ * Inside one recorder session this butt-joined fragments, on the reasoning that
+ * "BlobEvent delivery jitter is not a pixel gap" and encoded sample durations
+ * are therefore authoritative. The first half is true. The second holds only
+ * while the source keeps producing: when it starves, MediaRecorder emits
+ * fragments whose encoded durations do not account for the wall time nobody
+ * drew in, and both cases arrive down the same path.
+ *
+ * `tfdt` tells them apart, and always could. Measured on
+ * CapturePack_2026-07-31_233324, one capture, two displays:
+ *
+ *   display 2, healthy  — encoder span 11972 ms, media 11917 ms.  Agree.
+ *   display 1, starved  — encoder span 11908 ms, media  3501 ms.  8.4 s lost,
+ *                         with the longest held frame just 72.2 ms, so the
+ *                         sample durations do not carry it either. Only `tfdt`
+ *                         ever knew, and 24 of 24 fragments carried one.
  */
 function observedFragmentTimeline(
   fragments: readonly StoredFragment[],
@@ -371,20 +447,70 @@ function observedFragmentTimeline(
 ): ObservedFragmentTimeline {
   const first = fragments[0]
   if (first === undefined) return { decodeTimes: [], durationTicks: 0n }
+
+  // Trust is decided per SESSION, over the whole session, before any fragment
+  // is placed. A per-fragment decision could believe the first half of one
+  // recording and disbelieve the second, putting a seam mid-session.
+  const wallSpanMs = deliveredWallSpanMs(fragments)
+  const trusted = new Map<number, StoredFragment | null>()
+  {
+    let session: StoredFragment[] = []
+    const settle = (): void => {
+      const head = session[0]
+      if (head === undefined) return
+      trusted.set(
+        head.recorderSession,
+        sessionTfdtIsTrustworthy(session, wallSpanMs) ? head : null,
+      )
+    }
+    for (const fragment of fragments) {
+      const head = session[0]
+      if (head !== undefined && head.recorderSession !== fragment.recorderSession) {
+        settle()
+        session = []
+      }
+      session.push(fragment)
+    }
+    settle()
+  }
+
   const decodeTimes: bigint[] = []
   let previousEndTicks = 0n
   let previousSession = first.recorderSession
+  // Where the current session's own clock is pinned on the output timeline.
+  let sessionOriginTicks = 0n
   for (const fragment of fragments) {
-    // BlobEvent delivery jitter is not a pixel gap. Inside one recorder,
-    // encoded sample durations remain authoritative. A fresh ftyp/moov is the
-    // observed boundary where stop/restart latency can create a real hole.
-    const observedStartTicks =
-      fragment.recorderSession === previousSession
-        ? previousEndTicks
-        : millisecondsToTicks(
-            fragment.startAtMs - first.startAtMs,
-            targetTimescale,
-          )
+    const sessionStart = trusted.get(fragment.recorderSession) ?? null
+    const newSession = fragment.recorderSession !== previousSession
+    // A fresh ftyp/moov is the observed boundary where stop/restart latency can
+    // create a real hole; delivery time is the only clock that spans it,
+    // because `tfdt` restarts at zero in every recorder session. Delivery on
+    // BOTH sides - subtracting two back-dated starts would put one session's
+    // media compression into the seam between two sessions.
+    const boundaryTicks = millisecondsToTicks(
+      fragment.deliveredAtMs - first.deliveredAtMs,
+      targetTimescale,
+    )
+    if (newSession || decodeTimes.length === 0) {
+      sessionOriginTicks =
+        boundaryTicks > previousEndTicks ? boundaryTicks : previousEndTicks
+    }
+    const anchor = sessionStart?.sourceDecodeTicks ?? null
+    let observedStartTicks: bigint
+    if (anchor !== null) {
+      const ticks = fragment.sourceDecodeTicks ?? anchor
+      observedStartTicks =
+        sessionOriginTicks +
+        scaledDuration(
+          ticks - anchor,
+          fragment.timescale > 0 ? fragment.timescale : targetTimescale,
+          targetTimescale,
+        )
+    } else if (newSession) {
+      observedStartTicks = boundaryTicks
+    } else {
+      observedStartTicks = previousEndTicks
+    }
     const decodeTime =
       observedStartTicks > previousEndTicks
         ? observedStartTicks

@@ -346,7 +346,12 @@ console.log('\nA cut inside a held frame lands where it was asked to')
   )
   check(
     'a render with no out-point starts no timer at all',
-    render.includes('trimEndMs === undefined') && render.includes('? null\n      : setInterval('),
+    // Matched without spanning a line break: this file is checked out with
+    // CRLF, so an assertion that depends on the line ending fails for a
+    // reason that has nothing to do with what it tests.
+    render.includes('trimEndMs === undefined')
+      && render.includes('? null')
+      && render.includes(': setInterval('),
     true,
   )
 }
