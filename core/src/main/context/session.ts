@@ -33,7 +33,6 @@ import {
 } from './buffer'
 import type { ContextObservation } from './buffer'
 import type { EditorUiaElement, EditorUiaWindow } from '../../shared/ipc'
-import type { ObjectTrackResult, ObjectTrackSample } from '../../shared/ipc'
 import { SessionClock } from './clock'
 // THE SAME REGISTRY THE RECORDING SIDE USES (#64). Not a second, smaller one
 // for the editor: a provider that is budgeted, isolated, clock-corrected and
@@ -630,78 +629,6 @@ export class ContextSession {
 
   markDropped(dropped: boolean): void {
     this.dropped = dropped
-  }
-
-  /**
-   * WHERE ONE OBJECT WAS, FOR AS LONG AS IT WAS THERE (#86).
-   *
-   * A box that follows its object needs two things this session already holds:
-   * a stable id per surface (`mintSurfaceIds`, keyed on identity and ordinal, so
-   * the same window is the same id in every observation), and the observations
-   * themselves. So a track is a filter over what is already here rather than a
-   * second path back to the ring — one source, one answer.
-   *
-   * Sampling STOPS at the first absence rather than skipping it. A window that
-   * vanishes and comes back is two appearances; joining them would slide a box
-   * across a stretch of replay where the thing it points at was not on screen.
-   * That stop is also what clamps a picked box's lifetime to its object (#77):
-   * a box outliving its object points at whatever moved in behind it, and no
-   * reader can tell that from a box that is still right.
-   */
-  trackOf(surfaceId: string, startMs: number, endMs: number): ObjectTrackResult | null {
-    const from = Math.min(startMs, endMs)
-    const to = Math.max(startMs, endMs)
-    const samples: ObjectTrackSample[] = []
-    let display: number | null = null
-    let endedAtMs: number | null = null
-
-    for (const observation of this.observations) {
-      if (observation.tMs < from) continue
-      if (observation.tMs > to) break
-      const window = observation.windows.find(
-        (w) => surfaceIdOf(this.ids, observation, w) === surfaceId,
-      )
-      if (window === undefined) {
-        // The observation exists and the surface is not in it. That is an
-        // absence, not a gap in the record.
-        if (samples.length > 0) endedAtMs = observation.tMs
-        break
-      }
-      // A WINDOW DRAGGED ONTO ANOTHER SCREEN IS STILL THE SAME WINDOW (#86).
-      //
-      // This used to end the track there, because an annotation belongs to
-      // exactly one display (SPEC §8.8) and its numbers are that display's
-      // snapshot pixels — so continuing would have silently changed what the
-      // coordinates referred to. Correct about the format, wrong about the
-      // user: they drag a window to the other monitor and the box stops
-      // following the thing it names, which is the whole defect this exists to
-      // fix.
-      //
-      // So each SAMPLE carries the display its numbers are in. The box moves
-      // between screens with the window, and every rectangle still says exactly
-      // which image it is pixels of. `display` on the annotation stays what it
-      // always was: where the box was drawn, and where a reader that ignores
-      // tracking puts it.
-      if (display === null) display = window.display
-      // One sample per screen the window is visible on (#103) — the split is
-      // made upstream, in `ringObservations`, where a surface still has its
-      // virtual-desktop rectangle and every display's mapping is in hand. Here
-      // it is simply "every window in this observation with this id".
-      let placed = 0
-      for (const w of observation.windows) {
-        if (surfaceIdOf(this.ids, observation, w) !== surfaceId) continue
-        samples.push({ tMs: observation.tMs, display: w.display, ...w.bounds })
-        placed += 1
-      }
-      if (placed === 0) {
-        if (samples.length > 0) endedAtMs = observation.tMs
-        break
-      }
-
-    }
-
-    if (display === null || samples.length === 0) return null
-    return { display, samples, endedAtMs }
   }
 
   get providerIds(): readonly string[] {

@@ -31,6 +31,16 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   expect: replays of a mostly-still screen are now several times longer and
   contain real pauses, and the retention window — which had been counting that
   fast clock — now keeps the number of seconds it says it keeps.
+- A box in a replay no longer follows a moving object. It never reliably knew
+  where a control had been eight seconds ago: a tracked box asks the picture to
+  be precise to a fraction of a frame, and the picture is fifteen frames a
+  second on the screen being worked on and two to five on a quiet one. What
+  video keeps is everything that does not need that — the recording, the
+  captured frame with its context, boxes with lifetimes, blur, trim, the
+  annotated replay and the stills. What the precision was costing now goes to
+  the captured instant, which has no clock to disagree with and can carry the
+  whole interface of what was on screen. Packs written before this keep their
+  tracks and still render exactly as they did.
 - A capture now records what is inside an Electron window — an editor, a chat
   client, a browser, or this app's own editor. Their controls were being skipped
   wholesale, including on the window the user had just selected: a still capture
@@ -39,13 +49,6 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   meant for the recording lane, and it had been reaching a walk that happens
   once and has no frame rate to keep up with
   ([#117](https://github.com/r2cuerdame/capturepack/issues/117)).
-- Boxes follow their object again on a replay whose screen went quiet. Nothing
-  about the following was broken; the clock underneath it was, and a box drawn
-  against a video that had lost eight seconds could not be right no matter where
-  it was placed. Object tracking was briefly removed on the belief that this was
-  unfixable, and is restored now that it is fixed. On a display producing about
-  five frames a second the box still stops for as long as that screen does —
-  that is the screen, not the box.
 - A trim whose out-point lands inside a held frame cuts where it was asked to.
   The render only tested the out-point when a new frame was presented, so
   across a frame the replay holds — up to 197 ms in a measured capture, and far
