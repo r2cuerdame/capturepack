@@ -35,6 +35,7 @@ import {
   type ExposureAlignmentInput,
   type LandmarkObservation,
 } from '../src/shared/exposureAlignment'
+import { resolvedReplayClockOffsetMs } from '../src/shared/displayClock'
 
 interface Bounds { x: number; y: number; width: number; height: number }
 interface ContextWindow {
@@ -48,6 +49,7 @@ interface ContextWindow {
 interface DisplayEntry {
   index: number
   replay?: string
+  replay_duration_ms?: number
   replay_clock_offset_ms?: number
   bounds?: Bounds
   scale?: number
@@ -190,9 +192,34 @@ async function measureDisplay(display: DisplayEntry): Promise<void> {
     const confident = frames.filter(
       (f) => f.secondScore !== null && f.score - f.secondScore > CONFIDENCE_MARGIN,
     )
-    const offsetMs = Number.isFinite(display.replay_clock_offset_ms)
-      ? (display.replay_clock_offset_ms as number)
-      : 0
+    // THE OFFSET THE APP ACTUALLY USES, NOT ZERO (#89).
+    //
+    // A non-focused display often has no MEASURED clock origin, and the app
+    // then falls back to assuming both recordings ended together
+    // (`resolvedReplayClockOffsetMs`). Assuming zero here instead put that
+    // entire fallback into the answer as if it were exposure.
+    //
+    // Measured on CapturePack_2026-08-01_011147: display 2 came out at 127 ms
+    // and display 1 at 242 ms, and I reported that as proof the latency is
+    // per-display. Display 1's replay is 12799 ms against the focused 12665, so
+    // its fallback offset is +134 ms — and the gap between the two answers was
+    // +115 ms. The displays were not disagreeing about exposure; one of them
+    // was being measured on a clock the harness had guessed at.
+    const focusedDurationMs = displays.find((d) => d.focused === true)?.replay_duration_ms
+    const declared = display.replay_clock_offset_ms
+    const usingFallback =
+      !(typeof declared === 'number' && Number.isSafeInteger(declared))
+    const offsetMs = resolvedReplayClockOffsetMs(
+      declared,
+      display.replay_duration_ms ?? 0,
+      focusedDurationMs ?? display.replay_duration_ms ?? 0,
+    )
+    if (usingFallback) {
+      console.log(
+        `  no measured clock origin; using the app's own fallback `
+          + `${offsetMs >= 0 ? '+' : ''}${offsetMs} ms, which is itself an assumption`,
+      )
+    }
     const input: ExposureAlignmentInput = {
       contextObservations: candidates.map(
         (o): LandmarkObservation => ({ tMs: o.tMs, x: o.bounds.x, y: o.bounds.y }),
@@ -250,7 +277,7 @@ async function measureDisplay(display: DisplayEntry): Promise<void> {
     // Deliberately wider than the identification path's range and symmetric about
     // zero: an answer pinned to a boundary is not a peak, and a sweep that cannot
     // go past its own answer has no way to say so.
-    const fit = fitOffsetByPixelScore(frames, { minMs: -400, maxMs: 400 }, 1)
+    const fit = fitOffsetByPixelScore(frames, { minMs: -400, maxMs: 400 }, 1, offsetMs)
     const fitLine = fit === null
       ? '    pixel-score fit: no usable signal'
       : `    pixel-score fit: latency ${round(fit.latencyMs)} ms +/- ${round(fit.resolutionMs)}`
@@ -377,6 +404,7 @@ function fitOffsetByPixelScore(
   frames: readonly InvertedFrame[],
   search: { minMs: number; maxMs: number },
   stepMs: number,
+  replayClockOffsetMs: number,
 ): PixelScoreFit | null {
   const usable = frames.filter((frame) => frame.scores.length > 0)
   if (usable.length < 8 || !(stepMs > 0) || !(search.maxMs > search.minMs)) return null
@@ -388,7 +416,9 @@ function fitOffsetByPixelScore(
     let total = 0
     let count = 0
     for (const frame of usable) {
-      const wanted = frame.ptsMs + offsetMs
+      // SPEC 5.6 defines the offset as `t_i = t + offset` — display time from
+      // PACK time — so reaching pack time from a decoded frame subtracts it.
+      const wanted = frame.ptsMs - replayClockOffsetMs + offsetMs
       // The nearest OBSERVED rectangle to the hypothesised instant. Nearest,
       // never interpolated: an interpolated rectangle is a position the window
       // never occupied, and scoring pixels against one would invent evidence.

@@ -591,6 +591,29 @@ check(
     field.includes('latencyMs: -((low.offsetMs + high.offsetMs) / 2)')
       && field.includes('Positive = the picture is BEHIND its own timestamp'),
   )
+  // A HARNESS THAT GUESSES A CLOCK REPORTS THE GUESS AS PHYSICS.
+  //
+  // A non-focused display often has no MEASURED clock origin, and the app falls
+  // back to assuming both recordings ended together. The harness assumed ZERO
+  // instead, so that whole fallback landed in the answer as if it were exposure.
+  //
+  // On CapturePack_2026-08-01_011147 it produced 127 ms for the focused display
+  // and 242 ms for the other, and I reported the gap as proof that exposure is
+  // per-display. Display 1's fallback offset is +134 ms and the gap was +115.
+  // Using the app's own offset, the two displays read 127 and 108 — nineteen
+  // milliseconds apart, less than a third of a frame, with the remainder inside
+  // the uncertainty of the guess itself. The displays were never disagreeing.
+  check(
+    'the harness measures on the clock the app uses, not on zero',
+    field.includes('resolvedReplayClockOffsetMs(')
+      && field.includes("using the app's own fallback")
+      && field.includes('which is itself an assumption'),
+  )
+  check(
+    'and reaches pack time by SUBTRACTING the offset, as SPEC 5.6 defines it',
+    field.includes('const wanted = frame.ptsMs - replayClockOffsetMs + offsetMs')
+      && field.includes('`t_i = t + offset`'),
+  )
   check(
     'and a refusal by identification no longer ends the measurement',
     field.includes('identification REFUSED')
