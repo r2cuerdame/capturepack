@@ -475,8 +475,17 @@ async function invertFrames(
     let buffered: Buffer[] = []
     let have = 0
 
+    // -fps_mode passthrough, and it is not optional. Every CapturePack replay
+    // is variable-rate by construction — a screen capture makes a frame when
+    // the screen CHANGES — so ffmpeg's default CFR conversion DUPLICATES frames
+    // to reach the container's nominal r_frame_rate. Measured on
+    // CapturePack_2026-07-31_202834: 263 packets, 263 probe timestamps, 266
+    // frames out of the decoder. The Nth decoded frame then stops being the Nth
+    // timestamp, the guard below fires, and the measurement refuses — which is
+    // why this harness has never returned a number on an MP4 pack.
     const ffmpeg = spawn('ffmpeg', [
       '-v', 'error', '-i', replayPath,
+      '-fps_mode', 'passthrough',
       '-f', 'rawvideo', '-pix_fmt', 'gray', '-',
     ], { stdio: ['ignore', 'pipe', 'inherit'] })
 

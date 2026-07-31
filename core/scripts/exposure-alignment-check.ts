@@ -546,6 +546,33 @@ check(
   Object.keys(fieldShape).every((key) => key in fine),
 )
 
+// K. THE DECODER MUST HAND BACK THE FRAMES THE FILE HAS, NOT A CADENCE.
+//
+// Every CapturePack replay is variable-rate by construction: a screen capture
+// makes a frame when the screen CHANGES. ffmpeg's DEFAULT output mode converts
+// to the container's nominal r_frame_rate and DUPLICATES frames to get there.
+// The harness pairs the Nth decoded frame with the Nth probed timestamp, so an
+// invented frame shifts every pairing after it — and its own guard then refuses
+// the whole measurement. Measured on CapturePack_2026-07-31_202834: 263
+// packets, 263 probe timestamps, 266 frames out of the default decoder. That is
+// why this harness reported nothing on an MP4 pack, which is every pack written
+// since the trim stopped changing the container (#113).
+{
+  const field = readFileSync(
+    path.join(process.cwd(), 'scripts', 'exposure-field-check.ts'),
+    'utf8',
+  )
+  check(
+    'the field decoder disables frame-rate conversion',
+    field.includes("'-fps_mode', 'passthrough',"),
+  )
+  check(
+    'and still pairs decoded frames against a separately probed timestamp list',
+    field.includes('frame=best_effort_timestamp_time')
+      && field.includes('if (index !== video.ptsMs.length) {'),
+  )
+}
+
 console.log(
   `\nresult: ${failed === 0 ? 'OK' : 'FAILED'} — ${passed} passed, ${failed} failed`,
 )
