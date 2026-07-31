@@ -115,6 +115,14 @@ Two independent drags in one capture agree to 9 ms. Display 1 refuses on
 `insufficient-samples` rather than guessing from one frame. The harness is
 read-only and needs ffmpeg on PATH, so it is a `qa:` script, not a gate step.
 
+**The number is not an artefact of the gate that produced it.** Every run
+re-measures at half and double its own identification margin and fails if the
+answers disagree by more than one frame; both segments hold their value exactly.
+A manual sweep over `--margin 4..40` and `--window 250..500` — twelve runs,
+identified frames varying from 24 down to 8 — moves the first segment only
+between **125.0 and 129.5 ms** and does not move the second from **118.0 ms**
+at all.
+
 **Which display is which, because the numbering has already been mixed up
 once.** Read it from that pack's `manifest.json` rather than from prose:
 

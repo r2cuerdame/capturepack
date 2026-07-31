@@ -54,10 +54,15 @@ interface DisplayEntry {
   focused?: boolean
 }
 
-/** A frame whose best candidate is not this much better did not identify anything. */
-const CONFIDENCE_MARGIN = 10
+/**
+ * A frame whose best candidate is not this much better did not identify anything.
+ * Overridable so the answer's sensitivity to the gate can be inspected rather
+ * than assumed: a latency that moves when this moves is a parameter, not a
+ * measurement.
+ */
+const CONFIDENCE_MARGIN = Number(argValue('--margin') ?? 10)
 /** Candidate rectangles are drawn from this much of the track around each frame. */
-const CANDIDATE_WINDOW_MS = 350
+const CANDIDATE_WINDOW_MS = Number(argValue('--window') ?? 350)
 /** Below this a segment is a twitch, not a drag. */
 const SEGMENT_MIN_TRAVEL_PX = 300
 /** A gap longer than this ends a segment. */
@@ -203,6 +208,22 @@ async function measureDisplay(display: DisplayEntry): Promise<void> {
       stepMs: 1,
     }
     const report = measureExposureLatency(input)
+    // The identification gate is a choice, so the answer's dependence on it is
+    // reported rather than assumed. Re-filtering costs nothing: the decode has
+    // already happened and the margin only selects from what it produced.
+    const sensitivity = [CONFIDENCE_MARGIN / 2, CONFIDENCE_MARGIN * 2]
+      .map((margin) => {
+        const kept = frames.filter(
+          (f) => f.secondScore !== null && f.score - f.secondScore > margin,
+        )
+        const alternative = measureExposureLatency({
+          ...input,
+          decodedFrames: kept.map(
+            (f): DecodedLandmarkFrame => ({ ptsMs: f.ptsMs, x: f.x, y: f.y }),
+          ),
+        })
+        return { margin, frames: kept.length, latencyMs: alternative.latencyMs }
+      })
     const header = `  ${segment.startMs}-${segment.endMs} ms: `
       + `${confident.length}/${frames.length} frames identified`
     if (report.status !== 'measured') {
@@ -224,6 +245,22 @@ async function measureDisplay(display: DisplayEntry): Promise<void> {
         + ` (${round(uncorrected.residualMs)} ms -> ${round(report.residualMs)} ms)`,
     )
     measured += 1
+    const agreeing = sensitivity.filter((s) => s.latencyMs !== null)
+    console.log(
+      `    at half and double the identification gate: `
+        + agreeing.map(
+          (s) => `${round(s.latencyMs)} ms (${s.frames} frames)`,
+        ).join(', ') || '    the gate could not be varied',
+    )
+    check(
+      `${label} ${segment.startMs}-${segment.endMs} ms: the latency is not an artefact of the identification gate`,
+      agreeing.length > 0
+        && agreeing.every(
+          (s) => Math.abs((s.latencyMs as number) - (report.latencyMs as number))
+            <= (report.frameIntervalMs ?? 0),
+        ),
+      agreeing.map((s) => `${round(s.latencyMs)}`).join(' / ') || 'no comparison possible',
+    )
     check(
       `${label} ${segment.startMs}-${segment.endMs} ms: the measured latency explains the pixels`,
       report.residualPx !== null

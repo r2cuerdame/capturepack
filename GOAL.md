@@ -237,6 +237,13 @@ than the number.
 The measurement is **read-only** — it opens a pack, decodes it and writes
 nothing — and it needs ffmpeg, so it is a `qa:` script and not a gate step.
 
+A latency that moves when its own identification gate moves is a parameter, not
+a measurement, so every run re-measures at half and double that gate and fails
+if the answers disagree by more than one frame. A manual sweep over
+`--margin 4..40` and `--window 250..500` — twelve runs, identified frames
+falling from 24 to 8 — moves the first segment only between 125.0 and 129.5 ms
+and does not move the second from 118.0 ms at all.
+
 **Two defects the fixture could not have found**, both fixed and now gated:
 
 - A real ring files on its own cadence whether or not anything moved, so on a
