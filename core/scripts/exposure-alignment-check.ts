@@ -21,6 +21,9 @@ import {
   residualAfterExposureCorrection,
   syntheticMovingLandmark,
   fitOffsetByPixelScore,
+  shiftObservationsToPicture,
+  isApplicableExposureLatency,
+  MAXIMUM_APPLICABLE_LATENCY_MS,
   type ExposureAlignmentInput,
   type FrameScoreRow,
 } from '../src/shared/exposureAlignment'
@@ -763,6 +766,79 @@ const SWEEP = { minMs: -400, maxMs: 400 }
     'and measures on the clock the app uses, saying so when it is a fallback',
     field.includes('resolvedReplayClockOffsetMs(')
       && field.includes('which is itself an assumption'),
+  )
+}
+
+// M. THE CORRECTION ITSELF, AND WHAT IT REFUSES TO DO (#89).
+//
+// The frame stamped t shows the desktop as it was at t - latency, so the
+// rectangle the window really occupied at t is the one a viewer sees at
+// t + latency. Moving every observation later by that constant is the whole
+// correction. What matters as much is everything it does not do.
+console.log('\nM. putting the observations on the picture\'s clock')
+{
+  const observed = [
+    { t_ms: 0, x: 0, y: 10 },
+    { t_ms: 100, x: 200, y: 10 },
+    { t_ms: 250, x: 500, y: 10 },
+  ]
+  const moved = shiftObservationsToPicture(observed, 127)
+  check(
+    'every observation moves later by the measured latency',
+    moved.map((s) => s.t_ms).join(',') === '127,227,377',
+    moved.map((s) => s.t_ms).join(','),
+  )
+  check(
+    'and nothing else about them changes',
+    moved.every((s, i) => s.x === observed[i]?.x && s.y === observed[i]?.y)
+      && moved.length === observed.length,
+  )
+  // SPEC 8.3: a sample is a measurement of a real window. A correction that
+  // resampled, dropped or interpolated would be writing positions the window
+  // never occupied into the same field as ones it did.
+  check(
+    'the set of rectangles is exactly the set that was observed',
+    JSON.stringify(moved.map((s) => [s.x, s.y]))
+      === JSON.stringify(observed.map((s) => [s.x, s.y])),
+  )
+  check(
+    'ascending order survives, because a constant shift cannot reorder',
+    moved.every((s, i) => i === 0 || s.t_ms > (moved[i - 1] as { t_ms: number }).t_ms),
+  )
+  // Clamping belongs to a trim (rebaseAnnotationClock). Doing it here as well
+  // would silently drop the tail of a track whose last observations move past
+  // the end of the replay, which is a deletion disguised as an alignment.
+  check(
+    'an observation pushed past the replay end is moved, not dropped',
+    shiftObservationsToPicture([{ t_ms: 12_500 }], 127)[0]?.t_ms === 12_627,
+  )
+  check(
+    'a zero latency is a copy, not a rewrite',
+    shiftObservationsToPicture(observed, 0).map((s) => s.t_ms).join(',') === '0,100,250',
+  )
+}
+{
+  // A number the estimator refused to produce is not a small correction, it is
+  // no correction. A negative one would mean the picture leads its own
+  // timestamp, which no recorder does — applying it would move boxes the wrong
+  // way, twice as far as leaving them alone.
+  check(
+    'an unmeasured latency is not applied',
+    !isApplicableExposureLatency(null),
+  )
+  check(
+    'nor a negative one, which would be a broken measurement rather than a lead',
+    !isApplicableExposureLatency(-127) && !isApplicableExposureLatency(0),
+  )
+  check(
+    'nor one beyond any recorder',
+    !isApplicableExposureLatency(MAXIMUM_APPLICABLE_LATENCY_MS + 1)
+      && !isApplicableExposureLatency(Number.POSITIVE_INFINITY)
+      && !isApplicableExposureLatency(Number.NaN),
+  )
+  check(
+    'and the measured value is',
+    isApplicableExposureLatency(127) && isApplicableExposureLatency(108),
   )
 }
 

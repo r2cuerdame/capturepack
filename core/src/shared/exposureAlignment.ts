@@ -598,3 +598,63 @@ export function fitOffsetByPixelScore(
     contrast: span / Math.max(1, Math.abs(best.total)),
   }
 }
+
+/**
+ * PUT THE OBSERVATIONS ON THE PICTURE'S CLOCK (#89).
+ *
+ * A tracked box must sit on the window as the PICTURE shows it, not where the
+ * window truly was — GOAL "The box sits on the picture", and before it "The
+ * picture is the clock" (#81). The recorder puts pixels on the glass late, so
+ * the frame stamped `t` shows the desktop as it was at `t - latency`. Measured
+ * at ~127 ms on the reference desk, agreed by three independent segments and by
+ * two estimators that share no code.
+ *
+ * The correction is therefore to move each observation LATER by the latency:
+ * the rectangle the window really occupied at `t` is the one a viewer sees at
+ * `t + latency`, because that is when its pixels arrive.
+ *
+ * What this deliberately does NOT do:
+ *
+ * - It does not invent samples. Every `t_ms` moves by the same constant, so the
+ *   set of rectangles is exactly the set that was observed (SPEC §8.3: a sample
+ *   is a measurement of a real window, never an interpolation).
+ * - It does not reorder them. A constant shift preserves the ascending order
+ *   §8.3 requires.
+ * - It does not clamp into a lifetime or a duration. That is a trim's job
+ *   (`rebaseAnnotationClock`), and doing both here would silently drop the tail
+ *   of a track whose last observations move past the end.
+ *
+ * Applying it is a decision recorded per pack, not a constant compiled in: the
+ * value travels in `media.cadence.source_latency` so a reader can undo it.
+ */
+export function shiftObservationsToPicture<T extends { t_ms: number }>(
+  samples: readonly T[],
+  latencyMs: number,
+): T[] {
+  if (!Number.isFinite(latencyMs) || latencyMs === 0) return [...samples]
+  const shift = Math.round(latencyMs)
+  return samples.map((sample) => ({ ...sample, t_ms: sample.t_ms + shift }))
+}
+
+/**
+ * Whether a measured latency may be applied at all.
+ *
+ * A number the estimator refused to produce is not a small correction, it is no
+ * correction — the same rule the cadence fields obey. A negative one would mean
+ * the picture leads its own timestamp, which is not a thing a recorder does; it
+ * is a sign the measurement was wrong, and applying it would move boxes the
+ * wrong way twice as far as leaving them alone.
+ *
+ * The ceiling is deliberately generous rather than tuned: this is a sanity
+ * bound against a broken measurement, not a claim about what is plausible.
+ */
+export const MAXIMUM_APPLICABLE_LATENCY_MS = 1_000
+
+export function isApplicableExposureLatency(latencyMs: number | null): boolean {
+  return (
+    latencyMs !== null
+    && Number.isFinite(latencyMs)
+    && latencyMs > 0
+    && latencyMs <= MAXIMUM_APPLICABLE_LATENCY_MS
+  )
+}
