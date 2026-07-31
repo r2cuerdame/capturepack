@@ -47,16 +47,15 @@ The same evidence is saved as structured data for AI.
 1. **Rewind** — while Live recording is on (the default), press `Ctrl+Alt+C`
    after the bug, then scrub through the frozen replay to the frame where the UI
    was wrong. Replay length is configurable from 1–60 seconds.
-2. **Pick** — Object Pick highlights captured UI controls under the cursor. Click
-   once to record the real target, observed bounds, accessible name, control
-   type, and captured instant; a window remains the fallback when control data
-   is unavailable.
-3. **Track the window** — CapturePack records window geometry on the replay clock.
-   A picked control follows the observed translation of its owner window. Richer
-   per-control movement is used only when it was actually captured; otherwise
-   CapturePack does not invent it. Each observation names its display, so saved
-   and reopened multi-monitor packs keep their timing and coordinates when an
-   object crosses screens.
+2. **Pick** — Object Pick highlights the UI controls that were on screen in the
+   frame you scrubbed to. Click once to record the real target, observed bounds,
+   accessible name, control type, and that instant; a window remains the
+   fallback when control data is unavailable.
+3. **Keep what the frame contained** — the pack records the controls that were on
+   screen at that instant, including inside applications built on Chromium, and
+   every rectangle names the display it belongs to. A box marks the moment it was
+   picked at; it does not follow the object afterwards, because a replay cannot
+   show a moment finer than a frame.
 4. **Hand off structured context** — save the folder for another developer, drop
    it into ChatGPT, Claude, Codex, Cursor, or Gemini, or let a connected AI read
    it through the built-in, read-only MCP server.
@@ -108,8 +107,8 @@ A semantic annotation can identify more than a rectangle:
 - **Target identity:** UIA name, control type (the control's semantic role),
   AutomationId, process or window identity when the application exposes them;
   an optional Chrome DOM pick can instead carry selector, role, text and URL.
-- **Captured state in time:** the picked instant, display, observed bounds, and —
-  when tracking is available — observed movement samples.
+- **Captured state in time:** the picked instant, the display it was on, and the
+  bounds observed at that instant.
 - **Visual and narrative evidence:** original media, editable annotations,
   generated views and reports; video packs also carry keyframes and a timeline.
 
@@ -168,9 +167,8 @@ CapturePack_2026-07-27_143052/
 An image pack records `capture_kind: "image"` and either a region or full-screen
 scope. It has no replay and no `timeline.json`. A region image also records where
 the crop came from without storing pixels outside the crop.
-Object metadata and movement tracks are also optional evidence: if an application
-does not expose a usable UI object or no track was observed, the pack says so
-instead of fabricating context.
+Object metadata is also optional evidence: if an application does not expose a
+usable UI object, the pack says so instead of fabricating context.
 
 The specification matters more than any implementation — any language can generate CapturePack files. See [SPEC.md](SPEC.md).
 
