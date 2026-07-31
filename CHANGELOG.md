@@ -50,6 +50,12 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   back, and it refuses rather than reporting a number when too few frames can be
   identified.
 
+- Extending a box's lifetime to the end of the replay no longer drags its start
+  backwards. A ten-second lifetime asked for on a box starting at 12.0 s of a
+  14.7 s replay became 4.7 s–14.7 s, drawing the box over seven seconds in which
+  the thing it names had not happened yet. There is less room than was asked
+  for, and the box is now that much shorter instead
+  ([#109](https://github.com/r2cuerdame/capturepack/issues/109)).
 - Control geometry keeps up with the picture instead of being crowded out.
   Walking a Chromium window's accessibility tree cost 92% of everything the
   control lane did on the reporting machine — 1534 ms of a 1673 ms pass — and

@@ -38,6 +38,7 @@
     "check:annotation-style": "node scripts/annotation-style-check.mjs",
     "check:annotation-placement": "node scripts/annotation-placement-check.mjs",
     "check:trim": "node scripts/trim-drag-check.mjs",
+    "check:lifetime": "node scripts/lifetime-check.mjs",
     "check:plugins": "node scripts/plugin-preservation-check.mjs",
     "check:past": "node scripts/past-picking-check.mjs",
     "check:windows-context": "node scripts/windows-context-timeline-check.mjs",

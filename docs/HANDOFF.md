@@ -220,8 +220,8 @@ npm run qa:rc
 npm audit --omit=dev
 ```
 
-`qa:rc` currently runs 67 discovered `check:*` regressions plus type checking,
-the production build, and isolated Electron smoke: **70 gate steps** (68 with
+`qa:rc` currently runs 68 discovered `check:*` regressions plus type checking,
+the production build, and isolated Electron smoke: **71 gate steps** (69 with
 `--skip-build`). Reports
 are written under `%TEMP%\capturepack-qa` unless an artifact directory is
 provided.
@@ -335,7 +335,7 @@ builds are artifacts of a commit, never part of one.
 - An explicitly picked document element is no longer filtered by the threshold
   measured for UI Automation enumerations. It is judged at a viewport-like
   threshold and is never deleted.
-- The gate discovers **67 checks**: `check:frame-geometry`, `check:dom-pick`,
+- The gate discovers **68 checks**: `check:frame-geometry`, `check:dom-pick`,
   `check:docs` and `check:exposure-alignment` are new, and
   `check:chrome-bridge` — an end-to-end harness that existed, had never been
   wired in, and was failing — now runs.
