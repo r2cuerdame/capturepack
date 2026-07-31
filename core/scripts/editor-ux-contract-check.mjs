@@ -175,12 +175,17 @@ const checks = [
       pointerDown.includes('state.selectedId !== selectedId'),
   ],
   [
-    'the selected observed sample time uses existing picked_at_ms provenance',
+    // 0.4.0: the pick instant still comes from the OBSERVED sample rather than
+    // the playhead (#81/#85/#111), and it is now spent entirely on the frame
+    // whose geometry the box takes. There is no longer a stored pick time,
+    // because there is no longer anything that could re-anchor the box away
+    // from it — see GOAL "The still is the context".
+    'the pick reads its instant from the observed sample, not the playhead',
     renderer.includes('fallback?.observedAtMs') &&
       beginPending.includes(
         'const pickedAt = observedPickedAtMs ?? presentedOn(on.index)',
       ) &&
-      beginPending.includes('pickedAtMs.set(draft.annotation_id, pickedAt)'),
+      !beginPending.includes('pickedAtMs.set('),
   ],
 ]
 

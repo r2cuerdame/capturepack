@@ -13,8 +13,6 @@ import type {
   ContextFrameRequest,
   EditorExportPayload,
   EditorInitPayload,
-  ObjectTrackRequest,
-  ObjectTrackResult,
   RecorderFailureReason,
 } from '../../shared/ipc'
 import type { ContextFrame } from '../../shared/context/protocol'
@@ -88,8 +86,6 @@ import { BoardScrub, wheelScrubDeltaMs } from './scrub'
 import type { BoardReplayInput } from './scrub'
 import { Timebar } from './timebar'
 import { planTrimDrag } from './trimDrag'
-import { projectControlTrack } from './objectTrack'
-import type { ControlTrackAnchor } from './objectTrack'
 import { placeFloatingChrome } from './chromePlacement'
 import {
   clampZoom,
@@ -122,7 +118,6 @@ interface EditorBridge {
   onContextFrame(cb: (frame: ContextFrame) => void): void
   // WHERE A PICKED OBJECT WENT (#86). Asked once per picked box; the answer is
   // a path the box is drawn along, so following costs nothing while scrubbing.
-  requestObjectTrack(request: ObjectTrackRequest): Promise<ObjectTrackResult | null>
   export(payload: EditorExportPayload): void
   saveAsNew(payload: EditorExportPayload): void
   cancel(): void
@@ -1649,22 +1644,13 @@ function beginPendingBox(
     //
     // The frame the box was drawn over is the only instant that means anything
     // here, and it is the same clock the rectangle itself came from (#81).
-    pickedAtMs.set(draft.annotation_id, pickedAt)
-    const controlAnchor: ControlTrackAnchor | null =
-      picked.level === 'control' && board !== null
-        ? {
-            display: on.index,
-            bounds: { x: b.x, y: b.y, width: b.w, height: b.h },
-            surfaceBounds: { ...picked.surface.bounds },
-            displays: board.displays.map((d) => ({
-              index: d.index,
-              width: d.width,
-              height: d.height,
-              pixelsPerDip: d.bw > 0 ? d.width / d.bw : 1,
-            })),
-          }
-        : null
-    attachTrack(draft, picked.surface.surfaceId, controlAnchor)
+    // THE PICK IS A STATEMENT ABOUT ONE FRAME, AND IT STOPS THERE (0.4.0).
+    //
+    // `bounds` is the rectangle the object had in the frame that was clicked
+    // and `target` is what the object IS. Nothing follows it afterwards — see
+    // GOAL "The still is the context" for why the app stopped claiming to know
+    // where a control was eight seconds ago.
+    void pickedAt
   }
   textSession = { kind: 'new', draft }
   // The lane belongs to the box, and the box exists now (#92).
@@ -1825,8 +1811,6 @@ function cancelTextEditor(): void {
     pickedRects.delete(pending.annotation_id)
     trackedSurfaces.delete(pending.annotation_id)
     pickedObjectIdentities.delete(pending.annotation_id)
-    trackedControlAnchors.delete(pending.annotation_id)
-    pickedAtMs.delete(pending.annotation_id)
   }
   // The pending box's own chrome goes with it (the duration editor may have
   // been opened from the header while typing).
@@ -2172,15 +2156,14 @@ function applyMutation(mutate: (a: Annotation) => void): void {
   if (pending !== null) {
     const before = lifeKey(pending)
     mutate(pending)
-    // A track was fetched for the lifetime the box had when it was picked. Any
-    // change to that lifetime — a preset, "until the end", "entire capture" —
-    // makes the path we hold the wrong length (#86).
-    // The lifetime moved, so the representative instant did. Do NOT re-anchor
-    // yet (#107): the track in hand was fetched for the OLD range and cannot
-    // reach the new midpoint, so anchoring against it clamps to the track's end
-    // — one big visible jump, and then a second one when the real track lands.
-    // `attachTrack` re-anchors once, on the path that actually has the answer.
-    if (lifeKey(pending) !== before) refreshTrack(pending)
+    // A LIFETIME EDIT NO LONGER MOVES THE BOX, AND CANNOT (0.4.0).
+    //
+    // It never should have needed to. The rectangle states where the object was
+    // in the frame that was clicked, and that frame does not move when the box
+    // is asked to last longer. #107 and #111 were both this defect — a lifetime
+    // edit dragging the anchor along with it — and with no path to re-anchor
+    // against, the class is gone rather than fixed.
+    void before
     // Repaints the live preview (blur, number badge, border), re-syncs the
     // header labels, and moves the pending box's own lane (#92).
     syncLanes()
@@ -2193,8 +2176,7 @@ function applyMutation(mutate: (a: Annotation) => void): void {
   const snapshot = state.cloneAnnotations()
   const life = lifeKey(a)
   mutate(a)
-  // Same rule as the pending path (#107): the refreshed track re-anchors it.
-  if (lifeKey(a) !== life) refreshTrack(a)
+  void life
   state.pushUndoSnapshot(snapshot)
   refresh()
 }
@@ -2218,8 +2200,6 @@ function deleteSelected(): void {
   pickedRects.delete(a.annotation_id)
   trackedSurfaces.delete(a.annotation_id)
   pickedObjectIdentities.delete(a.annotation_id)
-  trackedControlAnchors.delete(a.annotation_id)
-  pickedAtMs.delete(a.annotation_id)
   refresh()
 }
 
@@ -3226,30 +3206,6 @@ function displayObjectHint(text: string): void {
 // telling every AI reader that the box annotating one thing targets another.
 const pickedRects = new Map<string, Box>()
 
-/**
- * Puts `bounds` back on the object's rectangle at this box's representative
- * instant (#102) — the lifetime's midpoint, per SPEC §8.4.
- *
- * A no-op for a box with no track: a hand-drawn rectangle IS the answer, and
- * there is nothing to re-anchor it to.
- */
-function reanchorBounds(a: Annotation): void {
-  if (a.tracking?.enabled !== true) return
-  // THE INSTANT THE USER PICKED IT, NOT THE MIDDLE OF ITS LIFETIME (#111).
-  //
-  // #102 anchored `bounds` to the lifetime's midpoint, which SPEC §8.4 calls
-  // the representative instant. Correct for a box someone drew, wrong for a box
-  // someone PICKED: extending the lifetime moves the midpoint, so the stored
-  // rectangle walked away from the thing the user had clicked on. Measured on
-  // CapturePack_2026-07-29_091123 — picked at 3656 ms where the window was at
-  // (1814,684), extended to the end, and `bounds` ended up at (119,271), the
-  // midpoint's rectangle, seventeen hundred pixels away.
-  //
-  // The pick instant is what the box MEANS. The track says where the object was
-  // at every other moment, so nothing is lost by holding this one still.
-  const at = trackedBoundsAt(a, pickedAtMs.get(a.annotation_id) ?? lifetimeMidpoint(a, replayDurationMs))
-  if (at !== null) a.bounds = at
-}
 
 /**
  * The box that already annotates this object AT THIS MOMENT, if there is one.
@@ -3302,30 +3258,6 @@ const trackedSurfaces = new Map<string, string>()
  */
 const pickedObjectIdentities = new Map<string, PickIdentity>()
 
-/** The picked control's rectangle within its owner window, retained on refresh. */
-const trackedControlAnchors = new Map<string, ControlTrackAnchor>()
-
-/**
- * The replay instant each picked box was placed at (#111).
- *
- * Its lifetime moves — "until the end" is one click — but the moment the user
- * pointed at the object does not, and that moment is what the box means.
- */
-const pickedAtMs = new Map<string, number>()
-
-/**
- * The replay times the editor has actually SHOWN, most recent last (#113).
- *
- * Kept so the app can answer, for itself, the question every one of these
- * captures has been sent back and forth to settle: does a track's sample sit on
- * a frame, or between two? A sample was produced BY a frame, so the distance to
- * the nearest frame the editor has presented should be zero. Anything else is
- * the residual, in milliseconds, and it belongs in the log rather than in a
- * measurement someone has to run ffprobe for.
- */
-const presentedTimes: number[] = []
-
-/** Reports where a freshly fetched track sits relative to the frames on screen. */
 /**
  * The first-run tutorial (GOAL "First-Run Tutorial").
  *
@@ -3361,64 +3293,6 @@ tutorialScrim.addEventListener('mousedown', (e) => {
   if (e.target === tutorialScrim) closeTutorial()
 })
 
-function reportTrackAlignment(samples: readonly { t_ms: number }[]): void {
-  if (presentedTimes.length < 8 || samples.length === 0) return
-  // MEASURED FROM THE PICTURES, NOT FROM THE SAMPLES (#93).
-  //
-  // The first version of this asked, for every sample, how far the nearest
-  // SHOWN frame was — and reported -855 ms on a capture whose rendered output
-  // was later measured correct to two pixels during a 5000 px/s drag. It was
-  // not measuring sync. A user who picks at 11 s and drags the lifetime out to
-  // 30 s has a track covering twenty seconds of replay they never played, and
-  // samples out in that unwatched stretch have no nearby frame by construction.
-  // The number was coverage wearing a sync number's clothes, which is worse
-  // than no number at all.
-  //
-  // Turned around, it means something: for each frame this editor actually put
-  // on screen, how far away was the nearest observation? In sync that is at
-  // most half a sample interval, whatever the rate, and it cannot be inflated
-  // by parts of the replay nobody looked at.
-  const first = samples[0]!.t_ms
-  const last = samples[samples.length - 1]!.t_ms
-  const gaps: number[] = []
-  let outside = 0
-  for (const t of presentedTimes) {
-    if (t < first || t > last) {
-      // A frame from outside the track's span says nothing about alignment.
-      outside += 1
-      continue
-    }
-    let best = Number.POSITIVE_INFINITY
-    for (const s of samples) {
-      const d = s.t_ms - t
-      if (Math.abs(d) < Math.abs(best)) best = d
-    }
-    if (Number.isFinite(best)) gaps.push(best)
-  }
-  if (gaps.length === 0) {
-    console.info(
-      `capturepack: track alignment — none of the ${presentedTimes.length} frames shown so far ` +
-        `fall inside the track (${Math.round(first)}..${Math.round(last)} ms), so there is nothing to compare yet`,
-    )
-    return
-  }
-  gaps.sort((a, b) => a - b)
-  const median = Math.round(gaps[gaps.length >> 1] ?? 0)
-  const worst = Math.round(Math.abs(gaps[0]!) > Math.abs(gaps[gaps.length - 1]!) ? gaps[0]! : gaps[gaps.length - 1]!)
-  console.info(
-    `capturepack: track alignment — over ${gaps.length} frame(s) this editor has shown inside the track, ` +
-      `the nearest observation sits a median of ${median} ms away (worst ${worst} ms; 0 is exact). ` +
-      `${outside} shown frame(s) fell outside the track and were not counted`,
-  )
-}
-
-/** Re-asks for the path over the box's CURRENT lifetime (see `trackedSurfaces`). */
-function refreshTrack(a: Annotation): void {
-  const surfaceId = trackedSurfaces.get(a.annotation_id)
-  if (surfaceId !== undefined) {
-    attachTrack(a, surfaceId, trackedControlAnchors.get(a.annotation_id) ?? null)
-  }
-}
 
 /** One native annotation rectangle expressed in the board's common DIP space. */
 function nativeRectOnBoard(d: BoardDisplay, b: AnnotationBounds): AnnotationBounds {
@@ -3462,88 +3336,6 @@ function setAnnotationDisplay(a: Annotation, index: number): void {
   else a.display = index
 }
 
-function attachTrack(
-  draft: Annotation,
-  surfaceId: string,
-  controlAnchor: ControlTrackAnchor | null,
-): void {
-  if (contextSessionId === null) return
-  const id = draft.annotation_id
-  trackedSurfaces.set(id, surfaceId)
-  if (controlAnchor === null) trackedControlAnchors.delete(id)
-  else trackedControlAnchors.set(id, controlAnchor)
-  const start = draft.start_ms ?? 0
-  const end = draft.end_ms ?? replayDurationMs
-  void window.editorBridge
-    .requestObjectTrack({ sessionId: contextSessionId, surfaceId, startMs: start, endMs: end })
-    .then((track) => {
-      if (track === null) return
-      // requestObjectTrack records the owner HWND. That IS the picked object
-      // for a window, but it is only the moving coordinate frame for a control.
-      // Copying those samples verbatim produced rc.36's exact contradiction:
-      // target={level:"control", name:"..."} beside a window-sized bounds box.
-      const samples =
-        controlAnchor === null ? track.samples : projectControlTrack(track.samples, controlAnchor)
-      if (samples.length < 2) return
-      // The draft may have been committed, renamed or discarded while this was
-      // in flight; the stored annotation is the one that matters.
-      const live = state.byId(id) ?? (textSession?.kind === 'new' && textSession.draft.annotation_id === id ? textSession.draft : undefined)
-      if (live === undefined) return
-      // What an ABSENT sample display means for THIS box (SPEC §8.8): the box's
-      // own screen, which is the focused one when the box does not name it.
-      const ownDisplay = live.display ?? focusedDisplayIndex
-      live.tracking = {
-        enabled: true,
-        // Recorded, not derived: a reader can now check `bounds` against the
-        // track without guessing which instant the box was anchored at (#90).
-        ...(pickedAtMs.has(id) ? { picked_at_ms: Math.round(pickedAtMs.get(id)!) } : {}),
-        // WHICH SCREEN EACH SAMPLE IS MEASURED IN (#86). Dropping it here was
-        // not a missing nicety: a window straddling two monitors changes which
-        // display owns it as it crosses the middle, and its rectangle is then
-        // pixels of the OTHER snapshot — different origin, and on this desk a
-        // different scale too (1443x953 on the 1.5x screen is the same window as
-        // 960x634 on the 1x one). Without the field those two spaces are mixed
-        // in one list and nothing downstream can tell them apart, so the box
-        // jumps between two readings of the same position.
-        // Written only where it SAYS something: absent means the annotation's
-        // own display (SPEC §8.3), so a capture whose object never left one
-        // screen produces exactly the samples it did before this field existed.
-        samples: samples.map((s) => ({
-          t_ms: s.tMs,
-          ...(s.display === ownDisplay ? {} : { display: s.display }),
-          x: s.x,
-          y: s.y,
-          width: s.width,
-          height: s.height,
-        })),
-      }
-      if (track.endedAtMs !== null && live.end_ms !== undefined && live.end_ms > track.endedAtMs) {
-        live.end_ms = Math.max(live.start_ms ?? 0, track.endedAtMs)
-      }
-      // `bounds` IS THE RECTANGLE AT THIS BOX'S OWN MOMENT (#102).
-      //
-      // SPEC §8.3 defines it that way and §8.4 says the moment is the lifetime's
-      // MIDPOINT — but it was left as the rectangle the object had when the user
-      // clicked, and the midpoint moves the instant the lifetime is changed.
-      // Measured on CapturePack_2026-07-29_081922: `bounds` was (1784,608),
-      // the object's rectangle at that box's own midpoint was (75,941), and
-      // every reader that honours `bounds` — a 0.1.0 reader, our own still
-      // renderer, report.md — placed the box 1709 px from the thing it names.
-      //
-      // So it is re-anchored from the track, which is the record of where the
-      // object actually was. Nothing is estimated: this is the nearest OBSERVED
-      // sample (#89), the same one the editor draws.
-      reanchorBounds(live)
-      reportTrackAlignment(live.tracking.samples ?? [])
-      schedulePaint()
-    })
-    .catch((err: unknown) => {
-      // Rule 1 of object data: a box that cannot follow is a box that does not
-      // follow, never an editor that broke.
-      console.error('capturepack: requesting an object track failed:', err)
-    })
-}
-
 /**
  * Drops `target` once the box no longer covers the element it was picked from.
  * Called after a committed move or resize; a box that still contains the
@@ -3562,8 +3354,6 @@ function invalidateTargetIfMoved(id: string): void {
   // the user made by hand.
   trackedSurfaces.delete(id)
   pickedObjectIdentities.delete(id)
-  trackedControlAnchors.delete(id)
-  pickedAtMs.delete(id)
   if (a.target === undefined) return
   const picked = pickedRects.get(id)
   if (picked === undefined) return
@@ -5075,13 +4865,6 @@ async function initEditor(payload: EditorInitPayload): Promise<void> {
       // request is time-keyed and de-duplicated, so when the timer was already
       // right this costs nothing.
       onFrame: () => {
-        // Every frame the editor actually shows, remembered so a track can be
-        // checked against the pictures it was built from (#113).
-        const shown = Math.round(controller.presentedMs)
-        if (Number.isFinite(shown)) {
-          presentedTimes.push(shown)
-          if (presentedTimes.length > 400) presentedTimes.shift()
-        }
         scheduleContextFrame()
       },
     })

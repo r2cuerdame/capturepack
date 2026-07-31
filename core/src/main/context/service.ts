@@ -11,7 +11,7 @@
 import type { BrowserWindow } from 'electron'
 import { ipcMain } from 'electron'
 import { IPC } from '../../shared/ipc'
-import type { ContextFrameRequest, ObjectTrackRequest, ObjectTrackResult } from '../../shared/ipc'
+import type { ContextFrameRequest } from '../../shared/ipc'
 import type { ContextFrame } from '../../shared/context/protocol'
 import { logError, logInfo, logWarn } from '../log'
 import { ContextSession } from './session'
@@ -86,29 +86,6 @@ function ensureIpc(): void {
         return await session.frameAt(request.timeMs)
       } catch (err) {
         logError('capturepack: context: building a frame failed:', err)
-        return null
-      }
-    },
-  )
-  ipcMain.handle(
-    IPC.contextRequestTrack,
-    (event, raw: unknown): ObjectTrackResult | null => {
-      const session = sessions.get(event.sender.id)
-      if (session === undefined) return null
-      // Untrusted like every other renderer message, and validated the same way
-      // the frame request is: a request naming another session, or carrying
-      // anything but finite numbers, is refused rather than answered.
-      const request = raw as Partial<ObjectTrackRequest>
-      if (request.sessionId !== session.sessionId) return null
-      if (typeof request.surfaceId !== 'string' || request.surfaceId === '') return null
-      if (typeof request.startMs !== 'number' || !Number.isFinite(request.startMs)) return null
-      if (typeof request.endMs !== 'number' || !Number.isFinite(request.endMs)) return null
-      try {
-        return session.trackOf(request.surfaceId, request.startMs, request.endMs)
-      } catch (err) {
-        // Rule 1: a box that cannot follow is a box that does not follow, never
-        // a capture that failed.
-        logError('capturepack: context: building an object track failed:', err)
         return null
       }
     },

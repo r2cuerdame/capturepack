@@ -298,6 +298,98 @@ That last point has no obviously right answer and is the owner's call.
 
 ---
 
+## The still is the context (0.4.0 direction, decided 2026-07-31)
+
+**Video stops collecting context frame by frame. The captured instant collects
+everything.** Owner's decision, taken after the evidence below.
+
+### What the evidence said
+
+Every hard defect of the last two weeks lives in one place: the join between
+moving geometry and a video frame. Not one of them is a bug in the geometry, and
+not one is a bug in the video.
+
+- **#89** — the recorder puts pixels on the glass late. Measured 118–127 ms on
+  one desk, and the correction turns 551 px of error into 97 px. Where to apply
+  it has no right answer (see above), and no answer at all for a display whose
+  latency could not be measured.
+- **Multi-monitor** — a second display's replay has its own clock. When its
+  origin cannot be observed the alignment falls back to assuming both recordings
+  ended together, which is arithmetic wearing the clothes of a measurement.
+- **Time-axis compression** — measured on `CapturePack_2026-07-31_202834`:
+  display 1 recorded 17.6 s of wall time into 5.29 s of media, frames evenly
+  spaced at 66.7 ms with a largest gap of 197 ms, while its own cadence report
+  admits a 903 ms stall. The gaps were not preserved. **No single offset can
+  repair that** — time is compressed non-linearly, so a box is wrong in a
+  different amount in every stretch.
+- **Cost** — 15 fps control geometry is reachable only by excluding Chromium
+  windows, which are 92% of the cost. The thing users most want to select is the
+  thing the budget cannot afford to watch.
+
+Each of those is fixable. Together they are a standing tax on every capture, paid
+so that a box can follow a window that the user is dragging — which is the rarest
+thing they do and the least of what they are trying to explain.
+
+### The decision
+
+A single instant has no clock to disagree with. There is no exposure latency
+between a snapshot and itself, no second display's origin to observe, no
+compressed time base, and no per-frame budget. Everything that was hard becomes
+either trivial or absent.
+
+So:
+
+**Video keeps** — the replay, the frozen snapshot at the trigger, hand-drawn
+annotations with lifetimes, blur, trim, the annotated replay and keyframe stills.
+It still answers *"what happened, and when."*
+
+**Video loses** — `tracking.samples`, boxes that follow a moving object, and
+object selection at an arbitrary past frame. It no longer claims to know where a
+control was 8 seconds ago, because it never reliably did.
+
+**The captured instant gains** — everything the machine can say about that one
+frame. The full UIA tree, and the Chromium DOM: every element's tag, role, id,
+class, screen rectangle and visible text. This is what `Ctrl+Alt+S` was always
+for, and it is now the deep half of `Ctrl+Alt+C` too — a video capture's
+`snapshot.png` gets the same treatment, because it is a still.
+
+### What the DOM carries, and what it must not
+
+Structure, geometry, and the text a person could read off the screen. **Not**
+the value of any `input` or `textarea`, **not** any `type="password"`, **not**
+the text of hidden elements.
+
+The rule behind it: `snapshot.png` already contains every pixel the user could
+see, so recording the visible text adds no exposure the pack did not already
+have. A typed-but-unsubmitted password, a token in a `data-` attribute, or the
+text of a collapsed panel are all things the picture does *not* contain, and a
+pack that quietly adds them is a pack that is more dangerous to forward than it
+looks. README already warns that blur is non-destructive; that warning must not
+have to grow a second paragraph about text.
+
+### Format consequence
+
+`tracking` is **not removed from the specification.** Packs already in the world
+carry it, and §13.1 requires readers to keep reading them; removing it would be
+a breaking change bought for nothing. New writers simply stop emitting it, and
+the field is documented as legacy — written by 0.2.0–0.3.x, read forever.
+
+`target` stays and matters more than before: the identity of the object a box
+was picked from is exactly the durable half of what tracking was trying to say.
+
+### What this costs
+
+An honest list, because it is a real loss:
+
+- A dragged window in a replay can no longer be followed by a box.
+- "Select this control as it was at 00:08" is gone from video.
+- The time-machine narrative on the landing page is no longer true and has to be
+  rewritten, along with its localized motion assets in nine languages.
+
+The trade is that everything remaining is something the app can prove.
+
+---
+
 ## Mission
 
 Build the fastest possible workflow for explaining visual problems.
