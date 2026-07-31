@@ -780,6 +780,22 @@ export interface CaptureReplayResultPayload {
     retainedBytes: number
     retainedDurationMs: number
     selectedFragmentCount: number
+    /**
+     * WHERE THIS CAPTURE'S TIME WENT (#116). Recorded, never acted on.
+     *
+     * These separate the layers that a compressed replay could have been
+     * flattened by: the encoder's own span against the media sum says whether
+     * `tfdt` carried a gap, the longest sample says whether the sample
+     * durations did, and the delivery count says how much independent wall
+     * evidence there was to check either against.
+     */
+    ringTiming?: {
+      sampleCount: number
+      maxSampleDurationMs: number
+      sourceSpanMs: number
+      fragmentsWithSourceTime: number
+      deliveryCount: number
+    }
     /** Async source/presentation comparison; diagnostic until measured. */
     sourceLatencyCalibration?: CaptureReadyPayload['sourceLatencyCalibration']
     /**

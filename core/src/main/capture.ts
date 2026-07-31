@@ -1419,6 +1419,23 @@ export function requestReplay(
             `${Math.round(ring.retainedDurationMs)} ms; selected ` +
             `${ring.selectedFragmentCount} fragment(s)`,
         )
+        // WHERE THIS CAPTURE'S TIME WENT (#116).
+        //
+        // A display reported a 902 ms stall and produced 5.9 s of media for a
+        // 12.7 s capture. Which layer dropped the time was not answerable from
+        // outside: the replay's own `tfdt` is this recorder's arithmetic, so
+        // reading the file says nothing about what arrived. These are the
+        // incoming numbers.
+        if (ring.ringTiming !== undefined) {
+          const t = ring.ringTiming
+          logInfo(
+            `[capture] display ${displayId}: ring timing — ` +
+              `${t.sampleCount} sample(s) over ${t.deliveryCount} delivery instant(s); ` +
+              `encoder span ${t.sourceSpanMs} ms ` +
+              `(${t.fragmentsWithSourceTime} fragment(s) carried one), ` +
+              `longest held frame ${t.maxSampleDurationMs} ms`,
+          )
+        }
         if (ring.sourceLatencyCalibration !== undefined) {
           logInfo(
             `[capture] display ${displayId}: source latency calibration ` +

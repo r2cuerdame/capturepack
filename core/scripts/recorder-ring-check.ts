@@ -1351,6 +1351,32 @@ async function checkWebmFallbackLifecycle(): Promise<void> {
 // measurement that should have come first, and these cases pin it, because a
 // diagnostic that lies is worse than none: the next person reads it to decide
 // whether the encoder or the sample durations flattened a capture.
+// AND IT HAS TO REACH THE LOG (#116).
+//
+// The first version of this measured correctly and printed from the RENDERER,
+// whose console does not reach the main log. rc.9 therefore shipped a
+// diagnostic that produced nothing at all, and the very capture it was built
+// for came and went unmeasured. A diagnostic nobody can read is the same as no
+// diagnostic, so the ROUTE is pinned here, not just the calculation.
+{
+  const renderer = readFileSync(
+    path.join(process.cwd(), 'src/renderer/capture/capture.ts'),
+    'utf8',
+  )
+  const main = readFileSync(path.join(process.cwd(), 'src/main/capture.ts'), 'utf8')
+  check(
+    'the renderer SENDS the timing rather than logging where nothing reads',
+    renderer.includes('ringTiming: stats.timing,')
+      && !renderer.includes('[capture] ring timing'),
+    'renderer',
+  )
+  check(
+    'and main writes it to the log beside the ring line it belongs with',
+    main.includes('ring timing') && main.includes('ring.ringTiming !== undefined'),
+    'main',
+  )
+}
+
 console.log('\nRing timing diagnostics')
 {
   const ring = new FragmentedMp4Ring(60_000)
