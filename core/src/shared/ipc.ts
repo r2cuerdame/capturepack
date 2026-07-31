@@ -796,6 +796,25 @@ export interface CaptureReplayResultPayload {
       sourceSpanMs: number
       fragmentsWithSourceTime: number
       deliveryCount: number
+      /**
+       * WHY the timeline came out the length it did (#116).
+       *
+       * A refused `tfdt` and a privacy-window trim both produce a short replay,
+       * and without this they are indistinguishable from each other and from
+       * success.
+       */
+      assembly?: {
+        retentionMs: number
+        selectedBeforeRetention: number
+        selectedAfterRetention: number
+        timelineBeforeRetentionMs: number
+        verdicts: ReadonlyArray<{
+          trusted: boolean
+          reason?: string
+          claimedMs: number | null
+          wallSpanMs: number
+        }>
+      } | null
     }
     /** Async source/presentation comparison; diagnostic until measured. */
     sourceLatencyCalibration?: CaptureReadyPayload['sourceLatencyCalibration']

@@ -70,6 +70,23 @@ export interface FragmentedMp4RingStats {
   timing: FragmentedMp4RingTiming
 }
 
+export interface FragmentedMp4RingAssembly {
+  retentionMs: number
+  selectedBeforeRetention: number
+  selectedAfterRetention: number
+  /** What the honest timeline measured BEFORE the privacy window trimmed it. */
+  timelineBeforeRetentionMs: number
+  verdicts: ReadonlyArray<
+    | { trusted: true; claimedMs: number; wallSpanMs: number }
+    | {
+        trusted: false
+        reason: string
+        claimedMs: number | null
+        wallSpanMs: number
+      }
+  >
+}
+
 export interface FragmentedMp4RingTiming {
   /** Samples across every retained fragment. */
   sampleCount: number
@@ -81,6 +98,8 @@ export interface FragmentedMp4RingTiming {
   fragmentsWithSourceTime: number
   /** Distinct delivery instants the retained fragments arrived over. */
   deliveryCount: number
+  /** The last assemble()'s own decisions, or null before one has run. */
+  assembly: FragmentedMp4RingAssembly | null
 }
 
 // Top-level boxes which may legally sit between ftyp and moov in an
@@ -357,6 +376,8 @@ function millisecondsToTicks(milliseconds: number, timescale: number): bigint {
 interface ObservedFragmentTimeline {
   decodeTimes: bigint[]
   durationTicks: bigint
+  /** One per recorder session, in order. Diagnostics only. */
+  verdicts: TfdtVerdict[]
 }
 
 /**
@@ -375,26 +396,57 @@ interface ObservedFragmentTimeline {
  */
 const TFDT_WALL_TOLERANCE_MS = 1_000
 
-function sessionTfdtIsTrustworthy(
+/**
+ * Why a session's `tfdt` was or was not believed — the whole verdict, not a
+ * boolean.
+ *
+ * A silent refusal here is indistinguishable from success: the output is a
+ * compressed replay either way, and no one downstream can tell whether the
+ * evidence was missing, contradictory, or simply never consulted. That already
+ * cost one release. The reason travels with the answer.
+ */
+type TfdtVerdict =
+  | { trusted: true; claimedMs: number; wallSpanMs: number }
+  | {
+      trusted: false
+      reason: 'empty' | 'no-timescale' | 'missing-tfdt' | 'went-backwards' | 'outruns-wall'
+      claimedMs: number | null
+      wallSpanMs: number
+    }
+
+function sessionTfdtVerdict(
   session: readonly StoredFragment[],
   wallSpanMs: number,
-): boolean {
+): TfdtVerdict {
   const first = session[0]
   const last = session[session.length - 1]
-  if (first === undefined || last === undefined) return false
-  if (first.timescale <= 0) return false
+  if (first === undefined || last === undefined) {
+    return { trusted: false, reason: 'empty', claimedMs: null, wallSpanMs }
+  }
+  if (first.timescale <= 0) {
+    return { trusted: false, reason: 'no-timescale', claimedMs: null, wallSpanMs }
+  }
   let previous: bigint | null = null
   for (const fragment of session) {
     const ticks = fragment.sourceDecodeTicks
-    if (ticks === null) return false
-    if (previous !== null && ticks < previous) return false
+    if (ticks === null) {
+      return { trusted: false, reason: 'missing-tfdt', claimedMs: null, wallSpanMs }
+    }
+    if (previous !== null && ticks < previous) {
+      return { trusted: false, reason: 'went-backwards', claimedMs: null, wallSpanMs }
+    }
     previous = ticks
   }
   const firstTicks = first.sourceDecodeTicks
   const lastTicks = last.sourceDecodeTicks
-  if (firstTicks === null || lastTicks === null) return false
+  if (firstTicks === null || lastTicks === null) {
+    return { trusted: false, reason: 'missing-tfdt', claimedMs: null, wallSpanMs }
+  }
   const claimedMs = (Number(lastTicks - firstTicks) * 1_000) / first.timescale
-  return claimedMs <= wallSpanMs + TFDT_WALL_TOLERANCE_MS
+  if (claimedMs > wallSpanMs + TFDT_WALL_TOLERANCE_MS) {
+    return { trusted: false, reason: 'outruns-wall', claimedMs, wallSpanMs }
+  }
+  return { trusted: true, claimedMs, wallSpanMs }
 }
 
 /**
@@ -446,22 +498,24 @@ function observedFragmentTimeline(
   targetTimescale: number,
 ): ObservedFragmentTimeline {
   const first = fragments[0]
-  if (first === undefined) return { decodeTimes: [], durationTicks: 0n }
+  if (first === undefined) {
+    return { decodeTimes: [], durationTicks: 0n, verdicts: [] }
+  }
 
   // Trust is decided per SESSION, over the whole session, before any fragment
   // is placed. A per-fragment decision could believe the first half of one
   // recording and disbelieve the second, putting a seam mid-session.
   const wallSpanMs = deliveredWallSpanMs(fragments)
   const trusted = new Map<number, StoredFragment | null>()
+  const verdicts: TfdtVerdict[] = []
   {
     let session: StoredFragment[] = []
     const settle = (): void => {
       const head = session[0]
       if (head === undefined) return
-      trusted.set(
-        head.recorderSession,
-        sessionTfdtIsTrustworthy(session, wallSpanMs) ? head : null,
-      )
+      const verdict = sessionTfdtVerdict(session, wallSpanMs)
+      verdicts.push(verdict)
+      trusted.set(head.recorderSession, verdict.trusted ? head : null)
     }
     for (const fragment of fragments) {
       const head = session[0]
@@ -527,7 +581,7 @@ function observedFragmentTimeline(
     previousEndTicks = decodeTime + durationTicks
     previousSession = fragment.recorderSession
   }
-  return { decodeTimes, durationTicks: previousEndTicks }
+  return { decodeTimes, durationTicks: previousEndTicks, verdicts }
 }
 
 function patchHeaderDuration(
@@ -881,6 +935,7 @@ export class FragmentedMp4Ring {
   private awaitingInitializationMoov = false
   private currentFragmentParts: Uint8Array<ArrayBufferLike>[] = []
   private currentFragmentDurationTicks = 0n
+  private lastAssembly: FragmentedMp4RingAssembly | null = null
   private currentFragmentDecodeTicks: bigint | null = null
   private currentFragmentSamples: { count: number; maxDurationTicks: number } = {
     count: 0,
@@ -1127,6 +1182,16 @@ export class FragmentedMp4Ring {
     }
     let selected = candidates.slice(selectedStart)
     let timeline = observedFragmentTimeline(selected, this.timescale)
+    // WHAT THE HONEST TIMELINE COSTS AT THE PRIVACY WINDOW (#116).
+    //
+    // This loop barely fired while the timeline was the compressed sum. Now it
+    // is the real span, so a starved display - whose media is short but whose
+    // WALL time is long - can exceed the configured window and be trimmed from
+    // the front by a rule written for a different quantity. Recorded so the
+    // difference between "refused the evidence" and "trimmed for privacy" is
+    // visible, because the output looks identical.
+    const timelineBeforeRetentionTicks = timeline.durationTicks
+    const selectedBeforeRetention = selected.length
     const retentionTicks = millisecondsToTicks(this.retentionMs, this.timescale)
     // A delayed session can add a real wall gap even when fragment durations
     // alone fit N. Keep the newest complete suffix whose actual encoded
@@ -1138,6 +1203,15 @@ export class FragmentedMp4Ring {
     ) {
       selected = selected.slice(1)
       timeline = observedFragmentTimeline(selected, this.timescale)
+    }
+    this.lastAssembly = {
+      retentionMs: this.retentionMs,
+      selectedBeforeRetention,
+      selectedAfterRetention: selected.length,
+      timelineBeforeRetentionMs: Math.round(
+        (Number(timelineBeforeRetentionTicks) * 1_000) / this.timescale,
+      ),
+      verdicts: timeline.verdicts,
     }
     if (selected.length === 0) return null
     const totalBytes =
@@ -1247,6 +1321,7 @@ export class FragmentedMp4Ring {
       sourceSpanMs: Math.round(sourceSpanMs),
       fragmentsWithSourceTime,
       deliveryCount: deliveries.size,
+      assembly: this.lastAssembly,
     }
   }
 

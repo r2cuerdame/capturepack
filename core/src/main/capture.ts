@@ -1435,6 +1435,27 @@ export function requestReplay(
               `(${t.fragmentsWithSourceTime} fragment(s) carried one), ` +
               `longest held frame ${t.maxSampleDurationMs} ms`,
           )
+          const a = t.assembly
+          if (a !== undefined && a !== null) {
+            const verdicts = a.verdicts
+              .map((v) =>
+                v.trusted
+                  ? `believed (${Math.round(v.claimedMs ?? 0)} ms claimed within ` +
+                    `${Math.round(v.wallSpanMs)} ms of wall)`
+                  : `REFUSED ${v.reason ?? 'unknown'} ` +
+                    `(${v.claimedMs === null ? 'n/a' : Math.round(v.claimedMs)} ms claimed, ` +
+                    `${Math.round(v.wallSpanMs)} ms of wall)`,
+              )
+              .join('; ')
+            logInfo(
+              `[capture] display ${displayId}: ring timeline — ` +
+                `${a.selectedBeforeRetention} fragment(s) selected spanning ` +
+                `${a.timelineBeforeRetentionMs} ms, ` +
+                `${a.selectedAfterRetention} kept after the ${a.retentionMs} ms ` +
+                `retention window; source clock ` +
+                `${verdicts === '' ? 'no sessions' : verdicts}`,
+            )
+          }
         }
         if (ring.sourceLatencyCalibration !== undefined) {
           logInfo(

@@ -3882,9 +3882,13 @@ async function handleReplayRequest(
             wallComparableTimeMs(performance.timeOrigin, replay.startAtMs),
             durationMs,
           )
-          ringDiagnostics = {
-            ...ringDiagnostics,
-            replayPixelClock: clock,
+          // Spreading a possibly-undefined base would have widened every
+          // required field to optional and silently dropped the ring's own
+          // numbers on any path where the flush had not produced them. It is
+          // reachable only after an assembled replay, which is where
+          // ringDiagnostics is set — so say that, rather than relying on it.
+          if (ringDiagnostics !== undefined) {
+            ringDiagnostics = { ...ringDiagnostics, replayPixelClock: clock }
           }
           originMs =
             clock.status === 'measured' ? clock.originMs : undefined

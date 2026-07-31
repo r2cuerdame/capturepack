@@ -1454,6 +1454,101 @@ console.log('\nA stalled source keeps its hole')
   )
 }
 
+// A REFUSAL AND A PRIVACY TRIM PRODUCE THE SAME SHORT REPLAY (#116).
+//
+// Both look exactly like success from outside, and one release was already lost
+// to a diagnostic that could not be read. So the verdict travels with the
+// answer: which sessions were believed, what they claimed, what wall time there
+// was to check it against, and how many fragments the retention window took.
+console.log('\nThe timeline says why it is the length it is')
+{
+  const ring = new FragmentedMp4Ring(60_000)
+  ring.pushBytes(join([initialization(), fragment(0n, 15_000)]), 1_000)
+  ring.pushBytes(fragment(28_500n, 15_000), 2_900)
+  ring.assemble(2_900)
+  const a = ring.stats().timing.assembly
+  check(
+    'a believed session records what it claimed and what checked it',
+    a !== null && a.verdicts.length === 1 && a.verdicts[0]?.trusted === true
+      && Math.round(a.verdicts[0].claimedMs ?? 0) === 1_900,
+    a === null ? 'no assembly' : JSON.stringify(a.verdicts),
+  )
+  check(
+    'and the retention window is reported even when it took nothing',
+    a !== null && a.selectedBeforeRetention === a.selectedAfterRetention
+      && a.retentionMs === 60_000,
+    a === null ? 'no assembly' : `${String(a.selectedBeforeRetention)} -> ${String(a.selectedAfterRetention)}`,
+  )
+}
+{
+  const ring = new FragmentedMp4Ring(60_000)
+  ring.pushBytes(join([initialization(), fragment(0n, 15_000)]), 1_000)
+  // 60 s claimed inside 1.9 s of wall.
+  ring.pushBytes(fragment(900_000n, 15_000), 2_900)
+  ring.assemble(2_900)
+  const a = ring.stats().timing.assembly
+  const v = a?.verdicts[0]
+  check(
+    'a refusal names its reason and both numbers',
+    v !== undefined && v.trusted === false && v.reason === 'outruns-wall'
+      && Math.round(v.claimedMs ?? 0) === 60_000,
+    JSON.stringify(v),
+  )
+}
+{
+  const ring = new FragmentedMp4Ring(60_000)
+  ring.pushBytes(join([initialization(), fragment(0n, 15_000)]), 1_000)
+  ring.pushBytes(trexDurationFragmentWithoutTfdt(15_000), 2_900)
+  ring.assemble(2_900)
+  const v = ring.stats().timing.assembly?.verdicts[0]
+  check(
+    'a session missing a tfdt says so, rather than looking like a short capture',
+    v !== undefined && v.trusted === false && v.reason === 'missing-tfdt',
+    JSON.stringify(v),
+  )
+}
+// THE PRIVACY WINDOW CANNOT SWALLOW AN HONEST TIMELINE (#116).
+//
+// The retention gate is the other way a duration can die, and the fix changed
+// what it measures: it used to peel against the compressed sum and now peels
+// against the real span. The obvious worry is that a starved display - short
+// media, long wall - would now be trimmed by a rule written for a different
+// quantity.
+//
+// It cannot be, and the two rules that prevent it are worth pinning together
+// because neither says so alone:
+//
+//   the candidate cutoff keeps only fragments delivered within retentionMs
+//   the trust guard believes tfdt only while claimed <= wallSpan + 1000 ms
+//
+// So an accepted timeline is at most retentionMs + 1000 ms, and the tick gate
+// can only ever peel inside that one-second band. A capture is never trimmed
+// to a fraction of itself by this path - which is also why the gate is not the
+// explanation when a display comes out compressed anyway.
+{
+  const ring = new FragmentedMp4Ring(2_500)
+  ring.pushBytes(join([initialization(), fragment(0n, 15_000)]), 1_000)
+  ring.pushBytes(fragment(28_500n, 15_000), 2_900)
+  ring.assemble(2_900)
+  const a = ring.stats().timing.assembly
+  check(
+    'the retention window and the timeline it judged are both on the record',
+    a !== null && a.retentionMs === 2_500 && a.timelineBeforeRetentionMs > 0,
+    a === null
+      ? 'no assembly'
+      : `${String(a.timelineBeforeRetentionMs)} ms judged against ${String(a.retentionMs)} ms`,
+  )
+  check(
+    'and what survives never exceeds the window by more than the tolerance',
+    a !== null
+      && a.selectedAfterRetention <= a.selectedBeforeRetention
+      && a.timelineBeforeRetentionMs <= a.retentionMs + 1_000,
+    a === null
+      ? 'no assembly'
+      : `${String(a.selectedBeforeRetention)} -> ${String(a.selectedAfterRetention)}`,
+  )
+}
+
 // AND IT HAS TO REACH THE LOG (#116).
 //
 // The first version of this measured correctly and printed from the RENDERER,
