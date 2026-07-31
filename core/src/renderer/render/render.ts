@@ -22,6 +22,7 @@ import {
   type AnnotationLabelStyle,
 } from '../../shared/annotationCanvas'
 import { renderedAnnotationAt } from '../../shared/track'
+import { rectangleEdgeScore } from '../../shared/exposureAlignment'
 import type { AuthoredMotionSpace } from '../../shared/track'
 
 interface RenderBridge {
@@ -44,10 +45,116 @@ window.renderBridge.onStart((payload) => {
   void run(payload)
 })
 
+/**
+ * SCORE THE PACK'S OWN PIXELS, AND DRAW NOTHING (#89).
+ *
+ * Seeks to a spread of instants across the range the landmark actually moved
+ * over, reads each frame back, and scores it against every rectangle the
+ * context recorded near that instant. The fit itself happens in main, from the
+ * shared estimator, so this window's only job is to turn video into numbers.
+ *
+ * Seeking rather than playing is deliberate. Playing costs the replay's whole
+ * duration in real time, which is what made every measurement placement too
+ * expensive; forty seeks cost a fraction of it, and the estimator has been
+ * measured to resolve to a few milliseconds on twelve frames.
+ *
+ * A seek that lands in a hole is a real case since the ring stopped compressing
+ * stalls — the frame that comes back is the one being held, which is the honest
+ * answer and is scored like any other.
+ */
+async function measureExposure(
+  job: RenderStartPayload,
+  request: NonNullable<RenderStartPayload['measure']>,
+): Promise<{ scoreRows: NonNullable<RenderResultPayload['scoreRows']> }> {
+  const replay = job.replayWebm
+  if (replay === null) throw new Error('a measurement job needs a replay')
+  const blob = new Blob([replay], {
+    type: job.replayMimeType ?? 'video/webm',
+  })
+  const url = URL.createObjectURL(blob)
+  const video = document.createElement('video')
+  video.muted = true
+  video.playsInline = true
+  video.preload = 'auto'
+  video.src = url
+  try {
+    await new Promise<void>((resolve, reject) => {
+      video.onloadedmetadata = () => resolve()
+      video.onerror = () => reject(new Error('measurement could not decode the replay'))
+    })
+    const canvas = document.createElement('canvas')
+    canvas.width = video.videoWidth
+    canvas.height = video.videoHeight
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })
+    if (ctx === null) throw new Error('no 2d context for measurement')
+    // No smoothing: the scorer reads two-pixel gradients on window borders, and
+    // a smoothed draw is exactly what resamples them away.
+    ctx.imageSmoothingEnabled = false
+
+    const times = request.candidates.map((c) => c.tMs)
+    const firstMs = Math.min(...times)
+    const lastMs = Math.max(...times)
+    const spanMs = Math.max(0, lastMs - firstMs)
+    const wanted = Math.max(2, Math.min(request.sampleCount, 120))
+    const rows: NonNullable<RenderResultPayload['scoreRows']> = []
+    for (let index = 0; index < wanted; index += 1) {
+      const atMs = firstMs + (spanMs * index) / (wanted - 1)
+      const presentedMs = await seekAndRead(video, atMs / 1000)
+      if (presentedMs === null) continue
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+      const image = ctx.getImageData(0, 0, canvas.width, canvas.height)
+      // The red channel of an RGBA readback, used as the luminance plane the
+      // scorer expects. A window border is a step in all three channels, so one
+      // of them carries the same edge at a third of the memory.
+      const gray = new Uint8Array(canvas.width * canvas.height)
+      for (let i = 0; i < gray.length; i += 1) gray[i] = image.data[i * 4] as number
+      const plane = { data: gray, width: canvas.width, height: canvas.height }
+      const scores: Array<{ tMs: number; score: number }> = []
+      for (const candidate of request.candidates) {
+        if (Math.abs(candidate.tMs - presentedMs) > request.candidateWindowMs) continue
+        const score = rectangleEdgeScore(plane, request.scale, candidate)
+        if (score !== null) scores.push({ tMs: candidate.tMs, score })
+      }
+      if (scores.length > 0) rows.push({ ptsMs: presentedMs, scores })
+    }
+    return { scoreRows: rows }
+  } finally {
+    video.src = ''
+    URL.revokeObjectURL(url)
+  }
+}
+
+/** Seeks and returns the instant the frame that arrived actually carries. */
+async function seekAndRead(
+  video: HTMLVideoElement,
+  seconds: number,
+): Promise<number | null> {
+  return await new Promise<number | null>((resolve) => {
+    let settled = false
+    const done = (value: number | null): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(value)
+    }
+    // A seek that never completes must not hang the whole measurement; the
+    // frames that did arrive are still evidence.
+    const timer = setTimeout(() => done(null), 2_000)
+    video.requestVideoFrameCallback((_now, metadata) => {
+      done(metadata.mediaTime * 1000)
+    })
+    video.currentTime = seconds
+  })
+}
+
 async function run(payload: RenderStartPayload): Promise<void> {
   try {
     const result =
-      payload.replayWebm === null ? await renderStill(payload) : await renderAnnotated(payload)
+      payload.measure !== undefined
+        ? await measureExposure(payload, payload.measure)
+        : payload.replayWebm === null
+          ? await renderStill(payload)
+          : await renderAnnotated(payload)
     window.renderBridge.result({ ok: true, ...result })
   } catch (err) {
     window.renderBridge.result({

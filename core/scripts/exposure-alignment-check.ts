@@ -22,6 +22,7 @@ import {
   syntheticMovingLandmark,
   fitOffsetByPixelScore,
   shiftObservationsToPicture,
+  rectangleEdgeScore,
   isApplicableExposureLatency,
   MAXIMUM_APPLICABLE_LATENCY_MS,
   type ExposureAlignmentInput,
@@ -839,6 +840,73 @@ console.log('\nM. putting the observations on the picture\'s clock')
   check(
     'and the measured value is',
     isApplicableExposureLatency(127) && isApplicableExposureLatency(108),
+  )
+}
+
+// N. THE APP AND THE HARNESS SCORE THE SAME PIXELS THE SAME WAY (#89).
+//
+// ffmpeg hands the offline harness a gray plane; a canvas hands the app the red
+// channel of getImageData. Both are one byte per pixel in row order, and the
+// scorer must not care which — otherwise the app and the harness can disagree
+// about the same capture, which is the whole reason the fit was shared.
+console.log('\nN. the edge scorer, on either kind of plane')
+{
+  // A synthetic frame with one rectangle drawn as a luminance step.
+  const W = 200
+  const H = 160
+  const rect = { x: 40, y: 30, width: 100, height: 80 }
+  const make = (): Uint8Array => {
+    const px = new Uint8Array(W * H).fill(30)
+    for (let y = rect.y; y < rect.y + rect.height; y += 1) {
+      for (let x = rect.x; x < rect.x + rect.width; x += 1) px[y * W + x] = 200
+    }
+    return px
+  }
+  const plane = { data: make(), width: W, height: H }
+  const onIt = rectangleEdgeScore(plane, 1, rect)
+  const offBy20 = rectangleEdgeScore(plane, 1, { ...rect, x: rect.x + 20 })
+  check(
+    'the true rectangle scores above one displaced from it',
+    onIt !== null && offBy20 !== null && onIt > offBy20,
+    `${round(onIt)} vs ${round(offBy20)}`,
+  )
+  check(
+    'a rectangle mostly outside the frame is refused, not scored on a sliver',
+    rectangleEdgeScore(plane, 1, { x: -400, y: -400, width: 10, height: 10 }) === null,
+  )
+  // The two plane kinds the two callers actually produce.
+  const asBuffer = { data: Buffer.from(make()), width: W, height: H }
+  const asClamped = { data: new Uint8ClampedArray(make()), width: W, height: H }
+  check(
+    'the same pixels score the same through a Buffer and a clamped array',
+    rectangleEdgeScore(asBuffer, 1, rect) === onIt
+      && rectangleEdgeScore(asClamped, 1, rect) === onIt,
+  )
+  const field = readFileSync(
+    path.join(process.cwd(), 'scripts', 'exposure-field-check.ts'),
+    'utf8',
+  )
+  check(
+    'the harness delegates to it rather than keeping a second copy',
+    field.includes('return rectangleEdgeScore(')
+      && !field.includes('const inside = x === x0 ? x + 12 : x - 12'),
+  )
+  const render = readFileSync(
+    path.join(process.cwd(), 'src/renderer/render/render.ts'),
+    'utf8',
+  )
+  check(
+    'and so does the app, on frames it seeks to rather than plays through',
+    render.includes('rectangleEdgeScore(plane, request.scale, candidate)')
+      && render.includes('async function seekAndRead(')
+      && render.includes('ctx.imageSmoothingEnabled = false'),
+  )
+  // Playing costs the replay's whole duration in real time, which is what made
+  // every other measurement placement too expensive to run.
+  check(
+    'the measurement job draws and records nothing',
+    render.includes("payload.measure !== undefined")
+      && render.includes('a measurement job needs a replay'),
   )
 }
 

@@ -658,3 +658,75 @@ export function isApplicableExposureLatency(latencyMs: number | null): boolean {
     && latencyMs <= MAXIMUM_APPLICABLE_LATENCY_MS
   )
 }
+
+/**
+ * A GRAYSCALE PLANE, WHOEVER PRODUCED IT.
+ *
+ * ffmpeg hands the offline harness `-pix_fmt gray`; a canvas hands the app the
+ * red channel of `getImageData`. Both are one byte per pixel in row order, and
+ * the scorer must not care which, or the app and the harness can disagree about
+ * the same capture — the thing sharing this file exists to prevent.
+ */
+export interface GrayPlane {
+  data: Uint8Array | Uint8ClampedArray | Buffer
+  width: number
+  height: number
+}
+
+/**
+ * How well a rectangle's four edges explain the gradients in one frame (#89).
+ *
+ * A window border is a step in luminance, so the measure is the gradient ON the
+ * proposed edge minus the gradient a little way INSIDE it. Subtracting the
+ * inside is what stops a busy wallpaper from scoring as well as a real border:
+ * texture raises both terms and cancels, an edge raises only the first.
+ *
+ * `scale` converts the rectangle's desktop pixels into the replay's, which is
+ * the recorder's downscale and nothing else.
+ *
+ * Returns null when too little of the rectangle lies inside the frame to judge
+ * — a window mostly off-screen is not evidence, and scoring it on its visible
+ * sliver would let a stray edge decide the whole fit.
+ */
+export function rectangleEdgeScore(
+  frame: GrayPlane,
+  scale: number,
+  bounds: { x: number; y: number; width: number; height: number },
+): number | null {
+  const { width, height } = frame
+  const px = frame.data
+  const x0 = Math.round(bounds.x * scale)
+  const y0 = Math.round(bounds.y * scale)
+  const x1 = Math.round((bounds.x + bounds.width) * scale)
+  const y1 = Math.round((bounds.y + bounds.height) * scale)
+  let edge = 0
+  let reference = 0
+  let samples = 0
+  for (let y = Math.max(1, y0 + 4); y < Math.min(height - 1, y1 - 4); y += 3) {
+    const row = y * width
+    for (const x of [x0, x1]) {
+      if (x < 2 || x >= width - 2) continue
+      edge += Math.abs((px[row + x] as number) - (px[row + x - 2] as number))
+      const inside = x === x0 ? x + 12 : x - 12
+      if (inside > 1 && inside < width - 1) {
+        reference += Math.abs((px[row + inside] as number) - (px[row + inside - 2] as number))
+      }
+      samples += 1
+    }
+  }
+  for (let x = Math.max(1, x0 + 4); x < Math.min(width - 1, x1 - 4); x += 3) {
+    for (const y of [y0, y1]) {
+      if (y < 2 || y >= height - 2) continue
+      edge += Math.abs((px[y * width + x] as number) - (px[(y - 2) * width + x] as number))
+      const inside = y === y0 ? y + 12 : y - 12
+      if (inside > 1 && inside < height - 1) {
+        reference += Math.abs(
+          (px[inside * width + x] as number) - (px[(inside - 2) * width + x] as number),
+        )
+      }
+      samples += 1
+    }
+  }
+  if (samples < 40) return null
+  return (edge - reference) / samples
+}
