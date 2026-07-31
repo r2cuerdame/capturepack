@@ -450,25 +450,60 @@ function sessionTfdtVerdict(
 }
 
 /**
- * The wall time the ring watched THIS selection arrive over.
+ * The wall time a session's `tfdt` is allowed to have covered.
  *
- * DELIVERY instants only. `endAtMs - startAtMs` would be the very bug this
- * guard exists to catch: those are back-dated by media duration, so on a
- * starved display the span collapses toward the compressed sum and the guard
- * would be checking `tfdt` against the number `tfdt` is correcting.
+ * ANCHORED AT THE SESSION'S START, NOT AT THE FIRST RETAINED FRAGMENT (#116).
  *
- * Measured on CapturePack_2026-07-31_233324, display 1: 24 fragments arriving
- * over 23 distinct delivery instants. There is nearly always one per fragment.
+ * The claim and the wall reference must begin at the same instant, and for a
+ * while they did not. `claimedMs` starts at the first fragment's FIRST SAMPLE —
+ * that is what its `tfdt` is. The delivery of that fragment happens when it
+ * CLOSES, and Chromium closes a `moof` only at a key frame. On a quiet screen
+ * one fragment therefore stays open for seconds while declaring a couple of
+ * hundred milliseconds of media, so its delivery lands long after the sample it
+ * is anchored to. Measuring the wall from that delivery subtracted the wait
+ * from the reference but not from the claim, and the claim appeared to outrun
+ * the wall by exactly the amount the screen had been still.
+ *
+ * Measured on CapturePack_2026-08-01_002541, one capture, two displays:
+ *
+ *   display 2, 14.8 fps   first fragment delivered 272 ms after its own first
+ *                         sample; excess 126 ms; believed.
+ *   display 1, 5.3 fps    first retained fragment delivered ~2019 ms after the
+ *                         recorder started; excess 1456 ms against a 1000 ms
+ *                         tolerance; REFUSED, and 12011 ms of desk was written
+ *                         as 25 butt-joined fragments totalling 3696 ms.
+ *
+ * The error was therefore largest exactly where the evidence mattered most, and
+ * absent where it did not matter at all. An earlier capture that appeared to
+ * confirm the fix had passed with 53 ms of margin — luck, not correctness.
+ *
+ * The session's own start is the honest front anchor: a session's `tfdt` cannot
+ * truthfully cover more time than that session has existed, and the instant it
+ * began is a delivery instant like any other, so the guard stays independent of
+ * the media clock. Raising the tolerance instead would not work — this capture
+ * alone needed 2000 ms, and the amount is bounded only by how long a screen can
+ * stay still.
  */
-function deliveredWallSpanMs(fragments: readonly StoredFragment[]): number {
+function sessionWallSpanMs(
+  session: readonly StoredFragment[],
+  sessionStartAtMs: number | undefined,
+): number {
   let earliest = Number.POSITIVE_INFINITY
   let latest = Number.NEGATIVE_INFINITY
-  for (const fragment of fragments) {
+  for (const fragment of session) {
     if (fragment.deliveredAtMs < earliest) earliest = fragment.deliveredAtMs
     if (fragment.deliveredAtMs > latest) latest = fragment.deliveredAtMs
   }
-  if (!Number.isFinite(earliest) || !Number.isFinite(latest)) return 0
-  return Math.max(0, latest - earliest)
+  if (!Number.isFinite(latest)) return 0
+  // No recorded start means the session began before this ring was watching.
+  // Fall back to the fragments themselves, which is the stricter reading and
+  // therefore the safe one: it refuses, it never over-trusts.
+  const from =
+    sessionStartAtMs === undefined || sessionStartAtMs > latest
+      ? earliest
+      : sessionStartAtMs
+  if (!Number.isFinite(from)) return 0
+  return Math.max(0, latest - from)
 }
 
 /**
@@ -496,6 +531,7 @@ function deliveredWallSpanMs(fragments: readonly StoredFragment[]): number {
 function observedFragmentTimeline(
   fragments: readonly StoredFragment[],
   targetTimescale: number,
+  sessionStarts: ReadonlyMap<number, number> = new Map(),
 ): ObservedFragmentTimeline {
   const first = fragments[0]
   if (first === undefined) {
@@ -505,7 +541,6 @@ function observedFragmentTimeline(
   // Trust is decided per SESSION, over the whole session, before any fragment
   // is placed. A per-fragment decision could believe the first half of one
   // recording and disbelieve the second, putting a seam mid-session.
-  const wallSpanMs = deliveredWallSpanMs(fragments)
   const trusted = new Map<number, StoredFragment | null>()
   const verdicts: TfdtVerdict[] = []
   {
@@ -513,7 +548,10 @@ function observedFragmentTimeline(
     const settle = (): void => {
       const head = session[0]
       if (head === undefined) return
-      const verdict = sessionTfdtVerdict(session, wallSpanMs)
+      const verdict = sessionTfdtVerdict(
+        session,
+        sessionWallSpanMs(session, sessionStarts.get(head.recorderSession)),
+      )
       verdicts.push(verdict)
       trusted.set(head.recorderSession, verdict.trusted ? head : null)
     }
@@ -935,6 +973,7 @@ export class FragmentedMp4Ring {
   private awaitingInitializationMoov = false
   private currentFragmentParts: Uint8Array<ArrayBufferLike>[] = []
   private currentFragmentDurationTicks = 0n
+  private readonly sessionStartAtMs = new Map<number, number>()
   private lastAssembly: FragmentedMp4RingAssembly | null = null
   private currentFragmentDecodeTicks: bigint | null = null
   private currentFragmentSamples: { count: number; maxDurationTicks: number } = {
@@ -1054,6 +1093,10 @@ export class FragmentedMp4Ring {
               this.initializationCompatibility !== compatibility)
           this.initializationCompatibility = compatibility
           this.recorderSession += 1
+          // The instant this recorder session began, on the delivery clock.
+          // Its own first fragment cannot be delivered before this, which is
+          // what makes it a usable front anchor when that fragment is late.
+          this.sessionStartAtMs.set(this.recorderSession, endAtMs)
           this.awaitingInitializationMoov = false
           continue
         }
@@ -1149,6 +1192,7 @@ export class FragmentedMp4Ring {
     this.fragments.push(...timed)
     this.prune(endAtMs)
     this.pruneToRetainedBudget()
+    this.forgetUnusedSessions()
     return completed.length
   }
 
@@ -1181,7 +1225,11 @@ export class FragmentedMp4Ring {
       selectedStart = index
     }
     let selected = candidates.slice(selectedStart)
-    let timeline = observedFragmentTimeline(selected, this.timescale)
+    let timeline = observedFragmentTimeline(
+      selected,
+      this.timescale,
+      this.sessionStartAtMs,
+    )
     // WHAT THE HONEST TIMELINE COSTS AT THE PRIVACY WINDOW (#116).
     //
     // This loop barely fired while the timeline was the compressed sum. Now it
@@ -1202,7 +1250,11 @@ export class FragmentedMp4Ring {
       timeline.durationTicks > retentionTicks
     ) {
       selected = selected.slice(1)
-      timeline = observedFragmentTimeline(selected, this.timescale)
+      timeline = observedFragmentTimeline(
+        selected,
+        this.timescale,
+        this.sessionStartAtMs,
+      )
     }
     this.lastAssembly = {
       retentionMs: this.retentionMs,
@@ -1322,6 +1374,16 @@ export class FragmentedMp4Ring {
       fragmentsWithSourceTime,
       deliveryCount: deliveries.size,
       assembly: this.lastAssembly,
+    }
+  }
+
+  /** A session nothing is retained from can be forgotten with its fragments. */
+  private forgetUnusedSessions(): void {
+    if (this.sessionStartAtMs.size <= 1) return
+    const live = new Set(this.fragments.map((fragment) => fragment.recorderSession))
+    live.add(this.recorderSession)
+    for (const session of [...this.sessionStartAtMs.keys()]) {
+      if (!live.has(session)) this.sessionStartAtMs.delete(session)
     }
   }
 

@@ -8,6 +8,17 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 
 ### Fixed
 
+- The fix below now applies on the screens it was written for. It compared how
+  much time the recording claimed against how long the app had been receiving
+  video, and those two were measured from different starting points: the claim
+  began at the first frame, the comparison began when that frame's chunk
+  finally arrived. On a quiet screen a chunk stays open until the next key
+  frame, so it can arrive seconds after the moment it describes — and the
+  quieter the screen, the further apart the two got. One capture, two monitors:
+  the busy one was off by 126 ms and was believed, the quiet one by 1456 ms and
+  was refused, writing 12 seconds of screen as 3.7. Both are now measured from
+  the same instant
+  ([#116](https://github.com/r2cuerdame/capturepack/issues/116)).
 - A replay whose screen stopped changing now says so, instead of being written
   as a shorter recording that looks fine. Measured in one capture across two
   displays: the busy screen's video ran 11.9 seconds for an 11.9 second

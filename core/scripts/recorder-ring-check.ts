@@ -1507,6 +1507,68 @@ console.log('\nThe timeline says why it is the length it is')
     JSON.stringify(v),
   )
 }
+// A QUIET SCREEN DELIVERS ITS FIRST FRAGMENT LATE, AND THAT IS NOT EVIDENCE
+// AGAINST IT (#116).
+//
+// The claim starts at the first fragment's FIRST SAMPLE - that is what tfdt is.
+// Its delivery happens when the fragment CLOSES, and Chromium closes a moof
+// only at a key frame, so on a still screen one fragment stays open for seconds
+// while declaring a couple of hundred milliseconds of media. Anchoring the wall
+// reference at that delivery subtracted the wait from the reference but not
+// from the claim, and the claim then appeared to outrun the wall by exactly the
+// amount the screen had been still.
+//
+// Measured on CapturePack_2026-08-01_002541, one capture, two displays:
+//   display 2, 14.8 fps  first fragment 272 ms late   excess  126 ms  believed
+//   display 1,  5.3 fps  first fragment 2019 ms late  excess 1456 ms  REFUSED
+// and 12011 ms of desk was written as 25 butt-joined fragments totalling
+// 3696 ms. The error was largest exactly where the evidence mattered most.
+console.log('\nA late first fragment is not evidence against its own clock')
+{
+  const ring = new FragmentedMp4Ring(60_000)
+  // The session begins at t=1000 - the init blob carries no fragment, which is
+  // what a starved recorder does while it waits for its first key frame.
+  ring.pushBytes(join([initialization()]), 1_000)
+  // Three seconds later the first fragment finally closes and arrives. Its tfdt
+  // says its samples began back at 0 — which is true, and is exactly what the
+  // old anchor read as the clock outrunning the wall.
+  ring.pushBytes(fragment(0n, 15_000), 4_000)
+  ring.pushBytes(fragment(165_000n, 15_000), 13_000)
+  const replay = ring.assemble(13_000)
+  const decodeTimes =
+    replay === null ? [] : topLevelTfdtValues(new Uint8Array(replay.buffer))
+  check(
+    'the session start anchors the wall, so an 11 s claim survives a late arrival',
+    decodeTimes.join(',') === '0,165000',
+    replay === null ? 'no replay' : `tfdt ${decodeTimes.join(',')}`,
+  )
+  const v = ring.stats().timing.assembly?.verdicts[0]
+  check(
+    'and the verdict shows the wall it was judged against, not the arrival gap',
+    v !== undefined && v.trusted === true && Math.round(v.wallSpanMs) === 12_000,
+    JSON.stringify(v),
+  )
+}
+// The guard still refuses a claim that outruns the session itself. Anchoring
+// earlier widened the window by a known, bounded amount - it did not remove it.
+{
+  const ring = new FragmentedMp4Ring(60_000)
+  ring.pushBytes(join([initialization()]), 1_000)
+  ring.pushBytes(fragment(0n, 15_000), 4_000)
+  // 60 s of encoder time claimed inside a session that is 12 s old.
+  ring.pushBytes(fragment(900_000n, 15_000), 13_000)
+  const replay = ring.assemble(13_000)
+  const decodeTimes =
+    replay === null ? [] : topLevelTfdtValues(new Uint8Array(replay.buffer))
+  const v = ring.stats().timing.assembly?.verdicts[0]
+  check(
+    'a claim longer than its own session is still refused',
+    decodeTimes.join(',') === '0,15000'
+      && v?.trusted === false && v.reason === 'outruns-wall',
+    `tfdt ${decodeTimes.join(',')} / ${JSON.stringify(v)}`,
+  )
+}
+
 // THE PRIVACY WINDOW CANNOT SWALLOW AN HONEST TIMELINE (#116).
 //
 // The retention gate is the other way a duration can die, and the fix changed
