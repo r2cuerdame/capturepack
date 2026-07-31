@@ -503,8 +503,23 @@ interface RememberedSourceLatency {
   confidence: number | undefined
   measuredAtMs: number
   sampleSource: string | undefined
+  /**
+   * What the pixels were matched AGAINST. Carried because a latency without it
+   * cannot be compared with anything: an operation-completion timestamp is not
+   * a pixel exposure, and the pack refuses to publish a number that cannot say
+   * which one it is.
+   */
+  referenceSource: string | undefined
   referenceTiming: string | undefined
+  /** Half the reference anchor's bracket — the error bar, when it gave one. */
+  uncertaintyMs: number | undefined
   backend: string | undefined
+  /**
+   * Cleared when a new recorder generation starts for this display. The
+   * measurement survives — that is the point — but it stops being a statement
+   * about the recorder that is running now.
+   */
+  fromCurrentRecorder: boolean
 }
 const displaySourceLatency = new Map<number, RememberedSourceLatency>()
 
@@ -513,6 +528,15 @@ export function recorderSourceLatency(
   displayId: number,
 ): RememberedSourceLatency | null {
   return displaySourceLatency.get(displayId) ?? null
+}
+
+/**
+ * A new recorder generation begins. Its predecessor's measurement is still the
+ * best evidence there is for this display, but it is no longer this recorder's.
+ */
+function endSourceLatencyGeneration(displayId: number): void {
+  const remembered = displaySourceLatency.get(displayId)
+  if (remembered !== undefined) remembered.fromCurrentRecorder = false
 }
 
 /**
@@ -532,7 +556,11 @@ function rememberSourceLatency(
     latencyMs?: number
     confidence?: number
     sampleSource?: string
-    referenceTiming?: string
+    reference?: {
+      source?: string
+      timing?: string
+      anchorUncertaintyMs?: number
+    }
   } | undefined
   if (c === undefined) return null
   if (c.status === 'measured' && typeof c.latencyMs === 'number') {
@@ -541,8 +569,11 @@ function rememberSourceLatency(
       confidence: c.confidence,
       measuredAtMs: nowMs,
       sampleSource: c.sampleSource,
-      referenceTiming: c.referenceTiming,
+      referenceSource: c.reference?.source,
+      referenceTiming: c.reference?.timing,
+      uncertaintyMs: c.reference?.anchorUncertaintyMs,
       backend,
+      fromCurrentRecorder: true,
     })
     return null
   }
@@ -1669,6 +1700,7 @@ async function rebuild(): Promise<void> {
     // Signature/recovery replacement starts a new measurement generation.
     // Keeping the old report would write stale FPS beside the new replay.
     displayCadence.reset(id)
+    endSourceLatencyGeneration(id)
     clearRecorderProbe(id)
     // A fresh renderer is owed a fresh hearing: it must get its own probe
     // before anything recreates its window again, or a display that failed once
@@ -1791,6 +1823,7 @@ async function createCaptureWindow(
       // Chromium -> GDI transition. Old primary cadence/quality and "recording"
       // proof must not survive into bytes produced by the replacement backend.
       displayCadence.reset(display.id)
+      endSourceLatencyGeneration(display.id)
       setDisplayRecorderState(display.id, { status: 'starting' })
       // The recorder is running as of NOW, so the backstop is re-anchored here
       // — behind the renderer's own frame-evidence deadline, and re-armed for

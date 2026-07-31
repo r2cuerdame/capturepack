@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "CapturePack manifest.json",
-  "description": "Schema for manifest.json, the REQUIRED entry point of a CapturePack, including semantics defined through format 0.5.0 and backward compatibility with existing manifests that omit capture_kind (including early 0.3.0 RC output). Format 0.5.0 adds the fixed-name optional viewer.html generated view; its presence is outside manifest.json and is validated at the pack-container layer. This schema identifies the pack, records the capture environment, and inventories the variable parts of the pack (media and plugin payloads). Unknown additional properties are deliberately allowed everywhere: readers MUST accept unknown optional fields for forward compatibility (SPEC.md §13). See SPEC.md §5 for the normative definition; where schema and prose disagree, the prose wins.",
+  "description": "Schema for manifest.json, the REQUIRED entry point of a CapturePack, including semantics defined through format 0.6.0 and backward compatibility with existing manifests that omit capture_kind (including early 0.3.0 RC output). Format 0.5.0 adds the fixed-name optional viewer.html generated view; its presence is outside manifest.json and is validated at the pack-container layer. Format 0.6.0 adds the measured media.cadence.source_latency. This schema identifies the pack, records the capture environment, and inventories the variable parts of the pack (media and plugin payloads). Unknown additional properties are deliberately allowed everywhere: readers MUST accept unknown optional fields for forward compatibility (SPEC.md §13). See SPEC.md §5 for the normative definition; where schema and prose disagree, the prose wins.",
   "type": "object",
   "required": [
     "format",
@@ -14,7 +14,7 @@
   ],
   "$defs": {
     "cadence": {
-      "description": "Measured replay cadence. Capture provenance fields were added in format 0.4.0.",
+      "description": "Measured replay cadence. Capture provenance fields were added in format 0.4.0, and the measured source_latency in 0.6.0.",
       "type": "object",
       "required": ["achieved_fps", "worst_stall_ms"],
       "properties": {
@@ -26,7 +26,27 @@
           "enum": ["chromium-desktop-capture", "windows-gdi-bitblt"]
         },
         "quality": { "enum": ["full", "degraded"] },
-        "recorder_count": { "type": "integer", "minimum": 1 }
+        "recorder_count": { "type": "integer", "minimum": 1 },
+        "source_latency": { "$ref": "#/$defs/source_latency" }
+      }
+    },
+    "source_latency": {
+      "description": "How far this recorder's pixels lagged the glass, MEASURED against an independent desktop-exposure reference — never a configured delay and never derived from a frame rate. What it was measured against is part of the value, so reference and timing are as required as the number. Added in format 0.6.0.",
+      "type": "object",
+      "required": ["measured_ms", "reference", "timing"],
+      "properties": {
+        "measured_ms": { "type": "number", "minimum": 0 },
+        "reference": {
+          "enum": ["dxgi-desktop-duplication", "windows-gdi-bitblt"]
+        },
+        "timing": { "enum": ["pixel-exposure", "post-bitblt-completion"] },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "uncertainty_ms": { "type": "number", "minimum": 0 },
+        "age_ms": {
+          "description": "Milliseconds between the measurement and this capture. Absent means the recorder that produced this replay measured it.",
+          "type": "integer",
+          "minimum": 0
+        }
       }
     }
   },
@@ -36,7 +56,7 @@
       "const": "capturepack"
     },
     "format_version": {
-      "description": "Oldest version of the CapturePack specification that fully expresses this pack, as semver (for example \"0.1.0\", \"0.4.0\" or \"0.5.0\"). capture_kind was introduced in 0.3.0, capture diagnostics in 0.4.0, and the fixed-name optional viewer.html generated view in 0.5.0. Major (pre-1.0: minor) version changes are breaking; see SPEC.md §13.",
+      "description": "Oldest version of the CapturePack specification that fully expresses this pack, as semver (for example \"0.1.0\", \"0.4.0\" or \"0.6.0\"). capture_kind was introduced in 0.3.0, capture diagnostics in 0.4.0, the fixed-name optional viewer.html generated view in 0.5.0, and the measured source latency in 0.6.0. Major (pre-1.0: minor) version changes are breaking; see SPEC.md §13.",
       "type": "string",
       "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"
     },

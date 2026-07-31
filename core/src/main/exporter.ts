@@ -42,6 +42,7 @@ import {
   FORMAT_NAME,
   FORMAT_VERSION_CAPTURE_DIAGNOSTICS,
   FORMAT_VERSION_KEYFRAMES,
+  FORMAT_VERSION_SOURCE_LATENCY,
 } from '../shared/types'
 import { displayAnnotatedName, displayFramesDir } from '../shared/keyframes'
 import { buildReport } from './report'
@@ -836,15 +837,23 @@ export function buildManifest(input: ManifestInput): Manifest {
       cadence?.requested_fps !== undefined ||
       cadence?.recorder_count !== undefined,
   )
+  // A measured source latency is 0.6.0, and only a pack that emits one says so
+  // (SPEC §13.1). Checked on the SAME emitted list as the 0.4.0 provenance:
+  // a cadence the manifest will not declare cannot raise its version.
+  const hasSourceLatency = emittedCadences.some(
+    (cadence) => cadence?.source_latency !== undefined,
+  )
   const manifest: Manifest = {
     format: FORMAT_NAME,
     // Every pack written here declares capture_kind, a 0.3.0 field (SPEC §5.1,
     // §13.1). Legacy 0.2.1 packs remain readable because they omit the field;
     // a new video cannot claim that older contract merely because it has no
     // authored keyframes.
-    format_version: hasCaptureDiagnostics
-      ? FORMAT_VERSION_CAPTURE_DIAGNOSTICS
-      : FORMAT_VERSION_KEYFRAMES,
+    format_version: hasSourceLatency
+      ? FORMAT_VERSION_SOURCE_LATENCY
+      : hasCaptureDiagnostics
+        ? FORMAT_VERSION_CAPTURE_DIAGNOSTICS
+        : FORMAT_VERSION_KEYFRAMES,
     capture_kind: captureKind,
     id: input.id,
     created_at: isoWithOffset(input.createdAt),

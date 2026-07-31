@@ -59,6 +59,7 @@
     "check:native-replay-fallback": "node scripts/native-replay-fallback-check.mjs",
     "check:replay-health": "node scripts/replay-health-check.mjs",
     "check:source-latency-calibration": "node scripts/source-latency-calibration-check.mjs",
+    "check:source-latency-pack": "node scripts/source-latency-pack-check.mjs",
     "check:replay-pixel-clock": "node --no-warnings --experimental-strip-types scripts/replay-pixel-clock-check.ts",
     "check:replay-clock-map": "node scripts/replay-clock-map-check.mjs",
     "check:fmp4-sample-timeline": "node scripts/fmp4-sample-timeline-check.mjs",

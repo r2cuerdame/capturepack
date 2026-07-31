@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Format** | `capturepack` |
-| **Version** | `0.5.0` |
+| **Version** | `0.6.0` |
 | **Status** | Draft |
-| **Date** | 2026-07-30 |
+| **Date** | 2026-07-31 |
 | **License** | MIT (same as the repository) |
 
 > Capture context, not screenshots.
@@ -279,7 +279,7 @@ of screen count or scaling.
 | `snapshot` | string | REQUIRED | Filename of the snapshot. In format 0.1.0 this MUST be `"snapshot.png"`. Declared explicitly so future versions can vary it without breaking readers that trust the manifest. |
 | `replay` | string **or** `null` | REQUIRED | Filename of the original replay video — `"replay.webm"` or `"replay.mp4"` — or `null` for a screenshot-only pack. Readers MUST take the replay filename from this field rather than probing the pack. |
 | `replay_duration_ms` | integer **or** `null` | REQUIRED when `replay` is a string | Duration of the replay video in milliseconds. MUST be `null` (or absent) when `replay` is `null`. |
-| `cadence` | object | OPTIONAL | What this display's recorder ACHIEVED: `achieved_fps` (number) and `worst_stall_ms` (number, the longest the frame counter went without advancing — quantised to the writer's sampling interval and therefore a LOWER bound). Written only beside a replay, and only where the writer could measure itself: a rate nobody measured MUST NOT be reported as a rate. Also OPTIONAL `discarded_frames` (number): frames the source produced and threw away. A LOW `achieved_fps` means two different things, and only this tells them apart — a screen capture makes a frame when the screen CHANGES, so a monitor nobody touched delivers almost nothing and has lost nothing, while frames made and discarded are a replay that really is missing time. A reader uses it to know that a moment being annotated may simply not be in the file. Format 0.4.0 adds OPTIONAL capture provenance: `requested_fps` (number in 1..30), `backend` (`"chromium-desktop-capture"` or `"windows-gdi-bitblt"`), `quality` (`"full"` or `"degraded"`), and `recorder_count` (integer >= 1). A current writer MUST request 5..30 fps; readers keep accepting 1..30 here because this field is historical provenance and existing packs may record a former 1..4 fps request. These fields MUST describe the source and encoder(s) that produced the declared replay; a fallback MUST NOT call itself full quality. The original achieved fields were added in 0.2.0; capture provenance is added in 0.4.0. |
+| `cadence` | object | OPTIONAL | What this display's recorder ACHIEVED: `achieved_fps` (number) and `worst_stall_ms` (number, the longest the frame counter went without advancing — quantised to the writer's sampling interval and therefore a LOWER bound). Written only beside a replay, and only where the writer could measure itself: a rate nobody measured MUST NOT be reported as a rate. Also OPTIONAL `discarded_frames` (number): frames the source produced and threw away. A LOW `achieved_fps` means two different things, and only this tells them apart — a screen capture makes a frame when the screen CHANGES, so a monitor nobody touched delivers almost nothing and has lost nothing, while frames made and discarded are a replay that really is missing time. A reader uses it to know that a moment being annotated may simply not be in the file. Format 0.4.0 adds OPTIONAL capture provenance: `requested_fps` (number in 1..30), `backend` (`"chromium-desktop-capture"` or `"windows-gdi-bitblt"`), `quality` (`"full"` or `"degraded"`), and `recorder_count` (integer >= 1). A current writer MUST request 5..30 fps; readers keep accepting 1..30 here because this field is historical provenance and existing packs may record a former 1..4 fps request. These fields MUST describe the source and encoder(s) that produced the declared replay; a fallback MUST NOT call itself full quality. Format 0.6.0 adds OPTIONAL `source_latency` (object): how far this recorder's pixels lagged the glass, MEASURED. `measured_ms` (number >= 0), `reference` (`"dxgi-desktop-duplication"` or `"windows-gdi-bitblt"`) and `timing` (`"pixel-exposure"` or `"post-bitblt-completion"`) are all REQUIRED inside the object, because the same number means different things against a pixel exposure and against an operation completion, and a writer that cannot say which one it matched has not measured a source latency. A writer MUST NOT report a measured source latency whose `timing` is `"post-bitblt-completion"`: the copied surface may already have been stale by an unobserved amount, so that value is not an exposure latency. This MUST be an observation against an independent reference — never a configured delay, and never derived from `achieved_fps` or `requested_fps`; the rule above holds here too, a latency nobody measured MUST NOT be reported as a latency. Also OPTIONAL: `confidence` (number in 0..1, the matcher's own verdict), `uncertainty_ms` (number >= 0, the reference anchor's error bar) and `age_ms` (integer >= 0, milliseconds between the measurement and this capture). **Absent `age_ms` means the recorder that produced this replay measured it.** A writer MAY carry a measurement forward from an earlier capture of the same display — the calibration succeeds only when the desktop happens to move while it watches, so most captures have no measurement of their own — but a carried value MUST declare its `age_ms`, and MUST NOT be carried across a change of capture `backend`, which is a different path to the glass. The original achieved fields were added in 0.2.0; capture provenance is added in 0.4.0, and the measured source latency in 0.6.0. |
 | `replay_annotated` | string | OPTIONAL | Filename of the **annotated replay** — `"replay_annotated.webm"` or `"replay_annotated.mp4"` ([§7.2](#72-the-annotated-replay)). MUST be absent when `replay` is `null` (there is nothing to render it from), and absent while the annotated replay has not (yet) been rendered. A writer MUST finish the file before publishing this declaration. A defensive reader that encounters a declared but missing file in an interrupted or older pack SHOULD treat the derived view as unavailable and fall back to `replay` + `annotations.json`. |
 | `snapshot_t_ms` | integer | OPTIONAL | Position on the replay clock, in milliseconds, of the frame shown in `snapshot.png` — the same clock as annotation lifetimes ([§8.4](#84-lifetime)) and timeline `t_ms` offsets relative to `t0` ([§10.1](#101-structure)). MUST be >= 0. **Absent means the snapshot is the capture instant** — the native "now" frame. SHOULD be absent when `replay` is `null`: without a replay there is no timeline to anchor the value to. See [§7.1](#71-frame-accurate-captures). |
 | `trim_offset_ms` | integer | OPTIONAL | **Provenance only.** When the writer trimmed the replay before saving, the position (ms) in the original captured recording of this replay's first frame — the trim in-point. MUST be >= 0. Purely informational: every time in the pack (annotation lifetimes, `snapshot_t_ms`, timeline offsets against `t0`) is already on the trimmed replay's clock, so readers never apply this offset to anything. Absent means the replay was never trimmed. SHOULD be absent when `replay` is `null`. |
@@ -1692,6 +1692,12 @@ The fixed-name optional `viewer.html` generated view was introduced in 0.5.0. A 
 includes it MUST declare `format_version` 0.5.0 or later. Its absence is normal and never makes a
 pack invalid.
 
+The optional `source_latency` member of `media.cadence` and `media.displays[].cadence` was
+introduced in 0.6.0. A writer that emits it MUST declare `format_version` 0.6.0 or later. Its
+absence is normal and always will be: the measurement requires the desktop to move while the
+calibration watches, and a capture of a still screen has nothing to measure against. Readers that
+do not understand it ignore it and still read the replay and its cadence.
+
 **Readers MUST accept unknown optional fields and unknown files.** Forward compatibility is a
 requirement, not a courtesy:
 
@@ -1790,8 +1796,8 @@ repository:
 - [`docs/schemas/annotations.schema.json`](docs/schemas/annotations.schema.json)
 - [`docs/schemas/timeline.schema.json`](docs/schemas/timeline.schema.json)
 
-The manifest schema models the capture-kind, still-image, and capture-diagnostics media rules defined through 0.4.0
-when `capture_kind` is present. It also accepts existing manifests without that discriminator,
+The manifest schema models the capture-kind, still-image, capture-diagnostics and measured
+source-latency media rules defined through 0.6.0 when `capture_kind` is present. It also accepts existing manifests without that discriminator,
 including early 0.3.0 RC packs; compatibility does not make a null replay unambiguous. The
 annotation and timeline schemas validate the fields and discriminator values they explicitly
 define. All three deliberately allow unknown properties — forward compatibility

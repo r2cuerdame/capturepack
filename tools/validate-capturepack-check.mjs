@@ -270,9 +270,76 @@ try {
     diagnosticsOnOldFormat.status === 1
       && diagnosticsOnOldFormat.stdout.includes('requires format_version 0.4.0 or later'))
 
+  // A MEASURED SOURCE LATENCY MUST SAY WHAT IT WAS MEASURED AGAINST (#115).
+  motionManifest.format_version = '0.6.0'
+  const measuredLatency = {
+    measured_ms: 37.7,
+    reference: 'dxgi-desktop-duplication',
+    timing: 'pixel-exposure',
+    confidence: 0.92,
+    uncertainty_ms: 0.4,
+  }
+  motionManifest.media.cadence.source_latency = { ...measuredLatency }
+  motionManifest.media.displays[1].cadence.source_latency = { ...measuredLatency }
+  motionManifest.media.displays[0].cadence.source_latency = {
+    ...measuredLatency,
+    reference: 'windows-gdi-bitblt',
+    timing: 'pixel-exposure',
+    age_ms: 812_345,
+  }
+  writeJson(motionManifestFile, motionManifest)
+  const validSourceLatency = runValidator(motionPack)
+  check('format 0.6 accepts a measured source latency, carried or fresh',
+    validSourceLatency.status === 0
+      && validSourceLatency.stdout.includes('says what it was measured against'))
+
+  motionManifest.format_version = '0.5.0'
+  writeJson(motionManifestFile, motionManifest)
+  const latencyOnOldFormat = runValidator(motionPack)
+  check('a measured source latency requires format 0.6 or later',
+    latencyOnOldFormat.status === 1
+      && latencyOnOldFormat.stdout.includes('requires format_version 0.6.0 or later'))
+
+  motionManifest.format_version = '0.6.0'
+  delete motionManifest.media.cadence.source_latency.reference
+  delete motionManifest.media.displays[1].cadence.source_latency.reference
+  writeJson(motionManifestFile, motionManifest)
+  const anonymousLatency = runValidator(motionPack)
+  check('a latency that will not name its reference is refused',
+    anonymousLatency.status === 1
+      && anonymousLatency.stdout.includes('MUST name the exposure reference it matched'))
+
+  motionManifest.media.cadence.source_latency.reference = 'dxgi-desktop-duplication'
+  motionManifest.media.displays[1].cadence.source_latency.reference = 'dxgi-desktop-duplication'
+  motionManifest.media.displays[0].cadence.source_latency.timing = 'post-bitblt-completion'
+  writeJson(motionManifestFile, motionManifest)
+  const completionAsExposure = runValidator(motionPack)
+  check('an operation completion cannot be published as a pixel exposure',
+    completionAsExposure.status === 1
+      && completionAsExposure.stdout.includes('is not a pixel exposure'))
+
+  motionManifest.media.displays[0].cadence.source_latency.timing = 'pixel-exposure'
+  motionManifest.media.cadence.source_latency.measured_ms = -1
+  motionManifest.media.displays[1].cadence.source_latency.measured_ms = -1
+  writeJson(motionManifestFile, motionManifest)
+  const negativeLatency = runValidator(motionPack)
+  check('a negative source latency is not a measurement',
+    negativeLatency.status === 1
+      && negativeLatency.stdout.includes('measured_ms MUST be a non-negative number'))
+
+  motionManifest.media.cadence.source_latency.measured_ms = 37.7
+  motionManifest.media.displays[1].cadence.source_latency.measured_ms = 37.7
+  motionManifest.media.displays[0].cadence.source_latency.age_ms = 812_345.5
+  writeJson(motionManifestFile, motionManifest)
+  const fractionalAge = runValidator(motionPack)
+  check('a carried measurement declares its age as whole milliseconds',
+    fractionalAge.status === 1
+      && fractionalAge.stdout.includes('age_ms MUST be an integer >= 0'))
+
   delete motionManifest.media.cadence
   delete motionManifest.media.displays[0].cadence
   delete motionManifest.media.displays[1].cadence
+  motionManifest.format_version = '0.4.0'
   motionManifest.media.displays[1].replay_clock_offset_ms = 7
   writeJson(motionManifestFile, motionManifest)
   const nonzeroFocusedClock = runValidator(motionPack)

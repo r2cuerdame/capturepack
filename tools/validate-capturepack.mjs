@@ -85,6 +85,54 @@ function cropBoundsValid(value) {
     && value.coordinate_space === "virtual-desktop-dip";
 }
 
+// A LATENCY THAT CANNOT SAY WHAT IT WAS MEASURED AGAINST IS NOT EVIDENCE.
+//
+// SPEC §5.3 requires `reference` and `timing` inside the object rather than
+// leaving them optional, because the same number means different things
+// against a pixel exposure and against an operation completion — and only the
+// first is a source latency at all.
+function validateSourceLatency(value, label, formatVersion) {
+  if (value === undefined) return true;
+  if (!formatAtLeast(formatVersion, 0, 6)) {
+    fail(`${label} requires format_version 0.6.0 or later (SPEC §5.3, §13.1)`);
+    return false;
+  }
+  if (!isObj(value) || !isNum(value.measured_ms) || value.measured_ms < 0) {
+    fail(`${label}.measured_ms MUST be a non-negative number (SPEC §5.3)`);
+    return false;
+  }
+  let ok = true;
+  if (value.reference !== "dxgi-desktop-duplication"
+      && value.reference !== "windows-gdi-bitblt") {
+    fail(`${label}.reference MUST name the exposure reference it matched (SPEC §5.3)`);
+    ok = false;
+  }
+  if (value.timing !== "pixel-exposure" && value.timing !== "post-bitblt-completion") {
+    fail(`${label}.timing MUST be "pixel-exposure" or "post-bitblt-completion" (SPEC §5.3)`);
+    ok = false;
+  }
+  if (value.timing === "post-bitblt-completion") {
+    fail(`${label}: an operation-completion timestamp is not a pixel exposure, so it MUST NOT be reported as a measured source latency (SPEC §5.3)`);
+    ok = false;
+  }
+  if (value.confidence !== undefined
+      && (!isNum(value.confidence) || value.confidence < 0 || value.confidence > 1)) {
+    fail(`${label}.confidence MUST be a number in 0..1 (SPEC §5.3)`);
+    ok = false;
+  }
+  if (value.uncertainty_ms !== undefined
+      && (!isNum(value.uncertainty_ms) || value.uncertainty_ms < 0)) {
+    fail(`${label}.uncertainty_ms MUST be a non-negative number (SPEC §5.3)`);
+    ok = false;
+  }
+  if (value.age_ms !== undefined && (!isInt(value.age_ms) || value.age_ms < 0)) {
+    fail(`${label}.age_ms MUST be an integer >= 0 (SPEC §5.3)`);
+    ok = false;
+  }
+  if (ok) pass(`${label} is measured and says what it was measured against`);
+  return ok;
+}
+
 function validateCadence(value, label, formatVersion, hasReplay) {
   if (value === undefined) return true;
   if (!hasReplay) {
@@ -131,6 +179,9 @@ function validateCadence(value, label, formatVersion, hasReplay) {
   if (value.recorder_count !== undefined
       && (!isInt(value.recorder_count) || value.recorder_count < 1)) {
     fail(`${label}.recorder_count MUST be an integer >= 1 (SPEC §5.3)`);
+    ok = false;
+  }
+  if (!validateSourceLatency(value.source_latency, `${label}.source_latency`, formatVersion)) {
     ok = false;
   }
   if (ok) pass(`${label} is measured and capture provenance is honest`);

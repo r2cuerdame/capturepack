@@ -27,6 +27,86 @@ export const FORMAT_VERSION = '0.2.1'
 export const FORMAT_VERSION_KEYFRAMES = '0.3.0'
 /** Capture backend/quality provenance in media.cadence (SPEC §5.3). */
 export const FORMAT_VERSION_CAPTURE_DIAGNOSTICS = '0.4.0'
+/** Measured source latency in media.cadence.source_latency (SPEC §5.3). */
+export const FORMAT_VERSION_SOURCE_LATENCY = '0.6.0'
+
+/**
+ * How far the recorder's pixels lagged the glass, MEASURED (SPEC §5.3, #115).
+ *
+ * Not a configured delay and not derived from a frame rate: an independent
+ * desktop-exposure reference is matched against decoded source pixels. What it
+ * is measured AGAINST is part of the value, so `reference` and `timing` are as
+ * required as the number — an operation-completion timestamp is not a pixel
+ * exposure, and a bare "37.7" that does not say which one it is cannot be
+ * compared with anything.
+ */
+export interface ManifestSourceLatency {
+  measured_ms: number
+  reference: 'dxgi-desktop-duplication' | 'windows-gdi-bitblt'
+  timing: 'pixel-exposure' | 'post-bitblt-completion'
+  confidence?: number
+  uncertainty_ms?: number
+  /** Absent means the recorder that produced this replay measured it. */
+  age_ms?: number
+}
+
+/** What the main process remembers, in the shape it remembers it. */
+export interface MeasuredSourceLatency {
+  latencyMs: number
+  confidence: number | undefined
+  measuredAtMs: number
+  referenceSource: string | undefined
+  referenceTiming: string | undefined
+  uncertaintyMs: number | undefined
+  fromCurrentRecorder: boolean
+}
+
+/**
+ * The published form of a remembered measurement, or undefined (SPEC §5.3).
+ *
+ * Undefined rather than a partial object: SPEC §5.3's rule for the cadence
+ * this sits in — "a rate nobody measured MUST NOT be reported as a rate" —
+ * governs the latency too, and a number that cannot say what it was matched
+ * against has not measured one. An operation-completion reference is refused
+ * outright: the copied surface may already have been stale by an unobserved
+ * amount, so that value is not an exposure latency at all.
+ */
+export function manifestSourceLatencyFrom(
+  remembered: MeasuredSourceLatency,
+  nowMs: number,
+): ManifestSourceLatency | undefined {
+  const { referenceSource, referenceTiming } = remembered
+  if (
+    referenceSource !== 'dxgi-desktop-duplication' &&
+    referenceSource !== 'windows-gdi-bitblt'
+  ) {
+    return undefined
+  }
+  if (referenceTiming !== 'pixel-exposure') return undefined
+  if (!Number.isFinite(remembered.latencyMs) || remembered.latencyMs < 0) {
+    return undefined
+  }
+  return {
+    // One decimal. The matcher's resolution is bounded by the frame interval it
+    // sampled; writing 37.69 would claim ten microseconds it never had.
+    measured_ms: Math.round(remembered.latencyMs * 10) / 10,
+    reference: referenceSource,
+    timing: referenceTiming,
+    ...(remembered.confidence === undefined || !Number.isFinite(remembered.confidence)
+      ? {}
+      : { confidence: Math.round(remembered.confidence * 100) / 100 }),
+    ...(remembered.uncertaintyMs === undefined
+      || !Number.isFinite(remembered.uncertaintyMs)
+      || remembered.uncertaintyMs < 0
+      ? {}
+      : { uncertainty_ms: Math.round(remembered.uncertaintyMs * 10) / 10 }),
+    // Absent means this recorder measured it. Present says how much older the
+    // evidence is, so a reader is never told a borrowed number is fresh.
+    ...(remembered.fromCurrentRecorder
+      ? {}
+      : { age_ms: Math.max(0, Math.round(nowMs - remembered.measuredAtMs)) }),
+  }
+}
 
 /** Measured replay cadence written beside the replay it describes (SPEC §5.3). */
 export interface ManifestCadence {
@@ -37,6 +117,7 @@ export interface ManifestCadence {
   backend?: 'chromium-desktop-capture' | 'windows-gdi-bitblt'
   quality?: 'full' | 'degraded'
   recorder_count?: number
+  source_latency?: ManifestSourceLatency
 }
 
 // Per-display media of an all-displays capture (SPEC §5.3, GOAL "Multi-Monitor

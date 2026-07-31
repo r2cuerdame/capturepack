@@ -1,0 +1,39 @@
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const here = path.dirname(fileURLToPath(import.meta.url))
+const work = mkdtempSync(path.join(tmpdir(), 'capturepack-source-latency-pack-'))
+try {
+  const bundle = path.join(work, 'check.cjs')
+  // buildManifest reaches electron only for the app version; the check drives
+  // it with an explicit generatorVersion and never touches the stub.
+  const electronStub = path.join(work, 'electron-stub.cjs')
+  writeFileSync(
+    electronStub,
+    `exports.app={getVersion:()=>'0.0.0-check'};` +
+      `exports.clipboard={writeText:()=>{}};` +
+      `exports.screen={getAllDisplays:()=>[]};\n`,
+  )
+  execFileSync(
+    process.execPath,
+    [
+      path.join(here, '..', 'node_modules', 'esbuild', 'bin', 'esbuild'),
+      path.join(here, 'source-latency-pack-check.ts'),
+      '--bundle',
+      '--platform=node',
+      '--format=cjs',
+      `--alias:electron=${electronStub}`,
+      `--outfile=${bundle}`,
+    ],
+    { stdio: ['ignore', 'ignore', 'inherit'] },
+  )
+  execFileSync(process.execPath, [bundle], {
+    stdio: 'inherit',
+    cwd: path.join(here, '..'),
+  })
+} finally {
+  rmSync(work, { recursive: true, force: true })
+}

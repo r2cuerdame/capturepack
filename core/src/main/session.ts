@@ -13,6 +13,7 @@ import { existsSync } from 'node:fs'
 import * as path from 'node:path'
 import { IPC } from '../shared/ipc'
 import { REPLAY_TIMEOUT_MS } from '../shared/captureTimeouts'
+import { manifestSourceLatencyFrom } from '../shared/types'
 import type {
   EditorAnnotationAddedPayload,
   EditorDisplayPayload,
@@ -27,6 +28,7 @@ import type {
   EditorWindowMode,
   Manifest,
   ManifestCadence,
+  ManifestSourceLatency,
   ManifestDisplayMedia,
   Settings,
   TimelineEvent,
@@ -73,6 +75,7 @@ import {
   resolveTargetDisplay,
   takeDisplaySnapshots,
   recorderCadence,
+  recorderSourceLatency,
 } from './capture'
 import type { DisplaySnapshot, ReplayFetch } from './capture'
 import {
@@ -731,6 +734,7 @@ function toEditorDisplays(
 function manifestCadence(displayId: number): ManifestCadence | undefined {
   const measured = recorderCadence(displayId)
   if (measured === null) return undefined
+  const sourceLatency = manifestSourceLatency(displayId)
   return {
     achieved_fps: measured.achievedFps,
     worst_stall_ms: measured.worstStallMs,
@@ -745,7 +749,15 @@ function manifestCadence(displayId: number): ManifestCadence | undefined {
     ...(measured.recorderCount === undefined
       ? {}
       : { recorder_count: measured.recorderCount }),
+    ...(sourceLatency === undefined ? {} : { source_latency: sourceLatency }),
   }
+}
+
+/** The measured source latency, if this display has one to publish (#115). */
+function manifestSourceLatency(displayId: number): ManifestSourceLatency | undefined {
+  const remembered = recorderSourceLatency(displayId)
+  if (remembered === null) return undefined
+  return manifestSourceLatencyFrom(remembered, Date.now())
 }
 
 function imageCropBounds(

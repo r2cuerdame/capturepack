@@ -35,6 +35,21 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 
 ### Added
 
+- **Pack format 0.6.0**: a measured source latency travels with the evidence.
+  `media.cadence.source_latency` says how far a recorder's pixels lagged the
+  glass — `measured_ms` with the `reference` and `timing` it was matched
+  against, and optionally the matcher's `confidence`, the reference's
+  `uncertainty_ms`, and `age_ms` when the measurement was carried forward from
+  an earlier capture of the same display. All three of the first are required
+  inside the object, because the same number means different things against a
+  pixel exposure and against an operation completion; a writer that cannot say
+  which one it matched has not measured a source latency, and the pack stays
+  silent rather than publishing one. Only a pack that emits the field declares
+  0.6.0 ([#115](https://github.com/r2cuerdame/capturepack/issues/115)). This is
+  the number [#89](https://github.com/r2cuerdame/capturepack/issues/89) needs:
+  it can now be read straight out of a pack and set beside the 118–127 ms the
+  offline harness measures, so the remaining difference belongs to a named leg
+  instead of an estimate.
 - The application records what the element picker did: arming, failing to arm
   with the browser's own reason, disarming, every pick that arrived, and every
   message it refused together with the rule that refused it. Settings ›
