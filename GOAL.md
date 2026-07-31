@@ -255,6 +255,20 @@ and does not move the second from 118.0 ms at all.
   acceptance boundary was then being measured against a rate the recorder never
   ran at. The replay's declared interval is now passed in.
 
+**But only one capture on this machine can be measured at all.** Of the five
+packs carrying a windows-context timeline and two replays, four report that no
+window moved far enough to time anything. So display 1 still has no number, and
+that is the gap that matters: *display-specific* is #89's central claim, and one
+measured display cannot support it. Closing it needs one capture recorded while
+a window is dragged across display 1 — the owner's action, because nothing here
+may synthesize the capture hotkey or mouse input.
+
+The magnitude survives a method that shares no code with the harness. Reading
+one decoded frame by hand: PTS 6585 ms shows the window's left edge at physical
+x=1736, and the context track puts it there at about 6446 ms — 139 ms; the next
+frame gives 137 ms. That is a third motion segment, measured with nothing but
+ffprobe and arithmetic.
+
 What remains is not measurement. It is where the correction goes, and that is a
 decision about what a saved pack means:
 

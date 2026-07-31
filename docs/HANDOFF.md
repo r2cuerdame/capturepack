@@ -123,6 +123,23 @@ identified frames varying from 24 down to 8 — moves the first segment only
 between **125.0 and 129.5 ms** and does not move the second from **118.0 ms**
 at all.
 
+It is also confirmed by a method that shares no code with the harness. Reading
+one decoded frame by hand: at PTS 6585 ms the window's left edge is at physical
+x=1736, and the context track says it was at x=1736 at about 6446 ms — **139 ms**.
+The next frame, PTS 6650 ms at x=980 against 6513 ms, gives **137 ms**. That is
+a third motion segment, measured with nothing but ffprobe and arithmetic.
+
+**Only one capture in the whole capture root can be measured at all.** Of the
+five packs that carry a windows-context timeline and two replays, four report
+that no window moved far enough to time anything. The field procedure needs a
+capture that contains a deliberate drag; ordinary captures do not.
+
+**Display 1 therefore has no measured latency yet, and that is the gap that
+matters**, because "display-specific" is #89's central claim and only display 2
+has a number. Closing it needs one capture recorded while a window is dragged
+across display 1 — the owner's action, not an agent's: nothing here may
+synthesize the capture hotkey or mouse input.
+
 **Which display is which, because the numbering has already been mixed up
 once.** Read it from that pack's `manifest.json` rather than from prose:
 
@@ -330,6 +347,15 @@ record and [#104](https://github.com/r2cuerdame/capturepack/issues/104) /
   correction twice is measured to be exactly as wrong as not applying it, and
   applying it backwards twice as wrong; the check counts the application sites
   in `src/` and fails above one.
+
+Two things need the machine and the owner, not an agent:
+
+1. One capture recorded while a window is dragged **across display 1**, so #89's
+   central claim — that the latency is display-specific — can be measured
+   instead of asserted. Four of the five packs that could be measured contain no
+   drag at all, and the fifth measures only display 2.
+2. One run with the element picker deliberately armed on an ordinary `https://`
+   page (below).
 
 Not proved, and it needs the machine: one run with the element picker
 deliberately armed on an ordinary `https://` page, so `main.log` says whether it
