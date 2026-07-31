@@ -50,6 +50,12 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   back, and it refuses rather than reporting a number when too few frames can be
   identified.
 
+- Trimming a capture now moves the whole annotation onto the trimmed clock, not
+  just its lifetime. Observed samples, the pick instant and authored keyframes
+  kept their old times: on a tail cut that left a couple of samples past the end
+  of the replay, and on a cut from the front it put every sample out by the
+  in-point, so a box followed its object at a constant offset
+  ([#114](https://github.com/r2cuerdame/capturepack/issues/114)).
 - Trimming a capture no longer changes its codec. The exact cut re-encodes — the
   format permits that — but it asked its encoder for WebM whatever the recorder
   had produced, so cutting 310 ms off the end of an H.264 recording quietly

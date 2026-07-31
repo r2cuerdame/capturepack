@@ -10,6 +10,7 @@
 import { planTrimDrag } from '../src/renderer/editor/trimDrag'
 import { annotationAt } from '../src/shared/track'
 import type { Annotation } from '../src/shared/types'
+import { rebaseAnnotationClock } from '../src/shared/motion'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 
@@ -141,6 +142,104 @@ console.log('\nNATIVE CAPTURE FRAME STAYS NATIVE WHILE THE END IS TRIMMED')
 }
 
 
+// A TRIM MOVES EVERY TIME THE BOX CARRIES (#114).
+//
+// rebaseAnnotationsForTrim moved start_ms and end_ms by hand and left
+// tracking.samples, picked_at_ms and keyframes on the untrimmed clock, while
+// rebaseAnnotationClock next door has always moved all of them. Measured on
+// CapturePack_2026-07-31_185602, a tail-only cut: two samples at 11057 and
+// 11205 ms survived in a pack declaring 10895. Cut from the FRONT and it is
+// not stragglers - every observed sample is out by the in-point, so the box
+// follows its object at an offset for the whole replay.
+console.log('\nA trim rebases the whole annotation, not just its lifetime')
+{
+  const tracked = {
+    annotation_id: 'ann_trim',
+    type: 'box',
+    bounds: { x: 0, y: 0, width: 10, height: 10 },
+    text: '',
+    numbered: false,
+    blur: false,
+    created_at: '2026-07-31T00:00:00.000Z',
+    z: 1,
+    start_ms: 3_000,
+    end_ms: 9_000,
+    keyframes: [
+      { t_ms: 3_000, x: 0, y: 0, width: 10, height: 10 },
+      { t_ms: 8_000, x: 50, y: 0, width: 10, height: 10 },
+    ],
+    tracking: {
+      enabled: true,
+      picked_at_ms: 3_000,
+      samples: [
+        { t_ms: 3_000, x: 0, y: 0, width: 10, height: 10 },
+        { t_ms: 6_000, x: 30, y: 0, width: 10, height: 10 },
+        { t_ms: 9_500, x: 60, y: 0, width: 10, height: 10 },
+      ],
+    },
+  } as unknown as Annotation
+
+  // A head cut of 2000 ms: this is what rebaseAnnotationsForTrim now calls.
+  const head = rebaseAnnotationClock(tracked, -2_000, 8_000)
+  check(
+    'a head cut moves the lifetime onto the trimmed clock',
+    `${head.start_ms},${head.end_ms}`,
+    '1000,7000',
+  )
+  check(
+    'and moves every observed sample by the same in-point',
+    (head.tracking.samples ?? []).map((x) => x.t_ms).join(','),
+    '1000,4000,7500',
+  )
+  check('and the pick instant', String(head.tracking.picked_at_ms), '1000')
+  check(
+    'and the authored keyframes',
+    (head.keyframes ?? []).map((k) => k.t_ms).join(','),
+    '1000,6000',
+  )
+
+  // The reported case: tail only. Nothing shifts, and nothing may survive
+  // past the declared end.
+  const tail = rebaseAnnotationClock(tracked, 0, 9_000)
+  check(
+    'a tail cut leaves no sample past the declared end',
+    String((tail.tracking.samples ?? []).filter((x) => x.t_ms > 9_000).length),
+    '0',
+  )
+  check(
+    'and does not move the samples that were already inside it',
+    (tail.tracking.samples ?? []).slice(0, 2).map((x) => x.t_ms).join(','),
+    '3000,6000',
+  )
+
+  // The trim path must actually call it, rather than hand-rolling the two
+  // fields that are easy to see.
+  const session = readFileSync(
+    path.join(process.cwd(), 'src/main/session.ts'),
+    'utf8',
+  )
+  check(
+    'the trim rebase delegates to the function that moves everything',
+    String(
+      session.includes(
+        'result.push(rebaseAnnotationClock(a, -trim.startMs, trim.lengthMs))',
+      )
+        && !session.includes(
+          'start_ms: clampToTrim(a.start_ms - trim.startMs, trim.lengthMs),',
+        ),
+    ),
+    'true',
+  )
+  check(
+    'and a box wholly outside the kept range is still dropped',
+    String(
+      session.includes(
+        'if (a.end_ms < trim.startMs || a.start_ms > trim.endMs) continue',
+      ),
+    ),
+    'true',
+  )
+}
 // A TRIM MUST NOT ALSO CHANGE THE CODEC (#113).
 //
 // The exact cut re-encodes through a canvas — SPEC 5.3 permits that — but it

@@ -4024,11 +4024,16 @@ function rebaseAnnotationsForTrim(annotations: Annotation[], trim: TrimRange): A
       continue
     }
     if (a.end_ms < trim.startMs || a.start_ms > trim.endMs) continue // wholly outside
-    result.push({
-      ...a,
-      start_ms: clampToTrim(a.start_ms - trim.startMs, trim.lengthMs),
-      end_ms: clampToTrim(a.end_ms - trim.startMs, trim.lengthMs),
-    })
+    // EVERY TIME THE BOX CARRIES, NOT JUST THE TWO THAT ARE EASY TO SEE (#114).
+    //
+    // This moved start_ms and end_ms and left tracking.samples, picked_at_ms
+    // and keyframes on the untrimmed clock — while rebaseAnnotationClock, the
+    // function next door, has always moved all of them. On a tail-only cut that
+    // showed as stragglers past the declared end (measured: two samples at
+    // 11057 and 11205 ms in a pack declaring 10895). Cut from the FRONT and it
+    // is not stragglers: every observed sample is out by the in-point, so the
+    // box follows its object at an offset for the whole replay.
+    result.push(rebaseAnnotationClock(a, -trim.startMs, trim.lengthMs))
   }
   return result
 }
