@@ -412,15 +412,20 @@ async function renderAnnotated(
   }
   // AN OUT-POINT INSIDE A HELD FRAME STILL STOPS THERE (#116).
   //
-  // The test above rides requestVideoFrameCallback, which fires when a NEW
-  // frame is presented. A replay that honestly records a stalled source holds
-  // one frame across the stall, so nothing fires for as long as the hold lasts
-  // and the cut overshoots by up to that much. Holes used to be short enough
-  // for this not to show; since the ring stopped compressing them they are the
-  // length the desk actually paused for — 903 ms in the capture that prompted
-  // the fix. The playhead keeps moving through a held frame, so a clock test is
-  // the one that can see it. Idempotent with the callback path: both only ever
-  // pause and resolve, and `done` resolves once.
+  // The test above rides requestVideoFrameCallback, which fires only when a NEW
+  // frame is presented. A replay holds one frame for as long as its next sample
+  // says, so across a long-held frame nothing fires and the cut is only noticed
+  // at the far side of it: the trim overshoots by up to that sample's duration.
+  //
+  // Measured, not assumed. replay-d1.mp4 of CapturePack_2026-07-31_202834 holds
+  // single frames for up to 197 ms, and a recorder stop/restart writes a real
+  // multi-second hole into the timeline — this file's own
+  // `observedFragmentTimeline` exists to preserve exactly that. Both are longer
+  // than the frame interval this test was written against.
+  //
+  // The playhead keeps moving through a held frame, so a clock test sees what
+  // the frame callback cannot. Idempotent with the callback path: both only
+  // ever pause and resolve, and `done` resolves once.
   const outPointTimer =
     trimEndMs === undefined
       ? null

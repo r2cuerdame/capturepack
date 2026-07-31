@@ -3855,6 +3855,29 @@ async function handleReplayRequest(
         boundaryReady = true
         const replay = ring.assemble(requestedAt)
         const stats = ring.stats()
+        // WHERE THIS CAPTURE'S TIME WENT (#116).
+        //
+        // A field capture reported a 903 ms stall and produced a replay whose
+        // longest held frame was 197 ms — 17.6 s of desk written as 5.3 s of
+        // media. Two probes against a real MediaRecorder could not reproduce
+        // it, and the file itself says why they could not: one fragment, so no
+        // placement this recorder does could have been involved. The flattening
+        // was already in the sample durations when the bytes arrived.
+        //
+        // These four numbers separate the layers. The encoder's own span
+        // against the media sum says whether `tfdt` carried the gap; the
+        // longest sample says whether the samples did; the delivery count says
+        // how much independent wall evidence there was to check either against.
+        // Recorded, so the next capture on a starving display answers it.
+        console.info(
+          `[capture] ring timing: ${String(stats.fragmentCount)} fragment(s) over ` +
+            `${String(stats.timing.deliveryCount)} delivery instant(s), ` +
+            `${String(stats.timing.sampleCount)} sample(s); ` +
+            `media ${String(Math.round(stats.retainedDurationMs))} ms, ` +
+            `encoder span ${String(stats.timing.sourceSpanMs)} ms ` +
+            `(${String(stats.timing.fragmentsWithSourceTime)} fragment(s) carried one), ` +
+            `longest held frame ${String(stats.timing.maxSampleDurationMs)} ms`,
+        )
         ringDiagnostics = {
           retainedFragmentCount: stats.fragmentCount,
           retainedBytes: stats.retainedBytes,

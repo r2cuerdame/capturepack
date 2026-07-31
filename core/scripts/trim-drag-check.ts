@@ -313,11 +313,12 @@ console.log('\nA trim keeps the container it was recorded in')
 // AN OUT-POINT INSIDE A HELD FRAME STILL STOPS THERE (#116).
 //
 // The render's out-point test rode requestVideoFrameCallback alone, which fires
-// only when a NEW frame is presented. Once the ring stopped compressing a
-// stalled source, a replay holds one frame for as long as the desk paused - 903
-// ms in the capture that prompted the fix - and nothing fires for that whole
-// stretch, so a cut landing inside the hold overshoots to the far side of it.
-// The playhead keeps moving through a held frame, so a clock test sees what the
+// only when a NEW frame is presented, so a cut landing inside a long-held frame
+// was only noticed at the far side of it and overshot by up to that frame's
+// duration. Measured: replay-d1.mp4 of CapturePack_2026-07-31_202834 holds
+// single frames for up to 197 ms, and a recorder stop/restart writes a real
+// multi-second hole that observedFragmentTimeline deliberately preserves. The
+// playhead keeps moving through a held frame, so a clock test sees what the
 // frame callback cannot.
 console.log('\nA cut inside a held frame lands where it was asked to')
 {

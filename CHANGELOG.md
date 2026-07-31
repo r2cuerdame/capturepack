@@ -8,20 +8,12 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 
 ### Fixed
 
-- A replay that stalled says so, instead of being compressed into a shorter one
-  that looks fine. Measured on a two-display capture: a 17.6 second recording
-  was written as 5.29 seconds of video — 77 frames spaced an even 66.7 ms apart,
-  largest gap 197 ms — in a pack whose own cadence report admitted a 903
-  millisecond stall. The holes had been folded out. Chromium had recorded them
-  all along, in a per-fragment timestamp the ring read past and then overwrote;
-  it assumed that inside one recorder the encoded durations were authoritative,
-  which is true only while the screen keeps changing. A late delivery still does
-  not invent a gap — the encoder's own clock is what tells the two apart, and it
-  always could ([#116](https://github.com/r2cuerdame/capturepack/issues/116)).
-  Two consequences worth stating: replays of a mostly-still screen are now
-  several times longer and contain real pauses, and the retention window — which
-  was being enforced against that fast clock — now keeps the number of seconds
-  it says it keeps.
+- A trim whose out-point lands inside a held frame cuts where it was asked to.
+  The render only tested the out-point when a new frame was presented, so
+  across a frame the replay holds — up to 197 ms in a measured capture, and far
+  longer across a recorder restart — the cut was noticed only on the far side
+  and overshot by that much
+  ([#116](https://github.com/r2cuerdame/capturepack/issues/116)).
 - A measured source latency outlives the capture that found it. The calibration
   succeeds only when the desk happens to move during the two seconds after a
   recorder starts, and every capture in this machine's log before one on
@@ -49,6 +41,15 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 
 ### Added
 
+- The capture log now says where a recording's time went: how many fragments
+  arrived over how many deliveries, how many samples they carry, what the
+  encoder's own clock spans, and the longest single frame the replay holds. A
+  two-display capture reported a 903 millisecond stall and produced a replay
+  whose longest held frame was 197 ms, 17.6 seconds of screen written as 5.3
+  seconds of video, and there was no way to tell from the outside which layer
+  had dropped the time. These numbers separate them
+  ([#116](https://github.com/r2cuerdame/capturepack/issues/116)). They are
+  recorded, never acted on.
 - **Pack format 0.6.0**: a measured source latency travels with the evidence.
   `media.cadence.source_latency` says how far a recorder's pixels lagged the
   glass — `measured_ms` with the `reference` and `timing` it was matched

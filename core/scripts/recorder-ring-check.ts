@@ -1268,82 +1268,6 @@ async function checkWebmFallbackLifecycle(): Promise<void> {
   )
 }
 
-// A SOURCE THAT STOPPED PRODUCING IS NOT A RECORDING THAT RAN FAST (#116).
-//
-// The case above and the case below arrive through the SAME code path and used
-// to be indistinguishable, so the ring treated both as jitter and butt-joined
-// them. That is why display 1 of CapturePack_2026-07-31_202834 wrote 17.6 s of
-// desk as 5.29 s of media: 77 frames at an even 66.7 ms, largest gap 197 ms, in
-// a pack whose own cadence report admits a 903 ms stall.
-//
-// `tfdt` tells them apart, and always could. Delivery jitter leaves the
-// encoder's clock continuous; a source that stopped drawing leaves a hole in it.
-{
-  const ring = new FragmentedMp4Ring(30_000)
-  ring.pushBytes(join([initialization(), fragment(0n, 15_000)]), 1_000)
-  // One second of encoded media, then the desk went still. The next fragment
-  // arrives a further 900 ms later AND says so on the encoder's own clock:
-  // 15000 ticks of content ended at 15000, and the next starts at 28500.
-  ring.pushBytes(fragment(28_500n, 15_000), 2_900)
-  const replay = ring.assemble(2_900)
-  const replayBytes =
-    replay === null ? new Uint8Array(0) : new Uint8Array(replay.buffer)
-  const decodeTimes = replay === null ? [] : topLevelTfdtValues(replayBytes)
-  check(
-    'a stalled source keeps its hole instead of being compressed away',
-    decodeTimes.join(',') === '0,28500',
-    replay === null
-      ? 'no replay'
-      : `${replay.durationMs} ms / tfdt ${decodeTimes.join(',')}`,
-  )
-}
-
-// FAIL CLOSED: an encoder clock that outruns the wall is not believed.
-//
-// Placing frames at wildly wrong times is a worse failure than compressing
-// them, because compression is visible in the duration and a bad placement is
-// not. So the ring checks the span tfdt CLAIMS against the span it watched the
-// blobs arrive over, and falls back to the arithmetic that shipped.
-{
-  const ring = new FragmentedMp4Ring(30_000)
-  ring.pushBytes(join([initialization(), fragment(0n, 15_000)]), 1_000)
-  // 60 s of encoder time claimed inside 1.9 s of wall time. Impossible.
-  ring.pushBytes(fragment(900_000n, 15_000), 2_900)
-  const replay = ring.assemble(2_900)
-  const replayBytes =
-    replay === null ? new Uint8Array(0) : new Uint8Array(replay.buffer)
-  const decodeTimes = replay === null ? [] : topLevelTfdtValues(replayBytes)
-  check(
-    'an impossible encoder timeline is refused, not written',
-    decodeTimes.join(',') === '0,15000',
-    replay === null
-      ? 'no replay'
-      : `${replay.durationMs} ms / tfdt ${decodeTimes.join(',')}`,
-  )
-}
-
-// A fragment carrying no tfdt refuses the WHOLE session rather than placing
-// half of it. Half-placed is the failure nobody can see, so the two fragments
-// that DO carry a hole must lose it too — proving the refusal is session-wide
-// and not per-fragment.
-{
-  const ring = new FragmentedMp4Ring(30_000)
-  ring.pushBytes(join([initialization(), fragment(0n, 15_000)]), 1_000)
-  ring.pushBytes(fragment(28_500n, 15_000), 2_900)
-  ring.pushBytes(trexDurationFragmentWithoutTfdt(15_000), 3_900)
-  const replay = ring.assemble(3_900)
-  const replayBytes =
-    replay === null ? new Uint8Array(0) : new Uint8Array(replay.buffer)
-  const decodeTimes = replay === null ? [] : topLevelTfdtValues(replayBytes)
-  check(
-    'one tfdt-less fragment refuses the whole session, hole and all',
-    decodeTimes.join(',') === '0,15000',
-    replay === null
-      ? 'no replay'
-      : `${replay.durationMs} ms / tfdt ${decodeTimes.join(',')}`,
-  )
-}
-
 {
   const ring = new FragmentedMp4Ring(30_000)
   ring.pushBytes(join([initialization(1_000), fragment(0n, 1_000)]), 1_000)
@@ -1415,7 +1339,65 @@ async function checkWebmFallbackLifecycle(): Promise<void> {
       topLevelTypes(replayBytes).join(','),
     )
   } else {
-    console.log('  SKIP  rc.36 field replay fixture is not present on this machine')
+    // THE NUMBERS THAT SEPARATE THE LAYERS (#116).
+//
+// A field capture reported a 903 ms stall and produced a replay whose longest
+// held frame was 197 ms - 17.6 s of desk as 5.3 s of media. The obvious
+// suspect was this ring folding gaps out when it joins fragments. It was not:
+// the file holds ONE fragment, so there was nothing to join, and two probes
+// against a real MediaRecorder could not make the shipped ring lose a gap.
+//
+// A fix was written and reverted on that evidence. What is left is the
+// measurement that should have come first, and these cases pin it, because a
+// diagnostic that lies is worse than none: the next person reads it to decide
+// whether the encoder or the sample durations flattened a capture.
+console.log('\nRing timing diagnostics')
+{
+  const ring = new FragmentedMp4Ring(60_000)
+  // One fragment holding one very long sample: the field file's shape.
+  ring.pushBytes(join([initialization(), fragment(0n, 150_000)]), 10_000)
+  const t = ring.stats().timing
+  check(
+    'a long-held frame is reported as one, at its real length',
+    t.sampleCount === 1 && t.maxSampleDurationMs === 10_000,
+    `${String(t.sampleCount)} sample(s), longest ${String(t.maxSampleDurationMs)} ms`,
+  )
+  check(
+    'and one delivery is reported as one delivery',
+    t.deliveryCount === 1,
+    String(t.deliveryCount),
+  )
+}
+{
+  const ring = new FragmentedMp4Ring(60_000)
+  ring.pushBytes(join([initialization(), fragment(0n, 15_000)]), 1_000)
+  // Two more in ONE blob - the flush path every capture takes.
+  ring.pushBytes(join([fragment(15_000n, 15_000), fragment(30_000n, 15_000)]), 5_000)
+  const t = ring.stats().timing
+  check(
+    'the encoder span is what the encoder said, not the media sum',
+    t.sourceSpanMs === 2_000,
+    `${String(t.sourceSpanMs)} ms`,
+  )
+  check(
+    'fragments sharing one blob are one delivery instant, not three',
+    t.deliveryCount === 2 && t.fragmentsWithSourceTime === 3,
+    `${String(t.deliveryCount)} delivery instant(s), ` +
+      `${String(t.fragmentsWithSourceTime)} with a source time`,
+  )
+}
+{
+  const ring = new FragmentedMp4Ring(60_000)
+  ring.pushBytes(join([initialization(), trexDurationFragmentWithoutTfdt(15_000)]), 1_000)
+  const t = ring.stats().timing
+  check(
+    'a fragment carrying no source time is counted as carrying none',
+    t.fragmentsWithSourceTime === 0 && t.sourceSpanMs === 0,
+    `${String(t.fragmentsWithSourceTime)} with a source time, span ${String(t.sourceSpanMs)} ms`,
+  )
+}
+
+console.log('  SKIP  rc.36 field replay fixture is not present on this machine')
   }
 }
 
