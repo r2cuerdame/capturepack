@@ -220,8 +220,8 @@ npm run qa:rc
 npm audit --omit=dev
 ```
 
-`qa:rc` currently runs 69 discovered `check:*` regressions plus type checking,
-the production build, and isolated Electron smoke: **72 gate steps** (70 with
+`qa:rc` currently runs 70 discovered `check:*` regressions plus type checking,
+the production build, and isolated Electron smoke: **73 gate steps** (71 with
 `--skip-build`). Reports
 are written under `%TEMP%\capturepack-qa` unless an artifact directory is
 provided.

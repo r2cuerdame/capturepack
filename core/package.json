@@ -27,6 +27,7 @@
     "check:provider-host": "node scripts/provider-host-check.mjs",
     "check:dom": "node scripts/dom-provider-check.mjs",
     "check:dom-pick": "node scripts/dom-pick-check.mjs",
+    "check:document-snapshot": "node scripts/document-snapshot-check.mjs",
     "check:controls": "node scripts/control-lane-check.mjs",
     "check:context-host-dirty": "node scripts/context-host-dirty-check.mjs",
     "check:identity": "node scripts/pack-identity-check.mjs",
