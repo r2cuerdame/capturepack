@@ -52,10 +52,12 @@ The same evidence is saved as structured data for AI.
    accessible name, control type, and that instant; a window remains the
    fallback when control data is unavailable.
 3. **Keep what the frame contained** — the pack records the controls that were on
-   screen at that instant, including inside applications built on Chromium, and
-   every rectangle names the display it belongs to. A box marks the moment it was
-   picked at; it does not follow the object afterwards, because a replay cannot
-   show a moment finer than a frame.
+   screen at that instant, and in a browser the page itself: every element you
+   could see, with its role, rectangle and text. What you typed, password boxes
+   and anything hidden are refused deliberately, and the payload lists what it
+   left out so a reader knows an empty-looking form is a redaction. A box marks
+   the moment it was picked at; it does not follow the object afterwards, because
+   a replay cannot show a moment finer than a frame.
 4. **Hand off structured context** — save the folder for another developer, drop
    it into ChatGPT, Claude, Codex, Cursor, or Gemini, or let a connected AI read
    it through the built-in, read-only MCP server.

@@ -82,6 +82,20 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 
 ### Added
 
+- Picking an element in a browser now records the page it sat in. The pack gets
+  every element that was visible at that instant — what it is, where it sat and
+  the words on it — instead of only the one thing that was clicked. This is what
+  dropping object tracking paid for: a frozen frame can spend everything once,
+  on depth, where a replay had to keep up with fifteen frames a second.
+  What it refuses to record is part of the feature, and the pack says so in its
+  own data: the value of anything typed into a field, everything about a
+  password box except that one was there, the text of anything hidden, and
+  anything scrolled out of view. Those lines are where they are because writing
+  down words already legible in `snapshot.png` adds no exposure the pack did not
+  have — and that argument covers nothing beyond what was on the glass. A reader
+  meeting an empty-looking form can tell it is a redaction rather than an empty
+  form.
+
 - The capture log now says where a recording's time went: how many fragments
   arrived over how many deliveries, how many samples they carry, what the
   encoder's own clock spans, and the longest single frame the replay holds. A

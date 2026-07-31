@@ -1399,6 +1399,38 @@ button is neither.
 Written by CapturePack's browser extension over protocol v1. Like every plugin payload it is
 OPTIONAL and purely additive, and it follows all of [§11.1](#111-rules).
 
+**Payload 0.2.0 adds `document` on a pick:** the interface the picked element sat in — every
+element the user could SEE in the top document at that instant, each with its role, its
+rectangle in viewport CSS pixels, and its own visible text. `viewport` gives the space those
+rectangles are in, exactly as the pick's own `viewport` does.
+
+A `document` records only what the picture already shows, and the rule is not a courtesy — it
+is the whole justification for recording page text at all. `snapshot.png` contains the pixels
+a reader could read anyway, so writing the words down adds no exposure the pack did not
+already have; that argument covers nothing beyond what was on the glass. Writers therefore
+MUST NOT record:
+
+- anything outside the viewport, which is outside the picture;
+- the value of any `input`, `textarea` or `select` — a half-typed password or a card number
+  may be dots on screen and characters in the document;
+- anything about a `type="password"` field beyond its presence and position, its own `name`,
+  `id` and `placeholder` included, because those can name the account it belongs to;
+- the text of an element the user could not see — a collapsed panel, a closed menu;
+- attributes outside a declared allowlist, because `data-*` routinely carries tokens.
+
+A writer MAY record whether a field held something (`filled`), which is visible on the glass
+and is frequently the whole bug, and MUST NOT record what it held.
+
+**`omitted` is REQUIRED in a `document`** and is the payload's own statement of the above: a
+reader learns what is missing without reading the writer's source. A reader MUST treat an
+absent `document` as "nobody looked" rather than "the page was empty", and MUST treat
+`truncated: true` as "this is a prefix of the page". Neither is a defect; both are the
+difference between silence and evidence that [§11.3](#113-windows-uia-windows-ui-automation)
+already draws for windows.
+
+A pick made inside an iframe carries its element and no `document`: the snapshot belongs to
+the frame whose client rectangle a reader can place, which is the top one.
+
 ```
 plugins/
 └── chrome-dom/
