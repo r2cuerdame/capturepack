@@ -161,3 +161,59 @@ export function contextFrameRequestsForDisplays(
         : Math.max(0, Math.min(endMs, Math.round(display.presentedMs))),
   }))
 }
+
+/**
+ * WHETHER A DISPLAY'S REPLAY IS ON THE CAPTURE'S CLOCK AT ALL (#110).
+ *
+ * A screen nobody touched produces almost no frames, and the fragments it does
+ * produce are laid end to end: 18691 ms of capture came back as a 3688 ms
+ * replay whose frames sit at a uniform 66.6 ms. Fifteen seconds of stillness is
+ * simply not in the file, so a box placed at a pack time has no matching moment
+ * in that picture — and `replay_clock_offset_ms` cannot help, because an offset
+ * shifts an axis and this one would have to stretch.
+ *
+ * Recovering those instants needs per-frame times the recorder does not have.
+ * `captureCadence` polls a counter and says so ("it cannot see WHEN each frame
+ * arrived"), and the one observer that could — a `requestVideoFrameCallback`
+ * sink — is deliberately attached to the focused display only, because
+ * attaching it costs that display its frame rate. Measured: the display that
+ * ticked managed 10.1 fps with an 897 ms stall while its neighbour held 14.8.
+ *
+ * So this does not repair the axis. It names it. A reader that knows the media
+ * covers a fifth of the capture can decline to place anything on that display's
+ * timeline, instead of placing it confidently in the wrong second.
+ */
+export interface ReplayCoverage {
+  /** Encoded media length, ms. */
+  mediaMs: number
+  /** How long the capture itself ran, ms. */
+  captureMs: number
+  /** mediaMs / captureMs, clamped to 0..1. */
+  ratio: number
+  /** Capture time with no media behind it at all. */
+  missingMs: number
+  /** The media is short enough that its timeline is not the capture's. */
+  compressed: boolean
+}
+
+/** A display may start late or stop early by this much and still be on-clock. */
+const REPLAY_COVERAGE_TOLERANCE_MS = 1_000
+/** Below this share of the capture, the gaps are the story, not the edges. */
+const REPLAY_COVERAGE_MIN_RATIO = 0.9
+
+export function replayCoverage(mediaMs: number, captureMs: number): ReplayCoverage {
+  const media = Number.isFinite(mediaMs) ? Math.max(0, mediaMs) : 0
+  const capture = Number.isFinite(captureMs) ? Math.max(0, captureMs) : 0
+  const missingMs = Math.max(0, capture - media)
+  const ratio = capture > 0 ? Math.min(1, media / capture) : 1
+  return {
+    mediaMs: media,
+    captureMs: capture,
+    ratio,
+    missingMs,
+    compressed:
+      capture > 0
+      && missingMs > REPLAY_COVERAGE_TOLERANCE_MS
+      && ratio < REPLAY_COVERAGE_MIN_RATIO,
+  }
+}

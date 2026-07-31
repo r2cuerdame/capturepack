@@ -10,6 +10,7 @@ import {
   observedReplayClockOffsetMs,
   retainedDisplayReplayMask,
   resolveFocusedReplayTimelineClock,
+  replayCoverage,
   resolvedReplayClockOffsetMs,
 } from '../src/shared/displayClock'
 
@@ -631,6 +632,85 @@ check(
     (display) => display.replay_clock_offset_ms === undefined,
   ),
 )
+
+
+// A DISPLAY WHOSE REPLAY IS NOT ON THE CAPTURE'S CLOCK (#110).
+//
+// Measured on CapturePack_2026-07-31_182908: display 1 recorded 3.3 fps with a
+// 1000 ms stall, and its 18691 ms of capture came back as a 3688 ms replay
+// whose frames sit at a uniform 66.6 ms. Fifteen seconds of stillness is simply
+// not in the file. No offset repairs that — an offset shifts an axis, this one
+// would have to stretch — so what is owed is a reader that knows.
+console.log('\nReplay coverage')
+{
+  const reported = replayCoverage(3_688, 18_691)
+  check(
+    'the reported capture is recognised as off-clock',
+    reported.compressed
+      && reported.missingMs === 15_003
+      && Math.abs(reported.ratio - 0.197) < 0.001,
+    JSON.stringify(reported),
+  )
+  const focused = replayCoverage(18_691, 18_691)
+  check(
+    'a display that covered its capture is not accused of anything',
+    !focused.compressed && focused.ratio === 1 && focused.missingMs === 0,
+    JSON.stringify(focused),
+  )
+  // Starting a moment late or stopping a moment early is not a broken axis.
+  check(
+    'ordinary start/stop edges stay under the tolerance',
+    !replayCoverage(29_000, 29_740).compressed
+      && !replayCoverage(18_000, 18_691).compressed,
+  )
+  check(
+    'a long capture missing a tenth of itself is still on-clock',
+    !replayCoverage(27_000, 29_740).compressed,
+    JSON.stringify(replayCoverage(27_000, 29_740)),
+  )
+  check(
+    'and missing half of itself is not',
+    replayCoverage(14_000, 29_740).compressed,
+  )
+  check(
+    'nothing recorded at all is the clearest case, not a division by zero',
+    replayCoverage(0, 29_740).compressed && replayCoverage(0, 29_740).ratio === 0,
+  )
+  check(
+    'a capture of no length accuses nobody',
+    !replayCoverage(0, 0).compressed && replayCoverage(0, 0).ratio === 1,
+  )
+  check(
+    'media longer than its capture is clamped rather than reported as a surplus',
+    replayCoverage(20_000, 18_691).ratio === 1
+      && replayCoverage(20_000, 18_691).missingMs === 0,
+  )
+  check(
+    'nonsense input is not an accusation',
+    !replayCoverage(Number.NaN, 18_691).compressed === false
+      && replayCoverage(Number.NaN, 18_691).mediaMs === 0,
+  )
+}
+
+// The pack has to SAY it, in its own description of itself, or a reader finds
+// out by placing a box in the wrong second.
+{
+  const report = readFileSync('src/main/report.ts', 'utf8')
+  check(
+    'the display summary reports an off-clock replay',
+    report.includes('replayCoverage(') && report.includes("t('pack.replayCompressed'"),
+  )
+  const session = readFileSync('src/main/session.ts', 'utf8')
+  check(
+    'and the capture log says it beside the cadence that caused it',
+    session.includes('replayCoverage(') && session.includes("is not this capture's clock"),
+  )
+  const i18n = readFileSync('src/shared/i18n.ts', 'utf8')
+  check(
+    'every locale can say it',
+    (i18n.match(/'pack\.replayCompressed'/gu) ?? []).length === 9,
+  )
+}
 
 console.log(`\nresult: ${failed === 0 ? 'OK' : 'FAILED'} — ${passed} passed, ${failed} failed`)
 if (failed > 0) process.exitCode = 1

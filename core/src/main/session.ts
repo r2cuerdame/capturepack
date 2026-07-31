@@ -46,6 +46,7 @@ import {
   observedReplayClockOffsetMs,
   retainedDisplayReplayMask,
   resolveFocusedReplayTimelineClock,
+  replayCoverage,
   resolvedReplayClockOffsetMs,
 } from '../shared/displayClock'
 import {
@@ -1655,9 +1656,19 @@ async function runFlow(settings: Settings): Promise<void> {
       discarded !== undefined && discarded !== null && shortfall !== null && shortfall >= 1
         ? discarded < shortfall * 0.2
         : discarded === 0
+    // AND WHAT THAT DID TO ITS CLOCK (#110). "The screen did not change" is
+    // true and was where the account stopped. What it left out is that the
+    // frames which WERE made are laid end to end, so the media is shorter than
+    // the capture and its timeline is no longer the capture's — the thing that
+    // actually puts a box in the wrong second.
+    const coverage = replayCoverage(d.replayDurationMs ?? 0, replayDurationMs)
+    const axis = coverage.compressed
+      ? `, and ${(coverage.mediaMs / 1000).toFixed(1)}s of media for a ` +
+        `${(coverage.captureMs / 1000).toFixed(1)}s capture is not this capture's clock`
+      : ''
     if (still && (short || stalled)) {
       logInfo(
-        `${line} — the missing frames were never made, not dropped, so this screen simply did not change`,
+        `${line} — the missing frames were never made, not dropped, so this screen simply did not change${axis}`,
       )
     } else if (short || stalled) {
       logWarn(`${line} — the replay is missing time the user was looking at`)

@@ -12,6 +12,7 @@ import type { Annotation, AnnotationsFile, Manifest } from '../shared/types'
 import { annotationsOnDisplay, declaredDisplayIndices, focusedDisplayIndex } from '../shared/types'
 import { computeDisplayNumbers } from '../shared/numbering'
 import { computeKeyframes, keyframeFileName } from '../shared/keyframes'
+import { replayCoverage } from '../shared/displayClock'
 
 const px = (n: number): number => Math.round(n)
 
@@ -145,10 +146,28 @@ export function displaySummaryLines(
   const declared = packDisplayIndices(manifest)
   const lines = [`- **${t('pack.displays')}:** ${displays.length} captured`]
   for (const d of displays) {
+    // A DISPLAY WHOSE REPLAY IS NOT ON THE CAPTURE'S CLOCK SAYS SO (#110).
+    //
+    // A screen nobody touched makes almost no frames, and the ones it makes are
+    // laid end to end — 18.7 s of capture came back as 3.7 s of media. Nothing
+    // downstream can stretch that back, so the pack's own description of itself
+    // is where a reader finds out, rather than after placing a box in the wrong
+    // second.
+    const coverage = replayCoverage(
+      d.replay_duration_ms ?? 0,
+      manifest.media.replay_duration_ms ?? 0,
+    )
+    const compressed =
+      d.replay !== null && coverage.compressed
+        ? ` — ${t('pack.replayCompressed', {
+            media: (coverage.mediaMs / 1000).toFixed(1),
+            capture: (coverage.captureMs / 1000).toFixed(1),
+          })}`
+        : ''
     const replay =
       d.replay === null
         ? 'no replay'
-        : `${((d.replay_duration_ms ?? 0) / 1000).toFixed(1)}s \`${d.replay}\``
+        : `${((d.replay_duration_ms ?? 0) / 1000).toFixed(1)}s \`${d.replay}\`${compressed}`
     const focused = d.focused ? ` (${t('pack.displayFocused')})` : ''
     // How many boxes were drawn on THIS screen — the single most useful thing
     // to know about a display once every display is annotatable (SPEC §8.8).

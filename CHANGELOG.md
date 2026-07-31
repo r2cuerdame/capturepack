@@ -50,6 +50,13 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   back, and it refuses rather than reporting a number when too few frames can be
   identified.
 
+- A display whose screen barely changed now says that its replay is not on the
+  capture's clock. Such a screen makes almost no frames and the ones it makes
+  are laid end to end, so 18.7 s of capture came back as 3.7 s of media whose
+  frames sit at a uniform interval — and no offset can stretch that back. The
+  pack's own description and the capture log now name it, so a reader stops
+  treating the two as the same clock
+  ([#110](https://github.com/r2cuerdame/capturepack/issues/110)).
 - Pressing Check for updates now says so when there is nothing to update, instead
   of changing a tray label for a few seconds and otherwise looking identical to a
   broken updater ([#111](https://github.com/r2cuerdame/capturepack/issues/111)).
