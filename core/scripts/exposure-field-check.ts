@@ -244,16 +244,50 @@ async function measureDisplay(display: DisplayEntry): Promise<void> {
         })
         return { margin, frames: kept.length, latencyMs: alternative.latencyMs }
       })
+    // The estimator that does not need a single frame identified. Always run,
+    // always printed: where identification also succeeds the two are a check on
+    // each other, and where it does not this is the only answer available.
+    // Deliberately wider than the identification path's range and symmetric about
+    // zero: an answer pinned to a boundary is not a peak, and a sweep that cannot
+    // go past its own answer has no way to say so.
+    const fit = fitOffsetByPixelScore(frames, { minMs: -400, maxMs: 400 }, 1)
+    const fitLine = fit === null
+      ? '    pixel-score fit: no usable signal'
+      : `    pixel-score fit: latency ${round(fit.latencyMs)} ms +/- ${round(fit.resolutionMs)}`
+        + ` over ${fit.comparedFrames} frame(s), contrast ${round(fit.contrast * 100, 1)}%`
     const header = `  ${segment.startMs}-${segment.endMs} ms: `
       + `${confident.length}/${frames.length} frames identified`
     if (report.status !== 'measured') {
-      console.log(`${header} — REFUSED: ${report.reason}`)
+      console.log(`${header} — identification REFUSED: ${report.reason}`)
+      console.log(fitLine)
+      // A refusal is still correct: the identification path must not guess.
+      // What has changed is that its refusal no longer ends the measurement.
       check(
         `${label} ${segment.startMs}-${segment.endMs} ms: thin evidence refuses instead of guessing`,
         report.latencyMs === null,
         report.reason,
       )
+      if (fit !== null) {
+        measured += 1
+        check(
+          `${label} ${segment.startMs}-${segment.endMs} ms: the slow drag still yields an offset`,
+          fit.contrast > 0 && Math.abs(fit.latencyMs) < 395,
+          `${round(fit.latencyMs)} ms +/- ${round(fit.resolutionMs)}`,
+        )
+      }
       continue
+    }
+    console.log(fitLine)
+    if (fit !== null) {
+      // Two estimators, one quantity. They are computed from the same pixels
+      // but by different questions, so a disagreement is evidence about the
+      // measurement rather than about the recorder.
+      check(
+        `${label} ${segment.startMs}-${segment.endMs} ms: both estimators agree within their resolutions`,
+        Math.abs(fit.latencyMs - (report.latencyMs ?? 0))
+          <= fit.resolutionMs + (report.resolutionMs ?? 0) + 34,
+        `${round(report.latencyMs)} vs ${round(fit.latencyMs)}`,
+      )
     }
     const uncorrected = residualAfterExposureCorrection(input, 0)
     console.log(
@@ -304,6 +338,120 @@ async function measureDisplay(display: DisplayEntry): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+
+/**
+ * THE OFFSET A SLOW DRAG CAN STILL SHOW (#89).
+ *
+ * The measurement above asks each frame which rectangle it is showing, then
+ * fits an offset to the answers. That needs consecutive observations to be
+ * TELLABLE APART, and a slow drag moves the window a few pixels between them —
+ * so no candidate clears the confidence margin, almost nothing survives, and
+ * the whole segment refuses. Three field packs in a row refused exactly that
+ * way while the owner was dragging deliberately slowly to look at the problem.
+ *
+ * This asks the question the other way round, in pixel space, and never
+ * identifies anything: for each hypothesised offset, score every decoded frame
+ * against the rectangle the context says was there at that frame's time plus
+ * the offset, and total it. One frame's row is nearly flat on a slow drag; a
+ * hundred of them summed is not, because the true offset is the only one that
+ * lines up all of them at once.
+ *
+ * It is a different estimator, not a relaxed gate. Where the identification
+ * path can answer, both are reported and they are expected to agree; where it
+ * cannot, this one still can, and its own plateau says how sharply.
+ */
+interface PixelScoreFit {
+  /**
+   * Positive = the picture is BEHIND its own timestamp, i.e. the frame stamped
+   * t shows the desktop as it was at t - latencyMs. Same sign as
+   * `measureExposureLatency`, so the two can be read against each other.
+   */
+  latencyMs: number
+  resolutionMs: number
+  comparedFrames: number
+  /** Peak total against the flattest total in the sweep — 0 means no signal. */
+  contrast: number
+}
+
+function fitOffsetByPixelScore(
+  frames: readonly InvertedFrame[],
+  search: { minMs: number; maxMs: number },
+  stepMs: number,
+): PixelScoreFit | null {
+  const usable = frames.filter((frame) => frame.scores.length > 0)
+  if (usable.length < 8 || !(stepMs > 0) || !(search.maxMs > search.minMs)) return null
+
+  const totals: Array<{ offsetMs: number; total: number; count: number }> = []
+  const steps = Math.round((search.maxMs - search.minMs) / stepMs)
+  for (let index = 0; index <= steps; index += 1) {
+    const offsetMs = search.minMs + index * stepMs
+    let total = 0
+    let count = 0
+    for (const frame of usable) {
+      const wanted = frame.ptsMs + offsetMs
+      // The nearest OBSERVED rectangle to the hypothesised instant. Nearest,
+      // never interpolated: an interpolated rectangle is a position the window
+      // never occupied, and scoring pixels against one would invent evidence.
+      let nearest: { tMs: number; score: number } | null = null
+      let nearestGap = Number.POSITIVE_INFINITY
+      for (const entry of frame.scores) {
+        const gap = Math.abs(entry.tMs - wanted)
+        if (gap < nearestGap) {
+          nearestGap = gap
+          nearest = entry
+        }
+      }
+      // Outside the scored window this frame has no opinion, and counting it as
+      // zero would reward offsets that simply run off the end of the evidence.
+      if (nearest === null || nearestGap > CANDIDATE_WINDOW_MS) continue
+      total += nearest.score
+      count += 1
+    }
+    if (count >= 8) totals.push({ offsetMs, total, count })
+  }
+  if (totals.length < 3) return null
+
+  // Only offsets every frame could be compared over. A sweep whose ends drop
+  // frames would otherwise prefer whichever end kept the easiest ones.
+  let maxCount = 0
+  for (const entry of totals) if (entry.count > maxCount) maxCount = entry.count
+  const level = totals.filter((entry) => entry.count === maxCount)
+  if (level.length < 3) return null
+
+  let best = level[0] as { offsetMs: number; total: number; count: number }
+  let worst = best
+  for (const entry of level) {
+    if (entry.total > best.total) best = entry
+    if (entry.total < worst.total) worst = entry
+  }
+  const span = best.total - worst.total
+  if (!(span > 0)) return null
+
+  // The plateau is every offset within 2% of the peak, which is the same
+  // "how sharply is this decided" question the identification path answers with
+  // its own plateau. A wide one is a real answer that says it is imprecise.
+  const threshold = best.total - span * 0.02
+  let firstIndex = -1
+  let lastIndex = -1
+  for (let index = 0; index < level.length; index += 1) {
+    const entry = level[index]
+    if (entry === undefined || entry.total < threshold) continue
+    if (firstIndex < 0) firstIndex = index
+    lastIndex = index
+  }
+  const low = level[firstIndex]
+  const high = level[lastIndex]
+  if (low === undefined || high === undefined) return null
+  return {
+    // The sweep hypothesises "this frame shows the rectangle from ptsMs +
+    // offset"; a match at a NEGATIVE offset is a picture lagging its stamp,
+    // which is a POSITIVE latency.
+    latencyMs: -((low.offsetMs + high.offsetMs) / 2),
+    resolutionMs: (high.offsetMs - low.offsetMs) / 2 + stepMs / 2,
+    comparedFrames: maxCount,
+    contrast: span / Math.max(1, Math.abs(best.total)),
+  }
+}
 
 function argValue(flag: string): string | null {
   const index = process.argv.indexOf(flag)
@@ -459,6 +607,18 @@ interface InvertedFrame {
   y: number
   score: number
   secondScore: number | null
+  /**
+   * Every candidate this frame was scored against, kept rather than discarded.
+   *
+   * The argmax above answers "which rectangle is this frame showing", which is
+   * a question a SLOW drag cannot answer: consecutive observations sit a few
+   * pixels apart, no candidate wins by the confidence margin, and the whole
+   * measurement refuses. Three consecutive field packs refused that way.
+   *
+   * The row survives so the offset can be fitted without ever identifying a
+   * single frame — see `fitOffsetByPixelScore`.
+   */
+  scores: Array<{ tMs: number; score: number }>
 }
 
 async function invertFrames(
@@ -495,18 +655,27 @@ async function invertFrames(
       if (ptsMs === undefined || ptsMs < segment.startMs || ptsMs > segment.endMs) return
       let best: InvertedFrame | null = null
       let secondScore: number | null = null
+      const scores: Array<{ tMs: number; score: number }> = []
       for (const candidate of candidates) {
         if (Math.abs(candidate.tMs - ptsMs) > CANDIDATE_WINDOW_MS) continue
         const score = edgeScore(frame, video, scale, candidate.bounds)
+        if (score !== null) scores.push({ tMs: candidate.tMs, score })
         if (score === null) continue
         if (best === null || score > best.score) {
           secondScore = best?.score ?? secondScore
-          best = { ptsMs, x: candidate.bounds.x, y: candidate.bounds.y, score, secondScore: null }
+          best = {
+            ptsMs,
+            x: candidate.bounds.x,
+            y: candidate.bounds.y,
+            score,
+            secondScore: null,
+            scores,
+          }
         } else if (secondScore === null || score > secondScore) {
           secondScore = score
         }
       }
-      if (best !== null) out.push({ ...best, secondScore })
+      if (best !== null) out.push({ ...best, secondScore, scores })
     }
 
     ffmpeg.stdout.on('data', (chunk: Buffer) => {

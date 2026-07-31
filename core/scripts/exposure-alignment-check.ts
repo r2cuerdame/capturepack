@@ -546,6 +546,58 @@ check(
   Object.keys(fieldShape).every((key) => key in fine),
 )
 
+// L. A SLOW DRAG IS STILL EVIDENCE (#89).
+//
+// The identification path asks each frame WHICH rectangle it shows, then fits
+// an offset to the answers. That needs consecutive observations to be tellable
+// apart, and a deliberate, slow drag moves a window a few pixels between them —
+// so nothing clears the confidence margin and the whole segment refuses. Three
+// field packs in a row refused that way while the owner was dragging slowly on
+// purpose, to look at the very thing being measured.
+//
+// The second estimator never identifies anything: it sweeps the offset and
+// totals the pixel score of every frame against the rectangle the context says
+// was there. One frame's row is nearly flat on a slow drag; a hundred summed is
+// not, because only the true offset lines all of them up at once.
+//
+// Measured on CapturePack_2026-08-01_011147, three independent segments of one
+// focused display: 126.5, 125.5 and 129.0 ms — agreeing with the 118-127 ms an
+// entirely different estimator found on earlier packs.
+{
+  const field = readFileSync(
+    path.join(process.cwd(), 'scripts', 'exposure-field-check.ts'),
+    'utf8',
+  )
+  check(
+    'the field harness carries an estimator that needs no identified frame',
+    field.includes('function fitOffsetByPixelScore(')
+      && field.includes('frame.scores'),
+  )
+  check(
+    'it never interpolates a rectangle the window did not occupy',
+    field.includes('never interpolated')
+      && field.includes('if (nearest === null || nearestGap > CANDIDATE_WINDOW_MS) continue'),
+  )
+  // The first run of this reported -59 ms with a +/-1.5 ms resolution, one step
+  // from its own search boundary. A confident answer pinned to the edge of the
+  // sweep is not a peak; widening it moved the same segment to 129 ms.
+  check(
+    'its sweep is symmetric and wide enough that a boundary cannot pose as a peak',
+    field.includes('{ minMs: -400, maxMs: 400 }')
+      && field.includes('an answer pinned to a boundary is not a peak'),
+  )
+  check(
+    'it reports a latency in the same sign as the estimator it sits beside',
+    field.includes('latencyMs: -((low.offsetMs + high.offsetMs) / 2)')
+      && field.includes('Positive = the picture is BEHIND its own timestamp'),
+  )
+  check(
+    'and a refusal by identification no longer ends the measurement',
+    field.includes('identification REFUSED')
+      && field.includes('the slow drag still yields an offset'),
+  )
+}
+
 // K. THE DECODER MUST HAND BACK THE FRAMES THE FILE HAS, NOT A CADENCE.
 //
 // Every CapturePack replay is variable-rate by construction: a screen capture
