@@ -50,6 +50,15 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   back, and it refuses rather than reporting a number when too few frames can be
   identified.
 
+- A picked object keeps its box when its window is dragged to another monitor.
+  The box used to stop following at the seam and sit there for the rest of its
+  lifetime while the video carried the window away, and the object could not be
+  picked on the screen it had moved to. Windows applies a display's DPI to a
+  window only when the drag ends, so mid-drag the window is seen on the new
+  screen at the size it still physically is — which was read as a resize and
+  ended the track ([#107](https://github.com/r2cuerdame/capturepack/issues/107)).
+  A window that genuinely resizes still ends it, because its children may have
+  been laid out again.
 - Re-editing a saved CapturePack now records what the editor did. Both capture
   flows already forwarded the editor's own diagnostics to the log and the
   re-edit flow never did, so the one session a problem is usually reported from

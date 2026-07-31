@@ -80,14 +80,30 @@ function clipped(
   }
 }
 
+/**
+ * A window's size is meaningful to about one DIP, not one pixel.
+ *
+ * `expectedSize` is the anchor's pixels divided by one display's scale and
+ * multiplied by another's, and the operating system rounds its own conversion
+ * independently. A 1439 px window on a 1.5x screen is 959.33 DIP, and Windows
+ * reports it as 958 px on the 1x screen — 1.33 px from what this arithmetic
+ * expects, which a one-pixel tolerance calls a resize. So the slack is one DIP
+ * of the target display plus a rounding pixel at each end.
+ */
+function sizeTolerance(scale: number): number {
+  return scale + 1
+}
+
 function compatibleVisibleAxis(
   position: number,
   visibleSize: number,
   expectedSize: number,
   displaySize: number | undefined,
+  scale: number,
 ): boolean {
-  if (Math.abs(visibleSize - expectedSize) <= 1) return true
-  if (visibleSize > expectedSize + 1 || displaySize === undefined) return false
+  const tolerance = sizeTolerance(scale)
+  if (Math.abs(visibleSize - expectedSize) <= tolerance) return true
+  if (visibleSize > expectedSize + tolerance || displaySize === undefined) return false
   return position <= 1 || position + visibleSize >= displaySize - 1
 }
 
@@ -130,32 +146,44 @@ export function projectControlTrack(
   for (const sample of samples) {
     const targetDisplay = anchor.displays.find((display) => display.index === sample.display)
     const targetScale = positiveScale(targetDisplay?.pixelsPerDip)
-    const expectedSurfaceWidth = surfaceWidthDip * targetScale
-    const expectedSurfaceHeight = surfaceHeightDip * targetScale
-    if (
-      !compatibleVisibleAxis(
-        sample.x,
-        sample.width,
-        expectedSurfaceWidth,
-        targetDisplay?.width,
-      )
-      || !compatibleVisibleAxis(
-        sample.y,
-        sample.height,
-        expectedSurfaceHeight,
-        targetDisplay?.height,
-      )
-    ) {
-      break
-    }
+    // A WINDOW BEING DRAGGED ACROSS A DPI BOUNDARY HAS NOT BEEN RESCALED YET (#107).
+    //
+    // Expressing the owner's DIP size at the TARGET display's scale assumes
+    // Windows has already applied that display's DPI to the window. It applies
+    // it when the drag ENDS, so for the whole time the window straddles the
+    // seam — and until it is dropped — it is observed on the new screen at the
+    // size it still physically is. That is not a re-layout, and reading it as
+    // one ended the projection permanently and took every later sample with it:
+    // measured on a 1439x951 window crossing from a 1.5x screen to a 1x one,
+    // 4525 ms of a 10 s box was discarded while the window went on being
+    // observed the whole time.
+    //
+    // So both readings of "the same window" are allowed, and whichever the
+    // observation actually matches is the one the child is projected through —
+    // the child of an unrescaled owner is unrescaled too. A size that matches
+    // NEITHER is a real change, and still ends the projection below.
+    const ownerScale = compatibleOwnerScale(
+      sample,
+      { widthDip: surfaceWidthDip, heightDip: surfaceHeightDip },
+      targetDisplay,
+      candidateScales(
+        targetScale,
+        sourceScale,
+        anchor.displays,
+        touchesEdge(sample, targetDisplay),
+      ),
+    )
+    if (ownerScale === null) break
+    const expectedSurfaceWidth = surfaceWidthDip * ownerScale
+    const expectedSurfaceHeight = surfaceHeightDip * ownerScale
     const surfaceX = inferredSurfaceOrigin(sample.x, sample.width, expectedSurfaceWidth)
     const surfaceY = inferredSurfaceOrigin(sample.y, sample.height, expectedSurfaceHeight)
     const rect = clipped(
       {
-        x: surfaceX + offsetDipX * targetScale,
-        y: surfaceY + offsetDipY * targetScale,
-        width: widthDip * targetScale,
-        height: heightDip * targetScale,
+        x: surfaceX + offsetDipX * ownerScale,
+        y: surfaceY + offsetDipY * ownerScale,
+        width: widthDip * ownerScale,
+        height: heightDip * ownerScale,
       },
       targetDisplay,
     )
@@ -164,4 +192,83 @@ export function projectControlTrack(
     }
   }
   return projected
+}
+
+/**
+ * The DPIs this window could be carrying, most likely first.
+ *
+ * A straddling window is rescaled as a whole, so BOTH halves report the DPI of
+ * whichever display Windows has decided it now belongs to — the half still on
+ * the 1.5x screen is 633 px tall while the window is being treated as a 1x
+ * window. Restricting the candidates to the sample's own display and the pick's
+ * display therefore still ends the track at the seam, one sample later than
+ * before. Any DPI on this desktop is a legitimate reading; a size that matches
+ * none of them is the resize the projection must stop at.
+ */
+function candidateScales(
+  targetScale: number,
+  sourceScale: number,
+  displays: readonly TrackDisplayGeometry[],
+  crossing: boolean,
+): number[] {
+  // A window sitting wholly inside one screen is not being rescaled, so its own
+  // display's DPI is the only honest reading and a size that disagrees is the
+  // resize this projection must stop at. Widening the candidates there would
+  // let a real resize pass whenever the new size happened to match some other
+  // screen's DPI.
+  if (!crossing) return [targetScale]
+  const ordered = [targetScale, sourceScale]
+  for (const display of displays) ordered.push(positiveScale(display.pixelsPerDip))
+  return [...new Set(ordered)]
+}
+
+/** Whether this observation is clipped by a screen edge — the window is crossing. */
+function touchesEdge(
+  sample: ObjectTrackSample,
+  display: TrackDisplayGeometry | undefined,
+): boolean {
+  if (display === undefined) return false
+  return (
+    sample.x <= 1
+    || sample.y <= 1
+    || sample.x + sample.width >= display.width - 1
+    || sample.y + sample.height >= display.height - 1
+  )
+}
+
+/**
+ * The scale at which this observation is still the same, unresized window.
+ *
+ * Candidates are tried in order and the first that explains BOTH axes wins, so
+ * a window that has settled at the new display's DPI is read that way and one
+ * still carrying its old physical size is read that way. `null` means the
+ * observation is not this window's size under any of them.
+ */
+function compatibleOwnerScale(
+  sample: ObjectTrackSample,
+  surface: { widthDip: number; heightDip: number },
+  display: TrackDisplayGeometry | undefined,
+  candidates: readonly number[],
+): number | null {
+  for (const scale of candidates) {
+    if (
+      compatibleVisibleAxis(
+        sample.x,
+        sample.width,
+        surface.widthDip * scale,
+        display?.width,
+        scale,
+      )
+      && compatibleVisibleAxis(
+        sample.y,
+        sample.height,
+        surface.heightDip * scale,
+        display?.height,
+        scale,
+      )
+    ) {
+      return scale
+    }
+  }
+  return null
 }
