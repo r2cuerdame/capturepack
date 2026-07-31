@@ -57,14 +57,31 @@ clock comparison the product already runs calls that fixture aligned to 2.0 ms
 while correlating position names 60.0 ms. The disagreement is not on the time
 axis.
 
-Read a real landmark out of decoded replay pixels and the context ring, feed it
-to `measureExposureLatency`, publish the result as its own per-display quantity
-— never by overloading `replay_clock_offset_ms`, whose `focused => 0` is correct
-by definition — and apply it through `exposureCorrectedContextTimeMs` at exactly
-one place. The check counts application sites and fails above one, because
-applying it twice is measured to be exactly as wrong as not applying it.
-A stationary or barely-moving capture must keep returning `insufficient-motion`
-rather than 0 ms.
+`npm run qa:exposure-field -- --pack <dir>` then measured it on real evidence.
+On the pack that opened the issue the focused display reads **127.0 ms ± 0.5**
+and **118.0 ms ± 0.5** across two independent drags, and applying that collapses
+the overlay's positional error from about **550 px to 19–97 px**. The
+non-focused display refuses on `insufficient-samples` rather than guessing from
+one identified frame. The harness is read-only and needs ffmpeg on PATH.
+
+What is left is **not** a measurement question, and it should not be settled by
+an agent. The only single save-side funnel is `frozenRingObservations`
+(`core/src/main/context/ringObservations.ts:441`), where one `t` is both the ring
+query and the published label; relabelling there reaches the pack, the live
+editor, every drawn box and the burned-in video at once, and is correct for MCP
+and third-party readers with no changes. But it is irreversible per pack, and
+one observation record carries entries for every display it overlaps while the
+latency is per-display. Read the next order in `docs/HANDOFF.md` and ask the
+owner.
+
+Whatever is chosen: publish the value as its own per-display quantity — never by
+overloading `replay_clock_offset_ms`, whose `focused => 0` is correct by
+definition — apply it through `exposureCorrectedContextTimeMs` at exactly one
+place (the check counts sites and fails above one, because applying it twice is
+measured to be exactly as wrong as not applying it), and do not add it on top of
+the `frameAgeMs` leg already folded into every sample time at
+`surfaceLane.ts:895`. A stationary or barely-moving capture must keep returning
+`insufficient-motion` rather than 0 ms.
 
 Before claiming a change works:
 

@@ -349,7 +349,85 @@ check(
 )
 
 // ---------------------------------------------------------------------------
-// H. The rules that make a wrong fix impossible to land quietly.
+// H. The shape real evidence actually has.
+//
+// Both of these came from running the measurement against
+// C:\CapturePack\CapturePack_2026-07-30_230217 rather than from reasoning, and
+// neither could have been found from a fixture that moves for its whole
+// duration and keeps every frame.
+// ---------------------------------------------------------------------------
+
+// A ring files on its own cadence for the whole capture; the window is dragged
+// for a fraction of a second in the middle. Most consecutive observations are
+// therefore identical, and a median speed over ALL steps is 0.
+const RING_INTERVAL_MS = 28
+const REPLAY_INTERVAL_MS = 67
+const briefDrag = syntheticMovingLandmark({
+  velocityXPxPerMs: DRAG_PX_PER_MS,
+  exposureLatencyMs: TRUE_LATENCY_MS,
+  contextIntervalMs: RING_INTERVAL_MS,
+  frameIntervalMs: REPLAY_INTERVAL_MS,
+  durationMs: 3000,
+  motionWindowMs: { startMs: 1000, endMs: 1300 },
+})
+const heldSteps = briefDrag.contextObservations.filter((observation, index, all) => {
+  const previous = all[index - 1]
+  return previous !== undefined && previous.x === observation.x && previous.y === observation.y
+}).length
+const briefReport = measureExposureLatency(briefDrag)
+console.log(
+  `\nH. ring at ${RING_INTERVAL_MS} ms, 300 ms of drag:`
+    + ` ${heldSteps}/${briefDrag.contextObservations.length} steps held,`
+    + ` latency ${round(briefReport.latencyMs)} ms +/- ${round(briefReport.resolutionMs)}`
+    + ` at ${round(briefReport.speedPxPerMs, 2)} px/ms`,
+)
+check(
+  'held ring samples outnumber moving ones, as they do on a real capture',
+  heldSteps > briefDrag.contextObservations.length / 2,
+  `${heldSteps} of ${briefDrag.contextObservations.length}`,
+)
+check(
+  'a brief drag inside a mostly still capture is still measurable',
+  briefReport.status === 'measured'
+    && briefReport.latencyMs !== null
+    && briefReport.resolutionMs !== null
+    && Math.abs(briefReport.latencyMs - TRUE_LATENCY_MS) <= briefReport.resolutionMs,
+  `${round(briefReport.latencyMs)} +/- ${round(briefReport.resolutionMs)}`,
+)
+check(
+  'reported speed describes the drag, not the average of a mostly still window',
+  briefReport.speedPxPerMs !== null
+    && Math.abs(briefReport.speedPxPerMs - DRAG_PX_PER_MS) <= 0.2,
+  `${round(briefReport.speedPxPerMs, 2)} px/ms`,
+)
+
+// A harness that discards frames it could not identify hands over a subset. If
+// the frame interval is derived from that subset it grows, and the one-frame
+// acceptance boundary is then measured against a rate the recorder never ran at.
+const everyThird = {
+  ...fine,
+  decodedFrames: fine.decodedFrames.filter((_frame, index) => index % 3 === 0),
+}
+const derivedFromSubset = measureExposureLatency(everyThird)
+const toldTheTruth = measureExposureLatency({ ...everyThird, frameIntervalMs: FRAME_MS })
+console.log(
+  `   filtered subset: derived interval ${round(derivedFromSubset.frameIntervalMs)} ms`
+    + ` vs declared ${round(toldTheTruth.frameIntervalMs)} ms`,
+)
+check(
+  'dropping unidentifiable frames inflates the interval derived from what is left',
+  derivedFromSubset.frameIntervalMs !== null
+    && derivedFromSubset.frameIntervalMs >= FRAME_MS * 2.5,
+  `${round(derivedFromSubset.frameIntervalMs)} ms from a subset of a ${round(FRAME_MS)} ms replay`,
+)
+check(
+  'the declared replay interval overrides the one derived from a subset',
+  toldTheTruth.frameIntervalMs === FRAME_MS
+    && toldTheTruth.latencyMs === derivedFromSubset.latencyMs,
+)
+
+// ---------------------------------------------------------------------------
+// I. The rules that make a wrong fix impossible to land quietly.
 // ---------------------------------------------------------------------------
 
 const moduleSource = readFileSync('src/shared/exposureAlignment.ts', 'utf8')
@@ -378,7 +456,7 @@ check(
 // There must be exactly one subtraction site, forever. Two is a double
 // correction that looks like a smaller bug instead of a bigger one.
 const applicationSites = applicationSiteCount()
-console.log(`\nH. exposure correction is applied at ${applicationSites} place(s) in src/`)
+console.log(`\nI. exposure correction is applied at ${applicationSites} place(s) in src/`)
 check(
   'the exposure correction has at most one application site in the product',
   applicationSites <= 1,
@@ -418,7 +496,7 @@ function walk(directory: string): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// I. What the field harness has to produce, stated as a shape.
+// J. What the field harness has to produce, stated as a shape.
 // ---------------------------------------------------------------------------
 
 const fieldShape: ExposureAlignmentInput = {

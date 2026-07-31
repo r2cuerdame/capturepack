@@ -99,6 +99,22 @@ it through both measurements: the existing clock comparison calls it aligned to
 does not live on the time axis. Any future claim that #89 is fixed has to move
 that second number, not the first.
 
+**The measured number.** `npm run qa:exposure-field -- --pack <dir>` reads a
+saved pack, recovers the landmark's rectangle over time from the windows-context
+timeline, decodes the replay with ffmpeg, and inverts each frame against the
+rectangles that were *observed*. On the pack above:
+
+| display | segment | frames identified | exposure latency | positional error |
+|---|---|---|---|---|
+| 2 (focused) | 7110–9365 ms | 18/34 | **127.0 ms ± 0.5** | 551 px → 97 px |
+| 2 (focused) | 9916–12367 ms | 11/36 | **118.0 ms ± 0.5** | 518 px → 19 px |
+| 1 | 6555–7257 ms | 1/11 | *refused* | — |
+| 1 | 9228–10126 ms | 1/13 | *refused* | — |
+
+Two independent drags in one capture agree to 9 ms. Display 1 refuses on
+`insufficient-samples` rather than guessing from one frame. The harness is
+read-only and needs ffmpeg on PATH, so it is a `qa:` script, not a gate step.
+
 **Which display is which, because the numbering has already been mixed up
 once.** Read it from that pack's `manifest.json` rather than from prose:
 
@@ -188,6 +204,11 @@ npm run qa:video
 # for twelve seconds, so it needs a real display. The gate runs its wire half
 # (`check:chrome-bridge`, --wire-only) and says so out loud when it skips.
 npm run qa:chrome-bridge
+
+# Measure desktop pixel exposure (#89) from a saved pack. NOT in the gate: it
+# needs ffmpeg/ffprobe on PATH and a pack containing a dragged window. Read-only
+# — it opens the pack, decodes its replay and writes nothing back.
+npm run qa:exposure-field -- --pack C:\_CapturePack\CapturePack_YYYY-MM-DD_HHMMSS
 
 # Audit a real pack without mutating it.
 npm run qa:rc -- --pack C:\_CapturePack\CapturePack_YYYY-MM-DD_HHMMSS
@@ -286,6 +307,12 @@ record and [#104](https://github.com/r2cuerdame/capturepack/issues/104) /
   way by 53-125 ms the moment a real exposure latency reaches that term.
   `check:sync` drives a deliberately large age and fails by exactly one age
   without it.
+- **#89 has a number.** `qa:exposure-field` measures desktop pixel exposure from
+  a saved pack: **127.0 ms and 118.0 ms** on the focused display of the pack that
+  opened the issue, from two independent drags, collapsing the overlay's
+  positional error from about 550 px to 19–97 px. The non-focused display
+  refuses on thin evidence. Where the correction is applied is now an owner
+  decision — see the next order.
 - `check:exposure-alignment` is the moving fixture #89 was missing. It measures
   desktop pixel exposure by correlating *position* rather than time, recovers an
   injected 60 ms to **60.0 ms ± 0.5**, keeps two displays on 60 ms and 95 ms
@@ -302,24 +329,43 @@ armed, could not arm, or armed and the click went elsewhere.
 
 ## Suggested next order
 
-1. Feed real evidence into `measureExposureLatency`. The fixture proves the
-   arithmetic and the refusals; nothing yet reads a landmark out of decoded
-   replay pixels and a moving window out of the context ring on this machine.
-   That harness is the next thing that produces a number for a real display.
-2. Publish the measured mapping as its own per-display quantity — never by
-   overloading `replay_clock_offset_ms`, whose `focused => 0` is correct by
-   definition — and apply it through `exposureCorrectedContextTimeMs` at exactly
-   one place. `check:exposure-alignment` counts the application sites and fails
-   above one. Do not infer the mapping from flush completion, IPC response, or a
-   stationary frame.
-3. Make the one-shot startup calibration retry when motion evidence appears. It
+1. **Ask the owner where the correction goes.** This is not a measurement
+   question any more and it should not be decided by an agent:
+   - The only single save-side funnel is `frozenRingObservations`
+     (`core/src/main/context/ringObservations.ts:441`), where one `t` is both the
+     ring query (`surfacesAt(t)`) and the published label (`Math.round(t)`).
+     Relabelling there reaches the persisted timeline, the live editor ring,
+     every track sample, every drawn box and the burned-in annotated video with
+     one call, and is correct for MCP and third-party SPEC readers with no
+     changes at all.
+   - Correcting on the read side needs at least two sites — `frameAt` for
+     picking and `trackOf` for drawing (`core/src/main/context/session.ts:715`
+     and `:651`) — which `check:exposure-alignment` already forbids, and it still
+     leaves `replay_annotated` uncorrected because that renders in a separate
+     process off `metadata.mediaTime`.
+   - Save-time correction is **irreversible per pack**: the residual the
+     measurement needs is gone, so a pack written with a wrong number cannot be
+     re-measured.
+   - One `ContextObservation` at one `tMs` carries entries for **every** display
+     it overlaps, while the latency is per-display: 127 ms on display 2 and
+     unmeasurable on display 1 in the same capture. There is no per-display time
+     field in an observation or in a track sample.
+2. Whatever is chosen, apply it through `exposureCorrectedContextTimeMs` at
+   exactly one place and publish the measured value as its own per-display
+   manifest quantity — never by overloading `replay_clock_offset_ms`, whose
+   `focused => 0` is correct by definition.
+3. Do not add the measured latency on top of the age term without subtracting
+   what is already there. `surfaceLane.ts:895` files every ticked observation at
+   `frameMs + delayMs + lag + (ageMs ?? 0)`, and the converted and held paths add
+   `frameAgeShiftMs`. That leg is about 1 ms today and would be counted twice.
+4. Make the one-shot startup calibration retry when motion evidence appears. It
    runs once against a still desktop today, which is why both displays reported
    `insufficient-motion-transitions`.
-4. Exercise #62 on a genuinely failing backend and require a decodable replay,
+5. Exercise #62 on a genuinely failing backend and require a decodable replay,
    not a screenshot-only result or a recreated recorder on the same dead stream.
-5. Add the real Electron/Windows E2E layer tracked by #63 while preserving the
+6. Add the real Electron/Windows E2E layer tracked by #63 while preserving the
    existing deterministic gate.
-6. Re-run the manual matrix in `docs/QA.md` and record actual hardware, duration,
+7. Re-run the manual matrix in `docs/QA.md` and record actual hardware, duration,
    FPS, gaps, CPU, memory, process, and media-decode evidence.
 
 Lead reports to the owner with the measured outcome in Korean. If something

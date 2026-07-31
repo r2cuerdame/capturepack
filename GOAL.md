@@ -214,10 +214,59 @@ The refusals matter as much as the number, because #89 is easy to "fix" wrongly:
 - nothing in the module reads `replay_clock_offset_ms`. Exposure is its own
   quantity, or `focused => 0` stops being true.
 
-What the fixture does **not** do is produce a number for a real display. It
-proves the arithmetic and the refusals. Reading a landmark out of decoded replay
-pixels and out of the context ring on this machine is the next step, and until
-that exists #89 stays open.
+**The number, at last.** `qa:exposure-field` reads a saved pack, recovers the
+landmark's rectangle over time from the windows-context timeline, decodes the
+replay with ffmpeg, and inverts each frame against the rectangles that were
+**observed** — never a freehand detection, never an interpolation. Run against
+the pack that opened #89, `CapturePack_2026-07-30_230217`:
+
+```
+display 2 (focused): 1920x1080 replay of a 3840x2160 desktop
+  7110-9365  ms  18/34 frames identified  127.0 ms +/- 0.5   551 px -> 97 px
+  9916-12367 ms  11/36 frames identified  118.0 ms +/- 0.5   518 px -> 19 px
+display 1: 1/11 and 1/13 frames identified — REFUSED: insufficient-samples
+```
+
+Two independent drags in one capture agree to 9 ms, and applying what they
+measure collapses the overlay's positional error from about **550 px to 19–97
+px**. Those are the 526 px / 178 px / 776 px spatial errors already recorded
+above, now with a cause attached. The non-focused display refuses rather than
+guessing from one identified frame, which is the behaviour that matters more
+than the number.
+
+The measurement is **read-only** — it opens a pack, decodes it and writes
+nothing — and it needs ffmpeg, so it is a `qa:` script and not a gate step.
+
+**Two defects the fixture could not have found**, both fixed and now gated:
+
+- A real ring files on its own cadence whether or not anything moved, so on a
+  real capture 95 of 108 consecutive observations are identical and a median
+  speed over all steps is **0** — the measurement refused a capture that plainly
+  contained a drag. The speed is now the median over steps that actually moved.
+- A harness drops frames it could not identify, and the frame interval derived
+  from what survived grows: 16.7 ms became 50 ms on a subset. The one-frame
+  acceptance boundary was then being measured against a rate the recorder never
+  ran at. The replay's declared interval is now passed in.
+
+What remains is not measurement. It is where the correction goes, and that is a
+decision about what a saved pack means:
+
+- The single save-side funnel is `frozenRingObservations`, where one `t` is both
+  the ring query and the published label. Relabelling there reaches the
+  persisted timeline, the live editor ring, every track sample, every drawn box
+  and the burned-in annotated video with one call.
+- Correcting on the read side needs at least two sites (`frameAt` for picking,
+  `trackOf` for drawing), which the one-application-site rule already forbids,
+  and it would still leave the annotated video and every third-party SPEC reader
+  uncorrected.
+- But correcting at save time is **irreversible per pack**: the residual this
+  measurement needs is gone, so a pack saved with a wrong number cannot be
+  re-measured.
+- And an observation is not per-display. One record at one `tMs` carries entries
+  for every display it overlaps, while the latency is per-display — 127 ms on
+  display 2 and unmeasurable on display 1 in the same capture.
+
+That last point has no obviously right answer and is the owner's call.
 
 ---
 

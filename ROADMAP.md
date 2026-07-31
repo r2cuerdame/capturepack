@@ -60,12 +60,18 @@ verification history. These are the current additions and next gates:
   instead of 6% of them, and a deterministic moving fixture measures desktop
   pixel exposure by correlating position, which is the only axis on which the
   failure is visible at all.
-- Next: read a real moving landmark out of decoded replay pixels and the context
-  ring, publish the resulting per-display exposure latency as its own quantity,
-  and apply it at exactly one place; recalibrate when motion evidence appears.
-  Alongside that, continue physical mixed-DPI/long-running recording,
-  save/reopen, installer/update and Chrome reconnection QA, and design an
-  explicit sanitized-sharing path.
+  That measurement now runs against real evidence: on the capture that opened
+  #89 the focused display reads 127 ms and 118 ms across two independent drags,
+  and applying it collapses the overlay's positional error from about 550 px to
+  19–97 px. The non-focused display refuses rather than guessing.
+- Next: decide where that correction is applied, which is a decision about what
+  a saved pack means rather than a measurement — the single save-side funnel
+  reaches the pack, the editor and the burned-in video at once but is
+  irreversible per pack, while one observation record spans displays whose
+  latencies differ. Then recalibrate when motion evidence appears. Alongside
+  that, continue physical mixed-DPI/long-running recording, save/reopen,
+  installer/update and Chrome reconnection QA, and design an explicit
+  sanitized-sharing path.
 
 ---
 

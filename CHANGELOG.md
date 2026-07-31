@@ -43,6 +43,12 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   capture, keeps each display's latency separate, and fails if the correction is
   ever applied in more than one place
   ([#89](https://github.com/r2cuerdame/capturepack/issues/89)).
+- `npm run qa:exposure-field -- --pack <dir>` measures that latency from a saved
+  CapturePack: it recovers the landmark's rectangle over time from the recorded
+  window context, decodes the replay, and matches each frame against the
+  rectangles that were actually observed. It reads the pack and writes nothing
+  back, and it refuses rather than reporting a number when too few frames can be
+  identified.
 
 ### Changed
 

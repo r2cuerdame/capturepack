@@ -91,6 +91,7 @@
     "qa:checks": "node scripts/qa-gate.mjs --skip-build",
     "qa:video": "node scripts/qa-gate.mjs --skip-build --profile video",
     "qa:chrome-bridge": "node scripts/chrome-bridge-check.mjs",
+    "qa:exposure-field": "node scripts/exposure-field-check.mjs",
     "qa:native-replay-field": "node scripts/native-replay-fallback-e2e.mjs",
     "qa:dxgi-timing-reference": "node scripts/dxgi-timing-reference-field-check.mjs",
     "qa:pack": "node scripts/pack-forensics.mjs",

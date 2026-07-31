@@ -63,6 +63,15 @@ export interface ExposureAlignmentInput {
   stepMs?: number
   /** A landmark that travels less than this over the run cannot time anything. */
   minimumTravelPx?: number
+  /**
+   * The replay's own declared frame interval.
+   *
+   * Pass it whenever `decodedFrames` is a filtered subset - a harness that
+   * drops frames it could not identify inflates the interval derived from what
+   * survived, and the one-frame acceptance boundary would then be measured
+   * against a frame rate the recorder never ran at.
+   */
+  frameIntervalMs?: number
 }
 
 export type ExposureAlignmentReason =
@@ -85,9 +94,16 @@ export interface ExposureAlignmentReport {
   residualPx: number | null
   /** residualPx expressed in ms at the observed speed. */
   residualMs: number | null
-  /** Median observed landmark speed, px/ms. */
+  /**
+   * Median landmark speed across the steps on which it ACTUALLY MOVED, px/ms.
+   *
+   * A real context ring files a sample on its own cadence whether or not
+   * anything moved, so most consecutive observations of a briefly dragged
+   * window are identical. A median over all steps is therefore 0 on evidence
+   * that plainly contains motion, and would refuse a measurable capture.
+   */
   speedPxPerMs: number | null
-  /** Median declared PTS interval, ms. */
+  /** Declared PTS interval of the replay, ms. */
   frameIntervalMs: number | null
   comparedFrameCount: number
   /** The acceptance boundary: more than one frame of correlation error fails. */
@@ -161,7 +177,8 @@ export function measureExposureLatency(
   const contextObservations = input.contextObservations
   const decodedFrames = input.decodedFrames
   const speedPxPerMs = medianSpeedPxPerMs(contextObservations)
-  const frameIntervalMs = medianIntervalMs(decodedFrames.map((frame) => frame.ptsMs))
+  const frameIntervalMs = input.frameIntervalMs
+    ?? medianIntervalMs(decodedFrames.map((frame) => frame.ptsMs))
   const base = {
     latencyMs: null,
     resolutionMs: null,
@@ -292,6 +309,15 @@ function observedTravelPx(observations: readonly LandmarkObservation[]): number 
   return travel
 }
 
+/**
+ * Median speed over the steps the landmark actually moved on.
+ *
+ * Steps with no displacement are held samples, not evidence of standing still
+ * for the purpose of timing: a ring filing at 36 Hz produces several of them
+ * between every real move. Counting them would drag the median to 0 and refuse
+ * a capture that contains a perfectly good drag. If NO step moved there is
+ * nothing to take a median of, and the caller refuses on that.
+ */
 function medianSpeedPxPerMs(observations: readonly LandmarkObservation[]): number | null {
   const speeds: number[] = []
   for (let index = 1; index < observations.length; index += 1) {
@@ -300,7 +326,9 @@ function medianSpeedPxPerMs(observations: readonly LandmarkObservation[]): numbe
     if (previous === undefined || current === undefined) continue
     const deltaMs = current.tMs - previous.tMs
     if (!(deltaMs > 0)) continue
-    speeds.push(Math.hypot(current.x - previous.x, current.y - previous.y) / deltaMs)
+    const travelPx = Math.hypot(current.x - previous.x, current.y - previous.y)
+    if (travelPx <= 0) continue
+    speeds.push(travelPx / deltaMs)
   }
   return median(speeds)
 }
@@ -358,6 +386,14 @@ export interface SyntheticMotionOptions {
   /** Deterministic +/- jitter applied to context sample times, ms. */
   contextJitterMs?: number
   seed?: number
+  /**
+   * Restrict the landmark's travel to this window, holding it still outside.
+   *
+   * This is the shape real evidence has: a ring files on its own cadence for
+   * the whole capture and the window is dragged for a fraction of a second in
+   * the middle of it, so most consecutive observations are identical.
+   */
+  motionWindowMs?: { startMs: number; endMs: number }
 }
 
 /**
@@ -379,10 +415,17 @@ export function syntheticMovingLandmark(
   const jitterMs = options.contextJitterMs ?? 0
   let seed = options.seed ?? 1
 
-  const positionAt = (worldMs: number): { x: number; y: number } => ({
-    x: Math.round(originX + velocityX * worldMs),
-    y: Math.round(originY + velocityY * worldMs),
-  })
+  const motion = options.motionWindowMs
+  const positionAt = (worldMs: number): { x: number; y: number } => {
+    let travelledMs = worldMs
+    if (motion !== undefined) {
+      travelledMs = Math.min(Math.max(worldMs, motion.startMs), motion.endMs) - motion.startMs
+    }
+    return {
+      x: Math.round(originX + velocityX * travelledMs),
+      y: Math.round(originY + velocityY * travelledMs),
+    }
+  }
 
   const contextObservations: LandmarkObservation[] = []
   for (let tMs = 0; tMs <= options.durationMs; tMs += options.contextIntervalMs) {
