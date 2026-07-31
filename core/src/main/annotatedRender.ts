@@ -483,7 +483,12 @@ export async function renderTrimmedReplay(
  */
 export async function measureExposureLatency(
   job: ExposureMeasureJob,
-): Promise<{ latencyMs: number; resolutionMs: number; frames: number } | null> {
+): Promise<{
+  latencyMs: number
+  resolutionMs: number
+  frames: number
+  contrast: number
+} | null> {
   const candidates = job.candidates
   if (candidates.length < MINIMUM_MEASURE_CANDIDATES) return null
   const spanMs =
@@ -530,6 +535,9 @@ export async function measureExposureLatency(
     latencyMs: fit.latencyMs,
     resolutionMs: fit.resolutionMs,
     frames: fit.comparedFrames,
+    // How sharply the sweep decided. A flat total is an answer the evidence did
+    // not really give, and reporting the number without it would hide that.
+    contrast: fit.contrast,
   }
 }
 

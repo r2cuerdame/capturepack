@@ -24,6 +24,7 @@ import {
   shiftObservationsToPicture,
   rectangleEdgeScore,
   isApplicableExposureLatency,
+  movingRanges,
   MAXIMUM_APPLICABLE_LATENCY_MS,
   type ExposureAlignmentInput,
   type FrameScoreRow,
@@ -1034,6 +1035,89 @@ console.log('\nO. shifting one annotation onto the picture')
     render.includes('MINIMUM_MEASURE_CANDIDATES')
       && render.includes('MINIMUM_MEASURE_SPAN_MS')
       && render.includes('if (fit === null || !isApplicableExposureLatency(fit.latencyMs)) return null'),
+  )
+}
+
+// P. A STILL WINDOW IS NOT EVIDENCE, AND AVERAGING IT IN IS WORSE (#89).
+//
+// A frame of a stationary window cannot say when it was taken: every candidate
+// near it is the same rectangle, so every hypothesised offset scores the same.
+// Such frames do not merely fail to help - averaged in they flatten the peak
+// and drag the answer toward zero, in proportion to how much of the track was
+// standing still.
+//
+// Measured, on two consecutive real captures that ran the fit over a whole
+// track without this restriction:
+//
+//   CapturePack_2026-08-01_023151   48% of steps moving  ->  77.5 ms
+//   CapturePack_2026-08-01_023253   33% of steps moving  ->  37.0 ms
+//
+// against ~127 ms from the same estimator restricted to motion. The answer was
+// tracking the fraction of the track that was still.
+//
+// The offline harness never hit this: its observations come from a
+// change-driven timeline, so a pause IS a time gap and its segmenter splits
+// there. An annotation's samples are recorded at the ring's cadence whether the
+// window moves or not, so stillness has to be found in the POSITIONS.
+console.log('\nP. finding the stretches that actually moved')
+{
+  const at = (t: number, x: number): { t_ms: number; x: number; y: number } =>
+    ({ t_ms: t, x, y: 0 })
+  // Move 500 px, stand still for a second, move 500 px again.
+  const track: Array<{ t_ms: number; x: number; y: number }> = []
+  let t = 0
+  for (let i = 0; i <= 50; i += 1) track.push(at((t += 10), i * 10))
+  for (let i = 0; i < 100; i += 1) track.push(at((t += 10), 500))
+  for (let i = 0; i <= 50; i += 1) track.push(at((t += 10), 500 + i * 10))
+  const ranges = movingRanges(track, { minTravelPx: 300, pauseMs: 400 })
+  check(
+    'a pause splits one drag into the two that surround it',
+    ranges.length === 2,
+    JSON.stringify(ranges.map((r) => `${String(r.startMs)}-${String(r.endMs)}`)),
+  )
+  check(
+    'and neither range includes the still stretch',
+    ranges.length === 2
+      && (ranges[0] as { endMs: number }).endMs <= 510
+      && (ranges[1] as { startMs: number }).startMs >= 1500,
+    JSON.stringify(ranges),
+  )
+  // A drag has hesitation in it. Cutting at the first still frame would shred
+  // one gesture into dozens of runs too short to measure.
+  const hesitant: Array<{ t_ms: number; x: number; y: number }> = []
+  let u = 0
+  for (let i = 0; i <= 50; i += 1) {
+    hesitant.push(at((u += 10), i * 10))
+    if (i === 25) for (let k = 0; k < 20; k += 1) hesitant.push(at((u += 10), 250))
+  }
+  check(
+    'a 200 ms hesitation inside one drag does not split it',
+    movingRanges(hesitant, { minTravelPx: 300, pauseMs: 400 }).length === 1,
+    JSON.stringify(movingRanges(hesitant, { minTravelPx: 300, pauseMs: 400 })),
+  )
+  const still = Array.from({ length: 200 }, (_v, i) => at(i * 10, 400))
+  check(
+    'a window that never moved yields no range at all',
+    movingRanges(still, { minTravelPx: 300, pauseMs: 400 }).length === 0,
+  )
+  const twitch = Array.from({ length: 20 }, (_v, i) => at(i * 10, i))
+  check(
+    'and a twitch is below the travel a drag has to reach',
+    movingRanges(twitch, { minTravelPx: 300, pauseMs: 400 }).length === 0,
+  )
+}
+{
+  const session = readFileSync(path.join(process.cwd(), 'src/main/session.ts'), 'utf8')
+  check(
+    'the app measures inside the widest moving range, not across the whole track',
+    session.includes('movingRanges(own, {')
+      && session.includes('range.travelPx > widest.travelPx')
+      && session.includes('sample.t_ms >= widest.startMs && sample.t_ms <= widest.endMs'),
+  )
+  const capture = readFileSync(path.join(process.cwd(), 'src/main/capture.ts'), 'utf8')
+  check(
+    'and how sharply the sweep decided reaches the log with the number',
+    capture.includes('contrast ${(measured.contrast * 100).toFixed(1)}%'),
   )
 }
 

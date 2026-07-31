@@ -730,3 +730,68 @@ export function rectangleEdgeScore(
   if (samples < 40) return null
   return (edge - reference) / samples
 }
+
+/**
+ * THE STRETCHES WHERE THE WINDOW ACTUALLY MOVED (#89).
+ *
+ * A frame of a stationary window cannot say when it was taken: every candidate
+ * rectangle near it is the same rectangle, so every hypothesised offset scores
+ * the same. Such frames do not merely fail to help — averaged in, they flatten
+ * the peak and drag the answer toward zero.
+ *
+ * Measured, on two consecutive real captures that ran the fit over a whole
+ * track without this:
+ *
+ *   48% of steps moving  ->  77.5 ms
+ *   33% of steps moving  ->  37.0 ms
+ *
+ * against ~127 ms from the same estimator restricted to motion. The answer was
+ * tracking the fraction of the track that was standing still.
+ *
+ * The offline harness never hit this because its observations come from a
+ * change-driven timeline: a stationary window simply produces no records, so a
+ * pause is a time gap and its segmenter splits there. An annotation's samples
+ * are recorded at the ring's cadence whether the window moves or not, so
+ * stillness has to be found in the POSITIONS.
+ *
+ * `pauseMs` is tolerance, not a threshold: a drag has moments of hesitation in
+ * it, and cutting at the first still frame would shred one drag into dozens of
+ * runs too short to measure.
+ */
+export function movingRanges(
+  samples: ReadonlyArray<{ t_ms: number; x: number; y: number }>,
+  options: {
+    minTravelPx: number
+    pauseMs: number
+    stillPx?: number
+  },
+): Array<{ startMs: number; endMs: number; travelPx: number }> {
+  const stillPx = options.stillPx ?? 2
+  const out: Array<{ startMs: number; endMs: number; travelPx: number }> = []
+  let startMs: number | null = null
+  let lastMoveMs: number | null = null
+  let travelPx = 0
+  const close = (): void => {
+    if (startMs !== null && lastMoveMs !== null && travelPx >= options.minTravelPx) {
+      out.push({ startMs, endMs: lastMoveMs, travelPx })
+    }
+    startMs = null
+    lastMoveMs = null
+    travelPx = 0
+  }
+  for (let index = 1; index < samples.length; index += 1) {
+    const a = samples[index - 1]
+    const b = samples[index]
+    if (a === undefined || b === undefined) continue
+    const step = Math.hypot(b.x - a.x, b.y - a.y)
+    if (step > stillPx) {
+      if (startMs === null) startMs = a.t_ms
+      lastMoveMs = b.t_ms
+      travelPx += step
+      continue
+    }
+    if (lastMoveMs !== null && b.t_ms - lastMoveMs > options.pauseMs) close()
+  }
+  close()
+  return out
+}

@@ -14,7 +14,10 @@ import * as path from 'node:path'
 import { IPC } from '../shared/ipc'
 import { REPLAY_TIMEOUT_MS } from '../shared/captureTimeouts'
 import { manifestSourceLatencyFrom } from '../shared/types'
-import { isApplicableExposureLatency } from '../shared/exposureAlignment'
+import {
+  isApplicableExposureLatency,
+  movingRanges,
+} from '../shared/exposureAlignment'
 import type {
   EditorAnnotationAddedPayload,
   EditorDisplayPayload,
@@ -767,6 +770,10 @@ function manifestCadence(displayId: number): ManifestCadence | undefined {
  * measurement that cannot be made simply is not made, and the next capture is
  * then corrected by whatever was last measured, or by nothing at all.
  */
+/** Below this a drag is a twitch; a pause longer than this ends one. */
+const MEASURE_MIN_TRAVEL_PX = 300
+const MEASURE_PAUSE_MS = 400
+
 async function measureAndRememberPictureLatency(job: {
   displayId: number
   replayWebm: Buffer
@@ -797,8 +804,25 @@ async function measureAndRememberPictureLatency(job: {
       // the two coordinate spaces would score rectangles against the wrong
       // image (SPEC §8.8).
       const own = samples.filter((sample) => sample.display === undefined)
-      if (own.length > best.length) {
-        best = own.map((sample) => ({
+      // ONLY THE STRETCHES THAT MOVED (#89). A frame of a stationary window
+      // cannot say when it was taken, and averaging such frames in drags the
+      // answer toward zero in proportion to how much of the track was still —
+      // measured at 77.5 ms on a track 48% moving and 37.0 ms on one 33%
+      // moving, against ~127 from the same estimator restricted to motion.
+      const ranges = movingRanges(own, {
+        minTravelPx: MEASURE_MIN_TRAVEL_PX,
+        pauseMs: MEASURE_PAUSE_MS,
+      })
+      let widest: { startMs: number; endMs: number; travelPx: number } | null = null
+      for (const range of ranges) {
+        if (widest === null || range.travelPx > widest.travelPx) widest = range
+      }
+      if (widest === null) continue
+      const moving = own.filter(
+        (sample) => sample.t_ms >= widest.startMs && sample.t_ms <= widest.endMs,
+      )
+      if (moving.length > best.length) {
+        best = moving.map((sample) => ({
           tMs: sample.t_ms,
           x: sample.x,
           y: sample.y,

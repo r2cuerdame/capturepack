@@ -541,6 +541,7 @@ interface MeasuredPictureLatency {
   latencyMs: number
   resolutionMs: number
   frames: number
+  contrast: number
   measuredAtMs: number
   backend: string | undefined
 }
@@ -562,7 +563,12 @@ export function recorderPictureLatency(
  */
 export function rememberPictureLatency(
   displayId: number,
-  measured: { latencyMs: number; resolutionMs: number; frames: number },
+  measured: {
+    latencyMs: number
+    resolutionMs: number
+    frames: number
+    contrast: number
+  },
   nowMs: number,
   backend: string | undefined,
 ): string {
@@ -571,12 +577,14 @@ export function rememberPictureLatency(
     latencyMs: measured.latencyMs,
     resolutionMs: measured.resolutionMs,
     frames: measured.frames,
+    contrast: measured.contrast,
     measuredAtMs: nowMs,
     backend,
   })
   return (
     `${measured.latencyMs.toFixed(1)} ms +/- ${measured.resolutionMs.toFixed(1)} ` +
-    `over ${String(measured.frames)} frame(s)` +
+    `over ${String(measured.frames)} frame(s), ` +
+    `contrast ${(measured.contrast * 100).toFixed(1)}%` +
     (previous === undefined
       ? ' (first for this display)'
       : `, was ${previous.latencyMs.toFixed(1)} ms`)
