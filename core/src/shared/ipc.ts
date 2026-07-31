@@ -1273,8 +1273,13 @@ export interface ExposureMeasureRequest {
     width: number
     height: number
   }>
-  /** Desktop pixels to replay pixels: the recorder's downscale, nothing else. */
-  scale: number
+  /**
+   * The width the candidate rectangles are expressed in — the display's own
+   * snapshot pixels. The renderer divides its decoded frame width by this to
+   * get the recorder's downscale, because only it has decoded the video and so
+   * only it knows what that width is.
+   */
+  candidateWidth: number
   /** How many frames to sample across the moving range. */
   sampleCount: number
   /** Only rectangles this close to a frame are scored against it. */

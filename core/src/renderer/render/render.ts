@@ -91,6 +91,10 @@ async function measureExposure(
     // a smoothed draw is exactly what resamples them away.
     ctx.imageSmoothingEnabled = false
 
+    // The recorder's downscale, and nothing else: candidate rectangles are the
+    // display's snapshot pixels, the frame is the replay's.
+    const scale = request.candidateWidth > 0 ? canvas.width / request.candidateWidth : 0
+    if (!(scale > 0)) throw new Error('measurement has no usable scale')
     const times = request.candidates.map((c) => c.tMs)
     const firstMs = Math.min(...times)
     const lastMs = Math.max(...times)
@@ -112,7 +116,7 @@ async function measureExposure(
       const scores: Array<{ tMs: number; score: number }> = []
       for (const candidate of request.candidates) {
         if (Math.abs(candidate.tMs - presentedMs) > request.candidateWindowMs) continue
-        const score = rectangleEdgeScore(plane, request.scale, candidate)
+        const score = rectangleEdgeScore(plane, scale, candidate)
         if (score !== null) scores.push({ tMs: candidate.tMs, score })
       }
       if (scores.length > 0) rows.push({ ptsMs: presentedMs, scores })

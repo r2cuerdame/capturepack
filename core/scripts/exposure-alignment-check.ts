@@ -899,7 +899,7 @@ console.log('\nN. the edge scorer, on either kind of plane')
   )
   check(
     'and so does the app, on frames it seeks to rather than plays through',
-    render.includes('rectangleEdgeScore(plane, request.scale, candidate)')
+    render.includes('rectangleEdgeScore(plane, scale, candidate)')
       && render.includes('async function seekAndRead(')
       && render.includes('ctx.imageSmoothingEnabled = false'),
   )
@@ -1000,6 +1000,34 @@ console.log('\nO. shifting one annotation onto the picture')
   const render = readFileSync(
     path.join(process.cwd(), 'src/main/annotatedRender.ts'),
     'utf8',
+  )
+  check(
+    'the measurement runs after the save, behind the same single render lane',
+    render.includes('enqueueRender(async (signal)')
+      && readFileSync(path.join(process.cwd(), 'src/main/session.ts'), 'utf8')
+        .includes('void measureAndRememberPictureLatency({'),
+  )
+  check(
+    'it scores against the observations BEFORE they were corrected',
+    readFileSync(path.join(process.cwd(), 'src/main/session.ts'), 'utf8')
+      .includes('uncorrectedAnnotations: trimmedAnnotations,')
+      && readFileSync(path.join(process.cwd(), 'src/main/session.ts'), 'utf8')
+        .includes('input.uncorrectedAnnotations ?? focusedAnnotations'),
+  )
+  // Only the renderer has decoded the video, so only it knows the replay's
+  // width; main sends the space its rectangles are in and lets the downscale be
+  // derived where both numbers exist.
+  check(
+    'the downscale is derived where the decoded frame is, not guessed in main',
+    readFileSync(path.join(process.cwd(), 'src/renderer/render/render.ts'), 'utf8')
+      .includes('canvas.width / request.candidateWidth')
+      && !readFileSync(path.join(process.cwd(), 'src/main/session.ts'), 'utf8')
+        .includes('scale: job.width > 0'),
+  )
+  check(
+    'a sample naming another display is left out of the scoring',
+    readFileSync(path.join(process.cwd(), 'src/main/session.ts'), 'utf8')
+      .includes('samples.filter((sample) => sample.display === undefined)'),
   )
   check(
     'the measurement refuses a still capture rather than inventing a number',

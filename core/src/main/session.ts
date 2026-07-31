@@ -65,6 +65,7 @@ import type { Language } from '../shared/i18n'
 import {
   renderTrimmedReplay,
   startAnnotatedRender,
+  measureExposureLatency,
   startDisplayRender,
   startKeyframeStill,
 } from './annotatedRender'
@@ -79,6 +80,8 @@ import {
   recorderCadence,
   recorderSourceLatency,
   recorderPictureLatency,
+  rememberPictureLatency,
+  forgetPictureLatencyOnBackendChange,
 } from './capture'
 import type { DisplaySnapshot, ReplayFetch } from './capture'
 import {
@@ -757,6 +760,81 @@ function manifestCadence(displayId: number): ManifestCadence | undefined {
 }
 
 /** The measured source latency, if this display has one to publish (#115). */
+/**
+ * Measure this pack's own exposure latency and remember it for the next one.
+ *
+ * Never awaited by anything the user is waiting for, and never fatal: a
+ * measurement that cannot be made simply is not made, and the next capture is
+ * then corrected by whatever was last measured, or by nothing at all.
+ */
+async function measureAndRememberPictureLatency(job: {
+  displayId: number
+  replayWebm: Buffer
+  replayMimeType: string
+  width: number
+  height: number
+  fps: number
+  durationMs: number
+  backend: string | undefined
+  annotations: readonly Annotation[]
+}): Promise<void> {
+  try {
+    forgetPictureLatencyOnBackendChange(job.displayId, job.backend)
+    // The observed rectangles of whatever the user actually picked. One track
+    // is enough and the longest is the best evidence, so the others are not
+    // worth decoding twice for.
+    let best: ReadonlyArray<{
+      tMs: number
+      x: number
+      y: number
+      width: number
+      height: number
+    }> = []
+    for (const annotation of job.annotations) {
+      const samples = annotation.tracking?.samples
+      if (annotation.tracking?.enabled !== true || samples === undefined) continue
+      // A sample naming another display is pixels of another snapshot; mixing
+      // the two coordinate spaces would score rectangles against the wrong
+      // image (SPEC §8.8).
+      const own = samples.filter((sample) => sample.display === undefined)
+      if (own.length > best.length) {
+        best = own.map((sample) => ({
+          tMs: sample.t_ms,
+          x: sample.x,
+          y: sample.y,
+          width: sample.width,
+          height: sample.height,
+        }))
+      }
+    }
+    if (best.length === 0) return
+    const measured = await measureExposureLatency({
+      replayWebm: job.replayWebm,
+      replayMimeType: job.replayMimeType,
+      width: job.width,
+      height: job.height,
+      fps: job.fps,
+      durationMs: job.durationMs,
+      // Annotation coordinates are this display's snapshot pixels; the render
+      // window divides its decoded width by this to recover the downscale.
+      candidateWidth: job.width,
+      // The focused display owns the pack clock (SPEC §5.6).
+      replayClockOffsetMs: 0,
+      candidates: best,
+    })
+    if (measured === null) {
+      logInfo('[capture] picture latency: not measurable from this capture')
+      return
+    }
+    logInfo(
+      `[capture] picture latency measured: ` +
+        rememberPictureLatency(job.displayId, measured, Date.now(), job.backend),
+    )
+  } catch (err) {
+    logError('capturepack: measuring the picture latency failed:', err)
+  }
+}
+
 function manifestSourceLatency(displayId: number): ManifestSourceLatency | undefined {
   const remembered = recorderSourceLatency(displayId)
   if (remembered === null) return undefined
@@ -2151,6 +2229,7 @@ async function runFlow(settings: Settings): Promise<void> {
     replayDurationMs: keptRange.lengthMs,
     cadence: focusedCadence,
     annotations: finalAnnotations,
+    uncorrectedAnnotations: trimmedAnnotations,
     title: outcome.payload.title,
     note: outcome.payload.note,
     snapshotTMs: finalSnapshotTMs,
@@ -2493,6 +2572,29 @@ function startFreshCaptureRenders(
       (state) => updateToastRenderStatus(dirPath, state),
       (ratio) => updateToastRenderStatus(dirPath, 'rendering', ratio),
     )
+    // MEASURE WHAT THE NEXT CAPTURE WILL BE CORRECTED BY (#89).
+    //
+    // After the pack is written, so the save pays nothing, and behind the same
+    // single render lane so it cannot compete with the annotated render for the
+    // media pipeline. The answer belongs to the NEXT capture of this display —
+    // every placement that tried to correct the current one was evaluated
+    // against this flow and refused (see measureExposureLatency).
+    //
+    // The candidates are the observations this pack already carries, taken
+    // BEFORE the correction was applied to them, so what comes back is the
+    // absolute latency rather than a residual against a previous answer. That
+    // is what keeps it from chasing its own tail.
+    void measureAndRememberPictureLatency({
+      displayId: focused.id,
+      replayWebm: input.replayWebm,
+      replayMimeType: focused.replayMimeType,
+      width: input.width,
+      height: input.height,
+      fps: settings.fps,
+      durationMs: input.replayDurationMs,
+      backend: focused.cadence?.backend,
+      annotations: input.uncorrectedAnnotations ?? focusedAnnotations,
+    })
   } else {
     startKeyframeStill(handle, {
       snapshotPng: input.snapshotPng,

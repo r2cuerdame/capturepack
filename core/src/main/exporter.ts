@@ -710,6 +710,14 @@ export interface ExportInput {
   replayFile?: string
   cadence?: ManifestCadence
   annotations: Annotation[]
+  /**
+   * The same annotations BEFORE their observations were moved onto the
+   * picture's clock (#89). Carried only so the post-save measurement can score
+   * against the times the ring actually recorded — measuring against corrected
+   * ones would return a residual against a previous answer and let the value
+   * chase its own tail. Never written to the pack.
+   */
+  uncorrectedAnnotations?: Annotation[]
   title: string
   note: string
   // Replay position (ms) of the exported snapshot frame; null = the capture instant

@@ -501,7 +501,7 @@ export async function measureExposureLatency(
       durationMs: job.durationMs,
       measure: {
         candidates: candidates.map((c) => ({ ...c })),
-        scale: job.scale,
+        candidateWidth: job.candidateWidth,
         sampleCount: MEASURE_SAMPLE_COUNT,
         candidateWindowMs: MEASURE_CANDIDATE_WINDOW_MS,
       },
@@ -557,8 +557,8 @@ export interface ExposureMeasureJob {
   height: number
   fps: number
   durationMs: number
-  /** Desktop pixels to replay pixels. */
-  scale: number
+  /** The width the candidate rectangles are expressed in (snapshot pixels). */
+  candidateWidth: number
   /** SPEC §5.6: display time from pack time. Zero on the focused display. */
   replayClockOffsetMs: number
   /** The observed rectangles, ascending, in this display's own pixels. */
