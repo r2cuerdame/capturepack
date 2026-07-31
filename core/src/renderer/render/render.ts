@@ -266,7 +266,7 @@ async function renderStill(job: RenderStartPayload): Promise<{ frameCount: numbe
 
 async function renderAnnotated(
   job: RenderStartPayload,
-): Promise<{ webm: ArrayBuffer; frameCount: number }> {
+): Promise<{ webm: ArrayBuffer; frameCount: number; producedMimeType: string }> {
   const replayWebm = job.replayWebm
   if (replayWebm === null) throw new Error('annotated render job carries no replay')
   const video = document.createElement('video')
@@ -367,8 +367,11 @@ async function renderAnnotated(
   captureDue(drawFrame())
 
   const stream = canvas.captureStream(job.fps)
+  // Only a trim asks for a container: the annotated view is a derived file that
+  // has always been WebM, and nothing declares it by codec.
+  const producedMimeType = pickMimeType(job.preferMimeType)
   const recorder = new MediaRecorder(stream, {
-    mimeType: pickMimeType(),
+    mimeType: producedMimeType,
     videoBitsPerSecond: 8_000_000,
   })
   const chunks: Blob[] = []
@@ -421,10 +424,17 @@ async function renderAnnotated(
   await stopped
   URL.revokeObjectURL(video.src)
 
-  const blob = new Blob(chunks, { type: 'video/webm' })
+  const blob = new Blob(chunks, { type: producedMimeType === '' ? 'video/webm' : producedMimeType })
   if (blob.size === 0) throw new Error('recorded annotated replay is empty')
   const shipped = (await Promise.all(pending)).filter(Boolean).length
-  return { webm: await blob.arrayBuffer(), frameCount: shipped }
+  // The caller declares the bytes it was given, not the type it asked for
+  // (SPEC 5.3: "A writer MUST declare the filename matching the bytes it
+  // actually produced").
+  return {
+    webm: await blob.arrayBuffer(),
+    frameCount: shipped,
+    producedMimeType: blob.type,
+  }
 }
 
 /** Encodes the canvas as a PNG still without blocking the real-time render. */
@@ -463,8 +473,30 @@ function videoSeek(video: HTMLVideoElement, seconds: number): Promise<void> {
   })
 }
 
-function pickMimeType(): string {
-  for (const t of ['video/webm;codecs=vp8', 'video/webm;codecs=vp9', 'video/webm']) {
+/**
+ * A TRIM MUST NOT ALSO CHANGE THE CODEC (#113).
+ *
+ * SPEC 5.3: "Writers SHOULD prefer a platform H.264 encoder in `replay.mp4`
+ * when one is available, then fall back to VP8 and VP9 in `replay.webm`." The
+ * recorder follows that and chose MP4/avc1; this re-encode then handed back VP8
+ * because the list below was the only list, so cutting a tail off a capture
+ * silently demoted it to the container the spec ranks second — measured on
+ * CapturePack_2026-07-31_185602, where an H.264 recording came out of a 310 ms
+ * tail trim as VP8.
+ *
+ * `prefer` is the source's own type. It is a preference, never a claim: an
+ * unsupported one falls through to exactly the order that shipped before, and
+ * the caller declares whatever actually came back rather than what it asked
+ * for.
+ */
+function pickMimeType(prefer?: string): string {
+  const ordered = [
+    ...(prefer === undefined || prefer === '' ? [] : [prefer]),
+    'video/webm;codecs=vp8',
+    'video/webm;codecs=vp9',
+    'video/webm',
+  ]
+  for (const t of ordered) {
     if (MediaRecorder.isTypeSupported(t)) return t
   }
   return ''

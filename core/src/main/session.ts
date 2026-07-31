@@ -2348,7 +2348,7 @@ async function cutFrozenDisplay(
   if (endMs <= startMs) return withoutFrozenReplay(display)
   if (startMs === 0 && endMs === display.replayDurationMs) return display
 
-  const replayWebm = await renderTrimmedReplay({
+  const trimmed = await renderTrimmedReplay({
     replayWebm: display.replayWebm,
     replayMimeType: display.replayMimeType,
     width: display.width,
@@ -2357,6 +2357,10 @@ async function cutFrozenDisplay(
     sourceDurationMs: display.replayDurationMs,
     trimStartMs: startMs,
     trimEndMs: endMs < display.replayDurationMs ? endMs : null,
+    // Come back in the container this capture was recorded in when the encoder
+    // supports it (#113). A trim is not the moment to change codec, and SPEC
+    // 5.3 ranks H.264/MP4 first "when one is available" — it was.
+    ...(display.replayMimeType === null ? {} : { preferMimeType: display.replayMimeType }),
   })
   const measuredMap = observedReplayClockMap(display)
   const mappedOriginMs =
@@ -2372,15 +2376,21 @@ async function cutFrozenDisplay(
   } = display
   return {
     ...displayWithoutRawClockAnchors,
-    replayWebm,
+    replayWebm: trimmed.bytes,
     replayDurationMs: endMs - startMs,
     ...(mappedOriginMs !== undefined
       ? { replayOriginMs: mappedOriginMs }
       : display.replayOriginMs === undefined
         ? {}
         : { replayOriginMs: display.replayOriginMs + startMs }),
-    replayMimeType: 'video/webm',
-    replayFile: 'replay.webm',
+    // DECLARE THE BYTES, NOT A HABIT (#113). SPEC 5.3: "A writer MUST declare
+    // the filename matching the bytes it actually produced". These two were
+    // hardcoded to WebM whatever the recorder made and whatever came back, so
+    // trimming an H.264 capture silently renamed it to a VP8 one. The
+    // superseded file is removed by removeReplacedReplayFiles on the same
+    // write, which is how the .mp4 disappeared when this went the other way.
+    replayMimeType: trimmed.mimeType,
+    replayFile: trimmed.mimeType.startsWith('video/mp4') ? 'replay.mp4' : 'replay.webm',
   }
 }
 

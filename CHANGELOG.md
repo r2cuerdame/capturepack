@@ -50,6 +50,12 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   back, and it refuses rather than reporting a number when too few frames can be
   identified.
 
+- Trimming a capture no longer changes its codec. The exact cut re-encodes — the
+  format permits that — but it asked its encoder for WebM whatever the recorder
+  had produced, so cutting 310 ms off the end of an H.264 recording quietly
+  turned it into VP8 and renamed the file. It now asks for the container the
+  capture was recorded in and declares whatever actually came back
+  ([#113](https://github.com/r2cuerdame/capturepack/issues/113)).
 - A pack's recorded cadence describes the replay it contains again. On a
   multi-display capture the numbers were re-read after the editor closed and the
   trim finished, so a capture that ran at 14.5 fps with a 16 ms worst stall

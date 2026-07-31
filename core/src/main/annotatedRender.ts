@@ -404,6 +404,8 @@ export interface TrimRenderJob {
   // Kept range on the source replay clock; trimEndMs null = to the video end
   trimStartMs: number
   trimEndMs: number | null
+  /** Container to re-encode into when the encoder supports it (#113). */
+  preferMimeType?: string
 }
 
 /**
@@ -414,7 +416,9 @@ export interface TrimRenderJob {
  * callers run it in their background finalization and then atomically update
  * the replay declaration and clock data together.
  */
-export async function renderTrimmedReplay(job: TrimRenderJob): Promise<Buffer> {
+export async function renderTrimmedReplay(
+  job: TrimRenderJob,
+): Promise<{ bytes: Buffer; mimeType: string }> {
   const endMs = job.trimEndMs ?? job.sourceDurationMs
   const lengthMs = Math.max(0, endMs - job.trimStartMs)
   // The render plays only the kept range in real time. No keyframes: the trim
@@ -432,6 +436,7 @@ export async function renderTrimmedReplay(job: TrimRenderJob): Promise<Buffer> {
       trimStartMs: job.trimStartMs,
     }
     if (job.trimEndMs !== null) payload.trimEndMs = job.trimEndMs
+    if (job.preferMimeType !== undefined) payload.preferMimeType = job.preferMimeType
     const outcome = await runRenderWindow(
       payload,
       lengthMs * 2 + RENDER_TIMEOUT_SLACK_MS,
@@ -442,7 +447,14 @@ export async function renderTrimmedReplay(job: TrimRenderJob): Promise<Buffer> {
     return outcome
   })
   if (result.webm === undefined) throw new Error('render window returned no video')
-  return Buffer.from(result.webm)
+  return {
+    bytes: Buffer.from(result.webm),
+    // What the encoder gave back, which is what the caller must declare.
+    mimeType:
+      result.producedMimeType === undefined || result.producedMimeType === ''
+        ? 'video/webm'
+        : result.producedMimeType,
+  }
 }
 
 /** A finished render: the video plus the stills that were streamed in. */

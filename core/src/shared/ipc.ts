@@ -1196,6 +1196,8 @@ export interface RenderStartPayload {
   // (absent = 0 / the video end). The SAME pipeline serves both jobs: the
   // annotated render (no trim fields, overlays drawn) and the plain trim that
   // produces the trimmed replay.webm (trim range + an EMPTY annotation set).
+  /** Container the TRIM should re-encode into when supported (#113). */
+  preferMimeType?: string
   trimStartMs?: number
   trimEndMs?: number
   // Also capture annotated keyframe stills (GOAL "Annotated keyframes",
@@ -1217,6 +1219,8 @@ export interface RenderResultPayload {
   ok: boolean
   // webm bytes of replay_annotated when ok; absent on a still job
   webm?: ArrayBuffer
+  /** The container/codec the encoder actually produced (#113). */
+  producedMimeType?: string
   // How many stills this job SENT over IPC.renderFrame (the bytes themselves
   // never travel in this message). A still that failed to encode is dropped and
   // not counted, and is never fatal to the render.

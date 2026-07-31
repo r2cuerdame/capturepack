@@ -10,6 +10,8 @@
 import { planTrimDrag } from '../src/renderer/editor/trimDrag'
 import { annotationAt } from '../src/shared/track'
 import type { Annotation } from '../src/shared/types'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 
 let failed = 0
 
@@ -138,5 +140,76 @@ console.log('\nNATIVE CAPTURE FRAME STAYS NATIVE WHILE THE END IS TRIMMED')
   check('native now is not preview-seeked into encoded footage', plan.previewMs, null)
 }
 
+
+// A TRIM MUST NOT ALSO CHANGE THE CODEC (#113).
+//
+// The exact cut re-encodes through a canvas — SPEC 5.3 permits that — but it
+// asked MediaRecorder for WebM whatever the recorder had produced and then
+// declared replay.webm whatever came back. Measured on
+// CapturePack_2026-07-31_185602: an H.264/MP4 capture came out of a 310 ms
+// tail trim as VP8/WebM, against "Writers SHOULD prefer a platform H.264
+// encoder in replay.mp4 when one is available" — it was available, the
+// recorder had already chosen it.
+console.log('\nA trim keeps the container it was recorded in')
+{
+  const render = readFileSync(
+    path.join(process.cwd(), 'src/renderer/render/render.ts'),
+    'utf8',
+  )
+  check(
+    'the encoder is asked for the source container first',
+    render.includes('function pickMimeType(prefer?: string): string')
+      && render.includes(
+        'const producedMimeType = pickMimeType(job.preferMimeType)',
+      ),
+    true,
+  )
+  check(
+    'an unsupported preference still falls back to the order that shipped',
+    render.includes("'video/webm;codecs=vp8',")
+      && render.includes("'video/webm;codecs=vp9',")
+      && render.includes("...(prefer === undefined || prefer === '' ? [] : [prefer]),"),
+    true,
+  )
+  check(
+    'the render reports what it produced rather than what it asked for',
+    render.includes('producedMimeType: blob.type'),
+    true,
+  )
+  const session = readFileSync(
+    path.join(process.cwd(), 'src/main/session.ts'),
+    'utf8',
+  )
+  check(
+    'the cut asks for the container this capture was recorded in',
+    session.includes(
+      '...(display.replayMimeType === null ? {} : { preferMimeType: display.replayMimeType })',
+    ),
+    true,
+  )
+  check(
+    'and declares the bytes it got, never a hardcoded name',
+    session.includes('replayMimeType: trimmed.mimeType')
+      && session.includes(
+        "replayFile: trimmed.mimeType.startsWith('video/mp4') ? 'replay.mp4' : 'replay.webm'",
+      )
+      && !session.includes("replayMimeType: 'video/webm',"),
+    true,
+  )
+  // The rename is only safe because the superseded file is removed on the
+  // same write; without it a pack would declare replay.mp4 beside an orphan
+  // replay.webm the writer is forbidden to delete.
+  const exporter = readFileSync(
+    path.join(process.cwd(), 'src/main/exporter.ts'),
+    'utf8',
+  )
+  check(
+    'a replay renamed by the cut has its predecessor removed',
+    exporter.includes('async function removeReplacedReplayFiles(')
+      && exporter.includes('if (oldTop !== null && oldTop !== current.media.replay)')
+      && (exporter.match(/await removeReplacedReplayFiles\(/gu) ?? []).length >= 2,
+    true,
+  )
+}
 console.log(failed === 0 ? '\ntrim-drag-check ok' : `\ntrim-drag-check FAILED (${failed})`)
 process.exitCode = failed === 0 ? 0 : 1
