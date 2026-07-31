@@ -95,7 +95,7 @@ Measured evidence from
 is a *timestamp*, and on this failure the timestamps agree. `check:exposure-alignment`
 builds a landmark moving at 2 px/ms whose pixels are exposed 60 ms late and puts
 it through both measurements: the existing clock comparison calls it aligned to
-**2.0 ms**, while correlating position names **60.0 ms ± 0.5**. The disagreement
+**2.0 ms**, while correlating position names **60.0 ms ± 2.0**. The disagreement
 does not live on the time axis. Any future claim that #89 is fixed has to move
 that second number, not the first.
 
@@ -106,14 +106,24 @@ rectangles that were *observed*. On the pack above:
 
 | display | segment | frames identified | exposure latency | positional error |
 |---|---|---|---|---|
-| 2 (focused) | 7110–9365 ms | 18/34 | **127.0 ms ± 0.5** | 551 px → 97 px |
-| 2 (focused) | 9916–12367 ms | 11/36 | **118.0 ms ± 0.5** | 518 px → 19 px |
+| 2 (focused) | 7110–9365 ms | 18/34 | **127.0 ms ± 5.5** | 551 px → 97 px |
+| 2 (focused) | 9916–12367 ms | 11/36 | **118.0 ms ± 5.5** | 518 px → 19 px |
 | 1 | 6555–7257 ms | 1/11 | *refused* | — |
 | 1 | 9228–10126 ms | 1/13 | *refused* | — |
 
-Two independent drags in one capture agree to 9 ms. Display 1 refuses on
-`insufficient-samples` rather than guessing from one frame. The harness is
-read-only and needs ffmpeg on PATH, so it is a `qa:` script, not a gate step.
+Two independent drags in one capture differ by 9 ms and overlap inside their
+stated resolution. Display 1 refuses on `insufficient-samples` rather than
+guessing from one frame. The harness is read-only and needs ffmpeg on PATH, so
+it is a `qa:` script, not a gate step.
+
+**Read the ± as a floor, not a plateau.** These numbers were first published as
+`± 0.5 ms`, which was an overclaim: on real evidence noise makes exactly one
+grid point win by a hair, the argmin plateau collapses to a single step, and half
+a step is all the plateau can say — while the harness's own two segments differ
+by 9 ms. Nearest-observation inversion cannot beat half the interval those
+observations arrive at, so the reported resolution is now the wider of the
+plateau and that floor, and `check:exposure-alignment` fails if a coarser ring
+ever reports a finer answer.
 
 **The number is not an artefact of the gate that produced it.** Every run
 re-measures at half and double its own identification margin and fails if the
@@ -340,7 +350,7 @@ record and [#104](https://github.com/r2cuerdame/capturepack/issues/104) /
   decision — see the next order.
 - `check:exposure-alignment` is the moving fixture #89 was missing. It measures
   desktop pixel exposure by correlating *position* rather than time, recovers an
-  injected 60 ms to **60.0 ms ± 0.5**, keeps two displays on 60 ms and 95 ms
+  injected 60 ms to **60.0 ms ± 2.0**, keeps two displays on 60 ms and 95 ms
   independently, and shows one global constant failing on both at once by about
   17 ms. It refuses on stationary evidence, on evidence that travels too little
   to time anything, and on a replay whose declared PTS regresses. Applying the

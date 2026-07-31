@@ -88,7 +88,18 @@ export interface ExposureAlignmentReport {
   reason: ExposureAlignmentReason
   /** Pixels at pack time T show the world at T - latencyMs. */
   latencyMs: number | null
-  /** Half the plateau width: the best this sampling interval can resolve. */
+  /**
+   * How coarsely this evidence can place the latency, in ms.
+   *
+   * Two things bound it and the wider one wins. The argmin is often a plateau,
+   * and half its width is one bound. The other is a floor that no amount of
+   * scanning can beat: inversion picks the NEAREST recorded observation, so the
+   * answer cannot be finer than half the interval those observations arrive at.
+   *
+   * The floor matters most on real evidence, where noise makes exactly one grid
+   * point win by a hair and the plateau collapses to a single step. Reporting
+   * half a step there would claim a precision the sampling never had.
+   */
   resolutionMs: number | null
   /** Mean positional disagreement at the estimate, in pixels. */
   residualPx: number | null
@@ -255,7 +266,12 @@ export function measureExposureLatency(
   const low = candidates[firstIndex] as { latencyMs: number }
   const high = candidates[lastIndex] as { latencyMs: number }
   const latencyMs = (low.latencyMs + high.latencyMs) / 2
-  const resolutionMs = (high.latencyMs - low.latencyMs) / 2 + stepMs / 2
+  const plateauHalfWidthMs = (high.latencyMs - low.latencyMs) / 2 + stepMs / 2
+  const contextIntervalMs = medianIntervalMs(
+    contextObservations.map((observation) => observation.tMs),
+  )
+  const samplingFloorMs = contextIntervalMs === null ? 0 : contextIntervalMs / 2
+  const resolutionMs = Math.max(plateauHalfWidthMs, samplingFloorMs)
   const settled = scoreCandidate(input, observed, latencyMs)
   const residualPx = settled === null ? bestErrorPx : settled.meanErrorPx
   const comparedFrameCount = settled === null ? 0 : settled.comparedFrameCount

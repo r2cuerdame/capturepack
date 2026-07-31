@@ -188,7 +188,7 @@ are exposed 60 ms late, and runs it through both measurements:
 
 ```
 existing clock comparison   aligned to 2.0 ms
-correlating position        60.0 ms +/- 0.5
+correlating position        60.0 ms +/- 2.0
 ```
 
 That is #89 in two lines. The measurement inverts the landmark's observed track
@@ -222,14 +222,21 @@ the pack that opened #89, `CapturePack_2026-07-30_230217`:
 
 ```
 display 2 (focused): 1920x1080 replay of a 3840x2160 desktop
-  7110-9365  ms  18/34 frames identified  127.0 ms +/- 0.5   551 px -> 97 px
-  9916-12367 ms  11/36 frames identified  118.0 ms +/- 0.5   518 px -> 19 px
+  7110-9365  ms  18/34 frames identified  127.0 ms +/- 5.5   551 px -> 97 px
+  9916-12367 ms  11/36 frames identified  118.0 ms +/- 5.5   518 px -> 19 px
 display 1: 1/11 and 1/13 frames identified — REFUSED: insufficient-samples
 ```
 
-Two independent drags in one capture agree to 9 ms, and applying what they
-measure collapses the overlay's positional error from about **550 px to 19–97
-px**. Those are the 526 px / 178 px / 776 px spatial errors already recorded
+Two independent drags in one capture differ by 9 ms — overlapping inside their
+stated resolution — and applying what they measure collapses the overlay's
+positional error from about **550 px to 19–97 px**.
+
+The `±` is a floor, not a plateau. These were first published as `± 0.5 ms`,
+which was an overclaim: on real evidence noise makes exactly one grid point win
+by a hair, so the argmin plateau collapses to a single step and half a step is
+all it can say. Nearest-observation inversion cannot beat half the interval the
+observations arrive at, so the reported resolution is now the wider of the two,
+and the fixture fails if a coarser ring ever reports a finer answer. Those are the 526 px / 178 px / 776 px spatial errors already recorded
 above, now with a cause attached. The non-focused display refuses rather than
 guessing from one identified frame, which is the behaviour that matters more
 than the number.

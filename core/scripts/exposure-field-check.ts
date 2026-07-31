@@ -207,6 +207,26 @@ async function measureDisplay(display: DisplayEntry): Promise<void> {
       searchMs: { minMs: -60, maxMs: 400 },
       stepMs: 1,
     }
+    // The pixel stage is a classifier over the observed rectangles, so the
+    // latency it can support is bounded by how far apart those rectangles are.
+    // When consecutive candidates sit closer together than the scorer can tell
+    // apart, the answer degrades into a ladder whose steps are the ring
+    // interval — and `resolutionMs`, computed from the latency scan rather than
+    // from the classifier, does not widen to say so. Report the separation so
+    // that gap is visible instead of implied.
+    const separations: number[] = []
+    for (let i = 1; i < candidates.length; i += 1) {
+      const a = candidates[i - 1]
+      const b = candidates[i]
+      if (a === undefined || b === undefined) continue
+      const step = Math.hypot(b.bounds.x - a.bounds.x, b.bounds.y - a.bounds.y)
+      if (step > 0) separations.push(step)
+    }
+    separations.sort((a, b) => a - b)
+    const separationPx = separations.length === 0
+      ? null
+      : (separations[separations.length >> 1] as number)
+
     const report = measureExposureLatency(input)
     // The identification gate is a choice, so the answer's dependence on it is
     // reported rather than assumed. Re-filtering costs nothing: the decode has
@@ -242,7 +262,14 @@ async function measureDisplay(display: DisplayEntry): Promise<void> {
         + ` at ${round(report.speedPxPerMs, 2)} px/ms\n`
         + `    positional error ${round(uncorrected.residualPx, 0)} px uncorrected`
         + ` -> ${round(report.residualPx, 0)} px corrected`
-        + ` (${round(uncorrected.residualMs)} ms -> ${round(report.residualMs)} ms)`,
+        + ` (${round(uncorrected.residualMs)} ms -> ${round(report.residualMs)} ms)\n`
+        + `    consecutive candidates ${round(separationPx, 0)} px apart`
+        + ` — what the pixel stage had to tell apart`,
+    )
+    check(
+      `${label} ${segment.startMs}-${segment.endMs} ms: consecutive candidates are far enough apart to be told apart`,
+      separationPx !== null && separationPx >= 8,
+      `${round(separationPx, 0)} px between observed positions`,
     )
     measured += 1
     const agreeing = sensitivity.filter((s) => s.latencyMs !== null)
@@ -484,7 +511,23 @@ async function invertFrames(
         have = rest.length
       }
     })
-    ffmpeg.on('close', () => { resolve(out) })
+    ffmpeg.on('close', () => {
+      // The Nth decoded frame is paired with the Nth timestamp from a SEPARATE
+      // ffprobe run. If the two ever disagree on how many frames the file has,
+      // every frame after the disagreement carries a confidently-declared wrong
+      // PTS — which is precisely the failure this whole measurement exists to
+      // detect, so it must never be produced by the measurement itself.
+      if (index !== video.ptsMs.length) {
+        console.log(
+          `    decoder and probe disagree: ${index} frames decoded, `
+            + `${video.ptsMs.length} timestamps — every pairing after the first `
+            + `disagreement would be wrong, so nothing is reported`,
+        )
+        resolve([])
+        return
+      }
+      resolve(out)
+    })
   })
 }
 

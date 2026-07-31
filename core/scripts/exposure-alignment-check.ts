@@ -401,6 +401,43 @@ check(
   `${round(briefReport.speedPxPerMs, 2)} px/ms`,
 )
 
+// On real evidence noise makes exactly one grid point win by a hair, so the
+// argmin plateau collapses to a single step and half a step is all the plateau
+// can say. Reporting that as the resolution claims a precision the sampling
+// never had — the harness published 127.0 +/- 0.5 while its own two segments
+// disagreed by 9 ms. Nearest-observation inversion cannot beat half the
+// interval those observations arrive at, and the report must say so.
+const resolutionFloors = [4, FRAME_MS, RING_INTERVAL_MS].map((intervalMs) => {
+  const report = measureExposureLatency(
+    syntheticMovingLandmark({
+      velocityXPxPerMs: DRAG_PX_PER_MS,
+      exposureLatencyMs: TRUE_LATENCY_MS,
+      contextIntervalMs: intervalMs,
+      frameIntervalMs: REPLAY_INTERVAL_MS,
+      durationMs: 3000,
+    }),
+  )
+  return { intervalMs, resolutionMs: report.resolutionMs }
+})
+console.log(
+  `   resolution never beats half the ring interval: `
+    + resolutionFloors.map(
+      (r) => `${round(r.intervalMs)} ms ring -> +/- ${round(r.resolutionMs)}`,
+    ).join(', '),
+)
+check(
+  'resolution never claims to beat half the interval the observations arrive at',
+  resolutionFloors.every(
+    (r) => r.resolutionMs !== null && r.resolutionMs >= r.intervalMs / 2 - 1e-9,
+  ),
+  resolutionFloors.map((r) => `${round(r.resolutionMs)}`).join(' / '),
+)
+check(
+  'a coarser ring is reported as a coarser answer, monotonically',
+  (resolutionFloors[0]?.resolutionMs ?? 0) < (resolutionFloors[1]?.resolutionMs ?? 0)
+    && (resolutionFloors[1]?.resolutionMs ?? 0) < (resolutionFloors[2]?.resolutionMs ?? 0),
+)
+
 // A harness that discards frames it could not identify hands over a subset. If
 // the frame interval is derived from that subset it grows, and the one-frame
 // acceptance boundary is then measured against a rate the recorder never ran at.

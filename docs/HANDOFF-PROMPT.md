@@ -58,8 +58,8 @@ while correlating position names 60.0 ms. The disagreement is not on the time
 axis.
 
 `npm run qa:exposure-field -- --pack <dir>` then measured it on real evidence.
-On the pack that opened the issue the focused display reads **127.0 ms ± 0.5**
-and **118.0 ms ± 0.5** across two independent drags, and applying that collapses
+On the pack that opened the issue the focused display reads **127.0 ms ± 5.5**
+and **118.0 ms ± 5.5** across two independent drags, and applying that collapses
 the overlay's positional error from about **550 px to 19–97 px**. The
 non-focused display refuses on `insufficient-samples` rather than guessing from
 one identified frame. The harness is read-only and needs ffmpeg on PATH.
