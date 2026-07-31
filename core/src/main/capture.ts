@@ -479,6 +479,90 @@ async function probeRecorder(displayId: number, win: BrowserWindow): Promise<voi
  */
 const displayCadence = new CaptureCadenceRegistry()
 
+/**
+ * THE ONE MEASUREMENT THAT ONLY LUCK PRODUCES, REMEMBERED (#115).
+ *
+ * Source-latency calibration runs once per capture, inside the startup
+ * observation window and never inside retained replay — the call site refuses
+ * to "tax their recorder" for it, and this session measured why: a second sink
+ * cost its display 14.8 fps against 10.1. So there is no retry to add. What
+ * there is, is a measurement that succeeds only when the desk happened to move
+ * during those two seconds, and is then thrown away.
+ *
+ * Every capture in this machine's log before 2026-07-31 19:54 reported
+ * `insufficient-motion-transitions` or `no-motion-witness`. That one measured
+ * 37.69 ms of pixel exposure on display 1 at 0.92 confidence — and the focused
+ * display, the one #89 is about, still measured nothing.
+ *
+ * An AMBIGUOUS result never overwrites a measured one: "I could not measure it
+ * this time" is not "the previous measurement is void". A backend change does
+ * void it, because that is a different path to the glass.
+ */
+interface RememberedSourceLatency {
+  latencyMs: number
+  confidence: number | undefined
+  measuredAtMs: number
+  sampleSource: string | undefined
+  referenceTiming: string | undefined
+  backend: string | undefined
+}
+const displaySourceLatency = new Map<number, RememberedSourceLatency>()
+
+/** The last MEASURED source latency for this display, or null if never. */
+export function recorderSourceLatency(
+  displayId: number,
+): RememberedSourceLatency | null {
+  return displaySourceLatency.get(displayId) ?? null
+}
+
+/**
+ * Records a measured calibration and returns the line to log beside it.
+ *
+ * Returns null when there is nothing to add: a fresh measurement speaks for
+ * itself in the payload that was just logged.
+ */
+function rememberSourceLatency(
+  displayId: number,
+  calibration: unknown,
+  nowMs: number,
+  backend: string | undefined,
+): string | null {
+  const c = calibration as {
+    status?: string
+    latencyMs?: number
+    confidence?: number
+    sampleSource?: string
+    referenceTiming?: string
+  } | undefined
+  if (c === undefined) return null
+  if (c.status === 'measured' && typeof c.latencyMs === 'number') {
+    displaySourceLatency.set(displayId, {
+      latencyMs: c.latencyMs,
+      confidence: c.confidence,
+      measuredAtMs: nowMs,
+      sampleSource: c.sampleSource,
+      referenceTiming: c.referenceTiming,
+      backend,
+    })
+    return null
+  }
+  const remembered = displaySourceLatency.get(displayId)
+  if (remembered === undefined) return null
+  if (backend !== undefined && remembered.backend !== undefined && remembered.backend !== backend) {
+    // A different path to the glass. The old number is not about this one.
+    displaySourceLatency.delete(displayId)
+    return null
+  }
+  const ageMs = Math.max(0, nowMs - remembered.measuredAtMs)
+  return (
+    `last measured ${remembered.latencyMs.toFixed(1)} ms ` +
+    `${Math.round(ageMs / 1000)}s ago` +
+    (remembered.confidence === undefined
+      ? ''
+      : ` at ${remembered.confidence.toFixed(2)} confidence`)
+  )
+}
+
 /** What this display's recorder has achieved, or null if it never said. */
 export function recorderCadence(displayId: number): {
   achievedFps: number
@@ -1309,6 +1393,21 @@ export function requestReplay(
             `[capture] display ${displayId}: source latency calibration ` +
               `${JSON.stringify(ring.sourceLatencyCalibration)}`,
           )
+          const numericDisplayId = typeof displayId === 'number' ? displayId : null
+          const carried =
+            numericDisplayId === null
+              ? null
+              : rememberSourceLatency(
+                  numericDisplayId,
+                  ring.sourceLatencyCalibration,
+                  Date.now(),
+                  displayCadence.get(numericDisplayId)?.backend,
+                )
+          if (carried !== null) {
+            logInfo(
+              `[capture] display ${displayId}: source latency not measured now; ${carried}`,
+            )
+          }
         }
         if (ring.replayPixelClock !== undefined) {
           logInfo(
@@ -1530,6 +1629,9 @@ async function rebuild(): Promise<void> {
   // A disconnected or no-longer-requested display cannot lend its last
   // renderer's cadence to a future recorder that happens to reuse the id.
   displayCadence.retain(wantedDisplayIds)
+  for (const id of [...displaySourceLatency.keys()]) {
+    if (!wantedDisplayIds.has(id)) displaySourceLatency.delete(id)
+  }
   for (const id of displayRecorderStates.keys()) {
     if (!wanted.has(id)) displayRecorderStates.delete(id)
   }
@@ -1673,6 +1775,17 @@ async function createCaptureWindow(
           `[capture] display ${display.id}: source latency calibration ` +
             `${JSON.stringify(ready.sourceLatencyCalibration)}`,
         )
+        const carried = rememberSourceLatency(
+          display.id,
+          ready.sourceLatencyCalibration,
+          Date.now(),
+          displayCadence.get(display.id)?.backend,
+        )
+        if (carried !== null) {
+          logInfo(
+            `[capture] display ${display.id}: source latency not measured now; ${carried}`,
+          )
+        }
       }
       // sendReady describes a new source generation, including an in-window
       // Chromium -> GDI transition. Old primary cadence/quality and "recording"

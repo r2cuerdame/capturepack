@@ -8,6 +8,17 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 
 ### Fixed
 
+- A measured source latency outlives the capture that found it. The calibration
+  succeeds only when the desk happens to move during the two seconds after a
+  recorder starts, and every capture in this machine's log before one on
+  2026-07-31 reported no motion to measure against; the one that succeeded
+  measured 37.7 ms and the number was then discarded. The last **measured**
+  value is now kept per display. A later "could not measure it this time" no
+  longer reads as "there is nothing to say" — it reports what is remembered and
+  how old it is — while a backend change, which is a different path to the
+  glass, voids it. Calibration itself runs exactly when it did, at exactly the
+  same cost to the recorder
+  ([#115](https://github.com/r2cuerdame/capturepack/issues/115)).
 - Picking an element in a browser works on pages whose interface lives inside an
   iframe. The picker previously ran only in the top document, so a click inside
   a frame reached nothing and was swallowed without a message, a failure or any

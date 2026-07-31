@@ -16,6 +16,8 @@ import {
   sourceLatencyFingerprintDelta,
   type SourceLatencyCalibrationSample,
 } from '../src/renderer/capture/sourceLatencyCalibration'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 
 let passed = 0
 let failed = 0
@@ -1178,5 +1180,59 @@ check(
   }) === 10_000,
 )
 
+
+// THE ONE MEASUREMENT THAT ONLY LUCK PRODUCES IS REMEMBERED (#115).
+//
+// Calibration runs once per capture, inside the startup observation window
+// and never inside retained replay - the call site refuses to tax the
+// recorder for it, and this session measured why: a second sink cost its
+// display 14.8 fps against 10.1. So there is no retry to add. What there is,
+// is a measurement that succeeds only when the desk happened to move during
+// those two seconds and was then thrown away. Every capture in this
+// machine's log before 2026-07-31 19:54 reported no-motion-witness or
+// insufficient-motion-transitions; the one that succeeded measured 37.69 ms
+// on display 1 at 0.92 confidence, and the focused display still measured
+// nothing.
+console.log('\nA measured source latency outlives the capture that found it')
+{
+  const main = readFileSync(
+    path.join(process.cwd(), 'src/main/capture.ts'),
+    'utf8',
+  )
+  check(
+    'main keeps the last measured latency per display',
+    main.includes('const displaySourceLatency = new Map<number, RememberedSourceLatency>()')
+      && main.includes('export function recorderSourceLatency('),
+  )
+  check(
+    'only a measured result is remembered',
+    main.includes("if (c.status === 'measured' && typeof c.latencyMs === 'number')"),
+  )
+  check(
+    'an ambiguous result reports what is remembered instead of nothing',
+    main.includes('source latency not measured now;')
+      && main.includes('last measured '),
+  )
+  check(
+    'a backend change voids it, because that is a different path to the glass',
+    main.includes('displaySourceLatency.delete(displayId)')
+      && main.includes('remembered.backend !== backend'),
+  )
+  check(
+    'a display that goes away takes its measurement with it',
+    main.includes('if (!wantedDisplayIds.has(id)) displaySourceLatency.delete(id)'),
+  )
+  // The constraint that rules a retry out, so a later reader does not add one
+  // without meeting the cost this codebase already refused.
+  const renderer = readFileSync(
+    path.join(process.cwd(), 'src/renderer/capture/capture.ts'),
+    'utf8',
+  )
+  check(
+    'calibration still runs only inside the startup observation window',
+    renderer.includes('never inside retained replay')
+      && renderer.includes('minimumObservationMs > 0'),
+  )
+}
 console.log(`\nsource latency calibration checks: ${passed} passed, ${failed} failed`)
 if (failed > 0) process.exitCode = 1
