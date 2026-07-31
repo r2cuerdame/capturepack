@@ -392,23 +392,49 @@ async function renderAnnotated(
     video.onended = () => resolve()
     video.onerror = () => reject(new Error('replay video failed to decode'))
   })
+  const reachedOutPoint = (): boolean =>
+    trimEndMs !== undefined && video.currentTime * 1000 >= trimEndMs
+  const stopAtOutPoint = (): void => {
+    video.pause()
+    reachedTrimEnd()
+  }
   const scheduleDraw = (mediaTimeMs?: number): void => {
     if (video.ended) return
     captureDue(drawFrame(mediaTimeMs))
     // Out-point reached: stop like 'ended' would, holding the current frame.
-    if (trimEndMs !== undefined && video.currentTime * 1000 >= trimEndMs) {
-      video.pause()
-      reachedTrimEnd()
+    if (reachedOutPoint()) {
+      stopAtOutPoint()
       return
     }
     // The metadata of the frame that JUST became current, handed straight to
     // the draw it triggers (#98).
     video.requestVideoFrameCallback((_now, metadata) => scheduleDraw(metadata.mediaTime * 1000))
   }
+  // AN OUT-POINT INSIDE A HELD FRAME STILL STOPS THERE (#116).
+  //
+  // The test above rides requestVideoFrameCallback, which fires when a NEW
+  // frame is presented. A replay that honestly records a stalled source holds
+  // one frame across the stall, so nothing fires for as long as the hold lasts
+  // and the cut overshoots by up to that much. Holes used to be short enough
+  // for this not to show; since the ring stopped compressing them they are the
+  // length the desk actually paused for — 903 ms in the capture that prompted
+  // the fix. The playhead keeps moving through a held frame, so a clock test is
+  // the one that can see it. Idempotent with the callback path: both only ever
+  // pause and resolve, and `done` resolves once.
+  const outPointTimer =
+    trimEndMs === undefined
+      ? null
+      : setInterval(() => {
+          if (!video.ended && reachedOutPoint()) stopAtOutPoint()
+        }, 25)
   recorder.start(1000)
   scheduleDraw()
   await video.play()
-  await done
+  try {
+    await done
+  } finally {
+    if (outPointTimer !== null) clearInterval(outPointTimer)
+  }
   // Final frame. A plain trim must not append the old 200 ms still-frame tail:
   // the saved replay's upper bound is the configured window, never N + 200 ms.
   drawFrame()

@@ -310,5 +310,44 @@ console.log('\nA trim keeps the container it was recorded in')
     true,
   )
 }
+// AN OUT-POINT INSIDE A HELD FRAME STILL STOPS THERE (#116).
+//
+// The render's out-point test rode requestVideoFrameCallback alone, which fires
+// only when a NEW frame is presented. Once the ring stopped compressing a
+// stalled source, a replay holds one frame for as long as the desk paused - 903
+// ms in the capture that prompted the fix - and nothing fires for that whole
+// stretch, so a cut landing inside the hold overshoots to the far side of it.
+// The playhead keeps moving through a held frame, so a clock test sees what the
+// frame callback cannot.
+console.log('\nA cut inside a held frame lands where it was asked to')
+{
+  const render = readFileSync(
+    path.join(process.cwd(), 'src/renderer/render/render.ts'),
+    'utf8',
+  )
+  check(
+    'the out-point is tested on the clock as well as on presented frames',
+    render.includes('const outPointTimer =')
+      && render.includes('if (!video.ended && reachedOutPoint()) stopAtOutPoint()'),
+    true,
+  )
+  check(
+    'both paths run the same stop, so they cannot disagree',
+    render.includes('const stopAtOutPoint = (): void => {')
+      && (render.match(/stopAtOutPoint\(\)/gu) ?? []).length === 2,
+    true,
+  )
+  check(
+    'and the timer is cleared however the render ends',
+    render.includes('} finally {')
+      && render.includes('if (outPointTimer !== null) clearInterval(outPointTimer)'),
+    true,
+  )
+  check(
+    'a render with no out-point starts no timer at all',
+    render.includes('trimEndMs === undefined') && render.includes('? null\n      : setInterval('),
+    true,
+  )
+}
 console.log(failed === 0 ? '\ntrim-drag-check ok' : `\ntrim-drag-check FAILED (${failed})`)
 process.exitCode = failed === 0 ? 0 : 1
