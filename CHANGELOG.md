@@ -50,6 +50,16 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   back, and it refuses rather than reporting a number when too few frames can be
   identified.
 
+- Re-editing a saved CapturePack now records what the editor did. Both capture
+  flows already forwarded the editor's own diagnostics to the log and the
+  re-edit flow never did, so the one session a problem is usually reported from
+  was the one session that could not be asked what happened
+  ([#106](https://github.com/r2cuerdame/capturepack/issues/106)).
+- A click on the canvas that could not be acted on now says which rule consumed
+  it — the editor still loading, a point belonging to no display, a context
+  frame that has not settled, or a deferred object answer discarded as stale.
+  All four were previously indistinguishable from a box that refuses to move.
+
 ### Changed
 
 - Every recorded context sample now carries the age of the picture it describes.

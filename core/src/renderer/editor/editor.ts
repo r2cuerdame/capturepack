@@ -3773,8 +3773,47 @@ function finishObservedPickClick(
   schedulePaint()
 }
 
+/**
+ * A CANVAS CLICK THAT CHANGED NOTHING HAS TO SAY SO (#106).
+ *
+ * Several gates in `pointerdown` return before anything can happen — the editor
+ * not being ready, a point that belongs to no display, a context frame that has
+ * not settled — and every one of them is indistinguishable, from the user's
+ * side, from a box that simply refuses to move. A report of "the box would not
+ * move" was unanswerable because the machine it happened on recorded nothing
+ * about the click at all.
+ *
+ * One line per distinct reason, then at each power of ten: a user clicking the
+ * same dead spot twenty times is worth one more line, not twenty.
+ */
+const inertClickCounts = new Map<string, number>()
+function reportInertClick(reason: string, detail = ''): void {
+  const seen = (inertClickCounts.get(reason) ?? 0) + 1
+  inertClickCounts.set(reason, seen)
+  if (seen !== 1 && seen !== 10 && seen !== 100) return
+  console.warn(
+    `capturepack: click did nothing (${reason})`
+      + (detail === '' ? '' : ` — ${detail}`)
+      + (seen === 1 ? '' : ` [${seen} times]`),
+  )
+}
+
+/** Where the board actually is, for a click that landed on none of it. */
+function boardGeometryDescription(e: PointerEvent | MouseEvent): string {
+  const b = toBoardUnits(e)
+  const where = b === null ? 'pointer outside the canvas' : `pointer ${Math.round(b.x)},${Math.round(b.y)}`
+  if (board === null) return `${where}; no board`
+  const rects = board.displays
+    .map((d) => `#${d.index} ${Math.round(d.bx)},${Math.round(d.by)} ${Math.round(d.bw)}x${Math.round(d.bh)} (${d.width}x${d.height} native)`)
+    .join(', ')
+  return `${where}; board ${rects}`
+}
+
 overlay.addEventListener('pointerdown', (e) => {
-  if (!loaded) return
+  if (!loaded) {
+    reportInertClick('the editor has not finished loading')
+    return
+  }
   // The MIDDLE button belongs to panning and to nothing else (issue #55). A
   // press only reaches here when the board CANNOT pan — the stage's capture
   // handler swallows the rest — and "nothing to pan" has to mean nothing
@@ -3813,6 +3852,11 @@ overlay.addEventListener('pointerdown', (e) => {
     commitTextEditor()
   }
   if (hit === null) {
+    // Clearing the selection is a real effect, but only when the click was
+    // genuinely in the gutter. A board whose displays do not cover where the
+    // picture is drawn sends EVERY click here, and the editor then looks
+    // completely dead — which is exactly what the geometry below settles.
+    reportInertClick('the point belongs to no display', boardGeometryDescription(e))
     state.selectedId = null
     syncLanes()
     schedulePaint()
@@ -3849,6 +3893,13 @@ overlay.addEventListener('pointerdown', (e) => {
   // clicked display immediately and leave this click otherwise untouched; the
   // refreshed frame re-probes the resting pointer when it arrives.
   if (!objectIndexMatchesPresentedFrame(hit.d.index)) {
+    // The refreshed frame re-probes the resting pointer when it arrives, so one
+    // click is normally spent. A frame that never arrives spends every click,
+    // and the box under the cursor is never even consulted.
+    reportInertClick(
+      'the context frame for this display has not settled',
+      `display ${hit.d.index}, waiting for a refreshed frame`,
+    )
     hoverStack = []
     hoverStackIndex = 0
     setHoverObject(null, null)
@@ -3934,6 +3985,13 @@ overlay.addEventListener('pointerdown', (e) => {
           drag !== null ||
           textSession !== null
         ) {
+          // This click was deferred and its answer is no longer about the state
+          // it was asked in. Discarding it is right; doing so without a word is
+          // what makes "I clicked and nothing happened" unanswerable.
+          reportInertClick(
+            'the deferred object answer was no longer about this click',
+            `display ${hit.d.index}`,
+          )
           return
         }
         finishObservedPickClick(hit.d, p, ui, box, picked, fallback)

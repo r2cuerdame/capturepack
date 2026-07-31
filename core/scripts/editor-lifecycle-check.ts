@@ -320,6 +320,56 @@ console.log('\nHistory -> replay editor reopen contract')
     pushedFrame.includes('requestContextFrameNow()')
       && !pushedFrame.includes('scheduleContextFrame()'),
   )
+
+  // EVERY EDITOR WINDOW FORWARDS ITS OWN CONSOLE (#106).
+  //
+  // Both capture flows did; the re-edit flow never did, so a re-edit was the
+  // one session that could not be asked what it had done. A failed display
+  // decode, a failed bounded pick, and every diagnostic added below went
+  // nowhere on exactly the path a user reports a problem from. Counting is the
+  // point: the next flow that creates an editor gets the same treatment or this
+  // fails.
+  const sessionSource = source('src/main/session.ts')
+  const editorWindows = sessionSource.split('createEditorWindow(').length - 2 // minus the definition
+  const forwarders = sessionSource.split("webContents.on('console-message'").length - 1
+  check(
+    'every editor window forwards its renderer console to the log',
+    editorWindows > 0 && forwarders === editorWindows,
+    `${editorWindows} editor window(s), ${forwarders} forwarder(s)`,
+  )
+  check(
+    'the forwarder takes only CapturePack lines, at the level the renderer used',
+    sessionSource.includes("if (!message.startsWith('capturepack:')) return"),
+  )
+
+  // A CLICK THAT CHANGED NOTHING SAYS SO (#106).
+  //
+  // Three gates in pointerdown return before anything can happen, and from the
+  // user's side all three are indistinguishable from a box that refuses to
+  // move. "재편집으로 박스를 못옮기던데" was unanswerable from the machine it
+  // happened on because none of them left a trace.
+  const pointerDown = sectionBetween(
+    editorSource,
+    "overlay.addEventListener('pointerdown'",
+    'function endDrag(',
+  )
+  check(
+    'the editor reports a click it could not act on',
+    editorSource.includes('function reportInertClick(')
+      && editorSource.includes('function boardGeometryDescription('),
+  )
+  for (const [gate, needle] of [
+    ['the editor is still loading', 'the editor has not finished loading'],
+    ['the point belongs to no display', 'the point belongs to no display'],
+    ['the context frame has not settled', 'the context frame for this display has not settled'],
+    ['a deferred answer went stale', 'the deferred object answer was no longer about this click'],
+  ] as const) {
+    check(`a silent pointerdown return names its reason: ${gate}`, pointerDown.includes(needle))
+  }
+  check(
+    'the no-display report carries the board geometry that would explain it',
+    pointerDown.includes('boardGeometryDescription(e)'),
+  )
 }
 
 console.log(`\n${passed} passed, ${failed} failed`)

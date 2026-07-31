@@ -2723,6 +2723,20 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
     loadedDisplays: loadedEditorDisplayList,
   })
   const { win: editor, mode: windowMode } = createEditorWindow(display.bounds, settings)
+  // THE SAME DIAGNOSTICS, ON THE PATH THAT NEEDED THEM MOST (#106).
+  //
+  // Both capture flows forward the editor's own console lines to the log. This
+  // one never did, so a re-edit was the one session that could not be asked
+  // what it had done: a failed display decode, a failed bounded pick, any
+  // `capturepack:` line the editor emitted between "editor shown" and "editor
+  // closed" went nowhere. A report of the editor misbehaving on reopen was
+  // therefore unanswerable from the machine it happened on, which is the whole
+  // reason this forwarding exists.
+  editor.webContents.on('console-message', (_event, level, message) => {
+    if (!message.startsWith('capturepack:')) return
+    if (level >= 2) logWarn(`[editor] ${message}`)
+    else logInfo(`[editor] ${message}`)
+  })
   // Picking works on re-edit too, from the pack's own saved observation — which
   // for every pack written before v0.2.0 describes exactly one instant, and the
   // frame says so for every other time rather than offering that instant's
