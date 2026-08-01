@@ -6,13 +6,20 @@
 [![Downloads](https://img.shields.io/github/downloads/r2cuerdame/capturepack/total?color=7c5cff)](https://github.com/r2cuerdame/capturepack/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-## Den Fehler zurückspulen. Das Objekt wählen. Der KI seinen Zustand geben.
+## Den Fehler zurückspulen. Markieren, was kaputtging. Der KI seinen Zustand geben.
 
 **CapturePack macht aus einem laufenden Replay — standardmäßig 30 Sekunden — strukturierte Belege für Menschen und KI.**
 
-Drücke den Hotkey nach dem Fehler, gehe zum betroffenen Bild zurück und wähle das erfasste
-Steuerelement oder Fenster. CapturePack bewahrt Identität, beobachtete Position und Bewegung,
-damit eine KI sie nicht allein aus Pixeln erraten muss.
+Drücke den Hotkey nach dem Fehler und gehe zu dem Bild zurück, in dem die Oberfläche wirklich
+falsch war. Umrahme, was kaputtging, schreibe dazu, was du meintest, und speichere. Das Paket
+trägt das Replay, die Fenster- und Steuerelementgeometrie, die der Desktop über die Zeit
+aufgezeichnet hat, und deine Anmerkungen — damit eine KI nicht alles aus Pixeln erraten muss.
+
+**Object Pick ist eine Standbild-Funktion.** Mach einen Screenshot, und du kannst das echte
+Steuerelement unter dem Mauszeiger anklicken: CapturePack speichert Name, Rolle, AutomationId
+und Prozess, im Browser die ganze sichtbare Seite. Ein Replay kann dasselbe nicht ehrlich
+anbieten — für das Fenster antwortet es jederzeit, für das Steuerelement im Browser nur im
+erfassten Augenblick — also bleibt es beim Video bei den Rahmen, die du zeichnest.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Herunterladen](https://github.com/r2cuerdame/capturepack/releases/latest)
 

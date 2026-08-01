@@ -6,13 +6,20 @@
 [![Downloads](https://img.shields.io/github/downloads/r2cuerdame/capturepack/total?color=7c5cff)](https://github.com/r2cuerdame/capturepack/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-## 버그를 되감고, 객체를 선택하고, 그 상태를 AI에게 전달하세요
+## 버그를 되감고, 무엇이 망가졌는지 표시하고, 그 상태를 AI에게 전달하세요
 
 **CapturePack은 기본 30초의 순환 리플레이를 사람과 AI가 읽을 수 있는 구조화된 증거로 바꿉니다.**
 
-문제가 생긴 뒤 단축키를 눌러 그 순간으로 되감고, 객체 선택으로 과거 프레임의
-캡처된 컨트롤이나 창을 고르세요. CapturePack은 픽셀만 보고 추측하게 하지 않고
-대상의 식별 정보, 관측된 위치와 움직임을 보존합니다.
+문제가 생긴 뒤 단축키를 눌러 인터페이스가 실제로 잘못됐던 프레임으로 되감으세요.
+망가진 곳에 상자를 그리고 무슨 뜻인지 적은 뒤 저장하면 됩니다. 팩에는 리플레이,
+시간에 따라 기록된 데스크톱의 창·컨트롤 좌표, 그리고 당신의 주석이 함께 담기므로
+AI가 픽셀만 보고 추측할 필요가 없습니다.
+
+**객체 선택은 정지 화면 기능입니다.** 스크린샷을 찍으면 커서 아래의 실제 컨트롤을
+직접 클릭할 수 있고, CapturePack이 이름·역할·AutomationId·프로세스를, 브라우저에서는
+보이던 페이지 전체를 기록합니다. 리플레이에서는 같은 것을 정직하게 제공할 수 없어
+(영상은 창은 언제든 답하지만 브라우저 안 컨트롤은 캡처 순간에만 답합니다) 상자를
+직접 그리는 방식만 남깁니다.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [다운로드](https://github.com/r2cuerdame/capturepack/releases/latest)
 

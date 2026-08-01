@@ -6,13 +6,20 @@
 [![Downloads](https://img.shields.io/github/downloads/r2cuerdame/capturepack/total?color=7c5cff)](https://github.com/r2cuerdame/capturepack/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-## バグを巻き戻し、オブジェクトを選び、その状態をAIへ
+## バグを巻き戻し、壊れた箇所に印を付け、その状態をAIへ
 
 **CapturePackは、既定30秒のローリングリプレイを、人とAIが読める構造化された証拠に変えます。**
 
-問題が起きた後にショートカットを押し、その瞬間まで巻き戻して、過去フレームに
-記録されたコントロールまたはウィンドウをObject Pickで選びます。CapturePackは
-対象の識別情報と観測済みの位置・動きを保存し、AIにピクセルだけから推測させません。
+問題が起きた後にショートカットを押し、インターフェースが実際に壊れていたフレーム
+まで巻き戻します。壊れた箇所を囲み、意図を書いて保存するだけです。パックには
+リプレイ、時間を通じて記録されたデスクトップのウィンドウ・コントロール座標、そして
+あなたの注釈が入るので、AIがピクセルだけから推測する必要はありません。
+
+**Object Pickは静止画の機能です。** スクリーンショットを撮れば、カーソル下の実際の
+コントロールをクリックでき、名前・ロール・AutomationId・プロセスを、ブラウザーでは
+見えていたページ全体を記録します。リプレイでは同じことを正直には提供できない
+（ウィンドウはいつでも答えられますが、ブラウザー内のコントロールは取得の瞬間だけ）
+ため、動画は自分で描くボックスに徹します。
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [ダウンロード](https://github.com/r2cuerdame/capturepack/releases/latest)
 

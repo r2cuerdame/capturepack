@@ -6,13 +6,21 @@
 [![Downloads](https://img.shields.io/github/downloads/r2cuerdame/capturepack/total?color=7c5cff)](https://github.com/r2cuerdame/capturepack/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-## Remontez le bug. Choisissez l’objet. Donnez son état à l’IA.
+## Remontez le bug. Marquez ce qui a cassé. Donnez son état à l’IA.
 
 **CapturePack transforme un replay continu — 30 secondes par défaut — en preuves structurées pour les humains et l’IA.**
 
-Appuyez sur le raccourci après le problème, revenez à l’image concernée puis choisissez le
-contrôle ou la fenêtre capturés. CapturePack conserve leur identité, leur position et leur
-mouvement observés afin que l’IA n’ait pas à les déduire des seuls pixels.
+Appuyez sur le raccourci après le problème et revenez à l’image où l’interface était réellement
+fautive. Encadrez ce qui a cassé, écrivez ce que vous vouliez dire, enregistrez. Le pack emporte
+la relecture, la géométrie des fenêtres et des contrôles que le bureau a enregistrée au fil du
+temps, et vos annotations — pour que l’IA n’ait pas à tout déduire des seuls pixels.
+
+**Object Pick est une fonction de capture fixe.** Prenez une capture d’écran et vous pouvez
+cliquer sur le vrai contrôle sous le curseur : CapturePack enregistre son nom, son rôle, son
+AutomationId et son processus, et dans un navigateur toute la page visible. Une relecture ne
+peut pas offrir la même chose honnêtement — elle répond pour la fenêtre à tout instant, mais
+pour le contrôle dans le navigateur seulement à l’instant capturé — donc une vidéo garde les
+cadres que vous dessinez.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Télécharger](https://github.com/r2cuerdame/capturepack/releases/latest)
 

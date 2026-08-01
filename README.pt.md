@@ -6,13 +6,20 @@
 [![Downloads](https://img.shields.io/github/downloads/r2cuerdame/capturepack/total?color=7c5cff)](https://github.com/r2cuerdame/capturepack/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-## Volte ao erro. Selecione o objeto. Entregue o estado à IA.
+## Volte ao erro. Marque o que quebrou. Entregue o estado à IA.
 
 **O CapturePack transforma um replay contínuo — 30 segundos por padrão — em evidência estruturada para pessoas e IA.**
 
-Pressione o atalho depois do erro, volte ao quadro em que ocorreu e selecione o controle ou
-a janela capturados. O CapturePack preserva identidade, posição e movimento observados para
+Pressione o atalho depois do erro e volte ao quadro em que a interface estava realmente errada.
+Marque o que quebrou, escreva o que quis dizer e salve. O pacote leva o replay, a geometria de
+janelas e controles que a área de trabalho registrou ao longo do tempo, e suas anotações — para
 que a IA não precise inferir tudo apenas dos pixels.
+
+**O Object Pick é um recurso de imagem estática.** Faça uma captura de tela e você pode clicar
+no controle real sob o cursor: o CapturePack registra nome, papel, AutomationId e processo, e
+num navegador a página visível inteira. Um replay não consegue oferecer o mesmo com honestidade
+— responde pela janela a qualquer momento, mas pelo controle dentro do navegador só no instante
+capturado — então um vídeo fica com as caixas que você desenha.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Baixar](https://github.com/r2cuerdame/capturepack/releases/latest)
 

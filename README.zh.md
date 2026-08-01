@@ -6,12 +6,18 @@
 [![Downloads](https://img.shields.io/github/downloads/r2cuerdame/capturepack/total?color=7c5cff)](https://github.com/r2cuerdame/capturepack/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-## 回溯 bug，选择对象，把当时的状态交给 AI
+## 回溯 bug，标记出问题的地方，把当时的状态交给 AI
 
 **CapturePack 把默认 30 秒的循环回放变成人和 AI 都能读取的结构化证据。**
 
-问题发生后按下快捷键，回到出错时刻，再用对象选择挑出过去画面里已捕获的控件或
-窗口。CapturePack 保存目标身份、观测位置和移动，不让 AI 只凭像素猜测。
+问题发生后按下快捷键，回到界面真正出错的那一帧。框出出问题的地方，写下你的意思，
+然后保存。包里会带上回放、桌面随时间记录下来的窗口与控件坐标，以及你的批注——
+AI 不必只凭像素猜测。
+
+**对象选择是静止画面的功能。** 截一张图，你就能点击光标下的真实控件：CapturePack
+会记录它的名称、角色、AutomationId 和进程，在浏览器里还会记录整个可见页面。回放
+无法诚实地提供同样的能力（窗口随时可答，浏览器内的控件只在捕获的那一刻可答），
+所以视频只保留你自己画的方框。
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [下载](https://github.com/r2cuerdame/capturepack/releases/latest)
 

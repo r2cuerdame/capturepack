@@ -6,13 +6,20 @@
 [![Downloads](https://img.shields.io/github/downloads/r2cuerdame/capturepack/total?color=7c5cff)](https://github.com/r2cuerdame/capturepack/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-## Rebobina el fallo. Selecciona el objeto. Entrega su estado a la IA.
+## Rebobina el fallo. Marca lo que falló. Entrega su estado a la IA.
 
 **CapturePack convierte una repetición continua —30 segundos por defecto— en evidencia estructurada para personas e IA.**
 
-Pulsa el atajo después del fallo, vuelve al fotograma donde ocurrió y selecciona el control o
-la ventana capturados. CapturePack conserva la identidad, posición y movimiento observados para
-que una IA no tenga que inferirlos solo a partir de píxeles.
+Pulsa el atajo después del fallo y vuelve al fotograma donde la interfaz estaba realmente mal.
+Encuadra lo que falló, escribe lo que querías decir y guarda. El paquete lleva la repetición, la
+geometría de ventanas y controles que el escritorio registró a lo largo del tiempo, y tus
+anotaciones — para que una IA no tenga que inferirlo todo a partir de píxeles.
+
+**Object Pick es una función de captura fija.** Haz una captura de pantalla y podrás hacer clic
+en el control real bajo el cursor: CapturePack registra su nombre, rol, AutomationId y proceso,
+y en un navegador toda la página visible. Una repetición no puede ofrecer lo mismo con
+honestidad — responde por la ventana en cualquier momento, pero por el control dentro del
+navegador solo en el instante capturado — así que un vídeo se queda con los recuadros que dibujas.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Descargar](https://github.com/r2cuerdame/capturepack/releases/latest)
 
