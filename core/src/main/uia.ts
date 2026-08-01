@@ -46,7 +46,7 @@ import { existsSync } from 'node:fs'
 import * as path from 'node:path'
 import { app, screen } from 'electron'
 import type { Rectangle } from 'electron'
-import { logInfo } from './log'
+import { logInfo, logWarn } from './log'
 import { visibleWindowHandlesNow } from './context/runtime'
 import type {
   UiaBounds,
@@ -246,6 +246,22 @@ function recordDumpOutcome(dump: UiaRawDump | null, failure: UiaFailureReason | 
   // describe a capture two captures ago.
   lastDump = null
   lastFailure = failure
+  // AND SAY SO. This branch was silent, and silence here is the worst kind:
+  // the capture still succeeds, the pack still opens, and every window in it is
+  // pickable — but only as a WINDOW, because the control trees are gone. Nothing
+  // in the pack distinguishes "this desk has no controls" from "the walk never
+  // ran", and nothing in the log said which had happened. Measured on the
+  // owner's machine: 21 windows, 0 controls, `budget_ms: 0` (the payload came
+  // from the surface floor, not from a dump at all), and not one line about it.
+  //
+  // `failure === null` is the deliberate case — the Plugins switch is off — and
+  // recordUiaSkipped() routes here too. That one is not news.
+  if (failure !== null) {
+    logWarn(
+      `[uia] dump produced NOTHING (${failure}) — every window in this pack is pickable only as a window, `
+      + 'not as the controls inside it',
+    )
+  }
 }
 
 /**
