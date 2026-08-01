@@ -78,7 +78,9 @@
     if (style.visibility === 'hidden' || style.display === 'none') return 'hidden'
     if (style.opacity === '0') return 'hidden'
     if (el.hasAttribute('hidden') || el.getAttribute('aria-hidden') === 'true') return 'hidden'
-    if (rect.width < MIN_SIZE_PX || rect.height < MIN_SIZE_PX) return 'hidden'
+    // Everything above this line is INHERITED and prunes the subtree. Everything
+    // below is about this element's own box, which its children do not share.
+    if (rect.width < MIN_SIZE_PX || rect.height < MIN_SIZE_PX) return 'offscreen'
     // Outside the viewport is outside the picture.
     if (rect.bottom <= 0 || rect.right <= 0) return 'offscreen'
     if (rect.top >= window.innerHeight || rect.left >= window.innerWidth) return 'offscreen'
@@ -90,11 +92,16 @@
 
   const HOLDS_A_VALUE = { INPUT: true, TEXTAREA: true, SELECT: true }
 
+  /** Not recordable here, but its descendants still might be. */
+  const SKIP = Object.freeze({ skip: true })
+
   function describe(el, index) {
     const rect = el.getBoundingClientRect()
     const style = window.getComputedStyle(el)
     const state = visibility(el, rect, style)
-    if (state !== 'visible') return null
+    // null prunes the subtree; SKIP records nothing and keeps walking.
+    if (state === 'hidden') return null
+    if (state !== 'visible') return SKIP
 
     const tag = el.tagName.toLowerCase()
     const out = {
@@ -153,12 +160,23 @@
         break
       }
       const described = describe(el, elements.length)
-      if (described === null) {
-        // Hidden or off-screen: its children are too, and skipping the subtree
-        // is what keeps a page of collapsed menus cheap.
-        continue
-      }
-      elements.push(described)
+      // TWO DIFFERENT REFUSALS, AND CONFLATING THEM COST A WHOLE PAGE.
+      //
+      // `display: none`, `visibility: hidden`, `aria-hidden` and `opacity: 0`
+      // are INHERITED — a subtree under one of them is genuinely invisible, and
+      // skipping it whole is what keeps a page of collapsed menus cheap.
+      //
+      // A zero-sized or off-screen BOX is not inherited. An absolutely
+      // positioned child escapes its parent's box entirely, so a container with
+      // no height can contain the entire visible page. Measured on youtube.com:
+      // `<html>` has zero height because every child is positioned, the walk
+      // refused it as "hidden", and the document came out with **0 elements
+      // after visiting 1** — the whole page, thrown away by its root.
+      //
+      // So a box that cannot be recorded is skipped as an ELEMENT and still
+      // descended into. Only inherited invisibility prunes.
+      if (described === null) continue
+      if (described !== SKIP) elements.push(described)
       const children = el.children
       for (let i = children.length - 1; i >= 0; i -= 1) stack.push(children[i])
     }

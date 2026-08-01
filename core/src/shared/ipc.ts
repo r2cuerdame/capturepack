@@ -1401,6 +1401,8 @@ export interface ChromeIntegrationStatus {
   hostSeen: boolean
   /** The extension completed its handshake. */
   extensionConnected: boolean
+  /** The user has allowed the browser, so a capture carries the page (#128). */
+  browserGranted: boolean
   extensionVersion: string | null
   /**
    * The version of the extension folder THIS BUILD ships, or null when it

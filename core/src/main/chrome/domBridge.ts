@@ -175,6 +175,7 @@ export interface DomBridgeStatus {
   hostSeen: boolean
   /** The extension completed a hello handshake. */
   extensionConnected: boolean
+  browserGranted: boolean
   extensionVersion: string | null
   protocolVersion: number | null
   protocolCompatible: boolean
@@ -318,6 +319,7 @@ export function domBridgeStatus(): DomBridgeStatus {
     listening: server !== null,
     hostSeen,
     extensionConnected: extension !== null,
+    browserGranted,
     extensionVersion: extension?.version ?? null,
     protocolVersion: extension?.protocol ?? null,
     protocolCompatible: extension?.protocol === DOM_PROTOCOL_VERSION,

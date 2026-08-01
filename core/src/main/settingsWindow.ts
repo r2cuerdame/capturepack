@@ -321,6 +321,7 @@ async function chromeStatus(forceInstallRefresh = false): Promise<ChromeIntegrat
     listening: bridge.listening,
     hostSeen: bridge.hostSeen,
     extensionConnected: bridge.extensionConnected,
+    browserGranted: bridge.browserGranted,
     extensionVersion: bridge.extensionVersion,
     protocolVersion: bridge.protocolVersion,
     appProtocolVersion: DOM_PROTOCOL_VERSION,

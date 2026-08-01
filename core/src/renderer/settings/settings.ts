@@ -88,8 +88,14 @@ const chromeExtPageBtn = el<HTMLButtonElement>('chromeExtPageBtn')
 const chromeDetectBtn = el<HTMLButtonElement>('chromeDetectBtn')
 const chromeManual = el<HTMLDivElement>('chromeManual')
 const chromeManualToggle = el<HTMLButtonElement>('chromeManualToggle')
-const chromeSteps = [el<HTMLLIElement>('chromeStep1'), el<HTMLLIElement>('chromeStep2'), el<HTMLLIElement>('chromeStep3')]
+const chromeSteps = [
+  el<HTMLLIElement>('chromeStep1'),
+  el<HTMLLIElement>('chromeStep2'),
+  el<HTMLLIElement>('chromeStep3'),
+  el<HTMLLIElement>('chromeStep4'),
+]
 const chromeStep3How = el<HTMLElement>('chromeStep3How')
+const chromeStep4How = el<HTMLElement>('chromeStep4How')
 const chromeUninstallBtn = el<HTMLButtonElement>('chromeUninstallBtn')
 const chromeRefreshBtn = el<HTMLButtonElement>('chromeRefreshBtn')
 const chromeExtDir = el<HTMLElement>('chromeExtDir')
@@ -769,11 +775,21 @@ openOutputBtn.addEventListener('click', () => {
 function renderChromeWizard(status: ChromeIntegrationStatus): void {
   const loaded = status.detected.length > 0
   const connected = status.extensionConnected && status.protocolCompatible
-  const at = connected ? 2 : loaded ? 2 : 0
+  // CONNECTING IS NOT THE LAST STEP (#128). A connected extension still wrote
+  // packs with no page, because one click remained and nothing said so. Step 4
+  // is where the wizard now ends, and it is only "done" once the browser has
+  // actually been allowed.
+  const granted = status.browserGranted
+  const at = granted ? 3 : connected ? 3 : loaded ? 2 : 0
   chromeSteps.forEach((li, i) => {
-    li.classList.toggle('current', i === at && !connected)
-    li.classList.toggle('done', connected ? true : i < at)
+    li.classList.toggle('current', i === at && !granted)
+    li.classList.toggle('done', granted ? true : i < at)
   })
+  chromeStep4How.textContent = granted
+    ? t('settings.chromeStep4Done')
+    : connected
+      ? t('settings.chromeStep4How')
+      : t('settings.chromeStep4Waiting')
   if (connected) {
     chromeStep3How.textContent = t('settings.chromeStep3Done', {
       version: status.extensionVersion ?? '?',

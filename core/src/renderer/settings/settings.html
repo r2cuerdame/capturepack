@@ -467,6 +467,17 @@
                 <span class="how" id="chromeStep3How" data-i18n="settings.chromeStep3How">CapturePack registers itself with the browser and waits for the extension to say hello.</span>
               </div>
             </li>
+            <!-- Connecting is not the last step, and stopping at 3 is why a
+                 connected extension still produced packs with no page: nothing
+                 told the user there was one click left. -->
+            <li id="chromeStep4">
+              <span class="num">4</span>
+              <div class="body">
+                <b data-i18n="settings.chromeStep4">Allow the browser</b>
+                <span class="how" id="chromeStep4How" data-i18n="settings.chromeStep4How">Open any ordinary web page, click the CapturePack icon in the toolbar, and choose Allow. Chrome asks once. After that a capture brings the page with it and you press nothing in Chrome — the icon goes back to picking a single element.</span>
+                <span class="how" id="chromeStep4Why" data-i18n="settings.chromeStep4Why">Your capture hotkey is a Windows shortcut, so Chrome never sees it. A page reaches an extension only for a click made inside Chrome, or for a browser you have allowed. Nothing is held until you allow it, and chrome://extensions takes it back at any time.</span>
+              </div>
+            </li>
           </ol>
           <div class="pathRow" id="chromeManual" hidden>
             <input type="text" id="chromeExtensionId" spellcheck="false" placeholder="extension id from chrome://extensions" data-i18n-placeholder="settings.chromeIdPlaceholder" />

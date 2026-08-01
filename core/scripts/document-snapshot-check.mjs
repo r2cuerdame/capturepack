@@ -161,15 +161,18 @@ console.log('\nA password field records that it exists, and nothing else')
 
 console.log('\nWhat the user could not see is not in the pack')
 {
+  // ONLY INHERITED INVISIBILITY PRUNES A SUBTREE.
+  //
+  // These five are inherited: nothing under them can be seen, so refusing the
+  // branch whole is both correct and what keeps a page of collapsed menus cheap.
+  // A zero-sized or off-screen BOX is NOT inherited and is tested separately
+  // below — conflating the two threw away an entire page (#128).
   const hiddenWays = [
     ['display:none', { style: { display: 'none' } }],
     ['visibility:hidden', { style: { visibility: 'hidden' } }],
     ['opacity:0', { style: { opacity: '0' } }],
     ['the hidden attribute', { attrs: { hidden: '' } }],
     ['aria-hidden', { attrs: { 'aria-hidden': 'true' } }],
-    ['a zero-sized box', { rect: { left: 0, top: 0, width: 0, height: 0 } }],
-    ['scrolled off the top', { rect: { left: 10, top: -900, width: 100, height: 20 } }],
-    ['past the right edge', { rect: { left: 4000, top: 10, width: 100, height: 20 } }],
   ]
   for (const [label, options] of hiddenWays) {
     const snap = snapshotOf(
@@ -185,6 +188,67 @@ console.log('\nWhat the user could not see is not in the pack')
     check(
       `${label}: neither it nor its children are recorded`,
       !JSON.stringify(snap).includes('SECRET-COLLAPSED-TEXT'),
+    )
+  }
+
+  // A BOX WITH NO SIZE IS NOT A HIDDEN BRANCH (#128).
+  //
+  // An absolutely positioned child escapes its parent's box entirely, so a
+  // container with no height routinely contains the whole visible page.
+  // Measured on youtube.com: `<html>` has zero height because every child is
+  // positioned, the walk refused it as hidden, and the document arrived with
+  // **0 elements after visiting 1**. The page, discarded by its own root.
+  const boxOnly = [
+    ['a zero-sized box', { rect: { left: 0, top: 0, width: 0, height: 0 } }],
+    ['scrolled off the top', { rect: { left: 10, top: -900, width: 100, height: 20 } }],
+    ['past the right edge', { rect: { left: 4000, top: 10, width: 100, height: 20 } }],
+  ]
+  for (const [label, options] of boxOnly) {
+    const snap = snapshotOf(
+      el('html', {
+        children: [
+          el('div', {
+            ...options,
+            children: [
+              el('span', {
+                rect: { left: 10, top: 10, width: 200, height: 20 },
+                text: 'VISIBLE-CHILD-TEXT',
+              }),
+            ],
+          }),
+        ],
+      }),
+    )
+    check(
+      `${label}: the box itself is not recorded`,
+      !snap.elements.some((e) => e.bounds.width === (options.rect?.width ?? -1)
+        && e.bounds.height === (options.rect?.height ?? -1)
+        && e.tag === 'div'),
+    )
+    check(
+      `${label}: but a visible child underneath still is`,
+      JSON.stringify(snap).includes('VISIBLE-CHILD-TEXT'),
+      JSON.stringify(snap.elements),
+    )
+  }
+
+  // The exact shape that broke: a zero-height root over a real page.
+  {
+    const snap = snapshotOf(
+      el('html', {
+        rect: { left: 0, top: 0, width: 1184, height: 0 },
+        children: [
+          el('div', {
+            rect: { left: 0, top: 0, width: 1184, height: 814 },
+            children: [el('span', { text: 'YOUTUBE-STYLE-PAGE' })],
+          }),
+        ],
+      }),
+    )
+    check(
+      'a zero-height ROOT does not discard the document',
+      snap.elements.length > 0 && JSON.stringify(snap).includes('YOUTUBE-STYLE-PAGE'),
+      `${String(snap.elements.length)} element(s), visited ${String(snap.visitedCount)}`,
     )
   }
 }

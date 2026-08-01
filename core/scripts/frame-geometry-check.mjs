@@ -161,7 +161,7 @@ console.log('\nThe picker actually uses it, in every frame')
   // speak the new payload. 0.2.0 was a pick carrying the document it sat in;
   // 0.3.0 adds a second way to arm the picker.
   check('the manifest version moved with the protocol change',
-    manifest.version === '0.3.1', manifest.version)
+    manifest.version === '0.3.2', manifest.version)
   check('and the document walker ships with it',
     existsSync(resolve(EXTENSION, 'document-snapshot.js')))
 
