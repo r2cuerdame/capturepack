@@ -322,8 +322,30 @@ the design record and [#104](https://github.com/r2cuerdame/capturepack/issues/10
 [#89](https://github.com/r2cuerdame/capturepack/issues/89) for the evidence.
 
 An RC installer is built with `npm run dist` and appears at
-`core/release-rc18b/CapturePack-Setup-0.3.4-rc.19.exe`. It is unsigned and gitignored:
-builds are artifacts of a commit, never part of one.
+`core/release-rc19/CapturePack-Setup-0.3.4-rc.19.exe`. It is unsigned and gitignored:
+builds are artifacts of a commit, never part of one. (`release/` can hold a lock
+from an earlier build; `npx --% electron-builder --win --publish never
+-c.directories.output=release-rcNN` builds beside it. The `--%` matters —
+PowerShell otherwise eats `-c.directories...` as an argument to `-c`.)
+
+- **Picking is a still-image feature** ([#119](https://github.com/r2cuerdame/capturepack/issues/119)).
+  A video builds no object index at all: one gate, `objectPickingApplies()` in
+  the editor. Not because picking in a replay was hard, but because it was only
+  half true — lane A skips Chromium windows to hold its 3% duty, so a scrubbed
+  frame offered the window and never the thing in it. Lane A still RECORDS into
+  the pack's windows-context timeline; only the affordance is gone. Pinned by
+  `check:video-no-picking`.
+- **A control rectangle is checked before it is offered**
+  ([#118](https://github.com/r2cuerdame/capturepack/issues/118)). Chromium
+  answers with the old display's scale for a while after a window is dragged
+  across a DPI boundary, so a web-content root that no longer covers the surface
+  it was drawn into is refused, subtree and all. Measured 0.67 and 0.50 against
+  a healthy 1.00. `windows-uia` payload 0.4.0 reports `geometry_refused`. Pinned
+  by `check:renderer-geometry`; verified against the owner's own failing pack
+  (330 elements -> 294, all three misplaced picks gone, every healthy window
+  intact).
+- **The gate is 75 steps.** `npm run qa:rc` — NOT `node scripts/qa-gate.mjs`,
+  which loses `npm_execpath` and then cannot spawn `npm.cmd` under Node 24.
 
 - Element picking now reports itself end to end: the picker's arming, failure
   and disarming, every pick that arrives, every message refused with the rule
