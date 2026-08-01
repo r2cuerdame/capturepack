@@ -589,7 +589,15 @@ function parse(raw: unknown): ParseOutcome {
       },
     }
   }
-  if (type !== 'dom.element.selected' && type !== 'tab.updated' && type !== 'url.changed') {
+  // `dom.document.captured` is written by the app, not the browser — but a pack
+  // is READ BACK through this same parser, so leaving it off this list meant
+  // re-opening a saved capture silently dropped its page (#130).
+  if (
+    type !== 'dom.element.selected' &&
+    type !== 'tab.updated' &&
+    type !== 'url.changed' &&
+    type !== 'dom.document.captured'
+  ) {
     return refuse(`unknown-type:${typeof type === 'string' ? type.slice(0, 64) : typeof type}`)
   }
   const tabValue = parseTab(m['tab'])

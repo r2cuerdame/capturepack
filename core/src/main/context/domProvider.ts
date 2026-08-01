@@ -42,7 +42,12 @@ import type {
 import { CONTEXT_PROTOCOL_VERSION } from '../../shared/context/protocol'
 import type { ProviderManifest } from '../../shared/context/manifest'
 import { rectContains } from '../../shared/context/surfaces'
-import type { DomElement, DomEvent, DomViewport } from '../chrome/domBridge'
+import type {
+  DomDocumentSnapshot,
+  DomElement,
+  DomEvent,
+  DomViewport,
+} from '../chrome/domBridge'
 
 export const CHROME_DOM_PROVIDER_ID = 'chrome-dom'
 const CHROME_DOM_VERSION = '0.1.0'
@@ -263,6 +268,28 @@ export class ChromeDomProvider implements TemporalContextProvider {
     const out: PlacedPick[] = []
     const refusals: DomPlacementRefusal[] = []
     for (const [eventOrdinal, event] of this.events.entries()) {
+      // A CAPTURED DOCUMENT IS EVERY ELEMENT, NOT ONE (#130).
+      //
+      // This loop only ever understood `dom.element.selected` — the single
+      // element a user had already clicked in Chrome. So the document fetched at
+      // the capture instant reached the pack and stopped there: 340 rectangles
+      // written to disk and none of them offered to the editor, which is
+      // indistinguishable, from the outside, from not collecting it at all.
+      //
+      // Each entry is placed through exactly the same transform as a pick, so a
+      // document element and a picked element cannot land in different places.
+      if (event.type === 'dom.document.captured') {
+        const snapshot = event.document
+        if (snapshot === undefined) continue
+        for (const entry of snapshot.elements) {
+          const placed = this.place(
+            { ...event, element: documentElementAsPick(entry) },
+            eventOrdinal,
+          )
+          if (placed !== null) out.push(placed)
+        }
+        continue
+      }
       if (event.type !== 'dom.element.selected') continue
       if (event.element === undefined) continue
       const placed = this.place(event, eventOrdinal)
@@ -621,4 +648,38 @@ function intersectionArea(a: Rect, b: Rect): number {
 
 function overlaps(a: Rect, b: Rect): boolean {
   return intersectionArea(a, b) > 0
+}
+
+/**
+ * ONE ENTRY OF A DOCUMENT SNAPSHOT, AS THE PICK SHAPE.
+ *
+ * The walker records what it saw; a pick carries a `selector` because that is
+ * what identifies an element to a person reading the pack later. The walker has
+ * no selector engine and should not grow one, so the identity is rebuilt here
+ * from what it did record, cheapest first: an id is unique by definition, a
+ * class list is usually enough to recognise, and a bare tag is the honest floor.
+ *
+ * Deliberately not invented beyond that. A synthesised `nth-child` chain would
+ * look like a selector that could be resolved later, and it could not be — the
+ * page has moved on.
+ */
+export function documentElementAsPick(entry: DomDocumentSnapshot['elements'][number]): DomElement {
+  const classes = (entry.class ?? '')
+    .split(/\s+/u)
+    .filter((c: string) => c !== '')
+    .slice(0, 3)
+    .map((c: string) => `.${c}`)
+    .join('')
+  const selector =
+    entry.id !== undefined && entry.id !== ''
+      ? `#${entry.id}`
+      : `${entry.tag}${classes}`
+  return {
+    tag: entry.tag,
+    selector,
+    bounds: entry.bounds,
+    ...(entry.id === undefined || entry.id === '' ? {} : { id: entry.id }),
+    ...(entry.role === undefined || entry.role === '' ? {} : { role: entry.role }),
+    ...(entry.text === undefined || entry.text === '' ? {} : { text: entry.text }),
+  }
 }

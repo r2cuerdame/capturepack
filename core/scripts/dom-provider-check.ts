@@ -22,6 +22,7 @@ import {
 } from '../src/main/context/buffer'
 import { WindowsUiaProvider } from '../src/main/context/provider'
 import { parseDomPayload, type DomEvent } from '../src/main/chrome/domBridge'
+import { documentElementAsPick as documentElementAsPickForTest } from '../src/main/context/domProvider'
 import type { Rect, SurfaceInfo } from '../src/shared/context/protocol'
 import { claimCovers } from '../src/shared/context/resolver'
 
@@ -717,6 +718,66 @@ console.log('\nA picked document is parsed, not believed')
     older.length === 1 && older[0]?.element !== undefined && older[0]?.document === undefined,
   )
 }
+
+  // A CAPTURED DOCUMENT IS EVERY ELEMENT, NOT ONE (#130).
+  //
+  // The provider only ever understood `dom.element.selected`, so the document
+  // fetched at the capture instant reached the pack and stopped: 340 rectangles on
+  // disk, none of them offered to the editor. From outside that is
+  // indistinguishable from never collecting it.
+  console.log('\nEvery element of a captured document is offered, not just a pick')
+  {
+    const viewport = { width: 1000, height: 800, dpr: 1, screenX: 100, screenY: 50, outerWidth: 1000, outerHeight: 900 }
+    const doc = {
+      viewport: { width: 1000, height: 800, devicePixelRatio: 1, scrollX: 0, scrollY: 0 },
+      url: 'https://example.invalid/',
+      title: 'Fixture',
+      elements: [
+        { i: 0, tag: 'button', role: 'button', bounds: { x: 10, y: 20, width: 80, height: 30 }, id: 'go', text: 'Go' },
+        { i: 1, tag: 'a', role: 'link', bounds: { x: 10, y: 60, width: 120, height: 20 }, class: 'nav main extra fourth', text: 'Home' },
+        { i: 2, tag: 'div', role: '', bounds: { x: 0, y: 0, width: 1000, height: 800 } },
+      ],
+      truncated: false,
+      visitedCount: 3,
+      elapsedMs: 1,
+      omitted: [],
+    }
+    const events = parseDomPayload(
+      JSON.stringify({
+        events: [{
+          t_ms: 1000,
+          type: 'dom.document.captured',
+          protocol: 1,
+          tab: { url: 'https://example.invalid/', title: 'Fixture' },
+          viewport,
+          document: doc,
+        }],
+      }),
+    )
+    report(
+      'a captured document survives the parser',
+      events.length === 1 && events[0]?.document !== undefined,
+      `${String(events.length)} event(s)`,
+    )
+    report(
+      'and it keeps the viewport that places it',
+      events[0]?.viewport?.screenX === 100,
+      JSON.stringify(events[0]?.viewport),
+    )
+    // The identity a reader gets for an element the walker never selectored.
+    const built = documentElementAsPickForTest(doc.elements[0] as never)
+    report(
+      'an id becomes the selector, because an id is unique by definition',
+      built.selector === '#go', built.selector)
+    const byClass = documentElementAsPickForTest(doc.elements[1] as never)
+    report(
+      'otherwise the tag and up to three classes identify it',
+      byClass.selector === 'a.nav.main.extra', byClass.selector)
+    const bare = documentElementAsPickForTest(doc.elements[2] as never)
+    report(
+      'and a bare tag is the honest floor, not an invented nth-child chain',
+      bare.selector === 'div', bare.selector)
+  }
 
 console.log(failures === 0 ? '\ndom-provider-check ok' : `\ndom-provider-check FAILED (${String(failures)})`)
   if (failures > 0) process.exitCode = 1
