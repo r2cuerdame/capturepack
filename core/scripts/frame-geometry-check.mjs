@@ -208,6 +208,15 @@ console.log('\nThe picker actually uses it, in every frame')
     'without this the extension would try, fail, and look like an empty page')
   check('a withdrawn grant is reported, so a pack can say why it carries no page',
     /permissions\.onRemoved/.test(background) && /browser\.grant/.test(background))
+  // THE BUG rc.25 SHIPPED. The extension announced the grant from onAdded and
+  // onRemoved only, so an app that started AFTER the user granted — or whose
+  // worker MV3 had recycled — believed there was none and never asked for a
+  // page. Nothing in the log, nothing in the pack.
+  check('the grant is announced on CONNECT, not only when it changes',
+    /host\.hello[\s\S]{0,300}hasBrowserGrant\(\)\.then\(announceGrant\)/.test(
+      background.split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n'),
+    ),
+    'a state reported only on change is invisible to a process that started later')
   check('activeTab is still the whole permission story — no host permissions',
     !('host_permissions' in manifest) &&
       !manifest.permissions.some((p) => p === '<all_urls>' || p.includes('://')),

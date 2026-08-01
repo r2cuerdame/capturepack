@@ -169,6 +169,14 @@ function connect() {
         return
       }
       if (!message || message.type !== 'host.hello' || message.protocol !== PROTOCOL) return
+      // STATE ON CONNECT, NOT ONLY ON CHANGE.
+      //
+      // The first version announced the grant from permissions.onAdded/onRemoved
+      // alone, so an app that started AFTER the user granted — or after this
+      // service worker was recycled, which MV3 does constantly — believed the
+      // grant did not exist and never asked for a page. Silently. The handshake
+      // is the one moment both sides are known to be listening.
+      void hasBrowserGrant().then(announceGrant)
       clearHelloTimer()
       const loadedVersion = chrome.runtime.getManifest().version
       // CapturePack updates the stable unpacked folder before opening its

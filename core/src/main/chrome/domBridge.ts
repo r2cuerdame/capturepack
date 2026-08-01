@@ -207,6 +207,8 @@ let clockNowMs: () => number = () => Date.now()
 
 /** Whether the user has allowed the browser (extension 0.3.0's optional grant). */
 let browserGranted = false
+/** Whether the extension has ever told us; distinguishes "never" from "withdrawn". */
+let browserGrantReported = false
 /** In-flight capture-time fetches, by request id. */
 const domRequests = new Map<string, (answer: DomResponseMessage) => void>()
 let domRequestSeq = 0
@@ -230,7 +232,22 @@ export function browserGrantState(): boolean {
  */
 export function requestDomForCapture(timeoutMs: number): Promise<DomResponseMessage | null> {
   const sockets = extensionConnections.keys()
-  if (sockets.length === 0 || !browserGranted) return Promise.resolve(null)
+  // ASK. DO NOT CONSULT A CACHE.
+  //
+  // The first version returned early when `browserGranted` was false, and that
+  // flag is only ever set by a message from the extension — so an app that
+  // started after the user granted, or whose extension worker had been recycled
+  // (MV3 does that constantly), believed there was no grant and never asked.
+  // Silently, with nothing in the log and nothing in the pack: the invisible
+  // failure this codebase keeps having to relearn.
+  //
+  // The extension is the authority on its own permissions, and refusing costs it
+  // one message. So the cached flag is now only for REPORTING — Settings, and
+  // the line below — and never for deciding.
+  if (sockets.length === 0) {
+    logInfo('[chrome] no browser connected — pack written without a page')
+    return Promise.resolve(null)
+  }
   domRequestSeq += 1
   const requestId = `r${String(domRequestSeq)}`
   return new Promise<DomResponseMessage | null>((resolve) => {
@@ -241,6 +258,18 @@ export function requestDomForCapture(timeoutMs: number): Promise<DomResponseMess
     }, timeoutMs)
     domRequests.set(requestId, (answer) => {
       clearTimeout(timer)
+      // EVERY OUTCOME SAYS SOMETHING. A pack with no page must never be the only
+      // evidence that something did not happen.
+      if (answer.ok) {
+        logInfo(`[chrome] the browser answered with the visible page${answer.tab === null ? '' : ` on ${answer.tab.url.slice(0, 120)}`}`)
+      } else if (answer.reason === 'not-granted') {
+        logInfo(
+          '[chrome] the browser has not been allowed yet — click the CapturePack icon in Chrome once; '
+          + 'until then a capture carries no page',
+        )
+      } else {
+        logWarn(`[chrome] the browser refused the page: ${answer.reason ?? 'unknown'}`)
+      }
       resolve(answer)
     })
     let sent = 0
@@ -734,12 +763,22 @@ export function startDomBridge(): void {
               })}\n`,
             )
           } else if ('kind' in result.value && result.value.kind === 'grant') {
+            const was = browserGranted
+            const seen = browserGrantReported
             browserGranted = result.value.granted
-            logInfo(
-              browserGranted
-                ? '[chrome] the browser is allowed — a capture can carry the page without any click'
-                : '[chrome] the browser grant was withdrawn — captures carry no page until it is given again',
-            )
+            browserGrantReported = true
+            // A first report and a withdrawal are different facts. Saying
+            // "withdrawn" to someone who never granted it sends them looking for
+            // something they did not do.
+            if (browserGranted && !was) {
+              logInfo('[chrome] the browser is allowed — a capture carries the page, with nothing to press in Chrome')
+            } else if (!browserGranted && was && seen) {
+              logInfo('[chrome] the browser grant was withdrawn — captures carry no page until it is given again')
+            } else if (!browserGranted) {
+              logInfo(
+                '[chrome] the browser has not been allowed — click the CapturePack icon in Chrome once to allow it',
+              )
+            }
           } else if ('kind' in result.value && result.value.kind === 'domResponse') {
             const answer = result.value
             const pending = domRequests.get(answer.requestId)

@@ -126,5 +126,29 @@ check(
   'a reader keys on the declared version to know what to expect',
 )
 
+console.log('\nThe capture asks the browser rather than trusting a cache')
+const bridge = source('src/main/chrome/domBridge.ts')
+check(
+  'the still fetches the page at the capture instant',
+  /requestDomForCapture\(/.test(code(image)),
+  'the whole point: one global hotkey, no gesture in Chrome',
+)
+check(
+  'the fetch is bounded, so a capture never waits on a browser',
+  /STILL_DOM_FETCH_TIMEOUT_MS/.test(code(image)),
+)
+// rc.25 gated the request on a cached grant flag that only a change event ever
+// set — so an app started after the grant asked for nothing, silently.
+check(
+  'the request is NOT gated on a cached grant flag',
+  !/if \(sockets\.length === 0 \|\| !browserGranted\)/.test(code(bridge)),
+  'the extension is the authority on its own permissions; refusing costs one message',
+)
+check(
+  'every outcome is logged, including "not allowed yet"',
+  /not-granted/.test(bridge) && /no browser connected/.test(bridge),
+  'a pack with no page must never be the only evidence that nothing happened',
+)
+
 console.log(failed === 0 ? '\nstill-dom: OK' : `\nstill-dom: ${failed} FAILED`)
 process.exit(failed === 0 ? 0 : 1)
