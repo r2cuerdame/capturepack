@@ -44,6 +44,7 @@
     "check:windows-context": "node scripts/windows-context-timeline-check.mjs",
     "check:image-context": "node scripts/image-context-check.mjs",
     "check:renderer-geometry": "node scripts/renderer-geometry-check.mjs",
+    "check:pack-geometry-e2e": "node scripts/pack-geometry-e2e-check.mjs",
     "check:video-no-picking": "node scripts/video-no-picking-check.mjs",
     "check:image-region-selector": "node scripts/image-region-selector-check.mjs",
     "check:image-region-window": "electron scripts/image-region-window-check.cjs",

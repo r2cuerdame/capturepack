@@ -220,8 +220,8 @@ npm run qa:rc
 npm audit --omit=dev
 ```
 
-`qa:rc` currently runs 72 discovered `check:*` regressions plus type checking,
-the production build, and isolated Electron smoke: **75 gate steps** (73 with
+`qa:rc` currently runs 73 discovered `check:*` regressions plus type checking,
+the production build, and isolated Electron smoke: **76 gate steps** (74 with
 `--skip-build`). Reports
 are written under `%TEMP%\capturepack-qa` unless an artifact directory is
 provided.
@@ -352,7 +352,7 @@ PowerShell otherwise eats `-c.directories...` as an argument to `-c`.)
   `mapUiaToSnapshot`, and `composeUiaForImageDesktop` / `mergeImageWindowFloor`
   stopped rebuilding `geometry_refused` away. **The lesson: a check that does not
   run on the numbers that get written is not a check.**
-- **The gate is 75 steps.** `npm run qa:rc` — NOT `node scripts/qa-gate.mjs`,
+- **The gate is 76 steps.** `npm run qa:rc` — NOT `node scripts/qa-gate.mjs`,
   which loses `npm_execpath` and then cannot spawn `npm.cmd` under Node 24.
 
 - Element picking now reports itself end to end: the picker's arming, failure
