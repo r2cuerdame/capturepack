@@ -315,14 +315,14 @@ version and fix forward. Documentation-only commits may follow the release on
 ## 0.3.4 in progress
 
 Work on `agent/0.3.4`, not released. `core/package.json` is
-**`0.3.4-rc.19`** — a release *candidate* version so a locally built installer can
+**`0.3.4-rc.20`** — a release *candidate* version so a locally built installer can
 never be confused with the public `0.3.3`, not a release. There is no tag and no
 published binary, and `v0.3.3` stays where it is. See [GOAL.md](../GOAL.md) for
 the design record and [#104](https://github.com/r2cuerdame/capturepack/issues/104) /
 [#89](https://github.com/r2cuerdame/capturepack/issues/89) for the evidence.
 
 An RC installer is built with `npm run dist` and appears at
-`core/release-rc19/CapturePack-Setup-0.3.4-rc.19.exe`. It is unsigned and gitignored:
+`core/release-rc20/CapturePack-Setup-0.3.4-rc.20.exe`. It is unsigned and gitignored:
 builds are artifacts of a commit, never part of one. (`release/` can hold a lock
 from an earlier build; `npx --% electron-builder --win --publish never
 -c.directories.output=release-rcNN` builds beside it. The `--%` matters —
@@ -340,10 +340,18 @@ PowerShell otherwise eats `-c.directories...` as an argument to `-c`.)
   answers with the old display's scale for a while after a window is dragged
   across a DPI boundary, so a web-content root that no longer covers the surface
   it was drawn into is refused, subtree and all. Measured 0.67 and 0.50 against
-  a healthy 1.00. `windows-uia` payload 0.4.0 reports `geometry_refused`. Pinned
-  by `check:renderer-geometry`; verified against the owner's own failing pack
-  (330 elements -> 294, all three misplaced picks gone, every healthy window
-  intact).
+  a healthy 1.00. `windows-uia` payload 0.4.0 reports `geometry_refused`.
+- **...and it is checked on the coordinates the pack will actually carry**
+  ([#120](https://github.com/r2cuerdame/capturepack/issues/120)). rc.19 shipped
+  the test in the WALK and in `parseDump`, both of which see the helper's raw
+  numbers — and rc.19 still wrote a 0.497 document while reporting nothing
+  refused. The mapping is ratio-preserving, so a parent and child mapped through
+  the same display cannot disagree; those two were mapped through DIFFERENT
+  ones, because `coveringSpace` picks per rectangle and a stale one lands in the
+  neighbouring display's space. The test now also runs after
+  `mapUiaToSnapshot`, and `composeUiaForImageDesktop` / `mergeImageWindowFloor`
+  stopped rebuilding `geometry_refused` away. **The lesson: a check that does not
+  run on the numbers that get written is not a check.**
 - **The gate is 75 steps.** `npm run qa:rc` — NOT `node scripts/qa-gate.mjs`,
   which loses `npm_execpath` and then cannot spawn `npm.cmd` under Node 24.
 

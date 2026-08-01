@@ -1318,8 +1318,20 @@ reported web content covering **0.67** and **0.50** of the surface it was drawn 
 1/2, the two scales involved), while a window that had never left its own display reported
 1.00.
 
+**And the damage is not always visible in the writer's own coordinates.** A multi-display
+writer maps each rectangle into the snapshot space of the display it is ON
+([§5.6](#56-displays-multi-monitor-captures)), choosing per rectangle so that a window
+straddling two monitors keeps the children visible on the smaller side. That mapping is
+ratio-preserving, so a parent and child mapped through the SAME display can never come out
+disagreeing — but a stale rectangle reported in the coordinates of a display the window has
+already left falls into the OTHER display's space and is scaled by the other display's factor.
+Measured: a Chrome window whose web content covered 1.000 of its host in the writer's raw
+coordinates produced 0.497 in the pack. A writer that checks only its raw numbers will pass
+that one.
+
 A writer therefore MUST NOT emit a control whose web-content root does not still COVER the
-surface it was drawn into, and MUST count what it dropped in `geometry_refused`. Coverage and
+surface it was drawn into, MUST apply that test to the coordinates it will actually WRITE —
+after any display mapping, not before — and MUST count what it dropped in `geometry_refused`. Coverage and
 not containment: scrolled content legitimately overflows its viewport, and is correct. A
 refusal and not a correction: the ratio proves the numbers are wrong without revealing what the
 right ones were. The window itself is unaffected — it was never measured wrongly — so a pick

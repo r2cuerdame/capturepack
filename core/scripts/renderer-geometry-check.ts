@@ -20,7 +20,13 @@
 // refusal and not a correction, because the ratio proves the numbers are wrong
 // without revealing what the right ones were.
 
-import { UIA_DOCUMENT_COVERAGE_MIN, parseUiaPayload, refuseDisplacedRenderers } from '../src/main/uia'
+import {
+  UIA_DOCUMENT_COVERAGE_MIN,
+  mapUiaToSnapshot,
+  parseUiaPayload,
+  refuseDisplacedRenderers,
+} from '../src/main/uia'
+import type { UiaRawDump, UiaScreenAccess } from '../src/main/uia'
 import type { UiaElementRecord } from '../src/shared/types'
 
 let failures = 0
@@ -214,6 +220,137 @@ console.log('\nEach window is judged on its own')
     JSON.stringify(payload?.elements.map((e) => e.name)),
   )
 }
+
+console.log('\nA renderer that answers in the coordinates of the OTHER monitor')
+{
+  // THE CASE THE WALK CANNOT SEE, and the reason this test also runs AFTER the
+  // display mapping.
+  //
+  // `CapturePack_2026-08-01_103452` shipped a document covering 0.497 of its
+  // host while the walk itself reported nothing refused. Both are true at once.
+  // The mapping is ratio-preserving, so a parent and child mapped through the
+  // SAME display cannot come out disagreeing — these were mapped through
+  // DIFFERENT ones. `coveringSpace` chooses per element, deliberately (so a
+  // window straddling two monitors keeps the children visible on the smaller
+  // side), and a rectangle Chromium reported in the coordinates of a display its
+  // window has already left falls into the other display's space and is scaled
+  // by the other display's factor.
+  //
+  // The desk below is the one that produced that pack: DISPLAY1 is 1800x2880 of
+  // helper space declared as 1200x1920 (2/3); DISPLAY2 is 3840x2160 at 1:1.
+  const desk = (
+    elements: UiaElementRecord[],
+    windowBounds: UiaElementRecord['bounds'],
+  ): UiaRawDump => ({
+    capturedAt: new Date('2026-08-01T10:34:52+09:00'),
+    truncated: false,
+    rootBounds: { x: 0, y: 0, width: 3840, height: 2160 },
+    monitors: [
+      { device: 'DISPLAY1', primary: false, bounds: { x: -1800, y: 0, width: 1800, height: 2880 } },
+      { device: 'DISPLAY2', primary: true, bounds: { x: 0, y: 0, width: 3840, height: 2160 } },
+    ],
+    windows: [
+      {
+        hwnd: '1',
+        title: 'Chrome',
+        process: 'chrome.exe',
+        class_name: 'Chrome_WidgetWin_1',
+        bounds: windowBounds,
+        focused: true,
+        z: 0,
+        tree: 'collected',
+        element_count: 0,
+      },
+    ] as UiaRawDump['windows'],
+    elements,
+    geometryRefused: 0,
+  })
+
+  const targets = [
+    { index: 1, focused: false, bounds: { x: -1200, y: 0, width: 1200, height: 1920 }, width: 1200, height: 1920 },
+    { index: 2, focused: true, bounds: { x: 0, y: 0, width: 2560, height: 1440 }, width: 3840, height: 2160 },
+  ]
+  const screenAccess = {
+    getAllDisplays: () => [
+      { id: 1, bounds: { x: -1200, y: 0, width: 1200, height: 1920 } },
+      { id: 2, bounds: { x: 0, y: 0, width: 2560, height: 1440 } },
+    ],
+    getPrimaryDisplay: () => ({ id: 2, bounds: { x: 0, y: 0, width: 2560, height: 1440 } }),
+    dipToScreenRect: (_w: unknown, b: unknown) => ({ ...(b as object) }),
+  } as unknown as UiaScreenAccess
+
+  // Window on DISPLAY2; its renderer still answering in DISPLAY1's coordinates.
+  const crossed = desk(
+    [
+      el(0, 'Window', 100, 100, 1500, 1200, 'Chrome'),
+      el(7, 'Pane', 100, 100, 1500, 1200),
+      el(8, 'Document', -1700, 100, 1500, 1200, 'page'),
+      el(12, 'Group', -1600, 300, 400, 300, 'a tile'),
+      el(8, 'TabItem', 130, 100, 300, 40, 'a tab'),
+    ],
+    { x: 100, y: 100, width: 1500, height: 1200 },
+  )
+  const crossedHost = crossed.elements[1] as UiaElementRecord
+  const crossedDoc = crossed.elements[2] as UiaElementRecord
+  check(
+    'in helper space the displaced child covers its host EXACTLY, so the walk sees nothing wrong',
+    refuseDisplacedRenderers(crossed.elements).refused === 0 &&
+      crossedDoc.bounds.width / crossedHost.bounds.width === 1,
+    `cover ${String(crossedDoc.bounds.width / crossedHost.bounds.width)}`,
+  )
+
+  const mapped = mapUiaToSnapshot(crossed, targets, 3000, screenAccess)
+  check(
+    'but after mapping it is refused — only there are the numbers the pack will carry',
+    mapped.geometry_refused === 1 && !mapped.elements.some((e) => e.control_type === 'Document'),
+    `refused ${String(mapped.geometry_refused)}, kept ${JSON.stringify(mapped.elements.map((e) => e.control_type))}`,
+  )
+  check(
+    'the tile beneath it goes too',
+    !mapped.elements.some((e) => e.name === 'a tile'),
+    JSON.stringify(mapped.elements.map((e) => e.name)),
+  )
+  check(
+    'the window and the browser frame stay pickable',
+    mapped.elements.some((e) => e.control_type === 'Window') &&
+      mapped.elements.some((e) => e.control_type === 'Pane'),
+    JSON.stringify(mapped.elements.map((e) => e.control_type)),
+  )
+  check(
+    'and the sibling after the refused subtree comes back',
+    mapped.elements.some((e) => e.control_type === 'TabItem'),
+    JSON.stringify(mapped.elements.map((e) => e.control_type)),
+  )
+
+  // A window wholly on one display maps every child through one transform, so
+  // crossing a DPI boundary may never make an honest tree look suspicious.
+  const healthyDesk = desk(
+    [
+      el(0, 'Window', -1788, 182, 1776, 1221, 'Chrome'),
+      el(7, 'Pane', -1788, 182, 1776, 1221),
+      el(8, 'Document', -1788, 182, 1776, 1221, 'page'),
+      el(9, 'Group', -1788, -3869, 1754, 7190),
+      el(12, 'Hyperlink', -1782, 272, 96, 114, 'home'),
+    ],
+    { x: -1788, y: 182, width: 1776, height: 1221 },
+  )
+  const fine = mapUiaToSnapshot(healthyDesk, targets, 3000, screenAccess)
+  check(
+    'a window living entirely on the 2/3 display keeps everything, scrolled overflow included',
+    fine.geometry_refused === 0 && fine.elements.length === healthyDesk.elements.length,
+    `refused ${String(fine.geometry_refused)}, kept ${String(fine.elements.length)}/${String(healthyDesk.elements.length)}`,
+  )
+  check(
+    'and it really was mapped, not passed through: 1776 -> 1184 at 2/3',
+    fine.elements[0]?.bounds.width === 1184,
+    JSON.stringify(fine.elements[0]?.bounds),
+  )
+  check(
+    'the count is always written, so 0 reads as "looked and found none"',
+    Object.hasOwn(fine, 'geometry_refused') && fine.geometry_refused === 0,
+  )
+}
+
 
 console.log(failures === 0 ? '\nrenderer-geometry: OK' : `\nrenderer-geometry: ${String(failures)} FAILED`)
 process.exit(failures === 0 ? 0 : 1)

@@ -472,7 +472,7 @@ export function mapUiaToSnapshot(
     if (space !== undefined) windowSpaces.set(w.z, space)
     return place(w, space)
   })
-  const elements = raw.elements.map((e) => {
+  const mapped = raw.elements.map((e) => {
     // A window can straddle two monitors. Its child can be wholly visible on
     // the smaller side, so forcing every child through the window's dominant
     // display maps that child outside the snapshot and the composer drops it.
@@ -481,13 +481,39 @@ export function mapUiaToSnapshot(
     const space = coveringSpace(spaces, e.bounds) ?? windowSpaces.get(e.window) ?? fallback
     return place(e, space)
   })
+  // THE CHECK BELONGS HERE, AFTER THE MAPPING, AND NOWHERE EARLIER.
+  //
+  // A displaced renderer is not always visible in the helper's own numbers.
+  // Measured on this desk: a Chrome window whose web content covered 1.000 of
+  // its host in HELPER space produced 0.497 in the pack. The transform above is
+  // ratio-preserving, so that cannot happen to a parent and child mapped
+  // through the SAME display — it happens because they were mapped through
+  // DIFFERENT ones. `coveringSpace` chooses per element, deliberately (the
+  // straddling case above), and a rectangle Chromium reported in a display's
+  // coordinates its window has already left lands in the other display's space
+  // and is scaled by the other display's factor.
+  //
+  // So the helper-side test (uia-dump.ps1) catches the case where the stale
+  // rectangle is still on its own monitor, and this one catches the case where
+  // it crossed. Both are needed; only this one sees the numbers the pack will
+  // actually contain, which are the numbers a box is drawn from.
+  const elements: UiaElementRecord[] = []
+  let crossed = 0
+  for (let i = 0; i < mapped.length; ) {
+    let j = i
+    while (j < mapped.length && (mapped[j] as UiaElementRecord).window === (mapped[i] as UiaElementRecord).window) j++
+    const verdict = refuseDisplacedRenderers(mapped.slice(i, j))
+    elements.push(...verdict.kept)
+    crossed += verdict.refused
+    i = j
+  }
   return {
     captured_at: isoWithOffset(raw.capturedAt),
     budget_ms: budgetMs,
     truncated: raw.truncated,
     // Always written, 0 included: "we looked and found none" is a claim, and
     // absent already means "this walk could not tell" (payload 0.4.0).
-    geometry_refused: raw.geometryRefused,
+    geometry_refused: raw.geometryRefused + crossed,
     windows,
     elements,
   }

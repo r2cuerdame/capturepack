@@ -390,6 +390,11 @@ export function cropUiaForImage(
     captured_at: payload.captured_at,
     budget_ms: payload.budget_ms,
     truncated: payload.truncated,
+    // Carried, not rebuilt away: the count of refused rectangles is part of the
+    // claim the payload makes, and cropping or composing does not un-refuse one.
+    ...(payload.geometry_refused === undefined
+      ? {}
+      : { geometry_refused: payload.geometry_refused }),
     windows,
     elements,
   }
@@ -521,6 +526,11 @@ export function composeUiaForImageDesktop(
     captured_at: payload.captured_at,
     budget_ms: payload.budget_ms,
     truncated: payload.truncated,
+    // Carried, not rebuilt away: the count of refused rectangles is part of the
+    // claim the payload makes, and cropping or composing does not un-refuse one.
+    ...(payload.geometry_refused === undefined
+      ? {}
+      : { geometry_refused: payload.geometry_refused }),
     windows,
     elements,
   }
