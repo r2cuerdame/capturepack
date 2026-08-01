@@ -425,23 +425,61 @@ async function answerDomRequest(requestId) {
 // needs a user gesture, and this is the only one the extension reliably gets.
 // Once granted, the button goes back to being the element picker.
 chrome.action.onClicked.addListener((tab) => {
-  void (async () => {
-    if (!(await hasBrowserGrant())) {
-      try {
-        const granted = await chrome.permissions.request(ALL_URLS)
+  // NOT `async`, AND NOTHING IS AWAITED BEFORE THE REQUEST.
+  //
+  // `permissions.request` is only allowed inside a live user-gesture context,
+  // and an `await` ENDS that context — the continuation runs on a later
+  // microtask with no gesture left. The first version checked
+  // `hasBrowserGrant()` first, so by the time it asked, Chrome refused to show
+  // the prompt at all. Measured: three toolbar clicks, no dialog, and the
+  // rejection swallowed by a `catch` that assumed a refusal could only mean the
+  // user had said no.
+  //
+  // So the request goes first, synchronously. Asking for a permission that is
+  // already held resolves `true` immediately and shows nothing, which is why the
+  // check it replaced was never needed.
+  let settled = false
+  const thenArm = () => {
+    if (settled) return
+    settled = true
+    void armPicker(tab, 'toolbar')
+  }
+  try {
+    chrome.permissions.request(ALL_URLS).then(
+      (granted) => {
         announceGrant(granted)
         if (granted) {
           chrome.action.setBadgeBackgroundColor({ color: '#1a7f37' })
           chrome.action.setBadgeText({ text: '✓', tabId: tab?.id })
           setTimeout(() => chrome.action.setBadgeText({ text: '', tabId: tab?.id }), 4000)
-          return
         }
-      } catch {
-        // A refused prompt is an answer, not an error. Fall through to picking.
-      }
-    }
-    await armPicker(tab, 'toolbar')
-  })()
+        // The button keeps its second job either way: pick one element here.
+        thenArm()
+      },
+      (err) => {
+        // A REFUSAL AND A BROKEN CALL ARE DIFFERENT FACTS. The first is the user
+        // answering; the second is this extension asking wrongly, and it must
+        // never again look like the first.
+        send({
+          type: 'picker.failed',
+          protocol: PROTOCOL,
+          timestamp: Date.now(),
+          reason: `grant-request-failed: ${String(err && err.message ? err.message : err).slice(0, 160)}`,
+          via: 'toolbar',
+        })
+        thenArm()
+      },
+    )
+  } catch (err) {
+    send({
+      type: 'picker.failed',
+      protocol: PROTOCOL,
+      timestamp: Date.now(),
+      reason: `grant-request-threw: ${String(err && err.message ? err.message : err).slice(0, 160)}`,
+      via: 'toolbar',
+    })
+    thenArm()
+  }
 })
 
 
