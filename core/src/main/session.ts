@@ -1369,7 +1369,20 @@ async function runImageFlowWithContext(
       const contextSession = openContextSession(editor, {
         displays: [{ index: 1, focused: true, width, height }],
         replayDurationMs: 0,
-        observation: contextObservation(uia, 1, 0),
+        // THE SURFACES THE EDITOR REASONS FROM MUST CARRY CLIENT RECTANGLES.
+        //
+        // `contextObservation` builds windows from the UIA payload, and UI
+        // Automation reports a window rectangle but never a client one. A DOM
+        // element is measured in viewport CSS pixels and the client rectangle is
+        // the only thing that converts them, so a still could never place a page
+        // however complete its payload was (#132).
+        //
+        // Lane S measured those rectangles at the trigger and `imageWindows`
+        // already holds them; it was simply not the observation being handed
+        // over. UIA's controls are layered onto it rather than replacing it —
+        // the two describe the same desk, and only one of them has been in the
+        // window's own coordinate space all along.
+        observation: withClientRectangles(contextObservation(uia, 1, 0), imageWindows),
         dropped: settled.ready && uiaEmpty(uia),
         // The editor gets exactly what the pack gets — the lesson of #122.
         domEvents: capturedDomEvents,
@@ -4307,6 +4320,36 @@ function uiaEmpty(payload: UiaPluginPayload | null): boolean {
  * in a way nobody notices for months (design §3.1), which is why the mapping
  * lives in one place instead of being re-derived per caller.
  */
+/**
+ * UIA's controls, on lane S's rectangles.
+ *
+ * Two observations of one desk: UIA knows what the controls ARE, lane S knows
+ * where the windows' client areas were. Matched by HWND, which is the only
+ * identity both sources agree on (#97) — a title or a process is a description
+ * two sources can legitimately disagree about.
+ *
+ * A window lane S never saw keeps whatever UIA said, so this can only ever ADD
+ * a measurement; it never removes one.
+ */
+function withClientRectangles(
+  observation: ContextObservation | null,
+  surfaces: ContextObservation | null,
+): ContextObservation | null {
+  if (observation === null) return surfaces
+  if (surfaces === null) return observation
+  const byHandle = new Map(
+    surfaces.windows.flatMap((w) => (w.hwnd === undefined ? [] : [[w.hwnd, w] as const])),
+  )
+  return {
+    ...observation,
+    windows: observation.windows.map((w) => {
+      const measured = w.hwnd === undefined ? undefined : byHandle.get(w.hwnd)
+      if (measured?.client_bounds === undefined) return w
+      return { ...w, client_bounds: { ...measured.client_bounds } }
+    }),
+  }
+}
+
 function contextObservation(
   payload: UiaPluginPayload | null,
   focusedIndex: number,

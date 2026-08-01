@@ -179,5 +179,27 @@ check(
   'age_ms must be measured before the times are collapsed, or it becomes 0 for everything',
 )
 
+console.log('\nThe editor reasons from surfaces that carry a client rectangle')
+check(
+  'the still layers UIA controls onto lane S rectangles',
+  /withClientRectangles\(contextObservation\(uia, 1, 0\), imageWindows\)/.test(code(image)),
+  'UIA reports a window rect but never a client one; a DOM element cannot be placed without it (#132)',
+)
+check(
+  'they are matched by HWND, the one identity both sources agree on',
+  /byHandle\.get\(w\.hwnd\)/.test(code(session)),
+  'a title or a process is a description two sources can legitimately disagree about',
+)
+check(
+  'a still keeps the client rectangle when the window was not split',
+  /client_bounds: clientBounds/.test(code(source('src/main/imageContext.ts'))),
+  'it used to be dropped unconditionally, which is why a complete page could not be placed',
+)
+check(
+  'and still refuses it where slices were unioned',
+  /client_bounds: undefined/.test(code(source('src/main/imageContext.ts'))),
+  'a rectangle unioned from mixed-DPI slices describes no viewport that ever existed',
+)
+
 console.log(failed === 0 ? '\nstill-dom: OK' : `\nstill-dom: ${failed} FAILED`)
 process.exit(failed === 0 ? 0 : 1)

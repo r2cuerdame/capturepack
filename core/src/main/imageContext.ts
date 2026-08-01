@@ -124,6 +124,43 @@ export function imageWindowObservation(
     const bounds =
       crop === undefined ? desktopBounds : intersectImageRect(desktopBounds, crop)
     if (bounds === null) continue
+    // THE CLIENT RECTANGLE, MAPPED THE SAME WAY (#132).
+    //
+    // A DOM element is measured in viewport CSS pixels, and the ONLY thing that
+    // turns those into snapshot pixels is the browser's client rectangle: the
+    // scale is `client.width / viewport.width` and the chrome height is
+    // `client.height - viewport.height * scale`. Both are derived, neither is
+    // assumed — and without a client rectangle neither can be derived at all.
+    //
+    // A still used to drop this unconditionally, so a captured page reached the
+    // pack complete and could not be placed on the picture: 477 elements, a
+    // viewport, a matching window, and nothing offered. It is carried through
+    // the same placement transform as `bounds`, and given up ONLY where it is
+    // genuinely unsafe — see the union below.
+    const clientLocal =
+      window.client_bounds === undefined
+        ? null
+        : intersectImageRect(window.client_bounds, {
+            x: 0,
+            y: 0,
+            width: placement.width,
+            height: placement.height,
+          })
+    const clientDesktop =
+      clientLocal === null
+        ? null
+        : {
+            x: clientLocal.x + placement.x,
+            y: clientLocal.y + placement.y,
+            width: clientLocal.width,
+            height: clientLocal.height,
+          }
+    const clientBounds =
+      clientDesktop === null
+        ? null
+        : crop === undefined
+          ? clientDesktop
+          : intersectImageRect(clientDesktop, crop)
     const key =
       window.surface_id ??
       window.hwnd ??
@@ -145,6 +182,12 @@ export function imageWindowObservation(
         bounds: { x: left, y: top, width: right - left, height: bottom - top },
         focused: previous.focused || window.focused,
         z: Math.min(previous.z, window.z),
+        // THIS is the case the old blanket refusal was written for, and the only
+        // one it was right about. A window straddling monitors of different DPI
+        // arrives as clipped slices, and a rectangle unioned from them describes
+        // no viewport that ever existed. Placing a page against it would be an
+        // invented number; refusing costs the page and keeps the window.
+        client_bounds: undefined,
       })
       continue
     }
@@ -154,9 +197,8 @@ export function imageWindowObservation(
       display: 1,
       hasControls: false,
       tree: 'skipped',
-      // A client rectangle split across mixed-DPI monitors cannot be safely
-      // unioned from clipped slices. UIA supplies the refinement separately.
-      client_bounds: undefined,
+      // One slice: nothing was unioned, so this rectangle is a measurement.
+      ...(clientBounds === null ? { client_bounds: undefined } : { client_bounds: clientBounds }),
     })
   }
   const windows = [...bySurface.values()].sort((a, b) => a.z - b.z)
