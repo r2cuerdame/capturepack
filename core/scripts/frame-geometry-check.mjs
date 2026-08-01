@@ -158,11 +158,37 @@ console.log('\nThe picker actually uses it, in every frame')
     background.includes("msg.type === 'picker.failed'"))
   // The app asks Chromium to reload an unpacked extension when this number
   // moves, so a wire change that leaves it alone ships a worker that cannot
-  // speak the new payload. 0.2.0 is a pick carrying the document it sat in.
+  // speak the new payload. 0.2.0 was a pick carrying the document it sat in;
+  // 0.3.0 adds a second way to arm the picker.
   check('the manifest version moved with the protocol change',
-    manifest.version === '0.2.0', manifest.version)
+    manifest.version === '0.3.0', manifest.version)
   check('and the document walker ships with it',
     existsSync(resolve(EXTENSION, 'document-snapshot.js')))
+
+  // A KEYBOARD SHORTCUT IS A GESTURE TOO.
+  //
+  // The toolbar trip was never the point — `activeTab` is, and Chrome grants it
+  // for a command shortcut exactly as it does for an action click. What must NOT
+  // happen is someone "fixing" the ergonomics by asking for host permissions
+  // instead, which would trade two clicks for the ability to read every page the
+  // user ever opens. So this pins both: the second entry point exists, and the
+  // permission story is unchanged.
+  check('a keyboard shortcut can arm the picker',
+    manifest.commands !== undefined && manifest.commands['pick-element'] !== undefined,
+    JSON.stringify(manifest.commands))
+  check('the shortcut suggests a default binding',
+    manifest.commands?.['pick-element']?.suggested_key?.default !== undefined)
+  check('both entry points call one arming path',
+    /function armPicker\(/.test(background) &&
+      /chrome\.action\.onClicked\.addListener\(\(tab\) => armPicker\(/.test(background) &&
+      /commands\.onCommand\.addListener/.test(background))
+  check('activeTab is still the whole permission story — no host permissions',
+    !('host_permissions' in manifest) &&
+      !manifest.permissions.some((p) => p === '<all_urls>' || p.includes('://')),
+    JSON.stringify(manifest.permissions))
+  check('and no content script runs without a gesture',
+    manifest.content_scripts === undefined,
+    'a declared content script would read every matching page unasked')
 }
 
 console.log(`\nresult: ${failed === 0 ? 'OK' : 'BROKEN'} — ${passed} passed, ${failed} failed\n`)

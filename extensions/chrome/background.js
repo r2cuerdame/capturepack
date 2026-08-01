@@ -260,9 +260,9 @@ function send(message) {
 // restricted page (chrome://, the Web Store, a PDF viewer) looked exactly like
 // a user who had not clicked the icon. So arming, disarming and failing all go
 // down the same wire the picks do, and land in main.log.
-chrome.action.onClicked.addListener(async (tab) => {
-  if (!tab.id) {
-    send({ type: 'picker.failed', protocol: PROTOCOL, timestamp: Date.now(), reason: 'no-tab' })
+async function armPicker(tab, via) {
+  if (!tab || !tab.id) {
+    send({ type: 'picker.failed', protocol: PROTOCOL, timestamp: Date.now(), reason: 'no-tab', via })
     return
   }
   const url = tab.url || ''
@@ -291,10 +291,38 @@ chrome.action.onClicked.addListener(async (tab) => {
       protocol: PROTOCOL,
       timestamp: Date.now(),
       reason: String(err && err.message ? err.message : err).slice(0, 200),
+      via,
       tab: { url: url.slice(0, 2048), title: (tab.title || '').slice(0, 512) },
     })
   }
-})
+}
+
+// TWO WAYS IN, ONE PERMISSION STORY.
+//
+// The toolbar button is not a ceremony we invented — `activeTab` is granted
+// only by a user gesture, and it is what lets this extension read the page you
+// point at WITHOUT holding permission to read every page you ever open. The
+// alternative is `<all_urls>`, which Chrome describes to the user as "read your
+// data on all websites", and which would be true.
+//
+// But Chrome grants `activeTab` for a KEYBOARD SHORTCUT just as it does for a
+// toolbar click, so the gesture never had to be a trip to the corner of the
+// window. `_execute_action` maps a shortcut straight onto the handler below;
+// the user assigns it at chrome://extensions/shortcuts, and nothing about the
+// permission model changes.
+chrome.action.onClicked.addListener((tab) => armPicker(tab, 'toolbar'))
+
+if (chrome.commands && chrome.commands.onCommand) {
+  chrome.commands.onCommand.addListener(async (command, tab) => {
+    if (command !== 'pick-element') return
+    // The shortcut can fire with no tab argument on some Chrome versions; ask
+    // for the active one rather than failing on a technicality.
+    const target =
+      tab ??
+      (await chrome.tabs.query({ active: true, currentWindow: true }).then((t) => t[0]))
+    await armPicker(target, 'shortcut')
+  })
+}
 
 // Element selections from the content script.
 chrome.runtime.onMessage.addListener((msg, sender) => {
