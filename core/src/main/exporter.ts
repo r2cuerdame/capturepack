@@ -434,8 +434,14 @@ export const DOM_PLUGIN_NAME = 'chrome-dom'
  * still carries the context"). Absent on a pick from an older extension, and on
  * one made inside an iframe; a reader treats its absence as "nobody looked",
  * never as "the page was empty".
+ *
+ * 0.3.0 adds `age_ms` on an event, written only by a STILL. A screenshot is one
+ * instant, so every event it carries is stamped `t_ms: 0`; without the age, a
+ * pick made two seconds before the shutter would be indistinguishable from one
+ * made at it. A page can change in between, and that is the reader's judgement
+ * to make. Absent on a replay pack, where `t_ms` already carries the time.
  */
-export const DOM_PLUGIN_VERSION = '0.2.0'
+export const DOM_PLUGIN_VERSION = '0.3.0'
 
 /**
  * WHAT WAS ON SCREEN, AND WHAT WAS DELIBERATELY LEFT OFF IT.
@@ -489,6 +495,11 @@ export interface DomPluginPayload {
   extension_version: string | null
   events: readonly {
     t_ms: number
+    /**
+     * Milliseconds between this pick and the captured instant. Written by a
+     * still, where every event shares `t_ms: 0`; absent on a replay.
+     */
+    age_ms?: number
     type: string
     tab: { url: string; title: string }
     element?: {

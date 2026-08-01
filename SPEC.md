@@ -1483,6 +1483,15 @@ already draws for windows.
 A pick made inside an iframe carries its element and no `document`: the snapshot belongs to
 the frame whose client rectangle a reader can place, which is the top one.
 
+**`age_ms` (payload 0.3.0) is REQUIRED on an event in a still-image pack** and MUST NOT be
+written in a replay pack. A still describes ONE instant, so every event it carries is stamped
+`t_ms: 0` — and without the age, a pick made seconds before the shutter is indistinguishable
+from one made at it. The page may have changed in between, so the distance is the reader's to
+weigh and the writer's to state. A writer SHOULD bound how far back a still looks at all;
+CapturePack uses ten seconds, the reach of the picker's own two-click gesture, and simply does
+not claim an older pick. In a replay pack `t_ms` already carries the time and `age_ms` would be
+a second answer to one question.
+
 ```
 plugins/
 └── chrome-dom/

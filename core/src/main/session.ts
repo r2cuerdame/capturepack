@@ -59,6 +59,7 @@ import {
 } from '../shared/replayClockMap'
 import type { ObservedReplayClockMap } from '../shared/replayClockMap'
 import type { AuthoredMotionSpace } from '../shared/track'
+import type { DomPluginPayload } from './exporter'
 import type { Language } from '../shared/i18n'
 import {
   renderTrimmedReplay,
@@ -82,6 +83,7 @@ import {
   freezeContext,
   contextObservationFromSurfaceSample,
   frozenObservations,
+  contextNowMs,
   frozenPackTimeAt,
   frozenWindow,
   logContextCost,
@@ -905,6 +907,78 @@ function composeImageDesktop(
   return composed.toPNG()
 }
 
+/**
+ * ONE DOM EVENT, ON THE WAY OUT (SPEC 11.4).
+ *
+ * Extracted so the still and the replay write the same shape. They differ only
+ * in what `t_ms` MEANS — see the two callers — and a second hand-maintained copy
+ * of this mapping is exactly how the two would drift apart.
+ *
+ * Snake_case on the way out, like every other field the pack writes, and the
+ * `document` is carried whole rather than re-filtered: the extension already
+ * decided what may leave the page, and `omitted` is its statement of that
+ * decision. Re-deciding here would mean two rules for one question, and the one
+ * a reader can check is the one in the file.
+ */
+function domEventForPack(
+  e: DomEvent,
+  tMs: number,
+  ageMs?: number,
+): DomPluginPayload['events'][number] {
+  return {
+    t_ms: Math.max(0, Math.round(tMs)),
+    // HOW LONG BEFORE THE CAPTURED INSTANT THIS PICK WAS MADE (payload 0.3.0).
+    //
+    // A still has ONE instant, so every event it carries is stamped `t_ms: 0` —
+    // and without this, a pick made two seconds before the hotkey would be
+    // indistinguishable from one made at it. That difference is the reader's to
+    // judge, not ours to hide: a page can change between the pick and the
+    // shutter. Absent on a replay pack, where `t_ms` already carries the time.
+    ...(ageMs === undefined ? {} : { age_ms: Math.max(0, Math.round(ageMs)) }),
+    type: e.type,
+    tab: e.tab,
+    ...(e.element === undefined ? {} : { element: e.element }),
+    // Without this a saved pick is unplaceable forever: bounds are viewport CSS
+    // pixels and this is the only thing that says where that viewport was.
+    // Absent for an event from an extension older than 0.1.4.
+    ...(e.viewport === undefined ? {} : { viewport: e.viewport }),
+    ...(e.document === undefined
+      ? {}
+      : {
+          document: {
+            viewport: {
+              width: e.document.viewport.width,
+              height: e.document.viewport.height,
+              device_pixel_ratio: e.document.viewport.devicePixelRatio,
+              scroll_x: e.document.viewport.scrollX,
+              scroll_y: e.document.viewport.scrollY,
+            },
+            url: e.document.url,
+            title: e.document.title,
+            elements: e.document.elements,
+            truncated: e.document.truncated,
+            visited_count: e.document.visitedCount,
+            elapsed_ms: e.document.elapsedMs,
+            omitted: e.document.omitted,
+          },
+        }),
+  }
+}
+
+/**
+ * HOW FAR BACK A STILL LOOKS FOR A BROWSER PICK.
+ *
+ * A replay carries its whole window, because it HAS a window. A screenshot is
+ * one instant, so "which picks belong to it" is a judgement rather than a fact,
+ * and the owner's ruling (2026-08-01) is: keep it short and write down the age.
+ *
+ * Ten seconds is the two-click picker's reach — arm the toolbar button, click
+ * the element, press the hotkey — and no further. A pick older than that
+ * described a page the shutter may no longer be showing, so the pack does not
+ * claim it at all rather than claim it quietly.
+ */
+const STILL_DOM_LOOKBACK_MS = 10_000
+
 async function runImageFlow(settings: Settings): Promise<void> {
   const triggerAt = Date.now()
   // Read full Win32 membership immediately before the pixels. Projection waits
@@ -1154,6 +1228,33 @@ async function runImageFlowWithContext(
     logError('[image] save-first failed; Save will retry:', err)
   }
 
+  // THE BROWSER'S HALF OF THE SAME INSTANT, FOR A STILL (#123).
+  //
+  // This flow used to pass `domEvents: []` and write no chrome-dom directory at
+  // all, so the still — the capture the whole product now says carries the most
+  // context — was the one that carried none of the page. A replay takes its
+  // whole window because it HAS one; a screenshot is a single instant, so it
+  // takes a short bounded lookback and records how old each pick was
+  // (STILL_DOM_LOOKBACK_MS, `age_ms`).
+  const domNowMs = contextNowMs()
+  const capturedDomEvents =
+    domNowMs === null
+      ? []
+      : domEventsBetween(domNowMs - STILL_DOM_LOOKBACK_MS, domNowMs)
+  const domStatus = domBridgeStatus()
+  const domPayload: DomPluginPayload | null =
+    capturedDomEvents.length === 0 || domNowMs === null
+      ? null
+      : {
+          protocol: DOM_PROTOCOL_VERSION,
+          extension_version: domStatus.extensionVersion,
+          // Every event is stamped at the pack's ONE instant, and carries the
+          // real distance from it so a reader can weigh the pick itself.
+          events: capturedDomEvents.map((e: DomEvent) =>
+            domEventForPack(e, 0, domNowMs - e.tMs),
+          ),
+        }
+
   const uiaWrite: Promise<UiaPluginPayload | null> = uiaReady.then(async (payload) => {
     const saved = handle
     if (payload === null || saved === null) return payload
@@ -1165,6 +1266,20 @@ async function runImageFlowWithContext(
     }
     return payload
   })
+
+  const domWrite: Promise<void> = (async () => {
+    const saved = handle
+    if (saved === null || domPayload === null) return
+    try {
+      const wrote = await tryWriteDomPlugin(saved.dirPath, domPayload)
+      if (!wrote) return
+      await addManifestPlugin(saved, domPluginDeclaration(), packDocLanguage(settings))
+      logInfo(`[image] pack carries ${domPayload.events.length} DOM event(s) from the browser`)
+    } catch (err) {
+      // Browser context refines a capture; it may never fail one.
+      logError('[image] writing plugins/chrome-dom failed:', err)
+    }
+  })()
 
   const { win: editor, mode: windowMode } = createEditorWindow(
     selectedDisplay.bounds,
@@ -1185,7 +1300,8 @@ async function runImageFlowWithContext(
         replayDurationMs: 0,
         observation: contextObservation(uia, 1, 0),
         dropped: settled.ready && uiaEmpty(uia),
-        domEvents: [],
+        // The editor gets exactly what the pack gets — the lesson of #122.
+        domEvents: capturedDomEvents,
       })
       const init: EditorInitPayload = {
         captureKind: 'image',
@@ -1777,44 +1893,8 @@ async function runFlow(settings: Settings): Promise<void> {
       events: capturedDomEvents.flatMap((e: DomEvent) => {
         const packTMs = frozenPackTimeAt(contextFreezeId, e.tMs)
         if (packTMs === null) return []
-        return [{
-          // On the encoded replay's pack clock, like everything drawn beside it.
-          t_ms: Math.max(0, Math.round(packTMs)),
-          type: e.type,
-          tab: e.tab,
-          ...(e.element === undefined ? {} : { element: e.element }),
-          // Without this a saved pick is unplaceable forever: bounds are viewport
-          // CSS pixels and this is the only thing that says where that viewport
-          // was. Absent for an event from an extension older than 0.1.4.
-          ...(e.viewport === undefined ? {} : { viewport: e.viewport }),
-          // THE INTERFACE THE PICK SAT IN (GOAL "The still carries the context").
-          //
-          // Snake_case on the way out, like every other field the pack writes,
-          // and carried whole rather than re-filtered: the extension already
-          // decided what may leave the page, and `omitted` is its statement of
-          // that decision. Re-deciding here would mean two rules for one
-          // question, and the one a reader can check is the one in the file.
-          ...(e.document === undefined
-            ? {}
-            : {
-                document: {
-                  viewport: {
-                    width: e.document.viewport.width,
-                    height: e.document.viewport.height,
-                    device_pixel_ratio: e.document.viewport.devicePixelRatio,
-                    scroll_x: e.document.viewport.scrollX,
-                    scroll_y: e.document.viewport.scrollY,
-                  },
-                  url: e.document.url,
-                  title: e.document.title,
-                  elements: e.document.elements,
-                  truncated: e.document.truncated,
-                  visited_count: e.document.visitedCount,
-                  elapsed_ms: e.document.elapsedMs,
-                  omitted: e.document.omitted,
-                },
-              }),
-        }]
+        // On the encoded replay's pack clock, like everything drawn beside it.
+        return [domEventForPack(e, packTMs)]
       }),
     })
     if (!wrote) return

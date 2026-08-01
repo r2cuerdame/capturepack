@@ -220,8 +220,8 @@ npm run qa:rc
 npm audit --omit=dev
 ```
 
-`qa:rc` currently runs 73 discovered `check:*` regressions plus type checking,
-the production build, and isolated Electron smoke: **76 gate steps** (74 with
+`qa:rc` currently runs 74 discovered `check:*` regressions plus type checking,
+the production build, and isolated Electron smoke: **77 gate steps** (75 with
 `--skip-build`). Reports
 are written under `%TEMP%\capturepack-qa` unless an artifact directory is
 provided.
@@ -315,14 +315,14 @@ version and fix forward. Documentation-only commits may follow the release on
 ## 0.3.4 in progress
 
 Work on `agent/0.3.4`, not released. `core/package.json` is
-**`0.3.4-rc.22`** — a release *candidate* version so a locally built installer can
+**`0.3.4-rc.23`** — a release *candidate* version so a locally built installer can
 never be confused with the public `0.3.3`, not a release. There is no tag and no
 published binary, and `v0.3.3` stays where it is. See [GOAL.md](../GOAL.md) for
 the design record and [#104](https://github.com/r2cuerdame/capturepack/issues/104) /
 [#89](https://github.com/r2cuerdame/capturepack/issues/89) for the evidence.
 
 An RC installer is built with `npm run dist` and appears at
-`core/release-rc22/CapturePack-Setup-0.3.4-rc.22.exe`. It is unsigned and gitignored:
+`core/release-rc23/CapturePack-Setup-0.3.4-rc.23.exe`. It is unsigned and gitignored:
 builds are artifacts of a commit, never part of one. (`release/` can hold a lock
 from an earlier build; `npx --% electron-builder --win --publish never
 -c.directories.output=release-rcNN` builds beside it. The `--%` matters —
@@ -372,7 +372,19 @@ PowerShell otherwise eats `-c.directories...` as an argument to `-c`.)
   **The lesson, four times over: place the check where the value stops changing
   and before anyone reads it — and remember the file is not the only reader.**
   Upstream copies are optimisations only.
-- **The gate is 76 steps.** `npm run qa:rc` — NOT `node scripts/qa-gate.mjs`,
+- **A still now carries the browser's half too**
+  ([#123](https://github.com/r2cuerdame/capturepack/issues/123)). `runImageFlow`
+  passed `domEvents: []` and wrote no `plugins/chrome-dom` at all — so the ONE
+  capture kind this cycle promised the most context to was collecting none of
+  the page, while GOAL, SPEC, the README in nine languages and the site all said
+  otherwise. It now reads the bridge over a bounded 10 s lookback
+  (`STILL_DOM_LOOKBACK_MS`), hands the same array to the editor, and writes the
+  payload through `domEventForPack()` — one mapping shared with the replay.
+  chrome-dom payload **0.3.0** adds `age_ms`, because a still stamps every event
+  `t_ms: 0` and the distance from the shutter is the reader's to weigh. Pinned by
+  `check:still-dom`. **The documentation shipped before the feature; that is its
+  own lesson.**
+- **The gate is 77 steps.** `npm run qa:rc` — NOT `node scripts/qa-gate.mjs`,
   which loses `npm_execpath` and then cannot spawn `npm.cmd` under Node 24.
 
 - Element picking now reports itself end to end: the picker's arming, failure
