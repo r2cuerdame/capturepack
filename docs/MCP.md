@@ -237,8 +237,11 @@ A Windows video pack can carry two complementary sources:
 - `plugins/windows-context/timeline.json` is the compact checkpoint/delta history
   of the windows and controls CapturePack actually observed across the replay.
   It is on the pack clock and keeps each rectangle in the named display's
-  snapshot pixels. This is the source that lets a reopened pack resolve an
-  object at a past frame without querying the current desktop.
+  snapshot pixels. It is a RECORD, not an affordance: it says what was on the
+  desk at each observed moment without querying the current desktop. The editor
+  does not offer object picking on a replay frame — picking is a still-image
+  feature — so read this timeline as evidence, never as a claim that a box in
+  the pack was picked off a past frame.
 - `plugins/windows-uia/elements.json` ([SPEC §11.3](../SPEC.md)) is the detailed
   capture-instant UI Automation window/control snapshot. It contains accessible
   names, control types, AutomationIds and tree-collection status where the
@@ -284,12 +287,17 @@ level — a complete answer, not a degraded one:
 ```
 
 That is the difference between *"a box at (2140, 1236)"* and *"the Save
-button"*. `bounds` is the annotation's fallback rectangle and the rectangle at
-its representative/picked instant. At another replay time, an object-picked box
-uses the nearest recorded `tracking.samples` observation unchanged; observed
-samples are never interpolated. `tracking.picked_at_ms` records the frame the
-user actually picked. Authored manual-box `keyframes` are a separate claim and
-may interpolate.
+button"*. A box carrying a `target` was picked in a **still-image** capture:
+object picking is not offered in a video at any frame, so a video pack's boxes
+are the rectangles its author drew.
+
+`bounds` is the annotation's fallback rectangle and the rectangle at its
+representative/picked instant. In a pack written by 0.2.0–0.3.x a box may also
+carry `tracking.samples`, and at another replay time such a box uses the nearest
+recorded observation unchanged — observed samples are never interpolated, and
+`tracking.picked_at_ms` records the frame that box was picked on. Read those
+fields wherever they appear; current writers no longer produce them. Authored
+manual-box `keyframes` are a separate claim and may interpolate.
 
 A pack without one of these optional sources (a non-Windows capture, disabled
 UIA, an exhausted collection budget, or a capture made before temporal context

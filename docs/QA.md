@@ -96,6 +96,7 @@ user CapturePack.
 | Same-millisecond same-selector DOM picks collide, or every candidate inherits the nearest pick's accuracy | Distinct picks retain distinct object ids and every candidate reports its own temporal error/accuracy. | `check:dom` (16/16) |
 | A browser spans displays and its claim uses a different slice from the candidate | Candidate and claims must preserve the same visible display slice and display id. | `check:dom` (16/16) |
 | A second child in the same window cannot be selected after the first | Two controls share one `surfaceId` but have different object identities; only the exact same child may be treated as a duplicate. | `check:pick` |
+| A video offers object picking again, or its help sheet promises a pick a replay cannot make | `objectPickingApplies()` must remain the whole rule (`captureKind === 'image'`), and every way in — index build, index hand-out, the hint path and the help sheet — must route through it. The same check pins what a video KEEPS: right-drag boxes, and lane A still recording control geometry into the pack's windows-context timeline. | `check:video-no-picking` |
 | Past frames lose windows/controls after save and reopen | The Windows context codec exports, parses as untrusted JSON, and reconstructs every temporal observation deeply equal, including HWND and no-op instants. The surface ring restores historical motion after checkpoints and bounded pruning, while temporal/index fixtures probe early, middle, and final replay times. | `check:ring-prune`, `check:surface-restore`, `check:windows-context`, `check:past`, `check:temporal` |
 | History Edit appears dead, reopens without its replay, or reveals a blank editor before decode | The accepted/busy IPC result, detached pack I/O, manifest-declared replay bytes, `editMode`, context deadline, renderer success/failure acknowledgement, paint boundary, and show ordering are pinned. Native-close fallback is exercised with a fake scheduler. | `check:editor-lifecycle`, `check:plugins` |
 | `Ctrl+Alt+C` or `Ctrl+Alt+S` stops working after the other shortcut changes or conflicts | A fake OS shortcut backend proves video and image registrations coexist, one change releases only its own prior binding, conflict/invalid syntax is contained, and Settings can restore only the failed action. | `check:hotkeys`, `check:settings` |
@@ -150,8 +151,11 @@ mixed-DPI desktop. Before a public release, run one headed Windows smoke
 manually, one application window at a time:
 
 1. Record 30 seconds across the 1x portrait monitor and 1.5x primary monitor.
-   At early, middle, and final frames, select two sibling controls in one
-   window; save, reopen from History, and repeat the same picks.
+   At early, middle, and final frames, confirm the video editor offers **no
+   object pick at all**: a left click selects only an existing box, no outline
+   follows the cursor, and the shortcut sheet never names a pick. Right-drag one
+   box at an early frame and one at a final frame, describe both, save, reopen
+   from History, and confirm both survive with their lifetimes.
 2. With the playhead inside the retained range, drag the start handle and the
    end handle separately. The displayed time and selected box must remain
    unchanged.
@@ -162,7 +166,9 @@ manually, one application window at a time:
    across the boundary into a 1.5x display. Confirm native pixel placement,
    annotate, save, and reopen. Verify `capture_kind: "image"`, `image_scope:
    "region"`, crop provenance, and the absence of replay and top-level
-   `timeline.json`.
+   `timeline.json`. Object picking is a still-image affordance, so this is where
+   it is proved: select two sibling controls in one window, and one element in a
+   visible Chrome window, then reopen from History and repeat the same picks.
 5. Press `Ctrl+Alt+S` again and choose **Full screen capture**. Confirm every
    attached display is present in one virtual-desktop image, the editor opens at
    100% when the desktop fits its supported scale range, and MCP reports an

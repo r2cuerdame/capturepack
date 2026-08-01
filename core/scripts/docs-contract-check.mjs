@@ -95,12 +95,22 @@ function prose(text) {
     .join('\n')
 }
 
-/** GitHub's heading slug: lower-cased, punctuation dropped, EACH space a dash. */
+/**
+ * GitHub's heading slug: lower-cased, punctuation dropped, EACH space a dash.
+ *
+ * `\p{L}\p{N}`, NOT `\w`. JavaScript's `\w` is ASCII-only even under the `u`
+ * flag, so the previous version deleted every Hangul, kana, Han and Cyrillic
+ * character in a heading and left the dashes behind — meaning a localized
+ * anchor could never match its own heading. It passed for a year because only
+ * the English README linked to a section; the moment the eight translations
+ * grew one, all eight reported a broken link that GitHub resolves perfectly
+ * well. GitHub keeps Unicode letters in an anchor, and so does this now.
+ */
 function slug(heading) {
   return heading
     .trim()
     .toLowerCase()
-    .replace(/[^\w\s-]/gu, '')
+    .replace(/[^\p{L}\p{N}\s_-]/gu, '')
     .replace(/\s/gu, '-')
 }
 

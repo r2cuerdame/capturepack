@@ -24,7 +24,8 @@ cannot offer the same thing honestly — see
 [why](#why-picking-belongs-to-the-still) — so a video gets the boxes you draw.
 
 The saved pack matches what the user captured: a video pack combines replay,
-frames, annotations, object context and an event timeline; an image pack contains
+frames, annotations, the window and control geometry observed through time, and
+an event timeline; an image pack contains
 the explicit still image, annotations and object context. Double-click
 `viewer.html` to inspect either kind offline, without installing CapturePack or
 starting a server. It stays a local, open folder that works without an AI,
@@ -32,13 +33,14 @@ account, or cloud service.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Download](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Current public Windows release: **CapturePack 0.3.3**. It adds the offline pack
-viewer and improves replay reliability, past-object picking and multi-display
-context capture.
+Current public Windows release: **CapturePack 0.3.4**. Object Pick now belongs to
+the still image, where it can be complete: a screenshot carries the full UI
+Automation tree and the visible page of every browser window on the desk. A
+video keeps the replay, the timeline and the boxes you draw.
 
 <p align="center">
   <a href="https://capturepack.dev/">
-    <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/motion/en/capturepack-time-machine-poster.webp" alt="CapturePack starts at NOW on the right, moves the playhead left to 5 seconds ago, restores and selects the child UI control that existed in that historical frame, and exports structured evidence for AI." width="760">
+    <img src="https://raw.githubusercontent.com/r2cuerdame/capturepack/main/site/assets/motion/en/capturepack-time-machine-poster.webp" alt="CapturePack starts at NOW on the right, moves the playhead left to 5 seconds ago, boxes the failure that is already gone from the screen, and exports structured evidence for AI." width="760">
   </a>
 </p>
 
@@ -123,8 +125,9 @@ image.
 
 - **Screenshots preserve pixels.** You lose what happened before the frame.
 - **Videos preserve motion.** You lose intent and structure.
-- **CapturePack preserves context.** The replay, the picked UI object, observed
-  movement, annotations, and the state that was actually captured.
+- **CapturePack preserves context.** The replay and the window geometry recorded
+  through it, the object picked in a still, annotations, and the state that was
+  actually captured.
 
 ## Rewind first
 
@@ -136,7 +139,8 @@ that recording is off.
 
 ## What the structured context says
 
-A semantic annotation can identify more than a rectangle:
+An annotation made on a still image can identify more than a rectangle. A video's
+annotations are the boxes you drew, plus the moment each one explains:
 
 - **Target identity:** UIA name, control type (the control's semantic role),
   AutomationId, process or window identity when the application exposes them;
@@ -144,7 +148,8 @@ A semantic annotation can identify more than a rectangle:
 - **Captured state in time:** the picked instant, the display it was on, and the
   bounds observed at that instant.
 - **Visual and narrative evidence:** original media, editable annotations,
-  generated views and reports; video packs also carry keyframes and a timeline.
+  generated views and reports; a video pack adds keyframes, a timeline and the
+  window geometry recorded through it.
 
 That context can be read from the plain folder. A connected AI can also use the
 app's **read-only MCP server** and start with: *"Analyze the latest CapturePack."*
@@ -233,7 +238,7 @@ Tools, client setup, and settings: [docs/MCP.md](docs/MCP.md).
 
 ## Status
 
-**0.3.3 is the current public Windows download.** CapturePack remains an
+**0.3.4 is the current public Windows download.** CapturePack remains an
 early-stage project, so keep the original pack when reporting a problem and see
 [GOAL.md](GOAL.md) for the product vision and [ROADMAP.md](ROADMAP.md) for what
 comes next.
@@ -255,7 +260,7 @@ hard-coded global offset.
 - [MCP](docs/MCP.md) and [temporal provider API](docs/temporal-provider-api.md)
   — read-only saved-pack access and context-provider integration.
 
-CapturePack `0.3.3` is the application version. Pack `format_version` evolves
+CapturePack `0.3.4` is the application version. Pack `format_version` evolves
 independently through additive format changes; readers must follow
 [SPEC.md](SPEC.md) rather than infer format support from the app version.
 

@@ -57,8 +57,9 @@ reset or clean away an active worktree.
   instead of treating an unmeasured capture as successful.
 - One N-display geometry model across negative origins, portrait displays,
   mixed DPI, capture, editing, rendering, save/reopen, and generated documents.
-- Past-frame and reopened Windows UI Automation / Chrome DOM evidence used by
-  Object Pick without inventing unobserved object state.
+- Capture-instant and reopened Windows UI Automation / Chrome DOM evidence used
+  by Object Pick — a still-image affordance; a video carries the geometry it
+  observed but offers no picking — without inventing unobserved object state.
 - Separate image-region and image-fullscreen pack contracts, including
   cross-monitor region composition and image-aware MCP output.
 - Source-first atomic save: annotations, timeline, manifest, report, README,
@@ -188,8 +189,9 @@ claim these complete without new measurements:
   retained-chunk, and stall matrix on one and two physical displays;
 - a physical three-display setup with negative origin, portrait, mixed DPI,
   cross-display manual/semantic objects, save/reopen, and rendered output;
-- a full real-app E2E flow from hotkey through rewind, Object Pick, save, pack
-  validation, and failure artifacts
+- a full real-app E2E flow from hotkey through save, pack validation, and
+  failure artifacts — a video rewound and annotated with drawn boxes, and a
+  still capture's Object Pick, which is the only capture kind that has one
   ([#63](https://github.com/r2cuerdame/capturepack/issues/63)).
 
 The open issue list is a backlog, not a reliable map of what has or has not
@@ -312,17 +314,19 @@ Never overwrite a public version. A product hotfix after 0.3.3 must use a higher
 version and fix forward. Documentation-only commits may follow the release on
 `main`, but they do not alter the binaries identified by the `v0.3.3` tag.
 
-## 0.3.4 in progress
+## 0.3.4 being published
 
-Work on `agent/0.3.4`, not released. `core/package.json` is
-**`0.3.4-rc.33`** — a release *candidate* version so a locally built installer can
-never be confused with the public `0.3.3`, not a release. There is no tag and no
-published binary, and `v0.3.3` stays where it is. See [GOAL.md](../GOAL.md) for
-the design record and [#104](https://github.com/r2cuerdame/capturepack/issues/104) /
+`core/package.json` is **`0.3.4`** and the documentation, site and motion assets
+in this commit describe it. The tag and the public binary are produced by the
+`Release` workflow, which is dispatched by hand — so until that run finishes,
+`v0.3.3` above is still the public release and this section is the record of
+what is going out. Fill in the Public state table from the finished run, and do
+not move or replace `v0.3.3`. See [GOAL.md](../GOAL.md) for the design record
+and [#104](https://github.com/r2cuerdame/capturepack/issues/104) /
 [#89](https://github.com/r2cuerdame/capturepack/issues/89) for the evidence.
 
-An RC installer is built with `npm run dist` and appears at
-`core/release-rc33/CapturePack-Setup-0.3.4-rc.33.exe`. It is unsigned and gitignored:
+During the cycle an RC installer is built with `npm run dist` and appears at
+`core/release-rcNN/CapturePack-Setup-0.3.4-rc.NN.exe`. It is unsigned and gitignored:
 builds are artifacts of a commit, never part of one. (`release/` can hold a lock
 from an earlier build; `npx --% electron-builder --win --publish never
 -c.directories.output=release-rcNN` builds beside it. The `--%` matters —

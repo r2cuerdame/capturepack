@@ -41,7 +41,7 @@ const packageVersion = String(packageJson.version ?? '')
 // a later one. What it may never be is a different build wearing the public
 // version's number: a locally built installer named like the published 0.3.3
 // cannot be told apart from it once it leaves this folder.
-const PUBLIC_VERSION = '0.3.3'
+const PUBLIC_VERSION = '0.3.4'
 const packageIsCurrentPublic = packageVersion === PUBLIC_VERSION
 const candidateBase = /^(\d+\.\d+\.\d+)-rc\.\d+$/.exec(packageVersion)?.[1]
 /** Negative, zero or positive, comparing major.minor.patch left to right. */
@@ -67,15 +67,30 @@ const motionFiles = supported.flatMap((lang) =>
 const localizedReadmes = supported
   .filter((lang) => lang !== 'en')
   .map((lang) => ({ lang, text: read(`README.${lang}.md`) }))
+/**
+ * Each translation must say that `replay_annotated.webm` exists ONLY when the
+ * manifest declares it — the one line that stops a reader treating a derived
+ * view as part of every pack.
+ *
+ * PATTERNS, NOT EXACT STRINGS. These were fixed phrases, and a retranslation
+ * broke six of eight on nothing but grammatical agreement: `lo declara` became
+ * `la declara` once the Spanish sentence chose "vista", `objavlen` became
+ * `objavleno`, `declarado` became `declarada`. Every one of those files still
+ * stated the contract perfectly; the check was pinning the wording rather than
+ * the meaning, and a check that fails on correct work teaches people to edit
+ * the check. So each pattern now requires the two words that carry the claim —
+ * the manifest, and the declaration being conditional — and lets the sentence
+ * around them be written however the language wants.
+ */
 const derivedReadmeMarkers = {
-  ko: '매니페스트 선언 시에만',
-  ja: 'マニフェスト宣言時のみ',
-  zh: '仅在清单声明时存在',
-  es: 'solo si el manifest lo declara',
-  fr: 'si le manifest le déclare',
-  de: 'nur bei Manifest-Deklaration',
-  pt: 'só se declarado no manifesto',
-  ru: 'только если объявлен в manifest',
+  ko: /매니페스트에?\s*선언[^\n]{0,16}경우에만/u,
+  ja: /マニフェスト[^\n]{0,12}宣言[^\n]{0,12}場合のみ/u,
+  zh: /仅在清单声明时/u,
+  es: /solo si el manifest l[ao] declara/u,
+  fr: /si le manifest l[ae] déclare/u,
+  de: /nur bei Manifest-Deklaration/u,
+  pt: /só (?:quando|se) declarad[ao] no manifesto/u,
+  ru: /только если объявлен[оа]? в manifest/u,
 }
 
 let passed = 0
@@ -144,8 +159,8 @@ for (const lang of supported) {
     missingText.length === 0
       && missingAlt.length === 0
       && document.documentElement.lang === lang
-      && releaseNote.includes('0.3.3')
-      && !releaseNote.includes('0.3.2'),
+      && releaseNote.includes('0.3.4')
+      && !releaseNote.includes('0.3.3'),
     [...missingText, ...missingAlt].join(', '),
   )
 }
@@ -215,10 +230,10 @@ check(
     && i18n.includes("prefers-reduced-motion: reduce"),
 )
 check(
-  'landing names 0.3.3 as the public release',
-  html.includes('"softwareVersion": "0.3.3"')
-    && html.includes('>v0.3.3</span>')
-    && html.includes('Public download: 0.3.3')
+  'landing names 0.3.4 as the public release',
+  html.includes('"softwareVersion": "0.3.4"')
+    && html.includes('>v0.3.4</span>')
+    && html.includes('Public download: 0.3.4')
     && !html.includes('source/release candidate'),
 )
 check(
@@ -233,9 +248,9 @@ check(
   `${packageVersion} (public ${PUBLIC_VERSION}), lock ${packageLock.version}`,
 )
 check(
-  'README names 0.3.3 as the public release',
-  readme.includes('Current public Windows release: **CapturePack 0.3.3**')
-    && readme.includes('**0.3.3 is the current public Windows download.**')
+  'README names 0.3.4 as the public release',
+  readme.includes('Current public Windows release: **CapturePack 0.3.4**')
+    && readme.includes('**0.3.4 is the current public Windows download.**')
     && !readme.includes('candidate baseline')
     && !readme.includes('not a public release until it appears on GitHub Releases'),
 )
@@ -293,7 +308,12 @@ check(
     && readme.includes('https://capturepack.dev/')
     && readme.includes('starts at NOW on the right')
     && readme.includes('moves the playhead left to 5 seconds ago')
-    && readme.includes('historical frame'),
+    // Was `historical frame`, which came from the alt text's old ending:
+    // "restores and selects the child UI control that existed in that
+    // historical frame". A video selects nothing, so that sentence went. What
+    // the alt text still has to say is WHY rewinding is worth anything — the
+    // thing being marked is no longer on screen.
+    && readme.includes('already gone from the screen'),
 )
 check(
   'landing copy explains the visible temporal direction',
@@ -347,13 +367,13 @@ for (const { lang, text: localized } of localizedReadmes) {
   check(
     `${lang}: README public-release and product/privacy contract`,
     localized.includes(`motion/${lang}/capturepack-time-machine-poster.webp`)
-      && localized.includes('0.3.3')
-      && !localized.includes('0.3.0')
+      && localized.includes('0.3.4')
+      && !localized.includes('0.3.3')
       && localized.includes('Ctrl+Alt+S')
       && localized.includes('capture_kind: image')
       && localized.includes('MCP')
       && localized.includes('SHA256SUMS.txt')
-      && localized.includes(derivedReadmeMarkers[lang]),
+      && derivedReadmeMarkers[lang].test(localized),
   )
 }
 check(
@@ -398,17 +418,18 @@ check(
     && !html.includes('blob/main/ROADMAP.md'),
 )
 
-console.log('\n0.3.3 release and documentation contract')
+console.log('\n0.3.4 release and documentation contract')
 check(
   'roadmap preserves history and adds the current baseline',
-  roadmap.includes('## Current baseline — 0.3.3')
+  roadmap.includes('## Current baseline — 0.3.4')
     && roadmap.includes('## V1 — MVP + installable, self-updating release')
     && roadmap.includes('## V2 — Temporal plugin system')
     && roadmap.includes('## Success criteria (from GOAL.md)'),
 )
 check(
   'current release, known issue and dependency audit are documented',
-  changelog.includes('## 0.3.3 — 2026-07-30')
+  changelog.includes('## 0.3.4 — 2026-08-02')
+    && changelog.includes('## 0.3.3 — 2026-07-30')
     && changelog.includes('viewer.html')
     && changelog.includes('Known issues')
     && changelog.includes('issues/89')

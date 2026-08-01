@@ -14,7 +14,7 @@
   "videos": {
     "timeMachine": {
       "basename": "capturepack-time-machine",
-      "message": "Rewind a past bug without reproducing it, then attach object or manual context.",
+      "message": "Rewind a past bug without reproducing it, then box what broke by hand and keep the replay with it.",
       "durationSeconds": 9.0,
       "width": 1280,
       "height": 720,

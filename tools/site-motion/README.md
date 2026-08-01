@@ -2,7 +2,7 @@
 
 Remotion source for the two short CapturePack landing-page explainers.
 
-1. **TimeMachine** — no bug reproduction; rewind the replay, then attach object or manual context.
+1. **TimeMachine** — no bug reproduction; rewind the replay, then box what broke by hand. A replay has no object picking: the boxes are drawn, and the pack carries the moment and the recorded window geometry with them.
 2. **StillContext** — keep `snapshot.png` pixels untouched and store editable context in `annotations.json`.
 
 ## Locales

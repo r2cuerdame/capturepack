@@ -32,9 +32,13 @@ record preserved later in this document:
 - Video capture and explicit region/full-virtual-desktop image capture are
   distinct contracts. Multi-display pixels, scale, negative origins and
   measured replay-clock evidence remain explicit through save and reopen.
-- The editor authors unified boxes and can bind them to captured UIA, Chrome
-  DOM or HWND evidence. Observed object tracks use the nearest real sample and
-  are never interpolated; authored manual-box keyframes may interpolate.
+- The editor authors unified boxes. In a STILL capture it can also bind a box to
+  the captured UIA, Chrome DOM or HWND evidence under the cursor; a video offers
+  no object picking at any frame — the captured instant included — and takes
+  hand-drawn boxes with lifetimes, while the same control evidence keeps being
+  recorded into the pack. Observed object tracks, in the packs that carry them,
+  use the nearest real sample and are never interpolated; authored manual-box
+  keyframes may interpolate.
 - The browser integration is explicit-pick only and crosses three processes:
   page → extension service worker → native messaging host → a per-user named
   pipe the running application listens on. The DOM is never streamed. A pick

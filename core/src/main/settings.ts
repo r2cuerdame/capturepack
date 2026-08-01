@@ -58,9 +58,20 @@ function defaultSettings(): Settings {
     // The prompt, not the folder: what a saved pack is for, nine times out of
     // ten, is the next sentence typed into an LLM.
     clipboardAfterSave: 'prompt',
-    // Screenshot-tool convention: the pixels the user just annotated are
-    // ready to paste. This waits for the derived still, never the raw source.
-    imageClipboardAfterSave: 'image',
+    // THE PATH, NOT THE PIXELS — for the same reason as the video above.
+    //
+    // This was 'image' on the screenshot-tool convention: paste what you just
+    // annotated. That convention was written for a tool whose output IS the
+    // image. A 0.3.4 still is not: it carries the whole UI Automation tree and
+    // the visible page of every browser window on the desk, which is the entire
+    // point of moving Object Pick to the still. Flattening that to a PNG throws
+    // away everything the capture just went to the trouble of collecting, and
+    // does it silently — the user pastes a picture and never learns there was
+    // a folder behind it.
+    //
+    // The prompt carries the path, so the context stays reachable. Anyone who
+    // genuinely wants the pixels still has 'image' one dropdown away.
+    imageClipboardAfterSave: 'prompt',
     // The welcome window has never been shown on this machine (GOAL "Welcome
     // (first launch after install)"). Flipped — and written — the moment the
     // window opens.

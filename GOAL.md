@@ -46,10 +46,14 @@ pre-release identifiers. This section is the current product truth:
 - All displays are captured by default. Per-display pixels, scale, negative
   origins and measured replay-clock offsets remain explicit through save,
   reopen and rendering.
-- Object Pick resolves captured past-frame evidence: the Windows surface/control
-  timeline, built-in UI Automation, optional explicit Chrome DOM picks, and an
-  HWND window fallback. Missing context stays missing; observed rectangles are
-  never interpolated or invented.
+- Object Pick is a STILL-IMAGE affordance. A screenshot resolves real objects
+  from the evidence captured at the shutter: the Windows surface/control record,
+  built-in UI Automation, optional explicit Chrome DOM picks, and an HWND window
+  fallback. A video picks nothing at any frame, the captured instant included —
+  it takes the boxes the user draws, each with a lifetime — while the same
+  control evidence keeps being recorded into the pack's windows-context
+  timeline. Missing context stays missing; observed rectangles are never
+  interpolated or invented.
 - Manual-box keyframes are authored presentation data and do interpolate,
   including across monitors. They never change the rule for observed tracks.
 - The MCP server is optional, loopback-only and read-only. It is enabled and
@@ -1834,8 +1838,14 @@ temporal implementation:
 
 ### Temporal object picking (0.3)
 
-Object Pick resolves evidence captured on the replay clock; it never asks the
-current desktop to explain a past frame.
+**Superseded for the editor on 2026-08-01 — see "The still carries the context;
+the video carries the time".** Picking is offered in a STILL only; a video gets
+the boxes the user draws and no object selection at any frame. What survives
+below is the RECORD — points 1, 2, 3, 6 and 7 still describe what every capture
+writes into the pack — and how a still resolves the one instant it has.
+
+Object Pick resolves evidence captured at the instant the shutter fired; it
+never asks the current desktop to explain a frame it did not observe.
 
 1. **Windows have a temporal floor.** Capture starts with one `EnumWindows`
    snapshot. A WinEvent hook then marks only changed HWNDs dirty; periodic full
@@ -1854,15 +1864,19 @@ current desktop to explain a past frame.
    the actual owner-window client rectangle and the owning display's DPI
    transform; 0.3.1 adds the regression that caught a 2x-to-1x cross-display
    size/position error.
-4. **The editor resolves the viewed instant.** Hover/click at a past frame hits
-   the top captured window and the finest captured child that contains the
-   point. A real HWND window remains the fallback. The selected annotation is
-   still one `"box"` with semantic `target`, `tracking.picked_at_ms` and, when
-   observed, `tracking.samples`; there is no separate element annotation type.
-5. **Observed and authored motion never mix.** Tracking samples are measurements
-   and use the nearer recorded sample unchanged between observations. Manual-box
-   `keyframes` are authored presentation data and interpolate, including across
-   displays.
+4. **The editor resolves the instant it is showing, and only a still has one.**
+   In a screenshot, hover/click hits the top captured window and the finest
+   captured child that contains the point; a real HWND window remains the
+   fallback. In a video there is no hit test at all — no object index is built
+   (`objectPickingApplies()` in the editor), and a right-drag rectangle with a
+   lifetime is the whole annotation vocabulary. A picked annotation is still one
+   `"box"` with a semantic `target`; there is no separate element annotation
+   type.
+5. **Observed and authored motion never mix.** Observed tracking samples, in the
+   packs that carry them, are measurements: a reader uses the nearer recorded
+   sample unchanged between observations and never interpolates. Manual-box
+   `keyframes` are authored presentation data and do interpolate, including
+   across displays.
 6. **Save/reopen uses the same record.** The live editor and a History-reopened
    editor consume the same frozen observations and coordinate projection. If a
    legacy or degraded pack lacks temporal coverage, the editor reports that
@@ -2006,7 +2020,12 @@ Annotation speed is everything.
 ## Editor Input System
 
 The editor is not a static screenshot viewer — it scrubs the frozen replay in time.
-The user should finish **time selection → object selection → description** with the mouse alone.
+The user should finish **time selection → box → description** with the mouse alone.
+
+**Object selection is a still-image affordance** ("The still carries the context;
+the video carries the time", 2026-08-01). In a video the mouse chooses a moment
+and draws a rectangle; the object under the cursor is offered only in a
+screenshot, where there is one instant and nothing to disagree with it.
 
 **Final UX**
 
@@ -2018,8 +2037,8 @@ Ctrl+Alt+C
 Wheel up        → toward the past
 Wheel down      → toward the present
 
-Left click      → semantic object auto-selection → type description immediately (V3;
-                  MVP falls back to manual selection)
+Left click      → select an existing box (in a screenshot it also picks the real
+                  object under the pointer; a video offers no object at all)
 
 Right-click drag → manual rectangle → type description immediately
 
@@ -2155,7 +2174,9 @@ CapturePack is running in your tray.
 The toolless editor explains itself once. On the editor's FIRST open, a compact popup
 shows an animated demonstration of the core interactions:
 
-- **Left click** → select an object/box (animated cursor click + highlight)
+- **Left click** → select a box; in a screenshot, also pick the real object under
+  the pointer (animated cursor click + highlight). A video picks no objects, so
+  the text must not promise one.
 - **Right drag** → draw a box, description input appears (animated drag + typing)
 - **Wheel** → travel back through time (animated playhead)
 
@@ -2172,7 +2193,7 @@ tool buttons in the default UI. The user remembers only:
 
 | Interaction | Action |
 | --- | --- |
-| **Left click** | Probe the real object at the current frame (Chrome DOM, Windows UI Automation). If a semantic object exists, select it, create an object annotation, and show the description input immediately. |
+| **Left click** | Select the box under the cursor. **In a still capture only**, also probe the real object at the captured instant (Chrome DOM, Windows UI Automation): if a semantic object exists, select it, create an object annotation, and show the description input immediately. A video probes nothing — a left click there selects an existing box and does nothing else. |
 | **Right drag** | Manual selection box, live while dragging; on release, default 1.0 s lifetime + description input immediately. No tool-selection step exists. |
 | **Top-left duration** | Shows the manual annotation's duration; click to edit instantly. Default 1.0 s. |
 | **Top-right ×** | Delete the annotation (for Tracked Elements, tracking ends too). Ctrl+Z restores. |
@@ -2282,9 +2303,10 @@ Data example:
 }
 ```
 
-**UX principle** — no tool selection, ever: Left click = semantic object → box ·
-Right drag = manual box · # = number toggle · Duration = time edit · Blur = blur
-toggle · × = delete. Everything happens inside one Annotation Box.
+**UX principle** — no tool selection, ever: Left click = select a box, and in a
+still capture a semantic object → box · Right drag = manual box · # = number
+toggle · Duration = time edit · Blur = blur toggle · × = delete. Everything
+happens inside one Annotation Box.
 
 ### Pin Numbering
 
@@ -2360,6 +2382,12 @@ Measured on the reference desk: display 1 came up 486 frames short and had
 discarded two of them.
 
 ### A picked box means the frame it was picked on (#90)
+
+**Historical, and now a READER's rule only.** A video no longer picks anything
+("The still carries the context; the video carries the time", 2026-08-01), so no
+current writer produces a picked box on a replay clock. The rule below is why
+`tracking.picked_at_ms` exists, and packs written by 0.2.0–0.3.x carry it and
+must still render exactly as they did.
 
 A box someone DREW covers a stretch of time, and the middle of that stretch is
 a fair thing to call its moment. A box someone PICKED OFF AN OBJECT is a

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>CapturePack — Guide</title>
-  <meta name="description" content="How to use CapturePack: rewind the default 30-second replay, pick captured UI objects, or press Ctrl+Alt+S for an image pack, then hand structured local context to a person or AI.">
+  <meta name="description" content="How to use CapturePack: rewind the default 30-second replay and box what broke, or press Ctrl+Alt+S for a still whose real UI objects you can pick, then hand structured local context to a person or AI.">
   <meta name="robots" content="index, follow">
   <meta name="theme-color" content="#fafafc">
   <meta property="og:type" content="article">
@@ -78,7 +78,7 @@
       <ul class="gestures">
         <li>
           <b data-i18n="g_click_t">Left click</b>
-          <span data-i18n="g_click_b">Select the captured control or window under the pointer at that past frame. The box follows observed movement.</span>
+          <span data-i18n="g_click_b">On a still, select the captured control or window under the pointer. A replay has nothing to pick — you draw its boxes.</span>
         </li>
         <li>
           <b data-i18n="g_drag_t">Right drag</b>
@@ -89,7 +89,7 @@
           <span data-i18n="g_wheel_b">Travel back through the replay to the moment the bug happened.</span>
         </li>
       </ul>
-      <p data-i18n="g_annotate_b">Windows UI Automation supplies accessible controls; the optional Chrome extension supplies selector, role, text and URL for an explicitly picked element; a real HWND window is the fallback. Every observation names its display, so reopened multi-monitor packs keep the same timing and coordinates. Press <kbd>Enter</kbd> to save, <kbd>?</kbd> for every shortcut.</p>
+      <p data-i18n="g_annotate_b">On a still, Windows UI Automation supplies accessible controls; the optional Chrome extension supplies selector, role, text and URL for an explicitly picked element; a real HWND window is the fallback. Every observation names its display, so reopened multi-monitor packs keep the same timing and coordinates. Press <kbd>Enter</kbd> to save, <kbd>?</kbd> for every shortcut.</p>
     </section>
 
     <section id="pack">

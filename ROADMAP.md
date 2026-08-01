@@ -21,7 +21,7 @@ Ctrl+Alt+C  →  capture  →  5-second annotation  →  export .capturepack  �
 
 ---
 
-## Current baseline — 0.3.3
+## Current baseline — 0.3.4
 
 The milestone narrative below is preserved as the product's design and
 verification history. These are the current additions and next gates:
@@ -29,10 +29,14 @@ verification history. These are the current additions and next gates:
 - Video context uses `Ctrl+Alt+C`; explicit cross-monitor region or complete
   virtual-desktop image context uses independently configurable `Ctrl+Alt+S`.
   Capture rate is 5–30 fps.
-- Past-frame/reopened-pack Object Pick uses captured Windows surface/control
-  history, built-in UI Automation, optional Chrome DOM preview observations and
-  an HWND fallback. Observed motion is never interpolated; authored manual-box
-  keyframes may interpolate across displays.
+- Object Pick is a still-image affordance. A screenshot — live or reopened from
+  History — picks real objects out of the captured Windows surface/control
+  evidence, built-in UI Automation, optional Chrome DOM preview observations and
+  an HWND fallback. A video offers no object picking at any frame, the captured
+  instant included: it takes the boxes the user draws, each with a lifetime,
+  while the same control evidence keeps being recorded into the pack's
+  windows-context timeline. Observed motion is never interpolated; authored
+  manual-box keyframes may interpolate across displays.
 - Image packs and video packs have distinct storage contracts. Image packs
   contain no replay or top-level `timeline.json`.
 - MCP is optional, loopback-only and read-only. It reads already-saved packs
@@ -64,6 +68,13 @@ verification history. These are the current additions and next gates:
   #89 the focused display reads 127 ms and 118 ms across two independent drags,
   and applying it collapses the overlay's positional error from about 550 px to
   19–97 px. The non-focused display refuses rather than guessing.
+  0.3.4 also **removes object picking from a video entirely**
+  ([#119](https://github.com/r2cuerdame/capturepack/issues/119)): control
+  geometry could only be sampled at a 3% duty cycle and skipped Chromium
+  altogether, so a scrubbed frame offered the window and never the thing inside
+  it. A video now takes manual boxes only; a still keeps the whole affordance
+  and gains the visible page of every visible browser window. Pinned by
+  `check:video-no-picking`.
 - Next: decide where that correction is applied, which is a decision about what
   a saved pack means rather than a measurement — the single save-side funnel
   reaches the pack, the editor and the burned-in video at once but is
@@ -123,8 +134,10 @@ usage habit that the whole project is measured by.
 - [x] **Annotation lifetime** (GOAL "Annotation Timeline & Lifetime"): manual annotations get a
       default 1.0 s duration (±0.5 s, clamped), duration label + editor with presets, × delete,
       lifetime bars on the timeline (`t_start_ms` / `t_end_ms`)
-- [x] Object Pick binds a box to captured UIA/Chrome DOM/HWND evidence; observed
-      tracks use measured samples without interpolation
+- [x] Object Pick binds a box to captured UIA/Chrome DOM/HWND evidence in a
+      STILL capture; a video takes manual boxes only. Observed rectangles
+      written by earlier releases still render from measured samples, never
+      from interpolation
 
 ### Export — Implemented
 
@@ -231,12 +244,16 @@ not frozen, and top-level `input.*` events remain reserved.
 
 ### Semantic object picking — Partially implemented
 
-Click actual UI objects instead of drawing rectangles; CapturePack stores the object, not
-coordinates (GOAL "Annotation Timeline & Lifetime"):
+In a STILL capture, click actual UI objects instead of drawing rectangles;
+CapturePack stores the object, not coordinates (GOAL "Annotation Timeline &
+Lifetime"). A video has no object picking at any frame — it takes the boxes the
+user draws, each with a lifetime — because control geometry could not be
+answered at an arbitrary replay frame:
 
 - [x] A box can carry a semantic `target` from UIA, Chrome DOM or HWND evidence
-- [x] Observed target bounds can follow captured samples across displays without
-      inventing intermediate object state
+- [x] Observed target bounds written by earlier releases still render and
+      survive save/reopen across displays without inventing intermediate object
+      state
 - [ ] App-specific object lifecycles beyond observed provider evidence
 - [ ] Engine providers (Unreal widgets, Unity UI)
 

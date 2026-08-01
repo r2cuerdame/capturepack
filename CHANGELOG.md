@@ -4,9 +4,21 @@ All notable changes to CapturePack. Format follows [Keep a Changelog](https://ke
 this project uses [semantic versioning](https://semver.org/) for the app, and the pack
 format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 
-## Unreleased
+## 0.3.4 — 2026-08-02
 
 ### Fixed
+
+- A screenshot now carries the page of every browser window on the desk, not
+  just the one Chrome had last focused. With two Chrome windows open the pack
+  held one page: picking in the YouTube window gave the real element, and
+  picking in the GitHub window beside it drew a box around the whole browser.
+  The extension had asked the browser for the active tab of a single window —
+  the right question for a pick, which happens in the window you clicked in, and
+  the wrong one for a capture, which photographs everything visible. The second
+  window was never asked, so nothing recorded that it was missing either. Every
+  visible browser window is now asked at once, a minimised one is skipped
+  because it is not in the pixels, and a window that could not answer says why
+  ([#132](https://github.com/r2cuerdame/capturepack/issues/132)).
 
 - The fix below now applies on the screens it was written for. It compared how
   much time the recording claimed against how long the app had been receiving
@@ -189,15 +201,16 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   reached. Those windows are no longer walked: a real browser already reports its
   own document, and the lane says on its cost line how many it left alone and how
   many controls it could afford ([#108](https://github.com/r2cuerdame/capturepack/issues/108)).
-- A picked object keeps its box when its window is dragged to another monitor.
-  The box used to stop following at the seam and sit there for the rest of its
-  lifetime while the video carried the window away, and the object could not be
-  picked on the screen it had moved to. Windows applies a display's DPI to a
-  window only when the drag ends, so mid-drag the window is seen on the new
-  screen at the size it still physically is — which was read as a resize and
-  ended the track ([#107](https://github.com/r2cuerdame/capturepack/issues/107)).
-  A window that genuinely resizes still ends it, because its children may have
-  been laid out again.
+- An object track recorded by an older version keeps its box when its window was
+  dragged to another monitor. The box used to stop following at the seam and sit
+  there for the rest of its lifetime while the video carried the window away.
+  Windows applies a display's DPI to a window only when the drag ends, so
+  mid-drag the window is seen on the new screen at the size it still physically
+  is — which was read as a resize and ended the track
+  ([#107](https://github.com/r2cuerdame/capturepack/issues/107)). This now only
+  affects packs written before this release: a video capture no longer records
+  object tracks at all (see above), and re-opening one of those older packs
+  renders its existing tracks the way they were meant to look.
 - Re-editing a saved CapturePack now records what the editor did. Both capture
   flows already forwarded the editor's own diagnostics to the log and the
   re-edit flow never did, so the one session a problem is usually reported from
@@ -210,6 +223,16 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 
 ### Changed
 
+- After an image capture the clipboard now carries the LLM prompt with the
+  pack's path, where it used to carry the finished image. The old default came
+  from the screenshot-tool convention — paste what you just annotated — and that
+  convention assumes the image is the output. It no longer is: a still now
+  carries the full UI Automation tree and the visible page of every browser
+  window on the desk, which is the whole reason Object Pick moved to the still.
+  Pasting a flattened PNG threw all of it away without ever saying so, so the
+  person who copied a screenshot never learned there was a folder behind it.
+  The finished image is still one dropdown away, under Settings → After image
+  capture.
 - Every recorded context sample now carries the age of the picture it describes.
   The correction had only ever been applied to samples stamped directly by the
   frame clock, which is about 6% of them; the remaining majority was converted

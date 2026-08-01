@@ -154,11 +154,28 @@ async function run(): Promise<void> {
       historyPreload.includes('ipcRenderer.invoke(IPC.historyCopyPrompt, packPath)'),
   )
   check(
-    'settings expose an independent image post-capture action with final image',
+    'settings expose an independent image post-capture action',
     settingsHtml.includes('id="imageClipboardAfterSave"') &&
-      settingsHtml.includes('value="image"') &&
-      settingsRenderer.includes("el<HTMLSelectElement>('imageClipboardAfterSave')") &&
-      settingsMain.includes("imageClipboardAfterSave: 'image'"),
+      settingsRenderer.includes("el<HTMLSelectElement>('imageClipboardAfterSave')"),
+  )
+  // THE STILL COPIES ITS PATH, NOT ITS PIXELS.
+  //
+  // This pinned `imageClipboardAfterSave: 'image'` — paste what you just
+  // annotated, the screenshot-tool convention. That convention assumes the image
+  // IS the output. A 0.3.4 still is not: it carries the whole UI Automation tree
+  // and the visible page of every browser window, which is the entire reason
+  // Object Pick moved to the still. Copying a flattened PNG discards all of it,
+  // silently, and the user never learns there was a folder behind the picture.
+  check(
+    'and a still copies the prompt carrying its path by default',
+    settingsMain.includes("imageClipboardAfterSave: 'prompt'"),
+    'the context a still now collects is only reachable through the path',
+  )
+  // Changing a default must not remove a choice. Someone whose workflow is
+  // paste-into-chat still needs the pixels, one dropdown away.
+  check(
+    'while the final image is still offered as a mode',
+    settingsHtml.includes('value="image"') && imageFlow.includes("=== 'image'"),
   )
   check(
     'image final-image mode copies only the completed derived PNG',

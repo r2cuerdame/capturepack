@@ -286,7 +286,10 @@ const RewindPick: React.FC<{duration: number}> = ({duration}) => {
       <div style={{position: 'absolute', left: 956, top: 162, width: 270, opacity: picked, transform: `translateX(${(1 - picked) * 44}px)`}}>
         <div style={{padding: '18px 18px 20px', background: '#12121a', border: `1px solid ${C.blue}88`, borderRadius: 16, boxShadow: '0 28px 70px rgba(0,0,0,.32)'}}>
           <div style={{display: 'flex', alignItems: 'center', gap: 10, color: '#cfe8ff', fontSize: 12, fontWeight: 820, letterSpacing: '.09em'}}><span style={{width: 9, height: 9, background: C.blue, borderRadius: '50%', boxShadow: `0 0 15px ${C.blue}`}} /> {t.recordedContext}</div>
-          {[['NAME', t.saveChanges], ['ROLE', t.button], ['STATE', t.visibleAgo]].map(([k, v]) => (
+          {/* Not a pick: a replay names no control. What the pack really has at
+              this instant is the moment itself, the window geometry lane S kept
+              through time, and the box the user drew, with its lifetime. */}
+          {[['MOMENT', t.momentAt], ['WINDOW', t.windowGeometry], ['BOX', t.boxLifetime]].map(([k, v]) => (
             <div key={k} style={{marginTop: 18}}><div style={{fontSize: 10, color: '#777384', fontWeight: 800, letterSpacing: '.12em'}}>{k}</div><div style={{fontSize: 16, color: C.text, fontWeight: 680, marginTop: 4}}>{v}</div></div>
           ))}
         </div>
@@ -318,7 +321,7 @@ const PackFlow: React.FC<{duration: number}> = ({duration}) => {
     <AbsoluteFill style={{opacity}}>
       <div style={{position: 'absolute', left: 64, top: 54}}><Kicker>{t.packKicker}</Kicker><Headline size={48} style={{marginTop: 12}}>{t.packTitle}</Headline></div>
       <FlowCard label="REPLAY" detail={t.momentBefore} color={C.purple2} x={76} y={220} enter={e1} />
-      <FlowCard label="OBJECT" detail={t.nameRoleState} color={C.blue} x={76} y={345} enter={e2} />
+      <FlowCard label="BOXES" detail={t.handDrawnBoxes} color={C.blue} x={76} y={345} enter={e2} />
       <FlowCard label="INTENT" detail={t.yourAnnotation} color={C.red} x={76} y={470} enter={e3} />
       {[325, 450, 575].map((y, i) => <div key={y} style={{position: 'absolute', left: 325, top: y, width: 188, height: 2, background: `linear-gradient(90deg,${[C.purple2,C.blue,C.red][i]},${C.purple})`, opacity: [e1,e2,e3][i], transformOrigin: 'left', transform: `scaleX(${progress(frame, 20 + i * 4, 43 + i * 4)})`}} />)}
       <div style={{position: 'absolute', left: 505, top: 281, width: 310, height: 245, borderRadius: 28, background: 'linear-gradient(145deg,#7c5cff,#5537db)', boxShadow: '0 34px 90px rgba(124,92,255,.36)', opacity: folder, transform: `scale(${0.78 + folder * .22}) rotate(${(1 - folder) * -4}deg)`, padding: 28}}>
@@ -330,7 +333,7 @@ const PackFlow: React.FC<{duration: number}> = ({duration}) => {
       <div style={{position: 'absolute', left: 817, top: 403, width: 92, height: 2, background: `linear-gradient(90deg,${C.purple},${C.mint})`, transformOrigin: 'left', transform: `scaleX(${ai})`}} />
       <div style={{position: 'absolute', right: 64, top: 264, width: 306, height: 280, borderRadius: 22, background: '#121a18', border: `1px solid ${C.mint}77`, boxShadow: '0 30px 80px rgba(0,0,0,.34)', opacity: ai, transform: `translateX(${(1 - ai) * 52}px)`, padding: 26}}>
         <div style={{color: C.mint, fontSize: 12, fontWeight: 850, letterSpacing: '.13em'}}>{t.aiReady}</div>
-        <div style={{marginTop: 22, fontSize: 25, fontWeight: 760, lineHeight: 1.2, letterSpacing: '-.03em'}}>{t.aiExact}<br />{t.aiRealObject}<br />{t.aiWhatMeant}</div>
+        <div style={{marginTop: 22, fontSize: 25, fontWeight: 760, lineHeight: 1.2, letterSpacing: '-.03em'}}>{t.aiExact}<br />{t.aiYourBox}<br />{t.aiWhatMeant}</div>
         <div style={{marginTop: 25, height: 1, background: '#264139'}} />
         <div style={{marginTop: 18, color: '#a8c7be', fontSize: 14, lineHeight: 1.45}}>{t.noGuess}</div>
       </div>
