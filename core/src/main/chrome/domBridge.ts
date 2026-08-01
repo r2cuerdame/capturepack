@@ -375,6 +375,7 @@ interface DomResponseMessage {
   reason: string | null
   tab: { url: string; title: string } | null
   document: unknown
+  viewport: unknown
 }
 
 type ParseOutcome =
@@ -486,6 +487,46 @@ export function parseDomDocument(doc: unknown): DomDocumentSnapshot | null {
   return event.document ?? null
 }
 
+/**
+ * WHERE THE VIEWPORT WAS, WITHOUT WHICH NOTHING IN IT CAN BE PLACED.
+ *
+ * Every rectangle a page reports — a picked element's bounds, every entry in a
+ * document snapshot — is in viewport CSS pixels. This is the only thing that
+ * says where that viewport sat on the screen, so a payload carrying one without
+ * the other is data with no position (#129: a capture-time document arrived with
+ * 343 elements and no anchor, and not one of them could be drawn).
+ *
+ * Extracted so the pick and the capture-time fetch are anchored by the same
+ * rules rather than two copies that can disagree.
+ */
+export function parseDomViewport(raw: unknown): DomEvent['viewport'] | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const v = raw as Record<string, unknown>
+  const pos = (k: string): number | null => {
+    const n = v[k]
+    return typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : null
+  }
+  const opt = (k: string): number | null => {
+    const n = v[k]
+    return typeof n === 'number' && Number.isFinite(n) ? n : null
+  }
+  const width = pos('width')
+  const height = pos('height')
+  const dpr = pos('dpr')
+  // A viewport with a nonsensical size or ratio is DROPPED rather than
+  // defaulted: a default would place the element somewhere plausible and wrong.
+  if (width === null || height === null || dpr === null || dpr > 16) return null
+  return {
+    width,
+    height,
+    dpr,
+    screenX: opt('screenX'),
+    screenY: opt('screenY'),
+    outerWidth: opt('outerWidth'),
+    outerHeight: opt('outerHeight'),
+  }
+}
+
 function parse(raw: unknown): ParseOutcome {
   if (typeof raw !== 'object' || raw === null) return refuse('not-an-object')
   const m = raw as Record<string, unknown>
@@ -528,6 +569,7 @@ function parse(raw: unknown): ParseOutcome {
         reason: typeof m['reason'] === 'string' ? m['reason'].slice(0, 200) : null,
         tab: parseTab(m['tab']),
         document: m['document'],
+        viewport: m['viewport'],
       },
     }
   }
@@ -614,32 +656,8 @@ function parse(raw: unknown): ParseOutcome {
   // line would be claiming more completeness than it has.
   const parsedDocument = parseDomDocument(m['document'])
   if (parsedDocument !== null) event.document = parsedDocument
-  const vp = m['viewport']
-  if (typeof vp === 'object' && vp !== null) {
-    const v = vp as Record<string, unknown>
-    const pos = (k: string): number | null => {
-      const n = v[k]
-      return typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : null
-    }
-    const opt = (k: string): number | null => {
-      const n = v[k]
-      return typeof n === 'number' && Number.isFinite(n) ? n : null
-    }
-    const width = pos('width')
-    const height = pos('height')
-    const dpr = pos('dpr')
-    if (width !== null && height !== null && dpr !== null && dpr <= 16) {
-      event.viewport = {
-        width,
-        height,
-        dpr,
-        screenX: opt('screenX'),
-        screenY: opt('screenY'),
-        outerWidth: opt('outerWidth'),
-        outerHeight: opt('outerHeight'),
-      }
-    }
-  }
+  const parsedViewport = parseDomViewport(m['viewport'])
+  if (parsedViewport !== null) event.viewport = parsedViewport
   if (type === 'dom.element.selected' && event.element === undefined) {
     return refuse(elementRefusal)
   }

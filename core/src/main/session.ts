@@ -95,6 +95,7 @@ import {
   domBridgeStatus,
   domEventsBetween,
   parseDomDocument,
+  parseDomViewport,
   requestDomForCapture,
   parseDomPayload,
 } from './chrome/domBridge'
@@ -1005,7 +1006,16 @@ function domRequestEvent(
   if (answer === null || !answer.ok || answer.tab === null || nowMs === null) return null
   const document_ = parseDomDocument(answer.document)
   if (document_ === null) return null
-  return { tMs: nowMs, type: 'dom.document.captured', tab: answer.tab, document: document_ }
+  // Without the viewport every rectangle in that document is unplaceable — the
+  // one field whose absence turns 343 elements into nothing drawable (#129).
+  const viewport = parseDomViewport(answer.viewport)
+  return {
+    tMs: nowMs,
+    type: 'dom.document.captured',
+    tab: answer.tab,
+    document: document_,
+    ...(viewport === null ? {} : { viewport }),
+  }
 }
 
 

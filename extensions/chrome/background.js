@@ -397,16 +397,34 @@ async function answerDomRequest(requestId) {
       target: { tabId: tab.id },
       files: ['frame-geometry.js', 'document-snapshot.js'],
     })
+    // THE DOCUMENT AND WHERE IT WAS, IN ONE READ.
+    //
+    // Every rectangle in the snapshot is in viewport CSS pixels, so without this
+    // the app receives geometry with no position. Measured: 343 elements
+    // arrived, and not one of them could be drawn (#129). The picker has always
+    // sent this alongside a pick; the capture-time fetch forgot to.
     const [out] = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      func: () => (window.__capturepackDocumentSnapshot ? window.__capturepackDocumentSnapshot() : null),
+      func: () => ({
+        document: window.__capturepackDocumentSnapshot ? window.__capturepackDocumentSnapshot() : null,
+        viewport: {
+          width: window.innerWidth,
+          height: window.innerHeight,
+          dpr: window.devicePixelRatio,
+          screenX: typeof window.screenX === 'number' ? window.screenX : null,
+          screenY: typeof window.screenY === 'number' ? window.screenY : null,
+          outerWidth: window.outerWidth,
+          outerHeight: window.outerHeight,
+        },
+      }),
     })
-    const document_ = out && out.result ? out.result : null
+    const document_ = out && out.result ? out.result.document : null
     if (document_ === null) { reply({ ok: false, reason: 'no-snapshot' }); return }
     reply({
       ok: true,
       tab: { url: (tab.url || '').slice(0, 2048), title: (tab.title || '').slice(0, 512) },
       document: document_,
+      viewport: out.result.viewport,
     })
   } catch (err) {
     // chrome://, the Web Store and the PDF viewer are refused even WITH the

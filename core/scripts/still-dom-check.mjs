@@ -150,5 +150,22 @@ check(
   'a pack with no page must never be the only evidence that nothing happened',
 )
 
+console.log('\nA document without its viewport is geometry with no position')
+check(
+  'the still attaches a viewport to the captured document',
+  /parseDomViewport\(answer\.viewport\)/.test(code(session)),
+  'every rectangle in a document is viewport CSS pixels; this is what places them (#129)',
+)
+check(
+  'the extension returns the viewport with the document',
+  /viewport: out\.result\.viewport/.test(source('../extensions/chrome/background.js')),
+  'the picker always sent it; the capture-time fetch forgot to',
+)
+check(
+  'one viewport parser, shared with the pick',
+  /export function parseDomViewport\(/.test(bridge),
+  'two copies of an anchoring rule is how a pick and a document come to disagree',
+)
+
 console.log(failed === 0 ? '\nstill-dom: OK' : `\nstill-dom: ${failed} FAILED`)
 process.exit(failed === 0 ? 0 : 1)
