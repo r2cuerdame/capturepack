@@ -315,14 +315,14 @@ version and fix forward. Documentation-only commits may follow the release on
 ## 0.3.4 in progress
 
 Work on `agent/0.3.4`, not released. `core/package.json` is
-**`0.3.4-rc.20`** — a release *candidate* version so a locally built installer can
+**`0.3.4-rc.21`** — a release *candidate* version so a locally built installer can
 never be confused with the public `0.3.3`, not a release. There is no tag and no
 published binary, and `v0.3.3` stays where it is. See [GOAL.md](../GOAL.md) for
 the design record and [#104](https://github.com/r2cuerdame/capturepack/issues/104) /
 [#89](https://github.com/r2cuerdame/capturepack/issues/89) for the evidence.
 
 An RC installer is built with `npm run dist` and appears at
-`core/release-rc20/CapturePack-Setup-0.3.4-rc.20.exe`. It is unsigned and gitignored:
+`core/release-rc21/CapturePack-Setup-0.3.4-rc.21.exe`. It is unsigned and gitignored:
 builds are artifacts of a commit, never part of one. (`release/` can hold a lock
 from an earlier build; `npx --% electron-builder --win --publish never
 -c.directories.output=release-rcNN` builds beside it. The `--%` matters —
@@ -350,8 +350,18 @@ PowerShell otherwise eats `-c.directories...` as an argument to `-c`.)
   ones, because `coveringSpace` picks per rectangle and a stale one lands in the
   neighbouring display's space. The test now also runs after
   `mapUiaToSnapshot`, and `composeUiaForImageDesktop` / `mergeImageWindowFloor`
-  stopped rebuilding `geometry_refused` away. **The lesson: a check that does not
-  run on the numbers that get written is not a check.**
+  stopped rebuilding `geometry_refused` away.
+- **...and it is checked ONE more time, at the write itself**
+  ([#121](https://github.com/r2cuerdame/capturepack/issues/121)). rc.20 leaked
+  too. Neither the walk nor the mapper is the end of the pipeline:
+  `composeUiaForImageDesktop` drops elements outside a display's placement and
+  `mergeImageWindowFloor` drops elements that clip away against the window
+  floor, so an element that was somebody's PARENT when the test ran can be gone
+  by the time the file is written. The survivor inherits a parent it never had.
+  `writeUiaPlugin` now runs the test against the exact array it serializes, and
+  every writer — video included — reaches disk through it.
+  **The lesson, three times over: a check that does not run on the numbers that
+  get written is not a check.** Upstream copies are now optimisations only.
 - **The gate is 76 steps.** `npm run qa:rc` — NOT `node scripts/qa-gate.mjs`,
   which loses `npm_execpath` and then cannot spawn `npm.cmd` under Node 24.
 

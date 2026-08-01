@@ -228,6 +228,85 @@ async function main(): Promise<void> {
     await rm(dir, { recursive: true, force: true })
   }
 
+  // THE CASE THAT LEAKED THROUGH rc.20, and the reason the last gate exists.
+  //
+  // A middle stage can DELETE an element. `mergeImageWindowFloor` drops any
+  // element that clips away to nothing against the window floor, and
+  // `composeUiaForImageDesktop` drops any that falls outside its display's
+  // placement. When the deleted element was somebody's PARENT, the survivor
+  // inherits a parent it never had — and a ratio that was innocent when the
+  // earlier tests ran becomes a lie in the written file, without any stage
+  // having done anything wrong.
+  //
+  // Here the document's true parent is a small pane that the floor clips away.
+  // Against that parent the document covers 1.000 and every upstream test
+  // passes it. In the file, the nearest remaining ancestor is the full-width
+  // pane, and the document covers 0.497 of it.
+  console.log('\nA parent deleted by a later stage')
+  {
+    const floorWindow = { x: 8, y: 0, width: 1184, height: 935 }
+    const raw2: UiaRawDump = {
+      capturedAt: new Date('2026-08-01T19:03:13+09:00'),
+      truncated: false,
+      rootBounds: { x: 0, y: 0, width: 3840, height: 2160 },
+      monitors: MONITORS,
+      windows: [
+        { hwnd: '11', title: 'YouTube', process: 'chrome.exe', class_name: 'Chrome_WidgetWin_1',
+          bounds: { x: -1788, y: 0, width: 1776, height: 1403 }, focused: true, z: 0, tree: 'collected', element_count: 0 },
+      ] as UiaRawDump['windows'],
+      elements: [
+        el(0, 0, 'Window', -1788, 0, 1776, 1403, 'YouTube'),
+        el(0, 7, 'Pane', -1788, 182, 1776, 1221),          // full-width host
+        // The document's REAL parent: sits below the window floor, so the merge
+        // clips it away entirely and it never reaches the file.
+        el(0, 8, 'Pane', -1788, 2000, 882, 1130, 'offscreen host'),
+        el(0, 9, 'Document', -1788, 273, 882, 1130, 'the page'),
+        el(0, 12, 'Group', -1788, 400, 500, 400, 'a tile'),
+        el(0, 7, 'TabItem', -1734, 0, 384, 62, 'a tab'),
+      ],
+      geometryRefused: 0,
+    }
+    const floor = {
+      tMs: 0,
+      windows: [
+        { hwnd: '11', title: 'YouTube', process: 'chrome.exe', class_name: 'Chrome_WidgetWin_1',
+          bounds: floorWindow, focused: true, z: 0 },
+      ],
+      elements: [],
+    }
+    const mapped2 = mapUiaToSnapshot(raw2, TARGETS, 3000, SCREEN)
+    const composed2 = composeUiaForImageDesktop(mapped2, PLACEMENTS as never, 1)
+    const merged2 = mergeImageWindowFloor(composed2, floor as never, '2026-08-01T19:03:13+09:00', [])
+    check('the upstream stages pass it — against its real parent it covers 1.000',
+      mapped2.geometry_refused === 0, `mapper refused ${String(mapped2.geometry_refused)}`)
+
+    const dir2 = await mkdtemp(join(tmpdir(), 'capturepack-e2e2-'))
+    try {
+      await writeUiaPlugin(dir2, merged2 ?? mapped2)
+      const file2 = JSON.parse(
+        await readFile(join(dir2, 'plugins', 'windows-uia', 'elements.json'), 'utf8'),
+      ) as UiaPluginPayload
+      const doc = file2.elements.find((e) => e.name === 'the page')
+      check(
+        'and the WRITTEN file does not contain the orphaned document',
+        doc === undefined,
+        `still present: ${JSON.stringify(doc?.bounds)}`,
+      )
+      check(
+        'the file says it refused something',
+        (file2.geometry_refused ?? 0) >= 1,
+        `geometry_refused=${String(file2.geometry_refused)}`,
+      )
+      check(
+        'the tab beside it survives',
+        file2.elements.some((e) => e.name === 'a tab'),
+        JSON.stringify(file2.elements.map((e) => e.name)),
+      )
+    } finally {
+      await rm(dir2, { recursive: true, force: true })
+    }
+  }
+
   console.log(failures === 0 ? '\npack-geometry-e2e: OK' : `\npack-geometry-e2e: ${String(failures)} FAILED`)
   process.exit(failures === 0 ? 0 : 1)
 }

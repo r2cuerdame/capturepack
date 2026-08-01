@@ -1329,9 +1329,19 @@ Measured: a Chrome window whose web content covered 1.000 of its host in the wri
 coordinates produced 0.497 in the pack. A writer that checks only its raw numbers will pass
 that one.
 
+**And a later stage can make an innocent rectangle guilty.** A writer that composes displays,
+crops to a selection, or reconciles against a window list will DROP elements — and when the
+dropped element was another element's parent, the survivor inherits an ancestor it never had.
+Its ratio against that inherited ancestor is meaningless, and measured in the field it read
+0.497 while every earlier stage had correctly seen 1.000.
+
 A writer therefore MUST NOT emit a control whose web-content root does not still COVER the
-surface it was drawn into, MUST apply that test to the coordinates it will actually WRITE —
-after any display mapping, not before — and MUST count what it dropped in `geometry_refused`. Coverage and
+surface it was drawn into, and MUST count what it dropped in `geometry_refused`. **The test
+MUST be applied to the array the writer serializes** — after every mapping, composition, crop
+and reconciliation, not before any of them. Applying it earlier as well is a legitimate
+optimisation (a walk that skips a bad subtree does not pay to descend it), but an earlier
+application alone is not conformant: no stage before the last can see what the last one
+produces. Coverage and
 not containment: scrolled content legitimately overflows its viewport, and is correct. A
 refusal and not a correction: the ratio proves the numbers are wrong without revealing what the
 right ones were. The window itself is unaffected — it was never measured wrongly — so a pick

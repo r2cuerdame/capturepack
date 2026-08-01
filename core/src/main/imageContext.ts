@@ -282,6 +282,13 @@ export function mergeImageWindowFloor(
     captured_at: safePayload?.captured_at ?? capturedAt,
     budget_ms: safePayload?.budget_ms ?? 0,
     truncated: safePayload?.truncated ?? false,
+    // Carried like the other two rebuilds. Note this stage DROPS elements that
+    // clip away to nothing against the window floor, which is how a refused
+    // rectangle's parent can vanish and leave it looking innocent — the reason
+    // writeUiaPlugin tests once more against the array it serializes.
+    ...(safePayload?.geometry_refused === undefined
+      ? {}
+      : { geometry_refused: safePayload.geometry_refused }),
     windows,
     elements,
   }

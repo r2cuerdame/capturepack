@@ -20,6 +20,7 @@ import { release } from 'node:os'
 import { dirname, extname, join } from 'node:path'
 import { app, screen } from 'electron'
 import AdmZip from 'adm-zip'
+import { refuseDisplacedRenderers } from './uia'
 import type { Language } from '../shared/i18n'
 import type {
   Annotation,
@@ -412,7 +413,60 @@ export async function writeUiaPlugin(dirPath: string, payload: UiaPluginPayload)
     join(dir, 'meta.json'),
     toJson({ name: UIA_PLUGIN_NAME, version: UIA_PLUGIN_VERSION }),
   )
-  await writeSourceFile(join(dir, 'elements.json'), toJson(payload))
+  await writeSourceFile(join(dir, 'elements.json'), toJson(guardWrittenGeometry(payload)))
+}
+
+/**
+ * THE LAST GATE, AND THE ONLY ONE THAT HAS EVER HELD.
+ *
+ * The displaced-renderer test has now been placed three times and leaked twice.
+ * In the walk (rc.19) it saw the helper's raw coordinates; in `mapUiaToSnapshot`
+ * (rc.20) it saw them mapped — and rc.20 still wrote a document covering 0.497
+ * of the pane it sits in. The reason is that neither position is the end of the
+ * pipeline. `composeUiaForImageDesktop` drops elements that fall outside a
+ * display's placement and `mergeImageWindowFloor` drops those that clip away to
+ * nothing against the window floor, so an element that was SOMEBODY'S PARENT
+ * when the test ran can be gone by the time the file is written. The survivor
+ * then inherits a parent it never had, and a ratio that was innocent becomes a
+ * lie — without any stage doing anything wrong.
+ *
+ * So the test runs once more here, against the exact array being serialized.
+ * Everything upstream is now an optimisation: the walk skips a bad subtree
+ * cheaply, the mapper catches the cross-display case early, and this catches
+ * whatever those two could not see, because after this line there is no further
+ * stage to invalidate it.
+ *
+ * Every writer reaches the disk through this function, so the video path gets
+ * the same guarantee without a second copy of the rule.
+ */
+function guardWrittenGeometry(payload: UiaPluginPayload): UiaPluginPayload {
+  const kept: UiaPluginPayload['elements'] = []
+  let refused = 0
+  // Per window, because `depth` is a pre-order walk of ONE window's control
+  // view and the payload keeps each window's elements contiguous.
+  const source = payload.elements
+  for (let i = 0; i < source.length; ) {
+    let j = i
+    while (j < source.length && source[j]?.window === source[i]?.window) j++
+    const verdict = refuseDisplacedRenderers(source.slice(i, j))
+    kept.push(...verdict.kept)
+    refused += verdict.refused
+    i = j
+  }
+  if (refused === 0 && payload.geometry_refused !== undefined) return payload
+  // element_count is a claim about this file; it has to describe what is in it.
+  const windows = payload.windows.map((w) => ({
+    ...w,
+    ...(w.element_count === undefined
+      ? {}
+      : { element_count: kept.filter((e) => e.window === w.z).length }),
+  }))
+  return {
+    ...payload,
+    geometry_refused: (payload.geometry_refused ?? 0) + refused,
+    windows,
+    elements: kept,
+  }
 }
 
 // ---------------------------------------------------------------------------
