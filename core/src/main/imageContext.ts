@@ -124,7 +124,7 @@ export function imageWindowObservation(
     const bounds =
       crop === undefined ? desktopBounds : intersectImageRect(desktopBounds, crop)
     if (bounds === null) continue
-    // THE CLIENT RECTANGLE, MAPPED THE SAME WAY (#132).
+    // THE CLIENT RECTANGLE, MAPPED THE SAME WAY (#131).
     //
     // A DOM element is measured in viewport CSS pixels, and the ONLY thing that
     // turns those into snapshot pixels is the browser's client rectangle: the

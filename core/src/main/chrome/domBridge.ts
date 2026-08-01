@@ -262,14 +262,33 @@ export function requestDomForCapture(timeoutMs: number): Promise<DomResponseMess
       // EVERY OUTCOME SAYS SOMETHING. A pack with no page must never be the only
       // evidence that something did not happen.
       if (answer.ok) {
-        logInfo(`[chrome] the browser answered with the visible page${answer.tab === null ? '' : ` on ${answer.tab.url.slice(0, 120)}`}`)
-      } else if (answer.reason === 'not-granted') {
+        const pages = 1 + answer.windows.length
         logInfo(
-          '[chrome] the browser has not been allowed yet — click the CapturePack icon in Chrome once; '
-          + 'until then a capture carries no page',
+          `[chrome] the browser answered with ${String(pages)} visible page(s)`
+          + `${answer.tab === null ? '' : ` on ${answer.tab.url.slice(0, 120)}`}`
+          + answer.windows.map((w) => `, ${w.tab === null ? '?' : w.tab.url.slice(0, 120)}`).join(''),
         )
-      } else {
-        logWarn(`[chrome] the browser refused the page: ${answer.reason ?? 'unknown'}`)
+      }
+      // A WINDOW THAT WAS ASKED AND SAID NO IS NOT A WINDOW THAT WAS NEVER
+      // ASKED (#132). Before this, the only browser window a capture ever
+      // consulted was the focused one — so a second Chrome window carrying no
+      // page left nothing behind at all, and looked exactly like a page the
+      // extension had read and found empty.
+      for (const refusal of answer.refused) {
+        logWarn(
+          `[chrome] no page from ${refusal.tab === null ? 'a browser window' : refusal.tab.title.slice(0, 80)}`
+          + `: ${refusal.reason}`,
+        )
+      }
+      if (!answer.ok) {
+        if (answer.reason === 'not-granted') {
+          logInfo(
+            '[chrome] the browser has not been allowed yet — click the CapturePack icon in Chrome once; '
+            + 'until then a capture carries no page',
+          )
+        } else {
+          logWarn(`[chrome] the browser refused the page: ${answer.reason ?? 'unknown'}`)
+        }
       }
       resolve(answer)
     })
@@ -368,6 +387,13 @@ interface DomGrantMessage {
   granted: boolean
 }
 
+/** One browser window's page, as it answered a capture-time fetch. */
+interface DomResponseWindow {
+  tab: { url: string; title: string } | null
+  document: unknown
+  viewport: unknown
+}
+
 interface DomResponseMessage {
   kind: 'domResponse'
   requestId: string
@@ -376,7 +402,25 @@ interface DomResponseMessage {
   tab: { url: string; title: string } | null
   document: unknown
   viewport: unknown
+  /**
+   * THE OTHER BROWSER WINDOWS ON THE DESK (#132).
+   *
+   * A screenshot contains every visible window, and the extension used to answer
+   * with the focused one only — so with two Chrome windows open the pack carried
+   * one page and picking in the other boxed the whole browser. The leading
+   * window stays where it always was, above; these are the rest, so an app older
+   * than the extension reads the message unchanged.
+   *
+   * Empty from an extension older than 0.3.4, which is not an error: it is one
+   * window's worth of page, exactly as before.
+   */
+  windows: DomResponseWindow[]
+  /** Windows that were asked and could not answer, and why. */
+  refused: Array<{ tab: { url: string; title: string } | null; reason: string }>
 }
+
+/** Bound on windows adopted from one reply; the extension caps at 6. */
+const DOM_RESPONSE_MAX_WINDOWS = 8
 
 type ParseOutcome =
   | { ok: true; value: DomEvent | DomHello | DomPickerMessage | DomGrantMessage | DomResponseMessage }
@@ -560,6 +604,31 @@ function parse(raw: unknown): ParseOutcome {
   // The answer to a capture-time fetch. Correlated by `request_id` because a
   // capture that has already given up must not adopt a late reply.
   if (type === 'dom.response') {
+    const extra = m['documents']
+    const windows: DomResponseWindow[] = []
+    if (Array.isArray(extra)) {
+      for (const entry of extra.slice(0, DOM_RESPONSE_MAX_WINDOWS)) {
+        if (typeof entry !== 'object' || entry === null) continue
+        const w = entry as Record<string, unknown>
+        windows.push({
+          tab: parseTab(w['tab']),
+          document: w['document'],
+          viewport: w['viewport'],
+        })
+      }
+    }
+    const refusals: DomResponseMessage['refused'] = []
+    const said = m['refused']
+    if (Array.isArray(said)) {
+      for (const entry of said.slice(0, DOM_RESPONSE_MAX_WINDOWS)) {
+        if (typeof entry !== 'object' || entry === null) continue
+        const r = entry as Record<string, unknown>
+        refusals.push({
+          tab: parseTab(r['tab']),
+          reason: typeof r['reason'] === 'string' ? r['reason'].slice(0, 200) : 'unknown',
+        })
+      }
+    }
     return {
       ok: true,
       value: {
@@ -570,6 +639,8 @@ function parse(raw: unknown): ParseOutcome {
         tab: parseTab(m['tab']),
         document: m['document'],
         viewport: m['viewport'],
+        windows,
+        refused: refusals,
       },
     }
   }
@@ -750,7 +821,14 @@ export function startDomBridge(): void {
     socket.on('data', (chunk: Buffer) => {
       buffer += chunk.toString('utf8')
       // A host that never sends a newline must not grow this without bound.
-      if (buffer.length > 4 * 1024 * 1024) {
+      //
+      // Raised from 4 MB with #133: one reply now carries a document per VISIBLE
+      // BROWSER WINDOW, up to six, each up to 4000 elements. A realistic page
+      // runs 100-200 bytes an element, so a full desk lands around 5 MB — over
+      // the old bound, which would have destroyed the socket and cost the pack
+      // every page rather than the one that was too big. Still bounded, which is
+      // the only thing this line was ever for.
+      if (buffer.length > 32 * 1024 * 1024) {
         socket.destroy()
         return
       }

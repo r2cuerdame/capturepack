@@ -150,11 +150,90 @@ check(
   'a pack with no page must never be the only evidence that nothing happened',
 )
 
+// A SCREENSHOT CONTAINS EVERY BROWSER WINDOW, NOT THE FOCUSED ONE (#132).
+//
+// Reported as "유튜브는 되는데 왜 깃허브는 안되냐": two Chrome windows on the desk,
+// one document in the pack. The extension asked `lastFocusedWindow: true`, which
+// is the right question for a PICK — that happens in the window the user clicked
+// in — and the wrong one for a CAPTURE, which photographs everything visible.
+// The second window was never asked, so nothing said it was missing either.
+console.log('\nEvery visible browser window is asked, not just the focused one (#132)')
+const extension = source('../extensions/chrome/background.js')
+check(
+  'the capture-time fetch enumerates browser WINDOWS',
+  /chrome\.windows\.getAll\(/.test(code(extension)),
+  'querying one tab can only ever return one window',
+)
+check(
+  'and it no longer asks the focused window ALONE',
+  !/const tabs = await chrome\.tabs\.query\(\{ active: true, lastFocusedWindow: true \}\)/
+    .test(code(extension)),
+  'this single line is the whole of #133',
+)
+check(
+  'a minimised window is not asked, because it is not in the pixels',
+  /state === 'minimized'/.test(code(extension)),
+)
+check(
+  'each window is snapshotted through the SAME function',
+  /async function snapshotOneTab\(/.test(code(extension))
+    && /tabs\.map\(\(tab\) => snapshotOneTab\(tab\)/.test(code(extension)),
+  'a second copy of the injection is a second idea of what a document is',
+)
+check(
+  'one slow or restricted window costs only itself',
+  /snapshotOneTab\(tab\)\.catch\(/.test(code(extension)),
+  'a chrome:// window must not take the whole desk down with it',
+)
+check(
+  'the leading window keeps its place at the top level',
+  /reply\(\{[\s\S]{0,200}ok: true,[\s\S]{0,120}tab: lead\.tab,[\s\S]{0,120}document: lead\.document/
+    .test(code(extension)),
+  'an app older than this extension must read the message unchanged',
+)
+check(
+  'and the rest travel in `documents`',
+  /documents: rest\.map\(/.test(code(extension)),
+)
+check(
+  'a window that was asked and refused says so',
+  /refused/.test(code(extension)) && /refused/.test(code(bridge)),
+  'a browser window with no page must never be indistinguishable from one never asked',
+)
+check(
+  'the host parses the extra windows',
+  /windows\.push\(\{/.test(code(bridge)) && /m\['documents'\]/.test(code(bridge)),
+)
+check(
+  'the still turns EVERY window into an event',
+  /function domRequestEvents\(/.test(code(session))
+    && /for \(const window of answer\.windows\) add\(/.test(code(session)),
+  'one answer, N documents, N events — or the second window is dropped here instead',
+)
+check(
+  'and all of them lead the buffered picks',
+  /const rawEvents = \[\.\.\.requested, \.\.\.buffered\]/.test(code(image)),
+)
+check(
+  'the socket bound admits a desk-sized reply',
+  !/buffer\.length > 4 \* 1024 \* 1024/.test(code(bridge)),
+  'six documents exceed 4 MB, and the old bound destroyed the socket — every page lost, not the big one',
+)
+
 console.log('\nA document without its viewport is geometry with no position')
 check(
   'the still attaches a viewport to the captured document',
-  /parseDomViewport\(answer\.viewport\)/.test(code(session)),
+  /parseDomViewport\(rawViewport\)/.test(code(session)),
   'every rectangle in a document is viewport CSS pixels; this is what places them (#129)',
+)
+// #133 made this plural. A viewport carried for the leading window and dropped
+// for the others would place one page and silently refuse every element of the
+// rest — the same invisible failure, one window along.
+check(
+  'and to EVERY window it captured, not only the leading one',
+  /add\(answer\.tab, answer\.document, answer\.viewport\)/.test(code(session))
+    && /add\(window\.tab, window\.document, window\.viewport\)/.test(code(session)),
+  'each window has its own viewport; they are not interchangeable',
 )
 check(
   'the extension returns the viewport with the document',
@@ -183,7 +262,7 @@ console.log('\nThe editor reasons from surfaces that carry a client rectangle')
 check(
   'the still layers UIA controls onto lane S rectangles',
   /withClientRectangles\(contextObservation\(uia, 1, 0\), imageWindows\)/.test(code(image)),
-  'UIA reports a window rect but never a client one; a DOM element cannot be placed without it (#132)',
+  'UIA reports a window rect but never a client one; a DOM element cannot be placed without it (#131)',
 )
 check(
   'they are matched by HWND, the one identity both sources agree on',

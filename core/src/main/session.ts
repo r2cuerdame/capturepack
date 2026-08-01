@@ -992,30 +992,48 @@ const STILL_DOM_LOOKBACK_MS = 10_000
 const STILL_DOM_FETCH_TIMEOUT_MS = 700
 
 /**
- * The browser's answer, as an event the pack can carry.
+ * The browser's answer, as events the pack can carry — ONE PER WINDOW (#132).
  *
- * `age_ms: 0` and nothing else: this snapshot was taken FOR this capture, at it,
- * so it is the one DOM event a still can honestly place at its own instant.
- * A refusal returns null — the pack then has no chrome-dom payload, and SPEC
- * §11.4 already reads that as "nobody looked" rather than "the page was empty".
+ * `age_ms: 0` and nothing else: these snapshots were taken FOR this capture, at
+ * it, so they are the DOM events a still can honestly place at its own instant.
+ * A refusal returns an empty list — the pack then has no chrome-dom payload, and
+ * SPEC §11.4 already reads that as "nobody looked" rather than "the page was
+ * empty".
+ *
+ * This returned a single event until #133, because the extension only ever
+ * answered for the focused window. A screenshot contains every visible one, and
+ * each carries its own tab title — which is exactly what `ChromeDomProvider`
+ * matches a document to a window by, so two documents find two windows with no
+ * further help from here.
  */
-function domRequestEvent(
+function domRequestEvents(
   answer: Awaited<ReturnType<typeof requestDomForCapture>>,
   nowMs: number | null,
-): DomEvent | null {
-  if (answer === null || !answer.ok || answer.tab === null || nowMs === null) return null
-  const document_ = parseDomDocument(answer.document)
-  if (document_ === null) return null
-  // Without the viewport every rectangle in that document is unplaceable — the
-  // one field whose absence turns 343 elements into nothing drawable (#129).
-  const viewport = parseDomViewport(answer.viewport)
-  return {
-    tMs: nowMs,
-    type: 'dom.document.captured',
-    tab: answer.tab,
-    document: document_,
-    ...(viewport === null ? {} : { viewport }),
+): DomEvent[] {
+  if (answer === null || !answer.ok || nowMs === null) return []
+  const out: DomEvent[] = []
+  const add = (
+    tab: { url: string; title: string } | null,
+    rawDocument: unknown,
+    rawViewport: unknown,
+  ): void => {
+    if (tab === null) return
+    const document_ = parseDomDocument(rawDocument)
+    if (document_ === null) return
+    // Without the viewport every rectangle in that document is unplaceable — the
+    // one field whose absence turns 343 elements into nothing drawable (#129).
+    const viewport = parseDomViewport(rawViewport)
+    out.push({
+      tMs: nowMs,
+      type: 'dom.document.captured',
+      tab,
+      document: document_,
+      ...(viewport === null ? {} : { viewport }),
+    })
   }
+  add(answer.tab, answer.document, answer.viewport)
+  for (const window of answer.windows) add(window.tab, window.document, window.viewport)
+  return out
 }
 
 
@@ -1288,13 +1306,14 @@ async function runImageFlowWithContext(
   // Bounded, and awaited beside the UIA dump rather than after it: a capture is
   // never allowed to wait on a browser.
   const fetched = await requestDomForCapture(STILL_DOM_FETCH_TIMEOUT_MS)
-  const requested = domRequestEvent(fetched, domNowMs)
+  const requested = domRequestEvents(fetched, domNowMs)
   const buffered =
     domNowMs === null
       ? []
       : domEventsBetween(domNowMs - STILL_DOM_LOOKBACK_MS, domNowMs)
-  // The fetch describes THIS instant, so it leads; a click the user made just
-  // before it still rides along, aged.
+  // The fetch describes THIS instant, so it leads — one document per visible
+  // browser window (#132); a click the user made just before it still rides
+  // along, aged.
   // ON THE IMAGE'S CLOCK, WHICH HAS EXACTLY ONE INSTANT.
   //
   // A still's context is frozen at t=0 — `contextObservation(uia, 1, 0)`, and
@@ -1306,7 +1325,7 @@ async function runImageFlowWithContext(
   // 455 elements, a viewport, a matching window title — and not one candidate,
   // because the question was asked at a moment this pack does not have (#131).
   // The real distance from the shutter is not lost: it rides in `age_ms`.
-  const rawEvents = requested === null ? buffered : [requested, ...buffered]
+  const rawEvents = [...requested, ...buffered]
   const ages = rawEvents.map((e) => (domNowMs === null ? 0 : Math.max(0, domNowMs - e.tMs)))
   const onImageClock = (e: DomEvent): DomEvent => ({ ...e, tMs: 0 })
   const capturedDomEvents = rawEvents.map(onImageClock)
@@ -1375,7 +1394,7 @@ async function runImageFlowWithContext(
         // Automation reports a window rectangle but never a client one. A DOM
         // element is measured in viewport CSS pixels and the client rectangle is
         // the only thing that converts them, so a still could never place a page
-        // however complete its payload was (#132).
+        // however complete its payload was (#131).
         //
         // Lane S measured those rectangles at the trigger and `imageWindows`
         // already holds them; it was simply not the observation being handed

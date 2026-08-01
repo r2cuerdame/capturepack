@@ -159,9 +159,10 @@ console.log('\nThe picker actually uses it, in every frame')
   // The app asks Chromium to reload an unpacked extension when this number
   // moves, so a wire change that leaves it alone ships a worker that cannot
   // speak the new payload. 0.2.0 was a pick carrying the document it sat in;
-  // 0.3.0 adds a second way to arm the picker.
+  // 0.3.0 adds a second way to arm the picker; 0.3.4 answers a capture with one
+  // document per VISIBLE BROWSER WINDOW instead of the focused one alone (#132).
   check('the manifest version moved with the protocol change',
-    manifest.version === '0.3.3', manifest.version)
+    manifest.version === '0.3.4', manifest.version)
   check('and the document walker ships with it',
     existsSync(resolve(EXTENSION, 'document-snapshot.js')))
 

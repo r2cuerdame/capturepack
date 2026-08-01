@@ -779,6 +779,138 @@ console.log('\nA picked document is parsed, not believed')
       bare.selector === 'div', bare.selector)
   }
 
+  // A SCREENSHOT CONTAINS EVERY BROWSER WINDOW (#132).
+  //
+  // Reported as "유튜브는 되는데 왜 깃허브는 안되냐": two Chrome windows on the desk,
+  // and the pack carried one page — the extension had asked `lastFocusedWindow`.
+  // The fix is in the extension, but it is only SUFFICIENT if this layer can
+  // take N documents and send each to its own window, so that is what this
+  // proves: two pages, two windows, each element on the monitor coordinates of
+  // the window whose tab it actually belongs to.
+  console.log('\nWith two browser windows open, each page lands on its own window')
+  {
+    const at = (id: string, hwnd: string, title: string, x: number, y: number): SurfaceInfo => ({
+      surfaceId: id,
+      hwnd,
+      bounds: { ...WINDOW, x, y },
+      clientBounds: {
+        x: CLIENT.x + (x - WINDOW.x),
+        y: CLIENT.y + (y - WINDOW.y),
+        width: CLIENT.width,
+        height: CLIENT.height,
+      },
+      space: 'display-snapshot',
+      display: 1,
+      zOrder: 0,
+      visible: true,
+      minimized: false,
+      // Neither is foreground: the capture hotkey is a global OS key, so the
+      // user is usually not even in Chrome when the shutter fires.
+      foreground: false,
+      executableName: 'chrome.exe',
+      windowTitle: `${title} - Google Chrome`,
+      className: 'Chrome_WidgetWin_1',
+    })
+    const captured = (title: string, ex: number, ey: number): DomEvent => ({
+      tMs: 0,
+      type: 'dom.document.captured',
+      tab: { url: `https://example.invalid/${encodeURIComponent(title)}`, title },
+      viewport: {
+        width: VIEWPORT_CSS.width,
+        height: VIEWPORT_CSS.height,
+        dpr: SCALE,
+        screenX: null,
+        screenY: null,
+        outerWidth: null,
+        outerHeight: null,
+      },
+      document: {
+        viewport: {
+          width: VIEWPORT_CSS.width,
+          height: VIEWPORT_CSS.height,
+          devicePixelRatio: SCALE,
+          scrollX: 0,
+          scrollY: 0,
+        },
+        url: `https://example.invalid/${encodeURIComponent(title)}`,
+        title,
+        elements: [
+          {
+            i: 0,
+            tag: 'button',
+            role: 'button',
+            bounds: { x: ex, y: ey, width: 100, height: 40 },
+            text: title,
+          },
+        ],
+        truncated: false,
+        visitedCount: 1,
+        elapsedMs: 1,
+        omitted: [],
+      },
+    })
+    const left = at('surf-left', '1001', 'YouTube', 100, 100)
+    const right = at('surf-right', '1002', 'r2cuerdame/WSLPad', 2600, 100)
+    const desk = [left, right]
+    const provider = new ChromeDomProvider(
+      [captured('YouTube', 40, 60), captured('r2cuerdame/WSLPad', 40, 60)],
+      () => desk,
+    )
+    const frame = await provider.frame({
+      sessionId: 'check',
+      timeMs: 0,
+      surfaces: desk,
+      maxCandidates: 100,
+    } as never)
+    report(
+      'both windows produce a candidate, not just the one that was focused',
+      frame.candidates.length === 2,
+      `${String(frame.candidates.length)} candidate(s)`,
+    )
+    // The same element offset in both pages: identical rectangles would mean the
+    // second document was placed on the FIRST window, which is the failure this
+    // scenario exists to catch.
+    const placedOn = (id: string): Rect | undefined =>
+      frame.candidates.find((c) => c.surfaceId === id)?.bounds
+    const want = (surface: SurfaceInfo): Rect => ({
+      x: (surface.clientBounds?.x ?? 0) + 40 * SCALE,
+      y: (surface.clientBounds?.y ?? 0) + CHROME_PX + 60 * SCALE,
+      width: 100 * SCALE,
+      height: 40 * SCALE,
+    })
+    for (const surface of desk) {
+      const got = placedOn(surface.surfaceId)
+      report(
+        `${surface.windowTitle ?? '?'}: its element sits in ITS window`,
+        got !== undefined && near(got, want(surface)),
+        got === undefined ? 'no candidate' : `${fmt(got)} want ${fmt(want(surface))}`,
+      )
+    }
+    report(
+      'and the two are in different places, on different monitors coordinates',
+      placedOn('surf-left')?.x !== placedOn('surf-right')?.x,
+      `${String(placedOn('surf-left')?.x)} vs ${String(placedOn('surf-right')?.x)}`,
+    )
+
+    // AMBIGUITY IS STILL REFUSED, AND IT GETS MORE LIKELY WITH MORE WINDOWS.
+    // "GitHub" is contained in "GitHub Docs - Google Chrome" as well as its own
+    // title, and `place()` matches by containment. Two windows, one tab title,
+    // no honest answer: a box on the wrong browser is worse than no box.
+    const twin = at('surf-twin', '1003', 'YouTube Music', 100, 1600)
+    const ambiguous = new ChromeDomProvider([captured('YouTube', 40, 60)], () => [left, twin])
+    const confused = await ambiguous.frame({
+      sessionId: 'check',
+      timeMs: 0,
+      surfaces: [left, twin],
+      maxCandidates: 100,
+    } as never)
+    report(
+      'a tab title that matches two windows is refused, not guessed at',
+      confused.candidates.length === 0,
+      `${String(confused.candidates.length)} candidate(s)`,
+    )
+  }
+
 console.log(failures === 0 ? '\ndom-provider-check ok' : `\ndom-provider-check FAILED (${String(failures)})`)
   if (failures > 0) process.exitCode = 1
 }

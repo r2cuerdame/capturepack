@@ -368,11 +368,104 @@ if (chrome.permissions && chrome.permissions.onRemoved) {
 }
 
 /**
+ * A SCREENSHOT CONTAINS EVERY BROWSER WINDOW ON THE DESK, NOT THE FOCUSED ONE.
+ *
+ * Reported as "유튜브는 되는데 왜 깃허브는 안되냐" (#132). Two Chrome windows were
+ * on screen; the pack carried ONE document — YouTube's — and picking anything in
+ * the other window fell through to the window rung and boxed the whole browser.
+ *
+ * The cause was `lastFocusedWindow: true` below: it asks the active tab of a
+ * SINGLE window. That is the right question for a pick, which happens in the
+ * window the user clicked in, and the wrong one for a capture, which photographs
+ * the whole desk. The other window was never asked, so nothing about it was
+ * missing from the log either — it simply had no page, silently, the way this
+ * chain keeps failing.
+ *
+ * A window that is MINIMISED is not in the pixels, so it is not asked. Windows
+ * are capped because a reply crosses a pipe, and a desk with more visible
+ * browser windows than this is not a screenshot anyone is annotating.
+ */
+const CAPTURE_MAX_WINDOWS = 6
+
+function tabFacts(tab) {
+  return { url: (tab.url || '').slice(0, 2048), title: (tab.title || '').slice(0, 512) }
+}
+
+/**
+ * The active tab of every browser window the screenshot can actually contain.
+ *
+ * The window the app would have got on its own leads the list, so the top-level
+ * fields of the reply mean exactly what they meant before this existed — see
+ * `answerDomRequest`.
+ */
+async function visibleActiveTabs() {
+  let leaderId = null
+  try {
+    const front = await chrome.tabs.query({ active: true, lastFocusedWindow: true })
+    leaderId = front[0]?.id ?? null
+  } catch {
+    // Ordering is a nicety; the set below is the part that matters.
+  }
+  // `normal` only: a DevTools window, a popup or an app window is not a page a
+  // reader annotates, and each one asked costs an injection.
+  const windows = await chrome.windows.getAll({ populate: true, windowTypes: ['normal'] })
+  const found = []
+  for (const win of windows) {
+    if (win.state === 'minimized') continue
+    const active = (win.tabs || []).find((t) => t.active)
+    if (!active || !active.id) continue
+    found.push(active)
+  }
+  found.sort((a, b) => (b.id === leaderId ? 1 : 0) - (a.id === leaderId ? 1 : 0))
+  return found.slice(0, CAPTURE_MAX_WINDOWS)
+}
+
+/** One window's visible document, with the viewport that places it. */
+async function snapshotOneTab(tab) {
+  // Top frame only: a document snapshot is placed by a viewport a reader can
+  // locate, and that is the top one.
+  await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    files: ['frame-geometry.js', 'document-snapshot.js'],
+  })
+  // THE DOCUMENT AND WHERE IT WAS, IN ONE READ.
+  //
+  // Every rectangle in the snapshot is in viewport CSS pixels, so without this
+  // the app receives geometry with no position. Measured: 343 elements
+  // arrived, and not one of them could be drawn (#129). The picker has always
+  // sent this alongside a pick; the capture-time fetch forgot to.
+  const [out] = await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    func: () => ({
+      document: window.__capturepackDocumentSnapshot ? window.__capturepackDocumentSnapshot() : null,
+      viewport: {
+        width: window.innerWidth,
+        height: window.innerHeight,
+        dpr: window.devicePixelRatio,
+        screenX: typeof window.screenX === 'number' ? window.screenX : null,
+        screenY: typeof window.screenY === 'number' ? window.screenY : null,
+        outerWidth: window.outerWidth,
+        outerHeight: window.outerHeight,
+      },
+    }),
+  })
+  const document_ = out && out.result ? out.result.document : null
+  if (document_ === null) return { ok: false, reason: 'no-snapshot', tab: tabFacts(tab) }
+  return { ok: true, tab: tabFacts(tab), document: document_, viewport: out.result.viewport }
+}
+
+/**
  * The app asking for the visible document at the moment of a capture.
  *
  * Answered ONLY when the user has granted the browser to CapturePack. Without
  * the grant this refuses and says so, rather than failing in a way that looks
  * like an empty page — the difference a reader needs (SPEC §11.4).
+ *
+ * ONE DOCUMENT AT THE TOP LEVEL, THE REST IN `documents`. The leading window
+ * keeps the exact place in the message it has always had, so an app older than
+ * this extension reads it unchanged and simply does not see the others. The
+ * windows it could not read are named in `refused`: a browser window with no
+ * page in the pack must be able to say which of the half-dozen reasons it was.
  */
 async function answerDomRequest(requestId) {
   const reply = (extra) => send({
@@ -386,55 +479,50 @@ async function answerDomRequest(requestId) {
     reply({ ok: false, reason: 'not-granted' })
     return
   }
-  let tab = null
+  let tabs = []
   try {
-    const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true })
-    tab = tabs[0] ?? null
-    if (!tab || !tab.id) { reply({ ok: false, reason: 'no-tab' }); return }
-    // Top frame only: a document snapshot is placed by a viewport a reader can
-    // locate, and that is the top one.
-    await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      files: ['frame-geometry.js', 'document-snapshot.js'],
-    })
-    // THE DOCUMENT AND WHERE IT WAS, IN ONE READ.
-    //
-    // Every rectangle in the snapshot is in viewport CSS pixels, so without this
-    // the app receives geometry with no position. Measured: 343 elements
-    // arrived, and not one of them could be drawn (#129). The picker has always
-    // sent this alongside a pick; the capture-time fetch forgot to.
-    const [out] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: () => ({
-        document: window.__capturepackDocumentSnapshot ? window.__capturepackDocumentSnapshot() : null,
-        viewport: {
-          width: window.innerWidth,
-          height: window.innerHeight,
-          dpr: window.devicePixelRatio,
-          screenX: typeof window.screenX === 'number' ? window.screenX : null,
-          screenY: typeof window.screenY === 'number' ? window.screenY : null,
-          outerWidth: window.outerWidth,
-          outerHeight: window.outerHeight,
-        },
-      }),
-    })
-    const document_ = out && out.result ? out.result.document : null
-    if (document_ === null) { reply({ ok: false, reason: 'no-snapshot' }); return }
-    reply({
-      ok: true,
-      tab: { url: (tab.url || '').slice(0, 2048), title: (tab.title || '').slice(0, 512) },
-      document: document_,
-      viewport: out.result.viewport,
-    })
+    tabs = await visibleActiveTabs()
   } catch (err) {
-    // chrome://, the Web Store and the PDF viewer are refused even WITH the
-    // grant. The capture still happens; it just carries no page.
-    reply({
+    reply({ ok: false, reason: String(err && err.message ? err.message : err).slice(0, 200) })
+    return
+  }
+  if (tabs.length === 0) { reply({ ok: false, reason: 'no-tab' }); return }
+  // In parallel: each window is a separate tab, so N windows cost what one does.
+  // The app's fetch is bounded and a capture never waits on a browser, so a
+  // window that is slow to answer must not spend the whole budget by itself.
+  const results = await Promise.all(
+    tabs.map((tab) => snapshotOneTab(tab).catch((err) => ({
+      // chrome://, the Web Store and the PDF viewer are refused even WITH the
+      // grant. The capture still happens; that window just carries no page.
       ok: false,
       reason: String(err && err.message ? err.message : err).slice(0, 200),
-      tab: tab ? { url: (tab.url || '').slice(0, 2048), title: (tab.title || '').slice(0, 512) } : null,
-    })
+      tab: tabFacts(tab),
+    }))),
+  )
+  const captured = results.filter((r) => r.ok)
+  const refused = results.filter((r) => !r.ok).map((r) => ({ tab: r.tab, reason: r.reason }))
+  if (captured.length === 0) {
+    const first = results[0]
+    reply({ ok: false, reason: first.reason, tab: first.tab, refused })
+    return
   }
+  const [lead, ...rest] = captured
+  reply({
+    ok: true,
+    tab: lead.tab,
+    document: lead.document,
+    viewport: lead.viewport,
+    ...(rest.length === 0
+      ? {}
+      : {
+          documents: rest.map((r) => ({
+            tab: r.tab,
+            document: r.document,
+            viewport: r.viewport,
+          })),
+        }),
+    ...(refused.length === 0 ? {} : { refused }),
+  })
 }
 
 // TOOLBAR: the grant first, the picker after.
