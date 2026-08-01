@@ -94,6 +94,8 @@ import {
   DOM_PROTOCOL_VERSION,
   domBridgeStatus,
   domEventsBetween,
+  parseDomDocument,
+  requestDomForCapture,
   parseDomPayload,
 } from './chrome/domBridge'
 import type { DomEvent } from './chrome/domBridge'
@@ -978,6 +980,34 @@ function domEventForPack(
  * claim it at all rather than claim it quietly.
  */
 const STILL_DOM_LOOKBACK_MS = 10_000
+/**
+ * How long a capture may wait for the browser to answer.
+ *
+ * Short on purpose. The UIA dump already owns the time between the shutter and
+ * the editor, and the browser is answering from a service worker that may have
+ * to wake up — but a page that is not ready in this long is not worth delaying
+ * a screenshot for. Missing it costs the pack its page, which the pack says.
+ */
+const STILL_DOM_FETCH_TIMEOUT_MS = 700
+
+/**
+ * The browser's answer, as an event the pack can carry.
+ *
+ * `age_ms: 0` and nothing else: this snapshot was taken FOR this capture, at it,
+ * so it is the one DOM event a still can honestly place at its own instant.
+ * A refusal returns null — the pack then has no chrome-dom payload, and SPEC
+ * §11.4 already reads that as "nobody looked" rather than "the page was empty".
+ */
+function domRequestEvent(
+  answer: Awaited<ReturnType<typeof requestDomForCapture>>,
+  nowMs: number | null,
+): DomEvent | null {
+  if (answer === null || !answer.ok || answer.tab === null || nowMs === null) return null
+  const document_ = parseDomDocument(answer.document)
+  if (document_ === null) return null
+  return { tMs: nowMs, type: 'dom.document.captured', tab: answer.tab, document: document_ }
+}
+
 
 async function runImageFlow(settings: Settings): Promise<void> {
   const triggerAt = Date.now()
@@ -1237,10 +1267,25 @@ async function runImageFlowWithContext(
   // takes a short bounded lookback and records how old each pick was
   // (STILL_DOM_LOOKBACK_MS, `age_ms`).
   const domNowMs = contextNowMs()
-  const capturedDomEvents =
+  // ASK THE BROWSER DIRECTLY, AT THE CAPTURE INSTANT (#125).
+  //
+  // The point of the whole exercise: the user presses ONE key — CapturePack's
+  // own global hotkey — and the page comes with the screenshot. That is only
+  // possible because the browser was granted once; Chrome refuses a page to a
+  // request that did not start inside Chrome, so without the grant this returns
+  // null immediately and the pack is written exactly as it was before.
+  //
+  // Bounded, and awaited beside the UIA dump rather than after it: a capture is
+  // never allowed to wait on a browser.
+  const fetched = await requestDomForCapture(STILL_DOM_FETCH_TIMEOUT_MS)
+  const requested = domRequestEvent(fetched, domNowMs)
+  const buffered =
     domNowMs === null
       ? []
       : domEventsBetween(domNowMs - STILL_DOM_LOOKBACK_MS, domNowMs)
+  // The fetch describes THIS instant, so it leads; a click the user made just
+  // before it still rides along, aged.
+  const capturedDomEvents = requested === null ? buffered : [requested, ...buffered]
   const domStatus = domBridgeStatus()
   const domPayload: DomPluginPayload | null =
     capturedDomEvents.length === 0 || domNowMs === null

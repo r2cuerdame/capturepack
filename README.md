@@ -97,13 +97,13 @@ does is invite you to click it.
   click the element. It works inside iframes, reads the page only for that pick,
   and does not stream the DOM. Settings › Plugins › Chrome DOM reports what the
   picker last did, so a pick that does not arrive says why.
-  **Arm it with `Ctrl+Shift+E`** (rebindable at `chrome://extensions/shortcuts`)
-  or the toolbar button, then click the element. The gesture is not ceremony:
-  Chrome grants a page to an extension only when the user asks for that page, and
-  the alternative is the permission Chrome describes as *"read your data on all
-  websites"* — which CapturePack does not ask for and does not want. A screenshot
-  carries the picks you made in the ten seconds before the shutter and records how
-  old each one was, because a page can change between the pick and the picture.
+  **Click the CapturePack icon once and allow the browser.** After that you press
+  nothing in Chrome: your normal capture hotkey brings the visible page with it.
+  The one-time grant exists because Chrome never sees a global hotkey — it hands
+  a page to an extension only for a click made inside Chrome, or to an extension
+  the user has allowed. Nothing is held until you allow it (installing shows no
+  permission warning), and `chrome://extensions` takes it back at any time. A pack
+  written without the grant simply carries no page, and says so.
 - **HWND window fallback:** when no child control is available, CapturePack still
   records the real window and its observed geometry instead of inventing a
   control.

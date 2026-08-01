@@ -124,7 +124,10 @@ export interface DomDocumentSnapshot {
 export interface DomEvent {
   /** Milliseconds on the replay clock, at arrival. */
   tMs: number
-  type: 'dom.element.selected' | 'tab.updated' | 'url.changed'
+  // `dom.document.captured` is written by the APP, not the browser: the page
+  // as it was at the instant of a capture, fetched because the user pressed
+  // CapturePack's own hotkey and the browser had been granted once (#125).
+  type: 'dom.element.selected' | 'tab.updated' | 'url.changed' | 'dom.document.captured'
   tab: { url: string; title: string }
   element?: DomElement
   /** Present on an element pick from extension 0.1.4 or newer. */
@@ -202,6 +205,64 @@ let pickerState: DomPickerState | null = null
 /** Supplied by the context runtime: "now" on the replay clock. */
 let clockNowMs: () => number = () => Date.now()
 
+/** Whether the user has allowed the browser (extension 0.3.0's optional grant). */
+let browserGranted = false
+/** In-flight capture-time fetches, by request id. */
+const domRequests = new Map<string, (answer: DomResponseMessage) => void>()
+let domRequestSeq = 0
+
+export function browserGrantState(): boolean {
+  return browserGranted
+}
+
+/**
+ * ASK THE BROWSER FOR THE VISIBLE PAGE, AT THE MOMENT OF A CAPTURE.
+ *
+ * This is what makes CapturePack's own global hotkey enough. Chrome will not
+ * hand a page to an extension for a request that did not start in Chrome, so
+ * this only ever succeeds when the user has granted the browser once — see the
+ * extension's own note. Without the grant the extension refuses immediately and
+ * says `not-granted`, which is a different answer from "the page was empty" and
+ * has to stay different (SPEC §11.4).
+ *
+ * Bounded: a capture may never wait on a browser. On timeout the pack is written
+ * without a page, exactly as it was before this existed.
+ */
+export function requestDomForCapture(timeoutMs: number): Promise<DomResponseMessage | null> {
+  const sockets = extensionConnections.keys()
+  if (sockets.length === 0 || !browserGranted) return Promise.resolve(null)
+  domRequestSeq += 1
+  const requestId = `r${String(domRequestSeq)}`
+  return new Promise<DomResponseMessage | null>((resolve) => {
+    const timer = setTimeout(() => {
+      domRequests.delete(requestId)
+      logWarn(`[chrome] the browser did not answer within ${String(timeoutMs)} ms — pack written without a page`)
+      resolve(null)
+    }, timeoutMs)
+    domRequests.set(requestId, (answer) => {
+      clearTimeout(timer)
+      resolve(answer)
+    })
+    let sent = 0
+    for (const socket of sockets) {
+      try {
+        socket.write(
+          `${JSON.stringify({ type: 'dom.request', protocol: DOM_PROTOCOL_VERSION, request_id: requestId })}
+`,
+        )
+        sent += 1
+      } catch {
+        // A dead socket is one fewer browser to ask, never a failed capture.
+      }
+    }
+    if (sent === 0) {
+      clearTimeout(timer)
+      domRequests.delete(requestId)
+      resolve(null)
+    }
+  })
+}
+
 export function setDomClock(now: () => number): void {
   clockNowMs = now
 }
@@ -271,8 +332,22 @@ interface DomPickerMessage {
  * outside the process, which is the whole reason #104 stayed open for two
  * release cycles.
  */
+interface DomGrantMessage {
+  kind: 'grant'
+  granted: boolean
+}
+
+interface DomResponseMessage {
+  kind: 'domResponse'
+  requestId: string
+  ok: boolean
+  reason: string | null
+  tab: { url: string; title: string } | null
+  document: unknown
+}
+
 type ParseOutcome =
-  | { ok: true; value: DomEvent | DomHello | DomPickerMessage }
+  | { ok: true; value: DomEvent | DomHello | DomPickerMessage | DomGrantMessage | DomResponseMessage }
   | { ok: false; reason: string }
 
 function refuse(reason: string): ParseOutcome {
@@ -285,6 +360,99 @@ function parseTab(raw: unknown): { url: string; title: string } | null {
   const t = raw as Record<string, unknown>
   if (typeof t['url'] !== 'string' || typeof t['title'] !== 'string') return null
   return { url: t['url'].slice(0, 2048), title: t['title'].slice(0, 512) }
+}
+
+/**
+ * A DOCUMENT SNAPSHOT, PARSED RATHER THAN BELIEVED.
+ *
+ * Extracted from `parse()` so a document that arrives as the ANSWER to a
+ * capture-time fetch is checked by the same rules as one riding on a pick
+ * (#125). A second copy of these bounds would be a second definition of what a
+ * pack may contain, and the one a reader can check is the one in the file.
+ */
+export function parseDomDocument(doc: unknown): DomDocumentSnapshot | null {
+  const event: { document?: DomDocumentSnapshot } = {}
+  if (typeof doc === 'object' && doc !== null) {
+    const d = doc as Record<string, unknown>
+    const dv = d['viewport']
+    const rawElements = d['elements']
+    if (typeof dv === 'object' && dv !== null && Array.isArray(rawElements)) {
+      const v = dv as Record<string, unknown>
+      const num = (source: Record<string, unknown>, k: string): number | null => {
+        const n = source[k]
+        return typeof n === 'number' && Number.isFinite(n) ? n : null
+      }
+      const width = num(v, 'width')
+      const height = num(v, 'height')
+      const dpr = num(v, 'devicePixelRatio')
+      if (width !== null && width > 0 && height !== null && height > 0
+        && dpr !== null && dpr > 0 && dpr <= 16) {
+        const elements: NonNullable<DomEvent['document']>['elements'] = []
+        for (const entry of rawElements.slice(0, DOM_SNAPSHOT_MAX_ELEMENTS)) {
+          if (typeof entry !== 'object' || entry === null) continue
+          const el = entry as Record<string, unknown>
+          const b = el['bounds']
+          if (typeof el['tag'] !== 'string' || typeof b !== 'object' || b === null) continue
+          const bb = b as Record<string, unknown>
+          const x = num(bb, 'x')
+          const y = num(bb, 'y')
+          const w = num(bb, 'width')
+          const h = num(bb, 'height')
+          if (x === null || y === null || w === null || h === null) continue
+          const text = (k: string, max: number): Record<string, string> =>
+            typeof el[k] === 'string' && el[k] !== ''
+              ? { [k]: (el[k] as string).slice(0, max) }
+              : {}
+          elements.push({
+            i: elements.length,
+            tag: el['tag'].slice(0, 64),
+            role: typeof el['role'] === 'string' ? el['role'].slice(0, 64) : '',
+            bounds: { x, y, width: w, height: h },
+            ...text('id', 256),
+            ...text('class', 256),
+            ...text('name', 256),
+            ...text('type', 64),
+            ...text('placeholder', 200),
+            ...text('alt', 200),
+            ...text('title', 200),
+            ...text('href', 2048),
+            ...text('text', 200),
+            ...(el['filled'] === true ? { filled: true } : {}),
+            ...(el['filled'] === false ? { filled: false } : {}),
+            ...(el['secret'] === true ? { secret: true } : {}),
+          })
+        }
+        const omitted = Array.isArray(d['omitted'])
+          ? d['omitted'].filter((o): o is string => typeof o === 'string').map((o) => o.slice(0, 200))
+          : []
+        event.document = {
+          viewport: {
+            width,
+            height,
+            devicePixelRatio: dpr,
+            scrollX: num(v, 'scrollX') ?? 0,
+            scrollY: num(v, 'scrollY') ?? 0,
+          },
+          url: typeof d['url'] === 'string' ? d['url'].slice(0, 2048) : '',
+          title: typeof d['title'] === 'string' ? d['title'].slice(0, 512) : '',
+          elements,
+          // The extension's own cap, or ours: either way the pack says the list
+          // is a prefix rather than the page.
+          truncated: d['truncated'] === true
+            || rawElements.length > DOM_SNAPSHOT_MAX_ELEMENTS,
+          visitedCount: num(d, 'visitedCount') ?? elements.length,
+          elapsedMs: num(d, 'elapsedMs') ?? 0,
+          omitted,
+        }
+      }
+    }
+  }
+  // The screen anchor, validated exactly as strictly as everything else here:
+  // a viewport with a nonsensical size or ratio is DROPPED rather than
+  // defaulted, because a default would place the element somewhere plausible
+  // and wrong. An event without it still records the pick — it simply cannot
+  // be turned into a candidate, which is the pre-0.1.4 behaviour.
+  return event.document ?? null
 }
 
 function parse(raw: unknown): ParseOutcome {
@@ -311,6 +479,27 @@ function parse(raw: unknown): ParseOutcome {
   // browser showed, not which buttons the user pressed in it — but the only
   // evidence that says whether a missing pick is a picker that never armed, a
   // page the extension may not touch, or a click that went somewhere else.
+  // THE BROWSER GRANT (extension 0.3.0). Not pack content — it is the reason a
+  // pack has no chrome-dom payload, which Settings > Plugins has to be able to
+  // say out loud instead of showing an empty row.
+  if (type === 'browser.grant') {
+    return { ok: true, value: { kind: 'grant', granted: m['granted'] === true } }
+  }
+  // The answer to a capture-time fetch. Correlated by `request_id` because a
+  // capture that has already given up must not adopt a late reply.
+  if (type === 'dom.response') {
+    return {
+      ok: true,
+      value: {
+        kind: 'domResponse',
+        requestId: typeof m['request_id'] === 'string' ? m['request_id'] : '',
+        ok: m['ok'] === true,
+        reason: typeof m['reason'] === 'string' ? m['reason'].slice(0, 200) : null,
+        tab: parseTab(m['tab']),
+        document: m['document'],
+      },
+    }
+  }
   if (type === 'picker.armed' || type === 'picker.disarmed' || type === 'picker.failed') {
     const reason = m['reason']
     return {
@@ -392,87 +581,8 @@ function parse(raw: unknown): ParseOutcome {
   // `omitted` is carried through verbatim because it is the extension's own
   // statement of what it refused to record, and a pack that quietly lost that
   // line would be claiming more completeness than it has.
-  const doc = m['document']
-  if (typeof doc === 'object' && doc !== null) {
-    const d = doc as Record<string, unknown>
-    const dv = d['viewport']
-    const rawElements = d['elements']
-    if (typeof dv === 'object' && dv !== null && Array.isArray(rawElements)) {
-      const v = dv as Record<string, unknown>
-      const num = (source: Record<string, unknown>, k: string): number | null => {
-        const n = source[k]
-        return typeof n === 'number' && Number.isFinite(n) ? n : null
-      }
-      const width = num(v, 'width')
-      const height = num(v, 'height')
-      const dpr = num(v, 'devicePixelRatio')
-      if (width !== null && width > 0 && height !== null && height > 0
-        && dpr !== null && dpr > 0 && dpr <= 16) {
-        const elements: NonNullable<DomEvent['document']>['elements'] = []
-        for (const entry of rawElements.slice(0, DOM_SNAPSHOT_MAX_ELEMENTS)) {
-          if (typeof entry !== 'object' || entry === null) continue
-          const el = entry as Record<string, unknown>
-          const b = el['bounds']
-          if (typeof el['tag'] !== 'string' || typeof b !== 'object' || b === null) continue
-          const bb = b as Record<string, unknown>
-          const x = num(bb, 'x')
-          const y = num(bb, 'y')
-          const w = num(bb, 'width')
-          const h = num(bb, 'height')
-          if (x === null || y === null || w === null || h === null) continue
-          const text = (k: string, max: number): Record<string, string> =>
-            typeof el[k] === 'string' && el[k] !== ''
-              ? { [k]: (el[k] as string).slice(0, max) }
-              : {}
-          elements.push({
-            i: elements.length,
-            tag: el['tag'].slice(0, 64),
-            role: typeof el['role'] === 'string' ? el['role'].slice(0, 64) : '',
-            bounds: { x, y, width: w, height: h },
-            ...text('id', 256),
-            ...text('class', 256),
-            ...text('name', 256),
-            ...text('type', 64),
-            ...text('placeholder', 200),
-            ...text('alt', 200),
-            ...text('title', 200),
-            ...text('href', 2048),
-            ...text('text', 200),
-            ...(el['filled'] === true ? { filled: true } : {}),
-            ...(el['filled'] === false ? { filled: false } : {}),
-            ...(el['secret'] === true ? { secret: true } : {}),
-          })
-        }
-        const omitted = Array.isArray(d['omitted'])
-          ? d['omitted'].filter((o): o is string => typeof o === 'string').map((o) => o.slice(0, 200))
-          : []
-        event.document = {
-          viewport: {
-            width,
-            height,
-            devicePixelRatio: dpr,
-            scrollX: num(v, 'scrollX') ?? 0,
-            scrollY: num(v, 'scrollY') ?? 0,
-          },
-          url: typeof d['url'] === 'string' ? d['url'].slice(0, 2048) : '',
-          title: typeof d['title'] === 'string' ? d['title'].slice(0, 512) : '',
-          elements,
-          // The extension's own cap, or ours: either way the pack says the list
-          // is a prefix rather than the page.
-          truncated: d['truncated'] === true
-            || rawElements.length > DOM_SNAPSHOT_MAX_ELEMENTS,
-          visitedCount: num(d, 'visitedCount') ?? elements.length,
-          elapsedMs: num(d, 'elapsedMs') ?? 0,
-          omitted,
-        }
-      }
-    }
-  }
-  // The screen anchor, validated exactly as strictly as everything else here:
-  // a viewport with a nonsensical size or ratio is DROPPED rather than
-  // defaulted, because a default would place the element somewhere plausible
-  // and wrong. An event without it still records the pick — it simply cannot
-  // be turned into a candidate, which is the pre-0.1.4 behaviour.
+  const parsedDocument = parseDomDocument(m['document'])
+  if (parsedDocument !== null) event.document = parsedDocument
   const vp = m['viewport']
   if (typeof vp === 'object' && vp !== null) {
     const v = vp as Record<string, unknown>
@@ -623,7 +733,21 @@ export function startDomBridge(): void {
                 extensionVersion: bundledExtensionVersion(),
               })}\n`,
             )
-          } else if ('kind' in result.value) {
+          } else if ('kind' in result.value && result.value.kind === 'grant') {
+            browserGranted = result.value.granted
+            logInfo(
+              browserGranted
+                ? '[chrome] the browser is allowed — a capture can carry the page without any click'
+                : '[chrome] the browser grant was withdrawn — captures carry no page until it is given again',
+            )
+          } else if ('kind' in result.value && result.value.kind === 'domResponse') {
+            const answer = result.value
+            const pending = domRequests.get(answer.requestId)
+            if (pending !== undefined) {
+              domRequests.delete(answer.requestId)
+              pending(answer)
+            }
+          } else if ('kind' in result.value && result.value.kind === 'picker') {
             const signal = result.value
             pickerState = {
               phase: signal.phase,

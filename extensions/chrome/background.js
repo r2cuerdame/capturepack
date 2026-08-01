@@ -164,6 +164,10 @@ function connect() {
     })
     candidate.onMessage.addListener((message) => {
       if (port !== candidate) return
+      if (message && message.type === 'dom.request' && message.protocol === PROTOCOL) {
+        void answerDomRequest(message.request_id)
+        return
+      }
       if (!message || message.type !== 'host.hello' || message.protocol !== PROTOCOL) return
       clearHelloTimer()
       const loadedVersion = chrome.runtime.getManifest().version
@@ -310,7 +314,129 @@ async function armPicker(tab, via) {
 // window. `_execute_action` maps a shortcut straight onto the handler below;
 // the user assigns it at chrome://extensions/shortcuts, and nothing about the
 // permission model changes.
-chrome.action.onClicked.addListener((tab) => armPicker(tab, 'toolbar'))
+/**
+ * THE ONE-TIME GRANT, AND WHY IT IS THE ONLY WAY TO GET OUT OF TWO STEPS.
+ *
+ * CapturePack's capture hotkey is a GLOBAL, OS-level key. Chrome never sees it,
+ * and `activeTab` is granted only for a gesture made inside Chrome — so "press
+ * Ctrl+Alt+S and the page comes with it" cannot be built out of gestures. The
+ * native-messaging channel is not the obstacle: it is bidirectional and the app
+ * already writes down it. Chrome simply will not hand over a page for a request
+ * that did not start in Chrome.
+ *
+ * Which leaves exactly one mechanism: a host permission the user grants once.
+ * It is declared OPTIONAL, so installing this extension still shows no warning
+ * and the grant does not exist until it is asked for. When it is granted, the
+ * app can fetch the visible document at the moment of a capture and the user
+ * does nothing at all.
+ *
+ * The grant is revocable at any time from chrome://extensions, and the app
+ * reports its state so a pack without a `chrome-dom` payload can say WHY.
+ */
+const ALL_URLS = { origins: ['<all_urls>'] }
+
+async function hasBrowserGrant() {
+  try {
+    return await chrome.permissions.contains(ALL_URLS)
+  } catch {
+    return false
+  }
+}
+
+function announceGrant(granted) {
+  send({
+    type: 'browser.grant',
+    protocol: PROTOCOL,
+    timestamp: Date.now(),
+    granted: granted === true,
+  })
+}
+
+if (chrome.permissions && chrome.permissions.onAdded) {
+  chrome.permissions.onAdded.addListener(() => { void hasBrowserGrant().then(announceGrant) })
+}
+if (chrome.permissions && chrome.permissions.onRemoved) {
+  chrome.permissions.onRemoved.addListener(() => { void hasBrowserGrant().then(announceGrant) })
+}
+
+/**
+ * The app asking for the visible document at the moment of a capture.
+ *
+ * Answered ONLY when the user has granted the browser to CapturePack. Without
+ * the grant this refuses and says so, rather than failing in a way that looks
+ * like an empty page — the difference a reader needs (SPEC §11.4).
+ */
+async function answerDomRequest(requestId) {
+  const reply = (extra) => send({
+    type: 'dom.response',
+    protocol: PROTOCOL,
+    timestamp: Date.now(),
+    request_id: requestId,
+    ...extra,
+  })
+  if (!(await hasBrowserGrant())) {
+    reply({ ok: false, reason: 'not-granted' })
+    return
+  }
+  let tab = null
+  try {
+    const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true })
+    tab = tabs[0] ?? null
+    if (!tab || !tab.id) { reply({ ok: false, reason: 'no-tab' }); return }
+    // Top frame only: a document snapshot is placed by a viewport a reader can
+    // locate, and that is the top one.
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ['frame-geometry.js', 'document-snapshot.js'],
+    })
+    const [out] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => (window.__capturepackDocumentSnapshot ? window.__capturepackDocumentSnapshot() : null),
+    })
+    const document_ = out && out.result ? out.result : null
+    if (document_ === null) { reply({ ok: false, reason: 'no-snapshot' }); return }
+    reply({
+      ok: true,
+      tab: { url: (tab.url || '').slice(0, 2048), title: (tab.title || '').slice(0, 512) },
+      document: document_,
+    })
+  } catch (err) {
+    // chrome://, the Web Store and the PDF viewer are refused even WITH the
+    // grant. The capture still happens; it just carries no page.
+    reply({
+      ok: false,
+      reason: String(err && err.message ? err.message : err).slice(0, 200),
+      tab: tab ? { url: (tab.url || '').slice(0, 2048), title: (tab.title || '').slice(0, 512) } : null,
+    })
+  }
+}
+
+// TOOLBAR: the grant first, the picker after.
+//
+// The first click is where the user is actually asked — `permissions.request`
+// needs a user gesture, and this is the only one the extension reliably gets.
+// Once granted, the button goes back to being the element picker.
+chrome.action.onClicked.addListener((tab) => {
+  void (async () => {
+    if (!(await hasBrowserGrant())) {
+      try {
+        const granted = await chrome.permissions.request(ALL_URLS)
+        announceGrant(granted)
+        if (granted) {
+          chrome.action.setBadgeBackgroundColor({ color: '#1a7f37' })
+          chrome.action.setBadgeText({ text: '✓', tabId: tab?.id })
+          setTimeout(() => chrome.action.setBadgeText({ text: '', tabId: tab?.id }), 4000)
+          return
+        }
+      } catch {
+        // A refused prompt is an answer, not an error. Fall through to picking.
+      }
+    }
+    await armPicker(tab, 'toolbar')
+  })()
+})
+
+
 
 if (chrome.commands && chrome.commands.onCommand) {
   chrome.commands.onCommand.addListener(async (command, tab) => {

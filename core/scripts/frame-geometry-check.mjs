@@ -180,8 +180,34 @@ console.log('\nThe picker actually uses it, in every frame')
     manifest.commands?.['pick-element']?.suggested_key?.default !== undefined)
   check('both entry points call one arming path',
     /function armPicker\(/.test(background) &&
-      /chrome\.action\.onClicked\.addListener\(\(tab\) => armPicker\(/.test(background) &&
+      /chrome\.action\.onClicked\.addListener/.test(background) &&
+      /armPicker\(tab, 'toolbar'\)/.test(background) &&
       /commands\.onCommand\.addListener/.test(background))
+
+  // THE ONE-TIME GRANT (#125). CapturePack's capture hotkey is global, so Chrome
+  // never sees it and `activeTab` can never apply to it. The user grants the
+  // browser ONCE and then presses nothing in Chrome ever again.
+  //
+  // What must stay true: the grant is OPTIONAL, so installing the extension
+  // still shows no warning and nothing is held until the user asks for it.
+  check('the browser grant is optional, not demanded at install',
+    Array.isArray(manifest.optional_host_permissions) &&
+      manifest.optional_host_permissions.includes('<all_urls>') &&
+      !('host_permissions' in manifest),
+    JSON.stringify({
+      optional: manifest.optional_host_permissions,
+      demanded: manifest.host_permissions,
+    }))
+  check('the extension asks for it from a real user gesture',
+    /permissions\.request\(/.test(background) &&
+      /action\.onClicked/.test(background),
+    'permissions.request only works inside a gesture; the toolbar click is the one we get')
+  check('and it answers the app only when the grant is held',
+    /async function answerDomRequest\(/.test(background) &&
+      /if \(!\(await hasBrowserGrant\(\)\)\)/.test(background),
+    'without this the extension would try, fail, and look like an empty page')
+  check('a withdrawn grant is reported, so a pack can say why it carries no page',
+    /permissions\.onRemoved/.test(background) && /browser\.grant/.test(background))
   check('activeTab is still the whole permission story — no host permissions',
     !('host_permissions' in manifest) &&
       !manifest.permissions.some((p) => p === '<all_urls>' || p.includes('://')),

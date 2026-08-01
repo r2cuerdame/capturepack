@@ -21,7 +21,7 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "CapturePack: pick an element (or press the shortcut)",
+    "default_title": "CapturePack: allow this browser, or pick an element",
     "default_icon": {
       "16": "icons/icon-16.png",
       "32": "icons/icon-32.png",
@@ -37,5 +37,8 @@
       },
       "description": "CapturePack: pick an element on this page"
     }
-  }
+  },
+  "optional_host_permissions": [
+    "<all_urls>"
+  ]
 }
