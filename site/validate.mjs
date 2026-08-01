@@ -508,8 +508,8 @@ check(
     && !/\balways[- ](?:on|running)\b/i.test(mcpDocs),
 )
 check(
-  'handoff records the stable 0.3.3 baton without presenting the sync issue as fixed',
-  handoff.includes('# CapturePack handoff — after v0.3.3')
+  'handoff records the stable 0.3.4 baton without presenting the sync issue as fixed',
+  handoff.includes('# CapturePack handoff — after v0.3.4')
     && handoff.includes('b7e0c695d5f2c018e2c10fcf83936d1d42f7a0d4')
     && handoff.includes('Issue #89')
     && handoff.includes('Do not hard-code 125 ms')

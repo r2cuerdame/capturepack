@@ -1,6 +1,6 @@
-# CapturePack handoff — after v0.3.3
+# CapturePack handoff — after v0.3.4
 
-Last verified: 2026-07-30 (Asia/Seoul)
+Last verified: 2026-08-02 (Asia/Seoul)
 
 This is the current baton-pass document. Read it before changing capture,
 timeline, object-picking, multi-display, viewer, packaging, or release code.
@@ -20,33 +20,91 @@ Use [docs/README.md](README.md) as the documentation index. The older
 
 ## Public state
 
-CapturePack **0.3.3** is the current stable Windows release.
+CapturePack **0.3.4** is the current stable Windows release.
 
 | Item | Verified state |
 |---|---|
-| Public release | [v0.3.3](https://github.com/r2cuerdame/capturepack/releases/tag/v0.3.3), stable (`draft=false`, `prerelease=false`) |
-| Release source | `b7e0c695d5f2c018e2c10fcf83936d1d42f7a0d4` |
-| Release workflow | [passed](https://github.com/r2cuerdame/capturepack/actions/runs/30553084001) |
-| Main CI | [passed on retry](https://github.com/r2cuerdame/capturepack/actions/runs/30553473638) |
-| Pages deployment | [passed](https://github.com/r2cuerdame/capturepack/actions/runs/30553473663) |
-| Website | [capturepack.dev](https://capturepack.dev/), serving 0.3.3 |
-| Public installer SHA-256 | `cdf1da6fee39eb28e82749b9183cdd3c347f26b31e68e0db25a6be5400ebcf3c` |
+| Public release | [v0.3.4](https://github.com/r2cuerdame/capturepack/releases/tag/v0.3.4), stable (`draft=false`, `prerelease=false`), published 2026-08-01T17:51:41Z |
+| Release source | `525ea4968987a0e4445232d1bba71db0c03703c6` |
+| Release workflow | [passed](https://github.com/r2cuerdame/capturepack/actions/runs/30711112527) |
+| Main CI | [passed](https://github.com/r2cuerdame/capturepack/actions/runs/30711020932) |
+| Pages deployment | [passed](https://github.com/r2cuerdame/capturepack/actions/runs/30711020911) |
+| Website | [capturepack.dev](https://capturepack.dev/), serving 0.3.4 |
+| Public installer SHA-256 | `a989eb2fd623da4ce88cb4284766bf51b98887715225d986676a151fe0c2f434` |
+| Installer size | 104,153,982 bytes |
+
+Verified after publication by downloading the released asset and hashing it,
+not by reading the workflow log: SHA-256 matches `SHA256SUMS.txt`, and the
+SHA-512 matches `latest.yml` byte for byte, so electron-updater will accept it.
+The installer was also unpacked and checked to contain what this release claims
+— extension `0.3.4` with `chrome.windows.getAll`, and an `app.asar` carrying
+`domRequestEvents` and `imageClipboardAfterSave: 'prompt'`.
+
+The previous release [v0.3.3](https://github.com/r2cuerdame/capturepack/releases/tag/v0.3.3)
+(`b7e0c695d5f2c018e2c10fcf83936d1d42f7a0d4`, installer SHA-256
+`cdf1da6fee39eb28e82749b9183cdd3c347f26b31e68e0db25a6be5400ebcf3c`) stays
+exactly where it is.
 
 The binaries were built from the tagged release source above. `main` may
 contain documentation-only follow-up commits after that tag. Do not move or
-replace the public `v0.3.3` tag or its assets.
+replace a public tag or its assets.
 
-The locally built installer in `core/release-0.3.3-final` has a different hash
+A locally built RC installer under `core/release-rcNN/` has a different hash
 because it is a separate unsigned build. Use the public release's
 `SHA256SUMS.txt`, not a local build hash, when verifying a downloaded installer.
 
 At the time this handoff was written, the working checkout was
-`C:\_Project\capturepack` on `agent/rc-0.3.3-rc.1`. Its local `main` ref was
-older than `origin/main`. Always begin with `git status --short --branch`,
-`git fetch`, and a non-destructive comparison before choosing a branch. Never
-reset or clean away an active worktree.
+`C:\_Project\capturepack` on `main`, fast-forwarded from `agent/0.3.4` and
+pushed. Always begin with `git status --short --branch`, `git fetch`, and a
+non-destructive comparison before choosing a branch. Never reset or clean away
+an active worktree.
 
-## What 0.3.3 contains
+## What 0.3.4 contains
+
+**Object Pick moved to the still image, and a video no longer offers it at
+all.** Not because picking in a replay was hard, but because it could only be
+done in half: window geometry is sampled about a hundred times a second, while
+walking a window's controls costs 326 ms against 13.9 ms for everything else on
+a normal desk, so the recording-time tracker paced itself to a 3% duty and
+skipped Chromium entirely. A still is one instant, the full walk runs at it, and
+everything the precision was costing now goes there. A video keeps the replay,
+the timeline, keyframes, the window and control geometry recorded through time,
+and hand-drawn boxes with lifetimes. One gate enforces it:
+`objectPickingApplies()` in the editor.
+
+- A screenshot carries the page of **every visible browser window**, not just the
+  one Chrome last focused ([#132](https://github.com/r2cuerdame/capturepack/issues/132)).
+  The extension had asked for the active tab of a single window — right for a
+  pick, wrong for a capture that photographs the whole desk.
+- A still collects the browser's half at the capture instant, over a bounded
+  lookback, and records how old each pick was. This needed a one-time browser
+  grant: Chrome never sees a global hotkey, so it hands a page to an extension
+  only for a click made inside Chrome or for a browser the user has allowed.
+- A still layers UIA controls onto lane-S rectangles so a DOM element has a
+  client rectangle to be placed against — UIA reports a window rect and never a
+  client one.
+- After an image capture the clipboard carries the LLM prompt with the pack's
+  path rather than the flattened image; the image is still one dropdown away.
+- Replay duration, pauses, trim out-points and source latency are measured from
+  the instants they describe rather than from when their bytes arrived
+  ([#115](https://github.com/r2cuerdame/capturepack/issues/115),
+  [#116](https://github.com/r2cuerdame/capturepack/issues/116)).
+- Electron windows are no longer skipped wholesale by a frame-rate budget that
+  had no business reaching a once-per-capture walk
+  ([#117](https://github.com/r2cuerdame/capturepack/issues/117)).
+- Every documentation surface — README in nine languages, the site in nine, the
+  Remotion films, GOAL/ROADMAP/ARCHITECTURE/SPEC — now says the still-only rule
+  instead of contradicting it.
+
+Known and open: [#133](https://github.com/r2cuerdame/capturepack/issues/133),
+the annotated keyframe is written 116 px taller than the snapshot it declares
+itself derived from. No pixels are lost — the extra band is editor background —
+but `annotations.json` declares the snapshot's extent, so a reader overlaying
+coordinates on the keyframe is off by that ratio. A gate check asserting every
+declared keyframe matches the pack's own `reference_width x reference_height`
+would have caught it the day it appeared.
+
+## What 0.3.3 contained
 
 - A script-free, offline `viewer.html` generated inside a CapturePack. It uses
   only declared relative media and remains an optional generated view.
@@ -72,7 +130,7 @@ reset or clean away an active worktree.
   `runtime.lastError` values while bounded reconnect remains active.
 
 Application version and pack format version are different contracts.
-`core/package.json` is application version `0.3.3`; packs containing the
+`core/package.json` is application version `0.3.4`; packs containing the
 optional viewer declare a compatible format version of at least `0.5.0`.
 
 ## Known problem: video/context alignment
