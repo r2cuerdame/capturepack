@@ -113,7 +113,7 @@ check(
 console.log('\nThe age is recorded, because a still cannot say it in t_ms')
 check(
   'the still passes an age',
-  /domEventForPack\(e,\s*0,\s*domNowMs - e\.tMs\)/.test(image),
+  /domEventForPack\(e, 0, ages\[i\]/.test(code(image)),
   'every still event shares t_ms: 0, so the distance has to be stated',
 )
 check(
@@ -165,6 +165,18 @@ check(
   'one viewport parser, shared with the pick',
   /export function parseDomViewport\(/.test(bridge),
   'two copies of an anchoring rule is how a pick and a document come to disagree',
+)
+
+console.log('\nThe editor is asked at a moment the pack actually has')
+check(
+  'events handed to the editor are re-stamped onto the image clock',
+  /tMs:\s*0/.test(code(image)) && /onImageClock/.test(code(image)),
+  "a still's context exists only at t=0; a session-clock time finds no surface (#131)",
+)
+check(
+  'and the real distance from the shutter survives that re-stamp',
+  /ages\[i\]/.test(code(image)),
+  'age_ms must be measured before the times are collapsed, or it becomes 0 for everything',
 )
 
 console.log(failed === 0 ? '\nstill-dom: OK' : `\nstill-dom: ${failed} FAILED`)

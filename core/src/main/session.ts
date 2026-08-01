@@ -1295,7 +1295,21 @@ async function runImageFlowWithContext(
       : domEventsBetween(domNowMs - STILL_DOM_LOOKBACK_MS, domNowMs)
   // The fetch describes THIS instant, so it leads; a click the user made just
   // before it still rides along, aged.
-  const capturedDomEvents = requested === null ? buffered : [requested, ...buffered]
+  // ON THE IMAGE'S CLOCK, WHICH HAS EXACTLY ONE INSTANT.
+  //
+  // A still's context is frozen at t=0 — `contextObservation(uia, 1, 0)`, and
+  // the written payload stamps every event `t_ms: 0` for the same reason. The
+  // in-memory events handed to the editor were still carrying SESSION-clock
+  // times, so the DOM provider looked for the browser window at (say) 16000 ms
+  // in a timeline that only exists at 0, found no surface, and placed nothing.
+  //
+  // 455 elements, a viewport, a matching window title — and not one candidate,
+  // because the question was asked at a moment this pack does not have (#131).
+  // The real distance from the shutter is not lost: it rides in `age_ms`.
+  const rawEvents = requested === null ? buffered : [requested, ...buffered]
+  const ages = rawEvents.map((e) => (domNowMs === null ? 0 : Math.max(0, domNowMs - e.tMs)))
+  const onImageClock = (e: DomEvent): DomEvent => ({ ...e, tMs: 0 })
+  const capturedDomEvents = rawEvents.map(onImageClock)
   const domStatus = domBridgeStatus()
   const domPayload: DomPluginPayload | null =
     capturedDomEvents.length === 0 || domNowMs === null
@@ -1305,8 +1319,10 @@ async function runImageFlowWithContext(
           extension_version: domStatus.extensionVersion,
           // Every event is stamped at the pack's ONE instant, and carries the
           // real distance from it so a reader can weigh the pick itself.
-          events: capturedDomEvents.map((e: DomEvent) =>
-            domEventForPack(e, 0, domNowMs - e.tMs),
+          // `age_ms` is measured against the ORIGINAL time, captured in `ages`
+          // above — re-stamping to the image clock must not erase the distance.
+          events: capturedDomEvents.map((e: DomEvent, i: number) =>
+            domEventForPack(e, 0, ages[i] ?? 0),
           ),
         }
 
