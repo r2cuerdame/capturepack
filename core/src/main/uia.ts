@@ -982,6 +982,57 @@ export function refuseDisplacedRenderers(chunk: readonly UiaElementRecord[]): {
   return { kept, refused }
 }
 
+/**
+ * SEAL A PAYLOAD: the one call that makes it safe to hand to anybody.
+ *
+ * The refusal has now been placed four times. Three of them were somewhere in
+ * the middle of the pipeline and all three leaked, because a later stage can
+ * still delete an element and leave its child holding an ancestor it never had.
+ * The fourth was inside `writeUiaPlugin`, which fixed the FILE and nothing else
+ * — and the file is not what the user picks from. The editor takes the same
+ * payload straight off the promise, so rc.21 wrote a clean pack and still
+ * offered the bad rectangles to click on. The owner picked two of them.
+ *
+ * So this is the seal, applied once where a payload stops being assembled and
+ * starts being consumed. Everything downstream — the editor's ObjectIndex, the
+ * written plugin, the MCP answers — gets the sealed value.
+ *
+ * Idempotent by construction: it removes what it refuses, so sealing twice
+ * refuses nothing the second time. `writeUiaPlugin` seals again anyway, because
+ * a future writer that forgets to seal should still be unable to write a
+ * displaced rectangle to disk.
+ */
+export function sealUiaPayload(payload: UiaPluginPayload | null): UiaPluginPayload | null {
+  if (payload === null) return null
+  const kept: UiaPluginPayload['elements'] = []
+  let refused = 0
+  // Per window: `depth` is a pre-order walk of ONE window's control view, and a
+  // payload keeps each window's elements contiguous.
+  const source = payload.elements
+  for (let i = 0; i < source.length; ) {
+    let j = i
+    while (j < source.length && source[j]?.window === source[i]?.window) j++
+    const verdict = refuseDisplacedRenderers(source.slice(i, j))
+    kept.push(...verdict.kept)
+    refused += verdict.refused
+    i = j
+  }
+  if (refused === 0 && payload.geometry_refused !== undefined) return payload
+  // element_count is a claim about this payload; it has to describe this one.
+  const windows = payload.windows.map((w) => ({
+    ...w,
+    ...(w.element_count === undefined
+      ? {}
+      : { element_count: kept.filter((e) => e.window === w.z).length }),
+  }))
+  return {
+    ...payload,
+    geometry_refused: (payload.geometry_refused ?? 0) + refused,
+    windows,
+    elements: kept,
+  }
+}
+
 function documentCoversHost(rect: UiaBounds, host: UiaBounds): boolean {
   // An unmeasurable host proves nothing either way, so it accuses nobody.
   if (!(host.width > 0) || !(host.height > 0)) return true

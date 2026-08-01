@@ -23,7 +23,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { composeUiaForImageDesktop, mergeImageWindowFloor } from '../src/main/imageContext'
 import { writeUiaPlugin } from '../src/main/exporter'
-import { mapUiaToSnapshot } from '../src/main/uia'
+import { mapUiaToSnapshot, sealUiaPayload } from '../src/main/uia'
 import type { UiaRawDump, UiaScreenAccess } from '../src/main/uia'
 import type { UiaElementRecord, UiaPluginPayload } from '../src/shared/types'
 
@@ -304,6 +304,91 @@ async function main(): Promise<void> {
       )
     } finally {
       await rm(dir2, { recursive: true, force: true })
+    }
+  }
+
+  // WHAT rc.21 STILL GOT WRONG (#122).
+  //
+  // rc.21 put the refusal inside `writeUiaPlugin`, so the FILE was clean — and
+  // the owner still picked two displaced rectangles, because the editor does
+  // not read the file. It takes the same payload straight off the promise, and
+  // a refusal applied at the writer protects the pack while leaving the pick
+  // exactly as wrong as before. The pack then records, in annotations.json, a
+  // target whose bounds the very same pack refuses to list.
+  //
+  // The seal therefore belongs where assembly ends and consumption begins, and
+  // the test for it must look at THE PAYLOAD, not only at the bytes.
+  console.log('\nThe payload handed to the editor is sealed too')
+  {
+    const raw3: UiaRawDump = {
+      capturedAt: new Date('2026-08-01T19:25:39+09:00'),
+      truncated: false,
+      rootBounds: { x: 0, y: 0, width: 3840, height: 2160 },
+      monitors: MONITORS,
+      windows: [
+        { hwnd: '11', title: 'YouTube', process: 'chrome.exe', class_name: 'Chrome_WidgetWin_1',
+          bounds: { x: -1788, y: 0, width: 1776, height: 1403 }, focused: true, z: 0, tree: 'collected', element_count: 0 },
+      ] as UiaRawDump['windows'],
+      elements: [
+        el(0, 0, 'Window', -1788, 0, 1776, 1403, 'YouTube'),
+        el(0, 7, 'Pane', -1788, 182, 1776, 1221),
+        el(0, 8, 'Pane', -1788, 2000, 882, 1130, 'a parent the floor removes'),
+        el(0, 9, 'Document', -1788, 273, 882, 1130, 'the page'),
+        // The two rectangles the owner actually picked, in helper coordinates.
+        el(0, 12, 'Group', -1462, 345, 510, 477, '', 'style-scope ytd-rich-grid-renderer'),
+        el(0, 12, 'Group', -1462, 868, 510, 475, '', 'style-scope ytd-rich-grid-renderer'),
+        el(0, 7, 'TabItem', -1734, 0, 384, 62, 'a tab'),
+      ],
+      geometryRefused: 0,
+    }
+    const floor3 = {
+      tMs: 0,
+      windows: [
+        { hwnd: '11', title: 'YouTube', process: 'chrome.exe', class_name: 'Chrome_WidgetWin_1',
+          bounds: { x: 8, y: 0, width: 1184, height: 935 }, focused: true, z: 0 },
+      ],
+      elements: [],
+    }
+    // Exactly what the image flow builds and then hands to BOTH consumers.
+    const assembled = sealUiaPayload(
+      mergeImageWindowFloor(
+        composeUiaForImageDesktop(mapUiaToSnapshot(raw3, TARGETS, 3000, SCREEN), PLACEMENTS as never, 1),
+        floor3 as never,
+        '2026-08-01T19:25:39+09:00',
+        [],
+      ),
+    )
+    check('the assembled payload exists', assembled !== null)
+    if (assembled !== null) {
+      const grid = assembled.elements.filter((e) => (e.class_name ?? '').includes('rich-grid'))
+      check(
+        'the rectangles the owner picked are NOT offered to the editor',
+        grid.length === 0,
+        JSON.stringify(grid.map((e) => e.bounds)),
+      )
+      check(
+        'the payload says how many it refused',
+        (assembled.geometry_refused ?? 0) >= 1,
+        `geometry_refused=${String(assembled.geometry_refused)}`,
+      )
+      check(
+        'the window is still there for a window-level pick',
+        assembled.windows.length === 1,
+        `${String(assembled.windows.length)} windows`,
+      )
+      check(
+        'and the tab beside the refused subtree survives',
+        assembled.elements.some((e) => e.name === 'a tab'),
+        JSON.stringify(assembled.elements.map((e) => e.name)),
+      )
+      // Sealing is idempotent, because writeUiaPlugin seals again.
+      const twice = sealUiaPayload(assembled)
+      check(
+        'sealing twice refuses nothing more',
+        twice?.geometry_refused === assembled.geometry_refused &&
+          twice?.elements.length === assembled.elements.length,
+        `${String(twice?.geometry_refused)} vs ${String(assembled.geometry_refused)}`,
+      )
     }
   }
 

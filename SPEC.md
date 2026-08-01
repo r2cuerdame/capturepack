@@ -1336,8 +1336,11 @@ Its ratio against that inherited ancestor is meaningless, and measured in the fi
 0.497 while every earlier stage had correctly seen 1.000.
 
 A writer therefore MUST NOT emit a control whose web-content root does not still COVER the
-surface it was drawn into, and MUST count what it dropped in `geometry_refused`. **The test
-MUST be applied to the array the writer serializes** — after every mapping, composition, crop
+surface it was drawn into, and MUST count what it dropped in `geometry_refused`. A writer that
+also OFFERS these controls to a user — a picker, an editor, a hover outline — MUST offer the
+same refused set it writes, so that a `target` recorded in `annotations.json` can never name a
+rectangle the pack itself declines to list. **The test MUST be applied to the array the writer
+serializes** — after every mapping, composition, crop
 and reconciliation, not before any of them. Applying it earlier as well is a legitimate
 optimisation (a walk that skips a bad subtree does not pay to descend it), but an earlier
 application alone is not conformant: no stage before the last can see what the last one

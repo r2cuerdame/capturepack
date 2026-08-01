@@ -157,6 +157,7 @@ import {
 } from './imageDesktop'
 import {
   mapUiaToSnapshot,
+  sealUiaPayload,
   parseUiaPayload,
   recordUiaSkipped,
   startUiaDump,
@@ -1091,12 +1092,18 @@ async function runImageFlowWithContext(
       selection.pixelRect,
     )
   }
+  // SEALED HERE, which is where assembly ends and consumption begins. The
+  // editor takes this promise directly, so a refusal applied any later protects
+  // the FILE and not the pick — rc.21 wrote a clean pack and still offered the
+  // displaced rectangles to click on (#122).
   uiaReady = uiaReady.then((payload) =>
-    mergeImageWindowFloor(
-      payload,
-      imageWindows,
-      isoWithOffset(new Date(triggerAt)),
-      selectorHwnds,
+    sealUiaPayload(
+      mergeImageWindowFloor(
+        payload,
+        imageWindows,
+        isoWithOffset(new Date(triggerAt)),
+        selectorHwnds,
+      ),
     ),
   )
   // From this point onward the only reachable raster is the explicit crop or
@@ -1729,12 +1736,16 @@ async function runFlow(settings: Settings): Promise<void> {
   // Neither promise may EVER reject: a rejection here would surface as
   // "Capture failed", and object data must never be able to fail a capture.
   //
-  const uiaReady: Promise<UiaPluginPayload | null> = uiaDump
+  let uiaReady: Promise<UiaPluginPayload | null> = uiaDump
     .then((raw) => (raw === null ? null : mapUiaToSnapshot(raw, uiaTargets)))
     .catch((err: unknown) => {
       logError('capturepack: mapping the UI Automation dump failed:', err)
       return null
     })
+  // Sealed before anything reads it, for the same reason as the image flow: the
+  // editor and the writer are two consumers of one payload, and only a refusal
+  // applied before the split reaches both (#122).
+  uiaReady = uiaReady.then((payload) => sealUiaPayload(payload))
   // Landing the payload in the SAVE-FIRST folder means a cancelled editor (or a
   // crash) still keeps the object data, exactly like the raw media.
   const uiaWrite: Promise<UiaPluginPayload | null> = uiaReady.then(async (payload) => {

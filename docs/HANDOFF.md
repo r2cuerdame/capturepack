@@ -315,14 +315,14 @@ version and fix forward. Documentation-only commits may follow the release on
 ## 0.3.4 in progress
 
 Work on `agent/0.3.4`, not released. `core/package.json` is
-**`0.3.4-rc.21`** — a release *candidate* version so a locally built installer can
+**`0.3.4-rc.22`** — a release *candidate* version so a locally built installer can
 never be confused with the public `0.3.3`, not a release. There is no tag and no
 published binary, and `v0.3.3` stays where it is. See [GOAL.md](../GOAL.md) for
 the design record and [#104](https://github.com/r2cuerdame/capturepack/issues/104) /
 [#89](https://github.com/r2cuerdame/capturepack/issues/89) for the evidence.
 
 An RC installer is built with `npm run dist` and appears at
-`core/release-rc21/CapturePack-Setup-0.3.4-rc.21.exe`. It is unsigned and gitignored:
+`core/release-rc22/CapturePack-Setup-0.3.4-rc.22.exe`. It is unsigned and gitignored:
 builds are artifacts of a commit, never part of one. (`release/` can hold a lock
 from an earlier build; `npx --% electron-builder --win --publish never
 -c.directories.output=release-rcNN` builds beside it. The `--%` matters —
@@ -360,8 +360,18 @@ PowerShell otherwise eats `-c.directories...` as an argument to `-c`.)
   by the time the file is written. The survivor inherits a parent it never had.
   `writeUiaPlugin` now runs the test against the exact array it serializes, and
   every writer — video included — reaches disk through it.
-  **The lesson, three times over: a check that does not run on the numbers that
-  get written is not a check.** Upstream copies are now optimisations only.
+- **...and the EDITOR does not read the file**
+  ([#122](https://github.com/r2cuerdame/capturepack/issues/122)). rc.21's guard
+  lived inside `writeUiaPlugin`, so the pack came out clean and the owner still
+  picked two displaced rectangles — the editor takes the payload straight off
+  the promise. A pack can therefore record a `target` whose bounds that same
+  pack refuses to list. `sealUiaPayload()` is now applied once in each flow
+  where assembly ends and consumption begins, before the editor/writer split.
+  `writeUiaPlugin` seals again (it is idempotent) so a future writer that
+  forgets cannot put a displaced rectangle on disk.
+  **The lesson, four times over: place the check where the value stops changing
+  and before anyone reads it — and remember the file is not the only reader.**
+  Upstream copies are optimisations only.
 - **The gate is 76 steps.** `npm run qa:rc` — NOT `node scripts/qa-gate.mjs`,
   which loses `npm_execpath` and then cannot spawn `npm.cmd` under Node 24.
 
