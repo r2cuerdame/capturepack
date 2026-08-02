@@ -17,14 +17,22 @@
  *     places on the way out. When they disagree, a reader that resolves a
  *     display index gets the wrong monitor and never finds out.
  *
- * WHAT IS DELIBERATELY NOT ASSERTED: the annotated replay, the keyframe stills
- * and the exact ring cut. `--save-now` exits when SOURCE-first save has
- * published the pack; the derived media starts on the next turn of the event
- * loop and is abandoned by that exit (see src/main/saveNow.ts). Asserting on it
- * here would be asserting on a race. That also means the replay ON DISK may be
+ * WHEN THE DERIVED MEDIA IS ASSERTED, AND WHEN IT IS NOT. `--save-now` exits
+ * when SOURCE-first save has published the pack; the annotated replay, the
+ * keyframe stills and the exact ring cut start on the next turn of the event
+ * loop and are abandoned by that exit (see src/main/saveNow.ts). So by default
+ * a pack that declares no `media.keyframes` is a pack that was asserted at its
+ * source boundary, and that is a PASS. It also means the replay ON DISK may be
  * the raw ring segment, which is LONGER than the duration the manifest
  * declares — hence the span check is "carries at least what it declares", never
  * "matches exactly".
+ *
+ * What is NOT optional is a keyframe that IS declared. `--expect-keyframes`
+ * says the run waited for the render (`--await-render`) and the stills must be
+ * there; either way every declared still is opened and held to the size it
+ * declares. A keyframe is legitimately TALLER than the snapshot — it grows
+ * downward to hold the labels of bottom-edge boxes (SPEC §5.7, #133) — so the
+ * check is against the DECLARED size, never against the snapshot's.
  *
  * Usage:
  *   node scripts/assert-capturepack.mjs <pack-dir> [options]
@@ -32,6 +40,8 @@
  *   --expect-replay          (default) the pack must carry a real replay
  *   --expect-no-replay       the pack must STATE that the replay is unavailable
  *                            (the --simulate-no-frames path)
+ *   --expect-keyframes       the derived render was waited for, so the stills
+ *                            must be declared as well as correct
  *   --log <file>             main.log to hold to the announcement rule
  *   --expect-announcements <n>
  *                            demand an exact announcement count, for a run that
@@ -421,31 +431,161 @@ function replayFindings(dirPath, manifest, options) {
   return findings
 }
 
+const KNOWN_BACKENDS = new Set(['chromium-desktop-capture', 'windows-gdi-bitblt'])
+
 /**
- * `cadence.backend` is reported, never dictated.
+ * A pack that carries a replay MUST say which capture path produced it.
  *
  * Issue #63 expected a CI runner to have no usable desktop. It does have one —
  * check:native-replay-fallback already drives a real DISPLAY1 there. What is
  * genuinely unknown is WHICH capture path answers: Desktop Duplication through
  * Chromium, or the GDI fallback taking over. Either is a working capture, so
- * the assertion is that the pack names one of the two, and the value is printed
- * because that is the finding.
+ * what is asserted is that the pack names one of the two, and the value is
+ * printed because that is the finding.
+ *
+ * THIS USED TO PASS ON AN ABSENT FIELD, and it was honest to: SPEC §5.3 makes
+ * `backend` OPTIONAL, and the assertion refused to hold an absent field to a
+ * value. The first green capture-e2e run showed what that costs — "no cadence
+ * backend declared" over a pack with a perfectly good replay, which is the one
+ * situation the field exists for and the one it left open. The writer always
+ * knows its backend (it chose it), so a pack whose replay it produced is now
+ * required to say so, and #62's fallback story gets a machine-checkable end.
+ *
+ * A pack with NO replay is the other way round: SPEC §5.3 says cadence MUST be
+ * absent there, because there are no bytes for it to describe.
  */
-function cadenceFindings(manifest) {
+function cadenceFindings(manifest, expectReplay) {
   const backends = []
   const collect = (cadence) => {
     if (cadence !== undefined && cadence !== null && cadence.backend !== undefined) backends.push(cadence.backend)
   }
   collect(manifest?.media?.cadence)
   for (const display of manifest?.media?.displays ?? []) collect(display.cadence)
-  if (backends.length === 0) {
-    return [{ ok: true, text: 'no cadence backend declared — nothing to hold to a name' }]
+  if (!expectReplay) {
+    return [
+      {
+        ok: backends.length === 0,
+        text: `a pack with no replay declares no cadence backend — there are no bytes to describe (found ${backends.length})`,
+      },
+    ]
   }
-  const known = new Set(['chromium-desktop-capture', 'windows-gdi-bitblt'])
-  return backends.map((backend) => ({
-    ok: known.has(backend),
-    text: `cadence.backend is "${backend}" (one of the two capture paths)`,
-  }))
+  const declared = manifest?.media?.cadence?.backend
+  const findings = [
+    {
+      ok: KNOWN_BACKENDS.has(declared),
+      text:
+        `media.cadence.backend is ${JSON.stringify(declared ?? null)} — a pack that carries a replay names the ` +
+        'capture path that produced it (chromium-desktop-capture or windows-gdi-bitblt)',
+    },
+  ]
+  for (const backend of backends) {
+    if (backend === declared) continue
+    findings.push({
+      ok: KNOWN_BACKENDS.has(backend),
+      text: `a per-display cadence.backend is "${backend}" (one of the two capture paths)`,
+    })
+  }
+  return findings
+}
+
+/**
+ * Every declared keyframe, opened, and held to the size it declares (#133).
+ *
+ * `media.keyframes[].width`/`height` describe THAT FILE — not the snapshot, and
+ * not the display. The gutter rule is why: a box on the bottom edge of the
+ * screen has to put its label somewhere, so the writer MAY grow the still
+ * downward, and two stills in one pack may legitimately differ (SPEC §5.7). A
+ * reader that assumed the reference frame's height would mis-place every
+ * overlay it drew, which is exactly what the declaration exists to prevent — so
+ * the file is opened and its real IHDR is compared with the declaration.
+ *
+ * The frame itself stays at (0, 0) at its original scale, which is what makes
+ * the annotation coordinates apply unchanged. That gives two more checks the
+ * declaration alone cannot: the width must equal the source raster's, and the
+ * height may only ever GROW.
+ */
+export function keyframeFindings(dirPath, manifest, options = {}) {
+  const sets = []
+  const focusedSize = declaredSnapshotSize(manifest)
+  if (manifest?.media?.keyframes !== undefined) {
+    sets.push({ label: 'media.keyframes', entries: manifest.media.keyframes, frame: focusedSize })
+  }
+  for (const display of manifest?.media?.displays ?? []) {
+    if (display?.keyframes === undefined) continue
+    const frame =
+      Number.isInteger(display.snapshot_width) && Number.isInteger(display.snapshot_height)
+        ? { width: display.snapshot_width, height: display.snapshot_height }
+        : null
+    sets.push({ label: `media.displays[index ${display.index}].keyframes`, entries: display.keyframes, frame })
+  }
+
+  if (sets.length === 0) {
+    // Not a defect by itself. Source-first save publishes a complete pack and
+    // the render is a later refinement, so an unattended run that did not wait
+    // for it legitimately declares nothing here (SPEC §5.7).
+    return [
+      {
+        ok: options.expectKeyframes !== true,
+        text:
+          options.expectKeyframes === true
+            ? 'no keyframes are declared, but this run waited for the derived render — the stills should be here'
+            : 'no keyframes declared: the derived render is a later refinement of a pack that is already complete',
+      },
+    ]
+  }
+
+  const findings = []
+  for (const set of sets) {
+    if (!Array.isArray(set.entries) || set.entries.length === 0) {
+      findings.push({ ok: false, text: `${set.label} is declared but is not a non-empty array` })
+      continue
+    }
+    for (const [index, entry] of set.entries.entries()) {
+      const label = `${set.label}[${index}] ${JSON.stringify(entry?.file ?? null)}`
+      if (typeof entry?.file !== 'string') {
+        findings.push({ ok: false, text: `${label} declares no file` })
+        continue
+      }
+      const filePath = path.join(dirPath, entry.file)
+      if (!existsSync(filePath)) {
+        findings.push({ ok: false, text: `${label} is declared but missing from the pack` })
+        continue
+      }
+      const actual = pngSize(readFileSync(filePath))
+      if (actual === null) {
+        findings.push({ ok: false, text: `${label} is not a readable PNG` })
+        continue
+      }
+      const declares =
+        Number.isInteger(entry.width) && entry.width >= 1 &&
+        Number.isInteger(entry.height) && entry.height >= 1
+      // SPEC §5.7 makes width/height OPTIONAL because packs written before the
+      // field existed do not have it. What THIS app writes is not optional:
+      // writeKeyframes() reads the size back out of the bytes it just wrote, so
+      // a still it rendered and did not declare means that read-back stopped
+      // happening — which is the regression #133 exists to catch.
+      findings.push({
+        ok: declares,
+        text:
+          `${label} declares its own size (got ${JSON.stringify(entry.width ?? null)}x${JSON.stringify(entry.height ?? null)}) ` +
+          'rather than leaving a reader to assume the reference frame — REQUIRED of a pack this app rendered, ' +
+          'absent only in one written before the field existed',
+      })
+      if (!declares) continue
+      findings.push({
+        ok: actual.width === entry.width && actual.height === entry.height,
+        text: `${label} is ${actual.width}x${actual.height} on disk and declares ${entry.width}x${entry.height}`,
+      })
+      if (set.frame === null || set.frame === undefined) continue
+      findings.push({
+        ok: actual.width === set.frame.width && actual.height >= set.frame.height,
+        text:
+          `${label} keeps the ${set.frame.width}x${set.frame.height} source frame at (0,0) unscaled: same width, ` +
+          `height >= the source's (got ${actual.width}x${actual.height}; taller is the label gutter, never shorter)`,
+      })
+    }
+  }
+  return findings
 }
 
 /** Every assertion, in order, against one pack directory. */
@@ -457,6 +597,7 @@ export function assertPack(dirPath, options = {}) {
     logPath: options.logPath ?? null,
     expectAnnouncements: options.expectAnnouncements ?? null,
     runValidator: options.runValidator !== false,
+    expectKeyframes: options.expectKeyframes === true,
   }
   const findings = []
 
@@ -510,7 +651,8 @@ export function assertPack(dirPath, options = {}) {
   }
 
   findings.push(...replayFindings(dirPath, manifest, settings))
-  findings.push(...cadenceFindings(manifest))
+  findings.push(...cadenceFindings(manifest, settings.expectReplay))
+  findings.push(...keyframeFindings(dirPath, manifest, settings))
 
   if (settings.logPath !== null) {
     if (!existsSync(settings.logPath)) {
@@ -567,6 +709,7 @@ function parseCli(argv) {
     const arg = argv[index]
     if (arg === '--expect-replay') options.expectReplay = true
     else if (arg === '--expect-no-replay') options.expectReplay = false
+    else if (arg === '--expect-keyframes') options.expectKeyframes = true
     else if (arg === '--log') options.logPath = path.resolve(argv[++index] ?? '')
     else if (arg === '--expect-announcements') options.expectAnnouncements = Number(argv[++index])
     else if (arg === '--min-replay-ms') options.minReplayMs = Number(argv[++index])
@@ -589,6 +732,9 @@ function main(argv) {
   }
   console.log(`CapturePack pack assertions: ${options.dirPath}`)
   console.log(`Replay: ${options.expectReplay ? 'REQUIRED' : 'must be declared unavailable'}`)
+  console.log(
+    `Keyframes: ${options.expectKeyframes === true ? 'REQUIRED (the run waited for the render)' : 'optional; every declared one is checked'}`,
+  )
   const findings = assertPack(options.dirPath, options)
   for (const finding of findings) console.log(`  ${finding.ok ? 'PASS' : 'FAIL'}  ${finding.text}`)
   const failed = findings.filter((finding) => !finding.ok).length

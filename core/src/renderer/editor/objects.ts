@@ -35,6 +35,7 @@
 // candidate set arrives per SETTLED TIME rather than per pointer move.
 import type {
   ContextCandidate,
+  ContextFrame,
   ProviderSurfaceClaim,
   SurfaceCoverage,
   SurfaceInfo,
@@ -586,6 +587,41 @@ export class ObjectIndex {
       present,
       claims,
       display,
+    )
+  }
+
+  /**
+   * ONE DISPLAY'S INDEX OVER A CONTEXTFRAME — the construction itself, with no
+   * editor around it (#134).
+   *
+   * This used to live in editor.ts, reading the board for the display it was
+   * building for, which meant the only way to ask "what would picking offer
+   * here?" was to open an Electron renderer and hover. A saved pack could not be
+   * measured, so the picking QUALITY the editor ships — the numbers
+   * WINDOW_FRAME_FRACTION above is set from — was unfalsifiable between the day
+   * someone measured it by hand and the day a user said hover select felt wrong.
+   *
+   * The width/height stay a parameter rather than being read from the slice
+   * because they are the ANNOTATION space, and the caller is the one that knows
+   * it: the editor's board display, or (for a reader with no board) the slice's
+   * own `width`/`height`, which Core wrote from the same display target. A
+   * display the frame has no slice for still gets an index — an empty one, which
+   * is the honest "this frame says nothing here" and exactly what the editor
+   * showed before this was extracted.
+   */
+  static forDisplay(
+    frame: ContextFrame,
+    display: { index: number; width: number; height: number },
+  ): ObjectIndex {
+    const slice = frame.displays.find((candidate) => candidate.display === display.index)
+    return ObjectIndex.build(
+      slice?.candidates ?? [],
+      slice?.surfaces ?? [],
+      slice?.coverage ?? [],
+      frame.claims,
+      display.width,
+      display.height,
+      display.index,
     )
   }
 

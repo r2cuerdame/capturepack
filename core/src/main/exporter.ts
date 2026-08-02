@@ -1878,7 +1878,23 @@ export async function setManifestRenderOutputs(
     if (!existsSync(join(handle.dirPath, k.file))) break
     present.push(k)
   }
-  const declared = present.map((k) => ({ file: k.file, t_ms: k.t_ms }))
+  // REBUILT FIELD BY FIELD, SO EVERY FIELD HAS TO BE HERE (#133, #135).
+  //
+  // This rebuild exists so nothing a caller happens to be carrying leaks into
+  // manifest.json. That made it silently lossy the moment a keyframe gained a
+  // field: writeKeyframes() reads each still's real size back out of the bytes
+  // it just wrote, precisely because the render grows the image downward to hold
+  // bottom-edge labels — and this line dropped both numbers one function later.
+  // Every pack was declaring stills whose size a reader had to guess at, and
+  // nothing caught it, because the CI capture exits at the source boundary and
+  // so no pack anyone asserted on had ever been rendered at all.
+  const declared = present.map((k) => ({
+    file: k.file,
+    t_ms: k.t_ms,
+    ...(Number.isInteger(k.width) && Number.isInteger(k.height)
+      ? { width: k.width, height: k.height }
+      : {}),
+  }))
 
   if (outputs.display !== undefined) {
     const displays = manifest.media.displays

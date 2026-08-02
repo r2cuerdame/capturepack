@@ -385,8 +385,8 @@ npm run qa:rc
 npm audit --omit=dev
 ```
 
-`qa:rc` currently runs 80 discovered `check:*` regressions plus type checking,
-the production build, and isolated Electron smoke: **83 gate steps** (81 with
+`qa:rc` currently runs 81 discovered `check:*` regressions plus type checking,
+the production build, and isolated Electron smoke: **84 gate steps** (82 with
 `--skip-build`). Reports
 are written under `%TEMP%\capturepack-qa` unless an artifact directory is
 provided.
@@ -567,7 +567,7 @@ PowerShell otherwise eats `-c.directories...` as an argument to `-c`.)
   `t_ms: 0` and the distance from the shutter is the reader's to weigh. Pinned by
   `check:still-dom`. **The documentation shipped before the feature; that is its
   own lesson.**
-- **The gate is 83 steps.** `npm run qa:rc` — NOT `node scripts/qa-gate.mjs`,
+- **The gate is 84 steps.** `npm run qa:rc` — NOT `node scripts/qa-gate.mjs`,
   which loses `npm_execpath` and then cannot spawn `npm.cmd` under Node 24.
 
 - Element picking now reports itself end to end: the picker's arming, failure

@@ -854,6 +854,25 @@ export interface CaptureReplayResultPayload {
       latestMediaTimeMs?: number
     }>
   }
+  /**
+   * THE RECORDER'S ACCOUNT OF **THESE** BYTES (#135).
+   *
+   * The same summary CaptureFramesPayload carries, measured at the ring cut and
+   * travelling WITH the replay it describes. It is here because the health
+   * heartbeat cannot be relied on to have delivered one: `sendFrames` is main's
+   * proof-of-recording channel, so it is gated on `framesProven`, and the first
+   * proof is only due four seconds in with the next twelve seconds after that.
+   * A capture triggered inside that window — which on CI is every capture, and
+   * on a desk is "launch the app and hit the hotkey" — reached the exporter
+   * with no cadence at all, so the pack declared no `cadence.backend` and could
+   * not say which capture path produced the replay sitting next to it. That is
+   * exactly the question the field exists for (SPEC §5.3).
+   *
+   * Absent when the runtime exposes no delivered-frame counter: a rate nobody
+   * measured must not be reported as a rate, and `cadence` is a MEASUREMENT
+   * object — `achieved_fps` and `worst_stall_ms` are required inside it.
+   */
+  cadence?: CaptureFramesPayload['cadence']
 }
 
 export interface CaptureReplayRequestPayload {

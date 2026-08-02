@@ -141,6 +141,52 @@ jobs:
           node scripts/assert-capturepack.mjs $pack --expect-no-replay --log "$work\userdata\logs\main.log"
           exit $LASTEXITCODE
 
+      # AND A PACK THAT WAITED FOR ITS DERIVED MEDIA (#135).
+      #
+      # The two captures above exit at the SOURCE boundary, which is the honest
+      # boundary and the one they are right to assert on: the pack is complete
+      # and valid the moment the source is written, and the annotated replay and
+      # keyframe stills are a later refinement that the exit abandons. The cost
+      # only became visible once the job first went green — every pack CI had
+      # ever seen carried no `media.keyframes`, so the contract added in #133 (a
+      # keyframe declares its own width/height, and the file agrees) had no
+      # end-to-end coverage at all. It was checked against a fixture and against
+      # nothing this app had actually rendered.
+      #
+      # `--await-render` buys the other half without moving the boundary: the
+      # save deadline still bounds the capture, and a SECOND budget — spent on a
+      # hidden window re-encoding a replay, so its length is a property of the
+      # runner's CPU — starts only once the source is already durable. The two
+      # stay distinguishable in the exit code: 0 saved and rendered, 22 the pack
+      # is saved and the render ran long, 23 the render failed (src/main/saveNow.ts).
+      - name: Capture a third pack and wait for the derived render
+        run: |
+          $work = "${{ runner.temp }}\capturepack-e2e-rendered"
+          New-Item -ItemType Directory -Force "$work\userdata" | Out-Null
+          New-Item -ItemType Directory -Force "$work\packs" | Out-Null
+          & .\node_modules\.bin\electron.cmd . `
+            --user-data-dir="$work\userdata" `
+            --output-dir="$work\packs" `
+            --no-global-shortcut `
+            --capture-now=6 `
+            --save-now=180 `
+            --await-render=240
+          Write-Host "capture exited $LASTEXITCODE"
+          exit $LASTEXITCODE
+
+      # --expect-keyframes: the run WAITED, so an absent media.keyframes is now a
+      # failure rather than a pack that was simply asserted early. Every declared
+      # still is opened and held to the size it declares — never to the
+      # snapshot's, because a still is legitimately taller (SPEC §5.7).
+      - name: Assert the rendered pack carries its stills
+        run: |
+          $work = "${{ runner.temp }}\capturepack-e2e-rendered"
+          $pack = (Get-ChildItem -Directory "$work\packs" | Select-Object -First 1).FullName
+          if ($null -eq $pack) { throw "no pack was written to $work\packs" }
+          Write-Host "asserting on $pack"
+          node scripts/assert-capturepack.mjs $pack --expect-replay --expect-keyframes --log "$work\userdata\logs\main.log"
+          exit $LASTEXITCODE
+
       # The pack and the log, whatever happened. A failing assertion that cannot
       # be looked at afterwards is the situation this whole job exists to end.
       - name: Upload the packs and the logs
@@ -151,6 +197,7 @@ jobs:
           path: |
             ${{ runner.temp }}\capturepack-e2e
             ${{ runner.temp }}\capturepack-e2e-no-frames
+            ${{ runner.temp }}\capturepack-e2e-rendered
           if-no-files-found: warn
           retention-days: 14
 

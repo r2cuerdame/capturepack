@@ -2634,6 +2634,11 @@ function objectPickingCanSpeak(): boolean {
  * frame THAT display actually presented. Core splits candidates into native
  * display spaces; claims and accuracy must come from the same temporal frame as
  * the selected slice.
+ *
+ * The BOARD is all this adds now: which displays exist and how many snapshot
+ * pixels each one has. The construction itself is `ObjectIndex.forDisplay`, so
+ * a reader with a pack and no editor gets the identical index — see the comment
+ * there for why that seam had to exist (#134).
  */
 function objectIndexForFrame(
   displayIndex: number,
@@ -2642,16 +2647,7 @@ function objectIndexForFrame(
   if (board === null) return null
   const d = board.displays.find((display) => display.index === displayIndex)
   if (d === undefined) return null
-  const slice = frame.displays.find((candidate) => candidate.display === displayIndex)
-  return ObjectIndex.build(
-    slice?.candidates ?? [],
-    slice?.surfaces ?? [],
-    slice?.coverage ?? [],
-    frame.claims,
-    d.width,
-    d.height,
-    displayIndex,
-  )
+  return ObjectIndex.forDisplay(frame, { index: displayIndex, width: d.width, height: d.height })
 }
 
 function buildObjectIndex(displayIndex: number, frame: ContextFrame): void {

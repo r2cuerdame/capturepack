@@ -1410,6 +1410,25 @@ export function requestReplay(
 
     const onResult = (payload: CaptureReplayResultPayload): void => {
       cleanup()
+      // THE ACCOUNT THAT CAME WITH THE BYTES WINS (#135).
+      //
+      // displayCadence is otherwise fed only by onFramesProven, and that is
+      // main's proof-of-recording channel: the renderer withholds it until
+      // frames are proven, four seconds in at the earliest and every twelve
+      // seconds after that. A capture triggered between two heartbeats reached
+      // buildManifest with nothing at all, so the pack declared no
+      // `cadence.backend` and could not say which of the two capture paths
+      // produced the replay beside it — the exact question the field is for,
+      // unanswered in exactly the situation it is for (SPEC §5.3, #62).
+      //
+      // This one describes the replay in this very payload and is measured at
+      // the ring cut, so it also supersedes any earlier heartbeat: later, and
+      // about these bytes rather than about the recorder in general.
+      const resultCadence = payload.cadence
+      const resultDisplayId = Number(assignedDisplays.get(win.webContents.id))
+      if (resultCadence !== undefined && Number.isFinite(resultDisplayId)) {
+        displayCadence.set(resultDisplayId, resultCadence)
+      }
       const ring = payload.ringDiagnostics
       if (ring !== undefined) {
         const displayId = assignedDisplays.get(win.webContents.id) ?? 'unknown'

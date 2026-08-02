@@ -15,6 +15,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } f
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { deflateSync } from 'node:zlib'
 import { announcementCount, assertPack, probeContainer } from './assert-capturepack.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -108,6 +109,48 @@ function fmp4({ count, mdatBytes, stepTicks, timescale = 90_000 }) {
   return Buffer.concat([box('ftyp', Buffer.from('iso5mp42', 'latin1')), moov, ...fragments])
 }
 
+// A REAL PNG at an arbitrary size. The keyframe assertions read IHDR, but the
+// SPEC validator opens these files too, so a fixture that is only a header
+// would be testing the assertion against something no writer produces.
+const PNG_CRC = new Int32Array(256)
+for (let n = 0; n < 256; n += 1) {
+  let c = n
+  for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+  PNG_CRC[n] = c
+}
+
+function pngCrc32(buf) {
+  let c = 0xffffffff
+  for (const byte of buf) c = PNG_CRC[(c ^ byte) & 0xff] ^ (c >>> 8)
+  return (c ^ 0xffffffff) >>> 0
+}
+
+function pngChunk(type, data) {
+  const head = Buffer.alloc(8)
+  head.writeUInt32BE(data.length, 0)
+  head.write(type, 4, 'latin1')
+  const crc = Buffer.alloc(4)
+  crc.writeUInt32BE(pngCrc32(Buffer.concat([head.subarray(4), data])), 0)
+  return Buffer.concat([head, data, crc])
+}
+
+/** A decodable 8-bit greyscale PNG of exactly `width` x `height`. */
+function png(width, height) {
+  const ihdr = Buffer.alloc(13)
+  ihdr.writeUInt32BE(width, 0)
+  ihdr.writeUInt32BE(height, 4)
+  ihdr[8] = 8 // bit depth
+  ihdr[9] = 0 // greyscale
+  // One filter byte (0 = None) per row, then the row's samples.
+  const raw = Buffer.alloc(height * (width + 1))
+  return Buffer.concat([
+    Buffer.from('89504e470d0a1a0a', 'hex'),
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', deflateSync(raw)),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ])
+}
+
 // --- pack fixtures ----------------------------------------------------------
 
 const work = mkdtempSync(path.join(tmpdir(), 'capturepack-pack-assertions-'))
@@ -129,9 +172,24 @@ function fixture(name, mutate, files = {}) {
   return dirPath
 }
 
+/**
+ * A pack that carries a replay — and therefore says what produced it.
+ *
+ * The cadence is not decoration. A pack with a replay is now REQUIRED to name
+ * its capture backend (see cadenceFindings), so a fixture that omits it is not
+ * a pack this app would write. Capture provenance is a 0.4.0 field, so the
+ * declaration comes with the version that expresses it (SPEC §5.3, §13.1).
+ */
 function withReplay(manifest) {
+  manifest.format_version = '0.4.0'
   manifest.media.replay = 'replay.webm'
   manifest.media.replay_duration_ms = 3000
+  manifest.media.cadence = {
+    achieved_fps: 14.7,
+    worst_stall_ms: 99,
+    backend: 'chromium-desktop-capture',
+    quality: 'full',
+  }
 }
 
 function verdict(dirPath, options) {
@@ -314,6 +372,196 @@ try {
     !verdict(strayIndex, { expectReplay: true, runValidator: false }).ok,
   )
 
+  // --- the capture path a pack was produced by (#135, #62) --------------------
+  //
+  // The assertion used to pass on an absent `cadence.backend`, and it was honest
+  // to: SPEC §5.3 makes the field OPTIONAL. What that cost showed up on the
+  // first green capture-e2e run — "no cadence backend declared" printed over a
+  // pack with a perfectly good replay, which is the one situation the field
+  // exists for. A writer always knows its backend, so a pack that carries a
+  // replay is now held to naming it.
+  const anonymousReplay = fixture(
+    'anonymous-replay',
+    (manifest) => {
+      withReplay(manifest)
+      delete manifest.media.cadence
+    },
+    { 'replay.webm': webm({ count: 4, blockBytes: 2000, stepMs: 1000 }) },
+  )
+  const anonymousVerdict = verdict(anonymousReplay, { expectReplay: true })
+  check(
+    'a pack that carries a replay and will not say which capture path produced it is rejected',
+    !anonymousVerdict.ok && anonymousVerdict.failures.some((text) => text.includes('media.cadence.backend')),
+    anonymousVerdict.failures.join(' | '),
+  )
+
+  const inventedBackend = fixture(
+    'invented-backend',
+    (manifest) => {
+      withReplay(manifest)
+      manifest.media.cadence.backend = 'wishful-thinking'
+    },
+    { 'replay.webm': webm({ count: 4, blockBytes: 2000, stepMs: 1000 }) },
+  )
+  check(
+    'a backend that is not one of the two real capture paths is rejected',
+    !verdict(inventedBackend, { expectReplay: true, runValidator: false }).ok,
+  )
+
+  const gdiFallback = fixture(
+    'gdi-fallback',
+    (manifest) => {
+      withReplay(manifest)
+      manifest.media.cadence.backend = 'windows-gdi-bitblt'
+      // A fallback must not call itself full quality (SPEC §5.3).
+      manifest.media.cadence.quality = 'degraded'
+    },
+    { 'replay.webm': webm({ count: 4, blockBytes: 2000, stepMs: 1000 }) },
+  )
+  const gdiVerdict = verdict(gdiFallback, { expectReplay: true })
+  check(
+    'the GDI fallback is a working capture and passes — the assertion names the path, it does not dictate one',
+    gdiVerdict.ok,
+    gdiVerdict.failures.join(' | '),
+  )
+
+  const cadenceWithoutReplay = fixture('cadence-without-replay', (manifest) => {
+    manifest.format_version = '0.4.0'
+    manifest.media.cadence = {
+      achieved_fps: 14.7,
+      worst_stall_ms: 99,
+      backend: 'chromium-desktop-capture',
+    }
+  })
+  check(
+    'a screenshot-only pack that declares a cadence anyway is rejected — there are no bytes for it to describe',
+    !verdict(cadenceWithoutReplay, { expectReplay: false, runValidator: false }).ok,
+  )
+
+  // --- the annotated stills (#133, #135) -------------------------------------
+  //
+  // A keyframe declares the size of ITS OWN file, which is legitimately taller
+  // than the snapshot: a box on the bottom edge grows the still downward to hold
+  // its label (SPEC §5.7). Every assertion below is therefore against the
+  // DECLARATION, with the snapshot used only for the two things the gutter rule
+  // does fix — the width, and that the height may only ever grow.
+
+  function withKeyframes(entries) {
+    return (manifest) => {
+      withReplay(manifest)
+      manifest.media.keyframes = entries
+    }
+  }
+
+  const framesFile = 'frames/frame-01_00-03.000.png'
+
+  const noKeyframes = fixture('no-keyframes', withReplay, {
+    'replay.webm': webm({ count: 4, blockBytes: 2000, stepMs: 1000 }),
+  })
+  check(
+    'a pack asserted at its source boundary declares no stills, and that is not a defect',
+    verdict(noKeyframes, { expectReplay: true }).ok,
+  )
+  const demandedVerdict = verdict(noKeyframes, { expectReplay: true, expectKeyframes: true })
+  check(
+    'the same pack fails when the run waited for the render — then the stills were owed',
+    !demandedVerdict.ok && demandedVerdict.failures.some((text) => text.includes('waited for the derived render')),
+    demandedVerdict.failures.join(' | '),
+  )
+
+  function keyframePack(name, entries, files) {
+    const dirPath = fixture(name, withKeyframes(entries), {
+      'replay.webm': webm({ count: 4, blockBytes: 2000, stepMs: 1000 }),
+    })
+    mkdirSync(path.join(dirPath, 'frames'), { recursive: true })
+    for (const [file, contents] of Object.entries(files)) {
+      writeFileSync(path.join(dirPath, file), contents)
+    }
+    return dirPath
+  }
+
+  const exactStill = keyframePack(
+    'keyframe-exact',
+    [{ file: framesFile, t_ms: 3000, width: SNAPSHOT.width, height: SNAPSHOT.height }],
+    { [framesFile]: png(SNAPSHOT.width, SNAPSHOT.height) },
+  )
+  const exactVerdict = verdict(exactStill, { expectReplay: true, expectKeyframes: true, runValidator: false })
+  check(
+    'a still that is exactly what it declares passes, and satisfies --expect-keyframes',
+    exactVerdict.ok,
+    exactVerdict.failures.join(' | '),
+  )
+
+  const gutterStill = keyframePack(
+    'keyframe-gutter',
+    [{ file: framesFile, t_ms: 3000, width: SNAPSHOT.width, height: SNAPSHOT.height + 64 }],
+    { [framesFile]: png(SNAPSHOT.width, SNAPSHOT.height + 64) },
+  )
+  const gutterVerdict = verdict(gutterStill, { expectReplay: true, expectKeyframes: true, runValidator: false })
+  check(
+    'a still TALLER than the snapshot passes — the label gutter is legal and is why the declaration exists',
+    gutterVerdict.ok,
+    gutterVerdict.failures.join(' | '),
+  )
+
+  const lyingStill = keyframePack(
+    'keyframe-lying',
+    [{ file: framesFile, t_ms: 3000, width: SNAPSHOT.width, height: SNAPSHOT.height }],
+    { [framesFile]: png(SNAPSHOT.width, SNAPSHOT.height + 64) },
+  )
+  const lyingVerdict = verdict(lyingStill, { expectReplay: true, runValidator: false })
+  check(
+    'a still whose file is not the size it declares is rejected — this is the whole point of #133',
+    !lyingVerdict.ok && lyingVerdict.failures.some((text) => text.includes('on disk and declares')),
+    lyingVerdict.failures.join(' | '),
+  )
+
+  const undeclaredSize = keyframePack(
+    'keyframe-undeclared-size',
+    [{ file: framesFile, t_ms: 3000 }],
+    { [framesFile]: png(SNAPSHOT.width, SNAPSHOT.height) },
+  )
+  const undeclaredVerdict = verdict(undeclaredSize, { expectReplay: true, runValidator: false })
+  check(
+    'a still that declares no size of its own is rejected — a reader would have to assume the reference frame',
+    !undeclaredVerdict.ok && undeclaredVerdict.failures.some((text) => text.includes('declares its own size')),
+    undeclaredVerdict.failures.join(' | '),
+  )
+
+  const shrunkStill = keyframePack(
+    'keyframe-shrunk',
+    [{ file: framesFile, t_ms: 3000, width: SNAPSHOT.width, height: SNAPSHOT.height - 40 }],
+    { [framesFile]: png(SNAPSHOT.width, SNAPSHOT.height - 40) },
+  )
+  const shrunkVerdict = verdict(shrunkStill, { expectReplay: true, runValidator: false })
+  check(
+    'a still SHORTER than the source frame is rejected — the gutter only ever grows downward',
+    !shrunkVerdict.ok && shrunkVerdict.failures.some((text) => text.includes('at (0,0) unscaled')),
+    shrunkVerdict.failures.join(' | '),
+  )
+
+  const scaledStill = keyframePack(
+    'keyframe-scaled',
+    [{ file: framesFile, t_ms: 3000, width: SNAPSHOT.width / 2, height: SNAPSHOT.height / 2 }],
+    { [framesFile]: png(SNAPSHOT.width / 2, SNAPSHOT.height / 2) },
+  )
+  check(
+    'a still scaled down from the source frame is rejected — annotation coordinates would no longer apply',
+    !verdict(scaledStill, { expectReplay: true, runValidator: false }).ok,
+  )
+
+  const missingStill = fixture(
+    'keyframe-missing',
+    withKeyframes([{ file: framesFile, t_ms: 3000, width: SNAPSHOT.width, height: SNAPSHOT.height }]),
+    { 'replay.webm': webm({ count: 4, blockBytes: 2000, stepMs: 1000 }) },
+  )
+  const missingVerdict = verdict(missingStill, { expectReplay: true, runValidator: false })
+  check(
+    'a declared still that is not in the pack is rejected',
+    !missingVerdict.ok && missingVerdict.failures.some((text) => text.includes('missing from the pack')),
+    missingVerdict.failures.join(' | '),
+  )
+
   // --- the honest-failure path (--simulate-no-frames) ------------------------
 
   const screenshotOnly = fixture('screenshot-only', () => {})
@@ -405,6 +653,18 @@ try {
       workflow.includes('--expect-no-replay'),
   )
   check('CI exercises the starved recorder too', workflow.includes('--simulate-no-frames'))
+  // A pack CI has ever seen used to be a SOURCE pack, so media.keyframes — and
+  // with it #133's whole contract — had no end-to-end coverage at all. The only
+  // way to get one is to wait for the render, which is what --await-render buys.
+  check(
+    'CI also captures a pack that waited for its derived render',
+    workflow.includes('--await-render'),
+  )
+  check(
+    'and asserts that the rendered pack really carries its stills',
+    workflow.includes('--expect-keyframes'),
+    'without this the render is waited for and then never looked at',
+  )
 
   console.log(`\n${passed} passed, ${failed} failed`)
   if (failed > 0) process.exitCode = 1

@@ -36,7 +36,13 @@ import {
 import { uiLanguage, uiT } from './locale'
 import { initForensics, logError, logInfo, logWarn } from './log'
 import { mcpEndpoint, startMcpAtBoot, stopMcpServer } from './mcp/service'
-import { armSaveNow, saveNowRequest } from './saveNow'
+import { isRenderInFlight, onRenderStateChange } from './annotatedRender'
+import {
+  armSaveNow,
+  awaitedRenderDirPath,
+  noteRenderEnded,
+  saveNowRequest,
+} from './saveNow'
 import { startCaptureFlow, startImageCaptureFlow } from './session'
 import { loadSettings, persistSettings } from './settings'
 import { openSettingsWindow, registerSettingsIpc } from './settingsWindow'
@@ -563,8 +569,28 @@ function main(): void {
       if (saveNow !== null) {
         logInfo(
           `[capture] --save-now: the editor will save without a person; ` +
-            `deadline ${String(Math.round(saveNow.deadlineMs / 1_000))}s`,
+            `deadline ${String(Math.round(saveNow.deadlineMs / 1_000))}s` +
+            (saveNow.renderDeadlineMs === null
+              ? ''
+              : `, then up to ${String(Math.round(saveNow.renderDeadlineMs / 1_000))}s for the derived render`),
         )
+        // `--await-render` (#135): stay alive past the source boundary until the
+        // pack's derived media is on disk, so CI can assert on a RENDERED pack.
+        // Subscribed only when asked for — an ordinary unattended run keeps the
+        // exit it has always had, and this listener never sees a thing.
+        if (saveNow.renderDeadlineMs !== null) {
+          onRenderStateChange((dirPath, state) => {
+            if (state !== 'done' && state !== 'failed') return
+            const awaited = awaitedRenderDirPath()
+            if (awaited === null || path.resolve(dirPath) !== path.resolve(awaited)) return
+            // A multi-display capture starts one render per display. The wait
+            // ends when the LAST of them leaves the queue, not the first: the
+            // counter is decremented before this fires, so an empty one means
+            // there is nothing left to wait for.
+            if (isRenderInFlight(dirPath)) return
+            noteRenderEnded(state)
+          })
+        }
         void armSaveNow(saveNow).then((verdict) => {
           logInfo(
             `[capture] --save-now: ${verdict.result} (exit ${String(verdict.exitCode)})` +

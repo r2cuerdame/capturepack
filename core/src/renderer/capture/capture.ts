@@ -457,6 +457,28 @@ function cadenceReport(): { achievedFps: number; worstStallMs: number; discarded
   )
 }
 
+/**
+ * cadenceReport() plus the provenance of the source that produced it — the ONE
+ * shape both the health heartbeat and the replay result send (#135).
+ *
+ * The provenance rides inside the measurement rather than beside it because
+ * that is what the manifest declares: SPEC §5.3 makes `achieved_fps` and
+ * `worst_stall_ms` required members of `media.cadence`, so a `backend` with no
+ * measured rate to sit next to has nowhere legal to go. Both senders build it
+ * here so the two can never describe the same recorder differently.
+ */
+function cadenceSummary(): CaptureFramesPayload['cadence'] | null {
+  const measured = cadenceReport()
+  if (measured === null) return null
+  return {
+    ...measured,
+    backend: captureBackend,
+    quality: captureQuality,
+    ...(startPayload?.fps === undefined ? {} : { requestedFps: startPayload.fps }),
+    recorderCount: captureRecorderCount,
+  }
+}
+
 // ---------------------------------------------------------------------------
 // THE FRAME TICK DRIVES THE OBSERVER (#105).
 //
@@ -2198,7 +2220,7 @@ function noteRecorderBytes(size: number): void {
  */
 function sendCurrentFrameProof(bytes: number, frames: number): void {
   if (startPayload?.simulateSlowReplayMs !== undefined) return
-  const measured = cadenceReport()
+  const measured = cadenceSummary()
   window.captureBridge.sendFrames({
     displayId: startPayload?.displayId ?? '',
     bytes,
@@ -2220,17 +2242,7 @@ function sendCurrentFrameProof(bytes: number, frames: number): void {
       : {}),
     // Omitted, never zeroed, while nothing can honestly be said (#82): a rate
     // nobody measured must not be reported as a rate.
-    ...(measured === null
-      ? {}
-      : {
-          cadence: {
-            ...measured,
-            backend: captureBackend,
-            quality: captureQuality,
-            requestedFps: startPayload?.fps,
-            recorderCount: captureRecorderCount,
-          },
-        }),
+    ...(measured === null ? {} : { cadence: measured }),
   })
 }
 
@@ -3941,6 +3953,12 @@ async function handleReplayRequest(
     sendEmptyReplay(requestId, format)
     return
   }
+  // WHAT PRODUCED THESE BYTES TRAVELS WITH THEM (#135). The heartbeat above is
+  // a liveness proof and is gated on one; this is provenance for the replay
+  // being handed over, and it is owed whether or not liveness was ever proven.
+  // Attached only to the branch that returns a replay: a pack with no replay
+  // must declare no cadence at all (SPEC §5.3).
+  const replayCadence = cadenceSummary()
   // A container header with no frames in it is NOT a replay: handing those few
   // hundred bytes back would put an undecodable replay.mp4 in the pack and let
   // every reader believe a recording exists. Below the evidence bar the honest
@@ -3960,6 +3978,7 @@ async function handleReplayRequest(
           mimeType: format.mimeType,
           replayFile: format.replayFile,
           ...(ringDiagnostics === undefined ? {} : { ringDiagnostics }),
+          ...(replayCadence === null ? {} : { cadence: replayCadence }),
         }
       : {
           requestId,
