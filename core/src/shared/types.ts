@@ -1,4 +1,4 @@
-// CapturePack format types — mirror SPEC.md (format_version 0.2.1).
+// CapturePack format types — mirror SPEC.md (format_version 0.2.2).
 // These types describe data written into a .capturepack; keep them in sync with the spec.
 //
 // 0.2.1 adds one OPTIONAL field, `number_pin` on a box (SPEC §8.5): the display
@@ -8,12 +8,22 @@
 // ignores the field and computes numbers the automatic way, which is a valid,
 // self-consistent pack; that is precisely the forward compatibility §13.1
 // requires, so nothing older breaks.
+//
+// 0.2.2 widens that field from 1-9 to any integer >= 1 (#51). Also a patch, and
+// for the same reason: 0.2.1 already defined a pin outside its range as IGNORED,
+// so a 0.2.1 reader meeting a pin of 12 does exactly what 0.2.1 told it to and
+// still computes a valid, contiguous sequence. Nothing on disk changes shape.
 
 export const FORMAT_NAME = 'capturepack'
 // 0.2.1 carries `number_pin` (SPEC §8.5) — an additive optional field, so a
 // PATCH under §13.1's pre-1.0 rules, where minor holds the promises major
-// normally would.
-export const FORMAT_VERSION = '0.2.1'
+// normally would. 0.2.2 widens its range; still a patch, still nothing an older
+// reader can be broken by.
+//
+// No pack this app writes declares it: every one of them uses a 0.3.0-or-later
+// field and declares that instead (see exporter.ts). It is the base version the
+// format's own history is written against, and §13.1 is why it still moves.
+export const FORMAT_VERSION = '0.2.2'
 /**
  * The version a pack declares once it carries 0.3 semantics: explicit
  * `capture_kind`/image scope or AUTHORED motion (`keyframes`, SPEC §8.9).
@@ -516,7 +526,9 @@ export interface BoxAnnotation {
   // computed via computeDisplayNumbers(), never stored.
   numbered: boolean
   /**
-   * A number the USER chose for this box, 1-9 (SPEC §8.5). Absent = automatic.
+   * The number the USER assigned this box — an integer >= 1 (SPEC §8.5).
+   * Absent = it numbers automatically, in creation order, around the boxes that
+   * carry one.
    *
    * NAMED `number_pin`, NOT `display_number`, and the name is the design. §8.5's
    * invariant is that display numbers are computed and never stored, and that
@@ -525,9 +537,16 @@ export interface BoxAnnotation {
    * self-consistent pack — which is exactly what §13.1 asks of an unknown
    * optional field.
    *
+   * IT IS A CLAIM ON A SLOT, NOT A NUMBER STAMPED ON THE BOX. Numbering stays
+   * contiguous from 1 whatever this says (#51), so a pin above the number of
+   * numbered boxes claims the last slot rather than inventing a ⑤ the pack has
+   * no ①-④ for.
+   *
    * Only meaningful with `numbered: true`; a pin on an unnumbered box is inert
-   * rather than an error, so turning numbering off and back on does not silently
-   * discard the number the user picked.
+   * rather than an error, so a foreign writer's inactive pin cannot corrupt the
+   * sequence. THIS EDITOR does not leave one behind: turning numbering off
+   * releases the number (#51), and turning it back on assigns the next one,
+   * because a user who re-numbers a box has just asked for it at the end.
    */
   number_pin?: number
   // Whether the interior is blurred in RENDERED views only (SPEC §9): the
@@ -580,13 +599,22 @@ export interface AnnotationsFile {
 // documents, MCP responses — MUST derive them from this one function so video
 // numbers and document numbers can never differ.
 //
-// ORDER IS CREATION ORDER, and it used to be timeline order. Sorting by
-// `start_ms` first meant a box drawn LAST but scrubbed back to an earlier frame
-// took number 1 and renumbered everything made before it — reported as
-// "버튼 숫자도 버그가 있네 마지막에 누른게 뒤로 가야지". A number is how a person
-// refers to the boxes THEY made, in the order they made them; where a box
+// THE ORDER IS ASSIGNMENT ORDER (#51), and for a box nobody has re-numbered
+// that is creation order — the sequence below. It used to be timeline order;
+// sorting by `start_ms` first meant a box drawn LAST but scrubbed back to an
+// earlier frame took number 1 and renumbered everything made before it, reported
+// as "버튼 숫자도 버그가 있네 마지막에 누른게 뒤로 가야지". A number is how a
+// person refers to the boxes THEY made, in the order they made them; where a box
 // happens to sit on the replay clock is a different question, and the documents
 // already answer it by printing each box's time beside its number.
+//
+// Creation order alone cannot express a RE-assignment, though, and that is what
+// `number_pin` is for. Turning a box's number off and on again is the user
+// saying "this one, now, at the end"; `created_at` is as fixed as the `start_ms`
+// it replaced, so the app used to slide the box back into the middle of the
+// sequence and overrule them. What the user assigned is written down instead —
+// see nextDisplayNumber and planNumberPins below, which is where the editor
+// turns an assignment into pins.
 //
 // `created_at` is parsed to an instant rather than compared as text: it carries
 // a UTC offset (SPEC §8.3), so "…T18:22+09:00" and "…T10:22+01:00" are the same
@@ -595,33 +623,37 @@ export interface AnnotationsFile {
 // every box that has one and falls back to the old z / array-position / id
 // chain, so such a pack numbers exactly as it always did.
 //
-// PINS. `number_pin` is a number the user chose, 1-9. Pins are honoured first,
-// in creation order; everyone else fills the smallest still-free number,
-// ascending, also in creation order. Three consequences, all deliberate:
+// CONTIGUOUS FROM 1, ALWAYS. N numbered boxes carry exactly the numbers 1..N —
+// no gaps, no duplicates, whatever the pins ask for. Everything below only
+// decides WHICH box holds which number. A rule that could leave a hole would
+// have the documents cite a ④ that no frame of the video contains, and a reader
+// has no way to tell which of the two lied.
 //
-//  - TWO BOXES PINNED TO THE SAME NUMBER: the one created FIRST keeps it, the
-//    other falls back to automatic. Creation order is already the primary key
-//    for everything else here, so resolving with it needs no new concept — and
-//    the loser still gets A number, because a numbered box without one is a box
-//    the documents cannot reference.
-//  - A PIN MAY LEAVE A GAP. Pin the only box to 5 and the pack has a ⑤ and no
-//    ①-④. That is what pinning is for; automatic numbers stay contiguous among
-//    themselves.
-//  - ONLY 1-9 CAN BE PINNED, but automatic numbering does not stop at 9: a
-//    capture with twelve numbered boxes numbers all twelve.
+// PINS. `number_pin` is the number a box was ASSIGNED — an integer >= 1, an
+// input to this rule. It claims a SLOT:
+//
+//  - A PIN NEVER LEAVES A GAP. A pin above the count claims the last slot: pin
+//    the only box to 5 and it is ①, because 5 is not a number this pack has.
+//    (0.2.1 let a pin leave a gap. #51 made contiguity absolute — a lone ⑤ with
+//    no ①-④ was the counter-example that settled it.)
+//  - AUTOMATIC BOXES FILL WHAT IS LEFT, in creation order, around the pins.
+//  - TWO BOXES CLAIMING ONE SLOT: the earlier-created keeps it; the other takes
+//    the nearest free slot, searching upward first. This editor never writes
+//    that state — typing a number PUSHES the box that held it along, and stores
+//    the result (planNumberPins) — so this is the rule for a pack written by
+//    something else, where all it has to be is contiguous and the same twice.
 //
 // Returns annotation_id -> display number; unnumbered boxes are absent.
 
-/** The pin a box actually carries: an integer 1-9, or null for automatic. */
+/** The slot a box claims: an integer >= 1, or null when it numbers automatically. */
 function pinOf(a: Annotation): number | null {
   const raw = a.number_pin
-  if (typeof raw !== 'number' || !Number.isInteger(raw)) return null
-  return raw >= 1 && raw <= 9 ? raw : null
+  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1) return null
+  return raw
 }
 
-export function computeDisplayNumbers(
-  annotations: readonly Annotation[],
-): Map<string, number> {
+/** The numbered boxes in creation order — the sequence described above. */
+function numberedInCreationOrder(annotations: readonly Annotation[]): Annotation[] {
   const numbered = annotations
     .map((a, index) => ({ a, index }))
     .filter(({ a }) => a.numbered)
@@ -643,24 +675,168 @@ export function computeDisplayNumbers(
         ? 1
         : 0
   })
-  const numbers = new Map<string, number>()
-  const claimed = new Set<number>()
-  // Pass 1: the numbers the user asked for, first come first served.
-  for (const { a } of numbered) {
-    const pin = pinOf(a)
-    if (pin === null || claimed.has(pin)) continue
-    claimed.add(pin)
-    numbers.set(a.annotation_id, pin)
+  return numbered.map(({ a }) => a)
+}
+
+export function computeDisplayNumbers(
+  annotations: readonly Annotation[],
+): Map<string, number> {
+  const ordered = numberedInCreationOrder(annotations)
+  const total = ordered.length
+  // As many slots as boxes: that is where contiguity comes from, not from a
+  // rule anyone has to remember to apply.
+  const slots: Array<Annotation | null> = new Array<Annotation | null>(total).fill(null)
+  // Pass 1: the slots the pins claim. Ascending pin, and sort is stable, so
+  // boxes claiming the same slot arrive in creation order.
+  const pinned = ordered
+    .filter((a) => pinOf(a) !== null)
+    .sort((p, q) => (pinOf(p) ?? 0) - (pinOf(q) ?? 0))
+  for (const a of pinned) {
+    const want = Math.min(pinOf(a) ?? 1, total)
+    let i = want - 1
+    while (i < total && slots[i] != null) i += 1
+    // Taken all the way up: fall back DOWN from the claim. There is always a
+    // free slot below, because there are exactly as many slots as boxes.
+    if (i >= total) {
+      i = want - 1
+      while (i >= 0 && slots[i] != null) i -= 1
+    }
+    if (i >= 0 && i < total) slots[i] = a
   }
-  // Pass 2: everyone else takes the smallest number still free.
-  let next = 1
-  for (const { a } of numbered) {
-    if (numbers.has(a.annotation_id)) continue
-    while (claimed.has(next)) next += 1
-    claimed.add(next)
-    numbers.set(a.annotation_id, next)
+  // Pass 2: everyone else fills the gaps, ascending, in creation order.
+  let free = 0
+  for (const a of ordered) {
+    if (pinOf(a) !== null) continue
+    while (free < total && slots[free] != null) free += 1
+    if (free < total) slots[free] = a
+  }
+  const numbers = new Map<string, number>()
+  for (let i = 0; i < total; i += 1) {
+    const a = slots[i]
+    if (a != null) numbers.set(a.annotation_id, i + 1)
   }
   return numbers
+}
+
+/**
+ * The number a box takes the moment its numbering is turned ON: the next one
+ * (SPEC §8.5, #51).
+ *
+ * The defect this exists to stop: "turning a box's number off and back on
+ * returns it to the middle of the sequence". Nothing in the pack could say
+ * otherwise — `created_at` is as fixed as the `start_ms` it replaced — so the
+ * app kept re-inserting a box the user had just re-assigned, which reads as
+ * the app overruling them. `id` is excluded from the count so this answers the
+ * same whether the caller has already flipped `numbered` or not.
+ */
+export function nextDisplayNumber(annotations: readonly Annotation[], id: string): number {
+  let others = 0
+  for (const a of annotations) {
+    if (a.numbered && a.annotation_id !== id) others += 1
+  }
+  return others + 1
+}
+
+/** A copy of the numbered boxes carrying `pins` instead of their stored ones. */
+function withPins(
+  ordered: readonly Annotation[],
+  pins: ReadonlyMap<string, number>,
+): Annotation[] {
+  return ordered.map((a) => {
+    const copy: Annotation = { ...a }
+    const pin = pins.get(a.annotation_id)
+    if (pin === undefined) delete copy.number_pin
+    else copy.number_pin = pin
+    return copy
+  })
+}
+
+/**
+ * The pins to STORE so that box `id` shows display number `wanted` — the whole
+ * of "let the user type a number" (SPEC §8.5, #51).
+ *
+ * Typing a number another box holds PUSHES that box along: the answer is
+ * today's order with `id` lifted out and dropped in at `wanted`, everyone it
+ * displaced shifted by one, and no box that was not displaced moving at all.
+ * That order is then expressed as pins — computed by asking the rule above what
+ * it would do and pinning only the boxes it would put somewhere else, so a pack
+ * carries the user's decisions and not a pin on every box restating what
+ * creation order already said.
+ *
+ * `annotations` is the state the user is LOOKING AT — the box need not be
+ * numbered in it yet, and the plan is for the state where it is. That is not a
+ * convenience: the sequence being rearranged is the one on screen, and a box
+ * that has just been given a number was not part of it a moment ago. Ask over
+ * the after-state instead and the boxes AROUND the new one shuffle, because a
+ * pin means a different slot in a sequence one longer.
+ *
+ * Returns annotation_id -> pin for every box whose STORED pin has to change —
+ * apply them all in one edit, they are one decision.
+ */
+export function planNumberPins(
+  annotations: readonly Annotation[],
+  id: string,
+  wanted: number,
+): Map<string, number> {
+  const after = annotations.map((a) =>
+    a.annotation_id === id && !a.numbered ? { ...a, numbered: true } : a,
+  )
+  const ordered = numberedInCreationOrder(after)
+  const total = ordered.length
+  const changes = new Map<string, number>()
+  const target = ordered.find((a) => a.annotation_id === id)
+  if (target === undefined) return changes
+  const slot = Math.min(Math.max(Math.trunc(wanted), 1), total)
+
+  // The order being asked for: the sequence ON SCREEN with `id` taken out and
+  // put back at `slot`. Everything it steps over shifts by one; everything else
+  // stays exactly where the user last saw it.
+  const now = computeDisplayNumbers(annotations)
+  const desired = ordered
+    .filter((a) => a.annotation_id !== id)
+    .sort((p, q) => (now.get(p.annotation_id) ?? 0) - (now.get(q.annotation_id) ?? 0))
+  desired.splice(slot - 1, 0, target)
+
+  // Start from the pins the boxes already carry, then add one at a time — each
+  // pin can fix several boxes at once, and pinning a box that was already going
+  // to land there would write noise into the pack. The box being assigned gets
+  // no head start for exactly that reason: numbering a box that is already going
+  // to be ③ must leave the pack byte-identical.
+  const pins = new Map<string, number>()
+  for (const a of ordered) {
+    const pin = pinOf(a)
+    if (pin !== null) pins.set(a.annotation_id, pin)
+  }
+  // THE BOX THE USER TOUCHED IS PINNED FIRST, and that is what keeps the pack
+  // small: pinning it usually settles every other box at once, while starting
+  // from the top of the sequence would pin everything AROUND it instead and
+  // store four decisions where the user made one.
+  const places = desired.map((a, i) => ({ a, want: i + 1 }))
+  const toFix = [
+    ...places.filter(({ a }) => a.annotation_id === id),
+    ...places.filter(({ a }) => a.annotation_id !== id),
+  ]
+  // Bounded by construction: every pass pins one more box to the number it is
+  // supposed to have and never revisits it, and a full set of distinct pins
+  // reproduces the order exactly.
+  for (let pass = 0; pass <= total; pass += 1) {
+    const got = computeDisplayNumbers(withPins(ordered, pins))
+    let fixed = false
+    for (const { a, want } of toFix) {
+      if (got.get(a.annotation_id) === want) continue
+      if (pins.get(a.annotation_id) === want) continue
+      pins.set(a.annotation_id, want)
+      fixed = true
+      break
+    }
+    if (!fixed) break
+  }
+
+  for (const a of ordered) {
+    const after = pins.get(a.annotation_id)
+    if (after !== undefined && after !== pinOf(a)) changes.set(a.annotation_id, after)
+  }
+  return changes
 }
 
 /**

@@ -40,6 +40,120 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  # CI MAKES A PACK AND ASSERTS ON IT (#63).
+  #
+  # Until this job existed, CI proved that the app boots. Every question about a
+  # capture — is the replay real, does the snapshot match the display, do the
+  # declared displays agree with the screens — could only be answered by asking
+  # a human to record one and send it over, which is how every investigation
+  # this cycle ended. `--capture-now` had existed for months and nothing ran it,
+  # because a capture opens the editor and then waits for a person; `--save-now`
+  # is the person.
+  #
+  # NON-BLOCKING ON PURPOSE, FOR NOW. This is the first time a headed Electron
+  # capture has run on a hosted runner. The evidence says it should work —
+  # check:native-replay-fallback already drives windows-gdi-bitblt against a
+  # real DISPLAY1 here and passes — but "should" is not a reason to start
+  # blocking every pull request on a desktop nobody has looked at. The
+  # assertions below are exact and will fail loudly in the job list; make this
+  # job required once it has been green for a run of merges.
+  capture-e2e:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    continue-on-error: true
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: core
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: core/package-lock.json
+
+      - name: Install dependencies
+        timeout-minutes: 10
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      # A capture, unattended, through the very entry point the global hotkey
+      # uses. `--capture-now=6` is not padding: the replay buffer and the surface
+      # ring have to be FULL of something before there is anything to record,
+      # and capturing the instant the app starts would assert on a fraction of a
+      # second. The exit code is the verdict — 0 saved, 20 the flow saved
+      # nothing, 21 it never finished (see src/main/saveNow.ts).
+      - name: Capture a pack, with nobody at the machine
+        run: |
+          $work = "${{ runner.temp }}\capturepack-e2e"
+          New-Item -ItemType Directory -Force "$work\userdata" | Out-Null
+          New-Item -ItemType Directory -Force "$work\packs" | Out-Null
+          & .\node_modules\.bin\electron.cmd . `
+            --user-data-dir="$work\userdata" `
+            --output-dir="$work\packs" `
+            --no-global-shortcut `
+            --capture-now=6 `
+            --save-now=180
+          Write-Host "capture exited $LASTEXITCODE"
+          exit $LASTEXITCODE
+
+      - name: Assert on the pack
+        run: |
+          $work = "${{ runner.temp }}\capturepack-e2e"
+          $pack = (Get-ChildItem -Directory "$work\packs" | Select-Object -First 1).FullName
+          if ($null -eq $pack) { throw "no pack was written to $work\packs" }
+          Write-Host "asserting on $pack"
+          node scripts/assert-capturepack.mjs $pack --expect-replay --log "$work\userdata\logs\main.log"
+          exit $LASTEXITCODE
+
+      # The other ending, and the one that has to stay honest: a recorder that
+      # is given nothing. The pack must SAY the replay is unavailable rather
+      # than shipping an empty container, and the outage must be announced at
+      # most once — never once per retry cycle. Which of the two endings this
+      # produces depends on whether the windows-gdi-bitblt fallback rescues the
+      # recorder in time, so the assertion holds for both (see
+      # scripts/assert-capturepack.mjs).
+      - name: Capture again with the recorder starved (--simulate-no-frames)
+        run: |
+          $work = "${{ runner.temp }}\capturepack-e2e-no-frames"
+          New-Item -ItemType Directory -Force "$work\userdata" | Out-Null
+          New-Item -ItemType Directory -Force "$work\packs" | Out-Null
+          & .\node_modules\.bin\electron.cmd . `
+            --user-data-dir="$work\userdata" `
+            --output-dir="$work\packs" `
+            --no-global-shortcut `
+            --simulate-no-frames `
+            --capture-now=6 `
+            --save-now=180
+          Write-Host "capture exited $LASTEXITCODE"
+          exit $LASTEXITCODE
+
+      - name: Assert the failure is honest
+        run: |
+          $work = "${{ runner.temp }}\capturepack-e2e-no-frames"
+          $pack = (Get-ChildItem -Directory "$work\packs" | Select-Object -First 1).FullName
+          if ($null -eq $pack) { throw "no pack was written to $work\packs" }
+          Write-Host "asserting on $pack"
+          node scripts/assert-capturepack.mjs $pack --expect-no-replay --log "$work\userdata\logs\main.log"
+          exit $LASTEXITCODE
+
+      # The pack and the log, whatever happened. A failing assertion that cannot
+      # be looked at afterwards is the situation this whole job exists to end.
+      - name: Upload the packs and the logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: capturepack-e2e-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}\capturepack-e2e
+            ${{ runner.temp }}\capturepack-e2e-no-frames
+          if-no-files-found: warn
+          retention-days: 14
+
   spec-validate:
     runs-on: ubuntu-latest
     timeout-minutes: 10

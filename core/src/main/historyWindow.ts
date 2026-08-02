@@ -24,6 +24,7 @@ import type {
   HistoryPackSummary,
   HistoryRenameResult,
   HistoryRenderStatusPayload,
+  StorageUsage,
   ToastCreateZipResult,
 } from '../shared/ipc'
 import { DEFAULT_CAPTURE_HOTKEY } from '../shared/types'
@@ -34,9 +35,11 @@ import { createPackZip, replayMimeType } from './exporter'
 import { packDocLanguage, uiLanguage, uiT } from './locale'
 import { createPackStore, openPack } from './mcp/store'
 import type { PackHandle, PackStore, RawPackEntry } from './mcp/store'
+import { archiveStem, packArchiveExt, siblingArchive } from './packArchive'
 import { analyzePrompt } from './saveToast'
 import { startEditFlow } from './session'
 import { openSettingsWindow } from './settingsWindow'
+import { invalidateStorageUsage, storageUsage } from './storage'
 import { copyTextToClipboard } from './clipboard'
 
 const THUMB_WIDTH = 320
@@ -45,32 +48,12 @@ const HISTORY_STARTUP_TIMEOUT_MS = 10_000
 // Windows-invalid filename characters plus control chars.
 const INVALID_NAME_CHARS = /[<>:"/\\|?*\u0000-\u001f]/
 const RESERVED_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i
-// What "Create ZIP" writes now. `.capturepack` is still recognised for packs
-// zipped by earlier versions — see PACK_ARCHIVE_EXTS below and the note in
-// exporter.createPackZip on why the private extension had to go.
+// What "Create ZIP" writes now, and so what a renamed pack's twin falls back to
+// when its own suffix is unrecognisable. `.capturepack` is still recognised for
+// packs zipped by earlier versions — see packArchive.ts, which owns that list
+// now, and the note in exporter.createPackZip on why the private extension had
+// to go.
 const PACK_EXT = '.zip'
-const PACK_ARCHIVE_EXTS: readonly string[] = [PACK_EXT, '.capturepack']
-
-/** Which archive extension `p` ends with, or null when it is not one. */
-function packArchiveExt(p: string): string | null {
-  const lower = p.toLowerCase()
-  return PACK_ARCHIVE_EXTS.find((ext) => lower.endsWith(ext)) ?? null
-}
-
-/** The sibling archive of a pack FOLDER, whichever extension it was made with. */
-function siblingArchive(dirPath: string): string | null {
-  for (const ext of PACK_ARCHIVE_EXTS) {
-    const candidate = `${dirPath}${ext}`
-    if (fs.existsSync(candidate)) return candidate
-  }
-  return null
-}
-
-/** A zip entry's display name: its own basename, minus whichever suffix it has. */
-function archiveStem(p: string): string {
-  const ext = packArchiveExt(p)
-  return ext === null ? path.basename(p) : path.basename(p, ext)
-}
 
 let historyWindow: BrowserWindow | null = null
 let ipcRegistered = false
@@ -164,6 +147,16 @@ export function registerHistoryIpc(live: Settings): void {
     } catch {
       return null
     }
+  })
+
+  // The header's usage bar (issue #48). NOT summed from the per-card sizes
+  // above: those arrive one lazy invoke at a time as cards scroll into view, so
+  // a total built from them would climb while the user reads it and would be
+  // wrong for any pack they never scrolled to. storage.ts answers for the whole
+  // folder at once, from the same cached snapshot Settings draws its bar from.
+  ipcMain.handle(IPC.historyUsage, (event): StorageUsage | null => {
+    if (!fromHistory(event)) return null
+    return liveSettings === null ? null : storageUsage(liveSettings)
   })
 
   ipcMain.handle(IPC.historySearchText, (event, ref: unknown): string => {
@@ -296,6 +289,11 @@ export function registerHistoryIpc(live: Settings): void {
         }
       }
     }
+    // The folder just got smaller, and the header bar is on screen saying it
+    // did not. storage.ts otherwise re-reads on its own short TTL, which is
+    // fine for a capture arriving in the background and wrong for a delete the
+    // user is watching.
+    invalidateStorageUsage()
     return { ok: true }
   })
 }

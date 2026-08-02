@@ -52,6 +52,10 @@ export type ExitKind =
   | 'update-restart'
   // Startup itself failed and the app quit to report it.
   | 'startup-failure'
+  // `--save-now` (#63): an unattended run captured, saved and left on purpose.
+  // Nobody chose Quit, so it is not `user-quit`; it is still entirely deliberate
+  // and the next start must not report it as a disappearance.
+  | 'unattended-save'
   // will-quit fired without any of the above — a clean exit whose cause we did
   // not record (a Windows logoff or shutdown lands here, since Electron tears
   // the app down through the normal quit sequence). Honest name: we know it did

@@ -92,7 +92,7 @@ npm run qa:rc
 npm audit --omit=dev
 ```
 
-The automated gate has 77 steps (75 with `--skip-build`), but it does not replace
+The automated gate has 81 steps (79 with `--skip-build`), but it does not replace
 the physical Windows matrix in `docs/QA.md`. A real Desktop Duplication
 fallback, sustained FPS/gap measurements, physical three-display behavior, and
 full hotkey-to-pack E2E remain field work unless you produce new evidence.

@@ -458,13 +458,22 @@ function buildAnnotationSkill(
     )
   }
   lines.push('')
+  // This paragraph is read by an AI that has only the pack, so it has to state
+  // the rule the app actually applied — it described start_ms order long after
+  // numbering stopped using it (SPEC §8.5).
   lines.push(
-    'Display numbers are computed, never stored: boxes with `numbered: true`, sorted by start_ms',
+    'Display numbers are computed, never stored: boxes with `numbered: true`, in ASSIGNMENT order —',
   )
   lines.push(
-    'ascending (absent = 0), then z ascending, then annotation_id ascending, numbered from 1. The',
+    'the number a box carries in `number_pin` if it has one, and creation order (created_at ascending,',
   )
-  lines.push('same numbers appear in every rendered view and document.')
+  lines.push(
+    'then z, then annotation_id) for the rest, which fill the numbers the pins leave. Always',
+  )
+  lines.push(
+    'contiguous from 1, no gaps and no duplicates. The same numbers appear in every rendered view',
+  )
+  lines.push('and document.')
   lines.push('')
 
   if (annotations.length === 0) {

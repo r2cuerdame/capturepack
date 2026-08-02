@@ -1451,6 +1451,14 @@ function validateAnnotations(a, snapshotDims, replay, replayDurationMs, displayI
       else if (ann.blur) blurCount++;
     }
 
+    // number_pin — the number the author ASSIGNED this box (SPEC §8.5). A writer
+    // that emits one owes an integer >= 1; a reader ignores anything else rather
+    // than refusing the pack, which is why this is checked here and not there.
+    if (ann.number_pin !== undefined && (!isInt(ann.number_pin) || ann.number_pin < 1)) {
+      fail(`${label}.number_pin ${JSON.stringify(ann.number_pin)} MUST be an integer >= 1 — readers ignore anything else and number the box automatically (SPEC §8.5)`);
+      bad++;
+    }
+
     // tracking — { enabled: false } in 0.1.0; richer data reserved (SPEC §8.3).
     if (ann.tracking !== undefined) {
       if (!isObj(ann.tracking) || typeof ann.tracking.enabled !== "boolean") {
@@ -1732,20 +1740,54 @@ function validateAnnotations(a, snapshotDims, replay, replayDurationMs, displayI
     if (numbered && boundsOk) {
       numberedBoxes.push({
         id: isStr(ann.annotation_id) ? ann.annotation_id : `(annotations[${i}])`,
-        startMs: isNum(ann.start_ms) ? ann.start_ms : 0,
+        at: isStr(ann.created_at) ? Date.parse(ann.created_at) : NaN,
+        pin: isInt(ann.number_pin) && ann.number_pin >= 1 ? ann.number_pin : null,
         z: isInt(ann.z) ? ann.z : i,
         index: i,
       });
     }
   });
 
-  // Display numbers — computed, never stored (SPEC §8.5): start_ms asc
-  // (absent = 0), then z asc (absent = array position), then annotation_id asc.
+  // Display numbers — computed, never stored (SPEC §8.5). ASSIGNMENT order, which
+  // for a box carrying no pin is creation order: created_at as an INSTANT (it
+  // carries an offset, so text order would be wrong), undated boxes after dated
+  // ones, then z, then annotation_id. A pin claims a slot, clamped to the number
+  // of numbered boxes, ties to the earlier-created box; everyone else fills what
+  // is left. The result is always 1..N — contiguous, no gaps, no duplicates.
+  //
+  // This mirrors core/src/shared/numbering.ts and MUST be kept in step with it:
+  // the validator prints what a reader should see, and a validator that computed
+  // its own answer would accuse correct packs of being wrong.
   if (numberedBoxes.length > 0) {
-    numberedBoxes.sort((p, q) =>
-      p.startMs - q.startMs || p.z - q.z || (p.id < q.id ? -1 : p.id > q.id ? 1 : 0));
-    const assigned = numberedBoxes.map((nb, idx) => `${nb.id}=${idx + 1}`).join(", ");
+    const ordered = numberedBoxes.slice().sort((p, q) => {
+      const pDated = Number.isFinite(p.at);
+      const qDated = Number.isFinite(q.at);
+      if (pDated !== qDated) return pDated ? -1 : 1;
+      if (pDated && qDated && p.at !== q.at) return p.at - q.at;
+      if (p.z !== q.z) return p.z - q.z;
+      return p.id < q.id ? -1 : p.id > q.id ? 1 : 0;
+    });
+    const total = ordered.length;
+    const slots = new Array(total).fill(null);
+    for (const nb of ordered.filter((b) => b.pin !== null).sort((p, q) => p.pin - q.pin)) {
+      const want = Math.min(nb.pin, total);
+      let slot = want - 1;
+      while (slot < total && slots[slot] !== null) slot++;
+      if (slot >= total) { slot = want - 1; while (slot >= 0 && slots[slot] !== null) slot--; }
+      if (slot >= 0 && slot < total) slots[slot] = nb;
+    }
+    let free = 0;
+    for (const nb of ordered) {
+      if (nb.pin !== null) continue;
+      while (free < total && slots[free] !== null) free++;
+      if (free < total) slots[free] = nb;
+    }
+    const assigned = slots.map((nb, idx) => `${nb === null ? "?" : nb.id}=${idx + 1}`).join(", ");
     pass(`annotations.json: display numbers (computed, never stored — SPEC §8.5): ${assigned}`);
+    const pinnedPastEnd = ordered.filter((b) => b.pin !== null && b.pin > total);
+    for (const nb of pinnedPastEnd) {
+      note(`annotations.json: ${nb.id} asks for number ${nb.pin} but only ${total} box(es) are numbered — the claim lands on the last one, because numbering is contiguous from 1 (SPEC §8.5)`);
+    }
   }
   if (blurCount > 0) {
     note(`annotations.json: ${blurCount} box(es) are marked blur — snapshot.png and the replay keep the ORIGINAL unredacted pixels; blur renders only into derived views such as replay_annotated (SPEC §9)`);

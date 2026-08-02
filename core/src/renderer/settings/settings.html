@@ -43,24 +43,76 @@
 
            DELETION IS NOT A DROPDOWN. Every button below says how many packs
            and how many bytes it is about to remove BEFORE it removes anything,
-           and asks once. There is no automatic expiry setting: a capture is
-           evidence someone chose to keep, and a background job that quietly
-           deletes evidence is not a feature this tool is going to have. Packs
-           go to the Recycle Bin, never to unlink. -->
+           and asks once. Packs go to the Recycle Bin, never to unlink.
+
+           THIS NOTE USED TO END "there is no automatic expiry setting, and a
+           background job that quietly deletes evidence is not a feature this
+           tool is going to have." Issue #47 is the user asking for exactly
+           that, and the reason holds up: someone who captures in bursts fills
+           this folder faster than they will ever tidy it by hand. So the rule
+           below is a rule, not a button — and everything the old note was
+           protecting survives it. It is off until asked for, it states what its
+           next run would take before any run happens, changing it deletes
+           nothing on the spot, it runs at startup and once a day and at no
+           other time, and what it takes goes to the Recycle Bin. -->
       <div class="row rowCol">
         <div class="rowTop">
           <span class="label" id="storageLabel" data-i18n="settings.storage">Storage</span>
           <span class="hint" id="storageTotal"></span>
+        </div>
+        <!-- The glance, next to the policy that controls it (issue #48). A
+             fraction of the max size below, never of the disk: 3 GB of a 2 TB
+             drive draws as nothing while still being 3 GB of screen recordings. -->
+        <div class="storageMeter">
+          <span class="storageBar" id="storageBar" aria-hidden="true"><span class="storageBarFill" id="storageBarFill"></span></span>
+          <span class="subhint" id="storageMeterText"></span>
         </div>
         <div class="pathRow" id="storageRow">
           <button class="quiet" type="button" data-purge="1" data-i18n="settings.purge1">Delete older than 1 day</button>
           <button class="quiet" type="button" data-purge="7" data-i18n="settings.purge7">Older than 7 days</button>
           <button class="quiet" type="button" data-purge="30" data-i18n="settings.purge30">Older than 30 days</button>
           <!-- Last, and worded as what it is. Same counted confirm as the other
-               three, and the same Recycle Bin — nothing here bypasses either. -->
+               three, and the same Recycle Bin — nothing here bypasses either.
+               It stays an ACTION and never becomes one of the modes below:
+               "delete everything" is not a policy anyone should be able to
+               leave switched on. -->
           <button class="quiet" type="button" data-purge="0" data-i18n="settings.purgeAll">Delete everything</button>
         </div>
         <span class="how" id="storageResult" hidden></span>
+      </div>
+      <div class="row rowCol">
+        <div class="rowTop">
+          <label class="label" for="storageRetentionDays" data-i18n="settings.retention">Automatic cleanup</label>
+          <span class="control">
+            <select id="storageRetentionDays">
+              <option value="0" data-i18n="settings.retentionKeep">Keep everything</option>
+              <option value="1" data-i18n="settings.retention1">Delete older than 1 day</option>
+              <option value="7" data-i18n="settings.retention7">Delete older than 7 days</option>
+              <option value="30" data-i18n="settings.retention30">Delete older than 30 days</option>
+            </select>
+          </span>
+        </div>
+        <!-- What the next run WOULD take. The sentence is the whole reason this
+             is a mode and not a button: the user gets to read the consequence
+             and still be the one who decides to live with it. -->
+        <span class="subhint" id="storageNext"></span>
+      </div>
+      <!-- The second trigger, and the bar's denominator. Someone who captures
+           in bursts is better served by "keep it under this much" than by any
+           age: three heavy days can outweigh a quiet month. The options are
+           built in the renderer from STORAGE_MAX_BYTES_CHOICES so the select
+           cannot offer a size the validator would refuse. -->
+      <div class="row rowCol">
+        <div class="rowTop">
+          <label class="label" for="storageMaxBytes" data-i18n="settings.maxSize">Max size</label>
+          <span class="control">
+            <select id="storageMaxBytes"></select>
+          </span>
+        </div>
+        <label class="toggleRow rowFoot">
+          <input type="checkbox" id="storageEnforceMaxBytes" />
+          <span class="subhint" data-i18n="settings.enforceMaxSize">Delete the oldest when over this size</span>
+        </label>
       </div>
       <!-- Video and still capture deliberately have separate post-capture
            actions. A still can put its completed annotated image directly on

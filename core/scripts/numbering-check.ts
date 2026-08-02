@@ -120,44 +120,66 @@ console.log('PINS')
   const a = box('ann_0000s1', '2026-07-29T18:00:00+09:00', { pin: 3 })
   const b = box('ann_0000s2', '2026-07-29T18:00:01+09:00', { pin: 3 })
   const c = box('ann_0000s3', '2026-07-29T18:00:02+09:00')
-  // Same pin twice: the FIRST created keeps it, the loser numbers automatically
-  // — and still gets a number, because a numbered box without one cannot be
-  // referenced by the documents.
-  check('two boxes pinned to 3: first created wins, loser still numbered', numbersOf([a, b, c]), {
-    ann_0000s2: 1,
-    ann_0000s3: 2,
+  // PIN MOVED WITH #51. It used to be "the first created keeps 3, the loser
+  // falls back to automatic and lands on 1". Contiguity is now absolute, so the
+  // loser cannot fall back to a number outside the sequence: it takes the
+  // nearest free slot instead, and the automatic box gets what is left. The
+  // editor never writes two boxes claiming one slot — typing 3 pushes the box
+  // that held it along (see number-assignment-check) — so what this pins is a
+  // FOREIGN pack's answer: contiguous, and the same every time it is read.
+  check('two boxes claiming 3: first created keeps it, the other lands beside it', numbersOf([a, b, c]), {
+    ann_0000s3: 1,
+    ann_0000s2: 2,
     ann_0000s1: 3,
   })
 }
 {
   const only = box('ann_0000g1', '2026-07-29T18:00:00+09:00', { pin: 5 })
-  // A pin may leave a gap. That is what pinning is for.
-  check('a lone box pinned to 5 is ⑤, with no ①-④', numbersOf([only]), { ann_0000g1: 5 })
+  // PIN MOVED WITH #51: this used to assert a ⑤ with no ①-④, and that gap is
+  // exactly what the issue outlawed. 5 is not a number a one-box pack has, so
+  // the claim lands on the last slot there is.
+  check('a lone box pinned to 5 is ①, because 5 is not a number this pack has', numbersOf([only]), {
+    ann_0000g1: 1,
+  })
 }
 {
   const boxes = Array.from({ length: 12 }, (_, i) =>
     box(`ann_00c${String(i).padStart(3, '0')}`, `2026-07-29T18:00:${String(i).padStart(2, '0')}+09:00`),
   )
   const got = numbersOf(boxes)
-  // Only 1-9 can be PINNED; automatic numbering does not stop at 9.
   check('twelve boxes all get a number', Object.values(got), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
+}
+{
+  // ...and the twelfth can be ASKED for, which is why the 1-9 cap on a pin went
+  // away with #51: a number the user can be given is a number they can choose.
+  const boxes = Array.from({ length: 12 }, (_, i) =>
+    box(`ann_00d${String(i).padStart(3, '0')}`, `2026-07-29T18:00:${String(i).padStart(2, '0')}+09:00`, {
+      ...(i === 0 ? { pin: 12 } : {}),
+    }),
+  )
+  check('a box can be pinned to 12 in a twelve-box pack', numbersOf(boxes).ann_00d000, 12)
 }
 {
   const a = box('ann_0000i1', '2026-07-29T18:00:00+09:00', { pin: 2, numbered: false })
   const b = box('ann_0000i2', '2026-07-29T18:00:01+09:00')
-  // A pin on an unnumbered box is inert, not an error — toggling numbering off
-  // and on again must not discard the number the user picked.
+  // A pin on an unnumbered box is inert, not an error: a box that shows no
+  // number holds no slot, so a foreign writer's leftover pin cannot punch a hole
+  // in the sequence. (This editor does not leave one behind — turning numbering
+  // off releases the number, #51.)
   check('a pin on an unnumbered box is inert', numbersOf([a, b]), { ann_0000i2: 1 })
 }
 {
   const a = box('ann_0000v1', '2026-07-29T18:00:00+09:00', { pin: 0 })
   const b = box('ann_0000v2', '2026-07-29T18:00:01+09:00', { pin: 10 })
   const c = box('ann_0000v3', '2026-07-29T18:00:02+09:00', { pin: 2.5 })
-  // Out of range or non-integer: ignored, numbered automatically.
-  check('pins outside 1-9 and non-integers are ignored', numbersOf([a, b, c]), {
+  // PIN MOVED WITH #51. Below 1 and non-integers are still ignored — they name
+  // no slot at all. 10 is no longer "out of range": it is a claim on the last
+  // slot of a three-box pack, so b is ③ and the two ignored pins fill in around
+  // it in creation order.
+  check('pins below 1 and non-integers are ignored; a high pin claims the last slot', numbersOf([a, b, c]), {
     ann_0000v1: 1,
-    ann_0000v2: 2,
-    ann_0000v3: 3,
+    ann_0000v3: 2,
+    ann_0000v2: 3,
   })
 }
 

@@ -29,6 +29,14 @@ import {
 import type { I18nKey, TranslateFn } from '../../shared/i18n'
 import { connectAndAnalyzeLatestPrompt } from '../../shared/prompt'
 import {
+  budgetLevel,
+  budgetPercent,
+  formatBudget,
+  formatBytes,
+  RETENTION_DAY_CHOICES,
+  STORAGE_MAX_BYTES_CHOICES,
+} from '../../shared/retention'
+import {
   DEFAULT_CAPTURE_HOTKEY,
   DEFAULT_IMAGE_CAPTURE_HOTKEY,
   MAX_CAPTURE_FPS,
@@ -136,6 +144,8 @@ const uiaDetailPanel = el<HTMLElement>('uiaDetailPanel')
 const appVersionEl = el<HTMLSpanElement>('appVersion')
 const languageSelect = el<HTMLSelectElement>('language')
 const packLanguageSelect = el<HTMLSelectElement>('packLanguage')
+const retentionSelect = el<HTMLSelectElement>('storageRetentionDays')
+const maxBytesSelect = el<HTMLSelectElement>('storageMaxBytes')
 
 // ---------------------------------------------------------------------------
 // State
@@ -181,6 +191,11 @@ function refreshLanguage(): void {
   })
   syncHotkeyField()
   syncImageHotkeyField()
+  // Every string in the Storage block is interpolated — the total, the four
+  // button tooltips, the meter and the "next run would take" sentence — so
+  // applyDomI18n cannot reach any of them. Re-asking for the usage repaints all
+  // five in the new language at once, off a cached main-side snapshot.
+  refreshStorage()
   // The client dropdown is NOT rebuilt here: its entries are product names and
   // config paths, identical in every language, and rebuilding it would throw
   // away the client the user just picked.
@@ -265,6 +280,10 @@ const TOGGLES: ReadonlyArray<BooleanSettingsKey> = [
   // capture has shown the tutorial, and never claims an armed state that is no
   // longer true.
   'showEditorTutorial',
+  // Whether the max size is also a delete rule. Ticking it deletes nothing now
+  // — the "next run" line under Automatic cleanup is what changes, which is the
+  // whole contract this feature is built on.
+  'storageEnforceMaxBytes',
 ]
 
 for (const key of TOGGLES) {
@@ -272,6 +291,7 @@ for (const key of TOGGLES) {
     const input = event.currentTarget as HTMLInputElement
     void apply({ [key]: input.checked } as SettingsPatch).then(() => {
       if (key === 'chromeDomEnabled') refreshChromeStatus()
+      if (key === 'storageEnforceMaxBytes') refreshStorage()
     })
   })
 }
@@ -1007,11 +1027,18 @@ chromeDetectBtn.addEventListener('click', () => {
 const storageTotal = el<HTMLElement>('storageTotal')
 const storageRow = el<HTMLElement>('storageRow')
 const storageResult = el<HTMLElement>('storageResult')
+const storageBar = el<HTMLElement>('storageBar')
+const storageBarFill = el<HTMLElement>('storageBarFill')
+const storageMeterText = el<HTMLElement>('storageMeterText')
+const storageNext = el<HTMLElement>('storageNext')
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1_048_576) return `${String(Math.round(bytes / 1024))} KB`
-  if (bytes < 1_073_741_824) return `${String(Math.round(bytes / 1_048_576))} MB`
-  return `${(bytes / 1_073_741_824).toFixed(1)} GB`
+// One option per allowed budget, so the select cannot offer a size the
+// main-side validator would then quietly refuse and replace with the default.
+for (const bytes of STORAGE_MAX_BYTES_CHOICES) {
+  const option = document.createElement('option')
+  option.value = String(bytes)
+  option.textContent = formatBudget(bytes)
+  maxBytesSelect.append(option)
 }
 
 /**
@@ -1021,6 +1048,10 @@ function formatBytes(bytes: number): string {
  * would delete nothing looks identical until it is pressed. These read the
  * counts back from the same walk the delete will use, so the label is a
  * promise rather than a category.
+ *
+ * The same walk answers the bar and the "next run" sentence, so the folder the
+ * user is looking at, the one the buttons would empty and the one the daily
+ * job would trim are all the same folder at the same moment.
  */
 function renderStorage(usage: StorageUsage): void {
   storageTotal.textContent = t('settings.storageTotal', {
@@ -1036,6 +1067,33 @@ function renderStorage(usage: StorageUsage): void {
       ? t('settings.purgeNone')
       : t('settings.purgeCount', { packs: String(packs), size: formatBytes(bucket?.bytes ?? 0) })
   }
+  renderStorageMeter(usage)
+  // WHAT IT WOULD DO, NOT WHAT IT JUST DID. Changing the mode above deletes
+  // nothing; this line is the entire feedback for that change, so it is
+  // repainted from a fresh usage read after every patch.
+  storageNext.textContent =
+    usage.next.packs === 0
+      ? t('settings.retentionNextNone')
+      : t('settings.retentionNext', {
+          packs: String(usage.next.packs),
+          size: formatBytes(usage.next.bytes),
+        })
+}
+
+function renderStorageMeter(usage: StorageUsage): void {
+  const level = budgetLevel(usage.totalBytes, usage.maxBytes)
+  const percent = budgetPercent(usage.totalBytes, usage.maxBytes)
+  storageBarFill.style.width = `${String(Math.min(100, percent))}%`
+  storageBar.classList.toggle('near', level === 'near')
+  storageBar.classList.toggle('over', level === 'over')
+  storageMeterText.textContent =
+    usage.totalPacks === 0
+      ? t('common.storageEmpty')
+      : t('common.storageMeter', {
+          used: formatBytes(usage.totalBytes),
+          max: formatBytes(usage.maxBytes),
+          percent: String(percent),
+        })
 }
 
 function refreshStorage(): void {
@@ -1046,6 +1104,21 @@ function refreshStorage(): void {
       storageTotal.textContent = ''
     })
 }
+
+// Both write a policy and neither runs it: main persists the value, the
+// scheduler reads it at its next run, and the only thing that happens now is
+// that the sentence under the dropdown changes.
+retentionSelect.addEventListener('change', () => {
+  const days = Number.parseInt(retentionSelect.value, 10)
+  if (!RETENTION_DAY_CHOICES.includes(days)) return
+  void apply({ storageRetentionDays: days }).then(refreshStorage)
+})
+
+maxBytesSelect.addEventListener('change', () => {
+  const bytes = Number.parseInt(maxBytesSelect.value, 10)
+  if (!STORAGE_MAX_BYTES_CHOICES.includes(bytes)) return
+  void apply({ storageMaxBytes: bytes }).then(refreshStorage)
+})
 
 for (const btn of storageRow.querySelectorAll<HTMLButtonElement>('[data-purge]')) {
   btn.addEventListener('click', () => {
@@ -1470,6 +1543,8 @@ function syncControls(): void {
     el<HTMLInputElement>(field.id).value = String(field.fromSettings(s))
   }
   captureDisplaySelect.value = s.captureDisplay
+  retentionSelect.value = String(s.storageRetentionDays)
+  maxBytesSelect.value = String(s.storageMaxBytes)
   clipboardSelect.value = s.clipboardAfterSave
   imageClipboardSelect.value = s.imageClipboardAfterSave
   replayMaxWidthSelect.value = String(s.replayMaxWidth)

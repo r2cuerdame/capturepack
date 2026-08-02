@@ -8,6 +8,7 @@ import type {
   HistoryListResult,
   HistoryRenameResult,
   HistoryRenderStatusPayload,
+  StorageUsage,
   ToastCreateZipResult,
 } from '../shared/ipc'
 
@@ -20,6 +21,10 @@ contextBridge.exposeInMainWorld('historyBridge', {
   },
   size(packPath: string): Promise<number | null> {
     return ipcRenderer.invoke(IPC.historySize, packPath) as Promise<number | null>
+  },
+  // The whole folder, for the header bar — not a sum of the per-card sizes.
+  usage(): Promise<StorageUsage | null> {
+    return ipcRenderer.invoke(IPC.historyUsage) as Promise<StorageUsage | null>
   },
   searchText(packPath: string): Promise<string> {
     return ipcRenderer.invoke(IPC.historySearchText, packPath) as Promise<string>

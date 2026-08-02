@@ -42,6 +42,11 @@ import {
   syncBoundsToRepresentative,
 } from '../../shared/motion'
 import { computeDisplayNumbers } from '../../shared/numbering'
+// The other half of numbering (SPEC §8.5, #51): what number an assignment gives
+// a box, and what has to be STORED for it to keep that number. Rendering a
+// number and assigning one are different jobs, which is why only the first is
+// re-exported by shared/numbering.
+import { nextDisplayNumber, planNumberPins } from '../../shared/types'
 import { contextFrameRequestsForDisplays } from '../../shared/displayClock'
 import {
   ObjectIndex,
@@ -165,6 +170,7 @@ const boxHeader = el<HTMLDivElement>('boxHeader')
 const numberBtn = el<HTMLButtonElement>('numberBtn')
 const numberPinBtn = el<HTMLButtonElement>('numberPinBtn')
 const numberPicker = el<HTMLDivElement>('numberPicker')
+const numberPinChoices = el<HTMLDivElement>('numberPinChoices')
 const durationChip = el<HTMLButtonElement>('durationChip')
 const blurBtn = el<HTMLButtonElement>('blurBtn')
 const deleteBtn = el<HTMLButtonElement>('deleteBtn')
@@ -1975,10 +1981,17 @@ function headerAnnotation(): Annotation | null {
  * as any committed box, so nothing renumbers on commit.
  */
 function displayNumbers(): ReadonlyMap<string, number> {
+  return computeDisplayNumbers(numberingScope())
+}
+
+/**
+ * Every box the numbering rule can see: the store, plus the pending one. The
+ * assignment side (#51) has to ask over the SAME set the canvas draws from, or
+ * "the next number" would be one the user can already see on screen.
+ */
+function numberingScope(): readonly Annotation[] {
   const pending = pendingDraft()
-  return computeDisplayNumbers(
-    pending === null ? state.annotations : [...state.annotations, pending],
-  )
+  return pending === null ? state.annotations : [...state.annotations, pending]
 }
 
 /** The box drawn with selection chrome: the pending one, else the selection. */
@@ -2092,8 +2105,9 @@ function syncSelectionUi(): void {
   numberBtn.textContent = a.numbered && number !== undefined ? String(number) : '#'
   numberBtn.classList.toggle('on', a.numbered)
   // Choosing WHICH number is meaningless for a box that shows none, so the
-  // caret follows the toggle. A pin the user set while numbering was on is
-  // kept, not cleared, when they turn it off and on again — see `number_pin`.
+  // caret follows the toggle. Turning numbering off RELEASES the number (#51):
+  // there is nothing kept behind the caret to be restored, because turning it
+  // back on is a new assignment and takes the next number.
   numberPinBtn.hidden = !a.numbered
   if (!a.numbered && numberPickerOpen) closeNumberPicker(false)
   syncNumberPicker(a)
@@ -2229,10 +2243,71 @@ overlay.addEventListener('mousedown', (e) => {
   if (textSession !== null) e.preventDefault()
 })
 
+/**
+ * A numbering edit is never an edit to ONE box (SPEC §8.5, #51). Giving a box a
+ * number moves the boxes it displaced, and where those land is stored data now —
+ * so the plan comes back naming other boxes, and the flag and every pin have to
+ * land in a SINGLE undo step. Ctrl+Z taking a rearranged sequence apart one box
+ * at a time would leave the pack in an order nobody ever asked for.
+ */
+function applyNumberingChange(
+  mutate: (a: Annotation) => void,
+  plan: ReadonlyMap<string, number>,
+): void {
+  const pending = pendingDraft()
+  const target = pending ?? selectedVisibleAnnotation()
+  if (target === null) return
+  const snapshot = state.cloneAnnotations()
+  const before = JSON.stringify(state.annotations)
+  mutate(target)
+  for (const [id, pin] of plan) {
+    const a = id === target.annotation_id ? target : state.byId(id)
+    if (a === undefined) continue
+    a.number_pin = pin
+  }
+  // AN EDIT THAT CHANGED NOTHING IS NOT AN UNDO STEP. Two ways to get here with
+  // nothing to record: a pending box, which is not in the store at all and is
+  // discarded whole by Esc (see applyMutation), and asking for the number a box
+  // already shows, which plans no pins on purpose. Either would otherwise cost a
+  // Ctrl+Z that does nothing visible and throws the redo stack away.
+  if (JSON.stringify(state.annotations) !== before) state.pushUndoSnapshot(snapshot)
+  refresh()
+  // The header label is the number that just changed; do not make the user wait
+  // for the next paint to read it.
+  syncSelectionUi()
+}
+
+/**
+ * [#]: numbering on or off for the header's box.
+ *
+ * ON TAKES THE NEXT NUMBER, whatever the box's age (#51). Numbering used to come
+ * from `created_at` alone, so re-numbering an old box slid it back into the
+ * MIDDLE of the sequence — the user had just re-assigned it, and the app put it
+ * where the capture clock said it belonged. OFF releases the number and the rest
+ * close up; nothing is kept behind to be silently restored.
+ */
+function toggleSelectedNumbering(): void {
+  const a = headerAnnotation()
+  if (a === null) return
+  if (a.numbered) {
+    applyNumberingChange((box) => {
+      box.numbered = false
+      delete box.number_pin
+    }, new Map())
+    return
+  }
+  // Planned against the sequence as it stands NOW — the box is not part of it
+  // yet, and asking after the flag flips would shuffle the boxes around it.
+  const scope = numberingScope()
+  const id = a.annotation_id
+  const plan = planNumberPins(scope, id, nextDisplayNumber(scope, id))
+  applyNumberingChange((box) => {
+    box.numbered = true
+  }, plan)
+}
+
 numberBtn.addEventListener('click', () => {
-  applyMutation((a) => {
-    a.numbered = !a.numbered
-  })
+  toggleSelectedNumbering()
   refocusEditing()
 })
 
@@ -2250,6 +2325,11 @@ numberPicker.addEventListener('click', (e) => {
 numberPicker.addEventListener('keydown', (e) => {
   if (e.key === 'F11' || e.key === 'F1') return
   e.stopPropagation()
+  // Typing the number is Alt+1..9 (and Alt+0 for automatic), bound on the window
+  // so it works whether or not this popover is open — see the keydown handler
+  // there. A bare digit is NOT bound here: it frames a captured display, an
+  // older documented binding, and the picker has no focus of its own to take it
+  // out of the window's hands.
   if (e.key === 'Escape') closeNumberPicker()
 })
 
@@ -2291,12 +2371,36 @@ function closeDurationEditor(refocus = true): void {
   if (refocus) refocusEditing()
 }
 
-/** Marks the picker's current answer, so it shows the state as well as offers. */
+/**
+ * Fills the picker with the numbers this capture HAS and marks the one the box
+ * holds, so it shows the state as well as the offers.
+ *
+ * THE OFFERS ARE THE NUMBERS THAT EXIST (#51). The fixed 1-9 grid this replaced
+ * was a set with nothing to do with the capture in front of the user: it offered
+ * a ⑨ to a three-box pack, which numbering could only bend back to ③, and had no
+ * ⑫ for a twelve-box one.
+ */
 function syncNumberPicker(a: Annotation): void {
-  const pin = typeof a.number_pin === 'number' ? a.number_pin : null
-  for (const btn of numberPicker.querySelectorAll<HTMLButtonElement>('button[data-pin]')) {
-    const v = btn.dataset.pin
-    btn.classList.toggle('on', v === 'auto' ? pin === null : Number(v) === pin)
+  const numbers = displayNumbers()
+  // Rebuilt only when the count changes: this runs on every paint, and replacing
+  // the buttons under the pointer would swallow a click already on its way.
+  if (numberPinChoices.childElementCount !== numbers.size) {
+    numberPinChoices.replaceChildren(
+      ...Array.from({ length: numbers.size }, (_, i) => {
+        const btn = document.createElement('button')
+        btn.type = 'button'
+        btn.dataset.pin = String(i + 1)
+        btn.textContent = String(i + 1)
+        return btn
+      }),
+    )
+  }
+  // The number this box shows NOW — marked whether it was typed or fell out of
+  // creation order. Which of the two it is shows in Auto being offered at all,
+  // not in a second highlight the user would have to learn to read.
+  const mine = numbers.get(a.annotation_id)
+  for (const btn of numberPinChoices.querySelectorAll<HTMLButtonElement>('button[data-pin]')) {
+    btn.classList.toggle('on', Number(btn.dataset.pin) === mine)
   }
 }
 
@@ -2331,20 +2435,34 @@ function positionNumberPicker(): void {
 }
 
 /**
- * Pins the selected box to `pin`, or back to automatic with null.
+ * Gives the selected box display number `pin`, or hands it back to automatic
+ * numbering with null.
  *
- * Setting a pin also turns numbering ON: asking for number 3 on a box that
- * shows no number is a request nobody means, and silently doing nothing is the
- * worse answer.
+ * THE NUMBER IS THE REQUEST; the pins are how it is kept (SPEC §8.5, #51). A box
+ * already holding that number changes nothing — planNumberPins returns an empty
+ * plan — and a box that took it from someone else pushes them along, all of it
+ * stored in one edit.
+ *
+ * Asking for a number also turns numbering ON: number 3 on a box that shows no
+ * number is a request nobody means, and silently doing nothing is the worse
+ * answer.
  */
 function setSelectedNumberPin(pin: number | null): void {
-  applyMutation((a) => {
-    if (pin === null) delete a.number_pin
-    else {
-      a.number_pin = pin
-      a.numbered = true
-    }
-  })
+  const a = headerAnnotation()
+  if (a === null) return
+  if (pin === null) {
+    // Back to automatic: the box drops its claim and takes its place by creation
+    // order again, around whatever the other boxes asked for.
+    applyNumberingChange((box) => {
+      delete box.number_pin
+    }, new Map())
+    closeNumberPicker()
+    return
+  }
+  const plan = planNumberPins(numberingScope(), a.annotation_id, pin)
+  applyNumberingChange((box) => {
+    box.numbered = true
+  }, plan)
   closeNumberPicker()
 }
 
@@ -4436,6 +4554,10 @@ window.addEventListener('keydown', (e) => {
   // +1 produces different characters on different layouts, and the sheet
   // advertises the digits, not whatever the layout makes of them. Alt+0 goes
   // back to automatic, the same "0 resets" idiom the board fit already uses.
+  //
+  // The keyboard stops at 9 because the keys do; a capture with more numbered
+  // boxes than that offers every one of them in the picker (#51), which is the
+  // only surface that can grow with the pack.
   if (e.altKey && !e.ctrlKey && !e.metaKey && headerAnnotation() !== null) {
     const digit = /^Digit([0-9])$/.exec(e.code)
     if (digit !== null) {

@@ -4,6 +4,12 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { isSupportedLanguage } from '../shared/i18n'
 import {
+  DEFAULT_STORAGE_MAX_BYTES,
+  isRetentionDays,
+  isStorageMaxBytes,
+  RETENTION_KEEP_EVERYTHING,
+} from '../shared/retention'
+import {
   DEFAULT_CAPTURE_HOTKEY,
   DEFAULT_IMAGE_CAPTURE_HOTKEY,
   normalizeCaptureFps,
@@ -50,6 +56,23 @@ function defaultSettings(): Settings {
     notifyOnRecordingStart: true,
     recordingEnabled: true,
     outputDir: path.join(app.getPath('desktop'), 'CapturePack'),
+    // AUTOMATIC CLEANUP IS OFF FOR A NEW USER, AND STAYS OFF UNTIL ASKED.
+    //
+    // The panel has had counted, confirmable delete buttons since 0.3.x, and
+    // the note beside them said this tool was never going to grow a background
+    // job that quietly deletes evidence. Issue #47 is the user asking for one
+    // anyway, and the reason is real: someone who captures in bursts fills a
+    // folder faster than they will ever tidy it. The answer is not to refuse —
+    // it is to make sure the deletion is something they chose. So the default
+    // keeps everything, the mode is a mode rather than a button, the panel
+    // states what the next run would take before any run happens, and what the
+    // run takes still goes to the Recycle Bin.
+    storageRetentionDays: RETENTION_KEEP_EVERYTHING,
+    // The bar's denominator from the first launch, so the History header can
+    // say something honest before the user has an opinion about size. It only
+    // becomes a delete rule when the flag below is turned on.
+    storageMaxBytes: DEFAULT_STORAGE_MAX_BYTES,
+    storageEnforceMaxBytes: false,
     // The prompt, not the folder: what a saved pack is for, nine times out of
     // ten, is the next sentence typed into an LLM.
     clipboardAfterSave: 'prompt',
@@ -266,6 +289,9 @@ const SETTINGS_KEY_SET: Record<keyof Settings, true> = {
   launchAtLogin: true,
   notifyOnRecordingStart: true,
   outputDir: true,
+  storageRetentionDays: true,
+  storageMaxBytes: true,
+  storageEnforceMaxBytes: true,
   clipboardAfterSave: true,
   imageClipboardAfterSave: true,
   welcomeShown: true,
@@ -417,6 +443,21 @@ function mergeSettings(base: Settings, raw: Record<string, unknown>): Settings {
         ? raw.notifyOnRecordingStart
         : base.notifyOnRecordingStart,
     outputDir: typeof raw.outputDir === 'string' && raw.outputDir.length > 0 ? raw.outputDir : base.outputDir,
+    // AN UNRECOGNISED VALUE FALLS BACK TO THE DEFAULT, WHICH KEEPS EVERYTHING.
+    // This is the one setting where a rejected value has to fail in the safe
+    // direction by construction: a typo in a hand-edited settings.json must
+    // never resolve to a shorter retention than the user asked for, and the
+    // enumerated list is what makes "3.5" or "365" impossible to express.
+    storageRetentionDays: isRetentionDays(raw.storageRetentionDays)
+      ? raw.storageRetentionDays
+      : base.storageRetentionDays,
+    storageMaxBytes: isStorageMaxBytes(raw.storageMaxBytes)
+      ? raw.storageMaxBytes
+      : base.storageMaxBytes,
+    storageEnforceMaxBytes:
+      typeof raw.storageEnforceMaxBytes === 'boolean'
+        ? raw.storageEnforceMaxBytes
+        : base.storageEnforceMaxBytes,
     // v2 -> v3: the boolean became a mode.
     //
     // `true` LITERALLY meant "copy the folder", and the first cut of this

@@ -2304,16 +2304,30 @@ happens inside one Annotation Box.
 
 ### Pin Numbering
 
-- Displayed pin numbers are **computed, never stored** — each annotation's permanent
-  identity is its immutable `annotation_id` (e.g. `ann_8f21c4`); `display_number` is
-  derived at display/export time and is not a source-data identifier.
-- **Automatic renumbering** — add, delete, move, or time-change recomputes every pin
-  number immediately. No gaps, always contiguous from 1.
-- **Ordering** — start_time asc → creation order asc → annotation_id asc. Changing a
-  pin's time on the timeline updates its number immediately.
+- Displayed pin numbers are **computed** — each annotation's permanent identity is its
+  immutable `annotation_id` (e.g. `ann_8f21c4`); `display_number` is derived at
+  display/export time and is never a source-data identifier. A number the user
+  ASSIGNED is stored, as `number_pin`: an input to the computation, not its result.
+- **Automatic renumbering** — add, delete, number or un-number a box and every number
+  is recomputed immediately. No gaps, always contiguous from 1. That guarantee is
+  absolute; everything below only decides which box holds which number.
+- **Ordering is assignment order** (#51) — the order the user gave the numbers out,
+  which for a box nobody re-numbered is creation order (`created_at` asc as an instant
+  → z asc → annotation_id asc). It is NOT timeline order: a box drawn last but scrubbed
+  back to an earlier frame does not take ①, and where a box sits on the replay clock is
+  a question the documents already answer by printing its time beside its number.
+- **The user can compose the reading order** (#51) — numbering is the one place a user
+  writes a sequence for someone else to follow, so:
+  - turning a box's number **on takes the next number**, whatever the box's age;
+  - turning it **off releases** the number and the rest close up — nothing is kept
+    behind to reappear later;
+  - **typing a number another box holds pushes that one along** instead of duplicating
+    it, and only what creation order cannot already say is written into the pack;
+  - the editor offers exactly the numbers the capture HAS, never a fixed 1-9 grid.
 - **Consistency scope** — the same numbers everywhere: editor canvas, annotation list,
   timeline, replay_annotated, report.md, README.md, the annotations export view, MCP
-  responses, skills documents. Video numbers and document numbers must never differ.
+  responses, skills documents. Video numbers and document numbers must never differ,
+  which is why there is exactly one implementation (`core/src/shared/numbering.ts`).
 - **Rendering** — final numbers are computed right before rendering replay_annotated;
   each frame draws only the pins active at that time, but with their GLOBAL fixed
   numbers (if only ② is active in a frame, it renders as ② — numbers never re-compress
@@ -2321,7 +2335,10 @@ happens inside one Annotation Box.
 - **Documents** — report.md/README.md use the final computed order
   (`1. 00:03.200 - description`); if pins change after generation, documents are
   regenerated on Save/Export.
-- The user never manages pin numbers — CapturePack always keeps them tidy.
+- The user never has to TIDY pin numbers — CapturePack keeps them contiguous — but the
+  order is theirs to compose. (This replaced "the user never manages pin numbers":
+  keeping them tidy was read as keeping them out of the user's hands, and #51 is what
+  that cost.)
 
 ---
 

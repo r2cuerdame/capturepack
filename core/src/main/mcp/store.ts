@@ -6,25 +6,7 @@ import { directoryHoldsCapturePack, manifestNamesCapturePack } from '../../share
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import type { AnnotationsFile, Manifest, TimelineFile } from '../../shared/types'
-
-const PACK_EXT = '.capturepack'
-/**
- * Archive extensions this store will open, newest convention first.
- *
- * `.zip` is what the app writes now — an archive should say what it is, so a
- * stranger's Windows, mail client and chat app can all open it without being
- * told to rename anything. `.capturepack` is still read because packs made by
- * earlier versions carry it, and a pack that stops being readable because the
- * app changed its mind about a file suffix would be the exact breakage this
- * project exists to prevent.
- */
-const PACK_ARCHIVE_EXTS: readonly string[] = ['.zip', PACK_EXT]
-
-/** Which archive extension `name` ends with, or null when it is not one. */
-function packArchiveExt(name: string): string | null {
-  const lower = name.toLowerCase()
-  return PACK_ARCHIVE_EXTS.find((ext) => lower.endsWith(ext)) ?? null
-}
+import { packArchiveExt } from '../packArchive'
 
 /**
  * True when a zip has a manifest.json at its root.

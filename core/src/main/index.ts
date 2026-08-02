@@ -36,6 +36,7 @@ import {
 import { uiLanguage, uiT } from './locale'
 import { initForensics, logError, logInfo, logWarn } from './log'
 import { mcpEndpoint, startMcpAtBoot, stopMcpServer } from './mcp/service'
+import { armSaveNow, saveNowRequest } from './saveNow'
 import { startCaptureFlow, startImageCaptureFlow } from './session'
 import { loadSettings, persistSettings } from './settings'
 import { openSettingsWindow, registerSettingsIpc } from './settingsWindow'
@@ -275,9 +276,23 @@ function main(): void {
     // Whether the CURRENT failure episode has already been announced. An
     // episode ends only when the recorder proves it is recording again.
     let failureAnnounced = false
+    // SHUTTING THE RECORDERS DOWN IS NOT A RECORDING FAILURE (#63).
+    //
+    // Closing the recorder windows is one of the first things quitting does,
+    // and the recorders report exactly what happened: 'process-stopped'. Read
+    // as an outage, that produced a balloon saying the last N seconds were not
+    // being recorded — on every deliberate exit, as the tray icon it came from
+    // was disappearing. Nothing is lost from the record: capture.ts still logs
+    // every state transition. What goes is the claim that a shutdown broke
+    // something, which is also what makes "announced exactly once" a fact CI
+    // can assert on rather than a count polluted by the exit itself.
+    let quitting = false
+    app.on('before-quit', () => {
+      quitting = true
+    })
 
     const handleRecorderState = (state: RecorderState): void => {
-      if (tray === null) return
+      if (tray === null || quitting) return
       tray.refresh()
       if (state.status === 'recording') {
         // The failure is OVER — the only thing that ends an episode, and
@@ -537,6 +552,36 @@ function main(): void {
             void capture()
           }, delayMs)
         }
+      }
+      // `--save-now[=SECONDS]` (#63): the half of an unattended capture nobody
+      // can press. `--capture-now` above opens the editor exactly the way the
+      // hotkey does — and then the flow waits for a person, which on a CI
+      // runner never arrives. Armed here rather than inside the capture flow so
+      // that a capture which never even starts still ends in an exit code
+      // instead of a job that hangs until its timeout.
+      const saveNow = saveNowRequest(process.argv)
+      if (saveNow !== null) {
+        logInfo(
+          `[capture] --save-now: the editor will save without a person; ` +
+            `deadline ${String(Math.round(saveNow.deadlineMs / 1_000))}s`,
+        )
+        void armSaveNow(saveNow).then((verdict) => {
+          logInfo(
+            `[capture] --save-now: ${verdict.result} (exit ${String(verdict.exitCode)})` +
+              (verdict.dirPath === null ? '' : ` — ${verdict.dirPath}`),
+          )
+          // A deliberate exit, and recorded as one: without this the next start
+          // in the same user-data directory would report the run as a
+          // disappearance (issue #61) and CI would inherit a false alarm.
+          noteExitIntent('unattended-save')
+          // app.quit() first so will-quit runs — that is what closes the run
+          // marker, stops the recorders and flushes the log. app.exit() alone
+          // skips all of it, and app.quit() alone cannot carry an exit code, so
+          // the code is applied from a listener registered after the one
+          // installed at startup and therefore running after it.
+          app.once('will-quit', () => app.exit(verdict.exitCode))
+          app.quit()
+        })
       }
       // Dev aid / headed testing: open the Welcome window on launch.
       if (process.argv.includes('--show-welcome')) {

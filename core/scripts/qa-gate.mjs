@@ -28,13 +28,18 @@ const VIDEO_PROFILE_CHECKS = new Set([
   'check:keyframes',
   'check:pick',
   'check:numbering',
+  'check:number-assignment',
   'check:motion',
   'check:render',
   'check:annotation-style',
   'check:annotation-placement',
   'check:trim',
   'check:plugins',
-  'check:past',
+  // `check:past` was here. Past-frame picking was removed in 01e4069 along with
+  // its script, and this list kept naming it — which made the guard below throw
+  // on every single `npm run qa:video`, so the whole video profile has run never
+  // since. Removing a name that resolves to nothing is not weakening the gate;
+  // it is what lets the gate run at all.
   'check:windows-context',
   'check:repo-hygiene',
   'check:recorder-ring',
@@ -54,6 +59,8 @@ const VIDEO_PROFILE_CHECKS = new Set([
   'check:about',
   'check:clipboard',
   'check:source-first-save',
+  'check:save-now',
+  'check:pack-assertions',
   'check:background-media',
   'check:viewer',
   'check:chrome-lifecycle',

@@ -457,6 +457,9 @@ body[data-window-mode="windowed"] #zoomControl {
 #numberPicker {
   position: absolute;
   z-index: 7;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   padding: 8px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -464,12 +467,17 @@ body[data-window-mode="windowed"] #zoomControl {
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
 }
 
+/* One row per ten-ish numbers rather than one very wide popover: the offers are
+   as many as the capture has numbered boxes, so this has to survive a pack with
+   more of them than a header is wide. */
 #numberPinChoices {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
+  max-width: 232px;
 }
 
-#numberPinChoices button {
+#numberPicker button {
   border: 1px solid var(--border);
   border-radius: 5px;
   background: transparent;
@@ -480,13 +488,20 @@ body[data-window-mode="windowed"] #zoomControl {
   white-space: nowrap;
 }
 
-#numberPinChoices button:hover {
+#numberPinChoices button {
+  min-width: 26px;
+  font-variant-numeric: tabular-nums;
+}
+
+#numberPicker button:hover {
   background: var(--panel-hover);
 }
 
-/* The number this box is PINNED to, so the popover shows the current answer
-   rather than only offering new ones. */
-#numberPinChoices button.on {
+/* The number this box has RIGHT NOW, so the popover shows the current answer
+   rather than only offering new ones. It marks the number, not the storage:
+   whether that number came from creation order or from the user typing it is
+   this file's business, not something to make them read a highlight for. */
+#numberPicker button.on {
   border-color: #3574f0;
   background: rgba(53, 116, 240, 0.22);
 }

@@ -25,6 +25,16 @@
       <button type="button" class="chip" data-filter="week" data-i18n="history.filterWeek">This Week</button>
       <button type="button" class="chip" data-filter="renderfailed" data-i18n="history.filterRenderFailed">Render Failed</button>
     </nav>
+    <!-- What the whole folder weighs (issue #48), where the person deciding
+         what to delete is already looking. A fraction of the Max size in
+         Settings, never of the disk — and a distinct element from the per-card
+         .renderBar, which measures a render and means nothing like this. -->
+    <!-- Starts hidden: an empty bar next to no numbers is a claim about the
+         folder, and this window has not asked yet. The first list shows it. -->
+    <div id="usage" class="usage" hidden>
+      <span class="storageBar" id="usageBar" aria-hidden="true"><span class="storageBarFill" id="usageBarFill"></span></span>
+      <span class="usageText" id="usageText"></span>
+    </div>
     <!-- History is the only window a user stays in, so it is the only one where
          "I want to change a setting" happens without going back to the tray.
          Pushed to the far right, away from the filters, because it does not

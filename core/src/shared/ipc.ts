@@ -242,6 +242,10 @@ export const IPC = {
   historyThumb: 'history:thumb',
   // history window -> main (invoke): total pack size in bytes (computed async)
   historySize: 'history:size',
+  // history window -> main (invoke): what the whole output folder weighs, for
+  // the header's usage bar. The SAME snapshot Settings draws its bar from, so
+  // the two windows cannot disagree about the size of one folder.
+  historyUsage: 'history:usage',
   // history window -> main (invoke): lazily loaded searchable text for one pack
   // (report.md + note + annotation texts), cached main-side until the pack changes
   historySearchText: 'history:search-text',
@@ -1569,6 +1573,24 @@ export interface StorageUsage {
   totalPacks: number
   /** Keyed by age in days: what deleting everything older than that removes. */
   olderThan: { days: number; packs: number; bytes: number }[]
+  /**
+   * mtime of the oldest pack, or null when the folder holds none. The bar is
+   * the glance; this is one of the plain numbers printed beside it, because
+   * "12 packs, 4.1 GB" says nothing about whether that is a morning or a year.
+   */
+  oldestMs: number | null
+  /**
+   * The soft budget `totalBytes` is a fraction of (settings.storageMaxBytes).
+   * Travels with the usage so the two windows draw one bar against one
+   * denominator, and neither has to ask for settings to paint it.
+   */
+  maxBytes: number
+  /**
+   * What the NEXT automatic run would move to the Recycle Bin under the
+   * currently persisted policy — the sentence Settings shows instead of
+   * deleting anything the moment the mode changes.
+   */
+  next: { packs: number; bytes: number }
 }
 
 export interface StoragePurgeResult {

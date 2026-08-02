@@ -164,6 +164,48 @@ h2 {
   cursor: pointer;
 }
 
+/* ---- storage meter (issue #48) ----
+
+   A FRACTION OF THE MAX SIZE, NEVER OF THE DISK. The colour is the only thing
+   this bar says that the numbers beside it do not: green while there is room,
+   amber approaching the budget, red past it. Nothing here deletes anything —
+   crossing the line is a fact about the folder, and whether it is also a
+   trigger is the checkbox's business. */
+
+.storageMeter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 4px;
+}
+
+.storageBar {
+  position: relative;
+  flex: 0 1 220px;
+  min-width: 90px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--panel-hover);
+  overflow: hidden;
+}
+
+.storageBarFill {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: #3fa863;
+  transition: width 160ms linear;
+}
+
+.storageBar.near .storageBarFill {
+  background: #d4a03a;
+}
+
+.storageBar.over .storageBarFill {
+  background: #e5484d;
+}
+
 /* ---- controls ---- */
 
 input[type="checkbox"] {

@@ -280,8 +280,8 @@ npm run qa:rc
 npm audit --omit=dev
 ```
 
-`qa:rc` currently runs 74 discovered `check:*` regressions plus type checking,
-the production build, and isolated Electron smoke: **77 gate steps** (75 with
+`qa:rc` currently runs 78 discovered `check:*` regressions plus type checking,
+the production build, and isolated Electron smoke: **81 gate steps** (79 with
 `--skip-build`). Reports
 are written under `%TEMP%\capturepack-qa` unless an artifact directory is
 provided.
@@ -304,6 +304,22 @@ npm run qa:chrome-bridge
 # needs ffmpeg/ffprobe on PATH and a pack containing a dragged window. Read-only
 # — it opens the pack, decodes its replay and writes nothing back.
 npm run qa:exposure-field -- --pack C:\_CapturePack\CapturePack_YYYY-MM-DD_HHMMSS
+
+# Capture a pack with nobody at the machine and assert on it (#63) — what the
+# `capture-e2e` CI job runs, in the same order. NOT in the gate: it records the
+# desktop, so it needs a real display. `--save-now` exits 0 when the pack's
+# sources are durable, 20 when the flow saved nothing, 21 when it never
+# finished. Use your own directories: a shared profile takes the
+# single-instance lock and kills your instance.
+$work = "$env:TEMP\capturepack-e2e"
+.\node_modules\.bin\electron.cmd . --user-data-dir="$work\userdata" `
+  --output-dir="$work\packs" --no-global-shortcut --capture-now=6 --save-now
+node scripts\assert-capturepack.mjs (Get-ChildItem -Directory "$work\packs")[0].FullName `
+  --expect-replay --log "$work\userdata\logs\main.log"
+
+# The same run with the recorder starved. The pack must STATE that the replay
+# is unavailable; add --simulate-no-frames and swap --expect-replay for
+# --expect-no-replay.
 
 # Audit a real pack without mutating it.
 npm run qa:rc -- --pack C:\_CapturePack\CapturePack_YYYY-MM-DD_HHMMSS
@@ -446,7 +462,7 @@ PowerShell otherwise eats `-c.directories...` as an argument to `-c`.)
   `t_ms: 0` and the distance from the shutter is the reader's to weigh. Pinned by
   `check:still-dom`. **The documentation shipped before the feature; that is its
   own lesson.**
-- **The gate is 77 steps.** `npm run qa:rc` — NOT `node scripts/qa-gate.mjs`,
+- **The gate is 81 steps.** `npm run qa:rc` — NOT `node scripts/qa-gate.mjs`,
   which loses `npm_execpath` and then cannot spawn `npm.cmd` under Node 24.
 
 - Element picking now reports itself end to end: the picker's arming, failure

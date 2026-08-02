@@ -38,8 +38,7 @@ import type {
   StorageUsage,
 } from '../shared/ipc'
 import { resolveLanguage } from '../shared/i18n'
-import { directoryHoldsCapturePack, manifestNamesCapturePack } from '../shared/packIdentity'
-import AdmZip from 'adm-zip'
+import { purgeOlderThan, startRetentionScheduler, storageUsage } from './storage'
 import type { Settings } from '../shared/types'
 import { logError, logInfo, logWarn } from './log'
 import { restartCapture } from './capture'
@@ -58,158 +57,6 @@ import { setAutoUpdateCheck } from './updater'
 
 /** The online manual (GOAL "First-Run Tutorial"). */
 const GUIDE_URL = 'https://capturepack.dev/guide'
-
-/**
- * The ages the panel offers, in days — and ZERO, which means everything.
- *
- * Zero is not a special case anywhere below: "older than 0 days" has a cutoff
- * of now, and every pack on disk was written before now. So one walk, one
- * filter and one counted, confirmable delete serve all four buttons, and
- * "delete everything" cannot drift away from the three that are dated.
- */
-const PURGE_AGES_DAYS: readonly number[] = [0, 1, 7, 30]
-
-/** A pack folder, or an archive sitting beside one, with its size and age. */
-interface StoredPack {
-  path: string
-  bytes: number
-  mtimeMs: number
-}
-
-/**
- * Every CapturePack in the output folder — and NOTHING else in it.
- *
- * A folder counts only when it holds a manifest.json, and an archive only when
- * its name matches one of ours. The output folder is a place the user also
- * keeps their own things (this machine's is the Desktop), and a storage tool
- * that measured or deleted by "everything in this directory" would be a
- * catastrophe waiting for its first Downloads folder.
- */
-function listStoredPacks(outputDir: string): StoredPack[] {
-  let entries: fs.Dirent[]
-  try {
-    entries = fs.readdirSync(outputDir, { withFileTypes: true })
-  } catch {
-    return []
-  }
-  const packs: StoredPack[] = []
-  for (const entry of entries) {
-    const full = path.join(outputDir, entry.name)
-    try {
-      // A NAME IS NOT AN IDENTITY, AND THIS LIST FEEDS A DELETE.
-      //
-      // This counted any directory holding a file called manifest.json, and any
-      // file whose name ended in .zip. `purgeOlderThan` then hands every entry
-      // to the Recycle Bin. The output folder is the user's to choose, and the
-      // Settings GUI lets them choose Downloads, Documents or the Desktop
-      // itself — where "delete older than 30 days" would have taken every
-      // unrelated archive, and every npm, Electron or Rust project folder,
-      // because those all carry a manifest.json too.
-      //
-      // So a pack is now something that SAYS it is a pack: its manifest must
-      // parse and must name this format. The cost is one small read per
-      // candidate, on a path that is about to delete things.
-      if (entry.isDirectory()) {
-        if (!directoryHoldsCapturePack(full)) continue
-        packs.push({ path: full, bytes: dirBytes(full), mtimeMs: fs.statSync(full).mtimeMs })
-      } else if (entry.isFile() && /\.(zip|capturepack)$/i.test(entry.name)) {
-        if (!archiveHoldsCapturePack(full)) continue
-        const stat = fs.statSync(full)
-        packs.push({ path: full, bytes: stat.size, mtimeMs: stat.mtimeMs })
-      }
-    } catch {
-      // Vanished or unreadable mid-scan: not counted, not deleted.
-    }
-  }
-  return packs
-}
-
-/** Recursive size, best effort — an unreadable child costs its own bytes only. */
-/**
- * A pack ARCHIVE: the zip's central directory holds a `manifest.json` that
- * parses and names this format. adm-zip reads the entry table without
- * inflating the body, so this is one small read even for a large pack.
- */
-function archiveHoldsCapturePack(zipPath: string): boolean {
-  try {
-    const entry = new AdmZip(zipPath).getEntry('manifest.json')
-    if (entry === null || entry.isDirectory) return false
-    return manifestNamesCapturePack(entry.getData().toString('utf8'))
-  } catch {
-    // Not a zip, truncated, or unreadable — not a pack, and not deleted.
-    return false
-  }
-}
-
-function dirBytes(dir: string): number {
-  let total = 0
-  let entries: fs.Dirent[]
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true })
-  } catch {
-    return 0
-  }
-  for (const entry of entries) {
-    const full = path.join(dir, entry.name)
-    try {
-      if (entry.isDirectory()) total += dirBytes(full)
-      else total += fs.statSync(full).size
-    } catch {
-      // Skip.
-    }
-  }
-  return total
-}
-
-function storageUsage(outputDir: string): StorageUsage {
-  const packs = listStoredPacks(outputDir)
-  const now = Date.now()
-  return {
-    totalBytes: packs.reduce((sum, p) => sum + p.bytes, 0),
-    totalPacks: packs.length,
-    olderThan: PURGE_AGES_DAYS.map((days) => {
-      const cutoff = now - days * 86_400_000
-      const old = packs.filter((p) => p.mtimeMs < cutoff)
-      return { days, packs: old.length, bytes: old.reduce((sum, p) => sum + p.bytes, 0) }
-    }),
-  }
-}
-
-/**
- * Moves packs older than `days` to the Recycle Bin.
- *
- * TRASH, NEVER UNLINK. These are captures the user chose to keep, and a wrong
- * click here would otherwise be unrecoverable. shell.trashItem is what makes
- * this a decision the user can take back — and if the shell refuses, the pack
- * stays where it is rather than being removed some other way.
- */
-async function purgeOlderThan(outputDir: string, days: number): Promise<StoragePurgeResult> {
-  const cutoff = Date.now() - days * 86_400_000
-  const doomed = listStoredPacks(outputDir).filter((p) => p.mtimeMs < cutoff)
-  let packsDeleted = 0
-  let bytesFreed = 0
-  let firstError: string | null = null
-  for (const pack of doomed) {
-    try {
-      await shell.trashItem(pack.path)
-      packsDeleted += 1
-      bytesFreed += pack.bytes
-    } catch (err) {
-      if (firstError === null) firstError = err instanceof Error ? err.message : String(err)
-    }
-  }
-  logInfo(
-    `[storage] purge ${days === 0 ? 'everything' : `older than ${String(days)}d`}: ` +
-      `${String(packsDeleted)} of ${String(doomed.length)} pack(s) ` +
-      `to the Recycle Bin, ${String(Math.round(bytesFreed / 1_048_576))} MB`,
-  )
-  return {
-    ok: firstError === null,
-    packsDeleted,
-    bytesFreed,
-    ...(firstError === null ? {} : { error: firstError }),
-  }
-}
 
 /** The address the user needs, named once so the UI and the launcher agree. */
 const EXTENSIONS_URL = 'chrome://extensions'
@@ -371,6 +218,14 @@ export interface SettingsIpcHooks {
 // Call once at startup, before the window can open.
 export function registerSettingsIpc(live: Settings, hooks: SettingsIpcHooks = {}): void {
   liveSettings = live
+
+  // Automatic history cleanup (issue #47) starts here because this is the one
+  // startup call that already holds the LIVE settings object, and the sweep has
+  // to follow that object rather than a copy taken at boot: a retention change
+  // made in this window is what the next run must honour, without a restart.
+  // Starting it is not running it — the first sweep is on a delay, the next is
+  // a day later, and settings:set below deliberately triggers neither.
+  startRetentionScheduler(live)
 
   ipcMain.handle(IPC.settingsGet, (): SettingsGetResult => {
     return {
@@ -600,24 +455,26 @@ export function registerSettingsIpc(live: Settings, hooks: SettingsIpcHooks = {}
   })
 
   // Storage (GOAL "Settings GUI"): the app that fills the folder is the one
-  // that should be able to empty it. Both handlers walk the SAME set of
-  // entries — a pack is a folder holding a manifest, or an archive beside one —
-  // so nothing else the user keeps in that folder is ever counted or touched.
+  // that should be able to empty it. Both handlers go through storage.ts, which
+  // reads the same pack index History lists and deletes through, so nothing
+  // else the user keeps in that folder is ever counted or touched — and the
+  // number on the usage bar, the number in the confirmation and the set of
+  // folders that actually move to the Recycle Bin are one answer.
   ipcMain.handle(IPC.settingsStorageUsage, async (): Promise<StorageUsage> => {
-    return storageUsage(live.outputDir)
+    return storageUsage(live)
   })
 
   ipcMain.handle(
     IPC.settingsStoragePurge,
     async (_event, days: unknown): Promise<StoragePurgeResult> => {
       const olderThanDays = typeof days === 'number' && Number.isFinite(days) ? days : NaN
-      // Zero is now a button of its own — "Delete everything" — and it says so
+      // Zero is a button of its own — "Delete everything" — and it says so
       // before it runs. Negative is still nothing this panel can mean, and a
       // value this function does not recognise deletes nothing.
       if (!(olderThanDays >= 0)) {
         return { ok: false, packsDeleted: 0, bytesFreed: 0, error: 'unsupported age' }
       }
-      return purgeOlderThan(live.outputDir, olderThanDays)
+      return purgeOlderThan(live, olderThanDays)
     },
   )
 

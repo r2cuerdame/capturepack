@@ -74,10 +74,68 @@ body {
   flex-wrap: wrap;
 }
 
-/* Pushed to the far right by the auto margin, so it never reads as one more
-   filter chip sitting at the end of the row. */
-#settingsBtn {
+/* ---- storage usage (issue #48) ----
+
+   THE BAR IS THE GLANCE, THE NUMBERS ARE THE TRUTH. The fill is a fraction of
+   the Max size set in Settings — never of the disk, where 3 GB of a 2 TB drive
+   would draw as empty while still being 3 GB of screen recordings — and it
+   colours as it approaches. The text beside it carries what the colour cannot:
+   how many packs, how many bytes, and how far back they go.
+
+   Deliberately NOT .renderBar. That class is the per-card render progress
+   indicator and shares nothing with this but a shape; one bar filling because a
+   render is halfway and another filling because a folder is halfway would be
+   the same picture told to mean two different things. */
+
+.usage {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin-left: auto;
+  min-width: 0;
+}
+
+.usage[hidden] {
+  display: none !important;
+}
+
+.usage .storageBar {
+  position: relative;
+  flex: 0 0 90px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--panel-hover);
+  overflow: hidden;
+}
+
+.usage .storageBarFill {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: #3fa863;
+  transition: width 160ms linear;
+}
+
+.usage .storageBar.near .storageBarFill {
+  background: #d4a03a;
+}
+
+.usage .storageBar.over .storageBarFill {
+  background: var(--danger);
+}
+
+.usageText {
+  color: var(--muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Sits at the end of the row on its own, next to the usage block that now
+   carries the auto margin, so it never reads as one more filter chip. */
+#settingsBtn {
   border: 1px solid var(--border);
   border-radius: 7px;
   background: var(--panel);

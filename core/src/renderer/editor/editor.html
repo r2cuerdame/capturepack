@@ -175,21 +175,15 @@
       <button id="blurBtn" title="Toggle blur" data-i18n-title="editor.blurTooltip" data-i18n="editor.blur">Blur</button>
       <button id="deleteBtn" title="Delete (Del)" data-i18n-title="editor.deleteTooltip">×</button>
     </div>
-    <!-- 1-9, plus a way back to automatic. Small on purpose: this is an
-         affordance for the number the user wants, not a numbering panel. -->
+    <!-- Every number this capture HAS, plus a way back to automatic. The offers
+         are built in editor.ts (syncNumberPicker), because which numbers exist
+         depends on how many boxes are numbered: the fixed 1-9 grid this replaced
+         offered a ⑨ a three-box capture does not have, and no ⑫ to a twelve-box
+         one (#51). Small on purpose: an affordance for the number the user
+         wants, not a numbering panel. -->
     <div id="numberPicker" hidden>
-      <div id="numberPinChoices">
-        <button type="button" data-pin="1">1</button>
-        <button type="button" data-pin="2">2</button>
-        <button type="button" data-pin="3">3</button>
-        <button type="button" data-pin="4">4</button>
-        <button type="button" data-pin="5">5</button>
-        <button type="button" data-pin="6">6</button>
-        <button type="button" data-pin="7">7</button>
-        <button type="button" data-pin="8">8</button>
-        <button type="button" data-pin="9">9</button>
-        <button type="button" data-pin="auto" id="numberAutoBtn" data-i18n="editor.numberAuto">Auto</button>
-      </div>
+      <div id="numberPinChoices"></div>
+      <button type="button" data-pin="auto" id="numberAutoBtn" data-i18n="editor.numberAuto">Auto</button>
     </div>
     <div id="durationEditor" hidden>
       <div id="durationPresets">

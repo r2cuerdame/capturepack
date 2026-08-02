@@ -10,14 +10,17 @@ import type {
   HistoryPackSummary,
   HistoryRenameResult,
   HistoryRenderStatusPayload,
+  StorageUsage,
   ToastCreateZipResult,
 } from '../../shared/ipc'
+import { budgetLevel, budgetPercent, formatBytes } from '../../shared/retention'
 import { DEFAULT_CAPTURE_HOTKEY } from '../../shared/types'
 
 interface HistoryBridge {
   list(): Promise<HistoryListResult>
   thumb(packPath: string): Promise<string | null>
   size(packPath: string): Promise<number | null>
+  usage(): Promise<StorageUsage | null>
   searchText(packPath: string): Promise<string>
   openPack(packPath: string): Promise<HistoryActionResult>
   play(packPath: string): Promise<HistoryActionResult>
@@ -56,6 +59,10 @@ const filtersNav = el<HTMLElement>('filters')
 const listEl = el<HTMLElement>('list')
 const countLabel = el<HTMLSpanElement>('countLabel')
 const settingsBtn = el<HTMLButtonElement>('settingsBtn')
+const usageEl = el<HTMLElement>('usage')
+const usageBar = el<HTMLElement>('usageBar')
+const usageBarFill = el<HTMLElement>('usageBarFill')
+const usageText = el<HTMLElement>('usageText')
 
 settingsBtn.addEventListener('click', () => {
   bridge.openSettings()
@@ -166,6 +173,7 @@ async function refresh(): Promise<void> {
     if (openMenuFor !== null && !live.has(openMenuFor)) openMenuFor = null
     render()
     fetchLazy()
+    refreshUsage()
     if (query.trim() !== '') void ensureSearchTexts()
   } catch {
     // list failed (e.g. window closing): leave the current view
@@ -176,6 +184,59 @@ async function refresh(): Promise<void> {
       void refresh()
     }
   }
+}
+
+/**
+ * The header's usage bar (issue #48).
+ *
+ * ONE ASK FOR THE WHOLE FOLDER, not a sum of the per-card sizes below: those
+ * arrive one lazy invoke at a time as cards come into view, so a total built
+ * from them would climb while the user reads it and would be short by every
+ * pack they never scrolled to. Main answers from a cached snapshot, so calling
+ * this on every re-list costs nothing worth avoiding.
+ *
+ * A failure hides the block rather than showing a zero — an empty bar next to
+ * "0 packs" is a claim about the folder, and this window would be making it up.
+ */
+function refreshUsage(): void {
+  void bridge
+    .usage()
+    .then((usage) => {
+      if (usage === null) {
+        usageEl.hidden = true
+        return
+      }
+      usageEl.hidden = false
+      const percent = budgetPercent(usage.totalBytes, usage.maxBytes)
+      const level = budgetLevel(usage.totalBytes, usage.maxBytes)
+      usageBarFill.style.width = `${String(Math.min(100, percent))}%`
+      usageBar.classList.toggle('near', level === 'near')
+      usageBar.classList.toggle('over', level === 'over')
+      usageBar.title = t('common.storageMeter', {
+        used: formatBytes(usage.totalBytes),
+        max: formatBytes(usage.maxBytes),
+        percent: String(percent),
+      })
+      usageText.textContent =
+        usage.totalPacks === 0
+          ? t('common.storageEmpty')
+          : t('history.usage', {
+              packs: String(usage.totalPacks),
+              size: formatBytes(usage.totalBytes),
+              date: oldestLabel(usage.oldestMs),
+            })
+    })
+    .catch(() => {
+      usageEl.hidden = true
+    })
+}
+
+/** Day only: the oldest pack's clock time is noise next to how far back it is. */
+function oldestLabel(oldestMs: number | null): string {
+  if (oldestMs === null) return '—'
+  const d = new Date(oldestMs)
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${String(d.getFullYear())}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
 
 function fetchLazy(): void {
@@ -741,18 +802,10 @@ function formatDuration(ms: number): string {
   return `${minutes}:${String(seconds).padStart(2, '0')}`
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  const units = ['KB', 'MB', 'GB']
-  let value = bytes
-  let unit = 'B'
-  for (const next of units) {
-    if (value < 1024) break
-    value /= 1024
-    unit = next
-  }
-  return `${value >= 100 ? Math.round(value) : value.toFixed(1)} ${unit}`
-}
+// formatBytes now lives in shared/retention.ts: this window prints a pack's
+// size on a card and the whole folder's size in the header, and Settings prints
+// the same total beside the same bar. Two formatters that rounded differently
+// would have had the two windows disagree about the size of one folder.
 
 // ---------------------------------------------------------------------------
 // Global events

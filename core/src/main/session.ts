@@ -141,6 +141,12 @@ import { copyPngToClipboard } from './clipboard'
 import { logError, logInfo, logWarn } from './log'
 import { openPack } from './mcp/store'
 import { showSaveToast, updateToastRenderStatus } from './saveToast'
+import {
+  noteFlowEnded,
+  notePackSaved,
+  saveNowRequest,
+  unattendedExportPayload,
+} from './saveNow'
 import { startSourceFirstFinalSave } from './sourceFirstFinalSave'
 import { persistSettings } from './settings'
 import {
@@ -254,6 +260,12 @@ export async function startCaptureFlow(settings: Settings): Promise<void> {
     dialog.showErrorBox('CapturePack', uiT(settings)('app.captureFailed', { error: errorMessage(err) }))
   } finally {
     flowActive = false
+    // An unattended run (#63) exits HERE, not the moment the folder appeared:
+    // by now source-first save has published the manifest, copied the prompt
+    // path and raised the toast inside the promise above. A flow that saved
+    // nothing still reports, so `--save-now` fails with a code instead of
+    // hanging. A no-op on every ordinary launch.
+    noteFlowEnded()
   }
 }
 
@@ -2215,7 +2227,17 @@ async function runFlow(settings: Settings): Promise<void> {
 
   let outcome: EditorOutcome
   try {
-    outcome = await runEditor(editor, events, t0Ms)
+    outcome = await runEditor(
+      editor,
+      events,
+      t0Ms,
+      // The ONLY flow that saves without a person (#63). The payload is the
+      // editor's own snapshot bytes, so the pack CI asserts on is the pack a
+      // user would have got by opening the editor and pressing Save.
+      saveNowRequest(process.argv) === null
+        ? null
+        : () => unattendedExportPayload(toArrayBuffer(snap.png)),
+    )
   } finally {
     // The pin comes off when the editor closes (#64 `onFreeze`: "pin the
     // captured range so it survives until the editor closes or the pack is
@@ -2402,6 +2424,10 @@ async function runFlow(settings: Settings): Promise<void> {
           renderState: hasReplay ? (needsExactCut ? 'trimming' : 'rendering') : 'none',
           uiLanguage: uiLanguage(settings),
         })
+        // The folder an unattended run (#63) hands to CI. Reported at the END of
+        // source publication — everything above this line is what "saved" means
+        // — and a no-op on every ordinary launch.
+        notePackSaved(savedHandle.dirPath)
         return savedHandle.dirPath
       },
       renderDerived: async (sourceDirPath) => {
@@ -4113,7 +4139,19 @@ function initializeAndShowEditor(
 
 // Resolves when the editor session ends: export, cancel, or the window closing.
 // Annotation events are appended to `events` as they arrive.
-function runEditor(editor: BrowserWindow, events: TimelineEvent[], t0Ms: number): Promise<EditorOutcome> {
+//
+// `unattended` (#63) is the person `--save-now` does not have: a payload the
+// MAIN process exports on the editor's behalf once the window is up. It is
+// armed on 'show' and not a moment earlier, because 'show' is the only signal
+// that the bootstrap payload decoded and the first annotation frame reached a
+// paint boundary (initializeAndShowEditor). Exporting before that would let a
+// broken editor produce a pack CI would then certify as proof it worked.
+function runEditor(
+  editor: BrowserWindow,
+  events: TimelineEvent[],
+  t0Ms: number,
+  unattended: (() => EditorExportPayload) | null = null,
+): Promise<EditorOutcome> {
   return new Promise((resolve) => {
     // loadFile/startup guards can close the hidden window before the caller has
     // finished assembling init data and reaches runEditor(). Waiting for a
@@ -4213,6 +4251,18 @@ function runEditor(editor: BrowserWindow, events: TimelineEvent[], t0Ms: number)
     ipcMain.on(IPC.editorClosePromptShown, onClosePromptShown)
     editor.on('close', onCloseAttempt)
     editor.on('closed', onClosed)
+
+    if (unattended !== null) {
+      const exportWithoutAPerson = (): void => {
+        if (settled) return
+        logInfo('[capture] --save-now: exporting the capture with nothing authored')
+        settle({ kind: 'export', payload: unattended() })
+      }
+      // Already visible when a previous await let the show through: take it,
+      // rather than waiting for an event that has been and gone.
+      if (editor.isVisible()) exportWithoutAPerson()
+      else editor.once('show', exportWithoutAPerson)
+    }
   })
 }
 
