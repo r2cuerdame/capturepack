@@ -242,10 +242,6 @@ type BooleanSettingsKey = {
 const TOGGLES: ReadonlyArray<BooleanSettingsKey> = [
   'autoUpdateCheck',
   'launchAtLogin',
-  // GOAL "And do not stay gone." (issue #61): main stops the watchdog and
-  // removes the Start Menu fallback the moment this goes off, so the switch is
-  // a real teardown, not a preference read at the next start.
-  'superviseProcess',
   'notifyOnRecordingStart',
   'showDurationLabel',
   'scrubInvert',

@@ -6,9 +6,9 @@ The public script name remains `qa:rc` for compatibility. It discovers every
 `typecheck`, runs each regression in package order, and finishes with the
 production build plus the built app's Electron smoke mode. A failing check
 does not hide later failures unless fail-fast is requested.
-The smoke process uses a unique temporary Electron profile, disables
-supervision, terminates its whole process tree, and removes that profile; it
-does not read or rewrite the owner's installed CapturePack settings.
+The smoke process uses a unique temporary Electron profile, terminates its whole
+process tree, and removes that profile; it does not read or rewrite the owner's
+installed CapturePack settings.
 
 A check that needs hardware the gate cannot promise does not belong in the
 gate — it belongs under a `qa:` script that says what it needs. `qa:chrome-bridge`

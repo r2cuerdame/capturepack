@@ -2,17 +2,24 @@
 ; app cannot run after its own files have been removed, so the NSIS uninstall
 ; hook removes both the Run value and Windows' StartupApproved companion value.
 ;
-; Issue #61 adds two more things setup has to know about, because supervision
-; runs OUTSIDE the app and must never outlive it:
+; Two more things setup has to know about:
 ;
-;  1. The stand-down flag. Installing or uninstalling closes the running
-;     CapturePack, which to a watchdog looks exactly like a crash — and a
-;     supervisor that resurrected the app in the middle of an update would be a
-;     far worse bug than the one it exists to fix. The flag is written before
-;     anything is closed and removed once setup is done.
-;  2. The Start Menu fallback shortcut ("CapturePack Capture"), which carries
-;     the shortcut key that answers the hotkey while the app is not running.
-;     Whatever supervision adds, an uninstall takes away.
+;  1. THE STAND-DOWN FLAG ($APPDATA\CapturePack\supervision-standdown). Written
+;     before anything is closed, deleted once setup is done. Chrome respawns a
+;     native messaging host automatically, and that host is CapturePack.exe —
+;     the very file being replaced. The flag is how setup tells a host that
+;     Chrome cached to let go (src/main/chrome/nativeHostEntry.ts exits on it),
+;     and the next live app clears it (index.ts clearInstallerStandDown).
+;     The NAME is history: it was born to stand a watchdog down as well, and
+;     #80 removed the watchdog but deliberately kept the filename, so an
+;     in-flight upgrade from 0.3.4 still stands that build's watchdog down.
+;  2. THE LEGACY START MENU SHORTCUT ("CapturePack Capture.lnk"). 0.3.4 and
+;     earlier armed it with the capture hotkey so Explorer could answer the key
+;     while the app was not running. #80 removed it, and setup must DELETE it
+;     rather than preserve it: Explorer keeps a shortcut key until the .lnk is
+;     gone, so an upgrade that left it behind would hold Ctrl+Alt+C forever and
+;     the app's own registration would be refused — permanently, silently,
+;     which is the exact symptom #80 exists to stop causing.
 
 Var CapturePackWasRunning
 Var CapturePackChromeReg
@@ -24,7 +31,6 @@ Var CapturePackChromiumReg
   Var CapturePackHadLauncher
   Var CapturePackRunValue
   Var CapturePackHadStartupApproved
-  Var CapturePackHadShortcut
   Var CapturePackHadOldUninstaller
   Var CapturePackOldUninstallCompleted
   Var CapturePackLoadedPending
@@ -77,7 +83,6 @@ Var CapturePackChromiumReg
   StrCpy $CapturePackHadLauncher "0"
   StrCpy $CapturePackRunValue ""
   StrCpy $CapturePackHadStartupApproved "0"
-  StrCpy $CapturePackHadShortcut "0"
   StrCpy $CapturePackHadOldUninstaller "0"
   StrCpy $CapturePackOldUninstallCompleted "0"
   StrCpy $CapturePackLoadedPending "0"
@@ -113,12 +118,10 @@ Var CapturePackChromiumReg
   ${If} ${FileExists} "$PLUGINSDIR\capturepack-startup-approved.txt"
     StrCpy $CapturePackHadStartupApproved "1"
   ${EndIf}
-  ${If} ${FileExists} "$SMPROGRAMS\CapturePack Capture.lnk"
-    CopyFiles /SILENT "$SMPROGRAMS\CapturePack Capture.lnk" "$PLUGINSDIR"
-    ${If} ${FileExists} "$PLUGINSDIR\CapturePack Capture.lnk"
-      StrCpy $CapturePackHadShortcut "1"
-    ${EndIf}
-  ${EndIf}
+  ; The Start Menu fallback shortcut is NOT snapshotted (#80). Everything else
+  ; here is preserved because losing it would break a working setup; that .lnk
+  ; is the one piece of prior state this build must not put back.
+
   ; electron-builder's result hook runs even when it found no previous
   ; UninstallString. Record that distinction here, while the old registry is
   ; still intact, instead of reaching into a template-local variable.
@@ -136,7 +139,7 @@ Var CapturePackChromiumReg
   ; closed. It stays in $PLUGINSDIR during an ordinary install and is promoted
   ; to userData only if the old app has been removed and extraction then fails.
   ${If} $CapturePackLoadedPending != "1"
-    nsExec::ExecToStack `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\capturepack-installer-state.ps1" -Mode save-pending -PendingDir "$PLUGINSDIR\capturepack-pending-stage" -AppDataDir "$APPDATA\CapturePack" -StartMenuPrograms "$SMPROGRAMS"`
+    nsExec::ExecToStack `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\capturepack-installer-state.ps1" -Mode save-pending -PendingDir "$PLUGINSDIR\capturepack-pending-stage" -AppDataDir "$APPDATA\CapturePack"`
     Pop $0
     Pop $1
     ${If} $0 != 0
@@ -175,11 +178,19 @@ Var CapturePackChromiumReg
         DetailPrint "Could not restore CapturePack StartupApproved state."
       ${EndIf}
     ${EndIf}
-    ${If} $CapturePackHadShortcut == "1"
-      CopyFiles /SILENT "$PLUGINSDIR\CapturePack Capture.lnk" "$SMPROGRAMS"
-    ${EndIf}
   !endif
   !insertmacro RestoreCapturePackBrowserRegistration
+!macroend
+
+!macro RemoveLegacyCapturePackShortcut
+  ; The 0.3.4 Start Menu fallback ("CapturePack Capture.lnk"), removed by #80.
+  ; Per-user install, so $SMPROGRAMS is this user's Start Menu\Programs — the
+  ; folder Explorer scans for shortcut keys, and the only place the fallback was
+  ; ever written. Deleting the .lnk is what makes Explorer release the shortcut
+  ; key; nothing else does. Unconditional and idempotent: a fresh install has
+  ; nothing to delete, an upgrade has exactly one, and leaving it would hold the
+  ; user's capture hotkey hostage with no app able to take it back.
+  Delete "$SMPROGRAMS\CapturePack Capture.lnk"
 !macroend
 
 !macro BeginCapturePackShutdown
@@ -191,8 +202,8 @@ Var CapturePackChromiumReg
 !macroend
 
 !macro RestartCapturePackIfNeeded
-  ; The close gate may have stopped the tray app and its watchdog. On a failure
-  ; that leaves the old install intact, put the exact prior running state back.
+  ; The close gate may have stopped the tray app. On a failure that leaves the
+  ; old install intact, put the exact prior running state back.
   ${If} $CapturePackWasRunning == "1"
     ${If} ${FileExists} "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
       ${If} ${FileExists} "$INSTDIR\resources\app.asar"
@@ -238,7 +249,7 @@ Var CapturePackChromiumReg
   !insertmacro DisableCapturePackNativeHost
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "CapturePack"
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run" "CapturePack"
-  Delete "$SMPROGRAMS\CapturePack Capture.lnk"
+  !insertmacro RemoveLegacyCapturePackShortcut
   Delete "$APPDATA\CapturePack\supervision-standdown"
 !macroend
 
@@ -308,7 +319,8 @@ Var CapturePackChromiumReg
     FunctionEnd
   !else
     ; A standalone uninstall can fail after its process gate (for example when
-    ; an unrelated process holds app.asar). Do not strand Chrome or supervision.
+    ; an unrelated process holds app.asar). Do not strand Chrome or the
+    ; stand-down flag.
     Function un.onUninstFailed
       !insertmacro AbortCapturePackShutdown
     FunctionEnd
@@ -355,12 +367,12 @@ Var CapturePackChromiumReg
 !macro customInstall
   ; The previous uninstaller may predate the ${isUpdated} guard below and have
   ; removed app-data integration. Restore the snapshot only after replacement
-  ; files are safely in place, then release the native host and watchdog.
+  ; files are safely in place, then release the native host.
   ${If} $CapturePackLoadedPending == "1"
     ; Consume the durable state only after every file and registry value was
     ; restored. A helper failure leaves it in place and re-enters the safe
     ; post-removal failure path via .onInstFailed.
-    nsExec::ExecToStack `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\capturepack-installer-state.ps1" -Mode restore-pending -PendingDir "$APPDATA\CapturePack\installer-pending" -AppDataDir "$APPDATA\CapturePack" -StartMenuPrograms "$SMPROGRAMS"`
+    nsExec::ExecToStack `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\capturepack-installer-state.ps1" -Mode restore-pending -PendingDir "$APPDATA\CapturePack\installer-pending" -AppDataDir "$APPDATA\CapturePack"`
     Pop $0
     Pop $1
     ${If} $0 != 0
@@ -372,21 +384,23 @@ Var CapturePackChromiumReg
   ${Else}
     !insertmacro RestoreCapturePackIntegration
   ${EndIf}
+  ; ON EVERY INSTALL, INCLUDING AN UPGRADE (#80). Both branches above can put a
+  ; 0.3.4 profile back; neither restores the fallback .lnk any more, but the
+  ; machine may still be carrying the one 0.3.4 itself armed. This is the single
+  ; point where the new build is definitely in place and can be given its hotkey.
+  !insertmacro RemoveLegacyCapturePackShortcut
   Delete "$APPDATA\CapturePack\supervision-standdown"
 !macroend
 
 !macro customUnInstall
   ; Updating is not uninstalling the user's integration. The parent installer
   ; keeps stand-down armed and restores its snapshot in customInstall. Only a
-  ; real uninstall removes login, fallback and native-host state.
+  ; real uninstall removes login and native-host state.
   ${IfNot} ${isUpdated}
     !insertmacro DisableCapturePackNativeHost
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "CapturePack"
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run" "CapturePack"
-    ; Per-user install, so $SMPROGRAMS is this user's Start Menu\Programs — the
-    ; folder Explorer scans for shortcut keys, and the only place the fallback
-    ; is ever written.
-    Delete "$SMPROGRAMS\CapturePack Capture.lnk"
+    !insertmacro RemoveLegacyCapturePackShortcut
     Delete "$APPDATA\CapturePack\com.capturepack.host.json"
     Delete "$APPDATA\CapturePack\capturepack-host.cmd"
     ; A real uninstall also rejects any deferred update recovery. Leaving it
@@ -395,6 +409,9 @@ Var CapturePackChromiumReg
     Delete "$APPDATA\CapturePack\installer-pending\state.json"
     Delete "$APPDATA\CapturePack\installer-pending\com.capturepack.host.json"
     Delete "$APPDATA\CapturePack\installer-pending\capturepack-host.cmd"
+    ; 0.3.4 also staged the fallback shortcut here. Nothing writes it now, but
+    ; an interrupted 0.3.4 install may have left one, and RMDir below refuses a
+    ; folder that is not empty.
     Delete "$APPDATA\CapturePack\installer-pending\CapturePack Capture.lnk"
     RMDir "$APPDATA\CapturePack\installer-pending"
     Delete "$APPDATA\CapturePack\supervision-standdown"

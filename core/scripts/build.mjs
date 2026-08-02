@@ -70,23 +70,16 @@ const browser = {
 
 await Promise.all([
   build({ ...node, entryPoints: ['src/main/index.ts'], outfile: 'dist/main/index.js' }),
-  // The watchdog (issue #61) runs as PLAIN NODE — the app's own binary
-  // re-entered with ELECTRON_RUN_AS_NODE — so it must not link electron and
-  // must land outside the asar (asarUnpack in electron-builder.yml): a fresh
-  // Node process knows nothing about Electron's archive format.
-  build({
-    ...node,
-    external: [],
-    entryPoints: ['src/watchdog/watchdog.ts'],
-    outfile: 'dist/scripts/watchdog.js',
-  }),
-  // The native messaging host also runs as PLAIN NODE (ELECTRON_RUN_AS_NODE):
+  // The native messaging host runs as PLAIN NODE (ELECTRON_RUN_AS_NODE):
   // electron.exe writes CRLF to stdout before the main script runs, and two
   // stray bytes are enough to poison Chrome's length-prefixed framing for the
   // whole session — Chrome kills the port, the extension redials every ~2 s,
   // and the log fills with hellos from hosts that die young. Plain Node writes
-  // nothing it is not told to. Same rules as the watchdog: no electron import,
-  // outside the asar.
+  // nothing it is not told to. Two rules follow: no electron import, and it
+  // lands outside the asar (asarUnpack in electron-builder.yml), because a
+  // fresh Node process knows nothing about Electron's archive format. The
+  // watchdog bundle that used to sit here obeyed the same two rules; #80
+  // removed it.
   build({
     ...node,
     external: [],

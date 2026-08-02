@@ -15,8 +15,6 @@ param(
 
   [string]$AppDataDir = '',
 
-  [string]$StartMenuPrograms = '',
-
   # QA supplies a private HKCU subtree here. Production deliberately leaves it
   # empty so the four Chromium registrations and login values use their real
   # per-user locations.
@@ -27,7 +25,6 @@ $ErrorActionPreference = 'Stop'
 
 $manifestName = 'com.capturepack.host.json'
 $launcherName = 'capturepack-host.cmd'
-$shortcutName = 'CapturePack Capture.lnk'
 $pendingStateName = 'state.json'
 $browserKeys = [ordered]@{
   chrome = 'Software\Google\Chrome\NativeMessagingHosts\com.capturepack.host'
@@ -194,7 +191,6 @@ function Copy-OptionalFile(
 function Save-PendingSnapshot {
   Require-Argument 'PendingDir' $PendingDir
   Require-Argument 'AppDataDir' $AppDataDir
-  Require-Argument 'StartMenuPrograms' $StartMenuPrograms
 
   $temporary = "$PendingDir.tmp-$PID"
   Remove-ExactDirectory $temporary
@@ -208,11 +204,14 @@ function Save-PendingSnapshot {
       ([IO.Path]::Combine($AppDataDir, $launcherName)) `
       $temporary `
       $launcherName
-    $shortcut = Copy-OptionalFile `
-      ([IO.Path]::Combine($StartMenuPrograms, $shortcutName)) `
-      $temporary `
-      $shortcutName
 
+    # SCHEMA STAYS 1 THOUGH `files.shortcut` IS GONE (#80). Bumping it would
+    # make Read-PendingState reject a state.json written by an interrupted
+    # 0.3.4 install, and rejecting it fails the very update that was meant to
+    # recover from it. Both directions are already safe without a bump: this
+    # build ignores the extra field a 0.3.4 file carries, and a 0.3.4 installer
+    # reading a file written here treats the missing field as "no shortcut" —
+    # which is exactly the truth now.
     $state = [ordered]@{
       schema = 1
       browsers = [ordered]@{
@@ -226,7 +225,6 @@ function Save-PendingSnapshot {
       files = [ordered]@{
         manifest = $manifest
         launcher = $launcher
-        shortcut = $shortcut
       }
     }
     # state.json is the readiness marker and is always written last.
@@ -264,7 +262,7 @@ function Persist-PendingSnapshot {
   Remove-ExactDirectory $temporary
   [IO.Directory]::CreateDirectory($temporary) | Out-Null
   try {
-    foreach ($name in @($manifestName, $launcherName, $shortcutName)) {
+    foreach ($name in @($manifestName, $launcherName)) {
       $source = [IO.Path]::Combine($SourceDir, $name)
       if ([IO.File]::Exists($source)) {
         [IO.File]::Copy($source, [IO.Path]::Combine($temporary, $name), $true)
@@ -306,7 +304,6 @@ function Restore-OptionalFile(
 function Restore-PendingSnapshot {
   Require-Argument 'PendingDir' $PendingDir
   Require-Argument 'AppDataDir' $AppDataDir
-  Require-Argument 'StartMenuPrograms' $StartMenuPrograms
   $state = Read-PendingState $PendingDir
 
   # Files first. Browser registration is restored last while the installer's
@@ -319,10 +316,10 @@ function Restore-PendingSnapshot {
     ($state.files.launcher -eq $true) `
     $launcherName `
     ([IO.Path]::Combine($AppDataDir, $launcherName))
-  Restore-OptionalFile `
-    ($state.files.shortcut -eq $true) `
-    $shortcutName `
-    ([IO.Path]::Combine($StartMenuPrograms, $shortcutName))
+  # The Start Menu fallback shortcut is deliberately NOT restored (#80): a
+  # 0.3.4 snapshot may still carry one, and putting it back would hand the
+  # user's capture hotkey to Explorer with nothing left to take it away again.
+  # Remove-ExactDirectory below discards the staged copy with the rest.
 
   Restore-StringValue $runKey 'CapturePack' $state.run
   Restore-BinaryValue $startupApprovedKey 'CapturePack' $state.startupApproved

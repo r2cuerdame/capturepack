@@ -11,9 +11,9 @@ files:
 # keeps it inspectable (READ-ONLY BY CONSTRUCTION is a claim a user can check)
 # and keeps `powershell -File dist/scripts/uia-dump.ps1` working standalone.
 #
-# dist/scripts/watchdog.js (GOAL "And do not stay gone.", issue #61) MUST be
-# unpacked: it is executed by a fresh Node process, which knows nothing about
-# Electron's archive format and could not open a path inside app.asar.
+# dist/scripts/native-host.js MUST be unpacked: it is executed by a fresh Node
+# process (ELECTRON_RUN_AS_NODE), which knows nothing about Electron's archive
+# format and could not open a path inside app.asar.
 asarUnpack:
   - dist/scripts/**
 # The browser extension (GOAL "Chrome Extension") ships WITH the app, unpacked

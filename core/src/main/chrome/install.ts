@@ -215,8 +215,7 @@ function hostCommand(): { path: string; args: readonly string[] } {
   //
   // `ELECTRON_RUN_AS_NODE=1` boots the same binary with no Chromium and a
   // measured zero bytes of unsolicited stdout, running the standalone host
-  // bundle — the exact pattern the watchdog has shipped all along. The
-  // environment variable is what makes the launcher .cmd unavoidable now:
+  // bundle. The environment variable is what makes the launcher .cmd unavoidable now:
   // Chromium's manifest has no place for env or args.
   const script = resolveNativeHostScript()
   return { path: process.execPath, args: script === null ? [] : [script] }
@@ -225,7 +224,6 @@ function hostCommand(): { path: string; args: readonly string[] } {
 /**
  * dist/scripts/native-host.js — emitted by scripts/build.mjs, outside the asar
  * (asarUnpack) because plain Node cannot read Electron's archive format.
- * Mirrors supervisor.ts `resolveWatchdogScript`.
  */
 function resolveNativeHostScript(): string | null {
   const packed = path.join(app.getAppPath(), 'dist', 'scripts', 'native-host.js')

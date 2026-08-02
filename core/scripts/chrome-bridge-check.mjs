@@ -146,7 +146,6 @@ const app = track(spawn(
     `--output-dir=${outDir}`,
     '--no-global-shortcut',
     '--no-login-item',
-    '--no-supervision',
   ],
   { stdio: 'ignore', env: bridgeEnv },
 ))
@@ -349,7 +348,6 @@ const app2 = track(spawn(
     `--output-dir=${packOut}`,
     '--no-global-shortcut',
     '--no-login-item',
-    '--no-supervision',
     '--capture-now=12',
   ],
   { stdio: 'ignore', env: bridgeEnv },

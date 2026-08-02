@@ -47,11 +47,6 @@ function defaultSettings(): Settings {
     packLanguage: 'ui',
     autoUpdateCheck: true,
     launchAtLogin: true,
-    // ON by default (GOAL "And do not stay gone."): the failure issue #61
-    // reported — a hotkey pressed into silence because the app had died hours
-    // ago — is invisible until it is supervised, so a user must not have to
-    // know the feature exists to be protected by it.
-    superviseProcess: true,
     notifyOnRecordingStart: true,
     recordingEnabled: true,
     outputDir: path.join(app.getPath('desktop'), 'CapturePack'),
@@ -269,7 +264,6 @@ const SETTINGS_KEY_SET: Record<keyof Settings, true> = {
   packLanguage: true,
   autoUpdateCheck: true,
   launchAtLogin: true,
-  superviseProcess: true,
   notifyOnRecordingStart: true,
   outputDir: true,
   clipboardAfterSave: true,
@@ -411,8 +405,13 @@ function mergeSettings(base: Settings, raw: Record<string, unknown>): Settings {
         : base.packLanguage,
     autoUpdateCheck: typeof raw.autoUpdateCheck === 'boolean' ? raw.autoUpdateCheck : base.autoUpdateCheck,
     launchAtLogin: typeof raw.launchAtLogin === 'boolean' ? raw.launchAtLogin : base.launchAtLogin,
-    superviseProcess:
-      typeof raw.superviseProcess === 'boolean' ? raw.superviseProcess : base.superviseProcess,
+    // NO settingsVersion BUMP FOR THE REMOVED `superviseProcess` (#80). A
+    // profile written by 0.3.4 still carries it, and the `Object.assign({},
+    // raw, known)` below deliberately lets unknown keys ride along, so the
+    // orphan value survives in settings.json and is read by nothing: it is not
+    // in SETTINGS_KEY_SET, so the GUI patch filter refuses to write it, and no
+    // code asks for it. Loading such a profile is silent — which is the point.
+    // A migration would only rewrite the file to delete one dead boolean.
     notifyOnRecordingStart:
       typeof raw.notifyOnRecordingStart === 'boolean'
         ? raw.notifyOnRecordingStart

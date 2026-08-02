@@ -1721,7 +1721,6 @@ try {
     packLanguage: 'en',
     autoUpdateCheck: false,
     launchAtLogin: false,
-    superviseProcess: false,
     notifyOnRecordingStart: false,
     recordingEnabled: true,
     outputDir,
@@ -1762,7 +1761,6 @@ try {
       `--output-dir=${outputDir}`,
       '--no-global-shortcut',
       '--no-login-item',
-      '--no-supervision',
       `--capture-now=${String(captureDelaySeconds)}`,
     ],
     {

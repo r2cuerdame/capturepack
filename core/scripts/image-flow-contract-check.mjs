@@ -183,7 +183,14 @@ check(
 console.log('\nINDEPENDENT SHORTCUT + USER SURFACES')
 const sharedTypes = source('src/shared/types.ts')
 const index = source('src/main/index.ts')
-const imageTrigger = section(index, 'const imageCapture = (): void => {', 'captureFlow = capture')
+// Ends at registerSettingsIpc, the first thing after the two trigger closures.
+// It used to end at `captureFlow = capture`, which was the Start Menu fallback's
+// early-press hand-off; #80 deleted that line with the fallback.
+const imageTrigger = section(
+  index,
+  'const imageCapture = (): void => {',
+  'registerSettingsIpc(settings, {',
+)
 const tray = source('src/main/tray.ts')
 const settingsHtml = source('src/renderer/settings/settings.html')
 const settingsRenderer = source('src/renderer/settings/settings.ts')

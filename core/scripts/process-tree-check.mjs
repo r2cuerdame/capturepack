@@ -76,11 +76,6 @@ console.log('\nQA timeout process-tree termination')
 
 {
   const harness = readFileSync(new URL('./chrome-bridge-check.mjs', import.meta.url), 'utf8')
-  const main = readFileSync(new URL('../src/main/index.ts', import.meta.url), 'utf8')
-  const supervision = readFileSync(
-    new URL('../src/shared/supervision.ts', import.meta.url),
-    'utf8',
-  )
   const smoke = readFileSync(new URL('./smoke-check.mjs', import.meta.url), 'utf8')
   const qaGate = readFileSync(new URL('./qa-gate.mjs', import.meta.url), 'utf8')
   const qaDocs = readFileSync(new URL('../../docs/QA.md', import.meta.url), 'utf8')
@@ -89,12 +84,11 @@ console.log('\nQA timeout process-tree termination')
     qaGate.includes('const DEFAULT_TIMEOUT_MS = 2 * 60 * 1_000') &&
       qaDocs.includes('default 2 minutes'),
   )
-  check(
-    'headed Chrome harness disables watchdog relaunch for both temporary profiles',
-    (harness.match(/'--no-supervision'/gu) ?? []).length === 2 &&
-      main.includes("!process.argv.includes('--no-supervision')") &&
-      supervision.includes("'--no-supervision'"),
-  )
+  // There used to be a check here that the headed Chrome harness passed
+  // '--no-supervision' to both of its temporary profiles, so the watchdog could
+  // not relaunch a profile the harness had deliberately shut down. #80 deleted
+  // the watchdog and the flag with it; nothing can relaunch anything, so the
+  // check has no subject and is gone rather than left passing vacuously.
   check(
     'headed Chrome harness exercises the CRLF-safe plain-Node native host',
     harness.includes("const nativeHostScript = resolve('dist', 'scripts', 'native-host.js')") &&
@@ -124,7 +118,6 @@ console.log('\nQA timeout process-tree termination')
       smoke.includes("const electron = require('electron')") &&
       !smoke.includes("'electron', 'dist', 'electron.exe'") &&
       smoke.includes('`--user-data-dir=${profile}`') &&
-      smoke.includes("'--no-supervision'") &&
       smoke.includes('const killer = terminateProcessTree(target)') &&
       smoke.includes('await stopChildTree(child)') &&
       smoke.includes('rmSync(profile, { recursive: true, force: true })'),

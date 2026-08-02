@@ -217,25 +217,13 @@ export function previousRun(): PreviousRun | null {
   return previous
 }
 
-/**
- * The marker file itself, for the watchdog (supervisor.ts).
- *
- * The watchdog decides whether to relaunch by reading THIS file, so the
- * "quit vs death" question has exactly one definition in the product and the
- * two processes cannot drift into disagreeing about it.
- */
-export function runStateFilePath(): string {
-  return runStateFile()
-}
-
-/**
- * This run's `startedAt`. The watchdog compares it against the marker it reads,
- * so it can never act on a marker written by a DIFFERENT run — relaunching on
- * someone else's evidence would resurrect an app the user deliberately stopped.
- */
-export function runStartedAt(): string {
-  return current?.startedAt ?? ''
-}
+// runStateFilePath() and runStartedAt() were exported here for one reader, the
+// watchdog process, which had to answer "quit or death?" from outside this
+// process using the same file and the same run identity. #80 removed the
+// watchdog; nothing outside this module reads the marker any more, so the
+// marker is internal again (runStateFile() below) and the two accessors are
+// gone. Everything the marker exists FOR — beginRun, endRun, previousRunVanished
+// — is untouched.
 
 /**
  * The previous run VANISHED — it died rather than exited, and no update

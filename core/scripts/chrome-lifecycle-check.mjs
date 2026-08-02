@@ -236,10 +236,7 @@ try {
     path.join(here, '..', 'src', 'main', 'chrome', 'nativeHostEntry.ts'),
     'utf8',
   )
-  const supervisor = readFileSync(
-    path.join(here, '..', 'src', 'main', 'supervisor.ts'),
-    'utf8',
-  )
+  const main = readFileSync(path.join(here, '..', 'src', 'main', 'index.ts'), 'utf8')
   const macro = (name) =>
     new RegExp(`!macro ${name}\\b([\\s\\S]*?)!macroend`, 'u').exec(installer)?.[1] ?? ''
   const closeGate = macro('customCheckAppRunning')
@@ -279,16 +276,29 @@ try {
       nativeEntry.includes('process.exit(0)'),
   )
   check(
-    'an old updater cannot erase Chrome, login or fallback integration',
+    'an old updater cannot erase Chrome or login integration',
     macro('SnapshotCapturePackIntegration').includes('com.capturepack.host.json') &&
       macro('SnapshotCapturePackIntegration').includes('capturepack-host.cmd') &&
       macro('SnapshotCapturePackIntegration').includes('CurrentVersion\\Run') &&
       macro('SnapshotCapturePackIntegration').includes('capturepack-installer-state.ps1') &&
       macro('SnapshotCapturePackIntegration').includes('-Mode save') &&
       macro('RestoreCapturePackIntegration').includes('-Mode restore') &&
-      macro('SnapshotCapturePackIntegration').includes('CapturePack Capture.lnk') &&
       macro('SnapshotCapturePackIntegration').includes('$PLUGINSDIR\\com.capturepack.host.json') &&
       uninstall.includes('${IfNot} ${isUpdated}'),
+  )
+  check(
+    'an upgrade takes the 0.3.4 Start Menu fallback away instead of putting it back (#80)',
+    !macro('SnapshotCapturePackIntegration').includes('CapturePack Capture.lnk') &&
+      !macro('RestoreCapturePackIntegration').includes('CapturePack Capture.lnk') &&
+      macro('RemoveLegacyCapturePackShortcut').includes(
+        'Delete "$SMPROGRAMS\\CapturePack Capture.lnk"',
+      ) &&
+      // Explorer holds a .lnk's shortcut key until the file is gone, so every
+      // successful install must delete it — otherwise an upgraded machine keeps
+      // answering the capture hotkey from the Start Menu and the app's own
+      // registration is refused forever.
+      success.includes('!insertmacro RemoveLegacyCapturePackShortcut') &&
+      uninstall.includes('!insertmacro RemoveLegacyCapturePackShortcut'),
   )
   check(
     'browser registration is restored exactly rather than enabled by assumption',
@@ -465,7 +475,6 @@ try {
 
     const pendingRoot = path.join(work, 'pending-roundtrip')
     const pendingAppData = path.join(pendingRoot, 'appdata')
-    const pendingStartMenu = path.join(pendingRoot, 'start-menu')
     const pendingStage = path.join(pendingRoot, 'stage')
     const pendingRetryStage = path.join(pendingRoot, 'retry-stage')
     const pendingDurable = path.join(pendingRoot, 'durable')
@@ -489,13 +498,10 @@ try {
         { stdio: 'inherit' },
       )
     mkdirSync(pendingAppData, { recursive: true })
-    mkdirSync(pendingStartMenu, { recursive: true })
     const pendingManifest = path.join(pendingAppData, 'com.capturepack.host.json')
     const pendingLauncher = path.join(pendingAppData, 'capturepack-host.cmd')
-    const pendingShortcut = path.join(pendingStartMenu, 'CapturePack Capture.lnk')
     writeFileSync(pendingManifest, '{"allowed_origins":["chrome-extension://qa/"]}\n')
     writeFileSync(pendingLauncher, '@echo off\r\necho qa\r\n')
-    writeFileSync(pendingShortcut, 'shortcut-qa')
     const chromePendingKey = scoped('Software\\Google\\Chrome\\NativeMessagingHosts\\com.capturepack.host')
     const edgePendingKey = scoped('Software\\Microsoft\\Edge\\NativeMessagingHosts\\com.capturepack.host')
     const bravePendingKey = scoped(
@@ -557,8 +563,6 @@ try {
         pendingStage,
         '-AppDataDir',
         pendingAppData,
-        '-StartMenuPrograms',
-        pendingStartMenu,
       ])
       runPendingHelper([
         '-Mode',
@@ -583,7 +587,6 @@ try {
       ])
       unlinkSync(pendingManifest)
       unlinkSync(pendingLauncher)
-      unlinkSync(pendingShortcut)
       // This is the beginning of the second installer run. It may inspect the
       // deliberately deactivated live state, but it must not replace the
       // durable source of truth left by the failed first run.
@@ -594,8 +597,6 @@ try {
         pendingRetryStage,
         '-AppDataDir',
         pendingAppData,
-        '-StartMenuPrograms',
-        pendingStartMenu,
       ])
       pendingSurvivedRetrySnapshot =
         readFileSync(path.join(pendingDurable, 'state.json'), 'utf8') === durableBeforeRetry
@@ -607,8 +608,6 @@ try {
         pendingDurable,
         '-AppDataDir',
         pendingAppData,
-        '-StartMenuPrograms',
-        pendingStartMenu,
       ])
       const chromeQuery = execFileSync('reg.exe', ['query', chromePendingKey, '/ve'], {
         encoding: 'utf8',
@@ -640,7 +639,6 @@ try {
         edgeAbsent &&
         readFileSync(pendingManifest, 'utf8').includes('chrome-extension://qa/') &&
         readFileSync(pendingLauncher, 'utf8').includes('echo qa') &&
-        readFileSync(pendingShortcut, 'utf8') === 'shortcut-qa' &&
         !existsSync(path.join(pendingDurable, 'state.json'))
     } finally {
       try {
@@ -660,12 +658,25 @@ try {
         .includes("[string]$ValueName = 'CapturePack'"),
     )
   }
+  // The stand-down self-heal used to live in supervisor.ts, purely because
+  // supervision happened to be the first thing that ran; #80 deleted that file
+  // and re-homed the rmSync into the app's own startup. The property under test
+  // is unchanged and still load-bearing: a live main process is what clears an
+  // installer flag, and nothing may gate it. If it is ever gated again — on a
+  // setting, on a recovery state, on anything — an installer that died between
+  // writing the flag and deleting it leaves every Chrome native host launch
+  // exiting silently on a perfectly healthy app.
   check(
-    'stand-down self-heals even when supervision is off or gave up',
-    supervisor.indexOf('fs.rmSync(standDownFile(), { force: true })') <
-      supervisor.indexOf('if (recoveryState.gaveUp)') &&
-      supervisor.indexOf('fs.rmSync(standDownFile(), { force: true })') <
-        supervisor.indexOf('if (!options.enabled)') &&
+    'a live app clears the installer stand-down flag unconditionally, before Chrome can reach it',
+    main.includes(
+      "fs.rmSync(path.join(app.getPath('userData'), 'supervision-standdown'), { force: true })",
+    ) &&
+      /whenReady\(\)\.then\(async \(\) => \{\s*(\/\/[^\n]*\n\s*)*clearInstallerStandDown\(\)/u.test(
+        main,
+      ) &&
+      main.indexOf('clearInstallerStandDown()') <
+        main.indexOf('const { settings, firstRun } = loadSettings()') &&
+      main.indexOf('clearInstallerStandDown()') < main.indexOf('startDomBridge()') &&
       uninstallerTemplate.indexOf('call un.checkAppRunning') <
         uninstallerTemplate.indexOf('!insertmacro customUnInit'),
   )

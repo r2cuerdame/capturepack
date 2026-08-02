@@ -48,7 +48,6 @@ try {
       `--user-data-dir=${profile}`,
       '--no-global-shortcut',
       '--no-login-item',
-      '--no-supervision',
     ],
     {
       cwd: process.cwd(),

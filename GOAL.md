@@ -784,50 +784,43 @@ what happened. All of it local; nothing is ever uploaded.
   and then certifying the run healthy would be the same lie, told by the very feature
   built to expose it.
 
-**And do not stay gone.** Reporting a death on the next start is not enough on its own: a
-user pressed Ctrl+Alt+C, got nothing, and concluded CapturePack was not installed. It was
-installed — it had died hours earlier, and nothing brought it back until the next login.
-So the product makes one promise, and everything below exists only to keep it:
+**And when it is gone, say so — do not resurrect it.** The complaint that started this was
+real: a user pressed Ctrl+Alt+C, got nothing, and concluded CapturePack was not installed.
+It was installed — it had died hours earlier. The question is what a product owes that
+user, and 0.3.5 answers it differently from 0.3.4 (issue #80).
 
-> **Pressing the capture hotkey always produces a visible result — a capture, or the app
-> starting, or a message. Never silence.**
+> **A death is always accounted for: on the record while it happens, on screen at the next
+> start, and undone by the login the user already has. Never silence, never a guess.**
 
-- **An unintended exit is undone.** A detached watchdog process (the app's own binary
-  re-entered as plain Node, so nothing extra ships) watches the run and asks the SAME
-  marker the previous point defines: an exit that reached will-quit was meant — tray Quit,
-  an updater restart, a Windows shutdown — and is left alone. Anything else is a death, and
-  the app is relaunched **once, promptly (about four seconds), and never silently**: the
-  run that comes back says it stopped, when, and that nothing was recorded in between.
-- **A relaunch loop is worse than staying dead.** At most three relaunches in ten minutes.
-  On the fourth death supervision STOPS — and says so plainly rather than dying quietly.
-- **When the app is not there, Explorer answers.** CapturePack keeps a Start Menu shortcut,
-  "CapturePack Capture", carrying the configured hotkey as a Windows shortcut key. The
-  shortcut key is **armed the moment the app is gone** (by the watchdog) and **removed
-  while the app is running** (which is what lets the app hold the accelerator itself, so a
-  capture stays instant instead of costing a process launch). The watchdog arms BEFORE it
-  works out why the app went — the keystroke must have an answer during the gap — so it
-  also takes the shortcut back on every path that ends with CapturePack alive again. An
-  intentional Quit is the one case where it stays: nothing is running, so Explorer holding
-  the key is the promise being kept. Pressing it while the app is
-  running is forwarded into the live instance through the single-instance lock and captures
-  immediately; pressing it while the app is dead starts CapturePack and says so, instead of
-  hitting nothing. A hotkey the user re-records in Settings is mirrored onto the shortcut.
-  A combination Windows cannot store on a shortcut (the Windows key, or no Ctrl and no Alt)
-  simply gets no fallback — inventing a different key would be worse than having none.
-  After supervision gives up, the accelerator is left with the shortcut on purpose: slower
-  than owning it, and it cannot crash.
-- **All of it is removable, and none of it fights setup.** One Settings → General switch,
-  **on by default**, turns the whole thing on and off; off stops the watchdog and deletes
-  the shortcut in the same click. The installer and uninstaller raise a stand-down flag
-  before closing the running app, so supervision can never resurrect CapturePack in the
-  middle of an update, and the uninstaller removes the shortcut. It never fights the login
-  item either: the login item starts the app at logon, the watchdog only acts when the app
-  is already gone, and the single-instance lock settles any overlap.
-- **The limits, stated honestly.** Supervision is a watchdog, not a service: if the
-  watchdog and the app are destroyed in the same instant (an "end process tree", a power
-  loss) nothing is left to relaunch or to arm the shortcut, and the login item is what
-  restores the app at the next sign-in. A live app notices a killed watchdog within thirty
-  seconds and starts another. There is no Scheduled Task and no admin right anywhere.
+- **Everything that RECORDS stays.** The log names the failure as it happens; the crash
+  reporter keeps the dump; the run marker distinguishes an exit that was meant from one
+  that was not; and the next start says plainly that CapturePack stopped unexpectedly,
+  when, and **that the buffer was not recording in between**. That last sentence is the one
+  the user actually needed, and it is still there.
+- **Windows starts the app, not CapturePack.** The per-user login item is the whole restart
+  story now. It is a mechanism the operating system owns, the user can see in Task Manager,
+  and nothing in this codebase can break.
+- **What was removed, and why (#80).** 0.3.4 shipped a detached watchdog that relaunched
+  the app after an unintended exit, plus a "CapturePack Capture" Start Menu shortcut that
+  handed the hotkey to Explorer while the app was not running, plus a Settings switch for
+  both. It was built before we knew why the app was dying. Its deepest problem is
+  structural and no amount of rate limiting fixes it: **if the app died from a bug in the
+  app, a supervisor resurrects it into the same bug** — and a relaunch that looks like
+  nothing happened is how a crash loop hides. The shortcut carried its own cost: Explorer
+  holds a .lnk's shortcut key until the file is deleted, so the fallback and the app were
+  permanently negotiating over the user's own hotkey, and a mistake there kills the
+  keystroke outright — the exact symptom the feature existed to prevent. Setup therefore
+  DELETES that shortcut on upgrade rather than preserving it.
+- **The stand-down flag is not supervision and stays.** The installer still writes
+  `%APPDATA%\CapturePack\supervision-standdown` before closing the running app, and a
+  cached Chrome native messaging host exits on sight of it, so setup can replace
+  CapturePack.exe while a browser is holding it open. The next live app clears it. The name
+  is history, kept deliberately so an in-flight upgrade from 0.3.4 still stands that
+  build's watchdog down.
+- **The limit, stated honestly.** Between a death and the next sign-in, CapturePack is not
+  running and the hotkey does nothing. That gap is real, and it is now reported rather than
+  papered over. There is no watchdog, no Scheduled Task, no Start Menu shortcut key and no
+  admin right anywhere.
 
 **Capture must stay cheap.** CapturePack runs all day; a resident tool that eats a core is
 a tool people quit. The buffer currently encodes VP9 in software, twice over (two rotating
@@ -1549,10 +1542,11 @@ Settings are edited in a GUI window — never by opening settings.json in an edi
   — never at an app restart.
 - Grouped sections:
   - **General** — output folder (picker + open button), independent post-capture actions for
-    video and image, auto-update check, start with Windows, and **keep CapturePack running and answering its
-    hotkey** (GOAL "And do not stay gone.") — on by default, and a real teardown when
-    switched off: the watchdog stops and the Start Menu fallback shortcut is deleted on the
-    click, not at the next launch.
+    video and image, auto-update check, and start with Windows. (0.3.4 also carried a "keep
+    CapturePack running and answering its hotkey" switch for the process watchdog and its
+    Start Menu fallback shortcut; #80 removed the feature and the switch with it. A
+    settings.json written by 0.3.4 still holds the orphan `superviseProcess` value — it is
+    read by nothing and loading it is silent.)
     The video action may copy the prompt, folder, or path (or do nothing). The image action
     additionally defaults to **copy final image**: only the completed derived PNG, after
     annotation/blur rendering, durable file write, and manifest declaration, is copied.
