@@ -410,6 +410,34 @@
     return SUPPORTED.indexOf(nav) >= 0 ? nav : 'en'
   }
 
+  /**
+   * Make the mp4 an actual fallback for a webm the browser accepted and then
+   * could not play. See the note at the call site for why <source> alone does
+   * not do this.
+   *
+   * `src` on the VIDEO wins over its <source> children, so setting it is what
+   * takes the decision back. The flag is per element and survives a language
+   * change: a machine that cannot decode one VP9 file cannot decode the next
+   * one either, so re-arming would only cost the visitor the same failure again.
+   */
+  function bindMotionFallback(video, base) {
+    video.setAttribute('data-motion-base', base)
+    if (video.getAttribute('data-motion-bound') === '1') return
+    video.setAttribute('data-motion-bound', '1')
+    video.addEventListener('error', function () {
+      if (video.getAttribute('data-motion-fellback') === '1') return
+      video.setAttribute('data-motion-fellback', '1')
+      var mp4 = video.getAttribute('data-motion-base') + '.mp4'
+      if (video.currentSrc && video.currentSrc.indexOf('.mp4') >= 0) return
+      video.src = mp4
+      if (typeof video.load === 'function') video.load()
+      if (typeof video.play === 'function') {
+        var again = video.play()
+        if (again && typeof again.catch === 'function') again.catch(function () {})
+      }
+    })
+  }
+
   function apply(lang) {
     var dict = DICT[lang] || DICT.en
     var nodes = document.querySelectorAll('[data-i18n]')
@@ -435,6 +463,26 @@
           sources[s].setAttribute('src', base + '.' + format)
         }
       }
+      // A <source> LIST IS NOT A FALLBACK, WHICH IS THE WHOLE PROBLEM.
+      //
+      // The browser picks one source from its `type` attribute and then commits
+      // to it. If that file turns out not to DECODE here — a machine without VP9,
+      // a driver that refuses it, hardware acceleration in a bad mood — the
+      // element goes to MEDIA_ERR_DECODE or MEDIA_ERR_SRC_NOT_SUPPORTED and
+      // stops. It does not try the next <source>. So the mp4 sitting right beside
+      // the webm, which every one of those machines can play, was never reached
+      // and the visitor saw an empty box with a play button that did nothing.
+      //
+      // Reported as "영상이 안나오는데" — autoplay dead AND manual play dead,
+      // reproduced in a private window, while the files themselves decode
+      // perfectly and serve 200. That combination is what a committed-and-failed
+      // source looks like from outside.
+      //
+      // So the fallback is made real: on the element's own error, drop to the
+      // mp4 directly. Once, because a second failure is not this problem and a
+      // retry loop would hide it. If the mp4 fails too, the error stands and the
+      // poster remains — which is at least a picture of what the film shows.
+      bindMotionFallback(videos[k], base)
       if (typeof videos[k].load === 'function') videos[k].load()
       var reduce = typeof matchMedia === 'function'
         && matchMedia('(prefers-reduced-motion: reduce)').matches
