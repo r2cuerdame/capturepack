@@ -16,22 +16,65 @@ sacrifice the 5-second workflow.
 
 ---
 
-## Current implementation baseline — 0.3.3
+## Current implementation baseline — 0.4.1
 
 The current Electron reference app has moved beyond the original MVP design
 record preserved later in this document:
 
+- **CapturePack is one process.** A detached watchdog and the supervisor half
+  that started it shipped, and were removed in 0.3.5
+  ([#80](https://github.com/r2cuerdame/capturepack/issues/80), closing
+  [#78](https://github.com/r2cuerdame/capturepack/issues/78)). They were reasoned
+  onto a single observed death whose cause was unknown — there were no logs at
+  the time, which the same release fixed — and the reasoning did not hold. A second
+  `CapturePack.exe` in Task Manager wearing the product's own name is
+  indistinguishable from a leak, and underneath the cost sat the thing a
+  supervisor cannot do: an app that died from a bug in the app was brought back
+  into the same bug. The symptom it was reasoned onto — press the hotkey, get
+  silence — is answered now by things that cost no process: the app logs its own
+  death with a crash dump, the next start says it stopped unexpectedly and that
+  nothing was recorded in between, and the Windows login item brings it back.
+  Treat any second process as a regression, not an implementation detail.
 - Main owns one hidden capture window per recorded display. MP4/AVC uses one
   active `MediaRecorder` and a bounded fragmented-MP4 ring; runtimes without
   legal MP4 support use an explicitly different dual-slot WebM fallback.
 - Recovery state is isolated per display: Chromium stream reacquisition and
   alternate constraints can be attempted without discarding healthy display
   rings. A native Windows fallback may be declared only when it is actually
-  producing frames, with its degraded backend and quality recorded honestly;
-  real failing-backend field proof remains open in issue #62.
+  producing frames, with its degraded backend and quality recorded honestly.
+  Issue #62 closed on that path existing, engaging on confirmed primary failure
+  and being held by the gate (`check:native-replay-fallback`,
+  `check:replay-health`) — not on anyone watching it take over on a wedged
+  machine in the field, which has still not happened. If duplication wedges and
+  the fallback does not engage, that is a new and far more specific bug.
 - Video capture and explicit region/full-virtual-desktop image capture are
   distinct contracts. Multi-display pixels, scale, negative origins and
   measured replay-clock evidence remain explicit through save and reopen.
+- **`media.displays` is always written for a video capture**, a single-monitor
+  capture included, which writes an array of one. Nothing should have to know to
+  look in an optional field to find out the rest of the desk exists.
+  `media.snapshot` and `media.replay` are named aliases for the focused entry,
+  never a second copy of the bytes. Each entry states its own `snapshot_width` /
+  `snapshot_height`, read back out of the raster that was actually written:
+  `bounds.width × scale` rounds differently from the capture path at 1.25x and
+  1.5x, which is where most mixed-DPI desks live, so a derivable number is not
+  the same as a stated one. That contract is pack format 0.7.0; an image pack
+  declares no displays at all.
+- **The timeline carries what the user did**, on the replay clock:
+  `input.mouse.move`, `input.mouse.click`, `input.window.focus`,
+  `input.window.move` and `input.window.resize` (pack format 0.8.0, declared
+  only when a capture actually carries one). No boundary was added to get them.
+  The window events are differences between two surface samples lane S already
+  takes for the whole retention, and the cursor is one extra read inside the
+  dump the capture host was already taking — no hook, no thread, no second
+  loop. Every event is a difference between two readings that really happened;
+  nothing is interpolated or smoothed. `input.key.*` stays **reserved and is
+  never emitted**: the licence for recording the rest is that `snapshot.png`
+  already contains those pixels, and a keystroke is not among them — a password
+  field renders dots, which is the exact case the DOM walker already refuses
+  `type="password"` for. A global low-level keyboard hook in a screen-capture
+  tool is the shape of a keylogger; `check:input-events` is what stops that from
+  quietly becoming untrue.
 - The editor authors unified boxes. In a STILL capture it can also bind a box to
   the captured UIA, Chrome DOM or HWND evidence under the cursor; a video offers
   no object picking at any frame — the captured instant included — and takes
@@ -39,6 +82,17 @@ record preserved later in this document:
   recorded into the pack. Observed object tracks, in the packs that carry them,
   use the nearest real sample and are never interpolated; authored manual-box
   keyframes may interpolate.
+- **Picking is no longer a live-renderer-only capability.**
+  `ObjectIndex.forDisplay` builds one display's index from a resolved
+  `ContextFrame`, and `context/packObjects.ts` opens a saved pack folder as the
+  same `ContextSession` the re-edit flow builds — real parsers, real providers,
+  the filesystem as the only dependency, no Electron. Both seams exist for one
+  reason: until they did, the only way to ask "what would picking offer here?"
+  was to open a renderer and hover, so a pack with picking data and a pack with
+  *useful* picking data were indistinguishable to anything that only read the
+  file. A measurement or an outside reader now sees the same ladder the editor
+  sees — Core's window floor, the UIA control rung, the browser's document rung
+  — rather than a reimplementation free to drift from it.
 - The browser integration is explicit-pick only and crosses three processes:
   page → extension service worker → native messaging host → a per-user named
   pipe the running application listens on. The DOM is never streamed. A pick
@@ -47,6 +101,19 @@ record preserved later in this document:
   the reason a pick is only ever accepted from a frame the receiving document
   actually hosts, and only while the user has armed the picker. Nothing on this
   path may cost a capture: every failure is logged and swallowed.
+- **What the browser returns cannot be placed without a rectangle the page does
+  not have.** A document measures itself in viewport CSS pixels, and the only
+  thing that converts them to snapshot pixels is the browser window's drawable
+  area. That rectangle is persisted as `client_bounds` on a window in the
+  `windows-uia` payload (payload 0.5.0, additive under SPEC §11.1, so the pack
+  format itself does not move). It lives there rather than in `chrome-dom`
+  because it is a fact about a WINDOW, observed in the same pass and the same
+  space as the frame rectangle it sits beside — a window rectangle and its
+  client rectangle must be comparable without leaving the record they are in.
+  It is OPTIONAL and absent from every payload written earlier; a reader meeting
+  a window without one recovers the document and **declines to place it** rather
+  than deriving a rectangle from the frame and putting boxes somewhere plausible
+  and wrong.
 - Export is source-first. Original snapshot/replay media are never modified;
   blur is applied only to declared derived views. `viewer.html`, pack
   documents and rendered media are regenerated atomically without being
@@ -330,8 +397,11 @@ core/
         └── types.ts         SPEC 0.1.0 format types + Settings
 ```
 
-The main-process modules, the capture renderer, and the shared contract exist today; the editor
-renderer (`src/renderer/editor/`) does not yet, so the app cannot run the full flow end-to-end.
+That map is the 0.1.x tree, and it is now a shape rather than a listing: the editor renderer it
+described as missing shipped with V1, and `src/main/context/` alone has grown the session
+clock, the surface and control lanes, the input-event ring and the pack readers described in the
+baseline above. Read the current `core/src/` for what exists; read this map for what the app was
+originally decomposed into, which has not changed.
 
 Conventions, from GOAL.md's coding guidelines:
 

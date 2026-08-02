@@ -9,7 +9,7 @@ status; it never overrides either document.
 end on a real install (0.1.0 → 0.1.1 → 0.1.2). The active source and
 documentation baseline and current public
 [GitHub Release](https://github.com/r2cuerdame/capturepack/releases/latest) are
-**0.3.3**.
+**0.4.1**.
 What is *not* yet proven is the long-run habit — the one-month
 no-manual-reinstall criterion is still running.
 
@@ -48,26 +48,18 @@ verification history. These are the current additions and next gates:
   manual/semantic box ownership.
 - 0.3.3 adds the offline pack viewer, bounded replay/recorder ownership,
   measured capture-health evidence and expanded temporal/multi-display QA.
-  Per-display source-to-encoded-video alignment remains tracked in
-  [#89](https://github.com/r2cuerdame/capturepack/issues/89) when motion evidence
-  is insufficient; the writer does not invent a fixed correction.
-- 0.3.4 is **in progress and unreleased**, on `agent/0.3.4`
-  ([PR #105](https://github.com/r2cuerdame/capturepack/pull/105)): element
-  picking that reports arming, failure and every refusal instead of failing
-  silently; picking inside iframes with a measured frame offset; an explicitly
-  picked document element no longer filtered by a threshold measured for UI
-  Automation enumerations ([#104](https://github.com/r2cuerdame/capturepack/issues/104));
-  a routine update notice held over a locked screen
-  ([#103](https://github.com/r2cuerdame/capturepack/issues/103)); and the
-  measurement that narrows #89 — renderer-to-main transport and the memory
-  governor are ruled out, the frame-age term now reaches every sample path
-  instead of 6% of them, and a deterministic moving fixture measures desktop
-  pixel exposure by correlating position, which is the only axis on which the
-  failure is visible at all.
-  That measurement now runs against real evidence: on the capture that opened
-  #89 the focused display reads 127 ms and 118 ms across two independent drags,
-  and applying it collapses the overlay's positional error from about 550 px to
-  19–97 px. The non-focused display refuses rather than guessing.
+- 0.3.4 ships element picking that reports arming, failure and every refusal
+  instead of failing silently; picking inside iframes with a measured frame
+  offset; an explicitly picked document element no longer filtered by a
+  threshold measured for UI Automation enumerations
+  ([#104](https://github.com/r2cuerdame/capturepack/issues/104)); a routine
+  update notice held over a locked screen
+  ([#103](https://github.com/r2cuerdame/capturepack/issues/103)); a screenshot
+  that carries the page of every visible browser window rather than the one
+  Chrome last focused
+  ([#132](https://github.com/r2cuerdame/capturepack/issues/132)); and a replay
+  that stops writing a quiet screen as a shorter recording
+  ([#116](https://github.com/r2cuerdame/capturepack/issues/116)).
   0.3.4 also **removes object picking from a video entirely**
   ([#119](https://github.com/r2cuerdame/capturepack/issues/119)): control
   geometry could only be sampled at a 3% duty cycle and skipped Chromium
@@ -75,14 +67,68 @@ verification history. These are the current additions and next gates:
   it. A video now takes manual boxes only; a still keeps the whole affordance
   and gains the visible page of every visible browser window. Pinned by
   `check:video-no-picking`.
-- Next: decide where that correction is applied, which is a decision about what
-  a saved pack means rather than a measurement — the single save-side funnel
-  reaches the pack, the editor and the burned-in video at once but is
-  irreversible per pack, while one observation record spans displays whose
-  latencies differ. Then recalibrate when motion evidence appears. Alongside
-  that, continue physical mixed-DPI/long-running recording, save/reopen,
-  installer/update and Chrome reconnection QA, and design an explicit
-  sanitized-sharing path.
+- **[#89](https://github.com/r2cuerdame/capturepack/issues/89) is closed, and
+  not by a correction.** Overlays can lead the recorded video, and the picture
+  runs on the order of 100 ms behind its own timestamp — two estimators sharing
+  no code agree on the magnitude, and `qa:exposure-field` now measures it from
+  any saved pack and refuses rather than guessing. What could not be settled is
+  the exact figure: five separate confounds were found and fixed on the way, and
+  the answer moved each time. The only correction design that survived the cost
+  analysis measured one capture and corrected the next, which means telling
+  someone their first capture was a calibration run — not a thing a screenshot
+  tool may say. So no correction ships. A box marks the moment it was picked at,
+  and a replay no longer claims to know where a control went afterwards. Kept
+  from the whole investigation: the harness, and the real defect it found (#116
+  above, the recorder writing a quiet screen short).
+- 0.3.5 **removes the second process** — the watchdog and its supervisor are
+  gone ([#80](https://github.com/r2cuerdame/capturepack/issues/80), closing
+  [#78](https://github.com/r2cuerdame/capturepack/issues/78)) — because a
+  supervisor cannot fix an app that died from a bug in the app, and the symptom
+  it was reasoned onto is answered by a crash dump, a next start that says it
+  stopped unexpectedly, and the Windows login item. It also adds a retention
+  policy and a storage budget that run themselves
+  ([#47](https://github.com/r2cuerdame/capturepack/issues/47),
+  [#48](https://github.com/r2cuerdame/capturepack/issues/48)), pin numbers the
+  user assigns rather than the app
+  ([#51](https://github.com/r2cuerdame/capturepack/issues/51)), CI that records
+  a real capture and asserts on the pack it produced
+  ([#63](https://github.com/r2cuerdame/capturepack/issues/63)), and a keyframe
+  that declares the size it actually is
+  ([#133](https://github.com/r2cuerdame/capturepack/issues/133)).
+- 0.4.0 makes **N screens the normal case**: `media.displays` is always present,
+  a single-monitor capture writes an array of one, and every display states the
+  size of its own image measured from the file that was written rather than
+  recomputed from its bounds — pack format 0.7.0
+  ([#75](https://github.com/r2cuerdame/capturepack/issues/75)). The timeline
+  also records what moved: `input.mouse.*` and `input.window.*` on the replay
+  clock, pack format 0.8.0, declared only when a capture carries such an event
+  ([#12](https://github.com/r2cuerdame/capturepack/issues/12)). `input.key.*`
+  stays reserved and is never written — a screenshot contains every pixel you
+  could see, and a keystroke is not among them.
+- 0.4.1 makes a **saved pack's browser page readable again**: the reader asked
+  for the viewport in a different spelling than the writer uses, and no pack had
+  ever persisted the browser window's drawable area, so a pack could hold a
+  complete document and place none of it. Capture was never affected, which is
+  exactly why it survived three releases
+  ([#136](https://github.com/r2cuerdame/capturepack/issues/136)). It also makes
+  object picking measured rather than assumed — a check sweeps a saved pack on a
+  grid and fails the build if what is offered under the cursor grows past a
+  measured limit ([#134](https://github.com/r2cuerdame/capturepack/issues/134))
+  — has CI assert on a pack whose derived stills were really rendered
+  ([#135](https://github.com/r2cuerdame/capturepack/issues/135)), and pins four
+  of #76's five three-screen risks on a synthetic desk.
+- Next: the three-screen acceptance test on REAL hardware — one portrait, one
+  scaled, focus on the third — is still unrun, and
+  [#76](https://github.com/r2cuerdame/capturepack/issues/76) stays open until
+  someone with that desk works its checklist; a synthetic desk pins the risks it
+  can honestly reach and cannot stand in for the machine. On three screens the
+  pack names which display lost its replay and the tray and the toast do not
+  ([#137](https://github.com/r2cuerdame/capturepack/issues/137)). Beyond that:
+  the plugin platform ([#69](https://github.com/r2cuerdame/capturepack/issues/69),
+  [#68](https://github.com/r2cuerdame/capturepack/issues/68)), code signing
+  ([#21](https://github.com/r2cuerdame/capturepack/issues/21)), continued
+  physical mixed-DPI/long-running recording, save/reopen, installer/update and
+  Chrome reconnection QA, and an explicit sanitized-sharing path.
 
 ---
 
@@ -94,11 +140,11 @@ at the time. Current shipped behavior is summarized above and in
 
 | Milestone | Scope | Status |
 |---|---|---|
-| Format spec 0.5.0 | SPEC.md + JSON Schemas (`docs/schemas/`) | Draft; additive 0.1–0.5 contracts implemented by the reference writer |
+| Format spec | SPEC.md + JSON Schemas (`docs/schemas/`) | Draft; additive contracts through 0.8.0 implemented by the reference writer. A video pack declares 0.7.0 (`media.displays` always present), and 0.8.0 when it carries `input.*` events |
 | **V1 — MVP + release** | Capture, annotate (scrub timeline), export + installable auto-updating Windows release | **Done — shipped v0.1.0 → v0.1.2** |
 | **V1.5 — MCP server** | Always-on read-only MCP so any AI reads packs natively | Shipped in v0.1.1 (daily-use verification ongoing) |
 | **V1.6 — Working with saved packs** | History (browse/re-edit/re-render/package), replay trim, 9 languages, configurable hotkey | Shipped in v0.1.2 |
-| **V1.7 — Truth** | A recorder that proves frames before claiming them, picking that offers the thing under the cursor, an app that leaves a record and does not stay gone | Shipped in v0.1.6 → v0.1.7 |
+| **V1.7 — Truth** | A recorder that proves frames before claiming them, picking that offers the thing under the cursor, an app that leaves a record and does not stay gone | Shipped in v0.1.6 → v0.1.7. The "does not stay gone" half was a supervisor process; it was removed in 0.3.5 ([#80](https://github.com/r2cuerdame/capturepack/issues/80)) and the record half — crash dump, and a next start that says it stopped unexpectedly — is what carried the intent |
 | **V2 — Temporal plugin system** | Providers that restore the PAST at any buffered time (one clock, checkpoints + deltas), a platform surface timeline that decides what the user was actually looking at, after-save actions that can never cost a capture, Chrome extension as the first web provider | Partially implemented — Core surface timeline, UIA history and Chrome preview shipped; general API pending |
 | **V3 — Semantic layer** | Tracked annotations following their object through the replay, AI-assisted annotation | Partially implemented — semantic targets and observed tracks shipped; app/engine providers pending |
 
@@ -181,7 +227,7 @@ continued field verification remains ongoing. Client setup and the full tool ref
 [docs/MCP.md](docs/MCP.md).
 
 - [x] Recent-pack index + export-folder watcher (no manual refresh)
-- [x] Read-only tools: `latest` · `list` · `open` (dir or zip) · `summary` · `manifest` ·
+- [x] Read-only tools: `latest` · `history` · `list` · `open` (dir or zip) · `summary` · `manifest` ·
       `report` · `timeline(from_ms,to_ms)` · `annotations` · `find_annotations` ·
       `frame(time_s)` · `replay` · `dom` / `find_dom` · `windows` · `search` ·
       `export_markdown` — exposed as `capturepack_*` tool names; every pack-reading tool
@@ -214,25 +260,46 @@ mistake lands visibly on whoever wrote it.
 
 The Core surface timeline, bounded Windows UIA history and Chrome preview
 provider are implemented. The general third-party provider/after-save API is
-not frozen, and top-level `input.*` events remain reserved.
+not frozen ([#68](https://github.com/r2cuerdame/capturepack/issues/68),
+[#69](https://github.com/r2cuerdame/capturepack/issues/69)).
 
 ### Timeline events
 
 - [x] Window/focus/control observations in provider-owned temporal context
-- [ ] Top-level mouse and keyboard `input.*` events
+- [x] Top-level mouse and window `input.*` events — `input.mouse.move`,
+      `input.mouse.click`, `input.window.focus`, `input.window.move`,
+      `input.window.resize`, on the replay clock (pack format 0.8.0). Derived
+      from surface samples Core already takes plus one extra cursor read inside
+      a dump that was already happening: no hook, no thread, no new boundary
+
+`input.key.*` is **not a future item.** It stays RESERVED and unemitted at any
+version — a decision, not a deferral. Recording what is visible is licensed by
+the snapshot already containing those pixels; a keystroke is not among them, and
+a password field renders dots, which is the case the DOM walker already refuses
+`type="password"` for. `check:input-events` is what keeps that true.
 
 ### Plugin API & integrations
 
-- [ ] Plugin API — core owns capture; plugins only append metadata under `plugins/<name>/`
+- [ ] In-process Plugin API — core owns capture; plugins only append metadata
+      under `plugins/<name>/`. The **on-disk** half of that contract ships:
+      `plugins/windows-uia`, `plugins/chrome-dom` and `plugins/windows-context`
+      are written and declared exactly as SPEC §11 defines them. What is missing
+      is the runtime surface a third party could write against
 - [x] Chrome preview extension: element picker, selector generation, protocol v1,
       native host and installer registration
 - [x] Built-in UIA and Chrome settings expose enable/disable and live health
 - [ ] General third-party plugin manager and stable after-save API
+      ([#69](https://github.com/r2cuerdame/capturepack/issues/69),
+      [#68](https://github.com/r2cuerdame/capturepack/issues/68))
 - [x] Element picking inside iframes, with the frame offset measured by
-      cooperating frames rather than assumed (0.3.4, unreleased)
+      cooperating frames rather than assumed
 - [x] The picker reports arming, failure and every refusal, so a pick that does
-      not arrive says where it stopped (0.3.4, unreleased)
-- [ ] Extension Phase 2: DOM snapshot, Shadow DOM, SPA route detection
+      not arrive says where it stopped
+- [x] Extension Phase 2, the document snapshot half: a still records the whole
+      visible document of every visible browser window, not one element of one
+      focused tab — and refuses the fields the picture does not contain
+      (`check:document-snapshot`)
+- [ ] Extension Phase 2, the rest: Shadow DOM and SPA route detection
 - [x] Chromium-family registration (Chrome, Edge, Brave and Chromium)
 - [x] Built-in Windows UI Automation context provider
 - [ ] Git plugin · Console plugin
@@ -273,7 +340,8 @@ less complete without them, and nothing becomes an AI API integration (a stated 
 - **Open specification adoption** — other tools reading and writing `.capturepack`.
 - **Future MCP tools** — compare, merge, diff, statistics, exportPDF/HTML/Issue,
   findByApplication/URL/WindowTitle; true replay-frame extraction for `frame(time_s)`
-  (v0 returns the snapshot frame with a note).
+  (today it returns the nearest annotated keyframe, or `snapshot.png` with a note stating
+  its frame time — a frame is never decoded out of the video).
 
 ---
 
@@ -292,16 +360,16 @@ less complete without them, and nothing becomes an AI API integration (a stated 
 
 | # | Step | Milestone | Status |
 |---|---|---|---|
-| 1 | Write SPEC.md | — | Done (draft 0.1.0) |
+| 1 | Write SPEC.md | — | Done (draft 0.1.0; grown additively since, through 0.8.0) |
 | 2 | Define CapturePack format | — | Done (SPEC + schemas) |
 | 3 | Build replay buffer | V1 | Done (shipped) |
 | 4 | Screenshot | V1 | Done (shipped) |
 | 5 | Annotation editor | V1 | Done — unified box editor with scrub timeline and lifetimes (shipped) |
 | 6 | Export CapturePack | V1 | Done — folder-first packs with README/skills/annotated replay (shipped) |
-| 7 | Plugin API | V2 | Not started |
-| 8 | Browser plugin | V2 | Scaffolded (extension + protocol v1) |
-| 9 | Windows plugin | V2 | Not started |
-| 10 | Public release | V1 | Done (v0.1.1 live; auto-update chain proven) |
+| 7 | Plugin API | V2 | Not started — the in-process API. The on-disk plugin contract (SPEC §11) is implemented and written by every capture |
+| 8 | Browser plugin | V2 | Done — picker, document snapshot, protocol v1, native host, Chromium-family installer registration. Shadow DOM / SPA routes pending |
+| 9 | Windows plugin | V2 | Done — built-in UI Automation provider writing `plugins/windows-uia` and `plugins/windows-context` |
+| 10 | Public release | V1 | Done (0.4.1 live; auto-update chain proven from 0.1.0) |
 
 ---
 

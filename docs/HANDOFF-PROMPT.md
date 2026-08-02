@@ -12,78 +12,124 @@ Read these before changing anything:
 6. `docs/QA.md`
 7. the current files and `git diff`
 
-The current public Windows release is stable `v0.3.3`, built from
-`b7e0c695d5f2c018e2c10fcf83936d1d42f7a0d4`. Do not move that tag or replace
-its assets. `main` may contain documentation-only commits after the tag.
+The current public Windows release is stable `v0.4.1`, built from
+`5b2b4debc03a6ed26f4a62d7640a77d00601c17c`, published and verified by
+downloading the released asset and hashing it. Do not move that tag or replace
+its assets. Work happens on `main`; there is no in-flight release branch, and
+`main` may carry documentation-only commits after the tag. Start with
+`git status --short --branch` and `git fetch`, and never reset or clean away an
+active worktree.
 
-**Work in progress lives on `agent/0.3.4`
-([PR #105](https://github.com/r2cuerdame/capturepack/pull/105)), not on `main`.**
-It is not released: no version bump, no tag, no binaries. It contains element
-picking that reports itself end to end
-([#104](https://github.com/r2cuerdame/capturepack/issues/104)), cross-frame
-element picking, the editor no longer deleting an explicitly picked document
-element, the lock-screen update notice
-([#103](https://github.com/r2cuerdame/capturepack/issues/103)), and the #89
-measurement below. Read `GOAL.md`'s "0.3.4 in progress" section before touching
-any of it.
+Application version and pack format version are different contracts. The pack
+format is **0.7.0**, or **0.8.0** for a capture that actually carries an input
+event. The `windows-uia` plugin payload is **0.5.0**.
 
-The primary unresolved correctness problem is
-[issue #89](https://github.com/r2cuerdame/capturepack/issues/89): object/context
-overlays can lead encoded video by a display-specific amount. The measured
-focused-display lead was about 125 ms in one moving capture, while the
-non-focused display retained a different residual. Do not hard-code a global
-offset, interpolate observed object tracks, or claim sync from a stationary
-sample. Build a moving regression and measure source-frame time against encoded
-PTS per display.
+## What the product is, in the four sentences newcomers get wrong
 
-Three of its candidate causes are now measured rather than argued, from the lane
-cost line (`frame->core +4.1 ms, 1 dropped, stride 1`, with
-`10 frame-stamped / 0 clock-stamped / 160 converted`):
+**N screens is the normal case, not one screen plus others.** `media.displays`
+is REQUIRED and always present — a single-monitor capture writes an array of
+one — and `media.snapshot`/`media.replay` are defined as *aliases for the
+focused entry*, not as "the capture". A reader that follows the obvious field
+gets half the desk with no signal that the rest exists, which is exactly the
+defect the requirement closed. Each entry states its own snapshot frame as
+measured, because recomputing it from `bounds` × `scale` is off by a pixel at
+1.25x and 1.5x — the scale factors this exists to get right.
 
-- renderer-to-main IPC transport is **4.1 ms** — real, uniform, not the cause;
-- the memory governor never coarsened the ring and the lane is not thinning it —
-  both ruled out;
-- **95% of samples take the converted path, which did not carry the frame-age
-  term at all** — invisible at a ~1 ms age, a 53–125 ms error on the majority
-  population the moment a real exposure latency reached it. Fixed: every path
-  now applies the same shift, and `check:sync` fails by exactly one age without
-  it. Keep it that way; the next change to that term is the dangerous one.
+**Object picking is a still-image affordance, and a video builds no object index
+at all.** `objectPickingApplies()` in the editor is the whole rule. This is not
+an unfinished feature waiting to be extended back into video: picking in a
+replay could only ever be done in half, because lane A paces itself to a 3% duty
+and skips Chromium windows, so a scrubbed frame offered the window and never the
+thing inside it while the same click at the capture instant offered both. A
+video keeps its replay, its timeline, its keyframes, the window and control
+geometry recorded through time, and hand-drawn boxes with lifetimes. Lane A
+still RECORDS; only the affordance is gone.
 
-What is left is the term nothing in the product represents: desktop pixel
-exposure. `check:exposure-alignment` is the moving fixture that makes it a
-number instead of an argument — one landmark at a known speed, its pixels
-exposed a known amount late — and it shows why nothing caught this before: the
-clock comparison the product already runs calls that fixture aligned to 2.0 ms
-while correlating position names 60.0 ms. The disagreement is not on the time
-axis.
+**The timeline carries mouse and window events, and never keystrokes.**
+`input.mouse.move`, `input.mouse.click`, `input.window.focus`,
+`input.window.move`, `input.window.resize` — derived from samples lane S already
+takes plus one cursor read inside a dump the host already performs, twice
+bounded (pruned to the surface ring's retention, capped at 4096 events). A trim
+DROPS events outside the kept range rather than clamping them, which would stack
+hundreds of cursor positions onto instant zero. `input.key.*` stays reserved and
+unemitted, and that is a decision with a reason: the licence for recording
+anything here is that the picture already contains it, and a keystroke is not
+among those pixels because a password field renders dots. Do not add a keyboard
+hook, a key event type, or a keyboard virtual-key read. `check:input-events`
+hunts for all three across the source that runs and the format that is written,
+and the validator fails a pack carrying `input.key.*` at any version.
 
-`npm run qa:exposure-field -- --pack <dir>` then measured it on real evidence.
-On the pack that opened the issue the focused display reads **127.0 ms ± 5.5**
-and **118.0 ms ± 5.5** across two independent drags, and applying that collapses
-the overlay's positional error from about **550 px to 19–97 px**. The
-non-focused display refuses on `insufficient-samples` rather than guessing from
-one identified frame. The harness is read-only and needs ffmpeg on PATH.
+**A saved pack's browser page can be read back.** It could not until 0.4.1, and
+the failure was silent for as long as it existed: the extension speaks camelCase
+on the wire, packs are written in snake_case like every other persisted field,
+and the reader only knew the wire spelling — so the viewport guard correctly
+refused every document it was handed. Both spellings are accepted on read now
+and **the writer was deliberately not touched**, because SPEC and every pack in
+the field agree with it. `windows[].client_bounds` is the other half: a DOM
+element is measured in viewport CSS pixels and only the window's drawable
+rectangle turns those into snapshot pixels, so the payload carries one now.
 
-What is left is **not** a measurement question, and it should not be settled by
-an agent. The only single save-side funnel is `frozenRingObservations`
-(`core/src/main/context/ringObservations.ts:441`), where one `t` is both the ring
-query and the published label; relabelling there reaches the pack, the live
-editor, every drawn box and the burned-in video at once, and is correct for MCP
-and third-party readers with no changes. But it is irreversible per pack, and
-one observation record carries entries for every display it overlaps while the
-latency is per-display. Read the next order in `docs/HANDOFF.md` and ask the
-owner.
+## What is open
 
-Whatever is chosen: publish the value as its own per-display quantity — never by
-overloading `replay_clock_offset_ms`, whose `focused => 0` is correct by
-definition — apply it through `exposureCorrectedContextTimeMs` at exactly one
-place (the check counts sites and fails above one, because applying it twice is
-measured to be exactly as wrong as not applying it), and do not add it on top of
-the `frameAgeMs` leg already folded into every sample time at
-`surfaceLane.ts:895`. A stationary or barely-moving capture must keep returning
-`insufficient-motion` rather than 0 ms.
+Open, and only these:
 
-Before claiming a change works:
+- **[#76](https://github.com/r2cuerdame/capturepack/issues/76) — three real
+  screens.** Its acceptance test (one portrait, one scaled, focus on the third)
+  is UNRUN and cannot be run on a two-monitor machine. Four of its five risks are
+  covered synthetically in `check:n-display-format` on a desk built to break
+  them, and every assertion there was proven to catch its regression by
+  sabotaging the production rule it guards rather than the fixture's expected
+  value. The fifth — three hardware encoders and three UIA temporal buffers on
+  one machine — is a measurement on real hardware, not a property, and nothing
+  simulates it. A fixture is not a desk; do not close this on fixture evidence.
+- **[#137](https://github.com/r2cuerdame/capturepack/issues/137) — at three
+  screens only the pack names which display lost its replay.** The tray never
+  names the screen that stopped, the toast reports a count rather than an
+  identity, and the toast discards the count entirely when the focused display is
+  among the failures. The payloads are right in all three cases; the loss is in
+  the renderer, and the fix needs new strings in nine locales.
+- **[#69](https://github.com/r2cuerdame/capturepack/issues/69)** and
+  **[#68](https://github.com/r2cuerdame/capturepack/issues/68)** — the plugin
+  platform.
+- **[#21](https://github.com/r2cuerdame/capturepack/issues/21)** — code signing.
+- **[#1](https://github.com/r2cuerdame/capturepack/issues/1)** — the usage
+  journal.
+
+The open issue list on GitHub is a backlog, not a map of what has landed. Read
+the current code, the check that guards it, and the issue's acceptance criteria
+together before changing any issue state.
+
+## Do not reopen the video/context alignment problem
+
+[#89](https://github.com/r2cuerdame/capturepack/issues/89) — overlays leading
+encoded video by a display-specific amount — was not patched. It was designed
+out, and understanding why is the difference between maintaining this product
+and undoing a release. Every hard defect of that fortnight lived in one join:
+moving geometry against a video frame. Desktop pixel exposure measured 118–127
+ms on the one desk where it could be measured at all. A second display's replay
+clock had no observable origin. One display recorded 17.6 s of wall time into
+5.29 s of media with its 903 ms stall silently collapsed — time compressed
+non-linearly, so no single offset can repair it. And the cost of watching
+closely enough to try was reachable only by excluding Chromium windows, which
+are what users most want to select.
+
+None of those exist for a single instant. So the still became the thing that
+carries context, the video stopped following objects through frames, and the
+whole class went with it. The measurement machinery is retained as evidence, not
+as unfinished work: `check:exposure-alignment` is the moving fixture,
+`npm run qa:exposure-field -- --pack <dir>` is the read-only field harness, and
+`src/shared/exposureAlignment.ts` records the rules that make the number hard to
+fake. If a change you are considering makes a box follow a window through a
+replay again, it has reintroduced all of it — including the parts that were
+never fixable.
+
+Two standing rules survive from that work and are not negotiable: observed
+object tracks use observed samples and are never interpolated, and nothing may
+guess object state, bounds, or a time that was not observed. Human-authored
+manual-box keyframes may interpolate, because they are explicit author input and
+live in a separate field.
+
+## Before claiming a change works
 
 ```powershell
 cd C:\_Project\capturepack\core
@@ -92,32 +138,43 @@ npm run qa:rc
 npm audit --omit=dev
 ```
 
-The automated gate has 85 steps (83 with `--skip-build`), but it does not replace
-the physical Windows matrix in `docs/QA.md`. A real Desktop Duplication
-fallback, sustained FPS/gap measurements, physical three-display behavior, and
-full hotkey-to-pack E2E remain field work unless you produce new evidence.
+The gate discovers every `check:*` script in `core/package.json` — currently
+**82** — and runs them with type checking, the production build and the built
+app's Electron smoke: **85 steps**, or 83 with `--skip-build`. Count it yourself
+rather than trusting this sentence:
+
+```powershell
+node -e "const s=require('./core/package.json').scripts;console.log(Object.keys(s).filter(k=>k.startsWith('check:')).length)"
+```
+
+Run it as `npm run qa:rc`. Invoked as `node scripts/qa-gate.mjs` it loses
+`npm_execpath` and has to fall back to spawning `npm.cmd`.
+
+The gate does not replace the physical Windows matrix in `docs/QA.md`. A real
+Desktop Duplication fallback, sustained FPS and gap measurements, three physical
+displays, CPU and memory over repeated cycles, installer handoff, and a full
+hotkey-to-pack run on the owner's desk all remain field work unless you produce
+new evidence.
 
 A check that needs hardware the gate cannot promise belongs under a `qa:` script
 that says what it needs, not in the gate. `npm run qa:chrome-bridge` is the
 browser-to-pack end-to-end run and records the desktop for twelve seconds; the
-gate runs its wire half and prints the skip. That harness spent a release cycle
-wired to nothing and failing, so **confirm a check is actually discovered by
-`qa-gate.mjs` and passes standalone before trusting a green gate.**
+gate runs its wire half and prints the skip out loud rather than quietly running
+less. That harness spent a release cycle wired to nothing and failing, so
+**confirm a check is actually discovered by `qa-gate.mjs` and passes standalone
+before trusting a green gate** — and if you add one to the video profile's list
+in `qa-gate.mjs`, remember that list is maintained by hand and the gate throws
+when a name in it resolves to nothing.
 
-One thing is measured, fixed, and still unproved in the field: nothing shows
-that an element pick now arrives from a real browser. One run with the picker
-deliberately armed on an ordinary `https://` page produces one of
-`[chrome] element picker armed on …`, `[chrome] element picker could not arm: …`
-or `[chrome] element pick at …` and settles it.
-
-Safety and product boundaries:
+## Safety and product boundaries
 
 - Run `git status` and inspect current diffs before editing; preserve concurrent
   changes and never reset or clean them away.
 - Never synthesize the owner's global capture hotkeys or mouse input.
 - Do not modify the installed app, live `%APPDATA%\CapturePack` state, or packs
-  under `C:\_CapturePack`.
-- Use isolated profiles and disabled global shortcuts for headed QA.
+  under `C:\_CapturePack`. The capture root is evidence: read it, never write it.
+- Use isolated user-data/output directories, `--no-global-shortcut` and
+  `--no-login-item` for headed QA, and stop only PIDs belonging to that instance.
 - Preserve original media, unknown pack files, local/offline behavior, and the
   read-only saved-pack MCP boundary.
 - Never invent unobserved object state or call a failed capture successful.
@@ -125,7 +182,7 @@ Safety and product boundaries:
 - Do not commit installers, release directories, logs, backups, or private
   CapturePacks.
 - Do not publish, retag, or change external services without explicit owner
-  authorization.
+  authorization. Publication is a manual `workflow_dispatch`, never a tag push.
 
 Report to the owner in Korean, lead with the measured result, and list anything
 that remains unverified.
