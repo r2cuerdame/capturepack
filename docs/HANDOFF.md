@@ -20,24 +20,38 @@ Use [docs/README.md](README.md) as the documentation index. The older
 
 ## Public state
 
-CapturePack **0.4.0** is the current stable Windows release.
+CapturePack **0.4.1** is the current stable Windows release.
 
 | Item | Verified state |
 |---|---|
-| Public release | [v0.4.0](https://github.com/r2cuerdame/capturepack/releases/tag/v0.4.0), stable (`draft=false`, `prerelease=false`), published 2026-08-02T09:24:05Z |
-| Release source | `51865b73b52ec38a4712f9699669e45e2d02ba56` |
-| Release workflow | [passed](https://github.com/r2cuerdame/capturepack/actions/runs/30741570446) |
-| Main CI | [passed](https://github.com/r2cuerdame/capturepack/actions/runs/30741488293) — build, spec-validate and `capture-e2e` |
-| Pages deployment | [passed](https://github.com/r2cuerdame/capturepack/actions/runs/30741488318) |
-| Website | [capturepack.dev](https://capturepack.dev/), serving 0.4.0 in all nine languages |
-| Public installer SHA-256 | `296c80935e8d8fc3df65a58f626886702ffaaba804e374f77416c45effdc5889` |
-| Installer size | 104,245,259 bytes |
+| Public release | [v0.4.1](https://github.com/r2cuerdame/capturepack/releases/tag/v0.4.1), stable (`draft=false`, `prerelease=false`), published 2026-08-02T12:14:11Z |
+| Release source | `5b2b4debc03a6ed26f4a62d7640a77d00601c17c` |
+| Release workflow | [passed](https://github.com/r2cuerdame/capturepack/actions/runs/30747260000) |
+| Main CI | [passed](https://github.com/r2cuerdame/capturepack/actions/runs/30747137747) — build, spec-validate and `capture-e2e`, the last one asserting on a RENDERED pack for the first time |
+| Website | [capturepack.dev](https://capturepack.dev/), serving 0.4.1 in all nine languages |
+| Public installer SHA-256 | `43be44f5381c449fd0e6b7fed8c7536efdcefd63e3b71c40f6a4c1265d1a386d` |
+| Installer size | 104,279,341 bytes |
+
+The tag points at the CHECK FIX, not at the release-prep commit, and that is the
+whole story of this release's last hour. `capture-e2e` went red on the 0.4.1
+candidate over `media.cadence.backend is null` — a correct pack and a wrong
+assertion. `backend` rides inside `media.cadence`, whose `achieved_fps` and
+`worst_stall_ms` SPEC §5.3 makes REQUIRED, so a recorder that measured no rate
+writes no cadence and has nowhere legal to put the backend it does know. The job
+is `continue-on-error`, so the overall run was green and this could have shipped
+unexamined. Do not let that happen: a non-blocking job that goes red on a change
+you just made is the one you look at.
 
 Verified after publication by downloading the released asset and hashing it, not
 by reading the workflow log: SHA-256 matches `SHA256SUMS.txt`, and the SHA-512
 matches `latest.yml` byte for byte, so electron-updater will accept it.
 
-**The no-keystrokes promise was checked in the shipped binary, not the branch.**
+**The read-back fix was checked in the shipped binary, not the branch.** `app.asar`
+carries `device_pixel_ratio` on both sides of the seam — `device_pixel_ratio")` where
+the reader accepts it and `device_pixel_ratio: ...devicePixelRatio` where the writer
+emits it — plus `client_bounds` and the windows-uia `0.5.0` constant.
+
+**The no-keystrokes promise was checked in the shipped binary too.**
 `SetWindowsHookEx` is absent from `app.asar`; the only virtual keys the shipped
 capture host reads are `VK_LBUTTON`, `VK_RBUTTON` and `VK_MBUTTON`; and the only
 input event strings it can emit are `input.mouse.click`, `input.mouse.move`,
@@ -48,6 +62,9 @@ documents. Grep for either and read the surrounding line before concluding
 anything.
 
 Earlier public releases stay exactly where they are:
+[v0.4.0](https://github.com/r2cuerdame/capturepack/releases/tag/v0.4.0)
+(`51865b73b52ec38a4712f9699669e45e2d02ba56`, SHA-256
+`296c80935e8d8fc3df65a58f626886702ffaaba804e374f77416c45effdc5889`),
 [v0.3.5](https://github.com/r2cuerdame/capturepack/releases/tag/v0.3.5)
 (`e6b1cdc248c17283a067fb15b8f7c148e62a4eea`, SHA-256
 `058d3f8be37808eb2460d393f8598278c924063e64971b20a06f049f19686344`),
