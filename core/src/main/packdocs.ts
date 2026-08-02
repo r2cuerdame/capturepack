@@ -407,6 +407,19 @@ function buildTimelineSkill(manifest: Manifest, timeline: TimelineFile, t: Trans
       'annotation box being created in the editor (its `annotation_id` matches annotations.json), ' +
       'and `core.export.created` is the pack being saved. Other `source` values would be plugins.',
   )
+  if (timeline.events.some((e) => e.type.startsWith('input.'))) {
+    lines.push('')
+    lines.push(
+      '`input.mouse.*` and `input.window.*` are what the desk did during the replay, observed ' +
+        'while recording: cursor positions and clicks, and windows taking focus, moving or being ' +
+        'resized. Coordinates are snapshot pixels of the display in `display` (absent = the ' +
+        'focused display), the same space annotations use. They are a COALESCED record of real ' +
+        'observations — nothing between two of them was interpolated, and a click states in ' +
+        '`observed_within_ms` how much earlier than its timestamp it may have happened. ' +
+        'There are deliberately no keystrokes: `input.key.*` is reserved and never written, ' +
+        'because a key is the one input the picture does not already contain.',
+    )
+  }
   lines.push('')
   return lines.join('\n')
 }
@@ -418,6 +431,26 @@ function timelineEventDetail(type: string, data: Record<string, unknown> | undef
     return typeof data?.hotkey === 'string' ? `Hotkey ${data.hotkey}` : 'Capture hotkey'
   }
   if (type === 'core.export.created') return 'Pack saved'
+  // The observed input events (SPEC §10.2). Rendered as a sentence rather than
+  // as raw JSON, because this table is what a human and an LLM read first.
+  if (type === 'input.mouse.move' || type === 'input.mouse.click') {
+    const at = `(${String(data?.['x'] ?? '?')}, ${String(data?.['y'] ?? '?')})`
+    const screen = typeof data?.['display'] === 'number' ? ` on display ${String(data['display'])}` : ''
+    if (type === 'input.mouse.move') return `Cursor at ${at}${screen}`
+    const button = typeof data?.['button'] === 'string' ? data['button'] : 'unknown'
+    const within =
+      typeof data?.['observed_within_ms'] === 'number'
+        ? `, seen within ${String(data['observed_within_ms'])} ms`
+        : ''
+    return `${button} click at ${at}${screen}${within}`
+  }
+  if (type.startsWith('input.window.')) {
+    const title = typeof data?.['title'] === 'string' && data['title'] !== '' ? data['title'] : '(untitled)'
+    const process = typeof data?.['process'] === 'string' ? ` [${data['process']}]` : ''
+    const what =
+      type === 'input.window.focus' ? 'Focus' : type === 'input.window.move' ? 'Moved' : 'Resized'
+    return `${what}: ${title}${process}`.replaceAll('|', '\\|')
+  }
   if (type === 'core.annotation.added') {
     const id = typeof data?.annotation_id === 'string' ? data.annotation_id : 'unknown'
     return `${id} (box)`

@@ -82,6 +82,7 @@ import type { DisplaySnapshot, ReplayFetch } from './capture'
 import {
   freezeContext,
   contextObservationFromSurfaceSample,
+  frozenInputEvents,
   frozenObservations,
   contextNowMs,
   frozenPackTimeAt,
@@ -133,6 +134,7 @@ import {
   trimWindowsContextTimeline,
   type WindowsContextTimelineV1,
 } from './context/windowsContextTimeline'
+import { timelineEventsForTrim, withoutInputEvents } from './context/inputEvents'
 import { openContextSession, pushContextFrame } from './context/service'
 import { createEditorCloseWatchdog } from './editorCloseWatchdog'
 import { reopenedContextDisplayTargets } from './reopenDisplay'
@@ -1849,10 +1851,28 @@ async function runFlow(settings: Settings): Promise<void> {
     }
   }
 
+  // WHAT THE USER DID, FROM WHAT CORE ALREADY WATCHED (#12, SPEC §10.2).
+  //
+  // Read once, here, out of the ring lane S has been filling for the whole
+  // replay: the cursor's path, its clicks, and every window that took focus,
+  // moved or was resized inside the captured range. Nothing new was observed
+  // for this and nothing is inferred — see main/context/inputEvents.ts for why
+  // the mouse and the windows are recorded and a keystroke never is.
+  //
+  // Empty is normal: a still desk, a capture with no context host, a platform
+  // without one. The pack then declares the version it always did.
+  const inputEvents = frozenInputEvents(contextFreezeId, contextDisplays)
+  if (inputEvents.length > 0) {
+    logInfo(`[context] ${inputEvents.length} input event(s) on the pack clock (SPEC §10.2)`)
+  }
   // SPEC §10.2: the trigger event carries the accelerator that fired it in
   // `data.hotkey` (report.md renders it). It is configurable, so it is read
   // from the live settings rather than spelled out anywhere.
+  //
+  // Ascending by t_ms (SPEC §10.1): every input event was observed inside the
+  // replay, and the trigger closes it at `replayDurationMs`.
   const events: TimelineEvent[] = [
+    ...inputEvents,
     {
       t_ms: replayDurationMs,
       type: 'core.capture.triggered',
@@ -1878,8 +1898,14 @@ async function runFlow(settings: Settings): Promise<void> {
     cadence: focusedCadence,
     timeline: {
       t0: new Date(rawT0Ms).toISOString(),
+      // Save-first declares the RAW recorder file, whose clock starts
+      // `replaySourceStartMs` before the pack's. The trigger closes that clock
+      // at its own end; every other event is the same observation, restated on
+      // the clock this folder declares — a shift, never a re-timing.
       events: events.map((e) =>
-        e.type === 'core.capture.triggered' ? { ...e, t_ms: rawReplayDurationMs } : e,
+        e.type === 'core.capture.triggered'
+          ? { ...e, t_ms: rawReplayDurationMs }
+          : { ...e, t_ms: e.t_ms + replaySourceStartMs },
       ),
     },
     outputDir: settings.outputDir,
@@ -2330,7 +2356,11 @@ async function runFlow(settings: Settings): Promise<void> {
       ? timeline
       : {
           t0: new Date(packWallTimeAt(trim.startMs)).toISOString(),
-          events: events.map((e) => ({ ...e, t_ms: Math.max(0, e.t_ms - trim.startMs) })),
+          // A trim moves the clock, and `timelineEventsForTrim` is where the
+          // two kinds of event part company: a `core.*` event is clamped as it
+          // always was, an `input.*` observation outside the kept range is
+          // dropped rather than restamped to a moment nobody observed it at.
+          events: timelineEventsForTrim(events, trim.startMs, trim.endMs),
         }
   const sourceTrimStartMs = replaySourceStartMs + keptRange.startMs
   const needsExactCut =
@@ -2780,7 +2810,9 @@ async function handleExactCutFailure(
     trimOffsetMs: null,
     timeline: {
       t0: isoWithOffset(input.capturedAt),
-      events: input.timeline.events.map((e) => ({
+      // No replay survived, so no observation has a clock to sit on any more —
+      // see `withoutInputEvents`. The core events keep the shift they always had.
+      events: withoutInputEvents(input.timeline.events).map((e) => ({
         ...e,
         t_ms: Math.max(0, e.t_ms - input.replayDurationMs),
       })),
@@ -2861,7 +2893,9 @@ async function finalizeCancelledExactReplay(
       finalFocused.replayWebm === null
         ? {
             t0: isoWithOffset(initial.capturedAt),
-            events: initial.timeline.events.map((e) => ({ ...e, t_ms: 0 })),
+            // Same rule as the screenshot-only fallback above: with no replay
+            // left, an observed input event has no instant to be true at.
+            events: withoutInputEvents(initial.timeline.events).map((e) => ({ ...e, t_ms: 0 })),
           }
         : {
             // Exact-cut media and timeline share the same rebased origin. When
@@ -3181,7 +3215,12 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
     !hasReplay && declaredDurationMs > 0
       ? {
           t0: new Date(t0Ms + declaredDurationMs).toISOString(),
-          events: events.map((e) => ({ ...e, t_ms: Math.max(0, e.t_ms - declaredDurationMs) })),
+          // And the same rule when a re-edited pack's declared replay is not on
+          // disk: the events that described positions inside it go with it.
+          events: withoutInputEvents(events).map((e) => ({
+            ...e,
+            t_ms: Math.max(0, e.t_ms - declaredDurationMs),
+          })),
         }
       : { t0, events }
   // The declared focused replay is missing on disk: the save above rebased t0

@@ -69,6 +69,28 @@ export const FORMAT_VERSION_SOURCE_LATENCY = '0.6.0'
 export const FORMAT_VERSION_REQUIRED_DISPLAYS = '0.7.0'
 
 /**
+ * `input.mouse.*` AND `input.window.*` TIMELINE EVENTS (#12, SPEC §10.2).
+ *
+ * SPEC §10.2 reserved the whole `input.*` namespace in 0.1.0 with "writers MUST
+ * NOT emit them yet" and told readers to skip it like any unknown type. 0.8.0
+ * lifts the writer's half for the MOUSE and the WINDOW — and only those; a
+ * keystroke is not in the picture the pack already contains, so `input.key.*`
+ * stays reserved and unemitted (the reasoning lives in
+ * `main/context/inputEvents.ts`, where the events are derived).
+ *
+ * A MINOR under §13.1, and the reader side is why: an old reader was ALREADY
+ * required to skip an event type it does not know, so a 0.7.0 reader opening a
+ * 0.8.0 pack reads exactly the timeline it always read. What 0.8.0 changes is
+ * what a WRITER is permitted to put in it.
+ *
+ * Declared only by a pack that actually carries one of these events — §13.1's
+ * "write the oldest version that fully expresses your content". A capture in
+ * which nothing moved, or one taken with no context host, writes no input event
+ * and keeps declaring 0.7.0.
+ */
+export const FORMAT_VERSION_INPUT_EVENTS = '0.8.0'
+
+/**
  * How far the recorder's pixels lagged the glass, MEASURED (SPEC §5.3, #115).
  *
  * Not a configured delay and not derived from a frame rate: an independent

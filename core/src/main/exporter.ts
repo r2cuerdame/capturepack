@@ -42,6 +42,7 @@ import type {
 import {
   FORMAT_NAME,
   FORMAT_VERSION_CAPTURE_DIAGNOSTICS,
+  FORMAT_VERSION_INPUT_EVENTS,
   FORMAT_VERSION_KEYFRAMES,
   FORMAT_VERSION_REQUIRED_DISPLAYS,
   FORMAT_VERSION_SOURCE_LATENCY,
@@ -886,6 +887,21 @@ export interface ManifestInput {
    * for an empty pack would cost it older readers for a field it does not use.
    */
   usesKeyframes?: boolean
+  /**
+   * Whether `timeline.json` carries an `input.*` event (SPEC §10.2), which is
+   * the only thing that lifts this pack to 0.8.0. Absent = no.
+   *
+   * Derived from the timeline the SAME save is about to write, never from
+   * whether the app is capable of observing input: a capture in which nothing
+   * moved writes no event and must keep the older version, which is §13.1's
+   * "oldest version that fully expresses your content".
+   */
+  hasInputEvents?: boolean
+}
+
+/** Does this timeline carry an event from the 0.8.0 `input.*` namespace? */
+export function timelineHasInputEvents(timeline: TimelineFile | undefined): boolean {
+  return timeline?.events.some((event) => event.type.startsWith('input.')) === true
 }
 
 function validImageCropBounds(value: ImageCropBounds | undefined): value is ImageCropBounds {
@@ -965,6 +981,12 @@ export function buildManifest(input: ManifestInput): Manifest {
   const hasSourceLatency = emittedCadences.some(
     (cadence) => cadence?.source_latency !== undefined,
   )
+  // 0.8.0 IS THE `input.*` EVENTS AND NOTHING ELSE (SPEC §10.2, §13.1). It sits
+  // above the display requirement below because a pack that carries one of
+  // these events also carries everything 0.7.0 required — the version a writer
+  // declares is the newest thing it uses, and the oldest that expresses all of
+  // it.
+  const hasInputEvents = input.hasInputEvents === true
   const manifest: Manifest = {
     format: FORMAT_NAME,
     // Every pack written here declares capture_kind, a 0.3.0 field (SPEC §5.1,
@@ -977,7 +999,9 @@ export function buildManifest(input: ManifestInput): Manifest {
     // multi-display pack, which really does gain the per-display
     // snapshot_width/height it did not have before. A re-edit of a pack that
     // declares no displays keeps its older version; see declaresDisplays above.
-    format_version: declaresDisplays
+    format_version: hasInputEvents
+      ? FORMAT_VERSION_INPUT_EVENTS
+      : declaresDisplays
       ? FORMAT_VERSION_REQUIRED_DISPLAYS
       : hasSourceLatency
         ? FORMAT_VERSION_SOURCE_LATENCY
@@ -1152,6 +1176,11 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
       plugins: withWindowsContextPlugin(undefined, contextDisposition),
       displays: imageCapture ? undefined : input.displays,
       cadence: imageCapture ? undefined : input.cadence,
+      // Save-first already carries the capture's input events — they were
+      // observed before the trigger, not authored in the editor — so the folder
+      // written before the editor opens declares the same version the final
+      // save will.
+      hasInputEvents: timelineHasInputEvents(input.timeline),
     })
     // No render follows a save-first folder — the editor may never finish — so
     // the documents must not promise stills nothing will ever write.
@@ -1224,6 +1253,7 @@ export async function updateInitialPack(
     plugins: withWindowsContextPlugin(previous?.plugins, contextDisposition),
     displays: imageCapture ? undefined : input.displays,
     cadence: imageCapture ? undefined : input.cadence ?? previous?.media.cadence,
+    hasInputEvents: timelineHasInputEvents(input.timeline),
   })
   const annotationsFile: AnnotationsFile = {
     reference_width: input.width,
@@ -1318,6 +1348,7 @@ export async function updatePack(
         ? undefined
         : input.cadence ?? previousManifest?.media.cadence,
     usesKeyframes: input.annotations.some((a) => (a.keyframes?.length ?? 0) > 0),
+    hasInputEvents: timelineHasInputEvents(input.timeline),
   })
   const annotationsFile: AnnotationsFile = {
     reference_width: input.width,
@@ -1649,6 +1680,7 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
       displays: displayFiles,
       cadence: imageCapture ? undefined : input.cadence ?? sourceManifest?.media.cadence,
       usesKeyframes: annotations.some((a) => (a.keyframes?.length ?? 0) > 0),
+      hasInputEvents: timelineHasInputEvents(timeline),
     })
     // A background render for the NEW folder always follows this save.
     await writePackFiles(dirPath, manifest, annotationsFile, timeline, input.docLanguage, true)

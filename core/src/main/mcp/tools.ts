@@ -565,7 +565,10 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
       title: 'Window focus timeline',
       description:
         'Window-related context of a CapturePack: video timeline events whose type or source mentions ' +
-        'window/focus, plus any window-tracking plugin metadata — on Windows that is the ' +
+        'window/focus — including the observed "input.window.focus", "input.window.move" and ' +
+        '"input.window.resize" events a 0.8.0 pack records DURING the replay, each carrying the ' +
+        'window title/process and, for a move or resize, its bounds in that display\'s snapshot ' +
+        'pixels — plus any window-tracking plugin metadata — on Windows that is the ' +
         '"windows-uia" payload, whose windows[] lists every top-level window at the capture ' +
         'instant (title, process, class_name, bounds in the snapshot pixels of the display in ' +
         '"display" — absent means the focused display — z-order with 0 on top, which one had ' +

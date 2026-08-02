@@ -20,7 +20,9 @@
 import { randomUUID } from 'node:crypto'
 import type { ContextObservation } from './buffer'
 import { ControlLane, type ControlsAt } from './controlLane'
-import { frozenRingObservations } from './ringObservations'
+import { InputEventRing, inputTimelineEvents } from './inputEvents'
+import { frozenRingObservations, inputDisplayPlacement } from './ringObservations'
+import type { TimelineEvent } from '../../shared/types'
 import type { ContextDisplayTarget } from './session'
 import type { SurfaceStack } from '../../shared/context/protocol'
 import {
@@ -53,6 +55,8 @@ interface Runtime {
   clock: SessionClock
   timeline: SurfaceTimeline
   lane: SurfaceLane
+  /** `input.*` events (#12), derived from what lane S already observes. */
+  input: InputEventRing
   /** Lane A (#111) — the resident control tracker. Optional in behaviour, not in shape. */
   controls: ControlLane
   controlsEnabled: boolean
@@ -156,9 +160,18 @@ export function startContextRuntime(options: ContextRuntimeOptions): void {
   // importing it, so the same class can run in the Electron-free harnesses —
   // this is the Electron side, so it passes the real thing.
   const providers = new ProviderHost(clock, { info: logInfo, warn: logWarn })
+  // THE INPUT EVENTS COST WHAT THE REPLAY COSTS (#12). One retention, shared
+  // with the ring they are derived from, pruned on the same tick — so the
+  // buffer's size is a function of the replay length and never of how long the
+  // app has been running. See `INPUT_RING_MAX_EVENTS` for the second bound.
+  const input = new InputEventRing(retentionMs)
+  lane.setInputSink((timeMs, windows, pointer) => {
+    input.observe(timeMs, windows, pointer)
+  })
   const maintenance = setInterval(() => {
     void providers.tick()
     void providers.prune(clock.bufferStartMs())
+    input.prune(clock.bufferStartMs())
     // WHICH WINDOWS LANE A LOOKS INSIDE — lane S's answer, not lane A's.
     // `budgetedWindowHandlesNow` already excludes a window occluded to nothing,
     // and a control that cannot be seen cannot be hovered, so walking it is
@@ -185,6 +198,7 @@ export function startContextRuntime(options: ContextRuntimeOptions): void {
     clock,
     timeline,
     lane,
+    input,
     controls,
     controlsEnabled,
     readVisibleWindows,
@@ -209,6 +223,7 @@ export function stopContextRuntime(): void {
   if (current === null) return
   runtime = null
   clearInterval(current.maintenance)
+  current.lane.setInputSink(null)
   current.lane.stop()
   current.controls.stop()
   const controlStatus = current.controls.status()
@@ -236,11 +251,22 @@ export function stopContextRuntime(): void {
   }
   chromiumWindowsNotWalked = 0
   const stats = current.timeline.stats()
+  const inputStats = current.input.stats()
   // The cost, on the record, once per run (GOAL "Capture must stay cheap" is a
   // promise this subsystem has to be able to be checked against).
   logInfo(
     `[context] session ended — ${stats.samples} surface samples, ${stats.checkpoints} checkpoints, ` +
-      `${Math.round(stats.bytes / 1024)} KB ring`,
+      `${Math.round(stats.bytes / 1024)} KB ring, ` +
+      // Held AND dropped, because a bound nobody can see is a bound nobody
+      // trusts: retention is what makes the second number normal (#12). And the
+      // pointer readings, because "no mouse events" has two causes and only
+      // this number separates a still cursor from a host that never saw one.
+      `${inputStats.events} input event(s) held, ${inputStats.dropped} aged out, ` +
+        `${
+          inputStats.pointerReadings === 0
+            ? 'no pointer was ever reported'
+            : `${inputStats.pointerReadings} pointer reading(s)`
+        }`,
   )
 }
 
@@ -249,6 +275,7 @@ export function updateContextRetention(replayMs: number): void {
   const retentionMs = Math.max(1_000, replayMs) + RETENTION_SLACK_MS
   runtime?.clock.setRetentionMs(retentionMs)
   runtime?.controls.setRetentionMs(retentionMs)
+  runtime?.input.setRetentionMs(retentionMs)
   runtime?.timeline.setBudgetBytes(surfaceTimelineBudgetForRetention(retentionMs))
 }
 
@@ -512,6 +539,36 @@ export function frozenObservations(
       }
       return at
     },
+  )
+}
+
+/**
+ * The `input.*` events of the frozen range, as SPEC §10 timeline events (#12).
+ *
+ * ON THE REPLAY'S CLOCK, THROUGH THE FREEZE'S OWN MAPPING — the same one every
+ * surface answer uses, so an `input.window.move` and the rectangle the editor
+ * draws for that instant cannot disagree about when it happened.
+ *
+ * Read ONCE, at capture, into the array that becomes `timeline.json`. That is
+ * what makes the ring's retention irrelevant afterwards: an editor left open
+ * for an hour prunes the ring behind it and cannot take a single event out of
+ * the pack that was already written.
+ *
+ * Empty is a normal answer and never an assertion: no runtime, no freeze, a
+ * host that never reported a cursor, or a capture in which nothing moved.
+ */
+export function frozenInputEvents(
+  freezeId: string | null,
+  targets: readonly ContextDisplayTarget[],
+): TimelineEvent[] {
+  const current = runtime
+  if (current === null || freezeId === null) return []
+  const freeze = freezes.get(freezeId)
+  if (freeze === undefined) return []
+  return inputTimelineEvents(
+    current.input.between(freeze.startMs, freeze.endMs),
+    inputDisplayPlacement(current.lane.monitors(), targets),
+    (sessionMs) => packTimeOf(freeze, sessionMs),
   )
 }
 

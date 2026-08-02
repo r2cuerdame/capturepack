@@ -215,20 +215,48 @@ pack as described above.
 | `capturepack_summary` | `id?` | Title, note, captured_at, environment (os/screens/app), explicit/inferred `capture_kind`, image scope/crop provenance, annotation/plugin counts; video packs also report replay, timeline and frame-time details |
 | `capturepack_manifest` | `id?` | Raw `manifest.json` |
 | `capturepack_report` | `id?` | Raw `report.md` |
-| `capturepack_timeline` | `id?`, `from_ms?`, `to_ms?` | Video timeline or a slice; explicit image packs return a non-error explanation that no timeline applies |
+| `capturepack_timeline` | `id?`, `from_ms?`, `to_ms?` | Video timeline or a slice; explicit image packs return a non-error explanation that no timeline applies. Includes the `input.*` events described below |
 | `capturepack_annotations` | `id?` | The annotation list — including each box's optional `target` (the real UI object it was placed on, e.g. `{source:"uia", name:"Save", control_type:"Button"}`) and, on a multi-display capture, **which screen it is on** (`display_index` + `display_snapshot`, see below) |
 | `capturepack_find_annotations` | `keyword`, `id?` | Annotations matching the keyword |
 | `capturepack_frame` | `time_s?`, `id?` | An image of the capture: the **nearest annotated keyframe** to `time_s` when the pack has them, else `snapshot.png` — **see below** |
 | `capturepack_replay` | `id?` | Replay **metadata** only: filename, duration_ms, size_bytes — never raw video bytes |
 | `capturepack_dom` | `id?` | Generic plugin metadata under `plugins/*/` — on Windows usually `windows-uia` (the capture-instant window list + the control trees the dump reached); DOM-ish data lives under a chrome plugin dir when present |
 | `capturepack_find_dom` | `selector`, `id?` | Plugin/DOM entries matching the selector — e.g. an `automation_id` or a control name in the `windows-uia` dump |
-| `capturepack_windows` | `id?` | Window/focus timeline events plus window-related plugin metadata (the `windows-uia` window list), when present |
+| `capturepack_windows` | `id?` | Window/focus timeline events — including the observed `input.window.*` ones — plus window-related plugin metadata (the `windows-uia` window list), when present |
 | `capturepack_search` | `keyword`, `id?` | Case-insensitive substring search across `report.md`, annotation texts, video timeline when present, plugin JSON, and manifest title/note — hits grouped by source |
 | `capturepack_export_markdown` | `id?` | One Markdown document: `report.md` + annotations table + plugin inventory, plus the timeline only for video packs. Returned as text; **writes no files** |
 
 Plugin metadata is exposed generically — the MCP server never special-cases plugin kinds.
 If a pack has no plugin data, the plugin-reading tools return empty results with a clear
 message; that is expected today.
+
+### `input.*` timeline events (format 0.8.0)
+
+A video pack written by 0.8.0 or later can carry what the desk DID during the replay, beside
+the three `core.*` events that describe the capture itself (SPEC §10.2):
+
+| Type | `data` |
+| --- | --- |
+| `input.mouse.move` | `x`, `y`, `display?` |
+| `input.mouse.click` | `button` (`left`/`right`/`middle`), `x`, `y`, `display?`, `observed_within_ms?` |
+| `input.window.focus` | `title`, `process`, `display?` |
+| `input.window.move` / `input.window.resize` | `title`, `process`, `bounds`, `display?` |
+
+Read them the way the rest of a pack's geometry is read: coordinates are **snapshot pixels of
+the display in `display`**, and an absent `display` means the focused one — the same rule
+annotations and the `windows-uia` payload follow.
+
+Two things a session should know before reasoning over them:
+
+- **They are sampled observations, not a complete input log.** Movement between two
+  observations was not recorded, a click that began and ended between two of them is not there,
+  and the stream is deliberately coalesced to a few events per second. They are evidence that
+  something happened, never evidence that nothing else did. `observed_within_ms` on a click is
+  how much EARLIER than its timestamp the button may have gone down.
+- **There are no keystrokes and there will not be.** `input.key.*` is reserved and never
+  written: the replay already shows the cursor and every window, but a typed password renders as
+  dots, so a key is information the pack's own pixels never held. A pack that contains one was
+  not written by this tool.
 
 ### Object context (`windows-context`, `windows-uia`, Chrome DOM, and `target`)
 

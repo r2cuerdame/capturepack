@@ -1281,7 +1281,7 @@ Event types are lowercase dot-paths. The first segment is the namespace:
 | Namespace | Status in 0.1.0 | Description |
 |---|---|---|
 | `core.*` | Defined | Events emitted by the capture tool itself. |
-| `input.*` | **Reserved for V2** | User input events — `input.mouse.click`, `input.key.down`, `input.window.focus`, and similar. Not defined in 0.1.0; writers MUST NOT emit them yet, and readers MUST skip them like any unknown type. |
+| `input.*` | **Partly defined (0.8.0)** | What the user did. `input.mouse.*` and `input.window.*` are defined below and MAY be emitted from 0.8.0. **`input.key.*` remains RESERVED: writers MUST NOT emit it**, at any version, until a future version of this spec defines it. Readers MUST skip every type they do not know, reserved ones included. |
 | `plugin.<name>.*` | Defined (open) | Events emitted by plugin `<name>`. The `<name>` segment MUST match a declared plugin, and the event's `source` MUST equal `<name>`. Everything after `plugin.<name>.` is plugin-defined. |
 
 Core events defined in 0.1.0:
@@ -1295,6 +1295,43 @@ Core events defined in 0.1.0:
 `data` fields listed here are conventions, not requirements — readers MUST tolerate their
 absence. Readers MUST skip events of unknown type and SHOULD preserve them when rewriting a pack.
 New `core.*` event types may be added in minor format versions.
+
+Input events defined in 0.8.0:
+
+| Type | Emitted when | Conventional `data` fields |
+|---|---|---|
+| `input.mouse.move` | The pointer was observed at a new position. | `x`, `y` (integers, the coordinate rule below), `display` (integer, optional) |
+| `input.mouse.click` | A mouse button was observed DOWN having been observed UP. | `button` (`"left"`, `"right"` or `"middle"`), `x`, `y`, `display` (optional), `observed_within_ms` (integer, optional — see below) |
+| `input.window.focus` | A different top-level window became the foreground window. | `title`, `process` (matching `plugins/windows-uia`, [§11.3](#113-windows-uia-windows-ui-automation)), `display` (optional) |
+| `input.window.move` | A visible top-level window's position changed, its size unchanged. | `title`, `process`, `bounds` (`{x, y, width, height}`), `display` (optional) |
+| `input.window.resize` | A visible top-level window's size changed. | `title`, `process`, `bounds`, `display` (optional) |
+
+- **Coordinates.** `x`/`y` and `bounds` are **snapshot pixel coordinates** of the display named
+  by `display`, exactly as an annotation's ([§8.2](#82-coordinate-space)) and a `windows-uia`
+  rectangle's are. `display` is a `media.displays[].index` and is ABSENT for the focused display,
+  the same rule [§8.8](#88-display-which-display-a-box-is-on) fixes for a box. An event that
+  happened on a display the capture did not freeze has no coordinates in this pack and MUST NOT
+  be written into another display's space; writers omit such an event entirely.
+- **These are observations, and they are sampled.** A writer emits an event only for something it
+  actually observed, and MUST NOT interpolate between two observations, invent an event it did
+  not see, or restate one observation as several. It follows that the stream is INCOMPLETE by
+  construction: a movement between two samples is not recorded, and neither is a click that began
+  and ended between them. A reader MUST treat these events as evidence that something happened,
+  never as proof that nothing else did.
+- **`observed_within_ms`** is how much OLDER than `t_ms` the press may be: the gap back to the
+  previous observation, in which the button is known to have gone down. A writer that can
+  timestamp a press exactly omits the field; a writer that cannot MUST NOT pretend otherwise by
+  omitting it.
+- **Writers SHOULD coalesce.** `timeline.json` is an index into the capture, not a data store: a
+  pointer sampled 45 times a second for 30 seconds is 1,350 events that say one sentence. Emitting
+  at most a few events per second per moving thing keeps the shape of a movement, and dropping
+  observations is the only permitted way to do it — never averaging them into a position that was
+  never read.
+- **Why the keyboard is missing, and staying missing.** Every event above describes something the
+  pack's own pixels already contain: the replay shows the cursor, the effect of its clicks, and
+  every window that moved. A keystroke does not — a password field renders dots — so recording one
+  would put information into a pack that its picture never held, and observing one at all requires
+  a system-wide keyboard hook. `input.key.*` therefore stays reserved.
 
 ### 10.3 Example
 
@@ -1937,6 +1974,16 @@ major" makes it look like a break and it is not:
   to it. Refusing such a pack, or reporting it as malformed, is a bug in the reader.
 - **Image packs are unaffected**, at 0.7.0 as before: they declare no `media.displays` because
   they ship no per-display raster, so they keep declaring the oldest version that expresses them.
+
+**0.8.0 lets a writer emit `input.mouse.*` and `input.window.*` timeline events**
+([§10.2](#102-event-namespaces)). A writer that emits one MUST declare `format_version` 0.8.0 or
+later; a pack whose timeline carries none keeps its older version, which is the general rule
+above applied to a capture in which nothing moved. This is additive in the strictest sense: since
+0.1.0 readers have been REQUIRED to skip event types they do not know, so a 0.7.0 reader opening
+a 0.8.0 pack reads exactly the timeline it always read and loses nothing it ever had.
+**`input.key.*` is not part of this and is not scheduled.** It remains reserved and unemitted at
+0.8.0, deliberately and for the reason §10.2 states, so a reader may continue to treat any
+`input.key.*` event it meets as a pack that broke the rules.
 
 **Readers MUST accept unknown optional fields and unknown files.** Forward compatibility is a
 requirement, not a courtesy:

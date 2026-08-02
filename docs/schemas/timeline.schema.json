@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "CapturePack timeline.json",
-  "description": "Schema for timeline.json, the OPTIONAL machine-readable event log used by video CapturePacks through format 0.3.0. Explicit image packs MUST omit this file; that cross-file rule depends on manifest.capture_kind and therefore cannot be enforced by validating timeline.json in isolation. The timeline is append-only during capture, sorted ascending by t_ms, and replayable: when a replay video exists, t0 SHOULD be the instant of the replay's first frame so that t_ms doubles as a video seek position. Event types are namespaced dot-paths: core.* (defined in 0.1.0), input.* (reserved for V2 — not emitted yet), plugin.<name>.* (plugin-defined). Readers MUST skip events of unknown type and SHOULD preserve them when rewriting a pack. Unknown additional properties are deliberately allowed for forward compatibility (SPEC.md §13). See SPEC.md §10 for the normative definition; where schema and prose disagree, the prose wins.",
+  "description": "Schema for timeline.json, the OPTIONAL machine-readable event log used by video CapturePacks through format 0.8.0. Explicit image packs MUST omit this file; that cross-file rule depends on manifest.capture_kind and therefore cannot be enforced by validating timeline.json in isolation. The timeline is append-only during capture, sorted ascending by t_ms, and replayable: when a replay video exists, t0 SHOULD be the instant of the replay's first frame so that t_ms doubles as a video seek position. Event types are namespaced dot-paths: core.* (defined in 0.1.0), input.mouse.* and input.window.* (defined in 0.8.0), input.key.* (RESERVED — writers MUST NOT emit it), plugin.<name>.* (plugin-defined). A pack carrying any input.* event MUST declare format_version 0.8.0 or later. Readers MUST skip events of unknown type and SHOULD preserve them when rewriting a pack. Unknown additional properties are deliberately allowed for forward compatibility (SPEC.md §13). See SPEC.md §10 for the normative definition; where schema and prose disagree, the prose wins.",
   "type": "object",
   "required": ["t0", "events"],
   "properties": {
@@ -27,7 +27,7 @@
           "type": "integer"
         },
         "type": {
-          "description": "Namespaced lowercase dot-path identifying the event kind. Namespaces in 0.1.0: core.* — events from the capture tool itself (core.capture.triggered, core.annotation.added, core.export.created); input.* — RESERVED for V2 user-input events (input.mouse.click, input.key.down, input.window.focus); writers MUST NOT emit them yet; plugin.<name>.* — events from plugin <name>, where <name> matches a declared plugin. Readers skip unknown types.",
+          "description": "Namespaced lowercase dot-path identifying the event kind. core.* — events from the capture tool itself (core.capture.triggered, core.annotation.added, core.export.created), defined in 0.1.0. input.* — what the user did: input.mouse.move, input.mouse.click, input.window.focus, input.window.move and input.window.resize are defined in 0.8.0 and MAY be emitted; input.key.* is RESERVED and writers MUST NOT emit it at any version, because a keystroke is not in the pixels the pack already contains. plugin.<name>.* — events from plugin <name>, where <name> matches a declared plugin. Readers skip unknown types.",
           "type": "string",
           "pattern": "^[a-z0-9_-]+(\\.[a-z0-9_-]+)+$"
         },
@@ -37,7 +37,7 @@
           "minLength": 1
         },
         "data": {
-          "description": "OPTIONAL type-specific payload; absent means {}. Conventional fields for 0.1.0 core events — core.capture.triggered: {hotkey}; core.annotation.added: {annotation_id, annotation_type} matching annotations.json; core.export.created: {filename}. Conventions, not requirements: readers MUST tolerate their absence. Keep payloads small and structured — the timeline is an index into the capture, not a data store (bulk data belongs under plugins/).",
+          "description": "OPTIONAL type-specific payload; absent means {}. Conventional fields for 0.1.0 core events — core.capture.triggered: {hotkey}; core.annotation.added: {annotation_id, annotation_type} matching annotations.json; core.export.created: {filename}. For 0.8.0 input events — input.mouse.move: {x, y, display?}; input.mouse.click: {button, x, y, display?, observed_within_ms?}; input.window.focus: {title, process, display?}; input.window.move and input.window.resize: {title, process, bounds, display?}. Coordinates are snapshot pixels of the display in `display`, absent meaning the focused one, exactly as in annotations.json (SPEC.md §8.2, §8.8). observed_within_ms is how much OLDER than t_ms the press may be, i.e. the gap back to the previous observation. Conventions, not requirements: readers MUST tolerate their absence. Keep payloads small and structured — the timeline is an index into the capture, not a data store (bulk data belongs under plugins/).",
           "type": "object"
         }
       }

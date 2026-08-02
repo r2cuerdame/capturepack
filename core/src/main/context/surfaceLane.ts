@@ -24,6 +24,7 @@
 import { logInfo, logWarn } from '../log'
 import { ClockOffsetEstimator, type SessionClock } from './clock'
 import { ContextHost, type ContextHostOptions, type HostEvent, type HostReply } from './host'
+import type { PointerReading } from './inputEvents'
 import { SurfaceTimeline, type SurfaceSampleWindow } from './timeline'
 
 /**
@@ -283,7 +284,23 @@ export class SurfaceLane {
    * other clock to conflict with and they go in as they are. Either way none
    * is lost and none is mis-stamped.
    */
-  private pendingClockSamples: { timeMs: number; rawWindows: readonly unknown[] }[] = []
+  private pendingClockSamples: {
+    timeMs: number
+    rawWindows: readonly unknown[]
+    pointer: PointerReading | null
+  }[] = []
+  /**
+   * WHERE `input.*` EVENTS COME FROM (#12): this lane, and nothing new.
+   *
+   * The host reads the cursor and the mouse buttons on the dump it was already
+   * taking, so the pointer arrives on the same line, at the same instant and on
+   * the same clock as the window geometry beside it. The sink is optional and
+   * injected: the ring that derives events belongs to the runtime, and a lane
+   * with no sink behaves exactly as it did before this existed.
+   */
+  private inputSink:
+    | ((timeMs: number, windows: readonly SurfaceSampleWindow[], pointer: PointerReading | null) => void)
+    | null = null
   private clockDecided = false
   /**
    * THE TICK THAT ASKED, NOT WHICHEVER TICK WAS LAST (#110).
@@ -371,6 +388,15 @@ export class SurfaceLane {
   /** The host's monitor layout, for translating ring rectangles onto a snapshot. */
   monitors(): readonly HostMonitor[] {
     return this.hostMonitors
+  }
+
+  /** Where every appended observation is also offered as input (#12). */
+  setInputSink(
+    sink:
+      | ((timeMs: number, windows: readonly SurfaceSampleWindow[], pointer: PointerReading | null) => void)
+      | null,
+  ): void {
+    this.inputSink = sink
   }
   /** Previous status event, so the duty cycle is a rate and not an average since boot. */
   private lastStatus: { tMs: number; cpuMs: number } | null = null
@@ -923,7 +949,7 @@ export class SurfaceLane {
       }
       const takenAtFrameMs = observedAtMs
       this.lastAppendedMs = takenAtFrameMs
-      this.append(takenAtFrameMs, windows)
+      this.append(takenAtFrameMs, windows, parsePointer(event['p']))
       return
     }
     const timeMs = this.offset.toCoreMs(hostMs)
@@ -941,7 +967,11 @@ export class SurfaceLane {
         // Held until a tick says which clock this ring is on. Capped: past a
         // couple of seconds no tick is coming, and settleHeldSamples has
         // already let them through on their own clock.
-        this.pendingClockSamples.push({ timeMs, rawWindows: windows })
+        this.pendingClockSamples.push({
+          timeMs,
+          rawWindows: windows,
+          pointer: parsePointer(event['p']),
+        })
         if (this.pendingClockSamples.length > 64) this.pendingClockSamples.shift()
         return
       }
@@ -951,7 +981,7 @@ export class SurfaceLane {
         return
       }
       this.lastAppendedMs = timeMs
-      this.append(timeMs, windows)
+      this.append(timeMs, windows, parsePointer(event['p']))
       return
     }
     // Interleaved with ticked samples on the same clock (#110), so the same
@@ -968,7 +998,7 @@ export class SurfaceLane {
       return
     }
     this.lastAppendedMs = convertedAtMs
-    this.append(convertedAtMs, windows)
+    this.append(convertedAtMs, windows, parsePointer(event['p']))
   }
 
   /**
@@ -1000,7 +1030,7 @@ export class SurfaceLane {
       if (offsetMs === null) this.clockStamped += 1
       else this.converted += 1
       this.lastAppendedMs = atMs
-      this.append(atMs, sample.rawWindows)
+      this.append(atMs, sample.rawWindows, sample.pointer)
     }
   }
 
@@ -1033,7 +1063,11 @@ export class SurfaceLane {
     return [...this.lastWindowsByHandle.values()]
   }
 
-  private append(timeMs: number, rawWindows: readonly unknown[]): void {
+  private append(
+    timeMs: number,
+    rawWindows: readonly unknown[],
+    pointer: PointerReading | null = null,
+  ): void {
     const windows: SurfaceSampleWindow[] = []
     for (const raw of rawWindows) {
       const parsed = parseWindow(raw)
@@ -1043,6 +1077,15 @@ export class SurfaceLane {
     this.clock.observe(timeMs)
     this.samples += 1
     this.windows = windows.length
+    // AFTER the ring, and never able to hurt it: an input sink that throws
+    // must cost its own event, not the surface sample this lane exists for.
+    if (this.inputSink !== null) {
+      try {
+        this.inputSink(timeMs, windows, pointer)
+      } catch (err) {
+        logWarn(`[context] an input observation was dropped: ${errorMessage(err)}`)
+      }
+    }
   }
 
   private onStatus(event: HostEvent): void {
@@ -1180,6 +1223,20 @@ function parseWindow(raw: unknown): SurfaceSampleWindow | null {
     className: typeof record['cl'] === 'string' ? record['cl'] : '',
     executableName: typeof record['e'] === 'string' ? record['e'] : '',
   }
+}
+
+/**
+ * The sample's `p` — the cursor and the mouse buttons the host read on the same
+ * pass (#12). Validated rather than cast, like everything else that crosses
+ * this boundary: a malformed reading is NO reading, because a pointer at a
+ * position nobody measured is exactly the value this codebase refuses to write.
+ */
+function parsePointer(raw: unknown): PointerReading | null {
+  if (!Array.isArray(raw) || raw.length !== 3) return null
+  const [x, y, buttons] = raw
+  if (typeof x !== 'number' || typeof y !== 'number' || typeof buttons !== 'number') return null
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null
+  return { x: Math.round(x), y: Math.round(y), buttons: buttons | 0 }
 }
 
 function parseRect(raw: unknown): { x: number; y: number; width: number; height: number } | null {

@@ -2,7 +2,7 @@
 /**
  * validate-capturepack.mjs — dependency-free CapturePack validator.
  *
- * Validates a pack against SPEC.md (through format 0.7.0). Accepts either form of a
+ * Validates a pack against SPEC.md (through format 0.8.0). Accepts either form of a
  * pack (SPEC §3): an extracted directory, or a `.capturepack` / `.zip` file.
  * ZIP reading is implemented here directly (end-of-central-directory + central
  * directory + node:zlib inflateRawSync) — no npm dependencies, Node 18+ only.
@@ -15,11 +15,13 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { inflateRawSync } from "node:zlib";
 
-// Moved to 0.7.0 with the REQUIRED media.displays[] (SPEC §5.6). This is the
-// rule set the checks below apply, and the "differs from" note compares against
-// it — leaving it at 0.5.0 would have every correct 0.7.0 pack announce that it
-// was validated against rules that are not the ones it was written to.
-const SPEC_VERSION = "0.7.0";
+// Moved to 0.7.0 with the REQUIRED media.displays[] (SPEC §5.6), and to 0.8.0
+// with the emitted `input.mouse.*` / `input.window.*` timeline events
+// (SPEC §10.2). This is the rule set the checks below apply, and the "differs
+// from" note compares against it — leaving it behind would have every correct
+// pack announce that it was validated against rules that are not the ones it
+// was written to.
+const SPEC_VERSION = "0.8.0";
 
 // ---------------------------------------------------------------------------
 // Result collection
@@ -1964,7 +1966,19 @@ function validateAnnotations(a, snapshotDims, replay, replayDurationMs, displayI
   return knownIds;
 }
 
-function validateTimeline(t, declaredPlugins, annotationIds) {
+// `input.*` types a writer may emit from 0.8.0 (SPEC §10.2). `input.key.*` is
+// deliberately not here and is not an oversight: it is the one input a pack's
+// own pixels do not already contain, so it stays reserved and a pack carrying
+// one is refused rather than skipped with a note.
+const EMITTED_INPUT_EVENTS = new Set([
+  "input.mouse.move",
+  "input.mouse.click",
+  "input.window.focus",
+  "input.window.move",
+  "input.window.resize",
+]);
+
+function validateTimeline(t, declaredPlugins, annotationIds, formatVersion) {
   if (isIsoWithTz(t.t0)) pass(`timeline.json: t0 is ISO 8601 with a timezone designator`);
   else fail(`timeline.json: t0 ${JSON.stringify(t.t0)} MUST be ISO 8601 with a timezone designator (SPEC §10.1)`);
 
@@ -1976,6 +1990,7 @@ function validateTimeline(t, declaredPlugins, annotationIds) {
   let bad = 0;
   let lastT = -Infinity;
   let sorted = true;
+  let inputEvents = 0;
   t.events.forEach((ev, i) => {
     const label = `timeline.json: events[${i}]`;
     if (!isObj(ev)) { fail(`${label} MUST be an object`); bad++; return; }
@@ -1998,8 +2013,25 @@ function validateTimeline(t, declaredPlugins, annotationIds) {
         note(`${label}: annotation_id "${ev.data.annotation_id}" does not appear in annotations.json (conventional field mismatch, SPEC §10.2)`);
       }
     } else if (ns === "input") {
-      fail(`${label}: "${ev.type}" — input.* is reserved for V2; writers MUST NOT emit it in format 0.1.0 (SPEC §10.2)`);
-      bad++;
+      // THE HALF OF THE NAMESPACE THAT IS STILL RESERVED (SPEC §10.2). A
+      // keystroke is not in the picture the pack already holds, and no format
+      // version has ever permitted one, so this is a failure and not a skip.
+      if (second === "key") {
+        fail(`${label}: "${ev.type}" — input.key.* is RESERVED and writers MUST NOT emit it at any version: a keystroke is not in the pixels the pack already contains (SPEC §10.2)`);
+        bad++;
+      } else if (!EMITTED_INPUT_EVENTS.has(ev.type)) {
+        note(`${label}: input event type "${ev.type}" is not defined in 0.8.0 — skipped (readers MUST skip unknown event types, SPEC §10.2)`);
+      } else {
+        inputEvents++;
+        if (ev.source !== "core" && !declaredPlugins.has(ev.source)) {
+          fail(`${label}: source ${JSON.stringify(ev.source)} for an input event MUST name the component that observed it — "core", or a plugin declared in manifest.plugins (SPEC §10.1, §10.2)`);
+          bad++;
+        }
+        if (!inputDataValid(ev.type, ev.data)) {
+          fail(`${label}: "${ev.type}" carries a malformed payload — coordinates and bounds are integers in the snapshot space of the display in "display" (SPEC §10.2, §8.2)`);
+          bad++;
+        }
+      }
     } else if (ns === "plugin") {
       if (!second || !declaredPlugins.has(second)) { fail(`${label}: plugin event "${ev.type}" does not match any plugin declared in manifest.plugins (SPEC §10.2)`); bad++; }
       else if (ev.source !== second) { fail(`${label}: source MUST equal the plugin name "${second}" for plugin.* events (SPEC §10.1)`); bad++; }
@@ -2008,7 +2040,54 @@ function validateTimeline(t, declaredPlugins, annotationIds) {
     }
   });
   if (!sorted) { fail(`timeline.json: events MUST be sorted ascending by t_ms (SPEC §10.1)`); bad++; }
+  // THE VERSION AN INPUT EVENT COSTS (SPEC §10.2, §13.1). Emitting one is what
+  // 0.8.0 permits; a pack that carries one while declaring less is claiming a
+  // contract under which its own timeline was illegal.
+  if (inputEvents > 0) {
+    if (formatAtLeast(formatVersion, 0, 8)) {
+      pass(`timeline.json: ${inputEvents} input.mouse.*/input.window.* event(s), declared at format_version ${JSON.stringify(formatVersion)} (SPEC §10.2)`);
+    } else {
+      fail(`timeline.json: ${inputEvents} input.mouse.*/input.window.* event(s) require format_version 0.8.0 or later and this pack declares ${JSON.stringify(formatVersion)} (SPEC §10.2, §13.1)`);
+      bad++;
+    }
+  }
   if (bad === 0) pass(`timeline.json: all ${t.events.length} event(s) are well-formed and sorted by t_ms`);
+}
+
+/**
+ * The conventional payload of an emitted input event, checked for SHAPE only.
+ *
+ * Conventions are not requirements (SPEC §10.2) and every field may be absent,
+ * so this refuses a field that is PRESENT AND WRONG — a coordinate that is not
+ * a number, a bounds that is not a rectangle, a display that is not an index.
+ * A reader placing a cursor on a snapshot has to be able to trust the ones it
+ * finds.
+ */
+function inputDataValid(type, data) {
+  if (data === undefined) return true;
+  if (!isObj(data)) return false;
+  if (data.display !== undefined && (!isInt(data.display) || data.display < 1)) return false;
+  for (const key of ["x", "y"]) {
+    if (data[key] !== undefined && !isInt(data[key])) return false;
+  }
+  if (type === "input.mouse.click") {
+    if (data.button !== undefined && !["left", "right", "middle"].includes(data.button)) return false;
+    if (data.observed_within_ms !== undefined
+        && (!isInt(data.observed_within_ms) || data.observed_within_ms < 0)) {
+      return false;
+    }
+  }
+  if (type.startsWith("input.window.")) {
+    if (data.title !== undefined && !isStr(data.title)) return false;
+    if (data.process !== undefined && !isStr(data.process)) return false;
+    if (data.bounds !== undefined) {
+      const b = data.bounds;
+      if (!isObj(b)) return false;
+      if (!isInt(b.x) || !isInt(b.y) || !isInt(b.width) || !isInt(b.height)) return false;
+      if (b.width < 0 || b.height < 0) return false;
+    }
+  }
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -2082,7 +2161,7 @@ function validatePack(pack) {
       fail(`timeline.json: MUST be absent from an explicit still-image pack; it has no video event clock (SPEC §5.3, §10)`);
     } else {
       const parsed = parseJsonFile("timeline.json", tlBuf);
-      if (!parsed.error && isObj(parsed.value)) validateTimeline(parsed.value, declaredPlugins, annotationIds);
+      if (!parsed.error && isObj(parsed.value)) validateTimeline(parsed.value, declaredPlugins, annotationIds, manifest.format_version);
       else if (!parsed.error) fail(`timeline.json: MUST be a JSON object (SPEC §10.1)`);
     }
   } else {

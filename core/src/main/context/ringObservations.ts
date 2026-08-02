@@ -403,6 +403,63 @@ function observationOf(
  * observation would read as "nothing was on screen then", which is a different
  * and false statement from "this moment was not recorded".
  */
+/**
+ * THE SAME PLACEMENT, FOR A POINT AND A LOOSE RECTANGLE (#12).
+ *
+ * `input.*` timeline events face the identical problem the observations above
+ * do — the ring speaks virtual-desktop physical pixels, a pack speaks one
+ * display's snapshot pixels — and they must not solve it a second way, or a
+ * cursor and the window under it would land on different displays in the same
+ * pack. So this is the same `buildSpaces` transform, exposed for callers that
+ * carry no surfaces.
+ *
+ * Null is a real answer and the important one: a point or a window on a display
+ * the capture did not freeze has NO place in this pack's coordinates, and the
+ * caller's job is then to write nothing rather than to write it into the
+ * focused display's space.
+ */
+export function inputDisplayPlacement(
+  monitors: readonly HostMonitor[],
+  targets: readonly ContextDisplayTarget[],
+): {
+  point(x: number, y: number): { display: number; focused: boolean; x: number; y: number } | null
+  rect(bounds: SurfaceInfo['bounds']): {
+    display: number
+    focused: boolean
+    bounds: SurfaceInfo['bounds']
+  } | null
+} {
+  const spaces = buildSpaces(monitors, targets)
+  return {
+    point(x, y) {
+      const space = spaces.find((candidate) => containsPoint(candidate.monitor.bounds, x, y))
+      if (space === undefined) return null
+      const mapped = space.toSnapshot({ x, y, width: 0, height: 0 })
+      return { display: space.index, focused: space.focused, x: mapped.x, y: mapped.y }
+    },
+    rect(bounds) {
+      // The display it MOSTLY covers, which is the rule §11.3 already fixed for
+      // a window straddling two screens: one space, and it may reach past that
+      // snapshot's edge rather than being cut into two half-truths.
+      let best: DisplaySpace | null = null
+      let bestArea = 0
+      for (const space of spaces) {
+        const area = overlapArea(bounds, space.monitor.bounds)
+        if (area > bestArea) {
+          best = space
+          bestArea = area
+        }
+      }
+      if (best === null) return null
+      return { display: best.index, focused: best.focused, bounds: best.toSnapshot(bounds) }
+    },
+  }
+}
+
+function containsPoint(rect: HostMonitor['bounds'], x: number, y: number): boolean {
+  return x >= rect.x && y >= rect.y && x < rect.x + rect.width && y < rect.y + rect.height
+}
+
 export function frozenRingObservations(
   surfacesAt: (packTMs: number) => { surfaces: SurfaceInfo[] } | null,
   monitors: readonly HostMonitor[],

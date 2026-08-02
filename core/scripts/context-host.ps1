@@ -15,11 +15,16 @@
 #  3. IT IS READ-ONLY. It reads window geometry and identity through
 #     EnumWindows / GetWindowRect / DwmGetWindowAttribute / GetClientRect /
 #     GetWindowText / GetClassName / GetWindowThreadProcessId /
-#     QueryFullProcessImageName and NOTHING ELSE. It never synthesizes keyboard
-#     or mouse input, never moves / focuses / resizes / closes a window, never
-#     invokes a control pattern, and never writes a file. The one state it
-#     changes is its OWN process's DPI awareness. Run it standalone as often as
-#     you like:  powershell -NoProfile -File scripts/context-host.ps1 -SelfTest 100
+#     QueryFullProcessImageName, and the POINTER through GetCursorPos plus
+#     GetAsyncKeyState for the three MOUSE BUTTONS (#12, SPEC §10.2) — and
+#     NOTHING ELSE. It reads no keyboard state and installs no hook of any
+#     kind: a keystroke is the one input a screen recording does not already
+#     contain, so `input.key.*` stays unemitted and nothing here could emit it.
+#     It never synthesizes keyboard or mouse input, never moves / focuses /
+#     resizes / closes a window, never invokes a control pattern, and never
+#     writes a file. The one state it changes is its OWN process's DPI
+#     awareness. Run it standalone as often as you like:
+#     powershell -NoProfile -File scripts/context-host.ps1 -SelfTest 100
 #  4. NEW — IT MUST BE CHEAPER THAN THE THING IT OBSERVES. It publishes its own
 #     duty cycle and working set on every status event, and Core degrades or
 #     stops it when the budget is exceeded (GOAL.md "Capture must stay cheap": a
@@ -51,7 +56,10 @@
 #   <- {"id":1,"ok":true,"hostMs":12.3,"pid":1234,"dpi":"per-monitor-v2","monitors":[...]}
 #   -> {"id":2,"method":"surface.start","params":{"intervalMs":100}}
 #   <- {"id":2,"ok":true}
-#   <- {"event":"surface","t":112.7,"w":[{...}]}                    (one per sample)
+#   <- {"event":"surface","t":112.7,"w":[{...}],"p":[x,y,buttons]}  (one per sample)
+#      `p` is the cursor in the same physical space as `w`, plus a mask of the
+#      mouse buttons held at that reading (1 left, 2 right, 4 middle). Absent
+#      when the cursor could not be read.
 #   <- {"event":"status","t":5012.4,"dutyCycle":0.0064,"ws":91750400,...}
 #   -> {"id":3,"method":"ping"}          the clock probe (protocol GAP 3)
 #   <- {"id":3,"ok":true,"hostMs":5120.9}
@@ -123,6 +131,46 @@ namespace CapturePack {
     [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
     [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr h, out RECT r);
     [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr h, ref POINT p);
+    // THE POINTER, READ ON THE PASS THAT WAS ALREADY HAPPENING (#12).
+    //
+    // `input.mouse.*` needed a source, and this loop already is one: it wakes
+    // when the window manager says something moved and reads geometry with
+    // these same P/Invokes, 20-45 times a second. Two more calls on that pass
+    // cost microseconds against a dump measured at 0.585-0.9 ms, so the cursor
+    // is observed at the ring's own cadence with NO new hook, NO new thread and
+    // no new process.
+    //
+    // GetAsyncKeyState IS ASKED ABOUT THREE MOUSE BUTTONS AND NOTHING ELSE. It
+    // reads state the OS offers every process; it installs nothing, intercepts
+    // nothing, and cannot see a keystroke. That distinction is the whole reason
+    // `input.key.*` stays unemitted (SPEC §10.2): a keyboard would need
+    // WH_KEYBOARD_LL, a hook that sits IN the input path, and this file will
+    // never contain one. `check:input-events` fails if a keyboard virtual-key
+    // code ever appears in this script.
+    [DllImport("user32.dll")] static extern bool GetCursorPos(out POINT p);
+    [DllImport("user32.dll")] static extern short GetAsyncKeyState(int vKey);
+    const int VK_LBUTTON = 0x01;
+    const int VK_RBUTTON = 0x02;
+    const int VK_MBUTTON = 0x04;
+    /// `,"p":[x,y,buttons]` for the sample being built, or "" when the cursor
+    /// could not be read — an empty answer, never a remembered one.
+    static string PointerJson() {
+      POINT cursor;
+      if (!GetCursorPos(out cursor)) return "";
+      int buttons = 0;
+      // The HIGH bit only: "down at this reading". The low bit ("pressed since
+      // the previous call") is documented as unreliable, and a click derived
+      // from it would be a value nobody measured. Core turns up-then-down
+      // between two readings into one click and states the gap it could have
+      // happened in.
+      if ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0) buttons |= 1;
+      if ((GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0) buttons |= 2;
+      if ((GetAsyncKeyState(VK_MBUTTON) & 0x8000) != 0) buttons |= 4;
+      return ",\"p\":[" +
+        cursor.X.ToString(CultureInfo.InvariantCulture) + "," +
+        cursor.Y.ToString(CultureInfo.InvariantCulture) + "," +
+        buttons.ToString(CultureInfo.InvariantCulture) + "]";
+    }
     [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr h, int index);
     [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr h);
     [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr h, uint cmd);
@@ -562,6 +610,7 @@ namespace CapturePack {
         }
         Out.Append(",\"d\":1");
       }
+      Out.Append(PointerJson());
       Out.Append("}");
       long spent = Stopwatch.GetTimestamp() - started;
       // WHEN THIS SAMPLE WAS ACTUALLY TAKEN (#110).
@@ -662,7 +711,9 @@ namespace CapturePack {
         return Sample(hostMs, false);
       }
 
-      Out.Append("],\"d\":1}");
+      Out.Append("],\"d\":1");
+      Out.Append(PointerJson());
+      Out.Append("}");
       long spent = Stopwatch.GetTimestamp() - started;
       double dumpMs = (double)spent * 1000.0 / (double)Stopwatch.Frequency;
       Out.Insert(1, "\"t\":" +

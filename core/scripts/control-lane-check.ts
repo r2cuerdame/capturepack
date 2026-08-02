@@ -1627,6 +1627,10 @@ async function main(): Promise<void> {
         return {
           start: () => {},
           stop: () => {},
+          // The seam `input.*` events are derived through (#12). A double that
+          // did not offer it would make the runtime's wiring untestable here
+          // and would crash the moment the runtime used it.
+          setInputSink: () => {},
           monitors: () => MONITORS,
           clockErrorMs: () => 0,
         } as unknown as SurfaceLane
@@ -1782,6 +1786,10 @@ async function main(): Promise<void> {
         return {
           start: () => {},
           stop: () => {},
+          // The seam `input.*` events are derived through (#12). A double that
+          // did not offer it would make the runtime's wiring untestable here
+          // and would crash the moment the runtime used it.
+          setInputSink: () => {},
           monitors: () => MONITORS,
           clockErrorMs: () => 0,
         } as unknown as SurfaceLane
