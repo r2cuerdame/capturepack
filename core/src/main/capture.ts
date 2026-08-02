@@ -258,22 +258,40 @@ function sameRecorderState(a: RecorderState, b: RecorderState): boolean {
   return a.reason === b.reason && a.detail === b.detail
 }
 
-function aggregateRecorderState(): RecorderState {
-  for (const id of wantedDisplayIds) {
-    const state = displayRecorderStates.get(id)
+/**
+ * The ONE state the tray shows for a desk of N recorders.
+ *
+ * PESSIMISTIC ON PURPOSE, and that is the whole rule: a single stopped display
+ * makes the whole tray read "not recording", because the alternative — a tray
+ * that says "recording" while one screen is dead — is issue #39's lie with more
+ * monitors. "recording" has to be EARNED by every wanted display; anything in
+ * between is "starting".
+ *
+ * PARAMETERIZED so a fixture can hold it to a PARTIAL failure (#76: "two
+ * screens recording, one not"). Reaching this through the real pipeline needs
+ * three live recorder windows and a way to kill one of them; taking the two
+ * maps as arguments is what lets a three-display desk exist on a two-monitor
+ * machine. The private state is passed in by the one caller below, unchanged.
+ *
+ * `states` is typed as RecorderState rather than DisplayRecorderState because
+ * the two unions are the same shape — the per-display map satisfies it as is.
+ */
+export function aggregateRecorderState(
+  wanted: ReadonlySet<number>,
+  states: ReadonlyMap<number, RecorderState>,
+): RecorderState {
+  for (const id of wanted) {
+    const state = states.get(id)
     if (state?.status === 'stopped') return { ...state }
   }
-  if (
-    wantedDisplayIds.size > 0 &&
-    [...wantedDisplayIds].every((id) => displayRecorderStates.get(id)?.status === 'recording')
-  ) {
+  if (wanted.size > 0 && [...wanted].every((id) => states.get(id)?.status === 'recording')) {
     return { status: 'recording' }
   }
   return { status: 'starting' }
 }
 
 function publishRecorderState(): void {
-  const next = aggregateRecorderState()
+  const next = aggregateRecorderState(wantedDisplayIds, displayRecorderStates)
   if (sameRecorderState(publishedRecorderState, next)) return
   publishedRecorderState = next
   // One line per REAL change of the state the tray shows, so a report that says

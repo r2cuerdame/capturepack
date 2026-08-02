@@ -635,9 +635,23 @@ async function freezeDisplays(settings: Settings): Promise<{
  * recording"): how many captured displays came back without one, whether the
  * pack itself is therefore screenshot-only, and the recorder's reason — worded
  * exactly as the tray words it. null when every display delivered.
+ *
+ * EXPORTED, AND TAKING ONLY THE THREE FIELDS IT READS, so a fixture can put a
+ * PARTIAL failure through it (#76: "two screens recording, one not"). This rule
+ * only ever runs at the end of a real capture on a desk where a recorder died —
+ * on a two-monitor machine that is a hardware accident, and the case that
+ * matters most, a NON-focused failure on a three-monitor desk, cannot happen
+ * here at all. A `readonly FrozenDisplay[]` parameter would have forced a
+ * fixture to fabricate two dozen fields that this function never looks at; the
+ * narrowed signature is also the honest statement of what it depends on.
+ * FrozenDisplay[] still satisfies it structurally, so the caller is unchanged.
  */
-function replayUnavailableForToast(
-  displays: readonly FrozenDisplay[],
+export function replayUnavailableForToast(
+  displays: readonly {
+    focused: boolean
+    replayWebm: Buffer | null
+    replayUnavailableReason: RecorderFailureReason | null
+  }[],
 ): ReplayUnavailablePayload | null {
   const missing = displays.filter((d) => d.replayWebm === null)
   const first = missing[0]
