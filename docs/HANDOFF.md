@@ -1,4 +1,4 @@
-# CapturePack handoff — after v0.4.0
+# CapturePack handoff — after v0.4.1
 
 Last verified: 2026-08-02 (Asia/Seoul)
 
@@ -72,7 +72,65 @@ pushed. Always begin with `git status --short --branch`, `git fetch`, and a
 non-destructive comparison before choosing a branch. Never reset or clean away
 an active worktree.
 
-## What 0.4.0 contains
+## What 0.4.1 contains
+
+**A saved pack's browser page can be read back** ([#136](https://github.com/r2cuerdame/capturepack/issues/136)).
+Measured before and after on the same corpus with the same instrument: 12 packs,
+**6,092 rectangles on disk, 1 recovered → 6,092 recovered**. The single "1" was one
+explicit element pick; every captured document was refused.
+
+Two independent causes, either one fatal on its own:
+
+- The writer persists the document viewport as `device_pixel_ratio` / `scroll_x` /
+  `scroll_y`; the reader asked for `devicePixelRatio` / `scrollX` / `scrollY`. `dpr`
+  came back null and the guard refused the whole document rather than defaulting a
+  device pixel ratio — correct behaviour on wrong input. Both spellings are accepted
+  now and **the writer was not touched**: SPEC and every pack in the field agree with
+  it. `domProvider.ts`'s comment claiming #130 fixed read-back is corrected; it did,
+  and this defeated it on the next line.
+- No pack persisted a client rectangle. #131 solved that for the LIVE still by
+  layering lane-S rectangles onto the observation; nothing wrote them to disk, so 0 of
+  80 payloads carried one and every recovered element was declined. `windows[].client_bounds`
+  is now OPTIONAL in the **windows-uia payload, which moves to 0.5.0** — a plugin
+  payload is additive under SPEC §11.1, so the pack format itself does not move.
+
+It lives in windows-uia rather than chrome-dom because it is a fact about a WINDOW,
+observed in the same pass and the same space as the frame rectangle it qualifies.
+
+**What picking offers is measured** ([#134](https://github.com/r2cuerdame/capturepack/issues/134)).
+`ObjectIndex.forDisplay` lifts index construction out of the editor renderer and
+`context/packObjects.ts` opens a saved pack as the same `ContextSession` the re-edit
+flow does — real parser, real providers, no Electron. `check:pick-quality` sweeps on a
+16 px grid and fails past a **15%** per-pack median. The verdict on current code was
+FINE: median 0.37%, p90 3.27% across 41 real captures. The limit sits in a measured
+gap — floor 11.4% (worst honest pack, finest grid), ceiling 37% (the #58 regression
+reinstated). A "precise" column rides beside it so a fix that deletes every control
+cannot pass by driving the median to nothing.
+
+That threshold was **re-derived** after #136 landed rather than assumed still valid,
+because #136 changes what the document rung can offer. It stays at 15%; the note in
+the check carries the numbers, including the caveat that on a pack where the browser IS
+the frame this check would fail — which is the right answer, not a false alarm.
+
+**CI asserts on a rendered pack** ([#135](https://github.com/r2cuerdame/capturepack/issues/135)).
+`--save-now` gained a bounded `--await-render`. Polling the manifest cannot work here:
+it assumes the app is alive to finish the render, and `--save-now` quits at the source
+boundary where `before-quit` shuts the render queue down.
+
+**Three screens, synthetically** ([#76](https://github.com/r2cuerdame/capturepack/issues/76)).
+Four of its five risks are covered on a desk built to break them — mixed scales,
+vertical offsets, portrait in the middle, focus on index 3. Every assertion was proven
+to catch its regression by sabotaging **the production rule it guards**, not the
+fixture's expected value. The fifth — three encoders and three UIA buffers on one
+machine — is a measurement on real hardware and is NOT covered.
+
+**#76 stays open and its acceptance test is unrun.** The issue carries a seven-item
+checklist for whoever has three monitors; read it before assuming anything about that
+desk. [#137](https://github.com/r2cuerdame/capturepack/issues/137) is the reporting gap
+the fixtures found: at three screens only the pack names which one lost its replay —
+the tray and the toast do not. The payloads are right; the renderers drop it.
+
+## What 0.4.0 contained
 
 **N screens is the normal case** ([#75](https://github.com/r2cuerdame/capturepack/issues/75),
 pack format **0.7.0**). `media.displays` is REQUIRED and always present — a single-display
@@ -235,7 +293,7 @@ would have caught it the day it appeared.
   `runtime.lastError` values while bounded reconnect remains active.
 
 Application version and pack format version are different contracts.
-`core/package.json` is application version `0.4.0`; packs containing the
+`core/package.json` is application version `0.4.1`; packs containing the
 optional viewer declare a compatible format version of at least `0.5.0`.
 
 ## Known problem: video/context alignment

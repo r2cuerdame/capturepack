@@ -34,10 +34,9 @@ local et ouvert, qui fonctionne sans IA, sans compte et sans service cloud.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Télécharger](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Version Windows publique actuelle : **CapturePack 0.4.0**. Un pack décrit
-désormais chaque écran, et non plus un seul avec les autres en annexe ; la
-chronologie, elle, enregistre ce qui a bougé — le curseur et les fenêtres.
-Jamais ce que vous tapez.
+Version Windows publique actuelle : **CapturePack 0.4.1**. La page de navigateur
+d’un pack enregistré se relit enfin — rouvrir une capture n’en retrouvait rien —
+et ce que propose Object Pick est désormais mesuré, non plus supposé.
 
 <p align="center">
   <a href="https://capturepack.dev/">
@@ -254,7 +253,7 @@ Outils, configuration des clients et réglages : [docs/MCP.md](docs/MCP.md).
 
 ## État
 
-**0.4.0 est la version Windows publique actuellement téléchargeable.** CapturePack
+**0.4.1 est la version Windows publique actuellement téléchargeable.** CapturePack
 reste un projet à un stade précoce : conservez le pack d’origine lorsque vous
 signalez un problème, et consultez [GOAL.md](GOAL.md) pour la vision produit et
 [ROADMAP.md](ROADMAP.md) pour la suite.
@@ -278,7 +277,7 @@ un décalage global codé en dur.
   — accès en lecture seule aux packs enregistrés et intégration des fournisseurs de
   contexte.
 
-CapturePack `0.4.0` est la version de l’application. Le `format_version` des packs
+CapturePack `0.4.1` est la version de l’application. Le `format_version` des packs
 évolue indépendamment, par ajouts successifs au format ; les lecteurs doivent suivre
 [SPEC.md](SPEC.md) plutôt que déduire la prise en charge du format de la version de
 l’application.

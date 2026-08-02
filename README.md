@@ -33,9 +33,9 @@ account, or cloud service.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Download](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Current public Windows release: **CapturePack 0.4.0**. A pack now describes every
-screen rather than one screen plus others, and the timeline records what moved —
-the cursor and the windows. Never what you typed.
+Current public Windows release: **CapturePack 0.4.1**. A saved pack's browser page
+can now be read back — reopening a capture recovered none of it before — and what
+object picking offers is measured rather than assumed.
 
 <p align="center">
   <a href="https://capturepack.dev/">
@@ -237,7 +237,7 @@ Tools, client setup, and settings: [docs/MCP.md](docs/MCP.md).
 
 ## Status
 
-**0.4.0 is the current public Windows download.** CapturePack remains an
+**0.4.1 is the current public Windows download.** CapturePack remains an
 early-stage project, so keep the original pack when reporting a problem and see
 [GOAL.md](GOAL.md) for the product vision and [ROADMAP.md](ROADMAP.md) for what
 comes next.
@@ -259,7 +259,7 @@ hard-coded global offset.
 - [MCP](docs/MCP.md) and [temporal provider API](docs/temporal-provider-api.md)
   — read-only saved-pack access and context-provider integration.
 
-CapturePack `0.4.0` is the application version. Pack `format_version` evolves
+CapturePack `0.4.1` is the application version. Pack `format_version` evolves
 independently through additive format changes; readers must follow
 [SPEC.md](SPEC.md) rather than infer format support from the app version.
 

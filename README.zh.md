@@ -27,8 +27,8 @@ AI 不必只凭像素去猜。
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [下载](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-当前公开 Windows 版本：**CapturePack 0.4.0**。包现在会描述每一块屏幕，而不再是一块
-主屏加上其余几块；时间线记录的是动过的东西——光标和窗口。你敲了什么，永远不记。
+当前公开 Windows 版本：**CapturePack 0.4.1**。保存下来的包，浏览器页面终于能读回来了
+——以前重新打开一个捕获，那一页是空的；对象选择给出的范围，现在也是量出来的。
 
 <p align="center">
   <a href="https://capturepack.dev/">
@@ -203,7 +203,7 @@ claude mcp add --transport http capturepack http://127.0.0.1:39393/mcp
 
 ## 状态
 
-**0.4.0 是当前公开的 Windows 下载版本。** CapturePack 仍是一个早期阶段的项目，因此
+**0.4.1 是当前公开的 Windows 下载版本。** CapturePack 仍是一个早期阶段的项目，因此
 报告问题时请保留原始包；产品愿景见 [GOAL.md](GOAL.md)，接下来的计划见
 [ROADMAP.md](ROADMAP.md)。
 
@@ -220,7 +220,7 @@ CapturePack 宁可如实记录含糊的时间证据，也不用一个写死的�
 - [MCP](docs/MCP.md)与[时间上下文提供方 API](docs/temporal-provider-api.md)
   —— 只读的已保存包访问，以及上下文提供方集成。
 
-CapturePack `0.4.0` 是应用版本号。包的 `format_version` 通过纯追加式的格式变更独立
+CapturePack `0.4.1` 是应用版本号。包的 `format_version` 通过纯追加式的格式变更独立
 演进；读取方应当遵循 [SPEC.md](SPEC.md)，而不是从应用版本推断格式支持情况。
 
 ## 安全与签名

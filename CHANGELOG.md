@@ -4,6 +4,43 @@ All notable changes to CapturePack. Format follows [Keep a Changelog](https://ke
 this project uses [semantic versioning](https://semver.org/) for the app, and the pack
 format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 
+## 0.4.1 — 2026-08-02
+
+### Fixed
+
+- **A saved pack's browser page can be read back.** Reopening a capture, or reading
+  one with any other tool, recovered none of the page it had recorded: across the
+  packs on the author's own machine, 6,091 element rectangles on disk came back as
+  one. Live capture was never affected, which is exactly why it went unnoticed —
+  only the saved folder was unreadable, and only by everything except the app that
+  had just written it. Two independent causes, either one enough on its own: the
+  reader asked for the viewport in a different spelling than the writer uses, and
+  refused the whole page rather than guess at a missing value; and nothing had ever
+  written down the browser window's drawable area, without which an element measured
+  in page coordinates has no position on the screen. Both are fixed, packs written
+  before this keep working, and a pack that still lacks that rectangle recovers its
+  page and declines to place it rather than putting boxes somewhere plausible and
+  wrong ([#136](https://github.com/r2cuerdame/capturepack/issues/136)).
+
+### Added
+
+- Object picking is now measured rather than assumed. A check sweeps a saved pack on
+  a grid and fails the build if the thing offered under the cursor grows past a
+  measured limit — the regression that once offered a rectangle covering a fifth of a
+  4K screen would now be a red build instead of a user saying hover select felt
+  wrong. Across 41 real captures the current median is 0.37% of a screen
+  ([#134](https://github.com/r2cuerdame/capturepack/issues/134)).
+- CI captures a pack, waits for its derived stills to render, and asserts on them —
+  so the promise a keyframe makes about its own size is now checked on a file the app
+  really produced, not only on a fixture
+  ([#135](https://github.com/r2cuerdame/capturepack/issues/135)).
+- Multi-monitor behaviour is exercised on a synthetic three-screen desk: mixed scale
+  factors, a portrait screen between two landscape ones, and the focus on the third.
+  Board layout, the three separate numbering schemes, per-display file naming and a
+  partial recorder failure are each pinned against the regression that would break
+  them ([#76](https://github.com/r2cuerdame/capturepack/issues/76) — the real
+  three-monitor acceptance test remains unrun, and the issue stays open).
+
 ## 0.4.0 — 2026-08-02
 
 ### Changed

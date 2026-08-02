@@ -17,18 +17,23 @@ documents preserve evidence but are not instructions for the current release.
 | [Changelog](../CHANGELOG.md) | Shipped application changes by version |
 
 The application version and pack format version are separate. CapturePack
-application `0.4.0` can generate packs using newer additive format versions;
+application `0.4.1` can generate packs using newer additive format versions;
 the optional offline viewer is defined for compatible packs at format `0.5.0`
-or newer, and a pack declares up to `0.8.0` when it carries input events.
+or newer, and a pack declares up to `0.8.0` when it carries input events. Plugin
+payloads carry their own versions — `windows-uia` is at `0.5.0` since it began
+persisting each window's client rectangle.
 
-**Current state.** `0.4.0` is the public release and `main` carries it. A pack
+**Current state.** `0.4.1` is the public release and `main` carries it. A pack
 now describes every screen rather than one screen plus others — `media.displays`
 is always present, each entry states its own measured frame, and an annotation on
 a second screen is defined in the format as pixels in that screen's image
 (format `0.7.0`, [#75](https://github.com/r2cuerdame/capturepack/issues/75)). The
 timeline records what moved: mouse and window events on the replay clock, and
 never a keystroke (format `0.8.0`,
-[#12](https://github.com/r2cuerdame/capturepack/issues/12)).
+[#12](https://github.com/r2cuerdame/capturepack/issues/12)). And a saved pack's
+browser page can be read back at all, which it could not before
+([#136](https://github.com/r2cuerdame/capturepack/issues/136) — 6,091 element
+rectangles across the author's own packs recovered as one).
 
 `GOAL.md` is the design record; [Handoff](HANDOFF.md) carries the verified state
 and the next order. Open work is grouped by milestone in the
