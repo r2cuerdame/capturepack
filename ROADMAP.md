@@ -21,7 +21,7 @@ Ctrl+Alt+C  →  capture  →  5-second annotation  →  export .capturepack  �
 
 ---
 
-## Current baseline — 0.3.4
+## Current baseline — 0.3.5
 
 The milestone narrative below is preserved as the product's design and
 verification history. These are the current additions and next gates:

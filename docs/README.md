@@ -17,22 +17,25 @@ documents preserve evidence but are not instructions for the current release.
 | [Changelog](../CHANGELOG.md) | Shipped application changes by version |
 
 The application version and pack format version are separate. CapturePack
-application `0.3.3` can generate packs using newer additive format versions;
+application `0.3.5` can generate packs using newer additive format versions;
 the optional offline viewer is defined for compatible packs at format `0.5.0`
 or newer.
 
-**Work in progress.** `0.3.3` is the public release and `main` carries it.
-Unreleased 0.3.4 work lives on `agent/0.3.4`
-([PR #105](https://github.com/r2cuerdame/capturepack/pull/105)): element picking
-that reports itself, cross-frame element picking
-([#104](https://github.com/r2cuerdame/capturepack/issues/104)), the lock-screen
-update notice ([#103](https://github.com/r2cuerdame/capturepack/issues/103)),
-and the measurement that narrows
-[#89](https://github.com/r2cuerdame/capturepack/issues/89). The application
-version there is `0.3.4-rc.33`, a candidate so a locally built installer cannot be
-mistaken for the public `0.3.3`; there is no tag and no published binary.
-`GOAL.md`'s "0.3.4 in progress" section is the design record;
-[Handoff](HANDOFF.md) carries the state and the next order.
+**Current state.** `0.3.5` is the public release and `main` carries it. It runs
+as one process — the watchdog is gone
+([#80](https://github.com/r2cuerdame/capturepack/issues/80)) — captures clean up
+after themselves on a retention policy
+([#47](https://github.com/r2cuerdame/capturepack/issues/47),
+[#48](https://github.com/r2cuerdame/capturepack/issues/48)), pin numbers follow
+the order you assign them and can be typed
+([#51](https://github.com/r2cuerdame/capturepack/issues/51)), and CI now records
+a capture with nobody at the machine and asserts on the pack
+([#63](https://github.com/r2cuerdame/capturepack/issues/63)).
+
+`GOAL.md` is the design record; [Handoff](HANDOFF.md) carries the verified state
+and the next order. Open work is grouped by milestone in the
+[issues](https://github.com/r2cuerdame/capturepack/issues) — v0.4.0 is the
+N-display pack format, which is the next thing that changes the format itself.
 
 ## Development and QA
 

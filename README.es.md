@@ -35,11 +35,10 @@ cuenta y sin servicios en la nube.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Descargar](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Versión pública actual para Windows: **CapturePack 0.3.4**. Object Pick pasa a
-pertenecer a la imagen fija, que es donde puede estar completo: una captura de
-pantalla se lleva el árbol completo de UI Automation y la página visible de todas
-las ventanas de navegador que haya en el escritorio. Un vídeo conserva la
-repetición, la cronología y los recuadros que dibujas.
+Versión pública actual para Windows: **CapturePack 0.3.5**. Ya no son dos
+procesos, sino uno: el vigilante ha desaparecido. Las capturas se limpian solas
+según la política de retención que definas y el número de un recuadro lo
+escribes tú, no lo decide la aplicación.
 
 <p align="center">
   <a href="https://capturepack.dev/">
@@ -258,7 +257,7 @@ Herramientas, configuración del cliente y ajustes: [docs/MCP.md](docs/MCP.md).
 
 ## Estado
 
-**0.3.4 es la descarga pública actual para Windows.** CapturePack sigue siendo un
+**0.3.5 es la descarga pública actual para Windows.** CapturePack sigue siendo un
 proyecto en fase temprana, así que conserva el pack original cuando informes de
 un problema y consulta [GOAL.md](GOAL.md) para la visión del producto y
 [ROADMAP.md](ROADMAP.md) para lo que viene después.
@@ -281,7 +280,7 @@ desfase global fijado en el código.
   — acceso de solo lectura a los packs guardados e integración de proveedores de
   contexto.
 
-CapturePack `0.3.4` es la versión de la aplicación. El `format_version` del pack
+CapturePack `0.3.5` es la versión de la aplicación. El `format_version` del pack
 evoluciona de forma independiente mediante cambios aditivos del formato; quien lo
 lea debe seguir [SPEC.md](SPEC.md) en lugar de deducir la compatibilidad del
 formato a partir de la versión de la aplicación.

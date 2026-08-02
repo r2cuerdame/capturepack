@@ -27,9 +27,8 @@ AI 不必只凭像素去猜。
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [下载](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-当前公开 Windows 版本：**CapturePack 0.3.4**。Object Pick 现在归属于静止图像，
-因为只有在那里它才是完整的：一张截图会带上完整的 UI Automation 树，以及桌面上
-每一个可见浏览器窗口的可见页面。视频保留的是回放、时间线和你亲手画的方框。
+当前公开 Windows 版本：**CapturePack 0.3.5**。它现在只跑一个进程——看门狗已经移除；
+捕获会按你设定的保留策略自动清理；编号也归你说了算，点一下就能输入你想要的那个。
 
 <p align="center">
   <a href="https://capturepack.dev/">
@@ -204,7 +203,7 @@ claude mcp add --transport http capturepack http://127.0.0.1:39393/mcp
 
 ## 状态
 
-**0.3.4 是当前公开的 Windows 下载版本。** CapturePack 仍是一个早期阶段的项目，因此
+**0.3.5 是当前公开的 Windows 下载版本。** CapturePack 仍是一个早期阶段的项目，因此
 报告问题时请保留原始包；产品愿景见 [GOAL.md](GOAL.md)，接下来的计划见
 [ROADMAP.md](ROADMAP.md)。
 
@@ -221,7 +220,7 @@ CapturePack 宁可如实记录含糊的时间证据，也不用一个写死的�
 - [MCP](docs/MCP.md)与[时间上下文提供方 API](docs/temporal-provider-api.md)
   —— 只读的已保存包访问，以及上下文提供方集成。
 
-CapturePack `0.3.4` 是应用版本号。包的 `format_version` 通过纯追加式的格式变更独立
+CapturePack `0.3.5` 是应用版本号。包的 `format_version` 通过纯追加式的格式变更独立
 演进；读取方应当遵循 [SPEC.md](SPEC.md)，而不是从应用版本推断格式支持情况。
 
 ## 安全与签名

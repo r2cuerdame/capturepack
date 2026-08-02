@@ -1,4 +1,4 @@
-# CapturePack handoff — after v0.3.4
+# CapturePack handoff — after v0.3.5
 
 Last verified: 2026-08-02 (Asia/Seoul)
 
@@ -59,7 +59,50 @@ pushed. Always begin with `git status --short --branch`, `git fetch`, and a
 non-destructive comparison before choosing a branch. Never reset or clean away
 an active worktree.
 
-## What 0.3.4 contains
+## What 0.3.5 contains
+
+**One process.** The watchdog is gone, and with it the Start Menu fallback shortcut,
+the `superviseProcess` setting and the three tray announcements only supervision could
+produce ([#80](https://github.com/r2cuerdame/capturepack/issues/80),
+[#78](https://github.com/r2cuerdame/capturepack/issues/78) — 1,681 lines removed). It
+was built on one observed death whose cause was unknown, because there were no logs
+yet. What replaced it costs no process: the app logs its own death with a crash dump,
+the next start reports the unclean shutdown, and the login item brings it back.
+
+Read `supervision-standdown` before you touch it. Despite the name it is NOT
+supervision: the installer writes that flag before closing the running app and the
+Chrome native host exits while it exists, which is how setup replaces the executable
+without a native host holding it open. Clearing it lives in app startup now.
+
+- Retention that runs itself — a policy in Settings, a sweep at launch and once a day,
+  a storage bar filled against a budget rather than against the disk, and the budget as
+  a second cleanup trigger ([#47](https://github.com/r2cuerdame/capturepack/issues/47),
+  [#48](https://github.com/r2cuerdame/capturepack/issues/48)).
+- Pin numbering by ASSIGNMENT order, with a number the user can type
+  ([#51](https://github.com/r2cuerdame/capturepack/issues/51)). Numbering allocates
+  SLOTS: N numbered boxes get exactly 1..N, so contiguity is structural rather than a
+  rule. Three stale copies of the old rule were found on the way — the annotations
+  schema, the skills paragraph generated into every pack, and a SECOND display-number
+  implementation inside `tools/validate-capturepack.mjs` that already disagreed with
+  core. One rule, one implementation, seven consumers; keep it that way.
+- CI records a capture with nobody at the machine and asserts on the pack
+  ([#63](https://github.com/r2cuerdame/capturepack/issues/63)). `--save-now` is what
+  makes it possible. The job is `continue-on-error` on purpose — the first headed
+  Electron capture on a hosted runner — and should be made required once it has been
+  green across a run of merges.
+- A keyframe declares its own `width`/`height`
+  ([#133](https://github.com/r2cuerdame/capturepack/issues/133)). It is taller than the
+  frame it shows, deliberately, to hold the labels of bottom-edge boxes; the source
+  frame stays at (0,0) at original scale, so annotation coordinates apply unchanged and
+  a reader must never scale a keyframe to `reference_height`.
+
+Still open and deliberately not attempted:
+[#134](https://github.com/r2cuerdame/capturepack/issues/134), asserting on picking
+QUALITY rather than presence. It needs the editor's `ObjectIndex` rebuilt outside the
+editor process and a threshold argued from measurement; a threshold chosen to make
+today's build pass measures nothing.
+
+## What 0.3.4 contained
 
 **Object Pick moved to the still image, and a video no longer offers it at
 all.** Not because picking in a replay was hard, but because it could only be
@@ -130,7 +173,7 @@ would have caught it the day it appeared.
   `runtime.lastError` values while bounded reconnect remains active.
 
 Application version and pack format version are different contracts.
-`core/package.json` is application version `0.3.4`; packs containing the
+`core/package.json` is application version `0.3.5`; packs containing the
 optional viewer declare a compatible format version of at least `0.5.0`.
 
 ## Known problem: video/context alignment

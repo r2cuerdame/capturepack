@@ -33,10 +33,9 @@ account, or cloud service.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Download](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Current public Windows release: **CapturePack 0.3.4**. Object Pick now belongs to
-the still image, where it can be complete: a screenshot carries the full UI
-Automation tree and the visible page of every browser window on the desk. A
-video keeps the replay, the timeline and the boxes you draw.
+Current public Windows release: **CapturePack 0.3.5**. It runs as one process —
+the watchdog is gone — captures clean up after themselves on a retention policy
+you set, and a pin number is yours to type rather than the app's to decide.
 
 <p align="center">
   <a href="https://capturepack.dev/">
@@ -238,7 +237,7 @@ Tools, client setup, and settings: [docs/MCP.md](docs/MCP.md).
 
 ## Status
 
-**0.3.4 is the current public Windows download.** CapturePack remains an
+**0.3.5 is the current public Windows download.** CapturePack remains an
 early-stage project, so keep the original pack when reporting a problem and see
 [GOAL.md](GOAL.md) for the product vision and [ROADMAP.md](ROADMAP.md) for what
 comes next.
@@ -260,7 +259,7 @@ hard-coded global offset.
 - [MCP](docs/MCP.md) and [temporal provider API](docs/temporal-provider-api.md)
   — read-only saved-pack access and context-provider integration.
 
-CapturePack `0.3.4` is the application version. Pack `format_version` evolves
+CapturePack `0.3.5` is the application version. Pack `format_version` evolves
 independently through additive format changes; readers must follow
 [SPEC.md](SPEC.md) rather than infer format support from the app version.
 

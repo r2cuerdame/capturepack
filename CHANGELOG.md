@@ -4,6 +4,77 @@ All notable changes to CapturePack. Format follows [Keep a Changelog](https://ke
 this project uses [semantic versioning](https://semver.org/) for the app, and the pack
 format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 
+## 0.3.5 — 2026-08-02
+
+### Removed
+
+- CapturePack no longer runs a second process. A watchdog was added after one
+  observed death whose cause was unknown — there were no logs at the time, which
+  is what the same release fixed — so a supervisor was reasoned onto a single
+  incident. What it cost: a second `CapturePack.exe` in Task Manager wearing the
+  product's own name and indistinguishable from a leak, a relaunch loop that then
+  needed rate limiting, install state so setup and supervision could not fight,
+  and two real defects caught in review before release. Underneath all of it, the
+  thing a supervisor cannot do: if the app died from a bug in the app, it brought
+  the app back into the same bug. The symptom it was for — press the hotkey, get
+  silence, conclude it is not installed — is answered now by things that cost no
+  process: the app logs its own death with a crash dump, the next start says it
+  stopped unexpectedly and that nothing was recorded in between, and the Windows
+  login item brings it back. The `superviseProcess` setting is gone with it; a
+  settings file that still carries the key is not a migration, just an ignored
+  value ([#80](https://github.com/r2cuerdame/capturepack/issues/80),
+  [#78](https://github.com/r2cuerdame/capturepack/issues/78)).
+
+### Added
+
+- Captures clean up after themselves. Settings offers a retention policy — keep
+  everything, or delete captures older than 1, 7 or 30 days — and a sweep runs
+  once shortly after launch and once a day. Changing the setting deletes nothing
+  on the spot: it states what the next run would remove. Deletion goes to the
+  recycle bin, touches only the app's own output folder, and only folders that
+  are actually CapturePacks ([#47](https://github.com/r2cuerdame/capturepack/issues/47)).
+- A storage bar in History and in Settings, filled against a size budget you set
+  rather than against the size of the disk — three gigabytes of a two-terabyte
+  drive reads as nothing and is still three gigabytes of screen recordings. The
+  budget is also a second cleanup trigger: over it, the oldest go first, stopping
+  the moment it is under. The plain numbers sit beside the bar, because the bar
+  is the glance and the numbers are the truth
+  ([#48](https://github.com/r2cuerdame/capturepack/issues/48)).
+- CI now records a capture with nobody at the machine and asserts on the pack it
+  produced: that it validates, that the replay is more than a container header,
+  that the snapshot matches the display the manifest declares, and that the
+  declared displays agree with the screens. Then it does it again with the
+  recorder starved, where the pack has to *say* the replay is unavailable rather
+  than ship an empty container. Every investigation this cycle ended with "please
+  make one more capture and send it to me"; that is machine work now
+  ([#63](https://github.com/r2cuerdame/capturepack/issues/63)).
+
+### Changed
+
+- A pin number is yours to choose. Turning a box's number off and on again used
+  to slide it back into the middle of the sequence, because the order came from
+  when the box was created and re-numbering it did not change that — the app
+  overruling a decision the user had just made. Numbers now follow the order you
+  assign them, and clicking a number lets you type the one you want: the box that
+  held it moves along rather than being duplicated. Numbers stay contiguous from
+  1 with no gaps, which is now structural rather than a rule — there are exactly
+  as many slots as there are numbered boxes
+  ([#51](https://github.com/r2cuerdame/capturepack/issues/51)).
+
+### Fixed
+
+- An annotated keyframe now declares the size it actually is. The still is taller
+  than the frame it shows, and that is correct — a box on the bottom edge of the
+  screen needs somewhere to put its label, so the render grows downward rather
+  than moving the box or flipping its callout over the thing it points at. What
+  was wrong is that nothing said so: `annotations.json` gives the snapshot's
+  dimensions and the generated documents describe the still as derived from the
+  same pixels, so a reader who scaled the keyframe to that height was wrong by up
+  to 5%, differently in every pack. `media.keyframes[]` now carries `width` and
+  `height`, read back out of the bytes that were written, and SPEC §5.7 states
+  the rule the validator had been enforcing without anyone writing it down
+  ([#133](https://github.com/r2cuerdame/capturepack/issues/133)).
+
 ## 0.3.4 — 2026-08-02
 
 ### Fixed

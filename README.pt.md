@@ -35,11 +35,10 @@ que funciona sem IA, sem conta e sem serviço na nuvem.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Baixar](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Versão pública atual para Windows: **CapturePack 0.3.4**. O Object Pick agora
-pertence à imagem estática, onde consegue ser completo: uma captura de tela leva
-toda a árvore de UI Automation e a página visível de cada janela de navegador
-aberta na área de trabalho. Um vídeo mantém o replay, a linha do tempo e as
-caixas que você desenha.
+Versão pública atual para Windows: **CapturePack 0.3.5**. Ele roda como um
+único processo: o watchdog não existe mais. As capturas se limpam sozinhas
+conforme a política de retenção que você define, e o número de uma caixa é você
+quem digita — não o app quem decide.
 
 <p align="center">
   <a href="https://capturepack.dev/">
@@ -254,7 +253,7 @@ Ferramentas, configuração de clientes e ajustes: [docs/MCP.md](docs/MCP.md).
 
 ## Estado
 
-**0.3.4 é o download público atual para Windows.** O CapturePack continua sendo
+**0.3.5 é o download público atual para Windows.** O CapturePack continua sendo
 um projeto em estágio inicial, então guarde o pack original ao relatar um
 problema e veja o [GOAL.md](GOAL.md) para a visão do produto e o
 [ROADMAP.md](ROADMAP.md) para o que vem a seguir.
@@ -278,7 +277,7 @@ deslocamento global fixo no código.
   — acesso somente leitura a packs salvos e integração de provedores de
   contexto.
 
-CapturePack `0.3.4` é a versão do aplicativo. O `format_version` do pack evolui
+CapturePack `0.3.5` é a versão do aplicativo. O `format_version` do pack evolui
 de forma independente, por mudanças aditivas de formato; leitores devem seguir o
 [SPEC.md](SPEC.md) em vez de deduzir o suporte ao formato pela versão do app.
 
