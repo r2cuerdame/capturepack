@@ -445,6 +445,24 @@ function parseTab(raw: unknown): { url: string; title: string } | null {
  * capture-time fetch is checked by the same rules as one riding on a pick
  * (#125). A second copy of these bounds would be a second definition of what a
  * pack may contain, and the one a reader can check is the one in the file.
+ *
+ * TWO SPELLINGS, BOTH REAL (#136). A document reaches this function from two
+ * places, and they do not agree on how a compound name is written:
+ *
+ *   from the WIRE, the browser extension sends `devicePixelRatio`, `scrollX`,
+ *     `scrollY`, `visitedCount`, `elapsedMs` — JavaScript's own names for the
+ *     values it read off `window`.
+ *   from a PACK, `plugins/chrome-dom/elements.json` carries `device_pixel_ratio`,
+ *     `scroll_x`, `scroll_y`, `visited_count`, `elapsed_ms`, because snake_case
+ *     is what CapturePack persists everywhere (SPEC §11.4, and see
+ *     `domEventForPack` in exporter.ts, which is the writer).
+ *
+ * This function knew only the wire spelling, so `dpr` came back null for every
+ * pack on disk and the guard below refused the whole document — correctly, by
+ * its own rules, and invisibly, because only a REOPEN takes this path. Measured
+ * across the owner's capture root: 6,091 element rectangles written and none
+ * readable. Both spellings are accepted here; neither is preferred, because both
+ * are the truth from where they come.
  */
 export function parseDomDocument(doc: unknown): DomDocumentSnapshot | null {
   const event: { document?: DomDocumentSnapshot } = {}
@@ -458,9 +476,15 @@ export function parseDomDocument(doc: unknown): DomDocumentSnapshot | null {
         const n = source[k]
         return typeof n === 'number' && Number.isFinite(n) ? n : null
       }
+      /** The wire's name for a field, or the pack's — whichever this one has. */
+      const either = (
+        source: Record<string, unknown>,
+        wire: string,
+        persisted: string,
+      ): number | null => num(source, wire) ?? num(source, persisted)
       const width = num(v, 'width')
       const height = num(v, 'height')
-      const dpr = num(v, 'devicePixelRatio')
+      const dpr = either(v, 'devicePixelRatio', 'device_pixel_ratio')
       if (width !== null && width > 0 && height !== null && height > 0
         && dpr !== null && dpr > 0 && dpr <= 16) {
         const elements: NonNullable<DomEvent['document']>['elements'] = []
@@ -506,8 +530,8 @@ export function parseDomDocument(doc: unknown): DomDocumentSnapshot | null {
             width,
             height,
             devicePixelRatio: dpr,
-            scrollX: num(v, 'scrollX') ?? 0,
-            scrollY: num(v, 'scrollY') ?? 0,
+            scrollX: either(v, 'scrollX', 'scroll_x') ?? 0,
+            scrollY: either(v, 'scrollY', 'scroll_y') ?? 0,
           },
           url: typeof d['url'] === 'string' ? d['url'].slice(0, 2048) : '',
           title: typeof d['title'] === 'string' ? d['title'].slice(0, 512) : '',
@@ -516,8 +540,13 @@ export function parseDomDocument(doc: unknown): DomDocumentSnapshot | null {
           // is a prefix rather than the page.
           truncated: d['truncated'] === true
             || rawElements.length > DOM_SNAPSHOT_MAX_ELEMENTS,
-          visitedCount: num(d, 'visitedCount') ?? elements.length,
-          elapsedMs: num(d, 'elapsedMs') ?? 0,
+          // Defaulted rather than refused, unlike the viewport above: a wrong
+          // census makes the pack's own account of the walk less exact, while a
+          // wrong viewport puts rectangles in the wrong place. Still read under
+          // both spellings, because a default that silently replaces a recorded
+          // number is a quieter lie than an absent one.
+          visitedCount: either(d, 'visitedCount', 'visited_count') ?? elements.length,
+          elapsedMs: either(d, 'elapsedMs', 'elapsed_ms') ?? 0,
           omitted,
         }
       }

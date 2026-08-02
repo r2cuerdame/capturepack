@@ -1516,7 +1516,7 @@ plugins/
     └── elements.json
 ```
 
-`meta.json` is the standard plugin metadata (`{ "name": "windows-uia", "version": "0.3.0" }`).
+`meta.json` is the standard plugin metadata (`{ "name": "windows-uia", "version": "0.5.0" }`).
 Every version has been additive, and an older payload is still valid — read it by treating each
 added field as absent (see each row below):
 
@@ -1526,6 +1526,34 @@ added field as absent (see each row below):
   is now in the snapshot space of the display it is ON, instead of every entry being forced
   through the focused display's coordinate transform. Absent means the focused display, which
   is what a single-display pack writes — so such a payload is byte-identical to 0.2.0.
+- **0.4.0** added `geometry_refused` on the payload: how many web-content roots the writer threw
+  away for still measuring themselves against a display their window had left (see below).
+- **0.5.0** added `client_bounds` on a window: the drawable rectangle inside the frame, beside
+  the frame rectangle it qualifies (see below).
+
+**A window's client rectangle (0.5.0).** A frame rectangle says where a window is; it does not
+say where the window *draws*. The distance from the frame's top edge to the first drawable row
+is the application's chrome — a title bar, a tab strip, an omnibox — and it varies by
+application, theme, display scale and window state, so it cannot be assumed, subtracted or
+looked up. `client_bounds` is that drawable rectangle, measured, in the same coordinate space as
+`bounds`.
+
+It is here because a **document** payload cannot be placed without it. A browser extension
+measures a page in viewport CSS pixels ([§11.4](#114-chrome-dom-browser-dom-context)), a space
+that says nothing about where the page is on the screen. The client rectangle is what converts
+it, and both terms of the conversion are derived rather than assumed: the scale is
+`client.width / viewport.width`, and the browser's chrome height is
+`client.height - viewport.height * scale`. Neither the frame rectangle nor the control tree can
+stand in — the tree reports frames too, and a browser's page is one opaque control inside it.
+
+`client_bounds` is **OPTIONAL, and absent from every payload written before 0.5.0.** It is also
+legitimately absent in a 0.5.0 payload: a window that only an automation dump ever saw has no
+measured client area, and neither does one whose rectangle had to be reassembled from
+per-display slices, where no single drawable rectangle ever existed. **A reader that meets a
+window without one MUST decline to place a document element against it** — the same decline it
+performed before this field existed. A chrome height guessed from a constant, or a scale derived
+from the frame rectangle, would put a page's elements somewhere plausible and wrong, which is
+worse than the window rung, which is at least true.
 
 `elements.json`:
 
@@ -1546,7 +1574,8 @@ Each entry of `windows`:
 | `process` | string | REQUIRED | Process name without extension, e.g. `"chrome"`. Empty when it could not be read. |
 | `class_name` | string | REQUIRED (0.2.0) | Win32 window class, e.g. `"Chrome_WidgetWin_1"`. MAY be empty. Absent in a 0.1.0 payload. |
 | `display` | integer | OPTIONAL (0.3.0) | WHICH captured display `bounds` is expressed in: a `manifest.media.displays[].index` ([§5.6](#56-displays-multi-monitor-captures)). ABSENT = the focused display, the same rule an annotation's `display` follows ([§8.8](#88-display-which-display-a-box-is-on)). A window is reported on the display it mostly covers; one straddling two displays keeps a single space and simply reaches past that snapshot's edge. |
-| `bounds` | object | REQUIRED | `{ x, y, width, height }` — see the coordinate rule below. |
+| `bounds` | object | REQUIRED | `{ x, y, width, height }` — the window FRAME, see the coordinate rule below. |
+| `client_bounds` | object | OPTIONAL (0.5.0) | `{ x, y, width, height }` — the window's DRAWABLE area, in the same space as `bounds`, with the title bar and borders removed. Absent = not measured, which is every payload before 0.5.0, every window seen only by an automation dump, and any window whose rectangle was reassembled from per-display slices. A reader with no `client_bounds` for a window MUST decline to place a `chrome-dom` document element against it rather than derive one from `bounds` (see above). |
 | `focused` | boolean | REQUIRED | The window that had focus. At most one entry is `true`; a dump that could not determine the foreground window has none. |
 | `z` | integer | REQUIRED (0.2.0) | Z-order at the capture instant, `0` = top-most. This is what decides which window covers a given pixel when several overlap. Absent in a 0.1.0 payload, where the array order carries the same information. |
 | `tree` | string | REQUIRED (0.2.0) | What happened to THIS window's control tree: `"collected"` (whole tree), `"truncated"` (started, ran out of budget/depth/allowance), `"unavailable"` (walked, exposed no tree), `"skipped"` (never walked). Anything but `"collected"` means a reader MUST NOT conclude anything from the absence of this window's controls. Absent in a 0.1.0 payload, where only the focused window was ever walked. |
@@ -1568,8 +1597,9 @@ Each entry of `elements`:
 Unlike `target` ([§8.7](#87-target-semantic-objects)), these fields are REQUIRED but MAY be
 empty strings: this is a dump, and an empty `name` is itself information.
 
-- **Coordinates.** Every `bounds` in this payload is in **snapshot pixel coordinates** — the
-  same space as `annotations.json` ([§8.2](#82-coordinate-space)) — of the display its `display`
+- **Coordinates.** Every rectangle in this payload — `bounds` on either array, and a window's
+  `client_bounds` — is in **snapshot pixel coordinates**, the
+  same space as `annotations.json` ([§8.2](#82-coordinate-space)), of the display its `display`
   field names, i.e. the pixels of that display's snapshot, and of `snapshot.png` itself when
   `display` is absent ([§5.6](#56-displays-multi-monitor-captures)). Writers MUST convert from
   the OS's virtual-desktop coordinates, accounting for display scaling and the virtual desktop's
@@ -1655,7 +1685,7 @@ plugins/
     └── elements.json
 ```
 
-`meta.json` is the standard plugin metadata (`{ "name": "chrome-dom", "version": "0.1.0" }`).
+`meta.json` is the standard plugin metadata (`{ "name": "chrome-dom", "version": "0.3.0" }`).
 
 `elements.json`:
 
@@ -1670,14 +1700,51 @@ Each event:
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `t_ms` | number | REQUIRED | When it happened, on the **replay clock** ([§10.1](#101-structure)) — the same clock the video and the tracking samples use, so a DOM element and the window it was in can be named at one instant. |
-| `type` | string | REQUIRED | `dom.element.selected`, `tab.updated`, or `url.changed`. Readers ignore types they do not know. |
+| `age_ms` | number | REQUIRED in a still (0.3.0) | Milliseconds between this event and the captured instant. MUST NOT appear in a replay pack — see above. |
+| `type` | string | REQUIRED | `dom.element.selected`, `dom.document.captured`, `tab.updated`, or `url.changed`. Readers ignore types they do not know. |
 | `tab` | object | REQUIRED | `url` and `title`, both strings. |
 | `element` | object | OPTIONAL | REQUIRED for `dom.element.selected`, absent otherwise. `tag`, `selector` and `bounds` (`x`/`y`/`width`/`height`) are required; `id`, `role` and `text` are written only when the page had them. |
+| `viewport` | object | OPTIONAL | Where the page's coordinate space was: `width`, `height` and `dpr` are required when present, and `screenX`, `screenY`, `outerWidth`, `outerHeight` are the browser's own report of its window and MAY be `null`. Without this an event's rectangles cannot be placed at all — see the placement rule below. |
+| `document` | object | OPTIONAL (0.2.0) | The whole interface that was visible, when the writer looked. Absent means NOBODY LOOKED, never that the page was empty. |
+
+Each `document`:
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `viewport` | object | REQUIRED | `width`, `height`, `device_pixel_ratio`, `scroll_x`, `scroll_y` — all numbers. The space every `elements[].bounds` below is measured in. |
+| `url` | string | REQUIRED | The document's own URL, which MAY differ from `tab.url`. |
+| `title` | string | REQUIRED | The document's title. MAY be empty. |
+| `elements` | array | REQUIRED | One entry per element the writer recorded: `i` (its ordinal), `tag`, `role` and `bounds` are required; `id`, `class`, `name`, `type`, `placeholder`, `alt`, `title`, `href`, `text`, `filled` and `secret` are written only when the page had them and the rules above allow them. MAY be empty. |
+| `truncated` | boolean | REQUIRED | `true` = the walk hit its element cap, so this is a PREFIX of the page. |
+| `visited_count` | integer | REQUIRED | How many nodes the walk visited, including those it did not record. |
+| `elapsed_ms` | number | REQUIRED | How long the walk took. |
+| `omitted` | array | REQUIRED | The writer's own statement of what it refused to record — see above. |
+
+**Field names are the file's, not the wire's.** Every compound name in this payload is
+`snake_case`, like every other field CapturePack persists: `device_pixel_ratio`, `scroll_x`,
+`scroll_y`, `visited_count`, `elapsed_ms`. The protocol a browser extension speaks is a private
+matter between a writer and its own extension and is not this document's business — but a reader
+of a PACK reads the names above, and a reader that knows only its own extension's spelling will
+find the viewport absent and, if it obeys the rule below, refuse every document in every pack it
+is given. That is not hypothetical: it is how 6,091 recorded element rectangles across one
+capture folder turned out to be unreadable while live capture worked perfectly.
 
 **The DOM is never streamed.** These are the moments something was picked or the page changed,
-not a feed — a pack holds a handful of them, not a recording. `element.bounds` is in **CSS
-pixels of the page**, not snapshot pixels: it locates the element within its document, and is
-not a rectangle to draw on a frame.
+not a feed — a pack holds a handful of them, not a recording.
+
+**Placing a page on the picture.** Every rectangle here — `element.bounds` and every
+`document.elements[].bounds` — is in **viewport CSS pixels**, not snapshot pixels: it locates
+the element within its document and is not a rectangle to draw on a frame. Converting one needs
+two things this payload does not contain: the viewport's own size and device pixel ratio (the
+`viewport` object above) and the browser window's DRAWABLE rectangle, which a reader takes from
+`plugins/windows-uia`'s `client_bounds`
+([§11.3](#113-windows-uia-windows-ui-automation)). The scale is
+`client.width / viewport.width` and the browser's chrome height is
+`client.height - viewport.height * scale` — both measured, neither assumed. **A reader missing
+either half MUST decline to place the element** rather than assume a device pixel ratio or a
+chrome height; a rectangle drawn from a guess is indistinguishable from a measured one and is
+wrong. Declining costs the reader the document rung and keeps the window, which is at least
+true.
 
 ---
 

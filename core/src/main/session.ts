@@ -106,6 +106,7 @@ import {
   savePack,
   saveAsNewPack,
   uiaPluginDeclaration,
+  domEventForPack,
   domPluginDeclaration,
   tryWriteDomPlugin,
   updateInitialPack,
@@ -930,64 +931,6 @@ function composeImageDesktop(
     )
   }
   return composed.toPNG()
-}
-
-/**
- * ONE DOM EVENT, ON THE WAY OUT (SPEC 11.4).
- *
- * Extracted so the still and the replay write the same shape. They differ only
- * in what `t_ms` MEANS — see the two callers — and a second hand-maintained copy
- * of this mapping is exactly how the two would drift apart.
- *
- * Snake_case on the way out, like every other field the pack writes, and the
- * `document` is carried whole rather than re-filtered: the extension already
- * decided what may leave the page, and `omitted` is its statement of that
- * decision. Re-deciding here would mean two rules for one question, and the one
- * a reader can check is the one in the file.
- */
-function domEventForPack(
-  e: DomEvent,
-  tMs: number,
-  ageMs?: number,
-): DomPluginPayload['events'][number] {
-  return {
-    t_ms: Math.max(0, Math.round(tMs)),
-    // HOW LONG BEFORE THE CAPTURED INSTANT THIS PICK WAS MADE (payload 0.3.0).
-    //
-    // A still has ONE instant, so every event it carries is stamped `t_ms: 0` —
-    // and without this, a pick made two seconds before the hotkey would be
-    // indistinguishable from one made at it. That difference is the reader's to
-    // judge, not ours to hide: a page can change between the pick and the
-    // shutter. Absent on a replay pack, where `t_ms` already carries the time.
-    ...(ageMs === undefined ? {} : { age_ms: Math.max(0, Math.round(ageMs)) }),
-    type: e.type,
-    tab: e.tab,
-    ...(e.element === undefined ? {} : { element: e.element }),
-    // Without this a saved pick is unplaceable forever: bounds are viewport CSS
-    // pixels and this is the only thing that says where that viewport was.
-    // Absent for an event from an extension older than 0.1.4.
-    ...(e.viewport === undefined ? {} : { viewport: e.viewport }),
-    ...(e.document === undefined
-      ? {}
-      : {
-          document: {
-            viewport: {
-              width: e.document.viewport.width,
-              height: e.document.viewport.height,
-              device_pixel_ratio: e.document.viewport.devicePixelRatio,
-              scroll_x: e.document.viewport.scrollX,
-              scroll_y: e.document.viewport.scrollY,
-            },
-            url: e.document.url,
-            title: e.document.title,
-            elements: e.document.elements,
-            truncated: e.document.truncated,
-            visited_count: e.document.visitedCount,
-            elapsed_ms: e.document.elapsedMs,
-            omitted: e.document.omitted,
-          },
-        }),
-  }
 }
 
 /**

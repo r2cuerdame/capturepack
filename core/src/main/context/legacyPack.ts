@@ -78,6 +78,14 @@ export function editorUiaWindows(
       process: w.process,
       class_name: w.class_name,
       bounds: { ...w.bounds },
+      // The client rectangle, when the pack carries one (payload 0.5.0, #136).
+      // It is the ONLY route by which a reopened pack can place a browser
+      // document: viewport CSS pixels become snapshot pixels through
+      // `client.width / viewport.width`, and nothing else in this payload
+      // measures a drawable area. Absent for every pack written before 0.5.0
+      // and for a window only the UI Automation dump ever saw — in both cases
+      // the document rung declines, as it always did.
+      ...(w.client_bounds === undefined ? {} : { client_bounds: { ...w.client_bounds } }),
       display: displayIndexOf(w.display, focusedIndex),
       focused: w.focused,
       z,

@@ -21,6 +21,7 @@ import { dirname, extname, join } from 'node:path'
 import { app, screen } from 'electron'
 import AdmZip from 'adm-zip'
 import { sealUiaPayload } from './uia'
+import type { DomEvent } from './chrome/domBridge'
 import type { Language } from '../shared/i18n'
 import type {
   Annotation,
@@ -424,8 +425,22 @@ export const UIA_PLUGIN_NAME = 'windows-uia'
  *    left. Absent = a walk that could not tell, which is what every earlier
  *    version wrote; 0 = it looked and found none. The difference matters,
  *    because a refused window is not a window without controls.
+ *  - 0.5.0 added `client_bounds` on a window: the drawable rectangle inside the
+ *    frame, beside the frame rectangle it qualifies. A page measures itself in
+ *    viewport CSS pixels and this is the only thing that converts them, so
+ *    without it a pack could carry a complete browser document and place none
+ *    of it (#136). OPTIONAL and absent from every payload before this one; a
+ *    reader that meets a window without it declines to place, exactly as today.
+ *
+ * WHY IT LIVES HERE AND NOT IN chrome-dom. The client rectangle is a fact about
+ * a WINDOW, observed by the surface ring in the same pass and the same snapshot
+ * space as the frame rectangle it sits beside. Putting it in the browser payload
+ * would put a window measurement in a file about pages, duplicated once per
+ * document, and readable only by a reader that had already decided to care about
+ * browsers — while a window rectangle and its client rectangle are the kind of
+ * thing that must be comparable without leaving the record they are in.
  */
-export const UIA_PLUGIN_VERSION = '0.4.0'
+export const UIA_PLUGIN_VERSION = '0.5.0'
 
 /** The manifest.plugins entry for the payload writeUiaPlugin() lays down. */
 export function uiaPluginDeclaration(): Manifest['plugins'][number] {
@@ -549,6 +564,72 @@ export interface DomPluginPayload {
 
 export function domPluginDeclaration(): Manifest['plugins'][number] {
   return { name: DOM_PLUGIN_NAME, version: DOM_PLUGIN_VERSION, path: `plugins/${DOM_PLUGIN_NAME}/` }
+}
+
+/**
+ * ONE DOM EVENT, ON THE WAY OUT (SPEC §11.4).
+ *
+ * Extracted so the still and the replay write the same shape. They differ only
+ * in what `t_ms` MEANS — see the two callers in session.ts — and a second
+ * hand-maintained copy of this mapping is exactly how the two would drift apart.
+ *
+ * IT LIVES BESIDE `writeDomPlugin` BECAUSE IT DEFINES THE FILE. It used to sit
+ * in session.ts, five hundred lines from the type it fills in and a thousand
+ * from anything that reads one back, and that distance is where #136 grew: the
+ * SPELLING chosen here is the pack's, and the reader that has to know it was in
+ * another module nobody looked at while editing this one. A round-trip check can
+ * now call the real writer instead of hand-writing a payload that agrees with
+ * itself.
+ *
+ * Snake_case on the way out, like every other field the pack writes, and the
+ * `document` is carried whole rather than re-filtered: the extension already
+ * decided what may leave the page, and `omitted` is its statement of that
+ * decision. Re-deciding here would mean two rules for one question, and the one
+ * a reader can check is the one in the file.
+ */
+export function domEventForPack(
+  e: DomEvent,
+  tMs: number,
+  ageMs?: number,
+): DomPluginPayload['events'][number] {
+  return {
+    t_ms: Math.max(0, Math.round(tMs)),
+    // HOW LONG BEFORE THE CAPTURED INSTANT THIS PICK WAS MADE (payload 0.3.0).
+    //
+    // A still has ONE instant, so every event it carries is stamped `t_ms: 0` —
+    // and without this, a pick made two seconds before the hotkey would be
+    // indistinguishable from one made at it. That difference is the reader's to
+    // judge, not ours to hide: a page can change between the pick and the
+    // shutter. Absent on a replay pack, where `t_ms` already carries the time.
+    ...(ageMs === undefined ? {} : { age_ms: Math.max(0, Math.round(ageMs)) }),
+    type: e.type,
+    tab: e.tab,
+    ...(e.element === undefined ? {} : { element: e.element }),
+    // Without this a saved pick is unplaceable forever: bounds are viewport CSS
+    // pixels and this is the only thing that says where that viewport was.
+    // Absent for an event from an extension older than 0.1.4.
+    ...(e.viewport === undefined ? {} : { viewport: e.viewport }),
+    ...(e.document === undefined
+      ? {}
+      : {
+          document: {
+            viewport: {
+              width: e.document.viewport.width,
+              height: e.document.viewport.height,
+              device_pixel_ratio: e.document.viewport.devicePixelRatio,
+              scroll_x: e.document.viewport.scrollX,
+              scroll_y: e.document.viewport.scrollY,
+            },
+            url: e.document.url,
+            title: e.document.title,
+            elements: e.document.elements,
+            truncated: e.document.truncated,
+            visited_count: e.document.visitedCount,
+            elapsed_ms: e.document.elapsedMs,
+            omitted: e.document.omitted,
+          },
+        }),
+  }
 }
 
 /**

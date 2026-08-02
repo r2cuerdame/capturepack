@@ -524,6 +524,28 @@ export interface UiaWindowRecord {
   // covers, and its controls are always in the SAME space as their window.
   display?: number
   bounds: UiaBounds
+  /**
+   * The window's CLIENT rectangle — the drawable area inside the frame, with
+   * the title bar and borders removed — in the same space as `bounds`
+   * (payload 0.5.0, SPEC §11.3).
+   *
+   * WHY A SECOND RECTANGLE IS NOT A LUXURY (#136). A browser extension measures
+   * in VIEWPORT CSS PIXELS, the only space a page can measure itself in, and
+   * nothing about that space says where the page is on the screen. The client
+   * rectangle is what converts it: the scale is `client.width / viewport.width`
+   * and the browser's chrome height is `client.height - viewport.height * scale`
+   * — both derived from measurements, neither assumed, no tab-strip constant
+   * anywhere. The frame rectangle cannot stand in for it, because the distance
+   * from the frame's top to the first drawable row is exactly the unknown.
+   *
+   * OPTIONAL, and ABSENT from every payload written before 0.5.0. A reader that
+   * meets a window without one MUST decline to place a document element against
+   * it, exactly as it did before this field existed. It is also absent for a
+   * window that only a UI Automation dump ever saw — the dump reports frames —
+   * and for a window whose rectangle had to be unioned from per-display slices,
+   * where no single client area was ever measured.
+   */
+  client_bounds?: UiaBounds
   // Exactly the window that had focus; false for every other window. A dump
   // that could not determine the foreground window has no focused entry.
   focused: boolean

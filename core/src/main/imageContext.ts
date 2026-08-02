@@ -137,30 +137,30 @@ export function imageWindowObservation(
     // viewport, a matching window, and nothing offered. It is carried through
     // the same placement transform as `bounds`, and given up ONLY where it is
     // genuinely unsafe — see the union below.
-    const clientLocal =
+    //
+    // TRANSLATED, NEVER CLIPPED — the same rule ringObservations.ts states for
+    // the temporal path, and the reason it is stated there twice. This rectangle
+    // is a MEASURING STICK, not a region: the scale is `client.width /
+    // viewport.width` and the chrome height is `client.height - viewport.height
+    // * scale`. Clip it to the display raster or to the user's crop and the
+    // stick gets shorter while the page it measures does not, so every element
+    // lands scaled down and shifted — confidently, and by an amount that can sit
+    // inside the reader's own agreement band and never be refused.
+    //
+    // It cost nothing while this value only ever lived in memory. Since #136 it
+    // is WRITTEN TO THE PACK (windows-uia 0.5.0), where SPEC §11.3 defines it as
+    // the window's drawable rectangle — which a clipped one is not. Elements
+    // that fall outside the picture are dropped later, by the index that clips
+    // candidates to the snapshot, which is where a region test belongs.
+    const clientBounds =
       window.client_bounds === undefined
         ? null
-        : intersectImageRect(window.client_bounds, {
-            x: 0,
-            y: 0,
-            width: placement.width,
-            height: placement.height,
-          })
-    const clientDesktop =
-      clientLocal === null
-        ? null
         : {
-            x: clientLocal.x + placement.x,
-            y: clientLocal.y + placement.y,
-            width: clientLocal.width,
-            height: clientLocal.height,
+            x: window.client_bounds.x + placement.x - (crop?.x ?? 0),
+            y: window.client_bounds.y + placement.y - (crop?.y ?? 0),
+            width: window.client_bounds.width,
+            height: window.client_bounds.height,
           }
-    const clientBounds =
-      clientDesktop === null
-        ? null
-        : crop === undefined
-          ? clientDesktop
-          : intersectImageRect(clientDesktop, crop)
     const key =
       window.surface_id ??
       window.hwnd ??
@@ -302,6 +302,23 @@ export function mergeImageWindowFloor(
       process: candidate.process,
       class_name: candidate.class_name,
       bounds: { ...candidate.bounds },
+      // THE CLIENT RECTANGLE, WRITTEN DOWN THIS TIME (#136, payload 0.5.0).
+      //
+      // This function is the last stage that HOLDS one: `candidate` is the
+      // surface ring's floor, which observes a window's drawable area, and
+      // `source` is the UI Automation dump, which reports frames only. #131
+      // carried it this far so the live still could place a page; it stopped
+      // here, so a reopened pack had a document, a viewport, a matching window
+      // and no way to convert one into the other. Measured across the owner's
+      // capture root: 80 windows-uia payloads, 0 carrying a client rectangle.
+      //
+      // Absent stays absent — the floor gives one up where it would be a
+      // measuring stick unioned from two monitors (see imageWindowObservation),
+      // and an absent rectangle means a reader declines to place, which is the
+      // honest answer and the one SPEC §11.3 requires.
+      ...(candidate.client_bounds === undefined
+        ? {}
+        : { client_bounds: { ...candidate.client_bounds } }),
       focused: candidate.focused,
       z,
       tree: source?.tree ?? 'skipped',

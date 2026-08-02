@@ -469,6 +469,75 @@ try {
       && disguisedRaster.stdout.includes('plugins/hidden-context/context.blob')
       && disguisedRaster.stdout.includes('hidden raster/video source media are forbidden'))
 
+  // A WINDOW'S CLIENT RECTANGLE (SPEC §11.3, payload 0.5.0).
+  //
+  // The only route by which a chrome-dom page becomes placeable, so a payload
+  // that carries a broken one has silently earned a reader's refusal of the
+  // whole document while reading as valid in every other respect. That is the
+  // failure mode §11.3 is written against, and it is why the validator tests the
+  // rectangle against the frame it claims to be inside rather than merely
+  // checking that four numbers are present.
+  rmSync(join(imagePack, 'plugins', 'hidden-context'), { recursive: true, force: true })
+  mkdirSync(join(imagePack, 'plugins', 'windows-uia'), { recursive: true })
+  imageManifest.plugins = [{
+    name: 'windows-uia',
+    version: '0.5.0',
+    path: 'plugins/windows-uia/',
+  }]
+  writeJson(imageManifestFile, imageManifest)
+  writeJson(join(imagePack, 'plugins', 'windows-uia', 'meta.json'), {
+    name: 'windows-uia',
+    version: '0.5.0',
+  })
+  const uiaFile = join(imagePack, 'plugins', 'windows-uia', 'elements.json')
+  const uiaPayload = (clientBounds) => ({
+    captured_at: '2026-08-02T00:59:13+09:00',
+    budget_ms: 3000,
+    truncated: false,
+    windows: [{
+      hwnd: '9001',
+      title: 'Checkout — Example - Chrome',
+      process: 'chrome',
+      class_name: 'Chrome_WidgetWin_1',
+      bounds: { x: 100, y: 50, width: 1200, height: 951 },
+      ...(clientBounds === null ? {} : { client_bounds: clientBounds }),
+      focused: true,
+      z: 0,
+      tree: 'collected',
+      element_count: 0,
+    }],
+    elements: [],
+  })
+
+  writeJson(uiaFile, uiaPayload({ x: 108, y: 58, width: 1184, height: 935 }))
+  const withClient = runValidator(imagePack)
+  check('a window carrying a client rectangle is valid and counted',
+    withClient.status === 0
+      && withClient.stdout.includes('1 window(s), 1 with a client rectangle'))
+
+  writeJson(uiaFile, uiaPayload(null))
+  const withoutClient = runValidator(imagePack)
+  check('a window without one is equally valid — absence means "not measured"',
+    withoutClient.status === 0
+      && withoutClient.stdout.includes('1 window(s), 0 with a client rectangle'))
+
+  writeJson(uiaFile, uiaPayload({ x: 90, y: 58, width: 1184, height: 935 }))
+  const outsideClient = runValidator(imagePack)
+  check('a client rectangle reaching outside its own frame is rejected',
+    outsideClient.status === 1
+      && outsideClient.stdout.includes('is not inside its own window'))
+
+  writeJson(uiaFile, uiaPayload({ x: 108, y: 58, width: 0, height: 935 }))
+  const emptyClient = runValidator(imagePack)
+  check('a client rectangle with no area is rejected rather than treated as absent',
+    emptyClient.status === 1 && emptyClient.stdout.includes('has no area'))
+
+  writeJson(uiaFile, uiaPayload({ x: 108, y: 58, width: 1184 }))
+  const malformedClient = runValidator(imagePack)
+  check('a client rectangle missing a side is rejected',
+    malformedClient.status === 1
+      && malformedClient.stdout.includes('client_bounds MUST be { x, y, width, height }'))
+
   console.log(`\n${checks}/${checks} CapturePack validator checks passed`)
 } finally {
   rmSync(temporaryRoot, { recursive: true, force: true })

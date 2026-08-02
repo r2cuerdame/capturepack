@@ -1112,6 +1112,13 @@ function toWindowRecord(raw: Record<string, unknown>, index: number): UiaWindowR
     // to a number the pack does not declare.
     ...displayField(raw['display']),
     bounds: raw['bounds'] as UiaBounds,
+    // The drawable rectangle inside the frame (payload 0.5.0, SPEC §11.3), kept
+    // only when it is a complete rectangle. A page measures itself in viewport
+    // CSS pixels and this is the sole thing that converts them, so a half-read
+    // one would not be a rough answer — it would be a scale derived from a
+    // number nobody wrote. Absent stays absent: a reader with no client
+    // rectangle declines to place, which is what every pack before 0.5.0 means.
+    ...(isBounds(raw['client_bounds']) ? { client_bounds: raw['client_bounds'] } : {}),
     focused: raw['focused'] === true,
     // The array order IS the z-order; the field only makes it explicit for
     // readers that reorder or filter the list.

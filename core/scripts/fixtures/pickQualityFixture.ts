@@ -24,61 +24,13 @@
 // It is deliberately NOT a sample of picking quality — nothing synthetic can
 // be. It is a regression shape, and the number it produces moves by a factor of
 // ~40 between a filtered and an unfiltered client-area pane.
-import { deflateSync } from 'node:zlib'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import * as path from 'node:path'
+import { greyPng } from './greyPng'
 
 const WIDTH = 1920
 const HEIGHT = 1080
-
-/** CRC-32 as PNG chunks carry it. */
-function crc32(bytes: Buffer): number {
-  let crc = 0xffffffff
-  for (const byte of bytes) {
-    crc ^= byte
-    for (let bit = 0; bit < 8; bit += 1) {
-      crc = crc & 1 ? (crc >>> 1) ^ 0xedb88320 : crc >>> 1
-    }
-  }
-  return (crc ^ 0xffffffff) >>> 0
-}
-
-function chunk(type: string, data: Buffer): Buffer {
-  const head = Buffer.alloc(4)
-  head.writeUInt32BE(data.length, 0)
-  const body = Buffer.concat([Buffer.from(type, 'ascii'), data])
-  const tail = Buffer.alloc(4)
-  tail.writeUInt32BE(crc32(body), 0)
-  return Buffer.concat([head, body, tail])
-}
-
-/**
- * A real, valid, mid-grey 8-bit greyscale PNG.
- *
- * The reader only needs the IHDR to learn the annotation space, but a fixture
- * that shipped a truncated file would be asserting against a pack no writer
- * could ever produce — and the next person to point an image tool at it would
- * have to work out why. Zero-filled scanlines deflate to a few hundred bytes.
- */
-function greyPng(width: number, height: number): Buffer {
-  const raw = Buffer.alloc((width + 1) * height)
-  for (let y = 0; y < height; y += 1) {
-    raw[y * (width + 1)] = 0
-    raw.fill(0x20, y * (width + 1) + 1, (y + 1) * (width + 1))
-  }
-  const ihdr = Buffer.alloc(13)
-  ihdr.writeUInt32BE(width, 0)
-  ihdr.writeUInt32BE(height, 4)
-  ihdr[8] = 8
-  ihdr[9] = 0
-  return Buffer.concat([
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-    chunk('IHDR', ihdr),
-    chunk('IDAT', deflateSync(raw)),
-    chunk('IEND', Buffer.alloc(0)),
-  ])
-}
 
 const manifest = {
   format: 'capturepack',

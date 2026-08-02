@@ -278,6 +278,23 @@ export class ChromeDomProvider implements TemporalContextProvider {
       //
       // Each entry is placed through exactly the same transform as a pick, so a
       // document element and a picked element cannot land in different places.
+      //
+      // AND FOR A SAVED PACK IT STAYED BROKEN ANYWAY UNTIL #136, which is why
+      // this paragraph now carries a correction rather than a claim. #130 fixed
+      // this loop, and the LIVE still it fixed worked; a REOPENED pack reached
+      // this line with an empty event list, because two things further upstream
+      // each dropped the page on their own:
+      //
+      //   the reader knew only the extension's camelCase spelling, so the
+      //     `device_pixel_ratio` a pack actually carries parsed as absent and
+      //     the whole document was refused (`parseDomDocument`);
+      //   and no pack persisted a client rectangle, so `rectAtPick` below had
+      //     nothing to place a viewport CSS pixel with.
+      //
+      // Measured on the owner's capture root before the fix: 6,091 rectangles on
+      // disk, 0 recovered. A comment that says a bug is fixed when it is not is
+      // worse than no comment, so `check:pack-readback` now counts both numbers
+      // on a pack the exporter wrote — the claim is checked, not written down.
       if (event.type === 'dom.document.captured') {
         const snapshot = event.document
         if (snapshot === undefined) continue

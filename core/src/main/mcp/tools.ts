@@ -501,7 +501,14 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
         'the top-level window list and the UI Automation control trees of the windows the dump ' +
         'reached at the capture instant (name, control_type, automation_id, class_name, bounds in ' +
         'SNAPSHOT pixel coordinates, depth, and window = the z of the owning window) — that is ' +
-        'what annotation targets are picked from. Each windows[] entry carries tree: "collected" | ' +
+        'what annotation targets are picked from. A windows[] entry MAY also carry client_bounds ' +
+        '(payload 0.5.0): the window\'s DRAWABLE rectangle inside its frame, in the same space as ' +
+        'bounds. It is what converts a chrome-dom page — whose rectangles are viewport CSS pixels ' +
+        '— into snapshot pixels: scale = client_bounds.width / document.viewport.width, and the ' +
+        'browser chrome height = client_bounds.height - viewport.height * scale. Absent means it ' +
+        'was not measured (every pack before 0.5.0, and any window only the dump saw), and a ' +
+        'reader without it must NOT place a page element against that window. Each windows[] ' +
+        'entry carries tree: "collected" | ' +
         '"truncated" | "unavailable" | "skipped"; anything but "collected" means no controls were ' +
         'RECORDED for that window, which never means the window had none (Chromium and Electron ' +
         'windows expose no tree unless an assistive client asks). DOM data contributed by the ' +
@@ -571,7 +578,8 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
         'pixels — plus any window-tracking plugin metadata — on Windows that is the ' +
         '"windows-uia" payload, whose windows[] lists every top-level window at the capture ' +
         'instant (title, process, class_name, bounds in the snapshot pixels of the display in ' +
-        '"display" — absent means the focused display — z-order with 0 on top, which one had ' +
+        '"display" — absent means the focused display — an optional client_bounds giving the ' +
+        'drawable rectangle inside that frame, z-order with 0 on top, which one had ' +
         'focus, and whether its control tree was collected). Returns empty lists ' +
         'with a message when the pack has no window data.',
       inputSchema: idArg,

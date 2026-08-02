@@ -453,6 +453,69 @@ check(
   },
   { windows: [['100', 'Visible app', 'skipped']], elements: 0 },
 )
+
+// A CLIENT RECTANGLE IS A MEASURING STICK, SO IT IS TRANSLATED AND NEVER
+// CLIPPED (#136) — the rule ringObservations.ts already applies on the temporal
+// path, now applied here because this rectangle is WRITTEN to the pack.
+//
+// The window below is 400 px wide with a 20 px frame each side; the crop keeps
+// only its left 200 px. Clip the client rectangle to that crop and the derived
+// scale is 180/400 of the truth, so every element of the page inside it lands at
+// 45% size and shifted — inside the reader's own agreement band, so never
+// refused, just wrong. Translated, the stick keeps its length and points off the
+// left edge at a negative x, which is exactly what it means.
+const cropSource: ContextObservation = {
+  tMs: 0,
+  windows: [
+    {
+      surface_id: 'browser',
+      hwnd: '200',
+      title: 'Page - Chrome',
+      process: 'chrome.exe',
+      class_name: 'Chrome_WidgetWin_1',
+      bounds: { x: 100, y: 100, width: 400, height: 300 },
+      client_bounds: { x: 120, y: 160, width: 360, height: 220 },
+      display: 1,
+      focused: true,
+      z: 0,
+      hasControls: false,
+      tree: 'skipped',
+    },
+  ],
+  elements: [],
+}
+const cropPlacement = [{
+  id: 'only',
+  index: 1,
+  bounds: { x: 0, y: 0, width: 1200, height: 1920 },
+  scaleFactor: 1,
+  pixelSize: { width: 1200, height: 1920 },
+  x: 0,
+  y: 0,
+  width: 1200,
+  height: 1920,
+}]
+const cropFloor = imageWindowObservation(
+  cropSource,
+  cropPlacement,
+  { x: 300, y: 150, width: 200, height: 400 },
+)
+check(
+  'a cropped still keeps the client rectangle at full size, in crop-local coordinates',
+  cropFloor?.windows.map((w) => ({ bounds: w.bounds, client_bounds: w.client_bounds })),
+  [{
+    // The visible part of the window: clipped, because a WINDOW is a region.
+    bounds: { x: 0, y: 0, width: 200, height: 250 },
+    // The drawable rectangle: whole, translated by the crop origin only.
+    client_bounds: { x: -180, y: 10, width: 360, height: 220 },
+  }],
+)
+const croppedPayload = mergeImageWindowFloor(null, cropFloor, '2026-07-30T11:00:00+09:00')
+check(
+  'and writes that same rectangle into the payload a reader will reopen',
+  croppedPayload?.windows.map((w) => w.client_bounds),
+  [{ x: -180, y: 10, width: 360, height: 220 }],
+)
 const seamSlicePayload = composeUiaForImageDesktop(
   {
     captured_at: '2026-07-30T11:00:00+09:00',

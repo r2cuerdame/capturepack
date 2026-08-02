@@ -273,7 +273,10 @@ A Windows video pack can carry two complementary sources:
 - `plugins/windows-uia/elements.json` ([SPEC §11.3](../SPEC.md)) is the detailed
   capture-instant UI Automation window/control snapshot. It contains accessible
   names, control types, AutomationIds and tree-collection status where the
-  budgeted walk reached them.
+  budgeted walk reached them. From payload 0.5.0 a window MAY also carry
+  `client_bounds`: the drawable rectangle inside its frame, in the same space as
+  `bounds`. Absent means it was not measured — every pack written before 0.5.0
+  says so, and so does any window only the automation dump saw.
 
 The optional Chrome preview extension contributes explicit DOM picks (selector,
 role, text, URL and viewport placement). `capturepack_dom` exposes plugin JSON
@@ -284,7 +287,21 @@ context, but intentionally have no replay-clock window timeline.
 Read a DOM pick's `element.bounds` as **viewport CSS pixels of the top
 document**, not as snapshot pixels, and `viewport` as what makes them
 placeable — the browser window's position is not something a page can know, so
-the application derives the rest from the window's observed client rectangle.
+the application derives the rest from the window's observed client rectangle,
+which the pack carries as `windows[].client_bounds` in the `windows-uia` payload
+beside it. The scale is `client_bounds.width / viewport.width` and the browser's
+chrome height is `client_bounds.height - viewport.height * scale`; both are
+measured, neither is assumed. **Without a `client_bounds` for that window there
+is no honest conversion, and a reader must decline to place the element** rather
+than guess a chrome height — the window rung is coarser and true.
+
+Compound field names inside a pack are `snake_case`, and the `chrome-dom`
+document's viewport is no exception: `device_pixel_ratio`, `scroll_x`,
+`scroll_y`, beside `visited_count` and `elapsed_ms` on the document itself. A
+reader that expects the browser's own `devicePixelRatio` spelling finds the
+viewport absent and, obeying the rule above, refuses every page in every pack —
+which is precisely what happened to 6,091 recorded element rectangles before
+this was written down ([SPEC §11.4](../SPEC.md)).
 An element picked inside an iframe is measured in its own frame and translated
 up the frame chain before it is recorded; `element.frameDepth` says how far down
 it was found (`0` = the top document, absent in packs written before extension

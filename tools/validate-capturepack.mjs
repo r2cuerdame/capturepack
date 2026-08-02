@@ -777,9 +777,9 @@ function validateChromeDom(pack, replayDurationMs) {
  * annotation results.
  *
  * Fields added in payload 0.2.0 (class_name/z/tree/element_count on a window,
- * window on an element) and 0.3.0 (display on both) are checked WHEN PRESENT: a
- * 0.1.0 payload is still valid, and demanding them would fail packs written by
- * a conforming older writer.
+ * window on an element), 0.3.0 (display on both) and 0.5.0 (client_bounds on a
+ * window) are checked WHEN PRESENT: a 0.1.0 payload is still valid, and
+ * demanding them would fail packs written by a conforming older writer.
  */
 function validateWindowsUia(pack, displayInfo) {
   /**
@@ -828,9 +828,12 @@ function validateWindowsUia(pack, displayInfo) {
   if (!isInt(p.budget_ms) || p.budget_ms <= 0) { fail(`${name}: budget_ms MUST be a positive integer — the bound the dump was given (SPEC §11.3)`); bad++; }
   if (typeof p.truncated !== "boolean") { fail(`${name}: truncated MUST be a boolean (SPEC §11.3)`); bad++; }
 
-  const checkBounds = (label, b) => {
+  // Takes the FULL field path rather than appending ".bounds" itself: a window
+  // carries two rectangles since payload 0.5.0, and a message naming the wrong
+  // one sends a reader to the wrong field.
+  const checkRect = (label, b) => {
     if (!isObj(b) || !isNum(b.x) || !isNum(b.y) || !isNum(b.width) || !isNum(b.height)) {
-      fail(`${label}.bounds MUST be { x, y, width, height } with all four numbers, in snapshot pixel coordinates (SPEC §11.3)`);
+      fail(`${label} MUST be { x, y, width, height } with all four numbers, in snapshot pixel coordinates (SPEC §11.3)`);
       return false;
     }
     return true;
@@ -859,7 +862,39 @@ function validateWindowsUia(pack, displayInfo) {
       }
       if (typeof w.focused !== "boolean") { fail(`${label}.focused MUST be a boolean (SPEC §11.3)`); bad++; }
       else if (w.focused) focusedWindows++;
-      if (!checkBounds(label, w.bounds)) bad++;
+      if (!checkRect(`${label}.bounds`, w.bounds)) bad++;
+      // client_bounds (payload 0.5.0) — the window's DRAWABLE rectangle, and
+      // the only route by which a chrome-dom document can be placed on the
+      // picture at all (SPEC §11.4). Checked WHEN PRESENT and never demanded:
+      // absence is a legal, meaningful statement ("not measured"), and every
+      // payload before 0.5.0 makes it.
+      //
+      // The containment test is not pedantry. A reader derives the page scale
+      // from `client_bounds.width` and the browser's chrome height from
+      // `client.height - viewport.height * scale`, so a client rectangle that
+      // is not inside the frame it belongs to yields a NEGATIVE chrome height
+      // or a scale describing two different windows — and the reader's only
+      // recourse is to refuse the whole page. A pack that has quietly earned
+      // that refusal reads as valid otherwise, which is exactly the silence
+      // this payload's own rules are written against.
+      if (w.client_bounds !== undefined) {
+        if (!checkRect(`${label}.client_bounds`, w.client_bounds)) {
+          bad++;
+        } else if (isObj(w.bounds) && isNum(w.bounds.x)) {
+          const c = w.client_bounds, f = w.bounds;
+          const inside =
+            c.x >= f.x && c.y >= f.y &&
+            c.x + c.width <= f.x + f.width &&
+            c.y + c.height <= f.y + f.height;
+          if (!inside) {
+            fail(`${label}.client_bounds ${JSON.stringify(c)} is not inside its own window's bounds ${JSON.stringify(f)} — the client area is the DRAWABLE part of the frame, and a reader deriving a page's scale and chrome height from the two gets a negative or nonsensical answer and must refuse the whole document (SPEC §11.3, payload 0.5.0)`);
+            bad++;
+          } else if (!(c.width > 0) || !(c.height > 0)) {
+            fail(`${label}.client_bounds has no area (${c.width}x${c.height}) — a zero-sized drawable rectangle cannot scale anything; a window with nothing measured MUST omit client_bounds instead (SPEC §11.3, payload 0.5.0)`);
+            bad++;
+          }
+        }
+      }
       // z — the z-order that decides which window covers a pixel. Duplicates
       // would make that unanswerable, so they are a failure, not a note.
       if (w.z !== undefined) {
@@ -911,7 +946,7 @@ function validateWindowsUia(pack, displayInfo) {
         if (!isStr(e[f])) { fail(`${label}.${f} MUST be a string (may be empty — this is a dump, SPEC §11.3)`); bad++; }
       }
       if (!isInt(e.depth) || e.depth < 0) { fail(`${label}.depth MUST be a non-negative integer (0 = the element's own window) (SPEC §11.3)`); bad++; }
-      if (!checkBounds(label, e.bounds)) bad++;
+      if (!checkRect(`${label}.bounds`, e.bounds)) bad++;
       // window — which window's tree this control came from. A control pointing
       // at a window that is not in the list cannot be placed in the z-order.
       // Reported at most ORPHAN_REPORTS times: one bad window list orphans
@@ -954,7 +989,10 @@ function validateWindowsUia(pack, displayInfo) {
     }
   }
   if (bad === 0) {
-    pass(`plugins/windows-uia/: capture-instant object dump is well-formed (${Array.isArray(p.windows) ? p.windows.length : 0} window(s), ${Array.isArray(p.elements) ? p.elements.length : 0} element(s), bounds in snapshot pixels — SPEC §11.3)`);
+    const withClient = Array.isArray(p.windows)
+      ? p.windows.filter((w) => isObj(w) && w.client_bounds !== undefined).length
+      : 0;
+    pass(`plugins/windows-uia/: capture-instant object dump is well-formed (${Array.isArray(p.windows) ? p.windows.length : 0} window(s), ${withClient} with a client rectangle, ${Array.isArray(p.elements) ? p.elements.length : 0} element(s), bounds in snapshot pixels — SPEC §11.3)`);
   }
 }
 

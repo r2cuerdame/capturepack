@@ -95,9 +95,23 @@ check(
 )
 
 console.log('\nOne mapping, not two')
+// IT LIVES WITH THE WRITER NOW (#136). This used to look for the function in
+// session.ts, where it was born. It defines the SPELLING of every field in
+// plugins/chrome-dom/elements.json, and sitting a thousand lines from anything
+// that reads one back is how the pack came to say `device_pixel_ratio` while the
+// reader looked for `devicePixelRatio` — for twelve packs and 6,091 rectangles.
+// The contract this check pins is "one mapping, not two", which is unchanged;
+// only where the one lives has moved, so the assertion follows it rather than
+// pinning a file it no longer belongs in.
 check(
-  'the shared mapper exists',
-  /function domEventForPack\(/.test(session),
+  'the shared mapper exists, beside the writer whose file format it defines',
+  /export function domEventForPack\(/.test(source('src/main/exporter.ts')),
+  'domEventForPack() must be defined once, in exporter.ts with writeDomPlugin()',
+)
+check(
+  'and session.ts does not keep a second copy of it',
+  !/function domEventForPack\(/.test(code(session)),
+  'two copies of the mapping is exactly how the spellings drifted apart',
 )
 check(
   'the still uses it',
@@ -278,6 +292,18 @@ check(
   'and still refuses it where slices were unioned',
   /client_bounds: undefined/.test(code(source('src/main/imageContext.ts'))),
   'a rectangle unioned from mixed-DPI slices describes no viewport that ever existed',
+)
+// ...AND IT REACHES THE FILE (#136). Everything above this line was true and
+// the pack still could not be reopened: the rectangle was layered onto the
+// in-memory observation and dropped again by `mergeImageWindowFloor`, which is
+// the stage that builds what gets serialized. Measured across the owner's
+// capture root: 80 windows-uia payloads, none carrying one. The round trip
+// itself is asserted by `check:pack-readback`; this pins the seam that lost it.
+check(
+  'and the payload the still SERIALIZES carries it too',
+  /candidate\.client_bounds === undefined[\s\S]{0,120}client_bounds: \{ \.\.\.candidate\.client_bounds \}/
+    .test(code(source('src/main/imageContext.ts'))),
+  'mergeImageWindowFloor builds the record that is written; a rectangle it drops is a page nobody can reopen',
 )
 
 console.log(failed === 0 ? '\nstill-dom: OK' : `\nstill-dom: ${failed} FAILED`)

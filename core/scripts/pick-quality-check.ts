@@ -104,12 +104,51 @@ const DEFAULT_STRIDE = 16
  * middle of it. Tighter fails the next honest capture of a file list; 20% lets
  * #58 back in.
  *
- * ONE THING THIS NUMBER DOES NOT COVER, and it must be re-derived when that
- * changes: no browser DOCUMENT rectangle reaches the index from a saved pack
- * today (see the chrome-dom line this check prints — 6,092 declared, 0
- * offered), so the distribution above is the UI Automation rung alone. The day
- * the document rung starts placing, a page's own containers join the sample and
- * this threshold is measuring a different population.
+ * RE-DERIVED FOR THE DOCUMENT RUNG (#136), AND IT LANDS IN THE SAME PLACE.
+ *
+ * The note here used to end by saying no browser DOCUMENT rectangle reached the
+ * index from a saved pack, so the distribution above was the UI Automation rung
+ * alone, and this threshold would be measuring a different population the day
+ * that changed. #136 changed it, so here is the measurement.
+ *
+ * ON THE CORPUS AS IT STANDS the distribution does not move at all. Reading a
+ * saved page back went from 1 rectangle of 6,092 to all 6,092, and not one of
+ * them became a candidate — every pack on disk predates windows-uia 0.5.0 and
+ * carries no client rectangle, so the document rung correctly declines to place
+ * (SPEC §11.3). Same 42 packs, before and after, identical to the digit:
+ *
+ *     all                 packs=42  median 0.42%  p90 3.27%  worst 9.09%
+ *     carrying chrome-dom packs=15  median 0.37%  p90 0.75%  worst 1.84%
+ *
+ * SO THE NEW POPULATION HAD TO BE MEASURED DIRECTLY: the ten page-carrying image
+ * packs, copied out of the read-only evidence folder with the one number a 0.5.0
+ * writer now records added — the client rectangle, which with a 1184x935 frame
+ * and an 1184x814 viewport at dpr 1 the reader's own agreement band pins to the
+ * frame's width. 41,355 probes are then answered by the browser, and the per-pack
+ * median offered control moves from 0.37% to 0.65% (p90 0.75% -> 0.80%, worst
+ * 1.84% -> 1.84%). Per pack the largest move is CapturePack_2026-08-02_014011,
+ * whose UI Automation rung offers almost nothing: 0.07% -> 0.46%.
+ *
+ * FLOOR, by the same argument as above: the worst honest pack is unchanged at
+ * 9.09% on a 16 px grid and 11.39% on an 8 px one, because both are packs the
+ * document rung places nothing in. CEILING, with WINDOW_FRAME_FRACTION put back
+ * to 0.95 and the document rung live: CapturePack_2026-07-30_093014 still reads
+ * 37.10%, the fixture still 34.14%, the corpus median-of-medians still 1.20%,
+ * and this check still fails 2 packs. Nothing about the gap 11.4% -> 19% moved,
+ * so neither does the number.
+ *
+ * WHAT THE CORPUS CANNOT YET DECIDE, stated because it is the one shape that
+ * could move this. Pooled over those 41,355 offers, a document rectangle is 8.24%
+ * of the browser window it belongs to at the median — but 59.47% at p90 and
+ * 81.04% at worst, and on 014011 the MEDIAN document offer is 48.79% of its
+ * window. Every page-carrying pack here is a full-desktop still where a browser
+ * is a small part of the frame, so those fractions divide by a large denominator
+ * and stay small. On a pack where the browser IS the frame — a single-display
+ * capture of a maximised Chrome — the same offers would be ~49% of it, and this
+ * check would fail. That is the RIGHT answer, not a false alarm: #58 is defined
+ * as "19% of a 3840x2160 screen, 55% of the window it belonged to", and a page
+ * container answering the median hover at 49% of its window is that shape
+ * exactly, whichever provider produced it. The limit is not raised to admit it.
  */
 const MEDIAN_FRACTION_LIMIT = 0.15
 
