@@ -167,6 +167,22 @@ export interface ManifestKeyframe {
   // Position on the replay clock (ms) of the frame this still shows. 0 in a
   // screenshot-only pack, whose single still comes from snapshot.png.
   t_ms: number
+  // A KEYFRAME IS TALLER THAN THE FRAME IT SHOWS, AND HAS TO SAY SO (#133).
+  //
+  // The render grows DOWNWARD to hold the labels of boxes sitting on the bottom
+  // edge, rather than moving those boxes or flipping their callouts over what
+  // they point at (renderedLabelBottomGutter). The source frame stays at (0, 0)
+  // at its original scale, so annotation coordinates drawn straight onto this
+  // image are correct — but the image is not the reference frame's size, and
+  // the pack never said so. Measured on real packs: 116 px on a 5040x2160 desk,
+  // 49 px on a smaller one, 0 when nothing carries text. A reader told the
+  // still is "derived from the same pixels" and scaling it to
+  // reference_height is wrong by that much.
+  //
+  // Declared per entry because the gutter depends on how many labels this
+  // particular instant has.
+  width?: number
+  height?: number
 }
 
 export interface Manifest {

@@ -386,10 +386,29 @@ async function writeKeyframes(
   for (const [i, frame] of frames.entries()) {
     const t_ms = Math.max(0, Math.round(frame.t_ms))
     const file = keyframeFileName(i + 1, t_ms, dir)
-    await writeFile(path.join(handle.dirPath, file), Buffer.from(frame.png))
-    declared.push({ file, t_ms })
+    const png = Buffer.from(frame.png)
+    await writeFile(path.join(handle.dirPath, file), png)
+    // Read back from the bytes just written, not from the job's requested size:
+    // the render adds a label gutter below the source frame (#133), so the two
+    // legitimately differ and only the file knows by how much.
+    const size = pngSize(png)
+    declared.push({ file, t_ms, ...(size === null ? {} : size) })
   }
   return declared
+}
+
+/**
+ * A PNG's declared dimensions, straight out of its IHDR.
+ *
+ * Eight-byte signature, then the first chunk, which a PNG REQUIRES to be IHDR:
+ * 4 length + 4 type + width + height. Cheaper and more honest than trusting the
+ * size the render was asked for — the written file is what a reader will open.
+ */
+function pngSize(png: Buffer): { width: number; height: number } | null {
+  if (png.length < 24 || png.toString('ascii', 12, 16) !== 'IHDR') return null
+  const width = png.readUInt32BE(16)
+  const height = png.readUInt32BE(20)
+  return width > 0 && height > 0 ? { width, height } : null
 }
 
 export interface TrimRenderJob {

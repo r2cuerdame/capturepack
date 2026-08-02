@@ -484,6 +484,24 @@ Each entry:
 |---|---|---|---|
 | `file` | string | REQUIRED | Pack-relative filename, `"frames/frame-<NN>_<MM-SS.mmm>.png"`. `NN` is this entry's **1-based position in the array**, zero-padded to at least two digits; `MM-SS.mmm` SHOULD be `t_ms` formatted as minutes-seconds.milliseconds, minutes zero-padded to at least two digits (`:` is not a legal filename character on Windows, hence `-`). The file MUST exist in the pack. |
 | `t_ms` | integer | REQUIRED | Position on the replay clock, in milliseconds, of the frame this still shows — the same clock as annotation lifetimes ([§8.4](#84-lifetime)), `snapshot_t_ms`, and timeline offsets against `t0`. MUST be >= 0. |
+| `width` | integer | OPTIONAL (RECOMMENDED) | The still's real pixel width, as written. Equals the source frame's width. |
+| `height` | integer | OPTIONAL (RECOMMENDED) | The still's real pixel height, as written. **MAY be GREATER than the source frame's height** — see the label gutter rule below. Absent in packs written before this field existed; a reader that needs it MUST read the PNG rather than assume the reference frame's height. |
+
+**The label gutter.** A keyframe MAY be taller than the frame it shows. A box sitting on the
+bottom edge of the screen has to put its label somewhere, and a writer MAY grow the still
+**downward** to hold it rather than move the box or flip its callout over the thing it points at.
+
+What that space costs a reader is nothing, provided the reader is told:
+
+- The source frame is at **(0, 0)**, at its **original scale**. The gutter is appended below it
+  and never shifts, scales or crops the frame.
+- Therefore annotation coordinates — which are in `annotations.json`'s
+  `reference_width`/`reference_height` space ([§8.2](#82-coordinate-space)) — apply to this image
+  **unchanged**. Drawing them straight onto the still is correct.
+- A reader MUST NOT scale a keyframe to `reference_height`, and MUST NOT assume the still and
+  the snapshot have the same dimensions. `height` above is what the file actually is.
+- The gutter is per-instant: it depends on the labels present at that `t_ms`, so two entries in
+  one pack MAY differ. Zero is normal when nothing at that instant carries text.
 
 Rules:
 

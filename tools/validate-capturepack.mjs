@@ -1020,6 +1020,24 @@ function validateKeyframes(keyframes, pack, keyframeFiles, replay, replayDuratio
       return;
     }
     const dims = pngDimensions(buf);
+    // A DECLARED SIZE MUST BE THE FILE'S SIZE (#133).
+    //
+    // The validator has always said a still "adds only a declared result
+    // gutter", and nothing declared it: the gutter is real, per-instant, and up
+    // to 116 px on a wide desk, while the manifest carried only `file` and
+    // `t_ms`. A reader told the still is derived from the snapshot and scaling
+    // it to reference_height was wrong by that much, with nothing in the pack
+    // to catch the mistake. These fields close that, so they are worth exactly
+    // as much as their agreement with the bytes.
+    if (dims && (k.width !== undefined || k.height !== undefined)) {
+      if (!isInt(k.width) || k.width !== dims.width || !isInt(k.height) || k.height !== dims.height) {
+        fail(
+          `${label} declares ${JSON.stringify(k.width)}x${JSON.stringify(k.height)} but "${k.file}" is ` +
+            `${dims.width}x${dims.height} — a declared keyframe size MUST be the file's own size (${ref})`,
+        );
+        ok = false;
+      }
+    }
     if (!dims) {
       fail(`${short}: "${k.file}" is not a valid PNG (bad signature or IHDR) (${ref}, §7.3)`);
       ok = false;
