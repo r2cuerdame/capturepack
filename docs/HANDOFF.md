@@ -20,30 +20,38 @@ Use [docs/README.md](README.md) as the documentation index. The older
 
 ## Public state
 
-CapturePack **0.3.4** is the current stable Windows release.
+CapturePack **0.3.5** is the current stable Windows release.
 
 | Item | Verified state |
 |---|---|
-| Public release | [v0.3.4](https://github.com/r2cuerdame/capturepack/releases/tag/v0.3.4), stable (`draft=false`, `prerelease=false`), published 2026-08-01T17:51:41Z |
-| Release source | `525ea4968987a0e4445232d1bba71db0c03703c6` |
-| Release workflow | [passed](https://github.com/r2cuerdame/capturepack/actions/runs/30711112527) |
-| Main CI | [passed](https://github.com/r2cuerdame/capturepack/actions/runs/30711020932) |
-| Pages deployment | [passed](https://github.com/r2cuerdame/capturepack/actions/runs/30711020911) |
-| Website | [capturepack.dev](https://capturepack.dev/), serving 0.3.4 |
-| Public installer SHA-256 | `a989eb2fd623da4ce88cb4284766bf51b98887715225d986676a151fe0c2f434` |
-| Installer size | 104,153,982 bytes |
+| Public release | [v0.3.5](https://github.com/r2cuerdame/capturepack/releases/tag/v0.3.5), stable (`draft=false`, `prerelease=false`), published 2026-08-02T06:01:53Z |
+| Release source | `e6b1cdc248c17283a067fb15b8f7c148e62a4eea` |
+| Release workflow | [passed](https://github.com/r2cuerdame/capturepack/actions/runs/30735015301) |
+| Main CI | [passed](https://github.com/r2cuerdame/capturepack/actions/runs/30734934137) — including the first green `capture-e2e` |
+| Pages deployment | [passed](https://github.com/r2cuerdame/capturepack/actions/runs/30734934082) |
+| Website | [capturepack.dev](https://capturepack.dev/), serving 0.3.5 |
+| Public installer SHA-256 | `058d3f8be37808eb2460d393f8598278c924063e64971b20a06f049f19686344` |
+| Installer size | 104,198,110 bytes |
 
-Verified after publication by downloading the released asset and hashing it,
-not by reading the workflow log: SHA-256 matches `SHA256SUMS.txt`, and the
-SHA-512 matches `latest.yml` byte for byte, so electron-updater will accept it.
-The installer was also unpacked and checked to contain what this release claims
-— extension `0.3.4` with `chrome.windows.getAll`, and an `app.asar` carrying
-`domRequestEvents` and `imageClipboardAfterSave: 'prompt'`.
+Verified after publication by downloading the released asset and hashing it, not
+by reading the workflow log: SHA-256 matches `SHA256SUMS.txt`, and the SHA-512
+matches `latest.yml` byte for byte, so electron-updater will accept it.
 
-The previous release [v0.3.3](https://github.com/r2cuerdame/capturepack/releases/tag/v0.3.3)
-(`b7e0c695d5f2c018e2c10fcf83936d1d42f7a0d4`, installer SHA-256
-`cdf1da6fee39eb28e82749b9183cdd3c347f26b31e68e0db25a6be5400ebcf3c`) stays
-exactly where it is.
+The installer was also unpacked and checked to contain the claim this release is
+actually making. `watchdog.js` is not in `dist/scripts/`, and `supervision.json`,
+`startSupervision` and `armShortcutNow` are absent from `app.asar`. The string
+`superviseProcess` does survive, in exactly one place and inside a comment — the
+note in the settings loader explaining why the removed key needs no migration.
+No code path references it: `settings.superviseProcess`, `superviseProcess:`,
+`'superviseProcess'` and `"superviseProcess"` all return nothing.
+
+Earlier public releases stay exactly where they are:
+[v0.3.4](https://github.com/r2cuerdame/capturepack/releases/tag/v0.3.4)
+(`525ea4968987a0e4445232d1bba71db0c03703c6`, SHA-256
+`a989eb2fd623da4ce88cb4284766bf51b98887715225d986676a151fe0c2f434`) and
+[v0.3.3](https://github.com/r2cuerdame/capturepack/releases/tag/v0.3.3)
+(`b7e0c695d5f2c018e2c10fcf83936d1d42f7a0d4`, SHA-256
+`cdf1da6fee39eb28e82749b9183cdd3c347f26b31e68e0db25a6be5400ebcf3c`).
 
 The binaries were built from the tagged release source above. `main` may
 contain documentation-only follow-up commits after that tag. Do not move or
@@ -54,7 +62,7 @@ because it is a separate unsigned build. Use the public release's
 `SHA256SUMS.txt`, not a local build hash, when verifying a downloaded installer.
 
 At the time this handoff was written, the working checkout was
-`C:\_Project\capturepack` on `main`, fast-forwarded from `agent/0.3.4` and
+`C:\_Project\capturepack` on `main`, fast-forwarded from `agent/0.3.5` and
 pushed. Always begin with `git status --short --branch`, `git fetch`, and a
 non-destructive comparison before choosing a branch. Never reset or clean away
 an active worktree.
