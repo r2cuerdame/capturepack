@@ -247,8 +247,18 @@ function displaySection(manifest: Manifest, focusedIndex: number, lang: Language
 ${ordered
   .map((display) => {
     const focused = display.index === focusedIndex
-    const width = Math.round(display.bounds.width * display.scale)
-    const height = Math.round(display.bounds.height * display.scale)
+    // The size the entry DECLARES (SPEC §5.6, 0.7.0), falling back to
+    // bounds × scale for a pack written before the field existed. The summary
+    // label is the reader's answer to "which image are these coordinates in",
+    // so it should be the raster's real size, not an arithmetic near-miss.
+    const width =
+      typeof display.snapshot_width === 'number' && display.snapshot_width > 0
+        ? display.snapshot_width
+        : Math.round(display.bounds.width * display.scale)
+    const height =
+      typeof display.snapshot_height === 'number' && display.snapshot_height > 0
+        ? display.snapshot_height
+        : Math.round(display.bounds.height * display.scale)
     return `<details${focused ? ' open' : ''}>
 <summary>Display ${escapeHtml(display.index)}${focused ? ' · focused' : ''} · ${escapeHtml(width)}×${escapeHtml(height)} @${escapeHtml(display.scale)}x</summary>
 ${displayMedia(manifest, display, focused)}

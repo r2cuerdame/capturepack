@@ -290,9 +290,14 @@ export function displayScreenFindings(manifest) {
     return findings
   }
   if (displays === undefined) {
+    // Legal only below format 0.7.0, where media.displays became REQUIRED for a
+    // video capture (SPEC §5.6, §13.1) — and always legal for an image pack,
+    // which ships no per-display raster. Read as ONE display, the focused one.
     findings.push({
       ok: true,
-      text: `single-display pack: no media.displays, ${screens.length} screen(s) declared`,
+      text:
+        `no media.displays (pre-0.7.0 or image pack): read as ONE display, the focused one; ` +
+        `${screens.length} screen(s) declared`,
     })
     return findings
   }
@@ -331,17 +336,32 @@ export function displayScreenFindings(manifest) {
   return findings
 }
 
-/** The display size the manifest declares for the pack's own snapshot.png. */
+/**
+ * The size the manifest declares for the pack's own snapshot.png.
+ *
+ * The FOCUSED entry's own snapshot_width/snapshot_height answer first from
+ * format 0.7.0 (SPEC §5.6): they describe that exact file, while
+ * environment.screens describes the hardware and is derived through the same
+ * bounds x scale rounding the declaration replaced. The screens fallback is for
+ * packs written before the field existed.
+ */
 export function declaredSnapshotSize(manifest) {
   const screens = manifest?.environment?.screens
-  if (!Array.isArray(screens) || screens.length === 0) return null
   const displays = manifest?.media?.displays
   if (Array.isArray(displays)) {
     const focused = displays.find((display) => display.focused === true)
+    if (
+      Number.isInteger(focused?.snapshot_width) && focused.snapshot_width >= 1 &&
+      Number.isInteger(focused?.snapshot_height) && focused.snapshot_height >= 1
+    ) {
+      return { width: focused.snapshot_width, height: focused.snapshot_height }
+    }
+    if (!Array.isArray(screens) || screens.length === 0) return null
     const screen = focused === undefined ? undefined : screens[focused.index - 1]
     if (screen !== undefined) return { width: screen.width, height: screen.height }
     return null
   }
+  if (!Array.isArray(screens) || screens.length === 0) return null
   return { width: screens[0].width, height: screens[0].height }
 }
 

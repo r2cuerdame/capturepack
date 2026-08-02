@@ -39,6 +39,34 @@ export const FORMAT_VERSION_KEYFRAMES = '0.3.0'
 export const FORMAT_VERSION_CAPTURE_DIAGNOSTICS = '0.4.0'
 /** Measured source latency in media.cadence.source_latency (SPEC §5.3). */
 export const FORMAT_VERSION_SOURCE_LATENCY = '0.6.0'
+/**
+ * HOW MANY DISPLAYS STOPS BEING A SPECIAL CASE A READER CAN FORGET TO ASK
+ * (#75/#76, SPEC §5.6, §8.2).
+ *
+ * Through 0.6.0 the format's first-class citizen was ONE monitor:
+ * `media.snapshot`/`media.replay` were the capture, and `media.displays` was an
+ * optional extra that only a multi-monitor pack carried. A reader that followed
+ * the obvious field got half the desk with no signal the rest existed — and
+ * worse, `annotations.json` declared ONE `reference_width`/`reference_height`
+ * while a box carrying `display: 2` was pixels in a DIFFERENT image. Our own MCP
+ * tool descriptions warned about that trap in prose; the format did not say it.
+ *
+ * 0.7.0 says it:
+ *  - `media.displays` is REQUIRED and ALWAYS PRESENT for a video capture. A
+ *    single-display capture writes an array of ONE.
+ *  - `media.snapshot`/`media.replay` stay, redefined as explicit ALIASES for the
+ *    focused entry's files. Their bytes are still never duplicated, so an OLD
+ *    reader meeting a 0.7.0 pack still works — which is why this is a minor and
+ *    not a major even under §13.1's pre-1.0 rule that minor carries the major
+ *    promises. What 0.7.0 binds is WRITERS, not readers.
+ *  - Each entry declares `snapshot_width`/`snapshot_height`: the frame the
+ *    annotations on that display live in, STATED rather than derived.
+ *
+ * Declared only by a pack that actually carries the required array (§13.1's
+ * "oldest version that fully expresses the content"). An image capture never
+ * does — see the media.displays comment below for why it is exempt.
+ */
+export const FORMAT_VERSION_REQUIRED_DISPLAYS = '0.7.0'
 
 /**
  * How far the recorder's pixels lagged the glass, MEASURED (SPEC §5.3, #115).
@@ -130,8 +158,9 @@ export interface ManifestCadence {
   source_latency?: ManifestSourceLatency
 }
 
-// Per-display media of an all-displays capture (SPEC §5.3, GOAL "Multi-Monitor
-// Support"). One entry per display frozen by the trigger.
+// Per-display media of a video capture (SPEC §5.3, §5.6, GOAL "Multi-Monitor
+// Support"). One entry per display frozen by the trigger — INCLUDING a capture
+// that froze exactly one, which writes an array of one (0.7.0).
 export interface ManifestDisplayMedia {
   // 1-based position in manifest.environment.screens (OS enumeration order).
   index: number
@@ -139,6 +168,22 @@ export interface ManifestDisplayMedia {
   // top-level media: snapshot === "snapshot.png" (the bytes are never
   // duplicated, so a reader ignoring displays[] still sees the focused one).
   snapshot: string
+  // THE FRAME THIS DISPLAY'S ANNOTATIONS LIVE IN, STATED (0.7.0, SPEC §5.6,
+  // §8.2). Pixel dimensions of the file named in `snapshot` above.
+  //
+  // It was always derivable — bounds.width x scale — and derivable is not the
+  // same as stated. Every consumer recomputed it, and the arithmetic is not
+  // exact: capture rounds with Math.max(1, Math.round(...)) at 1.25x/1.5x, which
+  // is why the pack-assertion cross-check had to tolerate +-1 px. A field that
+  // was recomputed instead of measured would be stated and still wrong at
+  // exactly the scale factors the change exists to get right, so a WRITER MUST
+  // populate these from the raster it actually wrote, never from bounds x scale.
+  //
+  // Named for the file rather than bare width/height because `bounds` sits in
+  // the same object with its own width/height in DIP: `snapshot_width` cannot
+  // be misread as the DIP one.
+  snapshot_width: number
+  snapshot_height: number
   // "replay-d<index>.webm", the top-level replay filename on the focused
   // display, or null when this display recorded nothing.
   replay: string | null
@@ -213,14 +258,33 @@ export interface Manifest {
     app?: string
   }
   media: {
+    // ALIASES FOR THE FOCUSED DISPLAY'S ENTRY, not "the capture" (0.7.0, SPEC
+    // §5.3/§5.6). Still REQUIRED, still the same bytes, still what an older
+    // reader reads — the redefinition costs no reader anything. What changes is
+    // that `displays` below is now the place a reader asks how many screens
+    // this pack holds, instead of these two fields quietly implying "one".
     snapshot: string
     replay: string | null
     replay_duration_ms?: number
     cadence?: ManifestCadence
-    // All-displays capture (SPEC §5.3): the media of EVERY display the trigger
-    // froze, focused one included. Absent when only one display was captured
-    // (settings.captureDisplay "cursor"/"<id>"), which is exactly the 0.1.2
-    // single-display pack.
+    // The media of EVERY display the trigger froze, focused one included.
+    //
+    // REQUIRED AND ALWAYS PRESENT for a video capture as of format 0.7.0 (SPEC
+    // §5.6): a single-display capture writes an array of ONE rather than
+    // omitting it, so "how many displays" is a question every reader asks the
+    // same way instead of a special case half of them forget.
+    //
+    // Optional in the TYPE because this type also describes packs read back off
+    // disk, and a pack written before 0.7.0 legitimately has none — SPEC §13.1
+    // requires a 0.7.0 reader to accept those and read them as a single-display
+    // pack whose one display is the focused one. Same shape, same reason, as
+    // `capture_kind?` above.
+    //
+    // ALWAYS ABSENT for capture_kind "image", at every version. An image pack
+    // ships ONE composed raster and no per-display rasters at all — a fullscreen
+    // still is every screen stitched into one PNG, a region still is a crop that
+    // may straddle two — so there is no per-display frame for an entry to name.
+    // `image_scope` is where an image pack answers what its one raster covers.
     displays?: ManifestDisplayMedia[]
     // Annotated replay ("replay_annotated.webm"/".mp4", SPEC §7.2): the replay
     // with annotation boxes rendered into the pixels. Absent while not yet
@@ -589,6 +653,20 @@ export interface BoxAnnotation {
 export type Annotation = BoxAnnotation
 
 export interface AnnotationsFile {
+  /**
+   * THE FOCUSED DISPLAY'S FRAME — not the pack's, and not the desk's (SPEC
+   * §8.1, §8.2).
+   *
+   * There is exactly one of these and there are N displays, so it cannot be
+   * "the coordinate space" of a multi-display pack. It is the pixel size of
+   * `snapshot.png`, which is the focused display's snapshot and the frame every
+   * box that carries NO `display` field is read against. A box that DOES carry
+   * one is pixels in THAT display's snapshot, whose size its
+   * `media.displays[]` entry now states (`snapshot_width`/`snapshot_height`).
+   *
+   * Reading a `display: 2` box against these numbers puts it on the wrong
+   * screen at coordinates that mean nothing — the trap #75 was filed for.
+   */
   reference_width: number
   reference_height: number
   annotations: Annotation[]
@@ -890,8 +968,9 @@ export function annotationsOnDisplay(
 /**
  * The display indices a pack DECLARES (manifest.media.displays[].index), for
  * annotationDisplayIndex()/annotationsOnDisplay(). `undefined` for a pack that
- * declares no per-display media: a single-display pack has exactly one screen,
- * every box is on it, and there is no set to check against.
+ * declares no per-display media — a pack older than 0.7.0, or an image pack.
+ * SPEC §13.1 makes those a single-display pack whose one screen is the focused
+ * one: every box is on it, so there is no set to check against.
  */
 export function declaredDisplayIndices(
   displays: readonly ManifestDisplayMedia[] | undefined,
@@ -907,8 +986,8 @@ export function declaredDisplayIndices(
 /**
  * The 1-based index of the pack's FOCUSED display, i.e. the display
  * snapshot.png and every `display`-less annotation belong to. 1 for a pack that
- * declares no per-display media, which is the single-display case: there is
- * only one display and it is the focused one.
+ * declares no per-display media — a pre-0.7.0 or image pack, which SPEC §13.1
+ * says to read as one display, and that one display is the focused one.
  */
 export function focusedDisplayIndex(displays: readonly ManifestDisplayMedia[] | undefined): number {
   if (!Array.isArray(displays)) return 1

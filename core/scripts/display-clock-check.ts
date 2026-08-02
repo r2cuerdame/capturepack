@@ -173,6 +173,8 @@ const manifest = buildManifest({
       focused: true,
       bounds: { x: 0, y: 0, width: 1_920, height: 1_080 },
       scale: 1,
+      snapshotWidth: 1_920,
+      snapshotHeight: 1_080,
       hasReplay: true,
       replayDurationMs: 25_000,
       snapshotFile: 'snapshot.png',
@@ -184,6 +186,8 @@ const manifest = buildManifest({
       focused: false,
       bounds: { x: 1_920, y: 0, width: 2_560, height: 1_440 },
       scale: 1,
+      snapshotWidth: 2_560,
+      snapshotHeight: 1_440,
       hasReplay: true,
       replayDurationMs: 24_000,
       replayClockOffsetMs: measuredOffsetMs,
@@ -218,11 +222,65 @@ const singleDisplayManifest = buildManifest({
     discarded_frames: 1,
   },
 })
+// THE PIN MOVED, AND ONLY THIS FAR (SPEC §5.6, format 0.7.0).
+//
+// This call passes NO `displays` input at all, and that is the case it still
+// pins: buildManifest declares the displays it is GIVEN and never manufactures
+// one. It knows this pack's snapshot size, but not which of environment.screens
+// the capture was focused on nor where that screen sat on the virtual desktop,
+// and inventing bounds/scale to satisfy a required field would put geometry in
+// the pack that nobody observed. A caller with nothing to declare gets a pack
+// that declares nothing and stays below 0.7.0 — §13.1's "oldest version that
+// fully expresses your content", applied honestly.
+//
+// What DID change is the real capture path: it now always hands over every
+// frozen display, one included. That is the assertion below this one.
 check(
-  'single-display replay keeps focused cadence without declaring media.displays',
+  'a manifest built from no display input declares none, and stays below 0.7.0',
   singleDisplayManifest.media.cadence?.achieved_fps === 14.8 &&
     singleDisplayManifest.media.cadence.discarded_frames === 1 &&
-    singleDisplayManifest.media.displays === undefined,
+    singleDisplayManifest.media.displays === undefined &&
+    singleDisplayManifest.format_version === '0.3.0',
+)
+const oneDisplayManifest = buildManifest({
+  id: 'one-display-declaration-check',
+  createdAt: new Date('2026-07-30T00:00:00.000Z'),
+  generatorVersion: 'check',
+  title: '',
+  note: '',
+  osVersion: 'check',
+  screens: [{ width: 2_400, height: 1_350, scale: 1.25 }],
+  captureKind: 'video',
+  hasReplay: true,
+  replayFile: 'replay.webm',
+  replayDurationMs: 10_000,
+  snapshotTMs: null,
+  displays: [
+    {
+      index: 1,
+      focused: true,
+      bounds: { x: 0, y: 0, width: 1_920, height: 1_080 },
+      scale: 1.25,
+      // The raster the capture actually produced. bounds x scale would say
+      // 2400x1350 too here; the point is that this number comes from the file.
+      snapshotWidth: 2_400,
+      snapshotHeight: 1_350,
+      hasReplay: true,
+      replayDurationMs: 10_000,
+      snapshotFile: 'snapshot.png',
+      replayFile: 'replay.webm',
+    },
+  ],
+})
+check(
+  'a capture that froze ONE display declares an array of one, focused, at 0.7.0',
+  oneDisplayManifest.format_version === '0.7.0' &&
+    oneDisplayManifest.media.displays?.length === 1 &&
+    oneDisplayManifest.media.displays[0]?.focused === true &&
+    oneDisplayManifest.media.displays[0]?.snapshot === 'snapshot.png' &&
+    oneDisplayManifest.media.displays[0]?.replay === 'replay.webm' &&
+    oneDisplayManifest.media.displays[0]?.snapshot_width === 2_400 &&
+    oneDisplayManifest.media.displays[0]?.snapshot_height === 1_350,
 )
 const secondaryOnlyDiagnosticsManifest = buildManifest({
   id: 'secondary-only-capture-diagnostics-check',
@@ -246,6 +304,8 @@ const secondaryOnlyDiagnosticsManifest = buildManifest({
       focused: true,
       bounds: { x: 0, y: 0, width: 1_920, height: 1_080 },
       scale: 1,
+      snapshotWidth: 1_920,
+      snapshotHeight: 1_080,
       hasReplay: true,
       replayDurationMs: 10_000,
       replayClockOffsetMs: 0,
@@ -257,6 +317,8 @@ const secondaryOnlyDiagnosticsManifest = buildManifest({
       focused: false,
       bounds: { x: 1_920, y: 0, width: 1_280, height: 720 },
       scale: 1,
+      snapshotWidth: 1_280,
+      snapshotHeight: 720,
       hasReplay: true,
       replayDurationMs: 9_900,
       replayClockOffsetMs: -100,
@@ -274,8 +336,17 @@ const secondaryOnlyDiagnosticsManifest = buildManifest({
   ],
 })
 check(
-  'capture diagnostics on any replay display raise the additive format version',
-  secondaryOnlyDiagnosticsManifest.format_version === '0.4.0',
+  // THE PIN MOVED BECAUSE THE RULE DID. This used to read 0.4.0: the capture
+  // provenance was the newest thing the manifest declared. It now also declares
+  // a REQUIRED media.displays[] with per-display snapshot frames, which is
+  // 0.7.0, and 0.7.0 supersedes it (SPEC §13.1). What the check is FOR is
+  // unchanged and asserted beside it — a secondary display's diagnostics must
+  // still reach the pack rather than being dropped because the focused one had
+  // none.
+  'capture diagnostics on any replay display are declared, at the version the pack expresses',
+  secondaryOnlyDiagnosticsManifest.format_version === '0.7.0' &&
+    secondaryOnlyDiagnosticsManifest.media.displays?.[1]?.cadence?.backend ===
+      'windows-gdi-bitblt',
 )
 const imageWithStaleCadence = buildManifest({
   id: 'image-stale-cadence-check',
@@ -322,6 +393,8 @@ const failedReplayDisplayWithStaleCadence = buildManifest({
       focused: true,
       bounds: { x: 0, y: 0, width: 1_920, height: 1_080 },
       scale: 1,
+      snapshotWidth: 1_920,
+      snapshotHeight: 1_080,
       hasReplay: false,
       replayDurationMs: 0,
       snapshotFile: 'snapshot.png',
@@ -338,8 +411,13 @@ const failedReplayDisplayWithStaleCadence = buildManifest({
   ],
 })
 check(
+  // Same pin move, same reason: this pack now declares a required
+  // media.displays[], so it is 0.7.0. The claim being made is that a cadence
+  // the manifest does NOT emit cannot pull the version to 0.4.0 — which is
+  // still exactly what is asserted, only against the version the pack really
+  // expresses instead of against a number that used to be the ceiling.
   'a failed display cannot raise a no-replay video pack to format 0.4',
-  failedReplayDisplayWithStaleCadence.format_version === '0.3.0' &&
+  failedReplayDisplayWithStaleCadence.format_version === '0.7.0' &&
     failedReplayDisplayWithStaleCadence.media.cadence === undefined &&
     failedReplayDisplayWithStaleCadence.media.displays?.[0]?.cadence === undefined,
 )
@@ -540,6 +618,8 @@ const threeDisplayManifest = buildManifest({
       focused: false,
       bounds: { x: -1_200, y: -480, width: 1_200, height: 1_920 },
       scale: 1,
+      snapshotWidth: 1_200,
+      snapshotHeight: 1_920,
       hasReplay: true,
       replayDurationMs: 24_963,
       replayClockOffsetMs: threeDisplayOffsets[0],
@@ -551,6 +631,8 @@ const threeDisplayManifest = buildManifest({
       focused: false,
       bounds: { x: 0, y: 0, width: 2_560, height: 1_440 },
       scale: 1.5,
+      snapshotWidth: 3_840,
+      snapshotHeight: 2_160,
       hasReplay: false,
       replayDurationMs: 0,
       snapshotFile: 'snapshot-d2.png',
@@ -561,6 +643,8 @@ const threeDisplayManifest = buildManifest({
       focused: true,
       bounds: { x: 2_560, y: -360, width: 1_920, height: 1_080 },
       scale: 1.25,
+      snapshotWidth: 2_400,
+      snapshotHeight: 1_350,
       hasReplay: true,
       replayDurationMs: 25_000,
       replayClockOffsetMs: threeDisplayOffsets[2],
@@ -607,6 +691,8 @@ const noReplayManifest = buildManifest({
       focused: true,
       bounds: { x: 0, y: 0, width: 1_920, height: 1_080 },
       scale: 1,
+      snapshotWidth: 1_920,
+      snapshotHeight: 1_080,
       hasReplay: false,
       replayDurationMs: 0,
       replayClockOffsetMs: 0,
@@ -618,6 +704,8 @@ const noReplayManifest = buildManifest({
       focused: false,
       bounds: { x: 1_920, y: 0, width: 2_560, height: 1_440 },
       scale: 1,
+      snapshotWidth: 2_560,
+      snapshotHeight: 1_440,
       hasReplay: false,
       replayDurationMs: 0,
       replayClockOffsetMs: 99,

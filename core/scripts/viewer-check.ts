@@ -180,6 +180,8 @@ function pureContractChecks(): void {
           index: 1,
           focused: false,
           snapshot: 'snapshot-d1.png',
+          snapshot_width: 1600,
+          snapshot_height: 2560,
           replay: null,
           bounds: { x: -1280, y: -600, width: 1280, height: 2048 },
           scale: 1.25,
@@ -188,6 +190,8 @@ function pureContractChecks(): void {
           index: 2,
           focused: false,
           snapshot: 'snapshot-d2.png',
+          snapshot_width: 1920,
+          snapshot_height: 1080,
           replay: 'replay-d2.webm',
           replay_duration_ms: 4_900,
           replay_clock_offset_ms: 37,
@@ -198,6 +202,10 @@ function pureContractChecks(): void {
           index: 3,
           focused: true,
           snapshot: 'snapshot.png',
+          // 1707 DIP x 1.5 rounds to 2561, and the real raster is 2560. This
+          // entry is the fractional-scale case the declared frame exists for.
+          snapshot_width: 2560,
+          snapshot_height: 1440,
           replay: 'replay.mp4',
           replay_duration_ms: 5_000,
           replay_clock_offset_ms: 0,
@@ -225,6 +233,13 @@ function pureContractChecks(): void {
   )
   check('focused display may be index 3', multiHtml.includes('<dd>3 (포커스됨)</dd>'))
   check('negative-origin portrait display is represented', multiHtml.includes('Display 1') && multiHtml.includes('1600×2560 @1.25x'))
+  // The viewer prints the frame the entry DECLARES, not bounds x scale. This
+  // display's bounds multiply out to 2561x1440 and its raster is 2560x1440 —
+  // the fractional-scale disagreement media.displays[].snapshot_width settles.
+  check(
+    'per-display summary uses the declared snapshot frame, not bounds x scale',
+    multiHtml.includes('2560×1440 @1.5x') && !multiHtml.includes('2561×1440'),
+  )
   check('partial per-display replay is honest', multiHtml.includes('snapshot-d1.png') && multiHtml.includes('replay-d2.webm'))
   check('annotation display and semantic target are preserved', multiHtml.includes('<dd>2</dd>') && multiHtml.includes('saveButton') && multiHtml.includes('<b>role:</b> button'))
   check('core navigation follows pack language', multiHtml.includes('>주석</h2>') && multiHtml.includes('>파일</h2>') && multiHtml.includes('>디스플레이</h2>'))

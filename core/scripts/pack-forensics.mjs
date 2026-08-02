@@ -491,6 +491,21 @@ export function inspectPack(inputPath, { strict = false } = {}) {
     if (Number.isInteger(display)) {
       const probed = snapshotDimensionsByDisplay.get(display)
       if (probed !== undefined) return probed
+      // What the display's own entry SAYS its snapshot is, before falling back
+      // to environment.screens (SPEC §5.6, format 0.7.0). The entry describes
+      // that exact file; environment.screens describes the hardware, and the two
+      // can differ by a pixel at fractional scale factors.
+      const declaredDisplays = manifest?.media?.displays
+      const entry = Array.isArray(declaredDisplays)
+        ? declaredDisplays.find((d) => isRecord(d) && d.index === display)
+        : undefined
+      if (
+        isRecord(entry)
+        && isFiniteNumber(entry.snapshot_width)
+        && isFiniteNumber(entry.snapshot_height)
+      ) {
+        return { width: entry.snapshot_width, height: entry.snapshot_height }
+      }
       const screen = Array.isArray(manifest?.environment?.screens)
         ? manifest.environment.screens[display - 1]
         : null

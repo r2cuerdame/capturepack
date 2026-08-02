@@ -312,18 +312,32 @@ them can carry annotations**. A box names its screen in the stored field `displa
 what a single-monitor pack and every box on the focused screen write — so nothing about an
 existing pack changed.
 
-Because that stored form is sparse, `capturepack_annotations` and `capturepack_find_annotations`
+**Ask `manifest.media.displays` how many screens a pack holds.** From format 0.7.0 that array is
+REQUIRED for a video pack and always present — a capture that froze one display declares an array
+of one — so "how many displays" is one question with one answer, not a special case. A pack older
+than 0.7.0 omits the array; read it as a single-display pack whose one display is the focused one.
+`media.snapshot` and `media.replay` are **aliases for the focused display's files**, not the
+capture: following them alone on a three-monitor pack gets you one screen of three.
+
+Because the stored form is sparse, `capturepack_annotations` and `capturepack_find_annotations`
 resolve it for you on a multi-display pack — additively, alongside the untouched `display`:
 
 ```json
 { "annotation_id": "ann_44a1c9", "display": 1, "bounds": { "x": 220, "y": 640, "width": 300, "height": 120 },
-  "display_index": 1, "display_focused": false, "display_snapshot": "snapshot-d1.png" }
+  "display_index": 1, "display_focused": false, "display_snapshot": "snapshot-d1.png",
+  "display_width": 1920, "display_height": 1080 }
 ```
 
 **`bounds` are pixels in `display_snapshot`, never in `snapshot.png`.** Reading a second screen's
 box against `snapshot.png` puts it in the wrong place at coordinates that mean nothing there.
+`display_width`/`display_height` are that file's own pixel size, taken from the display entry's
+`snapshot_width`/`snapshot_height` — measure the box against those. The response's top-level
+`reference_width`/`reference_height` are the **focused** display's frame only, and are the wrong
+ruler for any other screen.
+
 Display numbers stay one global sequence across every screen, so box ② is ② wherever it sits.
-A single-display pack returns the annotations exactly as stored — one screen needs no label.
+A pack that declares a single display returns the annotations exactly as stored — one screen needs
+no label, and `reference_width`/`reference_height` already describe it.
 
 ### `capturepack_frame` — annotated keyframes
 

@@ -276,8 +276,8 @@ of screen count or scaling.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `snapshot` | string | REQUIRED | Filename of the snapshot. In format 0.1.0 this MUST be `"snapshot.png"`. Declared explicitly so future versions can vary it without breaking readers that trust the manifest. |
-| `replay` | string **or** `null` | REQUIRED | Filename of the original replay video — `"replay.webm"` or `"replay.mp4"` — or `null` for a screenshot-only pack. Readers MUST take the replay filename from this field rather than probing the pack. |
+| `snapshot` | string | REQUIRED | Filename of the snapshot. In format 0.1.0 this MUST be `"snapshot.png"`. Declared explicitly so future versions can vary it without breaking readers that trust the manifest. From 0.7.0 this is defined as an **alias for the FOCUSED display's entry** in `displays` below ([§5.6](#56-displays-multi-monitor-captures)) — the same string, not a second copy of the bytes. It is not "the capture": a pack may hold several screens, and `displays` is where a reader asks how many. |
+| `replay` | string **or** `null` | REQUIRED | Filename of the original replay video — `"replay.webm"` or `"replay.mp4"` — or `null` for a screenshot-only pack. Readers MUST take the replay filename from this field rather than probing the pack. From 0.7.0, an **alias for the focused display's `replay`**, under the same rule as `snapshot` above. |
 | `replay_duration_ms` | integer **or** `null` | REQUIRED when `replay` is a string | Duration of the replay video in milliseconds. MUST be `null` (or absent) when `replay` is `null`. |
 | `cadence` | object | OPTIONAL | What this display's recorder ACHIEVED: `achieved_fps` (number) and `worst_stall_ms` (number, the longest the frame counter went without advancing — quantised to the writer's sampling interval and therefore a LOWER bound). Written only beside a replay, and only where the writer could measure itself: a rate nobody measured MUST NOT be reported as a rate. Also OPTIONAL `discarded_frames` (number): frames the source produced and threw away. A LOW `achieved_fps` means two different things, and only this tells them apart — a screen capture makes a frame when the screen CHANGES, so a monitor nobody touched delivers almost nothing and has lost nothing, while frames made and discarded are a replay that really is missing time. A reader uses it to know that a moment being annotated may simply not be in the file. Format 0.4.0 adds OPTIONAL capture provenance: `requested_fps` (number in 1..30), `backend` (`"chromium-desktop-capture"` or `"windows-gdi-bitblt"`), `quality` (`"full"` or `"degraded"`), and `recorder_count` (integer >= 1). A current writer MUST request 5..30 fps; readers keep accepting 1..30 here because this field is historical provenance and existing packs may record a former 1..4 fps request. These fields MUST describe the source and encoder(s) that produced the declared replay; a fallback MUST NOT call itself full quality. Format 0.6.0 adds OPTIONAL `source_latency` (object): how far this recorder's pixels lagged the glass, MEASURED. `measured_ms` (number >= 0), `reference` (`"dxgi-desktop-duplication"` or `"windows-gdi-bitblt"`) and `timing` (`"pixel-exposure"` or `"post-bitblt-completion"`) are all REQUIRED inside the object, because the same number means different things against a pixel exposure and against an operation completion, and a writer that cannot say which one it matched has not measured a source latency. A writer MUST NOT report a measured source latency whose `timing` is `"post-bitblt-completion"`: the copied surface may already have been stale by an unobserved amount, so that value is not an exposure latency. This MUST be an observation against an independent reference — never a configured delay, and never derived from `achieved_fps` or `requested_fps`; the rule above holds here too, a latency nobody measured MUST NOT be reported as a latency. Also OPTIONAL: `confidence` (number in 0..1, the matcher's own verdict), `uncertainty_ms` (number >= 0, the reference anchor's error bar) and `age_ms` (integer >= 0, milliseconds between the measurement and this capture). **Absent `age_ms` means the recorder that produced this replay measured it.** A writer MAY carry a measurement forward from an earlier capture of the same display — the calibration succeeds only when the desktop happens to move while it watches, so most captures have no measurement of their own — but a carried value MUST declare its `age_ms`, and MUST NOT be carried across a change of capture `backend`, which is a different path to the glass. The original achieved fields were added in 0.2.0; capture provenance is added in 0.4.0, and the measured source latency in 0.6.0. |
 | `replay_annotated` | string | OPTIONAL | Filename of the **annotated replay** — `"replay_annotated.webm"` or `"replay_annotated.mp4"` ([§7.2](#72-the-annotated-replay)). MUST be absent when `replay` is `null` (there is nothing to render it from), and absent while the annotated replay has not (yet) been rendered. A writer MUST finish the file before publishing this declaration. A defensive reader that encounters a declared but missing file in an interrupted or older pack SHOULD treat the derived view as unavailable and fall back to `replay` + `annotations.json`. |
@@ -285,7 +285,7 @@ of screen count or scaling.
 | `trim_offset_ms` | integer | OPTIONAL | **Provenance only.** When the writer trimmed the replay before saving, the position (ms) in the original captured recording of this replay's first frame — the trim in-point. MUST be >= 0. Purely informational: every time in the pack (annotation lifetimes, `snapshot_t_ms`, timeline offsets against `t0`) is already on the trimmed replay's clock, so readers never apply this offset to anything. Absent means the replay was never trimmed. SHOULD be absent when `replay` is `null`. |
 | `image_scope` | `"region"` or `"fullscreen"` | REQUIRED when `capture_kind` is `"image"`; otherwise MUST be absent | The explicit still-image choice. `"region"` means `snapshot.png` contains only the selected pixels. `"fullscreen"` means the user explicitly requested the complete virtual desktop: every attached display is composed into the single `snapshot.png`, with no separate per-display raster. **Added in 0.3.0.** |
 | `crop_bounds` | object | REQUIRED for a region image; otherwise MUST be absent | Places the selected crop in OS virtual-desktop DIP coordinates: `{ x, y, width, height, coordinate_space: "virtual-desktop-dip" }`. `x`/`y` are finite numbers and MAY be negative; `width`/`height` MUST be finite and > 0. This is placement provenance, not an authorization to store pixels outside the crop. **Added in 0.3.0.** |
-| `displays` | array | OPTIONAL | Per-display media of a capture that froze MORE THAN ONE display at the same instant. Absent for a single-display capture — which is the whole pack in that case. See [§5.6](#56-displays-multi-monitor-captures). |
+| `displays` | array | **REQUIRED** for `capture_kind: "video"` from format **0.7.0**; OPTIONAL before it; MUST be absent for `capture_kind: "image"` | Per-display media: ONE entry for every display the trigger froze, focused one included. A capture that froze a single display writes an array of ONE — "how many displays" is a question every reader asks the same way, not a special case half of them forget. `snapshot` and `replay` above are ALIASES for the focused entry's files, never a second copy of the bytes. Absent in packs written before 0.7.0, which readers MUST accept and read as a single-display pack whose one display is the focused one ([§13.1](#131-format_version-policy)). See [§5.6](#56-displays-multi-monitor-captures). |
 | `keyframes` | array | OPTIONAL (RECOMMENDED) | The **annotated keyframe stills** in `frames/`: one PNG per annotation state change, with the annotations rendered into the pixels. Absent until the render that produces them completes (the same background render as `replay_annotated`), and absent in a pack that was never rendered. See [§5.7](#57-keyframes-annotated-stills). |
 
 For `capture_kind: "image"`, `media.replay` MUST be `null` and
@@ -357,11 +357,36 @@ An empty `plugins/` directory (no payloads, no declarations) is fine. Readers MU
 
 ### 5.6 `displays` (multi-monitor captures)
 
-A capture MAY freeze every connected display at the same instant. The pack then carries one
+<!-- Heading text is load-bearing: every §5.6 cross-reference in this document is
+     an anchor derived from it. The section is no longer only about multi-monitor
+     captures — from 0.7.0 a single-display pack declares `displays` too — but
+     renaming it would break seventeen links for a wording improvement. -->
+
+A capture freezes one or more connected displays at the same instant. The pack carries one
 snapshot (and optionally one replay) **per display**, and `media.displays` declares them.
 
-`media.displays` is present only when the capture covered **more than one** display. A
-single-display capture omits it: the top-level `media` already describes the whole pack.
+**`media.displays` is REQUIRED and ALWAYS PRESENT for a video capture from format 0.7.0**, with
+one entry per display the trigger froze. A capture that froze a single display writes an array of
+**one**. It used to be omitted in that case, and that omission was the format's oldest wrong
+default: it made ONE monitor the first-class citizen and every additional screen an optional
+extra, so a reader following `media.snapshot` — the obvious field — got half the desk with no
+signal the rest existed. A writer MUST NOT omit the array to mean "one display", and a reader
+MUST NOT need to know that omission ever meant that.
+
+`media.snapshot` and `media.replay` remain REQUIRED, and are defined as **aliases for the focused
+entry's files** rather than as the capture. They are the same two strings written twice, not a
+second copy of the bytes, which is why an older reader meeting a 0.7.0 pack still works: it finds
+what it always found, still meaning what it always meant. What 0.7.0 binds is WRITERS.
+
+Packs written before 0.7.0 carry no `media.displays` and stay valid. A reader built for 0.7.0
+MUST accept them and read them as a single-display pack whose one display is the focused one —
+`snapshot.png` is its snapshot, `media.replay` its replay, and `annotations.json`'s
+`reference_width`/`reference_height` its frame ([§13.1](#131-format_version-policy)).
+
+An **image** capture (`capture_kind: "image"`) MUST NOT declare `media.displays` at any version.
+It ships no per-display raster for an entry to name: a fullscreen still is every attached display
+composed into one `snapshot.png`, and a region still is a crop that may straddle two.
+`media.image_scope` ([§5.3](#53-media)) is where an image pack says what its single raster covers.
 
 Exactly one entry is the **focused** display — the display the user was on (cursor position) at
 the trigger. Its media *is* the top-level media: `snapshot.png`, `replay`, `replay_duration_ms`,
@@ -380,13 +405,15 @@ Each entry:
 |---|---|---|---|
 | `index` | integer | REQUIRED | 1-based position of this display in `environment.screens` ([§5.2](#52-environment)) — the OS enumeration order. MUST be >= 1 and unique within the array. |
 | `snapshot` | string | REQUIRED | Filename of this display's frozen frame: `"snapshot-d<index>.png"`, except the focused entry, which MUST repeat the top-level `media.snapshot` (`"snapshot.png"`). |
+| `snapshot_width` | integer | **REQUIRED** from format **0.7.0** | Pixel width of the file named in `snapshot` — **the frame this display's annotations are expressed in** ([§8.2](#82-coordinate-space)). MUST be >= 1 and MUST equal that PNG's actual width. It was always derivable as `bounds.width × scale`, and derivable is not the same as stated: the multiplication rounds differently from the capture path at 1.25x/1.5x scaling, so a writer MUST take these numbers from the raster it actually wrote and MUST NOT recompute them from `bounds`. On the focused entry it MUST equal `annotations.json`'s `reference_width` ([§8.1](#81-structure)). |
+| `snapshot_height` | integer | **REQUIRED** from format **0.7.0** | Pixel height of the file named in `snapshot`, under the same rules as `snapshot_width`. On the focused entry it MUST equal `annotations.json`'s `reference_height`. |
 | `replay` | string **or** `null` | REQUIRED | Filename of this display's replay: `"replay-d<index>.webm"` (or `.mp4`), the top-level `media.replay` on the focused entry, or `null` when this display has no replay. |
 | `replay_duration_ms` | integer | REQUIRED when `replay` is a string | Duration of this display's replay in milliseconds. |
 | `replay_clock_offset_ms` | integer | OPTIONAL when `replay` is a string | Milliseconds to add to the pack clock to reach this display's replay clock: `t_i = t + replay_clock_offset_ms`. `0` on the focused display. A writer SHOULD include it when the recorder reported a shared-clock origin; readers of a legacy entry that omits it use the duration-difference fallback below. MUST be absent when `replay` is `null`. |
 | `cadence` | object | OPTIONAL when `replay` is a string | This display's measured cadence and capture provenance, with the same fields and rules as top-level `media.cadence` ([§5.3](#53-media)). On the focused entry it MUST equal top-level `media.cadence`. MUST be absent when `replay` is `null`. |
 | `replay_annotated` | string | OPTIONAL | This display's replay with **its own** annotation boxes rendered into the pixels: `"replay_annotated-d<index>.webm"` (or `.mp4`). Absent on the focused entry — its annotated replay is the top-level `media.replay_annotated` — and absent on any display that carries no annotations or no replay. Regenerable from `replay` + `annotations.json`. |
 | `keyframes` | array | OPTIONAL | This display's annotated stills, same shape and rules as `media.keyframes` ([§5.7](#57-keyframes-annotated-stills)), with files under `"frames-d<index>/"`. `t_ms` is on **this display's own replay clock**, not the pack clock. Absent on the focused entry (its stills are the top-level `media.keyframes`) and on any display without annotations. |
-| `bounds` | object | REQUIRED | This display's rectangle in the OS virtual-desktop coordinate space, in **device-independent pixels**: `{ "x", "y", "width", "height" }`. Multiply by `scale` for physical pixels — `bounds.width × scale` equals the per-display snapshot's pixel width and `environment.screens[index-1].width`. The offsets place the screens relative to each other, and are what lets a viewer lay the displays out in their real arrangement. |
+| `bounds` | object | REQUIRED | This display's rectangle in the OS virtual-desktop coordinate space, in **device-independent pixels**: `{ "x", "y", "width", "height" }`. Multiply by `scale` for physical pixels — `bounds.width × scale` is `environment.screens[index-1].width` and approximates `snapshot_width`, which is the authoritative frame and MAY differ by a pixel at fractional scale factors. The offsets place the screens relative to each other, and are what lets a viewer lay the displays out in their real arrangement. |
 | `scale` | number | REQUIRED | This display's scale factor (`1`, `1.25`, `1.5`, `2`, …). MUST be > 0. |
 | `focused` | boolean | REQUIRED | `true` on exactly one entry: the display whose media is the pack's top-level media, and the display a box without an explicit `display` belongs to. |
 
@@ -394,7 +421,10 @@ Rules:
 
 - Annotation geometry is **per display**: a box's `bounds` are pixels in the snapshot of the
   display its `display` field names ([§8.2](#82-coordinate-space),
-  [§8.8](#88-display-which-display-a-box-is-on)) — never in the focused display's snapshot.
+  [§8.8](#88-display-which-display-a-box-is-on)) — never in the focused display's snapshot. That
+  display's frame is its entry's `snapshot_width`/`snapshot_height`; a reader MUST measure the box
+  against those and MUST NOT measure it against `annotations.json`'s
+  `reference_width`/`reference_height`, which describe the FOCUSED display alone.
 - **Rendered views are per display too.** The focused display's annotated replay and stills are
   the top-level `media.replay_annotated` / `media.keyframes` and MUST contain only the focused
   display's boxes; another display's are `replay_annotated` / `keyframes` on its own entry and
@@ -431,7 +461,9 @@ Rules:
   `trim_offset_ms` to a reader's seek is wrong: all declared clocks are already rebased, and the
   field is provenance only.
 - A declared per-display file MUST exist in the pack. Readers MUST ignore per-display files that
-  are not declared, and MUST NOT fail when `displays` is absent.
+  are not declared, and MUST NOT fail when `displays` is absent (a pack older than 0.7.0).
+
+Two displays, focus on the second:
 
 ```json
 "media": {
@@ -442,6 +474,8 @@ Rules:
     {
       "index": 1,
       "snapshot": "snapshot-d1.png",
+      "snapshot_width": 1920,
+      "snapshot_height": 1080,
       "replay": "replay-d1.webm",
       "replay_duration_ms": 28402,
       "replay_clock_offset_ms": -35,
@@ -454,6 +488,8 @@ Rules:
     {
       "index": 2,
       "snapshot": "snapshot.png",
+      "snapshot_width": 2560,
+      "snapshot_height": 1440,
       "replay": "replay.webm",
       "replay_duration_ms": 28437,
       "replay_clock_offset_ms": 0,
@@ -464,6 +500,36 @@ Rules:
   ]
 }
 ```
+
+A capture that froze **one** display. This is the shape a single-monitor pack writes from 0.7.0 —
+the array is present, holds exactly one entry, and that entry is focused and repeats the
+top-level media:
+
+```json
+"media": {
+  "snapshot": "snapshot.png",
+  "replay": "replay.webm",
+  "replay_duration_ms": 12010,
+  "displays": [
+    {
+      "index": 1,
+      "snapshot": "snapshot.png",
+      "snapshot_width": 2400,
+      "snapshot_height": 1350,
+      "replay": "replay.webm",
+      "replay_duration_ms": 12010,
+      "replay_clock_offset_ms": 0,
+      "bounds": { "x": 0, "y": 0, "width": 1920, "height": 1080 },
+      "scale": 1.25,
+      "focused": true
+    }
+  ]
+}
+```
+
+Note `snapshot_width` `2400` beside `bounds.width × scale` = `1920 × 1.25` = `2400` here, but the
+two are computed differently and a fractional scale factor is exactly where they part company.
+`snapshot_width`/`snapshot_height` are the raster's real size and win.
 
 ### 5.7 `keyframes` (annotated stills)
 
@@ -710,8 +776,8 @@ sensitive region; a box with text is a labeled callout; any combination is valid
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `reference_width` | integer | REQUIRED | Width in pixels of the coordinate space — MUST equal the pixel width of `snapshot.png`. |
-| `reference_height` | integer | REQUIRED | Height in pixels of the coordinate space — MUST equal the pixel height of `snapshot.png`. |
+| `reference_width` | integer | REQUIRED | Width in pixels of **the FOCUSED display's** coordinate space — MUST equal the pixel width of `snapshot.png`, and from format 0.7.0 the `snapshot_width` of the focused `media.displays` entry ([§5.6](#56-displays-multi-monitor-captures)). This is *not* the size of the capture: a box carrying a `display` field is pixels in THAT display's snapshot and MUST be read against its own frame ([§8.2](#82-coordinate-space)). |
+| `reference_height` | integer | REQUIRED | Height in pixels of **the FOCUSED display's** coordinate space, under the same rules as `reference_width`. |
 | `annotations` | array | REQUIRED | List of annotation boxes. May be empty. Order carries no meaning — reading order is defined by the display-number rule ([§8.5](#85-display-numbers)) and lifetimes, not by array position. |
 
 ### 8.2 Coordinate space
@@ -720,14 +786,22 @@ All annotation geometry is in **snapshot pixel coordinates**: origin at the top-
 `snapshot.png`, x grows right, y grows down, units are snapshot pixels. Coordinates MAY be
 non-integers (sub-pixel positions from freehand drawing are fine).
 
-In a **multi-display** pack ([§5.6](#56-displays-multi-monitor-captures)) each display has its
-own such space, and a box's coordinates are pixels in the snapshot of the display its `display`
-field names ([§8.8](#88-display-which-display-a-box-is-on)) — `snapshot-d<N>.png` for a
-non-focused display, `snapshot.png` for the focused one. `reference_width`/`reference_height`
-below describe `snapshot.png` (the focused display) only; a box on another display is read
-against that display's own snapshot, whose size is `bounds.width × scale` of its
-`media.displays` entry. There is no board-wide or virtual-desktop coordinate space in the
-format: every box belongs to exactly one screen.
+Each captured display ([§5.6](#56-displays-multi-monitor-captures)) has its own such space, and a
+box's coordinates are pixels in the snapshot of the display its `display` field names
+([§8.8](#88-display-which-display-a-box-is-on)) — `snapshot-d<N>.png` for a non-focused display,
+`snapshot.png` for the focused one. There is no board-wide or virtual-desktop coordinate space in
+the format: every box belongs to exactly one screen.
+
+**`reference_width`/`reference_height` describe the FOCUSED display and nothing else.** There is
+exactly one of them and there are N displays, so they cannot be "the coordinate space" of the
+pack. They are the pixel size of `snapshot.png`, which is the focused display's snapshot, and
+they are the frame for every box that carries **no** `display` field. A box that carries one is
+read against that display's own snapshot, whose size its `media.displays` entry states in
+`snapshot_width`/`snapshot_height`. Reading a `display: 2` box against `reference_width` puts it
+on the wrong screen at coordinates that mean nothing — the same numbers describe different pixels
+on every monitor. (Before 0.7.0 a reader had to compute the other display's frame as
+`bounds.width × scale`; that is now a fallback for pre-0.7.0 packs only, and the declared frame
+wins where both are present.)
 
 A box's geometry MUST lie **within** the snapshot it is expressed in: `x >= 0`, `y >= 0`,
 `x + width <= ` that snapshot's width, and `y + height <= ` its height. Coordinates outside the
@@ -736,6 +810,13 @@ renderers clip them inconsistently, and generated views print them as facts (`re
 "box at (-202, 864)" for a box that left a 3840x2160 screen). Writers MUST clamp a box to its
 display as it is drawn, moved or resized; readers encountering an out-of-range box SHOULD clamp
 it into the frame rather than discard the annotation, and MAY report the pack as malformed.
+
+**The frame checked is the one the box names, and a validator MUST NOT skip the check.** A box
+with `display: 2` is measured against display 2's `snapshot_width`/`snapshot_height`, not against
+`reference_width`/`reference_height`; a validator that cannot establish that display's frame —
+neither declared nor readable from its snapshot — MUST report the box as unverifiable rather than
+pass it. Silently skipping is how a pack whose boxes are hundreds of pixels off the side of a
+screen looks valid.
 
 `reference_width`/`reference_height` exist so annotations survive image processing: if a reader
 finds that `snapshot.png`'s actual dimensions differ from the reference (for example the snapshot
@@ -1004,10 +1085,12 @@ a box belongs to exactly one of them: the screen it was drawn on.
   pack has one screen and writes no `display` at all, and a box drawn on the focused screen of a
   multi-display capture writes none either. Every pack written before this field existed is
   therefore already correct under this rule, byte for byte.
-- **Bounds follow the display.** A box's `bounds` are pixels in ITS display's snapshot
-  ([§8.2](#82-coordinate-space)). A reader MUST resolve `display` before interpreting `bounds`;
-  reading them against `snapshot.png` regardless would place a box on the wrong screen at
-  coordinates that mean nothing.
+- **Bounds follow the display.** A box's `bounds` are pixels in ITS display's snapshot, whose size
+  that display's entry states in `snapshot_width`/`snapshot_height`
+  ([§5.6](#56-displays-multi-monitor-captures), [§8.2](#82-coordinate-space)). A reader MUST
+  resolve `display` before interpreting `bounds`; reading them against `snapshot.png` — or against
+  `reference_width`/`reference_height`, which describe that same focused snapshot — would place a
+  box on the wrong screen at coordinates that mean nothing.
 - **Unknown or malformed values.** A `display` that is not an integer >= 1, or that names no
   declared display, MUST be treated as absent (the focused display) rather than dropping the
   box — the box still has a text, a lifetime, and a rectangle worth showing.
@@ -1832,6 +1915,28 @@ introduced in 0.6.0. A writer that emits it MUST declare `format_version` 0.6.0 
 absence is normal and always will be: the measurement requires the desktop to move while the
 calibration watches, and a capture of a still screen has nothing to measure against. Readers that
 do not understand it ignore it and still read the replay and its cadence.
+
+**0.7.0 makes `media.displays` REQUIRED for a video capture and adds `snapshot_width` /
+`snapshot_height` to every entry** ([§5.6](#56-displays-multi-monitor-captures)). A writer that
+declares the array — which every conforming video writer now must — MUST declare
+`format_version` 0.7.0 or later, and MUST populate the two new fields from the raster it actually
+wrote. This is the one place the pre-1.0 rule above needs spelling out, because "minor acts as
+major" makes it look like a break and it is not:
+
+- **Old readers keep working.** `media.snapshot` and `media.replay` are still REQUIRED and still
+  mean exactly what they meant; 0.7.0 only says out loud that they are the focused display's
+  files. A 0.5.0 reader opening a 0.7.0 pack reads the same snapshot and the same replay it
+  always did, and ignores an array it does not know — which is what §13.1 has always required of
+  it.
+- **What 0.7.0 binds is WRITERS.** A writer MUST NOT omit `displays` to mean "one display", and
+  MUST NOT compute `snapshot_width`/`snapshot_height` from `bounds × scale`.
+- **New readers MUST still accept old packs.** A reader built for 0.7.0 MUST accept a pack that
+  predates it and carries no `media.displays`, and MUST read it as a **single-display pack whose
+  one display is the focused one**: `snapshot.png` is that display's snapshot,
+  `annotations.json`'s `reference_width`/`reference_height` are its frame, and every box belongs
+  to it. Refusing such a pack, or reporting it as malformed, is a bug in the reader.
+- **Image packs are unaffected**, at 0.7.0 as before: they declare no `media.displays` because
+  they ship no per-display raster, so they keep declaring the oldest version that expresses them.
 
 **Readers MUST accept unknown optional fields and unknown files.** Forward compatibility is a
 requirement, not a courtesy:

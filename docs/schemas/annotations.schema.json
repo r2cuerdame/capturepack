@@ -6,12 +6,12 @@
   "required": ["reference_width", "reference_height", "annotations"],
   "properties": {
     "reference_width": {
-      "description": "Width in pixels of the annotation coordinate space. MUST equal the pixel width of snapshot.png. If a reader finds the actual snapshot dimensions differ (e.g. the image was rescaled by an intermediate tool), it SHOULD scale all geometry by actual/reference per axis rather than discard the annotations.",
+      "description": "Width in pixels of THE FOCUSED DISPLAY'S coordinate space — not the capture's. MUST equal the pixel width of snapshot.png, which is the focused display's snapshot, and from format 0.7.0 the snapshot_width of the focused manifest.media.displays entry (SPEC.md §8.1, §8.2, §5.6). There is exactly one of these and a pack may hold N displays, so this cannot be the frame of every box: a box carrying a display field is pixels in THAT display's snapshot and MUST be measured against that entry's snapshot_width/snapshot_height. Reading such a box against this value places it on the wrong screen at coordinates that mean nothing. Boxes with NO display field are the ones this frames. If a reader finds the actual snapshot dimensions differ (e.g. the image was rescaled by an intermediate tool), it SHOULD scale all geometry by actual/reference per axis rather than discard the annotations.",
       "type": "integer",
       "minimum": 1
     },
     "reference_height": {
-      "description": "Height in pixels of the annotation coordinate space. MUST equal the pixel height of snapshot.png.",
+      "description": "Height in pixels of THE FOCUSED DISPLAY'S coordinate space, under the same rules as reference_width. MUST equal the pixel height of snapshot.png and, from format 0.7.0, the snapshot_height of the focused manifest.media.displays entry.",
       "type": "integer",
       "minimum": 1
     },
@@ -23,7 +23,7 @@
   },
   "$defs": {
     "motionSample": {
-      "description": "One timed rectangle. t_ms is on the pack replay clock. x/y/width/height are pixels in the snapshot named by display; absent display means the annotation's own display.",
+      "description": "One timed rectangle. t_ms is on the pack replay clock. x/y/width/height are pixels in the snapshot named by display, whose frame is that manifest.media.displays entry's snapshot_width/snapshot_height (SPEC.md §5.6) — never annotations.json's reference_width/reference_height, which describe the focused display alone. Absent display means the annotation's own display, and an annotation with no display of its own means the focused one.",
       "type": "object",
       "required": ["t_ms", "x", "y", "width", "height"],
       "properties": {

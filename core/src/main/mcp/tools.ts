@@ -309,11 +309,16 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
         'was placed on, e.g. {source:"uia", name:"Save", control_type:"Button", automation_id, ' +
         'class_name} from Windows UI Automation at the capture instant — that is the box\'s ' +
         'meaning ("the Save button"), while its geometry always comes from bounds alone. ' +
+        'reference_width/reference_height describe the FOCUSED display\'s snapshot.png and nothing ' +
+        'else — they are not the size of the desk and not the frame of a box on another screen. ' +
         'MULTI-DISPLAY: when the capture froze more than one screen, every box also reports the ' +
         'display it was drawn on. The stored field is "display" (1-based manifest ' +
         'media.displays[].index, ABSENT = the focused display); each returned box additionally ' +
-        'carries a resolved "display_index" and the "display_snapshot" file its bounds are pixels ' +
-        'in — bounds are ALWAYS in that display\'s own snapshot, never the focused one\'s. ' +
+        'carries a resolved "display_index", the "display_snapshot" file its bounds are pixels ' +
+        'in, and that file\'s own "display_width"/"display_height" — bounds are ALWAYS in that ' +
+        'display\'s own snapshot, never the focused one\'s, so measure them against those. ' +
+        'Format 0.7.0 makes manifest.media.displays REQUIRED, so ask it how many screens the pack ' +
+        'holds; a pack older than 0.7.0 omits it and is one display, the focused one. ' +
         'Display numbers are computed, never stored, and run as ONE sequence across all displays.',
       inputSchema: idArg,
     },
@@ -752,8 +757,12 @@ function annotationList(pack: PackHandle): Annotation[] {
  * pixels live in travel with every box, additively; the original `display`
  * field is untouched.
  *
- * A single-display pack is returned exactly as stored: there is one screen, and
- * naming it on every box would be noise.
+ * A ONE-SCREEN pack is returned exactly as stored: there is one screen, its
+ * frame is the reference_width/reference_height already in the response, and
+ * naming it on every box would be noise. The test is `< 2` rather than "does
+ * the pack declare displays" because from format 0.7.0 every video pack
+ * declares them — a one-entry array is a single-display capture, not a
+ * multi-display one.
  */
 function withDisplayContext(pack: PackHandle, annotations: readonly Annotation[]): Annotation[] {
   const displays = pack.manifest()?.media?.displays
@@ -763,14 +772,27 @@ function withDisplayContext(pack: PackHandle, annotations: readonly Annotation[]
   // (SPEC §8.8) — the same screen the editor draws such a box on — so the
   // index and snapshot reported here always name media the pack contains.
   const declared = declaredDisplayIndices(displays)
+  const focusedEntry = displays.find(
+    (d) => d !== null && typeof d === 'object' && d.index === focused,
+  )
   return annotations.map((a) => {
     const index = annotationDisplayIndex(a, focused, declared)
     const entry = displays.find((d) => d !== null && typeof d === 'object' && d.index === index)
+    // The resolved index always names a declared entry, so the fallbacks below
+    // only fire for a malformed manifest. They name the focused display, which
+    // is what an unresolvable `display` resolves to anyway (SPEC §8.8).
+    const frame = entry ?? focusedEntry
     return {
       ...a,
       display_index: index,
       display_focused: index === focused,
       display_snapshot: entry?.snapshot ?? 'snapshot.png',
+      // The frame these bounds are pixels in, stated (SPEC §5.6, 0.7.0): an AI
+      // reader told only the filename has to fetch and decode the image to
+      // learn whether a box at y=2000 is on screen.
+      ...(typeof frame?.snapshot_width === 'number' && typeof frame.snapshot_height === 'number'
+        ? { display_width: frame.snapshot_width, display_height: frame.snapshot_height }
+        : {}),
     } as Annotation
   })
 }

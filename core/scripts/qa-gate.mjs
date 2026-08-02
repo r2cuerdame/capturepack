@@ -69,6 +69,7 @@ const VIDEO_PROFILE_CHECKS = new Set([
   'check:qa-process-tree',
   'check:pack-forensics',
   'check:display-clock',
+  'check:n-display-format',
   'check:temporal-alignment',
   'check:semantic-multidisplay-roundtrip',
   'check:windows-replay-field-fixture',

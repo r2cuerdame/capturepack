@@ -62,13 +62,19 @@ Exit codes: `0` valid, `1` invalid, `2` usage or unreadable input.
   regenerable from `replay` + `annotations.json`; `snapshot_t_ms`
   (frame-accurate snapshot, §7.1) is an integer >= 0, with a note when it has
   no replay to anchor to or exceeds the replay duration.
-- **Per-display media** (SPEC §5.6): when `media.displays` is present (a
-  multi-monitor capture), every declared `snapshot-d<N>.png` /
-  `replay-d<N>.webm` exists in the pack, `index` values are integers >= 1 and
-  unique (a note when an index has no `environment.screens` entry), `bounds`
-  and `scale` are well-formed, exactly one entry is `focused: true`, and that
-  entry repeats the top-level `snapshot`, `replay`, and `replay_duration_ms`
-  rather than declaring its own files. A display with `replay: null` is a
+- **Per-display media** (SPEC §5.6): `media.displays` is REQUIRED for a video
+  capture from format 0.7.0 and its absence there is a FAILURE — a capture that
+  froze one display declares an array of one. Below 0.7.0 its absence is a NOTE
+  and the pack is read as a single-display pack whose one display is the focused
+  one; an image capture MUST NOT declare it at any version. Every declared
+  `snapshot-d<N>.png` / `replay-d<N>.webm` exists in the pack, `index` values are
+  integers >= 1 and unique (a note when an index has no `environment.screens`
+  entry), `bounds` and `scale` are well-formed, `snapshot_width`/`snapshot_height`
+  are declared (required from 0.7.0) and equal that snapshot's REAL pixel size,
+  exactly one entry is `focused: true`, and that entry repeats the top-level
+  `snapshot`, `replay`, and `replay_duration_ms` rather than declaring its own
+  files — and its frame equals `annotations.json`'s
+  `reference_width`/`reference_height`. A display with `replay: null` is a
   NOTE, never a failure; a trimmed replay alongside non-focused replays gets a
   clock-alignment note.
 - **Annotated keyframes** (SPEC §5.7, §7.3): when `media.keyframes` is present,
@@ -102,10 +108,14 @@ Exit codes: `0` valid, `1` invalid, `2` usage or unreadable input.
   A malformed payload never affects the annotation results — object data is
   additive.
 - **annotations.json** (SPEC §8, unified **box** model): reference dimensions
-  equal the actual snapshot dimensions; `annotation_id` matches
+  equal the actual snapshot dimensions AND the FOCUSED display's declared frame —
+  `reference_width`/`reference_height` are the focused display's snapshot, never
+  the whole desk; `annotation_id` matches
   `^ann_[0-9a-f]{6}$` and is unique; `bounds` is `{x, y, width, height}` with
-  `width`/`height` > 0 (a note when the box lies entirely outside the
-  coordinate space); `text` a string; `numbered`/`blur` booleans; `tracking`
+  `width`/`height` > 0 and lying INSIDE the frame of the display the box names
+  (its entry's `snapshot_width`/`snapshot_height`, or the reference space for a
+  box with no `display`) — a box that leaves its own screen FAILS, and so does a
+  box whose frame the validator cannot establish at all; `text` a string; `numbered`/`blur` booleans; `tracking`
   an object with boolean `enabled` (a note when `enabled` is `true` — reserved
   in 0.1.0); `style.color` hex. A `target` (§8.7 — the real UI object the box
   was placed on) must be an object with a non-empty string `source`; for

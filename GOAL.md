@@ -1613,6 +1613,16 @@ simultaneously is the default** — one Ctrl+Alt+C, N displays in the pack.
     the focused display marked). The display under the cursor becomes the FOCUSED
     display — the editor opens on it and annotations anchor to it; the other displays
     ship as synchronized context.
+- **`media.displays[]` is REQUIRED, always, one screen included** (format 0.7.0,
+  SPEC §5.6). A capture that froze a single display writes an array of ONE rather
+  than omitting the field. `media.snapshot`/`media.replay` remain, redefined as
+  ALIASES for the focused entry's files — so "how many displays does this pack
+  hold" is one question every reader asks the same way, instead of a special case
+  half of them forget. Each entry states its own `snapshot_width`/`snapshot_height`,
+  measured from the raster it wrote: a box on display 2 is pixels in display 2's
+  image, and `annotations.json`'s single `reference_width`/`reference_height` is
+  the FOCUSED display's frame alone. Packs written before 0.7.0 carry no array and
+  stay valid — readers treat them as one display, the focused one (SPEC §13.1).
   - **Cursor display** — record all, but the pack keeps only the cursor display
     (smaller packs).
   - **Fixed display** — record only the chosen display (lowest CPU).

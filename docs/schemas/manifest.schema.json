@@ -208,12 +208,12 @@
           "minimum": 0
         },
         "displays": {
-          "description": "OPTIONAL per-display media of a capture that froze MORE THAN ONE display at the same instant (SPEC.md §5.6). Absent for a single-display capture. Exactly one entry has focused: true — the display whose media IS the top-level media, and the display a box without an explicit annotation.display belongs to — and that entry repeats the top-level media (snapshot \"snapshot.png\", the same replay filename and duration) rather than duplicating the bytes under a per-display name, so a reader that ignores this array still sees the whole pack. EVERY display can carry annotations (SPEC.md §8.8): a box names its screen in annotations.json's display field, its bounds are pixels in THAT display's snapshot, and a display that carries boxes gets its own rendered views here (replay_annotated / keyframes below). Every declared file must exist in the pack; index values are 1-based positions in environment.screens and must be unique.",
+          "description": "Per-display media: ONE entry for every display the trigger froze, focused one included. REQUIRED and always present for capture_kind \"video\" from format 0.7.0 — a capture that froze a single display writes an array of ONE, so that \"how many displays\" is a question every reader asks the same way rather than a special case half of them forget (SPEC.md §5.6). MUST be absent for capture_kind \"image\" at every version: an image pack ships no per-display raster (a fullscreen still is every display composed into one snapshot.png, a region still is a crop that may straddle two), and media.image_scope is where it says what its one raster covers. Absent in packs written before 0.7.0, which readers MUST accept and read as a single-display pack whose one display is the focused one (SPEC.md §13.1) — this schema therefore cannot make the field unconditionally required, and a validator applies the requirement by format_version. Exactly one entry has focused: true — the display whose media IS the top-level media, and the display a box without an explicit annotation.display belongs to — and that entry repeats the top-level media (snapshot \"snapshot.png\", the same replay filename and duration) rather than duplicating the bytes under a per-display name: media.snapshot and media.replay are ALIASES for it, so a reader that ignores this array still sees the whole pack. EVERY display can carry annotations (SPEC.md §8.8): a box names its screen in annotations.json's display field, its bounds are pixels in THAT display's snapshot and are measured against that entry's snapshot_width/snapshot_height, and a display that carries boxes gets its own rendered views here (replay_annotated / keyframes below). Every declared file must exist in the pack; index values are 1-based positions in environment.screens and must be unique.",
           "type": "array",
           "minItems": 1,
           "items": {
             "type": "object",
-            "required": ["index", "snapshot", "replay", "bounds", "scale", "focused"],
+            "required": ["index", "snapshot", "snapshot_width", "snapshot_height", "replay", "bounds", "scale", "focused"],
             "properties": {
               "index": {
                 "description": "1-based position of this display in environment.screens (OS enumeration order). Unique within the array.",
@@ -224,6 +224,16 @@
                 "description": "Filename of this display's frozen frame: \"snapshot-d<index>.png\", except the focused entry, which repeats the top-level media.snapshot (\"snapshot.png\").",
                 "type": "string",
                 "pattern": "^(snapshot\\.png|snapshot-d[1-9][0-9]*\\.png)$"
+              },
+              "snapshot_width": {
+                "description": "REQUIRED from format 0.7.0: pixel width of the file named in snapshot — the frame this display's annotations are expressed in (SPEC.md §5.6, §8.2). MUST equal that PNG's actual width. It was always derivable as bounds.width * scale, and derivable is not the same as stated: the multiplication rounds differently from the capture path at 1.25x/1.5x, so a writer MUST take this from the raster it actually wrote and MUST NOT recompute it from bounds. On the focused entry it MUST equal annotations.json's reference_width.",
+                "type": "integer",
+                "minimum": 1
+              },
+              "snapshot_height": {
+                "description": "REQUIRED from format 0.7.0: pixel height of the file named in snapshot, under the same rules as snapshot_width. On the focused entry it MUST equal annotations.json's reference_height.",
+                "type": "integer",
+                "minimum": 1
               },
               "replay": {
                 "description": "Filename of this display's replay — \"replay-d<index>.webm\" (or .mp4), the top-level media.replay on the focused entry — or null when this display has no replay.",
@@ -272,7 +282,7 @@
                 }
               },
               "bounds": {
-                "description": "This display's rectangle in the OS virtual-desktop coordinate space, in device-independent pixels. Multiply by scale for physical pixels: bounds.width * scale equals the per-display snapshot's pixel width and environment.screens[index-1].width. The offsets place the screens relative to each other, which is what lets a viewer lay them out in their real arrangement.",
+                "description": "This display's rectangle in the OS virtual-desktop coordinate space, in device-independent pixels. Multiply by scale for physical pixels: bounds.width * scale is environment.screens[index-1].width and approximates snapshot_width, which is the authoritative frame and may differ by a pixel at fractional scale factors. The offsets place the screens relative to each other, which is what lets a viewer lay them out in their real arrangement.",
                 "type": "object",
                 "required": ["x", "y", "width", "height"],
                 "properties": {

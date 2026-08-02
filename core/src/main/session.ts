@@ -9,7 +9,7 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, screen } from 'electron'
 import type { Event as ElectronEvent, IpcMainEvent } from 'electron'
 import { randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import * as path from 'node:path'
 import { IPC } from '../shared/ipc'
 import { REPLAY_TIMEOUT_MS } from '../shared/captureTimeouts'
@@ -683,6 +683,14 @@ function toDisplayCaptures(
     // pack so the replay's quality is a fact a reader can see — as it stood
     // when this replay was taken, not when the finalizer happened to run (#112).
     ...(d.cadence === undefined ? {} : { cadence: d.cadence }),
+    // The frame this display's annotations live in, from the raster
+    // takeDisplaySnapshots actually produced (SPEC §5.6). NOT bounds x scale:
+    // that rounds differently from the capture path at 1.25x/1.5x, and the
+    // whole point of declaring the size is that it is the file's real one.
+    // The focused display's raster IS snapshot.png, so its numbers are the same
+    // ones annotations.json writes as reference_width/reference_height.
+    snapshotWidth: d.width,
+    snapshotHeight: d.height,
     // A fresh capture writes the canonical names; they travel with the entry so
     // every writer uses the SAME string the manifest declares.
     snapshotFile: displaySnapshotName(d.index),
@@ -1750,9 +1758,14 @@ async function runFlow(settings: Settings): Promise<void> {
       `all display replies ready ${String(allReplaysReadyAt - triggerAt)} ms from trigger`,
   )
   logContextCost()
-  // media.displays[] exists only when the capture actually covered more than
-  // one display (SPEC §5.3): a single-display pack stays exactly what 0.1.2
-  // wrote. The editor's board follows the same rule: one display, one screen.
+  // media.displays[] is declared for EVERY display the trigger froze, one or
+  // many (SPEC §5.6, format 0.7.0) — the exporter turns a one-display capture
+  // into a one-entry array instead of omitting it.
+  //
+  // `multiDisplay` survives because several things below genuinely are about
+  // there being more than one screen — the editor's board, the per-display UIA
+  // mapping, the cross-display motion space — and those did not change. Only
+  // what the MANIFEST declares did.
   const multiDisplay = frozen.displays.length > 1
   // The focused recorder is the top-level media object even for a one-display
   // pack. Snapshot its measured cadence now: the recorder registry may rotate
@@ -1762,12 +1775,8 @@ async function runFlow(settings: Settings): Promise<void> {
   // measured from the focused RAW origin. The editor/final declaration starts
   // at the logical source in-point instead. Keeping both prevents a transient
   // save-first manifest from mixing a raw replay with the last-N pack clock.
-  const rawDisplayCaptures = multiDisplay
-    ? toDisplayCaptures(frozen.displays)
-    : undefined
-  const displayCaptures = multiDisplay
-    ? toDisplayCaptures(frozen.displays, replaySourceStartMs)
-    : undefined
+  const rawDisplayCaptures = toDisplayCaptures(frozen.displays)
+  const displayCaptures = toDisplayCaptures(frozen.displays, replaySourceStartMs)
 
   // ONE MAPPING SPACE PER CAPTURED DISPLAY (GOAL "Multi-Monitor Support").
   // These targets are shared by all three consumers — UIA dump mapping, the
@@ -2453,7 +2462,9 @@ async function runFlow(settings: Settings): Promise<void> {
             ? {}
             : { replayFile: finalFocused.replayFile }),
           replayDurationMs: finalFocused.replayDurationMs,
-          displays: multiDisplay ? toDisplayCaptures(finalDisplays) : undefined,
+          // Every frozen display, one or many (SPEC §5.6): the exact cut
+          // replaced the bytes, so the declaration is rebuilt from them.
+          displays: toDisplayCaptures(finalDisplays),
         }
         if (needsExactCut) {
           // The source revision is already durable. This second update only
@@ -2774,7 +2785,7 @@ async function handleExactCutFailure(
         t_ms: Math.max(0, e.t_ms - input.replayDurationMs),
       })),
     },
-    displays: displays.length > 1 ? toDisplayCaptures(displays) : undefined,
+    displays: toDisplayCaptures(displays),
     windowsContext:
       input.windowsContext === undefined || input.windowsContext === null
         ? null
@@ -2863,7 +2874,7 @@ async function finalizeCancelledExactReplay(
               t_ms: Math.max(0, e.t_ms - replaySourceStartMs),
             })),
           },
-    displays: displays.length > 1 ? toDisplayCaptures(displays) : undefined,
+    displays: toDisplayCaptures(displays),
     windowsContext: finalWindowsContext,
   })
 }
@@ -3424,6 +3435,17 @@ function motionSpaceFromFrozenDisplays(
   }
 }
 
+/**
+ * The frames authored motion is interpolated in, per display.
+ *
+ * `< 2` stays the right predicate here even though media.displays is always
+ * declared now: authored motion only needs a SPACE when a box can cross from
+ * one screen to another, and one screen has nowhere to cross to.
+ *
+ * The sizes come from each capture's measured raster rather than from
+ * bounds x scale (SPEC §5.6). This is the frame a keyframe's x/y are pixels in,
+ * so a value one pixel off at 1.25x/1.5x moves every interpolated position.
+ */
 function motionSpaceFromDisplayCaptures(
   displays: readonly DisplayCapture[],
   focusedIndex: number,
@@ -3433,8 +3455,8 @@ function motionSpaceFromDisplayCaptures(
     focusedIndex,
     displays: displays.map((display) => ({
       index: display.index,
-      width: Math.max(1, Math.round(display.bounds.width * display.scale)),
-      height: Math.max(1, Math.round(display.bounds.height * display.scale)),
+      width: Math.max(1, Math.round(display.snapshotWidth)),
+      height: Math.max(1, Math.round(display.snapshotHeight)),
       bounds: { ...display.bounds },
     })),
   }
@@ -3454,12 +3476,17 @@ function withResolvedDisplays(
   annotations: readonly Annotation[],
   displays: readonly DisplayCapture[],
 ): Annotation[] {
-  // Fewer than two declared displays IS a single-display pack: media.displays
-  // is not written at all, so no box may carry `display`.
-  const declared = displays.length > 1 ? new Set(displays.map((d) => d.index)) : new Set<number>()
+  const declared = new Set(displays.map((d) => d.index))
+  // ABSENT MEANS THE FOCUSED DISPLAY, so a box ON the focused display omits the
+  // field (SPEC §8.8). That used to fall out of the shape — a single-display
+  // pack declared no displays, so the set was empty and every `display` was
+  // dropped. From 0.7.0 such a pack declares one entry, and without this the
+  // one-screen capture would begin writing `"display": 1` where it had always
+  // written nothing.
+  const focused = displays.find((d) => d.focused)?.index
   return annotations.map((a) => {
     if (a.display === undefined) return a
-    if (declared.has(a.display)) return a
+    if (declared.has(a.display) && a.display !== focused) return a
     const { display: _dropped, ...rest } = a
     return rest
   })
@@ -3542,9 +3569,39 @@ function isBoundsLike(v: unknown): v is { x: number; y: number; width: number; h
 }
 
 /**
+ * A PNG's declared pixel size, straight out of its IHDR — 8-byte signature,
+ * then the first chunk, which a PNG REQUIRES to be IHDR.
+ *
+ * Reads the header only. The alternative on this path is decoding a 4K raster
+ * per display just to learn two integers a re-edit needs for every declared
+ * screen, and re-editing must not pay tens of megabytes of decode for it.
+ */
+function pngPixelSize(file: string): { width: number; height: number } | null {
+  let head: Buffer
+  try {
+    head = readFileSync(file)
+  } catch {
+    return null
+  }
+  if (head.length < 24 || head.toString('ascii', 12, 16) !== 'IHDR') return null
+  const width = head.readUInt32BE(16)
+  const height = head.readUInt32BE(20)
+  return width > 0 && height > 0 ? { width, height } : null
+}
+
+/**
  * manifest.media.displays as the exporter re-declares it on a re-edit save:
  * entry-validated, restricted to files that still exist in the folder, and
  * carrying NO bytes (the files on disk are the original evidence).
+ *
+ * THE FRAME IS MEASURED FROM THE FILE, NOT COPIED FROM THE DECLARATION (SPEC
+ * §5.6). A pre-0.7.0 entry has no snapshot_width/height to copy, and a 0.7.0
+ * one that disagrees with its own raster is the bug the field exists to expose —
+ * re-declaring the wrong number would launder it. The PNG on disk is what the
+ * pack ships, so the PNG on disk is what gets declared. An entry whose raster
+ * cannot be measured is DROPPED: the re-edit cannot say what frame that
+ * display's boxes are in, and a declaration it cannot stand behind is worse
+ * than one screen fewer.
  */
 function loadedDisplayCaptures(manifest: Manifest, dirPath: string): DisplayCapture[] {
   const raw: unknown = manifest.media?.displays
@@ -3571,11 +3628,15 @@ function loadedDisplayCaptures(manifest: Manifest, dirPath: string): DisplayCapt
     if (!e.focused && !existsSync(path.join(dirPath, snapshotFile))) continue
     const hasReplay =
       replayFile !== null && (e.focused || existsSync(path.join(dirPath, replayFile)))
+    const frame = pngPixelSize(path.join(dirPath, e.focused ? 'snapshot.png' : snapshotFile))
+    if (frame === null) continue
     result.push({
       index: e.index,
       focused: e.focused,
       bounds: { ...e.bounds },
       scale: typeof e.scale === 'number' && e.scale > 0 ? e.scale : 1,
+      snapshotWidth: frame.width,
+      snapshotHeight: frame.height,
       hasReplay,
       replayDurationMs: typeof e.replay_duration_ms === 'number' ? Math.max(0, e.replay_duration_ms) : 0,
       ...(typeof e.replay_clock_offset_ms === 'number' &&
@@ -3588,14 +3649,23 @@ function loadedDisplayCaptures(manifest: Manifest, dirPath: string): DisplayCapt
       replayWebm: null,
     })
   }
+  // EXACTLY ONE ENTRY IS FOCUSED, or there is no honest declaration to make
+  // (SPEC §5.6). The focused entry is what media.snapshot/media.replay alias; a
+  // set without one would be re-declared as a pack whose top-level media belongs
+  // to no display, which no reader can resolve a `display`-less box against.
+  // Losing it means the source manifest was malformed or its snapshot.png is
+  // unreadable — both cases where declaring nothing is the truthful outcome.
+  if (result.filter((d) => d.focused).length !== 1) return []
   return result
 }
 
 /**
- * A stand-in for a malformed environment.screens entry, derived from the
- * media.displays entry that points at it (bounds x scale IS that screen's
- * physical size, SPEC §5.6). 1x1 when nothing refers to it — a placeholder that
- * holds the POSITION is what the display indices need.
+ * A stand-in for a malformed environment.screens entry, taken from the
+ * media.displays entry that points at it (SPEC §5.6). The entry's DECLARED
+ * snapshot frame answers first; bounds x scale is the pre-0.7.0 fallback, and it
+ * is the arithmetic the declaration replaced. 1x1 when nothing refers to the
+ * index at all — a placeholder that holds the POSITION is what the display
+ * indices need.
  */
 function screenFromDisplay(
   manifest: Manifest,
@@ -3606,9 +3676,17 @@ function screenFromDisplay(
     ? displays.find((d) => d !== null && typeof d === 'object' && d.index === index)
     : undefined
   if (match !== undefined && isBoundsLike(match.bounds) && typeof match.scale === 'number' && match.scale > 0) {
+    const declaredWidth = match.snapshot_width
+    const declaredHeight = match.snapshot_height
     return {
-      width: Math.round(match.bounds.width * match.scale),
-      height: Math.round(match.bounds.height * match.scale),
+      width:
+        typeof declaredWidth === 'number' && declaredWidth >= 1
+          ? Math.round(declaredWidth)
+          : Math.round(match.bounds.width * match.scale),
+      height:
+        typeof declaredHeight === 'number' && declaredHeight >= 1
+          ? Math.round(declaredHeight)
+          : Math.round(match.bounds.height * match.scale),
       scale: match.scale,
     }
   }

@@ -2,7 +2,7 @@
 /**
  * validate-capturepack.mjs — dependency-free CapturePack validator.
  *
- * Validates a pack against SPEC.md (through format 0.5.0). Accepts either form of a
+ * Validates a pack against SPEC.md (through format 0.7.0). Accepts either form of a
  * pack (SPEC §3): an extracted directory, or a `.capturepack` / `.zip` file.
  * ZIP reading is implemented here directly (end-of-central-directory + central
  * directory + node:zlib inflateRawSync) — no npm dependencies, Node 18+ only.
@@ -15,7 +15,11 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { inflateRawSync } from "node:zlib";
 
-const SPEC_VERSION = "0.5.0";
+// Moved to 0.7.0 with the REQUIRED media.displays[] (SPEC §5.6). This is the
+// rule set the checks below apply, and the "differs from" note compares against
+// it — leaving it at 0.5.0 would have every correct 0.7.0 pack announce that it
+// was validated against rules that are not the ones it was written to.
+const SPEC_VERSION = "0.7.0";
 
 // ---------------------------------------------------------------------------
 // Result collection
@@ -468,7 +472,11 @@ function validateManifest(m, pack, snapshotDims) {
   // Which displays this pack declares, and which one is focused — what
   // annotations.json's `display` field is checked against (SPEC §8.8). Empty
   // indices = a single-display pack, where no box may name a display at all.
-  const displayInfo = { indices: new Set(), focused: null, declared: false, snapshots: new Map() };
+  // `frames` is index -> { width, height, name }: the frame a box naming that
+  // display is measured against (SPEC §8.2). Filled from the entry's DECLARED
+  // snapshot_width/height where the pack states them, and from the PNG's own
+  // header otherwise — see validateDisplays.
+  const displayInfo = { indices: new Set(), focused: null, declared: false, frames: new Map() };
   if (!isObj(media)) {
     fail(`manifest.json: media MUST be an object (SPEC §5.3)`);
   } else {
@@ -549,7 +557,14 @@ function validateManifest(m, pack, snapshotDims) {
         fail(`manifest.json: an image capture MUST NOT carry replay-only metadata (SPEC §5.3)`);
       }
       if (media.displays !== undefined) {
-        fail(`manifest.json: an image capture has one explicit source snapshot and MUST NOT declare media.displays (SPEC §5.3)`);
+        // STILL FORBIDDEN AT 0.7.0, and deliberately so. The 0.7.0 requirement
+        // is that a pack which HAS per-display rasters declares every one of
+        // them; an image pack has none. A fullscreen still is every attached
+        // display composed into ONE snapshot.png, a region still is a crop that
+        // may straddle two, and neither ships a per-display frame an entry
+        // could name. media.image_scope is where an image pack answers what its
+        // single raster covers.
+        fail(`manifest.json: an image capture has one explicit source snapshot and MUST NOT declare media.displays, at any format version — it ships no per-display raster for an entry to name; media.image_scope says what its one snapshot covers (SPEC §5.3, §5.6)`);
       }
       if (media.image_scope !== "region" && media.image_scope !== "fullscreen") {
         fail(`manifest.json: an image capture MUST declare media.image_scope as "region" or "fullscreen" (SPEC §5.3)`);
@@ -562,9 +577,24 @@ function validateManifest(m, pack, snapshotDims) {
       }
     }
 
-    // media.displays[] — multi-monitor capture (SPEC §5.6)
+    // media.displays[] — REQUIRED and always present from 0.7.0 (SPEC §5.6).
+    //
+    // VERSION-GATED, and it has to be. examples/minimal is a correct 0.1.0 pack
+    // with no displays at all, and every pack written before 0.7.0 is correct
+    // without one; enforcing the requirement unconditionally would fail packs
+    // that obey the rules they were written to. SPEC §13.1 states the reader
+    // side of the same rule — a 0.7.0 reader MUST accept a pack that predates
+    // the field and read it as a single-display pack whose one display is the
+    // focused one — so the note below says exactly that rather than staying
+    // silent about which reading was applied.
     if (media.displays !== undefined && media.displays !== null) {
       validateDisplays(media, env, pack, displayFiles, keyframeFiles, displayInfo, m.format_version);
+    } else if (captureKind !== "image") {
+      if (formatAtLeast(m.format_version, 0, 7)) {
+        fail(`manifest.json: media.displays is REQUIRED from format 0.7.0 and this pack declares ${JSON.stringify(m.format_version)} — a capture that froze ONE display writes an array of one, so that "how many displays" is never a question a reader has to know not to ask (SPEC §5.6, §13.1)`);
+      } else {
+        note(`manifest.json: media.displays is absent and format_version is ${JSON.stringify(m.format_version)} — legal before 0.7.0; read as a single-display pack whose one display is the focused one, with snapshot.png and the replay as its media (SPEC §5.6, §13.1)`);
+      }
     }
 
     // media.keyframes[] — annotated stills (SPEC §5.7)
@@ -1078,7 +1108,16 @@ function validateDisplays(media, env, pack, displayFiles, keyframeFiles, display
     return;
   }
   if (displays.length === 0) {
-    note(`manifest.json: media.displays is [] — omit it entirely for a single-display capture (SPEC §5.6)`);
+    // An empty array never described anything: before 0.7.0 it was a
+    // single-display pack that should have omitted the field, and from 0.7.0 a
+    // capture that froze one display writes an array of ONE. Either way there is
+    // no reading under which zero declared displays is the truth about a pack
+    // that has a snapshot.
+    if (formatAtLeast(formatVersion, 0, 7)) {
+      fail(`manifest.json: media.displays is [] — a pack at format 0.7.0 declares one entry per display it froze, and a capture that froze one writes an array of ONE (SPEC §5.6)`);
+    } else {
+      note(`manifest.json: media.displays is [] — omit it entirely before format 0.7.0; from 0.7.0 write the one entry the capture actually froze (SPEC §5.6)`);
+    }
     return;
   }
   const screenCount = isObj(env) && Array.isArray(env.screens) ? env.screens.length : null;
@@ -1109,7 +1148,6 @@ function validateDisplays(media, env, pack, displayFiles, keyframeFiles, display
     let indexOk = false;
     if (isInt(d.index) && d.index >= 1) {
       displayInfo.indices.add(d.index);
-      if (isStr(d.snapshot)) displayInfo.snapshots.set(d.index, d.snapshot);
     }
     if (!isInt(d.index) || d.index < 1) {
       fail(`${label}.index ${JSON.stringify(d.index)} MUST be an integer >= 1 — the 1-based position in environment.screens (SPEC §5.6)`);
@@ -1133,6 +1171,29 @@ function validateDisplays(media, env, pack, displayFiles, keyframeFiles, display
     }
     if (!isNum(d.scale) || d.scale <= 0) {
       fail(`${label}.scale MUST be a number > 0 (SPEC §5.6)`);
+      ok = false;
+    }
+
+    // snapshot_width / snapshot_height: THE FRAME THIS DISPLAY'S BOXES LIVE IN
+    // (SPEC §5.6, §8.2), REQUIRED from 0.7.0.
+    //
+    // Checked against the raster the pack actually ships, not just for shape.
+    // The whole reason the field exists is that bounds × scale rounds
+    // differently from the capture path at 1.25x/1.5x: a writer that computes
+    // this instead of measuring it produces a pack that STATES the wrong frame,
+    // which is worse than the derivable one it replaced because every reader now
+    // trusts it. A declaration nobody compares to the file is not a fix.
+    const declaredFrame =
+      isInt(d.snapshot_width) && d.snapshot_width >= 1 && isInt(d.snapshot_height) && d.snapshot_height >= 1
+        ? { width: d.snapshot_width, height: d.snapshot_height }
+        : null;
+    if (d.snapshot_width !== undefined || d.snapshot_height !== undefined) {
+      if (declaredFrame === null) {
+        fail(`${label}.snapshot_width/snapshot_height MUST both be integers >= 1 — the pixel dimensions of this display's snapshot, which is the frame its annotations are expressed in (SPEC §5.6, §8.2)`);
+        ok = false;
+      }
+    } else if (formatAtLeast(formatVersion, 0, 7)) {
+      fail(`${label} declares no snapshot_width/snapshot_height — REQUIRED from format 0.7.0, because a box on this display is pixels in THIS snapshot and a reader must not have to derive that frame from bounds × scale (SPEC §5.6, §8.2)`);
       ok = false;
     }
 
@@ -1160,6 +1221,37 @@ function validateDisplays(media, env, pack, displayFiles, keyframeFiles, display
       } else {
         fail(`media.displays: declared snapshot "${d.snapshot}" is missing from the pack (SPEC §5.6)`);
         ok = false;
+      }
+    }
+
+    // THE DECLARED FRAME AGAINST THE FILE IT DESCRIBES.
+    //
+    // Two fields that can disagree are worse than one, and the pack now has
+    // three saying the same thing about the focused display: this entry, the
+    // snapshot's own IHDR, and annotations.json's reference_*. They are
+    // cross-checked here and in validateAnnotations rather than trusted to hold
+    // by construction — construction is exactly what was wrong.
+    const snapshotBytes = isStr(d.snapshot) ? pack.files.get(d.snapshot) : undefined;
+    const actualFrame = snapshotBytes ? pngDimensions(snapshotBytes) : null;
+    if (declaredFrame !== null && actualFrame !== null) {
+      if (declaredFrame.width !== actualFrame.width || declaredFrame.height !== actualFrame.height) {
+        fail(`${label} declares snapshot_width/height ${declaredFrame.width}x${declaredFrame.height} but "${d.snapshot}" is ${actualFrame.width}x${actualFrame.height} — the declaration MUST be the raster's real size, or every box on this display is read against a frame the pack does not contain (SPEC §5.6, §8.2)`);
+        ok = false;
+      } else {
+        pass(`media.displays: display ${isInt(d.index) ? d.index : i} declares its snapshot frame ${declaredFrame.width}x${declaredFrame.height}, matching "${d.snapshot}" (SPEC §5.6)`);
+      }
+    }
+    // The frame a box naming this display is measured against. The DECLARATION
+    // leads: it is what makes the check survive a snapshot that is missing or
+    // unparseable, which used to skip the bounds check in silence (#74).
+    if (isInt(d.index)) {
+      const frame = declaredFrame ?? actualFrame;
+      if (frame !== null) {
+        displayInfo.frames.set(d.index, {
+          width: frame.width,
+          height: frame.height,
+          name: isStr(d.snapshot) ? d.snapshot : `display ${d.index}'s snapshot`,
+        });
       }
     }
 
@@ -1328,6 +1420,28 @@ function validateAnnotations(a, snapshotDims, replay, replayDurationMs, displayI
     pass(`annotations.json: coordinate space ${a.reference_width}x${a.reference_height} matches snapshot.png`);
   }
 
+  // THE FOCUSED DISPLAY'S FRAME, SAID TWICE, CHECKED ONCE (SPEC §8.1, §8.2,
+  // §5.6). reference_* is the FOCUSED display's snapshot size — that is the
+  // whole point of §8.2's per-display rule — and from 0.7.0 the focused
+  // media.displays entry states the same two numbers. Nothing forced them to
+  // agree: they are written by different code paths from different inputs, so a
+  // pack can say 3840x2160 in one place and 3839x2160 in the other and every
+  // reader picks whichever it happened to look at.
+  if (
+    isInt(a.reference_width) && a.reference_width >= 1 &&
+    isInt(a.reference_height) && a.reference_height >= 1 &&
+    displayInfo && displayInfo.declared && isInt(displayInfo.focused)
+  ) {
+    const focusedFrame = displayInfo.frames.get(displayInfo.focused);
+    if (focusedFrame) {
+      if (focusedFrame.width !== a.reference_width || focusedFrame.height !== a.reference_height) {
+        fail(`annotations.json: reference ${a.reference_width}x${a.reference_height} does not equal the FOCUSED display's frame ${focusedFrame.width}x${focusedFrame.height} declared by manifest.media.displays (display ${displayInfo.focused}, "${focusedFrame.name}") — reference_width/height ARE the focused display's snapshot, so the two MUST be the same numbers (SPEC §8.1, §8.2, §5.6)`);
+      } else {
+        pass(`annotations.json: reference ${a.reference_width}x${a.reference_height} is the FOCUSED display's declared frame (display ${displayInfo.focused}) — a box with no "display" is read against exactly this (SPEC §8.2)`);
+      }
+    }
+  }
+
   if (!Array.isArray(a.annotations)) {
     fail(`annotations.json: annotations MUST be an array (SPEC §8.1)`);
     return knownIds;
@@ -1339,19 +1453,47 @@ function validateAnnotations(a, snapshotDims, replay, replayDurationMs, displayI
   const targetedBoxes = []; // annotation ids carrying any recognized semantic target (SPEC §8.7)
   const domTargetedBoxes = [];
   const displayBoxes = new Map(); // display index -> how many boxes name it (SPEC §8.8)
+  /**
+   * The frame a rectangle is expressed in (SPEC §8.2): the named display's own
+   * snapshot, or — for a box with no `display` — the focused display's, which is
+   * what annotations.json's reference_width/reference_height describe.
+   *
+   * `unresolved` is the part #74 left open. The frame used to be obtained ONLY
+   * by probing the display's snapshot PNG, so a snapshot that was missing or
+   * unparseable produced `frame: null` and the whole bounds check was SKIPPED in
+   * silence — a pack with a box 900 px off the side of screen 2 validated
+   * clean as long as screen 2's image was broken. A declared frame now answers
+   * first (SPEC §5.6), and when neither the declaration nor the file can say
+   * what the frame is, that is reported instead of waved through.
+   */
   const frameForDisplay = (display) => {
-    if (isInt(display) && displayInfo.snapshots.has(display)) {
-      const file = displayInfo.snapshots.get(display);
-      const snapshot = pack.files.get(file);
-      const dims = snapshot ? pngDimensions(snapshot) : null;
-      if (dims) return { frame: dims, frameName: file };
-    } else if (display === undefined && isInt(a.reference_width) && isInt(a.reference_height)) {
+    if (isInt(display)) {
+      const known = displayInfo.frames.get(display);
+      if (known) {
+        return { frame: { width: known.width, height: known.height }, frameName: known.name, unresolved: null };
+      }
+      // A `display` that names nothing this pack declares already failed its own
+      // check below; resolving it to the focused display's frame here would
+      // report the same one problem twice in two different vocabularies.
+      if (displayInfo.declared && displayInfo.indices.has(display)) {
+        return {
+          frame: null,
+          frameName: "the coordinate space",
+          unresolved: `display ${display} states no snapshot_width/snapshot_height and its snapshot could not be measured`,
+        };
+      }
+      return { frame: null, frameName: "the coordinate space", unresolved: null };
+    }
+    if (display === undefined && isInt(a.reference_width) && isInt(a.reference_height)) {
       return {
         frame: { width: a.reference_width, height: a.reference_height },
-        frameName: `the ${a.reference_width}x${a.reference_height} reference space`,
+        frameName: `the ${a.reference_width}x${a.reference_height} reference space (the FOCUSED display's snapshot.png)`,
+        unresolved: null,
       };
     }
-    return { frame: null, frameName: "the coordinate space" };
+    // No `display` and no usable reference: reference_width/height already
+    // failed above, so this adds nothing by repeating it.
+    return { frame: null, frameName: "the coordinate space", unresolved: null };
   };
   a.annotations.forEach((ann, i) => {
     const label = `annotations.json: annotations[${i}]`;
@@ -1395,7 +1537,7 @@ function validateAnnotations(a, snapshotDims, replay, replayDurationMs, displayI
       boundsOk = true;
       // The frame this box DECLARES: its own display's snapshot when it names
       // one, the reference space otherwise (SPEC §8.2, §8.8).
-      const { frame, frameName } = frameForDisplay(ann.display);
+      const { frame, frameName, unresolved } = frameForDisplay(ann.display);
       // A box's coordinates ARE that snapshot's pixels. An origin outside it, or
       // an edge past it, is not a position in the space the annotation declares:
       // report.md and the MCP tools print these numbers as facts, and "box at
@@ -1412,6 +1554,9 @@ function validateAnnotations(a, snapshotDims, replay, replayDurationMs, displayI
           fail(`${label}.bounds leaves ${frameName} (${over.join(", ")}) — bounds are pixels IN that snapshot, so a coordinate outside it is not a position any reader can interpret (SPEC §8.2)`);
           bad++;
         }
+      } else if (unresolved !== null) {
+        fail(`${label}.bounds cannot be checked: ${unresolved} — a box whose frame the pack does not state and whose snapshot cannot be read has bounds no reader can interpret, and skipping the check is how a silently-wrong pack looks valid (SPEC §5.6, §8.2)`);
+        bad++;
       }
     }
 
@@ -1617,7 +1762,12 @@ function validateAnnotations(a, snapshotDims, replay, replayDurationMs, displayI
             keyframeBad++;
           } else if (displayOk) {
             const effectiveDisplay = keyframe.display ?? ann.display;
-            const { frame, frameName } = frameForDisplay(effectiveDisplay);
+            const { frame, frameName, unresolved } = frameForDisplay(effectiveDisplay);
+            if (unresolved !== null) {
+              fail(`${keyframeLabel} cannot be checked against its display: ${unresolved} (SPEC §8.9, §8.2)`);
+              bad++;
+              keyframeBad++;
+            }
             if (frame) {
               const over = [];
               if (keyframe.x < 0) over.push(`x ${keyframe.x} < 0`);

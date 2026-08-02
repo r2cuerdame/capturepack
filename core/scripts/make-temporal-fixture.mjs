@@ -34,12 +34,20 @@ for (const dir of packs) {
   const t0Ms = Date.parse(timeline.t0)
   // Every captured display, with the PIXEL size of its snapshot — which is the
   // annotation coordinate space (SPEC §8.2) the payload's bounds are already in.
+  // The entry's DECLARED frame answers first (SPEC §5.6, format 0.7.0). The
+  // bounds x scale fallback is for the packs already baked into this fixture,
+  // which predate the field — and it is the arithmetic the field replaced
+  // because it disagrees with the real raster at fractional scale factors.
   const displays = Array.isArray(media.displays) && media.displays.length > 0
     ? media.displays.map((d) => ({
         index: d.index,
         focused: d.focused === true,
-        width: Math.round(d.bounds.width * (typeof d.scale === 'number' ? d.scale : 1)),
-        height: Math.round(d.bounds.height * (typeof d.scale === 'number' ? d.scale : 1)),
+        width: Number.isInteger(d.snapshot_width) && d.snapshot_width >= 1
+          ? d.snapshot_width
+          : Math.round(d.bounds.width * (typeof d.scale === 'number' ? d.scale : 1)),
+        height: Number.isInteger(d.snapshot_height) && d.snapshot_height >= 1
+          ? d.snapshot_height
+          : Math.round(d.bounds.height * (typeof d.scale === 'number' ? d.scale : 1)),
       }))
     : [
         {

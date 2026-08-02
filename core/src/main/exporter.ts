@@ -43,6 +43,7 @@ import {
   FORMAT_NAME,
   FORMAT_VERSION_CAPTURE_DIAGNOSTICS,
   FORMAT_VERSION_KEYFRAMES,
+  FORMAT_VERSION_REQUIRED_DISPLAYS,
   FORMAT_VERSION_SOURCE_LATENCY,
 } from '../shared/types'
 import { displayAnnotatedName, displayFramesDir } from '../shared/keyframes'
@@ -69,6 +70,15 @@ export interface DisplayDeclaration {
   // Virtual-desktop rectangle in device-independent pixels; x scale = physical.
   bounds: { x: number; y: number; width: number; height: number }
   scale: number
+  // MEASURED pixel size of the raster this display's snapshot file holds — the
+  // frame its annotations are expressed in (SPEC §5.6, §8.2), declared as
+  // media.displays[].snapshot_width/height from 0.7.0.
+  //
+  // Every caller passes what it actually captured or read back off disk, never
+  // Math.round(bounds.width * scale): that arithmetic is off by a pixel at
+  // 1.25x/1.5x, and a stated-but-wrong frame is worse than a derived one.
+  snapshotWidth: number
+  snapshotHeight: number
   hasReplay: boolean
   replayDurationMs: number
   // Observed conversion from the pack clock to this replay's clock. Optional
@@ -142,6 +152,11 @@ export function displayMediaName(
  * media.displays[] for the captured displays. The focused entry is filled from
  * the FINAL top-level media object, so "focused entry === top-level media"
  * holds by construction — including after a trim replaced the replay bytes.
+ *
+ * That construction is exactly what SPEC §5.6 means by the top-level
+ * `snapshot`/`replay` being ALIASES for the focused entry from 0.7.0: they are
+ * not copied bytes and not a second opinion, they are the same two strings
+ * written twice so an older reader still finds them where it looks.
  */
 function buildDisplayMedia(
   displays: readonly DisplayDeclaration[],
@@ -163,6 +178,11 @@ function buildDisplayMedia(
     return {
       index: d.index,
       snapshot: d.focused ? media.snapshot : d.snapshotFile,
+      // The frame this display's boxes live in, from the raster the caller
+      // measured (SPEC §5.6). Clamped to a positive integer only because a
+      // manifest field cannot be 0 or fractional — never recomputed here.
+      snapshot_width: Math.max(1, Math.round(d.snapshotWidth)),
+      snapshot_height: Math.max(1, Math.round(d.snapshotHeight)),
       replay,
       // Written only alongside a replay, and next to it (SPEC §5.6).
       ...(replay !== null && durationMs !== undefined ? { replay_duration_ms: durationMs } : {}),
@@ -329,8 +349,16 @@ export async function settleDisplayWrites(dirPath: string): Promise<void> {
 /**
  * A per-display file the background write could not lay down must not stay
  * DECLARED: re-reads the manifest and drops every media.displays entry whose
- * files are missing (and the whole array when fewer than two survive, SPEC
- * §5.6). Keeps a save-first folder valid even when the editor is cancelled.
+ * files are missing. Keeps a save-first folder valid even when the editor is
+ * cancelled.
+ *
+ * IT COLLAPSES, IT NEVER DELETES (0.7.0, SPEC §5.6). This used to remove the
+ * whole array once fewer than two entries survived, because that was the
+ * single-display shape. Under a REQUIRED media.displays that would turn a
+ * crash-recovery folder into an invalid 0.7.0 pack — a manifest declaring
+ * 0.7.0 with no displays at all — and this runs on precisely the path nobody is
+ * watching. One surviving entry is now a one-entry array, which is exactly what
+ * a single-display capture writes anyway.
  */
 async function dropUndeclarableDisplays(dirPath: string): Promise<void> {
   return withManifestMutation(dirPath, async () => {
@@ -364,7 +392,10 @@ async function dropUndeclarableDisplays(dirPath: string): Promise<void> {
       kept.push(d)
     }
     if (!changed) return
-    if (kept.length > 1) manifest.media.displays = kept
+    // Zero survivors means the array had no focused entry — a manifest that was
+    // already malformed before this ran. There is nothing honest to collapse to,
+    // so the undeclarable array goes rather than being left pointing at nothing.
+    if (kept.length > 0) manifest.media.displays = kept
     else delete manifest.media.displays
     await writeSourceFile(manifestPath, toJson(manifest))
   })
@@ -894,11 +925,28 @@ export function buildManifest(input: ManifestInput): Manifest {
       input.displays?.find((display) => display.focused)?.cadence,
     )
   }
-  if (
-    captureKind === 'video' &&
-    input.displays !== undefined &&
-    input.displays.length > 1
-  ) {
+  // WHETHER THIS MANIFEST WILL CARRY media.displays AT ALL (SPEC §5.6, §13.1).
+  //
+  // From 0.7.0 the array is REQUIRED and always present for a video capture, a
+  // single-display capture included — so the old `length > 1` gate is gone and
+  // what is left is "did the caller give us displays it actually froze".
+  //
+  // It stays a condition rather than becoming unconditional for two reasons the
+  // next person will ask about:
+  //  - An IMAGE capture has no per-display rasters to declare (see the
+  //    media.displays comment in shared/types.ts) and passes none.
+  //  - A re-edit of a pack written before 0.7.0 reads back an EMPTY set: that
+  //    pack never declared its displays, and this process cannot honestly
+  //    invent one. It knows snapshot.png's size, but not which of
+  //    environment.screens the capture was focused on, nor where that screen sat
+  //    on the virtual desktop. Manufacturing bounds/scale to satisfy a required
+  //    field would put geometry in the pack that nobody ever observed. The
+  //    regenerated pack declares no displays and therefore does not claim
+  //    0.7.0 — §13.1's "write the oldest version that fully expresses your
+  //    content", applied honestly.
+  const declaresDisplays =
+    captureKind === 'video' && input.displays !== undefined && input.displays.length > 0
+  if (declaresDisplays && input.displays !== undefined) {
     for (const display of input.displays) {
       const emitsReplay = display.focused ? input.hasReplay : display.hasReplay
       if (emitsReplay) emittedCadences.push(display.cadence)
@@ -923,11 +971,19 @@ export function buildManifest(input: ManifestInput): Manifest {
     // §13.1). Legacy 0.2.1 packs remain readable because they omit the field;
     // a new video cannot claim that older contract merely because it has no
     // authored keyframes.
-    format_version: hasSourceLatency
-      ? FORMAT_VERSION_SOURCE_LATENCY
-      : hasCaptureDiagnostics
-        ? FORMAT_VERSION_CAPTURE_DIAGNOSTICS
-        : FORMAT_VERSION_KEYFRAMES,
+    // A REQUIRED media.displays[] IS 0.7.0, and it supersedes every version
+    // below it (SPEC §13.1). Every video pack this app writes now carries one,
+    // so every video pack declares 0.7.0 — including a re-edit of an older
+    // multi-display pack, which really does gain the per-display
+    // snapshot_width/height it did not have before. A re-edit of a pack that
+    // declares no displays keeps its older version; see declaresDisplays above.
+    format_version: declaresDisplays
+      ? FORMAT_VERSION_REQUIRED_DISPLAYS
+      : hasSourceLatency
+        ? FORMAT_VERSION_SOURCE_LATENCY
+        : hasCaptureDiagnostics
+          ? FORMAT_VERSION_CAPTURE_DIAGNOSTICS
+          : FORMAT_VERSION_KEYFRAMES,
     capture_kind: captureKind,
     id: input.id,
     created_at: isoWithOffset(input.createdAt),
@@ -989,14 +1045,11 @@ export function buildManifest(input: ManifestInput): Manifest {
     }
   }
   // Declared LAST so the focused entry copies the finished top-level media
-  // (replay filename + duration, trimmed or not). Present ONLY for a capture
-  // that covered more than one display — a single-display capture omits it and
-  // the top-level media already describes the whole pack (SPEC §5.6).
-  if (
-    captureKind === 'video' &&
-    input.displays !== undefined &&
-    input.displays.length > 1
-  ) {
+  // (replay filename + duration, trimmed or not). One entry per display the
+  // trigger froze, INCLUDING a capture that froze exactly one: from 0.7.0 a
+  // single-display pack declares an array of one rather than omitting it, so a
+  // reader never has to know that "no displays" means "one" (SPEC §5.6).
+  if (declaresDisplays && input.displays !== undefined) {
     manifest.media.displays = buildDisplayMedia(input.displays, manifest.media)
   }
   return manifest
@@ -1485,15 +1538,23 @@ async function copyImagePluginMetadata(
  * §8.8): a `display` that names no declared entry is DROPPED from the box, so
  * the box resolves to the focused display instead of carrying an index that
  * fails validation, renders into nothing, and disappears from the documents.
- * `undefined` declarations = a single-display pack, where no box may carry one.
+ *
+ * A `display` naming the FOCUSED entry is dropped too, because §8.8 says absent
+ * MEANS the focused display and writers SHOULD omit it there. That rule used to
+ * be enforced by accident — a single-display pack declared no displays at all,
+ * so every `display` failed the set test. Now that such a pack declares one
+ * entry, the rule has to be stated: without it a one-screen capture would start
+ * writing `"display": 1` on boxes that never carried the field before.
  */
 function withDeclaredDisplays(
   annotations: readonly Annotation[],
   displays: readonly DisplayDeclaration[] | undefined,
 ): Annotation[] {
   const declared = new Set((displays ?? []).map((d) => d.index))
+  const focused = (displays ?? []).find((d) => d.focused)?.index
   return annotations.map((a) => {
-    if (a.display === undefined || declared.has(a.display)) return a
+    if (a.display === undefined) return a
+    if (declared.has(a.display) && a.display !== focused) return a
     const { display: _dropped, ...rest } = a
     return rest
   })
@@ -1522,9 +1583,14 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
             d.hasReplay && d.replayFile !== null && existsSync(join(sourceDir, d.replayFile)),
         },
   )
-  // Fewer than two surviving displays is a SINGLE-display pack: media.displays
-  // exists only for a capture that covered more than one (SPEC §5.6).
-  const displayFiles = surviving !== undefined && surviving.length > 1 ? surviving : undefined
+  // Every display whose files travel is declared, one or many (SPEC §5.6).
+  // This used to drop the array when fewer than two survived; from 0.7.0 that
+  // would write a pack claiming a version whose required field it does not have.
+  // An empty set stays undefined — a Save As New of a pack that declared no
+  // displays (pre-0.7.0, or an image pack) still declares none, and buildManifest
+  // keeps it at the older version rather than inventing geometry for it.
+  const displayFiles =
+    surviving !== undefined && surviving.length > 0 ? surviving : undefined
   // A box may only name a display this pack DECLARES (SPEC §8.8). Anything the
   // filter above dropped resolves back to the focused display — the field is
   // removed, which is what "absent = focused" means — rather than being written

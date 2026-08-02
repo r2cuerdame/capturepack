@@ -63,12 +63,34 @@ export function describeAnnotation(a: Annotation, t: TranslateFn = makeT('en')):
 // than the one screen the annotations live on.
 // ---------------------------------------------------------------------------
 
-/** Physical pixel size of a declared display (bounds are DIP × scale). */
+/**
+ * Pixel size of a declared display's snapshot — the frame its boxes live in.
+ *
+ * The entry STATES it from 0.7.0 (SPEC §5.6), so that is what gets printed. The
+ * bounds × scale fallback is for a pack written before the field existed, and it
+ * is a fallback rather than the rule for a reason: the arithmetic disagrees with
+ * the real raster by a pixel at 1.25x/1.5x, and this string ends up in report.md
+ * as a fact about a file the reader can open.
+ */
 function displayPixels(d: NonNullable<Manifest['media']['displays']>[number]): string {
-  return `${Math.round(d.bounds.width * d.scale)}×${Math.round(d.bounds.height * d.scale)}`
+  const width =
+    typeof d.snapshot_width === 'number' && d.snapshot_width > 0
+      ? d.snapshot_width
+      : Math.round(d.bounds.width * d.scale)
+  const height =
+    typeof d.snapshot_height === 'number' && d.snapshot_height > 0
+      ? d.snapshot_height
+      : Math.round(d.bounds.height * d.scale)
+  return `${width}×${height}`
 }
 
-/** True when this pack carries per-display media at all (SPEC §5.6). */
+/**
+ * True when this pack carries media for MORE THAN ONE screen (SPEC §5.6).
+ *
+ * Not "declares media.displays": from 0.7.0 every video pack does, a one-screen
+ * capture included. What the documents branch on is whether there is more than
+ * one screen to tell the reader about.
+ */
 export function isMultiDisplay(manifest: Manifest): boolean {
   const displays = manifest.media.displays
   return Array.isArray(displays) && displays.length > 1
@@ -133,7 +155,13 @@ export function groupByDisplay(
 /**
  * The captured displays as markdown bullets, e.g.
  * `- **Displays:** 2 captured` + one indented line per display.
- * Empty for a single-display pack (no media.displays).
+ *
+ * Empty for a ONE-SCREEN pack, and the test is `< 2` rather than "is the array
+ * there". From 0.7.0 the array is always there, so the old absent/empty guard
+ * would have started printing "Displays: 1 captured" and an indented line
+ * describing snapshot.png into every single-monitor report.md — a format change
+ * silently rewriting what users read. One screen has nothing to disambiguate;
+ * the media table already names snapshot.png and its size.
  */
 export function displaySummaryLines(
   manifest: Manifest,
@@ -141,7 +169,7 @@ export function displaySummaryLines(
   annotations: readonly Annotation[] = [],
 ): string[] {
   const displays = manifest.media.displays
-  if (displays === undefined || displays.length === 0) return []
+  if (displays === undefined || displays.length < 2) return []
   const focusedIndex = packFocusedDisplay(manifest)
   const declared = packDisplayIndices(manifest)
   const lines = [`- **${t('pack.displays')}:** ${displays.length} captured`]
@@ -493,11 +521,18 @@ export function buildReport(
           '§8.8). Numbers are the computed display numbers (SPEC §8.5) — one global sequence ' +
           'across the whole pack, identical in every rendered view.',
       )
+      const declaredDisplays = manifest.media.displays ?? []
       for (const g of groups) {
         if (g.annotations.length === 0) continue
+        // The name and size the manifest DECLARES, not ones re-derived from the
+        // index: the format now states both (SPEC §5.6), and this line tells a
+        // reader which file to open a box's coordinates against.
+        const entry = declaredDisplays.find((d) => d.index === g.index)
         const snapshot = g.focused
           ? `snapshot.png, ${annotationsFile.reference_width}×${annotationsFile.reference_height}`
-          : `snapshot-d${g.index}.png`
+          : entry === undefined
+            ? `snapshot-d${g.index}.png`
+            : `${entry.snapshot}, ${displayPixels(entry)}`
         lines.push('')
         lines.push(
           `### ${t('pack.display')} ${g.index}${g.focused ? ` (${t('pack.displayFocused')})` : ''} — ${snapshot}`,

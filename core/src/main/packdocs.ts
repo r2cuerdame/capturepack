@@ -439,8 +439,16 @@ function buildAnnotationSkill(
   const lines: string[] = []
   lines.push(`# ${t('pack.annotations')}`)
   lines.push('')
+  // annotations.json carries ONE reference size and a pack can hold N screens,
+  // so the document has to say WHICH screen that size describes — the focused
+  // display's, never "the capture's" (SPEC §8.1, §8.2).
   lines.push(
-    `Coordinate space: snapshot.png, ${annotationsFile.reference_width}×${annotationsFile.reference_height} pixels, origin top-left.`,
+    multi
+      ? `Coordinate space of the FOCUSED display (${focusedIndex}): snapshot.png, ` +
+          `${annotationsFile.reference_width}×${annotationsFile.reference_height} pixels, origin top-left. ` +
+          'That is what annotations.json’s reference_width/reference_height mean here — ' +
+          'the focused display’s frame, not the whole desk.'
+      : `Coordinate space: snapshot.png, ${annotationsFile.reference_width}×${annotationsFile.reference_height} pixels, origin top-left.`,
   )
   if (multi) {
     lines.push('')
@@ -454,7 +462,10 @@ function buildAnnotationSkill(
       'the focused one, whose snapshot is `snapshot.png`. Bounds are always pixels in THAT display’s',
     )
     lines.push(
-      'own snapshot — never the focused display’s — so read each box against the file named below it.',
+      'own snapshot — whose size that display’s entry states in `snapshot_width`/`snapshot_height` —',
+    )
+    lines.push(
+      'never the focused display’s, so read each box against the file named below it.',
     )
   }
   lines.push('')
@@ -508,8 +519,16 @@ function buildAnnotationSkill(
       const index = annotationDisplayIndex(a, focusedIndex, declaredDisplayIndices(manifest.media.displays))
       const entry = manifest.media.displays?.find((d) => d.index === index)
       const file = entry?.snapshot ?? 'snapshot.png'
+      // The frame, stated: an AI reading only this document otherwise has to
+      // multiply bounds by scale to know what image these coordinates are in.
+      const frame =
+        entry !== undefined &&
+        typeof entry.snapshot_width === 'number' &&
+        typeof entry.snapshot_height === 'number'
+          ? ` (${entry.snapshot_width}×${entry.snapshot_height})`
+          : ''
       lines.push(
-        `- **Display:** ${index}${index === focusedIndex ? ' (focused)' : ''} — bounds below are pixels in \`${file}\``,
+        `- **Display:** ${index}${index === focusedIndex ? ' (focused)' : ''} — bounds below are pixels in \`${file}\`${frame}`,
       )
     }
     lines.push(
