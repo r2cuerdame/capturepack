@@ -17,25 +17,26 @@ documents preserve evidence but are not instructions for the current release.
 | [Changelog](../CHANGELOG.md) | Shipped application changes by version |
 
 The application version and pack format version are separate. CapturePack
-application `0.3.5` can generate packs using newer additive format versions;
+application `0.4.0` can generate packs using newer additive format versions;
 the optional offline viewer is defined for compatible packs at format `0.5.0`
-or newer.
+or newer, and a pack declares up to `0.8.0` when it carries input events.
 
-**Current state.** `0.3.5` is the public release and `main` carries it. It runs
-as one process — the watchdog is gone
-([#80](https://github.com/r2cuerdame/capturepack/issues/80)) — captures clean up
-after themselves on a retention policy
-([#47](https://github.com/r2cuerdame/capturepack/issues/47),
-[#48](https://github.com/r2cuerdame/capturepack/issues/48)), pin numbers follow
-the order you assign them and can be typed
-([#51](https://github.com/r2cuerdame/capturepack/issues/51)), and CI now records
-a capture with nobody at the machine and asserts on the pack
-([#63](https://github.com/r2cuerdame/capturepack/issues/63)).
+**Current state.** `0.4.0` is the public release and `main` carries it. A pack
+now describes every screen rather than one screen plus others — `media.displays`
+is always present, each entry states its own measured frame, and an annotation on
+a second screen is defined in the format as pixels in that screen's image
+(format `0.7.0`, [#75](https://github.com/r2cuerdame/capturepack/issues/75)). The
+timeline records what moved: mouse and window events on the replay clock, and
+never a keystroke (format `0.8.0`,
+[#12](https://github.com/r2cuerdame/capturepack/issues/12)).
 
 `GOAL.md` is the design record; [Handoff](HANDOFF.md) carries the verified state
 and the next order. Open work is grouped by milestone in the
-[issues](https://github.com/r2cuerdame/capturepack/issues) — v0.4.0 is the
-N-display pack format, which is the next thing that changes the format itself.
+[issues](https://github.com/r2cuerdame/capturepack/issues). Two things the format
+work does not settle stay open: a real three-screen capture
+([#76](https://github.com/r2cuerdame/capturepack/issues/76)) and a measured
+threshold for picking quality
+([#134](https://github.com/r2cuerdame/capturepack/issues/134)).
 
 ## Development and QA
 

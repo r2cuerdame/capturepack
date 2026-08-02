@@ -32,10 +32,9 @@ AutomationId, 프로세스를 기록하고, 브라우저에서는 보이던 페�
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [다운로드](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-현재 공개 Windows 릴리스: **CapturePack 0.3.5**. 이제 프로세스는 둘이 아니라
-하나입니다. 앱이 죽으면 되살리려 따로 떠 있던 감시 프로세스는 사라졌습니다.
-캡처는 사용자가 정한 보관 기간에 따라 스스로 정리되고, 상자 번호는 앱이 정하는
-대신 사용자가 직접 입력합니다.
+현재 공개 Windows 릴리스: **CapturePack 0.4.0**. 이제 팩은 화면 하나가 아니라
+모든 화면을 적습니다. 타임라인에는 커서와 창이 어떻게 움직였는지가 남습니다.
+무엇을 입력했는지는 결코 남지 않습니다.
 
 <p align="center">
   <a href="https://capturepack.dev/">
@@ -230,7 +229,7 @@ claude mcp add --transport http capturepack http://127.0.0.1:39393/mcp
 
 ## 상태
 
-**현재 공개 Windows 다운로드는 0.3.5입니다.** CapturePack은 아직 초기 단계
+**현재 공개 Windows 다운로드는 0.4.0입니다.** CapturePack은 아직 초기 단계
 프로젝트이므로, 문제를 보고할 때는 원본 팩을 보관해 두세요. 제품이 향하는 방향은
 [GOAL.md](GOAL.md)에, 다음에 올 것은 [ROADMAP.md](ROADMAP.md)에 있습니다.
 
@@ -251,7 +250,7 @@ claude mcp add --transport http capturepack http://127.0.0.1:39393/mcp
 - [MCP](docs/MCP.md)와 [temporal provider API](docs/temporal-provider-api.md) —
   저장된 팩에 대한 읽기 전용 접근과 맥락 제공자 연동입니다.
 
-CapturePack `0.3.5`는 애플리케이션 버전입니다. 팩의 `format_version`은 추가 방식의
+CapturePack `0.4.0`은 애플리케이션 버전입니다. 팩의 `format_version`은 추가 방식의
 포맷 변경을 따라 독립적으로 올라갑니다. 읽는 쪽은 앱 버전으로 포맷 지원 범위를
 추측하지 말고 [SPEC.md](SPEC.md)를 따라야 합니다.
 

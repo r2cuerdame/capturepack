@@ -32,9 +32,9 @@ AutomationId・プロセスを記録し、ブラウザーであれば表示さ�
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [ダウンロード](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-現在公開中のWindows版: **CapturePack 0.3.5**。ひとつのプロセスで動きます —
-ウォッチドッグは廃止しました。キャプチャは設定した保持期間に従って自動で
-片付き、ボックスの番号もアプリ任せではなく、自分で入力して決められます。
+現在公開中のWindows版: **CapturePack 0.4.0**。パックは、ひとつの画面と
+おまけではなく、すべての画面を宣言します。タイムラインに残るのは
+動いたもの — カーソルとウィンドウです。入力した文字は、決して残りません。
 
 <p align="center">
   <a href="https://capturepack.dev/">
@@ -239,7 +239,7 @@ claude mcp add --transport http capturepack http://127.0.0.1:39393/mcp
 
 ## 状態
 
-**現在公開中のWindows版のダウンロードは0.3.5です。** CapturePackはまだ初期段階の
+**現在公開中のWindows版のダウンロードは0.4.0です。** CapturePackはまだ初期段階の
 プロジェクトです。問題を報告するときは元のパックを残しておいてください。製品の
 ビジョンは[GOAL.md](GOAL.md)、この先の予定は[ROADMAP.md](ROADMAP.md)にあります。
 
@@ -259,7 +259,7 @@ claude mcp add --transport http capturepack http://127.0.0.1:39393/mcp
 - [MCP](docs/MCP.md)と[時間軸プロバイダーAPI](docs/temporal-provider-api.md)
   — 保存済みパックへの読み取り専用アクセスと、コンテキストプロバイダーの連携。
 
-CapturePack `0.3.5`はアプリケーションのバージョンです。パックの`format_version`は
+CapturePack `0.4.0`はアプリケーションのバージョンです。パックの`format_version`は
 追加的な形式変更を通じて独立に進化します。読み手はアプリのバージョンから対応形式を
 推測せず、[SPEC.md](SPEC.md)に従ってください。
 

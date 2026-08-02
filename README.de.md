@@ -34,10 +34,10 @@ lokaler, offener Ordner, der ohne KI, Konto und Cloud-Dienst funktioniert.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Herunterladen](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Aktuelle öffentliche Windows-Version: **CapturePack 0.3.5**. Ein Prozess statt
-zwei — der Watchdog ist weg. Aufnahmen räumen nach einer Aufbewahrungsregel,
-die du festlegst, selbst auf, und die Nummer eines Rahmens tippst du selbst,
-statt sie der App zu überlassen.
+Aktuelle öffentliche Windows-Version: **CapturePack 0.4.0**. Ein Pack
+beschreibt jetzt jeden Bildschirm, nicht mehr einen und die anderen
+nebenbei, und die Zeitleiste hält fest, was sich bewegt hat — den
+Mauszeiger und die Fenster. Nie, was du getippt hast.
 
 <p align="center">
   <a href="https://capturepack.dev/">
@@ -256,7 +256,7 @@ Werkzeuge, Client-Einrichtung und Einstellungen: [docs/MCP.md](docs/MCP.md).
 
 ## Status
 
-**0.3.5 ist der aktuelle öffentliche Windows-Download.** CapturePack ist
+**0.4.0 ist der aktuelle öffentliche Windows-Download.** CapturePack ist
 weiterhin ein Projekt in einem frühen Stadium: Hebe bei einer Fehlermeldung
 deshalb das ursprüngliche Pack auf, und sieh dir [GOAL.md](GOAL.md) für die
 Produktvision und [ROADMAP.md](ROADMAP.md) für die nächsten Schritte an.
@@ -279,7 +279,7 @@ statt sie hinter einem fest verdrahteten globalen Versatz zu verstecken.
   schreibgeschützter Zugriff auf gespeicherte Packs und die Anbindung von
   Kontextanbietern.
 
-CapturePack `0.3.5` ist die Version der Anwendung. Die `format_version` des Packs
+CapturePack `0.4.0` ist die Version der Anwendung. Die `format_version` des Packs
 entwickelt sich unabhängig davon durch additive Formatänderungen weiter; Leser
 müssen sich an [SPEC.md](SPEC.md) halten, statt die Formatunterstützung aus der
 App-Version abzuleiten.

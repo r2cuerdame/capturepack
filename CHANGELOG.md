@@ -4,6 +4,51 @@ All notable changes to CapturePack. Format follows [Keep a Changelog](https://ke
 this project uses [semantic versioning](https://semver.org/) for the app, and the pack
 format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 
+## 0.4.0 — 2026-08-02
+
+### Changed
+
+- **A pack describes every screen, not one screen plus others.** `media.displays`
+  is now always present — a single-monitor capture writes an array of one — so a
+  reader never has to know to go looking in an optional field to find out the
+  rest of the desk exists. `media.snapshot` and `media.replay` stay exactly where
+  they were and now mean, explicitly, the focused display's entry. Nothing is
+  duplicated and no older reader is affected; what changed is that a reader may
+  now rely on the array being there. Pack format 0.7.0
+  ([#75](https://github.com/r2cuerdame/capturepack/issues/75)).
+- Every display states the size of its own image, measured from the file that was
+  written rather than recomputed from its bounds. The recomputation is off by a
+  pixel at 1.25x and 1.5x scaling — which is where most mixed-DPI desks live — so
+  a box could be checked against a frame that was very slightly not the picture.
+- An annotation on a second screen is now defined, in the format itself, as
+  pixels in *that* screen's image. It always was; the rule lived in a tool
+  description rather than in the spec, so a reader doing the obvious thing —
+  trusting the one declared reference frame — was silently wrong. The validator
+  now refuses a box that leaves the frame of the display it names, even when it
+  fits the top-level frame.
+
+### Added
+
+- **The timeline records what moved.** `input.mouse.move`, `input.mouse.click`,
+  `input.window.focus`, `input.window.move` and `input.window.resize` are written
+  into `timeline.json` on the replay clock, so a reader can follow the session
+  without decoding a frame of video. Pack format 0.8.0, declared only when a
+  capture actually carries such an event
+  ([#12](https://github.com/r2cuerdame/capturepack/issues/12)).
+- **Never what you typed.** `input.key.*` stays reserved and is never written.
+  The rule that decides it is the one already governing the browser payload: a
+  screenshot contains every pixel you could see, so recording those adds no
+  exposure the pack did not already have — and a keystroke is not among them. A
+  password field renders dots. Recording the key would take back in the timeline
+  what the browser payload refuses on the same grounds. Every pack now says so in
+  its own documents, the validator refuses a pack carrying one, and nothing in
+  the capture host can produce one: there is no keyboard hook, and the only
+  virtual keys it reads are the three mouse buttons.
+- These events cost nothing new to collect. Window events are derived from
+  samples the app already takes about a hundred times a second; the cursor is one
+  extra read inside a measurement that was already happening, at no cost this
+  machine can detect. They are held for as long as the replay is, and no longer.
+
 ## 0.3.5 — 2026-08-02
 
 ### Removed

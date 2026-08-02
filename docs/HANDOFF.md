@@ -1,4 +1,4 @@
-# CapturePack handoff — after v0.3.5
+# CapturePack handoff — after v0.4.0
 
 Last verified: 2026-08-02 (Asia/Seoul)
 
@@ -67,7 +67,56 @@ pushed. Always begin with `git status --short --branch`, `git fetch`, and a
 non-destructive comparison before choosing a branch. Never reset or clean away
 an active worktree.
 
-## What 0.3.5 contains
+## What 0.4.0 contains
+
+**N screens is the normal case** ([#75](https://github.com/r2cuerdame/capturepack/issues/75),
+pack format **0.7.0**). `media.displays` is REQUIRED and always present — a single-display
+capture writes an array of one — and `media.snapshot`/`media.replay` are defined as
+aliases for the focused entry rather than as the capture. Old readers are unaffected;
+what binds is writers, and §13.1 now says a 0.7.0 reader MUST still accept a pack that
+predates the requirement.
+
+Two things in there are worth not re-litigating:
+
+- **Each entry states its own snapshot frame, MEASURED.** This looks redundant with
+  `bounds` × `scale` and is not: capture rounds with `Math.max(1, Math.round(...))`, so
+  the recomputation is off by a pixel at 1.25x and 1.5x — the scale factors this change
+  exists to get right, and the reason the pack-assertion cross-check already tolerated
+  ±1. A writer MUST populate these from the raster it actually wrote.
+- **The validator refuses a box that leaves the frame of the display it names**, even
+  when it fits `reference_*`. That was #74's remaining half, and it is checked from the
+  DECLARED frame so it still fails when that display's PNG cannot be read.
+
+**The timeline records what moved** ([#12](https://github.com/r2cuerdame/capturepack/issues/12),
+pack format **0.8.0**, declared only when a capture actually carries an input event).
+`input.mouse.move`, `input.mouse.click`, `input.window.focus`, `input.window.move`,
+`input.window.resize`. Derived from samples lane S already takes plus one cursor read
+inside the dump the host already performs — no new hook, no new thread, no measurable
+cost. Twice bounded: pruned to the surface ring's retention, capped at 4096 events. A
+trim DROPS events outside the kept range rather than clamping them, which would stack
+hundreds of cursor positions onto instant zero.
+
+**`input.key.*` stays reserved, and that is a decision with a reason.** GOAL.md's rule
+for the browser payload is the test: a screenshot contains every pixel the user could
+see, so recording those adds no exposure the pack did not already have — and a keystroke
+is not among them, because a password field renders dots. Recording it in `timeline.json`
+would take back what §11.4 refuses on identical grounds. It is checked from five
+directions rather than asserted: the ring emits only the five defined types whatever it
+is fed, `INPUT_EVENT_TYPES` holds no key type, no source file names one, the host has no
+keyboard hook and reads only the three mouse virtual-keys, and the validator FAILS a pack
+carrying one at any version. Every pack says so in its own generated docs.
+
+**Not closed, and do not close them on this work.**
+[#76](https://github.com/r2cuerdame/capturepack/issues/76) wants three REAL screens, one
+portrait, one scaled, focus on the third; this machine has two, so the case is covered
+synthetically in `check:n-display-format` and a fixture is not a desk. Everything that
+issue lists as likely to break on a third screen — board layout, the three numberings
+agreeing, a focused display that is neither index 1 nor 2, partial recorder failure,
+three encoders on one machine — is exactly what a fixture cannot prove.
+[#134](https://github.com/r2cuerdame/capturepack/issues/134) needs a picking-quality
+threshold argued from measurement; one chosen to make today's build pass measures nothing.
+
+## What 0.3.5 contained
 
 **One process.** The watchdog is gone, and with it the Start Menu fallback shortcut,
 the `superviseProcess` setting and the three tray announcements only supervision could
@@ -181,7 +230,7 @@ would have caught it the day it appeared.
   `runtime.lastError` values while bounded reconnect remains active.
 
 Application version and pack format version are different contracts.
-`core/package.json` is application version `0.3.5`; packs containing the
+`core/package.json` is application version `0.4.0`; packs containing the
 optional viewer declare a compatible format version of at least `0.5.0`.
 
 ## Known problem: video/context alignment
