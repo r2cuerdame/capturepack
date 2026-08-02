@@ -374,23 +374,46 @@ try {
 
   // --- the capture path a pack was produced by (#135, #62) --------------------
   //
-  // The assertion used to pass on an absent `cadence.backend`, and it was honest
-  // to: SPEC §5.3 makes the field OPTIONAL. What that cost showed up on the
-  // first green capture-e2e run — "no cadence backend declared" printed over a
-  // pack with a perfectly good replay, which is the one situation the field
-  // exists for. A writer always knows its backend, so a pack that carries a
-  // replay is now held to naming it.
-  const anonymousReplay = fixture(
-    'anonymous-replay',
+  // THE RULE THIS PINS WAS WRONG FOR ONE RELEASE, AND CI IS WHAT SAID SO.
+  //
+  // It read "a pack that carries a replay names its backend", on the reasoning
+  // that a writer always knows which path it chose. It does — and it has nowhere
+  // legal to put it. `backend` rides INSIDE `media.cadence`, whose `achieved_fps`
+  // and `worst_stall_ms` are REQUIRED by SPEC §5.3, and the writer omits the
+  // whole cadence when nothing could be measured because the same section forbids
+  // reporting a rate nobody measured. A 1144 ms replay on a CI runner did exactly
+  // that and turned the job red over a correct pack.
+  //
+  // What survives is the invariant the writer really guarantees: every cadence it
+  // builds carries a backend. So an absent cadence is accepted and a cadence
+  // without a backend is not — which is the case a regression would actually
+  // produce.
+  const noCadence = fixture(
+    'no-cadence',
     (manifest) => {
       withReplay(manifest)
       delete manifest.media.cadence
     },
     { 'replay.webm': webm({ count: 4, blockBytes: 2000, stepMs: 1000 }) },
   )
-  const anonymousVerdict = verdict(anonymousReplay, { expectReplay: true })
+  const noCadenceVerdict = verdict(noCadence, { expectReplay: true })
   check(
-    'a pack that carries a replay and will not say which capture path produced it is rejected',
+    'a replay whose rate could not be measured declares no cadence, and that is accepted',
+    noCadenceVerdict.ok,
+    noCadenceVerdict.failures.join(' | '),
+  )
+
+  const anonymousCadence = fixture(
+    'anonymous-cadence',
+    (manifest) => {
+      withReplay(manifest)
+      delete manifest.media.cadence.backend
+    },
+    { 'replay.webm': webm({ count: 4, blockBytes: 2000, stepMs: 1000 }) },
+  )
+  const anonymousVerdict = verdict(anonymousCadence, { expectReplay: true })
+  check(
+    'but a cadence that measured a rate and will not say which path produced it is rejected',
     !anonymousVerdict.ok && anonymousVerdict.failures.some((text) => text.includes('media.cadence.backend')),
     anonymousVerdict.failures.join(' | '),
   )

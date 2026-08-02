@@ -443,13 +443,22 @@ const KNOWN_BACKENDS = new Set(['chromium-desktop-capture', 'windows-gdi-bitblt'
  * what is asserted is that the pack names one of the two, and the value is
  * printed because that is the finding.
  *
- * THIS USED TO PASS ON AN ABSENT FIELD, and it was honest to: SPEC §5.3 makes
- * `backend` OPTIONAL, and the assertion refused to hold an absent field to a
- * value. The first green capture-e2e run showed what that costs — "no cadence
- * backend declared" over a pack with a perfectly good replay, which is the one
- * situation the field exists for and the one it left open. The writer always
- * knows its backend (it chose it), so a pack whose replay it produced is now
- * required to say so, and #62's fallback story gets a machine-checkable end.
+ * THE TIGHTENING THIS WANTED, AND THE ONE IT CAN ACTUALLY HAVE.
+ *
+ * The obvious rule — "a pack that carries a replay names its backend" — is
+ * false, and CI proved it: a 1144 ms replay produced no backend and the job went
+ * red on a correct pack. The writer does know which path it chose. It has
+ * nowhere legal to put it. `backend` rides INSIDE `media.cadence`, `cadenceSummary()`
+ * returns null when nothing could be measured, and SPEC §5.3 makes `achieved_fps`
+ * and `worst_stall_ms` REQUIRED members — so a backend with no measured rate to
+ * sit beside cannot be written without inventing the rate, which §5.3 forbids in
+ * the same breath ("a rate nobody measured MUST NOT be reported as a rate").
+ *
+ * What IS an invariant, and is asserted: cadence present implies backend present.
+ * `cadenceSummary()` sets it unconditionally on every cadence it builds, so a
+ * cadence without one is a real defect. That still gives #62's fallback story a
+ * machine-checkable end wherever a rate exists — which is every capture long
+ * enough to measure one, and the short ones were never the interesting case.
  *
  * A pack with NO replay is the other way round: SPEC §5.3 says cadence MUST be
  * absent there, because there are no bytes for it to describe.
@@ -469,15 +478,26 @@ function cadenceFindings(manifest, expectReplay) {
       },
     ]
   }
-  const declared = manifest?.media?.cadence?.backend
-  const findings = [
-    {
-      ok: KNOWN_BACKENDS.has(declared),
-      text:
-        `media.cadence.backend is ${JSON.stringify(declared ?? null)} — a pack that carries a replay names the ` +
-        'capture path that produced it (chromium-desktop-capture or windows-gdi-bitblt)',
-    },
-  ]
+  const cadence = manifest?.media?.cadence
+  const declared = cadence?.backend
+  const findings =
+    cadence === undefined || cadence === null
+      ? [
+          {
+            ok: true,
+            text:
+              'no media.cadence, so no backend to name — the recorder measured no rate, and §5.3 forbids ' +
+              'reporting one it did not measure',
+          },
+        ]
+      : [
+          {
+            ok: KNOWN_BACKENDS.has(declared),
+            text:
+              `media.cadence.backend is ${JSON.stringify(declared ?? null)} — a cadence names the capture path ` +
+              'that produced it (chromium-desktop-capture or windows-gdi-bitblt)',
+          },
+        ]
   for (const backend of backends) {
     if (backend === declared) continue
     findings.push({
