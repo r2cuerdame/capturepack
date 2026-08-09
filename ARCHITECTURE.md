@@ -16,7 +16,7 @@ sacrifice the 5-second workflow.
 
 ---
 
-## Current implementation baseline — 0.4.1
+## Current implementation baseline — 0.4.2
 
 The current Electron reference app has moved beyond the original MVP design
 record preserved later in this document:

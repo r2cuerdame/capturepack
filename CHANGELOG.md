@@ -4,6 +4,26 @@ All notable changes to CapturePack. Format follows [Keep a Changelog](https://ke
 this project uses [semantic versioning](https://semver.org/) for the app, and the pack
 format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 
+## 0.4.2 — 2026-08-09
+
+### Fixed
+
+- Region image captures now place Chrome DOM selections in the pixels that were
+  actually saved. On mixed-DPI desktops the previous path scaled CSS-pixel DOM
+  rectangles through a stale UI Automation client rectangle, so the highlight
+  could be displaced even though the selected element was correct. CapturePack
+  now maps through the captured browser viewport and the selected crop, and
+  refuses ambiguous cross-monitor geometry instead of drawing a plausible but
+  wrong box.
+- Refreshed the locked runtime dependency tree to patched `fast-uri`, `hono`,
+  and `js-yaml` releases; `npm audit --omit=dev` reports zero vulnerabilities.
+
+### Changed
+
+- Removed the unused adjacent-frame control-pick fallback. Object picks now
+  describe the exact displayed observation rather than guessing from a nearby
+  frame when a provider clock is ambiguous.
+
 ## 0.4.1 — 2026-08-02
 
 ### Fixed
