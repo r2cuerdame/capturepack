@@ -358,26 +358,6 @@ export class ObjectIndex {
   }
 
   /**
-   * Semantic controls known to exist in this exact frame.
-   *
-   * Adjacent-time picking uses this only as an identity/lifetime guard. It
-   * never substitutes these rectangles for the point hit, and callers opt in
-   * to the deliberately deferred Document/Contents rung exactly as normal
-   * point probing does.
-   */
-  controlObjects(
-    surfaceId?: string,
-    includeLargeSemanticRefinements = false,
-  ): readonly PickableObject[] {
-    const source = includeLargeSemanticRefinements
-      ? [...this.objects, ...this.deferredLargeSemantics]
-      : this.objects
-    return surfaceId === undefined
-      ? source
-      : source.filter((object) => object.surfaceId === surfaceId)
-  }
-
-  /**
    * Builds the index for one display's slice of a ContextFrame. Candidates are
    * clipped to the snapshot and filtered (see the constants above); controls
    * are stored area-ascending so a scan meets the smallest first, windows z

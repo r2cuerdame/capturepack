@@ -27,10 +27,6 @@ const immediateContextRequest = functionBody(
   'requestContextFrameNow',
   'requestContextFrames',
 )
-const boundedObservedRequest = functionBody(
-  'requestBoundedObservedControlPick',
-  'scheduleContextFrame',
-)
 const beginPending = functionBody('beginPendingBox', 'selectBox')
 const answerProbe = functionBody('answerProbe', 'offerHover')
 const pointerDownStart = renderer.indexOf("overlay.addEventListener('pointerdown'")
@@ -134,57 +130,11 @@ const checks = [
       !immediateContextRequest.includes('window.setTimeout'),
   ],
   [
-    'adjacent observed picking is bounded by two configured video-frame intervals',
-    boundedObservedRequest.includes('const frameIntervalMs = 1000 / fps') &&
-      boundedObservedRequest.includes('requestedTimeMs - frameIntervalMs * 2') &&
-      boundedObservedRequest.includes('requestedTimeMs + frameIntervalMs * 2') &&
-      !boundedObservedRequest.includes('30'),
-  ],
-  [
-    'adjacent picking inspects frames without replacing hover or the current index',
-    boundedObservedRequest.includes('objectIndexForFrame(on.index, frame)') &&
-      boundedObservedRequest.includes('boundedObservedPickFallback({') &&
-      boundedObservedRequest.includes(
-        'exactControls: exactIndex.controlObjects(',
-      ) &&
-      !boundedObservedRequest.includes('exactWindow.surfaceId') &&
-      !boundedObservedRequest.includes('buildObjectIndex(') &&
-      !boundedObservedRequest.includes('setHoverObject('),
-  ],
-  [
-    'exact semantic hits, Shift/window picks, repeat clicks and manual boxes bypass fallback',
-    pointerDown.includes("candidate.level === 'control'") &&
-      pointerDown.includes("(picked === null || picked.level === 'window')") &&
-      pointerDown.includes('!windowLevelKey') &&
-      pointerDown.includes('!semanticPointHit') &&
-      pointerDown.includes('!repeat') &&
-      pointerDown.includes('safeDelayedBox'),
-  ],
-  [
-    'a moved-away target may recover when the exact point is background or empty',
-    pointerDown.includes("(picked === null || picked.level === 'window')") &&
-      pointerDown.includes('exactIndex.controlObjects(') &&
-      !pointerDown.includes('picked.surfaceId'),
-  ],
-  [
-    'a stale adjacent-pick answer cannot move selection after click, seek, or session change',
-    pointerDown.includes('observedPickSeq !== observedPickRequestSeq') &&
-      pointerDown.includes('contextSessionId !== sessionId') &&
-      pointerDown.includes('objectIndexOf(hit.d.index) !== exactIndex') &&
-      pointerDown.includes('!objectIndexMatchesPresentedFrame(hit.d.index)') &&
-      pointerDown.includes('state.selectedId !== selectedId'),
-  ],
-  [
-    // 0.4.0: the pick instant still comes from the OBSERVED sample rather than
-    // the playhead (#81/#85/#111), and it is now spent entirely on the frame
-    // whose geometry the box takes. There is no longer a stored pick time,
-    // because there is no longer anything that could re-anchor the box away
-    // from it — see GOAL "The still is the context".
-    'the pick reads its instant from the observed sample, not the playhead',
-    renderer.includes('fallback?.observedAtMs') &&
-      beginPending.includes(
-        'const pickedAt = observedPickedAtMs ?? presentedOn(on.index)',
-      ) &&
+    // A picked box is anchored to the frame presented on the clicked display
+    // (#81/#85/#111), with no separate pick clock that could later move its
+    // geometry away from that still — see GOAL "The still is the context".
+    'the pick reads its instant from the presented frame, not the playhead',
+    beginPending.includes('const pickedAt = presentedOn(on.index)') &&
       !beginPending.includes('pickedAtMs.set('),
   ],
 ]

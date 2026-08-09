@@ -89,11 +89,6 @@ check(
   'a still still builds its index',
   body(editor, 'function buildObjectIndexes(').includes('buildObjectIndex(d.index, frame)'),
 )
-check(
-  'the still-only escape hatch stays video-gated and therefore unreachable',
-  body(editor, 'async function requestBoundedObservedControlPick(').includes("captureKind !== 'video'"),
-  'it needs a non-null ObjectIndex, which a video can no longer produce',
-)
 
 console.log(failed === 0 ? '\nvideo-no-picking: OK' : `\nvideo-no-picking: ${failed} FAILED`)
 process.exit(failed === 0 ? 0 : 1)

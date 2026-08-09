@@ -203,10 +203,11 @@ async function main(): Promise<void> {
     ])
     const want = truth(element.x, element.y, element.width, element.height)
     const at = centre(want)
-    const top = index.stackAt(at.x, at.y).offered[0]
+    const offered = index.stackAt(at.x, at.y).offered
+    const top = offered[0]
     report('the picked <main> is offered at all',
-      index.controlObjects(undefined, true).some((o) => o.authority === 'document-native'),
-      `index holds ${String(index.controlObjects(undefined, true).length)} control(s)`)
+      offered.some((o) => o.authority === 'document-native'),
+      offered.map(describe).join(' | '))
     report('and it is what the click takes, ahead of the window rung',
       top?.authority === 'document-native', describe(top))
   }

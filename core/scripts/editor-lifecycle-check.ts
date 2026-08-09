@@ -325,10 +325,9 @@ console.log('\nHistory -> replay editor reopen contract')
   //
   // Both capture flows did; the re-edit flow never did, so a re-edit was the
   // one session that could not be asked what it had done. A failed display
-  // decode, a failed bounded pick, and every diagnostic added below went
-  // nowhere on exactly the path a user reports a problem from. Counting is the
-  // point: the next flow that creates an editor gets the same treatment or this
-  // fails.
+  // decode, a failed object pick, and every diagnostic added below went nowhere
+  // on exactly the path a user reports a problem from. Counting is the point:
+  // the next flow that creates an editor gets the same treatment, or this fails.
   const sessionSource = source('src/main/session.ts')
   const editorWindows = sessionSource.split('createEditorWindow(').length - 2 // minus the definition
   const forwarders = sessionSource.split("webContents.on('console-message'").length - 1
@@ -362,7 +361,6 @@ console.log('\nHistory -> replay editor reopen contract')
     ['the editor is still loading', 'the editor has not finished loading'],
     ['the point belongs to no display', 'the point belongs to no display'],
     ['the context frame has not settled', 'the context frame for this display has not settled'],
-    ['a deferred answer went stale', 'the deferred object answer was no longer about this click'],
   ] as const) {
     check(`a silent pointerdown return names its reason: ${gate}`, pointerDown.includes(needle))
   }

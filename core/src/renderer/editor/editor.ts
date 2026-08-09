@@ -54,10 +54,9 @@ import {
   objectLabel,
   pickIdentityOf,
 } from './objects'
-import type { PickableObject, PickIdentity, PickLevel } from './objects'
+import type { PickableObject, PickIdentity } from './objects'
 import {
   annotationAlreadyAnnotatesPick,
-  boundedObservedPickFallback,
   existingAnnotationForPick,
   pickBeatsBoxPolicy,
 } from './objectPickPolicy'
@@ -305,10 +304,6 @@ const pendingDisplayContextFrames = new Map<number, ContextFrame>()
 const frameTimesByDisplay = new Map<number, number>()
 let frameRequestSeq = 0
 let frameSettleTimer: number | null = null
-// A bounded adjacent-sample click is asynchronous. Any later click/Esc/seek
-// invalidates it so an old answer can never create a box after the user moved
-// on.
-let observedPickRequestSeq = 0
 let hoverObject: PickableObject | null = null
 // THE LOSING CANDIDATES ARE KEPT (#66). Tab / Shift+Tab cycle the objects at
 // the hovered point; `hoverStack` is that list and `hoverStackIndex` is where
@@ -1567,7 +1562,6 @@ function beginPendingBox(
   on: BoardDisplay,
   b: Box,
   picked?: PickableObject,
-  observedPickedAtMs?: number,
 ): void {
   // ONE BOX PER OBJECT PER MOMENT (#101).
   //
@@ -1619,11 +1613,7 @@ function beginPendingBox(
   // every captured display at once and they present independently, so a click
   // on the second monitor's picture must be timed by that monitor's picture —
   // the same frame the rectangle above was read out of.
-  // Ordinarily the object is observed in the exact displayed ContextFrame.
-  // An ambiguous source-start clock may use one bounded adjacent observation;
-  // keep that actual sample time as the existing picked_at_ms provenance
-  // instead of inventing and persisting a clock correction.
-  const pickedAt = observedPickedAtMs ?? presentedOn(on.index)
+  const pickedAt = presentedOn(on.index)
   if (scrub) {
     // "Now" (the capture instant) anchors at the end of the replay; a scrubbed
     // stamp is clamped to the manifest's wall-clock replay_duration_ms — the
@@ -2797,110 +2787,6 @@ function requestContextFrames(
     })
 }
 
-interface ObservedPickSearchResult {
-  readonly picked: PickableObject
-  readonly observedAtMs: number
-}
-
-/**
- * Search no farther than two actual video frames around the displayed one.
- *
- * This is a click-only escape hatch for a source whose video↔context start
- * latency was ambiguous. It does not update the current ObjectIndex, hover,
- * playhead or selection; each returned frame is inspected off to the side and
- * the pure policy below decides whether one directly observed control is safe.
- */
-async function requestBoundedObservedControlPick(
-  on: BoardDisplay,
-  point: { x: number; y: number },
-  exactIndex: ObjectIndex,
-  requestedTimeMs: number,
-  includeLargeSemanticRefinements: boolean,
-): Promise<ObservedPickSearchResult | null> {
-  const sessionId = contextSessionId
-  if (
-    sessionId === null ||
-    captureKind !== 'video' ||
-    !Number.isFinite(fps) ||
-    fps <= 0
-  ) {
-    return null
-  }
-  const frameIntervalMs = 1000 / fps
-  const times = [
-    requestedTimeMs - frameIntervalMs * 2,
-    requestedTimeMs - frameIntervalMs,
-    requestedTimeMs + frameIntervalMs,
-    requestedTimeMs + frameIntervalMs * 2,
-  ]
-    .map(normalizedContextTimeMs)
-    .filter(
-      (timeMs, index, all) =>
-        timeMs >= 0 &&
-        timeMs <= replayDurationMs &&
-        timeMs !== requestedTimeMs &&
-        all.indexOf(timeMs) === index,
-    )
-  if (times.length === 0) return null
-
-  const answers = await Promise.all(
-    times.map(async (timeMs) => {
-      try {
-        const frame = await window.editorBridge.requestContextFrame({
-          sessionId,
-          timeMs,
-        })
-        if (
-          frame === null ||
-          frame.sessionId !== sessionId ||
-          normalizedContextTimeMs(frame.requestedTimeMs) !== timeMs
-        ) {
-          return null
-        }
-        return frame
-      } catch (err) {
-        console.error(
-          `capturepack: adjacent observed-pick frame ${timeMs} failed:`,
-          err,
-        )
-        return null
-      }
-    }),
-  )
-  const observations = answers.map((frame) => {
-    if (frame === null) {
-      return {
-        coverage: 'none' as const,
-        pointPicks: [] as readonly PickableObject[],
-      }
-    }
-    const index = objectIndexForFrame(on.index, frame)
-    return {
-      coverage: frame.accuracy.coverage,
-      pointPicks:
-        index
-          ?.stackAt(
-            point.x,
-            point.y,
-            false,
-            0,
-            includeLargeSemanticRefinements,
-          )
-          .offered.filter((picked) => picked.level === 'control') ?? [],
-    }
-  })
-  return boundedObservedPickFallback({
-    requestedTimeMs,
-    frameIntervalMs,
-    exactPointPick: null,
-    exactControls: exactIndex.controlObjects(
-      undefined,
-      includeLargeSemanticRefinements,
-    ),
-    observations,
-  })
-}
-
 /** Schedules a re-query for the position the scrub has settled on. */
 function scheduleContextFrame(): void {
   if (contextSessionId === null || scrub === null) return
@@ -3057,12 +2943,6 @@ function pickBeatsBox(picked: PickableObject, a: Annotation, at: AimAt): boolean
     pickedArea: picked.area,
     boxArea: a.bounds.width * a.bounds.height,
   })
-}
-
-function semanticPickLevel(a: Annotation): PickLevel | undefined {
-  const stored = a.target?.['level']
-  if (stored === 'control' || stored === 'window') return stored
-  return pickedObjectIdentities.get(a.annotation_id)?.level
 }
 
 /** Hover probe. Cheap by design: nothing happens until the pointer moves. */
@@ -3662,66 +3542,6 @@ function applyResize(
 }
 
 /**
- * Completes the click that paused for an adjacent observed-sample query.
- *
- * Eligibility guarantees an existing box, if any, is semantic and therefore
- * never starts a drag. This delayed path can select it or create a semantic
- * box, but it cannot move manual geometry or the timeline cursor.
- */
-function finishObservedPickClick(
-  on: BoardDisplay,
-  point: { x: number; y: number },
-  ui: number,
-  box: Annotation | null,
-  exactPick: PickableObject | null,
-  fallback: ObservedPickSearchResult | null,
-): void {
-  const picked = fallback?.picked ?? exactPick
-  if (picked === null) {
-    if (box !== null) {
-      selectBox(box.annotation_id, on)
-    } else {
-      state.selectedId = null
-      if (objectPickingCanSpeak()) {
-        const answer = emptyAnswer(on)
-        showObjectAnswer(answer.kind, answer.text)
-      }
-    }
-    syncLanes()
-    schedulePaint()
-    return
-  }
-  const pickWins =
-    box === null ||
-    pickBeatsBox(picked, box, {
-      x: point.x,
-      y: point.y,
-      ui,
-      repeat: false,
-    })
-  if (box !== null && !pickWins) {
-    if (!annotatesPick(box, picked)) {
-      showObjectHintOnce('boxTookClick', t('editor.objectBoxTookClick'), 'answer')
-    }
-    selectBox(box.annotation_id, on)
-    syncLanes()
-    schedulePaint()
-    return
-  }
-
-  state.selectedId = null
-  beginPendingBox(
-    on,
-    { x: picked.x, y: picked.y, w: picked.width, h: picked.height },
-    picked,
-    fallback?.observedAtMs,
-  )
-  clickPickDraftId = pendingDraft()?.annotation_id ?? null
-  syncLanes()
-  schedulePaint()
-}
-
-/**
  * A CANVAS CLICK THAT CHANGED NOTHING HAS TO SAY SO (#106).
  *
  * Several gates in `pointerdown` return before anything can happen — the editor
@@ -3768,8 +3588,6 @@ overlay.addEventListener('pointerdown', (e) => {
   // happens: not a paused replay, not a dismissed duration popover, and
   // certainly not a selection change.
   if (e.button === 1) return
-  // Any new canvas gesture supersedes an adjacent-frame pick still in flight.
-  observedPickRequestSeq += 1
   scrub?.pause() // annotating targets a moment; freeze it
   closeDurationEditor(false) // any canvas interaction dismisses it, unapplied
   setHoverObject(null, null) // the outline has served its purpose once it is used
@@ -3785,7 +3603,6 @@ overlay.addEventListener('pointerdown', (e) => {
     return
   }
   if (e.button !== 0) return
-  const observedPickSeq = observedPickRequestSeq
   const repeat = isRepeatClick(e)
   // A REPEAT click is the second half of one gesture, and the pending box the
   // FIRST half opened was never asked for: "double-click a box to edit its
@@ -3881,77 +3698,6 @@ overlay.addEventListener('pointerdown', (e) => {
   }
   const box = boxUnder(hit.d, p.x, p.y)
   const picked = hoverStack[hoverStackIndex] ?? null
-  const exactIndex = objectIndexOf(hit.d.index)
-  const requestedTimeMs = frameTimesByDisplay.get(hit.d.index)
-  const semanticPointHit = hoverStack.some(
-    (candidate) => candidate.level === 'control',
-  )
-  const includeLargeSemanticRefinements =
-    box !== null && semanticPickLevel(box) === 'window'
-  const safeDelayedBox =
-    box === null ||
-    (semanticPickLevel(box) === 'window' && coreOwnsGeometry(box))
-  // When the exact frame has no CONTROL at this pixel, a static-start source
-  // with ambiguous latency may have the pixels one observed frame either side
-  // of its context sample. Search off-thread before accepting the window floor,
-  // but never delay a deliberate Shift/window pick, a repeat, an edge grab, a
-  // manual box, or an exact semantic hit.
-  if (
-    (picked === null || picked.level === 'window') &&
-    exactIndex !== null &&
-    requestedTimeMs !== undefined &&
-    !windowLevelKey &&
-    !semanticPointHit &&
-    !repeat &&
-    safeDelayedBox &&
-    (box === null || !onBoxEdge(box, p.x, p.y, ui)) &&
-    exactIndex.controlObjects(
-      undefined,
-      includeLargeSemanticRefinements,
-    ).length > 0
-  ) {
-    const sessionId = contextSessionId
-    const selectedId = state.selectedId
-    void requestBoundedObservedControlPick(
-      hit.d,
-      p,
-      exactIndex,
-      requestedTimeMs,
-      includeLargeSemanticRefinements,
-    )
-      .then((fallback) => {
-        // The answer belongs only to this untouched click and displayed frame.
-        // A seek, later click, context refresh, selection change or session
-        // replacement makes it stale even when its own provider answer is good.
-        if (
-          observedPickSeq !== observedPickRequestSeq ||
-          contextSessionId !== sessionId ||
-          objectIndexOf(hit.d.index) !== exactIndex ||
-          frameTimesByDisplay.get(hit.d.index) !== requestedTimeMs ||
-          !objectIndexMatchesPresentedFrame(hit.d.index) ||
-          state.selectedId !== selectedId ||
-          drag !== null ||
-          textSession !== null
-        ) {
-          // This click was deferred and its answer is no longer about the state
-          // it was asked in. Discarding it is right; doing so without a word is
-          // what makes "I clicked and nothing happened" unanswerable.
-          reportInertClick(
-            'the deferred object answer was no longer about this click',
-            `display ${hit.d.index}`,
-          )
-          return
-        }
-        finishObservedPickClick(hit.d, p, ui, box, picked, fallback)
-      })
-      .catch((err: unknown) => {
-        // Context is optional and cannot take the editor down. The exact window
-        // remains available on the next click if this bounded query itself
-        // failed unexpectedly.
-        console.error('capturepack: bounded observed control pick failed:', err)
-      })
-    return
-  }
   const pickWins =
     picked !== null && (box === null || pickBeatsBox(picked, box, { x: p.x, y: p.y, ui, repeat }))
   if (box !== null && !pickWins) {
@@ -4388,7 +4134,6 @@ function syncPanCursor(): void {
 // ---------------------------------------------------------------------------
 
 window.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') observedPickRequestSeq += 1
   // The tutorial is modal, so it answers keys before anything else can: Enter,
   // Escape and Space all mean "got it". Nothing behind it is reachable while
   // it is up, which is the point — a first-time user pressing keys at random

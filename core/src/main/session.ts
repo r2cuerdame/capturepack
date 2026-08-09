@@ -3035,12 +3035,11 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
   // THE SAME DIAGNOSTICS, ON THE PATH THAT NEEDED THEM MOST (#106).
   //
   // Both capture flows forward the editor's own console lines to the log. This
-  // one never did, so a re-edit was the one session that could not be asked
-  // what it had done: a failed display decode, a failed bounded pick, any
-  // `capturepack:` line the editor emitted between "editor shown" and "editor
-  // closed" went nowhere. A report of the editor misbehaving on reopen was
-  // therefore unanswerable from the machine it happened on, which is the whole
-  // reason this forwarding exists.
+  // one never did, so a re-edit was the one session that could not be asked what
+  // it had done: a failed display decode, a failed object pick, or any
+  // `capturepack:` line emitted while the editor was open went nowhere. A report
+  // of the editor misbehaving on reopen was therefore unanswerable from the
+  // machine it happened on, which is the whole reason this forwarding exists.
   editor.webContents.on('console-message', (_event, level, message) => {
     if (!message.startsWith('capturepack:')) return
     if (level >= 2) logWarn(`[editor] ${message}`)
