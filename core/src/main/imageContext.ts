@@ -126,11 +126,12 @@ export function imageWindowObservation(
     if (bounds === null) continue
     // THE CLIENT RECTANGLE, MAPPED THE SAME WAY (#131).
     //
-    // A DOM element is measured in viewport CSS pixels, and the ONLY thing that
-    // turns those into snapshot pixels is the browser's client rectangle: the
-    // scale is `client.width / viewport.width` and the chrome height is
-    // `client.height - viewport.height * scale`. Both are derived, neither is
-    // assumed — and without a client rectangle neither can be derived at all.
+    // A DOM element is measured in viewport CSS pixels. The normal bridge into
+    // snapshot pixels is the browser's client rectangle: scale is
+    // `client.width / viewport.width` and chrome height is
+    // `client.height - viewport.height * scale`. An affine region still has a
+    // second measured bridge — its persisted desktop-DIP crop plus the page's
+    // screen anchor — but every other still still needs this rectangle.
     //
     // A still used to drop this unconditionally, so a captured page reached the
     // pack complete and could not be placed on the picture: 477 elements, a

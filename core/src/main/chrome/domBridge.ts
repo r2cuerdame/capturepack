@@ -54,10 +54,10 @@ export interface DomViewport {
   height: number
   dpr: number
   /**
-   * The window's own screen position as the page sees it, CSS px. A FALLBACK
-   * only: on a scaled display Chrome reports these in the OS's scaled space,
-   * which is not the snapshot's space, so it is used only when the ring holds
-   * no sample of this window. Null when the browser did not report it.
+   * The window's own screen position as the page sees it, in Windows' scaled
+   * desktop space. An affine region still persists a crop in that same space
+   * and can map this anchor exactly; other capture shapes use the ring's client
+   * rectangle. Null when the browser did not report it.
    */
   screenX: number | null
   screenY: number | null

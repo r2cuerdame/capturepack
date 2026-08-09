@@ -167,6 +167,7 @@ function packDisplays(dirPath: string, manifest: Manifest): ContextDisplayTarget
     screens: Array.isArray(manifest.environment?.screens) ? manifest.environment.screens : [],
     displays: manifest.media?.displays,
     loadedDisplays: loaded,
+    cropBounds: manifest.media?.crop_bounds,
   })
 }
 

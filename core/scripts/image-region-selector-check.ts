@@ -248,6 +248,32 @@ same(
   'the 1.5x display uses its own frozen raster dimensions',
 )
 
+// The exact region from CapturePack_2026-08-09_171702. This proves the user's
+// drag/crop itself is sound: its persisted virtual-desktop DIP edges reproduce
+// the 1957x1866 source raster exactly. The fault found in that pack begins later,
+// when DOM CSS rectangles are projected onto these pixels.
+const reportedRegion = resolveImageDesktopRegion(
+  [left, primary],
+  mixedDesktop,
+  {
+    x: 1255.3333333333333,
+    y: 79.33333333333333,
+    width: 1304.6666666666667,
+    height: 1244,
+  },
+)
+same(
+  reportedRegion?.compositePixelRect,
+  { x: 3083, y: 119, width: 1957, height: 1866 },
+  'the reported mixed-DPI region resolves to the exact saved snapshot pixels',
+)
+check(
+  reportedRegion !== null
+    && Math.abs(reportedRegion.compositePixelRect.width / reportedRegion.desktopDipRect.width - 1.5) < 1e-9
+    && Math.abs(reportedRegion.compositePixelRect.height / reportedRegion.desktopDipRect.height - 1.5) < 1e-9,
+  'the reported crop retains one affine 1.5x desktop-DIP mapping for semantic placement',
+)
+
 console.log('EDGE COVERAGE + CLAMP')
 const fractional = resolveImageRegionIntent(primary, {
   mode: 'region',

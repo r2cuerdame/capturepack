@@ -20,13 +20,13 @@
 //   from the PAGE (extension 0.1.4's `viewport`): the viewport's size in CSS
 //     pixels, so the CSS-pixel-to-snapshot-pixel scale can be derived rather
 //     than assumed.
-//   from the RING (`SurfaceInfo.clientBounds`): the browser window's DRAWABLE
-//     rectangle, already in this display's snapshot pixels, observed by the
-//     surface host at the same instants everything else in a pack is.
+//   from the RING (`SurfaceInfo.clientBounds`): normally, the browser window's
+//     DRAWABLE rectangle in this display's snapshot pixels; or, for an affine
+//     region still, from the persisted virtual-desktop DIP crop plus the page's
+//     own screen/outer rectangle.
 //
-// Neither half can do it alone, and nothing here is guessed from a constant —
-// no hard-coded tab-strip height, no assumed devicePixelRatio, no scale factor
-// baked in. See `place()` for the derivation.
+// Nothing here is guessed from a toolbar constant. See `place()` for both
+// measured derivations and the conditions under which each is allowed.
 import type {
   ContextCandidate,
   FrameContext,
@@ -156,16 +156,21 @@ export class ChromeDomProvider implements TemporalContextProvider {
    * lane's `SurfaceHost` uses.
    */
   private readonly surfacesAt: (timeMs: number) => readonly SurfaceInfo[]
+  private readonly snapshotPixelsPerDipAt: (display: number) => number | null
+  private readonly snapshotDipBoundsAt: (display: number) => Rect | undefined
   private placedCache: PlacedPick[] | null = null
   private refusalCache: DomPlacementRefusal[] = []
 
   constructor(
     events: readonly DomEvent[],
     surfacesAt: (timeMs: number) => readonly SurfaceInfo[],
-    _snapshotPixelsPerDipAt: (display: number) => number | null = () => null,
+    snapshotPixelsPerDipAt: (display: number) => number | null = () => null,
+    snapshotDipBoundsAt: (display: number) => Rect | undefined = () => undefined,
   ) {
     this.events = events
     this.surfacesAt = surfacesAt
+    this.snapshotPixelsPerDipAt = snapshotPixelsPerDipAt
+    this.snapshotDipBoundsAt = snapshotDipBoundsAt
   }
 
   /** Late-arriving events (the bridge keeps receiving during an open editor). */
@@ -408,7 +413,29 @@ export class ChromeDomProvider implements TemporalContextProvider {
       | null = null
     let derived = 0
     for (const surface of matches) {
-      const candidate = rectAtPick(surface, element.bounds, viewport)
+      const display = surface.display
+      const anchored =
+        display === undefined
+          ? undefined
+          : rectAtDesktopDipAnchor(
+              element.bounds,
+              viewport,
+              this.snapshotPixelsPerDipAt(display),
+              this.snapshotDipBoundsAt(display),
+            )
+      // A one-monitor region pack records the exact virtual-desktop DIP crop.
+      // In that case Chrome's own screen/outer geometry and DPR place viewport
+      // CSS pixels directly onto the raster. Prefer that complete transform to
+      // a Win32 client rectangle: the latter can be stale or cross-DPI
+      // virtualized while still looking numerically plausible (#137).
+      //
+      // `undefined` means the pack has no affine page anchor (old pack, video,
+      // mixed-DPI desktop composition), so the measured client rectangle stays
+      // the fallback. `null` means an anchor was present but contradicted itself;
+      // do not turn that refusal into a confidently wrong fallback rectangle.
+      const candidate = anchored === undefined
+        ? rectAtPick(surface, element.bounds, viewport)
+        : anchored
       if (candidate === null) continue
       derived += 1
       const overlap = intersectionArea(candidate.rect, surface.bounds)
@@ -644,6 +671,107 @@ function rectAtPick(
     height: Math.max(1, Math.round(element.height * k)),
   }
   return validRect(rect) ? { client, rect } : null
+}
+
+/**
+ * Places viewport CSS pixels through an image region's persisted desktop crop.
+ *
+ * Chrome reports screenX/screenY and outerWidth/outerHeight in Windows' scaled
+ * desktop space. The crop is in that same virtual-desktop DIP space. Page
+ * rectangles themselves are CSS pixels, so DPR — not the monitor scale — maps
+ * their sizes to native snapshot pixels. The horizontal outer/client
+ * difference yields one native frame inset; Chromium's viewport is bottom
+ * anchored, so the same inset is removed from the bottom before its top is
+ * derived. No browser-toolbar constant is involved.
+ *
+ * Return values deliberately distinguish unavailable (`undefined`) from an
+ * internally contradictory anchor (`null`).
+ */
+function rectAtDesktopDipAnchor(
+  element: DomElement['bounds'],
+  viewport: DomViewport,
+  snapshotPixelsPerDip: number | null,
+  snapshotDipBounds: Rect | undefined,
+): { client: Rect; rect: Rect } | null | undefined {
+  const { screenX, screenY, outerWidth, outerHeight } = viewport
+  if (
+    snapshotDipBounds === undefined
+  ) {
+    return undefined
+  }
+  if (
+    snapshotPixelsPerDip === null
+    || screenX === null
+    || screenY === null
+    || outerWidth === null
+    || outerHeight === null
+  ) {
+    return null
+  }
+  if (
+    !validFinite(snapshotPixelsPerDip)
+    || snapshotPixelsPerDip <= 0
+    || !validRect(snapshotDipBounds)
+    || !validFinite(screenX)
+    || !validFinite(screenY)
+    || !validFinite(outerWidth)
+    || !validFinite(outerHeight)
+    || outerWidth <= 0
+    || outerHeight <= 0
+    || !validFinite(viewport.width)
+    || !validFinite(viewport.height)
+    || !validFinite(viewport.dpr)
+    || viewport.width <= 0
+    || viewport.height <= 0
+    || viewport.dpr <= 0
+    || !validFinite(element.x)
+    || !validFinite(element.y)
+    || !validFinite(element.width)
+    || !validFinite(element.height)
+    || element.width <= 0
+    || element.height <= 0
+  ) {
+    return null
+  }
+
+  const outerWidthPx = outerWidth * snapshotPixelsPerDip
+  const outerHeightPx = outerHeight * snapshotPixelsPerDip
+  const viewportWidthPx = viewport.width * viewport.dpr
+  const viewportHeightPx = viewport.height * viewport.dpr
+  const frameInsetPx = (outerWidthPx - viewportWidthPx) / 2
+  const chromeAbovePx = outerHeightPx - frameInsetPx - viewportHeightPx
+  if (
+    !Number.isFinite(outerWidthPx)
+    || !Number.isFinite(outerHeightPx)
+    || !Number.isFinite(viewportWidthPx)
+    || !Number.isFinite(viewportHeightPx)
+    || !Number.isFinite(frameInsetPx)
+    || !Number.isFinite(chromeAbovePx)
+    || frameInsetPx < 0
+    || frameInsetPx >= outerWidthPx / 2
+    || chromeAbovePx < 0
+    || chromeAbovePx >= outerHeightPx
+  ) {
+    return null
+  }
+
+  const viewportX =
+    (screenX - snapshotDipBounds.x) * snapshotPixelsPerDip + frameInsetPx
+  const viewportY =
+    (screenY - snapshotDipBounds.y) * snapshotPixelsPerDip + chromeAbovePx
+  const client: Rect = {
+    x: Math.round(viewportX),
+    y: Math.round(viewportY),
+    width: Math.max(1, Math.round(viewportWidthPx)),
+    height: Math.max(1, Math.round(viewportHeightPx)),
+  }
+  const rect: Rect = {
+    x: Math.round(viewportX + element.x * viewport.dpr),
+    y: Math.round(viewportY + element.y * viewport.dpr),
+    width: Math.max(1, Math.round(element.width * viewport.dpr)),
+    height: Math.max(1, Math.round(element.height * viewport.dpr)),
+  }
+  return validRect(client) && validRect(rect) ? { client, rect } : null
 }
 
 function accuracyAtPick(requestedTimeMs: number, pickTimeMs: number): TemporalAccuracy {

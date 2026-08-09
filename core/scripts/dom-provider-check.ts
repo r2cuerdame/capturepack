@@ -145,6 +145,103 @@ async function main(): Promise<void> {
     )
   }
 
+  // THE OWNER'S REGION-CAPTURE EVIDENCE (#137). The saved Win32 client
+  // rectangle is internally plausible but wrong for the pixels: using it puts
+  // section.office3-dash at x=205. Chrome's page anchor plus the persisted
+  // virtual-desktop DIP crop puts the same DOM CSS rectangle at x=399, exactly
+  // where snapshot.png changes from the sidebar to that section.
+  {
+    const cropBounds: Rect = {
+      x: 1255.3333333333333,
+      y: 79.33333333333333,
+      width: 1304.6666666666667,
+      height: 1244,
+    }
+    const ev: DomEvent = {
+      tMs: 0,
+      type: 'dom.element.selected',
+      tab: { url: 'http://127.0.0.1:3000/', title: 'LoopOffice — 프로젝트 방향 원장' },
+      element: {
+        tag: 'section',
+        selector: 'section.office3-dash',
+        bounds: { x: 240, y: 0, width: 558, height: 1233 },
+      },
+      viewport: {
+        width: 1278,
+        height: 1264,
+        dpr: 1.5,
+        screenX: 1274,
+        screenY: 6,
+        outerWidth: 1292,
+        outerHeight: 1392,
+      },
+    }
+    const staleClient: SurfaceInfo = {
+      surfaceId: 'reported-chrome',
+      hwnd: '658358',
+      bounds: { x: 0, y: 0, width: 1731, height: 1866 },
+      clientBounds: { x: -148, y: -105, width: 1879, height: 2049 },
+      space: 'display-snapshot',
+      display: 1,
+      zOrder: 1,
+      visible: true,
+      minimized: false,
+      foreground: false,
+      executableName: 'chrome.exe',
+      windowTitle: 'LoopOffice — 프로젝트 방향 원장 - Chrome',
+      className: 'Chrome_WidgetWin_1',
+    }
+    const legacy = new ChromeDomProvider([ev], () => [staleClient])
+    const legacyRect = await candidateAt(legacy, 0, [staleClient])
+    report(
+      'the reported stale client rectangle reproduces the displaced box',
+      legacyRect?.x === 205 && legacyRect.width === 820,
+      legacyRect === null ? 'no candidate' : fmt(legacyRect),
+    )
+    const provider = new ChromeDomProvider(
+      [ev],
+      () => [staleClient],
+      () => 1.5,
+      () => cropBounds,
+    )
+    const got = await candidateAt(provider, 0, [staleClient])
+    const want: Rect = { x: 399, y: 72, width: 837, height: 1850 }
+    report(
+      'a mixed-DPI region uses its crop and page anchor, not stale UIA client geometry',
+      got !== null && near(got, want),
+      got === null ? 'no candidate' : `got ${fmt(got)} want ${fmt(want)}`,
+    )
+
+    // Page zoom changes CSS viewport units and devicePixelRatio, but not the
+    // OS-scaled outer-window coordinates. Their products still describe the
+    // same native pixels, which is the separation this transform relies on.
+    const zoomed: DomEvent = {
+      ...ev,
+      element: {
+        ...ev.element!,
+        bounds: { x: 192, y: 0, width: 446.4, height: 986.4 },
+      },
+      viewport: {
+        ...ev.viewport!,
+        width: 1022.4,
+        height: 1011.2,
+        dpr: 1.875,
+      },
+    }
+    const zoomedProvider = new ChromeDomProvider(
+      [zoomed],
+      () => [staleClient],
+      () => 1.5,
+      () => cropBounds,
+    )
+    const zoomedGot = await candidateAt(zoomedProvider, 0, [staleClient])
+    report(
+      'browser zoom uses DPR for CSS pixels and monitor density for outer coordinates',
+      zoomedGot !== null && near(zoomedGot, want),
+      zoomedGot === null ? 'no candidate' : `got ${fmt(zoomedGot)} want ${fmt(want)}`,
+    )
+  }
+
   // 2. THE WHOLE POINT: it must NOT be the window. A candidate that merely
   //    exists but covers the browser is the bug wearing a disguise.
   {

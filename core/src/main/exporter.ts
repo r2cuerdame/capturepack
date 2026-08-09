@@ -426,11 +426,11 @@ export const UIA_PLUGIN_NAME = 'windows-uia'
  *    version wrote; 0 = it looked and found none. The difference matters,
  *    because a refused window is not a window without controls.
  *  - 0.5.0 added `client_bounds` on a window: the drawable rectangle inside the
- *    frame, beside the frame rectangle it qualifies. A page measures itself in
- *    viewport CSS pixels and this is the only thing that converts them, so
- *    without it a pack could carry a complete browser document and place none
- *    of it (#136). OPTIONAL and absent from every payload before this one; a
- *    reader that meets a window without it declines to place, exactly as today.
+ *    frame, beside the frame rectangle it qualifies. This is the normal bridge
+ *    from viewport CSS pixels to snapshot pixels, so without it a non-region
+ *    pack could carry a complete browser document and place none of it (#136).
+ *    OPTIONAL and absent from every payload before this one; an affine region
+ *    still can instead use its crop plus the page's own screen anchor.
  *
  * WHY IT LIVES HERE AND NOT IN chrome-dom. The client rectangle is a fact about
  * a WINDOW, observed by the surface ring in the same pass and the same snapshot
@@ -926,7 +926,12 @@ export interface ExportInput {
   displays?: DisplayCapture[]
   // The displays present at capture time, in the order media.displays indices
   // refer to. Absent = enumerate the CURRENT displays (single-display packs).
-  screens?: Array<{ width: number; height: number; scale: number }>
+  screens?: Array<{
+    width: number
+    height: number
+    scale: number
+    bounds?: { x: number; y: number; width: number; height: number }
+  }>
   clipboardAfterSave: ClipboardAfterSave
   // Pack document language (GOAL i18n, packLanguage setting): the language the
   // regenerated README/report/skills templates are written in. Absent = en.
@@ -940,7 +945,12 @@ export interface ManifestInput {
   title: string
   note: string
   osVersion: string
-  screens: Array<{ width: number; height: number; scale: number }>
+  screens: Array<{
+    width: number
+    height: number
+    scale: number
+    bounds?: { x: number; y: number; width: number; height: number }
+  }>
   captureKind?: CaptureKind
   imageScope?: ImageCaptureScope
   cropBounds?: ImageCropBounds

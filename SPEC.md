@@ -267,6 +267,7 @@ Each `screens` entry:
 | `width` | integer | REQUIRED | Display width in physical pixels. |
 | `height` | integer | REQUIRED | Display height in physical pixels. |
 | `scale` | number | OPTIONAL | OS display scale factor (`1`, `1.25`, `1.5`, `2`, …). Default `1`. |
+| `bounds` | object | OPTIONAL | Display rectangle `{ x, y, width, height }` in OS virtual-desktop DIP coordinates. Current image writers include it so readers can prove whether a region crop lies wholly on one scale; legacy packs may omit it. |
 
 `screens` describes the hardware environment; it does not define the annotation coordinate space.
 Annotations are always in snapshot pixel coordinates ([§8.2](#82-coordinate-space)), regardless

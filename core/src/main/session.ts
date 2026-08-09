@@ -1047,6 +1047,56 @@ function physicalContextBounds(
   }
 }
 
+/**
+ * The desktop-DIP placement of a one-monitor image crop.
+ *
+ * A cross-monitor region is a union of independently scaled native rasters and
+ * therefore has no one affine DIP-to-snapshot transform. Only retain this
+ * mapping when the selected rectangle is wholly inside its editor-owning
+ * display and both pixel axes reproduce that display's measured scale.
+ */
+function imageRegionContextSpace(
+  selection: ImageRegionSelection,
+  width: number,
+  height: number,
+  display: {
+    bounds: { x: number; y: number; width: number; height: number }
+    scaleFactor: number
+  },
+): {
+  snapshotPixelsPerDip: number
+  snapshotDipBounds: { x: number; y: number; width: number; height: number }
+} | null {
+  if (selection.mode !== 'region') return null
+  const crop = selection.desktopDipRect
+  const epsilon = 1e-7
+  if (
+    crop.x < display.bounds.x - epsilon
+    || crop.y < display.bounds.y - epsilon
+    || crop.x + crop.width > display.bounds.x + display.bounds.width + epsilon
+    || crop.y + crop.height > display.bounds.y + display.bounds.height + epsilon
+    || crop.width <= 0
+    || crop.height <= 0
+  ) {
+    return null
+  }
+  const scaleX = width / crop.width
+  const scaleY = height / crop.height
+  const tolerance = Math.max(1, scaleX, scaleY, display.scaleFactor) * 1e-9
+  if (
+    !Number.isFinite(scaleX)
+    || !Number.isFinite(scaleY)
+    || Math.abs(scaleX - scaleY) > tolerance
+    || Math.abs(scaleX - display.scaleFactor) > tolerance
+  ) {
+    return null
+  }
+  return {
+    snapshotPixelsPerDip: (scaleX + scaleY) / 2,
+    snapshotDipBounds: { ...crop },
+  }
+}
+
 async function runImageFlowWithContext(
   settings: Settings,
   triggerAt: number,
@@ -1153,6 +1203,7 @@ async function runImageFlowWithContext(
     width: placement.pixelSize.width,
     height: placement.pixelSize.height,
     scale: placement.scaleFactor,
+    bounds: { ...placement.bounds },
   }))
   let uiaReady: Promise<UiaPluginPayload | null>
   let imageWindows: ContextObservation | null
@@ -1350,6 +1401,13 @@ async function runImageFlowWithContext(
     }
   })()
 
+  const imageDipSpace = imageRegionContextSpace(
+    selection,
+    width,
+    height,
+    selectedDisplay,
+  )
+
   const { win: editor, mode: windowMode } = createEditorWindow(
     selectedDisplay.bounds,
     settings,
@@ -1365,15 +1423,22 @@ async function runImageFlowWithContext(
       if (editor.isDestroyed()) return
       const uia = settled.ready ? settled.value : null
       const contextSession = openContextSession(editor, {
-        displays: [{ index: 1, focused: true, width, height }],
+        displays: [{
+          index: 1,
+          focused: true,
+          width,
+          height,
+          ...(imageDipSpace ?? {}),
+        }],
         replayDurationMs: 0,
         // THE SURFACES THE EDITOR REASONS FROM MUST CARRY CLIENT RECTANGLES.
         //
         // `contextObservation` builds windows from the UIA payload, and UI
         // Automation reports a window rectangle but never a client one. A DOM
-        // element is measured in viewport CSS pixels and the client rectangle is
-        // the only thing that converts them, so a still could never place a page
-        // however complete its payload was (#131).
+        // element is measured in viewport CSS pixels and this client rectangle
+        // is the normal conversion bridge. Affine region images also carry the
+        // exact crop/page anchor added above; fullscreen and composite stills
+        // still require this measurement (#131).
         //
         // Lane S measured those rectangles at the trigger and `imageWindows`
         // already holds them; it was simply not the observation being handed
@@ -3030,6 +3095,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
     screens: manifest.environment.screens,
     displays: manifest.media.displays,
     loadedDisplays: loadedEditorDisplayList,
+    cropBounds: manifest.media.crop_bounds,
   })
   const { win: editor, mode: windowMode } = createEditorWindow(display.bounds, settings)
   // THE SAME DIAGNOSTICS, ON THE PATH THAT NEEDED THEM MOST (#106).

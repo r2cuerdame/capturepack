@@ -49,6 +49,7 @@ import { parseDomPayload } from '../src/main/chrome/domBridge'
 import type { DomEvent } from '../src/main/chrome/domBridge'
 import type { ContextObservation } from '../src/main/context/buffer'
 import { openPackContextSession, readPackObjectContext } from '../src/main/context/packObjects'
+import { reopenedContextDisplayTargets } from '../src/main/reopenDisplay'
 import { greyPng } from './fixtures/greyPng'
 
 let failures = 0
@@ -168,6 +169,50 @@ function windowFloor(withClientRectangle: boolean): ContextObservation {
 
 const CAPTURED_AT = '2026-08-02T00:59:13+09:00'
 
+// The exact mixed-DPI region capture that exposed #137
+// (CapturePack_2026-08-09_171702). Its source raster is an affine 1.5x
+// projection of this virtual-desktop DIP crop. The saved UIA client rectangle
+// is plausible but belongs to a different geometry space; the browser's own
+// screen anchor is the measurement that agrees with the pixels.
+const REPORTED_SNAPSHOT = { width: 1957, height: 1866 }
+const REPORTED_CROP = {
+  x: 1255.3333333333333,
+  y: 79.33333333333333,
+  width: 1304.6666666666667,
+  height: 1244,
+  coordinate_space: 'virtual-desktop-dip' as const,
+}
+const REPORTED_TAB = {
+  url: 'http://127.0.0.1:3000/',
+  title: 'LoopOffice — 프로젝트 방향 원장',
+}
+const REPORTED_ELEMENT = {
+  tag: 'section',
+  selector: 'section.office3-dash',
+  bounds: { x: 240, y: 0, width: 558, height: 1233 },
+}
+const REPORTED_VIEWPORT = {
+  width: 1278,
+  height: 1264,
+  dpr: 1.5,
+  screenX: 1274,
+  screenY: 6,
+  outerWidth: 1292,
+  outerHeight: 1392,
+}
+const REPORTED_STALE_WINDOW = {
+  x: 0,
+  y: 0,
+  width: 1731,
+  height: 1866,
+}
+const REPORTED_STALE_CLIENT = {
+  x: -148,
+  y: -105,
+  width: 1879,
+  height: 2049,
+}
+
 function manifest(): unknown {
   return {
     format: 'capturepack',
@@ -218,6 +263,92 @@ async function writePack(withClientRectangle: boolean): Promise<string> {
     events: domEvents().map((event) => domEventForPack(event, 0, 0)),
   }
   await writeDomPlugin(dir, payload)
+  return dir
+}
+
+/** A saved region pack written through the same plugin writers as a capture. */
+async function writeReportedRegionPack(): Promise<string> {
+  const dir = mkdtempSync(path.join(tmpdir(), 'capturepack-region-readback-'))
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(
+    path.join(dir, 'manifest.json'),
+    JSON.stringify({
+      format: 'capturepack',
+      format_version: '0.7.0',
+      capture_kind: 'image',
+      id: 'reported-region-readback-fixture',
+      created_at: '2026-08-09T17:17:02+09:00',
+      generator: { name: 'capturepack', version: '0.4.1' },
+      environment: {
+        os: 'windows',
+        os_version: '10.0.26200',
+        screens: [
+          {
+            width: 1200,
+            height: 1920,
+            scale: 1,
+            bounds: { x: -1200, y: -480, width: 1200, height: 1920 },
+          },
+          {
+            width: 3840,
+            height: 2160,
+            scale: 1.5,
+            bounds: { x: 0, y: 0, width: 2560, height: 1440 },
+          },
+        ],
+      },
+      media: {
+        snapshot: 'snapshot.png',
+        replay: null,
+        image_scope: 'region',
+        crop_bounds: REPORTED_CROP,
+      },
+      plugins: [
+        { name: 'windows-uia', version: UIA_PLUGIN_VERSION, path: 'plugins/windows-uia/' },
+        { name: 'chrome-dom', version: DOM_PLUGIN_VERSION, path: 'plugins/chrome-dom/' },
+      ],
+    }, null, 2),
+  )
+  writeFileSync(
+    path.join(dir, 'snapshot.png'),
+    greyPng(REPORTED_SNAPSHOT.width, REPORTED_SNAPSHOT.height),
+  )
+  writeFileSync(path.join(dir, 'annotations.json'), JSON.stringify({ annotations: [] }, null, 2))
+
+  const floor: ContextObservation = {
+    tMs: 0,
+    windows: [{
+      hwnd: '658358',
+      surface_id: 'hwnd:658358#1',
+      title: `${REPORTED_TAB.title} - Chrome`,
+      process: 'chrome.exe',
+      class_name: 'Chrome_WidgetWin_1',
+      bounds: { ...REPORTED_STALE_WINDOW },
+      client_bounds: { ...REPORTED_STALE_CLIENT },
+      display: 1,
+      focused: false,
+      z: 1,
+      hasControls: false,
+      tree: 'skipped',
+    }],
+    elements: [],
+  }
+  const uia = sealUiaPayload(mergeImageWindowFloor(null, floor, CAPTURED_AT))
+  if (uia === null) throw new Error('the reported region floor produced no windows-uia payload')
+  await writeUiaPlugin(dir, uia)
+
+  const event: DomEvent = {
+    tMs: 0,
+    type: 'dom.element.selected',
+    tab: REPORTED_TAB,
+    element: REPORTED_ELEMENT,
+    viewport: REPORTED_VIEWPORT,
+  }
+  await writeDomPlugin(dir, {
+    protocol: 1,
+    extension_version: '0.3.4',
+    events: [domEventForPack(event, 0, 0)],
+  })
   return dir
 }
 
@@ -317,6 +448,60 @@ async function main(): Promise<void> {
       && first.bounds.width === 120
       && first.bounds.height === 40,
     first === undefined ? 'no candidate for #field-0' : JSON.stringify(first.bounds),
+  )
+
+  console.log('\nA reopened mixed-DPI region keeps the crop-to-pixel transform')
+  const regionDir = await writeReportedRegionPack()
+  const regionContext = readPackObjectContext(regionDir)
+  if (regionContext === null) throw new Error('the reported region pack did not read back')
+  const regionDisplay = regionContext.displays[0]
+  check(
+    'the saved 1957x1866 raster maps back to its exact virtual-desktop DIP crop',
+    regionDisplay?.snapshotPixelsPerDip === 1.5
+      && regionDisplay.snapshotDipBounds?.x === REPORTED_CROP.x
+      && regionDisplay.snapshotDipBounds.y === REPORTED_CROP.y
+      && regionDisplay.snapshotDipBounds.width === REPORTED_CROP.width
+      && regionDisplay.snapshotDipBounds.height === REPORTED_CROP.height,
+    JSON.stringify(regionDisplay),
+  )
+  const regionFrame = await openPackContextSession(regionContext).frameAt(0)
+  const section = regionFrame.displays
+    .flatMap((slice) => slice.candidates)
+    .find((candidate) => candidate.identity?.['selector'] === REPORTED_ELEMENT.selector)
+  check(
+    'the page rectangle lands on the pixels, not the stale UIA client rectangle',
+    section !== undefined
+      && section.bounds.x === 399
+      && section.bounds.y === 72
+      && section.bounds.width === 837
+      && section.bounds.height === 1850,
+    section === undefined ? 'no section candidate' : JSON.stringify(section.bounds),
+  )
+
+  const accidentalMixedScale = reopenedContextDisplayTargets({
+    snapshotWidth: 1500,
+    snapshotHeight: 1500,
+    screens: [
+      { width: 1000, height: 1000, scale: 1, bounds: { x: 0, y: 0, width: 1000, height: 1000 } },
+      { width: 2000, height: 2000, scale: 2, bounds: { x: 1000, y: 0, width: 1000, height: 1000 } },
+      { width: 1500, height: 1500, scale: 1.5, bounds: { x: 3000, y: 0, width: 1000, height: 1000 } },
+    ],
+    displays: undefined,
+    loadedDisplays: [],
+    cropBounds: {
+      x: 500,
+      y: 0,
+      width: 1000,
+      height: 1000,
+      coordinate_space: 'virtual-desktop-dip',
+    },
+  })[0]
+  check(
+    'an accidental average scale across mixed-DPI screens is refused as non-affine',
+    accidentalMixedScale !== undefined
+      && accidentalMixedScale.snapshotPixelsPerDip === undefined
+      && accidentalMixedScale.snapshotDipBounds !== undefined,
+    JSON.stringify(accidentalMixedScale),
   )
 
   console.log('\nA window with no client rectangle still declines to place, as SPEC §11.3 says')

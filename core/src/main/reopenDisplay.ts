@@ -2,6 +2,7 @@ interface PersistedScreenGeometry {
   width: number
   height: number
   scale: number
+  bounds?: { x: number; y: number; width: number; height: number }
 }
 
 interface PersistedDisplayGeometry {
@@ -9,6 +10,14 @@ interface PersistedDisplayGeometry {
   focused: boolean
   bounds: { x: number; y: number; width: number; height: number }
   scale: number
+}
+
+interface PersistedImageCropGeometry {
+  x: number
+  y: number
+  width: number
+  height: number
+  coordinate_space: 'virtual-desktop-dip'
 }
 
 export interface ReopenedLoadedDisplayGeometry {
@@ -25,6 +34,8 @@ export interface ReopenedContextDisplayTarget {
   width: number
   height: number
   snapshotPixelsPerDip?: number
+  /** Crop provenance; affine only when snapshotPixelsPerDip is present too. */
+  snapshotDipBounds?: { x: number; y: number; width: number; height: number }
 }
 
 function positive(value: number): boolean {
@@ -41,6 +52,74 @@ function rasterMatches(
     Math.round(width) === Math.round(snapshotWidth)
     && Math.round(height) === Math.round(snapshotHeight)
   )
+}
+
+/**
+ * A one-monitor image region is the rare reopened raster that still has a
+ * desktop placement: media.crop_bounds is in virtual-desktop DIP and the PNG
+ * is its native-pixel projection. Keep that affine mapping only when both axes
+ * agree and the density is one the captured desk actually declared. A region
+ * spanning mixed-DPI displays has no single scale and must stay unmapped.
+ */
+function reopenedImageCropSpace(
+  snapshotWidth: number,
+  snapshotHeight: number,
+  screens: readonly PersistedScreenGeometry[],
+  cropBounds: PersistedImageCropGeometry | undefined,
+): {
+  snapshotPixelsPerDip: number
+  snapshotDipBounds: { x: number; y: number; width: number; height: number }
+} | null {
+  if (
+    cropBounds === undefined
+    || cropBounds.coordinate_space !== 'virtual-desktop-dip'
+    || !Number.isFinite(cropBounds.x)
+    || !Number.isFinite(cropBounds.y)
+    || !positive(cropBounds.width)
+    || !positive(cropBounds.height)
+    || !positive(snapshotWidth)
+    || !positive(snapshotHeight)
+  ) {
+    return null
+  }
+  const scaleX = snapshotWidth / cropBounds.width
+  const scaleY = snapshotHeight / cropBounds.height
+  const tolerance = Math.max(1, scaleX, scaleY) * 1e-9
+  if (!positive(scaleX) || !positive(scaleY) || Math.abs(scaleX - scaleY) > tolerance) {
+    return null
+  }
+  const scale = (scaleX + scaleY) / 2
+  const declared = screens.some((screen) => {
+    const bounds = screen.bounds
+    if (
+      bounds === undefined
+      || !Number.isFinite(bounds.x)
+      || !Number.isFinite(bounds.y)
+      || !positive(bounds.width)
+      || !positive(bounds.height)
+      || !positive(screen.scale)
+      || Math.abs(screen.scale - scale) > tolerance
+    ) {
+      return false
+    }
+    const edgeTolerance = 1e-7
+    return (
+      cropBounds.x >= bounds.x - edgeTolerance
+      && cropBounds.y >= bounds.y - edgeTolerance
+      && cropBounds.x + cropBounds.width <= bounds.x + bounds.width + edgeTolerance
+      && cropBounds.y + cropBounds.height <= bounds.y + bounds.height + edgeTolerance
+    )
+  })
+  if (!declared) return null
+  return {
+    snapshotPixelsPerDip: scale,
+    snapshotDipBounds: {
+      x: cropBounds.x,
+      y: cropBounds.y,
+      width: cropBounds.width,
+      height: cropBounds.height,
+    },
+  }
 }
 
 /**
@@ -127,12 +206,14 @@ export function reopenedContextDisplayTargets({
   screens,
   displays,
   loadedDisplays,
+  cropBounds,
 }: {
   snapshotWidth: number
   snapshotHeight: number
   screens: readonly PersistedScreenGeometry[]
   displays: readonly PersistedDisplayGeometry[] | undefined
   loadedDisplays: readonly ReopenedLoadedDisplayGeometry[]
+  cropBounds?: PersistedImageCropGeometry
 }): ReopenedContextDisplayTarget[] {
   if (loadedDisplays.length > 0) {
     return loadedDisplays.map((display) => ({
@@ -155,12 +236,35 @@ export function reopenedContextDisplayTargets({
     screens,
     displays,
   })
+  const imageCropSpace = reopenedImageCropSpace(
+    snapshotWidth,
+    snapshotHeight,
+    screens,
+    cropBounds,
+  )
+  const persistedCrop =
+    cropBounds !== undefined
+    && cropBounds.coordinate_space === 'virtual-desktop-dip'
+    && Number.isFinite(cropBounds.x)
+    && Number.isFinite(cropBounds.y)
+    && positive(cropBounds.width)
+    && positive(cropBounds.height)
+      ? {
+          snapshotDipBounds: {
+            x: cropBounds.x,
+            y: cropBounds.y,
+            width: cropBounds.width,
+            height: cropBounds.height,
+          },
+        }
+      : null
   return [{
     index: persistedIndex ?? 1,
     focused: true,
     width: snapshotWidth,
     height: snapshotHeight,
-    ...(snapshotPixelsPerDip === undefined ? {} : { snapshotPixelsPerDip }),
+    ...(imageCropSpace ?? persistedCrop ??
+      (snapshotPixelsPerDip === undefined ? {} : { snapshotPixelsPerDip })),
   }]
 }
 

@@ -276,7 +276,12 @@ export interface Manifest {
   environment: {
     os: string
     os_version: string
-    screens: Array<{ width: number; height: number; scale: number }>
+    screens: Array<{
+      width: number
+      height: number
+      scale: number
+      bounds?: { x: number; y: number; width: number; height: number }
+    }>
     app?: string
   }
   media: {

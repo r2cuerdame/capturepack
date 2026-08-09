@@ -136,6 +136,17 @@
                 "type": "number",
                 "exclusiveMinimum": 0,
                 "default": 1
+              },
+              "bounds": {
+                "description": "OPTIONAL display rectangle in OS virtual-desktop DIP coordinates. Current image writers include it so a reader can prove whether a region crop has one affine display scale.",
+                "type": "object",
+                "required": ["x", "y", "width", "height"],
+                "properties": {
+                  "x": { "type": "number" },
+                  "y": { "type": "number" },
+                  "width": { "type": "number", "exclusiveMinimum": 0 },
+                  "height": { "type": "number", "exclusiveMinimum": 0 }
+                }
               }
             }
           }

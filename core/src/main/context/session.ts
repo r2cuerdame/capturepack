@@ -66,6 +66,13 @@ export interface ContextDisplayTarget {
    * either display's captured scale is absent.
    */
   snapshotPixelsPerDip?: number
+  /**
+   * Virtual-desktop DIP rectangle represented by this one snapshot raster.
+   * Paired with snapshotPixelsPerDip only when a one-monitor affine mapping was
+   * proved. A crop may travel alone to mark geometry that must be refused
+   * instead of falling back to an incompatible client rectangle.
+   */
+  snapshotDipBounds?: { x: number; y: number; width: number; height: number }
 }
 
 export interface ContextSessionOptions {
@@ -582,10 +589,18 @@ export class ContextSession {
           : [[display.index, display.snapshotPixelsPerDip] as const],
       ),
     )
+    const displayDipBounds = new Map(
+      this.displays.flatMap((display) =>
+        display.snapshotDipBounds === undefined
+          ? []
+          : [[display.index, { ...display.snapshotDipBounds }] as const],
+      ),
+    )
     const provider = new ChromeDomProvider(
       this.domEvents,
       (timeMs) => this.timeline.restore(timeMs).surfaces,
       (display) => displayScales.get(display) ?? null,
+      (display) => displayDipBounds.get(display),
     )
     const outcome = this.host.register(CHROME_DOM_MANIFEST, provider, { builtIn: true })
     if (!outcome.ok) {
