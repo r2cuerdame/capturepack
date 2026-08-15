@@ -41,7 +41,7 @@ const packageVersion = String(packageJson.version ?? '')
 // a later one. What it may never be is a different build wearing the public
 // version's number: a locally built installer named like the published 0.3.3
 // cannot be told apart from it once it leaves this folder.
-const PUBLIC_VERSION = '0.4.2'
+const PUBLIC_VERSION = '0.4.3'
 const packageIsCurrentPublic = packageVersion === PUBLIC_VERSION
 const candidateBase = /^(\d+\.\d+\.\d+)-rc\.\d+$/.exec(packageVersion)?.[1]
 /** Negative, zero or positive, comparing major.minor.patch left to right. */
@@ -159,7 +159,7 @@ for (const lang of supported) {
     missingText.length === 0
       && missingAlt.length === 0
       && document.documentElement.lang === lang
-      && releaseNote.includes('0.4.2')
+      && releaseNote.includes('0.4.3')
       && !releaseNote.includes('0.4.1'),
     [...missingText, ...missingAlt].join(', '),
   )
@@ -230,10 +230,10 @@ check(
     && i18n.includes("prefers-reduced-motion: reduce"),
 )
 check(
-  'landing names 0.4.2 as the public release',
-  html.includes('"softwareVersion": "0.4.2"')
-    && html.includes('>v0.4.2</span>')
-    && html.includes('Public download: 0.4.2')
+  'landing names 0.4.3 as the public release',
+  html.includes('"softwareVersion": "0.4.3"')
+    && html.includes('>v0.4.3</span>')
+    && html.includes('Public download: 0.4.3')
     && !html.includes('source/release candidate'),
 )
 check(
@@ -248,9 +248,9 @@ check(
   `${packageVersion} (public ${PUBLIC_VERSION}), lock ${packageLock.version}`,
 )
 check(
-  'README names 0.4.2 as the public release',
-  readme.includes('Current public Windows release: **CapturePack 0.4.2**')
-    && readme.includes('**0.4.2 is the current public Windows download.**')
+  'README names 0.4.3 as the public release',
+  readme.includes('Current public Windows release: **CapturePack 0.4.3**')
+    && readme.includes('**0.4.3 is the current public Windows download.**')
     && !readme.includes('candidate baseline')
     && !readme.includes('not a public release until it appears on GitHub Releases'),
 )
@@ -367,7 +367,7 @@ for (const { lang, text: localized } of localizedReadmes) {
   check(
     `${lang}: README public-release and product/privacy contract`,
     localized.includes(`motion/${lang}/capturepack-time-machine-poster.webp`)
-      && localized.includes('0.4.2')
+      && localized.includes('0.4.3')
       && !localized.includes('0.4.1')
       && localized.includes('Ctrl+Alt+S')
       && localized.includes('capture_kind: image')
@@ -418,17 +418,17 @@ check(
     && !html.includes('blob/main/ROADMAP.md'),
 )
 
-console.log('\n0.4.2 release and documentation contract')
+console.log('\n0.4.3 release and documentation contract')
 check(
   'roadmap preserves history and adds the current baseline',
-  roadmap.includes('## Current baseline — 0.4.2')
+  roadmap.includes('## Current baseline — 0.4.3')
     && roadmap.includes('## V1 — MVP + installable, self-updating release')
     && roadmap.includes('## V2 — Temporal plugin system')
     && roadmap.includes('## Success criteria (from GOAL.md)'),
 )
 check(
   'current release, known issue and dependency audit are documented',
-  changelog.includes('## 0.4.2 — 2026-08-09')
+  changelog.includes('## 0.4.3 — 2026-08-16')
     && changelog.includes('## 0.4.1 — 2026-08-02')
     && changelog.includes('## 0.4.0 — 2026-08-02')
     && changelog.includes('## 0.3.5 — 2026-08-02')

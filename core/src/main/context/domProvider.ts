@@ -532,6 +532,14 @@ export class ChromeDomProvider implements TemporalContextProvider {
         depth: 10_000,
         paintOrder: index,
         authority: 'document-native',
+        // WHICH OF THE TWO THINGS THIS IS. `dom.element.selected` is one
+        // element a human clicked the picker on; `dom.document.captured` is
+        // every element of the visible page, expanded into picks above so both
+        // land through the same transform. They must not stay
+        // indistinguishable downstream: the container filters exempt an
+        // explicit pick, and applying that exemption to a page's own `<section>`
+        // and `<nav>` wrappers is #58 all over again.
+        explicit: pick.event.type === 'dom.element.selected',
         confidence: pick.exact ? 0.95 : 0.6,
         visible: true,
         occluded: false,

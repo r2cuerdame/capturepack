@@ -17,13 +17,13 @@ documents preserve evidence but are not instructions for the current release.
 | [Changelog](../CHANGELOG.md) | Shipped application changes by version |
 
 The application version and pack format version are separate. CapturePack
-application `0.4.2` can generate packs using newer additive format versions;
+application `0.4.3` can generate packs using newer additive format versions;
 the optional offline viewer is defined for compatible packs at format `0.5.0`
 or newer, and a pack declares up to `0.8.0` when it carries input events. Plugin
 payloads carry their own versions — `windows-uia` is at `0.5.0` since it began
 persisting each window's client rectangle.
 
-**Current state.** `0.4.2` is the public release and `main` carries it. A pack
+**Current state.** `0.4.3` is the public release and `main` carries it. A pack
 now describes every screen rather than one screen plus others — `media.displays`
 is always present, each entry states its own measured frame, and an annotation on
 a second screen is defined in the format as pixels in that screen's image

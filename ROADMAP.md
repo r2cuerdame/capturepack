@@ -9,7 +9,7 @@ status; it never overrides either document.
 end on a real install (0.1.0 → 0.1.1 → 0.1.2). The active source and
 documentation baseline and current public
 [GitHub Release](https://github.com/r2cuerdame/capturepack/releases/latest) are
-**0.4.2**.
+**0.4.3**.
 What is *not* yet proven is the long-run habit — the one-month
 no-manual-reinstall criterion is still running.
 
@@ -21,7 +21,7 @@ Ctrl+Alt+C  →  capture  →  5-second annotation  →  export .capturepack  �
 
 ---
 
-## Current baseline — 0.4.2
+## Current baseline — 0.4.3
 
 The milestone narrative below is preserved as the product's design and
 verification history. These are the current additions and next gates:
@@ -117,6 +117,20 @@ verification history. These are the current additions and next gates:
   — has CI assert on a pack whose derived stills were really rendered
   ([#135](https://github.com/r2cuerdame/capturepack/issues/135)), and pins four
   of #76's five three-screen risks on a synthetic desk.
+- 0.4.3 stops a captured web page offering its own layout containers. #134's
+  sweep — added in 0.4.1 precisely so this class of decay could not go unnoticed
+  again — caught it on a real capture: chrome-dom answered 94.5% of hover points
+  and the median rectangle offered was 32.22% of the frame against a 15% limit.
+  The cause was a premise that stopped being true: 0.3.4 exempted
+  `document-native` candidates from the container filter because such a
+  candidate was one element a human had pointed at, and the same release taught
+  a still to record every element of the visible document under that same
+  authority. A provider now states which of the two a candidate is; an
+  enumerated container is offered one rung back and an explicit pick still wins.
+  Worst pack 32.22% → 5.88%, with the page still read in full. 0.4.3 also makes
+  the 5-second workflow itself a measured number — every capture records how
+  long it took to reach a usable editor, excluding the time the user held it —
+  and promotes `capture-e2e` from advisory to a required CI job.
 - Next: the three-screen acceptance test on REAL hardware — one portrait, one
   scaled, focus on the third — is still unrun, and
   [#76](https://github.com/r2cuerdame/capturepack/issues/76) stays open until
@@ -369,7 +383,7 @@ less complete without them, and nothing becomes an AI API integration (a stated 
 | 7 | Plugin API | V2 | Not started — the in-process API. The on-disk plugin contract (SPEC §11) is implemented and written by every capture |
 | 8 | Browser plugin | V2 | Done — picker, document snapshot, protocol v1, native host, Chromium-family installer registration. Shadow DOM / SPA routes pending |
 | 9 | Windows plugin | V2 | Done — built-in UI Automation provider writing `plugins/windows-uia` and `plugins/windows-context` |
-| 10 | Public release | V1 | Done (0.4.2 live; auto-update chain proven from 0.1.0) |
+| 10 | Public release | V1 | Done (0.4.3 live; auto-update chain proven from 0.1.0) |
 
 ---
 

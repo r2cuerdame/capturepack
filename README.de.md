@@ -34,10 +34,10 @@ lokaler, offener Ordner, der ohne KI, Konto und Cloud-Dienst funktioniert.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Herunterladen](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Aktuelle öffentliche Windows-Version: **CapturePack 0.4.2**. Die im Pack
-gespeicherte Browserseite lässt sich jetzt wieder auslesen — beim
-erneuten Öffnen kam bisher nichts davon zurück —, und was die
-Objektauswahl anbietet, wird gemessen statt vermutet.
+Aktuelle öffentliche Windows-Version: **CapturePack 0.4.3**. Auf einer
+aufgenommenen Webseite wird wieder das Element unter dem Zeiger angeboten — die
+Layout-Container der Seite selbst hatten den Hover an sich gezogen —, und jede
+Aufnahme hält fest, wie lange es bis zum Editor gedauert hat.
 
 <p align="center">
   <a href="https://capturepack.dev/">
@@ -256,7 +256,7 @@ Werkzeuge, Client-Einrichtung und Einstellungen: [docs/MCP.md](docs/MCP.md).
 
 ## Status
 
-**0.4.2 ist der aktuelle öffentliche Windows-Download.** CapturePack ist
+**0.4.3 ist der aktuelle öffentliche Windows-Download.** CapturePack ist
 weiterhin ein Projekt in einem frühen Stadium: Hebe bei einer Fehlermeldung
 deshalb das ursprüngliche Pack auf, und sieh dir [GOAL.md](GOAL.md) für die
 Produktvision und [ROADMAP.md](ROADMAP.md) für die nächsten Schritte an.
@@ -279,7 +279,7 @@ statt sie hinter einem fest verdrahteten globalen Versatz zu verstecken.
   schreibgeschützter Zugriff auf gespeicherte Packs und die Anbindung von
   Kontextanbietern.
 
-CapturePack `0.4.2` ist die Version der Anwendung. Die `format_version` des Packs
+CapturePack `0.4.3` ist die Version der Anwendung. Die `format_version` des Packs
 entwickelt sich unabhängig davon durch additive Formatänderungen weiter; Leser
 müssen sich an [SPEC.md](SPEC.md) halten, statt die Formatunterstützung aus der
 App-Version abzuleiten.

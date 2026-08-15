@@ -100,6 +100,60 @@ function pick(
   }
 }
 
+/**
+ * A CAPTURED DOCUMENT — every element of the visible page, not one.
+ *
+ * This is what a still records since #130, and it is a different KIND of
+ * evidence from `pick()` above even though both end up at `document-native`
+ * authority: nobody pointed at any of these. A page's own layout wrappers are
+ * in here, and they are the same shape UI Automation's client-area pane is.
+ */
+function documentSnapshot(
+  tMs: number,
+  elements: ReadonlyArray<{
+    tag: string
+    role?: string
+    x: number
+    y: number
+    w: number
+    h: number
+  }>,
+): DomEvent {
+  return {
+    tMs,
+    type: 'dom.document.captured',
+    tab: { url: 'https://capturepack.dev/docs', title: 'CapturePack — the docs' },
+    viewport: {
+      width: VIEWPORT.width,
+      height: VIEWPORT.height,
+      dpr: 1,
+      screenX: null,
+      screenY: null,
+      outerWidth: null,
+      outerHeight: null,
+    },
+    document: {
+      viewport: {
+        width: VIEWPORT.width,
+        height: VIEWPORT.height,
+        devicePixelRatio: 1,
+        scrollX: 0,
+        scrollY: 0,
+      },
+      url: 'https://capturepack.dev/docs',
+      title: 'CapturePack — the docs',
+      elements: elements.map((e, i) => ({
+        i,
+        tag: e.tag,
+        role: e.role ?? '',
+        bounds: { x: e.x, y: e.y, width: e.w, height: e.h },
+        id: `${e.tag}-${String(i)}`,
+      })),
+      truncated: false,
+    },
+  } as DomEvent
+}
+
 /** Where that element really is on the snapshot. */
 function truth(x: number, y: number, w: number, h: number): Rect {
   return { x: CLIENT.x + x, y: CLIENT.y + CHROME_PX + y, width: w, height: h }
@@ -229,6 +283,63 @@ async function main(): Promise<void> {
     report('but it survives on the refinement rung',
       refined.some((o) => o.authority === 'document-native'),
       refined.map(describe).join(' | '))
+  }
+
+  // A CAPTURED DOCUMENT IS NOT A PICK, AND ITS CONTAINERS ARE NOT TARGETS.
+  //
+  // Measured on CapturePack_2026-08-09_213801: chrome-dom answered 94.5% of
+  // 10,414 probes and the MEDIAN rectangle offered was 32.22% of the frame —
+  // `section.office3-dash` at 40.93%, `div.office3-chat-thread` at 32.22%,
+  // `nav.office3-project-list` at 16.33%. That is the #58 container shape
+  // exactly, arriving through the door #104 opened for a different kind of
+  // evidence: the container filter is skipped for `document-native` because a
+  // pick is "one element a human pointed at", and since #130 that authority
+  // also covers every element of a whole captured page, wrappers included.
+  console.log('\nA container from a CAPTURED DOCUMENT is not a thing anyone pointed at')
+  {
+    // 1400x900 CSS px = 35.2% of the 2560x1400 window: over WINDOW_FRAME_
+    // FRACTION and under every side rule, which is the shape the 0.35 test
+    // exists for and the one a 0.9 viewport test lets through.
+    const section = { x: 100, y: 100, w: 1400, h: 900 }
+    const para = { x: 200, y: 200, w: 300, h: 60 }
+    const { index } = await indexFor([
+      documentSnapshot(1000, [
+        { tag: 'section', ...section },
+        { tag: 'p', ...para },
+      ]),
+    ])
+
+    const inside = centre(truth(para.x, para.y, para.w, para.h))
+    const top = index.stackAt(inside.x, inside.y).offered[0]
+    report('a real element inside it is still offered precisely',
+      top?.authority === 'document-native' && top.width === para.w, describe(top))
+
+    // A point inside the section and outside every child: the container's own
+    // background. This is where a wrapper wins by being the smallest rectangle
+    // containing the point, and it is 3,400 probes of the real pack.
+    const gap = { x: CLIENT.x + 1200, y: CLIENT.y + CHROME_PX + 800 }
+    const onGap = index.stackAt(gap.x, gap.y).offered[0]
+    report('but its background offers the window, not the container',
+      onGap?.level === 'window', describe(onGap))
+
+    const refined = index.stackAt(gap.x, gap.y, false, 0, true).offered
+    report('the container is deferred, never deleted',
+      refined.some((o) => o.authority === 'document-native'),
+      refined.map(describe).join(' | '))
+  }
+
+  // ...and the distinction is the whole fix: the SAME rectangle, explicitly
+  // picked, must still be offered. #104 is not being undone.
+  console.log('\nThe same container, explicitly PICKED, is still offered (#104 holds)')
+  {
+    const section = { x: 100, y: 100, w: 1400, h: 900 }
+    const { index } = await indexFor([
+      pick(1000, 'section', '', section.x, section.y, section.w, section.h),
+    ])
+    const at = centre(truth(section.x, section.y, section.w, section.h))
+    const top = index.stackAt(at.x, at.y).offered[0]
+    report('a human pointing at it is different evidence, and it wins',
+      top?.authority === 'document-native', describe(top))
   }
 
   console.log('\nThe provider claims the surface it holds a pick for')

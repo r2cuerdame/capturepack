@@ -470,11 +470,29 @@ export class ObjectIndex {
       // viewport-like threshold below instead of the enumeration one, and an
       // explicit pick is never deleted — at worst it is offered one rung back,
       // like any other giant, which is a question of ordering, not existence.
-      const explicitDocumentPick = candidate.authority === 'document-native'
+      // AND IT MUST BE A PICK, NOT MERELY A DOCUMENT (#134).
+      //
+      // Authority alone said "a human pointed at this" until #130 gave
+      // `document-native` to every element of a whole captured page. Measured
+      // on CapturePack_2026-08-09_213801 — a page whose own layout wrappers
+      // then answered 94.5% of hover points with a median rectangle of 32.22%
+      // of the frame — the paragraph above stopped describing the data it
+      // filters. `explicit` is the provider stating which of the two it is;
+      // absent means enumerated, so every other provider keeps the #58 rule.
+      const documentCandidate = candidate.authority === 'document-native'
+      const explicitDocumentPick = documentCandidate && candidate.explicit === true
       const frameLike = explicitDocumentPick
         ? isDocumentPickFrame(clipped, owner.clip)
         : isWindowFrame(clipped, owner.clip)
-      if ((oversized || frameLike) && !largeSemantic && !explicitDocumentPick) continue
+      // DELETION IS FOR RECTANGLES NOBODY MEASURED. A UIA client-area wrapper
+      // is an artefact of enumerating a window and there is nothing to keep; a
+      // DOM element is a thing the browser measured and the page actually has,
+      // named by its own tag and ARIA role. So a captured document's container
+      // is judged by the strict rule above — it must not win a first hover —
+      // but it is deferred rather than dropped. That is the same sentence #104
+      // already wrote for an explicit pick, and it is true for the same reason:
+      // ordering, not existence.
+      if ((oversized || frameLike) && !largeSemantic && !documentCandidate) continue
       const object: PickableObject = {
         level: 'control',
         candidate,

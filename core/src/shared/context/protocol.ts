@@ -596,6 +596,24 @@ export interface ContextCandidate {
   confidence: number
   visible: boolean
   occluded: boolean
+  /**
+   * THE USER POINTED AT THIS ONE — as opposed to a provider enumerating it.
+   *
+   * Absent means enumerated, which is the safe default and what every provider
+   * that never sets it gets. It exists because the container filters treat the
+   * two as different kinds of evidence: an enumerated rectangle covering a
+   * third of its window is a layout wrapper and belongs at the window rung
+   * (#58), while the same rectangle picked by a human is the answer to a
+   * question they asked (#104).
+   *
+   * Authority CANNOT stand in for this. `document-native` meant "a pick" when
+   * that exemption was written, and #130 gave the same authority to every
+   * element of a whole captured page. Measured on
+   * CapturePack_2026-08-09_213801, that turned 94.5% of hover points into an
+   * offer of `section.office3-dash` and friends — a median rectangle of 32.22%
+   * of the frame, which is the exact regression #58 fixed.
+   */
+  explicit?: boolean
   parentId?: string
   /**
    * HOW WELL THIS CANDIDATE'S PROVIDER COVERS THE REQUESTED TIME.

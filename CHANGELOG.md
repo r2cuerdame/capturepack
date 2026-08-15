@@ -4,7 +4,31 @@ All notable changes to CapturePack. Format follows [Keep a Changelog](https://ke
 this project uses [semantic versioning](https://semver.org/) for the app, and the pack
 format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 
-## 0.4.3 — unreleased
+## 0.4.3 — 2026-08-16
+
+### Fixed
+
+- **Hovering a web page offered the page's own layout containers again.** On a
+  captured browser window, object picking answered 94.5% of hover points with a
+  wrapper — `section`, `nav`, a `div` holding a chat log — and the median
+  rectangle offered was 32.22% of the frame where a healthy capture sits under
+  0.4%. This is the regression [#58](https://github.com/r2cuerdame/capturepack/issues/58)
+  fixed, arriving through a door opened for something else: 0.3.4 exempted
+  `document-native` candidates from the container filter because such a
+  candidate was "one element a human pointed at", and the same release taught a
+  still to record the WHOLE visible document, giving every element of every page
+  — wrappers included — that same authority. Nothing tested the premise, so the
+  exemption quietly widened from one element to hundreds. A captured document's
+  containers are now judged by the same rule as any other enumerated rectangle
+  and are offered one rung back instead of first; an element a human actually
+  picked still wins, which is what 0.3.4 was for. Nothing is deleted — a DOM
+  element is a rectangle the browser measured, not one CapturePack inferred, so
+  it stays reachable on the refinement rung
+  ([#134](https://github.com/r2cuerdame/capturepack/issues/134)).
+
+  Measured across the author's 17 saved packs, worst pack: **32.22% → 5.88%**
+  median offered control; the page is still read in full (10,619 element
+  rectangles on disk, 10,619 recovered, unchanged).
 
 ### Added
 
