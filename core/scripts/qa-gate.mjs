@@ -47,6 +47,7 @@ const VIDEO_PROFILE_CHECKS = new Set([
   'check:tick-owner',
   'check:display-media-policy',
   'check:capture-cadence',
+  'check:capture-latency',
   'check:native-replay-fallback',
   'check:replay-health',
   'check:source-latency-calibration',

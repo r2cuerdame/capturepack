@@ -491,8 +491,8 @@ npm run qa:rc
 npm audit --omit=dev
 ```
 
-`qa:rc` currently runs 82 discovered `check:*` regressions plus type checking,
-the production build, and isolated Electron smoke: **85 gate steps** — 83 with
+`qa:rc` currently runs 83 discovered `check:*` regressions plus type checking,
+the production build, and isolated Electron smoke: **86 gate steps** — 84 with
 `--skip-build`, which drops the build and the smoke that follows it. The gate
 discovers its checks from `core/package.json`, so that number moves with every
 release. Count it before quoting it, and trust the count over any document,
@@ -660,11 +660,11 @@ What the actually-open issues ask for, in the order they are worth doing:
 
 Standing verification work that no issue tracks:
 
-6. Make `capture-e2e` a required CI job rather than `continue-on-error`, once it
-   has been green across a run of merges. It was made non-blocking on purpose —
-   it was the first headed Electron capture on a hosted runner — and 0.4.1 shows
-   the cost of leaving it that way: it went red on the candidate inside a run
-   that stayed green, and could have shipped unexamined.
+6. ~~Make `capture-e2e` a required CI job~~ — **done in 0.4.3.** The stated
+   condition was met: twelve consecutive CI runs from 2026-08-02 to 2026-08-09
+   were green on that job, so `continue-on-error` is gone. What it was
+   protecting against remains on the record — on the 0.4.1 candidate it went red
+   inside a run that stayed green, and could have shipped unexamined.
 7. Re-run the manual matrix in [QA.md](QA.md) and record actual hardware,
    duration, FPS, gaps, CPU, memory, process, and media-decode evidence. Every
    item under "Still unverified in the field" above is settled there or nowhere.

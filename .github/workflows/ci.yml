@@ -50,17 +50,19 @@ jobs:
   # because a capture opens the editor and then waits for a person; `--save-now`
   # is the person.
   #
-  # NON-BLOCKING ON PURPOSE, FOR NOW. This is the first time a headed Electron
-  # capture has run on a hosted runner. The evidence says it should work —
-  # check:native-replay-fallback already drives windows-gdi-bitblt against a
-  # real DISPLAY1 here and passes — but "should" is not a reason to start
-  # blocking every pull request on a desktop nobody has looked at. The
-  # assertions below are exact and will fail loudly in the job list; make this
-  # job required once it has been green for a run of merges.
+  # BLOCKING SINCE 0.4.3. It was non-blocking on purpose while it was the first
+  # headed Electron capture anyone had run on a hosted runner, and the condition
+  # for promoting it was stated at the time: green for a run of merges. It has
+  # been — twelve consecutive CI runs from 2026-08-02 to 2026-08-09, every one
+  # of them green on this job.
+  #
+  # The cost of waiting longer was measured rather than argued. On the 0.4.1
+  # candidate this job went RED inside a run that reported success, and the
+  # release could have shipped with nobody having looked at it. A job whose
+  # failures are invisible is not evidence, whatever it asserts.
   capture-e2e:
     runs-on: windows-latest
     timeout-minutes: 25
-    continue-on-error: true
     defaults:
       run:
         shell: pwsh

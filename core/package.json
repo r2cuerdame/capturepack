@@ -64,6 +64,7 @@
     "check:tick-owner": "node scripts/capture-tick-owner-check.mjs",
     "check:display-media-policy": "node scripts/display-media-policy-check.mjs",
     "check:capture-cadence": "node scripts/capture-cadence-check.mjs",
+    "check:capture-latency": "node scripts/capture-latency-check.mjs",
     "check:native-replay-fallback": "node scripts/native-replay-fallback-check.mjs",
     "check:replay-health": "node scripts/replay-health-check.mjs",
     "check:source-latency-calibration": "node scripts/source-latency-calibration-check.mjs",

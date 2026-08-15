@@ -4,6 +4,40 @@ All notable changes to CapturePack. Format follows [Keep a Changelog](https://ke
 this project uses [semantic versioning](https://semver.org/) for the app, and the pack
 format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 
+## 0.4.3 — unreleased
+
+### Added
+
+- **The 5-second workflow is now a measured number.** ROADMAP has carried one
+  constraint over every milestone — never sacrifice it — and it was the only
+  quantity in the product nobody measured. Every capture now writes one line
+  saying how long it kept the user waiting: the pixels frozen, the source pack
+  durable, and the editor visible with its first annotation frame painted,
+  each as an offset from the trigger on a monotonic clock. The total excludes
+  time the person themselves held the flow — choosing a region is not the app
+  being slow — and states that excluded span rather than dropping it. A
+  measurement that cannot be trusted refuses and prints no number at all: a
+  stage counted twice, a clock that stepped backwards, a wait longer than the
+  flow. A capture whose editor never opened is not a refusal; it reports how
+  far it got, which is the run a user is most likely to complain about.
+  `check:capture-latency` holds the arithmetic, the refusals, and the wiring —
+  a flow added without being measured fails the build.
+
+### Changed
+
+- `capture-e2e` is a required CI job. It was non-blocking while it was the
+  first headed Electron capture on a hosted runner, on the stated condition
+  that it be promoted once green across a run of merges; it has been green for
+  twelve consecutive runs. On the 0.4.1 candidate it went red inside a run that
+  reported success, which is the cost of leaving it advisory.
+
+### Fixed
+
+- `docs/schemas/manifest.schema.json` said its semantics were defined "through
+  format 0.6.0" while its own body already described 0.7.0's `media.displays`
+  and packs were declaring 0.8.0. The field descriptions were right and only
+  the summary was two versions stale; it now names 0.7.0 and 0.8.0.
+
 ## 0.4.2 — 2026-08-09
 
 ### Fixed

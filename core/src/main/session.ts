@@ -151,6 +151,16 @@ import {
   unattendedExportPayload,
 } from './saveNow'
 import { startSourceFirstFinalSave } from './sourceFirstFinalSave'
+import {
+  beginCaptureLatency,
+  captureLatencyReport,
+  formatCaptureLatency,
+  markCaptureLatency,
+  noteCaptureLatencyUserWait,
+  type CaptureFlowKind,
+  type CaptureLatencyStage,
+  type CaptureLatencyState,
+} from '../shared/captureLatency'
 import { persistSettings } from './settings'
 import {
   imageRegionSelectorWindowHandles,
@@ -223,6 +233,52 @@ type EditorOutcome =
 let flowActive = false
 let activeEditor: BrowserWindow | null = null
 
+// How long the flow kept the user waiting (ROADMAP: "never sacrifice the
+// 5-second workflow"). One flow at a time is already guaranteed by `flowActive`
+// above, so this is module state rather than a parameter threaded through every
+// stage of three long flows.
+//
+// The clock is monotonic on purpose. A wall clock that steps during a capture
+// would produce a duration nobody could tell from a real regression, and this
+// measurement exists to be believed.
+const latencyOriginNs = process.hrtime.bigint()
+function monotonicNowMs(): number {
+  return Math.round(Number(process.hrtime.bigint() - latencyOriginNs) / 1e6)
+}
+
+let flowLatency: CaptureLatencyState | null = null
+let flowLatencyReported = false
+
+function beginFlowLatency(kind: CaptureFlowKind): void {
+  flowLatency = beginCaptureLatency(kind, monotonicNowMs())
+  flowLatencyReported = false
+}
+
+function markFlowLatency(stage: CaptureLatencyStage): void {
+  if (flowLatency !== null) markCaptureLatency(flowLatency, stage, monotonicNowMs())
+}
+
+function noteFlowUserWait(waitedMs: number): void {
+  if (flowLatency !== null) noteCaptureLatencyUserWait(flowLatency, waitedMs)
+}
+
+/**
+ * Writes the line once. Called when the editor becomes visible, so the number
+ * lands while it is the answer to a question someone is asking, and again when
+ * the flow ends — which is the only report a flow whose editor never opened
+ * gets, and the run a user is most likely to complain about.
+ */
+function reportFlowLatency(): void {
+  if (flowLatency === null || flowLatencyReported) return
+  flowLatencyReported = true
+  logInfo(formatCaptureLatency(captureLatencyReport(flowLatency)))
+}
+
+function endFlowLatency(): void {
+  reportFlowLatency()
+  flowLatency = null
+}
+
 /**
  * Makes a repeated request useful while an editor is already open. Starting a
  * second capture would destroy the first flow's ownership, but silently doing
@@ -255,6 +311,7 @@ export async function startCaptureFlow(settings: Settings): Promise<void> {
   }
   logInfo('[capture] capture requested')
   flowActive = true
+  beginFlowLatency('video')
   try {
     await runFlow(settings)
   } catch (err) {
@@ -263,6 +320,7 @@ export async function startCaptureFlow(settings: Settings): Promise<void> {
     dialog.showErrorBox('CapturePack', uiT(settings)('app.captureFailed', { error: errorMessage(err) }))
   } finally {
     flowActive = false
+    endFlowLatency()
     // An unattended run (#63) exits HERE, not the moment the folder appeared:
     // by now source-first save has published the manifest, copied the prompt
     // path and raised the toast inside the promise above. A flow that saved
@@ -288,6 +346,7 @@ export function startEditFlow(dirPath: string, settings: Settings): boolean {
   }
   logInfo(`[capture] re-edit requested: ${path.basename(dirPath)}`)
   flowActive = true
+  beginFlowLatency('re-edit')
   // Let the invoke response reach History before reading replay files and
   // rebuilding provider indexes. runEditFlow necessarily does some synchronous
   // pack I/O before its first await; starting it on this call stack made the
@@ -300,6 +359,7 @@ export function startEditFlow(dirPath: string, settings: Settings): boolean {
       })
       .finally(() => {
         flowActive = false
+        endFlowLatency()
       })
   })
   return true
@@ -322,6 +382,7 @@ export async function startImageCaptureFlow(settings: Settings): Promise<void> {
   }
   logInfo('[image] capture requested')
   flowActive = true
+  beginFlowLatency('image')
   try {
     await runImageFlow(settings)
   } catch (err) {
@@ -332,6 +393,7 @@ export async function startImageCaptureFlow(settings: Settings): Promise<void> {
     )
   } finally {
     flowActive = false
+    endFlowLatency()
   }
 }
 
@@ -1117,6 +1179,7 @@ async function runImageFlowWithContext(
   if (allDisplays.length === 0) throw new Error('no display is available')
   const focused = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
   const snapshots = await takeDisplaySnapshots(allDisplays, focused)
+  markFlowLatency('frozen')
   const indexById = new Map(allDisplays.map((display, index) => [display.id, index + 1]))
   const selectable = allDisplays.flatMap((display) => {
     const snapshot = snapshots.get(display.id)
@@ -1172,7 +1235,12 @@ async function runImageFlowWithContext(
     uiLanguage: uiLanguage(settings),
   })
   const selectorHwnds = imageRegionSelectorWindowHandles()
+  // Everything from here to the selection is a person choosing a rectangle.
+  // Charging it to the product would make the most patient user look like the
+  // slowest machine.
+  const selectorShownAtMs = monotonicNowMs()
   const selection = await selectionPending
+  noteFlowUserWait(monotonicNowMs() - selectorShownAtMs)
   if (selection === null) {
     snapshots.clear()
     logInfo('[image] selection cancelled — no pack was written')
@@ -1308,6 +1376,7 @@ async function runImageFlowWithContext(
   let handle: PackHandle | null = null
   try {
     handle = await savePack(initialSave)
+    markFlowLatency('saved')
     logInfo(
       `[image] save-first wrote ${path.basename(handle.dirPath)} ` +
         `(${selection.mode}, ${width}x${height})`,
@@ -1482,6 +1551,10 @@ async function runImageFlowWithContext(
       }
       if (editor.isDestroyed()) return
       await initializeAndShowEditor(editor, init)
+      // The first instant the person can do what they pressed the hotkey for:
+      // the renderer has decoded the payload and crossed a paint boundary.
+      markFlowLatency('editor-visible')
+      reportFlowLatency()
 
       if (!settled.ready) {
         void uiaReady.then(
@@ -1625,6 +1698,7 @@ async function runFlow(settings: Settings): Promise<void> {
   // FOCUSED one. "cursor"/fixed: that display alone. Snapshot, replay, editor,
   // and annotations all target the focused display.
   let frozen = await freezeDisplays(settings)
+  markFlowLatency('frozen')
   // Every display replay is expressed on the focused recorder's pack clock.
   // If that clock master failed while a secondary recorder succeeded, keeping
   // the secondary would write an unclocked, unscrubbable and potentially
@@ -2014,6 +2088,7 @@ async function runFlow(settings: Settings): Promise<void> {
   let handle: PackHandle | null = null
   try {
     handle = await savePack(initialSave)
+    markFlowLatency('saved')
     logInfo(`[capture] save-first wrote ${path.basename(handle.dirPath)}`)
   } catch (err) {
     logError('capturepack: save-first failed:', err)
@@ -2227,6 +2302,10 @@ async function runFlow(settings: Settings): Promise<void> {
         windowMode,
       }
       await initializeAndShowEditor(editor, init)
+      // The first instant the person can do what they pressed the hotkey for:
+      // the renderer has decoded the payload and crossed a paint boundary.
+      markFlowLatency('editor-visible')
+      reportFlowLatency()
       // The dump was not back in time: hand it over the moment it is, rather
       // than throwing away a payload the capture already paid for. The editor
       // rebuilds its object indexes and picking simply starts working.
@@ -3198,6 +3277,10 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
       }
       if (editor.isDestroyed()) return
       await initializeAndShowEditor(editor, init)
+      // The first instant the person can do what they pressed the hotkey for:
+      // the renderer has decoded the payload and crossed a paint boundary.
+      markFlowLatency('editor-visible')
+      reportFlowLatency()
       logInfo(`[capture] re-edit editor shown: ${path.basename(dirPath)}`)
 
       if (!settledFrame.ready) {
