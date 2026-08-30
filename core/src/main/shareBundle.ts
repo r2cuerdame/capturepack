@@ -205,7 +205,9 @@ export async function planShareBundle(dirPath: string): Promise<ShareBundlePlan>
     )
     .digest('hex')
 
-  const outputPath = shareBundlePath(root)
+  // Preserve the caller's ordinary path spelling for the sibling. `root` may
+  // expand a Windows 8.3 component even though no link/junction was crossed.
+  const outputPath = shareBundlePath(requestedRoot)
   return {
     revision,
     outputPath,
