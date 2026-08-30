@@ -101,14 +101,10 @@ interface MediaCandidate {
  */
 export async function planShareBundle(dirPath: string): Promise<ShareBundlePlan> {
   const requestedRoot = path.resolve(dirPath)
-  const root = await realpath(dirPath).catch(() => {
+  await assertUnaliasedDirectory(requestedRoot)
+  const root = await realpath(requestedRoot).catch(() => {
     throw new ShareBundleError('invalid-pack')
   })
-  // A junction/symlink alias would make the managed sibling ambiguous: History
-  // would look beside the alias while creation writes beside the real pack.
-  if (requestedRoot.toLowerCase() !== root.toLowerCase()) {
-    throw new ShareBundleError('invalid-pack')
-  }
   const pack = await readPack(root)
   const declaredFocused = focusedDisplayIndex(pack.manifest)
   const focusedDisplay =
@@ -219,6 +215,33 @@ export async function planShareBundle(dirPath: string): Promise<ShareBundlePlan>
     visibleLabels,
     blockers,
   }
+}
+
+/**
+ * Reject actual symlink/junction aliases without comparing path spellings.
+ * Windows can represent the same ordinary directory with both an 8.3 short
+ * path and a long path; realpath may switch between them even though neither
+ * spelling crosses a reparse point.
+ */
+async function assertUnaliasedDirectory(resolvedPath: string): Promise<void> {
+  const parsed = path.parse(resolvedPath)
+  let current = parsed.root
+  let finalInfo = await lstat(current).catch(() => {
+    throw new ShareBundleError('invalid-pack')
+  })
+  const parts = resolvedPath
+    .slice(parsed.root.length)
+    .split(path.sep)
+    .filter((part) => part !== '')
+  for (const part of parts) {
+    current = path.join(current, part)
+    finalInfo = await lstat(current).catch(() => {
+      throw new ShareBundleError('invalid-pack')
+    })
+    // Node reports Windows directory junctions as symbolic links from lstat.
+    if (finalInfo.isSymbolicLink()) throw new ShareBundleError('invalid-pack')
+  }
+  if (!finalInfo.isDirectory()) throw new ShareBundleError('invalid-pack')
 }
 
 /**

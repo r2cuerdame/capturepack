@@ -207,6 +207,22 @@ try {
     trailingPlan.outputPath === shareBundlePath(trailing.dir) &&
       !trailingPlan.outputPath.startsWith(`${trailing.dir}${path.sep}`))
 
+  const aliasSource = makeFixture('pack-alias-source')
+  const aliasPath = path.join(root, 'pack-alias')
+  let packAliasMade = false
+  try {
+    symlinkSync(aliasSource.dir, aliasPath, process.platform === 'win32' ? 'junction' : 'dir')
+    packAliasMade = true
+  } catch {
+    // Some hosts disallow user-created links. The rejection remains exercised
+    // wherever the host permits creating the fixture.
+  }
+  if (packAliasMade) {
+    await expectError('invalid-pack', () => planShareBundle(aliasPath))
+  }
+  check('a pack reached through a symlink or junction alias is rejected',
+    !packAliasMade || !existsSync(`${aliasPath}.share.zip`))
+
   const reviewedAgain = await planShareBundle(success.dir)
   const oldShareHash = sha(readFileSync(success.share))
   appendFileSync(path.join(success.dir, 'annotations.json'), '\n')
