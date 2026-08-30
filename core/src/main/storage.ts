@@ -27,7 +27,8 @@ import type { Settings } from '../shared/types'
 import { logError, logInfo } from './log'
 import { createPackStore } from './mcp/store'
 import type { PackStore, RawPackEntry } from './mcp/store'
-import { siblingArchive } from './packArchive'
+import { siblingArchive, siblingShareBundle } from './packArchive'
+import { beginPackOperation } from './packOperations'
 
 /**
  * The ages the Settings panel offers, in days — and ZERO, which means
@@ -48,6 +49,8 @@ const PURGE_AGES_DAYS: readonly number[] = [0, 1, 7, 30]
 interface StoredPack extends RetentionCandidate {
   /** The sibling archive of a pack folder, when it has one. */
   twin: { path: string; bytes: number } | null
+  /** The reviewed-stills-only sharing copy managed beside the same folder. */
+  share: { path: string; bytes: number } | null
 }
 
 // ---------------------------------------------------------------------------
@@ -126,6 +129,15 @@ function measure(entry: RawPackEntry): StoredPack {
       twin = null // Vanished between the existence check and the stat.
     }
   }
+  const sharePath = entry.kind === 'dir' ? siblingShareBundle(entry.path) : null
+  let share: StoredPack['share'] = null
+  if (sharePath !== null && fs.existsSync(sharePath)) {
+    try {
+      share = { path: sharePath, bytes: fs.statSync(sharePath).size }
+    } catch {
+      share = null
+    }
+  }
   const cached = packBytesCache.get(entry.path)
   let bytes: number
   if (cached !== undefined && cached.mtimeMs === entry.mtimeMs) {
@@ -137,8 +149,9 @@ function measure(entry: RawPackEntry): StoredPack {
   return {
     path: entry.path,
     mtimeMs: entry.mtimeMs,
-    bytes: bytes + (twin?.bytes ?? 0),
+    bytes: bytes + (twin?.bytes ?? 0) + (share?.bytes ?? 0),
     twin,
+    share,
   }
 }
 
@@ -232,24 +245,49 @@ async function trashPacks(doomed: readonly StoredPack[], reason: string): Promis
   let bytesFreed = 0
   let firstError: string | null = null
   for (const pack of doomed) {
-    try {
-      await shell.trashItem(pack.path)
-      packsDeleted += 1
-      bytesFreed += pack.bytes
-    } catch (err) {
-      if (firstError === null) firstError = errorMessage(err)
+    const release = beginPackOperation(pack.path)
+    if (release === null) {
+      if (firstError === null) firstError = 'pack is busy'
       continue
     }
-    // The zip twin follows the folder. Best effort: the folder is already gone,
-    // so a failure here must not report the whole delete as failed — but the
-    // bytes it still occupies were counted in pack.bytes and are not free.
-    if (pack.twin !== null) {
-      try {
-        await shell.trashItem(pack.twin.path)
-      } catch (err) {
-        bytesFreed -= pack.twin.bytes
-        logError('capturepack: could not trash zip twin:', err)
+    const packOnlyBytes = Math.max(
+      0,
+      pack.bytes - (pack.twin?.bytes ?? 0) - (pack.share?.bytes ?? 0),
+    )
+    try {
+      // Companions go first. If either one cannot move, the pack remains in the
+      // index and continues to own every copy left on disk. This is stricter
+      // than best effort because an unindexed Share Copy is a silent privacy
+      // failure, not a successful cleanup.
+      if (pack.share !== null) {
+        try {
+          await shell.trashItem(pack.share.path)
+          bytesFreed += pack.share.bytes
+        } catch (err) {
+          if (firstError === null) firstError = errorMessage(err)
+          logError('capturepack: could not trash share copy:', err)
+          continue
+        }
       }
+      if (pack.twin !== null) {
+        try {
+          await shell.trashItem(pack.twin.path)
+          bytesFreed += pack.twin.bytes
+        } catch (err) {
+          if (firstError === null) firstError = errorMessage(err)
+          logError('capturepack: could not trash zip twin:', err)
+          continue
+        }
+      }
+      try {
+        await shell.trashItem(pack.path)
+        packsDeleted += 1
+        bytesFreed += packOnlyBytes
+      } catch (err) {
+        if (firstError === null) firstError = errorMessage(err)
+      }
+    } finally {
+      release()
     }
   }
   invalidateStorageUsage()

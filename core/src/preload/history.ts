@@ -5,11 +5,13 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../shared/ipc'
 import type {
   HistoryActionResult,
+  HistoryCreateShareResult,
+  HistoryCreateZipResult,
   HistoryListResult,
   HistoryRenameResult,
   HistoryRenderStatusPayload,
+  HistorySharePlanResult,
   StorageUsage,
-  ToastCreateZipResult,
 } from '../shared/ipc'
 
 contextBridge.exposeInMainWorld('historyBridge', {
@@ -35,8 +37,14 @@ contextBridge.exposeInMainWorld('historyBridge', {
   play(packPath: string): Promise<HistoryActionResult> {
     return ipcRenderer.invoke(IPC.historyPlay, packPath) as Promise<HistoryActionResult>
   },
-  createZip(packPath: string): Promise<ToastCreateZipResult> {
-    return ipcRenderer.invoke(IPC.historyCreateZip, packPath) as Promise<ToastCreateZipResult>
+  createZip(packPath: string): Promise<HistoryCreateZipResult> {
+    return ipcRenderer.invoke(IPC.historyCreateZip, packPath) as Promise<HistoryCreateZipResult>
+  },
+  planShare(packPath: string): Promise<HistorySharePlanResult> {
+    return ipcRenderer.invoke(IPC.historyPlanShare, packPath) as Promise<HistorySharePlanResult>
+  },
+  createShare(packPath: string, revision: string): Promise<HistoryCreateShareResult> {
+    return ipcRenderer.invoke(IPC.historyCreateShare, packPath, revision) as Promise<HistoryCreateShareResult>
   },
   openFolder(packPath: string): void {
     ipcRenderer.send(IPC.historyOpenFolder, packPath)

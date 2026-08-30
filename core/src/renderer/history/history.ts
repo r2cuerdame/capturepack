@@ -6,12 +6,15 @@ import { applyDomI18n, makeT } from '../../shared/i18n'
 import type { TranslateFn } from '../../shared/i18n'
 import type {
   HistoryActionResult,
+  HistoryCreateShareResult,
+  HistoryCreateZipResult,
   HistoryListResult,
   HistoryPackSummary,
   HistoryRenameResult,
   HistoryRenderStatusPayload,
+  HistorySharePlan,
+  HistorySharePlanResult,
   StorageUsage,
-  ToastCreateZipResult,
 } from '../../shared/ipc'
 import { budgetLevel, budgetPercent, formatBytes } from '../../shared/retention'
 import { DEFAULT_CAPTURE_HOTKEY } from '../../shared/types'
@@ -24,7 +27,9 @@ interface HistoryBridge {
   searchText(packPath: string): Promise<string>
   openPack(packPath: string): Promise<HistoryActionResult>
   play(packPath: string): Promise<HistoryActionResult>
-  createZip(packPath: string): Promise<ToastCreateZipResult>
+  createZip(packPath: string): Promise<HistoryCreateZipResult>
+  planShare(packPath: string): Promise<HistorySharePlanResult>
+  createShare(packPath: string, revision: string): Promise<HistoryCreateShareResult>
   openFolder(packPath: string): void
   copyPath(packPath: string): void
   copyPrompt(packPath: string): Promise<boolean>
@@ -95,6 +100,8 @@ let searchTextsLoading = false
 // In-flight renders (paths) — re-renders AND save-time renders; kept in sync
 // by history:render-status pushes ('rendering' adds, terminal states clear).
 const rendering = new Set<string>()
+const fullZipping = new Set<string>()
+const shareCreating = new Set<string>()
 // 0..1 for the packs whose render has reported a real playhead. A path in
 // `rendering` but NOT here is rendering without a measurement — queued, or a
 // stage that cannot say — and its bar runs indeterminate.
@@ -134,6 +141,9 @@ let renamingFor: string | null = null
 let renameValue = ''
 let renameError: string | null = null
 let deletingFor: string | null = null
+let sharingFor: string | null = null
+let sharePlan: HistorySharePlan | null = null
+let sharePlanLoading = false
 
 let listInFlight = false
 let refreshQueued = false
@@ -162,6 +172,8 @@ async function refresh(): Promise<void> {
       for (const key of [...map.keys()]) if (!live.has(key)) map.delete(key)
     }
     for (const key of [...rendering]) if (!live.has(key)) rendering.delete(key)
+    for (const key of [...fullZipping]) if (!live.has(key)) fullZipping.delete(key)
+    for (const key of [...shareCreating]) if (!live.has(key)) shareCreating.delete(key)
     // A pack whose annotated replay is now ready is definitely done rendering.
     for (const p of packs) if (p.annotated === 'ready') rendering.delete(p.path)
     // Re-request lazy data: main's stamp-keyed caches make unchanged packs free.
@@ -170,6 +182,7 @@ async function refresh(): Promise<void> {
     searchTexts.clear()
     if (renamingFor !== null && !live.has(renamingFor)) renamingFor = null
     if (deletingFor !== null && !live.has(deletingFor)) deletingFor = null
+    if (sharingFor !== null && !live.has(sharingFor)) cancelShareReview(false)
     if (openMenuFor !== null && !live.has(openMenuFor)) openMenuFor = null
     render()
     fetchLazy()
@@ -471,11 +484,18 @@ function buildCard(p: HistoryPackSummary): HTMLElement {
   // progressing from one that had wedged.
   if (rendering.has(p.path)) badges.append(renderProgressBar(p.path))
   if (p.zipTwin) badges.append(elc('span', 'badge', t('history.badgeZip')))
+  if (p.shareTwin) badges.append(elc('span', 'badge ready', t('history.badgeShare')))
+  if (fullZipping.has(p.path)) badges.append(elc('span', 'badge', t('history.zipping')))
+  if (shareCreating.has(p.path)) {
+    badges.append(elc('span', 'badge', t('history.shareCreating')))
+  }
   if (p.kind === 'zip') badges.append(elc('span', 'badge', t('history.badgeZipPack')))
   body.append(badges)
 
   // Inline delete confirm / rename input replace the action row.
-  if (deletingFor === p.path) {
+  if (sharingFor === p.path) {
+    body.append(buildShareReview(p))
+  } else if (deletingFor === p.path) {
     body.append(buildDeleteConfirm(p))
   } else if (renamingFor === p.path) {
     body.append(buildRenameRow(p))
@@ -547,22 +567,16 @@ function buildActions(p: HistoryPackSummary): HTMLElement {
   })
   row.append(playBtn)
 
-  const zipBtn = elc('button', undefined, p.zipTwin ? t('history.badgeZip') : t('toast.createZip'))
-  zipBtn.type = 'button'
-  zipBtn.disabled = p.zipTwin || p.kind !== 'dir'
-  zipBtn.addEventListener('click', () => {
-    zipBtn.disabled = true
-    zipBtn.textContent = t('history.zipping')
-    void bridge.createZip(p.path).then((result) => {
-      if (result.ok) {
-        p.zipTwin = true
-        render()
-      } else {
-        showCardError(p.path, result.error ?? t('history.createZipFailed'))
-      }
-    })
-  })
-  row.append(zipBtn)
+  const shareBtn = elc(
+    'button',
+    'shareButton',
+    p.shareTwin ? t('history.shareReviewReplace') : t('history.shareCreate'),
+  )
+  shareBtn.type = 'button'
+  shareBtn.disabled = p.kind !== 'dir' || shareCreating.has(p.path)
+  shareBtn.title = t('history.shareTooltip')
+  shareBtn.addEventListener('click', () => beginShareReview(p))
+  row.append(shareBtn)
 
   if (p.annotated === 'missing' && p.kind === 'dir') {
     const retryBtn = elc('button', undefined, rendering.has(p.path) ? t('history.renderingBtn') : t('history.retryRender'))
@@ -612,6 +626,14 @@ function buildMenu(p: HistoryPackSummary): HTMLElement {
   })
   menu.append(elc('div', 'menuSep'))
   item(
+    p.zipTwin ? t('history.badgeZip') : t('history.menuFullZip'),
+    {
+      disabled: p.kind !== 'dir' || p.zipTwin || fullZipping.has(p.path),
+      title: t('history.fullZipTooltip'),
+    },
+    () => startFullZip(p),
+  )
+  item(
     t('history.menuRerender'),
     {
       disabled: !p.hasReplay || p.kind !== 'dir' || rendering.has(p.path),
@@ -632,6 +654,176 @@ function buildMenu(p: HistoryPackSummary): HTMLElement {
   })
 
   return menu
+}
+
+function beginShareReview(p: HistoryPackSummary): void {
+  cardErrors.delete(p.path)
+  sharingFor = p.path
+  sharePlan = null
+  sharePlanLoading = true
+  openMenuFor = null
+  render()
+  void (async () => {
+    try {
+      const result = await bridge.planShare(p.path)
+      if (sharingFor !== p.path) return
+      if (!result.ok || result.plan === undefined) {
+        sharingFor = null
+        showCardError(p.path, result.error ?? t('history.sharePlanFailed'))
+        return
+      }
+      sharePlan = result.plan
+    } catch (err) {
+      if (sharingFor !== p.path) return
+      sharingFor = null
+      showCardError(
+        p.path,
+        err instanceof Error ? err.message : t('history.sharePlanFailed'),
+      )
+      return
+    } finally {
+      if (sharingFor === p.path) sharePlanLoading = false
+    }
+    render()
+  })()
+}
+
+function buildShareReview(p: HistoryPackSummary): HTMLElement {
+  const review = elc('section', 'shareReview')
+  if (sharePlanLoading || sharePlan === null) {
+    review.append(elc('div', 'shareReviewTitle', t('history.sharePlanning')))
+    return review
+  }
+  const plan = sharePlan
+  review.append(elc('div', 'shareReviewTitle', t('history.shareReviewTitle')))
+  review.append(elc('div', 'shareOutputName', plan.outputName))
+
+  if (plan.previewDataUrls.length > 0) {
+    const grid = elc('div', 'sharePreviewGrid')
+    for (const dataUrl of plan.previewDataUrls) {
+      const image = elc('img', 'sharePreview')
+      image.alt = t('history.sharePreviewAlt')
+      image.src = dataUrl
+      grid.append(image)
+    }
+    review.append(grid)
+    review.append(
+      elc(
+        'div',
+        'shareReviewMeta',
+        t('history.sharePreviewCount', {
+          shown: plan.previewCount,
+          total: plan.stillCount,
+        }),
+      ),
+    )
+  }
+
+  review.append(
+    elc(
+      'div',
+      'shareReviewMeta',
+      t('history.shareContents', {
+        displays: plan.displayCount,
+        images: plan.stillCount,
+      }),
+    ),
+  )
+  review.append(elc('div', 'shareExcluded', t('history.shareExcluded')))
+  review.append(elc('div', 'shareWarning', t('history.shareVisualWarning')))
+
+  if (plan.visibleLabels.length > 0) {
+    review.append(
+      elc(
+        'div',
+        'shareLabelsTitle',
+        t('history.shareVisibleLabels', { count: plan.visibleLabels.length }),
+      ),
+    )
+    const labels = elc('ul', 'shareLabels')
+    for (const label of plan.visibleLabels) labels.append(elc('li', undefined, label))
+    review.append(labels)
+  }
+
+  const blocked = plan.blockers.includes('blur-label')
+  if (blocked) review.append(elc('div', 'shareBlocker', t('history.shareErrBlurLabel')))
+
+  const actions = elc('div', 'inlineRow')
+  const createBtn = elc(
+    'button',
+    'primary',
+    p.shareTwin ? t('history.shareReplace') : t('history.shareConfirm'),
+  )
+  createBtn.type = 'button'
+  createBtn.disabled = blocked || shareCreating.has(p.path)
+  createBtn.addEventListener('click', () => commitShare(p, plan))
+  actions.append(createBtn)
+  const cancelBtn = elc('button', undefined, t('common.cancel'))
+  cancelBtn.type = 'button'
+  cancelBtn.disabled = shareCreating.has(p.path)
+  cancelBtn.addEventListener('click', () => {
+    if (!shareCreating.has(p.path)) cancelShareReview()
+  })
+  actions.append(cancelBtn)
+  review.append(actions)
+  return review
+}
+
+function commitShare(p: HistoryPackSummary, plan: HistorySharePlan): void {
+  if (shareCreating.has(p.path)) return
+  shareCreating.add(p.path)
+  render()
+  void (async () => {
+    try {
+      const result = await bridge.createShare(p.path, plan.revision)
+      if (!result.ok) {
+        showCardError(p.path, result.error ?? t('history.shareCreateFailed'))
+        return
+      }
+      p.shareTwin = true
+      cancelShareReview(false)
+      refreshUsage()
+    } catch (err) {
+      showCardError(
+        p.path,
+        err instanceof Error ? err.message : t('history.shareCreateFailed'),
+      )
+    } finally {
+      shareCreating.delete(p.path)
+      render()
+    }
+  })()
+}
+
+function cancelShareReview(shouldRender = true): void {
+  sharingFor = null
+  sharePlan = null
+  sharePlanLoading = false
+  if (shouldRender) render()
+}
+
+function startFullZip(p: HistoryPackSummary): void {
+  if (fullZipping.has(p.path)) return
+  cardErrors.delete(p.path)
+  fullZipping.add(p.path)
+  render()
+  void (async () => {
+    try {
+      const result = await bridge.createZip(p.path)
+      if (result.ok) {
+        p.zipTwin = true
+        refreshUsage()
+      } else showCardError(p.path, result.error ?? t('history.createZipFailed'))
+    } catch (err) {
+      showCardError(
+        p.path,
+        err instanceof Error ? err.message : t('history.createZipFailed'),
+      )
+    } finally {
+      fullZipping.delete(p.path)
+      render()
+    }
+  })()
 }
 
 function buildRenameRow(p: HistoryPackSummary): HTMLElement {
@@ -695,7 +887,9 @@ function buildDeleteConfirm(p: HistoryPackSummary): HTMLElement {
     elc(
       'span',
       'confirmText',
-      p.kind === 'dir' && p.zipTwin ? t('history.deleteConfirmZip') : t('history.deleteConfirm'),
+      p.kind === 'dir' && (p.zipTwin || p.shareTwin)
+        ? t('history.deleteConfirmZip')
+        : t('history.deleteConfirm'),
     ),
   )
   const yesBtn = elc('button', 'danger', t('history.menuDelete'))
@@ -858,6 +1052,10 @@ window.addEventListener('keydown', (event) => {
   if (deletingFor !== null) {
     deletingFor = null
     render()
+    return
+  }
+  if (sharingFor !== null) {
+    if (!shareCreating.has(sharingFor)) cancelShareReview()
     return
   }
   event.preventDefault()

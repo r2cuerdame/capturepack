@@ -1,6 +1,6 @@
 // Writes the CapturePack FOLDER (format_version 0.1.0, SPEC §3 "folder first").
-// The folder is the save unit; the .capturepack ZIP is created only on demand
-// by the save toast's [Create ZIP] button (createPackZip).
+// The folder is the save unit; the full .zip distribution is created only on demand
+// by History's explicit [Full ZIP] action (createPackZip).
 
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -53,6 +53,7 @@ import { buildReport } from './report'
 import { buildReadme, buildSkills, SKILLS_FILES } from './packdocs'
 import { buildViewerHtml, manifestWithViewerFormat } from './viewer'
 import { copyTextToClipboard } from './clipboard'
+import { isShareBundleArchive } from './packArchive'
 import {
   WINDOWS_CONTEXT_TIMELINE_SCHEMA,
   type WindowsContextTimelineV1,
@@ -2016,7 +2017,7 @@ export async function setManifestRenderOutputs(
 }
 
 /**
- * On-demand distribution ZIP (toast [Create ZIP]): sibling {folder}.capturepack
+ * On-demand full distribution ZIP (History [Full ZIP]): sibling {folder}.zip
  * with the folder CONTENTS at the archive root (SPEC §3.2). Returns the zip path.
  */
 /**
@@ -2036,6 +2037,11 @@ export async function setManifestRenderOutputs(
  */
 export async function createPackZip(dirPath: string): Promise<string> {
   const zipPath = `${dirPath}.zip`
+  // `Foo.share.zip` is also the Share Copy path of a neighbouring pack named
+  // Foo. Never let Full ZIP overwrite a different archive identity.
+  if (existsSync(zipPath) && isShareBundleArchive(zipPath)) {
+    throw new Error('The Full ZIP filename is occupied by another pack\'s Share Copy.')
+  }
   const zip = new AdmZip()
   zip.addLocalFolder(dirPath)
   await zip.writeZipPromise(zipPath, { overwrite: true })

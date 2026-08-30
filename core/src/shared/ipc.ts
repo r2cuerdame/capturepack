@@ -228,8 +228,6 @@ export const IPC = {
   toastOpenFolder: 'toast:open-folder',
   // toast -> main: copy the absolute pack folder path to the clipboard
   toastCopyPath: 'toast:copy-path',
-  // toast -> main (invoke): create {folder}.capturepack next to the folder
-  toastCreateZip: 'toast:create-zip',
   // toast -> main: copy the analyze-this-pack prompt to the clipboard
   toastCopyPrompt: 'toast:copy-prompt',
   // toast -> main: close the toast window (× button / auto-close)
@@ -253,8 +251,14 @@ export const IPC = {
   historyOpenPack: 'history:open-pack',
   // history window -> main (invoke): open replay_annotated.webm in the system player
   historyPlay: 'history:play',
-  // history window -> main (invoke): create the sibling {folder}.capturepack zip
+  // history window -> main (invoke): create the sibling full {folder}.zip
   historyCreateZip: 'history:create-zip',
+  // history window -> main (invoke): inspect the exact reviewed-stills-only
+  // Share Copy before creating it. Returns resized previews, never file paths.
+  historyPlanShare: 'history:plan-share',
+  // history window -> main (invoke): create the reviewed sibling .share.zip.
+  // The opaque revision from historyPlanShare makes a changed pack fail closed.
+  historyCreateShare: 'history:create-share',
   // history window -> main: open the pack folder in the file manager
   historyOpenFolder: 'history:open-folder',
   // settings -> main (invoke): how much the output folder is holding, and what
@@ -274,9 +278,9 @@ export const IPC = {
   historyCopyPrompt: 'history:copy-prompt',
   // history window -> main (invoke): re-run the background annotated-replay render
   historyRerender: 'history:rerender',
-  // history window -> main (invoke): rename the pack folder AND its zip twin
+  // history window -> main (invoke): rename the pack folder AND its managed copies
   historyRename: 'history:rename',
-  // history window -> main (invoke): move the pack folder + zip twin to the trash
+  // history window -> main (invoke): move the pack folder + managed copies to the trash
   historyDelete: 'history:delete',
   // main -> history window: the pack index changed on disk — re-list
   historyChanged: 'history:changed',
@@ -1303,7 +1307,7 @@ export interface ToastRenderStatusPayload {
   state: ToastRenderState
 }
 
-export interface ToastCreateZipResult {
+export interface HistoryCreateZipResult {
   ok: boolean
   zipPath?: string
   error?: string
@@ -1684,10 +1688,39 @@ export interface HistoryPackSummary {
   numberedCount: number
   hasBlur: boolean
   annotated: HistoryAnnotatedState
-  // A sibling {folder}.capturepack exists (always true for kind 'zip')
+  // A sibling full-pack archive exists (the entry itself when kind is 'zip').
   zipTwin: boolean
+  // A sibling reviewed-stills-only `{folder}.share.zip` exists.
+  shareTwin: boolean
   // Unreadable/malformed pack: the card renders degraded with this message
   warning: string | null
+}
+
+export interface HistorySharePlan {
+  // Opaque content revision; creation rejects it if the pack changed after review.
+  revision: string
+  outputName: string
+  previewDataUrls: string[]
+  previewCount: number
+  stillCount: number
+  displayCount: number
+  hasBlur: boolean
+  // Text already burned into the derived pixels. It is shown locally for
+  // review but is never copied as structured data into the Share Copy.
+  visibleLabels: string[]
+  blockers: Array<'blur-label'>
+}
+
+export interface HistorySharePlanResult {
+  ok: boolean
+  plan?: HistorySharePlan
+  error?: string
+}
+
+export interface HistoryCreateShareResult {
+  ok: boolean
+  bundlePath?: string
+  error?: string
 }
 
 export interface HistoryListResult {

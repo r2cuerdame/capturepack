@@ -870,8 +870,8 @@ what the user scrubs is what the pack contains.
 
 **Export**
 
-A CapturePack is a folder first; a standard-ZIP `.capturepack` is an optional
-sharing copy. A video pack can contain:
+A CapturePack is a folder first; the reference app's standard `.zip` is an optional
+full distribution copy and still contains the originals. A video pack can contain:
 
 - `manifest.json`
 - `replay.webm` (or `replay.mp4`)
@@ -891,9 +891,10 @@ verb is **Save**, not Export — "export" survives only as the SPEC's internal
 event name (`core.export.created`).
 
 **Output layout — Folder First.** The primary save unit is always a **folder**; ZIP is not
-the original, only an optional distribution package created when the user clicks
-[ Create ZIP ]. (This supersedes the earlier date-folder + automatic zip layout — the date
-lives in the folder name now.)
+the original. The optional full distribution package is created explicitly from
+History → More → **Full ZIP**, with an originals warning. Packaging is no longer a
+save-toast action. (This supersedes the earlier date-folder + automatic zip layout —
+the date lives in the folder name now.)
 
 ```
 CapturePack_2026-07-27_143052/
@@ -974,10 +975,11 @@ frames/
 
 ```
 Saved  CapturePack_2026-07-27_143052
-[ Open Folder ] [ Copy Folder Path ] [ Create ZIP ] [ Copy Prompt ]
+[ Open Folder ] [ Copy Folder Path ] [ Copy Prompt ]
 ```
 
-**Principles** — the folder is the source; ZIP is distribution. Replay is evidence;
+**Principles** — the folder is the source; a full ZIP is distribution, and the separate
+reviewed Share Copy contains canonical annotated stills only. Replay is evidence;
 `annotations.json` is the editable truth, and a manifest-declared
 `replay_annotated` is an instantly understandable optional derived result. Generated
 README/skills must work from the source media and structured data even when no derived
@@ -1683,9 +1685,10 @@ History.
 **History list** — CapturePack folders in the output folder, newest first, searchable.
 Each card shows: title (or report.md first sentence), captured application, time, replay
 length, annotation count (+ numbered count), blur presence, annotated-replay state
-(ready / rendering / failed → [Retry Render]), ZIP created or not, folder size, and a
-snapshot.png thumbnail (placeholder when missing/corrupt; external share previews must
-use a sanitized snapshot).
+(ready / rendering / failed → [Retry Render]), full-ZIP and Share-Copy state, folder size,
+and a local `snapshot.png` thumbnail (placeholder when missing/corrupt). The Share Copy
+review draws its previews only from manifest-declared annotated keyframes; the original
+snapshot is never a Share Copy candidate.
 
 **Search / filters** — search over title, report.md, application, URL, date and
 annotation text. Current quick filters are All · Today · This Week · Render
@@ -1707,9 +1710,10 @@ replay_annotated. replay is NEVER modified or overwritten.
 unsaved-changes state: [ Save ] [ Save As New CapturePack ] [ Discard ]. Save As creates
 a new folder preserving the original; Discard restores the last saved state.
 
-**Detail actions** — Edit CapturePack · Play Annotated Replay · Open Folder ·
-Create ZIP (choose included files; option to exclude the original replay) · Copy Prompt;
-secondary: Re-render · Save As · Rename · Delete.
+**Detail actions** — Edit CapturePack · Open Folder · Play Annotated Replay ·
+Share Copy; secondary under More: Copy Folder Path · Copy Prompt · Full ZIP ·
+Re-render · Rename · Delete. Share Copy is folder-only, reviews a pinned revision,
+and never offers an include/exclude-replay toggle because every video container is excluded.
 
 **Card buttons say what they do.** The primary action is labelled **Edit** — it reopens the
 pack in the editor, and "Open" left users guessing whether it opened a folder, a video, or
@@ -2283,12 +2287,18 @@ only (blur, border, number, text; arrow/highlight when supported later).
 **Blur security principle (supersedes destructive snapshot blur)** — replay stays
 original (preservation); blur lives in replay_annotated only. README/report may note an
 annotation is blurred. The save-complete screen warns:
-"Original replay contains unredacted content. Share replay_annotated or create a
-sanitized ZIP." A future sanitized-ZIP option excludes replay + original snapshot.png.
+"Original pixels remain in this pack. Use History → Share Copy and review every
+included still before sending." A Share Copy is a separate `capturepack-share` ZIP,
+never a reduced CapturePack: its `reviewed-stills-only` profile excludes all originals,
+all video containers including annotated replays, and structured source context. It
+shows the user the still inventory, representative previews, and visible labels first;
+fails closed when a blur label would be drawn back on top of the hidden object; and
+decodes each PNG to pixels before deterministic re-encoding so ancillary chunks and
+trailing container payload cannot ride along. This does not prove visible redaction safe.
 
 **No include-replay toggle** — the editor has no option to exclude the replay from the
 pack. Saving always keeps everything (save-first philosophy); what leaves the machine is
-decided at SHARE time (annotated video, on-demand ZIP, future sanitized ZIP). Replay
+decided at SHARE time (reviewed still-only Share Copy or explicit full ZIP). Replay
 length is the trim feature's job, not a checkbox.
 
 Data example:

@@ -2,7 +2,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../shared/ipc'
 import type {
-  ToastCreateZipResult,
   ToastInitPayload,
   ToastRenderStatusPayload,
 } from '../shared/ipc'
@@ -19,9 +18,6 @@ contextBridge.exposeInMainWorld('toastBridge', {
   },
   copyPath(): void {
     ipcRenderer.send(IPC.toastCopyPath)
-  },
-  createZip(): Promise<ToastCreateZipResult> {
-    return ipcRenderer.invoke(IPC.toastCreateZip) as Promise<ToastCreateZipResult>
   },
   copyPrompt(): Promise<boolean> {
     return ipcRenderer.invoke(IPC.toastCopyPrompt) as Promise<boolean>

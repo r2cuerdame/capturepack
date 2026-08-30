@@ -170,8 +170,11 @@ Generated CapturePacks should remain readable forever.
 
 ## What's inside a CapturePack
 
-The pack is a plain **folder** — browsable, editable, honest. ZIP (`.capturepack`)
-is created only when you want to share.
+The pack is a plain **folder** — browsable, editable, honest. The app's full `.zip`
+is an optional distribution copy and still contains the original evidence.
+**Unreleased current-source feature:** History adds a reviewed **Share Copy**
+(`.share.zip`) containing only manifest-declared annotated PNG stills and a closed,
+source-data-free inventory. This feature is not part of the public 0.4.3 release yet.
 
 Video packs may contain:
 
@@ -280,8 +283,14 @@ check, which can be disabled in Settings → General.
 
 Blur is non-destructive: it protects generated annotated views, but
 `snapshot.png` and the original replay inside the full pack remain unredacted.
-Review a pack before sharing it, and do not share the full pack when its original
-media contains information that must stay private.
+In the unreleased current source, when original media or structured context must
+stay private, use History → **Share Copy** and review every included still and
+visible label before sending it. The `reviewed-stills-only` Share Copy excludes
+originals, every video container (including annotated replays), manifests,
+annotations, timelines, plugin context and generated pack documents. Each included
+PNG is decoded to pixels and deterministically re-encoded so ancillary metadata and
+trailing payload are stripped. That container cleanup is not a security proof:
+unmarked secrets can still remain visible in the reviewed pixels.
 
 ## ♥ Support
 

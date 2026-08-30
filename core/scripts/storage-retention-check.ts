@@ -249,12 +249,36 @@ check(
 )
 const trash = functionBody(storage, 'trashPacks')
 check(
-  'the zip twin goes with the folder, automatically as well as manually',
+  'the full zip twin goes with the folder, automatically as well as manually',
   trash.includes('pack.twin') && trash.includes('shell.trashItem(pack.twin.path)'),
 )
 check(
-  'a twin that could not be trashed is not counted as freed',
-  trash.includes('bytesFreed -= pack.twin.bytes'),
+  'the reviewed Share Copy goes with the folder too',
+  trash.includes('pack.share') && trash.includes('shell.trashItem(pack.share.path)'),
+)
+check(
+  'retention takes the same per-pack operation lock as History mutations',
+  trash.includes('beginPackOperation(pack.path)') &&
+    trash.includes("firstError = 'pack is busy'") &&
+    trash.includes('release()'),
+)
+const shareTrashAt = trash.indexOf('shell.trashItem(pack.share.path)')
+const twinTrashAt = trash.indexOf('shell.trashItem(pack.twin.path)')
+const packTrashAt = trash.indexOf('shell.trashItem(pack.path)')
+check(
+  'managed copies move before their pack, so a failure cannot orphan a Share Copy',
+  shareTrashAt >= 0 &&
+    twinTrashAt >= 0 &&
+    packTrashAt >= 0 &&
+    shareTrashAt < packTrashAt &&
+    twinTrashAt < packTrashAt,
+)
+check(
+  'only successfully trashed companions are counted as freed',
+  trash.includes('bytesFreed += pack.twin.bytes') &&
+    trash.includes('bytesFreed += pack.share.bytes') &&
+    !trash.includes('bytesFreed -= pack.twin.bytes') &&
+    !trash.includes('bytesFreed -= pack.share.bytes'),
 )
 check(
   'both the manual buttons and the sweep delete through that one function',
