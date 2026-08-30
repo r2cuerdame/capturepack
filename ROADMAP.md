@@ -16,7 +16,7 @@ no-manual-reinstall criterion is still running.
 The guiding constraint for every milestone: **never sacrifice the 5-second workflow.**
 
 ```
-Ctrl+Alt+C  →  capture  →  5-second annotation  →  export .capturepack  →  drop anywhere
+Ctrl+Alt+C  →  capture  →  5-second annotation  →  save folder  →  share from History
 ```
 
 ---
@@ -131,6 +131,16 @@ verification history. These are the current additions and next gates:
   the 5-second workflow itself a measured number — every capture records how
   long it took to reach a usable editor, excluding the time the user held it —
   and promotes `capture-e2e` from advisory to a required CI job.
+- **Unreleased source addition:** History now reviews and creates a separate
+  `capturepack-share` `.share.zip` with the `reviewed-stills-only` profile. Its
+  exact allowlist contains only manifest-declared annotated keyframe PNGs: every
+  PNG is decoded to pixels and deterministically re-encoded without ancillary
+  chunks or trailing payload. It excludes original media, all video containers
+  including annotated replays, and structured pack context; blocks blur boxes
+  whose labels would be drawn back into the result; preserves the authoritative
+  source folder byte-for-byte; and deliberately does not call the result
+  sanitized. The full `.zip` remains available under More with an originals
+  warning.
 - Next: the three-screen acceptance test on REAL hardware — one portrait, one
   scaled, focus on the third — is still unrun, and
   [#76](https://github.com/r2cuerdame/capturepack/issues/76) stays open until
@@ -142,7 +152,8 @@ verification history. These are the current additions and next gates:
   [#68](https://github.com/r2cuerdame/capturepack/issues/68)), code signing
   ([#21](https://github.com/r2cuerdame/capturepack/issues/21)), continued
   physical mixed-DPI/long-running recording, save/reopen, installer/update and
-  Chrome reconnection QA, and an explicit sanitized-sharing path.
+  Chrome reconnection QA, plus stronger share-specific opaque redaction whose
+  pixels are proven independent of the covered source region.
 
 ---
 
@@ -201,9 +212,13 @@ usage habit that the whole project is measured by.
 
 ### Export — Implemented
 
-- [x] Folder-first `.capturepack` source files plus optional ZIP distribution
+- [x] Folder-first CapturePack sources plus an optional full `.zip` distribution
 - [x] Original snapshot/replay media remain untouched; blur renders only into
       declared derived views and the pack warns that originals remain sensitive
+- [x] A reviewed `capturepack-share` Share Copy packages only declared annotated
+      keyframe stills through a closed allowlist; it canonicalizes their decoded
+      PNG pixels, excludes originals, all videos and structured context, and
+      remains distinct from the CapturePack evidence contract
 - [x] `viewer.html`, `README.md`, `report.md` and `skills/` generated from the
       source contract
 - [x] Video packs may contain `timeline.json`; explicit image packs never do
@@ -349,8 +364,10 @@ less complete without them, and nothing becomes an AI API integration (a stated 
 
 ## Later — noted, not scheduled
 
-- **Sanitized sharing** — an export option that leaves the unredacted original replay and
-  snapshot out of the shared ZIP (blur already renders into declared derived views).
+- **Share-specific opaque redaction** — re-render Share Copy media so covered
+  pixels are input-independent, rather than reusing the pack's editable
+  pixelation view; retain mandatory human review because unmarked pixels can
+  still contain secrets.
 - **Open specification adoption** — other tools reading and writing `.capturepack`.
 - **Future MCP tools** — compare, merge, diff, statistics, exportPDF/HTML/Issue,
   findByApplication/URL/WindowTitle; true replay-frame extraction for `frame(time_s)`

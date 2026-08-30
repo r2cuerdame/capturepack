@@ -63,6 +63,7 @@ threshold for picking quality
 | [Manifest schema](schemas/manifest.schema.json) | Machine-readable manifest validation |
 | [Annotations schema](schemas/annotations.schema.json) | Machine-readable annotation validation |
 | [Timeline schema](schemas/timeline.schema.json) | Machine-readable event timeline validation |
+| [Share Copy schema](schemas/share.schema.json) | Closed inventory for reviewed-stills-only `.share.zip` files |
 
 ## Release notes
 

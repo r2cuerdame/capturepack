@@ -5,7 +5,6 @@ import { applyDomI18n, makeT, recorderFailureText } from '../../shared/i18n'
 import type { TranslateFn } from '../../shared/i18n'
 import type {
   ReplayUnavailablePayload,
-  ToastCreateZipResult,
   ToastInitPayload,
   ToastRenderStatusPayload,
 } from '../../shared/ipc'
@@ -15,7 +14,6 @@ interface ToastBridge {
   onRenderStatus(cb: (payload: ToastRenderStatusPayload) => void): void
   openFolder(): void
   copyPath(): void
-  createZip(): Promise<ToastCreateZipResult>
   copyPrompt(): Promise<boolean>
   close(): void
 }

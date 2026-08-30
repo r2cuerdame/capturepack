@@ -1,6 +1,6 @@
 // Save-complete toast (replaces the old Notification): a small frameless
 // always-on-top window bottom-right with [Open Folder] [Copy Folder Path]
-// [Create ZIP] [Copy Prompt], the blur warning line when the pack contains a
+// [Copy Prompt], the blur warning line when the pack contains a
 // blurred box, and the background render status. Auto-closes after 30 s.
 import { app, BrowserWindow, clipboard, ipcMain, screen, shell } from 'electron'
 import type { IpcMainEvent, IpcMainInvokeEvent } from 'electron'
@@ -8,13 +8,11 @@ import * as path from 'node:path'
 import { IPC } from '../shared/ipc'
 import type {
   ReplayUnavailablePayload,
-  ToastCreateZipResult,
   ToastInitPayload,
   ToastRenderState,
 } from '../shared/ipc'
 import { analyzePackPrompt } from '../shared/prompt'
 import { copyTextToClipboard } from './clipboard'
-import { createPackZip } from './exporter'
 
 const TOAST_WIDTH = 420
 const TOAST_HEIGHT = 180
@@ -189,16 +187,4 @@ function registerToastIpc(): void {
     toast.win.close()
   })
 
-  ipcMain.handle(IPC.toastCreateZip, async (event): Promise<ToastCreateZipResult> => {
-    const toast = fromActiveToast(event)
-    if (toast === null) return { ok: false, error: 'toast is no longer active' }
-    try {
-      const zipPath = await createPackZip(toast.folderPath)
-      return { ok: true, zipPath }
-    } catch (err) {
-      const error = err instanceof Error ? err.message : String(err)
-      console.error('capturepack: Create ZIP failed:', error)
-      return { ok: false, error }
-    }
-  })
 }

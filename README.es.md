@@ -188,7 +188,11 @@ Los CapturePacks generados deben seguir siendo legibles para siempre.
 ## Qué hay dentro de un CapturePack
 
 El pack es una **carpeta** normal y corriente: se puede explorar, se puede editar
-y es honesta. El ZIP (`.capturepack`) solo se crea cuando quieres compartirlo.
+y es honesta. Un ZIP completo (`.zip`) es una copia de distribución opcional y
+sigue conteniendo las pruebas originales. El código fuente actual, aún no
+publicado, también ofrece en Historial una **Copia para compartir** revisada
+(`.share.zip`) con solo imágenes fijas revisadas y un inventario cerrado sin
+datos de origen.
 
 Un pack de vídeo puede contener:
 
@@ -303,9 +307,14 @@ Releases, que puede desactivarse en Ajustes → General.
 
 El desenfoque no es destructivo: protege las vistas anotadas que se generan, pero
 `snapshot.png` y la repetición original que hay dentro del pack completo siguen
-sin censurar. Revisa un pack antes de compartirlo y no compartas el pack completo
-cuando sus medios originales contengan información que deba seguir siendo
-privada.
+sin censurar. Cuando los medios originales o el contexto estructurado deban
+seguir siendo privados, usa Historial → **Copia para compartir** en el código
+fuente actual aún no publicado y revisa la vista previa de cada imagen fija
+incluida antes de enviarla. La copia excluye los originales, todos los
+contenedores de vídeo, manifiestos, anotaciones, líneas temporales, contexto de
+plugins y documentos generados del pack; los PNG incluidos se recodifican de
+forma canónica solo a partir de sus píxeles. Aun así, no garantiza que las
+imágenes derivadas revisadas estén libres de secretos no marcados.
 
 ## ♥ Apoyo
 

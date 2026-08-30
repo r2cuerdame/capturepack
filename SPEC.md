@@ -160,9 +160,77 @@ A `.capturepack` file is a **standard ZIP archive** (PKWARE APPNOTE ZIP) of the 
 - The file extension is `.capturepack`. There is no registered media type; `application/zip` is
   accurate where one is needed.
 
-> **Note.** A future *sanitized* ZIP variant — one that deliberately excludes the unredacted
-> originals when blur is used — is anticipated but **not defined in 0.1.0**. See
-> [§9](#9-blur-and-privacy).
+> **Note.** A Privacy-aware Share Copy is a separate `capturepack-share` ZIP, not a reduced
+> CapturePack. It carries reviewed, canonical annotated PNG stills only and deliberately omits
+> the original evidence, every video container, and structured source context; see
+> [§3.3](#33-the-share-copy-derived-distribution) and [§9.4](#94-share-copy-distribution).
+
+### 3.3 The Share Copy (derived distribution)
+
+A Share Copy is a standard ZIP whose filename SHOULD end in `.share.zip`. It is a reviewed,
+derived distribution for sending selected annotated PNG stills without sending the original
+CapturePack. It is **not a CapturePack**, MUST NOT contain `manifest.json`, and MUST NOT claim
+`format: "capturepack"`. Readers that index CapturePacks therefore ignore it rather than treating
+it as a second or damaged pack.
+
+The reference writer creates a Share Copy only from the authoritative CapturePack **folder**
+selected in History. It MUST NOT use a full-pack ZIP or an existing Share Copy as its source;
+the folder remains the source whose revision the user reviewed.
+
+The archive root has this closed layout:
+
+```text
+README.md               REQUIRED   static, source-data-free human guidance
+share.json              REQUIRED   capturepack-share inventory
+viewer.html             REQUIRED   source-data-free offline view
+media/                  REQUIRED   only media declared by share.json
+```
+
+`share.json` has the following 0.1.0 shape. Unknown top-level fields are reserved; writers MUST
+NOT add source-pack data to it.
+
+```json
+{
+  "format": "capturepack-share",
+  "format_version": "0.1.0",
+  "profile": "reviewed-stills-only",
+  "media": [
+    { "file": "media/display-1/annotated-still-01.png", "kind": "annotated-still", "display": 1 }
+  ],
+  "excluded": ["original-media", "capturepack-manifest", "annotations", "timeline", "plugins",
+    "generated-source-documents", "user-note-and-report", "annotated-replays"],
+  "warnings": ["review-every-still", "visual-redaction-is-not-a-security-proof"]
+}
+```
+
+- `profile` MUST be `reviewed-stills-only`. `media` MUST be a non-empty array of unique entries,
+  and `kind` MUST be `annotated-still`; no video kind is defined by this profile.
+- Every `file` MUST be a writer-generated canonical path of the form
+  `media/capture/annotated-still-<NN>.png` or
+  `media/display-<N>/annotated-still-<NN>.png`. The first form MUST have `display: null` and is
+  only for the one composed raster of an explicit image capture. The second MUST have a positive
+  integer `display` equal to `<N>`. `<NN>` is a one-based lane ordinal, zero-padded to at least
+  two digits. Each source MUST be a manifest-declared annotated keyframe, exist as a regular
+  non-symlink file beneath the authoritative folder, and be the only kind of non-document entry
+  in the archive.
+- Writers MUST decode each source PNG to its pixel raster and deterministically re-encode it.
+  They MUST NOT copy the source container bytes. The output PNG MUST contain only `IHDR`, `IDAT`,
+  and `IEND` chunks and no bytes after `IEND`, thereby removing ancillary metadata, alternate
+  container encodings, and trailing payload while preserving the decoded pixels.
+- Writers MUST build the archive from an explicit entry allowlist. They MUST NOT recursively copy
+  the source directory and MUST reject a declared derived path that escapes it.
+- Writers MUST exclude original snapshots/replays, **all video containers including annotated
+  replays**, the CapturePack manifest, annotations, timeline, plugins, existing viewer/documents,
+  notes, reports, and unknown files. They MUST generate README/viewer content from this closed
+  projection, never copy the CapturePack versions.
+- A declared annotated keyframe that is absent, invalid, or still rendering makes creation fail.
+  Writers MUST NOT fall back to original media or an annotated replay.
+- The user MUST see the included media inventory, representative derived previews, excluded data
+  classes, and any text visibly rendered into the media before creation. If the source changes
+  after that review, creation MUST stop and require review of the new revision.
+- The original CapturePack folder MUST remain byte-for-byte unchanged.
+- “Share Copy” does not mean secret-free. Blur and other visual transforms cover only marked
+  regions; the user MUST review every included still before sending it.
 
 ---
 
@@ -1218,13 +1286,14 @@ lives in the rendered views — `replay_annotated` and the keyframe stills in `f
 - Writers MUST make this visible at save time whenever any `blur: true` box exists. The
   reference wording:
 
-  > Original replay contains unredacted content — share replay_annotated.webm or create a
-  > sanitized ZIP.
+  > Original pixels remain in this pack. Create a Share Copy from History and review every
+  > included still before sending it.
 
 - Readers MUST NOT assume `snapshot.png` or the replay video honor blur boxes — they never do in
   format 0.1.0.
 - `report.md`, `README.md`, and `skills/` documents SHOULD note when a pack contains blurred
-  boxes, so downstream humans and LLMs know which files are safe to forward.
+  boxes, so downstream humans and LLMs know that only derived views honor blur and still require
+  review before forwarding.
 
 ### 9.3 Why non-destructive
 
@@ -1237,18 +1306,33 @@ deliberately:
 - **Blur stays editable.** A mis-drawn blur box can be fixed and the views re-rendered. A
   destructive blur was forever, including its mistakes.
 - **The folder is local.** A pack folder lives on the user's own machine; redaction matters at
-  the moment of *sharing*, and the shareable artifact — `replay_annotated` — is exactly where
-  blur renders.
+  the moment of *sharing*. Annotated replays remain useful local derived views, while the
+  reviewed Share Copy is created separately from annotated stills only.
 
-### 9.4 Sanitized distribution (future)
+### 9.4 Share Copy distribution
 
-A future version will define a **sanitized ZIP**: a `.capturepack` variant that excludes the
-unredacted originals (`replay.webm`/`replay.mp4` and `snapshot.png`) and ships the annotated
-replay — and the equally redacted keyframe stills of
-[§7.3](#73-annotated-keyframes) — in their place, for sharing a blurred capture without any
-unredacted pixels at all. It is
-**not defined in 0.1.0**; until then, the sharing rule of [§9.2](#92-the-sharing-rule) is the
-guidance.
+The Share Copy of [§3.3](#33-the-share-copy-derived-distribution) closes the accidental full-pack
+sharing path without weakening the evidence contract. Its `reviewed-stills-only` profile excludes
+every original media file, every video container (including annotated replays), and all structured
+source context. It contains only manifest-declared annotated keyframe pixels re-encoded as
+canonical PNGs, plus documents generated from the closed share inventory.
+
+It deliberately does **not** call itself a sanitized CapturePack:
+
+- A conforming CapturePack requires `snapshot.png`, and that file means original pixels. Omitting
+  it would make an invalid pack; replacing it with redacted pixels would make the filename lie.
+- A visual redaction covers marked regions only. Pixels outside those regions and text intentionally
+  drawn into an annotated still remain visible.
+- Structured DOM/UIA/plugin data can repeat text hidden in pixels, so the 0.1.0 Share Copy excludes
+  it wholesale instead of guessing which provider fields are safe.
+- A blur-box label is drawn as visible result text. A writer MUST block Share Copy creation when a
+  blur box still has a non-empty label, unless a future share-specific renderer proves that it
+  removed that label from every output still.
+- PNG canonicalization removes hidden container metadata and trailing bytes; it does not inspect
+  the meaning of visible pixels or prove that a marked visual transformation is irreversible.
+
+The full pack folder stays local and authoritative. The Share Copy is a disposable, replaceable
+projection whose every still the user reviews at share time.
 
 ---
 
@@ -2150,6 +2234,7 @@ repository:
 - [`docs/schemas/manifest.schema.json`](docs/schemas/manifest.schema.json)
 - [`docs/schemas/annotations.schema.json`](docs/schemas/annotations.schema.json)
 - [`docs/schemas/timeline.schema.json`](docs/schemas/timeline.schema.json)
+- [`docs/schemas/share.schema.json`](docs/schemas/share.schema.json) — the separate Share Copy inventory
 
 The manifest schema models the capture-kind, still-image, capture-diagnostics and measured
 source-latency media rules defined through 0.6.0 when `capture_kind` is present. It also accepts existing manifests without that discriminator,

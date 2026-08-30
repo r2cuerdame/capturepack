@@ -17,15 +17,19 @@ import * as fs from 'node:fs'
 import { readdir, rename, stat } from 'node:fs/promises'
 import * as path from 'node:path'
 import { IPC } from '../shared/ipc'
+import type { TranslateFn } from '../shared/i18n'
 import type {
   HistoryActionResult,
   HistoryAnnotatedState,
+  HistoryCreateShareResult,
+  HistoryCreateZipResult,
   HistoryListResult,
   HistoryPackSummary,
   HistoryRenameResult,
   HistoryRenderStatusPayload,
+  HistorySharePlan,
+  HistorySharePlanResult,
   StorageUsage,
-  ToastCreateZipResult,
 } from '../shared/ipc'
 import { DEFAULT_CAPTURE_HOTKEY } from '../shared/types'
 import type { Annotation, Settings } from '../shared/types'
@@ -35,7 +39,20 @@ import { createPackZip, replayMimeType } from './exporter'
 import { packDocLanguage, uiLanguage, uiT } from './locale'
 import { createPackStore, openPack } from './mcp/store'
 import type { PackHandle, PackStore, RawPackEntry } from './mcp/store'
-import { archiveStem, packArchiveExt, siblingArchive } from './packArchive'
+import {
+  archiveStem,
+  packArchiveExt,
+  shareBundlePath,
+  siblingArchive,
+  siblingShareBundle,
+} from './packArchive'
+import { beginPackOperation } from './packOperations'
+import {
+  createShareBundle,
+  planShareBundle,
+  ShareBundleError,
+  type ShareBundlePlan,
+} from './shareBundle'
 import { analyzePrompt } from './saveToast'
 import { startEditFlow } from './session'
 import { openSettingsWindow } from './settingsWindow'
@@ -45,6 +62,8 @@ import { copyTextToClipboard } from './clipboard'
 const THUMB_WIDTH = 320
 const MAX_PACK_NAME_LENGTH = 180
 const HISTORY_STARTUP_TIMEOUT_MS = 10_000
+const SHARE_PREVIEW_WIDTH = 240
+const MAX_SHARE_PREVIEWS = 12
 // Windows-invalid filename characters plus control chars.
 const INVALID_NAME_CHARS = /[<>:"/\\|?*\u0000-\u001f]/
 const RESERVED_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i
@@ -210,20 +229,83 @@ export function registerHistoryIpc(live: Settings): void {
     return result === '' ? { ok: true } : { ok: false, error: result }
   })
 
-  ipcMain.handle(IPC.historyCreateZip, async (event, ref: unknown): Promise<ToastCreateZipResult> => {
+  ipcMain.handle(IPC.historyCreateZip, async (event, ref: unknown): Promise<HistoryCreateZipResult> => {
     if (!fromHistory(event)) return { ok: false, error: 'not the history window' }
     const entry = entryFor(ref)
-    if (entry === null) return { ok: false, error: uiT(live)('history.errPackNotFound') }
-    if (entry.kind !== 'dir') return { ok: false, error: uiT(live)('history.errAlreadyZip') }
+    const t = uiT(live)
+    if (entry === null) return { ok: false, error: t('history.errPackNotFound') }
+    if (entry.kind !== 'dir') return { ok: false, error: t('history.errAlreadyZip') }
+    const release = beginPackOperation(entry.path)
+    if (release === null) return { ok: false, error: t('history.shareErrBusy') }
     try {
       const zipPath = await createPackZip(entry.path)
+      invalidateStorageUsage()
       return { ok: true, zipPath }
     } catch (err) {
       const error = errorMessage(err)
       console.error('capturepack: history Create ZIP failed:', error)
       return { ok: false, error }
+    } finally {
+      release()
     }
   })
+
+  ipcMain.handle(
+    IPC.historyPlanShare,
+    async (event, ref: unknown): Promise<HistorySharePlanResult> => {
+      if (!fromHistory(event)) return { ok: false, error: 'not the history window' }
+      const entry = entryFor(ref)
+      const t = uiT(live)
+      if (entry === null) return { ok: false, error: t('history.errPackNotFound') }
+      if (entry.kind !== 'dir') return { ok: false, error: t('history.shareErrFolderOnly') }
+      if (isRenderInFlight(entry.path)) {
+        return { ok: false, error: t('history.shareErrNotReady') }
+      }
+      const release = beginPackOperation(entry.path)
+      if (release === null) return { ok: false, error: t('history.shareErrBusy') }
+      try {
+        if (isRenderInFlight(entry.path)) {
+          return { ok: false, error: t('history.shareErrNotReady') }
+        }
+        return { ok: true, plan: sharePlanForHistory(await planShareBundle(entry.path)) }
+      } catch (err) {
+        return { ok: false, error: shareErrorMessage(err, t) }
+      } finally {
+        release()
+      }
+    },
+  )
+
+  ipcMain.handle(
+    IPC.historyCreateShare,
+    async (event, ref: unknown, revision: unknown): Promise<HistoryCreateShareResult> => {
+      if (!fromHistory(event)) return { ok: false, error: 'not the history window' }
+      const entry = entryFor(ref)
+      const t = uiT(live)
+      if (entry === null) return { ok: false, error: t('history.errPackNotFound') }
+      if (entry.kind !== 'dir') return { ok: false, error: t('history.shareErrFolderOnly') }
+      if (typeof revision !== 'string' || revision === '') {
+        return { ok: false, error: t('history.shareErrReviewAgain') }
+      }
+      if (isRenderInFlight(entry.path)) {
+        return { ok: false, error: t('history.shareErrNotReady') }
+      }
+      const release = beginPackOperation(entry.path)
+      if (release === null) return { ok: false, error: t('history.shareErrBusy') }
+      try {
+        if (isRenderInFlight(entry.path)) {
+          return { ok: false, error: t('history.shareErrNotReady') }
+        }
+        const result = await createShareBundle(entry.path, revision)
+        invalidateStorageUsage()
+        return { ok: true, bundlePath: result.zipPath }
+      } catch (err) {
+        return { ok: false, error: shareErrorMessage(err, t) }
+      } finally {
+        release()
+      }
+    },
+  )
 
   ipcMain.on(IPC.historyOpenFolder, (event, ref: unknown) => {
     if (!fromHistory(event)) return
@@ -264,37 +346,55 @@ export function registerHistoryIpc(live: Settings): void {
   ipcMain.handle(IPC.historyRename, async (event, ref: unknown, newName: unknown): Promise<HistoryRenameResult> => {
     if (!fromHistory(event)) return { ok: false, error: 'not the history window' }
     const entry = entryFor(ref)
-    if (entry === null) return { ok: false, error: uiT(live)('history.errPackNotFound') }
-    return renamePack(entry, typeof newName === 'string' ? newName : '')
+    const t = uiT(live)
+    if (entry === null) return { ok: false, error: t('history.errPackNotFound') }
+    const release = beginPackOperation(entry.path)
+    if (release === null) return { ok: false, error: t('history.shareErrBusy') }
+    try {
+      const result = await renamePack(entry, typeof newName === 'string' ? newName : '')
+      if (result.ok) invalidateStorageUsage()
+      return result
+    } finally {
+      release()
+    }
   })
 
   ipcMain.handle(IPC.historyDelete, async (event, ref: unknown): Promise<HistoryActionResult> => {
     if (!fromHistory(event)) return { ok: false, error: 'not the history window' }
     const entry = entryFor(ref)
-    if (entry === null) return { ok: false, error: uiT(live)('history.errPackNotFound') }
+    const t = uiT(live)
+    if (entry === null) return { ok: false, error: t('history.errPackNotFound') }
+    const release = beginPackOperation(entry.path)
+    if (release === null) return { ok: false, error: t('history.shareErrBusy') }
+    let changed = false
     try {
-      await shell.trashItem(entry.path)
-    } catch (err) {
-      return { ok: false, error: errorMessage(err) }
-    }
-    // Zip twin: best-effort — the folder is already gone; a failure here must
-    // not report the whole delete as failed.
-    if (entry.kind === 'dir') {
-      const zip = siblingArchive(entry.path)
-      if (zip !== null) {
-        try {
-          await shell.trashItem(zip)
-        } catch (err) {
-          console.error('capturepack: could not trash zip twin:', errorMessage(err))
+      // Managed copies go first. If one is locked or otherwise cannot be
+      // trashed, keep the pack indexed so the remaining Share Copy can never
+      // become an invisible orphan after a superficially successful delete.
+      if (entry.kind === 'dir') {
+        const copies = [shareTwinPath(entry), siblingArchive(entry.path)].filter(
+          (candidate): candidate is string => candidate !== null,
+        )
+        for (const copy of copies) {
+          try {
+            await shell.trashItem(copy)
+            changed = true
+          } catch (err) {
+            return { ok: false, error: errorMessage(err) }
+          }
         }
       }
+      try {
+        await shell.trashItem(entry.path)
+        changed = true
+      } catch (err) {
+        return { ok: false, error: errorMessage(err) }
+      }
+      return { ok: true }
+    } finally {
+      if (changed) invalidateStorageUsage()
+      release()
     }
-    // The folder just got smaller, and the header bar is on screen saying it
-    // did not. storage.ts otherwise re-reads on its own short TTL, which is
-    // fine for a capture arriving in the background and wrong for a delete the
-    // user is watching.
-    invalidateStorageUsage()
-    return { ok: true }
   })
 }
 
@@ -477,6 +577,7 @@ function safeSummarize(entry: RawPackEntry): HistoryPackSummary {
       hasBlur: false,
       annotated: 'none',
       zipTwin: zipTwinPresent(entry),
+      shareTwin: shareTwinPresent(entry),
       warning: liveT()('history.errUnreadablePack', { error: errorMessage(err) }),
     }
   }
@@ -486,9 +587,13 @@ function summarize(entry: RawPackEntry): HistoryPackSummary {
   const stamp = packStamp(entry)
   const cached = summaryCache.get(entry.path)
   if (cached && cached.stamp === stamp) {
-    // zipTwin lives NEXT TO the pack: its create/delete changes the parent
-    // folder, not the pack, so it is re-checked on every listing.
-    return { ...cached.summary, zipTwin: zipTwinPresent(entry) }
+    // Managed copies live NEXT TO the pack: their create/delete changes the
+    // parent folder, not the pack, so both are re-checked on every listing.
+    return {
+      ...cached.summary,
+      zipTwin: zipTwinPresent(entry),
+      shareTwin: shareTwinPresent(entry),
+    }
   }
 
   const pack = openPack(entry.path, entry.kind, entry.id)
@@ -522,6 +627,7 @@ function summarize(entry: RawPackEntry): HistoryPackSummary {
     hasBlur: annotations.some((a) => a.blur === true),
     annotated,
     zipTwin: zipTwinPresent(entry),
+    shareTwin: shareTwinPresent(entry),
     // NOTE: cached by stamp — after a language change an unchanged malformed
     // pack keeps its old-language warning until it changes on disk (harmless).
     warning: manifest === null ? (pack.warnings()[0] ?? liveT()('history.errManifestBad')) : null,
@@ -533,6 +639,85 @@ function summarize(entry: RawPackEntry): HistoryPackSummary {
 function zipTwinPresent(entry: RawPackEntry): boolean {
   if (entry.kind === 'zip') return true
   return siblingArchive(entry.path) !== null
+}
+
+function shareTwinPath(entry: RawPackEntry): string | null {
+  if (entry.kind !== 'dir') return null
+  return siblingShareBundle(entry.path)
+}
+
+function shareTwinPresent(entry: RawPackEntry): boolean {
+  return shareTwinPath(entry) !== null
+}
+
+function sharePlanForHistory(plan: ShareBundlePlan): HistorySharePlan {
+  const stills = plan.entries.filter((entry) => entry.kind === 'annotated-still')
+  const previews = selectSharePreviews(stills)
+    .map((entry) => {
+      let image = nativeImage.createFromPath(entry.sourcePath)
+      if (image.isEmpty()) return null
+      if (image.getSize().width > SHARE_PREVIEW_WIDTH) {
+        image = image.resize({ width: SHARE_PREVIEW_WIDTH })
+      }
+      return image.toDataURL()
+    })
+    .filter((value): value is string => value !== null)
+  const lanes = new Set(plan.entries.map((entry) => String(entry.display ?? 'capture')))
+  return {
+    revision: plan.revision,
+    outputName: plan.outputName,
+    previewDataUrls: previews,
+    previewCount: previews.length,
+    stillCount: stills.length,
+    displayCount: lanes.size,
+    hasBlur: plan.hasBlur,
+    visibleLabels: plan.visibleLabels,
+    blockers: plan.blockers,
+  }
+}
+
+function selectSharePreviews(
+  stills: ShareBundlePlan['entries'],
+): ShareBundlePlan['entries'] {
+  if (stills.length <= MAX_SHARE_PREVIEWS) return stills
+  const selected = new Map<string, ShareBundlePlan['entries'][number]>()
+  // First show one still from every lane, then spread the remaining slots over
+  // the whole ordered set. A secondary display must not disappear merely
+  // because the focused display produced many annotation states.
+  for (const still of stills) {
+    const lane = String(still.display ?? 'capture')
+    if (![...selected.values()].some((entry) => String(entry.display ?? 'capture') === lane)) {
+      selected.set(still.archivePath, still)
+      if (selected.size >= MAX_SHARE_PREVIEWS) return [...selected.values()]
+    }
+  }
+  for (let slot = 0; slot < MAX_SHARE_PREVIEWS && selected.size < MAX_SHARE_PREVIEWS; slot += 1) {
+    const index = Math.round((slot * (stills.length - 1)) / Math.max(1, MAX_SHARE_PREVIEWS - 1))
+    const still = stills[index]
+    if (still !== undefined) selected.set(still.archivePath, still)
+  }
+  return [...selected.values()].slice(0, MAX_SHARE_PREVIEWS)
+}
+
+function shareErrorMessage(err: unknown, t: TranslateFn): string {
+  if (!(err instanceof ShareBundleError)) return errorMessage(err)
+  switch (err.code) {
+    case 'invalid-pack':
+      return t('history.shareErrInvalidPack')
+    case 'invalid-annotations':
+      return t('history.shareErrInvalidAnnotations')
+    case 'unsafe-media-path':
+      return t('history.shareErrUnsafeMedia')
+    case 'derived-media-missing':
+    case 'derived-media-not-ready':
+      return t('history.shareErrNotReady')
+    case 'pack-changed':
+      return t('history.shareErrChanged')
+    case 'blocked':
+      return t('history.shareErrBlurLabel')
+    case 'output-conflict':
+      return t('history.shareErrOutputConflict')
+  }
 }
 
 /** Card title fallback (GOAL "History"): report.md's first sentence. */
@@ -645,29 +830,60 @@ async function renamePack(entry: RawPackEntry, rawName: string): Promise<History
       : path.join(parent, newName)
   // Case-only renames are legal on Windows; anything else must not overwrite.
   const caseOnly = target.toLowerCase() === entry.path.toLowerCase()
-  if (!caseOnly && (fs.existsSync(target) || (entry.kind === 'dir' && siblingArchive(target) !== null))) {
+  if (
+    !caseOnly &&
+    (fs.existsSync(target) ||
+      (entry.kind === 'dir' &&
+        (siblingArchive(target) !== null || fs.existsSync(shareBundlePath(target)))))
+  ) {
     return { ok: false, error: liveT()('history.errNameExists') }
   }
-  try {
-    await rename(entry.path, target)
-  } catch (err) {
-    return { ok: false, error: errorMessage(err) }
+  // Resolve companion paths before the folder moves. They are siblings rather
+  // than children, but their names are defined by the old folder path.
+  const oldZip = entry.kind === 'dir' ? siblingArchive(entry.path) : null
+  const oldShare = entry.kind === 'dir' ? shareTwinPath(entry) : null
+  const companionMoves: Array<{ from: string; to: string }> = []
+  if (oldZip !== null) {
+    // Keeps the suffix it already had: renaming a pack must not also silently
+    // convert an older `.capturepack` archive into a `.zip`.
+    companionMoves.push({
+      from: oldZip,
+      to: `${target}${packArchiveExt(oldZip) ?? PACK_EXT}`,
+    })
   }
-  // The zip twin follows the folder (contract). Best-effort: the folder rename
-  // already succeeded and must not be reported as failed.
-  if (entry.kind === 'dir') {
-    const oldZip = siblingArchive(entry.path)
-    if (oldZip !== null) {
+  if (oldShare !== null) {
+    companionMoves.push({ from: oldShare, to: shareBundlePath(target) })
+  }
+
+  // Companions move first. If any step fails, every completed move is rolled
+  // back while the pack is still indexed at its original path. The pack itself
+  // moves last, so success can never strand an unindexed Share Copy.
+  const moved: Array<{ from: string; to: string }> = []
+  try {
+    for (const move of companionMoves) {
+      await rename(move.from, move.to)
+      moved.push(move)
+    }
+    await rename(entry.path, target)
+    return { ok: true, path: target }
+  } catch (err) {
+    const rollbackErrors: string[] = []
+    for (const move of [...moved].reverse()) {
       try {
-        // Keeps the suffix it already had: renaming a pack must not also
-        // silently convert an older `.capturepack` archive into a `.zip`.
-        await rename(oldZip, `${target}${packArchiveExt(oldZip) ?? PACK_EXT}`)
-      } catch (err) {
-        console.error('capturepack: could not rename zip twin:', errorMessage(err))
+        await rename(move.to, move.from)
+      } catch (rollbackErr) {
+        rollbackErrors.push(errorMessage(rollbackErr))
       }
     }
+    const failure = errorMessage(err)
+    return {
+      ok: false,
+      error:
+        rollbackErrors.length === 0
+          ? failure
+          : `${failure} (rollback failed: ${rollbackErrors.join('; ')})`,
+    }
   }
-  return { ok: true, path: target }
 }
 
 function validatePackName(name: string): string | null {

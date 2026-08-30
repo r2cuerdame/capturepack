@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CapturePack Share Copy share.json",
+  "description": "Closed, source-data-free inventory for the capturepack-share 0.1.0 reviewed-stills-only distribution (SPEC.md §3.3). This is deliberately not a CapturePack manifest.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "format_version",
+    "profile",
+    "media",
+    "excluded",
+    "warnings"
+  ],
+  "properties": {
+    "format": { "const": "capturepack-share" },
+    "format_version": { "const": "0.1.0" },
+    "profile": { "const": "reviewed-stills-only" },
+    "media": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["file", "kind", "display"],
+        "properties": {
+          "file": { "type": "string" },
+          "kind": { "const": "annotated-still" },
+          "display": {}
+        },
+        "oneOf": [
+          {
+            "description": "The one composed raster of an explicit image capture.",
+            "properties": {
+              "file": {
+                "pattern": "^media/capture/annotated-still-(0[1-9]|[1-9][0-9]+)\\.png$"
+              },
+              "display": { "type": "null" }
+            }
+          },
+          {
+            "description": "A per-display still. SPEC.md additionally requires the display integer to equal N in media/display-N/.",
+            "properties": {
+              "file": {
+                "pattern": "^media/display-[1-9][0-9]*/annotated-still-(0[1-9]|[1-9][0-9]+)\\.png$"
+              },
+              "display": { "type": "integer", "minimum": 1 }
+            }
+          }
+        ]
+      }
+    },
+    "excluded": {
+      "const": [
+        "original-media",
+        "capturepack-manifest",
+        "annotations",
+        "timeline",
+        "plugins",
+        "generated-source-documents",
+        "user-note-and-report",
+        "annotated-replays"
+      ]
+    },
+    "warnings": {
+      "const": [
+        "review-every-still",
+        "visual-redaction-is-not-a-security-proof"
+      ]
+    }
+  }
+}

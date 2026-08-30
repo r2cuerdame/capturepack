@@ -85,6 +85,7 @@
     "check:pack-assertions": "node scripts/pack-assertions-check.mjs",
     "check:background-media": "node scripts/background-media-queue-check.mjs",
     "check:viewer": "node scripts/viewer-check.mjs",
+    "check:share-bundle": "node scripts/share-bundle-check.mjs",
     "check:chrome-lifecycle": "node scripts/chrome-lifecycle-check.mjs",
     "check:frame-geometry": "node scripts/frame-geometry-check.mjs",
     "check:chrome-bridge": "node scripts/chrome-bridge-check.mjs --wire-only",

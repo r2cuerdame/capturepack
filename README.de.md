@@ -185,7 +185,11 @@ Erzeugte CapturePacks sollen für immer lesbar bleiben.
 ## Was in einem CapturePack steckt
 
 Das Pack ist ein einfacher **Ordner** — durchsuchbar, bearbeitbar, ehrlich. Ein
-ZIP (`.capturepack`) entsteht nur, wenn du teilen willst.
+vollständiges ZIP (`.zip`) ist eine optionale Kopie zur Weitergabe und enthält
+weiterhin die Originalbelege. Der derzeit unveröffentlichte Quellstand bietet
+unter Verlauf außerdem eine geprüfte **Share Copy** (`.share.zip`) mit
+ausschließlich geprüften Standbildern und einem geschlossenen Inventar ohne
+Quelldaten.
 
 Video-Packs können enthalten:
 
@@ -301,9 +305,14 @@ Einstellungen → Allgemein abschalten lässt.
 
 Unschärfe ist nicht destruktiv: Sie schützt erzeugte annotierte Ansichten, aber
 `snapshot.png` und das Original-Replay im vollständigen Pack bleiben
-ungeschwärzt. Prüfe ein Pack, bevor du es teilst, und teile das vollständige Pack
-nicht, wenn seine Originalmedien Informationen enthalten, die privat bleiben
-müssen.
+ungeschwärzt. Wenn Originalmedien oder strukturierter Kontext privat bleiben
+müssen, nutze im derzeit unveröffentlichten Quellstand Verlauf → **Share Copy**
+und prüfe vor dem Senden die Vorschau jedes enthaltenen Standbilds. Die
+Share Copy schließt Originale, sämtliche Videocontainer, Manifeste,
+Annotationen, Timelines, Plugin-Kontext und erzeugte Pack-Dokumente aus; die
+enthaltenen PNGs werden nur aus ihren Pixeldaten kanonisch neu codiert. Trotzdem
+garantiert sie nicht, dass die geprüften abgeleiteten Bilder keine unmarkierten
+Geheimnisse enthalten.
 
 ## ♥ Unterstützen
 

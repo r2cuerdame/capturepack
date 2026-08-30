@@ -7,6 +7,7 @@
 // that meant `.zip` in one file and `.capturepack` in the other; a third copy
 // was about to be born for storage. A pack whose archive is only recognised by
 // two of the three gets counted but not deleted, or renamed but left behind.
+import AdmZip from 'adm-zip'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
@@ -21,6 +22,15 @@ import * as path from 'node:path'
  * project exists to prevent.
  */
 export const PACK_ARCHIVE_EXTS: readonly string[] = ['.zip', '.capturepack']
+
+/**
+ * A reviewed, still-only sharing artifact is deliberately NOT a
+ * CapturePack archive. It has no manifest.json, is never indexed as a pack,
+ * and uses this unmistakable sibling suffix so it cannot be confused with the
+ * full `{folder}.zip` twin that still contains the originals.
+ */
+export const SHARE_BUNDLE_SUFFIX = '.share.zip'
+const MAX_SHARE_IDENTITY_BYTES = 64 * 1024
 
 /** Which archive extension `name` ends with, or null when it is not one. */
 export function packArchiveExt(name: string): string | null {
@@ -46,7 +56,54 @@ export function archiveStem(p: string): string {
 export function siblingArchive(dirPath: string): string | null {
   for (const ext of PACK_ARCHIVE_EXTS) {
     const candidate = `${dirPath}${ext}`
-    if (fs.existsSync(candidate)) return candidate
+    if (!fs.existsSync(candidate)) continue
+    // `Foo.share.zip` can mean either Foo's Share Copy or the full ZIP of a
+    // different pack folder named Foo.share. Content identity, not the suffix,
+    // owns that namespace.
+    if (
+      candidate.toLowerCase().endsWith(SHARE_BUNDLE_SUFFIX) &&
+      isShareBundleArchive(candidate)
+    ) {
+      continue
+    }
+    return candidate
   }
   return null
+}
+
+/** Fixed sibling path of the derived share copy for one pack folder. */
+export function shareBundlePath(dirPath: string): string {
+  const normalized = path.resolve(dirPath)
+  return path.join(path.dirname(normalized), `${path.basename(normalized)}${SHARE_BUNDLE_SUFFIX}`)
+}
+
+/**
+ * True only for the separate Share Copy identity. A full CapturePack ZIP never
+ * becomes a managed Share Copy merely because its filename ends in `.share.zip`.
+ */
+export function isShareBundleArchive(file: string): boolean {
+  try {
+    const entries = new AdmZip(file).getEntries()
+    const files = entries.filter((entry) => !entry.isDirectory)
+    if (files.some((entry) => entry.entryName === 'manifest.json')) return false
+    const inventories = files.filter((entry) => entry.entryName === 'share.json')
+    if (inventories.length !== 1) return false
+    const inventory = inventories[0]!
+    if (inventory.header.size > MAX_SHARE_IDENTITY_BYTES) return false
+    const parsed = JSON.parse(inventory.getData().toString('utf8')) as unknown
+    return (
+      parsed !== null &&
+      typeof parsed === 'object' &&
+      !Array.isArray(parsed) &&
+      (parsed as Record<string, unknown>)['format'] === 'capturepack-share'
+    )
+  } catch {
+    return false
+  }
+}
+
+/** The validated managed Share Copy beside a pack, or null on collision. */
+export function siblingShareBundle(dirPath: string): string | null {
+  const candidate = shareBundlePath(dirPath)
+  return fs.existsSync(candidate) && isShareBundleArchive(candidate) ? candidate : null
 }

@@ -85,6 +85,10 @@ console.log('ARCHIVES')
 zipCase('real-pack', { 'manifest.json': JSON.stringify({ format: 'capturepack' }) }, true)
 zipCase('holiday-photos', { 'IMG_0001.jpg': 'x' }, false)
 zipCase('some-node-module', { 'manifest.json': JSON.stringify({ name: 'left-pad' }) }, false)
+zipCase('capturepack-share', {
+  'share.json': JSON.stringify({ format: 'capturepack-share', format_version: '0.1.0' }),
+  'viewer.html': '<p>reviewed derived media</p>',
+}, false)
 
 console.log('LIVE MCP OUTPUT FOLDER')
 const outA = dir('output-a', {})

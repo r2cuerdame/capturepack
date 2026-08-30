@@ -183,8 +183,11 @@ Les CapturePacks générés doivent rester lisibles pour toujours.
 
 ## Ce que contient un CapturePack
 
-Le pack est un simple **dossier** — explorable, modifiable, honnête. Le ZIP
-(`.capturepack`) n’est créé que lorsque vous voulez partager.
+Le pack est un simple **dossier** — explorable, modifiable, honnête. Un ZIP
+complet (`.zip`) est une copie de distribution facultative qui contient toujours
+les éléments d’origine. L’état actuel des sources, non encore publié, propose
+aussi dans Historique une **Copie de partage** vérifiée (`.share.zip`) composée
+uniquement d’images fixes vérifiées et d’un inventaire fermé sans données source.
 
 Un pack vidéo peut contenir :
 
@@ -300,8 +303,14 @@ Releases, désactivable dans Réglages → Général.
 
 Le flou est non destructif : il protège les vues annotées générées, mais
 `snapshot.png` et le replay original contenus dans le pack complet restent non
-caviardés. Vérifiez un pack avant de le partager, et ne partagez pas le pack complet
-lorsque son média d’origine contient des informations qui doivent rester privées.
+caviardés. Lorsque le média d’origine ou le contexte structuré doit rester privé,
+utilisez, dans l’état actuel des sources non encore publié, Historique →
+**Copie de partage** et vérifiez l’aperçu de chaque image fixe incluse avant
+l’envoi. Cette copie exclut les originaux, tous les conteneurs vidéo, manifestes,
+annotations, chronologies, contextes de plugins et documents générés du pack ;
+elle réencode les PNG inclus de manière canonique à partir de leurs seuls pixels.
+Elle ne garantit toutefois pas que les images dérivées vérifiées soient exemptes
+de secrets non signalés.
 
 ## ♥ Soutien
 

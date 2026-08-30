@@ -400,6 +400,17 @@ button.primary:hover:not(:disabled) {
   background: #2b3c60;
 }
 
+button.shareButton {
+  border-color: #2f7a4b;
+  background: #173222;
+  color: #9be7b3;
+}
+
+button.shareButton:hover:not(:disabled) {
+  border-color: #48a367;
+  background: #1d402a;
+}
+
 button.danger {
   border-color: #7a2e31;
   color: #f2a0a3;
@@ -460,6 +471,91 @@ button.danger:hover:not(:disabled) {
   height: 1px;
   background: var(--border);
   margin: 4px 6px;
+}
+
+/* ---- Share Copy review ---- */
+
+.shareReview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #315f42;
+  border-radius: 8px;
+  background: #111d16;
+}
+
+.shareReviewTitle {
+  color: #9be7b3;
+  font-weight: 700;
+}
+
+.shareOutputName,
+.shareLabels {
+  user-select: text;
+}
+
+.shareOutputName {
+  color: var(--muted);
+  font: 11px/1.4 Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+.sharePreviewGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 7px;
+  max-height: 280px;
+  overflow: auto;
+}
+
+.sharePreview {
+  display: block;
+  width: 100%;
+  height: 92px;
+  object-fit: contain;
+  background: #090b09;
+  border: 1px solid #2b4433;
+  border-radius: 6px;
+}
+
+.shareReviewMeta,
+.shareExcluded,
+.shareWarning,
+.shareLabelsTitle,
+.shareLabels {
+  font-size: 11.5px;
+}
+
+.shareReviewMeta {
+  color: var(--muted);
+}
+
+.shareExcluded {
+  color: #9be7b3;
+}
+
+.shareWarning {
+  color: var(--warn-text);
+}
+
+.shareLabelsTitle {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.shareLabels {
+  color: #d8d8dc;
+  padding-left: 20px;
+  max-height: 100px;
+  overflow: auto;
+}
+
+.shareBlocker {
+  color: #f2a0a3;
+  border-left: 3px solid var(--danger);
+  padding-left: 8px;
+  font-size: 12px;
 }
 
 /* ---- inline rename / delete confirm / errors ---- */
