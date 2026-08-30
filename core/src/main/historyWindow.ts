@@ -13,8 +13,9 @@
 // when a later stage adds it to session.ts; until then it logs a notice.
 import { app, BrowserWindow, clipboard, ipcMain, nativeImage, shell } from 'electron'
 import type { IpcMainEvent, IpcMainInvokeEvent } from 'electron'
+import { randomUUID } from 'node:crypto'
 import * as fs from 'node:fs'
-import { readdir, rename, stat } from 'node:fs/promises'
+import { readdir, stat } from 'node:fs/promises'
 import * as path from 'node:path'
 import { IPC } from '../shared/ipc'
 import type { TranslateFn } from '../shared/i18n'
@@ -29,6 +30,7 @@ import type {
   HistoryRenderStatusPayload,
   HistorySharePlan,
   HistorySharePlanResult,
+  HistoryShareStillResult,
   StorageUsage,
 } from '../shared/ipc'
 import { DEFAULT_CAPTURE_HOTKEY } from '../shared/types'
@@ -39,6 +41,7 @@ import { createPackZip, replayMimeType } from './exporter'
 import { packDocLanguage, uiLanguage, uiT } from './locale'
 import { createPackStore, openPack } from './mcp/store'
 import type { PackHandle, PackStore, RawPackEntry } from './mcp/store'
+import { moveNoReplace } from './moveNoReplace'
 import {
   archiveStem,
   packArchiveExt,
@@ -50,6 +53,7 @@ import { beginPackOperation } from './packOperations'
 import {
   createShareBundle,
   planShareBundle,
+  readCanonicalShareStill,
   ShareBundleError,
   type ShareBundlePlan,
 } from './shareBundle'
@@ -63,7 +67,7 @@ const THUMB_WIDTH = 320
 const MAX_PACK_NAME_LENGTH = 180
 const HISTORY_STARTUP_TIMEOUT_MS = 10_000
 const SHARE_PREVIEW_WIDTH = 240
-const MAX_SHARE_PREVIEWS = 12
+const SHARE_PREVIEW_HEIGHT = 180
 // Windows-invalid filename characters plus control chars.
 const INVALID_NAME_CHARS = /[<>:"/\\|?*\u0000-\u001f]/
 const RESERVED_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i
@@ -91,6 +95,13 @@ const summaryCache = new Map<string, { stamp: number; summary: HistoryPackSummar
 const searchTextCache = new Map<string, { stamp: number; text: string }>()
 const thumbCache = new Map<string, { stamp: number; dataUrl: string | null }>()
 const sizeCache = new Map<string, { stamp: number; bytes: number }>()
+// Metadata only: canonical full-image bytes are read one at a time and are
+// never retained in main. The cached revision is the review session's binding.
+const sharePlanCache = new Map<string, ShareBundlePlan>()
+// Planning, exact-still decode and creation each consume the same bounded
+// canonical-media budget. Serialize them for the one History window so the
+// per-operation cap cannot be multiplied by parallel invokes on other packs.
+let historyShareOperationInFlight = false
 
 /** Call once at startup (after settings load), before the window can open. */
 export function registerHistoryIpc(live: Settings): void {
@@ -261,14 +272,77 @@ export function registerHistoryIpc(live: Settings): void {
       if (isRenderInFlight(entry.path)) {
         return { ok: false, error: t('history.shareErrNotReady') }
       }
-      const release = beginPackOperation(entry.path)
+      const release = beginHistoryShareOperation(entry.path)
       if (release === null) return { ok: false, error: t('history.shareErrBusy') }
       try {
         if (isRenderInFlight(entry.path)) {
           return { ok: false, error: t('history.shareErrNotReady') }
         }
-        return { ok: true, plan: sharePlanForHistory(await planShareBundle(entry.path)) }
+        const plan = await planShareBundle(entry.path)
+        const historyPlan = await sharePlanForHistory(plan)
+        if (!fromHistory(event)) {
+          return { ok: false, error: 'history window closed' }
+        }
+        sharePlanCache.set(entry.path, plan)
+        return { ok: true, plan: historyPlan }
       } catch (err) {
+        sharePlanCache.delete(entry.path)
+        return { ok: false, error: shareErrorMessage(err, t) }
+      } finally {
+        release()
+      }
+    },
+  )
+
+  ipcMain.handle(
+    IPC.historyShareStill,
+    async (
+      event,
+      ref: unknown,
+      revision: unknown,
+      index: unknown,
+    ): Promise<HistoryShareStillResult> => {
+      if (!fromHistory(event)) return { ok: false, error: 'not the history window' }
+      const entry = entryFor(ref)
+      const t = uiT(live)
+      if (entry === null) return { ok: false, error: t('history.errPackNotFound') }
+      if (entry.kind !== 'dir') return { ok: false, error: t('history.shareErrFolderOnly') }
+      if (
+        typeof revision !== 'string' ||
+        !/^[0-9a-f]{64}$/u.test(revision) ||
+        typeof index !== 'number' ||
+        !Number.isInteger(index) ||
+        index < 0
+      ) {
+        return { ok: false, error: t('history.shareErrReviewAgain') }
+      }
+      if (isRenderInFlight(entry.path)) {
+        return { ok: false, error: t('history.shareErrNotReady') }
+      }
+      const release = beginHistoryShareOperation(entry.path)
+      if (release === null) return { ok: false, error: t('history.shareErrBusy') }
+      try {
+        if (isRenderInFlight(entry.path)) {
+          return { ok: false, error: t('history.shareErrNotReady') }
+        }
+        const plan = sharePlanCache.get(entry.path)
+        const planned = plan?.entries[index]
+        if (plan === undefined || plan.revision !== revision || planned === undefined) {
+          return { ok: false, error: t('history.shareErrReviewAgain') }
+        }
+        const still = await readCanonicalShareStill(planned)
+        return {
+          ok: true,
+          revision,
+          index,
+          width: still.width,
+          height: still.height,
+          // Copy exactly the visible range: never expose a Buffer slab through
+          // the context-isolated bridge.
+          pngBytes: Uint8Array.from(still.bytes),
+        }
+      } catch (err) {
+        sharePlanCache.delete(entry.path)
         return { ok: false, error: shareErrorMessage(err, t) }
       } finally {
         release()
@@ -290,16 +364,18 @@ export function registerHistoryIpc(live: Settings): void {
       if (isRenderInFlight(entry.path)) {
         return { ok: false, error: t('history.shareErrNotReady') }
       }
-      const release = beginPackOperation(entry.path)
+      const release = beginHistoryShareOperation(entry.path)
       if (release === null) return { ok: false, error: t('history.shareErrBusy') }
       try {
         if (isRenderInFlight(entry.path)) {
           return { ok: false, error: t('history.shareErrNotReady') }
         }
         const result = await createShareBundle(entry.path, revision)
+        sharePlanCache.delete(entry.path)
         invalidateStorageUsage()
         return { ok: true, bundlePath: result.zipPath }
       } catch (err) {
+        sharePlanCache.delete(entry.path)
         return { ok: false, error: shareErrorMessage(err, t) }
       } finally {
         release()
@@ -431,7 +507,10 @@ export function openHistoryWindow(): void {
     }
   })
   win.on('closed', () => {
-    if (historyWindow === win) historyWindow = null
+    if (historyWindow === win) {
+      historyWindow = null
+      sharePlanCache.clear()
+    }
   })
   // Live refresh: the store watcher pushes history:changed; window focus is the
   // backstop for changes a dead watcher missed (the store rescans on access).
@@ -490,6 +569,7 @@ export function disposeHistory(): void {
   store?.dispose()
   store = null
   storeDir = null
+  sharePlanCache.clear()
 }
 
 // ---------------------------------------------------------------------------
@@ -518,6 +598,23 @@ function fromHistory(event: IpcMainEvent | IpcMainInvokeEvent): boolean {
     !historyWindow.isDestroyed() &&
     event.sender === historyWindow.webContents
   )
+}
+
+function beginHistoryShareOperation(packPath: string): (() => void) | null {
+  if (historyShareOperationInFlight) return null
+  historyShareOperationInFlight = true
+  const releasePack = beginPackOperation(packPath)
+  if (releasePack === null) {
+    historyShareOperationInFlight = false
+    return null
+  }
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    releasePack()
+    historyShareOperationInFlight = false
+  }
 }
 
 // Every action channel takes the pack's absolute path as its ref and only acts
@@ -576,6 +673,7 @@ function safeSummarize(entry: RawPackEntry): HistoryPackSummary {
       numberedCount: 0,
       hasBlur: false,
       annotated: 'none',
+      renderInFlight: isRenderInFlight(entry.path),
       zipTwin: zipTwinPresent(entry),
       shareTwin: shareTwinPresent(entry),
       warning: liveT()('history.errUnreadablePack', { error: errorMessage(err) }),
@@ -591,6 +689,7 @@ function summarize(entry: RawPackEntry): HistoryPackSummary {
     // parent folder, not the pack, so both are re-checked on every listing.
     return {
       ...cached.summary,
+      renderInFlight: isRenderInFlight(entry.path),
       zipTwin: zipTwinPresent(entry),
       shareTwin: shareTwinPresent(entry),
     }
@@ -626,6 +725,7 @@ function summarize(entry: RawPackEntry): HistoryPackSummary {
     numberedCount: annotations.filter((a) => a.numbered === true).length,
     hasBlur: annotations.some((a) => a.blur === true),
     annotated,
+    renderInFlight: isRenderInFlight(entry.path),
     zipTwin: zipTwinPresent(entry),
     shareTwin: shareTwinPresent(entry),
     // NOTE: cached by stamp — after a language change an unchanged malformed
@@ -650,22 +750,44 @@ function shareTwinPresent(entry: RawPackEntry): boolean {
   return shareTwinPath(entry) !== null
 }
 
-function sharePlanForHistory(plan: ShareBundlePlan): HistorySharePlan {
+async function sharePlanForHistory(plan: ShareBundlePlan): Promise<HistorySharePlan> {
   const stills = plan.entries.filter((entry) => entry.kind === 'annotated-still')
-  const previews = selectSharePreviews(stills)
-    .map((entry) => {
-      let image = nativeImage.createFromPath(entry.sourcePath)
-      if (image.isEmpty()) return null
-      if (image.getSize().width > SHARE_PREVIEW_WIDTH) {
-        image = image.resize({ width: SHARE_PREVIEW_WIDTH })
-      }
-      return image.toDataURL()
-    })
-    .filter((value): value is string => value !== null)
+  // Confirmation is the review boundary, so sampling is not allowed: every
+  // still that creation can publish must already be present in this plan. The
+  // thumbnail starts from the same canonical bytes creation writes, never the
+  // source container. Keep each IPC thumbnail bounded on both axes, including
+  // very tall valid PNGs, and decode sequentially to cap peak memory.
+  const previews: string[] = []
+  for (const entry of stills) {
+    const canonical = await readCanonicalShareStill(entry)
+    let image = nativeImage.createFromBuffer(canonical.bytes)
+    if (image.isEmpty()) {
+      throw new ShareBundleError('derived-media-missing', entry.sourceRel)
+    }
+    const size = image.getSize()
+    const widthRatio = SHARE_PREVIEW_WIDTH / size.width
+    const heightRatio = SHARE_PREVIEW_HEIGHT / size.height
+    if (widthRatio < 1 || heightRatio < 1) {
+      image = widthRatio <= heightRatio
+        ? image.resize({ width: SHARE_PREVIEW_WIDTH })
+        : image.resize({ height: SHARE_PREVIEW_HEIGHT })
+    }
+    if (image.isEmpty()) {
+      throw new ShareBundleError('derived-media-missing', entry.sourceRel)
+    }
+    previews.push(image.toDataURL())
+  }
   const lanes = new Set(plan.entries.map((entry) => String(entry.display ?? 'capture')))
   return {
     revision: plan.revision,
     outputName: plan.outputName,
+    media: stills.map((entry) => ({
+      file: entry.archivePath,
+      kind: entry.kind,
+      display: entry.display,
+      width: entry.pixelWidth,
+      height: entry.pixelHeight,
+    })),
     previewDataUrls: previews,
     previewCount: previews.length,
     stillCount: stills.length,
@@ -674,29 +796,6 @@ function sharePlanForHistory(plan: ShareBundlePlan): HistorySharePlan {
     visibleLabels: plan.visibleLabels,
     blockers: plan.blockers,
   }
-}
-
-function selectSharePreviews(
-  stills: ShareBundlePlan['entries'],
-): ShareBundlePlan['entries'] {
-  if (stills.length <= MAX_SHARE_PREVIEWS) return stills
-  const selected = new Map<string, ShareBundlePlan['entries'][number]>()
-  // First show one still from every lane, then spread the remaining slots over
-  // the whole ordered set. A secondary display must not disappear merely
-  // because the focused display produced many annotation states.
-  for (const still of stills) {
-    const lane = String(still.display ?? 'capture')
-    if (![...selected.values()].some((entry) => String(entry.display ?? 'capture') === lane)) {
-      selected.set(still.archivePath, still)
-      if (selected.size >= MAX_SHARE_PREVIEWS) return [...selected.values()]
-    }
-  }
-  for (let slot = 0; slot < MAX_SHARE_PREVIEWS && selected.size < MAX_SHARE_PREVIEWS; slot += 1) {
-    const index = Math.round((slot * (stills.length - 1)) / Math.max(1, MAX_SHARE_PREVIEWS - 1))
-    const still = stills[index]
-    if (still !== undefined) selected.set(still.archivePath, still)
-  }
-  return [...selected.values()].slice(0, MAX_SHARE_PREVIEWS)
 }
 
 function shareErrorMessage(err: unknown, t: TranslateFn): string {
@@ -737,6 +836,9 @@ function pruneCaches(live: Set<string>): void {
     for (const key of [...cache.keys()]) {
       if (!live.has(key)) cache.delete(key)
     }
+  }
+  for (const key of [...sharePlanCache.keys()]) {
+    if (!live.has(key)) sharePlanCache.delete(key)
   }
 }
 
@@ -861,21 +963,25 @@ async function renamePack(entry: RawPackEntry, rawName: string): Promise<History
   const moved: Array<{ from: string; to: string }> = []
   try {
     for (const move of companionMoves) {
-      await rename(move.from, move.to)
+      await moveHistoryNoReplace(move.from, move.to)
       moved.push(move)
     }
-    await rename(entry.path, target)
+    await moveHistoryNoReplace(entry.path, target)
     return { ok: true, path: target }
   } catch (err) {
     const rollbackErrors: string[] = []
+    let rollbackConflict = false
     for (const move of [...moved].reverse()) {
       try {
-        await rename(move.to, move.from)
+        await moveHistoryNoReplace(move.to, move.from)
       } catch (rollbackErr) {
+        rollbackConflict ||= isMoveDestinationConflict(rollbackErr)
         rollbackErrors.push(errorMessage(rollbackErr))
       }
     }
-    const failure = errorMessage(err)
+    const failure = isMoveDestinationConflict(err) || rollbackConflict
+      ? liveT()('history.errNameExists')
+      : errorMessage(err)
     return {
       ok: false,
       error:
@@ -884,6 +990,43 @@ async function renamePack(entry: RawPackEntry, rawName: string): Promise<History
           : `${failure} (rollback failed: ${rollbackErrors.join('; ')})`,
     }
   }
+}
+
+async function moveHistoryNoReplace(source: string, destination: string): Promise<void> {
+  if (source !== destination && source.toLowerCase() === destination.toLowerCase()) {
+    const temporary = path.join(
+      path.dirname(source),
+      `.capturepack-case-rename-${randomUUID()}.tmp`,
+    )
+    await moveNoReplace(source, temporary)
+    try {
+      await moveNoReplace(temporary, destination)
+    } catch (error) {
+      try {
+        await moveNoReplace(temporary, source)
+      } catch (rollbackError) {
+        const combined = new Error(
+          `${errorMessage(error)} (case-only rollback failed: ${errorMessage(rollbackError)})`,
+        ) as Error & { code?: string }
+        if (isMoveDestinationConflict(error) || isMoveDestinationConflict(rollbackError)) {
+          combined.code = 'EEXIST'
+        }
+        throw combined
+      }
+      throw error
+    }
+    return
+  }
+  await moveNoReplace(source, destination)
+}
+
+function isMoveDestinationConflict(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { code?: unknown }).code === 'EEXIST'
+  )
 }
 
 function validatePackName(name: string): string | null {

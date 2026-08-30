@@ -1,6 +1,6 @@
-# CapturePack handoff — after v0.4.1
+# CapturePack handoff — after v0.4.4
 
-Last verified: 2026-08-02 (Asia/Seoul)
+Last verified: 2026-08-30 (Asia/Seoul)
 
 This is the current baton-pass document. Read it before changing capture,
 timeline, object-picking, multi-display, viewer, packaging, or release code.
@@ -20,7 +20,25 @@ Use [docs/README.md](README.md) as the documentation index. The older
 
 ## Public state
 
-CapturePack **0.4.1** is the current stable Windows release.
+CapturePack **0.4.4** is the current stable Windows release.
+
+| Item | Current state |
+|---|---|
+| Public release | [v0.4.4](https://github.com/r2cuerdame/capturepack/releases/tag/v0.4.4), stable (`draft=false`, `prerelease=false`) |
+| Release source | Immutable `v0.4.4` tag; never move or replace it |
+| Release verification | The guarded Release workflow reran all 87 RC steps on the tagged source, built the Windows artifacts, and byte-verified the exact four-file draft before publication |
+| Delivery | Feature [#140](https://github.com/r2cuerdame/capturepack/issues/140), original implementation [#141](https://github.com/r2cuerdame/capturepack/pull/141), and publication tracker [#142](https://github.com/r2cuerdame/capturepack/issues/142) |
+| Website | [capturepack.dev](https://capturepack.dev/), with all nine languages kept on the application version |
+
+The Release workflow and its remote byte verification are authoritative for the
+published installer's hashes. Do not reuse a local RC hash or any older release's
+values when checking 0.4.4.
+
+### Historical 0.4.1 publication evidence
+
+The following table and investigation record apply to **0.4.1 only**. They stay
+here because they established the release-verification discipline; they are not
+the current version or 0.4.4 asset metadata.
 
 | Item | Verified state |
 |---|---|
@@ -62,6 +80,10 @@ documents. Grep for either and read the surrounding line before concluding
 anything.
 
 Earlier public releases stay exactly where they are:
+[v0.4.3](https://github.com/r2cuerdame/capturepack/releases/tag/v0.4.3),
+[v0.4.2](https://github.com/r2cuerdame/capturepack/releases/tag/v0.4.2),
+[v0.4.1](https://github.com/r2cuerdame/capturepack/releases/tag/v0.4.1)
+(with its detailed publication evidence above),
 [v0.4.0](https://github.com/r2cuerdame/capturepack/releases/tag/v0.4.0)
 (`51865b73b52ec38a4712f9699669e45e2d02ba56`, SHA-256
 `296c80935e8d8fc3df65a58f626886702ffaaba804e374f77416c45effdc5889`),
@@ -75,7 +97,7 @@ Earlier public releases stay exactly where they are:
 (`b7e0c695d5f2c018e2c10fcf83936d1d42f7a0d4`, SHA-256
 `cdf1da6fee39eb28e82749b9183cdd3c347f26b31e68e0db25a6be5400ebcf3c`).
 
-The binaries were built from the tagged release source above. `main` may
+Release binaries are built from their tagged release source. `main` may
 contain documentation-only follow-up commits after that tag. Do not move or
 replace a public tag or its assets.
 
@@ -83,13 +105,38 @@ A locally built RC installer under `core/release-rcNN/` has a different hash
 because it is a separate unsigned build. Use the public release's
 `SHA256SUMS.txt`, not a local build hash, when verifying a downloaded installer.
 
-At the time this handoff was written, the working checkout was
-`C:\_Project\capturepack` on `main`, fast-forwarded from `agent/0.4.0` and
-pushed. Always begin with `git status --short --branch`, `git fetch`, and a
-non-destructive comparison before choosing a branch. Never reset or clean away
-an active worktree.
+The 0.4.4 release-prep checkout was `C:\_Project\capturepack` on
+`release/0.4.4`, forked from `main` at
+`1db7ae34de0555bf8267e46f7a52940632a05230`. Always begin with
+`git status --short --branch`, `git fetch`, and a non-destructive comparison
+before choosing a branch. Never reset or clean away an active worktree.
 
-## What 0.4.1 contains
+## What 0.4.4 contains
+
+History's primary sharing action is now a reviewed, still-only Share Copy
+([#140](https://github.com/r2cuerdame/capturepack/issues/140),
+[#141](https://github.com/r2cuerdame/capturepack/pull/141)). It is a separate
+`capturepack-share` `.share.zip`, never a reduced CapturePack. Its closed
+media allowlist includes only declared annotated keyframe PNGs, after decoding
+and deterministically re-encoding their pixels. A generated README, offline
+viewer and minimal inventory accompany that media. Originals, all video
+containers, manifest, annotations, timeline, plugins, notes, reports, and
+generated source documents do not cross that boundary.
+
+The review is binding: every thumbnail is derived from the exact canonical PNG
+bytes that creation writes, every still opens lazily at full-resolution 1:1, a
+same-size/restored-mtime content change or annotation change refuses creation,
+and a labeled blur box is blocked. Malformed display tables and annotation lanes
+without a declared still fail closed instead of making a partial copy. Visual
+redaction remains risk reduction rather than proof that an image contains no
+secret. Atomic Windows no-replace moves, recoverable replacement, and a per-pack
+operation lock cover creation and managed rename; trash and retention manage the
+companion archive before the source folder.
+Windows 8.3 short-path spelling is accepted without treating an ordinary path as
+a link, while actual symlink/junction traversal is still refused component by
+component. Full ZIP remains the explicit originals-included distribution path.
+
+## What 0.4.1 contains (historical)
 
 **A saved pack's browser page can be read back** ([#136](https://github.com/r2cuerdame/capturepack/issues/136)).
 Measured before and after on the same corpus with the same instrument: 12 packs,
@@ -152,10 +199,11 @@ the tray and the toast do not. The payloads are right; the renderers drop it.
 The release notes are in [CHANGELOG.md](../CHANGELOG.md). What follows is only the
 part that still binds code written today.
 
-**N screens is the normal case** ([#75](https://github.com/r2cuerdame/capturepack/issues/75),
-pack format **0.7.0**). `media.displays` is REQUIRED and always present — a single-display
-capture writes an array of one — and `media.snapshot`/`media.replay` are defined as
-aliases for the focused entry rather than as the capture. Old readers are unaffected;
+**For video captures, N screens is the normal case**
+([#75](https://github.com/r2cuerdame/capturepack/issues/75), pack format
+**0.7.0**). `media.displays` is REQUIRED and always present — a single-display
+video capture writes an array of one — and `media.snapshot`/`media.replay` are
+defined as aliases for the focused entry rather than as the capture. Old readers are unaffected;
 what binds is writers, and §13.1 says a 0.7.0 reader MUST still accept a pack that
 predates the requirement. Two consequences that are easy to undo by accident:
 
@@ -267,7 +315,7 @@ because breaking them is quiet:
   save and a render must not multiply decoders or encoders.
 
 Application version and pack format version are different contracts.
-`core/package.json` is application version `0.4.3`; packs containing the
+`core/package.json` is application version `0.4.4`; packs containing the
 optional viewer declare a compatible format version of at least `0.5.0`.
 
 ## Measured characteristic: the picture lags its own timestamp
@@ -617,9 +665,9 @@ A push or tag push does not publish CapturePack. Publication is a manual
 `workflow_dispatch` that runs the full QA/build/package/remote-byte-verification
 sequence described in [RELEASING.md](RELEASING.md).
 
-Never overwrite a public version. A product hotfix after 0.4.1 must use a higher
+Never overwrite a public version. A product hotfix after 0.4.4 must use a higher
 version and fix forward. Documentation-only commits may follow the release on
-`main`, but they do not alter the binaries identified by the `v0.4.1` tag.
+`main`, but they do not alter the binaries identified by the `v0.4.4` tag.
 
 ## Suggested next order
 
@@ -647,25 +695,35 @@ What the actually-open issues ask for, in the order they are worth doing:
    right and the renderers drop it, so the fix is small; what is not decided is
    how a notification should NAME a screen to a person who has three of them.
    Settle that first, then the renderers follow.
-3. **[#69](https://github.com/r2cuerdame/capturepack/issues/69) and
+3. **[#138](https://github.com/r2cuerdame/capturepack/issues/138) — replace the
+   always-on Windows replay path.** Move toward DXGI Desktop Duplication, D3D11
+   surfaces, hardware H.264 and a bounded native ring only with measured
+   CPU/GPU/memory/latency gains, correct timestamps and rotation, an explicit
+   fallback, and no regression to the fast still-image path.
+4. **[#139](https://github.com/r2cuerdame/capturepack/issues/139) — maintain a
+   privacy-safe real-pack regression corpus.** Keep representative hard cases
+   and explicit capture-to-candidate latency and pick-quality thresholds in the
+   release gate, while separating an expected visual change from a broken
+   selection or capture.
+5. **[#69](https://github.com/r2cuerdame/capturepack/issues/69) and
    [#68](https://github.com/r2cuerdame/capturepack/issues/68) — the plugin
    platform.** Settings > Plugins with real status and reorderable actions, and
    an after-save action host with pack states, pipelines, retry and
    idempotency. Read both issues before designing either; they share a surface.
-4. **[#21](https://github.com/r2cuerdame/capturepack/issues/21) — Windows code
+6. **[#21](https://github.com/r2cuerdame/capturepack/issues/21) — Windows code
    signing** through the SignPath Foundation OSS programme. Still open, so the
    public installer is unsigned.
-5. **[#1](https://github.com/r2cuerdame/capturepack/issues/1) — the usage
+7. **[#1](https://github.com/r2cuerdame/capturepack/issues/1) — the usage
    journal.** The oldest issue and the least urgent.
 
 Standing verification work that no issue tracks:
 
-6. ~~Make `capture-e2e` a required CI job~~ — **done in 0.4.3.** The stated
+8. ~~Make `capture-e2e` a required CI job~~ — **done in 0.4.3.** The stated
    condition was met: twelve consecutive CI runs from 2026-08-02 to 2026-08-09
    were green on that job, so `continue-on-error` is gone. What it was
    protecting against remains on the record — on the 0.4.1 candidate it went red
    inside a run that stayed green, and could have shipped unexamined.
-7. Re-run the manual matrix in [QA.md](QA.md) and record actual hardware,
+9. Re-run the manual matrix in [QA.md](QA.md) and record actual hardware,
    duration, FPS, gaps, CPU, memory, process, and media-decode evidence. Every
    item under "Still unverified in the field" above is settled there or nowhere.
 

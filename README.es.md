@@ -35,10 +35,12 @@ cuenta y sin servicios en la nube.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Descargar](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Versión pública actual para Windows: **CapturePack 0.4.3**. Al pasar el cursor
-por una página web capturada vuelve a ofrecerse el elemento que hay debajo —los
-contenedores de maquetación de la propia página se quedaban con el foco— y cada
-captura registra cuánto tardó en abrirse el editor.
+Versión pública actual para Windows: **CapturePack 0.4.4**. En la versión 0.4.4,
+Historial crea una **Copia para compartir** (`.share.zip`) cuyos únicos medios
+son imágenes fijas PNG anotadas y revisadas; las acompañan un README generado,
+un visor sin conexión y un inventario mínimo. Se excluyen los originales, todos
+los vídeos y el contexto estructurado. El ZIP completo (`.zip`) sigue incluyendo
+los originales.
 
 <p align="center">
   <a href="https://capturepack.dev/">
@@ -189,10 +191,10 @@ Los CapturePacks generados deben seguir siendo legibles para siempre.
 
 El pack es una **carpeta** normal y corriente: se puede explorar, se puede editar
 y es honesta. Un ZIP completo (`.zip`) es una copia de distribución opcional y
-sigue conteniendo las pruebas originales. El código fuente actual, aún no
-publicado, también ofrece en Historial una **Copia para compartir** revisada
-(`.share.zip`) con solo imágenes fijas revisadas y un inventario cerrado sin
-datos de origen.
+sigue conteniendo las pruebas originales. Desde la versión 0.4.4, Historial
+también ofrece una **Copia para compartir** revisada (`.share.zip`) cuyos únicos
+medios son imágenes fijas PNG anotadas y revisadas; las acompañan un README
+generado, un visor sin conexión y un inventario mínimo cerrado.
 
 Un pack de vídeo puede contener:
 
@@ -261,7 +263,7 @@ Herramientas, configuración del cliente y ajustes: [docs/MCP.md](docs/MCP.md).
 
 ## Estado
 
-**0.4.3 es la descarga pública actual para Windows.** CapturePack sigue siendo un
+**0.4.4 es la descarga pública actual para Windows.** CapturePack sigue siendo un
 proyecto en fase temprana, así que conserva el pack original cuando informes de
 un problema y consulta [GOAL.md](GOAL.md) para la visión del producto y
 [ROADMAP.md](ROADMAP.md) para lo que viene después.
@@ -284,7 +286,7 @@ desfase global fijado en el código.
   — acceso de solo lectura a los packs guardados e integración de proveedores de
   contexto.
 
-CapturePack `0.4.3` es la versión de la aplicación. El `format_version` del pack
+CapturePack `0.4.4` es la versión de la aplicación. El `format_version` del pack
 evoluciona de forma independiente mediante cambios aditivos del formato; quien lo
 lea debe seguir [SPEC.md](SPEC.md) en lugar de deducir la compatibilidad del
 formato a partir de la versión de la aplicación.
@@ -308,9 +310,9 @@ Releases, que puede desactivarse en Ajustes → General.
 El desenfoque no es destructivo: protege las vistas anotadas que se generan, pero
 `snapshot.png` y la repetición original que hay dentro del pack completo siguen
 sin censurar. Cuando los medios originales o el contexto estructurado deban
-seguir siendo privados, usa Historial → **Copia para compartir** en el código
-fuente actual aún no publicado y revisa la vista previa de cada imagen fija
-incluida antes de enviarla. La copia excluye los originales, todos los
+seguir siendo privados, usa Historial → **Copia para compartir**, disponible
+desde la versión 0.4.4, y revisa la vista previa de cada imagen fija incluida
+antes de enviarla. La copia excluye los originales, todos los
 contenedores de vídeo, manifiestos, anotaciones, líneas temporales, contexto de
 plugins y documentos generados del pack; los PNG incluidos se recodifican de
 forma canónica solo a partir de sus píxeles. Aun así, no garantiza que las

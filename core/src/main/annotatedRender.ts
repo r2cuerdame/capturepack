@@ -26,6 +26,8 @@ import {
   copyBufferResponsively,
 } from './backgroundMediaQueue'
 import { refreshPackDocs, setManifestRenderOutputs, type PackHandle } from './exporter'
+import { beginPackOperation } from './packOperations'
+import { PackRenderBatchTracker, type RenderBatchFinish } from './renderBatch'
 
 export interface AnnotatedRenderJob {
   replayWebm: Buffer
@@ -86,11 +88,10 @@ const RENDER_TIMEOUT_SLACK_MS = 60_000
 // A still job decodes one PNG and draws once — no playback, no recorder.
 const STILL_RENDER_TIMEOUT_MS = 30_000
 
-// EVERY render's lifecycle (fresh-capture save, re-edit save, History
-// re-render), observable in one place: the History window subscribes so a
-// save-started render shows as "Rendering…" instead of an enabled
-// [Retry Render], and isRenderInFlight lets it join a running render rather
-// than stack a second hidden render window for the same pack.
+// EVERY render's aggregate lifecycle (focused replay, non-focused displays and
+// still-only jobs), observable in one place. A pack emits `rendering` on the
+// first job and one terminal state only after the last job finishes, so History
+// and --await-render cannot mistake a focused render for the whole pack.
 export type RenderLifecycleState = 'rendering' | 'done' | 'failed'
 // `ratio` rides along on the 'rendering' state so a subscriber can draw a
 // progress bar without a second channel to keep in sync with this one. It is
@@ -103,11 +104,6 @@ type RenderStateListener = (
   ratio?: number,
 ) => void
 const renderStateListeners = new Set<RenderStateListener>()
-// In-flight render count per resolved pack dir (a re-edit save can ask for a
-// render while an older one is still queued or running — they are SERIALIZED
-// by the job queue below, never overlapped).
-const inFlight = new Map<string, number>()
-
 // ---------------------------------------------------------------------------
 // The render job queue
 //
@@ -150,7 +146,7 @@ export function onRenderStateChange(listener: RenderStateListener): () => void {
 
 /** True while any render for this pack folder is still running. */
 export function isRenderInFlight(dirPath: string): boolean {
-  return (inFlight.get(path.resolve(dirPath)) ?? 0) > 0
+  return renderBatches.isInFlight(dirPath)
 }
 
 function emitRenderState(dirPath: string, state: RenderLifecycleState, ratio?: number): void {
@@ -163,6 +159,26 @@ function emitRenderState(dirPath: string, state: RenderLifecycleState, ratio?: n
   }
 }
 
+const renderBatches = new PackRenderBatchTracker(beginPackOperation, emitRenderState)
+
+/**
+ * Joins one pack-wide render batch and returns its idempotent terminal hook.
+ * A null result means a sibling mutation already owns the pack; rendering must
+ * fail closed instead of waiting and later writing through a renamed/deleted
+ * path.
+ */
+function beginTrackedRender(
+  dirPath: string,
+): RenderBatchFinish | null {
+  return renderBatches.begin(dirPath)
+}
+
+function reportBusyRender(dirPath: string, kind: string): Error {
+  const error = new Error(`pack operation already active before ${kind}`)
+  console.error(`capturepack: ${kind} did not start:`, error.message)
+  return error
+}
+
 /**
  * Fire-and-forget: never blocks the save toast. `onDone` reports the terminal
  * state so the toast can flip its "rendering annotated replay…" status line.
@@ -173,21 +189,32 @@ export function startAnnotatedRender(
   onDone: (state: 'done' | 'failed') => void,
   onProgress?: (ratio: number) => void,
 ): void {
-  const key = path.resolve(handle.dirPath)
-  inFlight.set(key, (inFlight.get(key) ?? 0) + 1)
-  emitRenderState(handle.dirPath, 'rendering')
+  const finishTracking = beginTrackedRender(handle.dirPath)
+  if (finishTracking === null) {
+    reportBusyRender(handle.dirPath, 'annotated replay render')
+    try {
+      onDone('failed')
+    } catch (err) {
+      console.error('capturepack: annotated replay completion callback failed:', errorMessage(err))
+    }
+    return
+  }
+  let finished = false
   const finish = (state: 'done' | 'failed'): void => {
-    const count = (inFlight.get(key) ?? 1) - 1
-    if (count <= 0) inFlight.delete(key)
-    else inFlight.set(key, count)
-    emitRenderState(handle.dirPath, state)
-    onDone(state)
+    if (finished) return
+    finished = true
+    finishTracking(state)
+    try {
+      onDone(state)
+    } catch (err) {
+      console.error('capturepack: annotated replay completion callback failed:', errorMessage(err))
+    }
   }
   // Progress goes BOTH ways: to the caller that asked for it (the save toast)
   // and to every lifecycle subscriber (the History window), so closing the
   // toast mid-render does not lose the only view of how far it got.
   const relay = (ratio: number): void => {
-    emitRenderState(handle.dirPath, 'rendering', ratio)
+    renderBatches.progress(handle.dirPath, ratio)
     onProgress?.(ratio)
   }
   void renderAnnotatedReplay(handle, job, relay)
@@ -258,19 +285,27 @@ async function renderAnnotatedReplay(
 
 /**
  * One NON-FOCUSED display's annotated replay + stills (GOAL "Multi-Monitor
- * Support"). Deliberately NOT on the render lifecycle bus and never awaited:
- * 'rendering'/'done' there means the PACK's annotated replay — the file the
- * save toast's status line and History's [Retry Render] are about — and a
- * second screen's rendering is extra, not the thing the user is waiting for.
- * Failures are logged only; the pack is complete and valid without it.
+ * Support"). It joins the pack's aggregate lifecycle and operation lock even
+ * though its own progress is not shown: Share Copy and --await-render must wait
+ * for every display that can still change the manifest/keyframes. Failures are
+ * logged; the source pack remains valid without this optional derived view.
  */
 export function startDisplayRender(handle: PackHandle, job: AnnotatedRenderJob): void {
-  void renderAnnotatedReplay(handle, job).catch((err) => {
-    console.error(
-      `capturepack: annotated replay render for display ${job.display ?? 0} failed:`,
-      errorMessage(err),
-    )
-  })
+  const finishTracking = beginTrackedRender(handle.dirPath)
+  if (finishTracking === null) {
+    reportBusyRender(handle.dirPath, `annotated replay render for display ${job.display ?? 0}`)
+    return
+  }
+  void renderAnnotatedReplay(handle, job).then(
+    () => finishTracking('done'),
+    (err: unknown) => {
+      console.error(
+        `capturepack: annotated replay render for display ${job.display ?? 0} failed:`,
+        errorMessage(err),
+      )
+      finishTracking('failed')
+    },
+  )
 }
 
 /**
@@ -292,18 +327,30 @@ async function refreshDocs(handle: PackHandle, docLanguage: Language | undefined
  * video to play, so the hidden window composites snapshot.png + the overlays
  * and hands back a single PNG.
  *
- * Deliberately NOT on the render lifecycle bus: 'rendering'/'done' there means
- * the annotated REPLAY (the save toast's status line, History's [Retry Render]),
- * and a pack without a replay has none. Fire-and-forget, failures logged only —
- * the pack is already complete and valid without frames/.
+ * It joins the same aggregate lifecycle and operation lock as video renders:
+ * this job writes frames/ and the manifest too, so Share Copy must not plan or
+ * publish while it is queued. Fire-and-forget; the source pack remains valid
+ * if the optional derived still fails.
  */
 export function startKeyframeStill(
   handle: PackHandle,
   job: KeyframeStillJob,
   callbacks: KeyframeStillCallbacks = {},
 ): void {
+  const finishTracking = beginTrackedRender(handle.dirPath)
+  if (finishTracking === null) {
+    const error = reportBusyRender(handle.dirPath, 'annotated keyframe render')
+    void Promise.resolve().then(() => callbacks.onFailed?.(error)).catch((callbackError: unknown) => {
+      console.error(
+        'capturepack: annotated keyframe failure action failed:',
+        errorMessage(callbackError),
+      )
+    })
+    return
+  }
   void renderKeyframeStill(handle, job)
     .then(async (renderedPng) => {
+      finishTracking('done')
       try {
         await callbacks.onRendered?.(renderedPng)
       } catch (err) {
@@ -311,6 +358,7 @@ export function startKeyframeStill(
       }
     })
     .catch(async (err) => {
+      finishTracking('failed')
       console.error('capturepack: annotated keyframe render failed:', errorMessage(err))
       try {
         await callbacks.onFailed?.(

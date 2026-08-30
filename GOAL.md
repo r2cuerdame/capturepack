@@ -1687,8 +1687,9 @@ Each card shows: title (or report.md first sentence), captured application, time
 length, annotation count (+ numbered count), blur presence, annotated-replay state
 (ready / rendering / failed → [Retry Render]), full-ZIP and Share-Copy state, folder size,
 and a local `snapshot.png` thumbnail (placeholder when missing/corrupt). The Share Copy
-review draws its previews only from manifest-declared annotated keyframes; the original
-snapshot is never a Share Copy candidate.
+review draws every thumbnail from the exact canonical outbound bytes of its
+manifest-declared annotated keyframe and opens each still lazily at full-resolution 1:1;
+the original snapshot is never a Share Copy candidate.
 
 **Search / filters** — search over title, report.md, application, URL, date and
 annotation text. Current quick filters are All · Today · This Week · Render
@@ -2291,7 +2292,10 @@ annotation is blurred. The save-complete screen warns:
 included still before sending." A Share Copy is a separate `capturepack-share` ZIP,
 never a reduced CapturePack: its `reviewed-stills-only` profile excludes all originals,
 all video containers including annotated replays, and structured source context. It
-shows the user the still inventory, representative previews, and visible labels first;
+shows the user every still as an exact-canonical thumbnail, makes every full-resolution
+1:1 still available lazily, and shows all visible labels first; rejects malformed display
+tables and any annotation-bearing lane without a declared still; publishes and renames
+with an atomic no-replace move so a raced destination is preserved;
 fails closed when a blur label would be drawn back on top of the hidden object; and
 decodes each PNG to pixels before deterministic re-encoding so ancillary chunks and
 trailing container payload cannot ride along. This does not prove visible redaction safe.

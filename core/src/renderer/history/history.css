@@ -509,17 +509,109 @@ button.danger:hover:not(:disabled) {
   overflow: auto;
 }
 
+.sharePreviewButton {
+  display: block;
+  min-width: 0;
+  padding: 0;
+  border: 1px solid #2b4433;
+  border-radius: 6px;
+  background: #090b09;
+  overflow: hidden;
+  cursor: zoom-in;
+}
+
+.sharePreviewButton:hover,
+.sharePreviewButton:focus-visible {
+  border-color: #73c68e;
+  outline: none;
+}
+
 .sharePreview {
   display: block;
   width: 100%;
   height: 92px;
   object-fit: contain;
+  background: transparent;
+}
+
+.shareInspector {
+  width: min(96vw, 1280px);
+  height: min(92vh, 900px);
+  max-width: none;
+  max-height: none;
+  padding: 0;
+  border: 1px solid #44644d;
+  border-radius: 9px;
   background: #090b09;
-  border: 1px solid #2b4433;
-  border-radius: 6px;
+  color: var(--text);
+  overflow: hidden;
+}
+
+.shareInspector[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.shareInspector::backdrop {
+  background: rgb(0 0 0 / 78%);
+}
+
+.shareInspectorHeader {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 12px;
+  border-bottom: 1px solid #2b4433;
+  background: #111d16;
+}
+
+.shareInspectorTitle {
+  flex: 1;
+  min-width: 0;
+  color: #b9e8c7;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.shareInspectorClose {
+  flex: none;
+  min-width: 34px;
+  padding: 2px 8px;
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.shareInspectorViewport {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  background:
+    linear-gradient(45deg, #151719 25%, transparent 25%),
+    linear-gradient(-45deg, #151719 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #151719 75%),
+    linear-gradient(-45deg, transparent 75%, #151719 75%),
+    #0b0d0e;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  background-size: 16px 16px;
+}
+
+.shareInspectorImage {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: none;
+  max-height: none;
+}
+
+.shareInspectorStatus {
+  padding: 20px;
+  color: var(--muted);
 }
 
 .shareReviewMeta,
+.shareInventory,
 .shareExcluded,
 .shareWarning,
 .shareLabelsTitle,
@@ -529,6 +621,17 @@ button.danger:hover:not(:disabled) {
 
 .shareReviewMeta {
   color: var(--muted);
+}
+
+.shareInventory {
+  margin: 0;
+  padding-left: 20px;
+  max-height: 110px;
+  overflow: auto;
+  color: #d8d8dc;
+  font-family: Consolas, monospace;
+  overflow-wrap: anywhere;
+  user-select: text;
 }
 
 .shareExcluded {
