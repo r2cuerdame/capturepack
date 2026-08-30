@@ -4,6 +4,54 @@ All notable changes to CapturePack. Format follows [Keep a Changelog](https://ke
 this project uses [semantic versioning](https://semver.org/) for the app, and the pack
 format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 
+## 0.4.4 — 2026-08-30
+
+### Added
+
+- **History can create a reviewed Share Copy without distributing the evidence
+  pack.** The primary sharing action now writes a separate
+  `capturepack-share` `.share.zip` with the `reviewed-stills-only` profile. Its
+  only media are the manifest-declared annotated keyframe PNGs that the
+  confirmation view showed; a fixed source-data-free README, viewer and minimal
+  inventory accompany them. Full ZIP remains the explicit secondary action when
+  originals and complete capture context are intended
+  ([#140](https://github.com/r2cuerdame/capturepack/issues/140),
+  [#141](https://github.com/r2cuerdame/capturepack/pull/141)).
+
+### Security
+
+- Every included PNG is decoded to pixels and deterministically re-encoded with
+  only `IHDR`, `IDAT` and `IEND`, removing ancillary metadata, alternate filter
+  encodings and trailing payload rather than copying the reviewed container.
+  Grayscale/RGB `tRNS` transparency is expanded into canonical RGBA pixels so
+  the exported image cannot reveal pixels that were transparent during review.
+  Every review thumbnail now starts from those exact canonical outbound bytes,
+  and every still opens lazily at full-resolution 1:1 before confirmation.
+- Share Copy excludes original snapshots, every video container (including an
+  annotated replay), the CapturePack manifest, annotations, timeline, plugin
+  context, notes, reports and generated source documents. It is deliberately
+  not called sanitized: pixelation is visual risk reduction, not proof that an
+  image is secret-free, and the user must review every included still and every
+  visible label before sending it. A blur box with a label is blocked because
+  the renderer would draw that text back over the blurred region.
+
+### Fixed
+
+- Share Copy creation is bound to the exact reviewed content revision and fails
+  closed if a still or annotation changes. Malformed display tables and any
+  annotation-bearing display lane without a declared canonical still now fail
+  instead of producing a partial copy. Fixed-name publication, recovery and
+  managed renames use Windows' atomic no-replace move, so a destination created
+  during the operation cannot be overwritten; interrupted replacement remains
+  recoverable. Every focused/display/still render shares one aggregate per-pack
+  operation lock with sharing, renaming, trash and retention. A companion Share
+  Copy follows its source folder through rename, trash and retention accounting.
+- Windows-hosted CI exposed that an ordinary directory can be spelled through
+  an 8.3 short-path component such as `RUNNER~1`. Share Copy now preserves the
+  caller's path spelling when choosing the sibling output and detects actual
+  symlink/junction traversal component by component, so a harmless short name is
+  accepted without weakening the alias boundary.
+
 ## 0.4.3 — 2026-08-16
 
 ### Fixed

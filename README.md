@@ -33,10 +33,10 @@ account, or cloud service.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Download](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Current public Windows release: **CapturePack 0.4.3**. Hovering a captured web page
-offers the element under your cursor again — the page's own layout containers had
-been winning the hover — and every capture now records how long it took to open
-the editor.
+Current public Windows release: **CapturePack 0.4.4**. History now creates a
+reviewed Share Copy containing annotated stills without originals, video
+containers or structured capture context; Full ZIP remains the explicit complete
+evidence export.
 
 <p align="center">
   <a href="https://capturepack.dev/">
@@ -172,9 +172,10 @@ Generated CapturePacks should remain readable forever.
 
 The pack is a plain **folder** — browsable, editable, honest. The app's full `.zip`
 is an optional distribution copy and still contains the original evidence.
-**Unreleased current-source feature:** History adds a reviewed **Share Copy**
-(`.share.zip`) containing only manifest-declared annotated PNG stills and a closed,
-source-data-free inventory. This feature is not part of the public 0.4.3 release yet.
+CapturePack 0.4.4 adds a reviewed **Share Copy** (`.share.zip`) in History,
+whose only media are manifest-declared annotated PNG stills. A generated README,
+offline viewer and closed minimal inventory accompany them; originals, every
+video container and structured capture context stay out.
 
 Video packs may contain:
 
@@ -241,7 +242,7 @@ Tools, client setup, and settings: [docs/MCP.md](docs/MCP.md).
 
 ## Status
 
-**0.4.3 is the current public Windows download.** CapturePack remains an
+**0.4.4 is the current public Windows download.** CapturePack remains an
 early-stage project, so keep the original pack when reporting a problem and see
 [GOAL.md](GOAL.md) for the product vision and [ROADMAP.md](ROADMAP.md) for what
 comes next.
@@ -263,7 +264,7 @@ hard-coded global offset.
 - [MCP](docs/MCP.md) and [temporal provider API](docs/temporal-provider-api.md)
   — read-only saved-pack access and context-provider integration.
 
-CapturePack `0.4.3` is the application version. Pack `format_version` evolves
+CapturePack `0.4.4` is the application version. Pack `format_version` evolves
 independently through additive format changes; readers must follow
 [SPEC.md](SPEC.md) rather than infer format support from the app version.
 
@@ -283,9 +284,9 @@ check, which can be disabled in Settings → General.
 
 Blur is non-destructive: it protects generated annotated views, but
 `snapshot.png` and the original replay inside the full pack remain unredacted.
-In the unreleased current source, when original media or structured context must
-stay private, use History → **Share Copy** and review every included still and
-visible label before sending it. The `reviewed-stills-only` Share Copy excludes
+In CapturePack 0.4.4, when original media or structured context must stay private,
+use History → **Share Copy** and review every included still and visible label
+before sending it. The `reviewed-stills-only` Share Copy excludes
 originals, every video container (including annotated replays), manifests,
 annotations, timelines, plugin context and generated pack documents. Each included
 PNG is decoded to pixels and deterministically re-encoded so ancillary metadata and

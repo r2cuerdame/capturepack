@@ -161,7 +161,8 @@ A `.capturepack` file is a **standard ZIP archive** (PKWARE APPNOTE ZIP) of the 
   accurate where one is needed.
 
 > **Note.** A Privacy-aware Share Copy is a separate `capturepack-share` ZIP, not a reduced
-> CapturePack. It carries reviewed, canonical annotated PNG stills only and deliberately omits
+> CapturePack. Its only media are reviewed, canonical annotated PNG stills; fixed source-free
+> guidance, inventory and an offline viewer accompany them. It deliberately omits
 > the original evidence, every video container, and structured source context; see
 > [§3.3](#33-the-share-copy-derived-distribution) and [§9.4](#94-share-copy-distribution).
 
@@ -225,9 +226,15 @@ NOT add source-pack data to it.
   projection, never copy the CapturePack versions.
 - A declared annotated keyframe that is absent, invalid, or still rendering makes creation fail.
   Writers MUST NOT fall back to original media or an annotated replay.
-- The user MUST see the included media inventory, representative derived previews, excluded data
-  classes, and any text visibly rendered into the media before creation. If the source changes
+- Every annotation-bearing display lane MUST have at least one declared canonical still. A writer
+  MUST reject malformed/ambiguous display tables and MUST NOT silently filter a display or publish
+  a partial subset of the annotated lanes.
+- Before creation, the user MUST see the included media inventory, a thumbnail for **every** still
+  derived from that still's exact canonical outbound bytes, a lazy full-resolution 1:1 view of each
+  still, excluded data classes, and any text visibly rendered into the media. If the source changes
   after that review, creation MUST stop and require review of the new revision.
+- Fixed-name publication and managed rename/recovery MUST use an atomic no-replace move. A path
+  appearing after a collision check MUST make the operation fail without overwriting that path.
 - The original CapturePack folder MUST remain byte-for-byte unchanged.
 - “Share Copy” does not mean secret-free. Blur and other visual transforms cover only marked
   regions; the user MUST review every included still before sending it.

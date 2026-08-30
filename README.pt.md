@@ -35,10 +35,11 @@ que funciona sem IA, sem conta e sem serviço na nuvem.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Baixar](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Versão pública atual para Windows: **CapturePack 0.4.3**. Ao passar o cursor
-sobre uma página web capturada, o elemento embaixo dele volta a ser oferecido — os
-contêineres de layout da própria página vinham ficando com o hover — e cada
-captura registra quanto tempo levou para abrir o editor.
+Versão pública atual para Windows: **CapturePack 0.4.4**. Na versão 0.4.4, o
+Histórico cria uma **Cópia para compartilhar** (`.share.zip`) cujas únicas mídias
+são imagens estáticas PNG anotadas e revisadas; acompanham-nas um README gerado,
+um visualizador offline e um inventário mínimo. Ela exclui originais, todos os
+vídeos e o contexto estruturado. O ZIP completo (`.zip`) ainda inclui os originais.
 
 <p align="center">
   <a href="https://capturepack.dev/">
@@ -186,9 +187,10 @@ Os CapturePacks gerados devem continuar legíveis para sempre.
 
 O pack é uma **pasta** comum — navegável, editável, honesta. Um ZIP completo
 (`.zip`) é uma cópia opcional de distribuição e ainda contém as evidências
-originais. O código-fonte atual, ainda não lançado, também oferece no Histórico
-uma **Cópia para compartilhar** revisada (`.share.zip`) somente com imagens
-estáticas revisadas e um inventário fechado sem dados de origem.
+originais. Desde a versão 0.4.4, o Histórico também oferece uma **Cópia para
+compartilhar** revisada (`.share.zip`) cujas únicas mídias são imagens estáticas
+PNG anotadas e revisadas; acompanham-nas um README gerado, um visualizador offline
+e um inventário mínimo fechado.
 
 Packs de vídeo podem conter:
 
@@ -256,7 +258,7 @@ Ferramentas, configuração de clientes e ajustes: [docs/MCP.md](docs/MCP.md).
 
 ## Estado
 
-**0.4.3 é o download público atual para Windows.** O CapturePack continua sendo
+**0.4.4 é o download público atual para Windows.** O CapturePack continua sendo
 um projeto em estágio inicial, então guarde o pack original ao relatar um
 problema e veja o [GOAL.md](GOAL.md) para a visão do produto e o
 [ROADMAP.md](ROADMAP.md) para o que vem a seguir.
@@ -280,7 +282,7 @@ deslocamento global fixo no código.
   — acesso somente leitura a packs salvos e integração de provedores de
   contexto.
 
-CapturePack `0.4.3` é a versão do aplicativo. O `format_version` do pack evolui
+CapturePack `0.4.4` é a versão do aplicativo. O `format_version` do pack evolui
 de forma independente, por mudanças aditivas de formato; leitores devem seguir o
 [SPEC.md](SPEC.md) em vez de deduzir o suporte ao formato pela versão do app.
 
@@ -302,8 +304,8 @@ Configurações → Geral.
 O desfoque não é destrutivo: ele protege as vistas anotadas geradas, mas o
 `snapshot.png` e o replay original dentro do pack completo continuam sem
 censura. Quando a mídia original ou o contexto estruturado precisar permanecer
-privado, use Histórico → **Cópia para compartilhar** no código-fonte atual ainda
-não lançado e revise a prévia de cada imagem estática incluída antes de enviar.
+privado, use Histórico → **Cópia para compartilhar**, disponível desde a versão
+0.4.4, e revise a prévia de cada imagem estática incluída antes de enviar.
 A cópia exclui originais, todos os contêineres de vídeo, manifestos, anotações,
 linhas do tempo, contexto de plugins e documentos gerados do pack; os PNGs
 incluídos são recodificados de forma canônica somente a partir de seus pixels.

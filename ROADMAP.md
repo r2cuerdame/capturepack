@@ -9,7 +9,7 @@ status; it never overrides either document.
 end on a real install (0.1.0 → 0.1.1 → 0.1.2). The active source and
 documentation baseline and current public
 [GitHub Release](https://github.com/r2cuerdame/capturepack/releases/latest) are
-**0.4.3**.
+**0.4.4**.
 What is *not* yet proven is the long-run habit — the one-month
 no-manual-reinstall criterion is still running.
 
@@ -21,7 +21,7 @@ Ctrl+Alt+C  →  capture  →  5-second annotation  →  save folder  →  share
 
 ---
 
-## Current baseline — 0.4.3
+## Current baseline — 0.4.4
 
 The milestone narrative below is preserved as the product's design and
 verification history. These are the current additions and next gates:
@@ -95,8 +95,9 @@ verification history. These are the current additions and next gates:
   ([#63](https://github.com/r2cuerdame/capturepack/issues/63)), and a keyframe
   that declares the size it actually is
   ([#133](https://github.com/r2cuerdame/capturepack/issues/133)).
-- 0.4.0 makes **N screens the normal case**: `media.displays` is always present,
-  a single-monitor capture writes an array of one, and every display states the
+- For video captures, 0.4.0 makes **N screens the normal case**:
+  `media.displays` is always present, a single-monitor capture writes an array
+  of one, and every display states the
   size of its own image measured from the file that was written rather than
   recomputed from its bounds — pack format 0.7.0
   ([#75](https://github.com/r2cuerdame/capturepack/issues/75)). The timeline
@@ -131,16 +132,21 @@ verification history. These are the current additions and next gates:
   the 5-second workflow itself a measured number — every capture records how
   long it took to reach a usable editor, excluding the time the user held it —
   and promotes `capture-e2e` from advisory to a required CI job.
-- **Unreleased source addition:** History now reviews and creates a separate
+- 0.4.4 ships History review and creation of a separate
   `capturepack-share` `.share.zip` with the `reviewed-stills-only` profile. Its
-  exact allowlist contains only manifest-declared annotated keyframe PNGs: every
-  PNG is decoded to pixels and deterministically re-encoded without ancillary
-  chunks or trailing payload. It excludes original media, all video containers
-  including annotated replays, and structured pack context; blocks blur boxes
-  whose labels would be drawn back into the result; preserves the authoritative
-  source folder byte-for-byte; and deliberately does not call the result
-  sanitized. The full `.zip` remains available under More with an originals
-  warning.
+  exact media allowlist contains only manifest-declared annotated keyframe PNGs:
+  every PNG is decoded to pixels and deterministically re-encoded without
+  ancillary chunks or trailing payload. Every thumbnail is derived from those
+  exact outbound bytes and every full-resolution still is available lazily at
+  1:1. A generated README, offline viewer and minimal inventory accompany that
+  media. Share Copy excludes original media, all video containers including
+  annotated replays, and structured pack context; rejects malformed or partial
+  display lanes; blocks blur boxes whose labels would be drawn back into the
+  result; preserves both raced destinations and the authoritative source folder;
+  and deliberately does not call the result sanitized. The full `.zip` remains
+  available under More with an originals warning
+  ([#140](https://github.com/r2cuerdame/capturepack/issues/140),
+  [#141](https://github.com/r2cuerdame/capturepack/pull/141)).
 - Next: the three-screen acceptance test on REAL hardware — one portrait, one
   scaled, focus on the third — is still unrun, and
   [#76](https://github.com/r2cuerdame/capturepack/issues/76) stays open until
@@ -216,8 +222,9 @@ usage habit that the whole project is measured by.
 - [x] Original snapshot/replay media remain untouched; blur renders only into
       declared derived views and the pack warns that originals remain sensitive
 - [x] A reviewed `capturepack-share` Share Copy packages only declared annotated
-      keyframe stills through a closed allowlist; it canonicalizes their decoded
-      PNG pixels, excludes originals, all videos and structured context, and
+      keyframe stills as media through a closed media allowlist, accompanied by
+      a generated README, offline viewer and minimal inventory; it canonicalizes
+      the PNG pixels, excludes originals, all videos and structured context, and
       remains distinct from the CapturePack evidence contract
 - [x] `viewer.html`, `README.md`, `report.md` and `skills/` generated from the
       source contract
@@ -400,7 +407,7 @@ less complete without them, and nothing becomes an AI API integration (a stated 
 | 7 | Plugin API | V2 | Not started — the in-process API. The on-disk plugin contract (SPEC §11) is implemented and written by every capture |
 | 8 | Browser plugin | V2 | Done — picker, document snapshot, protocol v1, native host, Chromium-family installer registration. Shadow DOM / SPA routes pending |
 | 9 | Windows plugin | V2 | Done — built-in UI Automation provider writing `plugins/windows-uia` and `plugins/windows-context` |
-| 10 | Public release | V1 | Done (0.4.3 live; auto-update chain proven from 0.1.0) |
+| 10 | Public release | V1 | Done (0.4.4 live; auto-update chain proven from 0.1.0) |
 
 ---
 

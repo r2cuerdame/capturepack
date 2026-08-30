@@ -46,7 +46,42 @@ function compileNativeReplayHelper() {
   }
 }
 
+function compileMoveNoReplaceHelper() {
+  if (process.platform !== 'win32') {
+    console.warn('move-no-replace helper skipped: Windows build host required')
+    return
+  }
+  const windows = process.env.WINDIR ?? 'C:\\Windows'
+  const candidates = [
+    join(windows, 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe'),
+    join(windows, 'Microsoft.NET', 'Framework', 'v4.0.30319', 'csc.exe'),
+  ]
+  const compiler = candidates.find((candidate) => existsSync(candidate))
+  if (compiler === undefined) {
+    throw new Error('move-no-replace helper compiler not found (Windows .NET Framework csc.exe)')
+  }
+  const output = join(process.cwd(), 'dist', 'scripts', 'move-no-replace.exe')
+  const result = spawnSync(
+    compiler,
+    [
+      '/nologo',
+      '/optimize+',
+      '/target:exe',
+      `/out:${output}`,
+      join(process.cwd(), 'scripts', 'move-no-replace.cs'),
+    ],
+    { encoding: 'utf8', windowsHide: true },
+  )
+  if (result.status !== 0 || !existsSync(output)) {
+    throw new Error(
+      `move-no-replace helper compile failed (${String(result.status)}): `
+        + `${String(result.stderr || result.stdout || result.error)}`,
+    )
+  }
+}
+
 compileNativeReplayHelper()
+compileMoveNoReplaceHelper()
 compileDxgiTimingHelper({
   required: process.argv.includes('--require-dxgi-helper'),
 })
@@ -142,6 +177,9 @@ await Promise.all([
   // `powershell -File dist/scripts/uia-track.ps1 -SelfTest 20` runnable by hand
   // — which is how its cost numbers are checked.
   cp('scripts/uia-track.ps1', 'dist/scripts/uia-track.ps1'),
+  // Atomic no-replace rename fallback for source/dev runs. Packaged Windows
+  // builds use the compiled MoveFileW helper above; both stay outside asar.
+  cp('scripts/move-no-replace.ps1', 'dist/scripts/move-no-replace.ps1'),
   cp('assets', 'dist/assets', { recursive: true }),
 ])
 

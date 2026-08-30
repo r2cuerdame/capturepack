@@ -256,6 +256,9 @@ export const IPC = {
   // history window -> main (invoke): inspect the exact reviewed-stills-only
   // Share Copy before creating it. Returns resized previews, never file paths.
   historyPlanShare: 'history:plan-share',
+  // history window -> main (invoke): lazily fetch one exact canonical still
+  // from the reviewed revision for full-resolution local inspection.
+  historyShareStill: 'history:share-still',
   // history window -> main (invoke): create the reviewed sibling .share.zip.
   // The opaque revision from historyPlanShare makes a changed pack fail closed.
   historyCreateShare: 'history:create-share',
@@ -1688,6 +1691,8 @@ export interface HistoryPackSummary {
   numberedCount: number
   hasBlur: boolean
   annotated: HistoryAnnotatedState
+  // True for any focused, non-focused or still-only render in the pack batch.
+  renderInFlight: boolean
   // A sibling full-pack archive exists (the entry itself when kind is 'zip').
   zipTwin: boolean
   // A sibling reviewed-stills-only `{folder}.share.zip` exists.
@@ -1700,6 +1705,16 @@ export interface HistorySharePlan {
   // Opaque content revision; creation rejects it if the pack changed after review.
   revision: string
   outputName: string
+  // Exact closed media inventory that share.json will declare. Keeping the
+  // writer-generated archive path beside the dimensions makes the review more
+  // than a count: the user can account for every outbound file individually.
+  media: Array<{
+    file: string
+    kind: 'annotated-still'
+    display: number | null
+    width: number
+    height: number
+  }>
   previewDataUrls: string[]
   previewCount: number
   stillCount: number
@@ -1714,6 +1729,17 @@ export interface HistorySharePlan {
 export interface HistorySharePlanResult {
   ok: boolean
   plan?: HistorySharePlan
+  error?: string
+}
+
+export interface HistoryShareStillResult {
+  ok: boolean
+  revision?: string
+  index?: number
+  width?: number
+  height?: number
+  /** Exact canonical PNG bytes, one requested still at a time. */
+  pngBytes?: Uint8Array
   error?: string
 }
 

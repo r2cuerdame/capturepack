@@ -12,11 +12,12 @@ Read these before changing anything:
 6. `docs/QA.md`
 7. the current files and `git diff`
 
-The current public Windows release is stable `v0.4.1`, built from
-`5b2b4debc03a6ed26f4a62d7640a77d00601c17c`, published and verified by
-downloading the released asset and hashing it. Do not move that tag or replace
-its assets. Work happens on `main`; there is no in-flight release branch, and
-`main` may carry documentation-only commits after the tag. Start with
+The current public Windows release is stable `v0.4.4`, published through the
+guarded Release workflow and verified against its downloaded assets. Treat the
+immutable `v0.4.4` tag and its four verified assets as the release authority: do
+not move the tag or replace those assets. Work happens on `main`; there is no
+in-flight release branch after publication, and `main` may carry commits after
+the tag. Start with
 `git status --short --branch` and `git fetch`, and never reset or clean away an
 active worktree.
 
@@ -24,12 +25,13 @@ Application version and pack format version are different contracts. The pack
 format is **0.7.0**, or **0.8.0** for a capture that actually carries an input
 event. The `windows-uia` plugin payload is **0.5.0**.
 
-## What the product is, in the four sentences newcomers get wrong
+## What the product is, in the five sentences newcomers get wrong
 
-**N screens is the normal case, not one screen plus others.** `media.displays`
-is REQUIRED and always present — a single-monitor capture writes an array of
-one — and `media.snapshot`/`media.replay` are defined as *aliases for the
-focused entry*, not as "the capture". A reader that follows the obvious field
+**For video captures, N screens is the normal case, not one screen plus
+others.** `media.displays` is REQUIRED and always present — a single-monitor
+video capture writes an array of one — and `media.snapshot`/`media.replay` are
+defined as *aliases for the focused entry*, not as "the capture". A reader that
+follows the obvious field
 gets half the desk with no signal that the rest exists, which is exactly the
 defect the requirement closed. Each entry states its own snapshot frame as
 measured, because recomputing it from `bounds` × `scale` is off by a pixel at
@@ -69,6 +71,18 @@ the field agree with it. `windows[].client_bounds` is the other half: a DOM
 element is measured in viewport CSS pixels and only the window's drawable
 rectangle turns those into snapshot pixels, so the payload carries one now.
 
+**A Share Copy is a reviewed, still-only distribution, not a CapturePack.** History
+can create a `capturepack-share` `.share.zip` whose only media are the declared
+annotated PNG stills; its other entries are a generated README, offline viewer
+and minimal inventory. The writer decodes and deterministically
+re-encodes the image pixels and excludes originals, every video container and
+structured pack context, but that is visual risk reduction rather than proof an
+image is secret-free. Every thumbnail comes from the exact canonical outbound
+PNG and opens lazily at full-resolution 1:1; malformed/partial display lanes and
+raced destination names fail closed. Review every included still and visible
+label before sending; use the Full ZIP only when the originals-included
+CapturePack is intended.
+
 ## What is open
 
 Open, and only these:
@@ -88,6 +102,17 @@ Open, and only these:
   identity, and the toast discards the count entirely when the focused display is
   among the failures. The payloads are right in all three cases; the loss is in
   the renderer, and the fix needs new strings in nine locales.
+- **[#138](https://github.com/r2cuerdame/capturepack/issues/138) — replace the
+  always-on Windows replay path.** The target is DXGI Desktop Duplication →
+  D3D11 surfaces → hardware H.264 → a bounded native ring, with measured
+  CPU/GPU/memory/latency improvements, correct timestamps and rotation, and an
+  explicit fallback when the native path is unavailable. The fast still-image
+  workflow must not regress.
+- **[#139](https://github.com/r2cuerdame/capturepack/issues/139) — maintain a
+  privacy-safe real-pack regression corpus.** It must cover representative hard
+  cases and put explicit capture-to-candidate latency and pick-quality thresholds
+  in the release gate while distinguishing expected visual change from a broken
+  selection or capture.
 - **[#69](https://github.com/r2cuerdame/capturepack/issues/69)** and
   **[#68](https://github.com/r2cuerdame/capturepack/issues/68)** — the plugin
   platform.
@@ -139,7 +164,7 @@ npm audit --omit=dev
 ```
 
 The gate discovers every `check:*` script in `core/package.json` — currently
-**83** — and runs them with type checking, the production build and the built
+**84** — and runs them with type checking, the production build and the built
 app's Electron smoke: **87 steps**, or 85 with `--skip-build`. Count it yourself
 rather than trusting this sentence:
 

@@ -12,16 +12,17 @@
 // source path, title, note, or undeclared file crosses this boundary.
 import AdmZip from 'adm-zip'
 import { createHash, randomUUID } from 'node:crypto'
-import { lstat, readFile, readdir, realpath, rename, rm } from 'node:fs/promises'
+import { lstat, readFile, readdir, realpath, rm } from 'node:fs/promises'
 import * as path from 'node:path'
 import { deflateSync, inflateSync } from 'node:zlib'
+import { captureMediaViolations } from '../shared/captureMedia'
 import type {
   Annotation,
-  AnnotationsFile,
   Manifest,
   ManifestDisplayMedia,
   ManifestKeyframe,
 } from '../shared/types'
+import { moveNoReplace, MoveNoReplaceError } from './moveNoReplace'
 import { isShareBundleArchive, shareBundlePath } from './packArchive'
 
 export const SHARE_FORMAT = 'capturepack-share'
@@ -46,6 +47,19 @@ export interface ShareMediaPlanEntry {
   mtimeMs: number
   /** Raw source hash: binds the pixels reviewed in History to creation. */
   contentSha256: string
+  /** Canonical outbound hash: binds every preview to the exact ZIP bytes. */
+  canonicalSha256: string
+  /** Canonical container bytes and decoded RGBA footprint are capped separately. */
+  canonicalSize: number
+  decodedRasterBytes: number
+  pixelWidth: number
+  pixelHeight: number
+}
+
+export interface CanonicalShareStill {
+  bytes: Buffer
+  width: number
+  height: number
 }
 
 export type ShareBundleBlocker = 'blur-label'
@@ -86,6 +100,7 @@ interface ParsedPack {
   annotations: Annotation[]
   annotationBytes: Buffer | null
   annotationMtimeMs: number | null
+  annotationFrame: { width: number; height: number } | null
 }
 
 interface MediaCandidate {
@@ -93,6 +108,24 @@ interface MediaCandidate {
   archivePath: string
   kind: ShareMediaKind
   display: number | null
+  declaredWidth?: number
+  declaredHeight?: number
+  sourceFrame?: ShareSourceFrame
+}
+
+interface ShareSourceFrame {
+  width: number
+  height: number
+  /** Only legacy bounds × scale estimates may differ from the raster by one pixel. */
+  widthTolerance: 0 | 1
+  heightTolerance: 0 | 1
+}
+
+interface ShareDisplayLayout {
+  focused: number | null
+  displays: ManifestDisplayMedia[]
+  declared: ReadonlySet<number>
+  frameByDisplay: ReadonlyMap<number | null, ShareSourceFrame>
 }
 
 /**
@@ -106,10 +139,25 @@ export async function planShareBundle(dirPath: string): Promise<ShareBundlePlan>
     throw new ShareBundleError('invalid-pack')
   })
   const pack = await readPack(root)
-  const declaredFocused = focusedDisplayIndex(pack.manifest)
-  const focusedDisplay =
-    pack.manifest.capture_kind === 'image' ? null : (declaredFocused ?? 1)
-  const candidates = mediaCandidates(pack.manifest, focusedDisplay)
+  const layout = shareDisplayLayout(pack.manifest, pack.annotationFrame)
+  const annotationLanes = pack.annotations.map((annotation) => annotationDisplays(annotation, layout))
+  const candidates = mediaCandidates(pack.manifest, layout)
+  const annotatedLaneKeys = new Set(
+    annotationLanes.flatMap((displays) => [...displays].map(laneKey)),
+  )
+  if (
+    candidates.some(
+      (candidate) =>
+        candidate.display !== null &&
+        candidate.display !== layout.focused &&
+        !annotatedLaneKeys.has(laneKey(candidate.display)),
+    )
+  ) {
+    // Current writers render secondary stills only for displays that actually
+    // carry an annotation. A declaration without such a lane is stale or
+    // foreign ambiguity, not extra media that Share Copy may silently trust.
+    throw new ShareBundleError('invalid-pack')
+  }
   if (candidates.length === 0) {
     throw new ShareBundleError('derived-media-not-ready')
   }
@@ -120,6 +168,8 @@ export async function planShareBundle(dirPath: string): Promise<ShareBundlePlan>
   const entries: ShareMediaPlanEntry[] = []
   const destinations = new Set<string>()
   let totalBytes = 0
+  let totalCanonicalBytes = 0
+  let totalDecodedRasterBytes = 0
   for (const candidate of candidates) {
     if (destinations.has(candidate.archivePath)) {
       throw new ShareBundleError('invalid-pack', candidate.archivePath)
@@ -150,7 +200,38 @@ export async function planShareBundle(dirPath: string): Promise<ShareBundlePlan>
     const sourceBytes = await readFile(sourcePath).catch(() => {
       throw new ShareBundleError('derived-media-missing', candidate.sourceRel)
     })
-    canonicalStill(sourceBytes, candidate.sourceRel)
+    const canonicalBytes = canonicalStill(sourceBytes, candidate.sourceRel)
+    const { width: pixelWidth, height: pixelHeight } = canonicalPngDimensions(canonicalBytes)
+    const decodedRasterBytes = pixelWidth * pixelHeight * 4
+    if (
+      canonicalBytes.length > MAX_SHARE_STILL_BYTES ||
+      !Number.isSafeInteger(decodedRasterBytes) ||
+      decodedRasterBytes > MAX_SHARE_STILL_BYTES
+    ) {
+      throw new ShareBundleError('derived-media-not-ready', candidate.sourceRel)
+    }
+    totalCanonicalBytes += canonicalBytes.length
+    totalDecodedRasterBytes += decodedRasterBytes
+    if (
+      totalCanonicalBytes > MAX_SHARE_TOTAL_BYTES ||
+      totalDecodedRasterBytes > MAX_SHARE_TOTAL_BYTES
+    ) {
+      throw new ShareBundleError('derived-media-not-ready')
+    }
+    if (
+      (candidate.declaredWidth !== undefined && candidate.declaredWidth !== pixelWidth) ||
+      (candidate.declaredHeight !== undefined && candidate.declaredHeight !== pixelHeight)
+    ) {
+      throw new ShareBundleError('invalid-pack', candidate.sourceRel)
+    }
+    if (
+      candidate.sourceFrame !== undefined &&
+      (Math.abs(candidate.sourceFrame.width - pixelWidth) >
+        candidate.sourceFrame.widthTolerance ||
+        candidate.sourceFrame.height - pixelHeight > candidate.sourceFrame.heightTolerance)
+    ) {
+      throw new ShareBundleError('derived-media-not-ready', candidate.sourceRel)
+    }
     const stableStat = await lstat(sourcePath).catch(() => {
       throw new ShareBundleError('derived-media-missing', candidate.sourceRel)
     })
@@ -163,6 +244,11 @@ export async function planShareBundle(dirPath: string): Promise<ShareBundlePlan>
       size: fileStat.size,
       mtimeMs: fileStat.mtimeMs,
       contentSha256: sha256(sourceBytes),
+      canonicalSha256: sha256(canonicalBytes),
+      canonicalSize: canonicalBytes.length,
+      decodedRasterBytes,
+      pixelWidth,
+      pixelHeight,
     })
   }
 
@@ -170,10 +256,11 @@ export async function planShareBundle(dirPath: string): Promise<ShareBundlePlan>
   const lanesWithStill = new Set(
     entries.filter((entry) => entry.kind === 'annotated-still').map((entry) => laneKey(entry.display)),
   )
-  for (const annotation of blurAnnotations) {
-    const display = annotationDisplay(annotation, focusedDisplay)
-    if (!lanesWithStill.has(laneKey(display))) {
-      throw new ShareBundleError('derived-media-not-ready')
+  for (const displays of annotationLanes) {
+    for (const display of displays) {
+      if (!lanesWithStill.has(laneKey(display))) {
+        throw new ShareBundleError('derived-media-not-ready')
+      }
     }
   }
 
@@ -195,11 +282,26 @@ export async function planShareBundle(dirPath: string): Promise<ShareBundlePlan>
     .update(pack.annotationBytes ?? Buffer.alloc(0))
     .update(
       JSON.stringify(
-        entries.map(({ sourceRel, size, mtimeMs, contentSha256 }) => ({
+        entries.map(({
           sourceRel,
           size,
           mtimeMs,
           contentSha256,
+          canonicalSha256,
+          canonicalSize,
+          decodedRasterBytes,
+          pixelWidth,
+          pixelHeight,
+        }) => ({
+          sourceRel,
+          size,
+          mtimeMs,
+          contentSha256,
+          canonicalSha256,
+          canonicalSize,
+          decodedRasterBytes,
+          pixelWidth,
+          pixelHeight,
         })),
       ),
     )
@@ -217,6 +319,62 @@ export async function planShareBundle(dirPath: string): Promise<ShareBundlePlan>
     visibleLabels,
     blockers,
   }
+}
+
+/**
+ * Re-reads one planned still and returns the exact canonical bytes that
+ * creation will publish. History uses the same function for its thumbnails and
+ * lazy full-resolution inspector, so review and ZIP creation cannot drift onto
+ * different decoder/container paths.
+ */
+export async function readCanonicalShareStill(
+  entry: ShareMediaPlanEntry,
+): Promise<CanonicalShareStill> {
+  const before = await lstat(entry.sourcePath).catch(() => {
+    throw new ShareBundleError('pack-changed')
+  })
+  if (
+    !before.isFile() ||
+    before.isSymbolicLink() ||
+    before.size !== entry.size ||
+    before.mtimeMs !== entry.mtimeMs
+  ) {
+    throw new ShareBundleError('pack-changed')
+  }
+  const sourceBytes = await readFile(entry.sourcePath).catch(() => {
+    throw new ShareBundleError('pack-changed')
+  })
+  const after = await lstat(entry.sourcePath).catch(() => {
+    throw new ShareBundleError('pack-changed')
+  })
+  if (
+    !after.isFile() ||
+    after.isSymbolicLink() ||
+    after.size !== before.size ||
+    after.mtimeMs !== before.mtimeMs ||
+    sha256(sourceBytes) !== entry.contentSha256
+  ) {
+    throw new ShareBundleError('pack-changed')
+  }
+  let bytes: Buffer
+  try {
+    bytes = canonicalPng(sourceBytes)
+  } catch {
+    throw new ShareBundleError('pack-changed')
+  }
+  const dimensions = canonicalPngDimensions(bytes)
+  const decodedRasterBytes = dimensions.width * dimensions.height * 4
+  if (
+    sha256(bytes) !== entry.canonicalSha256 ||
+    bytes.length !== entry.canonicalSize ||
+    !Number.isSafeInteger(decodedRasterBytes) ||
+    decodedRasterBytes !== entry.decodedRasterBytes ||
+    dimensions.width !== entry.pixelWidth ||
+    dimensions.height !== entry.pixelHeight
+  ) {
+    throw new ShareBundleError('pack-changed')
+  }
+  return { bytes, ...dimensions }
 }
 
 /**
@@ -272,13 +430,8 @@ export async function createShareBundle(
 
   const mediaBytes = new Map<string, Buffer>()
   for (const entry of plan.entries) {
-    const bytes = await readFile(entry.sourcePath).catch(() => {
-      throw new ShareBundleError('pack-changed')
-    })
-    if (sha256(bytes) !== entry.contentSha256) {
-      throw new ShareBundleError('pack-changed')
-    }
-    mediaBytes.set(entry.archivePath, canonicalStill(bytes, entry.sourceRel))
+    const canonical = await readCanonicalShareStill(entry)
+    mediaBytes.set(entry.archivePath, canonical.bytes)
   }
   // Catch a re-edit or late render that landed while the (potentially large)
   // annotated stills were being read. The user reviews that new revision on a
@@ -370,34 +523,45 @@ function verifyArchive(file: string, expected: ReadonlyMap<string, Buffer>): voi
 async function replaceCompletedArchive(temporary: string, destination: string): Promise<void> {
   const exists = await destinationExists(destination)
   if (!exists) {
-    await rename(temporary, destination)
+    await moveShareNoReplace(temporary, destination)
     return
   }
   await assertOwnedDestinationOrAbsent(destination)
   const backup = `${destination}.previous`
   if (await destinationExists(backup)) throw new ShareBundleError('output-conflict')
-  await rename(destination, backup)
+  await moveShareNoReplace(destination, backup)
   // Re-check after moving: another process could have replaced the destination
-  // between the earlier identity check and this rename.
+  // between the earlier identity check and this no-replace move.
   if (!isShareBundleArchive(backup)) {
     try {
-      await rename(backup, destination)
+      await moveShareNoReplace(backup, destination)
     } catch {
       throw new ShareBundleError('output-conflict')
     }
     throw new ShareBundleError('output-conflict')
   }
   try {
-    await rename(temporary, destination)
+    await moveShareNoReplace(temporary, destination)
   } catch (error) {
     try {
-      await rename(backup, destination)
+      await moveShareNoReplace(backup, destination)
     } catch {
       throw new ShareBundleError('output-conflict')
     }
     throw error
   }
   await rm(backup, { force: true })
+}
+
+async function moveShareNoReplace(source: string, destination: string): Promise<void> {
+  try {
+    await moveNoReplace(source, destination)
+  } catch (error) {
+    if (error instanceof MoveNoReplaceError && error.code === 'EEXIST') {
+      throw new ShareBundleError('output-conflict')
+    }
+    throw error
+  }
 }
 
 async function destinationExists(file: string): Promise<boolean> {
@@ -435,7 +599,7 @@ async function recoverArchiveArtifacts(destination: string): Promise<void> {
       await assertOwnedDestinationOrAbsent(destination)
       await rm(backup, { force: true })
     } else {
-      await rename(backup, destination)
+      await moveShareNoReplace(backup, destination)
     }
   }
 
@@ -464,6 +628,9 @@ async function readPack(root: string): Promise<ParsedPack> {
     if (!isRecord(parsed) || parsed['format'] !== 'capturepack' || !isRecord(parsed['media'])) {
       throw new Error('not a CapturePack manifest')
     }
+    if (captureMediaViolations(parsed).length > 0) {
+      throw new Error('capture media invariants')
+    }
     manifest = parsed as unknown as Manifest
   } catch {
     throw new ShareBundleError('invalid-pack')
@@ -472,16 +639,25 @@ async function readPack(root: string): Promise<ParsedPack> {
   const annotationFile = await readControlFile(root, 'annotations.json', false)
   const annotationBytes = annotationFile?.bytes ?? null
   let annotations: Annotation[] = []
+  let annotationFrame: { width: number; height: number } | null = null
   if (annotationBytes !== null) {
     try {
       const parsed = JSON.parse(annotationBytes.toString('utf8')) as unknown
-      if (!isRecord(parsed) || !Array.isArray(parsed['annotations'])) {
+      if (
+        !isRecord(parsed) ||
+        !positiveInteger(parsed['reference_width']) ||
+        !positiveInteger(parsed['reference_height']) ||
+        !Array.isArray(parsed['annotations'])
+      ) {
         throw new Error('bad annotations')
       }
-      annotations = (parsed as unknown as AnnotationsFile).annotations.filter(validAnnotation)
-      if (annotations.length !== (parsed as unknown as AnnotationsFile).annotations.length) {
-        throw new Error('bad annotation entry')
+      annotationFrame = {
+        width: parsed['reference_width'],
+        height: parsed['reference_height'],
       }
+      const annotationIds = new Set<string>()
+      annotations = parsed['annotations'].map((value, index) =>
+        normalizeAnnotation(value, index, annotationIds))
     } catch {
       throw new ShareBundleError('invalid-annotations')
     }
@@ -492,6 +668,7 @@ async function readPack(root: string): Promise<ParsedPack> {
     annotations,
     annotationBytes,
     annotationMtimeMs: annotationFile?.mtimeMs ?? null,
+    annotationFrame,
   }
 }
 
@@ -521,23 +698,28 @@ async function readControlFile(
   return { bytes: await readFile(resolved), mtimeMs: info.mtimeMs }
 }
 
-function mediaCandidates(manifest: Manifest, focused: number | null): MediaCandidate[] {
+function mediaCandidates(manifest: Manifest, layout: ShareDisplayLayout): MediaCandidate[] {
   const candidates: MediaCandidate[] = []
-  const imageCapture = manifest.capture_kind === 'image'
-  const topDisplay = imageCapture ? null : (focused ?? 1)
+  const topDisplay = layout.focused
   addLaneCandidates(
     candidates,
     topDisplay,
     manifest.media.keyframes,
     true,
+    layout.frameByDisplay.get(topDisplay),
+    manifest.media.replay,
+    manifest.media.replay_duration_ms,
   )
-  for (const display of validDisplays(manifest.media.displays)) {
+  for (const display of layout.displays) {
     if (display.focused === true || display.index === topDisplay) continue
     addLaneCandidates(
       candidates,
       display.index,
       display.keyframes,
       false,
+      layout.frameByDisplay.get(display.index),
+      display.replay,
+      display.replay_duration_ms,
     )
   }
   return candidates
@@ -548,27 +730,51 @@ function addLaneCandidates(
   display: number | null,
   keyframes: ManifestKeyframe[] | undefined,
   topLevel: boolean,
+  sourceFrame: ShareSourceFrame | undefined,
+  replay: string | null,
+  replayDurationMs: number | undefined,
 ): void {
   const lane = display === null ? 'media/capture' : `media/display-${String(display)}`
   if (keyframes === undefined) return
-  if (!Array.isArray(keyframes)) throw new ShareBundleError('invalid-pack')
+  if (!Array.isArray(keyframes) || keyframes.length === 0) {
+    throw new ShareBundleError('invalid-pack')
+  }
+  if (replay === null && keyframes.length !== 1) {
+    throw new ShareBundleError('invalid-pack')
+  }
+  let previousTime = -1
   for (const [index, frame] of keyframes.entries()) {
-    if (!isRecord(frame) || typeof frame.file !== 'string') {
+    if (
+      !isRecord(frame) ||
+      typeof frame.file !== 'string' ||
+      !nonNegativeInteger(frame.t_ms) ||
+      (frame.width !== undefined && !positiveInteger(frame.width)) ||
+      (frame.height !== undefined && !positiveInteger(frame.height)) ||
+      frame.t_ms < previousTime ||
+      (replay === null && frame.t_ms !== 0) ||
+      (replayDurationMs !== undefined && frame.t_ms > replayDurationMs)
+    ) {
       throw new ShareBundleError('invalid-pack')
     }
+    previousTime = frame.t_ms
     const expected = topLevel
-      ? /^frames\/frame-[0-9]{2,}_[0-9]{2,}-[0-9]{2}\.[0-9]{3}\.png$/
+      ? /^frames\/frame-([0-9]{2,})_[0-9]{2,}-[0-9]{2}\.[0-9]{3}\.png$/
       : new RegExp(
-          `^frames-d${String(display)}/frame-[0-9]{2,}_[0-9]{2,}-[0-9]{2}\\.[0-9]{3}\\.png$`,
+          `^frames-d${String(display)}/frame-([0-9]{2,})_[0-9]{2,}-[0-9]{2}\\.[0-9]{3}\\.png$`,
         )
-    if (!expected.test(frame.file)) {
+    const match = expected.exec(frame.file)
+    if (match === null) {
       throw new ShareBundleError('unsafe-media-path', frame.file)
     }
+    if (Number(match[1]) !== index + 1) throw new ShareBundleError('invalid-pack')
     into.push({
       sourceRel: frame.file,
       archivePath: `${lane}/annotated-still-${String(index + 1).padStart(2, '0')}.png`,
       kind: 'annotated-still',
       display,
+      ...(frame.width === undefined ? {} : { declaredWidth: frame.width }),
+      ...(frame.height === undefined ? {} : { declaredHeight: frame.height }),
+      ...(sourceFrame === undefined ? {} : { sourceFrame }),
     })
   }
 }
@@ -596,38 +802,392 @@ async function containedRegularFile(root: string, rel: string): Promise<string> 
   return resolved
 }
 
-function focusedDisplayIndex(manifest: Manifest): number | null {
-  const focused = validDisplays(manifest.media.displays).find((display) => display.focused === true)
-  return focused?.index ?? null
+function shareDisplayLayout(
+  manifest: Manifest,
+  annotationFrame: { width: number; height: number } | null,
+): ShareDisplayLayout {
+  const captureKind = manifest.capture_kind
+  if (captureKind !== undefined && captureKind !== 'image' && captureKind !== 'video') {
+    throw new ShareBundleError('invalid-pack')
+  }
+  const version = formatVersion(manifest.format_version)
+  const requiresDeclaredFrames = version.major > 0 || version.minor >= 7
+  const media = manifest.media as unknown as Record<string, unknown>
+  const replay = media['replay']
+  const replayDuration = media['replay_duration_ms']
+  if (
+    !(replay === null || (typeof replay === 'string' && /^replay\.(?:webm|mp4)$/u.test(replay))) ||
+    (typeof replay === 'string' && !nonNegativeInteger(replayDuration)) ||
+    (replay === null && replayDuration !== undefined && replayDuration !== null)
+  ) {
+    throw new ShareBundleError('invalid-pack')
+  }
+  const rawDisplays = media['displays']
+  const frameByDisplay = new Map<number | null, ShareSourceFrame>()
+  if (captureKind === 'image') {
+    if (rawDisplays !== undefined) throw new ShareBundleError('invalid-pack')
+    if (annotationFrame !== null) {
+      frameByDisplay.set(null, {
+        ...annotationFrame,
+        widthTolerance: 0,
+        heightTolerance: 0,
+      })
+    }
+    return {
+      focused: null,
+      displays: [],
+      declared: new Set<number>(),
+      frameByDisplay,
+    }
+  }
+  if (rawDisplays === undefined) {
+    if (requiresDeclaredFrames) {
+      throw new ShareBundleError('invalid-pack')
+    }
+    if (annotationFrame !== null) {
+      frameByDisplay.set(1, {
+        ...annotationFrame,
+        widthTolerance: 0,
+        heightTolerance: 0,
+      })
+    }
+    return {
+      focused: 1,
+      displays: [],
+      declared: new Set([1]),
+      frameByDisplay,
+    }
+  }
+  if (!Array.isArray(rawDisplays) || rawDisplays.length === 0) {
+    throw new ShareBundleError('invalid-pack')
+  }
+  const environment = manifest.environment as unknown
+  if (!isRecord(environment) || !Array.isArray(environment['screens'])) {
+    throw new ShareBundleError('invalid-pack')
+  }
+  const screens = environment['screens']
+  const displays: ManifestDisplayMedia[] = []
+  const declared = new Set<number>()
+  let focused: number | null = null
+  for (const value of rawDisplays) {
+    if (
+      !isRecord(value) ||
+      !positiveInteger(value['index']) ||
+      typeof value['focused'] !== 'boolean' ||
+      (requiresDeclaredFrames &&
+        (!positiveInteger(value['snapshot_width']) ||
+          !positiveInteger(value['snapshot_height']))) ||
+      (value['snapshot_width'] !== undefined && !positiveInteger(value['snapshot_width'])) ||
+      (value['snapshot_height'] !== undefined && !positiveInteger(value['snapshot_height'])) ||
+      !finiteRectangle(value['bounds']) ||
+      !positiveFinite(value['scale'])
+    ) {
+      throw new ShareBundleError('invalid-pack')
+    }
+    const screen = screens[value['index'] - 1]
+    if (
+      !isRecord(screen) ||
+      !positiveInteger(screen['width']) ||
+      !positiveInteger(screen['height']) ||
+      !positiveFinite(screen['scale']) ||
+      Math.abs(screen['scale'] - value['scale']) > 1e-6 ||
+      Math.abs(Math.round(value['bounds'].width * value['scale']) - screen['width']) > 1 ||
+      Math.abs(Math.round(value['bounds'].height * value['scale']) - screen['height']) > 1 ||
+      (positiveInteger(value['snapshot_width']) &&
+        Math.abs(value['snapshot_width'] - screen['width']) > 1) ||
+      (positiveInteger(value['snapshot_height']) &&
+        Math.abs(value['snapshot_height'] - screen['height']) > 1)
+    ) {
+      throw new ShareBundleError('invalid-pack')
+    }
+    const display = value as unknown as ManifestDisplayMedia
+    const displayFrame = {
+      width: positiveInteger(value['snapshot_width'])
+        ? value['snapshot_width']
+        : display.focused && annotationFrame !== null
+          ? annotationFrame.width
+          : Math.max(1, Math.round(value['bounds'].width * value['scale'])),
+      height: positiveInteger(value['snapshot_height'])
+        ? value['snapshot_height']
+        : display.focused && annotationFrame !== null
+          ? annotationFrame.height
+          : Math.max(1, Math.round(value['bounds'].height * value['scale'])),
+      widthTolerance: positiveInteger(value['snapshot_width']) ||
+        (display.focused && annotationFrame !== null) ? 0 as const : 1 as const,
+      heightTolerance: positiveInteger(value['snapshot_height']) ||
+        (display.focused && annotationFrame !== null) ? 0 as const : 1 as const,
+    }
+    if (declared.has(display.index)) throw new ShareBundleError('invalid-pack')
+    declared.add(display.index)
+    const expectedSnapshot = display.focused
+      ? manifest.media.snapshot
+      : `snapshot-d${String(display.index)}.png`
+    const displayReplay = value['replay']
+    const expectedReplay = display.focused
+      ? replay
+      : displayReplay === null
+        ? null
+        : `replay-d${String(display.index)}.${
+            typeof displayReplay === 'string' && displayReplay.endsWith('.mp4') ? 'mp4' : 'webm'
+          }`
+    if (
+      value['snapshot'] !== expectedSnapshot ||
+      !(displayReplay === null || typeof displayReplay === 'string') ||
+      displayReplay !== expectedReplay ||
+      (typeof displayReplay === 'string' && !nonNegativeInteger(value['replay_duration_ms'])) ||
+      (displayReplay === null &&
+        value['replay_duration_ms'] !== undefined &&
+        value['replay_duration_ms'] !== null)
+    ) {
+      throw new ShareBundleError('invalid-pack')
+    }
+    if (display.focused) {
+      if (
+        focused !== null ||
+        display.keyframes !== undefined ||
+        display.replay_annotated !== undefined ||
+        value['replay_duration_ms'] !== replayDuration ||
+        (annotationFrame !== null &&
+          (displayFrame.width !== annotationFrame.width ||
+            displayFrame.height !== annotationFrame.height))
+      ) {
+        throw new ShareBundleError('invalid-pack')
+      }
+      focused = display.index
+    } else {
+      const annotatedReplay = value['replay_annotated']
+      if (
+        annotatedReplay !== undefined &&
+        (displayReplay === null ||
+          annotatedReplay !== `replay_annotated-d${String(display.index)}.${
+            displayReplay.endsWith('.mp4') ? 'mp4' : 'webm'
+          }`)
+      ) {
+        throw new ShareBundleError('invalid-pack')
+      }
+    }
+    frameByDisplay.set(display.index, displayFrame)
+    displays.push(display)
+  }
+  if (focused === null) throw new ShareBundleError('invalid-pack')
+  return { focused, displays, declared, frameByDisplay }
 }
 
-function validDisplays(value: ManifestDisplayMedia[] | undefined): ManifestDisplayMedia[] {
-  if (!Array.isArray(value)) return []
-  return value.filter(
-    (display) =>
-      isRecord(display) && Number.isInteger(display.index) && display.index >= 1,
-  )
+function formatVersion(value: unknown): { major: number; minor: number; patch: number } {
+  if (typeof value !== 'string') throw new ShareBundleError('invalid-pack')
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?$/u.exec(value)
+  if (match === null) throw new ShareBundleError('invalid-pack')
+  const major = Number(match[1])
+  const minor = Number(match[2])
+  const patch = Number(match[3])
+  if (![major, minor, patch].every(Number.isSafeInteger)) {
+    throw new ShareBundleError('invalid-pack')
+  }
+  return { major, minor, patch }
 }
 
-function annotationDisplay(annotation: Annotation, focused: number | null): number | null {
-  if (annotation.display === undefined) return focused
-  if (!Number.isInteger(annotation.display) || annotation.display < 1) {
+function annotationDisplays(
+  annotation: Annotation,
+  layout: ShareDisplayLayout,
+): ReadonlySet<number | null> {
+  const imageCapture = layout.focused === null
+  const displays = new Set<number | null>()
+  let baseDisplay: number | null
+  if (imageCapture) {
+    if (annotation.display !== undefined) throw new ShareBundleError('invalid-annotations')
+    baseDisplay = null
+  } else {
+    baseDisplay = annotationDisplay(annotation.display, layout)
+  }
+  displays.add(baseDisplay)
+  assertAnnotationRectangle(annotation.bounds, baseDisplay, layout)
+
+  const tracking = annotation.tracking as unknown
+  if (!isRecord(tracking) || typeof tracking['enabled'] !== 'boolean') {
     throw new ShareBundleError('invalid-annotations')
   }
-  return annotation.display
+  if (
+    tracking['picked_at_ms'] !== undefined &&
+    !nonNegativeFinite(tracking['picked_at_ms'])
+  ) {
+    throw new ShareBundleError('invalid-annotations')
+  }
+  const samples = tracking['samples']
+  if (
+    (samples !== undefined && !Array.isArray(samples)) ||
+    (tracking['enabled'] === true && (!Array.isArray(samples) || samples.length === 0))
+  ) {
+    throw new ShareBundleError('invalid-annotations')
+  }
+  if (Array.isArray(samples)) {
+    let previousTime = -Infinity
+    for (const sample of samples) {
+      if (
+        !isRecord(sample) ||
+        !nonNegativeFinite(sample['t_ms']) ||
+        !finiteRectangle(sample) ||
+        sample['t_ms'] < previousTime
+      ) {
+        throw new ShareBundleError('invalid-annotations')
+      }
+      previousTime = sample['t_ms']
+      let sampleDisplay = baseDisplay
+      if (sample['display'] !== undefined) {
+        if (imageCapture) throw new ShareBundleError('invalid-annotations')
+        sampleDisplay = annotationDisplay(sample['display'], layout)
+      }
+      assertAnnotationRectangle(sample, sampleDisplay, layout)
+      if (tracking['enabled'] === true) displays.add(sampleDisplay)
+    }
+  }
+
+  const keyframes = annotation.keyframes as unknown
+  if (
+    (keyframes !== undefined && !Array.isArray(keyframes)) ||
+    (Array.isArray(keyframes) && keyframes.length < 2)
+  ) {
+    throw new ShareBundleError('invalid-annotations')
+  }
+  if (Array.isArray(keyframes)) {
+    let previousTime = -Infinity
+    for (const frame of keyframes) {
+      if (
+        !isRecord(frame) ||
+        !nonNegativeFinite(frame['t_ms']) ||
+        !finiteRectangle(frame) ||
+        frame['t_ms'] < previousTime
+      ) {
+        throw new ShareBundleError('invalid-annotations')
+      }
+      previousTime = frame['t_ms']
+      let frameDisplay = baseDisplay
+      if (frame['display'] !== undefined) {
+        if (imageCapture) throw new ShareBundleError('invalid-annotations')
+        frameDisplay = annotationDisplay(frame['display'], layout)
+      }
+      assertAnnotationRectangle(frame, frameDisplay, layout)
+      displays.add(frameDisplay)
+    }
+  }
+  return displays
+}
+
+function annotationDisplay(value: unknown, layout: ShareDisplayLayout): number {
+  const display = value === undefined ? layout.focused : value
+  if (
+    typeof display !== 'number' ||
+    !Number.isInteger(display) ||
+    display < 1 ||
+    !layout.declared.has(display)
+  ) {
+    throw new ShareBundleError('invalid-annotations')
+  }
+  return display
 }
 
 function laneKey(display: number | null): string {
   return display === null ? 'capture' : `display-${String(display)}`
 }
 
-function validAnnotation(value: unknown): value is Annotation {
+function normalizeAnnotation(
+  value: unknown,
+  index: number,
+  ids: Set<string>,
+): Annotation {
+  if (
+    !isRecord(value) ||
+    value['type'] !== 'box' ||
+    typeof value['annotation_id'] !== 'string' ||
+    !/^ann_[0-9a-f]{6}$/u.test(value['annotation_id']) ||
+    ids.has(value['annotation_id']) ||
+    !finiteRectangle(value['bounds']) ||
+    (value['text'] !== undefined && typeof value['text'] !== 'string') ||
+    (value['numbered'] !== undefined && typeof value['numbered'] !== 'boolean') ||
+    (value['blur'] !== undefined && typeof value['blur'] !== 'boolean') ||
+    (value['created_at'] !== undefined && typeof value['created_at'] !== 'string') ||
+    (value['z'] !== undefined && !Number.isInteger(value['z'])) ||
+    (value['display'] !== undefined && !positiveInteger(value['display'])) ||
+    (value['tracking'] !== undefined &&
+      (!isRecord(value['tracking']) || typeof value['tracking']['enabled'] !== 'boolean')) ||
+    (value['keyframes'] !== undefined && !Array.isArray(value['keyframes']))
+  ) {
+    throw new ShareBundleError('invalid-annotations')
+  }
+  const hasStart = value['start_ms'] !== undefined
+  const hasEnd = value['end_ms'] !== undefined
+  if (
+    hasStart !== hasEnd ||
+    (hasStart &&
+      (!nonNegativeFinite(value['start_ms']) ||
+        !nonNegativeFinite(value['end_ms']) ||
+        value['start_ms'] > value['end_ms']))
+  ) {
+    throw new ShareBundleError('invalid-annotations')
+  }
+  ids.add(value['annotation_id'])
+  return {
+    ...value,
+    text: value['text'] ?? '',
+    numbered: value['numbered'] ?? false,
+    blur: value['blur'] ?? false,
+    tracking: value['tracking'] ?? { enabled: false },
+    created_at: value['created_at'] ?? '',
+    z: value['z'] ?? index,
+  } as unknown as Annotation
+}
+
+function assertAnnotationRectangle(
+  rectangle: { x: number; y: number; width: number; height: number },
+  display: number | null,
+  layout: ShareDisplayLayout,
+): void {
+  const frame = layout.frameByDisplay.get(display)
+  if (
+    frame === undefined ||
+    rectangle.x < 0 ||
+    rectangle.y < 0 ||
+    rectangle.x + rectangle.width > frame.width + 1 ||
+    rectangle.y + rectangle.height > frame.height + 1
+  ) {
+    throw new ShareBundleError('invalid-annotations')
+  }
+}
+
+function finiteRectangle(
+  value: unknown,
+): value is Record<string, unknown> & {
+  x: number
+  y: number
+  width: number
+  height: number
+} {
   return (
     isRecord(value) &&
-    value['type'] === 'box' &&
-    typeof value['text'] === 'string' &&
-    typeof value['blur'] === 'boolean'
+    finiteNumber(value['x']) &&
+    finiteNumber(value['y']) &&
+    positiveFinite(value['width']) &&
+    positiveFinite(value['height'])
   )
+}
+
+function finiteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+function positiveFinite(value: unknown): value is number {
+  return finiteNumber(value) && value > 0
+}
+
+function nonNegativeFinite(value: unknown): value is number {
+  return finiteNumber(value) && value >= 0
+}
+
+function positiveInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) > 0
+}
+
+function nonNegativeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -642,8 +1202,19 @@ function sha256(bytes: Buffer): string {
   return createHash('sha256').update(bytes).digest('hex')
 }
 
+function canonicalPngDimensions(bytes: Buffer): { width: number; height: number } {
+  if (bytes.length < 24 || bytes.toString('ascii', 12, 16) !== 'IHDR') {
+    throw new Error('canonical PNG has no IHDR')
+  }
+  const width = bytes.readUInt32BE(16)
+  const height = bytes.readUInt32BE(20)
+  if (width < 1 || height < 1) throw new Error('canonical PNG dimensions')
+  return { width, height }
+}
+
 /**
- * Decode and deterministically re-encode an ordinary 8-bit RGB/RGBA PNG.
+ * Decode and deterministically re-encode an ordinary 8-bit grayscale/RGB PNG,
+ * with or without an alpha channel.
  * Keeping only pixels strips tEXt/XMP chunks, APNG frames, zlib trailers,
  * alternate filter encodings, and bytes after IEND instead of trusting a
  * visible thumbnail to reveal hidden container payloads.
@@ -661,6 +1232,7 @@ function canonicalPng(bytes: Buffer): Buffer {
   if (bytes.length < 33 || !bytes.subarray(0, 8).equals(signature)) throw new Error('png signature')
   let offset = 8
   let ihdr: Buffer | null = null
+  let transparency: Buffer | null = null
   const compressed: Buffer[] = []
   let ended = false
   while (offset + 12 <= bytes.length && !ended) {
@@ -677,6 +1249,12 @@ function canonicalPng(bytes: Buffer): Buffer {
     if (type === 'IHDR') {
       if (ihdr !== null || length !== 13) throw new Error('png ihdr')
       ihdr = Buffer.from(data)
+    } else if (type === 'tRNS') {
+      // For grayscale/RGB PNGs this chunk changes the meaning of the decoded
+      // samples. Dropping it would turn pixels that History showed as
+      // transparent into newly visible pixels in the Share Copy.
+      if (transparency !== null || compressed.length > 0) throw new Error('png transparency order')
+      transparency = Buffer.from(data)
     } else if (type === 'IDAT') {
       compressed.push(Buffer.from(data))
     } else if (type === 'IEND') {
@@ -705,7 +1283,33 @@ function canonicalPng(bytes: Buffer): Buffer {
   ) {
     throw new Error('png format')
   }
+  // Bound the representation History and the Share Copy actually expose,
+  // before inflating even a compact grayscale source. A source-channel limit
+  // alone lets a 1-byte-per-pixel PNG allocate several large buffers before
+  // the later RGBA plan check rejects it.
+  const decodedRasterBytes = width * height * 4
+  if (
+    !Number.isSafeInteger(decodedRasterBytes) ||
+    decodedRasterBytes > MAX_SHARE_STILL_BYTES
+  ) {
+    throw new Error('png decoded dimensions')
+  }
   const channels = colorType === 0 ? 1 : colorType === 2 ? 3 : colorType === 4 ? 2 : 4
+  if (transparency !== null) {
+    if (colorType === 0) {
+      if (transparency.length !== 2) {
+        throw new Error('png grayscale transparency')
+      }
+    } else if (colorType === 2) {
+      if (transparency.length !== 6) {
+        throw new Error('png rgb transparency')
+      }
+    } else {
+      // Alpha-bearing formats already encode transparency per pixel; tRNS is
+      // invalid there and must not be interpreted or silently discarded.
+      throw new Error('png unexpected transparency')
+    }
+  }
   const rowBytes = width * channels
   const rawLength = (rowBytes + 1) * height
   if (!Number.isSafeInteger(rawLength) || rawLength > MAX_SHARE_STILL_BYTES) {
@@ -730,15 +1334,69 @@ function canonicalPng(bytes: Buffer): Buffer {
       pixels[y * rowBytes + x] = (encoded + prediction) & 0xff
     }
   }
-  const canonicalRaster = Buffer.allocUnsafe(rawLength)
+
+  let canonicalIhdr = ihdr
+  let canonicalPixels = pixels
+  let canonicalChannels = channels
+  if (transparency !== null) {
+    const rgbaRowBytes = width * 4
+    const rgbaRawLength = (rgbaRowBytes + 1) * height
+    if (!Number.isSafeInteger(rgbaRawLength) || rgbaRawLength > MAX_SHARE_STILL_BYTES) {
+      throw new Error('png transparent dimensions')
+    }
+    const rgba = Buffer.allocUnsafe(rgbaRowBytes * height)
+    const pixelCount = width * height
+    if (colorType === 0) {
+      const transparentGrey = transparency.readUInt16BE(0) & 0xff
+      for (let pixel = 0; pixel < pixelCount; pixel += 1) {
+        const grey = pixels[pixel]!
+        const output = pixel * 4
+        rgba[output] = grey
+        rgba[output + 1] = grey
+        rgba[output + 2] = grey
+        rgba[output + 3] = grey === transparentGrey ? 0 : 0xff
+      }
+    } else {
+      const transparentRed = transparency.readUInt16BE(0) & 0xff
+      const transparentGreen = transparency.readUInt16BE(2) & 0xff
+      const transparentBlue = transparency.readUInt16BE(4) & 0xff
+      for (let pixel = 0; pixel < pixelCount; pixel += 1) {
+        const source = pixel * 3
+        const output = pixel * 4
+        const red = pixels[source]!
+        const green = pixels[source + 1]!
+        const blue = pixels[source + 2]!
+        rgba[output] = red
+        rgba[output + 1] = green
+        rgba[output + 2] = blue
+        rgba[output + 3] =
+          red === transparentRed && green === transparentGreen && blue === transparentBlue
+            ? 0
+            : 0xff
+      }
+    }
+    canonicalIhdr = Buffer.from(ihdr)
+    canonicalIhdr[9] = 6
+    canonicalPixels = rgba
+    canonicalChannels = 4
+  }
+
+  const canonicalRowBytes = width * canonicalChannels
+  const canonicalRawLength = (canonicalRowBytes + 1) * height
+  const canonicalRaster = Buffer.allocUnsafe(canonicalRawLength)
   for (let y = 0; y < height; y += 1) {
-    const at = y * (rowBytes + 1)
+    const at = y * (canonicalRowBytes + 1)
     canonicalRaster[at] = 0
-    pixels.copy(canonicalRaster, at + 1, y * rowBytes, (y + 1) * rowBytes)
+    canonicalPixels.copy(
+      canonicalRaster,
+      at + 1,
+      y * canonicalRowBytes,
+      (y + 1) * canonicalRowBytes,
+    )
   }
   return Buffer.concat([
     signature,
-    pngChunk('IHDR', ihdr),
+    pngChunk('IHDR', canonicalIhdr),
     pngChunk('IDAT', deflateSync(canonicalRaster, { level: 9 })),
     pngChunk('IEND', Buffer.alloc(0)),
   ])

@@ -34,10 +34,12 @@ lokaler, offener Ordner, der ohne KI, Konto und Cloud-Dienst funktioniert.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Herunterladen](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Aktuelle öffentliche Windows-Version: **CapturePack 0.4.3**. Auf einer
-aufgenommenen Webseite wird wieder das Element unter dem Zeiger angeboten — die
-Layout-Container der Seite selbst hatten den Hover an sich gezogen —, und jede
-Aufnahme hält fest, wie lange es bis zum Editor gedauert hat.
+Aktuelle öffentliche Windows-Version: **CapturePack 0.4.4**. In 0.4.4 erstellt
+Verlauf eine geprüfte **Share Copy** (`.share.zip`), deren einzige Medien geprüfte
+annotierte PNG-Standbilder sind; eine erzeugte README, ein Offline-Viewer und ein
+minimales Inventar begleiten sie. Originale, sämtliche Videos und strukturierter
+Kontext werden ausgeschlossen. Das vollständige ZIP (`.zip`) enthält weiterhin
+die Originale.
 
 <p align="center">
   <a href="https://capturepack.dev/">
@@ -186,10 +188,10 @@ Erzeugte CapturePacks sollen für immer lesbar bleiben.
 
 Das Pack ist ein einfacher **Ordner** — durchsuchbar, bearbeitbar, ehrlich. Ein
 vollständiges ZIP (`.zip`) ist eine optionale Kopie zur Weitergabe und enthält
-weiterhin die Originalbelege. Der derzeit unveröffentlichte Quellstand bietet
-unter Verlauf außerdem eine geprüfte **Share Copy** (`.share.zip`) mit
-ausschließlich geprüften Standbildern und einem geschlossenen Inventar ohne
-Quelldaten.
+weiterhin die Originalbelege. Seit 0.4.4 bietet Verlauf außerdem eine geprüfte
+**Share Copy** (`.share.zip`), deren einzige Medien geprüfte annotierte
+PNG-Standbilder sind; eine erzeugte README, ein Offline-Viewer und ein minimales
+geschlossenes Inventar begleiten sie.
 
 Video-Packs können enthalten:
 
@@ -260,7 +262,7 @@ Werkzeuge, Client-Einrichtung und Einstellungen: [docs/MCP.md](docs/MCP.md).
 
 ## Status
 
-**0.4.3 ist der aktuelle öffentliche Windows-Download.** CapturePack ist
+**0.4.4 ist der aktuelle öffentliche Windows-Download.** CapturePack ist
 weiterhin ein Projekt in einem frühen Stadium: Hebe bei einer Fehlermeldung
 deshalb das ursprüngliche Pack auf, und sieh dir [GOAL.md](GOAL.md) für die
 Produktvision und [ROADMAP.md](ROADMAP.md) für die nächsten Schritte an.
@@ -283,7 +285,7 @@ statt sie hinter einem fest verdrahteten globalen Versatz zu verstecken.
   schreibgeschützter Zugriff auf gespeicherte Packs und die Anbindung von
   Kontextanbietern.
 
-CapturePack `0.4.3` ist die Version der Anwendung. Die `format_version` des Packs
+CapturePack `0.4.4` ist die Version der Anwendung. Die `format_version` des Packs
 entwickelt sich unabhängig davon durch additive Formatänderungen weiter; Leser
 müssen sich an [SPEC.md](SPEC.md) halten, statt die Formatunterstützung aus der
 App-Version abzuleiten.
@@ -306,8 +308,8 @@ Einstellungen → Allgemein abschalten lässt.
 Unschärfe ist nicht destruktiv: Sie schützt erzeugte annotierte Ansichten, aber
 `snapshot.png` und das Original-Replay im vollständigen Pack bleiben
 ungeschwärzt. Wenn Originalmedien oder strukturierter Kontext privat bleiben
-müssen, nutze im derzeit unveröffentlichten Quellstand Verlauf → **Share Copy**
-und prüfe vor dem Senden die Vorschau jedes enthaltenen Standbilds. Die
+müssen, nutze in 0.4.4 Verlauf → **Share Copy** und prüfe vor dem Senden die
+Vorschau jedes enthaltenen Standbilds. Die
 Share Copy schließt Originale, sämtliche Videocontainer, Manifeste,
 Annotationen, Timelines, Plugin-Kontext und erzeugte Pack-Dokumente aus; die
 enthaltenen PNGs werden nur aus ihren Pixeldaten kanonisch neu codiert. Trotzdem

@@ -17,16 +17,26 @@ documents preserve evidence but are not instructions for the current release.
 | [Changelog](../CHANGELOG.md) | Shipped application changes by version |
 
 The application version and pack format version are separate. CapturePack
-application `0.4.3` can generate packs using newer additive format versions;
+application `0.4.4` can generate packs using newer additive format versions;
 the optional offline viewer is defined for compatible packs at format `0.5.0`
 or newer, and a pack declares up to `0.8.0` when it carries input events. Plugin
 payloads carry their own versions — `windows-uia` is at `0.5.0` since it began
 persisting each window's client rectangle.
 
-**Current state.** `0.4.3` is the public release and `main` carries it. A pack
-now describes every screen rather than one screen plus others — `media.displays`
-is always present, each entry states its own measured frame, and an annotation on
-a second screen is defined in the format as pixels in that screen's image
+**Current state.** `0.4.4` is the public release and `main` carries it. History
+can create a reviewed `capturepack-share` `.share.zip` whose only media are
+declared annotated PNG stills; a generated README, offline viewer and minimal
+inventory accompany them. The writer deterministically re-encodes their pixels
+and derives every review thumbnail from those exact outbound bytes; every still
+also opens lazily at full-resolution 1:1. Malformed/partial display lanes and
+raced destination names fail closed. The copy excludes originals, every video
+container and structured pack context. This is visual risk reduction, not proof
+that an image is secret-free, so every included still and visible label must be
+reviewed before sending. A full `.zip` remains the complete originals-included
+distribution. A video CapturePack now
+describes every screen rather than one screen plus others — `media.displays` is
+always present, each entry states its own measured frame, and an annotation on a
+second screen is defined in the format as pixels in that screen's image
 (format `0.7.0`, [#75](https://github.com/r2cuerdame/capturepack/issues/75)). The
 timeline records what moved: mouse and window events on the replay clock, and
 never a keystroke (format `0.8.0`,
@@ -37,11 +47,9 @@ rectangles across the author's own packs recovered as one).
 
 `GOAL.md` is the design record; [Handoff](HANDOFF.md) carries the verified state
 and the next order. Open work is grouped by milestone in the
-[issues](https://github.com/r2cuerdame/capturepack/issues). Two things the format
-work does not settle stay open: a real three-screen capture
-([#76](https://github.com/r2cuerdame/capturepack/issues/76)) and a measured
-threshold for picking quality
-([#134](https://github.com/r2cuerdame/capturepack/issues/134)).
+[issues](https://github.com/r2cuerdame/capturepack/issues). One thing the format
+work does not settle remains open: a real three-screen capture
+([#76](https://github.com/r2cuerdame/capturepack/issues/76)).
 
 ## Development and QA
 
@@ -67,7 +75,7 @@ threshold for picking quality
 
 ## Release notes
 
-- [0.3.3](releases/0.3.3.md) — current stable release.
+- [0.3.3](releases/0.3.3.md) — historical release notes.
 - [0.3.3-rc.1](releases/0.3.3-rc.1.md) — historical prerelease notes.
 
 ## Historical material

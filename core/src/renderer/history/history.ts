@@ -14,6 +14,7 @@ import type {
   HistoryRenderStatusPayload,
   HistorySharePlan,
   HistorySharePlanResult,
+  HistoryShareStillResult,
   StorageUsage,
 } from '../../shared/ipc'
 import { budgetLevel, budgetPercent, formatBytes } from '../../shared/retention'
@@ -29,6 +30,7 @@ interface HistoryBridge {
   play(packPath: string): Promise<HistoryActionResult>
   createZip(packPath: string): Promise<HistoryCreateZipResult>
   planShare(packPath: string): Promise<HistorySharePlanResult>
+  shareStill(packPath: string, revision: string, index: number): Promise<HistoryShareStillResult>
   createShare(packPath: string, revision: string): Promise<HistoryCreateShareResult>
   openFolder(packPath: string): void
   copyPath(packPath: string): void
@@ -102,6 +104,10 @@ let searchTextsLoading = false
 const rendering = new Set<string>()
 const fullZipping = new Set<string>()
 const shareCreating = new Set<string>()
+// Closing a review cannot cancel an invoke already running in main. These
+// track the underlying lock holders separately from the currently visible UI.
+const sharePlanning = new Set<string>()
+const shareStillPending = new Set<string>()
 // 0..1 for the packs whose render has reported a real playhead. A path in
 // `rendering` but NOT here is rendering without a measurement — queued, or a
 // stage that cannot say — and its bar runs indeterminate.
@@ -144,9 +150,17 @@ let deletingFor: string | null = null
 let sharingFor: string | null = null
 let sharePlan: HistorySharePlan | null = null
 let sharePlanLoading = false
+let sharePlanRequest = 0
+let shareInspector: HTMLDialogElement | null = null
+let shareInspectorUrl: string | null = null
+let shareStillRequest = 0
 
 let listInFlight = false
 let refreshQueued = false
+
+function shareOperationPending(): boolean {
+  return sharePlanning.size > 0 || shareStillPending.size > 0 || shareCreating.size > 0
+}
 
 // ---------------------------------------------------------------------------
 // Refresh
@@ -174,8 +188,13 @@ async function refresh(): Promise<void> {
     for (const key of [...rendering]) if (!live.has(key)) rendering.delete(key)
     for (const key of [...fullZipping]) if (!live.has(key)) fullZipping.delete(key)
     for (const key of [...shareCreating]) if (!live.has(key)) shareCreating.delete(key)
-    // A pack whose annotated replay is now ready is definitely done rendering.
-    for (const p of packs) if (p.annotated === 'ready') rendering.delete(p.path)
+    // Main owns the aggregate focused/display/still render count. A focused
+    // replay can become ready while a secondary still is still queued, so the
+    // manifest's annotated flag must never clear this state early.
+    for (const p of packs) {
+      if (p.renderInFlight) rendering.add(p.path)
+      else rendering.delete(p.path)
+    }
     // Re-request lazy data: main's stamp-keyed caches make unchanged packs free.
     requestedThumbs.clear()
     requestedSizes.clear()
@@ -573,7 +592,9 @@ function buildActions(p: HistoryPackSummary): HTMLElement {
     p.shareTwin ? t('history.shareReviewReplace') : t('history.shareCreate'),
   )
   shareBtn.type = 'button'
-  shareBtn.disabled = p.kind !== 'dir' || shareCreating.has(p.path)
+  shareBtn.disabled =
+    p.kind !== 'dir' ||
+    shareOperationPending()
   shareBtn.title = t('history.shareTooltip')
   shareBtn.addEventListener('click', () => beginShareReview(p))
   row.append(shareBtn)
@@ -657,16 +678,20 @@ function buildMenu(p: HistoryPackSummary): HTMLElement {
 }
 
 function beginShareReview(p: HistoryPackSummary): void {
+  if (shareOperationPending()) return
+  closeShareInspector()
   cardErrors.delete(p.path)
+  const request = ++sharePlanRequest
   sharingFor = p.path
   sharePlan = null
   sharePlanLoading = true
+  sharePlanning.add(p.path)
   openMenuFor = null
   render()
   void (async () => {
     try {
       const result = await bridge.planShare(p.path)
-      if (sharingFor !== p.path) return
+      if (request !== sharePlanRequest || sharingFor !== p.path) return
       if (!result.ok || result.plan === undefined) {
         sharingFor = null
         showCardError(p.path, result.error ?? t('history.sharePlanFailed'))
@@ -674,7 +699,7 @@ function beginShareReview(p: HistoryPackSummary): void {
       }
       sharePlan = result.plan
     } catch (err) {
-      if (sharingFor !== p.path) return
+      if (request !== sharePlanRequest || sharingFor !== p.path) return
       sharingFor = null
       showCardError(
         p.path,
@@ -682,9 +707,12 @@ function beginShareReview(p: HistoryPackSummary): void {
       )
       return
     } finally {
-      if (sharingFor === p.path) sharePlanLoading = false
+      sharePlanning.delete(p.path)
+      if (request === sharePlanRequest && sharingFor === p.path) {
+        sharePlanLoading = false
+      }
+      render()
     }
-    render()
   })()
 }
 
@@ -700,11 +728,23 @@ function buildShareReview(p: HistoryPackSummary): HTMLElement {
 
   if (plan.previewDataUrls.length > 0) {
     const grid = elc('div', 'sharePreviewGrid')
-    for (const dataUrl of plan.previewDataUrls) {
+    for (const [index, dataUrl] of plan.previewDataUrls.entries()) {
+      const media = plan.media[index]
+      const open = elc('button', 'sharePreviewButton')
+      open.type = 'button'
+      open.disabled = shareOperationPending()
+      open.title = media === undefined
+        ? `${t('history.sharePreviewAlt')} ${String(index + 1)}/${String(plan.stillCount)} · 1:1`
+        : `${media.file} · ${String(media.width)}×${String(media.height)} · 1:1`
+      open.setAttribute('aria-label', open.title)
       const image = elc('img', 'sharePreview')
       image.alt = t('history.sharePreviewAlt')
       image.src = dataUrl
-      grid.append(image)
+      open.append(image)
+      open.addEventListener('click', () => {
+        openShareInspector(p, plan, index)
+      })
+      grid.append(open)
     }
     review.append(grid)
     review.append(
@@ -729,6 +769,17 @@ function buildShareReview(p: HistoryPackSummary): HTMLElement {
       }),
     ),
   )
+  const inventory = elc('ul', 'shareInventory')
+  for (const media of plan.media) {
+    inventory.append(
+      elc(
+        'li',
+        undefined,
+        `${media.file} · ${String(media.width)}×${String(media.height)}`,
+      ),
+    )
+  }
+  review.append(inventory)
   review.append(elc('div', 'shareExcluded', t('history.shareExcluded')))
   review.append(elc('div', 'shareWarning', t('history.shareVisualWarning')))
 
@@ -755,7 +806,9 @@ function buildShareReview(p: HistoryPackSummary): HTMLElement {
     p.shareTwin ? t('history.shareReplace') : t('history.shareConfirm'),
   )
   createBtn.type = 'button'
-  createBtn.disabled = blocked || shareCreating.has(p.path)
+  createBtn.disabled =
+    blocked ||
+    shareOperationPending()
   createBtn.addEventListener('click', () => commitShare(p, plan))
   actions.append(createBtn)
   const cancelBtn = elc('button', undefined, t('common.cancel'))
@@ -769,8 +822,124 @@ function buildShareReview(p: HistoryPackSummary): HTMLElement {
   return review
 }
 
+function openShareInspector(
+  p: HistoryPackSummary,
+  plan: HistorySharePlan,
+  index: number,
+): void {
+  if (shareOperationPending()) return
+  closeShareInspector()
+  const request = ++shareStillRequest
+  shareStillPending.add(p.path)
+
+  const dialog = document.createElement('dialog')
+  dialog.className = 'shareInspector'
+  const header = elc('header', 'shareInspectorHeader')
+  const title = elc(
+    'div',
+    'shareInspectorTitle',
+    plan.media[index] === undefined
+      ? `${t('history.sharePreviewAlt')} ${String(index + 1)}/${String(plan.stillCount)} · 1:1`
+      : `${plan.media[index].file} · ${String(plan.media[index].width)}×` +
+        `${String(plan.media[index].height)} · 1:1`,
+  )
+  header.append(title)
+  const close = elc('button', 'shareInspectorClose', '×')
+  close.type = 'button'
+  close.setAttribute('aria-label', t('common.cancel'))
+  close.addEventListener('click', () => {
+    closeShareInspector()
+    render()
+  })
+  header.append(close)
+  dialog.append(header)
+  const viewport = elc('div', 'shareInspectorViewport')
+  viewport.append(elc('div', 'shareInspectorStatus', t('history.sharePlanning')))
+  dialog.append(viewport)
+  dialog.addEventListener('cancel', (event) => {
+    event.preventDefault()
+    closeShareInspector()
+    render()
+  })
+  dialog.addEventListener('click', (event) => {
+    if (event.target === dialog) {
+      closeShareInspector()
+      render()
+    }
+  })
+  document.body.append(dialog)
+  shareInspector = dialog
+  dialog.showModal()
+
+  void bridge
+    .shareStill(p.path, plan.revision, index)
+    .then((result) => {
+      if (
+        request !== shareStillRequest ||
+        shareInspector !== dialog ||
+        sharingFor !== p.path ||
+        sharePlan?.revision !== plan.revision
+      ) {
+        return
+      }
+      if (
+        !result.ok ||
+        result.pngBytes === undefined ||
+        result.revision !== plan.revision ||
+        result.index !== index ||
+        typeof result.width !== 'number' ||
+        typeof result.height !== 'number'
+      ) {
+        failShareInspector(p.path, result.error ?? t('history.shareErrReviewAgain'))
+        return
+      }
+      const bytes = Uint8Array.from(result.pngBytes)
+      const blob = new Blob([bytes.buffer], { type: 'image/png' })
+      shareInspectorUrl = URL.createObjectURL(blob)
+      const image = elc('img', 'shareInspectorImage')
+      image.alt = t('history.sharePreviewAlt')
+      image.src = shareInspectorUrl
+      title.textContent =
+        `${plan.media[index]?.file ?? `${t('history.sharePreviewAlt')} ` +
+          `${String(index + 1)}/${String(plan.stillCount)}`}` +
+        ` · ${String(result.width)}×${String(result.height)} · 1:1`
+      viewport.replaceChildren(image)
+    })
+    .catch((error: unknown) => {
+      if (request !== shareStillRequest || shareInspector !== dialog) return
+      failShareInspector(
+        p.path,
+        error instanceof Error ? error.message : t('history.shareErrReviewAgain'),
+      )
+    })
+    .finally(() => {
+      shareStillPending.delete(p.path)
+      render()
+    })
+}
+
+function failShareInspector(packPath: string, message: string): void {
+  closeShareInspector()
+  cancelShareReview(false)
+  showCardError(packPath, message)
+}
+
+function closeShareInspector(): void {
+  shareStillRequest += 1
+  if (shareInspectorUrl !== null) {
+    URL.revokeObjectURL(shareInspectorUrl)
+    shareInspectorUrl = null
+  }
+  const dialog = shareInspector
+  shareInspector = null
+  if (dialog !== null) {
+    if (dialog.open) dialog.close()
+    dialog.remove()
+  }
+}
+
 function commitShare(p: HistoryPackSummary, plan: HistorySharePlan): void {
-  if (shareCreating.has(p.path)) return
+  if (shareOperationPending()) return
   shareCreating.add(p.path)
   render()
   void (async () => {
@@ -781,7 +950,9 @@ function commitShare(p: HistoryPackSummary, plan: HistorySharePlan): void {
         return
       }
       p.shareTwin = true
-      cancelShareReview(false)
+      if (sharingFor === p.path && sharePlan?.revision === plan.revision) {
+        cancelShareReview(false)
+      }
       refreshUsage()
     } catch (err) {
       showCardError(
@@ -796,6 +967,8 @@ function commitShare(p: HistoryPackSummary, plan: HistorySharePlan): void {
 }
 
 function cancelShareReview(shouldRender = true): void {
+  closeShareInspector()
+  sharePlanRequest += 1
   sharingFor = null
   sharePlan = null
   sharePlanLoading = false
@@ -1040,6 +1213,11 @@ document.addEventListener('click', () => {
 window.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return
   // Esc peels UI layers before closing the window (contract: Esc closes).
+  if (shareInspector !== null) {
+    event.preventDefault()
+    closeShareInspector()
+    return
+  }
   if (openMenuFor !== null) {
     openMenuFor = null
     render()

@@ -11,6 +11,7 @@ import type {
   HistoryRenameResult,
   HistoryRenderStatusPayload,
   HistorySharePlanResult,
+  HistoryShareStillResult,
   StorageUsage,
 } from '../shared/ipc'
 
@@ -42,6 +43,14 @@ contextBridge.exposeInMainWorld('historyBridge', {
   },
   planShare(packPath: string): Promise<HistorySharePlanResult> {
     return ipcRenderer.invoke(IPC.historyPlanShare, packPath) as Promise<HistorySharePlanResult>
+  },
+  shareStill(packPath: string, revision: string, index: number): Promise<HistoryShareStillResult> {
+    return ipcRenderer.invoke(
+      IPC.historyShareStill,
+      packPath,
+      revision,
+      index,
+    ) as Promise<HistoryShareStillResult>
   },
   createShare(packPath: string, revision: string): Promise<HistoryCreateShareResult> {
     return ipcRenderer.invoke(IPC.historyCreateShare, packPath, revision) as Promise<HistoryCreateShareResult>
