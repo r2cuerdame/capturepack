@@ -216,12 +216,13 @@ check(
 )
 check(
   'landing loads the Adisad advertising platform once and asynchronously',
-  (html.match(/https:\/\/adisad\.jeongchi\.in\/p\/5twxqatrg8sejgoh2h67vqe5\.js/g) ?? []).length === 1
+  (html.match(/https:\/\/adisad\.com\/s\/5twxqatrg8sejgoh2h67vqe5\.js/g) ?? []).length === 1
+    && !html.includes('adisad.jeongchi.in')
     && html.includes(
-      '<script async src="https://adisad.jeongchi.in/p/5twxqatrg8sejgoh2h67vqe5.js"></script>',
+      '<script async src="https://adisad.com/s/5twxqatrg8sejgoh2h67vqe5.js"></script>',
     )
-    && html.indexOf('</main>') < html.indexOf('https://adisad.jeongchi.in/p/5twxqatrg8sejgoh2h67vqe5.js')
-    && html.indexOf('https://adisad.jeongchi.in/p/5twxqatrg8sejgoh2h67vqe5.js') < html.indexOf('<footer>'),
+    && html.indexOf('</main>') < html.indexOf('https://adisad.com/s/5twxqatrg8sejgoh2h67vqe5.js')
+    && html.indexOf('https://adisad.com/s/5twxqatrg8sejgoh2h67vqe5.js') < html.indexOf('<footer>'),
 )
 check(
   'every locale publishes both WebM/MP4 motions and WebP posters',
