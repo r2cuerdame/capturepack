@@ -34,7 +34,7 @@ lokaler, offener Ordner, der ohne KI, Konto und Cloud-Dienst funktioniert.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Herunterladen](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Aktuelle öffentliche Windows-Version: **CapturePack 0.4.4**. In 0.4.4 erstellt
+Aktuelle öffentliche Windows-Version: **CapturePack 0.4.5**. In 0.4.4 erstellt
 Verlauf eine geprüfte **Share Copy** (`.share.zip`), deren einzige Medien geprüfte
 annotierte PNG-Standbilder sind; eine erzeugte README, ein Offline-Viewer und ein
 minimales Inventar begleiten sie. Originale, sämtliche Videos und strukturierter
@@ -260,32 +260,31 @@ Werkzeuge, Client-Einrichtung und Einstellungen: [docs/MCP.md](docs/MCP.md).
   in der Größe begrenzte Laufzeitdiagnose. Protokolle werden nie automatisch
   hochgeladen.
 
-## Status
+### Status
 
-**0.4.4 ist der aktuelle öffentliche Windows-Download.** CapturePack ist
-weiterhin ein Projekt in einem frühen Stadium: Hebe bei einer Fehlermeldung
-deshalb das ursprüngliche Pack auf, und sieh dir [GOAL.md](GOAL.md) für die
-Produktvision und [ROADMAP.md](ROADMAP.md) für die nächsten Schritte an.
+**0.4.5 ist der aktuelle öffentliche Windows-Download.** CapturePack ist
+weiterhin ein Projekt im Frühstadium; bewahre beim Melden eines Problems das
+Original-Pack auf. Siehe [GOAL.md](GOAL.md) für die Produktvision und
+[ROADMAP.md](ROADMAP.md) für die nächsten Schritte.
 
-Bekannte Einschränkung: Die PTS-Ausrichtung von Video und Kontext pro Display
-wird weiterhin in [Issue #89](https://github.com/r2cuerdame/capturepack/issues/89)
-vermessen. CapturePack zeichnet mehrdeutige Zeitangaben lieber als solche auf,
-statt sie hinter einem fest verdrahteten globalen Versatz zu verstecken.
+Bekannte Einschränkung: Die PTS-Ausrichtung von Video und Kontext je Display
+wird in [Issue #89](https://github.com/r2cuerdame/capturepack/issues/89) weiter
+vermessen. CapturePack zeichnet mehrdeutige Zeitbelege auf, statt sie hinter
+einem fest einprogrammierten globalen Offset zu verstecken.
 
 ## Dokumentation
 
 - [Dokumentationsindex](docs/README.md) — der beste Einstieg für Entwicklung,
   Integrationen, QA, Releases, Schemata und historisches Material.
-- [Pack-Spezifikation](SPEC.md) und [Architektur](ARCHITECTURE.md) — der offene
-  Formatvertrag und die aktuellen Implementierungsgrenzen.
+- [Pack-Spezifikation](SPEC.md) und [Architektur](ARCHITECTURE.md) — der
+  Open-Format-Vertrag und die aktuellen Implementierungsgrenzen.
 - [Release-QA](docs/QA.md), [aktuelle Übergabe](docs/HANDOFF.md) und
   [Release-Prozess](docs/RELEASING.md) — wie Änderungen geprüft, übergeben und
   veröffentlicht werden.
-- [MCP](docs/MCP.md) und [Temporal-Provider-API](docs/temporal-provider-api.md) —
-  schreibgeschützter Zugriff auf gespeicherte Packs und die Anbindung von
-  Kontextanbietern.
+- [MCP](docs/MCP.md) und [Temporal-Provider-API](docs/temporal-provider-api.md)
+  — schreibgeschützter Zugriff auf gespeicherte Packs und Kontextanbindung.
 
-CapturePack `0.4.4` ist die Version der Anwendung. Die `format_version` des Packs
+CapturePack `0.4.5` ist die Version der Anwendung. Die `format_version` des Packs
 entwickelt sich unabhängig davon durch additive Formatänderungen weiter; Leser
 müssen sich an [SPEC.md](SPEC.md) halten, statt die Formatunterstützung aus der
 App-Version abzuleiten.

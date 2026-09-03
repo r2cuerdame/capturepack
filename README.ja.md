@@ -32,7 +32,7 @@ AutomationId・プロセスを記録し、ブラウザーであれば表示さ�
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [ダウンロード](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-現在公開中のWindows版: **CapturePack 0.4.4**。0.4.4では、履歴からレビュー済みの
+現在公開中のWindows版: **CapturePack 0.4.5**。0.4.4では、履歴からレビュー済みの
 **共有用コピー**（`.share.zip`）を作成できます。含まれるメディアはレビュー済みの注釈付き
 PNG静止画だけで、生成されたREADME、オフラインビューアー、最小限のインベントリが
 付属します。原本、すべての動画、構造化コンテキストは除外されます。通常のフルZIP
@@ -242,29 +242,31 @@ claude mcp add --transport http capturepack http://127.0.0.1:39393/mcp
 - 情報 → **ログフォルダーを開く**で、サイズ上限付きのローカルな実行診断を開けます。
   ログが自動でアップロードされることはありません。
 
-## 状態
+### 状態
 
-**現在公開中のWindows版のダウンロードは0.4.4です。** CapturePackはまだ初期段階の
-プロジェクトです。問題を報告するときは元のパックを残しておいてください。製品の
-ビジョンは[GOAL.md](GOAL.md)、この先の予定は[ROADMAP.md](ROADMAP.md)にあります。
+**現在公開中のWindows版のダウンロードは0.4.5です。** CapturePackはまだ初期段階の
+プロジェクトですので、問題を報告する際は元のパックを保管しておいてください。
+プロダクトの目指す方向は[GOAL.md](GOAL.md)を、今後の予定は[ROADMAP.md](ROADMAP.md)を
+参照してください。
 
-既知の制限: ディスプレイごとの映像/コンテキストのPTS整合は、
-[issue #89](https://github.com/r2cuerdame/capturepack/issues/89)で計測を続けて
-います。CapturePackは、曖昧なタイミングの証拠をハードコードされたグローバル
-オフセットで隠さず、そのまま記録します。
+既知の制限事項: ディスプレイごとの動画/コンテキストPTS同期は
+[issue #89](https://github.com/r2cuerdame/capturepack/issues/89)で測定を続けています。
+CapturePackは曖昧なタイミング証拠を固定オフセット値で隠さず、ありのまま
+記録します。
 
 ## ドキュメント
 
-- [ドキュメント索引](docs/README.md) — 開発、連携、QA、リリース、スキーマ、
-  過去の資料への、いちばんよい入口。
-- [パック仕様](SPEC.md)と[アーキテクチャ](ARCHITECTURE.md) — オープン形式の
-  契約と、現在の実装の境界。
-- [リリースQA](docs/QA.md)、[現在のハンドオフ](docs/HANDOFF.md)、
-  [リリース手順](docs/RELEASING.md) — 変更をどう検証し、引き継ぎ、公開するか。
-- [MCP](docs/MCP.md)と[時間軸プロバイダーAPI](docs/temporal-provider-api.md)
-  — 保存済みパックへの読み取り専用アクセスと、コンテキストプロバイダーの連携。
+- [ドキュメント一覧](docs/README.md) — 開発、連携、QA、リリース、スキーマ、過去資料への
+  最適な入り口です。
+- [パック仕様書](SPEC.md)と[アーキテクチャ](ARCHITECTURE.md) — オープンフォーマットの規約と
+  現在の実装境界です。
+- [リリースQA](docs/QA.md)、[現在の引き継ぎ](docs/HANDOFF.md)、
+  [リリース手順](docs/RELEASING.md) — 変更がどのように検証され、引き継がれ、
+  公開されるかを説明しています。
+- [MCP](docs/MCP.md)と[temporal provider API](docs/temporal-provider-api.md) —
+  保存済みパックへの読み取り専用アクセスとコンテキストプロバイダー連携です。
 
-CapturePack `0.4.4`はアプリケーションのバージョンです。パックの`format_version`は
+CapturePack `0.4.5`はアプリケーションのバージョンです。パックの`format_version`は
 追加的な形式変更を通じて独立に進化します。読み手はアプリのバージョンから対応形式を
 推測せず、[SPEC.md](SPEC.md)に従ってください。
 

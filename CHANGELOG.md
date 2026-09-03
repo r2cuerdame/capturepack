@@ -4,7 +4,7 @@ All notable changes to CapturePack. Format follows [Keep a Changelog](https://ke
 this project uses [semantic versioning](https://semver.org/) for the app, and the pack
 format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 
-## 0.4.5-rc.1 — 2026-09-03
+## 0.4.5 — 2026-09-03
 
 ### Fixed
 
