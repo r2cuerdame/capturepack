@@ -16,7 +16,7 @@ sacrifice the 5-second workflow.
 
 ---
 
-## Current implementation baseline — 0.4.2
+## Current implementation baseline — 0.4.4
 
 The current Electron reference app has moved beyond the original MVP design
 record preserved later in this document:
@@ -120,6 +120,28 @@ record preserved later in this document:
   authoritative over the source JSON.
 - The optional MCP server is loopback-only and read-only. It reads saved packs
   and cannot initiate capture or modify evidence.
+- **A captured web page layout container is distinguished from an explicit pick.**
+  `ContextCandidate.explicit` distinguishes `dom.element.selected` (an element
+  a user pointed at) from `dom.document.captured` (elements enumerated from the
+  visible document). Enumerated containers (`section`, `nav`, log `div`) are
+  judged by the container area filter and offered one rung back on hover probes,
+  preventing large layout wrappers from dominating candidate selection while
+  retaining full document recovery. The 5-second workflow latency is instrumented
+  from the monotonic trigger timestamp (`check:capture-latency`), and `capture-e2e`
+  is a required CI gate.
+- **History provides a reviewed, still-only Share Copy (`.share.zip`).**
+  The `capturepack-share` package uses a `reviewed-stills-only` profile with a
+  closed media allowlist containing only manifest-declared annotated keyframe PNGs.
+  Every PNG is decoded to raw pixels and deterministically re-encoded with only
+  `IHDR`, `IDAT`, and `IEND` (expanding `tRNS` transparency to canonical RGBA)
+  to eliminate ancillary metadata and trailing payload. Every review thumbnail is
+  derived from those exact canonical bytes, and full-resolution stills open
+  lazily at 1:1. Share Copy excludes original media, all video containers
+  (including annotated replays), manifest, timeline, plugins, notes, and
+  reports. Display lanes without declared stills fail closed, labeled blur boxes
+  are blocked, and Windows atomic no-replace moves (`moveNoReplace.ts`) prevent
+  race-condition overwrites during publication and rename under a shared
+  per-pack operation lock.
 
 The detailed MVP rationale in §§2–3 is retained as an **original 0.1.x design
 record**. Its present-tense implementation details (dual recorders, WebM-only
