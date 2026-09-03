@@ -20,7 +20,7 @@ Use [docs/README.md](README.md) as the documentation index. The older
 
 ## Public state
 
-CapturePack **0.4.4** is the current stable Windows release.
+CapturePack **0.4.4** is the current stable Windows release; `main` builds candidate **0.4.5-rc.1**.
 
 | Item | Current state |
 |---|---|

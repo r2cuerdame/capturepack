@@ -23,7 +23,7 @@ or newer, and a pack declares up to `0.8.0` when it carries input events. Plugin
 payloads carry their own versions — `windows-uia` is at `0.5.0` since it began
 persisting each window's client rectangle.
 
-**Current state.** `0.4.4` is the public release and `main` carries it. History
+**Current state.** `0.4.4` is the public release and `main` carries development candidate `0.4.5-rc.1`. History
 can create a reviewed `capturepack-share` `.share.zip` whose only media are
 declared annotated PNG stills; a generated README, offline viewer and minimal
 inventory accompany them. The writer deterministically re-encodes their pixels
