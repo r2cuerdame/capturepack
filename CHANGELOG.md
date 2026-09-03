@@ -63,6 +63,13 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 - **Region crop control quality measurement.** Pick quality checks normalize the
   offered interactive control area against the source host display resolution
   rather than treating region crops as full-screen bounds.
+- **Mouse pointer flicker elimination during fallback capture.** Native replay
+  fallback capture prioritizes `SRCCOPY` over `CAPTUREBLT`, avoiding DWM
+  hardware cursor plane toggling and eliminating mouse pointer flicker on Windows.
+- **Immediate capture recovery on session unlock and resume.** Display recorders
+  stopped during lock screen (`DXGI_ERROR_ACCESS_LOST`) or system sleep now
+  immediately clear backoff delay and rebuild upon desktop unlock or resume
+  via `powerMonitor`.
 
 ## 0.4.3 — 2026-08-16
 

@@ -208,6 +208,7 @@ internal static class NativeReplayCapture
             try
             {
                 SetStretchBltMode(dest, HALFTONE);
+                // Try SRCCOPY first to avoid DWM hardware cursor hide/unhide flicker on Windows.
                 bool bltOk = StretchBlt(
                     dest,
                     0,
@@ -219,10 +220,10 @@ internal static class NativeReplayCapture
                     srcY,
                     sourceWidth,
                     sourceHeight,
-                    SRCCOPY | CAPTUREBLT);
+                    SRCCOPY);
                 if (!bltOk)
                 {
-                    // Fallback without CAPTUREBLT if layered window capture fails on this DC/driver.
+                    // Fallback to CAPTUREBLT if plain SRCCOPY fails on this DC/driver.
                     bltOk = StretchBlt(
                         dest,
                         0,
@@ -234,7 +235,7 @@ internal static class NativeReplayCapture
                         srcY,
                         sourceWidth,
                         sourceHeight,
-                        SRCCOPY);
+                        SRCCOPY | CAPTUREBLT);
                 }
                 if (!bltOk)
                 {

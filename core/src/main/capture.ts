@@ -1182,6 +1182,29 @@ export function restartCapture(settings: Settings): Promise<void> {
   return queueRebuild()
 }
 
+/**
+ * Called when the desktop session is unlocked or resumes from sleep.
+ * If any display recorder was stopped (e.g. from lock-screen DXGI_ERROR_ACCESS_LOST
+ * or sleep mode), immediately clears the exponential backoff and triggers a rebuild.
+ */
+export function recoverSessionCapture(): void {
+  let anyStopped = false
+  for (const displayId of wantedDisplayIds) {
+    const win = captureWindows.get(displayId)
+    const alive = win !== undefined && !win.isDestroyed() && !win.webContents.isCrashed()
+    const status = displayRecorderStates.get(displayId)?.status
+    if (!alive || status === 'stopped') {
+      anyStopped = true
+      recoveryAttempts.delete(displayId)
+      probesSinceProof.set(displayId, RECOVERY_PROBES_BEFORE_REBUILD)
+    }
+  }
+  if (anyStopped) {
+    logInfo('[capture] desktop session resumed/unlocked; recovering stopped display recorders')
+    void queueRebuild()
+  }
+}
+
 // The display the NEXT capture should target — i.e. the FOCUSED display: the
 // one the editor opens on and annotations anchor to. "all"/"cursor": the
 // display under the mouse right now. Fixed mode: the configured display,

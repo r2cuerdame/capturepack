@@ -9,6 +9,7 @@ import {
   getRecorderState,
   onRecorderStateChanged,
   setupDisplayMediaHandler,
+  recoverSessionCapture,
   restartCapture,
   startCapture,
 } from './capture'
@@ -719,11 +720,19 @@ function main(): void {
     })
     powerMonitor.on('unlock-screen', () => {
       sessionLocked = false
+      recoverSessionCapture()
       const held = deferredUpdateToast
       if (held === null) return
       deferredUpdateToast = null
       logInfo(`[updater] showing the update-ready notice held over the lock screen (v${held})`)
       showUpdateToast(held)
+    })
+    powerMonitor.on('suspend', () => {
+      sessionLocked = true
+    })
+    powerMonitor.on('resume', () => {
+      sessionLocked = false
+      recoverSessionCapture()
     })
     initUpdater({
       autoCheck: settings.autoUpdateCheck,
