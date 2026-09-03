@@ -51,6 +51,18 @@ format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
   caller's path spelling when choosing the sibling output and detects actual
   symlink/junction traversal component by component, so a harmless short name is
   accepted without weakening the alias boundary.
+- **Multi-display recording loss notifications name failed displays.** When screen
+  recording is lost on one or more displays in a multi-monitor environment, the
+  toast warning and tray notification now name the specific failed display(s) and
+  indicate whether the failed display was the focused/primary screen across all 9
+  supported locales ([#137](https://github.com/r2cuerdame/capturepack/issues/137)).
+- **Native replay fallback capture on secondary displays with negative origin.**
+  Secondary monitors positioned with negative virtual-desktop coordinates (such as
+  `\\.\DISPLAY1` at `rect=-1200,0`) now blit from a device-specific DC with
+  automatic fallback without `CAPTUREBLT`, preventing unhandled CLR exceptions.
+- **Region crop control quality measurement.** Pick quality checks normalize the
+  offered interactive control area against the source host display resolution
+  rather than treating region crops as full-screen bounds.
 
 ## 0.4.3 — 2026-08-16
 

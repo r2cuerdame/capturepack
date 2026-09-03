@@ -31,7 +31,7 @@
 // healthy packs measured here still sit.
 //
 // Run: npm run check:pick-quality        (gate; add --report for the full table)
-import { existsSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import * as path from 'node:path'
 import { openPackContextSession, readPackObjectContext } from '../src/main/context/packObjects'
 import { ObjectIndex } from '../src/renderer/editor/objects'
@@ -228,8 +228,9 @@ function sweepDisplay(
   display: { index: number; width: number; height: number },
   stride: number,
   into: PackSweep,
+  screenArea?: number,
 ): void {
-  const frameArea = display.width * display.height
+  const frameArea = screenArea ?? (display.width * display.height)
   for (let y = Math.floor(stride / 2); y < display.height; y += stride) {
     for (let x = Math.floor(stride / 2); x < display.width; x += stride) {
       into.probes += 1
@@ -273,6 +274,35 @@ async function sweepPack(dirPath: string, stride: number): Promise<PackSweep | n
       0,
     ),
   }
+
+  let hostScreenArea: number | undefined
+  try {
+    const raw = readFileSync(path.join(dirPath, 'manifest.json'), 'utf8')
+    const manifest = JSON.parse(raw) as {
+      media?: { crop_bounds?: { x: number; y: number; width: number; height: number }; image_scope?: string }
+      environment?: { screens?: Array<{ width: number; height: number; bounds?: { x: number; y: number; width: number; height: number } }> }
+    }
+    const cropBounds = manifest.media?.crop_bounds
+    const screens = manifest.environment?.screens
+    if ((cropBounds || manifest.media?.image_scope === 'region') && Array.isArray(screens) && screens.length > 0) {
+      const host = (cropBounds
+        ? screens.find((s) => {
+            const b = s.bounds
+            if (!b) return false
+            const tol = 1
+            return (
+              cropBounds.x >= b.x - tol &&
+              cropBounds.y >= b.y - tol &&
+              cropBounds.x + cropBounds.width <= b.x + b.width + tol &&
+              cropBounds.y + cropBounds.height <= b.y + b.height + tol
+            )
+          })
+        : undefined) ?? screens[0]
+      if (host && typeof host.width === 'number' && typeof host.height === 'number') {
+        hostScreenArea = host.width * host.height
+      }
+    }
+  } catch { }
   for (const display of context.displays) {
     sweepDisplay(
       ObjectIndex.forDisplay(frame, {
@@ -283,6 +313,7 @@ async function sweepPack(dirPath: string, stride: number): Promise<PackSweep | n
       display,
       stride,
       sweep,
+      hostScreenArea,
     )
   }
   return sweep

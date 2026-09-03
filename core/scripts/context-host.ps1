@@ -128,6 +128,7 @@ namespace CapturePack {
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
     [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] static extern IntPtr GetDesktopWindow();
     [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
     [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr h, out RECT r);
     [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr h, ref POINT p);
@@ -556,6 +557,12 @@ namespace CapturePack {
       if (LastRaw.Count > GEOMETRY_CACHE_LIMIT) { LastRaw.Clear(); Inset.Clear(); }
       Handles.Clear();
       EnumWindows(Collect, IntPtr.Zero);
+      if (Handles.Count == 0) {
+        IntPtr desk = GetDesktopWindow();
+        if (desk != IntPtr.Zero && IsWindowVisible(desk)) {
+          Handles.Add(desk);
+        }
+      }
       IntPtr foreground = GetForegroundWindow();
       Out.Length = 0;
       Out.Append("{\"event\":\"surface\",\"w\":[");
@@ -688,7 +695,8 @@ namespace CapturePack {
         // A hide/destroy can race the structural callback. A dirty omission
         // would leave a ghost window in Core, so inability to read is a full
         // reconciliation, never an empty delta.
-        if (GetAncestor(h, GA_ROOT) != h) {
+        IntPtr root = GetAncestor(h, GA_ROOT);
+        if (root != IntPtr.Zero && root != h) {
           DirtyFallbackCount++;
           return Sample(hostMs, false);
         }

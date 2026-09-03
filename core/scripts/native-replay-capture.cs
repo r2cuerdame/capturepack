@@ -107,6 +107,16 @@ internal static class NativeReplayCapture
         int heightSource,
         int rop);
 
+    [DllImport("gdi32.dll", CharSet = CharSet.Auto)]
+    private static extern IntPtr CreateDC(
+        string lpszDriver,
+        string lpszDevice,
+        string lpszOutput,
+        IntPtr lpInitData);
+
+    [DllImport("gdi32.dll")]
+    private static extern bool DeleteDC(IntPtr hdc);
+
     [DllImport("gdi32.dll")]
     private static extern int SetStretchBltMode(IntPtr hdc, int mode);
 
@@ -169,28 +179,69 @@ internal static class NativeReplayCapture
         using (var graphics = Graphics.FromImage(bitmap))
         {
             var dest = graphics.GetHdc();
-            var screen = GetDC(IntPtr.Zero);
+            IntPtr screen = IntPtr.Zero;
+            bool isDeviceDc = false;
+            int srcX = monitor.Rect.Left;
+            int srcY = monitor.Rect.Top;
+
+            if (!string.IsNullOrEmpty(monitor.Device))
+            {
+                try
+                {
+                    screen = CreateDC(null, monitor.Device, null, IntPtr.Zero);
+                    if (screen != IntPtr.Zero)
+                    {
+                        isDeviceDc = true;
+                        srcX = 0;
+                        srcY = 0;
+                    }
+                }
+                catch { }
+            }
+            if (screen == IntPtr.Zero)
+            {
+                screen = GetDC(IntPtr.Zero);
+            }
+
             long capturedQpc = 0;
             long capturedEpochMs = 0;
             try
             {
                 SetStretchBltMode(dest, HALFTONE);
-                if (!StretchBlt(
+                bool bltOk = StretchBlt(
                     dest,
                     0,
                     0,
                     outputWidth,
                     outputHeight,
                     screen,
-                    monitor.Rect.Left,
-                    monitor.Rect.Top,
+                    srcX,
+                    srcY,
                     sourceWidth,
                     sourceHeight,
-                    SRCCOPY | CAPTUREBLT))
+                    SRCCOPY | CAPTUREBLT);
+                if (!bltOk)
                 {
+                    // Fallback without CAPTUREBLT if layered window capture fails on this DC/driver.
+                    bltOk = StretchBlt(
+                        dest,
+                        0,
+                        0,
+                        outputWidth,
+                        outputHeight,
+                        screen,
+                        srcX,
+                        srcY,
+                        sourceWidth,
+                        sourceHeight,
+                        SRCCOPY);
+                }
+                if (!bltOk)
+                {
+                    int err = Marshal.GetLastWin32Error();
                     throw new System.ComponentModel.Win32Exception(
-                        Marshal.GetLastWin32Error(),
-                        "StretchBlt failed");
+                        err,
+                        "StretchBlt failed on device " + monitor.Device + " (err " + err + ")");
                 }
                 // Timestamp the completed BitBlt, not JPEG encoding or IPC.
                 capturedQpc = Stopwatch.GetTimestamp();
@@ -198,7 +249,8 @@ internal static class NativeReplayCapture
             }
             finally
             {
-                ReleaseDC(IntPtr.Zero, screen);
+                if (isDeviceDc) DeleteDC(screen);
+                else ReleaseDC(IntPtr.Zero, screen);
                 graphics.ReleaseHdc(dest);
             }
             using (var bytes = new MemoryStream())
@@ -280,12 +332,22 @@ internal static class NativeReplayCapture
             double next = 0;
             while (!stopping)
             {
-                var frame = CaptureJpeg(
-                    monitor,
-                    outputWidth,
-                    outputHeight,
-                    codec,
-                    encoder);
+                CapturedFrame frame;
+                try
+                {
+                    frame = CaptureJpeg(
+                        monitor,
+                        outputWidth,
+                        outputHeight,
+                        codec,
+                        encoder);
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine(
+                        "native replay capture error: " + ex.GetType().Name + ": " + ex.Message);
+                    return 3;
+                }
                 stdout.Write(new byte[] { 0x43, 0x50, 0x52, 0x46 }); // CPRF
                 stdout.Write(2);
                 stdout.Write(sequence++);
