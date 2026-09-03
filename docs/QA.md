@@ -226,12 +226,12 @@ manually, one application window at a time:
    rather than falling back to a strip, manifest index and framing key and
    `report.md` and `environment.screens` all name the same screen, a capture
    focused on the third display writes no snapshot for it, and the pack names the
-   right screen when one recorder dies. While you are there, watch what the TRAY
-   and the TOAST say about the dead screen: they do not name it, which is
-   [#137](https://github.com/r2cuerdame/capturepack/issues/137) — the payload is
-   correct and the renderer drops the identity. Record encoder throughput, CPU
-   and helper counts alongside, since that is the fifth risk. Report this
-   unverified, never passed, if the hardware is not available.
+   right screen when one recorder dies. While you are there, verify what the TRAY
+   and the TOAST say about the dead screen: they identify the dead screen by
+   name and focused state across all locales ([#137](https://github.com/r2cuerdame/capturepack/issues/137)).
+   Record encoder throughput, CPU and helper counts alongside, since that is the
+   fifth risk. Report this unverified, never passed, if the hardware is not
+   available.
 7. Repeat capture/open/close cycles while recording the process tree, working
    set, idle CPU, capture CPU, and helper counts. Counts must return to baseline
    and must not grow per cycle. CPU needs a measured build baseline before a

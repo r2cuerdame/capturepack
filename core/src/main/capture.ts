@@ -168,7 +168,13 @@ export type { RecorderFailureReason }
 export type RecorderState =
   | { status: 'starting' }
   | { status: 'recording' }
-  | { status: 'stopped'; reason: RecorderFailureReason; detail: string }
+  | {
+      status: 'stopped'
+      reason: RecorderFailureReason
+      detail: string
+      failedDisplayIndices?: number[]
+      totalDisplays?: number
+    }
 
 type DisplayRecorderState =
   | { status: 'starting' }
@@ -255,7 +261,14 @@ export function onRecorderStateChanged(listener: (state: RecorderState) => void)
 function sameRecorderState(a: RecorderState, b: RecorderState): boolean {
   if (a.status !== b.status) return false
   if (a.status !== 'stopped' || b.status !== 'stopped') return true
-  return a.reason === b.reason && a.detail === b.detail
+  const sameIndices =
+    (a.failedDisplayIndices ?? []).join(',') === (b.failedDisplayIndices ?? []).join(',')
+  return (
+    a.reason === b.reason &&
+    a.detail === b.detail &&
+    a.totalDisplays === b.totalDisplays &&
+    sameIndices
+  )
 }
 
 /**
@@ -279,19 +292,60 @@ function sameRecorderState(a: RecorderState, b: RecorderState): boolean {
 export function aggregateRecorderState(
   wanted: ReadonlySet<number>,
   states: ReadonlyMap<number, RecorderState>,
+  displayIndices?: ReadonlyMap<number, number>,
 ): RecorderState {
+  const stoppedList: Array<{ id: number; state: Extract<RecorderState, { status: 'stopped' }> }> = []
   for (const id of wanted) {
     const state = states.get(id)
-    if (state?.status === 'stopped') return { ...state }
+    if (state?.status === 'stopped') {
+      stoppedList.push({ id, state })
+    }
   }
+
+  if (stoppedList.length > 0) {
+    const first = stoppedList[0]!
+    const failedDisplayIndices = displayIndices !== undefined
+      ? stoppedList
+          .map((s) => displayIndices.get(s.id))
+          .filter((idx): idx is number => idx !== undefined)
+          .sort((a, b) => a - b)
+      : undefined
+
+    return {
+      ...first.state,
+      ...(failedDisplayIndices !== undefined && failedDisplayIndices.length > 0
+        ? { failedDisplayIndices }
+        : {}),
+      totalDisplays: wanted.size,
+    }
+  }
+
   if (wanted.size > 0 && [...wanted].every((id) => states.get(id)?.status === 'recording')) {
     return { status: 'recording' }
   }
   return { status: 'starting' }
 }
 
+function getConnectedDisplayIndices(): Map<number, number> {
+  const map = new Map<number, number>()
+  try {
+    const all = screen.getAllDisplays()
+    for (let i = 0; i < all.length; i++) {
+      const d = all[i]
+      if (d !== undefined) map.set(d.id, i + 1)
+    }
+  } catch {
+    // In headless test environments
+  }
+  return map
+}
+
 function publishRecorderState(): void {
-  const next = aggregateRecorderState(wantedDisplayIds, displayRecorderStates)
+  const next = aggregateRecorderState(
+    wantedDisplayIds,
+    displayRecorderStates,
+    getConnectedDisplayIndices(),
+  )
   if (sameRecorderState(publishedRecorderState, next)) return
   publishedRecorderState = next
   // One line per REAL change of the state the tray shows, so a report that says

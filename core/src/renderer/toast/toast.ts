@@ -4,6 +4,7 @@
 import { applyDomI18n, makeT, recorderFailureText } from '../../shared/i18n'
 import type { TranslateFn } from '../../shared/i18n'
 import type {
+  FailedDisplayInfo,
   ReplayUnavailablePayload,
   ToastInitPayload,
   ToastRenderStatusPayload,
@@ -103,11 +104,26 @@ function setRenderStatus(state: string, progress?: number): void {
   }
 }
 
+function formatDisplayNames(displays: FailedDisplayInfo[]): string {
+  return displays
+    .map((d) =>
+      d.focused
+        ? t('toast.displayNamedFocused', { index: d.index })
+        : t('toast.displayNamed', { index: d.index }),
+    )
+    .join(', ')
+}
+
 /**
  * "Saved" must never read as "saved everything" (GOAL "Say that you are
  * recording"): when a display's buffer was not running, the pack has no replay
  * for it and the toast says so — with the recorder's reason, worded exactly as
  * the tray words it.
+ *
+ * Multi-display failure reporting (#137):
+ * - If all displays (or single display) lost replay: pack-level statement.
+ * - If exactly one display lost replay: names that display directly (with focused indicator if focused).
+ * - If multiple displays lost replay: lists them and reports count of total.
  */
 function setReplayWarning(unavailable: ReplayUnavailablePayload | null): void {
   if (unavailable === null) {
@@ -117,8 +133,35 @@ function setReplayWarning(unavailable: ReplayUnavailablePayload | null): void {
   }
   const reason = recorderFailureText(t, unavailable.reason)
   replayWarning.hidden = false
-  // The pack's OWN replay is missing -> say that plainly; otherwise name how
-  // many of the captured screens went without one.
+
+  // All displays lost replay, or single display desk
+  if (unavailable.total <= 1 || unavailable.screens >= unavailable.total) {
+    replayWarning.textContent = t('toast.replayUnavailable', { reason })
+    return
+  }
+
+  const failed = unavailable.failedDisplays ?? []
+  if (failed.length === 1 && failed[0] !== undefined) {
+    const d = failed[0]
+    const display = d.focused
+      ? t('toast.displayNamedFocused', { index: d.index })
+      : t('toast.displayNamed', { index: d.index })
+    replayWarning.textContent = t('toast.replayUnavailableDisplay', { display, reason })
+    return
+  }
+
+  if (failed.length > 1) {
+    const displays = formatDisplayNames(failed)
+    replayWarning.textContent = t('toast.replayUnavailableDisplays', {
+      displays,
+      count: unavailable.screens,
+      total: unavailable.total,
+      reason,
+    })
+    return
+  }
+
+  // Fallback if failedDisplays was not populated
   replayWarning.textContent = unavailable.focused
     ? t('toast.replayUnavailable', { reason })
     : t('toast.replayUnavailableScreens', {

@@ -152,7 +152,7 @@ verification history. These are the current additions and next gates:
   [#76](https://github.com/r2cuerdame/capturepack/issues/76) stays open until
   someone with that desk works its checklist; a synthetic desk pins the risks it
   can honestly reach and cannot stand in for the machine. On three screens the
-  pack names which display lost its replay and the tray and the toast do not
+  tray and the toast now name which display lost its replay across nine locales
   ([#137](https://github.com/r2cuerdame/capturepack/issues/137)). Beyond that:
   the plugin platform ([#69](https://github.com/r2cuerdame/capturepack/issues/69),
   [#68](https://github.com/r2cuerdame/capturepack/issues/68)), code signing

@@ -84,11 +84,14 @@ const EN = {
   'tray.tooltipRecording': 'CapturePack — recording · last {seconds}s ready ({hotkey})',
   'tray.tooltipStarting': 'CapturePack — starting…',
   'tray.tooltipStopped': 'CapturePack — not recording — {reason}',
+  'tray.tooltipStoppedDisplay': 'CapturePack — not recording on {display} — {reason}',
   'tray.recordingStarted':
     'The last {seconds} seconds are always available. Press {hotkey} to capture.',
   // "Replay buffer" is OUR word, not the user's (issue #46): every surface says
   // what actually happens — the last N seconds are (not) being recorded.
   'tray.recordingFailed': 'The last {seconds} seconds are not being recorded: {reason}',
+  'tray.recordingFailedDisplay':
+    'The last {seconds} seconds are not being recorded on {display}: {reason}',
   'tray.previousRunUnclean':
     'Stopped unexpectedly on {when}. Nothing was being recorded between then and now.',
 
@@ -302,7 +305,12 @@ const EN = {
   'toast.copyPrompt': 'Copy Prompt',
   'toast.blurWarning':
     'Original pixels remain in this pack. Use History → Share Copy and review every included still before sending.',
+  'toast.displayNamed': 'Display {index}',
+  'toast.displayNamedFocused': 'Display {index} (focused)',
   'toast.replayUnavailable': 'No replay in this pack — {reason}.',
+  'toast.replayUnavailableDisplay': 'No replay on {display} — {reason}.',
+  'toast.replayUnavailableDisplays':
+    'No replay on {displays} ({count} of {total} screens) — {reason}.',
   'toast.replayUnavailableScreens': 'No replay on {count} of {total} screens — {reason}.',
   'toast.trimming': 'Trimming replay…',
   'toast.rendering': 'rendering annotated replay…',
@@ -680,8 +688,11 @@ const KO: Record<I18nKey, string> = {
   'tray.tooltipRecording': 'CapturePack — 녹화 중 · 최근 {seconds}초 준비됨 ({hotkey})',
   'tray.tooltipStarting': 'CapturePack — 시작 중…',
   'tray.tooltipStopped': 'CapturePack — 녹화 안 됨 — {reason}',
+  'tray.tooltipStoppedDisplay': 'CapturePack — {display} 녹화 불가 — {reason}',
   'tray.recordingStarted': '최근 {seconds}초를 항상 사용할 수 있습니다. {hotkey}를 눌러 캡처하세요.',
   'tray.recordingFailed': '최근 {seconds}초가 녹화되지 않고 있습니다: {reason}',
+  'tray.recordingFailedDisplay':
+    '{display}의 최근 {seconds}초가 녹화되지 않습니다: {reason}',
   'tray.previousRunUnclean':
     '{when}에 예기치 않게 종료되었습니다. 그때부터 지금까지 아무것도 녹화되지 않았습니다.',
 
@@ -874,7 +885,12 @@ const KO: Record<I18nKey, string> = {
   'toast.copyPrompt': '프롬프트 복사',
   'toast.blurWarning':
     '이 팩에는 원본 픽셀이 남아 있습니다. 보내기 전에 기록 → 공유본에서 포함된 모든 스틸을 검토하세요.',
+  'toast.displayNamed': '디스플레이 {index}',
+  'toast.displayNamedFocused': '디스플레이 {index} (기준 화면)',
   'toast.replayUnavailable': '이 팩에는 리플레이가 없습니다 — {reason}.',
+  'toast.replayUnavailableDisplay': '{display}에 리플레이 없음 — {reason}.',
+  'toast.replayUnavailableDisplays':
+    '{displays} ({total}개 화면 중 {count}개)에 리플레이 없음 — {reason}.',
   'toast.replayUnavailableScreens': '화면 {total}개 중 {count}개에 리플레이가 없습니다 — {reason}.',
   'toast.trimming': '리플레이 트리밍 중…',
   'toast.rendering': '주석 리플레이 렌더링 중…',
@@ -1226,9 +1242,12 @@ const JA: Record<I18nKey, string> = {
   'tray.tooltipRecording': 'CapturePack — 録画中 · 直近 {seconds} 秒を準備済み ({hotkey})',
   'tray.tooltipStarting': 'CapturePack — 起動中…',
   'tray.tooltipStopped': 'CapturePack — 録画していません — {reason}',
+  'tray.tooltipStoppedDisplay': 'CapturePack — {display} は録画されていません — {reason}',
   'tray.recordingStarted':
     '直近 {seconds} 秒をいつでも利用できます。{hotkey} を押してキャプチャしてください。',
   'tray.recordingFailed': '直近 {seconds} 秒が録画されていません: {reason}',
+  'tray.recordingFailedDisplay':
+    '{display} の直前 {seconds} 秒は録画されていません: {reason}',
   'tray.previousRunUnclean':
     'CapturePack は {when} に予期せず終了しました。それ以降、何も録画されていません。',
 
@@ -1423,7 +1442,12 @@ const JA: Record<I18nKey, string> = {
   'toast.copyPrompt': 'プロンプトをコピー',
   'toast.blurWarning':
     'このパックには元のピクセルが残っています。送信する前に、［履歴］→［共有用コピー］で含まれるすべての静止画を確認してください。',
+  'toast.displayNamed': 'ディスプレイ {index}',
+  'toast.displayNamedFocused': 'ディスプレイ {index} (フォーカス)',
   'toast.replayUnavailable': 'このパックにリプレイはありません — {reason}。',
+  'toast.replayUnavailableDisplay': '{display} にリプレイがありません — {reason}。',
+  'toast.replayUnavailableDisplays':
+    '{displays} ({total} 画面中 {count} 画面) にリプレイがありません — {reason}。',
   'toast.replayUnavailableScreens': '{total} 画面中 {count} 画面にリプレイがありません — {reason}。',
   'toast.trimming': 'リプレイをトリム中…',
   'toast.rendering': '注釈付きリプレイをレンダリング中…',
@@ -1776,8 +1800,11 @@ const ZH: Record<I18nKey, string> = {
   'tray.tooltipRecording': 'CapturePack — 正在录制 · 最近 {seconds} 秒已就绪 ({hotkey})',
   'tray.tooltipStarting': 'CapturePack — 正在启动…',
   'tray.tooltipStopped': 'CapturePack — 未录制 — {reason}',
+  'tray.tooltipStoppedDisplay': 'CapturePack — {display} 未在录制 — {reason}',
   'tray.recordingStarted': '最近 {seconds} 秒现在始终可用。按 {hotkey} 即可捕获。',
   'tray.recordingFailed': '最近 {seconds} 秒未在录制：{reason}',
+  'tray.recordingFailedDisplay':
+    '{display} 的最近 {seconds} 秒未在录制：{reason}',
   'tray.previousRunUnclean':
     'CapturePack 于 {when} 意外停止。从那时起到现在，没有录制任何内容。',
 
@@ -1966,7 +1993,12 @@ const ZH: Record<I18nKey, string> = {
   'toast.copyPrompt': '复制提示词',
   'toast.blurWarning':
     '此包仍保留原始像素。发送前，请前往“历史记录”→“分享副本”检查其中的每张静态图。',
+  'toast.displayNamed': '显示器 {index}',
+  'toast.displayNamedFocused': '显示器 {index} (焦点)',
   'toast.replayUnavailable': '此包没有回放 — {reason}。',
+  'toast.replayUnavailableDisplay': '{display} 没有回放 — {reason}。',
+  'toast.replayUnavailableDisplays':
+    '{displays} ({total} 个屏幕中有 {count} 个) 没有回放 — {reason}。',
   'toast.replayUnavailableScreens': '{total} 个屏幕中有 {count} 个没有回放 — {reason}。',
   'toast.trimming': '正在裁剪回放…',
   'toast.rendering': '正在渲染标注回放…',
@@ -2317,9 +2349,12 @@ const ES: Record<I18nKey, string> = {
   'tray.tooltipRecording': 'CapturePack — grabando · últimos {seconds} s listos ({hotkey})',
   'tray.tooltipStarting': 'CapturePack — iniciando…',
   'tray.tooltipStopped': 'CapturePack — sin grabar — {reason}',
+  'tray.tooltipStoppedDisplay': 'CapturePack — sin grabar en {display} — {reason}',
   'tray.recordingStarted':
     'Los últimos {seconds} segundos están siempre disponibles. Pulsa {hotkey} para capturar.',
   'tray.recordingFailed': 'Los últimos {seconds} segundos no se están grabando: {reason}',
+  'tray.recordingFailedDisplay':
+    'Los últimos {seconds} segundos no se están grabando en {display}: {reason}',
   'tray.previousRunUnclean':
     'CapturePack se detuvo inesperadamente el {when}. No se grabó nada desde entonces hasta ahora.',
 
@@ -2515,7 +2550,12 @@ const ES: Record<I18nKey, string> = {
   'toast.copyPrompt': 'Copiar prompt',
   'toast.blurWarning':
     'Este pack conserva los píxeles originales. Antes de enviarlo, ve a Historial → Copia para compartir y revisa todas las imágenes fijas incluidas.',
+  'toast.displayNamed': 'Pantalla {index}',
+  'toast.displayNamedFocused': 'Pantalla {index} (enfocada)',
   'toast.replayUnavailable': 'Este paquete no tiene replay: {reason}.',
+  'toast.replayUnavailableDisplay': 'Sin replay en {display}: {reason}.',
+  'toast.replayUnavailableDisplays':
+    'Sin replay en {displays} ({count} de {total} pantallas): {reason}.',
   'toast.replayUnavailableScreens': 'Sin replay en {count} de {total} pantallas: {reason}.',
   'toast.trimming': 'Recortando el replay…',
   'toast.rendering': 'renderizando el replay anotado…',
@@ -2869,9 +2909,12 @@ const FR: Record<I18nKey, string> = {
   'tray.tooltipRecording': 'CapturePack — enregistrement · {seconds} dernières s prêtes ({hotkey})',
   'tray.tooltipStarting': 'CapturePack — démarrage…',
   'tray.tooltipStopped': 'CapturePack — aucun enregistrement — {reason}',
+  'tray.tooltipStoppedDisplay': 'CapturePack — pas d’enregistrement sur {display} — {reason}',
   'tray.recordingStarted':
     'Les {seconds} dernières secondes sont toujours disponibles. Appuyez sur {hotkey} pour capturer.',
   'tray.recordingFailed': 'Les {seconds} dernières secondes ne sont pas enregistrées : {reason}',
+  'tray.recordingFailedDisplay':
+    'Les {seconds} dernières secondes ne sont pas enregistrées sur {display} : {reason}',
   'tray.previousRunUnclean':
     'CapturePack s’est arrêté de façon inattendue le {when}. Rien n’a été enregistré depuis.',
 
@@ -3067,7 +3110,12 @@ const FR: Record<I18nKey, string> = {
   'toast.copyPrompt': 'Copier le prompt',
   'toast.blurWarning':
     'Les pixels d’origine restent dans ce pack. Avant de l’envoyer, utilisez Historique → Copie de partage et vérifiez chaque image fixe incluse.',
+  'toast.displayNamed': 'Écran {index}',
+  'toast.displayNamedFocused': 'Écran {index} (actif)',
   'toast.replayUnavailable': 'Aucun replay dans ce pack — {reason}.',
+  'toast.replayUnavailableDisplay': 'Aucun replay sur {display} — {reason}.',
+  'toast.replayUnavailableDisplays':
+    'Aucun replay sur {displays} ({count} des {total} écrans) — {reason}.',
   'toast.replayUnavailableScreens': 'Aucun replay sur {count} des {total} écrans — {reason}.',
   'toast.trimming': 'Rognage du replay…',
   'toast.rendering': 'rendu du replay annoté…',
@@ -3423,9 +3471,12 @@ const DE: Record<I18nKey, string> = {
   'tray.tooltipRecording': 'CapturePack — Aufnahme läuft · letzte {seconds} s bereit ({hotkey})',
   'tray.tooltipStarting': 'CapturePack — wird gestartet…',
   'tray.tooltipStopped': 'CapturePack — keine Aufnahme — {reason}',
+  'tray.tooltipStoppedDisplay': 'CapturePack — keine Aufnahme auf {display} — {reason}',
   'tray.recordingStarted':
     'Die letzten {seconds} Sekunden sind immer verfügbar. Mit {hotkey} erfassen.',
   'tray.recordingFailed': 'Die letzten {seconds} Sekunden werden nicht aufgezeichnet: {reason}',
+  'tray.recordingFailedDisplay':
+    'Die letzten {seconds} Sekunden werden auf {display} nicht aufgezeichnet: {reason}',
   'tray.previousRunUnclean':
     'CapturePack wurde am {when} unerwartet beendet. Seitdem wurde nichts aufgezeichnet.',
 
@@ -3622,7 +3673,12 @@ const DE: Record<I18nKey, string> = {
   'toast.copyPrompt': 'Prompt kopieren',
   'toast.blurWarning':
     'Die Originalpixel verbleiben in diesem Pack. Öffnen Sie vor dem Senden Verlauf → Freigabekopie und prüfen Sie jedes enthaltene Standbild.',
+  'toast.displayNamed': 'Bildschirm {index}',
+  'toast.displayNamedFocused': 'Bildschirm {index} (fokussiert)',
   'toast.replayUnavailable': 'Kein Replay in diesem Pack — {reason}.',
+  'toast.replayUnavailableDisplay': 'Kein Replay auf {display} — {reason}.',
+  'toast.replayUnavailableDisplays':
+    'Kein Replay auf {displays} ({count} von {total} Bildschirmen) — {reason}.',
   'toast.replayUnavailableScreens': 'Kein Replay auf {count} von {total} Bildschirmen — {reason}.',
   'toast.trimming': 'Replay wird zugeschnitten…',
   'toast.rendering': 'annotiertes Replay wird gerendert…',
@@ -3980,9 +4036,12 @@ const PT: Record<I18nKey, string> = {
   'tray.tooltipRecording': 'CapturePack — gravando · últimos {seconds} s disponíveis ({hotkey})',
   'tray.tooltipStarting': 'CapturePack — iniciando…',
   'tray.tooltipStopped': 'CapturePack — sem gravação — {reason}',
+  'tray.tooltipStoppedDisplay': 'CapturePack — sem gravação em {display} — {reason}',
   'tray.recordingStarted':
     'Os últimos {seconds} segundos estão sempre disponíveis. Pressione {hotkey} para capturar.',
   'tray.recordingFailed': 'Os últimos {seconds} segundos não estão sendo gravados: {reason}',
+  'tray.recordingFailedDisplay':
+    'Os últimos {seconds} segundos não estão sendo gravados em {display}: {reason}',
   'tray.previousRunUnclean':
     'O CapturePack parou inesperadamente em {when}. Nada foi gravado de lá até agora.',
 
@@ -4178,7 +4237,12 @@ const PT: Record<I18nKey, string> = {
   'toast.copyPrompt': 'Copiar prompt',
   'toast.blurWarning':
     'Os pixels originais permanecem neste pacote. Antes de enviar, acesse Histórico → Cópia para compartilhar e revise todas as imagens estáticas incluídas.',
+  'toast.displayNamed': 'Tela {index}',
+  'toast.displayNamedFocused': 'Tela {index} (em foco)',
   'toast.replayUnavailable': 'Sem replay neste pacote — {reason}.',
+  'toast.replayUnavailableDisplay': 'Sem replay em {display} — {reason}.',
+  'toast.replayUnavailableDisplays':
+    'Sem replay em {displays} ({count} de {total} telas) — {reason}.',
   'toast.replayUnavailableScreens': 'Sem replay em {count} de {total} telas — {reason}.',
   'toast.trimming': 'Aparando o replay…',
   'toast.rendering': 'renderizando o replay anotado…',
@@ -4533,9 +4597,12 @@ const RU: Record<I18nKey, string> = {
   'tray.tooltipRecording': 'CapturePack — запись · последние {seconds} с готовы ({hotkey})',
   'tray.tooltipStarting': 'CapturePack — запуск…',
   'tray.tooltipStopped': 'CapturePack — запись не идёт — {reason}',
+  'tray.tooltipStoppedDisplay': 'CapturePack — нет записи на {display} — {reason}',
   'tray.recordingStarted':
     'Последние {seconds} секунд всегда доступны. Нажмите {hotkey}, чтобы сделать захват.',
   'tray.recordingFailed': 'Последние {seconds} секунд не записываются: {reason}',
+  'tray.recordingFailedDisplay':
+    'Последние {seconds} секунд не записываются на {display}: {reason}',
   'tray.previousRunUnclean':
     'CapturePack неожиданно остановился {when}. С этого момента и до сих пор ничего не записывалось.',
 
@@ -4728,7 +4795,12 @@ const RU: Record<I18nKey, string> = {
   'toast.copyPrompt': 'Скопировать промпт',
   'toast.blurWarning':
     'Исходные пиксели остаются в этом паке. Перед отправкой откройте «История» → «Копия для отправки» и проверьте каждое включённое статичное изображение.',
+  'toast.displayNamed': 'Экран {index}',
+  'toast.displayNamedFocused': 'Экран {index} (активный)',
   'toast.replayUnavailable': 'В этом паке нет реплея — {reason}.',
+  'toast.replayUnavailableDisplay': 'Нет реплея на {display} — {reason}.',
+  'toast.replayUnavailableDisplays':
+    'Нет реплея на {displays} ({count} из {total} экранов) — {reason}.',
   'toast.replayUnavailableScreens': 'Нет реплея на {count} из {total} экранов — {reason}.',
   'toast.trimming': 'Обрезка реплея…',
   'toast.rendering': 'рендеринг аннотированного реплея…',

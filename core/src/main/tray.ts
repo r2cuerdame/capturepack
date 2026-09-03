@@ -74,6 +74,10 @@ export function createTray(
 
   let updateVersion: string | null = null
 
+  function formatFailedTrayDisplays(indices: number[], t: TranslateFn): string {
+    return indices.map((idx) => t('toast.displayNamed', { index: idx })).join(', ')
+  }
+
   const refreshRecorderVisuals = (): void => {
     const t = makeT(getLanguage())
     const recorder = getRecorderState()
@@ -91,14 +95,27 @@ export function createTray(
         tray.setImage(stoppedIcon)
         tray.setToolTip(t('tray.tooltipStarting'))
         break
-      case 'stopped':
+      case 'stopped': {
         tray.setImage(stoppedIcon)
-        tray.setToolTip(
-          t('tray.tooltipStopped', {
-            reason: recorderFailureText(t, recorder.reason),
-          }),
-        )
+        const reason = recorderFailureText(t, recorder.reason)
+        const failed = recorder.failedDisplayIndices ?? []
+        const isPartial =
+          recorder.totalDisplays !== undefined &&
+          recorder.totalDisplays > 1 &&
+          failed.length > 0 &&
+          failed.length < recorder.totalDisplays
+        if (isPartial) {
+          const display = formatFailedTrayDisplays(failed, t)
+          tray.setToolTip(
+            t('tray.tooltipStoppedDisplay', { display, reason }),
+          )
+        } else {
+          tray.setToolTip(
+            t('tray.tooltipStopped', { reason }),
+          )
+        }
         break
+      }
     }
   }
 
@@ -185,14 +202,23 @@ export function createTray(
       const state = getRecorderState()
       if (state.status !== 'stopped') return
       const t = makeT(getLanguage())
-      // In the user's terms, not ours (issue #46): the balloon names the last N
-      // seconds it promised — the same phrasing the "recording started" balloon
-      // and the tooltip use — instead of a "replay buffer" the user never
-      // configured and cannot see.
-      const message = t('tray.recordingFailed', {
-        seconds: getReplaySeconds(),
-        reason: recorderFailureText(t, state.reason),
-      })
+      const reason = recorderFailureText(t, state.reason)
+      const failed = state.failedDisplayIndices ?? []
+      const isPartial =
+        state.totalDisplays !== undefined &&
+        state.totalDisplays > 1 &&
+        failed.length > 0 &&
+        failed.length < state.totalDisplays
+      const message = isPartial
+        ? t('tray.recordingFailedDisplay', {
+            display: formatFailedTrayDisplays(failed, t),
+            seconds: getReplaySeconds(),
+            reason,
+          })
+        : t('tray.recordingFailed', {
+            seconds: getReplaySeconds(),
+            reason,
+          })
       // GOAL "A failure is always announced": logged as well as shown, so the
       // guarantee is checkable after the balloon has faded.
       logWarn(`[tray] announcing recorder failure (${state.reason}): ${message}`)

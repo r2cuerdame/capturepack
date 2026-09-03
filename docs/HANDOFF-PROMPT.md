@@ -96,12 +96,11 @@ Open, and only these:
   value. The fifth — three hardware encoders and three UIA temporal buffers on
   one machine — is a measurement on real hardware, not a property, and nothing
   simulates it. A fixture is not a desk; do not close this on fixture evidence.
-- **[#137](https://github.com/r2cuerdame/capturepack/issues/137) — at three
-  screens only the pack names which display lost its replay.** The tray never
-  names the screen that stopped, the toast reports a count rather than an
-  identity, and the toast discards the count entirely when the focused display is
-  among the failures. The payloads are right in all three cases; the loss is in
-  the renderer, and the fix needs new strings in nine locales.
+- **[#137](https://github.com/r2cuerdame/capturepack/issues/137) — display loss
+  notifications name failed screens across all nine locales.** Resolved: both
+  toast and tray identify the dead screen as "Display {index}" (or
+  "Display {index} (focused)") rather than dropping identity or reporting a bare
+  count, with coverage across all nine supported languages.
 - **[#138](https://github.com/r2cuerdame/capturepack/issues/138) — replace the
   always-on Windows replay path.** The target is DXGI Desktop Duplication →
   D3D11 surfaces → hardware H.264 → a bounded native ring, with measured

@@ -44,7 +44,9 @@ import { replayUnavailableForToast } from '../src/main/session'
 import { displaySummaryLines, extraDisplayFiles, groupByDisplay } from '../src/main/report'
 import { buildBoard, displayAtBoardPoint, toBoardPoint, toNativePoint } from '../src/renderer/editor/board'
 import type { BoardInput, BoardLayout } from '../src/renderer/editor/board'
-import type { RecorderFailureReason } from '../src/shared/ipc'
+import type { ReplayUnavailablePayload, RecorderFailureReason } from '../src/shared/ipc'
+import type { RecorderState } from '../src/main/capture'
+import { makeT, recorderFailureText } from '../src/shared/i18n'
 import { focusedDisplayIndex } from '../src/shared/types'
 import type { Manifest } from '../src/shared/types'
 import { spawnSync } from 'node:child_process'
@@ -1284,6 +1286,7 @@ function toastAndTrayChecks(): void {
     const base = DESK.find((d) => d.index === over.index)
     const merged = { ...(base as DeskDisplay), ...over }
     return {
+      index: merged.index,
       focused: merged.focused,
       replayWebm: merged.recorded ? Buffer.from('bytes') : null,
       replayUnavailableReason: merged.recorded ? null : merged.failure,
@@ -1299,7 +1302,11 @@ function toastAndTrayChecks(): void {
       toast.screens === 1 &&
       toast.total === 3 &&
       toast.focused === false &&
-      toast.reason === 'no-frames',
+      toast.reason === 'no-frames' &&
+      toast.failedDisplays !== undefined &&
+      toast.failedDisplays.length === 1 &&
+      toast.failedDisplays[0]?.index === 2 &&
+      toast.failedDisplays[0]?.focused === false,
     JSON.stringify(toast),
   )
   check(
@@ -1316,7 +1323,11 @@ function toastAndTrayChecks(): void {
   check(
     'NEGATIVE CONTROL: when the FOCUSED display is the one that died the toast flips to the ' +
       'pack-level wording (focused: true) — a different sentence, not a different number',
-    focusedDead !== null && focusedDead.focused === true && focusedDead.screens === 1,
+    focusedDead !== null &&
+      focusedDead.focused === true &&
+      focusedDead.screens === 1 &&
+      focusedDead.failedDisplays?.[0]?.index === 3 &&
+      focusedDead.failedDisplays?.[0]?.focused === true,
     JSON.stringify(focusedDead),
   )
   // Two dead recorders, one of them focused: the focused display's reason has
@@ -1333,7 +1344,10 @@ function toastAndTrayChecks(): void {
       twoDead.reason === 'screen-unavailable' &&
       twoDead.screens === 2 &&
       twoDead.total === 3 &&
-      twoDead.focused === true,
+      twoDead.focused === true &&
+      twoDead.failedDisplays?.length === 2 &&
+      twoDead.failedDisplays[0]?.index === 2 &&
+      twoDead.failedDisplays[1]?.index === 3,
     JSON.stringify(twoDead),
   )
 
@@ -1359,6 +1373,120 @@ function toastAndTrayChecks(): void {
       partialTray.reason === 'no-frames' &&
       partialTray.detail === 'display 2 died',
     JSON.stringify(partialTray),
+  )
+  const displayIndices = new Map([
+    [ids.d1, 1],
+    [ids.d2, 2],
+    [ids.d3, 3],
+  ])
+  const partialTrayWithIndices = aggregateRecorderState(
+    wanted,
+    new Map([
+      [ids.d1, { status: 'recording' as const }],
+      [ids.d2, { status: 'stopped' as const, reason: 'no-frames' as const, detail: 'display 2 died' }],
+      [ids.d3, { status: 'recording' as const }],
+    ]),
+    displayIndices,
+  )
+  check(
+    'the tray identifies the dead screen by index when display indices are provided (#137)',
+    partialTrayWithIndices.status === 'stopped' &&
+      JSON.stringify(partialTrayWithIndices.failedDisplayIndices) === '[2]' &&
+      partialTrayWithIndices.totalDisplays === 3,
+    JSON.stringify(partialTrayWithIndices),
+  )
+
+  function renderReplayWarning(unavailable: ReplayUnavailablePayload | null, lang: string): string {
+    if (unavailable === null) return ''
+    const t = makeT(lang)
+    const reason = recorderFailureText(t, unavailable.reason)
+    if (unavailable.total <= 1 || unavailable.screens >= unavailable.total) {
+      return t('toast.replayUnavailable', { reason })
+    }
+    const failed = unavailable.failedDisplays ?? []
+    if (failed.length === 1 && failed[0] !== undefined) {
+      const d = failed[0]
+      const display = d.focused
+        ? t('toast.displayNamedFocused', { index: d.index })
+        : t('toast.displayNamed', { index: d.index })
+      return t('toast.replayUnavailableDisplay', { display, reason })
+    }
+    if (failed.length > 1) {
+      const displays = failed
+        .map((d) =>
+          d.focused
+            ? t('toast.displayNamedFocused', { index: d.index })
+            : t('toast.displayNamed', { index: d.index }),
+        )
+        .join(', ')
+      return t('toast.replayUnavailableDisplays', {
+        displays,
+        count: unavailable.screens,
+        total: unavailable.total,
+        reason,
+      })
+    }
+    return unavailable.focused
+      ? t('toast.replayUnavailable', { reason })
+      : t('toast.replayUnavailableScreens', { count: unavailable.screens, total: unavailable.total, reason })
+  }
+
+  function renderTrayTooltip(state: RecorderState, lang: string): string {
+    const t = makeT(lang)
+    if (state.status !== 'stopped') return ''
+    const reason = recorderFailureText(t, state.reason)
+    const failed = state.failedDisplayIndices ?? []
+    const isPartial =
+      state.totalDisplays !== undefined &&
+      state.totalDisplays > 1 &&
+      failed.length > 0 &&
+      failed.length < state.totalDisplays
+    if (isPartial) {
+      const display = failed.map((idx) => t('toast.displayNamed', { index: idx })).join(', ')
+      return t('tray.tooltipStoppedDisplay', { display, reason })
+    }
+    return t('tray.tooltipStopped', { reason })
+  }
+
+  check(
+    'toast names dead screen in EN: "No replay on Display 2 — the screen delivered no video frames."',
+    renderReplayWarning(toast, 'en') === 'No replay on Display 2 — the screen delivered no video frames.',
+    renderReplayWarning(toast, 'en'),
+  )
+  check(
+    'toast names dead screen in KO: "디스플레이 2에 리플레이 없음 — 화면에서 영상 프레임이 오지 않음."',
+    renderReplayWarning(toast, 'ko') === '디스플레이 2에 리플레이 없음 — 화면에서 영상 프레임이 오지 않음.',
+    renderReplayWarning(toast, 'ko'),
+  )
+  check(
+    'toast names dead focused screen in EN: "No replay on Display 3 (focused) — screen capture is unavailable."',
+    renderReplayWarning(focusedDead, 'en') === 'No replay on Display 3 (focused) — screen capture is unavailable.',
+    renderReplayWarning(focusedDead, 'en'),
+  )
+  check(
+    'toast names dead focused screen in KO: "디스플레이 3 (기준 화면)에 리플레이 없음 — 화면 캡처를 사용할 수 없음."',
+    renderReplayWarning(focusedDead, 'ko') === '디스플레이 3 (기준 화면)에 리플레이 없음 — 화면 캡처를 사용할 수 없음.',
+    renderReplayWarning(focusedDead, 'ko'),
+  )
+  check(
+    'toast names multiple dead screens in EN: "No replay on Display 2, Display 3 (focused) (2 of 3 screens) — ..."',
+    renderReplayWarning(twoDead, 'en') === 'No replay on Display 2, Display 3 (focused) (2 of 3 screens) — screen capture is unavailable.',
+    renderReplayWarning(twoDead, 'en'),
+  )
+  check(
+    'toast names multiple dead screens in KO: "디스플레이 2, 디스플레이 3 (기준 화면) (3개 화면 중 2개)에 리플레이 없음 — ..."',
+    renderReplayWarning(twoDead, 'ko') === '디스플레이 2, 디스플레이 3 (기준 화면) (3개 화면 중 2개)에 리플레이 없음 — 화면 캡처를 사용할 수 없음.',
+    renderReplayWarning(twoDead, 'ko'),
+  )
+  check(
+    'tray tooltip names dead screen on partial failure in EN: "CapturePack — not recording on Display 2 — ..."',
+    renderTrayTooltip(partialTrayWithIndices, 'en') === 'CapturePack — not recording on Display 2 — the screen delivered no video frames',
+    renderTrayTooltip(partialTrayWithIndices, 'en'),
+  )
+  check(
+    'tray tooltip names dead screen on partial failure in KO: "CapturePack — 디스플레이 2 녹화 불가 — ..."',
+    renderTrayTooltip(partialTrayWithIndices, 'ko') === 'CapturePack — 디스플레이 2 녹화 불가 — 화면에서 영상 프레임이 오지 않음',
+    renderTrayTooltip(partialTrayWithIndices, 'ko'),
   )
   check(
     'NEGATIVE CONTROL: all three recording IS "recording" — so the check above is about the dead ' +

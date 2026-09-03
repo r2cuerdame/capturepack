@@ -1277,10 +1277,15 @@ export interface ToastRenderStatusPayload {
   progress?: number
 }
 
+export interface FailedDisplayInfo {
+  index: number
+  focused: boolean
+}
+
 /**
  * A saved pack that is (partly) screenshot-only because a display's replay
  * buffer was not running at the trigger (GOAL "Say that you are recording",
- * issue #39). The save toast states it; null means every captured display
+ * issue #39, #137). The save toast states it; null means every captured display
  * delivered its replay.
  */
 export interface ReplayUnavailablePayload {
@@ -1291,6 +1296,8 @@ export interface ReplayUnavailablePayload {
   total: number
   // The FOCUSED display is one of them — i.e. the pack itself has no replay.
   focused: boolean
+  // Display identity and focus state for each display missing a replay (#137).
+  failedDisplays?: FailedDisplayInfo[]
 }
 
 export interface ToastInitPayload {

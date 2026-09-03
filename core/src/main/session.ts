@@ -710,6 +710,7 @@ async function freezeDisplays(settings: Settings): Promise<{
  */
 export function replayUnavailableForToast(
   displays: readonly {
+    index?: number
     focused: boolean
     replayWebm: Buffer | null
     replayUnavailableReason: RecorderFailureReason | null
@@ -725,6 +726,10 @@ export function replayUnavailableForToast(
     screens: missing.length,
     total: displays.length,
     focused: missing.some((d) => d.focused),
+    failedDisplays: missing.map((d, i) => ({
+      index: d.index ?? i + 1,
+      focused: d.focused,
+    })),
   }
 }
 

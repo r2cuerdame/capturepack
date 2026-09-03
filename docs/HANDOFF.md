@@ -190,9 +190,9 @@ machine — is a measurement on real hardware and is NOT covered.
 
 **#76 stays open and its acceptance test is unrun.** The issue carries a seven-item
 checklist for whoever has three monitors; read it before assuming anything about that
-desk. [#137](https://github.com/r2cuerdame/capturepack/issues/137) is the reporting gap
-the fixtures found: at three screens only the pack names which one lost its replay —
-the tray and the toast do not. The payloads are right; the renderers drop it.
+desk. [#137](https://github.com/r2cuerdame/capturepack/issues/137) resolved the
+reporting gap: at three screens the tray and the toast now name the specific
+display that lost its replay across all nine supported locales.
 
 ## What 0.4.0 contained
 
@@ -689,12 +689,11 @@ What the actually-open issues ask for, in the order they are worth doing:
    machine) is a measurement no fixture can make. The issue carries a seven-item
    acceptance checklist that has never been run. It needs the owner's hardware,
    and nothing else in the backlog is waiting on it.
-2. **[#137](https://github.com/r2cuerdame/capturepack/issues/137) — a product
-   decision before it is a code change.** At three screens the pack names which
-   display lost its replay and the tray and the toast do not. The payloads are
-   right and the renderers drop it, so the fix is small; what is not decided is
-   how a notification should NAME a screen to a person who has three of them.
-   Settle that first, then the renderers follow.
+2. **[#137](https://github.com/r2cuerdame/capturepack/issues/137) — display loss
+   notification naming.** Resolved: notifications identify dead screens as
+   "Display {index}" (or "Display {index} (focused)") in both toast and tray
+   surfaces across all nine supported locales, keeping count/total context when
+   multiple screens fail.
 3. **[#138](https://github.com/r2cuerdame/capturepack/issues/138) — replace the
    always-on Windows replay path.** Move toward DXGI Desktop Duplication, D3D11
    surfaces, hardware H.264 and a bounded native ring only with measured
