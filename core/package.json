@@ -80,6 +80,7 @@
     "check:hotkeys": "node scripts/hotkey-registry-check.mjs",
     "check:about": "node scripts/about-window-check.mjs",
     "check:update-notice": "node scripts/update-notice-check.mjs",
+    "check:actions": "node scripts/action-pipeline-check.mjs",
     "check:clipboard": "node scripts/clipboard-contract-check.mjs",
     "check:source-first-save": "node scripts/source-first-save-check.mjs",
     "check:save-now": "node scripts/save-now-check.mjs",
