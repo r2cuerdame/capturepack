@@ -41,7 +41,7 @@ const packageVersion = String(packageJson.version ?? '')
 // a later one. What it may never be is a different build wearing the public
 // version's number: a locally built installer named like the published 0.3.3
 // cannot be told apart from it once it leaves this folder.
-const PUBLIC_VERSION = '0.4.6'
+const PUBLIC_VERSION = '0.5.0'
 const packageIsCurrentPublic = packageVersion === PUBLIC_VERSION
 const candidateBase = /^(\d+\.\d+\.\d+)-rc\.\d+$/.exec(packageVersion)?.[1]
 /** Negative, zero or positive, comparing major.minor.patch left to right. */
