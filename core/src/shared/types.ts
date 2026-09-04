@@ -14,6 +14,8 @@
 // so a 0.2.1 reader meeting a pin of 12 does exactly what 0.2.1 told it to and
 // still computes a valid, contiguous sequence. Nothing on disk changes shape.
 
+import type { ActionConfig } from './actions'
+
 export const FORMAT_NAME = 'capturepack'
 // 0.2.1 carries `number_pin` (SPEC §8.5) — an additive optional field, so a
 // PATCH under §13.1's pre-1.0 rules, where minor holds the promises major
@@ -1227,4 +1229,20 @@ export interface Settings {
   mcpReadOnly: boolean
   mcpWatchExportFolder: boolean
   mcpLogRequests: boolean
+  // AFTER SAVE ACTIONS (#68).
+  //
+  // One entry per configured action. The pipeline runs in ActionConfig.order,
+  // which is what Settings > Plugins reorders by dragging — order is the whole
+  // pipeline model, so it is persisted rather than derived from array position.
+  actionConfigs: ActionConfig[]
+  // Per-configuration settings for the built-in HTTP webhook, keyed by configId.
+  //
+  // THE SECRET IS NOT HERE. Tokens live encrypted through safeStorage in
+  // action-secrets.json, never in settings.json and never in a pack.
+  actionWebhooks: Record<string, ActionWebhookSettings>
+}
+
+/** Settings for one configuration of the built-in HTTP webhook action (#68). */
+export interface ActionWebhookSettings {
+  url: string
 }

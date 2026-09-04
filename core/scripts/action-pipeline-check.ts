@@ -344,6 +344,68 @@ console.log('\nTHE MODULES STAY REACHABLE WITHOUT A STUB')
   }
 }
 
+// A CHECK CAN EXIST, BE CORRECT, AND BE WIRED TO NOTHING.
+//
+// Everything above holds the rules. These hold the fact that the app obeys
+// them — the half this repository has already paid for leaving out once.
+console.log('\nTHE APP ACTUALLY RUNS THE PIPELINE')
+{
+  const read = (relative: string): string => readFileSync(path.join(process.cwd(), relative), 'utf8')
+  const session = read('src/main/session.ts')
+  const settings = read('src/main/settings.ts')
+  const onSave = read('src/main/actions/onSave.ts')
+  const host = read('src/main/actions/host.ts')
+  const i18n = read('src/shared/i18n.ts')
+
+  check('session.ts imports the after-save entry point', session.includes("import { runActionsAtState } from './actions/onSave'"))
+  check(
+    'it fires at source-ready immediately after the save flow calls publication finished',
+    session.includes("notePackSaved(savedHandle.dirPath)")
+      && session.includes("void runActionsAtState(savedHandle.dirPath, 'source-ready', settings)"),
+  )
+  check(
+    'it fires again at annotated-replay-ready when the derived render reports done, so a blocked action gets its second chance',
+    session.includes("if (state === 'done')")
+      && session.includes("void runActionsAtState(dirPath, 'annotated-replay-ready', settings)"),
+  )
+  check(
+    'neither call is awaited — a pack that is already durable never waits for an action',
+    session.includes("void runActionsAtState(savedHandle.dirPath")
+      && session.includes("void runActionsAtState(dirPath"),
+  )
+
+  check('settings persist the configured pipeline', settings.includes('readActionConfigs(raw.actionConfigs'))
+  check('settings persist the webhook targets', settings.includes('readActionWebhooks(raw.actionWebhooks'))
+  check(
+    'a malformed configuration row costs only that row — the pipeline is not emptied by one bad entry',
+    settings.includes('for (const entry of value)') && settings.includes('continue'),
+  )
+
+  // GOAL.md: "Secrets never enter the pack — Windows Credential Manager or
+  // Electron safeStorage." The negative half matters more than the positive:
+  // a token in settings.json is a token in every backup of settings.json.
+  check('the host stores secrets through safeStorage', host.includes('safeStorage.encryptString'))
+  check(
+    'it refuses to store a secret at all when the OS cannot encrypt, rather than writing one in clear',
+    host.includes('if (!safeStorage.isEncryptionAvailable())') && host.includes('refusing to store a secret'),
+  )
+  check(
+    'no secret is persisted in settings.json',
+    !settings.includes('actionSecret') && !settings.includes('webhookSecret'),
+  )
+
+  check('a failing action is announced BY NAME, not as "an action failed"', onSave.includes("uiT(settings)('actions.failed', { names })"))
+  check(
+    'the failure string exists in all nine locales',
+    (i18n.match(/'actions\.failed':/gu) ?? []).length === 9,
+    String((i18n.match(/'actions\.failed':/gu) ?? []).length),
+  )
+  check(
+    'a pack whose id cannot be read runs NOTHING — an action keyed on a guessed id could duplicate against the real one later',
+    onSave.includes('if (packId === null) return []'),
+  )
+}
+
 if (failed > 0) {
   console.error(`\naction-pipeline-check failed: ${failed}`)
   process.exitCode = 1
