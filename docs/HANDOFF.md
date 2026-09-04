@@ -1,6 +1,6 @@
-# CapturePack handoff — after v0.4.4
+# CapturePack handoff — after v0.4.5
 
-Last verified: 2026-08-30 (Asia/Seoul)
+Last verified: 2026-09-04 (Asia/Seoul)
 
 This is the current baton-pass document. Read it before changing capture,
 timeline, object-picking, multi-display, viewer, packaging, or release code.
@@ -24,21 +24,21 @@ CapturePack **0.4.5** is the current stable Windows release.
 
 | Item | Current state |
 |---|---|
-| Public release | [v0.4.4](https://github.com/r2cuerdame/capturepack/releases/tag/v0.4.4), stable (`draft=false`, `prerelease=false`) |
-| Release source | Immutable `v0.4.4` tag; never move or replace it |
-| Release verification | The guarded Release workflow reran all 87 RC steps on the tagged source, built the Windows artifacts, and byte-verified the exact four-file draft before publication |
-| Delivery | Feature [#140](https://github.com/r2cuerdame/capturepack/issues/140), original implementation [#141](https://github.com/r2cuerdame/capturepack/pull/141), and publication tracker [#142](https://github.com/r2cuerdame/capturepack/issues/142) |
+| Public release | [v0.4.5](https://github.com/r2cuerdame/capturepack/releases/tag/v0.4.5), stable (`draft=false`, `prerelease=false`), published 2026-09-03T10:03:51Z |
+| Release source | Immutable `v0.4.5` tag at `f86be65f559c11e9304108ef661940ca14aeb14d`; never move or replace it |
+| Release verification | The guarded Release workflow ([run 33741893263](https://github.com/r2cuerdame/capturepack/actions/runs/33741893263)) reran all 87 RC steps on the tagged source, built the Windows artifacts, and byte-verified the exact four-file draft before publication |
+| Delivery | Multi-display failure naming [#137](https://github.com/r2cuerdame/capturepack/issues/137), plus the negative-origin, region-crop, pointer-flicker and session-resume capture fixes listed under "What 0.4.5 contains" |
 | Website | [capturepack.dev](https://capturepack.dev/), with all nine languages kept on the application version |
 
 The Release workflow and its remote byte verification are authoritative for the
 published installer's hashes. Do not reuse a local RC hash or any older release's
-values when checking 0.4.4.
+values when checking 0.4.5.
 
 ### Historical 0.4.1 publication evidence
 
 The following table and investigation record apply to **0.4.1 only**. They stay
 here because they established the release-verification discipline; they are not
-the current version or 0.4.4 asset metadata.
+the current version or 0.4.5 asset metadata.
 
 | Item | Verified state |
 |---|---|
@@ -105,13 +105,43 @@ A locally built RC installer under `core/release-rcNN/` has a different hash
 because it is a separate unsigned build. Use the public release's
 `SHA256SUMS.txt`, not a local build hash, when verifying a downloaded installer.
 
-The 0.4.4 release-prep checkout was `C:\_Project\capturepack` on
-`release/0.4.4`, forked from `main` at
-`1db7ae34de0555bf8267e46f7a52940632a05230`. Always begin with
+0.4.5 was prepared and released on `main` itself — there is no `release/0.4.5`
+branch, and the tagged source is
+`f86be65f559c11e9304108ef661940ca14aeb14d`. Always begin with
 `git status --short --branch`, `git fetch`, and a non-destructive comparison
 before choosing a branch. Never reset or clean away an active worktree.
 
-## What 0.4.4 contains
+## What 0.4.5 contains
+
+Five fixes, all of them found by running the product on a real desk rather than
+by reading the code.
+
+**A multi-display recording loss now names the screen that lost it**
+([#137](https://github.com/r2cuerdame/capturepack/issues/137)). The payloads were
+always right; the two renderers were not. The tray collapsed N recorders into one
+pessimistic "not recording", and the toast reported a count -- or, when the focused
+display was among the failures, discarded the count entirely and read identically to
+a single-screen failure. Both now name the failed displays and say whether the
+focused one is among them, in all nine locales. The pack's `report.md` already did.
+
+**Native replay fallback survives a display at a negative origin.** A secondary
+monitor placed left of or above the primary (DISPLAY1 at `rect=-1200,0`) threw an unhandled
+CLR exception. The blit now runs from a device-specific DC with an automatic fallback
+that drops `CAPTUREBLT`.
+
+**Region crop pick quality is measured against the right frame.** Pick quality
+normalizes the offered interactive control area against the source host display
+resolution instead of treating a region crop as full-screen bounds.
+
+**The mouse pointer no longer flickers during fallback capture.** `SRCCOPY` is
+preferred over `CAPTUREBLT`, which was toggling the DWM hardware cursor plane.
+
+**Capture recovers immediately on unlock and resume.** Recorders stopped by
+`DXGI_ERROR_ACCESS_LOST` at the lock screen, or by system sleep, now clear their backoff and
+rebuild on the `powerMonitor` unlock/resume edge instead of waiting out the retry
+schedule.
+
+## What 0.4.4 contains (historical)
 
 History's primary sharing action is now a reviewed, still-only Share Copy
 ([#140](https://github.com/r2cuerdame/capturepack/issues/140),
@@ -315,7 +345,7 @@ because breaking them is quiet:
   save and a render must not multiply decoders or encoders.
 
 Application version and pack format version are different contracts.
-`core/package.json` is application version `0.4.4`; packs containing the
+`core/package.json` is application version `0.4.5`; packs containing the
 optional viewer declare a compatible format version of at least `0.5.0`.
 
 ## Measured characteristic: the picture lags its own timestamp
@@ -665,9 +695,9 @@ A push or tag push does not publish CapturePack. Publication is a manual
 `workflow_dispatch` that runs the full QA/build/package/remote-byte-verification
 sequence described in [RELEASING.md](RELEASING.md).
 
-Never overwrite a public version. A product hotfix after 0.4.4 must use a higher
+Never overwrite a public version. A product hotfix after 0.4.5 must use a higher
 version and fix forward. Documentation-only commits may follow the release on
-`main`, but they do not alter the binaries identified by the `v0.4.4` tag.
+`main`, but they do not alter the binaries identified by the `v0.4.5` tag.
 
 ## Suggested next order
 

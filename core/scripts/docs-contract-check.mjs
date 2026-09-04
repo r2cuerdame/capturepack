@@ -221,6 +221,29 @@ console.log('\nThe documents name the version this repository builds')
     docsIndex.includes(version),
     `docs/README.md never mentions ${version}`,
   )
+
+  // MENTIONING A VERSION IS NOT STATING IT.
+  //
+  // 0.4.5 shipped with a handoff that said "after v0.4.4" in its title and stated
+  // outright that core/package.json is application version 0.4.4 — and this gate
+  // stayed green, because one line further down mentioned 0.4.5 and `includes`
+  // never asked where. A check that exists, is correct and asserts too little is
+  // indistinguishable from coverage until someone reads the document by hand.
+  //
+  // Only the sentence below can be settled from core/package.json. The handoff
+  // title and its public-release row track the last PUBLISHED release, which is
+  // site/validate.mjs's PUBLIC_VERSION and is deliberately BEHIND this version
+  // during an RC cycle; they are asserted there.
+  const claimed = [
+    ...handoff.matchAll(/`core\/package\.json` is application version `([^`]+)`/gu),
+  ].map((match) => match[1])
+  check(
+    `every "core/package.json is application version" claim says ${version}`,
+    claimed.length > 0 && claimed.every((claim) => claim === version),
+    claimed.length === 0
+      ? 'docs/HANDOFF.md never states the application version core/package.json carries'
+      : `docs/HANDOFF.md claims ${claimed.join(', ')}`,
+  )
 }
 
 console.log('\nThe current handoff is the only one that reads as instructions')

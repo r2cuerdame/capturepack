@@ -523,9 +523,24 @@ check(
     && mcpDocs.includes('capturepack_open')
     && !/\balways[- ](?:on|running)\b/i.test(mcpDocs),
 )
+// THE BATON IS THE CURRENT RELEASE, NOT A VERSION SOMEONE TYPED HERE ONCE.
+//
+// This pinned the literal string "after v0.4.4". When 0.4.5 shipped, PUBLIC_VERSION
+// moved and this line did not, so the gate went on REQUIRING the handoff to name the
+// SUPERSEDED release — and docs/HANDOFF.md kept saying 0.4.4 in its title, its
+// public-release row and its application-version sentence, because that is what
+// staying green demanded. A pin that outlives its release stops being a check and
+// becomes the reason for the bug it was meant to catch.
+//
+// The title and the public-release row live here rather than in check:docs because
+// they track the last PUBLISHED release. During an RC cycle core/package.json is
+// deliberately ahead of PUBLIC_VERSION, so asserting them against the package
+// version would make every RC red for telling the truth.
+const publicReleaseRow = handoff.split(/\r?\n/u).find((line) => line.startsWith('| Public release |')) ?? ''
 check(
-  'handoff records the stable 0.4.4 baton while preserving historical verification',
-  handoff.includes('# CapturePack handoff — after v0.4.4')
+  `handoff records the stable ${PUBLIC_VERSION} baton while preserving historical verification`,
+  handoff.includes(`# CapturePack handoff — after v${PUBLIC_VERSION}`)
+    && publicReleaseRow.includes(PUBLIC_VERSION)
     && handoff.includes('b7e0c695d5f2c018e2c10fcf83936d1d42f7a0d4')
     && handoff.includes('Issue #89')
     && handoff.includes('Do not hard-code 125 ms')

@@ -16,7 +16,7 @@ sacrifice the 5-second workflow.
 
 ---
 
-## Current implementation baseline — 0.4.4
+## Current implementation baseline — 0.4.5
 
 The current Electron reference app has moved beyond the original MVP design
 record preserved later in this document:
@@ -47,6 +47,18 @@ record preserved later in this document:
   `check:replay-health`) — not on anyone watching it take over on a wedged
   machine in the field, which has still not happened. If duplication wedges and
   the fallback does not engage, that is a new and far more specific bug.
+- **A stopped recorder is a state to leave, not a schedule to wait out.** A
+  display recorder killed by `DXGI_ERROR_ACCESS_LOST` at the lock screen, or by
+  system sleep, clears its backoff and rebuilds on the `powerMonitor` unlock and
+  resume edges rather than serving out the retry interval it happened to be in.
+  The desk coming back is the event; the timer was only ever a guess about it.
+- **The native fallback blits from a device-specific DC.** A display whose
+  virtual-desktop origin is negative — the monitor placed left of or above the
+  primary — is not addressable from a virtual-desktop DC the way a positive
+  origin is, and the difference surfaced as an unhandled CLR exception rather
+  than a degraded capture. `SRCCOPY` is preferred over `CAPTUREBLT`, which
+  toggles the DWM hardware cursor plane and made the pointer flicker in every
+  fallback capture; `CAPTUREBLT` remains available as the second attempt.
 - Video capture and explicit region/full-virtual-desktop image capture are
   distinct contracts. Multi-display pixels, scale, negative origins and
   measured replay-clock evidence remain explicit through save and reopen.
