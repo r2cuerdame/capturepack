@@ -1,4 +1,4 @@
-# CapturePack handoff — after v0.4.5
+# CapturePack handoff — after v0.4.6
 
 Last verified: 2026-09-04 (Asia/Seoul)
 
@@ -24,21 +24,21 @@ CapturePack **0.4.5** is the current stable Windows release.
 
 | Item | Current state |
 |---|---|
-| Public release | [v0.4.5](https://github.com/r2cuerdame/capturepack/releases/tag/v0.4.5), stable (`draft=false`, `prerelease=false`), published 2026-09-03T10:03:51Z |
-| Release source | Immutable `v0.4.5` tag at `f86be65f559c11e9304108ef661940ca14aeb14d`; never move or replace it |
-| Release verification | The guarded Release workflow ([run 33741893263](https://github.com/r2cuerdame/capturepack/actions/runs/33741893263)) reran all 87 RC steps on the tagged source, built the Windows artifacts, and byte-verified the exact four-file draft before publication |
-| Delivery | Multi-display failure naming [#137](https://github.com/r2cuerdame/capturepack/issues/137), plus the negative-origin, region-crop, pointer-flicker and session-resume capture fixes listed under "What 0.4.5 contains" |
+| Public release | [v0.4.6](https://github.com/r2cuerdame/capturepack/releases/tag/v0.4.6), stable (`draft=false`, `prerelease=false`) |
+| Release source | Immutable `v0.4.6` tag; never move or replace it |
+| Release verification | The guarded Release workflow reran all 88 RC steps on the tagged source, built the Windows artifacts, and byte-verified the exact four-file draft before publication |
+| Delivery | Update-notice policy [#147](https://github.com/r2cuerdame/capturepack/issues/147) and the derived version gates [#148](https://github.com/r2cuerdame/capturepack/issues/148), listed under "What 0.4.6 contains" |
 | Website | [capturepack.dev](https://capturepack.dev/), with all nine languages kept on the application version |
 
 The Release workflow and its remote byte verification are authoritative for the
 published installer's hashes. Do not reuse a local RC hash or any older release's
-values when checking 0.4.5.
+values when checking 0.4.6.
 
 ### Historical 0.4.1 publication evidence
 
 The following table and investigation record apply to **0.4.1 only**. They stay
 here because they established the release-verification discipline; they are not
-the current version or 0.4.5 asset metadata.
+the current version or 0.4.6 asset metadata.
 
 | Item | Verified state |
 |---|---|
@@ -105,11 +105,46 @@ A locally built RC installer under `core/release-rcNN/` has a different hash
 because it is a separate unsigned build. Use the public release's
 `SHA256SUMS.txt`, not a local build hash, when verifying a downloaded installer.
 
-0.4.5 was prepared and released on `main` itself — there is no `release/0.4.5`
-branch, and the tagged source is
-`f86be65f559c11e9304108ef661940ca14aeb14d`. Always begin with
+0.4.6 was prepared and released on `main` itself — there is no `release/0.4.6`
+branch. Always begin with
 `git status --short --branch`, `git fetch`, and a non-destructive comparison
 before choosing a branch. Never reset or clean away an active worktree.
+
+## What 0.4.6 contains
+
+**A downloaded update can no longer wait unnoticed forever**
+([#147](https://github.com/r2cuerdame/capturepack/issues/147)). The update-ready
+notice fired once per version per process run, which is right for the moment an
+update arrives and wrong for every hour after it. Measured on the maintainer's own
+machine: one process ran twenty hours with 0.4.5 downloaded and waiting, logged
+"downloaded v0.4.5" six times, showed exactly one toast — at a moment the user was
+away from the desk — and was then killed rather than quit, so
+`autoInstallOnAppQuit` never ran. The app that exists to capture context sat a
+release behind with the installer already on disk.
+
+A version still downloaded and waiting is now announced again at most once a day.
+A newer version arriving while an older one waits is announced at once rather than
+serving out the old timer, and a clock that moves backwards is never read as a day
+having passed. **This is not the routine update noise #103 removed**: nothing fires
+on a schedule, nothing says "you are up to date", and #103's lock-screen hold still
+defers a due notice to unlock instead of dropping it.
+
+The rule lives alone in `core/src/main/updateNotice.ts` with no imports, precisely
+so `check:update-notice` can hold both the policy and the app's use of it without
+an Electron stub that could drift out from under it. Both halves were proven to
+fail before being accepted: reverting the policy to once-per-version turns the
+interval assertions red, and restoring the old `readyVersion === notifiedVersion`
+short-circuit in `index.ts` turns the wiring assertion red.
+
+**The documents that name the current version are now derived rather than typed**
+([#148](https://github.com/r2cuerdame/capturepack/issues/148)). After 0.4.5 shipped,
+this handoff still said "after v0.4.4" in its own title and stated outright that
+`core/package.json` was 0.4.4; `ARCHITECTURE.md` never mentioned 0.4.5 at all.
+Two gates were involved and only one was merely weak: `check:docs` asserted
+`handoff.includes(version)` and nothing else, while `site/validate.mjs` pinned the
+literal string `# CapturePack handoff — after v0.4.4` and therefore REQUIRED the
+stale title. A pin that outlives its release stops being a check and becomes the
+reason for the bug.
 
 ## What 0.4.5 contains
 
@@ -345,7 +380,7 @@ because breaking them is quiet:
   save and a render must not multiply decoders or encoders.
 
 Application version and pack format version are different contracts.
-`core/package.json` is application version `0.4.5`; packs containing the
+`core/package.json` is application version `0.4.6`; packs containing the
 optional viewer declare a compatible format version of at least `0.5.0`.
 
 ## Measured characteristic: the picture lags its own timestamp
@@ -569,8 +604,8 @@ npm run qa:rc
 npm audit --omit=dev
 ```
 
-`qa:rc` currently runs 84 discovered `check:*` regressions plus type checking,
-the production build, and isolated Electron smoke: **87 gate steps** — 85 with
+`qa:rc` currently runs 85 discovered `check:*` regressions plus type checking,
+the production build, and isolated Electron smoke: **88 gate steps** — 86 with
 `--skip-build`, which drops the build and the smoke that follows it. The gate
 discovers its checks from `core/package.json`, so that number moves with every
 release. Count it before quoting it, and trust the count over any document,
@@ -695,9 +730,9 @@ A push or tag push does not publish CapturePack. Publication is a manual
 `workflow_dispatch` that runs the full QA/build/package/remote-byte-verification
 sequence described in [RELEASING.md](RELEASING.md).
 
-Never overwrite a public version. A product hotfix after 0.4.5 must use a higher
+Never overwrite a public version. A product hotfix after 0.4.6 must use a higher
 version and fix forward. Documentation-only commits may follow the release on
-`main`, but they do not alter the binaries identified by the `v0.4.5` tag.
+`main`, but they do not alter the binaries identified by the `v0.4.6` tag.
 
 ## Suggested next order
 

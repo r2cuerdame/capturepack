@@ -50,6 +50,7 @@ import { openSettingsWindow, registerSettingsIpc } from './settingsWindow'
 import { createTray } from './tray'
 import type { TrayControls } from './tray'
 import { checkNow, initUpdater, restartAndUpdate, updaterState } from './updater'
+import { shouldAnnounceUpdate } from './updateNotice'
 import { openWelcomeWindow, registerWelcomeIpc } from './welcomeWindow'
 
 const LOGIN_HIDDEN_ARG = '--openAsHidden'
@@ -688,10 +689,14 @@ function main(): void {
       }
     }
 
-    // The version the "update ready" notification has already announced. A
-    // scheduled re-check re-emits 'update-downloaded' for the cached file, and
-    // the same toast every 4 hours would be nagging, not news.
+    // The version the "update ready" notification has already announced, and
+    // when. A scheduled re-check re-emits 'update-downloaded' for the cached
+    // file, and the same toast every 4 hours would be nagging, not news — but
+    // announcing it once and never again left this machine a release behind for
+    // twenty hours with the installer already on disk (#147). shouldAnnounceUpdate
+    // owns that policy; these two are the memory it reads.
     let notifiedVersion: string | null = null
+    let notifiedAtMs = 0
     // A ROUTINE TOAST ON A LOCKED SCREEN READS AS A FAILURE (#103).
     //
     // Windows hides notification content on the lock screen when the user asked
@@ -772,8 +777,19 @@ function main(): void {
           }).show()
           return
         }
-        if (readyVersion === null || readyVersion === notifiedVersion) return
+        if (readyVersion === null) return
+        if (
+          !shouldAnnounceUpdate({
+            readyVersion,
+            announcedVersion: notifiedVersion,
+            announcedAtMs: notifiedAtMs,
+            nowMs: Date.now(),
+          })
+        ) {
+          return
+        }
         notifiedVersion = readyVersion
+        notifiedAtMs = Date.now()
         if (sessionLocked) {
           // Held, not dropped: the user still learns about the update, at the
           // moment they can act on it. The tray carries it in the meantime.

@@ -9,7 +9,7 @@ status; it never overrides either document.
 end on a real install (0.1.0 → 0.1.1 → 0.1.2). The active source and
 documentation baseline and current public
 [GitHub Release](https://github.com/r2cuerdame/capturepack/releases/latest) are
-**0.4.5**.
+**0.4.6**.
 What is *not* yet proven is the long-run habit — the one-month
 no-manual-reinstall criterion is still running.
 
@@ -21,7 +21,7 @@ Ctrl+Alt+C  →  capture  →  5-second annotation  →  save folder  →  share
 
 ---
 
-## Current baseline — 0.4.5
+## Current baseline — 0.4.6
 
 The milestone narrative below is preserved as the product's design and
 verification history. These are the current additions and next gates:

@@ -41,7 +41,7 @@ const packageVersion = String(packageJson.version ?? '')
 // a later one. What it may never be is a different build wearing the public
 // version's number: a locally built installer named like the published 0.3.3
 // cannot be told apart from it once it leaves this folder.
-const PUBLIC_VERSION = '0.4.5'
+const PUBLIC_VERSION = '0.4.6'
 const packageIsCurrentPublic = packageVersion === PUBLIC_VERSION
 const candidateBase = /^(\d+\.\d+\.\d+)-rc\.\d+$/.exec(packageVersion)?.[1]
 /** Negative, zero or positive, comparing major.minor.patch left to right. */
@@ -159,7 +159,7 @@ for (const lang of supported) {
     missingText.length === 0
       && missingAlt.length === 0
       && document.documentElement.lang === lang
-      && releaseNote.includes('0.4.5')
+      && releaseNote.includes(PUBLIC_VERSION)
       && !releaseNote.includes('0.4.3'),
     [...missingText, ...missingAlt].join(', '),
   )
@@ -240,10 +240,10 @@ check(
     && i18n.includes("prefers-reduced-motion: reduce"),
 )
 check(
-  'landing names 0.4.5 as the public release',
-  html.includes('"softwareVersion": "0.4.5"')
-    && html.includes('>v0.4.5</span>')
-    && html.includes('Public download: 0.4.5')
+  `landing names ${PUBLIC_VERSION} as the public release`,
+  html.includes(`"softwareVersion": "${PUBLIC_VERSION}"`)
+    && html.includes(`>v${PUBLIC_VERSION}</span>`)
+    && html.includes(`Public download: ${PUBLIC_VERSION}`)
     && html.includes('From History, create a reviewed, still-only Share Copy without originals, videos, or structured capture context.')
     && !html.includes('source/release candidate'),
 )
@@ -259,9 +259,9 @@ check(
   `${packageVersion} (public ${PUBLIC_VERSION}), lock ${packageLock.version}`,
 )
 check(
-  'README names 0.4.5 as the public release',
-  readme.includes('Current public Windows release: **CapturePack 0.4.5**')
-    && readme.includes('**0.4.5 is the current public Windows download.**')
+  `README names ${PUBLIC_VERSION} as the public release`,
+  readme.includes(`Current public Windows release: **CapturePack ${PUBLIC_VERSION}**`)
+    && readme.includes(`**${PUBLIC_VERSION} is the current public Windows download.**`)
     && !readme.includes('candidate baseline')
     && !readme.includes('not a public release until it appears on GitHub Releases'),
 )
@@ -378,7 +378,7 @@ for (const { lang, text: localized } of localizedReadmes) {
   check(
     `${lang}: README public-release and product/privacy contract`,
     localized.includes(`motion/${lang}/capturepack-time-machine-poster.webp`)
-      && localized.includes('0.4.5')
+      && localized.includes(PUBLIC_VERSION)
       && !localized.includes('0.4.3')
       && localized.includes('Ctrl+Alt+S')
       && localized.includes('capture_kind: image')
@@ -429,17 +429,17 @@ check(
     && !html.includes('blob/main/ROADMAP.md'),
 )
 
-console.log('\n0.4.5 release and documentation contract')
+console.log(`\n${PUBLIC_VERSION} release and documentation contract`)
 check(
   'roadmap preserves history and adds the current baseline',
-  roadmap.includes('## Current baseline — 0.4.5')
+  roadmap.includes(`## Current baseline — ${PUBLIC_VERSION}`)
     && roadmap.includes('## V1 — MVP + installable, self-updating release')
     && roadmap.includes('## V2 — Temporal plugin system')
     && roadmap.includes('## Success criteria (from GOAL.md)'),
 )
 check(
   'current release, known issue and dependency audit are documented',
-  changelog.includes('## 0.4.5 — 2026-09-03')
+  (changelog.split(/\r?\n/u).find((line) => line.startsWith('## ')) ?? '').startsWith(`## ${PUBLIC_VERSION} — `)
     && changelog.includes('## 0.4.3 — 2026-08-16')
     && changelog.includes('## 0.4.1 — 2026-08-02')
     && changelog.includes('## 0.4.0 — 2026-08-02')
@@ -547,6 +547,33 @@ check(
     && !handoff.includes('public 0.3.2 release')
     && !handoff.includes('## Historical rc.35 snapshot'),
 )
+
+// TWO SURFACES NOTHING WAS ASKING ABOUT.
+//
+// The landing page, the READMEs, ROADMAP and the changelog are all pinned further
+// up this file. These two were not, and #148 is what that costs: a document keeps
+// advertising a superseded release because no assertion ever looks at it.
+{
+  const claimingLines = (text, predicate) => text.split(/\r?\n/u).filter(predicate)
+  const namesCurrent = (text, predicate) => {
+    const lines = claimingLines(text, predicate)
+    return {
+      ok: lines.length > 0 && lines.every((line) => line.includes(PUBLIC_VERSION)),
+      detail:
+        lines.length === 0
+          ? 'no line makes the claim any more — the predicate needs updating, not deleting'
+          : lines.filter((line) => !line.includes(PUBLIC_VERSION)).join(' | '),
+    }
+  }
+
+  const docsState = namesCurrent(docsReadme, (line) => line.includes('**Current state.**'))
+  check(`the documentation index's current state is ${PUBLIC_VERSION}`, docsState.ok, docsState.detail)
+
+  const promptState = namesCurrent(handoffPrompt, (line) =>
+    line.includes('The current public Windows release is stable'),
+  )
+  check(`the handoff prompt names ${PUBLIC_VERSION} as the public release`, promptState.ok, promptState.detail)
+}
 
 const localLinkDocuments = [
   ['README.md', readme],

@@ -1033,6 +1033,40 @@ CapturePack X.Y.Z available
 Download ahead of time; let the user restart after finishing their work. CapturePack holds a live
 screen replay buffer — force-killing it is not acceptable.
 
+**A downloaded update must not be able to wait forever (#147, 0.4.6)**
+
+"Notify if a new version exists" above was implemented as once per version per
+process run. That is right for the moment an update arrives and wrong for every
+hour after it, and the difference was measured on the maintainer's own machine:
+one process ran for twenty hours with 0.4.5 downloaded and waiting, logged
+"downloaded v0.4.5" six times, showed exactly one toast — at a moment the user
+was away from the desk — and was then killed rather than quit, so
+`autoInstallOnAppQuit` never ran. The app that exists to capture context sat a
+release behind with the installer already on disk.
+
+The rule, deliberately narrow:
+
+- The notice fires when a version first becomes ready, unchanged.
+- If that same version is STILL downloaded and waiting, it may be announced
+  again, at most **once a day**.
+- A newer version arriving while an older one waits is announced at once; it
+  does not serve out the old timer.
+- A clock that moves backwards is never read as a day having passed.
+- The tray's "Restart and update (vX)" item is unchanged, and nothing here ever
+  says "you are up to date".
+
+**This is not the routine update noise #103 removed.** #103 removed a toast that
+fired on a schedule whether or not anything had changed, which a locked screen
+reduces to an app name and a red badge that reads as a failed capture. This
+fires only while an update is genuinely downloaded and waiting to be installed,
+and a day apart rather than every four hours. The lock-screen hold added by #103
+still applies: a notice due while the session is locked is held until unlock, not
+dropped.
+
+The policy lives alone in `core/src/main/updateNotice.ts` with no imports, so
+`check:update-notice` can hold it — and the app's use of it — without an
+Electron stub that could drift out from under the rule.
+
 **Release pipeline**
 
 ```

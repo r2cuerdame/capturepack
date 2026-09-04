@@ -4,6 +4,41 @@ All notable changes to CapturePack. Format follows [Keep a Changelog](https://ke
 this project uses [semantic versioning](https://semver.org/) for the app, and the pack
 format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 
+## 0.4.6 — 2026-09-04
+
+### Fixed
+
+- **A downloaded update can no longer wait unnoticed forever.** The update-ready
+  notice fired once per version per process run, so an app left running for days
+  announced a waiting update exactly once — at whatever moment it arrived. Measured
+  on the maintainer's machine: one process ran twenty hours with 0.4.5 downloaded,
+  logged "downloaded" six times, showed one toast, and was then killed rather than
+  quit, so install-on-exit never ran and the machine stayed on 0.4.4 with the
+  installer already on disk. A version that is still downloaded and waiting is now
+  announced again at most once a day; a newer version arriving while an older one
+  waits is announced at once rather than serving out the old timer, and a clock that
+  moves backwards is never read as a day having passed. This is deliberately not the
+  routine update noise removed in 0.3.2: nothing fires on a schedule, nothing says
+  "you are up to date", and the lock-screen hold still defers a notice to unlock
+  rather than dropping it
+  ([#147](https://github.com/r2cuerdame/capturepack/issues/147)).
+
+### Changed
+
+- The announcement policy lives alone in `core/src/main/updateNotice.ts` with no
+  imports, and `check:update-notice` holds both the rule and the app's use of it
+  without an Electron stub — a rule the gate can reach cannot quietly stop being
+  the rule the app follows.
+
+### Documentation
+
+- `docs/HANDOFF.md` and `ARCHITECTURE.md` named 0.4.4 as current after 0.4.5
+  shipped. `check:docs` only asserted that the handoff mentioned the version
+  somewhere, and `site/validate.mjs` pinned the literal string
+  `# CapturePack handoff — after v0.4.4` — so the gate did not merely miss the
+  stale title, it required it. Both gates now derive the version they demand
+  ([#148](https://github.com/r2cuerdame/capturepack/issues/148)).
+
 ## 0.4.5 — 2026-09-03
 
 ### Fixed

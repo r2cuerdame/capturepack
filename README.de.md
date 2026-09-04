@@ -34,7 +34,7 @@ lokaler, offener Ordner, der ohne KI, Konto und Cloud-Dienst funktioniert.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Herunterladen](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Aktuelle öffentliche Windows-Version: **CapturePack 0.4.5**. In 0.4.4 erstellt
+Aktuelle öffentliche Windows-Version: **CapturePack 0.4.6**. In 0.4.4 erstellt
 Verlauf eine geprüfte **Share Copy** (`.share.zip`), deren einzige Medien geprüfte
 annotierte PNG-Standbilder sind; eine erzeugte README, ein Offline-Viewer und ein
 minimales Inventar begleiten sie. Originale, sämtliche Videos und strukturierter
@@ -262,7 +262,7 @@ Werkzeuge, Client-Einrichtung und Einstellungen: [docs/MCP.md](docs/MCP.md).
 
 ### Status
 
-**0.4.5 ist der aktuelle öffentliche Windows-Download.** CapturePack ist
+**0.4.6 ist der aktuelle öffentliche Windows-Download.** CapturePack ist
 weiterhin ein Projekt im Frühstadium; bewahre beim Melden eines Problems das
 Original-Pack auf. Siehe [GOAL.md](GOAL.md) für die Produktvision und
 [ROADMAP.md](ROADMAP.md) für die nächsten Schritte.
@@ -284,7 +284,7 @@ einem fest einprogrammierten globalen Offset zu verstecken.
 - [MCP](docs/MCP.md) und [Temporal-Provider-API](docs/temporal-provider-api.md)
   — schreibgeschützter Zugriff auf gespeicherte Packs und Kontextanbindung.
 
-CapturePack `0.4.5` ist die Version der Anwendung. Die `format_version` des Packs
+CapturePack `0.4.6` ist die Version der Anwendung. Die `format_version` des Packs
 entwickelt sich unabhängig davon durch additive Formatänderungen weiter; Leser
 müssen sich an [SPEC.md](SPEC.md) halten, statt die Formatunterstützung aus der
 App-Version abzuleiten.
