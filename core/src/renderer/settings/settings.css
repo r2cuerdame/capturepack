@@ -676,3 +676,53 @@ button.pluginFold[aria-expanded="true"] .pluginChevron {
   margin-top: 2px;
   font-size: 11.5px;
 }
+
+/* Two plugin lists (#69). The group heading is what says the section has two
+   halves; without it the actions read as more providers. */
+.pluginGroup {
+  margin: 18px 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.72;
+}
+.pluginGroupNote {
+  margin: 0 0 8px;
+  font-size: 12px;
+  opacity: 0.72;
+}
+/* One configured After Save Action. Its fields are always visible: a pipeline
+   step whose URL is folded away is a step nobody checks before a save. */
+.actionEntry .pluginDetailPanel {
+  display: block;
+}
+.actionField {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+  font-size: 12px;
+}
+.actionField > span {
+  min-width: 148px;
+  opacity: 0.85;
+}
+.actionField input[type='text'] {
+  flex: 1;
+  min-width: 0;
+}
+.actionField input[type='number'] {
+  width: 84px;
+}
+/* The sentence that says pack information leaves the machine. It is the one
+   line in this panel a user must not skim, so it is the one line with colour. */
+.actionOffMachine {
+  color: #b4531b;
+  font-weight: 600;
+}
+.actionControls {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}

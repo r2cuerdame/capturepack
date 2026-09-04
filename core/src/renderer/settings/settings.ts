@@ -42,7 +42,16 @@ import {
   MAX_CAPTURE_FPS,
   MIN_CAPTURE_FPS,
 } from '../../shared/types'
-import type { Settings } from '../../shared/types'
+import type { ActionWebhookSettings, Settings } from '../../shared/types'
+import {
+  ACTION_TIMEOUT_DEFAULT_MS,
+  ACTION_TIMEOUT_MAX_MS,
+  BUILTIN_WEBHOOK_MANIFEST,
+  type ActionConfig,
+  isAcceptableWebhookUrl,
+  normalizeActionTimeout,
+  sendsDataOffMachine,
+} from '../../shared/actions'
 
 interface SettingsBridge {
   get(): Promise<SettingsGetResult>
@@ -1531,6 +1540,268 @@ bindDisclosure(chromeFoldBtn, chromeDetailPanel)
 // ---------------------------------------------------------------------------
 // Sync + init
 
+// ---------------------------------------------------------------------------
+// After Save Actions (#69)
+//
+// The second of the two plugin lists. Providers above run all day; an action
+// never runs until a pack exists, so this half is a PIPELINE editor rather than
+// a set of switches: order is the model, and the rows carry it.
+//
+// Every control writes through the same apply() every other setting uses, so
+// main validates it and the renderer never holds a value main rejected.
+
+const actionList = el<HTMLDivElement>('actionList')
+const actionsEmpty = el<HTMLParagraphElement>('actionsEmpty')
+const actionAddBtn = el<HTMLButtonElement>('actionAddBtn')
+
+function actionConfigsOf(settings: Settings): ActionConfig[] {
+  return [...settings.actionConfigs].sort((left, right) => left.order - right.order)
+}
+
+/** Write a whole pipeline back, renumbering so order is dense and stable. */
+async function writePipeline(
+  configs: readonly ActionConfig[],
+  webhooks: Record<string, ActionWebhookSettings>,
+): Promise<void> {
+  const renumbered = configs.map((config, index) => ({ ...config, order: index }))
+  // Webhook settings for a configuration that no longer exists are dropped
+  // here rather than left to accumulate: a stale URL under a dead configId is
+  // a URL nobody can see and nobody can delete.
+  const live: Record<string, ActionWebhookSettings> = {}
+  for (const config of renumbered) {
+    const entry = webhooks[config.configId]
+    if (entry !== undefined) live[config.configId] = entry
+  }
+  await apply({ actionConfigs: renumbered, actionWebhooks: live })
+}
+
+function labelled(text: string, control: HTMLElement): HTMLLabelElement {
+  const label = document.createElement('label')
+  label.className = 'actionField'
+  const span = document.createElement('span')
+  span.textContent = text
+  label.append(span, control)
+  return label
+}
+
+/**
+ * One row. Built with createElement rather than innerHTML because a webhook URL
+ * is user input and this is the one place it is displayed.
+ */
+function renderActionRow(
+  config: ActionConfig,
+  index: number,
+  total: number,
+  settings: Settings,
+): HTMLElement {
+  const manifest = BUILTIN_WEBHOOK_MANIFEST
+  const webhook = settings.actionWebhooks[config.configId] ?? { url: '' }
+
+  const article = document.createElement('article')
+  article.className = 'pluginEntry actionEntry'
+  article.dataset.configId = config.configId
+
+  const row = document.createElement('div')
+  row.className = 'pluginRow'
+
+  const name = document.createElement('span')
+  name.className = 'pluginName'
+  name.textContent = manifest.name
+
+  // STATUS COMES FROM REALITY, not from a constant. #57 was Settings claiming a
+  // plugin was "coming soon" two releases after it shipped; the same mistake
+  // here would be a row that says Ready with nowhere to post.
+  const state = document.createElement('span')
+  state.className = 'pluginStatus'
+  if (!config.enabled) {
+    state.textContent = t('settings.actionStateDisabled')
+  } else if (webhook.url === '') {
+    state.textContent = t('settings.actionStateNoUrl')
+  } else if (!isAcceptableWebhookUrl(webhook.url)) {
+    state.textContent = t('settings.actionStateBadUrl')
+  } else {
+    state.textContent = t('settings.actionStateReady')
+  }
+
+  const enabled = document.createElement('input')
+  enabled.type = 'checkbox'
+  enabled.checked = config.enabled
+  enabled.setAttribute('aria-label', manifest.name)
+  enabled.addEventListener('change', () => {
+    const next = actionConfigsOf(settings).map((candidate) =>
+      candidate.configId === config.configId
+        ? { ...candidate, enabled: enabled.checked }
+        : candidate,
+    )
+    void writePipeline(next, settings.actionWebhooks)
+  })
+
+  const action = document.createElement('span')
+  action.className = 'pluginAction'
+  action.append(enabled)
+  row.append(name, state, action)
+
+  const panel = document.createElement('div')
+  panel.className = 'pluginDetailPanel'
+
+  // PERMISSIONS ARE SHOWN BEFORE ENABLING, and an action that sends pack data
+  // off the machine says so in those words (GOAL.md).
+  const permissions = document.createElement('p')
+  permissions.className = 'pluginSummary'
+  permissions.textContent = t('settings.actionPermissions', {
+    permissions: manifest.permissions.join(', '),
+  })
+  panel.append(permissions)
+  if (sendsDataOffMachine(manifest.permissions)) {
+    const warning = document.createElement('p')
+    warning.className = 'pluginSummary actionOffMachine'
+    warning.textContent = t('settings.actionOffMachine')
+    panel.append(warning)
+  }
+
+  const url = document.createElement('input')
+  url.type = 'text'
+  url.spellcheck = false
+  url.value = webhook.url
+  url.placeholder = 'https://example.internal/capturepack'
+  url.addEventListener('change', () => {
+    void writePipeline(actionConfigsOf(settings), {
+      ...settings.actionWebhooks,
+      [config.configId]: { url: url.value.trim() },
+    })
+  })
+  panel.append(labelled(t('settings.actionUrl'), url))
+
+  const continueOnFailure = document.createElement('input')
+  continueOnFailure.type = 'checkbox'
+  continueOnFailure.checked = config.continueOnFailure
+  continueOnFailure.addEventListener('change', () => {
+    const next = actionConfigsOf(settings).map((candidate) =>
+      candidate.configId === config.configId
+        ? { ...candidate, continueOnFailure: continueOnFailure.checked }
+        : candidate,
+    )
+    void writePipeline(next, settings.actionWebhooks)
+  })
+  panel.append(labelled(t('settings.actionContinue'), continueOnFailure))
+
+  const timeout = document.createElement('input')
+  timeout.type = 'number'
+  timeout.min = '1'
+  timeout.max = String(ACTION_TIMEOUT_MAX_MS / 1000)
+  timeout.value = String(Math.round(config.timeoutMs / 1000))
+  timeout.addEventListener('change', () => {
+    const seconds = Number(timeout.value)
+    const next = actionConfigsOf(settings).map((candidate) =>
+      candidate.configId === config.configId
+        ? { ...candidate, timeoutMs: normalizeActionTimeout(seconds * 1000, candidate.timeoutMs) }
+        : candidate,
+    )
+    void writePipeline(next, settings.actionWebhooks)
+  })
+  panel.append(labelled(t('settings.actionTimeout'), timeout))
+
+  const retries = document.createElement('input')
+  retries.type = 'number'
+  retries.min = '0'
+  retries.max = '5'
+  retries.value = String(config.retries)
+  retries.addEventListener('change', () => {
+    const next = actionConfigsOf(settings).map((candidate) =>
+      candidate.configId === config.configId
+        ? { ...candidate, retries: Math.max(0, Math.min(5, Math.floor(Number(retries.value)))) }
+        : candidate,
+    )
+    void writePipeline(next, settings.actionWebhooks)
+  })
+  panel.append(labelled(t('settings.actionRetries'), retries))
+
+  // ORDER IS THE PIPELINE MODEL, so it gets real controls. Buttons rather than
+  // drag: they work from the keyboard, they announce themselves to a screen
+  // reader, and #69 asks for reorderable, not for dragging.
+  const controls = document.createElement('div')
+  controls.className = 'actionControls'
+  const move = (delta: number): void => {
+    const ordered = actionConfigsOf(settings)
+    const target = index + delta
+    if (target < 0 || target >= ordered.length) return
+    const swapped = [...ordered]
+    const moving = swapped[index]
+    const other = swapped[target]
+    if (moving === undefined || other === undefined) return
+    swapped[index] = other
+    swapped[target] = moving
+    void writePipeline(swapped, settings.actionWebhooks)
+  }
+  const up = document.createElement('button')
+  up.type = 'button'
+  up.className = 'quiet'
+  up.textContent = '▲'
+  up.title = t('settings.actionMoveUp')
+  up.setAttribute('aria-label', t('settings.actionMoveUp'))
+  up.disabled = index === 0
+  up.addEventListener('click', () => {
+    move(-1)
+  })
+  const down = document.createElement('button')
+  down.type = 'button'
+  down.className = 'quiet'
+  down.textContent = '▼'
+  down.title = t('settings.actionMoveDown')
+  down.setAttribute('aria-label', t('settings.actionMoveDown'))
+  down.disabled = index === total - 1
+  down.addEventListener('click', () => {
+    move(1)
+  })
+  const remove = document.createElement('button')
+  remove.type = 'button'
+  remove.className = 'quiet'
+  remove.textContent = t('settings.actionRemove')
+  remove.addEventListener('click', () => {
+    void writePipeline(
+      actionConfigsOf(settings).filter((candidate) => candidate.configId !== config.configId),
+      settings.actionWebhooks,
+    )
+  })
+  controls.append(up, down, remove)
+  panel.append(controls)
+
+  article.append(row, panel)
+  return article
+}
+
+function renderActionList(): void {
+  if (current === null) return
+  const settings = current
+  const configs = actionConfigsOf(settings)
+  actionList.replaceChildren(
+    ...configs.map((config, index) => renderActionRow(config, index, configs.length, settings)),
+  )
+  actionsEmpty.hidden = configs.length > 0
+}
+
+actionAddBtn.addEventListener('click', () => {
+  if (current === null) return
+  const settings = current
+  const configId = crypto.randomUUID()
+  const added: ActionConfig = {
+    actionId: BUILTIN_WEBHOOK_MANIFEST.id,
+    configId,
+    // A NEW ACTION STARTS OFF. It has nowhere to post yet, and an action that
+    // enabled itself on creation would fire on the next save against an empty
+    // URL — a failure notice for something the user was still configuring.
+    enabled: false,
+    order: settings.actionConfigs.length,
+    continueOnFailure: false,
+    timeoutMs: ACTION_TIMEOUT_DEFAULT_MS,
+    retries: 0,
+  }
+  void writePipeline([...actionConfigsOf(settings), added], {
+    ...settings.actionWebhooks,
+    [configId]: { url: '' },
+  })
+})
+
 function syncControls(): void {
   if (current === null) return
   const s = current
@@ -1552,6 +1823,7 @@ function syncControls(): void {
   syncImageHotkeyField()
   languageSelect.value = s.language
   packLanguageSelect.value = s.packLanguage
+  renderActionList()
 }
 
 window.addEventListener('keydown', (event) => {

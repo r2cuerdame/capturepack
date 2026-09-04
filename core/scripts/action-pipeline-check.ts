@@ -350,7 +350,10 @@ console.log('\nTHE MODULES STAY REACHABLE WITHOUT A STUB')
 // them — the half this repository has already paid for leaving out once.
 console.log('\nTHE APP ACTUALLY RUNS THE PIPELINE')
 {
-  const read = (relative: string): string => readFileSync(path.join(process.cwd(), relative), 'utf8')
+  // Line endings normalized: these files are CRLF on disk, and an assertion
+  // written with a bare newline would fail for the wrong reason.
+  const read = (relative: string): string =>
+    readFileSync(path.join(process.cwd(), relative), 'utf8').split('\r\n').join('\n')
   const session = read('src/main/session.ts')
   const settings = read('src/main/settings.ts')
   const onSave = read('src/main/actions/onSave.ts')
@@ -403,6 +406,100 @@ console.log('\nTHE APP ACTUALLY RUNS THE PIPELINE')
   check(
     'a pack whose id cannot be read runs NOTHING — an action keyed on a guessed id could duplicate against the real one later',
     onSave.includes('if (packId === null) return []'),
+  )
+}
+
+// SETTINGS SHOWS BOTH PLUGIN KINDS, AND SHOWS THE ACTION HONESTLY (#69).
+console.log('\nSETTINGS > PLUGINS')
+{
+  // Line endings normalized: these files are CRLF on disk, and an assertion
+  // written with a bare newline would fail for the wrong reason.
+  const read = (relative: string): string =>
+    readFileSync(path.join(process.cwd(), relative), 'utf8').split('\r\n').join('\n')
+  const html = read('src/renderer/settings/settings.html')
+  const ui = read('src/renderer/settings/settings.ts')
+  const i18n = read('src/shared/i18n.ts')
+
+  check(
+    'the section has two named lists, not one undifferentiated pile',
+    html.includes('data-i18n="settings.providersGroup"') && html.includes('data-i18n="settings.actionsGroup"'),
+  )
+  check('there is somewhere to draw the configured actions', html.includes('id="actionList"'))
+  check('and a way to add one', html.includes('id="actionAddBtn"'))
+  check('an empty pipeline says so rather than showing nothing', html.includes('id="actionsEmpty"'))
+
+  check('the renderer draws the list from the saved settings', ui.includes('function renderActionList()'))
+  check(
+    'and redraws it whenever the settings change, so a row can never show a value main rejected',
+    ui.includes('renderActionList()\n}'),
+  )
+  check(
+    'a row is built with createElement — a webhook URL is user input and this is where it is displayed',
+    ui.includes("document.createElement('input')") && !ui.includes('actionList.innerHTML'),
+  )
+  check(
+    'PERMISSIONS ARE SHOWN, from the manifest rather than from a hand-written list',
+    ui.includes("t('settings.actionPermissions', {") && ui.includes('manifest.permissions.join'),
+  )
+  check(
+    'an action that sends pack data off the machine says so, decided by the contract',
+    ui.includes('sendsDataOffMachine(manifest.permissions)') && ui.includes("t('settings.actionOffMachine')"),
+  )
+  check(
+    'status is read from reality — disabled, no URL, an unusable URL, or ready',
+    ui.includes("t('settings.actionStateDisabled')")
+      && ui.includes("t('settings.actionStateNoUrl')")
+      && ui.includes("t('settings.actionStateBadUrl')")
+      && ui.includes("t('settings.actionStateReady')"),
+  )
+  check(
+    'the renderer judges a URL with the SAME rule main enforces',
+    ui.includes('isAcceptableWebhookUrl(webhook.url)')
+      && ui.includes("from '../../shared/actions'"),
+  )
+  check(
+    'ORDER IS REORDERABLE, and the order written back is dense rather than inherited from array position',
+    ui.includes("t('settings.actionMoveUp')")
+      && ui.includes("t('settings.actionMoveDown')")
+      && ui.includes('configs.map((config, index) => ({ ...config, order: index }))'),
+  )
+  check(
+    'a NEW action starts disabled — one that enabled itself would fire on the next save against an empty URL',
+    ui.includes('enabled: false,') && ui.includes('order: settings.actionConfigs.length,'),
+  )
+  check(
+    'webhook settings for a removed configuration are dropped, not left to accumulate under a dead id',
+    ui.includes('const live: Record<string, ActionWebhookSettings> = {}'),
+  )
+
+  const keys = [
+    'settings.providersGroup',
+    'settings.actionsGroup',
+    'settings.actionsNote',
+    'settings.actionsEmpty',
+    'settings.actionAdd',
+    'settings.actionStateDisabled',
+    'settings.actionStateNoUrl',
+    'settings.actionStateBadUrl',
+    'settings.actionStateReady',
+    'settings.actionPermissions',
+    'settings.actionOffMachine',
+    'settings.actionUrl',
+    'settings.actionContinue',
+    'settings.actionTimeout',
+    'settings.actionRetries',
+    'settings.actionMoveUp',
+    'settings.actionMoveDown',
+    'settings.actionRemove',
+  ]
+  const missing = keys.filter((key) => {
+    const matches = i18n.split(`'${key}':`).length - 1
+    return matches !== 9
+  })
+  check(
+    `all ${String(keys.length)} new Settings strings exist in all nine locales`,
+    missing.length === 0,
+    missing.join(', '),
   )
 }
 
