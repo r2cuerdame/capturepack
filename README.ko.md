@@ -32,7 +32,7 @@ AutomationId, 프로세스를 기록하고, 브라우저에서는 보이던 페�
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [다운로드](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-현재 공개 Windows 릴리스: **CapturePack 0.4.6**. 0.4.4에서는 기록에서 검토한
+현재 공개 Windows 릴리스: **CapturePack 0.5.0**. 0.4.4에서는 기록에서 검토한
 **공유용 사본**(`.share.zip`)을 만들 수 있습니다. 미디어는 검토한 주석 PNG 정지
 이미지뿐이며, 생성된 README, 오프라인 뷰어, 최소 목록이 함께 들어갑니다. 원본, 모든
 동영상, 구조화된 맥락은 제외됩니다. 전체 ZIP(`.zip`)에는 원본이 계속 포함됩니다.
@@ -233,7 +233,7 @@ claude mcp add --transport http capturepack http://127.0.0.1:39393/mcp
 
 ## 상태
 
-**현재 공개 Windows 다운로드는 0.4.6입니다.** CapturePack은 아직 초기 단계
+**현재 공개 Windows 다운로드는 0.5.0입니다.** CapturePack은 아직 초기 단계
 프로젝트이므로, 문제를 보고할 때는 원본 팩을 보관해 두세요. 제품이 향하는 방향은
 [GOAL.md](GOAL.md)에, 다음에 올 것은 [ROADMAP.md](ROADMAP.md)에 있습니다.
 
@@ -254,7 +254,7 @@ claude mcp add --transport http capturepack http://127.0.0.1:39393/mcp
 - [MCP](docs/MCP.md)와 [temporal provider API](docs/temporal-provider-api.md) —
   저장된 팩에 대한 읽기 전용 접근과 맥락 제공자 연동입니다.
 
-CapturePack `0.4.6`는 애플리케이션 버전입니다. 팩의 `format_version`은 추가 방식의
+CapturePack `0.5.0`는 애플리케이션 버전입니다. 팩의 `format_version`은 추가 방식의
 포맷 변경을 따라 독립적으로 올라갑니다. 읽는 쪽은 앱 버전으로 포맷 지원 범위를
 추측하지 말고 [SPEC.md](SPEC.md)를 따라야 합니다.
 

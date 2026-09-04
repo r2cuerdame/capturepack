@@ -35,7 +35,7 @@ que funciona sem IA, sem conta e sem serviço na nuvem.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Baixar](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Versão pública atual para Windows: **CapturePack 0.4.6**. Na versão 0.4.4, o
+Versão pública atual para Windows: **CapturePack 0.5.0**. Na versão 0.4.4, o
 Histórico cria uma **Cópia para compartilhar** (`.share.zip`) cujas únicas mídias
 são imagens estáticas PNG anotadas e revisadas; acompanham-nas um README gerado,
 um visualizador offline e um inventário mínimo. Ela exclui originais, todos os
@@ -258,7 +258,7 @@ Ferramentas, configuração de clientes e ajustes: [docs/MCP.md](docs/MCP.md).
 
 ## Estado
 
-**0.4.6 é o download público atual para Windows.** O CapturePack continua sendo
+**0.5.0 é o download público atual para Windows.** O CapturePack continua sendo
 um projeto em estágio inicial, então guarde o pack original ao relatar um
 problema e veja o [GOAL.md](GOAL.md) para a visão do produto e o
 [ROADMAP.md](ROADMAP.md) para o que vem a seguir.
@@ -282,7 +282,7 @@ deslocamento global fixo no código.
   — acesso somente leitura a packs salvos e integração de provedores de
   contexto.
 
-CapturePack `0.4.6` é a versão do aplicativo. O `format_version` do pack evolui
+CapturePack `0.5.0` é a versão do aplicativo. O `format_version` do pack evolui
 de forma independente, por mudanças aditivas de formato; leitores devem seguir o
 [SPEC.md](SPEC.md) em vez de deduzir o suporte ao formato pela versão do app.
 

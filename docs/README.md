@@ -17,13 +17,13 @@ documents preserve evidence but are not instructions for the current release.
 | [Changelog](../CHANGELOG.md) | Shipped application changes by version |
 
 The application version and pack format version are separate. CapturePack
-application `0.4.6` can generate packs using newer additive format versions;
+application `0.5.0` can generate packs using newer additive format versions;
 the optional offline viewer is defined for compatible packs at format `0.5.0`
 or newer, and a pack declares up to `0.8.0` when it carries input events. Plugin
 payloads carry their own versions — `windows-uia` is at `0.5.0` since it began
 persisting each window's client rectangle.
 
-**Current state.** `0.4.6` is the public release and `main` carries it. History
+**Current state.** `0.5.0` is the public release and `main` carries it. History
 can create a reviewed `capturepack-share` `.share.zip` whose only media are
 declared annotated PNG stills; a generated README, offline viewer and minimal
 inventory accompany them. The writer deterministically re-encodes their pixels

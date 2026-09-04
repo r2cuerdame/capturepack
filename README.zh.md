@@ -27,7 +27,7 @@ AI 不必只凭像素去猜。
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [下载](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-当前公开 Windows 版本：**CapturePack 0.4.6**。0.4.4 可从历史记录创建经检查的
+当前公开 Windows 版本：**CapturePack 0.5.0**。0.4.4 可从历史记录创建经检查的
 **分享副本**（`.share.zip`）；其中唯一的媒体是经检查的带批注 PNG 静态图片，并附带
 生成的 README、离线查看器和最小清单。原始内容、所有视频和结构化上下文都会被排除。
 完整 ZIP（`.zip`）仍会包含原始内容。
@@ -207,7 +207,7 @@ claude mcp add --transport http capturepack http://127.0.0.1:39393/mcp
 
 ## 状态
 
-**0.4.6 是当前公开的 Windows 下载版本。** CapturePack 仍是一个早期阶段的项目，因此
+**0.5.0 是当前公开的 Windows 下载版本。** CapturePack 仍是一个早期阶段的项目，因此
 报告问题时请保留原始包；产品愿景见 [GOAL.md](GOAL.md)，接下来的计划见
 [ROADMAP.md](ROADMAP.md)。
 
@@ -224,7 +224,7 @@ CapturePack 宁可如实记录含糊的时间证据，也不用一个写死的�
 - [MCP](docs/MCP.md)与[时间上下文提供方 API](docs/temporal-provider-api.md)
   —— 只读的已保存包访问，以及上下文提供方集成。
 
-CapturePack `0.4.6` 是应用版本号。包的 `format_version` 通过纯追加式的格式变更独立
+CapturePack `0.5.0` 是应用版本号。包的 `format_version` 通过纯追加式的格式变更独立
 演进；读取方应当遵循 [SPEC.md](SPEC.md)，而不是从应用版本推断格式支持情况。
 
 ## 安全与签名

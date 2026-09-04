@@ -1,6 +1,6 @@
-# CapturePack handoff — after v0.4.6
+# CapturePack handoff — after v0.5.0
 
-Last verified: 2026-09-04 (Asia/Seoul)
+Last verified: 2026-09-05 (Asia/Seoul)
 
 This is the current baton-pass document. Read it before changing capture,
 timeline, object-picking, multi-display, viewer, packaging, or release code.
@@ -24,21 +24,21 @@ CapturePack **0.4.5** is the current stable Windows release.
 
 | Item | Current state |
 |---|---|
-| Public release | [v0.4.6](https://github.com/r2cuerdame/capturepack/releases/tag/v0.4.6), stable (`draft=false`, `prerelease=false`) |
-| Release source | Immutable `v0.4.6` tag; never move or replace it |
+| Public release | [v0.5.0](https://github.com/r2cuerdame/capturepack/releases/tag/v0.5.0), stable (`draft=false`, `prerelease=false`) |
+| Release source | Immutable `v0.5.0` tag; never move or replace it |
 | Release verification | The guarded Release workflow reran all 88 RC steps on the tagged source, built the Windows artifacts, and byte-verified the exact four-file draft before publication |
-| Delivery | Update-notice policy [#147](https://github.com/r2cuerdame/capturepack/issues/147) and the derived version gates [#148](https://github.com/r2cuerdame/capturepack/issues/148), listed under "What 0.4.6 contains" |
+| Delivery | The After Save Action host [#68](https://github.com/r2cuerdame/capturepack/issues/68) and the two-list plugin settings [#69](https://github.com/r2cuerdame/capturepack/issues/69), listed under "What 0.5.0 contains" |
 | Website | [capturepack.dev](https://capturepack.dev/), with all nine languages kept on the application version |
 
 The Release workflow and its remote byte verification are authoritative for the
 published installer's hashes. Do not reuse a local RC hash or any older release's
-values when checking 0.4.6.
+values when checking 0.5.0.
 
 ### Historical 0.4.1 publication evidence
 
 The following table and investigation record apply to **0.4.1 only**. They stay
 here because they established the release-verification discipline; they are not
-the current version or 0.4.6 asset metadata.
+the current version or 0.5.0 asset metadata.
 
 | Item | Verified state |
 |---|---|
@@ -105,10 +105,45 @@ A locally built RC installer under `core/release-rcNN/` has a different hash
 because it is a separate unsigned build. Use the public release's
 `SHA256SUMS.txt`, not a local build hash, when verifying a downloaded installer.
 
-0.4.6 was prepared and released on `main` itself — there is no `release/0.4.6`
-branch. Always begin with
+0.5.0 was prepared on `feat/v0.5.0-action-host` and released from `main`.
+Always begin with
 `git status --short --branch`, `git fetch`, and a non-destructive comparison
 before choosing a branch. Never reset or clean away an active worktree.
+
+## What 0.5.0 contains
+
+**The second plugin kind exists** ([#68](https://github.com/r2cuerdame/capturepack/issues/68),
+[#69](https://github.com/r2cuerdame/capturepack/issues/69)). Temporal Context
+Providers have shipped since 0.2.0; After Save Actions are the other half of the
+plugin system GOAL.md describes, and they share nothing with providers but the
+Settings section. A provider runs all day and keeps a temporal buffer; an action
+never runs until a pack exists.
+
+The rules live in two dependency-free modules — `core/src/shared/actions.ts` and
+`core/src/shared/actionPipeline.ts`. That is deliberate and asserted:
+`check:actions` imports the real production code with no Electron stub, so what
+the gate holds cannot drift away from what the app follows.
+
+The pipeline's invariant is that the save is already done. It never rejects,
+every configured step produces exactly one result row, an action that throws a
+non-Error still produces a readable failure, and an action that never returns is
+abandoned rather than waited for. The timeout is a race and not an abort on
+purpose: a third-party action cannot be made to stop, so the host stops
+listening instead.
+
+Firing happens at two moments in `session.ts`, both chosen because the pack
+genuinely reaches that state there rather than because the call was convenient:
+immediately after `notePackSaved()`, the line the save flow itself documents as
+"everything above this is what saved means"; and when the derived render reports
+`done`. Neither is awaited.
+
+**Verified against a real receiver, not a mock.** An unattended capture posted
+over a real socket to a local HTTP server: `builtin.webhook ok (1 attempt, 19
+ms)` at source-ready, then `skipped — already completed for this pack` at
+annotated-replay-ready, with exactly one delivery on the wire. That test is also
+what found the summary reading `manifest.app_version`, a field the format does
+not have — the version lives under `generator`. `check:actions` now holds every
+field the summary reads against `docs/schemas/manifest.schema.json`.
 
 ## What 0.4.6 contains
 
@@ -380,7 +415,7 @@ because breaking them is quiet:
   save and a render must not multiply decoders or encoders.
 
 Application version and pack format version are different contracts.
-`core/package.json` is application version `0.4.6`; packs containing the
+`core/package.json` is application version `0.5.0`; packs containing the
 optional viewer declare a compatible format version of at least `0.5.0`.
 
 ## Measured characteristic: the picture lags its own timestamp
@@ -730,9 +765,9 @@ A push or tag push does not publish CapturePack. Publication is a manual
 `workflow_dispatch` that runs the full QA/build/package/remote-byte-verification
 sequence described in [RELEASING.md](RELEASING.md).
 
-Never overwrite a public version. A product hotfix after 0.4.6 must use a higher
+Never overwrite a public version. A product hotfix after 0.5.0 must use a higher
 version and fix forward. Documentation-only commits may follow the release on
-`main`, but they do not alter the binaries identified by the `v0.4.6` tag.
+`main`, but they do not alter the binaries identified by the `v0.5.0` tag.
 
 ## Suggested next order
 

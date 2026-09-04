@@ -4,6 +4,45 @@ All notable changes to CapturePack. Format follows [Keep a Changelog](https://ke
 this project uses [semantic versioning](https://semver.org/) for the app, and the pack
 format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 
+## 0.5.0 — 2026-09-05
+
+### Added
+
+- **After Save Actions.** The second plugin kind: an action consumes a FINISHED
+  pack and never participates in capture. A pipeline is configured in
+  Settings > Plugins with an order, a per-action timeout and retry count, and
+  whether the pipeline continues past a failure. Actions declare the pack state
+  they need — `captured` through `complete` — so a metadata-only action runs the
+  moment the sources are durable while one that needs the annotated replay waits
+  for the background render and is simply run again when it arrives. Duplicates
+  are prevented by an idempotency key of pack id + action id + config id, kept in
+  a bounded ledger outside the pack
+  ([#68](https://github.com/r2cuerdame/capturepack/issues/68)).
+- **One reference action: an HTTP webhook.** It posts a summary read from the
+  saved manifest — pack id, folder name and path, creation time, capture kind,
+  display count, application and format version. No media, no annotations, no
+  timeline, no structured capture context: `manifest.json` is the only file it
+  opens. `http` is refused except on loopback, because carrying a secret is this
+  action's reason to exist, and the secret itself is encrypted through
+  `safeStorage` and never written to `settings.json` or into a pack. Jira,
+  Redmine, Slack and email remain explicitly not Core's job.
+- **Settings > Plugins is two lists.** Temporal Context Providers and After Save
+  Actions, which share nothing but the section. An action row shows its
+  permissions read from the manifest, says in those words when it sends pack
+  information off the machine, and reports what is actually true — disabled, no
+  URL yet, a URL that will not be used, or ready — judged with the same rule main
+  enforces. Order is reorderable from the keyboard, because order is the whole
+  pipeline model
+  ([#69](https://github.com/r2cuerdame/capturepack/issues/69)).
+
+### Fixed
+
+- **A failed action never costs a save.** The pack on disk is the original and is
+  durable before any action runs; neither firing is awaited. An action that
+  throws something which is not an `Error`, or that never returns at all, is
+  abandoned and reported as its own failure — announced by name in all nine
+  locales, next to a pack that is already safe.
+
 ## 0.4.6 — 2026-09-04
 
 ### Fixed
