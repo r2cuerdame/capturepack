@@ -503,6 +503,69 @@ console.log('\nSETTINGS > PLUGINS')
   )
 }
 
+// A FIELD NAME THAT LOOKS OBVIOUS AND DOES NOT EXIST.
+//
+// The webhook summary read `manifest.app_version` and posted null to a real
+// receiver in the end-to-end test. There is no top-level app version: SPEC puts
+// the writing tool under `generator`. Nothing caught it, because a reader that
+// asks for a missing key is not an error in any language involved — it is a
+// null that travels all the way to somebody's endpoint and gets trusted.
+//
+// So the fields the summary reads are held against the published schema.
+console.log('\nTHE WEBHOOK SUMMARY READS FIELDS THAT EXIST')
+{
+  const readNorm = (relative: string): string =>
+    readFileSync(path.join(process.cwd(), relative), 'utf8').split('\r\n').join('\n')
+  // CODE, NOT PROSE. Both assertions below first failed against the comment
+  // that EXPLAINS the bug they defend — the same mistake, twice, in the same
+  // check. A source test that reads its own documentation is not a source test.
+  const stripComments = (source: string): string =>
+    source
+      .split('\n')
+      .map((line) => {
+        const trimmed = line.trimStart()
+        if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) return ''
+        const marker = line.indexOf('//')
+        return marker < 0 ? line : line.slice(0, marker)
+      })
+      .join('\n')
+  const webhook = stripComments(readNorm('src/main/actions/webhook.ts'))
+  const schemaText = readNorm('../docs/schemas/manifest.schema.json')
+  const schema: unknown = JSON.parse(schemaText)
+  const properties =
+    typeof schema === 'object' && schema !== null
+      ? ((schema as Record<string, unknown>).properties as Record<string, unknown> | undefined)
+      : undefined
+
+  const declared = (name: string): boolean => properties !== undefined && name in properties
+  for (const field of ['id', 'created_at', 'capture_kind', 'format_version', 'generator', 'media']) {
+    check(`the schema declares ${field}, which the summary reads`, declared(field))
+  }
+  check(
+    'the summary takes the application version from generator, where the format actually puts it',
+    webhook.includes('asString(generator.version)'),
+  )
+  check(
+    'and no longer reads a top-level app_version, which never existed',
+    !webhook.includes('record.app_version'),
+  )
+  check(
+    'the summary carries the FORMAT version too — it moves independently of the application version',
+    webhook.includes("asString(record.format_version)"),
+  )
+  check(
+    'manifest.json is the ONLY file the action opens — no media, annotations, timeline or context',
+    (webhook.match(/readFile\(/gu) ?? []).length === 1 && webhook.includes("path.join(packDir, 'manifest.json')"),
+  )
+  check(
+    'and no pack file name other than the manifest appears in its code at all',
+    !webhook.includes('annotations.json')
+      && !webhook.includes('timeline.json')
+      && !webhook.includes('snapshot.png')
+      && !webhook.includes('replay.webm'),
+  )
+}
+
 if (failed > 0) {
   console.error(`\naction-pipeline-check failed: ${failed}`)
   process.exitCode = 1

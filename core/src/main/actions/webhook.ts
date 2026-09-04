@@ -41,7 +41,10 @@ interface PackSummary {
   createdAt: string | null
   captureKind: string | null
   displayCount: number | null
+  /** The writing application's version, from manifest.generator.version. */
   appVersion: string | null
+  /** The pack FORMAT version, which moves independently of the app's. */
+  formatVersion: string | null
 }
 
 /**
@@ -59,6 +62,16 @@ export async function readPackSummary(packDir: string): Promise<PackSummary> {
     ? (record.media as Record<string, unknown>)
     : {}
   const displays = Array.isArray(media.displays) ? media.displays : null
+  // THE VERSION IS UNDER generator, NOT AT THE TOP LEVEL.
+  //
+  // This read `record.app_version` and shipped null to a real receiver in the
+  // end-to-end test. SPEC §5 puts the writing tool in `generator`, and there is
+  // no top-level app version at all — a field name that looked obvious and did
+  // not exist, which is the whole reason the summary is read back from a pack
+  // that was actually written rather than from the type that describes it.
+  const generator = typeof record.generator === 'object' && record.generator !== null
+    ? (record.generator as Record<string, unknown>)
+    : {}
   const asString = (value: unknown): string | null => (typeof value === 'string' ? value : null)
   return {
     packId: asString(record.id) ?? '',
@@ -67,7 +80,8 @@ export async function readPackSummary(packDir: string): Promise<PackSummary> {
     createdAt: asString(record.created_at),
     captureKind: asString(record.capture_kind),
     displayCount: displays === null ? null : displays.length,
-    appVersion: asString(record.app_version),
+    appVersion: asString(generator.version),
+    formatVersion: asString(record.format_version),
   }
 }
 
