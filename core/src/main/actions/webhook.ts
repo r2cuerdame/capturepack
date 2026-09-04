@@ -16,29 +16,16 @@
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import {
-  ACTION_PROTOCOL_VERSION,
-  type ActionManifest,
+  BUILTIN_WEBHOOK_ACTION_ID,
+  BUILTIN_WEBHOOK_MANIFEST,
+  isAcceptableWebhookUrl,
 } from '../../shared/actions'
 
-export const WEBHOOK_ACTION_ID = 'builtin.webhook'
+export { isAcceptableWebhookUrl }
 
-export const WEBHOOK_MANIFEST: ActionManifest = {
-  id: WEBHOOK_ACTION_ID,
-  name: 'HTTP webhook',
-  type: 'after-save-action',
-  protocolVersion: ACTION_PROTOCOL_VERSION,
-  entry: 'builtin:webhook',
-  // read-pack to read the manifest it summarises; network because the summary
-  // leaves this machine, which is the sentence Settings shows the user.
-  permissions: ['read-pack', 'network'],
-  // The summary names the pack's own media, so it waits until the sources are
-  // on disk. It deliberately does NOT wait for the annotated replay: a webhook
-  // that fires minutes after the save is a webhook nobody wired to anything.
-  requiredPackState: 'source-ready',
-  // A second POST is a second notification in whatever it feeds. The ledger
-  // suppresses it for the same pack and the same configuration.
-  idempotent: true,
-}
+// The manifest lives in the contract so the Settings renderer can read it too.
+export const WEBHOOK_ACTION_ID = BUILTIN_WEBHOOK_ACTION_ID
+export const WEBHOOK_MANIFEST = BUILTIN_WEBHOOK_MANIFEST
 
 export interface WebhookDelivery {
   url: string
@@ -126,22 +113,3 @@ export async function deliverWebhook(packDir: string, delivery: WebhookDelivery)
   }
 }
 
-/**
- * Whether a configured URL is one this action will post to.
- *
- * http is refused: a secret in an Authorization header over plaintext is a
- * secret handed to the network, and this action's whole reason to exist is
- * carrying one. Loopback is the exception, because that is where someone tests
- * their own receiver.
- */
-export function isAcceptableWebhookUrl(candidate: string): boolean {
-  let url: URL
-  try {
-    url = new URL(candidate)
-  } catch {
-    return false
-  }
-  if (url.protocol === 'https:') return true
-  if (url.protocol !== 'http:') return false
-  return url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '::1'
-}

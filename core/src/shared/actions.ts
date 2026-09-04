@@ -168,6 +168,57 @@ export function idempotencyKey(packId: string, actionId: string, configId: strin
   return `${packId} ${actionId} ${configId}`
 }
 
+export const BUILTIN_WEBHOOK_ACTION_ID = 'builtin.webhook'
+
+/**
+ * The one reference action this build ships (#68).
+ *
+ * It lives in the contract rather than beside its implementation because the
+ * Settings renderer has to render it — its name, its permissions, the pack
+ * state it waits for — and a renderer may not import from the main process.
+ * One definition, read by both sides.
+ */
+export const BUILTIN_WEBHOOK_MANIFEST: ActionManifest = {
+  id: BUILTIN_WEBHOOK_ACTION_ID,
+  name: 'HTTP webhook',
+  type: 'after-save-action',
+  protocolVersion: ACTION_PROTOCOL_VERSION,
+  entry: 'builtin:webhook',
+  // read-pack to read the manifest it summarises; network because the summary
+  // leaves this machine, which is the sentence Settings shows the user.
+  permissions: ['read-pack', 'network'],
+  // The summary names the pack's own media, so it waits for the sources. It
+  // deliberately does NOT wait for the annotated replay: a webhook that fires
+  // minutes after the save is a webhook nobody wired to anything.
+  requiredPackState: 'source-ready',
+  // A second POST is a second notification in whatever it feeds.
+  idempotent: true,
+}
+
+/**
+ * Whether the built-in webhook will post to this URL.
+ *
+ * http is refused: a secret in an Authorization header over plaintext is a
+ * secret handed to the network, and carrying one is this action's reason to
+ * exist. Loopback is the exception, because that is where someone tests their
+ * own receiver.
+ *
+ * In the contract rather than beside the implementation so that Settings can
+ * say "this URL will not be used" BEFORE a save, instead of the user finding
+ * out from a failed action afterwards.
+ */
+export function isAcceptableWebhookUrl(candidate: string): boolean {
+  let url: URL
+  try {
+    url = new URL(candidate)
+  } catch {
+    return false
+  }
+  if (url.protocol === 'https:') return true
+  if (url.protocol !== 'http:') return false
+  return url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]'
+}
+
 export interface PipelineStep {
   manifest: ActionManifest
   config: ActionConfig

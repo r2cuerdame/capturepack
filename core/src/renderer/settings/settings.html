@@ -381,6 +381,7 @@
 
     <section aria-labelledby="hPlugins">
       <h2 id="hPlugins" data-i18n="settings.pluginsSection">Plugins</h2>
+      <h3 class="pluginGroup" id="hProviders" data-i18n="settings.providersGroup">Temporal Context Providers</h3>
       <!-- Both shipped context providers are peers: the row owns live status
            and its real switch; "?" owns explanation only; the chevron owns
            operational detail only. Keeping those controls independent prevents
@@ -531,6 +532,17 @@
       <!-- Unity / Unreal / VS Code / Git used to sit here as "Coming soon" rows.
            They return only when a real plugin exists, with this same truthful
            status/switch/help/detail structure. -->
+
+      <!-- AFTER SAVE ACTIONS (#68, #69).
+           The second plugin kind, and it shares nothing with the first but this
+           section. A provider runs all day; an action never runs until a pack
+           exists. ORDER IS THE PIPELINE MODEL, so the rows are reorderable and
+           the order is persisted rather than inferred from array position. -->
+      <h3 class="pluginGroup" id="hActions" data-i18n="settings.actionsGroup">After Save Actions</h3>
+      <p class="pluginGroupNote" id="actionsNote" data-i18n="settings.actionsNote">An action runs after a pack is saved. The saved folder is the original — an action that fails never changes it, and can be retried on its own.</p>
+      <div id="actionList"></div>
+      <p class="pluginGroupNote" id="actionsEmpty" data-i18n="settings.actionsEmpty">No action is configured. Nothing runs after a save.</p>
+      <button id="actionAddBtn" class="quiet" type="button" data-i18n="settings.actionAdd">Add an HTTP webhook</button>
     </section>
 
     <footer id="about">
