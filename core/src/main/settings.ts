@@ -1,4 +1,6 @@
 // Settings persistence: JSON file in userData, tolerant of missing/corrupt content.
+import { normalizeActionTimeout, type ActionConfig } from '../shared/actions'
+import type { ActionWebhookSettings } from '../shared/types'
 import { app } from 'electron'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
@@ -67,6 +69,11 @@ function defaultSettings(): Settings {
     // keeps everything, the mode is a mode rather than a button, the panel
     // states what the next run would take before any run happens, and what the
     // run takes still goes to the Recycle Bin.
+    // No action is configured for a new user. An After Save Action is a thing
+    // someone deliberately wires to their own system, and a default one would
+    // be a default that sends data somewhere.
+    actionConfigs: [],
+    actionWebhooks: {},
     storageRetentionDays: RETENTION_KEEP_EVERYTHING,
     // The bar's denominator from the first launch, so the History header can
     // say something honest before the user has an opinion about size. It only
@@ -319,6 +326,8 @@ const SETTINGS_KEY_SET: Record<keyof Settings, true> = {
   mcpReadOnly: true,
   mcpWatchExportFolder: true,
   mcpLogRequests: true,
+  actionConfigs: true,
+  actionWebhooks: true,
 }
 const SETTINGS_KEYS = Object.keys(SETTINGS_KEY_SET) as Array<keyof Settings>
 
@@ -414,6 +423,65 @@ function isPackLanguage(value: string): boolean {
 
 // Known keys are validated against defaults; unknown keys ride along so a newer
 // version's settings survive a downgrade.
+/**
+ * Read the persisted After Save Action configurations (#68).
+ *
+ * Every field is checked, and one bad entry costs only that entry. A pipeline
+ * is something a user built by hand in Settings; a single malformed row in a
+ * hand-edited settings.json must not silently empty the whole pipeline, and a
+ * row that cannot be understood must not be run.
+ */
+function readActionConfigs(value: unknown, base: ActionConfig[]): ActionConfig[] {
+  if (!Array.isArray(value)) return base
+  const out: ActionConfig[] = []
+  const seen = new Set<string>()
+  for (const entry of value) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const record = entry as Record<string, unknown>
+    const actionId = typeof record.actionId === 'string' ? record.actionId : ''
+    const configId = typeof record.configId === 'string' ? record.configId : ''
+    // Both halves of the idempotency key must be real, and a duplicated
+    // configId would make two rows share one key and one stored secret.
+    if (actionId === '' || configId === '' || seen.has(configId)) continue
+    seen.add(configId)
+    out.push({
+      actionId,
+      configId,
+      enabled: typeof record.enabled === 'boolean' ? record.enabled : false,
+      order:
+        typeof record.order === 'number' && Number.isFinite(record.order)
+          ? Math.round(record.order)
+          : out.length,
+      continueOnFailure:
+        typeof record.continueOnFailure === 'boolean' ? record.continueOnFailure : false,
+      timeoutMs: normalizeActionTimeout(
+        typeof record.timeoutMs === 'number' ? record.timeoutMs : Number.NaN,
+      ),
+      retries:
+        typeof record.retries === 'number' && Number.isFinite(record.retries)
+          ? Math.max(0, Math.min(5, Math.floor(record.retries)))
+          : 0,
+    })
+  }
+  return out
+}
+
+/** Read the per-configuration webhook settings. The secret is never here. */
+function readActionWebhooks(
+  value: unknown,
+  base: Record<string, ActionWebhookSettings>,
+): Record<string, ActionWebhookSettings> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return base
+  const out: Record<string, ActionWebhookSettings> = {}
+  for (const [configId, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const url = (entry as Record<string, unknown>).url
+    if (typeof url !== 'string') continue
+    out[configId] = { url }
+  }
+  return out
+}
+
 function mergeSettings(base: Settings, raw: Record<string, unknown>): Settings {
   const known: Settings = {
     // Carried through, never invented here: migrateSettings() is the only place
@@ -448,6 +516,8 @@ function mergeSettings(base: Settings, raw: Record<string, unknown>): Settings {
     // direction by construction: a typo in a hand-edited settings.json must
     // never resolve to a shorter retention than the user asked for, and the
     // enumerated list is what makes "3.5" or "365" impossible to express.
+    actionConfigs: readActionConfigs(raw.actionConfigs, base.actionConfigs),
+    actionWebhooks: readActionWebhooks(raw.actionWebhooks, base.actionWebhooks),
     storageRetentionDays: isRetentionDays(raw.storageRetentionDays)
       ? raw.storageRetentionDays
       : base.storageRetentionDays,

@@ -144,6 +144,7 @@ import { copyPngToClipboard } from './clipboard'
 import { logError, logInfo, logWarn } from './log'
 import { openPack } from './mcp/store'
 import { showSaveToast, updateToastRenderStatus } from './saveToast'
+import { runActionsAtState } from './actions/onSave'
 import {
   noteFlowEnded,
   notePackSaved,
@@ -2573,6 +2574,13 @@ async function runFlow(settings: Settings): Promise<void> {
         // source publication — everything above this line is what "saved" means
         // — and a no-op on every ordinary launch.
         notePackSaved(savedHandle.dirPath)
+        // AFTER SAVE ACTIONS, at the first state that can carry one (#68).
+        //
+        // Deliberately not awaited: the pack is durable, this function's caller
+        // is the save flow, and an action is never allowed to hold up the
+        // return of a folder that already exists. Failures are announced by
+        // name from inside; nothing here can throw.
+        void runActionsAtState(savedHandle.dirPath, 'source-ready', settings)
         return savedHandle.dirPath
       },
       renderDerived: async (sourceDirPath) => {
@@ -2848,7 +2856,17 @@ function startFreshCaptureRenders(
         replayDurationMs: input.replayDurationMs,
         docLanguage: packDocLanguage(settings),
       },
-      (state) => updateToastRenderStatus(dirPath, state),
+      (state) => {
+        updateToastRenderStatus(dirPath, state)
+        // Actions that declared they need the annotated replay were BLOCKED at
+        // source-ready and get their second chance here. Re-running the whole
+        // pipeline is safe and is the point: decideStep refuses to repeat an
+        // idempotent action that already succeeded, so only what was waiting
+        // actually runs.
+        if (state === 'done') {
+          void runActionsAtState(dirPath, 'annotated-replay-ready', settings)
+        }
+      },
       (ratio) => updateToastRenderStatus(dirPath, 'rendering', ratio),
     )
   } else {
