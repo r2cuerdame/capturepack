@@ -499,7 +499,9 @@ async function main(): Promise<void> {
 
   const folders = packFolders(PACK_ROOT)
   if (folders.length === 0) {
-    console.log(`no packs under ${PACK_ROOT} — the fixture is the whole measurement here`)
+    console.log(
+      `no optional packs under ${PACK_ROOT} — the committed corpus is the complete measurement here`,
+    )
   } else {
     console.log(`--- ${String(folders.length)} pack(s) under ${PACK_ROOT} ---`)
     const medians: number[] = []
