@@ -168,14 +168,26 @@ Local first · Offline first · Open format · Plugin based · No cloud · No lo
 
 Generated CapturePacks should remain readable forever.
 
+## What CapturePack deliberately does not do
+
+CapturePack sets strict product boundaries by design:
+
+- **No cloud services, mandatory accounts, or silent telemetry:** CapturePack operates entirely offline and on-device. No telemetry, user tracking, or crash reports leave your machine. Its only outbound network call is the optional GitHub Releases check for app updates (which can be disabled in Settings → General).
+- **No keystroke logging:** CapturePack captures mouse coordinates, clicks, and window events on the replay clock. It never listens to or records keystrokes (`input.key.*` is reserved and forbidden).
+- **No hidden background pixels in region captures:** Region screenshot captures (`Ctrl+Alt+S`) record only the user-selected pixel rectangle and placement metadata. The application never secretly stores or retains the full desktop or unselected displays.
+- **No live object picking during video recording:** Walking accessibility trees during video recording costs substantial CPU time. CapturePack samples window geometry during video capture, but interactive control-level Object Pick belongs strictly to still images.
+- **No unprompted or silent deletion:** Retention policies follow explicit user-configured storage budgets and day thresholds. Manual purges send packs to the Windows Recycle Bin rather than permanently destroying files without recourse.
+- **No unverified or automated credential scrubbing:** Blurring is non-destructive visual redaction. The software never claims to automatically redact secrets or sensitive data; users remain responsible for visually inspecting all stills before sharing.
+- **No external issue trackers bundled in core:** Core does not hard-code issue creation into third-party trackers (e.g. Jira, GitHub, Linear). Integrations run as external After Save Action plugins or webhooks against the saved pack folder.
+
 ## What's inside a CapturePack
 
 The pack is a plain **folder** — browsable, editable, honest. The app's full `.zip`
 is an optional distribution copy and still contains the original evidence.
-CapturePack 0.4.4 adds a reviewed **Share Copy** (`.share.zip`) in History,
-whose only media are manifest-declared annotated PNG stills. A generated README,
-offline viewer and closed minimal inventory accompany them; originals, every
-video container and structured capture context stay out.
+History provides a reviewed **Share Copy** (`.share.zip`), whose only media are
+manifest-declared annotated PNG stills. A generated README, offline viewer and
+closed minimal inventory accompany them; originals, every video container and
+structured capture context stay out.
 
 Video packs may contain:
 
@@ -215,6 +227,13 @@ usable UI object, the pack says so instead of fabricating context.
 
 The specification matters more than any implementation — any language can generate CapturePack files. See [SPEC.md](SPEC.md).
 
+## Plugins and After Save Actions
+
+Settings → Plugins separates plugin capabilities into two distinct kinds:
+
+1. **Temporal Context Providers:** plugins that provide time-indexed metadata during capture (such as Windows UI Automation or the Chrome DOM extension). See [docs/temporal-provider-api.md](docs/temporal-provider-api.md).
+2. **After Save Actions:** post-save automation pipelines that execute sequentially after a capture pack is durable on disk (and optionally after background video rendering finishes). An action can run a local script or trigger an HTTP webhook. Failures are strictly isolated: a failing or hung action never damages the saved pack, blocks the user interface, or causes unhandled promise rejections. Webhook secrets are encrypted locally using Windows DPAPI (`safeStorage`), and non-loopback plaintext HTTP endpoints are rejected.
+
 ## MCP — talk to your captures
 
 The app includes an optional, read-only [MCP](https://modelcontextprotocol.io)
@@ -239,6 +258,41 @@ Tools, client setup, and settings: [docs/MCP.md](docs/MCP.md).
   (`Ctrl+Alt+S`) shortcuts, replay length and 5–30 fps capture rate.
 - About / Information → **Open logs folder** opens the local, size-capped run
   diagnostics. Logs are never uploaded automatically.
+
+## Install & build
+
+### Prebuilt Windows installer
+
+Download the latest installer from [GitHub Releases](https://github.com/r2cuerdame/capturepack/releases/latest):
+
+1. Download `CapturePack-Setup-0.5.0.exe` and `SHA256SUMS.txt`.
+2. Verify checksum integrity via PowerShell:
+   ```powershell
+   Get-FileHash CapturePack-Setup-0.5.0.exe -Algorithm SHA256
+   ```
+3. Run the installer. Because open-source code signing is pending, Windows SmartScreen will display an unrecognized publisher warning: click **More info** → **Run anyway**.
+
+### Building from source
+
+Requirements:
+- Windows 10/11 (64-bit)
+- [Node.js](https://nodejs.org/) `>= 22.12.0` (LTS recommended)
+- npm `>= 10.9.0`
+
+```powershell
+# Clone the repository
+git clone https://github.com/r2cuerdame/capturepack.git
+cd capturepack/core
+
+# Install pinned dependencies
+npm ci
+
+# Launch in local development mode
+npm run dev
+
+# Run release-candidate validation gate (all automated checks, typecheck, build, smoke)
+npm run qa:rc
+```
 
 ## Status
 
@@ -284,9 +338,9 @@ check, which can be disabled in Settings → General.
 
 Blur is non-destructive: it protects generated annotated views, but
 `snapshot.png` and the original replay inside the full pack remain unredacted.
-In CapturePack 0.4.4, when original media or structured context must stay private,
-use History → **Share Copy** and review every included still and visible label
-before sending it. The `reviewed-stills-only` Share Copy excludes
+When original media or structured context must stay private, use History →
+**Share Copy** and review every included still and visible label before sending
+it. The `reviewed-stills-only` Share Copy excludes
 originals, every video container (including annotated replays), manifests,
 annotations, timelines, plugin context and generated pack documents. Each included
 PNG is decoded to pixels and deterministically re-encoded so ancillary metadata and

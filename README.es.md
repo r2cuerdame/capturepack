@@ -35,12 +35,11 @@ cuenta y sin servicios en la nube.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Descargar](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Versión pública actual para Windows: **CapturePack 0.5.0**. En la versión 0.4.4,
-Historial crea una **Copia para compartir** (`.share.zip`) cuyos únicos medios
-son imágenes fijas PNG anotadas y revisadas; las acompañan un README generado,
-un visor sin conexión y un inventario mínimo. Se excluyen los originales, todos
-los vídeos y el contexto estructurado. El ZIP completo (`.zip`) sigue incluyendo
-los originales.
+Versión pública actual para Windows: **CapturePack 0.5.0**. Historial crea una
+**Copia para compartir** (`.share.zip`) cuyos únicos medios son imágenes fijas PNG
+anotadas y revisadas; las acompañan un README generado, un visor sin conexión y
+un inventario mínimo. Se excluyen los originales, todos los vídeos y el contexto
+estructurado. El ZIP completo (`.zip`) sigue incluyendo los originales.
 
 <p align="center">
   <a href="https://capturepack.dev/">
@@ -187,14 +186,26 @@ Local primero · Sin conexión primero · Formato abierto · Basado en plugins �
 
 Los CapturePacks generados deben seguir siendo legibles para siempre.
 
+## Lo que CapturePack deliberadamente no hace
+
+CapturePack establece límites de producto estrictos por diseño:
+
+- **Sin servicios en la nube, cuentas obligatorias ni telemetría silenciosa:** Funciona totalmente local y sin conexión. No envía telemetría, seguimiento de usuario ni informes de fallos fuera de tu equipo. La única llamada saliente es la comprobación opcional de actualizaciones en GitHub Releases (que se puede desactivar en Ajustes → General).
+- **Sin registro de pulsaciones de teclas (keylogging):** Registra coordenadas de ratón, clics y eventos de ventana sobre el reloj de repetición. Nunca escucha ni almacena pulsaciones de teclado (`input.key.*` está reservado y prohibido).
+- **Sin píxeles de fondo ocultos en capturas de región:** Las capturas de región (`Ctrl+Alt+S`) guardan únicamente el rectángulo de píxeles recortado por el usuario y los metadatos de posición. La aplicación nunca guarda en secreto el escritorio completo ni pantallas no seleccionadas.
+- **Sin selección interactiva de objetos durante la grabación de vídeo:** Recorrer el árbol de accesibilidad durante la grabación consume un tiempo excesivo de CPU. El vídeo registra la geometría de ventanas en el tiempo, pero la selección interactiva de controles (Object Pick) es exclusiva de las imágenes fijas.
+- **Sin eliminaciones automáticas o silenciosas:** Las políticas de retención siguen presupuestos de almacenamiento y días configurados expresamente por el usuario. La limpieza manual envía los packs a la Papelera de reciclaje de Windows en lugar de destruir archivos permanentemente sin confirmación.
+- **Sin eliminación desatendida ni mágica de credenciales:** El desenfoque es una ocultación visual no destructiva. No afirmamos detectar ni suprimir credenciales automáticamente; el usuario debe inspeccionar visualmente todas las imágenes antes de compartirlas.
+- **Sin integración directa de rastreadores de incidencias en el núcleo:** El núcleo no incluye código de conexión a Jira, GitHub, Linear u otros servicios. Toda integración externa se delega a plugins de acciones posteriores al guardado o a webhooks que leen la carpeta guardada.
+
 ## Qué hay dentro de un CapturePack
 
 El pack es una **carpeta** normal y corriente: se puede explorar, se puede editar
 y es honesta. Un ZIP completo (`.zip`) es una copia de distribución opcional y
-sigue conteniendo las pruebas originales. Desde la versión 0.4.4, Historial
-también ofrece una **Copia para compartir** revisada (`.share.zip`) cuyos únicos
-medios son imágenes fijas PNG anotadas y revisadas; las acompañan un README
-generado, un visor sin conexión y un inventario mínimo cerrado.
+sigue conteniendo las pruebas originales. Historial también ofrece una **Copia
+para compartir** revisada (`.share.zip`) cuyos únicos medios son imágenes fijas
+PNG anotadas y revisadas; las acompañan un README generado, un visor sin
+conexión y un inventario mínimo cerrado.
 
 Un pack de vídeo puede contener:
 
@@ -234,6 +245,13 @@ expone un objeto de UI utilizable, el pack lo dice en vez de fabricar contexto.
 
 La especificación importa más que cualquier implementación: cualquier lenguaje puede generar archivos CapturePack. Consulta [SPEC.md](SPEC.md).
 
+## Plugins y acciones posteriores al guardado
+
+Ajustes → Plugins separa las funcionalidades de plugins en dos categorías claras:
+
+1. **Proveedores de contexto temporal (Temporal Context Providers):** plugins que aportan metadatos indexados en el tiempo durante la captura (como Windows UI Automation o la extensión Chrome DOM). Consulta [docs/temporal-provider-api.md](docs/temporal-provider-api.md).
+2. **Acciones posteriores al guardado (After Save Actions):** canalizaciones de automatización que se ejecutan de forma secuencial una vez que el pack está seguro en disco (y opcionalmente tras finalizar el renderizado de vídeo en segundo plano). Pueden ejecutar scripts locales o enviar webhooks HTTP. El aislamiento es total: una acción colgada o fallida nunca corrompe el pack guardado, no bloquea la interfaz ni causa excepciones no capturadas. Los secretos de webhooks se cifran localmente con Windows DPAPI (`safeStorage`) y se rechaza HTTP en texto claro que no sea a loopback.
+
 ## MCP — habla con tus capturas
 
 La aplicación incluye un servidor [MCP](https://modelcontextprotocol.io)
@@ -260,6 +278,41 @@ Herramientas, configuración del cliente y ajustes: [docs/MCP.md](docs/MCP.md).
 - Acerca de / Información → **Abrir carpeta de registros** abre los diagnósticos
   locales de ejecución, con tamaño limitado. Los registros nunca se suben
   automáticamente.
+
+## Instalación y compilación
+
+### Instalador precompilado para Windows
+
+Descarga el instalador más reciente desde [GitHub Releases](https://github.com/r2cuerdame/capturepack/releases/latest):
+
+1. Descarga `CapturePack-Setup-0.5.0.exe` y `SHA256SUMS.txt`.
+2. Verifica la integridad del instalador en PowerShell:
+   ```powershell
+   Get-FileHash CapturePack-Setup-0.5.0.exe -Algorithm SHA256
+   ```
+3. Ejecuta el instalador. Dado que la firma de código para software libre está en tramitación, Windows SmartScreen mostrará una advertencia: haz clic en **Más información** → **Ejecutar de todas formas**.
+
+### Compilación desde el código fuente
+
+Requisitos:
+- Windows 10/11 (64 bits)
+- [Node.js](https://nodejs.org/) `>= 22.12.0` (se recomienda LTS)
+- npm `>= 10.9.0`
+
+```powershell
+# Clonar el repositorio
+git clone https://github.com/r2cuerdame/capturepack.git
+cd capturepack/core
+
+# Instalar dependencias exactas
+npm ci
+
+# Iniciar en modo de desarrollo local
+npm run dev
+
+# Ejecutar la verificación completa de candidatos a release (QA, chequeos, compilación y smoke)
+npm run qa:rc
+```
 
 ## Estado
 
@@ -310,13 +363,13 @@ Releases, que puede desactivarse en Ajustes → General.
 El desenfoque no es destructivo: protege las vistas anotadas que se generan, pero
 `snapshot.png` y la repetición original que hay dentro del pack completo siguen
 sin censurar. Cuando los medios originales o el contexto estructurado deban
-seguir siendo privados, usa Historial → **Copia para compartir**, disponible
-desde la versión 0.4.4, y revisa la vista previa de cada imagen fija incluida
-antes de enviarla. La copia excluye los originales, todos los
-contenedores de vídeo, manifiestos, anotaciones, líneas temporales, contexto de
-plugins y documentos generados del pack; los PNG incluidos se recodifican de
-forma canónica solo a partir de sus píxeles. Aun así, no garantiza que las
-imágenes derivadas revisadas estén libres de secretos no marcados.
+seguir siendo privados, usa Historial → **Copia para compartir** y revisa la
+vista previa de cada imagen fija incluida antes de enviarla. La copia excluye los
+originales, todos los contenedores de vídeo, manifiestos, anotaciones, líneas
+temporales, contexto de plugins y documentos generados del pack; los PNG
+incluidos se recodifican de forma canónica solo a partir de sus píxeles. Aun así,
+no garantiza que las imágenes derivadas revisadas estén libres de secretos no
+marcados.
 
 ## ♥ Apoyo
 
