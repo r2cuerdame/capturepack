@@ -1,0 +1,3405 @@
+{
+  "schema_version": 1,
+  "privacy": "geometry-only; original pixels, text, URLs, ids, classes, HWNDs and process names excluded",
+  "visual_policy": "snapshot pixels are regenerated neutral grey; visual diffs never replace behavioral gates",
+  "hard_case_inventory": [
+    {
+      "id": "mixed-dpi",
+      "status": "represented"
+    },
+    {
+      "id": "app-overlays",
+      "status": "represented"
+    },
+    {
+      "id": "multiple-display-environment",
+      "status": "represented"
+    },
+    {
+      "id": "multiple-display-output",
+      "status": "coverage-gap",
+      "companion_checks": [
+        "check:n-display-format",
+        "check:semantic-multidisplay-roundtrip"
+      ]
+    },
+    {
+      "id": "motion",
+      "status": "coverage-gap",
+      "companion_checks": [
+        "check:motion",
+        "check:temporal"
+      ]
+    },
+    {
+      "id": "similar-frames",
+      "status": "coverage-gap",
+      "companion_checks": [
+        "check:temporal-alignment"
+      ]
+    },
+    {
+      "id": "hdr-sdr",
+      "status": "coverage-gap"
+    }
+  ],
+  "cases": [
+    {
+      "id": "small-browser-region",
+      "provenance": "distilled-real-pack",
+      "shape_sha256": "c3911d164672d8e7fa2df17cb7ab3d1c10b53a4f84eaffe929d67e144a0452e2",
+      "classifications": [
+        "browser",
+        "mixed-dpi",
+        "multiple-display-environment",
+        "region",
+        "small-targets"
+      ],
+      "observed_hands_off_ms": 1302,
+      "thresholds": {
+        "max_hands_off_ms": 5000,
+        "max_replay_to_candidates_ms": 1000,
+        "max_median_control_fraction": 0.15,
+        "max_p90_control_fraction": 0.55,
+        "min_precise_control_share": 0.001,
+        "expected_controls": "some"
+      },
+      "pack": {
+        "width": 344,
+        "height": 271,
+        "image_scope": "region",
+        "crop_bounds": {
+          "x": -1180,
+          "y": 1142,
+          "width": 344,
+          "height": 271
+        },
+        "screens": [
+          {
+            "width": 1200,
+            "height": 1920,
+            "scale": 1,
+            "bounds": {
+              "x": -1200,
+              "y": 0,
+              "width": 1200,
+              "height": 1920
+            }
+          },
+          {
+            "width": 3840,
+            "height": 2160,
+            "scale": 1.5,
+            "bounds": {
+              "x": 0,
+              "y": 0,
+              "width": 2560,
+              "height": 1440
+            }
+          }
+        ],
+        "uia": {
+          "captured_at": "2026-01-01T00:00:00Z",
+          "budget_ms": 3000,
+          "truncated": true,
+          "windows": [
+            {
+              "hwnd": "1",
+              "title": "Corpus page 0 - Chrome",
+              "process": "chrome.exe",
+              "class_name": "Chrome_WidgetWin_1",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 344,
+                "height": 271
+              },
+              "client_bounds": {
+                "x": -19,
+                "y": -206,
+                "width": 1198,
+                "height": 935
+              },
+              "focused": false,
+              "z": 0,
+              "tree": "collected",
+              "element_count": 22
+            },
+            {
+              "hwnd": "2",
+              "title": "Corpus native 1",
+              "process": "corpus-native.exe",
+              "class_name": "CorpusNativeWindow",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 344,
+                "height": 271
+              },
+              "client_bounds": {
+                "x": -20,
+                "y": -1142,
+                "width": 5040,
+                "height": 2160
+              },
+              "focused": false,
+              "z": 1,
+              "tree": "skipped",
+              "element_count": 0
+            },
+            {
+              "hwnd": "3",
+              "title": "Corpus desktop 2",
+              "process": "corpus-native.exe",
+              "class_name": "Progman",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 344,
+                "height": 271
+              },
+              "client_bounds": {
+                "x": -20,
+                "y": -1142,
+                "width": 5040,
+                "height": 2160
+              },
+              "focused": false,
+              "z": 2,
+              "tree": "skipped",
+              "element_count": 0
+            }
+          ],
+          "elements": [
+            {
+              "name": "Corpus control 0",
+              "control_type": "window",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 344,
+                "height": 271
+              },
+              "depth": 0,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 344,
+                "height": 271
+              },
+              "depth": 1,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 2",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 344,
+                "height": 271
+              },
+              "depth": 1,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 344,
+                "height": 271
+              },
+              "depth": 2,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 344,
+                "height": 271
+              },
+              "depth": 3,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 344,
+                "height": 271
+              },
+              "depth": 4,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 344,
+                "height": 271
+              },
+              "depth": 5,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 344,
+                "height": 271
+              },
+              "depth": 6,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 344,
+                "height": 271
+              },
+              "depth": 7,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 9",
+              "control_type": "document",
+              "automation_id": "corpus-control-9",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 344,
+                "height": 271
+              },
+              "depth": 8,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "group",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 344,
+                "height": 271
+              },
+              "depth": 9,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "group",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 344,
+                "height": 271
+              },
+              "depth": 10,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 12",
+              "control_type": "hyperlink",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 23,
+                "y": 26,
+                "width": 66,
+                "height": 26
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 13",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 23,
+                "y": 71,
+                "width": 184,
+                "height": 25
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "group",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 23,
+                "y": 97,
+                "width": 321,
+                "height": 124
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 15",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 101,
+                "y": 99,
+                "width": 15,
+                "height": 25
+              },
+              "depth": 12,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 16",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 101,
+                "y": 130,
+                "width": 243,
+                "height": 37
+              },
+              "depth": 12,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 17",
+              "control_type": "hyperlink",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 101,
+                "y": 177,
+                "width": 243,
+                "height": 16
+              },
+              "depth": 12,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 18",
+              "control_type": "group",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 23,
+                "y": 242,
+                "width": 321,
+                "height": 29
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 19",
+              "control_type": "hyperlink",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 23,
+                "y": 242,
+                "width": 57,
+                "height": 29
+              },
+              "depth": 12,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 20",
+              "control_type": "hyperlink",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 84,
+                "y": 242,
+                "width": 55,
+                "height": 29
+              },
+              "depth": 12,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 21",
+              "control_type": "hyperlink",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 142,
+                "y": 242,
+                "width": 56,
+                "height": 29
+              },
+              "depth": 12,
+              "window": 0
+            }
+          ]
+        },
+        "surface_kinds": [
+          "browser",
+          "desktop",
+          "native"
+        ]
+      }
+    },
+    {
+      "id": "dense-browser-overlay",
+      "provenance": "distilled-real-pack",
+      "shape_sha256": "21e96e4e5b6b591847f18f41bc1d98c0e97396dc9859dac5a876f34bfc24d674",
+      "classifications": [
+        "app-overlays",
+        "browser",
+        "dense-document",
+        "mixed-dpi",
+        "multiple-display-environment",
+        "region"
+      ],
+      "observed_hands_off_ms": 1357,
+      "thresholds": {
+        "max_hands_off_ms": 5000,
+        "max_replay_to_candidates_ms": 1000,
+        "max_median_control_fraction": 0.15,
+        "max_p90_control_fraction": 0.55,
+        "min_precise_control_share": 0.001,
+        "expected_controls": "some"
+      },
+      "pack": {
+        "width": 1175,
+        "height": 810,
+        "image_scope": "region",
+        "crop_bounds": {
+          "x": -1194,
+          "y": 1061,
+          "width": 1175,
+          "height": 810
+        },
+        "screens": [
+          {
+            "width": 1200,
+            "height": 1920,
+            "scale": 1,
+            "bounds": {
+              "x": -1200,
+              "y": 0,
+              "width": 1200,
+              "height": 1920
+            }
+          },
+          {
+            "width": 3840,
+            "height": 2160,
+            "scale": 1.5,
+            "bounds": {
+              "x": 0,
+              "y": 0,
+              "width": 2560,
+              "height": 1440
+            }
+          }
+        ],
+        "uia": {
+          "captured_at": "2026-01-01T00:00:00Z",
+          "budget_ms": 3000,
+          "truncated": false,
+          "windows": [
+            {
+              "hwnd": "1",
+              "title": "Corpus page 0 - Chrome",
+              "process": "chrome.exe",
+              "class_name": "Chrome_WidgetWin_1",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1175,
+                "height": 810
+              },
+              "client_bounds": {
+                "x": -5,
+                "y": -125,
+                "width": 1198,
+                "height": 935
+              },
+              "focused": false,
+              "z": 0,
+              "tree": "collected",
+              "element_count": 52
+            },
+            {
+              "hwnd": "2",
+              "title": "Corpus native 1",
+              "process": "corpus-native.exe",
+              "class_name": "CorpusNativeWindow",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1175,
+                "height": 810
+              },
+              "client_bounds": {
+                "x": -6,
+                "y": -1061,
+                "width": 5040,
+                "height": 2160
+              },
+              "focused": false,
+              "z": 1,
+              "tree": "skipped",
+              "element_count": 0
+            },
+            {
+              "hwnd": "3",
+              "title": "Corpus desktop 2",
+              "process": "corpus-native.exe",
+              "class_name": "Progman",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1175,
+                "height": 810
+              },
+              "client_bounds": {
+                "x": -6,
+                "y": -1061,
+                "width": 5040,
+                "height": 2160
+              },
+              "focused": false,
+              "z": 2,
+              "tree": "skipped",
+              "element_count": 0
+            }
+          ],
+          "elements": [
+            {
+              "name": "Corpus control 0",
+              "control_type": "window",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1175,
+                "height": 810
+              },
+              "depth": 0,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1175,
+                "height": 810
+              },
+              "depth": 1,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 2",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1175,
+                "height": 810
+              },
+              "depth": 1,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1175,
+                "height": 810
+              },
+              "depth": 2,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1175,
+                "height": 810
+              },
+              "depth": 3,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1175,
+                "height": 810
+              },
+              "depth": 4,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1175,
+                "height": 810
+              },
+              "depth": 5,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1175,
+                "height": 810
+              },
+              "depth": 6,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1175,
+                "height": 810
+              },
+              "depth": 7,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 9",
+              "control_type": "document",
+              "automation_id": "corpus-control-9",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1175,
+                "height": 810
+              },
+              "depth": 8,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "group",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1175,
+                "height": 810
+              },
+              "depth": 9,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "group",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1175,
+                "height": 474
+              },
+              "depth": 10,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 12",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 138,
+                "y": 3,
+                "width": 70,
+                "height": 29
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 13",
+              "control_type": "button",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 219,
+                "y": 3,
+                "width": 49,
+                "height": 29
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 14",
+              "control_type": "button",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 271,
+                "y": 3,
+                "width": 50,
+                "height": 29
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 15",
+              "control_type": "hyperlink",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 958,
+                "y": 1,
+                "width": 77,
+                "height": 33
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 16",
+              "control_type": "hyperlink",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 138,
+                "y": 45,
+                "width": 449,
+                "height": 57
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 17",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 146,
+                "y": 51,
+                "width": 349,
+                "height": 21
+              },
+              "depth": 12,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 18",
+              "control_type": "hyperlink",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 586,
+                "y": 45,
+                "width": 449,
+                "height": 57
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 19",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 594,
+                "y": 51,
+                "width": 350,
+                "height": 21
+              },
+              "depth": 12,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 20",
+              "control_type": "hyperlink",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 138,
+                "y": 101,
+                "width": 449,
+                "height": 57
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 21",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 146,
+                "y": 107,
+                "width": 349,
+                "height": 21
+              },
+              "depth": 12,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 22",
+              "control_type": "hyperlink",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 586,
+                "y": 101,
+                "width": 449,
+                "height": 57
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 23",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 594,
+                "y": 107,
+                "width": 350,
+                "height": 21
+              },
+              "depth": 12,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 24",
+              "control_type": "hyperlink",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 138,
+                "y": 157,
+                "width": 449,
+                "height": 57
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 25",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 146,
+                "y": 163,
+                "width": 349,
+                "height": 21
+              },
+              "depth": 12,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 26",
+              "control_type": "hyperlink",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 586,
+                "y": 157,
+                "width": 449,
+                "height": 57
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 27",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 594,
+                "y": 163,
+                "width": 350,
+                "height": 21
+              },
+              "depth": 12,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 28",
+              "control_type": "hyperlink",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 138,
+                "y": 213,
+                "width": 449,
+                "height": 57
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 29",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 146,
+                "y": 219,
+                "width": 349,
+                "height": 21
+              },
+              "depth": 12,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 30",
+              "control_type": "hyperlink",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 586,
+                "y": 213,
+                "width": 449,
+                "height": 57
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 31",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 594,
+                "y": 219,
+                "width": 350,
+                "height": 21
+              },
+              "depth": 12,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 32",
+              "control_type": "hyperlink",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 138,
+                "y": 269,
+                "width": 449,
+                "height": 57
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 33",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 146,
+                "y": 275,
+                "width": 349,
+                "height": 21
+              },
+              "depth": 12,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 34",
+              "control_type": "hyperlink",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 586,
+                "y": 269,
+                "width": 449,
+                "height": 57
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 35",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 594,
+                "y": 275,
+                "width": 350,
+                "height": 21
+              },
+              "depth": 12,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 36",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 138,
+                "y": 343,
+                "width": 127,
+                "height": 29
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 37",
+              "control_type": "button",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 276,
+                "y": 343,
+                "width": 49,
+                "height": 29
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 38",
+              "control_type": "button",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 328,
+                "y": 343,
+                "width": 49,
+                "height": 29
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 39",
+              "control_type": "hyperlink",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 958,
+                "y": 341,
+                "width": 77,
+                "height": 33
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 40",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 490,
+                "y": 411,
+                "width": 193,
+                "height": 20
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 41",
+              "control_type": "hyperlink",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 473,
+                "width": 1175,
+                "height": 169
+              },
+              "depth": 10,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 42",
+              "control_type": "hyperlink",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 473,
+                "width": 25,
+                "height": 20
+              },
+              "depth": 10,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 43",
+              "control_type": "button",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 1154,
+                "y": 477,
+                "width": 20,
+                "height": 21
+              },
+              "depth": 10,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "group",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 673,
+                "width": 1175,
+                "height": 137
+              },
+              "depth": 10,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 45",
+              "control_type": "hyperlink",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 456,
+                "y": 705,
+                "width": 49,
+                "height": 21
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 46",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 516,
+                "y": 707,
+                "width": 5,
+                "height": 17
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 47",
+              "control_type": "hyperlink",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 532,
+                "y": 705,
+                "width": 98,
+                "height": 21
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 48",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 641,
+                "y": 707,
+                "width": 5,
+                "height": 17
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 49",
+              "control_type": "hyperlink",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 657,
+                "y": 705,
+                "width": 60,
+                "height": 21
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 50",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 170,
+                "y": 760,
+                "width": 213,
+                "height": 17
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 51",
+              "control_type": "hyperlink",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 828,
+                "y": 758,
+                "width": 175,
+                "height": 21
+              },
+              "depth": 11,
+              "window": 0
+            }
+          ]
+        },
+        "surface_kinds": [
+          "browser",
+          "desktop",
+          "native"
+        ]
+      }
+    },
+    {
+      "id": "silent-electron-native",
+      "provenance": "distilled-real-pack",
+      "shape_sha256": "cc55e23b64f30c9cb118725ff79b329762ac648443572492bcab015fa482b020",
+      "classifications": [
+        "electron",
+        "mixed-dpi",
+        "multiple-display-environment",
+        "native",
+        "region",
+        "window-only"
+      ],
+      "observed_hands_off_ms": 1871,
+      "thresholds": {
+        "max_hands_off_ms": 5000,
+        "max_replay_to_candidates_ms": 1000,
+        "max_median_control_fraction": 0.15,
+        "max_p90_control_fraction": 0.55,
+        "min_precise_control_share": 0,
+        "expected_controls": "none"
+      },
+      "pack": {
+        "width": 1736,
+        "height": 1024,
+        "image_scope": "region",
+        "crop_bounds": {
+          "x": 1290,
+          "y": 387.3333333333333,
+          "width": 1157.3333333333335,
+          "height": 682.6666666666667
+        },
+        "screens": [
+          {
+            "width": 1200,
+            "height": 1920,
+            "scale": 1,
+            "bounds": {
+              "x": -1200,
+              "y": 0,
+              "width": 1200,
+              "height": 1920
+            }
+          },
+          {
+            "width": 3840,
+            "height": 2160,
+            "scale": 1.5,
+            "bounds": {
+              "x": 0,
+              "y": 0,
+              "width": 2560,
+              "height": 1440
+            }
+          }
+        ],
+        "uia": {
+          "captured_at": "2026-01-01T00:00:00Z",
+          "budget_ms": 3000,
+          "truncated": false,
+          "windows": [
+            {
+              "hwnd": "1",
+              "title": "Corpus electron 0",
+              "process": "corpus-electron.exe",
+              "class_name": "Chrome_WidgetWin_1",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1736,
+                "height": 1024
+              },
+              "client_bounds": {
+                "x": -49,
+                "y": -365,
+                "width": 1928,
+                "height": 1700
+              },
+              "focused": false,
+              "z": 0,
+              "tree": "collected",
+              "element_count": 8
+            },
+            {
+              "hwnd": "2",
+              "title": "Corpus electron 1",
+              "process": "corpus-electron.exe",
+              "class_name": "Chrome_WidgetWin_1",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 502,
+                "height": 690
+              },
+              "client_bounds": {
+                "x": -1325,
+                "y": -534,
+                "width": 1827,
+                "height": 1224
+              },
+              "focused": false,
+              "z": 1,
+              "tree": "skipped",
+              "element_count": 0
+            },
+            {
+              "hwnd": "3",
+              "title": "Corpus native 2",
+              "process": "corpus-native.exe",
+              "class_name": "CorpusNativeWindow",
+              "bounds": {
+                "x": 1171,
+                "y": 0,
+                "width": 565,
+                "height": 1024
+              },
+              "client_bounds": {
+                "x": 1171,
+                "y": -485,
+                "width": 734,
+                "height": 1811
+              },
+              "focused": false,
+              "z": 2,
+              "tree": "collected",
+              "element_count": 4
+            },
+            {
+              "hwnd": "4",
+              "title": "Corpus electron 3",
+              "process": "corpus-electron.exe",
+              "class_name": "Chrome_WidgetWin_1",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1736,
+                "height": 1024
+              },
+              "client_bounds": {
+                "x": -26,
+                "y": -581,
+                "width": 1927,
+                "height": 2077
+              },
+              "focused": false,
+              "z": 3,
+              "tree": "collected",
+              "element_count": 8
+            },
+            {
+              "hwnd": "5",
+              "title": "Corpus native 4",
+              "process": "corpus-native.exe",
+              "class_name": "CorpusNativeWindow",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1308,
+                "height": 1024
+              },
+              "client_bounds": {
+                "x": -271,
+                "y": -479,
+                "width": 1579,
+                "height": 1984
+              },
+              "focused": false,
+              "z": 4,
+              "tree": "skipped",
+              "element_count": 0
+            },
+            {
+              "hwnd": "6",
+              "title": "Corpus native 5",
+              "process": "corpus-native.exe",
+              "class_name": "CorpusNativeWindow",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1564,
+                "height": 917
+              },
+              "client_bounds": {
+                "x": -166,
+                "y": -8,
+                "width": 1730,
+                "height": 925
+              },
+              "focused": false,
+              "z": 5,
+              "tree": "skipped",
+              "element_count": 0
+            },
+            {
+              "hwnd": "7",
+              "title": "Corpus native 6",
+              "process": "corpus-native.exe",
+              "class_name": "CorpusNativeWindow",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1736,
+                "height": 1024
+              },
+              "client_bounds": {
+                "x": -3135,
+                "y": -581,
+                "width": 5040,
+                "height": 2160
+              },
+              "focused": false,
+              "z": 6,
+              "tree": "collected",
+              "element_count": 1
+            },
+            {
+              "hwnd": "8",
+              "title": "Corpus desktop 7",
+              "process": "corpus-native.exe",
+              "class_name": "Progman",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1736,
+                "height": 1024
+              },
+              "client_bounds": {
+                "x": -3135,
+                "y": -581,
+                "width": 5040,
+                "height": 2160
+              },
+              "focused": false,
+              "z": 7,
+              "tree": "skipped",
+              "element_count": 0
+            }
+          ],
+          "elements": [
+            {
+              "name": "Corpus control 0",
+              "control_type": "window",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1736,
+                "height": 1024
+              },
+              "depth": 0,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1736,
+                "height": 1024
+              },
+              "depth": 1,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 2",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1736,
+                "height": 1024
+              },
+              "depth": 1,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1736,
+                "height": 1024
+              },
+              "depth": 2,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1736,
+                "height": 1024
+              },
+              "depth": 3,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1736,
+                "height": 1024
+              },
+              "depth": 4,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1736,
+                "height": 1024
+              },
+              "depth": 5,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1736,
+                "height": 1024
+              },
+              "depth": 6,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 8",
+              "control_type": "window",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 1171,
+                "y": 0,
+                "width": 565,
+                "height": 1024
+              },
+              "depth": 0,
+              "window": 2
+            },
+            {
+              "name": "Corpus control 9",
+              "control_type": "pane",
+              "automation_id": "corpus-control-9",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 1172,
+                "y": 0,
+                "width": 564,
+                "height": 1024
+              },
+              "depth": 1,
+              "window": 2
+            },
+            {
+              "name": "Corpus control 10",
+              "control_type": "pane",
+              "automation_id": "corpus-control-10",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 1269,
+                "y": 0,
+                "width": 467,
+                "height": 1024
+              },
+              "depth": 2,
+              "window": 2
+            },
+            {
+              "name": "Corpus control 11",
+              "control_type": "pane",
+              "automation_id": "corpus-control-11",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 1269,
+                "y": 0,
+                "width": 467,
+                "height": 1024
+              },
+              "depth": 3,
+              "window": 2
+            },
+            {
+              "name": "Corpus control 12",
+              "control_type": "window",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1736,
+                "height": 1024
+              },
+              "depth": 0,
+              "window": 3
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1736,
+                "height": 1024
+              },
+              "depth": 1,
+              "window": 3
+            },
+            {
+              "name": "Corpus control 14",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1736,
+                "height": 1024
+              },
+              "depth": 1,
+              "window": 3
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1736,
+                "height": 1024
+              },
+              "depth": 2,
+              "window": 3
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1736,
+                "height": 1024
+              },
+              "depth": 3,
+              "window": 3
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1736,
+                "height": 1024
+              },
+              "depth": 4,
+              "window": 3
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1736,
+                "height": 1024
+              },
+              "depth": 5,
+              "window": 3
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1736,
+                "height": 1024
+              },
+              "depth": 6,
+              "window": 3
+            },
+            {
+              "name": "Corpus control 20",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1736,
+                "height": 1024
+              },
+              "depth": 0,
+              "window": 6
+            }
+          ]
+        },
+        "surface_kinds": [
+          "desktop",
+          "electron",
+          "native"
+        ]
+      }
+    },
+    {
+      "id": "dense-electron-native",
+      "provenance": "distilled-real-pack",
+      "shape_sha256": "b153e05f9e19a258bb3dae4f134836d0b563ae394cbb42090d3679ae59dfc275",
+      "classifications": [
+        "dense-controls",
+        "electron",
+        "mixed-dpi",
+        "multiple-display-environment",
+        "native",
+        "region"
+      ],
+      "observed_hands_off_ms": 1695,
+      "thresholds": {
+        "max_hands_off_ms": 5000,
+        "max_replay_to_candidates_ms": 1000,
+        "max_median_control_fraction": 0.15,
+        "max_p90_control_fraction": 0.55,
+        "min_precise_control_share": 0.001,
+        "expected_controls": "some"
+      },
+      "pack": {
+        "width": 1770,
+        "height": 1204,
+        "image_scope": "region",
+        "crop_bounds": {
+          "x": 1288,
+          "y": 353.3333333333333,
+          "width": 1180,
+          "height": 802.6666666666667
+        },
+        "screens": [
+          {
+            "width": 1200,
+            "height": 1920,
+            "scale": 1,
+            "bounds": {
+              "x": -1200,
+              "y": 0,
+              "width": 1200,
+              "height": 1920
+            }
+          },
+          {
+            "width": 3840,
+            "height": 2160,
+            "scale": 1.5,
+            "bounds": {
+              "x": 0,
+              "y": 0,
+              "width": 2560,
+              "height": 1440
+            }
+          }
+        ],
+        "uia": {
+          "captured_at": "2026-01-01T00:00:00Z",
+          "budget_ms": 3000,
+          "truncated": false,
+          "windows": [
+            {
+              "hwnd": "1",
+              "title": "Corpus electron 0",
+              "process": "corpus-electron.exe",
+              "class_name": "Chrome_WidgetWin_1",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1770,
+                "height": 1204
+              },
+              "client_bounds": {
+                "x": -46,
+                "y": -314,
+                "width": 1928,
+                "height": 1700
+              },
+              "focused": false,
+              "z": 0,
+              "tree": "collected",
+              "element_count": 56
+            },
+            {
+              "hwnd": "2",
+              "title": "Corpus electron 1",
+              "process": "corpus-electron.exe",
+              "class_name": "Chrome_WidgetWin_1",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 505,
+                "height": 741
+              },
+              "client_bounds": {
+                "x": -1322,
+                "y": -483,
+                "width": 1827,
+                "height": 1224
+              },
+              "focused": false,
+              "z": 1,
+              "tree": "skipped",
+              "element_count": 0
+            },
+            {
+              "hwnd": "3",
+              "title": "Corpus native 2",
+              "process": "corpus-native.exe",
+              "class_name": "CorpusNativeWindow",
+              "bounds": {
+                "x": 1174,
+                "y": 0,
+                "width": 596,
+                "height": 1204
+              },
+              "client_bounds": {
+                "x": 1174,
+                "y": -434,
+                "width": 734,
+                "height": 1811
+              },
+              "focused": false,
+              "z": 2,
+              "tree": "collected",
+              "element_count": 4
+            },
+            {
+              "hwnd": "4",
+              "title": "Corpus electron 3",
+              "process": "corpus-electron.exe",
+              "class_name": "Chrome_WidgetWin_1",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1770,
+                "height": 1204
+              },
+              "client_bounds": {
+                "x": -23,
+                "y": -530,
+                "width": 1927,
+                "height": 2077
+              },
+              "focused": false,
+              "z": 3,
+              "tree": "collected",
+              "element_count": 29
+            },
+            {
+              "hwnd": "5",
+              "title": "Corpus native 4",
+              "process": "corpus-native.exe",
+              "class_name": "CorpusNativeWindow",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1311,
+                "height": 1204
+              },
+              "client_bounds": {
+                "x": -268,
+                "y": -428,
+                "width": 1579,
+                "height": 1984
+              },
+              "focused": false,
+              "z": 4,
+              "tree": "skipped",
+              "element_count": 0
+            },
+            {
+              "hwnd": "6",
+              "title": "Corpus native 5",
+              "process": "corpus-native.exe",
+              "class_name": "CorpusNativeWindow",
+              "bounds": {
+                "x": 0,
+                "y": 43,
+                "width": 1567,
+                "height": 925
+              },
+              "client_bounds": {
+                "x": -163,
+                "y": 43,
+                "width": 1730,
+                "height": 925
+              },
+              "focused": false,
+              "z": 5,
+              "tree": "skipped",
+              "element_count": 0
+            },
+            {
+              "hwnd": "7",
+              "title": "Corpus native 6",
+              "process": "corpus-native.exe",
+              "class_name": "CorpusNativeWindow",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1770,
+                "height": 1204
+              },
+              "client_bounds": {
+                "x": -3132,
+                "y": -530,
+                "width": 5040,
+                "height": 2160
+              },
+              "focused": false,
+              "z": 6,
+              "tree": "collected",
+              "element_count": 1
+            },
+            {
+              "hwnd": "8",
+              "title": "Corpus desktop 7",
+              "process": "corpus-native.exe",
+              "class_name": "Progman",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1770,
+                "height": 1204
+              },
+              "client_bounds": {
+                "x": -3132,
+                "y": -530,
+                "width": 5040,
+                "height": 2160
+              },
+              "focused": false,
+              "z": 7,
+              "tree": "skipped",
+              "element_count": 0
+            }
+          ],
+          "elements": [
+            {
+              "name": "Corpus control 0",
+              "control_type": "window",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1770,
+                "height": 1204
+              },
+              "depth": 0,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1770,
+                "height": 1204
+              },
+              "depth": 1,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 2",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1770,
+                "height": 1204
+              },
+              "depth": 1,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1770,
+                "height": 1204
+              },
+              "depth": 2,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1770,
+                "height": 1204
+              },
+              "depth": 3,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1770,
+                "height": 1204
+              },
+              "depth": 4,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1770,
+                "height": 1204
+              },
+              "depth": 5,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1770,
+                "height": 1204
+              },
+              "depth": 6,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 8",
+              "control_type": "document",
+              "automation_id": "corpus-control-8",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1770,
+                "height": 1204
+              },
+              "depth": 7,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "group",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1770,
+                "height": 1204
+              },
+              "depth": 8,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "group",
+              "automation_id": "corpus-control-10",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1770,
+                "height": 1204
+              },
+              "depth": 9,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "group",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 422,
+                "height": 1204
+              },
+              "depth": 10,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 12",
+              "control_type": "group",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 422,
+                "height": 1204
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "group",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 387,
+                "height": 307
+              },
+              "depth": 12,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 14",
+              "control_type": "button",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 330,
+                "width": 252,
+                "height": 39
+              },
+              "depth": 12,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 15",
+              "control_type": "button",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 263,
+                "y": 331,
+                "width": 37,
+                "height": 37
+              },
+              "depth": 12,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 16",
+              "control_type": "button",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 305,
+                "y": 331,
+                "width": 37,
+                "height": 37
+              },
+              "depth": 12,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 17",
+              "control_type": "button",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 347,
+                "y": 331,
+                "width": 37,
+                "height": 37
+              },
+              "depth": 12,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "group",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 368,
+                "width": 387,
+                "height": 836
+              },
+              "depth": 12,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "separator",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 409,
+                "y": 0,
+                "width": 25,
+                "height": 1204
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "group",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 421,
+                "y": 0,
+                "width": 1349,
+                "height": 1204
+              },
+              "depth": 10,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "list",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 600,
+                "y": 0,
+                "width": 1105,
+                "height": 59
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 22",
+              "control_type": "listitem",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 634,
+                "y": 0,
+                "width": 1071,
+                "height": 25
+              },
+              "depth": 12,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 23",
+              "control_type": "listitem",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 634,
+                "y": 24,
+                "width": 1071,
+                "height": 35
+              },
+              "depth": 12,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 24",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 600,
+                "y": 72,
+                "width": 46,
+                "height": 29
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 25",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 645,
+                "y": 72,
+                "width": 182,
+                "height": 29
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 26",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 600,
+                "y": 127,
+                "width": 108,
+                "height": 29
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 27",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 707,
+                "y": 127,
+                "width": 312,
+                "height": 29
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 28",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 600,
+                "y": 179,
+                "width": 1105,
+                "height": 38
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 29",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 600,
+                "y": 229,
+                "width": 178,
+                "height": 29
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 30",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 600,
+                "y": 285,
+                "width": 116,
+                "height": 29
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 31",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 715,
+                "y": 285,
+                "width": 317,
+                "height": 29
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 32",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 1031,
+                "y": 285,
+                "width": 88,
+                "height": 29
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 33",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 600,
+                "y": 319,
+                "width": 550,
+                "height": 29
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 34",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 600,
+                "y": 374,
+                "width": 137,
+                "height": 29
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "list",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 600,
+                "y": 426,
+                "width": 1105,
+                "height": 69
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 36",
+              "control_type": "listitem",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 634,
+                "y": 426,
+                "width": 1071,
+                "height": 35
+              },
+              "depth": 12,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 37",
+              "control_type": "listitem",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 634,
+                "y": 460,
+                "width": 1071,
+                "height": 35
+              },
+              "depth": 12,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 38",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 600,
+                "y": 508,
+                "width": 114,
+                "height": 29
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 39",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 600,
+                "y": 563,
+                "width": 366,
+                "height": 29
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 40",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 600,
+                "y": 615,
+                "width": 1105,
+                "height": 38
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 41",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 600,
+                "y": 665,
+                "width": 308,
+                "height": 29
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 42",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 907,
+                "y": 665,
+                "width": 109,
+                "height": 29
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 43",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 600,
+                "y": 720,
+                "width": 236,
+                "height": 29
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "group",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 600,
+                "y": 772,
+                "width": 1105,
+                "height": 57
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 45",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 632,
+                "y": 786,
+                "width": 505,
+                "height": 29
+              },
+              "depth": 12,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 46",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 600,
+                "y": 841,
+                "width": 763,
+                "height": 29
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 47",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 600,
+                "y": 896,
+                "width": 25,
+                "height": 29
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 48",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 624,
+                "y": 896,
+                "width": 310,
+                "height": 29
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 49",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 600,
+                "y": 930,
+                "width": 425,
+                "height": 29
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 50",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 600,
+                "y": 982,
+                "width": 1105,
+                "height": 38
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 51",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 600,
+                "y": 1033,
+                "width": 245,
+                "height": 29
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 52",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 600,
+                "y": 1088,
+                "width": 108,
+                "height": 29
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 53",
+              "control_type": "text",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 609,
+                "y": 1148,
+                "width": 288,
+                "height": 24
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "",
+              "control_type": "list",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 600,
+                "y": 1198,
+                "width": 1105,
+                "height": 6
+              },
+              "depth": 11,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 55",
+              "control_type": "listitem",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 634,
+                "y": 1198,
+                "width": 1071,
+                "height": 6
+              },
+              "depth": 12,
+              "window": 0
+            },
+            {
+              "name": "Corpus control 56",
+              "control_type": "window",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 1174,
+                "y": 0,
+                "width": 596,
+                "height": 1204
+              },
+              "depth": 0,
+              "window": 2
+            },
+            {
+              "name": "Corpus control 57",
+              "control_type": "pane",
+              "automation_id": "corpus-control-57",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 1175,
+                "y": 0,
+                "width": 595,
+                "height": 1204
+              },
+              "depth": 1,
+              "window": 2
+            },
+            {
+              "name": "Corpus control 58",
+              "control_type": "pane",
+              "automation_id": "corpus-control-58",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 1272,
+                "y": 0,
+                "width": 498,
+                "height": 1204
+              },
+              "depth": 2,
+              "window": 2
+            },
+            {
+              "name": "Corpus control 59",
+              "control_type": "pane",
+              "automation_id": "corpus-control-59",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 1272,
+                "y": 0,
+                "width": 498,
+                "height": 1204
+              },
+              "depth": 3,
+              "window": 2
+            },
+            {
+              "name": "Corpus control 60",
+              "control_type": "window",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1770,
+                "height": 1204
+              },
+              "depth": 0,
+              "window": 3
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1770,
+                "height": 1204
+              },
+              "depth": 1,
+              "window": 3
+            },
+            {
+              "name": "Corpus control 62",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1770,
+                "height": 1204
+              },
+              "depth": 1,
+              "window": 3
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1770,
+                "height": 1204
+              },
+              "depth": 2,
+              "window": 3
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1770,
+                "height": 1204
+              },
+              "depth": 3,
+              "window": 3
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1770,
+                "height": 1204
+              },
+              "depth": 4,
+              "window": 3
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1770,
+                "height": 1204
+              },
+              "depth": 5,
+              "window": 3
+            },
+            {
+              "name": "",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1770,
+                "height": 1204
+              },
+              "depth": 6,
+              "window": 3
+            },
+            {
+              "name": "Corpus control 68",
+              "control_type": "document",
+              "automation_id": "corpus-control-68",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1770,
+                "height": 1204
+              },
+              "depth": 7,
+              "window": 3
+            },
+            {
+              "name": "",
+              "control_type": "group",
+              "automation_id": "corpus-control-69",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1770,
+                "height": 1204
+              },
+              "depth": 8,
+              "window": 3
+            },
+            {
+              "name": "",
+              "control_type": "group",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1770,
+                "height": 1204
+              },
+              "depth": 9,
+              "window": 3
+            },
+            {
+              "name": "Corpus control 71",
+              "control_type": "group",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 86,
+                "height": 1204
+              },
+              "depth": 10,
+              "window": 3
+            },
+            {
+              "name": "",
+              "control_type": "tree",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 86,
+                "height": 1204
+              },
+              "depth": 11,
+              "window": 3
+            },
+            {
+              "name": "",
+              "control_type": "group",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 2,
+                "y": 0,
+                "width": 60,
+                "height": 24
+              },
+              "depth": 12,
+              "window": 3
+            },
+            {
+              "name": "",
+              "control_type": "group",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 2,
+                "y": 35,
+                "width": 60,
+                "height": 61
+              },
+              "depth": 12,
+              "window": 3
+            },
+            {
+              "name": "Corpus control 75",
+              "control_type": "group",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 85,
+                "y": 0,
+                "width": 469,
+                "height": 1204
+              },
+              "depth": 10,
+              "window": 3
+            },
+            {
+              "name": "",
+              "control_type": "group",
+              "automation_id": "corpus-control-76",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 85,
+                "y": 0,
+                "width": 467,
+                "height": 1204
+              },
+              "depth": 11,
+              "window": 3
+            },
+            {
+              "name": "Corpus control 77",
+              "control_type": "list",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 85,
+                "y": 0,
+                "width": 455,
+                "height": 377
+              },
+              "depth": 12,
+              "window": 3
+            },
+            {
+              "name": "Corpus control 78",
+              "control_type": "thumb",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 547,
+                "y": 0,
+                "width": 7,
+                "height": 1204
+              },
+              "depth": 10,
+              "window": 3
+            },
+            {
+              "name": "Corpus control 79",
+              "control_type": "group",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 553,
+                "y": 0,
+                "width": 956,
+                "height": 1204
+              },
+              "depth": 10,
+              "window": 3
+            },
+            {
+              "name": "",
+              "control_type": "group",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 553,
+                "y": 0,
+                "width": 956,
+                "height": 1204
+              },
+              "depth": 11,
+              "window": 3
+            },
+            {
+              "name": "Corpus control 81",
+              "control_type": "list",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 553,
+                "y": 0,
+                "width": 932,
+                "height": 1204
+              },
+              "depth": 12,
+              "window": 3
+            },
+            {
+              "name": "",
+              "control_type": "group",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 1509,
+                "y": 0,
+                "width": 261,
+                "height": 1204
+              },
+              "depth": 10,
+              "window": 3
+            },
+            {
+              "name": "Corpus control 83",
+              "control_type": "group",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 1510,
+                "y": 0,
+                "width": 260,
+                "height": 1204
+              },
+              "depth": 11,
+              "window": 3
+            },
+            {
+              "name": "Corpus control 84",
+              "control_type": "list",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 1510,
+                "y": 0,
+                "width": 260,
+                "height": 1204
+              },
+              "depth": 12,
+              "window": 3
+            },
+            {
+              "name": "",
+              "control_type": "group",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1770,
+                "height": 1204
+              },
+              "depth": 9,
+              "window": 3
+            },
+            {
+              "name": "",
+              "control_type": "group",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1770,
+                "height": 1204
+              },
+              "depth": 9,
+              "window": 3
+            },
+            {
+              "name": "",
+              "control_type": "group",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1770,
+                "height": 1204
+              },
+              "depth": 9,
+              "window": 3
+            },
+            {
+              "name": "",
+              "control_type": "image",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1770,
+                "height": 1204
+              },
+              "depth": 9,
+              "window": 3
+            },
+            {
+              "name": "Corpus control 89",
+              "control_type": "pane",
+              "automation_id": "",
+              "class_name": "CorpusControl",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 1770,
+                "height": 1204
+              },
+              "depth": 0,
+              "window": 6
+            }
+          ]
+        },
+        "surface_kinds": [
+          "desktop",
+          "electron",
+          "native"
+        ]
+      }
+    }
+  ]
+}
