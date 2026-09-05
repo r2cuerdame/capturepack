@@ -34,8 +34,8 @@ lokaler, offener Ordner, der ohne KI, Konto und Cloud-Dienst funktioniert.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Herunterladen](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Aktuelle öffentliche Windows-Version: **CapturePack 0.5.0**. In 0.4.4 erstellt
-Verlauf eine geprüfte **Share Copy** (`.share.zip`), deren einzige Medien geprüfte
+Aktuelle öffentliche Windows-Version: **CapturePack 0.5.0**. Verlauf erstellt
+eine geprüfte **Share Copy** (`.share.zip`), deren einzige Medien geprüfte
 annotierte PNG-Standbilder sind; eine erzeugte README, ein Offline-Viewer und ein
 minimales Inventar begleiten sie. Originale, sämtliche Videos und strukturierter
 Kontext werden ausgeschlossen. Das vollständige ZIP (`.zip`) enthält weiterhin
@@ -184,11 +184,23 @@ Local first · Offline first · offenes Format · Plugin-basiert · keine Cloud 
 
 Erzeugte CapturePacks sollen für immer lesbar bleiben.
 
+## Was CapturePack bewusst nicht tut
+
+CapturePack setzt sich bewusst strikte Produktgrenzen:
+
+- **Keine Cloud-Dienste, Kontopflichten oder heimliche Telemetrie:** Vollständig lokal und offline. Es werden keine Telemetrie-, Tracking- oder Absturzdaten vom System gesendet. Die einzige ausgehende Netzwerkanfrage ist die optionale Update-Prüfung über GitHub Releases (unter Einstellungen → Allgemein abschaltbar).
+- **Keine Tastenprotokollierung (Keylogging):** Erfasst Mauskoordinaten, Klicks und Fensterereignisse synchron zur Replay-Uhr. Tastatureingaben werden niemals belauscht oder aufgezeichnet (`input.key.*` ist reserviert und verboten).
+- **Keine versteckten Hintergrundpixel bei Bereichsaufnahmen:** Bereichs-Screenshots (`Ctrl+Alt+S`) speichern ausschließlich das gewählte Pixelrechteck und dessen Platzierungsmetadaten. Die Anwendung behält niemals heimlich den gesamten Desktop oder nicht ausgewählte Monitore.
+- **Keine interaktive Objektauswahl während der Videoaufzeichnung:** Das Durchlaufen des Barrierefreiheitsbaums während der Aufnahme würde übermäßig viel CPU beanspruchen. Videoaufnahmen erfassen Fenstergeometrien über die Zeit, aber die interaktive Steuerelement-Auswahl (Object Pick) bleibt ausschließlich Standbildern vorbehalten.
+- **Kein unangekündigtes oder stillschweigendes Löschen:** Aufbewahrungsrichtlinien folgen exakt den benutzerdefinierten Speicher- und Tage-Grenzen. Manuelles Bereinigen verschiebt Packs in den Windows-Papierkorb, anstatt Daten unwiderruflich ohne Rückfrage zu vernichten.
+- **Keine ungeprüfte automatische Geheimnisentfernung:** Weichzeichnen ist eine nicht-destruktive visuelle Abdeckung. Die Software behauptet nicht, Zugangsdaten oder sensible Daten magisch zu erkennen; der Nutzer bleibt dafür verantwortlich, Standbilder vor der Weitergabe visuell zu prüfen.
+- **Keine externen Issue-Tracker im Kern gebündelt:** Der Kern enthält keinen Code zur Ticketerstellung in Jira, GitHub, Linear usw. Solche Integrationen werden an Post-Save-Action-Plugins oder Webhooks delegiert.
+
 ## Was in einem CapturePack steckt
 
 Das Pack ist ein einfacher **Ordner** — durchsuchbar, bearbeitbar, ehrlich. Ein
 vollständiges ZIP (`.zip`) ist eine optionale Kopie zur Weitergabe und enthält
-weiterhin die Originalbelege. Seit 0.4.4 bietet Verlauf außerdem eine geprüfte
+weiterhin die Originalbelege. Verlauf bietet außerdem eine geprüfte
 **Share Copy** (`.share.zip`), deren einzige Medien geprüfte annotierte
 PNG-Standbilder sind; eine erzeugte README, ein Offline-Viewer und ein minimales
 geschlossenes Inventar begleiten sie.
@@ -232,6 +244,13 @@ UI-Objekt preis, sagt das Pack das — statt Kontext zu erfinden.
 
 Die Spezifikation zählt mehr als jede Implementierung — jede Sprache kann CapturePack-Dateien erzeugen. Siehe [SPEC.md](SPEC.md).
 
+## Plugins und After-Save-Aktionen
+
+Einstellungen → Plugins unterteilt Erweiterungen in zwei klare Kategorien:
+
+1. **Temporale Kontext-Provider (Temporal Context Providers):** Plugins, die während der Aufnahme zeitindizierte Metadaten bereitstellen (wie Windows UI Automation oder die Chrome-DOM-Erweiterung). Siehe [docs/temporal-provider-api.md](docs/temporal-provider-api.md).
+2. **After-Save-Aktionen (After Save Actions):** Automatisierungspipelines, die sequentiell ausgeführt werden, sobald ein Pack dauerhaft auf der Festplatte gesichert ist (und optional nach Abschluss des Hintergrund-Videorenderings). Aktionen können lokale Skripte ausführen oder HTTP-Webhooks anstoßen. Die Isolation ist strikt: Eine hängende oder fehlgeschlagene Aktion gefährdet niemals das gespeicherte Pack, blockiert nicht die Oberfläche und erzeugt keine unbehandelten Fehler. Webhook-Geheimnisse werden lokal mit Windows DPAPI (`safeStorage`) verschlüsselt, und Klartext-HTTP außerhalb von Loopback wird abgewiesen.
+
 ## MCP — mit deinen Aufnahmen sprechen
 
 Die App enthält einen optionalen, schreibgeschützten
@@ -260,7 +279,42 @@ Werkzeuge, Client-Einrichtung und Einstellungen: [docs/MCP.md](docs/MCP.md).
   in der Größe begrenzte Laufzeitdiagnose. Protokolle werden nie automatisch
   hochgeladen.
 
-### Status
+## Installation & Build
+
+### Vorgefertigter Windows-Installer
+
+Lade den aktuellen Installer von den [GitHub Releases](https://github.com/r2cuerdame/capturepack/releases/latest) herunter:
+
+1. Lade `CapturePack-Setup-0.5.0.exe` und `SHA256SUMS.txt` herunter.
+2. Prüfe die Prüfsumme in PowerShell:
+   ```powershell
+   Get-FileHash CapturePack-Setup-0.5.0.exe -Algorithm SHA256
+   ```
+3. Führe den Installer aus. Da die Open-Source-Codesignierung noch beantragt wird, zeigt Windows SmartScreen einen Hinweis: Klicke auf **Weitere Informationen** → **Trotzdem ausführen**.
+
+### Aus dem Quellcode bauen
+
+Voraussetzungen:
+- Windows 10/11 (64-Bit)
+- [Node.js](https://nodejs.org/) `>= 22.12.0` (LTS empfohlen)
+- npm `>= 10.9.0`
+
+```powershell
+# Repository klonen
+git clone https://github.com/r2cuerdame/capturepack.git
+cd capturepack/core
+
+# Festgelegte Abhängigkeiten installieren
+npm ci
+
+# Im lokalen Entwicklungsmodus starten
+npm run dev
+
+# Release-Candidate-Validierung ausführen (alle Tests, Typcheck, Build, Smoke)
+npm run qa:rc
+```
+
+## Status
 
 **0.5.0 ist der aktuelle öffentliche Windows-Download.** CapturePack ist
 weiterhin ein Projekt im Frühstadium; bewahre beim Melden eines Problems das
@@ -307,7 +361,7 @@ Einstellungen → Allgemein abschalten lässt.
 Unschärfe ist nicht destruktiv: Sie schützt erzeugte annotierte Ansichten, aber
 `snapshot.png` und das Original-Replay im vollständigen Pack bleiben
 ungeschwärzt. Wenn Originalmedien oder strukturierter Kontext privat bleiben
-müssen, nutze in 0.4.4 Verlauf → **Share Copy** und prüfe vor dem Senden die
+müssen, nutze Verlauf → **Share Copy** und prüfe vor dem Senden die
 Vorschau jedes enthaltenen Standbilds. Die
 Share Copy schließt Originale, sämtliche Videocontainer, Manifeste,
 Annotationen, Timelines, Plugin-Kontext und erzeugte Pack-Dokumente aus; die

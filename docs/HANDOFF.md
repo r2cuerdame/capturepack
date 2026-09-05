@@ -20,13 +20,13 @@ Use [docs/README.md](README.md) as the documentation index. The older
 
 ## Public state
 
-CapturePack **0.4.5** is the current stable Windows release.
+CapturePack **0.5.0** is the current stable Windows release.
 
 | Item | Current state |
 |---|---|
 | Public release | [v0.5.0](https://github.com/r2cuerdame/capturepack/releases/tag/v0.5.0), stable (`draft=false`, `prerelease=false`) |
 | Release source | Immutable `v0.5.0` tag; never move or replace it |
-| Release verification | The guarded Release workflow reran all 88 RC steps on the tagged source, built the Windows artifacts, and byte-verified the exact four-file draft before publication |
+| Release verification | The guarded Release workflow reran all 89 RC steps on the tagged source, built the Windows artifacts, and byte-verified the exact four-file draft before publication |
 | Delivery | The After Save Action host [#68](https://github.com/r2cuerdame/capturepack/issues/68) and the two-list plugin settings [#69](https://github.com/r2cuerdame/capturepack/issues/69), listed under "What 0.5.0 contains" |
 | Website | [capturepack.dev](https://capturepack.dev/), with all nine languages kept on the application version |
 

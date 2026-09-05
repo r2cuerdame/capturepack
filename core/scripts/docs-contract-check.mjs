@@ -204,6 +204,14 @@ console.log('\nThe handoff set agrees with the gate it describes')
     claimsFull.test(prompt) && new RegExp(`\\b${String(skipBuildSteps)}\\b`, 'u').test(prompt),
     'docs/HANDOFF-PROMPT.md does not state the number qa-gate would actually run',
   )
+
+  const qa = readFileSync(join(ROOT, 'docs', 'QA.md'), 'utf8')
+  const claimsQaDiscovered = new RegExp(`the gate discovers ${String(discovered.length)} checks`, 'u')
+  check(
+    `docs/QA.md states the real discovered check count (${String(discovered.length)} checks)`,
+    claimsQaDiscovered.test(qa),
+    `docs/QA.md does not state "the gate discovers ${String(discovered.length)} checks"`,
+  )
 }
 
 console.log('\nThe documents name the version this repository builds')

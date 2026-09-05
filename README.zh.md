@@ -27,7 +27,7 @@ AI 不必只凭像素去猜。
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [下载](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-当前公开 Windows 版本：**CapturePack 0.5.0**。0.4.4 可从历史记录创建经检查的
+当前公开 Windows 版本：**CapturePack 0.5.0**。可从历史记录创建经检查的
 **分享副本**（`.share.zip`）；其中唯一的媒体是经检查的带批注 PNG 静态图片，并附带
 生成的 README、离线查看器和最小清单。原始内容、所有视频和结构化上下文都会被排除。
 完整 ZIP（`.zip`）仍会包含原始内容。
@@ -139,10 +139,22 @@ CapturePack 支持 **9 种语言**：English · 한국어 · 日本語 · 中文
 
 生成的 CapturePack 应当永远可读。
 
+## CapturePack 刻意不做的事情
+
+CapturePack 经过深思熟虑设定了严格的产品边界：
+
+- **无云端服务、强制账号或隐形遥测：** 完全在本地离线运行。绝不向外发送遥测、用户跟踪或崩溃报告。唯一的对外网络请求是可选的 GitHub Releases 更新检查（可在 设置 → 常规 中禁用）。
+- **绝不记录按键：** 依据回放时钟记录鼠标坐标、点击与窗口事件。绝不监听或记录任何键盘输入（`input.key.*` 被保留并严禁生成）。
+- **区域截图无隐藏背景像素：** 区域截图（`Ctrl+Alt+S`）仅保存用户选择的裁剪像素矩形与放置元数据，绝不暗中保存完整屏幕或未选择显示器的像素。
+- **视频录制期间无实时对象拾取：** 在录制期间遍历无障碍树会耗费大量 CPU。视频录制在时间轴上记录窗口几何位置，但控件级别的交互式对象拾取专属于静态截图。
+- **绝无未经提示的隐式删除：** 留存策略严格遵守用户配置的存储配额与天数阈值。手动清理会将包移动至 Windows 回收站，绝不未经确认直接永久粉碎文件。
+- **绝无未经人工复核的自动凭据擦除：** 模糊处理是非破坏性的视觉遮蔽。软件不会妄称自动识别并剔除密码或机密；用户在分享前必须亲自目视检查所有静态图像。
+- **核心模块不内置外部缺陷跟踪器：** 核心包不捆绑 Jira、GitHub、Linear 等第三方工单创建客户端。所有外部集成均交给保存后动作插件或针对已保存文件夹的 Webhook。
+
 ## CapturePack 里有什么
 
 包就是一个普通的**文件夹**——可浏览、可编辑、不藏东西。完整分发副本是普通 ZIP
-（`.zip`），其中仍包含原始证据。0.4.4 还在历史记录中提供经检查的**分享副本**
+（`.zip`），其中仍包含原始证据。历史记录中还提供经检查的**分享副本**
 （`.share.zip`）；其中唯一的媒体是经检查的带批注 PNG 静态图片，并附带生成的 README、
 离线查看器和最小封闭清单。
 
@@ -183,6 +195,13 @@ CapturePack_2026-07-27_143052/
 
 规范比任何具体实现都重要——任何语言都可以生成 CapturePack 文件。参见 [SPEC.md](SPEC.md)。
 
+## 插件与保存后动作
+
+设置 → 插件 将插件能力清晰划分为两类：
+
+1. **时间上下文提供方 (Temporal Context Providers)：** 在捕获期间提供带时间戳元数据的插件（例如 Windows UI Automation 或 Chrome DOM 扩展）。参见 [docs/temporal-provider-api.md](docs/temporal-provider-api.md)。
+2. **保存后动作 (After Save Actions)：** 捕获包在磁盘上持久化后顺序执行的自动化流水线（亦可在后台视频渲染完成后触发）。动作可以执行本地脚本或发送 HTTP Webhook。故障严格隔离：卡死或失败的动作绝不会破坏已保存的包、阻塞 UI 或导致未捕获的 Promise rejection。Webhook 密钥通过 Windows DPAPI (`safeStorage`) 本地加密存储，拒绝非 loopback 的明文 HTTP 终结点。
+
 ## MCP —— 与你的捕获对话
 
 应用内置一个可选的只读 [MCP](https://modelcontextprotocol.io) 服务器，默认启用并自动
@@ -204,6 +223,41 @@ claude mcp add --transport http capturepack http://127.0.0.1:39393/mcp
   回放长度以及 5–30 fps 的捕获帧率。
 - 关于 / 信息 → **打开日志文件夹** 会打开本地的、有大小上限的运行诊断。日志绝不会
   被自动上传。
+
+## 安装与构建
+
+### 预构建 Windows 安装包
+
+从 [GitHub Releases](https://github.com/r2cuerdame/capturepack/releases/latest) 下载最新安装程序：
+
+1. 下载 `CapturePack-Setup-0.5.0.exe` 与 `SHA256SUMS.txt`。
+2. 在 PowerShell 中校验哈希：
+   ```powershell
+   Get-FileHash CapturePack-Setup-0.5.0.exe -Algorithm SHA256
+   ```
+3. 运行安装程序。由于开源代码签名正在申请中，Windows SmartScreen 会弹出未识别发布者警告：点击 **更多信息** → **仍要运行**。
+
+### 从源码构建
+
+环境要求：
+- Windows 10/11 (64 位)
+- [Node.js](https://nodejs.org/) `>= 22.12.0` (推荐 LTS)
+- npm `>= 10.9.0`
+
+```powershell
+# 克隆仓库
+git clone https://github.com/r2cuerdame/capturepack.git
+cd capturepack/core
+
+# 安装固定依赖
+npm ci
+
+# 以本地开发模式启动
+npm run dev
+
+# 运行发布候选验证门禁（所有自动化检查、类型检查、构建与冒烟测试）
+npm run qa:rc
+```
 
 ## 状态
 
@@ -241,7 +295,7 @@ URL——都可能是敏感信息。CapturePack 把捕获内容和对象上下�
 GitHub Releases 更新检查。
 
 模糊是非破坏性的：它保护的是生成的批注视图，而完整包里的 `snapshot.png` 和原始回放
-仍然未被遮挡。当原始媒体或结构化上下文必须保密时，请在 0.4.4 中使用历史记录 →
+仍然未被遮挡。当原始媒体或结构化上下文必须保密时，请使用历史记录 →
 **分享副本**，并在发送前逐一检查所含静态图片的预览。分享副本会排除原始
 内容、所有视频容器、manifest、批注、时间线、插件上下文和生成的包文档，并把所含 PNG
 仅按像素数据规范化重编码。即便如此，也不能保证经检查的衍生图片中没有未标记的秘密。
