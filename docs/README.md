@@ -63,6 +63,7 @@ work does not settle remains open: a real three-screen capture
 | [Code signing](CODE_SIGNING.md) | Current unsigned-build policy and signing plan |
 | [0.3.1 dependency audit](DEPENDENCY-AUDIT-0.3.1.md) | Production/dev dependency findings for that release line |
 | [DXGI timing reference](DXGI_TIMING_REFERENCE.md) | Windows capture timing evidence and terminology |
+| [DXGI replay ring foundation](DXGI_REPLAY_RING.md) | Native ring self-test, capability handshake, and field-probe boundary |
 
 ## Integrations and schemas
 
