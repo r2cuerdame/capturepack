@@ -4,7 +4,10 @@ import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { cp, mkdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import { compileDxgiTimingHelper } from './build-dxgi-timing-helper.mjs'
+import {
+  compileDxgiReplayRingHelper,
+  compileDxgiTimingHelper,
+} from './build-dxgi-timing-helper.mjs'
 
 const watch = process.argv.includes('--watch')
 
@@ -83,6 +86,9 @@ function compileMoveNoReplaceHelper() {
 compileNativeReplayHelper()
 compileMoveNoReplaceHelper()
 compileDxgiTimingHelper({
+  required: process.argv.includes('--require-dxgi-helper'),
+})
+compileDxgiReplayRingHelper({
   required: process.argv.includes('--require-dxgi-helper'),
 })
 
