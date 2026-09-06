@@ -7,7 +7,7 @@ import { inspectPack } from './pack-forensics.mjs'
 import { terminateProcessTree } from './process-tree.mjs'
 
 const REPORT_SCHEMA_VERSION = 1
-// The complete 48-check gate finishes in about 21 seconds on the release
+// The complete gate finishes in about 21 seconds on the release
 // machine. A 15-minute timeout PER child made one wedged helper look like the
 // entire tool had frozen for exactly the delays the owner reported. Two
 // minutes leaves ample CI headroom while keeping a single failure bounded;
@@ -55,6 +55,7 @@ const VIDEO_PROFILE_CHECKS = new Set([
   'check:replay-clock-map',
   'check:fmp4-sample-timeline',
   'check:processor-qpc-latency',
+  'check:dxgi-replay-ring',
   'check:settings',
   'check:hotkeys',
   'check:about',

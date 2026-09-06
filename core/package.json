@@ -75,6 +75,7 @@
     "check:fmp4-sample-timeline": "node scripts/fmp4-sample-timeline-check.mjs",
     "check:processor-qpc-latency": "node scripts/processor-qpc-latency-check.mjs",
     "check:dxgi-timing-reference": "node scripts/dxgi-timing-reference-check.mjs",
+    "check:dxgi-replay-ring": "node scripts/dxgi-replay-ring-check.mjs",
     "check:settings": "node scripts/settings-limits-check.mjs",
     "check:storage-retention": "node scripts/storage-retention-check.mjs",
     "check:hotkeys": "node scripts/hotkey-registry-check.mjs",
@@ -113,6 +114,7 @@
     "qa:exposure-field": "node scripts/exposure-field-check.mjs",
     "qa:native-replay-field": "node scripts/native-replay-fallback-e2e.mjs",
     "qa:dxgi-timing-reference": "node scripts/dxgi-timing-reference-field-check.mjs",
+    "qa:dxgi-replay-ring": "node scripts/dxgi-replay-ring-field-check.mjs",
     "qa:pack": "node scripts/pack-forensics.mjs",
     "qa:rc": "node scripts/qa-gate.mjs"
   },
