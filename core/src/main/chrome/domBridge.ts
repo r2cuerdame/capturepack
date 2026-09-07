@@ -966,6 +966,13 @@ function handlePageCaptureMessage(raw: unknown, socket: net.Socket): boolean {
   if (typeof type !== 'string' || !type.startsWith('page.capture.')) return false
   const captureId = pageCaptureId(message['capture_id'])
   if (type === 'page.capture.failed') {
+    if (message['protocol'] === DOM_PROTOCOL_VERSION && captureId !== null) {
+      const pending = pageCaptures.get(captureId)
+      if (pending?.socket === socket) {
+        clearTimeout(pending.timeout)
+        pageCaptures.delete(captureId)
+      }
+    }
     logWarn(
       `[chrome] toolbar page capture failed: ${String(message['reason'] ?? 'unknown').slice(0, 200)}`,
     )

@@ -593,6 +593,7 @@ chrome.action.onClicked.addListener((tab) => {
       type: 'page.capture.failed',
       protocol: PROTOCOL,
       timestamp: Date.now(),
+      ...(captureId === null ? {} : { capture_id: captureId }),
       reason: String(err && err.message ? err.message : err).slice(0, 200),
       tab: tabFacts(tab || {}),
     })

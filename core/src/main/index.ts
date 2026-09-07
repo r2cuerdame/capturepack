@@ -375,6 +375,7 @@ function main(): void {
           `[chrome] full-page capture saved as ${path.basename(handle.dirPath)}, ` +
           'but another capture/editor already owns the window',
         )
+        return { ok: false, reason: 'capture-saved-editor-busy' }
       }
       return { ok: true }
     })
