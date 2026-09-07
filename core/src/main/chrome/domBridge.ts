@@ -21,8 +21,7 @@ import { logError, logInfo, logWarn } from '../log'
 
 /** The protocol both halves speak (shared/protocol/protocol-v1.schema.json). */
 export const DOM_PROTOCOL_VERSION = 1
-/** Stable synthetic Core surface used by a standalone full-page browser raster. */
-export const BROWSER_PAGE_SURFACE_ID = 'capturepack-browser-page'
+export { BROWSER_PAGE_SURFACE_ID } from '../../shared/context/browserPage'
 const MAX_DOM_COORDINATE = 10_000_000
 
 export interface DomElement {

@@ -24,6 +24,8 @@ const manifest = JSON.parse(readFileSync(resolve(extension, 'manifest.json'), 'u
 const bridge = readFileSync(resolve(here, '..', 'src', 'main', 'chrome', 'domBridge.ts'), 'utf8')
 const appCapture = readFileSync(resolve(here, '..', 'src', 'main', 'chrome', 'pageCapture.ts'), 'utf8')
 const appMain = readFileSync(resolve(here, '..', 'src', 'main', 'index.ts'), 'utf8')
+const translations = readFileSync(resolve(here, '..', 'src', 'shared', 'i18n.ts'), 'utf8')
+const settingsHtml = readFileSync(resolve(here, '..', 'src', 'renderer', 'settings', 'settings.html'), 'utf8')
 
 const sandbox = { self: {}, TextEncoder, btoa: (value) => Buffer.from(value, 'binary').toString('base64') }
 runInNewContext(source, sandbox)
@@ -283,6 +285,10 @@ check('switching tabs during capture aborts before another tab can enter the bun
     switched.restored && switched.activated.size() === 0 && switched.updated.size() === 0)
 check('the optional app-hotkey grant is still reachable explicitly',
   manifest.permissions.includes('contextMenus') && background.includes('GRANT_CONTEXT_MENU'))
+check('Settings sends every locale to the real context-menu grant path',
+  (translations.match(/CapturePack: allow pages for the app hotkey/g) ?? []).length === 9 &&
+    settingsHtml.includes('CapturePack: allow pages for the app hotkey') &&
+    settingsHtml.includes('Ctrl+Shift+E'))
 check('DOM full-page mode admits only the captured document rectangle',
   documentSource.includes('options.fullPage === true') &&
     documentSource.includes('elements outside the captured document rectangle'))

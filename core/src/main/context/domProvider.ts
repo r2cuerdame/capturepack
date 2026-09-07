@@ -48,7 +48,7 @@ import type {
   DomEvent,
   DomViewport,
 } from '../chrome/domBridge'
-import { BROWSER_PAGE_SURFACE_ID } from '../chrome/domBridge'
+import { BROWSER_PAGE_SURFACE_ID } from '../../shared/context/browserPage'
 
 export const CHROME_DOM_PROVIDER_ID = 'chrome-dom'
 const CHROME_DOM_VERSION = '0.1.0'
