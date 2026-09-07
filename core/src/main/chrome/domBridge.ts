@@ -967,13 +967,25 @@ function handlePageCaptureMessage(raw: unknown, socket: net.Socket): boolean {
   const type = message['type']
   if (typeof type !== 'string' || !type.startsWith('page.capture.')) return false
   const captureId = pageCaptureId(message['capture_id'])
-  if (type === 'page.capture.failed') {
-    logWarn(
-      `[chrome] toolbar page capture failed: ${String(message['reason'] ?? 'unknown').slice(0, 200)}`,
-    )
+  if (message['protocol'] !== DOM_PROTOCOL_VERSION) {
+    rejectPageCapture(socket, captureId, 'malformed-envelope')
     return true
   }
-  if (message['protocol'] !== DOM_PROTOCOL_VERSION || captureId === null) {
+  if (type === 'page.capture.failed') {
+    const reason = String(message['reason'] ?? 'unknown').slice(0, 160)
+    if (captureId === null) {
+      logWarn(`[chrome] toolbar page capture failed before assembly: ${reason}`)
+      return true
+    }
+    const state = pageCaptures.get(captureId)
+    if (state?.socket === socket) {
+      rejectPageCapture(socket, captureId, `extension-failed:${reason}`)
+    } else {
+      logWarn(`[chrome] toolbar page capture failed before assembly: ${reason}`)
+    }
+    return true
+  }
+  if (captureId === null) {
     rejectPageCapture(socket, captureId, 'malformed-envelope')
     return true
   }

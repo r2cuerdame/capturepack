@@ -3399,10 +3399,8 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
     editAfterSaveMode === 'image' ? 'off' : editAfterSaveMode
   const browserPageImage =
     loadedCapture.captureKind === 'image' &&
-    events.some((event) =>
-      event.type === 'core.image.capture.triggered' &&
-      event.data?.source === 'chrome-full-page',
-    ) &&
+    loadedPlugins.some((plugin) => plugin.name === DOM_PLUGIN_NAME) &&
+    loadedDomEvents.some((event) => event.document !== undefined) &&
     loadedWindowsContext !== null &&
     loadedWindowsContext.checkpoint.windows.length === 1 &&
     loadedWindowsContext.checkpoint.windows[0]?.surface_id === BROWSER_PAGE_SURFACE_ID &&

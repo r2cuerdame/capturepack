@@ -1,5 +1,5 @@
 import { app, nativeImage } from 'electron'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -9,6 +9,7 @@ import {
 } from '../src/main/chrome/pageCapture'
 import type { BrowserPageCapture } from '../src/main/chrome/domBridge'
 import { openPackContextSession, readPackObjectContext } from '../src/main/context/packObjects'
+import { saveAsNewPack, updatePack } from '../src/main/exporter'
 import { loadSettings } from '../src/main/settings'
 
 function tile(red: number, green: number, blue: number, width = 2, height = 2): Buffer {
@@ -100,6 +101,48 @@ void app.whenReady().then(async () => {
       throw new Error(`full-page DOM did not reach the editor context session: ${JSON.stringify(candidate)}`)
     }
     console.log('PASS — Chrome full-page context: saved pack reopens through the normal editor session')
+
+    const savedManifest = JSON.parse(readFileSync(join(saved.dirPath, 'manifest.json'), 'utf8'))
+    const savedBrowserContext = browserPageCaptureContext(
+      capture,
+      result.width,
+      result.height,
+      result.scale,
+    )
+    const reeditInput = {
+      captureKind: 'image' as const,
+      imageScope: 'fullscreen' as const,
+      imageContextMode: 'browser-page' as const,
+      snapshotPng: result.png,
+      width: result.width,
+      height: result.height,
+      capturedAt: capture.capturedAt,
+      replayWebm: null,
+      replayDurationMs: 0,
+      annotations: [],
+      title: 'Re-edited full page',
+      note: '',
+      snapshotTMs: null,
+      timeline: { t0: capture.capturedAt.toISOString(), events: [] },
+      plugins: savedManifest.plugins,
+      windowsContext: savedBrowserContext.windowsContext,
+      screens: [{ width: 2, height: 4, scale: 1 }],
+      clipboardAfterSave: 'off' as const,
+    }
+    await updatePack(saved, reeditInput, { keepReplay: true })
+    const savedAsNew = await saveAsNewPack(saved.dirPath, reeditInput)
+    for (const handle of [saved, savedAsNew]) {
+      const reopened = readPackObjectContext(handle.dirPath)
+      if (reopened === null || reopened.history.length !== 1 || reopened.domEvents.length !== 1) {
+        throw new Error('re-edit dropped the browser page context bundle')
+      }
+      const reopenedCandidate = (await openPackContextSession(reopened).frameAt(0))
+        .displays[0]?.candidates.find((item) => item.providerId === 'chrome-dom')
+      if (reopenedCandidate?.name !== 'Save') {
+        throw new Error('re-edit no longer exposes the saved DOM candidate')
+      }
+    }
+    console.log('PASS — Chrome full-page context: Save and Save As New preserve the DOM bundle')
 
     const fractional: BrowserPageCapture = {
       ...capture,

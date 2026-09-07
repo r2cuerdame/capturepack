@@ -144,6 +144,9 @@ check('DPR participates in the bounded-pixel decision',
   source.includes('geometry.deviceScaleFactor ** 2'))
 check('restricted-page/injection errors surface through the toolbar',
   background.includes("type: 'page.capture.failed'") && background.includes("text: '✕'"))
+check('extension-side failures identify and clear their in-flight app assembly',
+  background.includes("{ capture_id: captureId }") &&
+    bridge.includes("rejectPageCapture(socket, captureId, `extension-failed:${reason}`)"))
 check('captureVisibleTab is guarded on both sides against tab switches',
   (source.match(/await assertCaptureTab\(tab\)/g) ?? []).length === 2)
 
@@ -180,6 +183,10 @@ check('the saved page surface and viewport feed the normal context-session path'
     appCapture.includes('windowsContext: browserContext.windowsContext') &&
     appCapture.includes('viewport: {') &&
     appCapture.includes("'plugins', 'windows-context', 'timeline.json'"))
+check('re-edit recognizes only a persisted DOM bundle with the reserved page surface',
+  appMain.includes('saveBrowserPageCapture') &&
+    readFileSync(resolve(here, '..', 'src', 'main', 'session.ts'), 'utf8')
+      .includes('loadedDomEvents.some((event) => event.document !== undefined)'))
 check('failure to open the normal editor is not acknowledged as success',
   appMain.includes("{ ok: false, reason: 'Capture saved, but another editor is already open' }"))
 check('the app acknowledges only after the capture handler settles',
