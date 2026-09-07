@@ -169,6 +169,21 @@ void app.whenReady().then(async () => {
     ) {
       throw new Error('fractional DPR did not use the compositor measured raster scale')
     }
+    const fractionalSaved = await saveBrowserPageCapture(fractional, {
+      ...loadSettings().settings,
+      outputDir,
+    })
+    const fractionalManifest = JSON.parse(
+      readFileSync(join(fractionalSaved.dirPath, 'manifest.json'), 'utf8'),
+    )
+    const fractionalScreen = fractionalManifest.environment?.screens?.[0]
+    if (
+      fractionalScreen?.width !== 3 ||
+      fractionalScreen?.height !== 6 ||
+      fractionalScreen?.scale !== 1.5
+    ) {
+      throw new Error('manifest screen metadata does not match the measured page raster')
+    }
     console.log('PASS — Chrome full-page mapping: fractional DPR uses measured raster scale')
   } catch (error) {
     console.error(`FAIL — Chrome full-page composition: ${String(error)}`)

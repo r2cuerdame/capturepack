@@ -25,69 +25,105 @@ const bridge = readFileSync(resolve(here, '..', 'src', 'main', 'chrome', 'domBri
 const appCapture = readFileSync(resolve(here, '..', 'src', 'main', 'chrome', 'pageCapture.ts'), 'utf8')
 const appMain = readFileSync(resolve(here, '..', 'src', 'main', 'index.ts'), 'utf8')
 
-const sandbox = {
-  self: {},
-  TextEncoder,
-  btoa: (value) => Buffer.from(value, 'binary').toString('base64'),
-}
+const sandbox = { self: {}, TextEncoder, btoa: (value) => Buffer.from(value, 'binary').toString('base64') }
 runInNewContext(source, sandbox)
 const fullPage = sandbox.self.__capturepackFullPageCapture
 
-async function captureLifecycle({ failRestore = false } = {}) {
-  const events = []
-  const tab = { id: 7, windowId: 3, url: 'https://example.test/', title: 'Fixture', active: true }
-  const geometry = {
-    documentWidth: 1,
-    documentHeight: 1,
-    viewportWidth: 1,
-    viewportHeight: 1,
-    deviceScaleFactor: 1,
-    originalScrollX: 0,
-    originalScrollY: 0,
+function listenerChannel() {
+  const listeners = new Set()
+  return {
+    addListener: (listener) => listeners.add(listener),
+    removeListener: (listener) => listeners.delete(listener),
+    emit: (...args) => listeners.forEach((listener) => listener(...args)),
+    size: () => listeners.size,
   }
+}
+
+async function runExtensionCapture({
+  activateDuringScreenshot = false,
+  injectionError = null,
+  failRestore = false,
+} = {}) {
+  const geometry = {
+    documentWidth: 1800,
+    documentHeight: 1800,
+    viewportWidth: 1000,
+    viewportHeight: 900,
+    deviceScaleFactor: 1,
+    originalScrollX: 12,
+    originalScrollY: 34,
+  }
+  const activated = listenerChannel()
+  const updated = listenerChannel()
+  const messages = []
+  const moves = []
+  const events = []
+  let restored = false
+  let captures = 0
   sandbox.chrome = {
-    runtime: { getManifest: () => ({ version: 'test' }) },
+    runtime: { getManifest: () => ({ version: '0.4.0' }) },
     tabs: {
-      get: async () => tab,
-      captureVisibleTab: async () => 'data:image/png;base64,aQ==',
+      onActivated: activated,
+      onUpdated: updated,
+      get: async () => ({
+        id: 7,
+        windowId: 3,
+        url: 'https://example.test/',
+        active: true,
+      }),
+      captureVisibleTab: async () => {
+        captures += 1
+        if (activateDuringScreenshot) activated.emit({ tabId: 8, windowId: 3 })
+        return 'data:image/png;base64,iVBORw0KGgo='
+      },
     },
     scripting: {
-      executeScript: async (details) => {
-        if (details.files) return []
-        const name = details.func?.name
-        events.push(`script:${name}`)
-        if (name === 'preparePage' || name === 'movePage') return [{ result: geometry }]
-        if (name === 'snapshotPage') {
+      executeScript: async (request) => {
+        if (request.files) {
+          if (injectionError !== null) throw injectionError
+          return []
+        }
+        if (request.func.name === 'preparePage') return [{ result: geometry }]
+        if (request.func.name === 'movePage') {
+          moves.push(request.args)
           return [{ result: {
-            viewport: { width: 1, height: 1, devicePixelRatio: 1, scrollX: 0, scrollY: 0 },
-            url: tab.url,
-            title: tab.title,
-            elements: [],
-            truncated: false,
-            visitedCount: 0,
-            elapsedMs: 0,
-            omitted: [],
+            x: request.args[1],
+            y: request.args[2],
+            documentWidth: geometry.documentWidth,
+            documentHeight: geometry.documentHeight,
+            viewportWidth: geometry.viewportWidth,
+            viewportHeight: geometry.viewportHeight,
+            deviceScaleFactor: geometry.deviceScaleFactor,
           } }]
         }
-        if (name === 'restorePage' && failRestore) throw new Error('restore failed')
-        return []
+        if (request.func.name === 'snapshotPage') {
+          return [{ result: { elements: [], space: { width: 1800, height: 1800 } } }]
+        }
+        if (request.func.name === 'restorePage') {
+          events.push('script:restorePage')
+          if (failRestore) throw new Error('restore failed')
+          restored = true
+          return [{ result: null }]
+        }
+        throw new Error(`unexpected injected function ${request.func.name}`)
       },
     },
   }
-  let rejected = false
+  let error = null
   try {
-    await fullPage.run(tab, (message) => {
-      events.push(`send:${message.type}`)
-      return true
-    })
-  } catch {
-    rejected = true
+    await fullPage.run(
+      { id: 7, windowId: 3, url: 'https://example.test/', title: 'Example' },
+      (message) => {
+        messages.push(message)
+        events.push(`send:${message.type}`)
+        return true
+      },
+    )
+  } catch (caught) {
+    error = caught
   }
-  return { events, rejected }
+  return { activated, captures, error, events, messages, moves, restored, updated }
 }
-
-const successfulLifecycle = await captureLifecycle()
-const failedRestoreLifecycle = await captureLifecycle({ failRestore: true })
 
 console.log('\nDeterministic tiling')
 check('the shipped helper is loadable', typeof fullPage?.captureGrid === 'function')
@@ -124,22 +160,93 @@ check('a switched tab is rejected before its pixels can be adopted', !fullPage.s
 
 console.log('\nQuality and restoration contract')
 check('lazy content is warmed before metadata is frozen', source.includes('Warm the complete vertical range'))
-check('fixed and sticky elements are suppressed after the first tile, including wide pages',
-  source.includes("position !== 'fixed' && position !== 'sticky'") && source.includes('index > 0'))
-check('scrollbars are suppressed during capture and removed during restoration',
-  source.includes('html::-webkit-scrollbar, body::-webkit-scrollbar') &&
-    !source.includes(' } ::-webkit-scrollbar') &&
-    source.includes('state.scrollbarStyle?.remove()'))
+const completed = await runExtensionCapture()
+const failedRestore = await runExtensionCapture({ failRestore: true })
+const captureMoves = completed.moves.filter((args) => args[4] === 550)
+let styleCapError = null
+sandbox.window = { __capturepackFullPageState: { captureId: 'cap', floating: null } }
+sandbox.document = { getElementsByTagName: () => ({ length: 20_001 }) }
+try {
+  await fullPage.movePage('cap', 0, 900, true, 0, 20_000, false)
+} catch (caught) {
+  styleCapError = caught
+}
+let stickyNeutralized = false
+let stickyRemainsVisible = false
+const stickyStyle = {
+  hidden: false,
+  position: '',
+  offsets: new Map(),
+  getPropertyValue: (name) => name === 'position'
+    ? stickyStyle.position
+    : (stickyStyle.offsets.get(name) || ''),
+  getPropertyPriority: () => '',
+  setProperty: (name, value) => {
+    if (name === 'visibility') stickyStyle.hidden = value === 'hidden'
+    if (name === 'position') stickyStyle.position = value
+    if (['top', 'right', 'bottom', 'left'].includes(name)) stickyStyle.offsets.set(name, value)
+  },
+  removeProperty: (name) => {
+    if (name === 'visibility') stickyStyle.hidden = false
+    if (name === 'position') stickyStyle.position = ''
+    stickyStyle.offsets.delete(name)
+  },
+}
+const sticky = {
+  style: stickyStyle,
+  getBoundingClientRect: () => ({ left: 0, top: 150, right: 100, bottom: 180 }),
+}
+const root = { scrollWidth: 100, scrollHeight: 200 }
+sandbox.window = {
+  __capturepackFullPageState: { captureId: 'sticky', floating: null },
+  scrollX: 0,
+  scrollY: 0,
+  innerWidth: 100,
+  innerHeight: 100,
+  getComputedStyle: () => ({ position: 'sticky' }),
+  scrollTo: (x, y) => { sandbox.window.scrollX = x; sandbox.window.scrollY = y },
+}
+sandbox.document = {
+  documentElement: root,
+  body: null,
+  getElementsByTagName: () => ({ 0: sticky, length: 1 }),
+}
+sandbox.requestAnimationFrame = (callback) => callback()
+sandbox.setTimeout = (callback) => callback()
+await fullPage.movePage('sticky', 0, 0, true, 0, 20_000, true)
+stickyNeutralized = stickyStyle.position === 'relative' &&
+  ['top', 'right', 'bottom', 'left'].every((name) => stickyStyle.offsets.get(name) === 'auto') &&
+  !stickyStyle.hidden
+await fullPage.movePage('sticky', 0, 100, true, 0, 20_000, false)
+stickyRemainsVisible = !stickyStyle.hidden
+check('fixed elements are shown only in the first tile, including wide pages',
+  source.includes("position !== 'fixed' && position !== 'sticky'") &&
+    captureMoves.every((args) => args[3] === true) &&
+    JSON.stringify(captureMoves.map((args) => args[6])) === JSON.stringify([true, false, false, false]))
+check('sticky positioning is neutralized without hiding its normal-flow content',
+  stickyNeutralized && stickyRemainsVisible &&
+    source.includes("setProperty('position', 'relative', 'important')") &&
+    source.includes("element.style.setProperty(name, 'auto', 'important')") &&
+    source.includes("saved.position === 'fixed' && !showFixed"))
+check('the fixed-element scan has a hard element cap and avoids an unbounded snapshot',
+  styleCapError?.message.includes('fixed-element scan limit is 20000') &&
+    source.includes('MAX_STYLE_SCAN_ELEMENTS = 20_000') &&
+    source.includes("document.getElementsByTagName('*')") &&
+    !source.includes("document.querySelectorAll('*')"))
 check('tile capture respects Chrome\'s two-per-second quota',
   source.includes('const CAPTURE_DELAY_MS = 550'))
 check('the exact original scroll is restored in a finally path',
-  /finally\s*\{[\s\S]*restorePage/.test(source) && source.includes('window.scrollTo(state.scrollX, state.scrollY)'))
+  completed.restored && /finally\s*\{[\s\S]*restorePage/.test(source) &&
+    source.includes('window.scrollTo(state.scrollX, state.scrollY)'))
+check('document scrollbars are suppressed without changing nested scrollers',
+  source.includes('html::-webkit-scrollbar, body::-webkit-scrollbar') &&
+    !source.includes(' } ::-webkit-scrollbar') &&
+    source.includes('state.scrollbarStyle?.remove()'))
 check('capture completion is sent only after page restoration succeeds',
-  successfulLifecycle.events.indexOf('script:restorePage') <
-    successfulLifecycle.events.indexOf('send:page.capture.finish') &&
-    failedRestoreLifecycle.rejected &&
-    !failedRestoreLifecycle.events.includes('send:page.capture.finish'),
-  JSON.stringify({ successfulLifecycle, failedRestoreLifecycle }))
+  completed.events.indexOf('script:restorePage') <
+    completed.events.indexOf('send:page.capture.finish') &&
+    failedRestore.error?.message === 'restore failed' &&
+    !failedRestore.messages.some((message) => message.type === 'page.capture.finish'))
 check('DPR participates in the bounded-pixel decision',
   source.includes('geometry.deviceScaleFactor ** 2'))
 check('restricted-page/injection errors surface through the toolbar',
@@ -148,7 +255,11 @@ check('extension-side failures identify and clear their in-flight app assembly',
   background.includes("{ capture_id: captureId }") &&
     bridge.includes("rejectPageCapture(socket, captureId, `extension-failed:${reason}`)"))
 check('captureVisibleTab is guarded on both sides against tab switches',
-  (source.match(/await assertCaptureTab\(tab\)/g) ?? []).length === 2)
+  (source.match(/await assertCaptureTabActive\(tab/g) ?? []).length >= 3)
+const restricted = await runExtensionCapture({ injectionError: new Error('restricted page') })
+check('a restricted page fails before any bundle or screenshot is emitted',
+  restricted.error?.message === 'restricted page' && restricted.messages.length === 0 &&
+    restricted.captures === 0 && restricted.activated.size() === 0 && restricted.updated.size() === 0)
 
 console.log('\nPrivacy and UX contract')
 check('toolbar click runs full-page capture, not the picker',
@@ -164,6 +275,12 @@ check('element picking remains an explicit shortcut',
   manifest.commands?.['pick-element'] !== undefined && background.includes("command !== 'pick-element'"))
 check('no debugger or standing host permission was added',
   !manifest.permissions.includes('debugger') && !('host_permissions' in manifest))
+const switched = await runExtensionCapture({ activateDuringScreenshot: true })
+check('switching tabs during capture aborts before another tab can enter the bundle',
+  switched.error?.message.includes('source tab changed') && switched.captures === 1 &&
+    !switched.messages.some((message) => message.type === 'page.capture.tile.end') &&
+    !switched.messages.some((message) => message.type === 'page.capture.finish') &&
+    switched.restored && switched.activated.size() === 0 && switched.updated.size() === 0)
 check('the optional app-hotkey grant is still reachable explicitly',
   manifest.permissions.includes('contextMenus') && background.includes('GRANT_CONTEXT_MENU'))
 check('DOM full-page mode admits only the captured document rectangle',
@@ -188,9 +305,19 @@ check('re-edit recognizes only a persisted DOM bundle with the reserved page sur
     readFileSync(resolve(here, '..', 'src', 'main', 'session.ts'), 'utf8')
       .includes('loadedDomEvents.some((event) => event.document !== undefined)'))
 check('failure to open the normal editor is not acknowledged as success',
-  appMain.includes("{ ok: false, reason: 'Capture saved, but another editor is already open' }"))
+  appMain.includes("return { ok: false, reason: 'capture-saved-editor-busy' }"))
+check('a complete mocked extension run emits one aligned document and every tile',
+  completed.error === null && completed.captures === 4 &&
+    completed.messages.filter((message) => message.type === 'page.capture.tile.end').length === 4 &&
+    completed.messages.at(-1)?.type === 'page.capture.finish')
+check('an abandoned streamed capture is identified so the app can release it',
+  background.includes("{ capture_id: captureId }") &&
+    bridge.includes("rejectPageCapture(socket, captureId, `extension-failed:${reason}`)"))
 check('the app acknowledges only after the capture handler settles',
   /pageCaptureHandler\(capture\)\.then/.test(bridge) && bridge.includes("type: 'page.capture.result'"))
+check('a saved capture reports failure when the normal editor path is busy',
+  readFileSync(resolve(here, '..', 'src', 'main', 'index.ts'), 'utf8')
+    .includes("return { ok: false, reason: 'capture-saved-editor-busy' }"))
 
 console.log(`\n${failed === 0 ? 'PASS' : 'FAIL'} — Chrome full-page: ${passed} passed, ${failed} failed`)
 process.exitCode = failed === 0 ? 0 : 1

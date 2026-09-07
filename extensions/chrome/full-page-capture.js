@@ -8,6 +8,7 @@
   const MAX_TILES = 256
   const MAX_DOCUMENT_DIMENSION_CSS = 50_000
   const MAX_DOCUMENT_PIXELS = 40_000_000
+  const MAX_STYLE_SCAN_ELEMENTS = 20_000
   const WARMUP_DELAY_MS = 120
   // Chrome allows at most two captureVisibleTab calls per second.
   const CAPTURE_DELAY_MS = 550
@@ -71,7 +72,7 @@
       rootScrollPriority: root.style.getPropertyPriority('scroll-behavior'),
       bodyScrollBehavior: body?.style.getPropertyValue('scroll-behavior') || '',
       bodyScrollPriority: body?.style.getPropertyPriority('scroll-behavior') || '',
-      hidden: [],
+      floating: null,
       scrollbarStyle: null,
     }
     window.__capturepackFullPageState = state
@@ -98,19 +99,60 @@
     }
   }
 
-  async function movePage(captureId, x, y, hideFixed, delayMs) {
+  async function movePage(
+    captureId,
+    x,
+    y,
+    manageFloating,
+    delayMs,
+    maxStyleScanElements,
+    showFixed,
+  ) {
     const state = window.__capturepackFullPageState
     if (!state || state.captureId !== captureId) throw new Error('capture state was lost')
-    if (hideFixed && state.hidden.length === 0) {
-      for (const element of document.querySelectorAll('*')) {
+    if (manageFloating && state.floating === null) {
+      const elements = document.getElementsByTagName('*')
+      if (elements.length > maxStyleScanElements) {
+        throw new Error(
+          `page has ${elements.length} elements; the fixed-element scan limit is ${maxStyleScanElements}`,
+        )
+      }
+      state.floating = []
+      for (let index = 0; index < elements.length; index += 1) {
+        const element = elements[index]
         const position = window.getComputedStyle(element).position
         if (position !== 'fixed' && position !== 'sticky') continue
-        state.hidden.push({
+        state.floating.push({
           element,
+          position,
           value: element.style.getPropertyValue('visibility'),
           priority: element.style.getPropertyPriority('visibility'),
+          positionValue: element.style.getPropertyValue('position'),
+          positionPriority: element.style.getPropertyPriority('position'),
+          offsets: ['top', 'right', 'bottom', 'left'].map((name) => ({
+            name,
+            value: element.style.getPropertyValue(name),
+            priority: element.style.getPropertyPriority(name),
+          })),
         })
-        element.style.setProperty('visibility', 'hidden', 'important')
+        if (position === 'sticky') {
+          // Relative keeps the sticky box in normal flow AND remains the
+          // containing block for absolute children. Auto insets remove only
+          // the sticking behavior, so a boundary-crossing header cannot be
+          // duplicated in a later tile without rearranging its contents.
+          element.style.setProperty('position', 'relative', 'important')
+          for (const name of ['top', 'right', 'bottom', 'left']) {
+            element.style.setProperty(name, 'auto', 'important')
+          }
+        }
+      }
+    }
+    if (manageFloating) {
+      for (const saved of state.floating) {
+        const hide = saved.position === 'fixed' && !showFixed
+        if (hide) saved.element.style.setProperty('visibility', 'hidden', 'important')
+        else if (saved.value === '') saved.element.style.removeProperty('visibility')
+        else saved.element.style.setProperty('visibility', saved.value, saved.priority)
       }
     }
     window.scrollTo(x, y)
@@ -142,9 +184,15 @@
   async function restorePage(captureId) {
     const state = window.__capturepackFullPageState
     if (!state || state.captureId !== captureId) return
-    for (const saved of state.hidden) {
+    for (const saved of state.floating || []) {
       if (saved.value === '') saved.element.style.removeProperty('visibility')
       else saved.element.style.setProperty('visibility', saved.value, saved.priority)
+      if (saved.positionValue === '') saved.element.style.removeProperty('position')
+      else saved.element.style.setProperty('position', saved.positionValue, saved.positionPriority)
+      for (const offset of saved.offsets) {
+        if (offset.value === '') saved.element.style.removeProperty(offset.name)
+        else saved.element.style.setProperty(offset.name, offset.value, offset.priority)
+      }
     }
     const root = document.documentElement
     const body = document.body
@@ -208,11 +256,13 @@
     )
   }
 
-  async function assertCaptureTab(tab) {
+  async function assertCaptureTabActive(tab, changed) {
+    if (changed()) throw new Error('the source tab changed during capture')
     const current = await chrome.tabs.get(tab.id)
     if (!sameCaptureTab(tab, current)) {
-      throw new Error('the captured tab changed or stopped being active')
+      throw new Error('the source tab changed or stopped being active')
     }
+    if (changed()) throw new Error('the source tab changed during capture')
   }
 
   async function run(tab, send, onStarted = () => {}, shouldContinue = () => true) {
@@ -220,7 +270,19 @@
     const captureId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
     onStarted(captureId)
     let prepared = false
+    let tabChanged = false
+    const onActivated = (activeInfo) => {
+      if (activeInfo.windowId === tab.windowId && activeInfo.tabId !== tab.id) tabChanged = true
+    }
+    const onUpdated = (tabId, changeInfo) => {
+      if (tabId === tab.id && (changeInfo.status === 'loading' || changeInfo.url !== undefined)) {
+        tabChanged = true
+      }
+    }
+    chrome.tabs.onActivated.addListener(onActivated)
+    chrome.tabs.onUpdated.addListener(onUpdated)
     try {
+      await assertCaptureTabActive(tab, () => tabChanged)
       await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         files: ['document-snapshot.js'],
@@ -244,13 +306,13 @@
           await chrome.scripting.executeScript({
             target: { tabId: tab.id },
             func: movePage,
-            args: [captureId, 0, y, false, WARMUP_DELAY_MS],
+            args: [captureId, 0, y, false, WARMUP_DELAY_MS, MAX_STYLE_SCAN_ELEMENTS, false],
           })
         }
         const [remeasured] = await chrome.scripting.executeScript({
           target: { tabId: tab.id },
           func: movePage,
-          args: [captureId, 0, 0, false, WARMUP_DELAY_MS],
+          args: [captureId, 0, 0, false, WARMUP_DELAY_MS, MAX_STYLE_SCAN_ELEMENTS, false],
         })
         geometry = { ...before, ...remeasured?.result }
         validateGeometry(geometry)
@@ -270,6 +332,7 @@
       })
       const documentSnapshot = snapshotResult?.result
       if (!documentSnapshot) throw new Error('document snapshot was unavailable')
+      await assertCaptureTabActive(tab, () => tabChanged)
       const grid = captureGrid(geometry)
       if (!send({
         type: 'page.capture.start',
@@ -305,7 +368,15 @@
         const [moved] = await chrome.scripting.executeScript({
           target: { tabId: tab.id },
           func: movePage,
-          args: [captureId, target.x, target.y, index > 0, CAPTURE_DELAY_MS],
+          args: [
+            captureId,
+            target.x,
+            target.y,
+            true,
+            CAPTURE_DELAY_MS,
+            MAX_STYLE_SCAN_ELEMENTS,
+            index === 0,
+          ],
         })
         const actual = moved?.result
         if (!actual) throw new Error('page stopped reporting its scroll position')
@@ -320,9 +391,9 @@
         // captureVisibleTab targets a WINDOW, not a tab. Verify on both sides
         // of the await so a mid-capture tab switch can never pair foreign pixels
         // with the original page's DOM and URL.
-        await assertCaptureTab(tab)
+        await assertCaptureTabActive(tab, () => tabChanged)
         const png = base64Body(await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' }))
-        await assertCaptureTab(tab)
+        await assertCaptureTabActive(tab, () => tabChanged)
         if (!shouldContinue(captureId)) throw new Error('CapturePack app rejected the capture')
         const chunks = sendChunked(send, 'page.capture.tile.chunk', captureId, index, png)
         if (!send({
@@ -337,6 +408,8 @@
         })) throw new Error('CapturePack native host is unavailable')
       }
     } finally {
+      chrome.tabs.onActivated.removeListener(onActivated)
+      chrome.tabs.onUpdated.removeListener(onUpdated)
       if (prepared) {
         await chrome.scripting.executeScript({
           target: { tabId: tab.id },
@@ -359,6 +432,7 @@
   self.__capturepackFullPageCapture = {
     axisPositions,
     captureGrid,
+    movePage,
     validateGeometry,
     sameCaptureTab,
     run,

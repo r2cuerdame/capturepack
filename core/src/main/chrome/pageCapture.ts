@@ -220,9 +220,9 @@ export async function saveBrowserPageCapture(
     timeline,
     outputDir: settings.outputDir,
     screens: [{
-      width: capture.geometry.documentWidth,
-      height: capture.geometry.documentHeight,
-      scale: capture.geometry.deviceScaleFactor,
+      width: assembled.width,
+      height: assembled.height,
+      scale: assembled.scale,
     }],
     windowsContext: browserContext.windowsContext,
     imageContextMode: 'browser-page',
