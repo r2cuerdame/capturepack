@@ -1,8 +1,10 @@
 import {
   DXGI_REPLAY_PROBE_PACKET_BYTES,
+  DXGI_REPLAY_RUN_PACKET_BYTES,
   DxgiReplayCapabilityParser,
   dxgiReplayCapabilityArguments,
   parseDxgiReplayCapability,
+  parseDxgiReplayRunResult,
   probeDxgiReplayCapability,
 } from '../src/main/dxgiReplayRing'
 
@@ -195,6 +197,99 @@ check(
     && dxgiReplayCapabilityArguments({
       bounds: { x: -1920, y: 0, width: 1920, height: 1080 },
     })?.join(' ') === '--left -1920 --top 0 --native-width 1920 --native-height 1080',
+)
+
+function runPacket({
+  status = 0,
+  reason = 0,
+  flags = 0x0fff,
+}: {
+  status?: number
+  reason?: number
+  flags?: number
+} = {}): Buffer {
+  const result = Buffer.alloc(DXGI_REPLAY_RUN_PACKET_BYTES)
+  result.write('CPNRUN01', 0, 'ascii')
+  result.writeUInt16LE(1, 8)
+  result.writeUInt16LE(DXGI_REPLAY_RUN_PACKET_BYTES, 10)
+  result.writeUInt32LE(status, 12)
+  result.writeUInt32LE(reason, 16)
+  result.writeUInt32LE(flags, 20)
+  result.writeUInt32LE(2, 24)
+  result.writeUInt32LE(1, 28)
+  result.writeInt32LE(-1920, 32)
+  result.writeInt32LE(0, 36)
+  result.writeInt32LE(0, 40)
+  result.writeInt32LE(1080, 44)
+  result.writeUInt32LE(1, 48)
+  result.writeUInt32LE(15, 52)
+  result.writeBigInt64LE(10_000_000n, 56)
+  result.writeBigInt64LE(9_000_000_000n, 64)
+  result.writeBigInt64LE(9_030_000_000n, 72)
+  result.writeBigUInt64LE(40n, 80)
+  result.writeBigUInt64LE(2n, 88)
+  result.writeBigUInt64LE(8n, 96)
+  result.writeBigUInt64LE(30n, 104)
+  result.writeBigUInt64LE(30n, 112)
+  result.writeBigUInt64LE(29n, 120)
+  result.writeBigUInt64LE(400_000n, 128)
+  result.writeBigUInt64LE(2n, 136)
+  result.writeBigUInt64LE(29n, 144)
+  result.writeBigUInt64LE(400_000n, 152)
+  writeString(result, 188, 184, 'Fixture Hardware H.264 Encoder')
+  return result
+}
+
+const completedRun = parseDxgiReplayRunResult(runPacket())
+check(
+  'capture summary requires real H.264 ring evidence',
+  completedRun.status === 'completed'
+    && completedRun.bounds.x === -1920
+    && completedRun.rotation === 1
+    && completedRun.encodedSamples === 29n
+    && completedRun.ringUnits === 29n
+    && completedRun.stages.includes('sample-retained'),
+)
+check(
+  'capture summary counts retained codec configuration inside the ring bound',
+  (() => {
+    const value = runPacket()
+    value.writeBigUInt64LE(400_064n, 152)
+    return parseDxgiReplayRunResult(value).status === 'completed'
+  })(),
+)
+check(
+  'capture summary preserves explicit native failure evidence',
+  parseDxgiReplayRunResult(
+    runPacket({ status: 1, reason: 27, flags: 0x07ff }),
+  ).reason === 'encoder-output-failed',
+)
+check(
+  'capture summary preserves failure before output selection',
+  (() => {
+    const value = Buffer.alloc(DXGI_REPLAY_RUN_PACKET_BYTES)
+    value.write('CPNRUN01', 0, 'ascii')
+    value.writeUInt16LE(1, 8)
+    value.writeUInt16LE(DXGI_REPLAY_RUN_PACKET_BYTES, 10)
+    value.writeUInt32LE(1, 12)
+    value.writeUInt32LE(1, 16)
+    value.writeUInt32LE(15, 52)
+    return parseDxgiReplayRunResult(value).reason === 'invalid-request'
+  })(),
+)
+check(
+  'capture summary rejects capability-only success and impossible counters',
+  throws(() => parseDxgiReplayRunResult(runPacket({ flags: 0x00ff })))
+    && throws(() => {
+      const value = runPacket()
+      value.writeBigUInt64LE(31n, 120)
+      parseDxgiReplayRunResult(value)
+    })
+    && throws(() => {
+      const value = runPacket()
+      value.writeUInt32LE(32, 16)
+      parseDxgiReplayRunResult(value)
+    }),
 )
 
 async function checkWrapperOutcomes(): Promise<void> {

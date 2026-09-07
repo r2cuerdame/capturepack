@@ -1,25 +1,57 @@
-# DXGI replay ring foundation
+# DXGI replay ring
 
 Issue [#138](https://github.com/r2cuerdame/capturepack/issues/138) replaces the
 always-on Windows replay path only after the replacement proves lower overhead
 and preserves replay timing, retention, fallback, and still capture.
 
-This first code slice does **not** select a new runtime backend. The shipping
-Chromium/MediaRecorder recorder and the separate still-image path are unchanged.
-It adds `dxgi-replay-ring.exe`, with two bounded operations:
+The native helper now contains the next bounded production slice, while the
+shipping backend remains unchanged:
 
-- `--self-test` exercises a fixed-byte/fixed-time encoded-access-unit ring. A
-  retention cut that crosses a GOP discards the undecodable prefix through the
-  next keyframe.
-- capability mode selects one exact DXGI output, creates a D3D11 video device
-  on that adapter, opens Desktop Duplication, verifies GPU BGRA-to-NV12 video
-  processor support, enumerates adapter-bound hardware H.264 MFTs, and requires
-  a D3D11-aware encoder to accept the same `IMFDXGIDeviceManager`.
+`DXGI Desktop Duplication -> D3D11 BGRA surface -> D3D11 video processor NV12
+surface -> adapter-bound Media Foundation hardware H.264 MFT -> bounded native
+access-unit ring`
 
-Capability stdout is exactly one 256-byte versioned packet. Available and
-unavailable are both valid results; process failure, timeout, malformed output,
-and unsupported capability stages stay distinct. The probe does not call
-`AcquireNextFrame`, because an unchanged desktop may legitimately time out.
+No captured pixels are mapped to the CPU. A desktop-duplication surface is
+copied to an owned GPU surface before `ReleaseFrame`, rotated and converted on
+the same D3D11 device, and submitted as an `MFCreateDXGISurfaceBuffer` sample.
+Only a hardware, D3D11-aware H.264 transform selected for the capture adapter is
+accepted. Unsupported duplication, rotation, GPU conversion, or encoding is an
+explicit unavailable result; this helper never substitutes a CPU converter or
+software encoder.
+
+The existing Chromium/MediaRecorder replay flow, its declared GDI fallback, and
+the normal still-image capture flow are not routed through this helper. Runtime
+selection and MP4 export remain a later slice.
+
+## Modes and wire contracts
+
+- Identity arguments alone run the original bounded capability handshake and
+  emit exactly one 256-byte `CPNRCP01` packet.
+- `--capture-ms 100..30000` runs continuous bounded acquisition at a target of
+  15 fps and emits exactly one 256-byte `CPNRUN01` summary. A completed summary
+  requires evidence of a real desktop frame, GPU NV12 conversion, a real H.264
+  output sample, and retention in the native ring.
+- `--self-test` opens neither the desktop nor a codec. It exercises the native
+  timestamp, geometry, encoder-transition, retention, keyframe/configuration,
+  and device-loss/reinitialization contracts.
+
+Every submitted frame starts with DXGI `LastPresentTime` in QPC units. Pointer-
+only updates, duplicate/regressing timestamps, and acquire timeouts do not
+become encoded frames. The exact input QPC is retained alongside its Media
+Foundation 100 ns timestamp so output samples are not mapped back through a
+lossy inverse conversion.
+
+The ring has independent byte, time, and access-unit count bounds. Its snapshots
+start on a clean point and carry the matching `MF_MT_MPEG_SEQUENCE_HEADER`.
+Reinitialization advances the generation, clears the old configuration and
+access units, and refuses predictive frames until a new clean point is
+available. An unexpected encoder stream-format change is terminal and
+fail-closed, so incompatible codec generations cannot be joined by a cut.
+
+Desktop-duplication access loss and D3D device removal/reset/hang cause a bounded
+full-pipeline rebuild. The output is re-selected by its exact device identity;
+an identity mismatch, exhausted retry budget, encoder error, or malformed
+sample is terminal and fail-closed.
 
 ## Deterministic gate
 
@@ -28,27 +60,28 @@ cd core
 npm run check:dxgi-replay-ring
 ```
 
-The gate compiles the helper, runs its native ring self-test, and exercises the
-bounded TypeScript parser at every two-chunk boundary and byte by byte.
+The gate compiles the helper, requires each named native self-test marker, and
+exercises the strict capability and run-summary parsers.
 
-## Managed Windows field probe
+## Managed Windows field acceptance
 
-Run this only in the DevHotel Windows room assigned to the acceptance job, after
-`npm run build`. Use the exact DXGI device name when known:
+Run only in the DevHotel managed Windows room assigned to the acceptance job,
+after `npm run build -- --require-dxgi-helper`. Use the exact DXGI device name
+when known:
 
 ```powershell
-npm run qa:dxgi-replay-ring -- --device \\.\DISPLAY1
+npm run qa:dxgi-replay-ring -- --device \\.\DISPLAY1 --capture-ms 3000
 ```
 
 Or use exact physical-pixel bounds, including a negative display origin:
 
 ```powershell
-npm run qa:dxgi-replay-ring -- --left -1920 --top 0 --native-width 1920 --native-height 1080
+npm run qa:dxgi-replay-ring -- --left -1920 --top 0 --native-width 1920 --native-height 1080 --capture-ms 3000
 ```
 
-The JSON result is capability evidence only. It does not prove a frame can be
-encoded, that a recent-history clip decodes, or that CPU/GPU/memory/latency is
-better than the existing path. Those require the subsequent native encoder
-slice and before/after DevHotel field evidence. An unavailable or failed probe
-must select the declared fallback/disable path; it must not be promoted by
-partial stage flags.
+The JSON result proves only the bounded native helper run on that managed host.
+It is not proof of a valid exported MP4, runtime fallback selection, sustained
+performance, or screenshot non-regression. Those require the next integration
+slice and the recorded DevHotel CPU/GPU/memory/latency and application-flow
+acceptance matrix. If no managed Windows room is available, leave that gate
+unverified; do not substitute an ad-hoc local desktop run.
