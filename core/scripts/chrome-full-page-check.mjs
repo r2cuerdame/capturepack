@@ -193,7 +193,7 @@ stickyNeutralized = stickyStyle.position === 'relative' &&
   !stickyStyle.hidden
 await fullPage.movePage('sticky', 0, 100, true, 0, 20_000, false)
 stickyRemainsVisible = !stickyStyle.hidden
-check('fixed and sticky elements are shown only in the first tile, including wide pages',
+check('fixed elements are shown only in the first tile, including wide pages',
   source.includes("position !== 'fixed' && position !== 'sticky'") &&
     captureMoves.every((args) => args[3] === true) &&
     JSON.stringify(captureMoves.map((args) => args[6])) === JSON.stringify([true, false, false, false]))
