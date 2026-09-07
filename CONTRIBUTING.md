@@ -31,27 +31,27 @@ The file format matters more than any implementation. [SPEC.md](SPEC.md) is auth
 capturepack/
 ├── SPEC.md          # the format specification — source of truth
 ├── GOAL.md          # vision and principles
-├── docs/            # schemas, release process, other documentation
-├── core/            # the reference app (Electron): capture, annotate, export
-├── plugins/         # plugin implementations (planned)
+├── ARCHITECTURE.md  # current system architecture
+├── ROADMAP.md       # project roadmap and milestone history
+├── docs/            # schemas, release process, handoffs, and other documentation
+├── core/            # the reference app (Electron): capture, annotate, export, MCP
+├── extensions/      # browser extensions (extensions/chrome)
 ├── examples/        # example packs — examples/minimal is a complete valid pack
 ├── tools/           # standalone CLI tools — validate-capturepack.mjs checks a pack against SPEC.md
-├── site/            # landing page (GitHub Pages)
-└── tests/           # cross-cutting tests, e.g. spec conformance (planned)
+└── site/            # landing page and guide (capturepack.dev)
 ```
-
-Directories marked *planned* don't exist yet — creating the first one is a fine contribution.
 
 ## Development setup
 
-You need **Node.js 20+** and npm. The app lives in `core/`:
+You need **Node.js 22.12+** and npm. The app lives in `core/`:
 
 ```
 cd core
-npm install
+npm ci
 npm run dev        # build and launch the app
 npm run typecheck  # TypeScript check
 npm run build      # build only
+npm run qa:rc      # deterministic release QA gate
 ```
 
 Everything runs locally. There is no backend, no login, nothing to provision.

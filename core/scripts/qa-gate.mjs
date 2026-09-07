@@ -185,7 +185,7 @@ function runScript(name, timeoutMs) {
         FORCE_COLOR: '0',
         NO_COLOR: '1',
       },
-      shell: false,
+      shell: process.platform === 'win32' && !command.executable.toLowerCase().endsWith('.exe'),
       detached: process.platform !== 'win32',
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],

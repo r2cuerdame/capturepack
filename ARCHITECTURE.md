@@ -154,6 +154,17 @@ record preserved later in this document:
   are blocked, and Windows atomic no-replace moves (`moveNoReplace.ts`) prevent
   race-condition overwrites during publication and rename under a shared
   per-pack operation lock.
+- **After Save Actions are the second plugin kind (0.5.0).**
+  An action consumes a FINISHED, durable pack and never participates in capture.
+  The pipeline runs sequentially after `notePackSaved()` when source media is
+  already safe on disk (and again after background rendering if an action needs
+  annotated replays). Failures are isolated — an action that hangs, times out,
+  or throws cannot cost the saved pack or reject unhandled. The execution ledger
+  prevents duplicate dispatches using an idempotency key (`packId + actionId + configId`).
+  Settings > Plugins is divided into Temporal Context Providers and After Save Actions.
+  The reference HTTP webhook posts summary metadata read from `manifest.json`
+  only, refusing non-loopback HTTP and storing secrets encrypted via Windows
+  `safeStorage`.
 
 The detailed MVP rationale in §§2–3 is retained as an **original 0.1.x design
 record**. Its present-tense implementation details (dual recorders, WebM-only

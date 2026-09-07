@@ -541,6 +541,7 @@ check(
   `handoff records the stable ${PUBLIC_VERSION} baton while preserving historical verification`,
   handoff.includes(`# CapturePack handoff — after v${PUBLIC_VERSION}`)
     && publicReleaseRow.includes(PUBLIC_VERSION)
+    && handoff.includes(`CapturePack **${PUBLIC_VERSION}** is the current stable Windows release.`)
     && handoff.includes('b7e0c695d5f2c018e2c10fcf83936d1d42f7a0d4')
     && handoff.includes('Issue #89')
     && handoff.includes('Do not hard-code 125 ms')

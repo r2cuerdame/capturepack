@@ -100,13 +100,23 @@ check(
 // The lane-S rewrite exists so a delta reads ONE window instead of every visible
 // top-level window. Bytes per sample measure exactly that and depend on nothing
 // but the code: no clock, no scheduler, no other tenant on the machine.
-check(
-  'dirty path reads less than a full desktop pass',
-  Number.isFinite(dirty.bytesPerDirty) &&
-    Number.isFinite(full.bytesPerSample) &&
-    dirty.bytesPerDirty < full.bytesPerSample,
-  `dirty=${String(dirty.bytesPerDirty)}B full=${String(full.bytesPerSample)}B`,
-)
+// On a desk with only 1 window open, reading one window IS reading the whole
+// desktop, so the comparison is only meaningful when multiple windows exist.
+if (full.windows > 1) {
+  check(
+    'dirty path reads less than a full desktop pass',
+    Number.isFinite(dirty.bytesPerDirty) &&
+      Number.isFinite(full.bytesPerSample) &&
+      dirty.bytesPerDirty < full.bytesPerSample,
+    `dirty=${String(dirty.bytesPerDirty)}B full=${String(full.bytesPerSample)}B`,
+  )
+} else {
+  console.log(
+    `  n/a   dirty path reads less than a full desktop pass — only ${String(full.windows)} ` +
+      `window(s) open on this desk (dirty=${String(dirty.bytesPerDirty)}B full=${String(full.bytesPerSample)}B), ` +
+      `so a full pass reads no more than one window.`,
+  )
+}
 
 // AND IT IS CHEAPER — WHEN THERE IS ENOUGH DESKTOP FOR THAT TO MEAN ANYTHING.
 //

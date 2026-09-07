@@ -43,7 +43,9 @@ never a keystroke (format `0.8.0`,
 [#12](https://github.com/r2cuerdame/capturepack/issues/12)). And a saved pack's
 browser page can be read back at all, which it could not before
 ([#136](https://github.com/r2cuerdame/capturepack/issues/136) — 6,091 element
-rectangles across the author's own packs recovered as one).
+rectangles across the author's own packs recovered as one). Settings > Plugins
+splits Temporal Context Providers from After Save Actions ([#69](https://github.com/r2cuerdame/capturepack/issues/69)),
+whose pipelines run after save is durable with isolated failures ([#68](https://github.com/r2cuerdame/capturepack/issues/68)).
 
 `GOAL.md` is the design record; [Handoff](HANDOFF.md) carries the verified state
 and the next order. Open work is grouped by milestone in the

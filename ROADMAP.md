@@ -147,16 +147,26 @@ verification history. These are the current additions and next gates:
   available under More with an originals warning
   ([#140](https://github.com/r2cuerdame/capturepack/issues/140),
   [#141](https://github.com/r2cuerdame/capturepack/pull/141)).
+- 0.4.5 ships **multi-display toast/tray reporting that names failed screens**
+  across nine locales ([#137](https://github.com/r2cuerdame/capturepack/issues/137)),
+  native replay fallback that survives displays with negative coordinates, and
+  eliminates cursor flicker during fallback blits.
+- 0.4.6 ensures **downloaded updates no longer wait unnoticed forever**
+  ([#147](https://github.com/r2cuerdame/capturepack/issues/147)): once on download,
+  at most once a day thereafter, immediately on a newer download, and deferred over
+  locked sessions.
+- 0.5.0 ships the **plugin platform's second half: After Save Actions**
+  ([#68](https://github.com/r2cuerdame/capturepack/issues/68),
+  [#69](https://github.com/r2cuerdame/capturepack/issues/69)). An action runs after
+  a pack is saved and durable; Settings > Plugins is split into Temporal Context
+  Providers and After Save Actions; and a reference HTTP webhook posts summary
+  manifest metadata with encrypted secrets stored in Windows DPAPI (`safeStorage`).
 - Next: the three-screen acceptance test on REAL hardware — one portrait, one
   scaled, focus on the third — is still unrun, and
   [#76](https://github.com/r2cuerdame/capturepack/issues/76) stays open until
   someone with that desk works its checklist; a synthetic desk pins the risks it
-  can honestly reach and cannot stand in for the machine. On three screens the
-  tray and the toast now name which display lost its replay across nine locales
-  ([#137](https://github.com/r2cuerdame/capturepack/issues/137)). Beyond that:
-  the plugin platform ([#69](https://github.com/r2cuerdame/capturepack/issues/69),
-  [#68](https://github.com/r2cuerdame/capturepack/issues/68)), code signing
-  ([#21](https://github.com/r2cuerdame/capturepack/issues/21)), continued
+  can honestly reach and cannot stand in for the machine. Beyond that: code
+  signing ([#21](https://github.com/r2cuerdame/capturepack/issues/21)), continued
   physical mixed-DPI/long-running recording, save/reopen, installer/update and
   Chrome reconnection QA, plus stronger share-specific opaque redaction whose
   pixels are proven independent of the covered source region.
@@ -404,10 +414,10 @@ less complete without them, and nothing becomes an AI API integration (a stated 
 | 4 | Screenshot | V1 | Done (shipped) |
 | 5 | Annotation editor | V1 | Done — unified box editor with scrub timeline and lifetimes (shipped) |
 | 6 | Export CapturePack | V1 | Done — folder-first packs with README/skills/annotated replay (shipped) |
-| 7 | Plugin API | V2 | Not started — the in-process API. The on-disk plugin contract (SPEC §11) is implemented and written by every capture |
+| 7 | Plugin API | V2 | Done — After Save Actions host and pipeline shipped in 0.5.0; temporal provider protocol v1 documented; on-disk plugin contract (SPEC §11) implemented |
 | 8 | Browser plugin | V2 | Done — picker, document snapshot, protocol v1, native host, Chromium-family installer registration. Shadow DOM / SPA routes pending |
 | 9 | Windows plugin | V2 | Done — built-in UI Automation provider writing `plugins/windows-uia` and `plugins/windows-context` |
-| 10 | Public release | V1 | Done (0.4.4 live; auto-update chain proven from 0.1.0) |
+| 10 | Public release | V1 | Done (0.5.0 live; auto-update chain proven from 0.1.0) |
 
 ---
 

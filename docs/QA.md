@@ -90,13 +90,14 @@ existed in an earlier Lane-A frame may legitimately be absent from the final
 ## Video-core regression matrix
 
 The tables in this document map a reported failure to the check that would now
-catch it. They are a map, not an inventory: the gate discovers 84 checks and
+catch it. They are a map, not an inventory: the gate discovers 86 checks and
 only some of them have ever had a defect worth naming.
 
-`npm run qa:video` runs type checking plus a subset — 57 of the 84 — so some
+`npm run qa:video` runs type checking plus a subset — 59 of the 86 — so some
 rows below are outside it and only `qa:checks`/`qa:rc` reach them:
-`check:video-no-picking`, `check:site`, `check:input-events` and
-`check:storage-retention`. A row that names one says so. That subset is a
+`check:video-no-picking`, `check:site`, `check:input-events`,
+`check:storage-retention`, `check:update-notice`, and `check:actions`. A row
+that names one says so. That subset is a
 literal list of names inside `qa-gate.mjs`, and the gate throws when one of them
 resolves to nothing. It did: the list kept naming `check:past` after the script
 was deleted, so `npm run qa:video` threw before running anything and the whole
@@ -140,6 +141,8 @@ to a user CapturePack.
 | `timeline.json` grows a keystroke, or the `input.*` events it carries disagree with SPEC §10.2 | The five emitted types are pinned against the schema and the validator, and the ring that holds them is bounded. The no-keystrokes promise is hunted rather than asserted: no keyboard event type, no keyboard hook and no keyboard virtual-key code, across the source that runs and the format that is written. `input.key.*` stays reserved, and the validator fails a pack carrying one at any version. Full-profile only. | `check:input-events`, `check:validator`, `check:spec` |
 | Turning a box's number off and on puts it back in the middle of the sequence, or a pack's numbers are not 1..N | Assignment order (`nextDisplayNumber` + `planNumberPins`, exercised exactly as the editor calls them) and contiguity over every arrangement of pins a pack can arrive carrying, because the documents and the video both cite these numbers. The one-implementation rule is pinned too: a second copy of the numbering rule is how the video and the documents come to disagree, and three stale copies were found the last time. | `check:number-assignment`, `check:numbering` |
 | Automatic cleanup deletes packs of a user who never touched the setting | The retention rule is kept pure — no disk, no clock, no Electron — and run to exhaustion, plus the wiring that decides whether the pure rule is the one consulted. The failure it exists for: manual "purge older than 0 days" means everything and automatic "retention 0 days" means keep everything, and they are the same number in the same application. Full-profile only. | `check:storage-retention` |
+| A downloaded update waits unnoticed forever, nags every launch, or notifies on a locked screen | Announcement policy is held pure and without stubs: a downloaded update is announced on download and at most once a day thereafter, a newer download announces at once without serving out the old timer, notifications defer across locked sessions, and backwards clock changes cannot satisfy the interval. Full-profile only. | `check:update-notice` |
+| An After Save Action failure costs the saved pack, blocks UI, or reads non-existent manifest fields | The pipeline runs only after the pack is durable on disk, handles non-Error/hung actions without unhandled rejections, enforces encrypted loopback/HTTPS webhook secrets, and holds summary properties strictly against the manifest schema. Full-profile only. | `check:actions` |
 | CI reports that it made a pack, and the pack proves nothing | `--save-now`'s argv parsing, its verdicts over a sequence of flow events, and its person-less export payload are pinned — including that main and the capture flow actually call into it, since an unwired flag runs never. Separately, every assertion `assert-capturepack.mjs` makes is exercised against a pack that must pass and a mutant that must not, because an assertion that cannot fail is a green tick over a broken build. | `check:save-now`, `check:pack-assertions` |
 
 The `_223519` fixture is a distilled copy of the relevant numeric evidence, not

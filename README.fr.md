@@ -34,9 +34,9 @@ local et ouvert, qui fonctionne sans IA, sans compte et sans service cloud.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Télécharger](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Version Windows publique actuelle : **CapturePack 0.5.0**. Dans la version 0.4.4,
-Historique crée une **Copie de partage** (`.share.zip`) dont les seuls médias
-sont des images fixes PNG annotées et vérifiées ; un README généré, une visionneuse
+Version Windows publique actuelle : **CapturePack 0.5.0**. Historique permet
+de créer une **Copie de partage** (`.share.zip`) dont les seuls médias sont des
+images fixes PNG annotées et vérifiées ; un README généré, une visionneuse
 hors ligne et un inventaire minimal les accompagnent. Elle exclut les originaux,
 toutes les vidéos et le contexte structuré. Le ZIP complet (`.zip`) contient
 toujours les originaux.
@@ -183,14 +183,26 @@ Local d’abord · Hors ligne d’abord · Format ouvert · Architecture à plug
 
 Les CapturePacks générés doivent rester lisibles pour toujours.
 
+## Ce que CapturePack ne fait délibérément pas
+
+CapturePack applique des limites strictes dès sa conception :
+
+- **Aucun service cloud, compte obligatoire ou télémétrie masquée :** Fonctionnement entièrement local et hors ligne. Aucune télémétrie, suivi ou rapport de plantage ne quitte votre machine. Le seul appel réseau sortant est la vérification optionnelle des mises à jour sur GitHub Releases (désactivable dans Réglages → Général).
+- **Aucun enregistreur de frappe (keylogger) :** Enregistre les coordonnées, clics de souris et mouvements de fenêtres calés sur l'horloge de relecture. N'écoute ni n'enregistre jamais les frappes au clavier (`input.key.*` reste réservé et interdit).
+- **Aucun pixel d'arrière-plan masqué dans les captures de région :** La capture de région (`Ctrl+Alt+S`) n'enregistre que le rectangle de pixels découpé par l'utilisateur et ses métadonnées de placement. L'application ne stocke jamais discrètement l'écran complet ou d'autres moniteurs.
+- **Aucune sélection d'objet en direct pendant l'enregistrement vidéo :** Parcourir l'arborescence d'accessibilité en continu consommerait trop de processeur. La vidéo enregistre l'évolution géométrique des fenêtres, mais la sélection interactive de contrôles (Object Pick) est réservée aux captures fixes.
+- **Aucune suppression silencieuse ou inattendue :** La rétention respecte strictement les limites de stockage et d'ancienneté fixées par l'utilisateur. Le nettoyage manuel déplace les packs dans la Corbeille Windows plutôt que de les détruire sans confirmation.
+- **Aucune suppression automatique non vérifiée de secrets :** Le floutage est une occultation visuelle non destructive. Nous ne prétendons pas filtrer automatiquement les identifiants ou données secrètes ; l'utilisateur doit toujours inspecter visuellement les images avant de les partager.
+- **Aucun outil tiers de suivi de tickets intégré au cœur :** Le cœur n'embarque aucun code de création de tickets pour Jira, GitHub, Linear, etc. Ces intégrations sont déléguées aux plugins d'actions après enregistrement ou à des webhooks.
+
 ## Ce que contient un CapturePack
 
 Le pack est un simple **dossier** — explorable, modifiable, honnête. Un ZIP
 complet (`.zip`) est une copie de distribution facultative qui contient toujours
-les éléments d’origine. Depuis la version 0.4.4, Historique propose aussi une
-**Copie de partage** vérifiée (`.share.zip`) dont les seuls médias sont des images
-fixes PNG annotées et vérifiées ; un README généré, une visionneuse hors ligne et
-un inventaire minimal fermé les accompagnent.
+les éléments d’origine. Historique propose aussi une **Copie de partage**
+vérifiée (`.share.zip`) dont les seuls médias sont des images fixes PNG
+annotées et vérifiées ; un README généré, une visionneuse hors ligne et un
+inventaire minimal fermé les accompagnent.
 
 Un pack vidéo peut contenir :
 
@@ -231,6 +243,13 @@ fabriquer du contexte.
 
 La spécification compte plus que n’importe quelle implémentation — n’importe quel langage peut générer des fichiers CapturePack. Voir [SPEC.md](SPEC.md).
 
+## Plugins et actions après enregistrement
+
+Réglages → Plugins sépare les extensions en deux catégories distinctes :
+
+1. **Fournisseurs de contexte temporel (Temporal Context Providers) :** plugins fournissant des métadonnées indexées dans le temps pendant la capture (tels que Windows UI Automation ou l'extension Chrome DOM). Voir [docs/temporal-provider-api.md](docs/temporal-provider-api.md).
+2. **Actions après enregistrement (After Save Actions) :** pipelines d'automatisation exécutés séquentiellement dès que le pack est durablement écrit sur le disque (et optionnellement après le rendu vidéo en arrière-plan). Une action peut exécuter un script local ou envoyer un webhook HTTP. L'isolation est stricte : une action bloquée ou en échec n'endommage jamais le pack, ne gèle pas l'interface et ne provoque pas de rejet non géré. Les secrets de webhook sont chiffrés localement avec Windows DPAPI (`safeStorage`) et les requêtes HTTP en texte clair hors loopback sont refusées.
+
 ## MCP — dialoguez avec vos captures
 
 L’application inclut un serveur [MCP](https://modelcontextprotocol.io) facultatif, en
@@ -257,6 +276,41 @@ Outils, configuration des clients et réglages : [docs/MCP.md](docs/MCP.md).
 - À propos / Informations → **Ouvrir le dossier des journaux** ouvre les diagnostics
   d’exécution locaux, dont la taille est plafonnée. Les journaux ne sont jamais
   envoyés automatiquement.
+
+## Installation et compilation
+
+### Installateur Windows précompilé
+
+Téléchargez le dernier installateur sur [GitHub Releases](https://github.com/r2cuerdame/capturepack/releases/latest) :
+
+1. Téléchargez `CapturePack-Setup-0.5.0.exe` et `SHA256SUMS.txt`.
+2. Vérifiez l'intégrité de la somme de contrôle via PowerShell :
+   ```powershell
+   Get-FileHash CapturePack-Setup-0.5.0.exe -Algorithm SHA256
+   ```
+3. Lancez l'installateur. La demande de signature de code open source étant en cours, Windows SmartScreen affichera un avertissement : cliquez sur **Informations complémentaires** → **Exécuter quand même**.
+
+### Compilation depuis les sources
+
+Prérequis :
+- Windows 10/11 (64 bits)
+- [Node.js](https://nodejs.org/) `>= 22.12.0` (LTS recommandée)
+- npm `>= 10.9.0`
+
+```powershell
+# Cloner le dépôt
+git clone https://github.com/r2cuerdame/capturepack.git
+cd capturepack/core
+
+# Installer les dépendances verrouillées
+npm ci
+
+# Lancer en mode développement local
+npm run dev
+
+# Exécuter la porte de validation candidate (vérifications automatisées, typage, compilation et smoke)
+npm run qa:rc
+```
 
 ## État
 
@@ -307,13 +361,12 @@ Releases, désactivable dans Réglages → Général.
 Le flou est non destructif : il protège les vues annotées générées, mais
 `snapshot.png` et le replay original contenus dans le pack complet restent non
 caviardés. Lorsque le média d’origine ou le contexte structuré doit rester privé,
-utilisez Historique → **Copie de partage**, disponible depuis la version 0.4.4,
-et vérifiez l’aperçu de chaque image fixe incluse avant
-l’envoi. Cette copie exclut les originaux, tous les conteneurs vidéo, manifestes,
-annotations, chronologies, contextes de plugins et documents générés du pack ;
-elle réencode les PNG inclus de manière canonique à partir de leurs seuls pixels.
-Elle ne garantit toutefois pas que les images dérivées vérifiées soient exemptes
-de secrets non signalés.
+utilisez Historique → **Copie de partage**, et vérifiez l’aperçu de chaque image fixe
+incluse avant l’envoi. Cette copie exclut les originaux, tous les conteneurs vidéo,
+manifestes, annotations, chronologies, contextes de plugins et documents générés du
+pack ; elle réencode les PNG inclus de manière canonique à partir de leurs seuls
+pixels. Elle ne garantit toutefois pas que les images dérivées vérifiées soient
+exemptes de secrets non signalés.
 
 ## ♥ Soutien
 

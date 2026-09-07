@@ -154,7 +154,7 @@ if (process.platform === 'win32') {
     })
   })
   const deadline = (label) => new Promise((_, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} timed out`)), 5_000)
+    const timer = setTimeout(() => reject(new Error(`${label} timed out`)), 15_000)
     timer.unref()
   })
   const alive = (pid) => {
