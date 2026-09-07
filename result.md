@@ -36,8 +36,9 @@ issue and does not change the shipping replay backend.
 - Added deterministic and field harnesses:
   - `check:dxgi-replay-ring`
   - `qa:dxgi-replay-ring`
-- Extended the existing MSVC/vswhere build path to produce
-  `dist/scripts/dxgi-replay-ring.exe`; required distribution builds fail if it
+- Extended the existing MSVC build path to produce
+  `dist/scripts/dxgi-replay-ring.exe` and added standard Visual Studio installation
+  fallbacks when vswhere returns empty; required distribution builds fail if it
   cannot be built. Existing `dist/scripts/**` unpacking includes it.
 - Registered the deterministic check in the full gate and video profile.
 - Added `docs/DXGI_REPLAY_RING.md` and updated the documentation index and gate
@@ -48,7 +49,7 @@ issue and does not change the shipping replay backend.
 ## Verification
 
 Build identity: commit `a318337`, Windows x64, Node `v24.13.1`, MSVC Build
-Tools 2022 discovered through vswhere.
+Tools 2022 discovered through vswhere / standard installation path fallback.
 
 - PASS — `npm run typecheck`
 - PASS — `npm run build -- --require-dxgi-helper`

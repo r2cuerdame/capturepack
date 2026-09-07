@@ -27,25 +27,53 @@ function visualStudioDeveloperCommand() {
     ),
   ]
   const vswhere = candidates.find((candidate) => existsSync(candidate))
-  if (vswhere === undefined) return null
-  const query = spawnSync(
-    vswhere,
-    [
-      '-latest',
-      '-products',
-      '*',
-      '-requires',
-      'Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
-      '-property',
-      'installationPath',
-    ],
-    { encoding: 'utf8', windowsHide: true },
-  )
-  if (query.status !== 0) return null
-  const installation = query.stdout.trim()
-  if (installation === '') return null
-  const command = path.join(installation, 'VC', 'Auxiliary', 'Build', 'vcvars64.bat')
-  return existsSync(command) ? command : null
+  if (vswhere !== undefined) {
+    const query = spawnSync(
+      vswhere,
+      [
+        '-latest',
+        '-products',
+        '*',
+        '-requires',
+        'Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
+        '-property',
+        'installationPath',
+      ],
+      { encoding: 'utf8', windowsHide: true },
+    )
+    if (query.status === 0) {
+      const installation = query.stdout.trim()
+      if (installation !== '') {
+        const command = path.join(installation, 'VC', 'Auxiliary', 'Build', 'vcvars64.bat')
+        if (existsSync(command)) return command
+      }
+    }
+  }
+
+  const standardInstallations = [
+    process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)',
+    process.env.ProgramFiles ?? 'C:\\Program Files',
+  ]
+  const editions = ['BuildTools', 'Community', 'Professional', 'Enterprise']
+  const versions = ['2022', '2019']
+  for (const root of standardInstallations) {
+    for (const version of versions) {
+      for (const edition of editions) {
+        const command = path.join(
+          root,
+          'Microsoft Visual Studio',
+          version,
+          edition,
+          'VC',
+          'Auxiliary',
+          'Build',
+          'vcvars64.bat',
+        )
+        if (existsSync(command)) return command
+      }
+    }
+  }
+  return null
 }
 
 function quoted(value) {
