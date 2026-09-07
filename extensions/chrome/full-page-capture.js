@@ -72,8 +72,15 @@
       bodyScrollBehavior: body?.style.getPropertyValue('scroll-behavior') || '',
       bodyScrollPriority: body?.style.getPropertyPriority('scroll-behavior') || '',
       hidden: [],
+      scrollbarStyle: null,
     }
     window.__capturepackFullPageState = state
+    const scrollbarStyle = document.createElement('style')
+    scrollbarStyle.textContent =
+      'html, body { scrollbar-width: none !important; } ' +
+      'html::-webkit-scrollbar, body::-webkit-scrollbar { display: none !important; }'
+    ;(document.head || root).appendChild(scrollbarStyle)
+    state.scrollbarStyle = scrollbarStyle
     root.style.setProperty('scroll-behavior', 'auto', 'important')
     body?.style.setProperty('scroll-behavior', 'auto', 'important')
     window.scrollTo(0, 0)
@@ -141,13 +148,20 @@
     }
     const root = document.documentElement
     const body = document.body
+    // Keep the forced instant scroll in place until the original position is
+    // restored. Re-enabling a site's smooth scrolling first would let this
+    // function return while the page was still animating.
+    state.scrollbarStyle?.remove()
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    window.scrollTo(state.scrollX, state.scrollY)
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    window.scrollTo(state.scrollX, state.scrollY)
     if (state.rootScrollBehavior === '') root.style.removeProperty('scroll-behavior')
     else root.style.setProperty('scroll-behavior', state.rootScrollBehavior, state.rootScrollPriority)
     if (body) {
       if (state.bodyScrollBehavior === '') body.style.removeProperty('scroll-behavior')
       else body.style.setProperty('scroll-behavior', state.bodyScrollBehavior, state.bodyScrollPriority)
     }
-    window.scrollTo(state.scrollX, state.scrollY)
     delete window.__capturepackFullPageState
   }
 
@@ -184,7 +198,24 @@
     return chunkIndex
   }
 
-  async function run(tab, send, onStarted = () => {}) {
+  function sameCaptureTab(expected, current) {
+    return Boolean(
+      current &&
+      current.id === expected.id &&
+      current.windowId === expected.windowId &&
+      current.active === true &&
+      current.url === expected.url,
+    )
+  }
+
+  async function assertCaptureTab(tab) {
+    const current = await chrome.tabs.get(tab.id)
+    if (!sameCaptureTab(tab, current)) {
+      throw new Error('the captured tab changed or stopped being active')
+    }
+  }
+
+  async function run(tab, send, onStarted = () => {}, shouldContinue = () => true) {
     if (!tab?.id || !Number.isInteger(tab.windowId)) throw new Error('no capturable tab')
     const captureId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
     onStarted(captureId)
@@ -269,11 +300,12 @@
       })
 
       for (let index = 0; index < grid.length; index += 1) {
+        if (!shouldContinue(captureId)) throw new Error('CapturePack app rejected the capture')
         const target = grid[index]
         const [moved] = await chrome.scripting.executeScript({
           target: { tabId: tab.id },
           func: movePage,
-          args: [captureId, target.x, target.y, target.y > 0, CAPTURE_DELAY_MS],
+          args: [captureId, target.x, target.y, index > 0, CAPTURE_DELAY_MS],
         })
         const actual = moved?.result
         if (!actual) throw new Error('page stopped reporting its scroll position')
@@ -285,7 +317,13 @@
         ) {
           throw new Error('page geometry changed during capture; try again after it settles')
         }
+        // captureVisibleTab targets a WINDOW, not a tab. Verify on both sides
+        // of the await so a mid-capture tab switch can never pair foreign pixels
+        // with the original page's DOM and URL.
+        await assertCaptureTab(tab)
         const png = base64Body(await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' }))
+        await assertCaptureTab(tab)
+        if (!shouldContinue(captureId)) throw new Error('CapturePack app rejected the capture')
         const chunks = sendChunked(send, 'page.capture.tile.chunk', captureId, index, png)
         if (!send({
           type: 'page.capture.tile.end',
@@ -298,28 +336,31 @@
           y: actual.y,
         })) throw new Error('CapturePack native host is unavailable')
       }
-      if (!send({
-        type: 'page.capture.finish',
-        protocol: 1,
-        timestamp: Date.now(),
-        capture_id: captureId,
-      })) throw new Error('CapturePack native host is unavailable')
-      return captureId
     } finally {
       if (prepared) {
         await chrome.scripting.executeScript({
           target: { tabId: tab.id },
           func: restorePage,
           args: [captureId],
-        }).catch(() => {})
+        })
       }
     }
+    // Core may start saving/opening as soon as it adopts `finish`, so publish
+    // completion only after the page has been restored successfully.
+    if (!send({
+      type: 'page.capture.finish',
+      protocol: 1,
+      timestamp: Date.now(),
+      capture_id: captureId,
+    })) throw new Error('CapturePack native host is unavailable')
+    return captureId
   }
 
   self.__capturepackFullPageCapture = {
     axisPositions,
     captureGrid,
     validateGeometry,
+    sameCaptureTab,
     run,
   }
 })()

@@ -293,6 +293,10 @@ function sendPageCapture(message) {
   return send(message)
 }
 
+function pageCaptureReady() {
+  return port !== null && handshakeAt !== null
+}
+
 // Toolbar click: arm the picker in the active tab.
 //
 // EVERY STEP OF THIS REPORTS ITSELF. Picking an element failed twice in the
@@ -567,22 +571,34 @@ chrome.action.onClicked.addListener((tab) => {
     chrome.action.setBadgeText({ text: '…', ...(tab?.id ? { tabId: tab.id } : {}) })
     return
   }
+  if (!pageCaptureReady()) {
+    connect()
+    chrome.action.setBadgeBackgroundColor({ color: '#d93025' })
+    chrome.action.setBadgeText({ text: '!', ...(tab?.id ? { tabId: tab.id } : {}) })
+    setTimeout(() => chrome.action.setBadgeText({ text: '', ...(tab?.id ? { tabId: tab.id } : {}) }), 4000)
+    return
+  }
   chrome.action.setBadgeBackgroundColor({ color: '#0969da' })
   chrome.action.setBadgeText({ text: '…', ...(tab?.id ? { tabId: tab.id } : {}) })
   let captureId = null
-  void self.__capturepackFullPageCapture.run(tab, sendPageCapture, (startedId) => {
-    captureId = startedId
-    const timer = setTimeout(() => {
-      pageCaptureResults.delete(startedId)
-      chrome.action.setBadgeBackgroundColor({ color: '#d93025' })
-      chrome.action.setBadgeText({ text: '✕', ...(tab?.id ? { tabId: tab.id } : {}) })
-      setTimeout(
-        () => chrome.action.setBadgeText({ text: '', ...(tab?.id ? { tabId: tab.id } : {}) }),
-        4000,
-      )
-    }, 300_000)
-    pageCaptureResults.set(startedId, { tabId: tab?.id, timer })
-  }).catch((err) => {
+  void self.__capturepackFullPageCapture.run(
+    tab,
+    sendPageCapture,
+    (startedId) => {
+      captureId = startedId
+      const timer = setTimeout(() => {
+        pageCaptureResults.delete(startedId)
+        chrome.action.setBadgeBackgroundColor({ color: '#d93025' })
+        chrome.action.setBadgeText({ text: '✕', ...(tab?.id ? { tabId: tab.id } : {}) })
+        setTimeout(
+          () => chrome.action.setBadgeText({ text: '', ...(tab?.id ? { tabId: tab.id } : {}) }),
+          4000,
+        )
+      }, 300_000)
+      pageCaptureResults.set(startedId, { tabId: tab?.id, timer })
+    },
+    (startedId) => pageCaptureResults.has(startedId),
+  ).catch((err) => {
     const pending = captureId === null ? null : pageCaptureResults.get(captureId)
     if (pending) clearTimeout(pending.timer)
     if (captureId !== null) pageCaptureResults.delete(captureId)

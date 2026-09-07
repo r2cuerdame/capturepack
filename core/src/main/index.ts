@@ -376,7 +376,9 @@ function main(): void {
           'but another capture/editor already owns the window',
         )
       }
-      return { ok: true }
+      return opened
+        ? { ok: true }
+        : { ok: false, reason: 'Capture saved, but another editor is already open' }
     })
     if (settings.chromeDomEnabled) {
       // Update the stable unpacked folder BEFORE answering the extension's

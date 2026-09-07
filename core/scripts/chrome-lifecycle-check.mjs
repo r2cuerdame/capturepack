@@ -102,7 +102,8 @@ try {
       onStartup: event(),
       onMessage: event(),
     },
-    action: { setBadgeText() {}, onClicked: event() },
+    action: { setBadgeText() {}, setBadgeBackgroundColor() {}, onClicked: event() },
+    contextMenus: { create() {}, removeAll(callback) { callback() }, onClicked: event() },
     storage: {
       local: {
         get(key, callback) {
@@ -125,6 +126,7 @@ try {
     chrome,
     console,
     Date,
+    importScripts() {},
     setTimeout(callback, delay) {
       const id = nextTimer++
       timers.set(id, { callback, delay })

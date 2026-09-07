@@ -1,4 +1,6 @@
 import { nativeImage } from 'electron'
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import type { Settings, TimelineFile } from '../../shared/types'
 import { uiLanguage } from '../locale'
 import { logInfo } from '../log'
@@ -7,17 +9,69 @@ import {
   domEventForPack,
   domPluginDeclaration,
   savePack,
-  tryWriteDomPlugin,
+  writeDomPlugin,
   type DomPluginPayload,
   type PackHandle,
 } from '../exporter'
 import {
+  exportWindowsContextTimeline,
+  type WindowsContextTimelineV1,
+} from '../context/windowsContextTimeline'
+import {
+  BROWSER_PAGE_SURFACE_ID,
   DOM_PROTOCOL_VERSION,
   type BrowserPageCapture,
   type DomEvent,
 } from './domBridge'
 
 const MAX_BITMAP_BYTES = 160 * 1024 * 1024
+
+export function browserPageCaptureContext(
+  capture: BrowserPageCapture,
+  rasterWidth: number,
+  rasterHeight: number,
+  rasterScale = capture.geometry.deviceScaleFactor,
+): { event: DomEvent; windowsContext: WindowsContextTimelineV1 } {
+  // This event describes a document raster, not the browser's on-screen
+  // viewport. Giving it the raster's effective CSS extent lets the ordinary
+  // Chrome DOM provider map document-space rectangles straight onto the saved
+  // image without inventing a second editor or candidate path.
+  const event: DomEvent = {
+    tMs: 0,
+    type: 'dom.document.captured',
+    tab: capture.tab,
+    viewport: {
+      width: rasterWidth / rasterScale,
+      height: rasterHeight / rasterScale,
+      dpr: rasterScale,
+      screenX: 0,
+      screenY: 0,
+      outerWidth: rasterWidth / rasterScale,
+      outerHeight: rasterHeight / rasterScale,
+    },
+    document: capture.document,
+  }
+  const bounds = { x: 0, y: 0, width: rasterWidth, height: rasterHeight }
+  const windowsContext = exportWindowsContextTimeline([{
+    tMs: 0,
+    windows: [{
+      surface_id: BROWSER_PAGE_SURFACE_ID,
+      title: capture.tab.title,
+      process: 'chrome',
+      class_name: 'Chrome_WidgetWin_1',
+      bounds,
+      client_bounds: bounds,
+      display: 1,
+      focused: true,
+      z: 0,
+      hasControls: false,
+      tree: 'unavailable',
+    }],
+    elements: [],
+  }])
+  if (windowsContext === null) throw new Error('full-page browser surface could not be encoded')
+  return { event, windowsContext }
+}
 
 function axisPositions(length: number, viewport: number): number[] {
   if (length <= viewport) return [0]
@@ -33,6 +87,7 @@ export function composeBrowserPageCapture(capture: BrowserPageCapture): {
   png: Buffer
   width: number
   height: number
+  scale: number
 } {
   const first = capture.tiles[0]
   if (first === undefined) throw new Error('page capture has no tiles')
@@ -116,7 +171,7 @@ export function composeBrowserPageCapture(capture: BrowserPageCapture): {
   if (image.isEmpty() || outputSize.width !== width || outputSize.height !== height) {
     throw new Error('assembled full-page bitmap could not be encoded')
   }
-  return { png: image.toPNG(), width, height }
+  return { png: image.toPNG(), width, height, scale }
 }
 
 /** Reuses the ordinary save-first image pack and chrome-dom contracts. */
@@ -125,6 +180,12 @@ export async function saveBrowserPageCapture(
   settings: Settings,
 ): Promise<PackHandle> {
   const assembled = composeBrowserPageCapture(capture)
+  const browserContext = browserPageCaptureContext(
+    capture,
+    assembled.width,
+    assembled.height,
+    assembled.scale,
+  )
   const timeline: TimelineFile = {
     t0: capture.capturedAt.toISOString(),
     events: [{
@@ -163,24 +224,25 @@ export async function saveBrowserPageCapture(
       height: capture.geometry.documentHeight,
       scale: capture.geometry.deviceScaleFactor,
     }],
-    windowsContext: null,
+    windowsContext: browserContext.windowsContext,
+    imageContextMode: 'browser-page',
     docLanguage: uiLanguage(settings),
   })
+  // savePack normally treats temporal context as optional. For this bundle the
+  // synthetic page surface is what makes the required DOM usable in the normal
+  // editor, so its absence is a capture failure rather than a silent downgrade.
+  await readFile(join(handle.dirPath, 'plugins', 'windows-context', 'timeline.json'), 'utf8')
 
-  const event: DomEvent = {
-    tMs: 0,
-    type: 'dom.document.captured',
-    tab: capture.tab,
-    document: capture.document,
-  }
   const payload: DomPluginPayload = {
     protocol: DOM_PROTOCOL_VERSION,
     extension_version: capture.extensionVersion,
-    events: [domEventForPack(event, 0, 0)],
+    events: [domEventForPack(browserContext.event, 0, 0)],
   }
-  if (await tryWriteDomPlugin(handle.dirPath, payload)) {
-    await addManifestPlugin(handle, domPluginDeclaration(), uiLanguage(settings))
-  }
+  // Unlike ambient browser context on a desktop capture, DOM is a required
+  // half of this explicit toolbar bundle. A failed write must fail honestly;
+  // reporting a PNG-only pack as a successful full-page capture would lie.
+  await writeDomPlugin(handle.dirPath, payload)
+  await addManifestPlugin(handle, domPluginDeclaration(), uiLanguage(settings))
   logInfo(
     `[chrome] full-page CapturePack saved: ${assembled.width}x${assembled.height}, ` +
     `${capture.document.elements.length} DOM element(s), ${capture.tiles.length} tile(s)`,

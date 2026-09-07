@@ -208,8 +208,8 @@ console.log('\nThe picker actually uses it, in every frame')
       background.indexOf('const PICK_CONTEXT_MENU'),
     )
     const body = listener.split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n')
-    check('a toolbar click starts the full-page capture immediately',
-      /__capturepackFullPageCapture\.run\(tab, sendPageCapture,/.test(body), body)
+    check('a host-ready toolbar click starts the full-page capture immediately',
+      /if \(!pageCaptureReady\(\)\)[\s\S]*__capturepackFullPageCapture\.run\(\s*tab,\s*sendPageCapture,/.test(body), body)
     check('a toolbar click does not request standing page access',
       !/permissions\.request\(/.test(body), body)
     check('a toolbar failure is explicit',

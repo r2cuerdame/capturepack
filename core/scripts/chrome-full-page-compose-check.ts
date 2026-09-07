@@ -1,19 +1,30 @@
 import { app, nativeImage } from 'electron'
-import { composeBrowserPageCapture } from '../src/main/chrome/pageCapture'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import {
+  browserPageCaptureContext,
+  composeBrowserPageCapture,
+  saveBrowserPageCapture,
+} from '../src/main/chrome/pageCapture'
 import type { BrowserPageCapture } from '../src/main/chrome/domBridge'
+import { openPackContextSession, readPackObjectContext } from '../src/main/context/packObjects'
+import { loadSettings } from '../src/main/settings'
 
-function tile(red: number, green: number, blue: number): Buffer {
-  const bitmap = Buffer.alloc(2 * 2 * 4)
+function tile(red: number, green: number, blue: number, width = 2, height = 2): Buffer {
+  const bitmap = Buffer.alloc(width * height * 4)
   for (let offset = 0; offset < bitmap.length; offset += 4) {
     bitmap[offset] = blue
     bitmap[offset + 1] = green
     bitmap[offset + 2] = red
     bitmap[offset + 3] = 255
   }
-  return nativeImage.createFromBitmap(bitmap, { width: 2, height: 2 }).toPNG()
+  return nativeImage.createFromBitmap(bitmap, { width, height }).toPNG()
 }
 
-void app.whenReady().then(() => {
+void app.whenReady().then(async () => {
+  const outputDir = mkdtempSync(join(tmpdir(), 'capturepack-full-page-compose-'))
+  let exitCode = 0
   try {
     const capture: BrowserPageCapture = {
       captureId: 'compose-check',
@@ -40,7 +51,13 @@ void app.whenReady().then(() => {
         },
         url: 'https://example.test/long',
         title: 'Long page',
-        elements: [],
+        elements: [{
+          i: 0,
+          tag: 'button',
+          role: 'button',
+          bounds: { x: 0, y: 2, width: 2, height: 2 },
+          text: 'Save',
+        }],
         truncated: false,
         visitedCount: 0,
         elapsedMs: 0,
@@ -61,9 +78,60 @@ void app.whenReady().then(() => {
       throw new Error('composed pixels or dimensions do not match the tile grid')
     }
     console.log('PASS — Chrome full-page composition: exact 2x4 red/blue grid')
-    app.exit(0)
+
+    const saved = await saveBrowserPageCapture(capture, {
+      ...loadSettings().settings,
+      outputDir,
+    })
+    const packContext = readPackObjectContext(saved.dirPath)
+    if (packContext === null || packContext.history.length === 0 || packContext.domEvents.length === 0) {
+      throw new Error('browser context did not survive savePack and pack reload')
+    }
+    const session = openPackContextSession(packContext)
+    const frame = await session.frameAt(0)
+    const candidate = frame.displays[0]?.candidates.find((item) => item.providerId === 'chrome-dom')
+    if (
+      candidate?.name !== 'Save' ||
+      candidate.bounds.x !== 0 ||
+      candidate.bounds.y !== 2 ||
+      candidate.bounds.width !== 2 ||
+      candidate.bounds.height !== 2
+    ) {
+      throw new Error(`full-page DOM did not reach the editor context session: ${JSON.stringify(candidate)}`)
+    }
+    console.log('PASS — Chrome full-page context: saved pack reopens through the normal editor session')
+
+    const fractional: BrowserPageCapture = {
+      ...capture,
+      captureId: 'compose-fractional-check',
+      geometry: { ...capture.geometry, deviceScaleFactor: 1.49 },
+      tiles: [
+        { index: 0, x: 0, y: 0, png: tile(255, 0, 0, 3, 3) },
+        { index: 1, x: 0, y: 2, png: tile(0, 0, 255, 3, 3) },
+      ],
+    }
+    const fractionalResult = composeBrowserPageCapture(fractional)
+    const fractionalContext = browserPageCaptureContext(
+      fractional,
+      fractionalResult.width,
+      fractionalResult.height,
+      fractionalResult.scale,
+    )
+    if (
+      fractionalResult.width !== 3 ||
+      fractionalResult.height !== 6 ||
+      fractionalResult.scale !== 1.5 ||
+      fractionalContext.event.viewport?.dpr !== 1.5 ||
+      fractionalContext.event.viewport?.height !== 4
+    ) {
+      throw new Error('fractional DPR did not use the compositor measured raster scale')
+    }
+    console.log('PASS — Chrome full-page mapping: fractional DPR uses measured raster scale')
   } catch (error) {
     console.error(`FAIL — Chrome full-page composition: ${String(error)}`)
-    app.exit(1)
+    exitCode = 1
+  } finally {
+    rmSync(outputDir, { recursive: true, force: true })
+    app.exit(exitCode)
   }
 })
