@@ -3,7 +3,7 @@
 ## Canonical state
 
 - Issue: https://github.com/r2cuerdame/capturepack/issues/157
-- Final recheck: open; 1 comment; no sub-issues, `blocked_by`/`blocking` dependencies, related PRs, or remote `157` branches.
+- Final recheck: open; 1 comment; no sub-issues or `blocked_by`/`blocking` dependencies. No prior related PR or remote `157` branch existed; this job created draft PR #158.
 - Related foundation: merged PR #105 supplies the Chrome/native-host/DOM geometry base but does not implement one-click full-page capture.
 - Worktree branch: `feat/157-full-page-capture`
 - Build identity: CapturePack `0.5.0`, Chrome extension `0.4.0`, based on `origin/main` at `8e21c14`.
@@ -44,7 +44,7 @@
 - Required DevHotel web-room + Playwright acceptance is therefore NOT RUN: long page, sticky header, lazy loading, restricted-page failure, bundle integrity, console/network errors, and responsive viewports remain pending.
 - Per `DEVHOTEL_PREDEPLOY_V1`, `TEST_ROUTING_V1`, and `NO_ORCA_FALLBACK_V1`, no local browser/Orca fallback, merge, package, release, or deployment was performed.
 - Issue comment `#issuecomment-5564427007` adds mandatory post-ship performance evidence; it remains pending because this task explicitly forbids merge/deploy.
-- PR URL: **pending draft creation**.
+- Draft PR: https://github.com/r2cuerdame/capturepack/pull/158 (`Tracks #157`; not merged or deployed).
 
 ## Next required action
 
