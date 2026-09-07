@@ -196,6 +196,7 @@ const stickyStyle = {
 }
 const sticky = {
   style: stickyStyle,
+  hasAttribute: () => false,
   getBoundingClientRect: () => ({ left: 0, top: 150, right: 100, bottom: 180 }),
 }
 const root = { scrollWidth: 100, scrollHeight: 200 }
@@ -240,6 +241,9 @@ check('tile capture respects Chrome\'s two-per-second quota',
 check('the exact original scroll is restored in a finally path',
   completed.restored && /finally\s*\{[\s\S]*restorePage/.test(source) &&
     source.includes('window.scrollTo(state.scrollX, state.scrollY)'))
+check('page restoration does not leave empty inline-style attributes behind',
+  source.includes("!saved.hadStyleAttribute && saved.element.getAttribute('style') === ''") &&
+    source.includes("saved.element.removeAttribute('style')"))
 check('document scrollbars are suppressed without changing nested scrollers',
   source.includes('html::-webkit-scrollbar, body::-webkit-scrollbar') &&
     !source.includes(' } ::-webkit-scrollbar') &&

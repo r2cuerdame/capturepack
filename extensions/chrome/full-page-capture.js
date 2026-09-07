@@ -125,6 +125,7 @@
         state.floating.push({
           element,
           position,
+          hadStyleAttribute: element.hasAttribute('style'),
           value: element.style.getPropertyValue('visibility'),
           priority: element.style.getPropertyPriority('visibility'),
           positionValue: element.style.getPropertyValue('position'),
@@ -192,6 +193,9 @@
       for (const offset of saved.offsets) {
         if (offset.value === '') saved.element.style.removeProperty(offset.name)
         else saved.element.style.setProperty(offset.name, offset.value, offset.priority)
+      }
+      if (!saved.hadStyleAttribute && saved.element.getAttribute('style') === '') {
+        saved.element.removeAttribute('style')
       }
     }
     const root = document.documentElement
