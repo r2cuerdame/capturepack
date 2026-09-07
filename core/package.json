@@ -91,6 +91,8 @@
     "check:chrome-lifecycle": "node scripts/chrome-lifecycle-check.mjs",
     "check:frame-geometry": "node scripts/frame-geometry-check.mjs",
     "check:chrome-bridge": "node scripts/chrome-bridge-check.mjs --wire-only",
+    "check:chrome-full-page": "node scripts/chrome-full-page-check.mjs",
+    "check:chrome-full-page-compose": "node scripts/chrome-full-page-compose-check.mjs",
     "check:editor-lifecycle": "node scripts/editor-lifecycle-check.mjs",
     "check:editor-ux": "node scripts/editor-ux-contract-check.mjs",
     "check:qa-process-tree": "node scripts/process-tree-check.mjs",

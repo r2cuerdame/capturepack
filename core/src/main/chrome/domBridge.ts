@@ -190,6 +190,36 @@ export interface DomBridgeStatus {
   picker: DomPickerState | null
 }
 
+export interface BrowserPageCaptureGeometry {
+  documentWidth: number
+  documentHeight: number
+  viewportWidth: number
+  viewportHeight: number
+  deviceScaleFactor: number
+  originalScrollX: number
+  originalScrollY: number
+}
+
+export interface BrowserPageCapture {
+  captureId: string
+  extensionVersion: string
+  tabId: number | null
+  tab: { url: string; title: string }
+  capturedAt: Date
+  geometry: BrowserPageCaptureGeometry
+  document: DomDocumentSnapshot
+  tiles: Array<{ index: number; x: number; y: number; png: Buffer }>
+}
+
+export interface BrowserPageCaptureResult {
+  ok: boolean
+  reason?: string
+}
+
+type BrowserPageCaptureHandler = (
+  capture: BrowserPageCapture,
+) => Promise<BrowserPageCaptureResult>
+
 let server: net.Server | null = null
 let closingServer: net.Server | null = null
 let bridgeWanted = false
@@ -213,6 +243,37 @@ let browserGrantReported = false
 /** In-flight capture-time fetches, by request id. */
 const domRequests = new Map<string, (answer: DomResponseMessage) => void>()
 let domRequestSeq = 0
+let pageCaptureHandler: BrowserPageCaptureHandler | null = null
+
+interface PageCaptureAssembly {
+  socket: net.Socket
+  timeout: ReturnType<typeof setTimeout>
+  startedAt: number
+  captureId: string
+  extensionVersion: string
+  tabId: number | null
+  tab: { url: string; title: string }
+  capturedAt: Date
+  geometry: BrowserPageCaptureGeometry
+  tileCount: number
+  documentChunks: string[]
+  documentEnded: boolean
+  tileChunks: Map<number, string[]>
+  tiles: Map<number, { x: number; y: number; base64: string }>
+  base64Chars: number
+}
+
+const pageCaptures = new Map<string, PageCaptureAssembly>()
+const PAGE_CAPTURE_MAX_BASE64_CHARS = 64 * 1024 * 1024
+const PAGE_CAPTURE_MAX_TILES = 256
+const PAGE_CAPTURE_MAX_AGE_MS = 240_000
+const PAGE_CAPTURE_MAX_DIMENSION = 50_000
+
+export function setBrowserPageCaptureHandler(
+  handler: BrowserPageCaptureHandler | null,
+): void {
+  pageCaptureHandler = handler
+}
 
 export function browserGrantState(): boolean {
   return browserGranted
@@ -816,6 +877,281 @@ export function parseDomPayload(text: string | null): DomEvent[] {
   return out
 }
 
+function pageCaptureId(raw: unknown): string | null {
+  if (typeof raw !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/u.test(raw)) return null
+  return raw
+}
+
+function finitePageNumber(raw: unknown, positive = false): number | null {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return null
+  if (positive && raw <= 0) return null
+  if (Math.abs(raw) > PAGE_CAPTURE_MAX_DIMENSION) return null
+  return raw
+}
+
+function parsePageGeometry(raw: unknown): BrowserPageCaptureGeometry | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const value = raw as Record<string, unknown>
+  const documentWidth = finitePageNumber(value['documentWidth'], true)
+  const documentHeight = finitePageNumber(value['documentHeight'], true)
+  const viewportWidth = finitePageNumber(value['viewportWidth'], true)
+  const viewportHeight = finitePageNumber(value['viewportHeight'], true)
+  const deviceScaleFactor = finitePageNumber(value['deviceScaleFactor'], true)
+  const originalScrollX = finitePageNumber(value['originalScrollX'])
+  const originalScrollY = finitePageNumber(value['originalScrollY'])
+  if (
+    documentWidth === null || documentHeight === null ||
+    viewportWidth === null || viewportHeight === null ||
+    deviceScaleFactor === null || deviceScaleFactor > 16 ||
+    originalScrollX === null || originalScrollY === null
+  ) return null
+  if (documentWidth * documentHeight * deviceScaleFactor ** 2 > 40_000_000) return null
+  return {
+    documentWidth,
+    documentHeight,
+    viewportWidth,
+    viewportHeight,
+    deviceScaleFactor,
+    originalScrollX,
+    originalScrollY,
+  }
+}
+
+function pageCaptureReply(
+  socket: net.Socket,
+  captureId: string | null,
+  tabId: number | null,
+  result: BrowserPageCaptureResult,
+): void {
+  if (socket.destroyed) return
+  socket.write(`${JSON.stringify({
+    type: 'page.capture.result',
+    protocol: DOM_PROTOCOL_VERSION,
+    timestamp: Date.now(),
+    capture_id: captureId,
+    tab_id: tabId,
+    ok: result.ok,
+    ...(result.reason === undefined ? {} : { reason: result.reason.slice(0, 200) }),
+  })}\n`)
+}
+
+function rejectPageCapture(
+  socket: net.Socket,
+  captureId: string | null,
+  reason: string,
+): void {
+  const state = captureId === null ? undefined : pageCaptures.get(captureId)
+  if (state !== undefined) clearTimeout(state.timeout)
+  if (captureId !== null) pageCaptures.delete(captureId)
+  rejected += 1
+  lastRejection = `page-capture:${reason}`
+  logWarn(`[chrome] refused a page capture: ${reason}`)
+  pageCaptureReply(socket, captureId, state?.tabId ?? null, { ok: false, reason })
+}
+
+function decodePng(base64: string): Buffer | null {
+  const png = Buffer.from(base64, 'base64')
+  if (
+    png.length < 8 ||
+    !png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+  ) return null
+  return png
+}
+
+/** Handles the chunked, explicitly-triggered page capture wire vocabulary. */
+function handlePageCaptureMessage(raw: unknown, socket: net.Socket): boolean {
+  if (typeof raw !== 'object' || raw === null) return false
+  const message = raw as Record<string, unknown>
+  const type = message['type']
+  if (typeof type !== 'string' || !type.startsWith('page.capture.')) return false
+  const captureId = pageCaptureId(message['capture_id'])
+  if (type === 'page.capture.failed') {
+    logWarn(
+      `[chrome] toolbar page capture failed: ${String(message['reason'] ?? 'unknown').slice(0, 200)}`,
+    )
+    return true
+  }
+  if (message['protocol'] !== DOM_PROTOCOL_VERSION || captureId === null) {
+    rejectPageCapture(socket, captureId, 'malformed-envelope')
+    return true
+  }
+  if (type === 'page.capture.start') {
+    for (const [id, pending] of pageCaptures) {
+      if (Date.now() - pending.startedAt > PAGE_CAPTURE_MAX_AGE_MS) {
+        clearTimeout(pending.timeout)
+        pageCaptures.delete(id)
+      }
+    }
+    const tab = parseTab(message['tab'])
+    const geometry = parsePageGeometry(message['geometry'])
+    const tileCount = message['tile_count']
+    const capturedAt = message['captured_at']
+    const extensionVersion = message['extension_version']
+    if (
+      tab === null || geometry === null ||
+      !Number.isInteger(tileCount) || Number(tileCount) < 1 || Number(tileCount) > PAGE_CAPTURE_MAX_TILES ||
+      typeof capturedAt !== 'number' || !Number.isFinite(capturedAt) ||
+      !Number.isFinite(new Date(capturedAt).getTime()) ||
+      typeof extensionVersion !== 'string' || extensionVersion.length > 32
+    ) {
+      rejectPageCapture(socket, captureId, 'malformed-start')
+      return true
+    }
+    if (
+      pageCaptures.has(captureId) || pageCaptures.size >= 4 ||
+      [...pageCaptures.values()].some((pending) => pending.socket === socket)
+    ) {
+      rejectPageCapture(socket, captureId, 'duplicate-start')
+      return true
+    }
+    const timeout = setTimeout(() => {
+      if (pageCaptures.has(captureId)) rejectPageCapture(socket, captureId, 'capture-timed-out')
+    }, PAGE_CAPTURE_MAX_AGE_MS)
+    pageCaptures.set(captureId, {
+      socket,
+      timeout,
+      startedAt: Date.now(),
+      captureId,
+      extensionVersion,
+      tabId: Number.isInteger(message['tab_id']) ? Number(message['tab_id']) : null,
+      tab,
+      capturedAt: new Date(capturedAt),
+      geometry,
+      tileCount: Number(tileCount),
+      documentChunks: [],
+      documentEnded: false,
+      tileChunks: new Map(),
+      tiles: new Map(),
+      base64Chars: 0,
+    })
+    logInfo(
+      `[chrome] receiving full-page capture ${captureId}: ` +
+      `${String(Math.round(geometry.documentWidth))}x${String(Math.round(geometry.documentHeight))} CSS px, ` +
+      `${String(tileCount)} tile(s)`,
+    )
+    return true
+  }
+  const state = pageCaptures.get(captureId)
+  if (state === undefined || state.socket !== socket) {
+    rejectPageCapture(socket, captureId, 'capture-not-started')
+    return true
+  }
+  if (Date.now() - state.startedAt > PAGE_CAPTURE_MAX_AGE_MS) {
+    rejectPageCapture(socket, captureId, 'capture-timed-out')
+    return true
+  }
+  if (type === 'page.capture.document.chunk' || type === 'page.capture.tile.chunk') {
+    const data = message['data']
+    const chunkIndex = message['chunk_index']
+    if (
+      typeof data !== 'string' || data.length > 512 * 1024 ||
+      !Number.isInteger(chunkIndex) || Number(chunkIndex) < 0
+    ) {
+      rejectPageCapture(socket, captureId, 'malformed-chunk')
+      return true
+    }
+    let chunks: string[]
+    if (type === 'page.capture.document.chunk') {
+      chunks = state.documentChunks
+    } else {
+      const tileIndex = message['tile_index']
+      if (!Number.isInteger(tileIndex) || Number(tileIndex) < 0 || Number(tileIndex) >= state.tileCount) {
+        rejectPageCapture(socket, captureId, 'malformed-tile-index')
+        return true
+      }
+      chunks = state.tileChunks.get(Number(tileIndex)) ?? []
+      state.tileChunks.set(Number(tileIndex), chunks)
+    }
+    if (Number(chunkIndex) !== chunks.length) {
+      rejectPageCapture(socket, captureId, 'out-of-order-chunk')
+      return true
+    }
+    state.base64Chars += data.length
+    if (state.base64Chars > PAGE_CAPTURE_MAX_BASE64_CHARS) {
+      rejectPageCapture(socket, captureId, 'capture-exceeds-48mb')
+      return true
+    }
+    chunks.push(data)
+    return true
+  }
+  if (type === 'page.capture.document.end') {
+    if (
+      state.documentEnded ||
+      message['chunk_count'] !== state.documentChunks.length ||
+      state.documentChunks.length === 0
+    ) {
+      rejectPageCapture(socket, captureId, 'malformed-document-end')
+      return true
+    }
+    state.documentEnded = true
+    return true
+  }
+  if (type === 'page.capture.tile.end') {
+    const tileIndex = message['tile_index']
+    const x = finitePageNumber(message['x'])
+    const y = finitePageNumber(message['y'])
+    if (!Number.isInteger(tileIndex) || x === null || y === null || x < 0 || y < 0) {
+      rejectPageCapture(socket, captureId, 'malformed-tile-end')
+      return true
+    }
+    const index = Number(tileIndex)
+    const chunks = state.tileChunks.get(index)
+    if (
+      index < 0 || index >= state.tileCount || chunks === undefined || chunks.length === 0 ||
+      message['chunk_count'] !== chunks.length || state.tiles.has(index)
+    ) {
+      rejectPageCapture(socket, captureId, 'incomplete-tile')
+      return true
+    }
+    state.tiles.set(index, { x, y, base64: chunks.join('') })
+    state.tileChunks.delete(index)
+    return true
+  }
+  if (type === 'page.capture.finish') {
+    pageCaptures.delete(captureId)
+    clearTimeout(state.timeout)
+    if (!state.documentEnded || state.tiles.size !== state.tileCount || pageCaptureHandler === null) {
+      rejectPageCapture(socket, captureId, pageCaptureHandler === null ? 'app-handler-unavailable' : 'capture-incomplete')
+      return true
+    }
+    let document: DomDocumentSnapshot | null = null
+    try {
+      const json = Buffer.from(state.documentChunks.join(''), 'base64').toString('utf8')
+      document = parseDomDocument(JSON.parse(json) as unknown)
+    } catch {
+      document = null
+    }
+    const tiles = [...state.tiles.entries()]
+      .sort(([left], [right]) => left - right)
+      .map(([index, tile]) => ({ index, x: tile.x, y: tile.y, png: decodePng(tile.base64) }))
+    if (document === null || tiles.some((tile) => tile.png === null)) {
+      rejectPageCapture(socket, captureId, document === null ? 'invalid-document' : 'invalid-png')
+      return true
+    }
+    const capture: BrowserPageCapture = {
+      captureId,
+      extensionVersion: state.extensionVersion,
+      tabId: state.tabId,
+      tab: state.tab,
+      capturedAt: state.capturedAt,
+      geometry: state.geometry,
+      document,
+      tiles: tiles.map((tile) => ({ ...tile, png: tile.png as Buffer })),
+    }
+    void pageCaptureHandler(capture).then(
+      (result) => pageCaptureReply(socket, captureId, state.tabId, result),
+      (error: unknown) => {
+        const reason = error instanceof Error ? error.message : String(error)
+        logError('[chrome] saving the full-page capture failed:', error)
+        pageCaptureReply(socket, captureId, state.tabId, { ok: false, reason })
+      },
+    )
+    return true
+  }
+  rejectPageCapture(socket, captureId, 'unknown-page-capture-message')
+  return true
+}
+
 /**
  * Starts listening for native hosts.
  *
@@ -846,6 +1182,12 @@ export function startDomBridge(): void {
     const disconnect = (): void => {
       hostSockets.delete(socket)
       extensionConnections.remove(socket)
+      for (const [captureId, capture] of pageCaptures) {
+        if (capture.socket === socket) {
+          clearTimeout(capture.timeout)
+          pageCaptures.delete(captureId)
+        }
+      }
     }
     socket.on('data', (chunk: Buffer) => {
       buffer += chunk.toString('utf8')
@@ -871,6 +1213,10 @@ export function startDomBridge(): void {
             parsed = JSON.parse(line)
           } catch {
             parsed = null
+          }
+          if (handlePageCaptureMessage(parsed, socket)) {
+            cut = buffer.indexOf('\n')
+            continue
           }
           const result = parse(parsed)
           if (!result.ok) {
@@ -985,6 +1331,8 @@ export function stopDomBridge(): void {
   for (const socket of hostSockets) socket.destroy()
   hostSockets.clear()
   extensionConnections.clear()
+  for (const capture of pageCaptures.values()) clearTimeout(capture.timeout)
+  pageCaptures.clear()
   const active = server
   server = null
   if (active !== null) {

@@ -18,7 +18,8 @@
 // already have. That argument is the whole licence, and it fails the moment
 // anything is recorded that the picture does NOT contain. So:
 //
-//  - Nothing outside the viewport. Scrolled-away content is not in the image.
+//  - Nothing outside the captured raster. A normal still admits only the
+//    viewport; an explicit toolbar full-page image admits its document rectangle.
 //  - No value of any `input`, `textarea` or `select`. A half-typed password, a
 //    card number, a search someone did not run — the picture may show dots or
 //    nothing at all, and the DOM knows the characters.
@@ -74,16 +75,28 @@
   }
 
   /** Visible to the user, in the sense the picture can corroborate. */
-  const visibility = (el, rect, style) => {
+  const visibility = (el, rect, style, fullPage) => {
     if (style.visibility === 'hidden' || style.display === 'none') return 'hidden'
     if (style.opacity === '0') return 'hidden'
     if (el.hasAttribute('hidden') || el.getAttribute('aria-hidden') === 'true') return 'hidden'
     // Everything above this line is INHERITED and prunes the subtree. Everything
     // below is about this element's own box, which its children do not share.
     if (rect.width < MIN_SIZE_PX || rect.height < MIN_SIZE_PX) return 'offscreen'
-    // Outside the viewport is outside the picture.
-    if (rect.bottom <= 0 || rect.right <= 0) return 'offscreen'
-    if (rect.top >= window.innerHeight || rect.left >= window.innerWidth) return 'offscreen'
+    // A normal still contains the viewport. A toolbar full-page capture contains
+    // the complete document rectangle, so document-space boxes are admissible
+    // there — but never anything outside the pixels the bundle actually holds.
+    const left = fullPage ? rect.left + window.scrollX : rect.left
+    const top = fullPage ? rect.top + window.scrollY : rect.top
+    const right = left + rect.width
+    const bottom = top + rect.height
+    const limitWidth = fullPage
+      ? Math.max(document.documentElement.scrollWidth, document.body?.scrollWidth || 0)
+      : window.innerWidth
+    const limitHeight = fullPage
+      ? Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight || 0)
+      : window.innerHeight
+    if (bottom <= 0 || right <= 0) return 'offscreen'
+    if (top >= limitHeight || left >= limitWidth) return 'offscreen'
     return 'visible'
   }
 
@@ -95,10 +108,10 @@
   /** Not recordable here, but its descendants still might be. */
   const SKIP = Object.freeze({ skip: true })
 
-  function describe(el, index) {
+  function describe(el, index, fullPage) {
     const rect = el.getBoundingClientRect()
     const style = window.getComputedStyle(el)
-    const state = visibility(el, rect, style)
+    const state = visibility(el, rect, style, fullPage)
     // null prunes the subtree; SKIP records nothing and keeps walking.
     if (state === 'hidden') return null
     if (state !== 'visible') return SKIP
@@ -111,8 +124,8 @@
       // Viewport coordinates. The host translates them into the display's
       // pixels using the same client rectangle the picker already uses.
       bounds: {
-        x: Math.round(rect.left),
-        y: Math.round(rect.top),
+        x: Math.round(rect.left + (fullPage ? window.scrollX : 0)),
+        y: Math.round(rect.top + (fullPage ? window.scrollY : 0)),
         width: Math.round(rect.width),
         height: Math.round(rect.height),
       },
@@ -146,7 +159,7 @@
    * whole branch is invisible — a closed menu costs one refusal, not one per
    * item inside it.
    */
-  function walk() {
+  function walk(fullPage) {
     const elements = []
     let truncated = false
     let visited = 0
@@ -159,7 +172,7 @@
         truncated = true
         break
       }
-      const described = describe(el, elements.length)
+      const described = describe(el, elements.length, fullPage)
       // TWO DIFFERENT REFUSALS, AND CONFLATING THEM COST A WHOLE PAGE.
       //
       // `display: none`, `visibility: hidden`, `aria-hidden` and `opacity: 0`
@@ -183,17 +196,28 @@
     return { elements, truncated, visited }
   }
 
-  window.__capturepackDocumentSnapshot = () => {
+  window.__capturepackDocumentSnapshot = (options = {}) => {
+    const fullPage = options.fullPage === true
     const started = Date.now()
-    const { elements, truncated, visited } = walk()
+    const { elements, truncated, visited } = walk(fullPage)
+    const documentWidth = Math.max(
+      document.documentElement.scrollWidth,
+      document.body?.scrollWidth || 0,
+      window.innerWidth,
+    )
+    const documentHeight = Math.max(
+      document.documentElement.scrollHeight,
+      document.body?.scrollHeight || 0,
+      window.innerHeight,
+    )
     return {
       // The space the bounds are in, so the host never has to guess.
       viewport: {
-        width: window.innerWidth,
-        height: window.innerHeight,
+        width: fullPage ? documentWidth : window.innerWidth,
+        height: fullPage ? documentHeight : window.innerHeight,
         devicePixelRatio: window.devicePixelRatio || 1,
-        scrollX: Math.round(window.scrollX),
-        scrollY: Math.round(window.scrollY),
+        scrollX: fullPage ? 0 : Math.round(window.scrollX),
+        scrollY: fullPage ? 0 : Math.round(window.scrollY),
       },
       url: location.href,
       title: document.title,
@@ -207,7 +231,9 @@
         'the value of every input, textarea and select',
         'everything but the presence of a password field',
         'text of elements the user could not see',
-        'elements outside the viewport',
+        fullPage
+          ? 'elements outside the captured document rectangle'
+          : 'elements outside the viewport',
         'attributes outside the recorded allowlist',
       ],
     }
