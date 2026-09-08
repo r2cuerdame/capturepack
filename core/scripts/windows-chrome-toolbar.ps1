@@ -36,7 +36,11 @@ function Find-NamedWindow([string]$NameFragment) {
   return $null
 }
 
-function Find-Control([Windows.Automation.AutomationElement]$Root, [string]$NamePattern) {
+function Find-Control(
+  [Windows.Automation.AutomationElement]$Root,
+  [string]$NamePattern,
+  [string]$AutomationIdPattern = '(?!)'
+) {
   $all = $Root.FindAll(
     [Windows.Automation.TreeScope]::Descendants,
     [Windows.Automation.Condition]::TrueCondition
@@ -45,10 +49,27 @@ function Find-Control([Windows.Automation.AutomationElement]$Root, [string]$Name
     $type = $item.Current.ControlType.ProgrammaticName
     if (
       $type -in @('ControlType.Button', 'ControlType.CheckBox', 'ControlType.MenuItem', 'ControlType.ListItem') -and
-      $item.Current.Name -match $NamePattern -and
+      ($item.Current.Name -match $NamePattern -or $item.Current.AutomationId -match $AutomationIdPattern) -and
       $item.Current.IsEnabled -and
       -not $item.Current.IsOffscreen
     ) { return $item }
+  }
+  return $null
+}
+
+function Find-FolderDialog {
+  $desktop = [Windows.Automation.AutomationElement]::RootElement
+  $windows = $desktop.FindAll(
+    [Windows.Automation.TreeScope]::Children,
+    [Windows.Automation.Condition]::TrueCondition
+  )
+  foreach ($candidate in $windows) {
+    if (
+      $candidate.Current.ControlType.ProgrammaticName -eq 'ControlType.Window' -and
+      $candidate.Current.ClassName -eq '#32770' -and
+      $candidate.Current.IsEnabled -and
+      -not $candidate.Current.IsOffscreen
+    ) { return $candidate }
   }
   return $null
 }
@@ -99,7 +120,7 @@ if ($Mode -eq 'InstallExtension') {
 
   $developer = $null
   while ($null -eq $developer -and [DateTime]::UtcNow -lt $deadline) {
-    $developer = Find-Control $window '(?i)^(Developer mode|개발자 모드|デベロッパー モード|Entwicklermodus|Mode développeur|Modo de desarrollador)'
+    $developer = Find-Control $window '(?i)^Developer mode$' '(?i)(developer.?mode|devMode)'
     if ($null -eq $developer) { Start-Sleep -Milliseconds 250 }
   }
   if ($null -eq $developer) { throw 'Chrome Developer mode was not exposed through UI Automation' }
@@ -110,7 +131,7 @@ if ($Mode -eq 'InstallExtension') {
   } catch {}
   if ($needsToggle) { Click-Physical $developer | Out-Null; Start-Sleep -Milliseconds 500 }
 
-  $load = Find-Control $window '(?i)^(Load unpacked|압축해제된 확장 프로그램을 로드합니다|パッケージ化されていない拡張機能を読み込む|Entpackte Erweiterung laden|Charger l.extension non empaquetée|Cargar descomprimida)'
+  $load = Find-Control $window '(?i)^Load unpacked$' '(?i)(load.?unpacked|loadUnpacked)'
   if ($null -eq $load) { throw 'Chrome Load unpacked button was not exposed through UI Automation' }
   $loadClick = Click-Physical $load
   Start-Sleep -Milliseconds 500
@@ -119,9 +140,9 @@ if ($Mode -eq 'InstallExtension') {
   [Windows.Forms.SendKeys]::SendWait('{ENTER}')
 
   $select = $null
-  $desktop = [Windows.Automation.AutomationElement]::RootElement
   while ($null -eq $select -and [DateTime]::UtcNow -lt $deadline) {
-    $select = Find-Control $desktop '(?i)^(Select Folder|폴더 선택|フォルダーの選択|Ordner auswählen|Sélectionner un dossier|Seleccionar carpeta)'
+    $dialog = Find-FolderDialog
+    if ($null -ne $dialog) { $select = Find-Control $dialog '(?i)^Select Folder$' '^1$' }
     if ($null -eq $select) { Start-Sleep -Milliseconds 250 }
   }
   if ($null -eq $select) { throw 'Windows Select Folder button was not exposed through UI Automation' }
@@ -158,7 +179,7 @@ if ($Mode -eq 'FindEditor') {
 Start-Sleep -Milliseconds 300
 $action = Find-Control $window '(?i)CapturePack'
 if ($null -eq $action) {
-  $extensions = Find-Control $window '(?i)^(Extensions|확장 프로그램|拡張機能|Erweiterungen|Extensiones|Расширения)'
+  $extensions = Find-Control $window '(?i)^Extensions$' '(?i)(toolbar.*extension|extension.*toolbar)'
   if ($null -eq $extensions) { throw 'Chrome Extensions toolbar control was not exposed through UI Automation' }
   Click-Physical $extensions | Out-Null
   Start-Sleep -Milliseconds 500
