@@ -234,7 +234,7 @@ function packEvidence(packDir, expectedUrl) {
   ) throw new Error(`persisted raster/viewport scale mismatch: ${String(widthScale)}x${String(heightScale)} vs DPR ${String(trigger.data.device_scale_factor)}`)
   if (documentEvent?.tab?.url !== expectedUrl || marker === undefined) throw new Error('captured DOM URL/marker does not match the fixture')
   if (!plugins.includes('chrome-dom') || !plugins.includes('windows-context')) throw new Error('required context plugins are not declared')
-  if (!surfaceText.includes('capturepack:browser-page')) throw new Error('reserved browser-page surface is absent')
+  if (!surfaceText.includes('capturepack-browser-page')) throw new Error('reserved browser-page surface is absent')
   return {
     packId: manifest.id,
     directory: packDir,

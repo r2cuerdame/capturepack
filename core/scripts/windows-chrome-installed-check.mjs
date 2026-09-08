@@ -13,6 +13,8 @@ const installer = readFileSync(installerFile, 'utf8')
 const nativeEntry = readFileSync(join(here, '..', 'src', 'main', 'chrome', 'nativeHostEntry.ts'), 'utf8')
 const domBridge = readFileSync(join(here, '..', 'src', 'main', 'chrome', 'domBridge.ts'), 'utf8')
 const pageCapture = readFileSync(join(here, '..', 'src', 'main', 'chrome', 'pageCapture.ts'), 'utf8')
+const browserPage = readFileSync(join(here, '..', 'src', 'shared', 'context', 'browserPage.ts'), 'utf8')
+const browserPageSurfaceId = browserPage.match(/BROWSER_PAGE_SURFACE_ID\s*=\s*'([^']+)'/u)?.[1]
 let passed = 0
 let failed = 0
 
@@ -93,7 +95,8 @@ check(
   harness.includes("trigger?.data?.source !== 'chrome-full-page'") &&
     harness.includes("trigger?.data?.hotkey !== 'chrome.action'") &&
     harness.includes("element.id === 'acceptance-marker'") &&
-    harness.includes("surfaceText.includes('capturepack:browser-page')"),
+    browserPageSurfaceId !== undefined &&
+    harness.includes(`surfaceText.includes('${browserPageSurfaceId}')`),
 )
 check(
   'headed scenarios retain strict long, responsive, very-tall, DPR-2 and short raster checks',
