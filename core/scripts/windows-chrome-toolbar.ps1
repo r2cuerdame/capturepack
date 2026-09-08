@@ -187,14 +187,29 @@ if ($Mode -eq 'InstallExtension') {
   [Windows.Forms.SendKeys]::SendWait('{ENTER}')
 
   $select = $null
+  $sawFolderDialog = $false
+  $lastFolderDialog = $null
   while ($null -eq $select -and [DateTime]::UtcNow -lt $deadline) {
     $dialog = Find-FolderDialog
-    if ($null -ne $dialog) { $select = Find-Control $dialog '(?i)^Select Folder$' '^1$' }
+    if ($null -ne $dialog) {
+      $sawFolderDialog = $true
+      $lastFolderDialog = $dialog
+      $select = Find-Control $dialog '(?i)^Select Folder$' '^1$'
+    } elseif ($sawFolderDialog) {
+      break
+    }
     if ($null -eq $select) { Start-Sleep -Milliseconds 250 }
   }
-  if ($null -eq $select) {
+  if ($null -eq $select -and $sawFolderDialog -and $null -eq (Find-FolderDialog)) {
+    $selectClick = [ordered]@{
+      method = 'owned-dialog-closed-after-path-enter'
+      dialogName = $lastFolderDialog.Current.Name
+      processId = $lastFolderDialog.Current.ProcessId
+      confirmedAt = [DateTimeOffset]::UtcNow.ToString('o')
+    }
+  } elseif ($null -eq $select) {
     $dialog = Find-FolderDialog
-    if ($null -eq $dialog) { throw 'Windows folder picker disappeared before selection could be confirmed' }
+    if ($null -eq $dialog) { throw 'Windows folder picker was never observed or disappeared without owned provenance' }
     [CapturePackAcceptanceMouse]::SetForegroundWindow([IntPtr]$dialog.Current.NativeWindowHandle) | Out-Null
     Start-Sleep -Milliseconds 200
     [Windows.Forms.SendKeys]::SendWait('{ENTER}')
