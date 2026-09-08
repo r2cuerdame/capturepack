@@ -23,6 +23,29 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { runNativeHostMode } from './nativeHost'
 
+// Acceptance-only launch provenance. Chrome inherits the harness environment
+// and starts this process through the registered launcher; appending to an
+// explicitly supplied owned path proves that fact without ever writing a byte
+// to the native-messaging stdout stream.
+const evidencePath = process.env['CAPTUREPACK_NATIVE_HOST_EVIDENCE']
+if (evidencePath !== undefined && evidencePath !== '') {
+  try {
+    fs.appendFileSync(
+      evidencePath,
+      `${JSON.stringify({
+        pid: process.pid,
+        ppid: process.ppid,
+        argv: process.argv,
+        execPath: process.execPath,
+        startedAt: new Date().toISOString(),
+      })}\n`,
+      'utf8',
+    )
+  } catch {
+    // Evidence can never be the price of a working browser bridge.
+  }
+}
+
 const appData = process.env['APPDATA']
 const installerStandingDown =
   appData !== undefined &&

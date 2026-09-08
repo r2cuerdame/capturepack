@@ -3,31 +3,34 @@
 ## Canonical state
 
 - Issue: https://github.com/r2cuerdame/capturepack/issues/157
-- Draft PR: https://github.com/r2cuerdame/capturepack/pull/158 (`Tracks #157`)
-- Existing branch reused: `feat/157-full-page-capture`
-- Verified implementation head: `c906ba1` (this result update is evidence-only)
-- CapturePack version `0.5.0`; Chrome extension version `0.4.0`
-- PR remains draft. Nothing was merged, released, deployed, or published.
+- Existing draft PR: https://github.com/r2cuerdame/capturepack/pull/158 (`Tracks #157`)
+- Existing branch reused: `feat/157-full-page-capture`; no duplicate branch or PR was created.
+- CapturePack version `0.5.0`; Chrome extension version `0.4.0`.
+- PR #158 remains draft. Nothing was merged, released, deployed, or published.
 
-## Completion and regression evidence
+## Implemented behavior and regression evidence
 
 - The toolbar action performs a bounded full-page capture; element picking remains secondary through `Ctrl+Shift+E` and the context menu.
 - The full-page PNG and aligned DOM/URL/title/timestamp/geometry use the normal save-first CapturePack and `ContextSession` editor/re-edit path. Save and Save As New preserve the DOM bundle.
+- The normal screenshot path is unchanged and remains covered by `check:image-flow`; toolbar-vs-picker behavior is covered by `check:chrome-full-page` and `check:frame-geometry`.
 - Capture restores the exact scroll position, scrollbar/smooth-scroll state, modified fixed/sticky styles, and the absence of an original inline `style` attribute before publishing `page.capture.finish`.
-- Limits are explicit: 256 tiles, 50,000 CSS px per dimension, 40,000,000 output pixels, 20,000 elements in the fixed/sticky scan, and 512 KiB transport chunks.
-- Local `npm --prefix core run qa:rc`: PASS, 91 checks including build/smoke, 79.73 s.
-- GitHub Actions run 193 on `c906ba1`: PASS for `build`, `spec-validate`, and `capture-e2e`.
-- No PR reviews or unresolved review threads were present when this evidence was recorded.
+- Limits remain explicit: 256 tiles, 50,000 CSS px per dimension, 40,000,000 output pixels, 20,000 elements in the fixed/sticky scan, and 512 KiB transport chunks. Raster/viewport scale mismatches are still rejected rather than rounded or tolerated.
+- Local Node `22.23.2` release-candidate gate: PASS, 90 discovered checks / 93 sequential steps including typecheck, build, smoke, Chrome full-page 40/40, bridge wire 10/10, document snapshot, frame geometry 44/44, pack geometry, normal image flow, extension sync 5/5, and installed-Windows harness contract 14/14. Runtime: 84.51 s. Evidence: `core/release/qa-pr158-finalization-3/qa-report.json` and `qa-junit.xml`.
 
-## Before/after
+## Windows finalization automation
 
-- Before this completion pass (`8fd979b`): GitHub `build` failed because the Chrome DOM provider pulled Electron's dynamic `child_process` require into the temporal Node bundle; the full-page contract had 38 checks; Settings still described the old toolbar grant/picker flow; restoration could leave `style=""`.
-- After (`c906ba1`): the browser-page surface ID lives in an Electron-free shared module; GitHub CI is green; the contract is 40/40; all nine locales and fallback HTML describe the context-menu grant path; restoration removes an inline style attribute that was originally absent.
-- There is no meaningful runtime baseline for the full-page operation before this PR because the toolbar only armed the picker. Post-change DevHotel measurements are below.
+- `scripts/windows-chrome-installed-acceptance.mjs` provides three explicit phases: clean-head Windows build/package and evidence preparation, unlocked headed execution, and idempotent cleanup.
+- Preparation builds the exact clean Git head with the invoking Node runtime, requires the DXGI helper, creates the unpacked app and NSIS installer, stages the exact unpacked Chrome extension, and records SHA-256 identities for the application, installer, native host, and both source/packaged extension inventories.
+- The headed phase uses an owned Chrome profile, owned app-data/output roots, a unique native pipe, and a deterministic long-page fixture. It refuses to proceed while `LogonUI.exe` or any pre-existing Chrome process is present, before registry mutation.
+- The final trigger is a physical mouse click on a Chrome action discovered with Windows UI Automation. It does not invoke the extension helper, native host, or Chrome DevTools Protocol directly, so Chrome's toolbar user gesture and `activeTab` grant remain inside the proof.
+- Evidence correlates Chrome-spawned native-host provenance, `page.capture.start`, `page.capture.finish`, the persisted pack ID/path, DOM URL/title/viewport/marker geometry, `chrome-dom` and `windows-context` payloads, PNG identity, and a visible normal CapturePack editor window.
+- The Chrome native-host registry default value and type are journaled and restored exactly in `finally`. Cleanup terminates only recorded child PIDs and removes only profile/app-data/transient paths owned below the evidence directory.
+- Extension installation now compares the complete file tree digest instead of trusting only the version, publishes `manifest.json` last, removes stale files, verifies the final digest, and retries partial same-version copies. A missing plain-Node `native-host.js` is a hard registration failure; Settings disconnect removes both generated manifest and launcher.
+- `scripts/windows-installer-lifecycle.ps1` covers install, same-candidate update, uninstall, and residue assertions, but is hard-gated by `CAPTUREPACK_DISPOSABLE_WINDOWS_ACCEPTANCE=1` and an initially clean disposable Windows user. This prevents the real NSIS lifecycle from killing or overwriting the operator's installed CapturePack state.
 
 ## DevHotel evidence
 
-Managed web room `djeiradz` (`capturepack / issue-157-acceptance`), Node `22.23.2`, implementation head `c906ba1`.
+Managed web room `djeiradz` (`capturepack / issue-157-acceptance`), Node `22.23.2`, implementation head `c906ba1`. The room was slept after verification.
 
 - PASS `b604c224-2aed-4a23-8a55-281628dd0aab`: full-page contract 40/40.
 - PASS `fa935232-e603-4900-8dc3-5b9df1706e2c`: Electron composition under Xvfb, exact 2x4 raster, saved-pack reopen through the normal editor session, Save/Save As New DOM preservation, fractional-DPR mapping.
@@ -38,10 +41,16 @@ Managed web room `djeiradz` (`capturepack / issue-157-acceptance`), Node `22.23.
 - PARTIAL/FAIL `f738cda7-ac4d-49ec-88d6-4491684b2169`: DPR 2, 800×8,016 CSS px, 14 unique tiles, 10,057 ms, heap +576,960 bytes; state/lazy/error checks passed, but headless `captureVisibleTab` returned 800×461 instead of 1600×1200.
 - FAIL `c8b1c862-a3e5-4a56-ad45-7638e368ca34`: short page reproduced the headless compositor mismatch (1280×581 raster for a reported 1280×720 viewport) even after a 500 ms dwell.
 
-The long-page scenario passed end to end at DPR 1, and all exercised scenarios stayed below a 0.56 MiB measured service-worker/page JS heap delta. The responsive, very-tall first tile, short-page, and DPR-2 raster checks remain failed in the managed headless browser. The app compositor intentionally rejects inconsistent axis scale, so these are not counted as acceptance passes.
+The long-page scenario passed end to end at DPR 1, and all exercised scenarios stayed below a 0.56 MiB measured service-worker/page JS heap delta. The responsive, very-tall first tile, short-page, and DPR-2 raster checks remain failed in the managed headless browser. No compositor tolerance was weakened; these cases must be rerun in the real headed Windows suite.
 
-## Merge/release blockers
+## Remaining acceptance blocker
 
-The mandatory DevHotel browser acceptance is not fully green because its headless Chrome `captureVisibleTab` raster disagrees with Playwright viewport/DPR emulation in the cases above. DevHotel also reported no managed Windows room; therefore the real Chrome toolbar gesture → `activeTab` grant → Windows native messaging → persisted pack → visible normal editor path, installed-extension process memory, and installation/update/removal flows could not be run. Policy forbids substituting a local browser, Orca, or physical device for this missing managed verification.
+The operator Windows session is locked (`LogonUI.exe` active), with pre-existing Chrome and CapturePack processes. The headed harness therefore correctly stops before changing the Chrome native-host registry, profile, or application state. Do not claim a Windows UI pass from the deterministic/mock/wire checks.
 
-Release is additionally gated: public release `v0.5.0` already exists while the branch still declares `0.5.0`. Normal release policy requires a new version plus release notes/changelog and the Windows headed/installer acceptance above. Keep #157 and draft PR #158 open until a compatible DevHotel browser/Windows environment produces PASS evidence.
+After unlock, the remaining final Windows acceptance suite is:
+
+1. Close existing Chrome and run `qa:windows-chrome-installed -- --run` against the prepared clean-head evidence to prove toolbar click → `activeTab` → full-page tiles + DOM → Chrome-spawned native messaging → persisted pack → visible normal editor.
+2. Repeat the strict responsive, very-tall, DPR-2, and short-page compositor cases in that headed Chrome environment; the raster checks must pass as written.
+3. In a disposable Windows user or managed Windows room, run `windows-installer-lifecycle.ps1` to prove install → same-candidate update → remove and zero native-host/install residue.
+
+This is one headed Windows acceptance suite and is the only outstanding implementation acceptance blocker. Public release `v0.5.0` already exists, so any later release also requires an independent version/release-notes decision; no release work is authorized here.

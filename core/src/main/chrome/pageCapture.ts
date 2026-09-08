@@ -1,6 +1,6 @@
 import { nativeImage } from 'electron'
 import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import type { Settings, TimelineFile } from '../../shared/types'
 import { uiLanguage } from '../locale'
 import { logInfo } from '../log'
@@ -244,7 +244,9 @@ export async function saveBrowserPageCapture(
   await writeDomPlugin(handle.dirPath, payload)
   await addManifestPlugin(handle, domPluginDeclaration(), uiLanguage(settings))
   logInfo(
-    `[chrome] full-page CapturePack saved: ${assembled.width}x${assembled.height}, ` +
+    `[chrome] full-page capture ${capture.captureId} persisted as pack ${handle.id} ` +
+    `(${basename(handle.dirPath)}): ` +
+    `${assembled.width}x${assembled.height}, ` +
     `${capture.document.elements.length} DOM element(s), ${capture.tiles.length} tile(s)`,
   )
   return handle

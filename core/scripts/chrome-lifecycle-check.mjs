@@ -239,6 +239,10 @@ try {
     'utf8',
   )
   const main = readFileSync(path.join(here, '..', 'src', 'main', 'index.ts'), 'utf8')
+  const nativeInstall = readFileSync(
+    path.join(here, '..', 'src', 'main', 'chrome', 'install.ts'),
+    'utf8',
+  )
   const macro = (name) =>
     new RegExp(`!macro ${name}\\b([\\s\\S]*?)!macroend`, 'u').exec(installer)?.[1] ?? ''
   const closeGate = macro('customCheckAppRunning')
@@ -276,6 +280,16 @@ try {
     nativeEntry.includes("'supervision-standdown'") &&
       nativeEntry.includes('if (installerStandingDown)') &&
       nativeEntry.includes('process.exit(0)'),
+  )
+  check(
+    'registration refuses a package whose plain-Node native host bundle is missing',
+    nativeInstall.includes("throw new Error('native-host.js is missing; refusing to register a broken Chrome host')") &&
+      !nativeInstall.includes('args: script === null ? [] : [script]'),
+  )
+  check(
+    'Settings disconnect removes both generated native-host files',
+    nativeInstall.includes('fs.unlinkSync(manifestPath())') &&
+      nativeInstall.includes('fs.unlinkSync(launcherPath())'),
   )
   check(
     'an old updater cannot erase Chrome or login integration',

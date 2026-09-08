@@ -1038,7 +1038,7 @@ function handlePageCaptureMessage(raw: unknown, socket: net.Socket): boolean {
       base64Chars: 0,
     })
     logInfo(
-      `[chrome] receiving full-page capture ${captureId}: ` +
+      `[chrome] page.capture.start ${captureId} accepted: ` +
       `${String(Math.round(geometry.documentWidth))}x${String(Math.round(geometry.documentHeight))} CSS px, ` +
       `${String(tileCount)} tile(s)`,
     )
@@ -1141,6 +1141,12 @@ function handlePageCaptureMessage(raw: unknown, socket: net.Socket): boolean {
       rejectPageCapture(socket, captureId, document === null ? 'invalid-document' : 'invalid-png')
       return true
     }
+    logInfo(
+      `[chrome] page.capture.finish ${captureId} received after ` +
+      `${String(Date.now() - state.startedAt)} ms: ` +
+      `${String(tiles.length)} tile(s), ${String(document.elements.length)} DOM element(s), ` +
+      `${String(state.base64Chars)} base64 char(s)`,
+    )
     const capture: BrowserPageCapture = {
       captureId,
       extensionVersion: state.extensionVersion,

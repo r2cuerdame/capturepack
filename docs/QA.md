@@ -90,10 +90,10 @@ existed in an earlier Lane-A frame may legitimately be absent from the final
 ## Video-core regression matrix
 
 The tables in this document map a reported failure to the check that would now
-catch it. They are a map, not an inventory: the gate discovers 88 checks and
+catch it. They are a map, not an inventory: the gate discovers 90 checks and
 only some of them have ever had a defect worth naming.
 
-`npm run qa:video` runs type checking plus a subset — 59 of the 88 — so some
+`npm run qa:video` runs type checking plus a subset — 59 of the 90 — so some
 rows below are outside it and only `qa:checks`/`qa:rc` reach them:
 `check:video-no-picking`, `check:site`, `check:input-events`,
 `check:storage-retention`, `check:update-notice`, and `check:actions`. A row
@@ -172,7 +172,55 @@ capture kind, storage layout and MCP behavior are separate contracts.
 | A still-image editor opens as an empty dark page and native caption buttons cover its toolbar | The preload owns the one-shot init listener before renderer subscription and replays an early init exactly once. Main temporarily disables hidden-window throttling, reveals the native window only after renderer decode, two paint boundaries and success acknowledgement, then restores normal background throttling; initialization failure remains hidden and closes. A real Electron probe exercises the hidden paint boundary, and the HTML reserves windowed caption space before initialization. | `check:editor-lifecycle`, `check:image-region-window` |
 | Picking answers a hover with a rectangle covering a fifth of the screen, and every check stays green | Presence of picking data is not quality of it: a half-window container once passed every filter and then won by being the smallest rectangle containing the point, for months, until a user said hover select felt wrong. The real editor assembly (`readPackObjectContext` + `ObjectIndex.forDisplay`, the same path re-edit and the renderer use) is swept on a grid and the CONTROL rung's offered area is measured — the window rung is not ours to judge, since a maximized window legitimately is most of the frame. The gate fails past a 15% per-pack median, a limit derived from a measured gap rather than from what today's build happens to score, and a precision column rides beside it so deleting every control cannot pass by driving the median to nothing. It sweeps the local capture root (`CAPTUREPACK_PACK_ROOT`, default `C:\_CapturePack`) when one exists and its own fixture otherwise, so on a machine with no packs the fixture is the whole measurement — say so rather than reporting a corpus result. Full-profile only. | `check:pick-quality` |
 | A saved pack has a page, a viewport and a matching window, and can place none of it | Measured before the check existed: 12 packs, 6,091 of 6,092 rectangles on disk unrecoverable, while live capture was fine the whole time. A pack is written through the REAL writers and read through the REAL reader, then rectangles on disk are counted against rectangles recovered. A hand-built fixture cannot catch this class — the wire spelling and the on-disk spelling disagreed, and a fixture agrees with whatever spelling its author typed. Full-profile only. | `check:pack-readback` |
-| Chrome toolbar capture arms a picker, duplicates sticky headers, misses lazy content, loses scroll position, or saves pixels without DOM geometry | The extension contract covers row-major edge-aligned tiling, Chrome's capture quota, lazy-load warmup, fixed/sticky suppression, bounded DPR-aware dimensions, exact restoration and explicit failure. An Electron pixel probe assembles real PNG tiles without resampling. Before release, repeat long/sticky/lazy/restricted-page and responsive viewport acceptance in a DevHotel web room with Playwright. | `check:chrome-full-page`, `check:chrome-full-page-compose`, `check:document-snapshot`, DevHotel Playwright acceptance |
+| Chrome toolbar capture arms a picker, duplicates sticky headers, misses lazy content, loses scroll position, or saves pixels without DOM geometry | The extension contract covers row-major edge-aligned tiling, Chrome's capture quota, lazy-load warmup, fixed/sticky suppression, bounded DPR-aware dimensions, exact restoration and explicit failure. An Electron pixel probe assembles real PNG tiles without resampling. Before release, repeat long/sticky/lazy/restricted-page and responsive viewport acceptance in a DevHotel web room with Playwright, then run the hardware-only installed Chrome suite below. | `check:chrome-full-page`, `check:chrome-full-page-compose`, `check:document-snapshot`, `check:windows-chrome-installed`, DevHotel Playwright acceptance |
+
+### Installed Chrome toolbar acceptance (hardware-only)
+
+`check:windows-chrome-installed` validates the safety and evidence contract but
+does not pretend to click Chrome. The real run is deliberately outside
+`qa:rc`: it needs an unlocked interactive Windows desktop, no pre-existing
+Chrome process, and a packaged candidate. Preparation refuses a dirty tree and
+hashes the commit, installer, packaged app/native-host bundle, and byte-exact
+unpacked extension:
+
+```powershell
+npm run qa:windows-chrome-installed -- --prepare --artifacts=C:\temp\capturepack-157
+# After the machine is unlocked and every existing Chrome process is closed:
+npm run qa:windows-chrome-installed -- --run --artifacts=C:\temp\capturepack-157
+```
+
+Run the headed phase once for each strict compositor scenario by adding
+`--scenario=long`, `responsive`, `very-tall`, `dpr2`, and `short`. Each run uses
+a fresh owned profile and restores the native-host registry before returning.
+
+The run finds the real Chrome action through Windows UI Automation and sends a
+physical mouse click. It never invokes the extension helper or uses CDP. Its
+JSON evidence correlates the Chrome-spawned native host, handshake,
+`page.capture.start`/`page.capture.finish`, capture ID, persisted pack ID, DOM
+metadata, reserved browser-page surface and visible normal editor. In `finally`
+it kills only recorded process trees, restores the exact prior Chrome native
+host registry value, removes its isolated Chrome/app profiles, and fails if
+that cleanup is incomplete. If a run is interrupted, the idempotent recovery is:
+
+```powershell
+npm run qa:windows-chrome-installed -- --cleanup --artifacts=C:\temp\capturepack-157
+```
+
+The NSIS lifecycle is global to a Windows user and can close every same-user
+CapturePack process. It is therefore hard-blocked outside a disposable Windows
+user or managed room:
+
+```powershell
+$env:CAPTUREPACK_DISPOSABLE_WINDOWS_ACCEPTANCE='1'
+powershell -File scripts/windows-installer-lifecycle.ps1 `
+  -Installer C:\temp\capturepack-157\package\CapturePack-Setup-0.5.0.exe `
+  -EvidenceDir C:\temp\capturepack-157\installer-lifecycle
+```
+
+This executes fresh install, same-candidate update and removal, then rejects
+any remaining install directory, native-host key/file, pending installer state,
+or CapturePack process. An unavailable managed/disposable Windows environment
+is a blocker, not permission to exercise the owner's installation.
 
 ## Manual Windows smoke still required
 
