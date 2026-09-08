@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
@@ -33,6 +34,7 @@
 #include <cstdio>
 #include <cwchar>
 #include <deque>
+#include <future>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -48,13 +50,42 @@ constexpr std::uint16_t kProtocolVersion = 1;
 constexpr std::uint32_t kMinimumCaptureMs = 100;
 constexpr std::uint32_t kMaximumCaptureMs = 30'000;
 constexpr std::uint32_t kMinimumRetentionMs = 1'000;
-constexpr std::uint32_t kMaximumRetentionMs = 600'000;
+// The settings loader accepts legacy/manual values through 600 s, but the
+// opt-in native candidate deliberately owns at most one UI-sized 60 s window
+// per display. Larger requests are rejected before capture so the application
+// keeps its shipping recorder instead of multiplying hundreds of MiB across
+// a multi-display desktop.
+constexpr std::uint32_t kMaximumRetentionMs = 60'000;
 constexpr std::uint32_t kTargetFramesPerSecond = 15;
-constexpr std::size_t kMaximumRingBytes = 64U * 1024U * 1024U;
-constexpr std::size_t kMaximumRingUnits = 512;
+constexpr std::uint32_t kTargetBitsPerSecond = 6'000'000;
+constexpr std::uint32_t kKeyframeIntervalFrames = kTargetFramesPerSecond;
+constexpr std::uint64_t kRingBitrateHeadroomNumerator = 5;
+constexpr std::uint64_t kRingBitrateHeadroomDenominator = 4;
+constexpr std::size_t kRingContainerHeadroomBytes = 8U * 1024U * 1024U;
+constexpr std::size_t kExportContainerHeadroomBytes = 8U * 1024U * 1024U;
 constexpr std::uint32_t kAcquireTimeoutMs = 20;
 constexpr std::uint32_t kMaximumReinitializations = 3;
 constexpr std::size_t kMaximumServiceCommandBytes = 32U * 1024U;
+
+constexpr std::size_t RingMaximumBytes(std::uint32_t retentionMs) {
+  const std::uint64_t nominalBytes =
+      static_cast<std::uint64_t>(retentionMs) * kTargetBitsPerSecond / 8'000U;
+  return static_cast<std::size_t>(
+      (nominalBytes * kRingBitrateHeadroomNumerator +
+       kRingBitrateHeadroomDenominator - 1) /
+          kRingBitrateHeadroomDenominator +
+      kRingContainerHeadroomBytes);
+}
+
+constexpr std::size_t RingMaximumUnits(std::uint32_t retentionMs) {
+  return static_cast<std::size_t>(
+      (static_cast<std::uint64_t>(retentionMs) * kTargetFramesPerSecond + 999) /
+          1'000 +
+      kKeyframeIntervalFrames + 1);
+}
+
+constexpr std::size_t kMaximumRingBytes = RingMaximumBytes(kMaximumRetentionMs);
+constexpr std::size_t kMaximumRingUnits = RingMaximumUnits(kMaximumRetentionMs);
 
 enum class ProbeStatus : std::uint32_t {
   kAvailable = 0,
@@ -103,6 +134,7 @@ enum class ProbeReason : std::uint32_t {
   kExportStructureInvalid = 38,
   kExportDecodeFailed = 39,
   kServiceProtocolInvalid = 40,
+  kCursorCompositionUnavailable = 41,
 };
 
 enum ProbeFlag : std::uint32_t {
@@ -136,7 +168,18 @@ enum RunFlag : std::uint32_t {
   kRunMp4Muxed = 1U << 14,
   kRunMp4StructureValidated = 1U << 15,
   kRunMp4Decoded = 1U << 16,
+  // Desktop Duplication can return the hardware pointer as a separate plane.
+  // This bit may only be set after PointerPosition/PointerShape metadata has
+  // been composited into every submitted BGRA texture on the GPU.
+  kRunCursorComposited = 1U << 17,
 };
+
+constexpr std::uint32_t kRequiredServiceHealthFlags =
+    ((1U << 12) - 1) | (0xFU << 13) | kRunCursorComposited;
+
+constexpr bool ServiceHealthIncludesCursor(std::uint32_t flags) {
+  return (flags & kRequiredServiceHealthFlags) == kRequiredServiceHealthFlags;
+}
 
 #pragma pack(push, 1)
 struct ProbePacket {
@@ -312,6 +355,11 @@ class EncodedAccessUnitRing {
         (!units_.empty() && unit.exposedQpc <= units_.back().exposedQpc)) {
       return false;
     }
+    // A retention cut can remove the last decodable GOP just before the
+    // encoder emits its next clean point. Predictive output in that interval
+    // is valid encoder output but cannot seed a replay, so discard it without
+    // turning a short configured retention into a fatal service error.
+    if (units_.empty() && !unit.keyframe) return true;
     if (!units_.empty() && unit.generation < units_.back().generation) return false;
     if (units_.empty() || unit.generation > units_.back().generation) {
       if (!unit.keyframe || unit.codecConfig.empty()) return false;
@@ -975,14 +1023,15 @@ HRESULT WriteSnapshotSamples(IMFSinkWriter* writer,
   return S_OK;
 }
 
-bool ReadBoundedFile(const std::wstring& path, std::vector<std::uint8_t>& bytes) {
+bool ReadBoundedFile(const std::wstring& path, std::size_t maximumBytes,
+                     std::vector<std::uint8_t>& bytes) {
   bytes.clear();
   HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
   if (file == INVALID_HANDLE_VALUE) return false;
   LARGE_INTEGER size{};
   const bool sizeOk = GetFileSizeEx(file, &size) != FALSE && size.QuadPart > 0 &&
-      size.QuadPart <= static_cast<LONGLONG>(kMaximumRingBytes + 8U * 1024U * 1024U);
+      size.QuadPart <= static_cast<LONGLONG>(maximumBytes);
   if (!sizeOk) {
     CloseHandle(file);
     return false;
@@ -1144,7 +1193,8 @@ HRESULT DecodeAndValidateMp4(const std::wstring& path,
 
 ExportEvidence ExportSnapshot(const EncodedRingSnapshot& snapshot,
                               UINT width, UINT height,
-                              const std::wstring& path) {
+                              const std::wstring& path,
+                              std::size_t maximumBytes) {
   ExportEvidence evidence;
   if (!snapshot.safe()) {
     evidence.reason = ProbeReason::kNoSafeSnapshot;
@@ -1203,7 +1253,7 @@ ExportEvidence ExportSnapshot(const EncodedRingSnapshot& snapshot,
   }
   evidence.flags |= kRunCodecConfigValidated | kRunMp4Muxed;
   std::vector<std::uint8_t> fileBytes;
-  if (!ReadBoundedFile(path, fileBytes) ||
+  if (!ReadBoundedFile(path, maximumBytes, fileBytes) ||
       !ValidateFragmentedMp4Structure(fileBytes)) {
     DeleteFileW(path.c_str());
     evidence.result = E_FAIL;
@@ -1659,9 +1709,9 @@ class EncoderSession {
     transform_.As(&codec);
     SetCodecBool(codec.Get(), CODECAPI_AVLowLatencyMode, true);
     if (!SetCodecUint32(codec.Get(), CODECAPI_AVEncMPVDefaultBPictureCount, 0,
-                        false) ||
+                        true) ||
         !SetCodecUint32(codec.Get(), CODECAPI_AVEncMPVGOPSize,
-                        kTargetFramesPerSecond * 2, true)) {
+                        kKeyframeIntervalFrames, true)) {
       return MF_E_INVALIDREQUEST;
     }
 
@@ -1674,10 +1724,8 @@ class EncoderSession {
         outputType_.Get(), MF_MT_FRAME_RATE, kTargetFramesPerSecond, 1);
     if (SUCCEEDED(result)) result = outputType_->SetUINT32(
         MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
-    const std::uint64_t pixelRate = static_cast<std::uint64_t>(width) * height;
-    const std::uint32_t bitrate = static_cast<std::uint32_t>(std::min<std::uint64_t>(
-        50'000'000, std::max<std::uint64_t>(2'000'000, pixelRate * 4)));
-    if (SUCCEEDED(result)) result = outputType_->SetUINT32(MF_MT_AVG_BITRATE, bitrate);
+    if (SUCCEEDED(result)) result = outputType_->SetUINT32(
+        MF_MT_AVG_BITRATE, kTargetBitsPerSecond);
     if (SUCCEEDED(result)) result = outputType_->SetUINT32(
         MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Main);
     if (SUCCEEDED(result)) result = MFSetAttributeRatio(
@@ -1868,7 +1916,8 @@ class EncoderSession {
     if ((outputInfo_.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES) == 0) {
       HRESULT result = MFCreateSample(&callerSample);
       ComPtr<IMFMediaBuffer> buffer;
-      if (SUCCEEDED(result)) result = MFCreateMemoryBuffer(outputInfo_.cbSize, &buffer);
+      if (SUCCEEDED(result)) result = MFCreateAlignedMemoryBuffer(
+          outputInfo_.cbSize, outputInfo_.cbAlignment, &buffer);
       if (SUCCEEDED(result)) result = callerSample->AddBuffer(buffer.Get());
       if (FAILED(result)) return result;
     }
@@ -2488,6 +2537,42 @@ bool RingSelfTest() {
           unitsRing.Snapshot(3'000, unitsSnapshot) &&
           unitsSnapshot.units.size() == 1);
 
+  EncodedAccessUnitRing shortRetentionRing(1'000, 1'000, 31);
+  const bool waitsForCleanPointWithoutFailure =
+      shortRetentionRing.Append(TestUnit(1'000, true, 10)) &&
+      shortRetentionRing.Append(TestUnit(2'100, false, 10)) &&
+      shortRetentionRing.size() == 0 &&
+      shortRetentionRing.Append(TestUnit(2'200, false, 10)) &&
+      shortRetentionRing.size() == 0 &&
+      shortRetentionRing.Append(TestUnit(2'300, true, 10));
+  EncodedRingSnapshot shortRetentionSnapshot;
+  passed &= NamedSelfTest(
+      "short-retention-awaits-keyframe",
+      waitsForCleanPointWithoutFailure && shortRetentionRing.size() == 1 &&
+          shortRetentionRing.Snapshot(2'300, shortRetentionSnapshot) &&
+          shortRetentionSnapshot.units.front().keyframe);
+
+  std::uint32_t parsedMaximumRetention = 0;
+  passed &= NamedSelfTest(
+      "retention-sized-bounds",
+      ParseRetentionMs(L"60000", parsedMaximumRetention) &&
+          parsedMaximumRetention == kMaximumRetentionMs &&
+          !ParseRetentionMs(L"60001", parsedMaximumRetention) &&
+          RingMaximumBytes(1'000) == 9'326'108 &&
+          RingMaximumBytes(kMaximumRetentionMs) == 64'638'608 &&
+          RingMaximumUnits(1'000) == 31 &&
+          RingMaximumUnits(kMaximumRetentionMs) == 916 &&
+          kMaximumRingBytes == RingMaximumBytes(kMaximumRetentionMs) &&
+          kMaximumRingUnits == RingMaximumUnits(kMaximumRetentionMs));
+
+  const std::uint32_t priorHealthFlags = kRequiredServiceHealthFlags &
+      ~static_cast<std::uint32_t>(kRunCursorComposited);
+  passed &= NamedSelfTest(
+      "cursor-contract-fails-closed",
+      !ServiceHealthIncludesCursor(priorHealthFlags) &&
+          ServiceHealthIncludesCursor(priorHealthFlags |
+                                      kRunCursorComposited));
+
   EncodedAccessUnitRing generationRing(1'000, 10'000, 16);
   const bool firstGeneration =
       generationRing.Append(TestUnit(1'000, true, 10, 1)) &&
@@ -2678,8 +2763,8 @@ int RunCapture(const Request& request) {
           std::numeric_limits<std::int64_t>::max() / 30
       ? frequency * 30
       : std::numeric_limits<std::int64_t>::max();
-  EncodedAccessUnitRing ring(kMaximumRingBytes, retentionQpc,
-                             kMaximumRingUnits);
+  EncodedAccessUnitRing ring(RingMaximumBytes(30'000), retentionQpc,
+                             RingMaximumUnits(30'000));
   std::uint32_t generation = 1;
   std::uint32_t recoveryAttempts = 0;
   Request currentRequest = request;
@@ -2830,6 +2915,11 @@ void FillServiceEvidence(ServicePacket& packet,
   packet.encoderNameBytes = static_cast<std::uint32_t>(nameBytes);
 }
 
+struct PendingServiceExport {
+  ServicePacket response{};
+  std::future<ExportEvidence> future;
+};
+
 int RunService(const Request& request) {
   RunSummaryPacket summary = NewRunSummary();
   if (!QueryQpcFrequency(summary.qpcFrequency) ||
@@ -2861,8 +2951,11 @@ int RunService(const Request& request) {
   const std::int64_t retentionQpc =
       whole * request.retentionMs +
       (remainder * request.retentionMs) / 1000;
-  EncodedAccessUnitRing ring(kMaximumRingBytes, retentionQpc,
-                             kMaximumRingUnits);
+  const std::size_t ringMaximumBytes = RingMaximumBytes(request.retentionMs);
+  const std::size_t exportMaximumBytes =
+      ringMaximumBytes + kExportContainerHeadroomBytes;
+  EncodedAccessUnitRing ring(ringMaximumBytes, retentionQpc,
+                             RingMaximumUnits(request.retentionMs));
   ExposureTimeline timeline(summary.qpcFrequency);
   auto pipeline = std::make_unique<CapturePipeline>();
   std::uint32_t generation = 1;
@@ -2879,8 +2972,30 @@ int RunService(const Request& request) {
   ServiceCommandReader commands;
   std::uint64_t lastRequestId = 0;
   bool ready = false;
+  std::unique_ptr<PendingServiceExport> pendingExport;
 
   for (;;) {
+    if (pendingExport &&
+        pendingExport->future.wait_for(std::chrono::milliseconds(0)) ==
+            std::future_status::ready) {
+      ExportEvidence exported;
+      try {
+        exported = pendingExport->future.get();
+      } catch (...) {
+        exported.result = E_FAIL;
+        exported.reason = ProbeReason::kExportWriteFailed;
+      }
+      pendingExport->response.flags |= exported.flags;
+      pendingExport->response.mp4Bytes = exported.bytes;
+      if (!WriteServicePacket(
+              pendingExport->response,
+              SUCCEEDED(exported.result) ? ProbeStatus::kAvailable
+                                         : ProbeStatus::kUnavailable,
+              exported.reason, exported.result)) {
+        return 1;
+      }
+      pendingExport.reset();
+    }
     const ServiceCommand command = commands.Poll(lastRequestId);
     if (command.kind == ServiceCommandKind::kInvalid) {
       ServicePacket fatal = NewServicePacket(ServicePacketKind::kFatal);
@@ -2893,6 +3008,13 @@ int RunService(const Request& request) {
       lastRequestId = command.requestId;
       ServicePacket response = NewServicePacket(ServicePacketKind::kSnapshot);
       response.requestId = command.requestId;
+      if (pendingExport) {
+        response.ringUnits = ring.size();
+        response.ringBytes = ring.bytes();
+        WriteServicePacket(response, ProbeStatus::kUnavailable,
+                           ProbeReason::kNoSafeSnapshot, E_PENDING);
+        continue;
+      }
       std::int64_t cutQpc = 0;
       EncodedRingSnapshot snapshot;
       if (!QueryQpc(cutQpc) || !ring.Snapshot(cutQpc, snapshot)) {
@@ -2901,16 +3023,36 @@ int RunService(const Request& request) {
         WriteServicePacket(response, ProbeStatus::kUnavailable,
                            ProbeReason::kNoSafeSnapshot, E_PENDING);
       } else {
-        const ExportEvidence exported = ExportSnapshot(
-            snapshot, pipeline->outputWidth(), pipeline->outputHeight(),
-            command.path);
-        FillServiceEvidence(response, snapshot, exported, ring, *pipeline,
-                            summary);
-        WriteServicePacket(
-            response,
-            SUCCEEDED(exported.result) ? ProbeStatus::kAvailable
-                                       : ProbeStatus::kUnavailable,
-            exported.reason, exported.result);
+        const UINT width = pipeline->outputWidth();
+        const UINT height = pipeline->outputHeight();
+        const std::wstring outputPath = command.path;
+        const ExportEvidence pendingEvidence;
+        FillServiceEvidence(response, snapshot, pendingEvidence, ring,
+                            *pipeline, summary);
+        try {
+          auto future = std::async(
+              std::launch::async,
+              [snapshot = std::move(snapshot), width, height, outputPath,
+               exportMaximumBytes]() mutable {
+                ExportEvidence exported;
+                const HRESULT comResult =
+                    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+                if (FAILED(comResult)) {
+                  exported.result = comResult;
+                  exported.reason = ProbeReason::kExportCreateFailed;
+                  return exported;
+                }
+                ComLifetime comLifetime(true);
+                return ExportSnapshot(snapshot, width, height, outputPath,
+                                      exportMaximumBytes);
+              });
+          pendingExport = std::make_unique<PendingServiceExport>(
+              PendingServiceExport{response, std::move(future)});
+        } catch (...) {
+          DeleteFileW(outputPath.c_str());
+          WriteServicePacket(response, ProbeStatus::kUnavailable,
+                             ProbeReason::kExportCreateFailed, E_FAIL);
+        }
       }
     }
 
@@ -2928,16 +3070,6 @@ int RunService(const Request& request) {
       } else if (result == MF_E_INVALIDMEDIATYPE &&
                  failureReason == ProbeReason::kEncoderOutputFailed) {
         failureReason = ProbeReason::kCodecConfigInvalid;
-      }
-      if (ready) {
-        ServicePacket fatal = NewServicePacket(ServicePacketKind::kFatal);
-        fatal.flags = summary.flags;
-        fatal.qpcFrequency = summary.qpcFrequency;
-        fatal.ringUnits = ring.size();
-        fatal.ringBytes = ring.bytes();
-        WriteServicePacket(fatal, ProbeStatus::kUnavailable,
-                           failureReason, result);
-        return 1;
       }
       const RecoveryDecision recovery = RecoveryFor(result, recoveryAttempts);
       if (recovery != RecoveryDecision::kReinitialize) {
@@ -2967,7 +3099,11 @@ int RunService(const Request& request) {
                            ProbeReason::kReinitializeFailed, result);
         return 1;
       }
-      ready = false;
+      // Before the first READY, the rebuilt pipeline must pass the full health
+      // export. After READY, keep the protocol selected while the empty ring
+      // warms back to a safe keyframe; emitting a second READY would violate
+      // the one-shot handshake and make the application tear down a recovery
+      // that actually succeeded.
       continue;
     }
     if (ready) continue;
@@ -2984,7 +3120,7 @@ int RunService(const Request& request) {
     }
     const ExportEvidence health = ExportSnapshot(
         healthSnapshot, pipeline->outputWidth(), pipeline->outputHeight(),
-        healthPath);
+        healthPath, exportMaximumBytes);
     DeleteFileW(healthPath.c_str());
     if (FAILED(health.result)) {
       ServicePacket fatal = NewServicePacket(ServicePacketKind::kFatal);
@@ -2997,6 +3133,12 @@ int RunService(const Request& request) {
     ServicePacket readyPacket = NewServicePacket(ServicePacketKind::kReady);
     FillServiceEvidence(readyPacket, healthSnapshot, health, ring, *pipeline,
                         summary);
+    if (!ServiceHealthIncludesCursor(readyPacket.flags)) {
+      WriteServicePacket(readyPacket, ProbeStatus::kUnavailable,
+                         ProbeReason::kCursorCompositionUnavailable,
+                         DXGI_ERROR_UNSUPPORTED);
+      return 1;
+    }
     if (!WriteServicePacket(readyPacket, ProbeStatus::kAvailable,
                             ProbeReason::kNone, S_OK)) {
       return 1;

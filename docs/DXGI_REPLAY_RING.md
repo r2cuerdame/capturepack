@@ -5,7 +5,11 @@ always-on Windows replay path only after the replacement proves lower overhead
 and preserves replay timing, retention, fallback, and still capture.
 
 The native helper now contains a bounded opt-in production candidate. The
-shipping backend stays live and remains the default:
+shipping backend remains the default and covers native warm-up. After native
+READY, its MediaRecorder encoders and replay rings are suspended so only one
+replay encoder owns a display; a native failure restarts shipping capture. The
+focused window keeps its live one-pixel presentation sink temporarily because
+that is still the source of CapturePack's Lane-S context clock:
 
 `DXGI Desktop Duplication -> D3D11 BGRA surface -> D3D11 video processor NV12
 surface -> adapter-bound Media Foundation hardware H.264 MFT -> bounded native
@@ -19,13 +23,23 @@ accepted. Unsupported duplication, rotation, GPU conversion, or encoding is an
 explicit unavailable result; this helper never substitutes a CPU converter or
 software encoder.
 
+Desktop Duplication may expose the hardware cursor as a separate plane. Native
+READY therefore also requires explicit `cursor-composited` health evidence.
+The current candidate does not yet composite `PointerPosition` and
+`GetFramePointerShape` data into the GPU surface, so it deliberately reports
+`cursor-composition-unavailable` and leaves the shipping recorder selected.
+This gate must not be enabled until cursor composition is implemented and
+verified without a CPU full-frame readback.
+
 The existing Chromium/MediaRecorder replay flow and its declared GDI fallback
-remain live. The exact `--dxgi-native-replay` process switch permits a native
+remain available. The exact `--dxgi-native-replay` process switch permits a native
 candidate only after capability probing and a successful service `READY`
 health packet. Missing helper, locked session, encoder failure, malformed
-protocol, invalid export, timeout, or service death retains or immediately
-returns to the shipping replay path. The normal still-image capture flow is
-unchanged and is never routed through this helper.
+protocol, invalid export, timeout, or service death retains or restarts the
+shipping replay path. A failure after native takeover can make that triggering
+capture screenshot-only while shipping rebuilds an honest fresh buffer. The
+normal still-image capture flow is unchanged and is never routed through this
+helper.
 
 ## Modes and wire contracts
 
@@ -35,7 +49,7 @@ unchanged and is never routed through this helper.
   15 fps and emits exactly one 256-byte `CPNRUN01` summary. A completed summary
   requires evidence of a real desktop frame, GPU NV12 conversion, a real H.264
   output sample, and retention in the native ring.
-- `--serve --retention-ms 1000..600000` runs the persistent export service.
+- `--serve --retention-ms 1000..60000` runs the persistent export service.
   It accepts bounded `SNAPSHOT\t<request-id>\t<absolute-path>` commands and a
   `STOP` command on stdin, and emits exact 256-byte `CPNSRV01` READY, SNAPSHOT,
   or FATAL packets. A successful READY is emitted only after an internal
@@ -50,7 +64,14 @@ become encoded frames. The exact input QPC is retained alongside its Media
 Foundation 100 ns timestamp so output samples are not mapped back through a
 lossy inverse conversion.
 
-The ring has independent byte, time, and access-unit count bounds. Its snapshots
+The native candidate deliberately supports the settings UI's 1–60 second
+range. Legacy or hand-edited settings above 60 seconds are rejected before the
+helper starts, leaving the shipping recorder selected. For supported values,
+the byte and access-unit bounds are derived from the requested duration, the
+fixed 6 Mbps encoder rate, one keyframe interval, and explicit container/rate
+headroom; a 60 second service therefore cannot quietly inherit a 30 second
+capacity. The ring still has independent byte, time, and access-unit count
+bounds. Its snapshots
 are immutable deep copies, start on an IDR clean point, carry validated matching
 SPS/PPS configuration, remain inside one pipeline generation, and rebase their
 timestamps to zero while preserving monotonic duration.
@@ -58,6 +79,15 @@ Reinitialization advances the generation, clears the old configuration and
 access units, and refuses predictive frames until a new clean point is
 available. An unexpected encoder stream-format change is terminal and
 fail-closed, so incompatible codec generations cannot be joined by a cut.
+
+Snapshot muxing and full decode validation run from the immutable copy on a
+worker thread while desktop acquisition continues. After warm-up, the
+application also requires the returned duration to cover the available
+requested history minus one bounded GOP and timestamp tolerance; an encoder
+that overruns its byte budget therefore falls back instead of silently
+returning a much shorter replay. A transient access/device loss rebuilds the
+pipeline within the existing retry bound even after READY and resumes at a new
+clean point without emitting a contradictory second READY packet.
 
 Snapshot export uses the Windows Media Foundation fragmented MP4 sink and sink
 writer with converters explicitly disabled. The helper supplies the retained
@@ -73,6 +103,14 @@ Desktop-duplication access loss and D3D device removal/reset/hang cause a bounde
 full-pipeline rebuild. The output is re-selected by its exact device identity;
 an identity mismatch, exhausted retry budget, encoder error, or malformed
 sample is terminal and fail-closed.
+
+The lower-overhead acceptance is measured at application-process scope after
+native READY. It must compare CPU, GPU, working set, and capture/export latency
+against the shipping-only baseline with the same displays, resolution, FPS,
+retention, and desktop activity. The focused shipping stream retained solely
+for Lane-S ticks is part of the native result; absence of a second
+MediaRecorder is necessary but is not by itself proof of materially lower
+total overhead.
 
 ## Deterministic gate
 

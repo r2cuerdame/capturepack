@@ -27,6 +27,7 @@ import type {
   CaptureReplayRequestPayload,
   CaptureReplayResumePayload,
   CaptureReplayResultPayload,
+  CaptureReplayWorkloadPayload,
   CaptureStartPayload,
   RecorderFailureReason,
   CaptureTickPayload,
@@ -216,11 +217,14 @@ interface DxgiReplayServiceSlot {
   readonly signature: string
   readonly retentionMs: number
 }
-// The native backend is a guarded, opt-in export source. The shipping hidden
-// renderer recorder remains alive beside every selected service so any loss of
-// capability, READY health, process health, or export validity can fall through
-// to the exact path releases use today.
+// The native backend is a guarded, opt-in export source. Shipping covers native
+// warm-up, then releases its capture/encoder workload after READY. Any native
+// failure restarts the same shipping window and path releases use today.
 const dxgiReplayServices = new Map<number, DxgiReplayServiceSlot>()
+// A capture window stays alive for display identity and IPC. Passive displays
+// release their whole shipping capture path; the focused display releases its
+// encoders/rings but keeps the presentation stream which owns Lane-S ticks.
+const shippingReplaySuspended = new Set<number>()
 // A successful native snapshot acquires no renderer hold. Session still pairs
 // every holdAfterCapture request with resumeReplay(), so remember those request
 // ids and consume the matching resume without sending a phantom renderer token.
@@ -468,6 +472,7 @@ async function probeRecorder(displayId: number, win: BrowserWindow): Promise<voi
     captureWindows.get(displayId) !== win ||
     win.isDestroyed() ||
     !wantedDisplayIds.has(displayId) ||
+    shippingReplaySuspended.has(displayId) ||
     probesInFlight.has(displayId)
   ) {
     return
@@ -484,7 +489,11 @@ async function probeRecorder(displayId: number, win: BrowserWindow): Promise<voi
     probesInFlight.delete(displayId)
   }
   const { replay: result, miss } = outcome
-  if (captureWindows.get(displayId) !== win || !wantedDisplayIds.has(displayId)) return
+  if (
+    captureWindows.get(displayId) !== win
+    || !wantedDisplayIds.has(displayId)
+    || shippingReplaySuspended.has(displayId)
+  ) return
   if (result !== null && result.buffer.byteLength >= RECORDER_EVIDENCE_MIN_BYTES) {
     probesSinceProof.delete(displayId)
     // The SIZE of the proof, on the record (issue #60). "The tray said it was
@@ -697,10 +706,12 @@ export function recorderCadence(displayId: number): {
   requestedFps?: number
   recorderCount?: number
 } | null {
-  // Shipping remains live and may heartbeat after native MP4 selection. Until
-  // freezeDisplays consumes its paired resume, that cadence does not describe
-  // the bytes being placed into this capture's manifest.
-  if ([...nativeReplayRequests.values()].includes(displayId)) return null
+  // Shipping owns no cadence while its workload is suspended. During a native
+  // snapshot, never attribute a late/stale shipping heartbeat to native bytes.
+  if (
+    shippingReplaySuspended.has(displayId)
+    || [...nativeReplayRequests.values()].includes(displayId)
+  ) return null
   return displayCadence.get(displayId)
 }
 
@@ -838,9 +849,44 @@ function dxgiReplayServiceSignature(display: Display, retentionMs: number): stri
   return JSON.stringify({ ...dxgiDisplayIdentity(display), retentionMs })
 }
 
-function stopDxgiReplayServices(): void {
-  for (const slot of dxgiReplayServices.values()) slot.manager.stop()
+function setShippingReplayWorkload(displayId: number, active: boolean): boolean {
+  const suspended = shippingReplaySuspended.has(displayId)
+  if (active === !suspended) return true
+  const win = captureWindows.get(displayId)
+  if (win === undefined || win.isDestroyed()) {
+    shippingReplaySuspended.delete(displayId)
+    return false
+  }
+  const payload: CaptureReplayWorkloadPayload = { active }
+  try {
+    win.webContents.send(IPC.captureReplayWorkload, payload)
+  } catch {
+    shippingReplaySuspended.delete(displayId)
+    return false
+  }
+  if (active) {
+    shippingReplaySuspended.delete(displayId)
+    displayCadence.reset(displayId)
+    setDisplayRecorderState(displayId, { status: 'starting' })
+  } else {
+    shippingReplaySuspended.add(displayId)
+    clearRecorderProbe(displayId)
+    probesInFlight.delete(displayId)
+    recoveryAttempts.delete(displayId)
+    probesSinceProof.delete(displayId)
+    displayCadence.reset(displayId)
+    setDisplayRecorderState(displayId, { status: 'recording' })
+  }
+  return true
+}
+
+function stopDxgiReplayServices(resumeShipping = true): void {
+  for (const [displayId, slot] of dxgiReplayServices) {
+    slot.manager.stop()
+    if (resumeShipping) setShippingReplayWorkload(displayId, true)
+  }
   dxgiReplayServices.clear()
+  if (!resumeShipping) shippingReplaySuspended.clear()
 }
 
 function rememberNativeReplayRequest(requestId: string, displayId: number): void {
@@ -861,7 +907,7 @@ function reconcileDxgiReplayServices(
   // This check is deliberately outside the manager too: without the exact
   // launch switch, CapturePack does not even create a native candidate.
   if (settings === null || !settings.recordingEnabled || !dxgiReplayRuntimeOptedIn(process.argv)) {
-    stopDxgiReplayServices()
+    stopDxgiReplayServices(settings?.recordingEnabled === true)
     return
   }
   const retentionMs = settings.replaySeconds * 1_000
@@ -871,9 +917,13 @@ function reconcileDxgiReplayServices(
       display !== undefined
       && slot.signature === dxgiReplayServiceSignature(display, retentionMs)
     ) {
+      if (slot.manager.currentSelection().backend === 'native-dxgi') {
+        setShippingReplayWorkload(displayId, false)
+      }
       continue
     }
     slot.manager.stop()
+    setShippingReplayWorkload(displayId, true)
     dxgiReplayServices.delete(displayId)
   }
   for (const display of wanted.values()) {
@@ -884,6 +934,7 @@ function reconcileDxgiReplayServices(
       outputDirectory: path.join(app.getPath('temp'), 'capturepack-dxgi-replay'),
       onFallback: (selection) => {
         if (dxgiReplayServices.get(display.id)?.manager !== manager) return
+        setShippingReplayWorkload(display.id, true)
         logWarn(
           `[capture] display ${display.id}: DXGI native replay unavailable ` +
             `(${selection.reason})${selection.detail === undefined ? '' : ` — ${selection.detail}`}; ` +
@@ -912,6 +963,15 @@ function reconcileDxgiReplayServices(
           return
         }
         if (selection.backend === 'native-dxgi') {
+          if (!setShippingReplayWorkload(display.id, false)) {
+            dxgiReplayServices.delete(display.id)
+            manager.stop()
+            logWarn(
+              `[capture] display ${display.id}: could not suspend shipping replay; ` +
+                'discarding native candidate to avoid duplicate capture workload',
+            )
+            return
+          }
           logInfo(
             `[capture] display ${display.id}: DXGI native replay READY ` +
               `(${selection.ready.width}x${selection.ready.height} @ ` +
@@ -926,6 +986,7 @@ function reconcileDxgiReplayServices(
         if (isCurrent) dxgiReplayServices.delete(display.id)
         manager.stop()
         if (!isCurrent) return
+        setShippingReplayWorkload(display.id, true)
         logWarn(
           `[capture] display ${display.id}: DXGI native replay startup failed — ` +
             `${error instanceof Error ? error.message : String(error)}; retaining shipping replay path`,
@@ -947,7 +1008,7 @@ export function disposeCapture(): void {
   probesSinceProof.clear()
   probesInFlight.clear()
   displayCadence.retain(new Set())
-  stopDxgiReplayServices()
+  stopDxgiReplayServices(false)
   nativeReplayRequests.clear()
   nativeReplayFallback.stopAll()
   nativeReplayFrameDelivery.clear()
@@ -1660,6 +1721,7 @@ async function requestNativeReplay(
   ) {
     return null
   }
+  if (!shippingReplaySuspended.has(displayId)) return null
   let snapshot: Awaited<ReturnType<DxgiReplayRuntimeManager['snapshot']>>
   try {
     snapshot = await slot.manager.snapshot(REPLAY_TIMEOUT_MS)
@@ -2065,6 +2127,9 @@ async function rebuild(): Promise<void> {
   for (const id of probesSinceProof.keys()) {
     if (!wanted.has(id)) probesSinceProof.delete(id)
   }
+  for (const id of shippingReplaySuspended) {
+    if (!wanted.has(id)) shippingReplaySuspended.delete(id)
+  }
 
   for (const [id, win] of captureWindows) {
     const display = wanted.get(id)
@@ -2094,6 +2159,7 @@ async function rebuild(): Promise<void> {
     // before anything recreates its window again, or a display that failed once
     // would have every later recorder destroyed unexamined.
     probesSinceProof.delete(id)
+    shippingReplaySuspended.delete(id)
     if (!win.isDestroyed()) win.destroy()
   }
   if (settings === null) {
@@ -2152,6 +2218,7 @@ async function createCaptureWindow(
         event.sender === win.webContents &&
         isCurrentRecorderResource(captureWindows.get(display.id), win)
       ) {
+        if (shippingReplaySuspended.has(display.id)) return
         const detail = String(message)
         logError(
           `[capture] recorder for display ${display.id} failed, continuing screenshot-only: ${detail}`,
@@ -2177,6 +2244,7 @@ async function createCaptureWindow(
       ) {
         return
       }
+      if (shippingReplaySuspended.has(display.id)) return
       logInfo(
         `[capture] display ${display.id}: ${ready.mimeType} -> ${ready.replayFile}, ` +
           `${ready.width}x${ready.height}` +
@@ -2227,7 +2295,11 @@ async function createCaptureWindow(
       // Proof from a window a rebuild has already replaced says nothing about
       // the recorder that serves this display now: claiming "recording" on it
       // is the very mistake this whole path exists to stop.
-      if (event.sender !== win.webContents || captureWindows.get(display.id) !== win) return
+      if (
+        event.sender !== win.webContents
+        || captureWindows.get(display.id) !== win
+        || shippingReplaySuspended.has(display.id)
+      ) return
       onFramesProven(display.id, payload)
     }
     ipcMain.on(IPC.captureError, onError)

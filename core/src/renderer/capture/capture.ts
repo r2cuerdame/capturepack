@@ -13,6 +13,7 @@ import type {
   CaptureReplayRequestPayload,
   CaptureReplayResumePayload,
   CaptureReplayResultPayload,
+  CaptureReplayWorkloadPayload,
   CaptureStartPayload,
   CaptureTickPayload,
 } from '../../shared/ipc'
@@ -105,6 +106,7 @@ import { WebmDualSlotRing } from './webmDualSlotRing'
 
 interface CaptureBridge {
   onStart(cb: (payload: CaptureStartPayload) => void): void
+  onReplayWorkload(cb: (payload: CaptureReplayWorkloadPayload) => void): void
   onRequestReplay(cb: (payload: CaptureReplayRequestPayload) => void): void
   onResumeReplay(cb: (payload: CaptureReplayResumePayload) => void): void
   sendReplayResult(payload: CaptureReplayResultPayload): void
@@ -142,6 +144,10 @@ const REPLAY_PIXEL_CLOCK_DECODE_DEADLINE_MS = 1_500
 const REPLAY_PIXEL_CLOCK_SEEK_DEADLINE_MS = 200
 let replayPixelClockDecodeDiagnostics: Record<string, unknown> | undefined
 let recorderSourceFps = 15
+// The capture window remains alive as the display-identity/IPC owner while a
+// healthy native service is selected. Shipping encoders must not remain alive;
+// the focused stream survives only because it still owns Lane-S frame ticks.
+let replayWorkloadActive = true
 
 function currentMp4FragmentIntervalMs(): number {
   return mp4FragmentIntervalMs(recorderSourceFps)
@@ -2477,11 +2483,66 @@ function teardown(): void {
   }
 }
 
+/**
+ * Release the shipping encoders/rings after native READY without removing the
+ * focused display's live presentation clock. Lane-S context observations are
+ * driven by startFrameTicks(), so the one-pixel video sink and its MediaStream
+ * intentionally survive native ownership until the native protocol can carry
+ * an equivalent per-frame clock itself.
+ */
+function suspendReplayEncoding(): void {
+  captureGeneration += 1
+  primaryReadinessCancel?.()
+  primaryReadinessCancel = null
+  stopReplayHealthWatchdog()
+  ingestQueue?.cancel()
+  ingestQueue = null
+  recorderQueue = Promise.resolve()
+  window.clearTimeout(replayHold?.watchdog)
+  replayHold = null
+  replayResumeTokens.clear()
+  window.clearTimeout(retryTimer)
+  retryTimer = undefined
+  window.clearTimeout(evidenceTimer)
+  evidenceTimer = undefined
+  window.clearInterval(cadenceTimer)
+  cadenceTimer = undefined
+  cadence = null
+  const session = activeRecorder
+  activeRecorder = null
+  if (session !== null) {
+    window.clearTimeout(session.flushTimer)
+    session.flushTimer = undefined
+    const recorder = session.recorder
+    if (recorder.onstop === null) {
+      session.flushBatch?.cancel()
+      session.flushBatch = null
+      releaseRecorderReferences(recorder, [])
+    }
+    if (recorder.state !== 'inactive') {
+      try {
+        recorder.stop()
+      } catch {
+        // The recorder may already have a stop task queued.
+      }
+    }
+  }
+  replayRing?.clear()
+  replayRing = null
+  const fallback = webmRing
+  webmRing = null
+  fallback?.clear()
+}
+
 async function startCapture(payload: CaptureStartPayload): Promise<void> {
   // Explicit starts and guarded retries both supersede an in-flight
   // getDisplayMedia call. Teardown retires its generation; the local stream
   // below is installed only if this attempt still owns the renderer.
   teardown()
+  if (!replayWorkloadActive) {
+    startPayload = payload
+    return
+  }
   const generation = ++captureGeneration
   startPayload = payload
   recorderSourceFps = payload.fps
@@ -4008,6 +4069,27 @@ window.captureBridge.onStart((payload) => {
   // the prior command through startCapture()->teardown().
   retried = false
   nativeFallbackCircuitOpen = false
+  void startCapture(payload)
+})
+window.captureBridge.onReplayWorkload(({ active }) => {
+  if (active === replayWorkloadActive) return
+  replayWorkloadActive = active
+  const payload = startPayload
+  if (!active) {
+    // Only the focused display owns Lane-S ticks. Passive displays can release
+    // the whole stream; the focused display keeps its one-pixel clock sink but
+    // still releases every MediaRecorder/ring workload.
+    if (payload?.focused === true) suspendReplayEncoding()
+    else teardown()
+    console.info(
+      `[capture] display ${payload?.displayId ?? '?'}: shipping replay encoders suspended; native replay owns the display`,
+    )
+    return
+  }
+  if (payload === null) return
+  console.info(
+    `[capture] display ${payload.displayId}: native replay unavailable; restarting shipping replay workload`,
+  )
   void startCapture(payload)
 })
 window.captureBridge.onNativeFallbackFrame((payload) => {
