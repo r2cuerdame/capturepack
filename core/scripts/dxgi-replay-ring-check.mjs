@@ -9,6 +9,12 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const expectedNativeSelfTestLines = [
   'SELFTEST PASS timestamps',
   'SELFTEST PASS rotation-topology',
+  'SELFTEST PASS cursor-position-pointer-only-clipping',
+  'SELFTEST PASS cursor-rotation-multi-output-coordinates',
+  'SELFTEST PASS cursor-monochrome-and-xor-semantics',
+  'SELFTEST PASS cursor-masked-color-copy-xor-semantics',
+  'SELFTEST PASS cursor-color-shape-rotation-semantics',
+  'SELFTEST PASS cursor-shape-validation-fails-closed',
   'SELFTEST PASS bounded-bytes-keyframe-cut',
   'SELFTEST PASS bounded-time',
   'SELFTEST PASS bounded-max-units',

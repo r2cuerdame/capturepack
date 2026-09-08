@@ -182,6 +182,7 @@ export function compileDxgiReplayRingHelper({
     required,
     libraries: [
       'd3d11.lib',
+      'd3dcompiler.lib',
       'dxgi.lib',
       'mf.lib',
       'mfplat.lib',

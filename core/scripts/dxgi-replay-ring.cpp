@@ -13,6 +13,7 @@
 #include <codecapi.h>
 #include <d3d10_1.h>
 #include <d3d11.h>
+#include <d3dcompiler.h>
 #include <dxgi1_2.h>
 #include <icodecapi.h>
 #include <mfapi.h>
@@ -66,6 +67,10 @@ constexpr std::size_t kExportContainerHeadroomBytes = 8U * 1024U * 1024U;
 constexpr std::uint32_t kAcquireTimeoutMs = 20;
 constexpr std::uint32_t kMaximumReinitializations = 3;
 constexpr std::size_t kMaximumServiceCommandBytes = 32U * 1024U;
+constexpr UINT kMaximumPointerDimension = 1024;
+constexpr std::size_t kMaximumPointerShapeBytes =
+    static_cast<std::size_t>(kMaximumPointerDimension) *
+    kMaximumPointerDimension * 4U;
 
 constexpr std::size_t RingMaximumBytes(std::uint32_t retentionMs) {
   const std::uint64_t nominalBytes =
@@ -1521,6 +1526,269 @@ bool ResolveFrameGeometry(const OutputChoice& choice,
          orientedHeight == geometry.outputHeight;
 }
 
+struct PointerState {
+  bool hasPosition = false;
+  bool visible = false;
+  std::int64_t desktopX = 0;
+  std::int64_t desktopY = 0;
+  std::int64_t lastUpdateQpc = 0;
+  bool hasShape = false;
+  DXGI_OUTDUPL_POINTER_SHAPE_INFO shape{};
+  std::vector<std::uint8_t> bytes;
+};
+
+UINT PointerShapeHeight(const DXGI_OUTDUPL_POINTER_SHAPE_INFO& shape) {
+  return shape.Type == DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MONOCHROME
+      ? shape.Height / 2U
+      : shape.Height;
+}
+
+bool ValidatePointerShape(const DXGI_OUTDUPL_POINTER_SHAPE_INFO& shape,
+                          std::size_t bytes) {
+  if (shape.Type != DXGI_OUTDUPL_POINTER_SHAPE_TYPE_COLOR &&
+      shape.Type != DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MONOCHROME &&
+      shape.Type != DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MASKED_COLOR) {
+    return false;
+  }
+  if (shape.Width == 0 || shape.Width > kMaximumPointerDimension ||
+      shape.Height == 0 || shape.Pitch == 0) {
+    return false;
+  }
+  if (shape.Type == DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MONOCHROME) {
+    if ((shape.Height & 1U) != 0 ||
+        shape.Height / 2U > kMaximumPointerDimension ||
+        shape.Pitch < (shape.Width + 7U) / 8U) {
+      return false;
+    }
+  } else if (shape.Height > kMaximumPointerDimension ||
+             shape.Width > std::numeric_limits<UINT>::max() / 4U ||
+             shape.Pitch < shape.Width * 4U) {
+    return false;
+  }
+  const UINT height = PointerShapeHeight(shape);
+  if (shape.HotSpot.x < 0 || shape.HotSpot.y < 0 ||
+      static_cast<UINT>(shape.HotSpot.x) >= shape.Width ||
+      static_cast<UINT>(shape.HotSpot.y) >= height ||
+      shape.Height > std::numeric_limits<std::size_t>::max() / shape.Pitch) {
+    return false;
+  }
+  const std::size_t expected =
+      static_cast<std::size_t>(shape.Pitch) * shape.Height;
+  return expected == bytes && expected <= kMaximumPointerShapeBytes;
+}
+
+bool UpdatePointerPosition(const DXGI_OUTDUPL_FRAME_INFO& frame,
+                           const DXGI_OUTPUT_DESC& output,
+                           PointerState& state) {
+  if (frame.LastMouseUpdateTime.QuadPart == 0) return true;
+  if (frame.LastMouseUpdateTime.QuadPart < 0 ||
+      (state.lastUpdateQpc > 0 &&
+       frame.LastMouseUpdateTime.QuadPart < state.lastUpdateQpc)) {
+    return false;
+  }
+  // PointerPosition is output-local. Keep the persistent state in desktop
+  // coordinates, as the Windows sample does, then subtract this output's
+  // origin when drawing into its owned texture. This remains exact for
+  // negative-origin and vertically offset outputs.
+  state.desktopX = static_cast<std::int64_t>(
+                       frame.PointerPosition.Position.x) +
+                   output.DesktopCoordinates.left;
+  state.desktopY = static_cast<std::int64_t>(
+                       frame.PointerPosition.Position.y) +
+                   output.DesktopCoordinates.top;
+  state.lastUpdateQpc = frame.LastMouseUpdateTime.QuadPart;
+  state.visible = frame.PointerPosition.Visible != FALSE;
+  state.hasPosition = true;
+  return true;
+}
+
+struct CursorDrawRegion {
+  LONG logicalLeft = 0;
+  LONG logicalTop = 0;
+  UINT logicalWidth = 0;
+  UINT logicalHeight = 0;
+  UINT skipX = 0;
+  UINT skipY = 0;
+  UINT sourceLeft = 0;
+  UINT sourceTop = 0;
+  UINT sourceWidth = 0;
+  UINT sourceHeight = 0;
+  bool empty = true;
+};
+
+bool ResolveCursorDrawRegion(const PointerState& pointer,
+                             const DXGI_OUTPUT_DESC& output,
+                             const FrameGeometry& geometry,
+                             CursorDrawRegion& region) {
+  region = {};
+  if (!pointer.hasPosition || !pointer.hasShape ||
+      !ValidatePointerShape(pointer.shape, pointer.bytes.size())) {
+    return false;
+  }
+  const std::int64_t localLeft =
+      pointer.desktopX - output.DesktopCoordinates.left;
+  const std::int64_t localTop =
+      pointer.desktopY - output.DesktopCoordinates.top;
+  const std::int64_t localRight = localLeft + pointer.shape.Width;
+  const std::int64_t localBottom =
+      localTop + PointerShapeHeight(pointer.shape);
+  const std::int64_t clippedLeft = std::max<std::int64_t>(0, localLeft);
+  const std::int64_t clippedTop = std::max<std::int64_t>(0, localTop);
+  const std::int64_t clippedRight =
+      std::min<std::int64_t>(geometry.outputWidth, localRight);
+  const std::int64_t clippedBottom =
+      std::min<std::int64_t>(geometry.outputHeight, localBottom);
+  if (clippedLeft >= clippedRight || clippedTop >= clippedBottom) {
+    region.empty = true;
+    return true;
+  }
+  region.empty = false;
+  region.logicalLeft = static_cast<LONG>(clippedLeft);
+  region.logicalTop = static_cast<LONG>(clippedTop);
+  region.logicalWidth = static_cast<UINT>(clippedRight - clippedLeft);
+  region.logicalHeight = static_cast<UINT>(clippedBottom - clippedTop);
+  region.skipX = static_cast<UINT>(clippedLeft - localLeft);
+  region.skipY = static_cast<UINT>(clippedTop - localTop);
+  switch (geometry.rotation) {
+    case D3D11_VIDEO_PROCESSOR_ROTATION_IDENTITY:
+      region.sourceLeft = static_cast<UINT>(clippedLeft);
+      region.sourceTop = static_cast<UINT>(clippedTop);
+      region.sourceWidth = region.logicalWidth;
+      region.sourceHeight = region.logicalHeight;
+      break;
+    case D3D11_VIDEO_PROCESSOR_ROTATION_90:
+      region.sourceLeft = static_cast<UINT>(clippedTop);
+      region.sourceTop = static_cast<UINT>(geometry.outputWidth - clippedRight);
+      region.sourceWidth = region.logicalHeight;
+      region.sourceHeight = region.logicalWidth;
+      break;
+    case D3D11_VIDEO_PROCESSOR_ROTATION_180:
+      region.sourceLeft = static_cast<UINT>(geometry.outputWidth - clippedRight);
+      region.sourceTop = static_cast<UINT>(geometry.outputHeight - clippedBottom);
+      region.sourceWidth = region.logicalWidth;
+      region.sourceHeight = region.logicalHeight;
+      break;
+    case D3D11_VIDEO_PROCESSOR_ROTATION_270:
+      region.sourceLeft = static_cast<UINT>(geometry.outputHeight - clippedBottom);
+      region.sourceTop = static_cast<UINT>(clippedLeft);
+      region.sourceWidth = region.logicalHeight;
+      region.sourceHeight = region.logicalWidth;
+      break;
+    default:
+      return false;
+  }
+  return region.sourceWidth > 0 && region.sourceHeight > 0 &&
+         region.sourceWidth <= geometry.sourceWidth &&
+         region.sourceHeight <= geometry.sourceHeight &&
+         region.sourceLeft <= geometry.sourceWidth - region.sourceWidth &&
+         region.sourceTop <= geometry.sourceHeight - region.sourceHeight;
+}
+
+bool SourcePixelToLogical(const FrameGeometry& geometry,
+                          const CursorDrawRegion& region, UINT sourceX,
+                          UINT sourceY, UINT& logicalX, UINT& logicalY) {
+  if (sourceX >= region.sourceWidth || sourceY >= region.sourceHeight) {
+    return false;
+  }
+  switch (geometry.rotation) {
+    case D3D11_VIDEO_PROCESSOR_ROTATION_IDENTITY:
+      logicalX = sourceX;
+      logicalY = sourceY;
+      break;
+    case D3D11_VIDEO_PROCESSOR_ROTATION_90:
+      logicalX = region.logicalWidth - 1U - sourceY;
+      logicalY = sourceX;
+      break;
+    case D3D11_VIDEO_PROCESSOR_ROTATION_180:
+      logicalX = region.logicalWidth - 1U - sourceX;
+      logicalY = region.logicalHeight - 1U - sourceY;
+      break;
+    case D3D11_VIDEO_PROCESSOR_ROTATION_270:
+      logicalX = sourceY;
+      logicalY = region.logicalHeight - 1U - sourceX;
+      break;
+    default:
+      return false;
+  }
+  return logicalX < region.logicalWidth && logicalY < region.logicalHeight;
+}
+
+std::uint32_t ReadPointerColor(const PointerState& pointer, UINT x, UINT y) {
+  std::uint32_t pixel = 0;
+  std::memcpy(&pixel,
+              pointer.bytes.data() + static_cast<std::size_t>(y) *
+                                         pointer.shape.Pitch +
+                  static_cast<std::size_t>(x) * 4U,
+              sizeof(pixel));
+  return pixel;
+}
+
+bool PointerMaskBit(const PointerState& pointer, UINT x, UINT y) {
+  const std::size_t offset = static_cast<std::size_t>(y) *
+                                 pointer.shape.Pitch +
+                             x / 8U;
+  return (pointer.bytes[offset] & (0x80U >> (x % 8U))) != 0;
+}
+
+bool BuildCursorPixels(const PointerState& pointer,
+                       const FrameGeometry& geometry,
+                       const CursorDrawRegion& region,
+                       const std::vector<std::uint32_t>* background,
+                       std::vector<std::uint32_t>& pixels) {
+  if (region.empty || !ValidatePointerShape(pointer.shape, pointer.bytes.size()) ||
+      region.sourceWidth > kMaximumPointerDimension ||
+      region.sourceHeight > kMaximumPointerDimension) {
+    return false;
+  }
+  const std::size_t count = static_cast<std::size_t>(region.sourceWidth) *
+                            region.sourceHeight;
+  const bool needsBackground =
+      pointer.shape.Type != DXGI_OUTDUPL_POINTER_SHAPE_TYPE_COLOR;
+  if (needsBackground &&
+      (background == nullptr || background->size() != count)) {
+    return false;
+  }
+  pixels.resize(count);
+  for (UINT sourceY = 0; sourceY < region.sourceHeight; ++sourceY) {
+    for (UINT sourceX = 0; sourceX < region.sourceWidth; ++sourceX) {
+      UINT logicalX = 0;
+      UINT logicalY = 0;
+      if (!SourcePixelToLogical(geometry, region, sourceX, sourceY,
+                                logicalX, logicalY)) {
+        return false;
+      }
+      const UINT shapeX = region.skipX + logicalX;
+      const UINT shapeY = region.skipY + logicalY;
+      const std::size_t destination =
+          static_cast<std::size_t>(sourceY) * region.sourceWidth + sourceX;
+      if (pointer.shape.Type == DXGI_OUTDUPL_POINTER_SHAPE_TYPE_COLOR) {
+        pixels[destination] = ReadPointerColor(pointer, shapeX, shapeY);
+      } else if (pointer.shape.Type ==
+                 DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MONOCHROME) {
+        const bool andMask = PointerMaskBit(pointer, shapeX, shapeY);
+        const bool xorMask = PointerMaskBit(
+            pointer, shapeX, shapeY + PointerShapeHeight(pointer.shape));
+        const std::uint32_t andValue =
+            andMask ? 0xffffffffU : 0xff000000U;
+        const std::uint32_t xorValue =
+            xorMask ? 0x00ffffffU : 0x00000000U;
+        pixels[destination] =
+            ((*background)[destination] & andValue) ^ xorValue;
+      } else if (pointer.shape.Type ==
+                 DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MASKED_COLOR) {
+        const std::uint32_t shapePixel =
+            ReadPointerColor(pointer, shapeX, shapeY);
+        pixels[destination] = (shapePixel & 0xff000000U) != 0
+            ? (((*background)[destination] ^ shapePixel) | 0xff000000U)
+            : (shapePixel | 0xff000000U);
+      } else {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 enum class EncoderTransition { kNeedInput, kHaveOutput, kDrainComplete, kError };
 
 class EncoderTransitionState {
@@ -2071,6 +2339,263 @@ bool GpuCompletedWithin(ID3D11Device* device, ID3D11DeviceContext* context,
   }
 }
 
+struct CursorVertex {
+  float x;
+  float y;
+  float u;
+  float v;
+};
+
+class CursorCompositor {
+ public:
+  HRESULT Initialize(ID3D11Device* device, ID3D11DeviceContext* context,
+                     ID3D11Texture2D* target, UINT width, UINT height) {
+    if (device == nullptr || context == nullptr || target == nullptr ||
+        width == 0 || height == 0) {
+      return E_INVALIDARG;
+    }
+    device_ = device;
+    context_ = context;
+    width_ = width;
+    height_ = height;
+    HRESULT result = device_->CreateRenderTargetView(target, nullptr, &targetView_);
+    if (FAILED(result)) return result;
+
+    static constexpr char kVertexShader[] =
+        "struct I{float2 p:POSITION;float2 t:TEXCOORD0;};"
+        "struct O{float4 p:SV_POSITION;float2 t:TEXCOORD0;};"
+        "O main(I i){O o;o.p=float4(i.p,0,1);o.t=i.t;return o;}";
+    static constexpr char kPixelShader[] =
+        "Texture2D c:register(t0);SamplerState s:register(s0);"
+        "float4 main(float4 p:SV_POSITION,float2 t:TEXCOORD0):SV_TARGET"
+        "{return c.Sample(s,t);}";
+    ComPtr<ID3DBlob> vertexBytecode;
+    ComPtr<ID3DBlob> pixelBytecode;
+    ComPtr<ID3DBlob> errors;
+    result = D3DCompile(kVertexShader, sizeof(kVertexShader) - 1,
+                        "CapturePackCursorVS", nullptr, nullptr, "main",
+                        "vs_4_0", D3DCOMPILE_ENABLE_STRICTNESS, 0,
+                        &vertexBytecode, &errors);
+    if (FAILED(result)) return result;
+    errors.Reset();
+    result = D3DCompile(kPixelShader, sizeof(kPixelShader) - 1,
+                        "CapturePackCursorPS", nullptr, nullptr, "main",
+                        "ps_4_0", D3DCOMPILE_ENABLE_STRICTNESS, 0,
+                        &pixelBytecode, &errors);
+    if (FAILED(result)) return result;
+    result = device_->CreateVertexShader(
+        vertexBytecode->GetBufferPointer(), vertexBytecode->GetBufferSize(),
+        nullptr, &vertexShader_);
+    if (FAILED(result)) return result;
+    result = device_->CreatePixelShader(
+        pixelBytecode->GetBufferPointer(), pixelBytecode->GetBufferSize(),
+        nullptr, &pixelShader_);
+    if (FAILED(result)) return result;
+    const D3D11_INPUT_ELEMENT_DESC elements[] = {
+        {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0,
+         D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 8,
+         D3D11_INPUT_PER_VERTEX_DATA, 0},
+    };
+    result = device_->CreateInputLayout(
+        elements, ARRAYSIZE(elements), vertexBytecode->GetBufferPointer(),
+        vertexBytecode->GetBufferSize(), &inputLayout_);
+    if (FAILED(result)) return result;
+    D3D11_SAMPLER_DESC sampler{};
+    sampler.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
+    sampler.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sampler.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sampler.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sampler.ComparisonFunc = D3D11_COMPARISON_NEVER;
+    sampler.MaxLOD = D3D11_FLOAT32_MAX;
+    result = device_->CreateSamplerState(&sampler, &sampler_);
+    if (FAILED(result)) return result;
+    D3D11_BLEND_DESC blend{};
+    blend.RenderTarget[0].BlendEnable = TRUE;
+    blend.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+    blend.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+    blend.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+    blend.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+    blend.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ZERO;
+    blend.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+    blend.RenderTarget[0].RenderTargetWriteMask =
+        D3D11_COLOR_WRITE_ENABLE_ALL;
+    return device_->CreateBlendState(&blend, &blendState_);
+  }
+
+  HRESULT Composite(const PointerState& pointer,
+                    const DXGI_OUTPUT_DESC& output,
+                    const FrameGeometry& geometry,
+                    ID3D11Texture2D* target) {
+    if (!pointer.hasPosition) return S_FALSE;
+    if (!pointer.visible) return S_OK;
+    if (!pointer.hasShape || target == nullptr) return S_FALSE;
+    CursorDrawRegion region;
+    if (!ResolveCursorDrawRegion(pointer, output, geometry, region)) {
+      return E_INVALIDARG;
+    }
+    if (region.empty) return S_OK;
+
+    std::vector<std::uint32_t> background;
+    HRESULT result = S_OK;
+    if (pointer.shape.Type != DXGI_OUTDUPL_POINTER_SHAPE_TYPE_COLOR) {
+      result = ReadBackgroundRegion(target, region, background);
+      if (FAILED(result)) return result;
+    }
+    std::vector<std::uint32_t> pixels;
+    if (!BuildCursorPixels(
+            pointer, geometry, region,
+            pointer.shape.Type == DXGI_OUTDUPL_POINTER_SHAPE_TYPE_COLOR
+                ? nullptr
+                : &background,
+            pixels)) {
+      return E_INVALIDARG;
+    }
+    return Draw(region, pixels);
+  }
+
+ private:
+  HRESULT ReadBackgroundRegion(
+      ID3D11Texture2D* target, const CursorDrawRegion& region,
+      std::vector<std::uint32_t>& background) {
+    D3D11_TEXTURE2D_DESC stagingDescription{};
+    stagingDescription.Width = region.sourceWidth;
+    stagingDescription.Height = region.sourceHeight;
+    stagingDescription.MipLevels = 1;
+    stagingDescription.ArraySize = 1;
+    stagingDescription.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    stagingDescription.SampleDesc.Count = 1;
+    stagingDescription.Usage = D3D11_USAGE_STAGING;
+    stagingDescription.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    ComPtr<ID3D11Texture2D> staging;
+    HRESULT result = device_->CreateTexture2D(
+        &stagingDescription, nullptr, &staging);
+    if (FAILED(result)) return result;
+    D3D11_BOX source{};
+    source.left = region.sourceLeft;
+    source.top = region.sourceTop;
+    source.front = 0;
+    source.right = region.sourceLeft + region.sourceWidth;
+    source.bottom = region.sourceTop + region.sourceHeight;
+    source.back = 1;
+    context_->CopySubresourceRegion(staging.Get(), 0, 0, 0, 0, target, 0,
+                                    &source);
+    if (!GpuCompletedWithin(device_.Get(), context_.Get(),
+                            kAcquireTimeoutMs, result)) {
+      return result;
+    }
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    result = context_->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+    if (FAILED(result)) return result;
+    const std::size_t count = static_cast<std::size_t>(region.sourceWidth) *
+                              region.sourceHeight;
+    background.resize(count);
+    for (UINT row = 0; row < region.sourceHeight; ++row) {
+      std::memcpy(
+          background.data() + static_cast<std::size_t>(row) *
+                                  region.sourceWidth,
+          static_cast<const std::uint8_t*>(mapped.pData) +
+              static_cast<std::size_t>(row) * mapped.RowPitch,
+          static_cast<std::size_t>(region.sourceWidth) * sizeof(std::uint32_t));
+    }
+    context_->Unmap(staging.Get(), 0);
+    return S_OK;
+  }
+
+  HRESULT Draw(const CursorDrawRegion& region,
+               const std::vector<std::uint32_t>& pixels) {
+    D3D11_TEXTURE2D_DESC textureDescription{};
+    textureDescription.Width = region.sourceWidth;
+    textureDescription.Height = region.sourceHeight;
+    textureDescription.MipLevels = 1;
+    textureDescription.ArraySize = 1;
+    textureDescription.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    textureDescription.SampleDesc.Count = 1;
+    textureDescription.Usage = D3D11_USAGE_IMMUTABLE;
+    textureDescription.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    D3D11_SUBRESOURCE_DATA textureData{};
+    textureData.pSysMem = pixels.data();
+    textureData.SysMemPitch = region.sourceWidth * sizeof(std::uint32_t);
+    ComPtr<ID3D11Texture2D> texture;
+    HRESULT result = device_->CreateTexture2D(
+        &textureDescription, &textureData, &texture);
+    if (FAILED(result)) return result;
+    ComPtr<ID3D11ShaderResourceView> shaderView;
+    result = device_->CreateShaderResourceView(
+        texture.Get(), nullptr, &shaderView);
+    if (FAILED(result)) return result;
+
+    const float left = static_cast<float>(region.sourceLeft) /
+                           static_cast<float>(width_) * 2.0f -
+                       1.0f;
+    const float right = static_cast<float>(region.sourceLeft +
+                                           region.sourceWidth) /
+                            static_cast<float>(width_) * 2.0f -
+                        1.0f;
+    const float top = 1.0f -
+                      static_cast<float>(region.sourceTop) /
+                          static_cast<float>(height_) * 2.0f;
+    const float bottom = 1.0f -
+                         static_cast<float>(region.sourceTop +
+                                            region.sourceHeight) /
+                             static_cast<float>(height_) * 2.0f;
+    const CursorVertex vertices[] = {
+        {left, bottom, 0.0f, 1.0f}, {left, top, 0.0f, 0.0f},
+        {right, bottom, 1.0f, 1.0f}, {right, bottom, 1.0f, 1.0f},
+        {left, top, 0.0f, 0.0f}, {right, top, 1.0f, 0.0f},
+    };
+    D3D11_BUFFER_DESC vertexDescription{};
+    vertexDescription.ByteWidth = sizeof(vertices);
+    vertexDescription.Usage = D3D11_USAGE_IMMUTABLE;
+    vertexDescription.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    D3D11_SUBRESOURCE_DATA vertexData{};
+    vertexData.pSysMem = vertices;
+    ComPtr<ID3D11Buffer> vertexBuffer;
+    result = device_->CreateBuffer(
+        &vertexDescription, &vertexData, &vertexBuffer);
+    if (FAILED(result)) return result;
+
+    D3D11_VIEWPORT viewport{};
+    viewport.Width = static_cast<float>(width_);
+    viewport.Height = static_cast<float>(height_);
+    viewport.MaxDepth = 1.0f;
+    const UINT stride = sizeof(CursorVertex);
+    const UINT offset = 0;
+    const float blendFactor[4]{};
+    ID3D11Buffer* buffers[] = {vertexBuffer.Get()};
+    ID3D11RenderTargetView* targets[] = {targetView_.Get()};
+    ID3D11ShaderResourceView* resources[] = {shaderView.Get()};
+    ID3D11SamplerState* samplers[] = {sampler_.Get()};
+    context_->RSSetViewports(1, &viewport);
+    context_->IASetInputLayout(inputLayout_.Get());
+    context_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    context_->IASetVertexBuffers(0, 1, buffers, &stride, &offset);
+    context_->VSSetShader(vertexShader_.Get(), nullptr, 0);
+    context_->PSSetShader(pixelShader_.Get(), nullptr, 0);
+    context_->PSSetShaderResources(0, 1, resources);
+    context_->PSSetSamplers(0, 1, samplers);
+    context_->OMSetBlendState(blendState_.Get(), blendFactor, 0xffffffffU);
+    context_->OMSetRenderTargets(1, targets, nullptr);
+    context_->Draw(ARRAYSIZE(vertices), 0);
+    ID3D11ShaderResourceView* noResources[] = {nullptr};
+    ID3D11RenderTargetView* noTargets[] = {nullptr};
+    context_->PSSetShaderResources(0, 1, noResources);
+    context_->OMSetRenderTargets(1, noTargets, nullptr);
+    return S_OK;
+  }
+
+  UINT width_ = 0;
+  UINT height_ = 0;
+  ComPtr<ID3D11Device> device_;
+  ComPtr<ID3D11DeviceContext> context_;
+  ComPtr<ID3D11RenderTargetView> targetView_;
+  ComPtr<ID3D11VertexShader> vertexShader_;
+  ComPtr<ID3D11PixelShader> pixelShader_;
+  ComPtr<ID3D11InputLayout> inputLayout_;
+  ComPtr<ID3D11SamplerState> sampler_;
+  ComPtr<ID3D11BlendState> blendState_;
+};
+
 class DuplicationFrameLease {
  public:
   explicit DuplicationFrameLease(IDXGIOutputDuplication* duplication)
@@ -2135,6 +2660,11 @@ class CapturePipeline {
       return result;
     }
     lease.Acquired();
+    result = UpdatePointer(frameInfo);
+    if (FAILED(result)) {
+      failureReason = ProbeReason::kCursorCompositionUnavailable;
+      return result;
+    }
     if (frameInfo.LastPresentTime.QuadPart <= 0) {
       summary.pointerOnlyFrames += 1;
       return S_FALSE;
@@ -2193,11 +2723,25 @@ class CapturePipeline {
       summary.droppedBackpressure += 1;
       return S_FALSE;
     }
+    if (!pointer_.hasPosition ||
+        (pointer_.visible && !pointer_.hasShape)) {
+      // Never submit an image until the Desktop Duplication pointer plane is
+      // fully known. A later pointer-only frame can complete this state.
+      return S_FALSE;
+    }
     context_->CopyResource(ownedBgra_.Get(), source.Get());
+    result = cursorCompositor_.Composite(pointer_, choice_.outputDesc,
+                                         geometry_, ownedBgra_.Get());
+    if (result == S_FALSE) return S_FALSE;
+    if (FAILED(result)) {
+      failureReason = ProbeReason::kCursorCompositionUnavailable;
+      return result;
+    }
     if (!GpuCompletedWithin(device_.Get(), context_.Get(), kAcquireTimeoutMs,
                             result)) {
-      failureReason = IsDeviceLoss(result) ? ProbeReason::kDeviceLostExhausted
-                                           : ProbeReason::kGpuConversionFailed;
+      failureReason = IsDeviceLoss(result)
+          ? ProbeReason::kDeviceLostExhausted
+          : ProbeReason::kCursorCompositionUnavailable;
       return result;
     }
     ComPtr<IMFSample> inputSample;
@@ -2267,6 +2811,11 @@ class CapturePipeline {
       return result;
     }
     summary.submittedFrames += 1;
+    // Set this proof only after the BGRA image has been composited, completed
+    // on the GPU, converted, and accepted by the encoder. Every submitted
+    // frame passes through that sequence, and Initialize clears stale proof
+    // after a pipeline rebuild.
+    summary.flags |= kRunCursorComposited;
     lastSubmittedQpc_ = frameInfo.LastPresentTime.QuadPart;
     return S_OK;
   }
@@ -2287,6 +2836,34 @@ class CapturePipeline {
   std::uint32_t generation() const { return generation_; }
 
  private:
+  HRESULT UpdatePointer(const DXGI_OUTDUPL_FRAME_INFO& frame) {
+    if (!UpdatePointerPosition(frame, choice_.outputDesc, pointer_)) {
+      return E_INVALIDARG;
+    }
+    if (frame.PointerShapeBufferSize == 0) return S_OK;
+    if (frame.PointerShapeBufferSize > kMaximumPointerShapeBytes) {
+      return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
+    }
+    std::vector<std::uint8_t> bytes;
+    try {
+      bytes.resize(frame.PointerShapeBufferSize);
+    } catch (...) {
+      return E_OUTOFMEMORY;
+    }
+    UINT required = 0;
+    DXGI_OUTDUPL_POINTER_SHAPE_INFO shape{};
+    HRESULT result = duplication_->GetFramePointerShape(
+        frame.PointerShapeBufferSize, bytes.data(), &required, &shape);
+    if (FAILED(result)) return result;
+    if (required == 0 || required > bytes.size()) return E_INVALIDARG;
+    bytes.resize(required);
+    if (!ValidatePointerShape(shape, bytes.size())) return E_INVALIDARG;
+    pointer_.shape = shape;
+    pointer_.bytes = std::move(bytes);
+    pointer_.hasShape = true;
+    return S_OK;
+  }
+
   void AddRunIdentity(RunSummaryPacket& summary) const {
     summary.adapterIndex = choice_.adapterIndex;
     summary.outputIndex = choice_.outputIndex;
@@ -2357,7 +2934,10 @@ class CapturePipeline {
     sourceDescription_.Usage = D3D11_USAGE_DEFAULT;
     sourceDescription_.CPUAccessFlags = 0;
     sourceDescription_.MiscFlags = 0;
-    sourceDescription_.BindFlags = 0;
+    // The VideoProcessor input view accepts a render-target-capable texture on
+    // the validated field path. Cursor composition needs this exact owned BGRA
+    // surface as a GPU render target before NV12 conversion.
+    sourceDescription_.BindFlags = D3D11_BIND_RENDER_TARGET;
     sourceDescription_.ArraySize = 1;
     sourceDescription_.MipLevels = 1;
     sourceDescription_.SampleDesc.Count = 1;
@@ -2365,6 +2945,13 @@ class CapturePipeline {
     result = device_->CreateTexture2D(&sourceDescription_, nullptr, &ownedBgra_);
     if (FAILED(result)) {
       failureReason = ProbeReason::kGpuConversionFailed;
+      return result;
+    }
+    result = cursorCompositor_.Initialize(
+        device_.Get(), context_.Get(), ownedBgra_.Get(),
+        geometry_.sourceWidth, geometry_.sourceHeight);
+    if (FAILED(result)) {
+      failureReason = ProbeReason::kCursorCompositionUnavailable;
       return result;
     }
     D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC inputViewDescription{};
@@ -2419,6 +3006,7 @@ class CapturePipeline {
     std::fill(std::begin(summary.encoderName), std::end(summary.encoderName), 0);
     summary.encoderNameBytes = CopyBoundedUtf8(summary.encoderName, encoderName);
     summary.flags |= kRunHardwareEncoderConfigured | kRunEncoderStreaming;
+    summary.flags &= ~static_cast<std::uint32_t>(kRunCursorComposited);
     prepared_ = true;
     return S_OK;
   }
@@ -2440,6 +3028,8 @@ class CapturePipeline {
   ComPtr<ID3D11VideoProcessor> processor_;
   ComPtr<ID3D11Texture2D> ownedBgra_;
   ComPtr<ID3D11VideoProcessorInputView> inputView_;
+  PointerState pointer_;
+  CursorCompositor cursorCompositor_;
   EncoderSession encoder_;
 };
 
@@ -2497,6 +3087,208 @@ bool RingSelfTest() {
           rotatedGeometry.outputHeight == 1920 &&
           rotatedGeometry.rotation == D3D11_VIDEO_PROCESSOR_ROTATION_90 &&
           !ResolveFrameGeometry(rotatedChoice, rotatedSource, invalidGeometry));
+
+  DXGI_OUTPUT_DESC offsetOutput{};
+  offsetOutput.DesktopCoordinates = {-1920, 100, -840, 2020};
+  DXGI_OUTDUPL_FRAME_INFO pointerOnly{};
+  pointerOnly.LastMouseUpdateTime.QuadPart = 123;
+  pointerOnly.PointerPosition.Position = {10, -1};
+  pointerOnly.PointerPosition.Visible = TRUE;
+  PointerState clippedPointer;
+  clippedPointer.shape.Type = DXGI_OUTDUPL_POINTER_SHAPE_TYPE_COLOR;
+  clippedPointer.shape.Width = 4;
+  clippedPointer.shape.Height = 3;
+  clippedPointer.shape.Pitch = 16;
+  clippedPointer.shape.HotSpot = {1, 1};
+  clippedPointer.bytes.resize(48);
+  clippedPointer.hasShape = true;
+  FrameGeometry offsetGeometry;
+  offsetGeometry.sourceWidth = 1080;
+  offsetGeometry.sourceHeight = 1920;
+  offsetGeometry.outputWidth = 1080;
+  offsetGeometry.outputHeight = 1920;
+  CursorDrawRegion clippedRegion;
+  const bool pointerOnlyUpdated =
+      pointerOnly.LastPresentTime.QuadPart == 0 &&
+      UpdatePointerPosition(pointerOnly, offsetOutput, clippedPointer);
+  const bool pointerClipped = ResolveCursorDrawRegion(
+      clippedPointer, offsetOutput, offsetGeometry, clippedRegion);
+  passed &= NamedSelfTest(
+      "cursor-position-pointer-only-clipping",
+      pointerOnlyUpdated && clippedPointer.hasPosition &&
+          clippedPointer.visible && clippedPointer.desktopX == -1910 &&
+          clippedPointer.desktopY == 99 && pointerClipped &&
+          !clippedRegion.empty && clippedRegion.logicalLeft == 10 &&
+          clippedRegion.logicalTop == 0 && clippedRegion.logicalWidth == 4 &&
+          clippedRegion.logicalHeight == 2 && clippedRegion.skipX == 0 &&
+          clippedRegion.skipY == 1 && clippedRegion.sourceLeft == 10 &&
+          clippedRegion.sourceTop == 0);
+
+  DXGI_OUTPUT_DESC rotatedOutput{};
+  rotatedOutput.DesktopCoordinates = {500, -200, 1580, 1720};
+  PointerState rotatedPointer;
+  rotatedPointer.hasPosition = true;
+  rotatedPointer.visible = true;
+  rotatedPointer.desktopX = 498;
+  rotatedPointer.desktopY = -190;
+  rotatedPointer.hasShape = true;
+  rotatedPointer.shape.Type = DXGI_OUTDUPL_POINTER_SHAPE_TYPE_COLOR;
+  rotatedPointer.shape.Width = 4;
+  rotatedPointer.shape.Height = 3;
+  rotatedPointer.shape.Pitch = 16;
+  rotatedPointer.bytes.resize(48);
+  CursorDrawRegion rotatedRegion;
+  const bool rotatedClip = ResolveCursorDrawRegion(
+      rotatedPointer, rotatedOutput, rotatedGeometry, rotatedRegion);
+  UINT logicalX = 0;
+  UINT logicalY = 0;
+  const bool rotate90Mapping =
+      SourcePixelToLogical(rotatedGeometry, rotatedRegion, 0, 0,
+                           logicalX, logicalY) &&
+      logicalX == 1 && logicalY == 0 &&
+      SourcePixelToLogical(rotatedGeometry, rotatedRegion, 2, 1,
+                           logicalX, logicalY) &&
+      logicalX == 0 && logicalY == 2;
+  CursorDrawRegion matrixRegion;
+  matrixRegion.empty = false;
+  matrixRegion.logicalWidth = 2;
+  matrixRegion.logicalHeight = 3;
+  matrixRegion.sourceWidth = 2;
+  matrixRegion.sourceHeight = 3;
+  FrameGeometry matrixGeometry;
+  matrixGeometry.rotation = D3D11_VIDEO_PROCESSOR_ROTATION_180;
+  const bool rotate180Mapping =
+      SourcePixelToLogical(matrixGeometry, matrixRegion, 0, 0,
+                           logicalX, logicalY) &&
+      logicalX == 1 && logicalY == 2 &&
+      SourcePixelToLogical(matrixGeometry, matrixRegion, 1, 2,
+                           logicalX, logicalY) &&
+      logicalX == 0 && logicalY == 0;
+  matrixRegion.sourceWidth = 3;
+  matrixRegion.sourceHeight = 2;
+  matrixGeometry.rotation = D3D11_VIDEO_PROCESSOR_ROTATION_270;
+  const bool rotate270Mapping =
+      SourcePixelToLogical(matrixGeometry, matrixRegion, 0, 0,
+                           logicalX, logicalY) &&
+      logicalX == 0 && logicalY == 2 &&
+      SourcePixelToLogical(matrixGeometry, matrixRegion, 2, 1,
+                           logicalX, logicalY) &&
+      logicalX == 1 && logicalY == 0;
+  passed &= NamedSelfTest(
+      "cursor-rotation-multi-output-coordinates",
+      rotatedClip && !rotatedRegion.empty && rotatedRegion.logicalLeft == 0 &&
+          rotatedRegion.logicalTop == 10 && rotatedRegion.logicalWidth == 2 &&
+          rotatedRegion.logicalHeight == 3 && rotatedRegion.skipX == 2 &&
+          rotatedRegion.skipY == 0 && rotatedRegion.sourceLeft == 10 &&
+          rotatedRegion.sourceTop == 1078 && rotatedRegion.sourceWidth == 3 &&
+          rotatedRegion.sourceHeight == 2 && rotate90Mapping &&
+          rotate180Mapping && rotate270Mapping);
+
+  DXGI_OUTPUT_DESC semanticOutput{};
+  semanticOutput.DesktopCoordinates = {0, 0, 4, 2};
+  FrameGeometry semanticGeometry;
+  semanticGeometry.sourceWidth = 4;
+  semanticGeometry.sourceHeight = 2;
+  semanticGeometry.outputWidth = 4;
+  semanticGeometry.outputHeight = 2;
+  PointerState mono;
+  mono.hasPosition = true;
+  mono.visible = true;
+  mono.hasShape = true;
+  mono.shape.Type = DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MONOCHROME;
+  mono.shape.Width = 4;
+  mono.shape.Height = 2;
+  mono.shape.Pitch = 1;
+  mono.bytes = {0x30, 0x50};
+  CursorDrawRegion monoRegion;
+  std::vector<std::uint32_t> monoPixels;
+  const std::vector<std::uint32_t> monoBackground(
+      4, 0xff123456U);
+  const bool monoBuilt =
+      ResolveCursorDrawRegion(mono, semanticOutput, semanticGeometry,
+                              monoRegion) &&
+      BuildCursorPixels(mono, semanticGeometry, monoRegion, &monoBackground,
+                        monoPixels);
+  passed &= NamedSelfTest(
+      "cursor-monochrome-and-xor-semantics",
+      monoBuilt && monoPixels == std::vector<std::uint32_t>({
+          0xff000000U, 0xffffffffU, 0xff123456U, 0xffedcba9U}));
+
+  PointerState masked;
+  masked.hasPosition = true;
+  masked.visible = true;
+  masked.hasShape = true;
+  masked.shape.Type = DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MASKED_COLOR;
+  masked.shape.Width = 2;
+  masked.shape.Height = 1;
+  masked.shape.Pitch = 8;
+  masked.bytes.resize(8);
+  const std::uint32_t maskedShape[] = {0x00112233U, 0xff0000ffU};
+  std::memcpy(masked.bytes.data(), maskedShape, sizeof(maskedShape));
+  CursorDrawRegion maskedRegion;
+  std::vector<std::uint32_t> maskedPixels;
+  const std::vector<std::uint32_t> maskedBackground = {
+      0xffabcdefU, 0xff102030U};
+  const bool maskedBuilt =
+      ResolveCursorDrawRegion(masked, semanticOutput, semanticGeometry,
+                              maskedRegion) &&
+      BuildCursorPixels(masked, semanticGeometry, maskedRegion,
+                        &maskedBackground, maskedPixels);
+  passed &= NamedSelfTest(
+      "cursor-masked-color-copy-xor-semantics",
+      maskedBuilt && maskedPixels == std::vector<std::uint32_t>({
+          0xff112233U, 0xff1020cfU}));
+
+  PointerState colorRotation;
+  colorRotation.hasPosition = true;
+  colorRotation.visible = true;
+  colorRotation.hasShape = true;
+  colorRotation.desktopX = 1;
+  colorRotation.desktopY = 0;
+  colorRotation.shape.Type = DXGI_OUTDUPL_POINTER_SHAPE_TYPE_COLOR;
+  colorRotation.shape.Width = 2;
+  colorRotation.shape.Height = 1;
+  colorRotation.shape.Pitch = 8;
+  colorRotation.bytes.resize(8);
+  const std::uint32_t colorShape[] = {0xff010203U, 0xffa0b0c0U};
+  std::memcpy(colorRotation.bytes.data(), colorShape, sizeof(colorShape));
+  DXGI_OUTPUT_DESC colorOutput{};
+  colorOutput.DesktopCoordinates = {0, 0, 4, 2};
+  FrameGeometry colorGeometry;
+  colorGeometry.sourceWidth = 2;
+  colorGeometry.sourceHeight = 4;
+  colorGeometry.outputWidth = 4;
+  colorGeometry.outputHeight = 2;
+  colorGeometry.rotation = D3D11_VIDEO_PROCESSOR_ROTATION_90;
+  colorGeometry.needsRotation = true;
+  CursorDrawRegion colorRegion;
+  std::vector<std::uint32_t> colorPixels;
+  const bool colorBuilt = ResolveCursorDrawRegion(
+                              colorRotation, colorOutput, colorGeometry,
+                              colorRegion) &&
+                          BuildCursorPixels(colorRotation, colorGeometry,
+                                            colorRegion, nullptr, colorPixels);
+  passed &= NamedSelfTest(
+      "cursor-color-shape-rotation-semantics",
+      colorBuilt && colorRegion.sourceLeft == 0 &&
+          colorRegion.sourceTop == 1 && colorRegion.sourceWidth == 1 &&
+          colorRegion.sourceHeight == 2 &&
+          colorPixels == std::vector<std::uint32_t>({
+              0xffa0b0c0U, 0xff010203U}));
+
+  DXGI_OUTDUPL_POINTER_SHAPE_INFO invalidMono = mono.shape;
+  invalidMono.Height = 3;
+  DXGI_OUTDUPL_POINTER_SHAPE_INFO invalidColor = masked.shape;
+  invalidColor.Pitch = 7;
+  DXGI_OUTDUPL_POINTER_SHAPE_INFO unsupported = masked.shape;
+  unsupported.Type = 99;
+  passed &= NamedSelfTest(
+      "cursor-shape-validation-fails-closed",
+      ValidatePointerShape(mono.shape, mono.bytes.size()) &&
+          ValidatePointerShape(masked.shape, masked.bytes.size()) &&
+          !ValidatePointerShape(invalidMono, 3) &&
+          !ValidatePointerShape(invalidColor, 7) &&
+          !ValidatePointerShape(unsupported, masked.bytes.size()));
 
   EncodedAccessUnitRing bytesRing(80, 3'000, 16);
   const bool byteAppends =
@@ -2851,7 +3643,7 @@ int RunCapture(const Request& request) {
   summary.ringBytes = ring.bytes();
   const std::uint32_t requiredEvidence =
       kRunFrameAcquired | kRunFrameConverted | kRunH264Produced |
-      kRunRingRetained;
+      kRunRingRetained | kRunCursorComposited;
   if ((summary.flags & requiredEvidence) != requiredEvidence ||
       summary.capturedFrames == 0 || summary.convertedFrames == 0 ||
       summary.submittedFrames == 0 || summary.encodedSamples == 0 ||
