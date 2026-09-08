@@ -78,6 +78,7 @@
     "check:processor-qpc-latency": "node scripts/processor-qpc-latency-check.mjs",
     "check:dxgi-timing-reference": "node scripts/dxgi-timing-reference-check.mjs",
     "check:dxgi-replay-ring": "node scripts/dxgi-replay-ring-check.mjs",
+    "check:dxgi-replay-runtime": "node scripts/dxgi-replay-runtime-check.mjs",
     "check:settings": "node scripts/settings-limits-check.mjs",
     "check:storage-retention": "node scripts/storage-retention-check.mjs",
     "check:hotkeys": "node scripts/hotkey-registry-check.mjs",

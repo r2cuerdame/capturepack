@@ -12,7 +12,7 @@
 // time; what "all" adds is EXPORT work (one more snapshot + replay fetch + file
 // write per display). Fixed mode runs one encoder total (lowest CPU).
 import path from 'node:path'
-import { BrowserWindow, desktopCapturer, ipcMain, screen, session, webContents } from 'electron'
+import { app, BrowserWindow, desktopCapturer, ipcMain, screen, session, webContents } from 'electron'
 import type { Display, IpcMainEvent, WebContents } from 'electron'
 import { REPLAY_TIMEOUT_MS } from '../shared/captureTimeouts'
 import { IPC } from '../shared/ipc'
@@ -57,6 +57,10 @@ import {
   captureDxgiTimingReference,
   dxgiTimingReferenceToIpc,
 } from './dxgiTimingReference'
+import {
+  DxgiReplayRuntimeManager,
+  dxgiReplayRuntimeOptedIn,
+} from './dxgiReplayRuntime'
 
 const HOTPLUG_DEBOUNCE_MS = 1_000
 // A recorder window loading only proves that its renderer started, and
@@ -194,6 +198,7 @@ const nativeReplayFallback = new NativeReplayFallbackManager(
 )
 let nativeReplayFallbackIpcInstalled = false
 const NATIVE_PRESENTABLE_SEQUENCE_LIMIT = 32
+const NATIVE_REPLAY_REQUEST_LIMIT = 64
 interface NativeReplayFrameDelivery {
   sessionId: string
   inFlight: boolean
@@ -206,6 +211,20 @@ interface NativeReplayFrameDelivery {
   firstPresentedLogged: boolean
 }
 const nativeReplayFrameDelivery = new Map<number, NativeReplayFrameDelivery>()
+interface DxgiReplayServiceSlot {
+  readonly manager: DxgiReplayRuntimeManager
+  readonly signature: string
+  readonly retentionMs: number
+}
+// The native backend is a guarded, opt-in export source. The shipping hidden
+// renderer recorder remains alive beside every selected service so any loss of
+// capability, READY health, process health, or export validity can fall through
+// to the exact path releases use today.
+const dxgiReplayServices = new Map<number, DxgiReplayServiceSlot>()
+// A successful native snapshot acquires no renderer hold. Session still pairs
+// every holdAfterCapture request with resumeReplay(), so remember those request
+// ids and consume the matching resume without sending a phantom renderer token.
+const nativeReplayRequests = new Map<string, number>()
 // Actual per-display recorder health. "recording" is EARNED: it is set only
 // once the renderer proves frames are flowing (IPC.captureFrames) or the
 // backstop probe returns real replay bytes. Window creation alone — and a
@@ -678,6 +697,10 @@ export function recorderCadence(displayId: number): {
   requestedFps?: number
   recorderCount?: number
 } | null {
+  // Shipping remains live and may heartbeat after native MP4 selection. Until
+  // freezeDisplays consumes its paired resume, that cadence does not describe
+  // the bytes being placed into this capture's manifest.
+  if ([...nativeReplayRequests.values()].includes(displayId)) return null
   return displayCadence.get(displayId)
 }
 
@@ -797,6 +820,120 @@ function startReconciling(): void {
   reconcileTimer = setInterval(reconcileRecorders, RECONCILE_INTERVAL_MS)
 }
 
+function dxgiDisplayIdentity(display: Display): {
+  deviceName?: string
+  bounds: { x: number; y: number; width: number; height: number }
+} {
+  const label = display.label.trim()
+  return {
+    ...(/^\\\\\.\\DISPLAY\d+$/i.test(label) ? { deviceName: label } : {}),
+    // Electron display bounds are DIP. The helper selects an exact DXGI output
+    // in physical desktop coordinates, the same conversion used by the timing
+    // reference path below.
+    bounds: screen.dipToScreenRect(null, display.bounds),
+  }
+}
+
+function dxgiReplayServiceSignature(display: Display, retentionMs: number): string {
+  return JSON.stringify({ ...dxgiDisplayIdentity(display), retentionMs })
+}
+
+function stopDxgiReplayServices(): void {
+  for (const slot of dxgiReplayServices.values()) slot.manager.stop()
+  dxgiReplayServices.clear()
+}
+
+function rememberNativeReplayRequest(requestId: string, displayId: number): void {
+  nativeReplayRequests.delete(requestId)
+  while (nativeReplayRequests.size >= NATIVE_REPLAY_REQUEST_LIMIT) {
+    const oldest = nativeReplayRequests.keys().next().value
+    if (oldest === undefined) break
+    nativeReplayRequests.delete(oldest)
+  }
+  nativeReplayRequests.set(requestId, displayId)
+}
+
+/** Keeps exactly one retained native service per wanted display when opted in. */
+function reconcileDxgiReplayServices(
+  wanted: ReadonlyMap<number, Display>,
+  settings: Settings | null,
+): void {
+  // This check is deliberately outside the manager too: without the exact
+  // launch switch, CapturePack does not even create a native candidate.
+  if (settings === null || !settings.recordingEnabled || !dxgiReplayRuntimeOptedIn(process.argv)) {
+    stopDxgiReplayServices()
+    return
+  }
+  const retentionMs = settings.replaySeconds * 1_000
+  for (const [displayId, slot] of dxgiReplayServices) {
+    const display = wanted.get(displayId)
+    if (
+      display !== undefined
+      && slot.signature === dxgiReplayServiceSignature(display, retentionMs)
+    ) {
+      continue
+    }
+    slot.manager.stop()
+    dxgiReplayServices.delete(displayId)
+  }
+  for (const display of wanted.values()) {
+    if (dxgiReplayServices.has(display.id)) continue
+    const identity = dxgiDisplayIdentity(display)
+    let manager: DxgiReplayRuntimeManager
+    manager = new DxgiReplayRuntimeManager({
+      outputDirectory: path.join(app.getPath('temp'), 'capturepack-dxgi-replay'),
+      onFallback: (selection) => {
+        if (dxgiReplayServices.get(display.id)?.manager !== manager) return
+        logWarn(
+          `[capture] display ${display.id}: DXGI native replay unavailable ` +
+            `(${selection.reason})${selection.detail === undefined ? '' : ` — ${selection.detail}`}; ` +
+            'retaining shipping replay path',
+        )
+      },
+    })
+    const slot: DxgiReplayServiceSlot = {
+      manager,
+      signature: dxgiReplayServiceSignature(display, retentionMs),
+      retentionMs,
+    }
+    // Install before awaiting READY so a concurrent lifecycle stop owns the
+    // candidate process too. Rebuilds themselves remain serialized.
+    dxgiReplayServices.set(display.id, slot)
+    // Native warm-up is background-owned. Shipping windows are already live,
+    // and neither application startup nor a hotplug rebuild waits for the
+    // candidate's capability/READY deadline.
+    void manager.start({
+        ...identity,
+        retentionMs,
+      })
+      .then((selection) => {
+        if (dxgiReplayServices.get(display.id) !== slot) {
+          manager.stop()
+          return
+        }
+        if (selection.backend === 'native-dxgi') {
+          logInfo(
+            `[capture] display ${display.id}: DXGI native replay READY ` +
+              `(${selection.ready.width}x${selection.ready.height} @ ` +
+              `${selection.ready.targetFps}fps, ${selection.ready.encoderName ?? 'hardware H.264'})`,
+          )
+        }
+      })
+      .catch((error: unknown) => {
+        // Manager failures are normally expressed as a shipping selection.
+        // Keep this boundary fail-closed for an unexpected integration error.
+        const isCurrent = dxgiReplayServices.get(display.id) === slot
+        if (isCurrent) dxgiReplayServices.delete(display.id)
+        manager.stop()
+        if (!isCurrent) return
+        logWarn(
+          `[capture] display ${display.id}: DXGI native replay startup failed — ` +
+            `${error instanceof Error ? error.message : String(error)}; retaining shipping replay path`,
+        )
+      })
+  }
+}
+
 /**
  * Stops the recorder watchdog and any armed probe. index.ts calls this on
  * will-quit: a quitting app must not still be scheduling recoveries (or
@@ -810,6 +947,8 @@ export function disposeCapture(): void {
   probesSinceProof.clear()
   probesInFlight.clear()
   displayCadence.retain(new Set())
+  stopDxgiReplayServices()
+  nativeReplayRequests.clear()
   nativeReplayFallback.stopAll()
   nativeReplayFrameDelivery.clear()
 }
@@ -1199,8 +1338,18 @@ export function recoverSessionCapture(): void {
       probesSinceProof.set(displayId, RECOVERY_PROBES_BEFORE_REBUILD)
     }
   }
-  if (anyStopped) {
-    logInfo('[capture] desktop session resumed/unlocked; recovering stopped display recorders')
+  // A locked session is an expected fail-closed DXGI capability result. Drop
+  // unavailable candidates on the explicit unlock/resume signal so the next
+  // serialized rebuild gives each display one fresh capability + READY gate.
+  let retryNative = false
+  for (const [displayId, slot] of dxgiReplayServices) {
+    if (slot.manager.currentSelection().backend === 'native-dxgi') continue
+    slot.manager.stop()
+    dxgiReplayServices.delete(displayId)
+    retryNative = true
+  }
+  if (anyStopped || retryNative) {
+    logInfo('[capture] desktop session resumed/unlocked; recovering capture backends')
     void queueRebuild()
   }
 }
@@ -1491,13 +1640,96 @@ function validatedReplayClockAnchors(
   return validated
 }
 
+async function requestNativeReplay(
+  win: BrowserWindow,
+  requestId: string,
+): Promise<ReplayFetch | null> {
+  if (win.isDestroyed()) return null
+  const displayId = Number(assignedDisplays.get(win.webContents.id))
+  if (!Number.isFinite(displayId)) return null
+  const slot = dxgiReplayServices.get(displayId)
+  if (slot === undefined) return null
+  const selection = slot.manager.currentSelection()
+  // `native-dxgi` is only constructed by the runtime manager after capability
+  // probing and a complete successful READY packet. Re-read it immediately
+  // before snapshot so a process/export failure demotes the service in time.
+  if (
+    selection.backend !== 'native-dxgi'
+    || selection.ready.kind !== 'ready'
+    || selection.ready.status !== 'ok'
+  ) {
+    return null
+  }
+  let snapshot: Awaited<ReturnType<DxgiReplayRuntimeManager['snapshot']>>
+  try {
+    snapshot = await slot.manager.snapshot(REPLAY_TIMEOUT_MS)
+  } catch (error) {
+    logWarn(
+      `[capture] display ${displayId}: DXGI native replay export threw — ` +
+        `${error instanceof Error ? error.message : String(error)}; requesting shipping replay`,
+    )
+    return null
+  }
+  if (snapshot.status !== 'ok') {
+    logWarn(
+      `[capture] display ${displayId}: DXGI native replay export unavailable ` +
+        `(${snapshot.reason})${snapshot.detail === undefined ? '' : ` — ${snapshot.detail}`}; ` +
+        'requesting shipping replay',
+    )
+    return null
+  }
+  if (
+    dxgiReplayServices.get(displayId) !== slot
+    || slot.manager.currentSelection().backend !== 'native-dxgi'
+    || win.isDestroyed()
+  ) {
+    // A settings/hotplug generation replaced this service while it exported.
+    // Its bytes are not evidence about the recorder assigned to this request.
+    return null
+  }
+  // Never attribute the shipping renderer's last heartbeat to bytes produced
+  // by the independent DXGI/MF service.
+  displayCadence.reset(displayId)
+  rememberNativeReplayRequest(requestId, displayId)
+  logInfo(
+    `[capture] display ${displayId}: selected DXGI native replay snapshot ` +
+      `(${snapshot.buffer.byteLength} bytes, ${Math.round(snapshot.durationMs)} ms, ` +
+      `${snapshot.sampleCount} samples, ${snapshot.keyframes} keyframes)`,
+  )
+  return {
+    replay: {
+      buffer: snapshot.buffer,
+      durationMs: snapshot.durationMs,
+      mimeType: 'video/mp4',
+      replayFile: 'replay.mp4',
+    },
+    miss: null,
+  }
+}
+
 // Asks a capture window for its current replay blob, reporting WHY when there
 // is none: a timeout, an empty answer, or a window destroyed mid-request.
-export function requestReplay(
+// Health probes (hold=false) always exercise the shipping recorder. A real
+// capture may select native only after READY and a fully validated MP4 export;
+// every failure falls through to this same shipping request unchanged.
+export async function requestReplay(
   win: BrowserWindow,
   requestId: string,
   timeoutMs: number,
   options: { holdAfterCapture?: boolean } = {},
+): Promise<ReplayFetch> {
+  if (options.holdAfterCapture === true) {
+    const native = await requestNativeReplay(win, requestId)
+    if (native !== null) return native
+  }
+  return requestShippingReplay(win, requestId, timeoutMs, options)
+}
+
+function requestShippingReplay(
+  win: BrowserWindow,
+  requestId: string,
+  timeoutMs: number,
+  options: { holdAfterCapture?: boolean },
 ): Promise<ReplayFetch> {
   registerReplayListener()
   return new Promise((resolve) => {
@@ -1681,6 +1913,10 @@ export function requestReplay(
  * resume. Session owns calling it from `finally`.
  */
 export function resumeReplay(win: BrowserWindow, requestId: string): void {
+  if (nativeReplayRequests.has(requestId)) {
+    nativeReplayRequests.delete(requestId)
+    return
+  }
   if (win.isDestroyed()) return
   const payload: CaptureReplayResumePayload = { requestId }
   try {
@@ -1861,6 +2097,7 @@ async function rebuild(): Promise<void> {
     if (!win.isDestroyed()) win.destroy()
   }
   if (settings === null) {
+    reconcileDxgiReplayServices(wanted, settings)
     publishRecorderState()
     return
   }
@@ -1882,6 +2119,10 @@ async function rebuild(): Promise<void> {
       setDisplayRecorderState(display.id, { status: 'stopped', reason: 'process-stopped', detail })
     }
   }
+  // Start native candidates only after every shipping recorder window has had
+  // its chance to start. READY probing must never delay or replace the path a
+  // release build already relies on.
+  reconcileDxgiReplayServices(wanted, settings)
   publishRecorderState()
 }
 

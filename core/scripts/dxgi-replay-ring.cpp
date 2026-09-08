@@ -18,6 +18,7 @@
 #include <mfapi.h>
 #include <mferror.h>
 #include <mfidl.h>
+#include <mfreadwrite.h>
 #include <mftransform.h>
 #include <fcntl.h>
 #include <io.h>
@@ -25,14 +26,17 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <cstdio>
 #include <cwchar>
 #include <deque>
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <numeric>
 #include <string>
 #include <vector>
 
@@ -43,11 +47,14 @@ namespace {
 constexpr std::uint16_t kProtocolVersion = 1;
 constexpr std::uint32_t kMinimumCaptureMs = 100;
 constexpr std::uint32_t kMaximumCaptureMs = 30'000;
+constexpr std::uint32_t kMinimumRetentionMs = 1'000;
+constexpr std::uint32_t kMaximumRetentionMs = 600'000;
 constexpr std::uint32_t kTargetFramesPerSecond = 15;
 constexpr std::size_t kMaximumRingBytes = 64U * 1024U * 1024U;
 constexpr std::size_t kMaximumRingUnits = 512;
 constexpr std::uint32_t kAcquireTimeoutMs = 20;
 constexpr std::uint32_t kMaximumReinitializations = 3;
+constexpr std::size_t kMaximumServiceCommandBytes = 32U * 1024U;
 
 enum class ProbeStatus : std::uint32_t {
   kAvailable = 0,
@@ -87,6 +94,15 @@ enum class ProbeReason : std::uint32_t {
   kReinitializeFailed = 29,
   kCaptureDeadlineFailed = 30,
   kRingRejected = 31,
+  kNoSafeSnapshot = 32,
+  kCodecConfigInvalid = 33,
+  kCodecConfigChanged = 34,
+  kExportCreateFailed = 35,
+  kExportWriteFailed = 36,
+  kExportFinalizeFailed = 37,
+  kExportStructureInvalid = 38,
+  kExportDecodeFailed = 39,
+  kServiceProtocolInvalid = 40,
 };
 
 enum ProbeFlag : std::uint32_t {
@@ -116,6 +132,10 @@ enum RunFlag : std::uint32_t {
   kRunH264Produced = 1U << 10,
   kRunRingRetained = 1U << 11,
   kRunPipelineReinitialized = 1U << 12,
+  kRunCodecConfigValidated = 1U << 13,
+  kRunMp4Muxed = 1U << 14,
+  kRunMp4StructureValidated = 1U << 15,
+  kRunMp4Decoded = 1U << 16,
 };
 
 #pragma pack(push, 1)
@@ -177,6 +197,35 @@ struct RunSummaryPacket {
   std::uint32_t encoderNameBytes;
   char encoderName[68];
 };
+
+struct ServicePacket {
+  // CPNSRV01 v1 is a fixed little-endian record. Service stdout contains only
+  // whole records so the application can reject truncation or extra output.
+  char magic[8];
+  std::uint16_t version;
+  std::uint16_t headerBytes;
+  std::uint32_t kind;
+  std::uint32_t status;
+  std::uint32_t reason;
+  std::uint64_t requestId;
+  std::uint32_t flags;
+  std::uint32_t width;
+  std::uint32_t height;
+  std::uint32_t targetFps;
+  std::int64_t qpcFrequency;
+  std::int64_t firstQpc;
+  std::int64_t lastQpc;
+  std::int64_t durationHns;
+  std::uint64_t sampleCount;
+  std::uint64_t keyframes;
+  std::uint64_t mp4Bytes;
+  std::uint64_t ringUnits;
+  std::uint64_t ringBytes;
+  std::uint32_t generation;
+  std::int32_t lastHresult;
+  std::uint32_t encoderNameBytes;
+  char encoderName[124];
+};
 #pragma pack(pop)
 
 static_assert(sizeof(ProbePacket) == 256, "probe packet size changed");
@@ -187,10 +236,17 @@ static_assert(offsetof(RunSummaryPacket, qpcFrequency) == 56,
               "run packet offsets changed");
 static_assert(offsetof(RunSummaryPacket, encoderName) == 188,
               "run packet offsets changed");
+static_assert(sizeof(ServicePacket) == 256, "service packet size changed");
+static_assert(offsetof(ServicePacket, qpcFrequency) == 48,
+              "service packet offsets changed");
+static_assert(offsetof(ServicePacket, encoderName) == 132,
+              "service packet offsets changed");
 
 struct Request {
   bool selfTest = false;
+  bool serve = false;
   std::uint32_t captureMs = 0;
+  std::uint32_t retentionMs = 30'000;
   bool hasDeviceName = false;
   std::wstring deviceName;
   bool hasBounds = false;
@@ -219,6 +275,21 @@ struct EncodedAccessUnit {
   std::vector<std::uint8_t> bytes;
 };
 
+struct EncodedRingSnapshot {
+  std::uint32_t generation = 0;
+  std::int64_t firstQpc = 0;
+  std::int64_t lastQpc = 0;
+  std::int64_t durationHns = 0;
+  std::vector<std::uint8_t> codecConfig;
+  std::vector<EncodedAccessUnit> units;
+
+  bool safe() const {
+    return generation != 0 && firstQpc > 0 && lastQpc >= firstQpc &&
+           durationHns > 0 && !codecConfig.empty() && !units.empty() &&
+           units.front().keyframe && units.front().ptsHns == 0;
+  }
+};
+
 // The production encoder will append complete access units. Retention can be
 // shorter than requested when a byte/time cut crosses a GOP: the ring removes
 // the undecodable prefix through the next keyframe instead of exporting it.
@@ -235,6 +306,7 @@ class EncodedAccessUnitRing {
         unit.exposedQpc <= 0 || unit.ptsHns < 0 || unit.durationHns <= 0 ||
         unit.generation == 0 ||
         unit.bytes.empty() ||
+        unit.keyframe != !unit.codecConfig.empty() ||
         unitBytes > maximumBytes_ ||
         bytes_ > std::numeric_limits<std::size_t>::max() - unitBytes ||
         (!units_.empty() && unit.exposedQpc <= units_.back().exposedQpc)) {
@@ -253,8 +325,9 @@ class EncodedAccessUnitRing {
     return true;
   }
 
-  std::vector<EncodedAccessUnit> Snapshot(std::int64_t cutQpc) const {
-    std::vector<EncodedAccessUnit> selected;
+  bool Snapshot(std::int64_t cutQpc, EncodedRingSnapshot& snapshot) const {
+    snapshot = {};
+    if (cutQpc <= 0) return false;
     const std::int64_t earliest =
         cutQpc > retentionQpc_ ? cutQpc - retentionQpc_ : 0;
     auto first = std::find_if(
@@ -265,12 +338,34 @@ class EncodedAccessUnitRing {
         first, units_.end(), [](const EncodedAccessUnit& unit) {
           return unit.keyframe;
         });
+    if (first == units_.end() || first->codecConfig.empty()) return false;
+    const std::int64_t originPts = first->ptsHns;
+    const std::uint32_t generation = first->generation;
+    std::int64_t previousPts = -1;
     for (auto current = first;
          current != units_.end() && current->exposedQpc <= cutQpc;
          ++current) {
-      selected.push_back(*current);
+      if (current->generation != generation || current->ptsHns < originPts ||
+          current->ptsHns <= previousPts || current->durationHns <= 0 ||
+          (current->keyframe && current->codecConfig != first->codecConfig)) {
+        return false;
+      }
+      if (current->ptsHns - originPts >
+          std::numeric_limits<std::int64_t>::max() - current->durationHns) {
+        return false;
+      }
+      EncodedAccessUnit rebased = *current;
+      rebased.ptsHns -= originPts;
+      snapshot.durationHns = rebased.ptsHns + rebased.durationHns;
+      previousPts = current->ptsHns;
+      snapshot.units.push_back(std::move(rebased));
     }
-    return selected;
+    if (snapshot.units.empty()) return false;
+    snapshot.generation = generation;
+    snapshot.firstQpc = snapshot.units.front().exposedQpc;
+    snapshot.lastQpc = snapshot.units.back().exposedQpc;
+    snapshot.codecConfig = snapshot.units.front().codecConfig;
+    return snapshot.safe();
   }
 
   std::size_t bytes() const { return bytes_; }
@@ -344,6 +439,17 @@ bool ParseCaptureMs(const wchar_t* text, std::uint32_t& value) {
   return true;
 }
 
+bool ParseRetentionMs(const wchar_t* text, std::uint32_t& value) {
+  LONG parsed = 0;
+  if (!ParseLong(text, parsed) ||
+      parsed < static_cast<LONG>(kMinimumRetentionMs) ||
+      parsed > static_cast<LONG>(kMaximumRetentionMs)) {
+    return false;
+  }
+  value = static_cast<std::uint32_t>(parsed);
+  return true;
+}
+
 bool ParseRequest(int argc, wchar_t** argv, Request& request) {
   if (argc == 2 && std::wstring(argv[1]) == L"--self-test") {
     request.selfTest = true;
@@ -355,6 +461,11 @@ bool ParseRequest(int argc, wchar_t** argv, Request& request) {
   bool haveHeight = false;
   for (int index = 1; index < argc; ++index) {
     const std::wstring option = argv[index];
+    if (option == L"--serve") {
+      if (request.serve) return false;
+      request.serve = true;
+      continue;
+    }
     if (index + 1 >= argc) return false;
     const wchar_t* value = argv[++index];
     if (option == L"--device") {
@@ -374,6 +485,8 @@ bool ParseRequest(int argc, wchar_t** argv, Request& request) {
       if (!haveHeight) return false;
     } else if (option == L"--capture-ms") {
       if (!ParseCaptureMs(value, request.captureMs)) return false;
+    } else if (option == L"--retention-ms") {
+      if (!ParseRetentionMs(value, request.retentionMs)) return false;
     } else {
       return false;
     }
@@ -382,6 +495,8 @@ bool ParseRequest(int argc, wchar_t** argv, Request& request) {
                           static_cast<int>(haveWidth) + static_cast<int>(haveHeight);
   if (boundsParts != 0 && boundsParts != 4) return false;
   request.hasBounds = boundsParts == 4;
+  if (request.serve && request.captureMs != 0) return false;
+  if (!request.serve && request.retentionMs != 30'000) return false;
   return request.hasDeviceName || request.hasBounds;
 }
 
@@ -685,6 +800,553 @@ int WriteRunSummary(RunSummaryPacket& packet, ProbeStatus status,
   _setmode(_fileno(stdout), _O_BINARY);
   return std::fwrite(&packet, 1, sizeof(packet), stdout) == sizeof(packet) ? 0 : 1;
 }
+
+enum class ServicePacketKind : std::uint32_t {
+  kReady = 1,
+  kSnapshot = 2,
+  kFatal = 3,
+};
+
+ServicePacket NewServicePacket(ServicePacketKind kind) {
+  ServicePacket packet{};
+  std::copy_n("CPNSRV01", 8, packet.magic);
+  packet.version = kProtocolVersion;
+  packet.headerBytes = sizeof(ServicePacket);
+  packet.kind = static_cast<std::uint32_t>(kind);
+  packet.status = static_cast<std::uint32_t>(ProbeStatus::kUnavailable);
+  packet.reason = static_cast<std::uint32_t>(ProbeReason::kInternalFailure);
+  packet.targetFps = kTargetFramesPerSecond;
+  return packet;
+}
+
+bool WriteServicePacket(ServicePacket& packet, ProbeStatus status,
+                        ProbeReason reason, HRESULT lastResult = S_OK) {
+  packet.status = static_cast<std::uint32_t>(status);
+  packet.reason = static_cast<std::uint32_t>(reason);
+  packet.lastHresult = static_cast<std::int32_t>(lastResult);
+  _setmode(_fileno(stdout), _O_BINARY);
+  const bool written =
+      std::fwrite(&packet, 1, sizeof(packet), stdout) == sizeof(packet);
+  return written && std::fflush(stdout) == 0;
+}
+
+struct ExportEvidence {
+  HRESULT result = E_FAIL;
+  ProbeReason reason = ProbeReason::kExportCreateFailed;
+  std::uint64_t bytes = 0;
+  std::uint64_t decodedSamples = 0;
+  std::int64_t declaredDurationHns = 0;
+  std::uint32_t flags = 0;
+};
+
+struct AnnexBInspection {
+  bool valid = false;
+  bool hasSps = false;
+  bool hasPps = false;
+  bool hasIdr = false;
+  bool hasVcl = false;
+};
+
+bool FindAnnexBStart(const std::uint8_t* bytes, std::size_t size,
+                     std::size_t from, std::size_t& at,
+                     std::size_t& prefixBytes) {
+  for (std::size_t index = from; index + 3 <= size; ++index) {
+    if (bytes[index] != 0 || bytes[index + 1] != 0) continue;
+    if (bytes[index + 2] == 1) {
+      at = index;
+      prefixBytes = 3;
+      return true;
+    }
+    if (index + 4 <= size && bytes[index + 2] == 0 &&
+        bytes[index + 3] == 1) {
+      at = index;
+      prefixBytes = 4;
+      return true;
+    }
+  }
+  return false;
+}
+
+AnnexBInspection InspectAnnexB(const std::vector<std::uint8_t>& bytes) {
+  AnnexBInspection inspected;
+  if (bytes.empty()) return inspected;
+  std::size_t start = 0;
+  std::size_t prefix = 0;
+  if (!FindAnnexBStart(bytes.data(), bytes.size(), 0, start, prefix) ||
+      start != 0) {
+    return inspected;
+  }
+  std::size_t nalCount = 0;
+  for (;;) {
+    const std::size_t header = start + prefix;
+    if (header >= bytes.size()) return inspected;
+    std::size_t next = bytes.size();
+    std::size_t nextPrefix = 0;
+    FindAnnexBStart(bytes.data(), bytes.size(), header + 1, next, nextPrefix);
+    if (next <= header) return inspected;
+    const std::uint8_t nalType = bytes[header] & 0x1fU;
+    if (nalType == 0 || nalType >= 24) return inspected;
+    inspected.hasSps |= nalType == 7;
+    inspected.hasPps |= nalType == 8;
+    inspected.hasIdr |= nalType == 5;
+    inspected.hasVcl |= nalType >= 1 && nalType <= 5;
+    if (++nalCount > 256) return inspected;
+    if (next == bytes.size()) break;
+    start = next;
+    prefix = nextPrefix;
+  }
+  inspected.valid = nalCount > 0;
+  return inspected;
+}
+
+HRESULT SnapshotMediaType(const EncodedRingSnapshot& snapshot, UINT width,
+                          UINT height, ComPtr<IMFMediaType>& mediaType) {
+  HRESULT result = MFCreateMediaType(&mediaType);
+  if (SUCCEEDED(result)) result = mediaType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+  if (SUCCEEDED(result)) result = mediaType->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_H264);
+  if (SUCCEEDED(result)) result = MFSetAttributeSize(mediaType.Get(), MF_MT_FRAME_SIZE,
+                                                     width, height);
+  if (SUCCEEDED(result)) result = MFSetAttributeRatio(
+      mediaType.Get(), MF_MT_FRAME_RATE, kTargetFramesPerSecond, 1);
+  if (SUCCEEDED(result)) result = MFSetAttributeRatio(
+      mediaType.Get(), MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
+  if (SUCCEEDED(result)) result = mediaType->SetUINT32(
+      MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
+  if (SUCCEEDED(result)) result = mediaType->SetUINT32(
+      MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Main);
+  if (SUCCEEDED(result)) {
+    const std::uint64_t totalBits = std::accumulate(
+        snapshot.units.begin(), snapshot.units.end(), std::uint64_t{0},
+        [](std::uint64_t bytes, const EncodedAccessUnit& unit) {
+          return bytes + static_cast<std::uint64_t>(unit.bytes.size());
+        }) * 8U;
+    const std::uint64_t bitrate = snapshot.durationHns <= 0
+        ? 2'000'000
+        : std::max<std::uint64_t>(1,
+              totalBits * 10'000'000U /
+                  static_cast<std::uint64_t>(snapshot.durationHns));
+    result = mediaType->SetUINT32(
+        MF_MT_AVG_BITRATE,
+        static_cast<UINT32>(std::min<std::uint64_t>(
+            bitrate, std::numeric_limits<UINT32>::max())));
+  }
+  if (SUCCEEDED(result)) result = mediaType->SetBlob(
+      MF_MT_MPEG_SEQUENCE_HEADER, snapshot.codecConfig.data(),
+      static_cast<UINT32>(snapshot.codecConfig.size()));
+  return result;
+}
+
+HRESULT WriteSnapshotSamples(IMFSinkWriter* writer,
+                             const EncodedRingSnapshot& snapshot) {
+  for (std::size_t index = 0; index < snapshot.units.size(); ++index) {
+    const EncodedAccessUnit& unit = snapshot.units[index];
+    if (unit.bytes.size() > std::numeric_limits<DWORD>::max()) {
+      return MF_E_BUFFERTOOSMALL;
+    }
+    ComPtr<IMFMediaBuffer> buffer;
+    HRESULT result = MFCreateMemoryBuffer(
+        static_cast<DWORD>(unit.bytes.size()), &buffer);
+    BYTE* destination = nullptr;
+    DWORD capacity = 0;
+    if (SUCCEEDED(result)) result = buffer->Lock(&destination, &capacity, nullptr);
+    if (SUCCEEDED(result)) {
+      if (capacity < unit.bytes.size()) result = MF_E_BUFFERTOOSMALL;
+      else std::copy(unit.bytes.begin(), unit.bytes.end(), destination);
+      buffer->Unlock();
+    }
+    if (SUCCEEDED(result)) result = buffer->SetCurrentLength(
+        static_cast<DWORD>(unit.bytes.size()));
+    ComPtr<IMFSample> sample;
+    if (SUCCEEDED(result)) result = MFCreateSample(&sample);
+    if (SUCCEEDED(result)) result = sample->AddBuffer(buffer.Get());
+    if (SUCCEEDED(result)) result = sample->SetSampleTime(unit.ptsHns);
+    if (SUCCEEDED(result)) result = sample->SetSampleDuration(unit.durationHns);
+    if (SUCCEEDED(result)) result = sample->SetUINT64(
+        MFSampleExtension_DecodeTimestamp, static_cast<UINT64>(unit.ptsHns));
+    if (SUCCEEDED(result) && unit.keyframe) {
+      result = sample->SetUINT32(MFSampleExtension_CleanPoint, TRUE);
+    }
+    if (SUCCEEDED(result) && index == 0) {
+      result = sample->SetUINT32(MFSampleExtension_Discontinuity, TRUE);
+    }
+    if (SUCCEEDED(result)) result = writer->WriteSample(0, sample.Get());
+    if (FAILED(result)) return result;
+  }
+  return S_OK;
+}
+
+bool ReadBoundedFile(const std::wstring& path, std::vector<std::uint8_t>& bytes) {
+  bytes.clear();
+  HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) return false;
+  LARGE_INTEGER size{};
+  const bool sizeOk = GetFileSizeEx(file, &size) != FALSE && size.QuadPart > 0 &&
+      size.QuadPart <= static_cast<LONGLONG>(kMaximumRingBytes + 8U * 1024U * 1024U);
+  if (!sizeOk) {
+    CloseHandle(file);
+    return false;
+  }
+  bytes.resize(static_cast<std::size_t>(size.QuadPart));
+  std::size_t offset = 0;
+  while (offset < bytes.size()) {
+    const DWORD request = static_cast<DWORD>(std::min<std::size_t>(
+        bytes.size() - offset, 1U * 1024U * 1024U));
+    DWORD read = 0;
+    if (!ReadFile(file, bytes.data() + offset, request, &read, nullptr) ||
+        read == 0) {
+      CloseHandle(file);
+      bytes.clear();
+      return false;
+    }
+    offset += read;
+  }
+  CloseHandle(file);
+  return true;
+}
+
+std::uint32_t ReadBigEndian32(const std::uint8_t* bytes) {
+  return (static_cast<std::uint32_t>(bytes[0]) << 24) |
+         (static_cast<std::uint32_t>(bytes[1]) << 16) |
+         (static_cast<std::uint32_t>(bytes[2]) << 8) |
+         static_cast<std::uint32_t>(bytes[3]);
+}
+
+std::uint64_t ReadBigEndian64(const std::uint8_t* bytes) {
+  return (static_cast<std::uint64_t>(ReadBigEndian32(bytes)) << 32) |
+         ReadBigEndian32(bytes + 4);
+}
+
+bool ValidateFragmentedMp4Structure(const std::vector<std::uint8_t>& bytes) {
+  bool ftyp = false;
+  bool moov = false;
+  bool moof = false;
+  bool mdat = false;
+  std::size_t boxes = 0;
+  std::size_t offset = 0;
+  while (offset < bytes.size()) {
+    if (bytes.size() - offset < 8 || ++boxes > 4096) return false;
+    std::uint64_t boxBytes = ReadBigEndian32(bytes.data() + offset);
+    std::size_t headerBytes = 8;
+    if (boxBytes == 1) {
+      if (bytes.size() - offset < 16) return false;
+      boxBytes = ReadBigEndian64(bytes.data() + offset + 8);
+      headerBytes = 16;
+    } else if (boxBytes == 0) {
+      return false;
+    }
+    if (boxBytes < headerBytes || boxBytes > bytes.size() - offset) return false;
+    const char* type = reinterpret_cast<const char*>(bytes.data() + offset + 4);
+    if (std::memcmp(type, "ftyp", 4) == 0) {
+      if (offset != 0 || ftyp) return false;
+      ftyp = true;
+    } else if (std::memcmp(type, "moov", 4) == 0) {
+      if (!ftyp || moof) return false;
+      moov = true;
+    } else if (std::memcmp(type, "moof", 4) == 0) {
+      if (!moov) return false;
+      moof = true;
+    } else if (std::memcmp(type, "mdat", 4) == 0) {
+      if (!moof || boxBytes == headerBytes) return false;
+      mdat = true;
+    }
+    offset += static_cast<std::size_t>(boxBytes);
+  }
+  return offset == bytes.size() && ftyp && moov && moof && mdat;
+}
+
+HRESULT DecodeAndValidateMp4(const std::wstring& path,
+                             const EncodedRingSnapshot& snapshot,
+                             UINT expectedWidth, UINT expectedHeight,
+                             std::uint64_t& decodedSamples,
+                             std::int64_t& declaredDurationHns) {
+  decodedSamples = 0;
+  declaredDurationHns = 0;
+  ComPtr<IMFSourceReader> reader;
+  HRESULT result = MFCreateSourceReaderFromURL(path.c_str(), nullptr, &reader);
+  if (FAILED(result)) return result;
+  PROPVARIANT duration;
+  PropVariantInit(&duration);
+  result = reader->GetPresentationAttribute(
+      static_cast<DWORD>(MF_SOURCE_READER_MEDIASOURCE), MF_PD_DURATION,
+      &duration);
+  if (SUCCEEDED(result)) {
+    if (duration.vt == VT_UI8) {
+      declaredDurationHns =
+          static_cast<std::int64_t>(duration.uhVal.QuadPart);
+    } else if (duration.vt == VT_I8) {
+      declaredDurationHns = duration.hVal.QuadPart;
+    } else {
+      result = MF_E_INVALIDMEDIATYPE;
+    }
+  }
+  PropVariantClear(&duration);
+  if (FAILED(result) || declaredDurationHns <= 0) {
+    return FAILED(result) ? result : E_FAIL;
+  }
+  const std::int64_t tolerance = 10'000'000 / kTargetFramesPerSecond;
+  const std::int64_t difference = declaredDurationHns > snapshot.durationHns
+      ? declaredDurationHns - snapshot.durationHns
+      : snapshot.durationHns - declaredDurationHns;
+  if (difference > tolerance) return MF_E_INVALID_TIMESTAMP;
+
+  ComPtr<IMFMediaType> decodedType;
+  result = MFCreateMediaType(&decodedType);
+  if (SUCCEEDED(result)) result = decodedType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+  if (SUCCEEDED(result)) result = decodedType->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_NV12);
+  if (SUCCEEDED(result)) result = reader->SetCurrentMediaType(
+      static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), nullptr,
+      decodedType.Get());
+  if (FAILED(result)) return result;
+  ComPtr<IMFMediaType> currentType;
+  result = reader->GetCurrentMediaType(
+      static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), &currentType);
+  UINT width = 0;
+  UINT height = 0;
+  if (SUCCEEDED(result)) result = MFGetAttributeSize(
+      currentType.Get(), MF_MT_FRAME_SIZE, &width, &height);
+  if (FAILED(result) || width != expectedWidth || height != expectedHeight) {
+    return FAILED(result) ? result : MF_E_INVALIDMEDIATYPE;
+  }
+  std::int64_t previousTimestamp = -1;
+  const std::uint64_t maximumReads = snapshot.units.size() * 2U + 32U;
+  bool reachedEnd = false;
+  for (std::uint64_t reads = 0; reads < maximumReads; ++reads) {
+    DWORD stream = 0;
+    DWORD flags = 0;
+    LONGLONG timestamp = 0;
+    ComPtr<IMFSample> sample;
+    result = reader->ReadSample(
+        static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), 0,
+        &stream, &flags, &timestamp, &sample);
+    if (FAILED(result)) return result;
+    if ((flags & MF_SOURCE_READERF_ENDOFSTREAM) != 0) {
+      reachedEnd = true;
+      break;
+    }
+    if (sample) {
+      if (timestamp < 0 || timestamp < previousTimestamp) {
+        return MF_E_INVALID_TIMESTAMP;
+      }
+      ComPtr<IMFMediaBuffer> contiguous;
+      result = sample->ConvertToContiguousBuffer(&contiguous);
+      DWORD bytes = 0;
+      if (SUCCEEDED(result)) result = contiguous->GetCurrentLength(&bytes);
+      if (FAILED(result) || bytes == 0) return FAILED(result) ? result : E_FAIL;
+      previousTimestamp = timestamp;
+      ++decodedSamples;
+    } else if ((flags & MF_SOURCE_READERF_STREAMTICK) == 0) {
+      return E_FAIL;
+    }
+  }
+  return reachedEnd && decodedSamples == snapshot.units.size() ? S_OK : E_FAIL;
+}
+
+ExportEvidence ExportSnapshot(const EncodedRingSnapshot& snapshot,
+                              UINT width, UINT height,
+                              const std::wstring& path) {
+  ExportEvidence evidence;
+  if (!snapshot.safe()) {
+    evidence.reason = ProbeReason::kNoSafeSnapshot;
+    evidence.result = MF_E_INVALIDREQUEST;
+    return evidence;
+  }
+  const AnnexBInspection config = InspectAnnexB(snapshot.codecConfig);
+  if (!config.valid || !config.hasSps || !config.hasPps) {
+    evidence.reason = ProbeReason::kCodecConfigInvalid;
+    evidence.result = MF_E_INVALIDMEDIATYPE;
+    return evidence;
+  }
+  ComPtr<IMFMediaType> mediaType;
+  HRESULT result = SnapshotMediaType(snapshot, width, height, mediaType);
+  ComPtr<IMFByteStream> byteStream;
+  ComPtr<IMFMediaSink> sink;
+  ComPtr<IMFSinkWriter> writer;
+  bool created = false;
+  if (SUCCEEDED(result)) result = MFCreateFile(
+      MF_ACCESSMODE_WRITE, MF_OPENMODE_FAIL_IF_EXIST, MF_FILEFLAGS_NONE,
+      path.c_str(), &byteStream);
+  if (SUCCEEDED(result)) created = true;
+  if (SUCCEEDED(result)) result = MFCreateFMPEG4MediaSink(
+      byteStream.Get(), mediaType.Get(), nullptr, &sink);
+  ComPtr<IMFAttributes> writerAttributes;
+  if (SUCCEEDED(result)) result = MFCreateAttributes(&writerAttributes, 1);
+  if (SUCCEEDED(result)) result = writerAttributes->SetUINT32(
+      MF_READWRITE_DISABLE_CONVERTERS, TRUE);
+  if (SUCCEEDED(result)) result = MFCreateSinkWriterFromMediaSink(
+      sink.Get(), writerAttributes.Get(), &writer);
+  if (SUCCEEDED(result)) result = writer->SetInputMediaType(0, mediaType.Get(), nullptr);
+  if (SUCCEEDED(result)) result = writer->BeginWriting();
+  if (FAILED(result)) {
+    if (sink) sink->Shutdown();
+    if (byteStream) byteStream->Close();
+    if (created) DeleteFileW(path.c_str());
+    evidence.result = result;
+    evidence.reason = ProbeReason::kExportCreateFailed;
+    return evidence;
+  }
+  result = WriteSnapshotSamples(writer.Get(), snapshot);
+  if (FAILED(result)) evidence.reason = ProbeReason::kExportWriteFailed;
+  if (SUCCEEDED(result)) {
+    result = writer->Finalize();
+    if (FAILED(result)) evidence.reason = ProbeReason::kExportFinalizeFailed;
+  }
+  writer.Reset();
+  sink->Shutdown();
+  sink.Reset();
+  byteStream->Close();
+  byteStream.Reset();
+  if (FAILED(result)) {
+    DeleteFileW(path.c_str());
+    evidence.result = result;
+    return evidence;
+  }
+  evidence.flags |= kRunCodecConfigValidated | kRunMp4Muxed;
+  std::vector<std::uint8_t> fileBytes;
+  if (!ReadBoundedFile(path, fileBytes) ||
+      !ValidateFragmentedMp4Structure(fileBytes)) {
+    DeleteFileW(path.c_str());
+    evidence.result = E_FAIL;
+    evidence.reason = ProbeReason::kExportStructureInvalid;
+    return evidence;
+  }
+  evidence.bytes = fileBytes.size();
+  evidence.flags |= kRunMp4StructureValidated;
+  result = DecodeAndValidateMp4(path, snapshot, width, height,
+                                evidence.decodedSamples,
+                                evidence.declaredDurationHns);
+  if (FAILED(result)) {
+    DeleteFileW(path.c_str());
+    evidence.result = result;
+    evidence.reason = ProbeReason::kExportDecodeFailed;
+    return evidence;
+  }
+  evidence.flags |= kRunMp4Decoded;
+  evidence.result = S_OK;
+  evidence.reason = ProbeReason::kNone;
+  return evidence;
+}
+
+enum class ServiceCommandKind { kNone, kSnapshot, kStop, kInvalid };
+
+struct ServiceCommand {
+  ServiceCommandKind kind = ServiceCommandKind::kNone;
+  std::uint64_t requestId = 0;
+  std::wstring path;
+};
+
+bool AbsoluteNormalizedPath(const std::wstring& path) {
+  if (path.empty() || path.size() >= 32'767) return false;
+  const bool driveAbsolute = path.size() >= 3 &&
+      ((path[0] >= L'A' && path[0] <= L'Z') ||
+       (path[0] >= L'a' && path[0] <= L'z')) &&
+      path[1] == L':' && (path[2] == L'\\' || path[2] == L'/');
+  const bool uncAbsolute = path.size() >= 3 && path[0] == L'\\' &&
+                           path[1] == L'\\';
+  if (!driveAbsolute && !uncAbsolute) return false;
+  const DWORD needed = GetFullPathNameW(path.c_str(), 0, nullptr, nullptr);
+  if (needed == 0 || needed >= 32'767) return false;
+  std::vector<wchar_t> normalized(needed);
+  const DWORD written = GetFullPathNameW(path.c_str(), needed,
+                                         normalized.data(), nullptr);
+  if (written == 0 || written >= needed) return false;
+  std::wstring normalizedPath(normalized.data(), written);
+  std::replace(normalizedPath.begin(), normalizedPath.end(), L'/', L'\\');
+  std::wstring comparable = path;
+  std::replace(comparable.begin(), comparable.end(), L'/', L'\\');
+  return _wcsicmp(normalizedPath.c_str(), comparable.c_str()) == 0;
+}
+
+bool Utf8ToWide(const std::string& utf8, std::wstring& wide) {
+  wide.clear();
+  if (utf8.empty() || utf8.size() > kMaximumServiceCommandBytes) return false;
+  const int needed = MultiByteToWideChar(
+      CP_UTF8, MB_ERR_INVALID_CHARS, utf8.data(),
+      static_cast<int>(utf8.size()), nullptr, 0);
+  if (needed <= 0 || needed >= 32'767) return false;
+  wide.resize(static_cast<std::size_t>(needed));
+  return MultiByteToWideChar(
+      CP_UTF8, MB_ERR_INVALID_CHARS, utf8.data(),
+      static_cast<int>(utf8.size()), wide.data(), needed) == needed;
+}
+
+ServiceCommand ParseServiceCommand(const std::string& line,
+                                   std::uint64_t lastRequestId) {
+  // Stdin is bounded UTF-8, LF-delimited control text:
+  // SNAPSHOT<TAB>uint64<TAB>absolute-normalized-path or STOP.
+  ServiceCommand command;
+  if (line == "STOP") {
+    command.kind = ServiceCommandKind::kStop;
+    return command;
+  }
+  constexpr char prefix[] = "SNAPSHOT\t";
+  if (line.compare(0, sizeof(prefix) - 1, prefix) != 0 ||
+      line.find('\0') != std::string::npos ||
+      line.find('\r') != std::string::npos) {
+    command.kind = ServiceCommandKind::kInvalid;
+    return command;
+  }
+  const std::size_t idStart = sizeof(prefix) - 1;
+  const std::size_t separator = line.find('\t', idStart);
+  if (separator == std::string::npos ||
+      line.find('\t', separator + 1) != std::string::npos) {
+    command.kind = ServiceCommandKind::kInvalid;
+    return command;
+  }
+  const char* first = line.data() + idStart;
+  const char* last = line.data() + separator;
+  const auto parsed = std::from_chars(first, last, command.requestId, 10);
+  std::wstring path;
+  if (parsed.ec != std::errc{} || parsed.ptr != last ||
+      command.requestId == 0 || command.requestId <= lastRequestId ||
+      !Utf8ToWide(line.substr(separator + 1), path) ||
+      !AbsoluteNormalizedPath(path)) {
+    command.kind = ServiceCommandKind::kInvalid;
+    return command;
+  }
+  command.kind = ServiceCommandKind::kSnapshot;
+  command.path = std::move(path);
+  return command;
+}
+
+class ServiceCommandReader {
+ public:
+  ServiceCommand Poll(std::uint64_t lastRequestId) {
+    if (closed_) return {ServiceCommandKind::kStop};
+    const HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD available = 0;
+    if (input == nullptr || input == INVALID_HANDLE_VALUE ||
+        !PeekNamedPipe(input, nullptr, 0, nullptr, &available, nullptr)) {
+      const DWORD error = GetLastError();
+      if (error == ERROR_BROKEN_PIPE || error == ERROR_PIPE_NOT_CONNECTED) {
+        closed_ = true;
+        return {ServiceCommandKind::kStop};
+      }
+      return {ServiceCommandKind::kInvalid};
+    }
+    if (available > 0) {
+      char chunk[4096];
+      DWORD read = 0;
+      const DWORD wanted = std::min<DWORD>(available, sizeof(chunk));
+      if (!ReadFile(input, chunk, wanted, &read, nullptr)) {
+        return {ServiceCommandKind::kInvalid};
+      }
+      buffered_.append(chunk, chunk + read);
+      if (buffered_.size() > kMaximumServiceCommandBytes) {
+        return {ServiceCommandKind::kInvalid};
+      }
+    }
+    const std::size_t newline = buffered_.find('\n');
+    if (newline == std::string::npos) return {};
+    std::string line = buffered_.substr(0, newline);
+    buffered_.erase(0, newline + 1);
+    return ParseServiceCommand(line, lastRequestId);
+  }
+
+ private:
+  bool closed_ = false;
+  std::string buffered_;
+};
 
 bool QueryQpc(std::int64_t& value) {
   LARGE_INTEGER counter{};
@@ -1055,7 +1717,14 @@ class EncoderSession {
     if (SUCCEEDED(result)) result = allocator_->InitializeSampleAllocatorEx(
         4, 4, allocatorAttributes.Get(), inputType_.Get());
     if (FAILED(result)) return result;
-    ReadCodecConfig();
+    std::vector<std::uint8_t> initialConfig;
+    if (SUCCEEDED(ReadCodecConfig(initialConfig))) {
+      const AnnexBInspection inspected = InspectAnnexB(initialConfig);
+      if (!inspected.valid || !inspected.hasSps || !inspected.hasPps) {
+        return MF_E_INVALIDMEDIATYPE;
+      }
+      codecConfig_ = std::move(initialConfig);
+    }
     result = transform_->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0);
     if (SUCCEEDED(result)) {
       result = transform_->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0);
@@ -1169,7 +1838,8 @@ class EncoderSession {
   }
 
  private:
-  void ReadCodecConfig() {
+  HRESULT ReadCodecConfig(std::vector<std::uint8_t>& config) const {
+    config.clear();
     ComPtr<IMFMediaType> currentType;
     IMFMediaType* type = outputType_.Get();
     if (SUCCEEDED(transform_->GetOutputCurrentType(0, &currentType)) &&
@@ -1179,15 +1849,17 @@ class EncoderSession {
     UINT32 bytes = 0;
     if (FAILED(type->GetBlobSize(MF_MT_MPEG_SEQUENCE_HEADER, &bytes)) ||
         bytes == 0 || bytes > 64U * 1024U) {
-      return;
+      return MF_E_INVALIDMEDIATYPE;
     }
-    codecConfig_.resize(bytes);
+    config.resize(bytes);
     UINT32 written = 0;
-    if (FAILED(type->GetBlob(MF_MT_MPEG_SEQUENCE_HEADER, codecConfig_.data(),
-                             bytes, &written)) ||
+    if (FAILED(type->GetBlob(MF_MT_MPEG_SEQUENCE_HEADER, config.data(), bytes,
+                             &written)) ||
         written != bytes) {
-      codecConfig_.clear();
+      config.clear();
+      return MF_E_INVALIDMEDIATYPE;
     }
+    return S_OK;
   }
 
   HRESULT PullOutput(EncodedAccessUnitRing& ring, RunSummaryPacket& summary) {
@@ -1230,7 +1902,18 @@ class EncoderSession {
     if (durationHns <= 0) return E_FAIL;
     const bool keyframe =
         MFGetAttributeUINT32(produced.Get(), MFSampleExtension_CleanPoint, FALSE) != FALSE;
-    if (keyframe && codecConfig_.empty()) ReadCodecConfig();
+    if (keyframe) {
+      std::vector<std::uint8_t> currentConfig;
+      if (FAILED(ReadCodecConfig(currentConfig))) return MF_E_INVALIDMEDIATYPE;
+      const AnnexBInspection config = InspectAnnexB(currentConfig);
+      if (!config.valid || !config.hasSps || !config.hasPps) {
+        return MF_E_INVALIDMEDIATYPE;
+      }
+      if (!codecConfig_.empty() && currentConfig != codecConfig_) {
+        return MF_E_TRANSFORM_STREAM_CHANGE;
+      }
+      codecConfig_ = std::move(currentConfig);
+    }
     if (keyframe && codecConfig_.empty()) return MF_E_INVALIDMEDIATYPE;
     ComPtr<IMFMediaBuffer> contiguous;
     result = produced->ConvertToContiguousBuffer(&contiguous);
@@ -1253,6 +1936,13 @@ class EncoderSession {
     if (keyframe) unit.codecConfig = codecConfig_;
     unit.bytes.assign(bytes, bytes + current);
     contiguous->Unlock();
+    const AnnexBInspection accessUnit = InspectAnnexB(unit.bytes);
+    if (!accessUnit.valid || !accessUnit.hasVcl ||
+        accessUnit.hasIdr != keyframe ||
+        ((accessUnit.hasSps || accessUnit.hasPps) &&
+         (!keyframe || !accessUnit.hasSps || !accessUnit.hasPps))) {
+      return MF_E_INVALIDMEDIATYPE;
+    }
     summary.encodedSamples += 1;
     summary.encodedBytes += current;
     if (keyframe) summary.keyframes += 1;
@@ -1541,6 +2231,9 @@ class CapturePipeline {
 
   const OutputChoice& choice() const { return choice_; }
   bool prepared() const { return prepared_; }
+  UINT outputWidth() const { return geometry_.outputWidth; }
+  UINT outputHeight() const { return geometry_.outputHeight; }
+  std::uint32_t generation() const { return generation_; }
 
  private:
   void AddRunIdentity(RunSummaryPacket& summary) const {
@@ -1761,12 +2454,14 @@ bool RingSelfTest() {
       bytesRing.Append(TestUnit(3'000, false, 20)) &&
       bytesRing.Append(TestUnit(4'000, true, 20)) &&
       bytesRing.Append(TestUnit(5'000, false, 20));
-  const auto byteSnapshot = bytesRing.Snapshot(5'000);
+  EncodedRingSnapshot byteSnapshot;
+  const bool byteSnapshotOk = bytesRing.Snapshot(5'000, byteSnapshot);
   passed &= NamedSelfTest(
       "bounded-bytes-keyframe-cut",
       byteAppends && bytesRing.bytes() <= 80 && bytesRing.size() == 2 &&
-          byteSnapshot.size() == 2 && byteSnapshot.front().keyframe &&
-          byteSnapshot.front().exposedQpc == 4'000);
+          byteSnapshotOk && byteSnapshot.units.size() == 2 &&
+          byteSnapshot.units.front().keyframe &&
+          byteSnapshot.units.front().exposedQpc == 4'000);
 
   EncodedAccessUnitRing timeRing(1'000, 2'000, 16);
   const bool timeAppends =
@@ -1775,18 +2470,23 @@ bool RingSelfTest() {
       timeRing.Append(TestUnit(3'000, true, 10)) &&
       timeRing.Append(TestUnit(4'000, false, 10)) &&
       timeRing.Append(TestUnit(5'000, false, 10));
+  EncodedRingSnapshot timeSnapshot;
   passed &= NamedSelfTest(
       "bounded-time",
-      timeAppends && timeRing.size() == 3 && timeRing.Snapshot(5'000).size() == 3);
+      timeAppends && timeRing.size() == 3 &&
+          timeRing.Snapshot(5'000, timeSnapshot) &&
+          timeSnapshot.units.size() == 3);
 
   EncodedAccessUnitRing unitsRing(1'000, 10'000, 2);
   const bool unitsAppends = unitsRing.Append(TestUnit(1'000, true, 10)) &&
                             unitsRing.Append(TestUnit(2'000, false, 10)) &&
                             unitsRing.Append(TestUnit(3'000, true, 10));
+  EncodedRingSnapshot unitsSnapshot;
   passed &= NamedSelfTest(
       "bounded-max-units",
       unitsAppends && unitsRing.size() == 1 &&
-          unitsRing.Snapshot(3'000).size() == 1);
+          unitsRing.Snapshot(3'000, unitsSnapshot) &&
+          unitsSnapshot.units.size() == 1);
 
   EncodedAccessUnitRing generationRing(1'000, 10'000, 16);
   const bool firstGeneration =
@@ -1796,11 +2496,86 @@ bool RingSelfTest() {
       !generationRing.Append(TestUnit(3'000, false, 10, 2));
   const bool acceptsSafeGeneration =
       generationRing.Append(TestUnit(4'000, true, 10, 2));
+  EncodedRingSnapshot generationSnapshot;
+  const bool generationBoundarySafe =
+      firstGeneration && rejectsUnsafeGeneration && acceptsSafeGeneration &&
+      generationRing.size() == 1 &&
+      generationRing.Snapshot(4'000, generationSnapshot) &&
+      generationSnapshot.generation == 2;
+
+  EncodedAccessUnitRing rebasedRing(1'000, 10'000, 16);
+  EncodedAccessUnit rebasedFirst = TestUnit(1'000, true, 10);
+  rebasedFirst.ptsHns = 50'000;
+  rebasedFirst.durationHns = 10'000;
+  EncodedAccessUnit rebasedSecond = TestUnit(2'000, false, 10);
+  rebasedSecond.ptsHns = 80'000;
+  rebasedSecond.durationHns = 20'000;
+  EncodedRingSnapshot rebasedSnapshot;
+  const bool snapshotTimestampsSafe =
+      rebasedRing.Append(std::move(rebasedFirst)) &&
+      rebasedRing.Append(std::move(rebasedSecond)) &&
+      rebasedRing.Snapshot(2'000, rebasedSnapshot) &&
+      rebasedSnapshot.units.front().ptsHns == 0 &&
+      rebasedSnapshot.units.back().ptsHns == 30'000 &&
+      rebasedSnapshot.durationHns == 50'000;
+
+  EncodedAccessUnitRing changedConfigRing(1'000, 10'000, 16);
+  EncodedAccessUnit changedConfig = TestUnit(3'000, true, 10);
+  changedConfig.codecConfig.assign(4, 0x02);
+  EncodedRingSnapshot changedConfigSnapshot;
+  const bool configChangeRejected =
+      changedConfigRing.Append(TestUnit(1'000, true, 10)) &&
+      changedConfigRing.Append(TestUnit(2'000, false, 10)) &&
+      changedConfigRing.Append(std::move(changedConfig)) &&
+      !changedConfigRing.Snapshot(3'000, changedConfigSnapshot);
+
+  const AnnexBInspection codecConfig = InspectAnnexB({
+      0x00, 0x00, 0x01, 0x67, 0x64, 0xaa,
+      0x00, 0x00, 0x01, 0x68, 0xee, 0xbb});
+  const AnnexBInspection idrAccessUnit = InspectAnnexB(
+      {0x00, 0x00, 0x00, 0x01, 0x65, 0x88, 0x84});
+  const AnnexBInspection lengthPrefixed = InspectAnnexB(
+      {0x00, 0x00, 0x00, 0x03, 0x65, 0x88, 0x84});
+  const bool annexBValidated =
+      codecConfig.valid && codecConfig.hasSps && codecConfig.hasPps &&
+      !codecConfig.hasVcl && idrAccessUnit.valid && idrAccessUnit.hasIdr &&
+      idrAccessUnit.hasVcl && !lengthPrefixed.valid;
+
+  const std::vector<std::uint8_t> validFragmentedMp4 = {
+      0x00, 0x00, 0x00, 0x08, 'f', 't', 'y', 'p',
+      0x00, 0x00, 0x00, 0x08, 'm', 'o', 'o', 'v',
+      0x00, 0x00, 0x00, 0x08, 'm', 'o', 'o', 'f',
+      0x00, 0x00, 0x00, 0x09, 'm', 'd', 'a', 't', 0x01};
+  std::vector<std::uint8_t> truncatedFragmentedMp4 = validFragmentedMp4;
+  truncatedFragmentedMp4.pop_back();
+  const std::vector<std::uint8_t> emptyMdat = {
+      0x00, 0x00, 0x00, 0x08, 'f', 't', 'y', 'p',
+      0x00, 0x00, 0x00, 0x08, 'm', 'o', 'o', 'v',
+      0x00, 0x00, 0x00, 0x08, 'm', 'o', 'o', 'f',
+      0x00, 0x00, 0x00, 0x08, 'm', 'd', 'a', 't'};
+  const bool fragmentedMp4StructureValidated =
+      ValidateFragmentedMp4Structure(validFragmentedMp4) &&
+      !ValidateFragmentedMp4Structure(truncatedFragmentedMp4) &&
+      !ValidateFragmentedMp4Structure(emptyMdat);
+
+  const ServiceCommand validCommand = ParseServiceCommand(
+      "SNAPSHOT\t7\tC:\\capturepack-recent.mp4", 6);
+  const bool serviceProtocolBounded =
+      validCommand.kind == ServiceCommandKind::kSnapshot &&
+      validCommand.requestId == 7 &&
+      ParseServiceCommand("STOP", 7).kind == ServiceCommandKind::kStop &&
+      ParseServiceCommand(
+          "SNAPSHOT\t7\tC:\\capturepack-recent.mp4", 7).kind ==
+          ServiceCommandKind::kInvalid &&
+      ParseServiceCommand(
+          "SNAPSHOT\t8\tC:\\temp\\..\\capturepack-recent.mp4", 7).kind ==
+          ServiceCommandKind::kInvalid;
+
   passed &= NamedSelfTest(
       "config-generation-keyframe-cut",
-      firstGeneration && rejectsUnsafeGeneration && acceptsSafeGeneration &&
-          generationRing.size() == 1 &&
-          generationRing.Snapshot(4'000).front().generation == 2);
+      generationBoundarySafe && snapshotTimestampsSafe &&
+          configChangeRejected && annexBValidated &&
+          fragmentedMp4StructureValidated && serviceProtocolBounded);
 
   EncoderTransitionState transitions;
   const bool transitionSequence =
@@ -1861,6 +2636,13 @@ bool RingSelfTest() {
 bool HasCaptureArgument(int argc, wchar_t** argv) {
   for (int index = 1; index < argc; ++index) {
     if (std::wstring(argv[index]) == L"--capture-ms") return true;
+  }
+  return false;
+}
+
+bool HasServiceArgument(int argc, wchar_t** argv) {
+  for (int index = 1; index < argc; ++index) {
+    if (std::wstring(argv[index]) == L"--serve") return true;
   }
   return false;
 }
@@ -1948,10 +2730,9 @@ int RunCapture(const Request& request) {
     summary.flags |= kRunPipelineReinitialized;
     ring.Reset();
     pipeline.reset();
-    currentRequest = Request{};
+    currentRequest = request;
     currentRequest.hasDeviceName = true;
     currentRequest.deviceName = selectedDevice;
-    currentRequest.captureMs = request.captureMs;
     pipeline = std::make_unique<CapturePipeline>();
     result = pipeline->Initialize(currentRequest, generation, summary);
     if (FAILED(result)) {
@@ -1995,11 +2776,246 @@ int RunCapture(const Request& request) {
                          ProbeReason::kNone, S_OK);
 }
 
+ProbeReason InitialPipelineReason(HRESULT result) {
+  if (result == DXGI_ERROR_NOT_FOUND) return ProbeReason::kOutputNotFound;
+  if (result == E_ACCESSDENIED) return ProbeReason::kDuplicateAccessDenied;
+  if (result == DXGI_ERROR_UNSUPPORTED) return ProbeReason::kDuplicateUnsupported;
+  if (result == DXGI_ERROR_NOT_CURRENTLY_AVAILABLE) {
+    return ProbeReason::kDuplicateLimitReached;
+  }
+  if (result == DXGI_ERROR_SESSION_DISCONNECTED) {
+    return ProbeReason::kSessionDisconnected;
+  }
+  return ProbeReason::kReinitializeFailed;
+}
+
+bool TemporaryExportPath(std::wstring& path) {
+  wchar_t directory[MAX_PATH + 1]{};
+  const DWORD directoryChars = GetTempPathW(MAX_PATH, directory);
+  if (directoryChars == 0 || directoryChars > MAX_PATH) return false;
+  wchar_t file[MAX_PATH + 1]{};
+  if (GetTempFileNameW(directory, L"cpr", 0, file) == 0) return false;
+  if (!DeleteFileW(file)) return false;
+  path = file;
+  path += L".mp4";
+  if (GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES) return false;
+  return true;
+}
+
+void FillServiceEvidence(ServicePacket& packet,
+                         const EncodedRingSnapshot& snapshot,
+                         const ExportEvidence& exportEvidence,
+                         const EncodedAccessUnitRing& ring,
+                         const CapturePipeline& pipeline,
+                         const RunSummaryPacket& summary) {
+  packet.flags = summary.flags | exportEvidence.flags;
+  packet.width = pipeline.outputWidth();
+  packet.height = pipeline.outputHeight();
+  packet.targetFps = kTargetFramesPerSecond;
+  packet.qpcFrequency = summary.qpcFrequency;
+  packet.firstQpc = snapshot.firstQpc;
+  packet.lastQpc = snapshot.lastQpc;
+  packet.durationHns = snapshot.durationHns;
+  packet.sampleCount = snapshot.units.size();
+  packet.keyframes = static_cast<std::uint64_t>(std::count_if(
+      snapshot.units.begin(), snapshot.units.end(),
+      [](const EncodedAccessUnit& unit) { return unit.keyframe; }));
+  packet.mp4Bytes = exportEvidence.bytes;
+  packet.ringUnits = ring.size();
+  packet.ringBytes = ring.bytes();
+  packet.generation = snapshot.generation;
+  const std::size_t nameBytes = std::min<std::size_t>(
+      summary.encoderNameBytes, sizeof(packet.encoderName));
+  std::copy_n(summary.encoderName, nameBytes, packet.encoderName);
+  packet.encoderNameBytes = static_cast<std::uint32_t>(nameBytes);
+}
+
+int RunService(const Request& request) {
+  RunSummaryPacket summary = NewRunSummary();
+  if (!QueryQpcFrequency(summary.qpcFrequency) ||
+      !QueryQpc(summary.startedQpc)) {
+    ServicePacket fatal = NewServicePacket(ServicePacketKind::kFatal);
+    WriteServicePacket(fatal, ProbeStatus::kUnavailable,
+                       ProbeReason::kCaptureDeadlineFailed, E_FAIL);
+    return 1;
+  }
+  const HRESULT comResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+  if (FAILED(comResult)) {
+    ServicePacket fatal = NewServicePacket(ServicePacketKind::kFatal);
+    WriteServicePacket(fatal, ProbeStatus::kUnavailable,
+                       ProbeReason::kComInitializationFailed, comResult);
+    return 1;
+  }
+  ComLifetime comLifetime(true);
+  HRESULT result = MFStartup(MF_VERSION, MFSTARTUP_FULL);
+  if (FAILED(result)) {
+    ServicePacket fatal = NewServicePacket(ServicePacketKind::kFatal);
+    WriteServicePacket(fatal, ProbeStatus::kUnavailable,
+                       ProbeReason::kMediaFoundationFailed, result);
+    return 1;
+  }
+  MediaFoundationLifetime mediaFoundationLifetime;
+  summary.flags |= kRunMediaFoundationStarted;
+  const std::int64_t whole = summary.qpcFrequency / 1000;
+  const std::int64_t remainder = summary.qpcFrequency % 1000;
+  const std::int64_t retentionQpc =
+      whole * request.retentionMs +
+      (remainder * request.retentionMs) / 1000;
+  EncodedAccessUnitRing ring(kMaximumRingBytes, retentionQpc,
+                             kMaximumRingUnits);
+  ExposureTimeline timeline(summary.qpcFrequency);
+  auto pipeline = std::make_unique<CapturePipeline>();
+  std::uint32_t generation = 1;
+  std::uint32_t recoveryAttempts = 0;
+  Request currentRequest = request;
+  result = pipeline->Initialize(currentRequest, generation, summary);
+  if (FAILED(result)) {
+    ServicePacket fatal = NewServicePacket(ServicePacketKind::kFatal);
+    WriteServicePacket(fatal, ProbeStatus::kUnavailable,
+                       InitialPipelineReason(result), result);
+    return 1;
+  }
+  const std::wstring selectedDevice = pipeline->choice().outputDesc.DeviceName;
+  ServiceCommandReader commands;
+  std::uint64_t lastRequestId = 0;
+  bool ready = false;
+
+  for (;;) {
+    const ServiceCommand command = commands.Poll(lastRequestId);
+    if (command.kind == ServiceCommandKind::kInvalid) {
+      ServicePacket fatal = NewServicePacket(ServicePacketKind::kFatal);
+      WriteServicePacket(fatal, ProbeStatus::kUnavailable,
+                         ProbeReason::kServiceProtocolInvalid, E_INVALIDARG);
+      return 1;
+    }
+    if (command.kind == ServiceCommandKind::kStop) return 0;
+    if (command.kind == ServiceCommandKind::kSnapshot) {
+      lastRequestId = command.requestId;
+      ServicePacket response = NewServicePacket(ServicePacketKind::kSnapshot);
+      response.requestId = command.requestId;
+      std::int64_t cutQpc = 0;
+      EncodedRingSnapshot snapshot;
+      if (!QueryQpc(cutQpc) || !ring.Snapshot(cutQpc, snapshot)) {
+        response.ringUnits = ring.size();
+        response.ringBytes = ring.bytes();
+        WriteServicePacket(response, ProbeStatus::kUnavailable,
+                           ProbeReason::kNoSafeSnapshot, E_PENDING);
+      } else {
+        const ExportEvidence exported = ExportSnapshot(
+            snapshot, pipeline->outputWidth(), pipeline->outputHeight(),
+            command.path);
+        FillServiceEvidence(response, snapshot, exported, ring, *pipeline,
+                            summary);
+        WriteServicePacket(
+            response,
+            SUCCEEDED(exported.result) ? ProbeStatus::kAvailable
+                                       : ProbeStatus::kUnavailable,
+            exported.reason, exported.result);
+      }
+    }
+
+    ProbeReason failureReason = ProbeReason::kNone;
+    result = pipeline->AcquireAndProcess(kAcquireTimeoutMs, timeline, ring,
+                                         summary, failureReason);
+    if (result == DXGI_ERROR_WAIT_TIMEOUT &&
+        failureReason == ProbeReason::kAcquireFailed) {
+      ++summary.acquireTimeouts;
+      continue;
+    }
+    if (FAILED(result)) {
+      if (result == MF_E_TRANSFORM_STREAM_CHANGE) {
+        failureReason = ProbeReason::kCodecConfigChanged;
+      } else if (result == MF_E_INVALIDMEDIATYPE &&
+                 failureReason == ProbeReason::kEncoderOutputFailed) {
+        failureReason = ProbeReason::kCodecConfigInvalid;
+      }
+      if (ready) {
+        ServicePacket fatal = NewServicePacket(ServicePacketKind::kFatal);
+        fatal.flags = summary.flags;
+        fatal.qpcFrequency = summary.qpcFrequency;
+        fatal.ringUnits = ring.size();
+        fatal.ringBytes = ring.bytes();
+        WriteServicePacket(fatal, ProbeStatus::kUnavailable,
+                           failureReason, result);
+        return 1;
+      }
+      const RecoveryDecision recovery = RecoveryFor(result, recoveryAttempts);
+      if (recovery != RecoveryDecision::kReinitialize) {
+        ServicePacket fatal = NewServicePacket(ServicePacketKind::kFatal);
+        fatal.flags = summary.flags;
+        fatal.qpcFrequency = summary.qpcFrequency;
+        fatal.ringUnits = ring.size();
+        fatal.ringBytes = ring.bytes();
+        WriteServicePacket(fatal, ProbeStatus::kUnavailable,
+                           failureReason, result);
+        return 1;
+      }
+      ++recoveryAttempts;
+      ++summary.reinitializations;
+      ++generation;
+      summary.flags |= kRunPipelineReinitialized;
+      ring.Reset();
+      pipeline.reset();
+      currentRequest = request;
+      currentRequest.hasDeviceName = true;
+      currentRequest.deviceName = selectedDevice;
+      pipeline = std::make_unique<CapturePipeline>();
+      result = pipeline->Initialize(currentRequest, generation, summary);
+      if (FAILED(result)) {
+        ServicePacket fatal = NewServicePacket(ServicePacketKind::kFatal);
+        WriteServicePacket(fatal, ProbeStatus::kUnavailable,
+                           ProbeReason::kReinitializeFailed, result);
+        return 1;
+      }
+      ready = false;
+      continue;
+    }
+    if (ready) continue;
+    std::int64_t cutQpc = 0;
+    EncodedRingSnapshot healthSnapshot;
+    if (!QueryQpc(cutQpc) || !ring.Snapshot(cutQpc, healthSnapshot)) continue;
+    std::wstring healthPath;
+    if (!TemporaryExportPath(healthPath)) {
+      ServicePacket fatal = NewServicePacket(ServicePacketKind::kFatal);
+      WriteServicePacket(fatal, ProbeStatus::kUnavailable,
+                         ProbeReason::kExportCreateFailed,
+                         HRESULT_FROM_WIN32(GetLastError()));
+      return 1;
+    }
+    const ExportEvidence health = ExportSnapshot(
+        healthSnapshot, pipeline->outputWidth(), pipeline->outputHeight(),
+        healthPath);
+    DeleteFileW(healthPath.c_str());
+    if (FAILED(health.result)) {
+      ServicePacket fatal = NewServicePacket(ServicePacketKind::kFatal);
+      FillServiceEvidence(fatal, healthSnapshot, health, ring, *pipeline,
+                          summary);
+      WriteServicePacket(fatal, ProbeStatus::kUnavailable,
+                         health.reason, health.result);
+      return 1;
+    }
+    ServicePacket readyPacket = NewServicePacket(ServicePacketKind::kReady);
+    FillServiceEvidence(readyPacket, healthSnapshot, health, ring, *pipeline,
+                        summary);
+    if (!WriteServicePacket(readyPacket, ProbeStatus::kAvailable,
+                            ProbeReason::kNone, S_OK)) {
+      return 1;
+    }
+    ready = true;
+  }
+}
+
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
   Request request;
   if (!ParseRequest(argc, argv, request)) {
+    if (HasServiceArgument(argc, argv)) {
+      ServicePacket packet = NewServicePacket(ServicePacketKind::kFatal);
+      WriteServicePacket(packet, ProbeStatus::kUnavailable,
+                         ProbeReason::kInvalidRequest, E_INVALIDARG);
+      return 1;
+    }
     if (HasCaptureArgument(argc, argv)) {
       RunSummaryPacket packet = NewRunSummary();
       return WriteRunSummary(packet, ProbeStatus::kUnavailable,
@@ -2017,6 +3033,7 @@ int wmain(int argc, wchar_t** argv) {
     return 0;
   }
   SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+  if (request.serve) return RunService(request);
   if (request.captureMs != 0) return RunCapture(request);
 
   ProbePacket packet = NewPacket();

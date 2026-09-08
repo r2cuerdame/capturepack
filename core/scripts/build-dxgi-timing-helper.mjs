@@ -185,6 +185,7 @@ export function compileDxgiReplayRingHelper({
       'dxgi.lib',
       'mf.lib',
       'mfplat.lib',
+      'mfreadwrite.lib',
       'mfuuid.lib',
       'ole32.lib',
       'user32.lib',

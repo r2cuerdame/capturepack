@@ -1,0 +1,353 @@
+import { EventEmitter } from 'node:events'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
+import {
+  DXGI_REPLAY_MAX_EXPORT_BYTES,
+  DXGI_REPLAY_RUNTIME_SWITCH,
+  DXGI_REPLAY_SERVICE_ALL_FLAGS,
+  DXGI_REPLAY_SERVICE_PACKET_BYTES,
+  DXGI_REPLAY_SERVICE_REQUIRED_HEALTH_FLAGS,
+  DxgiReplayRuntime,
+  DxgiReplayRuntimeManager,
+  DxgiReplayServicePacketParser,
+  dxgiReplayRuntimeOptedIn,
+  parseDxgiReplayServicePacket,
+  selectDxgiReplayRuntime,
+  validateDxgiReplayMp4,
+  type DxgiReplayRuntimeProcess,
+} from '../src/main/dxgiReplayRuntime'
+import type { DxgiReplayCapabilityAvailable } from '../src/main/dxgiReplayRing'
+
+let passed = 0
+function check(name: string, condition: boolean): void {
+  if (!condition) throw new Error(`FAIL: ${name}`)
+  passed += 1
+  console.log(`PASS: ${name}`)
+}
+function throws(action: () => unknown): boolean {
+  try { action(); return false } catch { return true }
+}
+function reasonOf(selection: ReturnType<typeof selectDxgiReplayRuntime>): string | undefined {
+  return selection.backend === 'shipping' ? selection.reason : undefined
+}
+
+function u32(value: number): Buffer { const b = Buffer.alloc(4); b.writeUInt32BE(value); return b }
+function u64(value: bigint): Buffer { const b = Buffer.alloc(8); b.writeBigUInt64BE(value); return b }
+function ascii(value: string): Buffer { return Buffer.from(value, 'ascii') }
+function concat(...parts: readonly Buffer[]): Buffer { return Buffer.concat(parts) }
+function box(type: string, ...parts: readonly Buffer[]): Buffer {
+  const body = concat(...parts)
+  return concat(u32(8 + body.length), ascii(type), body)
+}
+function fullBox(version = 0, flags = 0): Buffer {
+  return Buffer.from([version, flags >>> 16 & 0xff, flags >>> 8 & 0xff, flags & 0xff])
+}
+function validMp4(sampleCount = 3, durationTicks = 40): Buffer {
+  const avcC = box('avcC', Buffer.from([1, 100, 0, 31, 0xff, 0xe1, 0]))
+  const avc1 = box('avc1', Buffer.alloc(78), avcC)
+  const stsd = box('stsd', fullBox(), u32(1), avc1)
+  const stbl = box('stbl', stsd)
+  const minf = box('minf', stbl)
+  const mdhd = box('mdhd', fullBox(), u32(0), u32(0), u32(1_000), u32(sampleCount * durationTicks))
+  const hdlr = box('hdlr', fullBox(), u32(0), ascii('vide'))
+  const tkhd = box('tkhd', fullBox(), u32(0), u32(0), u32(7), u32(0))
+  const trak = box('trak', tkhd, box('mdia', mdhd, hdlr, minf))
+  const trex = box('trex', fullBox(), u32(7), u32(1), u32(durationTicks), u32(0), u32(0))
+  const moov = box('moov', trak, box('mvex', trex))
+  const tfhd = box('tfhd', fullBox(0, 0x000008), u32(7), u32(durationTicks))
+  const tfdt = box('tfdt', fullBox(), u32(0))
+  const trun = box('trun', fullBox(), u32(sampleCount))
+  const moof = box('moof', box('traf', tfhd, tfdt, trun))
+  return concat(
+    box('ftyp', ascii('isom'), u32(0), ascii('isomiso6mp41')),
+    moov,
+    moof,
+    box('mdat', Buffer.alloc(sampleCount * 4, 0x55)),
+  )
+}
+
+function servicePacket(input: {
+  kind?: number; status?: number; reason?: number; requestId?: bigint
+  mp4Bytes?: bigint; durationHns?: bigint; sampleCount?: bigint
+} = {}): Buffer {
+  const result = Buffer.alloc(DXGI_REPLAY_SERVICE_PACKET_BYTES)
+  result.write('CPNSRV01', 0, 'ascii')
+  result.writeUInt16LE(1, 8)
+  result.writeUInt16LE(256, 10)
+  result.writeUInt32LE(input.kind ?? 1, 12)
+  result.writeUInt32LE(input.status ?? 0, 16)
+  result.writeUInt32LE(input.reason ?? 0, 20)
+  result.writeBigUInt64LE(input.requestId ?? 0n, 24)
+  result.writeUInt32LE(DXGI_REPLAY_SERVICE_REQUIRED_HEALTH_FLAGS, 32)
+  result.writeUInt32LE(1920, 36)
+  result.writeUInt32LE(1080, 40)
+  result.writeUInt32LE(15, 44)
+  result.writeBigInt64LE(10_000_000n, 48)
+  result.writeBigInt64LE(9_000_000_000n, 56)
+  result.writeBigInt64LE(9_001_200_000n, 64)
+  result.writeBigInt64LE(input.durationHns ?? 1_200_000n, 72)
+  result.writeBigUInt64LE(input.sampleCount ?? 3n, 80)
+  result.writeBigUInt64LE(1n, 88)
+  result.writeBigUInt64LE(input.mp4Bytes ?? 1024n, 96)
+  result.writeBigUInt64LE(input.sampleCount ?? 3n, 104)
+  result.writeBigUInt64LE(4096n, 112)
+  result.writeUInt32LE(1, 120)
+  result.writeInt32LE(0, 124)
+  const name = Buffer.from('Fixture Hardware H.264 Encoder')
+  result.writeUInt32LE(name.length, 128)
+  name.copy(result, 132)
+  return result
+}
+
+const available: DxgiReplayCapabilityAvailable = {
+  status: 'available', stages: [
+    'output-selected', 'd3d11-device-created', 'desktop-duplication-created',
+    'media-foundation-started', 'dxgi-device-manager-created',
+    'hardware-encoder-enumerated', 'encoder-activated', 'encoder-d3d11-aware',
+    'encoder-accepted-device-manager', 'gpu-bgra-to-nv12-supported',
+  ],
+  adapterIndex: 0, outputIndex: 0, bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+  vendorId: 1, deviceId: 2, deviceName: '\\\\.\\DISPLAY1',
+  encoderName: 'Fixture Hardware H.264 Encoder',
+}
+
+class FakeProcess extends EventEmitter implements DxgiReplayRuntimeProcess {
+  readonly stdout = new EventEmitter()
+  readonly stderr = new EventEmitter()
+  readonly stdin: { write: (data: string) => boolean; end: () => void }
+  killed = false
+  constructor(onWrite: (value: string, child: FakeProcess) => void = () => {}) {
+    super()
+    this.stdin = { write: (data) => { onWrite(data, this); return true }, end: () => {} }
+  }
+  kill(): boolean { this.killed = true; return true }
+  output(packet: Buffer, split = 0): void {
+    if (split > 0) {
+      this.stdout.emit('data', packet.subarray(0, split))
+      this.stdout.emit('data', packet.subarray(split))
+    } else this.stdout.emit('data', packet)
+  }
+  close(code: number | null = 0): void { this.emit('close', code, null) }
+}
+
+async function main(): Promise<void> {
+  check('DXGI runtime is off unless explicitly opted in',
+    !dxgiReplayRuntimeOptedIn([])
+      && dxgiReplayRuntimeOptedIn([DXGI_REPLAY_RUNTIME_SWITCH])
+      && dxgiReplayRuntimeOptedIn([], true)
+      && !dxgiReplayRuntimeOptedIn([DXGI_REPLAY_RUNTIME_SWITCH], false))
+
+  const locked = { status: 'unavailable', reason: 'duplicate-access-denied', stages: [] } as const
+  check('pure selector fails closed for platform, helper, locked session and missing health',
+    reasonOf(selectDxgiReplayRuntime({ optedIn: false, platform: 'win32', helperExists: true })) === 'switch-disabled'
+      && reasonOf(selectDxgiReplayRuntime({ optedIn: true, platform: 'linux', helperExists: true })) === 'unsupported-platform'
+      && reasonOf(selectDxgiReplayRuntime({ optedIn: true, platform: 'win32', helperExists: false })) === 'helper-missing'
+      && reasonOf(selectDxgiReplayRuntime({ optedIn: true, platform: 'win32', helperExists: true, capability: locked })) === 'capability-unavailable'
+      && reasonOf(selectDxgiReplayRuntime({ optedIn: true, platform: 'win32', helperExists: true, capability: available })) === 'native-not-ready')
+
+  const ready = parseDxgiReplayServicePacket(servicePacket())
+  check('only complete READY health evidence selects native',
+    selectDxgiReplayRuntime({ optedIn: true, platform: 'win32', helperExists: true, capability: available, ready }).backend === 'native-dxgi')
+
+  const stream = new DxgiReplayServicePacketParser()
+  check('fixed packet parser survives arbitrary chunking',
+    stream.push(servicePacket().subarray(0, 99)).length === 0
+      && stream.push(servicePacket().subarray(99)).length === 1)
+  stream.finish()
+  check('service parser rejects truncation, oversized storage and success contradictions',
+    throws(() => parseDxgiReplayServicePacket(servicePacket().subarray(0, 255)))
+      && throws(() => parseDxgiReplayServicePacket(servicePacket({ mp4Bytes: BigInt(DXGI_REPLAY_MAX_EXPORT_BYTES) + 1n })))
+      && throws(() => parseDxgiReplayServicePacket(servicePacket({ reason: 27 }))))
+  check('service parser requires exact health flags and request-id semantics',
+    throws(() => {
+      const value = servicePacket()
+      value.writeUInt32LE(DXGI_REPLAY_SERVICE_REQUIRED_HEALTH_FLAGS & ~(1 << 16), 32)
+      parseDxgiReplayServicePacket(value)
+    })
+      && throws(() => {
+        const value = servicePacket()
+        value.writeUInt32LE(DXGI_REPLAY_SERVICE_ALL_FLAGS + 1, 32)
+        parseDxgiReplayServicePacket(value)
+      })
+      && throws(() => parseDxgiReplayServicePacket(servicePacket({ status: 1, reason: 6, requestId: 1n })))
+      && throws(() => parseDxgiReplayServicePacket(servicePacket({ kind: 2, status: 1, reason: 32, requestId: 0n })))
+      && throws(() => parseDxgiReplayServicePacket(servicePacket({ kind: 3, status: 1, reason: 27, requestId: 1n }))))
+  const encoderFailure = parseDxgiReplayServicePacket(servicePacket({ kind: 1, status: 1, reason: 27 }))
+  check('locked and encoder failures retain explicit fail-closed reasons',
+    parseDxgiReplayServicePacket(servicePacket({ kind: 1, status: 1, reason: 6 })).reason === 'duplicate-access-denied'
+      && encoderFailure.status === 'unavailable' && encoderFailure.reason === 'encoder-output-failed')
+
+  const mp4 = validMp4()
+  const mp4Check = validateDxgiReplayMp4(mp4, 120, mp4.length, 1_000)
+  check('valid bounded fMP4 has exact monotone sample duration',
+    mp4Check.status === 'valid' && mp4Check.sampleCount === 3 && mp4Check.durationMs === 120)
+  const truncated = mp4.subarray(0, mp4.length - 1)
+  const withoutConfig = Buffer.from(mp4)
+  const avcCAt = withoutConfig.indexOf('avcC', 0, 'ascii')
+  if (avcCAt >= 0) withoutConfig.write('junk', avcCAt, 'ascii')
+  check('MP4 validation rejects truncation, missing codec config and insane duration',
+    validateDxgiReplayMp4(truncated, 120).status === 'invalid'
+      && validateDxgiReplayMp4(withoutConfig, 120).status === 'invalid'
+      && validateDxgiReplayMp4(mp4, 5_000, mp4.length, 1_000).status === 'invalid')
+
+  const work = path.resolve(process.argv[2] ?? '.')
+  mkdirSync(work, { recursive: true })
+  let spawned = 0
+  const common = {
+    enabled: true,
+    platform: 'win32' as const,
+    helperPath: 'fixture-helper.exe',
+    outputDirectory: work,
+    fileExists: () => true,
+    probe: async () => available,
+    startupTimeoutMs: 500,
+    snapshotTimeoutMs: 500,
+  }
+  const missing = new DxgiReplayRuntimeManager({ ...common, fileExists: () => false, spawnProcess: () => { spawned++; return new FakeProcess() } })
+  const missingSelection = await missing.start({ deviceName: '\\\\.\\DISPLAY1', retentionMs: 30_000 })
+  check('missing helper returns shipping without probing/spawning',
+    missingSelection.backend === 'shipping' && missingSelection.reason === 'helper-missing' && spawned === 0)
+
+  const lockedManager = new DxgiReplayRuntimeManager({ ...common, probe: async () => locked, spawnProcess: () => { spawned++; return new FakeProcess() } })
+  check('locked-session capability failure retains shipping backend',
+    (await lockedManager.start({ deviceName: '\\\\.\\DISPLAY1', retentionMs: 30_000 })).backend === 'shipping' && spawned === 0)
+
+  const failedChild = new FakeProcess()
+  const failedManager = new DxgiReplayRuntimeManager({ ...common, spawnProcess: () => { queueMicrotask(() => failedChild.output(servicePacket({ status: 1, reason: 27 }))); return failedChild } })
+  const failedSelection = await failedManager.start({ deviceName: '\\\\.\\DISPLAY1', retentionMs: 30_000 })
+  check('encoder failure before READY keeps shipping and stops candidate',
+    failedSelection.backend === 'shipping' && failedSelection.detail === 'encoder-output-failed')
+
+  let liveChild: FakeProcess
+  liveChild = new FakeProcess((command, child) => {
+    if (!command.startsWith('SNAPSHOT\t')) return
+    const [, id, output] = command.trimEnd().split('\t')
+    if (id === undefined || output === undefined) return
+    writeFileSync(output, mp4)
+    queueMicrotask(() => child.output(servicePacket({
+      kind: 2, requestId: BigInt(id), mp4Bytes: BigInt(mp4.length),
+    }), 71))
+  })
+  const liveManager = new DxgiReplayRuntimeManager({ ...common, spawnProcess: (_executable, args) => {
+    check('manager launches exact persistent service arguments',
+      args.includes('--serve') && args.includes('--retention-ms') && args.includes('30000'))
+    queueMicrotask(() => liveChild.output(servicePacket(), 17))
+    return liveChild
+  } })
+  check('complete capability plus READY promotes native',
+    (await liveManager.start({ deviceName: '\\\\.\\DISPLAY1', retentionMs: 30_000 })).backend === 'native-dxgi')
+  const snapshot = await liveManager.snapshot(1_000)
+  check('snapshot reads and validates bounded MP4 then returns in-memory bytes',
+    snapshot.status === 'ok' && snapshot.buffer.equals(mp4)
+      && snapshot.sampleCount === 3 && snapshot.durationMs === 120)
+  liveChild.close(7)
+  const afterDeath = liveManager.currentSelection()
+  check('runtime death immediately returns selection to shipping',
+    afterDeath.backend === 'shipping' && afterDeath.reason === 'native-runtime-failed')
+
+  const badChild = new FakeProcess((command, child) => {
+    if (!command.startsWith('SNAPSHOT\t')) return
+    const [, id, output] = command.trimEnd().split('\t')
+    if (id === undefined || output === undefined) return
+    writeFileSync(output, truncated)
+    queueMicrotask(() => child.output(servicePacket({
+      kind: 2, requestId: BigInt(id), mp4Bytes: BigInt(truncated.length),
+    })))
+  })
+  const badManager = new DxgiReplayRuntimeManager({ ...common, spawnProcess: () => {
+    queueMicrotask(() => badChild.output(servicePacket()))
+    return badChild
+  } })
+  await badManager.start({ deviceName: '\\\\.\\DISPLAY1', retentionMs: 30_000 })
+  const badSnapshot = await badManager.snapshot(1_000)
+  const afterBadExport = badManager.currentSelection()
+  check('malformed export fails closed and demotes native runtime',
+    badSnapshot.status === 'fallback' && afterBadExport.backend === 'shipping'
+      && afterBadExport.reason === 'native-export-failed')
+
+  let pendingCommand: { id: bigint; output: string } | null = null
+  let announceCommand!: () => void
+  const didCommand = new Promise<void>((resolve) => { announceCommand = resolve })
+  const serialChild = new FakeProcess((command) => {
+    if (!command.startsWith('SNAPSHOT\t')) return
+    const [, id, output] = command.trimEnd().split('\t')
+    if (id !== undefined && output !== undefined) {
+      pendingCommand = { id: BigInt(id), output }
+      announceCommand()
+    }
+  })
+  const serialManager = new DxgiReplayRuntimeManager({ ...common, spawnProcess: () => {
+    queueMicrotask(() => serialChild.output(servicePacket()))
+    return serialChild
+  } })
+  await serialManager.start({ deviceName: '\\\\.\\DISPLAY1', retentionMs: 30_000 })
+  const firstSnapshot = serialManager.snapshot(1_000)
+  const concurrentSnapshot = await serialManager.snapshot(1_000)
+  await didCommand
+  const command = pendingCommand as { id: bigint; output: string } | null
+  if (command === null) throw new Error('FAIL: first serialized snapshot command missing')
+  writeFileSync(command.output, mp4)
+  serialChild.output(servicePacket({
+    kind: 2, requestId: command.id, mp4Bytes: BigInt(mp4.length),
+  }))
+  check('one-service snapshot bound refuses concurrent stdin accumulation',
+    concurrentSnapshot.status === 'fallback'
+      && concurrentSnapshot.detail?.includes('already in flight') === true
+      && (await firstSnapshot).status === 'ok')
+  serialManager.stop()
+
+  const waitingChild = new FakeProcess()
+  let announceSpawn!: () => void
+  const didSpawn = new Promise<void>((resolve) => { announceSpawn = resolve })
+  const waitingManager = new DxgiReplayRuntimeManager({ ...common, startupTimeoutMs: 10_000, spawnProcess: () => {
+    announceSpawn()
+    return waitingChild
+  } })
+  const waitingStart = waitingManager.start({ deviceName: '\\\\.\\DISPLAY1', retentionMs: 30_000 })
+  await didSpawn
+  waitingManager.stop()
+  const stoppedStart = await waitingStart
+  check('stop resolves an outstanding READY wait without waiting for its deadline',
+    stoppedStart.backend === 'shipping' && stoppedStart.reason === 'native-not-ready')
+
+  const fleetChild = new FakeProcess((command, child) => {
+    if (!command.startsWith('SNAPSHOT\t')) return
+    const [, id, output] = command.trimEnd().split('\t')
+    if (id === undefined || output === undefined) return
+    writeFileSync(output, mp4)
+    queueMicrotask(() => child.output(servicePacket({
+      kind: 2, requestId: BigInt(id), mp4Bytes: BigInt(mp4.length),
+    })))
+  })
+  const statuses: string[] = []
+  const runtime = new DxgiReplayRuntime({
+    ...common,
+    spawnProcess: () => {
+      queueMicrotask(() => fleetChild.output(servicePacket()))
+      return fleetChild
+    },
+    onStatus: (displayId, selection) => statuses.push(`${displayId}:${selection.backend}`),
+  })
+  const synced = await runtime.sync([{
+    id: 7,
+    deviceName: '\\\\.\\DISPLAY1',
+    bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+  }], { enabled: true, retentionMs: 30_000, fps: 15 })
+  const appReplay = await runtime.snapshot(7, 1_000)
+  check('app-facing sync/snapshot API returns only a validated MP4 replay',
+    synced.get(7)?.backend === 'native-dxgi'
+      && appReplay?.mimeType === 'video/mp4'
+      && appReplay.replayFile === 'replay.mp4'
+      && appReplay.buffer.equals(mp4)
+      && statuses.includes('7:native-dxgi'))
+  runtime.retain(new Set())
+  check('app-facing retain stops displays removed by topology',
+    runtime.currentSelection(7) === null)
+
+  console.log(`dxgi replay runtime check: ${passed} passed`)
+}
+
+void main().catch((error: unknown) => {
+  console.error(error)
+  process.exitCode = 1
+})
