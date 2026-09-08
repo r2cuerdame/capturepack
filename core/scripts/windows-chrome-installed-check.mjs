@@ -1,7 +1,14 @@
 import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import {
+  assertProcessesPreserved,
+  identityKey,
+  selectOwnedProcessTrees,
+  traceProcessAncestry,
+  verifyChromeRoot,
+} from './windows-process-provenance.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const harnessFile = join(here, 'windows-chrome-installed-acceptance.mjs')
@@ -23,6 +30,16 @@ function check(name, condition) {
   if (condition) passed += 1
   else failed += 1
 }
+
+function throws(fn, pattern) {
+  try { fn(); return false } catch (error) { return pattern.test(String(error)) }
+}
+
+const root = { pid: 100, parentPid: 4, name: 'chrome.exe', executablePath: resolve('fixtures/chrome.exe'), commandLine: `chrome.exe --user-data-dir=${resolve('fixtures/profile')}`, creationTimeUtc: '2026-09-08T01:00:00.0000000Z' }
+const broker = { pid: 101, parentPid: 100, name: 'chrome.exe', creationTimeUtc: '2026-09-08T01:00:01.0000000Z' }
+const host = { pid: 102, parentPid: 101, name: 'CapturePack.exe', creationTimeUtc: '2026-09-08T01:00:02.0000000Z' }
+const prior = { pid: 90, parentPid: 4, name: 'chrome.exe', creationTimeUtc: '2026-09-08T00:00:00.0000000Z' }
+const fixtureProcesses = [root, broker, host, prior]
 
 const syntax = spawnSync(process.execPath, ['--check', harnessFile], { encoding: 'utf8' })
 check('headed acceptance harness parses as JavaScript', syntax.status === 0)
@@ -50,7 +67,47 @@ if (process.platform === 'win32') {
     registryProbe.status === 0 && typeof registryProbeResult?.keyExists === 'boolean' &&
       typeof registryProbeResult?.exists === 'boolean',
   )
+  const processProbe = spawnSync(process.execPath, [harnessFile, '--probe-processes'], {
+    encoding: 'utf8', windowsHide: true,
+  })
+  let processProbeResult = null
+  try { processProbeResult = JSON.parse(String(processProbe.stdout).trim()) } catch {}
+  check(
+    'the Windows process identity snapshot executes read-only or blocks fail-closed',
+    (processProbe.status === 0 && Number.isInteger(processProbeResult?.processCount) &&
+      Array.isArray(processProbeResult?.chrome) && processProbeResult.chrome.every((entry) =>
+        Number.isInteger(entry.pid) && typeof entry.creationTimeUtc === 'string')) ||
+      (processProbe.status !== 0 && String(processProbe.stderr).includes('BLOCKED: unable to snapshot Windows process identities safely')),
+  )
 }
+
+check(
+  'native-host ancestry reaches the owned Chrome root through an identity-checked chain',
+  traceProcessAncestry(fixtureProcesses, host, root, { strict: true }).map((entry) => entry.pid).join(',') === '102,101,100',
+)
+check(
+  'ancestry fails closed for an unrelated host, missing parent, cycle, and reused root PID',
+  throws(() => traceProcessAncestry(fixtureProcesses, prior, root, { strict: true }), /ended before owned root|missing parent/u) &&
+    throws(() => traceProcessAncestry([root, { ...host, parentPid: 999 }], host, root, { strict: true }), /missing parent PID 999/u) &&
+    throws(() => traceProcessAncestry([root, { ...broker, parentPid: 102, creationTimeUtc: host.creationTimeUtc }, { ...host, parentPid: 101 }], host, root, { strict: true }), /cycle/u) &&
+    throws(() => traceProcessAncestry([{ ...root, creationTimeUtc: '2026-09-08T02:00:00.0000000Z' }, host], host, root), /owned root identity is no longer live/u),
+)
+check(
+  'unique-profile launch accepts only a fresh Chrome root with the expected executable and profile',
+  identityKey(verifyChromeRoot(fixtureProcesses, root.pid, [prior], root.executablePath, resolve('fixtures/profile'))) === identityKey(root) &&
+    throws(() => verifyChromeRoot(fixtureProcesses, prior.pid, [prior], root.executablePath, resolve('fixtures/profile')), /reused pre-existing\/protected/u) &&
+    throws(() => verifyChromeRoot(fixtureProcesses, root.pid, [], root.executablePath, resolve('fixtures/other-profile')), /unique user-data-dir/u),
+)
+check(
+  'cleanup selection contains only identity-proven owned descendants and excludes pre-existing Chrome',
+  selectOwnedProcessTrees(fixtureProcesses, [root], [prior]).map((entry) => entry.pid).sort().join(',') === '100,101,102',
+)
+check(
+  'pre-existing Chrome preservation detects missing and PID-replaced browsers',
+  assertProcessesPreserved([prior], fixtureProcesses).length === 1 &&
+    throws(() => assertProcessesPreserved([prior], fixtureProcesses.filter((entry) => entry.pid !== prior.pid)), /killed or replaced/u) &&
+    throws(() => assertProcessesPreserved([prior], fixtureProcesses.map((entry) => entry.pid === prior.pid ? { ...entry, creationTimeUtc: '2026-09-08T03:00:00.0000000Z' } : entry)), /killed or replaced/u),
+)
 
 check(
   'the final trigger is a physical click on a UIA-discovered Chrome action',
@@ -66,11 +123,11 @@ check(
     harness.includes("'-Mode', 'InstallExtension'") && harness.includes("'--force-renderer-accessibility'"),
 )
 check(
-  'locked or shared Chrome sessions block before any registry mutation',
+  'locked sessions still block while pre-existing Chrome is snapshotted instead of rejected',
   harness.indexOf("processExists('LogonUI.exe')") < harness.indexOf('const registryBefore = registrySnapshot()') &&
-    harness.indexOf("processExists('chrome.exe')") < harness.indexOf('const registryBefore = registrySnapshot()') &&
-    harness.includes('close every pre-existing Chrome process or use a disposable Windows user') &&
-    harness.includes('BLOCKED: unable to inspect ${imageName} processes safely') &&
+    !harness.includes("processExists('chrome.exe')") &&
+    harness.includes('const preExistingChrome = chromeProcesses()') &&
+    harness.includes('preExistingChromePreserved') &&
     harness.includes('an earlier acceptance run still owns state; run --cleanup first'),
 )
 check(
@@ -86,16 +143,29 @@ check(
     harness.includes('native-host registry restoration mismatch'),
 )
 check(
-  'cleanup kills recorded PIDs and removes only paths owned below the artifact root',
-  harness.includes("spawnSync('taskkill.exe', ['/PID', String(pid), '/T', '/F']") &&
-    harness.includes('if (!ownedPath(candidate, parent))') &&
-    harness.includes('owned path survived cleanup'),
+  'cleanup identity-checks owned roots, protects prior Chrome and removes only owned paths',
+  harness.includes("spawnSync('taskkill.exe', ['/PID', String(root.pid), '/T', '/F']") &&
+    harness.includes('selectOwnedProcessTrees(before, [root], protectedChrome)') &&
+    harness.includes('assertProcessesPreserved(protectedChrome, chromeProcesses(after))') &&
+    harness.includes('refusing unsafe cleanup: run-state lacks PID/creation-time provenance') &&
+    harness.includes('if (!ownedPath(candidate, parent))') && harness.includes('owned path survived cleanup'),
 )
 check(
-  'Chrome-spawned native host provenance is opt-in and never touches stdout',
+  'Chrome-spawned native host evidence is ancestry-checked and never touches stdout',
   harness.includes('CAPTUREPACK_NATIVE_HOST_EVIDENCE') &&
+    harness.includes('traceProcessAncestry(processes, host, captureChromeRoot, { strict: true })') &&
+    harness.includes('native-host PID ${String(launch.pid)} exited before provenance inspection') &&
     nativeEntry.includes("process.env['CAPTUREPACK_NATIVE_HOST_EVIDENCE']") &&
     nativeEntry.includes('fs.appendFileSync') && !nativeEntry.includes('process.stdout.write'),
+)
+check(
+  'toolbar and editor UIA are constrained by unique title and owned PID/start-time ancestry',
+  harness.includes('const fixtureTitle = `${fixtureTitlePrefix} ${runId}`') &&
+    harness.includes("'-ExpectedRootPid', String(captureChromeRoot.pid)") &&
+    harness.includes("'-ExpectedRootCreationTimeUtc', captureChromeRoot.creationTimeUtc") &&
+    toolbar.includes('function Test-OwnedProcess') && toolbar.includes('$titleMatches') &&
+    toolbar.includes('(Test-OwnedProcess $item.Current.ProcessId)') &&
+    toolbar.includes('(Test-OwnedProcess $candidate.Current.ProcessId)'),
 )
 check(
   'capture ID, finish, pack identity and visible normal editor are correlated',

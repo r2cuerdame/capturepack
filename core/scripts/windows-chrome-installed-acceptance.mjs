@@ -18,13 +18,20 @@ import {
 import http from 'node:http'
 import { dirname, isAbsolute, join, normalize, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { terminateProcessTree } from './process-tree.mjs'
+import {
+  assertProcessesPreserved,
+  findProcess,
+  processIdentity,
+  selectOwnedProcessTrees,
+  traceProcessAncestry,
+  verifyChromeRoot,
+} from './windows-process-provenance.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const core = resolve(here, '..')
 const repo = resolve(core, '..')
 const hostKey = 'HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.capturepack.host'
-const fixtureTitle = 'CapturePack Acceptance Fixture'
+const fixtureTitlePrefix = 'CapturePack Acceptance Fixture'
 const scenarios = {
   long: { documentHeight: 7216, windowSize: '1024,720', deviceScaleFactor: null },
   responsive: { documentHeight: 5080, windowSize: '390,844', deviceScaleFactor: null },
@@ -114,6 +121,45 @@ function processExists(imageName) {
   throw new Error(`BLOCKED: unable to inspect ${imageName} processes safely`)
 }
 
+function windowsProcessSnapshot() {
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    'try {',
+    '  $rows = @(Get-CimInstance Win32_Process | ForEach-Object {',
+    '    if ($null -ne $_.CreationDate) {',
+    '      [ordered]@{',
+    '        pid = [int]$_.ProcessId',
+    '        parentPid = [int]$_.ParentProcessId',
+    '        name = [string]$_.Name',
+    '        executablePath = [string]$_.ExecutablePath',
+    '        commandLine = [string]$_.CommandLine',
+    "        creationTimeUtc = $_.CreationDate.ToUniversalTime().ToString('o')",
+    '      }',
+    '    }',
+    '  })',
+    '  $json = ConvertTo-Json -InputObject @($rows) -Compress -Depth 3',
+    '  [Console]::Out.Write([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json)))',
+    '} catch { [Console]::Error.WriteLine($_.Exception.Message); exit 2 }',
+  ].join('\n')
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+    encoding: 'utf8', windowsHide: true,
+  })
+  if (result.status !== 0) {
+    throw new Error(`BLOCKED: unable to snapshot Windows process identities safely: ${String(result.stderr || result.error)}`)
+  }
+  try {
+    const parsed = JSON.parse(Buffer.from(String(result.stdout).trim(), 'base64').toString('utf8'))
+    if (!Array.isArray(parsed)) throw new Error('process snapshot is not an array')
+    return parsed
+  } catch (error) {
+    throw new Error(`BLOCKED: Windows process snapshot was invalid: ${String(error)}`)
+  }
+}
+
+function chromeProcesses(processes = windowsProcessSnapshot()) {
+  return processes.filter((process) => String(process.name).toLowerCase() === 'chrome.exe')
+}
+
 function registrySnapshot() {
   const script = [
     "$key = $null",
@@ -179,16 +225,42 @@ async function waitFor(predicate, timeoutMs, label) {
   throw new Error(`${label} timed out after ${String(timeoutMs)} ms`)
 }
 
-async function stopChild(child) {
-  if (child === null || child === undefined || child.exitCode !== null || child.signalCode !== null) return
-  const killer = terminateProcessTree(child)
-  if (killer !== null) {
-    await Promise.race([
-      new Promise((done) => { killer.once('close', done); killer.once('error', done) }),
-      new Promise((done) => setTimeout(done, 10_000)),
-    ])
+async function recordSpawnedRoot(child, expectedExecutable, commandFragment) {
+  if (!Number.isInteger(child?.pid) || child.pid <= 0) throw new Error('spawned process has no valid PID')
+  return waitFor(() => {
+    const process = windowsProcessSnapshot().find((candidate) => candidate.pid === child.pid)
+    if (process === undefined) return null
+    if (normalize(resolve(process.executablePath)).toLowerCase() !== normalize(resolve(expectedExecutable)).toLowerCase()) {
+      throw new Error(`spawned PID ${String(child.pid)} executable does not match the owned binary`)
+    }
+    if (!String(process.commandLine).toLowerCase().includes(normalize(resolve(commandFragment)).toLowerCase())) {
+      throw new Error(`spawned PID ${String(child.pid)} command line lacks its owned path`)
+    }
+    return process
+  }, 5_000, `spawned PID ${String(child.pid)} identity`)
+}
+
+async function stopOwnedRoot(rootIdentity, protectedChrome) {
+  if (rootIdentity === null || rootIdentity === undefined) return { root: null, targets: [] }
+  const before = windowsProcessSnapshot()
+  const root = findProcess(before, rootIdentity)
+  if (root === null) {
+    assertProcessesPreserved(protectedChrome, chromeProcesses(before))
+    return { root: processIdentity(rootIdentity), targets: [], alreadyExited: true }
   }
-  await waitFor(() => child.exitCode !== null || child.signalCode !== null, 5_000, `PID ${String(child.pid)} exit`).catch(() => {})
+  const targets = selectOwnedProcessTrees(before, [root], protectedChrome)
+  const killed = spawnSync('taskkill.exe', ['/PID', String(root.pid), '/T', '/F'], {
+    encoding: 'utf8', windowsHide: true,
+  })
+  await waitFor(() => findProcess(windowsProcessSnapshot(), root) === null, 10_000, `owned PID ${String(root.pid)} exit`)
+  const after = windowsProcessSnapshot()
+  const preserved = assertProcessesPreserved(protectedChrome, chromeProcesses(after))
+  return {
+    root: processIdentity(root),
+    targets: targets.map(processIdentity),
+    taskkillStatus: killed.status,
+    preExistingChromePreserved: preserved,
+  }
 }
 
 function discoverExtensionId(profile, extensionDir) {
@@ -283,7 +355,7 @@ function packEvidence(packDir, expectedUrl) {
   }
 }
 
-async function fixtureServer(scenarioName, scenario) {
+async function fixtureServer(scenarioName, scenario, fixtureTitle) {
   const markerTop = Math.min(2475, Math.max(100, scenario.documentHeight - 180))
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${fixtureTitle}</title><style>html,body{margin:0}header{position:sticky;top:0;background:#18222f;color:white;padding:20px}main{height:${String(scenario.documentHeight)}px;background:linear-gradient(#fff,#7ad)}#acceptance-marker{position:absolute;left:123px;top:${String(markerTop)}px;width:240px;height:80px;background:#f85}</style></head><body><header>Toolbar gesture acceptance: ${scenarioName}</header><main><button id="acceptance-marker">Deterministic marker</button></main></body></html>`
   const server = http.createServer((request, response) => {
@@ -356,18 +428,33 @@ async function prepare(artifacts) {
 
 async function cleanup(artifacts, state, registryBefore) {
   const errors = []
-  for (const pid of [...(state.hostPids ?? []), ...(state.pids ?? [])]) {
-    if (!Number.isInteger(pid) || pid <= 0) continue
-    spawnSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { encoding: 'utf8', windowsHide: true })
+  const stopped = []
+  const protectedChrome = state.preExistingChrome ?? []
+  const provenanceStateValid = state.provenanceSchema === 1 &&
+    Array.isArray(state.preExistingChrome) && Array.isArray(state.chromeRoots) &&
+    Array.isArray(state.appRoots) && Array.isArray(state.hostProcesses)
+  if (!provenanceStateValid) {
+    errors.push('refusing unsafe cleanup: run-state lacks PID/creation-time provenance')
+  } else {
+    for (const root of [...state.chromeRoots, ...state.appRoots, ...state.hostProcesses].reverse()) {
+      try { stopped.push(await stopOwnedRoot(root, protectedChrome)) } catch (error) { errors.push(String(error)) }
+    }
   }
   try { restoreRegistry(registryBefore) } catch (error) { errors.push(String(error)) }
-  for (const candidate of [state.chromeProfile, state.appData, state.transient]) {
-    if (!candidate || !existsSync(candidate)) continue
-    try { removeOwned(candidate, artifacts) } catch (error) { errors.push(String(error)) }
+  if (errors.length === 0) {
+    for (const candidate of [state.chromeProfile, state.appData, state.transient]) {
+      if (!candidate || !existsSync(candidate)) continue
+      try { removeOwned(candidate, artifacts) } catch (error) { errors.push(String(error)) }
+    }
   }
+  let preExistingChromePreserved = []
+  try { preExistingChromePreserved = assertProcessesPreserved(protectedChrome, chromeProcesses()) } catch (error) { errors.push(String(error)) }
   const result = {
     registryRestored: JSON.stringify(registrySnapshot()) === JSON.stringify(registryBefore),
     pathsRemoved: [state.chromeProfile, state.appData, state.transient].filter(Boolean).every((path) => !existsSync(path)),
+    stopped,
+    preExistingChromeBefore: protectedChrome.map(processIdentity),
+    preExistingChromePreserved,
     errors,
   }
   if (!result.registryRestored || !result.pathsRemoved || errors.length > 0) throw new Error(`cleanup failed: ${JSON.stringify(result)}`)
@@ -377,7 +464,6 @@ async function cleanup(artifacts, state, registryBefore) {
 async function run(artifacts) {
   if (process.platform !== 'win32') throw new Error('headed Chrome acceptance requires Windows')
   if (processExists('LogonUI.exe')) throw new Error('BLOCKED: LogonUI is active; unlock the interactive Windows session')
-  if (processExists('chrome.exe')) throw new Error('BLOCKED: close every pre-existing Chrome process or use a disposable Windows user')
   const priorStateFile = join(artifacts, 'run-state.json')
   if (existsSync(priorStateFile)) {
     const priorState = JSON.parse(readFileSync(priorStateFile, 'utf8'))
@@ -407,7 +493,24 @@ async function run(artifacts) {
   const stateFile = join(artifacts, 'run-state.json')
   const registryFile = join(artifacts, 'registry-before.json')
   const registryBefore = registrySnapshot()
-  const state = { runId, scenario: scenarioName, transient, chromeProfile, appData, output, pids: [], hostPids: [] }
+  const preExistingChrome = chromeProcesses()
+  const preExistingChromeSnapshotAt = new Date().toISOString()
+  const fixtureTitle = `${fixtureTitlePrefix} ${runId}`
+  const state = {
+    provenanceSchema: 1,
+    runId,
+    scenario: scenarioName,
+    fixtureTitle,
+    transient,
+    chromeProfile,
+    appData,
+    output,
+    preExistingChromeSnapshotAt,
+    preExistingChrome: preExistingChrome.map(processIdentity),
+    chromeRoots: [],
+    appRoots: [],
+    hostProcesses: [],
+  }
   writeJson(registryFile, registryBefore)
   writeJson(stateFile, state)
   mkdirSync(chromeProfile, { recursive: true })
@@ -426,9 +529,14 @@ async function run(artifacts) {
   let verdict = null
   let extensionInstall = { method: 'command-line' }
   try {
-    fixture = await fixtureServer(scenarioName, scenario)
+    fixture = await fixtureServer(scenarioName, scenario, fixtureTitle)
     chrome = launchChrome(prepared.chrome, chromeProfile, prepared.extensionDir, fixture.url, env, scenario)
-    state.pids.push(chrome.pid)
+    const installChromeRoot = await waitFor(() => {
+      const processes = windowsProcessSnapshot()
+      if (!processes.some((process) => process.pid === chrome.pid)) return null
+      return verifyChromeRoot(processes, chrome.pid, preExistingChrome, prepared.chrome, chromeProfile)
+    }, 5_000, 'install Chrome root identity')
+    state.chromeRoots.push(processIdentity(installChromeRoot))
     writeJson(stateFile, state)
     let extensionId = await waitFor(
       () => discoverExtensionId(chromeProfile, prepared.extensionDir),
@@ -440,6 +548,8 @@ async function run(artifacts) {
         '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
         '-File', join(here, 'windows-chrome-toolbar.ps1'),
         '-Mode', 'InstallExtension', '-WindowTitle', fixtureTitle,
+        '-ExpectedRootPid', String(installChromeRoot.pid),
+        '-ExpectedRootCreationTimeUtc', installChromeRoot.creationTimeUtc,
         '-ExtensionPath', prepared.extensionDir, '-TargetUrl', fixture.url,
         '-TimeoutSeconds', '45',
       ], { windowsHide: false })
@@ -453,7 +563,7 @@ async function run(artifacts) {
         'UI-loaded unpacked extension ID discovery',
       )
     }
-    await stopChild(chrome)
+    await stopOwnedRoot(installChromeRoot, preExistingChrome)
     chrome = null
 
     const launcher = join(appData, 'capturepack-host.cmd')
@@ -477,18 +587,44 @@ async function run(artifacts) {
       '--no-global-shortcut',
       '--no-login-item',
     ], { stdio: 'ignore', env })
-    state.pids.push(app.pid)
+    const appRoot = await recordSpawnedRoot(app, prepared.appExe.path, appData)
+    state.appRoots.push(processIdentity(appRoot))
     writeJson(stateFile, state)
     await waitFor(() => existsSync(logFile) && readFileSync(logFile, 'utf8').includes('DOM bridge listening'), 45_000, 'CapturePack DOM bridge')
 
     chrome = launchChrome(prepared.chrome, chromeProfile, prepared.extensionDir, fixture.url, env, scenario)
-    state.pids.push(chrome.pid)
+    const captureChromeRoot = await waitFor(() => {
+      const processes = windowsProcessSnapshot()
+      if (!processes.some((process) => process.pid === chrome.pid)) return null
+      return verifyChromeRoot(processes, chrome.pid, preExistingChrome, prepared.chrome, chromeProfile)
+    }, 5_000, 'capture Chrome root identity')
+    state.chromeRoots.push(processIdentity(captureChromeRoot))
     writeJson(stateFile, state)
     await waitFor(() => readFileSync(logFile, 'utf8').includes(`[chrome] extension ${prepared.extensionVersion} connected, protocol v1`), 30_000, 'native-host handshake')
+    const hostLaunches = await waitFor(() => {
+      if (!existsSync(hostEvidence)) return null
+      const launches = readFileSync(hostEvidence, 'utf8').trim().split(/\r?\n/u).filter(Boolean).map((line) => JSON.parse(line))
+      if (launches.length === 0) return null
+      const processes = windowsProcessSnapshot()
+      return launches.map((launch) => {
+        const host = processes.find((process) => process.pid === launch.pid)
+        if (host === undefined) throw new Error(`native-host PID ${String(launch.pid)} exited before provenance inspection`)
+        if (host.parentPid !== launch.ppid) throw new Error(`native-host PID ${String(launch.pid)} parent identity changed`)
+        const ancestry = traceProcessAncestry(processes, host, captureChromeRoot, { strict: true })
+        if (!launch.argv.some((arg) => arg === `chrome-extension://${extensionId}/`) || !launch.argv.some((arg) => arg.startsWith('--parent-window='))) {
+          throw new Error('native host launch lacks Chrome origin/parent-window arguments')
+        }
+        return { ...launch, process: processIdentity(host), ancestry: ancestry.map(processIdentity) }
+      })
+    }, 10_000, 'native-host process ancestry')
+    state.hostProcesses = hostLaunches.map((launch) => launch.process)
+    writeJson(stateFile, state)
     const clickOutput = command('powershell.exe', [
       '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
       '-File', join(here, 'windows-chrome-toolbar.ps1'),
       '-Mode', 'ClickAction', '-WindowTitle', fixtureTitle, '-TimeoutSeconds', '30',
+      '-ExpectedRootPid', String(captureChromeRoot.pid),
+      '-ExpectedRootCreationTimeUtc', captureChromeRoot.creationTimeUtc,
     ], { windowsHide: false })
     const click = JSON.parse(clickOutput.split(/\r?\n/u).at(-1))
 
@@ -504,17 +640,17 @@ async function run(artifacts) {
       '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
       '-File', join(here, 'windows-chrome-toolbar.ps1'),
       '-Mode', 'FindEditor', '-WindowTitle', 'CapturePack', '-TimeoutSeconds', '30',
+      '-ExpectedRootPid', String(appRoot.pid),
+      '-ExpectedRootCreationTimeUtc', appRoot.creationTimeUtc,
     ], { windowsHide: false })
     const editor = JSON.parse(editorOutput.split(/\r?\n/u).at(-1))
     const packDir = join(output, persisted.basename)
     const pack = packEvidence(packDir, fixture.url)
     if (pack.packId !== persisted.packId) throw new Error(`pack identity mismatch: ${pack.packId} != ${persisted.packId}`)
-    const hostLaunch = JSON.parse(readFileSync(hostEvidence, 'utf8').trim().split(/\r?\n/u).at(-1))
+    const hostLaunch = hostLaunches.at(-1)
     if (!hostLaunch.argv.some((arg) => arg === `chrome-extension://${extensionId}/`) || !hostLaunch.argv.some((arg) => arg.startsWith('--parent-window='))) {
       throw new Error('native host launch lacks Chrome origin/parent-window arguments')
     }
-    state.hostPids.push(hostLaunch.pid)
-    writeJson(stateFile, state)
     verdict = {
       schema: 1,
       status: 'PASS',
@@ -527,7 +663,12 @@ async function run(artifacts) {
       extensionVersion: prepared.extensionVersion,
       extensionInstall,
       pipeSuffix: suffix,
+      fixtureTitle,
       fixtureUrl: fixture.url,
+      preExistingChromeSnapshotAt,
+      preExistingChrome: preExistingChrome.map(processIdentity),
+      chromeRoot: processIdentity(captureChromeRoot),
+      chromeLaunches: state.chromeRoots.map(processIdentity),
       action: click,
       captureId: persisted.captureId,
       pack,
@@ -541,8 +682,6 @@ async function run(artifacts) {
     throw error
   } finally {
     if (fixture !== null) await new Promise((done) => fixture.server.close(done))
-    await stopChild(chrome)
-    await stopChild(app)
     let cleanupResult
     try { cleanupResult = await cleanup(artifacts, state, registryBefore) }
     catch (error) { cleanupResult = { registryRestored: false, pathsRemoved: false, errors: [String(error)] }; if (verdict?.status === 'PASS') verdict.status = 'FAIL' }
@@ -553,10 +692,15 @@ async function run(artifacts) {
 }
 
 async function main() {
-  const mode = process.argv.includes('--prepare') ? 'prepare' : process.argv.includes('--run') ? 'run' : process.argv.includes('--cleanup') ? 'cleanup' : process.argv.includes('--probe-registry') ? 'probe-registry' : null
-  if (mode === null) throw new Error('choose exactly one of --prepare, --run, --cleanup, or --probe-registry')
+  const mode = process.argv.includes('--prepare') ? 'prepare' : process.argv.includes('--run') ? 'run' : process.argv.includes('--cleanup') ? 'cleanup' : process.argv.includes('--probe-registry') ? 'probe-registry' : process.argv.includes('--probe-processes') ? 'probe-processes' : null
+  if (mode === null) throw new Error('choose exactly one of --prepare, --run, --cleanup, --probe-registry, or --probe-processes')
   if (mode === 'probe-registry') {
     console.log(JSON.stringify(registrySnapshot()))
+    return
+  }
+  if (mode === 'probe-processes') {
+    const processes = windowsProcessSnapshot()
+    console.log(JSON.stringify({ processCount: processes.length, chrome: chromeProcesses(processes).map(processIdentity) }))
     return
   }
   const artifacts = resolve(option('artifacts', join(core, 'release', `windows-chrome-${Date.now()}`)))

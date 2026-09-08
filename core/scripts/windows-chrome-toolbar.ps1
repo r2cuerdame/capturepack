@@ -3,6 +3,8 @@ param(
   [ValidateSet('InstallExtension', 'ClickAction', 'FindEditor')]
   [string]$Mode,
   [string]$WindowTitle = 'CapturePack Acceptance Fixture',
+  [int]$ExpectedRootPid,
+  [string]$ExpectedRootCreationTimeUtc,
   [string]$ExtensionPath,
   [string]$TargetUrl,
   [int]$TimeoutSeconds = 30
@@ -24,16 +26,56 @@ public static class CapturePackAcceptanceMouse {
 }
 '@
 
-function Find-NamedWindow([string]$NameFragment) {
+function Get-ProcessCreationTimeUtc([Microsoft.Management.Infrastructure.CimInstance]$Process) {
+  return $Process.CreationDate.ToUniversalTime().ToString('o')
+}
+
+function Test-OwnedProcess([int]$ProcessId) {
+  if ($ExpectedRootPid -le 0 -or [string]::IsNullOrWhiteSpace($ExpectedRootCreationTimeUtc)) {
+    throw 'ExpectedRootPid and ExpectedRootCreationTimeUtc are required'
+  }
+  $seen = @{}
+  $currentPid = $ProcessId
+  $childCreation = $null
+  while ($currentPid -gt 0) {
+    if ($seen.ContainsKey($currentPid)) { throw "process ancestry cycle at PID $currentPid" }
+    $seen[$currentPid] = $true
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId = $currentPid" -ErrorAction Stop
+    if ($null -eq $process) { throw "process ancestry missing PID $currentPid" }
+    $creation = Get-ProcessCreationTimeUtc $process
+    if ($null -ne $childCreation -and [DateTimeOffset]::Parse($creation) -gt [DateTimeOffset]::Parse($childCreation)) {
+      throw "process ancestry crossed reused parent PID $currentPid"
+    }
+    if ($currentPid -eq $ExpectedRootPid) {
+      return [string]::Equals($creation, $ExpectedRootCreationTimeUtc, [StringComparison]::OrdinalIgnoreCase)
+    }
+    $childCreation = $creation
+    $currentPid = [int]$process.ParentProcessId
+  }
+  return $false
+}
+
+function Find-NamedWindow([string]$ExactFixtureTitle) {
   $desktop = [Windows.Automation.AutomationElement]::RootElement
   $windows = $desktop.FindAll(
     [Windows.Automation.TreeScope]::Children,
     [Windows.Automation.Condition]::TrueCondition
   )
+  $matches = @()
   foreach ($window in $windows) {
-    if ($window.Current.Name -like "*$NameFragment*") { return $window }
+    $name = $window.Current.Name
+    $titleMatches = if ($Mode -eq 'FindEditor') {
+      $name.StartsWith($ExactFixtureTitle, [StringComparison]::Ordinal)
+    } else {
+      $name -eq $ExactFixtureTitle -or $name.StartsWith("$ExactFixtureTitle - ", [StringComparison]::Ordinal)
+    }
+    if (
+      $titleMatches -and
+      (Test-OwnedProcess $window.Current.ProcessId)
+    ) { $matches += $window }
   }
-  return $null
+  if ($matches.Count -gt 1) { throw "multiple owned windows matched exact fixture title: $ExactFixtureTitle" }
+  return $matches | Select-Object -First 1
 }
 
 function Find-Control(
@@ -51,7 +93,8 @@ function Find-Control(
       $type -in @('ControlType.Button', 'ControlType.CheckBox', 'ControlType.MenuItem', 'ControlType.ListItem') -and
       ($item.Current.Name -match $NamePattern -or $item.Current.AutomationId -match $AutomationIdPattern) -and
       $item.Current.IsEnabled -and
-      -not $item.Current.IsOffscreen
+      -not $item.Current.IsOffscreen -and
+      (Test-OwnedProcess $item.Current.ProcessId)
     ) { return $item }
   }
   return $null
@@ -68,7 +111,8 @@ function Find-FolderDialog {
       $candidate.Current.ControlType.ProgrammaticName -eq 'ControlType.Window' -and
       $candidate.Current.ClassName -eq '#32770' -and
       $candidate.Current.IsEnabled -and
-      -not $candidate.Current.IsOffscreen
+      -not $candidate.Current.IsOffscreen -and
+      (Test-OwnedProcess $candidate.Current.ProcessId)
     ) { return $candidate }
   }
   return $null
@@ -96,6 +140,9 @@ function Click-Physical([Windows.Automation.AutomationElement]$Element) {
     width = [int]$rect.Width
     height = [int]$rect.Height
     clickedAt = [DateTimeOffset]::UtcNow.ToString('o')
+    processId = $Element.Current.ProcessId
+    ownedRootPid = $ExpectedRootPid
+    ownedRootCreationTimeUtc = $ExpectedRootCreationTimeUtc
   }
 }
 
