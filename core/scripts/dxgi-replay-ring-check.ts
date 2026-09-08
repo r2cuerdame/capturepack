@@ -202,7 +202,7 @@ check(
 function runPacket({
   status = 0,
   reason = 0,
-  flags = 0x0fff,
+  flags = 0x20fff,
 }: {
   status?: number
   reason?: number
@@ -248,7 +248,8 @@ check(
     && completedRun.rotation === 1
     && completedRun.encodedSamples === 29n
     && completedRun.ringUnits === 29n
-    && completedRun.stages.includes('sample-retained'),
+    && completedRun.stages.includes('sample-retained')
+    && completedRun.stages.includes('cursor-composited'),
 )
 check(
   'capture summary counts retained codec configuration inside the ring bound',
@@ -280,6 +281,7 @@ check(
 check(
   'capture summary rejects capability-only success and impossible counters',
   throws(() => parseDxgiReplayRunResult(runPacket({ flags: 0x00ff })))
+    && throws(() => parseDxgiReplayRunResult(runPacket({ flags: 0x0fff })))
     && throws(() => {
       const value = runPacket()
       value.writeBigUInt64LE(31n, 120)
@@ -290,6 +292,12 @@ check(
       value.writeUInt32LE(32, 16)
       parseDxgiReplayRunResult(value)
     }),
+)
+check(
+  'capture summary preserves cursor composition failure',
+  parseDxgiReplayRunResult(
+    runPacket({ status: 1, reason: 41, flags: 0x0fff }),
+  ).reason === 'cursor-composition-unavailable',
 )
 
 async function checkWrapperOutcomes(): Promise<void> {

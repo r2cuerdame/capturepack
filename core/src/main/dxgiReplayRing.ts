@@ -64,6 +64,16 @@ const runReasons = [
   'reinitialize-failed',
   'capture-deadline-failed',
   'ring-rejected',
+  'no-safe-snapshot',
+  'codec-config-invalid',
+  'codec-config-changed',
+  'export-create-failed',
+  'export-write-failed',
+  'export-finalize-failed',
+  'export-structure-invalid',
+  'export-decode-failed',
+  'service-protocol-invalid',
+  'cursor-composition-unavailable',
 ] as const
 
 const runStageBits = [
@@ -80,10 +90,11 @@ const runStageBits = [
   ['h264-sample-produced', 1 << 10],
   ['sample-retained', 1 << 11],
   ['pipeline-reinitialized', 1 << 12],
+  ['cursor-composited', 1 << 17],
 ] as const
 
 const ALL_RUN_STAGE_BITS = runStageBits.reduce((bits, [, bit]) => bits | bit, 0)
-const REQUIRED_COMPLETED_RUN_BITS = (1 << 12) - 1
+const REQUIRED_COMPLETED_RUN_BITS = ((1 << 12) - 1) | (1 << 17)
 const MAXIMUM_NATIVE_RING_BYTES = 64n * 1024n * 1024n
 
 export type DxgiReplayNativeUnavailableReason =
