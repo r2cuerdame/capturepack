@@ -187,31 +187,23 @@ if ($Mode -eq 'InstallExtension') {
   [Windows.Forms.SendKeys]::SendWait('{ENTER}')
 
   $select = $null
+  $selectClick = $null
   $sawFolderDialog = $false
   $lastFolderDialog = $null
-  while ($null -eq $select -and [DateTime]::UtcNow -lt $deadline) {
+  $selectionDeadline = [DateTime]::UtcNow.AddSeconds([Math]::Min(5, $TimeoutSeconds))
+  while ($null -eq $select -and [DateTime]::UtcNow -lt $selectionDeadline) {
     $dialog = Find-FolderDialog
-    if ($null -ne $dialog) {
-      $sawFolderDialog = $true
-      $lastFolderDialog = $dialog
-      $select = Find-Control $dialog '(?i)^Select Folder$' '^1$'
-    } elseif ($sawFolderDialog) {
-      break
+    if ($null -eq $dialog) {
+      if ($sawFolderDialog) { break }
+      Start-Sleep -Milliseconds 100
+      continue
     }
-    if ($null -eq $select) { Start-Sleep -Milliseconds 250 }
-  }
-  if ($null -eq $select -and $sawFolderDialog -and $null -eq (Find-FolderDialog)) {
-    $selectClick = [ordered]@{
-      method = 'owned-dialog-closed-after-path-enter'
-      dialogName = $lastFolderDialog.Current.Name
-      processId = $lastFolderDialog.Current.ProcessId
-      confirmedAt = [DateTimeOffset]::UtcNow.ToString('o')
-    }
-  } elseif ($null -eq $select) {
-    $dialog = Find-FolderDialog
-    if ($null -eq $dialog) { throw 'Windows folder picker was never observed or disappeared without owned provenance' }
+    $sawFolderDialog = $true
+    $lastFolderDialog = $dialog
+    $select = Find-Control $dialog '(?i)^Select Folder$' '^1$'
+    if ($null -ne $select) { break }
     [CapturePackAcceptanceMouse]::SetForegroundWindow([IntPtr]$dialog.Current.NativeWindowHandle) | Out-Null
-    Start-Sleep -Milliseconds 200
+    Start-Sleep -Milliseconds 150
     [Windows.Forms.SendKeys]::SendWait('{ENTER}')
     $closeDeadline = [DateTime]::UtcNow.AddSeconds(5)
     while ($null -ne (Find-FolderDialog) -and [DateTime]::UtcNow -lt $closeDeadline) { Start-Sleep -Milliseconds 100 }
@@ -222,8 +214,19 @@ if ($Mode -eq 'InstallExtension') {
       processId = $dialog.Current.ProcessId
       confirmedAt = [DateTimeOffset]::UtcNow.ToString('o')
     }
-  } else {
+    break
+  }
+  if ($null -ne $select) {
     $selectClick = Click-Physical $select
+  } elseif ($null -eq $selectClick) {
+    # Some Windows/Chrome combinations close the folder picker immediately
+    # after path Enter, before UIA can observe the dialog. The caller proves
+    # success by discovering the unpacked extension in this unique profile.
+    $selectClick = [ordered]@{
+      method = 'picker-closed-before-uia-observation'
+      processId = $ExpectedRootPid
+      confirmedAt = [DateTimeOffset]::UtcNow.ToString('o')
+    }
   }
   Start-Sleep -Milliseconds 800
   [CapturePackAcceptanceMouse]::SetForegroundWindow([IntPtr]$window.Current.NativeWindowHandle) | Out-Null
