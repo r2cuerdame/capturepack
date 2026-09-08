@@ -58,6 +58,7 @@ const VIDEO_PROFILE_CHECKS = new Set([
   'check:fmp4-sample-timeline',
   'check:processor-qpc-latency',
   'check:dxgi-replay-ring',
+  'check:dxgi-replay-runtime',
   'check:settings',
   'check:hotkeys',
   'check:about',

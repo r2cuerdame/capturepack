@@ -4,8 +4,8 @@ Issue [#138](https://github.com/r2cuerdame/capturepack/issues/138) replaces the
 always-on Windows replay path only after the replacement proves lower overhead
 and preserves replay timing, retention, fallback, and still capture.
 
-The native helper now contains the next bounded production slice, while the
-shipping backend remains unchanged:
+The native helper now contains a bounded opt-in production candidate. The
+shipping backend stays live and remains the default:
 
 `DXGI Desktop Duplication -> D3D11 BGRA surface -> D3D11 video processor NV12
 surface -> adapter-bound Media Foundation hardware H.264 MFT -> bounded native
@@ -19,9 +19,13 @@ accepted. Unsupported duplication, rotation, GPU conversion, or encoding is an
 explicit unavailable result; this helper never substitutes a CPU converter or
 software encoder.
 
-The existing Chromium/MediaRecorder replay flow, its declared GDI fallback, and
-the normal still-image capture flow are not routed through this helper. Runtime
-selection and MP4 export remain a later slice.
+The existing Chromium/MediaRecorder replay flow and its declared GDI fallback
+remain live. The exact `--dxgi-native-replay` process switch permits a native
+candidate only after capability probing and a successful service `READY`
+health packet. Missing helper, locked session, encoder failure, malformed
+protocol, invalid export, timeout, or service death retains or immediately
+returns to the shipping replay path. The normal still-image capture flow is
+unchanged and is never routed through this helper.
 
 ## Modes and wire contracts
 
@@ -31,6 +35,11 @@ selection and MP4 export remain a later slice.
   15 fps and emits exactly one 256-byte `CPNRUN01` summary. A completed summary
   requires evidence of a real desktop frame, GPU NV12 conversion, a real H.264
   output sample, and retention in the native ring.
+- `--serve --retention-ms 1000..600000` runs the persistent export service.
+  It accepts bounded `SNAPSHOT\t<request-id>\t<absolute-path>` commands and a
+  `STOP` command on stdin, and emits exact 256-byte `CPNSRV01` READY, SNAPSHOT,
+  or FATAL packets. A successful READY is emitted only after an internal
+  keyframe/config-safe snapshot has been muxed and decoded successfully.
 - `--self-test` opens neither the desktop nor a codec. It exercises the native
   timestamp, geometry, encoder-transition, retention, keyframe/configuration,
   and device-loss/reinitialization contracts.
@@ -42,11 +51,23 @@ Foundation 100 ns timestamp so output samples are not mapped back through a
 lossy inverse conversion.
 
 The ring has independent byte, time, and access-unit count bounds. Its snapshots
-start on a clean point and carry the matching `MF_MT_MPEG_SEQUENCE_HEADER`.
+are immutable deep copies, start on an IDR clean point, carry validated matching
+SPS/PPS configuration, remain inside one pipeline generation, and rebase their
+timestamps to zero while preserving monotonic duration.
 Reinitialization advances the generation, clears the old configuration and
 access units, and refuses predictive frames until a new clean point is
 available. An unexpected encoder stream-format change is terminal and
 fail-closed, so incompatible codec generations cannot be joined by a cut.
+
+Snapshot export uses the Windows Media Foundation fragmented MP4 sink and sink
+writer with converters explicitly disabled. The helper supplies the retained
+hardware H.264 access units directly; there is no external ffmpeg executable,
+CPU pixel conversion, or software H.264 fallback. Success requires bounded
+`ftyp`/`moov`/`moof`/non-empty `mdat` structure and a complete Media Foundation
+Source Reader decode whose sample count, monotonic timestamps, dimensions, and
+duration agree with the snapshot. The application independently validates the
+fragmented MP4 structure, AVC configuration, sample timeline, size, sample
+count, and duration before accepting its bytes.
 
 Desktop-duplication access loss and D3D device removal/reset/hang cause a bounded
 full-pipeline rebuild. The output is re-selected by its exact device identity;
@@ -61,7 +82,12 @@ npm run check:dxgi-replay-ring
 ```
 
 The gate compiles the helper, requires each named native self-test marker, and
-exercises the strict capability and run-summary parsers.
+exercises the strict capability and run-summary parsers. Runtime/export and
+application-switch contracts are covered by:
+
+```powershell
+npm run check:dxgi-replay-runtime
+```
 
 ## Managed Windows field acceptance
 
@@ -79,9 +105,10 @@ Or use exact physical-pixel bounds, including a negative display origin:
 npm run qa:dxgi-replay-ring -- --left -1920 --top 0 --native-width 1920 --native-height 1080 --capture-ms 3000
 ```
 
-The JSON result proves only the bounded native helper run on that managed host.
-It is not proof of a valid exported MP4, runtime fallback selection, sustained
-performance, or screenshot non-regression. Those require the next integration
-slice and the recorded DevHotel CPU/GPU/memory/latency and application-flow
-acceptance matrix. If no managed Windows room is available, leave that gate
-unverified; do not substitute an ad-hoc local desktop run.
+The remaining field gate must prove the full real unlocked-host path reaches
+READY and exports a playable recent-history MP4 through the application. Record
+the room/session, build identity, output identity, hardware encoder, duration,
+sample/keyframe counts, and resource measurements. If no managed Windows room
+is available, leave that gate unverified; do not substitute an ad-hoc local
+desktop run. A locked LogonUI session returning `E_ACCESSDENIED` is an expected
+fail-closed unavailable result and is not a reason to weaken the gate.
