@@ -104,10 +104,14 @@ function fileVersion(file) {
 }
 
 function processExists(imageName) {
-  const out = spawnSync('tasklist.exe', ['/FI', `IMAGENAME eq ${imageName}`, '/FO', 'CSV', '/NH'], {
-    encoding: 'utf8', windowsHide: true,
-  }).stdout ?? ''
-  return new RegExp(`"?${imageName.replace('.', '\\.')}"?`, 'iu').test(out)
+  const processName = imageName.replace(/\.exe$/iu, '').replace(/'/g, "''")
+  const result = spawnSync('powershell.exe', [
+    '-NoProfile', '-NonInteractive', '-Command',
+    `$found = Get-Process -Name '${processName}' -ErrorAction SilentlyContinue; if ($null -ne $found) { exit 0 }; exit 1`,
+  ], { encoding: 'utf8', windowsHide: true })
+  if (result.status === 0) return true
+  if (result.status === 1) return false
+  throw new Error(`BLOCKED: unable to inspect ${imageName} processes safely`)
 }
 
 function registrySnapshot() {
@@ -350,6 +354,13 @@ async function run(artifacts) {
   if (process.platform !== 'win32') throw new Error('headed Chrome acceptance requires Windows')
   if (processExists('LogonUI.exe')) throw new Error('BLOCKED: LogonUI is active; unlock the interactive Windows session')
   if (processExists('chrome.exe')) throw new Error('BLOCKED: close every pre-existing Chrome process or use a disposable Windows user')
+  const priorStateFile = join(artifacts, 'run-state.json')
+  if (existsSync(priorStateFile)) {
+    const priorState = JSON.parse(readFileSync(priorStateFile, 'utf8'))
+    if (typeof priorState.transient === 'string' && existsSync(priorState.transient)) {
+      throw new Error('BLOCKED: an earlier acceptance run still owns state; run --cleanup first')
+    }
+  }
   const prepared = JSON.parse(readFileSync(join(artifacts, 'prepare.json'), 'utf8'))
   const scenarioName = option('scenario', 'long')
   const scenario = scenarios[scenarioName]

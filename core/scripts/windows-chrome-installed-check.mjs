@@ -53,7 +53,9 @@ check(
   'locked or shared Chrome sessions block before any registry mutation',
   harness.indexOf("processExists('LogonUI.exe')") < harness.indexOf('const registryBefore = registrySnapshot()') &&
     harness.indexOf("processExists('chrome.exe')") < harness.indexOf('const registryBefore = registrySnapshot()') &&
-    harness.includes('close every pre-existing Chrome process or use a disposable Windows user'),
+    harness.includes('close every pre-existing Chrome process or use a disposable Windows user') &&
+    harness.includes('BLOCKED: unable to inspect ${imageName} processes safely') &&
+    harness.includes('an earlier acceptance run still owns state; run --cleanup first'),
 )
 check(
   'the exact Chrome registry value is journaled, restored and verified in cleanup',
