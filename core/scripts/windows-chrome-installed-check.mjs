@@ -30,8 +30,11 @@ if (process.platform === 'win32') {
     const escaped = file.replace(/'/g, "''")
     const parsed = spawnSync('powershell.exe', [
       '-NoProfile', '-NonInteractive', '-Command',
-      `$errors=$null; [void][System.Management.Automation.Language.Parser]::ParseFile('${escaped}',[ref]$null,[ref]$errors); if($errors.Count){$errors | ForEach-Object { Write-Error $_ }; exit 1}`,
+      `$parseTokens=$null; $parseErrors=$null; ` +
+      `[void][System.Management.Automation.Language.Parser]::ParseFile('${escaped}',[ref]$parseTokens,[ref]$parseErrors); ` +
+      `if(@($parseErrors).Count){$parseErrors | ForEach-Object { [Console]::Error.WriteLine($_.ToString()) }; exit 1}`,
     ], { encoding: 'utf8', windowsHide: true })
+    if (parsed.status !== 0) process.stderr.write(String(parsed.stderr || parsed.stdout || parsed.error))
     check(`${file.split(/[\\/]/u).at(-1)} parses as PowerShell`, parsed.status === 0)
   }
 }
