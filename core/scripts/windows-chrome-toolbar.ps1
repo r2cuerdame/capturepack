@@ -100,6 +100,28 @@ function Find-Control(
   return $null
 }
 
+function Find-ControlInOwnedRoot(
+  [Windows.Automation.AutomationElement]$Root,
+  [string]$NamePattern,
+  [string]$AutomationIdPattern = '(?!)'
+) {
+  if (-not (Test-OwnedProcess $Root.Current.ProcessId)) { throw 'UIA root is not owned by the expected Chrome tree' }
+  $all = $Root.FindAll(
+    [Windows.Automation.TreeScope]::Descendants,
+    [Windows.Automation.Condition]::TrueCondition
+  )
+  foreach ($item in $all) {
+    $type = $item.Current.ControlType.ProgrammaticName
+    if (
+      $type -in @('ControlType.Button', 'ControlType.CheckBox', 'ControlType.MenuItem', 'ControlType.ListItem') -and
+      ($item.Current.Name -match $NamePattern -or $item.Current.AutomationId -match $AutomationIdPattern) -and
+      $item.Current.IsEnabled -and
+      -not $item.Current.IsOffscreen
+    ) { return $item }
+  }
+  return $null
+}
+
 function Find-FolderDialog {
   $desktop = [Windows.Automation.AutomationElement]::RootElement
   $windows = $desktop.FindAll(
@@ -200,7 +222,7 @@ if ($Mode -eq 'InstallExtension') {
     }
     $sawFolderDialog = $true
     $lastFolderDialog = $dialog
-    $select = Find-Control $dialog '(?i)^Select Folder$' '^1$'
+    $select = Find-ControlInOwnedRoot $dialog '(?i)^Select Folder$' '^1$'
     if ($null -ne $select) { break }
     [CapturePackAcceptanceMouse]::SetForegroundWindow([IntPtr]$dialog.Current.NativeWindowHandle) | Out-Null
     Start-Sleep -Milliseconds 150
