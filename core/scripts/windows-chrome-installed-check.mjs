@@ -64,7 +64,12 @@ check(
 )
 check(
   'the exact Chrome registry value is journaled, restored and verified in cleanup',
-  harness.includes("const hostKey = 'HKCU\\\\Software\\\\Google\\\\Chrome") &&
+    harness.includes("const hostKey = 'HKCU\\\\Software\\\\Google\\\\Chrome") &&
+    harness.includes('[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey') &&
+    harness.includes("@($key.GetValueNames()) -contains ''") &&
+    harness.includes('[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))') &&
+    harness.includes("else if (snapshot.keyExists)") &&
+    harness.includes("['delete', hostKey, '/ve', '/f']") &&
     harness.includes("writeJson(registryFile, registryBefore)") &&
     harness.includes('restoreRegistry(registryBefore)') &&
     harness.includes('native-host registry restoration mismatch'),

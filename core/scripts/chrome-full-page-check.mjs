@@ -243,7 +243,11 @@ check('the exact original scroll is restored in a finally path',
     source.includes('window.scrollTo(state.scrollX, state.scrollY)'))
 check('page restoration does not leave empty inline-style attributes behind',
   source.includes("!saved.hadStyleAttribute && saved.element.getAttribute('style') === ''") &&
-    source.includes("saved.element.removeAttribute('style')"))
+    source.includes("saved.element.removeAttribute('style')") &&
+    source.includes("rootHadStyleAttribute: root.hasAttribute('style')") &&
+    source.includes("bodyHadStyleAttribute: body?.hasAttribute('style') || false") &&
+    source.includes("!state.rootHadStyleAttribute && root.getAttribute('style') === ''") &&
+    source.includes("!state.bodyHadStyleAttribute && body.getAttribute('style') === ''"))
 check('document scrollbars are suppressed without changing nested scrollers',
   source.includes('html::-webkit-scrollbar, body::-webkit-scrollbar') &&
     !source.includes(' } ::-webkit-scrollbar') &&

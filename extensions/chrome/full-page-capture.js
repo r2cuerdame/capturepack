@@ -68,8 +68,10 @@
       captureId,
       scrollX: window.scrollX,
       scrollY: window.scrollY,
+      rootHadStyleAttribute: root.hasAttribute('style'),
       rootScrollBehavior: root.style.getPropertyValue('scroll-behavior'),
       rootScrollPriority: root.style.getPropertyPriority('scroll-behavior'),
+      bodyHadStyleAttribute: body?.hasAttribute('style') || false,
       bodyScrollBehavior: body?.style.getPropertyValue('scroll-behavior') || '',
       bodyScrollPriority: body?.style.getPropertyPriority('scroll-behavior') || '',
       floating: null,
@@ -210,9 +212,11 @@
     window.scrollTo(state.scrollX, state.scrollY)
     if (state.rootScrollBehavior === '') root.style.removeProperty('scroll-behavior')
     else root.style.setProperty('scroll-behavior', state.rootScrollBehavior, state.rootScrollPriority)
+    if (!state.rootHadStyleAttribute && root.getAttribute('style') === '') root.removeAttribute('style')
     if (body) {
       if (state.bodyScrollBehavior === '') body.style.removeProperty('scroll-behavior')
       else body.style.setProperty('scroll-behavior', state.bodyScrollBehavior, state.bodyScrollPriority)
+      if (!state.bodyHadStyleAttribute && body.getAttribute('style') === '') body.removeAttribute('style')
     }
     delete window.__capturepackFullPageState
   }

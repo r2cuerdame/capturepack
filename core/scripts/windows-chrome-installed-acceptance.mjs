@@ -115,18 +115,42 @@ function processExists(imageName) {
 }
 
 function registrySnapshot() {
-  const result = spawnSync('reg.exe', ['query', hostKey, '/ve'], { encoding: 'utf8', windowsHide: true })
-  if (result.status !== 0) return { exists: false }
-  const match = /REG_([A-Z0-9_]+)\s+([^\r\n]+)/u.exec(String(result.stdout))
-  if (match === null) throw new Error('Chrome native-host registry value could not be parsed')
-  return { exists: true, type: `REG_${match[1]}`, value: match[2].trim() }
+  const script = [
+    "$key = $null",
+    "try {",
+    "  $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\\Google\\Chrome\\NativeMessagingHosts\\com.capturepack.host', $false)",
+    "  if ($null -eq $key) { $snapshot = @{ keyExists = $false; exists = $false } }",
+    "  elseif (-not (@($key.GetValueNames()) -contains '')) { $snapshot = @{ keyExists = $true; exists = $false } }",
+    "  else {",
+    "    $kind = $key.GetValueKind('').ToString()",
+    "    $type = switch ($kind) { 'String' { 'REG_SZ' } 'ExpandString' { 'REG_EXPAND_SZ' } default { throw \"unsupported native-host registry value kind: $kind\" } }",
+    "    $value = [string]$key.GetValue('', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)",
+    "    $snapshot = @{ keyExists = $true; exists = $true; type = $type; value = $value }",
+    "  }",
+    "  $json = $snapshot | ConvertTo-Json -Compress",
+    "  [Console]::Out.Write([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json)))",
+    "} catch { [Console]::Error.WriteLine($_.Exception.Message); exit 2 } finally { if ($null -ne $key) { $key.Dispose() } }",
+  ].join('; ')
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+    encoding: 'utf8', windowsHide: true,
+  })
+  if (result.status !== 0) {
+    throw new Error(`BLOCKED: unable to snapshot Chrome native-host registry safely: ${String(result.stderr || result.error)}`)
+  }
+  try {
+    return JSON.parse(Buffer.from(String(result.stdout).trim(), 'base64').toString('utf8'))
+  } catch (error) {
+    throw new Error(`BLOCKED: Chrome native-host registry snapshot was invalid: ${String(error)}`)
+  }
 }
 
 function restoreRegistry(snapshot) {
   if (snapshot.exists) {
     command('reg.exe', ['add', hostKey, '/ve', '/t', snapshot.type, '/d', snapshot.value, '/f'])
+  } else if (snapshot.keyExists) {
+    command('reg.exe', ['delete', hostKey, '/ve', '/f'])
   } else {
-    spawnSync('reg.exe', ['delete', hostKey, '/f'], { encoding: 'utf8', windowsHide: true })
+    command('reg.exe', ['delete', hostKey, '/f'])
   }
   const after = registrySnapshot()
   if (JSON.stringify(after) !== JSON.stringify(snapshot)) {
