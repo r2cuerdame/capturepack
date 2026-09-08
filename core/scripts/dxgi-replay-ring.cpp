@@ -1707,13 +1707,6 @@ class EncoderSession {
 
     ComPtr<ICodecAPI> codec;
     transform_.As(&codec);
-    SetCodecBool(codec.Get(), CODECAPI_AVLowLatencyMode, true);
-    if (!SetCodecUint32(codec.Get(), CODECAPI_AVEncMPVDefaultBPictureCount, 0,
-                        true) ||
-        !SetCodecUint32(codec.Get(), CODECAPI_AVEncMPVGOPSize,
-                        kKeyframeIntervalFrames, true)) {
-      return MF_E_INVALIDREQUEST;
-    }
 
     result = MFCreateMediaType(&outputType_);
     if (SUCCEEDED(result)) result = outputType_->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
@@ -1746,6 +1739,15 @@ class EncoderSession {
         inputType_.Get(), MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
     if (SUCCEEDED(result)) result = transform_->SetInputType(0, inputType_.Get(), 0);
     if (FAILED(result)) return result;
+
+    if (!SetCodecBool(codec.Get(), CODECAPI_AVLowLatencyMode, true)) {
+      return MF_E_INVALIDREQUEST;
+    }
+    SetCodecUint32(codec.Get(), CODECAPI_AVEncMPVDefaultBPictureCount, 0, false);
+    if (!SetCodecUint32(codec.Get(), CODECAPI_AVEncMPVGOPSize,
+                        kKeyframeIntervalFrames, true)) {
+      return MF_E_INVALIDREQUEST;
+    }
 
     result = transform_->GetOutputStreamInfo(0, &outputInfo_);
     if (FAILED(result)) return result;
@@ -2355,7 +2357,7 @@ class CapturePipeline {
     sourceDescription_.Usage = D3D11_USAGE_DEFAULT;
     sourceDescription_.CPUAccessFlags = 0;
     sourceDescription_.MiscFlags = 0;
-    sourceDescription_.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    sourceDescription_.BindFlags = 0;
     sourceDescription_.ArraySize = 1;
     sourceDescription_.MipLevels = 1;
     sourceDescription_.SampleDesc.Count = 1;
