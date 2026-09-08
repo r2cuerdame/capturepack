@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, rm, stat } from 'node:fs/promises'
+import { performance } from 'node:perf_hooks'
 import path from 'node:path'
 import {
   dxgiReplayCapabilityArguments,
@@ -16,8 +17,16 @@ export const DXGI_REPLAY_RUNTIME_SWITCH = '--dxgi-native-replay'
 export const DXGI_REPLAY_SERVICE_PACKET_BYTES = 256
 export const DXGI_REPLAY_SERVICE_MAX_COMMAND_BYTES = 32_768
 export const DXGI_REPLAY_MIN_RETENTION_MS = 1_000
-export const DXGI_REPLAY_MAX_RETENTION_MS = 600_000
-export const DXGI_REPLAY_MAX_EXPORT_BYTES = 72 * 1024 * 1024
+// Native is intentionally limited to the settings UI's 60 s ceiling. Legacy
+// or hand-edited profiles up to 600 s stay on the shipping recorder rather
+// than allocating a native ring hundreds of MiB large for every display.
+export const DXGI_REPLAY_MAX_RETENTION_MS = 60_000
+export const DXGI_REPLAY_MAX_GOP_MS = 1_000
+const DXGI_REPLAY_DURATION_TOLERANCE_MS = 100
+// 60 s at the native helper's fixed 6 Mbps, 25% encoder headroom, and two
+// independent 8 MiB allowances for ring/container overhead.
+export const DXGI_REPLAY_MAX_EXPORT_BYTES = 73_027_216
+export const DXGI_REPLAY_CURSOR_COMPOSITED_FLAG = 1 << 17
 const DXGI_REPLAY_SERVICE_MAGIC = Buffer.from('CPNSRV01', 'ascii')
 const DXGI_REPLAY_SERVICE_VERSION = 1
 const DEFAULT_STARTUP_TIMEOUT_MS = 10_000
@@ -25,10 +34,14 @@ const DEFAULT_SNAPSHOT_TIMEOUT_MS = 15_000
 const STOP_TIMEOUT_MS = 1_000
 const MAX_STDERR_BYTES = 8_192
 const MAX_SERVICE_REQUEST_ID = (1n << 64n) - 1n
-export const DXGI_REPLAY_SERVICE_ALL_FLAGS = (1 << 17) - 1
-// Pipeline bits 0..11 and export/decode bits 13..16 are mandatory. Bit 12
-// records an optional successful reinitialization and is not required.
-export const DXGI_REPLAY_SERVICE_REQUIRED_HEALTH_FLAGS = 0x0fff | 0x1e000
+export const DXGI_REPLAY_SERVICE_ALL_FLAGS = (1 << 18) - 1
+// Pipeline bits 0..11, export/decode bits 13..16, and the GPU cursor
+// composition proof in bit 17 are mandatory. Bit 12 records an optional
+// successful reinitialization and is not required. Desktop Duplication may
+// expose the hardware cursor as a separate plane, so a service that merely
+// encoded its acquired texture must never displace the shipping recorder.
+export const DXGI_REPLAY_SERVICE_REQUIRED_HEALTH_FLAGS =
+  0x0fff | 0x1e000 | DXGI_REPLAY_CURSOR_COMPOSITED_FLAG
 
 const serviceReasons = [
   'none',
@@ -72,6 +85,7 @@ const serviceReasons = [
   'export-structure',
   'export-decode',
   'service-protocol',
+  'cursor-composition-unavailable',
 ] as const
 
 export type DxgiReplayServiceReason = (typeof serviceReasons)[number]
@@ -493,6 +507,7 @@ export interface DxgiReplayRuntimeProcess {
 
 interface PendingSnapshot {
   outputPath: string
+  minimumDurationMs: number
   resolve: (result: DxgiReplayRuntimeSnapshotResult) => void
   timer: NodeJS.Timeout
 }
@@ -506,6 +521,7 @@ export interface DxgiReplayRuntimeManagerOptions {
   readonly startupTimeoutMs?: number
   readonly snapshotTimeoutMs?: number
   readonly maximumExportBytes?: number
+  readonly nowMs?: () => number
   readonly fileExists?: (value: string) => boolean
   readonly probe?: typeof probeDxgiReplayCapability
   readonly spawnProcess?: (executable: string, args: readonly string[]) => DxgiReplayRuntimeProcess
@@ -521,6 +537,7 @@ export class DxgiReplayRuntimeManager {
   private snapshotInFlight = false
   private nextRequestId = 1n
   private retentionMs = 0
+  private serviceStartedAtMs: number | null = null
   private stderr = ''
   private stopping = false
   private lifecycleGeneration = 0
@@ -584,6 +601,7 @@ export class DxgiReplayRuntimeManager {
       return this.setFallback('native-not-ready', String(error))
     }
     this.process = child
+    this.serviceStartedAtMs = this.options.nowMs?.() ?? performance.now()
     child.stdout.on('data', (chunk: Buffer) => this.onStdout(child, chunk))
     child.stderr.on('data', (chunk: Buffer) => {
       this.stderr = (this.stderr + chunk.toString('utf8')).slice(-MAX_STDERR_BYTES)
@@ -683,6 +701,16 @@ export class DxgiReplayRuntimeManager {
       this.failProcess(child, 'native-export-failed', String(error))
       return { status: 'fallback', reason: 'native-export-failed', detail: String(error) }
     }
+    const nowMs = this.options.nowMs?.() ?? performance.now()
+    const availableHistoryMs = this.serviceStartedAtMs === null
+      ? 0
+      : Math.max(0, nowMs - this.serviceStartedAtMs)
+    const minimumDurationMs = Math.max(
+      0,
+      Math.min(this.retentionMs, availableHistoryMs)
+        - DXGI_REPLAY_MAX_GOP_MS
+        - DXGI_REPLAY_DURATION_TOLERANCE_MS,
+    )
     return await new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.pendingSnapshots.delete(requestId)
@@ -692,7 +720,12 @@ export class DxgiReplayRuntimeManager {
         resolve({ status: 'fallback', reason: 'native-export-failed', detail: 'snapshot timeout' })
       }, timeoutMs)
       timer.unref()
-      this.pendingSnapshots.set(requestId, { outputPath, resolve, timer })
+      this.pendingSnapshots.set(requestId, {
+        outputPath,
+        minimumDurationMs,
+        resolve,
+        timer,
+      })
       try {
         if (!child.stdin.write(command)) {
           // Pipe backpressure is bounded by allowing only the pending requests
@@ -712,6 +745,7 @@ export class DxgiReplayRuntimeManager {
     this.lifecycleGeneration += 1
     const child = this.process
     this.process = null
+    this.serviceStartedAtMs = null
     const cancelReady = this.pendingReady
     this.pendingReady = null
     cancelReady?.(unavailableServicePacket('internal-failure'))
@@ -806,6 +840,12 @@ export class DxgiReplayRuntimeManager {
         this.retentionMs + 100,
       )
       if (validated.status !== 'valid') throw new Error(`${validated.reason}: ${validated.detail}`)
+      if (validated.durationMs < pending.minimumDurationMs) {
+        throw new Error(
+          `MP4 retained ${String(validated.durationMs)} ms; ` +
+          `required at least ${String(pending.minimumDurationMs)} ms`,
+        )
+      }
       if (validated.sampleCount !== Number(packet.sampleCount)) {
         throw new Error('MP4 sample count disagreed with service evidence')
       }

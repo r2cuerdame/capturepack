@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import {
   DXGI_REPLAY_MAX_EXPORT_BYTES,
+  DXGI_REPLAY_CURSOR_COMPOSITED_FLAG,
   DXGI_REPLAY_RUNTIME_SWITCH,
   DXGI_REPLAY_SERVICE_ALL_FLAGS,
   DXGI_REPLAY_SERVICE_PACKET_BYTES,
@@ -68,7 +69,7 @@ function validMp4(sampleCount = 3, durationTicks = 40): Buffer {
 
 function servicePacket(input: {
   kind?: number; status?: number; reason?: number; requestId?: bigint
-  mp4Bytes?: bigint; durationHns?: bigint; sampleCount?: bigint
+  mp4Bytes?: bigint; ringBytes?: bigint; durationHns?: bigint; sampleCount?: bigint
 } = {}): Buffer {
   const result = Buffer.alloc(DXGI_REPLAY_SERVICE_PACKET_BYTES)
   result.write('CPNSRV01', 0, 'ascii')
@@ -90,7 +91,7 @@ function servicePacket(input: {
   result.writeBigUInt64LE(1n, 88)
   result.writeBigUInt64LE(input.mp4Bytes ?? 1024n, 96)
   result.writeBigUInt64LE(input.sampleCount ?? 3n, 104)
-  result.writeBigUInt64LE(4096n, 112)
+  result.writeBigUInt64LE(input.ringBytes ?? 4096n, 112)
   result.writeUInt32LE(1, 120)
   result.writeInt32LE(0, 124)
   const name = Buffer.from('Fixture Hardware H.264 Encoder')
@@ -158,6 +159,10 @@ async function main(): Promise<void> {
     throws(() => parseDxgiReplayServicePacket(servicePacket().subarray(0, 255)))
       && throws(() => parseDxgiReplayServicePacket(servicePacket({ mp4Bytes: BigInt(DXGI_REPLAY_MAX_EXPORT_BYTES) + 1n })))
       && throws(() => parseDxgiReplayServicePacket(servicePacket({ reason: 27 }))))
+  check('service parser accepts the retention-sized maximum ring evidence',
+    parseDxgiReplayServicePacket(servicePacket({
+      ringBytes: BigInt(DXGI_REPLAY_MAX_EXPORT_BYTES),
+    })).ringBytes === BigInt(DXGI_REPLAY_MAX_EXPORT_BYTES))
   check('service parser requires exact health flags and request-id semantics',
     throws(() => {
       const value = servicePacket()
@@ -172,6 +177,19 @@ async function main(): Promise<void> {
       && throws(() => parseDxgiReplayServicePacket(servicePacket({ status: 1, reason: 6, requestId: 1n })))
       && throws(() => parseDxgiReplayServicePacket(servicePacket({ kind: 2, status: 1, reason: 32, requestId: 0n })))
       && throws(() => parseDxgiReplayServicePacket(servicePacket({ kind: 3, status: 1, reason: 27, requestId: 1n }))))
+  check('native selection requires explicit GPU cursor-composition health',
+    (DXGI_REPLAY_SERVICE_REQUIRED_HEALTH_FLAGS & DXGI_REPLAY_CURSOR_COMPOSITED_FLAG) !== 0
+      && throws(() => {
+        const value = servicePacket()
+        value.writeUInt32LE(
+          DXGI_REPLAY_SERVICE_REQUIRED_HEALTH_FLAGS & ~DXGI_REPLAY_CURSOR_COMPOSITED_FLAG,
+          32,
+        )
+        parseDxgiReplayServicePacket(value)
+      })
+      && parseDxgiReplayServicePacket(servicePacket({
+        kind: 3, status: 1, reason: 41,
+      })).reason === 'cursor-composition-unavailable')
   const encoderFailure = parseDxgiReplayServicePacket(servicePacket({ kind: 1, status: 1, reason: 27 }))
   check('locked and encoder failures retain explicit fail-closed reasons',
     parseDxgiReplayServicePacket(servicePacket({ kind: 1, status: 1, reason: 6 })).reason === 'duplicate-access-denied'
@@ -207,6 +225,20 @@ async function main(): Promise<void> {
   const missingSelection = await missing.start({ deviceName: '\\\\.\\DISPLAY1', retentionMs: 30_000 })
   check('missing helper returns shipping without probing/spawning',
     missingSelection.backend === 'shipping' && missingSelection.reason === 'helper-missing' && spawned === 0)
+
+  const oversizedRetention = new DxgiReplayRuntimeManager({
+    ...common,
+    spawnProcess: () => { spawned++; return new FakeProcess() },
+  })
+  const oversizedSelection = await oversizedRetention.start({
+    deviceName: '\\\\.\\DISPLAY1',
+    retentionMs: 600_000,
+  })
+  check('retention above the native memory envelope stays on shipping',
+    oversizedSelection.backend === 'shipping'
+      && oversizedSelection.reason === 'native-not-ready'
+      && oversizedSelection.detail === 'retention was outside service bounds'
+      && spawned === 0)
 
   const lockedManager = new DxgiReplayRuntimeManager({ ...common, probe: async () => locked, spawnProcess: () => { spawned++; return new FakeProcess() } })
   check('locked-session capability failure retains shipping backend',
@@ -264,6 +296,33 @@ async function main(): Promise<void> {
   check('malformed export fails closed and demotes native runtime',
     badSnapshot.status === 'fallback' && afterBadExport.backend === 'shipping'
       && afterBadExport.reason === 'native-export-failed')
+
+  let retentionClockMs = 0
+  let shortChild: FakeProcess
+  shortChild = new FakeProcess((command, child) => {
+    if (!command.startsWith('SNAPSHOT\t')) return
+    const [, id, output] = command.trimEnd().split('\t')
+    if (id === undefined || output === undefined) return
+    writeFileSync(output, mp4)
+    queueMicrotask(() => child.output(servicePacket({
+      kind: 2, requestId: BigInt(id), mp4Bytes: BigInt(mp4.length),
+    })))
+  })
+  const shortManager = new DxgiReplayRuntimeManager({
+    ...common,
+    nowMs: () => retentionClockMs,
+    spawnProcess: () => {
+      queueMicrotask(() => shortChild.output(servicePacket()))
+      return shortChild
+    },
+  })
+  await shortManager.start({ deviceName: '\\\\.\\DISPLAY1', retentionMs: 30_000 })
+  retentionClockMs = 30_000
+  const shortSnapshot = await shortManager.snapshot(1_000)
+  check('warmed runtime rejects a silently truncated retention window',
+    shortSnapshot.status === 'fallback'
+      && shortSnapshot.detail?.includes('required at least 28900 ms') === true
+      && shortManager.currentSelection().backend === 'shipping')
 
   let pendingCommand: { id: bigint; output: string } | null = null
   let announceCommand!: () => void
