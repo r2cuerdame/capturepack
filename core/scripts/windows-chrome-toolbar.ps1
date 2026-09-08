@@ -192,8 +192,24 @@ if ($Mode -eq 'InstallExtension') {
     if ($null -ne $dialog) { $select = Find-Control $dialog '(?i)^Select Folder$' '^1$' }
     if ($null -eq $select) { Start-Sleep -Milliseconds 250 }
   }
-  if ($null -eq $select) { throw 'Windows Select Folder button was not exposed through UI Automation' }
-  $selectClick = Click-Physical $select
+  if ($null -eq $select) {
+    $dialog = Find-FolderDialog
+    if ($null -eq $dialog) { throw 'Windows folder picker disappeared before selection could be confirmed' }
+    [CapturePackAcceptanceMouse]::SetForegroundWindow([IntPtr]$dialog.Current.NativeWindowHandle) | Out-Null
+    Start-Sleep -Milliseconds 200
+    [Windows.Forms.SendKeys]::SendWait('{ENTER}')
+    $closeDeadline = [DateTime]::UtcNow.AddSeconds(5)
+    while ($null -ne (Find-FolderDialog) -and [DateTime]::UtcNow -lt $closeDeadline) { Start-Sleep -Milliseconds 100 }
+    if ($null -ne (Find-FolderDialog)) { throw 'Windows folder picker did not close after owned default-button confirmation' }
+    $selectClick = [ordered]@{
+      method = 'owned-dialog-default-enter'
+      dialogName = $dialog.Current.Name
+      processId = $dialog.Current.ProcessId
+      confirmedAt = [DateTimeOffset]::UtcNow.ToString('o')
+    }
+  } else {
+    $selectClick = Click-Physical $select
+  }
   Start-Sleep -Milliseconds 800
   [CapturePackAcceptanceMouse]::SetForegroundWindow([IntPtr]$window.Current.NativeWindowHandle) | Out-Null
   [Windows.Forms.SendKeys]::SendWait('^l')
