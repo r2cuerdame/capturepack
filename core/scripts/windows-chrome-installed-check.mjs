@@ -39,6 +39,17 @@ if (process.platform === 'win32') {
     if (parsed.status !== 0) process.stderr.write(String(parsed.stderr || parsed.stdout || parsed.error))
     check(`${file.split(/[\\/]/u).at(-1)} parses as PowerShell`, parsed.status === 0)
   }
+  const registryProbe = spawnSync(process.execPath, [harnessFile, '--probe-registry'], {
+    encoding: 'utf8', windowsHide: true,
+  })
+  if (registryProbe.status !== 0) process.stderr.write(String(registryProbe.stderr || registryProbe.error))
+  let registryProbeResult = null
+  try { registryProbeResult = JSON.parse(String(registryProbe.stdout).trim()) } catch {}
+  check(
+    'the native-host registry snapshot executes read-only and fails closed',
+    registryProbe.status === 0 && typeof registryProbeResult?.keyExists === 'boolean' &&
+      typeof registryProbeResult?.exists === 'boolean',
+  )
 }
 
 check(

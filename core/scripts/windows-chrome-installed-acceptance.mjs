@@ -130,7 +130,7 @@ function registrySnapshot() {
     "  $json = $snapshot | ConvertTo-Json -Compress",
     "  [Console]::Out.Write([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json)))",
     "} catch { [Console]::Error.WriteLine($_.Exception.Message); exit 2 } finally { if ($null -ne $key) { $key.Dispose() } }",
-  ].join('; ')
+  ].join('\n')
   const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
     encoding: 'utf8', windowsHide: true,
   })
@@ -553,8 +553,12 @@ async function run(artifacts) {
 }
 
 async function main() {
-  const mode = process.argv.includes('--prepare') ? 'prepare' : process.argv.includes('--run') ? 'run' : process.argv.includes('--cleanup') ? 'cleanup' : null
-  if (mode === null) throw new Error('choose exactly one of --prepare, --run, or --cleanup')
+  const mode = process.argv.includes('--prepare') ? 'prepare' : process.argv.includes('--run') ? 'run' : process.argv.includes('--cleanup') ? 'cleanup' : process.argv.includes('--probe-registry') ? 'probe-registry' : null
+  if (mode === null) throw new Error('choose exactly one of --prepare, --run, --cleanup, or --probe-registry')
+  if (mode === 'probe-registry') {
+    console.log(JSON.stringify(registrySnapshot()))
+    return
+  }
   const artifacts = resolve(option('artifacts', join(core, 'release', `windows-chrome-${Date.now()}`)))
   if (!ownedPath(artifacts, core) && !ownedPath(artifacts, process.env['TEMP'] ?? core)) {
     throw new Error('artifacts must be inside core or the current TEMP directory')
