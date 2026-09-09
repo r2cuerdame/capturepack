@@ -178,14 +178,15 @@ capture kind, storage layout and MCP behavior are separate contracts.
 
 `check:windows-chrome-installed` validates the safety and evidence contract but
 does not pretend to click Chrome. The real run is deliberately outside
-`qa:rc`: it needs an unlocked interactive Windows desktop, no pre-existing
-Chrome process, and a packaged candidate. Preparation refuses a dirty tree and
+`qa:rc`: it needs an unlocked interactive managed Windows desktop, an ordinary
+pre-existing Chrome window that must survive the run, and a packaged candidate.
+Preparation refuses a dirty tree and
 hashes the commit, installer, packaged app/native-host bundle, and byte-exact
 unpacked extension:
 
 ```powershell
 npm run qa:windows-chrome-installed -- --prepare --artifacts=C:\temp\capturepack-157
-# After the machine is unlocked and every existing Chrome process is closed:
+# After the machine is unlocked, leave an ordinary Chrome window open as the preservation sentinel:
 npm run qa:windows-chrome-installed -- --run --artifacts=C:\temp\capturepack-157
 ```
 
@@ -195,9 +196,12 @@ a fresh owned profile and restores the native-host registry before returning.
 
 The run finds the real Chrome action through Windows UI Automation and sends a
 physical mouse click. It never invokes the extension helper or uses CDP. Its
-JSON evidence correlates the Chrome-spawned native host, handshake,
+JSON evidence records the owned-profile extension ID/path/load-location/state,
+requires the exact pre-existing Chrome PID/start-time set after cleanup, and
+correlates the Chrome-spawned native host, handshake,
 `page.capture.start`/`page.capture.finish`, capture ID, persisted pack ID, DOM
-metadata, reserved browser-page surface and visible normal editor. In `finally`
+metadata, independently reported fixture geometry, exact raster/screen geometry,
+reserved browser-page surface and an on-screen, positive-size normal editor. In `finally`
 it kills only recorded process trees, restores the exact prior Chrome native
 host registry value, removes its isolated Chrome/app profiles, and fails if
 that cleanup is incomplete. If a run is interrupted, the idempotent recovery is:

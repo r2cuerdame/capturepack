@@ -67,6 +67,17 @@ if (process.platform === 'win32') {
     registryProbe.status === 0 && typeof registryProbeResult?.keyExists === 'boolean' &&
       typeof registryProbeResult?.exists === 'boolean',
   )
+  const absentRestoreProbe = spawnSync(process.execPath, [harnessFile, '--probe-registry-restore-absent'], {
+    encoding: 'utf8', windowsHide: true,
+  })
+  if (absentRestoreProbe.status !== 0) process.stderr.write(String(absentRestoreProbe.stderr || absentRestoreProbe.error))
+  let absentRestoreResult = null
+  try { absentRestoreResult = JSON.parse(String(absentRestoreProbe.stdout).trim()) } catch {}
+  check(
+    'absent native-host-style registry restoration is an idempotent no-op and removes test residue',
+    absentRestoreProbe.status === 0 && absentRestoreResult?.noOp?.keyExists === false &&
+      absentRestoreResult?.restored?.keyExists === false,
+  )
   const processProbe = spawnSync(process.execPath, [harnessFile, '--probe-processes'], {
     encoding: 'utf8', windowsHide: true,
   })
@@ -120,24 +131,30 @@ check(
   toolbar.includes("ValidateSet('InstallExtension', 'ClickAction', 'FindEditor')") &&
     toolbar.includes("Send-Literal 'chrome://extensions/'") && toolbar.includes('Click-Physical $load') &&
     toolbar.includes('Click-Physical $select') && harness.includes("method: 'chrome-developer-mode-ui'") &&
-    harness.includes("'-Mode', 'InstallExtension'") && harness.includes("'--force-renderer-accessibility'"),
+    harness.includes("'-Mode', 'InstallExtension'") && harness.includes("'--force-renderer-accessibility'") &&
+    toolbar.indexOf("if ($null -eq $dialog) { throw 'Owned Windows folder picker did not appear after Load unpacked' }") <
+      toolbar.indexOf("[Windows.Forms.SendKeys]::SendWait('%d')") &&
+    !toolbar.includes('picker-closed-before-uia-observation'),
 )
 check(
   'locked sessions still block while pre-existing Chrome is snapshotted instead of rejected',
   harness.indexOf("processExists('LogonUI.exe')") < harness.indexOf('const registryBefore = registrySnapshot()') &&
     !harness.includes("processExists('chrome.exe')") &&
     harness.includes('const preExistingChrome = chromeProcesses()') &&
+    harness.includes('headed acceptance requires an ordinary pre-existing Chrome process') &&
     harness.includes('preExistingChromePreserved') &&
+    harness.includes('preExistingChromeExact') &&
     harness.includes('an earlier acceptance run still owns state; run --cleanup first'),
 )
 check(
   'the exact Chrome registry value is journaled, restored and verified in cleanup',
-    harness.includes("const hostKey = 'HKCU\\\\Software\\\\Google\\\\Chrome") &&
+    harness.includes("const hostRegistrySubkey = 'Software\\\\Google\\\\Chrome") &&
     harness.includes('[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey') &&
     harness.includes("@($key.GetValueNames()) -contains ''") &&
     harness.includes('[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))') &&
+    harness.includes('if (JSON.stringify(current) === JSON.stringify(snapshot)) return') &&
     harness.includes("else if (snapshot.keyExists)") &&
-    harness.includes("['delete', hostKey, '/ve', '/f']") &&
+    harness.includes("['delete', registryKey, '/ve', '/f']") &&
     harness.includes("writeJson(registryFile, registryBefore)") &&
     harness.includes('restoreRegistry(registryBefore)') &&
     harness.includes('native-host registry restoration mismatch'),
@@ -165,7 +182,9 @@ check(
     harness.includes("'-ExpectedRootCreationTimeUtc', captureChromeRoot.creationTimeUtc") &&
     toolbar.includes('function Test-OwnedProcess') && toolbar.includes('$titleMatches') &&
     toolbar.includes('(Test-OwnedProcess $item.Current.ProcessId)') &&
-    toolbar.includes('(Test-OwnedProcess $candidate.Current.ProcessId)'),
+    toolbar.includes('(Test-OwnedProcess $candidate.Current.ProcessId)') &&
+    harness.includes('editor.offscreen !== false') && harness.includes('editor.width <= 0') &&
+    harness.includes('editor.height <= 0'),
 )
 check(
   'capture ID, finish, pack identity and visible normal editor are correlated',
@@ -181,8 +200,20 @@ check(
   harness.includes("trigger?.data?.source !== 'chrome-full-page'") &&
     harness.includes("trigger?.data?.hotkey !== 'chrome.action'") &&
     harness.includes("element.id === 'acceptance-marker'") &&
+    harness.includes('independent fixture geometry report') &&
+    harness.includes('documentEvent?.document?.truncated !== false') &&
+    harness.includes('snapshot dimensions do not match the independently reported fixture geometry') &&
+    harness.includes('manifest screen metadata does not match the persisted full-page raster') &&
     browserPageSurfaceId !== undefined &&
     harness.includes(`surfaceText.includes('${browserPageSurfaceId}')`),
+)
+check(
+  'owned-profile extension discovery retains exact ID, path, load location and enabled state evidence',
+  harness.includes('function discoverExtension(profile, extensionDir)') &&
+    harness.includes('found === wanted') && harness.includes('entry?.location === 4') &&
+    harness.includes('entry?.state === 1') && harness.includes('preferenceFile: name') &&
+    harness.includes('resolvedPath: resolve(entry.path)') && harness.includes('extension,') &&
+    !harness.includes('discoverExtensionId'),
 )
 check(
   'headed scenarios retain strict long, responsive, very-tall, DPR-2 and short raster checks',

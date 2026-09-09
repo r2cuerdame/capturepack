@@ -203,52 +203,38 @@ if ($Mode -eq 'InstallExtension') {
   $load = Find-Control $window '(?i)^Load unpacked$' '(?i)(load.?unpacked|loadUnpacked)'
   if ($null -eq $load) { throw 'Chrome Load unpacked button was not exposed through UI Automation' }
   $loadClick = Click-Physical $load
-  Start-Sleep -Milliseconds 500
+  $dialog = $null
+  while ($null -eq $dialog -and [DateTime]::UtcNow -lt $deadline) {
+    $dialog = Find-FolderDialog
+    if ($null -eq $dialog) { Start-Sleep -Milliseconds 100 }
+  }
+  if ($null -eq $dialog) { throw 'Owned Windows folder picker did not appear after Load unpacked' }
+  [CapturePackAcceptanceMouse]::SetForegroundWindow([IntPtr]$dialog.Current.NativeWindowHandle) | Out-Null
+  Start-Sleep -Milliseconds 150
   [Windows.Forms.SendKeys]::SendWait('%d')
   Send-Literal ([IO.Path]::GetFullPath($ExtensionPath))
   [Windows.Forms.SendKeys]::SendWait('{ENTER}')
 
   $select = $null
   $selectClick = $null
-  $sawFolderDialog = $false
-  $lastFolderDialog = $null
-  $selectionDeadline = [DateTime]::UtcNow.AddSeconds([Math]::Min(5, $TimeoutSeconds))
+  $selectionDeadline = [DateTime]::UtcNow.AddSeconds([Math]::Min(15, $TimeoutSeconds))
   while ($null -eq $select -and [DateTime]::UtcNow -lt $selectionDeadline) {
     $dialog = Find-FolderDialog
     if ($null -eq $dialog) {
-      if ($sawFolderDialog) { break }
-      Start-Sleep -Milliseconds 100
-      continue
+      $selectClick = [ordered]@{
+        method = 'owned-picker-closed-after-path-entry'
+        processId = $ExpectedRootPid
+        confirmedAt = [DateTimeOffset]::UtcNow.ToString('o')
+      }
+      break
     }
-    $sawFolderDialog = $true
-    $lastFolderDialog = $dialog
     $select = Find-ControlInOwnedRoot $dialog '(?i)^Select Folder$' '^1$'
-    if ($null -ne $select) { break }
-    [CapturePackAcceptanceMouse]::SetForegroundWindow([IntPtr]$dialog.Current.NativeWindowHandle) | Out-Null
-    Start-Sleep -Milliseconds 150
-    [Windows.Forms.SendKeys]::SendWait('{ENTER}')
-    $closeDeadline = [DateTime]::UtcNow.AddSeconds(5)
-    while ($null -ne (Find-FolderDialog) -and [DateTime]::UtcNow -lt $closeDeadline) { Start-Sleep -Milliseconds 100 }
-    if ($null -ne (Find-FolderDialog)) { throw 'Windows folder picker did not close after owned default-button confirmation' }
-    $selectClick = [ordered]@{
-      method = 'owned-dialog-default-enter'
-      dialogName = $dialog.Current.Name
-      processId = $dialog.Current.ProcessId
-      confirmedAt = [DateTimeOffset]::UtcNow.ToString('o')
-    }
-    break
+    if ($null -eq $select) { Start-Sleep -Milliseconds 100 }
   }
   if ($null -ne $select) {
     $selectClick = Click-Physical $select
   } elseif ($null -eq $selectClick) {
-    # Some Windows/Chrome combinations close the folder picker immediately
-    # after path Enter, before UIA can observe the dialog. The caller proves
-    # success by discovering the unpacked extension in this unique profile.
-    $selectClick = [ordered]@{
-      method = 'picker-closed-before-uia-observation'
-      processId = $ExpectedRootPid
-      confirmedAt = [DateTimeOffset]::UtcNow.ToString('o')
-    }
+    throw 'Windows Select Folder button was not exposed through UI Automation'
   }
   Start-Sleep -Milliseconds 800
   [CapturePackAcceptanceMouse]::SetForegroundWindow([IntPtr]$window.Current.NativeWindowHandle) | Out-Null

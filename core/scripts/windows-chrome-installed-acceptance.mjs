@@ -30,14 +30,15 @@ import {
 const here = dirname(fileURLToPath(import.meta.url))
 const core = resolve(here, '..')
 const repo = resolve(core, '..')
-const hostKey = 'HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.capturepack.host'
+const hostRegistrySubkey = 'Software\\Google\\Chrome\\NativeMessagingHosts\\com.capturepack.host'
+const hostKey = `HKCU\\${hostRegistrySubkey}`
 const fixtureTitlePrefix = 'CapturePack Acceptance Fixture'
 const scenarios = {
-  long: { documentHeight: 7216, windowSize: '1024,720', deviceScaleFactor: null },
-  responsive: { documentHeight: 5080, windowSize: '390,844', deviceScaleFactor: null },
-  'very-tall': { documentHeight: 30016, windowSize: '1024,720', deviceScaleFactor: null },
-  dpr2: { documentHeight: 8016, windowSize: '800,600', deviceScaleFactor: 2 },
-  short: { documentHeight: 400, windowSize: '1280,720', deviceScaleFactor: null },
+  long: { documentHeight: 7216, markerTop: 2475, windowSize: '1024,720', viewportWidth: [800, 1024], viewportHeight: [450, 720], deviceScaleFactor: null },
+  responsive: { documentHeight: 5080, markerTop: 1777, windowSize: '390,844', viewportWidth: [300, 600], viewportHeight: [550, 844], deviceScaleFactor: null },
+  'very-tall': { documentHeight: 30016, markerTop: 24000, windowSize: '1024,720', viewportWidth: [800, 1024], viewportHeight: [450, 720], deviceScaleFactor: null },
+  dpr2: { documentHeight: 8016, markerTop: 6000, windowSize: '800,600', viewportWidth: [600, 800], viewportHeight: [350, 600], deviceScaleFactor: 2 },
+  short: { documentHeight: 400, markerTop: 100, windowSize: '1280,720', viewportWidth: [1000, 1280], viewportHeight: [450, 720], deviceScaleFactor: null },
 }
 
 function option(name, fallback = null) {
@@ -160,11 +161,12 @@ function chromeProcesses(processes = windowsProcessSnapshot()) {
   return processes.filter((process) => String(process.name).toLowerCase() === 'chrome.exe')
 }
 
-function registrySnapshot() {
+function registrySnapshot(registrySubkey = hostRegistrySubkey) {
+  const escapedSubkey = registrySubkey.replace(/'/g, "''")
   const script = [
     "$key = $null",
     "try {",
-    "  $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\\Google\\Chrome\\NativeMessagingHosts\\com.capturepack.host', $false)",
+    `  $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('${escapedSubkey}', $false)`,
     "  if ($null -eq $key) { $snapshot = @{ keyExists = $false; exists = $false } }",
     "  elseif (-not (@($key.GetValueNames()) -contains '')) { $snapshot = @{ keyExists = $true; exists = $false } }",
     "  else {",
@@ -190,17 +192,39 @@ function registrySnapshot() {
   }
 }
 
-function restoreRegistry(snapshot) {
+function restoreRegistry(snapshot, registrySubkey = hostRegistrySubkey) {
+  const registryKey = `HKCU\\${registrySubkey}`
+  const current = registrySnapshot(registrySubkey)
+  if (JSON.stringify(current) === JSON.stringify(snapshot)) return
   if (snapshot.exists) {
-    command('reg.exe', ['add', hostKey, '/ve', '/t', snapshot.type, '/d', snapshot.value, '/f'])
+    command('reg.exe', ['add', registryKey, '/ve', '/t', snapshot.type, '/d', snapshot.value, '/f'])
   } else if (snapshot.keyExists) {
-    command('reg.exe', ['delete', hostKey, '/ve', '/f'])
-  } else {
-    command('reg.exe', ['delete', hostKey, '/f'])
+    if (!current.keyExists) command('reg.exe', ['add', registryKey, '/f'])
+    if (registrySnapshot(registrySubkey).exists) command('reg.exe', ['delete', registryKey, '/ve', '/f'])
+  } else if (current.keyExists) {
+    command('reg.exe', ['delete', registryKey, '/f'])
   }
-  const after = registrySnapshot()
+  const after = registrySnapshot(registrySubkey)
   if (JSON.stringify(after) !== JSON.stringify(snapshot)) {
     throw new Error(`native-host registry restoration mismatch: ${JSON.stringify(after)}`)
+  }
+}
+
+function probeAbsentRegistryRestore() {
+  const registrySubkey = `Software\\CapturePack\\AcceptanceTests\\absent-${String(process.pid)}-${String(Date.now())}`
+  const registryKey = `HKCU\\${registrySubkey}`
+  const absent = registrySnapshot(registrySubkey)
+  if (absent.keyExists) throw new Error('unique absent-key registry probe unexpectedly exists')
+  try {
+    restoreRegistry(absent, registrySubkey)
+    const noOp = registrySnapshot(registrySubkey)
+    command('reg.exe', ['add', registryKey, '/ve', '/t', 'REG_SZ', '/d', 'temporary', '/f'])
+    restoreRegistry(absent, registrySubkey)
+    const restored = registrySnapshot(registrySubkey)
+    if (noOp.keyExists || restored.keyExists) throw new Error('absent-key registry restoration left residue')
+    return { noOp, restored }
+  } finally {
+    if (registrySnapshot(registrySubkey).keyExists) command('reg.exe', ['delete', registryKey, '/f'])
   }
 }
 
@@ -263,7 +287,7 @@ async function stopOwnedRoot(rootIdentity, protectedChrome) {
   }
 }
 
-function discoverExtensionId(profile, extensionDir) {
+function discoverExtension(profile, extensionDir) {
   const wanted = normalize(resolve(extensionDir)).toLowerCase()
   for (const name of ['Secure Preferences', 'Preferences']) {
     const file = join(profile, 'Default', name)
@@ -276,7 +300,21 @@ function discoverExtensionId(profile, extensionDir) {
     }
     for (const [id, entry] of Object.entries(settings ?? {})) {
       const found = typeof entry?.path === 'string' ? normalize(resolve(entry.path)).toLowerCase() : ''
-      if (/^[a-p]{32}$/u.test(id) && found === wanted) return id
+      if (
+        /^[a-p]{32}$/u.test(id) && found === wanted &&
+        entry?.location === 4 && entry?.state === 1
+      ) {
+        return {
+          id,
+          preferenceFile: name,
+          storedPath: entry.path,
+          resolvedPath: resolve(entry.path),
+          location: entry.location,
+          state: entry.state,
+          manifestName: entry.manifest?.name ?? null,
+          manifestVersion: entry.manifest?.version ?? null,
+        }
+      }
     }
   }
   return null
@@ -306,7 +344,11 @@ function pngSize(file) {
   return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20), bytes: bytes.length, sha256: sha256(file) }
 }
 
-function packEvidence(packDir, expectedUrl) {
+function sameNumber(actual, expected, tolerance = 0.001) {
+  return Number.isFinite(actual) && Number.isFinite(expected) && Math.abs(actual - expected) <= tolerance
+}
+
+function packEvidence(packDir, expected) {
   const manifest = JSON.parse(readFileSync(join(packDir, 'manifest.json'), 'utf8'))
   const timeline = JSON.parse(readFileSync(join(packDir, 'timeline.json'), 'utf8'))
   const domFile = join(packDir, 'plugins', 'chrome-dom', 'elements.json')
@@ -319,16 +361,50 @@ function packEvidence(packDir, expectedUrl) {
   const marker = documentEvent?.document?.elements?.find((element) => element.id === 'acceptance-marker')
   const plugins = manifest.plugins?.map((plugin) => plugin.name) ?? []
   const snapshot = pngSize(join(packDir, 'snapshot.png'))
+  const screen = manifest.environment?.screens?.[0]
+  const geometry = expected.geometry
   const widthScale = snapshot.width / trigger?.data?.document_width_css
   const heightScale = snapshot.height / trigger?.data?.document_height_css
   if (manifest.capture_kind !== 'image' || manifest.media?.image_scope !== 'fullscreen') throw new Error('pack is not a fullscreen image')
   if (trigger?.data?.source !== 'chrome-full-page' || trigger?.data?.hotkey !== 'chrome.action') throw new Error('timeline does not identify the Chrome action')
   if (
+    trigger.data.url !== expected.url || trigger.data.document_width_css !== geometry.documentWidth ||
+    trigger.data.document_height_css !== geometry.documentHeight ||
+    trigger.data.viewport_width_css !== geometry.viewportWidth ||
+    trigger.data.viewport_height_css !== geometry.viewportHeight ||
+    !sameNumber(trigger.data.device_scale_factor, geometry.deviceScaleFactor)
+  ) throw new Error(`persisted capture geometry differs from the independent fixture report: ${JSON.stringify(trigger.data)}`)
+  if (
     !Number.isFinite(widthScale) || !Number.isFinite(heightScale) ||
     Math.abs(widthScale - heightScale) > 0.001 ||
     Math.abs(widthScale - trigger.data.device_scale_factor) > 0.001
   ) throw new Error(`persisted raster/viewport scale mismatch: ${String(widthScale)}x${String(heightScale)} vs DPR ${String(trigger.data.device_scale_factor)}`)
-  if (documentEvent?.tab?.url !== expectedUrl || marker === undefined) throw new Error('captured DOM URL/marker does not match the fixture')
+  if (
+    snapshot.width !== Math.round(geometry.documentWidth * geometry.deviceScaleFactor) ||
+    snapshot.height !== Math.round(geometry.documentHeight * geometry.deviceScaleFactor)
+  ) throw new Error('snapshot dimensions do not match the independently reported fixture geometry')
+  if (
+    screen?.width !== snapshot.width || screen?.height !== snapshot.height ||
+    !sameNumber(screen?.scale, geometry.deviceScaleFactor)
+  ) throw new Error('manifest screen metadata does not match the persisted full-page raster')
+  if (
+    documentEvent?.tab?.url !== expected.url || documentEvent?.tab?.title !== expected.title ||
+    documentEvent?.document?.url !== expected.url || documentEvent?.document?.title !== expected.title ||
+    documentEvent?.document?.truncated !== false || marker === undefined
+  ) throw new Error('captured DOM URL/title/completeness/marker does not match the fixture')
+  if (
+    documentEvent.document.viewport?.width !== geometry.documentWidth ||
+    documentEvent.document.viewport?.height !== geometry.documentHeight ||
+    !sameNumber(documentEvent.document.viewport?.devicePixelRatio, geometry.deviceScaleFactor) ||
+    documentEvent.document.viewport?.scrollX !== 0 || documentEvent.document.viewport?.scrollY !== 0 ||
+    !sameNumber(documentEvent.viewport?.width, geometry.documentWidth) ||
+    !sameNumber(documentEvent.viewport?.height, geometry.documentHeight) ||
+    !sameNumber(documentEvent.viewport?.dpr, geometry.deviceScaleFactor)
+  ) throw new Error('persisted DOM document/raster viewport mapping differs from the fixture')
+  if (
+    marker.bounds?.x !== geometry.marker.x || marker.bounds?.y !== geometry.marker.y ||
+    marker.bounds?.width !== geometry.marker.width || marker.bounds?.height !== geometry.marker.height
+  ) throw new Error('persisted DOM marker bounds differ from the fixture')
   if (!plugins.includes('chrome-dom') || !plugins.includes('windows-context')) throw new Error('required context plugins are not declared')
   if (!surfaceText.includes('capturepack-browser-page')) throw new Error('reserved browser-page surface is absent')
   return {
@@ -338,6 +414,8 @@ function packEvidence(packDir, expectedUrl) {
     imageScope: manifest.media.image_scope,
     snapshot,
     rasterScale: { x: widthScale, y: heightScale, reportedDpr: trigger.data.device_scale_factor },
+    expectedFixtureGeometry: geometry,
+    manifestScreen: screen,
     timelineTrigger: trigger,
     dom: {
       bytes: statSync(domFile).size,
@@ -356,16 +434,57 @@ function packEvidence(packDir, expectedUrl) {
 }
 
 async function fixtureServer(scenarioName, scenario, fixtureTitle) {
-  const markerTop = Math.min(2475, Math.max(100, scenario.documentHeight - 180))
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${fixtureTitle}</title><style>html,body{margin:0}header{position:sticky;top:0;background:#18222f;color:white;padding:20px}main{height:${String(scenario.documentHeight)}px;background:linear-gradient(#fff,#7ad)}#acceptance-marker{position:absolute;left:123px;top:${String(markerTop)}px;width:240px;height:80px;background:#f85}</style></head><body><header>Toolbar gesture acceptance: ${scenarioName}</header><main><button id="acceptance-marker">Deterministic marker</button></main></body></html>`
+  let geometry = null
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${fixtureTitle}</title><style>html,body{margin:0;min-width:0}body{position:relative;height:${String(scenario.documentHeight)}px}header{position:sticky;top:0;z-index:2;background:#18222f;color:white;padding:20px}main{position:absolute;left:0;top:0;width:100%;height:${String(scenario.documentHeight)}px;background:linear-gradient(#fff,#7ad)}#acceptance-marker{position:absolute;left:123px;top:${String(scenario.markerTop)}px;width:240px;height:80px;background:#f85}</style></head><body><header>Toolbar gesture acceptance: ${scenarioName}</header><main><button id="acceptance-marker">Deterministic marker</button></main><script>(()=>{const report=()=>{const marker=document.getElementById('acceptance-marker').getBoundingClientRect();const root=document.documentElement;const body=document.body;fetch('/geometry',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({scenario:${JSON.stringify(scenarioName)},title:document.title,url:location.href,viewportWidth:innerWidth,viewportHeight:innerHeight,deviceScaleFactor:devicePixelRatio||1,documentWidth:Math.max(root.scrollWidth,body.scrollWidth,innerWidth),documentHeight:Math.max(root.scrollHeight,body.scrollHeight,innerHeight),marker:{x:Math.round(marker.left+scrollX),y:Math.round(marker.top+scrollY),width:Math.round(marker.width),height:Math.round(marker.height)}})}).catch(()=>{})};addEventListener('load',report);addEventListener('resize',report);setTimeout(report,250)})()</script></body></html>`
   const server = http.createServer((request, response) => {
     if (request.url === '/favicon.ico') { response.writeHead(204); response.end(); return }
+    if (request.url === '/geometry' && request.method === 'POST') {
+      let body = ''
+      request.setEncoding('utf8')
+      request.on('data', (chunk) => { if (body.length < 65_536) body += chunk })
+      request.on('end', () => {
+        try { geometry = JSON.parse(body) } catch { geometry = null }
+        response.writeHead(204)
+        response.end()
+      })
+      return
+    }
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
     response.end(html)
   })
   await new Promise((done, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', done) })
   const address = server.address()
-  return { server, url: `http://127.0.0.1:${String(address.port)}/acceptance` }
+  return {
+    server,
+    url: `http://127.0.0.1:${String(address.port)}/acceptance`,
+    geometry: () => geometry,
+    resetGeometry: () => { geometry = null },
+  }
+}
+
+function validateFixtureGeometry(geometry, scenarioName, scenario, fixtureTitle, fixtureUrl) {
+  if (
+    geometry?.scenario !== scenarioName || geometry?.title !== fixtureTitle || geometry?.url !== fixtureUrl
+  ) throw new Error(`fixture identity report mismatch: ${JSON.stringify(geometry)}`)
+  if (
+    !Number.isInteger(geometry.viewportWidth) ||
+    geometry.viewportWidth < scenario.viewportWidth[0] || geometry.viewportWidth > scenario.viewportWidth[1] ||
+    !Number.isInteger(geometry.viewportHeight) ||
+    geometry.viewportHeight < scenario.viewportHeight[0] || geometry.viewportHeight > scenario.viewportHeight[1]
+  ) throw new Error(`fixture viewport is outside the ${scenarioName} acceptance range: ${JSON.stringify(geometry)}`)
+  if (
+    geometry.documentWidth !== geometry.viewportWidth ||
+    geometry.documentHeight !== Math.max(scenario.documentHeight, geometry.viewportHeight)
+  ) throw new Error(`fixture document dimensions are not the ${scenarioName} contract: ${JSON.stringify(geometry)}`)
+  if (
+    !Number.isFinite(geometry.deviceScaleFactor) || geometry.deviceScaleFactor <= 0 ||
+    (scenario.deviceScaleFactor !== null && !sameNumber(geometry.deviceScaleFactor, scenario.deviceScaleFactor))
+  ) throw new Error(`fixture DPR is not the ${scenarioName} contract: ${JSON.stringify(geometry)}`)
+  if (
+    geometry.marker?.x !== 123 || geometry.marker?.y !== scenario.markerTop ||
+    geometry.marker?.width !== 240 || geometry.marker?.height !== 80
+  ) throw new Error(`fixture marker is not the ${scenarioName} contract: ${JSON.stringify(geometry)}`)
+  return geometry
 }
 
 async function prepare(artifacts) {
@@ -449,15 +568,19 @@ async function cleanup(artifacts, state, registryBefore) {
   }
   let preExistingChromePreserved = []
   try { preExistingChromePreserved = assertProcessesPreserved(protectedChrome, chromeProcesses()) } catch (error) { errors.push(String(error)) }
+  const preExistingChromeBefore = protectedChrome.map(processIdentity)
+  const preExistingChromeExact = JSON.stringify(preExistingChromePreserved) === JSON.stringify(preExistingChromeBefore)
+  if (!preExistingChromeExact) errors.push('pre-existing Chrome preservation evidence differs from the initial identity set')
   const result = {
     registryRestored: JSON.stringify(registrySnapshot()) === JSON.stringify(registryBefore),
     pathsRemoved: [state.chromeProfile, state.appData, state.transient].filter(Boolean).every((path) => !existsSync(path)),
     stopped,
-    preExistingChromeBefore: protectedChrome.map(processIdentity),
+    preExistingChromeBefore,
     preExistingChromePreserved,
+    preExistingChromeExact,
     errors,
   }
-  if (!result.registryRestored || !result.pathsRemoved || errors.length > 0) throw new Error(`cleanup failed: ${JSON.stringify(result)}`)
+  if (!result.registryRestored || !result.pathsRemoved || !result.preExistingChromeExact || errors.length > 0) throw new Error(`cleanup failed: ${JSON.stringify(result)}`)
   return result
 }
 
@@ -494,6 +617,9 @@ async function run(artifacts) {
   const registryFile = join(artifacts, 'registry-before.json')
   const registryBefore = registrySnapshot()
   const preExistingChrome = chromeProcesses()
+  if (preExistingChrome.length === 0) {
+    throw new Error('BLOCKED: headed acceptance requires an ordinary pre-existing Chrome process to prove preservation')
+  }
   const preExistingChromeSnapshotAt = new Date().toISOString()
   const fixtureTitle = `${fixtureTitlePrefix} ${runId}`
   const state = {
@@ -538,12 +664,12 @@ async function run(artifacts) {
     }, 5_000, 'install Chrome root identity')
     state.chromeRoots.push(processIdentity(installChromeRoot))
     writeJson(stateFile, state)
-    let extensionId = await waitFor(
-      () => discoverExtensionId(chromeProfile, prepared.extensionDir),
+    let extension = await waitFor(
+      () => discoverExtension(chromeProfile, prepared.extensionDir),
       8_000,
       'command-line unpacked extension discovery',
     ).catch(() => null)
-    if (extensionId === null) {
+    if (extension === null) {
       const installOutput = command('powershell.exe', [
         '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
         '-File', join(here, 'windows-chrome-toolbar.ps1'),
@@ -557,12 +683,13 @@ async function run(artifacts) {
         method: 'chrome-developer-mode-ui',
         ui: JSON.parse(installOutput.split(/\r?\n/u).at(-1)),
       }
-      extensionId = await waitFor(
-        () => discoverExtensionId(chromeProfile, prepared.extensionDir),
+      extension = await waitFor(
+        () => discoverExtension(chromeProfile, prepared.extensionDir),
         15_000,
-        'UI-loaded unpacked extension ID discovery',
+        'UI-loaded unpacked extension evidence discovery',
       )
     }
+    const extensionId = extension.id
     await stopOwnedRoot(installChromeRoot, preExistingChrome)
     chrome = null
 
@@ -592,6 +719,7 @@ async function run(artifacts) {
     writeJson(stateFile, state)
     await waitFor(() => existsSync(logFile) && readFileSync(logFile, 'utf8').includes('DOM bridge listening'), 45_000, 'CapturePack DOM bridge')
 
+    fixture.resetGeometry()
     chrome = launchChrome(prepared.chrome, chromeProfile, prepared.extensionDir, fixture.url, env, scenario)
     const captureChromeRoot = await waitFor(() => {
       const processes = windowsProcessSnapshot()
@@ -600,6 +728,13 @@ async function run(artifacts) {
     }, 5_000, 'capture Chrome root identity')
     state.chromeRoots.push(processIdentity(captureChromeRoot))
     writeJson(stateFile, state)
+    const fixtureGeometry = validateFixtureGeometry(
+      await waitFor(() => fixture.geometry(), 10_000, 'independent fixture geometry report'),
+      scenarioName,
+      scenario,
+      fixtureTitle,
+      fixture.url,
+    )
     await waitFor(() => readFileSync(logFile, 'utf8').includes(`[chrome] extension ${prepared.extensionVersion} connected, protocol v1`), 30_000, 'native-host handshake')
     const hostLaunches = await waitFor(() => {
       if (!existsSync(hostEvidence)) return null
@@ -644,8 +779,12 @@ async function run(artifacts) {
       '-ExpectedRootCreationTimeUtc', appRoot.creationTimeUtc,
     ], { windowsHide: false })
     const editor = JSON.parse(editorOutput.split(/\r?\n/u).at(-1))
+    if (
+      editor.offscreen !== false || !Number.isInteger(editor.width) || editor.width <= 0 ||
+      !Number.isInteger(editor.height) || editor.height <= 0
+    ) throw new Error(`normal editor is not visibly rendered on screen: ${JSON.stringify(editor)}`)
     const packDir = join(output, persisted.basename)
-    const pack = packEvidence(packDir, fixture.url)
+    const pack = packEvidence(packDir, { url: fixture.url, title: fixtureTitle, geometry: fixtureGeometry })
     if (pack.packId !== persisted.packId) throw new Error(`pack identity mismatch: ${pack.packId} != ${persisted.packId}`)
     const hostLaunch = hostLaunches.at(-1)
     if (!hostLaunch.argv.some((arg) => arg === `chrome-extension://${extensionId}/`) || !hostLaunch.argv.some((arg) => arg.startsWith('--parent-window='))) {
@@ -660,11 +799,13 @@ async function run(artifacts) {
       head: prepared.head,
       chrome: prepared.chrome,
       extensionId,
+      extension,
       extensionVersion: prepared.extensionVersion,
       extensionInstall,
       pipeSuffix: suffix,
       fixtureTitle,
       fixtureUrl: fixture.url,
+      fixtureGeometry,
       preExistingChromeSnapshotAt,
       preExistingChrome: preExistingChrome.map(processIdentity),
       chromeRoot: processIdentity(captureChromeRoot),
@@ -692,10 +833,14 @@ async function run(artifacts) {
 }
 
 async function main() {
-  const mode = process.argv.includes('--prepare') ? 'prepare' : process.argv.includes('--run') ? 'run' : process.argv.includes('--cleanup') ? 'cleanup' : process.argv.includes('--probe-registry') ? 'probe-registry' : process.argv.includes('--probe-processes') ? 'probe-processes' : null
-  if (mode === null) throw new Error('choose exactly one of --prepare, --run, --cleanup, --probe-registry, or --probe-processes')
+  const mode = process.argv.includes('--prepare') ? 'prepare' : process.argv.includes('--run') ? 'run' : process.argv.includes('--cleanup') ? 'cleanup' : process.argv.includes('--probe-registry') ? 'probe-registry' : process.argv.includes('--probe-registry-restore-absent') ? 'probe-registry-restore-absent' : process.argv.includes('--probe-processes') ? 'probe-processes' : null
+  if (mode === null) throw new Error('choose exactly one of --prepare, --run, --cleanup, --probe-registry, --probe-registry-restore-absent, or --probe-processes')
   if (mode === 'probe-registry') {
     console.log(JSON.stringify(registrySnapshot()))
+    return
+  }
+  if (mode === 'probe-registry-restore-absent') {
+    console.log(JSON.stringify(probeAbsentRegistryRestore()))
     return
   }
   if (mode === 'probe-processes') {
