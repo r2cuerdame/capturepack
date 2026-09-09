@@ -211,7 +211,7 @@ function restoreRegistry(snapshot, registrySubkey = hostRegistrySubkey) {
 }
 
 function probeAbsentRegistryRestore() {
-  const registrySubkey = `Software\\CapturePack\\AcceptanceTests\\absent-${String(process.pid)}-${String(Date.now())}`
+  const registrySubkey = `Software\\CapturePackAcceptanceTest-${String(process.pid)}-${String(Date.now())}`
   const registryKey = `HKCU\\${registrySubkey}`
   const absent = registrySnapshot(registrySubkey)
   if (absent.keyExists) throw new Error('unique absent-key registry probe unexpectedly exists')
