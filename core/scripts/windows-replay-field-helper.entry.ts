@@ -15,6 +15,15 @@ import {
   reopenedContextDisplayTargets,
   type ReopenedLoadedDisplayGeometry,
 } from '../src/main/reopenDisplay'
+import { validateDxgiReplayMp4 } from '../src/main/dxgiReplayRuntime'
+
+/** Runs the exact bounded production fMP4 validator used before native selection. */
+export function validateNativeReplayMp4(
+  bytes: Uint8Array,
+  reportedDurationMs: number,
+): ReturnType<typeof validateDxgiReplayMp4> {
+  return validateDxgiReplayMp4(Buffer.from(bytes), reportedDurationMs)
+}
 
 interface ReopenDisplayInput {
   snapshotWidth: number

@@ -59,6 +59,7 @@ const VIDEO_PROFILE_CHECKS = new Set([
   'check:processor-qpc-latency',
   'check:dxgi-replay-ring',
   'check:dxgi-replay-runtime',
+  'check:dxgi-replay-ab',
   'check:settings',
   'check:hotkeys',
   'check:about',

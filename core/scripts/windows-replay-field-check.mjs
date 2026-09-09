@@ -9,6 +9,7 @@
 //     --fps=15 --duration-seconds=30 --target=primary ^
 //     --artifacts-dir=C:\_CapturePack-QA\field-15fps-primary
 import { spawn, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import {
   appendFileSync,
@@ -76,6 +77,8 @@ Case:
   --target=all|primary|ID    Every display or one explicit Electron display id
 
 Optional:
+  --replay-backend=shipping|native-dxgi
+                              Select shipping baseline or opt-in DXGI candidate
   --warmup-seconds=N         Launch-to-steady allowance before the N-second window (default 3)
   --replay-max-width=N       0 or 720..3840 (default 1920)
   --sample-interval-ms=N     Process-tree sample cadence (default 5000)
@@ -92,6 +95,12 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
 }
 
 const fps = finiteNumber('fps', 15, { min: 5, max: 30, integer: true })
+const replayBackendArgument = option('replay-backend')
+const replayBackend = replayBackendArgument ?? 'shipping'
+if (!['shipping', 'native-dxgi'].includes(replayBackend)) {
+  throw new Error('--replay-backend must be shipping or native-dxgi')
+}
+const releaseComparison = replayBackendArgument !== null
 const durationSeconds = finiteNumber(
   'duration-seconds',
   30,
@@ -164,7 +173,7 @@ const movementPath = path.join(fixtureDir, 'movement.jsonl')
 const fixtureStopPath = path.join(fixtureDir, 'stop')
 const runId =
   `${new Date().toISOString().replace(/[-:.TZ]/gu, '')}-` +
-  `${String(process.pid)}-${fps}fps`
+  `${String(process.pid)}-${fps}fps-${replayBackend}`
 
 const beganAt = Date.now()
 let stage = 'initializing'
@@ -347,6 +356,27 @@ do {
     }
   }
 } while($added)
+$gpuByPid=@{}
+$gpuError=$null
+try {
+  $gpuSample=Get-Counter -Counter '\\GPU Engine(*)\\Utilization Percentage' -MaxSamples 1 -ErrorAction Stop
+  foreach($counter in @($gpuSample.CounterSamples)) {
+    $instance=[string]$counter.InstanceName
+    if($instance -notmatch 'pid_([0-9]+)_') { continue }
+    $processId=[int]$Matches[1]
+    if(-not $ids.Contains($processId)) { continue }
+    $engine='unknown'
+    if($instance -match 'engtype_([^_]+)') { $engine=[string]$Matches[1] }
+    if(-not $gpuByPid.ContainsKey($processId)) { $gpuByPid[$processId]=@() }
+    $gpuByPid[$processId] += [pscustomobject]@{
+      engine=$engine
+      utilization_percent=[double]$counter.CookedValue
+      instance=$instance
+    }
+  }
+} catch {
+  $gpuError=[string]$_.Exception.Message
+}
 $rows=@()
 foreach($node in $nodes) {
   if(-not $ids.Contains([int]$node.ProcessId)) { continue }
@@ -360,9 +390,14 @@ foreach($node in $nodes) {
     cpu_seconds=[double]$process.CPU
     private_bytes=[long]$process.PrivateMemorySize64
     working_set_bytes=[long]$process.WorkingSet64
+    gpu_engines=@($gpuByPid[[int]$node.ProcessId])
   }
 }
-ConvertTo-Json -InputObject @($rows) -Depth 3 -Compress
+[pscustomobject]@{
+  gpu_available=($null -eq $gpuError)
+  gpu_error=$gpuError
+  processes=@($rows)
+} | ConvertTo-Json -Depth 6 -Compress
 `
   const result = await runBounded(
     'powershell.exe',
@@ -370,12 +405,147 @@ ConvertTo-Json -InputObject @($rows) -Depth 3 -Compress
     { timeoutMs: Math.max(15_000, sampleIntervalMs * 2), maxStdoutBytes: 4 * 1024 * 1024 },
   )
   if (result.code !== 0) throw new Error(result.stderr || result.error || 'PowerShell sampling failed')
-  const parsed = JSON.parse(result.stdout || '[]')
-  return Array.isArray(parsed) ? parsed : [parsed]
+  const parsed = JSON.parse(result.stdout || '{}')
+  if (!Array.isArray(parsed.processes)) throw new Error('PowerShell sampling returned no process array')
+  return parsed
 }
 
 function readJson(file) {
   return JSON.parse(readFileSync(file, 'utf8').replace(/^\uFEFF/u, ''))
+}
+
+function sha256File(file) {
+  if (!existsSync(file)) return null
+  return createHash('sha256').update(readFileSync(file)).digest('hex')
+}
+
+function gitText(args) {
+  const result = spawnSync('git', args, {
+    cwd: coreDir,
+    encoding: 'utf8',
+    windowsHide: true,
+  })
+  return result.status === 0 ? result.stdout.trim() : null
+}
+
+function buildIdentity() {
+  const status = gitText(['status', '--porcelain=v1'])
+  return {
+    source_commit: gitText(['rev-parse', '--verify', 'HEAD']),
+    source_dirty: status === null ? null : status !== '',
+    app_main_sha256: sha256File(path.join(coreDir, 'dist', 'main', 'index.js')),
+    dxgi_helper_sha256: sha256File(
+      path.join(coreDir, 'dist', 'scripts', 'dxgi-replay-ring.exe'),
+    ),
+  }
+}
+
+function logTimestamp(line) {
+  const iso = /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z)\s/u.exec(line)?.[1] ?? null
+  const ms = iso === null ? null : Date.parse(iso)
+  return { iso, ms: Number.isFinite(ms) ? ms : null }
+}
+
+function parsePerformanceEvidence(mainLog, recorderAvailability) {
+  const nativeReady = []
+  const nativeSnapshots = []
+  const replayReady = []
+  let latency = null
+  for (const line of String(mainLog).split(/\r?\n/u)) {
+    const timestamp = logTimestamp(line)
+    let match = /\[capture\] display ([^:]+): DXGI native replay READY \((\d+)x(\d+) @ (\d+)fps, (.+)\)\s*$/u.exec(line)
+    if (match !== null) {
+      nativeReady.push({
+        display_id: match[1],
+        width: Number(match[2]),
+        height: Number(match[3]),
+        fps: Number(match[4]),
+        encoder: match[5],
+        at: timestamp.iso,
+        at_ms: timestamp.ms,
+      })
+      continue
+    }
+    match = /\[capture\] display ([^:]+): selected DXGI native replay snapshot \((\d+) bytes, (\d+) ms, (\d+) samples, (\d+) keyframes\)\s*$/u.exec(line)
+    if (match !== null) {
+      nativeSnapshots.push({
+        display_id: match[1],
+        bytes: Number(match[2]),
+        duration_ms: Number(match[3]),
+        samples: Number(match[4]),
+        keyframes: Number(match[5]),
+        at: timestamp.iso,
+        at_ms: timestamp.ms,
+      })
+      continue
+    }
+    match = /\[capture\] display ([^:]+): ([^ ]+) -> (replay\.(?:mp4|webm)), (\d+)x(\d+)/u.exec(line)
+    if (match !== null) {
+      replayReady.push({
+        display_id: match[1],
+        mime_type: match[2],
+        replay_file: match[3],
+        width: Number(match[4]),
+        height: Number(match[5]),
+        at: timestamp.iso,
+        at_ms: timestamp.ms,
+      })
+      continue
+    }
+    match = /\[capture\] latency video — (.+)\s*$/u.exec(line)
+    if (match !== null) {
+      const detail = match[1]
+      const stage = (name) => {
+        const value = new RegExp(`(?:^|[,;]\\s*)${name} ([0-9.]+) ms`, 'u').exec(detail)?.[1]
+        return value === undefined ? null : Number(value)
+      }
+      const handsOff = /(?:^|;\s*)hands-off ([0-9.]+) ms/u.exec(detail)?.[1]
+      latency = {
+        at: timestamp.iso,
+        frozen_ms: stage('frozen'),
+        saved_ms: stage('saved'),
+        editor_visible_ms: stage('editor-visible'),
+        hands_off_ms: handsOff === undefined ? null : Number(handsOff),
+        refused: detail.startsWith('refused:') ? detail.slice('refused:'.length).trim() : null,
+        raw: detail,
+      }
+    }
+  }
+  const captureRequestedMs = recorderAvailability.capture_requested_at_ms
+  const replayExportEvent = replayBackend === 'native-dxgi'
+    ? nativeSnapshots.filter((row) => row.at_ms !== null).at(-1)
+    : replayReady.filter((row) => row.at_ms !== null).at(-1)
+  const measurementStarts = replayBackend === 'native-dxgi'
+    ? nativeReady.flatMap((row) => row.at_ms === null ? [] : [row.at_ms])
+    : recorderAvailability.displays.flatMap(
+        (row) => row.ready_at_ms === null ? [] : [row.ready_at_ms],
+      )
+  const measurementStartMs = measurementStarts.length === 0
+    ? null
+    : Math.max(...measurementStarts)
+  return {
+    requested_backend: replayBackend,
+    native_ready: nativeReady,
+    native_snapshots: nativeSnapshots,
+    replay_ready: replayReady,
+    capture_latency: latency,
+    capture_to_saved_ms: latency?.saved_ms ?? null,
+    replay_export_ms:
+      captureRequestedMs === null || replayExportEvent?.at_ms == null
+        ? null
+        : Math.max(0, replayExportEvent.at_ms - captureRequestedMs),
+    measurement_window: {
+      start_at: Number.isFinite(measurementStartMs)
+        ? new Date(measurementStartMs).toISOString()
+        : null,
+      start_ms: Number.isFinite(measurementStartMs) ? measurementStartMs : null,
+      end_at: recorderAvailability.capture_requested_at,
+      end_ms: captureRequestedMs,
+      basis: replayBackend === 'native-dxgi'
+        ? 'latest production DXGI native READY through capture request'
+        : 'latest production shipping recorder readiness through capture request',
+    },
+  }
 }
 
 function packDirectory() {
@@ -1527,10 +1697,52 @@ function summarizeProcesses(samples) {
   const workingSets = []
   const privateBytes = []
   const processCounts = []
+  const gpuTotalEngine = []
+  const gpuVideoEncode = []
+  const gpuByEngine = new Map()
+  const gpuRaw = []
+  const cpuRaw = []
+  let gpuAvailableSamples = 0
+  const gpuErrors = []
   for (const sample of samples) {
     workingSets.push(sample.processes.reduce((sum, process) => sum + process.working_set_bytes, 0))
     privateBytes.push(sample.processes.reduce((sum, process) => sum + process.private_bytes, 0))
     processCounts.push(sample.processes.length)
+    if (sample.gpu_available === true) {
+      gpuAvailableSamples += 1
+      let total = 0
+      let videoEncode = 0
+      const oneSampleByEngine = new Map()
+      for (const process of sample.processes) {
+        for (const engine of Array.isArray(process.gpu_engines) ? process.gpu_engines : []) {
+          const value = Number(engine?.utilization_percent)
+          if (!Number.isFinite(value) || value < 0) continue
+          const name = String(engine?.engine ?? 'unknown').toLocaleLowerCase()
+          total += value
+          if (name === 'videoencode') videoEncode += value
+          oneSampleByEngine.set(name, (oneSampleByEngine.get(name) ?? 0) + value)
+        }
+      }
+      gpuTotalEngine.push(total)
+      gpuVideoEncode.push(videoEncode)
+      gpuRaw.push({
+        wall_time_ms: sample.wall_time_ms,
+        total_engine_percent: total,
+        video_encode_percent: videoEncode,
+        by_engine_percent: Object.fromEntries(oneSampleByEngine),
+      })
+      for (const [name, value] of oneSampleByEngine) {
+        if (!gpuByEngine.has(name)) {
+          gpuByEngine.set(name, Array(gpuAvailableSamples - 1).fill(0))
+        }
+        gpuByEngine.get(name).push(value)
+      }
+      for (const [name, values] of gpuByEngine) {
+        if (!oneSampleByEngine.has(name)) values.push(0)
+      }
+    } else if (typeof sample.gpu_error === 'string' && sample.gpu_error !== '') {
+      gpuErrors.push(sample.gpu_error)
+    }
   }
   for (let index = 1; index < samples.length; index += 1) {
     const before = samples[index - 1]
@@ -1546,34 +1758,60 @@ function summarizeProcesses(samples) {
     const oneCore = (gainedCpuSeconds / elapsedSeconds) * 100
     cpuOneCore.push(oneCore)
     cpuTotalCapacity.push(oneCore / logicalProcessors)
+    cpuRaw.push({
+      from_wall_time_ms: before.wall_time_ms,
+      to_wall_time_ms: after.wall_time_ms,
+      elapsed_seconds: elapsedSeconds,
+      cpu_seconds: gainedCpuSeconds,
+      one_core_percent: oneCore,
+      total_capacity_percent: oneCore / logicalProcessors,
+    })
   }
-  const mean = (values) =>
-    values.length === 0 ? null : values.reduce((sum, value) => sum + value, 0) / values.length
   return {
     sample_count: samples.length,
     sample_interval_ms: sampleIntervalMs,
     logical_processors: logicalProcessors,
     cpu_total_capacity_percent: {
-      mean: mean(cpuTotalCapacity),
+      mean: distribution(cpuTotalCapacity).mean,
       p95: percentile(cpuTotalCapacity, 0.95),
       peak: cpuTotalCapacity.length === 0 ? null : Math.max(...cpuTotalCapacity),
     },
     cpu_one_core_percent: {
-      mean: mean(cpuOneCore),
+      mean: distribution(cpuOneCore).mean,
       p95: percentile(cpuOneCore, 0.95),
       peak: cpuOneCore.length === 0 ? null : Math.max(...cpuOneCore),
     },
     private_bytes: {
-      mean: mean(privateBytes),
+      ...distribution(privateBytes),
       peak: privateBytes.length === 0 ? null : Math.max(...privateBytes),
     },
     working_set_bytes: {
-      mean: mean(workingSets),
+      ...distribution(workingSets),
       peak: workingSets.length === 0 ? null : Math.max(...workingSets),
+    },
+    gpu: {
+      counter: '\\GPU Engine(*)\\Utilization Percentage',
+      basis: 'sum of Windows per-process GPU Engine utilization counters in the app process tree',
+      available_sample_count: gpuAvailableSamples,
+      unavailable_sample_count: samples.length - gpuAvailableSamples,
+      errors: [...new Set(gpuErrors)],
+      total_engine_percent: distribution(gpuTotalEngine),
+      video_encode_percent: distribution(gpuVideoEncode),
+      by_engine_percent: Object.fromEntries(
+        [...gpuByEngine.entries()].sort(([left], [right]) => left.localeCompare(right))
+          .map(([name, values]) => [name, distribution(values)]),
+      ),
     },
     process_count: {
       min: processCounts.length === 0 ? null : Math.min(...processCounts),
       peak: processCounts.length === 0 ? null : Math.max(...processCounts),
+    },
+    raw: {
+      process_sample_wall_time_ms: samples.map((sample) => sample.wall_time_ms),
+      working_set_bytes: workingSets,
+      private_bytes: privateBytes,
+      cpu_intervals: cpuRaw,
+      gpu_samples: gpuRaw,
     },
     js_heap: {
       status: 'unavailable',
@@ -1588,11 +1826,13 @@ function summarizeProcesses(samples) {
 
 const report = {
   schema: 'capturepack.windows-replay-field-report',
-  version: 1,
+  version: 2,
   run_id: runId,
   started_at: new Date(beganAt).toISOString(),
   finished_at: null,
   case: {
+    replay_backend_requested: replayBackend,
+    release_comparison: releaseComparison,
     fps,
     duration_seconds: durationSeconds,
     capture_delay_seconds: captureDelaySeconds,
@@ -1612,11 +1852,17 @@ const report = {
     target_resolved: null,
     replay_max_width: replayMaxWidth,
     sample_interval_ms: sampleIntervalMs,
+    workload: {
+      fixture: 'windows-replay-field-surface',
+      fixture_schema_version: 1,
+      movement_cycle_ms: 9_000,
+    },
   },
   environment: {
     platform: process.platform,
     node: process.version,
     electron,
+    build: buildIdentity(),
     ffprobe_available: false,
     ffmpeg_available: false,
     layout: null,
@@ -1632,6 +1878,8 @@ const report = {
     app_log: path.join(profileDir, 'logs', 'main.log'),
   },
   process_metrics: null,
+  process_metrics_startup_inclusive: null,
+  performance: null,
   recorder_runtime: null,
   media: [],
   past_sampling: null,
@@ -1748,21 +1996,24 @@ try {
 
   setStage(
     'recording',
-    `${fps} fps, ${durationSeconds}s retained after ${warmupSeconds}s launch allowance, ` +
+    `${replayBackend}, ${fps} fps, ${durationSeconds}s retained after ` +
+      `${warmupSeconds}s launch allowance, ` +
       `${resolvedTargetId === 'all' ? 'all displays' : `display ${resolvedTargetId}`}`,
   )
   appStdout = createWriteStream(path.join(artifactsDir, 'capturepack-stdout.log'))
   appStderr = createWriteStream(path.join(artifactsDir, 'capturepack-stderr.log'))
+  const appArguments = [
+    '.',
+    `--user-data-dir=${profileDir}`,
+    `--output-dir=${outputDir}`,
+    '--no-global-shortcut',
+    '--no-login-item',
+    `--capture-now=${String(captureDelaySeconds)}`,
+    ...(replayBackend === 'native-dxgi' ? ['--dxgi-native-replay'] : []),
+  ]
   appProcess = track(spawn(
     electron,
-    [
-      '.',
-      `--user-data-dir=${profileDir}`,
-      `--output-dir=${outputDir}`,
-      '--no-global-shortcut',
-      '--no-login-item',
-      `--capture-now=${String(captureDelaySeconds)}`,
-    ],
+    appArguments,
     {
       cwd: coreDir,
       windowsHide: true,
@@ -1784,8 +2035,8 @@ try {
   while (!interrupted && Date.now() <= captureDeadline) {
     if (Date.now() >= nextSampleAt) {
       try {
-        const processes = await processTreeSnapshot(appProcess.pid)
-        const sample = { wall_time_ms: Date.now(), processes }
+        const snapshot = await processTreeSnapshot(appProcess.pid)
+        const sample = { wall_time_ms: Date.now(), ...snapshot }
         processSamples.push(sample)
         appendFileSync(processSamplesPath, `${JSON.stringify(sample)}\n`, 'utf8')
       } catch (error) {
@@ -1848,10 +2099,22 @@ try {
   appStdout?.end()
   appStderr?.end()
 
-  report.process_metrics = summarizeProcesses(processSamples)
+  report.process_metrics_startup_inclusive = summarizeProcesses(processSamples)
   const mainLogPath = path.join(profileDir, 'logs', 'main.log')
   const mainLog = existsSync(mainLogPath) ? readFileSync(mainLogPath, 'utf8') : ''
   const recorderAvailability = parseRecorderAvailability(mainLog)
+  report.performance = parsePerformanceEvidence(mainLog, recorderAvailability)
+  const measurementStartMs = report.performance.measurement_window.start_ms
+  const measurementEndMs = report.performance.measurement_window.end_ms
+  const measurementSamples = processSamples.filter((sample) => (
+    measurementStartMs !== null
+    && measurementEndMs !== null
+    && sample.wall_time_ms >= measurementStartMs
+    && sample.wall_time_ms <= measurementEndMs
+  ))
+  report.process_metrics = summarizeProcesses(measurementSamples)
+  report.performance.measurement_window.sample_count = measurementSamples.length
+  report.performance.measurement_window.raw_samples = processSamplesPath
   const readinessRows = recorderAvailability.displays
   report.case.recorder_start_readiness = {
     ...report.case.recorder_start_readiness,
@@ -2008,6 +2271,36 @@ try {
   for (const display of displays) {
     probes.push(await probeReplay(foundPack, display))
   }
+  const productionHelper = await loadPastHelper()
+  const productionFmp4 = new Map()
+  for (const probe of probes) {
+    if (replayBackend !== 'native-dxgi') {
+      productionFmp4.set(probe.display, { status: 'not-required' })
+      continue
+    }
+    const display = displays.find((item) => item.index === probe.display)
+    const reportedDurationMs = Number(display?.replay_duration_ms)
+    if (
+      probe.absolute_path === null
+      || !probe.absolute_path.toLocaleLowerCase().endsWith('.mp4')
+      || !Number.isFinite(reportedDurationMs)
+      || reportedDurationMs <= 0
+    ) {
+      productionFmp4.set(probe.display, {
+        status: 'invalid',
+        reason: 'missing native MP4 or manifest replay duration',
+      })
+      continue
+    }
+    productionFmp4.set(probe.display, {
+      ...productionHelper.validateNativeReplayMp4(
+        readFileSync(probe.absolute_path),
+        reportedDurationMs,
+      ),
+      reported_duration_ms: reportedDurationMs,
+      basis: 'production validateDxgiReplayMp4',
+    })
+  }
   writeJsonAtomic(framePtsPath, {
     displays: probes.map((probe) => ({
       display: probe.display,
@@ -2083,6 +2376,7 @@ try {
       probe_ok: probe.probe_ok,
       full_decode_ok: probe.decode_ok,
       full_decode_timed_out: probe.decode_timed_out,
+      production_fmp4_validation: productionFmp4.get(probe.display),
       manifest_cadence:
         cadence === undefined
           ? { status: 'missing' }
@@ -2153,6 +2447,65 @@ try {
     }
   })
 
+  const expectedDisplayCount = resolvedTargetId === 'all' ? layout.displays.length : 1
+  const nativeReadyDisplayCount = new Set(
+    report.performance.native_ready.map((row) => row.display_id),
+  ).size
+  const nativeSnapshotDisplayCount = new Set(
+    report.performance.native_snapshots.map((row) => row.display_id),
+  ).size
+  const nativeMediaValid = report.media.length === expectedDisplayCount
+    && report.media.every((media) => (
+      media.file?.endsWith('.mp4') === true
+      && media.production_fmp4_validation?.status === 'valid'
+      && media.full_decode_ok === true
+    ))
+  const nativeTimingValid = report.performance.measurement_window.start_ms !== null
+    && report.performance.measurement_window.end_ms !== null
+    && report.performance.measurement_window.start_ms
+      < report.performance.measurement_window.end_ms
+    && report.performance.native_snapshots.every((row) => (
+      row.at_ms !== null && row.at_ms >= report.performance.measurement_window.end_ms
+    ))
+  const nativeObserved = nativeReadyDisplayCount === expectedDisplayCount
+    && nativeSnapshotDisplayCount === expectedDisplayCount
+    && nativeMediaValid
+    && nativeTimingValid
+  const shippingObserved = report.performance.native_ready.length === 0
+    && report.performance.native_snapshots.length === 0
+    && report.performance.replay_ready.length === expectedDisplayCount
+  const observedBackend = nativeObserved
+    ? 'native-dxgi'
+    : shippingObserved
+      ? 'shipping'
+      : 'mixed-or-unverified'
+  report.performance.observed_backend = observedBackend
+  report.performance.backend_evidence = {
+    expected_display_count: expectedDisplayCount,
+    native_ready_display_count: nativeReadyDisplayCount,
+    native_snapshot_display_count: nativeSnapshotDisplayCount,
+    native_production_fmp4_valid: nativeMediaValid,
+    native_timing_valid: nativeTimingValid,
+    shipping_replay_ready_count: report.performance.replay_ready.length,
+  }
+  report.recorder_runtime.release_backend = {
+    requested: replayBackend,
+    observed: observedBackend,
+    pass: observedBackend === replayBackend,
+    basis:
+      'production native READY/snapshot selection logs plus persisted media validation',
+  }
+  const performanceEvidencePass =
+    report.process_metrics.sample_count >= 3
+    && report.process_metrics.cpu_total_capacity_percent.mean !== null
+    && report.process_metrics.working_set_bytes.mean !== null
+    && report.process_metrics.gpu.available_sample_count >= 3
+    && report.process_metrics.gpu.total_engine_percent.mean !== null
+    && report.process_metrics.gpu.video_encode_percent.mean !== null
+    && report.performance.capture_to_saved_ms !== null
+    && report.performance.replay_export_ms !== null
+  report.performance.evidence_complete = performanceEvidencePass
+
   setStage('past-sampling', 'decoding persisted timeline through production codec/session')
   if (!existsSync(contextPath)) {
     report.past_sampling = {
@@ -2189,7 +2542,7 @@ try {
     })
     const focusedContextDisplay =
       contextDisplays.find((display) => display.focused) ?? contextDisplays[0]
-    const helper = await loadPastHelper()
+    const helper = productionHelper
     const pastSamplingInput = {
       value: contextValue,
       displays: contextDisplays,
@@ -2602,11 +2955,28 @@ try {
     replay_file_count: report.media.length,
     every_replay_probes_decodes_and_meets_cadence: mediaPass,
     past_sampling: report.past_sampling?.pass === true,
+    requested_replay_backend_observed:
+      !releaseComparison || report.recorder_runtime.release_backend.pass,
+    release_performance_evidence_complete:
+      !releaseComparison || performanceEvidencePass,
+    native_fmp4_production_validator_and_full_decode:
+      replayBackend !== 'native-dxgi' || nativeMediaValid,
     every_spawned_process_terminated: false,
   }
   if (!mediaPass) report.failures.push('one or more replay media criteria failed')
   if (report.past_sampling?.pass !== true) {
     report.failures.push('persisted past sampling/reopen verification failed')
+  }
+  if (releaseComparison && !report.recorder_runtime.release_backend.pass) {
+    report.failures.push(
+      `requested ${replayBackend} but observed ${observedBackend}`,
+    )
+  }
+  if (releaseComparison && !performanceEvidencePass) {
+    report.failures.push('post-ready CPU/GPU/working-set/capture-export evidence is incomplete')
+  }
+  if (replayBackend === 'native-dxgi' && !nativeMediaValid) {
+    report.failures.push('native fMP4 did not pass production validation and full decode')
   }
   report.result = report.failures.length === 0 ? 'OK' : 'BROKEN'
 } catch (error) {
