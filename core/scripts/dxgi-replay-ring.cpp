@@ -1975,6 +1975,14 @@ class EncoderSession {
 
     ComPtr<ICodecAPI> codec;
     transform_.As(&codec);
+    // Main-profile snapshots are only independently decodable when the ring
+    // can use presentation order as decode order. Microsoft requires this
+    // property to be set before SetOutputType; an encoder that cannot prove
+    // zero B pictures must not reach READY.
+    if (!SetCodecUint32(codec.Get(), CODECAPI_AVEncMPVDefaultBPictureCount,
+                        0, true)) {
+      return MF_E_INVALIDREQUEST;
+    }
 
     result = MFCreateMediaType(&outputType_);
     if (SUCCEEDED(result)) result = outputType_->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
@@ -2011,7 +2019,6 @@ class EncoderSession {
     if (!SetCodecBool(codec.Get(), CODECAPI_AVLowLatencyMode, true)) {
       return MF_E_INVALIDREQUEST;
     }
-    SetCodecUint32(codec.Get(), CODECAPI_AVEncMPVDefaultBPictureCount, 0, false);
     if (!SetCodecUint32(codec.Get(), CODECAPI_AVEncMPVGOPSize,
                         kKeyframeIntervalFrames, true)) {
       return MF_E_INVALIDREQUEST;

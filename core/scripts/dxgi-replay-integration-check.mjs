@@ -14,6 +14,8 @@ const preload = readFileSync(path.join(core, 'src/preload/capture.ts'), 'utf8')
   .replace(/\r\n?/g, '\n')
 const ipc = readFileSync(path.join(core, 'src/shared/ipc.ts'), 'utf8')
   .replace(/\r\n?/g, '\n')
+const i18n = readFileSync(path.join(core, 'src/shared/i18n.ts'), 'utf8')
+  .replace(/\r\n?/g, '\n')
 let failed = 0
 let passed = 0
 
@@ -104,11 +106,24 @@ check(
     && renderer.includes('void startCapture(payload)'),
 )
 check(
-  'only held real captures attempt native and every miss falls through to shipping',
+  'only held real captures attempt native and an unselected service falls through to shipping',
   request.includes('options.holdAfterCapture === true')
     && request.includes('await requestNativeReplay(win, requestId)')
     && request.includes('return requestShippingReplay(win, requestId, timeoutMs, options)')
     && !probe.includes('holdAfterCapture'),
+)
+check(
+  'selected native export failure is explicit and restarts shipping only for later captures',
+  nativeRequest.includes("return { replay: null, miss: 'native-export-failed' }")
+    && nativeRequest.includes('dxgiReplayServices.delete(displayId)')
+    && nativeRequest.includes('slot.manager.stop()')
+    && nativeRequest.includes('setShippingReplayWorkload(displayId, true)')
+    && nativeRequest.includes('shipping restarts for later captures')
+    && nativeRequest.includes('rememberNativeReplayRequest(requestId, displayId)')
+    && request.includes('if (native !== null) return native')
+    && ipc.includes("| 'native-export-failed'")
+    && i18n.includes("case 'native-export-failed':")
+    && i18n.includes("return t('recorder.nativeExportFailed')"),
 )
 check(
   'native selection requires READY health and a bounded validated snapshot',

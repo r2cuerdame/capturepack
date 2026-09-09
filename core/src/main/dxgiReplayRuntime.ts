@@ -526,6 +526,10 @@ export interface DxgiReplayRuntimeManagerOptions {
   readonly probe?: typeof probeDxgiReplayCapability
   readonly spawnProcess?: (executable: string, args: readonly string[]) => DxgiReplayRuntimeProcess
   readonly onFallback?: (selection: Extract<DxgiReplayRuntimeSelection, { backend: 'shipping' }>) => void
+  /** Test seam for best-effort deletion after an export has stopped using its file. */
+  readonly cleanupOutputFile?: (outputPath: string) => Promise<void>
+  /** Cleanup failures are observable but never replace the original export result. */
+  readonly onCleanupError?: (outputPath: string, error: unknown) => void
 }
 
 export class DxgiReplayRuntimeManager {
@@ -541,6 +545,7 @@ export class DxgiReplayRuntimeManager {
   private stderr = ''
   private stopping = false
   private lifecycleGeneration = 0
+  private readonly exitedProcesses = new WeakSet<object>()
 
   constructor(private readonly options: DxgiReplayRuntimeManagerOptions) {}
 
@@ -608,6 +613,7 @@ export class DxgiReplayRuntimeManager {
     })
     child.once('error', (error) => this.failProcess(child, 'native-runtime-failed', error.message))
     child.once('close', (code, signal) => {
+      this.exitedProcesses.add(child)
       if (this.stopping || this.process !== child) return
       try {
         this.parser.finish()
@@ -715,7 +721,9 @@ export class DxgiReplayRuntimeManager {
       const timer = setTimeout(() => {
         this.pendingSnapshots.delete(requestId)
         this.snapshotInFlight = false
-        void rm(outputPath, { force: true })
+        // The service can still have the MP4 open here. Defer deletion until
+        // process close so Windows cannot leave a retention-sized orphan.
+        this.cleanupOutputAfterExit(child, outputPath)
         this.failProcess(child, 'native-export-failed', 'DXGI replay snapshot timed out')
         resolve({ status: 'fallback', reason: 'native-export-failed', detail: 'snapshot timeout' })
       }, timeoutMs)
@@ -754,7 +762,10 @@ export class DxgiReplayRuntimeManager {
     for (const [requestId, pending] of this.pendingSnapshots) {
       clearTimeout(pending.timer)
       pending.resolve({ status: 'fallback', reason: 'native-export-failed', detail: 'service stopped' })
-      void rm(pending.outputPath, { force: true })
+      // STOP may take time to finalize/cancel an export, especially on
+      // Windows where an open Media Foundation sink prevents unlinking.
+      if (child === null) this.cleanupOutput(pending.outputPath)
+      else this.cleanupOutputAfterExit(child, pending.outputPath)
       this.pendingSnapshots.delete(requestId)
     }
     if (child !== null) {
@@ -819,10 +830,10 @@ export class DxgiReplayRuntimeManager {
     this.pendingSnapshots.delete(packet.requestId)
     clearTimeout(pending.timer)
     if (packet.status !== 'ok') {
-      await rm(pending.outputPath, { force: true })
       this.snapshotInFlight = false
       this.failProcess(child, 'native-export-failed', packet.reason)
       pending.resolve({ status: 'fallback', reason: 'native-export-failed', detail: packet.reason })
+      this.cleanupOutput(pending.outputPath)
       return
     }
     try {
@@ -861,9 +872,28 @@ export class DxgiReplayRuntimeManager {
       this.failProcess(child, 'native-export-failed', String(error))
       pending.resolve({ status: 'fallback', reason: 'native-export-failed', detail: String(error) })
     } finally {
-      await rm(pending.outputPath, { force: true })
+      this.cleanupOutput(pending.outputPath)
       this.snapshotInFlight = false
     }
+  }
+
+  private cleanupOutputAfterExit(child: DxgiReplayRuntimeProcess, outputPath: string): void {
+    if (this.exitedProcesses.has(child)) {
+      this.cleanupOutput(outputPath)
+      return
+    }
+    child.once('close', () => {
+      this.exitedProcesses.add(child)
+      this.cleanupOutput(outputPath)
+    })
+  }
+
+  private cleanupOutput(outputPath: string): void {
+    const cleanup = this.options.cleanupOutputFile
+      ?? ((value: string) => rm(value, { force: true }))
+    void cleanup(outputPath).catch((error: unknown) => {
+      this.options.onCleanupError?.(outputPath, error)
+    })
   }
 
   private failProcess(
@@ -881,7 +911,7 @@ export class DxgiReplayRuntimeManager {
     for (const [requestId, pending] of this.pendingSnapshots) {
       clearTimeout(pending.timer)
       pending.resolve({ status: 'fallback', reason: 'native-export-failed', detail })
-      void rm(pending.outputPath, { force: true })
+      this.cleanupOutputAfterExit(child, pending.outputPath)
       this.pendingSnapshots.delete(requestId)
     }
     try { child.stdin.end() } catch { /* already gone */ }

@@ -372,6 +372,8 @@ export interface ImageRegionSelectorCancelPayload {
  *  - 'buffer-too-short'  — it came back with less than a decodable video (a slot
  *    that just started or just rotated; on MP4 its payload is still entirely
  *    inside the muxer).
+ *  - 'native-export-failed' — native owned the retained history but could not
+ *    export it; shipping restarts for the next capture, not this lost past.
  */
 export type RecorderFailureReason =
   | 'screen-unavailable'
@@ -382,6 +384,7 @@ export type RecorderFailureReason =
   | 'no-frames'
   | 'replay-timeout'
   | 'buffer-too-short'
+  | 'native-export-failed'
 
 export interface CaptureStartPayload {
   // Electron display id (as a string) this recorder window is assigned to.
