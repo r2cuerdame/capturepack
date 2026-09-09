@@ -25,11 +25,15 @@ software encoder.
 
 Desktop Duplication may expose the hardware cursor as a separate plane. Native
 READY therefore also requires explicit `cursor-composited` health evidence.
-The current candidate does not yet composite `PointerPosition` and
-`GetFramePointerShape` data into the GPU surface, so it deliberately reports
-`cursor-composition-unavailable` and leaves the shipping recorder selected.
-This gate must not be enabled until cursor composition is implemented and
-verified without a CPU full-frame readback.
+The helper persists `PointerPosition` and `GetFramePointerShape` metadata across
+pointer-only updates, clips and inverse-rotates the cursor for the selected
+output, and composites it onto the owned BGRA D3D11 render target before NV12
+conversion. COLOR shapes use the pointer metadata directly; MONOCHROME and
+MASKED_COLOR shapes read back only the bounded clipped cursor region, never the
+full frame. The proof bit is set only after GPU composition completes and the
+converted frame is accepted by the hardware encoder. Malformed or unsupported
+cursor data and composition failures report `cursor-composition-unavailable`
+and leave or return the application to the shipping recorder.
 
 The existing Chromium/MediaRecorder replay flow and its declared GDI fallback
 remain available. The exact `--dxgi-native-replay` process switch permits a native
