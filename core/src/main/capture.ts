@@ -932,6 +932,12 @@ function reconcileDxgiReplayServices(
     let manager: DxgiReplayRuntimeManager
     manager = new DxgiReplayRuntimeManager({
       outputDirectory: path.join(app.getPath('temp'), 'capturepack-dxgi-replay'),
+      onCleanupError: (outputPath, error) => {
+        logWarn(
+          `[capture] display ${display.id}: could not remove native replay export ` +
+            `${outputPath} — ${error instanceof Error ? error.message : String(error)}`,
+        )
+      },
       onFallback: (selection) => {
         if (dxgiReplayServices.get(display.id)?.manager !== manager) return
         setShippingReplayWorkload(display.id, true)
@@ -1331,6 +1337,8 @@ export function replayUnavailableReason(
       return 'replay-timeout'
     case 'empty':
       return 'buffer-too-short'
+    case 'native-export-failed':
+      return 'native-export-failed'
     case 'window-gone':
     case 'no-recorder':
       return 'did-not-start'
@@ -1620,6 +1628,9 @@ export type ReplayMiss =
   // under the evidence bar (on MP4 a freshly started/rotated slot is entirely
   // muxer-buffered, so this is reachable on a perfectly healthy recorder).
   | 'empty'
+  // Native owned the retained history, but its guarded export failed. Shipping
+  // is restarted for later captures; it cannot recreate this request's past.
+  | 'native-export-failed'
 
 export interface ReplayFetch {
   replay: {
@@ -1726,19 +1737,32 @@ async function requestNativeReplay(
   try {
     snapshot = await slot.manager.snapshot(REPLAY_TIMEOUT_MS)
   } catch (error) {
+    if (dxgiReplayServices.get(displayId) === slot) {
+      dxgiReplayServices.delete(displayId)
+      slot.manager.stop()
+      setShippingReplayWorkload(displayId, true)
+    }
     logWarn(
       `[capture] display ${displayId}: DXGI native replay export threw — ` +
-        `${error instanceof Error ? error.message : String(error)}; requesting shipping replay`,
+        `${error instanceof Error ? error.message : String(error)}; ` +
+        'this request has no replay; shipping restarts for later captures',
     )
-    return null
+    rememberNativeReplayRequest(requestId, displayId)
+    return { replay: null, miss: 'native-export-failed' }
   }
   if (snapshot.status !== 'ok') {
+    if (dxgiReplayServices.get(displayId) === slot) {
+      dxgiReplayServices.delete(displayId)
+      slot.manager.stop()
+      setShippingReplayWorkload(displayId, true)
+    }
     logWarn(
       `[capture] display ${displayId}: DXGI native replay export unavailable ` +
         `(${snapshot.reason})${snapshot.detail === undefined ? '' : ` — ${snapshot.detail}`}; ` +
-        'requesting shipping replay',
+        'this request has no replay; shipping restarts for later captures',
     )
-    return null
+    rememberNativeReplayRequest(requestId, displayId)
+    return { replay: null, miss: 'native-export-failed' }
   }
   if (
     dxgiReplayServices.get(displayId) !== slot
@@ -1747,7 +1771,8 @@ async function requestNativeReplay(
   ) {
     // A settings/hotplug generation replaced this service while it exported.
     // Its bytes are not evidence about the recorder assigned to this request.
-    return null
+    rememberNativeReplayRequest(requestId, displayId)
+    return { replay: null, miss: 'native-export-failed' }
   }
   // Never attribute the shipping renderer's last heartbeat to bytes produced
   // by the independent DXGI/MF service.
@@ -1771,9 +1796,10 @@ async function requestNativeReplay(
 
 // Asks a capture window for its current replay blob, reporting WHY when there
 // is none: a timeout, an empty answer, or a window destroyed mid-request.
-// Health probes (hold=false) always exercise the shipping recorder. A real
-// capture may select native only after READY and a fully validated MP4 export;
-// every failure falls through to this same shipping request unchanged.
+// Health probes (hold=false) always exercise the shipping recorder. A service
+// that was never selected falls through to shipping. Once native has
+// owned and cleared shipping history, an export failure is reported explicitly:
+// shipping restarts for later captures but cannot recreate this request's past.
 export async function requestReplay(
   win: BrowserWindow,
   requestId: string,

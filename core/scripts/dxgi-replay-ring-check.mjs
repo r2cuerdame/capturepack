@@ -1,11 +1,27 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { compileDxgiReplayRingHelper } from './build-dxgi-timing-helper.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
+const nativeSource = readFileSync(path.join(here, 'dxgi-replay-ring.cpp'), 'utf8')
+  .replace(/\r\n?/g, '\n')
+const encoderStart = nativeSource.indexOf('class EncoderSession')
+const encoderEnd = nativeSource.indexOf('bool GpuCompletedWithin(', encoderStart)
+const encoder = encoderStart >= 0 && encoderEnd > encoderStart
+  ? nativeSource.slice(encoderStart, encoderEnd)
+  : ''
+const bFrameContract = encoder.indexOf(
+  'SetCodecUint32(codec.Get(), CODECAPI_AVEncMPVDefaultBPictureCount,\n                        0, true)',
+)
+const outputTypeCommit = encoder.indexOf('transform_->SetOutputType(0, outputType_.Get(), 0)')
+if (bFrameContract < 0 || outputTypeCommit < 0 || bFrameContract > outputTypeCommit) {
+  throw new Error(
+    'DXGI replay encoder must require zero B pictures before committing its output type',
+  )
+}
 const expectedNativeSelfTestLines = [
   'SELFTEST PASS timestamps',
   'SELFTEST PASS rotation-topology',

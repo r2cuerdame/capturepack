@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import {
   DXGI_REPLAY_MAX_EXPORT_BYTES,
@@ -286,16 +286,131 @@ async function main(): Promise<void> {
       kind: 2, requestId: BigInt(id), mp4Bytes: BigInt(truncated.length),
     })))
   })
-  const badManager = new DxgiReplayRuntimeManager({ ...common, spawnProcess: () => {
-    queueMicrotask(() => badChild.output(servicePacket()))
-    return badChild
-  } })
+  const badFallbacks: string[] = []
+  const badManager = new DxgiReplayRuntimeManager({
+    ...common,
+    onFallback: (selection) => badFallbacks.push(selection.reason),
+    spawnProcess: () => {
+      queueMicrotask(() => badChild.output(servicePacket()))
+      return badChild
+    },
+  })
   await badManager.start({ deviceName: '\\\\.\\DISPLAY1', retentionMs: 30_000 })
   const badSnapshot = await badManager.snapshot(1_000)
   const afterBadExport = badManager.currentSelection()
   check('malformed export fails closed and demotes native runtime',
     badSnapshot.status === 'fallback' && afterBadExport.backend === 'shipping'
-      && afterBadExport.reason === 'native-export-failed')
+      && afterBadExport.reason === 'native-export-failed'
+      && badFallbacks.includes('native-export-failed')
+      && badChild.killed)
+
+  let timeoutOutput = ''
+  const timeoutCleanups: string[] = []
+  const timeoutChild = new FakeProcess((command) => {
+    if (!command.startsWith('SNAPSHOT\t')) return
+    const output = command.trimEnd().split('\t')[2]
+    if (output === undefined) return
+    timeoutOutput = output
+    writeFileSync(output, truncated)
+  })
+  const timeoutManager = new DxgiReplayRuntimeManager({
+    ...common,
+    cleanupOutputFile: async (outputPath) => {
+      timeoutCleanups.push(outputPath)
+      rmSync(outputPath, { force: true })
+    },
+    spawnProcess: () => {
+      queueMicrotask(() => timeoutChild.output(servicePacket()))
+      return timeoutChild
+    },
+  })
+  await timeoutManager.start({ deviceName: '\\\\.\\DISPLAY1', retentionMs: 30_000 })
+  // The production Electron process has other live handles; keep this isolated
+  // Node fixture alive while exercising the deliberately-unref'ed deadline.
+  const timeoutFixtureKeepAlive = setTimeout(() => {}, 1_000)
+  const timedOutSnapshot = await timeoutManager.snapshot(10)
+  clearTimeout(timeoutFixtureKeepAlive)
+  check('snapshot timeout kills native but does not unlink its possibly-open export',
+    timedOutSnapshot.status === 'fallback'
+      && timedOutSnapshot.detail === 'snapshot timeout'
+      && timeoutChild.killed
+      && timeoutCleanups.length === 0
+      && existsSync(timeoutOutput))
+  timeoutChild.close(null)
+  check('snapshot timeout removes its export only after process close',
+    timeoutCleanups.length === 1
+      && timeoutCleanups[0] === timeoutOutput
+      && !existsSync(timeoutOutput))
+
+  let stopOutput = ''
+  const stopCleanups: string[] = []
+  let announceStopSnapshot!: () => void
+  const didStartStopSnapshot = new Promise<void>((resolve) => { announceStopSnapshot = resolve })
+  const stopChild = new FakeProcess((command) => {
+    if (!command.startsWith('SNAPSHOT\t')) return
+    const output = command.trimEnd().split('\t')[2]
+    if (output === undefined) return
+    stopOutput = output
+    writeFileSync(output, truncated)
+    announceStopSnapshot()
+  })
+  const stopManager = new DxgiReplayRuntimeManager({
+    ...common,
+    cleanupOutputFile: async (outputPath) => {
+      stopCleanups.push(outputPath)
+      rmSync(outputPath, { force: true })
+    },
+    spawnProcess: () => {
+      queueMicrotask(() => stopChild.output(servicePacket()))
+      return stopChild
+    },
+  })
+  await stopManager.start({ deviceName: '\\\\.\\DISPLAY1', retentionMs: 30_000 })
+  const stoppedSnapshotPromise = stopManager.snapshot(1_000)
+  await didStartStopSnapshot
+  stopManager.stop()
+  const stoppedSnapshot = await stoppedSnapshotPromise
+  check('stop resolves export failure but retains its possibly-open temporary file',
+    stoppedSnapshot.status === 'fallback'
+      && stoppedSnapshot.detail === 'service stopped'
+      && stopCleanups.length === 0
+      && existsSync(stopOutput))
+  stopChild.close(null)
+  check('stop removes its temporary export only after process close',
+    stopCleanups.length === 1
+      && stopCleanups[0] === stopOutput
+      && !existsSync(stopOutput))
+
+  let cleanupFailureOutput = ''
+  const cleanupFailures: string[] = []
+  const cleanupFailureChild = new FakeProcess((command, child) => {
+    if (!command.startsWith('SNAPSHOT\t')) return
+    const [, id, output] = command.trimEnd().split('\t')
+    if (id === undefined || output === undefined) return
+    cleanupFailureOutput = output
+    writeFileSync(output, mp4)
+    queueMicrotask(() => child.output(servicePacket({
+      kind: 2, requestId: BigInt(id), mp4Bytes: BigInt(mp4.length),
+    })))
+  })
+  const cleanupFailureManager = new DxgiReplayRuntimeManager({
+    ...common,
+    cleanupOutputFile: async () => { throw new Error('fixture cleanup denied') },
+    onCleanupError: (outputPath, error) => cleanupFailures.push(`${outputPath}:${String(error)}`),
+    spawnProcess: () => {
+      queueMicrotask(() => cleanupFailureChild.output(servicePacket()))
+      return cleanupFailureChild
+    },
+  })
+  await cleanupFailureManager.start({ deviceName: '\\\\.\\DISPLAY1', retentionMs: 30_000 })
+  const cleanupFailureSnapshot = await cleanupFailureManager.snapshot(1_000)
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  check('cleanup errors are reported without replacing a successful export result',
+    cleanupFailureSnapshot.status === 'ok'
+      && cleanupFailures.length === 1
+      && cleanupFailures[0]?.includes('fixture cleanup denied') === true)
+  rmSync(cleanupFailureOutput, { force: true })
+  cleanupFailureManager.stop()
 
   let retentionClockMs = 0
   let shortChild: FakeProcess
