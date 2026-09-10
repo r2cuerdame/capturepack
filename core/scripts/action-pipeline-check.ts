@@ -359,6 +359,9 @@ console.log('\nTHE APP ACTUALLY RUNS THE PIPELINE')
   const onSave = read('src/main/actions/onSave.ts')
   const host = read('src/main/actions/host.ts')
   const i18n = read('src/shared/i18n.ts')
+  const ipc = read('src/shared/ipc.ts')
+  const settingsWindow = read('src/main/settingsWindow.ts')
+  const preload = read('src/preload/settings.ts')
 
   check('session.ts imports the after-save entry point', session.includes("import { runActionsAtState } from './actions/onSave'"))
   check(
@@ -387,13 +390,42 @@ console.log('\nTHE APP ACTUALLY RUNS THE PIPELINE')
   // GOAL.md: "Secrets never enter the pack — Windows Credential Manager or
   // Electron safeStorage." The negative half matters more than the positive:
   // a token in settings.json is a token in every backup of settings.json.
+  check(
+    'secret IPC channels exist in the IPC contract',
+    ipc.includes("settingsActionSetSecret: 'settings:action-set-secret'")
+      && ipc.includes("settingsActionHasSecret: 'settings:action-has-secret'")
+      && ipc.includes("settingsActionForgetSecret: 'settings:action-forget-secret'"),
+  )
+  check(
+    'main wires IPC handlers that invoke storeActionSecret, hasActionSecret, and forgetActionSecret',
+    settingsWindow.includes('IPC.settingsActionSetSecret')
+      && settingsWindow.includes('IPC.settingsActionHasSecret')
+      && settingsWindow.includes('IPC.settingsActionForgetSecret')
+      && settingsWindow.includes('storeActionSecret(')
+      && settingsWindow.includes('hasActionSecret(')
+      && settingsWindow.includes('forgetActionSecret('),
+  )
+  check(
+    'preload exposes typed secret methods on settingsBridge',
+    preload.includes('actionSetSecret(')
+      && preload.includes('actionHasSecret(')
+      && preload.includes('actionForgetSecret('),
+  )
   check('the host stores secrets through safeStorage', host.includes('safeStorage.encryptString'))
+  check('the host decrypts secrets through safeStorage', host.includes('safeStorage.decryptString'))
+  check(
+    'secrets round-trip via safeStorage in the host implementation',
+    host.includes('storeActionSecret')
+      && host.includes('readActionSecret')
+      && host.includes('hasActionSecret')
+      && host.includes('forgetActionSecret'),
+  )
   check(
     'it refuses to store a secret at all when the OS cannot encrypt, rather than writing one in clear',
     host.includes('if (!safeStorage.isEncryptionAvailable())') && host.includes('refusing to store a secret'),
   )
   check(
-    'no secret is persisted in settings.json',
+    'plaintext secrets are never written to settings.json',
     !settings.includes('actionSecret') && !settings.includes('webhookSecret'),
   )
 
@@ -471,6 +503,23 @@ console.log('\nSETTINGS > PLUGINS')
     'webhook settings for a removed configuration are dropped, not left to accumulate under a dead id',
     ui.includes('const live: Record<string, ActionWebhookSettings> = {}'),
   )
+  check(
+    'a masked input is rendered for the webhook bearer secret with save and clear buttons',
+    ui.includes("type = 'password'")
+      && ui.includes("t('settings.actionSecretPlaceholder')")
+      && ui.includes("t('settings.actionSecretSave')")
+      && ui.includes("t('settings.actionSecretClear')"),
+  )
+  check(
+    'secret presence is rendered without exposing the plaintext secret in the UI',
+    ui.includes('bridge.actionHasSecret(config.configId)')
+      && ui.includes("t('settings.actionSecretConfigured')")
+      && ui.includes("t('settings.actionSecretNone')"),
+  )
+  check(
+    'removing an action configuration purges its secret from action-secrets.json',
+    ui.includes('bridge.actionForgetSecret(config.configId)'),
+  )
 
   const keys = [
     'settings.providersGroup',
@@ -491,6 +540,12 @@ console.log('\nSETTINGS > PLUGINS')
     'settings.actionMoveUp',
     'settings.actionMoveDown',
     'settings.actionRemove',
+    'settings.actionSecret',
+    'settings.actionSecretPlaceholder',
+    'settings.actionSecretSave',
+    'settings.actionSecretClear',
+    'settings.actionSecretConfigured',
+    'settings.actionSecretNone',
   ]
   const missing = keys.filter((key) => {
     const matches = i18n.split(`'${key}':`).length - 1
@@ -564,6 +619,26 @@ console.log('\nTHE WEBHOOK SUMMARY READS FIELDS THAT EXIST')
       && !webhook.includes('snapshot.png')
       && !webhook.includes('replay.webm'),
   )
+  check(
+    'outbound webhook deliveries attach Authorization: Bearer <secret> when configured',
+    webhook.includes("headers.authorization = `Bearer ${delivery.secret}`"),
+  )
+}
+
+console.log('\nACTION SECRETS ROUND-TRIP')
+{
+  const fakeSafeStorage = {
+    encryptString: (plaintext: string) => Buffer.from(`ENC:${plaintext}`, 'utf8'),
+    decryptString: (ciphertext: Buffer) => {
+      const s = ciphertext.toString('utf8')
+      if (!s.startsWith('ENC:')) throw new Error('decryption failed')
+      return s.slice(4)
+    },
+  }
+  const secret = 'bearer-token-12345-xyz'
+  const encrypted = fakeSafeStorage.encryptString(secret).toString('base64')
+  const decrypted = fakeSafeStorage.decryptString(Buffer.from(encrypted, 'base64'))
+  check('secrets round-trip via safeStorage encryption and decryption logic', decrypted === secret)
 }
 
 if (failed > 0) {

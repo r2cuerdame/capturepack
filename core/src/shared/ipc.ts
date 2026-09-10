@@ -202,6 +202,12 @@ export const IPC = {
   // with the current settings (issue #54), then report the outcome. Nothing else
   // is touched: the capture buffer, the hotkey and any open editor keep running.
   settingsMcpRestart: 'settings:mcp-restart',
+  // settings window -> main (invoke): save OS-encrypted bearer secret for an action configuration
+  settingsActionSetSecret: 'settings:action-set-secret',
+  // settings window -> main (invoke): whether an encrypted action secret exists for a configId
+  settingsActionHasSecret: 'settings:action-has-secret',
+  // settings window -> main (invoke): delete any encrypted action secret for a configId
+  settingsActionForgetSecret: 'settings:action-forget-secret',
 
   // main -> hidden render window: render replay_annotated.webm from this job
   renderStart: 'render:start',
@@ -1668,6 +1674,11 @@ export interface SettingsSetResult {
   // Same contract for the explicit still-image shortcut. Kept separate so the
   // renderer can report the failure beside the field that actually failed.
   imageHotkeyFailed?: boolean
+}
+
+export interface ActionSetSecretPayload {
+  configId: string
+  secret: string
 }
 
 // ---------------------------------------------------------------------------
