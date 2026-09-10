@@ -45,8 +45,12 @@ try {
         windowsHide: true,
       }).trim()
       desktopInteractive = probeOutput === 'interactive' ? '1' : '0'
-    } catch {
-      desktopInteractive = '0'
+    } catch (error) {
+      if (error && error.status === 1 && String(error.stdout).trim() === 'locked') {
+        desktopInteractive = '0'
+      } else {
+        throw error
+      }
     }
   }
   execFileSync(

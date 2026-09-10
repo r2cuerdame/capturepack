@@ -434,7 +434,7 @@ console.log('\nActual Windows GDI frame source')
           /err 5\b/u.test(message) ||
           /access is denied/iu.test(message) ||
           /desktop.*locked|non-interactive|inaccessible/iu.test(message)
-        if (isLocked) {
+        if (isLocked && process.env.CAPTUREPACK_DESKTOP_INTERACTIVE !== '1') {
           console.log(
             '\nSKIPPED live frame capture: Windows desktop session is locked or non-interactive.'
             + '\n        Run on an unlocked interactive Windows desktop to verify live BitBlt frames.',
