@@ -20,8 +20,15 @@ import {
   stopContextRuntime,
   updateContextRetention,
 } from './context/runtime'
-import { setDomClock, setDomRetention, startDomBridge, stopDomBridge } from './chrome/domBridge'
+import {
+  setBrowserPageCaptureHandler,
+  setDomClock,
+  setDomRetention,
+  startDomBridge,
+  stopDomBridge,
+} from './chrome/domBridge'
 import { refreshHostManifestIfInstalled, syncExtensionIfChanged } from './chrome/install'
+import { saveBrowserPageCapture } from './chrome/pageCapture'
 import { disposeHistory, notifyHistoryChanged, openHistoryWindow, registerHistoryIpc } from './historyWindow'
 import {
   registerCaptureHotkey,
@@ -44,7 +51,7 @@ import {
   noteRenderEnded,
   saveNowRequest,
 } from './saveNow'
-import { startCaptureFlow, startImageCaptureFlow } from './session'
+import { startCaptureFlow, startEditFlow, startImageCaptureFlow } from './session'
 import { loadSettings, persistSettings } from './settings'
 import { openSettingsWindow, registerSettingsIpc } from './settingsWindow'
 import { createTray } from './tray'
@@ -225,6 +232,7 @@ function main(): void {
     // but stopping it here is what makes the surface timeline's final cost line
     // land in the log before the process goes (issues #64/#65).
     stopContextRuntime()
+    setBrowserPageCaptureHandler(null)
     stopDomBridge()
     disposeCapture()
     disposeHistory()
@@ -358,6 +366,21 @@ function main(): void {
     // clock, and it costs nothing while no browser is talking.
     setDomClock(() => contextNowMs() ?? Date.now())
     setDomRetention(settings.replaySeconds * 1000)
+    setBrowserPageCaptureHandler(async (capture) => {
+      const handle = await saveBrowserPageCapture(capture, settings)
+      notifyHistoryChanged()
+      const opened = startEditFlow(handle.dirPath, settings)
+      if (!opened) {
+        logWarn(
+          `[chrome] full-page capture saved as ${path.basename(handle.dirPath)}, ` +
+          'but another capture/editor already owns the window',
+        )
+        return { ok: false, reason: 'capture-saved-editor-busy' }
+      }
+      return opened
+        ? { ok: true }
+        : { ok: false, reason: 'Capture saved, but another editor is already open' }
+    })
     if (settings.chromeDomEnabled) {
       // Update the stable unpacked folder BEFORE answering the extension's
       // hello. Version 0.1.7+ compares the reply with its loaded version and

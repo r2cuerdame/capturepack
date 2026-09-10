@@ -161,8 +161,9 @@ console.log('\nThe picker actually uses it, in every frame')
   // speak the new payload. 0.2.0 was a pick carrying the document it sat in;
   // 0.3.0 adds a second way to arm the picker; 0.3.4 answers a capture with one
   // document per VISIBLE BROWSER WINDOW instead of the focused one alone (#132).
+  // 0.4.0 makes the toolbar a complete page capture (#157).
   check('the manifest version moved with the protocol change',
-    manifest.version === '0.3.4', manifest.version)
+    manifest.version === '0.4.0', manifest.version)
   check('and the document walker ships with it',
     existsSync(resolve(EXTENSION, 'document-snapshot.js')))
 
@@ -179,10 +180,9 @@ console.log('\nThe picker actually uses it, in every frame')
     JSON.stringify(manifest.commands))
   check('the shortcut suggests a default binding',
     manifest.commands?.['pick-element']?.suggested_key?.default !== undefined)
-  check('both entry points call one arming path',
+  check('element picking is an explicit secondary command',
     /function armPicker\(/.test(background) &&
-      /chrome\.action\.onClicked\.addListener/.test(background) &&
-      /armPicker\(tab, 'toolbar'\)/.test(background) &&
+      !/armPicker\(tab, 'toolbar'\)/.test(background) &&
       /commands\.onCommand\.addListener/.test(background))
 
   // THE ONE-TIME GRANT (#125). CapturePack's capture hotkey is global, so Chrome
@@ -199,28 +199,21 @@ console.log('\nThe picker actually uses it, in every frame')
       optional: manifest.optional_host_permissions,
       demanded: manifest.host_permissions,
     }))
-  // THE BUG rc.26 SHIPPED, and the reason this assertion is about AWAIT.
-  //
-  // `permissions.request` is only allowed inside a LIVE user-gesture context,
-  // and an `await` ends it — the continuation runs with no gesture left and
-  // Chrome refuses to show the prompt. rc.26 checked `hasBrowserGrant()` first,
-  // so three toolbar clicks produced no dialog at all. Asking for a permission
-  // already held resolves true and shows nothing, so the check was never needed.
+  // The toolbar's activeTab gesture is now spent on the capture itself. The
+  // standing all-sites grant still belongs to app-hotkey DOM requests, never to
+  // this default path.
   {
     const listener = background.slice(
       background.indexOf('chrome.action.onClicked.addListener'),
-      background.indexOf('chrome.commands'),
+      background.indexOf('const PICK_CONTEXT_MENU'),
     )
     const body = listener.split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n')
-    check('the extension asks for the grant from a real user gesture',
-      /permissions\.request\(/.test(body) && /action\.onClicked/.test(background),
-      'permissions.request only works inside a gesture; the toolbar click is the one we get')
-    check('and nothing is awaited before it, which would end that gesture',
-      !/await[\s\S]*?permissions\.request\(/.test(body),
-      'an await before the request is exactly how rc.26 produced no prompt at all')
-    check('a broken request is reported, not mistaken for the user saying no',
-      /grant-request-failed|grant-request-threw/.test(body),
-      'rc.26 swallowed the rejection in a catch and looked like a refusal')
+    check('a host-ready toolbar click starts the full-page capture immediately',
+      /if \(!pageCaptureReady\(\)\)[\s\S]*__capturepackFullPageCapture\.run\(\s*tab,\s*sendPageCapture,/.test(body), body)
+    check('a toolbar click does not request standing page access',
+      !/permissions\.request\(/.test(body), body)
+    check('a toolbar failure is explicit',
+      /page\.capture\.failed/.test(body) && /setBadgeText\(\{ text: '✕'/.test(body), body)
   }
   check('and it answers the app only when the grant is held',
     /async function answerDomRequest\(/.test(background) &&
@@ -244,6 +237,10 @@ console.log('\nThe picker actually uses it, in every frame')
   check('and no content script runs without a gesture',
     manifest.content_scripts === undefined,
     'a declared content script would read every matching page unasked')
+  check('the previous one-time browser grant remains an explicit secondary action',
+    manifest.permissions.includes('contextMenus') &&
+      /GRANT_CONTEXT_MENU[\s\S]*permissions\.request\(ALL_URLS\)/.test(background),
+    'the toolbar must capture; the context menu owns the optional standing grant')
 }
 
 console.log(`\nresult: ${failed === 0 ? 'OK' : 'BROKEN'} — ${passed} passed, ${failed} failed\n`)

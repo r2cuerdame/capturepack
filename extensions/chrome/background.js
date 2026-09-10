@@ -2,6 +2,8 @@
 // CapturePack native host. The DOM is never streamed — messages flow only when
 // the user picks an element or the tab context changes.
 
+importScripts('full-page-capture.js')
+
 const HOST = 'com.capturepack.host'
 const PROTOCOL = 1
 
@@ -18,6 +20,7 @@ const RETRY_MAX_MS = 60000
 let retryMs = RETRY_MIN_MS
 let retryTimer = null
 let helloTimer = null
+const pageCaptureResults = new Map()
 const UPDATE_ATTEMPT_KEY = 'capturepackUpdateAttempt'
 
 function clearHelloTimer() {
@@ -168,6 +171,26 @@ function connect() {
         void answerDomRequest(message.request_id)
         return
       }
+      if (message && message.type === 'page.capture.result' && message.protocol === PROTOCOL) {
+        const pending = pageCaptureResults.get(message.capture_id)
+        if (pending) {
+          clearTimeout(pending.timer)
+          pageCaptureResults.delete(message.capture_id)
+        }
+        const tabId = Number.isInteger(message.tab_id) ? message.tab_id : undefined
+        if (message.ok === true) {
+          chrome.action.setBadgeBackgroundColor({ color: '#1a7f37' })
+          chrome.action.setBadgeText({ text: '✓', ...(tabId === undefined ? {} : { tabId }) })
+        } else {
+          chrome.action.setBadgeBackgroundColor({ color: '#d93025' })
+          chrome.action.setBadgeText({ text: '✕', ...(tabId === undefined ? {} : { tabId }) })
+        }
+        setTimeout(
+          () => chrome.action.setBadgeText({ text: '', ...(tabId === undefined ? {} : { tabId }) }),
+          4000,
+        )
+        return
+      }
       if (!message || message.type !== 'host.hello' || message.protocol !== PROTOCOL) return
       // STATE ON CONNECT, NOT ONLY ON CHANGE.
       //
@@ -250,7 +273,7 @@ function send(message) {
   if (p) {
     try {
       p.postMessage(message)
-      return
+      return true
     } catch {
       port = null
       handshakeAt = null
@@ -260,6 +283,18 @@ function send(message) {
   // No host available: surface briefly on the toolbar icon instead of failing.
   chrome.action.setBadgeText({ text: '!' })
   setTimeout(() => chrome.action.setBadgeText({ text: '' }), 2000)
+  return false
+}
+
+// A page capture is not a tiny replayable context event. Do not spend seconds
+// scrolling and encode megabytes unless the app has completed its handshake.
+function sendPageCapture(message) {
+  if (!port || handshakeAt === null) return false
+  return send(message)
+}
+
+function pageCaptureReady() {
+  return port !== null && handshakeAt !== null
 }
 
 // Toolbar click: arm the picker in the active tab.
@@ -525,56 +560,95 @@ async function answerDomRequest(requestId) {
   })
 }
 
-// TOOLBAR: the grant first, the picker after.
+// TOOLBAR: one explicit gesture captures one complete page.
 //
-// The first click is where the user is actually asked — `permissions.request`
-// needs a user gesture, and this is the only one the extension reliably gets.
-// Once granted, the button goes back to being the element picker.
+// activeTab exists for exactly this gesture, so no standing read permission or
+// debugger permission is needed. The optional all-sites grant remains for the
+// app's GLOBAL capture hotkey; it is separate from this toolbar action.
 chrome.action.onClicked.addListener((tab) => {
-  // NOT `async`, AND NOTHING IS AWAITED BEFORE THE REQUEST.
-  //
-  // `permissions.request` is only allowed inside a live user-gesture context,
-  // and an `await` ENDS that context — the continuation runs on a later
-  // microtask with no gesture left. The first version checked
-  // `hasBrowserGrant()` first, so by the time it asked, Chrome refused to show
-  // the prompt at all. Measured: three toolbar clicks, no dialog, and the
-  // rejection swallowed by a `catch` that assumed a refusal could only mean the
-  // user had said no.
-  //
-  // So the request goes first, synchronously. Asking for a permission that is
-  // already held resolves `true` immediately and shows nothing, which is why the
-  // check it replaced was never needed.
-  let settled = false
-  const thenArm = () => {
-    if (settled) return
-    settled = true
-    void armPicker(tab, 'toolbar')
+  if (pageCaptureResults.size > 0) {
+    chrome.action.setBadgeBackgroundColor({ color: '#0969da' })
+    chrome.action.setBadgeText({ text: '…', ...(tab?.id ? { tabId: tab.id } : {}) })
+    return
   }
+  if (!pageCaptureReady()) {
+    connect()
+    chrome.action.setBadgeBackgroundColor({ color: '#d93025' })
+    chrome.action.setBadgeText({ text: '!', ...(tab?.id ? { tabId: tab.id } : {}) })
+    setTimeout(() => chrome.action.setBadgeText({ text: '', ...(tab?.id ? { tabId: tab.id } : {}) }), 4000)
+    return
+  }
+  chrome.action.setBadgeBackgroundColor({ color: '#0969da' })
+  chrome.action.setBadgeText({ text: '…', ...(tab?.id ? { tabId: tab.id } : {}) })
+  let captureId = null
+  void self.__capturepackFullPageCapture.run(
+    tab,
+    sendPageCapture,
+    (startedId) => {
+      captureId = startedId
+      const timer = setTimeout(() => {
+        pageCaptureResults.delete(startedId)
+        chrome.action.setBadgeBackgroundColor({ color: '#d93025' })
+        chrome.action.setBadgeText({ text: '✕', ...(tab?.id ? { tabId: tab.id } : {}) })
+        setTimeout(
+          () => chrome.action.setBadgeText({ text: '', ...(tab?.id ? { tabId: tab.id } : {}) }),
+          4000,
+        )
+      }, 300_000)
+      pageCaptureResults.set(startedId, { tabId: tab?.id, timer })
+    },
+    (startedId) => pageCaptureResults.has(startedId),
+  ).catch((err) => {
+    const pending = captureId === null ? null : pageCaptureResults.get(captureId)
+    if (pending) clearTimeout(pending.timer)
+    if (captureId !== null) pageCaptureResults.delete(captureId)
+    chrome.action.setBadgeBackgroundColor({ color: '#d93025' })
+    chrome.action.setBadgeText({ text: '✕', ...(tab?.id ? { tabId: tab.id } : {}) })
+    setTimeout(() => chrome.action.setBadgeText({ text: '', ...(tab?.id ? { tabId: tab.id } : {}) }), 4000)
+    send({
+      type: 'page.capture.failed',
+      protocol: PROTOCOL,
+      timestamp: Date.now(),
+      ...(captureId === null ? {} : { capture_id: captureId }),
+      reason: String(err && err.message ? err.message : err).slice(0, 200),
+      tab: tabFacts(tab || {}),
+    })
+  })
+})
+
+const PICK_CONTEXT_MENU = 'capturepack-pick-element'
+const GRANT_CONTEXT_MENU = 'capturepack-allow-browser'
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: PICK_CONTEXT_MENU,
+      title: 'CapturePack: pick an element',
+      contexts: ['page'],
+    })
+    chrome.contextMenus.create({
+      id: GRANT_CONTEXT_MENU,
+      title: 'CapturePack: allow pages for the app hotkey',
+      contexts: ['page'],
+    })
+  })
+})
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId === PICK_CONTEXT_MENU) {
+    void armPicker(tab, 'context-menu')
+    return
+  }
+  if (info.menuItemId !== GRANT_CONTEXT_MENU) return
   try {
     chrome.permissions.request(ALL_URLS).then(
-      (granted) => {
-        announceGrant(granted)
-        if (granted) {
-          chrome.action.setBadgeBackgroundColor({ color: '#1a7f37' })
-          chrome.action.setBadgeText({ text: '✓', tabId: tab?.id })
-          setTimeout(() => chrome.action.setBadgeText({ text: '', tabId: tab?.id }), 4000)
-        }
-        // The button keeps its second job either way: pick one element here.
-        thenArm()
-      },
-      (err) => {
-        // A REFUSAL AND A BROKEN CALL ARE DIFFERENT FACTS. The first is the user
-        // answering; the second is this extension asking wrongly, and it must
-        // never again look like the first.
-        send({
-          type: 'picker.failed',
-          protocol: PROTOCOL,
-          timestamp: Date.now(),
-          reason: `grant-request-failed: ${String(err && err.message ? err.message : err).slice(0, 160)}`,
-          via: 'toolbar',
-        })
-        thenArm()
-      },
+      announceGrant,
+      (err) => send({
+        type: 'picker.failed',
+        protocol: PROTOCOL,
+        timestamp: Date.now(),
+        reason: `grant-request-failed: ${String(err && err.message ? err.message : err).slice(0, 160)}`,
+        via: 'context-menu',
+      }),
     )
   } catch (err) {
     send({
@@ -582,13 +656,10 @@ chrome.action.onClicked.addListener((tab) => {
       protocol: PROTOCOL,
       timestamp: Date.now(),
       reason: `grant-request-threw: ${String(err && err.message ? err.message : err).slice(0, 160)}`,
-      via: 'toolbar',
+      via: 'context-menu',
     })
-    thenArm()
   }
 })
-
-
 
 if (chrome.commands && chrome.commands.onCommand) {
   chrome.commands.onCommand.addListener(async (command, tab) => {

@@ -92,6 +92,7 @@ import {
   releaseContext,
 } from './context/runtime'
 import {
+  BROWSER_PAGE_SURFACE_ID,
   DOM_PROTOCOL_VERSION,
   domBridgeStatus,
   domEventsBetween,
@@ -3396,8 +3397,18 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
       : settings.clipboardAfterSave
   const editPackClipboardMode =
     editAfterSaveMode === 'image' ? 'off' : editAfterSaveMode
+  const browserPageImage =
+    loadedCapture.captureKind === 'image' &&
+    loadedPlugins.some((plugin) => plugin.name === DOM_PLUGIN_NAME) &&
+    loadedDomEvents.some((event) => event.document !== undefined) &&
+    loadedWindowsContext !== null &&
+    loadedWindowsContext.checkpoint.windows.length === 1 &&
+    loadedWindowsContext.checkpoint.windows[0]?.surface_id === BROWSER_PAGE_SURFACE_ID &&
+    loadedWindowsContext.checkpoint.elements.length === 0 &&
+    loadedWindowsContext.deltas.length === 0
   const input: ExportInput = {
     captureKind: loadedCapture.captureKind,
+    ...(browserPageImage ? { imageContextMode: 'browser-page' as const } : {}),
     ...(loadedCapture.imageScope === undefined
       ? {}
       : { imageScope: loadedCapture.imageScope }),
