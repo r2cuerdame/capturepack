@@ -68,4 +68,23 @@ contextBridge.exposeInMainWorld('settingsBridge', {
   restartMcp(): Promise<SettingsStatusResult> {
     return ipcRenderer.invoke(IPC.settingsMcpRestart) as Promise<SettingsStatusResult>
   },
+  actionSetSecret(configId: string, secret: string): Promise<boolean> {
+    return ipcRenderer.invoke(
+      IPC.settingsActionSetSecret,
+      configId,
+      secret,
+    ) as Promise<boolean>
+  },
+  actionHasSecret(configId: string): Promise<boolean> {
+    return ipcRenderer.invoke(
+      IPC.settingsActionHasSecret,
+      configId,
+    ) as Promise<boolean>
+  },
+  actionForgetSecret(configId: string): Promise<void> {
+    return ipcRenderer.invoke(
+      IPC.settingsActionForgetSecret,
+      configId,
+    ) as Promise<void>
+  },
 })
