@@ -66,6 +66,7 @@ environment variables:
 | `CAPTUREPACK_QA_SKIP_BUILD=1` | Run checks without `npm run build` |
 | `CAPTUREPACK_QA_PROFILE=all\|video` | Select the full or video-core regression profile |
 | `CAPTUREPACK_QA_TIMEOUT_MS` | Per-command timeout; default 2 minutes |
+| `CAPTUREPACK_DESKTOP_INTERACTIVE=0\|1` | Explicitly assert Windows desktop session state for `check:native-replay-fallback`. Auto-probed via `native-replay-capture.exe --probe-desktop` when unset. Setting `'0'` cleanly skips live frame capture (removes one gate assertion: 34 passed instead of 35). Setting `'1'` forces interactive assertions, reporting startup or access-denied failures as assertion failures rather than skips. |
 
 When no pack is supplied, the JSON/JUnit reports contain an explicit skipped
 `pack-forensics` section. CI therefore needs no private user capture:
@@ -144,6 +145,7 @@ to a user CapturePack.
 | A downloaded update waits unnoticed forever, nags every launch, or notifies on a locked screen | Announcement policy is held pure and without stubs: a downloaded update is announced on download and at most once a day thereafter, a newer download announces at once without serving out the old timer, notifications defer across locked sessions, and backwards clock changes cannot satisfy the interval. Full-profile only. | `check:update-notice` |
 | An After Save Action failure costs the saved pack, blocks UI, or reads non-existent manifest fields | The pipeline runs only after the pack is durable on disk, handles non-Error/hung actions without unhandled rejections, enforces encrypted loopback/HTTPS webhook secrets, and holds summary properties strictly against the manifest schema. Full-profile only. | `check:actions` |
 | CI reports that it made a pack, and the pack proves nothing | `--save-now`'s argv parsing, its verdicts over a sequence of flow events, and its person-less export payload are pinned — including that main and the capture flow actually call into it, since an unwired flag runs never. Separately, every assertion `assert-capturepack.mjs` makes is exercised against a pack that must pass and a mutant that must not, because an assertion that cannot fail is a green tick over a broken build. | `check:save-now`, `check:pack-assertions` |
+| Native replay fallback crashes on locked Windows sessions or swallows helper crashes | `check:native-replay-fallback` verifies that `native-replay-capture.exe` falls back to virtual desktop DC or cleanly skips live capture only on verified locked sessions (`error.status === 1` and stdout `locked`). Startup crashes and absent helpers fail loudly, and forced interactive mode (`CAPTUREPACK_DESKTOP_INTERACTIVE=1`) reports access-denied rejections as assertion failures. | `check:native-replay-fallback` |
 
 The `_223519` fixture is a distilled copy of the relevant numeric evidence, not
 the owner's private pack. The strict forensic gate can additionally audit the

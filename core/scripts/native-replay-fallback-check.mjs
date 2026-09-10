@@ -37,6 +37,22 @@ try {
     ],
     { stdio: 'inherit', windowsHide: true },
   )
+  let desktopInteractive = process.env.CAPTUREPACK_DESKTOP_INTERACTIVE
+  if (desktopInteractive === undefined) {
+    try {
+      const probeOutput = execFileSync(helper, ['--probe-desktop'], {
+        encoding: 'utf8',
+        windowsHide: true,
+      }).trim()
+      desktopInteractive = probeOutput === 'interactive' ? '1' : '0'
+    } catch (error) {
+      if (error && error.status === 1 && String(error.stdout).trim() === 'locked') {
+        desktopInteractive = '0'
+      } else {
+        throw error
+      }
+    }
+  }
   execFileSync(
     process.execPath,
     [
@@ -71,6 +87,7 @@ try {
     stdio: 'inherit',
     env: {
       ...process.env,
+      CAPTUREPACK_DESKTOP_INTERACTIVE: desktopInteractive,
       CAPTUREPACK_NATIVE_REPLAY_HELPER: helper,
       CAPTUREPACK_NATIVE_WIDTH: width,
       CAPTUREPACK_NATIVE_HEIGHT: height,
