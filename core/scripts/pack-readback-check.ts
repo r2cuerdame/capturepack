@@ -49,6 +49,7 @@ import { parseDomPayload } from '../src/main/chrome/domBridge'
 import type { DomEvent } from '../src/main/chrome/domBridge'
 import type { ContextObservation } from '../src/main/context/buffer'
 import { openPackContextSession, readPackObjectContext } from '../src/main/context/packObjects'
+import { openPack } from '../src/main/mcp/store'
 import { reopenedContextDisplayTargets } from '../src/main/reopenDisplay'
 import { greyPng } from './fixtures/greyPng'
 
@@ -247,9 +248,16 @@ function manifest(): unknown {
 async function writePack(withClientRectangle: boolean): Promise<string> {
   const dir = mkdtempSync(path.join(tmpdir(), 'capturepack-pack-readback-'))
   mkdirSync(dir, { recursive: true })
-  writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(manifest(), null, 2))
+  writeFileSync(path.join(dir, 'manifest.json'), '\uFEFF' + JSON.stringify(manifest(), null, 2))
   writeFileSync(path.join(dir, 'snapshot.png'), greyPng(SCREEN.width, SCREEN.height))
-  writeFileSync(path.join(dir, 'annotations.json'), JSON.stringify({ annotations: [] }, null, 2))
+  writeFileSync(
+    path.join(dir, 'annotations.json'),
+    '\uFEFF' + JSON.stringify({ annotations: [] }, null, 2),
+  )
+  writeFileSync(
+    path.join(dir, 'timeline.json'),
+    '\uFEFF' + JSON.stringify({ t0: CAPTURED_AT, events: [] }, null, 2),
+  )
 
   const uia = sealUiaPayload(
     mergeImageWindowFloor(null, windowFloor(withClientRectangle), CAPTURED_AT),
@@ -263,6 +271,13 @@ async function writePack(withClientRectangle: boolean): Promise<string> {
     events: domEvents().map((event) => domEventForPack(event, 0, 0)),
   }
   await writeDomPlugin(dir, payload)
+  for (const rel of [
+    path.join('plugins', 'windows-uia', 'elements.json'),
+    path.join('plugins', 'chrome-dom', 'elements.json'),
+  ]) {
+    const file = path.join(dir, rel)
+    writeFileSync(file, '\uFEFF' + readFileSync(file, 'utf8'))
+  }
   return dir
 }
 
@@ -369,6 +384,15 @@ async function main(): Promise<void> {
 
   console.log('\nA pack written by the exporter is read back by the reader')
   const dir = await writePack(true)
+  const mcpPack = openPack(dir, 'dir', path.basename(dir))
+  check(
+    'the MCP pack reader parses BOM-prefixed manifest, annotations, and timeline JSON',
+    mcpPack.manifest()?.id === 'pack-readback-fixture'
+      && Array.isArray(mcpPack.annotations()?.annotations)
+      && Array.isArray(mcpPack.timeline()?.events)
+      && mcpPack.warnings().length === 0,
+    mcpPack.warnings().join('; ') || undefined,
+  )
   const context = readPackObjectContext(dir)
   if (context === null) throw new Error('the written pack did not read back as a pack at all')
 
@@ -410,7 +434,7 @@ async function main(): Promise<void> {
 
   console.log('\nThe window carries the client rectangle a page needs to be placed')
   const uiaText = readFileSync(path.join(dir, 'plugins', 'windows-uia', 'elements.json'), 'utf8')
-  const onDisk = JSON.parse(uiaText) as {
+  const onDisk = JSON.parse(uiaText.replace(/^\uFEFF/u, '')) as {
     windows: { client_bounds?: { x: number; y: number; width: number; height: number } }[]
   }
   check(

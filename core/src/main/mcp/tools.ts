@@ -17,6 +17,7 @@ import {
 } from '../../shared/types'
 import { captureMediaForMcp, type McpCaptureMedia } from '../../shared/captureMedia'
 import { computeDisplayNumbers } from '../../shared/numbering'
+import { stripUtf8Bom } from '../../shared/json'
 import { errorMessage, type PackHandle, type PackStore } from './store'
 
 const MAX_HITS_PER_GROUP = 100
@@ -845,7 +846,7 @@ function pluginJsonContents(pack: PackHandle): PluginJsonContents[] {
       if (text === null) return { file, error: 'unreadable' }
       if (text.length > MAX_PLUGIN_FILE_CHARS) return { file, error: `file too large to inline (${text.length} chars)` }
       try {
-        return { file, json: JSON.parse(text) as unknown }
+        return { file, json: JSON.parse(stripUtf8Bom(text)) as unknown }
       } catch (err) {
         return { file, error: `invalid JSON: ${errorMessage(err)}` }
       }

@@ -18,6 +18,7 @@ import { Notification } from 'electron'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { ActionResult, PackState } from '../../shared/actions'
+import { stripUtf8Bom } from '../../shared/json'
 import type { Settings } from '../../shared/types'
 import { uiT, uiLanguage } from '../locale'
 import { logError, logInfo } from '../log'
@@ -34,7 +35,7 @@ import { findAction, runActionsForPack } from './host'
 async function packIdOf(packDir: string): Promise<string | null> {
   try {
     const raw = await readFile(path.join(packDir, 'manifest.json'), 'utf8')
-    const parsed: unknown = JSON.parse(raw)
+    const parsed: unknown = JSON.parse(stripUtf8Bom(raw))
     if (typeof parsed !== 'object' || parsed === null) return null
     const id = (parsed as Record<string, unknown>).id
     return typeof id === 'string' && id !== '' ? id : null

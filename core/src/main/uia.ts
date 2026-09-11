@@ -46,6 +46,7 @@ import { existsSync } from 'node:fs'
 import * as path from 'node:path'
 import { app, screen } from 'electron'
 import type { Rectangle } from 'electron'
+import { stripUtf8Bom } from '../shared/json'
 import { logInfo, logWarn } from './log'
 import { visibleWindowHandlesNow } from './context/runtime'
 import type {
@@ -560,7 +561,7 @@ export function parseUiaPayload(text: string | null): UiaPluginPayload | null {
   if (text === null) return null
   let parsed: unknown
   try {
-    parsed = JSON.parse(text)
+    parsed = JSON.parse(stripUtf8Bom(text))
   } catch {
     return null
   }

@@ -23,6 +23,7 @@ import AdmZip from 'adm-zip'
 import { sealUiaPayload } from './uia'
 import type { DomEvent } from './chrome/domBridge'
 import type { Language } from '../shared/i18n'
+import { stripUtf8Bom } from '../shared/json'
 import type {
   Annotation,
   AnnotationsFile,
@@ -366,7 +367,7 @@ export async function settleDisplayWrites(dirPath: string): Promise<void> {
 async function dropUndeclarableDisplays(dirPath: string): Promise<void> {
   return withManifestMutation(dirPath, async () => {
     const manifestPath = join(dirPath, 'manifest.json')
-    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Manifest
+    const manifest = JSON.parse(stripUtf8Bom(await readFile(manifestPath, 'utf8'))) as Manifest
     const displays = manifest.media.displays
     if (!Array.isArray(displays)) return
     let changed = false
@@ -690,7 +691,7 @@ export async function addManifestPlugin(
 ): Promise<void> {
   return withManifestMutation(handle.dirPath, async () => {
     const manifestPath = join(handle.dirPath, 'manifest.json')
-    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Manifest
+    const manifest = JSON.parse(stripUtf8Bom(await readFile(manifestPath, 'utf8'))) as Manifest
     const plugins = Array.isArray(manifest.plugins) ? manifest.plugins : []
     const declared = plugins.some(
       (p) => p !== null && typeof p === 'object' && p.name === declaration.name,
@@ -698,15 +699,15 @@ export async function addManifestPlugin(
     const nextManifest: Manifest = declared
       ? manifest
       : { ...manifest, plugins: [...plugins, declaration] }
-    const annotationsFile = JSON.parse(
+    const annotationsFile = JSON.parse(stripUtf8Bom(
       await readFile(join(handle.dirPath, 'annotations.json'), 'utf8'),
-    ) as AnnotationsFile
+    )) as AnnotationsFile
     const timeline: TimelineFile =
       nextManifest.capture_kind === 'image'
         ? { t0: nextManifest.created_at, events: [] }
-        : JSON.parse(
+        : JSON.parse(stripUtf8Bom(
             await readFile(join(handle.dirPath, 'timeline.json'), 'utf8'),
-          ) as TimelineFile
+          )) as TimelineFile
 
     // A late plugin belongs to the durable source revision, not to derived
     // rendering. Under-promising while a final render starts is safe; once the
@@ -1493,7 +1494,9 @@ export async function updatePack(
 
 async function readManifestIfPresent(dirPath: string): Promise<Manifest | null> {
   try {
-    return JSON.parse(await readFile(join(dirPath, 'manifest.json'), 'utf8')) as Manifest
+    return JSON.parse(
+      stripUtf8Bom(await readFile(join(dirPath, 'manifest.json'), 'utf8')),
+    ) as Manifest
   } catch {
     return null
   }
@@ -1899,14 +1902,18 @@ async function writeDocs(
  */
 export async function refreshPackDocs(dirPath: string, docLanguage: Language = 'en'): Promise<void> {
   return withManifestMutation(dirPath, async () => {
-    const manifest = JSON.parse(await readFile(join(dirPath, 'manifest.json'), 'utf8')) as Manifest
-    const annotationsFile = JSON.parse(
+    const manifest = JSON.parse(
+      stripUtf8Bom(await readFile(join(dirPath, 'manifest.json'), 'utf8')),
+    ) as Manifest
+    const annotationsFile = JSON.parse(stripUtf8Bom(
       await readFile(join(dirPath, 'annotations.json'), 'utf8'),
-    ) as AnnotationsFile
+    )) as AnnotationsFile
     if (!Array.isArray(annotationsFile.annotations)) return
     let timeline: TimelineFile = { t0: manifest.created_at, events: [] }
     if (manifest.capture_kind !== 'image') {
-      timeline = JSON.parse(await readFile(join(dirPath, 'timeline.json'), 'utf8')) as TimelineFile
+      timeline = JSON.parse(
+        stripUtf8Bom(await readFile(join(dirPath, 'timeline.json'), 'utf8')),
+      ) as TimelineFile
       if (!Array.isArray(timeline.events)) return
     }
     // The render has already run: nothing further will write stills, so an
@@ -1959,7 +1966,7 @@ export async function setManifestRenderOutputs(
 ): Promise<void> {
   return withManifestMutation(handle.dirPath, async () => {
   const manifestPath = join(handle.dirPath, 'manifest.json')
-  const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Manifest
+  const manifest = JSON.parse(stripUtf8Bom(await readFile(manifestPath, 'utf8'))) as Manifest
   // Belt and braces against a second render for the same folder having wiped
   // the stills between this render's writes and this declaration: a declared
   // file MUST exist (SPEC §5.7). Renders are serialized (annotatedRender.ts),
