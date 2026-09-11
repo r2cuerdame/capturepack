@@ -54,7 +54,7 @@ check('missing global numbers is rejected', renderContractError({ motionSpace: p
 check('missing focused display is rejected', renderContractError({ motionSpace: plan.motionSpace, displayNumbers: plan.displayNumbers })?.includes('focusedDisplay'))
 
 console.log('\nHistory wiring')
-const historySource = readFileSync('src/main/historyWindow.ts', 'utf8')
+const historySource = readFileSync('src/main/historyWindow.ts', 'utf8').replaceAll('\r\n', '\n')
 const rendererSource = readFileSync('src/renderer/render/render.ts', 'utf8')
 check('retry starts every preflighted secondary render', historySource.includes('startHistoryDisplayRenders(\n    { id: manifest.id, dirPath: entry.path },'))
 check('secondary replay jobs use the display renderer', historySource.includes('startDisplayRender(handle, {'))
