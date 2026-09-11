@@ -40,6 +40,7 @@
     "check:number-assignment": "node scripts/number-assignment-check.mjs",
     "check:motion": "node scripts/box-motion-check.mjs",
     "check:render": "node scripts/track-render-check.mjs",
+    "check:history-rerender": "node scripts/history-rerender-check.mjs",
     "check:annotation-style": "node scripts/annotation-style-check.mjs",
     "check:annotation-placement": "node scripts/annotation-placement-check.mjs",
     "check:trim": "node scripts/trim-drag-check.mjs",
