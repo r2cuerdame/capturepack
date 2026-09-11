@@ -155,13 +155,29 @@ export function storeActionSecret(configId: string, secret: string): boolean {
   try {
     const store = readSecretStore()
     store[configId] = safeStorage.encryptString(secret).toString('base64')
-    mkdirSync(app.getPath('userData'), { recursive: true })
-    writeFileSync(secretsPath(), JSON.stringify(store), 'utf8')
+    writeSecretStore(store)
     return true
   } catch (error) {
     logError('[actions] could not store the action secret:', error)
     return false
   }
+}
+
+/**
+ * Replace the secret store on disk. Throws; the callers own the message.
+ *
+ * Written beside the target and renamed, like the ledger. Writing in place
+ * truncates first, and a shutdown in that gap leaves invalid JSON that
+ * `readSecretStore` reads as "no secrets" — which the NEXT store or forget
+ * would then persist over every secret the user had. One interrupted write
+ * must cost at most the one change that was in flight.
+ */
+function writeSecretStore(store: Record<string, string>): void {
+  mkdirSync(app.getPath('userData'), { recursive: true })
+  const target = secretsPath()
+  const temporary = `${target}.tmp`
+  writeFileSync(temporary, JSON.stringify(store), 'utf8')
+  renameSync(temporary, target)
 }
 
 function readSecretStore(): Record<string, string> {
@@ -200,7 +216,7 @@ export function forgetActionSecret(configId: string): void {
     const store = readSecretStore()
     if (store[configId] === undefined) return
     delete store[configId]
-    writeFileSync(secretsPath(), JSON.stringify(store), 'utf8')
+    writeSecretStore(store)
   } catch (error) {
     logError('[actions] could not forget an action secret:', error)
   }

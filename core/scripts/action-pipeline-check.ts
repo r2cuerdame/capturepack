@@ -625,6 +625,78 @@ console.log('\nTHE WEBHOOK SUMMARY READS FIELDS THAT EXIST')
   )
 }
 
+// A SECRET STORE THAT ONE INTERRUPTED WRITE CAN EMPTY FOR GOOD.
+//
+// The idempotency ledger is written beside its target and renamed. The secret
+// store was not: `writeFileSync(secretsPath(), ...)` truncates the file first,
+// and a shutdown in the gap leaves invalid JSON that `readSecretStore` reads
+// as `{}`. The next store or forget then persists that empty object over every
+// secret the user had. Same module, same pattern already written — held here
+// so the two cannot drift apart again. (#171)
+console.log('\nTHE SECRET STORE IS REPLACED ATOMICALLY')
+{
+  const readNorm = (relative: string): string =>
+    readFileSync(path.join(process.cwd(), relative), 'utf8').split('\r\n').join('\n')
+  const stripComments = (source: string): string =>
+    source
+      .split('\n')
+      .map((line) => {
+        const trimmed = line.trimStart()
+        if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) return ''
+        const marker = line.indexOf('//')
+        return marker < 0 ? line : line.slice(0, marker)
+      })
+      .join('\n')
+  const host = readNorm('src/main/actions/host.ts')
+  // SCOPED TO THE SECRETS SECTION. `renameSync` already appears in this file
+  // for the ledger; an assertion against the whole module would pass today
+  // with the secret store still written in place. Slice on the section
+  // banners (which are comments, so slice BEFORE stripping them).
+  const start = host.indexOf('// ── Secrets')
+  const end = host.indexOf('// ── Registry')
+  check('the host has a Secrets section followed by the Registry section', start >= 0 && end > start)
+  const secrets = stripComments(host.slice(Math.max(start, 0), end > start ? end : undefined))
+  const body = (name: string): string => {
+    const at = secrets.indexOf(`function ${name}(`)
+    if (at < 0) return ''
+    const close = secrets.indexOf('\n}\n', at)
+    return secrets.slice(at, close < 0 ? undefined : close)
+  }
+
+  check(
+    'secret store serialization goes through one helper, writeSecretStore',
+    secrets.includes('function writeSecretStore(store: Record<string, string>): void'),
+  )
+  check(
+    'writeSecretStore writes a sibling temporary file and renames it over action-secrets.json',
+    body('writeSecretStore').includes('const target = secretsPath()')
+      && body('writeSecretStore').includes('const temporary = `${target}.tmp`')
+      && body('writeSecretStore').includes('writeFileSync(temporary, JSON.stringify(store)')
+      && body('writeSecretStore').includes('renameSync(temporary, target)'),
+  )
+  check(
+    'the rename happens AFTER the temporary is fully written',
+    body('writeSecretStore').indexOf('writeFileSync(temporary') < body('writeSecretStore').indexOf('renameSync(temporary, target)'),
+  )
+  check(
+    'storeActionSecret persists through writeSecretStore',
+    body('storeActionSecret').includes('writeSecretStore(store)'),
+  )
+  check(
+    'forgetActionSecret persists through writeSecretStore',
+    body('forgetActionSecret').includes('writeSecretStore(store)'),
+  )
+  check(
+    'nothing in the Secrets section writes directly to secretsPath()',
+    !secrets.includes('writeFileSync(secretsPath()'),
+  )
+  check(
+    'the ONLY writeFileSync in the Secrets section is the one that targets the temporary file',
+    (secrets.match(/writeFileSync\(/gu) ?? []).length === 1 && secrets.includes('writeFileSync(temporary,'),
+    String((secrets.match(/writeFileSync\(/gu) ?? []).length),
+  )
+}
+
 console.log('\nACTION SECRETS ROUND-TRIP')
 {
   const fakeSafeStorage = {
