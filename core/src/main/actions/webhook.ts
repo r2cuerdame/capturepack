@@ -86,6 +86,18 @@ export async function readPackSummary(packDir: string): Promise<PackSummary> {
 }
 
 /**
+ * Strip `user:password@` out of any URL quoted in an error message.
+ *
+ * The contract refuses a URL with credentials in it, so this should never
+ * have anything to do. It exists for the day it does: fetch quotes the whole
+ * URL when it rejects one, and a message from here is written to the log and
+ * shown in the notification, retried and written again (#173).
+ */
+export function redactUrlCredentials(message: string): string {
+  return message.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/giu, '$1<redacted>@')
+}
+
+/**
  * Whether an error raised during delivery was caused by an HTTP redirect (#172).
  *
  * With `redirect: 'error'`, the Fetch Standard treats encountering a redirect
@@ -144,7 +156,7 @@ export async function deliverWebhook(packDir: string, delivery: WebhookDelivery)
       throw new Error('the webhook responded with an unsupported redirect')
     }
     const message = error instanceof Error ? error.message : String(error)
-    throw new Error(`could not reach the webhook: ${message}`)
+    throw new Error(`could not reach the webhook: ${redactUrlCredentials(message)}`)
   } finally {
     clearTimeout(timer)
   }
