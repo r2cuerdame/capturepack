@@ -23,6 +23,7 @@ import {
 } from '../../shared/annotationCanvas'
 import { renderedAnnotationAt } from '../../shared/track'
 import type { AuthoredMotionSpace } from '../../shared/track'
+import { renderContractError } from '../../shared/renderContract'
 
 interface RenderBridge {
   onStart(cb: (payload: RenderStartPayload) => void): void
@@ -108,6 +109,8 @@ function onThisDisplay(a: Annotation, overlay: Overlay): boolean {
 }
 
 function makeOverlay(job: RenderStartPayload, outputWidth: number, outputHeight: number): Overlay {
+  const contractError = renderContractError(job)
+  if (contractError !== null) throw new Error(contractError)
   const scaleX = job.width > 0 ? outputWidth / job.width : 1
   const scaleY = job.height > 0 ? outputHeight / job.height : 1
   return {
