@@ -24,6 +24,7 @@ import {
   decideStep,
   haltsPipeline,
   idempotencyKey,
+  isAcceptableWebhookUrl,
   normalizeActionTimeout,
   packStateAtLeast,
   pipelineOrder,
@@ -186,6 +187,25 @@ check('a sub-second timeout is raised to one second', normalizeActionTimeout(5) 
 check('no retries means one attempt', totalAttempts(config({ retries: 0 })) === 1)
 check('two retries means three attempts', totalAttempts(config({ retries: 2 })) === 3)
 check('retries are capped', totalAttempts(config({ retries: 99 })) === 6)
+
+// WHICH URLS THE WEBHOOK WILL POST TO (#173).
+//
+// The rule lives in the contract so Settings can refuse a URL before a save.
+// A URL that carries userinfo is refused there too: Node's fetch throws on it,
+// and the TypeError it throws quotes the whole URL, credentials included.
+console.log('\nWHICH URLS THE WEBHOOK WILL POST TO')
+check('https anywhere is accepted', isAcceptableWebhookUrl('https://api.example.com/webhook'))
+check('http on loopback is accepted', isAcceptableWebhookUrl('http://localhost:8080/hook') && isAcceptableWebhookUrl('http://127.0.0.1/hook'))
+check('http off this machine is refused', !isAcceptableWebhookUrl('http://api.example.com/webhook'))
+check('a non-URL is refused', !isAcceptableWebhookUrl('not a url'))
+check('a user:password in the URL is refused (#173)', !isAcceptableWebhookUrl('https://user:pass@api.example.com/webhook'))
+check('a bare user (token) in the URL is refused (#173)', !isAcceptableWebhookUrl('https://token@api.example.com/webhook'))
+check('an empty user with a password is refused (#173)', !isAcceptableWebhookUrl('https://:pass@api.example.com/webhook'))
+check('loopback does not excuse credentials (#173)', !isAcceptableWebhookUrl('http://user:pass@localhost:8080/hook'))
+check(
+  'NEGATIVE CONTROL: an @ in the path or query is not userinfo and is still accepted',
+  isAcceptableWebhookUrl('https://api.example.com/hooks/team@example.com?reply=a@b'),
+)
 
 console.log('\nRUNNING A PIPELINE')
 {
@@ -634,6 +654,10 @@ console.log('\nTHE WEBHOOK SUMMARY READS FIELDS THAT EXIST')
     'webhook delivery errors reject unsupported redirects with an informative message (#172)',
     webhook.includes("'the webhook responded with an unsupported redirect'"),
   )
+  check(
+    'webhook delivery errors are passed through a userinfo redaction before they are rethrown (#173)',
+    webhook.includes('redactUrlCredentials(') && webhook.includes("could not reach the webhook: ${redactUrlCredentials(message)}"),
+  )
 }
 
 // A SECRET STORE THAT ONE INTERRUPTED WRITE CAN EMPTY FOR GOOD.
@@ -845,6 +869,28 @@ console.log('\nWEBHOOK DELIVERY REFUSES HTTP REDIRECTS')
       '200 OK receiver received the pack summary payload',
       okServerReceivedBody.includes('capturepack.pack.saved') && okServerReceivedBody.includes('e3f1c0de-0000-4000-8000-000000000001'),
     )
+
+    // A URL that slipped past the contract with credentials in it. fetch refuses
+    // it before any socket is opened, and quotes the URL in the TypeError; the
+    // message that reaches the log and the notification must not carry them.
+    const receivedBefore = targetReceivedCount
+    let credentialError: Error | null = null
+    try {
+      await deliverWebhook(tempPackDir, {
+        url: `http://leaked-user:leaked-s3cret@127.0.0.1:${String(targetPort)}/target`,
+        secret: null,
+        timeoutMs: 5_000,
+      })
+    } catch (err) {
+      credentialError = err instanceof Error ? err : new Error(String(err))
+    }
+    check('deliverWebhook fails on a URL with embedded credentials (#173)', credentialError !== null)
+    check(
+      'and the failure message carries neither the user nor the password (#173)',
+      credentialError !== null && !credentialError.message.includes('leaked-user') && !credentialError.message.includes('leaked-s3cret'),
+      credentialError?.message ?? '',
+    )
+    check('and the receiver was never contacted', targetReceivedCount === receivedBefore)
   } finally {
     await new Promise<void>((resolve) => targetServer.close(() => resolve()))
     await new Promise<void>((resolve) => redirectServer.close(() => resolve()))

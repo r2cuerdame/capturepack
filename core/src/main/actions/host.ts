@@ -279,7 +279,7 @@ function executorFor(request: ActionRunRequest) {
       throw new Error('no webhook URL is configured')
     }
     if (!isAcceptableWebhookUrl(settings.url)) {
-      throw new Error('the webhook URL must be https, or http on this machine')
+      throw new Error('the webhook URL must be https, or http on this machine, and carry no credentials')
     }
     await deliverWebhook(request.packDir, {
       url: settings.url,
