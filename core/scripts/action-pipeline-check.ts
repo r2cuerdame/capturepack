@@ -7,8 +7,11 @@
 // The invariant under test throughout: THE PACK IS ALREADY SAVED. An action
 // that fails, hangs, or throws something that is not an Error is that action's
 // own failure and nothing else's.
-import { readFileSync } from 'node:fs'
+import { createServer } from 'node:http'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { deliverWebhook } from '../src/main/actions/webhook'
 import {
   ACTION_PERMISSIONS,
   ACTION_TIMEOUT_DEFAULT_MS,
@@ -623,6 +626,14 @@ console.log('\nTHE WEBHOOK SUMMARY READS FIELDS THAT EXIST')
     'outbound webhook deliveries attach Authorization: Bearer <secret> when configured',
     webhook.includes("headers.authorization = `Bearer ${delivery.secret}`"),
   )
+  check(
+    'outbound webhook deliveries configure fetch with redirect: error (#172)',
+    webhook.includes("redirect: 'error'"),
+  )
+  check(
+    'webhook delivery errors reject unsupported redirects with an informative message (#172)',
+    webhook.includes("'the webhook responded with an unsupported redirect'"),
+  )
 }
 
 // A SECRET STORE THAT ONE INTERRUPTED WRITE CAN EMPTY FOR GOOD.
@@ -711,6 +722,134 @@ console.log('\nACTION SECRETS ROUND-TRIP')
   const encrypted = fakeSafeStorage.encryptString(secret).toString('base64')
   const decrypted = fakeSafeStorage.decryptString(Buffer.from(encrypted, 'base64'))
   check('secrets round-trip via safeStorage encryption and decryption logic', decrypted === secret)
+}
+
+console.log('\nWEBHOOK DELIVERY REFUSES HTTP REDIRECTS')
+{
+  let targetReceivedCount = 0
+  let targetReceivedAuth: string | undefined
+  const targetServer = createServer((req, res) => {
+    targetReceivedCount += 1
+    targetReceivedAuth = req.headers.authorization
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ ok: true }))
+  })
+  await new Promise<void>((resolve) => targetServer.listen(0, '127.0.0.1', () => resolve()))
+  const targetPort = (targetServer.address() as { port: number }).port
+
+  let okServerReceivedAuth: string | undefined
+  let okServerReceivedBody = ''
+  const redirectServer = createServer((req, res) => {
+    if (req.url === '/redirect-302') {
+      res.writeHead(302, { Location: `http://127.0.0.1:${String(targetPort)}/target` })
+      res.end()
+      return
+    }
+    if (req.url === '/redirect-301') {
+      res.writeHead(301, { Location: `http://127.0.0.1:${String(targetPort)}/target` })
+      res.end()
+      return
+    }
+    if (req.url === '/redirect-307') {
+      res.writeHead(307, { Location: `http://127.0.0.1:${String(targetPort)}/target` })
+      res.end()
+      return
+    }
+    if (req.url === '/redirect-308') {
+      res.writeHead(308, { Location: `http://127.0.0.1:${String(targetPort)}/target` })
+      res.end()
+      return
+    }
+    if (req.url === '/ok') {
+      okServerReceivedAuth = req.headers.authorization
+      const chunks: Buffer[] = []
+      req.on('data', (chunk: Buffer) => chunks.push(chunk))
+      req.on('end', () => {
+        okServerReceivedBody = Buffer.concat(chunks).toString('utf8')
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ status: 'ok' }))
+      })
+      return
+    }
+    res.writeHead(404)
+    res.end()
+  })
+  await new Promise<void>((resolve) => redirectServer.listen(0, '127.0.0.1', () => resolve()))
+  const redirectPort = (redirectServer.address() as { port: number }).port
+
+  const tempPackDir = mkdtempSync(path.join(tmpdir(), 'capturepack-webhook-redirect-'))
+  const manifestContent = JSON.stringify({
+    id: 'e3f1c0de-0000-4000-8000-000000000001',
+    created_at: '2026-09-11T00:00:00.000Z',
+    capture_kind: 'still',
+    format_version: '1.0.0',
+    generator: { name: 'CapturePack', version: '0.5.0' },
+    media: { displays: [] },
+  })
+  writeFileSync(path.join(tempPackDir, 'manifest.json'), manifestContent, 'utf8')
+
+  try {
+    // 302 redirect
+    let caught302: Error | null = null
+    try {
+      await deliverWebhook(tempPackDir, {
+        url: `http://127.0.0.1:${String(redirectPort)}/redirect-302`,
+        secret: 'bearer-secret-302',
+        timeoutMs: 5_000,
+      })
+    } catch (err) {
+      caught302 = err instanceof Error ? err : new Error(String(err))
+    }
+    check(
+      'deliverWebhook refuses HTTP 302 redirect with an informative message (#172)',
+      caught302 !== null && caught302.message === 'the webhook responded with an unsupported redirect',
+      caught302?.message ?? 'no error thrown',
+    )
+    check('redirect target server was never contacted', targetReceivedCount === 0, `requests: ${String(targetReceivedCount)}`)
+    check('bearer secret was never sent to redirect target', targetReceivedAuth === undefined)
+
+    // 301, 307, 308 redirects
+    for (const status of [301, 307, 308]) {
+      let caught: Error | null = null
+      try {
+        await deliverWebhook(tempPackDir, {
+          url: `http://127.0.0.1:${String(redirectPort)}/redirect-${String(status)}`,
+          secret: `bearer-secret-${String(status)}`,
+          timeoutMs: 5_000,
+        })
+      } catch (err) {
+        caught = err instanceof Error ? err : new Error(String(err))
+      }
+      check(
+        `deliverWebhook refuses HTTP ${String(status)} redirect (#172)`,
+        caught !== null && caught.message === 'the webhook responded with an unsupported redirect',
+        caught?.message ?? 'no error thrown',
+      )
+    }
+    check('target server remained completely uncalled across all redirect tests', targetReceivedCount === 0)
+
+    // Normal 200 delivery succeeds
+    let normalError: Error | null = null
+    try {
+      await deliverWebhook(tempPackDir, {
+        url: `http://127.0.0.1:${String(redirectPort)}/ok`,
+        secret: 'bearer-secret-ok',
+        timeoutMs: 5_000,
+      })
+    } catch (err) {
+      normalError = err instanceof Error ? err : new Error(String(err))
+    }
+    check('deliverWebhook succeeds when receiver answers 200 OK', normalError === null, normalError?.message ?? '')
+    check('200 OK receiver received the configured bearer secret', okServerReceivedAuth === 'Bearer bearer-secret-ok')
+    check(
+      '200 OK receiver received the pack summary payload',
+      okServerReceivedBody.includes('capturepack.pack.saved') && okServerReceivedBody.includes('e3f1c0de-0000-4000-8000-000000000001'),
+    )
+  } finally {
+    await new Promise<void>((resolve) => targetServer.close(() => resolve()))
+    await new Promise<void>((resolve) => redirectServer.close(() => resolve()))
+    rmSync(tempPackDir, { recursive: true, force: true })
+  }
 }
 
 if (failed > 0) {
