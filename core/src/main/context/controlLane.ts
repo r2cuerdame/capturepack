@@ -447,7 +447,14 @@ export class ControlLane {
     }
     for (const hwnd of next) {
       const log = this.logs.get(hwnd)
-      if (log !== undefined) log.hiddenSinceMs = null
+      if (log === undefined) continue
+      // A return can beat the prune timer after retention has already elapsed.
+      // Match prune's inclusive cutoff before cancelling expiry.
+      if (log.hiddenSinceMs !== null && log.hiddenSinceMs < now - this.retentionMs) {
+        this.logs.delete(hwnd)
+      } else {
+        log.hiddenSinceMs = null
+      }
     }
     this.visible = { hwnds: [...next], focusHwnd }
     this.sendVisible()

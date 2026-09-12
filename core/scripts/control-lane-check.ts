@@ -699,6 +699,61 @@ async function main(): Promise<void> {
   churn.prune()
   check('returning visible HWND cancels its old expiry', churn.logs.has('returning'), true)
 
+  // A return can race the two-second prune timer. Expiry must be decided at
+  // the visibility transition, with the same inclusive cutoff as prune().
+  for (const hiddenMs of [1_000, 1_001]) {
+    let returnNow = 0
+    const returnLane = new ControlLane(() => returnNow, 1_000)
+    const returning = returnLane as unknown as RetentionInspectable
+    returnLane.setVisible(['boundary'], 'boundary')
+    returning.onMessage({
+      event: 'tree', h: 'boundary', v: 1, e: [rect(11, 12), rect(21, 22)],
+    })
+    returnNow = 100
+    returning.onMessage({
+      event: 'rects', h: 'boundary', v: 1, e: [[0, 13, 14, 100, 40]], g: [1],
+    })
+    const copied = returnLane.controlsAt(returnNow)
+    const oldLog = returning.logs.get('boundary')
+    returnLane.setVisible([], null)
+    returnNow += hiddenMs
+    // No prune between hiding and returning: both cases precede the next tick.
+    returnLane.setVisible(['boundary'], 'boundary')
+    const expired = hiddenMs > 1_000
+    const label = `return after ${hiddenMs}ms hidden`
+    check(`${label}: only history inside the inclusive cutoff is available`,
+      returnLane.controlsAt(returnNow).flatMap(entry => entry.controls.map(c => [c.x, c.y])),
+      expired ? [] : [[13, 14]])
+    check(`${label}: expired log is discarded; retained log keeps its fast path`,
+      returning.logs.get('boundary') === (expired ? undefined : oldLog), true)
+    check(`${label}: tree, move and death resources follow expiry`,
+      returnLane.resourceStats(), {
+        retainedWindows: expired ? 0 : 1, retainedTrees: expired ? 0 : 1,
+        retainedElements: expired ? 0 : 2, retainedMoves: expired ? 0 : 1,
+        retainedDeaths: expired ? 0 : 1,
+      })
+    returning.onMessage({
+      event: 'rects', h: 'boundary', v: 1, e: [[0, 15, 16, 100, 40]],
+    })
+    check(`${label}: late rects cannot recreate an expired tree`,
+      returnLane.controlsAt(returnNow).flatMap(entry => entry.controls.map(c => [c.x, c.y])),
+      expired ? [] : [[15, 16]])
+    returnNow += 10_000 // A replacement walk can hang across many prune ticks.
+    returning.prune()
+    check(`${label}: later pruning preserves the return-time expiry decision`,
+      returnLane.controlsAt(returnNow).flatMap(entry => entry.controls.map(c => [c.x, c.y])),
+      expired ? [] : [[15, 16]])
+    check(`${label}: copied observations keep their original geometry`,
+      copied.flatMap(entry => entry.controls.map(c => [c.x, c.y])), [[13, 14]])
+    returnNow += 1
+    returning.onMessage({
+      event: 'tree', h: 'boundary', v: 1, e: [rect(31, 32), rect(41, 42)],
+    })
+    check(`${label}: fresh replacement works without old moves or deaths`,
+      returnLane.controlsAt(returnNow).flatMap(entry => entry.controls.map(c => [c.x, c.y])),
+      [[31, 32], [41, 42]])
+  }
+
   // The pipe may deliver a completed tree after Lane S has hidden its HWND.
   // Such a result gets one retention window, never indefinite ownership.
   churnLane.setVisible([], null)
