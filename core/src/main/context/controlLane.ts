@@ -48,6 +48,8 @@ export interface TrackedControl {
 
 /** Everything one window's tree has done, as a replayable log. */
 interface WindowLog {
+  /** Lane S stopped offering this HWND at this session time; null while visible. */
+  hiddenSinceMs: number | null
   /**
    * Full walks, ascending by time. `version` is tracker-scoped and can restart
    * at 1; `ordinal` is Core's never-reused identity for the tree.
@@ -433,7 +435,28 @@ export class ControlLane {
    * set wholesale, so a repeated list would drop and re-walk every tree.
    */
   setVisible(hwnds: readonly string[], focusHwnd: string | null): void {
-    this.visible = { hwnds: [...hwnds], focusHwnd }
+    const now = this.nowMs()
+    const next = new Set(hwnds)
+    // Only a visibility transition starts expiry. Repeated maintenance/focus
+    // updates must not keep an absent HWND's last tree alive forever (#240).
+    // The first visible set also covers a tree received before Lane S started.
+    for (const hwnd of this.visible?.hwnds ?? this.logs.keys()) {
+      if (next.has(hwnd)) continue
+      const log = this.logs.get(hwnd)
+      if (log !== undefined && log.hiddenSinceMs === null) log.hiddenSinceMs = now
+    }
+    for (const hwnd of next) {
+      const log = this.logs.get(hwnd)
+      if (log === undefined) continue
+      // A return can beat the prune timer after retention has already elapsed.
+      // Match prune's inclusive cutoff before cancelling expiry.
+      if (log.hiddenSinceMs !== null && log.hiddenSinceMs < now - this.retentionMs) {
+        this.logs.delete(hwnd)
+      } else {
+        log.hiddenSinceMs = null
+      }
+    }
+    this.visible = { hwnds: [...next], focusHwnd }
     this.sendVisible()
   }
 
@@ -469,6 +492,33 @@ export class ControlLane {
       moves: this.moves,
       deaths: this.deaths,
       lastError: this.lastError,
+    }
+  }
+
+  /** On-demand retained resource counts, distinct from cumulative status events. */
+  resourceStats(): {
+    retainedWindows: number
+    retainedTrees: number
+    retainedElements: number
+    retainedMoves: number
+    retainedDeaths: number
+  } {
+    let retainedTrees = 0
+    let retainedElements = 0
+    let retainedMoves = 0
+    let retainedDeaths = 0
+    for (const log of this.logs.values()) {
+      retainedTrees += log.trees.length
+      for (const tree of log.trees) retainedElements += tree.elements.length
+      retainedMoves += log.moves.length
+      retainedDeaths += log.deaths.length
+    }
+    return {
+      retainedWindows: this.logs.size,
+      retainedTrees,
+      retainedElements,
+      retainedMoves,
+      retainedDeaths,
     }
   }
 
@@ -710,7 +760,15 @@ export class ControlLane {
   private logFor(hwnd: string): WindowLog {
     let log = this.logs.get(hwnd)
     if (log === undefined) {
-      log = { trees: [], moves: [], deaths: [] }
+      log = {
+        // In-flight helper output may arrive after the HWND left the visible
+        // set. It still gets a bounded retention window, not permanent tenure.
+        hiddenSinceMs:
+          this.visible !== null && !this.visible.hwnds.includes(hwnd) ? this.nowMs() : null,
+        trees: [],
+        moves: [],
+        deaths: [],
+      }
       this.logs.set(hwnd, log)
     }
     return log
@@ -731,6 +789,15 @@ export class ControlLane {
   private prune(): void {
     const cutoff = this.nowMs() - this.retentionMs
     for (const [hwnd, log] of this.logs) {
+      // A static tree is still the current observation for a visible window,
+      // regardless of its age. Once Lane S has omitted that window for an
+      // entire replay retention, no retained frame needs its checkpoint.
+      // Delete before materialising: otherwise every historical HWND costs a
+      // full tree clone on every prune for the rest of the process lifetime.
+      if (log.hiddenSinceMs !== null && log.hiddenSinceMs < cutoff) {
+        this.logs.delete(hwnd)
+        continue
+      }
       let keepFrom = 0
       for (let i = 0; i < log.trees.length; i += 1) {
         const tree = log.trees[i]

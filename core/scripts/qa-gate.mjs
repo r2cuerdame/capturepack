@@ -23,6 +23,7 @@ const VIDEO_PROFILE_CHECKS = new Set([
   'check:provider-host',
   'check:dom',
   'check:controls',
+  'check:longrun-resources',
   'check:context-host-dirty',
   'check:identity',
   'check:keyframes',

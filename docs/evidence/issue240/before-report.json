@@ -1,0 +1,416 @@
+{
+  "schema": 1,
+  "mode": "baseline-observation",
+  "quick": false,
+  "workload": "120 simulated minutes, 30s retention, one static window plus a new 64-control window every 10s; prune every 2s",
+  "identity": {
+    "baselineRef": "af30c383299eae470b55dfb2ab04b90054fa26c4",
+    "node": "v24.13.1",
+    "platform": "win32",
+    "sourceSha256": "6e3bcf8f471ea537dbdeee6aa598314b1a3250760b2ee6b1c09437810d29e40e",
+    "bundleSha256": "32f424a02a0be284f1fc82aa620568b37a60c57d2b2d8111ed66e04bb562e008"
+  },
+  "limit": "60s worker watchdog, 256MiB V8 old-space; exact PID-only OS sampler",
+  "qualification": "Accelerated isolated bookkeeping test. Not a two-hour desktop, installed-app, UIA-provider, MediaRecorder, or GPU soak.",
+  "checkpoints": [
+    {
+      "type": "checkpoint",
+      "phase": "cold",
+      "simulatedMs": 0,
+      "pid": 35692,
+      "createdWindows": 2,
+      "retainedWindows": 2,
+      "retainedTrees": 2,
+      "retainedElements": 128,
+      "retainedMoves": 0,
+      "retainedDeaths": 0,
+      "pruneVisits": 0,
+      "copiedElements": 0,
+      "pruneUs": 0,
+      "memory": {
+        "rss": 55422976,
+        "heapTotal": 6365184,
+        "heapUsed": 4914072,
+        "external": 1689609,
+        "arrayBuffers": 10511
+      },
+      "cpu": {
+        "user": 31000,
+        "system": 0
+      },
+      "resources": {
+        "captureSurfaces": 0,
+        "capturedFrames": 0,
+        "encodedRingBytes": 0,
+        "encoderSessions": 0,
+        "rendererWorkers": 0,
+        "note": "Synthetic control history only; capture/GPU/encoder paths are not exercised."
+      }
+    },
+    {
+      "type": "checkpoint",
+      "phase": "churn",
+      "simulatedMs": 900000,
+      "pid": 35692,
+      "createdWindows": 92,
+      "retainedWindows": 92,
+      "retainedTrees": 92,
+      "retainedElements": 5888,
+      "retainedMoves": 0,
+      "retainedDeaths": 0,
+      "pruneVisits": 21015,
+      "copiedElements": 1252800,
+      "pruneUs": 26647.400000000016,
+      "memory": {
+        "rss": 75468800,
+        "heapTotal": 40443904,
+        "heapUsed": 14847752,
+        "external": 1689665,
+        "arrayBuffers": 10527
+      },
+      "cpu": {
+        "user": 62000,
+        "system": 0
+      },
+      "resources": {
+        "captureSurfaces": 0,
+        "capturedFrames": 0,
+        "encodedRingBytes": 0,
+        "encoderSessions": 0,
+        "rendererWorkers": 0,
+        "note": "Synthetic control history only; capture/GPU/encoder paths are not exercised."
+      }
+    },
+    {
+      "type": "checkpoint",
+      "phase": "churn",
+      "simulatedMs": 1800000,
+      "pid": 35692,
+      "createdWindows": 182,
+      "retainedWindows": 182,
+      "retainedTrees": 182,
+      "retainedElements": 11648,
+      "retainedMoves": 0,
+      "retainedDeaths": 0,
+      "pruneVisits": 82530,
+      "copiedElements": 5097600,
+      "pruneUs": 92678.00000000003,
+      "memory": {
+        "rss": 125739008,
+        "heapTotal": 74260480,
+        "heapUsed": 14978424,
+        "external": 1689665,
+        "arrayBuffers": 10527
+      },
+      "cpu": {
+        "user": 93000,
+        "system": 46000
+      },
+      "resources": {
+        "captureSurfaces": 0,
+        "capturedFrames": 0,
+        "encodedRingBytes": 0,
+        "encoderSessions": 0,
+        "rendererWorkers": 0,
+        "note": "Synthetic control history only; capture/GPU/encoder paths are not exercised."
+      }
+    },
+    {
+      "type": "checkpoint",
+      "phase": "churn",
+      "simulatedMs": 2700000,
+      "pid": 35692,
+      "createdWindows": 272,
+      "retainedWindows": 272,
+      "retainedTrees": 272,
+      "retainedElements": 17408,
+      "retainedMoves": 0,
+      "retainedDeaths": 0,
+      "pruneVisits": 184545,
+      "copiedElements": 11534400,
+      "pruneUs": 193340.09999999998,
+      "memory": {
+        "rss": 194457600,
+        "heapTotal": 141369344,
+        "heapUsed": 32090400,
+        "external": 1689665,
+        "arrayBuffers": 10527
+      },
+      "cpu": {
+        "user": 203000,
+        "system": 46000
+      },
+      "resources": {
+        "captureSurfaces": 0,
+        "capturedFrames": 0,
+        "encodedRingBytes": 0,
+        "encoderSessions": 0,
+        "rendererWorkers": 0,
+        "note": "Synthetic control history only; capture/GPU/encoder paths are not exercised."
+      }
+    },
+    {
+      "type": "checkpoint",
+      "phase": "churn",
+      "simulatedMs": 3600000,
+      "pid": 35692,
+      "createdWindows": 362,
+      "retainedWindows": 362,
+      "retainedTrees": 362,
+      "retainedElements": 23168,
+      "retainedMoves": 0,
+      "retainedDeaths": 0,
+      "pruneVisits": 327060,
+      "copiedElements": 20563200,
+      "pruneUs": 363421.99999999994,
+      "memory": {
+        "rss": 194670592,
+        "heapTotal": 141893632,
+        "heapUsed": 62044720,
+        "external": 1689665,
+        "arrayBuffers": 10527
+      },
+      "cpu": {
+        "user": 390000,
+        "system": 46000
+      },
+      "resources": {
+        "captureSurfaces": 0,
+        "capturedFrames": 0,
+        "encodedRingBytes": 0,
+        "encoderSessions": 0,
+        "rendererWorkers": 0,
+        "note": "Synthetic control history only; capture/GPU/encoder paths are not exercised."
+      }
+    },
+    {
+      "type": "checkpoint",
+      "phase": "churn",
+      "simulatedMs": 4500000,
+      "pid": 35692,
+      "createdWindows": 452,
+      "retainedWindows": 452,
+      "retainedTrees": 452,
+      "retainedElements": 28928,
+      "retainedMoves": 0,
+      "retainedDeaths": 0,
+      "pruneVisits": 510075,
+      "copiedElements": 32184000,
+      "pruneUs": 567100.4999999997,
+      "memory": {
+        "rss": 195473408,
+        "heapTotal": 142680064,
+        "heapUsed": 36621864,
+        "external": 1689665,
+        "arrayBuffers": 10527
+      },
+      "cpu": {
+        "user": 609000,
+        "system": 46000
+      },
+      "resources": {
+        "captureSurfaces": 0,
+        "capturedFrames": 0,
+        "encodedRingBytes": 0,
+        "encoderSessions": 0,
+        "rendererWorkers": 0,
+        "note": "Synthetic control history only; capture/GPU/encoder paths are not exercised."
+      }
+    },
+    {
+      "type": "checkpoint",
+      "phase": "churn",
+      "simulatedMs": 5400000,
+      "pid": 35692,
+      "createdWindows": 542,
+      "retainedWindows": 542,
+      "retainedTrees": 542,
+      "retainedElements": 34688,
+      "retainedMoves": 0,
+      "retainedDeaths": 0,
+      "pruneVisits": 733590,
+      "copiedElements": 46396800,
+      "pruneUs": 837875.1000000008,
+      "memory": {
+        "rss": 195616768,
+        "heapTotal": 142680064,
+        "heapUsed": 67557360,
+        "external": 1689665,
+        "arrayBuffers": 10527
+      },
+      "cpu": {
+        "user": 906000,
+        "system": 46000
+      },
+      "resources": {
+        "captureSurfaces": 0,
+        "capturedFrames": 0,
+        "encodedRingBytes": 0,
+        "encoderSessions": 0,
+        "rendererWorkers": 0,
+        "note": "Synthetic control history only; capture/GPU/encoder paths are not exercised."
+      }
+    },
+    {
+      "type": "checkpoint",
+      "phase": "churn",
+      "simulatedMs": 6300000,
+      "pid": 35692,
+      "createdWindows": 632,
+      "retainedWindows": 632,
+      "retainedTrees": 632,
+      "retainedElements": 40448,
+      "retainedMoves": 0,
+      "retainedDeaths": 0,
+      "pruneVisits": 997605,
+      "copiedElements": 63201600,
+      "pruneUs": 1130468.5999999992,
+      "memory": {
+        "rss": 196186112,
+        "heapTotal": 142942208,
+        "heapUsed": 72807104,
+        "external": 1689665,
+        "arrayBuffers": 10527
+      },
+      "cpu": {
+        "user": 1281000,
+        "system": 109000
+      },
+      "resources": {
+        "captureSurfaces": 0,
+        "capturedFrames": 0,
+        "encodedRingBytes": 0,
+        "encoderSessions": 0,
+        "rendererWorkers": 0,
+        "note": "Synthetic control history only; capture/GPU/encoder paths are not exercised."
+      }
+    },
+    {
+      "type": "checkpoint",
+      "phase": "churn",
+      "simulatedMs": 7200000,
+      "pid": 35692,
+      "createdWindows": 722,
+      "retainedWindows": 722,
+      "retainedTrees": 722,
+      "retainedElements": 46208,
+      "retainedMoves": 0,
+      "retainedDeaths": 0,
+      "pruneVisits": 1302120,
+      "copiedElements": 82598400,
+      "pruneUs": 1436242.1999999967,
+      "memory": {
+        "rss": 231960576,
+        "heapTotal": 176496640,
+        "heapUsed": 47225088,
+        "external": 1689629,
+        "arrayBuffers": 10491
+      },
+      "cpu": {
+        "user": 1640000,
+        "system": 203000
+      },
+      "resources": {
+        "captureSurfaces": 0,
+        "capturedFrames": 0,
+        "encodedRingBytes": 0,
+        "encoderSessions": 0,
+        "rendererWorkers": 0,
+        "note": "Synthetic control history only; capture/GPU/encoder paths are not exercised."
+      }
+    },
+    {
+      "type": "checkpoint",
+      "phase": "retired",
+      "simulatedMs": 7264000,
+      "pid": 35692,
+      "createdWindows": 722,
+      "retainedWindows": 722,
+      "retainedTrees": 722,
+      "retainedElements": 46208,
+      "retainedMoves": 0,
+      "retainedDeaths": 0,
+      "pruneVisits": 1302120,
+      "copiedElements": 82598400,
+      "pruneUs": 1436242.1999999967,
+      "memory": {
+        "rss": 232058880,
+        "heapTotal": 155787264,
+        "heapUsed": 17044392,
+        "external": 1689629,
+        "arrayBuffers": 10491
+      },
+      "cpu": {
+        "user": 1640000,
+        "system": 203000
+      },
+      "resources": {
+        "captureSurfaces": 0,
+        "capturedFrames": 0,
+        "encodedRingBytes": 0,
+        "encoderSessions": 0,
+        "rendererWorkers": 0,
+        "note": "Synthetic control history only; capture/GPU/encoder paths are not exercised."
+      }
+    }
+  ],
+  "osSampleCount": 11,
+  "processBounds": {
+    "cpuMs": {
+      "min": 31.25,
+      "max": 1843.75,
+      "first": 31.25,
+      "last": 1843.75
+    },
+    "cpuPercentOneCore": {
+      "min": 0,
+      "max": 44.313778223292545,
+      "first": 0,
+      "last": 44.313778223292545
+    },
+    "privateBytes": {
+      "min": 19984384,
+      "max": 201318400,
+      "first": 19984384,
+      "last": 201318400
+    },
+    "workingSetBytes": {
+      "min": 55357440,
+      "max": 232058880,
+      "first": 55357440,
+      "last": 232058880
+    },
+    "handles": {
+      "min": 178,
+      "max": 178,
+      "first": 178,
+      "last": 178
+    },
+    "threads": {
+      "min": 12,
+      "max": 12,
+      "first": 12,
+      "last": 12
+    }
+  },
+  "passed": false,
+  "violations": [
+    "900000ms: 92 windows exceed 6",
+    "900000ms: 5888 elements exceed 384",
+    "1800000ms: 182 windows exceed 6",
+    "1800000ms: 11648 elements exceed 384",
+    "2700000ms: 272 windows exceed 6",
+    "2700000ms: 17408 elements exceed 384",
+    "3600000ms: 362 windows exceed 6",
+    "3600000ms: 23168 elements exceed 384",
+    "4500000ms: 452 windows exceed 6",
+    "4500000ms: 28928 elements exceed 384",
+    "5400000ms: 542 windows exceed 6",
+    "5400000ms: 34688 elements exceed 384",
+    "6300000ms: 632 windows exceed 6",
+    "6300000ms: 40448 elements exceed 384",
+    "7200000ms: 722 windows exceed 6",
+    "7200000ms: 46208 elements exceed 384",
+    "retired history did not expire"
+  ]
+}
