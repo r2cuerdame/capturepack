@@ -576,7 +576,10 @@ function startFrameTicks(preparedVideo?: HTMLVideoElement): void {
     video.style.position = 'fixed'
     video.style.width = '1px'
     video.style.height = '1px'
-    video.style.opacity = '0'
+    // The BrowserWindow is hidden. Keep this one pixel paintable: Chromium can
+    // throttle undrawn compositor frames to 1 Hz despite backgroundThrottling
+    // being disabled, starving rVFC and the bounded exposure calibration.
+    video.style.opacity = '1'
     video.style.pointerEvents = 'none'
     video.srcObject = active
     document.body.appendChild(video)
@@ -688,11 +691,8 @@ function startFrameTicks(preparedVideo?: HTMLVideoElement): void {
       video.requestVideoFrameCallback(pump)
       return
     }
-    const base = activeRecorder
-    if (base === null) {
-      video.requestVideoFrameCallback(pump)
-      return
-    }
+    // Native READY retires MediaRecorder, but this stream still owns Lane-S
+    // presentation ticks (#243). Only the tick generation retires this chain.
     // ONE MONOTONIC NUMBER FOR THE WHOLE SESSION (#112).
     //
     // This used to send the frame's position within the CURRENT recorder slot.
@@ -953,7 +953,9 @@ function waitForPrimaryReadiness(
     video.style.position = 'fixed'
     video.style.width = '1px'
     video.style.height = '1px'
-    video.style.opacity = '0'
+    // Reuse a paintable one-pixel sink after readiness; a fully transparent
+    // sink can leave the hidden document on Chromium's undrawn-frame throttle.
+    video.style.opacity = '1'
     video.style.pointerEvents = 'none'
     video.srcObject = acquiredStream
     document.body.appendChild(video)

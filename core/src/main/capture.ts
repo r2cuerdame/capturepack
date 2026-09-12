@@ -831,22 +831,25 @@ function startReconciling(): void {
   reconcileTimer = setInterval(reconcileRecorders, RECONCILE_INTERVAL_MS)
 }
 
-function dxgiDisplayIdentity(display: Display): {
+function dxgiDisplayIdentity(display: Display, maxLongEdge: number): {
   deviceName?: string
   bounds: { x: number; y: number; width: number; height: number }
+  outputSize?: { width: number; height: number }
 } {
   const label = display.label.trim()
+  const replay = replaySize(display, maxLongEdge)
   return {
     ...(/^\\\\\.\\DISPLAY\d+$/i.test(label) ? { deviceName: label } : {}),
     // Electron display bounds are DIP. The helper selects an exact DXGI output
     // in physical desktop coordinates, the same conversion used by the timing
     // reference path below.
     bounds: screen.dipToScreenRect(null, display.bounds),
+    ...(replay.width === 0 ? {} : { outputSize: replay }),
   }
 }
 
-function dxgiReplayServiceSignature(display: Display, retentionMs: number): string {
-  return JSON.stringify({ ...dxgiDisplayIdentity(display), retentionMs })
+function dxgiReplayServiceSignature(display: Display, retentionMs: number, maxLongEdge: number): string {
+  return JSON.stringify({ ...dxgiDisplayIdentity(display, maxLongEdge), retentionMs })
 }
 
 function setShippingReplayWorkload(displayId: number, active: boolean): boolean {
@@ -915,7 +918,7 @@ function reconcileDxgiReplayServices(
     const display = wanted.get(displayId)
     if (
       display !== undefined
-      && slot.signature === dxgiReplayServiceSignature(display, retentionMs)
+      && slot.signature === dxgiReplayServiceSignature(display, retentionMs, settings.replayMaxWidth)
     ) {
       if (slot.manager.currentSelection().backend === 'native-dxgi') {
         setShippingReplayWorkload(displayId, false)
@@ -928,7 +931,7 @@ function reconcileDxgiReplayServices(
   }
   for (const display of wanted.values()) {
     if (dxgiReplayServices.has(display.id)) continue
-    const identity = dxgiDisplayIdentity(display)
+    const identity = dxgiDisplayIdentity(display, settings.replayMaxWidth)
     let manager: DxgiReplayRuntimeManager
     manager = new DxgiReplayRuntimeManager({
       outputDirectory: path.join(app.getPath('temp'), 'capturepack-dxgi-replay'),
@@ -968,7 +971,7 @@ function reconcileDxgiReplayServices(
     })
     const slot: DxgiReplayServiceSlot = {
       manager,
-      signature: dxgiReplayServiceSignature(display, retentionMs),
+      signature: dxgiReplayServiceSignature(display, retentionMs, settings.replayMaxWidth),
       retentionMs,
     }
     // Install before awaiting READY so a concurrent lifecycle stop owns the

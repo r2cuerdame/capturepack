@@ -62,6 +62,12 @@ const snapshots = section(
 )
 
 console.log('DXGI APPLICATION INTEGRATION')
+const nativeIdentity = section('function dxgiDisplayIdentity(', 'function dxgiReplayServiceSignature(')
+check('native uses shipping replay size while retaining physical display identity',
+  nativeIdentity.includes('replaySize(display, maxLongEdge)')
+    && nativeIdentity.includes('outputSize: replay')
+    && nativeIdentity.includes('screen.dipToScreenRect')
+    && reconcile.includes('dxgiDisplayIdentity(display, settings.replayMaxWidth)'))
 check(
   'native candidates require the exact explicit opt-in and warm in background',
   reconcile.includes('dxgiReplayRuntimeOptedIn(process.argv)')
@@ -71,7 +77,7 @@ check(
 check(
   'one service is retained per display identity and stopped with lifecycle',
   capture.includes('const dxgiReplayServices = new Map<number, DxgiReplayServiceSlot>()')
-    && reconcile.includes('slot.signature === dxgiReplayServiceSignature(display, retentionMs)')
+    && reconcile.includes('slot.signature === dxgiReplayServiceSignature(display, retentionMs, settings.replayMaxWidth)')
     && capture.includes('stopDxgiReplayServices(')
     && capture.includes('slot.manager.stop()'),
 )
