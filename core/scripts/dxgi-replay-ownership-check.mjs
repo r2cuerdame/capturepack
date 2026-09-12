@@ -16,6 +16,9 @@ const main = parse('src/main/capture.ts')
 const renderer = parse('src/renderer/capture/capture.ts')
 const retention = parse('src/renderer/capture/recorderRetention.ts')
 function fn(source, name) {
+  if (name === 'measuredReplaySourceClockAnchors' && process.argv.includes('--mutate-unverified-source-clock')) {
+    return 'function measuredReplaySourceClockAnchors(clock, durationMs) { return sourceClockAnchorsFromObservedCaptureTime(replayClockAnchorsWithinDuration(clock, durationMs)); }'
+  }
   const node = source.statements.find((statement) =>
     ts.isFunctionDeclaration(statement) && statement.name?.text === name)
   assert.ok(node, `production function ${name} must exist`)
@@ -73,7 +76,7 @@ function harness() {
   const rendererContext = vm.createContext({
     console: { info: () => {} }, captureGeneration: 7, captureStreamGeneration: 0, replayWorkloadActive: true,
     startPayload: payload, stream: originalStream,
-    tickVideo: {}, sourceLatencyCalibrationCancel: null,
+    tickVideo: {}, sourceLatencyCalibrationCancel: null, sourceLatencyPresentationObserver: null,
     nativeFallbackStartupErrors: { cancel: () => {} }, nativeFallbackSessionId: null,
     nativeFallbackCanvas: null, nativeFallbackRequestedFrames: 0, nativeFallbackPresentedFrames: 0,
     nativeFallbackPresentationQueue: { stats: () => ({}), clear: () => {} },
@@ -379,5 +382,88 @@ await check('suspended shipping and obsolete sender errors cannot demote current
   assert.equal(h.mainContext.shippingReplaySuspended.has(17), true)
   assert.equal(count(h.events, 'native-stop'), 0)
   assert.equal(count(h.events, 'fresh-shipping-installed'), 0)
+})
+function calibrationHarness() {
+  const h = harness()
+  let finishCalibration
+  let rejectCalibration
+  let finishReadiness
+  let control
+  Object.assign(h.rendererContext, {
+    recorderFormat: { mimeType: 'video/mp4' }, primaryStartupObservationAttempted: false,
+    PRIMARY_STARTUP_OBSERVATION_MS: 2000, REPLAY_PIXEL_CLOCK_SAMPLE_LIMIT: 64,
+    sourceLatencyCalibrationGeneration: null,
+    measureChromiumSourceLatency: (_payload, _generation, _stream, observedControl) => {
+      control = observedControl
+      control.stopSampler = () => h.events.push('calibration-sampler-stop')
+      return new Promise((resolve, reject) => { finishCalibration = resolve; rejectCalibration = reject })
+    },
+    waitForPrimaryReadiness: () => new Promise((resolve) => { finishReadiness = resolve }),
+    beginInstalledRecording: () => h.events.push('recording-after-readiness'),
+    releaseVideoSink: () => {},
+    performance: { timeOrigin: 1000 }, wallComparableTimeMs: (origin, value) => origin + value,
+    replayPixelClockFingerprint: () => ({}),
+    retainReplayPixelClockPresentedSample: (samples, sample) => samples.push(sample),
+    replayPixelClockPresentedSamples: [], segmentMs: 30000,
+  })
+  run([fn(renderer, 'startChromiumSourceLatencyCalibration'), fn(renderer, 'installRecordingStream'),
+    fn(renderer, 'retainReplayPixelClockFrame')].join('\n'), h.rendererContext)
+  h.rendererContext.installRecordingStream(h.rendererContext.startPayload, 7, h.originalStream, 'chromium-desktop-capture', 'full')
+  return { ...h, control: () => control, ready: () => finishReadiness({ clockVideo: {} }), finish: (value) => finishCalibration(value), fail: (error) => rejectCalibration(error) }
+}
+await check('bounded calibration survives recorder readiness and collects live clock witnesses', async () => {
+  const h = calibrationHarness()
+  h.rendererContext.retainReplayPixelClockFrame({}, 5, 15, 4)
+  assert.equal(h.control().presentedSamples.length, 1, 'first readiness samples use the same observer')
+  h.ready(); await flush()
+  assert.equal(count(h.events, 'recording-after-readiness'), 1)
+  assert.equal(h.control().cancelled, false, 'recorder readiness must not discard bounded calibration still in flight')
+  h.rendererContext.retainReplayPixelClockFrame({}, 10, 20, 9)
+  assert.equal(h.control().presentedSamples.length, 2, 'live sink must continue the same bounded calibration observations')
+  const proof = { status: 'measured' }
+  h.finish(proof); await flush()
+  assert.equal(h.rendererContext.sourceLatencyCalibration, proof)
+  assert.equal(h.rendererContext.sourceLatencyPresentationObserver, null)
+  assert.equal(h.rendererContext.sourceLatencyCalibrationCancel, null)
+})
+await check('native READY and actual teardown cancel calibration and reject late proof', async () => {
+  for (const action of ['native-ready', 'teardown']) {
+    const h = calibrationHarness(); h.ready(); await flush()
+    if (action === 'native-ready') h.workload(false)
+    else h.rendererContext.teardown()
+    assert.equal(h.control().cancelled, true)
+    assert.equal(count(h.events, 'calibration-sampler-stop'), 1)
+    h.finish({ status: 'measured' }); await flush()
+    assert.equal(h.rendererContext.sourceLatencyCalibration, undefined)
+    assert.equal(h.rendererContext.sourceLatencyPresentationObserver, null)
+  }
+})
+await check('rejected calibration settles unavailable and releases live observers', async () => {
+  const h = calibrationHarness(); h.ready(); await flush()
+  h.fail(new Error('bounded probe failed')); await flush()
+  assert.equal(h.rendererContext.sourceLatencyCalibration?.status, 'unavailable')
+  assert.equal(h.rendererContext.sourceLatencyCalibration?.reason, 'probe-failed')
+  assert.equal(h.rendererContext.sourceLatencyPresentationObserver, null)
+  assert.equal(h.rendererContext.sourceLatencyCalibrationCancel, null)
+})
+await check('only independent DXGI pixel exposure can select the replay source clock', async () => {
+  const h = harness()
+  Object.assign(h.rendererContext, {
+    replayClockAnchorsWithinDuration: () => [{ ptsMs: 0, presentedAtMs: 1000, capturedAtMs: 999, mediaTimeMs: 50 }],
+    sourceClockAnchorsFromObservedCaptureTime: () => [{ ptsMs: 0, wallMs: 999 }],
+    sourceClockAnchorsFromMeasuredMediaTime: (_anchors, origin) => [{ ptsMs: 0, wallMs: origin + 50 }],
+    sourceLatencyCalibration: {
+      reference: { source: 'dxgi-desktop-duplication', timing: 'pixel-exposure' },
+      presentation: { sourceMediaTimeOriginMs: 750, direct: { status: 'measured', sourceMediaTimeOriginMs: 750 } },
+    },
+  })
+  run(fn(renderer, 'measuredReplaySourceClockAnchors'), h.rendererContext)
+  assert.equal(h.rendererContext.measuredReplaySourceClockAnchors({}, 1000)[0].wallMs, 800,
+    'independent same-pixel exposure must win over misleading raw rVFC captureTime')
+  h.rendererContext.sourceLatencyCalibration.reference.source = 'windows-gdi-bitblt'
+  assert.equal(h.rendererContext.measuredReplaySourceClockAnchors({}, 1000), undefined)
+  h.rendererContext.sourceLatencyCalibration = undefined
+  assert.equal(h.rendererContext.measuredReplaySourceClockAnchors({}, 1000), undefined,
+    'raw captureTime alone is not a verified source exposure clock')
 })
 console.log(`dxgi replay ownership behavior check: ${passed} passed`)
