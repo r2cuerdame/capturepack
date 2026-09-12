@@ -357,7 +357,8 @@ check(
   'measured pixel-clock decoding still covers the full retained replay',
   decodeStart >= 0
     && decodeEnd > decodeStart
-    && decodeSource.includes('for (const target of targets)')
+    && decodeSource.includes('while (targets.length > 0 && seekAttempts < REPLAY_PIXEL_CLOCK_DECODE_SAMPLE_LIMIT)')
+    && decodeSource.includes('const target = targets.shift()!')
     && !decodeSource.includes('decideReplayPixelClock(presented, decoded)'),
 )
 const targetStart = captureSource.indexOf(
