@@ -15,6 +15,9 @@ import type {
 export const IPC = {
   // main -> capture window: begin recording this desktop source id
   captureStart: 'capture:start',
+  // main -> capture window: enable/disable shipping replay encoding while a
+  // guarded native service owns this display.
+  captureReplayWorkload: 'capture:replay-workload',
   // main -> capture window: deliver the replay blob for an export in progress
   captureRequestReplay: 'capture:request-replay',
   // main -> capture window: the full-native snapshot phase is complete. A held
@@ -369,6 +372,8 @@ export interface ImageRegionSelectorCancelPayload {
  *  - 'buffer-too-short'  — it came back with less than a decodable video (a slot
  *    that just started or just rotated; on MP4 its payload is still entirely
  *    inside the muxer).
+ *  - 'native-export-failed' — native owned the retained history but could not
+ *    export it; shipping restarts for the next capture, not this lost past.
  */
 export type RecorderFailureReason =
   | 'screen-unavailable'
@@ -379,6 +384,7 @@ export type RecorderFailureReason =
   | 'no-frames'
   | 'replay-timeout'
   | 'buffer-too-short'
+  | 'native-export-failed'
 
 export interface CaptureStartPayload {
   // Electron display id (as a string) this recorder window is assigned to.
@@ -418,6 +424,11 @@ export interface CaptureStartPayload {
   // must end in no verdict at all rather than a destroyed buffer.
   // Absent in every normal run.
   simulateSlowReplayMs?: number
+}
+
+export interface CaptureReplayWorkloadPayload {
+  /** False releases shipping encoders/rings; true reacquires shipping capture. */
+  active: boolean
 }
 
 export interface CaptureReadyPayload {

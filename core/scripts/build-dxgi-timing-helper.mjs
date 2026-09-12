@@ -3,8 +3,6 @@ import { existsSync, mkdirSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-const HELPER_NAME = 'dxgi-timing-reference.exe'
-
 function commandOnPath(name) {
   const result = spawnSync('where.exe', [name], {
     encoding: 'utf8',
@@ -29,25 +27,53 @@ function visualStudioDeveloperCommand() {
     ),
   ]
   const vswhere = candidates.find((candidate) => existsSync(candidate))
-  if (vswhere === undefined) return null
-  const query = spawnSync(
-    vswhere,
-    [
-      '-latest',
-      '-products',
-      '*',
-      '-requires',
-      'Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
-      '-property',
-      'installationPath',
-    ],
-    { encoding: 'utf8', windowsHide: true },
-  )
-  if (query.status !== 0) return null
-  const installation = query.stdout.trim()
-  if (installation === '') return null
-  const command = path.join(installation, 'VC', 'Auxiliary', 'Build', 'vcvars64.bat')
-  return existsSync(command) ? command : null
+  if (vswhere !== undefined) {
+    const query = spawnSync(
+      vswhere,
+      [
+        '-latest',
+        '-products',
+        '*',
+        '-requires',
+        'Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
+        '-property',
+        'installationPath',
+      ],
+      { encoding: 'utf8', windowsHide: true },
+    )
+    if (query.status === 0) {
+      const installation = query.stdout.trim()
+      if (installation !== '') {
+        const command = path.join(installation, 'VC', 'Auxiliary', 'Build', 'vcvars64.bat')
+        if (existsSync(command)) return command
+      }
+    }
+  }
+
+  const standardInstallations = [
+    process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)',
+    process.env.ProgramFiles ?? 'C:\\Program Files',
+  ]
+  const editions = ['BuildTools', 'Community', 'Professional', 'Enterprise']
+  const versions = ['2022', '2019']
+  for (const root of standardInstallations) {
+    for (const version of versions) {
+      for (const edition of editions) {
+        const command = path.join(
+          root,
+          'Microsoft Visual Studio',
+          version,
+          edition,
+          'VC',
+          'Auxiliary',
+          'Build',
+          'vcvars64.bat',
+        )
+        if (existsSync(command)) return command
+      }
+    }
+  }
+  return null
 }
 
 function quoted(value) {
@@ -61,13 +87,15 @@ function quoted(value) {
  * helper. Installer/release commands pass required=true: producing a package
  * that silently lacks the calibration helper is not an acceptable success.
  */
-export function compileDxgiTimingHelper({
-  source = path.join(process.cwd(), 'scripts', 'dxgi-timing-reference.cpp'),
+function compileDxgiHelper({
+  helperName,
+  source,
   outputDirectory = path.join(process.cwd(), 'dist', 'scripts'),
   required = false,
-} = {}) {
+  libraries,
+}) {
   if (process.platform !== 'win32') {
-    const message = 'DXGI timing helper skipped: Windows MSVC build host required'
+    const message = `${helperName} skipped: Windows MSVC build host required`
     if (required) throw new Error(message)
     console.warn(message)
     return null
@@ -77,7 +105,7 @@ export function compileDxgiTimingHelper({
     : visualStudioDeveloperCommand()
   if (developerCommand === null && !commandOnPath('cl.exe')) {
     const message =
-      'DXGI timing helper skipped: MSVC C++ Build Tools were not found; ' +
+      `${helperName} skipped: MSVC C++ Build Tools were not found; ` +
       'install the x64 Desktop development with C++ workload'
     if (required) throw new Error(message)
     console.warn(message)
@@ -85,8 +113,11 @@ export function compileDxgiTimingHelper({
   }
 
   mkdirSync(outputDirectory, { recursive: true })
-  const output = path.join(outputDirectory, HELPER_NAME)
-  const object = path.join(outputDirectory, 'dxgi-timing-reference.obj')
+  const output = path.join(outputDirectory, helperName)
+  const object = path.join(
+    outputDirectory,
+    `${path.basename(helperName, path.extname(helperName))}.obj`,
+  )
   const compilerArguments = [
     '/nologo',
     '/std:c++17',
@@ -98,9 +129,7 @@ export function compileDxgiTimingHelper({
     `/Fo${object}`,
     `/Fe${output}`,
     source,
-    'd3d11.lib',
-    'dxgi.lib',
-    'user32.lib',
+    ...libraries,
   ]
   const result = developerCommand === null
     ? spawnSync('cl.exe', compilerArguments, {
@@ -119,12 +148,50 @@ export function compileDxgiTimingHelper({
   rmSync(object, { force: true })
   if (result.status !== 0 || !existsSync(output)) {
     throw new Error(
-      `DXGI timing helper compile failed (${String(result.status)}): ` +
+      `${helperName} compile failed (${String(result.status)}): ` +
         String(result.stderr || result.stdout || result.error),
     )
   }
-  console.log(`DXGI timing helper built: ${path.relative(process.cwd(), output)}`)
+  console.log(`DXGI helper built: ${path.relative(process.cwd(), output)}`)
   return output
+}
+
+export function compileDxgiTimingHelper({
+  source = path.join(process.cwd(), 'scripts', 'dxgi-timing-reference.cpp'),
+  outputDirectory = path.join(process.cwd(), 'dist', 'scripts'),
+  required = false,
+} = {}) {
+  return compileDxgiHelper({
+    helperName: 'dxgi-timing-reference.exe',
+    source,
+    outputDirectory,
+    required,
+    libraries: ['d3d11.lib', 'dxgi.lib', 'user32.lib'],
+  })
+}
+
+export function compileDxgiReplayRingHelper({
+  source = path.join(process.cwd(), 'scripts', 'dxgi-replay-ring.cpp'),
+  outputDirectory = path.join(process.cwd(), 'dist', 'scripts'),
+  required = false,
+} = {}) {
+  return compileDxgiHelper({
+    helperName: 'dxgi-replay-ring.exe',
+    source,
+    outputDirectory,
+    required,
+    libraries: [
+      'd3d11.lib',
+      'd3dcompiler.lib',
+      'dxgi.lib',
+      'mf.lib',
+      'mfplat.lib',
+      'mfreadwrite.lib',
+      'mfuuid.lib',
+      'ole32.lib',
+      'user32.lib',
+    ],
+  })
 }
 
 if (
@@ -132,6 +199,9 @@ if (
   && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
 ) {
   compileDxgiTimingHelper({
+    required: process.argv.includes('--required'),
+  })
+  compileDxgiReplayRingHelper({
     required: process.argv.includes('--required'),
   })
 }

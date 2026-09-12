@@ -1,0 +1,21 @@
+
+> capturepack@0.5.0 check:dxgi-replay-ab
+> node scripts/dxgi-replay-ab-check.mjs
+
+PASS: a cleaned failed trial permits remaining evidence but can never pass release
+PASS: missing cleanup and timed-out children stop subsequent trials
+PASS: complete same-workload READY/SNAPSHOT/fMP4/decode evidence passes
+PASS: report preserves every raw sample and aggregate mean/p95/delta
+PASS: CPU materially-lower threshold is the primary 90 percent gate
+PASS: GPU and working-set thresholds are 110 percent guardrails
+PASS: latency thresholds include the bounded absolute jitter allowance
+PASS: wrong observed backend fails closed
+PASS: missing native snapshot evidence fails closed
+PASS: missing production fMP4 validation fails closed
+PASS: CPU mean above 90 percent of shipping fails
+PASS: GPU regression above the 110 percent guardrail fails
+PASS: display/resolution/FPS/retention/activity mismatch fails
+PASS: fewer than three trials is not release evidence
+PASS: field runner launches only the explicit native switch and samples Windows GPU engines
+PASS: field runner records production fMP4 validation and post-ready evidence
+dxgi replay A/B checks: 16 passed

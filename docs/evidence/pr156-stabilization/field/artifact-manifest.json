@@ -1,0 +1,2472 @@
+[
+  {
+    "file": "artifacts/ab-report.json",
+    "bytes": 14965,
+    "sha256": "ced94c5312c6925d6dd418a1759d1293b7dc295ca7d95809db6475fc7557c582"
+  },
+  {
+    "file": "artifacts/native-1/app-data/Cache/Cache_Data/data_0",
+    "bytes": 45056,
+    "sha256": "966f2f2ad8eae5f99b2aff47b34650eb97dbbd00eada46c048be93a7d51a6749"
+  },
+  {
+    "file": "artifacts/native-1/app-data/Cache/Cache_Data/data_1",
+    "bytes": 270336,
+    "sha256": "9244e85bf2756dedafc0a3fadfe052977c30c456c7909640545ecafd280d29e1"
+  },
+  {
+    "file": "artifacts/native-1/app-data/Cache/Cache_Data/data_2",
+    "bytes": 1056768,
+    "sha256": "1a06e9ec5a175d38a5404c4d0b48cd41f199cf120c448fbfae7240c7f6b417bc"
+  },
+  {
+    "file": "artifacts/native-1/app-data/Cache/Cache_Data/data_3",
+    "bytes": 8192,
+    "sha256": "e09f42c398d688dce168570291f1f92d079987deda3099a34adb9e8c0522b30c"
+  },
+  {
+    "file": "artifacts/native-1/app-data/Cache/Cache_Data/f_000001",
+    "bytes": 11476456,
+    "sha256": "75b5e033a0d6e1bba1e7ce6aad6f723d84128cda7f2048339c8c498f049f49bc"
+  },
+  {
+    "file": "artifacts/native-1/app-data/Cache/Cache_Data/index",
+    "bytes": 524656,
+    "sha256": "4f32e499805b9ab0aea4df3c6086a2a08946ba60910a05b4d511daa74f33cd0a"
+  },
+  {
+    "file": "artifacts/native-1/app-data/Cache/No_Vary_Search/journal.baj",
+    "bytes": 4,
+    "sha256": "9c169428d852e25bd59b27652ed533d2a1f09f96e4c329fa5e06f47e16731543"
+  },
+  {
+    "file": "artifacts/native-1/app-data/Cache/No_Vary_Search/snapshot.baf",
+    "bytes": 20,
+    "sha256": "0c2dd377ed0cc66161e9db8f89f7d8bcb3ad8c06c4a054bdcba214ab05f58c9a"
+  },
+  {
+    "file": "artifacts/native-1/app-data/Code Cache/electron-preload/41D252202F15AB6C14C963F847ECD8CF1FE0216BF682E47561E109F255FE5B99.cache",
+    "bytes": 8756,
+    "sha256": "b973c9a3fe78c2de52eec8a7edb310008cd64044e341c030af6fbdad87d71b07"
+  },
+  {
+    "file": "artifacts/native-1/app-data/Code Cache/electron-preload/4EE12411E85EF93D4072D3589E3E0E757DD33D4B3FB335DEB7FCDF0B4673D836.cache",
+    "bytes": 8876,
+    "sha256": "9e8c2c9d4d8a46c35cbb011ca4bd7953f3ad1160765b400b1f6e80a978c42bd5"
+  },
+  {
+    "file": "artifacts/native-1/app-data/Code Cache/js/index",
+    "bytes": 24,
+    "sha256": "fbcfe23a2ecb82b7100c50811691dde0a33aa3da8d176be9882a9db485dc0f2d"
+  },
+  {
+    "file": "artifacts/native-1/app-data/Code Cache/js/index-dir/the-real-index",
+    "bytes": 48,
+    "sha256": "b06a13827d184deaa7eb3fcdc7c7810b71bf258b01693965a7fb8ba5f3559139"
+  },
+  {
+    "file": "artifacts/native-1/app-data/Code Cache/wasm/index",
+    "bytes": 24,
+    "sha256": "fbcfe23a2ecb82b7100c50811691dde0a33aa3da8d176be9882a9db485dc0f2d"
+  },
+  {
+    "file": "artifacts/native-1/app-data/Code Cache/wasm/index-dir/the-real-index",
+    "bytes": 48,
+    "sha256": "4e1a6c14f7abf1aee1a154c1bfdf23d5d26b02e5c613d75bf99bcc91b00d8a1e"
+  },
+  {
+    "file": "artifacts/native-1/app-data/Crashpad/settings.dat",
+    "bytes": 40,
+    "sha256": "0a247331bc70f6ade63fa3d27463b764d68d8ed9e4d76ebed4af3c417caa9836"
+  },
+  {
+    "file": "artifacts/native-1/app-data/DawnGraphiteCache/data_0",
+    "bytes": 8192,
+    "sha256": "d6a5fe39cd672781b256e0e3102f7022635f1d4bb7cfcc90a80fffe4d0f3877e"
+  },
+  {
+    "file": "artifacts/native-1/app-data/DawnGraphiteCache/data_1",
+    "bytes": 270336,
+    "sha256": "902f30c1fb0597d0734bc34b979ec5d131f8f39a4b71b338083821216ec8d61b"
+  },
+  {
+    "file": "artifacts/native-1/app-data/DawnGraphiteCache/data_2",
+    "bytes": 8192,
+    "sha256": "ec1702806f4cc7c42a82fc2b38e89835fde7c64bb32060e0823c9077ca92efb7"
+  },
+  {
+    "file": "artifacts/native-1/app-data/DawnGraphiteCache/data_3",
+    "bytes": 8192,
+    "sha256": "e09f42c398d688dce168570291f1f92d079987deda3099a34adb9e8c0522b30c"
+  },
+  {
+    "file": "artifacts/native-1/app-data/DawnGraphiteCache/index",
+    "bytes": 262512,
+    "sha256": "2b8af29cf44d5e3604bdcf7df501c20ccf7060b97b8c7ebb2d7ee6d832a4026c"
+  },
+  {
+    "file": "artifacts/native-1/app-data/DawnWebGPUCache/data_0",
+    "bytes": 8192,
+    "sha256": "d6a5fe39cd672781b256e0e3102f7022635f1d4bb7cfcc90a80fffe4d0f3877e"
+  },
+  {
+    "file": "artifacts/native-1/app-data/DawnWebGPUCache/data_1",
+    "bytes": 270336,
+    "sha256": "902f30c1fb0597d0734bc34b979ec5d131f8f39a4b71b338083821216ec8d61b"
+  },
+  {
+    "file": "artifacts/native-1/app-data/DawnWebGPUCache/data_2",
+    "bytes": 8192,
+    "sha256": "ec1702806f4cc7c42a82fc2b38e89835fde7c64bb32060e0823c9077ca92efb7"
+  },
+  {
+    "file": "artifacts/native-1/app-data/DawnWebGPUCache/data_3",
+    "bytes": 8192,
+    "sha256": "e09f42c398d688dce168570291f1f92d079987deda3099a34adb9e8c0522b30c"
+  },
+  {
+    "file": "artifacts/native-1/app-data/DawnWebGPUCache/index",
+    "bytes": 262512,
+    "sha256": "0debaf3e167e3aa7edf732c920a7d646bb3891fc6e9581e1e3b20983f450cf43"
+  },
+  {
+    "file": "artifacts/native-1/app-data/Dictionaries/ko-3-0.bdic",
+    "bytes": 11476456,
+    "sha256": "75b5e033a0d6e1bba1e7ce6aad6f723d84128cda7f2048339c8c498f049f49bc"
+  },
+  {
+    "file": "artifacts/native-1/app-data/DIPS",
+    "bytes": 4096,
+    "sha256": "0ab48b25cba617ed3a4acca0161813b314c095ef63544bb4af60769eb1012977"
+  },
+  {
+    "file": "artifacts/native-1/app-data/DIPS-wal",
+    "bytes": 45352,
+    "sha256": "785a7f8289e492252ebd7e29e1889fa0f7a3635c31747b824126681fd37a8d43"
+  },
+  {
+    "file": "artifacts/native-1/app-data/GPUCache/data_0",
+    "bytes": 8192,
+    "sha256": "d6a5fe39cd672781b256e0e3102f7022635f1d4bb7cfcc90a80fffe4d0f3877e"
+  },
+  {
+    "file": "artifacts/native-1/app-data/GPUCache/data_1",
+    "bytes": 270336,
+    "sha256": "902f30c1fb0597d0734bc34b979ec5d131f8f39a4b71b338083821216ec8d61b"
+  },
+  {
+    "file": "artifacts/native-1/app-data/GPUCache/data_2",
+    "bytes": 8192,
+    "sha256": "ec1702806f4cc7c42a82fc2b38e89835fde7c64bb32060e0823c9077ca92efb7"
+  },
+  {
+    "file": "artifacts/native-1/app-data/GPUCache/data_3",
+    "bytes": 8192,
+    "sha256": "e09f42c398d688dce168570291f1f92d079987deda3099a34adb9e8c0522b30c"
+  },
+  {
+    "file": "artifacts/native-1/app-data/GPUCache/index",
+    "bytes": 262512,
+    "sha256": "2599daed2bda789f8aa93868d0f16913585708560f35b14e25207b0fbd33d341"
+  },
+  {
+    "file": "artifacts/native-1/app-data/Local State",
+    "bytes": 490,
+    "sha256": "04d7ddc683b1fced65f8872bb60db602fe8029a616225d80216ec9a1e6bf4f5c"
+  },
+  {
+    "file": "artifacts/native-1/app-data/Local Storage/leveldb/000003.log",
+    "bytes": 30,
+    "sha256": "8bd2ea70a0b70c91de138a5b87c7936c6a6fa7c4275c54b97f4ef0ccc5b79bb4"
+  },
+  {
+    "file": "artifacts/native-1/app-data/Local Storage/leveldb/CURRENT",
+    "bytes": 16,
+    "sha256": "0f1bad70c7bd1e0a69562853ec529355462fcd0423263a3d39d6d0d70b780443"
+  },
+  {
+    "file": "artifacts/native-1/app-data/Local Storage/leveldb/LOCK",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/native-1/app-data/Local Storage/leveldb/LOG",
+    "bytes": 463,
+    "sha256": "a7af19ee977112ef0d673e70f633962bf3906c97d4042d33ee8d383ba38f7789"
+  },
+  {
+    "file": "artifacts/native-1/app-data/Local Storage/leveldb/MANIFEST-000001",
+    "bytes": 41,
+    "sha256": "f9d31b278e215eb0d0e9cd709edfa037e828f36214ab7906f612160fead4b2b4"
+  },
+  {
+    "file": "artifacts/native-1/app-data/logs/main.log",
+    "bytes": 12462,
+    "sha256": "54805cee28e33891942da1d7560e1b2813e71b010b28bbec84c62f8fabd482a7"
+  },
+  {
+    "file": "artifacts/native-1/app-data/Network/Network Persistent State",
+    "bytes": 59,
+    "sha256": "0178d3cd64965de13e56a805628521262dc0b9bb2294d6eda186252382fe1f11"
+  },
+  {
+    "file": "artifacts/native-1/app-data/Network/NetworkDataMigrated",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/native-1/app-data/Network/Trust Tokens",
+    "bytes": 36864,
+    "sha256": "8b5a62a399e316009e0c0ee1727ede327893d7f82f38a136e795422b3f9c333c"
+  },
+  {
+    "file": "artifacts/native-1/app-data/Network/Trust Tokens-journal",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/native-1/app-data/Preferences",
+    "bytes": 129,
+    "sha256": "c2fb2f979b95766fe9c209282355999a7ff399e99e37bd170e29a9c9ccf1f17f"
+  },
+  {
+    "file": "artifacts/native-1/app-data/run-state.json",
+    "bytes": 197,
+    "sha256": "0e03f47bf9894af020ffb6cce690479a8a1f2afdfd53892e623116a6f39f76f1"
+  },
+  {
+    "file": "artifacts/native-1/app-data/settings.json",
+    "bytes": 1248,
+    "sha256": "f587f1b5cc59d429ebd617ae0d8d92278fb32797680b27d20ee1298c7217a52a"
+  },
+  {
+    "file": "artifacts/native-1/app-data/Shared Dictionary/cache/index",
+    "bytes": 24,
+    "sha256": "fbcfe23a2ecb82b7100c50811691dde0a33aa3da8d176be9882a9db485dc0f2d"
+  },
+  {
+    "file": "artifacts/native-1/app-data/Shared Dictionary/cache/index-dir/the-real-index",
+    "bytes": 48,
+    "sha256": "797a4f08f1e9e48361f55350f7410579626e7a9bb1d025d83a1f91d33db90e6e"
+  },
+  {
+    "file": "artifacts/native-1/app-data/Shared Dictionary/db",
+    "bytes": 45056,
+    "sha256": "fbb86c665b2fed35c372ce8996eb1c4e31082aedd6ad5fc6086cfac889c3471b"
+  },
+  {
+    "file": "artifacts/native-1/app-data/Shared Dictionary/db-journal",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/native-1/capturepack-stderr.log",
+    "bytes": 1307,
+    "sha256": "1760005cabe01b5ed0c8f1803d4d9d8626abb521f91d950d67d9ee4ebf2bb066"
+  },
+  {
+    "file": "artifacts/native-1/capturepack-stdout.log",
+    "bytes": 9200,
+    "sha256": "cb9758923a41057e297cabec6a4a3ef06772d5167fd2c3db06926ba4c4a391c2"
+  },
+  {
+    "file": "artifacts/native-1/ffmpeg-d2.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/native-1/ffprobe-d2.json",
+    "bytes": 26860,
+    "sha256": "81fdf5a22facb44165455fcf190ca7231aad8c53a4f11222d6cc415cf8da446e"
+  },
+  {
+    "file": "artifacts/native-1/fixture/layout.json",
+    "bytes": 1483,
+    "sha256": "0735be2cc875c64ff517e0f646d6713e0b5a808bbcd8c310f77486cc01e38310"
+  },
+  {
+    "file": "artifacts/native-1/fixture/movement.jsonl",
+    "bytes": 537982,
+    "sha256": "428862d60256ddb612350865c0a06523f00f77debd75e95cf7982834b5a4e2f0"
+  },
+  {
+    "file": "artifacts/native-1/fixture/stderr.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/native-1/fixture/stdout.log",
+    "bytes": 2,
+    "sha256": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6"
+  },
+  {
+    "file": "artifacts/native-1/fixture/stop",
+    "bytes": 5,
+    "sha256": "a11c3d917a2149a4b548217038bc8f2dd2130a1966e0c7af5c4225d81f25a8c3"
+  },
+  {
+    "file": "artifacts/native-1/frame-pts.json",
+    "bytes": 6929,
+    "sha256": "9dc5f731ee7a0a9e931c7f989091893ae6fb32a3ad6d6d091763b80f749f1545"
+  },
+  {
+    "file": "artifacts/native-1/framemd5-d2.txt",
+    "bytes": 27492,
+    "sha256": "233c23e9674c5b536479e1ef6e6ffeaa7c374d73a1ace7795f4baed7b3ba12e6"
+  },
+  {
+    "file": "artifacts/native-1/native-lifecycle.json",
+    "bytes": 16794,
+    "sha256": "aa601e6bb084bab8383a212b65092ad2767b949e80c9e06c67b1650414352003"
+  },
+  {
+    "file": "artifacts/native-1/packs/CapturePack_2026-09-12_223349/annotations.json",
+    "bytes": 79,
+    "sha256": "559ff73550d656d06f08319e887eb54e25c0e8998bfe6e894b47af1d8bebecc1"
+  },
+  {
+    "file": "artifacts/native-1/packs/CapturePack_2026-09-12_223349/manifest.json",
+    "bytes": 1794,
+    "sha256": "b6d4a5ebee5c61eae6dc8582402eaf63e18138acb63445b51ab9f4fe7464f723"
+  },
+  {
+    "file": "artifacts/native-1/packs/CapturePack_2026-09-12_223349/plugins/windows-context/meta.json",
+    "bytes": 159,
+    "sha256": "b65c80c8ba92f592714c3f1965c7147ab26c1b38449fe93e5ca29f68eaa7af89"
+  },
+  {
+    "file": "artifacts/native-1/packs/CapturePack_2026-09-12_223349/plugins/windows-context/timeline.json",
+    "bytes": 366482,
+    "sha256": "a3662b8fa65082f1d5a136719454b41b5fcd4348dae2f4a336e7f95a9b45d97c"
+  },
+  {
+    "file": "artifacts/native-1/packs/CapturePack_2026-09-12_223349/plugins/windows-uia/elements.json",
+    "bytes": 216774,
+    "sha256": "1b1c60f14d57bb3e591e0bbb1686f75f86820a0f94ce4304b9df2214f5ba57d2"
+  },
+  {
+    "file": "artifacts/native-1/packs/CapturePack_2026-09-12_223349/plugins/windows-uia/meta.json",
+    "bytes": 50,
+    "sha256": "6ab10a5d24525dc4b432a957b5487959644312264fd8945c526bf6729ac96746"
+  },
+  {
+    "file": "artifacts/native-1/packs/CapturePack_2026-09-12_223349/README.md",
+    "bytes": 1086,
+    "sha256": "0653f87cba674d17aac92acc434b578679fc4df874ccc95ab8ca611974757c0a"
+  },
+  {
+    "file": "artifacts/native-1/packs/CapturePack_2026-09-12_223349/replay.mp4",
+    "bytes": 9377800,
+    "sha256": "aa6828171392b8b4c3daf3712e440c0d31aca3d3679700d195a9b828015115c5"
+  },
+  {
+    "file": "artifacts/native-1/packs/CapturePack_2026-09-12_223349/report.md",
+    "bytes": 931,
+    "sha256": "eaea380fd7b5ac7b209e04aae7a54bb26eacd56c4829ea027aa8f37b4f55daee"
+  },
+  {
+    "file": "artifacts/native-1/packs/CapturePack_2026-09-12_223349/skills/annotation.md",
+    "bytes": 510,
+    "sha256": "df343dd73ce31dbeb052d605b632f54d4f5c220d7f31c3ba331b8e66f632f356"
+  },
+  {
+    "file": "artifacts/native-1/packs/CapturePack_2026-09-12_223349/skills/dom.md",
+    "bytes": 758,
+    "sha256": "62f7102c6d123fcb204aebd2107483946c18640e4ddaa9731cfd56d5bd9cb280"
+  },
+  {
+    "file": "artifacts/native-1/packs/CapturePack_2026-09-12_223349/skills/overview.md",
+    "bytes": 352,
+    "sha256": "521bef421c55743a6e12c976d801d5a74c28d9357b09b1e5ef34d5551bdb9575"
+  },
+  {
+    "file": "artifacts/native-1/packs/CapturePack_2026-09-12_223349/skills/project.md",
+    "bytes": 1998,
+    "sha256": "e71c5f5b2c98d625e01111972b1e97099267deacdff55a37bc48c1cc3c6d690d"
+  },
+  {
+    "file": "artifacts/native-1/packs/CapturePack_2026-09-12_223349/skills/timeline.md",
+    "bytes": 9052,
+    "sha256": "aa7a9b64dc59a91db34c2fc6b42f1bcf9351a15c0b667fb946e7cdb91762b8b0"
+  },
+  {
+    "file": "artifacts/native-1/packs/CapturePack_2026-09-12_223349/snapshot.png",
+    "bytes": 1451612,
+    "sha256": "afb3c58c529202306bdad3625db7fb1a99fa12ed62342d5af261df7d3c17681e"
+  },
+  {
+    "file": "artifacts/native-1/packs/CapturePack_2026-09-12_223349/timeline.json",
+    "bytes": 22746,
+    "sha256": "8f53cefe4765e32c2ee5928b28aebe57836070f2c2f9a71f122f56170dcce7d7"
+  },
+  {
+    "file": "artifacts/native-1/packs/CapturePack_2026-09-12_223349/viewer.html",
+    "bytes": 5181,
+    "sha256": "98bb712d9e876728889902b035622290282da9adfb3097653454e882e5d51070"
+  },
+  {
+    "file": "artifacts/native-1/process-samples.jsonl",
+    "bytes": 60111,
+    "sha256": "cfd90126534bad60fe0642f53da71ad44ed7f6f6ded9e5b3da10b1ce85b62972"
+  },
+  {
+    "file": "artifacts/native-1/report.json",
+    "bytes": 89482,
+    "sha256": "cb8302ae2bbf51e3e52ee4b54a7fd007da3213f3039a506e8c539debbf95248f"
+  },
+  {
+    "file": "artifacts/native-1/status.json",
+    "bytes": 410,
+    "sha256": "698be08267e05f4d5100271edc7a8359bebb2d6a444c3d5840321594eec0903d"
+  },
+  {
+    "file": "artifacts/native-2/app-data/Cache/Cache_Data/data_0",
+    "bytes": 45056,
+    "sha256": "7cba2c314a0bb2c614cf7294d075f2fcb633fc29256c723fc4c168256ec2475d"
+  },
+  {
+    "file": "artifacts/native-2/app-data/Cache/Cache_Data/data_1",
+    "bytes": 270336,
+    "sha256": "a722ea48836a203f287f66780efd47097fb1a2956a6d3bd622c830de586769d7"
+  },
+  {
+    "file": "artifacts/native-2/app-data/Cache/Cache_Data/data_2",
+    "bytes": 1056768,
+    "sha256": "213ff468029591a1dffdb8ac086b003231c543a229cda298e5fee6b608128e90"
+  },
+  {
+    "file": "artifacts/native-2/app-data/Cache/Cache_Data/data_3",
+    "bytes": 8192,
+    "sha256": "e09f42c398d688dce168570291f1f92d079987deda3099a34adb9e8c0522b30c"
+  },
+  {
+    "file": "artifacts/native-2/app-data/Cache/Cache_Data/f_000001",
+    "bytes": 11476456,
+    "sha256": "75b5e033a0d6e1bba1e7ce6aad6f723d84128cda7f2048339c8c498f049f49bc"
+  },
+  {
+    "file": "artifacts/native-2/app-data/Cache/Cache_Data/index",
+    "bytes": 524656,
+    "sha256": "7869aaea91d0a7ffb3a468b89245b4af9a916b5e6035b5d35492866af299d950"
+  },
+  {
+    "file": "artifacts/native-2/app-data/Cache/No_Vary_Search/journal.baj",
+    "bytes": 4,
+    "sha256": "9c169428d852e25bd59b27652ed533d2a1f09f96e4c329fa5e06f47e16731543"
+  },
+  {
+    "file": "artifacts/native-2/app-data/Cache/No_Vary_Search/snapshot.baf",
+    "bytes": 20,
+    "sha256": "0c2dd377ed0cc66161e9db8f89f7d8bcb3ad8c06c4a054bdcba214ab05f58c9a"
+  },
+  {
+    "file": "artifacts/native-2/app-data/Code Cache/electron-preload/41D252202F15AB6C14C963F847ECD8CF1FE0216BF682E47561E109F255FE5B99.cache",
+    "bytes": 8756,
+    "sha256": "b973c9a3fe78c2de52eec8a7edb310008cd64044e341c030af6fbdad87d71b07"
+  },
+  {
+    "file": "artifacts/native-2/app-data/Code Cache/electron-preload/4EE12411E85EF93D4072D3589E3E0E757DD33D4B3FB335DEB7FCDF0B4673D836.cache",
+    "bytes": 8876,
+    "sha256": "9e8c2c9d4d8a46c35cbb011ca4bd7953f3ad1160765b400b1f6e80a978c42bd5"
+  },
+  {
+    "file": "artifacts/native-2/app-data/Code Cache/js/index",
+    "bytes": 24,
+    "sha256": "fbcfe23a2ecb82b7100c50811691dde0a33aa3da8d176be9882a9db485dc0f2d"
+  },
+  {
+    "file": "artifacts/native-2/app-data/Code Cache/js/index-dir/the-real-index",
+    "bytes": 48,
+    "sha256": "c922fa9479b2921dc9c8b281da41179d254e4108d0671a9c19a357fc36b07c0a"
+  },
+  {
+    "file": "artifacts/native-2/app-data/Code Cache/wasm/index",
+    "bytes": 24,
+    "sha256": "fbcfe23a2ecb82b7100c50811691dde0a33aa3da8d176be9882a9db485dc0f2d"
+  },
+  {
+    "file": "artifacts/native-2/app-data/Code Cache/wasm/index-dir/the-real-index",
+    "bytes": 48,
+    "sha256": "4d801044c6b1bd9f3df4a462c882b6cb873e96ae888630c5992a7b2203dfc2d1"
+  },
+  {
+    "file": "artifacts/native-2/app-data/Crashpad/settings.dat",
+    "bytes": 40,
+    "sha256": "a81aa1086f340da0212ad3184cc723b9a2f7f9f54fc767d39e9d26cde8b45380"
+  },
+  {
+    "file": "artifacts/native-2/app-data/DawnGraphiteCache/data_0",
+    "bytes": 8192,
+    "sha256": "d6a5fe39cd672781b256e0e3102f7022635f1d4bb7cfcc90a80fffe4d0f3877e"
+  },
+  {
+    "file": "artifacts/native-2/app-data/DawnGraphiteCache/data_1",
+    "bytes": 270336,
+    "sha256": "902f30c1fb0597d0734bc34b979ec5d131f8f39a4b71b338083821216ec8d61b"
+  },
+  {
+    "file": "artifacts/native-2/app-data/DawnGraphiteCache/data_2",
+    "bytes": 8192,
+    "sha256": "ec1702806f4cc7c42a82fc2b38e89835fde7c64bb32060e0823c9077ca92efb7"
+  },
+  {
+    "file": "artifacts/native-2/app-data/DawnGraphiteCache/data_3",
+    "bytes": 8192,
+    "sha256": "e09f42c398d688dce168570291f1f92d079987deda3099a34adb9e8c0522b30c"
+  },
+  {
+    "file": "artifacts/native-2/app-data/DawnGraphiteCache/index",
+    "bytes": 262512,
+    "sha256": "5be07a2388f5a3fb8ae6137bb78030f9db3ebc7ab292eb2d00356e0526e6c0fb"
+  },
+  {
+    "file": "artifacts/native-2/app-data/DawnWebGPUCache/data_0",
+    "bytes": 8192,
+    "sha256": "d6a5fe39cd672781b256e0e3102f7022635f1d4bb7cfcc90a80fffe4d0f3877e"
+  },
+  {
+    "file": "artifacts/native-2/app-data/DawnWebGPUCache/data_1",
+    "bytes": 270336,
+    "sha256": "902f30c1fb0597d0734bc34b979ec5d131f8f39a4b71b338083821216ec8d61b"
+  },
+  {
+    "file": "artifacts/native-2/app-data/DawnWebGPUCache/data_2",
+    "bytes": 8192,
+    "sha256": "ec1702806f4cc7c42a82fc2b38e89835fde7c64bb32060e0823c9077ca92efb7"
+  },
+  {
+    "file": "artifacts/native-2/app-data/DawnWebGPUCache/data_3",
+    "bytes": 8192,
+    "sha256": "e09f42c398d688dce168570291f1f92d079987deda3099a34adb9e8c0522b30c"
+  },
+  {
+    "file": "artifacts/native-2/app-data/DawnWebGPUCache/index",
+    "bytes": 262512,
+    "sha256": "6dcc0f4ffe4d5ed7a8306135fa7450333a03a7cf43c199d406817da3f61ed09b"
+  },
+  {
+    "file": "artifacts/native-2/app-data/Dictionaries/ko-3-0.bdic",
+    "bytes": 11476456,
+    "sha256": "75b5e033a0d6e1bba1e7ce6aad6f723d84128cda7f2048339c8c498f049f49bc"
+  },
+  {
+    "file": "artifacts/native-2/app-data/DIPS",
+    "bytes": 4096,
+    "sha256": "0ab48b25cba617ed3a4acca0161813b314c095ef63544bb4af60769eb1012977"
+  },
+  {
+    "file": "artifacts/native-2/app-data/DIPS-wal",
+    "bytes": 45352,
+    "sha256": "c37100c153b95e7fc60deb84b5ad3abf9e3fb0dcff64250dea97cb177a328b8c"
+  },
+  {
+    "file": "artifacts/native-2/app-data/GPUCache/data_0",
+    "bytes": 8192,
+    "sha256": "d6a5fe39cd672781b256e0e3102f7022635f1d4bb7cfcc90a80fffe4d0f3877e"
+  },
+  {
+    "file": "artifacts/native-2/app-data/GPUCache/data_1",
+    "bytes": 270336,
+    "sha256": "902f30c1fb0597d0734bc34b979ec5d131f8f39a4b71b338083821216ec8d61b"
+  },
+  {
+    "file": "artifacts/native-2/app-data/GPUCache/data_2",
+    "bytes": 8192,
+    "sha256": "ec1702806f4cc7c42a82fc2b38e89835fde7c64bb32060e0823c9077ca92efb7"
+  },
+  {
+    "file": "artifacts/native-2/app-data/GPUCache/data_3",
+    "bytes": 8192,
+    "sha256": "e09f42c398d688dce168570291f1f92d079987deda3099a34adb9e8c0522b30c"
+  },
+  {
+    "file": "artifacts/native-2/app-data/GPUCache/index",
+    "bytes": 262512,
+    "sha256": "738fed23292cd9ed03ae8a83c4c7412431083ff59cc048ce6821c5f78abd6323"
+  },
+  {
+    "file": "artifacts/native-2/app-data/Local State",
+    "bytes": 490,
+    "sha256": "574ea7fc3aef54972640ddd90140ab365a63def350cb1159f00400925a9275c6"
+  },
+  {
+    "file": "artifacts/native-2/app-data/Local Storage/leveldb/000003.log",
+    "bytes": 30,
+    "sha256": "8bd2ea70a0b70c91de138a5b87c7936c6a6fa7c4275c54b97f4ef0ccc5b79bb4"
+  },
+  {
+    "file": "artifacts/native-2/app-data/Local Storage/leveldb/CURRENT",
+    "bytes": 16,
+    "sha256": "0f1bad70c7bd1e0a69562853ec529355462fcd0423263a3d39d6d0d70b780443"
+  },
+  {
+    "file": "artifacts/native-2/app-data/Local Storage/leveldb/LOCK",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/native-2/app-data/Local Storage/leveldb/LOG",
+    "bytes": 465,
+    "sha256": "37a67899280ec3493919b878d6282f81525302c7246a87232ae5efdc70ff1240"
+  },
+  {
+    "file": "artifacts/native-2/app-data/Local Storage/leveldb/MANIFEST-000001",
+    "bytes": 41,
+    "sha256": "f9d31b278e215eb0d0e9cd709edfa037e828f36214ab7906f612160fead4b2b4"
+  },
+  {
+    "file": "artifacts/native-2/app-data/logs/main.log",
+    "bytes": 14699,
+    "sha256": "9a5292187077c62145cf8bb42bda2ee8272c2b29d6b9b904e0aabfec791b9691"
+  },
+  {
+    "file": "artifacts/native-2/app-data/Network/Network Persistent State",
+    "bytes": 59,
+    "sha256": "0178d3cd64965de13e56a805628521262dc0b9bb2294d6eda186252382fe1f11"
+  },
+  {
+    "file": "artifacts/native-2/app-data/Network/NetworkDataMigrated",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/native-2/app-data/Network/Trust Tokens",
+    "bytes": 36864,
+    "sha256": "8b5a62a399e316009e0c0ee1727ede327893d7f82f38a136e795422b3f9c333c"
+  },
+  {
+    "file": "artifacts/native-2/app-data/Network/Trust Tokens-journal",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/native-2/app-data/Preferences",
+    "bytes": 129,
+    "sha256": "1fc4be9cbeab9432b24caedc7164aee871d055cee375224dbecbedb76a5ed421"
+  },
+  {
+    "file": "artifacts/native-2/app-data/run-state.json",
+    "bytes": 197,
+    "sha256": "742098e11c50f7434344b27797efd1f9a5e43717bf9d4865e90fd79ca7eb6db6"
+  },
+  {
+    "file": "artifacts/native-2/app-data/settings.json",
+    "bytes": 1248,
+    "sha256": "2ab5c49f85dafcc163b0928dacaa1651f0ff3d6aae10024dc79772f6fa5f9ddf"
+  },
+  {
+    "file": "artifacts/native-2/app-data/Shared Dictionary/cache/index",
+    "bytes": 24,
+    "sha256": "fbcfe23a2ecb82b7100c50811691dde0a33aa3da8d176be9882a9db485dc0f2d"
+  },
+  {
+    "file": "artifacts/native-2/app-data/Shared Dictionary/cache/index-dir/the-real-index",
+    "bytes": 48,
+    "sha256": "3e2bd8e0066ac07e68be8bb39e19d778508fc09eedb2d8d22f31d5a9ad7fdfa9"
+  },
+  {
+    "file": "artifacts/native-2/app-data/Shared Dictionary/db",
+    "bytes": 45056,
+    "sha256": "fbb86c665b2fed35c372ce8996eb1c4e31082aedd6ad5fc6086cfac889c3471b"
+  },
+  {
+    "file": "artifacts/native-2/app-data/Shared Dictionary/db-journal",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/native-2/capturepack-stderr.log",
+    "bytes": 1246,
+    "sha256": "61d6dae4345c29c7d37fefad745b42b53da285e864dad19990fe351516711cea"
+  },
+  {
+    "file": "artifacts/native-2/capturepack-stdout.log",
+    "bytes": 11685,
+    "sha256": "3460e35dc7b39e1c3bfa4bce17cb62818353e996a28cbc590a015aa88fea7b61"
+  },
+  {
+    "file": "artifacts/native-2/ffmpeg-d2.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/native-2/ffprobe-d2.json",
+    "bytes": 34665,
+    "sha256": "09c21ce88efec9e1c24bb47db9d8d2f6db0340804f1a0dbacab09718022f2bc6"
+  },
+  {
+    "file": "artifacts/native-2/fixture/layout.json",
+    "bytes": 1483,
+    "sha256": "25fd9c13b89d0d13ebf4c19ec4feab6b706e5773d8abd96c1aae74d11ebfb111"
+  },
+  {
+    "file": "artifacts/native-2/fixture/movement.jsonl",
+    "bytes": 565593,
+    "sha256": "5b11e25b00495da2f523ef6d0317c2ef290f6173c3fc3c69b96828da3e0a483d"
+  },
+  {
+    "file": "artifacts/native-2/fixture/stderr.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/native-2/fixture/stdout.log",
+    "bytes": 2,
+    "sha256": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6"
+  },
+  {
+    "file": "artifacts/native-2/fixture/stop",
+    "bytes": 5,
+    "sha256": "a11c3d917a2149a4b548217038bc8f2dd2130a1966e0c7af5c4225d81f25a8c3"
+  },
+  {
+    "file": "artifacts/native-2/frame-pts.json",
+    "bytes": 9147,
+    "sha256": "1704555d2d31ca5859363ad08f2183d558aff268ebd2ccf00a780db901681f92"
+  },
+  {
+    "file": "artifacts/native-2/framemd5-d2.txt",
+    "bytes": 35492,
+    "sha256": "198170a82e17dc8b23c3e00915efda384bbeea7b437fc5779a9a685ac85d2e47"
+  },
+  {
+    "file": "artifacts/native-2/native-lifecycle.json",
+    "bytes": 20906,
+    "sha256": "964620a29bcaf91409bcfbfb997855443161fb990d1b1ee8ce952f4ccd9b5867"
+  },
+  {
+    "file": "artifacts/native-2/packs/CapturePack_2026-09-12_223443/annotations.json",
+    "bytes": 79,
+    "sha256": "559ff73550d656d06f08319e887eb54e25c0e8998bfe6e894b47af1d8bebecc1"
+  },
+  {
+    "file": "artifacts/native-2/packs/CapturePack_2026-09-12_223443/manifest.json",
+    "bytes": 1796,
+    "sha256": "ba9148b2324bdc0f54943024a490b3ff0494af98652f61f694b08c5baf0b473c"
+  },
+  {
+    "file": "artifacts/native-2/packs/CapturePack_2026-09-12_223443/plugins/windows-context/meta.json",
+    "bytes": 159,
+    "sha256": "b65c80c8ba92f592714c3f1965c7147ab26c1b38449fe93e5ca29f68eaa7af89"
+  },
+  {
+    "file": "artifacts/native-2/packs/CapturePack_2026-09-12_223443/plugins/windows-context/timeline.json",
+    "bytes": 485856,
+    "sha256": "b2312e390b8bda24d294c99b61e1c5456423a8c3dfaf373263d7cdbb2bd7d5dd"
+  },
+  {
+    "file": "artifacts/native-2/packs/CapturePack_2026-09-12_223443/plugins/windows-uia/elements.json",
+    "bytes": 216520,
+    "sha256": "63b0a6622cb002f3e0310ee896c37dd6f46d4f361793ea5ed355383910da5406"
+  },
+  {
+    "file": "artifacts/native-2/packs/CapturePack_2026-09-12_223443/plugins/windows-uia/meta.json",
+    "bytes": 50,
+    "sha256": "6ab10a5d24525dc4b432a957b5487959644312264fd8945c526bf6729ac96746"
+  },
+  {
+    "file": "artifacts/native-2/packs/CapturePack_2026-09-12_223443/README.md",
+    "bytes": 1086,
+    "sha256": "92e93db3491d8bcf7fa293bb688959d259eff81ffdc7e1cddbc014e1ad6c696b"
+  },
+  {
+    "file": "artifacts/native-2/packs/CapturePack_2026-09-12_223443/replay.mp4",
+    "bytes": 11954070,
+    "sha256": "ab6a909040aa578b5f632e59eb0da0fc10b16ffee1f2a0ba97a1b2dc27915c1d"
+  },
+  {
+    "file": "artifacts/native-2/packs/CapturePack_2026-09-12_223443/report.md",
+    "bytes": 931,
+    "sha256": "47d53fa05be4de659cf535b6367700f4ea25e90a161eefaa613167002b55ceac"
+  },
+  {
+    "file": "artifacts/native-2/packs/CapturePack_2026-09-12_223443/skills/annotation.md",
+    "bytes": 510,
+    "sha256": "df343dd73ce31dbeb052d605b632f54d4f5c220d7f31c3ba331b8e66f632f356"
+  },
+  {
+    "file": "artifacts/native-2/packs/CapturePack_2026-09-12_223443/skills/dom.md",
+    "bytes": 758,
+    "sha256": "62f7102c6d123fcb204aebd2107483946c18640e4ddaa9731cfd56d5bd9cb280"
+  },
+  {
+    "file": "artifacts/native-2/packs/CapturePack_2026-09-12_223443/skills/overview.md",
+    "bytes": 352,
+    "sha256": "ba0fae45aa8b1d047bbc4d5165be55c88ee9d21d702c30cf9c823f43168c7978"
+  },
+  {
+    "file": "artifacts/native-2/packs/CapturePack_2026-09-12_223443/skills/project.md",
+    "bytes": 1998,
+    "sha256": "3b2dd0ba9ff66bd60bb70d30a96b2f119e769ea6d1021cc58ecb4be4673b97ca"
+  },
+  {
+    "file": "artifacts/native-2/packs/CapturePack_2026-09-12_223443/skills/timeline.md",
+    "bytes": 11435,
+    "sha256": "7955d8c4f069f3a58bdc1faa05ad0c4dbc46c86752b4b37bba4863f86598965b"
+  },
+  {
+    "file": "artifacts/native-2/packs/CapturePack_2026-09-12_223443/snapshot.png",
+    "bytes": 1380521,
+    "sha256": "9e43c2fe0dc8085a73a95612540be0d4cd2ebebf5ac507bba56ff3856a614edf"
+  },
+  {
+    "file": "artifacts/native-2/packs/CapturePack_2026-09-12_223443/timeline.json",
+    "bytes": 29554,
+    "sha256": "9efe58009fda353fe58a3d2ac1bd1ee0d3e678b3996b97eea156a3711350db12"
+  },
+  {
+    "file": "artifacts/native-2/packs/CapturePack_2026-09-12_223443/viewer.html",
+    "bytes": 5181,
+    "sha256": "d4ea603bd7851be62582de06658fcf1183dfc623f7b37f66e948777c5db5ed07"
+  },
+  {
+    "file": "artifacts/native-2/process-samples.jsonl",
+    "bytes": 75991,
+    "sha256": "b4c2a0b53b608a04e11a92154cf72706d459b4fac0b6232e3b170878140b8102"
+  },
+  {
+    "file": "artifacts/native-2/report.json",
+    "bytes": 99209,
+    "sha256": "2f2d3cc84525202f6d0294cce5b7bef8091010faa7f892cb6d61bdfffc13ac7f"
+  },
+  {
+    "file": "artifacts/native-2/status.json",
+    "bytes": 410,
+    "sha256": "1075cd63a31febac2003cccceec24ade153b663572f1041f96a23e7c14f7c519"
+  },
+  {
+    "file": "artifacts/native-3/app-data/Cache/Cache_Data/data_0",
+    "bytes": 45056,
+    "sha256": "bac399e96642950bc8091f5c64276fd7178a7cdc2b0a857cbbbc450da18f1fb2"
+  },
+  {
+    "file": "artifacts/native-3/app-data/Cache/Cache_Data/data_1",
+    "bytes": 270336,
+    "sha256": "e7522b226df347b50df5b3b199273cf6bf390e61b62b4cd482e2a96a314950ab"
+  },
+  {
+    "file": "artifacts/native-3/app-data/Cache/Cache_Data/data_2",
+    "bytes": 1056768,
+    "sha256": "a7645dac00074a2f710c3014689b034c8b45cdc8d6a098a1aef2543c8d90c095"
+  },
+  {
+    "file": "artifacts/native-3/app-data/Cache/Cache_Data/data_3",
+    "bytes": 8192,
+    "sha256": "e09f42c398d688dce168570291f1f92d079987deda3099a34adb9e8c0522b30c"
+  },
+  {
+    "file": "artifacts/native-3/app-data/Cache/Cache_Data/f_000001",
+    "bytes": 11476456,
+    "sha256": "75b5e033a0d6e1bba1e7ce6aad6f723d84128cda7f2048339c8c498f049f49bc"
+  },
+  {
+    "file": "artifacts/native-3/app-data/Cache/Cache_Data/index",
+    "bytes": 524656,
+    "sha256": "648ec90df01f755b9a347aff5c92904f2955ed755a9e8fcdb705329783c92c8a"
+  },
+  {
+    "file": "artifacts/native-3/app-data/Cache/No_Vary_Search/journal.baj",
+    "bytes": 4,
+    "sha256": "9c169428d852e25bd59b27652ed533d2a1f09f96e4c329fa5e06f47e16731543"
+  },
+  {
+    "file": "artifacts/native-3/app-data/Cache/No_Vary_Search/snapshot.baf",
+    "bytes": 20,
+    "sha256": "0c2dd377ed0cc66161e9db8f89f7d8bcb3ad8c06c4a054bdcba214ab05f58c9a"
+  },
+  {
+    "file": "artifacts/native-3/app-data/Code Cache/electron-preload/41D252202F15AB6C14C963F847ECD8CF1FE0216BF682E47561E109F255FE5B99.cache",
+    "bytes": 8756,
+    "sha256": "b973c9a3fe78c2de52eec8a7edb310008cd64044e341c030af6fbdad87d71b07"
+  },
+  {
+    "file": "artifacts/native-3/app-data/Code Cache/electron-preload/4EE12411E85EF93D4072D3589E3E0E757DD33D4B3FB335DEB7FCDF0B4673D836.cache",
+    "bytes": 8876,
+    "sha256": "9e8c2c9d4d8a46c35cbb011ca4bd7953f3ad1160765b400b1f6e80a978c42bd5"
+  },
+  {
+    "file": "artifacts/native-3/app-data/Code Cache/js/index",
+    "bytes": 24,
+    "sha256": "fbcfe23a2ecb82b7100c50811691dde0a33aa3da8d176be9882a9db485dc0f2d"
+  },
+  {
+    "file": "artifacts/native-3/app-data/Code Cache/js/index-dir/the-real-index",
+    "bytes": 48,
+    "sha256": "53a4fa19c3c92268bd307d906fd5426e6e274b56b16e0b805d2e8b4cfe900251"
+  },
+  {
+    "file": "artifacts/native-3/app-data/Code Cache/wasm/index",
+    "bytes": 24,
+    "sha256": "fbcfe23a2ecb82b7100c50811691dde0a33aa3da8d176be9882a9db485dc0f2d"
+  },
+  {
+    "file": "artifacts/native-3/app-data/Code Cache/wasm/index-dir/the-real-index",
+    "bytes": 48,
+    "sha256": "24812e8732844fbe13532061b80f8357669daae1b68cdcb1050354dfcbfacc7e"
+  },
+  {
+    "file": "artifacts/native-3/app-data/Crashpad/settings.dat",
+    "bytes": 40,
+    "sha256": "afba5f72e1c768d429d44c9538c6d69776f22df59d87ce5e9153e2b1a87ff497"
+  },
+  {
+    "file": "artifacts/native-3/app-data/DawnGraphiteCache/data_0",
+    "bytes": 8192,
+    "sha256": "d6a5fe39cd672781b256e0e3102f7022635f1d4bb7cfcc90a80fffe4d0f3877e"
+  },
+  {
+    "file": "artifacts/native-3/app-data/DawnGraphiteCache/data_1",
+    "bytes": 270336,
+    "sha256": "902f30c1fb0597d0734bc34b979ec5d131f8f39a4b71b338083821216ec8d61b"
+  },
+  {
+    "file": "artifacts/native-3/app-data/DawnGraphiteCache/data_2",
+    "bytes": 8192,
+    "sha256": "ec1702806f4cc7c42a82fc2b38e89835fde7c64bb32060e0823c9077ca92efb7"
+  },
+  {
+    "file": "artifacts/native-3/app-data/DawnGraphiteCache/data_3",
+    "bytes": 8192,
+    "sha256": "e09f42c398d688dce168570291f1f92d079987deda3099a34adb9e8c0522b30c"
+  },
+  {
+    "file": "artifacts/native-3/app-data/DawnGraphiteCache/index",
+    "bytes": 262512,
+    "sha256": "11acb26f61c8ff09a8ac7e0fcd41bbb425f8679cb8070c46dcbb8fadb60e20b9"
+  },
+  {
+    "file": "artifacts/native-3/app-data/DawnWebGPUCache/data_0",
+    "bytes": 8192,
+    "sha256": "d6a5fe39cd672781b256e0e3102f7022635f1d4bb7cfcc90a80fffe4d0f3877e"
+  },
+  {
+    "file": "artifacts/native-3/app-data/DawnWebGPUCache/data_1",
+    "bytes": 270336,
+    "sha256": "902f30c1fb0597d0734bc34b979ec5d131f8f39a4b71b338083821216ec8d61b"
+  },
+  {
+    "file": "artifacts/native-3/app-data/DawnWebGPUCache/data_2",
+    "bytes": 8192,
+    "sha256": "ec1702806f4cc7c42a82fc2b38e89835fde7c64bb32060e0823c9077ca92efb7"
+  },
+  {
+    "file": "artifacts/native-3/app-data/DawnWebGPUCache/data_3",
+    "bytes": 8192,
+    "sha256": "e09f42c398d688dce168570291f1f92d079987deda3099a34adb9e8c0522b30c"
+  },
+  {
+    "file": "artifacts/native-3/app-data/DawnWebGPUCache/index",
+    "bytes": 262512,
+    "sha256": "85f4b7744e3aa7c22d75caf04d3855c78791243c40dda8132b7e90888af82db8"
+  },
+  {
+    "file": "artifacts/native-3/app-data/Dictionaries/ko-3-0.bdic",
+    "bytes": 11476456,
+    "sha256": "75b5e033a0d6e1bba1e7ce6aad6f723d84128cda7f2048339c8c498f049f49bc"
+  },
+  {
+    "file": "artifacts/native-3/app-data/DIPS",
+    "bytes": 4096,
+    "sha256": "0ab48b25cba617ed3a4acca0161813b314c095ef63544bb4af60769eb1012977"
+  },
+  {
+    "file": "artifacts/native-3/app-data/DIPS-wal",
+    "bytes": 45352,
+    "sha256": "6ebbe2c54df4936fcafa9e84c718c5985871c580bf79c3c26d27168fdd56df1e"
+  },
+  {
+    "file": "artifacts/native-3/app-data/GPUCache/data_0",
+    "bytes": 8192,
+    "sha256": "d6a5fe39cd672781b256e0e3102f7022635f1d4bb7cfcc90a80fffe4d0f3877e"
+  },
+  {
+    "file": "artifacts/native-3/app-data/GPUCache/data_1",
+    "bytes": 270336,
+    "sha256": "902f30c1fb0597d0734bc34b979ec5d131f8f39a4b71b338083821216ec8d61b"
+  },
+  {
+    "file": "artifacts/native-3/app-data/GPUCache/data_2",
+    "bytes": 8192,
+    "sha256": "ec1702806f4cc7c42a82fc2b38e89835fde7c64bb32060e0823c9077ca92efb7"
+  },
+  {
+    "file": "artifacts/native-3/app-data/GPUCache/data_3",
+    "bytes": 8192,
+    "sha256": "e09f42c398d688dce168570291f1f92d079987deda3099a34adb9e8c0522b30c"
+  },
+  {
+    "file": "artifacts/native-3/app-data/GPUCache/index",
+    "bytes": 262512,
+    "sha256": "755af21c1d21667f33ca08192f9d487864b84782da85d22c4538704fa563b5e9"
+  },
+  {
+    "file": "artifacts/native-3/app-data/Local State",
+    "bytes": 490,
+    "sha256": "99cde40c752c085b16bebf0a2a53afb6c9e8bcb21bb89913affe3f6fa776d6d1"
+  },
+  {
+    "file": "artifacts/native-3/app-data/Local Storage/leveldb/000003.log",
+    "bytes": 30,
+    "sha256": "8bd2ea70a0b70c91de138a5b87c7936c6a6fa7c4275c54b97f4ef0ccc5b79bb4"
+  },
+  {
+    "file": "artifacts/native-3/app-data/Local Storage/leveldb/CURRENT",
+    "bytes": 16,
+    "sha256": "0f1bad70c7bd1e0a69562853ec529355462fcd0423263a3d39d6d0d70b780443"
+  },
+  {
+    "file": "artifacts/native-3/app-data/Local Storage/leveldb/LOCK",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/native-3/app-data/Local Storage/leveldb/LOG",
+    "bytes": 463,
+    "sha256": "cbad38557374f912aa362fa2ff563968e4ed5bc4a80e31f8309f6f79c5176170"
+  },
+  {
+    "file": "artifacts/native-3/app-data/Local Storage/leveldb/MANIFEST-000001",
+    "bytes": 41,
+    "sha256": "f9d31b278e215eb0d0e9cd709edfa037e828f36214ab7906f612160fead4b2b4"
+  },
+  {
+    "file": "artifacts/native-3/app-data/logs/main.log",
+    "bytes": 13090,
+    "sha256": "cd98e837b25866060a9baa2e04fa91af839a19e75aada015a241fbbcfc5a0a3e"
+  },
+  {
+    "file": "artifacts/native-3/app-data/Network/Network Persistent State",
+    "bytes": 59,
+    "sha256": "0178d3cd64965de13e56a805628521262dc0b9bb2294d6eda186252382fe1f11"
+  },
+  {
+    "file": "artifacts/native-3/app-data/Network/NetworkDataMigrated",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/native-3/app-data/Network/Trust Tokens",
+    "bytes": 36864,
+    "sha256": "8b5a62a399e316009e0c0ee1727ede327893d7f82f38a136e795422b3f9c333c"
+  },
+  {
+    "file": "artifacts/native-3/app-data/Network/Trust Tokens-journal",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/native-3/app-data/Preferences",
+    "bytes": 129,
+    "sha256": "af31847d577cf43e6a7361f9834b859d092ec46c5b1c807301a22f0a24daa836"
+  },
+  {
+    "file": "artifacts/native-3/app-data/run-state.json",
+    "bytes": 197,
+    "sha256": "1721a0ad67dd85dbd8c238546b49b03a4825c16b3a2c1a10b9679a0abd3e9201"
+  },
+  {
+    "file": "artifacts/native-3/app-data/settings.json",
+    "bytes": 1248,
+    "sha256": "1e8f83f3f518e2bb8210f66f1b259aaf8980d960a9e3f1c2364c3d93640aca7e"
+  },
+  {
+    "file": "artifacts/native-3/app-data/Shared Dictionary/cache/index",
+    "bytes": 24,
+    "sha256": "fbcfe23a2ecb82b7100c50811691dde0a33aa3da8d176be9882a9db485dc0f2d"
+  },
+  {
+    "file": "artifacts/native-3/app-data/Shared Dictionary/cache/index-dir/the-real-index",
+    "bytes": 48,
+    "sha256": "44b20d11690136c8a5cc6865a7f8f5af17c794556628390c86a6193b2d00240a"
+  },
+  {
+    "file": "artifacts/native-3/app-data/Shared Dictionary/db",
+    "bytes": 45056,
+    "sha256": "fbb86c665b2fed35c372ce8996eb1c4e31082aedd6ad5fc6086cfac889c3471b"
+  },
+  {
+    "file": "artifacts/native-3/app-data/Shared Dictionary/db-journal",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/native-3/capturepack-stderr.log",
+    "bytes": 1782,
+    "sha256": "574a4890f8af7caca128962d068b32cf151777495198f26cc23e67b5858979d5"
+  },
+  {
+    "file": "artifacts/native-3/capturepack-stdout.log",
+    "bytes": 9345,
+    "sha256": "1e8ce5285d40fd06392f8a5c33f9ffd1178725b095c05a1c0739b1b978e62828"
+  },
+  {
+    "file": "artifacts/native-3/ffmpeg-d2.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/native-3/ffprobe-d2.json",
+    "bytes": 27880,
+    "sha256": "6f26511516662fc36ba126087c7649e03eb18d85b9f71adf71580f59775b5664"
+  },
+  {
+    "file": "artifacts/native-3/fixture/layout.json",
+    "bytes": 1483,
+    "sha256": "69a694fd568731f163a5a2893ce33d8c6bea008821f9c70b018b42a69c3ba3bb"
+  },
+  {
+    "file": "artifacts/native-3/fixture/movement.jsonl",
+    "bytes": 667256,
+    "sha256": "5ee5c2d88e50615304a288e181c9eea7c89bfe69b75e1040d7e5c010d1e9b71f"
+  },
+  {
+    "file": "artifacts/native-3/fixture/stderr.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/native-3/fixture/stdout.log",
+    "bytes": 2,
+    "sha256": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6"
+  },
+  {
+    "file": "artifacts/native-3/fixture/stop",
+    "bytes": 5,
+    "sha256": "a11c3d917a2149a4b548217038bc8f2dd2130a1966e0c7af5c4225d81f25a8c3"
+  },
+  {
+    "file": "artifacts/native-3/frame-pts.json",
+    "bytes": 7329,
+    "sha256": "a7701979ffb2dadb79bd452674fb61acd1dc7346bd03f91723a5453780c0109d"
+  },
+  {
+    "file": "artifacts/native-3/framemd5-d2.txt",
+    "bytes": 28532,
+    "sha256": "10d066c40efd352186271e9582d07c802ea8ae6af3bb8deb37cda8e298c628a4"
+  },
+  {
+    "file": "artifacts/native-3/native-lifecycle.json",
+    "bytes": 16790,
+    "sha256": "b35dff0c72ad5e9995569454341f71dd2decd88d3f58f87a7b2042045ce68f4f"
+  },
+  {
+    "file": "artifacts/native-3/packs/CapturePack_2026-09-12_223720/annotations.json",
+    "bytes": 79,
+    "sha256": "559ff73550d656d06f08319e887eb54e25c0e8998bfe6e894b47af1d8bebecc1"
+  },
+  {
+    "file": "artifacts/native-3/packs/CapturePack_2026-09-12_223720/manifest.json",
+    "bytes": 1693,
+    "sha256": "9537203486d13c1edef13364de727beb75f54d973bcf15b0fad502d5489f0ed4"
+  },
+  {
+    "file": "artifacts/native-3/packs/CapturePack_2026-09-12_223720/plugins/windows-context/meta.json",
+    "bytes": 159,
+    "sha256": "b65c80c8ba92f592714c3f1965c7147ab26c1b38449fe93e5ca29f68eaa7af89"
+  },
+  {
+    "file": "artifacts/native-3/packs/CapturePack_2026-09-12_223720/plugins/windows-context/timeline.json",
+    "bytes": 422671,
+    "sha256": "de0e012f139760e573e8bfe6fa720dffb26d844bee75bd3777abe00d86c06986"
+  },
+  {
+    "file": "artifacts/native-3/packs/CapturePack_2026-09-12_223720/README.md",
+    "bytes": 1086,
+    "sha256": "a9e2a957f897250e66dd70753459a6fad25ce4cfb28888baf8efc0ee1bdb1a2f"
+  },
+  {
+    "file": "artifacts/native-3/packs/CapturePack_2026-09-12_223720/replay.mp4",
+    "bytes": 9611410,
+    "sha256": "1f9178b12dda006c9101aa4b74f6e886f105d1644351363626b8b9ed30774697"
+  },
+  {
+    "file": "artifacts/native-3/packs/CapturePack_2026-09-12_223720/report.md",
+    "bytes": 931,
+    "sha256": "cf9b1f3d0ae523e450820f3105b5d7da0aff13f6a293c7dd1cdd775b764bc690"
+  },
+  {
+    "file": "artifacts/native-3/packs/CapturePack_2026-09-12_223720/skills/annotation.md",
+    "bytes": 510,
+    "sha256": "df343dd73ce31dbeb052d605b632f54d4f5c220d7f31c3ba331b8e66f632f356"
+  },
+  {
+    "file": "artifacts/native-3/packs/CapturePack_2026-09-12_223720/skills/dom.md",
+    "bytes": 147,
+    "sha256": "cfbbde94241fa17517bbb6a33d873033b0963d6f6f3da90e2f27617025e8b4d4"
+  },
+  {
+    "file": "artifacts/native-3/packs/CapturePack_2026-09-12_223720/skills/overview.md",
+    "bytes": 353,
+    "sha256": "5fc22cd52fa2e31ff19c8e3d7e1a196901a8af9f75799dd60654eb47716ae065"
+  },
+  {
+    "file": "artifacts/native-3/packs/CapturePack_2026-09-12_223720/skills/project.md",
+    "bytes": 1998,
+    "sha256": "c46ff13bc00b6825de20ae4637125978a6b62dc6ea680cd9bbd2506d5df17aec"
+  },
+  {
+    "file": "artifacts/native-3/packs/CapturePack_2026-09-12_223720/skills/timeline.md",
+    "bytes": 11876,
+    "sha256": "c29adc9f453f6bc541ad382360a3e505c620e486bc2dfeeb1fdf4b6d6307e071"
+  },
+  {
+    "file": "artifacts/native-3/packs/CapturePack_2026-09-12_223720/snapshot.png",
+    "bytes": 1446178,
+    "sha256": "f5053f629267d220de5736fd6778d79b601bbd326a530f6e24c813d1c7bb7ce2"
+  },
+  {
+    "file": "artifacts/native-3/packs/CapturePack_2026-09-12_223720/timeline.json",
+    "bytes": 30390,
+    "sha256": "a1e4d56c962253813da51204e01929291065f5e346f0190bfd95e29be3b16a74"
+  },
+  {
+    "file": "artifacts/native-3/packs/CapturePack_2026-09-12_223720/viewer.html",
+    "bytes": 5125,
+    "sha256": "78709cb9201cb6bccb7b39e73680a306f3368ed20b61be1f508ed163e8980649"
+  },
+  {
+    "file": "artifacts/native-3/process-samples.jsonl",
+    "bytes": 51760,
+    "sha256": "8ac31fa76598b200c14c0aaabae5e5283edc669344c49f4ef62c7278fd0e78a9"
+  },
+  {
+    "file": "artifacts/native-3/report.json",
+    "bytes": 112272,
+    "sha256": "a8897b169eb65269d2acbaf50ecf38a67c7b292300e7ecb651e0ede16c0fd0b0"
+  },
+  {
+    "file": "artifacts/native-3/status.json",
+    "bytes": 410,
+    "sha256": "24a6842f59036b6e6099d8a1d122f03918c9461fd9d6660edba313b855b422f9"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/Cache/Cache_Data/data_0",
+    "bytes": 45056,
+    "sha256": "89b5a5655456defa5b06da5efd0919f45a9fd71121234c3c9ebe503601d85b42"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/Cache/Cache_Data/data_1",
+    "bytes": 270336,
+    "sha256": "b2021d476fbed91f4944fe6c102d98fbaecc4c5e7ca07884fe71e49de3775e8c"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/Cache/Cache_Data/data_2",
+    "bytes": 1056768,
+    "sha256": "46b69f32b5006345a22bf2fdaaab2564aecaf5d5fd40926e2eefc69497e79c65"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/Cache/Cache_Data/data_3",
+    "bytes": 8192,
+    "sha256": "e09f42c398d688dce168570291f1f92d079987deda3099a34adb9e8c0522b30c"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/Cache/Cache_Data/f_000001",
+    "bytes": 11476456,
+    "sha256": "75b5e033a0d6e1bba1e7ce6aad6f723d84128cda7f2048339c8c498f049f49bc"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/Cache/Cache_Data/index",
+    "bytes": 524656,
+    "sha256": "398dbe8c6df864baec4c0220dd9ecc8aadbcef04fc9be46f77b325501ebdc5d1"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/Cache/No_Vary_Search/journal.baj",
+    "bytes": 4,
+    "sha256": "9c169428d852e25bd59b27652ed533d2a1f09f96e4c329fa5e06f47e16731543"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/Cache/No_Vary_Search/snapshot.baf",
+    "bytes": 20,
+    "sha256": "0c2dd377ed0cc66161e9db8f89f7d8bcb3ad8c06c4a054bdcba214ab05f58c9a"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/Code Cache/electron-preload/41D252202F15AB6C14C963F847ECD8CF1FE0216BF682E47561E109F255FE5B99.cache",
+    "bytes": 8756,
+    "sha256": "b973c9a3fe78c2de52eec8a7edb310008cd64044e341c030af6fbdad87d71b07"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/Code Cache/electron-preload/4EE12411E85EF93D4072D3589E3E0E757DD33D4B3FB335DEB7FCDF0B4673D836.cache",
+    "bytes": 8876,
+    "sha256": "9e8c2c9d4d8a46c35cbb011ca4bd7953f3ad1160765b400b1f6e80a978c42bd5"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/Code Cache/js/index",
+    "bytes": 24,
+    "sha256": "fbcfe23a2ecb82b7100c50811691dde0a33aa3da8d176be9882a9db485dc0f2d"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/Code Cache/js/index-dir/the-real-index",
+    "bytes": 48,
+    "sha256": "6090e80adfc9886bcbd08bfd07dc678a53cabbd4c1a3c810c6feb91643478662"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/Code Cache/wasm/index",
+    "bytes": 24,
+    "sha256": "fbcfe23a2ecb82b7100c50811691dde0a33aa3da8d176be9882a9db485dc0f2d"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/Code Cache/wasm/index-dir/the-real-index",
+    "bytes": 48,
+    "sha256": "6090e80adfc9886bcbd08bfd07dc678a53cabbd4c1a3c810c6feb91643478662"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/Crashpad/settings.dat",
+    "bytes": 40,
+    "sha256": "0853fd07f45f4e3befff58fd0fd0eba89f6f3e779c737da49fc4fc0c341b72a4"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/DawnGraphiteCache/data_0",
+    "bytes": 8192,
+    "sha256": "d6a5fe39cd672781b256e0e3102f7022635f1d4bb7cfcc90a80fffe4d0f3877e"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/DawnGraphiteCache/data_1",
+    "bytes": 270336,
+    "sha256": "902f30c1fb0597d0734bc34b979ec5d131f8f39a4b71b338083821216ec8d61b"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/DawnGraphiteCache/data_2",
+    "bytes": 8192,
+    "sha256": "ec1702806f4cc7c42a82fc2b38e89835fde7c64bb32060e0823c9077ca92efb7"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/DawnGraphiteCache/data_3",
+    "bytes": 8192,
+    "sha256": "e09f42c398d688dce168570291f1f92d079987deda3099a34adb9e8c0522b30c"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/DawnGraphiteCache/index",
+    "bytes": 262512,
+    "sha256": "1550ad77d0d768afbc5ab6c1ba3399591bc58cb610ee188dbef142d76eefeac4"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/DawnWebGPUCache/data_0",
+    "bytes": 8192,
+    "sha256": "d6a5fe39cd672781b256e0e3102f7022635f1d4bb7cfcc90a80fffe4d0f3877e"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/DawnWebGPUCache/data_1",
+    "bytes": 270336,
+    "sha256": "902f30c1fb0597d0734bc34b979ec5d131f8f39a4b71b338083821216ec8d61b"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/DawnWebGPUCache/data_2",
+    "bytes": 8192,
+    "sha256": "ec1702806f4cc7c42a82fc2b38e89835fde7c64bb32060e0823c9077ca92efb7"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/DawnWebGPUCache/data_3",
+    "bytes": 8192,
+    "sha256": "e09f42c398d688dce168570291f1f92d079987deda3099a34adb9e8c0522b30c"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/DawnWebGPUCache/index",
+    "bytes": 262512,
+    "sha256": "78a27ec0ae4384387e7ba355e79ab0ff7697222a0e60ac8858b97c7c8752aeea"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/Dictionaries/ko-3-0.bdic",
+    "bytes": 11476456,
+    "sha256": "75b5e033a0d6e1bba1e7ce6aad6f723d84128cda7f2048339c8c498f049f49bc"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/DIPS",
+    "bytes": 4096,
+    "sha256": "0ab48b25cba617ed3a4acca0161813b314c095ef63544bb4af60769eb1012977"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/DIPS-wal",
+    "bytes": 45352,
+    "sha256": "6529c2dcabaef3b31e55351858648f4dec826fa5a3de4129cf90afea613d822e"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/GPUCache/data_0",
+    "bytes": 8192,
+    "sha256": "d6a5fe39cd672781b256e0e3102f7022635f1d4bb7cfcc90a80fffe4d0f3877e"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/GPUCache/data_1",
+    "bytes": 270336,
+    "sha256": "902f30c1fb0597d0734bc34b979ec5d131f8f39a4b71b338083821216ec8d61b"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/GPUCache/data_2",
+    "bytes": 8192,
+    "sha256": "ec1702806f4cc7c42a82fc2b38e89835fde7c64bb32060e0823c9077ca92efb7"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/GPUCache/data_3",
+    "bytes": 8192,
+    "sha256": "e09f42c398d688dce168570291f1f92d079987deda3099a34adb9e8c0522b30c"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/GPUCache/index",
+    "bytes": 262512,
+    "sha256": "1d3b1c4dcc2edb7393ef9d557bf1d31f1c3524c682570d33080b5ea573cc38e5"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/Local State",
+    "bytes": 490,
+    "sha256": "1e86b40f548b4faf2d14e81ffa57afdc06b0fa6df4fbdfd87fb2d1db54cd2652"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/Local Storage/leveldb/000003.log",
+    "bytes": 30,
+    "sha256": "8bd2ea70a0b70c91de138a5b87c7936c6a6fa7c4275c54b97f4ef0ccc5b79bb4"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/Local Storage/leveldb/CURRENT",
+    "bytes": 16,
+    "sha256": "0f1bad70c7bd1e0a69562853ec529355462fcd0423263a3d39d6d0d70b780443"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/Local Storage/leveldb/LOCK",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/Local Storage/leveldb/LOG",
+    "bytes": 469,
+    "sha256": "337cf53e2e99c823931be48c0ca84de7cb62288f50a67cb2774572a41f527370"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/Local Storage/leveldb/MANIFEST-000001",
+    "bytes": 41,
+    "sha256": "f9d31b278e215eb0d0e9cd709edfa037e828f36214ab7906f612160fead4b2b4"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/logs/main.log",
+    "bytes": 13539,
+    "sha256": "206e8e8e68f74790dd55d7f17b7713c6948ab8e302a8022ba55dc2644e6e60d3"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/Network/Network Persistent State",
+    "bytes": 59,
+    "sha256": "0178d3cd64965de13e56a805628521262dc0b9bb2294d6eda186252382fe1f11"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/Network/NetworkDataMigrated",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/Network/Trust Tokens",
+    "bytes": 36864,
+    "sha256": "8b5a62a399e316009e0c0ee1727ede327893d7f82f38a136e795422b3f9c333c"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/Network/Trust Tokens-journal",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/Preferences",
+    "bytes": 129,
+    "sha256": "67ee6a561ce47ef577749e8afb56dd322f423203d70e55a444ee27a449b1410e"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/run-state.json",
+    "bytes": 197,
+    "sha256": "7ff34968625b70437d3ee1871a80a18f7c2738bb38b9ed171dbc30fd7708cf99"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/settings.json",
+    "bytes": 1250,
+    "sha256": "182717a5c4cb656891758c684e3c32662661363891814d27c472d5853af5163a"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/Shared Dictionary/cache/index",
+    "bytes": 24,
+    "sha256": "fbcfe23a2ecb82b7100c50811691dde0a33aa3da8d176be9882a9db485dc0f2d"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/Shared Dictionary/cache/index-dir/the-real-index",
+    "bytes": 48,
+    "sha256": "ba79a4e84f448ec5594ef11cb6ad58a742fcb497171848f0b46a5ac8f03dc440"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/Shared Dictionary/db",
+    "bytes": 45056,
+    "sha256": "fbb86c665b2fed35c372ce8996eb1c4e31082aedd6ad5fc6086cfac889c3471b"
+  },
+  {
+    "file": "artifacts/shipping-1/app-data/Shared Dictionary/db-journal",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/shipping-1/capturepack-stderr.log",
+    "bytes": 292,
+    "sha256": "fdab3a6654b33e3b7ee8b99b32f5ae98a6a55d139415a903176493aab6ce433d"
+  },
+  {
+    "file": "artifacts/shipping-1/capturepack-stdout.log",
+    "bytes": 11606,
+    "sha256": "d45e27996a3dc2738b1f689e52cc2a7b9851dc88458891f14ea412eb2d184bda"
+  },
+  {
+    "file": "artifacts/shipping-1/ffmpeg-d2.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/shipping-1/ffprobe-d2.json",
+    "bytes": 34584,
+    "sha256": "480e9391ed46adff5336ce3b1cb13c60077a4a1ff3f6e0ecc147c60fc050b7d6"
+  },
+  {
+    "file": "artifacts/shipping-1/fixture/layout.json",
+    "bytes": 1477,
+    "sha256": "de00bf04e74c93dbfde3f988e87f05855a14eff145bff87dea1bf006fe5fce93"
+  },
+  {
+    "file": "artifacts/shipping-1/fixture/movement.jsonl",
+    "bytes": 491790,
+    "sha256": "f05fb35c10db6de81a1dfcad3d9936b808c1230bf7060746f757599474a9f649"
+  },
+  {
+    "file": "artifacts/shipping-1/fixture/stderr.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/shipping-1/fixture/stdout.log",
+    "bytes": 2,
+    "sha256": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6"
+  },
+  {
+    "file": "artifacts/shipping-1/fixture/stop",
+    "bytes": 5,
+    "sha256": "a11c3d917a2149a4b548217038bc8f2dd2130a1966e0c7af5c4225d81f25a8c3"
+  },
+  {
+    "file": "artifacts/shipping-1/frame-pts.json",
+    "bytes": 9066,
+    "sha256": "2260a59db57853335caca130d303d6f274dda768a45986f509f824aba80e0432"
+  },
+  {
+    "file": "artifacts/shipping-1/framemd5-d2.txt",
+    "bytes": 35412,
+    "sha256": "03659f724f361b162785753a7f4ab349f25d70083af56815b5c8e8e883e50a0d"
+  },
+  {
+    "file": "artifacts/shipping-1/packs/CapturePack_2026-09-12_223258/annotations.json",
+    "bytes": 79,
+    "sha256": "559ff73550d656d06f08319e887eb54e25c0e8998bfe6e894b47af1d8bebecc1"
+  },
+  {
+    "file": "artifacts/shipping-1/packs/CapturePack_2026-09-12_223258/manifest.json",
+    "bytes": 1796,
+    "sha256": "1e2a5ef8a439986c86b4adec8f4d43332d5f395ec8133ce05864f1df31d99a4d"
+  },
+  {
+    "file": "artifacts/shipping-1/packs/CapturePack_2026-09-12_223258/plugins/windows-context/meta.json",
+    "bytes": 159,
+    "sha256": "b65c80c8ba92f592714c3f1965c7147ab26c1b38449fe93e5ca29f68eaa7af89"
+  },
+  {
+    "file": "artifacts/shipping-1/packs/CapturePack_2026-09-12_223258/plugins/windows-context/timeline.json",
+    "bytes": 477569,
+    "sha256": "fe28b8990f4c5ee371deb08f375516e999d8499f064c719209f222a54fd60e3f"
+  },
+  {
+    "file": "artifacts/shipping-1/packs/CapturePack_2026-09-12_223258/plugins/windows-uia/elements.json",
+    "bytes": 217059,
+    "sha256": "abd15e40369fce7d4caa0e185b6cc907a1498473a84979e5be7ad9e50dbd633a"
+  },
+  {
+    "file": "artifacts/shipping-1/packs/CapturePack_2026-09-12_223258/plugins/windows-uia/meta.json",
+    "bytes": 50,
+    "sha256": "6ab10a5d24525dc4b432a957b5487959644312264fd8945c526bf6729ac96746"
+  },
+  {
+    "file": "artifacts/shipping-1/packs/CapturePack_2026-09-12_223258/README.md",
+    "bytes": 1086,
+    "sha256": "c77779673b63ba031da49f692d4a15aa464b59a6aafe3dc879f81d0505273b20"
+  },
+  {
+    "file": "artifacts/shipping-1/packs/CapturePack_2026-09-12_223258/replay.mp4",
+    "bytes": 12078077,
+    "sha256": "0e4acef2af00fe150b6f70dd358270547fde1f5b46f6246da1ff825c54efd343"
+  },
+  {
+    "file": "artifacts/shipping-1/packs/CapturePack_2026-09-12_223258/report.md",
+    "bytes": 931,
+    "sha256": "570a338bbb658aaccbc5353b995a1ab5fb2be45b9b36c9b353b4f30eb390fd72"
+  },
+  {
+    "file": "artifacts/shipping-1/packs/CapturePack_2026-09-12_223258/skills/annotation.md",
+    "bytes": 510,
+    "sha256": "df343dd73ce31dbeb052d605b632f54d4f5c220d7f31c3ba331b8e66f632f356"
+  },
+  {
+    "file": "artifacts/shipping-1/packs/CapturePack_2026-09-12_223258/skills/dom.md",
+    "bytes": 758,
+    "sha256": "62f7102c6d123fcb204aebd2107483946c18640e4ddaa9731cfd56d5bd9cb280"
+  },
+  {
+    "file": "artifacts/shipping-1/packs/CapturePack_2026-09-12_223258/skills/overview.md",
+    "bytes": 352,
+    "sha256": "876118a72ecde0bb5781365958c1dca00084e8eabbff36f810226af57603d41e"
+  },
+  {
+    "file": "artifacts/shipping-1/packs/CapturePack_2026-09-12_223258/skills/project.md",
+    "bytes": 1998,
+    "sha256": "43c24e33d203996d45d3110c84dd28cab984e4e2447d4d3abce03bbc0585ebe6"
+  },
+  {
+    "file": "artifacts/shipping-1/packs/CapturePack_2026-09-12_223258/skills/timeline.md",
+    "bytes": 10819,
+    "sha256": "61e2fc344d4b8a7555320cc6737c082ae032d4bab5c0befa88945bc1d6b9165e"
+  },
+  {
+    "file": "artifacts/shipping-1/packs/CapturePack_2026-09-12_223258/snapshot.png",
+    "bytes": 1455154,
+    "sha256": "740bcf33d8aab507b1939a909f7c643efc51bc5a95a8ae099d4530b60c628291"
+  },
+  {
+    "file": "artifacts/shipping-1/packs/CapturePack_2026-09-12_223258/timeline.json",
+    "bytes": 28249,
+    "sha256": "d4170d860ba9443e4bb5fe53196c6744c5d1b6c49756b2c5696477529553d980"
+  },
+  {
+    "file": "artifacts/shipping-1/packs/CapturePack_2026-09-12_223258/viewer.html",
+    "bytes": 5181,
+    "sha256": "2b59bcdfed566dfdd5a30cec344ba7d52c1fcfa5facec2b55fce52a1ca173f7f"
+  },
+  {
+    "file": "artifacts/shipping-1/process-samples.jsonl",
+    "bytes": 64439,
+    "sha256": "88ae1a4d32c3bf2e51bd14135fe267c10a088667610d34e9ce220455c4985716"
+  },
+  {
+    "file": "artifacts/shipping-1/report.json",
+    "bytes": 82555,
+    "sha256": "5f897717ac4130e3637a34728bcf75b94bbbf05a88c3c4d8936d2ab98849886a"
+  },
+  {
+    "file": "artifacts/shipping-1/status.json",
+    "bytes": 409,
+    "sha256": "848c7aa8fa26e9a425c174eacae98671a51b744a00a74d981bf201c72bcb0a3c"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/Cache/Cache_Data/data_0",
+    "bytes": 45056,
+    "sha256": "39ae0e7e2e4aad2e2110b6d22c80f47c3413a4525e7a710f62f91c8efaa7f7b5"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/Cache/Cache_Data/data_1",
+    "bytes": 270336,
+    "sha256": "02aa5755f6a10f06172c7bd539a095f968a273787bc3d5b1f316f831c06d53f2"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/Cache/Cache_Data/data_2",
+    "bytes": 1056768,
+    "sha256": "84b991845aee3f64cc2839fd92f03dbe1602938100821e8f4b636993e13a2c5c"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/Cache/Cache_Data/data_3",
+    "bytes": 8192,
+    "sha256": "e09f42c398d688dce168570291f1f92d079987deda3099a34adb9e8c0522b30c"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/Cache/Cache_Data/f_000001",
+    "bytes": 11476456,
+    "sha256": "75b5e033a0d6e1bba1e7ce6aad6f723d84128cda7f2048339c8c498f049f49bc"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/Cache/Cache_Data/index",
+    "bytes": 524656,
+    "sha256": "c1fe9a056c3cea005acbfa74bee9ba7d1e145e48c0499af3017a06c82a2c29da"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/Cache/No_Vary_Search/journal.baj",
+    "bytes": 4,
+    "sha256": "9c169428d852e25bd59b27652ed533d2a1f09f96e4c329fa5e06f47e16731543"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/Cache/No_Vary_Search/snapshot.baf",
+    "bytes": 20,
+    "sha256": "0c2dd377ed0cc66161e9db8f89f7d8bcb3ad8c06c4a054bdcba214ab05f58c9a"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/Code Cache/electron-preload/41D252202F15AB6C14C963F847ECD8CF1FE0216BF682E47561E109F255FE5B99.cache",
+    "bytes": 8756,
+    "sha256": "b973c9a3fe78c2de52eec8a7edb310008cd64044e341c030af6fbdad87d71b07"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/Code Cache/electron-preload/4EE12411E85EF93D4072D3589E3E0E757DD33D4B3FB335DEB7FCDF0B4673D836.cache",
+    "bytes": 8876,
+    "sha256": "9e8c2c9d4d8a46c35cbb011ca4bd7953f3ad1160765b400b1f6e80a978c42bd5"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/Code Cache/js/index",
+    "bytes": 24,
+    "sha256": "fbcfe23a2ecb82b7100c50811691dde0a33aa3da8d176be9882a9db485dc0f2d"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/Code Cache/js/index-dir/the-real-index",
+    "bytes": 48,
+    "sha256": "d8620d73e32e6753b90662145caeeece17bf9f6c8898ae24ea211d0f78774c4a"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/Code Cache/wasm/index",
+    "bytes": 24,
+    "sha256": "fbcfe23a2ecb82b7100c50811691dde0a33aa3da8d176be9882a9db485dc0f2d"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/Code Cache/wasm/index-dir/the-real-index",
+    "bytes": 48,
+    "sha256": "8f4e4d434abee0dc31fca69e314bf2d7bc8ceb211c39733d75197fc127fbeac0"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/Crashpad/settings.dat",
+    "bytes": 40,
+    "sha256": "bed960692b98d2cdb01322e363a5e31eead2d240a7fddc69ea10c970db2820c5"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/DawnGraphiteCache/data_0",
+    "bytes": 8192,
+    "sha256": "d6a5fe39cd672781b256e0e3102f7022635f1d4bb7cfcc90a80fffe4d0f3877e"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/DawnGraphiteCache/data_1",
+    "bytes": 270336,
+    "sha256": "902f30c1fb0597d0734bc34b979ec5d131f8f39a4b71b338083821216ec8d61b"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/DawnGraphiteCache/data_2",
+    "bytes": 8192,
+    "sha256": "ec1702806f4cc7c42a82fc2b38e89835fde7c64bb32060e0823c9077ca92efb7"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/DawnGraphiteCache/data_3",
+    "bytes": 8192,
+    "sha256": "e09f42c398d688dce168570291f1f92d079987deda3099a34adb9e8c0522b30c"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/DawnGraphiteCache/index",
+    "bytes": 262512,
+    "sha256": "381150017af61448b2992cd74556590b2eee84fadebf2cabf00f34bdec461a47"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/DawnWebGPUCache/data_0",
+    "bytes": 8192,
+    "sha256": "d6a5fe39cd672781b256e0e3102f7022635f1d4bb7cfcc90a80fffe4d0f3877e"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/DawnWebGPUCache/data_1",
+    "bytes": 270336,
+    "sha256": "902f30c1fb0597d0734bc34b979ec5d131f8f39a4b71b338083821216ec8d61b"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/DawnWebGPUCache/data_2",
+    "bytes": 8192,
+    "sha256": "ec1702806f4cc7c42a82fc2b38e89835fde7c64bb32060e0823c9077ca92efb7"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/DawnWebGPUCache/data_3",
+    "bytes": 8192,
+    "sha256": "e09f42c398d688dce168570291f1f92d079987deda3099a34adb9e8c0522b30c"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/DawnWebGPUCache/index",
+    "bytes": 262512,
+    "sha256": "8ee7fd41eb9ee3b07753c162dd33e3244dd6320dce01d28c01ce28604926754f"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/Dictionaries/ko-3-0.bdic",
+    "bytes": 11476456,
+    "sha256": "75b5e033a0d6e1bba1e7ce6aad6f723d84128cda7f2048339c8c498f049f49bc"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/DIPS",
+    "bytes": 4096,
+    "sha256": "0ab48b25cba617ed3a4acca0161813b314c095ef63544bb4af60769eb1012977"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/DIPS-wal",
+    "bytes": 45352,
+    "sha256": "7a7163df910b50bfbeee5c25bf9c7c2deb1f14e3c6900293b537e709b9d09101"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/GPUCache/data_0",
+    "bytes": 8192,
+    "sha256": "d6a5fe39cd672781b256e0e3102f7022635f1d4bb7cfcc90a80fffe4d0f3877e"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/GPUCache/data_1",
+    "bytes": 270336,
+    "sha256": "902f30c1fb0597d0734bc34b979ec5d131f8f39a4b71b338083821216ec8d61b"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/GPUCache/data_2",
+    "bytes": 8192,
+    "sha256": "ec1702806f4cc7c42a82fc2b38e89835fde7c64bb32060e0823c9077ca92efb7"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/GPUCache/data_3",
+    "bytes": 8192,
+    "sha256": "e09f42c398d688dce168570291f1f92d079987deda3099a34adb9e8c0522b30c"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/GPUCache/index",
+    "bytes": 262512,
+    "sha256": "2fe661ed1533dc1cbc687c4ec7fee662e2a58319bccb38e3463017d7bf919737"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/Local State",
+    "bytes": 490,
+    "sha256": "371d65c6a676d8e6d0efb861426c73ecdbd97fe90c218faad25f5e7d9fd0a467"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/Local Storage/leveldb/000003.log",
+    "bytes": 30,
+    "sha256": "8bd2ea70a0b70c91de138a5b87c7936c6a6fa7c4275c54b97f4ef0ccc5b79bb4"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/Local Storage/leveldb/CURRENT",
+    "bytes": 16,
+    "sha256": "0f1bad70c7bd1e0a69562853ec529355462fcd0423263a3d39d6d0d70b780443"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/Local Storage/leveldb/LOCK",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/Local Storage/leveldb/LOG",
+    "bytes": 467,
+    "sha256": "5335cefe323f2b4591a63f893305af501c516e54c1768f20582e9ba3ea574c53"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/Local Storage/leveldb/MANIFEST-000001",
+    "bytes": 41,
+    "sha256": "f9d31b278e215eb0d0e9cd709edfa037e828f36214ab7906f612160fead4b2b4"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/logs/main.log",
+    "bytes": 13369,
+    "sha256": "9079675a1643eb2a24d95ec9790cf2314cdca08f0f3e62e5574d145e267e22e3"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/Network/Network Persistent State",
+    "bytes": 59,
+    "sha256": "0178d3cd64965de13e56a805628521262dc0b9bb2294d6eda186252382fe1f11"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/Network/NetworkDataMigrated",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/Network/Trust Tokens",
+    "bytes": 36864,
+    "sha256": "8b5a62a399e316009e0c0ee1727ede327893d7f82f38a136e795422b3f9c333c"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/Network/Trust Tokens-journal",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/Preferences",
+    "bytes": 129,
+    "sha256": "bc1574f756cbe19a4c4593b42e3016d69702b41bb8273076dcbaa4716e7596ee"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/run-state.json",
+    "bytes": 197,
+    "sha256": "9eb94d041432de0e0b6a2c45efa87e408cc9ae49a2fb83528cf57b85fc2852e3"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/settings.json",
+    "bytes": 1250,
+    "sha256": "4199015a4477bd5bc224d71c8248c56c11ee604ad9be78900211af1083d71686"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/Shared Dictionary/cache/index",
+    "bytes": 24,
+    "sha256": "fbcfe23a2ecb82b7100c50811691dde0a33aa3da8d176be9882a9db485dc0f2d"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/Shared Dictionary/cache/index-dir/the-real-index",
+    "bytes": 48,
+    "sha256": "27cc6b3abc725219b091e5a6da520e608e270eae6a40c819475d62a972267385"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/Shared Dictionary/db",
+    "bytes": 45056,
+    "sha256": "fbb86c665b2fed35c372ce8996eb1c4e31082aedd6ad5fc6086cfac889c3471b"
+  },
+  {
+    "file": "artifacts/shipping-2/app-data/Shared Dictionary/db-journal",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/shipping-2/capturepack-stderr.log",
+    "bytes": 211,
+    "sha256": "7d85e47742f69c78bb6361921972d6c49bac915d074de11a0da8eed3321c282f"
+  },
+  {
+    "file": "artifacts/shipping-2/capturepack-stdout.log",
+    "bytes": 11517,
+    "sha256": "c0ca7df88e53646f2ba763157f9f4bf673fe93f96fbcf4fbe91ce30c87ab5233"
+  },
+  {
+    "file": "artifacts/shipping-2/ffmpeg-d2.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/shipping-2/ffprobe-d2.json",
+    "bytes": 34195,
+    "sha256": "2b39792d4ea95cf0cbbcee88b947af029746e0d441af999d2d86eb96962b5cf1"
+  },
+  {
+    "file": "artifacts/shipping-2/fixture/layout.json",
+    "bytes": 1477,
+    "sha256": "9d05a4f6c7554a4dc42d19d982d8a070d0232b0912bf5a8438c00e95b4e5020f"
+  },
+  {
+    "file": "artifacts/shipping-2/fixture/movement.jsonl",
+    "bytes": 477717,
+    "sha256": "afeeb4803231d4c6abe28c51e873f3333856bded6f6b96197364e52cfb2f91de"
+  },
+  {
+    "file": "artifacts/shipping-2/fixture/stderr.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/shipping-2/fixture/stdout.log",
+    "bytes": 2,
+    "sha256": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6"
+  },
+  {
+    "file": "artifacts/shipping-2/fixture/stop",
+    "bytes": 5,
+    "sha256": "a11c3d917a2149a4b548217038bc8f2dd2130a1966e0c7af5c4225d81f25a8c3"
+  },
+  {
+    "file": "artifacts/shipping-2/frame-pts.json",
+    "bytes": 8954,
+    "sha256": "2e9a36833d461a290db2a92eb06bc3a7a1c1acf05ace8ef3ff8daccb2e055656"
+  },
+  {
+    "file": "artifacts/shipping-2/framemd5-d2.txt",
+    "bytes": 35012,
+    "sha256": "3500898942b0198d9a6d8d8709278e57f20dc03ddab6b3f04970740b6b11263f"
+  },
+  {
+    "file": "artifacts/shipping-2/packs/CapturePack_2026-09-12_223539/annotations.json",
+    "bytes": 79,
+    "sha256": "559ff73550d656d06f08319e887eb54e25c0e8998bfe6e894b47af1d8bebecc1"
+  },
+  {
+    "file": "artifacts/shipping-2/packs/CapturePack_2026-09-12_223539/manifest.json",
+    "bytes": 1796,
+    "sha256": "adba5cf99ceab51cb4ad0dad76c12002227f76c3b8bcdf722a00d3d49ff467ce"
+  },
+  {
+    "file": "artifacts/shipping-2/packs/CapturePack_2026-09-12_223539/plugins/windows-context/meta.json",
+    "bytes": 159,
+    "sha256": "b65c80c8ba92f592714c3f1965c7147ab26c1b38449fe93e5ca29f68eaa7af89"
+  },
+  {
+    "file": "artifacts/shipping-2/packs/CapturePack_2026-09-12_223539/plugins/windows-context/timeline.json",
+    "bytes": 458701,
+    "sha256": "2d9dffe8f7717f46b1772a608010f5f728e8273859f0ddb7e90acd5b58bef547"
+  },
+  {
+    "file": "artifacts/shipping-2/packs/CapturePack_2026-09-12_223539/plugins/windows-uia/elements.json",
+    "bytes": 139441,
+    "sha256": "45e0cf3ac9ef7cb708982e4934e7917dc06f956a64a06056a09b5531b2fc656e"
+  },
+  {
+    "file": "artifacts/shipping-2/packs/CapturePack_2026-09-12_223539/plugins/windows-uia/meta.json",
+    "bytes": 50,
+    "sha256": "6ab10a5d24525dc4b432a957b5487959644312264fd8945c526bf6729ac96746"
+  },
+  {
+    "file": "artifacts/shipping-2/packs/CapturePack_2026-09-12_223539/README.md",
+    "bytes": 1086,
+    "sha256": "5911f5edbcf4e3f5a6e79bf7bfe6e1c67958ef4fc2a8ffb0795709bc2227c83f"
+  },
+  {
+    "file": "artifacts/shipping-2/packs/CapturePack_2026-09-12_223539/replay.mp4",
+    "bytes": 12184449,
+    "sha256": "7bb6f7446977c1bab3594c902cf5c3caf5fc25e5a7fa9c69d03ea3a48603817c"
+  },
+  {
+    "file": "artifacts/shipping-2/packs/CapturePack_2026-09-12_223539/report.md",
+    "bytes": 931,
+    "sha256": "c8d78556e26f1f3eb7e80894d464064d4e3572393e4cb2a229a06deb89f0a375"
+  },
+  {
+    "file": "artifacts/shipping-2/packs/CapturePack_2026-09-12_223539/skills/annotation.md",
+    "bytes": 510,
+    "sha256": "df343dd73ce31dbeb052d605b632f54d4f5c220d7f31c3ba331b8e66f632f356"
+  },
+  {
+    "file": "artifacts/shipping-2/packs/CapturePack_2026-09-12_223539/skills/dom.md",
+    "bytes": 758,
+    "sha256": "62f7102c6d123fcb204aebd2107483946c18640e4ddaa9731cfd56d5bd9cb280"
+  },
+  {
+    "file": "artifacts/shipping-2/packs/CapturePack_2026-09-12_223539/skills/overview.md",
+    "bytes": 353,
+    "sha256": "3119c26184c672b22689fab96aec7e3ec4aaefda5cd1c6dac32ef5e8af91dad4"
+  },
+  {
+    "file": "artifacts/shipping-2/packs/CapturePack_2026-09-12_223539/skills/project.md",
+    "bytes": 1998,
+    "sha256": "2ed9ac6c3ba14a83ad40a4145c72af2621f7398d5fbbc625e241d8ca36a35157"
+  },
+  {
+    "file": "artifacts/shipping-2/packs/CapturePack_2026-09-12_223539/skills/timeline.md",
+    "bytes": 16253,
+    "sha256": "5c98714baaaa5f6c155cd28c6a57cfee74e0c9ecfbbdef4962066c668f894d6c"
+  },
+  {
+    "file": "artifacts/shipping-2/packs/CapturePack_2026-09-12_223539/snapshot.png",
+    "bytes": 1610282,
+    "sha256": "7913a919e896db714689e7173506345f446298e0e8c87be51f051dcb10470211"
+  },
+  {
+    "file": "artifacts/shipping-2/packs/CapturePack_2026-09-12_223539/timeline.json",
+    "bytes": 42655,
+    "sha256": "562e22b6077c08ec6905207deebeb0f3972bee28f7879c5d837e6eaf6bca011f"
+  },
+  {
+    "file": "artifacts/shipping-2/packs/CapturePack_2026-09-12_223539/viewer.html",
+    "bytes": 5181,
+    "sha256": "1c232d29020a25fd0a692b40c61466f52c4388b31d32de5f57da1f8df6725283"
+  },
+  {
+    "file": "artifacts/shipping-2/process-samples.jsonl",
+    "bytes": 54774,
+    "sha256": "33295bc11d7d5522374f4c5b1be6e14838801e621f8cec7f968c1a2afb2eba7c"
+  },
+  {
+    "file": "artifacts/shipping-2/report.json",
+    "bytes": 81112,
+    "sha256": "652288f7bd51c337cb684b6d13b04895087deb684ecf8426534dfa368794e2be"
+  },
+  {
+    "file": "artifacts/shipping-2/status.json",
+    "bytes": 409,
+    "sha256": "cac345efbea8e875f2070dc640e9efc153678a8d963d0c6c6f0adb57e2e31067"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/Cache/Cache_Data/data_0",
+    "bytes": 45056,
+    "sha256": "a1403ed0b37f5ac4ba92ee2cf492fa3809b6db9f4e8eabf06917a4756010eead"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/Cache/Cache_Data/data_1",
+    "bytes": 270336,
+    "sha256": "8f3b050aece08bdd06e8be12ad8022585c909307dddca13b9c12b43eedd231cb"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/Cache/Cache_Data/data_2",
+    "bytes": 1056768,
+    "sha256": "f44402fde3656c2c3c97b34af3f8eed5adc51ff61fd4f8599a87a864044b2ff3"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/Cache/Cache_Data/data_3",
+    "bytes": 8192,
+    "sha256": "e09f42c398d688dce168570291f1f92d079987deda3099a34adb9e8c0522b30c"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/Cache/Cache_Data/f_000001",
+    "bytes": 11476456,
+    "sha256": "75b5e033a0d6e1bba1e7ce6aad6f723d84128cda7f2048339c8c498f049f49bc"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/Cache/Cache_Data/index",
+    "bytes": 524656,
+    "sha256": "ff6bc8777ae74e166de2e12c95a106614c588e0e330f43a7ee1db25046e11164"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/Cache/No_Vary_Search/journal.baj",
+    "bytes": 4,
+    "sha256": "9c169428d852e25bd59b27652ed533d2a1f09f96e4c329fa5e06f47e16731543"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/Cache/No_Vary_Search/snapshot.baf",
+    "bytes": 20,
+    "sha256": "0c2dd377ed0cc66161e9db8f89f7d8bcb3ad8c06c4a054bdcba214ab05f58c9a"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/Code Cache/electron-preload/41D252202F15AB6C14C963F847ECD8CF1FE0216BF682E47561E109F255FE5B99.cache",
+    "bytes": 8756,
+    "sha256": "b973c9a3fe78c2de52eec8a7edb310008cd64044e341c030af6fbdad87d71b07"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/Code Cache/electron-preload/4EE12411E85EF93D4072D3589E3E0E757DD33D4B3FB335DEB7FCDF0B4673D836.cache",
+    "bytes": 8876,
+    "sha256": "9e8c2c9d4d8a46c35cbb011ca4bd7953f3ad1160765b400b1f6e80a978c42bd5"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/Code Cache/js/index",
+    "bytes": 24,
+    "sha256": "fbcfe23a2ecb82b7100c50811691dde0a33aa3da8d176be9882a9db485dc0f2d"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/Code Cache/js/index-dir/the-real-index",
+    "bytes": 48,
+    "sha256": "528d3053c3dba672acc8e1dadf768269a1bd11c3c7c92b065043beff2f2f95ae"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/Code Cache/wasm/index",
+    "bytes": 24,
+    "sha256": "fbcfe23a2ecb82b7100c50811691dde0a33aa3da8d176be9882a9db485dc0f2d"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/Code Cache/wasm/index-dir/the-real-index",
+    "bytes": 48,
+    "sha256": "e39e17af11216ebde563d4e1cdb35948a187825b533fdca618465ba9fcefbed2"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/Crashpad/settings.dat",
+    "bytes": 40,
+    "sha256": "75dd5e38e183ade58f5937b7b6fc720e85ed4dfb20cbdc4f5eb89d8c68201d37"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/DawnGraphiteCache/data_0",
+    "bytes": 8192,
+    "sha256": "d6a5fe39cd672781b256e0e3102f7022635f1d4bb7cfcc90a80fffe4d0f3877e"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/DawnGraphiteCache/data_1",
+    "bytes": 270336,
+    "sha256": "902f30c1fb0597d0734bc34b979ec5d131f8f39a4b71b338083821216ec8d61b"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/DawnGraphiteCache/data_2",
+    "bytes": 8192,
+    "sha256": "ec1702806f4cc7c42a82fc2b38e89835fde7c64bb32060e0823c9077ca92efb7"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/DawnGraphiteCache/data_3",
+    "bytes": 8192,
+    "sha256": "e09f42c398d688dce168570291f1f92d079987deda3099a34adb9e8c0522b30c"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/DawnGraphiteCache/index",
+    "bytes": 262512,
+    "sha256": "3928be13aa2ded57d204ee26df750816a4beaa8f1756f16ff2c4e17c803cfa44"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/DawnWebGPUCache/data_0",
+    "bytes": 8192,
+    "sha256": "d6a5fe39cd672781b256e0e3102f7022635f1d4bb7cfcc90a80fffe4d0f3877e"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/DawnWebGPUCache/data_1",
+    "bytes": 270336,
+    "sha256": "902f30c1fb0597d0734bc34b979ec5d131f8f39a4b71b338083821216ec8d61b"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/DawnWebGPUCache/data_2",
+    "bytes": 8192,
+    "sha256": "ec1702806f4cc7c42a82fc2b38e89835fde7c64bb32060e0823c9077ca92efb7"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/DawnWebGPUCache/data_3",
+    "bytes": 8192,
+    "sha256": "e09f42c398d688dce168570291f1f92d079987deda3099a34adb9e8c0522b30c"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/DawnWebGPUCache/index",
+    "bytes": 262512,
+    "sha256": "6059a630276d5e26eedbb60d6f20a0c7192a9c4b5e8bed467568d6bcb51321ae"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/Dictionaries/ko-3-0.bdic",
+    "bytes": 11476456,
+    "sha256": "75b5e033a0d6e1bba1e7ce6aad6f723d84128cda7f2048339c8c498f049f49bc"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/DIPS",
+    "bytes": 4096,
+    "sha256": "0ab48b25cba617ed3a4acca0161813b314c095ef63544bb4af60769eb1012977"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/DIPS-wal",
+    "bytes": 45352,
+    "sha256": "153f97b5846c2eb380691dad5ecd650aa704577496f98e5faf35e4207a112d22"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/GPUCache/data_0",
+    "bytes": 8192,
+    "sha256": "d6a5fe39cd672781b256e0e3102f7022635f1d4bb7cfcc90a80fffe4d0f3877e"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/GPUCache/data_1",
+    "bytes": 270336,
+    "sha256": "902f30c1fb0597d0734bc34b979ec5d131f8f39a4b71b338083821216ec8d61b"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/GPUCache/data_2",
+    "bytes": 8192,
+    "sha256": "ec1702806f4cc7c42a82fc2b38e89835fde7c64bb32060e0823c9077ca92efb7"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/GPUCache/data_3",
+    "bytes": 8192,
+    "sha256": "e09f42c398d688dce168570291f1f92d079987deda3099a34adb9e8c0522b30c"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/GPUCache/index",
+    "bytes": 262512,
+    "sha256": "fa04112b852e9a9c86909d409fc6cb16a8a7fd99cac43b958f0017f4917fa509"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/Local State",
+    "bytes": 490,
+    "sha256": "27b3f05dfba6e0939abe21ccdf46242ae8340dc01349446b0fec855bed543a7c"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/Local Storage/leveldb/000003.log",
+    "bytes": 30,
+    "sha256": "8bd2ea70a0b70c91de138a5b87c7936c6a6fa7c4275c54b97f4ef0ccc5b79bb4"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/Local Storage/leveldb/CURRENT",
+    "bytes": 16,
+    "sha256": "0f1bad70c7bd1e0a69562853ec529355462fcd0423263a3d39d6d0d70b780443"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/Local Storage/leveldb/LOCK",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/Local Storage/leveldb/LOG",
+    "bytes": 467,
+    "sha256": "a45dfdf41dd31ef6223c845960b6ce2cc0afeb6e3d1d63bc01b7b8fc8e07177f"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/Local Storage/leveldb/MANIFEST-000001",
+    "bytes": 41,
+    "sha256": "f9d31b278e215eb0d0e9cd709edfa037e828f36214ab7906f612160fead4b2b4"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/logs/main.log",
+    "bytes": 15388,
+    "sha256": "ff801405b2a15aedf7d9ac06c813849f7654b727e0336b3f99b5ba66d8500c28"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/Network/Network Persistent State",
+    "bytes": 59,
+    "sha256": "0178d3cd64965de13e56a805628521262dc0b9bb2294d6eda186252382fe1f11"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/Network/NetworkDataMigrated",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/Network/Trust Tokens",
+    "bytes": 36864,
+    "sha256": "8b5a62a399e316009e0c0ee1727ede327893d7f82f38a136e795422b3f9c333c"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/Network/Trust Tokens-journal",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/Preferences",
+    "bytes": 129,
+    "sha256": "23da492a16d35dfbcb1f75432a953862b4411793cbb1ef4eed774c6a1fa17c68"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/run-state.json",
+    "bytes": 197,
+    "sha256": "cff02435f58133980446ab06804cb13f1840ab5903b33e3729455a02bb948eed"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/settings.json",
+    "bytes": 1250,
+    "sha256": "dd4a101dde6a6f7d0c8773ec95e3da28f608f44e1ec268fa5043069b08ad1b2f"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/Shared Dictionary/cache/index",
+    "bytes": 24,
+    "sha256": "fbcfe23a2ecb82b7100c50811691dde0a33aa3da8d176be9882a9db485dc0f2d"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/Shared Dictionary/cache/index-dir/the-real-index",
+    "bytes": 48,
+    "sha256": "f38b0c1190dfcf5aad094a6f9e01cd87bfad4ccd48b09f27e75249f61c3615d1"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/Shared Dictionary/db",
+    "bytes": 45056,
+    "sha256": "fbb86c665b2fed35c372ce8996eb1c4e31082aedd6ad5fc6086cfac889c3471b"
+  },
+  {
+    "file": "artifacts/shipping-3/app-data/Shared Dictionary/db-journal",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/shipping-3/capturepack-stderr.log",
+    "bytes": 242,
+    "sha256": "cc94b5bd2ef49aa722ced736f19db46c7ee27f37efff5d65ba70f9ee2e2eb4da"
+  },
+  {
+    "file": "artifacts/shipping-3/capturepack-stdout.log",
+    "bytes": 13474,
+    "sha256": "232fea44250b8841916c4871b1d0ace0d34ef9989901f2ed0a529f8fa84c3749"
+  },
+  {
+    "file": "artifacts/shipping-3/ffmpeg-d2.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/shipping-3/ffprobe-d2.json",
+    "bytes": 33348,
+    "sha256": "a3cb70deec9b0f9106cc82121fe139f0b076c0e6743474ba06ff2afcd10283ef"
+  },
+  {
+    "file": "artifacts/shipping-3/fixture/layout.json",
+    "bytes": 1477,
+    "sha256": "919919c56c73955fc9001c68473c348ea1c1563cb5d19d65f307ef1fa887d07a"
+  },
+  {
+    "file": "artifacts/shipping-3/fixture/movement.jsonl",
+    "bytes": 445928,
+    "sha256": "6f599c48718c970fde449461d7b71106460e662c0ca519c606fd1c6e0876761a"
+  },
+  {
+    "file": "artifacts/shipping-3/fixture/stderr.log",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "file": "artifacts/shipping-3/fixture/stdout.log",
+    "bytes": 2,
+    "sha256": "7eb70257593da06f682a3ddda54a9d260d4fc514f645237f5ca74b08f8da61a6"
+  },
+  {
+    "file": "artifacts/shipping-3/fixture/stop",
+    "bytes": 5,
+    "sha256": "a11c3d917a2149a4b548217038bc8f2dd2130a1966e0c7af5c4225d81f25a8c3"
+  },
+  {
+    "file": "artifacts/shipping-3/frame-pts.json",
+    "bytes": 8780,
+    "sha256": "c6230998aecf9f5910244afeec1b9856977285c04273a5e3db81beb2e94e4eb5"
+  },
+  {
+    "file": "artifacts/shipping-3/framemd5-d2.txt",
+    "bytes": 34132,
+    "sha256": "84f65a64f95890c3f8c1cd300dc5fcd821f6348161679499f498eead48f30cad"
+  },
+  {
+    "file": "artifacts/shipping-3/packs/CapturePack_2026-09-12_223631/annotations.json",
+    "bytes": 79,
+    "sha256": "559ff73550d656d06f08319e887eb54e25c0e8998bfe6e894b47af1d8bebecc1"
+  },
+  {
+    "file": "artifacts/shipping-3/packs/CapturePack_2026-09-12_223631/manifest.json",
+    "bytes": 2290,
+    "sha256": "baceba801a163089948f811c93eeac4e4d9e391f816749e72f8fb7b265accfe5"
+  },
+  {
+    "file": "artifacts/shipping-3/packs/CapturePack_2026-09-12_223631/plugins/windows-context/meta.json",
+    "bytes": 159,
+    "sha256": "b65c80c8ba92f592714c3f1965c7147ab26c1b38449fe93e5ca29f68eaa7af89"
+  },
+  {
+    "file": "artifacts/shipping-3/packs/CapturePack_2026-09-12_223631/plugins/windows-context/timeline.json",
+    "bytes": 475254,
+    "sha256": "9fe95499d229bb8d8befa83ed24e82c37d1431673098eaba6c693c58d02ac170"
+  },
+  {
+    "file": "artifacts/shipping-3/packs/CapturePack_2026-09-12_223631/plugins/windows-uia/elements.json",
+    "bytes": 125346,
+    "sha256": "cfcf202ab791f98233190027aa4178d9748026f8e38f713dd2b0549d5ce43fc4"
+  },
+  {
+    "file": "artifacts/shipping-3/packs/CapturePack_2026-09-12_223631/plugins/windows-uia/meta.json",
+    "bytes": 50,
+    "sha256": "6ab10a5d24525dc4b432a957b5487959644312264fd8945c526bf6729ac96746"
+  },
+  {
+    "file": "artifacts/shipping-3/packs/CapturePack_2026-09-12_223631/README.md",
+    "bytes": 1086,
+    "sha256": "d8764706f4c1c5251e1b2dde8597c9dad7b2df1aafabbe5bc38effd75a4e82db"
+  },
+  {
+    "file": "artifacts/shipping-3/packs/CapturePack_2026-09-12_223631/replay.mp4",
+    "bytes": 11745622,
+    "sha256": "4d92ef74eaa3fd008b04da47f5bafc30f58ca83280fbbc33d462bdb026f6f27f"
+  },
+  {
+    "file": "artifacts/shipping-3/packs/CapturePack_2026-09-12_223631/report.md",
+    "bytes": 931,
+    "sha256": "f8d4491dda4961b2ab9ee900b6f5a117d9fed80fa24a4d97d51511269b73c1a8"
+  },
+  {
+    "file": "artifacts/shipping-3/packs/CapturePack_2026-09-12_223631/skills/annotation.md",
+    "bytes": 510,
+    "sha256": "df343dd73ce31dbeb052d605b632f54d4f5c220d7f31c3ba331b8e66f632f356"
+  },
+  {
+    "file": "artifacts/shipping-3/packs/CapturePack_2026-09-12_223631/skills/dom.md",
+    "bytes": 758,
+    "sha256": "62f7102c6d123fcb204aebd2107483946c18640e4ddaa9731cfd56d5bd9cb280"
+  },
+  {
+    "file": "artifacts/shipping-3/packs/CapturePack_2026-09-12_223631/skills/overview.md",
+    "bytes": 353,
+    "sha256": "c4c40e092c2de4971d88e65a78a5d69e9d8dfeb7b132c1aaf98b98db1adf70d1"
+  },
+  {
+    "file": "artifacts/shipping-3/packs/CapturePack_2026-09-12_223631/skills/project.md",
+    "bytes": 1998,
+    "sha256": "ed2e7286ec6217a09a6d9658e8d614aa017245b06435062137d3696f9bca5829"
+  },
+  {
+    "file": "artifacts/shipping-3/packs/CapturePack_2026-09-12_223631/skills/timeline.md",
+    "bytes": 17365,
+    "sha256": "0d425f0059d9d33743fbadc68a9bafe337c564a59a7a4df7c5295f8e07fe1e9a"
+  },
+  {
+    "file": "artifacts/shipping-3/packs/CapturePack_2026-09-12_223631/snapshot.png",
+    "bytes": 1609423,
+    "sha256": "89763d3008119fa1cc0563e91c093660992fd83750f889bdc4ef391719913f9a"
+  },
+  {
+    "file": "artifacts/shipping-3/packs/CapturePack_2026-09-12_223631/timeline.json",
+    "bytes": 45528,
+    "sha256": "06cb7cc4fc39f913f9fa2b1d133e3b390178f3249b4f1b972439cfed2a53b6fc"
+  },
+  {
+    "file": "artifacts/shipping-3/packs/CapturePack_2026-09-12_223631/viewer.html",
+    "bytes": 5181,
+    "sha256": "8e284c6a9fa8678485accf7dfdf8761867a8a5b800676e799f777c98504dab46"
+  },
+  {
+    "file": "artifacts/shipping-3/process-samples.jsonl",
+    "bytes": 43910,
+    "sha256": "286d0c330a6825893a45ec5824d6f18d227ae9018f31b9afd1829592340a7552"
+  },
+  {
+    "file": "artifacts/shipping-3/report.json",
+    "bytes": 80090,
+    "sha256": "4eeebb1eb0b384572931c8acdcbb3f10fb1c1cf14b54287bdb8234f1e8a3cde0"
+  },
+  {
+    "file": "artifacts/shipping-3/status.json",
+    "bytes": 407,
+    "sha256": "490d1654fabd7cbfaab45d31b10af9200b5bc82cc34f742ee43ab19c063bec2e"
+  }
+]

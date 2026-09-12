@@ -11,6 +11,7 @@ import type {
   CaptureReplayRequestPayload,
   CaptureReplayResumePayload,
   CaptureReplayResultPayload,
+  CaptureReplayWorkloadPayload,
   CaptureStartPayload,
   CaptureTickPayload,
 } from '../shared/ipc'
@@ -18,6 +19,12 @@ import type {
 contextBridge.exposeInMainWorld('captureBridge', {
   onStart(cb: (payload: CaptureStartPayload) => void): void {
     ipcRenderer.on(IPC.captureStart, (_event, payload: CaptureStartPayload) => cb(payload))
+  },
+  onReplayWorkload(cb: (payload: CaptureReplayWorkloadPayload) => void): void {
+    ipcRenderer.on(
+      IPC.captureReplayWorkload,
+      (_event, payload: CaptureReplayWorkloadPayload) => cb(payload),
+    )
   },
   onRequestReplay(cb: (payload: CaptureReplayRequestPayload) => void): void {
     ipcRenderer.on(

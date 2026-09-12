@@ -481,6 +481,52 @@ function fingerprintDelta(
   return Math.sqrt(squared / left.rgb.length)
 }
 
+/**
+ * Propose declared decode targets from one observed pixel/media-time pair.
+ * This repairs discovery when the delivery-time hint misses by several frames.
+ * The provisional relation is never exported as an origin or anchor: every
+ * proposed target must be decoded, then pass decideReplayPixelClock unchanged.
+ */
+export function discoverReplayPixelClockTargets<T extends { readonly presentationTimeMs: number }>(
+  presented: readonly ReplayPixelClockPresentedSample[],
+  decoded: ReplayPixelClockDecodedSample,
+  encoded: readonly T[],
+): T[] {
+  if (
+    presented.length > REPLAY_PIXEL_CLOCK_SAMPLE_LIMIT ||
+    !Number.isFinite(decoded.ptsMs) ||
+    !validFingerprint(decoded.fingerprint) ||
+    presented.some((sample) => !validFingerprint(sample.fingerprint))
+  ) return []
+  const distances = presented.map((sample) => ({
+    sample,
+    delta: fingerprintDelta(sample.fingerprint, decoded.fingerprint),
+  })).sort((left, right) => left.delta - right.delta)
+  const best = distances[0]
+  const second = distances[1]
+  if (
+    best === undefined || best.delta > MAXIMUM_MATCH_DELTA ||
+    best.sample.mediaTimeMs === undefined || !Number.isFinite(best.sample.mediaTimeMs) ||
+    (second !== undefined && second.delta - best.delta < MINIMUM_MATCH_CONTRAST)
+  ) return []
+  const candidateOffset = decoded.ptsMs - best.sample.mediaTimeMs
+  const available = encoded.filter((sample) =>
+    Number.isFinite(sample.presentationTimeMs) && sample.presentationTimeMs >= 0)
+  const targets = new Set<T>()
+  for (const observed of presented) {
+    if (observed.mediaTimeMs === undefined || !Number.isFinite(observed.mediaTimeMs)) continue
+    const candidatePtsMs = observed.mediaTimeMs + candidateOffset
+    let nearest: T | undefined
+    let distance = Number.POSITIVE_INFINITY
+    for (const sample of available) {
+      const delta = Math.abs(sample.presentationTimeMs - candidatePtsMs)
+      if (delta < distance) { nearest = sample; distance = delta }
+    }
+    if (nearest !== undefined) targets.add(nearest)
+  }
+  return [...targets]
+}
+
 function motionTransitions(
   fingerprints: readonly ReplayPixelClockFingerprint[],
 ): number {

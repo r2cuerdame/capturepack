@@ -1,0 +1,9 @@
+{
+  "time": "2026-09-12T12:26:11.542Z",
+  "launcherPid": 57292,
+  "nodePid": 65784,
+  "nodeExecutable": "C:\\Program Files\\nodejs\\node.exe",
+  "exit": 0,
+  "output": "[\r\n    {\r\n        \"pid\":  57292,\r\n        \"name\":  \"powershell\",\r\n        \"session\":  1,\r\n        \"integritySid\":  \"S-1-16-12288\"\r\n    },\r\n    {\r\n        \"pid\":  65784,\r\n        \"name\":  \"node\",\r\n        \"session\":  1,\r\n        \"integritySid\":  \"S-1-16-12288\"\r\n    }\r\n]\r\n",
+  "stderr": ""
+}

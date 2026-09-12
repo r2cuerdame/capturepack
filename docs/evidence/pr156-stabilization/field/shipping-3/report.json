@@ -1,0 +1,2477 @@
+{
+  "schema": "capturepack.windows-replay-field-report",
+  "version": 2,
+  "run_id": "20260912133556327-74416-15fps-shipping",
+  "started_at": "2026-09-12T13:35:56.328Z",
+  "finished_at": "2026-09-12T13:36:40.296Z",
+  "case": {
+    "replay_backend_requested": "shipping",
+    "release_comparison": true,
+    "fps": 15,
+    "duration_seconds": 30,
+    "capture_delay_seconds": 33,
+    "recorder_start_readiness": {
+      "policy": "first-presented-frame-and-advancing-pts",
+      "maximum_wait_ms": 2000,
+      "observed_wait_ms": {
+        "count": 1,
+        "min": 2010,
+        "p50": 2010,
+        "p95": 2010,
+        "max": 2010,
+        "mean": 2010
+      },
+      "timed_out": false,
+      "measurement": "production log",
+      "capture_requested_at": "2026-09-12T13:36:31.027Z",
+      "observations": [
+        {
+          "display_id": "2678724301",
+          "observed_wait_ms": 2010,
+          "presented_frames": 2,
+          "timed_out": false,
+          "excluded_before_recorder_ms": 2010,
+          "ready_at": "2026-09-12T13:36:01.180Z",
+          "ready_at_ms": 1789220161180,
+          "available_span_ms": 29847
+        }
+      ],
+      "measured_available_span_ms": {
+        "count": 1,
+        "min": 29847,
+        "p50": 29847,
+        "p95": 29847,
+        "max": 29847,
+        "mean": 29847
+      },
+      "excluded_before_recorder_ms": {
+        "count": 1,
+        "min": 2010,
+        "p50": 2010,
+        "p95": 2010,
+        "max": 2010,
+        "mean": 2010
+      }
+    },
+    "measurement_window": {
+      "kind": "post-warmup-retained",
+      "requested_ms": 30000,
+      "launch_allowance_ms": 3000,
+      "observed_buffer_state": "unfilled",
+      "observed_displays": [
+        {
+          "display_id": "2678724301",
+          "buffer_state": "unfilled",
+          "measured_available_span_ms": 29847,
+          "expected_duration_ms": 29847
+        }
+      ]
+    },
+    "target_requested": "primary",
+    "target_resolved": "2678724301",
+    "replay_max_width": 1920,
+    "sample_interval_ms": 2000,
+    "workload": {
+      "fixture": "windows-replay-field-surface",
+      "fixture_schema_version": 1,
+      "movement_cycle_ms": 9000
+    },
+    "fixture_start_display_id": "2678724301"
+  },
+  "environment": {
+    "platform": "win32",
+    "node": "v24.13.1",
+    "electron": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\core\\node_modules\\electron\\dist\\electron.exe",
+    "build": {
+      "source_commit": "fb982677c96d6d365ea06bd1d1a2d430b09873dc",
+      "source_dirty": true,
+      "app_main_sha256": "a0669e1e49955cb9d36663c6c978b2a817d938d9877c900ad1beaef5efe6bccd",
+      "dxgi_helper_sha256": "fd529165f9e33a3d069adf2f0be82e85ae3db8420eea9efa88646d1205a81b6f"
+    },
+    "ffprobe_available": true,
+    "ffmpeg_available": true,
+    "layout": {
+      "schema": "capturepack.windows-replay-field-layout",
+      "version": 1,
+      "run_id": "20260912133556327-74416-15fps-shipping",
+      "target_title": "CapturePack QA Moving Target 20260912133556327-74416-15fps-shipping",
+      "observed_at": "2026-09-12T13:35:56.865Z",
+      "primary_display_id": "2678724301",
+      "cursor_display_id": "2678724301",
+      "movement_start_display_id": "2678724301",
+      "movement_display_order_ids": [
+        "2678724301",
+        "1275392340"
+      ],
+      "displays": [
+        {
+          "index": 1,
+          "id": "1275392340",
+          "label": "DELL U2412M",
+          "bounds_dip": {
+            "x": -1200,
+            "y": 0,
+            "width": 1200,
+            "height": 1920
+          },
+          "work_area_dip": {
+            "x": -1200,
+            "y": 0,
+            "width": 1200,
+            "height": 1872
+          },
+          "physical_bounds": {
+            "x": -1200,
+            "y": 0,
+            "width": 1200,
+            "height": 1920
+          },
+          "scale_factor": 1,
+          "rotation": 90,
+          "internal": false
+        },
+        {
+          "index": 2,
+          "id": "2678724301",
+          "label": "LG ULTRAGEAR+",
+          "bounds_dip": {
+            "x": 0,
+            "y": 0,
+            "width": 2560,
+            "height": 1440
+          },
+          "work_area_dip": {
+            "x": 0,
+            "y": 0,
+            "width": 2560,
+            "height": 1392
+          },
+          "physical_bounds": {
+            "x": 0,
+            "y": 0,
+            "width": 3840,
+            "height": 2160
+          },
+          "scale_factor": 1.5,
+          "rotation": 0,
+          "internal": false
+        }
+      ]
+    }
+  },
+  "artifacts": {
+    "root": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\shipping-3",
+    "pack": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\shipping-3\\packs\\CapturePack_2026-09-12_223631",
+    "report": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\shipping-3\\report.json",
+    "process_samples": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\shipping-3\\process-samples.jsonl",
+    "frame_pts": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\shipping-3\\frame-pts.json",
+    "fixture_layout": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\shipping-3\\fixture\\layout.json",
+    "fixture_movement": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\shipping-3\\fixture\\movement.jsonl",
+    "app_log": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\shipping-3\\app-data\\logs\\main.log"
+  },
+  "process_metrics": {
+    "sample_count": 3,
+    "sample_interval_ms": 2000,
+    "logical_processors": 16,
+    "cpu_total_capacity_percent": {
+      "mean": 2.358966856136922,
+      "p95": 2.5125815500715234,
+      "peak": 2.52964984939759
+    },
+    "cpu_one_core_percent": {
+      "mean": 37.74346969819075,
+      "p95": 40.201304801144374,
+      "peak": 40.47439759036144
+    },
+    "private_bytes": {
+      "count": 3,
+      "min": 801456128,
+      "p50": 807469056,
+      "p95": 811730534.4,
+      "max": 812204032,
+      "mean": 807043072,
+      "peak": 812204032
+    },
+    "working_set_bytes": {
+      "count": 3,
+      "min": 1104113664,
+      "p50": 1113571328,
+      "p95": 1116874342.4,
+      "max": 1117241344,
+      "mean": 1111642112,
+      "peak": 1117241344
+    },
+    "gpu": {
+      "counter": "\\GPU Engine(*)\\Utilization Percentage",
+      "basis": "sum of Windows per-process GPU Engine utilization counters in the app process tree",
+      "available_sample_count": 3,
+      "unavailable_sample_count": 0,
+      "errors": [],
+      "total_engine_percent": {
+        "count": 3,
+        "min": 3.1042250302387804,
+        "p50": 3.3397066439147594,
+        "p95": 5.33108820619592,
+        "max": 5.55235282422716,
+        "mean": 3.998761499460233
+      },
+      "video_encode_percent": {
+        "count": 3,
+        "min": 1.7764923210345203,
+        "p50": 2.039850446684114,
+        "p95": 3.974442796632663,
+        "max": 4.189397502182502,
+        "mean": 2.6685800899670453
+      },
+      "by_engine_percent": {
+        "3d": {
+          "count": 3,
+          "min": 1.0953999245057457,
+          "p50": 1.0954715320868007,
+          "p95": 1.151087116401229,
+          "max": 1.1572666257694988,
+          "mean": 1.1160460274540152
+        },
+        "copy": {
+          "count": 3,
+          "min": 0.2044562727248997,
+          "p50": 0.2056886962751599,
+          "p95": 0.22960392903322935,
+          "max": 0.2322611771174593,
+          "mean": 0.21413538203917296
+        },
+        "jpeg": {
+          "count": 3,
+          "min": 0,
+          "p50": 0,
+          "p95": 0,
+          "max": 0,
+          "mean": 0
+        },
+        "ofa": {
+          "count": 3,
+          "min": 0,
+          "p50": 0,
+          "p95": 0,
+          "max": 0,
+          "mean": 0
+        },
+        "security": {
+          "count": 3,
+          "min": 0,
+          "p50": 0,
+          "p95": 0,
+          "max": 0,
+          "mean": 0
+        },
+        "videodecode": {
+          "count": 3,
+          "min": 0,
+          "p50": 0,
+          "p95": 0,
+          "max": 0,
+          "mean": 0
+        },
+        "videoencode": {
+          "count": 3,
+          "min": 1.7764923210345203,
+          "p50": 2.039850446684114,
+          "p95": 3.974442796632663,
+          "max": 4.189397502182502,
+          "mean": 2.6685800899670453
+        },
+        "vr": {
+          "count": 3,
+          "min": 0,
+          "p50": 0,
+          "p95": 0,
+          "max": 0,
+          "mean": 0
+        }
+      }
+    },
+    "process_count": {
+      "min": 9,
+      "peak": 9
+    },
+    "raw": {
+      "process_sample_wall_time_ms": [
+        1789220164006,
+        1789220173966,
+        1789220182936
+      ],
+      "working_set_bytes": [
+        1104113664,
+        1113571328,
+        1117241344
+      ],
+      "private_bytes": [
+        801456128,
+        807469056,
+        812204032
+      ],
+      "cpu_intervals": [
+        {
+          "from_wall_time_ms": 1789220164006,
+          "to_wall_time_ms": 1789220173966,
+          "elapsed_seconds": 9.96,
+          "cpu_seconds": 4.03125,
+          "one_core_percent": 40.47439759036144,
+          "total_capacity_percent": 2.52964984939759
+        },
+        {
+          "from_wall_time_ms": 1789220173966,
+          "to_wall_time_ms": 1789220182936,
+          "elapsed_seconds": 8.97,
+          "cpu_seconds": 3.140625,
+          "one_core_percent": 35.01254180602007,
+          "total_capacity_percent": 2.188283862876254
+        }
+      ],
+      "gpu_samples": [
+        {
+          "wall_time_ms": 1789220164006,
+          "total_engine_percent": 3.3397066439147594,
+          "video_encode_percent": 2.039850446684114,
+          "by_engine_percent": {
+            "3d": 1.0953999245057457,
+            "vr": 0,
+            "videodecode": 0,
+            "copy": 0.2044562727248997,
+            "security": 0,
+            "videoencode": 2.039850446684114,
+            "ofa": 0,
+            "jpeg": 0
+          }
+        },
+        {
+          "wall_time_ms": 1789220173966,
+          "total_engine_percent": 3.1042250302387804,
+          "video_encode_percent": 1.7764923210345203,
+          "by_engine_percent": {
+            "3d": 1.0954715320868007,
+            "vr": 0,
+            "videodecode": 0,
+            "copy": 0.2322611771174593,
+            "security": 0,
+            "videoencode": 1.7764923210345203,
+            "ofa": 0,
+            "jpeg": 0
+          }
+        },
+        {
+          "wall_time_ms": 1789220182936,
+          "total_engine_percent": 5.55235282422716,
+          "video_encode_percent": 4.189397502182502,
+          "by_engine_percent": {
+            "3d": 1.1572666257694988,
+            "vr": 0,
+            "videodecode": 0,
+            "copy": 0.2056886962751599,
+            "security": 0,
+            "videoencode": 4.189397502182502,
+            "ofa": 0,
+            "jpeg": 0
+          }
+        }
+      ]
+    },
+    "js_heap": {
+      "status": "unavailable",
+      "reason": "the production app exposes no read-only runtime heap diagnostics endpoint"
+    },
+    "retained_chunks_and_bytes": {
+      "status": "measured",
+      "displays": [
+        {
+          "display_id": "2678724301",
+          "retained_fragments": 135,
+          "retained_bytes": 11745622,
+          "retained_duration_ms": 29089,
+          "selected_fragments": 135
+        }
+      ]
+    }
+  },
+  "process_metrics_startup_inclusive": {
+    "sample_count": 4,
+    "sample_interval_ms": 2000,
+    "logical_processors": 16,
+    "cpu_total_capacity_percent": {
+      "mean": 2.4546413659799153,
+      "p95": 2.6343563320390704,
+      "peak": 2.6459903856659017
+    },
+    "cpu_one_core_percent": {
+      "mean": 39.274261855678645,
+      "p95": 42.149701312625126,
+      "peak": 42.33584617065443
+    },
+    "private_bytes": {
+      "count": 4,
+      "min": 801456128,
+      "p50": 809836544,
+      "p95": 870165708.8,
+      "max": 880394240,
+      "mean": 825380864,
+      "peak": 880394240
+    },
+    "working_set_bytes": {
+      "count": 4,
+      "min": 1104113664,
+      "p50": 1115406336,
+      "p95": 1170297446.4,
+      "max": 1179660288,
+      "mean": 1128646656,
+      "peak": 1179660288
+    },
+    "gpu": {
+      "counter": "\\GPU Engine(*)\\Utilization Percentage",
+      "basis": "sum of Windows per-process GPU Engine utilization counters in the app process tree",
+      "available_sample_count": 4,
+      "unavailable_sample_count": 0,
+      "errors": [],
+      "total_engine_percent": {
+        "count": 4,
+        "min": 3.1042250302387804,
+        "p50": 4.44602973407096,
+        "p95": 24.00756913410396,
+        "max": 27.264372012317523,
+        "mean": 9.815164127674556
+      },
+      "video_encode_percent": {
+        "count": 4,
+        "min": 1.1722560136639968,
+        "p50": 1.908171383859317,
+        "p95": 3.866965443857743,
+        "max": 4.189397502182502,
+        "mean": 2.294499070891283
+      },
+      "by_engine_percent": {
+        "3d": {
+          "count": 4,
+          "min": 1.0953999245057457,
+          "p50": 1.1263690789281497,
+          "p95": 1.9725729720563332,
+          "max": 2.1164505625775396,
+          "mean": 1.3661471612348963
+        },
+        "copy": {
+          "count": 4,
+          "min": 0.2044562727248997,
+          "p50": 0.2189749366963096,
+          "p95": 0.6999572424835256,
+          "max": 0.7824918422540081,
+          "mean": 0.35622449709288173
+        },
+        "jpeg": {
+          "count": 4,
+          "min": 0,
+          "p50": 0,
+          "p95": 0,
+          "max": 0,
+          "mean": 0
+        },
+        "ofa": {
+          "count": 4,
+          "min": 0,
+          "p50": 0,
+          "p95": 0,
+          "max": 0,
+          "mean": 0
+        },
+        "security": {
+          "count": 4,
+          "min": 0,
+          "p50": 0,
+          "p95": 0,
+          "max": 0,
+          "mean": 0
+        },
+        "videodecode": {
+          "count": 4,
+          "min": 0,
+          "p50": 0,
+          "p95": 19.714197554748676,
+          "max": 23.19317359382198,
+          "mean": 5.798293398455495
+        },
+        "videoencode": {
+          "count": 4,
+          "min": 1.1722560136639968,
+          "p50": 1.908171383859317,
+          "p95": 3.866965443857743,
+          "max": 4.189397502182502,
+          "mean": 2.294499070891283
+        },
+        "vr": {
+          "count": 4,
+          "min": 0,
+          "p50": 0,
+          "p95": 0,
+          "max": 0,
+          "mean": 0
+        }
+      }
+    },
+    "process_count": {
+      "min": 9,
+      "peak": 9
+    },
+    "raw": {
+      "process_sample_wall_time_ms": [
+        1789220164006,
+        1789220173966,
+        1789220182936,
+        1789220192089
+      ],
+      "working_set_bytes": [
+        1104113664,
+        1113571328,
+        1117241344,
+        1179660288
+      ],
+      "private_bytes": [
+        801456128,
+        807469056,
+        812204032,
+        880394240
+      ],
+      "cpu_intervals": [
+        {
+          "from_wall_time_ms": 1789220164006,
+          "to_wall_time_ms": 1789220173966,
+          "elapsed_seconds": 9.96,
+          "cpu_seconds": 4.03125,
+          "one_core_percent": 40.47439759036144,
+          "total_capacity_percent": 2.52964984939759
+        },
+        {
+          "from_wall_time_ms": 1789220173966,
+          "to_wall_time_ms": 1789220182936,
+          "elapsed_seconds": 8.97,
+          "cpu_seconds": 3.140625,
+          "one_core_percent": 35.01254180602007,
+          "total_capacity_percent": 2.188283862876254
+        },
+        {
+          "from_wall_time_ms": 1789220182936,
+          "to_wall_time_ms": 1789220192089,
+          "elapsed_seconds": 9.153,
+          "cpu_seconds": 3.875,
+          "one_core_percent": 42.33584617065443,
+          "total_capacity_percent": 2.6459903856659017
+        }
+      ],
+      "gpu_samples": [
+        {
+          "wall_time_ms": 1789220164006,
+          "total_engine_percent": 3.3397066439147594,
+          "video_encode_percent": 2.039850446684114,
+          "by_engine_percent": {
+            "3d": 1.0953999245057457,
+            "vr": 0,
+            "videodecode": 0,
+            "copy": 0.2044562727248997,
+            "security": 0,
+            "videoencode": 2.039850446684114,
+            "ofa": 0,
+            "jpeg": 0
+          }
+        },
+        {
+          "wall_time_ms": 1789220173966,
+          "total_engine_percent": 3.1042250302387804,
+          "video_encode_percent": 1.7764923210345203,
+          "by_engine_percent": {
+            "3d": 1.0954715320868007,
+            "vr": 0,
+            "videodecode": 0,
+            "copy": 0.2322611771174593,
+            "security": 0,
+            "videoencode": 1.7764923210345203,
+            "ofa": 0,
+            "jpeg": 0
+          }
+        },
+        {
+          "wall_time_ms": 1789220182936,
+          "total_engine_percent": 5.55235282422716,
+          "video_encode_percent": 4.189397502182502,
+          "by_engine_percent": {
+            "3d": 1.1572666257694988,
+            "vr": 0,
+            "videodecode": 0,
+            "copy": 0.2056886962751599,
+            "security": 0,
+            "videoencode": 4.189397502182502,
+            "ofa": 0,
+            "jpeg": 0
+          }
+        },
+        {
+          "wall_time_ms": 1789220192089,
+          "total_engine_percent": 27.264372012317523,
+          "video_encode_percent": 1.1722560136639968,
+          "by_engine_percent": {
+            "3d": 2.1164505625775396,
+            "vr": 0,
+            "videodecode": 23.19317359382198,
+            "copy": 0.7824918422540081,
+            "security": 0,
+            "videoencode": 1.1722560136639968,
+            "ofa": 0,
+            "jpeg": 0
+          }
+        }
+      ]
+    },
+    "js_heap": {
+      "status": "unavailable",
+      "reason": "the production app exposes no read-only runtime heap diagnostics endpoint"
+    },
+    "retained_chunks_and_bytes": {
+      "status": "unavailable",
+      "reason": "the production app exposes no field diagnostics endpoint for recorder ring internals"
+    }
+  },
+  "performance": {
+    "requested_backend": "shipping",
+    "native_ready": [],
+    "native_snapshots": [],
+    "replay_ready": [
+      {
+        "display_id": "2678724301",
+        "mime_type": "video/mp4;codecs=avc1",
+        "replay_file": "replay.mp4",
+        "width": 1920,
+        "height": 1080,
+        "at": "2026-09-12T13:36:01.180Z",
+        "at_ms": 1789220161180
+      }
+    ],
+    "capture_latency": {
+      "at": "2026-09-12T13:36:33.968Z",
+      "frozen_ms": 2070,
+      "saved_ms": 2313,
+      "editor_visible_ms": 2939,
+      "hands_off_ms": 2939,
+      "refused": null,
+      "raw": "frozen 2070 ms, saved 2313 ms, editor-visible 2939 ms; hands-off 2939 ms"
+    },
+    "capture_to_saved_ms": 2313,
+    "replay_export_ms": 0,
+    "measurement_window": {
+      "start_at": "2026-09-12T13:36:01.180Z",
+      "start_ms": 1789220161180,
+      "end_at": "2026-09-12T13:36:31.027Z",
+      "end_ms": 1789220191027,
+      "basis": "latest production shipping recorder readiness through capture request",
+      "sample_count": 3,
+      "raw_samples": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\shipping-3\\process-samples.jsonl"
+    },
+    "observed_backend": "shipping",
+    "backend_evidence": {
+      "expected_display_count": 1,
+      "native_ready_display_count": 0,
+      "native_snapshot_display_count": 0,
+      "native_production_fmp4_valid": false,
+      "native_timing_valid": true,
+      "shipping_replay_ready_count": 1
+    },
+    "evidence_complete": true
+  },
+  "recorder_runtime": {
+    "ready_displays": [
+      {
+        "display_id": "2678724301",
+        "mime_type": "video/mp4;codecs=avc1",
+        "replay_file": "replay.mp4",
+        "width": 1920,
+        "height": 1080
+      }
+    ],
+    "ready_display_count": 1,
+    "cadence_log": [
+      {
+        "display_id": "2",
+        "achieved_fps": 14.2,
+        "requested_fps": 15,
+        "worst_stall_ms": 106,
+        "discarded_frames": 0
+      }
+    ],
+    "ring_diagnostics": {
+      "measured": true,
+      "displays": [
+        {
+          "display_id": "2678724301",
+          "retained_fragments": 135,
+          "retained_bytes": 11745622,
+          "retained_duration_ms": 29089,
+          "selected_fragments": 135
+        }
+      ]
+    },
+    "failures": [],
+    "recorder_count": {
+      "measured": true,
+      "per_display": [
+        {
+          "display": 2,
+          "recorder_count": 1
+        }
+      ],
+      "basis": "persisted recorder self-report"
+    },
+    "capture_backend": {
+      "measured": true,
+      "value": [
+        "chromium-desktop-capture"
+      ],
+      "basis": "persisted manifest cadence/backend declaration"
+    },
+    "release_backend": {
+      "requested": "shipping",
+      "observed": "shipping",
+      "pass": true,
+      "basis": "production native READY/snapshot selection logs plus persisted media validation"
+    }
+  },
+  "native_lifecycle": null,
+  "media": [
+    {
+      "display": 2,
+      "fixture_display_index": 2,
+      "fixture_display_id": "2678724301",
+      "file": "replay.mp4",
+      "absolute_path": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\shipping-3\\packs\\CapturePack_2026-09-12_223631\\replay.mp4",
+      "present": true,
+      "bytes": 11745622,
+      "codec": "h264",
+      "size": {
+        "width": 1920,
+        "height": 1080
+      },
+      "requested_fps": 15,
+      "frame_count": 424,
+      "decoded_frame_hash_count": 424,
+      "unique_decoded_frame_hashes": 421,
+      "changed_decoded_frame_pairs": 420,
+      "decoded_frame_change_ratio": 0.9929078014184397,
+      "achieved_fps": 14.178295857996892,
+      "max_pts_gap_ms": 287.6,
+      "max_pts_gap_start_ms": 209.93300000000002,
+      "max_pts_gap_end_ms": 497.533,
+      "max_pts_gap_is_startup": true,
+      "max_pts_gap_after_first_1s_ms": 140.99999999999636,
+      "max_pts_gap_after_first_1s_start_ms": 28628.067000000003,
+      "max_pts_gap_after_first_1s_end_ms": 28769.067,
+      "pts_gap_ms": {
+        "count": 423,
+        "min": 51.400000000000546,
+        "p50": 67.13299999999799,
+        "p95": 82.18030000000078,
+        "max": 287.6,
+        "mean": 70.53033806146573
+      },
+      "nominal_frame_interval_ms": 66.66666666666667,
+      "duration_ms": 29900.932999999997,
+      "probe_ok": true,
+      "full_decode_ok": true,
+      "full_decode_timed_out": false,
+      "production_fmp4_validation": {
+        "status": "not-required"
+      },
+      "manifest_cadence": {
+        "status": "declared",
+        "achieved_fps": 14.2,
+        "worst_stall_ms": 106,
+        "discarded_frames": 0,
+        "requested_fps": 15,
+        "backend": "chromium-desktop-capture",
+        "quality": "full",
+        "recorder_count": 1,
+        "achieved_difference_fps": -0.021704142003107663,
+        "achieved_difference_percent": -0.15284607044442017
+      },
+      "runtime_cadence": {
+        "status": "logged",
+        "display_id": "2",
+        "achieved_fps": 14.2,
+        "requested_fps": 15,
+        "worst_stall_ms": 106,
+        "discarded_frames": 0,
+        "achieved_difference_fps": -0.021704142003107663,
+        "achieved_difference_percent": -0.15284607044442017
+      },
+      "duration_expectation": {
+        "buffer_state": "unfilled",
+        "requested_retention_ms": 30000,
+        "measured_available_span_ms": 29847,
+        "expected_duration_ms": 29847,
+        "actual_duration_ms": 29900.932999999997,
+        "duration_within_requested_window": true,
+        "fills_requested_window": true,
+        "matches_expected_duration": true,
+        "fill_tolerance_ms": 600,
+        "pass": true,
+        "basis": "min(requested retention, timestamped recorder-ready to capture-request span)",
+        "recorder_ready_at": "2026-09-12T13:36:01.180Z",
+        "capture_requested_at": "2026-09-12T13:36:31.027Z"
+      },
+      "criteria": {
+        "fps_within_20_percent": true,
+        "max_gap_within_three_intervals": false,
+        "steady_state_max_gap_within_three_intervals": true,
+        "moving_fixture_pixels_change": true,
+        "duration_within_requested_window": true,
+        "duration_fills_requested_window": true,
+        "duration_matches_expected_window": true,
+        "duration_buffer_state": "unfilled",
+        "duration_verdict_pass": true,
+        "duration_fill_tolerance_ms": 600,
+        "manifest_cadence_present": true,
+        "manifest_not_contradictory": true,
+        "runtime_cadence_not_contradictory": true
+      },
+      "error": null
+    }
+  ],
+  "past_sampling": {
+    "status": "loaded",
+    "pass": false,
+    "timeline_file": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\shipping-3\\packs\\CapturePack_2026-09-12_223631\\plugins\\windows-context\\timeline.json",
+    "timeline_origin": "2026-09-12T13:36:01.454Z",
+    "range": {
+      "start_ms": 0,
+      "end_ms": 29901
+    },
+    "observation_count": 1252,
+    "target_sample_count": 691,
+    "query_count": 5,
+    "covered_query_count": 2,
+    "no_interpolation": true,
+    "actual_object_pick": {
+      "pass": false,
+      "query_count": 5,
+      "successful_query_count": 2,
+      "attempted_point_count": 15,
+      "successful_point_count": 5,
+      "basis": "production ObjectIndex.pick at the center and four inset corners of decoded replay target pixels"
+    },
+    "reopen_identical": true,
+    "queries": [
+      {
+        "requested_t_ms": 2990,
+        "materialized_t_ms": 2985,
+        "error_ms": 5,
+        "coverage": "covered",
+        "exact": false,
+        "interpolated": false,
+        "observed_windows": [],
+        "candidates": [],
+        "picks": [],
+        "nearest_sample_unchanged": true,
+        "display_queries": [
+          {
+            "display": 2,
+            "replay_clock_offset_ms": 0,
+            "requested_pack_t_ms": 2990,
+            "presented_media_t_ms": 2990,
+            "materialized_pack_t_ms": 2985,
+            "error_ms": 5,
+            "coverage": "covered",
+            "observed_windows": [],
+            "candidates": [],
+            "picks": [],
+            "nearest_sample_unchanged": true,
+            "nearest_encoded_frame_pts_ms": 2988.533,
+            "signed_frame_distance_ms": -1.4670000000000982,
+            "absolute_frame_distance_ms": 1.4670000000000982
+          }
+        ],
+        "visual_pick_expected_count": 0,
+        "visual_pick_source": "five points inside decoded replay target pixels at the requested pack time",
+        "expected_presence_matches": true,
+        "expected_movement_sample_delta_ms": 9,
+        "visual_ground_truth": [
+          {
+            "display": 2,
+            "context_t_ms": 2990,
+            "media_t_ms": 2990,
+            "nearest_frame_pts_ms": 2988.533,
+            "signed_frame_distance_ms": -1.4670000000000982,
+            "absolute_frame_distance_ms": 1.4670000000000982,
+            "bounds": null,
+            "mask_pixels": 63,
+            "matched_pixels": 210,
+            "component_count": 29,
+            "decode_error": null
+          }
+        ],
+        "geometry_alignment_diagnostics": [
+          {
+            "display": 2,
+            "context_match": {
+              "status": "absent",
+              "context_t_ms": null,
+              "bounds": null,
+              "edge_error_px": null,
+              "nominal_context_t_ms": 2988.533,
+              "search_radius_ms": 1000,
+              "candidate_count": 0
+            },
+            "source_latency": {
+              "status": "absent",
+              "source_latency_ms": null,
+              "absolute_latency_ms": null,
+              "sign": "unknown",
+              "uncertainty_ms": null,
+              "confidence": "none",
+              "confidence_score": 0,
+              "encoded_frame_nominal_wall_time_ms": 1789220164442.533,
+              "inferred_pixel_wall_time_ms": null,
+              "reason": "decoded replay target is absent on this display"
+            }
+          }
+        ],
+        "coordinate_comparisons": [],
+        "encoded_frame_distance": []
+      },
+      {
+        "requested_t_ms": 8970,
+        "materialized_t_ms": 8979,
+        "error_ms": 9,
+        "coverage": "covered",
+        "exact": false,
+        "interpolated": false,
+        "observed_windows": [
+          {
+            "t_ms": 8979,
+            "display": 2,
+            "bounds": {
+              "x": 581,
+              "y": 1089,
+              "width": 629,
+              "height": 360
+            }
+          }
+        ],
+        "candidates": [
+          {
+            "provider_id": "core",
+            "surface_id": "s10027414.3",
+            "authority": "window",
+            "name": "CapturePack QA Moving Target 20260912133556327-74416-15fps-shipping",
+            "display": 2,
+            "bounds": {
+              "x": 581,
+              "y": 1089,
+              "width": 629,
+              "height": 360
+            },
+            "coverage": "covered",
+            "error_ms": 9
+          }
+        ],
+        "picks": [
+          {
+            "display": 2,
+            "point": {
+              "x": 1366,
+              "y": 1236
+            },
+            "label": "decoded-center",
+            "picked": {
+              "provider_id": "core",
+              "surface_id": "s16128436.19",
+              "authority": "window",
+              "level": "window",
+              "name": "OpenHands/OpenHands at sobonix.com - Chrome",
+              "surface_title": "OpenHands/OpenHands at sobonix.com - Chrome",
+              "bounds": {
+                "x": 903,
+                "y": 301,
+                "width": 1794,
+                "height": 1405
+              }
+            },
+            "picked_target": false
+          },
+          {
+            "display": 2,
+            "point": {
+              "x": 1064,
+              "y": 1068
+            },
+            "label": "decoded-top-left-inset",
+            "picked": {
+              "provider_id": "core",
+              "surface_id": "s16128436.19",
+              "authority": "window",
+              "level": "window",
+              "name": "OpenHands/OpenHands at sobonix.com - Chrome",
+              "surface_title": "OpenHands/OpenHands at sobonix.com - Chrome",
+              "bounds": {
+                "x": 903,
+                "y": 301,
+                "width": 1794,
+                "height": 1405
+              }
+            },
+            "picked_target": false
+          },
+          {
+            "display": 2,
+            "point": {
+              "x": 1668,
+              "y": 1068
+            },
+            "label": "decoded-top-right-inset",
+            "picked": {
+              "provider_id": "core",
+              "surface_id": "s16128436.19",
+              "authority": "window",
+              "level": "window",
+              "name": "OpenHands/OpenHands at sobonix.com - Chrome",
+              "surface_title": "OpenHands/OpenHands at sobonix.com - Chrome",
+              "bounds": {
+                "x": 903,
+                "y": 301,
+                "width": 1794,
+                "height": 1405
+              }
+            },
+            "picked_target": false
+          },
+          {
+            "display": 2,
+            "point": {
+              "x": 1064,
+              "y": 1404
+            },
+            "label": "decoded-bottom-left-inset",
+            "picked": {
+              "provider_id": "core",
+              "surface_id": "s10027414.3",
+              "authority": "window",
+              "level": "window",
+              "name": "CapturePack QA Moving Target 20260912133556327-74416-15fps-shipping",
+              "surface_title": "CapturePack QA Moving Target 20260912133556327-74416-15fps-shipping",
+              "bounds": {
+                "x": 581,
+                "y": 1089,
+                "width": 629,
+                "height": 360
+              }
+            },
+            "picked_target": true
+          },
+          {
+            "display": 2,
+            "point": {
+              "x": 1668,
+              "y": 1404
+            },
+            "label": "decoded-bottom-right-inset",
+            "picked": {
+              "provider_id": "core",
+              "surface_id": "s16128436.19",
+              "authority": "window",
+              "level": "window",
+              "name": "OpenHands/OpenHands at sobonix.com - Chrome",
+              "surface_title": "OpenHands/OpenHands at sobonix.com - Chrome",
+              "bounds": {
+                "x": 903,
+                "y": 301,
+                "width": 1794,
+                "height": 1405
+              }
+            },
+            "picked_target": false
+          }
+        ],
+        "nearest_sample_unchanged": true,
+        "display_queries": [
+          {
+            "display": 2,
+            "replay_clock_offset_ms": 0,
+            "requested_pack_t_ms": 8970,
+            "presented_media_t_ms": 8970,
+            "materialized_pack_t_ms": 8979,
+            "error_ms": 9,
+            "coverage": "covered",
+            "observed_windows": [
+              {
+                "t_ms": 8979,
+                "display": 2,
+                "bounds": {
+                  "x": 581,
+                  "y": 1089,
+                  "width": 629,
+                  "height": 360
+                }
+              }
+            ],
+            "candidates": [
+              {
+                "provider_id": "core",
+                "surface_id": "s10027414.3",
+                "authority": "window",
+                "name": "CapturePack QA Moving Target 20260912133556327-74416-15fps-shipping",
+                "display": 2,
+                "bounds": {
+                  "x": 581,
+                  "y": 1089,
+                  "width": 629,
+                  "height": 360
+                },
+                "coverage": "covered",
+                "error_ms": 9
+              }
+            ],
+            "picks": [
+              {
+                "display": 2,
+                "point": {
+                  "x": 895.5,
+                  "y": 1269
+                },
+                "label": "observed-center",
+                "picked": {
+                  "provider_id": "core",
+                  "surface_id": "s10027414.3",
+                  "authority": "window",
+                  "level": "window",
+                  "name": "CapturePack QA Moving Target 20260912133556327-74416-15fps-shipping",
+                  "surface_title": "CapturePack QA Moving Target 20260912133556327-74416-15fps-shipping",
+                  "bounds": {
+                    "x": 581,
+                    "y": 1089,
+                    "width": 629,
+                    "height": 360
+                  }
+                },
+                "picked_target": true
+              }
+            ],
+            "nearest_sample_unchanged": true,
+            "nearest_encoded_frame_pts_ms": 8932.667,
+            "signed_frame_distance_ms": -37.33300000000054,
+            "absolute_frame_distance_ms": 37.33300000000054
+          }
+        ],
+        "visual_pick_expected_count": 5,
+        "visual_pick_source": "five points inside decoded replay target pixels at the requested pack time",
+        "expected_presence_matches": true,
+        "expected_movement_sample_delta_ms": 2,
+        "visual_ground_truth": [
+          {
+            "display": 2,
+            "context_t_ms": 8970,
+            "media_t_ms": 8970,
+            "nearest_frame_pts_ms": 8932.667,
+            "signed_frame_distance_ms": -37.33300000000054,
+            "absolute_frame_distance_ms": 37.33300000000054,
+            "bounds": {
+              "x": 1052,
+              "y": 1056,
+              "width": 628,
+              "height": 360
+            },
+            "mask_pixels": 51783,
+            "matched_pixels": 53841,
+            "component_count": 151,
+            "decode_error": null
+          }
+        ],
+        "geometry_alignment_diagnostics": [
+          {
+            "display": 2,
+            "context_match": {
+              "status": "measured",
+              "context_t_ms": 8821,
+              "bounds": {
+                "x": 1052,
+                "y": 1055,
+                "width": 629,
+                "height": 360
+              },
+              "edge_error_px": 2,
+              "nominal_context_t_ms": 8932.667,
+              "search_radius_ms": 1000,
+              "candidate_count": 52
+            },
+            "source_latency": {
+              "status": "measured",
+              "source_latency_ms": 111.66699999999946,
+              "absolute_latency_ms": 111.66699999999946,
+              "sign": "source_pixels_older_than_encoded_pts",
+              "uncertainty_ms": 66.66666666666667,
+              "confidence": "high",
+              "confidence_score": 0.875,
+              "encoded_frame_nominal_wall_time_ms": 1789220170386.667,
+              "inferred_pixel_wall_time_ms": 1789220170275,
+              "reason": null
+            }
+          }
+        ],
+        "coordinate_comparisons": [
+          {
+            "display": 2,
+            "observed_bounds": {
+              "x": 581,
+              "y": 1089,
+              "width": 629,
+              "height": 360
+            },
+            "observed_context_t_ms": 8979,
+            "expected_bounds": {
+              "x": 1052,
+              "y": 1056,
+              "width": 628,
+              "height": 360
+            },
+            "expected_frame_pts_ms": 8932.667,
+            "expected_mask_pixels": 51783,
+            "edge_error_px": 505,
+            "temporal_lag": {
+              "status": "measured",
+              "signed_lag_ms": -118,
+              "absolute_lag_ms": 118,
+              "sign": "replay_pixels_older_than_context",
+              "uncertainty_ms": 30,
+              "confidence": "medium",
+              "confidence_score": 0.6875,
+              "observed_context_t_ms": 8979,
+              "nominal_wall_time_ms": 1789220170433,
+              "search_radius_ms": 1000,
+              "pixel_match": {
+                "status": "measured",
+                "inferred_wall_time_ms": 1789220169995,
+                "uncertainty_ms": 15,
+                "confidence": "medium",
+                "confidence_score": 0.6875,
+                "reason": null,
+                "candidate_count": 33,
+                "movement_cadence_ms": 30,
+                "motion_extent_px": 4256,
+                "best_edge_error_px": 5,
+                "near_best_cluster_count": 1,
+                "competing_cluster_count": 0,
+                "matched_interval": {
+                  "start_ms": 1789220169995,
+                  "end_ms": 1789220169995
+                }
+              },
+              "context_match": {
+                "status": "measured",
+                "inferred_wall_time_ms": 1789220170113,
+                "uncertainty_ms": 15,
+                "confidence": "high",
+                "confidence_score": 0.875,
+                "reason": null,
+                "candidate_count": 33,
+                "movement_cadence_ms": 30,
+                "motion_extent_px": 4256,
+                "best_edge_error_px": 2,
+                "near_best_cluster_count": 1,
+                "competing_cluster_count": 0,
+                "matched_interval": {
+                  "start_ms": 1789220170113,
+                  "end_ms": 1789220170113
+                }
+              }
+            },
+            "source_latency": {
+              "status": "measured",
+              "source_latency_ms": 391.6669921875,
+              "absolute_latency_ms": 391.6669921875,
+              "sign": "source_pixels_older_than_encoded_pts",
+              "uncertainty_ms": 15,
+              "confidence": "medium",
+              "confidence_score": 0.6875,
+              "encoded_frame_nominal_wall_time_ms": 1789220170386.667,
+              "inferred_pixel_wall_time_ms": 1789220169995,
+              "reason": null
+            }
+          }
+        ],
+        "encoded_frame_distance": [
+          {
+            "display": 2,
+            "context_t_ms": 8979,
+            "media_t_ms": 8979,
+            "nearest_frame_pts_ms": 8932.667,
+            "signed_distance_ms": -46.33300000000054,
+            "absolute_distance_ms": 46.33300000000054
+          }
+        ]
+      },
+      {
+        "requested_t_ms": 14951,
+        "materialized_t_ms": 14932,
+        "error_ms": 19,
+        "coverage": "covered",
+        "exact": false,
+        "interpolated": false,
+        "observed_windows": [
+          {
+            "t_ms": 14932,
+            "display": 2,
+            "bounds": {
+              "x": 932,
+              "y": 1592,
+              "width": 629,
+              "height": 360
+            }
+          }
+        ],
+        "candidates": [
+          {
+            "provider_id": "core",
+            "surface_id": "s10027414.3",
+            "authority": "window",
+            "name": "CapturePack QA Moving Target 20260912133556327-74416-15fps-shipping",
+            "display": 2,
+            "bounds": {
+              "x": 932,
+              "y": 1592,
+              "width": 629,
+              "height": 360
+            },
+            "coverage": "covered",
+            "error_ms": 19
+          }
+        ],
+        "picks": [
+          {
+            "display": 2,
+            "point": {
+              "x": 1132,
+              "y": 1786
+            },
+            "label": "decoded-center",
+            "picked": {
+              "provider_id": "core",
+              "surface_id": "s10027414.3",
+              "authority": "window",
+              "level": "window",
+              "name": "CapturePack QA Moving Target 20260912133556327-74416-15fps-shipping",
+              "surface_title": "CapturePack QA Moving Target 20260912133556327-74416-15fps-shipping",
+              "bounds": {
+                "x": 932,
+                "y": 1592,
+                "width": 629,
+                "height": 360
+              }
+            },
+            "picked_target": true
+          },
+          {
+            "display": 2,
+            "point": {
+              "x": 828,
+              "y": 1620
+            },
+            "label": "decoded-top-left-inset",
+            "picked": {
+              "provider_id": "core",
+              "surface_id": "s20842378.6",
+              "authority": "window",
+              "level": "window",
+              "name": "ChatGPT",
+              "surface_title": "ChatGPT",
+              "bounds": {
+                "x": 559,
+                "y": 130,
+                "width": 1944,
+                "height": 1716
+              }
+            },
+            "picked_target": false
+          },
+          {
+            "display": 2,
+            "point": {
+              "x": 1436,
+              "y": 1620
+            },
+            "label": "decoded-top-right-inset",
+            "picked": {
+              "provider_id": "core",
+              "surface_id": "s10027414.3",
+              "authority": "window",
+              "level": "window",
+              "name": "CapturePack QA Moving Target 20260912133556327-74416-15fps-shipping",
+              "surface_title": "CapturePack QA Moving Target 20260912133556327-74416-15fps-shipping",
+              "bounds": {
+                "x": 932,
+                "y": 1592,
+                "width": 629,
+                "height": 360
+              }
+            },
+            "picked_target": true
+          },
+          {
+            "display": 2,
+            "point": {
+              "x": 828,
+              "y": 1952
+            },
+            "label": "decoded-bottom-left-inset",
+            "picked": {
+              "provider_id": "core",
+              "surface_id": "s128123590.8",
+              "authority": "window",
+              "level": "window",
+              "name": "CapturePack QA Surface 2",
+              "surface_title": "CapturePack QA Surface 2",
+              "bounds": {
+                "x": 0,
+                "y": 0,
+                "width": 3840,
+                "height": 2091
+              }
+            },
+            "picked_target": false
+          },
+          {
+            "display": 2,
+            "point": {
+              "x": 1436,
+              "y": 1952
+            },
+            "label": "decoded-bottom-right-inset",
+            "picked": {
+              "provider_id": "core",
+              "surface_id": "s10027414.3",
+              "authority": "window",
+              "level": "window",
+              "name": "CapturePack QA Moving Target 20260912133556327-74416-15fps-shipping",
+              "surface_title": "CapturePack QA Moving Target 20260912133556327-74416-15fps-shipping",
+              "bounds": {
+                "x": 932,
+                "y": 1592,
+                "width": 629,
+                "height": 360
+              }
+            },
+            "picked_target": true
+          }
+        ],
+        "nearest_sample_unchanged": true,
+        "display_queries": [
+          {
+            "display": 2,
+            "replay_clock_offset_ms": 0,
+            "requested_pack_t_ms": 14951,
+            "presented_media_t_ms": 14951,
+            "materialized_pack_t_ms": 14932,
+            "error_ms": 19,
+            "coverage": "covered",
+            "observed_windows": [
+              {
+                "t_ms": 14932,
+                "display": 2,
+                "bounds": {
+                  "x": 932,
+                  "y": 1592,
+                  "width": 629,
+                  "height": 360
+                }
+              }
+            ],
+            "candidates": [
+              {
+                "provider_id": "core",
+                "surface_id": "s10027414.3",
+                "authority": "window",
+                "name": "CapturePack QA Moving Target 20260912133556327-74416-15fps-shipping",
+                "display": 2,
+                "bounds": {
+                  "x": 932,
+                  "y": 1592,
+                  "width": 629,
+                  "height": 360
+                },
+                "coverage": "covered",
+                "error_ms": 19
+              }
+            ],
+            "picks": [
+              {
+                "display": 2,
+                "point": {
+                  "x": 1246.5,
+                  "y": 1772
+                },
+                "label": "observed-center",
+                "picked": {
+                  "provider_id": "core",
+                  "surface_id": "s10027414.3",
+                  "authority": "window",
+                  "level": "window",
+                  "name": "CapturePack QA Moving Target 20260912133556327-74416-15fps-shipping",
+                  "surface_title": "CapturePack QA Moving Target 20260912133556327-74416-15fps-shipping",
+                  "bounds": {
+                    "x": 932,
+                    "y": 1592,
+                    "width": 629,
+                    "height": 360
+                  }
+                },
+                "picked_target": true
+              }
+            ],
+            "nearest_sample_unchanged": true,
+            "nearest_encoded_frame_pts_ms": 14982.6,
+            "signed_frame_distance_ms": 31.600000000000364,
+            "absolute_frame_distance_ms": 31.600000000000364
+          }
+        ],
+        "visual_pick_expected_count": 5,
+        "visual_pick_source": "five points inside decoded replay target pixels at the requested pack time",
+        "expected_presence_matches": true,
+        "expected_movement_sample_delta_ms": 4,
+        "visual_ground_truth": [
+          {
+            "display": 2,
+            "context_t_ms": 14951,
+            "media_t_ms": 14951,
+            "nearest_frame_pts_ms": 14982.6,
+            "signed_frame_distance_ms": 31.600000000000364,
+            "absolute_frame_distance_ms": 31.600000000000364,
+            "bounds": {
+              "x": 816,
+              "y": 1608,
+              "width": 632,
+              "height": 356
+            },
+            "mask_pixels": 51155,
+            "matched_pixels": 52480,
+            "component_count": 197,
+            "decode_error": null
+          }
+        ],
+        "geometry_alignment_diagnostics": [
+          {
+            "display": 2,
+            "context_match": {
+              "status": "measured",
+              "context_t_ms": 14820,
+              "bounds": {
+                "x": 818,
+                "y": 1605,
+                "width": 629,
+                "height": 360
+              },
+              "edge_error_px": 12,
+              "nominal_context_t_ms": 14982.6,
+              "search_radius_ms": 1000,
+              "candidate_count": 90
+            },
+            "source_latency": {
+              "status": "measured",
+              "source_latency_ms": 162.60000000000036,
+              "absolute_latency_ms": 162.60000000000036,
+              "sign": "source_pixels_older_than_encoded_pts",
+              "uncertainty_ms": 66.66666666666667,
+              "confidence": "medium",
+              "confidence_score": 0.25,
+              "encoded_frame_nominal_wall_time_ms": 1789220176436.6,
+              "inferred_pixel_wall_time_ms": 1789220176274,
+              "reason": null
+            }
+          }
+        ],
+        "coordinate_comparisons": [
+          {
+            "display": 2,
+            "observed_bounds": {
+              "x": 932,
+              "y": 1592,
+              "width": 629,
+              "height": 360
+            },
+            "observed_context_t_ms": 14932,
+            "expected_bounds": {
+              "x": 816,
+              "y": 1608,
+              "width": 632,
+              "height": 356
+            },
+            "expected_frame_pts_ms": 14982.6,
+            "expected_mask_pixels": 51155,
+            "edge_error_px": 139,
+            "temporal_lag": {
+              "status": "measured",
+              "signed_lag_ms": -123,
+              "absolute_lag_ms": 123,
+              "sign": "replay_pixels_older_than_context",
+              "uncertainty_ms": 30,
+              "confidence": "low",
+              "confidence_score": 0.375,
+              "observed_context_t_ms": 14932,
+              "nominal_wall_time_ms": 1789220176386,
+              "search_radius_ms": 1000,
+              "pixel_match": {
+                "status": "measured",
+                "inferred_wall_time_ms": 1789220176004,
+                "uncertainty_ms": 15,
+                "confidence": "low",
+                "confidence_score": 0.375,
+                "reason": null,
+                "candidate_count": 68,
+                "movement_cadence_ms": 30,
+                "motion_extent_px": 3222,
+                "best_edge_error_px": 10,
+                "near_best_cluster_count": 1,
+                "competing_cluster_count": 0,
+                "matched_interval": {
+                  "start_ms": 1789220176004,
+                  "end_ms": 1789220176004
+                }
+              },
+              "context_match": {
+                "status": "measured",
+                "inferred_wall_time_ms": 1789220176127,
+                "uncertainty_ms": 15,
+                "confidence": "high",
+                "confidence_score": 0.8125,
+                "reason": null,
+                "candidate_count": 68,
+                "movement_cadence_ms": 30,
+                "motion_extent_px": 3222,
+                "best_edge_error_px": 3,
+                "near_best_cluster_count": 1,
+                "competing_cluster_count": 0,
+                "matched_interval": {
+                  "start_ms": 1789220176127,
+                  "end_ms": 1789220176127
+                }
+              }
+            },
+            "source_latency": {
+              "status": "measured",
+              "source_latency_ms": 432.60009765625,
+              "absolute_latency_ms": 432.60009765625,
+              "sign": "source_pixels_older_than_encoded_pts",
+              "uncertainty_ms": 15,
+              "confidence": "low",
+              "confidence_score": 0.375,
+              "encoded_frame_nominal_wall_time_ms": 1789220176436.6,
+              "inferred_pixel_wall_time_ms": 1789220176004,
+              "reason": null
+            }
+          }
+        ],
+        "encoded_frame_distance": [
+          {
+            "display": 2,
+            "context_t_ms": 14932,
+            "media_t_ms": 14932,
+            "nearest_frame_pts_ms": 14911,
+            "signed_distance_ms": -21,
+            "absolute_distance_ms": 21
+          }
+        ]
+      },
+      {
+        "requested_t_ms": 20931,
+        "materialized_t_ms": 20933,
+        "error_ms": 2,
+        "coverage": "covered",
+        "exact": false,
+        "interpolated": false,
+        "observed_windows": [],
+        "candidates": [],
+        "picks": [],
+        "nearest_sample_unchanged": true,
+        "display_queries": [
+          {
+            "display": 2,
+            "replay_clock_offset_ms": 0,
+            "requested_pack_t_ms": 20931,
+            "presented_media_t_ms": 20931,
+            "materialized_pack_t_ms": 20933,
+            "error_ms": 2,
+            "coverage": "covered",
+            "observed_windows": [],
+            "candidates": [],
+            "picks": [],
+            "nearest_sample_unchanged": true,
+            "nearest_encoded_frame_pts_ms": 20951.132999999998,
+            "signed_frame_distance_ms": 20.132999999997992,
+            "absolute_frame_distance_ms": 20.132999999997992
+          }
+        ],
+        "visual_pick_expected_count": 0,
+        "visual_pick_source": "five points inside decoded replay target pixels at the requested pack time",
+        "expected_presence_matches": true,
+        "expected_movement_sample_delta_ms": 15,
+        "visual_ground_truth": [
+          {
+            "display": 2,
+            "context_t_ms": 20931,
+            "media_t_ms": 20931,
+            "nearest_frame_pts_ms": 20951.132999999998,
+            "signed_frame_distance_ms": 20.132999999997992,
+            "absolute_frame_distance_ms": 20.132999999997992,
+            "bounds": null,
+            "mask_pixels": 49,
+            "matched_pixels": 248,
+            "component_count": 37,
+            "decode_error": null
+          }
+        ],
+        "geometry_alignment_diagnostics": [
+          {
+            "display": 2,
+            "context_match": {
+              "status": "absent",
+              "context_t_ms": null,
+              "bounds": null,
+              "edge_error_px": null,
+              "nominal_context_t_ms": 20951.132999999998,
+              "search_radius_ms": 1000,
+              "candidate_count": 0
+            },
+            "source_latency": {
+              "status": "absent",
+              "source_latency_ms": null,
+              "absolute_latency_ms": null,
+              "sign": "unknown",
+              "uncertainty_ms": null,
+              "confidence": "none",
+              "confidence_score": 0,
+              "encoded_frame_nominal_wall_time_ms": 1789220182405.133,
+              "inferred_pixel_wall_time_ms": null,
+              "reason": "decoded replay target is absent on this display"
+            }
+          }
+        ],
+        "coordinate_comparisons": [],
+        "encoded_frame_distance": []
+      },
+      {
+        "requested_t_ms": 26911,
+        "materialized_t_ms": 26913,
+        "error_ms": 2,
+        "coverage": "covered",
+        "exact": false,
+        "interpolated": false,
+        "observed_windows": [
+          {
+            "t_ms": 26913,
+            "display": 2,
+            "bounds": {
+              "x": 667,
+              "y": 1083,
+              "width": 629,
+              "height": 360
+            }
+          }
+        ],
+        "candidates": [
+          {
+            "provider_id": "core",
+            "surface_id": "s10027414.3",
+            "authority": "window",
+            "name": "CapturePack QA Moving Target 20260912133556327-74416-15fps-shipping",
+            "display": 2,
+            "bounds": {
+              "x": 667,
+              "y": 1083,
+              "width": 629,
+              "height": 360
+            },
+            "coverage": "covered",
+            "error_ms": 2
+          }
+        ],
+        "picks": [
+          {
+            "display": 2,
+            "point": {
+              "x": 1567,
+              "y": 1220
+            },
+            "label": "decoded-center",
+            "picked": {
+              "provider_id": "core",
+              "surface_id": "s20842378.6",
+              "authority": "window",
+              "level": "window",
+              "name": "ChatGPT",
+              "surface_title": "ChatGPT",
+              "bounds": {
+                "x": 559,
+                "y": 130,
+                "width": 1944,
+                "height": 1716
+              }
+            },
+            "picked_target": false
+          },
+          {
+            "display": 2,
+            "point": {
+              "x": 1264,
+              "y": 1052
+            },
+            "label": "decoded-top-left-inset",
+            "picked": {
+              "provider_id": "core",
+              "surface_id": "s20842378.6",
+              "authority": "window",
+              "level": "window",
+              "name": "ChatGPT",
+              "surface_title": "ChatGPT",
+              "bounds": {
+                "x": 559,
+                "y": 130,
+                "width": 1944,
+                "height": 1716
+              }
+            },
+            "picked_target": false
+          },
+          {
+            "display": 2,
+            "point": {
+              "x": 1870,
+              "y": 1052
+            },
+            "label": "decoded-top-right-inset",
+            "picked": {
+              "provider_id": "core",
+              "surface_id": "s24517380.14",
+              "authority": "window",
+              "level": "window",
+              "name": "OpenHands - Chrome",
+              "surface_title": "OpenHands - Chrome",
+              "bounds": {
+                "x": 1682,
+                "y": 458,
+                "width": 1794,
+                "height": 1407
+              }
+            },
+            "picked_target": false
+          },
+          {
+            "display": 2,
+            "point": {
+              "x": 1264,
+              "y": 1388
+            },
+            "label": "decoded-bottom-left-inset",
+            "picked": {
+              "provider_id": "core",
+              "surface_id": "s10027414.3",
+              "authority": "window",
+              "level": "window",
+              "name": "CapturePack QA Moving Target 20260912133556327-74416-15fps-shipping",
+              "surface_title": "CapturePack QA Moving Target 20260912133556327-74416-15fps-shipping",
+              "bounds": {
+                "x": 667,
+                "y": 1083,
+                "width": 629,
+                "height": 360
+              }
+            },
+            "picked_target": true
+          },
+          {
+            "display": 2,
+            "point": {
+              "x": 1870,
+              "y": 1388
+            },
+            "label": "decoded-bottom-right-inset",
+            "picked": {
+              "provider_id": "core",
+              "surface_id": "s24517380.14",
+              "authority": "window",
+              "level": "window",
+              "name": "OpenHands - Chrome",
+              "surface_title": "OpenHands - Chrome",
+              "bounds": {
+                "x": 1682,
+                "y": 458,
+                "width": 1794,
+                "height": 1407
+              }
+            },
+            "picked_target": false
+          }
+        ],
+        "nearest_sample_unchanged": true,
+        "display_queries": [
+          {
+            "display": 2,
+            "replay_clock_offset_ms": 0,
+            "requested_pack_t_ms": 26911,
+            "presented_media_t_ms": 26911,
+            "materialized_pack_t_ms": 26913,
+            "error_ms": 2,
+            "coverage": "covered",
+            "observed_windows": [
+              {
+                "t_ms": 26913,
+                "display": 2,
+                "bounds": {
+                  "x": 667,
+                  "y": 1083,
+                  "width": 629,
+                  "height": 360
+                }
+              }
+            ],
+            "candidates": [
+              {
+                "provider_id": "core",
+                "surface_id": "s10027414.3",
+                "authority": "window",
+                "name": "CapturePack QA Moving Target 20260912133556327-74416-15fps-shipping",
+                "display": 2,
+                "bounds": {
+                  "x": 667,
+                  "y": 1083,
+                  "width": 629,
+                  "height": 360
+                },
+                "coverage": "covered",
+                "error_ms": 2
+              }
+            ],
+            "picks": [
+              {
+                "display": 2,
+                "point": {
+                  "x": 981.5,
+                  "y": 1263
+                },
+                "label": "observed-center",
+                "picked": {
+                  "provider_id": "core",
+                  "surface_id": "s10027414.3",
+                  "authority": "window",
+                  "level": "window",
+                  "name": "CapturePack QA Moving Target 20260912133556327-74416-15fps-shipping",
+                  "surface_title": "CapturePack QA Moving Target 20260912133556327-74416-15fps-shipping",
+                  "bounds": {
+                    "x": 667,
+                    "y": 1083,
+                    "width": 629,
+                    "height": 360
+                  }
+                },
+                "picked_target": true
+              }
+            ],
+            "nearest_sample_unchanged": true,
+            "nearest_encoded_frame_pts_ms": 26915.666999999998,
+            "signed_frame_distance_ms": 4.666999999997643,
+            "absolute_frame_distance_ms": 4.666999999997643
+          }
+        ],
+        "visual_pick_expected_count": 5,
+        "visual_pick_source": "five points inside decoded replay target pixels at the requested pack time",
+        "expected_presence_matches": true,
+        "expected_movement_sample_delta_ms": 3,
+        "visual_ground_truth": [
+          {
+            "display": 2,
+            "context_t_ms": 26911,
+            "media_t_ms": 26911,
+            "nearest_frame_pts_ms": 26915.666999999998,
+            "signed_frame_distance_ms": 4.666999999997643,
+            "absolute_frame_distance_ms": 4.666999999997643,
+            "bounds": {
+              "x": 1252,
+              "y": 1040,
+              "width": 630,
+              "height": 360
+            },
+            "mask_pixels": 51738,
+            "matched_pixels": 52178,
+            "component_count": 124,
+            "decode_error": null
+          }
+        ],
+        "geometry_alignment_diagnostics": [
+          {
+            "display": 2,
+            "context_match": {
+              "status": "measured",
+              "context_t_ms": 26762,
+              "bounds": {
+                "x": 1253,
+                "y": 1040,
+                "width": 629,
+                "height": 360
+              },
+              "edge_error_px": 2,
+              "nominal_context_t_ms": 26915.666999999998,
+              "search_radius_ms": 1000,
+              "candidate_count": 56
+            },
+            "source_latency": {
+              "status": "measured",
+              "source_latency_ms": 153.66699999999764,
+              "absolute_latency_ms": 153.66699999999764,
+              "sign": "source_pixels_older_than_encoded_pts",
+              "uncertainty_ms": 66.66666666666667,
+              "confidence": "high",
+              "confidence_score": 0.875,
+              "encoded_frame_nominal_wall_time_ms": 1789220188369.667,
+              "inferred_pixel_wall_time_ms": 1789220188216,
+              "reason": null
+            }
+          }
+        ],
+        "coordinate_comparisons": [
+          {
+            "display": 2,
+            "observed_bounds": {
+              "x": 667,
+              "y": 1083,
+              "width": 629,
+              "height": 360
+            },
+            "observed_context_t_ms": 26913,
+            "expected_bounds": {
+              "x": 1252,
+              "y": 1040,
+              "width": 630,
+              "height": 360
+            },
+            "expected_frame_pts_ms": 26915.666999999998,
+            "expected_mask_pixels": 51738,
+            "edge_error_px": 629,
+            "temporal_lag": {
+              "status": "measured",
+              "signed_lag_ms": -150,
+              "absolute_lag_ms": 150,
+              "sign": "replay_pixels_older_than_context",
+              "uncertainty_ms": 30,
+              "confidence": "high",
+              "confidence_score": 0.8125,
+              "observed_context_t_ms": 26913,
+              "nominal_wall_time_ms": 1789220188367,
+              "search_radius_ms": 1000,
+              "pixel_match": {
+                "status": "measured",
+                "inferred_wall_time_ms": 1789220187942,
+                "uncertainty_ms": 15,
+                "confidence": "high",
+                "confidence_score": 0.8125,
+                "reason": null,
+                "candidate_count": 37,
+                "movement_cadence_ms": 30,
+                "motion_extent_px": 4226,
+                "best_edge_error_px": 3,
+                "near_best_cluster_count": 1,
+                "competing_cluster_count": 0,
+                "matched_interval": {
+                  "start_ms": 1789220187942,
+                  "end_ms": 1789220187942
+                }
+              },
+              "context_match": {
+                "status": "measured",
+                "inferred_wall_time_ms": 1789220188092,
+                "uncertainty_ms": 15,
+                "confidence": "high",
+                "confidence_score": 0.875,
+                "reason": null,
+                "candidate_count": 37,
+                "movement_cadence_ms": 30,
+                "motion_extent_px": 4226,
+                "best_edge_error_px": 2,
+                "near_best_cluster_count": 1,
+                "competing_cluster_count": 0,
+                "matched_interval": {
+                  "start_ms": 1789220188092,
+                  "end_ms": 1789220188092
+                }
+              }
+            },
+            "source_latency": {
+              "status": "measured",
+              "source_latency_ms": 427.6669921875,
+              "absolute_latency_ms": 427.6669921875,
+              "sign": "source_pixels_older_than_encoded_pts",
+              "uncertainty_ms": 15,
+              "confidence": "high",
+              "confidence_score": 0.8125,
+              "encoded_frame_nominal_wall_time_ms": 1789220188369.667,
+              "inferred_pixel_wall_time_ms": 1789220187942,
+              "reason": null
+            }
+          }
+        ],
+        "encoded_frame_distance": [
+          {
+            "display": 2,
+            "context_t_ms": 26913,
+            "media_t_ms": 26913,
+            "nearest_frame_pts_ms": 26915.666999999998,
+            "signed_distance_ms": 2.6669999999976426,
+            "absolute_distance_ms": 2.6669999999976426
+          }
+        ]
+      }
+    ],
+    "visual_ground_truth_decode_ok": true,
+    "coordinate_reference": "decoded replay frame magenta fixture pixels at the requested pack time",
+    "expected_coordinate_edge_error_px": {
+      "count": 3,
+      "min": 139,
+      "p50": 505,
+      "p95": 616.6,
+      "max": 629,
+      "mean": 424.3333333333333
+    },
+    "coordinate_edge_error_limit_px": 16,
+    "coordinate_error_within_limit": false,
+    "temporal_lag": {
+      "status": "measured",
+      "basis": "decoded replay magenta bounds and the exact persisted context sample bounds are independently reverse-matched to the fixture movement clock",
+      "sign_convention": "signed_lag_ms = inferred replay pixel wall time - inferred observed context wall time; negative means replay pixels are older",
+      "ambiguity_policy": "static motion, no coordinate match, or multiple equally good time clusters produce no inferred lag",
+      "search_radius": "max(1000ms, 8 nominal frame intervals)",
+      "samples": [
+        {
+          "display": 2,
+          "fixture_display_index": 2,
+          "context_query_t_ms": 8970,
+          "materialized_context_t_ms": 8979,
+          "encoded_frame_pts_ms": 8932.667,
+          "status": "measured",
+          "signed_lag_ms": -118,
+          "absolute_lag_ms": 118,
+          "sign": "replay_pixels_older_than_context",
+          "uncertainty_ms": 30,
+          "confidence": "medium",
+          "confidence_score": 0.6875,
+          "observed_context_t_ms": 8979,
+          "nominal_wall_time_ms": 1789220170433,
+          "search_radius_ms": 1000,
+          "pixel_match": {
+            "status": "measured",
+            "inferred_wall_time_ms": 1789220169995,
+            "uncertainty_ms": 15,
+            "confidence": "medium",
+            "confidence_score": 0.6875,
+            "reason": null,
+            "candidate_count": 33,
+            "movement_cadence_ms": 30,
+            "motion_extent_px": 4256,
+            "best_edge_error_px": 5,
+            "near_best_cluster_count": 1,
+            "competing_cluster_count": 0,
+            "matched_interval": {
+              "start_ms": 1789220169995,
+              "end_ms": 1789220169995
+            }
+          },
+          "context_match": {
+            "status": "measured",
+            "inferred_wall_time_ms": 1789220170113,
+            "uncertainty_ms": 15,
+            "confidence": "high",
+            "confidence_score": 0.875,
+            "reason": null,
+            "candidate_count": 33,
+            "movement_cadence_ms": 30,
+            "motion_extent_px": 4256,
+            "best_edge_error_px": 2,
+            "near_best_cluster_count": 1,
+            "competing_cluster_count": 0,
+            "matched_interval": {
+              "start_ms": 1789220170113,
+              "end_ms": 1789220170113
+            }
+          }
+        },
+        {
+          "display": 2,
+          "fixture_display_index": 2,
+          "context_query_t_ms": 14951,
+          "materialized_context_t_ms": 14932,
+          "encoded_frame_pts_ms": 14982.6,
+          "status": "measured",
+          "signed_lag_ms": -123,
+          "absolute_lag_ms": 123,
+          "sign": "replay_pixels_older_than_context",
+          "uncertainty_ms": 30,
+          "confidence": "low",
+          "confidence_score": 0.375,
+          "observed_context_t_ms": 14932,
+          "nominal_wall_time_ms": 1789220176386,
+          "search_radius_ms": 1000,
+          "pixel_match": {
+            "status": "measured",
+            "inferred_wall_time_ms": 1789220176004,
+            "uncertainty_ms": 15,
+            "confidence": "low",
+            "confidence_score": 0.375,
+            "reason": null,
+            "candidate_count": 68,
+            "movement_cadence_ms": 30,
+            "motion_extent_px": 3222,
+            "best_edge_error_px": 10,
+            "near_best_cluster_count": 1,
+            "competing_cluster_count": 0,
+            "matched_interval": {
+              "start_ms": 1789220176004,
+              "end_ms": 1789220176004
+            }
+          },
+          "context_match": {
+            "status": "measured",
+            "inferred_wall_time_ms": 1789220176127,
+            "uncertainty_ms": 15,
+            "confidence": "high",
+            "confidence_score": 0.8125,
+            "reason": null,
+            "candidate_count": 68,
+            "movement_cadence_ms": 30,
+            "motion_extent_px": 3222,
+            "best_edge_error_px": 3,
+            "near_best_cluster_count": 1,
+            "competing_cluster_count": 0,
+            "matched_interval": {
+              "start_ms": 1789220176127,
+              "end_ms": 1789220176127
+            }
+          }
+        },
+        {
+          "display": 2,
+          "fixture_display_index": 2,
+          "context_query_t_ms": 26911,
+          "materialized_context_t_ms": 26913,
+          "encoded_frame_pts_ms": 26915.666999999998,
+          "status": "measured",
+          "signed_lag_ms": -150,
+          "absolute_lag_ms": 150,
+          "sign": "replay_pixels_older_than_context",
+          "uncertainty_ms": 30,
+          "confidence": "high",
+          "confidence_score": 0.8125,
+          "observed_context_t_ms": 26913,
+          "nominal_wall_time_ms": 1789220188367,
+          "search_radius_ms": 1000,
+          "pixel_match": {
+            "status": "measured",
+            "inferred_wall_time_ms": 1789220187942,
+            "uncertainty_ms": 15,
+            "confidence": "high",
+            "confidence_score": 0.8125,
+            "reason": null,
+            "candidate_count": 37,
+            "movement_cadence_ms": 30,
+            "motion_extent_px": 4226,
+            "best_edge_error_px": 3,
+            "near_best_cluster_count": 1,
+            "competing_cluster_count": 0,
+            "matched_interval": {
+              "start_ms": 1789220187942,
+              "end_ms": 1789220187942
+            }
+          },
+          "context_match": {
+            "status": "measured",
+            "inferred_wall_time_ms": 1789220188092,
+            "uncertainty_ms": 15,
+            "confidence": "high",
+            "confidence_score": 0.875,
+            "reason": null,
+            "candidate_count": 37,
+            "movement_cadence_ms": 30,
+            "motion_extent_px": 4226,
+            "best_edge_error_px": 2,
+            "near_best_cluster_count": 1,
+            "competing_cluster_count": 0,
+            "matched_interval": {
+              "start_ms": 1789220188092,
+              "end_ms": 1789220188092
+            }
+          }
+        }
+      ],
+      "displays": [
+        {
+          "display": 2,
+          "status": "measured",
+          "inferred_signed_lag_ms": -123,
+          "inferred_sign": "replay_pixels_older_than_context",
+          "confidence": "medium",
+          "measured_sample_count": 3,
+          "total_sample_count": 3,
+          "sample_status_counts": {
+            "measured": 3
+          },
+          "signed_lag_ms": {
+            "count": 3,
+            "min": -150,
+            "p50": -123,
+            "p95": -118.5,
+            "max": -118,
+            "mean": -130.33333333333334
+          },
+          "absolute_lag_ms": {
+            "count": 3,
+            "min": 118,
+            "p50": 123,
+            "p95": 147.3,
+            "max": 150,
+            "mean": 130.33333333333334
+          },
+          "median_absolute_deviation_ms": 5,
+          "median_uncertainty_ms": 30,
+          "sign_consistency": 1,
+          "mean_sample_confidence_score": 0.625,
+          "consistency_limit_ms": 100
+        }
+      ]
+    },
+    "source_latency": {
+      "status": "measured",
+      "basis": "encoded frame nominal wall time (timeline origin + encoded PTS) minus the independently reverse-matched replay pixel wall time; context query time and nearest-frame distance are not inputs",
+      "sign_convention": "source_latency_ms = timeline origin + encoded frame PTS - inferred replay pixel wall time; positive means source pixels are older than the encoded PTS clock",
+      "ambiguity_policy": "static motion, no coordinate match, or multiple equally good pixel-time clusters remain unmeasured",
+      "samples": [
+        {
+          "display": 2,
+          "fixture_display_index": 2,
+          "context_query_t_ms": 8970,
+          "materialized_context_t_ms": 8979,
+          "encoded_frame_pts_ms": 8932.667,
+          "status": "measured",
+          "source_latency_ms": 391.6669921875,
+          "absolute_latency_ms": 391.6669921875,
+          "sign": "source_pixels_older_than_encoded_pts",
+          "uncertainty_ms": 15,
+          "confidence": "medium",
+          "confidence_score": 0.6875,
+          "encoded_frame_nominal_wall_time_ms": 1789220170386.667,
+          "inferred_pixel_wall_time_ms": 1789220169995,
+          "reason": null
+        },
+        {
+          "display": 2,
+          "fixture_display_index": 2,
+          "context_query_t_ms": 14951,
+          "materialized_context_t_ms": 14932,
+          "encoded_frame_pts_ms": 14982.6,
+          "status": "measured",
+          "source_latency_ms": 432.60009765625,
+          "absolute_latency_ms": 432.60009765625,
+          "sign": "source_pixels_older_than_encoded_pts",
+          "uncertainty_ms": 15,
+          "confidence": "low",
+          "confidence_score": 0.375,
+          "encoded_frame_nominal_wall_time_ms": 1789220176436.6,
+          "inferred_pixel_wall_time_ms": 1789220176004,
+          "reason": null
+        },
+        {
+          "display": 2,
+          "fixture_display_index": 2,
+          "context_query_t_ms": 26911,
+          "materialized_context_t_ms": 26913,
+          "encoded_frame_pts_ms": 26915.666999999998,
+          "status": "measured",
+          "source_latency_ms": 427.6669921875,
+          "absolute_latency_ms": 427.6669921875,
+          "sign": "source_pixels_older_than_encoded_pts",
+          "uncertainty_ms": 15,
+          "confidence": "high",
+          "confidence_score": 0.8125,
+          "encoded_frame_nominal_wall_time_ms": 1789220188369.667,
+          "inferred_pixel_wall_time_ms": 1789220187942,
+          "reason": null
+        }
+      ],
+      "displays": [
+        {
+          "display": 2,
+          "status": "measured",
+          "inferred_source_latency_ms": 427.6669921875,
+          "inferred_sign": "source_pixels_older_than_encoded_pts",
+          "confidence": "medium",
+          "measured_sample_count": 3,
+          "total_sample_count": 3,
+          "sample_status_counts": {
+            "measured": 3
+          },
+          "source_latency_ms": {
+            "count": 3,
+            "min": 391.6669921875,
+            "p50": 427.6669921875,
+            "p95": 432.106787109375,
+            "max": 432.60009765625,
+            "mean": 417.3113606770833
+          },
+          "absolute_latency_ms": {
+            "count": 3,
+            "min": 391.6669921875,
+            "p50": 427.6669921875,
+            "p95": 432.106787109375,
+            "max": 432.60009765625,
+            "mean": 417.3113606770833
+          },
+          "median_absolute_deviation_ms": 4.93310546875,
+          "median_uncertainty_ms": 15,
+          "sign_consistency": 1,
+          "mean_sample_confidence_score": 0.625,
+          "consistency_limit_ms": 100
+        }
+      ]
+    },
+    "context_to_encoded_frame_ms": {
+      "signed": {
+        "count": 691,
+        "min": -68.06700000000001,
+        "p50": -0.13300000000162981,
+        "p95": 30.866500000000087,
+        "max": 57.66699999999946,
+        "mean": -0.2762156295224204
+      },
+      "absolute": {
+        "count": 691,
+        "min": 0.06700000000000728,
+        "p50": 17.13300000000163,
+        "p95": 34.73349999999982,
+        "max": 68.06700000000001,
+        "mean": 17.909798842257572
+      }
+    }
+  },
+  "checks": {
+    "pack_saved": true,
+    "requested_display_count": 1,
+    "saved_display_count": 1,
+    "saved_display_count_matches_request": true,
+    "replay_file_count": 1,
+    "every_replay_probes_decodes_and_meets_cadence": false,
+    "past_sampling": false,
+    "requested_replay_backend_observed": true,
+    "release_performance_evidence_complete": true,
+    "native_fmp4_production_validator_and_full_decode": true,
+    "native_ready_suspend_snapshot_and_failure_fallback": true,
+    "every_spawned_process_terminated": true
+  },
+  "result": "BROKEN",
+  "failures": [
+    "one or more replay media criteria failed",
+    "persisted past sampling/reopen verification failed"
+  ]
+}
