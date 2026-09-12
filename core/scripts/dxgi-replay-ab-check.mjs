@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs'
 const require = createRequire(import.meta.url)
 const {
   compareDxgiReplayAb,
+  canContinueDxgiReplayAbTrial,
 } = require('./fixtures/dxgi-replay-ab.cjs')
 
 let passed = 0
@@ -95,6 +96,15 @@ function report(backend, factor = 1, trial = 1) {
 const shipping = [1, 2, 3].map((trial) => report('shipping', 1, trial))
 const native = [1, 2, 3].map((trial) => report('native-dxgi', 0.85, trial))
 const pass = compareDxgiReplayAb({ shipping, native })
+const broken = structuredClone(shipping)
+broken[0].result = 'BROKEN'
+broken[0].checks = { every_spawned_process_terminated: true }
+check('a cleaned failed trial permits remaining evidence but can never pass release',
+  canContinueDxgiReplayAbTrial({ status: 1, signal: null }, broken[0])
+    && compareDxgiReplayAb({ shipping: broken, native }).result === 'FAIL')
+check('missing cleanup and timed-out children stop subsequent trials',
+  !canContinueDxgiReplayAbTrial({ status: 1, signal: null }, {})
+    && !canContinueDxgiReplayAbTrial({ status: null, signal: 'SIGTERM' }, broken[0]))
 check('complete same-workload READY/SNAPSHOT/fMP4/decode evidence passes', pass.result === 'PASS')
 check('report preserves every raw sample and aggregate mean/p95/delta',
   pass.metrics.cpu_total_capacity_percent.shipping.raw.length === 9

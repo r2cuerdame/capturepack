@@ -16,6 +16,7 @@ const require = createRequire(import.meta.url)
 const {
   DEFAULT_DXGI_REPLAY_AB_THRESHOLDS,
   compareDxgiReplayAb,
+  canContinueDxgiReplayAbTrial,
 } = require('./fixtures/dxgi-replay-ab.cjs')
 const here = path.dirname(fileURLToPath(import.meta.url))
 const fieldScript = path.join(here, 'windows-replay-field-check.mjs')
@@ -90,8 +91,9 @@ if (!common.some((argument) => argument.startsWith('--target='))) {
 
 const reports = { shipping: [], native: [] }
 const executionOrder = []
-let fieldFailure = null
-for (let trial = 1; trial <= trials && fieldFailure === null; trial += 1) {
+const fieldFailures = []
+let cleanupConfirmed = true
+for (let trial = 1; trial <= trials && cleanupConfirmed; trial += 1) {
   const order = trial % 2 === 1
     ? ['shipping', 'native-dxgi']
     : ['native-dxgi', 'shipping']
@@ -116,21 +118,28 @@ for (let trial = 1; trial <= trials && fieldFailure === null; trial += 1) {
       },
     )
     const reportPath = path.join(runDir, 'report.json')
-    if (child.status !== 0 || !existsSync(reportPath)) {
-      fieldFailure =
+    const report = existsSync(reportPath)
+      ? JSON.parse(readFileSync(reportPath, 'utf8').replace(/^\uFEFF/u, ''))
+      : null
+    if (child.status !== 0 || report === null) {
+      fieldFailures.push(
         `${backend} trial ${trial} failed or timed out ` +
-        `(status=${String(child.status)}, signal=${String(child.signal)})`
+        `(status=${String(child.status)}, signal=${String(child.signal)})`,
+      )
+    }
+    if (report !== null) reports[label].push(report)
+    cleanupConfirmed = canContinueDxgiReplayAbTrial(child, report)
+    if (!cleanupConfirmed) {
+      fieldFailures.push(`${backend} trial ${trial} did not confirm cleanup; later trials were not started`)
       break
     }
-    const report = JSON.parse(readFileSync(reportPath, 'utf8').replace(/^\uFEFF/u, ''))
-    reports[label].push(report)
   }
 }
 
 const comparison = compareDxgiReplayAb(reports)
 comparison.generated_at = new Date().toISOString()
 comparison.execution_order = executionOrder
-if (fieldFailure !== null) comparison.failures.unshift(fieldFailure)
+comparison.failures.unshift(...fieldFailures)
 for (const file of comparison.evidence.raw_process_samples) {
   if (typeof file !== 'string' || !existsSync(file)) {
     comparison.failures.push(`raw process sample artifact missing: ${String(file)}`)

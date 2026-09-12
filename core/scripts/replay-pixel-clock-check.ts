@@ -112,6 +112,7 @@ async function main(): Promise<void> {
   const modulePath = '../src/renderer/capture/replayPixelClock.ts'
   const {
     decideReplayPixelClock,
+    discoverReplayPixelClockTargets,
     REPLAY_PIXEL_CLOCK_MAX_FINGERPRINT_BYTES,
     REPLAY_PIXEL_CLOCK_SAMPLE_LIMIT,
     REPLAY_PIXEL_CLOCK_TOTAL_FINGERPRINT_BYTES,
@@ -122,6 +123,51 @@ async function main(): Promise<void> {
     '../src/renderer/capture/replayPixelClock'
   )
   const originMs = 1_785_000_000_123
+
+  // A delivery-time hint can miss the same-pixel frame by many encoded samples.
+  // One accidental seed may guide discovery; it must never replace final proof.
+  const discoveryPresented = Array.from({ length: 8 }, (_, index) => ({
+    presentedAtMs: originMs + 100 + index * 503,
+    mediaTimeMs: 850 + index * 503,
+    fingerprint: fingerprint(index),
+  }))
+  const discoveryEncoded = discoveryPresented.flatMap((sample, index) => {
+    const ptsMs = 100 + index * 503
+    const unrelated = fingerprint(index)
+    unrelated.rgb.fill(180 + index * 3)
+    return [
+      { presentationTimeMs: ptsMs, fingerprint: sample.fingerprint },
+      { presentationTimeMs: ptsMs + 900, fingerprint: index === 0 ? sample.fingerprint : unrelated },
+    ]
+  })
+  function discoverFrom(seedPtsMs: number): ReplayPixelClockDecodedSample[] {
+    const first = discoveryEncoded.find((sample) => sample.presentationTimeMs === seedPtsMs)!
+    const decoded = [{ ptsMs: seedPtsMs, fingerprint: first.fingerprint }]
+    for (let position = 0; position < decoded.length && decoded.length < REPLAY_PIXEL_CLOCK_SAMPLE_LIMIT; position += 1) {
+      for (const target of discoverReplayPixelClockTargets(discoveryPresented, decoded[position]!, discoveryEncoded)) {
+        if (decoded.some((sample) => sample.ptsMs === target.presentationTimeMs)) continue
+        decoded.push({ ptsMs: target.presentationTimeMs, fingerprint: target.fingerprint })
+        if (decoded.length === REPLAY_PIXEL_CLOCK_SAMPLE_LIMIT) break
+      }
+    }
+    return decoded
+  }
+  const trueDiscovery = discoverFrom(100)
+  const falseDiscovery = discoverFrom(1000)
+  check(
+    'adaptive discovery finds independent pixels beyond the original wall-hint neighborhood',
+    trueDiscovery.length >= 5 && measuredOrigin(decideReplayPixelClock(discoveryPresented, trueDiscovery)) === originMs,
+    JSON.stringify(decideReplayPixelClock(discoveryPresented, trueDiscovery)),
+  )
+  check(
+    'an accidental cross-sequence seed never becomes an accepted clock without corroborating pixels',
+    decideReplayPixelClock(discoveryPresented, falseDiscovery).status !== 'measured',
+    JSON.stringify(decideReplayPixelClock(discoveryPresented, falseDiscovery)),
+  )
+  check(
+    'a true single discovery seed remains insufficient to accept a clock',
+    decideReplayPixelClock(discoveryPresented, trueDiscovery.slice(0, 1)).status !== 'measured',
+  )
 
   const fast = scenario(originMs, 12, 18)
   const slow = scenario(originMs, 91, 147)
