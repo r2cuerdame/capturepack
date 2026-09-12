@@ -13,7 +13,7 @@ function fixture(dump, overrides = {}) {
   const options = { module: identity.module, faultRva: identity.faultRva,
     guid: identity.codeViewGuidBytes, age: identity.codeViewAge,
     exception: 0x80000003, architecture: 9, cvSize: 24, cvRva: 1000,
-    modules: 1, contextSize: 256, ...overrides }
+    modules: 1, contextSize: 256, contextRva: 512, contextFlags: 0x100003, ...overrides }
   const data = Buffer.alloc(1400)
   const u32 = (at, value) => data.writeUInt32LE(value, at)
   const u64 = (at, value) => data.writeBigUInt64LE(BigInt(value), at)
@@ -26,14 +26,14 @@ function fixture(dump, overrides = {}) {
   u32(128, 42); u32(136, options.exception)
   const base = 0x7ff600000000n
   u64(152, base + BigInt(options.faultRva))
-  u32(288, options.contextSize); u32(292, 512)
+  u32(288, options.contextSize); u32(292, options.contextRva)
   data.writeUInt16LE(options.architecture, 304)
   u32(368, options.modules); u64(372, base); u32(380, 0x8000000); u32(392, 900)
   u32(448, options.cvSize); u32(452, options.cvRva)
   const name = Buffer.from(options.module, 'utf16le')
   u32(900, name.length); name.copy(data, 904)
   data.write('RSDS', 1000); Buffer.from(options.guid, 'hex').copy(data, 1004); u32(1020, options.age)
-  u32(560, 0x100003) // AMD64 control + integer context
+  u32(560, options.contextFlags) // AMD64 control + integer context
   u64(632, dump.sum); u64(640, 1); u64(680, 0x10000); u64(688, 0x20000)
   u64(760, base + BigInt(options.faultRva))
   u32(800, 2); u64(804, 0x10000); u32(812, 4); u32(816, 1200)
@@ -88,4 +88,26 @@ for (const [label, overrides] of [
 }
 test('metadata-only mode never interprets operands', () => {
   assert.equal(Object.hasOwn(inspect(identity.dumps[0], {}, false), 'checkedU32Add'), false)
+})
+
+for (const [label, overrides] of [
+  ['control-only context with plausible operand slots', { contextFlags: 0x100001 }],
+  ['missing context flags', { contextFlags: 0 }],
+  ['integer flag without AMD64 context', { contextFlags: 2 }],
+  ['truncated context', { contextSize: 128 }],
+  ['context outside file', { contextRva: 1300 }],
+  ['context extent outside file', { contextSize: 1000 }],
+]) {
+  test(`interpretation unavailable: ${label}`, () => {
+    const output = inspect(identity.dumps[0], overrides)
+    assert.equal(output.checkedU32Add.available, false)
+    assert.match(output.checkedU32Add.reason, /context/i)
+    for (const key of ['prior', 'incoming', 'sum', 'rax', 'rcx', 'sumMatchesRax', 'exceedsUint32']) {
+      assert.equal(Object.hasOwn(output.checkedU32Add, key), false, key)
+    }
+  })
+}
+
+test('integer-only AMD64 context is sufficient for operand interpretation', () => {
+  assert.equal(inspect(identity.dumps[0], { contextFlags: 0x100002 }).checkedU32Add.sumMatchesRax, true)
 })

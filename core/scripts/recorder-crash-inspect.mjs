@@ -82,7 +82,19 @@ for (const path of paths) {
     } else {
       const contextSize = u32(exception + 160)
       const context = u32(exception + 164)
-      if (contextSize < 256) throw new Error('Truncated AMD64 context')
+      // A matching fault site does not make uncaptured integer registers valid.
+      // Check the whole declared record before flags, then require AMD64 and
+      // CONTEXT_INTEGER (control-only dumps may contain plausible stale slots).
+      const integerContext = contextSize >= 256 && context + contextSize <= data.length
+        && (u32(context + 48) & 0x100002) === 0x100002
+      if (!integerContext) {
+        output.checkedU32Add = {
+          available: false,
+          reason: 'Complete AMD64 integer context not established',
+        }
+        console.log(JSON.stringify(output, null, 2))
+        continue
+      }
       const ranges = []
       const memory = streams.get(5)?.rva
       if (memory !== undefined) {
