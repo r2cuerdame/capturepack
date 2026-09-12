@@ -32,6 +32,7 @@ if (layoutPath === null || movementPath === null || stopFile === null) {
   process.exit(2)
 }
 
+app.disableHardwareAcceleration()
 app.commandLine.appendSwitch('disable-renderer-backgrounding')
 app.commandLine.appendSwitch('disable-background-timer-throttling')
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
@@ -223,6 +224,8 @@ app.whenReady().then(async () => {
   target.setIgnoreMouseEvents(true)
   await target.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(targetHtml())}`)
   target.showInactive()
+  target.setAlwaysOnTop(true, 'screen-saver', 1)
+  target.moveTop()
   windows.push(target)
 
   const beganAtMonotonicMs = performance.now()
@@ -286,6 +289,8 @@ app.whenReady().then(async () => {
       height: targetHeight,
     }
     target.setBounds(bounds, false)
+    target.setAlwaysOnTop(true, 'screen-saver', 1)
+    target.moveTop()
     const targetPhysical = physicalRect(bounds)
     const expected = targetPhysical === null
       ? []

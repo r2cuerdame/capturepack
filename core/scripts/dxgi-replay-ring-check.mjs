@@ -13,13 +13,20 @@ const encoderEnd = nativeSource.indexOf('bool GpuCompletedWithin(', encoderStart
 const encoder = encoderStart >= 0 && encoderEnd > encoderStart
   ? nativeSource.slice(encoderStart, encoderEnd)
   : ''
-const bFrameContract = encoder.indexOf(
-  'SetCodecUint32(codec.Get(), CODECAPI_AVEncMPVDefaultBPictureCount,\n                        0, true)',
+const bFrameRequest = encoder.indexOf(
+  'SetCodecUint32(codec.Get(), CODECAPI_AVEncMPVDefaultBPictureCount, 0, true)',
 )
 const outputTypeCommit = encoder.indexOf('transform_->SetOutputType(0, outputType_.Get(), 0)')
-if (bFrameContract < 0 || outputTypeCommit < 0 || bFrameContract > outputTypeCommit) {
+const inputTypeCommit = encoder.indexOf('transform_->SetInputType(0, inputType_.Get(), 0)')
+const bFrameVerification = encoder.indexOf(
+  'if (!EstablishZeroBPictureCount(codec.Get(), zeroBRequestedBeforeTypes))',
+)
+const beginStreaming = encoder.indexOf('MFT_MESSAGE_NOTIFY_BEGIN_STREAMING')
+if (bFrameRequest < 0 || outputTypeCommit <= bFrameRequest ||
+    inputTypeCommit <= outputTypeCommit || bFrameVerification <= inputTypeCommit ||
+    beginStreaming <= bFrameVerification) {
   throw new Error(
-    'DXGI replay encoder must require zero B pictures before committing its output type',
+    'DXGI replay must request zero B pictures before types and fail closed on verified configuration before streaming',
   )
 }
 const expectedNativeSelfTestLines = [
@@ -38,6 +45,7 @@ const expectedNativeSelfTestLines = [
   'SELFTEST PASS retention-sized-bounds',
   'SELFTEST PASS cursor-contract-fails-closed',
   'SELFTEST PASS config-generation-keyframe-cut',
+  'SELFTEST PASS encoder-zero-b-contract-fails-closed',
   'SELFTEST PASS encoder-transition-semantics',
   'SELFTEST PASS device-loss-retry-boundaries',
   'SELFTEST PASS output-identity-topology',

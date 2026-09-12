@@ -484,6 +484,31 @@ async function main(): Promise<void> {
   check('stop resolves an outstanding READY wait without waiting for its deadline',
     stoppedStart.backend === 'shipping' && stoppedStart.reason === 'native-not-ready')
 
+  const lateChild = new FakeProcess()
+  const lateSelections: string[] = []
+  const lateManager = new DxgiReplayRuntimeManager({
+    ...common,
+    startupTimeoutMs: 10,
+    onReady: (selection) => lateSelections.push(selection.backend),
+    spawnProcess: () => lateChild,
+  })
+  const lateFixtureKeepAlive = setTimeout(() => {}, 1_000)
+  const lateInitial = await lateManager.start({ deviceName: '\\\\.\\DISPLAY1', retentionMs: 30_000 })
+  clearTimeout(lateFixtureKeepAlive)
+  check('static startup deadline keeps the native service warming behind shipping',
+    lateInitial.backend === 'shipping'
+      && lateInitial.reason === 'native-not-ready'
+      && !lateChild.killed
+      && lateManager.currentSelection().backend === 'shipping')
+  lateChild.output(servicePacket())
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  check('a late READY promotes the retained service without restarting it',
+    lateManager.currentSelection().backend === 'native-dxgi'
+      && lateSelections.length === 1
+      && lateSelections[0] === 'native-dxgi'
+      && !lateChild.killed)
+  lateManager.stop()
+
   const fleetChild = new FakeProcess((command, child) => {
     if (!command.startsWith('SNAPSHOT\t')) return
     const [, id, output] = command.trimEnd().split('\t')

@@ -763,7 +763,11 @@ async function detectFixtureTargetBounds(probe, framePtsMs, snapshotSize) {
       }
     }
   }
-  if (largest === null || largest.pixels < 100) {
+  const largestHeight = largest === null ? 0 : largest.max_y + 1 - largest.min_y
+  // A real fixture is a filled moving window. Reject thin magenta UI accents
+  // (for example progress bars in unrelated always-on-top widgets) instead of
+  // treating them as the field target when the target is on another display.
+  if (largest === null || largest.pixels < 1_000 || largestHeight < 20) {
     return {
       bounds: null,
       mask_pixels: largest?.pixels ?? 0,
@@ -2281,7 +2285,7 @@ try {
     const display = displays.find((item) => item.index === probe.display)
     const reportedDurationMs = Number(display?.replay_duration_ms)
     if (
-      probe.absolute_path === null
+      typeof probe.absolute_path !== 'string'
       || !probe.absolute_path.toLocaleLowerCase().endsWith('.mp4')
       || !Number.isFinite(reportedDurationMs)
       || reportedDurationMs <= 0
@@ -2519,11 +2523,11 @@ try {
     const queryTimes =
       typeof contextRange?.start_ms === 'number' && typeof contextRange?.end_ms === 'number'
         ? [...new Set([
-            Math.round(contextRange.start_ms),
-            Math.round(contextRange.start_ms + (contextRange.end_ms - contextRange.start_ms) * 0.25),
+            Math.round(contextRange.start_ms + (contextRange.end_ms - contextRange.start_ms) * 0.1),
+            Math.round(contextRange.start_ms + (contextRange.end_ms - contextRange.start_ms) * 0.3),
             Math.round(contextRange.start_ms + (contextRange.end_ms - contextRange.start_ms) * 0.5),
-            Math.round(contextRange.start_ms + (contextRange.end_ms - contextRange.start_ms) * 0.75),
-            Math.round(contextRange.end_ms),
+            Math.round(contextRange.start_ms + (contextRange.end_ms - contextRange.start_ms) * 0.7),
+            Math.round(contextRange.start_ms + (contextRange.end_ms - contextRange.start_ms) * 0.9),
           ])]
         : [0, Math.round(durationSeconds * 500), durationSeconds * 1000]
     const contextDisplays = displays.map((display) => {
@@ -2624,6 +2628,105 @@ try {
         })
       }
       visualGroundTruth.set(query, samples)
+    }
+    const alignmentKey = (requestedTimeMs, display) =>
+      `${String(requestedTimeMs)}:${String(display)}`
+    // Geometry search is diagnostic only; acceptance below uses the declared clock.
+    const visualAlignment = new Map()
+    const contextAlignmentSearchRadiusMs = Math.max(
+      TEMPORAL_LAG_MIN_SEARCH_RADIUS_MS,
+      (1000 / fps) * TEMPORAL_LAG_FRAME_SEARCH_MULTIPLIER,
+    )
+    for (const query of analysis.queries) {
+      for (const sample of visualGroundTruth.get(query) ?? []) {
+        const nominalContextTimeMs = Number.isFinite(sample.nearest_frame_pts_ms)
+          ? sample.nearest_frame_pts_ms
+          : query.requested_t_ms
+        const candidates = sample.bounds === null
+          ? []
+          : analysis.target_samples
+            .filter((target) => (
+              target.display === sample.display
+              && Math.abs(target.t_ms - nominalContextTimeMs) <= contextAlignmentSearchRadiusMs
+            ))
+            .map((target) => ({
+              target,
+              edge_error_px: rectError(target.bounds, sample.bounds),
+              time_distance_ms: Math.abs(target.t_ms - nominalContextTimeMs),
+            }))
+            .sort((left, right) => (
+              left.edge_error_px - right.edge_error_px
+              || left.time_distance_ms - right.time_distance_ms
+            ))
+        const best = candidates[0]
+        const contextMatch =
+          best !== undefined && best.edge_error_px <= COORDINATE_EDGE_ERROR_LIMIT_PX
+            ? {
+                status: 'measured',
+                context_t_ms: best.target.t_ms,
+                bounds: best.target.bounds,
+                edge_error_px: best.edge_error_px,
+                nominal_context_t_ms: nominalContextTimeMs,
+                search_radius_ms: contextAlignmentSearchRadiusMs,
+                candidate_count: candidates.length,
+              }
+            : {
+                status: sample.bounds === null ? 'absent' : 'unavailable',
+                context_t_ms: null,
+                bounds: null,
+                edge_error_px: best?.edge_error_px ?? null,
+                nominal_context_t_ms: nominalContextTimeMs,
+                search_radius_ms: contextAlignmentSearchRadiusMs,
+                candidate_count: candidates.length,
+              }
+        const effectiveLatencyMs =
+          contextMatch.status === 'measured' && Number.isFinite(sample.nearest_frame_pts_ms)
+            ? sample.nearest_frame_pts_ms - contextMatch.context_t_ms
+            : null
+        const sourceLatency = effectiveLatencyMs === null
+          ? {
+              status: contextMatch.status,
+              source_latency_ms: null,
+              absolute_latency_ms: null,
+              sign: 'unknown',
+              uncertainty_ms: null,
+              confidence: 'none',
+              confidence_score: 0,
+              encoded_frame_nominal_wall_time_ms:
+                Number.isFinite(timelineOriginMs) && Number.isFinite(sample.nearest_frame_pts_ms)
+                  ? timelineOriginMs + sample.nearest_frame_pts_ms
+                  : null,
+              inferred_pixel_wall_time_ms: null,
+              reason: contextMatch.status === 'absent'
+                ? 'decoded replay target is absent on this display'
+                : 'decoded replay target could not be aligned to persisted context within the bounded search',
+            }
+          : {
+              status: 'measured',
+              source_latency_ms: effectiveLatencyMs,
+              absolute_latency_ms: Math.abs(effectiveLatencyMs),
+              sign: sourceLatencySign(effectiveLatencyMs, 1000 / fps),
+              uncertainty_ms: 1000 / fps,
+              confidence: best.edge_error_px <= 4 ? 'high' : 'medium',
+              confidence_score: Math.max(
+                0,
+                1 - best.edge_error_px / Math.max(1, COORDINATE_EDGE_ERROR_LIMIT_PX),
+              ),
+              encoded_frame_nominal_wall_time_ms:
+                Number.isFinite(timelineOriginMs) && Number.isFinite(sample.nearest_frame_pts_ms)
+                  ? timelineOriginMs + sample.nearest_frame_pts_ms
+                  : null,
+              inferred_pixel_wall_time_ms:
+                Number.isFinite(timelineOriginMs)
+                  ? timelineOriginMs + contextMatch.context_t_ms
+                  : null,
+              reason: null,
+            }
+        visualAlignment.set(alignmentKey(query.requested_t_ms, sample.display), {
+          context_match: contextMatch,
+          source_latency: sourceLatency,
+        })
+      }
     }
     const visualPickPoints = analysis.queries.flatMap((query) =>
       (visualGroundTruth.get(query) ?? []).flatMap((sample) => {
@@ -2820,6 +2923,10 @@ try {
           && query.candidates.length === query.observed_windows.length,
         expected_movement_sample_delta_ms: expectedAt?.delta_ms ?? null,
         visual_ground_truth: visualSamples,
+        geometry_alignment_diagnostics: visualSamples.map((sample) => ({
+          display: sample.display,
+          ...visualAlignment.get(alignmentKey(query.requested_t_ms, sample.display)),
+        })),
         coordinate_comparisons: comparisons,
         encoded_frame_distance: frameDistances,
       }
@@ -2849,6 +2956,7 @@ try {
     const pass =
       analysis.status === 'loaded'
       && analysis.reopen_identical
+      && visualPickAnalysis.reopen_identical
       && queries.length >= 3
       && resolvedQueries.length === queries.length
       && coordinateErrors.length > 0
@@ -2873,7 +2981,7 @@ try {
         basis:
           'production ObjectIndex.pick at the center and four inset corners of decoded replay target pixels',
       },
-      reopen_identical: analysis.reopen_identical,
+      reopen_identical: analysis.reopen_identical && visualPickAnalysis.reopen_identical,
       queries,
       visual_ground_truth_decode_ok: queries.every((query) =>
         query.visual_ground_truth.every((sample) => sample.decode_error === null)),

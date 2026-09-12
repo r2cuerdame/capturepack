@@ -417,7 +417,13 @@ export function validateDxgiReplayMp4(
     || durationMs > maximumDurationMs + toleranceMs
     || Math.abs(durationMs - reportedDurationMs) > toleranceMs
   ) {
-    return { status: 'invalid', reason: 'duration', detail: 'MP4 duration disagreed with bounded service evidence' }
+    return {
+      status: 'invalid',
+      reason: 'duration',
+      detail:
+        `MP4 duration ${String(durationMs)} ms / first PTS ${String(firstPresentationTimeMs)} ms ` +
+        `disagreed with service ${String(reportedDurationMs)} ms`,
+    }
   }
   return {
     status: 'valid',
@@ -526,6 +532,8 @@ export interface DxgiReplayRuntimeManagerOptions {
   readonly probe?: typeof probeDxgiReplayCapability
   readonly spawnProcess?: (executable: string, args: readonly string[]) => DxgiReplayRuntimeProcess
   readonly onFallback?: (selection: Extract<DxgiReplayRuntimeSelection, { backend: 'shipping' }>) => void
+  /** Late READY after the startup deadline promotes the still-warming native service. */
+  readonly onReady?: (selection: Extract<DxgiReplayRuntimeSelection, { backend: 'native-dxgi' }>) => void
   /** Test seam for best-effort deletion after an export has stopped using its file. */
   readonly cleanupOutputFile?: (outputPath: string) => Promise<void>
   /** Cleanup failures are observable but never replace the original export result. */
@@ -629,15 +637,42 @@ export class DxgiReplayRuntimeManager {
     })
     const ready = await new Promise<DxgiReplayServicePacket | null>((resolve) => {
       let settled = false
+      const promoteLateReady = (packet: DxgiReplayServicePacket): void => {
+        if (this.process !== child) return
+        if (packet.kind !== 'ready' || packet.status !== 'ok') {
+          this.pendingReady = null
+          return
+        }
+        const selected = selectDxgiReplayRuntime({
+          optedIn,
+          platform,
+          helperExists: true,
+          capability,
+          ready: packet,
+        })
+        this.pendingReady = null
+        if (selected.backend !== 'native-dxgi') return
+        this.selection = selected
+        // From this point onward we can prove retained native history. Time
+        // spent waiting on a perfectly static desktop is not replay history.
+        this.serviceStartedAtMs = this.options.nowMs?.() ?? performance.now()
+        this.options.onReady?.(selected)
+      }
       const timer = setTimeout(() => {
         if (settled) return
         settled = true
-        this.pendingReady = null
+        // A static Desktop Duplication output may legally produce no frame.
+        // Keep shipping selected, but leave the service warming so the first
+        // later desktop update can complete health validation and promote.
+        this.pendingReady = promoteLateReady
         resolve(null)
       }, this.options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS)
       timer.unref()
       this.pendingReady = (packet) => {
-        if (settled) return
+        if (settled) {
+          promoteLateReady(packet)
+          return
+        }
         settled = true
         clearTimeout(timer)
         this.pendingReady = null
@@ -655,10 +690,17 @@ export class DxgiReplayRuntimeManager {
       ...(ready === null ? {} : { ready }),
     })
     if (selected.backend === 'shipping') {
+      if (ready === null && selected.reason === 'native-not-ready' && this.process === child) {
+        return this.setFallback(
+          selected.reason,
+          selected.detail ?? 'waiting for the first Desktop Duplication frame',
+        )
+      }
       this.stop()
       return this.setFallback(selected.reason, selected.detail)
     }
     this.selection = selected
+    this.serviceStartedAtMs = this.options.nowMs?.() ?? performance.now()
     return selected
   }
 
@@ -951,7 +993,7 @@ export interface DxgiReplayRuntimeReplay {
 }
 
 export interface DxgiReplayRuntimeOptions
-  extends Omit<DxgiReplayRuntimeManagerOptions, 'enabled' | 'onFallback'> {
+  extends Omit<DxgiReplayRuntimeManagerOptions, 'enabled' | 'onFallback' | 'onReady'> {
   readonly onStatus?: (displayId: number, selection: DxgiReplayRuntimeSelection) => void
 }
 
@@ -997,6 +1039,7 @@ export class DxgiReplayRuntime {
         ...this.options,
         enabled: settings.enabled,
         onFallback: (selection) => this.options.onStatus?.(display.id, selection),
+        onReady: (selection) => this.options.onStatus?.(display.id, selection),
       })
       this.displays.set(display.id, { manager, signature })
       const selection = await manager.start({
