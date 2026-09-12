@@ -46,6 +46,8 @@ const VIDEO_PROFILE_CHECKS = new Set([
   'check:repo-hygiene',
   'check:recorder-ring',
   'check:recorder-retention',
+  'check:recorder-lifecycle-soak',
+  'check:recorder-crash-inspect',
   'check:tick-owner',
   'check:display-media-policy',
   'check:capture-cadence',

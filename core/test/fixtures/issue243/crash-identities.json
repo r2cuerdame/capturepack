@@ -1,0 +1,22 @@
+{
+  "module": "CapturePack.exe",
+  "faultRva": "0x3b28d0a",
+  "codeViewGuidBytes": "0dff164f3181aab74c4c44205044422e",
+  "codeViewAge": 1,
+  "dumps": [
+    {
+      "name": "869f4a52-528b-475f-8ef2-114a4f32bb33.dmp",
+      "timestampUtc": "2026-09-12T03:31:12Z",
+      "prior": "4294935597",
+      "incoming": "153170",
+      "sum": "4295088767"
+    },
+    {
+      "name": "8a1524c6-a99a-45a6-9836-99d4aa805286.dmp",
+      "timestampUtc": "2026-09-12T05:03:24Z",
+      "prior": "4294898286",
+      "incoming": "168199",
+      "sum": "4295066485"
+    }
+  ]
+}
