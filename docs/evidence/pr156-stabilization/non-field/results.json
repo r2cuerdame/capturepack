@@ -1,0 +1,100 @@
+[
+  {
+    "name": "field-clock-red",
+    "started": "2026-09-12T12:23:26.427Z",
+    "exit": 1,
+    "expected": 1,
+    "pass": true
+  },
+  {
+    "name": "field-clock-green",
+    "started": "2026-09-12T12:23:26.489Z",
+    "exit": 0,
+    "expected": 0,
+    "pass": true
+  },
+  {
+    "name": "mux-red-green",
+    "started": "2026-09-12T12:23:26.551Z",
+    "exit": 0,
+    "expected": 0,
+    "pass": true
+  },
+  {
+    "name": "build-required",
+    "started": "2026-09-12T12:23:34.846Z",
+    "exit": 0,
+    "expected": 0,
+    "pass": true
+  },
+  {
+    "name": "typecheck",
+    "started": "2026-09-12T12:23:42.597Z",
+    "exit": 0,
+    "expected": 0,
+    "pass": true
+  },
+  {
+    "name": "check-dxgi-replay-ring",
+    "started": "2026-09-12T12:23:46.042Z",
+    "exit": 0,
+    "expected": 0,
+    "pass": true
+  },
+  {
+    "name": "check-dxgi-replay-runtime",
+    "started": "2026-09-12T12:23:50.426Z",
+    "exit": 0,
+    "expected": 0,
+    "pass": true
+  },
+  {
+    "name": "check-dxgi-replay-ab",
+    "started": "2026-09-12T12:23:51.570Z",
+    "exit": 0,
+    "expected": 0,
+    "pass": true
+  },
+  {
+    "name": "check-fmp4-sample-timeline",
+    "started": "2026-09-12T12:23:51.828Z",
+    "exit": 0,
+    "expected": 0,
+    "pass": true
+  },
+  {
+    "name": "check-windows-replay-field-fixture",
+    "started": "2026-09-12T12:23:52.180Z",
+    "exit": 0,
+    "expected": 0,
+    "pass": true
+  },
+  {
+    "name": "check-docs",
+    "started": "2026-09-12T12:23:52.436Z",
+    "exit": 0,
+    "expected": 0,
+    "pass": true
+  },
+  {
+    "name": "ownership",
+    "started": "2026-09-12T12:23:52.789Z",
+    "exit": 0,
+    "expected": 0,
+    "pass": true
+  },
+  {
+    "name": "lifecycle",
+    "started": "2026-09-12T12:23:53.334Z",
+    "exit": 0,
+    "expected": 0,
+    "pass": true
+  },
+  {
+    "name": "qa-video",
+    "started": "2026-09-12T12:23:53.395Z",
+    "exit": 0,
+    "expected": 0,
+    "pass": true
+  }
+]

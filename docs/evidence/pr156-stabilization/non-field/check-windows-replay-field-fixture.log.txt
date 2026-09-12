@@ -1,0 +1,43 @@
+
+> capturepack@0.5.0 check:windows-replay-field-fixture
+> node scripts/windows-replay-field-fixture-check.mjs
+
+field strict clock: 4 passed (wrong-time geometry rejected; declared mapping retained)
+PURE DISPLAY ORDER CONTRACT
+  PASS  primary start rotates only movement order — 222,333,111
+  PASS  layout array/index, negative origin, portrait and mixed DPI remain untouched
+  PASS  explicit display 3 rotates through every display exactly once
+  PASS  omitting the option preserves the historical Electron display order
+  PASS  an unknown start display is rejected instead of silently measuring a static screen
+
+FIELD TARGET -> FIXTURE START CONTRACT
+  PASS  one explicit target starts on that exact display id
+  PASS  primary target resolves inside the fixture against Electron primary
+  PASS  all-display runs start movement on primary for calibration
+  PASS  fixture keeps layout order separate from rotated movement order
+  PASS  field runner passes the requested start display before fixture startup
+  PASS  field runner verifies the fixture actually started on the resolved calibration display
+  PASS  field replay hashing preserves the encoded VFR cadence instead of dropping a valid frame
+  PASS  visual object-pick truth preserves the requested context clock and declared media mapping
+  PASS  field reopen verification passes persisted display mapping through the production helper
+  PASS  field helper resolves its second session through reopenedContextDisplayTargets
+
+FILLED VS HONESTLY UNFILLED REPLAY DURATION
+  PASS  actual timestamp distance, not launch delay minus a guessed readiness wait, measures availability — {"capture_requested_at":"2026-07-30T09:17:55.615Z","capture_requested_at_ms":1785403075615,"displays":[{"display_id":"391525080","observed_wait_ms":2015,"presented_frames":3,"timed_out":false,"excluded_before_recorder_ms":2015,"ready_at":"2026-07-30T09:17:44.515Z","ready_at_ms":1785403064515,"available_span_ms":11100},{"display_id":"987654321","observed_wait_ms":2010,"presented_frames":3,"timed_out":false,"excluded_before_recorder_ms":2010,"ready_at":"2026-07-30T09:17:45.900Z","ready_at_ms":1785403065900,"available_span_ms":9715}]}
+  PASS  each display keeps its own recorder-available span — [{"display_id":"391525080","observed_wait_ms":2015,"presented_frames":3,"timed_out":false,"excluded_before_recorder_ms":2015,"ready_at":"2026-07-30T09:17:44.515Z","ready_at_ms":1785403064515,"available_span_ms":11100},{"display_id":"987654321","observed_wait_ms":2010,"presented_frames":3,"timed_out":false,"excluded_before_recorder_ms":2010,"ready_at":"2026-07-30T09:17:45.900Z","ready_at_ms":1785403065900,"available_span_ms":9715}]
+  PASS  a recorder restart uses the latest readiness before capture, not stale startup readiness — {"capture_requested_at":"2026-07-30T09:17:55.000Z","capture_requested_at_ms":1785403075000,"displays":[{"display_id":"391525080","observed_wait_ms":1800,"presented_frames":3,"timed_out":false,"excluded_before_recorder_ms":1800,"ready_at":"2026-07-30T09:17:49.000Z","ready_at_ms":1785403069000,"available_span_ms":6000}]}
+  PASS  an honestly unfilled replay expects min(retention, measured available span) — {"buffer_state":"unfilled","requested_retention_ms":12000,"measured_available_span_ms":11100,"expected_duration_ms":11100,"actual_duration_ms":11106,"duration_within_requested_window":true,"fills_requested_window":false,"matches_expected_duration":true,"fill_tolerance_ms":240,"pass":true,"basis":"min(requested retention, timestamped recorder-ready to capture-request span)"}
+  PASS  the same short duration still fails once the recorder had time to fill retention — {"buffer_state":"filled","requested_retention_ms":12000,"measured_available_span_ms":14000,"expected_duration_ms":12000,"actual_duration_ms":11106,"duration_within_requested_window":true,"fills_requested_window":false,"matches_expected_duration":false,"fill_tolerance_ms":240,"pass":false,"basis":"min(requested retention, timestamped recorder-ready to capture-request span)"}
+  PASS  missing readiness timestamps never grant the underfilled exception — {"buffer_state":"unknown","requested_retention_ms":12000,"measured_available_span_ms":null,"expected_duration_ms":12000,"actual_duration_ms":11106,"duration_within_requested_window":true,"fills_requested_window":false,"matches_expected_duration":false,"fill_tolerance_ms":240,"pass":false,"basis":"readiness/capture timestamps unavailable; full-retention threshold retained"}
+  PASS  underfilled does not excuse losing measured recorder-available footage — {"buffer_state":"unfilled","requested_retention_ms":12000,"measured_available_span_ms":11100,"expected_duration_ms":11100,"actual_duration_ms":9000,"duration_within_requested_window":true,"fills_requested_window":false,"matches_expected_duration":false,"fill_tolerance_ms":240,"pass":false,"basis":"min(requested retention, timestamped recorder-ready to capture-request span)"}
+
+DECODED PIXELS -> PRODUCTION OBJECT PICK VERDICT
+  PASS  a vacuous frame with no decoded target cannot claim object-pick coverage — {"pass":false,"query_count":1,"successful_query_count":1,"attempted_point_count":0,"successful_point_count":0}
+  PASS  all five decoded-pixel probes selecting the target passes — {"pass":true,"query_count":2,"successful_query_count":2,"attempted_point_count":5,"successful_point_count":5}
+  PASS  one untested decoded-pixel point fails instead of shrinking coverage — {"pass":false,"query_count":1,"successful_query_count":0,"attempted_point_count":5,"successful_point_count":4}
+  PASS  one underlying-window result fails even when candidate counts match — {"pass":false,"query_count":1,"successful_query_count":0,"attempted_point_count":5,"successful_point_count":4}
+  PASS  field report parses timestamp-bounded recorder availability
+  PASS  field verdict reports filled/unfilled state and expected duration
+  PASS  field pass uses the bounded duration verdict without weakening the filled threshold
+
+result: OK — 29 passed, 0 failed

@@ -172,7 +172,7 @@ npm run check:dxgi-replay-runtime
 Probe DevHotel first and use its assigned managed Windows room when available.
 If no usable managed Windows provider exists, an explicitly authorized bounded
 local run may use the same gate, isolated worktree build, and fresh user data.
-Run after `npm run build -- --require-dxgi-helper`. Use the exact DXGI device name
+Before local field A/B, independently prove both the launcher and actual node process tokens are medium integrity (`S-1-16-8192`). A shell-only check is insufficient. HIGH-integrity runs are diagnostic-only, never acceptance. See [current stabilization evidence and blocker](PR156_STABILIZATION.md). Run after `npm run build -- --require-dxgi-helper`. Use the exact DXGI device name
 when known:
 
 ```powershell
