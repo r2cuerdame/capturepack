@@ -63,6 +63,7 @@
     "check:repo-hygiene": "node scripts/repo-hygiene-check.mjs",
     "check:recorder-ring": "node scripts/recorder-ring-check.mjs",
     "check:recorder-retention": "node scripts/recorder-retention-check.mjs",
+    "check:recorder-lifecycle-soak": "node scripts/recorder-lifecycle-soak-check.mjs",
     "check:tick-owner": "node scripts/capture-tick-owner-check.mjs",
     "check:display-media-policy": "node scripts/display-media-policy-check.mjs",
     "check:capture-cadence": "node scripts/capture-cadence-check.mjs",
