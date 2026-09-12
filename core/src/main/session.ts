@@ -1640,6 +1640,8 @@ async function runImageFlowWithContext(
         settings.imageClipboardAfterSave === 'image' ? 'image-rendering' : 'none',
       uiLanguage: uiLanguage(settings),
     })
+    notePackSaved(savedHandle.dirPath)
+    void runActionsAtState(savedHandle.dirPath, 'source-ready', settings)
     startKeyframeStill(
       savedHandle,
       {
@@ -3465,6 +3467,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
           : 'none',
       uiLanguage: uiLanguage(settings),
     })
+    void runActionsAtState(handle.dirPath, 'source-ready', settings)
     // Same per-display rule as a fresh save: the pack's own annotated views are
     // the FOCUSED display's, and every other annotated screen renders its own.
     const focusedIndex = savedDisplays.find((d) => d.focused)?.index ?? 1

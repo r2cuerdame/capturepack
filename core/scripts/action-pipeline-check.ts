@@ -386,11 +386,28 @@ console.log('\nTHE APP ACTUALLY RUNS THE PIPELINE')
   const settingsWindow = read('src/main/settingsWindow.ts')
   const preload = read('src/preload/settings.ts')
 
+  const section = (text: string, start: string, end: string): string => {
+    const from = text.indexOf(start)
+    const to = text.indexOf(end, from + start.length)
+    return from >= 0 && to > from ? text.slice(from, to) : ''
+  }
+  const imageFlow = section(session, 'async function runImageFlow(', 'async function runFlow(')
+  const editFlow = section(session, 'async function runEditFlow(', 'interface DisplayRenderSource')
+
   check('session.ts imports the after-save entry point', session.includes("import { runActionsAtState } from './actions/onSave'"))
   check(
     'it fires at source-ready immediately after the save flow calls publication finished',
     session.includes("notePackSaved(savedHandle.dirPath)")
       && session.includes("void runActionsAtState(savedHandle.dirPath, 'source-ready', settings)"),
+  )
+  check(
+    'still-image capture flow fires after-save actions and notes pack saved once durable',
+    imageFlow.includes("notePackSaved(savedHandle.dirPath)")
+      && imageFlow.includes("void runActionsAtState(savedHandle.dirPath, 'source-ready', settings)"),
+  )
+  check(
+    're-edit save fires after-save actions at source-ready once durable',
+    editFlow.includes("void runActionsAtState(handle.dirPath, 'source-ready', settings)"),
   )
   check(
     'it fires again at annotated-replay-ready when the derived render reports done, so a blocked action gets its second chance',
@@ -400,6 +417,7 @@ console.log('\nTHE APP ACTUALLY RUNS THE PIPELINE')
   check(
     'neither call is awaited — a pack that is already durable never waits for an action',
     session.includes("void runActionsAtState(savedHandle.dirPath")
+      && session.includes("void runActionsAtState(handle.dirPath")
       && session.includes("void runActionsAtState(dirPath"),
   )
 
