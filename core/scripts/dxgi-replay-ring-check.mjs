@@ -45,6 +45,7 @@ const expectedNativeSelfTestLines = [
   'SELFTEST PASS retention-sized-bounds',
   'SELFTEST PASS cursor-contract-fails-closed',
   'SELFTEST PASS config-generation-keyframe-cut',
+  'SELFTEST PASS service-clock-precision-fails-closed',
   'SELFTEST PASS encoder-zero-b-contract-fails-closed',
   'SELFTEST PASS encoder-transition-semantics',
   'SELFTEST PASS device-loss-retry-boundaries',

@@ -94,10 +94,10 @@ existed in an earlier Lane-A frame may legitimately be absent from the final
 ## Video-core regression matrix
 
 The tables in this document map a reported failure to the check that would now
-catch it. They are a map, not an inventory: the gate discovers 89 checks and
+catch it. They are a map, not an inventory: the gate discovers 91 checks and
 only some of them have ever had a defect worth naming.
 
-`npm run qa:video` runs type checking plus a subset — 62 of the 89 — so some
+`npm run qa:video` runs type checking plus a subset — 61 of the 91 — so some
 rows below are outside it and only `qa:checks`/`qa:rc` reach them:
 `check:video-no-picking`, `check:site`, `check:input-events`,
 `check:storage-retention`, `check:update-notice`, and `check:actions`. A row

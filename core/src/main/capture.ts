@@ -1805,6 +1805,8 @@ async function requestNativeReplay(
     replay: {
       buffer: snapshot.buffer,
       durationMs: snapshot.durationMs,
+      originMs: snapshot.originMs,
+      clockAnchors: snapshot.clockAnchors,
       mimeType: 'video/mp4',
       replayFile: 'replay.mp4',
     },
@@ -2262,8 +2264,25 @@ async function createCaptureWindow(
         event.sender === win.webContents &&
         isCurrentRecorderResource(captureWindows.get(display.id), win)
       ) {
-        if (shippingReplaySuspended.has(display.id)) return
         const detail = String(message)
+        if (shippingReplaySuspended.has(display.id)) {
+          // Retired MediaRecorder errors are stale, but native still depends on
+          // this focused window's presentation clock. Its explicit terminal
+          // failures must retire native ownership and recover shipping too.
+          const clockFailed = ownsTicks && typeof message === 'string' && (
+            message === 'focused presentation clock stream ended' ||
+            message.startsWith('focused presentation clock acquisition failed: ')
+          )
+          if (!clockFailed) return
+          const slot = dxgiReplayServices.get(display.id)
+          dxgiReplayServices.delete(display.id)
+          slot?.manager.stop()
+          logError(`[capture] display ${display.id}: ${detail}; retiring native replay and restarting shipping`)
+          if (!setShippingReplayWorkload(display.id, true)) {
+            setDisplayRecorderState(display.id, { status: 'stopped', reason: 'process-stopped', detail })
+          }
+          return
+        }
         logError(
           `[capture] recorder for display ${display.id} failed, continuing screenshot-only: ${detail}`,
         )
@@ -2349,6 +2368,16 @@ async function createCaptureWindow(
     ipcMain.on(IPC.captureError, onError)
     ipcMain.on(IPC.captureReady, onReady)
     ipcMain.on(IPC.captureFrames, onFrames)
+    // Persist the renderer's completed workload transition, not merely the IPC
+    // request, so #243 hardware acceptance can prove MediaRecorder suspension.
+    win.webContents.on('console-message', (details) => {
+      if (!isCurrentRecorderResource(captureWindows.get(display.id), win)) return
+      const prefix = `[capture] display ${display.id}: `
+      if (
+        details.message === `${prefix}shipping replay encoders suspended; native replay owns the display`
+        || details.message === `${prefix}native replay unavailable; restarting shipping replay workload`
+      ) logInfo(details.message)
+    })
     const onTick = (event: IpcMainEvent, payload: CaptureTickPayload): void => {
       if (event.sender !== win.webContents || captureWindows.get(display.id) !== win) return
       // Enforce ownership at the process boundary too. The renderer normally

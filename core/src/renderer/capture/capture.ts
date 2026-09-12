@@ -261,6 +261,9 @@ let latestPresentedFrame:
 let replayRing: FragmentedMp4Ring | null = null
 let webmRing: WebmDualSlotRing | null = null
 let captureGeneration = 0
+// Native READY retires recorder work, but a focused display still owns its
+// pending desktop stream for Lane-S. Only a real teardown retires that stream.
+let captureStreamGeneration = 0
 let ingestQueue: BoundedBlobIngestQueue<RecorderIngestPayload> | null = null
 let recorderQueue: Promise<void> = Promise.resolve()
 let replayHold: ReplayHold | null = null
@@ -2381,6 +2384,7 @@ function failCapture(message: string, generation = captureGeneration): void {
 
 function teardown(): void {
   captureGeneration += 1
+  captureStreamGeneration += 1
   sourceLatencyCalibrationCancel?.()
   sourceLatencyCalibrationCancel = null
   sourceLatencyCalibration = undefined
@@ -2483,6 +2487,22 @@ function teardown(): void {
   }
 }
 
+/** Retain a focused presentation clock independently of recorder generations. */
+function retainNativeReplayClock(): void {
+  const clockStream = stream
+  if (clockStream === null) return
+  const streamGeneration = captureStreamGeneration
+  clockStream.getVideoTracks()[0]?.addEventListener('ended', () => {
+    if (
+      streamGeneration !== captureStreamGeneration ||
+      stream !== clockStream ||
+      replayWorkloadActive
+    ) return
+    terminalCaptureFailure('focused presentation clock stream ended')
+  })
+  if (tickVideo === null) startFrameTicks()
+}
+
 /**
  * Release the shipping encoders/rings after native READY without removing the
  * focused display's live presentation clock. Lane-S context observations are
@@ -2532,18 +2552,23 @@ function suspendReplayEncoding(): void {
   const fallback = webmRing
   webmRing = null
   fallback?.clear()
+  // READY can interrupt initial recorder readiness before its video sink has
+  // become the Lane-S clock. Keep the acquired stream and establish that clock
+  // now; the retired recorder generation cannot later start an encoder.
+  retainNativeReplayClock()
 }
 
 async function startCapture(payload: CaptureStartPayload): Promise<void> {
   // Explicit starts and guarded retries both supersede an in-flight
-  // getDisplayMedia call. Teardown retires its generation; the local stream
-  // below is installed only if this attempt still owns the renderer.
+  // getDisplayMedia call. Stream ownership survives recorder-only suspension,
+  // but never an actual teardown or replacement start.
   teardown()
-  if (!replayWorkloadActive) {
+  if (!replayWorkloadActive && !payload.focused) {
     startPayload = payload
     return
   }
   const generation = ++captureGeneration
+  const streamGeneration = captureStreamGeneration
   startPayload = payload
   recorderSourceFps = payload.fps
   captureBackend = 'chromium-desktop-capture'
@@ -2552,7 +2577,7 @@ async function startCapture(payload: CaptureStartPayload): Promise<void> {
   recorderFormat = pickRecorderFormat((mimeType) =>
     MediaRecorder.isTypeSupported(mimeType),
   )
-  if (recorderFormat === null) {
+  if (replayWorkloadActive && recorderFormat === null) {
     failCapture('MediaRecorder has no supported CapturePack replay format')
     return
   }
@@ -2576,11 +2601,23 @@ async function startCapture(payload: CaptureStartPayload): Promise<void> {
       },
     })
   } catch (err) {
+    if (streamGeneration !== captureStreamGeneration) return
+    if (!replayWorkloadActive) {
+      terminalCaptureFailure(`focused presentation clock acquisition failed: ${describe(err)}`)
+      return
+    }
     failCapture(`getDisplayMedia failed: ${describe(err)}`, generation)
     return
   }
-  if (generation !== captureGeneration) {
+  if (streamGeneration !== captureStreamGeneration) {
     for (const track of acquiredStream.getTracks()) track.stop()
+    return
+  }
+  if (!replayWorkloadActive) {
+    // The focused stream is a presentation clock only. Never send it through
+    // recorder installation after native READY, including a fast initial READY.
+    stream = acquiredStream
+    retainNativeReplayClock()
     return
   }
   installRecordingStream(

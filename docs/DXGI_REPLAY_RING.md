@@ -55,18 +55,26 @@ helper.
   output sample, and retention in the native ring.
 - `--serve --retention-ms 1000..60000` runs the persistent export service.
   It accepts bounded `SNAPSHOT\t<request-id>\t<absolute-path>` commands and a
-  `STOP` command on stdin, and emits exact 256-byte `CPNSRV01` READY, SNAPSHOT,
+  `STOP` command on stdin, and emits exact 288-byte version-2 `CPNSRV01` READY, SNAPSHOT,
   or FATAL packets. A successful READY is emitted only after an internal
   keyframe/config-safe snapshot has been muxed and decoded successfully.
 - `--self-test` opens neither the desktop nor a codec. It exercises the native
   timestamp, geometry, encoder-transition, retention, keyframe/configuration,
   and device-loss/reinitialization contracts.
 
+The encoder must establish zero B pictures before streaming: request zero before
+media types, retry after commitment only for encoders requiring that ordering,
+and require a successful request plus exact zero readback. Failed or unavailable
+readback rejects native selection. FIFO output PTS checks remain a separate
+ordering guard; the application's structural MP4 validator is not a decoder.
+
 Every submitted frame starts with DXGI `LastPresentTime` in QPC units. Pointer-
 only updates, duplicate/regressing timestamps, and acquire timeouts do not
 become encoded frames. The exact input QPC is retained alongside its Media
 Foundation 100 ns timestamp so output samples are not mapped back through a
-lossy inverse conversion.
+lossy inverse conversion. Service snapshots carry a measured QPC/system-time
+anchor, so the app maps the first retained exposure to the replay origin instead
+of estimating it from request time minus duration.
 
 The native candidate deliberately supports the settings UI's 1–60 second
 range. Legacy or hand-edited settings above 60 seconds are rejected before the
@@ -133,8 +141,10 @@ npm run check:dxgi-replay-runtime
 
 ## Managed Windows field acceptance
 
-Run only in the DevHotel managed Windows room assigned to the acceptance job,
-after `npm run build -- --require-dxgi-helper`. Use the exact DXGI device name
+Probe DevHotel first and use its assigned managed Windows room when available.
+If no usable managed Windows provider exists, an explicitly authorized bounded
+local run may use the same gate, isolated worktree build, and fresh user data.
+Run after `npm run build -- --require-dxgi-helper`. Use the exact DXGI device name
 when known:
 
 ```powershell
@@ -150,7 +160,8 @@ npm run qa:dxgi-replay-ring -- --left -1920 --top 0 --native-width 1920 --native
 The remaining field gate must prove the full real unlocked-host path reaches
 READY and exports a playable recent-history MP4 through the application. Record
 the room/session, build identity, output identity, hardware encoder, duration,
-sample/keyframe counts, and resource measurements. If no managed Windows room
-is available, leave that gate unverified; do not substitute an ad-hoc local
-desktop run. A locked LogonUI session returning `E_ACCESSDENIED` is an expected
+sample/keyframe counts, and resource measurements. Record provider probe results
+and local authorization when using the bounded local fallback. Never use the
+installed application or mix artifact/user-data directories. A locked LogonUI
+session returning `E_ACCESSDENIED` is an expected
 fail-closed unavailable result and is not a reason to weaken the gate.
