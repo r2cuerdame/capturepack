@@ -636,6 +636,79 @@ async function main(): Promise<void> {
   check('the latest retained movement still restores after compaction',
     compactAt(100_000), [[50_000, 50_000]])
 
+  // Closed/occluded HWNDs must age out even when their last tree is static.
+  // One persistent window plus a new 1,000-control window each second: the
+  // retained window count must be independent of how long this churn runs.
+  console.log()
+  console.log('lane A closed-window retention (#240)')
+  let churnNow = 0
+  const churnLane = new ControlLane(() => churnNow, 1_000)
+  const churn = churnLane as unknown as RetentionInspectable
+  churnLane.setVisible(['persistent'], 'persistent')
+  churn.onMessage({ event: 'tree', h: 'persistent', v: 1, e: [rect(7, 9)] })
+  let peakWindows = 0
+  for (let index = 1; index <= 100; index += 1) {
+    churnNow = index * 1_000
+    const hwnd = String(index)
+    churnLane.setVisible(['persistent', hwnd], hwnd)
+    churn.onMessage({
+      event: 'tree', h: hwnd, v: 1,
+      e: Array.from({ length: 1_000 }, (_, i) => rect(i, i)),
+    })
+    if (index % 2 === 0) {
+      churn.prune()
+      peakWindows = Math.max(peakWindows, churn.logs.size)
+    }
+  }
+  check('100 churned HWNDs retain only active/recently hidden trees', churn.logs.size, 4)
+  check('closed-window history reaches a steady four-window bound', peakWindows, 4)
+  check('retained resource instrumentation counts trees and all control objects',
+    churnLane.resourceStats(), {
+      retainedWindows: 4, retainedTrees: 4, retainedElements: 3_001,
+      retainedMoves: 0, retainedDeaths: 0,
+    })
+  check('a visible static tree survives many retention windows',
+    churnLane.controlsAt(churnNow).find((entry) => entry.hwnd === 'persistent')?.controls[0]?.x, 7)
+
+  // Hiding time, not tree age, controls expiry. Preserve the inclusive cutoff
+  // and an independent snapshot already handed to a frozen editor.
+  const frozenControls = churnLane.controlsAt(churnNow)
+  churnNow += 1
+  churnLane.setVisible([], null)
+  churnNow += 1_000
+  churnLane.setVisible([], null) // Repeated maintenance must not renew expiry.
+  churn.prune()
+  check('just-hidden static trees survive through the inclusive retention cutoff',
+    churn.logs.has('persistent'), true)
+  churnNow += 1
+  churn.prune()
+  check('no historical HWND remains once hidden outside retention', churn.logs.size, 0)
+  check('eviction does not mutate controls already copied for a frozen editor',
+    frozenControls.find((entry) => entry.hwnd === 'persistent')?.controls[0]?.x, 7)
+
+  // A retained window may become visible again before expiration, without a
+  // fresh UIA walk. Its old tree is once again needed for current frames.
+  churnNow += 100
+  churnLane.setVisible(['returning'], 'returning')
+  churn.onMessage({ event: 'tree', h: 'returning', v: 1, e: [rect(11, 12)] })
+  churnNow += 100
+  churnLane.setVisible([], null)
+  churnNow += 500
+  churnLane.setVisible(['returning'], 'returning')
+  churnNow += 10_000
+  churn.prune()
+  check('returning visible HWND cancels its old expiry', churn.logs.has('returning'), true)
+
+  // The pipe may deliver a completed tree after Lane S has hidden its HWND.
+  // Such a result gets one retention window, never indefinite ownership.
+  churnLane.setVisible([], null)
+  churn.onMessage({ event: 'tree', h: 'late', v: 1, e: [rect(15, 16)] })
+  churnNow += 500
+  churn.onMessage({ event: 'tree', h: 'late', v: 2, e: [rect(17, 18)] })
+  churnNow += 501
+  churn.prune()
+  check('late tree output for an absent HWND also expires', churn.logs.size, 0)
+
   // ---- END TO END: do they reach ContextObservation.elements? --------------
   //
   // Everything above is the lane's own replay. This is the seam that actually
