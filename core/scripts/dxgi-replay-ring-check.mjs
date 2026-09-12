@@ -13,15 +13,21 @@ const encoderEnd = nativeSource.indexOf('bool GpuCompletedWithin(', encoderStart
 const encoder = encoderStart >= 0 && encoderEnd > encoderStart
   ? nativeSource.slice(encoderStart, encoderEnd)
   : ''
-const bFrameRequest = encoder.indexOf(
-  'SetCodecUint32(codec.Get(), CODECAPI_AVEncMPVDefaultBPictureCount, 0, true)',
+const bFrameRequest = encoder.search(
+  /SetCodecUint32\(\s*codec\.Get\(\),\s*CODECAPI_AVEncMPVDefaultBPictureCount,\s*0,\s*true(?:,\s*&zeroBBeforeTypesResult)?\s*\)/u,
 )
 const outputTypeCommit = encoder.indexOf('transform_->SetOutputType(0, outputType_.Get(), 0)')
 const inputTypeCommit = encoder.indexOf('transform_->SetInputType(0, inputType_.Get(), 0)')
-const bFrameVerification = encoder.indexOf(
-  'if (!EstablishZeroBPictureCount(codec.Get(), zeroBRequestedBeforeTypes))',
+const bFrameVerification = encoder.search(
+  /if\s*\(!EstablishZeroBPictureCount\(\s*codec\.Get\(\),\s*zeroBRequestedBeforeTypes(?:,\s*&zeroBDiagnostic)?\s*\)\)/u,
 )
 const beginStreaming = encoder.indexOf('MFT_MESSAGE_NOTIFY_BEGIN_STREAMING')
+const unitGuard = encoder.indexOf('zeroReorderGuard_.Validate(nals, keyframe)')
+const ringAppend = encoder.indexOf('ring.Append(std::move(unit))')
+if (unitGuard < 0 || ringAppend <= unitGuard ||
+    !encoder.includes('H264NoBSlices(nals, keyframe)')) {
+  throw new Error('Every native access unit needs the no-B guard before ring insertion')
+}
 if (bFrameRequest < 0 || outputTypeCommit <= bFrameRequest ||
     inputTypeCommit <= outputTypeCommit || bFrameVerification <= inputTypeCommit ||
     beginStreaming <= bFrameVerification) {
@@ -30,6 +36,12 @@ if (bFrameRequest < 0 || outputTypeCommit <= bFrameRequest ||
   )
 }
 const expectedNativeSelfTestLines = [
+  'SELFTEST PASS h264-config-explicit-zero-reorder',
+  'SELFTEST PASS h264-poc2-frame-progression-wrap-idr',
+  'SELFTEST PASS h264-b-reorder-marking-fail-closed',
+  'SELFTEST PASS h264-multislice-one-picture',
+  'SELFTEST PASS h264-malformed-extension-config-rejected',
+  'SELFTEST PASS h264-cabac-padding-bounded',
   'SELFTEST PASS timestamps',
   'SELFTEST PASS rotation-topology',
   'SELFTEST PASS cursor-position-pointer-only-clipping',

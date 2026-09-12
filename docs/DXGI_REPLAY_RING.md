@@ -62,11 +62,26 @@ helper.
   timestamp, geometry, encoder-transition, retention, keyframe/configuration,
   and device-loss/reinitialization contracts.
 
-The encoder must establish zero B pictures before streaming: request zero before
-media types, retry after commitment only for encoders requiring that ordering,
-and require a successful request plus exact zero readback. Failed or unavailable
-readback rejects native selection. FIFO output PTS checks remain a separate
-ordering guard; the application's structural MP4 validator is not a decoder.
+The encoder first requests zero B pictures before media types, retries after
+commitment when needed, and checks for successful configuration plus exact zero
+readback. NVIDIA's MFT rejects this property even though its output can explicitly
+signal zero reordering. When the property contract is unavailable, the native
+helper must establish a separate, bounded bitstream contract before streaming:
+Main-profile progressive POC type 2, explicit VUI zero reordering, and supported
+SPS/PPS syntax. Every access unit must then contain only reference I/P slices
+from one picture, without adaptive reference marking, and follow the exact
+frame-number sequence between IDRs (including normal modulo wrap). Unsupported,
+malformed, reordered, or changed configuration fails closed before ring retention
+and READY. FIFO input/output PTS checks remain independent of this bitstream
+inspection. The application's structural MP4 validator is not a decoder; actual
+snapshot decoding is performed separately.
+
+The property type is Microsoft's documented
+[`VT_UI4` contract](https://learn.microsoft.com/en-us/windows/win32/codecapi/avencmpvdefaultbpicturecount-property).
+The fallback follows [ITU-T H.264](https://www.itu.int/rec/T-REC-H.264-202606-I/en)
+syntax and POC type 2 derivation (sections 7.3/7.4 and 8.2.1.3), with the explicit
+zero-reordering restriction from Annex E. I/P-only slice types alone are not an
+ordering proof.
 
 Every submitted frame starts with DXGI `LastPresentTime` in QPC units. Pointer-
 only updates, duplicate/regressing timestamps, and acquire timeouts do not
