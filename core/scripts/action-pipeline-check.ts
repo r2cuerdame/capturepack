@@ -157,6 +157,21 @@ console.log('\nWHETHER A STEP MAY RUN')
   )
   const halted = decideStep({ ...base, pipelineHalted: true, step: step() })
   check('a step behind a halted pipeline is SKIPPED', !halted.run && halted.outcome === 'skipped')
+  const waitingForComplete = decideStep({
+    ...base,
+    packState: 'annotated-replay-ready',
+    step: step({ requiredPackState: 'complete' }),
+  })
+  check(
+    "a step requiring 'complete' is BLOCKED at annotated-replay-ready",
+    !waitingForComplete.run && waitingForComplete.outcome === 'blocked' && (waitingForComplete.message ?? '').includes('complete'),
+  )
+  const completeStep = decideStep({
+    ...base,
+    packState: 'complete',
+    step: step({ requiredPackState: 'complete' }),
+  })
+  check("a step requiring 'complete' runs when pack state is complete", completeStep.run)
 }
 
 console.log('\nWHAT STOPS A PIPELINE')
@@ -324,6 +339,38 @@ console.log('\nRUNNING A PIPELINE')
     run.results.map((r) => `${r.actionId}:${r.outcome}`).join(',') === 'a:blocked,b:ok',
   )
 }
+{
+  let completeActionCalls = 0
+  const blockedRun = await runPipeline({
+    packId: PACK,
+    packState: 'annotated-replay-ready',
+    steps: [step({ id: 'terminal-action', requiredPackState: 'complete' })],
+    completedKeys: new Set(),
+    execute: async () => {
+      completeActionCalls += 1
+    },
+    clock: fastClock(),
+  })
+  check(
+    "an action configured with requiredPackState 'complete' is BLOCKED at annotated-replay-ready",
+    blockedRun.results[0]?.outcome === 'blocked' && completeActionCalls === 0,
+  )
+
+  const completeRun = await runPipeline({
+    packId: PACK,
+    packState: 'complete',
+    steps: [step({ id: 'terminal-action', requiredPackState: 'complete' })],
+    completedKeys: new Set(),
+    execute: async () => {
+      completeActionCalls += 1
+    },
+    clock: fastClock(),
+  })
+  check(
+    "an action configured with requiredPackState 'complete' executes when 'complete' is emitted",
+    completeRun.results[0]?.outcome === 'ok' && completeActionCalls === 1,
+  )
+}
 
 console.log('\nRETRY IS OFFERED ONLY WHERE IT MEANS SOMETHING')
 {
@@ -401,6 +448,21 @@ console.log('\nTHE APP ACTUALLY RUNS THE PIPELINE')
     'neither call is awaited — a pack that is already durable never waits for an action',
     session.includes("void runActionsAtState(savedHandle.dirPath")
       && session.includes("void runActionsAtState(dirPath"),
+  )
+  check(
+    'it fires at complete once derived processing finishes after annotated-replay-ready',
+    session.includes("void runActionsAtState(dirPath, 'annotated-replay-ready', settings)")
+      && session.includes("void runActionsAtState(dirPath, 'complete', settings)"),
+  )
+  check(
+    "captures without video replay emit 'complete' once background keyframe still processing completes",
+    session.includes("startKeyframeStill(")
+      && session.includes("void runActionsAtState(dirPath, 'complete', settings)"),
+  )
+  check(
+    "image packs transition through source-ready and emit 'complete' upon still completion",
+    session.includes("void runActionsAtState(savedHandle.dirPath, 'source-ready', settings)")
+      && session.includes("void runActionsAtState(savedHandle.dirPath, 'complete', settings)"),
   )
 
   check('settings persist the configured pipeline', settings.includes('readActionConfigs(raw.actionConfigs'))

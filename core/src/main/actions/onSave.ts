@@ -1,15 +1,17 @@
 // Firing the After Save Action pipeline at the moments a pack changes state
-// (#68), and telling the user by name when one fails.
+// (#68, #160), and telling the user by name when one fails.
 //
-// Two call sites, both in session.ts, both chosen because they are where the
-// pack genuinely reaches a state rather than where it is convenient to call:
+// Call sites in session.ts, chosen because they are where the pack genuinely
+// reaches a state rather than where it is convenient to call:
 //
-//   source-ready            immediately after notePackSaved() — the line the
-//                           save flow itself documents as "everything above
-//                           this is what saved means"
+//   source-ready            immediately after notePackSaved() or image pack save —
+//                           the line the save flow itself documents as "everything
+//                           above this is what saved means"
 //   annotated-replay-ready  when the derived render reports 'done'
+//   complete                when derived background processing settles (after
+//                           annotated-replay-ready, or after keyframe still finishes)
 //
-// Actions blocked at the first moment are simply run again at the second. That
+// Actions blocked at the first moment are simply run again at later states. That
 // is cheaper and more honest than a queue: decideStep already refuses to repeat
 // an idempotent action that succeeded, so re-running the pipeline is how a
 // blocked step gets its second chance.
