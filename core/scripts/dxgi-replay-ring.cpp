@@ -1791,7 +1791,10 @@ class SnapshotMuxTiming {
         }
       } else return false;
     }
-    return tfra && mfro;
+    // MF omits tfra when its single-frame READY export has no seek entries.
+    // There is then no indexed timestamp to rewrite; the mandatory footer and
+    // every tfra that is present still require complete validation above.
+    return mfro;
   }
   std::vector<std::uint8_t>& bytes_;
   const EncodedRingSnapshot& snapshot_;
@@ -1807,6 +1810,19 @@ bool RewriteSnapshotMuxFile(const std::wstring& path, std::vector<std::uint8_t>&
   SnapshotMuxTiming timing(bytes, snapshot);
   if (!timing.Rewrite()) {
     std::fprintf(stderr, "dxgi replay: unsupported MP4 timing layout at %s\n", timing.stage());
+    // Metadata only: retain bounded index evidence when an unpublished export
+    // is rejected and deleted. Never dump encoded media or relax validation.
+    std::vector<Mp4TimingBox> boxes;
+    if (Mp4TimingChildren(bytes, 0, bytes.size(), boxes)) {
+      for (const auto& box : boxes) if (box.type == Mp4Type('m','f','r','a')) {
+        const auto length = std::min<std::size_t>(box.end - box.start, 512);
+        std::fprintf(stderr, "dxgi replay: rejected mfra offset=%llu size=%llu samples=%llu prefix=",
+            static_cast<unsigned long long>(box.start), static_cast<unsigned long long>(box.end - box.start),
+            static_cast<unsigned long long>(snapshot.units.size()));
+        for (std::size_t i = 0; i < length; ++i) std::fprintf(stderr, "%02x", bytes[box.start + i]);
+        std::fprintf(stderr, "\n");
+      }
+    }
     return false;
   }
   HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
@@ -3945,7 +3961,7 @@ struct MuxTimingFixture {
   }
   std::size_t Begin(const char* type) { const auto at = bytes.size(); Put(0); for (int i = 0; i < 4; ++i) bytes.push_back(type[i]); return at; }
   void End(std::size_t at) { Set(at, bytes.size() - at); }
-  explicit MuxTimingFixture(std::size_t count = 45, bool includeTfdt = false) {
+  explicit MuxTimingFixture(std::size_t count = 45, bool includeTfdt = false, bool includeTfra = true) {
     snapshot.generation = 1; snapshot.firstQpc = 1; snapshot.lastQpc = 1;
     snapshot.codecConfig = {1}; snapshot.durationHns = static_cast<std::int64_t>(count) * 666'800;
     for (std::size_t i = 0; i < count; ++i) {
@@ -3967,8 +3983,8 @@ struct MuxTimingFixture {
     End(stbl); End(minf); End(mdia); End(trak);
     const auto mvex = Begin("mvex"); box = Begin("trex"); Put(0); Put(1); Put(1); Put(0); Put(0); Put(0); End(box); End(mvex); End(moov);
     std::vector<std::size_t> moofs;
-    for (std::size_t fragment = 0; fragment < 2; ++fragment) {
-      const auto countInRun = fragment == 0 ? 22 : count - 22;
+    for (std::size_t fragment = 0; fragment < (count > 22 ? 2U : 1U); ++fragment) {
+      const auto countInRun = fragment == 0 ? std::min<std::size_t>(22, count) : count - 22;
       const auto moof = Begin("moof"); moofs.push_back(moof);
       box = Begin("mfhd"); Put(0); Put(fragment + 1); End(box);
       const auto traf = Begin("traf");
@@ -3987,13 +4003,18 @@ struct MuxTimingFixture {
       payloads.push_back({payload, bytes.size()}); End(box);
     }
     const auto mfra = Begin("mfra");
-    box = Begin("tfra"); Put(0x01000000); Put(1); Put(1); Put(3);
-    for (std::size_t index : {std::size_t{0}, std::size_t{3}, count > 282 ? std::size_t{281} : std::size_t{25}}) {
-      indexSamples.push_back(index); seekTimes.push_back(bytes.size()); Put(index * 1000, 8);
-      Put(moofs[index < 22 ? 0 : 1], 8); Put(1, 1); Put(1, 1);
-      seekSamples.push_back(bytes.size()); Put(index < 22 ? index + 1 : index - 21, 2);
+    for (std::size_t index : {std::size_t{0}, std::size_t{3}, count > 282 ? std::size_t{281} : std::size_t{25}})
+      if (index < count) indexSamples.push_back(index);
+    if (includeTfra) {
+      box = Begin("tfra"); Put(0x01000000); Put(1); Put(1); Put(indexSamples.size());
+      for (std::size_t index : indexSamples) {
+        seekTimes.push_back(bytes.size()); Put(index * 1000, 8);
+        Put(moofs[index < 22 ? 0 : 1], 8); Put(1, 1); Put(1, 1);
+        seekSamples.push_back(bytes.size()); Put(index < 22 ? index + 1 : index - 21, 2);
+      }
+      End(box);
     }
-    End(box); box = Begin("mfro"); Put(0); const auto mfraSize = bytes.size(); Put(0); End(box); End(mfra); Set(mfraSize, bytes.size() - mfra);
+    box = Begin("mfro"); Put(0); const auto mfraSize = bytes.size(); Put(0); End(box); End(mfra); Set(mfraSize, bytes.size() - mfra);
   }
 };
 
@@ -4019,6 +4040,22 @@ bool MuxTimingSelfTests() {
   for (const auto& payload : fixture.payloads) exact &= std::equal(
       original.begin() + payload.first, original.begin() + payload.second, fixture.bytes.begin() + payload.first);
   bool passed = NamedSelfTest("mux-absolute-boundaries-no-cumulative-rounding", exact);
+  // Exact MF single-frame READY footer: no seek table is emitted at all.
+  MuxTimingFixture single(1, false, false);
+  const std::vector<std::uint8_t> observedEmptyIndex = {
+      0,0,0,24, 'm','f','r','a', 0,0,0,16, 'm','f','r','o', 0,0,0,0, 0,0,0,24};
+  const auto singleBefore = single.bytes;
+  SnapshotMuxTiming singleRewrite(single.bytes, single.snapshot);
+  bool emptyIndex = std::equal(observedEmptyIndex.begin(), observedEmptyIndex.end(),
+      single.bytes.end() - observedEmptyIndex.size()) && singleRewrite.Rewrite();
+  emptyIndex &= single.bytes.size() == singleBefore.size() && std::equal(
+      observedEmptyIndex.begin(), observedEmptyIndex.end(), single.bytes.end() - observedEmptyIndex.size());
+  auto badFooter = MuxTimingFixture(1, false, false);
+  badFooter.Set(badFooter.bytes.size() - 4, 23);
+  const auto badFooterBefore = badFooter.bytes;
+  SnapshotMuxTiming badFooterRewrite(badFooter.bytes, badFooter.snapshot);
+  emptyIndex &= !badFooterRewrite.Rewrite() && badFooter.bytes == badFooterBefore;
+  passed &= NamedSelfTest("mux-single-frame-empty-random-access-index", emptyIndex);
   MuxTimingFixture wide(300, true);
   SnapshotMuxTiming wideRewrite(wide.bytes, wide.snapshot);
   bool indexes = wideRewrite.Rewrite();
