@@ -37,6 +37,7 @@ if (bFrameRequest < 0 || outputTypeCommit <= bFrameRequest ||
 }
 const expectedNativeSelfTestLines = [
   'SELFTEST PASS mux-absolute-boundaries-no-cumulative-rounding',
+  'SELFTEST PASS mux-single-frame-empty-random-access-index',
   'SELFTEST PASS mux-tfdt-tfra-interior-wide-sample-index',
   'SELFTEST PASS mux-malformed-unsupported-timing-transactional',
   'SELFTEST PASS mux-field-width-overflow-fails-closed',
