@@ -10,6 +10,7 @@
 import AdmZip from 'adm-zip'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import { stripUtf8Bom } from '../shared/json'
 
 /**
  * Archive extensions this app will open, newest convention first.
@@ -90,7 +91,7 @@ export function isShareBundleArchive(file: string): boolean {
     if (inventories.length !== 1) return false
     const inventory = inventories[0]!
     if (inventory.header.size > MAX_SHARE_IDENTITY_BYTES) return false
-    const parsed = JSON.parse(inventory.getData().toString('utf8')) as unknown
+    const parsed = JSON.parse(stripUtf8Bom(inventory.getData().toString('utf8'))) as unknown
     return (
       parsed !== null &&
       typeof parsed === 'object' &&

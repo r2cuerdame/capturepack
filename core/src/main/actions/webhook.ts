@@ -20,6 +20,7 @@ import {
   BUILTIN_WEBHOOK_MANIFEST,
   isAcceptableWebhookUrl,
 } from '../../shared/actions'
+import { stripUtf8Bom } from '../../shared/json'
 
 export { isAcceptableWebhookUrl }
 
@@ -56,7 +57,7 @@ interface PackSummary {
 export async function readPackSummary(packDir: string): Promise<PackSummary> {
   const manifestPath = path.join(packDir, 'manifest.json')
   const raw = await readFile(manifestPath, 'utf8')
-  const parsed: unknown = JSON.parse(raw)
+  const parsed: unknown = JSON.parse(stripUtf8Bom(raw))
   const record = typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {}
   const media = typeof record.media === 'object' && record.media !== null
     ? (record.media as Record<string, unknown>)

@@ -241,6 +241,39 @@ try {
   check('the same .share.zip is not stolen as another pack folder\'s Full ZIP',
     siblingArchive(`${success.dir}.share`) === null)
 
+  const bom = makeFixture('bom')
+  for (const rel of ['manifest.json', 'annotations.json']) {
+    const file = path.join(bom.dir, rel)
+    writeFileSync(file, '\uFEFF' + readFileSync(file, 'utf8'), 'utf8')
+  }
+  // The BOM edit is the reviewed source revision. Re-stamp the derived stills
+  // afterwards so the fixture remains in the same ready state as a real render.
+  for (const rel of [
+    path.join('frames', 'frame-01_00-01.000.png'),
+    path.join('frames-d2', 'frame-01_00-01.000.png'),
+  ]) {
+    const file = path.join(bom.dir, rel)
+    writeFileSync(file, readFileSync(file))
+  }
+  const bomPlan = await planShareBundle(bom.dir)
+  check(
+    'Share Copy planning accepts BOM-prefixed manifest and annotations control files',
+    bomPlan.entries.length === 2 && bomPlan.visibleLabels.includes('SECRET_VISIBLE_LABEL_51c4'),
+  )
+  const bomCreated = await createShareBundle(bom.dir, bomPlan.revision)
+  check(
+    'Share Copy creation accepts the reviewed BOM-prefixed control files',
+    existsSync(bomCreated.zipPath),
+  )
+  const bomArchive = new AdmZip(bomCreated.zipPath)
+  const shareInventory = bomArchive.getEntry('share.json')!.getData().toString('utf8')
+  bomArchive.updateFile('share.json', Buffer.from('\uFEFF' + shareInventory, 'utf8'))
+  bomArchive.writeZip(bomCreated.zipPath)
+  check(
+    'managed Share Copy identity accepts a BOM-prefixed share.json',
+    isShareBundleArchive(bomCreated.zipPath),
+  )
+
   const image = makeImageFixture('image')
   const imagePlan = await planShareBundle(image.dir)
   check('an explicit image capture uses the null/capture lane',

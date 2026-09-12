@@ -14,6 +14,7 @@
 // what the replay costs, not what the browsing session does.
 import * as fs from 'node:fs'
 import * as net from 'node:net'
+import { stripUtf8Bom } from '../../shared/json'
 import { bundledExtensionVersion } from './install'
 import { ExtensionConnectionLedger } from './lifecycle'
 import { domPipePath } from './nativeHost'
@@ -791,7 +792,7 @@ export function parseDomPayload(text: string | null): DomEvent[] {
   if (text === null) return []
   let raw: unknown
   try {
-    raw = JSON.parse(text) as unknown
+    raw = JSON.parse(stripUtf8Bom(text)) as unknown
   } catch {
     return []
   }

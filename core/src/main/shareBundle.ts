@@ -16,6 +16,7 @@ import { lstat, readFile, readdir, realpath, rm } from 'node:fs/promises'
 import * as path from 'node:path'
 import { deflateSync, inflateSync } from 'node:zlib'
 import { captureMediaViolations } from '../shared/captureMedia'
+import { stripUtf8Bom } from '../shared/json'
 import type {
   Annotation,
   Manifest,
@@ -624,7 +625,7 @@ async function readPack(root: string): Promise<ParsedPack> {
   const manifestBytes = manifestFile.bytes
   let manifest: Manifest
   try {
-    const parsed = JSON.parse(manifestBytes.toString('utf8')) as unknown
+    const parsed = JSON.parse(stripUtf8Bom(manifestBytes.toString('utf8'))) as unknown
     if (!isRecord(parsed) || parsed['format'] !== 'capturepack' || !isRecord(parsed['media'])) {
       throw new Error('not a CapturePack manifest')
     }
@@ -642,7 +643,7 @@ async function readPack(root: string): Promise<ParsedPack> {
   let annotationFrame: { width: number; height: number } | null = null
   if (annotationBytes !== null) {
     try {
-      const parsed = JSON.parse(annotationBytes.toString('utf8')) as unknown
+      const parsed = JSON.parse(stripUtf8Bom(annotationBytes.toString('utf8'))) as unknown
       if (
         !isRecord(parsed) ||
         !positiveInteger(parsed['reference_width']) ||

@@ -11,6 +11,7 @@
 // same translation, so `element_transforms` records that observed translation
 // once and the element patches retain only genuine internal changes.
 import type { EditorUiaElement, EditorUiaWindow } from '../../shared/ipc'
+import { stripUtf8Bom } from '../../shared/json'
 import type { ContextObservation } from './buffer'
 
 export const WINDOWS_CONTEXT_TIMELINE_SCHEMA = 'capturepack.windows-context.timeline'
@@ -1289,7 +1290,7 @@ export function loadWindowsContextHistory(
   }
   let value: unknown
   try {
-    value = JSON.parse(text) as unknown
+    value = JSON.parse(stripUtf8Bom(text)) as unknown
   } catch {
     return { status: 'dropped', reason: 'invalid-json', bytes: actualBytes }
   }
