@@ -156,12 +156,29 @@ included. The dependency-side regression/build is the remaining blocker.
 
 ```powershell
 node scripts/recorder-crash-inspect.mjs <dump.dmp>
-# Only after confirming the disassembly above for the matching executable:
+# Interpretation is gated on the independently verified identity/site above:
 node scripts/recorder-crash-inspect.mjs <dump.dmp> --checked-u32-add
+npm run check:recorder-crash-inspect
 ```
 
-The inspector prints metadata and selected numeric operands only. The optional
-interpretation is explicit; it is not a generic STATUS_BREAKPOINT detector.
+The inspector prints metadata and selected numeric operands only. Before reading
+RSI/RDI or operand memory, the optional interpretation requires AMD64,
+`STATUS_BREAKPOINT` (`0x80000003`), fault module `CapturePack.exe`, fault RVA
+`0x3b28d0a`, and a complete RSDS record with GUID bytes
+`0dff164f3181aab74c4c44205044422e` (the on-disk encoding of the GUID above), age 1.
+If this independently verified identity/site cannot be established, it reports
+`checkedU32Add.available: false` with a reason and no operand/diagnosis fields.
+It is not a generic STATUS_BREAKPOINT detector.
+
+The focused check constructs tiny synthetic minidumps from the two documented
+dump identities/operands in `core/test/fixtures/issue243/crash-identities.json`;
+these are not copies of private dump memory. Both expected sums remain covered.
+An unrelated breakpoint with identical registers/memory, individual identity
+mismatches, missing/out-of-file CodeView, missing module, non-AMD64 context and
+an unrelated site with unusable context must all be unavailable. Before the
+gate, 11 negative tests failed (the two positive fixtures and metadata-only test
+passed); with the gate, all 14 pass. The check is registered for hosted QA.
+
 Installed logs, dumps and executable were only read; no installed app was started
 or modified. No dump or binary is committed/uploaded.
 
