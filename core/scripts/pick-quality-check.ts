@@ -37,6 +37,10 @@ import { openPackContextSession, readPackObjectContext } from '../src/main/conte
 import { ObjectIndex } from '../src/renderer/editor/objects'
 import type { PickableObject } from '../src/renderer/editor/objects'
 import { writeFixturePack } from './fixtures/pickQualityFixture'
+import {
+  loadRealPackCorpus,
+  writeRealPackCorpusCases,
+} from './fixtures/realPackCorpus'
 
 /**
  * PROBE SPACING, in snapshot pixels — and the reason for the number.
@@ -429,9 +433,75 @@ async function main(): Promise<void> {
     failures += 1
   }
 
+  // THE MAINTAINED REAL-PACK CORPUS (#139). Each committed case is a
+  // geometry-only distillation of a pack that really passed through the app:
+  // neutral pixels replace the screenshot and every user-controlled string is
+  // discarded. Reconstructing a pack here keeps the gate on the same
+  // readPackObjectContext -> frameAt -> ObjectIndex path as a reopen.
+  //
+  // Two clocks remain separate on purpose:
+  //   observed_hands_off_ms is the capture -> painted editor measurement from
+  //     the source run's production monotonic log;
+  //   replayMs is what THIS build spends reopening that saved shape and making
+  //     candidates available. Adding them would double-count unrelated work
+  //     and make neither regression diagnosable.
+  const corpus = loadRealPackCorpus()
+  console.log(`--- maintained real-pack corpus: ${String(corpus.cases.length)} privacy-safe case(s) ---`)
+  for (const entry of corpus.hard_case_inventory) {
+    const companion = entry.companion_checks?.length
+      ? `; companion ${entry.companion_checks.join(', ')}`
+      : ''
+    console.log(`  coverage ${entry.id}: ${entry.status}${companion}`)
+  }
+  for (const written of writeRealPackCorpusCases(corpus)) {
+    const started = performance.now()
+    const swept = await sweepPack(written.dirPath, stride)
+    const replayMs = performance.now() - started
+    if (swept === null) {
+      console.error(`FAIL ${written.definition.id}: the distilled saved pack could not be reopened`)
+      failures += 1
+      continue
+    }
+    swept.name = written.definition.id
+    const stats = statsOf(swept)
+    const t = written.definition.thresholds
+    const reasons: string[] = []
+    if (replayMs > t.max_replay_to_candidates_ms) {
+      reasons.push(
+        `replay-to-candidates ${replayMs.toFixed(1)} ms > ${String(t.max_replay_to_candidates_ms)} ms`,
+      )
+    }
+    if (t.expected_controls === 'some' && stats.controls === 0) {
+      reasons.push('expected a control offer but candidates became unavailable')
+    }
+    if (t.expected_controls === 'none' && stats.controls !== 0) {
+      reasons.push(`expected the honest window-only floor but got ${String(stats.controls)} control offers`)
+    }
+    if (stats.controls > 0 && stats.median > t.max_median_control_fraction) {
+      reasons.push(`median ${pct(stats.median)} > ${pct(t.max_median_control_fraction)}`)
+    }
+    if (stats.controls > 0 && stats.p90 > t.max_p90_control_fraction) {
+      reasons.push(`p90 ${pct(stats.p90)} > ${pct(t.max_p90_control_fraction)}`)
+    }
+    if (stats.preciseShare < t.min_precise_control_share) {
+      reasons.push(`precise share ${pct(stats.preciseShare)} < ${pct(t.min_precise_control_share)}`)
+    }
+    const failed = reasons.length > 0
+    if (failed) failures += 1
+    console.log(line(swept, stats, failed))
+    console.log(
+      `      capture->editor ${String(written.definition.observed_hands_off_ms)} ms` +
+        ` / ${String(t.max_hands_off_ms)} ms; replay->candidates ${replayMs.toFixed(1)} ms` +
+        ` / ${String(t.max_replay_to_candidates_ms)} ms; ${written.definition.classifications.join('+')}`,
+    )
+    for (const reason of reasons) console.error(`      FAIL: ${reason}`)
+  }
+
   const folders = packFolders(PACK_ROOT)
   if (folders.length === 0) {
-    console.log(`no packs under ${PACK_ROOT} — the fixture is the whole measurement here`)
+    console.log(
+      `no optional packs under ${PACK_ROOT} — the committed corpus is the complete measurement here`,
+    )
   } else {
     console.log(`--- ${String(folders.length)} pack(s) under ${PACK_ROOT} ---`)
     const medians: number[] = []
