@@ -2115,56 +2115,68 @@ try {
       helper_gone: false,
       pass: false,
     }
-    if (helpers.length !== 1 || resolvedTargetId === 'all') {
-      throw new Error('native lifecycle proof requires exactly one owned service on the selected display')
-    }
-    const helper = helpers[0]
-    const quotePs = (value) => `'${String(value).replaceAll("'", "''")}'`
-    // Revalidate ancestry, executable, command line, and creation identity in
-    // the same bounded process that kills the helper; never select by name.
-    const killScript = `
-$ErrorActionPreference='Stop'
-$nodes=@(Get-CimInstance Win32_Process)
-$target=$nodes | Where-Object { $_.ProcessId -eq ${helper.pid} }
-if($null -eq $target -or $target.ExecutablePath -ine ${quotePs(expectedHelper)} -or $target.CommandLine -cne ${quotePs(helper.command_line)} -or $target.CreationDate.ToUniversalTime().ToString('o') -cne ${quotePs(helper.creation_date)}) { throw 'owned helper identity changed' }
-if($target.CommandLine -notmatch '(?:^|\\s)--serve(?:\\s|$)') { throw 'not a replay service' }
-$ancestor=[int]$target.ParentProcessId
-$visited=New-Object 'System.Collections.Generic.HashSet[int]'
-while($ancestor -ne ${appProcess.pid}) {
-  if(-not $visited.Add($ancestor)) { throw 'invalid ancestry' }
-  $parent=$nodes | Where-Object { $_.ProcessId -eq $ancestor }
-  if($null -eq $parent) { throw 'helper is not an app descendant' }
-  $ancestor=[int]$parent.ParentProcessId
-}
-Stop-Process -Id ([int]$target.ProcessId) -Force -ErrorAction Stop
-Wait-Process -Id ([int]$target.ProcessId) -Timeout 10 -ErrorAction SilentlyContinue
-if($null -ne (Get-Process -Id ([int]$target.ProcessId) -ErrorAction SilentlyContinue)) { throw 'owned helper survived termination' }
-Write-Output 'owned native replay service terminated'
-`
-    report.native_lifecycle.injected_at = new Date().toISOString()
-    const killed = await runBounded('powershell.exe', [
-      '-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encodedPowerShell(killScript),
-    ], { timeoutMs: 15_000, maxStdoutBytes: 4096 })
-    report.native_lifecycle.termination = killed
-    if (killed.code !== 0) throw new Error('could not terminate the verified owned native service')
-    const recovered = await waitFor(() => {
-      const afterLog = readFileSync(logPath, 'utf8').slice(beforeLog.length)
-      const evidence = lifecycleLogEvidence({
-        mainLog: beforeLog, fallbackMainLog: afterLog, displayId: resolvedTargetId,
-      })
-      report.native_lifecycle.log_evidence = evidence
-      report.native_lifecycle.fallback_log = afterLog
-      return evidence.pass
-    }, 45_000)
-    const afterProcesses = await processTreeSnapshot(appProcess.pid)
-    report.native_lifecycle.after_processes = afterProcesses
-    report.native_lifecycle.helper_gone = !afterProcesses.processes.some((row) => (
-      row.pid === helper.pid || row.executable_path?.toLowerCase() === expectedHelper.toLowerCase()
-    ))
-    report.native_lifecycle.pass = recovered && report.native_lifecycle.helper_gone
-    writeJsonAtomic(path.join(artifactsDir, 'native-lifecycle.json'), report.native_lifecycle)
-    if (!report.native_lifecycle.pass) {
-      throw new Error('native failure did not prove helper teardown and fresh shipping frame evidence')
+    try {
+      if (helpers.length !== 1 || resolvedTargetId === 'all') {
+        throw new Error('native lifecycle proof requires exactly one owned service on the selected display')
+      }
+      const helper = helpers[0]
+      const quotePs = (value) => `'${String(value).replaceAll("'", "''")}'`
+      // Revalidate ancestry, executable, command line, and creation identity in
+      // the same bounded process that kills the helper; never select by name.
+      const killScript = `
+  $ErrorActionPreference='Stop'
+  $nodes=@(Get-CimInstance Win32_Process)
+  $target=$nodes | Where-Object { $_.ProcessId -eq ${helper.pid} }
+  if($null -eq $target -or $target.ExecutablePath -ine ${quotePs(expectedHelper)} -or $target.CommandLine -cne ${quotePs(helper.command_line)} -or $target.CreationDate.ToUniversalTime().ToString('o') -cne ${quotePs(helper.creation_date)}) { throw 'owned helper identity changed' }
+  if($target.CommandLine -notmatch '(?:^|\\s)--serve(?:\\s|$)') { throw 'not a replay service' }
+  $ancestor=[int]$target.ParentProcessId
+  $visited=New-Object 'System.Collections.Generic.HashSet[int]'
+  while($ancestor -ne ${appProcess.pid}) {
+    if(-not $visited.Add($ancestor)) { throw 'invalid ancestry' }
+    $parent=$nodes | Where-Object { $_.ProcessId -eq $ancestor }
+    if($null -eq $parent) { throw 'helper is not an app descendant' }
+    $ancestor=[int]$parent.ParentProcessId
+  }
+  Stop-Process -Id ([int]$target.ProcessId) -Force -ErrorAction Stop
+  Wait-Process -Id ([int]$target.ProcessId) -Timeout 10 -ErrorAction SilentlyContinue
+  if($null -ne (Get-Process -Id ([int]$target.ProcessId) -ErrorAction SilentlyContinue)) { throw 'owned helper survived termination' }
+  Write-Output 'owned native replay service terminated'
+  `
+      report.native_lifecycle.injected_at = new Date().toISOString()
+      const killed = await runBounded('powershell.exe', [
+        '-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encodedPowerShell(killScript),
+      ], { timeoutMs: 15_000, maxStdoutBytes: 4096 })
+      report.native_lifecycle.termination = killed
+      if (killed.code !== 0) throw new Error('could not terminate the verified owned native service')
+      const recovered = await waitFor(() => {
+        const afterLog = readFileSync(logPath, 'utf8').slice(beforeLog.length)
+        const evidence = lifecycleLogEvidence({
+          mainLog: beforeLog, fallbackMainLog: afterLog, displayId: resolvedTargetId,
+        })
+        report.native_lifecycle.log_evidence = evidence
+        report.native_lifecycle.fallback_log = afterLog
+        return evidence.pass
+      }, 45_000)
+      const afterProcesses = await processTreeSnapshot(appProcess.pid)
+      report.native_lifecycle.after_processes = afterProcesses
+      report.native_lifecycle.helper_gone = !afterProcesses.processes.some((row) => (
+        row.pid === helper.pid || row.executable_path?.toLowerCase() === expectedHelper.toLowerCase()
+      ))
+      report.native_lifecycle.pass = recovered && report.native_lifecycle.helper_gone
+      writeJsonAtomic(path.join(artifactsDir, 'native-lifecycle.json'), report.native_lifecycle)
+      if (!report.native_lifecycle.pass) {
+        throw new Error('native failure did not prove helper teardown and fresh shipping frame evidence')
+      }
+    } catch (error) {
+      report.native_lifecycle.pass = false
+      report.native_lifecycle.error = error instanceof Error ? error.message : String(error)
+      report.native_lifecycle.startup_failure = beforeLog.split('\n').filter((line) => (
+        line.includes('DXGI native replay unavailable')
+      )).slice(-1)[0] ?? null
+      report.failures.push(`native lifecycle: ${report.native_lifecycle.error}`)
+      writeJsonAtomic(path.join(artifactsDir, 'native-lifecycle.json'), report.native_lifecycle)
+      // A failed lifecycle proof stays failed, but still decode the saved pack
+      // and retain performance/fallback evidence before normal tracked cleanup.
     }
   }
 

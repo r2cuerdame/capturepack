@@ -76,7 +76,6 @@ import {
   discoverReplayPixelClockTargets,
   REPLAY_PIXEL_CLOCK_SAMPLE_LIMIT,
   retainReplayPixelClockPresentedSample,
-  sourceClockAnchorsFromObservedCaptureTime,
   sourceClockAnchorsFromMeasuredMediaTime,
   type ReplayPixelClockAnchor,
   type ReplayPixelClockDecision,
@@ -249,6 +248,7 @@ let activeRecorder: ActiveRecorder | null = null
 let sourceLatencyCalibration: CaptureReadyPayload['sourceLatencyCalibration']
 let sourceLatencyCalibrationGeneration: number | null = null
 let sourceLatencyCalibrationCancel: (() => void) | null = null
+let sourceLatencyPresentationObserver: ((sample: ReplayPixelClockPresentedSample) => void) | null = null
 let replayPixelClockPresentedSamples: ReplayPixelClockPresentedSample[] = []
 let replayPixelClockCanvas: HTMLCanvasElement | null = null
 let replayPixelClockContext: CanvasRenderingContext2D | null = null
@@ -902,6 +902,7 @@ function retainReplayPixelClockFrame(
         ? { mediaTimeMs }
         : {}),
     }
+    sourceLatencyPresentationObserver?.(sample)
     retainReplayPixelClockPresentedSample(
       replayPixelClockPresentedSamples,
       sample,
@@ -2006,13 +2007,28 @@ function startChromiumSourceLatencyCalibration(
     presentedSamples: [],
   }
   let settled = false
-  void measureChromiumSourceLatency(
-    payload,
-    generation,
-    acquiredStream,
-    control,
-  ).then((calibration) => {
+  const releaseObservers = (): void => {
+    if (sourceLatencyPresentationObserver === observePresented) sourceLatencyPresentationObserver = null
+    if (sourceLatencyCalibrationCancel === cancel) sourceLatencyCalibrationCancel = null
+  }
+  const cancel = (): void => {
+    if (control.cancelled || settled) return
+    control.cancelled = true
+    releaseObservers()
+    control.stopSampler?.()
+  }
+  const observePresented = (sample: ReplayPixelClockPresentedSample): void => {
+    if (control.cancelled || settled) return
+    control.presentedSamples.push(sample)
+    if (control.presentedSamples.length > REPLAY_PIXEL_CLOCK_SAMPLE_LIMIT) {
+      control.presentedSamples.splice(0, control.presentedSamples.length - REPLAY_PIXEL_CLOCK_SAMPLE_LIMIT)
+    }
+  }
+  sourceLatencyCalibrationCancel = cancel
+  sourceLatencyPresentationObserver = observePresented
+  const settleCalibration = (calibration: CaptureReadyPayload['sourceLatencyCalibration']): void => {
     settled = true
+    releaseObservers()
     if (control.cancelled) return
     console.info(
       `[capture] display ${payload.displayId}: source latency calibration ${JSON.stringify(calibration)}`,
@@ -2025,28 +2041,19 @@ function startChromiumSourceLatencyCalibration(
       return
     }
     sourceLatencyCalibration = calibration
-  })
-  return {
-    cancel: () => {
-      if (control.cancelled || settled) return
-      control.cancelled = true
-      control.stopSampler?.()
-    },
-    observePresented: (sample) => {
-      if (control.cancelled || settled) return
-      control.presentedSamples.push(sample)
-      if (
-        control.presentedSamples.length
-        > REPLAY_PIXEL_CLOCK_SAMPLE_LIMIT
-      ) {
-        control.presentedSamples.splice(
-          0,
-          control.presentedSamples.length
-            - REPLAY_PIXEL_CLOCK_SAMPLE_LIMIT,
-        )
-      }
-    },
   }
+  void measureChromiumSourceLatency(
+    payload,
+    generation,
+    acquiredStream,
+    control,
+  ).then(settleCalibration, (error: unknown) => settleCalibration({
+    status: 'unavailable',
+    reason: 'probe-failed',
+    sampleCount: 0,
+    detail: describe(error),
+  }))
+  return { cancel, observePresented }
 }
 
 function stopReplayHealthWatchdog(): void {
@@ -2513,6 +2520,8 @@ function retainNativeReplayClock(): void {
  */
 function suspendReplayEncoding(): void {
   captureGeneration += 1
+  sourceLatencyCalibrationCancel?.()
+  sourceLatencyCalibrationCancel = null
   primaryReadinessCancel?.()
   primaryReadinessCancel = null
   stopReplayHealthWatchdog()
@@ -2852,9 +2861,10 @@ function installRecordingStream(
     primaryStartupObservationAttempted = true
     // Clone/processor setup briefly disturbed the first encoded PTS on the
     // physical 30 fps run (134.5 ms startup gap vs 36.9 ms steady state).
-    // Spend that work inside the already-declared first-start observation
-    // interval, never inside retained replay. Later reacquisitions have no such
-    // interval and skip this diagnostic rather than taxing their recorder.
+    // Start that work inside the first-start observation interval. The bounded
+    // one-shot may finish after READY; sparse hidden-video callbacks otherwise
+    // lose their independent exposure proof at the recorder boundary. Later
+    // reacquisitions still skip the diagnostic.
     const calibration =
       minimumObservationMs > 0
         ? startChromiumSourceLatencyCalibration(
@@ -2867,25 +2877,15 @@ function installRecordingStream(
       acquiredStream,
       generation,
       minimumObservationMs,
-      (sample) => calibration?.observePresented(sample),
     )
-    const cancelCalibration =
-      calibration === null ? null : () => calibration.cancel()
-    sourceLatencyCalibrationCancel = cancelCalibration
-    const closeCalibrationWindow = (): void => {
-      if (sourceLatencyCalibrationCancel === cancelCalibration) {
-        sourceLatencyCalibrationCancel = null
-      }
-      cancelCalibration?.()
-    }
     void readiness
       .then(async (ready) => {
-        closeCalibrationWindow()
         if (
           generation !== captureGeneration ||
           stream !== acquiredStream ||
           captureBackend !== backend
         ) {
+          calibration?.cancel()
           releaseVideoSink(ready.clockVideo)
           return
         }
@@ -2910,7 +2910,7 @@ function installRecordingStream(
         )
       })
       .catch((error: unknown) => {
-        closeCalibrationWindow()
+        calibration?.cancel()
         if (generation !== captureGeneration) return
         failCapture(`primary recorder readiness failed: ${describe(error)}`, generation)
       })
@@ -3886,18 +3886,17 @@ function measuredReplaySourceClockAnchors(
   clock: ReplayPixelClockDecision,
   durationMs: number,
 ): CaptureReplayResultPayload['sourceClockAnchors'] {
-  const sourceMediaTimeOriginMs =
-    sourceLatencyCalibration?.presentation?.sourceMediaTimeOriginMs
+  const calibration = sourceLatencyCalibration
+  const direct = calibration?.presentation?.direct
+  const sourceMediaTimeOriginMs = direct?.sourceMediaTimeOriginMs
   const anchors = replayClockAnchorsWithinDuration(clock, durationMs)
-  const observedCaptureAnchors =
-    anchors === undefined
-      ? undefined
-      : sourceClockAnchorsFromObservedCaptureTime(anchors)
-  if (observedCaptureAnchors !== undefined) {
-    return observedCaptureAnchors
-  }
+  // WGC rVFC captureTime can follow delivery of older compositor pixels. Only
+  // an independent same-pixel DXGI exposure join establishes the source axis.
   if (
     anchors === undefined
+    || calibration?.reference?.source !== 'dxgi-desktop-duplication'
+    || calibration.reference.timing !== 'pixel-exposure'
+    || direct?.status !== 'measured'
     || typeof sourceMediaTimeOriginMs !== 'number'
     || !Number.isFinite(sourceMediaTimeOriginMs)
   ) {

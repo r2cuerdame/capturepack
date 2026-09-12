@@ -317,8 +317,10 @@ check(
     && !sourceClockSource.includes('presentedAtMs -'),
 )
 check(
-  'observed getDisplayMedia captureTime is preferred as the same-frame source clock',
-  sourceClockSource.includes('sourceClockAnchorsFromObservedCaptureTime(')
+  'unverified getDisplayMedia captureTime remains diagnostic instead of overriding DXGI exposure',
+  !sourceClockSource.includes('sourceClockAnchorsFromObservedCaptureTime(')
+    && sourceClockSource.includes("calibration?.reference?.source !== 'dxgi-desktop-duplication'")
+    && sourceClockSource.includes("direct?.status !== 'measured'")
     && captureSource.includes('capturedAtMs: wallComparableTimeMs(')
     && captureSource.includes('metadata.captureTime,'),
 )
