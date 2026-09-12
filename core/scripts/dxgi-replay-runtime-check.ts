@@ -70,6 +70,7 @@ function validMp4(sampleCount = 3, durationTicks = 40): Buffer {
 function servicePacket(input: {
   kind?: number; status?: number; reason?: number; requestId?: bigint
   mp4Bytes?: bigint; ringBytes?: bigint; durationHns?: bigint; sampleCount?: bigint
+  width?: number; height?: number
 } = {}): Buffer {
   const result = Buffer.alloc(DXGI_REPLAY_SERVICE_PACKET_BYTES)
   result.write('CPNSRV01', 0, 'ascii')
@@ -80,8 +81,8 @@ function servicePacket(input: {
   result.writeUInt32LE(input.reason ?? 0, 20)
   result.writeBigUInt64LE(input.requestId ?? 0n, 24)
   result.writeUInt32LE(DXGI_REPLAY_SERVICE_REQUIRED_HEALTH_FLAGS, 32)
-  result.writeUInt32LE(1920, 36)
-  result.writeUInt32LE(1080, 40)
+  result.writeUInt32LE(input.width ?? 1920, 36)
+  result.writeUInt32LE(input.height ?? 1080, 40)
   result.writeUInt32LE(15, 44)
   result.writeBigInt64LE(10_000_000n, 48)
   result.writeBigInt64LE(9_000_000_000n, 56)
@@ -261,6 +262,42 @@ async function main(): Promise<void> {
       && oversizedSelection.detail === 'retention was outside service bounds'
       && spawned === 0)
 
+  for (const outputSize of [
+    { width: 1919, height: 1080 }, { width: 7680, height: 4320 },
+    { width: 1920, height: 0 }, { width: Number.NaN, height: 1080 },
+  ]) {
+    const invalidSize = new DxgiReplayRuntimeManager({ ...common, spawnProcess: () => { spawned++; return new FakeProcess() } })
+    const selection = await invalidSize.start({
+      deviceName: 'DISPLAY1', retentionMs: 30_000, outputSize,
+      bounds: { x: 0, y: 0, width: 3840, height: 2160 },
+    })
+    check('invalid or upscaled output size fails before spawning',
+      selection.backend === 'shipping' && selection.detail === 'output size was outside service bounds' && spawned === 0)
+  }
+  for (const late of [false, true]) {
+    let stopped = false
+    const child = new FakeProcess((command) => { if (command === 'STOP\n') stopped = true })
+    const manager = new DxgiReplayRuntimeManager({
+      ...common, startupTimeoutMs: 10,
+      spawnProcess: () => {
+        if (!late) queueMicrotask(() => child.output(servicePacket({ width: 3840, height: 2160 })))
+        return child
+      },
+    })
+    const keepAlive = setTimeout(() => {}, 1_000)
+    const selection = await manager.start({
+      deviceName: 'DISPLAY1', retentionMs: 30_000,
+      outputSize: { width: 1920, height: 1080 },
+    })
+    clearTimeout(keepAlive)
+    if (late) child.output(servicePacket({ width: 3840, height: 2160 }))
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    check(`${late ? 'late' : 'initial'} READY with uncapped physical dimensions cannot replace requested shipping workload`,
+      selection.backend === 'shipping' && manager.currentSelection().backend === 'shipping'
+        && (late ? child.killed : stopped))
+    manager.stop()
+  }
+
   const lockedManager = new DxgiReplayRuntimeManager({ ...common, probe: async () => locked, spawnProcess: () => { spawned++; return new FakeProcess() } })
   check('locked-session capability failure retains shipping backend',
     (await lockedManager.start({ deviceName: '\\\\.\\DISPLAY1', retentionMs: 30_000 })).backend === 'shipping' && spawned === 0)
@@ -283,12 +320,15 @@ async function main(): Promise<void> {
   })
   const liveManager = new DxgiReplayRuntimeManager({ ...common, spawnProcess: (_executable, args) => {
     check('manager launches exact persistent service arguments',
-      args.includes('--serve') && args.includes('--retention-ms') && args.includes('30000'))
+      args.includes('--serve') && args.includes('--retention-ms') && args.includes('30000')
+        && args[args.indexOf('--output-width') + 1] === '1920'
+        && args[args.indexOf('--output-height') + 1] === '1080')
     queueMicrotask(() => liveChild.output(servicePacket(), 17))
     return liveChild
   } })
   check('complete capability plus READY promotes native',
-    (await liveManager.start({ deviceName: '\\\\.\\DISPLAY1', retentionMs: 30_000 })).backend === 'native-dxgi')
+    (await liveManager.start({ deviceName: '\\\\.\\DISPLAY1', retentionMs: 30_000,
+      outputSize: { width: 1920, height: 1080 } })).backend === 'native-dxgi')
   const snapshot = await liveManager.snapshot(1_000)
   check('snapshot reads and validates bounded MP4 then returns in-memory bytes',
     snapshot.status === 'ok' && snapshot.buffer.equals(mp4)
@@ -331,6 +371,13 @@ async function main(): Promise<void> {
     child.close()
     return result
   }
+  const resizedSnapshot = await clockSnapshotFixture(3, (packet) => {
+    packet.writeUInt32LE(3840, 36)
+    packet.writeUInt32LE(2160, 40)
+  })
+  check('snapshot cannot change selected READY replay dimensions after reinitialization',
+    resizedSnapshot.status === 'fallback'
+      && resizedSnapshot.detail === 'Error: snapshot dimensions differed from selected READY replay size')
   const mismapped = await clockSnapshotFixture(3, (packet) => {
     // Internally consistent QPC/PTS declarations must still agree with media.
     packet.writeBigInt64LE(packet.readBigInt64LE(64) + 100_000n, 64)

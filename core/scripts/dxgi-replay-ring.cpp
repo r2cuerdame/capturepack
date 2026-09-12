@@ -312,6 +312,8 @@ struct Request {
   LONG top = 0;
   LONG width = 0;
   LONG height = 0;
+  UINT outputWidth = 0;
+  UINT outputHeight = 0;
 };
 
 struct OutputChoice {
@@ -546,6 +548,13 @@ bool ParseRequest(int argc, wchar_t** argv, Request& request) {
     } else if (option == L"--native-height") {
       haveHeight = ParseLong(value, request.height) && request.height > 0;
       if (!haveHeight) return false;
+    } else if (option == L"--output-width" || option == L"--output-height") {
+      LONG dimension = 0;
+      UINT& destination = option == L"--output-width"
+          ? request.outputWidth : request.outputHeight;
+      if (destination != 0 || !ParseLong(value, dimension) || dimension < 2 ||
+          dimension > 16384 || (dimension & 1) != 0) return false;
+      destination = static_cast<UINT>(dimension);
     } else if (option == L"--capture-ms") {
       if (!ParseCaptureMs(value, request.captureMs)) return false;
     } else if (option == L"--retention-ms") {
@@ -558,6 +567,7 @@ bool ParseRequest(int argc, wchar_t** argv, Request& request) {
                           static_cast<int>(haveWidth) + static_cast<int>(haveHeight);
   if (boundsParts != 0 && boundsParts != 4) return false;
   request.hasBounds = boundsParts == 4;
+  if ((request.outputWidth == 0) != (request.outputHeight == 0)) return false;
   if (request.serve && request.captureMs != 0) return false;
   if (!request.serve && request.retentionMs != 30'000) return false;
   return request.hasDeviceName || request.hasBounds;
@@ -1483,6 +1493,339 @@ bool ValidateFragmentedMp4Structure(const std::vector<std::uint8_t>& bytes) {
   return offset == bytes.size() && ftyp && moov && moof && mdat;
 }
 
+// The MF fragmented sink rounds each supplied duration to its media timescale.
+// Summing those rounded durations drifts from the original exposure timestamps.
+// Rewrite only existing timing fields from rounded absolute source boundaries;
+// all sizes, offsets and encoded payload bytes remain unchanged. Unsupported
+// layouts fail before any byte is changed. This is muxing, not an acceptance
+// adjustment: runtime still verifies the resulting sample clock independently.
+struct Mp4TimingBox {
+  std::size_t start = 0, payload = 0, end = 0;
+  std::uint32_t type = 0;
+};
+
+constexpr std::uint32_t Mp4Type(char a, char b, char c, char d) {
+  return (static_cast<std::uint32_t>(a) << 24) |
+         (static_cast<std::uint32_t>(b) << 16) |
+         (static_cast<std::uint32_t>(c) << 8) | static_cast<std::uint32_t>(d);
+}
+
+bool Mp4TimingChildren(const std::vector<std::uint8_t>& bytes,
+                       std::size_t begin, std::size_t end,
+                       std::vector<Mp4TimingBox>& boxes) {
+  boxes.clear();
+  if (end > bytes.size() || begin > end) return false;
+  while (begin < end) {
+    if (end - begin < 8 || boxes.size() >= 4096) return false;
+    std::uint64_t size = ReadBigEndian32(bytes.data() + begin);
+    std::size_t header = 8;
+    if (size == 1) {
+      if (end - begin < 16) return false;
+      size = ReadBigEndian64(bytes.data() + begin + 8); header = 16;
+    }
+    if (size < header || size > end - begin) return false;
+    const auto next = begin + static_cast<std::size_t>(size);
+    boxes.push_back({begin, begin + header, next,
+                    ReadBigEndian32(bytes.data() + begin + 4)});
+    begin = next;
+  }
+  return begin == end;
+}
+
+bool QuantizeMuxHns(std::int64_t hns, std::uint32_t scale, std::uint64_t& ticks) {
+  if (hns < 0 || scale == 0) return false;
+  const auto whole = static_cast<std::uint64_t>(hns / 10'000'000);
+  const auto remainder = static_cast<std::uint64_t>(hns % 10'000'000);
+  const auto partial = (remainder * scale + 5'000'000) / 10'000'000;
+  if (whole > (std::numeric_limits<std::uint64_t>::max() - partial) / scale) return false;
+  ticks = whole * scale + partial;
+  return true;
+}
+
+class SnapshotMuxTiming {
+ public:
+  SnapshotMuxTiming(std::vector<std::uint8_t>& bytes, const EncodedRingSnapshot& snapshot)
+      : bytes_(bytes), snapshot_(snapshot) {}
+  bool Rewrite() {
+    stage_ = "root boxes";
+    std::vector<Mp4TimingBox> roots;
+    if (!snapshot_.safe() || !Mp4TimingChildren(bytes_, 0, bytes_.size(), roots)) return false;
+    const Mp4TimingBox* moov = nullptr;
+    bool ftyp = false, sawMoof = false, sawMdat = false, sawMfra = false;
+    for (const auto& box : roots) {
+      if (box.type == Mp4Type('f','t','y','p')) {
+        if (ftyp || box.start != 0) return false; ftyp = true;
+      } else if (box.type == Mp4Type('m','o','o','v')) {
+        if (!ftyp || moov != nullptr || sawMoof) return false; moov = &box;
+      } else if (box.type == Mp4Type('m','o','o','f')) {
+        if (moov == nullptr || sawMfra) return false; sawMoof = true;
+      } else if (box.type == Mp4Type('m','d','a','t')) {
+        if (!sawMoof || sawMfra || box.payload == box.end) return false; sawMdat = true;
+      } else if (box.type == Mp4Type('m','f','r','a')) {
+        if (!sawMdat || sawMfra) return false; sawMfra = true;
+      } else if (box.type != Mp4Type('u','u','i','d') &&
+                 box.type != Mp4Type('p','d','i','n') &&
+                 box.type != Mp4Type('f','r','e','e')) return false;
+    }
+    stage_ = "movie/track declarations";
+    if (!ftyp || moov == nullptr || !sawMdat || !Movie(*moov)) return false;
+    boundaries_.reserve(snapshot_.units.size() + 1);
+    for (const auto& unit : snapshot_.units) {
+      std::uint64_t ticks = 0;
+      if (!QuantizeMuxHns(unit.ptsHns, scale_, ticks) ||
+          (!boundaries_.empty() && ticks <= boundaries_.back())) return false;
+      boundaries_.push_back(ticks);
+    }
+    std::uint64_t end = 0;
+    if (boundaries_.empty() || boundaries_.front() != 0 ||
+        !QuantizeMuxHns(snapshot_.durationHns, scale_, end) || end <= boundaries_.back()) return false;
+    boundaries_.push_back(end);
+    stage_ = "fragment sample durations";
+    for (const auto& box : roots) if (box.type == Mp4Type('m','o','o','f') && !Fragment(box)) return false;
+    if (locations_.size() != snapshot_.units.size()) return false;
+    stage_ = "random access index";
+    for (const auto& box : roots) if (box.type == Mp4Type('m','f','r','a') && !RandomAccess(box)) return false;
+    stage_ = "apply validated timing fields";
+    // No patch is applied until every field and every index has been checked.
+    std::sort(patches_.begin(), patches_.end(), [](const Patch& a, const Patch& b) { return a.at < b.at; });
+    for (std::size_t i = 1; i < patches_.size(); ++i)
+      if (patches_[i - 1].at + patches_[i - 1].width > patches_[i].at) return false;
+    for (const auto& patch : patches_) {
+      auto value = patch.value;
+      for (unsigned i = 0; i < patch.width; ++i) {
+        bytes_[patch.at + patch.width - 1 - i] = static_cast<std::uint8_t>(value & 255U); value >>= 8;
+      }
+    }
+    return true;
+  }
+  const char* stage() const { return stage_; }
+  std::uint32_t timescale() const { return scale_; }
+ private:
+  struct Patch { std::size_t at; unsigned width; std::uint64_t value; };
+  struct Location { std::size_t moof; std::uint32_t run, sample; };
+  bool Children(const Mp4TimingBox& box, std::vector<Mp4TimingBox>& children) {
+    return Mp4TimingChildren(bytes_, box.payload, box.end, children);
+  }
+  std::uint32_t U32(std::size_t at) const { return ReadBigEndian32(bytes_.data() + at); }
+  bool PatchValue(std::size_t at, unsigned width, std::uint64_t value, std::size_t end) {
+    if ((width != 4 && width != 8) || at > end || end - at < width || end > bytes_.size() ||
+        (width == 4 && value > std::numeric_limits<std::uint32_t>::max())) return false;
+    patches_.push_back({at, width, value}); return true;
+  }
+  bool Duration(const Mp4TimingBox& box, bool track, std::uint32_t& scale) {
+    if (box.end - box.payload < 4) return false;
+    const auto version = bytes_[box.payload];
+    if (version > 1) return false;
+    const std::size_t scaleAt = box.payload + (version == 1 ? 20 : 12);
+    const std::size_t durationAt = box.payload + (track ? (version == 1 ? 28 : 20) : (version == 1 ? 24 : 16));
+    const unsigned width = version == 1 ? 8 : 4;
+    if (durationAt > box.end || box.end - durationAt < width) return false;
+    if (!track) scale = U32(scaleAt);
+    if (scale == 0) return false;
+    const auto old = width == 8 ? ReadBigEndian64(bytes_.data() + durationAt) : U32(durationAt);
+    // Zero and all-ones are the fragmented/unknown duration sentinels.
+    if (old == 0 || old == (width == 8 ? UINT64_MAX : UINT32_MAX)) return true;
+    std::uint64_t duration = 0;
+    return QuantizeMuxHns(snapshot_.durationHns, scale, duration) && PatchValue(durationAt, width, duration, box.end);
+  }
+  bool EmptySampleTables(const Mp4TimingBox& minf) {
+    std::vector<Mp4TimingBox> children, tables;
+    if (!Children(minf, children)) return false;
+    bool stbl = false;
+    for (const auto& box : children) {
+      if (box.type == Mp4Type('s','t','b','l')) {
+        if (stbl || !Children(box, tables)) return false; stbl = true;
+        for (const auto& table : tables) {
+          if (table.type == Mp4Type('s','t','s','d')) continue;
+          if (table.type == Mp4Type('s','t','s','z')) {
+            if (table.end - table.payload != 12 || U32(table.payload) != 0 || U32(table.payload + 8) != 0) return false;
+          } else if (table.type == Mp4Type('s','t','t','s') || table.type == Mp4Type('c','t','t','s') ||
+                     table.type == Mp4Type('s','t','s','c') || table.type == Mp4Type('s','t','c','o') ||
+                     table.type == Mp4Type('c','o','6','4') || table.type == Mp4Type('s','t','s','s')) {
+            if (table.end - table.payload != 8 || U32(table.payload) != 0 || U32(table.payload + 4) != 0) return false;
+          } else return false;
+        }
+      } else if (box.type != Mp4Type('v','m','h','d') && box.type != Mp4Type('d','i','n','f')) return false;
+    }
+    return stbl;
+  }
+  bool Movie(const Mp4TimingBox& moov) {
+    std::vector<Mp4TimingBox> children;
+    if (!Children(moov, children)) return false;
+    const Mp4TimingBox *trak = nullptr, *mvex = nullptr, *mvhd = nullptr;
+    for (const auto& box : children) {
+      if (box.type == Mp4Type('m','v','h','d')) { if (mvhd) return false; mvhd = &box; }
+      else if (box.type == Mp4Type('t','r','a','k')) { if (trak) return false; trak = &box; }
+      else if (box.type == Mp4Type('m','v','e','x')) { if (mvex) return false; mvex = &box; }
+      else return false;
+    }
+    std::uint32_t movieScale = 0;
+    if (!trak || !mvex || !mvhd || !Duration(*mvhd, false, movieScale)) return false;
+    std::vector<Mp4TimingBox> trackChildren, mediaChildren;
+    if (!Children(*trak, trackChildren)) return false;
+    bool haveTkhd = false, haveMdia = false, haveMdhd = false, haveHandler = false, haveMinf = false;
+    for (const auto& box : trackChildren) {
+      if (box.type == Mp4Type('t','k','h','d')) {
+        if (haveTkhd || !Duration(box, true, movieScale)) return false; haveTkhd = true;
+        trackId_ = U32(box.payload + (bytes_[box.payload] == 1 ? 20 : 12));
+      } else if (box.type == Mp4Type('m','d','i','a')) {
+        if (haveMdia || !Children(box, mediaChildren)) return false; haveMdia = true;
+        for (const auto& media : mediaChildren) {
+          if (media.type == Mp4Type('m','d','h','d')) {
+            if (haveMdhd || !Duration(media, false, scale_)) return false; haveMdhd = true;
+          } else if (media.type == Mp4Type('h','d','l','r')) {
+            if (haveHandler || media.end - media.payload < 12 || U32(media.payload) != 0 ||
+                U32(media.payload + 8) != Mp4Type('v','i','d','e')) return false; haveHandler = true;
+          } else if (media.type == Mp4Type('m','i','n','f')) {
+            if (haveMinf || !EmptySampleTables(media)) return false; haveMinf = true;
+          } else return false;
+        }
+      } else return false; // Includes edit lists and alternate timelines.
+    }
+    std::vector<Mp4TimingBox> extensions;
+    if (!haveTkhd || !haveMdia || !haveMdhd || !haveHandler || !haveMinf || trackId_ == 0 ||
+        !Children(*mvex, extensions) || extensions.size() != 1) return false;
+    const auto& trex = extensions.front();
+    return trex.type == Mp4Type('t','r','e','x') && trex.end - trex.payload == 24 &&
+           U32(trex.payload) == 0 && U32(trex.payload + 4) == trackId_ && U32(trex.payload + 12) == 0;
+  }
+  bool Fragment(const Mp4TimingBox& moof) {
+    std::vector<Mp4TimingBox> children, entries;
+    if (!Children(moof, children)) return false;
+    const Mp4TimingBox* traf = nullptr;
+    bool mfhd = false;
+    for (const auto& box : children) {
+      if (box.type == Mp4Type('m','f','h','d')) {
+        if (mfhd || box.end - box.payload != 8 || U32(box.payload) != 0) return false; mfhd = true;
+      } else if (box.type == Mp4Type('t','r','a','f')) { if (traf) return false; traf = &box; }
+      else return false;
+    }
+    if (!mfhd || !traf || !Children(*traf, entries)) return false;
+    bool tfhd = false, tfdt = false;
+    std::uint32_t run = 0;
+    for (const auto& box : entries) {
+      if (box.type == Mp4Type('t','f','h','d')) {
+        if (tfhd || run != 0 || box.end - box.payload < 8 || U32(box.payload + 4) != trackId_) return false;
+        const auto flags = U32(box.payload);
+        if ((flags & ~0x02003bU) != 0 || (flags & 8U) != 0 ||
+            ((flags & 1U) && (flags & 0x020000U))) return false;
+        std::size_t cursor = box.payload + 8;
+        if (flags & 1U) cursor += 8;
+        if (flags & 2U) cursor += 4;
+        if (flags & 16U) cursor += 4;
+        if (flags & 32U) cursor += 4;
+        // MF emits an extra reserved zero word after its base-data-offset.
+        if (cursor != box.end && !(box.end - box.payload == 20 && flags == 1 &&
+                                  cursor + 4 == box.end && U32(cursor) == 0)) return false;
+        tfhd = true;
+      } else if (box.type == Mp4Type('t','f','d','t')) {
+        if (!tfhd || tfdt || run != 0 || box.end - box.payload < 4 || locations_.size() >= snapshot_.units.size()) return false;
+        const auto version = bytes_[box.payload]; const unsigned width = version == 1 ? 8 : 4;
+        if (version > 1 || (U32(box.payload) & 0xffffffU) != 0 || box.end - box.payload != 4 + width ||
+            !PatchValue(box.payload + 4, width, boundaries_[locations_.size()], box.end)) return false;
+        tfdt = true;
+      } else if (box.type == Mp4Type('t','r','u','n')) {
+        if (!tfhd || box.end - box.payload < 8) return false;
+        const auto vf = U32(box.payload), flags = vf & 0xffffffU;
+        if ((vf >> 24) > 1 || (flags & ~0xf05U) != 0 || (flags & 0x100U) == 0 ||
+            ((flags & 4U) && (flags & 0x400U))) return false;
+        const auto count = U32(box.payload + 4);
+        if (count == 0 || count > snapshot_.units.size() - locations_.size()) return false;
+        std::size_t cursor = box.payload + 8;
+        if (flags & 1U) cursor += 4;
+        if (flags & 4U) cursor += 4;
+        const unsigned per = 4 + ((flags & 0x200U) ? 4 : 0) + ((flags & 0x400U) ? 4 : 0) + ((flags & 0x800U) ? 4 : 0);
+        if (cursor > box.end || count != (box.end - cursor) / per || (box.end - cursor) % per != 0) return false;
+        ++run;
+        for (std::uint32_t sample = 1; sample <= count; ++sample) {
+          const auto index = locations_.size();
+          if (!PatchValue(cursor, 4, boundaries_[index + 1] - boundaries_[index], box.end)) return false;
+          cursor += 4;
+          if (flags & 0x200U) { if (U32(cursor) == 0) return false; cursor += 4; }
+          if (flags & 0x400U) cursor += 4;
+          if (flags & 0x800U) { if (U32(cursor) != 0) return false; cursor += 4; }
+          locations_.push_back({moof.start, run, sample});
+        }
+      } else return false;
+    }
+    return tfhd && run > 0;
+  }
+  bool RandomAccess(const Mp4TimingBox& mfra) {
+    std::vector<Mp4TimingBox> children;
+    if (!Children(mfra, children)) return false;
+    bool tfra = false, mfro = false;
+    for (const auto& box : children) {
+      if (box.type == Mp4Type('m','f','r','o')) {
+        if (mfro || box.end - box.payload != 8 || U32(box.payload) != 0 ||
+            U32(box.payload + 4) != mfra.end - mfra.start) return false; mfro = true;
+      } else if (box.type == Mp4Type('t','f','r','a')) {
+        if (tfra || box.end - box.payload < 16 || U32(box.payload + 4) != trackId_) return false; tfra = true;
+        const auto version = bytes_[box.payload];
+        const auto lengths = U32(box.payload + 8);
+        const unsigned timeWidth = version == 1 ? 8 : 4;
+        if (version > 1 || (U32(box.payload) & 0xffffffU) != 0 || (lengths & ~63U) != 0) return false;
+        const unsigned trafWidth = ((lengths >> 4) & 3) + 1, runWidth = ((lengths >> 2) & 3) + 1, sampleWidth = (lengths & 3) + 1;
+        const auto count = U32(box.payload + 12);
+        const unsigned per = timeWidth * 2 + trafWidth + runWidth + sampleWidth;
+        std::size_t cursor = box.payload + 16;
+        if (count > locations_.size() || count != (box.end - cursor) / per || (box.end - cursor) % per != 0) return false;
+        const auto read = [&](std::size_t at, unsigned width) {
+          std::uint64_t value = 0; for (unsigned i = 0; i < width; ++i) value = (value << 8) | bytes_[at + i]; return value;
+        };
+        std::size_t previousIndex = 0;
+        for (std::uint32_t entry = 0; entry < count; ++entry) {
+          const auto timeAt = cursor; cursor += timeWidth;
+          const auto moof = read(cursor, timeWidth); cursor += timeWidth;
+          const auto traf = read(cursor, trafWidth); cursor += trafWidth;
+          const auto run = read(cursor, runWidth); cursor += runWidth;
+          const auto sample = read(cursor, sampleWidth); cursor += sampleWidth;
+          if (traf != 1) return false;
+          const auto found = std::find_if(locations_.begin(), locations_.end(), [&](const Location& location) {
+            return location.moof == moof && location.run == run && location.sample == sample;
+          });
+          if (found == locations_.end()) return false;
+          const auto index = static_cast<std::size_t>(found - locations_.begin());
+          if ((entry != 0 && index <= previousIndex) || !snapshot_.units[index].keyframe ||
+              !PatchValue(timeAt, timeWidth, boundaries_[index], box.end)) return false;
+          previousIndex = index;
+        }
+      } else return false;
+    }
+    return tfra && mfro;
+  }
+  std::vector<std::uint8_t>& bytes_;
+  const EncodedRingSnapshot& snapshot_;
+  const char* stage_ = "not started";
+  std::uint32_t scale_ = 0, trackId_ = 0;
+  std::vector<std::uint64_t> boundaries_;
+  std::vector<Patch> patches_;
+  std::vector<Location> locations_;
+};
+
+bool RewriteSnapshotMuxFile(const std::wstring& path, std::vector<std::uint8_t>& bytes,
+                            const EncodedRingSnapshot& snapshot) {
+  SnapshotMuxTiming timing(bytes, snapshot);
+  if (!timing.Rewrite()) {
+    std::fprintf(stderr, "dxgi replay: unsupported MP4 timing layout at %s\n", timing.stage());
+    return false;
+  }
+  HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
+                            FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) return false;
+  LARGE_INTEGER size{};
+  bool ok = GetFileSizeEx(file, &size) && size.QuadPart == static_cast<LONGLONG>(bytes.size());
+  std::size_t offset = 0;
+  while (ok && offset < bytes.size()) {
+    const DWORD count = static_cast<DWORD>(std::min<std::size_t>(bytes.size() - offset, 1U << 20));
+    DWORD written = 0;
+    ok = WriteFile(file, bytes.data() + offset, count, &written, nullptr) && written != 0;
+    offset += written;
+  }
+  if (ok) ok = FlushFileBuffers(file) != FALSE;
+  CloseHandle(file);
+  return ok && offset == bytes.size();
+}
+
 HRESULT DecodeAndValidateMp4(const std::wstring& path,
                              const EncodedRingSnapshot& snapshot,
                              UINT expectedWidth, UINT expectedHeight,
@@ -1633,7 +1976,8 @@ ExportEvidence ExportSnapshot(const EncodedRingSnapshot& snapshot,
   evidence.flags |= kRunCodecConfigValidated | kRunMp4Muxed;
   std::vector<std::uint8_t> fileBytes;
   if (!ReadBoundedFile(path, maximumBytes, fileBytes) ||
-      !ValidateFragmentedMp4Structure(fileBytes)) {
+      !ValidateFragmentedMp4Structure(fileBytes) ||
+      !RewriteSnapshotMuxFile(path, fileBytes, snapshot)) {
     DeleteFileW(path.c_str());
     evidence.result = E_FAIL;
     evidence.reason = ProbeReason::kExportStructureInvalid;
@@ -1898,6 +2242,21 @@ bool ResolveFrameGeometry(const OutputChoice& choice,
   const UINT orientedHeight = swapsAxes ? source.Width : source.Height;
   return orientedWidth == geometry.outputWidth &&
          orientedHeight == geometry.outputHeight;
+}
+
+// Desktop identity and cursor coordinates remain physical. Only the GPU
+// VideoProcessor destination and encoder surface use the requested replay size.
+bool ResolveReplayOutputSize(const FrameGeometry& geometry, UINT requestedWidth,
+                             UINT requestedHeight, UINT& width, UINT& height) {
+  width = requestedWidth == 0 ? geometry.outputWidth : requestedWidth;
+  height = requestedHeight == 0 ? geometry.outputHeight : requestedHeight;
+  if ((requestedWidth == 0) != (requestedHeight == 0) || width < 2 || height < 2 ||
+      width > 16384 || height > 16384 || (width & 1) != 0 || (height & 1) != 0 ||
+      width > geometry.outputWidth || height > geometry.outputHeight) return false;
+  const std::int64_t aspectError = static_cast<std::int64_t>(width) * geometry.outputHeight -
+      static_cast<std::int64_t>(height) * geometry.outputWidth;
+  return std::abs(aspectError) <= static_cast<std::int64_t>(
+      std::max(geometry.outputWidth, geometry.outputHeight));
 }
 
 struct PointerState {
@@ -3118,6 +3477,8 @@ class CapturePipeline {
   HRESULT Initialize(const Request& request, std::uint32_t generation,
                      RunSummaryPacket& summary) {
     generation_ = generation;
+    requestedOutputWidth_ = request.outputWidth;
+    requestedOutputHeight_ = request.outputHeight;
     HRESULT result = S_OK;
     if (!SelectOutput(request, choice_, result)) return result;
     AddRunIdentity(summary);
@@ -3262,8 +3623,8 @@ class CapturePipeline {
     D3D11_TEXTURE2D_DESC nv12Description{};
     nv12->GetDesc(&nv12Description);
     if (nv12Description.Format != DXGI_FORMAT_NV12 ||
-        nv12Description.Width != geometry_.outputWidth ||
-        nv12Description.Height != geometry_.outputHeight ||
+        nv12Description.Width != outputWidth_ ||
+        nv12Description.Height != outputHeight_ ||
         nv12Description.MipLevels != 1 || nv12Description.ArraySize == 0 ||
         nv12Subresource >= nv12Description.ArraySize) {
       failureReason = ProbeReason::kEncoderTypeRejected;
@@ -3337,8 +3698,8 @@ class CapturePipeline {
 
   const OutputChoice& choice() const { return choice_; }
   bool prepared() const { return prepared_; }
-  UINT outputWidth() const { return geometry_.outputWidth; }
-  UINT outputHeight() const { return geometry_.outputHeight; }
+  UINT outputWidth() const { return outputWidth_; }
+  UINT outputHeight() const { return outputHeight_; }
   std::uint32_t generation() const { return generation_; }
 
  private:
@@ -3389,6 +3750,11 @@ class CapturePipeline {
           : ProbeReason::kUnsupportedFrame;
       return DXGI_ERROR_UNSUPPORTED;
     }
+    if (!ResolveReplayOutputSize(geometry_, requestedOutputWidth_,
+                                  requestedOutputHeight_, outputWidth_, outputHeight_)) {
+      failureReason = ProbeReason::kUnsupportedFrame;
+      return E_INVALIDARG;
+    }
     HRESULT result = device_.As(&videoDevice_);
     if (SUCCEEDED(result)) result = context_.As(&videoContext_);
     if (FAILED(result)) {
@@ -3401,8 +3767,8 @@ class CapturePipeline {
     content.InputWidth = geometry_.sourceWidth;
     content.InputHeight = geometry_.sourceHeight;
     content.OutputFrameRate = {kTargetFramesPerSecond, 1};
-    content.OutputWidth = geometry_.outputWidth;
-    content.OutputHeight = geometry_.outputHeight;
+    content.OutputWidth = outputWidth_;
+    content.OutputHeight = outputHeight_;
     content.Usage = D3D11_VIDEO_USAGE_PLAYBACK_NORMAL;
     result = videoDevice_->CreateVideoProcessorEnumerator(&content, &enumerator_);
     if (FAILED(result)) {
@@ -3473,8 +3839,8 @@ class CapturePipeline {
     }
     RECT sourceRect{0, 0, static_cast<LONG>(geometry_.sourceWidth),
                     static_cast<LONG>(geometry_.sourceHeight)};
-    RECT destinationRect{0, 0, static_cast<LONG>(geometry_.outputWidth),
-                         static_cast<LONG>(geometry_.outputHeight)};
+    RECT destinationRect{0, 0, static_cast<LONG>(outputWidth_),
+                         static_cast<LONG>(outputHeight_)};
     videoContext_->VideoProcessorSetStreamFrameFormat(
         processor_.Get(), 0, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE);
     videoContext_->VideoProcessorSetStreamSourceRect(
@@ -3491,7 +3857,7 @@ class CapturePipeline {
     D3D11_VIDEO_PROCESSOR_COLOR_SPACE inputColor{};
     inputColor.RGB_Range = 0;
     D3D11_VIDEO_PROCESSOR_COLOR_SPACE outputColor{};
-    outputColor.YCbCr_Matrix = geometry_.outputHeight >= 720 ? 1 : 0;
+    outputColor.YCbCr_Matrix = outputHeight_ >= 720 ? 1 : 0;
     outputColor.Nominal_Range = D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_16_235;
     videoContext_->VideoProcessorSetStreamColorSpace(
         processor_.Get(), 0, &inputColor);
@@ -3499,8 +3865,8 @@ class CapturePipeline {
         processor_.Get(), &outputColor);
     summary.flags |= kRunVideoProcessorCreated;
     std::string encoderName;
-    result = encoder_.Initialize(choice_, manager_.Get(), geometry_.outputWidth,
-                                 geometry_.outputHeight, generation_, encoderName);
+    result = encoder_.Initialize(choice_, manager_.Get(), outputWidth_,
+                                 outputHeight_, generation_, encoderName);
     if (FAILED(result)) {
       failureReason = result == MF_E_TOPO_CODEC_NOT_FOUND
           ? ProbeReason::kHardwareEncoderNotFound
@@ -3523,6 +3889,10 @@ class CapturePipeline {
   UINT managerToken_ = 0;
   OutputChoice choice_;
   FrameGeometry geometry_;
+  UINT requestedOutputWidth_ = 0;
+  UINT requestedOutputHeight_ = 0;
+  UINT outputWidth_ = 0;
+  UINT outputHeight_ = 0;
   D3D11_TEXTURE2D_DESC sourceDescription_{};
   ComPtr<ID3D11Device> device_;
   ComPtr<ID3D11DeviceContext> context_;
@@ -3555,6 +3925,128 @@ EncodedAccessUnit TestUnit(std::int64_t qpc, bool keyframe, std::size_t bytes,
 bool NamedSelfTest(const char* name, bool passed) {
   std::fprintf(passed ? stdout : stderr, "SELFTEST %s %s\n",
                passed ? "PASS" : "FAIL", name);
+  return passed;
+}
+
+// A synthetic MF-shaped file deliberately accumulates per-duration rounding.
+// The payload is not a codec fixture; these tests prove only the timing rewrite.
+struct MuxTimingFixture {
+  std::vector<std::uint8_t> bytes;
+  EncodedRingSnapshot snapshot;
+  std::vector<std::size_t> durations, compositions, seekTimes, seekSamples, decodeTimes, runFlags;
+  std::vector<std::size_t> indexSamples;
+  std::vector<std::pair<std::size_t, std::size_t>> payloads;
+  std::size_t mediaScale = 0, movieDuration = 0, trackDuration = 0, mediaDuration = 0;
+  void Put(std::uint64_t value, unsigned width = 4) {
+    for (unsigned i = width; i > 0; --i) bytes.push_back(static_cast<std::uint8_t>(value >> ((i - 1) * 8)));
+  }
+  void Set(std::size_t at, std::uint64_t value, unsigned width = 4) {
+    for (unsigned i = width; i > 0; --i) bytes[at + width - i] = static_cast<std::uint8_t>(value >> ((i - 1) * 8));
+  }
+  std::size_t Begin(const char* type) { const auto at = bytes.size(); Put(0); for (int i = 0; i < 4; ++i) bytes.push_back(type[i]); return at; }
+  void End(std::size_t at) { Set(at, bytes.size() - at); }
+  explicit MuxTimingFixture(std::size_t count = 45, bool includeTfdt = false) {
+    snapshot.generation = 1; snapshot.firstQpc = 1; snapshot.lastQpc = 1;
+    snapshot.codecConfig = {1}; snapshot.durationHns = static_cast<std::int64_t>(count) * 666'800;
+    for (std::size_t i = 0; i < count; ++i) {
+      auto unit = TestUnit(1 + static_cast<std::int64_t>(i) * 666'800, i == 0 || i == 3 || i == (count > 282 ? 281 : 25), 1);
+      unit.ptsHns -= 1; unit.durationHns = 666'800; snapshot.units.push_back(unit);
+    }
+    auto box = Begin("ftyp"); End(box);
+    const auto moov = Begin("moov");
+    box = Begin("mvhd"); Put(0); Put(0); Put(0); Put(1000); movieDuration = bytes.size(); Put(1); End(box);
+    const auto trak = Begin("trak");
+    box = Begin("tkhd"); Put(0x01000001); Put(0, 8); Put(0, 8); Put(1); Put(0); trackDuration = bytes.size(); Put(1, 8); End(box);
+    const auto mdia = Begin("mdia");
+    box = Begin("mdhd"); Put(0); Put(0); Put(0); mediaScale = bytes.size(); Put(15000); mediaDuration = bytes.size(); Put(1); End(box);
+    box = Begin("hdlr"); Put(0); Put(0); Put(Mp4Type('v','i','d','e')); End(box);
+    const auto minf = Begin("minf"), stbl = Begin("stbl");
+    box = Begin("stsd"); Put(0); Put(0); End(box);
+    box = Begin("stts"); Put(0); Put(0); End(box);
+    box = Begin("stsz"); Put(0); Put(0); Put(0); End(box);
+    End(stbl); End(minf); End(mdia); End(trak);
+    const auto mvex = Begin("mvex"); box = Begin("trex"); Put(0); Put(1); Put(1); Put(0); Put(0); Put(0); End(box); End(mvex); End(moov);
+    std::vector<std::size_t> moofs;
+    for (std::size_t fragment = 0; fragment < 2; ++fragment) {
+      const auto countInRun = fragment == 0 ? 22 : count - 22;
+      const auto moof = Begin("moof"); moofs.push_back(moof);
+      box = Begin("mfhd"); Put(0); Put(fragment + 1); End(box);
+      const auto traf = Begin("traf");
+      box = Begin("tfhd"); Put(1); Put(1); Put(0, 8); Put(0); End(box);
+      if (includeTfdt) {
+        box = Begin("tfdt"); Put(0x01000000); decodeTimes.push_back(bytes.size()); Put(fragment == 0 ? 0 : 22000, 8); End(box);
+      }
+      box = Begin("trun"); runFlags.push_back(bytes.size()); Put(0x01000f01); Put(countInRun); Put(0);
+      for (std::size_t i = 0; i < countInRun; ++i) {
+        durations.push_back(bytes.size()); Put(1000); Put(1); Put(0);
+        compositions.push_back(bytes.size()); Put(0);
+      }
+      End(box); End(traf); End(moof);
+      box = Begin("mdat"); const auto payload = bytes.size();
+      for (std::size_t i = 0; i < countInRun; ++i) Put(0xa5, 1);
+      payloads.push_back({payload, bytes.size()}); End(box);
+    }
+    const auto mfra = Begin("mfra");
+    box = Begin("tfra"); Put(0x01000000); Put(1); Put(1); Put(3);
+    for (std::size_t index : {std::size_t{0}, std::size_t{3}, count > 282 ? std::size_t{281} : std::size_t{25}}) {
+      indexSamples.push_back(index); seekTimes.push_back(bytes.size()); Put(index * 1000, 8);
+      Put(moofs[index < 22 ? 0 : 1], 8); Put(1, 1); Put(1, 1);
+      seekSamples.push_back(bytes.size()); Put(index < 22 ? index + 1 : index - 21, 2);
+    }
+    End(box); box = Begin("mfro"); Put(0); const auto mfraSize = bytes.size(); Put(0); End(box); End(mfra); Set(mfraSize, bytes.size() - mfra);
+  }
+};
+
+bool MuxTimingSelfTests() {
+  MuxTimingFixture fixture;
+  const auto original = fixture.bytes;
+  std::uint64_t expectedLast = 0;
+  QuantizeMuxHns(fixture.snapshot.units.back().ptsHns, 15000, expectedLast);
+  const bool driftWasReal = expectedLast > 44'001; // Old final PTS was 44,000 ticks.
+  SnapshotMuxTiming rewrite(fixture.bytes, fixture.snapshot);
+  bool exact = driftWasReal && rewrite.Rewrite() && fixture.bytes.size() == original.size();
+  std::uint64_t at = 0;
+  for (std::size_t i = 0; i < fixture.durations.size(); ++i) {
+    std::uint64_t expected = 0; QuantizeMuxHns(fixture.snapshot.units[i].ptsHns, 15000, expected);
+    exact &= at == expected;
+    at += ReadBigEndian32(fixture.bytes.data() + fixture.durations[i]);
+  }
+  std::uint64_t expectedEnd = 0; QuantizeMuxHns(fixture.snapshot.durationHns, 15000, expectedEnd);
+  exact &= at == expectedEnd && ReadBigEndian32(fixture.bytes.data() + fixture.mediaDuration) == expectedEnd;
+  std::uint64_t movieEnd = 0; QuantizeMuxHns(fixture.snapshot.durationHns, 1000, movieEnd);
+  exact &= ReadBigEndian32(fixture.bytes.data() + fixture.movieDuration) == movieEnd &&
+      ReadBigEndian64(fixture.bytes.data() + fixture.trackDuration) == movieEnd;
+  for (const auto& payload : fixture.payloads) exact &= std::equal(
+      original.begin() + payload.first, original.begin() + payload.second, fixture.bytes.begin() + payload.first);
+  bool passed = NamedSelfTest("mux-absolute-boundaries-no-cumulative-rounding", exact);
+  MuxTimingFixture wide(300, true);
+  SnapshotMuxTiming wideRewrite(wide.bytes, wide.snapshot);
+  bool indexes = wideRewrite.Rewrite();
+  for (std::size_t i = 0; i < wide.seekTimes.size(); ++i) {
+    std::uint64_t expected = 0; QuantizeMuxHns(wide.snapshot.units[wide.indexSamples[i]].ptsHns, 15000, expected);
+    indexes &= ReadBigEndian64(wide.bytes.data() + wide.seekTimes[i]) == expected;
+  }
+  std::uint64_t fragmentStart = 0; QuantizeMuxHns(wide.snapshot.units[22].ptsHns, 15000, fragmentStart);
+  indexes &= ReadBigEndian64(wide.bytes.data() + wide.decodeTimes[1]) == fragmentStart;
+  passed &= NamedSelfTest("mux-tfdt-tfra-interior-wide-sample-index", indexes);
+  const auto rejectsUntouched = [](MuxTimingFixture bad) {
+    const auto before = bad.bytes;
+    SnapshotMuxTiming repair(bad.bytes, bad.snapshot);
+    return !repair.Rewrite() && bad.bytes == before;
+  };
+  auto composition = MuxTimingFixture(); composition.Set(composition.compositions.back(), 1);
+  auto index = MuxTimingFixture(); index.Set(index.seekSamples.back(), 0, 2);
+  auto missingDuration = MuxTimingFixture(); missingDuration.Set(missingDuration.runFlags.back(), 0x01000e01);
+  auto truncated = MuxTimingFixture(); truncated.bytes.pop_back();
+  auto unsupported = MuxTimingFixture(); auto sidx = unsupported.Begin("sidx"); unsupported.End(sidx);
+  auto collapsed = MuxTimingFixture(); collapsed.snapshot.units[1].ptsHns = 1;
+  passed &= NamedSelfTest("mux-malformed-unsupported-timing-transactional", rejectsUntouched(composition) &&
+      rejectsUntouched(index) && rejectsUntouched(missingDuration) && rejectsUntouched(truncated) &&
+      rejectsUntouched(unsupported) && rejectsUntouched(collapsed));
+  auto overflow = MuxTimingFixture(); overflow.Set(overflow.mediaScale, UINT32_MAX);
+  for (std::size_t i = 0; i < overflow.snapshot.units.size(); ++i) overflow.snapshot.units[i].ptsHns = static_cast<std::int64_t>(i) * 100'000'000;
+  overflow.snapshot.durationHns = 4'500'000'000;
+  passed &= NamedSelfTest("mux-field-width-overflow-fails-closed", rejectsUntouched(overflow));
   return passed;
 }
 
@@ -3716,7 +4208,8 @@ bool H264GuardSelfTests() {
 }
 
 bool RingSelfTest() {
-  bool passed = H264GuardSelfTests();
+  bool passed = MuxTimingSelfTests();
+  passed &= H264GuardSelfTests();
   ExposureTimeline timeline(10'000'000);
   ExposureTimeline rejectsZero(10'000'000);
   std::int64_t firstPts = -1;
@@ -3752,6 +4245,42 @@ bool RingSelfTest() {
           !ResolveFrameGeometry(rotatedChoice, rotatedSource, invalidGeometry));
 
   DXGI_OUTPUT_DESC offsetOutput{};
+  FrameGeometry fullGeometry;
+  fullGeometry.sourceWidth = fullGeometry.outputWidth = 3840;
+  fullGeometry.sourceHeight = fullGeometry.outputHeight = 2160;
+  UINT replayWidth = 0, replayHeight = 0;
+  passed &= NamedSelfTest(
+      "replay-output-size-physical-cursor-contract",
+      ResolveReplayOutputSize(fullGeometry, 1920, 1080, replayWidth, replayHeight) &&
+          replayWidth == 1920 && replayHeight == 1080 &&
+          fullGeometry.outputWidth == 3840 && fullGeometry.sourceWidth == 3840 &&
+          ResolveReplayOutputSize(fullGeometry, 0, 0, replayWidth, replayHeight) &&
+          replayWidth == 3840 && replayHeight == 2160 &&
+          ResolveReplayOutputSize(rotatedGeometry, 720, 1280, replayWidth, replayHeight) &&
+          replayWidth == 720 && replayHeight == 1280 &&
+          !ResolveReplayOutputSize(fullGeometry, 7680, 4320, replayWidth, replayHeight) &&
+          !ResolveReplayOutputSize(fullGeometry, 1919, 1080, replayWidth, replayHeight) &&
+          !ResolveReplayOutputSize(fullGeometry, 1920, 0, replayWidth, replayHeight) &&
+          !ResolveReplayOutputSize(fullGeometry, 1920, 1200, replayWidth, replayHeight));
+  const auto acceptsOutputArguments = [](std::vector<std::wstring> arguments,
+                                         UINT width, UINT height) {
+    std::vector<wchar_t*> argv;
+    for (auto& argument : arguments) argv.push_back(argument.data());
+    Request request;
+    return ParseRequest(static_cast<int>(argv.size()), argv.data(), request) &&
+        request.outputWidth == width && request.outputHeight == height;
+  };
+  passed &= NamedSelfTest(
+      "replay-output-arguments-fail-closed",
+      acceptsOutputArguments({L"helper", L"--serve", L"--device", L"DISPLAY1",
+          L"--output-width", L"1920", L"--output-height", L"1080"}, 1920, 1080) &&
+          !acceptsOutputArguments({L"helper", L"--serve", L"--device", L"DISPLAY1",
+              L"--output-width", L"1920"}, 1920, 0) &&
+          !acceptsOutputArguments({L"helper", L"--serve", L"--device", L"DISPLAY1",
+              L"--output-width", L"1919", L"--output-height", L"1080"}, 1919, 1080) &&
+          !acceptsOutputArguments({L"helper", L"--serve", L"--device", L"DISPLAY1",
+              L"--output-width", L"1920", L"--output-height", L"1080",
+              L"--output-width", L"1920"}, 1920, 1080));
   offsetOutput.DesktopCoordinates = {-1920, 100, -840, 2020};
   DXGI_OUTDUPL_FRAME_INFO pointerOnly{};
   pointerOnly.LastMouseUpdateTime.QuadPart = 123;

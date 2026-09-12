@@ -40,6 +40,11 @@ const rendererCode = [
   suspend, fn(renderer, 'retainNativeReplayClock'), fn(renderer, 'teardown'), fn(renderer, 'terminalCaptureFailure'),
   fn(renderer, 'startCapture'), workloadNode.getText(renderer),
 ].join('\n')
+let tickPump = fn(renderer, 'startFrameTicks')
+if (process.argv.includes('--mutate-clock-requires-recorder')) {
+  tickPump = tickPump.replace('const delayMs = Math.max(0, now - submitted)',
+    'if (activeRecorder === null) { video.requestVideoFrameCallback(pump); return }; const delayMs = Math.max(0, now - submitted)')
+}
 const mainCode = ['setShippingReplayWorkload', 'stopDxgiReplayServices',
   'reconcileDxgiReplayServices'].map((name) => fn(main, name)).join('\n')
 let errorHandler
@@ -206,6 +211,56 @@ await check('native READY stops/releases shipping MP4 while retaining focused La
   assert.equal(count(h.events, 'fresh-shipping-installed'), 1, 'failure must resume the production shipping start path')
   h.managers[0].fail(); await flush()
   assert.equal(count(h.events, 'fresh-shipping-installed'), 1, 'duplicate fallback must not create duplicate recorders')
+})
+await check('actual frame callback keeps sending Lane-S ticks after READY and stops on teardown', async () => {
+  const h = harness()
+  const callbacks = []
+  const ticks = []
+  const video = { style: {}, requestVideoFrameCallback: (callback) => callbacks.push(callback), play: async () => {} }
+  Object.assign(h.rendererContext, {
+    tickGeneration: 0, captureBackend: 'chromium-desktop-capture', latestPresentedFrame: null,
+    document: { createElement: () => video, body: { appendChild: () => {} } },
+    performance: { timeOrigin: 1000 }, wallComparableTimeMs: (origin, value) => origin + value,
+    retainReplayPixelClockFrame: () => {}, releaseVideoSink: () => {},
+  })
+  h.rendererContext.window.captureBridge.sendTick = (tick) => ticks.push(tick)
+  run([tickPump, fn(renderer, 'stopFrameTicks')].join('\n'), h.rendererContext)
+  h.rendererContext.startFrameTicks()
+  assert.equal(video.style.opacity, '1', 'clock sink must produce paint damage in the hidden capture window')
+  assert.equal(video.width, 1)
+  assert.equal(video.height, 1)
+  const frame = (time) => callbacks.shift()(time + 2, { presentationTime: time, mediaTime: time / 1000 })
+  frame(100)
+  assert.equal(ticks.length, 1)
+  h.start(); h.managers[0].ready(); await flush()
+  assert.equal(h.rendererContext.activeRecorder, null)
+  frame(167)
+  assert.equal(ticks.length, 2, 'native ownership must retain actual clock IPC, independently of retired MediaRecorder')
+  assert.equal(ticks[1].mediaTimeMs, 1167)
+  assert.equal(callbacks.length, 1, 'one callback chain continues after READY')
+  h.rendererContext.teardown()
+  frame(234)
+  assert.equal(ticks.length, 2, 'a callback from a retired stream must not emit a tick')
+  assert.equal(callbacks.length, 0, 'retired callback must not reschedule itself')
+})
+await check('readiness uses the same opaque one-pixel clock sink without exposing a window', async () => {
+  const h = harness()
+  const video = { style: {}, requestVideoFrameCallback: () => 1, play: async () => {}, pause: () => {}, remove: () => {} }
+  Object.assign(h.rendererContext, {
+    PrimaryReadiness: class {}, PRIMARY_READY_TIMEOUT_MS: 2000,
+    performance: { now: () => 0 },
+    document: { createElement: () => video, body: { appendChild: () => {} } },
+  })
+  h.rendererContext.window.setTimeout = () => 1
+  run(fn(renderer, 'waitForPrimaryReadiness'), h.rendererContext)
+  const readiness = h.rendererContext.waitForPrimaryReadiness(h.originalStream, 7, 2000)
+  assert.equal(video.style.opacity, '1')
+  assert.equal(video.width, 1)
+  assert.equal(video.height, 1)
+  assert.equal(video.srcObject, h.originalStream)
+  h.rendererContext.primaryReadinessCancel()
+  await assert.rejects(readiness, /readiness cancelled/)
+  assert.equal(video.srcObject, null)
 })
 await check('stale READY after service teardown cannot suspend the replacement shipping owner', async () => {
   const h = harness(); h.start()

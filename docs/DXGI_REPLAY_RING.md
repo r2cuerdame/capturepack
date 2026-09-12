@@ -58,6 +58,10 @@ helper.
   `STOP` command on stdin, and emits exact 288-byte version-2 `CPNSRV01` READY, SNAPSHOT,
   or FATAL packets. A successful READY is emitted only after an internal
   keyframe/config-safe snapshot has been muxed and decoded successfully.
+- Production requests carry the same replay output size selected for the
+  shipping recorder. Physical display identity and cursor composition stay on
+  the native desktop geometry; the video processor scales its final NV12 output
+  to the requested encoder dimensions. READY must match those dimensions.
 - `--self-test` opens neither the desktop nor a codec. It exercises the native
   timestamp, geometry, encoder-transition, retention, keyframe/configuration,
   and device-loss/reinitialization contracts.
@@ -90,6 +94,15 @@ Foundation 100 ns timestamp so output samples are not mapped back through a
 lossy inverse conversion. Service snapshots carry a measured QPC/system-time
 anchor, so the app maps the first retained exposure to the replay origin instead
 of estimating it from request time minus duration.
+
+The Media Foundation fragmented-MP4 sink can round individual sample durations
+in its chosen track timescale, accumulating drift. After finalization, the helper
+records duration differences between quantized absolute exposure boundaries in
+that actual timescale. It also updates explicit decode bases, applicable duration
+headers, and each `tfra` seek entry at its exact referenced sample. Box sizes,
+byte offsets, and compressed media payload remain unchanged. Unsupported layouts
+fail export; the corrected file must still pass full decoding and the app's
+existing one-tick endpoint check.
 
 The native candidate deliberately supports the settings UI's 1–60 second
 range. Legacy or hand-edited settings above 60 seconds are rejected before the

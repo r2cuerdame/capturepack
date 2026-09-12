@@ -36,6 +36,10 @@ if (bFrameRequest < 0 || outputTypeCommit <= bFrameRequest ||
   )
 }
 const expectedNativeSelfTestLines = [
+  'SELFTEST PASS mux-absolute-boundaries-no-cumulative-rounding',
+  'SELFTEST PASS mux-tfdt-tfra-interior-wide-sample-index',
+  'SELFTEST PASS mux-malformed-unsupported-timing-transactional',
+  'SELFTEST PASS mux-field-width-overflow-fails-closed',
   'SELFTEST PASS h264-config-explicit-zero-reorder',
   'SELFTEST PASS h264-poc2-frame-progression-wrap-idr',
   'SELFTEST PASS h264-b-reorder-marking-fail-closed',
@@ -44,6 +48,8 @@ const expectedNativeSelfTestLines = [
   'SELFTEST PASS h264-cabac-padding-bounded',
   'SELFTEST PASS timestamps',
   'SELFTEST PASS rotation-topology',
+  'SELFTEST PASS replay-output-size-physical-cursor-contract',
+  'SELFTEST PASS replay-output-arguments-fail-closed',
   'SELFTEST PASS cursor-position-pointer-only-clipping',
   'SELFTEST PASS cursor-rotation-multi-output-coordinates',
   'SELFTEST PASS cursor-monochrome-and-xor-semantics',

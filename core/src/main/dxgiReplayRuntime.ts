@@ -488,6 +488,7 @@ export function selectDxgiReplayRuntime(input: {
   helperExists: boolean
   capability?: DxgiReplayCapability
   ready?: DxgiReplayServicePacket
+  outputSize?: { readonly width: number; readonly height: number }
 }): DxgiReplayRuntimeSelection {
   if (!input.optedIn) return { backend: 'shipping', reason: 'switch-disabled' }
   if (input.platform !== 'win32') return { backend: 'shipping', reason: 'unsupported-platform' }
@@ -506,6 +507,9 @@ export function selectDxgiReplayRuntime(input: {
       ...(input.ready === undefined ? {} : { detail: input.ready.reason }),
     }
   }
+  if (input.outputSize !== undefined && (
+    input.ready.width !== input.outputSize.width || input.ready.height !== input.outputSize.height
+  )) return { backend: 'shipping', reason: 'native-not-ready', detail: 'READY dimensions differed from requested replay size' }
   return { backend: 'native-dxgi', ready: input.ready }
 }
 
@@ -513,6 +517,7 @@ export interface DxgiReplayRuntimeStartRequest {
   readonly deviceName?: string
   readonly bounds?: DxgiReplayBounds
   readonly retentionMs: number
+  readonly outputSize?: { readonly width: number; readonly height: number }
 }
 
 export interface DxgiReplayRuntimeSnapshot {
@@ -604,6 +609,16 @@ export class DxgiReplayRuntimeManager {
         || request.retentionMs > DXGI_REPLAY_MAX_RETENTION_MS) {
       return this.setFallback('native-not-ready', 'retention was outside service bounds')
     }
+    const outputSize = request.outputSize
+    if (outputSize !== undefined && (
+      !Number.isSafeInteger(outputSize.width) || !Number.isSafeInteger(outputSize.height)
+      || outputSize.width < 2 || outputSize.height < 2
+      || outputSize.width > 16_384 || outputSize.height > 16_384
+      || outputSize.width % 2 !== 0 || outputSize.height % 2 !== 0
+      || (request.bounds !== undefined && (
+        outputSize.width > request.bounds.width || outputSize.height > request.bounds.height
+      ))
+    )) return this.setFallback('native-not-ready', 'output size was outside service bounds')
     const helper = this.options.helperPath ?? dxgiReplayRingHelperPath()
     const fileExists = this.options.fileExists ?? existsSync
     if (helper === null || !fileExists(helper)) return this.setFallback('helper-missing')
@@ -638,7 +653,10 @@ export class DxgiReplayRuntimeManager {
         { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true },
       ) as ChildProcessWithoutNullStreams))(
         helper,
-        [...identityArgs, '--serve', '--retention-ms', String(request.retentionMs)],
+        [...identityArgs, '--serve', '--retention-ms', String(request.retentionMs),
+          ...(outputSize === undefined ? [] : [
+            '--output-width', String(outputSize.width), '--output-height', String(outputSize.height),
+          ])],
       )
     } catch (error) {
       return this.setFallback('native-not-ready', String(error))
@@ -679,9 +697,13 @@ export class DxgiReplayRuntimeManager {
           helperExists: true,
           capability,
           ready: packet,
+          outputSize,
         })
         this.pendingReady = null
-        if (selected.backend !== 'native-dxgi') return
+        if (selected.backend !== 'native-dxgi') {
+          this.failProcess(child, 'native-runtime-failed', selected.detail ?? 'late READY did not match requested service')
+          return
+        }
         this.selection = selected
         // From this point onward we can prove retained native history. Time
         // spent waiting on a perfectly static desktop is not replay history.
@@ -718,6 +740,7 @@ export class DxgiReplayRuntimeManager {
       helperExists: true,
       capability,
       ...(ready === null ? {} : { ready }),
+      outputSize,
     })
     if (selected.backend === 'shipping') {
       if (ready === null && selected.reason === 'native-not-ready' && this.process === child) {
@@ -909,6 +932,11 @@ export class DxgiReplayRuntimeManager {
       return
     }
     try {
+      if (this.selection.backend !== 'native-dxgi'
+          || packet.width !== this.selection.ready.width
+          || packet.height !== this.selection.ready.height) {
+        throw new Error('snapshot dimensions differed from selected READY replay size')
+      }
       const info = await stat(pending.outputPath)
       const maximumBytes = this.options.maximumExportBytes ?? DXGI_REPLAY_MAX_EXPORT_BYTES
       if (!info.isFile() || info.size !== Number(packet.mp4Bytes) || info.size > maximumBytes) {
@@ -935,7 +963,12 @@ export class DxgiReplayRuntimeManager {
       if (validated.firstPresentationTimeMs !== 0
           || Math.abs(validated.lastPresentationTimeMs - Number(packet.lastPtsHns) / 10_000)
             > validated.timestampQuantumMs + 0.0001) {
-        throw new Error('MP4 sample PTS disagreed with measured exposure clock')
+        throw new Error('MP4 sample PTS disagreed with measured exposure clock: '
+          + JSON.stringify({ firstPtsMs: validated.firstPresentationTimeMs,
+            lastPtsMs: validated.lastPresentationTimeMs,
+            expectedLastPtsHns: packet.lastPtsHns.toString(),
+            timestampQuantumMs: validated.timestampQuantumMs,
+            sampleCount: packet.sampleCount.toString() }))
       }
       const reference = {
         qpcFrequency: packet.qpcFrequency,
@@ -1030,6 +1063,7 @@ export interface DxgiReplayRuntimeDisplay {
   readonly id: number
   readonly deviceName?: string
   readonly bounds: DxgiReplayBounds
+  readonly outputSize?: { readonly width: number; readonly height: number }
 }
 
 export interface DxgiReplayRuntimeSyncOptions {
@@ -1078,6 +1112,7 @@ export class DxgiReplayRuntime {
       const signature = JSON.stringify({
         deviceName: display.deviceName ?? null,
         bounds: display.bounds,
+        outputSize: display.outputSize,
         retentionMs: settings.retentionMs,
         fps: settings.fps,
         enabled: settings.enabled,
@@ -1102,6 +1137,7 @@ export class DxgiReplayRuntime {
       const selection = await manager.start({
         deviceName: display.deviceName,
         bounds: display.bounds,
+        outputSize: display.outputSize,
         retentionMs: settings.retentionMs,
       })
       const active = this.displays.get(display.id)
