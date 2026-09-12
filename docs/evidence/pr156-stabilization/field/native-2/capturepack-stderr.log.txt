@@ -1,0 +1,8 @@
+[context] host working set is 122 MB, past the 120 MB trigger for replacing the PowerShell host with a native addon
+[context] host is using 6.8% of a core — dropping lane S to 200 ms
+[context] lane A: window 36706892 dropped — it took 205.3 ms a pass and would define this lane's latency
+[context] host is using 6.3% of a core — dropping lane S to 500 ms
+[capture] display 2678724301: DXGI native replay unavailable (native-runtime-failed) — DXGI replay service exited 4294967295: dxgi replay: zero-B CodecAPI property contract unavailable; encoder=NVIDIA H.264 Encoder MFT; before-types-set=0x80070057; after-types-set-attempted=1; after-types-set=0x80070057; read-attempted=1; read=0x80004001; value-type=0; ui4-value-valid=0; ui4-value=0
+dxgi replay: zero-B property diagnostics; supported=0x80004001; modifiable=0x80004001; range=0x80004001; minimum-type=0; minimum-ui4=0; maximum-type=0; maximum-ui4=0; step-type=19; step-ui4=0
+dxgi replay: pre-stream codec-config diagnostics; read=0x00000000; bytes=37; bounded-hex=00000001674D402895A01E0089F9701100000303E8000075300F1C2AA00000000168EE3C80
+dxgi replay: verified H.264 POC2 zero-reordering contract; every access unit requires ordering validation; retaining shipping replay path

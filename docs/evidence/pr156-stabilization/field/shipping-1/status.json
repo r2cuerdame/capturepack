@@ -1,0 +1,9 @@
+{
+  "schema": "capturepack.windows-replay-field-status",
+  "version": 1,
+  "run_id": "20260912133222699-75376-15fps-shipping",
+  "stage": "done",
+  "detail": "BROKEN; report=C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\shipping-1\\report.json",
+  "elapsed_seconds": 45.4,
+  "updated_at": "2026-09-12T13:33:08.138Z"
+}

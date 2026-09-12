@@ -1,0 +1,14 @@
+{
+  "head": "fb982677c96d6d365ea06bd1d1a2d430b09873dc",
+  "argv": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\core\\scripts\\dxgi-replay-ab-field-check.mjs",
+    "--trials=3",
+    "--fps=15",
+    "--duration-seconds=30",
+    "--target=primary",
+    "--artifacts-dir=C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts"
+  ],
+  "cwd": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\core",
+  "time": "2026-09-12T13:32:22.583Z"
+}

@@ -1,0 +1,1 @@
+DXGI replay lifecycle: 9 checks passed (#243 READY suspension and honest fallback)

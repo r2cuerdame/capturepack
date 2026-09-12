@@ -1,0 +1,64 @@
+
+> capturepack@0.5.0 check:dxgi-replay-ring
+> node scripts/dxgi-replay-ring-check.mjs
+
+DXGI helper built: ..\..\..\..\AppData\Local\Temp\capturepack-dxgi-replay-ring-check-8JlPfY\dxgi-replay-ring.exe
+SELFTEST PASS mux-absolute-boundaries-no-cumulative-rounding
+SELFTEST PASS mux-single-frame-empty-random-access-index
+SELFTEST PASS mux-tfdt-tfra-interior-wide-sample-index
+SELFTEST PASS mux-malformed-unsupported-timing-transactional
+SELFTEST PASS mux-field-width-overflow-fails-closed
+SELFTEST PASS h264-config-explicit-zero-reorder
+SELFTEST PASS h264-poc2-frame-progression-wrap-idr
+SELFTEST PASS h264-b-reorder-marking-fail-closed
+SELFTEST PASS h264-multislice-one-picture
+SELFTEST PASS h264-malformed-extension-config-rejected
+SELFTEST PASS h264-cabac-padding-bounded
+SELFTEST PASS timestamps
+SELFTEST PASS rotation-topology
+SELFTEST PASS replay-output-size-physical-cursor-contract
+SELFTEST PASS replay-output-arguments-fail-closed
+SELFTEST PASS cursor-position-pointer-only-clipping
+SELFTEST PASS cursor-rotation-multi-output-coordinates
+SELFTEST PASS cursor-monochrome-and-xor-semantics
+SELFTEST PASS cursor-masked-color-copy-xor-semantics
+SELFTEST PASS cursor-color-shape-rotation-semantics
+SELFTEST PASS cursor-shape-validation-fails-closed
+SELFTEST PASS bounded-bytes-keyframe-cut
+SELFTEST PASS bounded-time
+SELFTEST PASS bounded-max-units
+SELFTEST PASS short-retention-awaits-keyframe
+SELFTEST PASS retention-sized-bounds
+SELFTEST PASS cursor-contract-fails-closed
+SELFTEST PASS config-generation-keyframe-cut
+SELFTEST PASS service-clock-precision-fails-closed
+SELFTEST PASS encoder-zero-b-contract-fails-closed
+SELFTEST PASS encoder-transition-semantics
+SELFTEST PASS device-loss-retry-boundaries
+SELFTEST PASS output-identity-topology
+dxgi replay ring self-test: OK
+PASS: available packet retains exact output and encoder identity
+PASS: every two-chunk split produces the same capability
+PASS: byte-at-a-time stream remains exact
+PASS: every native unavailable reason is recognized
+PASS: truncated, oversized and concatenated packets are rejected
+PASS: magic, version, status and reason corruption are rejected
+PASS: unknown stages and missing available stages are rejected
+PASS: available and unavailable status/reason contradictions are rejected
+PASS: selected output requires positive bounds and a device name
+PASS: unselected output cannot smuggle identity
+PASS: string bounds, padding and UTF-8 are strict
+PASS: stream parser refuses output beyond one fixed packet
+PASS: arguments require one exact display identity and preserve negative origins
+PASS: capture summary requires real H.264 ring evidence
+PASS: capture summary counts retained codec configuration inside the ring bound
+PASS: capture summary preserves explicit native failure evidence
+PASS: capture summary preserves failure before output selection
+PASS: capture summary rejects capability-only success and impossible counters
+PASS: capture summary preserves cursor composition failure
+PASS: wrapper names unsupported, invalid and missing-helper outcomes
+dxgi replay ring check: 20 passed
+
+  ...ta\Local\Temp\capturepack-dxgi-replay-ring-check-8JlPfY\check.cjs  25.8kb
+
+Done in 9ms

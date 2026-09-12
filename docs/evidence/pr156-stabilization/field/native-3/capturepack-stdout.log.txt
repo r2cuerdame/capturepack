@@ -1,0 +1,58 @@
+
+[app] CapturePack 0.5.0 starting — electron 43.2.0, chrome 150.0.7871.129, node 24.18.0, win32 x64, pid 2376
+[app] crash dumps: C:\_WorktreeArchive\Herder-2026-09-12\worktrees\job_01M21Z4M10PGMW2N12MNTC3EN3\.review-archive\medium-field-20260912-1\artifacts\native-3\app-data\Crashpad
+[lifecycle] no previous run recorded on this machine
+[app] launch: manual, language en, displays 2678724301, replay 30s @ 15fps
+[mcp] not started at boot — the MCP server is disabled in Settings
+[capture] display 2678724301: none -> starting
+[context] lane A started — control geometry is tracked, not frozen at the capture instant
+[context] session de04abc4 started — surface timeline retaining 35s
+[capture] --capture-now: capturing in 33s
+[hotkey] not registered (--no-global-shortcut)
+[hotkey] image capture not registered (--no-global-shortcut)
+[updater] dev
+[context] host ready — pid 70820, DPI per-monitor-v2, PowerShell 5.1.26100.7705
+[context] host move hook active — window movement observed event-driven
+[context] lane S sampling every 67 ms (clock offset -1014.6 ms, ±0.8 ms)
+[capture] display 2678724301: starting -> recording
+[capture] recorder state: recording
+[capture] display 2678724301: DXGI native replay READY (1920x1080 @ 15fps, NVIDIA H.264 Encoder MFT)
+[capture] display 2678724301: shipping replay encoders suspended; native replay owns the display
+[capture] display 2678724301: native replay health probe acquired 128x72 witness via windows-gdi-bitblt
+[context] lane S is on display 2678724301's frame clock
+[context] lane S anchored to captured frames — observing at 31 ms while the desk moves
+[capture] display 2678724301: recording -> starting
+[capture] recorder state: starting
+[capture] display 2678724301: native replay unavailable; restarting shipping replay workload
+[capture] display 2678724301: video/mp4;codecs=avc1 -> replay.mp4, 1920x1080, source latency unknown
+[capture] display 2678724301: primary recorder readiness after 2016 ms (1 presented frames, timeout=true, excluded-before-recorder=2016 ms, presentation-span=0 ms)
+[context] lane S anchored to captured frames — observing at 31 ms while the desk moves
+[capture] display 2678724301: frames confirmed (1807463 recorder bytes, 79 delivered frames)
+[capture] display 2678724301: starting -> recording
+[capture] recorder state: recording
+[storage] retention sweep (startup): nothing to remove (keep everything, budget off)
+[capture] capture requested
+[capture] display 2678724301: ring retained 110 fragment(s), 9611410 bytes / 23823 ms; selected 110 fragment(s)
+[capture] display 2678724301: ring timing — 354 sample(s) over 102 delivery instant(s); encoder span 24240 ms (110 fragment(s) carried one), longest held frame 123.5 ms
+[capture] display 2678724301: ring timeline — 110 fragment(s) selected spanning 24431 ms, 110 kept after the 30000 ms retention window; source clock believed (24240 ms claimed within 23841 ms of wall)
+[capture] display 2678724301: replay pixel clock {"status":"measured","reason":"measured","presentedSampleCount":25,"decodedSampleCount":64,"matchCount":17,"originMs":1789220215821.0667,"originSpreadMs":1.966552734375,"motionTransitions":16,"bestDelta":1.3561417220815715,"minimumContrast":8.29194644126128,"candidateOriginsMs":[1789220215820.5334,1789220215820.9,1789220215820.9333,1789220215821,1789220215821,1789220215821.0334,1789220215821.0667,1789220215821.0667],"clockAnchors":[{"ptsMs":0,"presentedAtMs":1789220215820.9,"capturedAtMs":1789220215820.3,"mediaTimeMs":1706.722},{"ptsMs":1219.9716666666673,"presentedAtMs":1789220217041,"capturedAtMs":1789220217040.4,"mediaTimeMs":2926.737},{"ptsMs":2238.6,"presentedAtMs":1789220218059.6,"capturedAtMs":1789220218059,"mediaTimeMs":3945.388},{"ptsMs":3200,"presentedAtMs":1789220219022.5,"capturedAtMs":1789220219020.4,"mediaTimeMs":4906.785},{"ptsMs":4219.866666666667,"presentedAtMs":1789220220041.4,"capturedAtMs":1789220220040.3,"mediaTimeMs":5926.632},{"ptsMs":5222.541666666667,"presentedAtMs":1789220221043.5,"capturedAtMs":1789220221042.9,"mediaTimeMs":6929.307},{"ptsMs":6243.4,"presentedAtMs":1789220222064.4,"capturedAtMs":1789220222063.8,"mediaTimeMs":7950.185},{"ptsMs":7259.266666666666,"presentedAtMs":1789220223080.2,"capturedAtMs":1789220223079.6,"mediaTimeMs":8966.024000000001},{"ptsMs":8264.483666666667,"presentedAtMs":1789220224085.5,"capturedAtMs":1789220224084.9,"mediaTimeMs":9971.249},{"ptsMs":9220.395666666667,"presentedAtMs":1789220225042.1,"capturedAtMs":1789220225040.8,"mediaTimeMs":10927.161},{"ptsMs":10227.951666666666,"presentedAtMs":1789220226048.9,"capturedAtMs":1789220226048.3,"mediaTimeMs":11934.716999999999},{"ptsMs":11250.533333333333,"presentedAtMs":1789220227071.6,"capturedAtMs":1789220227070.9,"mediaTimeMs":12957.293},{"ptsMs":12274.610666666666,"presentedAtMs":1789220228095.5,"capturedAtMs":1789220228095,"mediaTimeMs":13981.375999999998},{"ptsMs":13282.648666666668,"presentedAtMs":1789220229104.2,"capturedAtMs":1789220229103,"mediaTimeMs":14989.414},{"ptsMs":14288.266666666666,"presentedAtMs":1789220230109.3,"capturedAtMs":1789220230108.7,"mediaTimeMs":15995.069000000001},{"ptsMs":15300.333333333334,"presentedAtMs":1789220231121.4,"capturedAtMs":1789220231120.8,"mediaTimeMs":17007.166999999998},{"ptsMs":16249.066666666668,"presentedAtMs":1789220232070.6,"capturedAtMs":1789220232069.4,"mediaTimeMs":17955.825999999997},{"ptsMs":17252.466666666667,"presentedAtMs":1789220233073.6,"capturedAtMs":1789220233072.8,"mediaTimeMs":18959.176},{"ptsMs":18272.4,"presentedAtMs":1789220234093.5,"capturedAtMs":1789220234092.7,"mediaTimeMs":19979.135},{"ptsMs":19285.066666666666,"presentedAtMs":1789220235106.5,"capturedAtMs":1789220235105.5,"mediaTimeMs":20991.855},{"ptsMs":20296.533333333333,"presentedAtMs":1789220236117.6,"capturedAtMs":1789220236116.9,"mediaTimeMs":22003.338},{"ptsMs":21308.866666666665,"presentedAtMs":1789220237130,"capturedAtMs":1789220237129.3,"mediaTimeMs":23015.689},{"ptsMs":22323.066666666666,"presentedAtMs":1789220238143.6,"capturedAtMs":1789220238143.1,"mediaTimeMs":24029.457000000002},{"ptsMs":23269.821666666667,"presentedAtMs":1789220239090.8,"capturedAtMs":1789220239090.2,"mediaTimeMs":24976.587},{"ptsMs":24240.466666666667,"presentedAtMs":1789220240061.6,"capturedAtMs":1789220240060.8,"mediaTimeMs":25947.223}],"decoder":{"stage":"decoded","mimeType":"video/mp4;codecs=avc1","bytes":9611410,"approximateOriginMs":1789220216030.8667,"durationMs":24431,"presentedSamples":25,"parsedSampleCount":354,"parsedTrackCount":1,"parserStatus":"ok","targetCount":64,"relativeMinMs":-209.966796875,"relativeMaxMs":24030.7333984375,"mediaDurationSeconds":24.4306,"readyState":4,"networkState":1,"seekAttempts":64,"seekCallbacks":64,"decodedSamples":64,"elapsedMs":1344}}
+[capture-clock] display 2678724301: start=9087.900 event=9572.600 timecode=0.000 delivered=9572.900 presentation=9106.900 capture=9106.300 media=1706.722
+[capture-clock] display 2678724301: start=9087.900 event=9787.200 timecode=214.635 delivered=9787.400 presentation=9106.900 capture=9106.300 media=1706.722
+[capture-clock] display 2678724301: start=9087.900 event=9991.500 timecode=418.971 delivered=9991.700 presentation=9106.900 capture=9106.300 media=1706.722
+[capture-clock] display 2678724301: start=9087.900 event=10195.200 timecode=622.747 delivered=10195.500 presentation=9106.900 capture=9106.300 media=1706.722
+[capture-clock] display 2678724301: start=9087.900 event=10395.500 timecode=823.016 delivered=10395.800 presentation=10327.000 capture=10326.400 media=2926.737
+[capture-clock] display 2678724301: start=9087.900 event=10598.300 timecode=1025.841 delivered=10598.700 presentation=10327.000 capture=10326.400 media=2926.737
+[capture-clock] display 2678724301: start=9087.900 event=10869.200 timecode=1296.659 delivered=10869.400 presentation=10327.000 capture=10326.400 media=2926.737
+[capture-clock] display 2678724301: start=9087.900 event=11140.200 timecode=1567.717 delivered=11140.400 presentation=10327.000 capture=10326.400 media=2926.737
+[context] froze 24431ms of surface timeline (1464 samples, 289 KB)
+[context] pack clock: measured 25-anchor presentation pixel map, end -64.836181640625 ms from trigger, 24431 ms long (raw 24431 ms); all display replies ready 2708 ms from trigger
+[context] lane S: 1464 samples over 34s, 289 KB, host 8.42% of a core, 119 MB, clock ±0.5 ms, 30 frame-stamped / 0 clock-stamped / 1440 converted onto the frame clock, tick lag +1 ms (folded into the sample time), callback late 35 ms p50 / 62 ms p90 (folded in), frame already 1 ms old, frame->core +129.2 ms, 6 dropped, stride 1
+[context] 103 input event(s) on the pack clock (SPEC §10.2)
+[capture] captured 1 display(s), 1 with a replay (24431ms on the focused display)
+[capture] display 2: recorded 14.2 fps of 15 requested, worst stall 119 ms, 0 frame(s) discarded
+[capture] save-first wrote CapturePack_2026-09-12_223720
+[context] surface resolver ready
+capturepack: [context] provider registered: windows-uia 0.4.0 (built-in, permissions: read-active-window, write-plugin-files)
+capturepack: [context] provider registered: chrome-dom 0.1.0 (built-in, permissions: read-browser-context, write-plugin-files)
+[context] editor session reads 1064 surface observations across 24431 ms
+[capture] latency video — frozen 2708 ms, saved 3051 ms, editor-visible 3667 ms; hands-off 3667 ms
