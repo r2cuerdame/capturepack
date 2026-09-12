@@ -27,6 +27,7 @@
 // parseUiaPayload), and this module calls them rather than re-deciding.
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import * as path from 'node:path'
+import { pngPixelSize } from '../png'
 import { parseDomPayload } from '../chrome/domBridge'
 import type { DomEvent } from '../chrome/domBridge'
 import { parseUiaPayload } from '../uia'
@@ -97,29 +98,6 @@ function packReader(dirPath: string): {
       }
     },
   }
-}
-
-/**
- * A PNG's declared pixel size, straight out of its IHDR — 8-byte signature,
- * then the first chunk, which a PNG REQUIRES to be IHDR.
- *
- * MEASURED FROM THE FILE, never copied from `snapshot_width`/`snapshot_height`:
- * the declaration exists from format 0.7.0 only, and a declaration that
- * disagrees with its own raster is a bug this reader must expose rather than
- * inherit (SPEC §5.6). Reading 24 bytes also means opening a folder of 4K packs
- * costs no decode at all.
- */
-function pngPixelSize(file: string): { width: number; height: number } | null {
-  let head: Buffer
-  try {
-    head = readFileSync(file)
-  } catch {
-    return null
-  }
-  if (head.length < 24 || head.toString('ascii', 12, 16) !== 'IHDR') return null
-  const width = head.readUInt32BE(16)
-  const height = head.readUInt32BE(20)
-  return width > 0 && height > 0 ? { width, height } : null
 }
 
 function readManifest(dirPath: string): Manifest | null {
