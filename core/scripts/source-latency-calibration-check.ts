@@ -1229,8 +1229,8 @@ console.log('\nA measured source latency outlives the capture that found it')
     'utf8',
   )
   check(
-    'calibration still runs only inside the startup observation window',
-    renderer.includes('never inside retained replay')
+    'calibration starts once in the startup observation window',
+    renderer.includes('primaryStartupObservationAttempted = true')
       && renderer.includes('minimumObservationMs > 0'),
   )
 }
