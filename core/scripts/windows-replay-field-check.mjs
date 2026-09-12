@@ -32,6 +32,7 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const coreDir = path.resolve(here, '..')
 const require = createRequire(import.meta.url)
 const electron = require('electron')
+const { lifecycleLogEvidence } = require('./fixtures/dxgi-replay-lifecycle.cjs')
 const {
   requestedFixtureStartDisplayId,
 } = require('./fixtures/windows-replay-field-order.cjs')
@@ -344,7 +345,7 @@ async function processTreeSnapshot(rootPid) {
   const script = `
 $ErrorActionPreference='Stop'
 $rootPid=[int]${String(rootPid)}
-$nodes=@(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine)
+$nodes=@(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine,ExecutablePath,CreationDate)
 $ids=New-Object 'System.Collections.Generic.HashSet[int]'
 [void]$ids.Add($rootPid)
 do {
@@ -387,6 +388,8 @@ foreach($node in $nodes) {
     parent_pid=[int]$node.ParentProcessId
     name=[string]$node.Name
     command_line=[string]$node.CommandLine
+    executable_path=[string]$node.ExecutablePath
+    creation_date=$node.CreationDate.ToUniversalTime().ToString('o')
     cpu_seconds=[double]$process.CPU
     private_bytes=[long]$process.PrivateMemorySize64
     working_set_bytes=[long]$process.WorkingSet64
@@ -1885,6 +1888,7 @@ const report = {
   process_metrics_startup_inclusive: null,
   performance: null,
   recorder_runtime: null,
+  native_lifecycle: null,
   media: [],
   past_sampling: null,
   checks: {},
@@ -1899,6 +1903,7 @@ let fixtureStdout = null
 let fixtureStderr = null
 let appStdout = null
 let appStderr = null
+let measurementMainLog = null
 
 try {
   if (process.platform !== 'win32') throw new Error('this field check must run in Windows Node')
@@ -2086,6 +2091,83 @@ try {
     await delay(500)
   }
 
+  if (replayBackend === 'native-dxgi') {
+    // Fault injection is after the saved pack and performance window. Keep its
+    // samples separate so recovery cannot change the shipping/native metrics.
+    setStage('native-fallback-proof', 'verifying owned helper failure and fresh shipping frame evidence')
+    const logPath = path.join(profileDir, 'logs', 'main.log')
+    const beforeLog = readFileSync(logPath, 'utf8')
+    measurementMainLog = beforeLog
+    const beforeProcesses = await processTreeSnapshot(appProcess.pid)
+    const expectedHelper = path.join(coreDir, 'dist', 'scripts', 'dxgi-replay-ring.exe')
+    const helpers = beforeProcesses.processes.filter((row) => (
+      row.executable_path?.toLowerCase() === expectedHelper.toLowerCase()
+      && /(?:^|\s)--serve(?:\s|$)/u.test(row.command_line)
+    ))
+    report.native_lifecycle = {
+      phase: 'post-save, outside performance measurement window',
+      before_processes: beforeProcesses,
+      expected_helper: expectedHelper,
+      helper_count: helpers.length,
+      injected_at: null,
+      after_processes: null,
+      log_evidence: null,
+      helper_gone: false,
+      pass: false,
+    }
+    if (helpers.length !== 1 || resolvedTargetId === 'all') {
+      throw new Error('native lifecycle proof requires exactly one owned service on the selected display')
+    }
+    const helper = helpers[0]
+    const quotePs = (value) => `'${String(value).replaceAll("'", "''")}'`
+    // Revalidate ancestry, executable, command line, and creation identity in
+    // the same bounded process that kills the helper; never select by name.
+    const killScript = `
+$ErrorActionPreference='Stop'
+$nodes=@(Get-CimInstance Win32_Process)
+$target=$nodes | Where-Object { $_.ProcessId -eq ${helper.pid} }
+if($null -eq $target -or $target.ExecutablePath -ine ${quotePs(expectedHelper)} -or $target.CommandLine -cne ${quotePs(helper.command_line)} -or $target.CreationDate.ToUniversalTime().ToString('o') -cne ${quotePs(helper.creation_date)}) { throw 'owned helper identity changed' }
+if($target.CommandLine -notmatch '(?:^|\\s)--serve(?:\\s|$)') { throw 'not a replay service' }
+$ancestor=[int]$target.ParentProcessId
+$visited=New-Object 'System.Collections.Generic.HashSet[int]'
+while($ancestor -ne ${appProcess.pid}) {
+  if(-not $visited.Add($ancestor)) { throw 'invalid ancestry' }
+  $parent=$nodes | Where-Object { $_.ProcessId -eq $ancestor }
+  if($null -eq $parent) { throw 'helper is not an app descendant' }
+  $ancestor=[int]$parent.ParentProcessId
+}
+Stop-Process -Id ([int]$target.ProcessId) -Force -ErrorAction Stop
+Wait-Process -Id ([int]$target.ProcessId) -Timeout 10 -ErrorAction SilentlyContinue
+if($null -ne (Get-Process -Id ([int]$target.ProcessId) -ErrorAction SilentlyContinue)) { throw 'owned helper survived termination' }
+Write-Output 'owned native replay service terminated'
+`
+    report.native_lifecycle.injected_at = new Date().toISOString()
+    const killed = await runBounded('powershell.exe', [
+      '-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encodedPowerShell(killScript),
+    ], { timeoutMs: 15_000, maxStdoutBytes: 4096 })
+    report.native_lifecycle.termination = killed
+    if (killed.code !== 0) throw new Error('could not terminate the verified owned native service')
+    const recovered = await waitFor(() => {
+      const afterLog = readFileSync(logPath, 'utf8').slice(beforeLog.length)
+      const evidence = lifecycleLogEvidence({
+        mainLog: beforeLog, fallbackMainLog: afterLog, displayId: resolvedTargetId,
+      })
+      report.native_lifecycle.log_evidence = evidence
+      report.native_lifecycle.fallback_log = afterLog
+      return evidence.pass
+    }, 45_000)
+    const afterProcesses = await processTreeSnapshot(appProcess.pid)
+    report.native_lifecycle.after_processes = afterProcesses
+    report.native_lifecycle.helper_gone = !afterProcesses.processes.some((row) => (
+      row.pid === helper.pid || row.executable_path?.toLowerCase() === expectedHelper.toLowerCase()
+    ))
+    report.native_lifecycle.pass = recovered && report.native_lifecycle.helper_gone
+    writeJsonAtomic(path.join(artifactsDir, 'native-lifecycle.json'), report.native_lifecycle)
+    if (!report.native_lifecycle.pass) {
+      throw new Error('native failure did not prove helper teardown and fresh shipping frame evidence')
+    }
+  }
+
   // Stop the app before probing. This both releases every media handle and
   // proves the persisted folder, not a renderer's in-memory copy, is enough.
   setStage('stopping-app', 'releasing recorder and media handles')
@@ -2105,7 +2187,8 @@ try {
 
   report.process_metrics_startup_inclusive = summarizeProcesses(processSamples)
   const mainLogPath = path.join(profileDir, 'logs', 'main.log')
-  const mainLog = existsSync(mainLogPath) ? readFileSync(mainLogPath, 'utf8') : ''
+  const mainLog = measurementMainLog
+    ?? (existsSync(mainLogPath) ? readFileSync(mainLogPath, 'utf8') : '')
   const recorderAvailability = parseRecorderAvailability(mainLog)
   report.performance = parsePerformanceEvidence(mainLog, recorderAvailability)
   const measurementStartMs = report.performance.measurement_window.start_ms
@@ -3069,6 +3152,8 @@ try {
       !releaseComparison || performanceEvidencePass,
     native_fmp4_production_validator_and_full_decode:
       replayBackend !== 'native-dxgi' || nativeMediaValid,
+    native_ready_suspend_snapshot_and_failure_fallback:
+      replayBackend !== 'native-dxgi' || report.native_lifecycle?.pass === true,
     every_spawned_process_terminated: false,
   }
   if (!mediaPass) report.failures.push('one or more replay media criteria failed')

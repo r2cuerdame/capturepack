@@ -163,8 +163,8 @@ npm audit --omit=dev
 ```
 
 The gate discovers every `check:*` script in `core/package.json` — currently
-**89** — and runs them with type checking, the production build and the built
-app's Electron smoke: **92 steps**, or 90 with `--skip-build`. Count it yourself
+**91** — and runs them with type checking, the production build and the built
+app's Electron smoke: **94 steps**, or 92 with `--skip-build`. Count it yourself
 rather than trusting this sentence:
 
 ```powershell

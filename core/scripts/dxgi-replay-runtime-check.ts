@@ -73,8 +73,8 @@ function servicePacket(input: {
 } = {}): Buffer {
   const result = Buffer.alloc(DXGI_REPLAY_SERVICE_PACKET_BYTES)
   result.write('CPNSRV01', 0, 'ascii')
-  result.writeUInt16LE(1, 8)
-  result.writeUInt16LE(256, 10)
+  result.writeUInt16LE(2, 8)
+  result.writeUInt16LE(DXGI_REPLAY_SERVICE_PACKET_BYTES, 10)
   result.writeUInt32LE(input.kind ?? 1, 12)
   result.writeUInt32LE(input.status ?? 0, 16)
   result.writeUInt32LE(input.reason ?? 0, 20)
@@ -85,7 +85,9 @@ function servicePacket(input: {
   result.writeUInt32LE(15, 44)
   result.writeBigInt64LE(10_000_000n, 48)
   result.writeBigInt64LE(9_000_000_000n, 56)
-  result.writeBigInt64LE(9_001_200_000n, 64)
+  const lastPtsHns = (input.durationHns ?? 1_200_000n)
+    * ((input.sampleCount ?? 3n) - 1n) / (input.sampleCount ?? 3n)
+  result.writeBigInt64LE(9_000_000_000n + lastPtsHns, 64)
   result.writeBigInt64LE(input.durationHns ?? 1_200_000n, 72)
   result.writeBigUInt64LE(input.sampleCount ?? 3n, 80)
   result.writeBigUInt64LE(1n, 88)
@@ -97,6 +99,12 @@ function servicePacket(input: {
   const name = Buffer.from('Fixture Hardware H.264 Encoder')
   result.writeUInt32LE(name.length, 128)
   name.copy(result, 132)
+  // The last exposure is well before the clock measurement and export reply,
+  // as with a static desktop tail or encoder backpressure.
+  result.writeBigInt64LE(9_100_000_000n, 256)
+  result.writeBigInt64LE(1_700_000_010_000_000_000n, 264)
+  result.writeBigUInt64LE(100n, 272)
+  result.writeBigInt64LE(lastPtsHns, 280)
   return result
 }
 
@@ -155,8 +163,21 @@ async function main(): Promise<void> {
     stream.push(servicePacket().subarray(0, 99)).length === 0
       && stream.push(servicePacket().subarray(99)).length === 1)
   stream.finish()
+  check('service v1 and missing, invalid, or imprecise clock anchors fail closed',
+    [
+      (value: Buffer) => value.writeUInt16LE(1, 8),
+      (value: Buffer) => value.writeBigInt64LE(0n, 256),
+      (value: Buffer) => value.writeBigInt64LE(-1n, 264),
+      (value: Buffer) => value.writeBigUInt64LE(10_001n, 272),
+      (value: Buffer) => value.writeBigInt64LE(1_000_000n, 280),
+    ].every((corrupt) => {
+      const value = servicePacket()
+      corrupt(value)
+      return throws(() => parseDxgiReplayServicePacket(value))
+    }))
   check('service parser rejects truncation, oversized storage and success contradictions',
     throws(() => parseDxgiReplayServicePacket(servicePacket().subarray(0, 255)))
+      && throws(() => parseDxgiReplayServicePacket(servicePacket().subarray(0, 256)))
       && throws(() => parseDxgiReplayServicePacket(servicePacket({ mp4Bytes: BigInt(DXGI_REPLAY_MAX_EXPORT_BYTES) + 1n })))
       && throws(() => parseDxgiReplayServicePacket(servicePacket({ reason: 27 }))))
   check('service parser accepts the retention-sized maximum ring evidence',
@@ -272,10 +293,63 @@ async function main(): Promise<void> {
   check('snapshot reads and validates bounded MP4 then returns in-memory bytes',
     snapshot.status === 'ok' && snapshot.buffer.equals(mp4)
       && snapshot.sampleCount === 3 && snapshot.durationMs === 120)
+  check('static-tail snapshot retains measured exposure origin despite delayed request/export',
+    snapshot.status === 'ok' && snapshot.originMs === 1_700_000_000_000
+      && snapshot.clockAnchors.length === 2
+      && snapshot.clockAnchors[0]?.ptsMs === 0
+      && snapshot.clockAnchors[0]?.wallMs === 1_700_000_000_000
+      && snapshot.clockAnchors[1]?.ptsMs === 80
+      && snapshot.clockAnchors[1]?.wallMs === 1_700_000_000_080)
   liveChild.close(7)
   const afterDeath = liveManager.currentSelection()
   check('runtime death immediately returns selection to shipping',
     afterDeath.backend === 'shipping' && afterDeath.reason === 'native-runtime-failed')
+
+  async function clockSnapshotFixture(sampleCount: number, alter: (packet: Buffer) => void) {
+    const bytes = validMp4(sampleCount)
+    const child = new FakeProcess((command, process) => {
+      if (!command.startsWith('SNAPSHOT\t')) return
+      const [, id, output] = command.trimEnd().split('\t')
+      if (id === undefined || output === undefined) return
+      writeFileSync(output, bytes)
+      const packet = servicePacket({
+        kind: 2, requestId: BigInt(id), mp4Bytes: BigInt(bytes.length),
+        sampleCount: BigInt(sampleCount), durationHns: BigInt(sampleCount * 400_000),
+      })
+      alter(packet)
+      queueMicrotask(() => process.output(packet))
+    })
+    const manager = new DxgiReplayRuntimeManager({
+      ...common, spawnProcess: () => {
+        queueMicrotask(() => child.output(servicePacket()))
+        return child
+      },
+    })
+    await manager.start({ deviceName: '\\\\.\\DISPLAY1', retentionMs: 30_000 })
+    const result = await manager.snapshot(1_000)
+    manager.stop()
+    child.close()
+    return result
+  }
+  const mismapped = await clockSnapshotFixture(3, (packet) => {
+    // Internally consistent QPC/PTS declarations must still agree with media.
+    packet.writeBigInt64LE(packet.readBigInt64LE(64) + 100_000n, 64)
+    packet.writeBigInt64LE(packet.readBigInt64LE(280) + 100_000n, 280)
+  })
+  check('native export rejects coherent clock metadata at the wrong actual media PTS',
+    mismapped.status === 'fallback' && mismapped.reason === 'native-export-failed'
+      && mismapped.detail?.includes('MP4 sample PTS disagreed') === true)
+  const laterAnchor = await clockSnapshotFixture(3, (packet) => {
+    packet.writeBigInt64LE(packet.readBigInt64LE(256) + 500_000_000n, 256)
+    packet.writeBigInt64LE(packet.readBigInt64LE(264) + 50_000_000_000n, 264)
+  })
+  check('later clock measurement and export preserve the same earlier exposure origin',
+    laterAnchor.status === 'ok' && laterAnchor.originMs === 1_700_000_000_000)
+  const singleSample = await clockSnapshotFixture(1, () => {})
+  check('one-sample native snapshot keeps its measured origin without inventing a second exposure',
+    singleSample.status === 'ok' && singleSample.originMs === 1_700_000_000_000
+      && singleSample.clockAnchors.length === 1
+      && singleSample.clockAnchors[0]?.ptsMs === 0)
 
   const badChild = new FakeProcess((command, child) => {
     if (!command.startsWith('SNAPSHOT\t')) return
@@ -538,6 +612,8 @@ async function main(): Promise<void> {
       && appReplay?.mimeType === 'video/mp4'
       && appReplay.replayFile === 'replay.mp4'
       && appReplay.buffer.equals(mp4)
+      && appReplay.originMs === 1_700_000_000_000
+      && appReplay.clockAnchors[1]?.wallMs === 1_700_000_000_080
       && statuses.includes('7:native-dxgi'))
   runtime.retain(new Set())
   check('app-facing retain stops displays removed by topology',

@@ -250,7 +250,8 @@ struct RunSummaryPacket {
 };
 
 struct ServicePacket {
-  // CPNSRV01 v1 is a fixed little-endian record. Service stdout contains only
+  // CPNSRV01 v2 adds the measured QPC/Unix clock and final sample PTS.
+  // This is a fixed little-endian record. Service stdout contains only
   // whole records so the application can reject truncation or extra output.
   char magic[8];
   std::uint16_t version;
@@ -276,6 +277,10 @@ struct ServicePacket {
   std::int32_t lastHresult;
   std::uint32_t encoderNameBytes;
   char encoderName[124];
+  std::int64_t anchorQpc;
+  std::int64_t anchorUnixNs;
+  std::uint64_t anchorSpanQpc;
+  std::int64_t lastPtsHns;
 };
 #pragma pack(pop)
 
@@ -287,11 +292,13 @@ static_assert(offsetof(RunSummaryPacket, qpcFrequency) == 56,
               "run packet offsets changed");
 static_assert(offsetof(RunSummaryPacket, encoderName) == 188,
               "run packet offsets changed");
-static_assert(sizeof(ServicePacket) == 256, "service packet size changed");
+static_assert(sizeof(ServicePacket) == 288, "service packet size changed");
 static_assert(offsetof(ServicePacket, qpcFrequency) == 48,
               "service packet offsets changed");
 static_assert(offsetof(ServicePacket, encoderName) == 132,
               "service packet offsets changed");
+static_assert(offsetof(ServicePacket, anchorQpc) == 256,
+              "service clock offsets changed");
 
 struct Request {
   bool selfTest = false;
@@ -863,20 +870,81 @@ enum class ServicePacketKind : std::uint32_t {
   kFatal = 3,
 };
 
+bool MeasureServiceClock(ServicePacket& packet) {
+  LARGE_INTEGER before{};
+  LARGE_INTEGER after{};
+  FILETIME fileTime{};
+  if (!QueryPerformanceCounter(&before)) return false;
+  GetSystemTimePreciseAsFileTime(&fileTime);
+  if (!QueryPerformanceCounter(&after) || before.QuadPart <= 0 ||
+      after.QuadPart < before.QuadPart) return false;
+  ULARGE_INTEGER ticks{};
+  ticks.LowPart = fileTime.dwLowDateTime;
+  ticks.HighPart = fileTime.dwHighDateTime;
+  constexpr std::uint64_t windowsToUnixEpoch100ns = 116444736000000000ULL;
+  if (ticks.QuadPart < windowsToUnixEpoch100ns) return false;
+  const std::uint64_t unix100ns = ticks.QuadPart - windowsToUnixEpoch100ns;
+  if (unix100ns >
+      static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) / 100) {
+    return false;
+  }
+  packet.anchorQpc = before.QuadPart + (after.QuadPart - before.QuadPart) / 2;
+  packet.anchorUnixNs = static_cast<std::int64_t>(unix100ns * 100);
+  packet.anchorSpanQpc = static_cast<std::uint64_t>(after.QuadPart - before.QuadPart);
+  return packet.anchorUnixNs > 0;
+}
+
+bool ServiceClockWithinPrecision(const ServicePacket& packet) {
+  return packet.qpcFrequency > 0 && packet.anchorQpc > 0 &&
+         packet.anchorUnixNs > 0 &&
+         packet.anchorSpanQpc <= static_cast<std::uint64_t>(packet.qpcFrequency / 1000);
+}
+
+bool FillServiceClock(ServicePacket& packet) {
+  LARGE_INTEGER frequency{};
+  if (!QueryPerformanceFrequency(&frequency) || frequency.QuadPart <= 0) return false;
+  // Millisecond replay/context mapping requires at most 0.5 ms midpoint
+  // uncertainty: full bracket <= 1 ms. Use the narrowest of three immediate
+  // measurements, then fail closed if scheduling prevented that precision.
+  ServicePacket best{};
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    ServicePacket measured{};
+    if (MeasureServiceClock(measured) &&
+        (best.anchorQpc == 0 || measured.anchorSpanQpc < best.anchorSpanQpc)) {
+      best = measured;
+    }
+  }
+  best.qpcFrequency = frequency.QuadPart;
+  if (!ServiceClockWithinPrecision(best)) return false;
+  packet.qpcFrequency = frequency.QuadPart;
+  packet.anchorQpc = best.anchorQpc;
+  packet.anchorUnixNs = best.anchorUnixNs;
+  packet.anchorSpanQpc = best.anchorSpanQpc;
+  return true;
+}
+
 ServicePacket NewServicePacket(ServicePacketKind kind) {
   ServicePacket packet{};
   std::copy_n("CPNSRV01", 8, packet.magic);
-  packet.version = kProtocolVersion;
+  packet.version = 2;
   packet.headerBytes = sizeof(ServicePacket);
   packet.kind = static_cast<std::uint32_t>(kind);
   packet.status = static_cast<std::uint32_t>(ProbeStatus::kUnavailable);
   packet.reason = static_cast<std::uint32_t>(ProbeReason::kInternalFailure);
   packet.targetFps = kTargetFramesPerSecond;
+  // Capture the clock near the snapshot/READY cut, before asynchronous export.
+  // Never substitute the parent's request or receipt wall time for exposure.
+  FillServiceClock(packet);
   return packet;
 }
 
 bool WriteServicePacket(ServicePacket& packet, ProbeStatus status,
                         ProbeReason reason, HRESULT lastResult = S_OK) {
+  if (status == ProbeStatus::kAvailable && !ServiceClockWithinPrecision(packet)) {
+    status = ProbeStatus::kUnavailable;
+    reason = ProbeReason::kCaptureDeadlineFailed;
+    lastResult = E_FAIL;
+  }
   packet.status = static_cast<std::uint32_t>(status);
   packet.reason = static_cast<std::uint32_t>(reason);
   packet.lastHresult = static_cast<std::int32_t>(lastResult);
@@ -3506,6 +3574,21 @@ bool RingSelfTest() {
           configChangeRejected && annexBValidated &&
           fragmentedMp4StructureValidated && serviceProtocolBounded);
 
+  ServicePacket clockFixture{};
+  clockFixture.qpcFrequency = 10'000'000;
+  clockFixture.anchorQpc = 9'100'000'000;
+  clockFixture.anchorUnixNs = 1'700'000'010'000'000'000;
+  clockFixture.anchorSpanQpc = 10'000;
+  const bool acceptsClockPrecisionBoundary = ServiceClockWithinPrecision(clockFixture);
+  ++clockFixture.anchorSpanQpc;
+  const bool rejectsUncertainClock = !ServiceClockWithinPrecision(clockFixture);
+  clockFixture.anchorSpanQpc = 0;
+  clockFixture.anchorUnixNs = 0;
+  const bool rejectsMissingClock = !ServiceClockWithinPrecision(clockFixture);
+  passed &= NamedSelfTest("service-clock-precision-fails-closed",
+                         acceptsClockPrecisionBoundary && rejectsUncertainClock &&
+                             rejectsMissingClock);
+
   // Exercise the production contract with rejected writes, unavailable or
   // mistyped readback, and encoders which silently retain B pictures.
   struct CodecFixture {
@@ -3792,6 +3875,7 @@ void FillServiceEvidence(ServicePacket& packet,
   packet.qpcFrequency = summary.qpcFrequency;
   packet.firstQpc = snapshot.firstQpc;
   packet.lastQpc = snapshot.lastQpc;
+  packet.lastPtsHns = snapshot.units.back().ptsHns;
   packet.durationHns = snapshot.durationHns;
   packet.sampleCount = snapshot.units.size();
   packet.keyframes = static_cast<std::uint64_t>(std::count_if(

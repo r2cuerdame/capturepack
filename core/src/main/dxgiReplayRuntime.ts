@@ -12,9 +12,10 @@ import {
   type DxgiReplayCapability,
 } from './dxgiReplayRing'
 import { enumerateFmp4VideoSamples } from '../renderer/capture/fmp4SampleTimeline'
+import { dxgiQpcToUnixNs } from './dxgiTimingReference'
 
 export const DXGI_REPLAY_RUNTIME_SWITCH = '--dxgi-native-replay'
-export const DXGI_REPLAY_SERVICE_PACKET_BYTES = 256
+export const DXGI_REPLAY_SERVICE_PACKET_BYTES = 288
 export const DXGI_REPLAY_SERVICE_MAX_COMMAND_BYTES = 32_768
 export const DXGI_REPLAY_MIN_RETENTION_MS = 1_000
 // Native is intentionally limited to the settings UI's 60 s ceiling. Legacy
@@ -28,7 +29,7 @@ const DXGI_REPLAY_DURATION_TOLERANCE_MS = 100
 export const DXGI_REPLAY_MAX_EXPORT_BYTES = 73_027_216
 export const DXGI_REPLAY_CURSOR_COMPOSITED_FLAG = 1 << 17
 const DXGI_REPLAY_SERVICE_MAGIC = Buffer.from('CPNSRV01', 'ascii')
-const DXGI_REPLAY_SERVICE_VERSION = 1
+const DXGI_REPLAY_SERVICE_VERSION = 2
 const DEFAULT_STARTUP_TIMEOUT_MS = 10_000
 const DEFAULT_SNAPSHOT_TIMEOUT_MS = 15_000
 const STOP_TIMEOUT_MS = 1_000
@@ -99,6 +100,10 @@ export interface DxgiReplayServiceEvidence {
   readonly qpcFrequency: bigint
   readonly firstQpc: bigint
   readonly lastQpc: bigint
+  readonly anchorQpc: bigint
+  readonly anchorUnixNs: bigint
+  readonly anchorSpanQpc: bigint
+  readonly lastPtsHns: bigint
   readonly durationHns: bigint
   readonly sampleCount: bigint
   readonly keyframes: bigint
@@ -162,6 +167,10 @@ export function parseDxgiReplayServicePacket(packet: Buffer): DxgiReplayServiceP
     qpcFrequency: packet.readBigInt64LE(48),
     firstQpc: packet.readBigInt64LE(56),
     lastQpc: packet.readBigInt64LE(64),
+    anchorQpc: packet.readBigInt64LE(256),
+    anchorUnixNs: packet.readBigInt64LE(264),
+    anchorSpanQpc: packet.readBigUInt64LE(272),
+    lastPtsHns: packet.readBigInt64LE(280),
     durationHns: packet.readBigInt64LE(72),
     sampleCount: packet.readBigUInt64LE(80),
     keyframes: packet.readBigUInt64LE(88),
@@ -203,6 +212,13 @@ export function parseDxgiReplayServicePacket(packet: Buffer): DxgiReplayServiceP
       || evidence.qpcFrequency <= 0n
       || evidence.firstQpc <= 0n
       || evidence.lastQpc < evidence.firstQpc
+      || evidence.anchorQpc <= 0n
+      || evidence.anchorUnixNs <= 0n
+      || evidence.anchorSpanQpc >= evidence.anchorQpc * 2n
+      // Full bracket <= 1 ms bounds midpoint uncertainty to 0.5 ms.
+      || evidence.anchorSpanQpc * 1_000n > evidence.qpcFrequency
+      || evidence.lastPtsHns < 0n
+      || evidence.lastPtsHns >= evidence.durationHns
       || evidence.durationHns <= 0n
       || evidence.sampleCount === 0n
       || evidence.keyframes === 0n
@@ -214,6 +230,14 @@ export function parseDxgiReplayServicePacket(packet: Buffer): DxgiReplayServiceP
       || encoderName === ''
     ) {
       throw new Error('successful DXGI replay service packet lacked health evidence')
+    }
+    // ExposureTimeline maps QPC to 100 ns PTS, then the snapshot subtracts
+    // its first PTS. Two integer truncations can differ by at most one tick.
+    const clockDelta = evidence.lastPtsHns * evidence.qpcFrequency
+      - (evidence.lastQpc - evidence.firstQpc) * 10_000_000n
+    if (clockDelta < -evidence.qpcFrequency || clockDelta > evidence.qpcFrequency
+        || (evidence.sampleCount === 1n) !== (evidence.lastPtsHns === 0n)) {
+      throw new Error('DXGI replay exposure clock disagreed with sample PTS')
     }
   } else if (reason === 'none') {
     throw new Error('unavailable DXGI replay service packet lacked a reason')
@@ -257,6 +281,8 @@ export interface DxgiReplayMp4Validation {
   readonly sampleCount: number
   readonly firstPresentationTimeMs: number
   readonly lastPresentationEndMs: number
+  readonly lastPresentationTimeMs: number
+  readonly timestampQuantumMs: number
 }
 
 export type DxgiReplayMp4ValidationResult = DxgiReplayMp4Validation | {
@@ -431,6 +457,8 @@ export function validateDxgiReplayMp4(
     sampleCount: samples.length,
     firstPresentationTimeMs,
     lastPresentationEndMs,
+    lastPresentationTimeMs: samples[samples.length - 1]!.presentationTimeMs,
+    timestampQuantumMs: 1_000 / exact.tracks[0]!.timescale,
   }
 }
 
@@ -491,6 +519,8 @@ export interface DxgiReplayRuntimeSnapshot {
   readonly status: 'ok'
   readonly buffer: Buffer
   readonly durationMs: number
+  readonly originMs: number
+  readonly clockAnchors: readonly { ptsMs: number; wallMs: number }[]
   readonly sampleCount: number
   readonly keyframes: number
   readonly evidence: DxgiReplayServicePacket
@@ -902,10 +932,34 @@ export class DxgiReplayRuntimeManager {
       if (validated.sampleCount !== Number(packet.sampleCount)) {
         throw new Error('MP4 sample count disagreed with service evidence')
       }
+      if (validated.firstPresentationTimeMs !== 0
+          || Math.abs(validated.lastPresentationTimeMs - Number(packet.lastPtsHns) / 10_000)
+            > validated.timestampQuantumMs + 0.0001) {
+        throw new Error('MP4 sample PTS disagreed with measured exposure clock')
+      }
+      const reference = {
+        qpcFrequency: packet.qpcFrequency,
+        anchor: {
+          qpc: packet.anchorQpc, unixNs: packet.anchorUnixNs,
+          spanQpc: packet.anchorSpanQpc,
+        },
+      }
+      const originMs = Number(dxgiQpcToUnixNs(reference, packet.firstQpc)) / 1_000_000
+      const lastWallMs = Number(dxgiQpcToUnixNs(reference, packet.lastQpc)) / 1_000_000
+      if (!Number.isFinite(originMs) || originMs <= 0 || !Number.isFinite(lastWallMs)
+          || lastWallMs < originMs) {
+        throw new Error('native replay exposure clock could not map to Unix time')
+      }
+      const clockAnchors = [{ ptsMs: 0, wallMs: originMs }]
+      if (packet.lastPtsHns > 0n) {
+        clockAnchors.push({ ptsMs: validated.lastPresentationTimeMs, wallMs: lastWallMs })
+      }
       pending.resolve({
         status: 'ok',
         buffer,
         durationMs: validated.durationMs,
+        originMs,
+        clockAnchors,
         sampleCount: validated.sampleCount,
         keyframes: Number(packet.keyframes),
         evidence: packet,
@@ -966,6 +1020,7 @@ function unavailableServicePacket(reason: DxgiReplayServiceReason): DxgiReplaySe
     kind: 'fatal', status: 'unavailable', reason, requestId: 0n,
     flags: 0, width: 0, height: 0, targetFps: 0, qpcFrequency: 0n,
     firstQpc: 0n, lastQpc: 0n, durationHns: 0n, sampleCount: 0n,
+    anchorQpc: 0n, anchorUnixNs: 0n, anchorSpanQpc: 0n, lastPtsHns: 0n,
     keyframes: 0n, mp4Bytes: 0n, ringUnits: 0n, ringBytes: 0n,
     generation: 0, lastHresult: -1,
   }
@@ -988,6 +1043,8 @@ export interface DxgiReplayRuntimeSyncOptions {
 export interface DxgiReplayRuntimeReplay {
   readonly buffer: Buffer
   readonly durationMs: number
+  readonly originMs: number
+  readonly clockAnchors: readonly { ptsMs: number; wallMs: number }[]
   readonly mimeType: 'video/mp4'
   readonly replayFile: 'replay.mp4'
 }
@@ -1072,6 +1129,8 @@ export class DxgiReplayRuntime {
       ? {
           buffer: result.buffer,
           durationMs: result.durationMs,
+          originMs: result.originMs,
+          clockAnchors: result.clockAnchors,
           mimeType: 'video/mp4',
           replayFile: 'replay.mp4',
         }

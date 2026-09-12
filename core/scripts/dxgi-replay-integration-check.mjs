@@ -4,6 +4,9 @@
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+// Executable #243 ownership regression accompanies the application seam checks.
+import './dxgi-replay-ownership-check.mjs'
+import './dxgi-replay-lifecycle-check.mjs'
 
 const core = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const capture = readFileSync(path.join(core, 'src/main/capture.ts'), 'utf8')
