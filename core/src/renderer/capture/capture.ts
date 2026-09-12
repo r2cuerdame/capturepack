@@ -73,6 +73,7 @@ import {
 } from './sourceLatencyCalibration'
 import {
   decideReplayPixelClock,
+  discoverReplayPixelClockTargets,
   REPLAY_PIXEL_CLOCK_SAMPLE_LIMIT,
   retainReplayPixelClockPresentedSample,
   sourceClockAnchorsFromObservedCaptureTime,
@@ -3702,6 +3703,7 @@ async function decodeReplayPixelClockSamples(
   const startedAt = performance.now()
   let seekAttempts = 0
   let seekCallbacks = 0
+  const attemptedPts = new Set<number>()
   try {
     document.body.appendChild(video)
     video.src = url
@@ -3734,12 +3736,14 @@ async function decodeReplayPixelClockSamples(
       )
       return []
     }
-    for (const target of targets) {
+    while (targets.length > 0 && seekAttempts < REPLAY_PIXEL_CLOCK_DECODE_SAMPLE_LIMIT) {
+      const target = targets.shift()!
       const remainingMs =
         REPLAY_PIXEL_CLOCK_DECODE_DEADLINE_MS
         - (performance.now() - startedAt)
       if (remainingMs <= 0) break
       seekAttempts += 1
+      attemptedPts.add(target.presentationTimeMs)
       // Seek just inside the exact declared sample interval. This affects only
       // which decoded frame is selected; the clock still uses the sample's
       // integer-timescale PTS below.
@@ -3764,10 +3768,24 @@ async function decodeReplayPixelClockSamples(
         continue
       }
       try {
-        decoded.push({
+        const observation = {
           ptsMs,
           fingerprint: replayPixelClockFingerprint(video),
-        })
+        }
+        decoded.push(observation)
+        // A same-pixel seed proposes where to look next on the observed media
+        // clock. It is not an accepted clock: only independently decoded pixels
+        // passed through the unchanged final matcher can establish that.
+        const discovered = discoverReplayPixelClockTargets(presented, observation, encodedSamples)
+        if (discovered.length > 0) {
+          const queued = new Set(attemptedPts)
+          const next = [...discovered, ...targets].filter((sample) => {
+            if (queued.has(sample.presentationTimeMs)) return false
+            queued.add(sample.presentationTimeMs)
+            return true
+          })
+          targets.splice(0, targets.length, ...next.slice(0, REPLAY_PIXEL_CLOCK_DECODE_SAMPLE_LIMIT - seekAttempts))
+        }
       } catch {
         // A single unreadable decoded frame is a missing observation.
       }
@@ -3779,7 +3797,7 @@ async function decodeReplayPixelClockSamples(
           `${JSON.stringify({
             mimeType,
             bytes: buffer.byteLength,
-            targets: targets.length,
+            targets: attemptedPts.size + targets.length,
             duration: video.duration,
             readyState: video.readyState,
             networkState: video.networkState,
@@ -3794,6 +3812,7 @@ async function decodeReplayPixelClockSamples(
     replayPixelClockDecodeDiagnostics = {
       ...replayPixelClockDecodeDiagnostics,
       stage: decoded.length === 0 ? 'no-decoded-frames' : 'decoded',
+      targetCount: attemptedPts.size + targets.length,
       mediaDurationSeconds: video.duration,
       readyState: video.readyState,
       networkState: video.networkState,

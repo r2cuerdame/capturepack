@@ -258,7 +258,15 @@ function compareDxgiReplayAb(input) {
   }
 }
 
+// A failed field verdict still invalidates the release, but does not prevent
+// collecting the other backend if the trial proved complete process cleanup.
+function canContinueDxgiReplayAbTrial(child, report) {
+  return Number.isInteger(child.status) && child.signal === null
+    && report?.checks?.every_spawned_process_terminated === true
+}
+
 module.exports = {
   DEFAULT_DXGI_REPLAY_AB_THRESHOLDS: DEFAULT_THRESHOLDS,
   compareDxgiReplayAb,
+  canContinueDxgiReplayAbTrial,
 }
