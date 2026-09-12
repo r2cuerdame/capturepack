@@ -1023,6 +1023,292 @@ AnnexBInspection InspectAnnexB(const std::vector<std::uint8_t>& bytes) {
   return inspected;
 }
 
+// H.264 syntax/ordering proof, not a decoder. The fallback deliberately accepts
+// only progressive Main-profile POC type 2 with an explicit zero-reorder VUI.
+// See ITU-T H.264 7.3 (syntax), 7.4 (semantics), and 8.2.1.3 (POC type 2).
+// Unknown syntax never falls back to inferred defaults.
+class H264Bits {
+ public:
+  explicit H264Bits(const std::vector<std::uint8_t>& bytes) : bytes_(bytes) {}
+  std::uint32_t Read(unsigned count) {
+    if (!ok_ || count > 32 || count > Remaining()) { ok_ = false; return 0; }
+    std::uint32_t value = 0;
+    for (unsigned i = 0; i < count; ++i, ++position_) {
+      value = (value << 1) | ((bytes_[position_ / 8] >> (7 - position_ % 8)) & 1U);
+    }
+    return value;
+  }
+  std::uint32_t Ue() {
+    unsigned zeros = 0;
+    while (ok_ && Read(1) == 0) {
+      if (++zeros > 30) { ok_ = false; return 0; }
+    }
+    return ok_ ? ((1U << zeros) - 1) + Read(zeros) : 0;
+  }
+  std::int32_t Se() {
+    const std::uint32_t code = Ue();
+    return (code & 1U) != 0 ? static_cast<std::int32_t>((code + 1) / 2)
+                            : -static_cast<std::int32_t>(code / 2);
+  }
+  bool Finish() {
+    if (Read(1) != 1) return false;
+    while (ok_ && Remaining() != 0) if (Read(1) != 0) return false;
+    return ok_;
+  }
+  bool AlignCabac() {
+    while (ok_ && position_ % 8 != 0) if (Read(1) != 1) return false;
+    return ok_ && Remaining() > 0;
+  }
+  bool ok() const { return ok_; }
+  std::size_t Remaining() const { return bytes_.size() * 8 - position_; }
+ private:
+  const std::vector<std::uint8_t>& bytes_;
+  std::size_t position_ = 0;
+  bool ok_ = true;
+};
+
+struct H264Nal {
+  std::uint8_t type = 0;
+  std::uint8_t reference = 0;
+  std::vector<std::uint8_t> rbsp;
+};
+
+bool H264Nals(const std::vector<std::uint8_t>& bytes, std::vector<H264Nal>& nals) {
+  nals.clear();
+  if (bytes.empty() || bytes.size() > kMaximumRingBytes) return false;
+  std::size_t start = 0, prefix = 0;
+  if (!FindAnnexBStart(bytes.data(), bytes.size(), 0, start, prefix) || start != 0) return false;
+  for (;;) {
+    const std::size_t header = start + prefix;
+    if (header >= bytes.size() || (bytes[header] & 0x80U) != 0) return false;
+    std::size_t next = bytes.size(), nextPrefix = 0;
+    FindAnnexBStart(bytes.data(), bytes.size(), header + 1, next, nextPrefix);
+    std::size_t end = next;
+    while (end > header + 1 && bytes[end - 1] == 0) --end;
+    // Keep the protected final zero in a legal CABAC cabac_zero_word suffix;
+    // dropping it would manufacture a dangling emulation-prevention byte.
+    if (end > header + 3 && bytes[end - 1] == 3 &&
+        bytes[end - 2] == 0 && bytes[end - 3] == 0) end = next;
+    H264Nal nal;
+    nal.type = bytes[header] & 31U;
+    nal.reference = (bytes[header] >> 5) & 3U;
+    if (nal.type != 1 && nal.type != 5 && nal.type != 6 && nal.type != 7 &&
+        nal.type != 8 && nal.type != 9 && nal.type != 12) return false;
+    if ((nal.type == 6 || nal.type == 9 || nal.type == 12) && nal.reference != 0) return false;
+    if ((nal.type == 5 || nal.type == 7 || nal.type == 8) && nal.reference == 0) return false;
+    unsigned zeros = 0;
+    for (std::size_t at = header + 1; at < end; ++at) {
+      const std::uint8_t byte = bytes[at];
+      if (zeros >= 2) {
+        if (byte == 3) {
+          if (at + 1 >= end || bytes[at + 1] > 3) return false;
+          zeros = 0;
+          continue;
+        }
+        if (byte <= 2) return false;
+      }
+      nal.rbsp.push_back(byte);
+      zeros = byte == 0 ? zeros + 1 : 0;
+    }
+    if (nal.rbsp.empty() || nals.size() >= 256) return false;
+    nals.push_back(std::move(nal));
+    if (next == bytes.size()) break;
+    start = next; prefix = nextPrefix;
+  }
+  return !nals.empty();
+}
+
+bool H264NonVcl(const H264Nal& nal) {
+  if (nal.type == 9) { H264Bits bits(nal.rbsp); bits.Read(3); return bits.Finish(); }
+  if (nal.type == 12) {
+    return nal.rbsp.back() == 0x80 && std::all_of(
+        nal.rbsp.begin(), nal.rbsp.end() - 1, [](std::uint8_t byte) { return byte == 0xff; });
+  }
+  if (nal.type != 6) return false;
+  std::size_t at = 0;
+  while (at + 1 < nal.rbsp.size()) {
+    while (at < nal.rbsp.size() && nal.rbsp[at] == 0xff) ++at;
+    if (at >= nal.rbsp.size()) return false;
+    ++at;  // payload_type is non-VCL metadata and cannot authorize a picture.
+    std::size_t payloadSize = 0;
+    while (at < nal.rbsp.size() && nal.rbsp[at] == 0xff) { payloadSize += 255; ++at; }
+    if (at >= nal.rbsp.size()) return false;
+    payloadSize += nal.rbsp[at++];
+    if (payloadSize > nal.rbsp.size() - at) return false;
+    at += payloadSize;
+  }
+  return at + 1 == nal.rbsp.size() && nal.rbsp[at] == 0x80;
+}
+
+// Every encoder, including an established CodecAPI path, must actually emit
+// only ordinary I/P VCL NALs. Slice_type is before all SPS-dependent fields.
+bool H264NoBSlices(const std::vector<H264Nal>& nals, bool keyframe) {
+  bool hasVcl = false;
+  for (const auto& nal : nals) {
+    if (nal.type == 7 || nal.type == 8) continue;
+    if (nal.type != 1 && nal.type != 5) { if (!H264NonVcl(nal)) return false; continue; }
+    H264Bits bits(nal.rbsp);
+    const auto firstMb = bits.Ue();
+    const auto sliceType = bits.Ue();
+    const auto pps = bits.Ue();
+    if (!bits.ok() || bits.Remaining() == 0 || firstMb > 1'048'575 || pps > 255 ||
+        sliceType > 9 || (sliceType % 5 != 0 && sliceType % 5 != 2) ||
+        (nal.type == 5) != keyframe || (keyframe && sliceType % 5 != 2)) return false;
+    hasVcl = true;
+  }
+  return hasVcl;
+}
+
+struct H264ZeroReorderSps {
+  std::uint32_t id = 0, frameBits = 0, macroblocks = 0;
+};
+struct H264ZeroReorderPps {
+  std::uint32_t id = 0;
+  bool cabac = false, deblocking = false;
+  std::int32_t initialQp = 26;
+};
+
+bool ParseH264ZeroReorderSps(const H264Nal& nal, H264ZeroReorderSps& sps) {
+  if (nal.type != 7 || nal.rbsp.size() > 65536) return false;
+  H264Bits bits(nal.rbsp);
+  if (bits.Read(8) != 77 || (bits.Read(8) & 3U) != 0) return false;
+  if (bits.Read(8) == 0) return false;
+  sps.id = bits.Ue();
+  const auto frameBitsMinus4 = bits.Ue();
+  if (sps.id > 31 || frameBitsMinus4 > 12 || bits.Ue() != 2) return false;
+  sps.frameBits = frameBitsMinus4 + 4;
+  if (bits.Ue() != 1 || bits.Read(1) != 0) return false; // one reference; no gaps
+  const auto widthMinus1 = bits.Ue(), heightMinus1 = bits.Ue();
+  if (widthMinus1 > 1023 || heightMinus1 > 1023 || bits.Read(1) != 1) return false;
+  sps.macroblocks = (widthMinus1 + 1) * (heightMinus1 + 1);
+  bits.Read(1); // direct_8x8_inference_flag
+  if (bits.Read(1)) {
+    const auto left = bits.Ue(), right = bits.Ue(), top = bits.Ue(), bottom = bits.Ue();
+    if (left > 8192 || right > 8192 || top > 8192 || bottom > 8192 ||
+        left + right >= (widthMinus1 + 1) * 8 || top + bottom >= (heightMinus1 + 1) * 8) return false;
+  }
+  if (bits.Read(1) != 1) return false; // explicit VUI required
+  if (bits.Read(1)) {
+    const auto aspect = bits.Read(8);
+    if (aspect == 255) { if (bits.Read(16) == 0 || bits.Read(16) == 0) return false; }
+    else if (aspect > 16) return false;
+  }
+  if (bits.Read(1)) bits.Read(1); // overscan
+  if (bits.Read(1)) {
+    if (bits.Read(3) > 5) return false;
+    bits.Read(1);
+    if (bits.Read(1)) { bits.Read(8); bits.Read(8); bits.Read(8); }
+  }
+  if (bits.Read(1)) { if (bits.Ue() > 5 || bits.Ue() > 5) return false; }
+  if (bits.Read(1)) {
+    if (bits.Read(32) == 0 || bits.Read(32) == 0) return false;
+    bits.Read(1);
+  }
+  // HRD and pic_struct syntax are outside this deliberately narrow contract.
+  if (bits.Read(1) != 0 || bits.Read(1) != 0 || bits.Read(1) != 0) return false;
+  if (bits.Read(1) != 1) return false; // explicit bitstream_restriction_flag
+  bits.Read(1);
+  if (bits.Ue() > 16 || bits.Ue() > 16 || bits.Ue() > 16 || bits.Ue() > 16 ||
+      bits.Ue() != 0 || bits.Ue() != 1) return false;
+  return bits.Finish();
+}
+
+bool ParseH264ZeroReorderPps(const H264Nal& nal, const H264ZeroReorderSps& sps,
+                            H264ZeroReorderPps& pps) {
+  if (nal.type != 8 || nal.rbsp.size() > 65536) return false;
+  H264Bits bits(nal.rbsp);
+  pps.id = bits.Ue();
+  if (pps.id > 255 || bits.Ue() != sps.id) return false;
+  pps.cabac = bits.Read(1) != 0;
+  if (bits.Read(1) != 0 || bits.Ue() != 0 || bits.Ue() != 0 || bits.Ue() != 0 ||
+      bits.Read(1) != 0 || bits.Read(2) != 0) return false;
+  const auto qp = bits.Se(), qs = bits.Se(), chroma = bits.Se();
+  if (qp < -26 || qp > 25 || qs < -26 || qs > 25 || chroma < -12 || chroma > 12) return false;
+  pps.initialQp = 26 + qp;
+  pps.deblocking = bits.Read(1) != 0;
+  bits.Read(1); // constrained_intra_pred_flag
+  if (bits.Read(1) != 0) return false; // no redundant pictures or PPS extension
+  return bits.Finish();
+}
+
+class H264ZeroReorderGuard {
+ public:
+  bool Configure(const std::vector<std::uint8_t>& config) {
+    configured_ = false; havePicture_ = false;
+    std::vector<H264Nal> nals;
+    if (!H264Nals(config, nals) || nals.size() != 2 ||
+        !ParseH264ZeroReorderSps(nals[0], sps_) ||
+        !ParseH264ZeroReorderPps(nals[1], sps_, pps_)) return false;
+    spsBytes_ = nals[0].rbsp; ppsBytes_ = nals[1].rbsp;
+    configured_ = true;
+    return true;
+  }
+  bool Validate(const std::vector<H264Nal>& nals, bool keyframe) {
+    if (!configured_ || !H264NoBSlices(nals, keyframe)) return false;
+    bool haveSlice = false, seenSps = false, seenPps = false;
+    std::uint32_t pictureFrame = 0, pictureId = 0, lastMb = 0, pictureSliceType = 0;
+    std::uint8_t pictureReference = 0;
+    for (const auto& nal : nals) {
+      if (nal.type == 7 || nal.type == 8) {
+        if (haveSlice || !keyframe) return false;
+        if (nal.type == 7) {
+          if (seenSps || seenPps || nal.rbsp != spsBytes_) return false;
+          seenSps = true;
+        } else {
+          if (seenPps || !seenSps || nal.rbsp != ppsBytes_) return false;
+          seenPps = true;
+        }
+        continue;
+      }
+      if (nal.type != 1 && nal.type != 5) continue;
+      if (nal.reference == 0) return false; // POC2 non-reference formula differs
+      H264Bits bits(nal.rbsp);
+      const auto firstMb = bits.Ue(), sliceType = bits.Ue() % 5, ppsId = bits.Ue();
+      const auto frame = bits.Read(sps_.frameBits);
+      const auto id = keyframe ? bits.Ue() : 0;
+      if (ppsId != pps_.id || firstMb >= sps_.macroblocks || id > 65535 ||
+          (keyframe && frame != 0)) return false;
+      if (sliceType == 0) {
+        if (bits.Read(1) != 0 || bits.Read(1) != 0) return false; // override/ref-list modification
+      }
+      if (keyframe) {
+        bits.Read(1); // no_output_of_prior_pics_flag
+        if (bits.Read(1) != 0) return false; // no long-term reference
+      } else if (bits.Read(1) != 0) return false; // no adaptive marking, including MMCO5
+      if (pps_.cabac && sliceType != 2 && bits.Ue() > 2) return false;
+      const auto qp = bits.Se();
+      if (qp < -51 || qp > 51 || pps_.initialQp + qp < 0 || pps_.initialQp + qp > 51) return false;
+      if (pps_.deblocking) {
+        const auto disabled = bits.Ue();
+        if (disabled > 2) return false;
+        if (disabled != 1) {
+          const auto alpha = bits.Se(), beta = bits.Se();
+          if (alpha < -6 || alpha > 6 || beta < -6 || beta > 6) return false;
+        }
+      }
+      if (!bits.ok() || bits.Remaining() == 0 || (pps_.cabac && !bits.AlignCabac())) return false;
+      if (!haveSlice) {
+        if (firstMb != 0) return false;
+        pictureFrame = frame; pictureId = id; pictureReference = nal.reference;
+        pictureSliceType = sliceType;
+      } else if (firstMb <= lastMb || frame != pictureFrame || id != pictureId ||
+                 nal.reference != pictureReference || sliceType != pictureSliceType) return false;
+      lastMb = firstMb; haveSlice = true;
+    }
+    if (!haveSlice || seenSps != seenPps) return false;
+    if (!keyframe && (!havePicture_ ||
+        pictureFrame != ((lastFrame_ + 1) % (1U << sps_.frameBits)))) return false;
+    lastFrame_ = pictureFrame; havePicture_ = true;
+    return true;
+  }
+ private:
+  bool configured_ = false, havePicture_ = false;
+  std::uint32_t lastFrame_ = 0;
+  H264ZeroReorderSps sps_;
+  H264ZeroReorderPps pps_;
+  std::vector<std::uint8_t> spsBytes_, ppsBytes_;
+};
+
 HRESULT SnapshotMediaType(const EncodedRingSnapshot& snapshot, UINT width,
                           UINT height, ComPtr<IMFMediaType>& mediaType) {
   HRESULT result = MFCreateMediaType(&mediaType);
@@ -2021,12 +2307,16 @@ HRESULT ActivateHardwareEncoder(const OutputChoice& choice,
 
 template <typename Codec>
 bool SetCodecUint32(Codec* codec, const GUID& property, ULONG value,
-                    bool required) {
-  if (codec == nullptr) return !required;
+                    bool required, HRESULT* observedResult = nullptr) {
+  if (codec == nullptr) {
+    if (observedResult != nullptr) *observedResult = E_NOINTERFACE;
+    return !required;
+  }
   VARIANT variant{};
   variant.vt = VT_UI4;
   variant.ulVal = value;
   const HRESULT result = codec->SetValue(&property, &variant);
+  if (observedResult != nullptr) *observedResult = result;
   return SUCCEEDED(result) || !required;
 }
 
@@ -2043,20 +2333,46 @@ bool SetCodecBool(ICodecAPI* codec, const GUID& property, bool value) {
 // Some vendor MFTs reject it until types exist. A retry is acceptable only if
 // the request succeeds AND committed state reads back as VT_UI4 zero. Neither
 // low latency nor structural fMP4 validation proves this encoder contract.
+struct ZeroBPictureDiagnostics {
+  bool afterTypesSetAttempted = false;
+  HRESULT afterTypesSetResult = E_PENDING;
+  bool readAttempted = false;
+  HRESULT readResult = E_PENDING;
+  VARTYPE valueType = VT_EMPTY;
+  ULONG value = 0;
+};
+
 template <typename Codec>
-bool EstablishZeroBPictureCount(Codec* codec, bool requestedBeforeTypes) {
+bool EstablishZeroBPictureCount(Codec* codec, bool requestedBeforeTypes,
+                                ZeroBPictureDiagnostics* diagnostic = nullptr) {
   if (codec == nullptr) return false;
-  if (!requestedBeforeTypes &&
-      !SetCodecUint32(codec, CODECAPI_AVEncMPVDefaultBPictureCount, 0, true)) {
-    return false;
+  bool requestEstablished = requestedBeforeTypes;
+  if (!requestedBeforeTypes) {
+    HRESULT setResult = E_PENDING;
+    const bool set = SetCodecUint32(
+        codec, CODECAPI_AVEncMPVDefaultBPictureCount, 0, true, &setResult);
+    if (diagnostic != nullptr) {
+      diagnostic->afterTypesSetAttempted = true;
+      diagnostic->afterTypesSetResult = setResult;
+    }
+    requestEstablished = set;
+    // Read rejected-write state only for diagnostics. A zero default cannot
+    // turn a rejected zero-B request into acceptance.
+    if (!set && diagnostic == nullptr) return false;
   }
   VARIANT actual{};
   const HRESULT result = codec->GetValue(
       &CODECAPI_AVEncMPVDefaultBPictureCount, &actual);
+  if (diagnostic != nullptr) {
+    diagnostic->readAttempted = true;
+    diagnostic->readResult = result;
+    diagnostic->valueType = actual.vt;
+    if (SUCCEEDED(result) && actual.vt == VT_UI4) diagnostic->value = actual.ulVal;
+  }
   const bool zero = SUCCEEDED(result) && actual.vt == VT_UI4 &&
                     actual.ulVal == 0;
   VariantClear(&actual);
-  return zero;
+  return requestEstablished && zero;
 }
 
 struct PendingInput {
@@ -2073,6 +2389,9 @@ class EncoderSession {
   HRESULT Initialize(const OutputChoice& choice, IMFDXGIDeviceManager* manager,
                      UINT width, UINT height, std::uint32_t generation,
                      std::string& encoderName) {
+    bitstreamContractRequired_ = false;
+    zeroReorderGuard_ = H264ZeroReorderGuard{};
+    codecConfig_.clear();
     generation_ = generation;
     HRESULT result = ActivateHardwareEncoder(
         choice, activation_, transform_, encoderName);
@@ -2085,8 +2404,10 @@ class EncoderSession {
 
     ComPtr<ICodecAPI> codec;
     transform_.As(&codec);
-    const bool zeroBRequestedBeforeTypes =
-        SetCodecUint32(codec.Get(), CODECAPI_AVEncMPVDefaultBPictureCount, 0, true);
+    HRESULT zeroBBeforeTypesResult = E_PENDING;
+    const bool zeroBRequestedBeforeTypes = SetCodecUint32(
+        codec.Get(), CODECAPI_AVEncMPVDefaultBPictureCount, 0, true,
+        &zeroBBeforeTypesResult);
     result = MFCreateMediaType(&outputType_);
     if (SUCCEEDED(result)) result = outputType_->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
     if (SUCCEEDED(result)) result = outputType_->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_H264);
@@ -2127,9 +2448,65 @@ class EncoderSession {
       return MF_E_INVALIDREQUEST;
     }
 
-    if (!EstablishZeroBPictureCount(codec.Get(), zeroBRequestedBeforeTypes)) {
-      std::fprintf(stderr, "dxgi replay: zero-B encoder contract unavailable\n");
-      return MF_E_INVALIDREQUEST;
+    ZeroBPictureDiagnostics zeroBDiagnostic;
+    if (!EstablishZeroBPictureCount(
+            codec.Get(), zeroBRequestedBeforeTypes, &zeroBDiagnostic)) {
+      std::fprintf(stderr,
+          "dxgi replay: zero-B CodecAPI property contract unavailable; encoder=%s; "
+          "before-types-set=0x%08lX; after-types-set-attempted=%u; "
+          "after-types-set=0x%08lX; read-attempted=%u; read=0x%08lX; "
+          "value-type=%u; ui4-value-valid=%u; ui4-value=%lu\n",
+          encoderName.c_str(), static_cast<unsigned long>(zeroBBeforeTypesResult),
+          zeroBDiagnostic.afterTypesSetAttempted ? 1U : 0U,
+          static_cast<unsigned long>(zeroBDiagnostic.afterTypesSetResult),
+          zeroBDiagnostic.readAttempted ? 1U : 0U,
+          static_cast<unsigned long>(zeroBDiagnostic.readResult),
+          static_cast<unsigned int>(zeroBDiagnostic.valueType),
+          zeroBDiagnostic.readAttempted && SUCCEEDED(zeroBDiagnostic.readResult) &&
+              zeroBDiagnostic.valueType == VT_UI4 ? 1U : 0U,
+          zeroBDiagnostic.value);
+      if (codec) {
+        const HRESULT supported = codec->IsSupported(
+            &CODECAPI_AVEncMPVDefaultBPictureCount);
+        const HRESULT modifiable = codec->IsModifiable(
+            &CODECAPI_AVEncMPVDefaultBPictureCount);
+        VARIANT minimum{}, maximum{}, step{};
+        const HRESULT range = codec->GetParameterRange(
+            &CODECAPI_AVEncMPVDefaultBPictureCount, &minimum, &maximum, &step);
+        std::fprintf(stderr,
+            "dxgi replay: zero-B property diagnostics; supported=0x%08lX; "
+            "modifiable=0x%08lX; range=0x%08lX; "
+            "minimum-type=%u; minimum-ui4=%lu; maximum-type=%u; "
+            "maximum-ui4=%lu; step-type=%u; step-ui4=%lu\n",
+            static_cast<unsigned long>(supported),
+            static_cast<unsigned long>(modifiable),
+            static_cast<unsigned long>(range),
+            static_cast<unsigned int>(minimum.vt),
+            SUCCEEDED(range) && minimum.vt == VT_UI4 ? minimum.ulVal : 0UL,
+            static_cast<unsigned int>(maximum.vt),
+            SUCCEEDED(range) && maximum.vt == VT_UI4 ? maximum.ulVal : 0UL,
+            static_cast<unsigned int>(step.vt),
+            SUCCEEDED(range) && step.vt == VT_UI4 ? step.ulVal : 0UL);
+        VariantClear(&minimum);
+        VariantClear(&maximum);
+        VariantClear(&step);
+      }
+      std::vector<std::uint8_t> diagnosticConfig;
+      const HRESULT diagnosticConfigResult = ReadCodecConfig(diagnosticConfig);
+      std::fprintf(stderr,
+          "dxgi replay: pre-stream codec-config diagnostics; read=0x%08lX; "
+          "bytes=%zu; bounded-hex=",
+          static_cast<unsigned long>(diagnosticConfigResult), diagnosticConfig.size());
+      for (std::size_t index = 0;
+           index < std::min<std::size_t>(diagnosticConfig.size(), 256); ++index) {
+        std::fprintf(stderr, "%02X", static_cast<unsigned int>(diagnosticConfig[index]));
+      }
+      std::fputc('\n', stderr);
+      if (FAILED(diagnosticConfigResult) ||
+          !zeroReorderGuard_.Configure(diagnosticConfig)) return MF_E_INVALIDREQUEST;
+      bitstreamContractRequired_ = true;
+      codecConfig_ = std::move(diagnosticConfig);
+      std::fputs("dxgi replay: verified H.264 POC2 zero-reordering contract; every access unit requires ordering validation\n", stderr);
     }
 
     result = transform_->GetOutputStreamInfo(0, &outputInfo_);
@@ -2155,6 +2532,9 @@ class EncoderSession {
       const AnnexBInspection inspected = InspectAnnexB(initialConfig);
       if (!inspected.valid || !inspected.hasSps || !inspected.hasPps) {
         return MF_E_INVALIDMEDIATYPE;
+      }
+      if (!codecConfig_.empty() && initialConfig != codecConfig_) {
+        return MF_E_TRANSFORM_STREAM_CHANGE;
       }
       codecConfig_ = std::move(initialConfig);
     }
@@ -2377,6 +2757,12 @@ class EncoderSession {
          (!keyframe || !accessUnit.hasSps || !accessUnit.hasPps))) {
       return MF_E_INVALIDMEDIATYPE;
     }
+    std::vector<H264Nal> nals;
+    if (!H264Nals(unit.bytes, nals) || !H264NoBSlices(nals, keyframe) ||
+        (bitstreamContractRequired_ && !zeroReorderGuard_.Validate(nals, keyframe))) {
+      std::fputs("dxgi replay: H.264 no-B/order contract rejected access unit\n", stderr);
+      return MF_E_INVALIDMEDIATYPE;
+    }
     summary.encodedSamples += 1;
     summary.encodedBytes += current;
     if (keyframe) summary.keyframes += 1;
@@ -2401,6 +2787,8 @@ class EncoderSession {
   std::uint32_t generation_ = 0;
   bool streaming_ = false;
   bool firstInput_ = true;
+  bool bitstreamContractRequired_ = false;
+  H264ZeroReorderGuard zeroReorderGuard_;
   MFT_OUTPUT_STREAM_INFO outputInfo_{};
   EncoderTransitionState transitions_;
   std::deque<PendingInput> pending_;
@@ -3170,8 +3558,165 @@ bool NamedSelfTest(const char* name, bool passed) {
   return passed;
 }
 
-bool RingSelfTest() {
+// These fixtures exercise header/order rejection, not decoded pixel validity.
+class H264FixtureBits {
+ public:
+  void Put(std::uint32_t value, unsigned count) {
+    for (unsigned i = count; i > 0; --i) {
+      if (position_ % 8 == 0) bytes_.push_back(0);
+      bytes_.back() |= ((value >> (i - 1)) & 1U) << (7 - position_ % 8);
+      ++position_;
+    }
+  }
+  void Ue(std::uint32_t value) {
+    const auto code = value + 1;
+    unsigned count = 0;
+    for (auto number = code; number != 0; number >>= 1) ++count;
+    Put(0, count - 1); Put(code, count);
+  }
+  void Se(std::int32_t value) { Ue(value <= 0 ? -value * 2 : value * 2 - 1); }
+  void AlignOne() { while (position_ % 8 != 0) Put(1, 1); }
+  std::vector<std::uint8_t> Nal(std::uint8_t header) {
+    Put(1, 1); while (position_ % 8 != 0) Put(0, 1);
+    std::vector<std::uint8_t> result{0, 0, 0, 1, header};
+    unsigned zeros = 0;
+    for (auto byte : bytes_) {
+      if (zeros >= 2 && byte <= 3) { result.push_back(3); zeros = 0; }
+      result.push_back(byte); zeros = byte == 0 ? zeros + 1 : 0;
+    }
+    return result;
+  }
+ private:
+  std::vector<std::uint8_t> bytes_;
+  unsigned position_ = 0;
+};
+
+std::vector<std::uint8_t> H264FixtureConfig(bool vui = true,
+                                         std::uint32_t reorder = 0,
+                                         std::uint32_t poc = 2) {
+  H264FixtureBits s;
+  s.Put(77, 8); s.Put(64, 8); s.Put(51, 8); s.Ue(0); s.Ue(4); s.Ue(poc);
+  s.Ue(1); s.Put(0, 1); s.Ue(239); s.Ue(134); s.Put(1, 1); s.Put(1, 1); s.Put(0, 1);
+  s.Put(vui ? 1 : 0, 1);
+  if (vui) {
+    s.Put(0, 1); s.Put(0, 1); s.Put(0, 1); s.Put(0, 1); // aspect,overscan,video,chroma
+    s.Put(1, 1); s.Put(1000, 32); s.Put(30000, 32); s.Put(0, 1);
+    s.Put(0, 1); s.Put(0, 1); s.Put(0, 1); // HRD,HRD,pic_struct
+    s.Put(1, 1); s.Put(1, 1); s.Ue(0); s.Ue(0); s.Ue(13); s.Ue(9); s.Ue(reorder); s.Ue(1);
+  }
+  auto config = s.Nal(0x67);
+  H264FixtureBits p;
+  p.Ue(0); p.Ue(0); p.Put(1, 1); p.Put(0, 1); p.Ue(0); p.Ue(0); p.Ue(0);
+  p.Put(0, 1); p.Put(0, 2); p.Se(0); p.Se(0); p.Se(0);
+  p.Put(1, 1); p.Put(0, 1); p.Put(0, 1);
+  const auto pps = p.Nal(0x68);
+  config.insert(config.end(), pps.begin(), pps.end());
+  return config;
+}
+
+std::vector<std::uint8_t> H264FixtureSlice(std::uint32_t frame, bool idr,
+    std::uint32_t firstMb = 0, std::uint32_t sliceType = 99,
+    bool adaptiveMarking = false, bool refOverride = false,
+    bool refModification = false, std::uint32_t pps = 0,
+    std::uint32_t idrId = 0) {
+  H264FixtureBits bits;
+  if (sliceType == 99) sliceType = idr ? 2 : 0;
+  bits.Ue(firstMb); bits.Ue(sliceType); bits.Ue(pps); bits.Put(frame, 8);
+  if (idr) bits.Ue(idrId);
+  if (sliceType % 5 == 0) {
+    bits.Put(refOverride ? 1 : 0, 1); if (refOverride) bits.Ue(0);
+    bits.Put(refModification ? 1 : 0, 1);
+    if (refModification) { bits.Ue(0); bits.Ue(0); bits.Ue(3); }
+  }
+  if (idr) { bits.Put(0, 1); bits.Put(0, 1); }
+  else {
+    bits.Put(adaptiveMarking ? 1 : 0, 1);
+    if (adaptiveMarking) { bits.Ue(5); bits.Ue(0); }
+  }
+  if (sliceType % 5 != 2) bits.Ue(0);
+  bits.Se(0); bits.Ue(1); bits.AlignOne(); bits.Put(0x55, 8);
+  return bits.Nal(idr ? 0x65 : 0x41);
+}
+
+bool H264GuardSelfTests() {
   bool passed = true;
+  const auto config = H264FixtureConfig();
+  const std::vector<std::uint8_t> actualNvidiaConfig{
+    0,0,0,1,0x67,0x4d,0x40,0x33,0x95,0xa0,0x0f,0,0x10,0xfb,0x01,0x10,
+    0,0,0x3e,0x80,0,0x07,0x53,0,0xf1,0xc2,0xaa,0,0,0,1,0x68,0xee,0x3c,0x80};
+  const auto validate = [](H264ZeroReorderGuard& guard,
+                           const std::vector<std::uint8_t>& bytes, bool idr) {
+    std::vector<H264Nal> nals;
+    return H264Nals(bytes, nals) && guard.Validate(nals, idr);
+  };
+  H264ZeroReorderGuard guard;
+  bool configChecks = guard.Configure(actualNvidiaConfig) && guard.Configure(config) &&
+      !guard.Configure(H264FixtureConfig(false)) &&
+      !guard.Configure(H264FixtureConfig(true, 1)) &&
+      !guard.Configure(H264FixtureConfig(true, 0, 0));
+  for (std::size_t size = 0; size < config.size(); ++size) {
+    configChecks &= !guard.Configure(std::vector<std::uint8_t>(config.begin(), config.begin() + size));
+  }
+  passed &= NamedSelfTest("h264-config-explicit-zero-reorder", configChecks);
+  bool progression = guard.Configure(config) && validate(guard, H264FixtureSlice(0, true), true);
+  for (std::uint32_t frame = 1; frame <= 257; ++frame) {
+    progression &= validate(guard, H264FixtureSlice(frame % 256, false), false);
+  }
+  progression &= validate(guard, H264FixtureSlice(0, true), true);
+  passed &= NamedSelfTest("h264-poc2-frame-progression-wrap-idr", progression);
+  const auto rejectsAfterIdr = [&](const std::vector<std::uint8_t>& unit, bool idr = false) {
+    H264ZeroReorderGuard rejecting;
+    return rejecting.Configure(config) && validate(rejecting, H264FixtureSlice(0, true), true) &&
+        !validate(rejecting, unit, idr) && validate(rejecting, H264FixtureSlice(1, false), false);
+  };
+  auto nonreference = H264FixtureSlice(1, false); nonreference[4] = 0x01;
+  passed &= NamedSelfTest("h264-b-reorder-marking-fail-closed",
+      rejectsAfterIdr(H264FixtureSlice(1, false, 0, 1)) &&
+      rejectsAfterIdr(H264FixtureSlice(2, false)) &&
+      rejectsAfterIdr(H264FixtureSlice(0, false)) && rejectsAfterIdr(nonreference) &&
+      rejectsAfterIdr(H264FixtureSlice(1, false, 0, 0, true)) &&
+      rejectsAfterIdr(H264FixtureSlice(1, false, 0, 0, false, true)) &&
+      rejectsAfterIdr(H264FixtureSlice(1, false, 0, 0, false, false, true)) &&
+      rejectsAfterIdr(H264FixtureSlice(1, true), true) &&
+      rejectsAfterIdr(H264FixtureSlice(0, true, 0, 0), true));
+  auto multislice = H264FixtureSlice(1, false);
+  const auto second = H264FixtureSlice(1, false, 120);
+  multislice.insert(multislice.end(), second.begin(), second.end());
+  guard.Configure(config);
+  bool sliceChecks = validate(guard, H264FixtureSlice(0, true), true) && validate(guard, multislice, false);
+  for (const auto& badSecond : {H264FixtureSlice(1, false, 0),
+       H264FixtureSlice(2, false, 120), H264FixtureSlice(1, false, 32400),
+       H264FixtureSlice(1, false, 120, 0, false, false, false, 1)}) {
+    auto bad = H264FixtureSlice(1, false);
+    bad.insert(bad.end(), badSecond.begin(), badSecond.end());
+    sliceChecks &= rejectsAfterIdr(bad);
+  }
+  auto differentIdr = H264FixtureSlice(0, true);
+  const auto otherId = H264FixtureSlice(0, true, 120, 2, false, false, false, 0, 1);
+  differentIdr.insert(differentIdr.end(), otherId.begin(), otherId.end());
+  sliceChecks &= rejectsAfterIdr(differentIdr, true);
+  passed &= NamedSelfTest("h264-multislice-one-picture", sliceChecks);
+  auto forbidden = H264FixtureSlice(1, false); forbidden[4] |= 0x80;
+  auto partition = H264FixtureSlice(1, false); partition[4] = 0x42;
+  auto extension = H264FixtureSlice(1, false); extension[4] = 0x74;
+  auto truncated = H264FixtureSlice(1, false); truncated.resize(6);
+  auto changedConfig = H264FixtureConfig(true, 1);
+  const auto idr = H264FixtureSlice(0, true);
+  changedConfig.insert(changedConfig.end(), idr.begin(), idr.end());
+  passed &= NamedSelfTest("h264-malformed-extension-config-rejected",
+      rejectsAfterIdr(forbidden) && rejectsAfterIdr(partition) &&
+      rejectsAfterIdr(extension) && rejectsAfterIdr(truncated) &&
+      rejectsAfterIdr(changedConfig, true));
+  auto padded = H264FixtureSlice(1, false);
+  padded.insert(padded.end(), {0,0,3,0});
+  guard.Configure(config);
+  passed &= NamedSelfTest("h264-cabac-padding-bounded",
+      validate(guard, H264FixtureSlice(0, true), true) && validate(guard, padded, false));
+  return passed;
+}
+
+bool RingSelfTest() {
+  bool passed = H264GuardSelfTests();
   ExposureTimeline timeline(10'000'000);
   ExposureTimeline rejectsZero(10'000'000);
   std::int64_t firstPts = -1;
@@ -3624,6 +4169,15 @@ bool RingSelfTest() {
   wrongType.valueType = VT_I4;
   CodecFixture resetByTypes;
   resetByTypes.value = 1;
+  CodecFixture diagnosticRejected;
+  diagnosticRejected.setResult = E_INVALIDARG;
+  ZeroBPictureDiagnostics diagnostic;
+  const bool diagnosticCannotAuthorizeRejectedWrite =
+      !EstablishZeroBPictureCount(&diagnosticRejected, false, &diagnostic) &&
+      diagnostic.afterTypesSetAttempted &&
+      diagnostic.afterTypesSetResult == E_INVALIDARG &&
+      diagnostic.readAttempted && diagnostic.readResult == S_OK &&
+      diagnostic.valueType == VT_UI4 && diagnostic.value == 0;
   passed &= NamedSelfTest(
       "encoder-zero-b-contract-fails-closed",
       EstablishZeroBPictureCount(&beforeTypes, true) &&
@@ -3635,7 +4189,8 @@ bool RingSelfTest() {
           !EstablishZeroBPictureCount(&nonzero, false) &&
           !EstablishZeroBPictureCount(&wrongType, true) &&
           !EstablishZeroBPictureCount(&resetByTypes, true) &&
-          !EstablishZeroBPictureCount<CodecFixture>(nullptr, true));
+          !EstablishZeroBPictureCount<CodecFixture>(nullptr, true) &&
+          diagnosticCannotAuthorizeRejectedWrite);
 
   EncoderTransitionState transitions;
   const bool transitionSequence =
