@@ -938,14 +938,32 @@ function reconcileDxgiReplayServices(
             `${outputPath} — ${error instanceof Error ? error.message : String(error)}`,
         )
       },
+      onReady: (selection) => {
+        if (dxgiReplayServices.get(display.id)?.manager !== manager) return
+        if (!setShippingReplayWorkload(display.id, false)) {
+          dxgiReplayServices.delete(display.id)
+          manager.stop()
+          logWarn(
+            `[capture] display ${display.id}: could not suspend shipping replay after late native READY; ` +
+              'discarding native candidate to avoid duplicate capture workload',
+          )
+          return
+        }
+        logInfo(
+          `[capture] display ${display.id}: DXGI native replay READY ` +
+            `(${selection.ready.width}x${selection.ready.height} @ ` +
+            `${selection.ready.targetFps}fps, ${selection.ready.encoderName ?? 'hardware H.264'})`,
+        )
+      },
       onFallback: (selection) => {
         if (dxgiReplayServices.get(display.id)?.manager !== manager) return
         setShippingReplayWorkload(display.id, true)
-        logWarn(
+        const message =
           `[capture] display ${display.id}: DXGI native replay unavailable ` +
-            `(${selection.reason})${selection.detail === undefined ? '' : ` — ${selection.detail}`}; ` +
-            'retaining shipping replay path',
-        )
+          `(${selection.reason})${selection.detail === undefined ? '' : ` — ${selection.detail}`}; ` +
+          'retaining shipping replay path'
+        if (selection.reason === 'native-not-ready') logInfo(message)
+        else logWarn(message)
       },
     })
     const slot: DxgiReplayServiceSlot = {

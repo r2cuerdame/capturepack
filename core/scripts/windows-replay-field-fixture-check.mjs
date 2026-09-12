@@ -1,3 +1,4 @@
+import './windows-replay-field-clock-check.mjs'
 import { createRequire } from 'node:module'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -144,10 +145,12 @@ check(
     && fieldSource.includes("'-f', 'framemd5', '-'"),
 )
 check(
-  'visual object-pick truth decodes the requested pack time, not a stale materialized sample time',
+  'visual object-pick truth preserves the requested context clock and declared media mapping',
   fieldSource.includes(
     'query.requested_t_ms + Number(display?.replay_clock_offset_ms ?? 0)',
   )
+    && fieldSource.includes('geometry_alignment_diagnostics')
+    && !fieldSource.includes('aligned_context_t_ms')
     && fieldSource.includes(
       'five points inside decoded replay target pixels at the requested pack time',
     ),

@@ -25,6 +25,8 @@
 #include <io.h>
 #include <wrl/client.h>
 
+#pragma comment(lib, "oleaut32.lib")
+
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
@@ -65,6 +67,7 @@ constexpr std::uint64_t kRingBitrateHeadroomDenominator = 4;
 constexpr std::size_t kRingContainerHeadroomBytes = 8U * 1024U * 1024U;
 constexpr std::size_t kExportContainerHeadroomBytes = 8U * 1024U * 1024U;
 constexpr std::uint32_t kAcquireTimeoutMs = 20;
+constexpr std::uint32_t kGpuCompletionTimeoutMs = 50;
 constexpr std::uint32_t kMaximumReinitializations = 3;
 constexpr std::size_t kMaximumServiceCommandBytes = 32U * 1024U;
 constexpr UINT kMaximumPointerDimension = 1024;
@@ -991,8 +994,19 @@ HRESULT SnapshotMediaType(const EncodedRingSnapshot& snapshot, UINT width,
 
 HRESULT WriteSnapshotSamples(IMFSinkWriter* writer,
                              const EncodedRingSnapshot& snapshot) {
+  std::int64_t muxPtsHns = 0;
   for (std::size_t index = 0; index < snapshot.units.size(); ++index) {
     const EncodedAccessUnit& unit = snapshot.units[index];
+    std::int64_t muxDurationHns = unit.durationHns;
+    if (index + 1 < snapshot.units.size()) {
+      const std::int64_t nextPtsHns = snapshot.units[index + 1].ptsHns;
+      if (nextPtsHns <= unit.ptsHns) return MF_E_INVALID_TIMESTAMP;
+      muxDurationHns = nextPtsHns - unit.ptsHns;
+    }
+    if (muxDurationHns <= 0 ||
+        muxPtsHns > std::numeric_limits<std::int64_t>::max() - muxDurationHns) {
+      return MF_E_INVALID_TIMESTAMP;
+    }
     if (unit.bytes.size() > std::numeric_limits<DWORD>::max()) {
       return MF_E_BUFFERTOOSMALL;
     }
@@ -1012,10 +1026,15 @@ HRESULT WriteSnapshotSamples(IMFSinkWriter* writer,
     ComPtr<IMFSample> sample;
     if (SUCCEEDED(result)) result = MFCreateSample(&sample);
     if (SUCCEEDED(result)) result = sample->AddBuffer(buffer.Get());
-    if (SUCCEEDED(result)) result = sample->SetSampleTime(unit.ptsHns);
-    if (SUCCEEDED(result)) result = sample->SetSampleDuration(unit.durationHns);
+    // The NVIDIA MFT can legitimately skip input frames under backpressure,
+    // leaving gaps between retained PTS values. Microsoft's fragmented MP4
+    // sink may omit tfdt, so encode those gaps as the preceding frame's held
+    // duration and feed the muxer a contiguous DTS/PTS timeline. Playback then
+    // preserves the real retained wall-time instead of silently compressing it.
+    if (SUCCEEDED(result)) result = sample->SetSampleTime(muxPtsHns);
+    if (SUCCEEDED(result)) result = sample->SetSampleDuration(muxDurationHns);
     if (SUCCEEDED(result)) result = sample->SetUINT64(
-        MFSampleExtension_DecodeTimestamp, static_cast<UINT64>(unit.ptsHns));
+        MFSampleExtension_DecodeTimestamp, static_cast<UINT64>(muxPtsHns));
     if (SUCCEEDED(result) && unit.keyframe) {
       result = sample->SetUINT32(MFSampleExtension_CleanPoint, TRUE);
     }
@@ -1024,8 +1043,9 @@ HRESULT WriteSnapshotSamples(IMFSinkWriter* writer,
     }
     if (SUCCEEDED(result)) result = writer->WriteSample(0, sample.Get());
     if (FAILED(result)) return result;
+    muxPtsHns += muxDurationHns;
   }
-  return S_OK;
+  return muxPtsHns == snapshot.durationHns ? S_OK : MF_E_INVALID_TIMESTAMP;
 }
 
 bool ReadBoundedFile(const std::wstring& path, std::size_t maximumBytes,
@@ -1931,7 +1951,8 @@ HRESULT ActivateHardwareEncoder(const OutputChoice& choice,
   return result;
 }
 
-bool SetCodecUint32(ICodecAPI* codec, const GUID& property, ULONG value,
+template <typename Codec>
+bool SetCodecUint32(Codec* codec, const GUID& property, ULONG value,
                     bool required) {
   if (codec == nullptr) return !required;
   VARIANT variant{};
@@ -1947,6 +1968,27 @@ bool SetCodecBool(ICodecAPI* codec, const GUID& property, bool value) {
   variant.vt = VT_BOOL;
   variant.boolVal = value ? VARIANT_TRUE : VARIANT_FALSE;
   return SUCCEEDED(codec->SetValue(&property, &variant));
+}
+
+// The Microsoft H.264 MFT requires the zero-B request before SetOutputType:
+// https://learn.microsoft.com/en-us/windows/win32/medfound/h-264-video-encoder
+// Some vendor MFTs reject it until types exist. A retry is acceptable only if
+// the request succeeds AND committed state reads back as VT_UI4 zero. Neither
+// low latency nor structural fMP4 validation proves this encoder contract.
+template <typename Codec>
+bool EstablishZeroBPictureCount(Codec* codec, bool requestedBeforeTypes) {
+  if (codec == nullptr) return false;
+  if (!requestedBeforeTypes &&
+      !SetCodecUint32(codec, CODECAPI_AVEncMPVDefaultBPictureCount, 0, true)) {
+    return false;
+  }
+  VARIANT actual{};
+  const HRESULT result = codec->GetValue(
+      &CODECAPI_AVEncMPVDefaultBPictureCount, &actual);
+  const bool zero = SUCCEEDED(result) && actual.vt == VT_UI4 &&
+                    actual.ulVal == 0;
+  VariantClear(&actual);
+  return zero;
 }
 
 struct PendingInput {
@@ -1975,15 +2017,8 @@ class EncoderSession {
 
     ComPtr<ICodecAPI> codec;
     transform_.As(&codec);
-    // Main-profile snapshots are only independently decodable when the ring
-    // can use presentation order as decode order. Microsoft requires this
-    // property to be set before SetOutputType; an encoder that cannot prove
-    // zero B pictures must not reach READY.
-    if (!SetCodecUint32(codec.Get(), CODECAPI_AVEncMPVDefaultBPictureCount,
-                        0, true)) {
-      return MF_E_INVALIDREQUEST;
-    }
-
+    const bool zeroBRequestedBeforeTypes =
+        SetCodecUint32(codec.Get(), CODECAPI_AVEncMPVDefaultBPictureCount, 0, true);
     result = MFCreateMediaType(&outputType_);
     if (SUCCEEDED(result)) result = outputType_->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
     if (SUCCEEDED(result)) result = outputType_->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_H264);
@@ -2021,6 +2056,11 @@ class EncoderSession {
     }
     if (!SetCodecUint32(codec.Get(), CODECAPI_AVEncMPVGOPSize,
                         kKeyframeIntervalFrames, true)) {
+      return MF_E_INVALIDREQUEST;
+    }
+
+    if (!EstablishZeroBPictureCount(codec.Get(), zeroBRequestedBeforeTypes)) {
+      std::fprintf(stderr, "dxgi replay: zero-B encoder contract unavailable\n");
       return MF_E_INVALIDREQUEST;
     }
 
@@ -2791,6 +2831,7 @@ class CapturePipeline {
     result = videoDevice_->CreateVideoProcessorOutputView(
         nv12.Get(), enumerator_.Get(), &viewDescription, &outputView);
     if (FAILED(result)) {
+      std::fprintf(stderr, "[dxgi-replay] CreateVideoProcessorOutputView failed hr=0x%08X array=%u subresource=%u bind=0x%X misc=0x%X\n", static_cast<unsigned>(result), nv12Description.ArraySize, nv12Subresource, nv12Description.BindFlags, nv12Description.MiscFlags);
       failureReason = ProbeReason::kGpuConversionFailed;
       return result;
     }
@@ -2800,11 +2841,13 @@ class CapturePipeline {
     result = videoContext_->VideoProcessorBlt(
         processor_.Get(), outputView.Get(), 0, 1, &stream);
     if (FAILED(result)) {
+      std::fprintf(stderr, "[dxgi-replay] VideoProcessorBlt failed hr=0x%08X\n", static_cast<unsigned>(result));
       failureReason = IsDeviceLoss(result) ? ProbeReason::kDeviceLostExhausted
                                            : ProbeReason::kGpuConversionFailed;
       return result;
     }
-    if (!GpuCompletedWithin(device_.Get(), context_.Get(), kAcquireTimeoutMs, result)) {
+    if (!GpuCompletedWithin(device_.Get(), context_.Get(), kGpuCompletionTimeoutMs, result)) {
+      std::fprintf(stderr, "[dxgi-replay] post-conversion GPU completion failed hr=0x%08X timeout_ms=%u\n", static_cast<unsigned>(result), kGpuCompletionTimeoutMs);
       failureReason = IsDeviceLoss(result) ? ProbeReason::kDeviceLostExhausted
                                            : ProbeReason::kGpuConversionFailed;
       return result;
@@ -3462,6 +3505,54 @@ bool RingSelfTest() {
       generationBoundarySafe && snapshotTimestampsSafe &&
           configChangeRejected && annexBValidated &&
           fragmentedMp4StructureValidated && serviceProtocolBounded);
+
+  // Exercise the production contract with rejected writes, unavailable or
+  // mistyped readback, and encoders which silently retain B pictures.
+  struct CodecFixture {
+    HRESULT setResult = S_OK;
+    HRESULT getResult = S_OK;
+    VARTYPE valueType = VT_UI4;
+    ULONG value = 0;
+    int writes = 0;
+    int reads = 0;
+    HRESULT SetValue(const GUID* property, VARIANT* requested) {
+      ++writes;
+      if (*property != CODECAPI_AVEncMPVDefaultBPictureCount ||
+          requested->vt != VT_UI4 || requested->ulVal != 0) return E_INVALIDARG;
+      return setResult;
+    }
+    HRESULT GetValue(const GUID* property, VARIANT* actual) {
+      ++reads;
+      if (*property != CODECAPI_AVEncMPVDefaultBPictureCount) return E_INVALIDARG;
+      actual->vt = valueType;
+      actual->ulVal = value;
+      return getResult;
+    }
+  };
+  CodecFixture beforeTypes;
+  CodecFixture afterTypes;
+  CodecFixture rejected;
+  rejected.setResult = E_NOTIMPL;
+  CodecFixture unreadable;
+  unreadable.getResult = E_NOTIMPL;
+  CodecFixture nonzero;
+  nonzero.value = 2;
+  CodecFixture wrongType;
+  wrongType.valueType = VT_I4;
+  CodecFixture resetByTypes;
+  resetByTypes.value = 1;
+  passed &= NamedSelfTest(
+      "encoder-zero-b-contract-fails-closed",
+      EstablishZeroBPictureCount(&beforeTypes, true) &&
+          beforeTypes.writes == 0 && beforeTypes.reads == 1 &&
+          EstablishZeroBPictureCount(&afterTypes, false) &&
+          afterTypes.writes == 1 && afterTypes.reads == 1 &&
+          !EstablishZeroBPictureCount(&rejected, false) && rejected.reads == 0 &&
+          !EstablishZeroBPictureCount(&unreadable, true) &&
+          !EstablishZeroBPictureCount(&nonzero, false) &&
+          !EstablishZeroBPictureCount(&wrongType, true) &&
+          !EstablishZeroBPictureCount(&resetByTypes, true) &&
+          !EstablishZeroBPictureCount<CodecFixture>(nullptr, true));
 
   EncoderTransitionState transitions;
   const bool transitionSequence =

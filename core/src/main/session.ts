@@ -1887,20 +1887,20 @@ async function runFlow(settings: Settings): Promise<void> {
   // These targets are shared by all three consumers — UIA dump mapping, the
   // live editor ring, and the persisted ring — so save/reopen cannot drift into
   // a different monitor or DPI conversion.
-  const uiaTargets: UiaDisplayTarget[] = multiDisplay
-    ? frozen.displays.map((d) => ({
-        index: d.index,
-        focused: d.focused,
-        bounds: d.bounds,
-        width: d.focused ? snap.width : d.width,
-        height: d.focused ? snap.height : d.height,
-      }))
-    : [{ index: 1, focused: true, bounds: display.bounds, width: snap.width, height: snap.height }]
+  // Preserve the pack display index even when only one physical display was
+  // captured. The manifest always keeps that original index (for example the
+  // primary display can be index 2), so re-numbering only the context/UIA side
+  // to 1 makes persisted history impossible to match after reopen.
+  const uiaTargets: UiaDisplayTarget[] = frozen.displays.map((d) => ({
+    index: d.index,
+    focused: d.focused,
+    bounds: d.bounds,
+    width: d.focused ? snap.width : d.width,
+    height: d.focused ? snap.height : d.height,
+  }))
   const uiaFocusedIndex = uiaTargets.find((target) => target.focused)?.index ?? 1
   const snapshotScaleByIndex = new Map(
-    multiDisplay
-      ? frozen.displays.map((captured) => [captured.index, captured.scale] as const)
-      : [[1, display.scale] as const],
+    frozen.displays.map((captured) => [captured.index, captured.scale] as const),
   )
   const contextDisplays = uiaTargets.map((target) => {
     const snapshotPixelsPerDip = snapshotScaleByIndex.get(target.index)
