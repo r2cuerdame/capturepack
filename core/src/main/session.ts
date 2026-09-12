@@ -9,8 +9,9 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, screen } from 'electron'
 import type { Event as ElectronEvent, IpcMainEvent } from 'electron'
 import { randomUUID } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import * as path from 'node:path'
+import { pngPixelSize } from './png'
 import { IPC } from '../shared/ipc'
 import { REPLAY_TIMEOUT_MS } from '../shared/captureTimeouts'
 import { manifestSourceLatencyFrom } from '../shared/types'
@@ -3733,27 +3734,6 @@ function isBoundsLike(v: unknown): v is { x: number; y: number; width: number; h
     typeof b['width'] === 'number' &&
     typeof b['height'] === 'number'
   )
-}
-
-/**
- * A PNG's declared pixel size, straight out of its IHDR — 8-byte signature,
- * then the first chunk, which a PNG REQUIRES to be IHDR.
- *
- * Reads the header only. The alternative on this path is decoding a 4K raster
- * per display just to learn two integers a re-edit needs for every declared
- * screen, and re-editing must not pay tens of megabytes of decode for it.
- */
-function pngPixelSize(file: string): { width: number; height: number } | null {
-  let head: Buffer
-  try {
-    head = readFileSync(file)
-  } catch {
-    return null
-  }
-  if (head.length < 24 || head.toString('ascii', 12, 16) !== 'IHDR') return null
-  const width = head.readUInt32BE(16)
-  const height = head.readUInt32BE(20)
-  return width > 0 && height > 0 ? { width, height } : null
 }
 
 /**
