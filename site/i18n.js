@@ -41,7 +41,7 @@
       out_note: 'One local folder: visual evidence plus machine-readable object context.<br>Zip it only when you share.',
       privacy_kicker: 'LOCAL DOES NOT MEAN REDACTED',
       privacy_title: 'Review the original before sharing.',
-      privacy_body: 'CapturePack uploads no captures, telemetry or crash reports; the optional GitHub update check can be disabled, and MCP can be stopped in Settings. Blur is non-destructive: annotated views are protected, but snapshot.png and the original replay in a full pack remain unredacted.',
+      privacy_body: 'CapturePack uploads no captures or crash reports. Once per local day, the app and this site send PurplePulse only a random install ID, version, OS, and platform — never a username, device name, or capture data. Blur is non-destructive: annotated views are protected, but snapshot.png and the original replay in a full pack remain unredacted.',
       ft_releases: 'Releases', ft_sponsor: 'Sponsor',
       ft_license: 'MIT License · Open Source',
       ft_why: 'Made because explaining bugs to AI<br>was taking too much time.'
@@ -85,7 +85,7 @@
       out_note: '로컬 폴더 하나에 시각 증거와 기계가 읽을 수 있는 객체 맥락을 담습니다.<br>공유할 때만 ZIP으로 만드세요.',
       privacy_kicker: '로컬 저장은 비식별화를 뜻하지 않습니다',
       privacy_title: '공유하기 전에 원본을 확인하세요.',
-      privacy_body: 'CapturePack은 캡처, 텔레메트리, 충돌 보고서를 업로드하지 않습니다. 선택적인 GitHub 업데이트 확인은 끌 수 있고 MCP도 설정에서 중지할 수 있습니다. 블러는 비파괴 방식이므로 주석 결과물은 보호되지만 전체 팩의 snapshot.png와 원본 리플레이는 가려지지 않은 상태로 남습니다.',
+      privacy_body: 'CapturePack은 캡처나 충돌 보고서를 업로드하지 않습니다. 앱과 이 사이트는 로컬 날짜 기준 하루 한 번 PurplePulse에 임의 설치 ID, 버전, OS, 플랫폼만 보내며 사용자 이름, 기기 이름, 캡처 데이터는 보내지 않습니다. 블러는 비파괴 방식이므로 주석 결과물은 보호되지만 전체 팩의 snapshot.png와 원본 리플레이는 가려지지 않은 상태로 남습니다.',
       ft_releases: '릴리스', ft_sponsor: '후원',
       ft_license: 'MIT 라이선스 · 오픈소스',
       ft_why: 'AI에게 버그를 설명하는 데<br>시간이 너무 걸려서 만들었습니다.'
@@ -129,7 +129,7 @@
       out_note: 'ひとつのローカルフォルダに、視覚的証拠と機械可読なオブジェクトコンテキストを保存します。<br>共有するときだけZIPにしてください。',
       privacy_kicker: 'ローカル保存は匿名化ではありません',
       privacy_title: '共有前にオリジナルを確認してください。',
-      privacy_body: 'CapturePackはキャプチャ、テレメトリ、クラッシュレポートをアップロードしません。任意のGitHub更新確認は無効化でき、MCPも設定で停止できます。ぼかしは非破壊で、注釈済みビューは保護されますが、フルパック内のsnapshot.pngと元のリプレイは未編集のまま残ります。',
+      privacy_body: 'CapturePackはキャプチャやクラッシュレポートをアップロードしません。アプリとこのサイトはローカル日付で1日1回、ランダムなインストールID、バージョン、OS、プラットフォームだけをPurplePulseへ送信し、ユーザー名、端末名、キャプチャデータは送りません。ぼかしは非破壊で、注釈済みビューは保護されますが、フルパック内のsnapshot.pngと元のリプレイは未編集のまま残ります。',
       ft_releases: 'リリース', ft_sponsor: 'スポンサー',
       ft_license: 'MITライセンス · オープンソース',
       ft_why: 'AIにバグを説明する時間が<br>長すぎたので作りました。'
@@ -173,7 +173,7 @@
       out_note: '一个本地文件夹同时保存视觉证据和机器可读的对象上下文。<br>仅在分享时打包为 ZIP。',
       privacy_kicker: '本地保存不等于已脱敏',
       privacy_title: '分享前请检查原始内容。',
-      privacy_body: 'CapturePack 不会上传捕获内容、遥测或崩溃报告；可关闭可选的 GitHub 更新检查，也可在设置中停止 MCP。模糊是非破坏性的：标注视图会被保护，但完整包中的 snapshot.png 和原始回放仍保留未遮挡内容。',
+      privacy_body: 'CapturePack 不会上传捕获内容或崩溃报告。应用和本网站每天按本地日期仅向 PurplePulse 发送一次随机安装 ID、版本、操作系统和平台，绝不发送用户名、设备名或捕获数据。模糊是非破坏性的：标注视图会被保护，但完整包中的 snapshot.png 和原始回放仍保留未遮挡内容。',
       ft_releases: '发布', ft_sponsor: '赞助',
       ft_license: 'MIT 许可 · 开源',
       ft_why: '因为向 AI 解释 bug 太费时间，<br>所以做了它。'
@@ -217,7 +217,7 @@
       out_note: 'Una carpeta local: evidencia visual y contexto de objetos legible por máquinas.<br>Comprímela en ZIP solo cuando la compartas.',
       privacy_kicker: 'LOCAL NO SIGNIFICA CENSURADO',
       privacy_title: 'Revisa el original antes de compartir.',
-      privacy_body: 'CapturePack no sube capturas, telemetría ni informes de fallos; la comprobación opcional de actualizaciones en GitHub puede desactivarse y MCP puede detenerse en Ajustes. El desenfoque no es destructivo: protege las vistas anotadas, pero snapshot.png y la repetición original del pack completo siguen sin censurar.',
+      privacy_body: 'CapturePack no sube capturas ni informes de fallos. Una vez al día local, la aplicación y este sitio envían a PurplePulse solo un ID de instalación aleatorio, versión, sistema operativo y plataforma; nunca un nombre de usuario, nombre de dispositivo ni datos de captura. El desenfoque no es destructivo: protege las vistas anotadas, pero snapshot.png y la repetición original del pack completo siguen sin censurar.',
       ft_releases: 'Versiones', ft_sponsor: 'Patrocinar',
       ft_license: 'Licencia MIT · Open Source',
       ft_why: 'Creado porque explicar bugs a la IA<br>llevaba demasiado tiempo.'
@@ -261,7 +261,7 @@
       out_note: 'Un dossier local : preuves visuelles et contexte d’objet lisible par machine.<br>Créez un ZIP uniquement pour le partager.',
       privacy_kicker: 'LOCAL NE VEUT PAS DIRE CAVIARDÉ',
       privacy_title: 'Vérifiez l’original avant de le partager.',
-      privacy_body: 'CapturePack n’envoie ni captures, ni télémétrie, ni rapports de plantage ; la vérification facultative des mises à jour GitHub peut être désactivée et MCP arrêté dans les réglages. Le flou est non destructif : il protège les vues annotées, mais snapshot.png et le replay original du pack complet restent non caviardés.',
+      privacy_body: 'CapturePack n’envoie ni captures ni rapports de plantage. Une fois par jour local, l’application et ce site envoient à PurplePulse uniquement un identifiant d’installation aléatoire, la version, le système d’exploitation et la plateforme — jamais de nom d’utilisateur, de nom d’appareil ni de données de capture. Le flou est non destructif : il protège les vues annotées, mais snapshot.png et le replay original du pack complet restent non caviardés.',
       ft_releases: 'Versions', ft_sponsor: 'Sponsoriser',
       ft_license: 'Licence MIT · Open Source',
       ft_why: 'Créé parce qu’expliquer des bugs à l’IA<br>prenait trop de temps.'
@@ -305,7 +305,7 @@
       out_note: 'Ein lokaler Ordner: visuelle Belege plus maschinenlesbarer Objektkontext.<br>Erstelle nur zum Teilen eine ZIP-Datei.',
       privacy_kicker: 'LOKAL BEDEUTET NICHT GESCHWÄRZT',
       privacy_title: 'Prüfe das Original vor dem Teilen.',
-      privacy_body: 'CapturePack lädt keine Aufnahmen, Telemetrie oder Absturzberichte hoch. Die optionale GitHub-Updateprüfung lässt sich deaktivieren und MCP in den Einstellungen stoppen. Unschärfe ist nicht destruktiv: annotierte Ansichten sind geschützt, doch snapshot.png und das Original-Replay im vollständigen Pack bleiben ungeschwärzt.',
+      privacy_body: 'CapturePack lädt keine Aufnahmen oder Absturzberichte hoch. Einmal pro lokalem Tag senden die App und diese Website nur eine zufällige Installations-ID, Version, Betriebssystem und Plattform an PurplePulse — niemals Benutzername, Gerätename oder Aufnahmedaten. Unschärfe ist nicht destruktiv: annotierte Ansichten sind geschützt, doch snapshot.png und das Original-Replay im vollständigen Pack bleiben ungeschwärzt.',
       ft_releases: 'Releases', ft_sponsor: 'Sponsern',
       ft_license: 'MIT-Lizenz · Open Source',
       ft_why: 'Entstanden, weil es zu lange dauerte,<br>KI Bugs zu erklären.'
@@ -349,7 +349,7 @@
       out_note: 'Uma pasta local: evidência visual e contexto de objetos legível por máquina.<br>Crie o ZIP somente ao compartilhar.',
       privacy_kicker: 'LOCAL NÃO SIGNIFICA CENSURADO',
       privacy_title: 'Revise o original antes de compartilhar.',
-      privacy_body: 'O CapturePack não envia capturas, telemetria nem relatórios de falha; a verificação opcional de atualizações no GitHub pode ser desativada e o MCP interrompido nas Configurações. O desfoque não é destrutivo: protege as vistas anotadas, mas snapshot.png e o replay original do pack completo continuam sem censura.',
+      privacy_body: 'O CapturePack não envia capturas nem relatórios de falha. Uma vez por dia local, a aplicação e este site enviam ao PurplePulse apenas um ID de instalação aleatório, versão, sistema operativo e plataforma — nunca nome de utilizador, nome do dispositivo ou dados de captura. O desfoque não é destrutivo: protege as vistas anotadas, mas snapshot.png e o replay original do pack completo continuam sem censura.',
       ft_releases: 'Versões', ft_sponsor: 'Apoiar',
       ft_license: 'Licença MIT · Open Source',
       ft_why: 'Feito porque explicar bugs para a IA<br>tomava tempo demais.'
@@ -393,7 +393,7 @@
       out_note: 'Одна локальная папка: визуальные доказательства и машиночитаемый контекст объектов.<br>Создавайте ZIP только для отправки.',
       privacy_kicker: 'ЛОКАЛЬНО НЕ ЗНАЧИТ СКРЫТО',
       privacy_title: 'Проверьте оригинал перед отправкой.',
-      privacy_body: 'CapturePack не загружает снимки, телеметрию или отчёты о сбоях; необязательную проверку обновлений GitHub можно отключить, а MCP остановить в настройках. Размытие не изменяет оригинал: аннотированные представления защищены, но snapshot.png и исходный повтор в полном пакете остаются без скрытия.',
+      privacy_body: 'CapturePack не загружает снимки или отчёты о сбоях. Раз в локальный день приложение и этот сайт отправляют PurplePulse только случайный ID установки, версию, ОС и платформу — без имени пользователя, имени устройства и данных захвата. Размытие не изменяет оригинал: аннотированные представления защищены, но snapshot.png и исходный повтор в полном пакете остаются без скрытия.',
       ft_releases: 'Релизы', ft_sponsor: 'Поддержать',
       ft_license: 'Лицензия MIT · Open Source',
       ft_why: 'Сделано потому, что объяснять баги ИИ<br>было слишком долго.'

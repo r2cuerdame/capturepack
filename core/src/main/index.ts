@@ -49,6 +49,7 @@ import { loadSettings, persistSettings } from './settings'
 import { openSettingsWindow, registerSettingsIpc } from './settingsWindow'
 import { createTray } from './tray'
 import type { TrayControls } from './tray'
+import { sendDailyTelemetry, telemetryOs } from './telemetry'
 import { checkNow, initUpdater, restartAndUpdate, updaterState } from './updater'
 import { shouldAnnounceUpdate } from './updateNotice'
 import { openWelcomeWindow, registerWelcomeIpc } from './welcomeWindow'
@@ -246,6 +247,13 @@ function main(): void {
     // `firstRun` is TRUE only when no settings file existed a moment ago — the
     // one honest fresh-install signal (GOAL "Welcome": never shown on update).
     const { settings, firstRun } = loadSettings()
+    if (app.isPackaged) {
+      void sendDailyTelemetry({
+        statePath: path.join(app.getPath('userData'), 'purplepulse.json'),
+        version: app.getVersion(),
+        os: telemetryOs(),
+      })
+    }
     // Read the launch signal BEFORE reconciling. Our Windows login entry carries
     // --openAsHidden; wasOpenedAtLogin covers platforms where Electron can
     // report it directly. Reconciliation happens once here (and on a settings
