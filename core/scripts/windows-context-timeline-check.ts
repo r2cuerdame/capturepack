@@ -296,6 +296,56 @@ async function main(): Promise<void> {
     { start_ms: 1_000, end_ms: 1_000 },
   )
 
+  const fractionalNativeDurationMs = 29_485.933333333334
+  const exactFractionalQueries: number[] = []
+  const fractionalNativeEdge = frozenRingObservations(
+    (tMs) => {
+      exactFractionalQueries.push(tMs)
+      return {
+        surfaces: [{
+          surfaceId: 'fractional-native-edge',
+          hwnd: '301',
+          bounds: { x: 0, y: 0, width: 100, height: 100 },
+          zOrder: 0,
+          visible: true,
+          minimized: false,
+          foreground: true,
+          executableName: 'native.exe',
+          windowTitle: 'Fractional native edge',
+          className: 'NativeWindow',
+        }],
+      }
+    },
+    [{
+      device: 'RIGHT',
+      primary: true,
+      bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+    }],
+    [{ index: 1, focused: true, width: 1920, height: 1080 }],
+    fractionalNativeDurationMs,
+    [fractionalNativeDurationMs],
+  )
+  check(
+    'the exact fractional native anchor is queried but conservatively labelled inside the media',
+    {
+      queries: exactFractionalQueries,
+      labels: fractionalNativeEdge.map((observation) => observation.tMs),
+    },
+    {
+      queries: [fractionalNativeDurationMs],
+      labels: [29_485],
+    },
+  )
+  check(
+    'the production fractional native range passes the strict integer encoder without outliving media',
+    exportWindowsContextTimeline(fractionalNativeEdge, {
+      startMs: 0,
+      endMs: Math.floor(fractionalNativeDurationMs),
+      rebaseToMs: 0,
+    })?.range,
+    { start_ms: 0, end_ms: 29_485 },
+  )
+
   const fresh = frozenRingObservations(
     (tMs) => surfacesAt(tMs),
     monitors,

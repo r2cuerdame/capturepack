@@ -2609,6 +2609,36 @@ function suspendReplayEncoding(): void {
   retainNativeReplayClock()
 }
 
+/**
+ * Restart shipping recording over the live focused stream retained for Lane-S.
+ *
+ * Native READY deliberately keeps this stream as its presentation clock. On a
+ * later native service failure, stopping that still-healthy source and calling
+ * getDisplayMedia again in the same task races Chromium's asynchronous desktop
+ * source teardown on Windows and can fail with NotReadableError. The retained
+ * stream is already the assigned display, is still delivering fresh frames,
+ * and has no shipping encoder owner after suspendReplayEncoding(), so create a
+ * new recorder epoch on it instead of destroying and reacquiring the source.
+ */
+function resumeShippingReplayEncoding(payload: CaptureStartPayload): boolean {
+  const retainedStream = stream
+  if (payload.focused !== true || retainedStream === null || !retainedStream.active) return false
+  const generation = ++captureGeneration
+  startPayload = payload
+  if (recorderFormat === null) {
+    terminalCaptureFailure('MediaRecorder has no supported CapturePack replay format', generation)
+    return true
+  }
+  installRecordingStream(
+    payload,
+    generation,
+    retainedStream,
+    captureBackend,
+    captureQuality,
+  )
+  return true
+}
+
 async function startCapture(payload: CaptureStartPayload): Promise<void> {
   // Explicit starts and guarded retries both supersede an in-flight
   // getDisplayMedia call. Stream ownership survives recorder-only suspension,
@@ -4188,6 +4218,7 @@ window.captureBridge.onReplayWorkload(({ active }) => {
   console.info(
     `[capture] display ${payload.displayId}: native replay unavailable; restarting shipping replay workload`,
   )
+  if (resumeShippingReplayEncoding(payload)) return
   void startCapture(payload)
 })
 window.captureBridge.onNativeFallbackFrame((payload) => {

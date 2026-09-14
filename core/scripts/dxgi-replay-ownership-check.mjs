@@ -38,7 +38,7 @@ if (process.argv.includes('--mutate-omit-recorder-stop')) {
 const rendererCode = [
   fn(retention, 'detachRecorderHandlers'), fn(retention, 'releaseRecorderReferences'),
   suspend, fn(renderer, 'retainNativeReplayClock'), fn(renderer, 'teardown'), fn(renderer, 'terminalCaptureFailure'),
-  fn(renderer, 'startCapture'), workloadNode.getText(renderer),
+  fn(renderer, 'resumeShippingReplayEncoding'), fn(renderer, 'startCapture'), workloadNode.getText(renderer),
 ].join('\n')
 let tickPump = fn(renderer, 'startFrameTicks')
 if (process.argv.includes('--mutate-clock-requires-recorder')) {
@@ -67,6 +67,8 @@ function harness() {
   const payload = { displayId: 17, focused: true, fps: 15, segmentSeconds: 30, replayMaxWidth: 0 }
   const originalEndedListeners = []
   const originalStream = {
+    active: true,
+    identity: 'retained-shipping-stream',
     getTracks: () => [{ stop: () => events.push('lane-s-track-stop') }],
     getVideoTracks: () => [{ addEventListener: (_type, listener) => originalEndedListeners.push(listener) }],
     end: () => originalEndedListeners.forEach((listener) => listener()),
@@ -80,7 +82,8 @@ function harness() {
   let workloadCallback
   const rendererContext = vm.createContext({
     console: { info: () => {} }, captureGeneration: 7, captureStreamGeneration: 0, replayWorkloadActive: true,
-    startPayload: payload, stream: originalStream,
+    captureBackend: 'chromium-desktop-capture', captureQuality: 'full',
+    startPayload: payload, stream: originalStream, recorderFormat: { mimeType: 'video/mp4' },
     tickVideo: {}, sourceLatencyCalibrationCancel: null, sourceLatencyPresentationObserver: null,
     nativeFallbackStartupErrors: { cancel: () => {} }, nativeFallbackSessionId: null,
     nativeFallbackCanvas: null, nativeFallbackRequestedFrames: 0, nativeFallbackPresentedFrames: 0,
@@ -113,11 +116,10 @@ function harness() {
       events.push('shipping-get-display-media')
       return { identity: 'fresh-shipping-stream', getTracks: () => [] }
     } } },
-    installRecordingStream: (actualPayload, generation, stream, backend) => {
+    installRecordingStream: (actualPayload, generation, stream, backend, quality) => {
       assert.equal(actualPayload, payload)
       assert.ok(generation > 7)
-      assert.equal(stream.identity, 'fresh-shipping-stream')
-      assert.equal(backend, 'chromium-desktop-capture')
+      events.push(`shipping-stream:${stream.identity}:${backend}:${quality}`)
       events.push('fresh-shipping-installed')
     },
     failCapture: (message) => { throw new Error(message) },
@@ -207,7 +209,10 @@ await check('native READY stops/releases shipping MP4 while retaining focused La
   assert.equal(count(h.events, 'workload:false'), 1, 'callback and start completion must not duplicate suspension')
   h.managers[0].fail(); await flush()
   assert.equal(count(h.events, 'workload:true'), 1)
-  assert.equal(count(h.events, 'shipping-get-display-media'), 1)
+  assert.equal(count(h.events, 'shipping-get-display-media'), 0,
+    'native failure must not race teardown/reacquisition of its retained live clock source')
+  assert.equal(count(h.events, 'shipping-stream:retained-shipping-stream:chromium-desktop-capture:full'), 1)
+  assert.equal(count(h.events, 'lane-s-track-stop'), 0)
   assert.equal(count(h.events, 'fresh-shipping-installed'), 1, 'failure must resume the production shipping start path')
   h.managers[0].fail(); await flush()
   assert.equal(count(h.events, 'fresh-shipping-installed'), 1, 'duplicate fallback must not create duplicate recorders')
@@ -276,8 +281,20 @@ await check('native teardown resumes fresh shipping capture after native ownersh
   h.mainContext.stopDxgiReplayServices(); await flush()
   assert.equal(count(h.events, 'native-stop'), 1)
   assert.equal(count(h.events, 'fresh-shipping-installed'), 1)
+  assert.equal(count(h.events, 'shipping-get-display-media'), 0)
+  assert.equal(count(h.events, 'shipping-stream:retained-shipping-stream:chromium-desktop-capture:full'), 1)
   assert.equal(h.mainContext.dxgiReplayServices.size, 0)
   assert.equal(h.mainContext.shippingReplaySuspended.size, 0)
+})
+await check('native teardown preserves a retained GDI shipping source provenance', async () => {
+  const h = harness()
+  h.rendererContext.captureBackend = 'windows-gdi-bitblt'
+  h.rendererContext.captureQuality = 'degraded'
+  h.start(); h.managers[0].ready(); await flush()
+  h.managers[0].fail(); await flush()
+  assert.equal(count(h.events, 'shipping-get-display-media'), 0)
+  assert.equal(count(h.events, 'shipping-stream:retained-shipping-stream:windows-gdi-bitblt:degraded'), 1)
+  assert.equal(count(h.events, 'lane-s-track-stop'), 0)
 })
 await check('obsolete service callbacks cannot change replacement native ownership', async () => {
   const h = harness(); h.start()

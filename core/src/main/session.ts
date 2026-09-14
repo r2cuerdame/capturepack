@@ -1922,6 +1922,12 @@ async function runFlow(settings: Settings): Promise<void> {
   // cannot fail or delay the media save beyond this bounded in-memory read.
   let windowsContextObservations: ContextObservation[] = []
   let saveFirstWindowsContext: WindowsContextTimelineV1 | null = null
+  // The plugin schema is intentionally integer-millisecond and its range may
+  // not outlive the declared replay. Native MP4 duration comes from a rational
+  // sample clock (for example 29485.933333ms), so canonicalise at the producer
+  // boundary instead of weakening the strict encoder.
+  const contextReplayDurationMs = Math.max(0, Math.floor(replayDurationMs))
+  const contextReplaySourceStartMs = Math.max(0, Math.floor(replaySourceStartMs))
   if (contextFreezeId !== null) {
     try {
       windowsContextObservations = frozenObservations(
@@ -1936,8 +1942,8 @@ async function runFlow(settings: Settings): Promise<void> {
         windowsContextObservations,
         {
           startMs: 0,
-          endMs: replayDurationMs,
-          rebaseToMs: replaySourceStartMs,
+          endMs: contextReplayDurationMs,
+          rebaseToMs: contextReplaySourceStartMs,
         },
       )
       if (windowsContextObservations.length > 0 && saveFirstWindowsContext === null) {
@@ -2480,8 +2486,8 @@ async function runFlow(settings: Settings): Promise<void> {
       finalWindowsContext = exportWindowsContextTimeline(
         windowsContextObservations,
         {
-          startMs: keptRange.startMs,
-          endMs: keptRange.endMs,
+          startMs: Math.ceil(keptRange.startMs),
+          endMs: Math.floor(keptRange.endMs),
           rebaseToMs: 0,
         },
       )
