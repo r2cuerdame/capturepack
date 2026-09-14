@@ -61,7 +61,10 @@ constexpr std::uint32_t kMinimumRetentionMs = 1'000;
 constexpr std::uint32_t kMaximumRetentionMs = 60'000;
 constexpr std::uint32_t kTargetFramesPerSecond = 15;
 constexpr std::uint32_t kTargetBitsPerSecond = 6'000'000;
-constexpr std::uint32_t kKeyframeIntervalFrames = kTargetFramesPerSecond;
+// Retention starts at the first independently decodable access unit after the
+// time cut. Keep that unavoidable GOP head loss below the field contract's
+// 600 ms fill tolerance even at the accepted 80% cadence floor (6 / 12 fps).
+constexpr std::uint32_t kKeyframeIntervalFrames = 6;
 constexpr std::uint64_t kRingBitrateHeadroomNumerator = 5;
 constexpr std::uint64_t kRingBitrateHeadroomDenominator = 4;
 constexpr std::size_t kRingContainerHeadroomBytes = 8U * 1024U * 1024U;
@@ -463,6 +466,59 @@ class EncodedAccessUnitRing {
   const std::size_t maximumUnits_;
   std::size_t bytes_ = 0;
   std::deque<EncodedAccessUnit> units_;
+};
+
+// Select real Desktop Duplication presents against one persistent target
+// phase. Comparing every frame with the last accepted frame resets the phase
+// after a slightly early monitor refresh: on a nominal 60 Hz desktop, four
+// refreshes can be a few QPC ticks short of 1/15 s, so that comparison waits
+// for a fifth refresh every time and turns a 15 fps request into ~12 fps.
+//
+// This clock never invents or repeats a frame. It only chooses which observed
+// present owns each elapsed 1/15 s slot, and skips elapsed slots after a stall.
+class FrameCadenceGate {
+ public:
+  bool started() const { return originQpc_ != 0; }
+
+  bool Due(std::int64_t presentQpc, std::int64_t frequency) const {
+    if (presentQpc <= 0 || frequency <= 0) return false;
+    if (originQpc_ == 0) return true;
+    if (presentQpc <= originQpc_) return false;
+    return CompletedSlots(presentQpc, frequency) >= nextSlot_;
+  }
+
+  bool Commit(std::int64_t presentQpc, std::int64_t frequency) {
+    if (!Due(presentQpc, frequency)) return false;
+    if (originQpc_ == 0) {
+      originQpc_ = presentQpc;
+      nextSlot_ = 1;
+      return true;
+    }
+    const std::uint64_t completed = CompletedSlots(presentQpc, frequency);
+    if (completed == std::numeric_limits<std::uint64_t>::max()) return false;
+    nextSlot_ = completed + 1;
+    return true;
+  }
+
+ private:
+  std::uint64_t CompletedSlots(std::int64_t presentQpc,
+                               std::int64_t frequency) const {
+    const std::uint64_t elapsed =
+        static_cast<std::uint64_t>(presentQpc - originQpc_);
+    const std::uint64_t whole =
+        elapsed / static_cast<std::uint64_t>(frequency);
+    if (whole > std::numeric_limits<std::uint64_t>::max() /
+                    kTargetFramesPerSecond) {
+      return std::numeric_limits<std::uint64_t>::max();
+    }
+    return whole * kTargetFramesPerSecond +
+        ((elapsed % static_cast<std::uint64_t>(frequency)) *
+         kTargetFramesPerSecond) /
+            static_cast<std::uint64_t>(frequency);
+  }
+
+  std::int64_t originQpc_ = 0;
+  std::uint64_t nextSlot_ = 0;
 };
 
 class ComLifetime {
@@ -1080,6 +1136,7 @@ class H264Bits {
 struct H264Nal {
   std::uint8_t type = 0;
   std::uint8_t reference = 0;
+  bool terminalCabacZeroWord = false;
   std::vector<std::uint8_t> rbsp;
 };
 
@@ -1111,7 +1168,18 @@ bool H264Nals(const std::vector<std::uint8_t>& bytes, std::vector<H264Nal>& nals
       const std::uint8_t byte = bytes[at];
       if (zeros >= 2) {
         if (byte == 3) {
-          if (at + 1 >= end || bytes[at + 1] > 3) return false;
+          if (at + 1 >= end) {
+            // Annex B permits cabac_zero_word padding at the end of a VCL
+            // NAL. Once trailing_zero_8bits are separated, its EBSP can end
+            // in 00 00 03: the terminal 03 protects those zero bytes from a
+            // start-code interpretation and does not add another RBSP byte.
+            // Keep every non-VCL dangling prevention byte fail-closed.
+            if (at + 1 != end || (nal.type != 1 && nal.type != 5)) return false;
+            nal.terminalCabacZeroWord = true;
+            zeros = 0;
+            continue;
+          }
+          if (bytes[at + 1] > 3) return false;
           zeros = 0;
           continue;
         }
@@ -1271,6 +1339,7 @@ class H264ZeroReorderGuard {
         continue;
       }
       if (nal.type != 1 && nal.type != 5) continue;
+      if (nal.terminalCabacZeroWord && !pps_.cabac) return false;
       if (nal.reference == 0) return false; // POC2 non-reference formula differs
       H264Bits bits(nal.rbsp);
       const auto firstMb = bits.Ue(), sliceType = bits.Ue() % 5, ppsId = bits.Ue();
@@ -3574,10 +3643,8 @@ class CapturePipeline {
     }
     summary.capturedFrames += 1;
     summary.flags |= kRunFrameAcquired;
-    const std::int64_t minimumFrameDelta =
-        std::max<std::int64_t>(1, summary.qpcFrequency / kTargetFramesPerSecond);
-    if (lastSubmittedQpc_ > 0 &&
-        frameInfo.LastPresentTime.QuadPart - lastSubmittedQpc_ < minimumFrameDelta) {
+    if (!cadence_.Due(frameInfo.LastPresentTime.QuadPart,
+                      summary.qpcFrequency)) {
       return S_FALSE;
     }
     std::int64_t ptsHns = 0;
@@ -3592,7 +3659,7 @@ class CapturePipeline {
       failureReason = ProbeReason::kEncoderOutputFailed;
       return result;
     }
-    if (encoder_.inputCredits() == 0 && lastSubmittedQpc_ == 0) {
+    if (encoder_.inputCredits() == 0 && !cadence_.started()) {
       result = encoder_.WaitForInput(100, ring, summary);
       if (FAILED(result) && result != HRESULT_FROM_WIN32(WAIT_TIMEOUT)) {
         failureReason = ProbeReason::kEncoderStreamFailed;
@@ -3699,7 +3766,11 @@ class CapturePipeline {
     // frame passes through that sequence, and Initialize clears stale proof
     // after a pipeline rebuild.
     summary.flags |= kRunCursorComposited;
-    lastSubmittedQpc_ = frameInfo.LastPresentTime.QuadPart;
+    if (!cadence_.Commit(frameInfo.LastPresentTime.QuadPart,
+                         summary.qpcFrequency)) {
+      failureReason = ProbeReason::kUnsupportedFrame;
+      return E_INVALIDARG;
+    }
     return S_OK;
   }
 
@@ -3901,7 +3972,7 @@ class CapturePipeline {
 
   bool prepared_ = false;
   std::uint32_t generation_ = 0;
-  std::int64_t lastSubmittedQpc_ = 0;
+  FrameCadenceGate cadence_;
   UINT managerToken_ = 0;
   OutputChoice choice_;
   FrameGeometry geometry_;
@@ -4122,7 +4193,8 @@ class H264FixtureBits {
 
 std::vector<std::uint8_t> H264FixtureConfig(bool vui = true,
                                          std::uint32_t reorder = 0,
-                                         std::uint32_t poc = 2) {
+                                         std::uint32_t poc = 2,
+                                         bool cabac = true) {
   H264FixtureBits s;
   s.Put(77, 8); s.Put(64, 8); s.Put(51, 8); s.Ue(0); s.Ue(4); s.Ue(poc);
   s.Ue(1); s.Put(0, 1); s.Ue(239); s.Ue(134); s.Put(1, 1); s.Put(1, 1); s.Put(0, 1);
@@ -4135,7 +4207,7 @@ std::vector<std::uint8_t> H264FixtureConfig(bool vui = true,
   }
   auto config = s.Nal(0x67);
   H264FixtureBits p;
-  p.Ue(0); p.Ue(0); p.Put(1, 1); p.Put(0, 1); p.Ue(0); p.Ue(0); p.Ue(0);
+  p.Ue(0); p.Ue(0); p.Put(cabac ? 1 : 0, 1); p.Put(0, 1); p.Ue(0); p.Ue(0); p.Ue(0);
   p.Put(0, 1); p.Put(0, 2); p.Se(0); p.Se(0); p.Se(0);
   p.Put(1, 1); p.Put(0, 1); p.Put(0, 1);
   const auto pps = p.Nal(0x68);
@@ -4241,6 +4313,16 @@ bool H264GuardSelfTests() {
   guard.Configure(config);
   passed &= NamedSelfTest("h264-cabac-padding-bounded",
       validate(guard, H264FixtureSlice(0, true), true) && validate(guard, padded, false));
+  auto terminalCabacPadding = H264FixtureSlice(1, false);
+  terminalCabacPadding.insert(terminalCabacPadding.end(), {0,0,3});
+  guard.Configure(config);
+  H264ZeroReorderGuard cavlcGuard;
+  passed &= NamedSelfTest("h264-terminal-cabac-zero-word",
+      validate(guard, H264FixtureSlice(0, true), true) &&
+      validate(guard, terminalCabacPadding, false) &&
+      cavlcGuard.Configure(H264FixtureConfig(true, 0, 2, false)) &&
+      validate(cavlcGuard, H264FixtureSlice(0, true), true) &&
+      !validate(cavlcGuard, terminalCabacPadding, false));
   return passed;
 }
 
@@ -4583,10 +4665,36 @@ bool RingSelfTest() {
           !ParseRetentionMs(L"60001", parsedMaximumRetention) &&
           RingMaximumBytes(1'000) == 9'326'108 &&
           RingMaximumBytes(kMaximumRetentionMs) == 64'638'608 &&
-          RingMaximumUnits(1'000) == 31 &&
-          RingMaximumUnits(kMaximumRetentionMs) == 916 &&
+          RingMaximumUnits(1'000) == 22 &&
+          RingMaximumUnits(kMaximumRetentionMs) == 907 &&
           kMaximumRingBytes == RingMaximumBytes(kMaximumRetentionMs) &&
           kMaximumRingUnits == RingMaximumUnits(kMaximumRetentionMs));
+
+  FrameCadenceGate cadence;
+  std::uint64_t phaseLockedFrames = 0;
+  std::uint64_t resetFrames = 0;
+  std::int64_t resetLastQpc = 0;
+  constexpr std::int64_t cadenceFrequency = 1'000'000;
+  constexpr std::int64_t cadenceStartQpc = 1'000'000;
+  // A measured 16.666 ms refresh is slightly shorter than the rounded-up
+  // mathematical 60 Hz period. Four refreshes are therefore two QPC ticks
+  // short of the old per-frame 15 fps cutoff.
+  for (std::int64_t index = 0; index <= 600; ++index) {
+    const std::int64_t presentQpc = cadenceStartQpc + index * 16'666;
+    if (cadence.Due(presentQpc, cadenceFrequency) &&
+        cadence.Commit(presentQpc, cadenceFrequency)) {
+      ++phaseLockedFrames;
+    }
+    if (resetLastQpc == 0 ||
+        presentQpc - resetLastQpc >=
+            cadenceFrequency / kTargetFramesPerSecond) {
+      ++resetFrames;
+      resetLastQpc = presentQpc;
+    }
+  }
+  passed &= NamedSelfTest(
+      "frame-cadence-phase-no-reset-loss",
+      phaseLockedFrames == 150 && resetFrames == 121);
 
   const std::uint32_t priorHealthFlags = kRequiredServiceHealthFlags &
       ~static_cast<std::uint32_t>(kRunCursorComposited);

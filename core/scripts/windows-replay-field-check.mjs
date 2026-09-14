@@ -449,6 +449,55 @@ function logTimestamp(line) {
   return { iso, ms: Number.isFinite(ms) ? ms : null }
 }
 
+function parseReplayPresentationClocks(mainLog) {
+  const clocks = new Map()
+  for (const line of String(mainLog).split(/\r?\n/u)) {
+    const match = /\[capture\] display ([^:]+): replay pixel clock (\{.*\})\s*$/u.exec(line)
+    if (match === null) continue
+    try {
+      const value = JSON.parse(match[2])
+      if (value?.status === 'measured' && Array.isArray(value.clockAnchors)) {
+        clocks.set(match[1], value.clockAnchors.map((anchor) => ({
+          ptsMs: anchor?.ptsMs,
+          wallMs: anchor?.presentedAtMs,
+        })))
+      }
+    } catch {
+      // A malformed diagnostic line cannot become timing evidence.
+    }
+  }
+  return clocks
+}
+
+function replayPresentationWallTimeMs(encodedFramePtsMs, replayClockAnchors) {
+  if (
+    !Number.isFinite(encodedFramePtsMs)
+    || !Array.isArray(replayClockAnchors)
+    || replayClockAnchors.length < 2
+    || replayClockAnchors.length > 64
+  ) return null
+  let previous = null
+  for (const anchor of replayClockAnchors) {
+    if (
+      !Number.isFinite(anchor?.ptsMs)
+      || !Number.isFinite(anchor?.wallMs)
+      || (previous !== null && (
+        anchor.ptsMs <= previous.ptsMs
+        || anchor.wallMs <= previous.wallMs
+      ))
+    ) return null
+    if (previous !== null) {
+      const rate = (anchor.wallMs - previous.wallMs) / (anchor.ptsMs - previous.ptsMs)
+      if (!Number.isFinite(rate) || rate < 0.8 || rate > 1.2) return null
+      if (encodedFramePtsMs >= previous.ptsMs && encodedFramePtsMs <= anchor.ptsMs) {
+        return previous.wallMs + (encodedFramePtsMs - previous.ptsMs) * rate
+      }
+    }
+    previous = anchor
+  }
+  return null
+}
+
 function parsePerformanceEvidence(mainLog, recorderAvailability) {
   const nativeReady = []
   const nativeSnapshots = []
@@ -1447,12 +1496,22 @@ function inferSourceLatencySample({
   timelineOriginMs,
   encodedFramePtsMs,
   pixelMatch,
+  replayClockAnchors,
 }) {
-  const encodedFrameNominalWallTimeMs =
+  const encodedFrameLinearWallTimeMs =
     Number.isFinite(timelineOriginMs) && Number.isFinite(encodedFramePtsMs)
       ? timelineOriginMs + encodedFramePtsMs
       : null
-  if (encodedFrameNominalWallTimeMs === null) {
+  const piecewiseWallTimeMs = replayPresentationWallTimeMs(
+    encodedFramePtsMs,
+    replayClockAnchors,
+  )
+  const encodedFramePresentationWallTimeMs =
+    piecewiseWallTimeMs ?? encodedFrameLinearWallTimeMs
+  const encodedFrameClockBasis = piecewiseWallTimeMs === null
+    ? 'linear-timeline-origin-fallback'
+    : 'piecewise-replay-presentation-clock'
+  if (encodedFramePresentationWallTimeMs === null) {
     return {
       status: 'unavailable',
       source_latency_ms: null,
@@ -1461,9 +1520,11 @@ function inferSourceLatencySample({
       uncertainty_ms: null,
       confidence: 'none',
       confidence_score: 0,
-      encoded_frame_nominal_wall_time_ms: null,
+      encoded_frame_presentation_wall_time_ms: null,
+      encoded_frame_linear_wall_time_ms: encodedFrameLinearWallTimeMs,
+      encoded_frame_clock_basis: 'unavailable',
       inferred_pixel_wall_time_ms: null,
-      reason: 'timeline origin or encoded frame PTS is unavailable',
+      reason: 'replay presentation clock and linear fallback are unavailable',
     }
   }
   if (pixelMatch?.status !== 'measured') {
@@ -1481,7 +1542,9 @@ function inferSourceLatencySample({
       uncertainty_ms: null,
       confidence: 'none',
       confidence_score: 0,
-      encoded_frame_nominal_wall_time_ms: encodedFrameNominalWallTimeMs,
+      encoded_frame_presentation_wall_time_ms: encodedFramePresentationWallTimeMs,
+      encoded_frame_linear_wall_time_ms: encodedFrameLinearWallTimeMs,
+      encoded_frame_clock_basis: encodedFrameClockBasis,
       inferred_pixel_wall_time_ms: null,
       reason:
         pixelMatch?.reason
@@ -1489,7 +1552,7 @@ function inferSourceLatencySample({
     }
   }
   const sourceLatencyMs =
-    encodedFrameNominalWallTimeMs - pixelMatch.inferred_wall_time_ms
+    encodedFramePresentationWallTimeMs - pixelMatch.inferred_wall_time_ms
   const uncertaintyMs = pixelMatch.uncertainty_ms
   return {
     status: 'measured',
@@ -1499,7 +1562,9 @@ function inferSourceLatencySample({
     uncertainty_ms: uncertaintyMs,
     confidence: pixelMatch.confidence,
     confidence_score: pixelMatch.confidence_score,
-    encoded_frame_nominal_wall_time_ms: encodedFrameNominalWallTimeMs,
+    encoded_frame_presentation_wall_time_ms: encodedFramePresentationWallTimeMs,
+    encoded_frame_linear_wall_time_ms: encodedFrameLinearWallTimeMs,
+    encoded_frame_clock_basis: encodedFrameClockBasis,
     inferred_pixel_wall_time_ms: pixelMatch.inferred_wall_time_ms,
     reason: null,
   }
@@ -1616,6 +1681,34 @@ function runTemporalLagSelfTest() {
   ) {
     throw new Error(
       `lag self-test expected 400ms source latency, got ${JSON.stringify(sourceLatency)}`,
+    )
+  }
+  // Preserved shipping-3 evidence: the replay clock changes rate between
+  // observed presentation anchors. A linear timeline-origin + PTS estimate
+  // reports 391.667 ms, while the actual local anchor segment reports
+  // 99.613 ms for the same encoded frame and reverse-matched source pixel.
+  const piecewiseSourceLatency = inferSourceLatencySample({
+    timelineOriginMs: 1_789_220_161_454,
+    encodedFramePtsMs: 8_932.667,
+    pixelMatch: {
+      status: 'measured',
+      inferred_wall_time_ms: 1_789_220_169_995,
+      time_resolution_ms: 15,
+      confidence: 'medium',
+      confidence_score: 0.6875,
+    },
+    replayClockAnchors: [
+      { ptsMs: 8_459.066666666668, wallMs: 1_789_220_169_650.7 },
+      { ptsMs: 9_540.133333333333, wallMs: 1_789_220_170_664 },
+    ],
+  })
+  if (
+    piecewiseSourceLatency.status !== 'measured'
+    || Math.abs(piecewiseSourceLatency.source_latency_ms - 99.613) > 0.001
+  ) {
+    throw new Error(
+      `lag self-test expected 99.613ms piecewise source latency, got ` +
+      `${JSON.stringify(piecewiseSourceLatency)}`,
     )
   }
   const staticMatch = inferMovementTime({
@@ -2139,7 +2232,8 @@ try {
   }
   Stop-Process -Id ([int]$target.ProcessId) -Force -ErrorAction Stop
   Wait-Process -Id ([int]$target.ProcessId) -Timeout 10 -ErrorAction SilentlyContinue
-  if($null -ne (Get-Process -Id ([int]$target.ProcessId) -ErrorAction SilentlyContinue)) { throw 'owned helper survived termination' }
+  $remaining=Get-CimInstance Win32_Process -Filter "ProcessId = $([int]$target.ProcessId)" -ErrorAction SilentlyContinue
+  if($null -ne $remaining -and $remaining.ExecutablePath -ieq ${quotePs(expectedHelper)} -and $remaining.CommandLine -ceq ${quotePs(helper.command_line)} -and $remaining.CreationDate.ToUniversalTime().ToString('o') -ceq ${quotePs(helper.creation_date)}) { throw 'owned helper survived termination' }
   Write-Output 'owned native replay service terminated'
   `
       report.native_lifecycle.injected_at = new Date().toISOString()
@@ -2202,6 +2296,7 @@ try {
   const mainLog = measurementMainLog
     ?? (existsSync(mainLogPath) ? readFileSync(mainLogPath, 'utf8') : '')
   const recorderAvailability = parseRecorderAvailability(mainLog)
+  const replayPresentationClocks = parseReplayPresentationClocks(mainLog)
   report.performance = parsePerformanceEvidence(mainLog, recorderAvailability)
   const measurementStartMs = report.performance.measurement_window.start_ms
   const measurementEndMs = report.performance.measurement_window.end_ms
@@ -2909,6 +3004,9 @@ try {
           layout,
           resolvedTargetId,
         })
+        const fixtureDisplayId = layout.displays?.find(
+          (item) => item.index === fixtureDisplayIndex,
+        )?.id
         const error = matching === undefined
           ? null
           : rectError(observed.bounds, matching.bounds_snapshot)
@@ -2948,10 +3046,15 @@ try {
           timelineOriginMs,
           encodedFramePtsMs: matching?.frame_pts_ms ?? null,
           pixelMatch: temporalLag.pixel_match,
+          replayClockAnchors:
+            fixtureDisplayId === undefined
+              ? undefined
+              : replayPresentationClocks.get(String(fixtureDisplayId)),
         })
         sourceLatencySamples.push({
           display: observed.display,
           fixture_display_index: fixtureDisplayIndex,
+          fixture_display_id: fixtureDisplayId ?? null,
           context_query_t_ms: query.requested_t_ms,
           materialized_context_t_ms: query.materialized_t_ms,
           encoded_frame_pts_ms: matching?.frame_pts_ms ?? null,
@@ -3115,9 +3218,9 @@ try {
                 ? 'static'
                 : 'unavailable',
         basis:
-          'encoded frame nominal wall time (timeline origin + encoded PTS) minus the independently reverse-matched replay pixel wall time; context query time and nearest-frame distance are not inputs',
+          'encoded frame wall time from the recorded piecewise replay presentation clock minus the independently reverse-matched replay pixel wall time; timeline origin + PTS is diagnostic fallback only when no bounded anchor segment contains the frame',
         sign_convention:
-          'source_latency_ms = timeline origin + encoded frame PTS - inferred replay pixel wall time; positive means source pixels are older than the encoded PTS clock',
+          'source_latency_ms = piecewise replay presentation wall time at encoded frame PTS - inferred replay pixel wall time; positive means source pixels are older than the encoded presentation clock',
         ambiguity_policy:
           'static motion, no coordinate match, or multiple equally good pixel-time clusters remain unmeasured',
         samples: sourceLatencySamples,

@@ -140,6 +140,12 @@ check(
   fieldSource.includes('layout.movement_start_display_id !== expectedFixtureStartDisplayId'),
 )
 check(
+  'native lifecycle teardown rechecks the full owned-process identity after termination',
+  fieldSource.includes('$remaining=Get-CimInstance Win32_Process')
+    && fieldSource.includes("$remaining.CreationDate.ToUniversalTime().ToString('o')")
+    && !fieldSource.includes("Get-Process -Id ([int]$target.ProcessId)"),
+)
+check(
   'field replay hashing preserves the encoded VFR cadence instead of dropping a valid frame',
   fieldSource.includes("'-fps_mode', 'passthrough'")
     && fieldSource.includes("'-f', 'framemd5', '-'"),

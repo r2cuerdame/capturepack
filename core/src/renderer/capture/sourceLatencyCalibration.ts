@@ -1166,6 +1166,131 @@ export function decideProcessorPresentationLatency(
   }
 }
 
+export type SameFrameSourcePresentationLatencyDecision =
+  | {
+      readonly status: 'measured'
+      readonly reason: 'measured'
+      readonly latencyMs: number
+      readonly processorToPresentationMs: number
+      readonly matchedMediaTimeMs: number
+      readonly sourceMediaTimeOriginMs: number
+      readonly processorIndex: number
+      readonly presentedIndex: number
+    }
+  | {
+      readonly status: 'ambiguous' | 'unavailable'
+      readonly reason:
+        | 'invalid-reference'
+        | 'source-processor-sample-unavailable'
+        | 'processor-presentation-bridge-unavailable'
+        | 'source-processor-sample-unbridged'
+        | 'invalid-bridge-match'
+        | 'presentation-media-time-unavailable'
+        | 'invalid-latency'
+    }
+
+/**
+ * Translate one independently exposed DXGI pixel onto the rVFC media clock.
+ *
+ * The source matcher first identifies the processor sample that contains the
+ * acquired DXGI resource. The processor/presentation matcher independently
+ * identifies identical pixels on both sides. This join succeeds only when the
+ * very same processor sample participates in both proofs; medians from two
+ * unrelated frames and configured FPS are never combined.
+ */
+export function decideSameFrameSourcePresentationLatency(
+  referenceAtMs: number,
+  sourceToProcessorLatencyMs: number | undefined,
+  processorSamples: readonly ProcessorPresentationSample[],
+  bridge: ProcessorPresentationLatencyDecision,
+  presentedSamples: readonly SourcePresentationSample[],
+): SameFrameSourcePresentationLatencyDecision {
+  if (!Number.isFinite(referenceAtMs)) {
+    return { status: 'unavailable', reason: 'invalid-reference' }
+  }
+  if (
+    typeof sourceToProcessorLatencyMs !== 'number'
+    || !Number.isFinite(sourceToProcessorLatencyMs)
+    || sourceToProcessorLatencyMs < 0
+  ) {
+    return {
+      status: 'ambiguous',
+      reason: 'source-processor-sample-unavailable',
+    }
+  }
+  if (bridge.status !== 'measured') {
+    return {
+      status: bridge.status,
+      reason: 'processor-presentation-bridge-unavailable',
+    }
+  }
+  const sourceProcessorIndexes = processorSamples.flatMap((sample, index) =>
+    sample.processorAtMs - referenceAtMs === sourceToProcessorLatencyMs
+      ? [index]
+      : [],
+  )
+  if (sourceProcessorIndexes.length !== 1) {
+    return {
+      status: 'ambiguous',
+      reason: 'source-processor-sample-unavailable',
+    }
+  }
+  const processorIndex = sourceProcessorIndexes[0] as number
+  const matchingBridge = bridge.matches.filter(
+    (match) => match.processorIndex === processorIndex,
+  )
+  if (matchingBridge.length !== 1) {
+    return {
+      status: 'ambiguous',
+      reason: 'source-processor-sample-unbridged',
+    }
+  }
+  const match = matchingBridge[0]
+  const processor = processorSamples[processorIndex]
+  const presented =
+    match === undefined ? undefined : presentedSamples[match.presentedIndex]
+  if (
+    match === undefined
+    || processor === undefined
+    || presented === undefined
+    || match.processorAtMs !== processor.processorAtMs
+    || match.presentedAtMs !== presented.presentedAtMs
+  ) {
+    return { status: 'unavailable', reason: 'invalid-bridge-match' }
+  }
+  const mediaTimeMs = presented.mediaTimeMs
+  if (
+    typeof mediaTimeMs !== 'number'
+    || !Number.isFinite(mediaTimeMs)
+    || mediaTimeMs < 0
+  ) {
+    return {
+      status: 'ambiguous',
+      reason: 'presentation-media-time-unavailable',
+    }
+  }
+  const latencyMs = presented.presentedAtMs - referenceAtMs
+  const sourceMediaTimeOriginMs = referenceAtMs - mediaTimeMs
+  if (
+    !Number.isFinite(latencyMs)
+    || latencyMs < 0
+    || latencyMs > 1_000
+    || !Number.isFinite(sourceMediaTimeOriginMs)
+  ) {
+    return { status: 'unavailable', reason: 'invalid-latency' }
+  }
+  return {
+    status: 'measured',
+    reason: 'measured',
+    latencyMs,
+    processorToPresentationMs: match.latencyMs,
+    matchedMediaTimeMs: mediaTimeMs,
+    sourceMediaTimeOriginMs,
+    processorIndex,
+    presentedIndex: match.presentedIndex,
+  }
+}
+
 /**
  * Join an independent DXGI pixel-exposure reference to the startup rVFC sink.
  * No FPS or configured delay participates: a unique decoded-pixel match is the

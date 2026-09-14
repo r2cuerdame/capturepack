@@ -59,6 +59,7 @@ import {
   buildSourceLatencyFingerprint,
   buildSourceLatencyFingerprintFromRgb,
   decideProcessorPresentationLatency,
+  decideSameFrameSourcePresentationLatency,
   decideSourceLatencyCalibration,
   decideSourcePresentationLatency,
   mapDxgiTimingReferenceEpoch,
@@ -1447,6 +1448,36 @@ interface SourceLatencyCalibrationHandle {
   observePresented(sample: ReplayPixelClockPresentedSample): void
 }
 
+/**
+ * Give the processor/rVFC bridge enough real presentation witnesses before
+ * acquiring the independent DXGI exposure reference.
+ *
+ * Hidden capture windows may receive only two rVFC callbacks during primary
+ * readiness. Taking the DXGI snapshot immediately made those callbacks both
+ * post-reference, so no processor sample already linked to the rVFC media
+ * clock could also contain the later DXGI pixel. Waiting for two real callbacks
+ * supplies pre-reference bridge candidates; the existing bounded
+ * post-reference observation supplies the other side. This one-shot does not
+ * gate recorder startup and does not invent a delay, FPS interval, or latency.
+ */
+async function waitForSourcePresentationWitnesses(
+  control: SourceLatencyCalibrationControl,
+  generation: number,
+  acquiredStream: MediaStream,
+): Promise<void> {
+  const deadline = performance.now() + PRIMARY_READY_TIMEOUT_MS
+  while (
+    control.presentedSamples.length < 2
+    && performance.now() < deadline
+    && !control.cancelled
+    && generation === captureGeneration
+    && stream === acquiredStream
+    && captureBackend === 'chromium-desktop-capture'
+  ) {
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 16))
+  }
+}
+
 function processorTimestampDiagnostic(
   samples: readonly ProcessorFingerprintSample[],
   qpcDecision?: ProcessorQpcDeliveryDecision,
@@ -1629,6 +1660,11 @@ async function measureChromiumSourceLatency(
     void processorSampler?.stop()
   }
   try {
+    await waitForSourcePresentationWitnesses(
+      control,
+      generation,
+      acquiredStream,
+    )
     const dxgi = await startDxgiLatencyReference()
     if (
       control.cancelled
@@ -1864,20 +1900,21 @@ async function measureChromiumSourceLatency(
         && Number.isFinite(diagnostic.latencyMs)
           ? diagnostic.latencyMs
           : undefined
-      const measuredBridge =
-        bridge.status === 'measured' ? bridge : undefined
+      const sameFramePresentation = decideSameFrameSourcePresentationLatency(
+        referenceAtMs,
+        measuredBaseLatencyMs,
+        processorEpochSamples,
+        bridge,
+        control.presentedSamples,
+      )
       const sourceMediaTimeOriginMs =
-        direct.status === 'measured'
-        && typeof direct.sourceMediaTimeOriginMs === 'number'
-        && Number.isFinite(direct.sourceMediaTimeOriginMs)
-          ? direct.sourceMediaTimeOriginMs
+        sameFramePresentation.status === 'measured'
+          ? sameFramePresentation.sourceMediaTimeOriginMs
           : undefined
       const measuredTotalLatencyMs =
-        measuredBaseLatencyMs === undefined
-        || qpcDecision.status !== 'measured'
-        || measuredBridge === undefined
-          ? undefined
-          : measuredBaseLatencyMs + measuredBridge.latencyMs
+        sameFramePresentation.status === 'measured'
+          ? sameFramePresentation.latencyMs
+          : undefined
       const presentation: NonNullable<
         NonNullable<
           CaptureReadyPayload['sourceLatencyCalibration']
@@ -1893,11 +1930,17 @@ async function measureChromiumSourceLatency(
               method: 'dxgi-processor-rvfc-pixel-join',
               sampleCount: control.presentedSamples.length,
               latencyMs: measuredTotalLatencyMs,
-              matchedPairCount: measuredBridge?.matchedPairCount,
-              processorToPresentationMs: measuredBridge?.latencyMs,
-              dispersionMs: measuredBridge?.dispersionMs,
+              matchedPairCount: bridge.matchedPairCount,
+              processorToPresentationMs:
+                sameFramePresentation.status === 'measured'
+                  ? sameFramePresentation.processorToPresentationMs
+                  : undefined,
+              dispersionMs:
+                bridge.status === 'measured'
+                  ? bridge.dispersionMs
+                  : undefined,
               observedProcessorSpacingMs:
-                measuredBridge?.observedProcessorSpacingMs,
+                bridge.observedProcessorSpacingMs,
               ...(sourceMediaTimeOriginMs === undefined
                 ? {}
                 : { sourceMediaTimeOriginMs }),
@@ -1907,6 +1950,7 @@ async function measureChromiumSourceLatency(
               status:
                 diagnostic.status === 'unavailable'
                 || bridge.status === 'unavailable'
+                || sameFramePresentation.status === 'unavailable'
                   ? 'unavailable'
                   : 'ambiguous',
               reason:
@@ -1914,9 +1958,7 @@ async function measureChromiumSourceLatency(
                   ? `source-base-${diagnostic.reason ?? diagnostic.status}`
                   : qpcDecision.status !== 'measured'
                     ? `processor-clock-${qpcDecision.reason}`
-                    : bridge.status !== 'measured'
-                      ? `processor-presentation-${bridge.reason}`
-                      : 'invalid-composed-latency',
+                    : `same-frame-presentation-${sameFramePresentation.reason}`,
               sampleCount: control.presentedSamples.length,
               matchedPairCount: bridge.matchedPairCount,
               ...(bridge.dispersionMs === undefined
@@ -1928,9 +1970,6 @@ async function measureChromiumSourceLatency(
                     observedProcessorSpacingMs:
                       bridge.observedProcessorSpacingMs,
                   }),
-              ...(sourceMediaTimeOriginMs === undefined
-                ? {}
-                : { sourceMediaTimeOriginMs }),
               direct,
             }
       return {
@@ -3889,16 +3928,18 @@ function measuredReplaySourceClockAnchors(
   durationMs: number,
 ): CaptureReplayResultPayload['sourceClockAnchors'] {
   const calibration = sourceLatencyCalibration
-  const direct = calibration?.presentation?.direct
-  const sourceMediaTimeOriginMs = direct?.sourceMediaTimeOriginMs
+  const presentation = calibration?.presentation
+  const sourceMediaTimeOriginMs = presentation?.sourceMediaTimeOriginMs
   const anchors = replayClockAnchorsWithinDuration(clock, durationMs)
   // WGC rVFC captureTime can follow delivery of older compositor pixels. Only
-  // an independent same-pixel DXGI exposure join establishes the source axis.
+  // a DXGI -> processor -> rVFC join through the exact same pixel sample
+  // establishes the source axis.
   if (
     anchors === undefined
     || calibration?.reference?.source !== 'dxgi-desktop-duplication'
     || calibration.reference.timing !== 'pixel-exposure'
-    || direct?.status !== 'measured'
+    || presentation?.status !== 'measured'
+    || presentation.method !== 'dxgi-processor-rvfc-pixel-join'
     || typeof sourceMediaTimeOriginMs !== 'number'
     || !Number.isFinite(sourceMediaTimeOriginMs)
   ) {

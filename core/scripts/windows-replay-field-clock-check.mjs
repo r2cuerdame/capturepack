@@ -1,9 +1,20 @@
 // Execute the field runner's real acceptance block with controlled decoded pixels
 // and persisted context. This catches geometry-derived clock corrections.
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { strict as assert } from 'node:assert'
 
 const source = readFileSync(new URL('./windows-replay-field-check.mjs', import.meta.url), 'utf8')
+const clockFunctionsStart = source.indexOf('function parseReplayPresentationClocks')
+const clockFunctionsEnd = source.indexOf('function parsePerformanceEvidence', clockFunctionsStart)
+const latencyFunctionsStart = source.indexOf('function sourceLatencySign')
+const latencyFunctionsEnd = source.indexOf('function summarizeSourceLatency', latencyFunctionsStart)
+assert(clockFunctionsStart >= 0 && clockFunctionsEnd > clockFunctionsStart)
+assert(latencyFunctionsStart >= 0 && latencyFunctionsEnd > latencyFunctionsStart)
+const clockFunctions = new Function(
+  source.slice(clockFunctionsStart, clockFunctionsEnd) +
+  source.slice(latencyFunctionsStart, latencyFunctionsEnd) +
+  '; return { parseReplayPresentationClocks, inferSourceLatencySample };',
+)()
 const start = source.indexOf('    const alignmentKey =')
 const end = source.indexOf('    report.past_sampling =', start)
 assert(start >= 0 && end > start, 'field acceptance block must be exercised')
@@ -56,4 +67,53 @@ assert(wrong.visualPickPoints.every((p) => [1000, 3000, 5000].includes(p.request
   'production object picks must stay on the requested context clock')
 assert.equal((await run(0)).pass, true, 'matching requested context and decoded pixels must pass')
 assert.equal((await run(0, 200)).pass, true, 'declared media offset does not move the context query')
-console.log('field strict clock: 4 passed (wrong-time geometry rejected; declared mapping retained)')
+
+const evidenceRoot = new URL('../../docs/evidence/pr156-stabilization/field/', import.meta.url)
+const cases = ['shipping-1', 'native-1', 'shipping-2', 'native-2', 'shipping-3', 'native-3']
+let correctedSamples = 0
+for (const name of cases) {
+  const reportUrl = new URL(`${name}/report.json`, evidenceRoot)
+  const logUrl = new URL(`${name}/main.log.txt`, evidenceRoot)
+  assert(existsSync(reportUrl) && existsSync(logUrl), `${name} preserved field evidence is required`)
+  const report = JSON.parse(readFileSync(reportUrl, 'utf8'))
+  const clocks = clockFunctions.parseReplayPresentationClocks(readFileSync(logUrl, 'utf8'))
+  for (const sample of report.past_sampling?.source_latency?.samples ?? []) {
+    if (sample.status !== 'measured') continue
+    const media = report.media.find((item) => item.display === sample.display)
+    const recomputed = clockFunctions.inferSourceLatencySample({
+      timelineOriginMs: Date.parse(report.past_sampling.timeline_origin),
+      encodedFramePtsMs: sample.encoded_frame_pts_ms,
+      replayClockAnchors: clocks.get(String(media?.fixture_display_id)),
+      pixelMatch: {
+        status: 'measured',
+        inferred_wall_time_ms: sample.inferred_pixel_wall_time_ms,
+        uncertainty_ms: sample.uncertainty_ms,
+        confidence: sample.confidence,
+        confidence_score: sample.confidence_score,
+      },
+    })
+    assert.equal(recomputed.status, 'measured', `${name} source sample remains measurable`)
+    assert.equal(
+      recomputed.encoded_frame_clock_basis,
+      'piecewise-replay-presentation-clock',
+      `${name} must use its recorded presentation anchors`,
+    )
+    if (Math.abs(recomputed.source_latency_ms - sample.source_latency_ms) > 0.001) {
+      correctedSamples += 1
+    }
+    if (
+      name === 'shipping-3'
+      && Math.abs(sample.encoded_frame_pts_ms - 8_932.667) < 0.001
+    ) {
+      assert(
+        Math.abs(recomputed.source_latency_ms - 99.612548828125) < 0.001,
+        `shipping-3 piecewise age was ${String(recomputed.source_latency_ms)}`,
+      )
+    }
+  }
+}
+assert(correctedSamples > 0, 'six-report replay must exercise the corrected clock axis')
+console.log(
+  `field strict clock: 5 passed (${cases.length} preserved reports replayed; ` +
+  `${correctedSamples} source-age samples corrected)`,
+)

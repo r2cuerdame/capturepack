@@ -22,7 +22,10 @@ export const DXGI_REPLAY_MIN_RETENTION_MS = 1_000
 // or hand-edited profiles up to 600 s stay on the shipping recorder rather
 // than allocating a native ring hundreds of MiB large for every display.
 export const DXGI_REPLAY_MAX_RETENTION_MS = 60_000
-export const DXGI_REPLAY_MAX_GOP_MS = 1_000
+// Six frames at the accepted 12 fps floor can span 500 ms. The additional
+// 100 ms duration tolerance below keeps native validation equal to, not weaker
+// than, the field contract's 600 ms retention-fill tolerance.
+export const DXGI_REPLAY_MAX_GOP_MS = 500
 const DXGI_REPLAY_DURATION_TOLERANCE_MS = 100
 // 60 s at the native helper's fixed 6 Mbps, 25% encoder headroom, and two
 // independent 8 MiB allowances for ring/container overhead.

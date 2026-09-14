@@ -521,9 +521,10 @@ export function frozenRingObservations(
     ))
   }
   // The capture instant itself, which the walk only lands on when a sample
-  // happened to fall exactly there. It is the one moment the user is guaranteed
-  // to look at.
-  if (times[times.length - 1] !== end) {
+  // happened to fall or round there. It is the one moment the user is
+  // guaranteed to look at, but publishing its integer label twice makes the
+  // otherwise valid persisted timeline fail its strict monotonic-time check.
+  if (times[times.length - 1] !== end && previousLabel !== end) {
     const last = surfacesAt(end)
     if (last !== null && last.surfaces.length > 0) {
       observations.push(observationOf(

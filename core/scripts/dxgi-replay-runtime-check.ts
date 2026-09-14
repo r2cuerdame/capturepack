@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import {
   DXGI_REPLAY_MAX_EXPORT_BYTES,
+  DXGI_REPLAY_MAX_GOP_MS,
   DXGI_REPLAY_CURSOR_COMPOSITED_FLAG,
   DXGI_REPLAY_RUNTIME_SWITCH,
   DXGI_REPLAY_SERVICE_ALL_FLAGS,
@@ -25,6 +26,10 @@ function check(name: string, condition: boolean): void {
   passed += 1
   console.log(`PASS: ${name}`)
 }
+check(
+  'native GOP head-loss budget remains below the 600 ms field fill tolerance',
+  DXGI_REPLAY_MAX_GOP_MS === 500,
+)
 function throws(action: () => unknown): boolean {
   try { action(); return false } catch { return true }
 }
@@ -557,7 +562,7 @@ async function main(): Promise<void> {
   const shortSnapshot = await shortManager.snapshot(1_000)
   check('warmed runtime rejects a silently truncated retention window',
     shortSnapshot.status === 'fallback'
-      && shortSnapshot.detail?.includes('required at least 28900 ms') === true
+      && shortSnapshot.detail?.includes('required at least 29400 ms') === true
       && shortManager.currentSelection().backend === 'shipping')
 
   let pendingCommand: { id: bigint; output: string } | null = null

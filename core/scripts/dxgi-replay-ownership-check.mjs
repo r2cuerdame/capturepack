@@ -509,16 +509,59 @@ await check('only independent DXGI pixel exposure can select the replay source c
     sourceClockAnchorsFromMeasuredMediaTime: (_anchors, origin) => [{ ptsMs: 0, wallMs: origin + 50 }],
     sourceLatencyCalibration: {
       reference: { source: 'dxgi-desktop-duplication', timing: 'pixel-exposure' },
-      presentation: { sourceMediaTimeOriginMs: 750, direct: { status: 'measured', sourceMediaTimeOriginMs: 750 } },
+      presentation: {
+        status: 'measured', method: 'dxgi-processor-rvfc-pixel-join',
+        sourceMediaTimeOriginMs: 750,
+        direct: { status: 'ambiguous', sourceMediaTimeOriginMs: 1 },
+      },
     },
   })
   run(fn(renderer, 'measuredReplaySourceClockAnchors'), h.rendererContext)
   assert.equal(h.rendererContext.measuredReplaySourceClockAnchors({}, 1000)[0].wallMs, 800,
-    'independent same-pixel exposure must win over misleading raw rVFC captureTime')
+    'the exact chained same-pixel join must win over direct/rVFC clock guesses')
   h.rendererContext.sourceLatencyCalibration.reference.source = 'windows-gdi-bitblt'
   assert.equal(h.rendererContext.measuredReplaySourceClockAnchors({}, 1000), undefined)
   h.rendererContext.sourceLatencyCalibration = undefined
   assert.equal(h.rendererContext.measuredReplaySourceClockAnchors({}, 1000), undefined,
     'raw captureTime alone is not a verified source exposure clock')
+})
+await check('native Desktop Duplication PTS is carried as source-exposure clock evidence', async () => {
+  const anchors = [
+    { ptsMs: 0, wallMs: 1_700_000_000_000 },
+    { ptsMs: 29_500, wallMs: 1_700_000_029_500 },
+  ]
+  const manager = {
+    currentSelection: () => ({
+      backend: 'native-dxgi',
+      ready: { kind: 'ready', status: 'ok' },
+    }),
+    snapshot: async () => ({
+      status: 'ok',
+      buffer: Buffer.from([1, 2, 3]),
+      durationMs: 29_500,
+      originMs: anchors[0].wallMs,
+      clockAnchors: anchors,
+      sampleCount: 443,
+      keyframes: 74,
+    }),
+  }
+  const context = vm.createContext({
+    assignedDisplays: new Map([[5, 17]]),
+    dxgiReplayServices: new Map([[17, { manager }]]),
+    shippingReplaySuspended: new Set([17]),
+    REPLAY_TIMEOUT_MS: 1_000,
+    displayCadence: { reset: () => {} },
+    rememberNativeReplayRequest: () => {},
+    logInfo: () => {},
+    setShippingReplayWorkload: () => {},
+    Buffer,
+  })
+  run(fn(main, 'requestNativeReplay'), context)
+  const result = await context.requestNativeReplay(
+    { isDestroyed: () => false, webContents: { id: 5 } },
+    'native-source-clock',
+  )
+  assert.deepEqual(result.replay.clockAnchors, anchors)
+  assert.deepEqual(result.replay.sourceClockAnchors, anchors)
 })
 console.log(`dxgi replay ownership behavior check: ${passed} passed`)

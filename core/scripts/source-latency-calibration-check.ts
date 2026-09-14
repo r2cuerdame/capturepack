@@ -3,6 +3,7 @@ import {
   buildSourceLatencyFingerprint,
   buildSourceLatencyFingerprintFromRgb,
   decideProcessorPresentationLatency,
+  decideSameFrameSourcePresentationLatency,
   decideSourceLatencyCalibration,
   decideSourcePresentationLatency,
   mapDxgiTimingReferenceEpoch,
@@ -983,6 +984,63 @@ check(
   JSON.stringify(measuredProcessorPresentation),
 )
 
+const sameFrameProcessorSamples = bridgeFrames.map((fingerprint, index) => ({
+  processorAtMs: [1_000, 1_033, 1_067, 1_100][index] ?? 0,
+  fingerprint,
+}))
+const sameFramePresentedSamples = bridgeFrames.map((fingerprint, index) => ({
+  presentedAtMs: [1_048, 1_081, 1_115, 1_148][index] ?? 0,
+  mediaTimeMs: [500, 533, 567, 600][index] ?? 0,
+  fingerprint,
+}))
+const sameFramePresentation = decideSameFrameSourcePresentationLatency(
+  960,
+  73,
+  sameFrameProcessorSamples,
+  measuredProcessorPresentation,
+  sameFramePresentedSamples,
+)
+check(
+  'the DXGI source match and rVFC bridge must share one exact processor sample',
+  sameFramePresentation.status === 'measured'
+    && sameFramePresentation.processorIndex === 1
+    && sameFramePresentation.presentedIndex === 1
+    && sameFramePresentation.latencyMs === 121
+    && sameFramePresentation.processorToPresentationMs === 48
+    && sameFramePresentation.sourceMediaTimeOriginMs === 427,
+  JSON.stringify(sameFramePresentation),
+)
+
+const missingSameFramePresentation = decideSameFrameSourcePresentationLatency(
+  960,
+  74,
+  sameFrameProcessorSamples,
+  measuredProcessorPresentation,
+  sameFramePresentedSamples,
+)
+check(
+  'independently measured source and bridge medians cannot substitute for a shared frame',
+  missingSameFramePresentation.status === 'ambiguous'
+    && missingSameFramePresentation.reason
+      === 'source-processor-sample-unavailable',
+  JSON.stringify(missingSameFramePresentation),
+)
+
+const missingSameFrameMediaTime = decideSameFrameSourcePresentationLatency(
+  960,
+  73,
+  sameFrameProcessorSamples,
+  measuredProcessorPresentation,
+  sameFramePresentedSamples.map(({ mediaTimeMs: _mediaTimeMs, ...sample }) => sample),
+)
+check(
+  'a shared pixel without its observed rVFC media time cannot create a source clock',
+  missingSameFrameMediaTime.status === 'ambiguous'
+    && missingSameFrameMediaTime.reason
+      === 'presentation-media-time-unavailable',
+  JSON.stringify(missingSameFrameMediaTime),
+)
+
 const repeatedBridgeFingerprint = decideProcessorPresentationLatency(
   [bridgeFrames[0], bridgeFrames[0], bridgeFrames[1], bridgeFrames[2]].map(
     (fingerprint, index) => ({
@@ -1232,6 +1290,31 @@ console.log('\nA measured source latency outlives the capture that found it')
     'calibration starts once in the startup observation window',
     renderer.includes('primaryStartupObservationAttempted = true')
       && renderer.includes('minimumObservationMs > 0'),
+  )
+  const calibrationStart = renderer.indexOf(
+    'async function measureChromiumSourceLatency',
+  )
+  const witnessWait = renderer.indexOf(
+    'await waitForSourcePresentationWitnesses(',
+    calibrationStart,
+  )
+  const dxgiReferenceStart = renderer.indexOf(
+    'const dxgi = await startDxgiLatencyReference()',
+    calibrationStart,
+  )
+  check(
+    'shipping observes real presentation pixels before taking the independent DXGI reference',
+    calibrationStart >= 0
+      && witnessWait > calibrationStart
+      && dxgiReferenceStart > witnessWait
+      && renderer.includes('control.presentedSamples.length < 2')
+      && renderer.includes('performance.now() + PRIMARY_READY_TIMEOUT_MS'),
+  )
+  check(
+    'shipping replay source clocks require the exact chained same-frame join',
+    renderer.includes('decideSameFrameSourcePresentationLatency(')
+      && renderer.includes("presentation.method !== 'dxgi-processor-rvfc-pixel-join'")
+      && !renderer.includes("presentation?.direct?.status !== 'measured'"),
   )
 }
 console.log(`\nsource latency calibration checks: ${passed} passed, ${failed} failed`)

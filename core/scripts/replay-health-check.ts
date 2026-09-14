@@ -390,13 +390,15 @@ console.log('\nProduction wiring')
       source.includes('decideSourceLatencyCalibration(samples, {'),
   )
   check(
-    'only independently verified same-pixel DXGI clocks can move the replay source map',
+    'only the exact DXGI-processor-rVFC same-pixel join can move the replay source map',
     !source.includes('sourceClockAnchorsFromObservedCaptureTime(') &&
       source.includes('sourceClockAnchorsFromMeasuredMediaTime(') &&
       source.includes('capturedAtMs: wallComparableTimeMs(') &&
       source.includes("calibration?.reference?.source !== 'dxgi-desktop-duplication'") &&
       source.includes("calibration.reference.timing !== 'pixel-exposure'") &&
-      source.includes("direct?.status !== 'measured'") &&
+      source.includes("presentation?.status !== 'measured'") &&
+      source.includes("presentation.method !== 'dxgi-processor-rvfc-pixel-join'") &&
+      !source.includes("presentation?.direct?.status !== 'measured'") &&
       !source.includes('alignReplayOriginToMeasuredPixels('),
   )
   const ipcSource = readFileSync(

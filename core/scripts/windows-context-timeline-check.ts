@@ -261,6 +261,41 @@ async function main(): Promise<void> {
     ],
   )
 
+  const roundedCaptureInstant = frozenRingObservations(
+    () => ({
+      surfaces: [{
+        surfaceId: 'capture-edge',
+        hwnd: '300',
+        bounds: { x: 0, y: 0, width: 100, height: 100 },
+        zOrder: 0,
+        visible: true,
+        minimized: false,
+        foreground: true,
+        executableName: 'edge.exe',
+        windowTitle: 'Capture edge',
+        className: 'EdgeWindow',
+      }],
+    }),
+    [{
+      device: 'RIGHT',
+      primary: true,
+      bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+    }],
+    [{ index: 1, focused: true, width: 1920, height: 1080 }],
+    1_000,
+    [999.6],
+  )
+  check(
+    'a measured edge sample rounding to the capture instant is persisted once',
+    roundedCaptureInstant.map((observation) => observation.tMs),
+    [1_000],
+  )
+  check(
+    'the rounded capture-instant history remains encodable',
+    exportWindowsContextTimeline(roundedCaptureInstant)?.range,
+    { start_ms: 1_000, end_ms: 1_000 },
+  )
+
   const fresh = frozenRingObservations(
     (tMs) => surfacesAt(tMs),
     monitors,

@@ -1810,6 +1810,10 @@ async function requestNativeReplay(
       durationMs: snapshot.durationMs,
       originMs: snapshot.originMs,
       clockAnchors: snapshot.clockAnchors,
+      // Native PTS is derived directly from each Desktop Duplication
+      // LastPresentTime. These anchors are therefore independently observed
+      // source-pixel exposure, not a Chromium delivery/capture-time estimate.
+      sourceClockAnchors: snapshot.clockAnchors,
       mimeType: 'video/mp4',
       replayFile: 'replay.mp4',
     },

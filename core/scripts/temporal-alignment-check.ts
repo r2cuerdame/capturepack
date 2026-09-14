@@ -320,7 +320,9 @@ check(
   'unverified getDisplayMedia captureTime remains diagnostic instead of overriding DXGI exposure',
   !sourceClockSource.includes('sourceClockAnchorsFromObservedCaptureTime(')
     && sourceClockSource.includes("calibration?.reference?.source !== 'dxgi-desktop-duplication'")
-    && sourceClockSource.includes("direct?.status !== 'measured'")
+    && sourceClockSource.includes("presentation?.status !== 'measured'")
+    && sourceClockSource.includes("presentation.method !== 'dxgi-processor-rvfc-pixel-join'")
+    && !sourceClockSource.includes("presentation?.direct?.status !== 'measured'")
     && captureSource.includes('capturedAtMs: wallComparableTimeMs(')
     && captureSource.includes('metadata.captureTime,'),
 )
