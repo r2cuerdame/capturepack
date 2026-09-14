@@ -1,5 +1,6 @@
 // Isolated #240 workload: real lane bookkeeping, synthetic tracker protocol.
 // No Electron app, UIA provider, desktop capture, encoder, or forced GC.
+import { existsSync } from 'node:fs'
 import { ControlLane } from '../src/main/context/controlLane'
 import { setTimeout as delay } from 'node:timers/promises'
 
@@ -60,7 +61,21 @@ async function main(): Promise<void> {
     })
   }
   emit({ type: 'ready', pid: process.pid })
-  if (!quick) await delay(1500) // Let the independent OS sampler attach.
+  if (!quick) {
+    const gate = process.argv.find((arg) => arg.startsWith('--sample-gate='))
+      ?.slice('--sample-gate='.length)
+    if (gate === undefined) {
+      await delay(1500)
+    } else {
+      const deadline = Date.now() + 45_000
+      while (!existsSync(gate)) {
+        if (Date.now() >= deadline) {
+          throw new Error('process sampler did not establish three exact-PID baseline samples')
+        }
+        await delay(100)
+      }
+    }
+  }
   snapshot('cold')
   const end = quick ? 120_000 : 7_200_000
   for (now = 2_000; now <= end; now += 2_000) {

@@ -1,13 +1,16 @@
 param(
   [Parameter(Mandatory = $true)][int[]]$TargetProcessId,
   [ValidateRange(1, 120)][int]$DurationSeconds = 60,
-  [ValidateRange(200, 10000)][int]$IntervalMs = 1000
+  [ValidateRange(200, 10000)][int]$IntervalMs = 1000,
+  [string]$ReadyFile = ''
 )
 # Read-only, explicit PIDs only. Never discover/launch/stop installed apps.
 $ErrorActionPreference = 'Stop'
 $until = [DateTime]::UtcNow.AddSeconds($DurationSeconds)
 $previous = @{}
 $identities = @{}
+$sampleCounts = @{}
+$readyWritten = $false
 $gpuAvailable = $true
 while ([DateTime]::UtcNow -lt $until) {
   $gpuEngines = @()
@@ -65,11 +68,29 @@ while ([DateTime]::UtcNow -lt $until) {
         encoderSessionNote = 'Not exposed by Windows process counters; video-encode engines are reported when available.'
       }
     } | ConvertTo-Json -Compress -Depth 8
+    if ($sampleCounts.ContainsKey($targetId)) {
+      $sampleCounts[$targetId] += 1
+    } else {
+      $sampleCounts[$targetId] = 1
+    }
     } catch {
       # Completion between Get-Process and property reads is ordinary. Other
       # errors remain failures instead of being silently reported as zero.
       if (-not $target.HasExited) { throw }
     } finally { $target.Dispose() }
+  }
+  if (-not $readyWritten -and $ReadyFile.Length -gt 0) {
+    $allReady = $true
+    foreach ($targetId in $TargetProcessId) {
+      if (-not $sampleCounts.ContainsKey($targetId) -or $sampleCounts[$targetId] -lt 3) {
+        $allReady = $false
+        break
+      }
+    }
+    if ($allReady) {
+      [System.IO.File]::WriteAllText($ReadyFile, "three exact-PID samples collected`n")
+      $readyWritten = $true
+    }
   }
   if ($alive -eq 0) { break }
   Start-Sleep -Milliseconds $IntervalMs
