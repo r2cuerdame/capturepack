@@ -198,9 +198,10 @@
         <span class="still-kicker" data-i18n="privacy_kicker">LOCAL DOES NOT MEAN REDACTED</span>
         <h2 id="privacy-title" data-i18n="privacy_title">Review the original before sharing.</h2>
       </div>
-      <p data-i18n="privacy_body">CapturePack uploads no captures, telemetry or crash reports; the optional GitHub
-      update check can be disabled, and MCP can be stopped in Settings. Blur is non-destructive: annotated views are
-      protected, but snapshot.png and the original replay in a full pack remain unredacted.</p>
+      <p data-i18n="privacy_body">CapturePack uploads no captures or crash reports. Once per local day, the app and
+      this site send PurplePulse only a random install ID, version, OS, and platform — never a username, device name,
+      or capture data. Blur is non-destructive: annotated views are protected, but snapshot.png and the original
+      replay in a full pack remain unredacted.</p>
     </aside>
 
   </main>
@@ -221,6 +222,7 @@
   </footer>
 
   <script src="i18n.js"></script>
+  <script src="telemetry.js"></script>
   <script>
     // Point Download at the latest installer directly; fall back to the releases page.
     fetch('https://api.github.com/repos/r2cuerdame/capturepack/releases/latest')
