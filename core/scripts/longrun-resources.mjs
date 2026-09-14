@@ -22,6 +22,7 @@ const output = resolve(args.find(a => a.startsWith('--artifacts='))?.slice(12)
 if (existsSync(output)) throw new Error('Use a new artifact directory; previous evidence must not be overwritten')
 mkdirSync(output, { recursive: true })
 const bundle = resolve(output, 'worker.cjs')
+const samplerReady = resolve(output, 'sampler-ready')
 await build({
   entryPoints: [resolve(core, 'scripts/longrun-resource-worker.ts')],
   outfile: bundle, bundle: true, platform: 'node', format: 'cjs',
@@ -59,11 +60,19 @@ function run(exe, childArgs, timeoutMs, onStart) {
 }
 let sampling
 const worker = await run(process.execPath,
-  ['--max-old-space-size=256', bundle, ...(quick ? ['--quick'] : []), ...(baseline ? ['--observe-only'] : [])],
+  [
+    '--max-old-space-size=256', bundle,
+    ...(quick ? ['--quick'] : []),
+    ...(baseline ? ['--observe-only'] : []),
+    ...(!quick && process.platform === 'win32'
+      ? [`--sample-gate=${samplerReady}`]
+      : []),
+  ],
   60_000, pid => {
     if (!quick && process.platform === 'win32') sampling = run('powershell.exe', [
       '-NoProfile', '-NonInteractive', '-File', resolve(core, 'scripts/sample-process-resources.ps1'),
       '-TargetProcessId', String(pid), '-DurationSeconds', '60', '-IntervalMs', '1000',
+      '-ReadyFile', samplerReady,
     ], 65_000)
   })
 const sampler = sampling ? await sampling : null
