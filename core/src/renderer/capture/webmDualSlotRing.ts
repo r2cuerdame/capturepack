@@ -14,6 +14,12 @@ export interface WebmDualSlotReplay {
   startAtMs: number
 }
 
+interface PreparedWebmDualSlotReplay {
+  source: Blob
+  durationMs: number
+  startAtMs: number
+}
+
 export interface WebmDualSlotOptions {
   generation: number
   segmentMs: number
@@ -22,6 +28,7 @@ export interface WebmDualSlotOptions {
   stopTimeoutMs: number
   timers: WebmDualSlotTimers
   createRecorder(): MediaRecorder
+  readBlob?(source: Blob): Promise<ArrayBuffer>
   discardRecorderOutput(): boolean
   onBytes(bytes: number): void
   onFailure(message: string, generation: number): void
@@ -91,12 +98,27 @@ export class WebmDualSlotRing {
         // One failed maintenance rotation must not poison a later request.
       })
       .then(() => this.captureNow(requestedAtMs))
+    // A Blob conversion is browser-owned and cannot be cancelled. Keep only
+    // the recorder stop/replacement inside the slot lifecycle queue so a slow
+    // conversion cannot prevent the two live slots from rotating and pruning
+    // their bounded-duration chunk lists.
     this.lifecycleQueue = operation.then(
       () => undefined,
       () => undefined,
     )
     try {
-      return await operation
+      const prepared = await operation
+      if (prepared === null) return null
+      const buffer = await (
+        this.options.readBlob?.(prepared.source) ??
+        prepared.source.arrayBuffer()
+      )
+      if (this.disposed) return null
+      return {
+        buffer,
+        durationMs: prepared.durationMs,
+        startAtMs: prepared.startAtMs,
+      }
     } catch (err) {
       this.fail(`WebM replay assembly failed: ${describe(err)}`)
       return null
@@ -270,7 +292,7 @@ export class WebmDualSlotRing {
 
   private async captureNow(
     requestedAtMs: number,
-  ): Promise<WebmDualSlotReplay | null> {
+  ): Promise<PreparedWebmDualSlotReplay | null> {
     if (this.disposed) return null
     const selected = this.olderRecording()
     if (selected === null) return null
@@ -311,15 +333,16 @@ export class WebmDualSlotRing {
       return null
     }
     const source = new Blob(session.chunks, { type: this.options.mimeType })
-    const buffer = await source.arrayBuffer()
     const durationMs = Math.max(
       0,
       Math.round(requestedAtMs - session.startedAtMs),
     )
     const startAtMs = session.startedAtMs
+    // Blob construction takes its own immutable reference to the parts. The
+    // stopped recorder and its chunk array no longer own replay conversion.
     releaseRecorderReferences(recorder, session.chunks)
     if (this.disposed) return null
-    return { buffer, durationMs, startAtMs }
+    return { source, durationMs, startAtMs }
   }
 
   private fail(message: string): void {

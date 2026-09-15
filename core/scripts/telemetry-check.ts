@@ -1,6 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { sendDailyTelemetry, telemetryOs, type TelemetryPayload } from '../src/main/telemetry'
+import { dailyTelemetryLaunchPolicy, sendDailyTelemetry, telemetryOs, type TelemetryPayload } from '../src/main/telemetry'
 
 function requiredCheckDirectory(): string {
   const directory = process.env.CAPTUREPACK_TELEMETRY_CHECK_DIR
@@ -27,6 +27,24 @@ const post = async (payload: TelemetryPayload): Promise<void> => {
 }
 
 async function main(): Promise<void> {
+const production = dailyTelemetryLaunchPolicy(true, {})
+const qa = dailyTelemetryLaunchPolicy(true, { CAPTUREPACK_FIELD_QA: '1', CAPTUREPACK_TELEMETRY_ENVIRONMENT: 'prod' })
+const test = dailyTelemetryLaunchPolicy(true, { CAPTUREPACK_TELEMETRY_ENVIRONMENT: 'test' })
+const dev = dailyTelemetryLaunchPolicy(true, { CAPTUREPACK_TELEMETRY_ENVIRONMENT: 'dev' })
+check('packaged production keeps the existing identity file and omitted environment', production.enabled && production.stateFile === 'purplepulse.json' && production.environment === undefined)
+check('source development never emits production telemetry', !dailyTelemetryLaunchPolicy(false, {}).enabled)
+check('explicit test mode does not enable unpackaged collection', !dailyTelemetryLaunchPolicy(false, { CAPTUREPACK_TELEMETRY_ENVIRONMENT: 'test' }).enabled)
+check('field QA always overrides a production environment request', qa.enabled && qa.environment === 'test')
+check('test mode uses a separate persistent identity and daily gate', test.enabled && test.stateFile === 'purplepulse.test.json' && test.environment === 'test')
+check('dev mode is isolated from test and production', dev.enabled && dev.stateFile === 'purplepulse.dev.json' && dev.environment === 'dev')
+check('invalid environment fails closed instead of polluting production', !dailyTelemetryLaunchPolicy(true, { CAPTUREPACK_TELEMETRY_ENVIRONMENT: 'qa-typo' }).enabled)
+let qaPayload: TelemetryPayload | undefined
+await sendDailyTelemetry({
+  statePath: join(checkDirectory, qa.stateFile), version: 'qa', os: 'windows',
+  environment: qa.environment, now: new Date(2026, 8, 14, 12),
+  createInstallId: () => SECOND_ID, post: async payload => { qaPayload = payload },
+})
+check('packaged QA policy reaches the sender as test', qaPayload?.environment === 'test')
 await sendDailyTelemetry({
   statePath,
   version: '0.5.0',
@@ -132,3 +150,8 @@ void main().catch((error: unknown) => {
   console.error(error)
   process.exitCode = 1
 })
+
+for (const flag of ['true', '0', '', 'false', 'typo']) {
+  check('invalid field QA mode fails closed: ' + JSON.stringify(flag),
+    !dailyTelemetryLaunchPolicy(true, { CAPTUREPACK_FIELD_QA: flag, CAPTUREPACK_TELEMETRY_ENVIRONMENT: 'prod' }).enabled)
+}

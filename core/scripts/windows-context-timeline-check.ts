@@ -15,6 +15,7 @@ import {
   loadWindowsContextHistory,
   restoreWindowsContextTimeline,
   trimWindowsContextTimeline,
+  windowsContextReplayClockMap,
   WINDOWS_CONTEXT_MAX_FILE_BYTES,
   WINDOWS_CONTEXT_TIMELINE_LIMITS,
   WINDOWS_CONTEXT_TIMELINE_PACK_PATH,
@@ -260,6 +261,177 @@ async function main(): Promise<void> {
       { title: 'Right', display: 2, x: 100 },
     ],
   )
+
+  const roundedCaptureInstant = frozenRingObservations(
+    () => ({
+      surfaces: [{
+        surfaceId: 'capture-edge',
+        hwnd: '300',
+        bounds: { x: 0, y: 0, width: 100, height: 100 },
+        zOrder: 0,
+        visible: true,
+        minimized: false,
+        foreground: true,
+        executableName: 'edge.exe',
+        windowTitle: 'Capture edge',
+        className: 'EdgeWindow',
+      }],
+    }),
+    [{
+      device: 'RIGHT',
+      primary: true,
+      bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+    }],
+    [{ index: 1, focused: true, width: 1920, height: 1080 }],
+    1_000,
+    [999.6],
+  )
+  check(
+    'a measured edge sample rounding to the capture instant is persisted once',
+    roundedCaptureInstant.map((observation) => observation.tMs),
+    [1_000],
+  )
+  check(
+    'the rounded capture-instant history remains encodable',
+    exportWindowsContextTimeline(roundedCaptureInstant)?.range,
+    { start_ms: 1_000, end_ms: 1_000 },
+  )
+
+  const fractionalNativeDurationMs = 29_485.933333333334
+  const exactFractionalQueries: number[] = []
+  const fractionalNativeEdge = frozenRingObservations(
+    (tMs) => {
+      exactFractionalQueries.push(tMs)
+      return {
+        surfaces: [{
+          surfaceId: 'fractional-native-edge',
+          hwnd: '301',
+          bounds: { x: 0, y: 0, width: 100, height: 100 },
+          zOrder: 0,
+          visible: true,
+          minimized: false,
+          foreground: true,
+          executableName: 'native.exe',
+          windowTitle: 'Fractional native edge',
+          className: 'NativeWindow',
+        }],
+      }
+    },
+    [{
+      device: 'RIGHT',
+      primary: true,
+      bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+    }],
+    [{ index: 1, focused: true, width: 1920, height: 1080 }],
+    fractionalNativeDurationMs,
+    [fractionalNativeDurationMs],
+  )
+  check(
+    'the exact fractional native anchor is queried but conservatively labelled inside the media',
+    {
+      queries: exactFractionalQueries,
+      labels: fractionalNativeEdge.map((observation) => observation.tMs),
+    },
+    {
+      queries: [fractionalNativeDurationMs],
+      labels: [29_485],
+    },
+  )
+  check(
+    'the production fractional native range passes the strict integer encoder without outliving media',
+    exportWindowsContextTimeline(fractionalNativeEdge, {
+      startMs: 0,
+      endMs: Math.floor(fractionalNativeDurationMs),
+      rebaseToMs: 0,
+    })?.range,
+    { start_ms: 0, end_ms: 29_485 },
+  )
+
+  const nativeClockBase = fractionalNativeEdge[0]
+  if (nativeClockBase === undefined) throw new Error('native clock fixture had no observation')
+  const nativeClockObservations = [0, 43, 100, 139, 239, 300].map((tMs) => {
+    const observation = cloneAt(nativeClockBase, tMs)
+    observation.windows[0]!.bounds.x =
+      tMs === 43 ? 1_144 : tMs === 139 ? 1_600 : 1_028
+    return observation
+  })
+  const nativeClockTimeline = exportWindowsContextTimeline(
+    nativeClockObservations,
+    {
+      startMs: 0,
+      endMs: 300,
+      rebaseToMs: 0,
+      replayClock: {
+        basis: 'native-source-exposure',
+        anchors: [
+          { replay_ms: 0, context_ms: 0 },
+          { replay_ms: 100, context_ms: 43 },
+          { replay_ms: 200, context_ms: 139 },
+          { replay_ms: 300, context_ms: 239 },
+        ],
+        max_extrapolation_ms: 100,
+      },
+    },
+  )
+  const reopenedNativeClock = nativeClockTimeline === null
+    ? null
+    : decodeWindowsContextTimeline(JSON.parse(JSON.stringify(nativeClockTimeline)))
+  const reopenedNativeMap = reopenedNativeClock === null
+    ? null
+    : windowsContextReplayClockMap(reopenedNativeClock.timeline)
+  const reopenedNativeSession = new ContextSession('native-source-clock-reopen', {
+    displays: [{ index: 1, focused: true, width: 1920, height: 1080 }],
+    replayDurationMs: 300,
+    observation: null,
+    dropped: false,
+    ...(reopenedNativeMap === null ? {} : { replayClockMap: reopenedNativeMap }),
+  })
+  if (reopenedNativeClock !== null) {
+    reopenedNativeSession.adoptAll(reopenedNativeClock.observations)
+  }
+  const mappedNativeFrame = await reopenedNativeSession.frameAt(100)
+  check(
+    'reopened production session maps a measured 57-61ms native source offset before picking',
+    {
+      persisted: nativeClockTimeline?.replay_clock,
+      materialized: mappedNativeFrame.accuracy.materializedTimeMs,
+      x: mappedNativeFrame.displays[0]?.candidates[0]?.bounds.x,
+    },
+    {
+      persisted: {
+        basis: 'native-source-exposure',
+        anchors: [
+          { replay_ms: 0, context_ms: 0 },
+          { replay_ms: 100, context_ms: 43 },
+          { replay_ms: 200, context_ms: 139 },
+          { replay_ms: 300, context_ms: 239 },
+        ],
+        max_extrapolation_ms: 100,
+      },
+      materialized: 43,
+      x: 1_144,
+    },
+  )
+  const outsideNativeClock = await reopenedNativeSession.frameAt(1_000)
+  check(
+    'a declared native clock refuses queries beyond measured projection instead of falling back to identity',
+    {
+      coverage: outsideNativeClock.accuracy.coverage,
+      candidates: outsideNativeClock.displays.flatMap((display) => display.candidates).length,
+    },
+    { coverage: 'none', candidates: 0 },
+  )
+  if (nativeClockTimeline !== null) {
+    const crossedNativeClock = JSON.parse(JSON.stringify(nativeClockTimeline)) as {
+      replay_clock: { anchors: Array<{ replay_ms: number; context_ms: number }> }
+    }
+    crossedNativeClock.replay_clock.anchors[1]!.context_ms = -1
+    check(
+      'a crossed native replay/context clock is rejected as an invalid persisted timeline',
+      decodeWindowsContextTimeline(crossedNativeClock),
+      null,
+    )
+  }
 
   const fresh = frozenRingObservations(
     (tMs) => surfacesAt(tMs),

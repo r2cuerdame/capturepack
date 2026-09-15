@@ -1,0 +1,1 @@
+field strict clock: 4 passed (wrong-time geometry rejected; declared mapping retained)

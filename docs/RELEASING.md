@@ -141,3 +141,22 @@ and four issues had no milestone at all. Renaming a shipped milestone is not the
 repair — 15 issues closed under that name and renaming rewrites their history.
 Move the open ones out, then close it with a description saying what superseded
 it.
+
+## Packaged QA telemetry
+
+Before launching a packaged build for verification, set:
+
+```powershell
+$env:CAPTUREPACK_TELEMETRY_ENVIRONMENT = 'test'
+```
+
+The field harness also forces `test` when `CAPTUREPACK_FIELD_QA=1`, even if an
+inherited telemetry override says `prod`. Test and development modes keep their
+identity and daily attempt state in `purplepulse.test.json` and
+`purplepulse.dev.json`; production continues to use the existing
+`purplepulse.json`. Unknown overrides disable collection rather than silently
+sending production data. Unpackaged development runs remain uncounted.
+
+This separation prevents QA from creating production users or consuming a real
+user's production daily ping. It does not replace the installed capture and
+long-run release acceptance gates.
