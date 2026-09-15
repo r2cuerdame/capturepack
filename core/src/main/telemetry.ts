@@ -117,3 +117,30 @@ export async function sendDailyTelemetry(options: DailyTelemetryOptions): Promis
     // Telemetry must never affect startup or surface an error to the user.
   }
 }
+
+/** Keep packaged QA out of production counts and out of the production daily gate. */
+export function dailyTelemetryLaunchPolicy(
+  isPackaged: boolean,
+  env: Readonly<Record<string, string | undefined>>,
+): { enabled: boolean; stateFile: string; environment?: 'test' | 'dev' } {
+  if (env.CAPTUREPACK_FIELD_QA !== undefined && env.CAPTUREPACK_FIELD_QA !== '1') {
+    return { enabled: false, stateFile: 'purplepulse.json' }
+  }
+  const requested = env.CAPTUREPACK_FIELD_QA === '1'
+    ? 'test'
+    : env.CAPTUREPACK_TELEMETRY_ENVIRONMENT
+  if (
+    !isPackaged ||
+    (requested !== undefined && !['prod', 'test', 'dev'].includes(requested))
+  ) {
+    return { enabled: false, stateFile: 'purplepulse.json' }
+  }
+  if (requested === 'test' || requested === 'dev') {
+    return {
+      enabled: true,
+      stateFile: `purplepulse.${requested}.json`,
+      environment: requested,
+    }
+  }
+  return { enabled: true, stateFile: 'purplepulse.json' }
+}
