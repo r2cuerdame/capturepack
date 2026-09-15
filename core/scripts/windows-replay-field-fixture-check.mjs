@@ -1,4 +1,5 @@
 import './windows-replay-process-snapshot-check.mjs'
+import './windows-replay-continuous-sampler-check.mjs'
 import './windows-replay-field-clock-check.mjs'
 import { createRequire } from 'node:module'
 import { readFileSync } from 'node:fs'
@@ -145,6 +146,15 @@ check(
   fieldSource.includes('$remaining=Get-CimInstance Win32_Process')
     && fieldSource.includes("$remaining.CreationDate.ToUniversalTime().ToString('o')")
     && !fieldSource.includes("Get-Process -Id ([int]$target.ProcessId)"),
+)
+check(
+  'performance sampling uses one asynchronous owned sampler and stops it before fault injection',
+  fieldSource.includes('performanceSampler = createContinuousProcessSampler({')
+    && fieldSource.includes('spawnProcess: (command, args, options) => track(spawn(')
+    && fieldSource.includes('await performanceSampler.stop()')
+    && fieldSource.indexOf('await performanceSampler.stop()')
+      < fieldSource.indexOf("setStage('native-fallback-proof'")
+    && !fieldSource.includes('const snapshot = await processTreeSnapshot(appProcess.pid)'),
 )
 check(
   'field replay hashing preserves the encoded VFR cadence instead of dropping a valid frame',

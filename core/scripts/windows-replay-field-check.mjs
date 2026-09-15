@@ -27,6 +27,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import { terminateProcessTree } from './process-tree.mjs'
+import { createContinuousProcessSampler } from './windows-replay-continuous-sampler.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const coreDir = path.resolve(here, '..')
@@ -1996,6 +1997,7 @@ const report = {
 
 let fixture = null
 let appProcess = null
+let performanceSampler = null
 const processSamples = []
 let fixtureStdout = null
 let fixtureStderr = null
@@ -2134,27 +2136,32 @@ try {
   appProcess.stdout.pipe(appStdout)
   appProcess.stderr.pipe(appStderr)
 
+  performanceSampler = createContinuousProcessSampler({
+    rootPid: appProcess.pid,
+    intervalMs: sampleIntervalMs,
+    spawnProcess: (command, args, options) => track(spawn(command, args, {
+      ...options,
+      cwd: coreDir,
+    })),
+    stopProcess: stopTracked,
+    onSample: (sample) => {
+      appendFileSync(processSamplesPath, `${JSON.stringify(sample)}\n`, 'utf8')
+      if (Array.isArray(sample.processes)) processSamples.push(sample)
+    },
+    onError: (error) => {
+      appendFileSync(
+        processSamplesPath,
+        `${JSON.stringify({ wall_time_ms: Date.now(), error: String(error) })}\n`,
+        'utf8',
+      )
+    },
+  })
+
   const captureDeadline =
     Date.now() + captureDelaySeconds * 1000 + 180_000
-  let nextSampleAt = 0
   let foundPack = null
   let lastProgressAt = 0
   while (!interrupted && Date.now() <= captureDeadline) {
-    if (Date.now() >= nextSampleAt) {
-      try {
-        const snapshot = await processTreeSnapshot(appProcess.pid)
-        const sample = { wall_time_ms: Date.now(), ...snapshot }
-        processSamples.push(sample)
-        appendFileSync(processSamplesPath, `${JSON.stringify(sample)}\n`, 'utf8')
-      } catch (error) {
-        appendFileSync(
-          processSamplesPath,
-          `${JSON.stringify({ wall_time_ms: Date.now(), error: String(error) })}\n`,
-          'utf8',
-        )
-      }
-      nextSampleAt = Date.now() + sampleIntervalMs
-    }
     foundPack = packDirectory()
     if (foundPack !== null) break
     if (Date.now() - lastProgressAt >= 15_000) {
@@ -2172,6 +2179,8 @@ try {
   if (interrupted) throw new Error('field check was interrupted')
   if (foundPack === null) throw new Error('bounded wait expired before a CapturePack was saved')
   report.artifacts.pack = foundPack
+  await performanceSampler.stop()
+  performanceSampler = null
 
   setStage('settling-pack', 'waiting for independently persisted context')
   const contextPath = path.join(foundPack, 'plugins', 'windows-context', 'timeline.json')
@@ -3320,6 +3329,10 @@ try {
   report.result = 'BROKEN'
 } finally {
   setStage('cleanup', 'terminating every spawned process')
+  if (performanceSampler !== null) {
+    await performanceSampler.stop()
+    performanceSampler = null
+  }
   try {
     if (fixture !== null && !existsSync(fixtureStopPath)) {
       writeFileSync(fixtureStopPath, 'stop\n', 'utf8')
