@@ -35,8 +35,12 @@ export const DXGI_REPLAY_CURSOR_COMPOSITED_FLAG = 1 << 17
 const DXGI_REPLAY_SERVICE_MAGIC = Buffer.from('CPNSRV01', 'ascii')
 const DXGI_REPLAY_SERVICE_VERSION = 2
 const DEFAULT_STARTUP_TIMEOUT_MS = 10_000
-const DEFAULT_ENCODER_ACTIVATION_RETRY_DELAY_MS = 250
-const MAXIMUM_ENCODER_ACTIVATION_ATTEMPTS = 3
+const DEFAULT_CAPABILITY_RETRY_DELAY_MS = 250
+const MAXIMUM_CAPABILITY_ATTEMPTS = 3
+const RETRYABLE_CAPABILITY_REASONS = new Set([
+  'device-failed',
+  'encoder-activation-failed',
+])
 const DEFAULT_SNAPSHOT_TIMEOUT_MS = 15_000
 const STOP_TIMEOUT_MS = 1_000
 const MAX_STDERR_BYTES = 8_192
@@ -584,7 +588,7 @@ export interface DxgiReplayRuntimeManagerOptions {
   readonly fileExists?: (value: string) => boolean
   readonly probe?: typeof probeDxgiReplayCapability
   /** Test seam; production retries only the observed transient MFT activation failure. */
-  readonly encoderActivationRetryDelayMs?: number
+  readonly capabilityRetryDelayMs?: number
   readonly spawnProcess?: (executable: string, args: readonly string[]) => DxgiReplayRuntimeProcess
   readonly onFallback?: (selection: Extract<DxgiReplayRuntimeSelection, { backend: 'shipping' }>) => void
   /** Late READY after the startup deadline promotes the still-warming native service. */
@@ -647,7 +651,7 @@ export class DxgiReplayRuntimeManager {
     let capability: DxgiReplayCapability = {
       status: 'unavailable', reason: 'encoder-activation-failed', stages: [],
     }
-    for (let attempt = 0; attempt < MAXIMUM_ENCODER_ACTIVATION_ATTEMPTS; attempt += 1) {
+    for (let attempt = 0; attempt < MAXIMUM_CAPABILITY_ATTEMPTS; attempt += 1) {
       try {
         capability = await (this.options.probe ?? probeDxgiReplayCapability)({
           deviceName: request.deviceName,
@@ -663,13 +667,13 @@ export class DxgiReplayRuntimeManager {
       }
       if (
         capability.status === 'available'
-        || capability.reason !== 'encoder-activation-failed'
-        || attempt + 1 >= MAXIMUM_ENCODER_ACTIVATION_ATTEMPTS
+        || !RETRYABLE_CAPABILITY_REASONS.has(capability.reason)
+        || attempt + 1 >= MAXIMUM_CAPABILITY_ATTEMPTS
       ) break
       await new Promise<void>((resolve) => setTimeout(
         resolve,
-        this.options.encoderActivationRetryDelayMs
-          ?? DEFAULT_ENCODER_ACTIVATION_RETRY_DELAY_MS,
+        this.options.capabilityRetryDelayMs
+          ?? DEFAULT_CAPABILITY_RETRY_DELAY_MS,
       ))
     }
     if (capability.status !== 'available') {
