@@ -12,7 +12,7 @@
 // time; what "all" adds is EXPORT work (one more snapshot + replay fetch + file
 // write per display). Fixed mode runs one encoder total (lowest CPU).
 import path from 'node:path'
-import { app, BrowserWindow, desktopCapturer, ipcMain, screen, session, webContents } from 'electron'
+import { app, BrowserWindow, desktopCapturer, ipcMain, nativeImage, screen, session, webContents } from 'electron'
 import type { Display, IpcMainEvent, WebContents } from 'electron'
 import { REPLAY_TIMEOUT_MS } from '../shared/captureTimeouts'
 import { IPC } from '../shared/ipc'
@@ -57,6 +57,7 @@ import {
   shouldSimulateNoFrames,
 } from './displayMediaPolicy'
 import {
+  captureNativeReplaySnapshot,
   NativeReplayFallbackManager,
   type NativeReplayFrame,
 } from './nativeReplayFallback'
@@ -1551,6 +1552,24 @@ async function snapshotGroup(
         logError(`[capture] ${message}`)
       } else {
         logError(`[capture] ${message}:`, read.error)
+      }
+      if (process.platform === 'win32') {
+        try {
+          const frame = await captureNativeReplaySnapshot(
+            path.join(__dirname, '../scripts/native-replay-capture.exe'),
+            screen.dipToScreenRect(null, d.bounds),
+          )
+          const image = nativeImage.createFromBuffer(frame.jpeg)
+          const size = image.getSize()
+          if (image.isEmpty() || size.width !== frame.width || size.height !== frame.height) {
+            throw new Error('native snapshot JPEG dimensions were invalid')
+          }
+          into.set(d.id, { png: image.toPNG(), width: size.width, height: size.height })
+          logWarn(`[capture] display ${d.id}: Chromium snapshot unavailable; used exact-display GDI still fallback`)
+          continue
+        } catch (error) {
+          logError(`[capture] display ${d.id}: native still fallback failed:`, error)
+        }
       }
       if (d.id === requiredDisplayId) throw new Error(message)
       continue

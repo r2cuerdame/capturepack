@@ -4,6 +4,7 @@ import {
   NativeReplayFallbackManager,
   NativeReplayFrameParser,
   nativeFallbackArguments,
+  nativeSnapshotArguments,
   nativeFallbackFps,
   nativeFallbackRequestedFps,
   nativeReplayHelperPath,
@@ -90,6 +91,12 @@ const capped4k = nativeFallbackArguments({
   width: 1920,
   height: 1080,
 })
+
+const snapshot4k = nativeSnapshotArguments({ x: 0, y: 0, width: 3840, height: 2160 })
+check(
+  'native still fallback retains exact physical display identity and resolution',
+  snapshot4k.join(' ') === '--left 0 --top 0 --expected-native-width 3840 --expected-native-height 2160 --width 3840 --height 2160 --fps 5',
+)
 check(
   'degraded 4K fallback preserves aspect while bounding JPEG cost',
   Number(capped4k[capped4k.indexOf('--width') + 1]) ===

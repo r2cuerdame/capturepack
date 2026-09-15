@@ -163,6 +163,12 @@ check(
     && shippingRequest.includes('{ holdAfterCapture: true }'),
 )
 check(
+  'strict Chromium still failure uses the exact-display native fallback before aborting capture',
+  capture.includes('captureNativeReplaySnapshot(')
+    && capture.includes('screen.dipToScreenRect(null, d.bounds)')
+    && capture.includes('nativeImage.createFromBuffer(frame.jpeg)'),
+)
+check(
   'normal still snapshot implementation has no native replay dependency',
   snapshots.includes('snapshotGroup(withFocused, focused.id, result)')
     && !snapshots.includes('dxgiReplay')
