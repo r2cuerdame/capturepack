@@ -112,22 +112,6 @@ export function nativeFallbackArguments(
   ]
 }
 
-export function nativeSnapshotArguments(
-  nativeBounds: { x: number; y: number; width: number; height: number },
-): string[] {
-  const width = Math.max(1, Math.round(nativeBounds.width))
-  const height = Math.max(1, Math.round(nativeBounds.height))
-  return [
-    '--left', String(Math.round(nativeBounds.x)),
-    '--top', String(Math.round(nativeBounds.y)),
-    '--expected-native-width', String(width),
-    '--expected-native-height', String(height),
-    '--width', String(width),
-    '--height', String(height),
-    '--fps', String(NATIVE_REPLAY_MAX_FPS),
-  ]
-}
-
 export class NativeReplayFrameParser {
   private buffered = Buffer.alloc(0)
 
@@ -202,57 +186,6 @@ export function nativeReplayHelperPath(packedPath: string): string | null {
     `${path.sep}app.asar.unpacked${path.sep}`,
   )
   return [unpacked, packedPath].find((candidate) => existsSync(candidate)) ?? null
-}
-
-/** One exact-display GDI frame when Chromium cannot enumerate that desktop. */
-export async function captureNativeReplaySnapshot(
-  packedHelperPath: string,
-  nativeBounds: { x: number; y: number; width: number; height: number },
-  timeoutMs = FIRST_FRAME_TIMEOUT_MS,
-): Promise<NativeReplayFrame> {
-  const helperPath = nativeReplayHelperPath(packedHelperPath)
-  if (helperPath === null) throw new Error(`native replay helper is missing: ${packedHelperPath}`)
-  return await new Promise<NativeReplayFrame>((resolve, reject) => {
-    const child = spawn(helperPath, nativeSnapshotArguments(nativeBounds), {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
-    })
-    const parser = new NativeReplayFrameParser()
-    let stderr = ''
-    let settled = false
-    const finish = (error: Error | null, frame?: NativeReplayFrame): void => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      child.stdin.end()
-      child.kill()
-      if (error !== null || frame === undefined) reject(error ?? new Error('native snapshot returned no frame'))
-      else resolve(frame)
-    }
-    const timer = setTimeout(() => {
-      finish(new Error(`native snapshot exceeded ${timeoutMs}ms`))
-    }, timeoutMs)
-    timer.unref()
-    child.once('error', (error) => finish(error))
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderr = (stderr + chunk.toString('utf8')).slice(-8_192)
-    })
-    child.stdout.on('data', (chunk: Buffer) => {
-      try {
-        const frame = parser.push(chunk)[0]
-        if (frame !== undefined) finish(null, frame)
-      } catch (error) {
-        finish(error instanceof Error ? error : new Error(String(error)))
-      }
-    })
-    child.once('close', (code, signal) => {
-      if (settled) return
-      finish(new Error(
-        `native snapshot helper exited ${String(code ?? signal ?? 'unknown')}`
-          + (stderr.trim() === '' ? '' : `: ${stderr.trim()}`),
-      ))
-    })
-  })
 }
 
 export class NativeReplayFallbackManager {

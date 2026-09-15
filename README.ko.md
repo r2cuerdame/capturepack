@@ -32,7 +32,7 @@ AutomationId, 프로세스를 기록하고, 브라우저에서는 보이던 페�
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [다운로드](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-현재 공개 Windows 릴리스: **CapturePack 0.5.0**. 기록에서 검토한
+현재 공개 Windows 릴리스: **CapturePack 0.5.1**. 기록에서 검토한
 **공유용 사본**(`.share.zip`)을 만들 수 있습니다. 미디어는 검토한 주석 PNG 정지
 이미지뿐이며, 생성된 README, 오프라인 뷰어, 최소 목록이 함께 들어갑니다. 원본, 모든
 동영상, 구조화된 맥락은 제외됩니다. 전체 ZIP(`.zip`)에는 원본이 계속 포함됩니다.
@@ -256,10 +256,10 @@ claude mcp add --transport http capturepack http://127.0.0.1:39393/mcp
 
 [GitHub Releases](https://github.com/r2cuerdame/capturepack/releases/latest)에서 최신 설치 프로그램을 다운로드하세요:
 
-1. `CapturePack-Setup-0.5.0.exe`와 `SHA256SUMS.txt`를 다운로드합니다.
+1. `CapturePack-Setup-0.5.1.exe`와 `SHA256SUMS.txt`를 다운로드합니다.
 2. PowerShell에서 체크섬을 확인합니다:
    ```powershell
-   Get-FileHash CapturePack-Setup-0.5.0.exe -Algorithm SHA256
+   Get-FileHash CapturePack-Setup-0.5.1.exe -Algorithm SHA256
    ```
 3. 설치 프로그램을 실행합니다. 오픈소스 코드 서명 심사 중이므로 Windows SmartScreen 경고가 표시될 수 있습니다: **추가 정보** → **실행**을 클릭하세요.
 
@@ -287,7 +287,7 @@ npm run qa:rc
 
 ## 상태
 
-**현재 공개 Windows 다운로드는 0.5.0입니다.** CapturePack은 아직 초기 단계
+**현재 공개 Windows 다운로드는 0.5.1입니다.** CapturePack은 아직 초기 단계
 프로젝트이므로, 문제를 보고할 때는 원본 팩을 보관해 두세요. 제품이 향하는 방향은
 [GOAL.md](GOAL.md)에, 다음에 올 것은 [ROADMAP.md](ROADMAP.md)에 있습니다.
 
@@ -302,7 +302,7 @@ npm run qa:rc
 - [릴리스 QA](docs/QA.md), [현재 핸드오프](docs/HANDOFF.md), [릴리스 절차](docs/RELEASING.md) — 변경 사항을 어떻게 검증하고, 인계하고, 발행하는지 다룹니다.
 - [MCP](docs/MCP.md)와 [시간 맥락 제공자 API](docs/temporal-provider-api.md) — 읽기 전용 저장 팩 접근과 맥락 제공자 연동을 안내합니다.
 
-CapturePack `0.5.0`은 애플리케이션 버전입니다. 팩의 `format_version`은 호환 가능한
+CapturePack `0.5.1`은 애플리케이션 버전입니다. 팩의 `format_version`은 호환 가능한
 포맷 변경을 따라 독립적으로 올라갑니다. 읽는 쪽은 앱 버전으로 포맷 지원 범위를
 추측하지 말고 [SPEC.md](SPEC.md)를 따라야 합니다.
 

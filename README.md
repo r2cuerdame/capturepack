@@ -33,7 +33,7 @@ account, or cloud service.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Download](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Current public Windows release: **CapturePack 0.5.0**. History creates a
+Current public Windows release: **CapturePack 0.5.1**. History creates a
 reviewed Share Copy containing annotated stills without originals, video
 containers or structured capture context; Full ZIP remains the explicit complete
 evidence export.
@@ -265,10 +265,10 @@ Tools, client setup, and settings: [docs/MCP.md](docs/MCP.md).
 
 Download the latest installer from [GitHub Releases](https://github.com/r2cuerdame/capturepack/releases/latest):
 
-1. Download `CapturePack-Setup-0.5.0.exe` and `SHA256SUMS.txt`.
+1. Download `CapturePack-Setup-0.5.1.exe` and `SHA256SUMS.txt`.
 2. Verify checksum integrity via PowerShell:
    ```powershell
-   Get-FileHash CapturePack-Setup-0.5.0.exe -Algorithm SHA256
+   Get-FileHash CapturePack-Setup-0.5.1.exe -Algorithm SHA256
    ```
 3. Run the installer. Because open-source code signing is pending, Windows SmartScreen will display an unrecognized publisher warning: click **More info** → **Run anyway**.
 
@@ -296,7 +296,7 @@ npm run qa:rc
 
 ## Status
 
-**0.5.0 is the current public Windows download.** CapturePack remains an
+**0.5.1 is the current public Windows download.** CapturePack remains an
 early-stage project, so keep the original pack when reporting a problem and see
 [GOAL.md](GOAL.md) for the product vision and [ROADMAP.md](ROADMAP.md) for what
 comes next.
@@ -318,7 +318,7 @@ hard-coded global offset.
 - [MCP](docs/MCP.md) and [temporal provider API](docs/temporal-provider-api.md)
   — read-only saved-pack access and context-provider integration.
 
-CapturePack `0.5.0` is the application version. Pack `format_version` evolves
+CapturePack `0.5.1` is the application version. Pack `format_version` evolves
 independently through additive format changes; readers must follow
 [SPEC.md](SPEC.md) rather than infer format support from the app version.
 
