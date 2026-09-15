@@ -2149,6 +2149,7 @@ try {
       if (Array.isArray(sample.processes)) processSamples.push(sample)
     },
     onError: (error) => {
+      report.failures.push(`performance sampling failed: ${String(error)}`)
       appendFileSync(
         processSamplesPath,
         `${JSON.stringify({ wall_time_ms: Date.now(), error: String(error) })}\n`,

@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+const pdhSource = readFileSync(new URL('./windows-replay-pdh.cs', import.meta.url), 'utf8')
 
 function encodePowerShell(script) {
   return Buffer.from(script, 'utf16le').toString('base64')
@@ -11,11 +13,18 @@ export function continuousSamplerScript(rootPid, intervalMs) {
 $ErrorActionPreference='Stop'
 $rootPid=[int]${String(rootPid)}
 $intervalMs=[int]${String(intervalMs)}
+$gpuCounter=$null
+$gpuInitializationError=$null
+try {
+  $pdhSource=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(pdhSource, 'utf8').toString('base64')}'))
+  Add-Type -TypeDefinition $pdhSource
+  $gpuCounter=New-Object CapturePackGpuCounter
+} catch { $gpuInitializationError=[string]$_.Exception.Message }
 $nextSample=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 # The field harness permits at most 600s of retained capture plus 30s warmup.
 # Keep an independent lifetime bound even if its parent is terminated abruptly.
 $samplingDeadline=$nextSample+900000
-while([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() -lt $samplingDeadline) {
+try { while([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() -lt $samplingDeadline) {
   try {
     $nodes=@(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine,ExecutablePath,CreationDate)
     $ids=New-Object 'System.Collections.Generic.HashSet[int]'
@@ -32,8 +41,9 @@ while([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() -lt $samplingDeadline) {
     $gpuByPid=@{}
     $gpuError=$null
     try {
-      $gpuSample=Get-Counter -Counter '\\GPU Engine(*)\\Utilization Percentage' -MaxSamples 1 -ErrorAction Stop
-      foreach($counter in @($gpuSample.CounterSamples)) {
+      if ($null -eq $gpuCounter) { throw $gpuInitializationError }
+      $gpuSample=$gpuCounter.Read()
+      foreach($counter in @($gpuSample)) {
         $instance=[string]$counter.InstanceName
         if($instance -notmatch 'pid_([0-9]+)_') { continue }
         $processId=[int]$Matches[1]
@@ -89,7 +99,7 @@ while([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() -lt $samplingDeadline) {
   $remaining=$nextSample-[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
   if($remaining -gt 0) { Start-Sleep -Milliseconds $remaining }
   else { $nextSample=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
-}
+} } finally { if ($null -ne $gpuCounter) { $gpuCounter.Dispose() } }
 `
 }
 
@@ -151,6 +161,12 @@ export function createContinuousProcessSampler({
       parsed = JSON.parse(raw)
     } catch (error) {
       reportError(`continuous sampler returned invalid JSON: ${String(error)}`)
+      return
+    }
+    if (parsed === null || typeof parsed !== 'object' || !Number.isFinite(parsed.wall_time_ms)
+      || !Array.isArray(parsed.processes) || parsed.error !== undefined) {
+      try { onSample(parsed) } catch {}
+      reportError(`continuous sampler collection failed: ${String(parsed?.error ?? 'invalid process observation')}`)
       return
     }
     resetWatchdog()

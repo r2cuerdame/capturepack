@@ -1,3 +1,4 @@
+import './windows-replay-sampler-quality-check.mjs'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
@@ -38,7 +39,7 @@ async function scenario(options, exercise) {
 
 assert.match(continuousSamplerScript(123, 1000), /while\(.*-lt \$samplingDeadline\)/)
 assert.match(continuousSamplerScript(123, 1000), /\$samplingDeadline=\$nextSample\+900000/)
-assert.match(continuousSamplerScript(123, 1000), /Get-Counter/)
+assert.match(continuousSamplerScript(123, 1000), /CapturePackGpuCounter/)
 assert.match(continuousSamplerScript(123, 1000), /handle_count=/)
 assert.match(continuousSamplerScript(123, 1000), /thread_count=/)
 assert.match(continuousSamplerScript(123, 1000), /parent_pid=/)
@@ -48,7 +49,7 @@ assert.match(continuousSamplerScript(123, 1000), /creation_date=/)
 {
   const state = await scenario({}, async ({ child, sampler, samples, errors }) => {
     child.stdout.write('{"wall_time_ms":1,"process')
-    child.stdout.write('es":[]}\r\n{"wall_time_ms":2,"gpu_available":false}\n')
+    child.stdout.write('es":[]}\r\n{"wall_time_ms":2,"gpu_available":false,"processes":[]}\n')
     assert.deepEqual(samples.map(sample => sample.wall_time_ms), [1, 2], 'split and joined NDJSON lines parse')
     assert.deepEqual(errors, [])
     await sampler.stop()
