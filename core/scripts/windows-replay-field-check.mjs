@@ -341,7 +341,7 @@ async function runBounded(
   })
 }
 
-async function processTreeSnapshot(rootPid) {
+async function processTreeSnapshot(rootPid, { includeGpu = true } = {}) {
   const script = `
 $ErrorActionPreference='Stop'
 $rootPid=[int]${String(rootPid)}
@@ -359,6 +359,7 @@ do {
 } while($added)
 $gpuByPid=@{}
 $gpuError=$null
+if (${includeGpu ? '$true' : '$false'}) {
 try {
   $gpuSample=Get-Counter -Counter '\\GPU Engine(*)\\Utilization Percentage' -MaxSamples 1 -ErrorAction Stop
   foreach($counter in @($gpuSample.CounterSamples)) {
@@ -378,6 +379,7 @@ try {
 } catch {
   $gpuError=[string]$_.Exception.Message
 }
+} else { $gpuError='not sampled (identity-only)' }
 $rows=@()
 foreach($node in $nodes) {
   if(-not $ids.Contains([int]$node.ProcessId)) { continue }
@@ -407,7 +409,10 @@ foreach($node in $nodes) {
     ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encodedPowerShell(script)],
     { timeoutMs: Math.max(15_000, sampleIntervalMs * 2), maxStdoutBytes: 4 * 1024 * 1024 },
   )
-  if (result.code !== 0) throw new Error(result.stderr || result.error || 'PowerShell sampling failed')
+  if (result.timed_out || result.overflow || result.code !== 0) {
+    const cause = result.timed_out ? 'deadline exceeded' : result.overflow ? 'output limit exceeded' : 'nonzero exit'
+    throw new Error('PowerShell process sampling failed (' + cause + '): ' + (result.error || result.stderr || 'no diagnostic output'))
+  }
   const parsed = JSON.parse(result.stdout || '{}')
   if (!Array.isArray(parsed.processes)) throw new Error('PowerShell sampling returned no process array')
   return parsed
@@ -2191,7 +2196,7 @@ try {
     const logPath = path.join(profileDir, 'logs', 'main.log')
     const beforeLog = readFileSync(logPath, 'utf8')
     measurementMainLog = beforeLog
-    const beforeProcesses = await processTreeSnapshot(appProcess.pid)
+    const beforeProcesses = await processTreeSnapshot(appProcess.pid, { includeGpu: false })
     const expectedHelper = path.join(coreDir, 'dist', 'scripts', 'dxgi-replay-ring.exe')
     const helpers = beforeProcesses.processes.filter((row) => (
       row.executable_path?.toLowerCase() === expectedHelper.toLowerCase()
@@ -2251,7 +2256,7 @@ try {
         report.native_lifecycle.fallback_log = afterLog
         return evidence.pass
       }, 45_000)
-      const afterProcesses = await processTreeSnapshot(appProcess.pid)
+      const afterProcesses = await processTreeSnapshot(appProcess.pid, { includeGpu: false })
       report.native_lifecycle.after_processes = afterProcesses
       report.native_lifecycle.helper_gone = !afterProcesses.processes.some((row) => (
         row.pid === helper.pid || row.executable_path?.toLowerCase() === expectedHelper.toLowerCase()

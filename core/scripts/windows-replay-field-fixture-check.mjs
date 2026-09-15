@@ -1,3 +1,4 @@
+import './windows-replay-process-snapshot-check.mjs'
 import './windows-replay-field-clock-check.mjs'
 import { createRequire } from 'node:module'
 import { readFileSync } from 'node:fs'

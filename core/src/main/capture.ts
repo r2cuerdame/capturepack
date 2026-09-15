@@ -50,6 +50,9 @@ import {
 } from './captureTickOwnership'
 import type { RecorderTickOwnership } from './captureTickOwnership'
 import {
+  completeDisplayMediaRequest,
+  displaySnapshotFailureMessage,
+  readDisplaySnapshot,
   selectDisplayMediaSource,
   shouldSimulateNoFrames,
 } from './displayMediaPolicy'
@@ -1367,9 +1370,9 @@ export function setupDisplayMediaHandler(): void {
   session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
     const requester = request.frame === null ? undefined : webContents.fromFrame(request.frame)
     const wantedId = requester === undefined ? undefined : assignedDisplays.get(requester.id)
-    desktopCapturer
-      .getSources({ types: ['screen'] })
-      .then((sources) => {
+    void completeDisplayMediaRequest(
+      async () => {
+        const sources = await desktopCapturer.getSources({ types: ['screen'] })
         const primaryId = String(screen.getPrimaryDisplay().id)
         const source = selectDisplayMediaSource(sources, wantedId, primaryId)
         if (wantedId !== undefined && source === undefined) {
@@ -1378,9 +1381,13 @@ export function setupDisplayMediaHandler(): void {
               'rejecting the request instead of substituting another display',
           )
         }
-        callback(source ? { video: source } : {})
-      })
-      .catch(() => callback({}))
+        return source
+      },
+      callback,
+      (stage, error) => {
+        logError(`[capture] display-media request ${stage} failed:`, error)
+      },
+    )
   })
 }
 
@@ -1486,10 +1493,9 @@ export function captureWindowForDisplay(displayId: number): BrowserWindow | null
 
 // Snapshots ONE display at its native (physical-pixel) resolution.
 //
-// `exact` refuses the "any screen" fallback: an all-displays capture must never
-// silently store the wrong screen's pixels under a display's index, whereas the
-// focused display (the pack's snapshot.png) is better served by a best-effort
-// frame than by no capture at all.
+// Every snapshot must belong to its declared display. Missing or empty sources
+// fail at the capture boundary rather than substituting another screen or
+// handing undecodable image bytes to the editor.
 export type DisplaySnapshot = { png: Buffer; width: number; height: number }
 
 /** A display's native (physical-pixel) size — what its snapshot is captured at. */
@@ -1521,15 +1527,13 @@ function replaySize(
 /**
  * ONE desktopCapturer round trip for a group of same-sized displays.
  *
- * `fallbackFor` is the one display allowed the "any screen" fallback — the
- * FOCUSED display, whose frame becomes snapshot.png and is better served by a
- * best-effort frame than by no capture at all. Every other display is matched
- * strictly by display_id: an all-displays capture must never store the wrong
- * screen's pixels under a display's index.
+ * Every display is matched strictly by display_id. A source disappearing
+ * during capture leaves that display absent; another display's pixels must
+ * never be relabeled as the missing display.
  */
 async function snapshotGroup(
   group: readonly Display[],
-  fallbackFor: number | null,
+  requiredDisplayId: number | null,
   into: Map<number, DisplaySnapshot>,
 ): Promise<void> {
   const first = group[0]
@@ -1539,14 +1543,19 @@ async function snapshotGroup(
     thumbnailSize: physicalSize(first),
   })
   for (const d of group) {
-    const matched = sources.find((s) => s.display_id === String(d.id))
-    const source = matched ?? (d.id === fallbackFor ? sources[0] : undefined)
-    if (source === undefined) {
-      logError(`[capture] no screen source available for display ${d.id}`)
+    const read = readDisplaySnapshot(sources, String(d.id))
+    if (!read.ok) {
+      const detail = displaySnapshotFailureMessage(read)
+      const message = `snapshot capture failed for display ${d.id}: ${detail}`
+      if (read.error === undefined) {
+        logError(`[capture] ${message}`)
+      } else {
+        logError(`[capture] ${message}:`, read.error)
+      }
+      if (d.id === requiredDisplayId) throw new Error(message)
       continue
     }
-    const size = source.thumbnail.getSize()
-    into.set(d.id, { png: source.thumbnail.toPNG(), width: size.width, height: size.height })
+    into.set(d.id, read.snapshot)
   }
 }
 
