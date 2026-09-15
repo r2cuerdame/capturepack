@@ -35,6 +35,8 @@ export const DXGI_REPLAY_CURSOR_COMPOSITED_FLAG = 1 << 17
 const DXGI_REPLAY_SERVICE_MAGIC = Buffer.from('CPNSRV01', 'ascii')
 const DXGI_REPLAY_SERVICE_VERSION = 2
 const DEFAULT_STARTUP_TIMEOUT_MS = 10_000
+const DEFAULT_ENCODER_ACTIVATION_RETRY_DELAY_MS = 250
+const MAXIMUM_ENCODER_ACTIVATION_ATTEMPTS = 3
 const DEFAULT_SNAPSHOT_TIMEOUT_MS = 15_000
 const STOP_TIMEOUT_MS = 1_000
 const MAX_STDERR_BYTES = 8_192
@@ -581,6 +583,8 @@ export interface DxgiReplayRuntimeManagerOptions {
   readonly nowMs?: () => number
   readonly fileExists?: (value: string) => boolean
   readonly probe?: typeof probeDxgiReplayCapability
+  /** Test seam; production retries only the observed transient MFT activation failure. */
+  readonly encoderActivationRetryDelayMs?: number
   readonly spawnProcess?: (executable: string, args: readonly string[]) => DxgiReplayRuntimeProcess
   readonly onFallback?: (selection: Extract<DxgiReplayRuntimeSelection, { backend: 'shipping' }>) => void
   /** Late READY after the startup deadline promotes the still-warming native service. */
@@ -640,19 +644,33 @@ export class DxgiReplayRuntimeManager {
     if (helper === null || !fileExists(helper)) return this.setFallback('helper-missing')
     const identityArgs = dxgiReplayCapabilityArguments(request)
     if (identityArgs === null) return this.setFallback('capability-unavailable', 'invalid-request')
-    let capability: DxgiReplayCapability
-    try {
-      capability = await (this.options.probe ?? probeDxgiReplayCapability)({
-        deviceName: request.deviceName,
-        bounds: request.bounds,
-        platform,
-        helperPath: helper,
-      })
-    } catch (error) {
-      return this.setFallback('capability-unavailable', String(error))
+    let capability: DxgiReplayCapability = {
+      status: 'unavailable', reason: 'encoder-activation-failed', stages: [],
     }
-    if (this.lifecycleGeneration !== startGeneration) {
-      return { backend: 'shipping', reason: 'native-not-ready', detail: 'start was cancelled' }
+    for (let attempt = 0; attempt < MAXIMUM_ENCODER_ACTIVATION_ATTEMPTS; attempt += 1) {
+      try {
+        capability = await (this.options.probe ?? probeDxgiReplayCapability)({
+          deviceName: request.deviceName,
+          bounds: request.bounds,
+          platform,
+          helperPath: helper,
+        })
+      } catch (error) {
+        return this.setFallback('capability-unavailable', String(error))
+      }
+      if (this.lifecycleGeneration !== startGeneration) {
+        return { backend: 'shipping', reason: 'native-not-ready', detail: 'start was cancelled' }
+      }
+      if (
+        capability.status === 'available'
+        || capability.reason !== 'encoder-activation-failed'
+        || attempt + 1 >= MAXIMUM_ENCODER_ACTIVATION_ATTEMPTS
+      ) break
+      await new Promise<void>((resolve) => setTimeout(
+        resolve,
+        this.options.encoderActivationRetryDelayMs
+          ?? DEFAULT_ENCODER_ACTIVATION_RETRY_DELAY_MS,
+      ))
     }
     if (capability.status !== 'available') {
       return this.setFallback('capability-unavailable', capability.reason)

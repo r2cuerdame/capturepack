@@ -308,6 +308,27 @@ async function main(): Promise<void> {
   check('locked-session capability failure retains shipping backend',
     (await lockedManager.start({ deviceName: '\\\\.\\DISPLAY1', retentionMs: 30_000 })).backend === 'shipping' && spawned === 0)
 
+  let activationAttempts = 0
+  const activationChild = new FakeProcess()
+  const activationManager = new DxgiReplayRuntimeManager({
+    ...common,
+    encoderActivationRetryDelayMs: 0,
+    probe: async () => {
+      activationAttempts += 1
+      return activationAttempts === 1
+        ? { status: 'unavailable', reason: 'encoder-activation-failed', stages: [] }
+        : available
+    },
+    spawnProcess: () => {
+      queueMicrotask(() => activationChild.output(servicePacket()))
+      return activationChild
+    },
+  })
+  check('one transient encoder activation failure is retried before shipping fallback',
+    (await activationManager.start({ deviceName: '\\\\.\\DISPLAY1', retentionMs: 30_000 })).backend === 'native-dxgi'
+      && activationAttempts === 2)
+  activationManager.stop()
+
   const failedChild = new FakeProcess()
   const failedManager = new DxgiReplayRuntimeManager({ ...common, spawnProcess: () => { queueMicrotask(() => failedChild.output(servicePacket({ status: 1, reason: 27 }))); return failedChild } })
   const failedSelection = await failedManager.start({ deviceName: '\\\\.\\DISPLAY1', retentionMs: 30_000 })
