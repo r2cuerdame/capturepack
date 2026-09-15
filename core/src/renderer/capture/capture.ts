@@ -749,9 +749,25 @@ function startFrameTicks(preparedVideo?: HTMLVideoElement): void {
     // would be a clock artifact, not a negative delay.
     const delayMs = Math.max(0, now - submitted)
     if (startPayload?.focused === true) {
+      if (!replayWorkloadActive) {
+        // Native DXGI/MF owns the saved bytes. This surviving Chromium stream
+        // is only a metronome that asks Lane-S to observe; its presentation
+        // timestamp and captureTime describe different pixels and must not
+        // shift the context timeline. Main/Lane-S files the host's measured
+        // observation instant, then the native PTS->wall anchors map replay
+        // queries onto that independent clock at freeze time.
+        window.captureBridge.sendTick?.({
+          displayId: startPayload.displayId,
+          mediaTimeMs: wallComparableTimeMs(performance.timeOrigin, now),
+          contextClockBasis: 'wall-observation',
+        })
+        video.requestVideoFrameCallback(pump)
+        return
+      }
       window.captureBridge.sendTick?.({
         displayId: startPayload.displayId,
         mediaTimeMs: wallComparableTimeMs(performance.timeOrigin, submitted),
+        contextClockBasis: 'frame-presentation',
         tickDelayMs: delayMs,
         ...(ageMs === undefined ? {} : { frameAgeMs: ageMs }),
       })
@@ -940,6 +956,7 @@ function waitForPrimaryReadiness(
   acquiredStream: MediaStream,
   generation: number,
   minimumObservationMs: number,
+  requireAdvancingPresentations = false,
   onPresentedSample?: (sample: ReplayPixelClockPresentedSample) => void,
 ): Promise<PrimaryReadyResult> {
   return new Promise<PrimaryReadyResult>((resolve, reject) => {
@@ -1022,7 +1039,16 @@ function waitForPrimaryReadiness(
         cancel()
         return
       }
-      if (readiness.canStartAtDeadline()) {
+      if (
+        readiness.canStartAtDeadline()
+        && (
+          !requireAdvancingPresentations
+          || (
+            readiness.observedFrames() >= 2
+            && readiness.observedSpanMs() > 0
+          )
+        )
+      ) {
         // Two monotonic frames are the early path. At the bounded deadline one
         // real presentation is sufficient for a legitimately static desktop;
         // its post-start watchdog is the only place a freeze can be judged,
@@ -1031,7 +1057,9 @@ function waitForPrimaryReadiness(
       } else {
         fail(
           new Error(
-            `primary capture produced no presented frame within ${PRIMARY_READY_TIMEOUT_MS} ms`,
+            requireAdvancingPresentations
+              ? `primary capture produced fewer than two advancing presentations within ${PRIMARY_READY_TIMEOUT_MS} ms`
+              : `primary capture produced no presented frame within ${PRIMARY_READY_TIMEOUT_MS} ms`,
           ),
         )
       }
@@ -2629,13 +2657,30 @@ function resumeShippingReplayEncoding(payload: CaptureStartPayload): boolean {
     terminalCaptureFailure('MediaRecorder has no supported CapturePack replay format', generation)
     return true
   }
-  installRecordingStream(
-    payload,
-    generation,
-    retainedStream,
-    captureBackend,
-    captureQuality,
-  )
+  const backend = captureBackend
+  const quality = captureQuality
+  // A retained stream avoids the getDisplayMedia teardown/reacquire race, but
+  // liveness still has to be re-established for this new encoder epoch. Unlike
+  // first launch, resume cannot use the one-frame static-desktop deadline: the
+  // lifecycle contract requires two increasing presentation timestamps.
+  void waitForPrimaryReadiness(retainedStream, generation, 0, true)
+    .then((ready) => {
+      if (generation !== captureGeneration || stream !== retainedStream) {
+        releaseVideoSink(ready.clockVideo)
+        return
+      }
+      console.info(
+        `[capture] display ${payload.displayId}: primary recorder readiness after ` +
+          `${Math.round(ready.waitedMs)} ms (${ready.observedFrames} presented frames, ` +
+          `timeout=${String(ready.timedOut)}, excluded-before-recorder=${Math.round(ready.waitedMs)} ms, ` +
+          `presentation-span=${Math.round(ready.observedSpanMs)} ms, startup-observation=false)`,
+      )
+      beginInstalledRecording(payload, generation, retainedStream, backend, quality, undefined, undefined, ready)
+    })
+    .catch((error: unknown) => {
+      if (generation !== captureGeneration) return
+      failCapture(`primary recorder readiness failed: ${describe(error)}`, generation)
+    })
   return true
 }
 

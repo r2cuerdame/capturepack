@@ -225,7 +225,8 @@ async function main(): Promise<void> {
   const mp4 = validMp4()
   const mp4Check = validateDxgiReplayMp4(mp4, 120, mp4.length, 1_000)
   check('valid bounded fMP4 has exact monotone sample duration',
-    mp4Check.status === 'valid' && mp4Check.sampleCount === 3 && mp4Check.durationMs === 120)
+    mp4Check.status === 'valid' && mp4Check.sampleCount === 3 && mp4Check.durationMs === 120
+      && mp4Check.maximumPresentationGapMs === 40)
   const truncated = mp4.subarray(0, mp4.length - 1)
   const withoutConfig = Buffer.from(mp4)
   const avcCAt = withoutConfig.indexOf('avcC', 0, 'ascii')
@@ -337,7 +338,13 @@ async function main(): Promise<void> {
   const snapshot = await liveManager.snapshot(1_000)
   check('snapshot reads and validates bounded MP4 then returns in-memory bytes',
     snapshot.status === 'ok' && snapshot.buffer.equals(mp4)
-      && snapshot.sampleCount === 3 && snapshot.durationMs === 120)
+      && snapshot.sampleCount === 3 && snapshot.durationMs === 120
+      && snapshot.cadence?.achievedFps === 25
+      && snapshot.cadence.worstStallMs === 40
+      && snapshot.cadence.backend === 'native-dxgi'
+      && snapshot.cadence.requestedFps === 15
+      && snapshot.cadence.quality === 'full'
+      && snapshot.cadence.recorderCount === 1)
   check('static-tail snapshot retains measured exposure origin despite delayed request/export',
     snapshot.status === 'ok' && snapshot.originMs === 1_700_000_000_000
       && snapshot.clockAnchors.length === 2
@@ -401,7 +408,8 @@ async function main(): Promise<void> {
   check('one-sample native snapshot keeps its measured origin without inventing a second exposure',
     singleSample.status === 'ok' && singleSample.originMs === 1_700_000_000_000
       && singleSample.clockAnchors.length === 1
-      && singleSample.clockAnchors[0]?.ptsMs === 0)
+      && singleSample.clockAnchors[0]?.ptsMs === 0
+      && singleSample.cadence === undefined)
 
   const badChild = new FakeProcess((command, child) => {
     if (!command.startsWith('SNAPSHOT\t')) return
@@ -666,6 +674,8 @@ async function main(): Promise<void> {
       && appReplay.buffer.equals(mp4)
       && appReplay.originMs === 1_700_000_000_000
       && appReplay.clockAnchors[1]?.wallMs === 1_700_000_000_080
+      && appReplay.cadence?.backend === 'native-dxgi'
+      && appReplay.cadence.worstStallMs === 40
       && statuses.includes('7:native-dxgi'))
   runtime.retain(new Set())
   check('app-facing retain stops displays removed by topology',

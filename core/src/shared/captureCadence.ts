@@ -33,7 +33,7 @@ export interface CaptureCadenceSummary {
   discardedFrames?: number | null
   sampledMs?: number
   gainedFrames?: number
-  backend?: 'chromium-desktop-capture' | 'windows-gdi-bitblt'
+  backend?: 'chromium-desktop-capture' | 'windows-gdi-bitblt' | 'native-dxgi'
   quality?: 'full' | 'degraded'
   requestedFps?: number
   recorderCount?: number

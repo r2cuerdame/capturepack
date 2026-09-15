@@ -2736,6 +2736,29 @@ try {
     })
     const focusedContextDisplay =
       contextDisplays.find((display) => display.focused) ?? contextDisplays[0]
+    const focusedManifestDisplay = displays.find((display) =>
+      display.index === focusedContextDisplay?.index)
+    const focusedProbe = probes.find((probe) =>
+      probe.display === focusedContextDisplay?.index)
+    const focusedReplayOffsetMs = Number(
+      focusedManifestDisplay?.replay_clock_offset_ms ?? 0,
+    )
+    // Production object picking follows the frame actually presented by the
+    // video element, not the seek/playhead request (#81). Snap the release
+    // acceptance probes onto that same encoded-frame clock before querying
+    // persisted context; a movement-cycle boundary can put those on opposite
+    // sides of the screen even when they differ by only one frame.
+    const presentedQueryTimes = focusedProbe === undefined
+      ? queryTimes
+      : [...new Set(queryTimes.map((queryTime) => {
+          const presentedPts = nearestNumber(
+            focusedProbe.frames_ms,
+            queryTime + focusedReplayOffsetMs,
+          )
+          return presentedPts === null
+            ? queryTime
+            : Math.max(0, Math.round(presentedPts - focusedReplayOffsetMs))
+        }))]
     const helper = productionHelper
     const pastSamplingInput = {
       value: contextValue,
@@ -2749,7 +2772,7 @@ try {
           ? manifest.media.replay_duration_ms
           : durationSeconds * 1000,
       targetTitle: layout.target_title,
-      queryTimesMs: queryTimes,
+      queryTimesMs: presentedQueryTimes,
       reopen: {
         snapshotWidth: focusedContextDisplay?.width ?? 1,
         snapshotHeight: focusedContextDisplay?.height ?? 1,

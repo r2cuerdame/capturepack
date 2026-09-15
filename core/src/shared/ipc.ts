@@ -548,6 +548,7 @@ export interface CaptureReadyPayload {
 export type CaptureReplayBackend =
   | 'chromium-desktop-capture'
   | 'windows-gdi-bitblt'
+  | 'native-dxgi'
 
 export type CaptureReplayQuality = 'full' | 'degraded'
 
@@ -739,6 +740,15 @@ export interface CaptureTickPayload {
    * live source (#109).
    */
   mediaTimeMs: number
+  /**
+   * What `mediaTimeMs` names for context sampling.
+   *
+   * Older senders omit this and retain the frame-presentation contract. While
+   * native DXGI owns replay history, the surviving Chromium stream is only a
+   * sampling metronome: its pixels and capture age are unrelated to the saved
+   * bytes, so the host observation stays on Core's wall-observation clock.
+   */
+  contextClockBasis?: 'frame-presentation' | 'wall-observation'
   /**
    * How old the frame already was when this tick was sent, in ms — if the
    * runtime can say (#109).

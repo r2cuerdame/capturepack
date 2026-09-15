@@ -151,10 +151,12 @@ check(
     && fieldSource.includes("'-f', 'framemd5', '-'"),
 )
 check(
-  'visual object-pick truth preserves the requested context clock and declared media mapping',
-  fieldSource.includes(
-    'query.requested_t_ms + Number(display?.replay_clock_offset_ms ?? 0)',
-  )
+  'visual object-pick truth follows the replay frame actually presented by production',
+  fieldSource.includes('const presentedQueryTimes = focusedProbe === undefined')
+    && fieldSource.includes('queryTimesMs: presentedQueryTimes')
+    && fieldSource.includes(
+      'query.requested_t_ms + Number(display?.replay_clock_offset_ms ?? 0)',
+    )
     && fieldSource.includes('geometry_alignment_diagnostics')
     && !fieldSource.includes('aligned_context_t_ms')
     && fieldSource.includes(

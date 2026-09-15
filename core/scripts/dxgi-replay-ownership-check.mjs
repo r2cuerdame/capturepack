@@ -116,6 +116,20 @@ function harness() {
       events.push('shipping-get-display-media')
       return { identity: 'fresh-shipping-stream', getTracks: () => [] }
     } } },
+    waitForPrimaryReadiness: async (stream, generation) => {
+      assert.equal(stream, originalStream)
+      assert.ok(generation > 7)
+      events.push('shipping-readiness-proven')
+      return { fingerprint: null, observedFrames: 2, observedSpanMs: 67, waitedMs: 67, timedOut: false, clockVideo: {} }
+    },
+    releaseVideoSink: () => {},
+    beginInstalledRecording: (actualPayload, generation, stream, backend, quality, _w, _h, ready) => {
+      assert.equal(actualPayload, payload)
+      assert.ok(generation > 7)
+      assert.equal(ready.observedFrames, 2)
+      events.push(`shipping-stream:${stream.identity}:${backend}:${quality}`)
+      events.push('fresh-shipping-installed')
+    },
     installRecordingStream: (actualPayload, generation, stream, backend, quality) => {
       assert.equal(actualPayload, payload)
       assert.ok(generation > 7)
@@ -241,7 +255,9 @@ await check('actual frame callback keeps sending Lane-S ticks after READY and st
   assert.equal(h.rendererContext.activeRecorder, null)
   frame(167)
   assert.equal(ticks.length, 2, 'native ownership must retain actual clock IPC, independently of retired MediaRecorder')
-  assert.equal(ticks[1].mediaTimeMs, 1167)
+  assert.equal(ticks[1].mediaTimeMs, 1169)
+  assert.equal(ticks[1].contextClockBasis, 'wall-observation',
+    'native ownership keeps Chromium as a sampling metronome without attributing its frame clock')
   assert.equal(callbacks.length, 1, 'one callback chain continues after READY')
   h.rendererContext.teardown()
   frame(234)

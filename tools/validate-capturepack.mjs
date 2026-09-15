@@ -170,7 +170,8 @@ function validateCadence(value, label, formatVersion, hasReplay) {
   }
   if (value.backend !== undefined
       && value.backend !== "chromium-desktop-capture"
-      && value.backend !== "windows-gdi-bitblt") {
+      && value.backend !== "windows-gdi-bitblt"
+      && value.backend !== "native-dxgi") {
     fail(`${label}.backend is not a defined CapturePack replay backend (SPEC §5.3)`);
     ok = false;
   }

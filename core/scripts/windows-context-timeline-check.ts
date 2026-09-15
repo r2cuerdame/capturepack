@@ -15,6 +15,7 @@ import {
   loadWindowsContextHistory,
   restoreWindowsContextTimeline,
   trimWindowsContextTimeline,
+  windowsContextReplayClockMap,
   WINDOWS_CONTEXT_MAX_FILE_BYTES,
   WINDOWS_CONTEXT_TIMELINE_LIMITS,
   WINDOWS_CONTEXT_TIMELINE_PACK_PATH,
@@ -345,6 +346,92 @@ async function main(): Promise<void> {
     })?.range,
     { start_ms: 0, end_ms: 29_485 },
   )
+
+  const nativeClockBase = fractionalNativeEdge[0]
+  if (nativeClockBase === undefined) throw new Error('native clock fixture had no observation')
+  const nativeClockObservations = [0, 43, 100, 139, 239, 300].map((tMs) => {
+    const observation = cloneAt(nativeClockBase, tMs)
+    observation.windows[0]!.bounds.x =
+      tMs === 43 ? 1_144 : tMs === 139 ? 1_600 : 1_028
+    return observation
+  })
+  const nativeClockTimeline = exportWindowsContextTimeline(
+    nativeClockObservations,
+    {
+      startMs: 0,
+      endMs: 300,
+      rebaseToMs: 0,
+      replayClock: {
+        basis: 'native-source-exposure',
+        anchors: [
+          { replay_ms: 0, context_ms: 0 },
+          { replay_ms: 100, context_ms: 43 },
+          { replay_ms: 200, context_ms: 139 },
+          { replay_ms: 300, context_ms: 239 },
+        ],
+        max_extrapolation_ms: 100,
+      },
+    },
+  )
+  const reopenedNativeClock = nativeClockTimeline === null
+    ? null
+    : decodeWindowsContextTimeline(JSON.parse(JSON.stringify(nativeClockTimeline)))
+  const reopenedNativeMap = reopenedNativeClock === null
+    ? null
+    : windowsContextReplayClockMap(reopenedNativeClock.timeline)
+  const reopenedNativeSession = new ContextSession('native-source-clock-reopen', {
+    displays: [{ index: 1, focused: true, width: 1920, height: 1080 }],
+    replayDurationMs: 300,
+    observation: null,
+    dropped: false,
+    ...(reopenedNativeMap === null ? {} : { replayClockMap: reopenedNativeMap }),
+  })
+  if (reopenedNativeClock !== null) {
+    reopenedNativeSession.adoptAll(reopenedNativeClock.observations)
+  }
+  const mappedNativeFrame = await reopenedNativeSession.frameAt(100)
+  check(
+    'reopened production session maps a measured 57-61ms native source offset before picking',
+    {
+      persisted: nativeClockTimeline?.replay_clock,
+      materialized: mappedNativeFrame.accuracy.materializedTimeMs,
+      x: mappedNativeFrame.displays[0]?.candidates[0]?.bounds.x,
+    },
+    {
+      persisted: {
+        basis: 'native-source-exposure',
+        anchors: [
+          { replay_ms: 0, context_ms: 0 },
+          { replay_ms: 100, context_ms: 43 },
+          { replay_ms: 200, context_ms: 139 },
+          { replay_ms: 300, context_ms: 239 },
+        ],
+        max_extrapolation_ms: 100,
+      },
+      materialized: 43,
+      x: 1_144,
+    },
+  )
+  const outsideNativeClock = await reopenedNativeSession.frameAt(1_000)
+  check(
+    'a declared native clock refuses queries beyond measured projection instead of falling back to identity',
+    {
+      coverage: outsideNativeClock.accuracy.coverage,
+      candidates: outsideNativeClock.displays.flatMap((display) => display.candidates).length,
+    },
+    { coverage: 'none', candidates: 0 },
+  )
+  if (nativeClockTimeline !== null) {
+    const crossedNativeClock = JSON.parse(JSON.stringify(nativeClockTimeline)) as {
+      replay_clock: { anchors: Array<{ replay_ms: number; context_ms: number }> }
+    }
+    crossedNativeClock.replay_clock.anchors[1]!.context_ms = -1
+    check(
+      'a crossed native replay/context clock is rejected as an invalid persisted timeline',
+      decodeWindowsContextTimeline(crossedNativeClock),
+      null,
+    )
+  }
 
   const fresh = frozenRingObservations(
     (tMs) => surfacesAt(tMs),

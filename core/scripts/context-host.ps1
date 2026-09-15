@@ -105,6 +105,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading.Tasks;
 
 namespace CapturePack {
 
@@ -180,6 +181,7 @@ namespace CapturePack {
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
     [DllImport("dwmapi.dll", EntryPoint = "DwmGetWindowAttribute")] static extern int DwmGetRect(IntPtr h, int attr, out RECT val, int size);
     [DllImport("dwmapi.dll", EntryPoint = "DwmGetWindowAttribute")] static extern int DwmGetInt(IntPtr h, int attr, out int val, int size);
+    [DllImport("dwmapi.dll")] static extern int DwmFlush();
     [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr value);
     [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
     [DllImport("shcore.dll")] static extern int SetProcessDpiAwareness(int value);
@@ -200,6 +202,12 @@ namespace CapturePack {
     const int WS_CAPTION = 0x00C00000;
     const uint GW_OWNER = 4;
     const int PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+    // Three 30 Hz refresh periods. DwmFlush normally returns at the next
+    // presentation, but this failure-isolated host must remain bounded even
+    // when composition is unhealthy. A timed-out task is retained until it
+    // completes so repeated samples never accumulate blocked worker threads.
+    const int PRESENTATION_SYNC_TIMEOUT_MS = 100;
+    static Task<int> PendingPresentationFlush;
 
     // pid -> executable name. Opening a process costs ~100x a window rect read,
     // so it is done once per pid and the whole table is dropped periodically:
@@ -213,6 +221,38 @@ namespace CapturePack {
     static readonly StringBuilder Out = new StringBuilder(64 * 1024);
     static readonly List<IntPtr> Handles = new List<IntPtr>(512);
     static readonly EnumWindowsProc Collect = CollectHandle;
+
+    /// Returns the measured wait to the next compositor presentation. Failure
+    /// returns zero so a locked or unhealthy compositor cannot break capture;
+    /// the geometry-read midpoint remains the fail-open timestamp.
+    static long AwaitPresentedBoundary() {
+      Task<int> flush = PendingPresentationFlush;
+      if (flush != null && flush.IsCompleted) {
+        // A completion after an earlier timeout predates the geometry just
+        // read. Consume it only as cleanup and issue a fresh boundary below.
+        try { flush.GetAwaiter().GetResult(); } catch { }
+        PendingPresentationFlush = null;
+        flush = null;
+      }
+      if (flush == null) {
+        flush = Task.Run(() => DwmFlush());
+        PendingPresentationFlush = flush;
+      }
+      long waitStarted = Stopwatch.GetTimestamp();
+      if (!flush.Wait(PRESENTATION_SYNC_TIMEOUT_MS)) {
+        return 0;
+      }
+      long waited = Stopwatch.GetTimestamp() - waitStarted;
+      if (Object.ReferenceEquals(PendingPresentationFlush, flush)) {
+        PendingPresentationFlush = null;
+      }
+      try {
+        int result = flush.GetAwaiter().GetResult();
+        return result < 0 ? 0 : waited;
+      } catch {
+        return 0;
+      }
+    }
 
     /// Last GetWindowRect per window, and the invisible-border inset learned
     /// from a sample where it had not moved. See the frame branch in Sample().
@@ -364,23 +404,32 @@ namespace CapturePack {
           previous.Right == raw.Right && previous.Bottom == raw.Bottom;
         moved = !stoodStill;
         bool clientOwnsFrame = (captionless || compactNonClient) && haveClient;
+        // Keep learning the shipping inset even while native replay owns the
+        // pixels, so fallback can resume without a geometry warm-up gap.
         if (clientOwnsFrame) {
-          frame = client;
           RECT learned;
           learned.Left = client.Left - raw.Left;
           learned.Top = client.Top - raw.Top;
           learned.Right = client.Right - raw.Right;
           learned.Bottom = client.Bottom - raw.Bottom;
           Inset[key] = learned;
+        } else if (haveDwm && stoodStill) {
+          RECT learned;
+          learned.Left = dwm.Left - raw.Left;
+          learned.Top = dwm.Top - raw.Top;
+          learned.Right = dwm.Right - raw.Right;
+          learned.Bottom = dwm.Bottom - raw.Bottom;
+          Inset[key] = learned;
+        }
+        if (PreferComposedGeometry && haveDwm) {
+          // Native DXGI records DWM's composed desktop. GetWindowRect advances
+          // as soon as the window manager accepts a move and can lead those
+          // pixels by tens of milliseconds. DWM bounds are the matching source
+          // of truth while native owns replay history.
+          frame = dwm;
+        } else if (clientOwnsFrame) {
+          frame = client;
         } else {
-          if (haveDwm && stoodStill) {
-            RECT learned;
-            learned.Left = dwm.Left - raw.Left;
-            learned.Top = dwm.Top - raw.Top;
-            learned.Right = dwm.Right - raw.Right;
-            learned.Bottom = dwm.Bottom - raw.Bottom;
-            Inset[key] = learned;
-          }
           RECT known;
           if (Inset.TryGetValue(key, out known)) {
             frame.Left = raw.Left + known.Left;
@@ -466,6 +515,7 @@ namespace CapturePack {
     }
 
     public static string DpiMode = "unaware";
+    public static bool PreferComposedGeometry;
     public static long SampleTicks;
     public static long SampleCount;
     public static int LastWindowCount;
@@ -619,7 +669,8 @@ namespace CapturePack {
       }
       Out.Append(PointerJson());
       Out.Append("}");
-      long spent = Stopwatch.GetTimestamp() - started;
+      long geometrySpent = Stopwatch.GetTimestamp() - started;
+      long presentationWait = AwaitPresentedBoundary();
       // WHEN THIS SAMPLE WAS ACTUALLY TAKEN (#110).
       //
       // `t` used to be stamped by the CALLER, before this method ran — so it was
@@ -630,18 +681,30 @@ namespace CapturePack {
       // desktop and exactly proportional to drag speed. The same shape of
       // mistake as #105, one layer further down.
       //
-      // The dump is not an instant, it is an interval, and no single number is
-      // right for every window in it — the first window read is at `started` and
-      // the last at `started + D`. The MIDPOINT is the least wrong one number,
-      // and it is honest: worst case half the dump instead of all of it.
+      // The dump is not an instant. AwaitPresentedBoundary independently
+      // proves that the sampled Win32 state reached DWM before publication,
+      // while `t` remains the midpoint of the geometry reads themselves. The
+      // compositor wait is evidence, not an invented shift of the sample clock.
       //
       // `dumpMs` goes out too, because a cost nobody can see is a cost nobody
       // fixes — that is how this one survived to be found by arithmetic.
-      double dumpMs = (double)spent * 1000.0 / (double)Stopwatch.Frequency;
+      long active = Math.Max(0, geometrySpent);
+      double dumpMs = (double)active * 1000.0 / (double)Stopwatch.Frequency;
+      double presentationWaitMs =
+        (double)presentationWait * 1000.0 / (double)Stopwatch.Frequency;
+      // DwmFlush proves that the Win32 geometry reached the compositor, but
+      // its wait is not part of when the geometry was measured. Stamping the
+      // completion instant files every moving rectangle one compositor wait
+      // late. Keep the honest geometry-read midpoint and retain the measured
+      // wait separately as diagnostics.
+      double observedMs =
+        hostMs + dumpMs / 2.0;
       Out.Insert(1, "\"t\":" +
-        (hostMs + dumpMs / 2.0).ToString("F1", CultureInfo.InvariantCulture) +
-        ",\"dumpMs\":" + dumpMs.ToString("F1", CultureInfo.InvariantCulture) + ",");
-      SampleTicks += spent;
+        observedMs.ToString("F1", CultureInfo.InvariantCulture) +
+        ",\"dumpMs\":" + dumpMs.ToString("F1", CultureInfo.InvariantCulture) +
+        ",\"presentationWaitMs\":" +
+        presentationWaitMs.ToString("F1", CultureInfo.InvariantCulture) + ",");
+      SampleTicks += active;
       SampleCount++;
       LastWindowCount = kept;
       MovedLastSample = anyMoved;
@@ -722,13 +785,26 @@ namespace CapturePack {
       Out.Append("],\"d\":1");
       Out.Append(PointerJson());
       Out.Append("}");
-      long spent = Stopwatch.GetTimestamp() - started;
-      double dumpMs = (double)spent * 1000.0 / (double)Stopwatch.Frequency;
+      long geometrySpent = Stopwatch.GetTimestamp() - started;
+      long presentationWait = AwaitPresentedBoundary();
+      long active = Math.Max(0, geometrySpent);
+      double dumpMs = (double)active * 1000.0 / (double)Stopwatch.Frequency;
+      double presentationWaitMs =
+        (double)presentationWait * 1000.0 / (double)Stopwatch.Frequency;
+      // DwmFlush proves that the Win32 geometry reached the compositor, but
+      // its wait is not part of when the geometry was measured. Stamping the
+      // completion instant files every moving rectangle one compositor wait
+      // late. Keep the honest geometry-read midpoint and retain the measured
+      // wait separately as diagnostics.
+      double observedMs =
+        hostMs + dumpMs / 2.0;
       Out.Insert(1, "\"t\":" +
-        (hostMs + dumpMs / 2.0).ToString("F1", CultureInfo.InvariantCulture) +
-        ",\"dumpMs\":" + dumpMs.ToString("F1", CultureInfo.InvariantCulture) + ",");
-      SampleTicks += spent;
-      DirtySampleTicks += spent;
+        observedMs.ToString("F1", CultureInfo.InvariantCulture) +
+        ",\"dumpMs\":" + dumpMs.ToString("F1", CultureInfo.InvariantCulture) +
+        ",\"presentationWaitMs\":" +
+        presentationWaitMs.ToString("F1", CultureInfo.InvariantCulture) + ",");
+      SampleTicks += active;
+      DirtySampleTicks += active;
       SampleCount++;
       DirtyWindowReadCount += kept;
       MovedLastSample = anyMoved;
@@ -1299,6 +1375,9 @@ while ($running) {
       $frameMs = $null
       if ($null -ne $request.params -and $null -ne $request.params.tMs) {
         $frameMs = [double]$request.params.tMs
+      }
+      if ($null -ne $request.params -and $null -ne $request.params.composed) {
+        [CapturePack.SurfaceLane]::PreferComposedGeometry = [bool]$request.params.composed
       }
       try {
         # `ft` is the FRAME's time; `t` stays the host's own, so the cost of the

@@ -80,6 +80,7 @@ import {
   recorderSourceLatency,
 } from './capture'
 import type { DisplaySnapshot, ReplayFetch } from './capture'
+import type { CaptureCadenceSummary } from '../shared/captureCadence'
 import {
   freezeContext,
   contextObservationFromSurfaceSample,
@@ -133,7 +134,10 @@ import { editorUiaElements, editorUiaWindows } from './context/legacyPack'
 import {
   exportWindowsContextTimeline,
   loadWindowsContextHistory,
+  persistedReplayContextClockMap,
   trimWindowsContextTimeline,
+  windowsContextReplayClockMap,
+  type PersistedReplayContextClock,
   type WindowsContextTimelineV1,
 } from './context/windowsContextTimeline'
 import { timelineEventsForTrim, withoutInputEvents } from './context/inputEvents'
@@ -513,6 +517,37 @@ function observedReplayPtsAtWallTime(
 }
 
 /**
+ * Declare how native replay time reaches the persisted context axis.
+ *
+ * `frozenObservations` has already used the independently measured native
+ * source-exposure map to normalize each exact ring observation onto pack time.
+ * Its persisted axis is therefore identity by construction. Keeping that map
+ * explicit makes both the live and reopened readers use the declared native
+ * basis, without carrying Chromium presentation age into native bytes or
+ * reverse-searching geometry to invent an offset.
+ */
+function persistedReplayClockForContext(
+  source: ObservedReplayClockMap | null,
+  sourceStartPtsMs: number,
+  durationMs: number,
+  native: boolean,
+): PersistedReplayContextClock | undefined {
+  if (!native || source === null || !(durationMs > 0)) return undefined
+  const sourceStartWallMs = ptsToSessionMs(source, sourceStartPtsMs)
+  const sourceEndWallMs = ptsToSessionMs(source, sourceStartPtsMs + durationMs)
+  if (sourceStartWallMs === undefined || sourceEndWallMs === undefined) return undefined
+  const anchors = [
+    { replay_ms: 0, context_ms: 0 },
+    { replay_ms: durationMs, context_ms: durationMs },
+  ]
+  return {
+    basis: 'native-source-exposure',
+    anchors,
+    max_extrapolation_ms: 0,
+  }
+}
+
+/**
  * Freezes what the trigger covers: every connected display in "all" mode, the
  * cursor/fixed display otherwise.
  *
@@ -654,7 +689,9 @@ async function freezeDisplays(settings: Settings): Promise<{
         replayWebm: replay.buffer,
         replayDurationMs: replay.durationMs,
         ...(() => {
-          const cadence = manifestCadence(display.id)
+          const cadence = replay.cadence === undefined
+            ? manifestCadence(display.id)
+            : manifestCadenceFromSummary(replay.cadence)
           return cadence === undefined ? {} : { cadence }
         })(),
         ...(replay.originMs === undefined ? {} : { replayOriginMs: replay.originMs }),
@@ -843,10 +880,10 @@ function toEditorDisplays(
   }))
 }
 
-function manifestCadence(displayId: number): ManifestCadence | undefined {
-  const measured = recorderCadence(displayId)
-  if (measured === null) return undefined
-  const sourceLatency = manifestSourceLatency(displayId)
+function manifestCadenceFromSummary(
+  measured: CaptureCadenceSummary,
+  sourceLatency?: ManifestSourceLatency,
+): ManifestCadence {
   return {
     achieved_fps: measured.achievedFps,
     worst_stall_ms: measured.worstStallMs,
@@ -863,6 +900,12 @@ function manifestCadence(displayId: number): ManifestCadence | undefined {
       : { recorder_count: measured.recorderCount }),
     ...(sourceLatency === undefined ? {} : { source_latency: sourceLatency }),
   }
+}
+
+function manifestCadence(displayId: number): ManifestCadence | undefined {
+  const measured = recorderCadence(displayId)
+  if (measured === null) return undefined
+  return manifestCadenceFromSummary(measured, manifestSourceLatency(displayId))
 }
 
 /** The measured source latency, if this display has one to publish (#115). */
@@ -1774,6 +1817,12 @@ async function runFlow(settings: Settings): Promise<void> {
   const presentationClockMap = observedReplayClockMap(display)
   const sourceClockMap = observedReplayClockMap(display, 'source')
   const contextClockMap = sourceClockMap ?? presentationClockMap
+  const replayContextClock = persistedReplayClockForContext(
+    contextClockMap,
+    replaySourceStartMs,
+    replayDurationMs,
+    display.cadence?.backend === 'native-dxgi',
+  )
   let measuredClockCoversMediaEdges = false
   if (presentationClockMap !== null) {
     const mappedRawT0Ms = ptsToSessionMs(presentationClockMap, 0)
@@ -1875,7 +1924,7 @@ async function runFlow(settings: Settings): Promise<void> {
   // The focused recorder is the top-level media object even for a one-display
   // pack. Snapshot its measured cadence now: the recorder registry may rotate
   // or be torn down before the detached exact-cut/render finalizer runs.
-  const focusedCadence = manifestCadence(display.id)
+  const focusedCadence = display.cadence
   // Save-first writes the uncut recorder files, so its per-display offsets are
   // measured from the focused RAW origin. The editor/final declaration starts
   // at the logical source in-point instead. Keeping both prevents a transient
@@ -1944,6 +1993,7 @@ async function runFlow(settings: Settings): Promise<void> {
           startMs: 0,
           endMs: contextReplayDurationMs,
           rebaseToMs: contextReplaySourceStartMs,
+          replayClock: replayContextClock,
         },
       )
       if (windowsContextObservations.length > 0 && saveFirstWindowsContext === null) {
@@ -2221,6 +2271,10 @@ async function runFlow(settings: Settings): Promise<void> {
       const contextSession = openContextSession(editor, {
         displays: contextDisplays,
         replayDurationMs,
+        ...(() => {
+          const replayClockMap = persistedReplayContextClockMap(replayContextClock)
+          return replayClockMap === null ? {} : { replayClockMap }
+        })(),
         observation: contextObservation(uia, uiaFocusedIndex, replayDurationMs),
         dropped: settled.ready && uiaEmpty(uia),
         domEvents: domPicks,
@@ -2489,6 +2543,7 @@ async function runFlow(settings: Settings): Promise<void> {
           startMs: Math.ceil(keptRange.startMs),
           endMs: Math.floor(keptRange.endMs),
           rebaseToMs: 0,
+          replayClock: replayContextClock,
         },
       )
     }
@@ -3229,6 +3284,12 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
     contextSession = openContextSession(editor, {
       displays: reopenedContextDisplays,
       replayDurationMs,
+      ...(() => {
+        const replayClockMap = loadedWindowsContext === null
+          ? null
+          : windowsContextReplayClockMap(loadedWindowsContext)
+        return replayClockMap === null ? {} : { replayClockMap }
+      })(),
       observation: contextObservation(loadedUia, loadedFocusedIndex, replayDurationMs),
       dropped: loadedUiaDropped,
       domEvents: loadedDomEvents,

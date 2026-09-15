@@ -37,7 +37,10 @@ import {
   normalizeCaptureFps,
   type Settings,
 } from '../shared/types'
-import { CaptureCadenceRegistry } from '../shared/captureCadence'
+import {
+  CaptureCadenceRegistry,
+  type CaptureCadenceSummary,
+} from '../shared/captureCadence'
 import { logError, logInfo, logWarn } from './log'
 import {
   captureRecorderSignature,
@@ -695,17 +698,7 @@ function rememberSourceLatency(
 }
 
 /** What this display's recorder has achieved, or null if it never said. */
-export function recorderCadence(displayId: number): {
-  achievedFps: number
-  worstStallMs: number
-  discardedFrames?: number | null
-  sampledMs?: number
-  gainedFrames?: number
-  backend?: 'chromium-desktop-capture' | 'windows-gdi-bitblt'
-  quality?: 'full' | 'degraded'
-  requestedFps?: number
-  recorderCount?: number
-} | null {
+export function recorderCadence(displayId: number): CaptureCadenceSummary | null {
   // Shipping owns no cadence while its workload is suspended. During a native
   // snapshot, never attribute a late/stale shipping heartbeat to native bytes.
   if (
@@ -1671,6 +1664,8 @@ export interface ReplayFetch {
       ptsMs: number
       wallMs: number
     }[]
+    /** Cadence measured from these exact replay bytes, when available. */
+    cadence?: CaptureCadenceSummary
   } | null
   // Set exactly when `replay` is null.
   miss: ReplayMiss | null
@@ -1796,7 +1791,8 @@ async function requestNativeReplay(
     return { replay: null, miss: 'native-export-failed' }
   }
   // Never attribute the shipping renderer's last heartbeat to bytes produced
-  // by the independent DXGI/MF service.
+  // by the independent DXGI/MF service. The native account travels beside the
+  // exact bytes below instead of entering this shipping-recorder registry.
   displayCadence.reset(displayId)
   rememberNativeReplayRequest(requestId, displayId)
   logInfo(
@@ -1814,6 +1810,7 @@ async function requestNativeReplay(
       // LastPresentTime. These anchors are therefore independently observed
       // source-pixel exposure, not a Chromium delivery/capture-time estimate.
       sourceClockAnchors: snapshot.clockAnchors,
+      ...(snapshot.cadence === undefined ? {} : { cadence: snapshot.cadence }),
       mimeType: 'video/mp4',
       replayFile: 'replay.mp4',
     },
@@ -2392,7 +2389,18 @@ async function createCaptureWindow(
       // sender still cannot put a second display's clock into lane S.
       if (!ownsTicks) return
       if (typeof payload?.mediaTimeMs !== 'number' || !Number.isFinite(payload.mediaTimeMs)) return
-      tickSurfaces(String(display.id), payload.mediaTimeMs, payload.frameAgeMs, payload.tickDelayMs)
+      if (
+        payload.contextClockBasis !== undefined
+        && payload.contextClockBasis !== 'frame-presentation'
+        && payload.contextClockBasis !== 'wall-observation'
+      ) return
+      tickSurfaces(
+        String(display.id),
+        payload.mediaTimeMs,
+        payload.frameAgeMs,
+        payload.tickDelayMs,
+        payload.contextClockBasis,
+      )
     }
     ipcMain.on(IPC.captureTick, onTick)
     // A recorder renderer that VANISHES is a recorder failure, never silence

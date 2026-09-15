@@ -13,6 +13,7 @@ import {
 } from './dxgiReplayRing'
 import { enumerateFmp4VideoSamples } from '../renderer/capture/fmp4SampleTimeline'
 import { dxgiQpcToUnixNs } from './dxgiTimingReference'
+import type { CaptureCadenceSummary } from '../shared/captureCadence'
 
 export const DXGI_REPLAY_RUNTIME_SWITCH = '--dxgi-native-replay'
 export const DXGI_REPLAY_SERVICE_PACKET_BYTES = 288
@@ -286,6 +287,8 @@ export interface DxgiReplayMp4Validation {
   readonly lastPresentationEndMs: number
   readonly lastPresentationTimeMs: number
   readonly timestampQuantumMs: number
+  /** Largest measured distance between consecutive encoded presentation instants. */
+  readonly maximumPresentationGapMs: number
 }
 
 export type DxgiReplayMp4ValidationResult = DxgiReplayMp4Validation | {
@@ -427,11 +430,18 @@ export function validateDxgiReplayMp4(
   }
   let firstPresentationTimeMs = Number.POSITIVE_INFINITY
   let lastPresentationEndMs = Number.NEGATIVE_INFINITY
+  let maximumPresentationGapMs = 0
   for (const sample of samples) {
     firstPresentationTimeMs = Math.min(firstPresentationTimeMs, sample.presentationTimeMs)
     lastPresentationEndMs = Math.max(
       lastPresentationEndMs,
       sample.presentationTimeMs + sample.durationMs,
+    )
+  }
+  for (let index = 1; index < samples.length; index += 1) {
+    maximumPresentationGapMs = Math.max(
+      maximumPresentationGapMs,
+      samples[index]!.presentationTimeMs - samples[index - 1]!.presentationTimeMs,
     )
   }
   const durationMs = lastPresentationEndMs - firstPresentationTimeMs
@@ -462,6 +472,7 @@ export function validateDxgiReplayMp4(
     lastPresentationEndMs,
     lastPresentationTimeMs: samples[samples.length - 1]!.presentationTimeMs,
     timestampQuantumMs: 1_000 / exact.tracks[0]!.timescale,
+    maximumPresentationGapMs,
   }
 }
 
@@ -531,6 +542,8 @@ export interface DxgiReplayRuntimeSnapshot {
   readonly clockAnchors: readonly { ptsMs: number; wallMs: number }[]
   readonly sampleCount: number
   readonly keyframes: number
+  /** Exact MP4-sample cadence; absent until an interval was actually measured. */
+  readonly cadence?: CaptureCadenceSummary
   readonly evidence: DxgiReplayServicePacket
 }
 
@@ -998,6 +1011,21 @@ export class DxgiReplayRuntimeManager {
         clockAnchors,
         sampleCount: validated.sampleCount,
         keyframes: Number(packet.keyframes),
+        ...(validated.sampleCount < 2
+          ? {}
+          : {
+              cadence: {
+                achievedFps:
+                  Math.round((validated.sampleCount / validated.durationMs) * 1_000 * 10) / 10,
+                worstStallMs: Math.round(validated.maximumPresentationGapMs * 10) / 10,
+                sampledMs: Math.round(validated.durationMs),
+                gainedFrames: validated.sampleCount,
+                requestedFps: packet.targetFps,
+                backend: 'native-dxgi' as const,
+                quality: 'full' as const,
+                recorderCount: 1,
+              },
+            }),
         evidence: packet,
       })
     } catch (error) {
@@ -1082,6 +1110,7 @@ export interface DxgiReplayRuntimeReplay {
   readonly durationMs: number
   readonly originMs: number
   readonly clockAnchors: readonly { ptsMs: number; wallMs: number }[]
+  readonly cadence?: CaptureCadenceSummary
   readonly mimeType: 'video/mp4'
   readonly replayFile: 'replay.mp4'
 }
@@ -1170,6 +1199,7 @@ export class DxgiReplayRuntime {
           durationMs: result.durationMs,
           originMs: result.originMs,
           clockAnchors: result.clockAnchors,
+          ...(result.cadence === undefined ? {} : { cadence: result.cadence }),
           mimeType: 'video/mp4',
           replayFile: 'replay.mp4',
         }

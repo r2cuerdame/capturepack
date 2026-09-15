@@ -6,7 +6,9 @@
 import { ContextSession } from '../src/main/context/session'
 import {
   decodeWindowsContextTimeline,
+  windowsContextReplayClockMap,
 } from '../src/main/context/windowsContextTimeline'
+import { ptsToSessionMs, type ObservedReplayClockMap } from '../src/shared/replayClockMap'
 import type { ContextObservation } from '../src/main/context/buffer'
 import type { ContextDisplayTarget } from '../src/main/context/session'
 import type { ContextCandidate } from '../src/shared/context/protocol'
@@ -45,6 +47,7 @@ interface PastSamplingInput {
   replayDurationMs: number
   targetTitle: string
   queryTimesMs: number[]
+  replayClockMap?: ObservedReplayClockMap
   reopen?: ReopenDisplayInput
   pickPoints?: Array<{
     requestedTimeMs: number
@@ -198,12 +201,18 @@ async function querySession(
     replayDurationMs: input.replayDurationMs,
     observation: null,
     dropped: false,
+    ...(input.replayClockMap === undefined ? {} : { replayClockMap: input.replayClockMap }),
   })
   session.adoptAll(observations)
 
   const rows = []
   for (const requestedTimeMs of input.queryTimesMs) {
-    const nearest = nearestObservation(observations, requestedTimeMs)
+    const contextTimeMs = input.replayClockMap === undefined
+      ? requestedTimeMs
+      : ptsToSessionMs(input.replayClockMap, requestedTimeMs)
+    const nearest = contextTimeMs === undefined
+      ? null
+      : nearestObservation(observations, contextTimeMs)
     const observed = targetWindows(nearest, input.targetTitle)
     const frame = await session.frameAt(requestedTimeMs)
     const candidates = frame.displays
@@ -338,6 +347,10 @@ export async function analyzePastSampling(input: PastSamplingInput): Promise<{
       targetTitle: input.targetTitle,
       queryTimesMs: input.queryTimesMs,
       pickPoints: input.pickPoints,
+      ...(() => {
+        const replayClockMap = windowsContextReplayClockMap(first.timeline)
+        return replayClockMap === null ? {} : { replayClockMap }
+      })(),
   }
   const queries = await querySession(first.observations, argumentsWithoutValue)
 
@@ -355,6 +368,10 @@ export async function analyzePastSampling(input: PastSamplingInput): Promise<{
     : await querySession(second.observations, {
         ...argumentsWithoutValue,
         displays: reopenedDisplays,
+        ...(() => {
+          const replayClockMap = windowsContextReplayClockMap(second.timeline)
+          return replayClockMap === null ? {} : { replayClockMap }
+        })(),
       })
   const targetSamples = first.observations.flatMap((observation) =>
     targetWindows(observation, input.targetTitle))

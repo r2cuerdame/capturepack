@@ -176,7 +176,7 @@ export interface ManifestCadence {
   worst_stall_ms: number
   discarded_frames?: number
   requested_fps?: number
-  backend?: 'chromium-desktop-capture' | 'windows-gdi-bitblt'
+  backend?: 'chromium-desktop-capture' | 'windows-gdi-bitblt' | 'native-dxgi'
   quality?: 'full' | 'degraded'
   recorder_count?: number
   source_latency?: ManifestSourceLatency
