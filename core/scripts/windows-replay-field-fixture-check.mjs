@@ -1,6 +1,10 @@
 import './windows-replay-process-snapshot-check.mjs'
 import './windows-replay-continuous-sampler-check.mjs'
 import './windows-replay-field-clock-check.mjs'
+import {
+  parseWindowsIntegrityGroups,
+  WINDOWS_MEDIUM_INTEGRITY_RID,
+} from './windows-replay-launch-integrity.mjs'
 import { createRequire } from 'node:module'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -122,6 +126,34 @@ const fieldSource = readFileSync(
   path.join(here, 'windows-replay-field-check.mjs'),
   'utf8',
 )
+check(
+  'release field runs require the proven Explorer-equivalent Medium integrity token',
+  fieldSource.includes('readWindowsLaunchIntegrity()')
+    && fieldSource.includes('releaseComparison')
+    && fieldSource.includes('WINDOWS_MEDIUM_INTEGRITY_RID'),
+)
+{
+  const medium = parseWindowsIntegrityGroups(
+    'Mandatory Label,Medium Mandatory Level,S-1-16-8192,Group used for deny only',
+  )
+  const high = parseWindowsIntegrityGroups(
+    'Mandatory Label,High Mandatory Level,S-1-16-12288,Group used for deny only',
+  )
+  check(
+    'integrity parser identifies exact Medium and does not collapse High into it',
+    medium.rid === WINDOWS_MEDIUM_INTEGRITY_RID
+      && medium.level === 'medium'
+      && high.rid !== WINDOWS_MEDIUM_INTEGRITY_RID
+      && high.level === 'high',
+  )
+  let ambiguousRejected = false
+  try {
+    parseWindowsIntegrityGroups('S-1-16-8192 S-1-16-12288')
+  } catch {
+    ambiguousRejected = true
+  }
+  check('ambiguous integrity evidence is rejected', ambiguousRejected)
+}
 const durationSource = readFileSync(
   path.join(here, 'fixtures', 'windows-replay-field-duration.cjs'),
   'utf8',

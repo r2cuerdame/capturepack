@@ -28,6 +28,10 @@ import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import { terminateProcessTree } from './process-tree.mjs'
 import { createContinuousProcessSampler } from './windows-replay-continuous-sampler.mjs'
+import {
+  readWindowsLaunchIntegrity,
+  WINDOWS_MEDIUM_INTEGRITY_RID,
+} from './windows-replay-launch-integrity.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const coreDir = path.resolve(here, '..')
@@ -1968,6 +1972,7 @@ const report = {
     platform: process.platform,
     node: process.version,
     electron,
+    launch_integrity: null,
     build: buildIdentity(),
     ffprobe_available: false,
     ffmpeg_available: false,
@@ -2007,6 +2012,17 @@ let measurementMainLog = null
 
 try {
   if (process.platform !== 'win32') throw new Error('this field check must run in Windows Node')
+  report.environment.launch_integrity = readWindowsLaunchIntegrity()
+  if (
+    releaseComparison
+    && report.environment.launch_integrity.rid !== WINDOWS_MEDIUM_INTEGRITY_RID
+  ) {
+    throw new Error(
+      'release field comparisons require an Explorer-equivalent Medium integrity token '
+      + `(S-1-16-${String(WINDOWS_MEDIUM_INTEGRITY_RID)}); observed `
+      + `${report.environment.launch_integrity.sid} (${report.environment.launch_integrity.level})`,
+    )
+  }
   if (!existsSync(path.join(coreDir, 'dist', 'main', 'index.js'))) {
     throw new Error('core/dist/main/index.js is missing; run npm run build first')
   }
