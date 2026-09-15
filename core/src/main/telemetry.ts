@@ -4,7 +4,7 @@ import { dirname } from 'node:path'
 
 export const PURPLEPULSE_ENDPOINT = 'https://pulse-api.purpleshiphub.workers.dev/api/v1/ping'
 export const PURPLEPULSE_PROJECT_ID = 'pp_capturepack_6bede657'
-const TELEMETRY_TIMEOUT_MS = 2_500
+const TELEMETRY_TIMEOUT_MS = 2_000
 
 interface TelemetryState {
   install_id: string
@@ -17,6 +17,7 @@ export interface TelemetryPayload {
   version: string
   os: string
   platform: 'electron'
+  schema_version: 2
   environment?: string
 }
 
@@ -32,10 +33,10 @@ interface DailyTelemetryOptions {
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
 
-export function localCalendarDay(date: Date): string {
-  const year = String(date.getFullYear()).padStart(4, '0')
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
+export function utcCalendarDay(date: Date): string {
+  const year = String(date.getUTCFullYear()).padStart(4, '0')
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(date.getUTCDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
 }
 
@@ -88,13 +89,13 @@ async function postTelemetry(payload: TelemetryPayload): Promise<void> {
 }
 
 /**
- * Makes one best-effort attempt per local calendar day. The gate is persisted
+ * Makes one best-effort attempt per UTC calendar day. The gate is persisted
  * before the request so an offline endpoint cannot turn every launch into a
  * retry. Any storage or network failure is deliberately silent.
  */
 export async function sendDailyTelemetry(options: DailyTelemetryOptions): Promise<void> {
   try {
-    const today = localCalendarDay(options.now ?? new Date())
+    const today = utcCalendarDay(options.now ?? new Date())
     const previous = await readState(options.statePath)
     const installId =
       typeof previous.install_id === 'string' && UUID_PATTERN.test(previous.install_id)
@@ -110,6 +111,7 @@ export async function sendDailyTelemetry(options: DailyTelemetryOptions): Promis
       version: options.version,
       os: options.os,
       platform: 'electron',
+      schema_version: 2,
     }
     if (options.environment !== undefined) payload.environment = options.environment
     await (options.post ?? postTelemetry)(payload)

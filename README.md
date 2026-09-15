@@ -172,7 +172,7 @@ Generated CapturePacks should remain readable forever.
 
 CapturePack sets strict product boundaries by design:
 
-- **No cloud services, mandatory accounts, or silent telemetry:** Captures and crash reports stay on your machine. Once per local day, CapturePack sends PurplePulse only a random install ID, app version, OS, and `platform: "electron"`; it sends no username, device name, capture content, or other personal fields. The optional GitHub Releases update check can be disabled in Settings → General.
+- **No cloud services, mandatory accounts, or silent telemetry:** Captures and crash reports stay on your machine. Once per UTC day, CapturePack sends PurplePulse only a random install ID, app version, OS, and `platform: "electron"`; it sends no username, device name, capture content, or other personal fields. The optional GitHub Releases update check can be disabled in Settings → General.
 - **No keystroke logging:** CapturePack captures mouse coordinates, clicks, and window events on the replay clock. It never listens to or records keystrokes (`input.key.*` is reserved and forbidden).
 - **No hidden background pixels in region captures:** Region screenshot captures (`Ctrl+Alt+S`) record only the user-selected pixel rectangle and placement metadata. The application never secretly stores or retains the full desktop or unselected displays.
 - **No live object picking during video recording:** Walking accessibility trees during video recording costs substantial CPU time. CapturePack samples window geometry during video capture, but interactive control-level Object Pick belongs strictly to still images.
@@ -333,7 +333,7 @@ is pending. Details, team roles, and privacy practices: [docs/CODE_SIGNING.md](d
 Screen pixels, window titles and accessibility names — plus selector, role, text
 and URL when Chrome DOM is used — can be sensitive. CapturePack keeps captures
 and object context on this machine and uploads no captures or crash reports.
-Once per local day it sends PurplePulse only a random install ID, app version,
+Once per UTC day it sends PurplePulse only a random install ID, app version,
 OS, and platform. The payload contains no username, device name, capture content,
 or other personal fields. The optional GitHub Releases update check can be
 disabled in Settings → General.

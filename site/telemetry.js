@@ -1,4 +1,4 @@
-// One anonymous, best-effort PurplePulse ping per browser install and local day.
+// One anonymous, best-effort PurplePulse ping per browser install and UTC day.
 ;(function () {
   'use strict'
 
@@ -7,14 +7,14 @@
   var SITE_VERSION = '0.5.1'
   var INSTALL_KEY = 'capturepack_purplepulse_install_id'
   var DAY_KEY = 'capturepack_purplepulse_day'
-  var TIMEOUT_MS = 2500
+  var TIMEOUT_MS = 2000
   var UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
-  function localDay(now) {
+  function utcDay(now) {
     return [
-      String(now.getFullYear()).padStart(4, '0'),
-      String(now.getMonth() + 1).padStart(2, '0'),
-      String(now.getDate()).padStart(2, '0')
+      String(now.getUTCFullYear()).padStart(4, '0'),
+      String(now.getUTCMonth() + 1).padStart(2, '0'),
+      String(now.getUTCDate()).padStart(2, '0')
     ].join('-')
   }
 
@@ -44,7 +44,7 @@
 
   async function send() {
     try {
-      var today = localDay(new Date())
+      var today = utcDay(new Date())
       var installId = localStorage.getItem(INSTALL_KEY)
       if (!installId || !UUID_PATTERN.test(installId)) {
         installId = newInstallId(crypto)
@@ -66,7 +66,8 @@
             install_id: installId,
             version: SITE_VERSION,
             os: browserOs(navigator),
-            platform: 'web'
+            platform: 'web',
+            schema_version: 2
           }),
           signal: controller.signal
         })

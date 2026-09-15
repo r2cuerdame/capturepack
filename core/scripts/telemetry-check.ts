@@ -49,18 +49,18 @@ await sendDailyTelemetry({
   statePath,
   version: '0.5.0',
   os: 'windows',
-  now: new Date(2026, 8, 14, 23, 59),
+  now: new Date('2026-09-14T23:59:00Z'),
   createInstallId: () => INSTALL_ID,
   post,
 })
 const firstState = JSON.parse(await readFile(statePath, 'utf8')) as Record<string, unknown>
 check('first run persists the generated UUID', firstState.install_id === INSTALL_ID)
-check('the daily gate uses the local calendar day', firstState.last_attempt_day === '2026-09-14')
+check('the daily gate uses the UTC calendar day', firstState.last_attempt_day === '2026-09-14')
 check('first run sends once', sent.length === 1)
 check(
   'production payload contains only the anonymous allowlist',
   JSON.stringify(Object.keys(sent[0] ?? {}).sort()) ===
-    JSON.stringify(['install_id', 'os', 'platform', 'project_id', 'version']),
+    JSON.stringify(['install_id', 'os', 'platform', 'project_id', 'schema_version', 'version']),
 )
 check(
   'production payload carries the project, app version, actual OS and Electron platform',
@@ -69,6 +69,7 @@ check(
     sent[0]?.version === '0.5.0' &&
     sent[0]?.os === 'windows' &&
     sent[0]?.platform === 'electron' &&
+    sent[0]?.schema_version === 2 &&
     sent[0]?.environment === undefined,
 )
 check('Electron OS maps Windows without leaking win32', telemetryOs('win32') === 'windows')
@@ -80,22 +81,36 @@ await sendDailyTelemetry({
   statePath,
   version: '0.5.0',
   os: 'windows',
-  now: new Date(2026, 8, 14, 0, 1),
+  now: new Date('2026-09-14T00:01:00Z'),
   createInstallId: () => SECOND_ID,
   post,
 })
-check('a second launch on the same local day sends nothing', sent.length === 1)
+check('a second launch on the same UTC day sends nothing', sent.length === 1)
 
 await sendDailyTelemetry({
   statePath,
   version: '0.5.1',
   os: 'windows',
-  now: new Date(2026, 8, 15, 0, 1),
+  now: new Date('2026-09-15T00:01:00Z'),
   createInstallId: () => SECOND_ID,
   post,
 })
-check('the next local day sends once with the persisted UUID', sent.length === 2 && sent[1]?.install_id === INSTALL_ID)
+check('the next UTC day sends once with the persisted UUID', sent.length === 2 && sent[1]?.install_id === INSTALL_ID)
 
+const migratedPath = join(checkDirectory, 'migrated-v1.json')
+await writeFile(migratedPath, JSON.stringify({ install_id: INSTALL_ID, last_attempt_day: '2026-09-15' }), 'utf8')
+let migratedPosts = 0
+await sendDailyTelemetry({
+  statePath: migratedPath,
+  version: '0.5.1',
+  os: 'windows',
+  now: new Date('2026-09-15T12:00:00Z'),
+  createInstallId: () => SECOND_ID,
+  post: async () => { migratedPosts += 1 },
+})
+const migratedState = JSON.parse(await readFile(migratedPath, 'utf8')) as Record<string, unknown>
+check('v1 install_id survives the v2 upgrade', migratedState.install_id === INSTALL_ID)
+check('v1 last_attempt_day survives and still gates the same UTC day', migratedState.last_attempt_day === '2026-09-15' && migratedPosts === 0)
 const failurePath = join(checkDirectory, 'failure.json')
 let failedPosts = 0
 await sendDailyTelemetry({

@@ -216,7 +216,7 @@ check(
     && guideHtml.includes('<script src="../telemetry.js"></script>'),
 )
 check(
-  'browser install UUID persists and the same local day is gated',
+  'browser install UUID persists and the same UTC day is gated',
   siteStorage.get('capturepack_purplepulse_install_id') === telemetryInstallId
     && siteStorage.get('capturepack_purplepulse_day') === '2026-09-14'
     && siteRequests.length === 1,
@@ -227,15 +227,16 @@ check(
     && siteRequests[0]?.init?.method === 'POST'
     && siteRequests[0]?.init?.headers?.['content-type'] === 'application/json'
     && siteRequests[0]?.init?.signal !== undefined
-    && siteTimers[0]?.milliseconds === 2500,
+    && siteTimers[0]?.milliseconds === 2000,
 )
 check(
   'site payload contains only the anonymous production allowlist',
   JSON.stringify(Object.keys(sitePayload).sort()) ===
-    JSON.stringify(['install_id', 'os', 'platform', 'project_id', 'version'])
+    JSON.stringify(['install_id', 'os', 'platform', 'project_id', 'schema_version', 'version'])
     && sitePayload.project_id === 'pp_capturepack_6bede657'
     && sitePayload.version === PUBLIC_VERSION
     && sitePayload.platform === 'web'
+    && sitePayload.schema_version === 2
     && sitePayload.environment === undefined,
 )
 check(
