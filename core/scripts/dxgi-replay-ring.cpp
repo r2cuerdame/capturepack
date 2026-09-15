@@ -353,15 +353,21 @@ struct EncodedRingSnapshot {
   }
 };
 
-// The production encoder will append complete access units. Retention can be
-// shorter than requested when a byte/time cut crosses a GOP: the ring removes
-// the undecodable prefix through the next keyframe instead of exporting it.
+// The production encoder appends complete access units asynchronously. The
+// ring's storage boundary follows the newest encoded exposure. Snapshot's
+// export boundary follows the newest encoded sample at or before its cut and
+// is enforced on the sample PTS clock. Keeping those boundaries separate is
+// essential: command time can be later than encoder output, but that tail lag
+// must not also shorten an already-bounded media window. A GOP crossing can
+// still shorten the export through the next independently decodable keyframe.
 class EncodedAccessUnitRing {
  public:
   EncodedAccessUnitRing(std::size_t maximumBytes, std::int64_t retentionQpc,
-                        std::size_t maximumUnits = kMaximumRingUnits)
+                        std::size_t maximumUnits,
+                        std::int64_t retentionHns)
       : maximumBytes_(maximumBytes), retentionQpc_(retentionQpc),
-        maximumUnits_(maximumUnits) {}
+        maximumUnits_(maximumUnits),
+        retentionHns_(retentionHns) {}
 
   bool Append(EncodedAccessUnit unit) {
     const std::size_t unitBytes = unit.bytes.size() + unit.codecConfig.size();
@@ -395,24 +401,35 @@ class EncodedAccessUnitRing {
 
   bool Snapshot(std::int64_t cutQpc, EncodedRingSnapshot& snapshot) const {
     snapshot = {};
-    if (cutQpc <= 0) return false;
-    const std::int64_t earliest =
-        cutQpc > retentionQpc_ ? cutQpc - retentionQpc_ : 0;
+    if (cutQpc <= 0 || retentionHns_ <= 0) return false;
+    const auto last = std::find_if(
+        units_.begin(), units_.end(), [cutQpc](const EncodedAccessUnit& unit) {
+          return unit.exposedQpc > cutQpc;
+        });
+    if (last == units_.begin()) return false;
+    const EncodedAccessUnit& tail = *std::prev(last);
+    // Tail-relative media duration must not resurrect an entirely expired capture.
+    if (cutQpc - tail.exposedQpc > retentionQpc_) return false;
+    if (tail.ptsHns > std::numeric_limits<std::int64_t>::max() -
+                          tail.durationHns) {
+      return false;
+    }
+    const std::int64_t tailEndPts = tail.ptsHns + tail.durationHns;
+    const std::int64_t earliestPts =
+        tailEndPts > retentionHns_ ? tailEndPts - retentionHns_ : 0;
     auto first = std::find_if(
-        units_.begin(), units_.end(), [earliest](const EncodedAccessUnit& unit) {
-          return unit.exposedQpc >= earliest;
+        units_.begin(), last, [earliestPts](const EncodedAccessUnit& unit) {
+          return unit.ptsHns >= earliestPts;
         });
     first = std::find_if(
-        first, units_.end(), [](const EncodedAccessUnit& unit) {
+        first, last, [](const EncodedAccessUnit& unit) {
           return unit.keyframe;
         });
-    if (first == units_.end() || first->codecConfig.empty()) return false;
+    if (first == last || first->codecConfig.empty()) return false;
     const std::int64_t originPts = first->ptsHns;
     const std::uint32_t generation = first->generation;
     std::int64_t previousPts = -1;
-    for (auto current = first;
-         current != units_.end() && current->exposedQpc <= cutQpc;
-         ++current) {
+    for (auto current = first; current != last; ++current) {
       if (current->generation != generation || current->ptsHns < originPts ||
           current->ptsHns <= previousPts || current->durationHns <= 0 ||
           (current->keyframe && current->codecConfig != first->codecConfig)) {
@@ -433,7 +450,7 @@ class EncodedAccessUnitRing {
     snapshot.firstQpc = snapshot.units.front().exposedQpc;
     snapshot.lastQpc = snapshot.units.back().exposedQpc;
     snapshot.codecConfig = snapshot.units.front().codecConfig;
-    return snapshot.safe();
+    return snapshot.durationHns <= retentionHns_ && snapshot.safe();
   }
 
   std::size_t bytes() const { return bytes_; }
@@ -464,6 +481,7 @@ class EncodedAccessUnitRing {
   const std::size_t maximumBytes_;
   const std::int64_t retentionQpc_;
   const std::size_t maximumUnits_;
+  const std::int64_t retentionHns_;
   std::size_t bytes_ = 0;
   std::deque<EncodedAccessUnit> units_;
 };
@@ -4601,7 +4619,7 @@ bool RingSelfTest() {
           !ValidatePointerShape(invalidColor, 7) &&
           !ValidatePointerShape(unsupported, masked.bytes.size()));
 
-  EncodedAccessUnitRing bytesRing(80, 3'000, 16);
+  EncodedAccessUnitRing bytesRing(80, 3'000, 16, 3'000);
   const bool byteAppends =
       bytesRing.Append(TestUnit(1'000, true, 20)) &&
       bytesRing.Append(TestUnit(2'000, false, 20)) &&
@@ -4617,7 +4635,9 @@ bool RingSelfTest() {
           byteSnapshot.units.front().keyframe &&
           byteSnapshot.units.front().exposedQpc == 4'000);
 
-  EncodedAccessUnitRing timeRing(1'000, 2'000, 16);
+  // This case isolates the QPC storage boundary; its synthetic PTS span is
+  // deliberately given a wider independent export window.
+  EncodedAccessUnitRing timeRing(1'000, 2'000, 16, 10'000);
   const bool timeAppends =
       timeRing.Append(TestUnit(1'000, true, 10)) &&
       timeRing.Append(TestUnit(2'000, false, 10)) &&
@@ -4631,7 +4651,7 @@ bool RingSelfTest() {
           timeRing.Snapshot(5'000, timeSnapshot) &&
           timeSnapshot.units.size() == 3);
 
-  EncodedAccessUnitRing unitsRing(1'000, 10'000, 2);
+  EncodedAccessUnitRing unitsRing(1'000, 10'000, 2, 10'000);
   const bool unitsAppends = unitsRing.Append(TestUnit(1'000, true, 10)) &&
                             unitsRing.Append(TestUnit(2'000, false, 10)) &&
                             unitsRing.Append(TestUnit(3'000, true, 10));
@@ -4642,7 +4662,7 @@ bool RingSelfTest() {
           unitsRing.Snapshot(3'000, unitsSnapshot) &&
           unitsSnapshot.units.size() == 1);
 
-  EncodedAccessUnitRing shortRetentionRing(1'000, 1'000, 31);
+  EncodedAccessUnitRing shortRetentionRing(1'000, 1'000, 31, 1'000);
   const bool waitsForCleanPointWithoutFailure =
       shortRetentionRing.Append(TestUnit(1'000, true, 10)) &&
       shortRetentionRing.Append(TestUnit(2'100, false, 10)) &&
@@ -4656,6 +4676,71 @@ bool RingSelfTest() {
       waitsForCleanPointWithoutFailure && shortRetentionRing.size() == 1 &&
           shortRetentionRing.Snapshot(2'300, shortRetentionSnapshot) &&
           shortRetentionSnapshot.units.front().keyframe);
+
+  // Exact deterministic model of the 29,134.4 ms field failure. The service
+  // command arrives 540 ms after the newest asynchronous encoder output. If
+  // command time supplies the lower boundary too, the next six-frame clean
+  // point leaves 438 samples / 29,134.4 ms. The media-tail-owned window keeps
+  // 450 real samples / 29,932.604 ms, without crossing the 30 s privacy cap.
+  constexpr std::int64_t fieldRetentionHns = 300'000'000;
+  constexpr std::int64_t fieldStepHns = 665'170;
+  constexpr std::int64_t fieldLastDurationHns = 664'710;
+  constexpr std::int64_t fieldFirstQpc = 1'000'000'000;
+  constexpr std::int64_t legacyCommandCutFirstIndex = 42;
+  constexpr std::int64_t legacyCommandCutDurationHns =
+      (479 - legacyCommandCutFirstIndex) * fieldStepHns +
+      fieldLastDurationHns;
+  EncodedAccessUnitRing laggedSnapshotRing(
+      10'000, fieldRetentionHns, 500, fieldRetentionHns);
+  bool laggedSnapshotAppends = true;
+  for (std::int64_t index = 0; index < 480; ++index) {
+    const std::int64_t qpc = fieldFirstQpc + index * fieldStepHns;
+    EncodedAccessUnit unit = TestUnit(qpc, index % 6 == 0, 1);
+    unit.ptsHns = index * fieldStepHns;
+    unit.durationHns = index == 479
+        ? fieldLastDurationHns
+        : fieldStepHns;
+    laggedSnapshotAppends &= laggedSnapshotRing.Append(std::move(unit));
+  }
+  EncodedRingSnapshot laggedSnapshot;
+  const std::int64_t fieldLastQpc =
+      fieldFirstQpc + 479 * fieldStepHns;
+  const bool laggedSnapshotOk = laggedSnapshotRing.Snapshot(
+      fieldLastQpc + 5'400'000, laggedSnapshot);
+
+  EncodedRingSnapshot expiredSnapshot;
+  const bool refusesExpiredWindow = !laggedSnapshotRing.Snapshot(
+      fieldLastQpc + fieldRetentionHns + 1, expiredSnapshot);
+
+  EncodedAccessUnitRing postCutRing(1'000, 10'000, 16, 10'000);
+  EncodedAccessUnit beforeCutKey = TestUnit(100, true, 1);
+  beforeCutKey.durationHns = 100;
+  EncodedAccessUnit beforeCutDelta = TestUnit(200, false, 1);
+  beforeCutDelta.durationHns = 100;
+  EncodedAccessUnit afterCutKey = TestUnit(300, true, 1);
+  afterCutKey.durationHns = 100;
+  EncodedRingSnapshot postCutSnapshot;
+  const bool excludesPostCutSample =
+      postCutRing.Append(std::move(beforeCutKey)) &&
+      postCutRing.Append(std::move(beforeCutDelta)) &&
+      postCutRing.Append(std::move(afterCutKey)) &&
+      postCutRing.Snapshot(250, postCutSnapshot) &&
+      postCutSnapshot.units.size() == 2 &&
+      postCutSnapshot.lastQpc == 200;
+  passed &= NamedSelfTest(
+      "retention-export-window-anchors-to-latest-encoded-sample",
+      legacyCommandCutDurationHns == 291'344'000 &&
+          laggedSnapshotAppends && laggedSnapshotOk &&
+          laggedSnapshot.units.size() == 450 &&
+          laggedSnapshot.units.front().keyframe &&
+          !laggedSnapshot.units.front().codecConfig.empty() &&
+          laggedSnapshot.units.front().ptsHns == 0 &&
+          laggedSnapshot.firstQpc == fieldFirstQpc + 30 * fieldStepHns &&
+          laggedSnapshot.lastQpc == fieldLastQpc &&
+          laggedSnapshot.durationHns == 299'326'040 &&
+          laggedSnapshot.durationHns >= 294'000'000 &&
+          laggedSnapshot.durationHns <= fieldRetentionHns &&
+          excludesPostCutSample && refusesExpiredWindow);
 
   std::uint32_t parsedMaximumRetention = 0;
   passed &= NamedSelfTest(
@@ -4704,7 +4789,7 @@ bool RingSelfTest() {
           ServiceHealthIncludesCursor(priorHealthFlags |
                                       kRunCursorComposited));
 
-  EncodedAccessUnitRing generationRing(1'000, 10'000, 16);
+  EncodedAccessUnitRing generationRing(1'000, 10'000, 16, 10'000);
   const bool firstGeneration =
       generationRing.Append(TestUnit(1'000, true, 10, 1)) &&
       generationRing.Append(TestUnit(2'000, false, 10, 1));
@@ -4719,7 +4804,7 @@ bool RingSelfTest() {
       generationRing.Snapshot(4'000, generationSnapshot) &&
       generationSnapshot.generation == 2;
 
-  EncodedAccessUnitRing rebasedRing(1'000, 10'000, 16);
+  EncodedAccessUnitRing rebasedRing(1'000, 10'000, 16, 100'000);
   EncodedAccessUnit rebasedFirst = TestUnit(1'000, true, 10);
   rebasedFirst.ptsHns = 50'000;
   rebasedFirst.durationHns = 10'000;
@@ -4735,7 +4820,7 @@ bool RingSelfTest() {
       rebasedSnapshot.units.back().ptsHns == 30'000 &&
       rebasedSnapshot.durationHns == 50'000;
 
-  EncodedAccessUnitRing changedConfigRing(1'000, 10'000, 16);
+  EncodedAccessUnitRing changedConfigRing(1'000, 10'000, 16, 10'000);
   EncodedAccessUnit changedConfig = TestUnit(3'000, true, 10);
   changedConfig.codecConfig.assign(4, 0x02);
   EncodedRingSnapshot changedConfigSnapshot;
@@ -4968,7 +5053,7 @@ int RunCapture(const Request& request) {
       ? frequency * 30
       : std::numeric_limits<std::int64_t>::max();
   EncodedAccessUnitRing ring(RingMaximumBytes(30'000), retentionQpc,
-                             RingMaximumUnits(30'000));
+                             RingMaximumUnits(30'000), 300'000'000);
   std::uint32_t generation = 1;
   std::uint32_t recoveryAttempts = 0;
   Request currentRequest = request;
@@ -5160,7 +5245,9 @@ int RunService(const Request& request) {
   const std::size_t exportMaximumBytes =
       ringMaximumBytes + kExportContainerHeadroomBytes;
   EncodedAccessUnitRing ring(ringMaximumBytes, retentionQpc,
-                             RingMaximumUnits(request.retentionMs));
+                             RingMaximumUnits(request.retentionMs),
+                             static_cast<std::int64_t>(request.retentionMs) *
+                                 10'000);
   ExposureTimeline timeline(summary.qpcFrequency);
   auto pipeline = std::make_unique<CapturePipeline>();
   std::uint32_t generation = 1;

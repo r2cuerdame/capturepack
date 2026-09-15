@@ -62,6 +62,7 @@ const expectedNativeSelfTestLines = [
   'SELFTEST PASS bounded-time',
   'SELFTEST PASS bounded-max-units',
   'SELFTEST PASS short-retention-awaits-keyframe',
+  'SELFTEST PASS retention-export-window-anchors-to-latest-encoded-sample',
   'SELFTEST PASS retention-sized-bounds',
   'SELFTEST PASS frame-cadence-phase-no-reset-loss',
   'SELFTEST PASS cursor-contract-fails-closed',
