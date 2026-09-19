@@ -35,6 +35,7 @@
 #include <cstdint>
 #include <cstring>
 #include <cstdio>
+#include <cstdlib>
 #include <cwchar>
 #include <deque>
 #include <future>
@@ -2413,6 +2414,21 @@ bool ValidatePointerShape(const DXGI_OUTDUPL_POINTER_SHAPE_INFO& shape,
   return expected == bytes && expected <= kMaximumPointerShapeBytes;
 }
 
+// Desktop Duplication reports a separate hardware pointer plane only while
+// Windows renders the cursor in hardware. When another capture session (for
+// example a Windows Graphics Capture client with cursor capture, which the
+// shipping Chromium recorder holds during native warm-up and on the focused
+// Lane-S display) forces a software cursor, or while the pointer stays on a
+// different output, every frame arrives with LastMouseUpdateTime == 0 and the
+// desktop image is already the complete picture. Waiting for a pointer update
+// in that state would block submission forever, so an unreported plane is
+// treated as "nothing separate to composite". A pointer that was reported as
+// visible still has to carry a validated shape before it can be drawn.
+bool PointerPlaneReady(const PointerState& state) {
+  if (!state.hasPosition) return true;
+  return !state.visible || state.hasShape;
+}
+
 bool UpdatePointerPosition(const DXGI_OUTDUPL_FRAME_INFO& frame,
                            const DXGI_OUTPUT_DESC& output,
                            PointerState& state) {
@@ -3033,11 +3049,18 @@ class EncoderSession {
       ComPtr<IMFMediaEvent> event;
       HRESULT result = events_->GetEvent(MF_EVENT_FLAG_NO_WAIT, &event);
       if (result == MF_E_NO_EVENTS_AVAILABLE) return S_OK;
-      if (FAILED(result)) return result;
+      if (FAILED(result)) {
+        std::fprintf(stderr, "[dxgi-replay] encoder GetEvent failed hr=0x%08X\n",
+                     static_cast<unsigned>(result));
+        return result;
+      }
       HRESULT eventStatus = S_OK;
       MediaEventType eventType = MEUnknown;
       if (FAILED(event->GetStatus(&eventStatus)) || FAILED(eventStatus) ||
           FAILED(event->GetType(&eventType))) {
+        event->GetType(&eventType);
+        std::fprintf(stderr, "[dxgi-replay] encoder event failure type=%lu status=0x%08X\n",
+                     static_cast<unsigned long>(eventType), static_cast<unsigned>(eventStatus));
         return FAILED(eventStatus) ? eventStatus : E_FAIL;
       }
       if (eventType == METransformNeedInput) {
@@ -3045,13 +3068,19 @@ class EncoderSession {
       } else if (eventType == METransformHaveOutput) {
         if (!transitions_.Apply(EncoderTransition::kHaveOutput)) return MF_E_INVALIDREQUEST;
         result = PullOutput(ring, summary);
-        if (FAILED(result)) return result;
+        if (FAILED(result)) {
+          std::fprintf(stderr, "[dxgi-replay] encoder PullOutput failed hr=0x%08X pending=%zu\n",
+                       static_cast<unsigned>(result), pending_.size());
+          return result;
+        }
       } else if (eventType == METransformDrainComplete) {
         if (!transitions_.Apply(EncoderTransition::kDrainComplete)) {
           return MF_E_INVALIDREQUEST;
         }
       } else if (eventType == MEError) {
         transitions_.Apply(EncoderTransition::kError);
+        std::fprintf(stderr, "[dxgi-replay] encoder MEError status=0x%08X\n",
+                     static_cast<unsigned>(eventStatus));
         return FAILED(eventStatus) ? eventStatus : E_FAIL;
       }
     }
@@ -3154,7 +3183,11 @@ class EncoderSession {
     DWORD status = 0;
     HRESULT result = transform_->ProcessOutput(0, 1, &output, &status);
     if (output.pEvents != nullptr) output.pEvents->Release();
-    if (FAILED(result)) return result;
+    if (FAILED(result)) {
+      std::fprintf(stderr, "[dxgi-replay] encoder ProcessOutput failed hr=0x%08X status=0x%08lX flags=0x%08lX\n",
+                   static_cast<unsigned>(result), status, output.dwStatus);
+      return result;
+    }
     ComPtr<IMFSample> produced;
     if (callerSample) {
       produced = callerSample;
@@ -3392,9 +3425,11 @@ class CursorCompositor {
                     const DXGI_OUTPUT_DESC& output,
                     const FrameGeometry& geometry,
                     ID3D11Texture2D* target) {
-    if (!pointer.hasPosition) return S_FALSE;
-    if (!pointer.visible) return S_OK;
-    if (!pointer.hasShape || target == nullptr) return S_FALSE;
+    // No reported plane (software cursor or pointer on another output) and an
+    // invisible pointer both leave the desktop image authoritative.
+    if (!PointerPlaneReady(pointer)) return S_FALSE;
+    if (!pointer.hasPosition || !pointer.visible) return S_OK;
+    if (target == nullptr) return S_FALSE;
     CursorDrawRegion region;
     if (!ResolveCursorDrawRegion(pointer, output, geometry, region)) {
       return E_INVALIDARG;
@@ -3627,6 +3662,16 @@ class CapturePipeline {
       return result;
     }
     lease.Acquired();
+    if (std::getenv("CAPTUREPACK_DXGI_TRACE") != nullptr) {
+      std::fprintf(stderr,
+                   "[dxgi-replay] frame present=%lld mouse=%lld pos=%ld,%ld visible=%d shape=%u accumulated=%u hasPosition=%d hasShape=%d\n",
+                   static_cast<long long>(frameInfo.LastPresentTime.QuadPart),
+                   static_cast<long long>(frameInfo.LastMouseUpdateTime.QuadPart),
+                   frameInfo.PointerPosition.Position.x, frameInfo.PointerPosition.Position.y,
+                   frameInfo.PointerPosition.Visible ? 1 : 0,
+                   frameInfo.PointerShapeBufferSize, frameInfo.AccumulatedFrames,
+                   pointer_.hasPosition ? 1 : 0, pointer_.hasShape ? 1 : 0);
+    }
     result = UpdatePointer(frameInfo);
     if (FAILED(result)) {
       failureReason = ProbeReason::kCursorCompositionUnavailable;
@@ -3688,10 +3733,10 @@ class CapturePipeline {
       summary.droppedBackpressure += 1;
       return S_FALSE;
     }
-    if (!pointer_.hasPosition ||
-        (pointer_.visible && !pointer_.hasShape)) {
-      // Never submit an image until the Desktop Duplication pointer plane is
-      // fully known. A later pointer-only frame can complete this state.
+    if (!PointerPlaneReady(pointer_)) {
+      // A reported, visible pointer must not be submitted without its shape.
+      // A later pointer-only frame can complete this state. An unreported
+      // plane is not waited for: see PointerPlaneReady.
       return S_FALSE;
     }
     context_->CopyResource(ownedBgra_.Get(), source.Get());
@@ -4452,6 +4497,39 @@ bool RingSelfTest() {
           clippedRegion.logicalHeight == 2 && clippedRegion.skipX == 0 &&
           clippedRegion.skipY == 1 && clippedRegion.sourceLeft == 10 &&
           clippedRegion.sourceTop == 0);
+
+  // A duplication that never receives LastMouseUpdateTime (software cursor
+  // forced by another capture client, or pointer on another output) must not
+  // hold every desktop image back; only a reported visible pointer waits for
+  // its shape.
+  PointerState unreportedPlane;
+  DXGI_OUTDUPL_FRAME_INFO noMouseUpdate{};
+  noMouseUpdate.LastPresentTime.QuadPart = 456;
+  const bool unreportedStaysUnreported =
+      UpdatePointerPosition(noMouseUpdate, offsetOutput, unreportedPlane) &&
+      !unreportedPlane.hasPosition && !unreportedPlane.hasShape;
+  PointerState reportedHidden;
+  reportedHidden.hasPosition = true;
+  reportedHidden.visible = false;
+  PointerState reportedVisibleNoShape;
+  reportedVisibleNoShape.hasPosition = true;
+  reportedVisibleNoShape.visible = true;
+  PointerState reportedVisibleShape = reportedVisibleNoShape;
+  reportedVisibleShape.hasShape = true;
+  CursorCompositor uninitializedCompositor;
+  passed &= NamedSelfTest(
+      "cursor-unreported-plane-submits-desktop-image",
+      unreportedStaysUnreported && PointerPlaneReady(unreportedPlane) &&
+          PointerPlaneReady(reportedHidden) &&
+          !PointerPlaneReady(reportedVisibleNoShape) &&
+          PointerPlaneReady(reportedVisibleShape) &&
+          uninitializedCompositor.Composite(
+              unreportedPlane, offsetOutput, offsetGeometry, nullptr) == S_OK &&
+          uninitializedCompositor.Composite(
+              reportedHidden, offsetOutput, offsetGeometry, nullptr) == S_OK &&
+          uninitializedCompositor.Composite(
+              reportedVisibleNoShape, offsetOutput, offsetGeometry, nullptr) ==
+              S_FALSE);
 
   DXGI_OUTPUT_DESC rotatedOutput{};
   rotatedOutput.DesktopCoordinates = {500, -200, 1580, 1720};

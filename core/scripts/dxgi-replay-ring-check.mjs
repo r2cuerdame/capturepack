@@ -53,6 +53,7 @@ const expectedNativeSelfTestLines = [
   'SELFTEST PASS replay-output-size-physical-cursor-contract',
   'SELFTEST PASS replay-output-arguments-fail-closed',
   'SELFTEST PASS cursor-position-pointer-only-clipping',
+  'SELFTEST PASS cursor-unreported-plane-submits-desktop-image',
   'SELFTEST PASS cursor-rotation-multi-output-coordinates',
   'SELFTEST PASS cursor-monochrome-and-xor-semantics',
   'SELFTEST PASS cursor-masked-color-copy-xor-semantics',
