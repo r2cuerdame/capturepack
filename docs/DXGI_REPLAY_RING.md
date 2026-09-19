@@ -35,6 +35,19 @@ converted frame is accepted by the hardware encoder. Malformed or unsupported
 cursor data and composition failures report `cursor-composition-unavailable`
 and leave or return the application to the shipping recorder.
 
+A separate pointer plane is reported only while Windows renders the cursor in
+hardware. When another capture client forces a software cursor (the shipping
+Chromium recorder does during native warm-up and on the focused Lane-S
+display) or the pointer sits on a different output, every frame arrives with
+`LastMouseUpdateTime == 0` and the desktop image already contains the cursor.
+The helper therefore treats an unreported plane as complete and submits the
+desktop image unchanged; it never waits for a pointer update that cannot
+arrive. Only a pointer that was reported as visible is held back until its
+validated shape is available. Set `CAPTUREPACK_DXGI_TRACE=1` in the helper's
+environment to print one stderr line per acquired frame (present and mouse
+QPC, pointer position, visibility, shape size, accumulated frames); encoder
+event, output, and MEError failures always print their HRESULT.
+
 The existing Chromium/MediaRecorder replay flow and its declared GDI fallback
 remain available. The exact `--dxgi-native-replay` process switch permits a native
 candidate only after capability probing and a successful service `READY`
@@ -193,3 +206,37 @@ and local authorization when using the bounded local fallback. Never use the
 installed application or mix artifact/user-data directories. A locked LogonUI
 session returning `E_ACCESSDENIED` is an expected
 fail-closed unavailable result and is not a reason to weaken the gate.
+
+## Local field evidence after the pointer-plane fix (2026-09-19)
+
+Before commit `76edf64` the application's native candidate never reached
+READY on a host where the shipping recorder forced a software cursor: every
+Desktop Duplication frame carried `LastMouseUpdateTime == 0`, the helper kept
+waiting for the pointer plane, and the app fell back with reasons that looked
+like encoder failures. After the fix, one bounded `windows-replay-field-check`
+trial per backend was run on the same host from a medium-integrity
+(`S-1-16-8192`) launch: primary display 3840x2160 -> 1920x1080 at 15 fps,
+30 s retention, identical fixture workload. Distilled reports live under
+[evidence/issue138](evidence/issue138/) (`before-after.json`,
+`native-trial-summary.json`, `shipping-trial-summary.json`); raw samples,
+packs and window titles stay local.
+
+- Native: READY on `NVIDIA H.264 Encoder MFT` 2.3 s after launch, shipping
+  encoders suspended, capture selected a 29 520 ms / 442-sample / 30-keyframe
+  native snapshot that passed the production fMP4 validator and a full decode
+  (14.97 fps, max PTS gap 113 ms). The injected helper failure after save
+  restarted shipping and reached a fresh READY (`fallback_proof.pass`).
+- Overhead at application-process scope inside the measurement window,
+  native vs shipping: one-core CPU mean 32.6 % vs 37.7 % (p95 38.0 % vs
+  47.5 %), working-set peak 1 121 MB vs 1 139 MB, GPU engine total 4.19 % vs
+  4.59 %, video-encode 2.37 % vs 2.83 %. Capture latency is higher on native
+  (frozen 2 259 ms vs 1 721 ms) because the snapshot export (1 414 ms) is
+  synchronous at capture time.
+- Both trials fail the same unrelated `past_sampling` check: the fixture
+  window is clipped to a one-pixel sliver at the display edge in the
+  windows-context timeline while it crosses onto the rotated secondary
+  display, so 3 of 5 past queries see no target. The replay media and native
+  lifecycle checks pass on both.
+
+This is a diagnostic single-trial measurement. The release claim still
+requires the >=3-trial `qa:dxgi-replay-ab` acceptance described above.
