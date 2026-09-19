@@ -220,6 +220,16 @@ try {
     validCaptureDiagnostics.status === 0
       && validCaptureDiagnostics.stdout.includes('capture provenance is honest'))
 
+  motionManifest.media.cadence.backend = 'native-dxgi'
+  motionManifest.media.displays[1].cadence.backend = 'native-dxgi'
+  writeJson(motionManifestFile, motionManifest)
+  const validNativeCadence = runValidator(motionPack)
+  check('native snapshot cadence provenance is accepted beside its replay',
+    validNativeCadence.status === 0
+      && validNativeCadence.stdout.includes('capture provenance is honest'))
+  motionManifest.media.cadence.backend = 'chromium-desktop-capture'
+  motionManifest.media.displays[1].cadence.backend = 'chromium-desktop-capture'
+
   motionManifest.media.cadence.requested_fps = 1
   motionManifest.media.displays[1].cadence.requested_fps = 1
   writeJson(motionManifestFile, motionManifest)

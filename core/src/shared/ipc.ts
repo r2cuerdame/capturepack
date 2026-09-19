@@ -15,6 +15,9 @@ import type {
 export const IPC = {
   // main -> capture window: begin recording this desktop source id
   captureStart: 'capture:start',
+  // main -> capture window: enable/disable shipping replay encoding while a
+  // guarded native service owns this display.
+  captureReplayWorkload: 'capture:replay-workload',
   // main -> capture window: deliver the replay blob for an export in progress
   captureRequestReplay: 'capture:request-replay',
   // main -> capture window: the full-native snapshot phase is complete. A held
@@ -202,6 +205,12 @@ export const IPC = {
   // with the current settings (issue #54), then report the outcome. Nothing else
   // is touched: the capture buffer, the hotkey and any open editor keep running.
   settingsMcpRestart: 'settings:mcp-restart',
+  // settings window -> main (invoke): save OS-encrypted bearer secret for an action configuration
+  settingsActionSetSecret: 'settings:action-set-secret',
+  // settings window -> main (invoke): whether an encrypted action secret exists for a configId
+  settingsActionHasSecret: 'settings:action-has-secret',
+  // settings window -> main (invoke): delete any encrypted action secret for a configId
+  settingsActionForgetSecret: 'settings:action-forget-secret',
 
   // main -> hidden render window: render replay_annotated.webm from this job
   renderStart: 'render:start',
@@ -363,6 +372,8 @@ export interface ImageRegionSelectorCancelPayload {
  *  - 'buffer-too-short'  — it came back with less than a decodable video (a slot
  *    that just started or just rotated; on MP4 its payload is still entirely
  *    inside the muxer).
+ *  - 'native-export-failed' — native owned the retained history but could not
+ *    export it; shipping restarts for the next capture, not this lost past.
  */
 export type RecorderFailureReason =
   | 'screen-unavailable'
@@ -373,6 +384,7 @@ export type RecorderFailureReason =
   | 'no-frames'
   | 'replay-timeout'
   | 'buffer-too-short'
+  | 'native-export-failed'
 
 export interface CaptureStartPayload {
   // Electron display id (as a string) this recorder window is assigned to.
@@ -412,6 +424,11 @@ export interface CaptureStartPayload {
   // must end in no verdict at all rather than a destroyed buffer.
   // Absent in every normal run.
   simulateSlowReplayMs?: number
+}
+
+export interface CaptureReplayWorkloadPayload {
+  /** False releases shipping encoders/rings; true reacquires shipping capture. */
+  active: boolean
 }
 
 export interface CaptureReadyPayload {
@@ -531,6 +548,7 @@ export interface CaptureReadyPayload {
 export type CaptureReplayBackend =
   | 'chromium-desktop-capture'
   | 'windows-gdi-bitblt'
+  | 'native-dxgi'
 
 export type CaptureReplayQuality = 'full' | 'degraded'
 
@@ -722,6 +740,15 @@ export interface CaptureTickPayload {
    * live source (#109).
    */
   mediaTimeMs: number
+  /**
+   * What `mediaTimeMs` names for context sampling.
+   *
+   * Older senders omit this and retain the frame-presentation contract. While
+   * native DXGI owns replay history, the surviving Chromium stream is only a
+   * sampling metronome: its pixels and capture age are unrelated to the saved
+   * bytes, so the host observation stays on Core's wall-observation clock.
+   */
+  contextClockBasis?: 'frame-presentation' | 'wall-observation'
   /**
    * How old the frame already was when this tick was sent, in ms — if the
    * runtime can say (#109).
@@ -1668,6 +1695,11 @@ export interface SettingsSetResult {
   // Same contract for the explicit still-image shortcut. Kept separate so the
   // renderer can report the failure beside the field that actually failed.
   imageHotkeyFailed?: boolean
+}
+
+export interface ActionSetSecretPayload {
+  configId: string
+  secret: string
 }
 
 // ---------------------------------------------------------------------------

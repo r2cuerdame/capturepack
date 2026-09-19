@@ -9,6 +9,7 @@ import {
   nativeReplayHelperPath,
   NATIVE_REPLAY_MAX_LONG_EDGE,
   type NativeReplayFrame,
+  type NativeReplayStartResult,
 } from '../src/main/nativeReplayFallback'
 import { buildManifest } from '../src/main/exporter'
 import { NativeFallbackStartupErrors } from '../src/renderer/capture/nativeFallbackStartup'
@@ -391,6 +392,11 @@ console.log('\nActual Windows GDI frame source')
   const helper = process.env.CAPTUREPACK_NATIVE_REPLAY_HELPER
   if (process.platform !== 'win32' || helper === undefined) {
     check('compiled helper path is supplied on Windows', false, 'CAPTUREPACK_NATIVE_REPLAY_HELPER missing')
+  } else if (process.env.CAPTUREPACK_DESKTOP_INTERACTIVE === '0') {
+    console.log(
+      '\nSKIPPED live frame capture: Windows desktop session is locked or non-interactive.'
+      + '\n        Run on an unlocked interactive Windows desktop to verify live BitBlt frames.',
+    )
   } else {
     const manager = new NativeReplayFallbackManager(helper)
     const frames: NativeReplayFrame[] = []
@@ -401,43 +407,66 @@ console.log('\nActual Windows GDI frame source')
       scaleFactor: 1,
     }
     try {
-      const started = await manager.start(
-        {
-          webContentsId: 1,
-          display: display as never,
-          nativeBounds: {
-            x: Number(process.env.CAPTUREPACK_NATIVE_X),
-            y: Number(process.env.CAPTUREPACK_NATIVE_Y),
-            width: Number(process.env.CAPTUREPACK_NATIVE_WIDTH),
-            height: Number(process.env.CAPTUREPACK_NATIVE_HEIGHT),
+      let started: NativeReplayStartResult | undefined
+      try {
+        started = await manager.start(
+          {
+            webContentsId: 1,
+            display: display as never,
+            nativeBounds: {
+              x: Number(process.env.CAPTUREPACK_NATIVE_X),
+              y: Number(process.env.CAPTUREPACK_NATIVE_Y),
+              width: Number(process.env.CAPTUREPACK_NATIVE_WIDTH),
+              height: Number(process.env.CAPTUREPACK_NATIVE_HEIGHT),
+            },
+            requestedFps: 5,
+            width: 640,
+            height: 360,
           },
-          requestedFps: 5,
-          width: 640,
-          height: 360,
-        },
-        (_sessionId, frame) => frames.push(frame),
-        () => {
-          // An unexpected exit is asserted by the frame count below.
-        },
-      )
-      frames.unshift(started.firstFrame)
-      const deadline = Date.now() + 2_000
-      while (frames.length < 3 && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 50))
+          (_sessionId, frame) => frames.push(frame),
+          () => {
+            // An unexpected exit is asserted by the frame count below.
+          },
+        )
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        const isLocked =
+          /err 5\b/u.test(message) ||
+          /access is denied/iu.test(message) ||
+          /desktop.*locked|non-interactive|inaccessible/iu.test(message)
+        if (isLocked && process.env.CAPTUREPACK_DESKTOP_INTERACTIVE !== '1') {
+          console.log(
+            '\nSKIPPED live frame capture: Windows desktop session is locked or non-interactive.'
+            + '\n        Run on an unlocked interactive Windows desktop to verify live BitBlt frames.',
+          )
+        } else {
+          check(
+            'native BitBlt helper supplies at least three real timestamped JPEG frames',
+            false,
+            `startup failed: ${message}`,
+          )
+        }
       }
-      check(
-        'native BitBlt helper supplies at least three real timestamped JPEG frames',
-        frames.length >= 3 &&
-          frames.slice(0, 3).every((frame, index) =>
-            frame.jpeg[0] === 0xff &&
-            frame.jpeg[1] === 0xd8 &&
-            frame.clockProvenance === 'windows-qpc' &&
-            frame.capturedQpc > 0 &&
-            frame.qpcFrequency > 0 &&
-            (index === 0 || frame.sequence > frames[index - 1]!.sequence) &&
-            frame.capturedAtMs > 0),
-        `${frames.length} frame(s)`,
-      )
+      if (started !== undefined) {
+        frames.unshift(started.firstFrame)
+        const deadline = Date.now() + 2_000
+        while (frames.length < 3 && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 50))
+        }
+        check(
+          'native BitBlt helper supplies at least three real timestamped JPEG frames',
+          frames.length >= 3 &&
+            frames.slice(0, 3).every((frame, index) =>
+              frame.jpeg[0] === 0xff &&
+              frame.jpeg[1] === 0xd8 &&
+              frame.clockProvenance === 'windows-qpc' &&
+              frame.capturedQpc > 0 &&
+              frame.qpcFrequency > 0 &&
+              (index === 0 || frame.sequence > frames[index - 1]!.sequence) &&
+              frame.capturedAtMs > 0),
+          `${frames.length} frame(s)`,
+        )
+      }
     } finally {
       manager.stopAll()
     }

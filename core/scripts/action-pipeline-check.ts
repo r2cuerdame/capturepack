@@ -7,8 +7,11 @@
 // The invariant under test throughout: THE PACK IS ALREADY SAVED. An action
 // that fails, hangs, or throws something that is not an Error is that action's
 // own failure and nothing else's.
-import { readFileSync } from 'node:fs'
+import { createServer } from 'node:http'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { deliverWebhook } from '../src/main/actions/webhook'
 import {
   ACTION_PERMISSIONS,
   ACTION_TIMEOUT_DEFAULT_MS,
@@ -21,6 +24,7 @@ import {
   decideStep,
   haltsPipeline,
   idempotencyKey,
+  isAcceptableWebhookUrl,
   normalizeActionTimeout,
   packStateAtLeast,
   pipelineOrder,
@@ -183,6 +187,25 @@ check('a sub-second timeout is raised to one second', normalizeActionTimeout(5) 
 check('no retries means one attempt', totalAttempts(config({ retries: 0 })) === 1)
 check('two retries means three attempts', totalAttempts(config({ retries: 2 })) === 3)
 check('retries are capped', totalAttempts(config({ retries: 99 })) === 6)
+
+// WHICH URLS THE WEBHOOK WILL POST TO (#173).
+//
+// The rule lives in the contract so Settings can refuse a URL before a save.
+// A URL that carries userinfo is refused there too: Node's fetch throws on it,
+// and the TypeError it throws quotes the whole URL, credentials included.
+console.log('\nWHICH URLS THE WEBHOOK WILL POST TO')
+check('https anywhere is accepted', isAcceptableWebhookUrl('https://api.example.com/webhook'))
+check('http on loopback is accepted', isAcceptableWebhookUrl('http://localhost:8080/hook') && isAcceptableWebhookUrl('http://127.0.0.1/hook'))
+check('http off this machine is refused', !isAcceptableWebhookUrl('http://api.example.com/webhook'))
+check('a non-URL is refused', !isAcceptableWebhookUrl('not a url'))
+check('a user:password in the URL is refused (#173)', !isAcceptableWebhookUrl('https://user:pass@api.example.com/webhook'))
+check('a bare user (token) in the URL is refused (#173)', !isAcceptableWebhookUrl('https://token@api.example.com/webhook'))
+check('an empty user with a password is refused (#173)', !isAcceptableWebhookUrl('https://:pass@api.example.com/webhook'))
+check('loopback does not excuse credentials (#173)', !isAcceptableWebhookUrl('http://user:pass@localhost:8080/hook'))
+check(
+  'NEGATIVE CONTROL: an @ in the path or query is not userinfo and is still accepted',
+  isAcceptableWebhookUrl('https://api.example.com/hooks/team@example.com?reply=a@b'),
+)
 
 console.log('\nRUNNING A PIPELINE')
 {
@@ -359,6 +382,9 @@ console.log('\nTHE APP ACTUALLY RUNS THE PIPELINE')
   const onSave = read('src/main/actions/onSave.ts')
   const host = read('src/main/actions/host.ts')
   const i18n = read('src/shared/i18n.ts')
+  const ipc = read('src/shared/ipc.ts')
+  const settingsWindow = read('src/main/settingsWindow.ts')
+  const preload = read('src/preload/settings.ts')
 
   check('session.ts imports the after-save entry point', session.includes("import { runActionsAtState } from './actions/onSave'"))
   check(
@@ -387,13 +413,42 @@ console.log('\nTHE APP ACTUALLY RUNS THE PIPELINE')
   // GOAL.md: "Secrets never enter the pack — Windows Credential Manager or
   // Electron safeStorage." The negative half matters more than the positive:
   // a token in settings.json is a token in every backup of settings.json.
+  check(
+    'secret IPC channels exist in the IPC contract',
+    ipc.includes("settingsActionSetSecret: 'settings:action-set-secret'")
+      && ipc.includes("settingsActionHasSecret: 'settings:action-has-secret'")
+      && ipc.includes("settingsActionForgetSecret: 'settings:action-forget-secret'"),
+  )
+  check(
+    'main wires IPC handlers that invoke storeActionSecret, hasActionSecret, and forgetActionSecret',
+    settingsWindow.includes('IPC.settingsActionSetSecret')
+      && settingsWindow.includes('IPC.settingsActionHasSecret')
+      && settingsWindow.includes('IPC.settingsActionForgetSecret')
+      && settingsWindow.includes('storeActionSecret(')
+      && settingsWindow.includes('hasActionSecret(')
+      && settingsWindow.includes('forgetActionSecret('),
+  )
+  check(
+    'preload exposes typed secret methods on settingsBridge',
+    preload.includes('actionSetSecret(')
+      && preload.includes('actionHasSecret(')
+      && preload.includes('actionForgetSecret('),
+  )
   check('the host stores secrets through safeStorage', host.includes('safeStorage.encryptString'))
+  check('the host decrypts secrets through safeStorage', host.includes('safeStorage.decryptString'))
+  check(
+    'secrets round-trip via safeStorage in the host implementation',
+    host.includes('storeActionSecret')
+      && host.includes('readActionSecret')
+      && host.includes('hasActionSecret')
+      && host.includes('forgetActionSecret'),
+  )
   check(
     'it refuses to store a secret at all when the OS cannot encrypt, rather than writing one in clear',
     host.includes('if (!safeStorage.isEncryptionAvailable())') && host.includes('refusing to store a secret'),
   )
   check(
-    'no secret is persisted in settings.json',
+    'plaintext secrets are never written to settings.json',
     !settings.includes('actionSecret') && !settings.includes('webhookSecret'),
   )
 
@@ -471,6 +526,23 @@ console.log('\nSETTINGS > PLUGINS')
     'webhook settings for a removed configuration are dropped, not left to accumulate under a dead id',
     ui.includes('const live: Record<string, ActionWebhookSettings> = {}'),
   )
+  check(
+    'a masked input is rendered for the webhook bearer secret with save and clear buttons',
+    ui.includes("type = 'password'")
+      && ui.includes("t('settings.actionSecretPlaceholder')")
+      && ui.includes("t('settings.actionSecretSave')")
+      && ui.includes("t('settings.actionSecretClear')"),
+  )
+  check(
+    'secret presence is rendered without exposing the plaintext secret in the UI',
+    ui.includes('bridge.actionHasSecret(config.configId)')
+      && ui.includes("t('settings.actionSecretConfigured')")
+      && ui.includes("t('settings.actionSecretNone')"),
+  )
+  check(
+    'removing an action configuration purges its secret from action-secrets.json',
+    ui.includes('bridge.actionForgetSecret(config.configId)'),
+  )
 
   const keys = [
     'settings.providersGroup',
@@ -491,6 +563,12 @@ console.log('\nSETTINGS > PLUGINS')
     'settings.actionMoveUp',
     'settings.actionMoveDown',
     'settings.actionRemove',
+    'settings.actionSecret',
+    'settings.actionSecretPlaceholder',
+    'settings.actionSecretSave',
+    'settings.actionSecretClear',
+    'settings.actionSecretConfigured',
+    'settings.actionSecretNone',
   ]
   const missing = keys.filter((key) => {
     const matches = i18n.split(`'${key}':`).length - 1
@@ -564,6 +642,260 @@ console.log('\nTHE WEBHOOK SUMMARY READS FIELDS THAT EXIST')
       && !webhook.includes('snapshot.png')
       && !webhook.includes('replay.webm'),
   )
+  check(
+    'outbound webhook deliveries attach Authorization: Bearer <secret> when configured',
+    webhook.includes("headers.authorization = `Bearer ${delivery.secret}`"),
+  )
+  check(
+    'outbound webhook deliveries configure fetch with redirect: error (#172)',
+    webhook.includes("redirect: 'error'"),
+  )
+  check(
+    'webhook delivery errors reject unsupported redirects with an informative message (#172)',
+    webhook.includes("'the webhook responded with an unsupported redirect'"),
+  )
+  check(
+    'webhook delivery errors are passed through a userinfo redaction before they are rethrown (#173)',
+    webhook.includes('redactUrlCredentials(') && webhook.includes("could not reach the webhook: ${redactUrlCredentials(message)}"),
+  )
+}
+
+// A SECRET STORE THAT ONE INTERRUPTED WRITE CAN EMPTY FOR GOOD.
+//
+// The idempotency ledger is written beside its target and renamed. The secret
+// store was not: `writeFileSync(secretsPath(), ...)` truncates the file first,
+// and a shutdown in the gap leaves invalid JSON that `readSecretStore` reads
+// as `{}`. The next store or forget then persists that empty object over every
+// secret the user had. Same module, same pattern already written — held here
+// so the two cannot drift apart again. (#171)
+console.log('\nTHE SECRET STORE IS REPLACED ATOMICALLY')
+{
+  const readNorm = (relative: string): string =>
+    readFileSync(path.join(process.cwd(), relative), 'utf8').split('\r\n').join('\n')
+  const stripComments = (source: string): string =>
+    source
+      .split('\n')
+      .map((line) => {
+        const trimmed = line.trimStart()
+        if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) return ''
+        const marker = line.indexOf('//')
+        return marker < 0 ? line : line.slice(0, marker)
+      })
+      .join('\n')
+  const host = readNorm('src/main/actions/host.ts')
+  // SCOPED TO THE SECRETS SECTION. `renameSync` already appears in this file
+  // for the ledger; an assertion against the whole module would pass today
+  // with the secret store still written in place. Slice on the section
+  // banners (which are comments, so slice BEFORE stripping them).
+  const start = host.indexOf('// ── Secrets')
+  const end = host.indexOf('// ── Registry')
+  check('the host has a Secrets section followed by the Registry section', start >= 0 && end > start)
+  const secrets = stripComments(host.slice(Math.max(start, 0), end > start ? end : undefined))
+  const body = (name: string): string => {
+    const at = secrets.indexOf(`function ${name}(`)
+    if (at < 0) return ''
+    const close = secrets.indexOf('\n}\n', at)
+    return secrets.slice(at, close < 0 ? undefined : close)
+  }
+
+  check(
+    'secret store serialization goes through one helper, writeSecretStore',
+    secrets.includes('function writeSecretStore(store: Record<string, string>): void'),
+  )
+  check(
+    'writeSecretStore writes a sibling temporary file and renames it over action-secrets.json',
+    body('writeSecretStore').includes('const target = secretsPath()')
+      && body('writeSecretStore').includes('const temporary = `${target}.tmp`')
+      && body('writeSecretStore').includes('writeFileSync(temporary, JSON.stringify(store)')
+      && body('writeSecretStore').includes('renameSync(temporary, target)'),
+  )
+  check(
+    'the rename happens AFTER the temporary is fully written',
+    body('writeSecretStore').indexOf('writeFileSync(temporary') < body('writeSecretStore').indexOf('renameSync(temporary, target)'),
+  )
+  check(
+    'storeActionSecret persists through writeSecretStore',
+    body('storeActionSecret').includes('writeSecretStore(store)'),
+  )
+  check(
+    'forgetActionSecret persists through writeSecretStore',
+    body('forgetActionSecret').includes('writeSecretStore(store)'),
+  )
+  check(
+    'nothing in the Secrets section writes directly to secretsPath()',
+    !secrets.includes('writeFileSync(secretsPath()'),
+  )
+  check(
+    'the ONLY writeFileSync in the Secrets section is the one that targets the temporary file',
+    (secrets.match(/writeFileSync\(/gu) ?? []).length === 1 && secrets.includes('writeFileSync(temporary,'),
+    String((secrets.match(/writeFileSync\(/gu) ?? []).length),
+  )
+}
+
+console.log('\nACTION SECRETS ROUND-TRIP')
+{
+  const fakeSafeStorage = {
+    encryptString: (plaintext: string) => Buffer.from(`ENC:${plaintext}`, 'utf8'),
+    decryptString: (ciphertext: Buffer) => {
+      const s = ciphertext.toString('utf8')
+      if (!s.startsWith('ENC:')) throw new Error('decryption failed')
+      return s.slice(4)
+    },
+  }
+  const secret = 'bearer-token-12345-xyz'
+  const encrypted = fakeSafeStorage.encryptString(secret).toString('base64')
+  const decrypted = fakeSafeStorage.decryptString(Buffer.from(encrypted, 'base64'))
+  check('secrets round-trip via safeStorage encryption and decryption logic', decrypted === secret)
+}
+
+console.log('\nWEBHOOK DELIVERY REFUSES HTTP REDIRECTS')
+{
+  let targetReceivedCount = 0
+  let targetReceivedAuth: string | undefined
+  const targetServer = createServer((req, res) => {
+    targetReceivedCount += 1
+    targetReceivedAuth = req.headers.authorization
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ ok: true }))
+  })
+  await new Promise<void>((resolve) => targetServer.listen(0, '127.0.0.1', () => resolve()))
+  const targetPort = (targetServer.address() as { port: number }).port
+
+  let okServerReceivedAuth: string | undefined
+  let okServerReceivedBody = ''
+  const redirectServer = createServer((req, res) => {
+    if (req.url === '/redirect-302') {
+      res.writeHead(302, { Location: `http://127.0.0.1:${String(targetPort)}/target` })
+      res.end()
+      return
+    }
+    if (req.url === '/redirect-301') {
+      res.writeHead(301, { Location: `http://127.0.0.1:${String(targetPort)}/target` })
+      res.end()
+      return
+    }
+    if (req.url === '/redirect-307') {
+      res.writeHead(307, { Location: `http://127.0.0.1:${String(targetPort)}/target` })
+      res.end()
+      return
+    }
+    if (req.url === '/redirect-308') {
+      res.writeHead(308, { Location: `http://127.0.0.1:${String(targetPort)}/target` })
+      res.end()
+      return
+    }
+    if (req.url === '/ok') {
+      okServerReceivedAuth = req.headers.authorization
+      const chunks: Buffer[] = []
+      req.on('data', (chunk: Buffer) => chunks.push(chunk))
+      req.on('end', () => {
+        okServerReceivedBody = Buffer.concat(chunks).toString('utf8')
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ status: 'ok' }))
+      })
+      return
+    }
+    res.writeHead(404)
+    res.end()
+  })
+  await new Promise<void>((resolve) => redirectServer.listen(0, '127.0.0.1', () => resolve()))
+  const redirectPort = (redirectServer.address() as { port: number }).port
+
+  const tempPackDir = mkdtempSync(path.join(tmpdir(), 'capturepack-webhook-redirect-'))
+  const manifestContent = JSON.stringify({
+    id: 'e3f1c0de-0000-4000-8000-000000000001',
+    created_at: '2026-09-11T00:00:00.000Z',
+    capture_kind: 'still',
+    format_version: '1.0.0',
+    generator: { name: 'CapturePack', version: '0.5.0' },
+    media: { displays: [] },
+  })
+  writeFileSync(path.join(tempPackDir, 'manifest.json'), manifestContent, 'utf8')
+
+  try {
+    // 302 redirect
+    let caught302: Error | null = null
+    try {
+      await deliverWebhook(tempPackDir, {
+        url: `http://127.0.0.1:${String(redirectPort)}/redirect-302`,
+        secret: 'bearer-secret-302',
+        timeoutMs: 5_000,
+      })
+    } catch (err) {
+      caught302 = err instanceof Error ? err : new Error(String(err))
+    }
+    check(
+      'deliverWebhook refuses HTTP 302 redirect with an informative message (#172)',
+      caught302 !== null && caught302.message === 'the webhook responded with an unsupported redirect',
+      caught302?.message ?? 'no error thrown',
+    )
+    check('redirect target server was never contacted', targetReceivedCount === 0, `requests: ${String(targetReceivedCount)}`)
+    check('bearer secret was never sent to redirect target', targetReceivedAuth === undefined)
+
+    // 301, 307, 308 redirects
+    for (const status of [301, 307, 308]) {
+      let caught: Error | null = null
+      try {
+        await deliverWebhook(tempPackDir, {
+          url: `http://127.0.0.1:${String(redirectPort)}/redirect-${String(status)}`,
+          secret: `bearer-secret-${String(status)}`,
+          timeoutMs: 5_000,
+        })
+      } catch (err) {
+        caught = err instanceof Error ? err : new Error(String(err))
+      }
+      check(
+        `deliverWebhook refuses HTTP ${String(status)} redirect (#172)`,
+        caught !== null && caught.message === 'the webhook responded with an unsupported redirect',
+        caught?.message ?? 'no error thrown',
+      )
+    }
+    check('target server remained completely uncalled across all redirect tests', targetReceivedCount === 0)
+
+    // Normal 200 delivery succeeds
+    let normalError: Error | null = null
+    try {
+      await deliverWebhook(tempPackDir, {
+        url: `http://127.0.0.1:${String(redirectPort)}/ok`,
+        secret: 'bearer-secret-ok',
+        timeoutMs: 5_000,
+      })
+    } catch (err) {
+      normalError = err instanceof Error ? err : new Error(String(err))
+    }
+    check('deliverWebhook succeeds when receiver answers 200 OK', normalError === null, normalError?.message ?? '')
+    check('200 OK receiver received the configured bearer secret', okServerReceivedAuth === 'Bearer bearer-secret-ok')
+    check(
+      '200 OK receiver received the pack summary payload',
+      okServerReceivedBody.includes('capturepack.pack.saved') && okServerReceivedBody.includes('e3f1c0de-0000-4000-8000-000000000001'),
+    )
+
+    // A URL that slipped past the contract with credentials in it. fetch refuses
+    // it before any socket is opened, and quotes the URL in the TypeError; the
+    // message that reaches the log and the notification must not carry them.
+    const receivedBefore = targetReceivedCount
+    let credentialError: Error | null = null
+    try {
+      await deliverWebhook(tempPackDir, {
+        url: `http://leaked-user:leaked-s3cret@127.0.0.1:${String(targetPort)}/target`,
+        secret: null,
+        timeoutMs: 5_000,
+      })
+    } catch (err) {
+      credentialError = err instanceof Error ? err : new Error(String(err))
+    }
+    check('deliverWebhook fails on a URL with embedded credentials (#173)', credentialError !== null)
+    check(
+      'and the failure message carries neither the user nor the password (#173)',
+      credentialError !== null && !credentialError.message.includes('leaked-user') && !credentialError.message.includes('leaked-s3cret'),
+      credentialError?.message ?? '',
+    )
+    check('and the receiver was never contacted', targetReceivedCount === receivedBefore)
+  } finally {
+    await new Promise<void>((resolve) => targetServer.close(() => resolve()))
+    await new Promise<void>((resolve) => redirectServer.close(() => resolve()))
+    rmSync(tempPackDir, { recursive: true, force: true })
+  }
 }
 
 if (failed > 0) {

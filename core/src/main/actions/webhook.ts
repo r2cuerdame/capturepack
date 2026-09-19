@@ -86,11 +86,46 @@ export async function readPackSummary(packDir: string): Promise<PackSummary> {
 }
 
 /**
+ * Strip `user:password@` out of any URL quoted in an error message.
+ *
+ * The contract refuses a URL with credentials in it, so this should never
+ * have anything to do. It exists for the day it does: fetch quotes the whole
+ * URL when it rejects one, and a message from here is written to the log and
+ * shown in the notification, retried and written again (#173).
+ */
+export function redactUrlCredentials(message: string): string {
+  return message.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/giu, '$1<redacted>@')
+}
+
+/**
+ * Whether an error raised during delivery was caused by an HTTP redirect (#172).
+ *
+ * With `redirect: 'error'`, the Fetch Standard treats encountering a redirect
+ * status (301, 302, 303, 307, 308) as a network error. In Node's undici, this
+ * throws a TypeError with `cause: Error: unexpected redirect`.
+ */
+function isRedirectError(error: unknown): boolean {
+  if (error instanceof Error) {
+    if (/redirect/i.test(error.message)) return true
+    const cause = (error as { cause?: unknown }).cause
+    if (cause instanceof Error && /redirect/i.test(cause.message)) return true
+    if (typeof cause === 'string' && /redirect/i.test(cause)) return true
+  } else if (typeof error === 'string') {
+    if (/redirect/i.test(error)) return true
+  }
+  return false
+}
+
+/**
  * POST the summary.
  *
  * Throws on anything that is not a 2xx, with the status in the message, because
  * that message is what the save screen shows next to the Retry button. "Failed"
  * with no status is a row the user cannot act on.
+ *
+ * Redirects are refused (`redirect: 'error'`). Following redirects can downgrade
+ * HTTPS to plaintext HTTP, expose Authorization secrets to third parties, or
+ * mutate POST to GET, violating the action's URL security policy (#172).
  */
 export async function deliverWebhook(packDir: string, delivery: WebhookDelivery): Promise<void> {
   const summary = await readPackSummary(packDir)
@@ -114,16 +149,22 @@ export async function deliverWebhook(packDir: string, delivery: WebhookDelivery)
       headers,
       body: JSON.stringify({ event: 'capturepack.pack.saved', pack: summary }),
       signal: controller.signal,
+      redirect: 'error',
     })
   } catch (error) {
+    if (isRedirectError(error)) {
+      throw new Error('the webhook responded with an unsupported redirect')
+    }
     const message = error instanceof Error ? error.message : String(error)
-    throw new Error(`could not reach the webhook: ${message}`)
+    throw new Error(`could not reach the webhook: ${redactUrlCredentials(message)}`)
   } finally {
     clearTimeout(timer)
   }
 
   if (!response.ok) {
+    if (response.status >= 300 && response.status < 400) {
+      throw new Error('the webhook responded with an unsupported redirect')
+    }
     throw new Error(`the webhook answered ${String(response.status)} ${response.statusText}`)
   }
 }
-

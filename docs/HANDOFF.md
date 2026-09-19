@@ -1,4 +1,4 @@
-# CapturePack handoff — after v0.5.0
+# CapturePack handoff — after v0.5.1
 
 Last verified: 2026-09-05 (Asia/Seoul)
 
@@ -20,25 +20,25 @@ Use [docs/README.md](README.md) as the documentation index. The older
 
 ## Public state
 
-CapturePack **0.5.0** is the current stable Windows release.
+CapturePack **0.5.1** is the current stable Windows release.
 
 | Item | Current state |
 |---|---|
-| Public release | [v0.5.0](https://github.com/r2cuerdame/capturepack/releases/tag/v0.5.0), stable (`draft=false`, `prerelease=false`) |
-| Release source | Immutable `v0.5.0` tag; never move or replace it |
-| Release verification | The guarded Release workflow reran all 89 RC steps on the tagged source, built the Windows artifacts, and byte-verified the exact four-file draft before publication |
-| Delivery | The After Save Action host [#68](https://github.com/r2cuerdame/capturepack/issues/68) and the two-list plugin settings [#69](https://github.com/r2cuerdame/capturepack/issues/69), listed under "What 0.5.0 contains" |
+| Public release | [v0.5.1](https://github.com/r2cuerdame/capturepack/releases/tag/v0.5.1), stable (`draft=false`, `prerelease=false`) |
+| Release source | Immutable `v0.5.1` tag; never move or replace it |
+| Release verification | The guarded Release workflow reran the complete `qa:rc` gate on the tagged source, built the Windows artifacts, and byte-verified the exact four-file draft before publication |
+| Delivery | WebM recorder ownership, strict image/callback boundaries, packaged-QA telemetry isolation, zero-audit dependency refresh, and bounded Windows evidence sampling; native DXGI remains opt-in experimental work for a later release |
 | Website | [capturepack.dev](https://capturepack.dev/), with all nine languages kept on the application version |
 
 The Release workflow and its remote byte verification are authoritative for the
 published installer's hashes. Do not reuse a local RC hash or any older release's
-values when checking 0.5.0.
+values when checking 0.5.1.
 
 ### Historical 0.4.1 publication evidence
 
 The following table and investigation record apply to **0.4.1 only**. They stay
 here because they established the release-verification discipline; they are not
-the current version or 0.5.0 asset metadata.
+the current version or 0.5.1 asset metadata.
 
 | Item | Verified state |
 |---|---|
@@ -415,7 +415,7 @@ because breaking them is quiet:
   save and a render must not multiply decoders or encoders.
 
 Application version and pack format version are different contracts.
-`core/package.json` is application version `0.5.0`; packs containing the
+`core/package.json` is application version `0.5.1`; packs containing the
 optional viewer declare a compatible format version of at least `0.5.0`.
 
 ## Measured characteristic: the picture lags its own timestamp
@@ -639,8 +639,8 @@ npm run qa:rc
 npm audit --omit=dev
 ```
 
-`qa:rc` currently runs 90 discovered `check:*` regressions plus type checking,
-the production build, and isolated Electron smoke: **93 gate steps** — 91 with
+`qa:rc` currently runs 96 discovered `check:*` regressions plus type checking,
+the production build, and isolated Electron smoke: **99 gate steps** — 97 with
 `--skip-build`, which drops the build and the smoke that follows it. The gate
 discovers its checks from `core/package.json`, so that number moves with every
 release. Count it before quoting it, and trust the count over any document,
@@ -765,9 +765,9 @@ A push or tag push does not publish CapturePack. Publication is a manual
 `workflow_dispatch` that runs the full QA/build/package/remote-byte-verification
 sequence described in [RELEASING.md](RELEASING.md).
 
-Never overwrite a public version. A product hotfix after 0.5.0 must use a higher
+Never overwrite a public version. A product hotfix after 0.5.1 must use a higher
 version and fix forward. Documentation-only commits may follow the release on
-`main`, but they do not alter the binaries identified by the `v0.5.0` tag.
+`main`, but they do not alter the binaries identified by the `v0.5.1` tag.
 
 ## Suggested next order
 

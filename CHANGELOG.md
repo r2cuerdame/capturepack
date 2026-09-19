@@ -4,6 +4,24 @@ All notable changes to CapturePack. Format follows [Keep a Changelog](https://ke
 this project uses [semantic versioning](https://semver.org/) for the app, and the pack
 format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 
+## 0.5.1 — 2026-09-16
+
+### Fixed
+
+- WebM replay rotation no longer waits on a stalled Blob conversion, so one
+  conversion cannot take ownership of later recorder epochs or stop retention.
+- Display-media requests complete exactly once even when the callback throws,
+  and missing, empty, or invalid exact-display images fail closed before the
+  editor instead of substituting another display's pixels.
+- Packaged QA telemetry is isolated as `environment=test` with separate daily
+  identity state; invalid QA/environment overrides disable collection instead
+  of falling through to production.
+- Runtime and packaging parser dependencies are updated so both production and
+  full development-tree audits report zero vulnerabilities.
+- Windows release evidence sampling reuses bounded process/GPU queries, waits
+  for exact-PID readiness, and rejects incomplete samples instead of treating
+  missing measurements as success.
+
 ## 0.5.0 — 2026-09-05
 
 ### Added

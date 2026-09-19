@@ -36,11 +36,18 @@ import type {
 import { DEFAULT_CAPTURE_HOTKEY } from '../shared/types'
 import type { Annotation, Settings } from '../shared/types'
 import { captureKindOf } from '../shared/captureMedia'
-import { isRenderInFlight, onRenderStateChange, startAnnotatedRender } from './annotatedRender'
+import {
+  isRenderInFlight,
+  onRenderStateChange,
+  startAnnotatedRender,
+  startDisplayRender,
+  startKeyframeStill,
+} from './annotatedRender'
 import { createPackZip, replayMimeType } from './exporter'
+import type { PackHandle as ExportPackHandle } from './exporter'
 import { packDocLanguage, uiLanguage, uiT } from './locale'
 import { createPackStore, openPack } from './mcp/store'
-import type { PackHandle, PackStore, RawPackEntry } from './mcp/store'
+import type { PackHandle as StorePackHandle, PackStore, RawPackEntry } from './mcp/store'
 import { moveNoReplace } from './moveNoReplace'
 import {
   archiveStem,
@@ -62,6 +69,7 @@ import { startEditFlow } from './session'
 import { openSettingsWindow } from './settingsWindow'
 import { invalidateStorageUsage, storageUsage } from './storage'
 import { copyTextToClipboard } from './clipboard'
+import { planHistoryRerender, type HistoryRerenderPlan } from './historyRerenderPlan'
 
 const THUMB_WIDTH = 320
 const MAX_PACK_NAME_LENGTH = 180
@@ -643,7 +651,7 @@ function packStamp(entry: RawPackEntry): number {
   return stamp
 }
 
-function annotationsOf(pack: PackHandle): Annotation[] {
+function annotationsOf(pack: StorePackHandle): Annotation[] {
   const file = pack.annotations()
   if (!Array.isArray(file?.annotations)) return []
   // Entry-level validation: a hand-edited annotations.json can hold null or
@@ -896,12 +904,36 @@ function startRerender(entry: RawPackEntry): HistoryActionResult {
   }
   const replayDurationMs =
     typeof manifest.media.replay_duration_ms === 'number' ? manifest.media.replay_duration_ms : 0
+  const annotations = annotationsOf(pack)
+  const plan = planHistoryRerender(manifest, annotations)
+  const displaySources: Array<{
+    plan: HistoryRerenderPlan['displays'][number]
+    snapshotPng: Buffer
+    replayWebm: Buffer | null
+  }> = []
+  // Preflight every annotated secondary display before starting any write, so
+  // a damaged pack cannot be left with a freshly rendered focused view beside
+  // stale secondary outputs.
+  for (const display of plan.displays) {
+    const snapshotPng = pack.readBinary(display.snapshot)
+    if (snapshotPng === null) {
+      return { ok: false, error: t('history.errFileMissing', { file: display.snapshot }) }
+    }
+    const displayReplay = display.replay === null ? null : pack.readBinary(display.replay)
+    if (display.replay !== null && displayReplay === null) {
+      return { ok: false, error: t('history.errFileMissing', { file: display.replay }) }
+    }
+    displaySources.push({ plan: display, snapshotPng, replayWebm: displayReplay })
+  }
   startAnnotatedRender(
     { id: manifest.id, dirPath: entry.path },
     {
       replayWebm,
       replayMimeType: replayMimeType(replayRel),
-      annotations: annotationsOf(pack),
+      annotations: plan.focusedAnnotations,
+      motionSpace: plan.motionSpace,
+      displayNumbers: plan.displayNumbers,
+      ...(plan.focusedDisplay === undefined ? {} : { focusedDisplay: plan.focusedDisplay }),
       width: annotationsFile.reference_width,
       height: annotationsFile.reference_height,
       fps: settings.fps,
@@ -914,7 +946,55 @@ function startRerender(entry: RawPackEntry): HistoryActionResult {
     // event), so that push is what drops "Rendering…" back to [Retry].
     () => {},
   )
+  startHistoryDisplayRenders(
+    { id: manifest.id, dirPath: entry.path },
+    displaySources,
+    plan,
+    settings,
+  )
   return { ok: true }
+}
+
+function startHistoryDisplayRenders(
+  handle: ExportPackHandle,
+  sources: ReadonlyArray<{
+    plan: HistoryRerenderPlan['displays'][number]
+    snapshotPng: Buffer
+    replayWebm: Buffer | null
+  }>,
+  renderPlan: HistoryRerenderPlan,
+  settings: Settings,
+): void {
+  for (const source of sources) {
+    const display = source.plan
+    const common = {
+      motionSpace: renderPlan.motionSpace,
+      displayNumbers: renderPlan.displayNumbers,
+      ...(renderPlan.focusedDisplay === undefined
+        ? {}
+        : { focusedDisplay: renderPlan.focusedDisplay }),
+      width: display.width,
+      height: display.height,
+      docLanguage: packDocLanguage(settings),
+      display: display.index,
+    }
+    if (source.replayWebm !== null && display.replay !== null && display.replayDurationMs > 0) {
+      startDisplayRender(handle, {
+        ...common,
+        replayWebm: source.replayWebm,
+        replayMimeType: replayMimeType(display.replay),
+        annotations: display.annotations,
+        fps: settings.fps,
+        replayDurationMs: display.replayDurationMs,
+      })
+    } else {
+      startKeyframeStill(handle, {
+        ...common,
+        snapshotPng: source.snapshotPng,
+        annotations: display.stillAnnotations,
+      })
+    }
+  }
 }
 
 async function renamePack(entry: RawPackEntry, rawName: string): Promise<HistoryRenameResult> {

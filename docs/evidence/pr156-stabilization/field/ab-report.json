@@ -1,0 +1,455 @@
+{
+  "schema": "capturepack.dxgi-replay-ab-report",
+  "version": 1,
+  "result": "FAIL",
+  "thresholds": {
+    "minimum_trials": 3,
+    "minimum_post_ready_process_samples": 3,
+    "cpu_mean_ratio": 0.9,
+    "gpu_total_mean_ratio": 1.1,
+    "gpu_video_encode_mean_ratio": 1.1,
+    "working_set_mean_ratio": 1.1,
+    "capture_to_saved_ratio": 1.1,
+    "replay_export_ratio": 1.1,
+    "latency_jitter_ms": 250
+  },
+  "trial_count": {
+    "shipping": 3,
+    "native": 3
+  },
+  "workload_identity": {
+    "source_commit": "fb982677c96d6d365ea06bd1d1a2d430b09873dc",
+    "app_main_sha256": "a0669e1e49955cb9d36663c6c978b2a817d938d9877c900ad1beaef5efe6bccd",
+    "dxgi_helper_sha256": "fd529165f9e33a3d069adf2f0be82e85ae3db8420eea9efa88646d1205a81b6f",
+    "fps": 15,
+    "duration_seconds": 30,
+    "warmup_ms": 3000,
+    "target_requested": "primary",
+    "target_resolved": "2678724301",
+    "replay_max_width": 1920,
+    "workload": {
+      "fixture": "windows-replay-field-surface",
+      "fixture_schema_version": 1,
+      "movement_cycle_ms": 9000
+    },
+    "layout": {
+      "primary_display_id": "2678724301",
+      "movement_start_display_id": "2678724301",
+      "movement_display_order_ids": [
+        "2678724301",
+        "1275392340"
+      ],
+      "displays": [
+        {
+          "index": 1,
+          "id": "1275392340",
+          "label": "DELL U2412M",
+          "bounds_dip": {
+            "x": -1200,
+            "y": 0,
+            "width": 1200,
+            "height": 1920
+          },
+          "physical_bounds": {
+            "x": -1200,
+            "y": 0,
+            "width": 1200,
+            "height": 1920
+          },
+          "scale_factor": 1,
+          "rotation": 90,
+          "internal": false
+        },
+        {
+          "index": 2,
+          "id": "2678724301",
+          "label": "LG ULTRAGEAR+",
+          "bounds_dip": {
+            "x": 0,
+            "y": 0,
+            "width": 2560,
+            "height": 1440
+          },
+          "physical_bounds": {
+            "x": 0,
+            "y": 0,
+            "width": 3840,
+            "height": 2160
+          },
+          "scale_factor": 1.5,
+          "rotation": 0,
+          "internal": false
+        }
+      ]
+    },
+    "replay_outputs": [
+      {
+        "display": 2,
+        "fixture_display_id": "2678724301",
+        "size": {
+          "width": 1920,
+          "height": 1080
+        },
+        "requested_fps": 15
+      }
+    ]
+  },
+  "evidence": {
+    "shipping_reports": [
+      "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\shipping-1\\report.json",
+      "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\shipping-2\\report.json",
+      "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\shipping-3\\report.json"
+    ],
+    "native_reports": [
+      "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\native-1\\report.json",
+      "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\native-2\\report.json",
+      "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\native-3\\report.json"
+    ],
+    "raw_process_samples": [
+      "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\shipping-1\\process-samples.jsonl",
+      "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\shipping-2\\process-samples.jsonl",
+      "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\shipping-3\\process-samples.jsonl",
+      "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\native-1\\process-samples.jsonl",
+      "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\native-2\\process-samples.jsonl",
+      "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\native-3\\process-samples.jsonl"
+    ]
+  },
+  "metrics": {
+    "cpu_total_capacity_percent": {
+      "name": "cpu_total_capacity_percent",
+      "shipping": {
+        "count": 9,
+        "raw": [
+          1.877711231827419,
+          1.8626942008921703,
+          2.000907874617737,
+          1.7924059345365555,
+          1.943474643151249,
+          2.014025288485146,
+          2.188307990642699,
+          2.52964984939759,
+          2.188283862876254
+        ],
+        "min": 1.7924059345365555,
+        "p50": 2.000907874617737,
+        "p95": 2.3931131058956336,
+        "max": 2.52964984939759,
+        "mean": 2.04416231960298
+      },
+      "native": {
+        "count": 7,
+        "raw": [
+          1.3415521875466625,
+          2.2355045180722892,
+          1.7788295958977498,
+          1.7603784754048273,
+          1.865610889197638,
+          2.071282236683538,
+          2.0644819026265213
+        ],
+        "min": 1.3415521875466625,
+        "p50": 1.865610889197638,
+        "p95": 2.186237833655664,
+        "max": 2.2355045180722892,
+        "mean": 1.8739485436327468
+      },
+      "delta_mean": -0.17021377597023335,
+      "delta_p95": -0.20687527223996982,
+      "ratio_mean": 0.9167317710839653,
+      "ratio_p95": 0.9135539094536254,
+      "ratio_limit": 0.9,
+      "absolute_jitter": 0,
+      "allowed_native_mean": 1.839746087642682,
+      "pass": false
+    },
+    "gpu_total_engine_percent": {
+      "name": "gpu_total_engine_percent",
+      "shipping": {
+        "count": 12,
+        "raw": [
+          2.605557176473262,
+          3.483629240542424,
+          3.304877635974897,
+          5.436280691376524,
+          3.3994802909369253,
+          3.2286302972240275,
+          3.306950141317053,
+          4.622421089451519,
+          3.3682913909620362,
+          3.3397066439147594,
+          3.1042250302387804,
+          5.55235282422716
+        ],
+        "min": 2.605557176473262,
+        "p50": 3.353999017438398,
+        "p95": 5.48851315115931,
+        "max": 5.55235282422716,
+        "mean": 3.7293668710532812
+      },
+      "native": {
+        "count": 8,
+        "raw": [
+          0.03446529897185625,
+          3.3252843870885034,
+          3.3301550803404507,
+          5.146036543050336,
+          0.03234765695824886,
+          3.3670349628585656,
+          3.9186577686369404,
+          5.572881185768766
+        ],
+        "min": 0.03234765695824886,
+        "p50": 3.3485950215995084,
+        "p95": 5.423485560817316,
+        "max": 5.572881185768766,
+        "mean": 3.0908578604592085
+      },
+      "delta_mean": -0.6385090105940727,
+      "delta_p95": -0.06502759034199457,
+      "ratio_mean": 0.8287888983113804,
+      "ratio_p95": 0.9881520571143646,
+      "ratio_limit": 1.1,
+      "absolute_jitter": 0,
+      "allowed_native_mean": 4.10230355815861,
+      "pass": true
+    },
+    "gpu_video_encode_percent": {
+      "name": "gpu_video_encode_percent",
+      "shipping": {
+        "count": 12,
+        "raw": [
+          2.177667559728096,
+          2.0845157300650357,
+          1.977837264663373,
+          3.9847280677769956,
+          1.9705287563803657,
+          1.9394831817977969,
+          1.9852702196356127,
+          3.314082789789924,
+          2.0013300592701597,
+          2.039850446684114,
+          1.7764923210345203,
+          4.189397502182502
+        ],
+        "min": 1.7764923210345203,
+        "p50": 2.020590252977137,
+        "p95": 4.0768293132594735,
+        "max": 4.189397502182502,
+        "mean": 2.4534319915840412
+      },
+      "native": {
+        "count": 8,
+        "raw": [
+          0,
+          1.9542895555327833,
+          1.9420637675214754,
+          3.787140378102399,
+          0,
+          1.987001334018737,
+          2.4834478074466837,
+          4.162064340275904
+        ],
+        "min": 0,
+        "p50": 1.97064544477576,
+        "p95": 4.0308409535151775,
+        "max": 4.162064340275904,
+        "mean": 2.039500897862248
+      },
+      "delta_mean": -0.41393109372179326,
+      "delta_p95": -0.04598835974429605,
+      "ratio_mean": 0.8312848715017604,
+      "ratio_p95": 0.9887195768548064,
+      "ratio_limit": 1.1,
+      "absolute_jitter": 0,
+      "allowed_native_mean": 2.6987751907424458,
+      "pass": true
+    },
+    "working_set_bytes": {
+      "name": "working_set_bytes",
+      "shipping": {
+        "count": 12,
+        "raw": [
+          1116344320,
+          1125756928,
+          1128615936,
+          1135927296,
+          1139298304,
+          1086451712,
+          1094254592,
+          1096683520,
+          1101225984,
+          1104113664,
+          1113571328,
+          1117241344
+        ],
+        "min": 1086451712,
+        "p50": 1114957824,
+        "p95": 1137444249.6,
+        "max": 1139298304,
+        "mean": 1113290410.6666667
+      },
+      "native": {
+        "count": 9,
+        "raw": [
+          728064000,
+          1058009088,
+          1099616256,
+          1102254080,
+          1104760832,
+          737337344,
+          1108856832,
+          1109471232,
+          1109876736
+        ],
+        "min": 728064000,
+        "p50": 1102254080,
+        "p95": 1109714534.4,
+        "max": 1109876736,
+        "mean": 1017582933.3333334
+      },
+      "delta_mean": -95707477.33333337,
+      "delta_p95": -27729715.19999981,
+      "ratio_mean": 0.9140318856460631,
+      "ratio_p95": 0.9756210335497749,
+      "ratio_limit": 1.1,
+      "absolute_jitter": 0,
+      "allowed_native_mean": 1224619451.7333336,
+      "pass": true
+    },
+    "capture_to_saved_ms": {
+      "name": "capture_to_saved_ms",
+      "shipping": {
+        "count": 3,
+        "raw": [
+          1723,
+          2331,
+          2313
+        ],
+        "min": 1723,
+        "p50": 2313,
+        "p95": 2329.2,
+        "max": 2331,
+        "mean": 2122.3333333333335
+      },
+      "native": {
+        "count": 3,
+        "raw": [
+          1475,
+          1719,
+          3051
+        ],
+        "min": 1475,
+        "p50": 1719,
+        "p95": 2917.8,
+        "max": 3051,
+        "mean": 2081.6666666666665
+      },
+      "delta_mean": -40.66666666666697,
+      "delta_p95": 588.6000000000004,
+      "ratio_mean": 0.9808386995445263,
+      "ratio_p95": 1.2527047913446678,
+      "ratio_limit": 1.1,
+      "absolute_jitter": 250,
+      "allowed_native_mean": 2584.566666666667,
+      "pass": true
+    },
+    "replay_export_ms": {
+      "name": "replay_export_ms",
+      "shipping": {
+        "count": 3,
+        "raw": [
+          0,
+          0,
+          0
+        ],
+        "min": 0,
+        "p50": 0,
+        "p95": 0,
+        "max": 0,
+        "mean": 0
+      },
+      "native": {
+        "count": 0,
+        "raw": [],
+        "min": null,
+        "p50": null,
+        "p95": null,
+        "max": null,
+        "mean": null
+      },
+      "delta_mean": null,
+      "delta_p95": null,
+      "ratio_mean": null,
+      "ratio_p95": null,
+      "ratio_limit": 1.1,
+      "absolute_jitter": 250,
+      "allowed_native_mean": 250,
+      "pass": false
+    }
+  },
+  "failures": [
+    "shipping trial 1 failed or timed out (status=1, signal=null)",
+    "native-dxgi trial 1 failed or timed out (status=1, signal=null)",
+    "native-dxgi trial 2 failed or timed out (status=1, signal=null)",
+    "shipping trial 2 failed or timed out (status=1, signal=null)",
+    "shipping trial 3 failed or timed out (status=1, signal=null)",
+    "native-dxgi trial 3 failed or timed out (status=1, signal=null)",
+    "shipping trial 1 field report was not OK",
+    "shipping trial 1 source tree was dirty or unknown",
+    "shipping trial 2 field report was not OK",
+    "shipping trial 2 source tree was dirty or unknown",
+    "shipping trial 3 field report was not OK",
+    "shipping trial 3 source tree was dirty or unknown",
+    "native-dxgi trial 1 field report was not OK",
+    "native-dxgi trial 1 observed backend was not native-dxgi",
+    "native-dxgi trial 1 performance evidence was incomplete",
+    "native-dxgi trial 1 source tree was dirty or unknown",
+    "native-dxgi trial 1 did not prove READY and SNAPSHOT for every display",
+    "native-dxgi trial 2 field report was not OK",
+    "native-dxgi trial 2 observed backend was not native-dxgi",
+    "native-dxgi trial 2 performance evidence was incomplete",
+    "native-dxgi trial 2 had too few post-ready process samples",
+    "native-dxgi trial 2 source tree was dirty or unknown",
+    "native-dxgi trial 2 did not prove READY and SNAPSHOT for every display",
+    "native-dxgi trial 3 field report was not OK",
+    "native-dxgi trial 3 observed backend was not native-dxgi",
+    "native-dxgi trial 3 performance evidence was incomplete",
+    "native-dxgi trial 3 source tree was dirty or unknown",
+    "native-dxgi trial 3 did not prove READY and SNAPSHOT for every display",
+    "cpu_total_capacity_percent exceeded its release threshold or was missing",
+    "replay_export_ms exceeded its release threshold or was missing"
+  ],
+  "generated_at": "2026-09-12T13:37:53.116Z",
+  "execution_order": [
+    {
+      "trial": 1,
+      "backend": "shipping",
+      "artifacts": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\shipping-1"
+    },
+    {
+      "trial": 1,
+      "backend": "native-dxgi",
+      "artifacts": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\native-1"
+    },
+    {
+      "trial": 2,
+      "backend": "native-dxgi",
+      "artifacts": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\native-2"
+    },
+    {
+      "trial": 2,
+      "backend": "shipping",
+      "artifacts": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\shipping-2"
+    },
+    {
+      "trial": 3,
+      "backend": "shipping",
+      "artifacts": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\shipping-3"
+    },
+    {
+      "trial": 3,
+      "backend": "native-dxgi",
+      "artifacts": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\native-3"
+    }
+  ]
+}
