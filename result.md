@@ -1,5 +1,39 @@
 # Issue #157 result — one-click full-page Chrome capture
 
+## 2026-09-19 reconciliation with main 0.5.1 (LoopOffice#94)
+
+- Merged `origin/main@06bba52` (stable 0.5.1) into `feat/157-full-page-capture`
+  as `cc98b6a`. Code merged without conflicts; the four documentation
+  conflicts (`docs/HANDOFF.md`, `docs/HANDOFF-PROMPT.md`, `docs/QA.md`,
+  `result.md`) were resolved by keeping both sides and restating the gate
+  counts as the merged tree computes them (96 discovered checks, 99 steps,
+  97 with `--skip-build`, video profile 61 of 96).
+- PASS on the merged tree: `typecheck`, `build` (DXGI helpers built),
+  `check:chrome-full-page` 40/40, `check:chrome-full-page-compose`,
+  `check:document-snapshot` 30/30, `check:frame-geometry` 44/44,
+  `check:chrome-bridge` 10/10, `check:still-dom`, `check:image-pack`,
+  `check:spec` 21/21, `check:repo-hygiene`, `check:docs` 10/10,
+  `check:windows-chrome-installed` 24/24.
+- PASS `qa:windows-chrome-installed -- --prepare` at head `cc98b6a`:
+  candidate `CapturePack-Setup-0.5.1.exe` (104,797,554 bytes, SHA-256
+  `f5ba10dd0f61aad7d0a73124b93756f511c3f0617fd487657589ef93c232d930`),
+  extension `0.4.0`, staged/packaged extension inventory
+  `b3808a0eaf51c9bb38057c8fb253f42bc74dd997e024d8c512d4cc54b8c1eb40`,
+  Chrome `152.0.7977.83`.
+- BLOCKED `qa:windows-chrome-installed -- --run --scenario=long` at
+  `2026-09-19T03:07:26Z`: `LogonUI is active; unlock the interactive Windows
+  session` — the gate failed closed before touching Chrome, the registry or
+  the packaged app. DevHotel 0.5.3 offers only `web` and `android` providers,
+  so no managed Windows room exists. The acceptance session ran as the
+  owner's non-administrator account, so no disposable Windows user can be
+  created for `windows-installer-lifecycle.ps1`, and the owner's installed
+  CapturePack 0.5.0 must not be exercised.
+- The five headed scenarios, the installer lifecycle, un-drafting, merge,
+  release and shipped verification therefore remain outstanding and require
+  either a managed/disposable Windows environment or an explicitly authorized
+  bounded local run on the unlocked owner desktop.
+
+
 ## Canonical state
 
 - Issue: https://github.com/r2cuerdame/capturepack/issues/157
