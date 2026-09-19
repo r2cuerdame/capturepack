@@ -319,7 +319,8 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
         'display\'s own snapshot, never the focused one\'s, so measure them against those. ' +
         'Format 0.7.0 makes manifest.media.displays REQUIRED, so ask it how many screens the pack ' +
         'holds; a pack older than 0.7.0 omits it and is one display, the focused one. ' +
-        'Display numbers are computed, never stored, and run as ONE sequence across all displays.',
+        'Display numbers are computed, never stored, and run as ONE sequence across all displays. ' +
+        'Every returned box includes "display_number": a 1-based number for numbered boxes or null otherwise.',
       inputSchema: idArg,
     },
     (args) =>
@@ -344,7 +345,7 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
       title: 'Find annotations',
       description:
         'Case-insensitive keyword search over the annotation box texts of a CapturePack. ' +
-        'Returns the matching annotations with all their fields.',
+        'Returns the matching annotations with all their fields, including computed display_number.',
       inputSchema: {
         keyword: z.string().min(1).describe('Substring to look for in annotation texts (case-insensitive).'),
         ...idArg,
@@ -363,7 +364,7 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
           pack: pack.id,
           keyword: args.keyword,
           count: matches.length,
-          annotations: withDisplayContext(pack, matches),
+          annotations: withDisplayContext(pack, matches, list),
         })
       }),
   )
@@ -775,9 +776,29 @@ function annotationList(pack: PackHandle): Annotation[] {
  * declares them — a one-entry array is a single-display capture, not a
  * multi-display one.
  */
-function withDisplayContext(pack: PackHandle, annotations: readonly Annotation[]): Annotation[] {
+type McpAnnotationView = Annotation & {
+  display_number: number | null
+  display_index?: number
+  display_focused?: boolean
+  display_snapshot?: string
+  display_width?: number
+  display_height?: number
+}
+
+function withDisplayContext(
+  pack: PackHandle,
+  annotations: readonly Annotation[],
+  numberingSource: readonly Annotation[] = annotations,
+): McpAnnotationView[] {
+  const numbers = computeDisplayNumbers(numberingSource)
+  const withNumbers = annotations.map(
+    (a): McpAnnotationView => ({
+      ...a,
+      display_number: numbers.get(a.annotation_id) ?? null,
+    }),
+  )
   const displays = pack.manifest()?.media?.displays
-  if (!Array.isArray(displays) || displays.length < 2) return [...annotations]
+  if (!Array.isArray(displays) || displays.length < 2) return withNumbers
   const focused = focusedDisplayIndex(displays)
   // A `display` this pack does not declare resolves to the FOCUSED display
   // (SPEC §8.8) — the same screen the editor draws such a box on — so the
@@ -786,7 +807,7 @@ function withDisplayContext(pack: PackHandle, annotations: readonly Annotation[]
   const focusedEntry = displays.find(
     (d) => d !== null && typeof d === 'object' && d.index === focused,
   )
-  return annotations.map((a) => {
+  return withNumbers.map((a): McpAnnotationView => {
     const index = annotationDisplayIndex(a, focused, declared)
     const entry = displays.find((d) => d !== null && typeof d === 'object' && d.index === index)
     // The resolved index always names a declared entry, so the fallbacks below
@@ -804,7 +825,7 @@ function withDisplayContext(pack: PackHandle, annotations: readonly Annotation[]
       ...(typeof frame?.snapshot_width === 'number' && typeof frame.snapshot_height === 'number'
         ? { display_width: frame.snapshot_width, display_height: frame.snapshot_height }
         : {}),
-    } as Annotation
+    }
   })
 }
 
