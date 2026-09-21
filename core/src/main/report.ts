@@ -16,14 +16,16 @@ import { replayCoverage } from '../shared/displayClock'
 
 const px = (n: number): number => Math.round(n)
 
-/** Replay-clock label, e.g. 3200 -> "00:03.200". */
+/** Replay-clock label, e.g. 3200 -> "00:03.200", -1500 -> "-00:01.500". */
 export function formatClock(ms: number): string {
-  const total = Math.max(0, Math.round(ms))
+  const rounded = Math.round(ms)
+  const sign = rounded < 0 ? '-' : ''
+  const total = Math.abs(rounded)
   const minutes = Math.floor(total / 60_000)
   const seconds = Math.floor((total % 60_000) / 1000)
   const millis = total % 1000
   const pad = (n: number, w: number): string => String(n).padStart(w, '0')
-  return `${pad(minutes, 2)}:${pad(seconds, 2)}.${pad(millis, 3)}`
+  return `${sign}${pad(minutes, 2)}:${pad(seconds, 2)}.${pad(millis, 3)}`
 }
 
 /**
