@@ -668,7 +668,7 @@ export interface BoxAnnotation {
   // Whether the interior is blurred in RENDERED views only (SPEC §9): the
   // original snapshot.png and replay are never modified.
   blur?: boolean
-  tracking: AnnotationTracking
+  tracking?: AnnotationTracking
   /**
    * AUTHORED motion for a MANUAL box (SPEC §8.9) — where the user put it, at
    * the moments they put it there.
