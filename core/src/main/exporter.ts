@@ -209,8 +209,8 @@ function buildDisplayMedia(
 /**
  * Writes the per-display media files (the focused display's are the top-level
  * ones). Concurrent on purpose: each of these is 20-45 MB of webm, and a
- * sequential loop over three or four screens is seconds of wall clock between
- * the hotkey and the editor (see savePack's background write).
+ * sequential loop over three or four screens adds seconds to a finalize or
+ * exact-cut update.
  */
 async function writeDisplayFiles(
   dirPath: string,
@@ -228,6 +228,59 @@ async function writeDisplayFiles(
       }
     }),
   )
+}
+
+/**
+ * Save-first must preserve the focused capture even when a secondary monitor
+ * cannot be persisted. Return only displays whose snapshots landed, and
+ * downgrade a display to screenshot-only when just its replay failed, so the
+ * first published manifest never declares a missing file (SPEC §5.6).
+ */
+async function writeSaveFirstDisplayFiles(
+  dirPath: string,
+  displays: readonly DisplayCapture[] | undefined,
+): Promise<DisplayCapture[] | undefined> {
+  if (displays === undefined) return undefined
+  const written = await Promise.all(
+    displays.map(async (display): Promise<DisplayCapture | null> => {
+      if (display.focused) return display
+
+      try {
+        if (display.snapshotPng !== null) {
+          await writeFile(join(dirPath, display.snapshotFile), display.snapshotPng)
+        }
+        const snapshotStat = await lstat(join(dirPath, display.snapshotFile))
+        if (!snapshotStat.isFile() || snapshotStat.size === 0) {
+          throw new Error(`${display.snapshotFile} is empty`)
+        }
+      } catch (err) {
+        console.error(
+          `capturepack: writing display ${display.index} snapshot failed; keeping focused capture:`,
+          err instanceof Error ? err.message : String(err),
+        )
+        return null
+      }
+
+      if (!display.hasReplay || display.replayFile === null) return display
+      try {
+        if (display.replayWebm !== null) {
+          await writeFile(join(dirPath, display.replayFile), display.replayWebm)
+        }
+        const replayStat = await lstat(join(dirPath, display.replayFile))
+        if (!replayStat.isFile() || replayStat.size === 0) {
+          throw new Error(`${display.replayFile} is empty`)
+        }
+        return display
+      } catch (err) {
+        console.error(
+          `capturepack: writing display ${display.index} replay failed; declaring snapshot only:`,
+          err instanceof Error ? err.message : String(err),
+        )
+        return { ...display, hasReplay: false, replayWebm: null }
+      }
+    }),
+  )
+  return written.filter((display): display is DisplayCapture => display !== null)
 }
 
 /**
@@ -1414,6 +1467,17 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
       dirPath,
       imageCapture ? null : input.windowsContext,
     )
+    // Every file declared by the manifest must be complete before that manifest
+    // becomes discoverable. This includes non-focused displays: manifest.json
+    // is the commit point, so none of their writes may remain in the background.
+    await writeFile(join(dirPath, 'snapshot.png'), input.snapshotPng)
+    if (!imageCapture && input.replayWebm !== null) {
+      await writeFile(join(dirPath, replayFileName(input.replayFile)), input.replayWebm)
+    }
+    const writtenDisplays = await writeSaveFirstDisplayFiles(
+      dirPath,
+      imageCapture ? undefined : input.displays,
+    )
     const manifest = buildManifest({
       id,
       createdAt: input.capturedAt,
@@ -1430,7 +1494,7 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
       replayDurationMs: input.replayDurationMs,
       snapshotTMs: null,
       plugins: withWindowsContextPlugin(undefined, contextDisposition),
-      displays: imageCapture ? undefined : input.displays,
+      displays: writtenDisplays,
       cadence: imageCapture ? undefined : input.cadence,
       // Save-first already carries the capture's input events — they were
       // observed before the trigger, not authored in the editor — so the folder
@@ -1438,14 +1502,6 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
       // save will.
       hasInputEvents: timelineHasInputEvents(input.timeline),
     })
-    // Every file declared by the manifest must be complete before that manifest
-    // becomes discoverable. This includes non-focused displays: manifest.json
-    // is the commit point, so none of their writes may remain in the background.
-    await writeFile(join(dirPath, 'snapshot.png'), input.snapshotPng)
-    if (!imageCapture && input.replayWebm !== null) {
-      await writeFile(join(dirPath, replayFileName(input.replayFile)), input.replayWebm)
-    }
-    await writeDisplayFiles(dirPath, imageCapture ? undefined : input.displays)
     // No render follows a save-first folder — the editor may never finish — so
     // the documents must not promise stills nothing will ever write.
     await writePackFiles(dirPath, manifest, annotationsFile, input.timeline, input.docLanguage, false)
@@ -1611,11 +1667,19 @@ export async function updatePack(
   // failed save-first retries the whole write here). Re-edit passes null
   // buffers, so the files already on disk are left alone.
   await writeDisplayFiles(handle.dirPath, imageCapture ? undefined : input.displays)
-  // A stale annotated replay must never outlive the annotations that produced
-  // it: the background render rewrites it (and re-declares it in the manifest)
-  // after this save. The annotated keyframe stills follow the same rule — the
-  // manifest written above declares neither, so both are removed here and the
-  // render puts back exactly the current set (SPEC §5.7).
+  if (!keepReplay) {
+    if (!imageCapture && input.replayWebm !== null) {
+      await writeFile(join(handle.dirPath, replayFile), input.replayWebm)
+    }
+  }
+  // A background render always follows this save (annotated replay + stills, or
+  // the single still of a screenshot-only pack), so the documents may reference
+  // the keyframe files it is about to write. The manifest is published only
+  // after every source raster and declared replay above is complete.
+  await writePackFiles(handle.dirPath, manifest, annotationsFile, timeline, input.docLanguage, true)
+  // The replacement manifest no longer declares outputs from the previous
+  // render. Delete those stale derived files only after that commit, so a
+  // concurrent reader following the old manifest can always open them.
   await Promise.all([
     rm(join(handle.dirPath, 'replay_annotated.webm'), { force: true }),
     rm(join(handle.dirPath, 'replay_annotated.mp4'), { force: true }),
@@ -1633,16 +1697,6 @@ export async function updatePack(
   // longer exist. Removed for EVERY declared display; the renders that follow
   // put back only the ones that still have annotations.
   await clearDisplayRenderOutputs(handle.dirPath, imageCapture ? undefined : input.displays)
-  if (!keepReplay) {
-    if (!imageCapture && input.replayWebm !== null) {
-      await writeFile(join(handle.dirPath, replayFile), input.replayWebm)
-    }
-  }
-  // A background render always follows this save (annotated replay + stills, or
-  // the single still of a screenshot-only pack), so the documents may reference
-  // the keyframe files it is about to write. The manifest is published only
-  // after every source raster and declared replay above is complete.
-  await writePackFiles(handle.dirPath, manifest, annotationsFile, timeline, input.docLanguage, true)
   if (!keepReplay && (imageCapture || input.replayWebm === null)) {
     // The user excluded the replay at save time (e.g. privacy). Remove it only
     // after the new manifest stops declaring it, keeping the previous revision
