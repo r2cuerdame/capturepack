@@ -460,6 +460,8 @@ function pureContractChecks(): void {
   check('path guard rejects encoded separators', safeViewerPath('frames%2fsecret.png') === null && safeViewerPath('frames%5csecret.png') === null)
   check('path guard rejects absolute/URL/drive paths', safeViewerPath('/secret.png') === null && safeViewerPath('C:/secret.png') === null && safeViewerPath('https://example.test/x.png') === null)
   check('path guard accepts an ordinary declared frame', safeViewerPath('frames/frame-01_00-01.000.png') === 'frames/frame-01_00-01.000.png')
+  check('path guard accepts plugin directory with single trailing slash', safeViewerPath('plugins/chrome-dom/') === 'plugins/chrome-dom/')
+  check('path guard rejects plugin directory with double trailing slash', safeViewerPath('plugins/chrome-dom//') === null)
   check('viewer raises 0.4 content to format 0.5.0', manifestWithViewerFormat({ ...base, format_version: '0.4.0' }).format_version === '0.5.0')
   check('viewer never lowers a future format', manifestWithViewerFormat({ ...base, format_version: '0.6.0' }).format_version === '0.6.0')
 
@@ -740,7 +742,14 @@ async function writerIntegrationChecks(): Promise<void> {
       { name: 'late-check', version: '1.0.0', path: 'plugins/late-check/' },
       'en',
     )
-    check('late plugin regenerates viewer from the same revision', readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8').includes('late-check'))
+    const lateViewer = readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8')
+    check('late plugin regenerates viewer from the same revision', lateViewer.includes('late-check'))
+    check('late plugin viewer renders plugin path', lateViewer.includes('<code>plugins/late-check/</code>'))
+    const filesMatch = /<ul class="files">([\s\S]*?)<\/ul>/u.exec(lateViewer)
+    check(
+      'late plugin file inventory includes plugin path',
+      filesMatch !== null && filesMatch[1] !== undefined && filesMatch[1].includes('<code>plugins/late-check/</code>'),
+    )
 
     writeFileSync(path.join(handle.dirPath, 'replay_annotated.mp4'), 'ANNOTATED')
     mkdirSync(path.join(handle.dirPath, 'frames'), { recursive: true })
