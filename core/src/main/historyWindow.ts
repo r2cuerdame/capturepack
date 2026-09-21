@@ -259,9 +259,15 @@ export function registerHistoryIpc(live: Settings): void {
     const t = uiT(live)
     if (entry === null) return { ok: false, error: t('history.errPackNotFound') }
     if (entry.kind !== 'dir') return { ok: false, error: t('history.errAlreadyZip') }
+    if (isRenderInFlight(entry.path)) {
+      return { ok: false, error: t('history.shareErrNotReady') }
+    }
     const release = beginPackOperation(entry.path)
     if (release === null) return { ok: false, error: t('history.shareErrBusy') }
     try {
+      if (isRenderInFlight(entry.path)) {
+        return { ok: false, error: t('history.shareErrNotReady') }
+      }
       const zipPath = await createPackZip(entry.path)
       invalidateStorageUsage()
       return { ok: true, zipPath }
