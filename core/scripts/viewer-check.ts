@@ -492,6 +492,20 @@ function pureContractChecks(): void {
       !noOsVersionSkills.overview.includes('undefined'),
   )
 
+  const noScaleManifest = videoManifest()
+  noScaleManifest.environment.screens = [{ width: 1920, height: 1080 }]
+  const noScaleHtml = buildViewerHtml(noScaleManifest, annotations(), timeline(), 'en')
+  const noScaleReport = buildReport(noScaleManifest, annotations(), 'en', false, true)
+  check(
+    'pack omitting screens[].scale defaults to @1x without @undefinedx',
+    noScaleHtml.includes('<dt>Screens</dt><dd>1920×1080 @1x</dd>') &&
+      !noScaleHtml.includes('undefined') &&
+      !noScaleHtml.includes('@undefinedx') &&
+      noScaleReport.includes('- **Screens:** 1920×1080 @1x scale') &&
+      !noScaleReport.includes('undefined') &&
+      !noScaleReport.includes('@undefinedx'),
+  )
+
   const minimalEnvManifest = videoManifest()
   minimalEnvManifest.environment = { os: 'windows' }
   const minimalEnvHtml = buildViewerHtml(minimalEnvManifest, annotations(), timeline(), 'en')
