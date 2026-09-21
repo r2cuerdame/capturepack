@@ -19,6 +19,8 @@ import {
   type ExportInput,
   type InitialSaveInput,
 } from '../src/main/exporter'
+import { writeAnnotatedReplayOutput } from '../src/main/annotatedReplayOutput'
+import { replayMimeType } from '../src/shared/replayMedia'
 import {
   buildViewerHtml,
   manifestWithViewerFormat,
@@ -789,6 +791,12 @@ async function writerIntegrationChecks(): Promise<void> {
         },
       ],
     })
+    const writtenDisplayReplay = await writeAnnotatedReplayOutput(
+      mp4DisplayHandle.dirPath,
+      Buffer.from('ANNOTATED DISPLAY 2'),
+      replayMimeType('replay-d2.mp4'),
+      2,
+    )
     mkdirSync(path.join(mp4DisplayHandle.dirPath, 'frames-d2'), { recursive: true })
     writeFileSync(
       path.join(mp4DisplayHandle.dirPath, 'frames-d2', 'frame-01_00-01.000.png'),
@@ -803,9 +811,10 @@ async function writerIntegrationChecks(): Promise<void> {
       readFileSync(path.join(mp4DisplayHandle.dirPath, 'manifest.json'), 'utf8'),
     ) as Manifest
     check(
-      'secondary MP4 render output declaration keeps the MP4 container',
+      'secondary MP4 render writes the file declared by the manifest',
       mp4DisplayManifest.media.displays?.[1]?.replay_annotated ===
-        'replay_annotated-d2.mp4',
+        writtenDisplayReplay &&
+        existsSync(path.join(mp4DisplayHandle.dirPath, writtenDisplayReplay)),
     )
 
     const omittedEnvManifest = JSON.parse(

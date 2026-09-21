@@ -49,6 +49,12 @@ import {
   FORMAT_VERSION_SOURCE_LATENCY,
 } from '../shared/types'
 import { displayAnnotatedName, displayFramesDir } from '../shared/keyframes'
+import {
+  DISPLAY_REPLAY_NAME_RE,
+  REPLAY_NAME_RE,
+  replayMimeType,
+} from '../shared/replayMedia'
+export { REPLAY_NAME_RE, replayMimeType } from '../shared/replayMedia'
 import { buildReport } from './report'
 import { buildReadme, buildSkills, SKILLS_FILES } from './packdocs'
 import { buildViewerHtml, manifestWithViewerFormat } from './viewer'
@@ -127,18 +133,11 @@ export function displayReplayName(index: number, replayFile = 'replay.webm'): st
 // manifest.json this process did not write (re-edit of an external or
 // hand-edited pack), and it is joined onto a path — so it is checked against
 // these before it can reach existsSync/copyFile/writeFile/rm.
-export const REPLAY_NAME_RE = /^replay\.(webm|mp4)$/
 const DISPLAY_SNAPSHOT_NAME_RE = /^snapshot-d[1-9][0-9]*\.png$/
-const DISPLAY_REPLAY_NAME_RE = /^replay-d[1-9][0-9]*\.(webm|mp4)$/
 
 /** A declared top-level replay filename, or the default when it is not legal. */
 export function replayFileName(declared: string | null | undefined): string {
   return typeof declared === 'string' && REPLAY_NAME_RE.test(declared) ? declared : 'replay.webm'
-}
-
-/** MIME type implied by a validated replay filename. */
-export function replayMimeType(declared: string | null | undefined): string {
-  return replayFileName(declared).endsWith('.mp4') ? 'video/mp4' : 'video/webm'
 }
 
 /** A declared per-display filename, or the index-derived default. */
