@@ -12,6 +12,7 @@ import {
   mkdir,
   open,
   readFile,
+  readdir,
   rename,
   rm,
   writeFile,
@@ -131,6 +132,8 @@ export function displayReplayName(index: number, replayFile = 'replay.webm'): st
 export const REPLAY_NAME_RE = /^replay\.(webm|mp4)$/
 const DISPLAY_SNAPSHOT_NAME_RE = /^snapshot-d[1-9][0-9]*\.png$/
 const DISPLAY_REPLAY_NAME_RE = /^replay-d[1-9][0-9]*\.(webm|mp4)$/
+const DISPLAY_ANNOTATED_NAME_RE = /^replay_annotated-d[1-9][0-9]*\.(webm|mp4)$/
+const DISPLAY_FRAMES_DIR_NAME_RE = /^frames-d[1-9][0-9]*$/
 
 /** A declared top-level replay filename, or the default when it is not legal. */
 export function replayFileName(declared: string | null | undefined): string {
@@ -243,9 +246,45 @@ async function clearDisplayRenderOutputs(
   if (displays === undefined) return
   for (const d of displays) {
     if (d.focused) continue
-    await rm(join(dirPath, displayAnnotatedName(d.index)), { force: true })
-    await rm(join(dirPath, displayFramesDir(d.index)), { recursive: true, force: true })
+    await clearDisplayDerivedOutputs(dirPath, d.index)
   }
+}
+
+async function clearDisplayDerivedOutputs(dirPath: string, index: number): Promise<void> {
+  await Promise.all([
+    rm(join(dirPath, displayAnnotatedName(index)), { force: true }),
+    rm(join(dirPath, displayAnnotatedName(index, 'replay.mp4')), { force: true }),
+    rm(join(dirPath, displayFramesDir(index)), { recursive: true, force: true }),
+  ])
+}
+
+async function clearDisplayMedia(dirPath: string, index: number): Promise<void> {
+  await Promise.all([
+    rm(join(dirPath, displaySnapshotName(index)), { force: true }),
+    rm(join(dirPath, displayReplayName(index)), { force: true }),
+    rm(join(dirPath, displayReplayName(index, 'replay.mp4')), { force: true }),
+    clearDisplayDerivedOutputs(dirPath, index),
+  ])
+}
+
+/**
+ * Image packs have no secondary-display media at all. Sweep canonical names
+ * rather than trusting only the previous manifest: older writers could leave
+ * an already-undeclared display behind, and a Full ZIP includes every file in
+ * the folder regardless of whether the manifest still names it.
+ */
+async function clearAllSecondaryDisplayMedia(dirPath: string): Promise<void> {
+  const entries = await readdir(dirPath)
+  await Promise.all(
+    entries
+      .filter((name) =>
+        DISPLAY_SNAPSHOT_NAME_RE.test(name) ||
+        DISPLAY_REPLAY_NAME_RE.test(name) ||
+        DISPLAY_ANNOTATED_NAME_RE.test(name) ||
+        DISPLAY_FRAMES_DIR_NAME_RE.test(name),
+      )
+      .map((name) => rm(join(dirPath, name), { recursive: true, force: true })),
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -383,7 +422,7 @@ async function dropUndeclarableDisplays(dirPath: string): Promise<void> {
         changed = true
         continue // no frame for this display: it is not in the pack at all
       }
-      if (d.replay !== null && !existsSync(join(dirPath, d.replay))) {
+      if (typeof d.replay === 'string' && !existsSync(join(dirPath, d.replay))) {
         // The frame landed, the recording did not — a screenshot-only display is
         // a legal entry (SPEC §5.6); a declared missing file is not.
         const {
@@ -832,23 +871,24 @@ export async function readAnnotationsSafe(
         reference_height?: unknown
         annotations?: unknown
       }
-      if (
-        Array.isArray(candidate.annotations) &&
-        candidate.annotations.every((a) => a !== null && typeof a === 'object')
-      ) {
-        const reference_width =
-          typeof candidate.reference_width === 'number' && Number.isFinite(candidate.reference_width)
-            ? candidate.reference_width
-            : fallbackWidth
-        const reference_height =
-          typeof candidate.reference_height === 'number' && Number.isFinite(candidate.reference_height)
-            ? candidate.reference_height
-            : fallbackHeight
-        return {
-          reference_width,
-          reference_height,
-          annotations: candidate.annotations as AnnotationsFile['annotations'],
-        }
+      const reference_width =
+        typeof candidate.reference_width === 'number' && Number.isFinite(candidate.reference_width)
+          ? candidate.reference_width
+          : fallbackWidth
+      const reference_height =
+        typeof candidate.reference_height === 'number' && Number.isFinite(candidate.reference_height)
+          ? candidate.reference_height
+          : fallbackHeight
+      const rawAnnotations = candidate.annotations
+      const annotations: AnnotationsFile['annotations'] =
+        Array.isArray(rawAnnotations) &&
+        rawAnnotations.every((a) => a !== null && typeof a === 'object')
+          ? (rawAnnotations as AnnotationsFile['annotations'])
+          : []
+      return {
+        reference_width,
+        reference_height,
+        annotations,
       }
     }
     return fallback
@@ -1136,7 +1176,7 @@ export interface ManifestInput {
   screens?: Array<{
     width: number
     height: number
-    scale: number
+    scale?: number
     bounds?: { x: number; y: number; width: number; height: number }
   }>
   captureKind?: CaptureKind
@@ -1658,7 +1698,10 @@ export async function updatePack(
   // after this save. The annotated keyframe stills follow the same rule — the
   // manifest written above declares neither, so both are removed here and the
   // render puts back exactly the current set (SPEC §5.7).
-  await rm(join(handle.dirPath, 'replay_annotated.webm'), { force: true })
+  await Promise.all([
+    rm(join(handle.dirPath, 'replay_annotated.webm'), { force: true }),
+    rm(join(handle.dirPath, 'replay_annotated.mp4'), { force: true }),
+  ])
   await rm(join(handle.dirPath, 'frames'), { recursive: true, force: true })
   // Same rule per display (GOAL "Multi-Monitor Support"): a screen the user
   // just un-annotated must not keep an annotated replay showing boxes that no
@@ -1717,10 +1760,25 @@ async function removeReplacedReplayFiles(
     (current.media.displays ?? []).map((d) => [d.index, d.replay] as const),
   )
   for (const old of previous?.media?.displays ?? []) {
-    if (old.focused || typeof old.replay !== 'string') continue
-    if (!DISPLAY_REPLAY_NAME_RE.test(old.replay)) continue
-    if (currentDisplays.get(old.index) === old.replay) continue
-    await rm(join(dirPath, old.replay), { force: true })
+    if (old.focused) continue
+    // Previous manifests can come from outside this writer. Never interpolate
+    // an unvalidated index into a removal path.
+    if (!Number.isSafeInteger(old.index) || old.index < 1) continue
+    if (!currentDisplays.has(old.index)) {
+      await clearDisplayMedia(dirPath, old.index)
+      continue
+    }
+    if (
+      typeof old.replay === 'string' &&
+      DISPLAY_REPLAY_NAME_RE.test(old.replay) &&
+      currentDisplays.get(old.index) !== old.replay
+    ) {
+      await rm(join(dirPath, old.replay), { force: true })
+    }
+  }
+
+  if (current.capture_kind === 'image') {
+    await clearAllSecondaryDisplayMedia(dirPath)
   }
 }
 
@@ -1854,9 +1912,10 @@ async function copyImagePluginMetadata(
  */
 /**
  * Annotations restricted to the display set a pack actually declares (SPEC
- * §8.8): a `display` that names no declared entry is DROPPED from the box, so
- * the box resolves to the focused display instead of carrying an index that
- * fails validation, renders into nothing, and disappears from the documents.
+ * §8.8). A box whose own display disappeared is dropped: its bounds are pixels
+ * of that missing raster, so treating them as focused-display pixels would
+ * silently move (or invalidate) it. Motion points on a surviving box are
+ * filtered independently because they each name their own coordinate space.
  *
  * A `display` naming the FOCUSED entry is dropped too, because §8.8 says absent
  * MEANS the focused display and writers SHOULD omit it there. That rule used to
@@ -1871,11 +1930,97 @@ function withDeclaredDisplays(
 ): Annotation[] {
   const declared = new Set((displays ?? []).map((d) => d.index))
   const focused = (displays ?? []).find((d) => d.focused)?.index
-  return annotations.map((a) => {
-    if (a.display === undefined) return a
-    if (declared.has(a.display) && a.display !== focused) return a
-    const { display: _dropped, ...rest } = a
-    return rest
+  const sampleMatchesBounds = (
+    sample: NonNullable<NonNullable<Annotation['tracking']>['samples']>[number],
+    annotation: Annotation,
+  ): boolean =>
+    (sample.display ?? annotation.display ?? focused) === (annotation.display ?? focused) &&
+    Math.round(sample.x) === annotation.bounds.x &&
+    Math.round(sample.y) === annotation.bounds.y &&
+    Math.round(sample.width) === annotation.bounds.width &&
+    Math.round(sample.height) === annotation.bounds.height
+
+  return annotations.flatMap((annotation) => {
+    // There is no trustworthy transform after this raster has disappeared.
+    // Keeping the box and merely deleting `display` corrupts its coordinates.
+    if (annotation.display !== undefined && !declared.has(annotation.display)) return []
+
+    let sanitized: Annotation =
+      annotation.display === focused
+        ? (({ display: _focused, ...rest }) => rest)(annotation)
+        : annotation
+
+    if (annotation.keyframes !== undefined) {
+      const keyframes = annotation.keyframes.filter(
+        (frame) => frame.display === undefined || declared.has(frame.display),
+      )
+      if (keyframes.length >= 2) {
+        if (keyframes.length !== annotation.keyframes.length) {
+          sanitized = { ...sanitized, keyframes }
+        }
+      } else {
+        const { keyframes: _dropped, ...withoutKeyframes } = sanitized
+        sanitized = withoutKeyframes
+        const survivor = keyframes[0]
+        // A lone authored position is a static box (SPEC §8.9). Do not replace
+        // the representative bounds of a legacy box that also carries an
+        // observed track: readers correctly give those measurements priority.
+        if (survivor !== undefined && annotation.tracking?.enabled !== true) {
+          const survivorDisplay = survivor.display ?? sanitized.display ?? focused
+          const { display: _oldDisplay, ...withoutDisplay } = sanitized
+          sanitized = {
+            ...withoutDisplay,
+            bounds: {
+              x: survivor.x,
+              y: survivor.y,
+              width: survivor.width,
+              height: survivor.height,
+            },
+            ...(survivorDisplay === undefined || survivorDisplay === focused
+              ? {}
+              : { display: survivorDisplay }),
+          }
+        }
+      }
+    }
+
+    const tracking = annotation.tracking
+    if (tracking?.samples !== undefined) {
+      const samples = tracking.samples.filter(
+        (sample) => sample.display === undefined || declared.has(sample.display),
+      )
+      if (samples.length !== tracking.samples.length) {
+        if (tracking.enabled && samples.length > 0) {
+          const boundsObserved = samples.some((sample) => sampleMatchesBounds(sample, sanitized))
+          const nearest =
+            tracking.picked_at_ms === undefined
+              ? undefined
+              : samples.reduce((best, sample) =>
+                  Math.abs(sample.t_ms - tracking.picked_at_ms!) <
+                  Math.abs(best.t_ms - tracking.picked_at_ms!)
+                    ? sample
+                    : best,
+                )
+          if (boundsObserved && (nearest === undefined || sampleMatchesBounds(nearest, sanitized))) {
+            sanitized = { ...sanitized, tracking: { ...tracking, samples } }
+          } else {
+            // Filtering can remove the observation that made `bounds` (or the
+            // picked-frame anchor) truthful. Preserve the static box instead
+            // of emitting a track whose remaining evidence contradicts it.
+            sanitized = { ...sanitized, tracking: { enabled: false } }
+          }
+        } else if (tracking.enabled) {
+          sanitized = { ...sanitized, tracking: { enabled: false } }
+        } else if (samples.length > 0) {
+          sanitized = { ...sanitized, tracking: { ...tracking, samples } }
+        } else {
+          const { samples: _dropped, picked_at_ms: _picked, ...inactive } = tracking
+          sanitized = { ...sanitized, tracking: inactive }
+        }
+      }
+    }
+
+    return [sanitized]
   })
 }
 
@@ -1910,10 +2055,9 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
   // keeps it at the older version rather than inventing geometry for it.
   const displayFiles =
     surviving !== undefined && surviving.length > 0 ? surviving : undefined
-  // A box may only name a display this pack DECLARES (SPEC §8.8). Anything the
-  // filter above dropped resolves back to the focused display — the field is
-  // removed, which is what "absent = focused" means — rather than being written
-  // as an index nothing in the new pack can resolve.
+  // A box or motion point may only name a display this pack DECLARES (SPEC
+  // §8.3, §8.8, §8.9). Boxes rooted in a missing raster cannot be reinterpreted
+  // safely and are dropped; undeclared points on surviving boxes are removed.
   const annotations = withDeclaredDisplays(input.annotations, displayFiles)
   const annotationsFile: AnnotationsFile = {
     reference_width: input.width,
@@ -2196,7 +2340,7 @@ export async function setManifestRenderOutputs(
     // files are undeclared and readers ignore them — never invent an entry.
     if (entry === undefined) return
     if (outputs.replayAnnotated && entry.replay !== null) {
-      entry.replay_annotated = displayAnnotatedName(entry.index)
+      entry.replay_annotated = displayAnnotatedName(entry.index, entry.replay ?? undefined)
     }
     if (declared.length > 0) entry.keyframes = declared
     else delete entry.keyframes
@@ -2207,7 +2351,9 @@ export async function setManifestRenderOutputs(
   // Never declared without a replay (SPEC §5.3) — keyframes have no such rule:
   // a screenshot-only pack has exactly one still, rendered from snapshot.png.
   if (outputs.replayAnnotated && typeof manifest.media.replay === 'string') {
-    manifest.media.replay_annotated = 'replay_annotated.webm'
+    manifest.media.replay_annotated = manifest.media.replay.endsWith('.mp4')
+      ? 'replay_annotated.mp4'
+      : 'replay_annotated.webm'
   }
   if (declared.length > 0) manifest.media.keyframes = declared
   else delete manifest.media.keyframes

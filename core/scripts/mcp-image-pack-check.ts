@@ -4,13 +4,18 @@
 // pack has no API path by which MCP can ask for pixels outside snapshot.png.
 import { registerTools } from '../src/main/mcp/tools'
 import type { Annotation } from '../src/shared/types'
+import { z } from 'zod'
 
 type ToolResult = {
   content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>
   isError?: boolean
 }
 type ToolCallback = (args: Record<string, unknown>) => ToolResult | Promise<ToolResult>
-type ToolDefinition = { inputSchema?: Record<string, unknown> }
+type ToolDefinition = {
+  title?: string
+  description?: string
+  inputSchema?: Record<string, unknown>
+}
 
 let failed = 0
 function check(ok: boolean, message: string): void {
@@ -309,6 +314,19 @@ async function main(): Promise<void> {
     path: 'C:\\packs\\short-timeline-pack',
     timeline: () => ({ t0: '2026-09-21T12:00:00+09:00', events: shortTimelineEvents }),
   }
+  const preT0TimelineEvents = [
+    { t_ms: -4000, type: 'plugin.hotkey.down', source: 'plugin' },
+    { t_ms: -2500, type: 'input.pointer.move', source: 'windows', data: { x: 10, y: 20 } },
+    { t_ms: -500, type: 'input.pointer.click', source: 'windows', data: { x: 10, y: 20 } },
+    { t_ms: 0, type: 'core.capture.trigger', source: 'core' },
+    { t_ms: 1200, type: 'input.pointer.move', source: 'windows', data: { x: 15, y: 25 } },
+  ]
+  const preT0TimelinePack = {
+    ...multiFramePack,
+    id: 'pre-t0-timeline-pack',
+    path: 'C:\\packs\\pre-t0-timeline-pack',
+    timeline: () => ({ t0: '2026-09-21T12:00:00+09:00', events: preT0TimelineEvents }),
+  }
   const invalidPluginPack = {
     ...pack,
     id: 'invalid-plugin-pack',
@@ -319,6 +337,63 @@ async function main(): Promise<void> {
       files: ['plugins/broken-plugin/elements.json'],
     }],
     readText: (file: string) => file === 'plugins/broken-plugin/elements.json' ? '{"elements":[' : null,
+  }
+  const minimalPack = {
+    ...pack,
+    id: 'minimal-pack',
+    path: 'C:\\packs\\minimal-pack',
+    manifest: () => ({
+      format: '0.8.0',
+      id: 'minimal-pack',
+      capture_kind: 'image',
+      created_at: '2026-09-21T12:00:00+09:00',
+      media: {
+        snapshot: 'snapshot.png',
+        image_scope: 'fullscreen',
+      },
+    }),
+    annotations: () => null,
+    timeline: () => null,
+    readText: () => null,
+  }
+  const malformedAnnotationsPack = {
+    ...minimalPack,
+    id: 'malformed-annotations-pack',
+    path: 'C:\\packs\\malformed-annotations-pack',
+    readText: (file: string) => file === 'annotations.json' ? '{"annotations":[' : null,
+  }
+  const videoOmittedTimelinePack = {
+    ...multiFramePack,
+    id: 'video-no-timeline-pack',
+    path: 'C:\\packs\\video-no-timeline-pack',
+    timeline: () => null,
+    readText: () => null,
+  }
+  const videoMalformedTimelinePack = {
+    ...multiFramePack,
+    id: 'video-malformed-timeline-pack',
+    path: 'C:\\packs\\video-malformed-timeline-pack',
+    timeline: () => null,
+    readText: (file: string) => file === 'timeline.json' ? '{"events":[' : null,
+  }
+  const legacyNoTimelineManifest = {
+    format: '0.2.0',
+    id: 'legacy-no-timeline-pack',
+    created_at: '2026-01-01T12:00:00+09:00',
+    media: {
+      snapshot: 'snapshot.png',
+      replay: null,
+    },
+  }
+  const legacyNoTimelinePack = {
+    ...pack,
+    id: 'legacy-no-timeline-pack',
+    path: 'C:\\packs\\legacy-no-timeline-pack',
+    manifest: () => legacyNoTimelineManifest,
+    manifestText: () => JSON.stringify(legacyNoTimelineManifest),
+    annotations: () => null,
+    timeline: () => null,
+    readText: () => null,
   }
   const store = {
     outputDir: 'C:\\packs',
@@ -332,7 +407,13 @@ async function main(): Promise<void> {
       if (id === windowsPack.id) return windowsPack
       if (id === longTimelinePack.id) return longTimelinePack
       if (id === shortTimelinePack.id) return shortTimelinePack
+      if (id === preT0TimelinePack.id) return preT0TimelinePack
       if (id === invalidPluginPack.id) return invalidPluginPack
+      if (id === minimalPack.id) return minimalPack
+      if (id === malformedAnnotationsPack.id) return malformedAnnotationsPack
+      if (id === videoOmittedTimelinePack.id) return videoOmittedTimelinePack
+      if (id === videoMalformedTimelinePack.id) return videoMalformedTimelinePack
+      if (id === legacyNoTimelinePack.id) return legacyNoTimelinePack
       return pack
     },
     list: () => ({
@@ -421,6 +502,104 @@ async function main(): Promise<void> {
       timelineJson.capture_kind === 'image' &&
       timelineJson.available === false,
     'timeline reader explains the intentional absence for a still-image pack',
+  )
+
+  const videoTimeline = await callbacks.get('capturepack_timeline')?.({ id: videoOmittedTimelinePack.id })
+  const videoTimelineJson = textJson(videoTimeline as ToolResult)
+  check(
+    videoTimeline?.isError !== true &&
+      videoTimelineJson.capture_kind === 'video' &&
+      videoTimelineJson.available === false &&
+      Array.isArray(videoTimelineJson.events) &&
+      videoTimelineJson.events.length === 0 &&
+      typeof videoTimelineJson.message === 'string',
+    'timeline reader returns non-error result with available: false on video pack omitting timeline.json',
+  )
+
+  const legacyTimeline = await callbacks.get('capturepack_timeline')?.({ id: legacyNoTimelinePack.id })
+  const legacyTimelineJson = textJson(legacyTimeline as ToolResult)
+  check(
+    legacyTimeline?.isError !== true &&
+      legacyTimelineJson.available === false &&
+      Array.isArray(legacyTimelineJson.events) &&
+      legacyTimelineJson.events.length === 0,
+    'timeline reader returns non-error result on legacy pack omitting timeline.json',
+  )
+
+  const malformedTimeline = await callbacks.get('capturepack_timeline')?.({ id: videoMalformedTimelinePack.id })
+  const malformedTimelineErr = (malformedTimeline as ToolResult)?.content.find((item) => item.type === 'text')?.text ?? ''
+  check(
+    malformedTimeline?.isError === true && malformedTimelineErr.includes('malformed'),
+    'timeline reader returns fatal tool error on corrupt timeline.json',
+  )
+
+  const timelineDef = definitions.get('capturepack_timeline')
+  check(
+    typeof timelineDef?.description === 'string' &&
+      timelineDef.description.includes('relative to t0') &&
+      timelineDef.description.includes('negative'),
+    'timeline description accurately states t_ms is relative to t0 and may be negative',
+  )
+
+  const timelineSchema = z.object(timelineDef?.inputSchema as z.ZodRawShape)
+  const schemaNegativeResult = timelineSchema.safeParse({ id: 'any-id', from_ms: -3000, to_ms: 0 })
+  check(
+    schemaNegativeResult.success,
+    'capturepack_timeline schema accepts negative from_ms and to_ms parameters',
+  )
+
+  const fromMsDesc = (timelineDef?.inputSchema?.from_ms as { description?: string })?.description ?? ''
+  const toMsDesc = (timelineDef?.inputSchema?.to_ms as { description?: string })?.description ?? ''
+  check(
+    fromMsDesc.includes('negative') && toMsDesc.includes('negative'),
+    'timeline from_ms and to_ms descriptions note offsets may be negative',
+  )
+
+  const preT0Slice = await callbacks.get('capturepack_timeline')?.({
+    id: preT0TimelinePack.id,
+    from_ms: -3000,
+    to_ms: 0,
+  })
+  const preT0SliceJson = textJson(preT0Slice as ToolResult)
+  const preT0SliceEvents = (preT0SliceJson.events as Array<{ t_ms: number }>) ?? []
+  check(
+    preT0Slice?.isError !== true &&
+      preT0SliceJson.total_events === 5 &&
+      preT0SliceJson.returned === 3 &&
+      preT0SliceEvents.length === 3 &&
+      preT0SliceEvents[0]?.t_ms === -2500 &&
+      preT0SliceEvents[1]?.t_ms === -500 &&
+      preT0SliceEvents[2]?.t_ms === 0,
+    'capturepack_timeline slices with negative bounds (-3000 to 0) returning matching pre-anchor events',
+  )
+
+  const preT0NegativeUpperOnly = await callbacks.get('capturepack_timeline')?.({
+    id: preT0TimelinePack.id,
+    to_ms: -1000,
+  })
+  const preT0NegativeUpperOnlyJson = textJson(preT0NegativeUpperOnly as ToolResult)
+  const preT0NegativeUpperEvents = (preT0NegativeUpperOnlyJson.events as Array<{ t_ms: number }>) ?? []
+  check(
+    preT0NegativeUpperOnly?.isError !== true &&
+      preT0NegativeUpperEvents.length === 2 &&
+      preT0NegativeUpperEvents[0]?.t_ms === -4000 &&
+      preT0NegativeUpperEvents[1]?.t_ms === -2500,
+    'capturepack_timeline filters events with negative to_ms bound',
+  )
+
+  const preT0NegativeLowerOnly = await callbacks.get('capturepack_timeline')?.({
+    id: preT0TimelinePack.id,
+    from_ms: -500,
+  })
+  const preT0NegativeLowerOnlyJson = textJson(preT0NegativeLowerOnly as ToolResult)
+  const preT0NegativeLowerEvents = (preT0NegativeLowerOnlyJson.events as Array<{ t_ms: number }>) ?? []
+  check(
+    preT0NegativeLowerOnly?.isError !== true &&
+      preT0NegativeLowerEvents.length === 3 &&
+      preT0NegativeLowerEvents[0]?.t_ms === -500 &&
+      preT0NegativeLowerEvents[1]?.t_ms === 0 &&
+      preT0NegativeLowerEvents[2]?.t_ms === 1200,
+    'capturepack_timeline filters events with negative from_ms bound',
   )
   const markdown = await callbacks.get('capturepack_export_markdown')?.({})
   const markdownText = markdown?.content.find((item) => item.type === 'text')?.text ?? ''
@@ -743,6 +922,27 @@ async function main(): Promise<void> {
       foundRows[0]?.display_number === 2 &&
       foundRows[1]?.display_number === null,
     'annotation search returns the same computed display_number fields',
+  )
+
+  const omittedAnnResult = await callbacks.get('capturepack_annotations')?.({ id: minimalPack.id })
+  const omittedAnnJson = textJson(omittedAnnResult as ToolResult)
+  check(
+    omittedAnnResult?.isError !== true &&
+      omittedAnnJson.available === false &&
+      omittedAnnJson.count === 0 &&
+      Array.isArray(omittedAnnJson.annotations) &&
+      omittedAnnJson.annotations.length === 0 &&
+      omittedAnnJson.reference_width === null &&
+      omittedAnnJson.reference_height === null &&
+      typeof omittedAnnJson.message === 'string',
+    'capturepack_annotations returns non-error result with available: false when annotations.json is omitted',
+  )
+
+  const malformedAnnResult = await callbacks.get('capturepack_annotations')?.({ id: malformedAnnotationsPack.id })
+  const malformedAnnErr = (malformedAnnResult as ToolResult)?.content.find((item) => item.type === 'text')?.text ?? ''
+  check(
+    malformedAnnResult?.isError === true && malformedAnnErr.includes('malformed'),
+    'capturepack_annotations returns fatal tool error on corrupt annotations.json',
   )
 
   console.log(failed === 0 ? '\nmcp-image-pack-check ok' : `\nmcp-image-pack-check FAILED (${failed})`)

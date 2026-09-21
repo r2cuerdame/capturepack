@@ -31,6 +31,7 @@ import {
   siblingShareBundle,
 } from '../src/main/packArchive'
 import { PackRenderBatchTracker } from '../src/main/renderBatch'
+import { displayAnnotatedName } from '../src/shared/keyframes'
 import { greyPng } from './fixtures/greyPng'
 
 let failures = 0
@@ -273,6 +274,37 @@ try {
     'managed Share Copy identity accepts a BOM-prefixed share.json',
     isShareBundleArchive(bomCreated.zipPath),
   )
+
+  check('display annotated filename follows the replay container',
+    displayAnnotatedName(2, 'replay-d2.mp4') === 'replay_annotated-d2.mp4' &&
+      displayAnnotatedName(2) === 'replay_annotated-d2.webm')
+
+  const multiDisplayMp4 = makeFixture('multi-display-mp4')
+  const multiDisplayMp4ManifestFile = path.join(multiDisplayMp4.dir, 'manifest.json')
+  const multiDisplayMp4Manifest = JSON.parse(
+    readFileSync(multiDisplayMp4ManifestFile, 'utf8'),
+  )
+  multiDisplayMp4Manifest.media.displays[1].replay = 'replay-d2.mp4'
+  multiDisplayMp4Manifest.media.displays[1].replay_annotated =
+    'replay_annotated-d2.mp4'
+  writeFileSync(
+    multiDisplayMp4ManifestFile,
+    `${JSON.stringify(multiDisplayMp4Manifest, null, 2)}\n`,
+  )
+  renameSync(
+    path.join(multiDisplayMp4.dir, 'replay-d2.webm'),
+    path.join(multiDisplayMp4.dir, 'replay-d2.mp4'),
+  )
+  rmSync(path.join(multiDisplayMp4.dir, 'replay_annotated-d2.webm'))
+  writeFileSync(path.join(multiDisplayMp4.dir, 'replay_annotated-d2.mp4'), WEBM)
+  const multiDisplayMp4Plan = await planShareBundle(multiDisplayMp4.dir)
+  const multiDisplayMp4Created = await createShareBundle(
+    multiDisplayMp4.dir,
+    multiDisplayMp4Plan.revision,
+  )
+  check('multi-display MP4 pack plans and creates a Share Copy',
+    multiDisplayMp4Created.zipPath === multiDisplayMp4Plan.outputPath &&
+      existsSync(multiDisplayMp4Plan.outputPath))
 
   const image = makeImageFixture('image')
   const imagePlan = await planShareBundle(image.dir)

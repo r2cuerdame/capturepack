@@ -126,6 +126,71 @@ function pureContractChecks(): void {
   const unannotatedHtml = buildViewerHtml(base, undefined, timeline(), 'en')
   check('pack without annotations file omits annotations.json from file inventory', !unannotatedHtml.includes('<code>annotations.json</code>'))
 
+  // Issue #206: buildViewerHtml with omitted, null, or non-array annotations
+  const omittedAnnotationsFile = {
+    reference_width: 1920,
+    reference_height: 1080,
+  } as AnnotationsFile
+  let omittedAnnThrew = false
+  let omittedAnnHtml = ''
+  try {
+    omittedAnnHtml = buildViewerHtml(base, omittedAnnotationsFile, timeline(), 'en')
+  } catch {
+    omittedAnnThrew = true
+  }
+  check(
+    'buildViewerHtml succeeds without throwing on annotationsFile omitting annotations',
+    !omittedAnnThrew &&
+      typeof omittedAnnHtml === 'string' &&
+      omittedAnnHtml.startsWith('<!doctype html>') &&
+      !omittedAnnHtml.includes('Privacy warning') &&
+      !omittedAnnHtml.includes('blur annotation') &&
+      omittedAnnHtml.includes('Original evidence may contain private information.') &&
+      !omittedAnnHtml.includes('<code>annotations.json</code>'),
+  )
+
+  const nullAnnotationsFile = {
+    reference_width: 1920,
+    reference_height: 1080,
+    annotations: null as unknown as Annotation[],
+  } as AnnotationsFile
+  let nullAnnThrew = false
+  let nullAnnHtml = ''
+  try {
+    nullAnnHtml = buildViewerHtml(base, nullAnnotationsFile, timeline(), 'en')
+  } catch {
+    nullAnnThrew = true
+  }
+  check(
+    'buildViewerHtml succeeds without throwing on annotationsFile with null annotations',
+    !nullAnnThrew &&
+      typeof nullAnnHtml === 'string' &&
+      !nullAnnHtml.includes('Privacy warning') &&
+      nullAnnHtml.includes('Original evidence may contain private information.') &&
+      !nullAnnHtml.includes('<code>annotations.json</code>'),
+  )
+
+  const nonArrayAnnotationsFile = {
+    reference_width: 1920,
+    reference_height: 1080,
+    annotations: 'not-an-array' as unknown as Annotation[],
+  } as AnnotationsFile
+  let nonArrayAnnThrew = false
+  let nonArrayAnnHtml = ''
+  try {
+    nonArrayAnnHtml = buildViewerHtml(base, nonArrayAnnotationsFile, timeline(), 'en')
+  } catch {
+    nonArrayAnnThrew = true
+  }
+  check(
+    'buildViewerHtml succeeds without throwing on annotationsFile with non-array annotations',
+    !nonArrayAnnThrew &&
+      typeof nonArrayAnnHtml === 'string' &&
+      !nonArrayAnnHtml.includes('Privacy warning') &&
+      nonArrayAnnHtml.includes('Original evidence may contain private information.') &&
+      !nonArrayAnnHtml.includes('<code>annotations.json</code>'),
+  )
+
   const annotated = videoManifest({
     media: {
       snapshot: 'snapshot.png',
@@ -427,6 +492,20 @@ function pureContractChecks(): void {
       !noOsVersionSkills.overview.includes('undefined'),
   )
 
+  const noScaleManifest = videoManifest()
+  noScaleManifest.environment.screens = [{ width: 1920, height: 1080 }]
+  const noScaleHtml = buildViewerHtml(noScaleManifest, annotations(), timeline(), 'en')
+  const noScaleReport = buildReport(noScaleManifest, annotations(), 'en', false, true)
+  check(
+    'pack omitting screens[].scale defaults to @1x without @undefinedx',
+    noScaleHtml.includes('<dt>Screens</dt><dd>1920×1080 @1x</dd>') &&
+      !noScaleHtml.includes('undefined') &&
+      !noScaleHtml.includes('@undefinedx') &&
+      noScaleReport.includes('- **Screens:** 1920×1080 @1x scale') &&
+      !noScaleReport.includes('undefined') &&
+      !noScaleReport.includes('@undefinedx'),
+  )
+
   const minimalEnvManifest = videoManifest()
   minimalEnvManifest.environment = { os: 'windows' }
   const minimalEnvHtml = buildViewerHtml(minimalEnvManifest, annotations(), timeline(), 'en')
@@ -484,6 +563,7 @@ function pureContractChecks(): void {
 
   const fakeRegion = { cx: 0, cy: 0, cw: 1920, ch: 1080, cscale: 1, width: 1920, height: 1080 }
   const fakeCtx = {
+    canvas: { width: 1920, height: 1080 },
     save: () => {},
     restore: () => {},
     setTransform: () => {},
@@ -520,6 +600,37 @@ function pureContractChecks(): void {
       noTextGutter === 0 &&
       !noTextDesc.includes('undefined') &&
       !labelsThrew,
+  )
+
+  const noZBox = box('ann_no_z', 'No Z')
+  delete (noZBox as Partial<Annotation>).z
+  const noZAnnotations = annotations([noZBox])
+  const noZManifest = videoManifest()
+  const noZHtml = buildViewerHtml(noZManifest, noZAnnotations, timeline(), 'en')
+  const noZReport = buildReport(noZManifest, noZAnnotations, 'en', false, true)
+  const noZReadme = buildReadme(noZManifest, noZAnnotations, 'en', false, true)
+  const noZSkills = buildSkills(noZManifest, noZAnnotations, timeline(), 'en', false)
+  let noZLabelsError = ''
+  try {
+    drawDisplayLabels(fakeCtx, fakeRegion, [noZBox], 1)
+    drawBox(fakeCtx, noZBox, 1, 1)
+  } catch (err) {
+    noZLabelsError = String(err)
+  }
+  check(
+    'pack omitting annotation.z generates viewer, report, readme, skills, and canvas labels cleanly',
+    typeof noZHtml === 'string' &&
+      !noZHtml.includes('undefined') &&
+      typeof noZReport === 'string' &&
+      !noZReport.includes('undefined') &&
+      typeof noZReadme === 'string' &&
+      !noZReadme.includes('undefined') &&
+      typeof noZSkills.overview === 'string' &&
+      !noZSkills.overview.includes('undefined') &&
+      typeof noZSkills.annotation === 'string' &&
+      !noZSkills.annotation.includes('undefined') &&
+      noZLabelsError === '',
+    noZLabelsError,
   )
 
   const omittedReplayManifest = videoManifest()
@@ -629,7 +740,7 @@ async function writerIntegrationChecks(): Promise<void> {
     )
     check('late plugin regenerates viewer from the same revision', readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8').includes('late-check'))
 
-    writeFileSync(path.join(handle.dirPath, 'replay_annotated.webm'), 'ANNOTATED')
+    writeFileSync(path.join(handle.dirPath, 'replay_annotated.mp4'), 'ANNOTATED')
     mkdirSync(path.join(handle.dirPath, 'frames'), { recursive: true })
     writeFileSync(path.join(handle.dirPath, 'frames', 'frame-01_00-01.000.png'), 'FRAME')
     await setManifestRenderOutputs(handle, {
@@ -638,7 +749,64 @@ async function writerIntegrationChecks(): Promise<void> {
     })
     await refreshPackDocs(handle.dirPath, 'en')
     const renderedViewer = readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8')
-    check('completed render regeneration selects declared annotated media', renderedViewer.includes('src="replay_annotated.webm"') && renderedViewer.includes('src="frames/frame-01_00-01.000.png"'))
+    check('completed MP4 render regeneration selects declared annotated media', renderedViewer.includes('src="replay_annotated.mp4"') && renderedViewer.includes('src="frames/frame-01_00-01.000.png"'))
+
+    const mp4DisplayHandle = await savePack({
+      ...initial,
+      capturedAt: new Date(capturedAt.getTime() + 1_000),
+      screens: [
+        { width: 1920, height: 1080, scale: 1 },
+        { width: 1280, height: 720, scale: 1 },
+      ],
+      displays: [
+        {
+          index: 1,
+          focused: true,
+          bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+          scale: 1,
+          snapshotWidth: 1920,
+          snapshotHeight: 1080,
+          hasReplay: true,
+          replayDurationMs: 5_000,
+          snapshotFile: 'snapshot.png',
+          replayFile: 'replay.mp4',
+          snapshotPng: null,
+          replayWebm: null,
+        },
+        {
+          index: 2,
+          focused: false,
+          bounds: { x: 1920, y: 0, width: 1280, height: 720 },
+          scale: 1,
+          snapshotWidth: 1280,
+          snapshotHeight: 720,
+          hasReplay: true,
+          replayDurationMs: 5_000,
+          snapshotFile: 'snapshot-d2.png',
+          replayFile: 'replay-d2.mp4',
+          snapshotPng: Buffer.from('DISPLAY 2 SNAPSHOT'),
+          replayWebm: Buffer.from('DISPLAY 2 REPLAY'),
+        },
+      ],
+    })
+    mkdirSync(path.join(mp4DisplayHandle.dirPath, 'frames-d2'), { recursive: true })
+    writeFileSync(
+      path.join(mp4DisplayHandle.dirPath, 'frames-d2', 'frame-01_00-01.000.png'),
+      'FRAME',
+    )
+    await setManifestRenderOutputs(mp4DisplayHandle, {
+      replayAnnotated: true,
+      keyframes: [{ file: 'frames-d2/frame-01_00-01.000.png', t_ms: 1_000 }],
+      display: 2,
+    })
+    const mp4DisplayManifest = JSON.parse(
+      readFileSync(path.join(mp4DisplayHandle.dirPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    check(
+      'secondary MP4 render output declaration keeps the MP4 container',
+      mp4DisplayManifest.media.displays?.[1]?.replay_annotated ===
+        'replay_annotated-d2.mp4',
+    )
 
     const omittedEnvManifest = JSON.parse(
       readFileSync(path.join(handle.dirPath, 'manifest.json'), 'utf8'),
@@ -760,6 +928,47 @@ async function writerIntegrationChecks(): Promise<void> {
         !omittedTextAnnotationSkill.includes('undefined') &&
         omittedTextOverviewSkill.length > 0 &&
         !omittedTextOverviewSkill.includes('undefined'),
+    )
+
+    const omittedZAnnotations = JSON.parse(
+      readFileSync(path.join(handle.dirPath, 'annotations.json'), 'utf8'),
+    ) as AnnotationsFile
+    for (const ann of omittedZAnnotations.annotations) {
+      delete (ann as Partial<Annotation>).z
+    }
+    writeFileSync(
+      path.join(handle.dirPath, 'annotations.json'),
+      JSON.stringify(omittedZAnnotations, null, 2),
+      'utf8',
+    )
+    await refreshPackDocs(handle.dirPath, 'en')
+    const omittedZAnnotationSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'annotation.md'),
+      'utf8',
+    )
+    const omittedZOverviewSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'overview.md'),
+      'utf8',
+    )
+    const omittedZReport = readFileSync(
+      path.join(handle.dirPath, 'report.md'),
+      'utf8',
+    )
+    const omittedZViewer = readFileSync(
+      path.join(handle.dirPath, 'viewer.html'),
+      'utf8',
+    )
+    check(
+      'refreshPackDocs regenerates viewer and docs for pack omitting annotation.z without throwing',
+      existsSync(path.join(handle.dirPath, 'viewer.html')) &&
+        omittedZViewer.length > 0 &&
+        !omittedZViewer.includes('undefined') &&
+        omittedZReport.length > 0 &&
+        !omittedZReport.includes('undefined') &&
+        omittedZAnnotationSkill.length > 0 &&
+        !omittedZAnnotationSkill.includes('undefined') &&
+        omittedZOverviewSkill.length > 0 &&
+        !omittedZOverviewSkill.includes('undefined'),
     )
 
     const omittedReplayManifestOnDisk = JSON.parse(
@@ -1022,6 +1231,43 @@ async function writerIntegrationChecks(): Promise<void> {
         !nonArrayAnnotationsSkill.includes('undefined'),
     )
 
+    // Issue #206 & #207: pack with annotations.json omitting annotations property (SPEC §8, §14 minimal/unannotated pack)
+    writeFileSync(
+      path.join(handle.dirPath, 'annotations.json'),
+      JSON.stringify({ reference_width: 1920, reference_height: 1080 }),
+      'utf8',
+    )
+    await refreshPackDocs(handle.dirPath, 'en')
+    const omittedAnnViewer = readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8')
+    const omittedAnnotationsSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'annotation.md'),
+      'utf8',
+    )
+    const omittedAnnotationsReport = readFileSync(
+      path.join(handle.dirPath, 'report.md'),
+      'utf8',
+    )
+    const omittedAnnotationsReadme = readFileSync(
+      path.join(handle.dirPath, 'README.md'),
+      'utf8',
+    )
+    check(
+      'refreshPackDocs regenerates viewer and docs for pack omitting annotations array without throwing',
+      existsSync(path.join(handle.dirPath, 'viewer.html')) &&
+        omittedAnnViewer.length > 0 &&
+        omittedAnnViewer.includes('Original evidence may contain private information.') &&
+        !omittedAnnViewer.includes('Privacy warning') &&
+        omittedAnnotationsReadme.includes('viewer.html'),
+    )
+    check(
+      'refreshPackDocs succeeds and falls back to empty annotations when annotations array is omitted',
+      omittedAnnotationsSkill.includes('This pack has no annotation boxes.') &&
+        !omittedAnnotationsSkill.includes('undefined') &&
+        omittedAnnotationsReport.includes('Coordinates are pixels in snapshot.png') === false &&
+        omittedAnnotationsReadme.includes('no annotation boxes') &&
+        !omittedAnnotationsReadme.includes('undefined'),
+    )
+
     // Direct unit checks for readAnnotationsSafe contract
     const safeMissingAnn = await readAnnotationsSafe(path.join(outputDir, 'nonexistent'))
     check('readAnnotationsSafe returns fallback for missing directory or file', safeMissingAnn.reference_width === 0 && safeMissingAnn.reference_height === 0 && safeMissingAnn.annotations.length === 0)
@@ -1029,6 +1275,8 @@ async function writerIntegrationChecks(): Promise<void> {
     check('readAnnotationsSafe preserves explicit fallback dimensions when file is missing', safeDimensionsAnn.reference_width === 1920 && safeDimensionsAnn.reference_height === 1080 && safeDimensionsAnn.annotations.length === 0)
     const safeManifestAnn = await readAnnotationsSafe(path.join(outputDir, 'nonexistent'), manifestAfterLateMalformedAnn)
     check('readAnnotationsSafe extracts fallback dimensions from manifest', safeManifestAnn.reference_width === (manifestAfterLateMalformedAnn.media.displays?.[0]?.snapshot_width ?? 0) && safeManifestAnn.annotations.length === 0)
+    const safeOmittedAnn = await readAnnotationsSafe(handle.dirPath)
+    check('readAnnotationsSafe preserves dimensions and defaults annotations when annotations array is omitted', safeOmittedAnn.reference_width === 1920 && safeOmittedAnn.reference_height === 1080 && safeOmittedAnn.annotations.length === 0)
     writeFileSync(
       path.join(handle.dirPath, 'annotations.json'),
       JSON.stringify({

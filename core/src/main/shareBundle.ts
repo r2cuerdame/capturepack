@@ -719,7 +719,7 @@ function mediaCandidates(manifest: Manifest, layout: ShareDisplayLayout): MediaC
       display.keyframes,
       false,
       layout.frameByDisplay.get(display.index),
-      display.replay,
+      display.replay ?? null,
       display.replay_duration_ms,
     )
   }

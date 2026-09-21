@@ -416,7 +416,7 @@ function inventory(
     const safe = safeViewerPath(value)
     if (safe !== null) files.add(safe)
   }
-  if (annotationsFile !== undefined && (annotationsFile.annotations?.length ?? 0) > 0) {
+  if (Array.isArray(annotationsFile?.annotations) && annotationsFile.annotations.length > 0) {
     files.add('annotations.json')
   }
   add(manifest.media.snapshot)
@@ -465,7 +465,10 @@ export function buildViewerHtml(
   const captureKind = captureKindOf(manifest)
   const title = manifest.title ?? t('pack.untitled')
   const focused = focusedDisplayIndex(manifest.media.displays)
-  const blurCount = (annotationsFile?.annotations ?? []).filter((annotation) => annotation.blur).length
+  const annotations = Array.isArray(annotationsFile?.annotations)
+    ? annotationsFile.annotations
+    : []
+  const blurCount = annotations.filter((annotation) => Boolean(annotation?.blur)).length
   const duration =
     captureKind === 'video' && manifest.media.replay_duration_ms !== undefined
       ? `${(manifest.media.replay_duration_ms / 1000).toFixed(1)}s`

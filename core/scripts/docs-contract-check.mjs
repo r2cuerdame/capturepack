@@ -347,6 +347,23 @@ console.log('\nSPEC §8.3 defines annotation.text as OPTIONAL')
   )
 }
 
+console.log('\nSPEC §8.3 defines annotation.z as OPTIONAL')
+{
+  const spec = readFileSync(join(ROOT, 'SPEC.md'), 'utf8')
+  check(
+    'SPEC §8.3 declares annotation.z as OPTIONAL defaulting to array position',
+    /\|\s*`z`\s*\|\s*integer\s*\|\s*OPTIONAL\s*\|\s*Stacking order for rendering/u.test(spec) &&
+      spec.includes("Default: the annotation's array position"),
+    'SPEC.md §8.3 lost its z OPTIONAL declaration',
+  )
+  const typesSource = readFileSync(join(CORE, 'src', 'shared', 'types.ts'), 'utf8')
+  check(
+    'types.ts declares BoxAnnotation.z as optional number',
+    /z\?:\s*number/u.test(typesSource),
+    'types.ts does not declare z?: number in BoxAnnotation',
+  )
+}
+
 console.log('\nSPEC §5.3 / §13.1 defines media.replay as nullable/omitted for screenshot-only packs')
 {
   const spec = readFileSync(join(ROOT, 'SPEC.md'), 'utf8')
@@ -393,31 +410,32 @@ console.log('\nSPEC §5.3 / §13.1 defines media.replay as nullable/omitted for 
   )
 }
 
+const bundleResult = buildSync({
+  stdin: {
+    contents: [
+      "export { buildReport, formatClock, keyframeSet, displaySummaryLines, extraDisplayFiles } from './src/main/report'",
+      "export { buildReadme, buildSkills, replayLabel } from './src/main/packdocs'",
+      "export { buildViewerHtml } from './src/main/viewer'",
+      "export { makeT } from './src/shared/i18n'",
+    ].join('\n'),
+    resolveDir: CORE,
+    sourcefile: 'contract-runner.ts',
+    loader: 'ts',
+  },
+  bundle: true,
+  platform: 'node',
+  format: 'cjs',
+  write: false,
+  external: ['electron'],
+})
+
+const mod = { exports: {} }
+const runner = new Function('module', 'exports', 'require', bundleResult.outputFiles[0].text)
+runner(mod, mod.exports, () => ({}))
+const { buildReport, formatClock, keyframeSet, displaySummaryLines, extraDisplayFiles, buildReadme, buildSkills, replayLabel, makeT, buildViewerHtml } = mod.exports
+
 console.log('\nPacks with omitted media.replay render clean screenshot-only documentation without undefined')
 {
-  const bundleResult = buildSync({
-    stdin: {
-      contents: [
-        "export { buildReport, keyframeSet } from './src/main/report'",
-        "export { buildReadme, buildSkills, replayLabel } from './src/main/packdocs'",
-        "export { makeT } from './src/shared/i18n'",
-      ].join('\n'),
-      resolveDir: CORE,
-      sourcefile: 'contract-runner.ts',
-      loader: 'ts',
-    },
-    bundle: true,
-    platform: 'node',
-    format: 'cjs',
-    write: false,
-    external: ['electron'],
-  })
-
-  const mod = { exports: {} }
-  const runner = new Function('module', 'exports', 'require', bundleResult.outputFiles[0].text)
-  runner(mod, mod.exports, () => ({}))
-  const { buildReport, keyframeSet, buildReadme, buildSkills, replayLabel, makeT } = mod.exports
-
   const t = makeT('en')
   const testAnnotations = {
     reference_width: 1920,
@@ -490,6 +508,204 @@ console.log('\nPacks with omitted media.replay render clean screenshot-only docu
   }
 }
 
+console.log('\nSPEC §5.6 / §13.1 defines displays[].replay as nullable/omitted for secondary displays without replay (Issue #210)')
+{
+  const spec = readFileSync(join(ROOT, 'SPEC.md'), 'utf8')
+  check(
+    'SPEC §5.6 declares displays[].replay as string or null',
+    /\|\s*`replay`\s*\|\s*string\s+\*\*or\*\*\s+`null`\s*\|\s*REQUIRED\s*\|\s*Filename of this display's replay/u.test(spec),
+    'SPEC.md §5.6 lost its displays[].replay string or null declaration',
+  )
+  const typesSource = readFileSync(join(CORE, 'src', 'shared', 'types.ts'), 'utf8')
+  check(
+    'types.ts declares ManifestDisplayMedia.replay as optional string or null',
+    /replay\?:\s*string\s*\|\s*null/u.test(typesSource),
+    'types.ts does not declare replay?: string | null in ManifestDisplayMedia',
+  )
+  const reportSource = readFileSync(join(CORE, 'src', 'main', 'report.ts'), 'utf8')
+  check(
+    'report.ts displaySummaryLines guards display replay with typeof string and length > 0',
+    reportSource.includes("const hasReplay = typeof d.replay === 'string' && d.replay.length > 0"),
+    'report.ts displaySummaryLines does not check typeof string and length > 0 for d.replay',
+  )
+  check(
+    'report.ts extraDisplayFiles guards display replay with typeof string and length > 0',
+    reportSource.includes("if (typeof d.replay === 'string' && d.replay.length > 0)"),
+    'report.ts extraDisplayFiles does not check typeof string and length > 0 for d.replay',
+  )
+
+  const t = makeT('en')
+  const testAnnotations = {
+    reference_width: 1920,
+    reference_height: 1080,
+    annotations: [],
+  }
+
+  for (const secondaryReplayKind of ['omitted', 'null', 'string']) {
+    const secondaryDisplay = {
+      index: 2,
+      snapshot: 'snapshot-d2.png',
+      snapshot_width: 1920,
+      snapshot_height: 1080,
+      bounds: { x: 1920, y: 0, width: 1920, height: 1080 },
+      scale: 1,
+      focused: false,
+      ...(secondaryReplayKind === 'omitted'
+        ? {}
+        : secondaryReplayKind === 'null'
+          ? { replay: null }
+          : { replay: 'replay-d2.webm', replay_duration_ms: 10000, replay_clock_offset_ms: 0 }),
+    }
+
+    const manifest = {
+      format: 'capturepack',
+      format_version: '0.7.0',
+      id: `test-multi-display-${secondaryReplayKind}-secondary-replay-pack`,
+      created_at: '2026-07-27T10:41:07+09:00',
+      generator: { name: 'test', version: '0.1.0' },
+      environment: {
+        os: 'windows',
+        screens: [
+          { width: 1920, height: 1080, scale: 1 },
+          { width: 1920, height: 1080, scale: 1 },
+        ],
+      },
+      media: {
+        snapshot: 'snapshot.png',
+        replay: 'replay.webm',
+        replay_duration_ms: 10000,
+        displays: [
+          {
+            index: 1,
+            snapshot: 'snapshot.png',
+            snapshot_width: 1920,
+            snapshot_height: 1080,
+            replay: 'replay.webm',
+            replay_duration_ms: 10000,
+            replay_clock_offset_ms: 0,
+            bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+            scale: 1,
+            focused: true,
+          },
+          secondaryDisplay,
+        ],
+      },
+    }
+
+    const summaryLines = displaySummaryLines(manifest, t, [])
+    const extraFiles = extraDisplayFiles(manifest)
+    const report = buildReport(manifest, testAnnotations, 'en', false, true)
+    const readme = buildReadme(manifest, testAnnotations, 'en', false, true)
+
+    if (secondaryReplayKind === 'string') {
+      check(
+        `[${secondaryReplayKind} secondary replay] displaySummaryLines reports replay duration and name`,
+        summaryLines.some((l) => l.includes('replay-d2.webm') && l.includes('10.0s')),
+      )
+      check(
+        `[${secondaryReplayKind} secondary replay] extraDisplayFiles includes secondary replay file`,
+        extraFiles.some((f) => f.name === 'replay-d2.webm'),
+      )
+      check(
+        `[${secondaryReplayKind} secondary replay] report.md and README.md include secondary replay`,
+        report.includes('replay-d2.webm') && readme.includes('replay-d2.webm'),
+      )
+    } else {
+      check(
+        `[${secondaryReplayKind} secondary replay] displaySummaryLines reports "no replay" and never emits literal undefined or 0.0s undefined`,
+        summaryLines.some((l) => l.includes('2: 1920×1080') && l.includes('no replay')) &&
+          !summaryLines.some((l) => l.includes('undefined')),
+      )
+      check(
+        `[${secondaryReplayKind} secondary replay] extraDisplayFiles only includes snapshot and never emits undefined`,
+        extraFiles.length === 1 &&
+          extraFiles[0].name === 'snapshot-d2.png' &&
+          !extraFiles.some((f) => f.name === undefined || f.name === 'undefined'),
+      )
+      check(
+        `[${secondaryReplayKind} secondary replay] report.md never emits literal undefined or secondary replay entries`,
+        !report.includes('undefined') &&
+          !report.includes('- undefined') &&
+          report.includes('`snapshot-d2.png`, no replay') &&
+          report.includes('- snapshot-d2.png — Display 2, 1920×1080 — the same instant on another screen') &&
+          !report.includes('replay-d2.webm'),
+      )
+      check(
+        `[${secondaryReplayKind} secondary replay] README.md never emits literal undefined or secondary replay table rows`,
+        !readme.includes('undefined') &&
+          !readme.includes('| undefined |') &&
+          readme.includes('| snapshot-d2.png | Display 2, 1920×1080 — the same instant on another screen') &&
+          !readme.includes('replay-d2.webm'),
+      )
+    }
+  }
+
+  for (const kind of ['omitted', 'null']) {
+    const screenshotMultiManifest = {
+      format: 'capturepack',
+      format_version: '0.7.0',
+      id: `test-screenshot-multi-${kind}-pack`,
+      created_at: '2026-07-27T10:41:07+09:00',
+      generator: { name: 'test', version: '0.1.0' },
+      environment: {
+        os: 'windows',
+        screens: [
+          { width: 1920, height: 1080, scale: 1 },
+          { width: 1920, height: 1080, scale: 1 },
+        ],
+      },
+      media: {
+        snapshot: 'snapshot.png',
+        ...(kind === 'null' ? { replay: null } : {}),
+        displays: [
+          {
+            index: 1,
+            snapshot: 'snapshot.png',
+            snapshot_width: 1920,
+            snapshot_height: 1080,
+            ...(kind === 'null' ? { replay: null } : {}),
+            bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+            scale: 1,
+            focused: true,
+          },
+          {
+            index: 2,
+            snapshot: 'snapshot-d2.png',
+            snapshot_width: 1920,
+            snapshot_height: 1080,
+            ...(kind === 'null' ? { replay: null } : {}),
+            bounds: { x: 1920, y: 0, width: 1920, height: 1080 },
+            scale: 1,
+            focused: false,
+          },
+        ],
+      },
+    }
+
+    const report = buildReport(screenshotMultiManifest, testAnnotations, 'en', false, true)
+    const readme = buildReadme(screenshotMultiManifest, testAnnotations, 'en', false, true)
+    const summaryLines = displaySummaryLines(screenshotMultiManifest, t, [])
+    const extraFiles = extraDisplayFiles(screenshotMultiManifest)
+
+    check(
+      `[screenshot multi-display ${kind} replay] displaySummaryLines reports no replay on all displays without undefined`,
+      summaryLines.every((l) => !l.includes('undefined')) &&
+        summaryLines.filter((l) => l.includes('no replay')).length === 2,
+    )
+    check(
+      `[screenshot multi-display ${kind} replay] extraDisplayFiles contains snapshot only`,
+      extraFiles.length === 1 && extraFiles[0].name === 'snapshot-d2.png',
+    )
+    check(
+      `[screenshot multi-display ${kind} replay] report.md and README.md never contain literal undefined`,
+      !report.includes('undefined') &&
+        !report.includes('- undefined') &&
+        !readme.includes('undefined') &&
+        !readme.includes('| undefined |'),
+    )
+  }
+}
+
 console.log('\nSPEC §4, §8, §14 define annotations.json as OPTIONAL')
 {
   const spec = readFileSync(join(ROOT, 'SPEC.md'), 'utf8')
@@ -517,5 +733,352 @@ console.log('\nSPEC §4, §8, §14 define annotations.json as OPTIONAL')
     'exporter.ts addManifestPlugin or refreshPackDocs does not use readAnnotationsSafe',
   )
 }
+
+console.log('\nbuildReport, buildReadme, and buildSkills succeed when annotationsFile.annotations is omitted or empty (Issue #207)')
+{
+  const reportSource = readFileSync(join(CORE, 'src', 'main', 'report.ts'), 'utf8')
+  const packdocsSource = readFileSync(join(CORE, 'src', 'main', 'packdocs.ts'), 'utf8')
+  check(
+    'report.ts guards annotationsFile?.annotations with Array.isArray in buildReport and keyframeSet',
+    reportSource.includes('Array.isArray(annotationsFile?.annotations)') &&
+      reportSource.includes('displaySummaryLines(manifest, t, annotations)'),
+    'report.ts does not guard annotationsFile?.annotations or does not pass guarded annotations',
+  )
+  check(
+    'packdocs.ts guards annotationsFile?.annotations with Array.isArray in buildReadme and buildSkills helpers',
+    packdocsSource.includes('Array.isArray(annotationsFile?.annotations)') &&
+      packdocsSource.includes('buildOverviewSkill(manifest, annotationsFile') &&
+      packdocsSource.includes('buildAnnotationSkill(manifest, annotationsFile') &&
+      packdocsSource.includes('buildDomSkill(manifest, annotationsFile'),
+    'packdocs.ts does not guard annotationsFile?.annotations in buildReadme and skill builders',
+  )
+
+  const testTimeline = {
+    t0: '2026-07-27T10:41:07+09:00',
+    events: [],
+  }
+  const testManifest = {
+    format: 'capturepack',
+    format_version: '0.1.0',
+    id: 'test-no-annotations-pack',
+    created_at: '2026-07-27T10:41:07+09:00',
+    generator: { name: 'test', version: '0.1.0' },
+    environment: { os: 'windows' },
+    media: {
+      snapshot: 'snapshot.png',
+      replay: null,
+      replay_duration_ms: null,
+    },
+  }
+
+  const testCases = [
+    { name: 'omitted annotations property', file: { reference_width: 1920, reference_height: 1080 } },
+    { name: 'empty annotations array', file: { reference_width: 1920, reference_height: 1080, annotations: [] } },
+    { name: 'undefined annotations property', file: { reference_width: 1920, reference_height: 1080, annotations: undefined } },
+    { name: 'null annotations property', file: { reference_width: 1920, reference_height: 1080, annotations: null } },
+    { name: 'non-array annotations property', file: { reference_width: 1920, reference_height: 1080, annotations: 'not-an-array' } },
+  ]
+
+  for (const tc of testCases) {
+    let reportOk = false
+    let readmeOk = false
+    let skillsOk = false
+    try {
+      const report = buildReport(testManifest, tc.file, 'en', false, true)
+      reportOk = typeof report === 'string' && report.includes('snapshot.png')
+    } catch {
+      reportOk = false
+    }
+
+    try {
+      const readme = buildReadme(testManifest, tc.file, 'en', false, true)
+      readmeOk = typeof readme === 'string' && readme.includes('snapshot.png')
+    } catch {
+      readmeOk = false
+    }
+
+    try {
+      const skills = buildSkills(testManifest, tc.file, testTimeline, 'en', false)
+      skillsOk =
+        skills !== null &&
+        typeof skills === 'object' &&
+        typeof skills.overview === 'string' &&
+        typeof skills.annotation === 'string' &&
+        typeof skills.dom === 'string' &&
+        skills.annotation.includes('This pack has no annotation boxes.')
+    } catch {
+      skillsOk = false
+    }
+
+    check(
+      `buildReport does not throw on ${tc.name}`,
+      reportOk,
+      `buildReport threw or returned invalid result for ${tc.name}`,
+    )
+    check(
+      `buildReadme does not throw on ${tc.name}`,
+      readmeOk,
+      `buildReadme threw or returned invalid result for ${tc.name}`,
+    )
+    check(
+      `buildSkills does not throw on ${tc.name}`,
+      skillsOk,
+      `buildSkills threw or returned invalid result for ${tc.name}`,
+    )
+  }
+}
+
+console.log('\nSPEC §5.2 defines environment.os_version and environment.screens[].scale as OPTIONAL (Issue #209)')
+{
+  const spec = readFileSync(join(ROOT, 'SPEC.md'), 'utf8')
+  check(
+    'SPEC §5.2 declares os_version as OPTIONAL (RECOMMENDED)',
+    /\|\s*`os_version`\s*\|\s*string\s*\|\s*OPTIONAL\s+\(RECOMMENDED\)\s*\|/u.test(spec),
+    'SPEC.md §5.2 lost its os_version OPTIONAL (RECOMMENDED) declaration',
+  )
+  check(
+    'SPEC §5.2 declares screens[].scale as OPTIONAL with default 1',
+    /\|\s*`scale`\s*\|\s*number\s*\|\s*OPTIONAL\s*\|\s*OS display scale factor.*Default `1`/u.test(spec),
+    'SPEC.md §5.2 lost its screens[].scale OPTIONAL declaration or default 1',
+  )
+
+  const schemaSource = readFileSync(join(ROOT, 'docs', 'schemas', 'manifest.schema.json'), 'utf8')
+  const schema = JSON.parse(schemaSource)
+  const envRequired = schema.properties?.environment?.required ?? []
+  const screenRequired = schema.properties?.environment?.properties?.screens?.items?.required ?? []
+  const scaleDefault = schema.properties?.environment?.properties?.screens?.items?.properties?.scale?.default
+
+  check(
+    'manifest.schema.json declares environment.os as required and os_version as optional',
+    envRequired.includes('os') && !envRequired.includes('os_version'),
+    'manifest.schema.json does not declare os as required and os_version as optional',
+  )
+  check(
+    'manifest.schema.json declares screens items width/height required and scale optional with default 1',
+    screenRequired.includes('width') &&
+      screenRequired.includes('height') &&
+      !screenRequired.includes('scale') &&
+      scaleDefault === 1,
+    'manifest.schema.json does not declare scale optional with default 1 on screens items',
+  )
+
+  const typesSource = readFileSync(join(CORE, 'src', 'shared', 'types.ts'), 'utf8')
+  check(
+    'types.ts declares os_version as optional in Manifest environment',
+    /os_version\?:\s*string/u.test(typesSource),
+    'types.ts does not declare os_version?: string in Manifest environment',
+  )
+  check(
+    'types.ts declares scale as optional in Manifest environment screens',
+    /screens\?:\s*Array<\{[\s\S]*?scale\?:\s*number[\s\S]*?\}>/u.test(typesSource),
+    'types.ts does not declare scale?: number in Manifest environment screens',
+  )
+}
+
+console.log('\nPacks omitting optional os_version and screens[].scale render clean docs and viewer without undefined (Issue #209)')
+{
+  const testAnnotations = {
+    reference_width: 1920,
+    reference_height: 1080,
+    annotations: [],
+  }
+  const testTimeline = {
+    t0: '2026-07-27T10:41:07+09:00',
+    events: [],
+  }
+
+  const envCases = [
+    {
+      name: 'omitted os_version and scale',
+      environment: {
+        os: 'windows',
+        screens: [{ width: 1920, height: 1080 }],
+      },
+      expectedOsText: 'windows',
+      expectedReportOs: '- **OS:** windows',
+      expectedViewerOs: '<dt>OS</dt><dd>windows</dd>',
+      expectedReportScreens: '- **Screens:** 1920×1080 @1x scale',
+      expectedViewerScreens: '<dt>Screens</dt><dd>1920×1080 @1x</dd>',
+    },
+    {
+      name: 'omitted os_version only (scale present)',
+      environment: {
+        os: 'darwin',
+        screens: [{ width: 1728, height: 1117, scale: 2 }],
+      },
+      expectedOsText: 'darwin',
+      expectedReportOs: '- **OS:** darwin',
+      expectedViewerOs: '<dt>OS</dt><dd>darwin</dd>',
+      expectedReportScreens: '- **Screens:** 1728×1117 @2x scale',
+      expectedViewerScreens: '<dt>Screens</dt><dd>1728×1117 @2x</dd>',
+    },
+    {
+      name: 'omitted scale only (os_version present)',
+      environment: {
+        os: 'linux',
+        os_version: '6.5.0-generic',
+        screens: [{ width: 2560, height: 1440 }],
+      },
+      expectedOsText: 'linux 6.5.0-generic',
+      expectedReportOs: '- **OS:** linux (version 6.5.0-generic)',
+      expectedViewerOs: '<dt>OS</dt><dd>linux 6.5.0-generic</dd>',
+      expectedReportScreens: '- **Screens:** 2560×1440 @1x scale',
+      expectedViewerScreens: '<dt>Screens</dt><dd>2560×1440 @1x</dd>',
+    },
+    {
+      name: 'multiple screens with mixed omitted scales',
+      environment: {
+        os: 'windows',
+        screens: [
+          { width: 1920, height: 1080 },
+          { width: 3840, height: 2160, scale: 2 },
+        ],
+      },
+      expectedOsText: 'windows',
+      expectedReportOs: '- **OS:** windows',
+      expectedViewerOs: '<dt>OS</dt><dd>windows</dd>',
+      expectedReportScreens: '- **Screens:** 1920×1080 @1x scale; 3840×2160 @2x scale',
+      expectedViewerScreens: '<dt>Screens</dt><dd>1920×1080 @1x; 3840×2160 @2x</dd>',
+    },
+    {
+      name: 'minimal environment omitting both screens and os_version',
+      environment: {
+        os: 'windows',
+      },
+      expectedOsText: 'windows',
+      expectedReportOs: '- **OS:** windows',
+      expectedViewerOs: '<dt>OS</dt><dd>windows</dd>',
+      expectedReportScreens: '- **Screens:** unknown',
+      expectedViewerScreens: '<dt>Screens</dt><dd>unknown</dd>',
+    },
+  ]
+
+  for (const tc of envCases) {
+    const manifest = {
+      format: 'capturepack',
+      format_version: '0.5.0',
+      id: `test-env-${tc.name.replace(/\s+/gu, '-')}`,
+      created_at: '2026-07-27T10:41:07+09:00',
+      generator: { name: 'test', version: '0.5.0' },
+      environment: tc.environment,
+      media: {
+        snapshot: 'snapshot.png',
+        replay: null,
+      },
+    }
+
+    const report = buildReport(manifest, testAnnotations, 'en', false, true)
+    const readme = buildReadme(manifest, testAnnotations, 'en', false, true)
+    const skills = buildSkills(manifest, testAnnotations, testTimeline, 'en', false)
+    const viewerHtml = buildViewerHtml(manifest, testAnnotations, testTimeline, 'en')
+
+    check(
+      `[${tc.name}] report.md never emits literal undefined and formats OS and screens cleanly`,
+      !report.includes('undefined') &&
+        !report.includes('@undefinedx') &&
+        !report.includes('(version undefined)') &&
+        report.includes(tc.expectedReportOs) &&
+        report.includes(tc.expectedReportScreens),
+      `report.md emitted undefined or mismatched format for ${tc.name}`,
+    )
+
+    check(
+      `[${tc.name}] README.md never emits literal undefined`,
+      !readme.includes('undefined'),
+      `README.md emitted undefined for ${tc.name}`,
+    )
+
+    check(
+      `[${tc.name}] skills/overview.md never emits literal undefined and formats OS cleanly`,
+      !skills.overview.includes('undefined') &&
+        skills.overview.includes(`on ${tc.expectedOsText}`) &&
+        !skills.overview.includes(`on ${tc.expectedOsText} undefined`),
+      `skills/overview.md emitted undefined or mismatched OS for ${tc.name}`,
+    )
+
+    check(
+      `[${tc.name}] viewer.html never emits literal undefined and formats OS and screens cleanly`,
+      !viewerHtml.includes('undefined') &&
+        !viewerHtml.includes('@undefinedx') &&
+        viewerHtml.includes(tc.expectedViewerOs) &&
+        viewerHtml.includes(tc.expectedViewerScreens),
+      `viewer.html emitted undefined or mismatched format for ${tc.name}`,
+    )
+  }
+}
+
+console.log('\nSPEC §10.1: formatClock preserves sign for negative millisecond offsets (Issue #211)')
+{
+  check(
+    'formatClock correctly formats positive, zero, and negative millisecond offsets',
+    formatClock(0) === '00:00.000' &&
+      formatClock(3200) === '00:03.200' &&
+      formatClock(65432) === '01:05.432' &&
+      formatClock(-1500) === '-00:01.500' &&
+      formatClock(-3500) === '-00:03.500' &&
+      formatClock(-1200) === '-00:01.200' &&
+      formatClock(-50) === '-00:00.050' &&
+      formatClock(-65432) === '-01:05.432',
+    `formatClock produced unexpected formatted strings: 0->${formatClock(0)}, 3200->${formatClock(3200)}, -1500->${formatClock(-1500)}, -50->${formatClock(-50)}`,
+  )
+
+  const reportSource = readFileSync(join(CORE, 'src', 'main', 'report.ts'), 'utf8')
+  check(
+    'report.ts does not clamp formatClock to Math.max(0, ...)',
+    !reportSource.includes('Math.max(0, Math.round(ms))'),
+    'report.ts still clamps negative ms values in formatClock',
+  )
+
+  const testAnnotations = {
+    reference_width: 1920,
+    reference_height: 1080,
+    annotations: [],
+  }
+  const testTimeline = {
+    t0: '2026-07-27T10:41:07+09:00',
+    events: [
+      { t_ms: -3500, type: 'input.window.focus', source: 'core', data: { title: 'Code' } },
+      { t_ms: -1200, type: 'input.mouse.click', source: 'core', data: { button: 'left', x: 120, y: 300 } },
+      { t_ms: 0, type: 'core.capture.triggered', source: 'core', data: {} },
+      { t_ms: 1500, type: 'core.annotation.added', source: 'core', data: { annotation_id: 'box-1' } },
+    ],
+  }
+  const manifest = {
+    format: 'capturepack',
+    format_version: '0.5.0',
+    id: 'test-negative-timeline-pack',
+    created_at: '2026-07-27T10:41:07+09:00',
+    generator: { name: 'test', version: '0.5.0' },
+    environment: { os: 'windows' },
+    media: {
+      snapshot: 'snapshot.png',
+      replay: null,
+    },
+  }
+
+  const skills = buildSkills(manifest, testAnnotations, testTimeline, 'en', false)
+  check(
+    'skills/timeline.md displays signed offsets for pre-t0 events (SPEC §10.1)',
+    skills.timeline.includes('| -00:03.500 | input.window.focus |') &&
+      skills.timeline.includes('| -00:01.200 | input.mouse.click |') &&
+      skills.timeline.includes('| 00:00.000 | core.capture.triggered |') &&
+      skills.timeline.includes('| 00:01.500 | core.annotation.added |'),
+    `skills/timeline.md did not include expected signed offsets. Output:\n${skills.timeline}`,
+  )
+
+  const lines = skills.timeline.split('\n')
+  const focusLine = lines.find((l) => l.includes('input.window.focus'))
+  const clickLine = lines.find((l) => l.includes('input.mouse.click'))
+  check(
+    'skills/timeline.md preserves distinct timing offsets for pre-anchor events',
+    focusLine !== undefined &&
+      clickLine !== undefined &&
+      !focusLine.includes('| 00:00.000 |') &&
+      !clickLine.includes('| 00:00.000 |') &&
+      focusLine !== clickLine,
+    'pre-t0 events collapsed to 00:00.000 or identical timestamps',
+  )
+}
+
 console.log(`\nresult: ${failed === 0 ? 'OK' : 'BROKEN'} — ${passed} passed, ${failed} failed\n`)
 if (failed > 0) process.exitCode = 1
