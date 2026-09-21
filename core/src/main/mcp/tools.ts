@@ -669,6 +669,13 @@ function snapshotDescription(media: McpCaptureMedia): string {
   if (snapshot.scope === 'fullscreen') {
     return 'User-requested full-screen image; snapshot.png itself is the complete explicit capture'
   }
+  if (snapshot.scope === 'browser-page') {
+    return (
+      'Whole web page captured by the CapturePack browser extension on the user\'s click; '
+      + 'snapshot.png is the document top to bottom at the page\'s own pixel ratio, '
+      + 'with plugins/chrome-dom carrying its DOM in the same coordinates'
+    )
+  }
   if (snapshot.scope === 'legacy_screenshot') {
     return 'Legacy screenshot-only capture'
   }

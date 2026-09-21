@@ -66,8 +66,13 @@ function frame(message: unknown): Buffer {
  * Chrome caps a host message at 64 MB; a DOM element report is a few hundred
  * bytes. Anything approaching this is not a message from our extension, and
  * reading it would mean allocating on a stranger's say-so.
+ *
+ * Raised from 1 MB with #157: a full-page capture's header carries the whole
+ * document walk (up to 4000 elements) and its picture follows in 512 KiB
+ * base64 chunks, each its own frame — so no legitimate frame comes near this,
+ * and the bound still means what it always did.
  */
-const MAX_FRAME_BYTES = 1024 * 1024
+const MAX_FRAME_BYTES = 4 * 1024 * 1024
 
 /**
  * Runs the process as Chrome's native messaging host until stdin closes.

@@ -334,8 +334,9 @@ export interface Manifest {
     // time in the pack is already on the trimmed replay clock — readers never
     // need to apply this offset. Absent = the replay was never trimmed.
     trim_offset_ms?: number
-    // Present only for capture_kind "image".
-    image_scope?: 'region' | 'fullscreen'
+    // Present only for capture_kind "image". "browser-page" is a whole web
+    // document captured by the browser extension (#157).
+    image_scope?: 'region' | 'fullscreen' | 'browser-page'
     crop_bounds?: {
       x: number
       y: number
