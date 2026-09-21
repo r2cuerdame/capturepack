@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
   addManifestPlugin,
+  readTimelineSafe,
   refreshPackDocs,
   savePack,
   setManifestRenderOutputs,
@@ -629,6 +630,127 @@ async function writerIntegrationChecks(): Promise<void> {
       omittedTrackingAnnotationSkill.length > 0 &&
         !omittedTrackingAnnotationSkill.includes('undefined'),
     )
+
+    // Issue #200: pack omitting timeline.json (OPTIONAL for video packs per SPEC §4, §10, §14)
+    rmSync(path.join(handle.dirPath, 'timeline.json'), { force: true })
+    const capturedNoTimelineErrors: string[] = []
+    const origConsoleError = console.error
+    console.error = (...args: unknown[]): void => {
+      capturedNoTimelineErrors.push(args.map(String).join(' '))
+      origConsoleError(...args)
+    }
+    try {
+      await refreshPackDocs(handle.dirPath, 'en')
+    } finally {
+      console.error = origConsoleError
+    }
+    const noTimelineViewer = readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8')
+    const noTimelineReport = readFileSync(path.join(handle.dirPath, 'report.md'), 'utf8')
+    const noTimelineReadme = readFileSync(path.join(handle.dirPath, 'README.md'), 'utf8')
+    const noTimelineTimelineSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'timeline.md'),
+      'utf8',
+    )
+    check(
+      'refreshPackDocs regenerates viewer and docs for pack omitting timeline.json without throwing or logging ENOENT',
+      !existsSync(path.join(handle.dirPath, 'timeline.json')) &&
+        capturedNoTimelineErrors.length === 0 &&
+        noTimelineViewer.length > 0 &&
+        !noTimelineViewer.includes('undefined') &&
+        noTimelineReport.length > 0 &&
+        !noTimelineReport.includes('undefined') &&
+        noTimelineReadme.length > 0 &&
+        !noTimelineReadme.includes('undefined') &&
+        noTimelineTimelineSkill.includes('No events were recorded.') &&
+        !noTimelineTimelineSkill.includes('undefined'),
+    )
+
+    const lateNoTimelinePluginDir = path.join(handle.dirPath, 'plugins', 'late-no-timeline')
+    mkdirSync(lateNoTimelinePluginDir, { recursive: true })
+    writeFileSync(
+      path.join(lateNoTimelinePluginDir, 'meta.json'),
+      '{"name":"late-no-timeline","version":"1"}',
+    )
+    await addManifestPlugin(
+      handle,
+      { name: 'late-no-timeline', version: '1.0.0', path: 'plugins/late-no-timeline/' },
+      'en',
+    )
+    const manifestAfterLateNoTimeline = JSON.parse(
+      readFileSync(path.join(handle.dirPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    const viewerAfterLateNoTimeline = readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8')
+    check(
+      'addManifestPlugin attaches plugin and updates docs on pack omitting timeline.json without throwing',
+      (manifestAfterLateNoTimeline.plugins ?? []).some((p) => p.name === 'late-no-timeline') &&
+        viewerAfterLateNoTimeline.includes('late-no-timeline') &&
+        !viewerAfterLateNoTimeline.includes('undefined'),
+    )
+
+    // Issue #200: malformed timeline.json (SyntaxError and non-array events)
+    writeFileSync(path.join(handle.dirPath, 'timeline.json'), '{"events": [corrupted json', 'utf8')
+    await refreshPackDocs(handle.dirPath, 'en')
+    const malformedJsonSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'timeline.md'),
+      'utf8',
+    )
+    check(
+      'refreshPackDocs falls back to empty timeline on malformed JSON without throwing or aborting',
+      malformedJsonSkill.includes('No events were recorded.') &&
+        !malformedJsonSkill.includes('undefined'),
+    )
+
+    const lateMalformedPluginDir = path.join(handle.dirPath, 'plugins', 'late-malformed')
+    mkdirSync(lateMalformedPluginDir, { recursive: true })
+    writeFileSync(
+      path.join(lateMalformedPluginDir, 'meta.json'),
+      '{"name":"late-malformed","version":"1"}',
+    )
+    await addManifestPlugin(
+      handle,
+      { name: 'late-malformed', version: '1.0.0', path: 'plugins/late-malformed/' },
+      'en',
+    )
+    const manifestAfterLateMalformed = JSON.parse(
+      readFileSync(path.join(handle.dirPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    check(
+      'addManifestPlugin succeeds and updates manifest on pack with malformed timeline.json',
+      (manifestAfterLateMalformed.plugins ?? []).some((p) => p.name === 'late-malformed'),
+    )
+
+    // Invalid shape: events is not an array
+    writeFileSync(
+      path.join(handle.dirPath, 'timeline.json'),
+      JSON.stringify({ t0: '2026-09-22T00:00:00Z', events: 'not-an-array' }),
+      'utf8',
+    )
+    await refreshPackDocs(handle.dirPath, 'en')
+    const nonArrayEventsSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'timeline.md'),
+      'utf8',
+    )
+    check(
+      'refreshPackDocs falls back to empty timeline when events is not an array',
+      nonArrayEventsSkill.includes('No events were recorded.') &&
+        !nonArrayEventsSkill.includes('undefined'),
+    )
+
+    // Direct unit checks for readTimelineSafe contract
+    const safeMissing = await readTimelineSafe(path.join(outputDir, 'nonexistent'), '2026-01-01T00:00:00Z', 'video')
+    check('readTimelineSafe returns fallback for missing directory or file', safeMissing.t0 === '2026-01-01T00:00:00Z' && safeMissing.events.length === 0)
+    const safeImage = await readTimelineSafe(handle.dirPath, '2026-01-01T00:00:00Z', 'image')
+    check('readTimelineSafe returns empty timeline for image capture without reading disk', safeImage.events.length === 0)
+    writeFileSync(
+      path.join(handle.dirPath, 'timeline.json'),
+      JSON.stringify({
+        t0: '2026-09-22T00:00:00Z',
+        events: [{ t_ms: 500, type: 'core.capture.triggered' }],
+      }),
+      'utf8',
+    )
+    const safeValid = await readTimelineSafe(handle.dirPath, '2026-01-01T00:00:00Z', 'video')
+    check('readTimelineSafe preserves valid timeline events', safeValid.events.length === 1 && safeValid.events[0]?.type === 'core.capture.triggered')
 
     rmSync(path.join(handle.dirPath, 'viewer.html'), { force: true })
     mkdirSync(path.join(handle.dirPath, 'viewer.html'))
