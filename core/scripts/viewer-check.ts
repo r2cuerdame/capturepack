@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
   addManifestPlugin,
+  readAnnotationsSafe,
   readTimelineSafe,
   refreshPackDocs,
   savePack,
@@ -845,6 +846,130 @@ async function writerIntegrationChecks(): Promise<void> {
     )
     const safeValid = await readTimelineSafe(handle.dirPath, '2026-01-01T00:00:00Z', 'video')
     check('readTimelineSafe preserves valid timeline events', safeValid.events.length === 1 && safeValid.events[0]?.type === 'core.capture.triggered')
+
+    // Issue #202: pack omitting annotations.json (OPTIONAL per SPEC §4, §8, §14)
+    rmSync(path.join(handle.dirPath, 'annotations.json'), { force: true })
+    const capturedNoAnnotationsErrors: string[] = []
+    const origConsoleError202 = console.error
+    console.error = (...args: unknown[]): void => {
+      capturedNoAnnotationsErrors.push(args.map(String).join(' '))
+      origConsoleError202(...args)
+    }
+    try {
+      await refreshPackDocs(handle.dirPath, 'en')
+    } finally {
+      console.error = origConsoleError202
+    }
+    const noAnnotationsViewer = readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8')
+    const noAnnotationsReport = readFileSync(path.join(handle.dirPath, 'report.md'), 'utf8')
+    const noAnnotationsReadme = readFileSync(path.join(handle.dirPath, 'README.md'), 'utf8')
+    const noAnnotationsAnnotationSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'annotation.md'),
+      'utf8',
+    )
+    check(
+      'refreshPackDocs regenerates viewer and docs for pack omitting annotations.json without throwing or logging ENOENT',
+      !existsSync(path.join(handle.dirPath, 'annotations.json')) &&
+        capturedNoAnnotationsErrors.length === 0 &&
+        noAnnotationsViewer.length > 0 &&
+        !noAnnotationsViewer.includes('undefined') &&
+        noAnnotationsReport.length > 0 &&
+        !noAnnotationsReport.includes('undefined') &&
+        noAnnotationsReadme.length > 0 &&
+        !noAnnotationsReadme.includes('undefined') &&
+        noAnnotationsAnnotationSkill.includes('This pack has no annotation boxes.') &&
+        !noAnnotationsAnnotationSkill.includes('undefined'),
+    )
+
+    const lateNoAnnotationsPluginDir = path.join(handle.dirPath, 'plugins', 'late-no-annotations')
+    mkdirSync(lateNoAnnotationsPluginDir, { recursive: true })
+    writeFileSync(
+      path.join(lateNoAnnotationsPluginDir, 'meta.json'),
+      '{"name":"late-no-annotations","version":"1"}',
+    )
+    await addManifestPlugin(
+      handle,
+      { name: 'late-no-annotations', version: '1.0.0', path: 'plugins/late-no-annotations/' },
+      'en',
+    )
+    const manifestAfterLateNoAnnotations = JSON.parse(
+      readFileSync(path.join(handle.dirPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    const viewerAfterLateNoAnnotations = readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8')
+    check(
+      'addManifestPlugin attaches plugin and updates docs on pack omitting annotations.json without throwing',
+      (manifestAfterLateNoAnnotations.plugins ?? []).some((p) => p.name === 'late-no-annotations') &&
+        viewerAfterLateNoAnnotations.includes('late-no-annotations') &&
+        !viewerAfterLateNoAnnotations.includes('undefined'),
+    )
+
+    // Issue #202: malformed annotations.json (SyntaxError and non-array annotations)
+    writeFileSync(path.join(handle.dirPath, 'annotations.json'), '{"annotations": [corrupted json', 'utf8')
+    await refreshPackDocs(handle.dirPath, 'en')
+    const malformedJsonAnnotationSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'annotation.md'),
+      'utf8',
+    )
+    check(
+      'refreshPackDocs falls back to empty annotations on malformed JSON without throwing or aborting',
+      malformedJsonAnnotationSkill.includes('This pack has no annotation boxes.') &&
+        !malformedJsonAnnotationSkill.includes('undefined'),
+    )
+
+    const lateMalformedAnnotationsPluginDir = path.join(handle.dirPath, 'plugins', 'late-malformed-ann')
+    mkdirSync(lateMalformedAnnotationsPluginDir, { recursive: true })
+    writeFileSync(
+      path.join(lateMalformedAnnotationsPluginDir, 'meta.json'),
+      '{"name":"late-malformed-ann","version":"1"}',
+    )
+    await addManifestPlugin(
+      handle,
+      { name: 'late-malformed-ann', version: '1.0.0', path: 'plugins/late-malformed-ann/' },
+      'en',
+    )
+    const manifestAfterLateMalformedAnn = JSON.parse(
+      readFileSync(path.join(handle.dirPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    check(
+      'addManifestPlugin succeeds and updates manifest on pack with malformed annotations.json',
+      (manifestAfterLateMalformedAnn.plugins ?? []).some((p) => p.name === 'late-malformed-ann'),
+    )
+
+    // Invalid shape: annotations is not an array
+    writeFileSync(
+      path.join(handle.dirPath, 'annotations.json'),
+      JSON.stringify({ reference_width: 1920, reference_height: 1080, annotations: 'not-an-array' }),
+      'utf8',
+    )
+    await refreshPackDocs(handle.dirPath, 'en')
+    const nonArrayAnnotationsSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'annotation.md'),
+      'utf8',
+    )
+    check(
+      'refreshPackDocs falls back to empty annotations when annotations is not an array',
+      nonArrayAnnotationsSkill.includes('This pack has no annotation boxes.') &&
+        !nonArrayAnnotationsSkill.includes('undefined'),
+    )
+
+    // Direct unit checks for readAnnotationsSafe contract
+    const safeMissingAnn = await readAnnotationsSafe(path.join(outputDir, 'nonexistent'))
+    check('readAnnotationsSafe returns fallback for missing directory or file', safeMissingAnn.reference_width === 0 && safeMissingAnn.reference_height === 0 && safeMissingAnn.annotations.length === 0)
+    const safeDimensionsAnn = await readAnnotationsSafe(path.join(outputDir, 'nonexistent'), 1920, 1080)
+    check('readAnnotationsSafe preserves explicit fallback dimensions when file is missing', safeDimensionsAnn.reference_width === 1920 && safeDimensionsAnn.reference_height === 1080 && safeDimensionsAnn.annotations.length === 0)
+    const safeManifestAnn = await readAnnotationsSafe(path.join(outputDir, 'nonexistent'), manifestAfterLateMalformedAnn)
+    check('readAnnotationsSafe extracts fallback dimensions from manifest', safeManifestAnn.reference_width === (manifestAfterLateMalformedAnn.media.displays?.[0]?.snapshot_width ?? 0) && safeManifestAnn.annotations.length === 0)
+    writeFileSync(
+      path.join(handle.dirPath, 'annotations.json'),
+      JSON.stringify({
+        reference_width: 1920,
+        reference_height: 1080,
+        annotations: [box('ann_safe_check', 'valid box text')],
+      }),
+      'utf8',
+    )
+    const safeValidAnn = await readAnnotationsSafe(handle.dirPath)
+    check('readAnnotationsSafe preserves valid annotations', safeValidAnn.annotations.length === 1 && safeValidAnn.annotations[0]?.annotation_id === 'ann_safe_check')
 
     rmSync(path.join(handle.dirPath, 'viewer.html'), { force: true })
     mkdirSync(path.join(handle.dirPath, 'viewer.html'))
