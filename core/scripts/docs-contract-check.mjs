@@ -415,6 +415,7 @@ const bundleResult = buildSync({
     contents: [
       "export { buildReport, keyframeSet } from './src/main/report'",
       "export { buildReadme, buildSkills, replayLabel } from './src/main/packdocs'",
+      "export { buildViewerHtml } from './src/main/viewer'",
       "export { makeT } from './src/shared/i18n'",
     ].join('\n'),
     resolveDir: CORE,
@@ -431,7 +432,7 @@ const bundleResult = buildSync({
 const mod = { exports: {} }
 const runner = new Function('module', 'exports', 'require', bundleResult.outputFiles[0].text)
 runner(mod, mod.exports, () => ({}))
-const { buildReport, keyframeSet, buildReadme, buildSkills, replayLabel, makeT } = mod.exports
+const { buildReport, keyframeSet, buildReadme, buildSkills, replayLabel, makeT, buildViewerHtml } = mod.exports
 
 console.log('\nPacks with omitted media.replay render clean screenshot-only documentation without undefined')
 {
@@ -628,5 +629,185 @@ console.log('\nbuildReport, buildReadme, and buildSkills succeed when annotation
     )
   }
 }
+
+console.log('\nSPEC §5.2 defines environment.os_version and environment.screens[].scale as OPTIONAL (Issue #209)')
+{
+  const spec = readFileSync(join(ROOT, 'SPEC.md'), 'utf8')
+  check(
+    'SPEC §5.2 declares os_version as OPTIONAL (RECOMMENDED)',
+    /\|\s*`os_version`\s*\|\s*string\s*\|\s*OPTIONAL\s+\(RECOMMENDED\)\s*\|/u.test(spec),
+    'SPEC.md §5.2 lost its os_version OPTIONAL (RECOMMENDED) declaration',
+  )
+  check(
+    'SPEC §5.2 declares screens[].scale as OPTIONAL with default 1',
+    /\|\s*`scale`\s*\|\s*number\s*\|\s*OPTIONAL\s*\|\s*OS display scale factor.*Default `1`/u.test(spec),
+    'SPEC.md §5.2 lost its screens[].scale OPTIONAL declaration or default 1',
+  )
+
+  const schemaSource = readFileSync(join(ROOT, 'docs', 'schemas', 'manifest.schema.json'), 'utf8')
+  const schema = JSON.parse(schemaSource)
+  const envRequired = schema.properties?.environment?.required ?? []
+  const screenRequired = schema.properties?.environment?.properties?.screens?.items?.required ?? []
+  const scaleDefault = schema.properties?.environment?.properties?.screens?.items?.properties?.scale?.default
+
+  check(
+    'manifest.schema.json declares environment.os as required and os_version as optional',
+    envRequired.includes('os') && !envRequired.includes('os_version'),
+    'manifest.schema.json does not declare os as required and os_version as optional',
+  )
+  check(
+    'manifest.schema.json declares screens items width/height required and scale optional with default 1',
+    screenRequired.includes('width') &&
+      screenRequired.includes('height') &&
+      !screenRequired.includes('scale') &&
+      scaleDefault === 1,
+    'manifest.schema.json does not declare scale optional with default 1 on screens items',
+  )
+
+  const typesSource = readFileSync(join(CORE, 'src', 'shared', 'types.ts'), 'utf8')
+  check(
+    'types.ts declares os_version as optional in Manifest environment',
+    /os_version\?:\s*string/u.test(typesSource),
+    'types.ts does not declare os_version?: string in Manifest environment',
+  )
+  check(
+    'types.ts declares scale as optional in Manifest environment screens',
+    /screens\?:\s*Array<\{[\s\S]*?scale\?:\s*number[\s\S]*?\}>/u.test(typesSource),
+    'types.ts does not declare scale?: number in Manifest environment screens',
+  )
+}
+
+console.log('\nPacks omitting optional os_version and screens[].scale render clean docs and viewer without undefined (Issue #209)')
+{
+  const testAnnotations = {
+    reference_width: 1920,
+    reference_height: 1080,
+    annotations: [],
+  }
+  const testTimeline = {
+    t0: '2026-07-27T10:41:07+09:00',
+    events: [],
+  }
+
+  const envCases = [
+    {
+      name: 'omitted os_version and scale',
+      environment: {
+        os: 'windows',
+        screens: [{ width: 1920, height: 1080 }],
+      },
+      expectedOsText: 'windows',
+      expectedReportOs: '- **OS:** windows',
+      expectedViewerOs: '<dt>OS</dt><dd>windows</dd>',
+      expectedReportScreens: '- **Screens:** 1920×1080 @1x scale',
+      expectedViewerScreens: '<dt>Screens</dt><dd>1920×1080 @1x</dd>',
+    },
+    {
+      name: 'omitted os_version only (scale present)',
+      environment: {
+        os: 'darwin',
+        screens: [{ width: 1728, height: 1117, scale: 2 }],
+      },
+      expectedOsText: 'darwin',
+      expectedReportOs: '- **OS:** darwin',
+      expectedViewerOs: '<dt>OS</dt><dd>darwin</dd>',
+      expectedReportScreens: '- **Screens:** 1728×1117 @2x scale',
+      expectedViewerScreens: '<dt>Screens</dt><dd>1728×1117 @2x</dd>',
+    },
+    {
+      name: 'omitted scale only (os_version present)',
+      environment: {
+        os: 'linux',
+        os_version: '6.5.0-generic',
+        screens: [{ width: 2560, height: 1440 }],
+      },
+      expectedOsText: 'linux 6.5.0-generic',
+      expectedReportOs: '- **OS:** linux (version 6.5.0-generic)',
+      expectedViewerOs: '<dt>OS</dt><dd>linux 6.5.0-generic</dd>',
+      expectedReportScreens: '- **Screens:** 2560×1440 @1x scale',
+      expectedViewerScreens: '<dt>Screens</dt><dd>2560×1440 @1x</dd>',
+    },
+    {
+      name: 'multiple screens with mixed omitted scales',
+      environment: {
+        os: 'windows',
+        screens: [
+          { width: 1920, height: 1080 },
+          { width: 3840, height: 2160, scale: 2 },
+        ],
+      },
+      expectedOsText: 'windows',
+      expectedReportOs: '- **OS:** windows',
+      expectedViewerOs: '<dt>OS</dt><dd>windows</dd>',
+      expectedReportScreens: '- **Screens:** 1920×1080 @1x scale; 3840×2160 @2x scale',
+      expectedViewerScreens: '<dt>Screens</dt><dd>1920×1080 @1x; 3840×2160 @2x</dd>',
+    },
+    {
+      name: 'minimal environment omitting both screens and os_version',
+      environment: {
+        os: 'windows',
+      },
+      expectedOsText: 'windows',
+      expectedReportOs: '- **OS:** windows',
+      expectedViewerOs: '<dt>OS</dt><dd>windows</dd>',
+      expectedReportScreens: '- **Screens:** unknown',
+      expectedViewerScreens: '<dt>Screens</dt><dd>unknown</dd>',
+    },
+  ]
+
+  for (const tc of envCases) {
+    const manifest = {
+      format: 'capturepack',
+      format_version: '0.5.0',
+      id: `test-env-${tc.name.replace(/\s+/gu, '-')}`,
+      created_at: '2026-07-27T10:41:07+09:00',
+      generator: { name: 'test', version: '0.5.0' },
+      environment: tc.environment,
+      media: {
+        snapshot: 'snapshot.png',
+        replay: null,
+      },
+    }
+
+    const report = buildReport(manifest, testAnnotations, 'en', false, true)
+    const readme = buildReadme(manifest, testAnnotations, 'en', false, true)
+    const skills = buildSkills(manifest, testAnnotations, testTimeline, 'en', false)
+    const viewerHtml = buildViewerHtml(manifest, testAnnotations, testTimeline, 'en')
+
+    check(
+      `[${tc.name}] report.md never emits literal undefined and formats OS and screens cleanly`,
+      !report.includes('undefined') &&
+        !report.includes('@undefinedx') &&
+        !report.includes('(version undefined)') &&
+        report.includes(tc.expectedReportOs) &&
+        report.includes(tc.expectedReportScreens),
+      `report.md emitted undefined or mismatched format for ${tc.name}`,
+    )
+
+    check(
+      `[${tc.name}] README.md never emits literal undefined`,
+      !readme.includes('undefined'),
+      `README.md emitted undefined for ${tc.name}`,
+    )
+
+    check(
+      `[${tc.name}] skills/overview.md never emits literal undefined and formats OS cleanly`,
+      !skills.overview.includes('undefined') &&
+        skills.overview.includes(`on ${tc.expectedOsText}`) &&
+        !skills.overview.includes(`on ${tc.expectedOsText} undefined`),
+      `skills/overview.md emitted undefined or mismatched OS for ${tc.name}`,
+    )
+
+    check(
+      `[${tc.name}] viewer.html never emits literal undefined and formats OS and screens cleanly`,
+      !viewerHtml.includes('undefined') &&
+        !viewerHtml.includes('@undefinedx') &&
+        viewerHtml.includes(tc.expectedViewerOs) &&
+        viewerHtml.includes(tc.expectedViewerScreens),
+      `viewer.html emitted undefined or mismatched format for ${tc.name}`,
+    )
+  }
+}
 console.log(`\nresult: ${failed === 0 ? 'OK' : 'BROKEN'} — ${passed} passed, ${failed} failed\n`)
 if (failed > 0) process.exitCode = 1
+

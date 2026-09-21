@@ -281,7 +281,7 @@ export interface Manifest {
     screens?: Array<{
       width: number
       height: number
-      scale: number
+      scale?: number
       bounds?: { x: number; y: number; width: number; height: number }
     }>
     app?: string
