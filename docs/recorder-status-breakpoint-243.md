@@ -105,11 +105,11 @@ Coverage:
   reader unlocked; the 128-sample cap and eight recorder-clock samples reached.
 - 100 cancelled conversions complete after a replacement starts; retired ring
   bytes stay zero and late bytes cannot reach the replacement consumer.
-- 30 additional script realms reinitialize the five bridge subscriptions and
+- 30 additional script realms reinitialize the six bridge subscriptions and
   perform another 1,050 conversions, then tear down their recording owners.
 
 Observed main-realm maxima: 30 fragments / 18,324 retained ring bytes, 692 ingest
-bytes, one live recording encoder model, five bridge subscriptions and three
+bytes, one live recording encoder model, six bridge subscriptions and three
 transient timers (including processor read/cleanup); teardown leaves zero owned
 timers/recorder handlers and zero ring bytes. Small synthetic fragments prove
 reference lifetime; existing retention checks exercise byte-budget pressure.
