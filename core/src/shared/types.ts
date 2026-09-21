@@ -797,8 +797,8 @@ function numberedInCreationOrder(annotations: readonly Annotation[]): Annotation
     // first. Undated boxes keep the ordering they have always had.
     if (pDated !== qDated) return pDated ? -1 : 1
     if (pDated && qDated && pAt !== qAt) return pAt - qAt
-    const pZ = typeof p.a.z === 'number' ? p.a.z : p.index
-    const qZ = typeof q.a.z === 'number' ? q.a.z : q.index
+    const pZ = typeof p.a.z === 'number' && Number.isFinite(p.a.z) ? p.a.z : p.index
+    const qZ = typeof q.a.z === 'number' && Number.isFinite(q.a.z) ? q.a.z : q.index
     if (pZ !== qZ) return pZ - qZ
     return p.a.annotation_id < q.a.annotation_id
       ? -1

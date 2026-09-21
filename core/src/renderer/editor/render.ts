@@ -179,8 +179,8 @@ function pixelate(
 export function sortAnnotationsAscending(annotations: readonly Annotation[]): Annotation[] {
   return [...annotations.map((a, i) => ({ a, i }))]
     .sort((p, q) => {
-      const pZ = typeof p.a.z === 'number' ? p.a.z : p.i
-      const qZ = typeof q.a.z === 'number' ? q.a.z : q.i
+      const pZ = typeof p.a.z === 'number' && Number.isFinite(p.a.z) ? p.a.z : p.i
+      const qZ = typeof q.a.z === 'number' && Number.isFinite(q.a.z) ? q.a.z : q.i
       return pZ !== qZ ? pZ - qZ : p.i - q.i
     })
     .map(({ a }) => a)
@@ -193,8 +193,8 @@ export function sortAnnotationsAscending(annotations: readonly Annotation[]): An
 export function sortAnnotationsDescending(annotations: readonly Annotation[]): Annotation[] {
   return [...annotations.map((a, i) => ({ a, i }))]
     .sort((p, q) => {
-      const pZ = typeof p.a.z === 'number' ? p.a.z : p.i
-      const qZ = typeof q.a.z === 'number' ? q.a.z : q.i
+      const pZ = typeof p.a.z === 'number' && Number.isFinite(p.a.z) ? p.a.z : p.i
+      const qZ = typeof q.a.z === 'number' && Number.isFinite(q.a.z) ? q.a.z : q.i
       return pZ !== qZ ? qZ - pZ : q.i - p.i
     })
     .map(({ a }) => a)

@@ -23,7 +23,7 @@ export class EditorState {
     this.usedIds.add(id)
     let maxZ = 0
     for (const [index, a] of this.annotations.entries()) {
-      const z = typeof a.z === 'number' ? a.z : index
+      const z = typeof a.z === 'number' && Number.isFinite(a.z) ? a.z : index
       if (z > maxZ) maxZ = z
     }
     return { annotation_id: id, z: maxZ + 1, created_at: new Date().toISOString() }

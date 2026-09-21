@@ -813,6 +813,40 @@ console.log('\nBoxAnnotation.z omitted and stacking order (SPEC §8.3, Issue #20
     stampExplicit.z === 11,
     `got ${String(stampExplicit.z)}`,
   )
+
+  // 6. Non-finite / NaN z resilience
+  const nanZ1: Annotation = {
+    ...noZ1,
+    annotation_id: 'ann_nan_1',
+    z: Number.NaN,
+  }
+  const nanZ2: Annotation = {
+    ...noZ2,
+    annotation_id: 'ann_nan_2',
+    z: Number.NaN,
+  }
+  const ascNan = sortAnnotationsAscending([nanZ1, nanZ2]).map((a) => a.annotation_id)
+  check(
+    'sortAnnotationsAscending safely falls back to array index when z is NaN',
+    ascNan.join(',') === 'ann_nan_1,ann_nan_2',
+    `got ${JSON.stringify(ascNan)}`,
+  )
+
+  const hitNan = hitTest([nanZ1, nanZ2], 100, 100, 1)
+  check(
+    'hitTest returns later array entry when overlapping boxes have NaN z',
+    hitNan === 'ann_nan_2',
+    `got ${String(hitNan)}`,
+  )
+
+  const stateNan = new EditorState()
+  stateNan.restore([nanZ1, nanZ2])
+  const stampNan = stateNan.nextStamp()
+  check(
+    'EditorState.nextStamp safely falls back to array index when z is NaN',
+    stampNan.z === 2,
+    `got ${String(stampNan.z)}`,
+  )
 }
 
 console.log(failures === 0 ? '\nrenderer-geometry: OK' : `\nrenderer-geometry: ${String(failures)} FAILED`)

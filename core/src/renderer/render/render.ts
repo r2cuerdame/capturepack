@@ -124,8 +124,8 @@ export function makeOverlay(job: RenderStartPayload, outputWidth: number, output
     // Falls back to array index when z is omitted, preventing NaN sort comparisons.
     ordered: [...job.annotations.map((a, i) => ({ a, i }))]
       .sort((p, q) => {
-        const pZ = typeof p.a.z === 'number' ? p.a.z : p.i
-        const qZ = typeof q.a.z === 'number' ? q.a.z : q.i
+        const pZ = typeof p.a.z === 'number' && Number.isFinite(p.a.z) ? p.a.z : p.i
+        const qZ = typeof q.a.z === 'number' && Number.isFinite(q.a.z) ? q.a.z : q.i
         return pZ !== qZ ? pZ - qZ : p.i - q.i
       })
       .map(({ a }) => a),
