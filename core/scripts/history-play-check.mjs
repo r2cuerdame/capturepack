@@ -12,16 +12,40 @@ try {
   writeFileSync(
     electronStub,
     `const noop = () => {};\n` +
-      `const emitter = { on: noop, once: noop, off: noop, removeListener: noop, removeAllListeners: noop, emit: noop, handle: noop, handleOnce: noop, removeHandler: noop };\n` +
+      `const listeners = new Map();\n` +
+      `const emitter = {\n` +
+      `  on(channel, fn) { const set = listeners.get(channel) || new Set(); set.add(fn); listeners.set(channel, set); return this; },\n` +
+      `  once(channel, fn) { const wrapped = (...args) => { this.removeListener(channel, wrapped); fn(...args); }; return this.on(channel, wrapped); },\n` +
+      `  off(channel, fn) { return this.removeListener(channel, fn); },\n` +
+      `  removeListener(channel, fn) { listeners.get(channel)?.delete(fn); return this; },\n` +
+      `  removeAllListeners(channel) { if (channel === undefined) listeners.clear(); else listeners.delete(channel); return this; },\n` +
+      `  emit(channel, ...args) { for (const fn of [...(listeners.get(channel) || [])]) fn(...args); return true; },\n` +
+      `  handle: noop, handleOnce: noop, removeHandler: noop,\n` +
+      `};\n` +
       `const handlers = new Map();\n` +
       `const openedPaths = [];\n` +
-      `let historyWebContents = { send: noop, isDestroyed: () => false, once: noop, on: noop };\n` +
+      `const renderStarts = [];\n` +
+      `const sentMessages = [];\n` +
+      `const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');\n` +
+      `let historyWebContents = {\n` +
+      `  send: (channel, payload) => {\n` +
+      `    sentMessages.push({ channel, payload });\n` +
+      `    if (channel !== 'render:start') return;\n` +
+      `    renderStarts.push(payload);\n` +
+      `    queueMicrotask(() => {\n` +
+      `      exports.ipcMain.emit('render:frame', { sender: historyWebContents }, { t_ms: 0, png });\n` +
+      `      exports.ipcMain.emit('render:result', { sender: historyWebContents }, { ok: true });\n` +
+      `    });\n` +
+      `  },\n` +
+      `  isDestroyed: () => false, once: noop, on: noop,\n` +
+      `};\n` +
       `class MockBrowserWindow {\n` +
       `  static getAllWindows() { return [] }\n` +
       `  static fromWebContents() { return null }\n` +
       `  constructor() { this.webContents = historyWebContents; this._destroyed = false; }\n` +
       `  on() {}\n` +
       `  once() {}\n` +
+      `  removeListener() {}\n` +
       `  loadFile() { return Promise.resolve() }\n` +
       `  destroy() { this._destroyed = true; }\n` +
       `  isDestroyed() { return this._destroyed; }\n` +
@@ -47,6 +71,8 @@ try {
       `globalThis.__electronStub = {\n` +
       `  __handlers: handlers,\n` +
       `  __openedPaths: openedPaths,\n` +
+      `  __renderStarts: renderStarts,\n` +
+      `  __sentMessages: sentMessages,\n` +
       `  __historyWebContents: historyWebContents,\n` +
       `};\n`,
   )

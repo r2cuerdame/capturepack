@@ -1,4 +1,5 @@
 import { resolvedReplayClockOffsetMs } from '../shared/displayClock'
+import type { HistoryAnnotatedState } from '../shared/ipc'
 import { rebaseAnnotationClock } from '../shared/motion'
 import { computeDisplayNumbers } from '../shared/numbering'
 import type { AuthoredMotionSpace } from '../shared/track'
@@ -26,6 +27,51 @@ export interface HistoryRerenderPlan {
   displayNumbers: Array<[string, number]>
   motionSpace: AuthoredMotionSpace | undefined
   displays: HistoryDisplayRerenderPlan[]
+}
+
+export type HistoryRerenderKind = 'replay' | 'still'
+
+/**
+ * A declared image capture always re-renders from its snapshot. A replay-less
+ * legacy/degraded pack has the same usable source, so History can recover its
+ * annotated still instead of rejecting it as an unrenderable video.
+ */
+export function historyRerenderKind(manifest: Manifest): HistoryRerenderKind {
+  return manifest.capture_kind === 'image' || typeof manifest.media?.replay !== 'string'
+    ? 'still'
+    : 'replay'
+}
+
+/**
+ * Reports whether the focused annotated output usable by a History card is on
+ * disk. Image packs have no replay_annotated file: their equivalent output is
+ * the declared keyframe still set under frames/.
+ */
+export function historyAnnotatedState(
+  manifest: Manifest,
+  annotationCount: number,
+  filePresent: (relativePath: string) => boolean,
+): HistoryAnnotatedState {
+  if (manifest.capture_kind === 'image') {
+    if (annotationCount === 0) return 'none'
+    const keyframes = manifest.media?.keyframes
+    if (!Array.isArray(keyframes) || keyframes.length === 0) return 'missing'
+    return keyframes.every((keyframe) => {
+      if (keyframe === null || typeof keyframe !== 'object') return false
+      const file = typeof keyframe.file === 'string' ? keyframe.file.trim() : ''
+      return file !== '' && filePresent(file)
+    })
+      ? 'ready'
+      : 'missing'
+  }
+
+  if (typeof manifest.media?.replay !== 'string') return 'none'
+  const target =
+    typeof manifest.media.replay_annotated === 'string'
+    && manifest.media.replay_annotated.trim() !== ''
+      ? manifest.media.replay_annotated.trim()
+      : 'replay_annotated.webm'
+  return filePresent(target) ? 'ready' : 'missing'
 }
 
 function positiveInteger(value: unknown): number | null {

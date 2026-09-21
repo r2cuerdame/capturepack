@@ -8,7 +8,12 @@ const bundle = await build({
   platform: 'node',
   write: false,
 })
-const { planHistoryRerender, renderContractError } = await import(
+const {
+  historyAnnotatedState,
+  historyRerenderKind,
+  planHistoryRerender,
+  renderContractError,
+} = await import(
   `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`
 )
 
@@ -53,12 +58,33 @@ check('complete multi-display payload is accepted', renderContractError({ motion
 check('missing global numbers is rejected', renderContractError({ motionSpace: plan.motionSpace, focusedDisplay: plan.focusedDisplay })?.includes('displayNumbers'))
 check('missing focused display is rejected', renderContractError({ motionSpace: plan.motionSpace, displayNumbers: plan.displayNumbers })?.includes('focusedDisplay'))
 
+console.log('\nStill-image History recovery')
+const imageManifest = {
+  capture_kind: 'image',
+  media: { snapshot: 'snapshot.png', replay: null },
+}
+const renderedImageManifest = {
+  ...imageManifest,
+  media: {
+    ...imageManifest.media,
+    keyframes: [{ file: 'frames/frame-01_00-00.000.png', t_ms: 0 }],
+  },
+}
+check('image packs select the still renderer', historyRerenderKind(imageManifest) === 'still')
+check('legacy replay-less packs select the still renderer', historyRerenderKind({ media: { snapshot: 'snapshot.png', replay: null } }) === 'still')
+check('video packs with replay select the replay renderer', historyRerenderKind({ capture_kind: 'video', media: { snapshot: 'snapshot.png', replay: 'replay.webm' } }) === 'replay')
+check('unannotated image packs need no derived still', historyAnnotatedState(imageManifest, 0, () => false) === 'none')
+check('annotated image packs without declarations are missing', historyAnnotatedState(imageManifest, 1, () => false) === 'missing')
+check('declared but absent image keyframes are missing', historyAnnotatedState(renderedImageManifest, 1, () => false) === 'missing')
+check('declared and present image keyframes are ready', historyAnnotatedState(renderedImageManifest, 1, (file) => file === 'frames/frame-01_00-00.000.png') === 'ready')
+
 console.log('\nHistory wiring')
 const historySource = readFileSync('src/main/historyWindow.ts', 'utf8').replaceAll('\r\n', '\n')
 const rendererSource = readFileSync('src/renderer/render/render.ts', 'utf8')
-check('retry starts every preflighted secondary render', historySource.includes('startHistoryDisplayRenders(\n    { id: manifest.id, dirPath: entry.path },'))
+check('retry starts every preflighted secondary render', historySource.includes('startHistoryDisplayRenders(\n    handle,'))
 check('secondary replay jobs use the display renderer', historySource.includes('startDisplayRender(handle, {'))
 check('secondary still-only jobs use the keyframe renderer', historySource.includes('startKeyframeStill(handle, {'))
+check('focused still retries dispatch the saved snapshot', historySource.includes('snapshotPng: focusedSource,'))
 check('renderer rejects an incomplete contract before making the overlay', rendererSource.includes('const contractError = renderContractError(job)'))
 
 import { execFileSync } from 'node:child_process'
