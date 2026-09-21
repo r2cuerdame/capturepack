@@ -210,7 +210,7 @@ export interface ManifestDisplayMedia {
   snapshot_height: number
   // "replay-d<index>.webm", the top-level replay filename on the focused
   // display, or null when this display recorded nothing.
-  replay: string | null
+  replay?: string | null
   replay_duration_ms?: number
   cadence?: ManifestCadence
   // Milliseconds to add to the pack/focused replay clock to reach this
