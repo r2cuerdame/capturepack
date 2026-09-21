@@ -238,6 +238,48 @@ async function main(): Promise<void> {
     path: 'C:\\packs\\pack-with-report',
     report: () => reportText,
   }
+  const largeUiaPayload = JSON.stringify({
+    captured_at: '2026-09-21T12:00:00+09:00',
+    budget_ms: 700,
+    truncated: false,
+    windows: [{
+      hwnd: '123456',
+      title: 'CapturePack regression window',
+      process: 'capturepack',
+      class_name: 'Chrome_WidgetWin_1',
+      bounds: { x: 40, y: 80, width: 1_200, height: 800 },
+      client_bounds: { x: 48, y: 112, width: 1_184, height: 760 },
+      display: 2,
+      focused: true,
+      z: 0,
+      tree: 'collected',
+      element_count: 1_200,
+    }],
+    elements: Array.from({ length: 1_200 }, (_, index) => ({
+      name: `UI Automation control ${index}`,
+      control_type: 'Button',
+      automation_id: `control-${index}`,
+      class_name: 'Button',
+      bounds: { x: 50, y: 120 + index, width: 100, height: 20 },
+      depth: 1,
+      window: 0,
+    })),
+  })
+  check(largeUiaPayload.length > 100_000, 'window regression fixture exceeds the plugin inline limit')
+  const windowsPack = {
+    ...pack,
+    id: 'large-windows-uia-pack',
+    path: 'C:\\packs\\large-windows-uia-pack',
+    timeline: () => ({
+      events: [{ t_ms: 25, type: 'input.window.focus', source: 'windows', title: 'CapturePack regression window' }],
+    }),
+    plugins: () => [{
+      name: 'windows-uia',
+      version: '0.5.0',
+      files: ['plugins/windows-uia/meta.json', 'plugins/windows-uia/elements.json'],
+    }],
+    readText: (file: string) => file === 'plugins/windows-uia/elements.json' ? largeUiaPayload : null,
+  }
   const store = {
     outputDir: 'C:\\packs',
     latest: () => pack,
@@ -247,6 +289,7 @@ async function main(): Promise<void> {
       if (id === multiFramePack.id) return multiFramePack
       if (id === multiReplayPack.id) return multiReplayPack
       if (id === reportPack.id) return reportPack
+      if (id === windowsPack.id) return windowsPack
       return pack
     },
     list: () => ({
@@ -339,6 +382,43 @@ async function main(): Promise<void> {
   const markdown = await callbacks.get('capturepack_export_markdown')?.({})
   const markdownText = markdown?.content.find((item) => item.type === 'text')?.text ?? ''
   check(!markdownText.includes('## Timeline'), 'image Markdown export omits the video timeline section')
+
+  console.log('WINDOWS')
+  const windowsResult = await callbacks.get('capturepack_windows')?.({ id: windowsPack.id })
+  check(windowsResult !== undefined && windowsResult.isError !== true, 'large UIA payload returns a non-error response')
+  const windowsJson = textJson(windowsResult as ToolResult)
+  const windowRows = windowsJson.windows as Array<Record<string, unknown>>
+  const firstWindow = windowRows[0]
+  check(
+    windowRows.length === 1 &&
+      firstWindow?.title === 'CapturePack regression window' &&
+      firstWindow?.process === 'capturepack' &&
+      firstWindow?.class_name === 'Chrome_WidgetWin_1' &&
+      firstWindow?.z === 0 &&
+      firstWindow?.focused === true &&
+      firstWindow?.tree === 'collected' &&
+      JSON.stringify(firstWindow?.bounds) === JSON.stringify({ x: 40, y: 80, width: 1_200, height: 800 }) &&
+      JSON.stringify(firstWindow?.client_bounds) === JSON.stringify({ x: 48, y: 112, width: 1_184, height: 760 }),
+    'capturepack_windows returns the validated top-level window layout',
+  )
+  check(
+    Array.isArray(windowsJson.window_events) && windowsJson.window_events.length === 1,
+    'capturepack_windows retains window and focus timeline events',
+  )
+  check(
+    !('window_plugins' in windowsJson) && !('elements' in windowsJson) && !JSON.stringify(windowsJson).includes('file too large to inline'),
+    'capturepack_windows omits raw UIA controls and plugin inline-limit errors',
+  )
+  const emptyWindowsResult = await callbacks.get('capturepack_windows')?.({ id: pack.id })
+  const emptyWindowsJson = textJson(emptyWindowsResult as ToolResult)
+  check(
+    Array.isArray(emptyWindowsJson.windows) &&
+      emptyWindowsJson.windows.length === 0 &&
+      Array.isArray(emptyWindowsJson.window_events) &&
+      emptyWindowsJson.window_events.length === 0 &&
+      typeof emptyWindowsJson.message === 'string',
+    'capturepack_windows explains when both window metadata and events are absent',
+  )
 
   console.log('FRAME')
   check(

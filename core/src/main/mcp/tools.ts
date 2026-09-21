@@ -21,6 +21,7 @@ import {
   type McpCaptureMedia,
 } from '../../shared/captureMedia'
 import { computeDisplayNumbers } from '../../shared/numbering'
+import { parseUiaPayload } from '../uia'
 import { errorMessage, type PackHandle, type PackStore } from './store'
 
 const MAX_HITS_PER_GROUP = 100
@@ -634,12 +635,12 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
         const timeline = pack.timeline()
         const all = Array.isArray(timeline?.events) ? timeline.events : []
         const events = all.filter((e) => /window|focus/i.test(`${e.type} ${e.source}`))
-        const plugins = pluginJsonContents(pack).filter((p) => /window/i.test(p.name))
-        const empty = events.length === 0 && plugins.length === 0
+        const windows = parseUiaPayload(pack.readText('plugins/windows-uia/elements.json'))?.windows ?? []
+        const empty = events.length === 0 && windows.length === 0
         return jsonResult({
           pack: pack.id,
+          windows,
           window_events: events,
-          window_plugins: plugins,
           ...(empty ? { message: 'No window-tracking data in this pack (no window/focus timeline events and no window plugin metadata).' } : {}),
         })
       }),
