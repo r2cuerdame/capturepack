@@ -3469,8 +3469,9 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
   // later screen and silently point each display's index at the wrong one.
   // A placeholder keeps the positions; the bounds x scale of the display that
   // refers to it is the honest substitute where one exists.
-  const loadedScreens = Array.isArray(manifest.environment?.screens)
-    ? manifest.environment.screens.map((s, i) =>
+  const manifestScreens = manifest.environment?.screens
+  const loadedScreens = Array.isArray(manifestScreens)
+    ? manifestScreens.map((s, i) =>
         s !== null && typeof s === 'object' && typeof s.width === 'number' && typeof s.height === 'number'
           ? { width: s.width, height: s.height, scale: typeof s.scale === 'number' && s.scale > 0 ? s.scale : 1 }
           : screenFromDisplay(manifest, i + 1),
@@ -3500,7 +3501,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
   const reopenedContextDisplays = reopenedContextDisplayTargets({
     snapshotWidth: width,
     snapshotHeight: height,
-    screens: manifest.environment.screens,
+    screens: loadedScreens,
     displays: manifest.media.displays,
     loadedDisplays: loadedEditorDisplayList,
     cropBounds: manifest.media.crop_bounds,
