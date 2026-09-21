@@ -336,6 +336,7 @@ export function keyframeSectionLines(
   set: KeyframeSet,
   t: TranslateFn,
   imageCapture = false,
+  annotatedReplayFile = 'replay_annotated.webm',
 ): string[] {
   if (set.frames.length === 0) return []
   if (imageCapture) {
@@ -373,7 +374,7 @@ export function keyframeSectionLines(
     lines.push(
       `${set.dropped} further annotation state change${set.dropped === 1 ? '' : 's'} ` +
         'were not rendered as stills (per-pack still limit); annotations.json carries every ' +
-        'lifetime, and replay_annotated.webm shows them all.',
+        `lifetime, and ${annotatedReplayFile} shows them all.`,
     )
   }
   if (!set.declared) {
@@ -573,7 +574,7 @@ export function buildReport(
   // Annotated keyframes (GOAL "Annotated keyframes"): images beat video for an
   // LLM, so they sit directly under the annotation list they illustrate.
   const keyframes = keyframeSet(manifest, annotationsFile, renderPending)
-  const keyframeLines = keyframeSectionLines(keyframes, t, imageCapture)
+  const keyframeLines = keyframeSectionLines(keyframes, t, imageCapture, annotatedReplayFile)
   if (keyframeLines.length > 0) {
     lines.push(imageCapture ? '## Annotated image' : `## ${t('pack.keyframes')}`)
     lines.push('')

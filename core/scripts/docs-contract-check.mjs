@@ -1209,6 +1209,81 @@ console.log('\nMP4 replay packs with render pending emit replay_annotated.mp4 (I
       !webmSkills.project.includes('replay_annotated.mp4'),
     'WebM pending pack emitted unexpected media names',
   )
+
+  const manyAnnotations = Array.from({ length: 30 }, (_, i) => ({
+    id: `box-${i}`,
+    start_ms: i * 1000,
+    end_ms: i * 1000 + 500,
+    bounds: { x: 10, y: 10, width: 100, height: 100 },
+    text: `Box ${i}`,
+  }))
+  const manyAnnotationsFile = {
+    reference_width: 1920,
+    reference_height: 1080,
+    annotations: manyAnnotations,
+  }
+
+  const mp4PendingLongManifest = {
+    ...mp4PendingManifest,
+    media: {
+      ...mp4PendingManifest.media,
+      replay_duration_ms: 35000,
+    },
+  }
+
+  const mp4CappedReport = buildReport(mp4PendingLongManifest, manyAnnotationsFile, 'en', true, true)
+  const mp4CappedReadme = buildReadme(mp4PendingLongManifest, manyAnnotationsFile, 'en', true, true)
+  const mp4CappedSkills = buildSkills(mp4PendingLongManifest, manyAnnotationsFile, testTimeline, 'en', true)
+
+  check(
+    '[MP4 capped keyframes] report.md, README.md, skills/overview.md reference replay_annotated.mp4 and contain no replay_annotated.webm',
+    mp4CappedReport.includes('and replay_annotated.mp4 shows them all.') &&
+      !mp4CappedReport.includes('replay_annotated.webm') &&
+      mp4CappedReadme.includes('and replay_annotated.mp4 shows them all.') &&
+      !mp4CappedReadme.includes('replay_annotated.webm') &&
+      mp4CappedSkills.overview.includes('and replay_annotated.mp4 shows them all.') &&
+      !mp4CappedSkills.overview.includes('replay_annotated.webm'),
+    `MP4 capped keyframes emitted unexpected media names in report:\n${mp4CappedReport}`,
+  )
+
+  const mp4DeclaredManifest = {
+    ...mp4PendingLongManifest,
+    media: {
+      ...mp4PendingLongManifest.media,
+      replay_annotated: 'replay_annotated.mp4',
+      keyframes: [
+        { file: 'frames/frame-01_00-01.000.png', t_ms: 1000 },
+      ],
+    },
+  }
+  const mp4DeclaredReport = buildReport(mp4DeclaredManifest, manyAnnotationsFile, 'en', false, false)
+  const mp4DeclaredReadme = buildReadme(mp4DeclaredManifest, manyAnnotationsFile, 'en', false, false)
+  const mp4DeclaredSkills = buildSkills(mp4DeclaredManifest, manyAnnotationsFile, testTimeline, 'en', false)
+  check(
+    '[MP4 declared capped keyframes] report.md, README.md, skills/overview.md reference replay_annotated.mp4 in dropped message',
+    mp4DeclaredReport.includes('and replay_annotated.mp4 shows them all.') &&
+      !mp4DeclaredReport.includes('replay_annotated.webm') &&
+      mp4DeclaredReadme.includes('and replay_annotated.mp4 shows them all.') &&
+      !mp4DeclaredReadme.includes('replay_annotated.webm') &&
+      mp4DeclaredSkills.overview.includes('and replay_annotated.mp4 shows them all.') &&
+      !mp4DeclaredSkills.overview.includes('replay_annotated.webm'),
+    `MP4 declared capped keyframes emitted unexpected media names:\n${mp4DeclaredReport}`,
+  )
+
+  const webmPendingLongManifest = {
+    ...webmPendingManifest,
+    media: {
+      ...webmPendingManifest.media,
+      replay_duration_ms: 35000,
+    },
+  }
+  const webmCappedReport = buildReport(webmPendingLongManifest, manyAnnotationsFile, 'en', true, true)
+  check(
+    '[WebM capped keyframes] report.md references replay_annotated.webm and not replay_annotated.mp4',
+    webmCappedReport.includes('and replay_annotated.webm shows them all.') &&
+      !webmCappedReport.includes('replay_annotated.mp4'),
+    `WebM capped keyframes emitted unexpected media names:\n${webmCappedReport}`,
+  )
 }
 
 console.log(`\nresult: ${failed === 0 ? 'OK' : 'BROKEN'} — ${passed} passed, ${failed} failed\n`)

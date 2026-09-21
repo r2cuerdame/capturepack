@@ -2,7 +2,7 @@
 // replay, a hidden BrowserWindow plays replay.webm into a canvas, draws the
 // per-frame annotation overlays (blur -> border -> number badge -> text,
 // lifetime-gated, GLOBAL display numbers, no editor controls), records the
-// canvas, and returns webm bytes; main writes replay_annotated.webm into the
+// canvas, and returns video bytes; main writes replay_annotated.(webm|mp4) into the
 // pack folder and declares it in manifest.json. Failures are logged, never
 // fatal — the pack stays valid without the annotated view.
 //
@@ -422,7 +422,7 @@ async function renderKeyframeStill(handle: PackHandle, job: KeyframeStillJob): P
 /**
  * Writes frames/ from scratch and returns the manifest declarations.
  * Stale stills never outlive the render that replaced them: the directory is
- * removed first (the same rule replay_annotated.webm follows), so a re-edit or
+ * removed first (the same rule replay_annotated.(webm|mp4) follows), so a re-edit or
  * a History re-render can only ever leave the CURRENT set behind.
  */
 async function writeKeyframes(
