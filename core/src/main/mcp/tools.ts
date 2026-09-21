@@ -285,7 +285,7 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
         'Machine-readable timeline events of a VIDEO CapturePack (capture trigger, annotations added, ' +
         'plugin events, export). Each event has t_ms (milliseconds since capture start t0), type, ' +
         'source, and optional data. Optionally slice by from_ms/to_ms. Explicit still-image packs ' +
-        'intentionally have no timeline and return an explanatory empty result.',
+        'and video packs omitting timeline.json return an explanatory empty result.',
       inputSchema: {
         ...idArg,
         from_ms: z.number().min(0).optional().describe('Only events with t_ms >= from_ms.'),
@@ -307,7 +307,19 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
                 'This is a still-image CapturePack. timeline.json is intentionally absent; read snapshot.png, annotations and plugin context.',
             })
           }
-          return errorResult(`timeline.json missing or malformed in video pack "${pack.id}"`)
+          const raw = typeof pack.readText === 'function' ? pack.readText('timeline.json') : null
+          if (raw !== null) {
+            return errorResult(`timeline.json malformed in video pack "${pack.id}"`)
+          }
+          return jsonResult({
+            pack: pack.id,
+            capture_kind: captureMedia.capture_kind,
+            available: false,
+            total_events: 0,
+            returned: 0,
+            events: [],
+            message: 'timeline.json is absent; this pack contains no timeline events.',
+          })
         }
         const all = Array.isArray(timeline.events) ? timeline.events : []
         const events = all.filter(
@@ -347,7 +359,21 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
       run('capturepack_annotations', args, () => {
         const pack = store.resolve(args.id)
         const file = pack.annotations()
-        if (!file) return errorResult(`annotations.json missing or malformed in pack "${pack.id}"`)
+        if (!file) {
+          const raw = typeof pack.readText === 'function' ? pack.readText('annotations.json') : null
+          if (raw === null) {
+            return jsonResult({
+              pack: pack.id,
+              reference_width: null,
+              reference_height: null,
+              count: 0,
+              annotations: [],
+              available: false,
+              message: 'annotations.json is absent; this pack contains no annotations.',
+            })
+          }
+          return errorResult(`annotations.json malformed in pack "${pack.id}"`)
+        }
         const list = Array.isArray(file.annotations) ? file.annotations : []
         return jsonResult({
           pack: pack.id,
