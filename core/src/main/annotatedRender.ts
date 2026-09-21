@@ -18,13 +18,14 @@ import * as path from 'node:path'
 import { IPC } from '../shared/ipc'
 import type { RenderFramePayload, RenderResultPayload, RenderStartPayload } from '../shared/ipc'
 import type { Language } from '../shared/i18n'
-import { displayAnnotatedName, displayFramesDir, keyframeFileName } from '../shared/keyframes'
+import { displayFramesDir, keyframeFileName } from '../shared/keyframes'
 import type { Annotation, ManifestKeyframe } from '../shared/types'
 import type { AuthoredMotionSpace } from '../shared/track'
 import {
   BoundedBackgroundMediaQueue,
   copyBufferResponsively,
 } from './backgroundMediaQueue'
+import { writeAnnotatedReplayOutput } from './annotatedReplayOutput'
 import { refreshPackDocs, setManifestRenderOutputs, type PackHandle } from './exporter'
 import { beginPackOperation } from './packOperations'
 import { PackRenderBatchTracker, type RenderBatchFinish } from './renderBatch'
@@ -234,12 +235,6 @@ async function renderAnnotatedReplay(
   // removes frames/ and rewrites it, so another render of the same pack landing
   // between the writes and the declaration would leave the manifest pointing at
   // files that no longer exist.
-  const replayFile = job.replayMimeType.split(';', 1)[0]?.trim().toLowerCase() === 'video/mp4'
-    ? 'replay.mp4'
-    : 'replay.webm'
-  const video = job.display === undefined
-    ? `replay_annotated.${replayFile.endsWith('.mp4') ? 'mp4' : 'webm'}`
-    : displayAnnotatedName(job.display, replayFile)
   const framesDir = job.display === undefined ? 'frames' : displayFramesDir(job.display)
   await enqueueRender(async (signal) => {
     // Allocate/copy only after this job owns the single media lane. Queued
@@ -271,7 +266,12 @@ async function renderAnnotatedReplay(
     )
     throwIfRenderAborted(signal)
     if (result.webm === undefined) throw new Error('render window returned no video')
-    await writeFile(path.join(handle.dirPath, video), Buffer.from(result.webm))
+    await writeAnnotatedReplayOutput(
+      handle.dirPath,
+      Buffer.from(result.webm),
+      job.replayMimeType,
+      job.display,
+    )
     throwIfRenderAborted(signal)
     // The stills are the smaller half of this job: losing them must never cost
     // the annotated replay its declaration (SPEC §5.7 — keyframes are optional).

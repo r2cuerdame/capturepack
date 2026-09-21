@@ -12,6 +12,7 @@ const {
   historyAnnotatedState,
   historyRerenderKind,
   planHistoryRerender,
+  replayMimeType,
   renderContractError,
 } = await import(
   `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`
@@ -54,6 +55,9 @@ check('secondary job receives only its own box', plan.displays[0].annotations.le
 check('secondary lifetime is rebased to its replay clock', plan.displays[0].annotations[0].start_ms === 175 && plan.displays[0].annotations[0].end_ms === 675, JSON.stringify(plan.displays[0].annotations[0]))
 
 console.log('\nRenderer contract')
+check('secondary MP4 replay keeps its MIME type', replayMimeType('replay-d2.mp4') === 'video/mp4')
+check('secondary WebM replay keeps its MIME type', replayMimeType('replay-d2.webm') === 'video/webm')
+check('invalid replay names fail closed to WebM', replayMimeType('other.mp4') === 'video/webm')
 check('complete multi-display payload is accepted', renderContractError({ motionSpace: plan.motionSpace, focusedDisplay: plan.focusedDisplay, displayNumbers: plan.displayNumbers }) === null)
 check('missing global numbers is rejected', renderContractError({ motionSpace: plan.motionSpace, focusedDisplay: plan.focusedDisplay })?.includes('displayNumbers'))
 check('missing focused display is rejected', renderContractError({ motionSpace: plan.motionSpace, displayNumbers: plan.displayNumbers })?.includes('focusedDisplay'))
