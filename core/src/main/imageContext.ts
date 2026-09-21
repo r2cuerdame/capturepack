@@ -411,12 +411,17 @@ export function cropUiaForImage(
     if (bounds === null) continue
     const newIndex = windows.length
     oldToNew.set(oldIndex, newIndex)
+    const clientBounds =
+      source.client_bounds !== undefined
+        ? croppedBounds(source.client_bounds, crop)
+        : null
     const window: UiaWindowRecord = {
       ...(source.hwnd === undefined ? {} : { hwnd: source.hwnd }),
       title: source.title,
       process: source.process,
       class_name: source.class_name,
       bounds,
+      ...(clientBounds !== null ? { client_bounds: clientBounds } : {}),
       focused: source.focused,
       z: newIndex,
       tree: source.tree,
@@ -530,12 +535,17 @@ export function composeUiaForImageDesktop(
     if (bounds === null) continue
     const newIndex = windows.length
     oldToNew.set(oldIndex, newIndex)
+    const clientBounds =
+      source.client_bounds !== undefined
+        ? desktopBounds(source.client_bounds, placement)
+        : null
     const window: UiaWindowRecord = {
       ...(source.hwnd === undefined ? {} : { hwnd: source.hwnd }),
       title: source.title,
       process: source.process,
       class_name: source.class_name,
       bounds,
+      ...(clientBounds !== null ? { client_bounds: clientBounds } : {}),
       focused: source.focused,
       z: newIndex,
       tree: source.tree,

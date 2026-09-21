@@ -64,13 +64,17 @@ const raw: UiaRawDump = {
   windows: [
     // 0: healthy Chrome, wholly on DISPLAY1.
     { hwnd: '11', title: 'YouTube', process: 'chrome.exe', class_name: 'Chrome_WidgetWin_1',
-      bounds: { x: -1788, y: 182, width: 1776, height: 1221 }, focused: true, z: 0, tree: 'collected', element_count: 0 },
+      bounds: { x: -1788, y: 182, width: 1776, height: 1221 },
+      client_bounds: { x: -1780, y: 250, width: 1760, height: 1140 },
+      focused: true, z: 0, tree: 'collected', element_count: 0 },
     // 1: Chrome on DISPLAY2 whose renderer still answers in DISPLAY1's space.
     { hwnd: '22', title: 'Dragged', process: 'chrome.exe', class_name: 'Chrome_WidgetWin_1',
       bounds: { x: 100, y: 100, width: 1500, height: 1200 }, focused: false, z: 1, tree: 'collected', element_count: 0 },
     // 2: a non-browser window, which must never be affected by any of this.
     { hwnd: '33', title: 'Explorer', process: 'explorer.exe', class_name: 'CabinetWClass',
-      bounds: { x: 2000, y: 300, width: 900, height: 700 }, focused: false, z: 2, tree: 'collected', element_count: 0 },
+      bounds: { x: 2000, y: 300, width: 900, height: 700 },
+      client_bounds: { x: 2008, y: 340, width: 884, height: 650 },
+      focused: false, z: 2, tree: 'collected', element_count: 0 },
   ] as UiaRawDump['windows'],
   elements: [
     el(0, 0, 'Window', -1788, 182, 1776, 1221, 'YouTube'),
@@ -224,6 +228,42 @@ async function main(): Promise<void> {
       yt?.bounds.width === 1184,
       JSON.stringify(yt?.bounds),
     )
+    check(
+      'the 2/3 display mapped and preserved client_bounds: 1760 -> 1173',
+      yt?.client_bounds?.width === 1173 && yt?.client_bounds?.x === 13,
+      JSON.stringify(yt?.client_bounds),
+    )
+
+    const exp = onDisk.windows.find((w) => w.title === 'Explorer')
+    check(
+      'the secondary display window gained desktop offset for bounds: 2000 -> 3200',
+      exp?.bounds.x === 3200,
+      JSON.stringify(exp?.bounds),
+    )
+    check(
+      'the secondary display window preserved and offset client_bounds: 2008 -> 3208',
+      exp?.client_bounds?.x === 3208 && exp?.client_bounds?.width === 884,
+      JSON.stringify(exp?.client_bounds),
+    )
+
+    const invalidClients = onDisk.windows.filter((w) => {
+      if (w.client_bounds === undefined) return false
+      const c = w.client_bounds
+      const f = w.bounds
+      return (
+        c.x < f.x ||
+        c.y < f.y ||
+        c.x + c.width > f.x + f.width ||
+        c.y + c.height > f.y + f.height ||
+        c.width <= 0 ||
+        c.height <= 0
+      )
+    })
+    check(
+      'every window client_bounds is inside its bounds with positive area (SPEC §11.3)',
+      invalidClients.length === 0,
+      JSON.stringify(invalidClients),
+    )
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -327,7 +367,9 @@ async function main(): Promise<void> {
       monitors: MONITORS,
       windows: [
         { hwnd: '11', title: 'YouTube', process: 'chrome.exe', class_name: 'Chrome_WidgetWin_1',
-          bounds: { x: -1788, y: 0, width: 1776, height: 1403 }, focused: true, z: 0, tree: 'collected', element_count: 0 },
+          bounds: { x: -1788, y: 0, width: 1776, height: 1403 },
+          client_bounds: { x: -1780, y: 50, width: 1760, height: 1340 },
+          focused: true, z: 0, tree: 'collected', element_count: 0 },
       ] as UiaRawDump['windows'],
       elements: [
         el(0, 0, 'Window', -1788, 0, 1776, 1403, 'YouTube'),
@@ -345,7 +387,9 @@ async function main(): Promise<void> {
       tMs: 0,
       windows: [
         { hwnd: '11', title: 'YouTube', process: 'chrome.exe', class_name: 'Chrome_WidgetWin_1',
-          bounds: { x: 8, y: 0, width: 1184, height: 935 }, focused: true, z: 0 },
+          bounds: { x: 8, y: 0, width: 1184, height: 935 },
+          client_bounds: { x: 13, y: 33, width: 1173, height: 890 },
+          focused: true, z: 0 },
       ],
       elements: [],
     }
@@ -375,6 +419,11 @@ async function main(): Promise<void> {
         'the window is still there for a window-level pick',
         assembled.windows.length === 1,
         `${String(assembled.windows.length)} windows`,
+      )
+      check(
+        'the assembled window preserves client_bounds for DOM picking',
+        assembled.windows[0]?.client_bounds?.width === 1173,
+        JSON.stringify(assembled.windows[0]?.client_bounds),
       )
       check(
         'and the tab beside the refused subtree survives',

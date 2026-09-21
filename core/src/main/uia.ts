@@ -537,12 +537,16 @@ export function mapUiaToSnapshot(
 }
 
 /** One record moved into `space` (no space: left exactly as the helper saw it). */
-function place<T extends { bounds: UiaBounds; display?: number }>(
+function place<T extends { bounds: UiaBounds; display?: number; client_bounds?: UiaBounds }>(
   record: T,
   space: DisplaySpace | undefined,
 ): T {
   if (space === undefined) return { ...record }
-  const mapped: T = { ...record, bounds: space.map(record.bounds) }
+  const mapped: T = {
+    ...record,
+    bounds: space.map(record.bounds),
+    ...(record.client_bounds !== undefined ? { client_bounds: space.map(record.client_bounds) } : {}),
+  }
   // SPEC §8.8/§11.3: absent means the focused display, so it is never written
   // for one — and never left over from anywhere either.
   if (space.focused) delete mapped.display
