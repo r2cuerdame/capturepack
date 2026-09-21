@@ -12,6 +12,7 @@ import {
   mkdir,
   open,
   readFile,
+  readdir,
   rename,
   rm,
   writeFile,
@@ -130,6 +131,8 @@ export function displayReplayName(index: number, replayFile = 'replay.webm'): st
 export const REPLAY_NAME_RE = /^replay\.(webm|mp4)$/
 const DISPLAY_SNAPSHOT_NAME_RE = /^snapshot-d[1-9][0-9]*\.png$/
 const DISPLAY_REPLAY_NAME_RE = /^replay-d[1-9][0-9]*\.(webm|mp4)$/
+const DISPLAY_ANNOTATED_NAME_RE = /^replay_annotated-d[1-9][0-9]*\.(webm|mp4)$/
+const DISPLAY_FRAMES_DIR_NAME_RE = /^frames-d[1-9][0-9]*$/
 
 /** A declared top-level replay filename, or the default when it is not legal. */
 export function replayFileName(declared: string | null | undefined): string {
@@ -242,12 +245,45 @@ async function clearDisplayRenderOutputs(
   if (displays === undefined) return
   for (const d of displays) {
     if (d.focused) continue
-    await Promise.all([
-      rm(join(dirPath, displayAnnotatedName(d.index)), { force: true }),
-      rm(join(dirPath, displayAnnotatedName(d.index, 'replay.mp4')), { force: true }),
-    ])
-    await rm(join(dirPath, displayFramesDir(d.index)), { recursive: true, force: true })
+    await clearDisplayDerivedOutputs(dirPath, d.index)
   }
+}
+
+async function clearDisplayDerivedOutputs(dirPath: string, index: number): Promise<void> {
+  await Promise.all([
+    rm(join(dirPath, displayAnnotatedName(index)), { force: true }),
+    rm(join(dirPath, displayAnnotatedName(index, 'replay.mp4')), { force: true }),
+    rm(join(dirPath, displayFramesDir(index)), { recursive: true, force: true }),
+  ])
+}
+
+async function clearDisplayMedia(dirPath: string, index: number): Promise<void> {
+  await Promise.all([
+    rm(join(dirPath, displaySnapshotName(index)), { force: true }),
+    rm(join(dirPath, displayReplayName(index)), { force: true }),
+    rm(join(dirPath, displayReplayName(index, 'replay.mp4')), { force: true }),
+    clearDisplayDerivedOutputs(dirPath, index),
+  ])
+}
+
+/**
+ * Image packs have no secondary-display media at all. Sweep canonical names
+ * rather than trusting only the previous manifest: older writers could leave
+ * an already-undeclared display behind, and a Full ZIP includes every file in
+ * the folder regardless of whether the manifest still names it.
+ */
+async function clearAllSecondaryDisplayMedia(dirPath: string): Promise<void> {
+  const entries = await readdir(dirPath)
+  await Promise.all(
+    entries
+      .filter((name) =>
+        DISPLAY_SNAPSHOT_NAME_RE.test(name) ||
+        DISPLAY_REPLAY_NAME_RE.test(name) ||
+        DISPLAY_ANNOTATED_NAME_RE.test(name) ||
+        DISPLAY_FRAMES_DIR_NAME_RE.test(name),
+      )
+      .map((name) => rm(join(dirPath, name), { recursive: true, force: true })),
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -1721,10 +1757,25 @@ async function removeReplacedReplayFiles(
     (current.media.displays ?? []).map((d) => [d.index, d.replay] as const),
   )
   for (const old of previous?.media?.displays ?? []) {
-    if (old.focused || typeof old.replay !== 'string') continue
-    if (!DISPLAY_REPLAY_NAME_RE.test(old.replay)) continue
-    if (currentDisplays.get(old.index) === old.replay) continue
-    await rm(join(dirPath, old.replay), { force: true })
+    if (old.focused) continue
+    // Previous manifests can come from outside this writer. Never interpolate
+    // an unvalidated index into a removal path.
+    if (!Number.isSafeInteger(old.index) || old.index < 1) continue
+    if (!currentDisplays.has(old.index)) {
+      await clearDisplayMedia(dirPath, old.index)
+      continue
+    }
+    if (
+      typeof old.replay === 'string' &&
+      DISPLAY_REPLAY_NAME_RE.test(old.replay) &&
+      currentDisplays.get(old.index) !== old.replay
+    ) {
+      await rm(join(dirPath, old.replay), { force: true })
+    }
+  }
+
+  if (current.capture_kind === 'image') {
+    await clearAllSecondaryDisplayMedia(dirPath)
   }
 }
 
