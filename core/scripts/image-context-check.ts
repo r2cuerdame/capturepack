@@ -36,6 +36,7 @@ const payload: UiaPluginPayload = {
       class_name: 'Outside',
       display: 1,
       bounds: { x: 0, y: 0, width: 1200, height: 1920 },
+      client_bounds: { x: 8, y: 30, width: 1184, height: 1880 },
       focused: false,
       z: 0,
       tree: 'collected',
@@ -49,6 +50,7 @@ const payload: UiaPluginPayload = {
       // deliberately maps the selected physical monitor as focused and then
       // normalizes it to image-local display 1.
       bounds: { x: 80, y: 40, width: 500, height: 400 },
+      client_bounds: { x: 88, y: 70, width: 484, height: 360 },
       focused: true,
       z: 1,
       tree: 'collected',
@@ -59,6 +61,7 @@ const payload: UiaPluginPayload = {
       process: 'secret',
       class_name: 'Secret',
       bounds: { x: 2000, y: 1000, width: 500, height: 400 },
+      client_bounds: { x: 2008, y: 1030, width: 484, height: 360 },
       focused: false,
       z: 2,
       tree: 'collected',
@@ -126,6 +129,17 @@ check('the surviving window is clipped and translated', cropped?.windows[0]?.bou
   width: 300,
   height: 200,
 })
+check('the surviving window translates and crops its client rectangle', cropped?.windows[0]?.client_bounds, {
+  x: 0,
+  y: 10,
+  width: 300,
+  height: 190,
+})
+check(
+  'crop covering only window frame omits client_bounds',
+  cropUiaForImage(payload, { display: 2, x: 80, y: 40, width: 200, height: 25 }, 2)?.windows[0]?.client_bounds,
+  undefined,
+)
 check('only the visible child survives', cropped?.elements.map((e) => e.name), ['visible button'])
 check('the child is crop-local and its owner is remapped', cropped?.elements[0], {
   name: 'visible button',
@@ -190,6 +204,15 @@ check(
   ],
 )
 check(
+  'desktop composition preserves and translates client rectangles across all displays',
+  desktop?.windows.map((window) => window.client_bounds),
+  [
+    { x: 8, y: 30, width: 1184, height: 1880 },
+    { x: 1288, y: 70, width: 484, height: 360 },
+    { x: 3208, y: 1030, width: 484, height: 360 },
+  ],
+)
+check(
   'flattened desktop objects no longer claim per-display coordinates',
   {
     windowDisplays: desktop?.windows.map((window) => window.display),
@@ -237,6 +260,7 @@ const seamRaw: UiaRawDump = {
     class_name: 'SeamWindow',
     // Most of the window is on the primary/right display.
     bounds: { x: -100, y: 100, width: 500, height: 500 },
+    client_bounds: { x: -92, y: 130, width: 484, height: 460 },
     focused: true,
     z: 0,
     tree: 'collected',
@@ -287,6 +311,11 @@ check(
     elementBounds: { x: 1120, y: 160, width: 60, height: 30 },
   },
 )
+check(
+  'place() transforms client_bounds into scaled snapshot space',
+  seamMapped.windows[0]?.client_bounds,
+  { x: -138, y: 195, width: 726, height: 690 },
+)
 const seamDesktop = composeUiaForImageDesktop(
   seamMapped,
   [
@@ -327,6 +356,11 @@ check(
     bounds: { x: 1120, y: 160, width: 60, height: 30 },
     window: 0,
   }],
+)
+check(
+  'desktop composition preserves clipped and offset client_bounds on seam window',
+  seamDesktop?.windows[0]?.client_bounds,
+  { x: 1200, y: 195, width: 588, height: 690 },
 )
 if (seamDesktop !== null) {
   const seamObservation: ContextObservation = {

@@ -670,6 +670,78 @@ try {
     explicitDisagreement.status === 1
       && explicitDisagreement.stdout.includes('elements[0].display 2 disagrees with windows[z=0].display 1'))
 
+  // WINDOW CLIENT BOUNDS ON SECONDARY DISPLAY (SPEC §11.3, #217).
+  //
+  // A window on a secondary display mapped to snapshot pixel coordinates carries
+  // client_bounds also mapped to that snapshot. When client_bounds is correctly
+  // mapped within the window's bounds, validation passes. If client_bounds is
+  // unmapped (e.g. left in desktop coordinates), validator fails with containment error.
+  const makeMultiDisplayClientPayload = (secondaryClientBounds) => ({
+    captured_at: uiaDisplayManifest.created_at,
+    budget_ms: 500,
+    truncated: false,
+    windows: [
+      {
+        title: 'Focused Window',
+        process: 'test',
+        class_name: 'TestClass',
+        focused: true,
+        bounds: { x: 0, y: 0, width: 640, height: 400 },
+        client_bounds: { x: 8, y: 30, width: 624, height: 360 },
+        z: 0,
+        tree: 'collected',
+        element_count: 1,
+      },
+      {
+        title: 'Secondary Window',
+        process: 'test',
+        class_name: 'TestClass',
+        focused: false,
+        display: 2,
+        bounds: { x: 50, y: 50, width: 700, height: 500 },
+        ...(secondaryClientBounds !== undefined ? { client_bounds: secondaryClientBounds } : {}),
+        z: 1,
+        tree: 'collected',
+        element_count: 1,
+      },
+    ],
+    elements: [
+      {
+        name: 'Btn 1',
+        control_type: 'Button',
+        automation_id: 'b1',
+        class_name: 'Button',
+        bounds: { x: 10, y: 40, width: 100, height: 30 },
+        depth: 1,
+        window: 0,
+      },
+      {
+        name: 'Btn 2',
+        control_type: 'Button',
+        automation_id: 'b2',
+        class_name: 'Button',
+        display: 2,
+        bounds: { x: 60, y: 90, width: 100, height: 30 },
+        depth: 1,
+        window: 1,
+      },
+    ],
+  })
+
+  writeJson(uiaDisplayElementsFile, makeMultiDisplayClientPayload({ x: 58, y: 80, width: 684, height: 460 }))
+  const validMultiDisplayClient = runValidator(uiaDisplayPack)
+  check('windows-uia accepts correctly mapped client_bounds on secondary display (SPEC §11.3)',
+    validMultiDisplayClient.status === 0
+      && validMultiDisplayClient.stdout.includes('result: VALID')
+      && validMultiDisplayClient.stdout.includes('2 window(s), 2 with a client rectangle'))
+
+  // Unmapped client_bounds in desktop coordinates (e.g. x=698 > bounds.x + bounds.width=750 on display 2)
+  writeJson(uiaDisplayElementsFile, makeMultiDisplayClientPayload({ x: 698, y: 80, width: 684, height: 460 }))
+  const unmappedSecondaryClient = runValidator(uiaDisplayPack)
+  check('windows-uia rejects unmapped desktop-coordinate client_bounds on secondary display',
+    unmappedSecondaryClient.status === 1
+      && unmappedSecondaryClient.stdout.includes('is not inside its own window\'s bounds'))
+
   console.log(`\n${checks}/${checks} CapturePack validator checks passed`)
 } finally {
   rmSync(temporaryRoot, { recursive: true, force: true })
