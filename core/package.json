@@ -61,6 +61,8 @@
     "check:image-pack-writer": "node scripts/image-pack-writer-check.mjs",
     "check:mcp-image-pack": "node scripts/mcp-image-pack-check.mjs",
     "check:repo-hygiene": "node scripts/repo-hygiene-check.mjs",
+    "check:winget-manifest": "node scripts/winget-manifest-check.mjs",
+    "winget:manifest": "node scripts/winget-manifest.mjs",
     "check:recorder-ring": "node scripts/recorder-ring-check.mjs",
     "check:recorder-retention": "node scripts/recorder-retention-check.mjs",
     "check:tick-owner": "node scripts/capture-tick-owner-check.mjs",
