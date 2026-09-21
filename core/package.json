@@ -16,6 +16,7 @@
   "main": "dist/main/index.js",
   "scripts": {
     "build": "node scripts/build.mjs",
+    "test": "npm run qa:checks",
     "typecheck": "tsc --noEmit",
     "dev": "npm run build && electron .",
     "dist": "npm run build -- --require-dxgi-helper && electron-builder --win --publish never",

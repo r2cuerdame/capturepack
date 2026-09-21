@@ -382,8 +382,8 @@ async function renderAnnotated(
   captureDue(drawFrame())
 
   const stream = canvas.captureStream(job.fps)
-  // Only a trim asks for a container: the annotated view is a derived file that
-  // has always been WebM, and nothing declares it by codec.
+  // Trim and annotated-render callers may preserve an MP4 source container;
+  // unsupported preferences fall through to the WebM encoder choices below.
   const producedMimeType = pickMimeType(job.preferMimeType)
   const recorder = new MediaRecorder(stream, {
     mimeType: producedMimeType,

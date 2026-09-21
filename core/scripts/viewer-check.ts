@@ -740,7 +740,7 @@ async function writerIntegrationChecks(): Promise<void> {
     )
     check('late plugin regenerates viewer from the same revision', readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8').includes('late-check'))
 
-    writeFileSync(path.join(handle.dirPath, 'replay_annotated.webm'), 'ANNOTATED')
+    writeFileSync(path.join(handle.dirPath, 'replay_annotated.mp4'), 'ANNOTATED')
     mkdirSync(path.join(handle.dirPath, 'frames'), { recursive: true })
     writeFileSync(path.join(handle.dirPath, 'frames', 'frame-01_00-01.000.png'), 'FRAME')
     await setManifestRenderOutputs(handle, {
@@ -749,7 +749,64 @@ async function writerIntegrationChecks(): Promise<void> {
     })
     await refreshPackDocs(handle.dirPath, 'en')
     const renderedViewer = readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8')
-    check('completed render regeneration selects declared annotated media', renderedViewer.includes('src="replay_annotated.webm"') && renderedViewer.includes('src="frames/frame-01_00-01.000.png"'))
+    check('completed MP4 render regeneration selects declared annotated media', renderedViewer.includes('src="replay_annotated.mp4"') && renderedViewer.includes('src="frames/frame-01_00-01.000.png"'))
+
+    const mp4DisplayHandle = await savePack({
+      ...initial,
+      capturedAt: new Date(capturedAt.getTime() + 1_000),
+      screens: [
+        { width: 1920, height: 1080, scale: 1 },
+        { width: 1280, height: 720, scale: 1 },
+      ],
+      displays: [
+        {
+          index: 1,
+          focused: true,
+          bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+          scale: 1,
+          snapshotWidth: 1920,
+          snapshotHeight: 1080,
+          hasReplay: true,
+          replayDurationMs: 5_000,
+          snapshotFile: 'snapshot.png',
+          replayFile: 'replay.mp4',
+          snapshotPng: null,
+          replayWebm: null,
+        },
+        {
+          index: 2,
+          focused: false,
+          bounds: { x: 1920, y: 0, width: 1280, height: 720 },
+          scale: 1,
+          snapshotWidth: 1280,
+          snapshotHeight: 720,
+          hasReplay: true,
+          replayDurationMs: 5_000,
+          snapshotFile: 'snapshot-d2.png',
+          replayFile: 'replay-d2.mp4',
+          snapshotPng: Buffer.from('DISPLAY 2 SNAPSHOT'),
+          replayWebm: Buffer.from('DISPLAY 2 REPLAY'),
+        },
+      ],
+    })
+    mkdirSync(path.join(mp4DisplayHandle.dirPath, 'frames-d2'), { recursive: true })
+    writeFileSync(
+      path.join(mp4DisplayHandle.dirPath, 'frames-d2', 'frame-01_00-01.000.png'),
+      'FRAME',
+    )
+    await setManifestRenderOutputs(mp4DisplayHandle, {
+      replayAnnotated: true,
+      keyframes: [{ file: 'frames-d2/frame-01_00-01.000.png', t_ms: 1_000 }],
+      display: 2,
+    })
+    const mp4DisplayManifest = JSON.parse(
+      readFileSync(path.join(mp4DisplayHandle.dirPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    check(
+      'secondary MP4 render output declaration keeps the MP4 container',
+      mp4DisplayManifest.media.displays?.[1]?.replay_annotated ===
+        'replay_annotated-d2.mp4',
+    )
 
     const omittedEnvManifest = JSON.parse(
       readFileSync(path.join(handle.dirPath, 'manifest.json'), 'utf8'),
