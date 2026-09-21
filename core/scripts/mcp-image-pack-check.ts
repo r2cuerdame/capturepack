@@ -131,12 +131,20 @@ async function main(): Promise<void> {
     listFiles: () => ['manifest.json', 'snapshot.png'],
     warnings: () => [],
   }
+  const reportText = '# CapturePack with report\n\nFull generated report.\n'
+  const reportPack = {
+    ...pack,
+    id: 'pack-with-report',
+    path: 'C:\\packs\\pack-with-report',
+    report: () => reportText,
+  }
   const store = {
     outputDir: 'C:\\packs',
     latest: () => pack,
     resolve: (id?: string) => {
       if (id === singlePack.id) return singlePack
       if (id === multiPack.id) return multiPack
+      if (id === reportPack.id) return reportPack
       return pack
     },
     list: () => ({
@@ -168,6 +176,25 @@ async function main(): Promise<void> {
   check(!('full_context' in snapshot), 'latest exposes no full-context image field')
   check(!('timeline_event_count' in summary), 'image summary does not pretend to have a video timeline')
   check(!('replay' in summary), 'image summary contains no video replay section')
+
+  console.log('REPORT')
+  const missingReport = await callbacks.get('capturepack_report')?.({})
+  const missingReportText = missingReport?.content.find((item) => item.type === 'text')?.text ?? ''
+  check(
+    missingReport !== undefined && missingReport.isError !== true,
+    'missing optional report.md returns a non-error response',
+  )
+  check(
+    missingReportText.includes('report.md is absent from this pack') &&
+      missingReportText.includes('optional audience view'),
+    'missing report response clearly explains the optional audience view is absent',
+  )
+  const presentReport = await callbacks.get('capturepack_report')?.({ id: reportPack.id })
+  const presentReportText = presentReport?.content.find((item) => item.type === 'text')?.text ?? ''
+  check(
+    presentReport?.isError !== true && presentReportText === reportText,
+    'present report.md continues to return its full text unchanged',
+  )
 
   console.log('HISTORY')
   const history = await callbacks.get('capturepack_history')?.({

@@ -252,7 +252,13 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
       run('capturepack_report', args, () => {
         const pack = store.resolve(args.id)
         const text = pack.report()
-        if (text === null) return errorResult(`report.md not found in pack "${pack.id}" (${pack.path})`)
+        if (text === null) {
+          const manifest = pack.manifest()
+          return textResult(
+            `# CapturePack ${manifest?.title ?? pack.id}\n\n` +
+              '_report.md is absent from this pack. It is an optional audience view (SPEC §12)._',
+          )
+        }
         return textResult(text)
       }),
   )
