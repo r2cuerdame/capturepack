@@ -6,6 +6,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -16,14 +17,16 @@ import {
   createPackZip,
   domPluginDeclaration,
   savePack,
+  saveAsNewPack,
   tryWriteDomPlugin,
   updatePack,
+  type DisplayCapture,
   type ExportInput,
   type InitialSaveInput,
 } from '../src/main/exporter'
 import { createPackStore } from '../src/main/mcp/store'
 import { startSourceFirstFinalSave } from '../src/main/sourceFirstFinalSave'
-import type { Annotation } from '../src/shared/types'
+import type { Annotation, Manifest } from '../src/shared/types'
 
 let failures = 0
 
@@ -63,6 +66,44 @@ function allFiles(root: string): string[] {
 
 async function nextImmediate(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve))
+}
+
+async function observeManifestPublication<T>(
+  phase: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const fsPromises = require('node:fs/promises') as typeof import('node:fs/promises')
+  const originalRename = fsPromises.rename
+  let commits = 0
+  try {
+    fsPromises.rename = (async (...args: Parameters<typeof originalRename>) => {
+      const [temporaryPath, destinationPath] = args
+      const destination = String(destinationPath)
+      if (path.basename(destination) === 'manifest.json') {
+        commits += 1
+        const manifest = JSON.parse(readFileSync(String(temporaryPath), 'utf8')) as Manifest
+        const declaredMedia = new Set<string>([manifest.media.snapshot])
+        if (typeof manifest.media.replay === 'string') declaredMedia.add(manifest.media.replay)
+        for (const display of manifest.media.displays ?? []) {
+          declaredMedia.add(display.snapshot)
+          if (typeof display.replay === 'string') declaredMedia.add(display.replay)
+        }
+        for (const mediaName of declaredMedia) {
+          const mediaPath = path.join(path.dirname(destination), mediaName)
+          check(
+            `${phase}: ${mediaName} is non-empty at the manifest commit point`,
+            existsSync(mediaPath) && statSync(mediaPath).size > 0,
+          )
+        }
+      }
+      return originalRename(...args)
+    }) as typeof fsPromises.rename
+    const result = await run()
+    check(`${phase}: manifest commit was observed`, commits > 0)
+    return result
+  } finally {
+    fsPromises.rename = originalRename
+  }
 }
 
 async function main(): Promise<void> {
@@ -111,6 +152,36 @@ async function main(): Promise<void> {
         },
       ],
     }
+    const displays: DisplayCapture[] = [
+      {
+        index: 1,
+        focused: true,
+        bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+        scale: 1,
+        snapshotWidth: 1920,
+        snapshotHeight: 1080,
+        hasReplay: true,
+        replayDurationMs: 10_000,
+        snapshotFile: 'snapshot.png',
+        replayFile: 'replay.mp4',
+        snapshotPng: null,
+        replayWebm: null,
+      },
+      {
+        index: 2,
+        focused: false,
+        bounds: { x: 1920, y: 0, width: 1280, height: 720 },
+        scale: 1,
+        snapshotWidth: 1280,
+        snapshotHeight: 720,
+        hasReplay: true,
+        replayDurationMs: 10_000,
+        snapshotFile: 'snapshot-d2.png',
+        replayFile: 'replay-d2.mp4',
+        snapshotPng: Buffer.from('SECONDARY SNAPSHOT'),
+        replayWebm: Buffer.from('SECONDARY REPLAY'),
+      },
+    ]
     const initial: InitialSaveInput = {
       captureKind: 'video',
       snapshotPng: Buffer.from('RAW SNAPSHOT'),
@@ -122,11 +193,15 @@ async function main(): Promise<void> {
       replayDurationMs: 10_000,
       timeline,
       outputDir,
-      screens: [{ width: 1920, height: 1080, scale: 1 }],
+      screens: [
+        { width: 1920, height: 1080, scale: 1 },
+        { width: 1280, height: 720, scale: 1 },
+      ],
+      displays,
       windowsContext: null,
       docLanguage: 'en',
     }
-    const handle = await savePack(initial)
+    const handle = await observeManifestPublication('savePack', () => savePack(initial))
     const saveFirstReadme = readFileSync(path.join(handle.dirPath, 'README.md'), 'utf8')
     const saveFirstReport = readFileSync(path.join(handle.dirPath, 'report.md'), 'utf8')
     check(
@@ -138,6 +213,11 @@ async function main(): Promise<void> {
       box('ann_000001', 'first durable annotation', 1_000),
       box('ann_000002', 'second durable annotation', 4_000),
     ]
+    const reeditDisplays: DisplayCapture[] = displays.map((display) => ({
+      ...display,
+      snapshotPng: null,
+      replayWebm: null,
+    }))
     const finalInput: ExportInput = {
       captureKind: 'video',
       snapshotPng: Buffer.from('FINAL SOURCE SNAPSHOT'),
@@ -153,7 +233,11 @@ async function main(): Promise<void> {
       snapshotTMs: 7_500,
       trimOffsetMs: 2_000,
       timeline,
-      screens: [{ width: 1920, height: 1080, scale: 1 }],
+      screens: [
+        { width: 1920, height: 1080, scale: 1 },
+        { width: 1280, height: 720, scale: 1 },
+      ],
+      displays: reeditDisplays,
       windowsContext: null,
       clipboardAfterSave: 'off',
       docLanguage: 'en',
@@ -201,20 +285,22 @@ async function main(): Promise<void> {
     let renderStarted = false
     let renderFailed = false
 
-    const sourcePath = await startSourceFirstFinalSave({
-      persistSource: async () => {
-        await updatePack(handle, finalInput, { keepReplay: true })
-        return handle.dirPath
-      },
-      renderDerived: async () => {
-        renderStarted = true
-        await renderGate
-        throw new Error('simulated derived renderer failure')
-      },
-      onDerivedFailure: () => {
-        renderFailed = true
-      },
-    })
+    const sourcePath = await observeManifestPublication('updatePack', () =>
+      startSourceFirstFinalSave({
+        persistSource: async () => {
+          await updatePack(handle, finalInput, { keepReplay: true })
+          return handle.dirPath
+        },
+        renderDerived: async () => {
+          renderStarted = true
+          await renderGate
+          throw new Error('simulated derived renderer failure')
+        },
+        onDerivedFailure: () => {
+          renderFailed = true
+        },
+      }),
+    )
 
     check('source completion returns the pack path', sourcePath === handle.dirPath)
     check(
@@ -291,6 +377,51 @@ async function main(): Promise<void> {
     check(
       'atomic source publication leaves no temporary files behind',
       allFiles(handle.dirPath).every((file) => !file.endsWith('.tmp')),
+    )
+
+    console.log('\nMEDIA-FIRST MANIFEST COMMIT (#216)')
+    const manifestBeforeFailedUpdate = readFileSync(
+      path.join(handle.dirPath, 'manifest.json'),
+      'utf8',
+    )
+    const mediaFsPromises = require('node:fs/promises') as typeof import('node:fs/promises')
+    const originalWriteFile = mediaFsPromises.writeFile
+    let mediaFailureObserved = false
+    try {
+      mediaFsPromises.writeFile = (async (...args: Parameters<typeof originalWriteFile>) => {
+        if (String(args[0]) === path.join(handle.dirPath, 'snapshot.png')) {
+          throw new Error('simulated snapshot write failure')
+        }
+        return originalWriteFile(...args)
+      }) as typeof mediaFsPromises.writeFile
+      try {
+        await updatePack(
+          handle,
+          { ...finalInput, title: 'must not be published after media failure' },
+          { keepReplay: true },
+        )
+      } catch (error) {
+        mediaFailureObserved = (error as Error).message === 'simulated snapshot write failure'
+      }
+    } finally {
+      mediaFsPromises.writeFile = originalWriteFile
+    }
+    check('finalize propagates a source-media write failure', mediaFailureObserved)
+    check(
+      'failed source-media write leaves the previously published manifest unchanged',
+      readFileSync(path.join(handle.dirPath, 'manifest.json'), 'utf8') ===
+        manifestBeforeFailedUpdate,
+    )
+
+    const copied = await observeManifestPublication('saveAsNewPack', () =>
+      saveAsNewPack(handle.dirPath, finalInput),
+    )
+    check(
+      'Save As New publishes a complete independent media set',
+      ['snapshot.png', 'replay.mp4', 'snapshot-d2.png', 'replay-d2.mp4'].every((name) => {
+        const file = path.join(copied.dirPath, name)
+        return existsSync(file) && statSync(file).size > 0
+      }),
     )
 
     console.log('\nFULL ZIP ATOMIC ARCHIVE CREATION & RESILIENCE (#177)')
