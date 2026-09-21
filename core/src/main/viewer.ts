@@ -330,7 +330,10 @@ ${annotations
     const marker = numbers.get(annotation.annotation_id)
     const display = annotationDisplayIndex(annotation, focused, declared)
     const bounds = annotation.bounds
-    const text = annotation.text.trim() === '' ? t('pack.none') : annotation.text
+    const text =
+      typeof annotation.text === 'string' && annotation.text.trim() !== ''
+        ? annotation.text
+        : t('pack.none')
     const flags: string[] = []
     if (annotation.blur) flags.push('blur')
     if (annotation.numbered) flags.push('numbered')

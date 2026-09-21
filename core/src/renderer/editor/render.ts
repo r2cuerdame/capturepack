@@ -231,7 +231,7 @@ export function drawDisplayLabels(
   ctx.save()
   ctx.setTransform(region.cscale, 0, 0, region.cscale, region.cx, region.cy)
   for (const annotation of [...annotations].sort((a, b) => a.z - b.z)) {
-    const text = annotation.text.trim()
+    const text = typeof annotation.text === 'string' ? annotation.text.trim() : ''
     if (text === '') continue
     drawAnnotationLabel(
       ctx,

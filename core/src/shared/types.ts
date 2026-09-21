@@ -630,8 +630,8 @@ export interface BoxAnnotation {
   // existing pack changes. `bounds` is always in THAT display's snapshot pixel
   // space, never the board's.
   display?: number
-  // The description the user typed. May be empty (spec default: "").
-  text: string
+  // The description the user typed. May be empty (spec default: ""). Absent means "" (SPEC §8.3).
+  text?: string
   // Lifetime interval [start_ms, end_ms] on the replay clock (SPEC §8.4).
   // BOTH present or BOTH absent; start_ms <= end_ms. Absent = whole capture.
   // The representative instant of a box is the lifetime MIDPOINT — there is

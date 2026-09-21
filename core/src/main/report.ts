@@ -50,7 +50,7 @@ export function lifetimeLabel(a: Annotation, t: TranslateFn = makeT('en')): stri
  */
 export function describeAnnotation(a: Annotation, t: TranslateFn = makeT('en')): string {
   const parts: string[] = [lifetimeLabel(a, t)]
-  if (a.text.trim() !== '') parts.push(`"${a.text.trim()}"`)
+  if (typeof a.text === 'string' && a.text.trim() !== '') parts.push(`"${a.text.trim()}"`)
   const b = a.bounds
   const flags = a.blur ? ', blur' : ''
   parts.push(`box at (${px(b.x)}, ${px(b.y)}) size ${px(b.width)}×${px(b.height)}${flags}`)

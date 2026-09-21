@@ -265,14 +265,14 @@ export async function planShareBundle(dirPath: string): Promise<ShareBundlePlan>
   }
 
   const visibleLabels = pack.annotations
-    .map((annotation) => annotation.text.trim())
+    .map((annotation) => (typeof annotation.text === 'string' ? annotation.text.trim() : ''))
     .filter((text) => text !== '')
   // The current renderer draws a box's label AFTER its blur pass. A semantic
   // pick commonly fills that label with the same UIA/DOM name the user meant
   // to hide, so copying those pixels would undo the redaction at the box edge.
   // Fail closed until the user clears the blur box's label and re-renders.
   const blockers: ShareBundleBlocker[] = blurAnnotations.some(
-    (annotation) => annotation.text.trim() !== '',
+    (annotation) => typeof annotation.text === 'string' && annotation.text.trim() !== '',
   )
     ? ['blur-label']
     : []

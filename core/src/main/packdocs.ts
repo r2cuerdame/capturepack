@@ -351,7 +351,7 @@ function buildOverviewSkill(
       .filter((a) => numbers.has(a.annotation_id))
       .sort((a, b) => (numbers.get(a.annotation_id) ?? 0) - (numbers.get(b.annotation_id) ?? 0))
     for (const a of numbered) {
-      const text = a.text.trim() !== '' ? ` — "${a.text.trim()}"` : ''
+      const text = typeof a.text === 'string' && a.text.trim() !== '' ? ` — "${a.text.trim()}"` : ''
       // WHICH screen those coordinates are in: without it, a reader of a
       // multi-display pack has no way to place the box at all.
       const where = multi
@@ -553,7 +553,7 @@ function buildAnnotationSkill(
         : `## ${a.annotation_id} (${flags.join(', ')})`,
     )
     lines.push('')
-    if (a.text.trim() !== '') lines.push(`- **Text:** "${a.text.trim()}"`)
+    if (typeof a.text === 'string' && a.text.trim() !== '') lines.push(`- **Text:** "${a.text.trim()}"`)
     if (multi) {
       // The DECLARED set resolves a box naming a display this pack does not
       // have back onto the focused one (SPEC §8.8), so the file named below is

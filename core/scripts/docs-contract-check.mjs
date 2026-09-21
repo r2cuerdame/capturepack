@@ -329,5 +329,22 @@ console.log('\nThe usage journal template still says what Issue #1 says')
   )
 }
 
+console.log('\nSPEC §8.3 defines annotation.text as OPTIONAL')
+{
+  const spec = readFileSync(join(ROOT, 'SPEC.md'), 'utf8')
+  check(
+    'SPEC §8.3 declares annotation.text as OPTIONAL where absent means empty string',
+    /\|\s*`text`\s*\|\s*string\s*\|\s*OPTIONAL\s*\|\s*The box's description/u.test(spec) &&
+      spec.includes('absent means `""`'),
+    'SPEC.md §8.3 lost its text OPTIONAL declaration',
+  )
+  const typesSource = readFileSync(join(CORE, 'src', 'shared', 'types.ts'), 'utf8')
+  check(
+    'types.ts declares BoxAnnotation.text as optional string',
+    /text\?:\s*string/u.test(typesSource),
+    'types.ts does not declare text?: string in BoxAnnotation',
+  )
+}
+
 console.log(`\nresult: ${failed === 0 ? 'OK' : 'BROKEN'} — ${passed} passed, ${failed} failed\n`)
 if (failed > 0) process.exitCode = 1

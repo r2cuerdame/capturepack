@@ -24,8 +24,10 @@ import {
   safeViewerPath,
   VIEWER_FORMAT_VERSION,
 } from '../src/main/viewer'
-import { buildReport } from '../src/main/report'
+import { buildReport, describeAnnotation } from '../src/main/report'
 import { buildReadme, buildSkills } from '../src/main/packdocs'
+import { drawDisplayLabels } from '../src/renderer/editor/render'
+import { drawBox, renderedLabelBottomGutter } from '../src/renderer/render/render'
 import type {
   Annotation,
   AnnotationsFile,
@@ -467,6 +469,57 @@ function pureContractChecks(): void {
       !noTrackingSkills.annotation.includes('undefined'),
   )
 
+  const noTextBox = box('ann_no_text', '')
+  delete (noTextBox as Partial<Annotation>).text
+  const noTextAnnotations = annotations([noTextBox])
+  const noTextManifest = videoManifest()
+  const noTextHtml = buildViewerHtml(noTextManifest, noTextAnnotations, timeline(), 'en')
+  const noTextReport = buildReport(noTextManifest, noTextAnnotations, 'en', false, true)
+  const noTextReadme = buildReadme(noTextManifest, noTextAnnotations, 'en', false, true)
+  const noTextSkills = buildSkills(noTextManifest, noTextAnnotations, timeline(), 'en', false)
+  const noTextGutter = renderedLabelBottomGutter([noTextBox], 1)
+  const noTextDesc = describeAnnotation(noTextBox)
+
+  const fakeRegion = { cx: 0, cy: 0, cw: 1920, ch: 1080, cscale: 1, width: 1920, height: 1080 }
+  const fakeCtx = {
+    save: () => {},
+    restore: () => {},
+    setTransform: () => {},
+    measureText: () => ({ width: 0 }),
+    fillText: () => {},
+    strokeRect: () => {},
+    fillRect: () => {},
+    beginPath: () => {},
+    arc: () => {},
+    roundRect: () => {},
+    fill: () => {},
+    stroke: () => {},
+  } as unknown as CanvasRenderingContext2D
+  let labelsThrew = false
+  try {
+    drawDisplayLabels(fakeCtx, fakeRegion, [noTextBox], 1)
+    drawBox(fakeCtx, noTextBox, 1, 1)
+  } catch {
+    labelsThrew = true
+  }
+
+  check(
+    'pack omitting annotation.text generates viewer, report, readme, skills, gutter, and canvas labels cleanly',
+    typeof noTextHtml === 'string' &&
+      !noTextHtml.includes('undefined') &&
+      typeof noTextReport === 'string' &&
+      !noTextReport.includes('undefined') &&
+      typeof noTextReadme === 'string' &&
+      !noTextReadme.includes('undefined') &&
+      typeof noTextSkills.overview === 'string' &&
+      !noTextSkills.overview.includes('undefined') &&
+      typeof noTextSkills.annotation === 'string' &&
+      !noTextSkills.annotation.includes('undefined') &&
+      noTextGutter === 0 &&
+      !noTextDesc.includes('undefined') &&
+      !labelsThrew,
+  )
+
   const minimalCandidates = [
     path.resolve(process.cwd(), '../examples/minimal'),
     path.resolve(process.cwd(), 'examples/minimal'),
@@ -629,6 +682,47 @@ async function writerIntegrationChecks(): Promise<void> {
       'refreshPackDocs regenerates skills documents for pack omitting annotation.tracking without throwing',
       omittedTrackingAnnotationSkill.length > 0 &&
         !omittedTrackingAnnotationSkill.includes('undefined'),
+    )
+
+    const omittedTextAnnotations = JSON.parse(
+      readFileSync(path.join(handle.dirPath, 'annotations.json'), 'utf8'),
+    ) as AnnotationsFile
+    for (const ann of omittedTextAnnotations.annotations) {
+      delete (ann as Partial<Annotation>).text
+    }
+    writeFileSync(
+      path.join(handle.dirPath, 'annotations.json'),
+      JSON.stringify(omittedTextAnnotations, null, 2),
+      'utf8',
+    )
+    await refreshPackDocs(handle.dirPath, 'en')
+    const omittedTextAnnotationSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'annotation.md'),
+      'utf8',
+    )
+    const omittedTextOverviewSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'overview.md'),
+      'utf8',
+    )
+    const omittedTextReport = readFileSync(
+      path.join(handle.dirPath, 'report.md'),
+      'utf8',
+    )
+    const omittedTextViewer = readFileSync(
+      path.join(handle.dirPath, 'viewer.html'),
+      'utf8',
+    )
+    check(
+      'refreshPackDocs regenerates viewer and docs for pack omitting annotation.text without throwing',
+      existsSync(path.join(handle.dirPath, 'viewer.html')) &&
+        omittedTextViewer.length > 0 &&
+        !omittedTextViewer.includes('undefined') &&
+        omittedTextReport.length > 0 &&
+        !omittedTextReport.includes('undefined') &&
+        omittedTextAnnotationSkill.length > 0 &&
+        !omittedTextAnnotationSkill.includes('undefined') &&
+        omittedTextOverviewSkill.length > 0 &&
+        !omittedTextOverviewSkill.includes('undefined'),
     )
 
     // Issue #200: pack omitting timeline.json (OPTIONAL for video packs per SPEC §4, §10, §14)
