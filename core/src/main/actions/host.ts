@@ -22,6 +22,7 @@ import {
   type PackState,
   type PipelineStep,
   idempotencyKey,
+  mergeActionResults,
 } from '../../shared/actions'
 import { runPipeline } from '../../shared/actionPipeline'
 import { logError, logInfo } from '../log'
@@ -345,6 +346,8 @@ export function readActionResults(packDir: string): ActionResult[] {
   }
 }
 
+export { mergeActionResults } from '../../shared/actions'
+
 /**
  * Persist action run outcomes to plugins/action-results.json inside the pack folder.
  * Merges newly produced results by configId and writes atomically.
@@ -353,15 +356,7 @@ export function persistActionResults(packDir: string, newResults: readonly Actio
   if (newResults.length === 0) return
   try {
     const existing = readActionResults(packDir)
-    const merged = [...existing]
-    for (const result of newResults) {
-      const idx = merged.findIndex((item) => item.configId === result.configId)
-      if (idx >= 0) {
-        merged[idx] = result
-      } else {
-        merged.push(result)
-      }
-    }
+    const merged = mergeActionResults(existing, newResults)
     const dir = path.join(packDir, 'plugins')
     mkdirSync(dir, { recursive: true })
     const target = actionResultsPath(packDir)
