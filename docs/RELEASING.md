@@ -95,6 +95,71 @@ Once that version is public, compare the lowercase hash with the matching line i
 [GitHub Releases](https://github.com/r2cuerdame/capturepack/releases). Until the
 matching release appears there, it is a candidate rather than a public download.
 
+## Publish to WinGet
+
+CapturePack is submitted to the Windows Package Manager community repository
+([microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs)) as
+`r2cuerdame.CapturePack`. WinGet installs the same artifact the release
+workflow published — the per-user, one-click NSIS installer — so nothing is
+built or re-uploaded for WinGet, and a release is never created only for it.
+
+What the shipped installer is, from evidence rather than assumption:
+
+| Manifest field | Value | Where it comes from |
+|---|---|---|
+| `InstallerType` | `nullsoft` | `core/electron-builder.yml` `win.target: nsis`; WinGet passes `/S` for silent install and uninstall, and electron-builder's one-click template does not launch the app when silent |
+| `Scope` | `user` | `nsis.perMachine: false`; the installer writes `HKCU` and `%LOCALAPPDATA%\Programs\capturepack` and never elevates |
+| `Architecture` | `x64` | the packaged `CapturePack.exe` is an x64 PE (the NSIS stub itself is 32-bit, as always) |
+| `ProductCode` | `e2882de7-4701-50c8-9b29-3229ccb6fbcc` | electron-builder's uninstall key: UUID v5 of `appId` in its fixed namespace; stable across versions, so `winget upgrade` finds the existing install |
+| `DisplayName` / `Publisher` / `DisplayVersion` | `CapturePack X.Y.Z` / `r2cuerdame` / `X.Y.Z` | what the installer writes under `HKCU\...\Uninstall\<ProductCode>` |
+| `InstallerUrl` / `InstallerSha256` | the `vX.Y.Z` release asset and `SHA256SUMS.txt` | published release assets only |
+| `ReleaseDate` | the day of `latest.yml` `releaseDate` | published release asset |
+
+There is no command-line alias and nothing is added to `PATH`: CapturePack is a
+tray application. The installer is unsigned (see [Code signing](#code-signing));
+WinGet verifies the SHA-256 in the manifest against the downloaded bytes.
+
+The manifests are generated, never typed. After the GitHub Release is public,
+from the checkout of the released tag:
+
+```powershell
+cd C:\_Project\capturepack\core
+gh release download vX.Y.Z --pattern latest.yml --pattern SHA256SUMS.txt --dir $env:TEMP\capturepack-winget
+npm run winget:manifest -- --latest $env:TEMP\capturepack-winget\latest.yml --sha256sums $env:TEMP\capturepack-winget\SHA256SUMS.txt --out $env:TEMP\capturepack-winget
+winget validate --manifest $env:TEMP\capturepack-winget\manifests\r\r2cuerdame\CapturePack\X.Y.Z
+```
+
+The generator refuses a prerelease version, a `SHA256SUMS.txt` that names a
+different installer, a `package.json` that is not at the released version, and
+a changelog without that version's section; `npm run check:winget-manifest`
+(part of `qa:rc`) proves those refusals and the derivations above on every run.
+
+Then, in the `r2cuerdame/winget-pkgs` fork of microsoft/winget-pkgs, create a
+branch `capturepack-X.Y.Z` from upstream `master`, add the three files under
+`manifests/r/r2cuerdame/CapturePack/X.Y.Z/`, push, and open a pull request to
+`microsoft/winget-pkgs` titled `New package: r2cuerdame.CapturePack version
+X.Y.Z` (or `New version: …` once a version is merged). Microsoft's validation
+pipeline downloads the installer and runs it silently; a moderator then
+approves. Until that PR is merged and `winget search r2cuerdame.CapturePack`
+returns the version, WinGet availability is a submission, not a claim — do not
+add `winget install` to the README before that.
+
+Submissions so far:
+
+- 0.5.0 — [microsoft/winget-pkgs#429924](https://github.com/microsoft/winget-pkgs/pull/429924)
+  (validation passed, awaiting moderator approval).
+- 0.5.1 — [microsoft/winget-pkgs#438314](https://github.com/microsoft/winget-pkgs/pull/438314)
+  (issue [#153](https://github.com/r2cuerdame/capturepack/issues/153)).
+
+After a merge, verify on a Windows machine:
+
+```powershell
+winget source update
+winget install --id r2cuerdame.CapturePack --exact
+```
+
+and confirm `winget list --id r2cuerdame.CapturePack` reports the version.
+
 ## How users receive updates
 
 When automatic update checks are enabled, the app checks GitHub Releases for a
