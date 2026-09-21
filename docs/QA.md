@@ -19,7 +19,12 @@ is the browser-to-pack end-to-end run and records the desktop for twelve
 seconds; the gate runs its wire half as `check:chrome-bridge --wire-only`, which
 prints the skip rather than quietly running less. That harness spent a release
 cycle wired to nothing and failing, so a silent shortening is the exact failure
-this convention exists to prevent.
+this convention exists to prevent. The wire half also carries a whole page the
+way the extension's toolbar button sends one (#157) and reads the browser-page
+pack the real app writes back; `check:full-page-capture` holds the extension's
+capture procedure to a fake page (long page, sticky header, lazy-load,
+restricted page, exact restoration, wire bundle) and `check:browser-page`
+holds the app's bridge, placement and payload halves, all without a browser.
 Use Node.js 22.12 or newer. Electron 42+ no longer downloads its development
 binary during `npm ci`; the smoke resolves the package so its supported,
 first-run download path is exercised before the isolated app starts.
@@ -94,7 +99,7 @@ existed in an earlier Lane-A frame may legitimately be absent from the final
 ## Video-core regression matrix
 
 The tables in this document map a reported failure to the check that would now
-catch it. They are a map, not an inventory: the gate discovers 93 checks and
+catch it. They are a map, not an inventory: the gate discovers 95 checks and
 only some of them have ever had a defect worth naming.
 
 `npm run qa:video` runs type checking plus a subset — 61 of the 91 — so some

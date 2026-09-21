@@ -94,12 +94,22 @@ does is invite you to click it.
 - **Windows UI Automation (built in):** accessible control name, semantic type,
   AutomationId, process/window identity, and observed bounds when the app exposes
   them.
-- **Chrome DOM (optional preview extension):** selector, role, text and URL for
-  the element you explicitly pick — click the CapturePack toolbar icon, then
-  click the element. It works inside iframes, reads the page only for that pick,
-  and does not stream the DOM. Settings › Plugins › Chrome DOM reports what the
-  picker last did, so a pick that does not arrive says why.
-  **Click the CapturePack icon once and allow the browser.** After that you press
+- **Chrome DOM (optional preview extension):** **click the CapturePack toolbar
+  icon and the whole current page becomes a still** — top to bottom, stitched
+  from the browser's own rendering at the page's pixel ratio, with every element
+  of the document walked in the same coordinates — and it opens in the same
+  editor your capture hotkey opens, ready to annotate, save and share. Sticky
+  and fixed headers appear once; lazy-loading content is scrolled in first; the
+  page's scroll position and styles are put back exactly; a page Chrome will not
+  let an extension read (`chrome://`, the Web Store, a PDF) fails on the icon
+  with the reason, never silently. Picking ONE element is still there as an
+  explicit action — `Ctrl+Shift+E`, or right-click the icon › *Pick an element
+  on this page* — with selector, role, text and URL, inside iframes too. Nothing
+  is captured except on your click, the DOM is never streamed, and the bundle
+  goes to the CapturePack app on your machine and nowhere else. Settings ›
+  Plugins › Chrome DOM reports what the picker last did, so a pick that does
+  not arrive says why.
+  **The first click also asks you to allow the browser.** After that you press
   nothing in Chrome: your normal capture hotkey brings the visible page with it.
   The one-time grant exists because Chrome never sees a global hotkey — it hands
   a page to an extension only for a click made inside Chrome, or to an extension
