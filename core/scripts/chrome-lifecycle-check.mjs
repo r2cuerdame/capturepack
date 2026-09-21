@@ -17,6 +17,16 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const work = mkdtempSync(path.join(tmpdir(), 'capturepack-chrome-lifecycle-'))
 
 try {
+  const stub = path.join(work, 'electron-stub.cjs')
+  writeFileSync(
+    stub,
+    `exports.app={` +
+      `getPath:(name)=>name==='userData'?${JSON.stringify(path.join(work, 'user-data'))}:${JSON.stringify(work)},` +
+      `getAppPath:()=>${JSON.stringify(path.join(work, 'app'))},` +
+      `isPackaged:false` +
+      `};` +
+      `exports.crashReporter={start:()=>{}};\n`,
+  )
   const bundle = path.join(work, 'check.cjs')
   execFileSync(
     process.execPath,
@@ -27,6 +37,7 @@ try {
       '--platform=node',
       '--format=cjs',
       `--outfile=${bundle}`,
+      `--alias:electron=${stub}`,
     ],
     { stdio: ['ignore', 'ignore', 'inherit'] },
   )
