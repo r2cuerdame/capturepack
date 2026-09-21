@@ -283,13 +283,13 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
       title: 'Event timeline',
       description:
         'Machine-readable timeline events of a VIDEO CapturePack (capture trigger, annotations added, ' +
-        'plugin events, export). Each event has t_ms (milliseconds since capture start t0), type, ' +
-        'source, and optional data. Optionally slice by from_ms/to_ms. Explicit still-image packs ' +
-        'and video packs omitting timeline.json return an explanatory empty result.',
+        'plugin events, export). Each event has t_ms (millisecond offset relative to t0; may be negative ' +
+        'for events preceding t0), type, source, and optional data. Optionally slice by from_ms/to_ms. ' +
+        'Explicit still-image packs and video packs omitting timeline.json return an explanatory empty result.',
       inputSchema: {
         ...idArg,
-        from_ms: z.number().min(0).optional().describe('Only events with t_ms >= from_ms.'),
-        to_ms: z.number().min(0).optional().describe('Only events with t_ms <= to_ms.'),
+        from_ms: z.number().optional().describe('Only events with t_ms >= from_ms (may be negative for events preceding t0).'),
+        to_ms: z.number().optional().describe('Only events with t_ms <= to_ms (may be negative for events preceding t0).'),
       },
     },
     (args) =>
