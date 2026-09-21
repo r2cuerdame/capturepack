@@ -50,7 +50,9 @@ export function safeViewerPath(value: unknown): string | null {
   ) {
     return null
   }
-  const segments = value.split('/')
+  const normalized = value.endsWith('/') ? value.slice(0, -1) : value
+  if (normalized === '') return null
+  const segments = normalized.split('/')
   if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
     return null
   }

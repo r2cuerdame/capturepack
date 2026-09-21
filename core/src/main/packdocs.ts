@@ -133,7 +133,7 @@ export function buildReadme(
   // images, right after the description — before the reader is asked to open
   // anything at all.
   const keyframes = keyframeSet(manifest, annotationsFile, renderPending)
-  const keyframeLines = keyframeSectionLines(keyframes, t, imageCapture)
+  const keyframeLines = keyframeSectionLines(keyframes, t, imageCapture, annotatedReplayFile)
   if (keyframeLines.length > 0) {
     lines.push(imageCapture ? '## Annotated image' : `## ${t('pack.keyframes')}`)
     lines.push('')
@@ -340,7 +340,7 @@ function buildOverviewSkill(
   // story as images — the single most useful thing in this document for a
   // model that cannot decode video.
   const keyframes = keyframeSet(manifest, annotationsFile, renderPending)
-  const keyframeLines = keyframeSectionLines(keyframes, t, imageCapture)
+  const keyframeLines = keyframeSectionLines(keyframes, t, imageCapture, annotatedReplayFile)
   if (keyframeLines.length > 0) {
     lines.push(imageCapture ? '## Annotated image' : `## ${t('pack.keyframes')}`)
     lines.push('')
