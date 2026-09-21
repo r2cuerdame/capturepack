@@ -259,6 +259,26 @@ console.log('\nRUNNING A PIPELINE')
   check('a failed idempotent action adds NOTHING to the ledger — the next run must be allowed to try again', run.newCompletedKeys.length === 0)
 }
 {
+  const timeoutStartedAt = Date.now()
+  const run = await runPipeline({
+    packId: PACK,
+    packState: 'complete',
+    steps: [step({ id: 'a' }, { timeoutMs: 1_000 })],
+    completedKeys: new Set(),
+    // Never settles. The pipeline must abandon it rather than wait for an
+    // action that cannot be made to stop.
+    execute: () => new Promise<void>(() => {}),
+    clock: fastClock(),
+  })
+  const timeoutWallClockMs = Date.now() - timeoutStartedAt
+  check('an action that never returns TIMES OUT and is retryable', run.results[0]?.outcome === 'timed-out' && run.results[0]?.retryable === true)
+  check(
+    'timeout budgeting uses the injected fast clock, not a wall-clock timer',
+    timeoutWallClockMs < 250,
+    `${String(timeoutWallClockMs)} ms`,
+  )
+}
+{
   const run = await runPipeline({
     packId: PACK,
     packState: 'complete',
@@ -275,17 +295,28 @@ console.log('\nRUNNING A PIPELINE')
   )
 }
 {
+  let timeoutCancelled = false
   const run = await runPipeline({
     packId: PACK,
     packState: 'complete',
-    steps: [step({ id: 'a' }, { timeoutMs: 1_000 })],
+    steps: [step({ id: 'a' }, { timeoutMs: 30_000 })],
     completedKeys: new Set(),
-    // Never settles. The pipeline must abandon it rather than wait for an
-    // action that cannot be made to stop.
-    execute: () => new Promise<void>(() => {}),
-    clock: fastClock(),
+    execute: async () => {},
+    clock: {
+      now: () => 0,
+      delay: (_ms, signal) =>
+        new Promise<void>((resolve) => {
+          const cancel = (): void => {
+            timeoutCancelled = true
+            resolve()
+          }
+          if (signal?.aborted) cancel()
+          else signal?.addEventListener('abort', cancel, { once: true })
+        }),
+    },
   })
-  check('an action that never returns TIMES OUT and is retryable', run.results[0]?.outcome === 'timed-out' && run.results[0]?.retryable === true)
+  check('an action that completes before its timeout succeeds', run.results[0]?.outcome === 'ok')
+  check('a completed action cancels its pending clock delay', timeoutCancelled)
 }
 {
   const run = await runPipeline({

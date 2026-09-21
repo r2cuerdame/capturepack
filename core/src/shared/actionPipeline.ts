@@ -32,8 +32,8 @@ export type ActionExecutor = (step: PipelineStep, attempt: number) => Promise<vo
 export interface PipelineClock {
   /** Monotonic-ish milliseconds. Injected so durations are testable. */
   now: () => number
-  /** Resolves after ms. Injected so retry backoff costs a test nothing. */
-  delay: (ms: number) => Promise<void>
+  /** Resolves after ms, or early when cancelled. Injected so waits are testable. */
+  delay: (ms: number, signal?: AbortSignal) => Promise<void>
 }
 
 export interface RunPipelineInput {
@@ -71,23 +71,29 @@ async function attemptOnce(
   execute: ActionExecutor,
   clock: PipelineClock,
 ): Promise<void> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const timeout = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => {
-      reject(new TimeoutError(`timed out after ${step.config.timeoutMs} ms`))
-    }, step.config.timeoutMs)
-  })
+  const timeoutController = new AbortController()
+  let timeoutActive = true
   try {
+    // Start the action before asking the clock for a delay. A fast clock may
+    // settle immediately, but an action that also settles immediately still
+    // completed within its budget.
+    const execution = execute(step, attempt)
+    const timeout = clock.delay(step.config.timeoutMs, timeoutController.signal).then(() => {
+      if (timeoutActive) {
+        throw new TimeoutError(`timed out after ${step.config.timeoutMs} ms`)
+      }
+    })
+
     // Promise.race, not an abort: an action that ignores cancellation must not
     // be able to hold the pipeline open, and the host cannot make a third-party
     // action stop. The attempt is abandoned, its result discarded, and the
     // pipeline moves on — which is exactly what "timeouts are budgets, not
     // suggestions" means when the other side may not cooperate.
-    await Promise.race([execute(step, attempt), timeout])
+    await Promise.race([execution, timeout])
   } finally {
-    if (timer !== undefined) clearTimeout(timer)
+    timeoutActive = false
+    timeoutController.abort()
   }
-  void clock
 }
 
 /**

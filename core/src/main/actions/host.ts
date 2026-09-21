@@ -297,9 +297,22 @@ function executorFor(request: ActionRunRequest) {
 
 const realClock = {
   now: () => Date.now(),
-  delay: (ms: number) =>
+  delay: (ms: number, signal?: AbortSignal) =>
     new Promise<void>((resolve) => {
-      setTimeout(resolve, ms)
+      if (signal?.aborted) {
+        resolve()
+        return
+      }
+
+      const timer = setTimeout(() => {
+        signal?.removeEventListener('abort', cancel)
+        resolve()
+      }, ms)
+      function cancel(): void {
+        clearTimeout(timer)
+        resolve()
+      }
+      signal?.addEventListener('abort', cancel, { once: true })
     }),
 }
 
