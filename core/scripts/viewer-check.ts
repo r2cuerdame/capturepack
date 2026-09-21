@@ -23,6 +23,8 @@ import {
   safeViewerPath,
   VIEWER_FORMAT_VERSION,
 } from '../src/main/viewer'
+import { buildReport } from '../src/main/report'
+import { buildReadme, buildSkills } from '../src/main/packdocs'
 import type {
   Annotation,
   AnnotationsFile,
@@ -388,6 +390,54 @@ function pureContractChecks(): void {
   check('path guard accepts an ordinary declared frame', safeViewerPath('frames/frame-01_00-01.000.png') === 'frames/frame-01_00-01.000.png')
   check('viewer raises 0.4 content to format 0.5.0', manifestWithViewerFormat({ ...base, format_version: '0.4.0' }).format_version === '0.5.0')
   check('viewer never lowers a future format', manifestWithViewerFormat({ ...base, format_version: '0.6.0' }).format_version === '0.6.0')
+
+  const noScreensManifest = videoManifest()
+  delete (noScreensManifest.environment as { screens?: unknown }).screens
+  const noScreensHtml = buildViewerHtml(noScreensManifest, annotations(), timeline(), 'en')
+  const noScreensReport = buildReport(noScreensManifest, annotations(), 'en', false, true)
+  const noScreensReadme = buildReadme(noScreensManifest, annotations(), 'en', false, true)
+  const noScreensSkills = buildSkills(noScreensManifest, annotations(), timeline(), 'en', false)
+  check(
+    'pack omitting screens generates viewer and docs safely without undefined',
+    noScreensHtml.includes('<dt>Screens</dt><dd>unknown</dd>') &&
+      !noScreensHtml.includes('undefined') &&
+      noScreensReport.includes('- **Screens:** unknown') &&
+      !noScreensReport.includes('undefined') &&
+      !noScreensReadme.includes('undefined') &&
+      !noScreensSkills.overview.includes('undefined'),
+  )
+
+  const noOsVersionManifest = videoManifest()
+  delete (noOsVersionManifest.environment as { os_version?: unknown }).os_version
+  const noOsVersionHtml = buildViewerHtml(noOsVersionManifest, annotations(), timeline(), 'en')
+  const noOsVersionReport = buildReport(noOsVersionManifest, annotations(), 'en', false, true)
+  const noOsVersionSkills = buildSkills(noOsVersionManifest, annotations(), timeline(), 'en', false)
+  check(
+    'pack omitting os_version generates viewer and docs without undefined',
+    noOsVersionHtml.includes('<dt>OS</dt><dd>windows</dd>') &&
+      !noOsVersionHtml.includes('undefined') &&
+      noOsVersionReport.includes('- **OS:** windows\n') &&
+      !noOsVersionReport.includes('undefined') &&
+      noOsVersionSkills.overview.includes('on windows') &&
+      !noOsVersionSkills.overview.includes('undefined'),
+  )
+
+  const minimalEnvManifest = videoManifest()
+  minimalEnvManifest.environment = { os: 'windows' }
+  const minimalEnvHtml = buildViewerHtml(minimalEnvManifest, annotations(), timeline(), 'en')
+  const minimalEnvReport = buildReport(minimalEnvManifest, annotations(), 'en', false, true)
+  const minimalEnvSkills = buildSkills(minimalEnvManifest, annotations(), timeline(), 'en', false)
+  check(
+    'pack omitting both screens and os_version generates viewer and docs without undefined',
+    minimalEnvHtml.includes('<dt>OS</dt><dd>windows</dd>') &&
+      minimalEnvHtml.includes('<dt>Screens</dt><dd>unknown</dd>') &&
+      !minimalEnvHtml.includes('undefined') &&
+      minimalEnvReport.includes('- **OS:** windows\n') &&
+      minimalEnvReport.includes('- **Screens:** unknown') &&
+      !minimalEnvReport.includes('undefined') &&
+      minimalEnvSkills.overview.includes('on windows.') &&
+      !minimalEnvSkills.overview.includes('undefined'),
+  )
 }
 
 async function writerIntegrationChecks(): Promise<void> {
@@ -440,6 +490,34 @@ async function writerIntegrationChecks(): Promise<void> {
     await refreshPackDocs(handle.dirPath, 'en')
     const renderedViewer = readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8')
     check('completed render regeneration selects declared annotated media', renderedViewer.includes('src="replay_annotated.webm"') && renderedViewer.includes('src="frames/frame-01_00-01.000.png"'))
+
+    const omittedEnvManifest = JSON.parse(
+      readFileSync(path.join(handle.dirPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    delete (omittedEnvManifest.environment as { screens?: unknown }).screens
+    delete (omittedEnvManifest.environment as { os_version?: unknown }).os_version
+    writeFileSync(
+      path.join(handle.dirPath, 'manifest.json'),
+      JSON.stringify(omittedEnvManifest, null, 2),
+      'utf8',
+    )
+    await refreshPackDocs(handle.dirPath, 'en')
+    const omittedViewer = readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8')
+    const omittedReport = readFileSync(path.join(handle.dirPath, 'report.md'), 'utf8')
+    const omittedReadme = readFileSync(path.join(handle.dirPath, 'README.md'), 'utf8')
+    const omittedSkills = readFileSync(path.join(handle.dirPath, 'skills', 'overview.md'), 'utf8')
+    check(
+      'refreshPackDocs regenerates viewer and docs for pack omitting screens and os_version without throwing or undefined',
+      omittedViewer.includes('<dt>Screens</dt><dd>unknown</dd>') &&
+        omittedViewer.includes('<dt>OS</dt><dd>windows</dd>') &&
+        !omittedViewer.includes('undefined') &&
+        omittedReport.includes('- **OS:** windows\n') &&
+        omittedReport.includes('- **Screens:** unknown') &&
+        !omittedReport.includes('undefined') &&
+        omittedSkills.includes('on windows.') &&
+        !omittedSkills.includes('undefined') &&
+        !omittedReadme.includes('undefined'),
+    )
 
     rmSync(path.join(handle.dirPath, 'viewer.html'), { force: true })
     mkdirSync(path.join(handle.dirPath, 'viewer.html'))
