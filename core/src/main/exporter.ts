@@ -2177,26 +2177,51 @@ export async function copyAfterSave(
 ): Promise<boolean> {
   if (mode === 'off') return true
   if (mode === 'folder') {
-    copyFolderToClipboard(dirPath)
-    return true
+    return await copyFolderToClipboard(dirPath)
   }
   return await copyTextToClipboard(mode === 'path' ? dirPath : analyzePackPrompt(dirPath))
 }
 
-function copyFolderToClipboard(dirPath: string): void {
+const FOLDER_CLIPBOARD_TIMEOUT_MS = 5_000
+
+async function copyFolderToClipboard(dirPath: string): Promise<boolean> {
   const escaped = dirPath.replace(/'/g, "''")
   const child = spawn(
     'powershell.exe',
     ['-NoProfile', '-Command', `Set-Clipboard -LiteralPath '${escaped}'`],
     { windowsHide: true, stdio: 'ignore' },
   )
-  child.on('error', (err) => console.error('capturepack: clipboard copy failed:', err))
-  child.on('exit', (code) => {
-    if (code !== 0 && code !== null) {
-      console.error(`capturepack: clipboard copy exited with code ${code}`)
+
+  return await new Promise<boolean>((resolve) => {
+    let settled = false
+    let timedOut = false
+    const finish = (succeeded: boolean): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      resolve(succeeded)
     }
+    const timeout = setTimeout(() => {
+      timedOut = true
+      console.error(
+        `capturepack: clipboard copy timed out after ${FOLDER_CLIPBOARD_TIMEOUT_MS} ms`,
+      )
+      // On Windows, SIGKILL uses TerminateProcess. Keep the child referenced and
+      // wait for close so copyAfterSave cannot resolve while PowerShell survives.
+      if (!child.kill('SIGKILL')) finish(false)
+    }, FOLDER_CLIPBOARD_TIMEOUT_MS)
+
+    child.once('error', (err) => {
+      console.error('capturepack: clipboard copy failed:', err)
+      finish(false)
+    })
+    child.once('close', (code) => {
+      if (!timedOut && code !== 0) {
+        console.error(`capturepack: clipboard copy exited with code ${String(code)}`)
+      }
+      finish(!timedOut && code === 0)
+    })
   })
-  child.unref()
 }
 
 function toJson(value: unknown): string {

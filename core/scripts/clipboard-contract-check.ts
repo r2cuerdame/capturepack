@@ -124,6 +124,28 @@ async function run(): Promise<void> {
     exporter.includes('await copyTextToClipboard(') &&
       !exporter.includes('clipboard.writeText(mode ==='),
   )
+  const folderCopy = exporter.slice(
+    exporter.indexOf('async function copyFolderToClipboard('),
+    exporter.indexOf('\nfunction toJson(', exporter.indexOf('async function copyFolderToClipboard(')),
+  )
+  check(
+    'automatic folder copy is awaited and returns its boolean outcome',
+    exporter.includes("if (mode === 'folder') {\n    return await copyFolderToClipboard(dirPath)\n  }") &&
+      folderCopy.includes('Promise<boolean>'),
+  )
+  check(
+    'folder copy reports launch and non-zero exit failures honestly',
+    folderCopy.includes("child.once('error'") &&
+      folderCopy.includes('finish(false)') &&
+      folderCopy.includes('code === 0'),
+  )
+  check(
+    'folder copy has a bounded timeout that terminates and awaits the child',
+    folderCopy.includes('FOLDER_CLIPBOARD_TIMEOUT_MS') &&
+      folderCopy.includes("child.kill('SIGKILL')") &&
+      folderCopy.includes("child.once('close'") &&
+      !folderCopy.includes('.unref()'),
+  )
   for (const [name, flow] of [
     ['image save', imageFlow],
     ['video save', videoFlow],
