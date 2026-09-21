@@ -310,7 +310,7 @@ function readPreviousRun(): PreviousRun | null {
  * know: a run that vanished outranks everything, and "it exited" is only ever
  * called CLEAN when nothing went unhandled along the way.
  */
-function statusOf(record: RunRecord): PreviousRunStatus {
+export function statusOf(record: RunRecord): PreviousRunStatus {
   if (record.exit === null) {
     // A version that is not this one means the build that wrote the marker is
     // not the build reading it: the installer closed it (issue #61 must not
@@ -324,7 +324,7 @@ function statusOf(record: RunRecord): PreviousRunStatus {
 // Hand-written validation rather than a cast: the file is on disk in a folder
 // the user can edit, and a garbled marker must degrade to "no previous run",
 // never to a crash on the startup path.
-function asRunRecord(value: unknown): RunRecord | null {
+export function asRunRecord(value: unknown): RunRecord | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
   const raw = value as Record<string, unknown>
   const version = typeof raw['version'] === 'string' ? raw['version'] : ''
@@ -345,11 +345,12 @@ function asRunRecord(value: unknown): RunRecord | null {
   return { version, startedAt, lastAliveAt, exit, faults, firstFaultAt, firstFaultSummary }
 }
 
-function isExitKind(value: unknown): value is ExitKind {
+export function isExitKind(value: unknown): value is ExitKind {
   return (
     value === 'user-quit' ||
     value === 'update-restart' ||
     value === 'startup-failure' ||
+    value === 'unattended-save' ||
     value === 'unknown'
   )
 }
