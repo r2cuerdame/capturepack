@@ -189,17 +189,18 @@ export function displaySummaryLines(
       manifest.media.replay_duration_ms ?? 0,
       d.replay_clock_offset_ms,
     )
+    const hasReplay = typeof d.replay === 'string' && d.replay.length > 0
     const compressed =
-      d.replay !== null && coverage.compressed
+      hasReplay && coverage.compressed
         ? ` — ${t('pack.replayCompressed', {
             media: (coverage.mediaMs / 1000).toFixed(1),
             capture: (coverage.captureMs / 1000).toFixed(1),
           })}`
         : ''
     const replay =
-      d.replay === null
-        ? 'no replay'
-        : `${((d.replay_duration_ms ?? 0) / 1000).toFixed(1)}s \`${d.replay}\`${compressed}`
+      hasReplay
+        ? `${((d.replay_duration_ms ?? 0) / 1000).toFixed(1)}s \`${d.replay}\`${compressed}`
+        : 'no replay'
     const focused = d.focused ? ` (${t('pack.displayFocused')})` : ''
     // How many boxes were drawn on THIS screen — the single most useful thing
     // to know about a display once every display is annotatable (SPEC §8.8).
@@ -229,7 +230,7 @@ export function extraDisplayFiles(manifest: Manifest): Array<{ name: string; wha
       name: d.snapshot,
       what: `Display ${d.index}, ${displayPixels(d)} — the same instant on another screen (original pixels, no annotations)`,
     })
-    if (d.replay !== null) {
+    if (typeof d.replay === 'string' && d.replay.length > 0) {
       files.push({
         name: d.replay,
         what: `Display ${d.index} screen recording, ${((d.replay_duration_ms ?? 0) / 1000).toFixed(1)}s — original evidence, never modified`,
@@ -477,7 +478,8 @@ export function buildReport(
   const annotatedReplayName = manifest.media.replay_annotated
   const annotatedReplayPending = hasReplay && renderPending && annotatedReplayName === undefined
   const hasAnnotatedReplay = annotatedReplayName !== undefined || annotatedReplayPending
-  const annotatedReplayFile = annotatedReplayName ?? 'replay_annotated.webm'
+  const annotatedReplayFile =
+    annotatedReplayName ?? (replayName.endsWith('.mp4') ? 'replay_annotated.mp4' : 'replay_annotated.webm')
   const replaySeconds = ((manifest.media.replay_duration_ms ?? 0) / 1000).toFixed(1)
   lines.push(`## ${t('pack.environment')}`)
   lines.push('')
