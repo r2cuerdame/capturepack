@@ -18,6 +18,7 @@ import { bundledExtensionVersion } from './install'
 import { ExtensionConnectionLedger } from './lifecycle'
 import { domPipePath } from './nativeHost'
 import { logError, logInfo, logWarn } from '../log'
+import { pngPixelSizeOf } from '../png'
 
 /** The protocol both halves speak (shared/protocol/protocol-v1.schema.json). */
 export const DOM_PROTOCOL_VERSION = 1
@@ -93,6 +94,14 @@ export interface DomDocumentSnapshot {
     scrollX: number
     scrollY: number
   }
+  /**
+   * What `viewport` and every rectangle describe: the visible viewport (a
+   * pick, a capture-time fetch) or the WHOLE DOCUMENT of a full-page capture
+   * (#157), whose rectangles are in document CSS pixels and whose `viewport`
+   * is the picture's CSS size. Absent from an extension older than 0.4.0,
+   * which only ever walked the viewport.
+   */
+  scope?: 'viewport' | 'document'
   url: string
   title: string
   elements: Array<{
@@ -139,6 +148,12 @@ export interface DomEvent {
    * and not the one whose client rectangle the app can translate.
    */
   document?: DomDocumentSnapshot
+  /**
+   * Present on the `dom.document.captured` event of a browser-page still
+   * (#157): how the picture was made, so a reader can weigh it — its scale,
+   * whether the page was cut at the tile budget or scaled down to fit.
+   */
+  page?: BrowserPageGeometry
 }
 
 /**
@@ -216,6 +231,278 @@ let domRequestSeq = 0
 
 export function browserGrantState(): boolean {
   return browserGranted
+}
+
+// ---------------------------------------------------------------------------
+// A WHOLE PAGE, ON THE USER'S CLICK (#157).
+//
+// The extension's toolbar button photographs the current page top to bottom
+// and sends it here as a header (`page.captured`: the page's geometry, its
+// document walk, the byte count) followed by the picture as base64 chunks
+// (`page.chunk`). The pieces are gathered per capture id, bounded in size and
+// time, verified against the header — the byte count, and the PNG's own IHDR
+// against the declared pixel size — and handed to ONE listener, which is the
+// app's normal still-image flow. The extension is answered on the same socket
+// (`page.received`) so its icon can say what happened.
+// ---------------------------------------------------------------------------
+
+/** The picture's own account of itself, as the extension measured it. */
+export interface BrowserPageGeometry {
+  url: string
+  title: string
+  /** The document's CSS size, as photographed. */
+  cssWidth: number
+  cssHeight: number
+  /** The picture's size in pixels — the PNG's IHDR agrees, or the bundle is refused. */
+  pixelWidth: number
+  pixelHeight: number
+  /** The page's device pixel ratio (display scale times browser zoom). */
+  devicePixelRatio: number
+  /** Picture pixels per CSS pixel: the DPR, or less when the page was downscaled to fit. */
+  scale: number
+  clientWidth: number
+  clientHeight: number
+  scrollWidth: number
+  scrollHeight: number
+  /** Viewports photographed. */
+  tiles: number
+  /** The page was taller than the tile budget; the picture is its top. */
+  truncated: boolean
+  /** The picture is smaller than the device pixel ratio would make it. */
+  downscaled: boolean
+  /** `cssWidth * scale` is an integer, so element placement is exact. */
+  exactScale: boolean
+  /** Fixed and stuck-sticky elements hidden after the first tile. */
+  hiddenRepeating: number
+  captureMs: number
+}
+
+export interface BrowserPageCapture {
+  captureId: string
+  /** What triggered it: `toolbar` today. */
+  via: string
+  /** Wall-clock milliseconds when the extension started the capture. */
+  capturedAtMs: number
+  tab: { url: string; title: string }
+  page: BrowserPageGeometry
+  /** The whole document, in document CSS pixels; null if the walker could not run. */
+  document: DomDocumentSnapshot | null
+  png: Buffer
+  /** From the PNG's own IHDR. */
+  width: number
+  height: number
+  extensionVersion: string | null
+}
+
+export interface BrowserPageOutcome {
+  ok: boolean
+  reason?: string
+}
+
+export type BrowserPageListener = (capture: BrowserPageCapture) => Promise<BrowserPageOutcome>
+
+let pageListener: BrowserPageListener | null = null
+
+/** The app's one consumer of captured pages: the still-image editor flow. */
+export function onBrowserPageCaptured(listener: BrowserPageListener | null): void {
+  pageListener = listener
+}
+
+/** Bytes of picture one capture may carry; 64 MB is a very tall HiDPI page. */
+const PAGE_MAX_PNG_BYTES = 64 * 1024 * 1024
+/** Chunks per capture; the extension sends 512 KiB of base64 per chunk. */
+const PAGE_MAX_CHUNKS = 1024
+/** A capture whose chunks stop arriving is dropped after this. */
+const PAGE_ASSEMBLY_TIMEOUT_MS = 30_000
+/** Captures in flight at once, across every socket. */
+const PAGE_MAX_PENDING = 4
+
+interface PendingPage {
+  socket: net.Socket
+  header: DomPageHeaderMessage
+  chunks: Array<string | undefined>
+  received: number
+  chars: number
+  timer: NodeJS.Timeout
+}
+
+const pendingPages = new Map<string, PendingPage>()
+let pagesReceived = 0
+let pagesRefused = 0
+
+/** What Settings and a bug report can quote about page captures. */
+export function browserPageStats(): { received: number; refused: number; pending: number } {
+  return { received: pagesReceived, refused: pagesRefused, pending: pendingPages.size }
+}
+
+function replyPage(socket: net.Socket, captureId: string, outcome: BrowserPageOutcome): void {
+  try {
+    socket.write(
+      `${JSON.stringify({
+        type: 'page.received',
+        protocol: DOM_PROTOCOL_VERSION,
+        capture_id: captureId,
+        ok: outcome.ok,
+        ...(outcome.reason === undefined ? {} : { reason: outcome.reason.slice(0, 200) }),
+      })}\n`,
+    )
+  } catch {
+    // The browser hung up; there is nobody to tell.
+  }
+}
+
+function dropPendingPage(captureId: string, reason: string): void {
+  const pending = pendingPages.get(captureId)
+  if (pending === undefined) return
+  clearTimeout(pending.timer)
+  pendingPages.delete(captureId)
+  pagesRefused += 1
+  logWarn(`[chrome] full page ${captureId} refused: ${reason}`)
+  replyPage(pending.socket, captureId, { ok: false, reason })
+}
+
+function dropPendingPagesOn(socket: net.Socket): void {
+  for (const [id, pending] of pendingPages) {
+    if (pending.socket !== socket) continue
+    clearTimeout(pending.timer)
+    pendingPages.delete(id)
+  }
+}
+
+function beginPendingPage(socket: net.Socket, header: DomPageHeaderMessage): void {
+  if (pendingPages.has(header.captureId)) {
+    dropPendingPage(header.captureId, 'duplicate-capture-id')
+  }
+  if (pendingPages.size >= PAGE_MAX_PENDING) {
+    pagesRefused += 1
+    logWarn(`[chrome] full page ${header.captureId} refused: too-many-in-flight`)
+    replyPage(socket, header.captureId, { ok: false, reason: 'too-many-in-flight' })
+    return
+  }
+  const timer = setTimeout(() => {
+    dropPendingPage(header.captureId, `incomplete-after-${String(PAGE_ASSEMBLY_TIMEOUT_MS)}ms`)
+  }, PAGE_ASSEMBLY_TIMEOUT_MS)
+  timer.unref()
+  pendingPages.set(header.captureId, {
+    socket,
+    header,
+    chunks: new Array<string | undefined>(header.chunks).fill(undefined),
+    received: 0,
+    chars: 0,
+    timer,
+  })
+  logInfo(
+    `[chrome] full page ${header.captureId} announced: ${header.page.url.slice(0, 120)} `
+    + `${String(header.page.pixelWidth)}x${String(header.page.pixelHeight)} px, `
+    + `${String(header.page.tiles)} tile(s), ${String(header.bytes)} bytes in ${String(header.chunks)} chunk(s)`
+    + `${header.document === null ? ', no document' : `, ${String(header.document.elements.length)} element(s)`}`,
+  )
+}
+
+function addPendingChunk(socket: net.Socket, chunk: DomPageChunkMessage): void {
+  const pending = pendingPages.get(chunk.captureId)
+  if (pending === undefined) {
+    // A chunk for a capture this side never heard announced, already dropped,
+    // or already finished: refused out loud, once per chunk is too loud, so
+    // this is the only line it costs.
+    rejected += 1
+    lastRejection = `page-chunk-without-header:${chunk.captureId.slice(0, 32)}`
+    return
+  }
+  if (pending.socket !== socket) {
+    dropPendingPage(chunk.captureId, 'chunk-from-another-connection')
+    return
+  }
+  if (chunk.index < 0 || chunk.index >= pending.chunks.length) {
+    dropPendingPage(chunk.captureId, `chunk-index-out-of-range:${String(chunk.index)}`)
+    return
+  }
+  if (pending.chunks[chunk.index] !== undefined) {
+    dropPendingPage(chunk.captureId, `chunk-repeated:${String(chunk.index)}`)
+    return
+  }
+  pending.chars += chunk.data.length
+  if (pending.chars > Math.ceil(pending.header.bytes / 3) * 4 + 4) {
+    dropPendingPage(chunk.captureId, 'more-data-than-announced')
+    return
+  }
+  pending.chunks[chunk.index] = chunk.data
+  pending.received += 1
+  if (pending.received < pending.chunks.length) return
+  clearTimeout(pending.timer)
+  pendingPages.delete(chunk.captureId)
+  void finishPendingPage(pending)
+}
+
+async function finishPendingPage(pending: PendingPage): Promise<void> {
+  const { header, socket } = pending
+  const refuse = (reason: string): void => {
+    pagesRefused += 1
+    logWarn(`[chrome] full page ${header.captureId} refused: ${reason}`)
+    replyPage(socket, header.captureId, { ok: false, reason })
+  }
+  let png: Buffer
+  try {
+    png = Buffer.from(pending.chunks.join(''), 'base64')
+  } catch {
+    refuse('picture-not-base64')
+    return
+  }
+  pending.chunks.length = 0
+  if (png.length !== header.bytes) {
+    refuse(`picture-bytes-mismatch:${String(png.length)}!=${String(header.bytes)}`)
+    return
+  }
+  const size = pngPixelSizeOf(png.subarray(0, 24))
+  if (size === null) {
+    refuse('picture-not-png')
+    return
+  }
+  if (size.width !== header.page.pixelWidth || size.height !== header.page.pixelHeight) {
+    refuse(
+      `picture-size-mismatch:${String(size.width)}x${String(size.height)}`
+      + `!=${String(header.page.pixelWidth)}x${String(header.page.pixelHeight)}`,
+    )
+    return
+  }
+  const listener = pageListener
+  if (listener === null) {
+    refuse('no-page-listener')
+    return
+  }
+  pagesReceived += 1
+  logInfo(
+    `[chrome] full page ${header.captureId} received: ${header.page.url.slice(0, 120)} `
+    + `${String(size.width)}x${String(size.height)} px from ${String(header.page.tiles)} tile(s)`
+    + ` in ${String(header.page.captureMs)} ms`
+    + `${header.page.truncated ? ' (TRUNCATED at the tile budget)' : ''}`
+    + `${header.page.downscaled ? ' (downscaled to fit)' : ''}`,
+  )
+  const capture: BrowserPageCapture = {
+    captureId: header.captureId,
+    via: header.via,
+    capturedAtMs: header.timestamp,
+    tab: header.tab,
+    page: header.page,
+    document: header.document,
+    png,
+    width: size.width,
+    height: size.height,
+    extensionVersion: extensionConnections.latest()?.version ?? null,
+  }
+  let outcome: BrowserPageOutcome
+  try {
+    outcome = await listener(capture)
+  } catch (err) {
+    outcome = { ok: false, reason: `editor-failed: ${String(err instanceof Error ? err.message : err).slice(0, 160)}` }
+  }
+  if (!outcome.ok) {
+    pagesRefused += 1
+    logWarn(`[chrome] full page ${header.captureId} not opened: ${outcome.reason ?? 'unknown'}`)
+  } else {
+    logInfo(`[chrome] full page ${header.captureId} opened in the editor`)
+  }
+  replyPage(socket, header.captureId, outcome)
 }
 
 /**
@@ -422,9 +709,114 @@ interface DomResponseMessage {
 /** Bound on windows adopted from one reply; the extension caps at 6. */
 const DOM_RESPONSE_MAX_WINDOWS = 8
 
+/** `page.captured`: the announcement of a full-page picture (#157). */
+interface DomPageHeaderMessage {
+  kind: 'pageHeader'
+  captureId: string
+  via: string
+  timestamp: number
+  tab: { url: string; title: string }
+  page: BrowserPageGeometry
+  document: DomDocumentSnapshot | null
+  bytes: number
+  chunks: number
+}
+
+/** `page.chunk`: one base64 piece of that picture. */
+interface DomPageChunkMessage {
+  kind: 'pageChunk'
+  captureId: string
+  index: number
+  data: string
+}
+
+/** `page.capture.failed`: the extension could not capture, and why. Diagnostics only. */
+interface DomPageFailedMessage {
+  kind: 'pageFailed'
+  via: string
+  stage: string
+  reason: string
+  tab: { url: string; title: string } | null
+}
+
 type ParseOutcome =
-  | { ok: true; value: DomEvent | DomHello | DomPickerMessage | DomGrantMessage | DomResponseMessage }
+  | {
+      ok: true
+      value:
+        | DomEvent
+        | DomHello
+        | DomPickerMessage
+        | DomGrantMessage
+        | DomResponseMessage
+        | DomPageHeaderMessage
+        | DomPageChunkMessage
+        | DomPageFailedMessage
+    }
   | { ok: false; reason: string }
+
+/** A capture id is the extension's own token; bounded and plain so it can be logged. */
+function parseCaptureId(raw: unknown): string | null {
+  return typeof raw === 'string' && /^[A-Za-z0-9_-]{1,64}$/u.test(raw) ? raw : null
+}
+
+/**
+ * THE PAGE'S GEOMETRY, VALIDATED LIKE EVERYTHING ELSE HERE. Every number is
+ * finite and bounded; the sizes must be positive; the picture's pixel size is
+ * checked again against the PNG's own header once the bytes are in.
+ */
+export function parsePageGeometry(raw: unknown): BrowserPageGeometry | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const p = raw as Record<string, unknown>
+  // Two spellings, both real, for the same reason `parseDomDocument` reads two:
+  // the wire says `cssWidth`, the pack says `css_width` (SPEC §11.4).
+  const snake = (k: string): string => k.replace(/[A-Z]/gu, (c) => `_${c.toLowerCase()}`)
+  const num = (k: string): number | null => {
+    const n = p[k] ?? p[snake(k)]
+    return typeof n === 'number' && Number.isFinite(n) && Math.abs(n) <= MAX_DOM_COORDINATE ? n : null
+  }
+  const flag = (k: string): boolean => (p[k] ?? p[snake(k)]) === true
+  const pos = (k: string): number | null => {
+    const n = num(k)
+    return n !== null && n > 0 ? n : null
+  }
+  const cssWidth = pos('cssWidth')
+  const cssHeight = pos('cssHeight')
+  const pixelWidth = pos('pixelWidth')
+  const pixelHeight = pos('pixelHeight')
+  const devicePixelRatio = pos('devicePixelRatio')
+  const scale = pos('scale')
+  if (
+    cssWidth === null || cssHeight === null || pixelWidth === null || pixelHeight === null
+    || devicePixelRatio === null || scale === null || devicePixelRatio > 16 || scale > 16
+    || !Number.isInteger(pixelWidth) || !Number.isInteger(pixelHeight)
+  ) {
+    return null
+  }
+  const tilesRaw = p['tiles']
+  const tiles = Array.isArray(tilesRaw)
+    ? tilesRaw.length
+    : typeof tilesRaw === 'number' && Number.isFinite(tilesRaw) ? Math.max(0, Math.round(tilesRaw)) : 0
+  return {
+    url: typeof p['url'] === 'string' ? p['url'].slice(0, 2048) : '',
+    title: typeof p['title'] === 'string' ? p['title'].slice(0, 512) : '',
+    cssWidth,
+    cssHeight,
+    pixelWidth,
+    pixelHeight,
+    devicePixelRatio,
+    scale,
+    clientWidth: pos('clientWidth') ?? cssWidth,
+    clientHeight: pos('clientHeight') ?? cssHeight,
+    scrollWidth: pos('scrollWidth') ?? cssWidth,
+    scrollHeight: pos('scrollHeight') ?? cssHeight,
+    tiles,
+    truncated: flag('truncated'),
+    downscaled: flag('downscaled'),
+    exactScale: flag('exactScale'),
+    hiddenRepeating: Math.max(0, Math.round(num('hiddenRepeating') ?? 0)),
+    captureMs: Math.max(0, Math.round(num('captureMs') ?? 0)),
+  }
+}
 
 function refuse(reason: string): ParseOutcome {
   return { ok: false, reason }
@@ -533,6 +925,7 @@ export function parseDomDocument(doc: unknown): DomDocumentSnapshot | null {
             scrollX: either(v, 'scrollX', 'scroll_x') ?? 0,
             scrollY: either(v, 'scrollY', 'scroll_y') ?? 0,
           },
+          ...(d['scope'] === 'document' || d['scope'] === 'viewport' ? { scope: d['scope'] } : {}),
           url: typeof d['url'] === 'string' ? d['url'].slice(0, 2048) : '',
           title: typeof d['title'] === 'string' ? d['title'].slice(0, 512) : '',
           elements,
@@ -673,6 +1066,70 @@ function parse(raw: unknown): ParseOutcome {
       },
     }
   }
+  // A FULL PAGE, IN PIECES (#157). The header is validated whole here; the
+  // chunks are only checked for shape, because what they add up to is checked
+  // once, when the last one is in (`finishPendingPage`).
+  if (type === 'page.captured') {
+    const captureId = parseCaptureId(m['capture_id'])
+    if (captureId === null) return refuse('page-without-capture-id')
+    const tab = parseTab(m['tab'])
+    if (tab === null) return refuse('page-missing-or-malformed-tab')
+    const page = parsePageGeometry(m['page'])
+    if (page === null) return refuse('page-geometry-malformed')
+    const pngRaw = m['png']
+    const png = typeof pngRaw === 'object' && pngRaw !== null ? (pngRaw as Record<string, unknown>) : null
+    const bytes = png !== null && typeof png['bytes'] === 'number' ? png['bytes'] : Number.NaN
+    const chunks = png !== null && typeof png['chunks'] === 'number' ? png['chunks'] : Number.NaN
+    if (!Number.isInteger(bytes) || bytes <= 0 || bytes > PAGE_MAX_PNG_BYTES) {
+      return refuse(`page-picture-size-refused:${String(bytes)}`)
+    }
+    if (!Number.isInteger(chunks) || chunks <= 0 || chunks > PAGE_MAX_CHUNKS) {
+      return refuse(`page-chunk-count-refused:${String(chunks)}`)
+    }
+    const timestamp = m['timestamp']
+    return {
+      ok: true,
+      value: {
+        kind: 'pageHeader',
+        captureId,
+        via: typeof m['via'] === 'string' ? m['via'].slice(0, 32) : 'unknown',
+        timestamp: typeof timestamp === 'number' && Number.isFinite(timestamp) && timestamp > 0
+          ? timestamp
+          : Date.now(),
+        tab,
+        page,
+        document: parseDomDocument(m['document']),
+        bytes,
+        chunks,
+      },
+    }
+  }
+  if (type === 'page.chunk') {
+    const captureId = parseCaptureId(m['capture_id'])
+    if (captureId === null) return refuse('page-chunk-without-capture-id')
+    const index = m['index']
+    const data = m['data']
+    if (typeof index !== 'number' || !Number.isInteger(index) || index < 0) {
+      return refuse('page-chunk-index-malformed')
+    }
+    if (typeof data !== 'string' || data.length === 0 || data.length % 4 !== 0
+      || !/^[A-Za-z0-9+/]*={0,2}$/u.test(data)) {
+      return refuse('page-chunk-not-base64')
+    }
+    return { ok: true, value: { kind: 'pageChunk', captureId, index, data } }
+  }
+  if (type === 'page.capture.failed') {
+    return {
+      ok: true,
+      value: {
+        kind: 'pageFailed',
+        via: typeof m['via'] === 'string' ? m['via'].slice(0, 32) : 'unknown',
+        stage: typeof m['stage'] === 'string' ? m['stage'].slice(0, 32) : 'unknown',
+        reason: typeof m['reason'] === 'string' ? m['reason'].slice(0, 200) : 'unknown',
+        tab: parseTab(m['tab']),
+      },
+    }
+  }
   if (type === 'picker.armed' || type === 'picker.disarmed' || type === 'picker.failed') {
     const reason = m['reason']
     return {
@@ -766,6 +1223,9 @@ function parse(raw: unknown): ParseOutcome {
   if (parsedDocument !== null) event.document = parsedDocument
   const parsedViewport = parseDomViewport(m['viewport'])
   if (parsedViewport !== null) event.viewport = parsedViewport
+  // How a browser-page picture was made (#157), read back so a re-edit keeps it.
+  const parsedPage = type === 'dom.document.captured' ? parsePageGeometry(m['page']) : null
+  if (parsedPage !== null) event.page = parsedPage
   if (type === 'dom.element.selected' && event.element === undefined) {
     return refuse(elementRefusal)
   }
@@ -846,6 +1306,7 @@ export function startDomBridge(): void {
     const disconnect = (): void => {
       hostSockets.delete(socket)
       extensionConnections.remove(socket)
+      dropPendingPagesOn(socket)
     }
     socket.on('data', (chunk: Buffer) => {
       buffer += chunk.toString('utf8')
@@ -880,6 +1341,15 @@ export function startDomBridge(): void {
             rejected += 1
             lastRejection = result.reason
             logWarn(`[chrome] refused a browser message: ${result.reason}`)
+            // A refused page announcement is still answered, so the icon in
+            // the browser says "refused: why" rather than waiting out its
+            // acknowledgement timeout and saying "no answer" (#157).
+            const announced = parsed as Record<string, unknown> | null
+            if (typeof announced === 'object' && announced !== null
+              && announced['type'] === 'page.captured'
+              && typeof announced['capture_id'] === 'string') {
+              replyPage(socket, announced['capture_id'].slice(0, 64), { ok: false, reason: result.reason })
+            }
           } else if ('kind' in result.value && result.value.kind === 'hello') {
             const hello = result.value
             extensionConnections.upsert(socket, {
@@ -921,6 +1391,17 @@ export function startDomBridge(): void {
               domRequests.delete(answer.requestId)
               pending(answer)
             }
+          } else if ('kind' in result.value && result.value.kind === 'pageHeader') {
+            beginPendingPage(socket, result.value)
+          } else if ('kind' in result.value && result.value.kind === 'pageChunk') {
+            addPendingChunk(socket, result.value)
+          } else if ('kind' in result.value && result.value.kind === 'pageFailed') {
+            const failure = result.value
+            const where = failure.tab === null ? '' : ` on ${failure.tab.url.slice(0, 200)}`
+            logWarn(
+              `[chrome] full-page capture failed at ${failure.stage} (${failure.via}): `
+              + `${failure.reason}${where}`,
+            )
           } else if ('kind' in result.value && result.value.kind === 'picker') {
             const signal = result.value
             pickerState = {
@@ -985,6 +1466,8 @@ export function stopDomBridge(): void {
   for (const socket of hostSockets) socket.destroy()
   hostSockets.clear()
   extensionConnections.clear()
+  for (const pending of pendingPages.values()) clearTimeout(pending.timer)
+  pendingPages.clear()
   const active = server
   server = null
   if (active !== null) {

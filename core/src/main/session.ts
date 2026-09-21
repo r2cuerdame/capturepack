@@ -102,7 +102,7 @@ import {
   requestDomForCapture,
   parseDomPayload,
 } from './chrome/domBridge'
-import type { DomEvent } from './chrome/domBridge'
+import type { BrowserPageCapture, BrowserPageOutcome, DomEvent } from './chrome/domBridge'
 import {
   addManifestPlugin,
   savePack,
@@ -400,6 +400,174 @@ export async function startImageCaptureFlow(settings: Settings): Promise<void> {
   } finally {
     flowActive = false
     endFlowLatency()
+  }
+}
+
+/**
+ * A WHOLE WEB PAGE FROM THE BROWSER EXTENSION, INTO THE SAME EDITOR (#157).
+ *
+ * The user clicked the CapturePack icon in Chrome; the extension photographed
+ * the page top to bottom, walked its document in the same coordinates, and
+ * handed the bundle to the app. From here it is a still: the picture is the
+ * source raster, the page is its browser context, and it goes through
+ * `runImageEditor` — the exact code a `Ctrl+Alt+S` still goes through after
+ * the region selector — so there is no second editor and no second pack shape.
+ *
+ * Resolves with what the extension is told: `ok` once the editor is open (the
+ * pack is already save-first written by then), or the reason it is not.
+ */
+/** The extension abandons a page capture after this long (full-page-capture.js MAX_CAPTURE_MS). */
+const BROWSER_PAGE_CAPTURE_BUDGET_MS = 90_000
+
+export function startBrowserPageFlow(
+  settings: Settings,
+  capture: BrowserPageCapture,
+): Promise<BrowserPageOutcome> {
+  if (flowActive) {
+    const focused = focusActiveEditor()
+    logWarn(
+      focused
+        ? '[page] browser page arrived while an editor was already open — focused that editor'
+        : '[page] browser page arrived while another flow was still preparing — refused',
+    )
+    return Promise.resolve({ ok: false, reason: focused ? 'editor-already-open' : 'capture-in-progress' })
+  }
+  logInfo(
+    `[page] browser page received: ${capture.page.url.slice(0, 120)} `
+    + `${String(capture.width)}x${String(capture.height)} px`,
+  )
+  flowActive = true
+  beginFlowLatency('image')
+  return new Promise<BrowserPageOutcome>((resolve) => {
+    let settled = false
+    const settle = (outcome: BrowserPageOutcome): void => {
+      if (settled) return
+      settled = true
+      resolve(outcome)
+    }
+    void (async () => {
+      try {
+        await runImageEditor(settings, prepareBrowserPageStill(capture, () => settle({ ok: true })))
+      } catch (err) {
+        logError('[page] opening the browser page failed:', err)
+        settle({ ok: false, reason: errorMessage(err).slice(0, 160) })
+        dialog.showErrorBox(
+          'CapturePack',
+          uiT(settings)('app.captureFailed', { error: errorMessage(err) }),
+        )
+      } finally {
+        flowActive = false
+        endFlowLatency()
+        // The editor closed before it ever reported itself visible: the pack
+        // was still written, so the extension is told it went through.
+        settle({ ok: true })
+      }
+    })()
+  })
+}
+
+/**
+ * The extension's bundle as the one shape `runImageEditor` takes.
+ *
+ * THE PICTURE IS THE WINDOW. A desktop still places a page through the browser
+ * window's client rectangle, measured by the surface ring; here the picture
+ * IS the page, so the one window in the floor is the browser, titled as the
+ * tab, whose client rectangle is the whole picture. The event's `viewport` is
+ * the document's CSS size with `dpr` set to the picture's pixels per CSS pixel,
+ * so the DOM provider's own derivation — scale from `client.width /
+ * viewport.width`, chrome height from the difference — yields the scale the
+ * extension measured and a chrome height of zero, with no special case in the
+ * reader (SPEC §11.4).
+ */
+function prepareBrowserPageStill(
+  capture: BrowserPageCapture,
+  onEditorVisible: () => void,
+): PreparedStill {
+  const { width, height, page } = capture
+  // A page without a title would match no window (an empty title matches
+  // nothing rather than everything — `titleMatches`), so the URL stands in.
+  const title = capture.tab.title.trim() !== '' ? capture.tab.title : page.url
+  const tab = { url: capture.tab.url, title }
+  const whole = { x: 0, y: 0, width, height }
+  const floor: ContextObservation = {
+    tMs: 0,
+    windows: [{
+      title,
+      process: 'chrome',
+      class_name: 'Chrome_WidgetWin_1',
+      bounds: whole,
+      client_bounds: { ...whole },
+      display: 1,
+      focused: true,
+      z: 0,
+      hasControls: false,
+      tree: 'skipped',
+    }],
+    elements: [],
+  }
+  const capturedAt = new Date(capture.capturedAtMs)
+  const merged = mergeImageWindowFloor(null, floor, isoWithOffset(capturedAt))
+  const uiaReady = Promise.resolve(
+    sealUiaPayload(
+      merged === null
+        ? null
+        // `budget_ms` is the bound the walk that produced this payload was
+        // given (SPEC §11.3). No UI Automation dump ran for a page; the one
+        // window here came out of the extension's capture, whose own bound is
+        // ninety seconds — so that is the number written, not a zero the
+        // validator rightly refuses.
+        : { ...merged, budget_ms: BROWSER_PAGE_CAPTURE_BUDGET_MS },
+    ),
+  )
+  const allDisplays = screen.getAllDisplays()
+  const screens = allDisplays.map((display) => ({
+    width: Math.round(display.size.width * display.scaleFactor),
+    height: Math.round(display.size.height * display.scaleFactor),
+    scale: display.scaleFactor,
+  }))
+  const editorDisplay = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+  const pageEvent: DomEvent | null = capture.document === null
+    ? null
+    : {
+        tMs: 0,
+        type: 'dom.document.captured',
+        tab,
+        document: { ...capture.document, url: capture.document.url || page.url, title: capture.document.title || title },
+        viewport: {
+          width: page.cssWidth,
+          height: page.cssHeight,
+          dpr: page.scale,
+          screenX: null,
+          screenY: null,
+          outerWidth: null,
+          outerHeight: null,
+        },
+        page,
+      }
+  return {
+    triggerAt: capture.capturedAtMs,
+    scope: 'browser-page',
+    snapshotPng: capture.png,
+    width,
+    height,
+    screens,
+    editorBounds: editorDisplay.bounds,
+    imageDipSpace: null,
+    uiaReady,
+    imageWindows: floor,
+    timelineData: {
+      scope: 'browser-page',
+      source: 'chrome-extension',
+      via: capture.via,
+      url: page.url,
+      title,
+    },
+    // The page is already in hand and IS this instant: one event, age zero.
+    collectDom: () => Promise.resolve({
+      events: pageEvent === null ? [] : [pageEvent],
+      ages: pageEvent === null ? [] : [0],
+    }),
+    onEditorVisible,
   }
 }
 
@@ -938,12 +1106,12 @@ function captureMetadataFromManifest(manifest: Manifest): {
     throw new Error('image CapturePack must not declare replay or per-display media')
   }
   const scope = manifest.media.image_scope
-  if (scope !== 'region' && scope !== 'fullscreen') {
+  if (scope !== 'region' && scope !== 'fullscreen' && scope !== 'browser-page') {
     throw new Error('image CapturePack has no valid media.image_scope')
   }
-  if (scope === 'fullscreen') {
+  if (scope === 'fullscreen' || scope === 'browser-page') {
     if (manifest.media.crop_bounds !== undefined) {
-      throw new Error('fullscreen image CapturePack must not declare crop_bounds')
+      throw new Error(`${scope} image CapturePack must not declare crop_bounds`)
     }
     return { captureKind: 'image', imageScope: scope }
   }
@@ -1391,24 +1559,128 @@ async function runImageFlowWithContext(
   desktopPng = null
   snapshots.clear()
 
+  const cropBounds = imageCropBounds(selection)
+  const imageDipSpace = imageRegionContextSpace(
+    selection,
+    width,
+    height,
+    selectedDisplay,
+  )
+  await runImageEditor(settings, {
+    triggerAt,
+    scope: selection.mode,
+    ...(cropBounds === undefined ? {} : { cropBounds }),
+    snapshotPng,
+    width,
+    height,
+    screens: screenDeclaration,
+    editorBounds: selectedDisplay.bounds,
+    imageDipSpace,
+    uiaReady,
+    imageWindows,
+    timelineData: {
+      hotkey: settings.imageCaptureHotkey,
+      scope: selection.mode,
+    },
+    // THE BROWSER'S HALF OF THE SAME INSTANT, FOR A STILL (#123).
+    //
+    // This flow used to pass `domEvents: []` and write no chrome-dom directory
+    // at all, so the still — the capture the whole product now says carries
+    // the most context — was the one that carried none of the page. A replay
+    // takes its whole window because it HAS one; a screenshot is a single
+    // instant, so it takes a short bounded lookback and records how old each
+    // pick was (STILL_DOM_LOOKBACK_MS, `age_ms`).
+    collectDom: async () => {
+      const domNowMs = contextNowMs()
+      // ASK THE BROWSER DIRECTLY, AT THE CAPTURE INSTANT (#125).
+      //
+      // The point of the whole exercise: the user presses ONE key —
+      // CapturePack's own global hotkey — and the page comes with the
+      // screenshot. That is only possible because the browser was granted
+      // once; Chrome refuses a page to a request that did not start inside
+      // Chrome, so without the grant this returns null immediately and the
+      // pack is written exactly as it was before.
+      //
+      // Bounded, and awaited beside the UIA dump rather than after it: a
+      // capture is never allowed to wait on a browser.
+      const fetched = await requestDomForCapture(STILL_DOM_FETCH_TIMEOUT_MS)
+      const requested = domRequestEvents(fetched, domNowMs)
+      const buffered =
+        domNowMs === null
+          ? []
+          : domEventsBetween(domNowMs - STILL_DOM_LOOKBACK_MS, domNowMs)
+      if (domNowMs === null) return null
+      // The fetch describes THIS instant, so it leads — one document per
+      // visible browser window (#132); a click the user made just before it
+      // still rides along, aged.
+      const rawEvents = [...requested, ...buffered]
+      return { events: rawEvents, ages: rawEvents.map((e) => Math.max(0, domNowMs - e.tMs)) }
+    },
+  })
+}
+
+/**
+ * EVERYTHING A STILL NEEDS ONCE ITS PIXELS ARE DECIDED.
+ *
+ * The desktop still decides them with the region selector; a browser-page
+ * still (#157) receives them from the extension. From here on the two are ONE
+ * flow — save-first, the browser's half written beside it, the same editor
+ * window, the same save pipeline — because a second editor path is how two
+ * captures of the same kind come to disagree about what a pack is.
+ */
+interface PreparedStill {
+  triggerAt: number
+  scope: ImageCaptureScope
+  cropBounds?: ImageCropBounds
+  snapshotPng: Buffer
+  width: number
+  height: number
+  screens: Array<{
+    width: number
+    height: number
+    scale: number
+    bounds?: { x: number; y: number; width: number; height: number }
+  }>
+  /** Where the editor window opens. */
+  editorBounds: { x: number; y: number; width: number; height: number }
+  /** The affine desktop-DIP anchor of a one-monitor crop, or null. */
+  imageDipSpace: {
+    snapshotPixelsPerDip: number
+    snapshotDipBounds: { x: number; y: number; width: number; height: number }
+  } | null
+  uiaReady: Promise<UiaPluginPayload | null>
+  /** The trigger-time window floor with client rectangles, or null. */
+  imageWindows: ContextObservation | null
+  /** What `core.image.capture.triggered` records. */
+  timelineData: Record<string, unknown>
+  /**
+   * The browser's half of this instant: events on the context clock with the
+   * distance of each from the shutter. Null when the still has no clock to
+   * place them on, which is also "no payload".
+   */
+  collectDom: () => Promise<{ events: DomEvent[]; ages: number[] } | null>
+  /** The first instant the person can do what they asked for. */
+  onEditorVisible?: () => void
+}
+
+async function runImageEditor(settings: Settings, still: PreparedStill): Promise<void> {
+  const { triggerAt, snapshotPng, width, height, uiaReady, imageWindows, imageDipSpace } = still
+  const screenDeclaration = still.screens
   const capturedAt = new Date(triggerAt)
   const events: TimelineEvent[] = [{
     t_ms: 0,
     type: 'core.image.capture.triggered',
     source: 'core',
-    data: {
-      hotkey: settings.imageCaptureHotkey,
-      scope: selection.mode,
-    },
+    data: still.timelineData,
   }]
   const timeline: TimelineFile = {
     t0: isoWithOffset(capturedAt),
     events,
   }
-  const cropBounds = imageCropBounds(selection)
+  const cropBounds = still.cropBounds
   const initialSave: InitialSaveInput = {
     captureKind: 'image',
-    imageScope: selection.mode,
+    imageScope: still.scope,
     ...(cropBounds === undefined ? {} : { cropBounds }),
     snapshotPng,
     width,
@@ -1429,40 +1701,18 @@ async function runImageFlowWithContext(
     markFlowLatency('saved')
     logInfo(
       `[image] save-first wrote ${path.basename(handle.dirPath)} ` +
-        `(${selection.mode}, ${width}x${height})`,
+        `(${still.scope}, ${width}x${height})`,
     )
   } catch (err) {
     logError('[image] save-first failed; Save will retry:', err)
   }
 
-  // THE BROWSER'S HALF OF THE SAME INSTANT, FOR A STILL (#123).
-  //
-  // This flow used to pass `domEvents: []` and write no chrome-dom directory at
-  // all, so the still — the capture the whole product now says carries the most
-  // context — was the one that carried none of the page. A replay takes its
-  // whole window because it HAS one; a screenshot is a single instant, so it
-  // takes a short bounded lookback and records how old each pick was
-  // (STILL_DOM_LOOKBACK_MS, `age_ms`).
-  const domNowMs = contextNowMs()
-  // ASK THE BROWSER DIRECTLY, AT THE CAPTURE INSTANT (#125).
-  //
-  // The point of the whole exercise: the user presses ONE key — CapturePack's
-  // own global hotkey — and the page comes with the screenshot. That is only
-  // possible because the browser was granted once; Chrome refuses a page to a
-  // request that did not start inside Chrome, so without the grant this returns
-  // null immediately and the pack is written exactly as it was before.
-  //
-  // Bounded, and awaited beside the UIA dump rather than after it: a capture is
-  // never allowed to wait on a browser.
-  const fetched = await requestDomForCapture(STILL_DOM_FETCH_TIMEOUT_MS)
-  const requested = domRequestEvents(fetched, domNowMs)
-  const buffered =
-    domNowMs === null
-      ? []
-      : domEventsBetween(domNowMs - STILL_DOM_LOOKBACK_MS, domNowMs)
-  // The fetch describes THIS instant, so it leads — one document per visible
-  // browser window (#132); a click the user made just before it still rides
-  // along, aged.
+  // WHERE THE PAGE COMES FROM DEPENDS ON THE STILL. A desktop still asks the
+  // browser at the capture instant and takes a bounded lookback of picks
+  // (`collectDom` in runImageFlowWithContext); a browser-page still already
+  // holds the page it is a picture of (#157). Both arrive here as events with
+  // their ages, and everything from this line on treats them identically.
+  const collected = await still.collectDom()
   // ON THE IMAGE'S CLOCK, WHICH HAS EXACTLY ONE INSTANT.
   //
   // A still's context is frozen at t=0 — `contextObservation(uia, 1, 0)`, and
@@ -1474,13 +1724,13 @@ async function runImageFlowWithContext(
   // 455 elements, a viewport, a matching window title — and not one candidate,
   // because the question was asked at a moment this pack does not have (#131).
   // The real distance from the shutter is not lost: it rides in `age_ms`.
-  const rawEvents = [...requested, ...buffered]
-  const ages = rawEvents.map((e) => (domNowMs === null ? 0 : Math.max(0, domNowMs - e.tMs)))
+  const rawEvents = collected === null ? [] : collected.events
+  const ages = collected === null ? [] : collected.ages
   const onImageClock = (e: DomEvent): DomEvent => ({ ...e, tMs: 0 })
   const capturedDomEvents = rawEvents.map(onImageClock)
   const domStatus = domBridgeStatus()
   const domPayload: DomPluginPayload | null =
-    capturedDomEvents.length === 0 || domNowMs === null
+    capturedDomEvents.length === 0 || collected === null
       ? null
       : {
           protocol: DOM_PROTOCOL_VERSION,
@@ -1520,15 +1770,8 @@ async function runImageFlowWithContext(
     }
   })()
 
-  const imageDipSpace = imageRegionContextSpace(
-    selection,
-    width,
-    height,
-    selectedDisplay,
-  )
-
   const { win: editor, mode: windowMode } = createEditorWindow(
-    selectedDisplay.bounds,
+    still.editorBounds,
     settings,
   )
   editor.webContents.on('console-message', (_event, level, message) => {
@@ -1605,6 +1848,7 @@ async function runImageFlowWithContext(
       // the renderer has decoded the payload and crossed a paint boundary.
       markFlowLatency('editor-visible')
       reportFlowLatency()
+      still.onEditorVisible?.()
 
       if (!settled.ready) {
         void uiaReady.then(
@@ -1644,7 +1888,7 @@ async function runImageFlowWithContext(
       : settings.imageClipboardAfterSave
   const input: ExportInput = {
     captureKind: 'image',
-    imageScope: selection.mode,
+    imageScope: still.scope,
     ...(cropBounds === undefined ? {} : { cropBounds }),
     snapshotPng: Buffer.from(outcome.payload.snapshotPng),
     width,

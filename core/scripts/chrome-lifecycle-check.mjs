@@ -102,7 +102,9 @@ try {
       onStartup: event(),
       onMessage: event(),
     },
-    action: { setBadgeText() {}, onClicked: event() },
+    action: { setBadgeText() {}, setBadgeBackgroundColor() {}, setTitle() {}, onClicked: event() },
+    // The picker's context-menu door (#157): created at worker start.
+    contextMenus: { removeAll(callback) { callback() }, create() {}, onClicked: event() },
     storage: {
       local: {
         get(key, callback) {
@@ -121,10 +123,19 @@ try {
     tabs: { onActivated: event(), onUpdated: event() },
     scripting: { executeScript: async () => undefined },
   }
+  const extensionDir = path.join(here, '..', '..', 'extensions', 'chrome')
   const context = {
     chrome,
     console,
     Date,
+    // The worker loads the full-page capture's plan and procedure through
+    // importScripts before anything else runs (#157); a classic worker's
+    // importScripts is synchronous and shares the worker's global.
+    importScripts(...files) {
+      for (const file of files) {
+        vm.runInContext(readFileSync(path.join(extensionDir, file), 'utf8'), context)
+      }
+    },
     setTimeout(callback, delay) {
       const id = nextTimer++
       timers.set(id, { callback, delay })
@@ -134,8 +145,11 @@ try {
       timers.delete(id)
     },
   }
-  vm.runInNewContext(
-    readFileSync(path.join(here, '..', '..', 'extensions', 'chrome', 'background.js'), 'utf8'),
+  context.self = context
+  context.globalThis = context
+  vm.createContext(context)
+  vm.runInContext(
+    readFileSync(path.join(extensionDir, 'background.js'), 'utf8'),
     context,
   )
 

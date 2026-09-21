@@ -7,7 +7,13 @@
  * pixels in snapshot.png and the rectangle's desktop placement provenance.
  */
 export type CaptureKind = 'image' | 'video'
-export type ImageCaptureScope = 'region' | 'fullscreen'
+/**
+ * `region` and `fullscreen` are what the desktop still offers; `browser-page`
+ * is a whole web document rendered by the CapturePack browser extension on the
+ * user's click (#157): snapshot.png is the page top to bottom at the page's own
+ * pixel ratio, no display raster is involved, and there is no desktop crop.
+ */
+export type ImageCaptureScope = 'region' | 'fullscreen' | 'browser-page'
 
 export interface ImageCropBounds {
   /**
@@ -147,7 +153,7 @@ export function captureMediaForMcp(manifest: unknown): McpCaptureMedia {
 
   const explicitScope = media?.image_scope
   const scope: ImageCaptureScope | 'legacy_screenshot' =
-    explicitScope === 'region' || explicitScope === 'fullscreen'
+    explicitScope === 'region' || explicitScope === 'fullscreen' || explicitScope === 'browser-page'
       ? explicitScope
       : 'legacy_screenshot'
   const crop = scope === 'region' ? cropBoundsOf(media?.crop_bounds) : null
@@ -269,10 +275,10 @@ export function captureMediaViolations(
   }
 
   const scope = media.image_scope
-  if (scope !== 'region' && scope !== 'fullscreen') {
+  if (scope !== 'region' && scope !== 'fullscreen' && scope !== 'browser-page') {
     violations.push({
       code: 'image.scope_invalid',
-      message: 'an image capture must declare image_scope as "region" or "fullscreen"',
+      message: 'an image capture must declare image_scope as "region", "fullscreen" or "browser-page"',
     })
   } else if (scope === 'region' && cropBoundsOf(media.crop_bounds) === null) {
     violations.push({
@@ -283,6 +289,11 @@ export function captureMediaViolations(
     violations.push({
       code: 'image.crop_bounds_forbidden',
       message: 'a full-screen image is snapshot.png itself and must not declare crop_bounds',
+    })
+  } else if (scope === 'browser-page' && media.crop_bounds !== undefined) {
+    violations.push({
+      code: 'image.crop_bounds_forbidden',
+      message: 'a browser-page image is a whole document, not a desktop crop, and must not declare crop_bounds',
     })
   }
 

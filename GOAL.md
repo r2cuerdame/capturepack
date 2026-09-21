@@ -1451,6 +1451,60 @@ Chrome Web Store distribution comes after stabilization.
 **Philosophy** — the extension's purpose is not to store the DOM. It is to make CapturePack
 understand meaningful objects (context) instead of screen pixels.
 
+### One click, the whole page (#157)
+
+The toolbar icon is the capture. Clicking it photographs the CURRENT PAGE from top to bottom
+and opens the result in the same CapturePack editor a `Ctrl+Alt+S` still opens — no extra
+selection click, no armed state the user has to understand, no viewer of its own.
+
+**Default UX.** Click the icon → the page is captured → the normal edit screen opens with the
+full-page image ready to annotate, save and share. The icon shows progress (`3/9` tiles) and
+the outcome: ✓ when the editor is open, ✕ with the reason on the tooltip when it is not — a
+restricted page (`chrome://`, the Web Store, a PDF), the app not running, a bundle the app
+refused, a page that could not be put back. Element picking stays available as an explicit
+secondary action only: the `Ctrl+Shift+E` shortcut and the icon's right-click menu.
+
+**How the picture is made.** Chrome hands an extension only the visible viewport, and the
+`debugger` permission that would give `captureBeyondViewport` changes what the user is told at
+install — so the page is stitched deterministically inside the existing `activeTab` model:
+
+- a pre-pass scrolls the page once so lazy-loading content has appeared and the FINAL height
+  is what the picture is sized to;
+- one tile per viewport, photographed after a paint, drawn at the position the page ACTUALLY
+  reached (a page clamps at its end; the last tile is pulled up and overlaps);
+- fixed elements and stuck sticky elements are hidden after the first tile, so a header
+  appears once where the user saw it, and shown again before the document is walked;
+- the picture's width is chosen so `cssWidth × scale` is an integer (a few scrollbar-gutter
+  columns are given up), which makes the app's one placement rule — scale = picture width /
+  viewport width — exact for a page; very tall pages are cut at a tile budget (60 viewports)
+  and say `truncated`; a page that would not fit the canvas or the memory bound (40 M px) is
+  kept whole at a smaller scale and says `downscaled`;
+- scroll position and every inline style touched are recorded first and restored in a
+  `finally`, on every path — success, restricted page, timeout, a tab closed mid-capture.
+
+**The bundle.** `page.captured` (page geometry, the document walked in DOCUMENT scope with
+every rectangle in document CSS pixels, URL, title, timestamp, byte count) followed by
+`page.chunk` base64 pieces the app concatenates; the app verifies the byte count and the PNG's
+own IHDR against the declared size, opens the editor, and answers `page.received` on the same
+wire. The pack declares `image_scope: "browser-page"` (SPEC §5.3); `plugins/chrome-dom`
+payload 0.4.0 carries the document (`scope: "document"`) and the page geometry (SPEC §11.4);
+`plugins/windows-uia` records the picture as the one window a reader places the page against,
+so the DOM provider's ordinary derivation yields the page's scale and a chrome height of zero.
+
+**Safety.** A capture starts on the click and nowhere else; nothing is walked in the
+background; the bundle travels the native messaging port to the local app and nowhere else;
+the document walk keeps every refusal of `document-snapshot.js` (no field values, nothing
+hidden, no attribute sweep) — the licence for recording page text is that the picture shows it,
+and a full-page picture shows the whole page. No new install-time permission.
+
+**Held to account without a browser.** `check:full-page-capture` runs the real capture procedure
+against a fake page (long page, sticky header, fixed banner, lazy-load, restricted page, exact
+restoration on every failure path, quota retry, wire bundle integrity); `check:browser-page` runs
+the real bridge over a real pipe (good bundle, every refusal, the extension's answer), the DOM
+provider's placement to the pixel, and the payload's write/read-back; `check:chrome-bridge`
+sends a page through the real native host into the real app and reads the browser-page pack it
+writes, validated against SPEC.
+
 ### Extension Install & Management UX
 
 The extension is part of CapturePack. Users must never hunt through browser settings or

@@ -569,12 +569,14 @@ function validateManifest(m, pack, snapshotDims) {
         // single raster covers.
         fail(`manifest.json: an image capture has one explicit source snapshot and MUST NOT declare media.displays, at any format version — it ships no per-display raster for an entry to name; media.image_scope says what its one snapshot covers (SPEC §5.3, §5.6)`);
       }
-      if (media.image_scope !== "region" && media.image_scope !== "fullscreen") {
-        fail(`manifest.json: an image capture MUST declare media.image_scope as "region" or "fullscreen" (SPEC §5.3)`);
+      if (media.image_scope !== "region" && media.image_scope !== "fullscreen" && media.image_scope !== "browser-page") {
+        fail(`manifest.json: an image capture MUST declare media.image_scope as "region", "fullscreen" or "browser-page" (SPEC §5.3)`);
       } else if (media.image_scope === "region" && !cropBoundsValid(media.crop_bounds)) {
         fail(`manifest.json: a region image requires valid virtual-desktop media.crop_bounds (SPEC §5.3)`);
       } else if (media.image_scope === "fullscreen" && media.crop_bounds !== undefined) {
         fail(`manifest.json: a fullscreen image MUST NOT declare media.crop_bounds (SPEC §5.3)`);
+      } else if (media.image_scope === "browser-page" && media.crop_bounds !== undefined) {
+        fail(`manifest.json: a browser-page image MUST NOT declare media.crop_bounds (SPEC §5.3)`);
       } else {
         pass(`manifest.json: image scope/provenance is explicit and valid`);
       }
