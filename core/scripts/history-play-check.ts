@@ -29,6 +29,14 @@ function check(name: string, condition: boolean, detail = ''): void {
   }
 }
 
+async function waitFor(condition: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!condition()) {
+    if (Date.now() >= deadline) throw new Error(`condition not met within ${timeoutMs} ms`)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}
+
 async function run(): Promise<void> {
   const tmpBase = fs.mkdtempSync(path.join(fs.realpathSync(path.resolve('.')), 'tmp-history-play-check-'))
 
@@ -247,7 +255,53 @@ async function run(): Promise<void> {
     `annotated=${summaryScreenshotOnly.annotated}`,
   )
 
-  console.log('\n--- 4. IPC.historyPlay invocation ---')
+  const packDirAnnotatedImage = path.join(tmpBase, 'Pack_Annotated_Image')
+  fs.mkdirSync(packDirAnnotatedImage, { recursive: true })
+  fs.mkdirSync(path.join(packDirAnnotatedImage, 'skills'))
+  fs.writeFileSync(path.join(packDirAnnotatedImage, 'snapshot.png'), 'fake-snapshot')
+  fs.writeFileSync(path.join(packDirAnnotatedImage, 'annotations.json'), JSON.stringify({
+    reference_width: 320,
+    reference_height: 200,
+    annotations: [{
+      annotation_id: 'still-box',
+      type: 'box',
+      bounds: { x: 10, y: 10, width: 40, height: 30 },
+      text: 'still annotation',
+      numbered: true,
+      blur: false,
+      tracking: { enabled: false },
+      created_at: new Date().toISOString(),
+      z: 1,
+    }],
+  }))
+  const manifestAnnotatedImage: Manifest = {
+    ...manifestA,
+    capture_kind: 'image',
+    id: 'pack-annotated-image',
+    media: {
+      snapshot: 'snapshot.png',
+      replay: null,
+      image_scope: 'region',
+    },
+  }
+  fs.writeFileSync(
+    path.join(packDirAnnotatedImage, 'manifest.json'),
+    JSON.stringify(manifestAnnotatedImage),
+  )
+  const entryAnnotatedImage: RawPackEntry = {
+    id: manifestAnnotatedImage.id,
+    path: packDirAnnotatedImage,
+    kind: 'dir',
+    mtimeMs: fs.statSync(packDirAnnotatedImage).mtimeMs,
+  }
+  const summaryAnnotatedImage = summarize(entryAnnotatedImage)
+  check(
+    'summarize marks an annotated image with no keyframe render as missing',
+    summaryAnnotatedImage.annotated === 'missing',
+    `annotated=${summaryAnnotatedImage.annotated}`,
+  )
+
+  console.log('\n--- 4. History IPC invocation ---')
   if (electronStub) {
     const settings = loadSettings().settings
     settings.outputDir = tmpBase
@@ -256,6 +310,73 @@ async function run(): Promise<void> {
 
     const playHandler = electronStub.__handlers.get(IPC.historyPlay)
     check('IPC.historyPlay handler registered in ipcMain', typeof playHandler === 'function')
+
+    const rerenderHandler = electronStub.__handlers.get(IPC.historyRerender)
+    check('IPC.historyRerender handler registered in ipcMain', typeof rerenderHandler === 'function')
+
+    if (typeof rerenderHandler === 'function') {
+      const mockEvent = { sender: electronStub.__historyWebContents }
+      electronStub.__renderStarts.length = 0
+      electronStub.__sentMessages.length = 0
+      const rerenderResult = await rerenderHandler(mockEvent, packDirAnnotatedImage)
+      check(
+        'IPC.historyRerender accepts an image pack without errNoReplayRender',
+        rerenderResult?.ok === true,
+        JSON.stringify(rerenderResult),
+      )
+      await waitFor(() => {
+        const current = JSON.parse(
+          fs.readFileSync(path.join(packDirAnnotatedImage, 'manifest.json'), 'utf8'),
+        ) as Manifest
+        const keyframe = current.media.keyframes?.[0]?.file
+        return typeof keyframe === 'string'
+          && fs.existsSync(path.join(packDirAnnotatedImage, keyframe))
+          && summarize(entryAnnotatedImage).renderInFlight === false
+      })
+      check(
+        'image retry dispatched a still render payload',
+        electronStub.__renderStarts.length === 1
+          && electronStub.__renderStarts[0]?.replayWebm === null
+          && electronStub.__renderStarts[0]?.snapshotPng !== null,
+      )
+      const renderedManifest = JSON.parse(
+        fs.readFileSync(path.join(packDirAnnotatedImage, 'manifest.json'), 'utf8'),
+      ) as Manifest
+      const renderedKeyframe = renderedManifest.media.keyframes?.[0]?.file
+      check(
+        'image retry writes frames/ and declares the keyframe in manifest.json',
+        typeof renderedKeyframe === 'string'
+          && renderedKeyframe.startsWith('frames/')
+          && fs.existsSync(path.join(packDirAnnotatedImage, renderedKeyframe)),
+        renderedKeyframe ?? 'undeclared',
+      )
+      const readySummary = summarize(entryAnnotatedImage)
+      check(
+        'completed image retry moves the History summary to ready',
+        readySummary.annotated === 'ready' && readySummary.renderInFlight === false,
+        `annotated=${readySummary.annotated}, inFlight=${readySummary.renderInFlight}`,
+      )
+      check(
+        'image retry notifies History of rendering and done states',
+        electronStub.__sentMessages.some(
+          (message: { channel: string; payload?: { state?: string } }) =>
+            message.channel === IPC.historyRenderStatus && message.payload?.state === 'rendering',
+        )
+          && electronStub.__sentMessages.some(
+            (message: { channel: string; payload?: { state?: string } }) =>
+              message.channel === IPC.historyRenderStatus && message.payload?.state === 'done',
+          ),
+      )
+      if (typeof renderedKeyframe === 'string') {
+        fs.rmSync(path.join(packDirAnnotatedImage, renderedKeyframe))
+        const missingAgain = summarize(entryAnnotatedImage)
+        check(
+          'cached image summary detects a removed declared keyframe as missing',
+          missingAgain.annotated === 'missing',
+          `annotated=${missingAgain.annotated}`,
+        )
+      }
+    }
 
     if (typeof playHandler === 'function') {
       const mockEvent = { sender: electronStub.__historyWebContents }

@@ -73,7 +73,12 @@ import { startEditFlow } from './session'
 import { openSettingsWindow } from './settingsWindow'
 import { invalidateStorageUsage, storageUsage } from './storage'
 import { copyTextToClipboard } from './clipboard'
-import { planHistoryRerender, type HistoryRerenderPlan } from './historyRerenderPlan'
+import {
+  historyAnnotatedState,
+  historyRerenderKind,
+  planHistoryRerender,
+  type HistoryRerenderPlan,
+} from './historyRerenderPlan'
 import { safeViewerPath } from './viewer'
 
 const THUMB_WIDTH = 320
@@ -834,10 +839,30 @@ export function summarize(entry: RawPackEntry): HistoryPackSummary {
   const stamp = packStamp(entry)
   const cached = summaryCache.get(entry.path)
   if (cached && cached.stamp === stamp) {
+    // The files declared by media.keyframes live below frames/. Removing one
+    // changes neither manifest.json nor the pack directory mtime on Windows,
+    // so re-check an annotated image pack even when its metadata is cached.
+    const annotated =
+      entry.kind === 'dir'
+      && cached.summary.captureKind === 'image'
+      && cached.summary.annotationCount > 0
+        ? (() => {
+            const pack = openPack(entry.path, entry.kind, entry.id)
+            const manifest = pack.manifest()
+            return manifest === null
+              ? cached.summary.annotated
+              : historyAnnotatedState(
+                  manifest,
+                  cached.summary.annotationCount,
+                  (rel) => safeViewerPath(rel) !== null && pack.fileSize(rel) !== null,
+                )
+          })()
+        : cached.summary.annotated
     // Managed copies live NEXT TO the pack: their create/delete changes the
     // parent folder, not the pack, so both are re-checked on every listing.
     return {
       ...cached.summary,
+      annotated,
       renderInFlight: isRenderInFlight(entry.path),
       zipTwin: zipTwinPresent(entry),
       shareTwin: shareTwinPresent(entry),
@@ -849,15 +874,13 @@ export function summarize(entry: RawPackEntry): HistoryPackSummary {
   const annotations = annotationsOf(pack)
   // ?. throughout: a malformed-but-parsed manifest may lack any of these.
   const hasReplay = typeof manifest?.media?.replay === 'string'
-  const targetFilename =
-    typeof manifest?.media?.replay_annotated === 'string' && manifest.media.replay_annotated.trim() !== ''
-      ? manifest.media.replay_annotated.trim()
-      : 'replay_annotated.webm'
-  const annotated: HistoryAnnotatedState = !hasReplay
+  const annotated: HistoryAnnotatedState = manifest === null
     ? 'none'
-    : safeViewerPath(targetFilename) !== null && pack.fileSize(targetFilename) !== null
-      ? 'ready'
-      : 'missing'
+    : historyAnnotatedState(
+        manifest,
+        annotations.length,
+        (rel) => safeViewerPath(rel) !== null && pack.fileSize(rel) !== null,
+      )
   const replayDurationMs =
     hasReplay && typeof manifest?.media?.replay_duration_ms === 'number'
       ? manifest.media.replay_duration_ms
@@ -1019,9 +1042,9 @@ async function dirSize(dir: string): Promise<number> {
 // ---------------------------------------------------------------------------
 // Actions
 
-// Re-runs the existing background annotated-replay pipeline for one pack:
-// replay + annotations read from the folder, result written by
-// annotatedRender (file + manifest declaration). Fire-and-forget like the
+// Re-runs the existing background annotated-media pipeline for one pack:
+// replay-or-snapshot + annotations read from the folder, result written by
+// annotatedRender (files + manifest declaration). Fire-and-forget like the
 // save-time render; the terminal state is pushed to the window.
 function startRerender(entry: RawPackEntry): HistoryActionResult {
   const settings = liveSettings
@@ -1035,11 +1058,6 @@ function startRerender(entry: RawPackEntry): HistoryActionResult {
   const t = uiT(settings)
   if (manifest === null) return { ok: false, error: t('history.errManifestBad') }
   const replayRel = manifest.media?.replay
-  if (typeof replayRel !== 'string') {
-    return { ok: false, error: t('history.errNoReplayRender') }
-  }
-  const replayWebm = pack.readBinary(replayRel)
-  if (replayWebm === null) return { ok: false, error: t('history.errFileMissing', { file: replayRel }) }
   const annotationsFile = pack.annotations()
   if (
     annotationsFile === null ||
@@ -1052,6 +1070,30 @@ function startRerender(entry: RawPackEntry): HistoryActionResult {
     typeof manifest.media.replay_duration_ms === 'number' ? manifest.media.replay_duration_ms : 0
   const annotations = annotationsOf(pack)
   const plan = planHistoryRerender(manifest, annotations)
+  const rerenderKind = historyRerenderKind(manifest)
+  let focusedSource: Buffer
+  if (rerenderKind === 'replay') {
+    // historyRerenderKind only returns replay for a string declaration. Keep
+    // the guard local so malformed on-disk JSON still fails as an action result.
+    if (typeof replayRel !== 'string') {
+      return { ok: false, error: t('history.errNoReplayRender') }
+    }
+    const replayWebm = pack.readBinary(replayRel)
+    if (replayWebm === null) {
+      return { ok: false, error: t('history.errFileMissing', { file: replayRel }) }
+    }
+    focusedSource = replayWebm
+  } else {
+    const snapshotRel =
+      typeof manifest.media?.snapshot === 'string' && manifest.media.snapshot.trim() !== ''
+        ? manifest.media.snapshot.trim()
+        : 'snapshot.png'
+    const snapshotPng = pack.readBinary(snapshotRel)
+    if (snapshotPng === null) {
+      return { ok: false, error: t('history.errFileMissing', { file: snapshotRel }) }
+    }
+    focusedSource = snapshotPng
+  }
   const displaySources: Array<{
     plan: HistoryRerenderPlan['displays'][number]
     snapshotPng: Buffer
@@ -1071,29 +1113,40 @@ function startRerender(entry: RawPackEntry): HistoryActionResult {
     }
     displaySources.push({ plan: display, snapshotPng, replayWebm: displayReplay })
   }
-  startAnnotatedRender(
-    { id: manifest.id, dirPath: entry.path },
-    {
-      replayWebm,
-      replayMimeType: replayMimeType(replayRel),
-      annotations: plan.focusedAnnotations,
-      motionSpace: plan.motionSpace,
-      displayNumbers: plan.displayNumbers,
-      ...(plan.focusedDisplay === undefined ? {} : { focusedDisplay: plan.focusedDisplay }),
-      width: annotationsFile.reference_width,
-      height: annotationsFile.reference_height,
-      fps: settings.fps,
-      replayDurationMs,
-      // The render regenerates the pack documents from what it declared.
-      docLanguage: packDocLanguage(settings),
-    },
-    // Terminal state reaches the window via onRenderStateChange (registered in
-    // registerHistoryIpc) — 'failed' leaves the disk unchanged (no watcher
-    // event), so that push is what drops "Rendering…" back to [Retry].
-    () => {},
-  )
+  const handle = { id: manifest.id, dirPath: entry.path }
+  const common = {
+    annotations: plan.focusedAnnotations,
+    motionSpace: plan.motionSpace,
+    displayNumbers: plan.displayNumbers,
+    ...(plan.focusedDisplay === undefined ? {} : { focusedDisplay: plan.focusedDisplay }),
+    width: annotationsFile.reference_width,
+    height: annotationsFile.reference_height,
+    // The render regenerates the pack documents from what it declared.
+    docLanguage: packDocLanguage(settings),
+  }
+  if (rerenderKind === 'replay' && typeof replayRel === 'string') {
+    startAnnotatedRender(
+      handle,
+      {
+        ...common,
+        replayWebm: focusedSource,
+        replayMimeType: replayMimeType(replayRel),
+        fps: settings.fps,
+        replayDurationMs,
+      },
+      // Terminal state reaches the window via onRenderStateChange (registered
+      // in registerHistoryIpc) — 'failed' leaves disk unchanged, so that push
+      // drops "Rendering…" back to [Retry].
+      () => {},
+    )
+  } else {
+    startKeyframeStill(handle, {
+      ...common,
+      snapshotPng: focusedSource,
+    })
+  }
   startHistoryDisplayRenders(
-    { id: manifest.id, dirPath: entry.path },
+    handle,
     displaySources,
     plan,
     settings,
