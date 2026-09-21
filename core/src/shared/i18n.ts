@@ -103,6 +103,7 @@ const EN = {
   'recorder.noFrames': 'the screen delivered no video frames',
   'recorder.replayTimeout': 'the recorder did not answer in time',
   'recorder.bufferTooShort': 'not enough had been recorded yet',
+  'recorder.nativeExportFailed': 'the native replay export failed',
 
   'app.recordingOff': 'Recording is off — turn it on in Settings to capture.',
   'settings.recordingName': 'Live recording',
@@ -729,6 +730,7 @@ const KO: Record<I18nKey, string> = {
   'recorder.noFrames': '화면에서 영상 프레임이 오지 않음',
   'recorder.replayTimeout': '녹화기가 제때 응답하지 않음',
   'recorder.bufferTooShort': '아직 충분히 녹화되지 않음',
+  'recorder.nativeExportFailed': '네이티브 리플레이 내보내기에 실패함',
 
   'app.recordingOff': '녹화가 꺼져 있습니다 — 캡처하려면 설정에서 켜세요.',
   'settings.recordingName': '실시간 녹화',
@@ -1309,6 +1311,7 @@ const JA: Record<I18nKey, string> = {
   'recorder.noFrames': '画面から映像フレームが届いていません',
   'recorder.replayTimeout': 'レコーダーが時間内に応答しませんでした',
   'recorder.bufferTooShort': 'まだ十分に録画されていません',
+  'recorder.nativeExportFailed': 'ネイティブリプレイのエクスポートに失敗しました',
 
   'app.recordingOff': '録画はオフです — キャプチャするには設定でオンにしてください。',
   'settings.recordingName': 'ライブ録画',
@@ -1891,6 +1894,7 @@ const ZH: Record<I18nKey, string> = {
   'recorder.noFrames': '屏幕未提供任何视频帧',
   'recorder.replayTimeout': '录制器未及时响应',
   'recorder.bufferTooShort': '录制的内容还不够',
+  'recorder.nativeExportFailed': '原生回放导出失败',
 
   'app.recordingOff': '录制已关闭 — 若要截取，请在设置中开启。',
   'settings.recordingName': '实时录制',
@@ -2466,6 +2470,7 @@ const ES: Record<I18nKey, string> = {
   'recorder.noFrames': 'la pantalla no entregó fotogramas de vídeo',
   'recorder.replayTimeout': 'la grabadora no respondió a tiempo',
   'recorder.bufferTooShort': 'aún no se había grabado lo suficiente',
+  'recorder.nativeExportFailed': 'falló la exportación del replay nativo',
 
   'app.recordingOff': 'La grabación está desactivada: actívala en Ajustes para capturar.',
   'settings.recordingName': 'Grabación en vivo',
@@ -3051,6 +3056,7 @@ const FR: Record<I18nKey, string> = {
   'recorder.noFrames': 'l’écran n’a fourni aucune image vidéo',
   'recorder.replayTimeout': 'l’enregistreur n’a pas répondu à temps',
   'recorder.bufferTooShort': 'pas encore assez d’enregistrement',
+  'recorder.nativeExportFailed': 'l’export du replay natif a échoué',
 
   'app.recordingOff': 'L’enregistrement est désactivé — activez-le dans les Réglages pour capturer.',
   'settings.recordingName': 'Enregistrement en direct',
@@ -3638,6 +3644,7 @@ const DE: Record<I18nKey, string> = {
   'recorder.noFrames': 'der Bildschirm lieferte keine Videobilder',
   'recorder.replayTimeout': 'der Rekorder hat nicht rechtzeitig geantwortet',
   'recorder.bufferTooShort': 'es war noch nicht genug aufgezeichnet',
+  'recorder.nativeExportFailed': 'der Export des nativen Replays ist fehlgeschlagen',
 
   'app.recordingOff': 'Die Aufnahme ist ausgeschaltet — zum Erfassen in den Einstellungen aktivieren.',
   'settings.recordingName': 'Live-Aufnahme',
@@ -4228,6 +4235,7 @@ const PT: Record<I18nKey, string> = {
   'recorder.noFrames': 'a tela não entregou quadros de vídeo',
   'recorder.replayTimeout': 'o gravador não respondeu a tempo',
   'recorder.bufferTooShort': 'ainda não havia gravação suficiente',
+  'recorder.nativeExportFailed': 'a exportação do replay nativo falhou',
 
   'app.recordingOff': 'A gravação está desligada — ative-a nas Configurações para capturar.',
   'settings.recordingName': 'Gravação ao vivo',
@@ -4814,6 +4822,7 @@ const RU: Record<I18nKey, string> = {
   'recorder.noFrames': 'экран не выдаёт кадров видео',
   'recorder.replayTimeout': 'рекордер не ответил вовремя',
   'recorder.bufferTooShort': 'записано ещё недостаточно',
+  'recorder.nativeExportFailed': 'не удалось экспортировать нативный реплей',
 
   'app.recordingOff': 'Запись выключена — включите её в настройках, чтобы сделать захват.',
   'settings.recordingName': 'Постоянная запись',
@@ -5414,6 +5423,8 @@ export function recorderFailureText(t: TranslateFn, reason: RecorderFailureReaso
       return t('recorder.replayTimeout')
     case 'buffer-too-short':
       return t('recorder.bufferTooShort')
+    case 'native-export-failed':
+      return t('recorder.nativeExportFailed')
   }
 }
 

@@ -155,7 +155,7 @@ function renderer() {
     }
   }
   const bridge = Object.fromEntries([
-    'onStart', 'onNativeFallbackFrame', 'onNativeFallbackError', 'onRequestReplay', 'onResumeReplay',
+    'onStart', 'onReplayWorkload', 'onNativeFallbackFrame', 'onNativeFallbackError', 'onRequestReplay', 'onResumeReplay',
   ].map(name => [name, callback => { assert.equal(subscriptions.has(name), false); subscriptions.set(name, callback) }]))
   bridge.sendError = message => errors.push(message)
   const context = vm.createContext({
@@ -207,7 +207,7 @@ function renderer() {
     }
     assert.ok(stats.clockSamples <= 8)
     assert.ok(stats.resumeTokens <= 4)
-    assert.equal(subscriptions.size, 5)
+    assert.equal(subscriptions.size, 6)
     assert.deepEqual(errors, [])
     sweep()
     assert.ok(recorders.size <= 1)

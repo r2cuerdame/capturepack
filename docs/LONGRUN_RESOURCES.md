@@ -6,15 +6,18 @@ last tree survived forever, and the two-second prune copied every old tree's
 elements again. Window churn therefore increased both retained objects and
 main-process maintenance work for the lifetime of the app.
 
-This is a reproduced defect, not an attribution of the reported Windows-wide
-slowdown. Issue #240 remains open. No installed CapturePack was restarted or
+This is a reproduced defect directly relevant to the reported 41-hour session,
+but it is not proof that every contributor to the Windows-wide slowdown is now
+removed. Issue #240 remains open. No installed CapturePack was restarted or
 profiled; no desktop soak, release, deployment, or system configuration change
 was performed.
 
 ## Audit and scope
 
-Baseline: `af30c383299eae470b55dfb2ab04b90054fa26c4`, branch
-`fix/240-longrun-system-slowdown`. GitHub main matched the baseline when checked.
+The UIA RED baseline is `af30c383299eae470b55dfb2ab04b90054fa26c4`.
+PR #241 was merged as `74f96f7fd549cfee901df9fd57ed80d558e7b9af`
+and PR #242 as `44231a22667965113b509f54e2898eb73ca79975`.
+The PR-head and squash-result trees were compared directly and match.
 
 - Shipping replay is MediaRecorder with a GDI/JPEG emergency fallback. The DXGI
   timing helper is one-shot: `FrameLease` releases successful acquisitions;
@@ -33,11 +36,14 @@ Baseline: `af30c383299eae470b55dfb2ab04b90054fa26c4`, branch
   synthetic checks do not prove the missing managed full-app acceptance.
 - Renderer frame/bitmap close paths, bounded ingest queues, recorder identity
   checks and timer/listener cleanup were inspected. A separate WebM fallback
-  defect was reproduced: a stalled `Blob.arrayBuffer()` holds the lifecycle
-  queue while live recorders accumulate chunks. That is outside this fix.
-- #180's whole-file synchronous PNG reads still exist on pack reopen/readback.
-  They are not invoked by this isolated always-on control-history workload.
-  Synchronous log writes also remain; no measured I/O amplification is claimed.
+  defect was reproduced: a stalled `Blob.arrayBuffer()` held the same lifecycle
+  queue as slot rotation while live recorders accumulated chunks. The conversion
+  now owns only the immutable stopped-session Blob; stop/replacement completes
+  first and bounded slot rotation continues independently.
+- #180's whole-file synchronous PNG reads were removed by merged PR #242. The
+  exact current-main regression reads 24 bytes per PNG header probe and closes
+  every descriptor, including a 128 MiB fixture. Synchronous log writes remain;
+  no measured I/O amplification is claimed.
 - The watchdog HWND strike map is another pre-existing lifetime concern. This
   change does not claim to bound all process state or all capture backends.
 
@@ -78,6 +84,22 @@ Capture surfaces, captured frames, ring bytes and encoder sessions are zero
 because this isolated worker creates none; they are not a measurement of a
 running capture app. Live capture telemetry integration remains field work.
 
+The Windows sampler now establishes three exact-PID baseline samples before the
+accelerated worker begins. This is a readiness handshake, not a fixed sleep: on
+this host the first GPU CIM query took about 7.6 seconds, which previously let
+the worker exit after only two samples. The corrected run produced seven samples.
+Baseline RED reached 200,273,920 private bytes, 227,606,528 working-set bytes and
+39.62% of one core; fixed GREEN reached 31,907,840 private bytes, 63,516,672
+working-set bytes and 2.60%. Handles stayed 168 and threads stayed 12 in both.
+
+The WebM regression holds one replay Blob conversion unresolved while feeding
+each live recorder 81,920 logical bytes every simulated second for 60 seconds.
+Before the change, rotation was queue-blocked and one active session
+grew to 4,920,200 logical bytes. After the change, rotation continues at the
+one/two-second slot bounds; active-session bytes peak at 86,920, and clear leaves
+zero timers plus no stopped recorder handlers. These are deterministic
+logical ownership counts, not physical Chromium allocation measurements.
+
 Machine-readable reports include source/bundle hashes, exact checkpoints,
 Node memory/CPU readings and raw OS samples:
 
@@ -105,7 +127,9 @@ npm run check:controls
 `--baseline` loads the named Git blob without checking out or editing files.
 The reports preserve failed baseline measurements before reporting the assertion
 failure. `--quick` is two simulated minutes without the OS sampler and is
-registered in both the complete and video QA profiles.
+registered in both the complete and video QA profiles. Full Windows runs create
+the sampler-ready marker only after three exact-PID observations; the worker has
+a 45-second readiness deadline inside its 60-second process watchdog.
 
 ## Validation and remaining field gate
 
@@ -118,9 +142,16 @@ frames. An initial sandbox QA run failed on temporary-directory permissions and
 loopback access; the RDC run supersedes it. Independent review found no blocker
 in this isolated fix.
 
-No DevHotel provider was available in this session. Keep #240 open and this
-change draft until managed Windows/app validation supplies incident attribution,
-real capture resource counters and the issue's two-hour installed-app soak.
+No DevHotel provider was available in this session. Draft PR #244 exact head
+`f93fe5fe9fa6c69d6390410a4dc6f3e3ba456f09` was independently rerun: its
+50h11m40s synthetic renderer lifecycle passed with 500 generations, 600 flushes,
+54,000 closed processor frames, five subscriptions, at most three timers, one
+recorder, 30 fragments / 18,324 ring bytes and 692 queued bytes. Its 21 dump
+identity/context tests and typecheck also passed. That proof excludes native,
+process and GPU allocations; the AVC/MP4 uint32 muxer overflow in #243 remains a
+separate release blocker. Keep #240 open until managed Windows/app validation
+supplies real capture resource counters and the issue's two-hour installed-app
+soak.
 
 If installed-app evidence becomes necessary, the proposed **unexecuted** next
 step is a 120-second read-only observation of an already-running installation:

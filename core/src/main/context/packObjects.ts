@@ -35,7 +35,11 @@ import { focusedDisplayIndex } from '../../shared/types'
 import type { Manifest, UiaPluginPayload } from '../../shared/types'
 import { reopenedContextDisplayTargets } from '../reopenDisplay'
 import { editorUiaElements, editorUiaWindows } from './legacyPack'
-import { loadWindowsContextHistory } from './windowsContextTimeline'
+import {
+  loadWindowsContextHistory,
+  windowsContextReplayClockMap,
+} from './windowsContextTimeline'
+import type { ObservedReplayClockMap } from '../../shared/replayClockMap'
 import { ContextSession } from './session'
 import type { ContextDisplayTarget, ContextSessionOptions } from './session'
 import type { ContextObservation } from './buffer'
@@ -54,6 +58,8 @@ export interface PackObjectContext {
   dropped: boolean
   /** The temporal window history, when the pack carries one (video packs do). */
   history: readonly ContextObservation[]
+  /** Measured replay/media time -> persisted context time, when declared. */
+  replayClockMap: ObservedReplayClockMap | null
   domEvents: readonly DomEvent[]
   /**
    * Element rectangles the chrome-dom payload DECLARES, counted off the raw
@@ -227,6 +233,10 @@ export function readPackObjectContext(dirPath: string): PackObjectContext | null
     // DROPPED — the flag is only for a payload that is there and unreadable.
     dropped: uiaText !== null && uiaEmpty(uia),
     history: history.status === 'loaded' ? history.observations : [],
+    replayClockMap:
+      history.status === 'loaded'
+        ? windowsContextReplayClockMap(history.timeline)
+        : null,
     domEvents: parseDomPayload(domText),
     domRectanglesDeclared: declaredDomRectangles(domText),
     note:
@@ -256,6 +266,7 @@ export function openPackContextSession(
     observation: context.observation,
     dropped: context.dropped,
     domEvents: context.domEvents,
+    ...(context.replayClockMap === null ? {} : { replayClockMap: context.replayClockMap }),
     ...options,
   })
   if (

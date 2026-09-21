@@ -11,8 +11,9 @@
 // this check exists to stop.
 //
 // Run: npm run check:numbering
-import { computeDisplayNumbers } from '../src/shared/types'
-import type { Annotation } from '../src/shared/types'
+import { computeDisplayNumbers, nextDisplayNumber, planNumberPins } from '../src/shared/types'
+import type { Annotation, AnnotationsFile, Manifest } from '../src/shared/types'
+import { buildReadme } from '../src/main/packdocs'
 
 let failed = 0
 
@@ -41,11 +42,10 @@ function box(
     ...(opts.start === undefined ? {} : { start_ms: opts.start, end_ms: opts.start + 1000 }),
     numbered: opts.numbered ?? true,
     ...(opts.pin === undefined ? {} : { number_pin: opts.pin }),
-    blur: false,
     tracking: { enabled: false },
     created_at: at,
     z: seq,
-  } as Annotation
+  }
 }
 
 const numbersOf = (as: Annotation[]): Record<string, number> =>
@@ -205,6 +205,96 @@ console.log('ROUND TRIP')
   const reloaded = JSON.parse(JSON.stringify({ annotations: original })).annotations as Annotation[]
   check('pins survive save and re-open', numbersOf(reloaded), numbersOf(original))
   check('the pin field itself round-trips', reloaded[0]?.number_pin, 4)
+}
+
+console.log('OPTIONAL numbered AND blur FLAGS (SPEC §8.3)')
+{
+  // SPEC §8.3: numbered and blur are OPTIONAL boolean fields with default false.
+  // Valid conforming packs that omit them satisfy BoxAnnotation / Annotation contracts
+  // without type errors, dummy defaults, or forced casts.
+  const minimalBox: Annotation = {
+    annotation_id: 'ann_0000a1',
+    type: 'box',
+    bounds: { x: 10, y: 10, width: 100, height: 50 },
+    text: 'Minimal box omitting numbered and blur',
+    tracking: { enabled: false },
+    created_at: '2026-07-29T18:00:00+09:00',
+    z: 1,
+  }
+  const numberedBox: Annotation = {
+    annotation_id: 'ann_0000a2',
+    type: 'box',
+    bounds: { x: 20, y: 20, width: 100, height: 50 },
+    text: 'Numbered box',
+    numbered: true,
+    tracking: { enabled: false },
+    created_at: '2026-07-29T18:00:01+09:00',
+    z: 2,
+  }
+  const blurredBox: Annotation = {
+    annotation_id: 'ann_0000a3',
+    type: 'box',
+    bounds: { x: 30, y: 30, width: 100, height: 50 },
+    text: 'Blurred box omitting numbered',
+    blur: true,
+    tracking: { enabled: false },
+    created_at: '2026-07-29T18:00:02+09:00',
+    z: 3,
+  }
+
+  // Runtime processing of computeDisplayNumbers with omitted numbered flag
+  check('omitted numbered defaults to unnumbered in computeDisplayNumbers', numbersOf([minimalBox]), {})
+  check(
+    'numbered box gets slot 1 alongside boxes omitting numbered',
+    numbersOf([minimalBox, numberedBox, blurredBox]),
+    { ann_0000a2: 1 },
+  )
+
+  // Verify nextDisplayNumber and planNumberPins handle omitted numbered flag cleanly
+  check(
+    'nextDisplayNumber ignores boxes omitting numbered',
+    nextDisplayNumber([minimalBox, blurredBox], 'ann_0000a4'),
+    1,
+  )
+  const earlierBox = box('ann_0000a0', '2026-07-29T17:59:00+09:00', { numbered: true })
+  const planned = planNumberPins([earlierBox, minimalBox], 'ann_0000a1', 1)
+  check('planNumberPins plans slot for box omitting numbered', planned.get('ann_0000a1'), 1)
+
+  // Verify packdocs document generation and counts on annotations omitting numbered and blur
+  const manifest: Manifest = {
+    format: 'capturepack',
+    format_version: '0.3.0',
+    id: 'cap_000001',
+    generator: { name: 'capturepack', version: '0.5.1' },
+    created_at: '2026-07-29T18:00:00+09:00',
+    environment: {
+      os: 'win32',
+      os_version: '10.0.26100',
+      app: 'TestApp',
+      screens: [{ width: 1920, height: 1080, scale: 1 }],
+    },
+    media: {
+      snapshot: 'snapshot.png',
+      replay: null,
+    },
+    plugins: [],
+  }
+  const annotationsFile: AnnotationsFile = {
+    reference_width: 1920,
+    reference_height: 1080,
+    annotations: [minimalBox, numberedBox, blurredBox],
+  }
+  const readme = buildReadme(manifest, annotationsFile)
+  check(
+    'buildReadme correctly counts 1 numbered, 1 blurred, 1 plain for omitted flags',
+    readme.includes('3 annotation boxes (1 numbered, 1 blurred, 1 plain)'),
+    true,
+  )
+  check(
+    'buildReadme lists blur section only for blur: true box, not for omitted blur',
+    readme.includes('Note: one annotation box is marked blur.'),
+    true,
+  )
 }
 
 console.log(failed === 0 ? '\nnumbering-check ok' : `\nnumbering-check FAILED (${failed})`)

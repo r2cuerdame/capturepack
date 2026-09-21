@@ -452,6 +452,58 @@ async function agePathAgreementReport(): Promise<boolean> {
   }
 }
 
+async function nativeWallObservationReport(): Promise<boolean> {
+  let coreNow = 0
+  let onReady: (hello: HostReply) => void = () => {}
+  let onEvent: (event: Record<string, unknown> & { event: string }) => void = () => {}
+  const host: SurfaceHost = {
+    start() {},
+    stop() {},
+    request(method) {
+      if (method === 'ping') return Promise.resolve({ id: 1, ok: true, hostMs: coreNow })
+      return Promise.resolve({ id: 1, ok: true })
+    },
+  }
+  const clock = {
+    nowMs: () => coreNow,
+    bufferStartMs: () => 0,
+    observe: () => {},
+  } as never
+  const timeline = new SurfaceTimeline()
+  const lane = new SurfaceLane(clock, timeline, D2_FRAME_MS, (options) => {
+    onReady = options.onReady
+    onEvent = options.onEvent as typeof onEvent
+    return host
+  })
+  try {
+    lane.start()
+    onReady({ id: 0, ok: true, hostMs: 0, monitors: [] })
+    await new Promise((resolve) => setImmediate(resolve))
+    await new Promise((resolve) => setImmediate(resolve))
+
+    coreNow = 1_000
+    lane.tickAt('display-a', 900, 80, 40, 'wall-observation')
+    coreNow = 1_007
+    onEvent({ event: 'surface', ft: 900, t: 1_007, w: deskAt(1_007) })
+    await new Promise((resolve) => setImmediate(resolve))
+
+    coreNow = 1_100
+    onEvent({ event: 'surface', t: 1_100, w: deskAt(1_100) })
+    await new Promise((resolve) => setImmediate(resolve))
+    const times = timeline.sampleTimesBetween(0, 10_000)
+    const ok = times[0] === 1_007 && times[1] === 1_100
+    console.log('G: native replay keeps context on measured wall-observation time')
+    console.log(
+      ok
+        ? '  PASS — unrelated Chromium frame age/delay does not shift native context\n'
+        : `  FAIL — native context times were ${JSON.stringify(times)}\n`,
+    )
+    return ok
+  } finally {
+    lane.stop()
+  }
+}
+
 async function stillRefreshReport(): Promise<boolean> {
   let onReady: (hello: HostReply) => void = () => {}
   let onEvent: (event: Record<string, unknown> & { event: string }) => void = () => {}
@@ -519,7 +571,8 @@ async function main(): Promise<void> {
   const d = await ownerHandoffReport()
   const e = await stillRefreshReport()
   const f = await agePathAgreementReport()
-  if (!a || !b || !c || !d || !e || !f) {
+  const g = await nativeWallObservationReport()
+  if (!a || !b || !c || !d || !e || !f || !g) {
     console.error('surface-sync-check FAILED')
     process.exitCode = 1
     return
