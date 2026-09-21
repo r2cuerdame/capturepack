@@ -87,6 +87,7 @@
     "check:hotkeys": "node scripts/hotkey-registry-check.mjs",
     "check:about": "node scripts/about-window-check.mjs",
     "check:update-notice": "node scripts/update-notice-check.mjs",
+    "check:update-restart": "node scripts/update-restart-check.mjs",
     "check:telemetry": "node scripts/telemetry-check.mjs",
     "check:actions": "node scripts/action-pipeline-check.mjs",
     "check:clipboard": "node scripts/clipboard-contract-check.mjs",

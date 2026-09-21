@@ -63,6 +63,7 @@ const VIDEO_PROFILE_CHECKS = new Set([
   'check:settings',
   'check:hotkeys',
   'check:about',
+  'check:update-restart',
   'check:clipboard',
   'check:source-first-save',
   'check:save-now',
