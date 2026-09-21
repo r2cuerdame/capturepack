@@ -176,7 +176,7 @@ export interface ManifestCadence {
   worst_stall_ms: number
   discarded_frames?: number
   requested_fps?: number
-  backend?: 'chromium-desktop-capture' | 'windows-gdi-bitblt'
+  backend?: 'chromium-desktop-capture' | 'windows-gdi-bitblt' | 'native-dxgi'
   quality?: 'full' | 'degraded'
   recorder_count?: number
   source_latency?: ManifestSourceLatency
@@ -334,8 +334,9 @@ export interface Manifest {
     // time in the pack is already on the trimmed replay clock — readers never
     // need to apply this offset. Absent = the replay was never trimmed.
     trim_offset_ms?: number
-    // Present only for capture_kind "image".
-    image_scope?: 'region' | 'fullscreen'
+    // Present only for capture_kind "image". "browser-page" is a whole web
+    // document captured by the browser extension (#157).
+    image_scope?: 'region' | 'fullscreen' | 'browser-page'
     crop_bounds?: {
       x: number
       y: number
@@ -639,7 +640,7 @@ export interface BoxAnnotation {
   end_ms?: number
   // Whether the box takes part in display numbering (SPEC §8.5). The number is
   // computed via computeDisplayNumbers(), never stored.
-  numbered: boolean
+  numbered?: boolean
   /**
    * The number the USER assigned this box — an integer >= 1 (SPEC §8.5).
    * Absent = it numbers automatically, in creation order, around the boxes that
@@ -666,7 +667,7 @@ export interface BoxAnnotation {
   number_pin?: number
   // Whether the interior is blurred in RENDERED views only (SPEC §9): the
   // original snapshot.png and replay are never modified.
-  blur: boolean
+  blur?: boolean
   tracking: AnnotationTracking
   /**
    * AUTHORED motion for a MANUAL box (SPEC §8.9) — where the user put it, at

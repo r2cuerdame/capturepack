@@ -27,6 +27,7 @@
 // parseUiaPayload), and this module calls them rather than re-deciding.
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import * as path from 'node:path'
+import { pngPixelSize } from '../png'
 import { parseDomPayload } from '../chrome/domBridge'
 import type { DomEvent } from '../chrome/domBridge'
 import { parseUiaPayload } from '../uia'
@@ -35,7 +36,11 @@ import { focusedDisplayIndex } from '../../shared/types'
 import type { Manifest, UiaPluginPayload } from '../../shared/types'
 import { reopenedContextDisplayTargets } from '../reopenDisplay'
 import { editorUiaElements, editorUiaWindows } from './legacyPack'
-import { loadWindowsContextHistory } from './windowsContextTimeline'
+import {
+  loadWindowsContextHistory,
+  windowsContextReplayClockMap,
+} from './windowsContextTimeline'
+import type { ObservedReplayClockMap } from '../../shared/replayClockMap'
 import { ContextSession } from './session'
 import type { ContextDisplayTarget, ContextSessionOptions } from './session'
 import type { ContextObservation } from './buffer'
@@ -54,6 +59,8 @@ export interface PackObjectContext {
   dropped: boolean
   /** The temporal window history, when the pack carries one (video packs do). */
   history: readonly ContextObservation[]
+  /** Measured replay/media time -> persisted context time, when declared. */
+  replayClockMap: ObservedReplayClockMap | null
   domEvents: readonly DomEvent[]
   /**
    * Element rectangles the chrome-dom payload DECLARES, counted off the raw
@@ -98,29 +105,6 @@ function packReader(dirPath: string): {
       }
     },
   }
-}
-
-/**
- * A PNG's declared pixel size, straight out of its IHDR — 8-byte signature,
- * then the first chunk, which a PNG REQUIRES to be IHDR.
- *
- * MEASURED FROM THE FILE, never copied from `snapshot_width`/`snapshot_height`:
- * the declaration exists from format 0.7.0 only, and a declaration that
- * disagrees with its own raster is a bug this reader must expose rather than
- * inherit (SPEC §5.6). Reading 24 bytes also means opening a folder of 4K packs
- * costs no decode at all.
- */
-function pngPixelSize(file: string): { width: number; height: number } | null {
-  let head: Buffer
-  try {
-    head = readFileSync(file)
-  } catch {
-    return null
-  }
-  if (head.length < 24 || head.toString('ascii', 12, 16) !== 'IHDR') return null
-  const width = head.readUInt32BE(16)
-  const height = head.readUInt32BE(20)
-  return width > 0 && height > 0 ? { width, height } : null
 }
 
 function readManifest(dirPath: string): Manifest | null {
@@ -252,6 +236,10 @@ export function readPackObjectContext(dirPath: string): PackObjectContext | null
     // DROPPED — the flag is only for a payload that is there and unreadable.
     dropped: uiaText !== null && uiaEmpty(uia),
     history: history.status === 'loaded' ? history.observations : [],
+    replayClockMap:
+      history.status === 'loaded'
+        ? windowsContextReplayClockMap(history.timeline)
+        : null,
     domEvents: parseDomPayload(domText),
     domRectanglesDeclared: declaredDomRectangles(domText),
     note:
@@ -281,6 +269,7 @@ export function openPackContextSession(
     observation: context.observation,
     dropped: context.dropped,
     domEvents: context.domEvents,
+    ...(context.replayClockMap === null ? {} : { replayClockMap: context.replayClockMap }),
     ...options,
   })
   if (

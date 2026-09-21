@@ -195,3 +195,77 @@ export function canRetry(result: ActionResult, config: ActionConfig | undefined)
   if (config === undefined || !config.enabled) return false
   return result.retryable
 }
+
+/**
+ * Failures and timeouts from a pipeline run that warrant notifying the user.
+ */
+export function failureResults(results: readonly ActionResult[]): readonly ActionResult[] {
+  return results.filter(
+    (result) => result.outcome === 'failed' || result.outcome === 'timed-out',
+  )
+}
+
+/**
+ * Tracks action outcomes across a pack's save lifecycle state transitions (#169).
+ *
+ * A pack moves through discrete states: source-ready -> annotated-replay-ready -> complete.
+ * At the initial transition (source-ready), all enabled configurations are evaluated.
+ * Actions that fail or succeed must not automatically re-execute on subsequent
+ * pack state transitions — retries for failed actions are explicit user requests
+ * (retryAction). Only actions that were previously BLOCKED (waiting for a later
+ * pack state) receive their second chance when that required state arrives.
+ */
+export class SaveActionLifecycle {
+  private initialRunDone = false
+  private readonly blocked = new Set<string>()
+
+  /** Whether the initial transition for this pack has been executed. */
+  get hasRun(): boolean {
+    return this.initialRunDone
+  }
+
+  /** The configuration IDs currently blocked waiting for a later pack state. */
+  get blockedConfigIds(): ReadonlySet<string> {
+    return this.blocked
+  }
+
+  /**
+   * Filter the enabled configurations for the current pack state transition.
+   *
+   * On the initial transition for a pack, all enabled configurations are returned.
+   * On subsequent transitions, only configurations that were previously blocked
+   * waiting for a later pack state are returned.
+   */
+  filterConfigs(configs: readonly ActionConfig[]): readonly ActionConfig[] {
+    if (!this.initialRunDone) {
+      return configs.filter((c) => c.enabled)
+    }
+    return configs.filter((c) => c.enabled && this.blocked.has(c.configId))
+  }
+
+  /**
+   * Record the results of a transition's pipeline execution.
+   *
+   * Updates the set of blocked configurations:
+   * - On the initial run, all actions with outcome 'blocked' are remembered.
+   * - On subsequent runs, actions that ran (ok, failed, timed-out) or skipped
+   *   are removed from the blocked set.
+   */
+  recordResults(results: readonly ActionResult[]): void {
+    if (!this.initialRunDone) {
+      this.initialRunDone = true
+      this.blocked.clear()
+      for (const result of results) {
+        if (result.outcome === 'blocked') {
+          this.blocked.add(result.configId)
+        }
+      }
+    } else {
+      for (const result of results) {
+        if (result.outcome !== 'blocked') {
+          this.blocked.delete(result.configId)
+        }
+      }
+    }
+  }
+}

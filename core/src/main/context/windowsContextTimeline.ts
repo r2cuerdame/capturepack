@@ -13,6 +13,12 @@
 import type { EditorUiaElement, EditorUiaWindow } from '../../shared/ipc'
 import { stripUtf8Bom } from '../../shared/json'
 import type { ContextObservation } from './buffer'
+import {
+  createObservedReplayClockMap,
+  measuredEdgeExtrapolationMs,
+  ptsToSessionMs,
+  type ObservedReplayClockMap,
+} from '../../shared/replayClockMap'
 
 export const WINDOWS_CONTEXT_TIMELINE_SCHEMA = 'capturepack.windows-context.timeline'
 export const WINDOWS_CONTEXT_TIMELINE_VERSION = 1
@@ -87,6 +93,11 @@ export interface WindowsContextTimelineV1 {
     start_ms: number
     end_ms: number
   }
+  /**
+   * Measured conversion from replay/media time to this file's context clock.
+   * Absent preserves the historical identity mapping.
+   */
+  replay_clock?: PersistedReplayContextClock
   checkpoint: {
     t_ms: number
     windows: EditorUiaWindow[]
@@ -100,6 +111,15 @@ export interface WindowsContextTimelineV1 {
   deltas: PersistedWindowsContextDelta[]
 }
 
+export interface PersistedReplayContextClock {
+  basis: 'native-source-exposure'
+  anchors: Array<{
+    replay_ms: number
+    context_ms: number
+  }>
+  max_extrapolation_ms: number
+}
+
 export interface WindowsContextExportRange {
   /** Boundary in the input observations' pack clock. */
   startMs?: number
@@ -107,6 +127,74 @@ export interface WindowsContextExportRange {
   endMs?: number
   /** Where `startMs` lands in the exported clock. `0` rebases a trim. */
   rebaseToMs?: number
+  /** Measured replay -> context mapping on the input observation clock. */
+  replayClock?: PersistedReplayContextClock
+}
+
+function observedMapFromPersisted(
+  value: PersistedReplayContextClock | undefined,
+): ObservedReplayClockMap | null {
+  if (value === undefined || value.anchors.length < 2 || value.anchors.length > 64) return null
+  const decision = createObservedReplayClockMap(
+    value.anchors.map((anchor) => ({
+      ptsMs: anchor.replay_ms,
+      sessionMs: anchor.context_ms,
+    })),
+    value.max_extrapolation_ms,
+  )
+  return decision.status === 'ready' ? decision.map : null
+}
+
+export function windowsContextReplayClockMap(
+  timeline: WindowsContextTimelineV1,
+): ObservedReplayClockMap | null {
+  return observedMapFromPersisted(timeline.replay_clock)
+}
+
+export function persistedReplayContextClockMap(
+  clock: PersistedReplayContextClock | undefined,
+): ObservedReplayClockMap | null {
+  return observedMapFromPersisted(clock)
+}
+
+function exportReplayClock(
+  clock: PersistedReplayContextClock | undefined,
+  startMs: number,
+  endMs: number,
+  rebaseToMs: number,
+): PersistedReplayContextClock | undefined {
+  const observed = observedMapFromPersisted(clock)
+  if (clock === undefined || observed === null) return undefined
+  const replayShift = rebaseToMs - startMs
+  const candidates = [
+    startMs,
+    ...clock.anchors
+      .map((anchor) => anchor.replay_ms)
+      .filter((replayMs) => replayMs > startMs && replayMs < endMs),
+    endMs,
+  ]
+  const anchors = candidates.flatMap((replayMs) => {
+    const contextMs = ptsToSessionMs(observed, replayMs)
+    return contextMs === undefined
+      ? []
+      : [{
+          replay_ms: replayMs + replayShift,
+          context_ms: contextMs + replayShift,
+        }]
+  })
+  if (anchors.length < 2) return undefined
+  const mapped = anchors.map((anchor) => ({
+    ptsMs: anchor.replay_ms,
+    sessionMs: anchor.context_ms,
+  }))
+  return {
+    basis: clock.basis,
+    anchors,
+    max_extrapolation_ms: Math.min(
+      clock.max_extrapolation_ms,
+      measuredEdgeExtrapolationMs(mapped),
+    ),
+  }
 }
 
 /**
@@ -682,6 +770,8 @@ export function exportWindowsContextTimeline(
     deltas.push(deltaOf(previous, observation))
     previous = observation
   }
+  const replayClock = exportReplayClock(range.replayClock, startMs, endMs, rebaseToMs)
+  if (range.replayClock !== undefined && replayClock === undefined) return null
   return {
     schema: WINDOWS_CONTEXT_TIMELINE_SCHEMA,
     version: WINDOWS_CONTEXT_TIMELINE_VERSION,
@@ -689,6 +779,7 @@ export function exportWindowsContextTimeline(
       start_ms: rebaseToMs,
       end_ms: rebasedEndMs,
     },
+    ...(replayClock === undefined ? {} : { replay_clock: replayClock }),
     checkpoint: {
       t_ms: checkpoint.tMs,
       windows: checkpoint.windows.map(cloneWindow),
@@ -1093,6 +1184,31 @@ function readWindowsContextTimeline(
   const rawCheckpoint = value['checkpoint']
   const rawDeltas = value['deltas']
   if (!isRecord(rawRange) || !isRecord(rawCheckpoint) || !Array.isArray(rawDeltas)) return null
+  let replayClock: PersistedReplayContextClock | undefined
+  const rawReplayClock = value['replay_clock']
+  if (rawReplayClock !== undefined) {
+    if (!isRecord(rawReplayClock) || !Array.isArray(rawReplayClock['anchors'])) return null
+    const basis = rawReplayClock['basis']
+    const maximum = rawReplayClock['max_extrapolation_ms']
+    if (
+      basis !== 'native-source-exposure'
+      || !finiteNumber(maximum)
+      || maximum < 0
+      || maximum > WINDOWS_CONTEXT_TIMELINE_LIMITS.maxDurationMs
+      || rawReplayClock['anchors'].length < 2
+      || rawReplayClock['anchors'].length > 64
+    ) return null
+    const anchors: PersistedReplayContextClock['anchors'] = []
+    for (const rawAnchor of rawReplayClock['anchors']) {
+      if (!isRecord(rawAnchor)) return null
+      const replayMs = rawAnchor['replay_ms']
+      const contextMs = rawAnchor['context_ms']
+      if (!finiteNumber(replayMs) || !finiteNumber(contextMs)) return null
+      anchors.push({ replay_ms: replayMs, context_ms: contextMs })
+    }
+    replayClock = { basis, anchors, max_extrapolation_ms: maximum }
+    if (observedMapFromPersisted(replayClock) === null) return null
+  }
   const startMs = rawRange['start_ms']
   const endMs = rawRange['end_ms']
   const checkpointMs = rawCheckpoint['t_ms']
@@ -1111,6 +1227,19 @@ function readWindowsContextTimeline(
     )
   ) {
     return null
+  }
+  if (replayClock !== undefined) {
+    const replayMap = observedMapFromPersisted(replayClock)
+    const mappedStart = replayMap === null ? undefined : ptsToSessionMs(replayMap, startMs)
+    const mappedEnd = replayMap === null ? undefined : ptsToSessionMs(replayMap, endMs)
+    if (
+      mappedStart === undefined
+      || mappedEnd === undefined
+      || mappedStart < startMs
+      || mappedStart > endMs
+      || mappedEnd < startMs
+      || mappedEnd > endMs
+    ) return null
   }
   const rawWindows = rawCheckpoint['windows']
   const rawElements = rawCheckpoint['elements']
@@ -1190,6 +1319,7 @@ function readWindowsContextTimeline(
     schema: WINDOWS_CONTEXT_TIMELINE_SCHEMA,
     version: WINDOWS_CONTEXT_TIMELINE_VERSION,
     range: { start_ms: startMs, end_ms: endMs },
+    ...(replayClock === undefined ? {} : { replay_clock: replayClock }),
     checkpoint: {
       t_ms: startMs,
       windows,
@@ -1344,11 +1474,12 @@ export function trimWindowsContextTimeline(
   endMs: number,
 ): WindowsContextTimelineV1 | null {
   if (!safeInteger(startMs, 0) || !safeInteger(endMs, 0) || endMs < startMs) return null
-  const observations = importWindowsContextTimeline(value)
-  if (observations === null) return null
-  return exportWindowsContextTimeline(observations, {
+  const decoded = decodeWindowsContextTimeline(value)
+  if (decoded === null) return null
+  return exportWindowsContextTimeline(decoded.observations, {
     startMs,
     endMs,
     rebaseToMs: 0,
+    replayClock: decoded.timeline.replay_clock,
   })
 }

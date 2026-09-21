@@ -103,6 +103,7 @@ const EN = {
   'recorder.noFrames': 'the screen delivered no video frames',
   'recorder.replayTimeout': 'the recorder did not answer in time',
   'recorder.bufferTooShort': 'not enough had been recorded yet',
+  'recorder.nativeExportFailed': 'the native replay export failed',
 
   'app.recordingOff': 'Recording is off — turn it on in Settings to capture.',
   'settings.recordingName': 'Live recording',
@@ -112,6 +113,14 @@ const EN = {
     'Could not register the {hotkey} hotkey. Another application may already be using it.',
   'app.updateReady': 'CapturePack {version} available — restart to update',
   'actions.failed': 'An After Save Action failed: {names}. The pack is saved — you can retry it.',
+  'actions.retry': 'Retry',
+  'actions.retrying': 'Retrying…',
+  'actions.statusOk': 'OK',
+  'actions.statusFailed': 'Failed',
+  'actions.statusTimedOut': 'Timed out',
+  'actions.statusBlocked': 'Blocked',
+  'actions.statusSkipped': 'Skipped',
+  'actions.heading': 'After Save Actions',
   'pack.replayCompressed': '{media}s of media for {capture}s of capture — this replay does not carry the capture clock',
   'app.upToDate': 'CapturePack is up to date ({version})',
   'app.captureFailed': 'Capture failed: {error}',
@@ -680,6 +689,7 @@ const EN = {
   'pack.skillTimeline': 'Timeline',
   'pack.skillDom': 'DOM / semantic objects',
   'pack.skillProject': 'What is a CapturePack?',
+  'pack.plugins': 'Plugins',
 } as const
 
 export type I18nKey = keyof typeof EN
@@ -729,6 +739,7 @@ const KO: Record<I18nKey, string> = {
   'recorder.noFrames': '화면에서 영상 프레임이 오지 않음',
   'recorder.replayTimeout': '녹화기가 제때 응답하지 않음',
   'recorder.bufferTooShort': '아직 충분히 녹화되지 않음',
+  'recorder.nativeExportFailed': '네이티브 리플레이 내보내기에 실패함',
 
   'app.recordingOff': '녹화가 꺼져 있습니다 — 캡처하려면 설정에서 켜세요.',
   'settings.recordingName': '실시간 녹화',
@@ -738,6 +749,14 @@ const KO: Record<I18nKey, string> = {
     '{hotkey} 단축키를 등록하지 못했습니다. 다른 프로그램이 이미 사용 중일 수 있습니다.',
   'app.updateReady': 'CapturePack {version} 사용 가능 — 재시작하면 업데이트됩니다',
   'actions.failed': '저장 후 작업이 실패했습니다: {names}. 팩은 저장되었습니다 — 다시 시도할 수 있습니다.',
+  'actions.retry': '다시 시도',
+  'actions.retrying': '다시 시도 중…',
+  'actions.statusOk': '완료',
+  'actions.statusFailed': '실패',
+  'actions.statusTimedOut': '시간 초과',
+  'actions.statusBlocked': '차단됨',
+  'actions.statusSkipped': '건너뜀',
+  'actions.heading': '저장 후 작업',
   'pack.replayCompressed': '{capture}초 캡처에 미디어는 {media}초 — 이 replay는 캡처 시계를 담고 있지 않습니다',
   'app.upToDate': 'CapturePack은 최신 버전입니다 ({version})',
   'app.captureFailed': '캡처 실패: {error}',
@@ -1261,6 +1280,7 @@ const KO: Record<I18nKey, string> = {
   'pack.skillTimeline': '타임라인',
   'pack.skillDom': 'DOM / 시맨틱 객체',
   'pack.skillProject': 'CapturePack이란?',
+  'pack.plugins': '플러그인',
 }
 
 const JA: Record<I18nKey, string> = {
@@ -1309,6 +1329,7 @@ const JA: Record<I18nKey, string> = {
   'recorder.noFrames': '画面から映像フレームが届いていません',
   'recorder.replayTimeout': 'レコーダーが時間内に応答しませんでした',
   'recorder.bufferTooShort': 'まだ十分に録画されていません',
+  'recorder.nativeExportFailed': 'ネイティブリプレイのエクスポートに失敗しました',
 
   'app.recordingOff': '録画はオフです — キャプチャするには設定でオンにしてください。',
   'settings.recordingName': 'ライブ録画',
@@ -1318,6 +1339,14 @@ const JA: Record<I18nKey, string> = {
     '{hotkey} ホットキーを登録できませんでした。ほかのアプリが既に使用している可能性があります。',
   'app.updateReady': 'CapturePack {version} が利用可能 — 再起動で更新されます',
   'actions.failed': '保存後アクションが失敗しました: {names}。パックは保存済みです — 再試行できます。',
+  'actions.retry': '再試行',
+  'actions.retrying': '再試行中…',
+  'actions.statusOk': '完了',
+  'actions.statusFailed': '失敗',
+  'actions.statusTimedOut': 'タイムアウト',
+  'actions.statusBlocked': 'ブロック中',
+  'actions.statusSkipped': 'スキップ',
+  'actions.heading': '保存後アクション',
   'pack.replayCompressed': '{capture}秒のキャプチャに対して映像は{media}秒 — この replay はキャプチャの時計を持ちません',
   'app.upToDate': 'CapturePack は最新です ({version})',
   'app.captureFailed': 'キャプチャに失敗しました: {error}',
@@ -1844,6 +1873,7 @@ const JA: Record<I18nKey, string> = {
   'pack.skillTimeline': 'タイムライン',
   'pack.skillDom': 'DOM / セマンティックオブジェクト',
   'pack.skillProject': 'CapturePack とは？',
+  'pack.plugins': 'プラグイン',
 }
 
 const ZH: Record<I18nKey, string> = {
@@ -1891,6 +1921,7 @@ const ZH: Record<I18nKey, string> = {
   'recorder.noFrames': '屏幕未提供任何视频帧',
   'recorder.replayTimeout': '录制器未及时响应',
   'recorder.bufferTooShort': '录制的内容还不够',
+  'recorder.nativeExportFailed': '原生回放导出失败',
 
   'app.recordingOff': '录制已关闭 — 若要截取，请在设置中开启。',
   'settings.recordingName': '实时录制',
@@ -1899,6 +1930,14 @@ const ZH: Record<I18nKey, string> = {
   'app.hotkeyFailed': '无法注册 {hotkey} 快捷键。可能已被其他应用占用。',
   'app.updateReady': 'CapturePack {version} 可用 — 重启即可更新',
   'actions.failed': '保存后操作失败：{names}。包已保存 — 可以重试。',
+  'actions.retry': '重试',
+  'actions.retrying': '重试中…',
+  'actions.statusOk': '已完成',
+  'actions.statusFailed': '失败',
+  'actions.statusTimedOut': '超时',
+  'actions.statusBlocked': '已阻止',
+  'actions.statusSkipped': '已跳过',
+  'actions.heading': '保存后操作',
   'pack.replayCompressed': '{capture} 秒的捕获仅有 {media} 秒画面 — 此 replay 不承载捕获时钟',
   'app.upToDate': 'CapturePack 已是最新版本 ({version})',
   'app.captureFailed': '捕获失败：{error}',
@@ -2418,6 +2457,7 @@ const ZH: Record<I18nKey, string> = {
   'pack.skillTimeline': '时间线',
   'pack.skillDom': 'DOM / 语义对象',
   'pack.skillProject': '什么是 CapturePack？',
+  'pack.plugins': '插件',
 }
 
 const ES: Record<I18nKey, string> = {
@@ -2466,6 +2506,7 @@ const ES: Record<I18nKey, string> = {
   'recorder.noFrames': 'la pantalla no entregó fotogramas de vídeo',
   'recorder.replayTimeout': 'la grabadora no respondió a tiempo',
   'recorder.bufferTooShort': 'aún no se había grabado lo suficiente',
+  'recorder.nativeExportFailed': 'falló la exportación del replay nativo',
 
   'app.recordingOff': 'La grabación está desactivada: actívala en Ajustes para capturar.',
   'settings.recordingName': 'Grabación en vivo',
@@ -2475,6 +2516,14 @@ const ES: Record<I18nKey, string> = {
     'No se pudo registrar el atajo {hotkey}. Puede que otra aplicación ya lo esté usando.',
   'app.updateReady': 'CapturePack {version} disponible — reinicia para actualizar',
   'actions.failed': 'Una acción posterior al guardado falló: {names}. El paquete está guardado — puedes reintentarla.',
+  'actions.retry': 'Reintentar',
+  'actions.retrying': 'Reintentando…',
+  'actions.statusOk': 'Completado',
+  'actions.statusFailed': 'Fallido',
+  'actions.statusTimedOut': 'Tiempo agotado',
+  'actions.statusBlocked': 'Bloqueado',
+  'actions.statusSkipped': 'Omitido',
+  'actions.heading': 'Acciones posteriores al guardado',
   'pack.replayCompressed': '{media}s de vídeo para {capture}s de captura — esta repetición no lleva el reloj de la captura',
   'app.upToDate': 'CapturePack está actualizado ({version})',
   'app.captureFailed': 'Fallo al capturar: {error}',
@@ -3003,6 +3052,7 @@ const ES: Record<I18nKey, string> = {
   'pack.skillTimeline': 'Cronología',
   'pack.skillDom': 'DOM / objetos semánticos',
   'pack.skillProject': '¿Qué es un CapturePack?',
+  'pack.plugins': 'Plugins',
 }
 
 const FR: Record<I18nKey, string> = {
@@ -3051,6 +3101,7 @@ const FR: Record<I18nKey, string> = {
   'recorder.noFrames': 'l’écran n’a fourni aucune image vidéo',
   'recorder.replayTimeout': 'l’enregistreur n’a pas répondu à temps',
   'recorder.bufferTooShort': 'pas encore assez d’enregistrement',
+  'recorder.nativeExportFailed': 'l’export du replay natif a échoué',
 
   'app.recordingOff': 'L’enregistrement est désactivé — activez-le dans les Réglages pour capturer.',
   'settings.recordingName': 'Enregistrement en direct',
@@ -3060,6 +3111,14 @@ const FR: Record<I18nKey, string> = {
     "Impossible d'enregistrer le raccourci {hotkey}. Une autre application l'utilise peut-être déjà.",
   'app.updateReady': 'CapturePack {version} disponible — redémarrez pour mettre à jour',
   'actions.failed': 'Une action après enregistrement a échoué : {names}. Le pack est enregistré — vous pouvez réessayer.',
+  'actions.retry': 'Réessayer',
+  'actions.retrying': 'Nouvelle tentative…',
+  'actions.statusOk': 'Terminé',
+  'actions.statusFailed': 'Échec',
+  'actions.statusTimedOut': 'Délai dépassé',
+  'actions.statusBlocked': 'Bloqué',
+  'actions.statusSkipped': 'Ignoré',
+  'actions.heading': 'Actions après enregistrement',
   'pack.replayCompressed': '{media}s de vidéo pour {capture}s de capture — cette relecture ne porte pas l’horloge de la capture',
   'app.upToDate': 'CapturePack est à jour ({version})',
   'app.captureFailed': 'Échec de la capture : {error}',
@@ -3590,6 +3649,7 @@ const FR: Record<I18nKey, string> = {
   'pack.skillTimeline': 'Chronologie',
   'pack.skillDom': 'DOM / objets sémantiques',
   'pack.skillProject': "Qu'est-ce qu'un CapturePack ?",
+  'pack.plugins': 'Plugins',
 }
 
 const DE: Record<I18nKey, string> = {
@@ -3638,6 +3698,7 @@ const DE: Record<I18nKey, string> = {
   'recorder.noFrames': 'der Bildschirm lieferte keine Videobilder',
   'recorder.replayTimeout': 'der Rekorder hat nicht rechtzeitig geantwortet',
   'recorder.bufferTooShort': 'es war noch nicht genug aufgezeichnet',
+  'recorder.nativeExportFailed': 'der Export des nativen Replays ist fehlgeschlagen',
 
   'app.recordingOff': 'Die Aufnahme ist ausgeschaltet — zum Erfassen in den Einstellungen aktivieren.',
   'settings.recordingName': 'Live-Aufnahme',
@@ -3647,6 +3708,14 @@ const DE: Record<I18nKey, string> = {
     'Der Hotkey {hotkey} konnte nicht registriert werden. Möglicherweise verwendet ihn bereits eine andere Anwendung.',
   'app.updateReady': 'CapturePack {version} verfügbar — zum Aktualisieren neu starten',
   'actions.failed': 'Eine Aktion nach dem Speichern ist fehlgeschlagen: {names}. Das Pack ist gespeichert — Sie können es erneut versuchen.',
+  'actions.retry': 'Wiederholen',
+  'actions.retrying': 'Wiederhole…',
+  'actions.statusOk': 'Abgeschlossen',
+  'actions.statusFailed': 'Fehlgeschlagen',
+  'actions.statusTimedOut': 'Zeitüberschreitung',
+  'actions.statusBlocked': 'Blockiert',
+  'actions.statusSkipped': 'Übersprungen',
+  'actions.heading': 'Aktionen nach dem Speichern',
   'pack.replayCompressed': '{media}s Video für {capture}s Aufnahme — diese Wiedergabe trägt nicht die Uhr der Aufnahme',
   'app.upToDate': 'CapturePack ist aktuell ({version})',
   'app.captureFailed': 'Aufnahme fehlgeschlagen: {error}',
@@ -4180,6 +4249,7 @@ const DE: Record<I18nKey, string> = {
   'pack.skillTimeline': 'Zeitleiste',
   'pack.skillDom': 'DOM / semantische Objekte',
   'pack.skillProject': 'Was ist ein CapturePack?',
+  'pack.plugins': 'Plugins',
 }
 
 const PT: Record<I18nKey, string> = {
@@ -4228,6 +4298,7 @@ const PT: Record<I18nKey, string> = {
   'recorder.noFrames': 'a tela não entregou quadros de vídeo',
   'recorder.replayTimeout': 'o gravador não respondeu a tempo',
   'recorder.bufferTooShort': 'ainda não havia gravação suficiente',
+  'recorder.nativeExportFailed': 'a exportação do replay nativo falhou',
 
   'app.recordingOff': 'A gravação está desligada — ative-a nas Configurações para capturar.',
   'settings.recordingName': 'Gravação ao vivo',
@@ -4237,6 +4308,14 @@ const PT: Record<I18nKey, string> = {
     'Não foi possível registrar o atalho {hotkey}. Outro aplicativo pode já estar usando esse atalho.',
   'app.updateReady': 'CapturePack {version} disponível — reinicie para atualizar',
   'actions.failed': 'Uma ação pós-salvamento falhou: {names}. O pacote está salvo — você pode tentar novamente.',
+  'actions.retry': 'Repetir',
+  'actions.retrying': 'Repetindo…',
+  'actions.statusOk': 'Concluído',
+  'actions.statusFailed': 'Falhou',
+  'actions.statusTimedOut': 'Tempo esgotado',
+  'actions.statusBlocked': 'Bloqueado',
+  'actions.statusSkipped': 'Ignorado',
+  'actions.heading': 'Ações pós-salvamento',
   'pack.replayCompressed': '{media}s de vídeo para {capture}s de captura — esta repetição não carrega o relógio da captura',
   'app.upToDate': 'O CapturePack está atualizado ({version})',
   'app.captureFailed': 'Falha na captura: {error}',
@@ -4766,6 +4845,7 @@ const PT: Record<I18nKey, string> = {
   'pack.skillTimeline': 'Linha do tempo',
   'pack.skillDom': 'DOM / objetos semânticos',
   'pack.skillProject': 'O que é um CapturePack?',
+  'pack.plugins': 'Plugins',
 }
 
 const RU: Record<I18nKey, string> = {
@@ -4814,6 +4894,7 @@ const RU: Record<I18nKey, string> = {
   'recorder.noFrames': 'экран не выдаёт кадров видео',
   'recorder.replayTimeout': 'рекордер не ответил вовремя',
   'recorder.bufferTooShort': 'записано ещё недостаточно',
+  'recorder.nativeExportFailed': 'не удалось экспортировать нативный реплей',
 
   'app.recordingOff': 'Запись выключена — включите её в настройках, чтобы сделать захват.',
   'settings.recordingName': 'Постоянная запись',
@@ -4823,6 +4904,14 @@ const RU: Record<I18nKey, string> = {
     'Не удалось зарегистрировать сочетание {hotkey}. Возможно, его уже использует другое приложение.',
   'app.updateReady': 'Доступен CapturePack {version} — перезапустите для обновления',
   'actions.failed': 'Действие после сохранения не выполнено: {names}. Пакет сохранён — можно повторить.',
+  'actions.retry': 'Повторить',
+  'actions.retrying': 'Повторная попытка…',
+  'actions.statusOk': 'Завершено',
+  'actions.statusFailed': 'Не выполнено',
+  'actions.statusTimedOut': 'Тайм-аут',
+  'actions.statusBlocked': 'Заблокировано',
+  'actions.statusSkipped': 'Пропущено',
+  'actions.heading': 'Действия после сохранения',
   'pack.replayCompressed': '{media} с видео на {capture} с записи — этот повтор не несёт часы записи',
   'app.upToDate': 'CapturePack обновлён до последней версии ({version})',
   'app.captureFailed': 'Сбой захвата: {error}',
@@ -5349,6 +5438,7 @@ const RU: Record<I18nKey, string> = {
   'pack.skillTimeline': 'Хронология',
   'pack.skillDom': 'DOM / семантические объекты',
   'pack.skillProject': 'Что такое CapturePack?',
+  'pack.plugins': 'Плагины',
 }
 
 // ---------------------------------------------------------------------------
@@ -5414,6 +5504,8 @@ export function recorderFailureText(t: TranslateFn, reason: RecorderFailureReaso
       return t('recorder.replayTimeout')
     case 'buffer-too-short':
       return t('recorder.bufferTooShort')
+    case 'native-export-failed':
+      return t('recorder.nativeExportFailed')
   }
 }
 

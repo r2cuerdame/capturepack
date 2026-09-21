@@ -27,6 +27,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { deflateSync } from 'node:zlib'
 import { terminateProcessTree } from './process-tree.mjs'
 
 let passed = 0
@@ -39,6 +40,44 @@ function check(name, condition, detail) {
     failed += 1
     console.log(`  FAIL  ${name}${detail === undefined ? '' : ` — ${detail}`}`)
   }
+}
+
+/**
+ * A real, valid grey PNG for the full-page bundle below (#157). The app reads
+ * the IHDR off the bytes it gathered and refuses a picture whose size disagrees
+ * with the announcement, so the fixture has to be a PNG a decoder accepts —
+ * the same shape `scripts/fixtures/greyPng.ts` builds for fixture packs, in
+ * plain JavaScript because this check runs unbundled on Node 22.
+ */
+function greyPng(width, height) {
+  const crc32 = (bytes) => {
+    let crc = 0xffffffff
+    for (const byte of bytes) {
+      crc ^= byte
+      for (let bit = 0; bit < 8; bit += 1) crc = crc & 1 ? (crc >>> 1) ^ 0xedb88320 : crc >>> 1
+    }
+    return (crc ^ 0xffffffff) >>> 0
+  }
+  const chunk = (type, data) => {
+    const head = Buffer.alloc(4)
+    head.writeUInt32BE(data.length, 0)
+    const body = Buffer.concat([Buffer.from(type, 'ascii'), data])
+    const tail = Buffer.alloc(4)
+    tail.writeUInt32BE(crc32(body), 0)
+    return Buffer.concat([head, body, tail])
+  }
+  const raw = Buffer.alloc((width + 1) * height)
+  for (let y = 0; y < height; y += 1) raw.fill(0x20, y * (width + 1) + 1, (y + 1) * (width + 1))
+  const ihdr = Buffer.alloc(13)
+  ihdr.writeUInt32BE(width, 0)
+  ihdr.writeUInt32BE(height, 4)
+  ihdr[8] = 8
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr),
+    chunk('IDAT', deflateSync(raw)),
+    chunk('IEND', Buffer.alloc(0)),
+  ])
 }
 
 /** Chrome's framing: 32-bit little-endian length, then the UTF-8 body. */
@@ -300,6 +339,130 @@ if (listening) {
   // still listening after being sent two malformed messages.
   check('malformed and future-protocol messages do not take the app down',
     !/DOM bridge could not listen/.test(log) && app.exitCode === null)
+
+  // A WHOLE PAGE FROM THE TOOLBAR BUTTON (#157), exactly as the extension
+  // sends it: the announcement, then the picture in base64 chunks, each its
+  // own native messaging frame. The app must gather it, open the still editor
+  // on it — the same editor a Ctrl+Alt+S still opens — write the save-first
+  // pack with the browser-page scope and the page beside it, and answer the
+  // extension on the same wire so its icon can say so.
+  console.log('\nA whole page from the toolbar button')
+  const pagePng = greyPng(96, 320)
+  const pageBase64 = pagePng.toString('base64')
+  const chunkChars = 256
+  const chunkCount = Math.ceil(pageBase64.length / chunkChars)
+  const repliesBefore = replyFrames
+  host.stdin.write(frame({
+    type: 'page.captured',
+    protocol: 1,
+    timestamp: Date.now(),
+    capture_id: 'wire-page-1',
+    via: 'toolbar',
+    tab: { url: 'https://example.com/docs/long', title: 'Long docs page' },
+    page: {
+      url: 'https://example.com/docs/long',
+      title: 'Long docs page',
+      cssWidth: 48, cssHeight: 160, pixelWidth: 96, pixelHeight: 320,
+      devicePixelRatio: 2, scale: 2, clientWidth: 48, clientHeight: 40,
+      scrollWidth: 48, scrollHeight: 160,
+      tiles: [{ index: 0, scrollY: 0 }, { index: 1, scrollY: 40 }, { index: 2, scrollY: 80 }, { index: 3, scrollY: 120 }],
+      truncated: false, downscaled: false, exactScale: true, hiddenRepeating: 1, captureMs: 2500,
+    },
+    document: {
+      viewport: { width: 48, height: 160, devicePixelRatio: 2, scrollX: 0, scrollY: 0 },
+      scope: 'document',
+      url: 'https://example.com/docs/long',
+      title: 'Long docs page',
+      elements: [
+        { i: 0, tag: 'h1', role: 'heading', bounds: { x: 4, y: 4, width: 40, height: 10 }, text: 'Docs' },
+        { i: 1, tag: 'p', role: '', bounds: { x: 4, y: 140, width: 40, height: 12 }, text: 'The end' },
+      ],
+      truncated: false, visitedCount: 3, elapsedMs: 1,
+      omitted: ['elements outside the captured page area'],
+    },
+    png: { bytes: pagePng.length, chunks: chunkCount, chunkChars },
+  }))
+  for (let index = 0; index < chunkCount; index += 1) {
+    host.stdin.write(frame({
+      type: 'page.chunk',
+      protocol: 1,
+      timestamp: Date.now(),
+      capture_id: 'wire-page-1',
+      index,
+      data: pageBase64.slice(index * chunkChars, (index + 1) * chunkChars),
+    }))
+  }
+  const pageReceived = await waitFor(
+    () => /\[chrome\] full page wire-page-1 received: https:\/\/example\.com\/docs\/long 96x320 px from 4 tile\(s\)/.test(logText()),
+    20_000,
+  )
+  check('the app gathers the chunks into the picture the header announced', pageReceived,
+    'no "full page wire-page-1 received" line in main.log')
+  const pageOpened = await waitFor(
+    () => /\[chrome\] full page wire-page-1 opened in the editor/.test(logText()),
+    30_000,
+  )
+  check('and opens it in the still editor', pageOpened,
+    'no "opened in the editor" line — the flow did not reach the editor')
+  check('through the still flow, not a viewer of its own',
+    /\[image\] save-first wrote .* \(browser-page, 96x320\)/.test(logText()),
+    'no save-first line naming the browser-page scope')
+  const acked = await waitFor(() => replyFrames > repliesBefore, 10_000)
+  check('the extension is answered on the same wire', acked, 'no page.received frame came back')
+  const pagePack = readdirSync(outDir).map((entry) => join(outDir, entry)).find((dir) => {
+    try {
+      const manifest = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8'))
+      return manifest.capture_kind === 'image' && manifest.media?.image_scope === 'browser-page'
+    } catch {
+      return false
+    }
+  })
+  check('the pack declares what it is: an image whose scope is the browser page', pagePack !== undefined,
+    `no browser-page pack in ${outDir}`)
+  if (pagePack !== undefined) {
+    const snapshot = readFileSync(join(pagePack, 'snapshot.png'))
+    check('snapshot.png is the picture the extension sent, byte for byte', snapshot.equals(pagePng))
+    const written = await waitFor(() => existsSync(join(pagePack, 'plugins', 'chrome-dom', 'elements.json')), 15_000)
+    check('the page\'s document rides beside it in plugins/chrome-dom', written)
+    if (written) {
+      const payload = JSON.parse(readFileSync(join(pagePack, 'plugins', 'chrome-dom', 'elements.json'), 'utf8'))
+      const event = payload.events.find((e) => e.type === 'dom.document.captured')
+      check('as a document-scoped capture with the page geometry and a zero age',
+        event?.document?.scope === 'document' && event.document.elements.length === 2
+        && event.page?.pixel_height === 320 && event.page?.tiles === 4 && event.age_ms === 0
+        && event.viewport?.dpr === 2 && event.viewport?.height === 160,
+        JSON.stringify({ ...event, document: event?.document && { ...event.document, elements: event.document.elements.length } }))
+      const declared = await waitFor(() => {
+        try {
+          return JSON.parse(readFileSync(join(pagePack, 'manifest.json'), 'utf8')).plugins.some((p) => p.name === 'chrome-dom')
+        } catch {
+          return false
+        }
+      }, 15_000)
+      check('and the manifest declares it', declared)
+    }
+    // THE PACK IS A SPEC-CONFORMANT PACK. The validator is the reader every
+    // other reader is measured against; a browser-page still that only the
+    // app that wrote it can read is not a pack.
+    const validated = spawnSync(
+      process.execPath,
+      [resolve('..', 'tools', 'validate-capturepack.mjs'), pagePack],
+      { encoding: 'utf8', windowsHide: true, timeout: 60_000 },
+    )
+    check('the written pack passes the SPEC validator', validated.status === 0,
+      `exit ${String(validated.status)}: ${String(validated.stdout).split(String.fromCharCode(10)).filter((l) => l.includes("FAIL")).join(" | ")}${String(validated.stderr).slice(-300)}`)
+    const uiaWritten = await waitFor(() => existsSync(join(pagePack, 'plugins', 'windows-uia', 'elements.json')), 15_000)
+    check('the picture is recorded as the one window a reader places the page against', uiaWritten)
+    if (uiaWritten) {
+      const uia = JSON.parse(readFileSync(join(pagePack, 'plugins', 'windows-uia', 'elements.json'), 'utf8'))
+      const window = uia.windows?.[0]
+      check('whose client rectangle is the whole picture, titled as the tab',
+        uia.windows?.length === 1 && window?.title === 'Long docs page'
+        && window?.client_bounds?.width === 96 && window?.client_bounds?.height === 320
+        && window?.bounds?.x === 0 && window?.bounds?.y === 0,
+        JSON.stringify(window))
+    }
+  }
 }
 
 host?.stdin.end()

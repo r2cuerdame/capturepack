@@ -6,11 +6,14 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import AdmZip from 'adm-zip'
 import {
   addManifestPlugin,
+  createPackZip,
   domPluginDeclaration,
   savePack,
   tryWriteDomPlugin,
@@ -288,6 +291,93 @@ async function main(): Promise<void> {
     check(
       'atomic source publication leaves no temporary files behind',
       allFiles(handle.dirPath).every((file) => !file.endsWith('.tmp')),
+    )
+
+    console.log('\nFULL ZIP ATOMIC ARCHIVE CREATION & RESILIENCE (#177)')
+    // 1. Successful creation: archive contains complete media and manifest
+    const zipPath = await createPackZip(handle.dirPath)
+    check('createPackZip returns the expected zip destination path', zipPath === `${handle.dirPath}.zip`)
+    check('createPackZip created the zip archive', existsSync(zipPath))
+    const initialZip = new AdmZip(zipPath)
+    const initialEntries = initialZip.getEntries().map((e) => e.entryName)
+    check('Full ZIP archive contains manifest.json', initialEntries.includes('manifest.json'))
+    check('Full ZIP archive contains snapshot.png', initialEntries.includes('snapshot.png'))
+    check('Full ZIP archive contains annotations.json', initialEntries.includes('annotations.json'))
+    check(
+      'Full ZIP archive creation leaves no temporary files in pack or parent directory',
+      allFiles(handle.dirPath).every((f) => !f.includes('.tmp')) &&
+        readdirSync(outputDir).every((f) => !f.includes('.tmp-')),
+    )
+
+    // 2. Atomic replacement: updating pack files and creating zip again replaces the existing archive
+    const initialZipBytes = readFileSync(zipPath)
+    writeFileSync(path.join(handle.dirPath, 'test-render-finish.txt'), 'render completed successfully')
+    await createPackZip(handle.dirPath)
+    const updatedZip = new AdmZip(zipPath)
+    const updatedEntries = updatedZip.getEntries().map((e) => e.entryName)
+    check(
+      'createPackZip atomically replaces preexisting archive with updated files',
+      updatedEntries.includes('test-render-finish.txt') &&
+        updatedZip.getEntry('test-render-finish.txt')?.getData().toString('utf8') ===
+          'render completed successfully',
+    )
+    const updatedZipBytes = readFileSync(zipPath)
+    check('preexisting archive bytes were replaced', !updatedZipBytes.equals(initialZipBytes))
+
+    // 3. Error / interruption resilience: failed or interrupted zip operations clean up temporary files and leave preexisting archive unharmed
+    const fsPromises = require('node:fs/promises') as typeof import('node:fs/promises')
+    const originalRename = fsPromises.rename
+    try {
+      fsPromises.rename = (async () => {
+        throw new Error('Simulated atomic rename failure')
+      }) as unknown as typeof fsPromises.rename
+      let renameThrew = false
+      try {
+        await createPackZip(handle.dirPath)
+      } catch (err) {
+        renameThrew = (err as Error).message === 'Simulated atomic rename failure'
+      }
+      check('createPackZip propagates atomic rename failure cleanly', renameThrew)
+      check(
+        'failed zip operation leaves preexisting archive completely unharmed',
+        readFileSync(zipPath).equals(updatedZipBytes),
+      )
+      check(
+        'failed zip operation cleans up all temporary sibling files',
+        readdirSync(outputDir).every((f) => !f.includes('.tmp-')),
+      )
+    } finally {
+      fsPromises.rename = originalRename
+    }
+
+    // 4. Source invariant checks for #177
+    const historySource = readFileSync(
+      path.join(process.cwd(), 'src', 'main', 'historyWindow.ts'),
+      'utf8',
+    ).split('\r\n').join('\n')
+    const exporterSource = readFileSync(
+      path.join(process.cwd(), 'src', 'main', 'exporter.ts'),
+      'utf8',
+    ).split('\r\n').join('\n')
+
+    const historyCreateZipSection = historySource.slice(
+      historySource.indexOf('IPC.historyCreateZip'),
+      historySource.indexOf('IPC.historyPlanShare'),
+    )
+    check(
+      'historyCreateZip guards against in-flight renders before starting zip operation',
+      historyCreateZipSection.includes('isRenderInFlight(entry.path)') &&
+        historyCreateZipSection.includes("return { ok: false, error: t('history.shareErrNotReady') }"),
+    )
+    check(
+      'createPackZip writes to a unique temporary sibling file and renames it',
+      exporterSource.includes('const temporaryPath = `${zipPath}.tmp-${process.pid}-${randomUUID()}.zip`') &&
+        exporterSource.includes('await zip.writeZipPromise(temporaryPath, { overwrite: true })') &&
+        exporterSource.includes('await rename(temporaryPath, zipPath)'),
+    )
+    check(
+      'createPackZip cleans up temporary files in finally block',
+      exporterSource.includes('await rm(temporaryPath, { force: true })'),
     )
   } finally {
     rmSync(outputDir, { recursive: true, force: true })

@@ -2093,7 +2093,7 @@ function syncSelectionUi(): void {
   // pending box, the number it will carry the moment Enter commits it.
   const number = displayNumbers().get(a.annotation_id)
   numberBtn.textContent = a.numbered && number !== undefined ? String(number) : '#'
-  numberBtn.classList.toggle('on', a.numbered)
+  numberBtn.classList.toggle('on', Boolean(a.numbered))
   // Choosing WHICH number is meaningless for a box that shows none, so the
   // caret follows the toggle. Turning numbering off RELEASES the number (#51):
   // there is nothing kept behind the caret to be restored, because turning it
@@ -2102,7 +2102,7 @@ function syncSelectionUi(): void {
   if (!a.numbered && numberPickerOpen) closeNumberPicker(false)
   syncNumberPicker(a)
   blurBtn.textContent = a.blur ? t('editor.blurOn') : t('editor.blur')
-  blurBtn.classList.toggle('on', a.blur)
+  blurBtn.classList.toggle('on', Boolean(a.blur))
   // Duration is only meaningful with a replay; respect settings.showDurationLabel.
   const showChip = scrub !== null && showDurationLabel
   durationChip.hidden = !showChip

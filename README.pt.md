@@ -35,7 +35,7 @@ que funciona sem IA, sem conta e sem serviço na nuvem.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Baixar](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Versão pública atual para Windows: **CapturePack 0.5.0**. O Histórico cria
+Versão pública atual para Windows: **CapturePack 0.5.1**. O Histórico cria
 uma **Cópia para compartilhar** (`.share.zip`) cujas únicas mídias são imagens
 estáticas PNG anotadas e revisadas; acompanham-nas um README gerado, um
 visualizador offline e um inventário mínimo. Ela exclui originais, todos os vídeos
@@ -281,10 +281,10 @@ Ferramentas, configuração de clientes e ajustes: [docs/MCP.md](docs/MCP.md).
 
 Baixe o instalador mais recente pelo [GitHub Releases](https://github.com/r2cuerdame/capturepack/releases/latest):
 
-1. Baixe `CapturePack-Setup-0.5.0.exe` e `SHA256SUMS.txt`.
+1. Baixe `CapturePack-Setup-0.5.1.exe` e `SHA256SUMS.txt`.
 2. Verifique o checksum no PowerShell:
    ```powershell
-   Get-FileHash CapturePack-Setup-0.5.0.exe -Algorithm SHA256
+   Get-FileHash CapturePack-Setup-0.5.1.exe -Algorithm SHA256
    ```
 3. Execute o instalador. Como o processo de assinatura de código open source está em andamento, o Windows SmartScreen pode alertar: clique em **Mais informações** → **Executar assim mesmo**.
 
@@ -312,7 +312,7 @@ npm run qa:rc
 
 ## Estado
 
-**0.5.0 é o download público atual para Windows.** O CapturePack continua sendo
+**0.5.1 é o download público atual para Windows.** O CapturePack continua sendo
 um projeto em estágio inicial, então guarde o pack original ao relatar um
 problema e veja o [GOAL.md](GOAL.md) para a visão do produto e o
 [ROADMAP.md](ROADMAP.md) para o que vem a seguir.
@@ -336,7 +336,7 @@ deslocamento global fixo no código.
   — acesso somente leitura a packs salvos e integração de provedores de
   contexto.
 
-CapturePack `0.5.0` é a versão do aplicativo. O `format_version` do pack evolui
+CapturePack `0.5.1` é a versão do aplicativo. O `format_version` do pack evolui
 de forma independente, por mudanças aditivas de formato; leitores devem seguir o
 [SPEC.md](SPEC.md) em vez de deduzir o suporte ao formato pela versão do app.
 

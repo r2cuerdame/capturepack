@@ -15,6 +15,7 @@ const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8')
 
 const html = read('site/index.html')
 const i18n = read('site/i18n.js')
+const telemetry = read('site/telemetry.js')
 const style = read('site/style.css')
 const svg = read('site/assets/demo.svg')
 const readme = read('README.md')
@@ -41,7 +42,7 @@ const packageVersion = String(packageJson.version ?? '')
 // a later one. What it may never be is a different build wearing the public
 // version's number: a locally built installer named like the published 0.3.3
 // cannot be told apart from it once it leaves this folder.
-const PUBLIC_VERSION = '0.5.0'
+const PUBLIC_VERSION = '0.5.1'
 const packageIsCurrentPublic = packageVersion === PUBLIC_VERSION
 const candidateBase = /^(\d+\.\d+\.\d+)-rc\.\d+$/.exec(packageVersion)?.[1]
 /** Negative, zero or positive, comparing major.minor.patch left to right. */
@@ -91,6 +92,39 @@ const derivedReadmeMarkers = {
   de: /nur bei Manifest-Deklaration/u,
   pt: /só (?:quando|se) declarad[ao] no manifesto/u,
   ru: /только если объявлен[оа]? в manifest/u,
+}
+
+const telemetryInstallId = '123e4567-e89b-42d3-a456-426614174000'
+
+function runSiteTelemetry({
+  storage,
+  now = new Date(2026, 8, 14, 12),
+  navigator = { platform: 'Win32', userAgent: '', maxTouchPoints: 0 },
+  fetch,
+  timers = [],
+}) {
+  class FixedDate extends Date {
+    constructor() {
+      super(now.getTime())
+    }
+  }
+  vm.runInNewContext(telemetry, {
+    AbortController,
+    Date: FixedDate,
+    Uint8Array,
+    clearTimeout() {},
+    crypto: { randomUUID: () => telemetryInstallId },
+    fetch,
+    localStorage: {
+      getItem: (key) => storage.get(key) ?? null,
+      setItem: (key, value) => storage.set(key, value),
+    },
+    navigator,
+    setTimeout(callback, milliseconds) {
+      timers.push({ callback, milliseconds })
+      return timers.length
+    },
+  })
 }
 
 let passed = 0
@@ -164,6 +198,86 @@ for (const lang of supported) {
     [...missingText, ...missingAlt].join(', '),
   )
 }
+
+console.log('\nPurplePulse telemetry')
+const siteStorage = new Map()
+const siteRequests = []
+const siteTimers = []
+const captureRequest = async (url, init) => {
+  siteRequests.push({ url, init, payload: JSON.parse(init.body) })
+}
+runSiteTelemetry({ storage: siteStorage, fetch: captureRequest, timers: siteTimers })
+runSiteTelemetry({ storage: siteStorage, fetch: captureRequest, timers: siteTimers })
+await Promise.resolve()
+const sitePayload = siteRequests[0]?.payload ?? {}
+check(
+  'both static entry points load the shared telemetry script',
+  html.includes('<script src="telemetry.js"></script>')
+    && guideHtml.includes('<script src="../telemetry.js"></script>'),
+)
+check(
+  'browser install UUID persists and the same local day is gated',
+  siteStorage.get('capturepack_purplepulse_install_id') === telemetryInstallId
+    && siteStorage.get('capturepack_purplepulse_day') === '2026-09-14'
+    && siteRequests.length === 1,
+)
+check(
+  'site request is a short, abortable JSON POST to PurplePulse',
+  siteRequests[0]?.url === 'https://pulse-api.purpleshiphub.workers.dev/api/v1/ping'
+    && siteRequests[0]?.init?.method === 'POST'
+    && siteRequests[0]?.init?.headers?.['content-type'] === 'application/json'
+    && siteRequests[0]?.init?.signal !== undefined
+    && siteTimers[0]?.milliseconds === 2500,
+)
+check(
+  'site payload contains only the anonymous production allowlist',
+  JSON.stringify(Object.keys(sitePayload).sort()) ===
+    JSON.stringify(['install_id', 'os', 'platform', 'project_id', 'version'])
+    && sitePayload.project_id === 'pp_capturepack_6bede657'
+    && sitePayload.version === PUBLIC_VERSION
+    && sitePayload.platform === 'web'
+    && sitePayload.environment === undefined,
+)
+check(
+  'published privacy copy describes the daily allowlist without claiming telemetry is absent',
+  html.includes('send PurplePulse only a random install ID, version, OS, and platform')
+    && html.includes('never a username, device name,')
+    && guideHtml.includes('sends PurplePulse only a random install ID, version, OS, and platform')
+    && !html.includes('uploads no captures, telemetry')
+    && !guideHtml.includes('Captures, telemetry and crash reports are never uploaded'),
+)
+
+const platformCases = [
+  [{ platform: 'Win32', userAgent: '', maxTouchPoints: 0 }, 'windows'],
+  [{ platform: 'MacIntel', userAgent: '', maxTouchPoints: 0 }, 'macos'],
+  [{ platform: 'Linux x86_64', userAgent: '', maxTouchPoints: 0 }, 'linux'],
+  [{ platform: 'Linux armv8l', userAgent: 'Mozilla/5.0 Android', maxTouchPoints: 5 }, 'android'],
+  [{ platform: 'MacIntel', userAgent: 'Mozilla/5.0', maxTouchPoints: 5 }, 'ios'],
+  [{ platform: 'FreeBSD amd64', userAgent: '', maxTouchPoints: 0 }, 'other'],
+]
+const mapped = []
+for (const [navigator, expected] of platformCases) {
+  const requests = []
+  runSiteTelemetry({
+    storage: new Map(),
+    navigator,
+    fetch: async (_url, init) => requests.push(JSON.parse(init.body)),
+  })
+  mapped.push(requests[0]?.os === expected)
+}
+check('browser platform maps to every allowed OS value', mapped.every(Boolean))
+
+const failedStorage = new Map()
+let failedRequestCount = 0
+const failingFetch = async () => {
+  failedRequestCount += 1
+  throw new Error('offline')
+}
+runSiteTelemetry({ storage: failedStorage, fetch: failingFetch })
+await Promise.resolve()
+runSiteTelemetry({ storage: failedStorage, fetch: failingFetch })
+await Promise.resolve()
+check('site network failure is silent and not retried that day', failedRequestCount === 1)
 
 const guideKeys = [...new Set([...guideHtml.matchAll(/data-i18n="([^"]+)"/g)].map((match) => match[1]))]
 

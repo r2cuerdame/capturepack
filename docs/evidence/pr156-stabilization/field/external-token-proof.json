@@ -1,0 +1,46 @@
+﻿{
+    "time":  "2026-09-12T13:32:22.3809187Z",
+    "inspectorPid":  70696,
+    "tokens":  [
+                   {
+                       "pid":  7240,
+                       "integritySid":  "S-1-16-8192"
+                   },
+                   {
+                       "pid":  24420,
+                       "integritySid":  "S-1-16-8192"
+                   },
+                   {
+                       "pid":  37816,
+                       "integritySid":  "S-1-16-8192"
+                   },
+                   {
+                       "pid":  70696,
+                       "integritySid":  "S-1-16-12288"
+                   }
+               ],
+    "processes":  [
+                      {
+                          "ProcessId":  7240,
+                          "ParentProcessId":  9192,
+                          "ExecutablePath":  "C:\\WINDOWS\\Explorer.EXE",
+                          "CommandLine":  "C:\\WINDOWS\\Explorer.EXE",
+                          "CreationDate":  "\/Date(1789045091684)\/"
+                      },
+                      {
+                          "ProcessId":  24420,
+                          "ParentProcessId":  7240,
+                          "ExecutablePath":  "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                          "CommandLine":  "\"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -File \"C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\launcher.ps1\"",
+                          "CreationDate":  "\/Date(1789219924490)\/"
+                      },
+                      {
+                          "ProcessId":  37816,
+                          "ParentProcessId":  24420,
+                          "ExecutablePath":  "C:\\Program Files\\nodejs\\node.exe",
+                          "CommandLine":  "\"C:\\Program Files\\nodejs\\node.exe\" \"C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\run-ab.cjs\" ",
+                          "CreationDate":  "\/Date(1789219924765)\/"
+                      }
+                  ],
+    "bothMedium":  true
+}

@@ -1,0 +1,546 @@
+{
+  "summary": {
+    "passed": 89,
+    "failed": 0,
+    "skipped": 0,
+    "total": 89
+  },
+  "duration_ms": 66362.703,
+  "liveGdiFrames": "explicitly skipped: CAPTUREPACK_DESKTOP_INTERACTIVE=0",
+  "checks": [
+    {
+      "name": "typecheck",
+      "status": "passed",
+      "duration_ms": 2704.365,
+      "exit_code": 0
+    },
+    {
+      "name": "check:sync",
+      "status": "passed",
+      "duration_ms": 394.688,
+      "exit_code": 0
+    },
+    {
+      "name": "check:delta",
+      "status": "passed",
+      "duration_ms": 380.006,
+      "exit_code": 0
+    },
+    {
+      "name": "check:ring-prune",
+      "status": "passed",
+      "duration_ms": 329.102,
+      "exit_code": 0
+    },
+    {
+      "name": "check:surface-restore",
+      "status": "passed",
+      "duration_ms": 315.832,
+      "exit_code": 0
+    },
+    {
+      "name": "check:provider-host",
+      "status": "passed",
+      "duration_ms": 564.632,
+      "exit_code": 0
+    },
+    {
+      "name": "check:dom",
+      "status": "passed",
+      "duration_ms": 403.151,
+      "exit_code": 0
+    },
+    {
+      "name": "check:dom-pick",
+      "status": "passed",
+      "duration_ms": 282.638,
+      "exit_code": 0
+    },
+    {
+      "name": "check:pick-quality",
+      "status": "passed",
+      "duration_ms": 784.662,
+      "exit_code": 0
+    },
+    {
+      "name": "check:pack-readback",
+      "status": "passed",
+      "duration_ms": 426.515,
+      "exit_code": 0
+    },
+    {
+      "name": "check:document-snapshot",
+      "status": "passed",
+      "duration_ms": 215.146,
+      "exit_code": 0
+    },
+    {
+      "name": "check:controls",
+      "status": "passed",
+      "duration_ms": 1943.944,
+      "exit_code": 0
+    },
+    {
+      "name": "check:longrun-resources",
+      "status": "passed",
+      "duration_ms": 283.746,
+      "exit_code": 0
+    },
+    {
+      "name": "check:context-host-dirty",
+      "status": "passed",
+      "duration_ms": 1360.034,
+      "exit_code": 0
+    },
+    {
+      "name": "check:input-events",
+      "status": "passed",
+      "duration_ms": 583.333,
+      "exit_code": 0
+    },
+    {
+      "name": "check:identity",
+      "status": "passed",
+      "duration_ms": 334.654,
+      "exit_code": 0
+    },
+    {
+      "name": "check:keyframes",
+      "status": "passed",
+      "duration_ms": 290.23,
+      "exit_code": 0
+    },
+    {
+      "name": "check:pick",
+      "status": "passed",
+      "duration_ms": 287.959,
+      "exit_code": 0
+    },
+    {
+      "name": "check:numbering",
+      "status": "passed",
+      "duration_ms": 277.867,
+      "exit_code": 0
+    },
+    {
+      "name": "check:number-assignment",
+      "status": "passed",
+      "duration_ms": 284.057,
+      "exit_code": 0
+    },
+    {
+      "name": "check:motion",
+      "status": "passed",
+      "duration_ms": 279.757,
+      "exit_code": 0
+    },
+    {
+      "name": "check:render",
+      "status": "passed",
+      "duration_ms": 375.795,
+      "exit_code": 0
+    },
+    {
+      "name": "check:history-rerender",
+      "status": "passed",
+      "duration_ms": 272.108,
+      "exit_code": 0
+    },
+    {
+      "name": "check:annotation-style",
+      "status": "passed",
+      "duration_ms": 247.452,
+      "exit_code": 0
+    },
+    {
+      "name": "check:annotation-placement",
+      "status": "passed",
+      "duration_ms": 321.772,
+      "exit_code": 0
+    },
+    {
+      "name": "check:trim",
+      "status": "passed",
+      "duration_ms": 366.399,
+      "exit_code": 0
+    },
+    {
+      "name": "check:lifetime",
+      "status": "passed",
+      "duration_ms": 307.832,
+      "exit_code": 0
+    },
+    {
+      "name": "check:plugins",
+      "status": "passed",
+      "duration_ms": 505.454,
+      "exit_code": 0
+    },
+    {
+      "name": "check:windows-context",
+      "status": "passed",
+      "duration_ms": 771.265,
+      "exit_code": 0
+    },
+    {
+      "name": "check:image-context",
+      "status": "passed",
+      "duration_ms": 435.944,
+      "exit_code": 0
+    },
+    {
+      "name": "check:renderer-geometry",
+      "status": "passed",
+      "duration_ms": 407.61,
+      "exit_code": 0
+    },
+    {
+      "name": "check:pack-geometry-e2e",
+      "status": "passed",
+      "duration_ms": 443.647,
+      "exit_code": 0
+    },
+    {
+      "name": "check:still-dom",
+      "status": "passed",
+      "duration_ms": 242.085,
+      "exit_code": 0
+    },
+    {
+      "name": "check:video-no-picking",
+      "status": "passed",
+      "duration_ms": 231.246,
+      "exit_code": 0
+    },
+    {
+      "name": "check:image-region-selector",
+      "status": "passed",
+      "duration_ms": 276.911,
+      "exit_code": 0
+    },
+    {
+      "name": "check:image-region-window",
+      "status": "passed",
+      "duration_ms": 1008.962,
+      "exit_code": 0
+    },
+    {
+      "name": "check:image-desktop",
+      "status": "passed",
+      "duration_ms": 347.582,
+      "exit_code": 0
+    },
+    {
+      "name": "check:image-flow",
+      "status": "passed",
+      "duration_ms": 246.712,
+      "exit_code": 0
+    },
+    {
+      "name": "check:image-pack",
+      "status": "passed",
+      "duration_ms": 298.948,
+      "exit_code": 0
+    },
+    {
+      "name": "check:image-pack-writer",
+      "status": "passed",
+      "duration_ms": 503.35,
+      "exit_code": 0
+    },
+    {
+      "name": "check:mcp-image-pack",
+      "status": "passed",
+      "duration_ms": 589.115,
+      "exit_code": 0
+    },
+    {
+      "name": "check:repo-hygiene",
+      "status": "passed",
+      "duration_ms": 906.125,
+      "exit_code": 0
+    },
+    {
+      "name": "check:recorder-ring",
+      "status": "passed",
+      "duration_ms": 434.825,
+      "exit_code": 0
+    },
+    {
+      "name": "check:recorder-retention",
+      "status": "passed",
+      "duration_ms": 362.239,
+      "exit_code": 0
+    },
+    {
+      "name": "check:tick-owner",
+      "status": "passed",
+      "duration_ms": 629.861,
+      "exit_code": 0
+    },
+    {
+      "name": "check:display-media-policy",
+      "status": "passed",
+      "duration_ms": 303.153,
+      "exit_code": 0
+    },
+    {
+      "name": "check:capture-cadence",
+      "status": "passed",
+      "duration_ms": 315.189,
+      "exit_code": 0
+    },
+    {
+      "name": "check:capture-latency",
+      "status": "passed",
+      "duration_ms": 318.661,
+      "exit_code": 0
+    },
+    {
+      "name": "check:native-replay-fallback",
+      "status": "passed",
+      "duration_ms": 863.883,
+      "exit_code": 0
+    },
+    {
+      "name": "check:replay-health",
+      "status": "passed",
+      "duration_ms": 414.747,
+      "exit_code": 0
+    },
+    {
+      "name": "check:source-latency-calibration",
+      "status": "passed",
+      "duration_ms": 466.146,
+      "exit_code": 0
+    },
+    {
+      "name": "check:source-latency-pack",
+      "status": "passed",
+      "duration_ms": 407.627,
+      "exit_code": 0
+    },
+    {
+      "name": "check:still-context",
+      "status": "passed",
+      "duration_ms": 296.047,
+      "exit_code": 0
+    },
+    {
+      "name": "check:replay-pixel-clock",
+      "status": "passed",
+      "duration_ms": 233.667,
+      "exit_code": 0
+    },
+    {
+      "name": "check:replay-clock-map",
+      "status": "passed",
+      "duration_ms": 288.891,
+      "exit_code": 0
+    },
+    {
+      "name": "check:fmp4-sample-timeline",
+      "status": "passed",
+      "duration_ms": 456.156,
+      "exit_code": 0
+    },
+    {
+      "name": "check:processor-qpc-latency",
+      "status": "passed",
+      "duration_ms": 486.571,
+      "exit_code": 0
+    },
+    {
+      "name": "check:dxgi-timing-reference",
+      "status": "passed",
+      "duration_ms": 340.311,
+      "exit_code": 0
+    },
+    {
+      "name": "check:settings",
+      "status": "passed",
+      "duration_ms": 300.619,
+      "exit_code": 0
+    },
+    {
+      "name": "check:storage-retention",
+      "status": "passed",
+      "duration_ms": 336.785,
+      "exit_code": 0
+    },
+    {
+      "name": "check:hotkeys",
+      "status": "passed",
+      "duration_ms": 304.312,
+      "exit_code": 0
+    },
+    {
+      "name": "check:about",
+      "status": "passed",
+      "duration_ms": 203.777,
+      "exit_code": 0
+    },
+    {
+      "name": "check:update-notice",
+      "status": "passed",
+      "duration_ms": 287.286,
+      "exit_code": 0
+    },
+    {
+      "name": "check:actions",
+      "status": "passed",
+      "duration_ms": 1369.635,
+      "exit_code": 0
+    },
+    {
+      "name": "check:clipboard",
+      "status": "passed",
+      "duration_ms": 286.778,
+      "exit_code": 0
+    },
+    {
+      "name": "check:source-first-save",
+      "status": "passed",
+      "duration_ms": 465.231,
+      "exit_code": 0
+    },
+    {
+      "name": "check:save-now",
+      "status": "passed",
+      "duration_ms": 293.034,
+      "exit_code": 0
+    },
+    {
+      "name": "check:pack-assertions",
+      "status": "passed",
+      "duration_ms": 1215.272,
+      "exit_code": 0
+    },
+    {
+      "name": "check:background-media",
+      "status": "passed",
+      "duration_ms": 287.053,
+      "exit_code": 0
+    },
+    {
+      "name": "check:viewer",
+      "status": "passed",
+      "duration_ms": 576.364,
+      "exit_code": 0
+    },
+    {
+      "name": "check:share-bundle",
+      "status": "passed",
+      "duration_ms": 5677.61,
+      "exit_code": 0
+    },
+    {
+      "name": "check:chrome-lifecycle",
+      "status": "passed",
+      "duration_ms": 5635.289,
+      "exit_code": 0
+    },
+    {
+      "name": "check:frame-geometry",
+      "status": "passed",
+      "duration_ms": 233.72,
+      "exit_code": 0
+    },
+    {
+      "name": "check:chrome-bridge",
+      "status": "passed",
+      "duration_ms": 13195.86,
+      "exit_code": 0
+    },
+    {
+      "name": "check:editor-lifecycle",
+      "status": "passed",
+      "duration_ms": 289.377,
+      "exit_code": 0
+    },
+    {
+      "name": "check:editor-ux",
+      "status": "passed",
+      "duration_ms": 202.76,
+      "exit_code": 0
+    },
+    {
+      "name": "check:qa-process-tree",
+      "status": "passed",
+      "duration_ms": 510.157,
+      "exit_code": 0
+    },
+    {
+      "name": "check:pack-forensics",
+      "status": "passed",
+      "duration_ms": 346.758,
+      "exit_code": 0
+    },
+    {
+      "name": "check:display-clock",
+      "status": "passed",
+      "duration_ms": 397.833,
+      "exit_code": 0
+    },
+    {
+      "name": "check:n-display-format",
+      "status": "passed",
+      "duration_ms": 1193.188,
+      "exit_code": 0
+    },
+    {
+      "name": "check:temporal-alignment",
+      "status": "passed",
+      "duration_ms": 273.539,
+      "exit_code": 0
+    },
+    {
+      "name": "check:exposure-alignment",
+      "status": "passed",
+      "duration_ms": 428.091,
+      "exit_code": 0
+    },
+    {
+      "name": "check:semantic-multidisplay-roundtrip",
+      "status": "passed",
+      "duration_ms": 439.509,
+      "exit_code": 0
+    },
+    {
+      "name": "check:windows-replay-field-fixture",
+      "status": "passed",
+      "duration_ms": 192.003,
+      "exit_code": 0
+    },
+    {
+      "name": "check:temporal",
+      "status": "passed",
+      "duration_ms": 355.408,
+      "exit_code": 0
+    },
+    {
+      "name": "check:validator",
+      "status": "passed",
+      "duration_ms": 1905.805,
+      "exit_code": 0
+    },
+    {
+      "name": "check:spec",
+      "status": "passed",
+      "duration_ms": 212.499,
+      "exit_code": 0
+    },
+    {
+      "name": "check:docs",
+      "status": "passed",
+      "duration_ms": 267.589,
+      "exit_code": 0
+    },
+    {
+      "name": "check:site",
+      "status": "passed",
+      "duration_ms": 218.981,
+      "exit_code": 0
+    }
+  ]
+}

@@ -1,28 +1,37 @@
 // Firing the After Save Action pipeline at the moments a pack changes state
-// (#68), and telling the user by name when one fails.
+// (#68, #169), and telling the user by name when one fails.
 //
-// Two call sites, both in session.ts, both chosen because they are where the
-// pack genuinely reaches a state rather than where it is convenient to call:
+// Call sites in session.ts are chosen because they are where the pack
+// genuinely reaches a state rather than where it is convenient to call:
 //
 //   source-ready            immediately after notePackSaved() — the line the
 //                           save flow itself documents as "everything above
 //                           this is what saved means"
 //   annotated-replay-ready  when the derived render reports 'done'
+//   complete                when background derived processing settles
 //
-// Actions blocked at the first moment are simply run again at the second. That
-// is cheaper and more honest than a queue: decideStep already refuses to repeat
-// an idempotent action that succeeded, so re-running the pipeline is how a
-// blocked step gets its second chance.
+// Actions blocked at earlier moments receive their second chance when their
+// required pack state arrives (#68, #169).
+//
+// Crucially, only previously BLOCKED actions are re-run on subsequent pack
+// state transitions. Actions that already attempted and failed (or timed out)
+// are NOT automatically re-executed on subsequent pack state transitions:
+// failed actions are retried exclusively on explicit user request (retryAction),
+// preventing duplicate executions and repeated failure notifications (#169).
 
 import { Notification } from 'electron'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { ActionResult, PackState } from '../../shared/actions'
 import { stripUtf8Bom } from '../../shared/json'
+import { SaveActionLifecycle } from '../../shared/actionPipeline'
 import type { Settings } from '../../shared/types'
 import { uiT, uiLanguage } from '../locale'
 import { logError, logInfo } from '../log'
-import { findAction, runActionsForPack } from './host'
+import { findAction, readActionResults, runActionsForPack } from './host'
+import { updateToastActionResults } from '../saveToast'
+
+export { readActionResults } from './host'
 
 /**
  * The pack's own UUID, which is half the idempotency key.
@@ -70,31 +79,100 @@ function announceFailures(results: readonly ActionResult[], settings: Settings):
   void uiLanguage
 }
 
+const MAX_REMEMBERED_PACKS = 1_000
+
+/**
+ * packId -> SaveActionLifecycle tracker.
+ *
+ * Remembers which actions were blocked waiting for a later pack state.
+ * Insertion order is age order, bounded to MAX_REMEMBERED_PACKS just like
+ * the host idempotency ledger.
+ */
+const sessionsByPack = new Map<string, SaveActionLifecycle>()
+
+/** In-flight transition execution promise per pack, to serialize runs. */
+const inFlightByPack = new Map<string, Promise<readonly ActionResult[]>>()
+
+function sessionFor(packId: string): SaveActionLifecycle {
+  let session = sessionsByPack.get(packId)
+  if (session === undefined) {
+    session = new SaveActionLifecycle()
+    sessionsByPack.set(packId, session)
+    if (sessionsByPack.size > MAX_REMEMBERED_PACKS) {
+      const oldest = sessionsByPack.keys().next().value
+      if (oldest !== undefined) {
+        sessionsByPack.delete(oldest)
+      }
+    }
+  }
+  return session
+}
+
+/**
+ * Reset the in-memory save action lifecycle sessions.
+ *
+ * Intended for test isolation and clean slate verification.
+ */
+export function clearSaveActionSessions(): void {
+  sessionsByPack.clear()
+  inFlightByPack.clear()
+}
+
 /**
  * Run the configured pipeline for a pack that has just reached `packState`.
  *
  * Never rejects and never throws: the save is finished, and an action is not
  * allowed to turn a pack that is safely on disk into an error the user sees.
+ *
+ * On subsequent pack state transitions (annotated-replay-ready, complete),
+ * only actions that were previously blocked waiting for a later pack state
+ * receive their second chance. Actions that already attempted and failed are
+ * not re-run automatically (#169).
  */
 export async function runActionsAtState(
   packDir: string,
   packState: PackState,
   settings: Settings,
 ): Promise<readonly ActionResult[]> {
-  const configs = settings.actionConfigs.filter((config) => config.enabled)
-  if (configs.length === 0) return []
+  const allConfigs = settings.actionConfigs
+  if (allConfigs.length === 0) return []
   try {
     const packId = await packIdOf(packDir)
     if (packId === null) return []
+
+    // If an earlier state transition for this pack is currently executing,
+    // wait for it to settle before evaluating which actions were blocked.
+    const inFlight = inFlightByPack.get(packId)
+    if (inFlight !== undefined) {
+      await inFlight.catch(() => {})
+    }
+
+    const session = sessionFor(packId)
+    const configs = session.filterConfigs(allConfigs)
+    if (configs.length === 0) return []
+
     logInfo(`[actions] ${path.basename(packDir)} reached ${packState}; ${String(configs.length)} configured`)
-    const results = await runActionsForPack({
+    const runPromise = runActionsForPack({
       packDir,
       packId,
       packState,
       configs,
       webhooks: settings.actionWebhooks,
     })
+
+    inFlightByPack.set(packId, runPromise)
+    let results: readonly ActionResult[] = []
+    try {
+      results = await runPromise
+    } finally {
+      if (inFlightByPack.get(packId) === runPromise) {
+        inFlightByPack.delete(packId)
+      }
+    }
+
+    session.recordResults(results)
     announceFailures(results, settings)
+    updateToastActionResults(packDir, results)
     return results
   } catch (error) {
     logError('[actions] the after-save pipeline failed:', error)

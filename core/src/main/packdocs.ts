@@ -47,6 +47,13 @@ export const SKILLS_FILES: ReadonlyArray<keyof SkillsDocs> = [
   'project',
 ]
 
+/** What one still's `snapshot.png` covers, for a reader (SPEC §5.3). */
+function imageScopeLabel(scope: Manifest['media']['image_scope']): string {
+  if (scope === 'region') return 'user-selected region'
+  if (scope === 'browser-page') return 'whole web page from the browser extension'
+  return 'user-requested full screen'
+}
+
 function replayLabel(manifest: Manifest, t: TranslateFn): string {
   if (manifest.media.replay === null) return t('pack.screenshotOnly')
   const seconds = ((manifest.media.replay_duration_ms ?? 0) / 1000).toFixed(1)
@@ -96,8 +103,7 @@ export function buildReadme(
   lines.push(`- **${t('pack.created')}:** ${humanDate(manifest.created_at)}`)
   lines.push(`- **${t('pack.application')}:** ${manifest.environment.app ?? t('pack.unknown')}`)
   if (imageCapture) {
-    const scope =
-      manifest.media.image_scope === 'region' ? 'user-selected region' : 'user-requested full screen'
+    const scope = imageScopeLabel(manifest.media.image_scope)
     lines.push(`- **Capture:** Still image (${scope})`)
   } else {
     lines.push(`- **${t('pack.duration')}:** ${replayLabel(manifest, t)}`)
@@ -265,8 +271,7 @@ function buildOverviewSkill(
   )
   const size = `${annotationsFile.reference_width}×${annotationsFile.reference_height}`
   if (imageCapture) {
-    const scope =
-      manifest.media.image_scope === 'region' ? 'user-selected region' : 'user-requested full screen'
+    const scope = imageScopeLabel(manifest.media.image_scope)
     lines.push(`**Media:** ${size} still image in snapshot.png (${scope}).`)
   } else {
     lines.push(
@@ -709,7 +714,9 @@ function buildProjectSkill(
     const scope =
       manifest.media.image_scope === 'region'
         ? 'a user-selected region'
-        : 'the user-requested full screen'
+        : manifest.media.image_scope === 'browser-page'
+          ? 'a whole web page captured by the browser extension'
+          : 'the user-requested full screen'
     lines.push(`This is a still-image pack containing ${scope}. Its layout is:`)
     lines.push('')
     lines.push('- `manifest.json` — REQUIRED entry point: identity, environment and image provenance.')

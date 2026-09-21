@@ -33,7 +33,7 @@ account, or cloud service.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Download](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Current public Windows release: **CapturePack 0.5.0**. History creates a
+Current public Windows release: **CapturePack 0.5.1**. History creates a
 reviewed Share Copy containing annotated stills without originals, video
 containers or structured capture context; Full ZIP remains the explicit complete
 evidence export.
@@ -94,12 +94,22 @@ does is invite you to click it.
 - **Windows UI Automation (built in):** accessible control name, semantic type,
   AutomationId, process/window identity, and observed bounds when the app exposes
   them.
-- **Chrome DOM (optional preview extension):** selector, role, text and URL for
-  the element you explicitly pick — click the CapturePack toolbar icon, then
-  click the element. It works inside iframes, reads the page only for that pick,
-  and does not stream the DOM. Settings › Plugins › Chrome DOM reports what the
-  picker last did, so a pick that does not arrive says why.
-  **Click the CapturePack icon once and allow the browser.** After that you press
+- **Chrome DOM (optional preview extension):** **click the CapturePack toolbar
+  icon and the whole current page becomes a still** — top to bottom, stitched
+  from the browser's own rendering at the page's pixel ratio, with every element
+  of the document walked in the same coordinates — and it opens in the same
+  editor your capture hotkey opens, ready to annotate, save and share. Sticky
+  and fixed headers appear once; lazy-loading content is scrolled in first; the
+  page's scroll position and styles are put back exactly; a page Chrome will not
+  let an extension read (`chrome://`, the Web Store, a PDF) fails on the icon
+  with the reason, never silently. Picking ONE element is still there as an
+  explicit action — `Ctrl+Shift+E`, or right-click the icon › *Pick an element
+  on this page* — with selector, role, text and URL, inside iframes too. Nothing
+  is captured except on your click, the DOM is never streamed, and the bundle
+  goes to the CapturePack app on your machine and nowhere else. Settings ›
+  Plugins › Chrome DOM reports what the picker last did, so a pick that does
+  not arrive says why.
+  **The first click also asks you to allow the browser.** After that you press
   nothing in Chrome: your normal capture hotkey brings the visible page with it.
   The one-time grant exists because Chrome never sees a global hotkey — it hands
   a page to an extension only for a click made inside Chrome, or to an extension
@@ -172,7 +182,7 @@ Generated CapturePacks should remain readable forever.
 
 CapturePack sets strict product boundaries by design:
 
-- **No cloud services, mandatory accounts, or silent telemetry:** CapturePack operates entirely offline and on-device. No telemetry, user tracking, or crash reports leave your machine. Its only outbound network call is the optional GitHub Releases check for app updates (which can be disabled in Settings → General).
+- **No cloud services, mandatory accounts, or silent telemetry:** Captures and crash reports stay on your machine. Once per local day, CapturePack sends PurplePulse only a random install ID, app version, OS, and `platform: "electron"`; it sends no username, device name, capture content, or other personal fields. The optional GitHub Releases update check can be disabled in Settings → General.
 - **No keystroke logging:** CapturePack captures mouse coordinates, clicks, and window events on the replay clock. It never listens to or records keystrokes (`input.key.*` is reserved and forbidden).
 - **No hidden background pixels in region captures:** Region screenshot captures (`Ctrl+Alt+S`) record only the user-selected pixel rectangle and placement metadata. The application never secretly stores or retains the full desktop or unselected displays.
 - **No live object picking during video recording:** Walking accessibility trees during video recording costs substantial CPU time. CapturePack samples window geometry during video capture, but interactive control-level Object Pick belongs strictly to still images.
@@ -265,10 +275,10 @@ Tools, client setup, and settings: [docs/MCP.md](docs/MCP.md).
 
 Download the latest installer from [GitHub Releases](https://github.com/r2cuerdame/capturepack/releases/latest):
 
-1. Download `CapturePack-Setup-0.5.0.exe` and `SHA256SUMS.txt`.
+1. Download `CapturePack-Setup-0.5.1.exe` and `SHA256SUMS.txt`.
 2. Verify checksum integrity via PowerShell:
    ```powershell
-   Get-FileHash CapturePack-Setup-0.5.0.exe -Algorithm SHA256
+   Get-FileHash CapturePack-Setup-0.5.1.exe -Algorithm SHA256
    ```
 3. Run the installer. Because open-source code signing is pending, Windows SmartScreen will display an unrecognized publisher warning: click **More info** → **Run anyway**.
 
@@ -296,7 +306,7 @@ npm run qa:rc
 
 ## Status
 
-**0.5.0 is the current public Windows download.** CapturePack remains an
+**0.5.1 is the current public Windows download.** CapturePack remains an
 early-stage project, so keep the original pack when reporting a problem and see
 [GOAL.md](GOAL.md) for the product vision and [ROADMAP.md](ROADMAP.md) for what
 comes next.
@@ -318,7 +328,7 @@ hard-coded global offset.
 - [MCP](docs/MCP.md) and [temporal provider API](docs/temporal-provider-api.md)
   — read-only saved-pack access and context-provider integration.
 
-CapturePack `0.5.0` is the application version. Pack `format_version` evolves
+CapturePack `0.5.1` is the application version. Pack `format_version` evolves
 independently through additive format changes; readers must follow
 [SPEC.md](SPEC.md) rather than infer format support from the app version.
 
@@ -332,9 +342,11 @@ is pending. Details, team roles, and privacy practices: [docs/CODE_SIGNING.md](d
 
 Screen pixels, window titles and accessibility names — plus selector, role, text
 and URL when Chrome DOM is used — can be sensitive. CapturePack keeps captures
-and object context on this machine and uploads no captures, telemetry or crash
-reports. Its only outbound app request is the optional GitHub Releases update
-check, which can be disabled in Settings → General.
+and object context on this machine and uploads no captures or crash reports.
+Once per local day it sends PurplePulse only a random install ID, app version,
+OS, and platform. The payload contains no username, device name, capture content,
+or other personal fields. The optional GitHub Releases update check can be
+disabled in Settings → General.
 
 Blur is non-destructive: it protects generated annotated views, but
 `snapshot.png` and the original replay inside the full pack remain unredacted.
@@ -349,7 +361,7 @@ unmarked secrets can still remain visible in the reviewed pixels.
 
 ## ♥ Support
 
-CapturePack is free, open source, and cloud-free — no accounts, no telemetry, nothing to sell.
+CapturePack is free, open source, and cloud-free — no accounts and no capture uploads.
 If it saves you time, [**sponsoring on GitHub**](https://github.com/sponsors/r2cuerdame) keeps it moving.
 
 ## License
