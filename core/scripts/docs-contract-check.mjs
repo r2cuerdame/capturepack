@@ -490,5 +490,32 @@ console.log('\nPacks with omitted media.replay render clean screenshot-only docu
   }
 }
 
+console.log('\nSPEC §4, §8, §14 define annotations.json as OPTIONAL')
+{
+  const spec = readFileSync(join(ROOT, 'SPEC.md'), 'utf8')
+  check(
+    'SPEC §4 and §8 declare annotations.json as OPTIONAL',
+    spec.includes('`annotations.json` | OPTIONAL') &&
+      spec.includes('`annotations.json` is OPTIONAL; it is present when the user annotated the capture.'),
+    'SPEC.md lost its annotations.json OPTIONAL declaration in §4 or §8',
+  )
+  check(
+    'SPEC §14 Rule 3 declares a screenshot-only pack without annotations is valid',
+    /screenshot-only pack.*manifest\.json.*snapshot\.png.*fully valid/u.test(spec),
+    'SPEC.md §14 lost the screenshot-only pack validity rule',
+  )
+  const exporterSource = readFileSync(join(CORE, 'src', 'main', 'exporter.ts'), 'utf8')
+  check(
+    'exporter.ts defines and exports readAnnotationsSafe',
+    exporterSource.includes('export async function readAnnotationsSafe'),
+    'exporter.ts does not export readAnnotationsSafe',
+  )
+  check(
+    'addManifestPlugin and refreshPackDocs use readAnnotationsSafe to guard against ENOENT',
+    /await readAnnotationsSafe\(\s*handle\.dirPath/u.test(exporterSource) &&
+      /await readAnnotationsSafe\(\s*dirPath/u.test(exporterSource),
+    'exporter.ts addManifestPlugin or refreshPackDocs does not use readAnnotationsSafe',
+  )
+}
 console.log(`\nresult: ${failed === 0 ? 'OK' : 'BROKEN'} — ${passed} passed, ${failed} failed\n`)
 if (failed > 0) process.exitCode = 1
