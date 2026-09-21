@@ -94,13 +94,16 @@ does is invite you to click it.
 - **Windows UI Automation (built in):** accessible control name, semantic type,
   AutomationId, process/window identity, and observed bounds when the app exposes
   them.
-- **Chrome DOM (optional preview extension):** selector, role, text and URL for
-  the element you explicitly pick — click the CapturePack toolbar icon, then
-  click the element. It works inside iframes, reads the page only for that pick,
-  and does not stream the DOM. Settings › Plugins › Chrome DOM reports what the
-  picker last did, so a pick that does not arrive says why.
-  **Click the CapturePack icon once and allow the browser.** After that you press
-  nothing in Chrome: your normal capture hotkey brings the visible page with it.
+- **Chrome DOM (optional preview extension):** click the CapturePack toolbar icon
+  to save the complete current page as one full-page PNG plus its DOM structure,
+  URL, title, timestamp and measured geometry. The app opens that local-only pack
+  immediately. Element picking remains an explicit `Ctrl+Shift+E` shortcut or
+  page context-menu action; it works inside iframes and does not stream the DOM.
+  Settings › Plugins › Chrome DOM reports failures instead of leaving an
+  unexplained armed picker.
+  **Choose “CapturePack: allow pages for the app hotkey” from the page context
+  menu once** if you also want the normal CapturePack hotkey to bring the visible
+  page with it without a Chrome click.
   The one-time grant exists because Chrome never sees a global hotkey — it hands
   a page to an extension only for a click made inside Chrome, or to an extension
   the user has allowed. Nothing is held until you allow it (installing shows no

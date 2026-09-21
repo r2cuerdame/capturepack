@@ -59,7 +59,7 @@ function el(tag, options = {}) {
   return node
 }
 
-function snapshotOf(root) {
+function snapshotOf(root, options = {}) {
   const script = readFileSync(
     resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'extensions', 'chrome', 'document-snapshot.js'),
     'utf8',
@@ -80,16 +80,41 @@ function snapshotOf(root) {
   sandbox.devicePixelRatio = 1
   sandbox.scrollX = 0
   sandbox.scrollY = 0
+  root.scrollWidth = options.documentWidth ?? 1000
+  root.scrollHeight = options.documentHeight ?? 800
   sandbox.getComputedStyle = (node) => ({
     visibility: node.style.visibility ?? 'visible',
     display: node.style.display ?? 'block',
     opacity: node.style.opacity ?? '1',
   })
   runInNewContext(script, sandbox)
-  return sandbox.window.__capturepackDocumentSnapshot()
+  return sandbox.window.__capturepackDocumentSnapshot(
+    options.fullPage === true ? { fullPage: true } : undefined,
+  )
 }
 
 const find = (snap, tag) => snap.elements.filter((e) => e.tag === tag)
+
+console.log('A full-page image admits the complete document rectangle')
+{
+  const snap = snapshotOf(
+    el('html', {
+      rect: { left: 0, top: 0, width: 1000, height: 1200 },
+      children: [
+        el('p', {
+          rect: { left: 20, top: 900, width: 200, height: 30 },
+          text: 'Below the original viewport',
+        }),
+      ],
+    }),
+    { fullPage: true, documentWidth: 1000, documentHeight: 1200 },
+  )
+  check('an element below the initial viewport is preserved',
+    find(snap, 'p')[0]?.text === 'Below the original viewport', JSON.stringify(snap.elements))
+  check('its bounds and declared space align to the full-page raster',
+    find(snap, 'p')[0]?.bounds.y === 900 && snap.viewport.height === 1200 && snap.viewport.scrollY === 0,
+    JSON.stringify(snap.viewport))
+}
 
 console.log('A value is never recorded, whatever the field')
 {

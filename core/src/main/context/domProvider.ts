@@ -48,6 +48,7 @@ import type {
   DomEvent,
   DomViewport,
 } from '../chrome/domBridge'
+import { BROWSER_PAGE_SURFACE_ID } from '../../shared/context/browserPage'
 
 export const CHROME_DOM_PROVIDER_ID = 'chrome-dom'
 const CHROME_DOM_VERSION = '0.1.0'
@@ -386,7 +387,10 @@ export class ChromeDomProvider implements TemporalContextProvider {
     const browsers = surfaces.filter(
       (s) => !s.minimized && s.visible && BROWSER_EXECUTABLES.has(normalizeExe(s.executableName)),
     )
-    const matches = browsers.filter((s) => titleMatches(s.windowTitle, event.tab.title))
+    const matches = browsers.filter(
+      (s) =>
+        s.surfaceId === BROWSER_PAGE_SURFACE_ID || titleMatches(s.windowTitle, event.tab.title),
+    )
     // Exactly one, or nothing. See the note above on refusing rather than
     // guessing. The #103 split can legitimately produce the same surfaceId
     // twice (one entry per display), so that is not ambiguity — collapse it and

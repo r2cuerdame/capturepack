@@ -14,7 +14,15 @@
         "host.hello",
         "picker.armed",
         "picker.disarmed",
-        "picker.failed"
+        "picker.failed",
+        "page.capture.start",
+        "page.capture.document.chunk",
+        "page.capture.document.end",
+        "page.capture.tile.chunk",
+        "page.capture.tile.end",
+        "page.capture.finish",
+        "page.capture.failed",
+        "page.capture.result"
       ]
     },
     "protocol": { "const": 1 },
@@ -74,7 +82,40 @@
       "description": "Why picker.failed happened: a restricted page, no tab, or an injection error."
     },
     "app": { "type": "string" },
-    "version": { "type": "string" }
+    "version": { "type": "string" },
+    "extension_version": { "type": "string", "maxLength": 32 },
+    "capture_id": { "type": ["string", "null"], "pattern": "^[A-Za-z0-9_-]{1,64}$" },
+    "captured_at": { "type": "number" },
+    "tab_id": { "type": ["integer", "null"] },
+    "tile_count": { "type": "integer", "minimum": 1, "maximum": 256 },
+    "tile_index": { "type": "integer", "minimum": 0, "maximum": 255 },
+    "chunk_index": { "type": "integer", "minimum": 0 },
+    "chunk_count": { "type": "integer", "minimum": 1 },
+    "data": { "type": "string", "maxLength": 524288 },
+    "x": { "type": "number" },
+    "y": { "type": "number" },
+    "ok": { "type": "boolean" },
+    "geometry": {
+      "type": "object",
+      "properties": {
+        "documentWidth": { "type": "number", "exclusiveMinimum": 0, "maximum": 50000 },
+        "documentHeight": { "type": "number", "exclusiveMinimum": 0, "maximum": 50000 },
+        "viewportWidth": { "type": "number", "exclusiveMinimum": 0, "maximum": 50000 },
+        "viewportHeight": { "type": "number", "exclusiveMinimum": 0, "maximum": 50000 },
+        "deviceScaleFactor": { "type": "number", "exclusiveMinimum": 0, "maximum": 16 },
+        "originalScrollX": { "type": "number" },
+        "originalScrollY": { "type": "number" }
+      },
+      "required": [
+        "documentWidth",
+        "documentHeight",
+        "viewportWidth",
+        "viewportHeight",
+        "deviceScaleFactor",
+        "originalScrollX",
+        "originalScrollY"
+      ]
+    }
   },
   "allOf": [
     {
@@ -97,6 +138,71 @@
         "properties": { "type": { "const": "picker.failed" } }
       },
       "then": { "required": ["reason"] }
+    },
+    {
+      "if": {
+        "required": ["type"],
+        "properties": { "type": { "const": "page.capture.start" } }
+      },
+      "then": {
+        "required": [
+          "capture_id",
+          "captured_at",
+          "extension_version",
+          "tab_id",
+          "tab",
+          "geometry",
+          "tile_count"
+        ]
+      }
+    },
+    {
+      "if": {
+        "required": ["type"],
+        "properties": {
+          "type": {
+            "enum": ["page.capture.document.chunk", "page.capture.tile.chunk"]
+          }
+        }
+      },
+      "then": { "required": ["capture_id", "chunk_index", "data"] }
+    },
+    {
+      "if": {
+        "required": ["type"],
+        "properties": { "type": { "const": "page.capture.tile.chunk" } }
+      },
+      "then": { "required": ["tile_index"] }
+    },
+    {
+      "if": {
+        "required": ["type"],
+        "properties": {
+          "type": { "enum": ["page.capture.document.end", "page.capture.tile.end"] }
+        }
+      },
+      "then": { "required": ["capture_id", "chunk_count"] }
+    },
+    {
+      "if": {
+        "required": ["type"],
+        "properties": { "type": { "const": "page.capture.tile.end" } }
+      },
+      "then": { "required": ["tile_index", "x", "y"] }
+    },
+    {
+      "if": {
+        "required": ["type"],
+        "properties": { "type": { "const": "page.capture.finish" } }
+      },
+      "then": { "required": ["capture_id"] }
+    },
+    {
+      "if": {
+        "required": ["type"],
+        "properties": { "type": { "const": "page.capture.result" } }
+      },
+      "then": { "required": ["capture_id", "ok"] }
     }
   ]
 }

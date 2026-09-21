@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "CapturePack",
-  "description": "Sends DOM context to the CapturePack app: the element you pick, and the interface it sat in. Part of CapturePack, not a separate product.",
-  "version": "0.3.4",
+  "description": "Captures a complete page and its DOM context into the local CapturePack app. Part of CapturePack, not a separate product.",
+  "version": "0.4.0",
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
@@ -15,13 +15,14 @@
     "scripting",
     "tabs",
     "alarms",
-    "storage"
+    "storage",
+    "contextMenus"
   ],
   "background": {
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "CapturePack: allow this browser, or pick an element",
+    "default_title": "CapturePack: capture this complete page",
     "default_icon": {
       "16": "icons/icon-16.png",
       "32": "icons/icon-32.png",

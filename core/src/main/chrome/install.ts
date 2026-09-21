@@ -17,6 +17,7 @@ import { app } from 'electron'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { logError, logInfo } from '../log'
+import { extensionTreeDigest, syncExtensionTree } from './extensionSync'
 
 export const NATIVE_HOST_NAME = 'com.capturepack.host'
 
@@ -139,12 +140,13 @@ export function syncExtensionIfChanged(): void {
   if (source === '' || !fs.existsSync(source)) return
   const bundled = versionIn(source)
   const installed = versionIn(target)
-  if (bundled !== null && bundled === installed) return
   try {
-    // Copied into place rather than swapped: a rename would delete the
-    // directory Chrome has open, which is the failure being fixed.
-    fs.mkdirSync(target, { recursive: true })
-    copyTree(source, target)
+    const sourceDigest = extensionTreeDigest(source)
+    if (fs.existsSync(target) && extensionTreeDigest(target) === sourceDigest) return
+    // The directory path remains stable, while syncExtensionTree publishes the
+    // manifest last and verifies every byte. Version equality is insufficient:
+    // two candidate builds can legitimately carry different extension bytes.
+    syncExtensionTree(source, target)
     logInfo(
       installed === null
         ? `[chrome] extension ${bundled ?? '?'} installed to ${target}`
@@ -154,20 +156,6 @@ export function syncExtensionIfChanged(): void {
     // Rule 1: the browser integration may never be why the app fails to start.
     // A copy that did not happen leaves the previous copy working.
     logError('[chrome] could not update the extension folder:', err)
-  }
-}
-
-/** Recursive copy that overwrites files in place and leaves extras alone. */
-function copyTree(from: string, to: string): void {
-  for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
-    const src = path.join(from, entry.name)
-    const dst = path.join(to, entry.name)
-    if (entry.isDirectory()) {
-      fs.mkdirSync(dst, { recursive: true })
-      copyTree(src, dst)
-    } else if (entry.isFile()) {
-      fs.copyFileSync(src, dst)
-    }
   }
 }
 
@@ -218,7 +206,10 @@ function hostCommand(): { path: string; args: readonly string[] } {
   // bundle. The environment variable is what makes the launcher .cmd unavoidable now:
   // Chromium's manifest has no place for env or args.
   const script = resolveNativeHostScript()
-  return { path: process.execPath, args: script === null ? [] : [script] }
+  if (script === null) {
+    throw new Error('native-host.js is missing; refusing to register a broken Chrome host')
+  }
+  return { path: process.execPath, args: [script] }
 }
 
 /**
@@ -232,6 +223,10 @@ function resolveNativeHostScript(): string | null {
     `${path.sep}app.asar.unpacked${path.sep}`,
   )
   return [unpacked, packed].find((candidate) => fs.existsSync(candidate)) ?? null
+}
+
+function launcherPath(): string {
+  return path.join(app.getPath('userData'), 'capturepack-host.cmd')
 }
 
 /**
@@ -248,7 +243,7 @@ function resolveNativeHostScript(): string | null {
 function writeLauncherIfNeeded(): string {
   const cmd = hostCommand()
   if (cmd.args.length === 0) return cmd.path
-  const launcher = path.join(app.getPath('userData'), 'capturepack-host.cmd')
+  const launcher = launcherPath()
   const quoted = cmd.args.map((a) => `"${a}"`).join(' ')
   // `set` before the exec is the entire fix for the \r\n poisoning above: with
   // ELECTRON_RUN_AS_NODE the binary is plain Node and stdout carries protocol
@@ -351,6 +346,11 @@ export async function unregisterBrowsers(): Promise<void> {
   }
   try {
     fs.unlinkSync(manifestPath())
+  } catch {
+    // Same.
+  }
+  try {
+    fs.unlinkSync(launcherPath())
   } catch {
     // Same.
   }

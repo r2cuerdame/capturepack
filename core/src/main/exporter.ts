@@ -921,6 +921,10 @@ export interface ExportInput {
   // on re-edit; null explicitly removes a stale raw-clock payload after a
   // replay is dropped; a value atomically replaces it before manifest rewrite.
   windowsContext?: WindowsContextTimelineV1 | null
+  // Full-page browser images deliberately carry one synthetic browser surface
+  // so their DOM snapshot can use the ordinary editor context path. Other
+  // still images keep the stricter no-windows-context privacy boundary.
+  imageContextMode?: 'browser-page'
   // All-displays capture: every display the trigger froze, focused included.
   // Absent = a single-display pack (no media.displays). On re-edit the entries
   // carry null buffers: the declaration survives, the files stay untouched.
@@ -1217,6 +1221,7 @@ export interface InitialSaveInput {
   // Save-first is aligned to the raw recorder clock. Cancel/finalize replaces
   // this with the exact cut/rebased clock through updateInitialPack().
   windowsContext?: WindowsContextTimelineV1 | null
+  imageContextMode?: 'browser-page'
   // Pack document language for the save-first docs (same as ExportInput's).
   docLanguage?: Language
 }
@@ -1248,7 +1253,7 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
     // swallows every failure, so save-first remains a media-first guarantee.
     const contextDisposition = await reconcileWindowsContextPlugin(
       dirPath,
-      imageCapture ? null : input.windowsContext,
+      imageCapture && input.imageContextMode !== 'browser-page' ? null : input.windowsContext,
     )
     const manifest = buildManifest({
       id,
@@ -1324,7 +1329,7 @@ export async function updateInitialPack(
   const previous = await readManifestIfPresent(handle.dirPath)
   const contextDisposition = await reconcileWindowsContextPlugin(
     handle.dirPath,
-    imageCapture ? null : input.windowsContext,
+    imageCapture && input.imageContextMode !== 'browser-page' ? null : input.windowsContext,
   )
   const manifest = buildManifest({
     id: handle.id,
@@ -1409,7 +1414,7 @@ export async function updatePack(
   const uiaWritten = await tryWriteUiaPlugin(handle.dirPath, input.uia)
   const contextDisposition = await reconcileWindowsContextPlugin(
     handle.dirPath,
-    imageCapture ? null : input.windowsContext,
+    imageCapture && input.imageContextMode !== 'browser-page' ? null : input.windowsContext,
   )
   const manifest = buildManifest({
     id: handle.id,
@@ -1750,7 +1755,7 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
     }
     const contextDisposition = await reconcileWindowsContextPlugin(
       dirPath,
-      imageCapture ? null : input.windowsContext,
+      imageCapture && input.imageContextMode !== 'browser-page' ? null : input.windowsContext,
     )
     const manifest = buildManifest({
       id,
