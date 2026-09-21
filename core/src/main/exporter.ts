@@ -382,7 +382,7 @@ async function dropUndeclarableDisplays(dirPath: string): Promise<void> {
         changed = true
         continue // no frame for this display: it is not in the pack at all
       }
-      if (d.replay !== null && !existsSync(join(dirPath, d.replay))) {
+      if (typeof d.replay === 'string' && !existsSync(join(dirPath, d.replay))) {
         // The frame landed, the recording did not — a screenshot-only display is
         // a legal entry (SPEC §5.6); a declared missing file is not.
         const {

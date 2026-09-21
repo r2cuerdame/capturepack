@@ -413,7 +413,7 @@ console.log('\nSPEC §5.3 / §13.1 defines media.replay as nullable/omitted for 
 const bundleResult = buildSync({
   stdin: {
     contents: [
-      "export { buildReport, formatClock, keyframeSet } from './src/main/report'",
+      "export { buildReport, formatClock, keyframeSet, displaySummaryLines, extraDisplayFiles } from './src/main/report'",
       "export { buildReadme, buildSkills, replayLabel } from './src/main/packdocs'",
       "export { buildViewerHtml } from './src/main/viewer'",
       "export { makeT } from './src/shared/i18n'",
@@ -432,7 +432,7 @@ const bundleResult = buildSync({
 const mod = { exports: {} }
 const runner = new Function('module', 'exports', 'require', bundleResult.outputFiles[0].text)
 runner(mod, mod.exports, () => ({}))
-const { buildReport, formatClock, keyframeSet, buildReadme, buildSkills, replayLabel, makeT, buildViewerHtml } = mod.exports
+const { buildReport, formatClock, keyframeSet, displaySummaryLines, extraDisplayFiles, buildReadme, buildSkills, replayLabel, makeT, buildViewerHtml } = mod.exports
 
 console.log('\nPacks with omitted media.replay render clean screenshot-only documentation without undefined')
 {
@@ -504,6 +504,204 @@ console.log('\nPacks with omitted media.replay render clean screenshot-only docu
     check(
       `[${kind} replay] replayLabel returns localized screenshotOnly`,
       label === 'screenshot only (no replay)',
+    )
+  }
+}
+
+console.log('\nSPEC §5.6 / §13.1 defines displays[].replay as nullable/omitted for secondary displays without replay (Issue #210)')
+{
+  const spec = readFileSync(join(ROOT, 'SPEC.md'), 'utf8')
+  check(
+    'SPEC §5.6 declares displays[].replay as string or null',
+    /\|\s*`replay`\s*\|\s*string\s+\*\*or\*\*\s+`null`\s*\|\s*REQUIRED\s*\|\s*Filename of this display's replay/u.test(spec),
+    'SPEC.md §5.6 lost its displays[].replay string or null declaration',
+  )
+  const typesSource = readFileSync(join(CORE, 'src', 'shared', 'types.ts'), 'utf8')
+  check(
+    'types.ts declares ManifestDisplayMedia.replay as optional string or null',
+    /replay\?:\s*string\s*\|\s*null/u.test(typesSource),
+    'types.ts does not declare replay?: string | null in ManifestDisplayMedia',
+  )
+  const reportSource = readFileSync(join(CORE, 'src', 'main', 'report.ts'), 'utf8')
+  check(
+    'report.ts displaySummaryLines guards display replay with typeof string and length > 0',
+    reportSource.includes("const hasReplay = typeof d.replay === 'string' && d.replay.length > 0"),
+    'report.ts displaySummaryLines does not check typeof string and length > 0 for d.replay',
+  )
+  check(
+    'report.ts extraDisplayFiles guards display replay with typeof string and length > 0',
+    reportSource.includes("if (typeof d.replay === 'string' && d.replay.length > 0)"),
+    'report.ts extraDisplayFiles does not check typeof string and length > 0 for d.replay',
+  )
+
+  const t = makeT('en')
+  const testAnnotations = {
+    reference_width: 1920,
+    reference_height: 1080,
+    annotations: [],
+  }
+
+  for (const secondaryReplayKind of ['omitted', 'null', 'string']) {
+    const secondaryDisplay = {
+      index: 2,
+      snapshot: 'snapshot-d2.png',
+      snapshot_width: 1920,
+      snapshot_height: 1080,
+      bounds: { x: 1920, y: 0, width: 1920, height: 1080 },
+      scale: 1,
+      focused: false,
+      ...(secondaryReplayKind === 'omitted'
+        ? {}
+        : secondaryReplayKind === 'null'
+          ? { replay: null }
+          : { replay: 'replay-d2.webm', replay_duration_ms: 10000, replay_clock_offset_ms: 0 }),
+    }
+
+    const manifest = {
+      format: 'capturepack',
+      format_version: '0.7.0',
+      id: `test-multi-display-${secondaryReplayKind}-secondary-replay-pack`,
+      created_at: '2026-07-27T10:41:07+09:00',
+      generator: { name: 'test', version: '0.1.0' },
+      environment: {
+        os: 'windows',
+        screens: [
+          { width: 1920, height: 1080, scale: 1 },
+          { width: 1920, height: 1080, scale: 1 },
+        ],
+      },
+      media: {
+        snapshot: 'snapshot.png',
+        replay: 'replay.webm',
+        replay_duration_ms: 10000,
+        displays: [
+          {
+            index: 1,
+            snapshot: 'snapshot.png',
+            snapshot_width: 1920,
+            snapshot_height: 1080,
+            replay: 'replay.webm',
+            replay_duration_ms: 10000,
+            replay_clock_offset_ms: 0,
+            bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+            scale: 1,
+            focused: true,
+          },
+          secondaryDisplay,
+        ],
+      },
+    }
+
+    const summaryLines = displaySummaryLines(manifest, t, [])
+    const extraFiles = extraDisplayFiles(manifest)
+    const report = buildReport(manifest, testAnnotations, 'en', false, true)
+    const readme = buildReadme(manifest, testAnnotations, 'en', false, true)
+
+    if (secondaryReplayKind === 'string') {
+      check(
+        `[${secondaryReplayKind} secondary replay] displaySummaryLines reports replay duration and name`,
+        summaryLines.some((l) => l.includes('replay-d2.webm') && l.includes('10.0s')),
+      )
+      check(
+        `[${secondaryReplayKind} secondary replay] extraDisplayFiles includes secondary replay file`,
+        extraFiles.some((f) => f.name === 'replay-d2.webm'),
+      )
+      check(
+        `[${secondaryReplayKind} secondary replay] report.md and README.md include secondary replay`,
+        report.includes('replay-d2.webm') && readme.includes('replay-d2.webm'),
+      )
+    } else {
+      check(
+        `[${secondaryReplayKind} secondary replay] displaySummaryLines reports "no replay" and never emits literal undefined or 0.0s undefined`,
+        summaryLines.some((l) => l.includes('2: 1920×1080') && l.includes('no replay')) &&
+          !summaryLines.some((l) => l.includes('undefined')),
+      )
+      check(
+        `[${secondaryReplayKind} secondary replay] extraDisplayFiles only includes snapshot and never emits undefined`,
+        extraFiles.length === 1 &&
+          extraFiles[0].name === 'snapshot-d2.png' &&
+          !extraFiles.some((f) => f.name === undefined || f.name === 'undefined'),
+      )
+      check(
+        `[${secondaryReplayKind} secondary replay] report.md never emits literal undefined or secondary replay entries`,
+        !report.includes('undefined') &&
+          !report.includes('- undefined') &&
+          report.includes('`snapshot-d2.png`, no replay') &&
+          report.includes('- snapshot-d2.png — Display 2, 1920×1080 — the same instant on another screen') &&
+          !report.includes('replay-d2.webm'),
+      )
+      check(
+        `[${secondaryReplayKind} secondary replay] README.md never emits literal undefined or secondary replay table rows`,
+        !readme.includes('undefined') &&
+          !readme.includes('| undefined |') &&
+          readme.includes('| snapshot-d2.png | Display 2, 1920×1080 — the same instant on another screen') &&
+          !readme.includes('replay-d2.webm'),
+      )
+    }
+  }
+
+  for (const kind of ['omitted', 'null']) {
+    const screenshotMultiManifest = {
+      format: 'capturepack',
+      format_version: '0.7.0',
+      id: `test-screenshot-multi-${kind}-pack`,
+      created_at: '2026-07-27T10:41:07+09:00',
+      generator: { name: 'test', version: '0.1.0' },
+      environment: {
+        os: 'windows',
+        screens: [
+          { width: 1920, height: 1080, scale: 1 },
+          { width: 1920, height: 1080, scale: 1 },
+        ],
+      },
+      media: {
+        snapshot: 'snapshot.png',
+        ...(kind === 'null' ? { replay: null } : {}),
+        displays: [
+          {
+            index: 1,
+            snapshot: 'snapshot.png',
+            snapshot_width: 1920,
+            snapshot_height: 1080,
+            ...(kind === 'null' ? { replay: null } : {}),
+            bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+            scale: 1,
+            focused: true,
+          },
+          {
+            index: 2,
+            snapshot: 'snapshot-d2.png',
+            snapshot_width: 1920,
+            snapshot_height: 1080,
+            ...(kind === 'null' ? { replay: null } : {}),
+            bounds: { x: 1920, y: 0, width: 1920, height: 1080 },
+            scale: 1,
+            focused: false,
+          },
+        ],
+      },
+    }
+
+    const report = buildReport(screenshotMultiManifest, testAnnotations, 'en', false, true)
+    const readme = buildReadme(screenshotMultiManifest, testAnnotations, 'en', false, true)
+    const summaryLines = displaySummaryLines(screenshotMultiManifest, t, [])
+    const extraFiles = extraDisplayFiles(screenshotMultiManifest)
+
+    check(
+      `[screenshot multi-display ${kind} replay] displaySummaryLines reports no replay on all displays without undefined`,
+      summaryLines.every((l) => !l.includes('undefined')) &&
+        summaryLines.filter((l) => l.includes('no replay')).length === 2,
+    )
+    check(
+      `[screenshot multi-display ${kind} replay] extraDisplayFiles contains snapshot only`,
+      extraFiles.length === 1 && extraFiles[0].name === 'snapshot-d2.png',
+    )
+    check(
+      `[screenshot multi-display ${kind} replay] report.md and README.md never contain literal undefined`,
+      !report.includes('undefined') &&
+        !report.includes('- undefined') &&
+        !readme.includes('undefined') &&
+        !readme.includes('| undefined |'),
     )
   }
 }
@@ -884,4 +1082,3 @@ console.log('\nSPEC §10.1: formatClock preserves sign for negative millisecond 
 
 console.log(`\nresult: ${failed === 0 ? 'OK' : 'BROKEN'} — ${passed} passed, ${failed} failed\n`)
 if (failed > 0) process.exitCode = 1
-
