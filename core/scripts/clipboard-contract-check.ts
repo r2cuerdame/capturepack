@@ -130,7 +130,9 @@ async function run(): Promise<void> {
   )
   check(
     'automatic folder copy is awaited and returns its boolean outcome',
-    exporter.includes("if (mode === 'folder') {\n    return await copyFolderToClipboard(dirPath)\n  }") &&
+    /if \(mode === 'folder'\) \{\s*return await copyFolderToClipboard\(dirPath\)\s*\}/.test(
+      exporter,
+    ) &&
       folderCopy.includes('Promise<boolean>'),
   )
   check(
