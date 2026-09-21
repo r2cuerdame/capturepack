@@ -64,6 +64,7 @@ work does not settle remains open: a real three-screen capture
 | [0.3.1 dependency audit](DEPENDENCY-AUDIT-0.3.1.md) | Production/dev dependency findings for that release line |
 | [DXGI timing reference](DXGI_TIMING_REFERENCE.md) | Windows capture timing evidence and terminology |
 | [DXGI replay ring foundation](DXGI_REPLAY_RING.md) | Native ring self-test, capability handshake, and field-probe boundary |
+| [0.5.1 stability gate](RELEASE_0_5_1_STABILITY_GATE.md) | Stability gate audit, #240/#243 resolution, native replay exit path, and QA verification guide |
 
 ## Integrations and schemas
 
