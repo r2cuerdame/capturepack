@@ -22,6 +22,7 @@ import type { TranslateFn } from '../shared/i18n'
 import type {
   HistoryActionResult,
   HistoryAnnotatedState,
+  ActionRetryResult,
   HistoryCreateShareResult,
   HistoryCreateZipResult,
   HistoryListResult,
@@ -33,6 +34,9 @@ import type {
   HistoryShareStillResult,
   StorageUsage,
 } from '../shared/ipc'
+import type { ActionResult } from '../shared/actions'
+import { readActionResults, retryAction } from './actions/host'
+import { loadSettings } from './settings'
 import { DEFAULT_CAPTURE_HOTKEY } from '../shared/types'
 import type { Annotation, Settings } from '../shared/types'
 import { captureKindOf } from '../shared/captureMedia'
@@ -144,6 +148,7 @@ export function registerHistoryIpc(live: Settings): void {
       packs: entries.map(safeSummarize),
       uiLanguage: uiLanguage(live),
       captureHotkey: live.captureHotkey,
+      actionConfigs: live.actionConfigs,
     }
   })
 
@@ -480,6 +485,71 @@ export function registerHistoryIpc(live: Settings): void {
       release()
     }
   })
+
+  ipcMain.handle(IPC.historyActionResults, (event, ref: unknown): ActionResult[] => {
+    if (!fromHistory(event)) return []
+    const entry = entryFor(ref)
+    if (entry === null) return []
+    if (entry.kind === 'dir') {
+      return readActionResults(entry.path)
+    }
+    const pack = openPack(entry.path, entry.kind, entry.id)
+    return readZipActionResults(pack)
+  })
+
+  ipcMain.handle(IPC.historyActionRetry, async (event, ref: unknown, configId: unknown): Promise<ActionRetryResult> => {
+    if (!fromHistory(event)) return { ok: false, error: 'not the history window' }
+    if (typeof configId !== 'string' || configId === '') {
+      return { ok: false, error: 'Invalid config id' }
+    }
+    const entry = entryFor(ref)
+    if (entry === null) return { ok: false, error: 'Pack not found' }
+    if (entry.kind !== 'dir') {
+      return { ok: false, error: 'Cannot retry actions on an archived pack' }
+    }
+    const settings = liveSettings ?? loadSettings().settings
+    const config = settings.actionConfigs.find((c) => c.configId === configId)
+    if (config === undefined || !config.enabled) {
+      return { ok: false, error: 'Action configuration is disabled or not found' }
+    }
+    const manifestPath = path.join(entry.path, 'manifest.json')
+    if (!fs.existsSync(manifestPath)) {
+      return { ok: false, error: 'Manifest not found' }
+    }
+    let packId = ''
+    try {
+      const raw = fs.readFileSync(manifestPath, 'utf8')
+      const parsed: unknown = JSON.parse(raw)
+      if (typeof parsed === 'object' && parsed !== null) {
+        const id = (parsed as Record<string, unknown>).id
+        packId = typeof id === 'string' ? id : ''
+      }
+    } catch {
+      return { ok: false, error: 'Could not read pack manifest' }
+    }
+    if (packId === '') {
+      return { ok: false, error: 'Empty pack id' }
+    }
+    try {
+      const result = await retryAction(
+        {
+          packDir: entry.path,
+          packId,
+          packState: 'complete',
+          configs: settings.actionConfigs,
+          webhooks: settings.actionWebhooks,
+        },
+        configId,
+      )
+      if (result === null) {
+        return { ok: false, error: 'Action retry returned no result' }
+      }
+      summaryCache.delete(entry.path)
+      return { ok: true, result }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
 }
 
 /** Opens the History window, or focuses the already-open one (single-instance). */
@@ -660,6 +730,18 @@ function annotationsOf(pack: StorePackHandle): Annotation[] {
   return file.annotations.filter((a) => a !== null && typeof a === 'object')
 }
 
+function readZipActionResults(pack: StorePackHandle): ActionResult[] {
+  try {
+    const text = pack.readText('plugins/action-results.json')
+    if (text === null) return []
+    const parsed: unknown = JSON.parse(text)
+    if (!Array.isArray(parsed)) return []
+    return parsed as ActionResult[]
+  } catch {
+    return []
+  }
+}
+
 // One malformed pack must never blank the whole listing: a summarize() throw
 // degrades to a warning card instead of rejecting the history:list invoke.
 function safeSummarize(entry: RawPackEntry): HistoryPackSummary {
@@ -685,6 +767,7 @@ function safeSummarize(entry: RawPackEntry): HistoryPackSummary {
       zipTwin: zipTwinPresent(entry),
       shareTwin: shareTwinPresent(entry),
       warning: liveT()('history.errUnreadablePack', { error: errorMessage(err) }),
+      actionResults: [],
     }
   }
 }
@@ -739,6 +822,7 @@ function summarize(entry: RawPackEntry): HistoryPackSummary {
     // NOTE: cached by stamp — after a language change an unchanged malformed
     // pack keeps its old-language warning until it changes on disk (harmless).
     warning: manifest === null ? (pack.warnings()[0] ?? liveT()('history.errManifestBad')) : null,
+    actionResults: entry.kind === 'dir' ? readActionResults(entry.path) : readZipActionResults(pack),
   }
   summaryCache.set(entry.path, { stamp, summary })
   return summary

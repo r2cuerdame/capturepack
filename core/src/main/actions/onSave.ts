@@ -21,7 +21,10 @@ import type { ActionResult, PackState } from '../../shared/actions'
 import type { Settings } from '../../shared/types'
 import { uiT, uiLanguage } from '../locale'
 import { logError, logInfo } from '../log'
-import { findAction, runActionsForPack } from './host'
+import { findAction, readActionResults, runActionsForPack } from './host'
+import { updateToastActionResults } from '../saveToast'
+
+export { readActionResults } from './host'
 
 /**
  * The pack's own UUID, which is half the idempotency key.
@@ -94,6 +97,7 @@ export async function runActionsAtState(
       webhooks: settings.actionWebhooks,
     })
     announceFailures(results, settings)
+    updateToastActionResults(packDir, results)
     return results
   } catch (error) {
     logError('[actions] the after-save pipeline failed:', error)
