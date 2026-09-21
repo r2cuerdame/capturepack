@@ -286,17 +286,6 @@ async function clearAllSecondaryDisplayMedia(dirPath: string): Promise<void> {
   )
 }
 
-// ---------------------------------------------------------------------------
-// Save-first per-display writes, off the editor-opening critical path
-// ---------------------------------------------------------------------------
-
-// dirPath -> the save-first per-display write still in flight for it. savePack
-// returns as soon as the CRASH-CRITICAL bytes (manifest, snapshot.png,
-// declared replay, annotations/timeline/docs) are down, so the editor opens without
-// waiting for 100+ MB of other screens; every later writer for that folder
-// (updatePack, saveAsNewPack) settles this first.
-const pendingDisplayWrites = new Map<string, Promise<void>>()
-
 // Every read-modify-write of one pack's manifest shares this queue. UIA/DOM
 // providers finish on independent budgets while final save and background
 // renders rewrite the same file; without serialization, the last stale writer
@@ -379,70 +368,13 @@ async function withManifestMutation<T>(
   }
 }
 
-/** Waits for a save-first per-display write to finish. Never rejects. */
-export async function settleDisplayWrites(dirPath: string): Promise<void> {
-  const pending = pendingDisplayWrites.get(dirPath)
-  if (pending === undefined) return
-  try {
-    await pending
-  } catch {
-    /* already logged by the writer */
-  }
-}
-
 /**
- * A per-display file the background write could not lay down must not stay
- * DECLARED: re-reads the manifest and drops every media.displays entry whose
- * files are missing. Keeps a save-first folder valid even when the editor is
- * cancelled.
- *
- * IT COLLAPSES, IT NEVER DELETES (0.7.0, SPEC §5.6). This used to remove the
- * whole array once fewer than two entries survived, because that was the
- * single-display shape. Under a REQUIRED media.displays that would turn a
- * crash-recovery folder into an invalid 0.7.0 pack — a manifest declaring
- * 0.7.0 with no displays at all — and this runs on precisely the path nobody is
- * watching. One surviving entry is now a one-entry array, which is exactly what
- * a single-display capture writes anyway.
+ * Kept for callers that may run against an older save-first implementation.
+ * Display media is now committed synchronously before manifest publication, so
+ * there is no local background write to settle.
  */
-async function dropUndeclarableDisplays(dirPath: string): Promise<void> {
-  return withManifestMutation(dirPath, async () => {
-    const manifestPath = join(dirPath, 'manifest.json')
-    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Manifest
-    const displays = manifest.media.displays
-    if (!Array.isArray(displays)) return
-    let changed = false
-    const kept: ManifestDisplayMedia[] = []
-    for (const d of displays) {
-      if (d.focused) {
-        kept.push(d)
-        continue
-      }
-      if (!existsSync(join(dirPath, d.snapshot))) {
-        changed = true
-        continue // no frame for this display: it is not in the pack at all
-      }
-      if (typeof d.replay === 'string' && !existsSync(join(dirPath, d.replay))) {
-        // The frame landed, the recording did not — a screenshot-only display is
-        // a legal entry (SPEC §5.6); a declared missing file is not.
-        const {
-          replay_duration_ms: _droppedDuration,
-          replay_clock_offset_ms: _droppedClock,
-          ...rest
-        } = d
-        kept.push({ ...rest, replay: null })
-        changed = true
-        continue
-      }
-      kept.push(d)
-    }
-    if (!changed) return
-    // Zero survivors means the array had no focused entry — a manifest that was
-    // already malformed before this ran. There is nothing honest to collapse to,
-    // so the undeclarable array goes rather than being left pointing at nothing.
-    if (kept.length > 0) manifest.media.displays = kept
-    else delete manifest.media.displays
-    await writeSourceFile(manifestPath, toJson(manifest))
-  })
+export async function settleDisplayWrites(dirPath: string): Promise<void> {
+  void dirPath
 }
 
 // ---------------------------------------------------------------------------
@@ -1507,36 +1439,21 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
       // save will.
       hasInputEvents: timelineHasInputEvents(input.timeline),
     })
-    // No render follows a save-first folder — the editor may never finish — so
-    // the documents must not promise stills nothing will ever write.
-    await writePackFiles(dirPath, manifest, annotationsFile, input.timeline, input.docLanguage, false)
+    // Every file declared by the manifest must be complete before that manifest
+    // becomes discoverable. This includes non-focused displays: manifest.json
+    // is the commit point, so none of their writes may remain in the background.
     await writeFile(join(dirPath, 'snapshot.png'), input.snapshotPng)
     if (!imageCapture && input.replayWebm !== null) {
       await writeFile(join(dirPath, replayFileName(input.replayFile)), input.replayWebm)
     }
+    await writeDisplayFiles(dirPath, imageCapture ? undefined : input.displays)
+    // No render follows a save-first folder — the editor may never finish — so
+    // the documents must not promise stills nothing will ever write.
+    await writePackFiles(dirPath, manifest, annotationsFile, input.timeline, input.docLanguage, false)
   } catch (err) {
     // Never leave a half-written pack behind.
     await rm(dirPath, { recursive: true, force: true })
     throw err
-  }
-  // The OTHER displays' media (up to ~45 MB of webm each) is written in the
-  // background: the focused pack above is already complete and valid, and the editor
-  // must not wait on 100+ MB of screens the user is not annotating. Every later
-  // writer for this folder settles it first (settleDisplayWrites).
-  if (!imageCapture && input.displays !== undefined) {
-    const write = writeDisplayFiles(dirPath, input.displays)
-      .catch(async (err: unknown) => {
-        console.error(
-          'capturepack: writing the per-display media failed:',
-          err instanceof Error ? err.message : String(err),
-        )
-        // A file that did not land must not stay declared (SPEC §5.6).
-        await dropUndeclarableDisplays(dirPath).catch(() => {})
-      })
-      .finally(() => {
-        if (pendingDisplayWrites.get(dirPath) === write) pendingDisplayWrites.delete(dirPath)
-      })
-    pendingDisplayWrites.set(dirPath, write)
   }
   return { id, dirPath }
 }
@@ -1585,6 +1502,11 @@ export async function updateInitialPack(
     reference_height: input.height,
     annotations: [],
   }
+  await writeDisplayFiles(handle.dirPath, imageCapture ? undefined : input.displays)
+  const replayFile = replayFileName(input.replayFile)
+  if (!imageCapture && input.replayWebm !== null) {
+    await writeFile(join(handle.dirPath, replayFile), input.replayWebm)
+  }
   await writePackFiles(
     handle.dirPath,
     manifest,
@@ -1593,12 +1515,9 @@ export async function updateInitialPack(
     input.docLanguage,
     false,
   )
-  await writeDisplayFiles(handle.dirPath, imageCapture ? undefined : input.displays)
-  const replayFile = replayFileName(input.replayFile)
   if (imageCapture || input.replayWebm === null) {
     await rm(join(handle.dirPath, replayFile), { force: true })
   }
-  else await writeFile(join(handle.dirPath, replayFile), input.replayWebm)
   await removeReplacedReplayFiles(handle.dirPath, previous, manifest)
   })
 }
@@ -1683,10 +1602,6 @@ export async function updatePack(
   // Save time (not capturedAt) — this event records when the pack was written.
   const timeline = withExportEvent(input.timeline, new Date())
 
-  // A background render always follows this save (annotated replay + stills, or
-  // the single still of a screenshot-only pack), so the documents may reference
-  // the keyframe files it is about to write.
-  await writePackFiles(handle.dirPath, manifest, annotationsFile, timeline, input.docLanguage, true)
   await writeFile(join(handle.dirPath, 'snapshot.png'), input.snapshotPng)
   // Non-focused displays: rewritten from the same bytes save-first used (a
   // failed save-first retries the whole write here). Re-edit passes null
@@ -1708,12 +1623,20 @@ export async function updatePack(
   // put back only the ones that still have annotations.
   await clearDisplayRenderOutputs(handle.dirPath, imageCapture ? undefined : input.displays)
   if (!keepReplay) {
-    if (imageCapture || input.replayWebm === null) {
-      // The user excluded the replay at save time (e.g. privacy).
-      await rm(join(handle.dirPath, replayFile), { force: true })
-    } else {
+    if (!imageCapture && input.replayWebm !== null) {
       await writeFile(join(handle.dirPath, replayFile), input.replayWebm)
     }
+  }
+  // A background render always follows this save (annotated replay + stills, or
+  // the single still of a screenshot-only pack), so the documents may reference
+  // the keyframe files it is about to write. The manifest is published only
+  // after every source raster and declared replay above is complete.
+  await writePackFiles(handle.dirPath, manifest, annotationsFile, timeline, input.docLanguage, true)
+  if (!keepReplay && (imageCapture || input.replayWebm === null)) {
+    // The user excluded the replay at save time (e.g. privacy). Remove it only
+    // after the new manifest stops declaring it, keeping the previous revision
+    // readable throughout the commit.
+    await rm(join(handle.dirPath, replayFile), { force: true })
   }
   await removeReplacedReplayFiles(handle.dirPath, previousManifest, manifest)
 
@@ -2111,8 +2034,6 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
       usesKeyframes: annotations.some((a) => (a.keyframes?.length ?? 0) > 0),
       hasInputEvents: timelineHasInputEvents(timeline),
     })
-    // A background render for the NEW folder always follows this save.
-    await writePackFiles(dirPath, manifest, annotationsFile, timeline, input.docLanguage, true)
     await writeFile(join(dirPath, 'snapshot.png'), input.snapshotPng)
     if (hasReplay) await copyFile(srcReplay, join(dirPath, replayFile))
     // Per-display media travels byte-for-byte with its declaration — under the
@@ -2127,6 +2048,9 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
       if (d.replayWebm !== null) await writeFile(join(dirPath, replayName), d.replayWebm)
       else await copyFile(join(sourceDir, replayName), join(dirPath, replayName))
     }
+    // A background render for the NEW folder always follows this save. Publish
+    // its discovery commit only after every declared media copy has completed.
+    await writePackFiles(dirPath, manifest, annotationsFile, timeline, input.docLanguage, true)
   } catch (err) {
     // Never leave a half-written pack behind.
     await rm(dirPath, { recursive: true, force: true })
