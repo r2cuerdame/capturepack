@@ -31,7 +31,7 @@ import {
   sendsDataOffMachine,
   totalAttempts,
 } from '../src/shared/actions'
-import { runPipeline, canRetry } from '../src/shared/actionPipeline'
+import { runPipeline, canRetry, SaveActionLifecycle, failureResults } from '../src/shared/actionPipeline'
 
 let failed = 0
 
@@ -341,6 +341,234 @@ console.log('\nRETRY IS OFFERED ONLY WHERE IT MEANS SOMETHING')
   )
 }
 
+console.log('\nSUBSEQUENT PACK STATE TRANSITIONS DO NOT RE-EXECUTE FAILED ACTIONS (#169)')
+{
+  const session = new SaveActionLifecycle()
+  const completedKeys = new Set<string>()
+  const clock = fastClock()
+
+  const cfg1 = config({ actionId: 'a', configId: 'cfg-1', order: 1, continueOnFailure: true })
+  const cfg2 = config({ actionId: 'b', configId: 'cfg-2', order: 2 })
+  const cfg3 = config({ actionId: 'c', configId: 'cfg-3', order: 3 })
+  const allConfigs = [cfg1, cfg2, cfg3]
+
+  const stepA = step({ id: 'a', requiredPackState: 'source-ready' }, cfg1)
+  const stepB = step({ id: 'b', requiredPackState: 'annotated-replay-ready' }, cfg2)
+  const stepC = step({ id: 'c', requiredPackState: 'complete' }, cfg3)
+  const allSteps = [stepA, stepB, stepC]
+
+  let aAttempts = 0
+  let bAttempts = 0
+  let cAttempts = 0
+  const failureAnnouncements: string[][] = []
+
+  const execute = async (s: PipelineStep) => {
+    if (s.manifest.id === 'a') {
+      aAttempts += 1
+      throw new Error('remote service down')
+    }
+    if (s.manifest.id === 'b') {
+      bAttempts += 1
+    }
+    if (s.manifest.id === 'c') {
+      cAttempts += 1
+    }
+  }
+
+  // Simulates onSave's runActionsAtState execution for a transition:
+  const runState = async (packState: PackState) => {
+    const targetConfigs = session.filterConfigs(allConfigs)
+    if (targetConfigs.length === 0) return []
+    const targetConfigIds = new Set(targetConfigs.map((c) => c.configId))
+    const stepsToRun = allSteps.filter((s) => targetConfigIds.has(s.config.configId))
+    const run = await runPipeline({
+      packId: PACK,
+      packState,
+      steps: stepsToRun,
+      completedKeys,
+      execute,
+      clock,
+    })
+    for (const key of run.newCompletedKeys) completedKeys.add(key)
+    session.recordResults(run.results)
+    const failures = failureResults(run.results)
+    if (failures.length > 0) {
+      failureAnnouncements.push(failures.map((f) => f.actionId))
+    }
+    return run.results
+  }
+
+  // 1. Initial transition: source-ready
+  const r1 = await runState('source-ready')
+  check(
+    'at source-ready: failed action a exhausts attempts and is recorded as failed',
+    r1.find((r) => r.actionId === 'a')?.outcome === 'failed' && aAttempts === 1,
+  )
+  check(
+    'at source-ready: actions b and c are blocked waiting for later pack states',
+    r1.find((r) => r.actionId === 'b')?.outcome === 'blocked'
+      && r1.find((r) => r.actionId === 'c')?.outcome === 'blocked'
+      && bAttempts === 0
+      && cAttempts === 0,
+  )
+  check(
+    'at source-ready: exactly one failure announcement is made for action a',
+    failureAnnouncements.length === 1 && failureAnnouncements[0]?.join(',') === 'a',
+  )
+  check(
+    'lifecycle tracks only actions b and c as blocked',
+    session.blockedConfigIds.has('cfg-2')
+      && session.blockedConfigIds.has('cfg-3')
+      && !session.blockedConfigIds.has('cfg-1'),
+  )
+
+  // 2. Second transition: annotated-replay-ready
+  const r2 = await runState('annotated-replay-ready')
+  check(
+    'at annotated-replay-ready: failed action a is NOT re-executed (#169)',
+    aAttempts === 1,
+    `action a attempts: ${String(aAttempts)}`,
+  )
+  check(
+    'at annotated-replay-ready: previously blocked action b runs and succeeds',
+    r2.find((r) => r.actionId === 'b')?.outcome === 'ok' && bAttempts === 1,
+  )
+  check(
+    'at annotated-replay-ready: action c remains blocked',
+    r2.find((r) => r.actionId === 'c')?.outcome === 'blocked' && cAttempts === 0,
+  )
+  check(
+    'at annotated-replay-ready: no duplicate failure announcement is emitted for action a (#169)',
+    failureAnnouncements.length === 1,
+    `announcements count: ${String(failureAnnouncements.length)}`,
+  )
+  check(
+    'lifecycle now tracks only action c as blocked',
+    session.blockedConfigIds.has('cfg-3')
+      && !session.blockedConfigIds.has('cfg-2')
+      && !session.blockedConfigIds.has('cfg-1'),
+  )
+
+  // 3. Third transition: complete
+  const r3 = await runState('complete')
+  check(
+    'at complete: failed action a is still NOT re-executed (#169)',
+    aAttempts === 1,
+    `action a attempts: ${String(aAttempts)}`,
+  )
+  check(
+    'at complete: successful action b is NOT re-executed',
+    bAttempts === 1,
+    `action b attempts: ${String(bAttempts)}`,
+  )
+  check(
+    'at complete: previously blocked action c runs and succeeds',
+    r3.find((r) => r.actionId === 'c')?.outcome === 'ok' && cAttempts === 1,
+  )
+  check(
+    'at complete: total failure announcements across the entire save session is still exactly 1',
+    failureAnnouncements.length === 1,
+  )
+  check(
+    'lifecycle blocked set is now completely clear',
+    session.blockedConfigIds.size === 0,
+  )
+
+  // 4. Any further transition does nothing
+  const r4 = await runState('complete')
+  check('subsequent transitions after all blocked actions settle execute zero actions', r4.length === 0)
+  check('failed action a attempts remains exactly 1', aAttempts === 1)
+
+  // 5. Explicit user retry of the failed action executes it
+  check('failed action offers canRetry', canRetry(r1[0]!, cfg1))
+  const retryRun = await runPipeline({
+    packId: PACK,
+    packState: 'complete',
+    steps: [stepA],
+    completedKeys,
+    execute,
+    clock,
+  })
+  check(
+    'explicit retry (retryAction path) re-executes the failed action on user request (#169)',
+    aAttempts === 2 && retryRun.results[0]?.actionId === 'a',
+  )
+}
+{
+  const session = new SaveActionLifecycle()
+  const clock = fastClock()
+  const cfg1 = config({ actionId: 'a', configId: 'cfg-1', order: 1 })
+  const stepA = step({ id: 'a', requiredPackState: 'annotated-replay-ready' }, cfg1)
+  let aAttempts = 0
+
+  // 1. source-ready: stepA is blocked
+  session.filterConfigs([cfg1])
+  const r1 = await runPipeline({
+    packId: PACK,
+    packState: 'source-ready',
+    steps: [stepA],
+    completedKeys: new Set(),
+    execute: async () => { aAttempts += 1 },
+    clock,
+  })
+  session.recordResults(r1.results)
+  check('stepA blocked at source-ready', r1.results[0]?.outcome === 'blocked' && aAttempts === 0)
+
+  // 2. annotated-replay-ready: stepA runs and fails
+  session.filterConfigs([cfg1])
+  const r2 = await runPipeline({
+    packId: PACK,
+    packState: 'annotated-replay-ready',
+    steps: [stepA],
+    completedKeys: new Set(),
+    execute: async () => {
+      aAttempts += 1
+      throw new Error('fail at annotated-replay-ready')
+    },
+    clock,
+  })
+  session.recordResults(r2.results)
+  check('stepA fails at annotated-replay-ready', r2.results[0]?.outcome === 'failed' && aAttempts === 1)
+
+  // 3. complete: stepA must NOT re-execute
+  const c3 = session.filterConfigs([cfg1])
+  check('stepA is excluded from configs at complete after failing at annotated-replay-ready (#169)', c3.length === 0)
+  check('stepA was not re-executed at complete', aAttempts === 1)
+}
+{
+  const session = new SaveActionLifecycle()
+  const clock = fastClock()
+  const cfg1 = config({ actionId: 'a', configId: 'cfg-1', order: 1, continueOnFailure: false })
+  const cfg2 = config({ actionId: 'b', configId: 'cfg-2', order: 2 })
+  const stepA = step({ id: 'a', requiredPackState: 'source-ready' }, cfg1)
+  const stepB = step({ id: 'b', requiredPackState: 'annotated-replay-ready' }, cfg2)
+  let bAttempts = 0
+
+  // Action a fails at source-ready and halts the pipeline; action b is skipped
+  session.filterConfigs([cfg1, cfg2])
+  const r1 = await runPipeline({
+    packId: PACK,
+    packState: 'source-ready',
+    steps: [stepA, stepB],
+    completedKeys: new Set(),
+    execute: async (s) => {
+      if (s.manifest.id === 'a') throw new Error('fail')
+      bAttempts += 1
+    },
+    clock,
+  })
+  session.recordResults(r1.results)
+  check(
+    'a halting failure leaves downstream action skipped (not blocked)',
+    r1.results.find((r) => r.actionId === 'b')?.outcome === 'skipped',
+  )
+  const c2 = session.filterConfigs([cfg1, cfg2])
+  check(
+    'downstream action behind a halted pipeline is not resurrected at subsequent transitions',
+    c2.length === 0 && bAttempts === 0,
+  )
+}
+
 console.log('\nTHE MODULES STAY REACHABLE WITHOUT A STUB')
 {
   const here = process.cwd()
@@ -465,6 +693,21 @@ console.log('\nTHE APP ACTUALLY RUNS THE PIPELINE')
   check(
     'a pack whose id cannot be read runs NOTHING — an action keyed on a guessed id could duplicate against the real one later',
     onSave.includes('if (packId === null) return []'),
+  )
+  check(
+    'onSave.ts filters configs through SaveActionLifecycle so failed actions do not re-execute (#169)',
+    onSave.includes('session.filterConfigs(allConfigs)')
+      && onSave.includes('session.recordResults(results)'),
+  )
+  check(
+    'onSave.ts serializes state transitions per pack so concurrent transitions do not race (#169)',
+    onSave.includes('inFlightByPack.get(packId)')
+      && onSave.includes('await inFlight.catch('),
+  )
+  check(
+    'onSave.ts bounds remembered save sessions to 1,000 packs just like the ledger',
+    onSave.includes('MAX_REMEMBERED_PACKS = 1_000')
+      && onSave.includes('sessionsByPack.size > MAX_REMEMBERED_PACKS'),
   )
 }
 
