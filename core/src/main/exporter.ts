@@ -242,7 +242,10 @@ async function clearDisplayRenderOutputs(
   if (displays === undefined) return
   for (const d of displays) {
     if (d.focused) continue
-    await rm(join(dirPath, displayAnnotatedName(d.index)), { force: true })
+    await Promise.all([
+      rm(join(dirPath, displayAnnotatedName(d.index)), { force: true }),
+      rm(join(dirPath, displayAnnotatedName(d.index, 'replay.mp4')), { force: true }),
+    ])
     await rm(join(dirPath, displayFramesDir(d.index)), { recursive: true, force: true })
   }
 }
@@ -1658,7 +1661,10 @@ export async function updatePack(
   // after this save. The annotated keyframe stills follow the same rule — the
   // manifest written above declares neither, so both are removed here and the
   // render puts back exactly the current set (SPEC §5.7).
-  await rm(join(handle.dirPath, 'replay_annotated.webm'), { force: true })
+  await Promise.all([
+    rm(join(handle.dirPath, 'replay_annotated.webm'), { force: true }),
+    rm(join(handle.dirPath, 'replay_annotated.mp4'), { force: true }),
+  ])
   await rm(join(handle.dirPath, 'frames'), { recursive: true, force: true })
   // Same rule per display (GOAL "Multi-Monitor Support"): a screen the user
   // just un-annotated must not keep an annotated replay showing boxes that no
@@ -2278,7 +2284,7 @@ export async function setManifestRenderOutputs(
     // files are undeclared and readers ignore them — never invent an entry.
     if (entry === undefined) return
     if (outputs.replayAnnotated && entry.replay !== null) {
-      entry.replay_annotated = displayAnnotatedName(entry.index)
+      entry.replay_annotated = displayAnnotatedName(entry.index, entry.replay ?? undefined)
     }
     if (declared.length > 0) entry.keyframes = declared
     else delete entry.keyframes
@@ -2289,7 +2295,9 @@ export async function setManifestRenderOutputs(
   // Never declared without a replay (SPEC §5.3) — keyframes have no such rule:
   // a screenshot-only pack has exactly one still, rendered from snapshot.png.
   if (outputs.replayAnnotated && typeof manifest.media.replay === 'string') {
-    manifest.media.replay_annotated = 'replay_annotated.webm'
+    manifest.media.replay_annotated = manifest.media.replay.endsWith('.mp4')
+      ? 'replay_annotated.mp4'
+      : 'replay_annotated.webm'
   }
   if (declared.length > 0) manifest.media.keyframes = declared
   else delete manifest.media.keyframes

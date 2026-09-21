@@ -51,9 +51,9 @@ export interface AnnotatedRenderJob {
   // declared, so their image links describe what the render actually wrote.
   docLanguage?: Language
   // WHICH captured display this job renders (GOAL "Multi-Monitor Support").
-  // Absent = the focused display: replay_annotated.webm + frames/, declared as
+  // Absent = the focused display: replay_annotated.(webm|mp4) + frames/, declared as
   // the top-level media. A 1-based index renders THAT display's own boxes into
-  // replay_annotated-d<N>.webm + frames-d<N>/, declared inside its
+  // replay_annotated-d<N>.(webm|mp4) + frames-d<N>/, declared inside its
   // media.displays entry — a box belongs to the screen it was drawn on, so a
   // display's rendering may only ever carry its own.
   display?: number
@@ -234,8 +234,12 @@ async function renderAnnotatedReplay(
   // removes frames/ and rewrites it, so another render of the same pack landing
   // between the writes and the declaration would leave the manifest pointing at
   // files that no longer exist.
-  const video =
-    job.display === undefined ? 'replay_annotated.webm' : displayAnnotatedName(job.display)
+  const replayFile = job.replayMimeType.split(';', 1)[0]?.trim().toLowerCase() === 'video/mp4'
+    ? 'replay.mp4'
+    : 'replay.webm'
+  const video = job.display === undefined
+    ? `replay_annotated.${replayFile.endsWith('.mp4') ? 'mp4' : 'webm'}`
+    : displayAnnotatedName(job.display, replayFile)
   const framesDir = job.display === undefined ? 'frames' : displayFramesDir(job.display)
   await enqueueRender(async (signal) => {
     // Allocate/copy only after this job owns the single media lane. Queued
@@ -253,6 +257,9 @@ async function renderAnnotatedReplay(
       height: job.height,
       fps: job.fps,
       durationMs: job.replayDurationMs,
+      // Keep the derived replay in the source replay's container so its
+      // manifest filename and bytes agree for both WebM and MP4 captures.
+      preferMimeType: job.replayMimeType,
       // The annotated stills come out of this same pass (SPEC §7.3).
       keyframes: true,
     }
