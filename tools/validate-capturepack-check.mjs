@@ -129,6 +129,157 @@ try {
     !`${invalidJson.stdout}\n${invalidJson.stderr}`.includes('ReferenceError')
       && !invalidJson.stderr.includes('SyntaxError'))
 
+  const validDoc = {
+    viewport: {
+      width: 1280,
+      height: 720,
+      device_pixel_ratio: 1,
+      scroll_x: 0,
+      scroll_y: 0,
+    },
+    url: 'https://example.test/doc',
+    title: 'Doc Title',
+    truncated: false,
+    visited_count: 10,
+    elapsed_ms: 3.5,
+    omitted: [],
+    elements: [{
+      i: 0,
+      tag: 'button',
+      role: 'button',
+      bounds: { x: 10, y: 20, width: 80, height: 24 },
+    }],
+  }
+
+  writeJson(elementsFile, {
+    protocol: 1,
+    extension_version: '0.1.8',
+    events: [{
+      t_ms: 0,
+      type: 'dom.document.captured',
+      tab: { url: 'https://example.test/', title: 'Fixture' },
+      document: validDoc,
+    }],
+  })
+  const capturedDocRes = runValidator()
+  check('validate-capturepack recognizes dom.document.captured as known event',
+    capturedDocRes.status === 0 && capturedDocRes.stdout.includes('result: VALID'))
+  check('dom.document.captured does not emit unknown event type note',
+    !capturedDocRes.stdout.includes('event(s) of a type this validator does not know'))
+
+  const invalidDocViewport = JSON.parse(JSON.stringify(validDoc))
+  delete invalidDocViewport.viewport.device_pixel_ratio
+  writeJson(elementsFile, {
+    protocol: 1,
+    extension_version: '0.1.8',
+    events: [{
+      t_ms: 0,
+      type: 'dom.document.captured',
+      tab: { url: 'https://example.test/', title: 'Fixture' },
+      document: invalidDocViewport,
+    }],
+  })
+  const missingViewportRes = runValidator()
+  check('validateChromeDom rejects document with missing viewport properties',
+    missingViewportRes.status === 1
+      && missingViewportRes.stdout.includes('result: INVALID')
+      && missingViewportRes.stdout.includes('document.viewport MUST carry numbers'))
+
+  const invalidDocElements = JSON.parse(JSON.stringify(validDoc))
+  invalidDocElements.elements = [{ i: 0, tag: 'div' }]
+  writeJson(elementsFile, {
+    protocol: 1,
+    extension_version: '0.1.8',
+    events: [{
+      t_ms: 0,
+      type: 'dom.document.captured',
+      tab: { url: 'https://example.test/', title: 'Fixture' },
+      document: invalidDocElements,
+    }],
+  })
+  const malformedElRes = runValidator()
+  check('validateChromeDom rejects document with malformed element entry',
+    malformedElRes.status === 1
+      && malformedElRes.stdout.includes('result: INVALID')
+      && malformedElRes.stdout.includes('document.elements[0] MUST be an object with'))
+
+  // age_ms rules for still image captures vs video/replay packs (SPEC §11.4)
+  manifest.format_version = '0.3.0'
+  manifest.capture_kind = 'image'
+  manifest.media.image_scope = 'fullscreen'
+  rmSync(join(pack, 'timeline.json'), { force: true })
+  rmSync(join(pack, 'skills', 'timeline.md'), { force: true })
+  writeJson(manifestFile, manifest)
+
+  writeJson(elementsFile, {
+    protocol: 1,
+    extension_version: '0.1.8',
+    events: [{
+      t_ms: 0,
+      type: 'dom.document.captured',
+      tab: { url: 'https://example.test/', title: 'Fixture' },
+      document: validDoc,
+    }],
+  })
+  const missingAgeStillRes = runValidator()
+  check('validateChromeDom rejects still image event missing age_ms',
+    missingAgeStillRes.status === 1
+      && missingAgeStillRes.stdout.includes('result: INVALID')
+      && missingAgeStillRes.stdout.includes('age_ms is REQUIRED in a still capture'))
+
+  writeJson(elementsFile, {
+    protocol: 1,
+    extension_version: '0.1.8',
+    events: [{
+      t_ms: 0,
+      age_ms: 0,
+      type: 'dom.document.captured',
+      tab: { url: 'https://example.test/', title: 'Fixture' },
+      document: validDoc,
+    }],
+  })
+  const validStillRes = runValidator()
+  check('validateChromeDom accepts still image event with valid age_ms',
+    validStillRes.status === 0 && validStillRes.stdout.includes('result: VALID'))
+
+  manifest.capture_kind = 'video'
+  manifest.media.replay = 'replay.webm'
+  manifest.media.replay_duration_ms = 1_000
+  delete manifest.media.image_scope
+  writeFileSync(join(pack, 'replay.webm'), Buffer.alloc(0))
+  writeJson(manifestFile, manifest)
+
+  writeJson(elementsFile, {
+    protocol: 1,
+    extension_version: '0.1.8',
+    events: [{
+      t_ms: 0,
+      age_ms: 0,
+      type: 'dom.document.captured',
+      tab: { url: 'https://example.test/', title: 'Fixture' },
+      document: validDoc,
+    }],
+  })
+  const replayWithAgeRes = runValidator()
+  check('validateChromeDom rejects replay pack event carrying age_ms',
+    replayWithAgeRes.status === 1
+      && replayWithAgeRes.stdout.includes('result: INVALID')
+      && replayWithAgeRes.stdout.includes('age_ms MUST NOT appear in a replay pack'))
+
+  writeJson(elementsFile, {
+    protocol: 1,
+    extension_version: '0.1.8',
+    events: [{
+      t_ms: 0,
+      type: 'dom.document.captured',
+      tab: { url: 'https://example.test/', title: 'Fixture' },
+      document: validDoc,
+    }],
+  })
+  const replayWithoutAgeRes = runValidator()
+  check('validateChromeDom accepts replay pack event omitting age_ms',
+    replayWithoutAgeRes.status === 0 && replayWithoutAgeRes.stdout.includes('result: VALID'))
+
   cpSync(join(repositoryRoot, 'examples', 'minimal'), viewerPack, { recursive: true })
   writeFileSync(join(viewerPack, 'viewer.html'), '<!doctype html><title>CapturePack</title>', 'utf8')
   const viewerManifestFile = join(viewerPack, 'manifest.json')
