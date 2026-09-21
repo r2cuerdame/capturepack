@@ -468,11 +468,12 @@ export function buildReport(
   const replaySeconds = ((manifest.media.replay_duration_ms ?? 0) / 1000).toFixed(1)
   lines.push(`## ${t('pack.environment')}`)
   lines.push('')
-  lines.push(`- **${t('pack.os')}:** ${manifest.environment.os} (version ${manifest.environment.os_version})`)
-  const screens = manifest.environment.screens
-    .map((s) => `${s.width}×${s.height} @${s.scale}x scale`)
+  const osVersion = manifest.environment.os_version ? ` (version ${manifest.environment.os_version})` : ''
+  lines.push(`- **${t('pack.os')}:** ${manifest.environment.os}${osVersion}`)
+  const screens = (manifest.environment.screens ?? [])
+    .map((s) => `${s.width}×${s.height} @${s.scale ?? 1}x scale`)
     .join('; ')
-  lines.push(`- **${t('pack.screens')}:** ${screens}`)
+  lines.push(`- **${t('pack.screens')}:** ${screens === '' ? t('pack.unknown') : screens}`)
   // All-displays capture: what the trigger actually froze, per display.
   lines.push(...displaySummaryLines(manifest, t, annotationsFile.annotations))
   if (manifest.environment.app !== undefined) {

@@ -41,9 +41,11 @@ declare global {
 
 const BLUR_BLOCK = 12 // native px per pixelation block (matches the editor preview)
 
-window.renderBridge.onStart((payload) => {
-  void run(payload)
-})
+if (typeof window !== 'undefined' && window.renderBridge) {
+  window.renderBridge.onStart((payload) => {
+    void run(payload)
+  })
+}
 
 async function run(payload: RenderStartPayload): Promise<void> {
   try {
@@ -82,7 +84,7 @@ async function shipFrame(pending: Promise<RenderFramePayload>): Promise<boolean>
 }
 
 /** The overlay drawing state shared by every frame of a job. */
-interface Overlay {
+export interface Overlay {
   ordered: Annotation[]
   numbers: Map<string, number>
   ui: number
@@ -103,12 +105,12 @@ interface Overlay {
  * Getting that wrong would silently drop every tracked box from the focused
  * display's own video, which is the one most people watch.
  */
-function onThisDisplay(a: Annotation, overlay: Overlay): boolean {
+export function onThisDisplay(a: Annotation, overlay: Overlay): boolean {
   if (overlay.focused === undefined) return true // single-display pack: one screen, every box
   return (a.display ?? overlay.focused) === (overlay.display ?? overlay.focused)
 }
 
-function makeOverlay(job: RenderStartPayload, outputWidth: number, outputHeight: number): Overlay {
+export function makeOverlay(job: RenderStartPayload, outputWidth: number, outputHeight: number): Overlay {
   const contractError = renderContractError(job)
   if (contractError !== null) throw new Error(contractError)
   const scaleX = job.width > 0 ? outputWidth / job.width : 1
@@ -144,7 +146,7 @@ function makeOverlay(job: RenderStartPayload, outputWidth: number, outputHeight:
 
 /** Draw order per frame (SPEC §7.2): original -> blur -> border -> badge -> text.
  * `tMs` null = no clock (still job): every box is drawn. */
-function drawOverlay(
+export function drawOverlay(
   ctx: CanvasRenderingContext2D,
   canvas: HTMLCanvasElement,
   overlay: Overlay,
@@ -159,7 +161,9 @@ function drawOverlay(
   // which is exactly what `bounds` means.
   const alive =
     tMs === null
-      ? overlay.ordered.map((a) => scaleAnnotation(a, overlay.scaleX, overlay.scaleY))
+      ? overlay.ordered
+          .filter((a) => onThisDisplay(a, overlay))
+          .map((a) => scaleAnnotation(a, overlay.scaleX, overlay.scaleY))
       : overlay.ordered
           .filter((a) => visibleAt(a, tMs))
           .map((a) =>
@@ -199,7 +203,7 @@ function renderedLabelStyle(text: string, ui: number): AnnotationLabelStyle {
  * bottom-edge box or flipping its callout above. The source frame remains at
  * (0, 0); this is result-only space and does not alter annotation coordinates.
  */
-function renderedLabelBottomGutter(
+export function renderedLabelBottomGutter(
   annotations: readonly Annotation[],
   ui: number,
 ): number {
@@ -207,7 +211,7 @@ function renderedLabelBottomGutter(
   return Math.ceil(annotationLabelBottomOutset(renderedLabelStyle('', ui)))
 }
 
-function renderedCanvasHeight(mediaHeight: number, bottomGutter: number): number {
+export function renderedCanvasHeight(mediaHeight: number, bottomGutter: number): number {
   const requested = Math.max(1, Math.ceil(mediaHeight + bottomGutter))
   // Canvas MediaRecorder encoders are least surprising on 2-pixel chroma
   // boundaries. One spare dark result row is cheaper than a codec-specific
@@ -215,7 +219,7 @@ function renderedCanvasHeight(mediaHeight: number, bottomGutter: number): number
   return requested % 2 === 0 ? requested : requested + 1
 }
 
-function scaleAnnotation(
+export function scaleAnnotation(
   a: Annotation,
   scaleX: number,
   scaleY: number,
@@ -249,10 +253,11 @@ async function renderStill(job: RenderStartPayload): Promise<{ frameCount: numbe
     const mediaWidth = job.width
     const mediaHeight = job.height
     const overlay = makeOverlay(job, mediaWidth, mediaHeight)
+    const activeAnnotations = overlay.ordered.filter((a) => onThisDisplay(a, overlay))
     canvas.width = mediaWidth
     canvas.height = renderedCanvasHeight(
       mediaHeight,
-      renderedLabelBottomGutter(overlay.ordered, overlay.ui),
+      renderedLabelBottomGutter(activeAnnotations, overlay.ui),
     )
     const ctx = canvas.getContext('2d')
     if (!ctx) throw new Error('canvas 2d context unavailable')

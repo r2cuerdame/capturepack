@@ -14,7 +14,7 @@ import type {
   ToastInitPayload,
   ToastRenderState,
 } from '../shared/ipc'
-import type { ActionResult } from '../shared/actions'
+import { type ActionResult, mergeActionResults } from '../shared/actions'
 import { analyzePackPrompt } from '../shared/prompt'
 import { copyTextToClipboard } from './clipboard'
 import { readActionResults, retryAction } from './actions/host'
@@ -38,6 +38,7 @@ interface ActiveToast {
   // The 30 s auto-close, armed only once nothing is in flight (see below).
   timer: NodeJS.Timeout | null
   ceiling: NodeJS.Timeout
+  actionResults: ActionResult[]
 }
 
 /** True while the toast is reporting work the user is waiting on. */
@@ -118,7 +119,13 @@ export function showSaveToast(options: {
   const ceiling = setTimeout(() => {
     if (!win.isDestroyed()) win.close()
   }, MAX_OPEN_MS)
-  const toast: ActiveToast = { win, folderPath: options.folderPath, timer: null, ceiling }
+  const toast: ActiveToast = {
+    win,
+    folderPath: options.folderPath,
+    timer: null,
+    ceiling,
+    actionResults: [...actionResults],
+  }
   armAutoClose(toast, options.renderState)
   win.on('closed', () => {
     if (toast.timer !== null) clearTimeout(toast.timer)
@@ -176,12 +183,16 @@ export function updateToastActionResults(
   if (active === null || active.win.isDestroyed()) return
   if (active.folderPath !== folderPath) return
   const settings = loadSettings().settings
+  const stored = readActionResults(folderPath)
+  const base = stored.length > 0 ? stored : active.actionResults
+  const effective = mergeActionResults(base, results)
+  active.actionResults = effective
   const payload: ToastActionResultsPayload = {
-    results: [...results],
+    results: effective,
     actionConfigs: settings.actionConfigs,
   }
   active.win.webContents.send(IPC.toastActionResults, payload)
-  const actionCount = results.length
+  const actionCount = effective.length
   const actionExtraHeight = actionCount > 0 ? Math.min(actionCount * 32 + 16, 140) : 0
   const work = screen.getPrimaryDisplay().workArea
   const current = active.win.getBounds()
@@ -226,7 +237,8 @@ function registerToastIpc(): void {
   ipcMain.handle(IPC.toastActionResults, (event): ActionResult[] => {
     const toast = fromActiveToast(event)
     if (toast === null) return []
-    return readActionResults(toast.folderPath)
+    const stored = readActionResults(toast.folderPath)
+    return stored.length > 0 ? stored : toast.actionResults
   })
 
   ipcMain.handle(IPC.toastActionRetry, async (event, configId: unknown): Promise<ActionRetryResult> => {
@@ -272,6 +284,7 @@ function registerToastIpc(): void {
       if (result === null) {
         return { ok: false, error: 'Action retry returned no result' }
       }
+      toast.actionResults = mergeActionResults(toast.actionResults, [result])
       return { ok: true, result }
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }

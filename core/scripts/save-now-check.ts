@@ -25,6 +25,7 @@ import {
   unattendedExportPayload,
   type SaveNowEvent,
 } from '../src/main/saveNow'
+import { asRunRecord, isExitKind, statusOf } from '../src/main/lifecycle'
 
 let passed = 0
 let failed = 0
@@ -220,6 +221,32 @@ check(
 check(
   'it trims nothing — a trim would put replay bytes behind a background render',
   payload.trimStartMs === null && payload.trimEndMs === null,
+)
+
+// --- the unattended exit survives the next launch --------------------------
+
+check(
+  'unattended-save is an accepted lifecycle exit kind',
+  isExitKind('unattended-save'),
+)
+const unattendedRun = asRunRecord({
+  version: '0.5.0',
+  startedAt: '2026-01-01T00:00:00.000Z',
+  lastAliveAt: '2026-01-01T00:00:01.000Z',
+  exit: 'unattended-save',
+  faults: 0,
+})
+check(
+  'an unattended-save marker preserves its deliberate exit during deserialization',
+  unattendedRun?.exit === 'unattended-save',
+)
+check(
+  'a completed unattended-save run is clean, never vanished',
+  unattendedRun !== null && statusOf(unattendedRun) === 'clean',
+)
+check(
+  'an unattended-save run with unhandled faults is faulted, never vanished',
+  unattendedRun !== null && statusOf({ ...unattendedRun, faults: 1 }) === 'faulted',
 )
 
 // --- the runtime arming is reachable ---------------------------------------

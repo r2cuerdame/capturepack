@@ -490,11 +490,9 @@ function main(): void {
         // menu item's label follows the state through the getter below.
         onCheckUpdates: () => void checkNow(),
         onAbout: () => openAboutWindow(),
-        onRestartUpdate: () => {
-          // Not a disappearance: the app is coming straight back (issue #61).
-          noteExitIntent('update-restart')
-          restartAndUpdate()
-        },
+        // The exit intent is recorded inside restartAndUpdate() (#182), the
+        // same as for the About window's Restart button and the update toast.
+        onRestartUpdate: () => restartAndUpdate(),
         onQuit: () => {
           // THE deliberate exit (issue #61): the only one that is allowed to
           // leave the machine without a replay buffer, and the only one the

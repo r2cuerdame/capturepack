@@ -9,7 +9,7 @@
 // that fails, hangs, or throws something that is not an Error is that action's
 // own failure and nothing else's.
 import { createServer } from 'node:http'
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { app } from 'electron'
@@ -23,12 +23,14 @@ import {
   PACK_STATE_ORDER,
   type ActionConfig,
   type ActionManifest,
+  type ActionResult,
   type PackState,
   type PipelineStep,
   decideStep,
   haltsPipeline,
   idempotencyKey,
   isAcceptableWebhookUrl,
+  mergeActionResults,
   normalizeActionTimeout,
   packStateAtLeast,
   pipelineOrder,
@@ -257,6 +259,26 @@ console.log('\nRUNNING A PIPELINE')
   check('a failed idempotent action adds NOTHING to the ledger — the next run must be allowed to try again', run.newCompletedKeys.length === 0)
 }
 {
+  const timeoutStartedAt = Date.now()
+  const run = await runPipeline({
+    packId: PACK,
+    packState: 'complete',
+    steps: [step({ id: 'a' }, { timeoutMs: 1_000 })],
+    completedKeys: new Set(),
+    // Never settles. The pipeline must abandon it rather than wait for an
+    // action that cannot be made to stop.
+    execute: () => new Promise<void>(() => {}),
+    clock: fastClock(),
+  })
+  const timeoutWallClockMs = Date.now() - timeoutStartedAt
+  check('an action that never returns TIMES OUT and is retryable', run.results[0]?.outcome === 'timed-out' && run.results[0]?.retryable === true)
+  check(
+    'timeout budgeting uses the injected fast clock, not a wall-clock timer',
+    timeoutWallClockMs < 250,
+    `${String(timeoutWallClockMs)} ms`,
+  )
+}
+{
   const run = await runPipeline({
     packId: PACK,
     packState: 'complete',
@@ -273,17 +295,28 @@ console.log('\nRUNNING A PIPELINE')
   )
 }
 {
+  let timeoutCancelled = false
   const run = await runPipeline({
     packId: PACK,
     packState: 'complete',
-    steps: [step({ id: 'a' }, { timeoutMs: 1_000 })],
+    steps: [step({ id: 'a' }, { timeoutMs: 30_000 })],
     completedKeys: new Set(),
-    // Never settles. The pipeline must abandon it rather than wait for an
-    // action that cannot be made to stop.
-    execute: () => new Promise<void>(() => {}),
-    clock: fastClock(),
+    execute: async () => {},
+    clock: {
+      now: () => 0,
+      delay: (_ms, signal) =>
+        new Promise<void>((resolve) => {
+          const cancel = (): void => {
+            timeoutCancelled = true
+            resolve()
+          }
+          if (signal?.aborted) cancel()
+          else signal?.addEventListener('abort', cancel, { once: true })
+        }),
+    },
   })
-  check('an action that never returns TIMES OUT and is retryable', run.results[0]?.outcome === 'timed-out' && run.results[0]?.retryable === true)
+  check('an action that completes before its timeout succeeds', run.results[0]?.outcome === 'ok')
+  check('a completed action cancels its pending clock delay', timeoutCancelled)
 }
 {
   const run = await runPipeline({
@@ -1337,6 +1370,90 @@ console.log('\nAFTER SAVE ACTION EXECUTION RESULTS & RETRY (#165)')
     check('ok action in results file retains ok outcome', parsed[1]?.outcome === 'ok' && parsed[1]?.retryable === false)
   } finally {
     rmSync(testPackDir, { recursive: true, force: true })
+  }
+
+  // Host persistence merge behavior
+  check('host exports mergeActionResults', host.includes('export { mergeActionResults } from'))
+  check('persistActionResults preserves terminal outcomes against non-run skipped results', host.includes('mergeActionResults(existing, newResults)'))
+
+  // mergeActionResults contract
+  const priorOk: ActionResult = { actionId: 'a', configId: 'c1', outcome: 'ok', attempts: 1, durationMs: 25, retryable: false }
+  const priorFailed: ActionResult = { actionId: 'a', configId: 'c2', outcome: 'failed', attempts: 1, durationMs: 10, message: 'err', retryable: true }
+  const priorTimedOut: ActionResult = { actionId: 'a', configId: 'c3', outcome: 'timed-out', attempts: 1, durationMs: 1000, message: 'timeout', retryable: true }
+  const skippedRun: ActionResult = { actionId: 'a', configId: 'c1', outcome: 'skipped', attempts: 0, durationMs: 0, message: 'already completed for this pack', retryable: false }
+  const skippedDisabled: ActionResult = { actionId: 'a', configId: 'c2', outcome: 'skipped', attempts: 0, durationMs: 0, message: 'disabled', retryable: false }
+  const skippedHalted: ActionResult = { actionId: 'a', configId: 'c3', outcome: 'skipped', attempts: 0, durationMs: 0, message: 'halted', retryable: false }
+  const mergedOk = mergeActionResults([priorOk], [skippedRun])
+  check('mergeActionResults does not let non-run skipped overwrite terminal ok', mergedOk[0]?.outcome === 'ok' && mergedOk[0]?.attempts === 1)
+  const mergedFailed = mergeActionResults([priorFailed], [skippedDisabled])
+  check('mergeActionResults does not let non-run skipped overwrite terminal failed', mergedFailed[0]?.outcome === 'failed' && mergedFailed[0]?.attempts === 1)
+  const mergedTimedOut = mergeActionResults([priorTimedOut], [skippedHalted])
+  check('mergeActionResults does not let non-run skipped overwrite terminal timed-out', mergedTimedOut[0]?.outcome === 'timed-out' && mergedTimedOut[0]?.attempts === 1)
+  const retriedOk: ActionResult = { actionId: 'a', configId: 'c2', outcome: 'ok', attempts: 1, durationMs: 15, retryable: false }
+  const mergedRetry = mergeActionResults([priorFailed], [retriedOk])
+  check('mergeActionResults allows retry to update terminal failed to ok', mergedRetry[0]?.outcome === 'ok' && mergedRetry[0]?.attempts === 1)
+
+  // Functional rerun test: source-ready then annotated-replay-ready leaves persisted outcome ok
+  const testRerunPackDir = mkdtempSync(path.join(tmpdir(), 'capturepack-action-rerun-test-'))
+  try {
+    const configId = 'cfg-rerun-test'
+    const stepConfig = config({ configId, order: 1 })
+    const stepManifest = manifest({ id: 'webhook', requiredPackState: 'source-ready', idempotent: true })
+    const pipelineStep = { manifest: stepManifest, config: stepConfig }
+
+    // First pass at source-ready: runs and succeeds ('ok')
+    let completedKeys = new Set<string>()
+    const run1 = await runPipeline({
+      packId: PACK,
+      packState: 'source-ready',
+      steps: [pipelineStep],
+      completedKeys,
+      execute: async () => {},
+      clock: fastClock(),
+    })
+    check('first pipeline pass at source-ready succeeds', run1.results[0]?.outcome === 'ok')
+    completedKeys = new Set([...completedKeys, ...run1.newCompletedKeys])
+
+    const resultsFile = path.join(testRerunPackDir, 'plugins', 'action-results.json')
+    mkdirSync(path.dirname(resultsFile), { recursive: true })
+
+    const persist = (results: readonly ActionResult[]): void => {
+      let existing: ActionResult[] = []
+      if (existsSync(resultsFile)) {
+        try {
+          existing = JSON.parse(readFileSync(resultsFile, 'utf8')) as ActionResult[]
+        } catch {}
+      }
+      const merged = mergeActionResults(existing, results)
+      const tmp = `${resultsFile}.tmp`
+      writeFileSync(tmp, JSON.stringify(merged, null, 2), 'utf8')
+      renameSync(tmp, resultsFile)
+    }
+
+    persist(run1.results)
+    const disk1 = JSON.parse(readFileSync(resultsFile, 'utf8')) as ActionResult[]
+    check('first pass persisted outcome is ok', disk1[0]?.outcome === 'ok' && disk1[0]?.attempts === 1)
+
+    // Second pass at annotated-replay-ready: decideStep returns skipped ('already completed for this pack')
+    const run2 = await runPipeline({
+      packId: PACK,
+      packState: 'annotated-replay-ready',
+      steps: [pipelineStep],
+      completedKeys,
+      execute: async () => {},
+      clock: fastClock(),
+    })
+    check('second pipeline pass at annotated-replay-ready returns skipped', run2.results[0]?.outcome === 'skipped')
+
+    // Persisting the second run must not overwrite the earlier 'ok' result
+    persist(run2.results)
+    const disk2 = JSON.parse(readFileSync(resultsFile, 'utf8')) as ActionResult[]
+    check(
+      'running the pipeline at source-ready (ok) and then at annotated-replay-ready leaves the persisted outcome ok for the completed config',
+      disk2[0]?.outcome === 'ok' && disk2[0]?.attempts === 1 && disk2[0]?.configId === configId,
+    )
+  } finally {
+    rmSync(testRerunPackDir, { recursive: true, force: true })
   }
 }
 

@@ -27,7 +27,15 @@ import {
   refuseDisplacedRenderers,
 } from '../src/main/uia'
 import type { UiaRawDump, UiaScreenAccess } from '../src/main/uia'
-import type { UiaElementRecord } from '../src/shared/types'
+import {
+  makeOverlay,
+  onThisDisplay,
+  drawOverlay,
+  renderedLabelBottomGutter,
+  renderedCanvasHeight,
+} from '../src/renderer/render/render'
+import type { Annotation, UiaElementRecord } from '../src/shared/types'
+import type { RenderStartPayload } from '../src/shared/ipc'
 
 let failures = 0
 
@@ -351,6 +359,257 @@ console.log('\nA renderer that answers in the coordinates of the OTHER monitor')
   )
 }
 
+
+console.log('\nStill keyframe and screenshot overlay geometry across multiple displays (#179)')
+{
+  const createMockContext = () => {
+    const badges: string[] = []
+    const texts: string[] = []
+    const strokeBoxes: Array<{ x: number; y: number; width: number; height: number }> = []
+    let blurCount = 0
+
+    const ctx: any = {
+      fillStyle: '#000000',
+      strokeStyle: '#000000',
+      lineWidth: 1,
+      font: '',
+      textAlign: 'start',
+      textBaseline: 'alphabetic',
+      imageSmoothingEnabled: true,
+      save() {},
+      restore() {},
+      beginPath() {},
+      arc() {},
+      fill() {},
+      stroke() {},
+      strokeRect(x: number, y: number, width: number, height: number) {
+        strokeBoxes.push({ x, y, width, height })
+      },
+      fillRect() {},
+      fillText(text: string) {
+        if (/^\d+$/.test(text)) {
+          badges.push(text)
+        } else {
+          texts.push(text)
+        }
+      },
+      measureText(text: string) {
+        return { width: text.length * 8 }
+      },
+      drawImage() {
+        blurCount += 1
+      },
+    }
+
+    const canvas: any = {
+      width: 1920,
+      height: 1080,
+      getContext: () => ctx,
+    }
+    ctx.canvas = canvas
+
+    return { ctx, canvas, badges, texts, strokeBoxes, getBlurCount: () => blurCount }
+  }
+
+  if (typeof (globalThis as any).document === 'undefined') {
+    ;(globalThis as any).document = {
+      createElement: (tag: string) => {
+        if (tag === 'canvas') {
+          return {
+            width: 100,
+            height: 100,
+            getContext: () => ({
+              drawImage() {},
+            }),
+          }
+        }
+        return {}
+      },
+    }
+  }
+
+  const annD1: Annotation = {
+    annotation_id: 'ann_d1',
+    type: 'box',
+    display: 1,
+    bounds: { x: 100, y: 100, width: 200, height: 150 },
+    text: '', // no label text
+    numbered: true,
+    blur: false,
+    tracking: { enabled: false },
+    created_at: '',
+    z: 1,
+  }
+
+  const annD2Blur: Annotation = {
+    annotation_id: 'ann_d2_blur',
+    type: 'box',
+    display: 2,
+    bounds: { x: 50, y: 50, width: 300, height: 200 },
+    text: '',
+    numbered: true,
+    blur: true, // blur on secondary display
+    tracking: { enabled: false },
+    created_at: '',
+    z: 2,
+  }
+
+  const annD2Text: Annotation = {
+    annotation_id: 'ann_d2_text',
+    type: 'box',
+    display: 2,
+    bounds: { x: 400, y: 300, width: 150, height: 100 },
+    text: 'Secondary Screen Button', // text label on secondary display
+    numbered: true,
+    blur: false,
+    tracking: { enabled: false },
+    created_at: '',
+    z: 3,
+  }
+
+  const allAnnotations = [annD1, annD2Blur, annD2Text]
+  const displayNumbers: Array<[string, number]> = [
+    ['ann_d1', 1],
+    ['ann_d2_blur', 2],
+    ['ann_d2_text', 3],
+  ]
+
+  // Case 1: Still render on Display 1 (focused display 1)
+  const jobD1: RenderStartPayload = {
+    replayWebm: null,
+    width: 1920,
+    height: 1080,
+    fps: 1,
+    durationMs: 0,
+    keyframes: true,
+    display: 1,
+    focusedDisplay: 1,
+    annotations: allAnnotations,
+    displayNumbers,
+  }
+  const overlayD1 = makeOverlay(jobD1, 1920, 1080)
+
+  check(
+    'onThisDisplay includes Display 1 box on Display 1 still overlay',
+    onThisDisplay(annD1, overlayD1) === true,
+  )
+  check(
+    'onThisDisplay excludes Display 2 blur annotation on Display 1 still overlay',
+    onThisDisplay(annD2Blur, overlayD1) === false,
+  )
+  check(
+    'onThisDisplay excludes Display 2 text annotation on Display 1 still overlay',
+    onThisDisplay(annD2Text, overlayD1) === false,
+  )
+
+  const activeD1 = overlayD1.ordered.filter((a) => onThisDisplay(a, overlayD1))
+  check(
+    'Display 1 still job filters overlay annotations to only Display 1',
+    activeD1.length === 1 && activeD1[0]?.annotation_id === 'ann_d1',
+    `kept ${JSON.stringify(activeD1.map((a) => a.annotation_id))}`,
+  )
+
+  const gutterD1 = renderedLabelBottomGutter(activeD1, overlayD1.ui)
+  const unfilteredGutterD1 = renderedLabelBottomGutter(overlayD1.ordered, overlayD1.ui)
+  check(
+    'Display 1 bottom gutter is 0 when Display 1 annotations have no text',
+    gutterD1 === 0,
+    `got ${String(gutterD1)}`,
+  )
+  check(
+    'unfiltered gutter would have incorrectly seen Display 2 label text and grown dead space',
+    unfilteredGutterD1 > 0,
+    `unfiltered ${String(unfilteredGutterD1)}`,
+  )
+  check(
+    'Display 1 still canvas height remains exactly source height without dead band',
+    renderedCanvasHeight(1080, gutterD1) === 1080,
+    `got ${String(renderedCanvasHeight(1080, gutterD1))}`,
+  )
+
+  const mock1 = createMockContext()
+  drawOverlay(mock1.ctx, mock1.canvas, overlayD1, null)
+  check(
+    'drawOverlay(null) on Display 1 does not paint Display 2 blur mask',
+    mock1.getBlurCount() === 0,
+    `blurCount = ${String(mock1.getBlurCount())}`,
+  )
+  check(
+    'drawOverlay(null) on Display 1 paints only Display 1 box and badge',
+    mock1.badges.length === 1 && mock1.badges[0] === '1' && mock1.strokeBoxes.length === 1,
+    `badges = ${JSON.stringify(mock1.badges)}, boxes = ${JSON.stringify(mock1.strokeBoxes)}`,
+  )
+  check(
+    'drawOverlay(null) on Display 1 paints no text labels from Display 2',
+    mock1.texts.length === 0,
+    `texts = ${JSON.stringify(mock1.texts)}`,
+  )
+
+  // Case 2: Still render on Display 2
+  const jobD2: RenderStartPayload = {
+    replayWebm: null,
+    width: 2560,
+    height: 1440,
+    fps: 1,
+    durationMs: 0,
+    keyframes: true,
+    display: 2,
+    focusedDisplay: 1,
+    annotations: allAnnotations,
+    displayNumbers,
+  }
+  const overlayD2 = makeOverlay(jobD2, 2560, 1440)
+  const activeD2 = overlayD2.ordered.filter((a) => onThisDisplay(a, overlayD2))
+
+  check(
+    'Display 2 still job filters overlay annotations to only Display 2',
+    activeD2.length === 2 && !activeD2.some((a) => a.annotation_id === 'ann_d1'),
+    `kept ${JSON.stringify(activeD2.map((a) => a.annotation_id))}`,
+  )
+
+  const gutterD2 = renderedLabelBottomGutter(activeD2, overlayD2.ui)
+  check(
+    'Display 2 bottom gutter is non-zero because Display 2 carries label text',
+    gutterD2 > 0,
+    `got ${String(gutterD2)}`,
+  )
+  check(
+    'Display 2 still canvas height includes the label gutter',
+    renderedCanvasHeight(1440, gutterD2) > 1440,
+    `height = ${String(renderedCanvasHeight(1440, gutterD2))}`,
+  )
+
+  const mock2 = createMockContext()
+  drawOverlay(mock2.ctx, mock2.canvas, overlayD2, null)
+  check(
+    'drawOverlay(null) on Display 2 applies blur mask for Display 2',
+    mock2.getBlurCount() > 0,
+    `blurCount = ${String(mock2.getBlurCount())}`,
+  )
+  check(
+    'drawOverlay(null) on Display 2 paints Display 2 badges without Display 1 badge',
+    mock2.badges.includes('2') && mock2.badges.includes('3') && !mock2.badges.includes('1'),
+    `badges = ${JSON.stringify(mock2.badges)}`,
+  )
+
+  // Case 3: Single-display pack (focusedDisplay undefined) draws all boxes
+  const jobSingle: RenderStartPayload = {
+    replayWebm: null,
+    width: 1920,
+    height: 1080,
+    fps: 1,
+    durationMs: 0,
+    keyframes: true,
+    annotations: [annD1, annD2Text],
+  }
+  const overlaySingle = makeOverlay(jobSingle, 1920, 1080)
+  const activeSingle = overlaySingle.ordered.filter((a) => onThisDisplay(a, overlaySingle))
+  check(
+    'single-display still job keeps all annotations unconditionally',
+    activeSingle.length === 2,
+    `kept ${String(activeSingle.length)}`,
+  )
+}
 
 console.log(failures === 0 ? '\nrenderer-geometry: OK' : `\nrenderer-geometry: ${String(failures)} FAILED`)
 process.exit(failures === 0 ? 0 : 1)

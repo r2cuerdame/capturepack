@@ -61,10 +61,10 @@ function rasterMatches(
  * agree and the density is one the captured desk actually declared. A region
  * spanning mixed-DPI displays has no single scale and must stay unmapped.
  */
-function reopenedImageCropSpace(
+export function reopenedImageCropSpace(
   snapshotWidth: number,
   snapshotHeight: number,
-  screens: readonly PersistedScreenGeometry[],
+  screens: readonly PersistedScreenGeometry[] | undefined,
   cropBounds: PersistedImageCropGeometry | undefined,
 ): {
   snapshotPixelsPerDip: number
@@ -89,7 +89,7 @@ function reopenedImageCropSpace(
     return null
   }
   const scale = (scaleX + scaleY) / 2
-  const declared = screens.some((screen) => {
+  const declared = (screens ?? []).some((screen) => {
     const bounds = screen.bounds
     if (
       bounds === undefined
@@ -141,7 +141,7 @@ export function reopenedSnapshotPixelsPerDip({
 }: {
   snapshotWidth: number
   snapshotHeight: number
-  screens: readonly PersistedScreenGeometry[]
+  screens?: readonly PersistedScreenGeometry[]
   displays: readonly PersistedDisplayGeometry[] | undefined
 }): number | undefined {
   if (!positive(snapshotWidth) || !positive(snapshotHeight)) return undefined
@@ -168,7 +168,7 @@ export function reopenedSnapshotPixelsPerDip({
     }
   }
 
-  const matchingScales = screens
+  const matchingScales = (screens ?? [])
     .filter(
       (screen) =>
         positive(screen.width)
@@ -210,7 +210,7 @@ export function reopenedContextDisplayTargets({
 }: {
   snapshotWidth: number
   snapshotHeight: number
-  screens: readonly PersistedScreenGeometry[]
+  screens?: readonly PersistedScreenGeometry[]
   displays: readonly PersistedDisplayGeometry[] | undefined
   loadedDisplays: readonly ReopenedLoadedDisplayGeometry[]
   cropBounds?: PersistedImageCropGeometry

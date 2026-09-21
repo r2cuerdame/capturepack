@@ -264,8 +264,11 @@ function buildOverviewSkill(
   lines.push(`# ${t('pack.skillOverview')}`)
   lines.push('')
   lines.push(`**Title:** ${manifest.title ?? '(untitled capture)'}`)
+  const osText = manifest.environment.os_version
+    ? `${manifest.environment.os} ${manifest.environment.os_version}`
+    : manifest.environment.os
   lines.push(
-    `**Captured:** ${humanDate(manifest.created_at)} on ${manifest.environment.os} ${manifest.environment.os_version}` +
+    `**Captured:** ${humanDate(manifest.created_at)} on ${osText}` +
       (manifest.environment.app !== undefined ? `, focused app ${manifest.environment.app}` : '') +
       '.',
   )
