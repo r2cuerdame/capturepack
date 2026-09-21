@@ -710,6 +710,46 @@ try {
     malformedClient.status === 1
       && malformedClient.stdout.includes('client_bounds MUST be { x, y, width, height }'))
 
+  // REGION-CROP STILL PACK WITH WINDOW LARGER THAN CROP (SPEC §11.3, #217).
+  //
+  // In a region-crop capture, a window partially covering the crop is clipped to
+  // the crop rectangle (e.g. bounds: { x: 0, y: 0, width: 485, height: 254 }).
+  // If client_bounds was left unclipped in global or translated coordinates
+  // (e.g. { x: -192, y: -132, width: 984, height: 724 }), it falls outside bounds
+  // and the canonical validator rejects the pack.
+  // When client_bounds is clipped to the crop, containment holds and validator passes.
+  const regionCropPayload = (clientBounds) => ({
+    captured_at: '2026-08-02T00:59:13+09:00',
+    budget_ms: 3000,
+    truncated: false,
+    windows: [{
+      hwnd: '9002',
+      title: 'Cropped Browser - Chrome',
+      process: 'chrome',
+      class_name: 'Chrome_WidgetWin_1',
+      bounds: { x: 0, y: 0, width: 485, height: 254 },
+      ...(clientBounds === null ? {} : { client_bounds: clientBounds }),
+      focused: true,
+      z: 0,
+      tree: 'collected',
+      element_count: 0,
+    }],
+    elements: [],
+  })
+
+  writeJson(uiaFile, regionCropPayload({ x: -192, y: -132, width: 984, height: 724 }))
+  const unclippedRegionClient = runValidator(imagePack)
+  check('a region-crop still pack rejects unclipped client_bounds extending outside cropped window bounds',
+    unclippedRegionClient.status === 1
+      && unclippedRegionClient.stdout.includes('is not inside its own window\'s bounds'))
+
+  writeJson(uiaFile, regionCropPayload({ x: 0, y: 10, width: 470, height: 240 }))
+  const clippedRegionClient = runValidator(imagePack)
+  check('a region-crop still pack accepts client_bounds clipped to cropped window bounds (SPEC §11.3)',
+    clippedRegionClient.status === 0
+      && clippedRegionClient.stdout.includes('result: VALID')
+      && clippedRegionClient.stdout.includes('1 window(s), 1 with a client rectangle'))
+
   // WINDOW AND ELEMENT DISPLAY COORDINATE SPACE RESOLUTION (SPEC §11.3, #232).
   //
   // In SPEC §11.3, an omitted `display` on a window or element denotes the

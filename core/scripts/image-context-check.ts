@@ -488,16 +488,13 @@ check(
   { windows: [['100', 'Visible app', 'skipped']], elements: 0 },
 )
 
-// A CLIENT RECTANGLE IS A MEASURING STICK, SO IT IS TRANSLATED AND NEVER
-// CLIPPED (#136) — the rule ringObservations.ts already applies on the temporal
-// path, now applied here because this rectangle is WRITTEN to the pack.
+// A CLIENT RECTANGLE IN A STILL PACK MUST BE CONTAINED WITHIN BOUNDS (SPEC §11.3, #217).
 //
-// The window below is 400 px wide with a 20 px frame each side; the crop keeps
-// only its left 200 px. Clip the client rectangle to that crop and the derived
-// scale is 180/400 of the truth, so every element of the page inside it lands at
-// 45% size and shifted — inside the reader's own agreement band, so never
-// refused, just wrong. Translated, the stick keeps its length and points off the
-// left edge at a negative x, which is exactly what it means.
+// In a written still pack (windows-uia 0.5.0), SPEC §11.3 defines client_bounds as
+// the window's drawable area, and canonical validation requires client_bounds
+// to be strictly inside bounds. A region crop clips the client rectangle to the
+// crop boundaries so that it remains inside the cropped window bounds, or omits
+// it entirely if the crop does not intersect the drawable area.
 const cropSource: ContextObservation = {
   tMs: 0,
   windows: [
@@ -535,20 +532,30 @@ const cropFloor = imageWindowObservation(
   { x: 300, y: 150, width: 200, height: 400 },
 )
 check(
-  'a cropped still keeps the client rectangle at full size, in crop-local coordinates',
+  'a cropped still crops its client rectangle to satisfy SPEC §11.3 containment',
   cropFloor?.windows.map((w) => ({ bounds: w.bounds, client_bounds: w.client_bounds })),
   [{
     // The visible part of the window: clipped, because a WINDOW is a region.
     bounds: { x: 0, y: 0, width: 200, height: 250 },
-    // The drawable rectangle: whole, translated by the crop origin only.
-    client_bounds: { x: -180, y: 10, width: 360, height: 220 },
+    // The drawable rectangle: clipped to crop and contained inside bounds.
+    client_bounds: { x: 0, y: 10, width: 180, height: 220 },
   }],
+)
+const frameOnlyCropFloor = imageWindowObservation(
+  cropSource,
+  cropPlacement,
+  { x: 100, y: 100, width: 200, height: 50 },
+)
+check(
+  'crop covering only window frame omits client_bounds on floor',
+  frameOnlyCropFloor?.windows[0]?.client_bounds,
+  undefined,
 )
 const croppedPayload = mergeImageWindowFloor(null, cropFloor, '2026-07-30T11:00:00+09:00')
 check(
   'and writes that same rectangle into the payload a reader will reopen',
   croppedPayload?.windows.map((w) => w.client_bounds),
-  [{ x: -180, y: 10, width: 360, height: 220 }],
+  [{ x: 0, y: 10, width: 180, height: 220 }],
 )
 const seamSlicePayload = composeUiaForImageDesktop(
   {

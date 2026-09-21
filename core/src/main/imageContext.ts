@@ -124,7 +124,7 @@ export function imageWindowObservation(
     const bounds =
       crop === undefined ? desktopBounds : intersectImageRect(desktopBounds, crop)
     if (bounds === null) continue
-    // THE CLIENT RECTANGLE, MAPPED THE SAME WAY (#131).
+    // THE CLIENT RECTANGLE, CLIPPED TO REMAIN CONTAINED (SPEC §11.3, #217).
     //
     // A DOM element is measured in viewport CSS pixels. The normal bridge into
     // snapshot pixels is the browser's client rectangle: scale is
@@ -133,35 +133,42 @@ export function imageWindowObservation(
     // second measured bridge — its persisted desktop-DIP crop plus the page's
     // screen anchor — but every other still still needs this rectangle.
     //
-    // A still used to drop this unconditionally, so a captured page reached the
-    // pack complete and could not be placed on the picture: 477 elements, a
-    // viewport, a matching window, and nothing offered. It is carried through
-    // the same placement transform as `bounds`, and given up ONLY where it is
-    // genuinely unsafe — see the union below.
-    //
-    // TRANSLATED, NEVER CLIPPED — the same rule ringObservations.ts states for
-    // the temporal path, and the reason it is stated there twice. This rectangle
-    // is a MEASURING STICK, not a region: the scale is `client.width /
-    // viewport.width` and the chrome height is `client.height - viewport.height
-    // * scale`. Clip it to the display raster or to the user's crop and the
-    // stick gets shorter while the page it measures does not, so every element
-    // lands scaled down and shifted — confidently, and by an amount that can sit
-    // inside the reader's own agreement band and never be refused.
-    //
-    // It cost nothing while this value only ever lived in memory. Since #136 it
-    // is WRITTEN TO THE PACK (windows-uia 0.5.0), where SPEC §11.3 defines it as
-    // the window's drawable rectangle — which a clipped one is not. Elements
-    // that fall outside the picture are dropped later, by the index that clips
-    // candidates to the snapshot, which is where a region test belongs.
-    const clientBounds =
+    // In a written still pack (windows-uia 0.5.0), SPEC §11.3 defines it as the
+    // window's drawable rectangle, and canonical validation requires it to be
+    // strictly contained within `bounds` (or omitted if the crop does not cover
+    // the client rectangle, or if the window is unioned across displays).
+    // It is carried through the same placement and crop clipping as `bounds`.
+    const localClient =
       window.client_bounds === undefined
         ? null
+        : intersectImageRect(window.client_bounds, {
+            x: 0,
+            y: 0,
+            width: placement.width,
+            height: placement.height,
+          })
+    const desktopClient =
+      localClient === null
+        ? null
         : {
-            x: window.client_bounds.x + placement.x - (crop?.x ?? 0),
-            y: window.client_bounds.y + placement.y - (crop?.y ?? 0),
-            width: window.client_bounds.width,
-            height: window.client_bounds.height,
+            x: localClient.x + placement.x,
+            y: localClient.y + placement.y,
+            width: localClient.width,
+            height: localClient.height,
           }
+    const rawClient =
+      desktopClient === null
+        ? null
+        : crop === undefined
+          ? desktopClient
+          : intersectImageRect(desktopClient, crop)
+    const clientBounds =
+      rawClient !== null &&
+      containsImageRect(bounds, rawClient) &&
+      rawClient.width > 0 &&
+      rawClient.height > 0
+        ? rawClient
+        : null
     const key =
       window.surface_id ??
       window.hwnd ??
@@ -340,7 +347,7 @@ export function mergeImageWindowFloor(
   if (windows.length === 0) return safePayload
   return {
     captured_at: safePayload?.captured_at ?? capturedAt,
-    budget_ms: safePayload?.budget_ms ?? 0,
+    budget_ms: safePayload?.budget_ms && safePayload.budget_ms > 0 ? safePayload.budget_ms : 3000,
     truncated: safePayload?.truncated ?? false,
     // Carried like the other two rebuilds. Note this stage DROPS elements that
     // clip away to nothing against the window floor, which is how a refused
@@ -411,9 +418,16 @@ export function cropUiaForImage(
     if (bounds === null) continue
     const newIndex = windows.length
     oldToNew.set(oldIndex, newIndex)
-    const clientBounds =
+    const rawClient =
       source.client_bounds !== undefined
         ? croppedBounds(source.client_bounds, crop)
+        : null
+    const clientBounds =
+      rawClient !== null &&
+      containsImageRect(bounds, rawClient) &&
+      rawClient.width > 0 &&
+      rawClient.height > 0
+        ? rawClient
         : null
     const window: UiaWindowRecord = {
       ...(source.hwnd === undefined ? {} : { hwnd: source.hwnd }),
@@ -535,9 +549,16 @@ export function composeUiaForImageDesktop(
     if (bounds === null) continue
     const newIndex = windows.length
     oldToNew.set(oldIndex, newIndex)
-    const clientBounds =
+    const rawClient =
       source.client_bounds !== undefined
         ? desktopBounds(source.client_bounds, placement)
+        : null
+    const clientBounds =
+      rawClient !== null &&
+      containsImageRect(bounds, rawClient) &&
+      rawClient.width > 0 &&
+      rawClient.height > 0
+        ? rawClient
         : null
     const window: UiaWindowRecord = {
       ...(source.hwnd === undefined ? {} : { hwnd: source.hwnd }),

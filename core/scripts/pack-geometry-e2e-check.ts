@@ -18,13 +18,19 @@
 // (1800x2880 @2/3 beside 3840x2160 @1:1), not a hand-built tree: hand-built
 // fixtures agree with whatever the author already believed.
 
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { spawnSync } from 'node:child_process'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { composeUiaForImageDesktop, mergeImageWindowFloor } from '../src/main/imageContext'
+import { join, resolve } from 'node:path'
+import {
+  composeUiaForImageDesktop,
+  imageWindowObservation,
+  mergeImageWindowFloor,
+} from '../src/main/imageContext'
 import { writeUiaPlugin } from '../src/main/exporter'
 import { mapUiaToSnapshot, sealUiaPayload } from '../src/main/uia'
 import type { UiaRawDump, UiaScreenAccess } from '../src/main/uia'
+import type { ContextObservation } from '../src/main/context/buffer'
 import type { UiaElementRecord, UiaPluginPayload } from '../src/shared/types'
 
 let failures = 0
@@ -438,6 +444,127 @@ async function main(): Promise<void> {
           twice?.elements.length === assembled.elements.length,
         `${String(twice?.geometry_refused)} vs ${String(assembled.geometry_refused)}`,
       )
+    }
+  }
+
+  // REGION-CROP STILL ASSEMBLY WITH CANONICAL VALIDATOR (SPEC §11.3, #217).
+  //
+  // A region crop still capture where a window is larger than the crop must write
+  // client_bounds that is clipped to the crop, strictly contained within bounds.
+  // The written pack must pass tools/validate-capturepack.mjs.
+  console.log('\nRegion crop still assembly with canonical validator')
+  {
+    const cropRegion = { x: 300, y: 150, width: 485, height: 254 }
+    const floorSource: ContextObservation = {
+      tMs: 0,
+      windows: [
+        {
+          surface_id: 'browser-crop',
+          hwnd: '888',
+          title: 'Cropped Chrome - YouTube',
+          process: 'chrome.exe',
+          class_name: 'Chrome_WidgetWin_1',
+          bounds: { x: 100, y: 100, width: 1000, height: 800 },
+          client_bounds: { x: 108, y: 150, width: 984, height: 724 },
+          display: 1,
+          focused: true,
+          z: 0,
+          hasControls: false,
+          tree: 'skipped',
+        },
+      ],
+      elements: [],
+    }
+    const cropFloor = imageWindowObservation(
+      floorSource,
+      PLACEMENTS as never,
+      cropRegion,
+    )
+    const croppedPayload = sealUiaPayload(
+      mergeImageWindowFloor(
+        null,
+        cropFloor,
+        '2026-08-01T19:30:00+09:00',
+        [],
+      ),
+    )
+    check('region crop payload assembled successfully', croppedPayload !== null)
+    if (croppedPayload !== null) {
+      const w = croppedPayload.windows[0]
+      check(
+        'cropped window bounds clipped to crop region',
+        w?.bounds.x === 0 && w?.bounds.y === 0 && w?.bounds.width === 485 && w?.bounds.height === 254,
+        JSON.stringify(w?.bounds),
+      )
+      check(
+        'cropped client_bounds clipped and contained within bounds (SPEC §11.3)',
+        w?.client_bounds !== undefined &&
+          w.client_bounds.x >= w.bounds.x &&
+          w.client_bounds.y >= w.bounds.y &&
+          w.client_bounds.x + w.client_bounds.width <= w.bounds.x + w.bounds.width &&
+          w.client_bounds.y + w.client_bounds.height <= w.bounds.y + w.bounds.height &&
+          w.client_bounds.width > 0 &&
+          w.client_bounds.height > 0,
+        JSON.stringify(w?.client_bounds),
+      )
+
+      // Write pack to temp dir and run canonical validator
+      const cropDir = await mkdtemp(join(tmpdir(), 'capturepack-crop-e2e-'))
+      try {
+        const manifest = {
+          format: 'capturepack',
+          format_version: '0.3.0',
+          id: '8a9b0c1d-2e3f-4a5b-8c7d-6e5f4a3b2c1d',
+          created_at: '2026-08-01T19:30:00+09:00',
+          generator: { name: 'capturepack-check', version: '0.5.1' },
+          environment: {
+            os: 'Windows 11',
+            screens: [{ width: 485, height: 254, scale: 1 }],
+          },
+          capture_kind: 'image',
+          media: {
+            image_scope: 'region',
+            crop_bounds: {
+              x: 300,
+              y: 150,
+              width: 485,
+              height: 254,
+              coordinate_space: 'virtual-desktop-dip',
+            },
+            snapshot: 'snapshot.png',
+            snapshot_width: 485,
+            snapshot_height: 254,
+            replay: null,
+          },
+          plugins: [
+            {
+              name: 'windows-uia',
+              version: '0.5.0',
+              path: 'plugins/windows-uia/',
+            },
+          ],
+        }
+        await writeFile(join(cropDir, 'manifest.json'), JSON.stringify(manifest, null, 2))
+        const png = Buffer.alloc(33)
+        Buffer.from('89504e470d0a1a0a', 'hex').copy(png, 0)
+        png.writeUInt32BE(13, 8)
+        png.write('IHDR', 12, 'ascii')
+        png.writeUInt32BE(485, 16)
+        png.writeUInt32BE(254, 20)
+        await writeFile(join(cropDir, 'snapshot.png'), png)
+        await writeUiaPlugin(cropDir, croppedPayload)
+
+        const validatorPath = resolve(process.cwd(), '..', 'tools', 'validate-capturepack.mjs')
+        const validation = spawnSync(process.execPath, [validatorPath, cropDir], { encoding: 'utf8' })
+        const validationOutput = `${validation.stdout ?? ''}${validation.stderr ?? ''}`
+        check(
+          'canonical validator accepts the region-crop still pack as VALID (SPEC §11.3)',
+          validation.status === 0 && validationOutput.includes('result: VALID'),
+          validationOutput.trim(),
+        )
+      } finally {
+        await rm(cropDir, { recursive: true, force: true })
+      }
     }
   }
 
