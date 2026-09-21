@@ -278,7 +278,22 @@ async function main(): Promise<void> {
       version: '0.5.0',
       files: ['plugins/windows-uia/meta.json', 'plugins/windows-uia/elements.json'],
     }],
-    readText: (file: string) => file === 'plugins/windows-uia/elements.json' ? largeUiaPayload : null,
+    readText: (file: string) => {
+      if (file === 'plugins/windows-uia/meta.json') return JSON.stringify({ source: 'windows-uia' })
+      if (file === 'plugins/windows-uia/elements.json') return largeUiaPayload
+      return null
+    },
+  }
+  const invalidPluginPack = {
+    ...pack,
+    id: 'invalid-plugin-pack',
+    path: 'C:\\packs\\invalid-plugin-pack',
+    plugins: () => [{
+      name: 'broken-plugin',
+      version: '1.0.0',
+      files: ['plugins/broken-plugin/elements.json'],
+    }],
+    readText: (file: string) => file === 'plugins/broken-plugin/elements.json' ? '{"elements":[' : null,
   }
   const store = {
     outputDir: 'C:\\packs',
@@ -290,6 +305,7 @@ async function main(): Promise<void> {
       if (id === multiReplayPack.id) return multiReplayPack
       if (id === reportPack.id) return reportPack
       if (id === windowsPack.id) return windowsPack
+      if (id === invalidPluginPack.id) return invalidPluginPack
       return pack
     },
     list: () => ({
@@ -408,6 +424,71 @@ async function main(): Promise<void> {
   check(
     !('window_plugins' in windowsJson) && !('elements' in windowsJson) && !JSON.stringify(windowsJson).includes('file too large to inline'),
     'capturepack_windows omits raw UIA controls and plugin inline-limit errors',
+  )
+
+  console.log('PLUGIN SEARCH')
+  const findDomResult = await callbacks.get('capturepack_find_dom')?.({
+    id: windowsPack.id,
+    selector: 'control-1199',
+  })
+  const findDomJson = textJson(findDomResult as ToolResult)
+  const domMatches = findDomJson.matches as Array<Record<string, unknown>>
+  check(
+    findDomResult?.isError !== true &&
+      findDomJson.count === 1 &&
+      domMatches[0]?.plugin === 'windows-uia' &&
+      domMatches[0]?.file === 'plugins/windows-uia/elements.json' &&
+      domMatches[0]?.json_path === 'elements[1199].automation_id' &&
+      domMatches[0]?.value === 'control-1199',
+    'capturepack_find_dom searches plugin JSON beyond the 100k inline limit',
+  )
+  const searchResult = await callbacks.get('capturepack_search')?.({
+    id: windowsPack.id,
+    keyword: 'control-1199',
+  })
+  const searchJson = textJson(searchResult as ToolResult)
+  const searchHits = searchJson.hits as Record<string, unknown>
+  const pluginHits = searchHits.plugins as Array<Record<string, unknown>>
+  check(
+    searchResult?.isError !== true &&
+      searchJson.total_hits === 1 &&
+      pluginHits[0]?.json_path === 'elements[1199].automation_id' &&
+      pluginHits[0]?.value === 'control-1199',
+    'capturepack_search returns plugin hits beyond the 100k inline limit',
+  )
+  const domResult = textJson(
+    await callbacks.get('capturepack_dom')?.({ id: windowsPack.id }) as ToolResult,
+  )
+  const domPlugins = domResult.plugins as Array<Record<string, unknown>>
+  const domFiles = domPlugins[0]?.files as Array<Record<string, unknown>>
+  check(
+    domFiles.some((file) =>
+      file.file === 'plugins/windows-uia/elements.json' &&
+      typeof file.error === 'string' &&
+      file.error.includes('file too large to inline')),
+    'capturepack_dom retains the 100k plugin inline limit',
+  )
+  const invalidFindDom = textJson(
+    await callbacks.get('capturepack_find_dom')?.({ id: invalidPluginPack.id, selector: 'save' }) as ToolResult,
+  )
+  const invalidFindWarnings = invalidFindDom.warnings as Array<Record<string, unknown>>
+  check(
+    invalidFindDom.count === 0 &&
+      invalidFindWarnings[0]?.file === 'plugins/broken-plugin/elements.json' &&
+      String(invalidFindWarnings[0]?.error).startsWith('invalid JSON:') &&
+      String(invalidFindDom.message).includes('could not be searched'),
+    'capturepack_find_dom surfaces plugin parse failures instead of a silent false negative',
+  )
+  const invalidSearch = textJson(
+    await callbacks.get('capturepack_search')?.({ id: invalidPluginPack.id, keyword: 'save' }) as ToolResult,
+  )
+  const invalidSearchWarnings = invalidSearch.plugin_warnings as Array<Record<string, unknown>>
+  check(
+    invalidSearch.total_hits === 0 &&
+      invalidSearchWarnings[0]?.file === 'plugins/broken-plugin/elements.json' &&
+      String(invalidSearchWarnings[0]?.error).startsWith('invalid JSON:') &&
+      String(invalidSearch.message).includes('could not be searched'),
+    'capturepack_search surfaces plugin parse failures instead of a silent false negative',
   )
   const emptyWindowsResult = await callbacks.get('capturepack_windows')?.({ id: pack.id })
   const emptyWindowsJson = textJson(emptyWindowsResult as ToolResult)

@@ -26,7 +26,11 @@ import { errorMessage, type PackHandle, type PackStore } from './store'
 
 const MAX_HITS_PER_GROUP = 100
 const MAX_JSON_MATCHES = 100
+// capturepack_dom inlines JSON into the response and must stay small. Search parses
+// one file at a time and returns only capped matches, so it can safely inspect the
+// multi-megabyte DOM/UIA payloads produced by real captures.
 const MAX_PLUGIN_FILE_CHARS = 100_000
+const MAX_PLUGIN_SEARCH_FILE_CHARS = 20_000_000
 
 export interface ToolOptions {
   logRequests: boolean
@@ -596,18 +600,21 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
       run('capturepack_find_dom', args, () => {
         const pack = store.resolve(args.id)
         const kw = args.selector.toLowerCase()
-        const matches: Array<{ plugin: string; file: string; json_path: string; value: string }> = []
-        for (const plugin of pluginJsonContents(pack)) {
-          for (const file of plugin.files) {
-            if (file.json === undefined) continue
-            for (const hit of findStrings(file.json, (s) => s.toLowerCase().includes(kw), MAX_JSON_MATCHES - matches.length)) {
-              matches.push({ plugin: plugin.name, file: file.file, json_path: hit.path, value: cap(hit.value, 300) })
-            }
-            if (matches.length >= MAX_JSON_MATCHES) break
-          }
-        }
-        const message = matches.length === 0 ? 'No matches. This pack may have no DOM/plugin metadata — check capturepack_dom.' : undefined
-        return jsonResult({ pack: pack.id, selector: args.selector, count: matches.length, matches, ...(message ? { message } : {}) })
+        const search = pluginJsonSearch(pack, (s) => s.toLowerCase().includes(kw), MAX_JSON_MATCHES)
+        const message = search.matches.length === 0
+          ? search.warnings.length > 0
+            ? 'No matches in searchable DOM/plugin metadata. Some plugin files could not be searched — see warnings.'
+            : 'No matches. This pack may have no DOM/plugin metadata — check capturepack_dom.'
+          : undefined
+        return jsonResult({
+          pack: pack.id,
+          selector: args.selector,
+          count: search.matches.length,
+          matches: search.matches,
+          ...(search.warnings.length > 0 ? { warnings: search.warnings } : {}),
+          ...(search.truncated ? { matches_truncated: true } : {}),
+          ...(message ? { message } : {}),
+        })
       }),
   )
 
@@ -971,6 +978,25 @@ interface PluginJsonContents {
   files: PluginJsonFile[]
 }
 
+interface PluginJsonSearchMatch {
+  plugin: string
+  file: string
+  json_path: string
+  value: string
+}
+
+interface PluginJsonSearchWarning {
+  plugin: string
+  file: string
+  error: string
+}
+
+interface PluginJsonSearchResult {
+  matches: PluginJsonSearchMatch[]
+  warnings: PluginJsonSearchWarning[]
+  truncated: boolean
+}
+
 function pluginJsonContents(pack: PackHandle): PluginJsonContents[] {
   return pack.plugins().map((plugin) => ({
     name: plugin.name,
@@ -987,6 +1013,58 @@ function pluginJsonContents(pack: PackHandle): PluginJsonContents[] {
       }
     }),
   }))
+}
+
+function pluginJsonSearch(
+  pack: PackHandle,
+  predicate: (value: string) => boolean,
+  budget: number,
+): PluginJsonSearchResult {
+  const matches: PluginJsonSearchMatch[] = []
+  const warnings: PluginJsonSearchWarning[] = []
+  let truncated = false
+
+  outer: for (const plugin of pack.plugins()) {
+    for (const file of plugin.files) {
+      if (!file.toLowerCase().endsWith('.json')) continue
+      if (matches.length >= budget) {
+        truncated = true
+        break outer
+      }
+
+      const text = pack.readText(file)
+      if (text === null) {
+        warnings.push({ plugin: plugin.name, file, error: 'unreadable' })
+        continue
+      }
+      if (text.length > MAX_PLUGIN_SEARCH_FILE_CHARS) {
+        warnings.push({
+          plugin: plugin.name,
+          file,
+          error: `file too large to search (${text.length} chars; limit ${MAX_PLUGIN_SEARCH_FILE_CHARS})`,
+        })
+        continue
+      }
+
+      let json: unknown
+      try {
+        json = JSON.parse(text) as unknown
+      } catch (err) {
+        warnings.push({ plugin: plugin.name, file, error: `invalid JSON: ${errorMessage(err)}` })
+        continue
+      }
+
+      const remaining = budget - matches.length
+      const hits = findStrings(json, predicate, remaining + 1)
+      if (hits.length > remaining) truncated = true
+      for (const hit of hits.slice(0, remaining)) {
+        matches.push({ plugin: plugin.name, file, json_path: hit.path, value: cap(hit.value, 300) })
+      }
+      if (truncated) break outer
+    }
+  }
+
+  return { matches, warnings, truncated }
 }
 
 function searchPack(pack: PackHandle, keyword: string): Record<string, unknown> {
@@ -1020,16 +1098,8 @@ function searchPack(pack: PackHandle, keyword: string): Record<string, unknown> 
     }
   }
 
-  const pluginHits: Array<{ plugin: string; file: string; json_path: string; value: string }> = []
-  outer: for (const plugin of pluginJsonContents(pack)) {
-    for (const file of plugin.files) {
-      if (pluginHits.length >= MAX_JSON_MATCHES) break outer
-      if (file.json === undefined) continue
-      for (const hit of findStrings(file.json, (s) => s.toLowerCase().includes(kw), MAX_JSON_MATCHES - pluginHits.length)) {
-        pluginHits.push({ plugin: plugin.name, file: file.file, json_path: hit.path, value: cap(hit.value, 300) })
-      }
-    }
-  }
+  const pluginSearch = pluginJsonSearch(pack, (s) => s.toLowerCase().includes(kw), MAX_JSON_MATCHES)
+  const pluginHits = pluginSearch.matches
 
   const total = manifestHits.length + reportHits.length + annotationHits.length + timelineHits.length + pluginHits.length
   return {
@@ -1044,7 +1114,15 @@ function searchPack(pack: PackHandle, keyword: string): Record<string, unknown> 
       plugins: pluginHits,
     },
     ...(allAnnotationHits.length > annotationHits.length ? { annotations_truncated: true } : {}),
-    ...(total === 0 ? { message: `No hits for "${keyword}" anywhere in this pack.` } : {}),
+    ...(pluginSearch.warnings.length > 0 ? { plugin_warnings: pluginSearch.warnings } : {}),
+    ...(pluginSearch.truncated ? { plugins_truncated: true } : {}),
+    ...(total === 0
+      ? {
+          message: pluginSearch.warnings.length > 0
+            ? `No hits for "${keyword}" in searchable pack data. Some plugin files could not be searched — see plugin_warnings.`
+            : `No hits for "${keyword}" anywhere in this pack.`,
+        }
+      : {}),
   }
 }
 
