@@ -1080,5 +1080,136 @@ console.log('\nSPEC §10.1: formatClock preserves sign for negative millisecond 
   )
 }
 
+console.log('\nMP4 replay packs with render pending emit replay_annotated.mp4 (Issue #215)')
+{
+  const reportSource = readFileSync(join(CORE, 'src', 'main', 'report.ts'), 'utf8')
+  const packdocsSource = readFileSync(join(CORE, 'src', 'main', 'packdocs.ts'), 'utf8')
+
+  check(
+    'report.ts derives annotatedReplayFile matching replay container extension',
+    reportSource.includes("annotatedReplayName ?? (replayName.endsWith('.mp4') ? 'replay_annotated.mp4' : 'replay_annotated.webm')"),
+    'report.ts does not dynamically match replay container extension for annotatedReplayFile',
+  )
+  check(
+    'packdocs.ts derives annotatedReplayFile matching replay container extension in buildReadme, buildOverviewSkill, and buildProjectSkill',
+    (packdocsSource.match(/annotatedReplayName \?\? \(replayName\.endsWith\('\.mp4'\) \? 'replay_annotated\.mp4' : 'replay_annotated\.webm'\)/gu) ?? []).length === 3,
+    'packdocs.ts does not derive annotatedReplayFile for MP4 containers across all 3 generator functions',
+  )
+  check(
+    'packdocs.ts buildProjectSkill fallback line references container dynamically',
+    packdocsSource.includes('lines.push(`- \\`${annotatedReplayFile}\\` — optional derived rendering, absent from this source revision.`)'),
+    'packdocs.ts still hardcodes replay_annotated.webm in buildProjectSkill fallback',
+  )
+
+  const mp4PendingManifest = {
+    format: 'capturepack',
+    format_version: '0.5.0',
+    id: 'test-mp4-pending-pack',
+    created_at: '2026-07-27T10:41:07+09:00',
+    generator: { name: 'test', version: '0.5.0' },
+    environment: { os: 'windows' },
+    media: {
+      snapshot: 'snapshot.png',
+      replay: 'replay.mp4',
+      replay_duration_ms: 10000,
+    },
+  }
+
+  const annotationsWithBlur = {
+    reference_width: 1920,
+    reference_height: 1080,
+    annotations: [
+      {
+        annotation_id: 'box-1',
+        bounds: { x: 10, y: 10, width: 100, height: 100 },
+        text: 'Redacted',
+        blur: true,
+      },
+    ],
+  }
+
+  const testTimeline = {
+    t0: '2026-07-27T10:41:07+09:00',
+    events: [
+      { t_ms: 0, type: 'core.capture.triggered', source: 'core', data: {} },
+    ],
+  }
+
+  const mp4Report = buildReport(mp4PendingManifest, annotationsWithBlur, 'en', true, true)
+  const mp4Readme = buildReadme(mp4PendingManifest, annotationsWithBlur, 'en', true, true)
+  const mp4Skills = buildSkills(mp4PendingManifest, annotationsWithBlur, testTimeline, 'en', true)
+
+  check(
+    '[MP4 pending] report.md references replay_annotated.mp4 and contains no phantom replay_annotated.webm',
+    mp4Report.includes('- replay_annotated.mp4 — the replay with annotations rendered in (generated in the background; may appear shortly after save)') &&
+      mp4Report.includes('(replay_annotated.mp4, editor previews)') &&
+      !mp4Report.includes('replay_annotated.webm'),
+    `report.md emitted incorrect annotated replay name for pending MP4 pack:\n${mp4Report}`,
+  )
+
+  check(
+    '[MP4 pending] README.md references replay_annotated.mp4 and contains no phantom replay_annotated.webm',
+    mp4Readme.includes('| replay_annotated.mp4 | The replay with annotations rendered in — watch this one (generated in the background; may appear shortly after save) |') &&
+      mp4Readme.includes('1. Watch `replay_annotated.mp4` — the annotations are rendered into the video.') &&
+      !mp4Readme.includes('replay_annotated.webm'),
+    `README.md emitted incorrect annotated replay name for pending MP4 pack:\n${mp4Readme}`,
+  )
+
+  check(
+    '[MP4 pending] skills/overview.md references replay_annotated.mp4 and contains no phantom replay_annotated.webm',
+    mp4Skills.overview.includes('; annotated view replay_annotated.mp4 is generated in the background after save.') &&
+      mp4Skills.overview.includes('- `replay_annotated.mp4` shows the annotations in place, in time.') &&
+      !mp4Skills.overview.includes('replay_annotated.webm'),
+    `skills/overview.md emitted incorrect annotated replay name for pending MP4 pack:\n${mp4Skills.overview}`,
+  )
+
+  check(
+    '[MP4 pending] skills/project.md references replay_annotated.mp4 and contains no phantom replay_annotated.webm',
+    mp4Skills.project.includes('- `replay_annotated.mp4` — the replay with annotations rendered in. Generated in the background') &&
+      mp4Skills.project.includes('regenerable at any time from replay.mp4 + annotations.json.') &&
+      !mp4Skills.project.includes('replay_annotated.webm'),
+    `skills/project.md emitted incorrect annotated replay name for pending MP4 pack:\n${mp4Skills.project}`,
+  )
+
+  const mp4SourceFirstSkills = buildSkills(mp4PendingManifest, annotationsWithBlur, testTimeline, 'en', false)
+  check(
+    '[MP4 source-first] skills/project.md references replay_annotated.mp4 in fallback line without phantom .webm',
+    mp4SourceFirstSkills.project.includes('- `replay_annotated.mp4` — optional derived rendering, absent from this source revision.') &&
+      !mp4SourceFirstSkills.project.includes('replay_annotated.webm'),
+    `skills/project.md emitted unexpected annotated fallback for source-first MP4 pack:\n${mp4SourceFirstSkills.project}`,
+  )
+
+  const webmPendingManifest = {
+    format: 'capturepack',
+    format_version: '0.5.0',
+    id: 'test-webm-pending-pack',
+    created_at: '2026-07-27T10:41:07+09:00',
+    generator: { name: 'test', version: '0.5.0' },
+    environment: { os: 'windows' },
+    media: {
+      snapshot: 'snapshot.png',
+      replay: 'replay.webm',
+      replay_duration_ms: 10000,
+    },
+  }
+
+  const webmReport = buildReport(webmPendingManifest, annotationsWithBlur, 'en', true, true)
+  const webmReadme = buildReadme(webmPendingManifest, annotationsWithBlur, 'en', true, true)
+  const webmSkills = buildSkills(webmPendingManifest, annotationsWithBlur, testTimeline, 'en', true)
+
+  check(
+    '[WebM pending] report.md, README.md, skills emit replay_annotated.webm and not replay_annotated.mp4',
+    webmReport.includes('replay_annotated.webm') &&
+      !webmReport.includes('replay_annotated.mp4') &&
+      webmReadme.includes('replay_annotated.webm') &&
+      !webmReadme.includes('replay_annotated.mp4') &&
+      webmSkills.overview.includes('replay_annotated.webm') &&
+      !webmSkills.overview.includes('replay_annotated.mp4') &&
+      webmSkills.project.includes('replay_annotated.webm') &&
+      !webmSkills.project.includes('replay_annotated.mp4'),
+    'WebM pending pack emitted unexpected media names',
+  )
+}
+
 console.log(`\nresult: ${failed === 0 ? 'OK' : 'BROKEN'} — ${passed} passed, ${failed} failed\n`)
 if (failed > 0) process.exitCode = 1
