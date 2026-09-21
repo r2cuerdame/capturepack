@@ -413,7 +413,7 @@ console.log('\nSPEC §5.3 / §13.1 defines media.replay as nullable/omitted for 
 const bundleResult = buildSync({
   stdin: {
     contents: [
-      "export { buildReport, keyframeSet, displaySummaryLines, extraDisplayFiles } from './src/main/report'",
+      "export { buildReport, formatClock, keyframeSet, displaySummaryLines, extraDisplayFiles } from './src/main/report'",
       "export { buildReadme, buildSkills, replayLabel } from './src/main/packdocs'",
       "export { buildViewerHtml } from './src/main/viewer'",
       "export { makeT } from './src/shared/i18n'",
@@ -432,7 +432,7 @@ const bundleResult = buildSync({
 const mod = { exports: {} }
 const runner = new Function('module', 'exports', 'require', bundleResult.outputFiles[0].text)
 runner(mod, mod.exports, () => ({}))
-const { buildReport, keyframeSet, displaySummaryLines, extraDisplayFiles, buildReadme, buildSkills, replayLabel, makeT, buildViewerHtml } = mod.exports
+const { buildReport, formatClock, keyframeSet, displaySummaryLines, extraDisplayFiles, buildReadme, buildSkills, replayLabel, makeT, buildViewerHtml } = mod.exports
 
 console.log('\nPacks with omitted media.replay render clean screenshot-only documentation without undefined')
 {
@@ -1006,5 +1006,79 @@ console.log('\nPacks omitting optional os_version and screens[].scale render cle
     )
   }
 }
+
+console.log('\nSPEC §10.1: formatClock preserves sign for negative millisecond offsets (Issue #211)')
+{
+  check(
+    'formatClock correctly formats positive, zero, and negative millisecond offsets',
+    formatClock(0) === '00:00.000' &&
+      formatClock(3200) === '00:03.200' &&
+      formatClock(65432) === '01:05.432' &&
+      formatClock(-1500) === '-00:01.500' &&
+      formatClock(-3500) === '-00:03.500' &&
+      formatClock(-1200) === '-00:01.200' &&
+      formatClock(-50) === '-00:00.050' &&
+      formatClock(-65432) === '-01:05.432',
+    `formatClock produced unexpected formatted strings: 0->${formatClock(0)}, 3200->${formatClock(3200)}, -1500->${formatClock(-1500)}, -50->${formatClock(-50)}`,
+  )
+
+  const reportSource = readFileSync(join(CORE, 'src', 'main', 'report.ts'), 'utf8')
+  check(
+    'report.ts does not clamp formatClock to Math.max(0, ...)',
+    !reportSource.includes('Math.max(0, Math.round(ms))'),
+    'report.ts still clamps negative ms values in formatClock',
+  )
+
+  const testAnnotations = {
+    reference_width: 1920,
+    reference_height: 1080,
+    annotations: [],
+  }
+  const testTimeline = {
+    t0: '2026-07-27T10:41:07+09:00',
+    events: [
+      { t_ms: -3500, type: 'input.window.focus', source: 'core', data: { title: 'Code' } },
+      { t_ms: -1200, type: 'input.mouse.click', source: 'core', data: { button: 'left', x: 120, y: 300 } },
+      { t_ms: 0, type: 'core.capture.triggered', source: 'core', data: {} },
+      { t_ms: 1500, type: 'core.annotation.added', source: 'core', data: { annotation_id: 'box-1' } },
+    ],
+  }
+  const manifest = {
+    format: 'capturepack',
+    format_version: '0.5.0',
+    id: 'test-negative-timeline-pack',
+    created_at: '2026-07-27T10:41:07+09:00',
+    generator: { name: 'test', version: '0.5.0' },
+    environment: { os: 'windows' },
+    media: {
+      snapshot: 'snapshot.png',
+      replay: null,
+    },
+  }
+
+  const skills = buildSkills(manifest, testAnnotations, testTimeline, 'en', false)
+  check(
+    'skills/timeline.md displays signed offsets for pre-t0 events (SPEC §10.1)',
+    skills.timeline.includes('| -00:03.500 | input.window.focus |') &&
+      skills.timeline.includes('| -00:01.200 | input.mouse.click |') &&
+      skills.timeline.includes('| 00:00.000 | core.capture.triggered |') &&
+      skills.timeline.includes('| 00:01.500 | core.annotation.added |'),
+    `skills/timeline.md did not include expected signed offsets. Output:\n${skills.timeline}`,
+  )
+
+  const lines = skills.timeline.split('\n')
+  const focusLine = lines.find((l) => l.includes('input.window.focus'))
+  const clickLine = lines.find((l) => l.includes('input.mouse.click'))
+  check(
+    'skills/timeline.md preserves distinct timing offsets for pre-anchor events',
+    focusLine !== undefined &&
+      clickLine !== undefined &&
+      !focusLine.includes('| 00:00.000 |') &&
+      !clickLine.includes('| 00:00.000 |') &&
+      focusLine !== clickLine,
+    'pre-t0 events collapsed to 00:00.000 or identical timestamps',
+  )
+}
+
 console.log(`\nresult: ${failed === 0 ? 'OK' : 'BROKEN'} — ${passed} passed, ${failed} failed\n`)
 if (failed > 0) process.exitCode = 1
