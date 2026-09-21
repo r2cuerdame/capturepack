@@ -1852,9 +1852,10 @@ async function copyImagePluginMetadata(
  */
 /**
  * Annotations restricted to the display set a pack actually declares (SPEC
- * §8.8): a `display` that names no declared entry is DROPPED from the box, so
- * the box resolves to the focused display instead of carrying an index that
- * fails validation, renders into nothing, and disappears from the documents.
+ * §8.8). A box whose own display disappeared is dropped: its bounds are pixels
+ * of that missing raster, so treating them as focused-display pixels would
+ * silently move (or invalidate) it. Motion points on a surviving box are
+ * filtered independently because they each name their own coordinate space.
  *
  * A `display` naming the FOCUSED entry is dropped too, because §8.8 says absent
  * MEANS the focused display and writers SHOULD omit it there. That rule used to
@@ -1869,11 +1870,97 @@ function withDeclaredDisplays(
 ): Annotation[] {
   const declared = new Set((displays ?? []).map((d) => d.index))
   const focused = (displays ?? []).find((d) => d.focused)?.index
-  return annotations.map((a) => {
-    if (a.display === undefined) return a
-    if (declared.has(a.display) && a.display !== focused) return a
-    const { display: _dropped, ...rest } = a
-    return rest
+  const sampleMatchesBounds = (
+    sample: NonNullable<NonNullable<Annotation['tracking']>['samples']>[number],
+    annotation: Annotation,
+  ): boolean =>
+    (sample.display ?? annotation.display ?? focused) === (annotation.display ?? focused) &&
+    Math.round(sample.x) === annotation.bounds.x &&
+    Math.round(sample.y) === annotation.bounds.y &&
+    Math.round(sample.width) === annotation.bounds.width &&
+    Math.round(sample.height) === annotation.bounds.height
+
+  return annotations.flatMap((annotation) => {
+    // There is no trustworthy transform after this raster has disappeared.
+    // Keeping the box and merely deleting `display` corrupts its coordinates.
+    if (annotation.display !== undefined && !declared.has(annotation.display)) return []
+
+    let sanitized: Annotation =
+      annotation.display === focused
+        ? (({ display: _focused, ...rest }) => rest)(annotation)
+        : annotation
+
+    if (annotation.keyframes !== undefined) {
+      const keyframes = annotation.keyframes.filter(
+        (frame) => frame.display === undefined || declared.has(frame.display),
+      )
+      if (keyframes.length >= 2) {
+        if (keyframes.length !== annotation.keyframes.length) {
+          sanitized = { ...sanitized, keyframes }
+        }
+      } else {
+        const { keyframes: _dropped, ...withoutKeyframes } = sanitized
+        sanitized = withoutKeyframes
+        const survivor = keyframes[0]
+        // A lone authored position is a static box (SPEC §8.9). Do not replace
+        // the representative bounds of a legacy box that also carries an
+        // observed track: readers correctly give those measurements priority.
+        if (survivor !== undefined && annotation.tracking?.enabled !== true) {
+          const survivorDisplay = survivor.display ?? sanitized.display ?? focused
+          const { display: _oldDisplay, ...withoutDisplay } = sanitized
+          sanitized = {
+            ...withoutDisplay,
+            bounds: {
+              x: survivor.x,
+              y: survivor.y,
+              width: survivor.width,
+              height: survivor.height,
+            },
+            ...(survivorDisplay === undefined || survivorDisplay === focused
+              ? {}
+              : { display: survivorDisplay }),
+          }
+        }
+      }
+    }
+
+    const tracking = annotation.tracking
+    if (tracking?.samples !== undefined) {
+      const samples = tracking.samples.filter(
+        (sample) => sample.display === undefined || declared.has(sample.display),
+      )
+      if (samples.length !== tracking.samples.length) {
+        if (tracking.enabled && samples.length > 0) {
+          const boundsObserved = samples.some((sample) => sampleMatchesBounds(sample, sanitized))
+          const nearest =
+            tracking.picked_at_ms === undefined
+              ? undefined
+              : samples.reduce((best, sample) =>
+                  Math.abs(sample.t_ms - tracking.picked_at_ms!) <
+                  Math.abs(best.t_ms - tracking.picked_at_ms!)
+                    ? sample
+                    : best,
+                )
+          if (boundsObserved && (nearest === undefined || sampleMatchesBounds(nearest, sanitized))) {
+            sanitized = { ...sanitized, tracking: { ...tracking, samples } }
+          } else {
+            // Filtering can remove the observation that made `bounds` (or the
+            // picked-frame anchor) truthful. Preserve the static box instead
+            // of emitting a track whose remaining evidence contradicts it.
+            sanitized = { ...sanitized, tracking: { enabled: false } }
+          }
+        } else if (tracking.enabled) {
+          sanitized = { ...sanitized, tracking: { enabled: false } }
+        } else if (samples.length > 0) {
+          sanitized = { ...sanitized, tracking: { ...tracking, samples } }
+        } else {
+          const { samples: _dropped, picked_at_ms: _picked, ...inactive } = tracking
+          sanitized = { ...sanitized, tracking: inactive }
+        }
+      }
+    }
+
+    return [sanitized]
   })
 }
 
@@ -1908,10 +1995,9 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
   // keeps it at the older version rather than inventing geometry for it.
   const displayFiles =
     surviving !== undefined && surviving.length > 0 ? surviving : undefined
-  // A box may only name a display this pack DECLARES (SPEC §8.8). Anything the
-  // filter above dropped resolves back to the focused display — the field is
-  // removed, which is what "absent = focused" means — rather than being written
-  // as an index nothing in the new pack can resolve.
+  // A box or motion point may only name a display this pack DECLARES (SPEC
+  // §8.3, §8.8, §8.9). Boxes rooted in a missing raster cannot be reinterpreted
+  // safely and are dropped; undeclared points on surviving boxes are removed.
   const annotations = withDeclaredDisplays(input.annotations, displayFiles)
   const annotationsFile: AnnotationsFile = {
     reference_width: input.width,
