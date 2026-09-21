@@ -21,6 +21,7 @@
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join, resolve, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { buildSync } from 'esbuild'
 
 const CORE = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const ROOT = resolve(CORE, '..')
@@ -344,6 +345,149 @@ console.log('\nSPEC §8.3 defines annotation.text as OPTIONAL')
     /text\?:\s*string/u.test(typesSource),
     'types.ts does not declare text?: string in BoxAnnotation',
   )
+}
+
+console.log('\nSPEC §5.3 / §13.1 defines media.replay as nullable/omitted for screenshot-only packs')
+{
+  const spec = readFileSync(join(ROOT, 'SPEC.md'), 'utf8')
+  check(
+    'SPEC §5.3 declares media.replay as string or null where null is a screenshot-only pack',
+    /\|\s*`replay`\s*\|\s*string\s+\*\*or\*\*\s+`null`\s*\|\s*REQUIRED\s*\|\s*Filename of the original replay video/u.test(spec),
+    'SPEC.md §5.3 lost its replay string or null declaration',
+  )
+
+  const reportSource = readFileSync(join(CORE, 'src', 'main', 'report.ts'), 'utf8')
+  const packdocsSource = readFileSync(join(CORE, 'src', 'main', 'packdocs.ts'), 'utf8')
+  const sessionSource = readFileSync(join(CORE, 'src', 'main', 'session.ts'), 'utf8')
+  const exporterSource = readFileSync(join(CORE, 'src', 'main', 'exporter.ts'), 'utf8')
+
+  check(
+    'report.ts determines hasReplay defensively for string replay filename',
+    reportSource.includes("const hasReplay = typeof manifest.media.replay === 'string' && manifest.media.replay.length > 0"),
+    'report.ts hasReplay does not check typeof string and length > 0',
+  )
+  check(
+    'report.ts keyframeSet treats non-string replay as duration 0',
+    reportSource.includes("typeof manifest.media.replay !== 'string' ? 0 : (manifest.media.replay_duration_ms ?? 0)"),
+    'report.ts keyframeSet does not check typeof string for replay duration',
+  )
+  check(
+    'packdocs.ts determines hasReplay defensively in all generator functions',
+    (packdocsSource.match(/const hasReplay = typeof manifest\.media\.replay === 'string' && manifest\.media\.replay\.length > 0/gu) ?? []).length === 4,
+    'packdocs.ts does not declare hasReplay via typeof string and length > 0 in buildReadme, buildOverviewSkill, buildTimelineSkill, and buildProjectSkill',
+  )
+  check(
+    'packdocs.ts replayLabel guards non-string replay as screenshotOnly',
+    packdocsSource.includes("if (typeof manifest.media.replay !== 'string') return t('pack.screenshotOnly')"),
+    'packdocs.ts replayLabel does not check typeof string for screenshotOnly fallback',
+  )
+  check(
+    'session.ts guards image CapturePack replay check with typeof string',
+    sessionSource.includes("if (typeof manifest.media.replay === 'string' || manifest.media.displays !== undefined)"),
+    'session.ts captureMetadataFromManifest does not guard typeof manifest.media.replay === string',
+  )
+  check(
+    'exporter.ts guards replay_annotated declaration with typeof string',
+    exporterSource.includes("if (outputs.replayAnnotated && typeof manifest.media.replay === 'string')"),
+    'exporter.ts does not guard replay_annotated with typeof manifest.media.replay === string',
+  )
+}
+
+console.log('\nPacks with omitted media.replay render clean screenshot-only documentation without undefined')
+{
+  const bundleResult = buildSync({
+    stdin: {
+      contents: [
+        "export { buildReport, keyframeSet } from './src/main/report'",
+        "export { buildReadme, buildSkills, replayLabel } from './src/main/packdocs'",
+        "export { makeT } from './src/shared/i18n'",
+      ].join('\n'),
+      resolveDir: CORE,
+      sourcefile: 'contract-runner.ts',
+      loader: 'ts',
+    },
+    bundle: true,
+    platform: 'node',
+    format: 'cjs',
+    write: false,
+    external: ['electron'],
+  })
+
+  const mod = { exports: {} }
+  const runner = new Function('module', 'exports', 'require', bundleResult.outputFiles[0].text)
+  runner(mod, mod.exports, () => ({}))
+  const { buildReport, keyframeSet, buildReadme, buildSkills, replayLabel, makeT } = mod.exports
+
+  const t = makeT('en')
+  const testAnnotations = {
+    reference_width: 1920,
+    reference_height: 1080,
+    annotations: [],
+  }
+  const testTimeline = {
+    t0: '2026-07-27T10:41:07+09:00',
+    events: [],
+  }
+
+  for (const kind of ['omitted', 'null']) {
+    const manifest = {
+      format: 'capturepack',
+      format_version: '0.1.0',
+      id: `test-${kind}-replay-pack`,
+      created_at: '2026-07-27T10:41:07+09:00',
+      generator: { name: 'test', version: '0.1.0' },
+      environment: { os: 'windows' },
+      media: {
+        snapshot: 'snapshot.png',
+        ...(kind === 'null' ? { replay: null } : {}),
+      },
+    }
+
+    const report = buildReport(manifest, testAnnotations, 'en', false, true)
+    const readme = buildReadme(manifest, testAnnotations, 'en', false, true)
+    const skills = buildSkills(manifest, testAnnotations, testTimeline, 'en', false)
+    const keyframes = keyframeSet(manifest, testAnnotations, false)
+    const label = replayLabel(manifest, t)
+
+    check(
+      `[${kind} replay] report.md never emits literal undefined or bogus replay entries`,
+      !report.includes('undefined') &&
+        report.includes('- **Replay:** none') &&
+        !report.includes('- undefined') &&
+        !report.includes('replay.webm'),
+    )
+
+    check(
+      `[${kind} replay] README.md never emits literal undefined or bogus replay instruction`,
+      !readme.includes('undefined') &&
+        !readme.includes('| undefined |') &&
+        readme.includes('1. Open `snapshot.png` — this pack is screenshot-only, so there is no `replay_annotated.webm`') &&
+        readme.includes('- **Duration:** screenshot only (no replay)'),
+    )
+
+    check(
+      `[${kind} replay] skills documents describe screenshot-only capture without undefined`,
+      !skills.overview.includes('undefined') &&
+        skills.overview.includes('**Media:** screenshot only (1920×1080 snapshot.png); no replay, no annotated replay.') &&
+        !skills.overview.includes('replay.webm') &&
+        !skills.timeline.includes('undefined') &&
+        skills.timeline.includes('this pack has no replay, so offsets are relative to the trigger') &&
+        !skills.timeline.includes('the start of replay.webm') &&
+        !skills.project.includes('undefined') &&
+        skills.project.includes('- `replay.webm` — optional last seconds before capture (absent here: screenshot-only pack).') &&
+        !skills.project.includes('the last seconds before the capture. Original evidence, never modified.'),
+    )
+
+    check(
+      `[${kind} replay] keyframeSet treats pack as screenshot-only with duration 0`,
+      keyframes.frames.length === 0 && keyframes.dropped === 0,
+    )
+
+    check(
+      `[${kind} replay] replayLabel returns localized screenshotOnly`,
+      label === 'screenshot only (no replay)',
+    )
+  }
 }
 
 console.log(`\nresult: ${failed === 0 ? 'OK' : 'BROKEN'} — ${passed} passed, ${failed} failed\n`)

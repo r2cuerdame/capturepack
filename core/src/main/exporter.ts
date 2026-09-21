@@ -2129,7 +2129,7 @@ export async function setManifestRenderOutputs(
 
   // Never declared without a replay (SPEC §5.3) — keyframes have no such rule:
   // a screenshot-only pack has exactly one still, rendered from snapshot.png.
-  if (outputs.replayAnnotated && manifest.media.replay !== null) {
+  if (outputs.replayAnnotated && typeof manifest.media.replay === 'string') {
     manifest.media.replay_annotated = 'replay_annotated.webm'
   }
   if (declared.length > 0) manifest.media.keyframes = declared

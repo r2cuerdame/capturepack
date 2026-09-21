@@ -295,7 +295,7 @@ export function keyframeSet(
   renderPending = false,
 ): KeyframeSet {
   const durationMs =
-    manifest.media.replay === null ? 0 : (manifest.media.replay_duration_ms ?? 0)
+    typeof manifest.media.replay !== 'string' ? 0 : (manifest.media.replay_duration_ms ?? 0)
   // The same input the render used, so the cap it hit is the cap reported here.
   // The pack's OWN stills cover the FOCUSED display (SPEC §5.6): a box on
   // another screen is rendered into that screen's own stills, so counting it
@@ -459,7 +459,7 @@ export function buildReport(
   lines.push(manifest.note ?? t('pack.noNote'))
   lines.push('')
 
-  const hasReplay = manifest.media.replay !== null
+  const hasReplay = typeof manifest.media.replay === 'string' && manifest.media.replay.length > 0
   const replayName = manifest.media.replay ?? 'replay.webm'
   const annotatedReplayName = manifest.media.replay_annotated
   const annotatedReplayPending = hasReplay && renderPending && annotatedReplayName === undefined
