@@ -789,6 +789,75 @@ export async function readTimelineSafe(
 }
 
 /**
+ * Safely reads annotations.json from a pack directory.
+ *
+ * SPEC §4, §8, and §14 declare annotations.json as OPTIONAL.
+ * If annotations.json is missing, unreadable, or contains malformed JSON
+ * or invalid annotations array, falls back to a safe empty AnnotationsFile
+ * ({ reference_width: fallbackWidth, reference_height: fallbackHeight, annotations: [] })
+ * rather than throwing or aborting doc refresh.
+ */
+export async function readAnnotationsSafe(
+  dirPath: string,
+  fallbackWidthOrManifest: number | Manifest = 0,
+  fallbackHeightParam: number = 0,
+): Promise<AnnotationsFile> {
+  let fallbackWidth = 0
+  let fallbackHeight = 0
+  if (typeof fallbackWidthOrManifest === 'number') {
+    fallbackWidth = Number.isFinite(fallbackWidthOrManifest) ? fallbackWidthOrManifest : 0
+    fallbackHeight =
+      typeof fallbackHeightParam === 'number' && Number.isFinite(fallbackHeightParam)
+        ? fallbackHeightParam
+        : 0
+  } else if (fallbackWidthOrManifest && typeof fallbackWidthOrManifest === 'object') {
+    fallbackWidth = fallbackWidthOrManifest.media?.displays?.[0]?.snapshot_width ?? 0
+    fallbackHeight = fallbackWidthOrManifest.media?.displays?.[0]?.snapshot_height ?? 0
+  }
+  const fallback: AnnotationsFile = {
+    reference_width: fallbackWidth,
+    reference_height: fallbackHeight,
+    annotations: [],
+  }
+  const annotationsPath = join(dirPath, 'annotations.json')
+  if (!existsSync(annotationsPath)) {
+    return fallback
+  }
+  try {
+    const raw = await readFile(annotationsPath, 'utf8')
+    const parsed = JSON.parse(stripUtf8Bom(raw)) as unknown
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const candidate = parsed as {
+        reference_width?: unknown
+        reference_height?: unknown
+        annotations?: unknown
+      }
+      if (
+        Array.isArray(candidate.annotations) &&
+        candidate.annotations.every((a) => a !== null && typeof a === 'object')
+      ) {
+        const reference_width =
+          typeof candidate.reference_width === 'number' && Number.isFinite(candidate.reference_width)
+            ? candidate.reference_width
+            : fallbackWidth
+        const reference_height =
+          typeof candidate.reference_height === 'number' && Number.isFinite(candidate.reference_height)
+            ? candidate.reference_height
+            : fallbackHeight
+        return {
+          reference_width,
+          reference_height,
+          annotations: candidate.annotations as AnnotationsFile['annotations'],
+        }
+      }
+    }
+    return fallback
+  } catch {
+    return fallback
+  }
+}
+
+/**
  * Adds one plugin declaration to an ALREADY written manifest.json, the way
  * setManifestRenderOutputs() adds the render outputs: the save-first folder is
  * complete before the (asynchronous, budgeted) dump lands, so its payload is
@@ -815,11 +884,11 @@ export async function addManifestPlugin(
     const nextManifest: Manifest = declared
       ? manifest
       : { ...manifest, plugins: [...plugins, declaration] }
-    const annotationsFile = JSON.parse(
-      stripUtf8Bom(
-        await readFile(join(handle.dirPath, 'annotations.json'), 'utf8'),
-      ),
-    ) as AnnotationsFile
+    const annotationsFile = await readAnnotationsSafe(
+      handle.dirPath,
+      nextManifest.media.displays?.[0]?.snapshot_width ?? 0,
+      nextManifest.media.displays?.[0]?.snapshot_height ?? 0,
+    )
     const timeline = await readTimelineSafe(
       handle.dirPath,
       nextManifest.created_at,
@@ -2029,10 +2098,11 @@ export async function refreshPackDocs(dirPath: string, docLanguage: Language = '
     const manifest = JSON.parse(
       stripUtf8Bom(await readFile(join(dirPath, 'manifest.json'), 'utf8')),
     ) as Manifest
-    const annotationsFile = JSON.parse(stripUtf8Bom(
-      await readFile(join(dirPath, 'annotations.json'), 'utf8'),
-    )) as AnnotationsFile
-    if (!Array.isArray(annotationsFile.annotations)) return
+    const annotationsFile = await readAnnotationsSafe(
+      dirPath,
+      manifest.media.displays?.[0]?.snapshot_width ?? 0,
+      manifest.media.displays?.[0]?.snapshot_height ?? 0,
+    )
     const timeline = await readTimelineSafe(
       dirPath,
       manifest.created_at,
@@ -2136,7 +2206,7 @@ export async function setManifestRenderOutputs(
 
   // Never declared without a replay (SPEC §5.3) — keyframes have no such rule:
   // a screenshot-only pack has exactly one still, rendered from snapshot.png.
-  if (outputs.replayAnnotated && manifest.media.replay !== null) {
+  if (outputs.replayAnnotated && typeof manifest.media.replay === 'string') {
     manifest.media.replay_annotated = 'replay_annotated.webm'
   }
   if (declared.length > 0) manifest.media.keyframes = declared

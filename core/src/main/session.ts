@@ -1107,7 +1107,7 @@ function captureMetadataFromManifest(manifest: Manifest): {
   // their recorder failed and only snapshot.png survived. Do not rewrite that
   // ambiguous legacy evidence as an explicitly requested full-screen still.
   if (manifest.capture_kind !== 'image') return { captureKind: 'video' }
-  if (manifest.media.replay !== null || manifest.media.displays !== undefined) {
+  if (typeof manifest.media.replay === 'string' || manifest.media.displays !== undefined) {
     throw new Error('image CapturePack must not declare replay or per-display media')
   }
   const scope = manifest.media.image_scope
