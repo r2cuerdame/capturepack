@@ -273,6 +273,16 @@ try {
     divergentFocusedCadence.status === 1
       && divergentFocusedCadence.stdout.includes('cadence MUST equal top-level media.cadence'))
 
+  delete motionManifest.media.displays[1].cadence
+  writeJson(motionManifestFile, motionManifest)
+  const missingFocusedCadence = runValidator(motionPack)
+  check('focused display missing cadence when top-level cadence is present is rejected (SPEC §5.6, #239)',
+    missingFocusedCadence.status === 1
+      && missingFocusedCadence.stdout.includes('cadence MUST equal top-level media.cadence'))
+
+  motionManifest.media.displays[1].cadence = {
+    ...motionManifest.media.cadence,
+  }
   motionManifest.media.displays[1].cadence.requested_fps = 15
   motionManifest.format_version = '0.3.0'
   writeJson(motionManifestFile, motionManifest)

@@ -178,6 +178,7 @@ function buildDisplayMedia(
           : Number.isSafeInteger(d.replayClockOffsetMs)
             ? d.replayClockOffsetMs
             : undefined
+    const cadence = d.focused ? media.cadence : d.cadence
     return {
       index: d.index,
       snapshot: d.focused ? media.snapshot : d.snapshotFile,
@@ -194,7 +195,8 @@ function buildDisplayMedia(
         : {}),
       // Only where there IS a replay and it measured itself: a rate reported
       // next to no recording, or one nobody measured, says nothing true.
-      ...(replay !== null && d.cadence !== undefined ? { cadence: d.cadence } : {}),
+      // On the focused entry, cadence MUST equal top-level media.cadence (SPEC §5.6).
+      ...(replay !== null && cadence !== undefined ? { cadence } : {}),
       bounds: { ...d.bounds },
       scale: d.scale,
       focused: d.focused,
