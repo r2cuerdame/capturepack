@@ -8,7 +8,7 @@
 // that fails, hangs, or throws something that is not an Error is that action's
 // own failure and nothing else's.
 import { createServer } from 'node:http'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { deliverWebhook } from '../src/main/actions/webhook'
@@ -334,6 +334,10 @@ console.log('\nRETRY IS OFFERED ONLY WHERE IT MEANS SOMETHING')
   check(
     'a successful action offers none',
     !canRetry({ actionId: 'a', configId: 'cfg-1', outcome: 'ok', attempts: 1, durationMs: 2, retryable: false }, config()),
+  )
+  check(
+    'a timed-out action with an enabled config offers Retry',
+    canRetry({ actionId: 'a', configId: 'cfg-1', outcome: 'timed-out', attempts: 1, durationMs: 2, retryable: true }, config()),
   )
 }
 
@@ -895,6 +899,123 @@ console.log('\nWEBHOOK DELIVERY REFUSES HTTP REDIRECTS')
     await new Promise<void>((resolve) => targetServer.close(() => resolve()))
     await new Promise<void>((resolve) => redirectServer.close(() => resolve()))
     rmSync(tempPackDir, { recursive: true, force: true })
+  }
+}
+
+console.log('\nAFTER SAVE ACTION EXECUTION RESULTS & RETRY (#165)')
+{
+  const readNorm = (relative: string): string =>
+    readFileSync(path.join(process.cwd(), relative), 'utf8').split('\r\n').join('\n')
+  const ipc = readNorm('src/shared/ipc.ts')
+  const host = readNorm('src/main/actions/host.ts')
+  const onSave = readNorm('src/main/actions/onSave.ts')
+  const saveToast = readNorm('src/main/saveToast.ts')
+  const historyWindow = readNorm('src/main/historyWindow.ts')
+  const preloadToast = readNorm('src/preload/toast.ts')
+  const preloadHistory = readNorm('src/preload/history.ts')
+  const toastHtml = readNorm('src/renderer/toast/toast.html')
+  const toastTs = readNorm('src/renderer/toast/toast.ts')
+  const historyTs = readNorm('src/renderer/history/history.ts')
+  const i18n = readNorm('src/shared/i18n.ts')
+
+  // IPC channel definitions
+  check('IPC declares toastActionResults channel', ipc.includes("toastActionResults: 'toast:action-results'"))
+  check('IPC declares toastActionRetry channel', ipc.includes("toastActionRetry: 'toast:action-retry'"))
+  check('IPC declares historyActionResults channel', ipc.includes("historyActionResults: 'history:action-results'"))
+  check('IPC declares historyActionRetry channel', ipc.includes("historyActionRetry: 'history:action-retry'"))
+  check('ToastInitPayload carries actionResults and actionConfigs', ipc.includes('actionResults?: ActionResult[]') && ipc.includes('actionConfigs?: ActionConfig[]'))
+  check('HistoryPackSummary carries actionResults', ipc.includes('actionResults?: ActionResult[]'))
+  check('HistoryListResult carries actionConfigs', ipc.includes('actionConfigs?: ActionConfig[]'))
+
+  // Host persistence
+  check('host exports persistActionResults', host.includes('export function persistActionResults('))
+  check('host exports readActionResults', host.includes('export function readActionResults('))
+  check('action results path targets plugins/action-results.json', host.includes("path.join(packDir, 'plugins', 'action-results.json')"))
+  check('persistActionResults writes atomically via sibling temporary file', host.includes('const temporary = `${target}.tmp`') && host.includes('renameSync(temporary, target)'))
+  check('runActionsForPack persists results to pack plugins folder', host.includes('persistActionResults(request.packDir, run.results)'))
+  check('retryAction refuses disabled configuration', host.includes('if (!config.enabled) return null'))
+  check('retryAction forgets idempotency key from ledger before re-running', host.includes('const key = idempotencyKey(request.packId, manifest.id, configId)') && host.includes('ledger.packs[request.packId] = remaining'))
+  check('retryAction delegates to runActionsForPack which persists updated result', host.includes('const results = await runActionsForPack({ ...request, configs: [config] })'))
+
+  // onSave coordination
+  check('onSave runs actions and pushes results to active save toast', onSave.includes('updateToastActionResults(packDir, results)'))
+  check('onSave exports readActionResults', onSave.includes("export { readActionResults } from './host'"))
+
+  // Save toast wiring
+  check('saveToast reads actionResults and passes actionConfigs', saveToast.includes('readActionResults(options.folderPath)') && saveToast.includes('actionConfigs: settings.actionConfigs'))
+  check('saveToast handles IPC toastActionRetry', saveToast.includes('IPC.toastActionRetry') && saveToast.includes('retryAction('))
+  check('saveToast exposes updateToastActionResults helper', saveToast.includes('export function updateToastActionResults('))
+
+  // History window wiring
+  check('historyWindow includes actionResults in safeSummarize', historyWindow.includes("entry.kind === 'dir' ? readActionResults(entry.path) : readZipActionResults(pack)"))
+  check('historyWindow includes actionConfigs in historyList', historyWindow.includes('actionConfigs: live.actionConfigs'))
+  check('historyWindow handles IPC historyActionRetry', historyWindow.includes('IPC.historyActionRetry') && historyWindow.includes('retryAction('))
+  check('historyWindow handles IPC historyActionResults', historyWindow.includes('IPC.historyActionResults') && historyWindow.includes('readActionResults('))
+
+  // Preload bridges
+  check('preload toast exposes onActionResults and actionRetry', preloadToast.includes('onActionResults(') && preloadToast.includes('actionRetry('))
+  check('preload history exposes actionRetry and actionResults', preloadHistory.includes('actionRetry(') && preloadHistory.includes('actionResults('))
+
+  // Renderer UI
+  check('toast.html includes actionStatus container', toastHtml.includes('id="actionStatus"'))
+  check('toast.ts renders action results and wires retry', toastTs.includes('renderActionResults()') && toastTs.includes('toastBridge.actionRetry('))
+  check('history.ts builds action status rows and wires retry', historyTs.includes('buildActionStatus(') && historyTs.includes('actionRetry('))
+
+  // i18n keys across all 9 locales
+  const actionI18nKeys = [
+    'actions.retry',
+    'actions.retrying',
+    'actions.statusOk',
+    'actions.statusFailed',
+    'actions.statusTimedOut',
+    'actions.statusBlocked',
+    'actions.statusSkipped',
+    'actions.heading',
+  ]
+  for (const key of actionI18nKeys) {
+    const count = (i18n.match(new RegExp(`'${key}':`, 'gu')) ?? []).length
+    check(`i18n key '${key}' exists in all 9 locales`, count === 9, `found ${String(count)}`)
+  }
+
+  // Functional filesystem test of action results round-trip
+  const testPackDir = mkdtempSync(path.join(tmpdir(), 'capturepack-action-results-test-'))
+  try {
+    const pluginsDir = path.join(testPackDir, 'plugins')
+    mkdirSync(pluginsDir, { recursive: true })
+    const resultsFile = path.join(pluginsDir, 'action-results.json')
+    const sampleResults = [
+      {
+        actionId: 'builtin:webhook',
+        configId: 'cfg-test-1',
+        outcome: 'failed',
+        attempts: 2,
+        durationMs: 45,
+        message: 'connection refused',
+        retryable: true,
+      },
+      {
+        actionId: 'builtin:webhook',
+        configId: 'cfg-test-2',
+        outcome: 'ok',
+        attempts: 1,
+        durationMs: 12,
+        retryable: false,
+      },
+    ]
+    const tempFile = `${resultsFile}.tmp`
+    writeFileSync(tempFile, JSON.stringify(sampleResults, null, 2), 'utf8')
+    renameSync(tempFile, resultsFile)
+
+    const raw = readFileSync(resultsFile, 'utf8')
+    const parsed = JSON.parse(raw) as typeof sampleResults
+    check('durable action results file parses successfully', Array.isArray(parsed) && parsed.length === 2)
+    check(
+      'failed action in results file retains message and retryable flag',
+      parsed[0]?.outcome === 'failed' && parsed[0]?.retryable === true && parsed[0]?.message === 'connection refused',
+    )
+    check('ok action in results file retains ok outcome', parsed[1]?.outcome === 'ok' && parsed[1]?.retryable === false)
+  } finally {
+    rmSync(testPackDir, { recursive: true, force: true })
   }
 }
 

@@ -2,6 +2,7 @@
 // Every channel is listed here; no module may invent channels outside this file.
 
 import type { Annotation, EditorWindowMode, Settings, UiaTreeStatus } from './types'
+import type { ActionConfig, ActionResult } from './actions'
 import type { ContextFrame } from './context/protocol'
 import type { AuthoredMotionSpace } from './track'
 import type { Language } from './i18n'
@@ -239,6 +240,9 @@ export const IPC = {
   toastCopyPath: 'toast:copy-path',
   // toast -> main: copy the analyze-this-pack prompt to the clipboard
   toastCopyPrompt: 'toast:copy-prompt',
+  // toast -> main (invoke): query or retry an action for the toast's pack (#165)
+  toastActionResults: 'toast:action-results',
+  toastActionRetry: 'toast:action-retry',
   // toast -> main: close the toast window (× button / auto-close)
   toastClose: 'toast:close',
 
@@ -294,6 +298,10 @@ export const IPC = {
   historyRename: 'history:rename',
   // history window -> main (invoke): move the pack folder + managed copies to the trash
   historyDelete: 'history:delete',
+  // history window -> main (invoke): query action results for one pack (#165)
+  historyActionResults: 'history:action-results',
+  // history window -> main (invoke): retry an action for a pack (#165)
+  historyActionRetry: 'history:action-retry',
   // main -> history window: the pack index changed on disk — re-list
   historyChanged: 'history:changed',
   // main -> history window: an annotated-replay render for a pack started or
@@ -1338,10 +1346,19 @@ export interface ToastInitPayload {
   renderState: ToastRenderState
   // Resolved UI language (shared/i18n Language) for the toast strings.
   uiLanguage: string
+  // Per-action execution outcomes persisted with the pack (#165).
+  actionResults?: ActionResult[]
+  // Active action configurations to evaluate retry eligibility (#165).
+  actionConfigs?: ActionConfig[]
 }
 
 export interface ToastRenderStatusPayload {
   state: ToastRenderState
+}
+
+export interface ToastActionResultsPayload {
+  results: ActionResult[]
+  actionConfigs?: ActionConfig[]
 }
 
 export interface HistoryCreateZipResult {
@@ -1738,6 +1755,8 @@ export interface HistoryPackSummary {
   shareTwin: boolean
   // Unreadable/malformed pack: the card renders degraded with this message
   warning: string | null
+  // Per-action execution outcomes persisted with the pack (#165).
+  actionResults?: ActionResult[]
 }
 
 export interface HistorySharePlan {
@@ -1798,6 +1817,14 @@ export interface HistoryListResult {
   // Current capture accelerator, for the "press {hotkey} to capture" empty
   // state. Travels with the list for the same reason uiLanguage does.
   captureHotkey: string
+  // Active action configurations to evaluate retry eligibility (#165).
+  actionConfigs?: ActionConfig[]
+}
+
+export interface ActionRetryResult {
+  ok: boolean
+  result?: ActionResult | null
+  error?: string
 }
 
 export interface HistoryActionResult {
