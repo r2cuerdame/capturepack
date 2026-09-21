@@ -225,8 +225,6 @@ export function inspectPack(inputPath, { strict = false } = {}) {
 
   const manifestFile = requireFile('manifest.json')
   const annotationsFile = requireFile('annotations.json')
-  requireFile('README.md')
-  requireFile('report.md')
   const manifest = readJson(manifestFile, 'manifest.json')
   const stillImage = isRecord(manifest) && manifest.capture_kind === 'image'
   const timelinePath = resolve(packPath, 'timeline.json')
@@ -246,17 +244,19 @@ export function inspectPack(inputPath, { strict = false } = {}) {
   }
 
   const skillsDirectory = resolve(packPath, 'skills')
-  if (!existsSync(skillsDirectory) || !statSync(skillsDirectory).isDirectory()) {
-    add('error', 'structure', 'skills_directory_missing', 'Required skills/ directory is missing')
-  } else if (!readdirSync(skillsDirectory).some((entry) => entry.toLocaleLowerCase().endsWith('.md'))) {
-    add('error', 'structure', 'skills_documents_missing', 'skills/ contains no Markdown documents')
-  } else if (stillImage && existsSync(resolve(skillsDirectory, 'timeline.md'))) {
-    add(
-      'error',
-      'structure',
-      'image_timeline_skill_present',
-      'Explicit still-image packs must not include skills/timeline.md',
-    )
+  if (existsSync(skillsDirectory)) {
+    if (!statSync(skillsDirectory).isDirectory()) {
+      add('error', 'structure', 'skills_directory_missing', 'Required skills/ directory is missing')
+    } else if (!readdirSync(skillsDirectory).some((entry) => entry.toLocaleLowerCase().endsWith('.md'))) {
+      add('error', 'structure', 'skills_documents_missing', 'skills/ contains no Markdown documents')
+    } else if (stillImage && existsSync(resolve(skillsDirectory, 'timeline.md'))) {
+      add(
+        'error',
+        'structure',
+        'image_timeline_skill_present',
+        'Explicit still-image packs must not include skills/timeline.md',
+      )
+    }
   }
 
   const annotationDocument = readJson(annotationsFile, 'annotations.json')
