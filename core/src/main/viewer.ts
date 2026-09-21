@@ -306,11 +306,11 @@ function targetSummary(target: Annotation['target']): string {
 
 function annotationSection(
   manifest: Manifest,
-  annotationsFile: AnnotationsFile,
+  annotationsFile: AnnotationsFile | undefined,
   lang: Language,
 ): string {
   const t = makeT(lang)
-  const annotations = Array.isArray(annotationsFile.annotations)
+  const annotations = Array.isArray(annotationsFile?.annotations)
     ? annotationsFile.annotations
     : []
   if (annotations.length === 0) {
@@ -326,7 +326,7 @@ function annotationSection(
 <h2 id="annotations-heading">${escapeHtml(t('pack.annotations'))}</h2>
 <ol class="annotations">
 ${annotations
-  .map((annotation, index) => {
+  .map((annotation) => {
     const marker = numbers.get(annotation.annotation_id)
     const display = annotationDisplayIndex(annotation, focused, declared)
     const bounds = annotation.bounds
@@ -335,9 +335,13 @@ ${annotations
     if (annotation.blur) flags.push('blur')
     if (annotation.numbered) flags.push('numbered')
     const flagsText = flags.length > 0 ? flags.join(', ') : '—'
+    const markerBadge =
+      marker !== undefined
+        ? `<span class="annotation-number">${escapeHtml(marker)}</span>`
+        : ''
     return `<li>
 <article>
-<header><span class="annotation-number">${escapeHtml(marker ?? index + 1)}</span><strong>${escapeHtml(text)}</strong></header>
+<header>${markerBadge}<strong>${escapeHtml(text)}</strong></header>
 <dl>
 <div><dt>Time</dt><dd>${escapeHtml(lifetimeLabel(annotation, t))}</dd></div>
 <div><dt>${escapeHtml(t('pack.display'))}</dt><dd>${escapeHtml(display)}${display === focused ? ` (${escapeHtml(t('pack.displayFocused'))})` : ''}</dd></div>
@@ -378,7 +382,7 @@ function pluginSection(manifest: Manifest, lang: Language): string {
   const t = makeT(lang)
   const plugins = Array.isArray(manifest.plugins) ? manifest.plugins : []
   return `<section aria-labelledby="plugins-heading">
-<h2 id="plugins-heading">${escapeHtml(t('pack.skillDom'))}</h2>
+<h2 id="plugins-heading">${escapeHtml(t('pack.plugins'))}</h2>
 ${
   plugins.length === 0
     ? '<p class="empty">No plugin data is declared.</p>'
@@ -394,12 +398,12 @@ ${
 
 function inventory(
   manifest: Manifest,
+  annotationsFile: AnnotationsFile | undefined,
   timeline: TimelineFile | undefined,
   captureKind: 'image' | 'video',
 ): string[] {
   const files = new Set<string>([
     'manifest.json',
-    'annotations.json',
     'viewer.html',
     'report.md',
     'README.md',
@@ -408,6 +412,9 @@ function inventory(
   const add = (value: unknown): void => {
     const safe = safeViewerPath(value)
     if (safe !== null) files.add(safe)
+  }
+  if (annotationsFile !== undefined && (annotationsFile.annotations?.length ?? 0) > 0) {
+    files.add('annotations.json')
   }
   add(manifest.media.snapshot)
   add(manifest.media.replay)
@@ -426,6 +433,7 @@ function inventory(
 
 function fileSection(
   manifest: Manifest,
+  annotationsFile: AnnotationsFile | undefined,
   timeline: TimelineFile | undefined,
   captureKind: 'image' | 'video',
   lang: Language,
@@ -433,7 +441,7 @@ function fileSection(
   const t = makeT(lang)
   return `<section aria-labelledby="files-heading">
 <h2 id="files-heading">${escapeHtml(t('pack.files'))}</h2>
-<ul class="files">${inventory(manifest, timeline, captureKind)
+<ul class="files">${inventory(manifest, annotationsFile, timeline, captureKind)
   .map((file) => `<li><code>${escapeHtml(file)}</code></li>`)
   .join('')}</ul>
 </section>`
@@ -445,7 +453,7 @@ function fileSection(
  */
 export function buildViewerHtml(
   manifestInput: Manifest,
-  annotationsFile: AnnotationsFile,
+  annotationsFile?: AnnotationsFile,
   timeline?: TimelineFile,
   lang: Language = 'en',
 ): string {
@@ -454,7 +462,7 @@ export function buildViewerHtml(
   const captureKind = captureKindOf(manifest)
   const title = manifest.title ?? t('pack.untitled')
   const focused = focusedDisplayIndex(manifest.media.displays)
-  const blurCount = annotationsFile.annotations.filter((annotation) => annotation.blur).length
+  const blurCount = (annotationsFile?.annotations ?? []).filter((annotation) => annotation.blur).length
   const duration =
     captureKind === 'video' && manifest.media.replay_duration_ms !== undefined
       ? `${(manifest.media.replay_duration_ms / 1000).toFixed(1)}s`
@@ -537,7 +545,7 @@ ${keyframeSection(manifest, lang)}
 ${annotationSection(manifest, annotationsFile, lang)}
 ${displaySection(manifest, focused, lang)}
 ${pluginSection(manifest, lang)}
-${fileSection(manifest, timeline, captureKind, lang)}
+${fileSection(manifest, annotationsFile, timeline, captureKind, lang)}
 </main>
 </body>
 </html>

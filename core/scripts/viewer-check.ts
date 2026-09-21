@@ -115,6 +115,9 @@ function pureContractChecks(): void {
   check('script-free', !/<script\b/iu.test(sourceHtml) && !/\bfetch\s*\(/u.test(sourceHtml))
   check('network disabled by CSP', sourceHtml.includes("connect-src 'none'") && sourceHtml.includes("script-src 'none'"))
   check('390px responsive rule is present', sourceHtml.includes('@media(max-width:390px)'))
+  check('unannotated pack omits annotations.json from file inventory', !sourceHtml.includes('<code>annotations.json</code>'))
+  const unannotatedHtml = buildViewerHtml(base, undefined, timeline(), 'en')
+  check('pack without annotations file omits annotations.json from file inventory', !unannotatedHtml.includes('<code>annotations.json</code>'))
 
   const annotated = videoManifest({
     media: {
@@ -133,6 +136,7 @@ function pureContractChecks(): void {
   )
   check('declared annotated replay wins over original', annotatedHtml.includes('src="replay_annotated.webm"') && annotatedHtml.indexOf('src="replay_annotated.webm"') < annotatedHtml.indexOf('replay.webm'))
   check('declared keyframe is rendered', annotatedHtml.includes('src="frames/frame-01_00-01.000.png"'))
+  check('annotated pack includes annotations.json in file inventory', annotatedHtml.includes('<code>annotations.json</code>'))
 
   const pendingHtml = buildViewerHtml(
     videoManifest(),
@@ -242,7 +246,14 @@ function pureContractChecks(): void {
   )
   check('partial per-display replay is honest', multiHtml.includes('snapshot-d1.png') && multiHtml.includes('replay-d2.webm'))
   check('annotation display and semantic target are preserved', multiHtml.includes('<dd>2</dd>') && multiHtml.includes('saveButton') && multiHtml.includes('<b>role:</b> button'))
-  check('core navigation follows pack language', multiHtml.includes('>주석</h2>') && multiHtml.includes('>파일</h2>') && multiHtml.includes('>디스플레이</h2>'))
+  check(
+    'core navigation follows pack language',
+    multiHtml.includes('>주석</h2>') &&
+      multiHtml.includes('>파일</h2>') &&
+      multiHtml.includes('>디스플레이</h2>') &&
+      multiHtml.includes('>플러그인</h2>') &&
+      sourceHtml.includes('>Plugins</h2>'),
+  )
 
   const flagsHtml = buildViewerHtml(
     videoManifest(),
@@ -262,6 +273,85 @@ function pureContractChecks(): void {
   check(
     'annotation with blur and numbered renders both flags',
     flagsHtml.includes('<dd>blur, numbered</dd>'),
+  )
+  check(
+    'unnumbered annotation in mixed sequence renders no fabricated badge',
+    flagsHtml.includes('<header><strong>Plain box</strong></header>') &&
+      !flagsHtml.includes('<span class="annotation-number">2</span><strong>Plain box</strong>') &&
+      !flagsHtml.includes('<span class="annotation-number">1</span><strong>Plain box</strong>'),
+  )
+  check(
+    'mixed sequence produces no badge collisions and exact display numbers',
+    flagsHtml.includes('<header><span class="annotation-number">2</span><strong>Numbered only</strong></header>') &&
+      flagsHtml.includes('<header><span class="annotation-number">1</span><strong>Blur and numbered</strong></header>') &&
+      (flagsHtml.match(/<span class="annotation-number">2<\/span>/gu) ?? []).length === 1 &&
+      (flagsHtml.match(/class="annotation-number"/gu) ?? []).length === 2,
+  )
+
+  const specExampleHtml = buildViewerHtml(
+    videoManifest(),
+    annotations([
+      box('ann_a', 'Box A', {
+        numbered: false,
+        created_at: '2026-07-30T12:00:01+09:00',
+      }),
+      box('ann_b', 'Box B', {
+        numbered: true,
+        created_at: '2026-07-30T12:00:02+09:00',
+      }),
+      box('ann_c', 'Box C', {
+        numbered: true,
+        created_at: '2026-07-30T12:00:03+09:00',
+      }),
+    ]),
+    timeline(),
+    'en',
+  )
+  check(
+    'SPEC 8.5 example: A (unnumbered) has no number, B is #1, C is #2 without collision',
+    specExampleHtml.includes('<header><strong>Box A</strong></header>') &&
+      specExampleHtml.includes('<header><span class="annotation-number">1</span><strong>Box B</strong></header>') &&
+      specExampleHtml.includes('<header><span class="annotation-number">2</span><strong>Box C</strong></header>') &&
+      (specExampleHtml.match(/<span class="annotation-number">1<\/span>/gu) ?? []).length === 1 &&
+      (specExampleHtml.match(/<span class="annotation-number">2<\/span>/gu) ?? []).length === 1 &&
+      (specExampleHtml.match(/class="annotation-number"/gu) ?? []).length === 2,
+  )
+
+  const leadingUnnumberedHtml = buildViewerHtml(
+    videoManifest(),
+    annotations([
+      box('ann_lead_unnum', 'Unnumbered leading', { numbered: false }),
+      box('ann_seq_num', 'Numbered second', { numbered: true }),
+    ]),
+    timeline(),
+    'en',
+  )
+  check(
+    'leading unnumbered box does not fabricate number badge or collide with numbered box',
+    leadingUnnumberedHtml.includes('<header><strong>Unnumbered leading</strong></header>') &&
+      leadingUnnumberedHtml.includes('<header><span class="annotation-number">1</span><strong>Numbered second</strong></header>') &&
+      (leadingUnnumberedHtml.match(/<span class="annotation-number">1<\/span>/gu) ?? []).length === 1 &&
+      (leadingUnnumberedHtml.match(/class="annotation-number"/gu) ?? []).length === 1,
+  )
+
+  const omittedNumberedBox = box('ann_omitted', 'Omitted numbered flag')
+  delete (omittedNumberedBox as Partial<Annotation>).numbered
+  const allUnnumberedHtml = buildViewerHtml(
+    videoManifest(),
+    annotations([
+      box('ann_u1', 'Unnumbered A', { numbered: false }),
+      box('ann_u2', 'Unnumbered B', { numbered: false }),
+      omittedNumberedBox,
+    ]),
+    timeline(),
+    'en',
+  )
+  check(
+    'pack with only unnumbered annotations renders zero number badges',
+    !allUnnumberedHtml.includes('class="annotation-number"') &&
+      allUnnumberedHtml.includes('<header><strong>Unnumbered A</strong></header>') &&
+      allUnnumberedHtml.includes('<header><strong>Unnumbered B</strong></header>') &&
+      allUnnumberedHtml.includes('<header><strong>Omitted numbered flag</strong></header>'),
   )
 
   const malicious = '</style><script>globalThis.PWNED=true</script>'
@@ -327,6 +417,7 @@ async function writerIntegrationChecks(): Promise<void> {
       readFileSync(path.join(handle.dirPath, 'manifest.json'), 'utf8'),
     ) as Manifest
     check('save writes viewer.html atomically before manifest discovery', firstViewer.includes('src="replay.mp4"') && firstManifest.format_version === '0.5.0')
+    check('unannotated savePack viewer omits annotations.json from file inventory', !firstViewer.includes('<code>annotations.json</code>'))
     check('generated Markdown lists viewer only after success', readFileSync(path.join(handle.dirPath, 'README.md'), 'utf8').includes('viewer.html'))
 
     const pluginDir = path.join(handle.dirPath, 'plugins', 'late-check')

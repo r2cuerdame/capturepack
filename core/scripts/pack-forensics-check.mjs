@@ -437,6 +437,60 @@ try {
   check('a manifest/document plugin contradiction gates strict pack QA',
     stalePluginDocs.gate_status === 'failed')
 
+  const omittedViewsPack = makePack('omitted-views')
+  rmSync(join(omittedViewsPack, 'README.md'), { force: true })
+  rmSync(join(omittedViewsPack, 'report.md'), { force: true })
+  rmSync(join(omittedViewsPack, 'skills'), { recursive: true, force: true })
+  const omittedViews = inspectPack(omittedViewsPack, { strict: true })
+  check('a pack omitting optional README.md, report.md, and skills/ passes strict QA',
+    omittedViews.gate_status === 'passed')
+  check('omitting README.md does not emit required_file_missing',
+    !omittedViews.findings.some((f) => f.code === 'required_file_missing' && f.message.includes('README.md')))
+  check('omitting report.md does not emit required_file_missing',
+    !omittedViews.findings.some((f) => f.code === 'required_file_missing' && f.message.includes('report.md')))
+  check('omitting skills/ does not emit skills_directory_missing',
+    !omittedViews.findings.some((f) => f.code === 'skills_directory_missing'))
+  check('omitted audience views pack has no structural errors',
+    !omittedViews.findings.some((f) => f.category === 'structure' && f.severity === 'error'))
+
+  const minimalSpecPack = makePack('minimal-spec-14')
+  const minimalManifest = JSON.parse(readFileSync(join(minimalSpecPack, 'manifest.json'), 'utf8'))
+  minimalManifest.capture_kind = 'image'
+  writeJson(join(minimalSpecPack, 'manifest.json'), minimalManifest)
+  rmSync(join(minimalSpecPack, 'README.md'), { force: true })
+  rmSync(join(minimalSpecPack, 'report.md'), { force: true })
+  rmSync(join(minimalSpecPack, 'skills'), { recursive: true, force: true })
+  rmSync(join(minimalSpecPack, 'timeline.json'), { force: true })
+  const minimalResult = inspectPack(minimalSpecPack, { strict: true })
+  check('minimal pack omitting optional views passes strict inspection without structural errors',
+    minimalResult.gate_status === 'passed'
+    && !minimalResult.findings.some((f) => f.category === 'structure' && f.severity === 'error'))
+
+  const emptySkillsPack = makePack('empty-skills')
+  rmSync(join(emptySkillsPack, 'skills', 'overview.md'), { force: true })
+  const emptySkills = inspectPack(emptySkillsPack, { strict: true })
+  check('present skills/ directory without Markdown documents is rejected',
+    emptySkills.findings.some((f) => f.code === 'skills_documents_missing'))
+  check('empty skills/ directory fails strict gate', emptySkills.gate_status === 'failed')
+
+  const stillImageTimelineSkillPack = makePack('still-image-timeline-skill')
+  const stillManifest = JSON.parse(readFileSync(join(stillImageTimelineSkillPack, 'manifest.json'), 'utf8'))
+  stillManifest.capture_kind = 'image'
+  writeJson(join(stillImageTimelineSkillPack, 'manifest.json'), stillManifest)
+  rmSync(join(stillImageTimelineSkillPack, 'timeline.json'), { force: true })
+  writeFileSync(join(stillImageTimelineSkillPack, 'skills', 'timeline.md'), '# timeline\n', 'utf8')
+  const stillTimelineSkill = inspectPack(stillImageTimelineSkillPack, { strict: true })
+  check('explicit still-image pack must not include skills/timeline.md',
+    stillTimelineSkill.findings.some((f) => f.code === 'image_timeline_skill_present'))
+  check('still-image pack with skills/timeline.md fails strict gate', stillTimelineSkill.gate_status === 'failed')
+
+  const notDirSkillsPack = makePack('skills-not-a-dir')
+  rmSync(join(notDirSkillsPack, 'skills'), { recursive: true, force: true })
+  writeFileSync(join(notDirSkillsPack, 'skills'), 'not a directory', 'utf8')
+  const notDirSkills = inspectPack(notDirSkillsPack, { strict: true })
+  check('skills existing as a non-directory is rejected with skills_directory_missing',
+    notDirSkills.findings.some((f) => f.code === 'skills_directory_missing'))
+
   const missing = inspectPack(join(temporaryRoot, 'does-not-exist'))
   check('an explicitly supplied missing pack is a configuration failure', missing.configuration_error === true)
   check('a missing configured pack always fails the gate', missing.gate_status === 'failed')

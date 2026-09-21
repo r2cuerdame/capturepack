@@ -681,6 +681,7 @@ const EN = {
   'pack.skillTimeline': 'Timeline',
   'pack.skillDom': 'DOM / semantic objects',
   'pack.skillProject': 'What is a CapturePack?',
+  'pack.plugins': 'Plugins',
 } as const
 
 export type I18nKey = keyof typeof EN
@@ -1263,6 +1264,7 @@ const KO: Record<I18nKey, string> = {
   'pack.skillTimeline': '타임라인',
   'pack.skillDom': 'DOM / 시맨틱 객체',
   'pack.skillProject': 'CapturePack이란?',
+  'pack.plugins': '플러그인',
 }
 
 const JA: Record<I18nKey, string> = {
@@ -1847,6 +1849,7 @@ const JA: Record<I18nKey, string> = {
   'pack.skillTimeline': 'タイムライン',
   'pack.skillDom': 'DOM / セマンティックオブジェクト',
   'pack.skillProject': 'CapturePack とは？',
+  'pack.plugins': 'プラグイン',
 }
 
 const ZH: Record<I18nKey, string> = {
@@ -2422,6 +2425,7 @@ const ZH: Record<I18nKey, string> = {
   'pack.skillTimeline': '时间线',
   'pack.skillDom': 'DOM / 语义对象',
   'pack.skillProject': '什么是 CapturePack？',
+  'pack.plugins': '插件',
 }
 
 const ES: Record<I18nKey, string> = {
@@ -3008,6 +3012,7 @@ const ES: Record<I18nKey, string> = {
   'pack.skillTimeline': 'Cronología',
   'pack.skillDom': 'DOM / objetos semánticos',
   'pack.skillProject': '¿Qué es un CapturePack?',
+  'pack.plugins': 'Plugins',
 }
 
 const FR: Record<I18nKey, string> = {
@@ -3596,6 +3601,7 @@ const FR: Record<I18nKey, string> = {
   'pack.skillTimeline': 'Chronologie',
   'pack.skillDom': 'DOM / objets sémantiques',
   'pack.skillProject': "Qu'est-ce qu'un CapturePack ?",
+  'pack.plugins': 'Plugins',
 }
 
 const DE: Record<I18nKey, string> = {
@@ -4187,6 +4193,7 @@ const DE: Record<I18nKey, string> = {
   'pack.skillTimeline': 'Zeitleiste',
   'pack.skillDom': 'DOM / semantische Objekte',
   'pack.skillProject': 'Was ist ein CapturePack?',
+  'pack.plugins': 'Plugins',
 }
 
 const PT: Record<I18nKey, string> = {
@@ -4774,6 +4781,7 @@ const PT: Record<I18nKey, string> = {
   'pack.skillTimeline': 'Linha do tempo',
   'pack.skillDom': 'DOM / objetos semânticos',
   'pack.skillProject': 'O que é um CapturePack?',
+  'pack.plugins': 'Plugins',
 }
 
 const RU: Record<I18nKey, string> = {
@@ -5358,6 +5366,7 @@ const RU: Record<I18nKey, string> = {
   'pack.skillTimeline': 'Хронология',
   'pack.skillDom': 'DOM / семантические объекты',
   'pack.skillProject': 'Что такое CapturePack?',
+  'pack.plugins': 'Плагины',
 }
 
 // ---------------------------------------------------------------------------
