@@ -306,11 +306,11 @@ function targetSummary(target: Annotation['target']): string {
 
 function annotationSection(
   manifest: Manifest,
-  annotationsFile: AnnotationsFile,
+  annotationsFile: AnnotationsFile | undefined,
   lang: Language,
 ): string {
   const t = makeT(lang)
-  const annotations = Array.isArray(annotationsFile.annotations)
+  const annotations = Array.isArray(annotationsFile?.annotations)
     ? annotationsFile.annotations
     : []
   if (annotations.length === 0) {
@@ -394,12 +394,12 @@ ${
 
 function inventory(
   manifest: Manifest,
+  annotationsFile: AnnotationsFile | undefined,
   timeline: TimelineFile | undefined,
   captureKind: 'image' | 'video',
 ): string[] {
   const files = new Set<string>([
     'manifest.json',
-    'annotations.json',
     'viewer.html',
     'report.md',
     'README.md',
@@ -408,6 +408,9 @@ function inventory(
   const add = (value: unknown): void => {
     const safe = safeViewerPath(value)
     if (safe !== null) files.add(safe)
+  }
+  if (annotationsFile !== undefined && (annotationsFile.annotations?.length ?? 0) > 0) {
+    files.add('annotations.json')
   }
   add(manifest.media.snapshot)
   add(manifest.media.replay)
@@ -426,6 +429,7 @@ function inventory(
 
 function fileSection(
   manifest: Manifest,
+  annotationsFile: AnnotationsFile | undefined,
   timeline: TimelineFile | undefined,
   captureKind: 'image' | 'video',
   lang: Language,
@@ -433,7 +437,7 @@ function fileSection(
   const t = makeT(lang)
   return `<section aria-labelledby="files-heading">
 <h2 id="files-heading">${escapeHtml(t('pack.files'))}</h2>
-<ul class="files">${inventory(manifest, timeline, captureKind)
+<ul class="files">${inventory(manifest, annotationsFile, timeline, captureKind)
   .map((file) => `<li><code>${escapeHtml(file)}</code></li>`)
   .join('')}</ul>
 </section>`
@@ -445,7 +449,7 @@ function fileSection(
  */
 export function buildViewerHtml(
   manifestInput: Manifest,
-  annotationsFile: AnnotationsFile,
+  annotationsFile?: AnnotationsFile,
   timeline?: TimelineFile,
   lang: Language = 'en',
 ): string {
@@ -454,7 +458,7 @@ export function buildViewerHtml(
   const captureKind = captureKindOf(manifest)
   const title = manifest.title ?? t('pack.untitled')
   const focused = focusedDisplayIndex(manifest.media.displays)
-  const blurCount = annotationsFile.annotations.filter((annotation) => annotation.blur).length
+  const blurCount = (annotationsFile?.annotations ?? []).filter((annotation) => annotation.blur).length
   const duration =
     captureKind === 'video' && manifest.media.replay_duration_ms !== undefined
       ? `${(manifest.media.replay_duration_ms / 1000).toFixed(1)}s`
@@ -537,7 +541,7 @@ ${keyframeSection(manifest, lang)}
 ${annotationSection(manifest, annotationsFile, lang)}
 ${displaySection(manifest, focused, lang)}
 ${pluginSection(manifest, lang)}
-${fileSection(manifest, timeline, captureKind, lang)}
+${fileSection(manifest, annotationsFile, timeline, captureKind, lang)}
 </main>
 </body>
 </html>

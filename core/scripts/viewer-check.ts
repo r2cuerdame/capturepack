@@ -115,6 +115,9 @@ function pureContractChecks(): void {
   check('script-free', !/<script\b/iu.test(sourceHtml) && !/\bfetch\s*\(/u.test(sourceHtml))
   check('network disabled by CSP', sourceHtml.includes("connect-src 'none'") && sourceHtml.includes("script-src 'none'"))
   check('390px responsive rule is present', sourceHtml.includes('@media(max-width:390px)'))
+  check('unannotated pack omits annotations.json from file inventory', !sourceHtml.includes('<code>annotations.json</code>'))
+  const unannotatedHtml = buildViewerHtml(base, undefined, timeline(), 'en')
+  check('pack without annotations file omits annotations.json from file inventory', !unannotatedHtml.includes('<code>annotations.json</code>'))
 
   const annotated = videoManifest({
     media: {
@@ -133,6 +136,7 @@ function pureContractChecks(): void {
   )
   check('declared annotated replay wins over original', annotatedHtml.includes('src="replay_annotated.webm"') && annotatedHtml.indexOf('src="replay_annotated.webm"') < annotatedHtml.indexOf('replay.webm'))
   check('declared keyframe is rendered', annotatedHtml.includes('src="frames/frame-01_00-01.000.png"'))
+  check('annotated pack includes annotations.json in file inventory', annotatedHtml.includes('<code>annotations.json</code>'))
 
   const pendingHtml = buildViewerHtml(
     videoManifest(),
@@ -334,6 +338,7 @@ async function writerIntegrationChecks(): Promise<void> {
       readFileSync(path.join(handle.dirPath, 'manifest.json'), 'utf8'),
     ) as Manifest
     check('save writes viewer.html atomically before manifest discovery', firstViewer.includes('src="replay.mp4"') && firstManifest.format_version === '0.5.0')
+    check('unannotated savePack viewer omits annotations.json from file inventory', !firstViewer.includes('<code>annotations.json</code>'))
     check('generated Markdown lists viewer only after success', readFileSync(path.join(handle.dirPath, 'README.md'), 'utf8').includes('viewer.html'))
 
     const pluginDir = path.join(handle.dirPath, 'plugins', 'late-check')
