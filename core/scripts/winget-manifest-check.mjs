@@ -11,9 +11,10 @@
 //
 //   node scripts/winget-manifest-check.mjs
 //
-// If the `winget` CLI is on PATH the generated manifests are also run through
-// `winget validate`, the official schema validator; elsewhere that step is
-// reported as skipped rather than passed.
+// If a `winget` CLI that knows the manifest schema version is on PATH, the
+// generated manifests are also run through `winget validate`, the official
+// schema validator; elsewhere (no CLI, or a CLI older than the schema, as on
+// hosted Windows runners) that step is reported as skipped rather than passed.
 
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
@@ -28,6 +29,7 @@ import {
   parseSha256Sums,
   productCodeForAppId,
   uuidV5,
+  validatorKnowsManifestVersion,
   writeWingetManifests,
 } from './winget-manifest.mjs'
 
@@ -158,14 +160,28 @@ rejects(
 check(parseSha256Sums(`${fixtureSha}  *${installerName}\n`, installerName) === fixtureSha.toUpperCase(), 'sha256sum binary-mode marker is tolerated')
 
 console.log('OFFICIAL VALIDATOR')
+// winget embeds the schemas it knows and compares the header URL against the
+// newest one it has; a CLI older than the manifest schema reports "succeeded
+// with warnings" (schema header URL pattern mismatch) and exits non-zero.
+// 1.11 still ships schema 1.10, so the gate is CLI >= schema, not CLI == schema.
+check(validatorKnowsManifestVersion('v1.12.350', '1.12.0') === true, 'winget 1.12 knows schema 1.12.0')
+check(validatorKnowsManifestVersion('v1.29.380\n', '1.12.0') === true, 'winget 1.29 knows schema 1.12.0')
+check(validatorKnowsManifestVersion('v1.11.510', '1.12.0') === false, 'winget 1.11 (schemas up to 1.10.0) does not know schema 1.12.0')
+check(validatorKnowsManifestVersion('v1.10.390', '1.12.0') === false, 'winget 1.10 does not know schema 1.12.0')
+check(validatorKnowsManifestVersion('', '1.12.0') === false, 'an unparseable winget version is treated as unknown')
 const probe = mkdtempSync(path.join(tmpdir(), 'capturepack-winget-'))
 try {
   const directory = writeWingetManifests(probe, manifests)
-  const winget = spawnSync(process.platform === 'win32' ? 'winget.exe' : 'winget', ['validate', '--manifest', directory], { encoding: 'utf8' })
-  if (winget.error || winget.status === null) {
+  const wingetBinary = process.platform === 'win32' ? 'winget.exe' : 'winget'
+  const wingetVersion = spawnSync(wingetBinary, ['--version'], { encoding: 'utf8' })
+  const cliVersion = wingetVersion.error || wingetVersion.status === null ? null : wingetVersion.stdout.trim()
+  if (cliVersion === null) {
     console.log('  SKIP  winget CLI not available; run `winget validate --manifest <dir>` on Windows')
+  } else if (!validatorKnowsManifestVersion(cliVersion)) {
+    console.log(`  SKIP  winget ${cliVersion} predates manifest schema ${MANIFEST_VERSION}; validate with winget >= ${MANIFEST_VERSION.replace(/\.\d+$/u, '')}`)
   } else {
-    check(winget.status === 0 && /validation succeeded/iu.test(winget.stdout), 'winget validate accepts the generated manifests', (winget.stdout + winget.stderr).trim())
+    const winget = spawnSync(wingetBinary, ['validate', '--manifest', directory], { encoding: 'utf8' })
+    check(winget.status === 0 && /validation succeeded/iu.test(winget.stdout), `winget ${cliVersion} validate accepts the generated manifests`, (winget.stdout + winget.stderr).trim())
   }
 } finally {
   rmSync(probe, { recursive: true, force: true })

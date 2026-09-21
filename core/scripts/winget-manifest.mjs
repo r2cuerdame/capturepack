@@ -47,6 +47,21 @@ function invariant(condition, message) {
   if (!condition) throw new Error(message)
 }
 
+/**
+ * Whether a `winget --version` output (e.g. `v1.29.380`) belongs to a CLI that
+ * embeds the given manifest schema. Since 1.10 the schema line tracks the CLI
+ * line, so a CLI whose major.minor is at least the schema's knows that schema;
+ * an older CLI validates against the newest schema it has and warns that the
+ * header URL does not match it, which is not a verdict on the manifest.
+ */
+export function validatorKnowsManifestVersion(versionText, manifestVersion = MANIFEST_VERSION) {
+  const cli = /^\s*v?(\d+)\.(\d+)/u.exec(String(versionText ?? ''))
+  if (!cli) return false
+  const [schemaMajor, schemaMinor] = manifestVersion.split('.').map(Number)
+  const [cliMajor, cliMinor] = [Number(cli[1]), Number(cli[2])]
+  return cliMajor > schemaMajor || (cliMajor === schemaMajor && cliMinor >= schemaMinor)
+}
+
 /** RFC 4122 UUID v5 (SHA-1) — what electron-builder computes for the app GUID. */
 export function uuidV5(name, namespace) {
   const namespaceBytes = Buffer.from(namespace.replaceAll('-', ''), 'hex')
