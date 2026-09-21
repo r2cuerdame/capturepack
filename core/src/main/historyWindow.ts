@@ -38,7 +38,7 @@ import type { ActionResult } from '../shared/actions'
 import { readActionResults, retryAction } from './actions/host'
 import { loadSettings } from './settings'
 import { DEFAULT_CAPTURE_HOTKEY } from '../shared/types'
-import type { Annotation, Settings } from '../shared/types'
+import type { Annotation, Manifest, Settings } from '../shared/types'
 import { captureKindOf } from '../shared/captureMedia'
 import {
   isRenderInFlight,
@@ -74,6 +74,7 @@ import { openSettingsWindow } from './settingsWindow'
 import { invalidateStorageUsage, storageUsage } from './storage'
 import { copyTextToClipboard } from './clipboard'
 import { planHistoryRerender, type HistoryRerenderPlan } from './historyRerenderPlan'
+import { safeViewerPath } from './viewer'
 
 const THUMB_WIDTH = 320
 const MAX_PACK_NAME_LENGTH = 180
@@ -250,8 +251,10 @@ export function registerHistoryIpc(live: Settings): void {
     const t = uiT(live)
     if (entry === null) return { ok: false, error: t('history.errPackNotFound') }
     if (entry.kind !== 'dir') return { ok: false, error: t('history.errZipPlay') }
-    const file = path.join(entry.path, 'replay_annotated.webm')
-    if (!fs.existsSync(file)) return { ok: false, error: t('history.errNotRendered') }
+    const pack = openPack(entry.path, entry.kind, entry.id)
+    const manifest = pack.manifest()
+    const file = resolveHistoryPlayFile(entry.path, manifest)
+    if (file === null) return { ok: false, error: t('history.errNotRendered') }
     const result = await shell.openPath(file)
     return result === '' ? { ok: true } : { ok: false, error: result }
   })
@@ -712,6 +715,52 @@ function entryFor(ref: unknown): RawPackEntry | null {
   return getStore().entries().find((e) => e.path === ref) ?? null
 }
 
+// Prevents directory traversal or opening paths outside the pack directory (SPEC §5.3).
+export function safePackPath(baseDir: string, rel: unknown): string | null {
+  const safeRel = safeViewerPath(rel)
+  if (safeRel === null) return null
+  try {
+    const resolvedBase = path.resolve(baseDir)
+    const resolvedTarget = path.resolve(resolvedBase, safeRel)
+    const relFromBase = path.relative(resolvedBase, resolvedTarget)
+    if (relFromBase === '' || relFromBase.startsWith('..') || path.isAbsolute(relFromBase)) {
+      return null
+    }
+    return resolvedTarget
+  } catch {
+    return null
+  }
+}
+
+// Resolves the playable video file for a pack folder. Takes the declared annotated
+// replay from manifest.media.replay_annotated (falling back to replay_annotated.webm),
+// and falls back to manifest.media.replay when no annotated replay exists (SPEC §5.3, §7.2).
+export function resolveHistoryPlayFile(entryPath: string, manifest: Manifest | null): string | null {
+  const declaredAnnotated =
+    typeof manifest?.media?.replay_annotated === 'string' && manifest.media.replay_annotated.trim() !== ''
+      ? manifest.media.replay_annotated.trim()
+      : null
+  const declaredReplay =
+    typeof manifest?.media?.replay === 'string' && manifest.media.replay.trim() !== ''
+      ? manifest.media.replay.trim()
+      : null
+
+  const targetAnnotated = declaredAnnotated ?? 'replay_annotated.webm'
+  const annotatedPath = safePackPath(entryPath, targetAnnotated)
+  if (annotatedPath !== null && fs.existsSync(annotatedPath)) {
+    return annotatedPath
+  }
+
+  if (declaredReplay !== null) {
+    const replayPath = safePackPath(entryPath, declaredReplay)
+    if (replayPath !== null && fs.existsSync(replayPath)) {
+      return replayPath
+    }
+  }
+
+  return null
+}
+
 // Cache stamp for derived data. The directory mtime alone is not enough:
 // updatePack rewrites manifest/annotations/report/snapshot IN PLACE, which on
 // Windows does not touch the directory entry — so the key files' mtimes are
@@ -781,7 +830,7 @@ function safeSummarize(entry: RawPackEntry): HistoryPackSummary {
   }
 }
 
-function summarize(entry: RawPackEntry): HistoryPackSummary {
+export function summarize(entry: RawPackEntry): HistoryPackSummary {
   const stamp = packStamp(entry)
   const cached = summaryCache.get(entry.path)
   if (cached && cached.stamp === stamp) {
@@ -800,9 +849,13 @@ function summarize(entry: RawPackEntry): HistoryPackSummary {
   const annotations = annotationsOf(pack)
   // ?. throughout: a malformed-but-parsed manifest may lack any of these.
   const hasReplay = typeof manifest?.media?.replay === 'string'
+  const targetFilename =
+    typeof manifest?.media?.replay_annotated === 'string' && manifest.media.replay_annotated.trim() !== ''
+      ? manifest.media.replay_annotated.trim()
+      : 'replay_annotated.webm'
   const annotated: HistoryAnnotatedState = !hasReplay
     ? 'none'
-    : pack.fileSize('replay_annotated.webm') !== null
+    : safeViewerPath(targetFilename) !== null && pack.fileSize(targetFilename) !== null
       ? 'ready'
       : 'missing'
   const replayDurationMs =
