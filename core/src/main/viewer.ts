@@ -331,6 +331,10 @@ ${annotations
     const display = annotationDisplayIndex(annotation, focused, declared)
     const bounds = annotation.bounds
     const text = annotation.text.trim() === '' ? t('pack.none') : annotation.text
+    const flags: string[] = []
+    if (annotation.blur) flags.push('blur')
+    if (annotation.numbered) flags.push('numbered')
+    const flagsText = flags.length > 0 ? flags.join(', ') : '—'
     return `<li>
 <article>
 <header><span class="annotation-number">${escapeHtml(marker ?? index + 1)}</span><strong>${escapeHtml(text)}</strong></header>
@@ -339,7 +343,7 @@ ${annotations
 <div><dt>${escapeHtml(t('pack.display'))}</dt><dd>${escapeHtml(display)}${display === focused ? ` (${escapeHtml(t('pack.displayFocused'))})` : ''}</dd></div>
 <div><dt>Bounds</dt><dd><code>${escapeHtml(`${Math.round(bounds.x)}, ${Math.round(bounds.y)} · ${Math.round(bounds.width)}×${Math.round(bounds.height)}`)}</code></dd></div>
 <div><dt>Target</dt><dd class="target">${targetSummary(annotation.target)}</dd></div>
-<div><dt>Flags</dt><dd>${annotation.blur ? 'blur' : '—'}${annotation.numbered ? `${annotation.blur ? ', ' : ''}numbered` : ''}</dd></div>
+<div><dt>Flags</dt><dd>${escapeHtml(flagsText)}</dd></div>
 </dl>
 </article>
 </li>`
