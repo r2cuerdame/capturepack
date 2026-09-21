@@ -345,7 +345,7 @@ export interface Manifest {
       coordinate_space: 'virtual-desktop-dip'
     }
   }
-  plugins: Array<{ name: string; version: string; path: string }>
+  plugins?: Array<{ name: string; version: string; path: string }>
 }
 
 // Format 0.1.0 defines exactly ONE annotation type: the box (SPEC §8). A box

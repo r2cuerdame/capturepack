@@ -446,7 +446,7 @@ export const UIA_PLUGIN_NAME = 'windows-uia'
 export const UIA_PLUGIN_VERSION = '0.5.0'
 
 /** The manifest.plugins entry for the payload writeUiaPlugin() lays down. */
-export function uiaPluginDeclaration(): Manifest['plugins'][number] {
+export function uiaPluginDeclaration(): NonNullable<Manifest['plugins']>[number] {
   return { name: UIA_PLUGIN_NAME, version: UIA_PLUGIN_VERSION, path: `plugins/${UIA_PLUGIN_NAME}/` }
 }
 
@@ -599,7 +599,7 @@ export interface DomPluginPage {
   capture_ms: number
 }
 
-export function domPluginDeclaration(): Manifest['plugins'][number] {
+export function domPluginDeclaration(): NonNullable<Manifest['plugins']>[number] {
   return { name: DOM_PLUGIN_NAME, version: DOM_PLUGIN_VERSION, path: `plugins/${DOM_PLUGIN_NAME}/` }
 }
 
@@ -744,7 +744,7 @@ export async function tryWriteDomPlugin(
  */
 export async function addManifestPlugin(
   handle: PackHandle,
-  declaration: Manifest['plugins'][number],
+  declaration: NonNullable<Manifest['plugins']>[number],
   docLanguage: Language,
 ): Promise<void> {
   return withManifestMutation(handle.dirPath, async () => {
@@ -800,7 +800,7 @@ export async function addManifestPlugin(
 export const WINDOWS_CONTEXT_PLUGIN_NAME = 'windows-context'
 export const WINDOWS_CONTEXT_PLUGIN_VERSION = '0.1.0'
 
-export function windowsContextPluginDeclaration(): Manifest['plugins'][number] {
+export function windowsContextPluginDeclaration(): NonNullable<Manifest['plugins']>[number] {
   return {
     name: WINDOWS_CONTEXT_PLUGIN_NAME,
     version: WINDOWS_CONTEXT_PLUGIN_VERSION,
