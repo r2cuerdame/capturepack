@@ -139,6 +139,24 @@ async function run(): Promise<void> {
     resolvedC ?? 'null',
   )
 
+  const packDirC2 = path.join(tmpBase, 'Pack_C2_LegacyMP4')
+  fs.mkdirSync(packDirC2, { recursive: true })
+  fs.writeFileSync(path.join(packDirC2, 'replay_annotated.mp4'), 'fake-mp4-data')
+  const manifestC2: Manifest = {
+    ...manifestA,
+    id: 'pack-c2-id',
+    media: {
+      snapshot: 'snapshot.png',
+      replay: 'replay.mp4',
+    },
+  }
+  const resolvedC2 = resolveHistoryPlayFile(packDirC2, manifestC2)
+  check(
+    'falls back to replay_annotated.mp4 when replay_annotated is undeclared but file exists for MP4 pack',
+    resolvedC2 === path.resolve(packDirC2, 'replay_annotated.mp4'),
+    resolvedC2 ?? 'null',
+  )
+
   const packDirD = path.join(tmpBase, 'Pack_D_FallbackOriginalReplay')
   fs.mkdirSync(packDirD, { recursive: true })
   fs.writeFileSync(path.join(packDirD, 'replay.mp4'), 'fake-replay-mp4')

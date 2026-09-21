@@ -102,7 +102,8 @@ export function buildReadme(
   const annotatedReplayName = manifest.media.replay_annotated
   const annotatedReplayPending = hasReplay && renderPending && annotatedReplayName === undefined
   const hasAnnotatedReplay = annotatedReplayName !== undefined || annotatedReplayPending
-  const annotatedReplayFile = annotatedReplayName ?? 'replay_annotated.webm'
+  const annotatedReplayFile =
+    annotatedReplayName ?? (replayName.endsWith('.mp4') ? 'replay_annotated.mp4' : 'replay_annotated.webm')
   const blurCount = annotations.filter((a) => a.blur).length
   const lines: string[] = []
 
@@ -132,7 +133,7 @@ export function buildReadme(
   // images, right after the description — before the reader is asked to open
   // anything at all.
   const keyframes = keyframeSet(manifest, annotationsFile, renderPending)
-  const keyframeLines = keyframeSectionLines(keyframes, t, imageCapture)
+  const keyframeLines = keyframeSectionLines(keyframes, t, imageCapture, annotatedReplayFile)
   if (keyframeLines.length > 0) {
     lines.push(imageCapture ? '## Annotated image' : `## ${t('pack.keyframes')}`)
     lines.push('')
@@ -274,7 +275,8 @@ function buildOverviewSkill(
   const annotatedReplayName = manifest.media.replay_annotated
   const annotatedReplayPending = hasReplay && renderPending && annotatedReplayName === undefined
   const hasAnnotatedReplay = annotatedReplayName !== undefined || annotatedReplayPending
-  const annotatedReplayFile = annotatedReplayName ?? 'replay_annotated.webm'
+  const annotatedReplayFile =
+    annotatedReplayName ?? (replayName.endsWith('.mp4') ? 'replay_annotated.mp4' : 'replay_annotated.webm')
   const numbers = computeDisplayNumbers(annotations)
   const lines: string[] = []
 
@@ -338,7 +340,7 @@ function buildOverviewSkill(
   // story as images — the single most useful thing in this document for a
   // model that cannot decode video.
   const keyframes = keyframeSet(manifest, annotationsFile, renderPending)
-  const keyframeLines = keyframeSectionLines(keyframes, t, imageCapture)
+  const keyframeLines = keyframeSectionLines(keyframes, t, imageCapture, annotatedReplayFile)
   if (keyframeLines.length > 0) {
     lines.push(imageCapture ? '## Annotated image' : `## ${t('pack.keyframes')}`)
     lines.push('')
@@ -732,7 +734,8 @@ function buildProjectSkill(
   const annotatedReplayName = manifest.media.replay_annotated
   const annotatedReplayPending = hasReplay && renderPending && annotatedReplayName === undefined
   const hasAnnotatedReplay = annotatedReplayName !== undefined || annotatedReplayPending
-  const annotatedReplayFile = annotatedReplayName ?? 'replay_annotated.webm'
+  const annotatedReplayFile =
+    annotatedReplayName ?? (replayName.endsWith('.mp4') ? 'replay_annotated.mp4' : 'replay_annotated.webm')
   const lines: string[] = []
   lines.push(`# ${t('pack.skillProject')}`)
   lines.push('')
@@ -794,7 +797,7 @@ function buildProjectSkill(
         : `  Declared in manifest.json and regenerable from ${replayName} + annotations.json.`,
     )
   } else {
-    lines.push('- `replay_annotated.webm` — optional derived rendering, absent from this source revision.')
+    lines.push(`- \`${annotatedReplayFile}\` — optional derived rendering, absent from this source revision.`)
   }
   if (manifest.media.displays !== undefined && manifest.media.displays.length > 1) {
     lines.push('- `snapshot-d<N>.png` / `replay-d<N>.webm` — the OTHER displays this capture froze, one')

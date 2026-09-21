@@ -19,6 +19,8 @@ import {
   type ExportInput,
   type InitialSaveInput,
 } from '../src/main/exporter'
+import { writeAnnotatedReplayOutput } from '../src/main/annotatedReplayOutput'
+import { replayMimeType } from '../src/shared/replayMedia'
 import {
   buildViewerHtml,
   manifestWithViewerFormat,
@@ -458,6 +460,8 @@ function pureContractChecks(): void {
   check('path guard rejects encoded separators', safeViewerPath('frames%2fsecret.png') === null && safeViewerPath('frames%5csecret.png') === null)
   check('path guard rejects absolute/URL/drive paths', safeViewerPath('/secret.png') === null && safeViewerPath('C:/secret.png') === null && safeViewerPath('https://example.test/x.png') === null)
   check('path guard accepts an ordinary declared frame', safeViewerPath('frames/frame-01_00-01.000.png') === 'frames/frame-01_00-01.000.png')
+  check('path guard accepts plugin directory with single trailing slash', safeViewerPath('plugins/chrome-dom/') === 'plugins/chrome-dom/')
+  check('path guard rejects plugin directory with double trailing slash', safeViewerPath('plugins/chrome-dom//') === null)
   check('viewer raises 0.4 content to format 0.5.0', manifestWithViewerFormat({ ...base, format_version: '0.4.0' }).format_version === '0.5.0')
   check('viewer never lowers a future format', manifestWithViewerFormat({ ...base, format_version: '0.6.0' }).format_version === '0.6.0')
 
@@ -738,7 +742,14 @@ async function writerIntegrationChecks(): Promise<void> {
       { name: 'late-check', version: '1.0.0', path: 'plugins/late-check/' },
       'en',
     )
-    check('late plugin regenerates viewer from the same revision', readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8').includes('late-check'))
+    const lateViewer = readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8')
+    check('late plugin regenerates viewer from the same revision', lateViewer.includes('late-check'))
+    check('late plugin viewer renders plugin path', lateViewer.includes('<code>plugins/late-check/</code>'))
+    const filesMatch = /<ul class="files">([\s\S]*?)<\/ul>/u.exec(lateViewer)
+    check(
+      'late plugin file inventory includes plugin path',
+      filesMatch !== null && filesMatch[1] !== undefined && filesMatch[1].includes('<code>plugins/late-check/</code>'),
+    )
 
     writeFileSync(path.join(handle.dirPath, 'replay_annotated.mp4'), 'ANNOTATED')
     mkdirSync(path.join(handle.dirPath, 'frames'), { recursive: true })
@@ -789,6 +800,12 @@ async function writerIntegrationChecks(): Promise<void> {
         },
       ],
     })
+    const writtenDisplayReplay = await writeAnnotatedReplayOutput(
+      mp4DisplayHandle.dirPath,
+      Buffer.from('ANNOTATED DISPLAY 2'),
+      replayMimeType('replay-d2.mp4'),
+      2,
+    )
     mkdirSync(path.join(mp4DisplayHandle.dirPath, 'frames-d2'), { recursive: true })
     writeFileSync(
       path.join(mp4DisplayHandle.dirPath, 'frames-d2', 'frame-01_00-01.000.png'),
@@ -803,9 +820,103 @@ async function writerIntegrationChecks(): Promise<void> {
       readFileSync(path.join(mp4DisplayHandle.dirPath, 'manifest.json'), 'utf8'),
     ) as Manifest
     check(
-      'secondary MP4 render output declaration keeps the MP4 container',
+      'secondary MP4 render writes the file declared by the manifest',
       mp4DisplayManifest.media.displays?.[1]?.replay_annotated ===
-        'replay_annotated-d2.mp4',
+        writtenDisplayReplay &&
+        existsSync(path.join(mp4DisplayHandle.dirPath, writtenDisplayReplay)),
+    )
+
+    const mp4PrimaryHandle = await savePack({
+      ...initial,
+      capturedAt: new Date(capturedAt.getTime() + 2_000),
+    })
+    writeFileSync(
+      path.join(mp4PrimaryHandle.dirPath, 'replay_annotated.webm'),
+      'STALE ANNOTATED WEBM',
+    )
+    const writtenPrimaryReplay = await writeAnnotatedReplayOutput(
+      mp4PrimaryHandle.dirPath,
+      Buffer.from('ANNOTATED PRIMARY MP4'),
+      replayMimeType('replay.mp4'),
+    )
+    mkdirSync(path.join(mp4PrimaryHandle.dirPath, 'frames'), { recursive: true })
+    writeFileSync(
+      path.join(mp4PrimaryHandle.dirPath, 'frames', 'frame-01_00-01.000.png'),
+      'FRAME',
+    )
+    await setManifestRenderOutputs(mp4PrimaryHandle, {
+      replayAnnotated: true,
+      keyframes: [{ file: 'frames/frame-01_00-01.000.png', t_ms: 1_000 }],
+    })
+    const mp4PrimaryManifest = JSON.parse(
+      readFileSync(path.join(mp4PrimaryHandle.dirPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    check(
+      'primary MP4 render writes and declares replay_annotated.mp4 and cleans up stale replay_annotated.webm',
+      writtenPrimaryReplay === 'replay_annotated.mp4' &&
+        mp4PrimaryManifest.media.replay_annotated === 'replay_annotated.mp4' &&
+        existsSync(path.join(mp4PrimaryHandle.dirPath, 'replay_annotated.mp4')) &&
+        !existsSync(path.join(mp4PrimaryHandle.dirPath, 'replay_annotated.webm')),
+    )
+
+    writeFileSync(
+      path.join(mp4PrimaryHandle.dirPath, 'replay_annotated.webm'),
+      'STALE WEBM ON RE-EDIT',
+    )
+    const updateInput: ExportInput = {
+      captureKind: 'video',
+      snapshotPng: Buffer.from('UPDATED SNAPSHOT'),
+      width: 1920,
+      height: 1080,
+      capturedAt,
+      replayWebm: Buffer.from('UPDATED MP4 REPLAY'),
+      replayFile: 'replay.mp4',
+      replayDurationMs: 5_000,
+      annotations: [],
+      title: 'update test',
+      note: 'testing cleanup',
+      snapshotTMs: 1_000,
+      timeline: eventTimeline,
+      screens: [{ width: 1920, height: 1080, scale: 1 }],
+      windowsContext: null,
+      clipboardAfterSave: 'off',
+      docLanguage: 'en',
+    }
+    await updatePack(mp4PrimaryHandle, updateInput, { keepReplay: true })
+    check(
+      'updatePack on MP4 pack removes both replay_annotated.webm and replay_annotated.mp4',
+      !existsSync(path.join(mp4PrimaryHandle.dirPath, 'replay_annotated.webm')) &&
+        !existsSync(path.join(mp4PrimaryHandle.dirPath, 'replay_annotated.mp4')),
+    )
+
+    const webmReplayHandle = await savePack({
+      ...initial,
+      capturedAt: new Date(capturedAt.getTime() + 3_000),
+      replayFile: 'replay.webm',
+      replayWebm: Buffer.from('WEBM REPLAY'),
+    })
+    writeFileSync(
+      path.join(webmReplayHandle.dirPath, 'replay_annotated.mp4'),
+      'STALE ANNOTATED MP4',
+    )
+    const writtenWebmReplay = await writeAnnotatedReplayOutput(
+      webmReplayHandle.dirPath,
+      Buffer.from('ANNOTATED WEBM'),
+      replayMimeType('replay.webm'),
+    )
+    await setManifestRenderOutputs(webmReplayHandle, {
+      replayAnnotated: true,
+      keyframes: [],
+    })
+    const webmReplayManifest = JSON.parse(
+      readFileSync(path.join(webmReplayHandle.dirPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    check(
+      'WebM render writes and declares replay_annotated.webm and cleans up stale replay_annotated.mp4',
+      writtenWebmReplay === 'replay_annotated.webm' &&
+        webmReplayManifest.media.replay_annotated === 'replay_annotated.webm' &&
+        existsSync(path.join(webmReplayHandle.dirPath, 'replay_annotated.webm')) &&
+        !existsSync(path.join(webmReplayHandle.dirPath, 'replay_annotated.mp4')),
     )
 
     const omittedEnvManifest = JSON.parse(

@@ -70,7 +70,7 @@ export function historyAnnotatedState(
     typeof manifest.media.replay_annotated === 'string'
     && manifest.media.replay_annotated.trim() !== ''
       ? manifest.media.replay_annotated.trim()
-      : 'replay_annotated.webm'
+      : (manifest.media.replay.endsWith('.mp4') ? 'replay_annotated.mp4' : 'replay_annotated.webm')
   return filePresent(target) ? 'ready' : 'missing'
 }
 

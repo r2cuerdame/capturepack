@@ -50,6 +50,12 @@ import {
   FORMAT_VERSION_SOURCE_LATENCY,
 } from '../shared/types'
 import { displayAnnotatedName, displayFramesDir } from '../shared/keyframes'
+import {
+  DISPLAY_REPLAY_NAME_RE,
+  REPLAY_NAME_RE,
+  replayMimeType,
+} from '../shared/replayMedia'
+export { REPLAY_NAME_RE, replayMimeType } from '../shared/replayMedia'
 import { buildReport } from './report'
 import { buildReadme, buildSkills, SKILLS_FILES } from './packdocs'
 import { buildViewerHtml, manifestWithViewerFormat } from './viewer'
@@ -128,20 +134,13 @@ export function displayReplayName(index: number, replayFile = 'replay.webm'): st
 // manifest.json this process did not write (re-edit of an external or
 // hand-edited pack), and it is joined onto a path — so it is checked against
 // these before it can reach existsSync/copyFile/writeFile/rm.
-export const REPLAY_NAME_RE = /^replay\.(webm|mp4)$/
 const DISPLAY_SNAPSHOT_NAME_RE = /^snapshot-d[1-9][0-9]*\.png$/
-const DISPLAY_REPLAY_NAME_RE = /^replay-d[1-9][0-9]*\.(webm|mp4)$/
 const DISPLAY_ANNOTATED_NAME_RE = /^replay_annotated-d[1-9][0-9]*\.(webm|mp4)$/
 const DISPLAY_FRAMES_DIR_NAME_RE = /^frames-d[1-9][0-9]*$/
 
 /** A declared top-level replay filename, or the default when it is not legal. */
 export function replayFileName(declared: string | null | undefined): string {
   return typeof declared === 'string' && REPLAY_NAME_RE.test(declared) ? declared : 'replay.webm'
-}
-
-/** MIME type implied by a validated replay filename. */
-export function replayMimeType(declared: string | null | undefined): string {
-  return replayFileName(declared).endsWith('.mp4') ? 'video/mp4' : 'video/webm'
 }
 
 /** A declared per-display filename, or the index-derived default. */
@@ -1574,6 +1573,11 @@ export async function updateInitialPack(
   if (imageCapture || input.replayWebm === null) {
     await rm(join(handle.dirPath, replayFile), { force: true })
   }
+  await Promise.all([
+    rm(join(handle.dirPath, 'replay_annotated.webm'), { force: true }),
+    rm(join(handle.dirPath, 'replay_annotated.mp4'), { force: true }),
+    rm(join(handle.dirPath, 'frames'), { recursive: true, force: true }),
+  ])
   await removeReplacedReplayFiles(handle.dirPath, previous, manifest)
   })
 }
@@ -1679,6 +1683,13 @@ export async function updatePack(
   await Promise.all([
     rm(join(handle.dirPath, 'replay_annotated.webm'), { force: true }),
     rm(join(handle.dirPath, 'replay_annotated.mp4'), { force: true }),
+    ...(typeof previousManifest?.media?.replay_annotated === 'string' &&
+    previousManifest.media.replay_annotated !== 'replay_annotated.webm' &&
+    previousManifest.media.replay_annotated !== 'replay_annotated.mp4' &&
+    !previousManifest.media.replay_annotated.includes('/') &&
+    !previousManifest.media.replay_annotated.includes('\\')
+      ? [rm(join(handle.dirPath, previousManifest.media.replay_annotated), { force: true })]
+      : []),
   ])
   await rm(join(handle.dirPath, 'frames'), { recursive: true, force: true })
   // Same rule per display (GOAL "Multi-Monitor Support"): a screen the user
@@ -2258,7 +2269,7 @@ export async function refreshPackDocs(dirPath: string, docLanguage: Language = '
  * rather than rebuilding, so it composes with whatever the last save wrote.
  *
  * The declaration always follows the files: the caller has already written
- * replay_annotated.webm and frames/, so a declared file is a file that exists.
+ * replay_annotated.(webm|mp4) and frames/, so a declared file is a file that exists.
  */
 export async function setManifestRenderOutputs(
   handle: PackHandle,
@@ -2314,6 +2325,9 @@ export async function setManifestRenderOutputs(
     if (entry === undefined) return
     if (outputs.replayAnnotated && entry.replay !== null) {
       entry.replay_annotated = displayAnnotatedName(entry.index, entry.replay ?? undefined)
+      const isMp4 = typeof entry.replay === 'string' && entry.replay.endsWith('.mp4')
+      const staleOther = displayAnnotatedName(entry.index, isMp4 ? 'replay.webm' : 'replay.mp4')
+      await rm(join(handle.dirPath, staleOther), { force: true })
     }
     if (declared.length > 0) entry.keyframes = declared
     else delete entry.keyframes
@@ -2324,9 +2338,11 @@ export async function setManifestRenderOutputs(
   // Never declared without a replay (SPEC §5.3) — keyframes have no such rule:
   // a screenshot-only pack has exactly one still, rendered from snapshot.png.
   if (outputs.replayAnnotated && typeof manifest.media.replay === 'string') {
-    manifest.media.replay_annotated = manifest.media.replay.endsWith('.mp4')
+    const isMp4 = manifest.media.replay.endsWith('.mp4')
+    manifest.media.replay_annotated = isMp4
       ? 'replay_annotated.mp4'
       : 'replay_annotated.webm'
+    await rm(join(handle.dirPath, isMp4 ? 'replay_annotated.webm' : 'replay_annotated.mp4'), { force: true })
   }
   if (declared.length > 0) manifest.media.keyframes = declared
   else delete manifest.media.keyframes
