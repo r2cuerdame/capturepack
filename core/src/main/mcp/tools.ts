@@ -31,6 +31,11 @@ const MAX_JSON_MATCHES = 100
 // multi-megabyte DOM/UIA payloads produced by real captures.
 const MAX_PLUGIN_FILE_CHARS = 100_000
 const MAX_PLUGIN_SEARCH_FILE_CHARS = 20_000_000
+// A multi-minute video capture holds tens of thousands of timeline events. The
+// Markdown export is a single text response, so an uncapped dump overflows the
+// reader's context before it reaches the plugin section. capturepack_timeline
+// stays the unbounded, range-filterable reader.
+const MAX_TIMELINE_EXPORT_EVENTS = 100
 
 export interface ToolOptions {
   logRequests: boolean
@@ -676,7 +681,10 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
       description:
         'A single self-contained Markdown document for a CapturePack: report.md followed by an ' +
         'annotations table (with computed display numbers and lifetimes), the plugin inventory, ' +
-        'and—for video packs only—the timeline. Returns the Markdown as text; writes no files.',
+        'and—for video packs only—the timeline. The timeline section lists at most ' +
+        `${MAX_TIMELINE_EXPORT_EVENTS} events and then says how many were omitted; use ` +
+        'capturepack_timeline for the full, time-filterable event log. Returns the Markdown as ' +
+        'text; writes no files.',
       inputSchema: idArg,
     },
     (args) => run('capturepack_export_markdown', args, () => textResult(exportMarkdown(store.resolve(args.id)))),
@@ -1169,8 +1177,16 @@ function exportMarkdown(pack: PackHandle): string {
     const events = Array.isArray(timeline?.events) ? timeline.events : []
     lines.push('', `## Timeline (${events.length} events${timeline?.t0 ? `, t0 = ${timeline.t0}` : ''})`, '')
     if (events.length === 0) lines.push('No timeline events.')
-    for (const e of events) {
+    for (const e of events.slice(0, MAX_TIMELINE_EXPORT_EVENTS)) {
       lines.push(`- ${e.t_ms} ms — \`${e.type}\` (${e.source})${e.data !== undefined ? ' ' + cap(JSON.stringify(e.data), 200) : ''}`)
+    }
+    // Say what was dropped and where the rest lives: a silently short list reads
+    // as a short capture, which is the one thing the reader must not conclude.
+    if (events.length > MAX_TIMELINE_EXPORT_EVENTS) {
+      lines.push(
+        `- … and ${events.length - MAX_TIMELINE_EXPORT_EVENTS} more timeline events ` +
+          '(use capturepack_timeline to inspect full event log or filter by time range).',
+      )
     }
   }
 

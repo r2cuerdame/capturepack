@@ -224,7 +224,7 @@ pack as described above.
 | `capturepack_find_dom` | `selector`, `id?` | Plugin/DOM entries matching the selector — e.g. an `automation_id` or a control name in the `windows-uia` dump |
 | `capturepack_windows` | `id?` | Window/focus timeline events — including the observed `input.window.*` ones — plus window-related plugin metadata (the `windows-uia` window list), when present |
 | `capturepack_search` | `keyword`, `id?` | Case-insensitive substring search across `report.md`, annotation texts, video timeline when present, plugin JSON, and manifest title/note — hits grouped by source |
-| `capturepack_export_markdown` | `id?` | One Markdown document: `report.md` + annotations table + plugin inventory, plus the timeline only for video packs. Returned as text; **writes no files** |
+| `capturepack_export_markdown` | `id?` | One Markdown document: `report.md` + annotations table + plugin inventory, plus the timeline only for video packs. The timeline section lists at most 100 events and then states how many were omitted — use `capturepack_timeline` for the full log. Returned as text; **writes no files** |
 
 Plugin metadata is exposed generically — the MCP server never special-cases plugin kinds.
 If a pack has no plugin data, the plugin-reading tools return empty results with a clear

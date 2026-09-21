@@ -284,6 +284,31 @@ async function main(): Promise<void> {
       return null
     },
   }
+  // A multi-minute video capture: the Markdown export must stay bounded rather
+  // than dumping every recorded pointer/window event into one response.
+  const longTimelineEvents = Array.from({ length: 500 }, (_, index) => ({
+    t_ms: index * 20,
+    type: 'input.pointer.move',
+    source: 'windows',
+    data: { x: index, y: index * 2 },
+  }))
+  const longTimelinePack = {
+    ...multiFramePack,
+    id: 'long-timeline-pack',
+    path: 'C:\\packs\\long-timeline-pack',
+    timeline: () => ({ t0: '2026-09-21T12:00:00+09:00', events: longTimelineEvents }),
+  }
+  const shortTimelineEvents = [
+    { t_ms: 10, type: 'input.window.focus', source: 'windows' },
+    { t_ms: 40, type: 'input.pointer.click', source: 'windows', data: { x: 5, y: 6 } },
+    { t_ms: 90, type: 'input.window.move', source: 'windows' },
+  ]
+  const shortTimelinePack = {
+    ...multiFramePack,
+    id: 'short-timeline-pack',
+    path: 'C:\\packs\\short-timeline-pack',
+    timeline: () => ({ t0: '2026-09-21T12:00:00+09:00', events: shortTimelineEvents }),
+  }
   const invalidPluginPack = {
     ...pack,
     id: 'invalid-plugin-pack',
@@ -305,6 +330,8 @@ async function main(): Promise<void> {
       if (id === multiReplayPack.id) return multiReplayPack
       if (id === reportPack.id) return reportPack
       if (id === windowsPack.id) return windowsPack
+      if (id === longTimelinePack.id) return longTimelinePack
+      if (id === shortTimelinePack.id) return shortTimelinePack
       if (id === invalidPluginPack.id) return invalidPluginPack
       return pack
     },
@@ -398,6 +425,44 @@ async function main(): Promise<void> {
   const markdown = await callbacks.get('capturepack_export_markdown')?.({})
   const markdownText = markdown?.content.find((item) => item.type === 'text')?.text ?? ''
   check(!markdownText.includes('## Timeline'), 'image Markdown export omits the video timeline section')
+
+  console.log('MARKDOWN EXPORT BOUNDS')
+  const longExport = await callbacks.get('capturepack_export_markdown')?.({ id: longTimelinePack.id })
+  const longExportText = longExport?.content.find((item) => item.type === 'text')?.text ?? ''
+  const longEventLines = longExportText
+    .split('\n')
+    .filter((line) => / ms — `input\.pointer\.move`/.test(line))
+  check(
+    longExport?.isError !== true && longExportText.includes('## Timeline (500 events'),
+    'Markdown export still reports the true total event count in the heading',
+  )
+  check(
+    longEventLines.length === 100,
+    `Markdown export emits at most 100 timeline event lines — got ${longEventLines.length}`,
+  )
+  check(
+    longEventLines[0]?.startsWith('- 0 ms —') === true &&
+      longEventLines[99]?.startsWith('- 1980 ms —') === true,
+    'Markdown export keeps the first 100 events in recorded order',
+  )
+  check(
+    longExportText.includes(
+      '- … and 400 more timeline events (use capturepack_timeline to inspect full event log or filter by time range).',
+    ),
+    'Markdown export names how many events were omitted and points at capturepack_timeline',
+  )
+  check(
+    longExportText.includes('## Plugins'),
+    'Markdown export still reaches the sections after the truncated timeline',
+  )
+  const shortExport = await callbacks.get('capturepack_export_markdown')?.({ id: shortTimelinePack.id })
+  const shortExportText = shortExport?.content.find((item) => item.type === 'text')?.text ?? ''
+  const shortEventLines = shortExportText.split('\n').filter((line) => / ms — `input\./.test(line))
+  check(
+    shortEventLines.length === shortTimelineEvents.length &&
+      !shortExportText.includes('more timeline events'),
+    'a timeline under the cap is still exported in full with no truncation notice',
+  )
 
   console.log('WINDOWS')
   const windowsResult = await callbacks.get('capturepack_windows')?.({ id: windowsPack.id })
