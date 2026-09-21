@@ -126,6 +126,71 @@ function pureContractChecks(): void {
   const unannotatedHtml = buildViewerHtml(base, undefined, timeline(), 'en')
   check('pack without annotations file omits annotations.json from file inventory', !unannotatedHtml.includes('<code>annotations.json</code>'))
 
+  // Issue #206: buildViewerHtml with omitted, null, or non-array annotations
+  const omittedAnnotationsFile = {
+    reference_width: 1920,
+    reference_height: 1080,
+  } as AnnotationsFile
+  let omittedAnnThrew = false
+  let omittedAnnHtml = ''
+  try {
+    omittedAnnHtml = buildViewerHtml(base, omittedAnnotationsFile, timeline(), 'en')
+  } catch {
+    omittedAnnThrew = true
+  }
+  check(
+    'buildViewerHtml succeeds without throwing on annotationsFile omitting annotations',
+    !omittedAnnThrew &&
+      typeof omittedAnnHtml === 'string' &&
+      omittedAnnHtml.startsWith('<!doctype html>') &&
+      !omittedAnnHtml.includes('Privacy warning') &&
+      !omittedAnnHtml.includes('blur annotation') &&
+      omittedAnnHtml.includes('Original evidence may contain private information.') &&
+      !omittedAnnHtml.includes('<code>annotations.json</code>'),
+  )
+
+  const nullAnnotationsFile = {
+    reference_width: 1920,
+    reference_height: 1080,
+    annotations: null as unknown as Annotation[],
+  } as AnnotationsFile
+  let nullAnnThrew = false
+  let nullAnnHtml = ''
+  try {
+    nullAnnHtml = buildViewerHtml(base, nullAnnotationsFile, timeline(), 'en')
+  } catch {
+    nullAnnThrew = true
+  }
+  check(
+    'buildViewerHtml succeeds without throwing on annotationsFile with null annotations',
+    !nullAnnThrew &&
+      typeof nullAnnHtml === 'string' &&
+      !nullAnnHtml.includes('Privacy warning') &&
+      nullAnnHtml.includes('Original evidence may contain private information.') &&
+      !nullAnnHtml.includes('<code>annotations.json</code>'),
+  )
+
+  const nonArrayAnnotationsFile = {
+    reference_width: 1920,
+    reference_height: 1080,
+    annotations: 'not-an-array' as unknown as Annotation[],
+  } as AnnotationsFile
+  let nonArrayAnnThrew = false
+  let nonArrayAnnHtml = ''
+  try {
+    nonArrayAnnHtml = buildViewerHtml(base, nonArrayAnnotationsFile, timeline(), 'en')
+  } catch {
+    nonArrayAnnThrew = true
+  }
+  check(
+    'buildViewerHtml succeeds without throwing on annotationsFile with non-array annotations',
+    !nonArrayAnnThrew &&
+      typeof nonArrayAnnHtml === 'string' &&
+      !nonArrayAnnHtml.includes('Privacy warning') &&
+      nonArrayAnnHtml.includes('Original evidence may contain private information.') &&
+      !nonArrayAnnHtml.includes('<code>annotations.json</code>'),
+  )
+
   const annotated = videoManifest({
     media: {
       snapshot: 'snapshot.png',
@@ -1095,13 +1160,14 @@ async function writerIntegrationChecks(): Promise<void> {
         !nonArrayAnnotationsSkill.includes('undefined'),
     )
 
-    // Omitted annotations array (SPEC §8, §14 minimal/unannotated pack)
+    // Issue #206 & #207: pack with annotations.json omitting annotations property (SPEC §8, §14 minimal/unannotated pack)
     writeFileSync(
       path.join(handle.dirPath, 'annotations.json'),
       JSON.stringify({ reference_width: 1920, reference_height: 1080 }),
       'utf8',
     )
     await refreshPackDocs(handle.dirPath, 'en')
+    const omittedAnnViewer = readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8')
     const omittedAnnotationsSkill = readFileSync(
       path.join(handle.dirPath, 'skills', 'annotation.md'),
       'utf8',
@@ -1113,6 +1179,14 @@ async function writerIntegrationChecks(): Promise<void> {
     const omittedAnnotationsReadme = readFileSync(
       path.join(handle.dirPath, 'README.md'),
       'utf8',
+    )
+    check(
+      'refreshPackDocs regenerates viewer and docs for pack omitting annotations array without throwing',
+      existsSync(path.join(handle.dirPath, 'viewer.html')) &&
+        omittedAnnViewer.length > 0 &&
+        omittedAnnViewer.includes('Original evidence may contain private information.') &&
+        !omittedAnnViewer.includes('Privacy warning') &&
+        omittedAnnotationsReadme.includes('viewer.html'),
     )
     check(
       'refreshPackDocs succeeds and falls back to empty annotations when annotations array is omitted',
