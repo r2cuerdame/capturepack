@@ -599,7 +599,7 @@ function buildAnnotationSkill(
     lines.push('')
   }
 
-  const tracked = annotations.some((a) => a.tracking.enabled)
+  const tracked = annotations.some((a) => a.tracking?.enabled === true)
   const targeted = annotations.some((a) => a.target !== undefined)
   if (!tracked && !targeted) {
     lines.push(

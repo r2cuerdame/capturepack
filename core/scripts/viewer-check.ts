@@ -455,6 +455,17 @@ function pureContractChecks(): void {
       !noPluginsSkills.dom.includes('undefined'),
   )
 
+  const noTrackingBox = box('ann_no_track', 'A box without tracking')
+  delete (noTrackingBox as Partial<Annotation>).tracking
+  const noTrackingAnnotations = annotations([noTrackingBox])
+  const noTrackingSkills = buildSkills(videoManifest(), noTrackingAnnotations, timeline(), 'en', false)
+  check(
+    'pack omitting annotation.tracking generates all skills documents without throwing or undefined',
+    typeof noTrackingSkills.annotation === 'string' &&
+      noTrackingSkills.annotation.includes('A box without tracking') &&
+      !noTrackingSkills.annotation.includes('undefined'),
+  )
+
   const minimalCandidates = [
     path.resolve(process.cwd(), '../examples/minimal'),
     path.resolve(process.cwd(), 'examples/minimal'),
@@ -595,6 +606,28 @@ async function writerIntegrationChecks(): Promise<void> {
         !omittedPluginsDom.includes('undefined') &&
         existsSync(path.join(handle.dirPath, 'manifest.json')) &&
         omittedPluginsManifestAfter.format_version !== undefined,
+    )
+
+    const omittedTrackingAnnotations = JSON.parse(
+      readFileSync(path.join(handle.dirPath, 'annotations.json'), 'utf8'),
+    ) as AnnotationsFile
+    for (const ann of omittedTrackingAnnotations.annotations) {
+      delete (ann as Partial<Annotation>).tracking
+    }
+    writeFileSync(
+      path.join(handle.dirPath, 'annotations.json'),
+      JSON.stringify(omittedTrackingAnnotations, null, 2),
+      'utf8',
+    )
+    await refreshPackDocs(handle.dirPath, 'en')
+    const omittedTrackingAnnotationSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'annotation.md'),
+      'utf8',
+    )
+    check(
+      'refreshPackDocs regenerates skills documents for pack omitting annotation.tracking without throwing',
+      omittedTrackingAnnotationSkill.length > 0 &&
+        !omittedTrackingAnnotationSkill.includes('undefined'),
     )
 
     rmSync(path.join(handle.dirPath, 'viewer.html'), { force: true })
