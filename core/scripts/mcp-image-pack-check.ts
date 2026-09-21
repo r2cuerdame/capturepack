@@ -113,6 +113,7 @@ async function main(): Promise<void> {
           snapshot: 'snapshot.png',
           snapshot_width: 1_920,
           snapshot_height: 1_080,
+          replay: null,
         },
         {
           index: 2,
@@ -120,6 +121,8 @@ async function main(): Promise<void> {
           snapshot: 'snapshot-d2.png',
           snapshot_width: 2_560,
           snapshot_height: 1_440,
+          replay: 'replay-d2.webm',
+          replay_duration_ms: 3_900,
           keyframes: [
             { file: 'frames-d2/frame-01_00-00.500.png', t_ms: 500 },
             { file: 'frames-d2/frame-02_00-01.500.png', t_ms: 1_500 },
@@ -149,9 +152,38 @@ async function main(): Promise<void> {
       if (file === 'frames-d2/frame-02_00-01.500.png') return Buffer.from('display-two-frame-two')
       return null
     },
-    fileSize: () => null,
+    fileSize: (file: string) => file === 'replay-d2.webm' ? 2_222 : null,
     listFiles: () => [],
     warnings: () => [],
+  }
+  const multiReplayManifest = {
+    ...multiFrameManifest,
+    id: 'multi-replay-pack',
+    media: {
+      ...multiFrameManifest.media,
+      replay: 'replay.mp4',
+      replay_duration_ms: 4_000,
+      displays: [
+        {
+          ...multiFrameManifest.media.displays[0],
+          replay: 'replay.mp4',
+          replay_duration_ms: 4_000,
+        },
+        multiFrameManifest.media.displays[1],
+      ],
+    },
+  }
+  const multiReplayPack = {
+    ...multiFramePack,
+    id: multiReplayManifest.id,
+    path: 'C:\\packs\\multi-replay-pack',
+    manifest: () => multiReplayManifest,
+    manifestText: () => JSON.stringify(multiReplayManifest),
+    fileSize: (file: string) => {
+      if (file === 'replay.mp4') return 4_444
+      if (file === 'replay-d2.webm') return 2_222
+      return null
+    },
   }
   const manifest = {
     capture_kind: 'image',
@@ -213,6 +245,7 @@ async function main(): Promise<void> {
       if (id === singlePack.id) return singlePack
       if (id === multiPack.id) return multiPack
       if (id === multiFramePack.id) return multiFramePack
+      if (id === multiReplayPack.id) return multiReplayPack
       if (id === reportPack.id) return reportPack
       return pack
     },
@@ -392,9 +425,63 @@ async function main(): Promise<void> {
   )
 
   console.log('REPLAY')
+  check(
+    definitions.get('capturepack_replay')?.inputSchema?.display !== undefined,
+    'capturepack_replay schema accepts display',
+  )
   const replay = await callbacks.get('capturepack_replay')?.({})
   const replayJson = textJson(replay as ToolResult)
   check(replayJson.capture_kind === 'image' && replayJson.replay === null, 'image replay is explicitly null')
+
+  const focusedReplay = textJson(
+    await callbacks.get('capturepack_replay')?.({ id: multiReplayPack.id }) as ToolResult,
+  )
+  const focusedReplayMedia = focusedReplay.replay as Record<string, unknown>
+  check(
+    focusedReplay.display_index === 1 &&
+      focusedReplay.focused === true &&
+      focusedReplayMedia.filename === 'replay.mp4' &&
+      focusedReplayMedia.duration_ms === 4_000 &&
+      focusedReplayMedia.size_bytes === 4_444,
+    'omitting display returns the focused display 1 replay metadata and context',
+  )
+  const explicitPrimaryReplay = textJson(
+    await callbacks.get('capturepack_replay')?.({ id: multiReplayPack.id, display: 1 }) as ToolResult,
+  )
+  check(
+    explicitPrimaryReplay.display_index === 1 &&
+      (explicitPrimaryReplay.replay as Record<string, unknown>).filename === 'replay.mp4',
+    'display 1 explicitly returns the primary replay metadata',
+  )
+
+  const secondaryReplay = textJson(
+    await callbacks.get('capturepack_replay')?.({ id: multiReplayPack.id, display: 2 }) as ToolResult,
+  )
+  const secondaryReplayMedia = secondaryReplay.replay as Record<string, unknown>
+  check(
+    secondaryReplay.display_index === 2 &&
+      secondaryReplay.focused === false &&
+      secondaryReplayMedia.filename === 'replay-d2.webm' &&
+      secondaryReplayMedia.duration_ms === 3_900 &&
+      secondaryReplayMedia.size_bytes === 2_222,
+    'display 2 returns replay-d2.webm metadata and context',
+  )
+
+  const missingPrimaryReplay = textJson(
+    await callbacks.get('capturepack_replay')?.({ id: multiFramePack.id }) as ToolResult,
+  )
+  check(
+    missingPrimaryReplay.display_index === 1 && missingPrimaryReplay.replay === null,
+    'a missing display 1 replay is reported for display 1 without hiding other displays',
+  )
+  const survivingSecondaryReplay = textJson(
+    await callbacks.get('capturepack_replay')?.({ id: multiFramePack.id, display: 2 }) as ToolResult,
+  )
+  check(
+    survivingSecondaryReplay.display_index === 2 &&
+      (survivingSecondaryReplay.replay as Record<string, unknown>).filename === 'replay-d2.webm',
+    'display 2 remains queryable when display 1 has no replay',
+  )
 
   console.log('ANNOTATIONS')
   const singleResult = await callbacks.get('capturepack_annotations')?.({ id: singlePack.id })

@@ -15,7 +15,11 @@ import {
   declaredDisplayIndices,
   focusedDisplayIndex,
 } from '../../shared/types'
-import { captureMediaForMcp, type McpCaptureMedia } from '../../shared/captureMedia'
+import {
+  captureMediaForMcp,
+  captureReplayForDisplay,
+  type McpCaptureMedia,
+} from '../../shared/captureMedia'
 import { computeDisplayNumbers } from '../../shared/numbering'
 import { errorMessage, type PackHandle, type PackStore } from './store'
 
@@ -479,30 +483,49 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
     {
       title: 'Replay metadata',
       description:
-        'Metadata about the screen replay video of a CapturePack: filename, duration_ms and ' +
-        'size_bytes. Never returns raw video bytes. Screenshot-only packs have no replay.',
-      inputSchema: idArg,
+        'Metadata about one display\'s screen replay video: filename, duration_ms and size_bytes. ' +
+        'Pass display (the 1-based manifest display index; default: focused display) to inspect a ' +
+        'particular screen. Never returns raw video bytes. Screenshot-only packs have no replay.',
+      inputSchema: {
+        ...idArg,
+        display: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe('1-based manifest.media.displays[].index (default: focused display).'),
+      },
     },
     (args) =>
       run('capturepack_replay', args, () => {
         const pack = store.resolve(args.id)
         const manifest = pack.manifest()
         const captureMedia = captureMediaForMcp(manifest)
-        const replay = captureMedia.replay
+        const selected = captureReplayForDisplay(manifest, args.display)
+        if (selected === null) {
+          return errorResult(`Display ${args.display} is not declared in pack "${pack.id}"`)
+        }
+        const replay = selected.replay
+        const displayContext = {
+          display_index: selected.display_index,
+          ...(selected.multi_display ? { focused: selected.focused } : {}),
+        }
         if (replay === null) {
           return jsonResult({
             pack: pack.id,
             capture_kind: captureMedia.capture_kind,
+            ...displayContext,
             replay: null,
             message:
               captureMedia.capture_kind === 'image'
                 ? 'Image capture: this user-created pack has no replay video.'
-                : 'No valid replay is declared by this pack.',
+                : `No valid replay is declared for display ${selected.display_index}.`,
           })
         }
         return jsonResult({
           pack: pack.id,
           capture_kind: captureMedia.capture_kind,
+          ...displayContext,
           replay: {
             filename: replay.filename,
             duration_ms: replay.duration_ms,
