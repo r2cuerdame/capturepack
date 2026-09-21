@@ -484,6 +484,7 @@ function pureContractChecks(): void {
 
   const fakeRegion = { cx: 0, cy: 0, cw: 1920, ch: 1080, cscale: 1, width: 1920, height: 1080 }
   const fakeCtx = {
+    canvas: { width: 1920, height: 1080 },
     save: () => {},
     restore: () => {},
     setTransform: () => {},
@@ -520,6 +521,37 @@ function pureContractChecks(): void {
       noTextGutter === 0 &&
       !noTextDesc.includes('undefined') &&
       !labelsThrew,
+  )
+
+  const noZBox = box('ann_no_z', 'No Z')
+  delete (noZBox as Partial<Annotation>).z
+  const noZAnnotations = annotations([noZBox])
+  const noZManifest = videoManifest()
+  const noZHtml = buildViewerHtml(noZManifest, noZAnnotations, timeline(), 'en')
+  const noZReport = buildReport(noZManifest, noZAnnotations, 'en', false, true)
+  const noZReadme = buildReadme(noZManifest, noZAnnotations, 'en', false, true)
+  const noZSkills = buildSkills(noZManifest, noZAnnotations, timeline(), 'en', false)
+  let noZLabelsError = ''
+  try {
+    drawDisplayLabels(fakeCtx, fakeRegion, [noZBox], 1)
+    drawBox(fakeCtx, noZBox, 1, 1)
+  } catch (err) {
+    noZLabelsError = String(err)
+  }
+  check(
+    'pack omitting annotation.z generates viewer, report, readme, skills, and canvas labels cleanly',
+    typeof noZHtml === 'string' &&
+      !noZHtml.includes('undefined') &&
+      typeof noZReport === 'string' &&
+      !noZReport.includes('undefined') &&
+      typeof noZReadme === 'string' &&
+      !noZReadme.includes('undefined') &&
+      typeof noZSkills.overview === 'string' &&
+      !noZSkills.overview.includes('undefined') &&
+      typeof noZSkills.annotation === 'string' &&
+      !noZSkills.annotation.includes('undefined') &&
+      noZLabelsError === '',
+    noZLabelsError,
   )
 
   const omittedReplayManifest = videoManifest()
@@ -760,6 +792,47 @@ async function writerIntegrationChecks(): Promise<void> {
         !omittedTextAnnotationSkill.includes('undefined') &&
         omittedTextOverviewSkill.length > 0 &&
         !omittedTextOverviewSkill.includes('undefined'),
+    )
+
+    const omittedZAnnotations = JSON.parse(
+      readFileSync(path.join(handle.dirPath, 'annotations.json'), 'utf8'),
+    ) as AnnotationsFile
+    for (const ann of omittedZAnnotations.annotations) {
+      delete (ann as Partial<Annotation>).z
+    }
+    writeFileSync(
+      path.join(handle.dirPath, 'annotations.json'),
+      JSON.stringify(omittedZAnnotations, null, 2),
+      'utf8',
+    )
+    await refreshPackDocs(handle.dirPath, 'en')
+    const omittedZAnnotationSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'annotation.md'),
+      'utf8',
+    )
+    const omittedZOverviewSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'overview.md'),
+      'utf8',
+    )
+    const omittedZReport = readFileSync(
+      path.join(handle.dirPath, 'report.md'),
+      'utf8',
+    )
+    const omittedZViewer = readFileSync(
+      path.join(handle.dirPath, 'viewer.html'),
+      'utf8',
+    )
+    check(
+      'refreshPackDocs regenerates viewer and docs for pack omitting annotation.z without throwing',
+      existsSync(path.join(handle.dirPath, 'viewer.html')) &&
+        omittedZViewer.length > 0 &&
+        !omittedZViewer.includes('undefined') &&
+        omittedZReport.length > 0 &&
+        !omittedZReport.includes('undefined') &&
+        omittedZAnnotationSkill.length > 0 &&
+        !omittedZAnnotationSkill.includes('undefined') &&
+        omittedZOverviewSkill.length > 0 &&
+        !omittedZOverviewSkill.includes('undefined'),
     )
 
     const omittedReplayManifestOnDisk = JSON.parse(

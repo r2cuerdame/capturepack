@@ -120,8 +120,15 @@ export function makeOverlay(job: RenderStartPayload, outputWidth: number, output
     // Keep every source rectangle in its declared native-pixel space until
     // annotationAt resolves the current sample/keyframe. Scaling first used to
     // leave authored keyframes unscaled and overwrite the correct 0.5x bounds
-    // with 4K coordinates on a 1920px annotated replay.
-    ordered: [...job.annotations].sort((a, b) => a.z - b.z),
+    // Stacking order for the overlay passes; z decides who draws on top (SPEC §8.3).
+    // Falls back to array index when z is omitted, preventing NaN sort comparisons.
+    ordered: [...job.annotations.map((a, i) => ({ a, i }))]
+      .sort((p, q) => {
+        const pZ = typeof p.a.z === 'number' ? p.a.z : p.i
+        const qZ = typeof q.a.z === 'number' ? q.a.z : q.i
+        return pZ !== qZ ? pZ - qZ : p.i - q.i
+      })
+      .map(({ a }) => a),
     // GLOBAL display numbers (SPEC §8.5) — global over the whole PACK, not just
     // over this job's boxes: a frame where only box 2 is alive still labels it
     // 2, and so does a per-display render that received box 2 alone. The map is

@@ -699,7 +699,8 @@ export interface BoxAnnotation {
   target?: AnnotationTarget
   style?: AnnotationStyle
   created_at: string
-  z: number
+  // Stacking order for rendering; higher draws on top. Default: array position (SPEC §8.3).
+  z?: number
 }
 
 export type Annotation = BoxAnnotation
