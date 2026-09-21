@@ -1613,8 +1613,8 @@ async function runImageFlowWithContext(
       // The fetch describes THIS instant, so it leads — one document per
       // visible browser window (#132); a click the user made just before it
       // still rides along, aged.
-      const events = [...requested, ...buffered]
-      return { events, ages: events.map((e) => Math.max(0, domNowMs - e.tMs)) }
+      const rawEvents = [...requested, ...buffered]
+      return { events: rawEvents, ages: rawEvents.map((e) => Math.max(0, domNowMs - e.tMs)) }
     },
   })
 }
