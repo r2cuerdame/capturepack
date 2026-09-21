@@ -438,6 +438,53 @@ function pureContractChecks(): void {
       minimalEnvSkills.overview.includes('on windows.') &&
       !minimalEnvSkills.overview.includes('undefined'),
   )
+
+  const noPluginsManifest = videoManifest()
+  delete noPluginsManifest.plugins
+  const noPluginsSkills = buildSkills(noPluginsManifest, annotations(), timeline(), 'en', false)
+  check(
+    'pack omitting plugins generates all skills documents without throwing or undefined',
+    typeof noPluginsSkills.overview === 'string' &&
+      typeof noPluginsSkills.dom === 'string' &&
+      typeof noPluginsSkills.annotation === 'string' &&
+      typeof noPluginsSkills.project === 'string' &&
+      typeof noPluginsSkills.timeline === 'string' &&
+      noPluginsSkills.overview.includes('0 plugins.') &&
+      noPluginsSkills.dom.includes('No DOM metadata in this pack.') &&
+      !noPluginsSkills.overview.includes('undefined') &&
+      !noPluginsSkills.dom.includes('undefined'),
+  )
+
+  const minimalCandidates = [
+    path.resolve(process.cwd(), '../examples/minimal'),
+    path.resolve(process.cwd(), 'examples/minimal'),
+  ]
+  const minimalPackPath = minimalCandidates.find((dir) => existsSync(path.join(dir, 'manifest.json')))
+  if (minimalPackPath !== undefined) {
+    const minimalManifest = JSON.parse(
+      readFileSync(path.join(minimalPackPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    const minimalAnnotations = JSON.parse(
+      readFileSync(path.join(minimalPackPath, 'annotations.json'), 'utf8'),
+    ) as AnnotationsFile
+    const minimalTimeline = JSON.parse(
+      readFileSync(path.join(minimalPackPath, 'timeline.json'), 'utf8'),
+    ) as TimelineFile
+    const minimalSkills = buildSkills(minimalManifest, minimalAnnotations, minimalTimeline, 'en', false)
+    check(
+      'examples/minimal pack generates all skills documents successfully',
+      minimalManifest.plugins === undefined &&
+        typeof minimalSkills.overview === 'string' &&
+        typeof minimalSkills.dom === 'string' &&
+        typeof minimalSkills.annotation === 'string' &&
+        typeof minimalSkills.project === 'string' &&
+        typeof minimalSkills.timeline === 'string' &&
+        minimalSkills.overview.includes('0 plugins.') &&
+        minimalSkills.dom.includes('No DOM metadata in this pack.') &&
+        !minimalSkills.overview.includes('undefined') &&
+        !minimalSkills.dom.includes('undefined'),
+    )
+  }
 }
 
 async function writerIntegrationChecks(): Promise<void> {
@@ -517,6 +564,37 @@ async function writerIntegrationChecks(): Promise<void> {
         omittedSkills.includes('on windows.') &&
         !omittedSkills.includes('undefined') &&
         !omittedReadme.includes('undefined'),
+    )
+
+    const omittedPluginsManifest = JSON.parse(
+      readFileSync(path.join(handle.dirPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    delete omittedPluginsManifest.plugins
+    writeFileSync(
+      path.join(handle.dirPath, 'manifest.json'),
+      JSON.stringify(omittedPluginsManifest, null, 2),
+      'utf8',
+    )
+    await refreshPackDocs(handle.dirPath, 'en')
+    const omittedPluginsOverview = readFileSync(path.join(handle.dirPath, 'skills', 'overview.md'), 'utf8')
+    const omittedPluginsDom = readFileSync(path.join(handle.dirPath, 'skills', 'dom.md'), 'utf8')
+    const omittedPluginsAnnotation = readFileSync(path.join(handle.dirPath, 'skills', 'annotation.md'), 'utf8')
+    const omittedPluginsProject = readFileSync(path.join(handle.dirPath, 'skills', 'project.md'), 'utf8')
+    const omittedPluginsTimeline = readFileSync(path.join(handle.dirPath, 'skills', 'timeline.md'), 'utf8')
+    const omittedPluginsManifestAfter = JSON.parse(
+      readFileSync(path.join(handle.dirPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    check(
+      'refreshPackDocs regenerates all skills documents for pack omitting plugins without throwing or undefined',
+      omittedPluginsOverview.includes('0 plugins.') &&
+        omittedPluginsDom.includes('No DOM metadata in this pack.') &&
+        omittedPluginsAnnotation.length > 0 &&
+        omittedPluginsProject.length > 0 &&
+        omittedPluginsTimeline.length > 0 &&
+        !omittedPluginsOverview.includes('undefined') &&
+        !omittedPluginsDom.includes('undefined') &&
+        existsSync(path.join(handle.dirPath, 'manifest.json')) &&
+        omittedPluginsManifestAfter.format_version !== undefined,
     )
 
     rmSync(path.join(handle.dirPath, 'viewer.html'), { force: true })

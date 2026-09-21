@@ -265,7 +265,7 @@ async function main(): Promise<void> {
       )
       check(
         'plugin source and declaration are readable before render',
-        manifest?.plugins.some((plugin) => plugin.name === 'chrome-dom') === true &&
+        manifest?.plugins?.some((plugin) => plugin.name === 'chrome-dom') === true &&
           latest.readText('plugins/chrome-dom/elements.json')?.includes('"click"') === true,
       )
     } finally {

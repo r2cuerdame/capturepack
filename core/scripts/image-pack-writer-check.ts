@@ -334,7 +334,7 @@ async function main(): Promise<void> {
   )
   check(
     'production writer declares and restores the null-UIA window floor',
-    reopenedManifest.plugins.some((entry) => entry.name === plugin.name) &&
+    reopenedManifest.plugins?.some((entry) => entry.name === plugin.name) === true &&
       reopenedUia?.windows[0]?.hwnd === '4242' &&
       reopenedUia.windows[0]?.tree === 'skipped' &&
       reopenedUia.elements.length === 0,
@@ -413,7 +413,7 @@ async function main(): Promise<void> {
       'Save As New preserves declared JSON plugin metadata',
       existsSync(path.join(copied.dirPath, 'plugins', plugin.name, 'meta.json')) &&
         existsSync(path.join(copied.dirPath, 'plugins', plugin.name, 'elements.json')) &&
-        manifestAt(copied.dirPath).plugins.some((entry) => entry.name === plugin.name),
+        manifestAt(copied.dirPath).plugins?.some((entry) => entry.name === plugin.name) === true,
     )
     check(
       'Save As New rejects media extensions and disguised raster/video magic',
