@@ -351,7 +351,7 @@ function buildOverviewSkill(
       .filter((a) => numbers.has(a.annotation_id))
       .sort((a, b) => (numbers.get(a.annotation_id) ?? 0) - (numbers.get(b.annotation_id) ?? 0))
     for (const a of numbered) {
-      const text = a.text.trim() !== '' ? ` — "${a.text.trim()}"` : ''
+      const text = typeof a.text === 'string' && a.text.trim() !== '' ? ` — "${a.text.trim()}"` : ''
       // WHICH screen those coordinates are in: without it, a reader of a
       // multi-display pack has no way to place the box at all.
       const where = multi
@@ -365,11 +365,12 @@ function buildOverviewSkill(
     lines.push('')
   }
 
+  const plugins = Array.isArray(manifest.plugins) ? manifest.plugins : []
   lines.push(
     imageCapture
-      ? `Counts: ${annotationCounts(annotations)}, ${manifest.plugins.length} plugins.`
+      ? `Counts: ${annotationCounts(annotations)}, ${plugins.length} plugins.`
       : `Counts: ${annotationCounts(annotations)}, ${timeline.events.length} timeline events, ` +
-          `${manifest.plugins.length} plugins.`,
+          `${plugins.length} plugins.`,
   )
 
   const blurCount = annotations.filter((a) => a.blur).length
@@ -552,7 +553,7 @@ function buildAnnotationSkill(
         : `## ${a.annotation_id} (${flags.join(', ')})`,
     )
     lines.push('')
-    if (a.text.trim() !== '') lines.push(`- **Text:** "${a.text.trim()}"`)
+    if (typeof a.text === 'string' && a.text.trim() !== '') lines.push(`- **Text:** "${a.text.trim()}"`)
     if (multi) {
       // The DECLARED set resolves a box naming a display this pack does not
       // have back onto the focused one (SPEC §8.8), so the file named below is
@@ -598,7 +599,7 @@ function buildAnnotationSkill(
     lines.push('')
   }
 
-  const tracked = annotations.some((a) => a.tracking.enabled)
+  const tracked = annotations.some((a) => a.tracking?.enabled === true)
   const targeted = annotations.some((a) => a.target !== undefined)
   if (!tracked && !targeted) {
     lines.push(
@@ -614,8 +615,9 @@ function buildDomSkill(manifest: Manifest, annotationsFile: AnnotationsFile, t: 
   const lines: string[] = []
   lines.push(`# ${t('pack.skillDom')}`)
   lines.push('')
+  const plugins = Array.isArray(manifest.plugins) ? manifest.plugins : []
   const targeted = annotationsFile.annotations.filter((a) => a.target !== undefined)
-  if (manifest.plugins.length === 0 && targeted.length === 0) {
+  if (plugins.length === 0 && targeted.length === 0) {
     // Honest empty: no invented structure when no plugin contributed data.
     lines.push('No DOM metadata in this pack.')
     lines.push('')
@@ -629,10 +631,10 @@ function buildDomSkill(manifest: Manifest, annotationsFile: AnnotationsFile, t: 
     lines.push('')
     return lines.join('\n')
   }
-  if (manifest.plugins.length > 0) {
+  if (plugins.length > 0) {
     lines.push('Plugins that contributed data (see `plugins/`):')
     lines.push('')
-    for (const p of manifest.plugins) {
+    for (const p of plugins) {
       lines.push(`- **${p.name}** v${p.version} — files under \`${p.path}\``)
     }
     lines.push('')
@@ -642,7 +644,7 @@ function buildDomSkill(manifest: Manifest, annotationsFile: AnnotationsFile, t: 
     // what is ABSENT from that structure changes what it may conclude. A model
     // that does not know field values were withheld will read an empty form as
     // an empty form; a model that does knows it is looking at a redaction.
-    const dom = manifest.plugins.find((p) => p.name === 'chrome-dom')
+    const dom = plugins.find((p) => p.name === 'chrome-dom')
     if (dom !== undefined) {
       lines.push(
         'A `chrome-dom` pick from extension 0.2.0 or newer carries a `document`: every element',
@@ -664,7 +666,7 @@ function buildDomSkill(manifest: Manifest, annotationsFile: AnnotationsFile, t: 
     // page rectangles land on the neighbouring thing, so the walk throws them
     // away — and a model that does not know they were thrown away will read a
     // window with no controls as a window that HAD no controls.
-    const uia = manifest.plugins.find((p) => p.name === 'windows-uia')
+    const uia = plugins.find((p) => p.name === 'windows-uia')
     if (uia !== undefined) {
       lines.push(
         'In `windows-uia` 0.4.0 or newer, read `geometry_refused` before concluding anything from',

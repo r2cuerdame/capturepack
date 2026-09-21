@@ -949,6 +949,73 @@ console.log('\nTHE WEBHOOK SUMMARY READS FIELDS THAT EXIST')
   )
 }
 
+console.log('\nTHE WEBHOOK SUMMARY COUNTS CAPTURE-TIME DISPLAYS (#197)')
+{
+  const packDir = mkdtempSync(path.join(tmpdir(), 'capturepack-webhook-summary-'))
+  const writeManifest = (manifest: Record<string, unknown>): void => {
+    writeFileSync(path.join(packDir, 'manifest.json'), JSON.stringify(manifest), 'utf8')
+  }
+
+  try {
+    writeManifest({
+      capture_kind: 'image',
+      environment: { screens: [{ id: 'left' }, { id: 'right' }] },
+      media: { snapshot: 'snapshot.png' },
+    })
+    const still = await readPackSummary(packDir)
+    check(
+      'still-image packs count environment.screens when media.displays is forbidden',
+      still.displayCount === 2,
+      `displayCount: ${String(still.displayCount)}`,
+    )
+
+    writeManifest({
+      capture_kind: 'video',
+      environment: { screens: [{ id: 'left' }, { id: 'right' }] },
+      media: { replay: 'replay.webm', displays: null },
+    })
+    const legacyVideo = await readPackSummary(packDir)
+    check(
+      'legacy video packs count environment.screens when media.displays is null',
+      legacyVideo.displayCount === 2,
+      `displayCount: ${String(legacyVideo.displayCount)}`,
+    )
+
+    writeManifest({
+      capture_kind: 'video',
+      media: { replay: 'replay.webm' },
+    })
+    const legacyVideoWithoutScreens = await readPackSummary(packDir)
+    check(
+      'legacy video packs default to one display when environment.screens is omitted',
+      legacyVideoWithoutScreens.displayCount === 1,
+      `displayCount: ${String(legacyVideoWithoutScreens.displayCount)}`,
+    )
+
+    writeManifest({
+      capture_kind: 'video',
+      environment: { screens: [{ id: 'physical' }] },
+      media: { displays: [{ id: 'one' }, { id: 'two' }, { id: 'three' }] },
+    })
+    const modernVideo = await readPackSummary(packDir)
+    check(
+      'modern video packs continue to prefer media.displays',
+      modernVideo.displayCount === 3,
+      `displayCount: ${String(modernVideo.displayCount)}`,
+    )
+
+    writeManifest({ capture_kind: 'video', environment: 'not-an-object', media: {} })
+    const malformedEnvironment = await readPackSummary(packDir)
+    check(
+      'a malformed environment value is handled safely',
+      malformedEnvironment.displayCount === 1,
+      `displayCount: ${String(malformedEnvironment.displayCount)}`,
+    )
+  } finally {
+    rmSync(packDir, { recursive: true, force: true })
+  }
+}
+
 // A SECRET STORE THAT ONE INTERRUPTED WRITE CAN EMPTY FOR GOOD.
 //
 // The idempotency ledger is written beside its target and renamed. The secret

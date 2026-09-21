@@ -447,7 +447,7 @@ export const UIA_PLUGIN_NAME = 'windows-uia'
 export const UIA_PLUGIN_VERSION = '0.5.0'
 
 /** The manifest.plugins entry for the payload writeUiaPlugin() lays down. */
-export function uiaPluginDeclaration(): Manifest['plugins'][number] {
+export function uiaPluginDeclaration(): NonNullable<Manifest['plugins']>[number] {
   return { name: UIA_PLUGIN_NAME, version: UIA_PLUGIN_VERSION, path: `plugins/${UIA_PLUGIN_NAME}/` }
 }
 
@@ -600,7 +600,7 @@ export interface DomPluginPage {
   capture_ms: number
 }
 
-export function domPluginDeclaration(): Manifest['plugins'][number] {
+export function domPluginDeclaration(): NonNullable<Manifest['plugins']>[number] {
   return { name: DOM_PLUGIN_NAME, version: DOM_PLUGIN_VERSION, path: `plugins/${DOM_PLUGIN_NAME}/` }
 }
 
@@ -732,6 +732,63 @@ export async function tryWriteDomPlugin(
 }
 
 /**
+ * Safely reads timeline.json from a pack directory.
+ *
+ * SPEC §4, §10, and §14 declare timeline.json as OPTIONAL for video packs
+ * and absent for image packs. If timeline.json is missing, unreadable, or
+ * contains malformed JSON or invalid event arrays, falls back to a safe empty
+ * timeline ({ t0: fallbackCreatedAt, events: [] }) rather than throwing or
+ * aborting doc refresh.
+ */
+export async function readTimelineSafe(
+  dirPath: string,
+  fallbackCreatedAt: string,
+  captureKind?: CaptureKind,
+): Promise<TimelineFile> {
+  const safeT0 =
+    typeof fallbackCreatedAt === 'string' && fallbackCreatedAt.length > 0
+      ? fallbackCreatedAt
+      : new Date().toISOString()
+  const fallback: TimelineFile = { t0: safeT0, events: [] }
+  if (captureKind === 'image') {
+    return fallback
+  }
+  const timelinePath = join(dirPath, 'timeline.json')
+  if (!existsSync(timelinePath)) {
+    return fallback
+  }
+  try {
+    const raw = await readFile(timelinePath, 'utf8')
+    const parsed = JSON.parse(stripUtf8Bom(raw)) as unknown
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const candidate = parsed as { t0?: unknown; events?: unknown }
+      const t0 =
+        typeof candidate.t0 === 'string' && candidate.t0.length > 0
+          ? candidate.t0
+          : safeT0
+      if (
+        Array.isArray(candidate.events) &&
+        candidate.events.every(
+          (e) =>
+            e !== null &&
+            typeof e === 'object' &&
+            typeof (e as { type?: unknown }).type === 'string' &&
+            typeof (e as { t_ms?: unknown }).t_ms === 'number',
+        )
+      ) {
+        return {
+          t0,
+          events: candidate.events as TimelineFile['events'],
+        }
+      }
+    }
+    return fallback
+  } catch {
+    return fallback
+  }
+}
+
+/**
  * Adds one plugin declaration to an ALREADY written manifest.json, the way
  * setManifestRenderOutputs() adds the render outputs: the save-first folder is
  * complete before the (asynchronous, budgeted) dump lands, so its payload is
@@ -745,7 +802,7 @@ export async function tryWriteDomPlugin(
  */
 export async function addManifestPlugin(
   handle: PackHandle,
-  declaration: Manifest['plugins'][number],
+  declaration: NonNullable<Manifest['plugins']>[number],
   docLanguage: Language,
 ): Promise<void> {
   return withManifestMutation(handle.dirPath, async () => {
@@ -758,15 +815,16 @@ export async function addManifestPlugin(
     const nextManifest: Manifest = declared
       ? manifest
       : { ...manifest, plugins: [...plugins, declaration] }
-    const annotationsFile = JSON.parse(stripUtf8Bom(
-      await readFile(join(handle.dirPath, 'annotations.json'), 'utf8'),
-    )) as AnnotationsFile
-    const timeline: TimelineFile =
-      nextManifest.capture_kind === 'image'
-        ? { t0: nextManifest.created_at, events: [] }
-        : JSON.parse(stripUtf8Bom(
-            await readFile(join(handle.dirPath, 'timeline.json'), 'utf8'),
-          )) as TimelineFile
+    const annotationsFile = JSON.parse(
+      stripUtf8Bom(
+        await readFile(join(handle.dirPath, 'annotations.json'), 'utf8'),
+      ),
+    ) as AnnotationsFile
+    const timeline = await readTimelineSafe(
+      handle.dirPath,
+      nextManifest.created_at,
+      nextManifest.capture_kind,
+    )
 
     // A late plugin belongs to the durable source revision, not to derived
     // rendering. Under-promising while a final render starts is safe; once the
@@ -801,7 +859,7 @@ export async function addManifestPlugin(
 export const WINDOWS_CONTEXT_PLUGIN_NAME = 'windows-context'
 export const WINDOWS_CONTEXT_PLUGIN_VERSION = '0.1.0'
 
-export function windowsContextPluginDeclaration(): Manifest['plugins'][number] {
+export function windowsContextPluginDeclaration(): NonNullable<Manifest['plugins']>[number] {
   return {
     name: WINDOWS_CONTEXT_PLUGIN_NAME,
     version: WINDOWS_CONTEXT_PLUGIN_VERSION,
@@ -1975,13 +2033,11 @@ export async function refreshPackDocs(dirPath: string, docLanguage: Language = '
       await readFile(join(dirPath, 'annotations.json'), 'utf8'),
     )) as AnnotationsFile
     if (!Array.isArray(annotationsFile.annotations)) return
-    let timeline: TimelineFile = { t0: manifest.created_at, events: [] }
-    if (manifest.capture_kind !== 'image') {
-      timeline = JSON.parse(
-        stripUtf8Bom(await readFile(join(dirPath, 'timeline.json'), 'utf8')),
-      ) as TimelineFile
-      if (!Array.isArray(timeline.events)) return
-    }
+    const timeline = await readTimelineSafe(
+      dirPath,
+      manifest.created_at,
+      manifest.capture_kind,
+    )
     // The render has already run: nothing further will write stills, so an
     // undeclared keyframe set is an ABSENT one, not a pending one.
     const previousFormatVersion = manifest.format_version

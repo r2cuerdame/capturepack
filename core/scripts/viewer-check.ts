@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
   addManifestPlugin,
+  readTimelineSafe,
   refreshPackDocs,
   savePack,
   setManifestRenderOutputs,
@@ -23,8 +24,10 @@ import {
   safeViewerPath,
   VIEWER_FORMAT_VERSION,
 } from '../src/main/viewer'
-import { buildReport } from '../src/main/report'
+import { buildReport, describeAnnotation } from '../src/main/report'
 import { buildReadme, buildSkills } from '../src/main/packdocs'
+import { drawDisplayLabels } from '../src/renderer/editor/render'
+import { drawBox, renderedLabelBottomGutter } from '../src/renderer/render/render'
 import type {
   Annotation,
   AnnotationsFile,
@@ -438,6 +441,115 @@ function pureContractChecks(): void {
       minimalEnvSkills.overview.includes('on windows.') &&
       !minimalEnvSkills.overview.includes('undefined'),
   )
+
+  const noPluginsManifest = videoManifest()
+  delete noPluginsManifest.plugins
+  const noPluginsSkills = buildSkills(noPluginsManifest, annotations(), timeline(), 'en', false)
+  check(
+    'pack omitting plugins generates all skills documents without throwing or undefined',
+    typeof noPluginsSkills.overview === 'string' &&
+      typeof noPluginsSkills.dom === 'string' &&
+      typeof noPluginsSkills.annotation === 'string' &&
+      typeof noPluginsSkills.project === 'string' &&
+      typeof noPluginsSkills.timeline === 'string' &&
+      noPluginsSkills.overview.includes('0 plugins.') &&
+      noPluginsSkills.dom.includes('No DOM metadata in this pack.') &&
+      !noPluginsSkills.overview.includes('undefined') &&
+      !noPluginsSkills.dom.includes('undefined'),
+  )
+
+  const noTrackingBox = box('ann_no_track', 'A box without tracking')
+  delete (noTrackingBox as Partial<Annotation>).tracking
+  const noTrackingAnnotations = annotations([noTrackingBox])
+  const noTrackingSkills = buildSkills(videoManifest(), noTrackingAnnotations, timeline(), 'en', false)
+  check(
+    'pack omitting annotation.tracking generates all skills documents without throwing or undefined',
+    typeof noTrackingSkills.annotation === 'string' &&
+      noTrackingSkills.annotation.includes('A box without tracking') &&
+      !noTrackingSkills.annotation.includes('undefined'),
+  )
+
+  const noTextBox = box('ann_no_text', '')
+  delete (noTextBox as Partial<Annotation>).text
+  const noTextAnnotations = annotations([noTextBox])
+  const noTextManifest = videoManifest()
+  const noTextHtml = buildViewerHtml(noTextManifest, noTextAnnotations, timeline(), 'en')
+  const noTextReport = buildReport(noTextManifest, noTextAnnotations, 'en', false, true)
+  const noTextReadme = buildReadme(noTextManifest, noTextAnnotations, 'en', false, true)
+  const noTextSkills = buildSkills(noTextManifest, noTextAnnotations, timeline(), 'en', false)
+  const noTextGutter = renderedLabelBottomGutter([noTextBox], 1)
+  const noTextDesc = describeAnnotation(noTextBox)
+
+  const fakeRegion = { cx: 0, cy: 0, cw: 1920, ch: 1080, cscale: 1, width: 1920, height: 1080 }
+  const fakeCtx = {
+    save: () => {},
+    restore: () => {},
+    setTransform: () => {},
+    measureText: () => ({ width: 0 }),
+    fillText: () => {},
+    strokeRect: () => {},
+    fillRect: () => {},
+    beginPath: () => {},
+    arc: () => {},
+    roundRect: () => {},
+    fill: () => {},
+    stroke: () => {},
+  } as unknown as CanvasRenderingContext2D
+  let labelsThrew = false
+  try {
+    drawDisplayLabels(fakeCtx, fakeRegion, [noTextBox], 1)
+    drawBox(fakeCtx, noTextBox, 1, 1)
+  } catch {
+    labelsThrew = true
+  }
+
+  check(
+    'pack omitting annotation.text generates viewer, report, readme, skills, gutter, and canvas labels cleanly',
+    typeof noTextHtml === 'string' &&
+      !noTextHtml.includes('undefined') &&
+      typeof noTextReport === 'string' &&
+      !noTextReport.includes('undefined') &&
+      typeof noTextReadme === 'string' &&
+      !noTextReadme.includes('undefined') &&
+      typeof noTextSkills.overview === 'string' &&
+      !noTextSkills.overview.includes('undefined') &&
+      typeof noTextSkills.annotation === 'string' &&
+      !noTextSkills.annotation.includes('undefined') &&
+      noTextGutter === 0 &&
+      !noTextDesc.includes('undefined') &&
+      !labelsThrew,
+  )
+
+  const minimalCandidates = [
+    path.resolve(process.cwd(), '../examples/minimal'),
+    path.resolve(process.cwd(), 'examples/minimal'),
+  ]
+  const minimalPackPath = minimalCandidates.find((dir) => existsSync(path.join(dir, 'manifest.json')))
+  if (minimalPackPath !== undefined) {
+    const minimalManifest = JSON.parse(
+      readFileSync(path.join(minimalPackPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    const minimalAnnotations = JSON.parse(
+      readFileSync(path.join(minimalPackPath, 'annotations.json'), 'utf8'),
+    ) as AnnotationsFile
+    const minimalTimeline = JSON.parse(
+      readFileSync(path.join(minimalPackPath, 'timeline.json'), 'utf8'),
+    ) as TimelineFile
+    const minimalSkills = buildSkills(minimalManifest, minimalAnnotations, minimalTimeline, 'en', false)
+    check(
+      'examples/minimal pack generates all skills documents successfully',
+      minimalManifest.plugins === undefined &&
+        typeof minimalSkills.overview === 'string' &&
+        typeof minimalSkills.dom === 'string' &&
+        typeof minimalSkills.annotation === 'string' &&
+        typeof minimalSkills.project === 'string' &&
+        typeof minimalSkills.timeline === 'string' &&
+        minimalSkills.overview.includes('0 plugins.') &&
+        minimalSkills.dom.includes('No DOM metadata in this pack.') &&
+        !minimalSkills.overview.includes('undefined') &&
+        !minimalSkills.dom.includes('undefined'),
+    )
+  }
 }
 
 async function writerIntegrationChecks(): Promise<void> {
@@ -518,6 +630,221 @@ async function writerIntegrationChecks(): Promise<void> {
         !omittedSkills.includes('undefined') &&
         !omittedReadme.includes('undefined'),
     )
+
+    const omittedPluginsManifest = JSON.parse(
+      readFileSync(path.join(handle.dirPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    delete omittedPluginsManifest.plugins
+    writeFileSync(
+      path.join(handle.dirPath, 'manifest.json'),
+      JSON.stringify(omittedPluginsManifest, null, 2),
+      'utf8',
+    )
+    await refreshPackDocs(handle.dirPath, 'en')
+    const omittedPluginsOverview = readFileSync(path.join(handle.dirPath, 'skills', 'overview.md'), 'utf8')
+    const omittedPluginsDom = readFileSync(path.join(handle.dirPath, 'skills', 'dom.md'), 'utf8')
+    const omittedPluginsAnnotation = readFileSync(path.join(handle.dirPath, 'skills', 'annotation.md'), 'utf8')
+    const omittedPluginsProject = readFileSync(path.join(handle.dirPath, 'skills', 'project.md'), 'utf8')
+    const omittedPluginsTimeline = readFileSync(path.join(handle.dirPath, 'skills', 'timeline.md'), 'utf8')
+    const omittedPluginsManifestAfter = JSON.parse(
+      readFileSync(path.join(handle.dirPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    check(
+      'refreshPackDocs regenerates all skills documents for pack omitting plugins without throwing or undefined',
+      omittedPluginsOverview.includes('0 plugins.') &&
+        omittedPluginsDom.includes('No DOM metadata in this pack.') &&
+        omittedPluginsAnnotation.length > 0 &&
+        omittedPluginsProject.length > 0 &&
+        omittedPluginsTimeline.length > 0 &&
+        !omittedPluginsOverview.includes('undefined') &&
+        !omittedPluginsDom.includes('undefined') &&
+        existsSync(path.join(handle.dirPath, 'manifest.json')) &&
+        omittedPluginsManifestAfter.format_version !== undefined,
+    )
+
+    const omittedTrackingAnnotations = JSON.parse(
+      readFileSync(path.join(handle.dirPath, 'annotations.json'), 'utf8'),
+    ) as AnnotationsFile
+    for (const ann of omittedTrackingAnnotations.annotations) {
+      delete (ann as Partial<Annotation>).tracking
+    }
+    writeFileSync(
+      path.join(handle.dirPath, 'annotations.json'),
+      JSON.stringify(omittedTrackingAnnotations, null, 2),
+      'utf8',
+    )
+    await refreshPackDocs(handle.dirPath, 'en')
+    const omittedTrackingAnnotationSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'annotation.md'),
+      'utf8',
+    )
+    check(
+      'refreshPackDocs regenerates skills documents for pack omitting annotation.tracking without throwing',
+      omittedTrackingAnnotationSkill.length > 0 &&
+        !omittedTrackingAnnotationSkill.includes('undefined'),
+    )
+
+    const omittedTextAnnotations = JSON.parse(
+      readFileSync(path.join(handle.dirPath, 'annotations.json'), 'utf8'),
+    ) as AnnotationsFile
+    for (const ann of omittedTextAnnotations.annotations) {
+      delete (ann as Partial<Annotation>).text
+    }
+    writeFileSync(
+      path.join(handle.dirPath, 'annotations.json'),
+      JSON.stringify(omittedTextAnnotations, null, 2),
+      'utf8',
+    )
+    await refreshPackDocs(handle.dirPath, 'en')
+    const omittedTextAnnotationSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'annotation.md'),
+      'utf8',
+    )
+    const omittedTextOverviewSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'overview.md'),
+      'utf8',
+    )
+    const omittedTextReport = readFileSync(
+      path.join(handle.dirPath, 'report.md'),
+      'utf8',
+    )
+    const omittedTextViewer = readFileSync(
+      path.join(handle.dirPath, 'viewer.html'),
+      'utf8',
+    )
+    check(
+      'refreshPackDocs regenerates viewer and docs for pack omitting annotation.text without throwing',
+      existsSync(path.join(handle.dirPath, 'viewer.html')) &&
+        omittedTextViewer.length > 0 &&
+        !omittedTextViewer.includes('undefined') &&
+        omittedTextReport.length > 0 &&
+        !omittedTextReport.includes('undefined') &&
+        omittedTextAnnotationSkill.length > 0 &&
+        !omittedTextAnnotationSkill.includes('undefined') &&
+        omittedTextOverviewSkill.length > 0 &&
+        !omittedTextOverviewSkill.includes('undefined'),
+    )
+
+    // Issue #200: pack omitting timeline.json (OPTIONAL for video packs per SPEC §4, §10, §14)
+    rmSync(path.join(handle.dirPath, 'timeline.json'), { force: true })
+    const capturedNoTimelineErrors: string[] = []
+    const origConsoleError = console.error
+    console.error = (...args: unknown[]): void => {
+      capturedNoTimelineErrors.push(args.map(String).join(' '))
+      origConsoleError(...args)
+    }
+    try {
+      await refreshPackDocs(handle.dirPath, 'en')
+    } finally {
+      console.error = origConsoleError
+    }
+    const noTimelineViewer = readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8')
+    const noTimelineReport = readFileSync(path.join(handle.dirPath, 'report.md'), 'utf8')
+    const noTimelineReadme = readFileSync(path.join(handle.dirPath, 'README.md'), 'utf8')
+    const noTimelineTimelineSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'timeline.md'),
+      'utf8',
+    )
+    check(
+      'refreshPackDocs regenerates viewer and docs for pack omitting timeline.json without throwing or logging ENOENT',
+      !existsSync(path.join(handle.dirPath, 'timeline.json')) &&
+        capturedNoTimelineErrors.length === 0 &&
+        noTimelineViewer.length > 0 &&
+        !noTimelineViewer.includes('undefined') &&
+        noTimelineReport.length > 0 &&
+        !noTimelineReport.includes('undefined') &&
+        noTimelineReadme.length > 0 &&
+        !noTimelineReadme.includes('undefined') &&
+        noTimelineTimelineSkill.includes('No events were recorded.') &&
+        !noTimelineTimelineSkill.includes('undefined'),
+    )
+
+    const lateNoTimelinePluginDir = path.join(handle.dirPath, 'plugins', 'late-no-timeline')
+    mkdirSync(lateNoTimelinePluginDir, { recursive: true })
+    writeFileSync(
+      path.join(lateNoTimelinePluginDir, 'meta.json'),
+      '{"name":"late-no-timeline","version":"1"}',
+    )
+    await addManifestPlugin(
+      handle,
+      { name: 'late-no-timeline', version: '1.0.0', path: 'plugins/late-no-timeline/' },
+      'en',
+    )
+    const manifestAfterLateNoTimeline = JSON.parse(
+      readFileSync(path.join(handle.dirPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    const viewerAfterLateNoTimeline = readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8')
+    check(
+      'addManifestPlugin attaches plugin and updates docs on pack omitting timeline.json without throwing',
+      (manifestAfterLateNoTimeline.plugins ?? []).some((p) => p.name === 'late-no-timeline') &&
+        viewerAfterLateNoTimeline.includes('late-no-timeline') &&
+        !viewerAfterLateNoTimeline.includes('undefined'),
+    )
+
+    // Issue #200: malformed timeline.json (SyntaxError and non-array events)
+    writeFileSync(path.join(handle.dirPath, 'timeline.json'), '{"events": [corrupted json', 'utf8')
+    await refreshPackDocs(handle.dirPath, 'en')
+    const malformedJsonSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'timeline.md'),
+      'utf8',
+    )
+    check(
+      'refreshPackDocs falls back to empty timeline on malformed JSON without throwing or aborting',
+      malformedJsonSkill.includes('No events were recorded.') &&
+        !malformedJsonSkill.includes('undefined'),
+    )
+
+    const lateMalformedPluginDir = path.join(handle.dirPath, 'plugins', 'late-malformed')
+    mkdirSync(lateMalformedPluginDir, { recursive: true })
+    writeFileSync(
+      path.join(lateMalformedPluginDir, 'meta.json'),
+      '{"name":"late-malformed","version":"1"}',
+    )
+    await addManifestPlugin(
+      handle,
+      { name: 'late-malformed', version: '1.0.0', path: 'plugins/late-malformed/' },
+      'en',
+    )
+    const manifestAfterLateMalformed = JSON.parse(
+      readFileSync(path.join(handle.dirPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    check(
+      'addManifestPlugin succeeds and updates manifest on pack with malformed timeline.json',
+      (manifestAfterLateMalformed.plugins ?? []).some((p) => p.name === 'late-malformed'),
+    )
+
+    // Invalid shape: events is not an array
+    writeFileSync(
+      path.join(handle.dirPath, 'timeline.json'),
+      JSON.stringify({ t0: '2026-09-22T00:00:00Z', events: 'not-an-array' }),
+      'utf8',
+    )
+    await refreshPackDocs(handle.dirPath, 'en')
+    const nonArrayEventsSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'timeline.md'),
+      'utf8',
+    )
+    check(
+      'refreshPackDocs falls back to empty timeline when events is not an array',
+      nonArrayEventsSkill.includes('No events were recorded.') &&
+        !nonArrayEventsSkill.includes('undefined'),
+    )
+
+    // Direct unit checks for readTimelineSafe contract
+    const safeMissing = await readTimelineSafe(path.join(outputDir, 'nonexistent'), '2026-01-01T00:00:00Z', 'video')
+    check('readTimelineSafe returns fallback for missing directory or file', safeMissing.t0 === '2026-01-01T00:00:00Z' && safeMissing.events.length === 0)
+    const safeImage = await readTimelineSafe(handle.dirPath, '2026-01-01T00:00:00Z', 'image')
+    check('readTimelineSafe returns empty timeline for image capture without reading disk', safeImage.events.length === 0)
+    writeFileSync(
+      path.join(handle.dirPath, 'timeline.json'),
+      JSON.stringify({
+        t0: '2026-09-22T00:00:00Z',
+        events: [{ t_ms: 500, type: 'core.capture.triggered' }],
+      }),
+      'utf8',
+    )
+    const safeValid = await readTimelineSafe(handle.dirPath, '2026-01-01T00:00:00Z', 'video')
+    check('readTimelineSafe preserves valid timeline events', safeValid.events.length === 1 && safeValid.events[0]?.type === 'core.capture.triggered')
 
     rmSync(path.join(handle.dirPath, 'viewer.html'), { force: true })
     mkdirSync(path.join(handle.dirPath, 'viewer.html'))

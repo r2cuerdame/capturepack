@@ -345,7 +345,7 @@ export interface Manifest {
       coordinate_space: 'virtual-desktop-dip'
     }
   }
-  plugins: Array<{ name: string; version: string; path: string }>
+  plugins?: Array<{ name: string; version: string; path: string }>
 }
 
 // Format 0.1.0 defines exactly ONE annotation type: the box (SPEC §8). A box
@@ -630,8 +630,8 @@ export interface BoxAnnotation {
   // existing pack changes. `bounds` is always in THAT display's snapshot pixel
   // space, never the board's.
   display?: number
-  // The description the user typed. May be empty (spec default: "").
-  text: string
+  // The description the user typed. May be empty (spec default: ""). Absent means "" (SPEC §8.3).
+  text?: string
   // Lifetime interval [start_ms, end_ms] on the replay clock (SPEC §8.4).
   // BOTH present or BOTH absent; start_ms <= end_ms. Absent = whole capture.
   // The representative instant of a box is the lifetime MIDPOINT — there is
@@ -668,7 +668,7 @@ export interface BoxAnnotation {
   // Whether the interior is blurred in RENDERED views only (SPEC §9): the
   // original snapshot.png and replay are never modified.
   blur?: boolean
-  tracking: AnnotationTracking
+  tracking?: AnnotationTracking
   /**
    * AUTHORED motion for a MANUAL box (SPEC §8.9) — where the user put it, at
    * the moments they put it there.

@@ -266,14 +266,14 @@ export async function planShareBundle(dirPath: string): Promise<ShareBundlePlan>
   }
 
   const visibleLabels = pack.annotations
-    .map((annotation) => annotation.text.trim())
+    .map((annotation) => (typeof annotation.text === 'string' ? annotation.text.trim() : ''))
     .filter((text) => text !== '')
   // The current renderer draws a box's label AFTER its blur pass. A semantic
   // pick commonly fills that label with the same UIA/DOM name the user meant
   // to hide, so copying those pixels would undo the redaction at the box edge.
   // Fail closed until the user clears the blur box's label and re-renders.
   const blockers: ShareBundleBlocker[] = blurAnnotations.some(
-    (annotation) => annotation.text.trim() !== '',
+    (annotation) => typeof annotation.text === 'string' && annotation.text.trim() !== '',
   )
     ? ['blur-label']
     : []
@@ -862,11 +862,6 @@ function shareDisplayLayout(
   if (!Array.isArray(rawDisplays) || rawDisplays.length === 0) {
     throw new ShareBundleError('invalid-pack')
   }
-  const environment = manifest.environment as unknown
-  if (!isRecord(environment) || !Array.isArray(environment['screens'])) {
-    throw new ShareBundleError('invalid-pack')
-  }
-  const screens = environment['screens']
   const displays: ManifestDisplayMedia[] = []
   const declared = new Set<number>()
   let focused: number | null = null
@@ -882,22 +877,6 @@ function shareDisplayLayout(
       (value['snapshot_height'] !== undefined && !positiveInteger(value['snapshot_height'])) ||
       !finiteRectangle(value['bounds']) ||
       !positiveFinite(value['scale'])
-    ) {
-      throw new ShareBundleError('invalid-pack')
-    }
-    const screen = screens[value['index'] - 1]
-    if (
-      !isRecord(screen) ||
-      !positiveInteger(screen['width']) ||
-      !positiveInteger(screen['height']) ||
-      !positiveFinite(screen['scale']) ||
-      Math.abs(screen['scale'] - value['scale']) > 1e-6 ||
-      Math.abs(Math.round(value['bounds'].width * value['scale']) - screen['width']) > 1 ||
-      Math.abs(Math.round(value['bounds'].height * value['scale']) - screen['height']) > 1 ||
-      (positiveInteger(value['snapshot_width']) &&
-        Math.abs(value['snapshot_width'] - screen['width']) > 1) ||
-      (positiveInteger(value['snapshot_height']) &&
-        Math.abs(value['snapshot_height'] - screen['height']) > 1)
     ) {
       throw new ShareBundleError('invalid-pack')
     }

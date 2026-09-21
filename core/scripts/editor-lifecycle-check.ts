@@ -10,6 +10,7 @@ import {
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { replayOnce } from '../src/preload/replayOnce'
+import { PackRenderBatchTracker } from '../src/main/renderBatch'
 
 interface FakeTimer extends WatchdogTimer {
   id: number
@@ -214,10 +215,32 @@ console.log('\nHistory -> replay editor reopen contract')
     `setImmediate=${scheduleAt}, runEditFlow=${runAt}, return=true=${acceptedAt}`,
   )
 
+  const startEditRenderCheckAt = startEdit.indexOf('if (isRenderInFlight(dirPath))')
+  const flowActiveSetAt = startEdit.indexOf('flowActive = true')
+  check(
+    'startEditFlow rejects re-edit requests when background render is in flight',
+    startEditRenderCheckAt >= 0
+      && flowActiveSetAt > startEditRenderCheckAt
+      && scheduleAt > flowActiveSetAt
+      && startEdit.includes('logWarn(`[capture] re-edit of ${path.basename(dirPath)} requested while render was in flight`)')
+      && startEdit.includes('return false')
+      && mainSource.includes('isRenderInFlight,'),
+    `renderCheck=${startEditRenderCheckAt}, flowActiveSet=${flowActiveSetAt}, schedule=${scheduleAt}`,
+  )
+
   const handler = sectionBetween(
     historyMainSource,
     'ipcMain.handle(IPC.historyOpenPack',
     'ipcMain.handle(IPC.historyPlay',
+  )
+  const historyRenderCheckAt = handler.indexOf('if (isRenderInFlight(entry.path))')
+  const historyStartEditAt = handler.indexOf('return startEditFlow(entry.path, liveSettings)')
+  check(
+    'historyOpenPack rejects re-edit requests when background render is in flight',
+    historyRenderCheckAt >= 0
+      && historyStartEditAt > historyRenderCheckAt
+      && handler.includes("return { ok: false, error: t('history.shareErrNotReady') }"),
+    `historyRenderCheck=${historyRenderCheckAt}, startEdit=${historyStartEditAt}`,
   )
   check(
     'History receives an explicit accepted/busy result from startEditFlow',
@@ -368,6 +391,88 @@ console.log('\nHistory -> replay editor reopen contract')
     'the no-display report carries the board geometry that would explain it',
     pointerDown.includes('boardGeometryDescription(e)'),
   )
+}
+
+console.log('\nRe-edit rejection during background rendering state machine')
+{
+  let packOperationActive = false
+  const emittedStates: string[] = []
+  const tracker = new PackRenderBatchTracker(
+    (_dir) => {
+      if (packOperationActive) return null
+      packOperationActive = true
+      return () => {
+        packOperationActive = false
+      }
+    },
+    (_dir, state) => {
+      emittedStates.push(state)
+    },
+  )
+
+  const packPath = 'C:\\packs\\recording-1'
+  const isRenderInFlight = (dir: string): boolean => tracker.isInFlight(dir)
+
+  let flowActive = false
+  const warnLogs: string[] = []
+  const simulateStartEditFlow = (dirPath: string): boolean => {
+    if (flowActive) {
+      warnLogs.push(`re-edit of ${path.basename(dirPath)} requested while a flow was already open`)
+      return false
+    }
+    if (isRenderInFlight(dirPath)) {
+      warnLogs.push(`re-edit of ${path.basename(dirPath)} requested while render was in flight`)
+      return false
+    }
+    flowActive = true
+    return true
+  }
+
+  const simulateHistoryOpenPack = (
+    dirPath: string,
+    packExists = true,
+  ): { ok: boolean; error?: string } => {
+    if (!packExists) return { ok: false, error: 'packNotFound' }
+    if (isRenderInFlight(dirPath)) {
+      return { ok: false, error: 'shareErrNotReady' }
+    }
+    return simulateStartEditFlow(dirPath)
+      ? { ok: true }
+      : { ok: false, error: 'errFlowBusy' }
+  }
+
+  check('no render in flight initially', !isRenderInFlight(packPath))
+
+  const finishRender = tracker.begin(packPath)
+  check(
+    'background render is in flight and locks pack operation',
+    finishRender !== null && isRenderInFlight(packPath) && packOperationActive,
+  )
+
+  const historyResult = simulateHistoryOpenPack(packPath)
+  check(
+    'historyOpenPack rejects re-edit while render is in flight with shareErrNotReady',
+    historyResult.ok === false && historyResult.error === 'shareErrNotReady',
+  )
+  check('editor flow was not started by historyOpenPack', !flowActive)
+
+  const editResult = simulateStartEditFlow(packPath)
+  check('startEditFlow rejects re-edit while render is in flight', editResult === false)
+  check('editor flow was not started by startEditFlow', !flowActive)
+  check(
+    'startEditFlow logged warning for render in flight',
+    warnLogs.includes(`re-edit of ${path.basename(packPath)} requested while render was in flight`),
+  )
+
+  finishRender?.('done')
+  check(
+    'render completes: isRenderInFlight is false and lock released',
+    !isRenderInFlight(packPath) && !packOperationActive,
+  )
+
+  const historyResultAfter = simulateHistoryOpenPack(packPath)
+  check('historyOpenPack accepts re-edit once render is complete', historyResultAfter.ok === true)
+  check('editor flow is now active', flowActive)
 }
 
 console.log(`\n${passed} passed, ${failed} failed`)

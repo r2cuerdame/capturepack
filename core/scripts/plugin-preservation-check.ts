@@ -106,7 +106,7 @@ async function main(): Promise<void> {
     await Promise.all([finalSave, lateDomDeclaration])
 
     const saved = JSON.parse(readFileSync(path.join(root, 'manifest.json'), 'utf8')) as Manifest
-    const names = saved.plugins.map((plugin) => plugin.name).sort()
+    const names = (saved.plugins ?? []).map((plugin) => plugin.name).sort()
     check(
       'final manifest keeps chrome-dom and adds windows-uia',
       names.join(',') === 'chrome-dom,windows-uia',

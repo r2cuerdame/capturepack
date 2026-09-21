@@ -529,7 +529,6 @@ try {
     }],
     ['missing display scale', (manifest: any) => { delete manifest.media.displays[1].scale }],
     ['invalid display scale', (manifest: any) => { manifest.media.displays[1].scale = 0 }],
-    ['display without matching screen', (manifest: any) => { manifest.environment.screens.pop() }],
   ] as const) {
     const malformed = makeFixture(`display-${name.replaceAll(' ', '-')}`)
     const manifestFile = path.join(malformed.dir, 'manifest.json')
@@ -539,6 +538,78 @@ try {
     await expectError('invalid-pack', () => planShareBundle(malformed.dir))
     check(`${name} cannot create a partial Share Copy`, !existsSync(malformed.share))
   }
+
+  // Issue #192: environment.screens is optional per SPEC §5.2.
+  // 1. Pack omitting environment.screens succeeds.
+  const omittedScreens = makeFixture('omitted-screens')
+  const omittedScreensManifestFile = path.join(omittedScreens.dir, 'manifest.json')
+  const omittedScreensManifest = JSON.parse(readFileSync(omittedScreensManifestFile, 'utf8'))
+  delete omittedScreensManifest.environment.screens
+  writeFileSync(omittedScreensManifestFile, `${JSON.stringify(omittedScreensManifest, null, 2)}\n`)
+  const omittedScreensPlan = await planShareBundle(omittedScreens.dir)
+  const omittedScreensCreated = await createShareBundle(omittedScreens.dir, omittedScreensPlan.revision)
+  check('pack omitting environment.screens plans and creates Share Copy',
+    omittedScreensCreated.zipPath === omittedScreensPlan.outputPath && existsSync(omittedScreensPlan.outputPath))
+
+  // 2. Pack where environment.screens is not an array succeeds.
+  const nonArrayScreens = makeFixture('non-array-screens')
+  const nonArrayScreensManifestFile = path.join(nonArrayScreens.dir, 'manifest.json')
+  const nonArrayScreensManifest = JSON.parse(readFileSync(nonArrayScreensManifestFile, 'utf8'))
+  nonArrayScreensManifest.environment.screens = 'not-an-array'
+  writeFileSync(nonArrayScreensManifestFile, `${JSON.stringify(nonArrayScreensManifest, null, 2)}\n`)
+  const nonArrayScreensPlan = await planShareBundle(nonArrayScreens.dir)
+  const nonArrayScreensCreated = await createShareBundle(nonArrayScreens.dir, nonArrayScreensPlan.revision)
+  check('pack with non-array environment.screens plans and creates Share Copy',
+    nonArrayScreensCreated.zipPath === nonArrayScreensPlan.outputPath && existsSync(nonArrayScreensPlan.outputPath))
+
+  // 3. Multi-monitor pack where display index does not align with 1-based screens index (e.g. subset of displays).
+  const unalignedScreens = makeFixture('unaligned-screens')
+  const unalignedScreensManifestFile = path.join(unalignedScreens.dir, 'manifest.json')
+  const unalignedScreensManifest = JSON.parse(readFileSync(unalignedScreensManifestFile, 'utf8'))
+  unalignedScreensManifest.environment.screens.pop()
+  writeFileSync(unalignedScreensManifestFile, `${JSON.stringify(unalignedScreensManifest, null, 2)}\n`)
+  const unalignedScreensPlan = await planShareBundle(unalignedScreens.dir)
+  const unalignedScreensCreated = await createShareBundle(unalignedScreens.dir, unalignedScreensPlan.revision)
+  check('pack with display indices exceeding environment.screens count plans and creates Share Copy',
+    unalignedScreensCreated.zipPath === unalignedScreensPlan.outputPath && existsSync(unalignedScreensPlan.outputPath))
+
+  // 4. Valid multi-display pack where OS enumeration order differs from display order.
+  const reversedOrder = makeFixture('reversed-screen-order')
+  const reversedOrderManifestFile = path.join(reversedOrder.dir, 'manifest.json')
+  const reversedOrderManifest = JSON.parse(readFileSync(reversedOrderManifestFile, 'utf8'))
+  reversedOrderManifest.environment.screens = [
+    { width: 3840, height: 2160, scale: 2 },
+    { width: reversedOrderManifest.environment.screens[0].width, height: reversedOrderManifest.environment.screens[0].height, scale: 1 },
+  ]
+  writeFileSync(reversedOrderManifestFile, `${JSON.stringify(reversedOrderManifest, null, 2)}\n`)
+  const reversedOrderPlan = await planShareBundle(reversedOrder.dir)
+  const reversedOrderCreated = await createShareBundle(reversedOrder.dir, reversedOrderPlan.revision)
+  check('multi-display pack with different OS enumeration order creates Share Copy without false geometry mismatch',
+    reversedOrderCreated.zipPath === reversedOrderPlan.outputPath && existsSync(reversedOrderPlan.outputPath))
+
+  // 5. Multi-display pack with non-trivial display indices (displays 2 and 3).
+  const nonTrivialIndices = makeFixture('non-trivial-indices')
+  const nonTrivialManifestFile = path.join(nonTrivialIndices.dir, 'manifest.json')
+  const nonTrivialManifest = JSON.parse(readFileSync(nonTrivialManifestFile, 'utf8'))
+  nonTrivialManifest.media.displays[0].index = 2
+  nonTrivialManifest.media.displays[1].index = 3
+  nonTrivialManifest.media.displays[1].snapshot = 'snapshot-d3.png'
+  nonTrivialManifest.media.displays[1].replay = 'replay-d3.webm'
+  nonTrivialManifest.media.displays[1].replay_annotated = 'replay_annotated-d3.webm'
+  nonTrivialManifest.media.displays[1].keyframes = [{ file: 'frames-d3/frame-01_00-01.000.png', t_ms: 1_000 }]
+  delete nonTrivialManifest.environment.screens
+  writeFileSync(nonTrivialManifestFile, `${JSON.stringify(nonTrivialManifest, null, 2)}\n`)
+  renameSync(path.join(nonTrivialIndices.dir, 'frames-d2'), path.join(nonTrivialIndices.dir, 'frames-d3'))
+  const nonTrivialAnnotationsFile = path.join(nonTrivialIndices.dir, 'annotations.json')
+  const nonTrivialAnnotations = JSON.parse(readFileSync(nonTrivialAnnotationsFile, 'utf8'))
+  nonTrivialAnnotations.annotations[1].display = 3
+  writeFileSync(nonTrivialAnnotationsFile, `${JSON.stringify(nonTrivialAnnotations, null, 2)}\n`)
+  writeFileSync(path.join(nonTrivialIndices.dir, 'frames', 'frame-01_00-01.000.png'), PNG)
+  writeFileSync(path.join(nonTrivialIndices.dir, 'frames-d3', 'frame-01_00-01.000.png'), PNG)
+  const nonTrivialPlan = await planShareBundle(nonTrivialIndices.dir)
+  const nonTrivialCreated = await createShareBundle(nonTrivialIndices.dir, nonTrivialPlan.revision)
+  check('pack with non-trivial multi-monitor display indices plans and creates Share Copy',
+    nonTrivialCreated.zipPath === nonTrivialPlan.outputPath && existsSync(nonTrivialPlan.outputPath))
 
   for (const [name, lane] of [['focused', 'top'], ['non-blur secondary', 'display']] as const) {
     const incomplete = makeFixture(`missing-${name.replaceAll(' ', '-')}-lane`)

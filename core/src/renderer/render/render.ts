@@ -207,7 +207,7 @@ export function renderedLabelBottomGutter(
   annotations: readonly Annotation[],
   ui: number,
 ): number {
-  if (!annotations.some((annotation) => annotation.text.trim() !== '')) return 0
+  if (!annotations.some((annotation) => typeof annotation.text === 'string' && annotation.text.trim() !== '')) return 0
   return Math.ceil(annotationLabelBottomOutset(renderedLabelStyle('', ui)))
 }
 
@@ -567,14 +567,14 @@ function pixelate(ctx: CanvasRenderingContext2D, source: HTMLCanvasElement, a: A
 }
 
 /** Border + number badge + text for one alive box. Results only — no controls. */
-function drawBox(
+export function drawBox(
   ctx: CanvasRenderingContext2D,
   a: Annotation,
   displayNumber: number | undefined,
   ui: number,
 ): void {
   const color = annotationColor(a)
-  const text = a.text.trim()
+  const text = typeof a.text === 'string' ? a.text.trim() : ''
   drawAnnotationBox(ctx, a.bounds, {
     color,
     borderWidth: 3 * ui,

@@ -38,7 +38,7 @@ import type { ActionResult } from '../shared/actions'
 import { readActionResults, retryAction } from './actions/host'
 import { loadSettings } from './settings'
 import { DEFAULT_CAPTURE_HOTKEY } from '../shared/types'
-import type { Annotation, Settings } from '../shared/types'
+import type { Annotation, Manifest, Settings } from '../shared/types'
 import { captureKindOf } from '../shared/captureMedia'
 import {
   isRenderInFlight,
@@ -73,7 +73,13 @@ import { startEditFlow } from './session'
 import { openSettingsWindow } from './settingsWindow'
 import { invalidateStorageUsage, storageUsage } from './storage'
 import { copyTextToClipboard } from './clipboard'
-import { planHistoryRerender, type HistoryRerenderPlan } from './historyRerenderPlan'
+import {
+  historyAnnotatedState,
+  historyRerenderKind,
+  planHistoryRerender,
+  type HistoryRerenderPlan,
+} from './historyRerenderPlan'
+import { safeViewerPath } from './viewer'
 
 const THUMB_WIDTH = 320
 const MAX_PACK_NAME_LENGTH = 180
@@ -236,6 +242,9 @@ export function registerHistoryIpc(live: Settings): void {
     if (entry === null) return { ok: false, error: t('history.errPackNotFound') }
     if (entry.kind !== 'dir') return { ok: false, error: t('history.editZipTooltip') }
     if (liveSettings === null) return { ok: false, error: t('history.couldNotEdit') }
+    if (isRenderInFlight(entry.path)) {
+      return { ok: false, error: t('history.shareErrNotReady') }
+    }
     return startEditFlow(entry.path, liveSettings)
       ? { ok: true }
       : { ok: false, error: t('history.errFlowBusy') }
@@ -247,8 +256,10 @@ export function registerHistoryIpc(live: Settings): void {
     const t = uiT(live)
     if (entry === null) return { ok: false, error: t('history.errPackNotFound') }
     if (entry.kind !== 'dir') return { ok: false, error: t('history.errZipPlay') }
-    const file = path.join(entry.path, 'replay_annotated.webm')
-    if (!fs.existsSync(file)) return { ok: false, error: t('history.errNotRendered') }
+    const pack = openPack(entry.path, entry.kind, entry.id)
+    const manifest = pack.manifest()
+    const file = resolveHistoryPlayFile(entry.path, manifest)
+    if (file === null) return { ok: false, error: t('history.errNotRendered') }
     const result = await shell.openPath(file)
     return result === '' ? { ok: true } : { ok: false, error: result }
   })
@@ -709,6 +720,52 @@ function entryFor(ref: unknown): RawPackEntry | null {
   return getStore().entries().find((e) => e.path === ref) ?? null
 }
 
+// Prevents directory traversal or opening paths outside the pack directory (SPEC §5.3).
+export function safePackPath(baseDir: string, rel: unknown): string | null {
+  const safeRel = safeViewerPath(rel)
+  if (safeRel === null) return null
+  try {
+    const resolvedBase = path.resolve(baseDir)
+    const resolvedTarget = path.resolve(resolvedBase, safeRel)
+    const relFromBase = path.relative(resolvedBase, resolvedTarget)
+    if (relFromBase === '' || relFromBase.startsWith('..') || path.isAbsolute(relFromBase)) {
+      return null
+    }
+    return resolvedTarget
+  } catch {
+    return null
+  }
+}
+
+// Resolves the playable video file for a pack folder. Takes the declared annotated
+// replay from manifest.media.replay_annotated (falling back to replay_annotated.webm),
+// and falls back to manifest.media.replay when no annotated replay exists (SPEC §5.3, §7.2).
+export function resolveHistoryPlayFile(entryPath: string, manifest: Manifest | null): string | null {
+  const declaredAnnotated =
+    typeof manifest?.media?.replay_annotated === 'string' && manifest.media.replay_annotated.trim() !== ''
+      ? manifest.media.replay_annotated.trim()
+      : null
+  const declaredReplay =
+    typeof manifest?.media?.replay === 'string' && manifest.media.replay.trim() !== ''
+      ? manifest.media.replay.trim()
+      : null
+
+  const targetAnnotated = declaredAnnotated ?? 'replay_annotated.webm'
+  const annotatedPath = safePackPath(entryPath, targetAnnotated)
+  if (annotatedPath !== null && fs.existsSync(annotatedPath)) {
+    return annotatedPath
+  }
+
+  if (declaredReplay !== null) {
+    const replayPath = safePackPath(entryPath, declaredReplay)
+    if (replayPath !== null && fs.existsSync(replayPath)) {
+      return replayPath
+    }
+  }
+
+  return null
+}
+
 // Cache stamp for derived data. The directory mtime alone is not enough:
 // updatePack rewrites manifest/annotations/report/snapshot IN PLACE, which on
 // Windows does not touch the directory entry — so the key files' mtimes are
@@ -778,14 +835,34 @@ function safeSummarize(entry: RawPackEntry): HistoryPackSummary {
   }
 }
 
-function summarize(entry: RawPackEntry): HistoryPackSummary {
+export function summarize(entry: RawPackEntry): HistoryPackSummary {
   const stamp = packStamp(entry)
   const cached = summaryCache.get(entry.path)
   if (cached && cached.stamp === stamp) {
+    // The files declared by media.keyframes live below frames/. Removing one
+    // changes neither manifest.json nor the pack directory mtime on Windows,
+    // so re-check an annotated image pack even when its metadata is cached.
+    const annotated =
+      entry.kind === 'dir'
+      && cached.summary.captureKind === 'image'
+      && cached.summary.annotationCount > 0
+        ? (() => {
+            const pack = openPack(entry.path, entry.kind, entry.id)
+            const manifest = pack.manifest()
+            return manifest === null
+              ? cached.summary.annotated
+              : historyAnnotatedState(
+                  manifest,
+                  cached.summary.annotationCount,
+                  (rel) => safeViewerPath(rel) !== null && pack.fileSize(rel) !== null,
+                )
+          })()
+        : cached.summary.annotated
     // Managed copies live NEXT TO the pack: their create/delete changes the
     // parent folder, not the pack, so both are re-checked on every listing.
     return {
       ...cached.summary,
+      annotated,
       renderInFlight: isRenderInFlight(entry.path),
       zipTwin: zipTwinPresent(entry),
       shareTwin: shareTwinPresent(entry),
@@ -797,11 +874,13 @@ function summarize(entry: RawPackEntry): HistoryPackSummary {
   const annotations = annotationsOf(pack)
   // ?. throughout: a malformed-but-parsed manifest may lack any of these.
   const hasReplay = typeof manifest?.media?.replay === 'string'
-  const annotated: HistoryAnnotatedState = !hasReplay
+  const annotated: HistoryAnnotatedState = manifest === null
     ? 'none'
-    : pack.fileSize('replay_annotated.webm') !== null
-      ? 'ready'
-      : 'missing'
+    : historyAnnotatedState(
+        manifest,
+        annotations.length,
+        (rel) => safeViewerPath(rel) !== null && pack.fileSize(rel) !== null,
+      )
   const replayDurationMs =
     hasReplay && typeof manifest?.media?.replay_duration_ms === 'number'
       ? manifest.media.replay_duration_ms
@@ -963,9 +1042,9 @@ async function dirSize(dir: string): Promise<number> {
 // ---------------------------------------------------------------------------
 // Actions
 
-// Re-runs the existing background annotated-replay pipeline for one pack:
-// replay + annotations read from the folder, result written by
-// annotatedRender (file + manifest declaration). Fire-and-forget like the
+// Re-runs the existing background annotated-media pipeline for one pack:
+// replay-or-snapshot + annotations read from the folder, result written by
+// annotatedRender (files + manifest declaration). Fire-and-forget like the
 // save-time render; the terminal state is pushed to the window.
 function startRerender(entry: RawPackEntry): HistoryActionResult {
   const settings = liveSettings
@@ -979,11 +1058,6 @@ function startRerender(entry: RawPackEntry): HistoryActionResult {
   const t = uiT(settings)
   if (manifest === null) return { ok: false, error: t('history.errManifestBad') }
   const replayRel = manifest.media?.replay
-  if (typeof replayRel !== 'string') {
-    return { ok: false, error: t('history.errNoReplayRender') }
-  }
-  const replayWebm = pack.readBinary(replayRel)
-  if (replayWebm === null) return { ok: false, error: t('history.errFileMissing', { file: replayRel }) }
   const annotationsFile = pack.annotations()
   if (
     annotationsFile === null ||
@@ -996,6 +1070,30 @@ function startRerender(entry: RawPackEntry): HistoryActionResult {
     typeof manifest.media.replay_duration_ms === 'number' ? manifest.media.replay_duration_ms : 0
   const annotations = annotationsOf(pack)
   const plan = planHistoryRerender(manifest, annotations)
+  const rerenderKind = historyRerenderKind(manifest)
+  let focusedSource: Buffer
+  if (rerenderKind === 'replay') {
+    // historyRerenderKind only returns replay for a string declaration. Keep
+    // the guard local so malformed on-disk JSON still fails as an action result.
+    if (typeof replayRel !== 'string') {
+      return { ok: false, error: t('history.errNoReplayRender') }
+    }
+    const replayWebm = pack.readBinary(replayRel)
+    if (replayWebm === null) {
+      return { ok: false, error: t('history.errFileMissing', { file: replayRel }) }
+    }
+    focusedSource = replayWebm
+  } else {
+    const snapshotRel =
+      typeof manifest.media?.snapshot === 'string' && manifest.media.snapshot.trim() !== ''
+        ? manifest.media.snapshot.trim()
+        : 'snapshot.png'
+    const snapshotPng = pack.readBinary(snapshotRel)
+    if (snapshotPng === null) {
+      return { ok: false, error: t('history.errFileMissing', { file: snapshotRel }) }
+    }
+    focusedSource = snapshotPng
+  }
   const displaySources: Array<{
     plan: HistoryRerenderPlan['displays'][number]
     snapshotPng: Buffer
@@ -1015,29 +1113,40 @@ function startRerender(entry: RawPackEntry): HistoryActionResult {
     }
     displaySources.push({ plan: display, snapshotPng, replayWebm: displayReplay })
   }
-  startAnnotatedRender(
-    { id: manifest.id, dirPath: entry.path },
-    {
-      replayWebm,
-      replayMimeType: replayMimeType(replayRel),
-      annotations: plan.focusedAnnotations,
-      motionSpace: plan.motionSpace,
-      displayNumbers: plan.displayNumbers,
-      ...(plan.focusedDisplay === undefined ? {} : { focusedDisplay: plan.focusedDisplay }),
-      width: annotationsFile.reference_width,
-      height: annotationsFile.reference_height,
-      fps: settings.fps,
-      replayDurationMs,
-      // The render regenerates the pack documents from what it declared.
-      docLanguage: packDocLanguage(settings),
-    },
-    // Terminal state reaches the window via onRenderStateChange (registered in
-    // registerHistoryIpc) — 'failed' leaves the disk unchanged (no watcher
-    // event), so that push is what drops "Rendering…" back to [Retry].
-    () => {},
-  )
+  const handle = { id: manifest.id, dirPath: entry.path }
+  const common = {
+    annotations: plan.focusedAnnotations,
+    motionSpace: plan.motionSpace,
+    displayNumbers: plan.displayNumbers,
+    ...(plan.focusedDisplay === undefined ? {} : { focusedDisplay: plan.focusedDisplay }),
+    width: annotationsFile.reference_width,
+    height: annotationsFile.reference_height,
+    // The render regenerates the pack documents from what it declared.
+    docLanguage: packDocLanguage(settings),
+  }
+  if (rerenderKind === 'replay' && typeof replayRel === 'string') {
+    startAnnotatedRender(
+      handle,
+      {
+        ...common,
+        replayWebm: focusedSource,
+        replayMimeType: replayMimeType(replayRel),
+        fps: settings.fps,
+        replayDurationMs,
+      },
+      // Terminal state reaches the window via onRenderStateChange (registered
+      // in registerHistoryIpc) — 'failed' leaves disk unchanged, so that push
+      // drops "Rendering…" back to [Retry].
+      () => {},
+    )
+  } else {
+    startKeyframeStill(handle, {
+      ...common,
+      snapshotPng: focusedSource,
+    })
+  }
   startHistoryDisplayRenders(
-    { id: manifest.id, dirPath: entry.path },
+    handle,
     displaySources,
     plan,
     settings,

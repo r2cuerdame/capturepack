@@ -246,13 +246,13 @@ const pastTie = trackedSampleAt(tracked, 200)
 const pastNearLater = trackedSampleAt(tracked, 260)
 check(
   'past object lookup returns the earlier recorded rectangle on an exact tie',
-  pastTie === tracked.tracking.samples?.[0]
+  pastTie === tracked.tracking?.samples?.[0]
     && pastTie?.x === 10
     && pastTie.display === undefined,
 )
 check(
   'past object lookup crosses displays using the nearest observed sample unchanged',
-  pastNearLater === tracked.tracking.samples?.[1]
+  pastNearLater === tracked.tracking?.samples?.[1]
     && pastNearLater?.display === 3
     && pastNearLater.x === 610,
 )

@@ -51,8 +51,9 @@ interface PackSummary {
 /**
  * Read the pack's own manifest for the summary.
  *
- * Anything missing is reported as null rather than guessed. A webhook payload
- * that invents a field is a payload someone downstream will trust.
+ * Missing optional summary fields are reported as null rather than guessed.
+ * Display count is the compatibility exception: older packs imply one display
+ * when neither the modern media list nor capture-time screen metadata exists.
  */
 export async function readPackSummary(packDir: string): Promise<PackSummary> {
   const manifestPath = path.join(packDir, 'manifest.json')
@@ -63,6 +64,10 @@ export async function readPackSummary(packDir: string): Promise<PackSummary> {
     ? (record.media as Record<string, unknown>)
     : {}
   const displays = Array.isArray(media.displays) ? media.displays : null
+  const environment = typeof record.environment === 'object' && record.environment !== null
+    ? (record.environment as Record<string, unknown>)
+    : {}
+  const screens = Array.isArray(environment.screens) ? environment.screens : null
   // THE VERSION IS UNDER generator, NOT AT THE TOP LEVEL.
   //
   // This read `record.app_version` and shipped null to a real receiver in the
@@ -80,7 +85,7 @@ export async function readPackSummary(packDir: string): Promise<PackSummary> {
     packPath: packDir,
     createdAt: asString(record.created_at),
     captureKind: asString(record.capture_kind),
-    displayCount: displays === null ? null : displays.length,
+    displayCount: displays?.length ?? screens?.length ?? 1,
     appVersion: asString(generator.version),
     formatVersion: asString(record.format_version),
   }

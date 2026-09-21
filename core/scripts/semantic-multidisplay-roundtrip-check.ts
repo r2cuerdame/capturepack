@@ -224,8 +224,8 @@ async function main(): Promise<void> {
       'disk annotations preserve semantic identity, picked time and every observed sample',
       loaded !== undefined
         && same(loaded.target, target)
-        && loaded.tracking.picked_at_ms === 100
-        && same(loaded.tracking.samples, semantic.tracking.samples),
+        && loaded.tracking?.picked_at_ms === 100
+        && same(loaded.tracking?.samples, semantic.tracking?.samples),
       JSON.stringify(loaded),
     )
 
@@ -271,8 +271,8 @@ async function main(): Promise<void> {
       loaded.display === 1
         && loaded.start_ms === 100
         && loaded.end_ms === 900
-        && loaded.tracking.samples?.[1]?.display === 2
-        && loaded.tracking.samples?.[2]?.display === 3
+        && loaded.tracking?.samples?.[1]?.display === 2
+        && loaded.tracking?.samples?.[2]?.display === 3
         && same(loaded.target, target),
       JSON.stringify(loaded),
     )
