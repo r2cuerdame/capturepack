@@ -54,8 +54,8 @@ function imageScopeLabel(scope: Manifest['media']['image_scope']): string {
   return 'user-requested full screen'
 }
 
-function replayLabel(manifest: Manifest, t: TranslateFn): string {
-  if (manifest.media.replay === null) return t('pack.screenshotOnly')
+export function replayLabel(manifest: Manifest, t: TranslateFn): string {
+  if (typeof manifest.media.replay !== 'string') return t('pack.screenshotOnly')
   const seconds = ((manifest.media.replay_duration_ms ?? 0) / 1000).toFixed(1)
   return t('pack.replaySnapshot', { seconds })
 }
@@ -88,7 +88,7 @@ export function buildReadme(
   const t = makeT(lang)
   const annotations = annotationsFile.annotations
   const imageCapture = manifest.capture_kind === 'image'
-  const hasReplay = manifest.media.replay !== null
+  const hasReplay = typeof manifest.media.replay === 'string' && manifest.media.replay.length > 0
   const replayName = manifest.media.replay ?? 'replay.webm'
   const annotatedReplayName = manifest.media.replay_annotated
   const annotatedReplayPending = hasReplay && renderPending && annotatedReplayName === undefined
@@ -252,7 +252,7 @@ function buildOverviewSkill(
 ): string {
   const annotations = annotationsFile.annotations
   const imageCapture = manifest.capture_kind === 'image'
-  const hasReplay = manifest.media.replay !== null
+  const hasReplay = typeof manifest.media.replay === 'string' && manifest.media.replay.length > 0
   const replayName = manifest.media.replay ?? 'replay.webm'
   const annotatedReplayName = manifest.media.replay_annotated
   const annotatedReplayPending = hasReplay && renderPending && annotatedReplayName === undefined
@@ -387,7 +387,7 @@ function buildOverviewSkill(
 }
 
 function buildTimelineSkill(manifest: Manifest, timeline: TimelineFile, t: TranslateFn): string {
-  const hasReplay = manifest.media.replay !== null
+  const hasReplay = typeof manifest.media.replay === 'string' && manifest.media.replay.length > 0
   const replayName = manifest.media.replay ?? 'replay.webm'
   const lines: string[] = []
   lines.push(`# ${t('pack.skillTimeline')}`)
@@ -698,7 +698,7 @@ function buildProjectSkill(
   t: TranslateFn,
   renderPending: boolean,
 ): string {
-  const hasReplay = manifest.media.replay !== null
+  const hasReplay = typeof manifest.media.replay === 'string' && manifest.media.replay.length > 0
   const replayName = manifest.media.replay ?? 'replay.webm'
   const annotatedReplayName = manifest.media.replay_annotated
   const annotatedReplayPending = hasReplay && renderPending && annotatedReplayName === undefined

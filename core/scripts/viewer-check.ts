@@ -25,8 +25,9 @@ import {
   safeViewerPath,
   VIEWER_FORMAT_VERSION,
 } from '../src/main/viewer'
-import { buildReport, describeAnnotation } from '../src/main/report'
-import { buildReadme, buildSkills } from '../src/main/packdocs'
+import { buildReport, describeAnnotation, keyframeSet } from '../src/main/report'
+import { buildReadme, buildSkills, replayLabel } from '../src/main/packdocs'
+import { makeT } from '../src/shared/i18n'
 import { drawDisplayLabels } from '../src/renderer/editor/render'
 import { drawBox, renderedLabelBottomGutter } from '../src/renderer/render/render'
 import type {
@@ -521,6 +522,41 @@ function pureContractChecks(): void {
       !labelsThrew,
   )
 
+  const omittedReplayManifest = videoManifest()
+  delete (omittedReplayManifest.media as { replay?: string | null }).replay
+  delete (omittedReplayManifest.media as { replay_duration_ms?: number }).replay_duration_ms
+  const omittedReplayHtml = buildViewerHtml(omittedReplayManifest, annotations(), timeline(), 'en')
+  const omittedReplayReport = buildReport(omittedReplayManifest, annotations(), 'en', false, true)
+  const omittedReplayReadme = buildReadme(omittedReplayManifest, annotations(), 'en', false, true)
+  const omittedReplaySkills = buildSkills(omittedReplayManifest, annotations(), timeline(), 'en', false)
+  const omittedReplayKeyframes = keyframeSet(omittedReplayManifest, annotations(), false)
+  const omittedReplayLabel = replayLabel(omittedReplayManifest, makeT('en'))
+
+  check(
+    'pack omitting media.replay renders viewer, report, readme, and skills cleanly without undefined or bogus replay',
+    typeof omittedReplayHtml === 'string' &&
+      !omittedReplayHtml.includes('undefined') &&
+      typeof omittedReplayReport === 'string' &&
+      !omittedReplayReport.includes('undefined') &&
+      omittedReplayReport.includes('- **Replay:** none') &&
+      !omittedReplayReport.includes('- undefined') &&
+      typeof omittedReplayReadme === 'string' &&
+      !omittedReplayReadme.includes('undefined') &&
+      !omittedReplayReadme.includes('| undefined |') &&
+      omittedReplayReadme.includes('screenshot-only') &&
+      typeof omittedReplaySkills.overview === 'string' &&
+      !omittedReplaySkills.overview.includes('undefined') &&
+      omittedReplaySkills.overview.includes('screenshot only') &&
+      typeof omittedReplaySkills.timeline === 'string' &&
+      !omittedReplaySkills.timeline.includes('undefined') &&
+      omittedReplaySkills.timeline.includes('this pack has no replay') &&
+      typeof omittedReplaySkills.project === 'string' &&
+      !omittedReplaySkills.project.includes('undefined') &&
+      omittedReplaySkills.project.includes('absent here: screenshot-only pack') &&
+      omittedReplayKeyframes.frames.length === 0 &&
+      omittedReplayLabel === 'screenshot only (no replay)',
+  )
+
   const minimalCandidates = [
     path.resolve(process.cwd(), '../examples/minimal'),
     path.resolve(process.cwd(), 'examples/minimal'),
@@ -724,6 +760,40 @@ async function writerIntegrationChecks(): Promise<void> {
         !omittedTextAnnotationSkill.includes('undefined') &&
         omittedTextOverviewSkill.length > 0 &&
         !omittedTextOverviewSkill.includes('undefined'),
+    )
+
+    const omittedReplayManifestOnDisk = JSON.parse(
+      readFileSync(path.join(handle.dirPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    delete (omittedReplayManifestOnDisk.media as { replay?: string | null }).replay
+    delete (omittedReplayManifestOnDisk.media as { replay_duration_ms?: number }).replay_duration_ms
+    writeFileSync(
+      path.join(handle.dirPath, 'manifest.json'),
+      JSON.stringify(omittedReplayManifestOnDisk, null, 2),
+      'utf8',
+    )
+    await refreshPackDocs(handle.dirPath, 'en')
+    const refreshedReplayReport = readFileSync(
+      path.join(handle.dirPath, 'report.md'),
+      'utf8',
+    )
+    const refreshedReplayReadme = readFileSync(
+      path.join(handle.dirPath, 'README.md'),
+      'utf8',
+    )
+    const refreshedReplayOverview = readFileSync(
+      path.join(handle.dirPath, 'skills', 'overview.md'),
+      'utf8',
+    )
+    check(
+      'refreshPackDocs regenerates viewer and docs for pack omitting media.replay without throwing or undefined',
+      !refreshedReplayReport.includes('undefined') &&
+        refreshedReplayReport.includes('- **Replay:** none') &&
+        !refreshedReplayReport.includes('- undefined') &&
+        !refreshedReplayReadme.includes('undefined') &&
+        !refreshedReplayReadme.includes('| undefined |') &&
+        !refreshedReplayOverview.includes('undefined') &&
+        refreshedReplayOverview.includes('screenshot only'),
     )
 
     // Issue #200: pack omitting timeline.json (OPTIONAL for video packs per SPEC §4, §10, §14)
