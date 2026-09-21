@@ -410,31 +410,31 @@ console.log('\nSPEC §5.3 / §13.1 defines media.replay as nullable/omitted for 
   )
 }
 
+const bundleResult = buildSync({
+  stdin: {
+    contents: [
+      "export { buildReport, keyframeSet } from './src/main/report'",
+      "export { buildReadme, buildSkills, replayLabel } from './src/main/packdocs'",
+      "export { makeT } from './src/shared/i18n'",
+    ].join('\n'),
+    resolveDir: CORE,
+    sourcefile: 'contract-runner.ts',
+    loader: 'ts',
+  },
+  bundle: true,
+  platform: 'node',
+  format: 'cjs',
+  write: false,
+  external: ['electron'],
+})
+
+const mod = { exports: {} }
+const runner = new Function('module', 'exports', 'require', bundleResult.outputFiles[0].text)
+runner(mod, mod.exports, () => ({}))
+const { buildReport, keyframeSet, buildReadme, buildSkills, replayLabel, makeT } = mod.exports
+
 console.log('\nPacks with omitted media.replay render clean screenshot-only documentation without undefined')
 {
-  const bundleResult = buildSync({
-    stdin: {
-      contents: [
-        "export { buildReport, keyframeSet } from './src/main/report'",
-        "export { buildReadme, buildSkills, replayLabel } from './src/main/packdocs'",
-        "export { makeT } from './src/shared/i18n'",
-      ].join('\n'),
-      resolveDir: CORE,
-      sourcefile: 'contract-runner.ts',
-      loader: 'ts',
-    },
-    bundle: true,
-    platform: 'node',
-    format: 'cjs',
-    write: false,
-    external: ['electron'],
-  })
-
-  const mod = { exports: {} }
-  const runner = new Function('module', 'exports', 'require', bundleResult.outputFiles[0].text)
-  runner(mod, mod.exports, () => ({}))
-  const { buildReport, keyframeSet, buildReadme, buildSkills, replayLabel, makeT } = mod.exports
-
   const t = makeT('en')
   const testAnnotations = {
     reference_width: 1920,
@@ -533,6 +533,100 @@ console.log('\nSPEC §4, §8, §14 define annotations.json as OPTIONAL')
       /await readAnnotationsSafe\(\s*dirPath/u.test(exporterSource),
     'exporter.ts addManifestPlugin or refreshPackDocs does not use readAnnotationsSafe',
   )
+}
+
+console.log('\nbuildReport, buildReadme, and buildSkills succeed when annotationsFile.annotations is omitted or empty (Issue #207)')
+{
+  const reportSource = readFileSync(join(CORE, 'src', 'main', 'report.ts'), 'utf8')
+  const packdocsSource = readFileSync(join(CORE, 'src', 'main', 'packdocs.ts'), 'utf8')
+  check(
+    'report.ts guards annotationsFile?.annotations with Array.isArray in buildReport and keyframeSet',
+    reportSource.includes('Array.isArray(annotationsFile?.annotations)') &&
+      reportSource.includes('displaySummaryLines(manifest, t, annotations)'),
+    'report.ts does not guard annotationsFile?.annotations or does not pass guarded annotations',
+  )
+  check(
+    'packdocs.ts guards annotationsFile?.annotations with Array.isArray in buildReadme and buildSkills helpers',
+    packdocsSource.includes('Array.isArray(annotationsFile?.annotations)') &&
+      packdocsSource.includes('buildOverviewSkill(manifest, annotationsFile') &&
+      packdocsSource.includes('buildAnnotationSkill(manifest, annotationsFile') &&
+      packdocsSource.includes('buildDomSkill(manifest, annotationsFile'),
+    'packdocs.ts does not guard annotationsFile?.annotations in buildReadme and skill builders',
+  )
+
+  const testTimeline = {
+    t0: '2026-07-27T10:41:07+09:00',
+    events: [],
+  }
+  const testManifest = {
+    format: 'capturepack',
+    format_version: '0.1.0',
+    id: 'test-no-annotations-pack',
+    created_at: '2026-07-27T10:41:07+09:00',
+    generator: { name: 'test', version: '0.1.0' },
+    environment: { os: 'windows' },
+    media: {
+      snapshot: 'snapshot.png',
+      replay: null,
+      replay_duration_ms: null,
+    },
+  }
+
+  const testCases = [
+    { name: 'omitted annotations property', file: { reference_width: 1920, reference_height: 1080 } },
+    { name: 'empty annotations array', file: { reference_width: 1920, reference_height: 1080, annotations: [] } },
+    { name: 'undefined annotations property', file: { reference_width: 1920, reference_height: 1080, annotations: undefined } },
+    { name: 'null annotations property', file: { reference_width: 1920, reference_height: 1080, annotations: null } },
+    { name: 'non-array annotations property', file: { reference_width: 1920, reference_height: 1080, annotations: 'not-an-array' } },
+  ]
+
+  for (const tc of testCases) {
+    let reportOk = false
+    let readmeOk = false
+    let skillsOk = false
+    try {
+      const report = buildReport(testManifest, tc.file, 'en', false, true)
+      reportOk = typeof report === 'string' && report.includes('snapshot.png')
+    } catch {
+      reportOk = false
+    }
+
+    try {
+      const readme = buildReadme(testManifest, tc.file, 'en', false, true)
+      readmeOk = typeof readme === 'string' && readme.includes('snapshot.png')
+    } catch {
+      readmeOk = false
+    }
+
+    try {
+      const skills = buildSkills(testManifest, tc.file, testTimeline, 'en', false)
+      skillsOk =
+        skills !== null &&
+        typeof skills === 'object' &&
+        typeof skills.overview === 'string' &&
+        typeof skills.annotation === 'string' &&
+        typeof skills.dom === 'string' &&
+        skills.annotation.includes('This pack has no annotation boxes.')
+    } catch {
+      skillsOk = false
+    }
+
+    check(
+      `buildReport does not throw on ${tc.name}`,
+      reportOk,
+      `buildReport threw or returned invalid result for ${tc.name}`,
+    )
+    check(
+      `buildReadme does not throw on ${tc.name}`,
+      readmeOk,
+      `buildReadme threw or returned invalid result for ${tc.name}`,
+    )
+    check(
+      `buildSkills does not throw on ${tc.name}`,
+      skillsOk,
+      `buildSkills threw or returned invalid result for ${tc.name}`,
+    )
+  }
 }
 console.log(`\nresult: ${failed === 0 ? 'OK' : 'BROKEN'} — ${passed} passed, ${failed} failed\n`)
 if (failed > 0) process.exitCode = 1

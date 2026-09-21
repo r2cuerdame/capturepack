@@ -170,6 +170,7 @@ export function displaySummaryLines(
 ): string[] {
   const displays = manifest.media.displays
   if (displays === undefined || displays.length < 2) return []
+  const safeAnnotations = Array.isArray(annotations) ? annotations : []
   const focusedIndex = packFocusedDisplay(manifest)
   const declared = packDisplayIndices(manifest)
   const lines = [`- **${t('pack.displays')}:** ${displays.length} captured`]
@@ -200,7 +201,7 @@ export function displaySummaryLines(
     const focused = d.focused ? ` (${t('pack.displayFocused')})` : ''
     // How many boxes were drawn on THIS screen — the single most useful thing
     // to know about a display once every display is annotatable (SPEC §8.8).
-    const count = annotationsOnDisplay(annotations, d.index, focusedIndex, declared).length
+    const count = annotationsOnDisplay(safeAnnotations, d.index, focusedIndex, declared).length
     const boxes = count === 0 ? '' : `, ${count} annotation${count === 1 ? '' : 's'}`
     lines.push(
       `  - ${d.index}: ${displayPixels(d)} at ${px(d.bounds.x)},${px(d.bounds.y)} @${d.scale}x — ` +
@@ -300,8 +301,9 @@ export function keyframeSet(
   // The pack's OWN stills cover the FOCUSED display (SPEC §5.6): a box on
   // another screen is rendered into that screen's own stills, so counting it
   // here would predict filenames the render never writes.
+  const annotations = Array.isArray(annotationsFile?.annotations) ? annotationsFile.annotations : []
   const { times, dropped } = computeKeyframes(
-    boxesOnDisplay(manifest, annotationsFile.annotations, packFocusedDisplay(manifest)),
+    boxesOnDisplay(manifest, annotations, packFocusedDisplay(manifest)),
     durationMs,
   )
   const declared = manifest.media.keyframes
@@ -443,6 +445,15 @@ export function buildReport(
   includeViewer = false,
 ): string {
   const t = makeT(lang)
+  const annotations = Array.isArray(annotationsFile?.annotations) ? annotationsFile.annotations : []
+  const refWidth =
+    typeof annotationsFile?.reference_width === 'number'
+      ? annotationsFile.reference_width
+      : (manifest.media?.displays?.[0]?.snapshot_width ?? 0)
+  const refHeight =
+    typeof annotationsFile?.reference_height === 'number'
+      ? annotationsFile.reference_height
+      : (manifest.media?.displays?.[0]?.snapshot_height ?? 0)
   const lines: string[] = []
   const imageCapture = manifest.capture_kind === 'image'
 
@@ -475,7 +486,7 @@ export function buildReport(
     .join('; ')
   lines.push(`- **${t('pack.screens')}:** ${screens === '' ? t('pack.unknown') : screens}`)
   // All-displays capture: what the trigger actually froze, per display.
-  lines.push(...displaySummaryLines(manifest, t, annotationsFile.annotations))
+  lines.push(...displaySummaryLines(manifest, t, annotations))
   if (manifest.environment.app !== undefined) {
     lines.push(`- **${t('pack.focusedApp')}:** ${manifest.environment.app}`)
   }
@@ -496,7 +507,6 @@ export function buildReport(
 
   lines.push(`## ${t('pack.annotations')}`)
   lines.push('')
-  const annotations = annotationsFile.annotations
   if (annotations.length === 0) {
     lines.push(t('pack.none'))
   } else {
@@ -507,7 +517,7 @@ export function buildReport(
     const groups = groupByDisplay(manifest, annotations)
     if (groups.length === 0) {
       lines.push(
-        `Coordinates are pixels in snapshot.png (${annotationsFile.reference_width}×${annotationsFile.reference_height}). ` +
+        `Coordinates are pixels in snapshot.png (${refWidth}×${refHeight}). ` +
           'Numbers are the computed display numbers (SPEC §8.5) — identical in every rendered view.',
       )
       lines.push('')
@@ -530,7 +540,7 @@ export function buildReport(
         // reader which file to open a box's coordinates against.
         const entry = declaredDisplays.find((d) => d.index === g.index)
         const snapshot = g.focused
-          ? `snapshot.png, ${annotationsFile.reference_width}×${annotationsFile.reference_height}`
+          ? `snapshot.png, ${refWidth}×${refHeight}`
           : entry === undefined
             ? `snapshot-d${g.index}.png`
             : `${entry.snapshot}, ${displayPixels(entry)}`
@@ -571,7 +581,7 @@ export function buildReport(
   lines.push('')
   lines.push('- manifest.json — pack identity, environment, file inventory')
   lines.push(
-    `- snapshot.png — captured frame, ${annotationsFile.reference_width}×${annotationsFile.reference_height} (original pixels, never modified)`,
+    `- snapshot.png — captured frame, ${refWidth}×${refHeight} (original pixels, never modified)`,
   )
   lines.push('- annotations.json — the annotation boxes above, as editable data (the true source)')
   if (!imageCapture) lines.push('- timeline.json — timestamped events from capture start to save')

@@ -1160,7 +1160,7 @@ async function writerIntegrationChecks(): Promise<void> {
         !nonArrayAnnotationsSkill.includes('undefined'),
     )
 
-    // Issue #206: pack with annotations.json omitting annotations property
+    // Issue #206 & #207: pack with annotations.json omitting annotations property (SPEC §8, §14 minimal/unannotated pack)
     writeFileSync(
       path.join(handle.dirPath, 'annotations.json'),
       JSON.stringify({ reference_width: 1920, reference_height: 1080 }),
@@ -1168,14 +1168,33 @@ async function writerIntegrationChecks(): Promise<void> {
     )
     await refreshPackDocs(handle.dirPath, 'en')
     const omittedAnnViewer = readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8')
-    const omittedAnnReadme = readFileSync(path.join(handle.dirPath, 'README.md'), 'utf8')
+    const omittedAnnotationsSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'annotation.md'),
+      'utf8',
+    )
+    const omittedAnnotationsReport = readFileSync(
+      path.join(handle.dirPath, 'report.md'),
+      'utf8',
+    )
+    const omittedAnnotationsReadme = readFileSync(
+      path.join(handle.dirPath, 'README.md'),
+      'utf8',
+    )
     check(
       'refreshPackDocs regenerates viewer and docs for pack omitting annotations array without throwing',
       existsSync(path.join(handle.dirPath, 'viewer.html')) &&
         omittedAnnViewer.length > 0 &&
         omittedAnnViewer.includes('Original evidence may contain private information.') &&
         !omittedAnnViewer.includes('Privacy warning') &&
-        omittedAnnReadme.includes('viewer.html'),
+        omittedAnnotationsReadme.includes('viewer.html'),
+    )
+    check(
+      'refreshPackDocs succeeds and falls back to empty annotations when annotations array is omitted',
+      omittedAnnotationsSkill.includes('This pack has no annotation boxes.') &&
+        !omittedAnnotationsSkill.includes('undefined') &&
+        omittedAnnotationsReport.includes('Coordinates are pixels in snapshot.png') === false &&
+        omittedAnnotationsReadme.includes('no annotation boxes') &&
+        !omittedAnnotationsReadme.includes('undefined'),
     )
 
     // Direct unit checks for readAnnotationsSafe contract
@@ -1185,6 +1204,8 @@ async function writerIntegrationChecks(): Promise<void> {
     check('readAnnotationsSafe preserves explicit fallback dimensions when file is missing', safeDimensionsAnn.reference_width === 1920 && safeDimensionsAnn.reference_height === 1080 && safeDimensionsAnn.annotations.length === 0)
     const safeManifestAnn = await readAnnotationsSafe(path.join(outputDir, 'nonexistent'), manifestAfterLateMalformedAnn)
     check('readAnnotationsSafe extracts fallback dimensions from manifest', safeManifestAnn.reference_width === (manifestAfterLateMalformedAnn.media.displays?.[0]?.snapshot_width ?? 0) && safeManifestAnn.annotations.length === 0)
+    const safeOmittedAnn = await readAnnotationsSafe(handle.dirPath)
+    check('readAnnotationsSafe preserves dimensions and defaults annotations when annotations array is omitted', safeOmittedAnn.reference_width === 1920 && safeOmittedAnn.reference_height === 1080 && safeOmittedAnn.annotations.length === 0)
     writeFileSync(
       path.join(handle.dirPath, 'annotations.json'),
       JSON.stringify({
