@@ -19,6 +19,7 @@ const pack = join(temporaryRoot, 'chrome-dom.capturepack')
 const motionPack = join(temporaryRoot, 'mixed-display-motion.capturepack')
 const imagePack = join(temporaryRoot, 'region-image.capturepack')
 const viewerPack = join(temporaryRoot, 'offline-viewer.capturepack')
+const uiaDisplayPack = join(temporaryRoot, 'uia-display.capturepack')
 let checks = 0
 
 function check(message, condition) {
@@ -547,6 +548,117 @@ try {
   check('a client rectangle missing a side is rejected',
     malformedClient.status === 1
       && malformedClient.stdout.includes('client_bounds MUST be { x, y, width, height }'))
+
+  // WINDOW AND ELEMENT DISPLAY COORDINATE SPACE RESOLUTION (SPEC §11.3, #232).
+  //
+  // In SPEC §11.3, an omitted `display` on a window or element denotes the
+  // focused display. Explicitly declaring the focused display index is also
+  // conforming and legal (issuing an advisory note). Coordinate space agreement
+  // between a control and its window must compare the resolved displays, so
+  // mixing explicit and omitted representations for the focused display is
+  // accepted as VALID.
+  cpSync(join(repositoryRoot, 'examples', 'minimal'), uiaDisplayPack, { recursive: true })
+  const uiaDisplayManifestFile = join(uiaDisplayPack, 'manifest.json')
+  const uiaDisplayManifest = JSON.parse(readFileSync(uiaDisplayManifestFile, 'utf8'))
+  uiaDisplayManifest.format_version = '0.7.0'
+  uiaDisplayManifest.environment.screens = [
+    { width: 640, height: 400, scale: 1 },
+    { width: 800, height: 600, scale: 1 },
+  ]
+  uiaDisplayManifest.media.displays = [
+    {
+      index: 1,
+      focused: true,
+      bounds: { x: 0, y: 0, width: 640, height: 400 },
+      scale: 1,
+      snapshot: 'snapshot.png',
+      snapshot_width: 640,
+      snapshot_height: 400,
+      replay: null,
+    },
+    {
+      index: 2,
+      focused: false,
+      bounds: { x: 640, y: 0, width: 800, height: 600 },
+      scale: 1,
+      snapshot: 'snapshot-d2.png',
+      snapshot_width: 800,
+      snapshot_height: 600,
+      replay: null,
+    },
+  ]
+  writeFileSync(join(uiaDisplayPack, 'snapshot-d2.png'), pngHeader(800, 600))
+  uiaDisplayManifest.plugins = [{
+    name: 'windows-uia',
+    version: '0.5.0',
+    path: 'plugins/windows-uia/',
+  }]
+  writeJson(uiaDisplayManifestFile, uiaDisplayManifest)
+  mkdirSync(join(uiaDisplayPack, 'plugins', 'windows-uia'), { recursive: true })
+  writeJson(join(uiaDisplayPack, 'plugins', 'windows-uia', 'meta.json'), {
+    name: 'windows-uia',
+    version: '0.5.0',
+  })
+
+  const uiaDisplayElementsFile = join(uiaDisplayPack, 'plugins', 'windows-uia', 'elements.json')
+  const makeUiaDisplayPayload = (windowDisplay, elementDisplay) => ({
+    captured_at: uiaDisplayManifest.created_at,
+    budget_ms: 500,
+    truncated: false,
+    windows: [{
+      title: 'Test Window',
+      process: 'test',
+      class_name: 'TestClass',
+      focused: true,
+      bounds: { x: 0, y: 0, width: 640, height: 400 },
+      z: 0,
+      tree: 'collected',
+      element_count: 1,
+      ...(windowDisplay !== undefined ? { display: windowDisplay } : {}),
+    }],
+    elements: [{
+      name: 'Test Button',
+      control_type: 'Button',
+      automation_id: 'btn1',
+      class_name: 'Button',
+      bounds: { x: 10, y: 10, width: 100, height: 30 },
+      depth: 1,
+      window: 0,
+      ...(elementDisplay !== undefined ? { display: elementDisplay } : {}),
+    }],
+  })
+
+  writeJson(uiaDisplayElementsFile, makeUiaDisplayPayload(undefined, 1))
+  const omittedWinExplicitEl = runValidator(uiaDisplayPack)
+  check('windows-uia accepts omitted window display with explicit focused element display',
+    omittedWinExplicitEl.status === 0
+      && omittedWinExplicitEl.stdout.includes('result: VALID')
+      && omittedWinExplicitEl.stdout.includes('elements[0].display 1 names the FOCUSED display'))
+
+  writeJson(uiaDisplayElementsFile, makeUiaDisplayPayload(1, undefined))
+  const explicitWinOmittedEl = runValidator(uiaDisplayPack)
+  check('windows-uia accepts explicit focused window display with omitted element display',
+    explicitWinOmittedEl.status === 0
+      && explicitWinOmittedEl.stdout.includes('result: VALID')
+      && explicitWinOmittedEl.stdout.includes('windows[0].display 1 names the FOCUSED display'))
+
+  writeJson(uiaDisplayElementsFile, makeUiaDisplayPayload(undefined, 2))
+  const omittedWinDifferentEl = runValidator(uiaDisplayPack)
+  check('windows-uia rejects element on different display when window display is omitted (focused)',
+    omittedWinDifferentEl.status === 1
+      && omittedWinDifferentEl.stdout.includes('elements[0].display 2 disagrees with windows[z=0].display null'))
+
+  writeJson(uiaDisplayElementsFile, makeUiaDisplayPayload(2, undefined))
+  const differentWinOmittedEl = runValidator(uiaDisplayPack)
+  check('windows-uia rejects omitted element display when window is on a non-focused display',
+    differentWinOmittedEl.status === 1
+      && differentWinOmittedEl.stdout.includes('elements[0].display null disagrees with windows[z=0].display 2'))
+
+  writeJson(uiaDisplayElementsFile, makeUiaDisplayPayload(1, 2))
+  const explicitDisagreement = runValidator(uiaDisplayPack)
+  check('windows-uia rejects genuinely disagreeing explicit window and element displays',
+    explicitDisagreement.status === 1
+      && explicitDisagreement.stdout.includes('elements[0].display 2 disagrees with windows[z=0].display 1'))
 
   console.log(`\n${checks}/${checks} CapturePack validator checks passed`)
 } finally {

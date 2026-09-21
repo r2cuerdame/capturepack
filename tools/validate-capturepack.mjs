@@ -971,8 +971,18 @@ function validateWindowsUia(pack, displayInfo) {
       // into a different display than the window it was walked from cannot be
       // resolved against it at all — occlusion, refinement and the "smallest
       // control of the top window" rule all compare the two directly.
-      if (displayBad === 0 && isInt(e.window) && windowDisplay.has(e.window) && windowDisplay.get(e.window) !== e.display) {
-        fail(`${label}.display ${JSON.stringify(e.display ?? null)} disagrees with windows[z=${e.window}].display ${JSON.stringify(windowDisplay.get(e.window) ?? null)} — a control and its window MUST be resolvable in ONE coordinate space (SPEC §11.3)`);
+      const focused = displayInfo ? displayInfo.focused : undefined;
+      const resolvedWindowDisplay = windowDisplay.get(e.window) ?? focused;
+      const resolvedElementDisplay = e.display ?? focused;
+      if (
+        displayBad === 0 &&
+        isInt(e.window) &&
+        windowDisplay.has(e.window) &&
+        resolvedWindowDisplay !== resolvedElementDisplay
+      ) {
+        fail(
+          `${label}.display ${JSON.stringify(e.display ?? null)} disagrees with windows[z=${e.window}].display ${JSON.stringify(windowDisplay.get(e.window) ?? null)} — a control and its window MUST be resolvable in ONE coordinate space (SPEC §11.3)`,
+        );
         bad++;
       }
     });
