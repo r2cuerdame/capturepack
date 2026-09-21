@@ -1,8 +1,9 @@
 // The After Save Action contract and pipeline (#68).
 //
-// Everything asserted here is production code imported directly: both modules
-// are dependency-free on purpose, so this check needs no Electron stub and
-// cannot end up holding a mock to the standard the app is not held to.
+// Everything asserted here is production code imported directly. The runner
+// supplies an Electron stub only for the host's app path and safeStorage: that
+// lets this check exercise the real executor and prove a decryption failure
+// cannot reach the network.
 //
 // The invariant under test throughout: THE PACK IS ALREADY SAVED. An action
 // that fails, hangs, or throws something that is not an Error is that action's
@@ -11,11 +12,14 @@ import { createServer } from 'node:http'
 import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { app } from 'electron'
+import { runActionsForPack } from '../src/main/actions/host'
 import { deliverWebhook } from '../src/main/actions/webhook'
 import {
   ACTION_PERMISSIONS,
   ACTION_TIMEOUT_DEFAULT_MS,
   ACTION_TIMEOUT_MAX_MS,
+  BUILTIN_WEBHOOK_ACTION_ID,
   PACK_STATE_ORDER,
   type ActionConfig,
   type ActionManifest,
@@ -993,6 +997,67 @@ console.log('\nACTION SECRETS ROUND-TRIP')
   const encrypted = fakeSafeStorage.encryptString(secret).toString('base64')
   const decrypted = fakeSafeStorage.decryptString(Buffer.from(encrypted, 'base64'))
   check('secrets round-trip via safeStorage encryption and decryption logic', decrypted === secret)
+}
+
+console.log('\nA CONFIGURED WEBHOOK SECRET FAILS CLOSED WHEN DECRYPTION FAILS (#170)')
+{
+  const configId = 'cfg-decryption-failure'
+  const packDir = mkdtempSync(path.join(tmpdir(), 'capturepack-webhook-secret-failure-'))
+  const userDataDir = app.getPath('userData')
+  mkdirSync(userDataDir, { recursive: true })
+  writeFileSync(
+    path.join(userDataDir, 'action-secrets.json'),
+    JSON.stringify({ [configId]: Buffer.from('ciphertext-that-cannot-be-decrypted').toString('base64') }),
+    'utf8',
+  )
+  writeFileSync(
+    path.join(packDir, 'manifest.json'),
+    JSON.stringify({
+      id: PACK,
+      created_at: '2026-09-21T00:00:00.000Z',
+      capture_kind: 'still',
+      format_version: '1.0',
+      generator: { version: '0.5.1' },
+      media: { displays: [] },
+    }),
+    'utf8',
+  )
+
+  let receivedCount = 0
+  const receiver = createServer((_req, res) => {
+    receivedCount += 1
+    res.writeHead(200)
+    res.end()
+  })
+  await new Promise<void>((resolve) => receiver.listen(0, '127.0.0.1', () => resolve()))
+  const receiverPort = (receiver.address() as { port: number }).port
+
+  try {
+    const results = await runActionsForPack({
+      packDir,
+      packId: PACK,
+      packState: 'complete',
+      configs: [config({ actionId: BUILTIN_WEBHOOK_ACTION_ID, configId })],
+      webhooks: {
+        [configId]: { url: `http://127.0.0.1:${String(receiverPort)}/hook` },
+      },
+    })
+    const result = results[0]
+    check(
+      'the action fails with the local decryption error',
+      result?.outcome === 'failed'
+        && result.message === 'configured webhook secret could not be decrypted',
+      result?.message ?? 'no action result',
+    )
+    check(
+      'the receiver is never contacted when the configured secret cannot be decrypted',
+      receivedCount === 0,
+      `requests: ${String(receivedCount)}`,
+    )
+  } finally {
+    await new Promise<void>((resolve) => receiver.close(() => resolve()))
+    rmSync(packDir, { recursive: true, force: true })
+  }
 }
 
 console.log('\nWEBHOOK DELIVERY REFUSES HTTP REDIRECTS')
