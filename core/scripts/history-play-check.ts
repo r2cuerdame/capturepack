@@ -430,7 +430,7 @@ async function run(): Promise<void> {
   const historyRendererSource = fs.readFileSync(
     path.resolve('src/renderer/history/history.ts'),
     'utf8',
-  )
+  ).replaceAll('\r\n', '\n')
   check(
     'historyWindow.ts does not hardcode path.join(entry.path, "replay_annotated.webm") in historyPlay',
     !historySource.includes("path.join(entry.path, 'replay_annotated.webm')"),
