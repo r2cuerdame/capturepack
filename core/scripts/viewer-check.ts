@@ -242,7 +242,14 @@ function pureContractChecks(): void {
   )
   check('partial per-display replay is honest', multiHtml.includes('snapshot-d1.png') && multiHtml.includes('replay-d2.webm'))
   check('annotation display and semantic target are preserved', multiHtml.includes('<dd>2</dd>') && multiHtml.includes('saveButton') && multiHtml.includes('<b>role:</b> button'))
-  check('core navigation follows pack language', multiHtml.includes('>주석</h2>') && multiHtml.includes('>파일</h2>') && multiHtml.includes('>디스플레이</h2>'))
+  check(
+    'core navigation follows pack language',
+    multiHtml.includes('>주석</h2>') &&
+      multiHtml.includes('>파일</h2>') &&
+      multiHtml.includes('>디스플레이</h2>') &&
+      multiHtml.includes('>플러그인</h2>') &&
+      sourceHtml.includes('>Plugins</h2>'),
+  )
 
   const flagsHtml = buildViewerHtml(
     videoManifest(),
