@@ -102,6 +102,20 @@ console.log('ORDER — creation, not timeline')
     numbersOf([bare('ann_0000nn', 1), box('ann_0000dd', '2026-07-29T18:00:00+09:00')]),
     { ann_0000dd: 1, ann_0000nn: 2 },
   )
+
+  // SPEC §8.3: z is OPTIONAL and defaults to array position
+  const noZ1 = box('ann_0000z1', '', { numbered: true })
+  delete (noZ1 as Partial<Annotation>).z
+  const noZ2 = box('ann_0000z2', '', { numbered: true })
+  delete (noZ2 as Partial<Annotation>).z
+  check('undated boxes omitting z default to array position', numbersOf([noZ1, noZ2]), {
+    ann_0000z1: 1,
+    ann_0000z2: 2,
+  })
+  check('undated boxes omitting z inverted array position', numbersOf([noZ2, noZ1]), {
+    ann_0000z2: 1,
+    ann_0000z1: 2,
+  })
 }
 
 console.log('PINS')

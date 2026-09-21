@@ -173,6 +173,34 @@ function pixelate(
 }
 
 /**
+ * Stacking order for rendering (z ascending, SPEC §8.3).
+ * Falls back to original array index when z is omitted, preventing NaN sort comparisons.
+ */
+export function sortAnnotationsAscending(annotations: readonly Annotation[]): Annotation[] {
+  return [...annotations.map((a, i) => ({ a, i }))]
+    .sort((p, q) => {
+      const pZ = typeof p.a.z === 'number' && Number.isFinite(p.a.z) ? p.a.z : p.i
+      const qZ = typeof q.a.z === 'number' && Number.isFinite(q.a.z) ? q.a.z : q.i
+      return pZ !== qZ ? pZ - qZ : p.i - q.i
+    })
+    .map(({ a }) => a)
+}
+
+/**
+ * Stacking order for hit-testing (z descending, top-most first, SPEC §8.3).
+ * Falls back to original array index (later entries on top) when z is omitted or equal.
+ */
+export function sortAnnotationsDescending(annotations: readonly Annotation[]): Annotation[] {
+  return [...annotations.map((a, i) => ({ a, i }))]
+    .sort((p, q) => {
+      const pZ = typeof p.a.z === 'number' && Number.isFinite(p.a.z) ? p.a.z : p.i
+      const qZ = typeof q.a.z === 'number' && Number.isFinite(q.a.z) ? q.a.z : q.i
+      return pZ !== qZ ? qZ - pZ : q.i - p.i
+    })
+    .map(({ a }) => a)
+}
+
+/**
  * Paints one display's boxes onto the overlay. `annotations` is the set to draw
  * for THIS display (already filtered by display and by lifetime; may include
  * ephemeral drafts); `numbers` is the GLOBAL display-number map from
@@ -189,7 +217,7 @@ export function drawDisplayScene(
   ui: number,
 ): void {
   enterDisplay(ctx, region)
-  const ordered = [...annotations].sort((a, b) => a.z - b.z)
+  const ordered = sortAnnotationsAscending(annotations)
   // Blur pass first (live non-destructive preview — the base canvas keeps the
   // original pixels), so borders and badges are never pixelated.
   for (const a of ordered) {
@@ -230,7 +258,7 @@ export function drawDisplayLabels(
 ): void {
   ctx.save()
   ctx.setTransform(region.cscale, 0, 0, region.cscale, region.cx, region.cy)
-  for (const annotation of [...annotations].sort((a, b) => a.z - b.z)) {
+  for (const annotation of sortAnnotationsAscending(annotations)) {
     const text = typeof annotation.text === 'string' ? annotation.text.trim() : ''
     if (text === '') continue
     drawAnnotationLabel(
@@ -426,7 +454,7 @@ export function hitTest(
   ui: number,
 ): string | null {
   const tol = HIT_TOL * ui
-  const ordered = [...annotations].sort((a, b) => b.z - a.z)
+  const ordered = sortAnnotationsDescending(annotations)
   for (const a of ordered) {
     if (inBox(x, y, annotationBounds(a), tol)) return a.annotation_id
   }

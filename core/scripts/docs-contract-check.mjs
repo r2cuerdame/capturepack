@@ -347,6 +347,23 @@ console.log('\nSPEC §8.3 defines annotation.text as OPTIONAL')
   )
 }
 
+console.log('\nSPEC §8.3 defines annotation.z as OPTIONAL')
+{
+  const spec = readFileSync(join(ROOT, 'SPEC.md'), 'utf8')
+  check(
+    'SPEC §8.3 declares annotation.z as OPTIONAL defaulting to array position',
+    /\|\s*`z`\s*\|\s*integer\s*\|\s*OPTIONAL\s*\|\s*Stacking order for rendering/u.test(spec) &&
+      spec.includes("Default: the annotation's array position"),
+    'SPEC.md §8.3 lost its z OPTIONAL declaration',
+  )
+  const typesSource = readFileSync(join(CORE, 'src', 'shared', 'types.ts'), 'utf8')
+  check(
+    'types.ts declares BoxAnnotation.z as optional number',
+    /z\?:\s*number/u.test(typesSource),
+    'types.ts does not declare z?: number in BoxAnnotation',
+  )
+}
+
 console.log('\nSPEC §5.3 / §13.1 defines media.replay as nullable/omitted for screenshot-only packs')
 {
   const spec = readFileSync(join(ROOT, 'SPEC.md'), 'utf8')

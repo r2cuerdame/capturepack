@@ -34,6 +34,13 @@ import {
   renderedLabelBottomGutter,
   renderedCanvasHeight,
 } from '../src/renderer/render/render'
+import {
+  hitTest,
+  drawDisplayLabels,
+  sortAnnotationsAscending,
+  sortAnnotationsDescending,
+} from '../src/renderer/editor/render'
+import { EditorState } from '../src/renderer/editor/state'
 import type { Annotation, UiaElementRecord } from '../src/shared/types'
 import type { RenderStartPayload } from '../src/shared/ipc'
 
@@ -360,73 +367,76 @@ console.log('\nA renderer that answers in the coordinates of the OTHER monitor')
 }
 
 
+const createMockContext = () => {
+  const badges: string[] = []
+  const texts: string[] = []
+  const strokeBoxes: Array<{ x: number; y: number; width: number; height: number }> = []
+  let blurCount = 0
+
+  const ctx: any = {
+    fillStyle: '#000000',
+    strokeStyle: '#000000',
+    lineWidth: 1,
+    font: '',
+    textAlign: 'start',
+    textBaseline: 'alphabetic',
+    imageSmoothingEnabled: true,
+    save() {},
+    restore() {},
+    setTransform() {},
+    beginPath() {},
+    arc() {},
+    roundRect() {},
+    fill() {},
+    stroke() {},
+    strokeRect(x: number, y: number, width: number, height: number) {
+      strokeBoxes.push({ x, y, width, height })
+    },
+    fillRect() {},
+    fillText(text: string) {
+      if (/^\d+$/.test(text)) {
+        badges.push(text)
+      } else {
+        texts.push(text)
+      }
+    },
+    measureText(text: string) {
+      return { width: text.length * 8 }
+    },
+    drawImage() {
+      blurCount += 1
+    },
+  }
+
+  const canvas: any = {
+    width: 1920,
+    height: 1080,
+    getContext: () => ctx,
+  }
+  ctx.canvas = canvas
+
+  return { ctx, canvas, badges, texts, strokeBoxes, getBlurCount: () => blurCount }
+}
+
+if (typeof (globalThis as any).document === 'undefined') {
+  ;(globalThis as any).document = {
+    createElement: (tag: string) => {
+      if (tag === 'canvas') {
+        return {
+          width: 100,
+          height: 100,
+          getContext: () => ({
+            drawImage() {},
+          }),
+        }
+      }
+      return {}
+    },
+  }
+}
+
 console.log('\nStill keyframe and screenshot overlay geometry across multiple displays (#179)')
 {
-  const createMockContext = () => {
-    const badges: string[] = []
-    const texts: string[] = []
-    const strokeBoxes: Array<{ x: number; y: number; width: number; height: number }> = []
-    let blurCount = 0
-
-    const ctx: any = {
-      fillStyle: '#000000',
-      strokeStyle: '#000000',
-      lineWidth: 1,
-      font: '',
-      textAlign: 'start',
-      textBaseline: 'alphabetic',
-      imageSmoothingEnabled: true,
-      save() {},
-      restore() {},
-      beginPath() {},
-      arc() {},
-      fill() {},
-      stroke() {},
-      strokeRect(x: number, y: number, width: number, height: number) {
-        strokeBoxes.push({ x, y, width, height })
-      },
-      fillRect() {},
-      fillText(text: string) {
-        if (/^\d+$/.test(text)) {
-          badges.push(text)
-        } else {
-          texts.push(text)
-        }
-      },
-      measureText(text: string) {
-        return { width: text.length * 8 }
-      },
-      drawImage() {
-        blurCount += 1
-      },
-    }
-
-    const canvas: any = {
-      width: 1920,
-      height: 1080,
-      getContext: () => ctx,
-    }
-    ctx.canvas = canvas
-
-    return { ctx, canvas, badges, texts, strokeBoxes, getBlurCount: () => blurCount }
-  }
-
-  if (typeof (globalThis as any).document === 'undefined') {
-    ;(globalThis as any).document = {
-      createElement: (tag: string) => {
-        if (tag === 'canvas') {
-          return {
-            width: 100,
-            height: 100,
-            getContext: () => ({
-              drawImage() {},
-            }),
-          }
-        }
-        return {}
-      },
-    }
-  }
 
   const annD1: Annotation = {
     annotation_id: 'ann_d1',
@@ -608,6 +618,234 @@ console.log('\nStill keyframe and screenshot overlay geometry across multiple di
     'single-display still job keeps all annotations unconditionally',
     activeSingle.length === 2,
     `kept ${String(activeSingle.length)}`,
+  )
+}
+
+console.log('\nBoxAnnotation.z omitted and stacking order (SPEC §8.3, Issue #204)')
+{
+  const noZ1: Annotation = {
+    annotation_id: 'ann_noz_1',
+    type: 'box',
+    bounds: { x: 50, y: 50, width: 200, height: 150 },
+    text: 'First Label',
+    numbered: true,
+    blur: false,
+    tracking: { enabled: false },
+    created_at: '2026-09-22T00:00:00Z',
+  }
+  const noZ2: Annotation = {
+    annotation_id: 'ann_noz_2',
+    type: 'box',
+    bounds: { x: 50, y: 50, width: 200, height: 150 },
+    text: 'Second Label',
+    numbered: true,
+    blur: false,
+    tracking: { enabled: false },
+    created_at: '2026-09-22T00:00:01Z',
+  }
+  const explicitZHigh: Annotation = {
+    annotation_id: 'ann_z_high',
+    type: 'box',
+    bounds: { x: 50, y: 50, width: 200, height: 150 },
+    text: 'Top Label',
+    numbered: true,
+    blur: false,
+    tracking: { enabled: false },
+    created_at: '2026-09-22T00:00:02Z',
+    z: 10,
+  }
+  const explicitZLow: Annotation = {
+    annotation_id: 'ann_z_low',
+    type: 'box',
+    bounds: { x: 50, y: 50, width: 200, height: 150 },
+    text: 'Bottom Label',
+    numbered: true,
+    blur: false,
+    tracking: { enabled: false },
+    created_at: '2026-09-22T00:00:03Z',
+    z: -5,
+  }
+
+  // 1. makeOverlay ordering
+  const jobForward: RenderStartPayload = {
+    replayWebm: null,
+    width: 1920,
+    height: 1080,
+    fps: 1,
+    durationMs: 0,
+    keyframes: true,
+    annotations: [noZ1, noZ2],
+  }
+  const overlayForward = makeOverlay(jobForward, 1920, 1080)
+  check(
+    'makeOverlay sorts annotations omitting z in array index order',
+    overlayForward.ordered.length === 2 &&
+      overlayForward.ordered[0]?.annotation_id === 'ann_noz_1' &&
+      overlayForward.ordered[1]?.annotation_id === 'ann_noz_2',
+    `got ${JSON.stringify(overlayForward.ordered.map((a) => a.annotation_id))}`,
+  )
+
+  const jobReverse: RenderStartPayload = {
+    replayWebm: null,
+    width: 1920,
+    height: 1080,
+    fps: 1,
+    durationMs: 0,
+    keyframes: true,
+    annotations: [noZ2, noZ1],
+  }
+  const overlayReverse = makeOverlay(jobReverse, 1920, 1080)
+  check(
+    'makeOverlay sorts inverted array of annotations omitting z deterministically',
+    overlayReverse.ordered.length === 2 &&
+      overlayReverse.ordered[0]?.annotation_id === 'ann_noz_2' &&
+      overlayReverse.ordered[1]?.annotation_id === 'ann_noz_1',
+    `got ${JSON.stringify(overlayReverse.ordered.map((a) => a.annotation_id))}`,
+  )
+
+  const jobMixed: RenderStartPayload = {
+    replayWebm: null,
+    width: 1920,
+    height: 1080,
+    fps: 1,
+    durationMs: 0,
+    keyframes: true,
+    annotations: [noZ1, explicitZHigh, explicitZLow, noZ2],
+  }
+  // Indices:
+  // noZ1: index 0 (effective z: 0)
+  // explicitZHigh: index 1 (z: 10)
+  // explicitZLow: index 2 (z: -5)
+  // noZ2: index 3 (effective z: 3)
+  // Expected ascending sort: explicitZLow (-5), noZ1 (0), noZ2 (3), explicitZHigh (10)
+  const overlayMixed = makeOverlay(jobMixed, 1920, 1080)
+  const mixedIds = overlayMixed.ordered.map((a) => a.annotation_id)
+  check(
+    'makeOverlay correctly interleaves explicit z and omitted z fallback',
+    mixedIds.join(',') === 'ann_z_low,ann_noz_1,ann_noz_2,ann_z_high',
+    `got ${JSON.stringify(mixedIds)}`,
+  )
+
+  // 2. sortAnnotationsAscending / sortAnnotationsDescending
+  const asc = sortAnnotationsAscending([noZ1, noZ2]).map((a) => a.annotation_id)
+  check(
+    'sortAnnotationsAscending preserves array order on omitted z',
+    asc.join(',') === 'ann_noz_1,ann_noz_2',
+    `got ${JSON.stringify(asc)}`,
+  )
+
+  const desc = sortAnnotationsDescending([noZ1, noZ2]).map((a) => a.annotation_id)
+  check(
+    'sortAnnotationsDescending orders later array position first on omitted z (top-most first)',
+    desc.join(',') === 'ann_noz_2,ann_noz_1',
+    `got ${JSON.stringify(desc)}`,
+  )
+
+  // 3. hitTest
+  // Overlapping boxes: noZ1 (i=0) and noZ2 (i=1) both cover (100, 100).
+  // Later box in array is drawn on top (SPEC §8.3), so hitTest must return noZ2.
+  const hitForward = hitTest([noZ1, noZ2], 100, 100, 1)
+  check(
+    'hitTest returns later array entry on overlapping boxes omitting z',
+    hitForward === 'ann_noz_2',
+    `got ${String(hitForward)}`,
+  )
+
+  const hitReverse = hitTest([noZ2, noZ1], 100, 100, 1)
+  check(
+    'hitTest with reversed array returns visually topmost (later) box',
+    hitReverse === 'ann_noz_1',
+    `got ${String(hitReverse)}`,
+  )
+
+  const hitMixed = hitTest([explicitZLow, noZ1, explicitZHigh], 100, 100, 1)
+  check(
+    'hitTest respects explicit higher z over omitted z',
+    hitMixed === 'ann_z_high',
+    `got ${String(hitMixed)}`,
+  )
+
+  // 4. drawDisplayLabels ordering
+  const region = { cx: 0, cy: 0, cw: 1920, ch: 1080, cscale: 1, width: 1920, height: 1080 }
+  const mockLabels1 = createMockContext()
+  drawDisplayLabels(mockLabels1.ctx, region, [noZ1, noZ2], 1)
+  check(
+    'drawDisplayLabels draws in ascending array index order when z is omitted',
+    mockLabels1.texts.length === 2 &&
+      mockLabels1.texts[0] === 'First Label' &&
+      mockLabels1.texts[1] === 'Second Label',
+    `got ${JSON.stringify(mockLabels1.texts)}`,
+  )
+
+  const mockLabels2 = createMockContext()
+  drawDisplayLabels(mockLabels2.ctx, region, [noZ2, noZ1], 1)
+  check(
+    'drawDisplayLabels draws in reversed order matching array when z is omitted',
+    mockLabels2.texts.length === 2 &&
+      mockLabels2.texts[0] === 'Second Label' &&
+      mockLabels2.texts[1] === 'First Label',
+    `got ${JSON.stringify(mockLabels2.texts)}`,
+  )
+
+  // 5. EditorState.nextStamp
+  const stateEmpty = new EditorState()
+  const stampEmpty = stateEmpty.nextStamp()
+  check(
+    'EditorState.nextStamp starts at z = 1 for empty annotations',
+    stampEmpty.z === 1,
+    `got ${String(stampEmpty.z)}`,
+  )
+
+  const stateNoZ = new EditorState()
+  stateNoZ.restore([noZ1, noZ2]) // 2 annotations with omitted z at indices 0 and 1
+  const stampNoZ = stateNoZ.nextStamp()
+  check(
+    'EditorState.nextStamp computes maxZ from array index when z is omitted',
+    stampNoZ.z === 2, // maxZ is 1 (index 1), so nextStamp is maxZ + 1 = 2
+    `got ${String(stampNoZ.z)}`,
+  )
+
+  const stateExplicit = new EditorState()
+  stateExplicit.restore([explicitZHigh]) // z: 10
+  const stampExplicit = stateExplicit.nextStamp()
+  check(
+    'EditorState.nextStamp computes maxZ + 1 from explicit z',
+    stampExplicit.z === 11,
+    `got ${String(stampExplicit.z)}`,
+  )
+
+  // 6. Non-finite / NaN z resilience
+  const nanZ1: Annotation = {
+    ...noZ1,
+    annotation_id: 'ann_nan_1',
+    z: Number.NaN,
+  }
+  const nanZ2: Annotation = {
+    ...noZ2,
+    annotation_id: 'ann_nan_2',
+    z: Number.NaN,
+  }
+  const ascNan = sortAnnotationsAscending([nanZ1, nanZ2]).map((a) => a.annotation_id)
+  check(
+    'sortAnnotationsAscending safely falls back to array index when z is NaN',
+    ascNan.join(',') === 'ann_nan_1,ann_nan_2',
+    `got ${JSON.stringify(ascNan)}`,
+  )
+
+  const hitNan = hitTest([nanZ1, nanZ2], 100, 100, 1)
+  check(
+    'hitTest returns later array entry when overlapping boxes have NaN z',
+    hitNan === 'ann_nan_2',
+    `got ${String(hitNan)}`,
+  )
+
+  const stateNan = new EditorState()
+  stateNan.restore([nanZ1, nanZ2])
+  const stampNan = stateNan.nextStamp()
+  check(
+    'EditorState.nextStamp safely falls back to array index when z is NaN',
+    stampNan.z === 2,
+    `got ${String(stampNan.z)}`,
   )
 }
 
