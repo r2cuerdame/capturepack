@@ -61,5 +61,12 @@ check('secondary replay jobs use the display renderer', historySource.includes('
 check('secondary still-only jobs use the keyframe renderer', historySource.includes('startKeyframeStill(handle, {'))
 check('renderer rejects an incomplete contract before making the overlay', rendererSource.includes('const contractError = renderContractError(job)'))
 
-console.log(`\nresult: ${failed === 0 ? 'OK' : 'BROKEN'} — ${passed} passed, ${failed} failed\n`)
+import { execFileSync } from 'node:child_process'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const here = path.dirname(fileURLToPath(import.meta.url))
+execFileSync(process.execPath, [path.join(here, 'history-play-check.mjs')], { stdio: 'inherit' })
+
+console.log(`\nrerender result: ${failed === 0 ? 'OK' : 'BROKEN'} — ${passed} passed, ${failed} failed\n`)
 process.exit(failed === 0 ? 0 : 1)
