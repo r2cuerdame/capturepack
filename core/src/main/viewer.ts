@@ -467,8 +467,8 @@ export function buildViewerHtml(
     captureKind === 'video' && manifest.media.replay_duration_ms !== undefined
       ? `${(manifest.media.replay_duration_ms / 1000).toFixed(1)}s`
       : '—'
-  const screens = manifest.environment.screens
-    .map((screen) => `${screen.width}×${screen.height} @${screen.scale}x`)
+  const screens = (manifest.environment.screens ?? [])
+    .map((screen) => `${screen.width}×${screen.height} @${screen.scale ?? 1}x`)
     .join('; ')
   const mainMedia = primaryMedia(manifest, captureKind)
   const privacyWarning =
@@ -531,7 +531,7 @@ a:focus-visible,summary:focus-visible,video:focus-visible{outline:3px solid var(
 <div><dt>Capture</dt><dd>${escapeHtml(captureKind)}${captureKind === 'image' && manifest.media.image_scope !== undefined ? ` · ${escapeHtml(manifest.media.image_scope)}` : ''}</dd></div>
 <div><dt>${escapeHtml(t('pack.application'))}</dt><dd>${escapeHtml(manifest.environment.app ?? t('pack.unknown'))}</dd></div>
 <div><dt>${escapeHtml(t('pack.duration'))}</dt><dd>${escapeHtml(duration)}</dd></div>
-<div><dt>${escapeHtml(t('pack.os'))}</dt><dd>${escapeHtml(`${manifest.environment.os} ${manifest.environment.os_version}`)}</dd></div>
+<div><dt>${escapeHtml(t('pack.os'))}</dt><dd>${escapeHtml(manifest.environment.os_version ? `${manifest.environment.os} ${manifest.environment.os_version}` : manifest.environment.os)}</dd></div>
 <div><dt>${escapeHtml(t('pack.screens'))}</dt><dd>${escapeHtml(screens === '' ? t('pack.unknown') : screens)}</dd></div>
 <div><dt>${escapeHtml(t('pack.display'))}</dt><dd>${escapeHtml(focused)} (${escapeHtml(t('pack.displayFocused'))})</dd></div>
 </dl>

@@ -1096,7 +1096,8 @@ function numberingChecks(): void {
   check(
     'N1 = environment.screens: screens[index - 1] has that display’s scale and orientation — the ' +
       'portrait screen is the SECOND entry, where index 2 says it is',
-    screens.length === 3 &&
+    screens !== undefined &&
+      screens.length === 3 &&
       DESK.every((desk) => {
         const s = screens[desk.index - 1]
         return (

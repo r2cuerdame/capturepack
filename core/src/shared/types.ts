@@ -277,8 +277,8 @@ export interface Manifest {
   note?: string
   environment: {
     os: string
-    os_version: string
-    screens: Array<{
+    os_version?: string
+    screens?: Array<{
       width: number
       height: number
       scale: number

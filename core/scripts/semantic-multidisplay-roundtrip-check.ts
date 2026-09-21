@@ -233,7 +233,7 @@ async function main(): Promise<void> {
     const motionSpace: AuthoredMotionSpace = {
       focusedIndex: declared.find((display) => display.focused)?.index ?? 1,
       displays: declared.flatMap((display) => {
-        const screen = manifest.environment.screens[display.index - 1]
+        const screen = manifest.environment.screens?.[display.index - 1]
         return screen === undefined || display.bounds === undefined
           ? []
           : [{

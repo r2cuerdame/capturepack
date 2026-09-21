@@ -1004,8 +1004,8 @@ export interface ManifestInput {
   generatorVersion: string
   title: string
   note: string
-  osVersion: string
-  screens: Array<{
+  osVersion?: string
+  screens?: Array<{
     width: number
     height: number
     scale: number
@@ -1172,8 +1172,8 @@ export function buildManifest(input: ManifestInput): Manifest {
     generator: { name: 'capturepack', version: input.generatorVersion },
     environment: {
       os: 'windows',
-      os_version: input.osVersion,
-      screens: input.screens,
+      ...(input.osVersion !== undefined ? { os_version: input.osVersion } : {}),
+      ...(input.screens !== undefined ? { screens: input.screens } : {}),
     },
     media: {
       snapshot: 'snapshot.png',
