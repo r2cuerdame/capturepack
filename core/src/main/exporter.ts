@@ -2100,6 +2100,10 @@ export async function setManifestRenderOutputs(
  *
  * The FORMAT is still CapturePack — manifest.json says so, and the folder
  * inside is unchanged. Only the wrapper now admits to being a zip.
+ *
+ * The archive is written beside the destination to a unique temporary file and
+ * atomically replaced upon completion, ensuring temporary files are cleaned up
+ * on error and preexisting archives are unharmed (#177).
  */
 export async function createPackZip(dirPath: string): Promise<string> {
   const zipPath = `${dirPath}.zip`
@@ -2108,10 +2112,19 @@ export async function createPackZip(dirPath: string): Promise<string> {
   if (existsSync(zipPath) && isShareBundleArchive(zipPath)) {
     throw new Error('The Full ZIP filename is occupied by another pack\'s Share Copy.')
   }
+  const temporaryPath = `${zipPath}.tmp-${process.pid}-${randomUUID()}.zip`
   const zip = new AdmZip()
   zip.addLocalFolder(dirPath)
-  await zip.writeZipPromise(zipPath, { overwrite: true })
-  return zipPath
+  try {
+    await zip.writeZipPromise(temporaryPath, { overwrite: true })
+    if (existsSync(zipPath) && isShareBundleArchive(zipPath)) {
+      throw new Error('The Full ZIP filename is occupied by another pack\'s Share Copy.')
+    }
+    await rename(temporaryPath, zipPath)
+    return zipPath
+  } finally {
+    await rm(temporaryPath, { force: true }).catch(() => {})
+  }
 }
 
 function physicalScreens(): Array<{ width: number; height: number; scale: number }> {

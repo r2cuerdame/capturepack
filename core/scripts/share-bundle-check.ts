@@ -888,6 +888,14 @@ try {
       renderer.includes('refreshUsage()'))
   check('Full ZIP refuses to overwrite the neighbouring Share Copy identity',
     exporter.includes('isShareBundleArchive(zipPath)'))
+  check('Full ZIP writes to a unique temporary file and replaces atomically',
+    exporter.includes('const temporaryPath = `${zipPath}.tmp-${process.pid}-${randomUUID()}.zip`') &&
+      exporter.includes('await zip.writeZipPromise(temporaryPath, { overwrite: true })') &&
+      exporter.includes('await rename(temporaryPath, zipPath)') &&
+      exporter.includes('await rm(temporaryPath, { force: true })'))
+  check('History Create ZIP rejects requests while render is in flight',
+    history.slice(history.indexOf('IPC.historyCreateZip'), history.indexOf('IPC.historyPlanShare')).includes('isRenderInFlight(entry.path)') &&
+      history.slice(history.indexOf('IPC.historyCreateZip'), history.indexOf('IPC.historyPlanShare')).includes("return { ok: false, error: t('history.shareErrNotReady') }"))
   check('raw full ZIP is demoted to the More menu with an originals warning',
     renderer.includes("t('history.menuFullZip')") && renderer.includes("t('history.fullZipTooltip')"))
   check('save toast no longer exposes the stale raw-ZIP IPC',
