@@ -22,6 +22,7 @@ import type { TranslateFn } from '../shared/i18n'
 import type {
   HistoryActionResult,
   HistoryAnnotatedState,
+  ActionRetryResult,
   HistoryCreateShareResult,
   HistoryCreateZipResult,
   HistoryListResult,
@@ -33,14 +34,24 @@ import type {
   HistoryShareStillResult,
   StorageUsage,
 } from '../shared/ipc'
+import type { ActionResult } from '../shared/actions'
+import { readActionResults, retryAction } from './actions/host'
+import { loadSettings } from './settings'
 import { DEFAULT_CAPTURE_HOTKEY } from '../shared/types'
 import type { Annotation, Settings } from '../shared/types'
 import { captureKindOf } from '../shared/captureMedia'
-import { isRenderInFlight, onRenderStateChange, startAnnotatedRender } from './annotatedRender'
+import {
+  isRenderInFlight,
+  onRenderStateChange,
+  startAnnotatedRender,
+  startDisplayRender,
+  startKeyframeStill,
+} from './annotatedRender'
 import { createPackZip, replayMimeType } from './exporter'
+import type { PackHandle as ExportPackHandle } from './exporter'
 import { packDocLanguage, uiLanguage, uiT } from './locale'
 import { createPackStore, openPack } from './mcp/store'
-import type { PackHandle, PackStore, RawPackEntry } from './mcp/store'
+import type { PackHandle as StorePackHandle, PackStore, RawPackEntry } from './mcp/store'
 import { moveNoReplace } from './moveNoReplace'
 import {
   archiveStem,
@@ -62,6 +73,7 @@ import { startEditFlow } from './session'
 import { openSettingsWindow } from './settingsWindow'
 import { invalidateStorageUsage, storageUsage } from './storage'
 import { copyTextToClipboard } from './clipboard'
+import { planHistoryRerender, type HistoryRerenderPlan } from './historyRerenderPlan'
 
 const THUMB_WIDTH = 320
 const MAX_PACK_NAME_LENGTH = 180
@@ -136,6 +148,7 @@ export function registerHistoryIpc(live: Settings): void {
       packs: entries.map(safeSummarize),
       uiLanguage: uiLanguage(live),
       captureHotkey: live.captureHotkey,
+      actionConfigs: live.actionConfigs,
     }
   })
 
@@ -472,6 +485,71 @@ export function registerHistoryIpc(live: Settings): void {
       release()
     }
   })
+
+  ipcMain.handle(IPC.historyActionResults, (event, ref: unknown): ActionResult[] => {
+    if (!fromHistory(event)) return []
+    const entry = entryFor(ref)
+    if (entry === null) return []
+    if (entry.kind === 'dir') {
+      return readActionResults(entry.path)
+    }
+    const pack = openPack(entry.path, entry.kind, entry.id)
+    return readZipActionResults(pack)
+  })
+
+  ipcMain.handle(IPC.historyActionRetry, async (event, ref: unknown, configId: unknown): Promise<ActionRetryResult> => {
+    if (!fromHistory(event)) return { ok: false, error: 'not the history window' }
+    if (typeof configId !== 'string' || configId === '') {
+      return { ok: false, error: 'Invalid config id' }
+    }
+    const entry = entryFor(ref)
+    if (entry === null) return { ok: false, error: 'Pack not found' }
+    if (entry.kind !== 'dir') {
+      return { ok: false, error: 'Cannot retry actions on an archived pack' }
+    }
+    const settings = liveSettings ?? loadSettings().settings
+    const config = settings.actionConfigs.find((c) => c.configId === configId)
+    if (config === undefined || !config.enabled) {
+      return { ok: false, error: 'Action configuration is disabled or not found' }
+    }
+    const manifestPath = path.join(entry.path, 'manifest.json')
+    if (!fs.existsSync(manifestPath)) {
+      return { ok: false, error: 'Manifest not found' }
+    }
+    let packId = ''
+    try {
+      const raw = fs.readFileSync(manifestPath, 'utf8')
+      const parsed: unknown = JSON.parse(raw)
+      if (typeof parsed === 'object' && parsed !== null) {
+        const id = (parsed as Record<string, unknown>).id
+        packId = typeof id === 'string' ? id : ''
+      }
+    } catch {
+      return { ok: false, error: 'Could not read pack manifest' }
+    }
+    if (packId === '') {
+      return { ok: false, error: 'Empty pack id' }
+    }
+    try {
+      const result = await retryAction(
+        {
+          packDir: entry.path,
+          packId,
+          packState: 'complete',
+          configs: settings.actionConfigs,
+          webhooks: settings.actionWebhooks,
+        },
+        configId,
+      )
+      if (result === null) {
+        return { ok: false, error: 'Action retry returned no result' }
+      }
+      summaryCache.delete(entry.path)
+      return { ok: true, result }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
 }
 
 /** Opens the History window, or focuses the already-open one (single-instance). */
@@ -643,13 +721,25 @@ function packStamp(entry: RawPackEntry): number {
   return stamp
 }
 
-function annotationsOf(pack: PackHandle): Annotation[] {
+function annotationsOf(pack: StorePackHandle): Annotation[] {
   const file = pack.annotations()
   if (!Array.isArray(file?.annotations)) return []
   // Entry-level validation: a hand-edited annotations.json can hold null or
   // non-object elements (valid JSON, so the parse-level array check passes).
   // One such entry must never throw in summarize()/search/render paths.
   return file.annotations.filter((a) => a !== null && typeof a === 'object')
+}
+
+function readZipActionResults(pack: StorePackHandle): ActionResult[] {
+  try {
+    const text = pack.readText('plugins/action-results.json')
+    if (text === null) return []
+    const parsed: unknown = JSON.parse(text)
+    if (!Array.isArray(parsed)) return []
+    return parsed as ActionResult[]
+  } catch {
+    return []
+  }
 }
 
 // One malformed pack must never blank the whole listing: a summarize() throw
@@ -677,6 +767,7 @@ function safeSummarize(entry: RawPackEntry): HistoryPackSummary {
       zipTwin: zipTwinPresent(entry),
       shareTwin: shareTwinPresent(entry),
       warning: liveT()('history.errUnreadablePack', { error: errorMessage(err) }),
+      actionResults: [],
     }
   }
 }
@@ -731,6 +822,7 @@ function summarize(entry: RawPackEntry): HistoryPackSummary {
     // NOTE: cached by stamp — after a language change an unchanged malformed
     // pack keeps its old-language warning until it changes on disk (harmless).
     warning: manifest === null ? (pack.warnings()[0] ?? liveT()('history.errManifestBad')) : null,
+    actionResults: entry.kind === 'dir' ? readActionResults(entry.path) : readZipActionResults(pack),
   }
   summaryCache.set(entry.path, { stamp, summary })
   return summary
@@ -896,12 +988,36 @@ function startRerender(entry: RawPackEntry): HistoryActionResult {
   }
   const replayDurationMs =
     typeof manifest.media.replay_duration_ms === 'number' ? manifest.media.replay_duration_ms : 0
+  const annotations = annotationsOf(pack)
+  const plan = planHistoryRerender(manifest, annotations)
+  const displaySources: Array<{
+    plan: HistoryRerenderPlan['displays'][number]
+    snapshotPng: Buffer
+    replayWebm: Buffer | null
+  }> = []
+  // Preflight every annotated secondary display before starting any write, so
+  // a damaged pack cannot be left with a freshly rendered focused view beside
+  // stale secondary outputs.
+  for (const display of plan.displays) {
+    const snapshotPng = pack.readBinary(display.snapshot)
+    if (snapshotPng === null) {
+      return { ok: false, error: t('history.errFileMissing', { file: display.snapshot }) }
+    }
+    const displayReplay = display.replay === null ? null : pack.readBinary(display.replay)
+    if (display.replay !== null && displayReplay === null) {
+      return { ok: false, error: t('history.errFileMissing', { file: display.replay }) }
+    }
+    displaySources.push({ plan: display, snapshotPng, replayWebm: displayReplay })
+  }
   startAnnotatedRender(
     { id: manifest.id, dirPath: entry.path },
     {
       replayWebm,
       replayMimeType: replayMimeType(replayRel),
-      annotations: annotationsOf(pack),
+      annotations: plan.focusedAnnotations,
+      motionSpace: plan.motionSpace,
+      displayNumbers: plan.displayNumbers,
+      ...(plan.focusedDisplay === undefined ? {} : { focusedDisplay: plan.focusedDisplay }),
       width: annotationsFile.reference_width,
       height: annotationsFile.reference_height,
       fps: settings.fps,
@@ -914,7 +1030,55 @@ function startRerender(entry: RawPackEntry): HistoryActionResult {
     // event), so that push is what drops "Rendering…" back to [Retry].
     () => {},
   )
+  startHistoryDisplayRenders(
+    { id: manifest.id, dirPath: entry.path },
+    displaySources,
+    plan,
+    settings,
+  )
   return { ok: true }
+}
+
+function startHistoryDisplayRenders(
+  handle: ExportPackHandle,
+  sources: ReadonlyArray<{
+    plan: HistoryRerenderPlan['displays'][number]
+    snapshotPng: Buffer
+    replayWebm: Buffer | null
+  }>,
+  renderPlan: HistoryRerenderPlan,
+  settings: Settings,
+): void {
+  for (const source of sources) {
+    const display = source.plan
+    const common = {
+      motionSpace: renderPlan.motionSpace,
+      displayNumbers: renderPlan.displayNumbers,
+      ...(renderPlan.focusedDisplay === undefined
+        ? {}
+        : { focusedDisplay: renderPlan.focusedDisplay }),
+      width: display.width,
+      height: display.height,
+      docLanguage: packDocLanguage(settings),
+      display: display.index,
+    }
+    if (source.replayWebm !== null && display.replay !== null && display.replayDurationMs > 0) {
+      startDisplayRender(handle, {
+        ...common,
+        replayWebm: source.replayWebm,
+        replayMimeType: replayMimeType(display.replay),
+        annotations: display.annotations,
+        fps: settings.fps,
+        replayDurationMs: display.replayDurationMs,
+      })
+    } else {
+      startKeyframeStill(handle, {
+        ...common,
+        snapshotPng: source.snapshotPng,
+        annotations: display.stillAnnotations,
+      })
+    }
+  }
 }
 
 async function renamePack(entry: RawPackEntry, rawName: string): Promise<HistoryRenameResult> {

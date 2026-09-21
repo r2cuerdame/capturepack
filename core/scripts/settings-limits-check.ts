@@ -44,6 +44,51 @@ check(
     captureSettingsStore.includes('fps: normalizeCaptureFps(raw.fps, base.fps)'),
 )
 
+// settings.json is the primary configuration store. Writing it in place
+// truncates the last valid profile before the replacement is complete, so a
+// crash in that gap can turn the next launch into a silent factory reset.
+console.log('\nTHE SETTINGS FILE IS REPLACED ATOMICALLY')
+{
+  const normalized = captureSettingsStore.split('\r\n').join('\n')
+  const withoutComments = normalized
+    .split('\n')
+    .map((line) => {
+      const trimmed = line.trimStart()
+      if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) return ''
+      const marker = line.indexOf('//')
+      return marker < 0 ? line : line.slice(0, marker)
+    })
+    .join('\n')
+  const start = withoutComments.indexOf('export function saveSettings(')
+  const end = withoutComments.indexOf('\n}\n', start)
+  const saveSettingsBody = withoutComments.slice(start, end < 0 ? undefined : end)
+
+  check('saveSettings remains available as the settings serialization boundary', start >= 0 && end > start)
+  check(
+    'saveSettings writes a sibling temporary file and renames it over settings.json',
+    saveSettingsBody.includes('const file = settingsFilePath()')
+      && saveSettingsBody.includes('const temporary = `${file}.tmp`')
+      && saveSettingsBody.includes('fs.writeFileSync(temporary, JSON.stringify(settings')
+      && saveSettingsBody.includes('fs.renameSync(temporary, file)'),
+  )
+  check(
+    'the atomic rename happens after the temporary file is fully written',
+    saveSettingsBody.indexOf('fs.writeFileSync(temporary')
+      < saveSettingsBody.indexOf('fs.renameSync(temporary, file)'),
+  )
+  check(
+    'saveSettings never writes directly to settings.json',
+    !saveSettingsBody.includes('fs.writeFileSync(file,')
+      && !saveSettingsBody.includes('fs.writeFileSync(settingsFilePath()'),
+  )
+  check(
+    'the only settings write targets the temporary file',
+    (saveSettingsBody.match(/fs\.writeFileSync\(/gu) ?? []).length === 1
+      && saveSettingsBody.includes('fs.writeFileSync(temporary,'),
+    String((saveSettingsBody.match(/fs\.writeFileSync\(/gu) ?? []).length),
+  )
+}
+
 console.log('\nINDEPENDENT CAPTURE SHORTCUTS')
 const settingsHtmlForHotkeys = readFileSync(
   path.join(process.cwd(), 'src/renderer/settings/settings.html'),

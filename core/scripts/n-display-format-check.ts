@@ -178,6 +178,81 @@ try {
     onScreen.format_version,
   )
 
+  // TOP-LEVEL CADENCE PROPAGATION TO FOCUSED DISPLAY (#239, SPEC §5.6).
+  // When top-level cadence is supplied and display declaration omits it,
+  // the focused display MUST inherit media.cadence. When replay is null,
+  // cadence MUST be absent.
+  const withCadence = buildManifest({
+    id: 'cadence-focused-display',
+    createdAt: new Date('2026-07-30T00:00:00.000Z'),
+    generatorVersion: 'check',
+    title: '',
+    note: '',
+    osVersion: 'check',
+    screens: [{ width: 1_920, height: 1_080, scale: 1 }],
+    captureKind: 'video',
+    hasReplay: true,
+    replayFile: 'replay.webm',
+    replayDurationMs: 5_000,
+    snapshotTMs: 1_000,
+    cadence: { achieved_fps: 30, worst_stall_ms: 33 },
+    displays: [
+      {
+        index: 1,
+        focused: true,
+        bounds: { x: 0, y: 0, width: 1_920, height: 1_080 },
+        scale: 1,
+        snapshotWidth: 1_920,
+        snapshotHeight: 1_080,
+        hasReplay: true,
+        replayDurationMs: 5_000,
+        snapshotFile: 'snapshot.png',
+        replayFile: 'replay.webm',
+      },
+    ],
+  })
+  check(
+    'focused display inherits top-level cadence when omitted on display declaration (SPEC §5.6, #239)',
+    JSON.stringify(withCadence.media.displays?.[0]?.cadence) ===
+      JSON.stringify(withCadence.media.cadence) &&
+      withCadence.media.displays?.[0]?.cadence?.achieved_fps === 30,
+  )
+
+  const noReplayWithCadence = buildManifest({
+    id: 'cadence-no-replay-display',
+    createdAt: new Date('2026-07-30T00:00:00.000Z'),
+    generatorVersion: 'check',
+    title: '',
+    note: '',
+    osVersion: 'check',
+    screens: [{ width: 1_920, height: 1_080, scale: 1 }],
+    captureKind: 'video',
+    hasReplay: false,
+    replayFile: 'replay.webm',
+    replayDurationMs: 0,
+    snapshotTMs: null,
+    cadence: { achieved_fps: 30, worst_stall_ms: 33 },
+    displays: [
+      {
+        index: 1,
+        focused: true,
+        bounds: { x: 0, y: 0, width: 1_920, height: 1_080 },
+        scale: 1,
+        snapshotWidth: 1_920,
+        snapshotHeight: 1_080,
+        hasReplay: false,
+        replayDurationMs: 0,
+        snapshotFile: 'snapshot.png',
+        replayFile: 'replay.webm',
+      },
+    ],
+  })
+  check(
+    'cadence is omitted on focused display when replay is null (SPEC §5.6, #239)',
+    noReplayWithCadence.media.displays?.[0]?.cadence === undefined &&
+      noReplayWithCadence.media.cadence === undefined,
+  )
+
   // THREE SCREENS, ONE PORTRAIT, ONE SCALED, FOCUS ON THE THIRD (#76) —
   // synthetically. Vertical offsets differ, scale factors differ, and the
   // focused display is neither first in the array nor at the desktop origin.
@@ -431,6 +506,7 @@ async function writtenPackChecks(): Promise<void> {
       replayWebm: Buffer.from('REPLAY BYTES'),
       replayFile: 'replay.webm',
       replayDurationMs: 4_000,
+      cadence: { achieved_fps: 30, worst_stall_ms: 33 },
       timeline: {
         t0: '2026-07-30T12:00:00+09:00',
         events: [{ t_ms: 0, type: 'core.capture.triggered', source: 'core' }],
@@ -471,6 +547,11 @@ async function writtenPackChecks(): Promise<void> {
         entry.snapshot_width === 640 &&
         entry.snapshot_height === 400,
       `${written.format_version}, ${String(written.media.displays?.length)} display(s)`,
+    )
+    check(
+      'the written pack preserves cadence on top-level media and focused display (SPEC §5.6, #239)',
+      written.media.cadence !== undefined &&
+        JSON.stringify(entry?.cadence) === JSON.stringify(written.media.cadence),
     )
     const run = spawnSync(process.execPath, [validator, handle.dirPath], {
       cwd: repositoryRoot,

@@ -497,7 +497,7 @@ check(
 )
 check(
   'fresh single-display capture transports focused cadence through save-first and finalization',
-  sessionSource.includes('const focusedCadence = manifestCadence(display.id)') &&
+  sessionSource.includes('const focusedCadence = display.cadence') &&
     sessionSource.includes('cadence: focusedCadence,') &&
     sessionSource.match(/cadence:\s*focusedCadence,/g)?.length === 2,
 )

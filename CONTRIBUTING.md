@@ -109,8 +109,36 @@ Format changes are the highest-impact changes in this project, so they move deli
 - Reviews aim to be fast and friendly; "simpler" is the most common review comment here, and it's
   meant kindly.
 
-We also keep a daily **usage journal** in GitHub Issues (what worked, what hurt, ideas) — reading
-recent entries is the best way to find something worth fixing.
+## Usage journal
+
+GitHub Issues are not only for feature requests: this repository keeps a daily **usage journal**
+in them, and reading recent entries is the best way to find something worth fixing.
+
+**The rule:** one issue per day of real use. Title `Journal: YYYY-MM-DD`, label `journal`. Honest
+notes, ten seconds to write. After a month, the journal itself becomes the best roadmap.
+
+Click *New issue* and pick **Usage journal** — the template
+([`.github/ISSUE_TEMPLATE/usage-journal.md`](.github/ISSUE_TEMPLATE/usage-journal.md)) sets the
+title, the label and the three sections:
+
+```
+## Used Today
+
+Today I used CapturePack 7 times.
+
+## Pain
+
+- Annotation took too long.
+
+## Idea
+
+- Need object picker.
+```
+
+Tag concrete friction with `pain` and concrete proposals with `idea` so the roadmap can be mined
+later. The standing "how this works" issue is
+[#1](https://github.com/r2cuerdame/capturepack/issues/1); the practice itself is described in
+[GOAL.md](GOAL.md#development-practice-usage-journal).
 
 ## License
 

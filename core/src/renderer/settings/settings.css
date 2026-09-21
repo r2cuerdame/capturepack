@@ -708,12 +708,30 @@ button.pluginFold[aria-expanded="true"] .pluginChevron {
   min-width: 148px;
   opacity: 0.85;
 }
-.actionField input[type='text'] {
+.actionField input[type='text'],
+.actionField input[type='password'] {
   flex: 1;
   min-width: 0;
 }
 .actionField input[type='number'] {
   width: 84px;
+}
+.actionSecretWrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+.actionSecretWrap input[type='password'] {
+  flex: 1;
+  min-width: 0;
+}
+.actionSecretStatus {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  margin-left: 2px;
 }
 /* The sentence that says pack information leaves the machine. It is the one
    line in this panel a user must not skim, so it is the one line with colour. */

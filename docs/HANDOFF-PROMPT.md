@@ -12,9 +12,9 @@ Read these before changing anything:
 6. `docs/QA.md`
 7. the current files and `git diff`
 
-The current public Windows release is stable `v0.5.0`, published through the
+The current public Windows release is stable `v0.5.1`, published through the
 guarded Release workflow and verified against its downloaded assets. Treat the
-immutable `v0.5.0` tag and its four verified assets as the release authority: do
+immutable `v0.5.1` tag and its four verified assets as the release authority: do
 not move the tag or replace those assets. Work happens on `main`; there is no
 in-flight release branch after publication, and `main` may carry commits after
 the tag. Start with
@@ -163,8 +163,8 @@ npm audit --omit=dev
 ```
 
 The gate discovers every `check:*` script in `core/package.json` — currently
-**84** — and runs them with type checking, the production build and the built
-app's Electron smoke: **89 steps**, or 87 with `--skip-build`. Count it yourself
+**95** — and runs them with type checking, the production build and the built
+app's Electron smoke: **98 steps**, or 96 with `--skip-build`. Count it yourself
 rather than trusting this sentence:
 
 ```powershell

@@ -109,6 +109,8 @@ const MAX_SCALE = 6
 /** Refuse side-panel/DevTools layouts where client width is not viewport width. */
 const MIN_DPR_AGREEMENT = 0.75
 const MAX_DPR_AGREEMENT = 1.25
+/** How far below zero a derived chrome height may fall and still be rounding. */
+const CHROME_HEIGHT_ROUNDING_PX = 1
 
 /**
  * A PICK THAT WAS NOT OFFERED, AND WHY (#104).
@@ -668,10 +670,22 @@ function rectAtPick(
   ) {
     return null
   }
-  const chromeHeight = client.height - viewport.height * k
-  if (!Number.isFinite(chromeHeight) || chromeHeight < 0 || chromeHeight >= client.height) {
+  // A VIEWPORT MAY BE TALLER THAN ITS CLIENT AREA BY A ROUNDING (#157).
+  //
+  // A browser-page still's client rectangle IS the picture, whose pixel height
+  // is the document's CSS height times the scale, ROUNDED to a whole pixel —
+  // so the derived chrome height lands anywhere in [-0.5, 0.5] rather than at
+  // zero. Half a pixel is rounding, not a disagreement; a whole pixel past
+  // that still is, and is refused as it always was.
+  const derivedChromeHeight = client.height - viewport.height * k
+  if (
+    !Number.isFinite(derivedChromeHeight)
+    || derivedChromeHeight < -CHROME_HEIGHT_ROUNDING_PX
+    || derivedChromeHeight >= client.height
+  ) {
     return null
   }
+  const chromeHeight = Math.max(0, derivedChromeHeight)
   const rect: Rect = {
     x: Math.round(client.x + element.x * k),
     y: Math.round(client.y + chromeHeight + element.y * k),

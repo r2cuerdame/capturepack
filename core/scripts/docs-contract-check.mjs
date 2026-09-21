@@ -282,5 +282,52 @@ console.log('\nThe current handoff is the only one that reads as instructions')
   )
 }
 
+console.log('\nThe usage journal template still says what Issue #1 says')
+{
+  // Issue #1 is the standing description of the journal practice: one issue
+  // per day, title `Journal: YYYY-MM-DD`, label `journal`, three sections, and
+  // `pain` / `idea` as the labels the roadmap is later mined by. The template
+  // is what a person actually sees when they click New issue, so it is the
+  // copy that drifts — and a template that quietly drops the label or renames
+  // a section makes a month of entries unminable.
+  const templatePath = join(ROOT, '.github', 'ISSUE_TEMPLATE', 'usage-journal.md')
+  check('the usage journal issue template exists', existsSync(templatePath), templatePath)
+  const template = existsSync(templatePath) ? readFileSync(templatePath, 'utf8') : ''
+  const frontMatter = template.match(/^---\r?\n([\s\S]*?)\r?\n---/u)?.[1] ?? ''
+  const field = (name) => frontMatter.match(new RegExp(`^${name}:\\s*(.+?)\\s*$`, 'mu'))?.[1] ?? ''
+  check(
+    'the template titles the entry "Journal: YYYY-MM-DD"',
+    field('title').replace(/^["']|["']$/gu, '') === 'Journal: YYYY-MM-DD',
+    `title is ${field('title') || '(missing)'}`,
+  )
+  check(
+    'the template applies the journal label',
+    field('labels').split(',').map((label) => label.trim()).includes('journal'),
+    `labels is ${field('labels') || '(missing)'}`,
+  )
+  const headings = [...template.matchAll(/^## (.+?)\s*$/gmu)].map((match) => match[1])
+  check(
+    'the template carries the three sections in order',
+    JSON.stringify(headings) === JSON.stringify(['Used Today', 'Pain', 'Idea']),
+    `sections are ${JSON.stringify(headings)}`,
+  )
+  check(
+    'the template tells the writer about the pain and idea labels',
+    /`pain`/u.test(template) && /`idea`/u.test(template),
+    'the template never mentions `pain` or `idea`',
+  )
+
+  // The contributor-facing copy of the rule has to agree with the template.
+  const contributing = readFileSync(join(ROOT, 'CONTRIBUTING.md'), 'utf8')
+  check(
+    'CONTRIBUTING.md states the journal rule',
+    /## Usage journal/u.test(contributing) &&
+      contributing.includes('`Journal: YYYY-MM-DD`') &&
+      contributing.includes('label `journal`') &&
+      contributing.includes('.github/ISSUE_TEMPLATE/usage-journal.md'),
+    'CONTRIBUTING.md lost the Usage journal section, the title format, the label or the template path',
+  )
+}
+
 console.log(`\nresult: ${failed === 0 ? 'OK' : 'BROKEN'} — ${passed} passed, ${failed} failed\n`)
 if (failed > 0) process.exitCode = 1

@@ -1,0 +1,266 @@
+{
+  "phase": "post-save, outside performance measurement window",
+  "before_processes": {
+    "gpu_available": true,
+    "gpu_error": null,
+    "processes": [
+      {
+        "pid": 2376,
+        "parent_pid": 67988,
+        "name": "electron.exe",
+        "command_line": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\core\\node_modules\\electron\\dist\\electron.exe . --user-data-dir=C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\native-3\\app-data --output-dir=C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\native-3\\packs --no-global-shortcut --no-login-item --capture-now=33 --dxgi-native-replay",
+        "executable_path": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\core\\node_modules\\electron\\dist\\electron.exe",
+        "creation_date": "2026-09-12T13:36:46.2342330Z",
+        "cpu_seconds": 9.734375,
+        "private_bytes": 312877056,
+        "working_set_bytes": 351494144,
+        "gpu_engines": [
+          {
+            "engine": "3d",
+            "utilization_percent": 1.0352312424729164,
+            "instance": "pid_2376_luid_0x00000000_0x0000d9f6_phys_0_eng_0_engtype_3d"
+          },
+          {
+            "engine": "vr",
+            "utilization_percent": 0,
+            "instance": "pid_2376_luid_0x00000000_0x0000d9f6_phys_0_eng_10_engtype_vr"
+          },
+          {
+            "engine": "videodecode",
+            "utilization_percent": 0,
+            "instance": "pid_2376_luid_0x00000000_0x0000d9f6_phys_0_eng_1_engtype_videodecode"
+          },
+          {
+            "engine": "videodecode",
+            "utilization_percent": 0,
+            "instance": "pid_2376_luid_0x00000000_0x0000d9f6_phys_0_eng_2_engtype_videodecode"
+          },
+          {
+            "engine": "copy",
+            "utilization_percent": 0,
+            "instance": "pid_2376_luid_0x00000000_0x0000d9f6_phys_0_eng_3_engtype_copy"
+          },
+          {
+            "engine": "copy",
+            "utilization_percent": 0,
+            "instance": "pid_2376_luid_0x00000000_0x0000d9f6_phys_0_eng_4_engtype_copy"
+          },
+          {
+            "engine": "security",
+            "utilization_percent": 0,
+            "instance": "pid_2376_luid_0x00000000_0x0000d9f6_phys_0_eng_5_engtype_security"
+          },
+          {
+            "engine": "videoencode",
+            "utilization_percent": 0,
+            "instance": "pid_2376_luid_0x00000000_0x0000d9f6_phys_0_eng_6_engtype_videoencode"
+          },
+          {
+            "engine": "videoencode",
+            "utilization_percent": 0,
+            "instance": "pid_2376_luid_0x00000000_0x0000d9f6_phys_0_eng_7_engtype_videoencode"
+          },
+          {
+            "engine": "ofa",
+            "utilization_percent": 0,
+            "instance": "pid_2376_luid_0x00000000_0x0000d9f6_phys_0_eng_8_engtype_ofa_0"
+          },
+          {
+            "engine": "jpeg",
+            "utilization_percent": 0,
+            "instance": "pid_2376_luid_0x00000000_0x0000d9f6_phys_0_eng_9_engtype_jpeg_decode_1"
+          }
+        ]
+      },
+      {
+        "pid": 72228,
+        "parent_pid": 2376,
+        "name": "electron.exe",
+        "command_line": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\core\\node_modules\\electron\\dist\\electron.exe --type=crashpad-handler --user-data-dir=C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\native-3\\app-data /prefetch:4 --no-rate-limit --monitor-self-annotation=ptype=crashpad-handler --database=C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\native-3\\app-data\\Crashpad --annotation=_productName=CapturePack --annotation=_version=0.5.0 --annotation=plat=Win64 --annotation=prod=Electron --annotation=ver=43.2.0 --initial-client-data=0x5a4,0x5a8,0x5ac,0x59c,0x5b0,0x7ff6d28d85e0,0x7ff6d28d85f0,0x7ff6d28d8600",
+        "executable_path": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\core\\node_modules\\electron\\dist\\electron.exe",
+        "creation_date": "2026-09-12T13:36:46.4965730Z",
+        "cpu_seconds": 0.046875,
+        "private_bytes": 10182656,
+        "working_set_bytes": 67358720,
+        "gpu_engines": [
+          null
+        ]
+      },
+      {
+        "pid": 48520,
+        "parent_pid": 2376,
+        "name": "electron.exe",
+        "command_line": "\"C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\core\\node_modules\\electron\\dist\\electron.exe\" --type=gpu-process --user-data-dir=\"C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\native-3\\app-data\" --gpu-preferences=UAAAAAAAAADgAAAEAAAAAAAAAAAAAGAAOAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAABgAAAAAAAAAGAAAAAAAAAAIAAAAAAAAAAgAAAAAAAAACAAAAAAAAAA= --field-trial-handle=1928,i,5412547219661376331,12609555368396639633,262144 --enable-features=PdfUseShowSaveFilePicker --disable-features=CalculateNativeWinOcclusion,DropInputEventsWhilePaintHolding,LocalNetworkAccessChecks,NetworkServiceSandbox,ScreenAIOCREnabled,SpareRendererForSitePerProcess,TraceSiteInstanceGetProcessCreation --variations-seed-version --pseudonymization-salt-handle=1936,i,18293342707787877556,11777698455955259779,4 --trace-process-track-uuid=3190708988185955192 --mojo-platform-channel-handle=1924 /prefetch:2",
+        "executable_path": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\core\\node_modules\\electron\\dist\\electron.exe",
+        "creation_date": "2026-09-12T13:36:46.6385420Z",
+        "cpu_seconds": 6.328125,
+        "private_bytes": 625033216,
+        "working_set_bytes": 331911168,
+        "gpu_engines": [
+          {
+            "engine": "3d",
+            "utilization_percent": 0.03233401232127217,
+            "instance": "pid_48520_luid_0x00000000_0x0000d9f6_phys_0_eng_0_engtype_3d"
+          },
+          {
+            "engine": "vr",
+            "utilization_percent": 0,
+            "instance": "pid_48520_luid_0x00000000_0x0000d9f6_phys_0_eng_10_engtype_vr"
+          },
+          {
+            "engine": "videodecode",
+            "utilization_percent": 0,
+            "instance": "pid_48520_luid_0x00000000_0x0000d9f6_phys_0_eng_1_engtype_videodecode"
+          },
+          {
+            "engine": "videodecode",
+            "utilization_percent": 0,
+            "instance": "pid_48520_luid_0x00000000_0x0000d9f6_phys_0_eng_2_engtype_videodecode"
+          },
+          {
+            "engine": "copy",
+            "utilization_percent": 0.2029561341154822,
+            "instance": "pid_48520_luid_0x00000000_0x0000d9f6_phys_0_eng_3_engtype_copy"
+          },
+          {
+            "engine": "copy",
+            "utilization_percent": 0,
+            "instance": "pid_48520_luid_0x00000000_0x0000d9f6_phys_0_eng_4_engtype_copy"
+          },
+          {
+            "engine": "security",
+            "utilization_percent": 0,
+            "instance": "pid_48520_luid_0x00000000_0x0000d9f6_phys_0_eng_5_engtype_security"
+          },
+          {
+            "engine": "videoencode",
+            "utilization_percent": 0.8816644238811356,
+            "instance": "pid_48520_luid_0x00000000_0x0000d9f6_phys_0_eng_6_engtype_videoencode"
+          },
+          {
+            "engine": "videoencode",
+            "utilization_percent": 0.9473490551381766,
+            "instance": "pid_48520_luid_0x00000000_0x0000d9f6_phys_0_eng_7_engtype_videoencode"
+          },
+          {
+            "engine": "ofa",
+            "utilization_percent": 0,
+            "instance": "pid_48520_luid_0x00000000_0x0000d9f6_phys_0_eng_8_engtype_ofa_0"
+          },
+          {
+            "engine": "jpeg",
+            "utilization_percent": 0,
+            "instance": "pid_48520_luid_0x00000000_0x0000d9f6_phys_0_eng_9_engtype_jpeg_decode_1"
+          }
+        ]
+      },
+      {
+        "pid": 39828,
+        "parent_pid": 2376,
+        "name": "electron.exe",
+        "command_line": "\"C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\core\\node_modules\\electron\\dist\\electron.exe\" --type=utility --utility-sub-type=network.mojom.NetworkService --lang=ko --service-sandbox-type=none --user-data-dir=\"C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\native-3\\app-data\" --field-trial-handle=1928,i,5412547219661376331,12609555368396639633,262144 --enable-features=PdfUseShowSaveFilePicker --disable-features=CalculateNativeWinOcclusion,DropInputEventsWhilePaintHolding,LocalNetworkAccessChecks,NetworkServiceSandbox,ScreenAIOCREnabled,SpareRendererForSitePerProcess,TraceSiteInstanceGetProcessCreation --variations-seed-version --pseudonymization-salt-handle=1936,i,18293342707787877556,11777698455955259779,4 --trace-process-track-uuid=3190708989122997041 --mojo-platform-channel-handle=2144 /prefetch:11",
+        "executable_path": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\core\\node_modules\\electron\\dist\\electron.exe",
+        "creation_date": "2026-09-12T13:36:46.6519480Z",
+        "cpu_seconds": 0.5625,
+        "private_bytes": 13508608,
+        "working_set_bytes": 78901248,
+        "gpu_engines": [
+          null
+        ]
+      },
+      {
+        "pid": 7112,
+        "parent_pid": 2376,
+        "name": "electron.exe",
+        "command_line": "\"C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\core\\node_modules\\electron\\dist\\electron.exe\" --type=renderer --user-data-dir=\"C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\native-3\\app-data\" --app-user-model-id=io.github.r2cuerdame.capturepack --app-path=\"C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\core\" --enable-sandbox --video-capture-use-gpu-memory-buffer --lang=ko --device-scale-factor=1.5 --num-raster-threads=4 --enable-main-frame-before-activation --renderer-client-id=4 --time-ticks-at-unix-epoch=-1789045078432926 --launch-time-ticks=175128283416 --field-trial-handle=1928,i,5412547219661376331,12609555368396639633,262144 --enable-features=PdfUseShowSaveFilePicker --disable-features=CalculateNativeWinOcclusion,DropInputEventsWhilePaintHolding,LocalNetworkAccessChecks,NetworkServiceSandbox,ScreenAIOCREnabled,SpareRendererForSitePerProcess,TraceSiteInstanceGetProcessCreation --variations-seed-version --pseudonymization-salt-handle=1936,i,18293342707787877556,11777698455955259779,4 --trace-process-track-uuid=3190708990060038890 --mojo-platform-channel-handle=2648 /prefetch:1",
+        "executable_path": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\core\\node_modules\\electron\\dist\\electron.exe",
+        "creation_date": "2026-09-12T13:36:46.7264460Z",
+        "cpu_seconds": 3.28125,
+        "private_bytes": 46317568,
+        "working_set_bytes": 156614656,
+        "gpu_engines": [
+          null
+        ]
+      },
+      {
+        "pid": 74908,
+        "parent_pid": 2376,
+        "name": "powershell.exe",
+        "command_line": "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\core\\dist\\scripts\\uia-track.ps1",
+        "executable_path": "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        "creation_date": "2026-09-12T13:36:47.2337770Z",
+        "cpu_seconds": 2.03125,
+        "private_bytes": 106450944,
+        "working_set_bytes": 132120576,
+        "gpu_engines": [
+          null
+        ]
+      },
+      {
+        "pid": 70820,
+        "parent_pid": 2376,
+        "name": "powershell.exe",
+        "command_line": "powershell.exe -NoProfile -NonInteractive -STA -ExecutionPolicy Bypass -File C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\core\\dist\\scripts\\context-host.ps1",
+        "executable_path": "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        "creation_date": "2026-09-12T13:36:47.2562270Z",
+        "cpu_seconds": 4.90625,
+        "private_bytes": 104972288,
+        "working_set_bytes": 125198336,
+        "gpu_engines": [
+          null
+        ]
+      },
+      {
+        "pid": 65052,
+        "parent_pid": 74908,
+        "name": "conhost.exe",
+        "command_line": "\\??\\C:\\WINDOWS\\system32\\conhost.exe 0x4",
+        "executable_path": "C:\\WINDOWS\\system32\\conhost.exe",
+        "creation_date": "2026-09-12T13:36:47.2699280Z",
+        "cpu_seconds": 0.015625,
+        "private_bytes": 1249280,
+        "working_set_bytes": 8130560,
+        "gpu_engines": [
+          null
+        ]
+      },
+      {
+        "pid": 37652,
+        "parent_pid": 70820,
+        "name": "conhost.exe",
+        "command_line": "\\??\\C:\\WINDOWS\\system32\\conhost.exe 0x4",
+        "executable_path": "C:\\WINDOWS\\system32\\conhost.exe",
+        "creation_date": "2026-09-12T13:36:47.2899560Z",
+        "cpu_seconds": 0.015625,
+        "private_bytes": 1220608,
+        "working_set_bytes": 8122368,
+        "gpu_engines": [
+          null
+        ]
+      },
+      {
+        "pid": 72124,
+        "parent_pid": 2376,
+        "name": "electron.exe",
+        "command_line": "\"C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\core\\node_modules\\electron\\dist\\electron.exe\" --type=renderer --user-data-dir=\"C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\native-3\\app-data\" --app-user-model-id=io.github.r2cuerdame.capturepack --app-path=\"C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\core\" --enable-sandbox --video-capture-use-gpu-memory-buffer --lang=ko --device-scale-factor=1.5 --num-raster-threads=4 --enable-main-frame-before-activation --renderer-client-id=5 --time-ticks-at-unix-epoch=-1789045078432926 --launch-time-ticks=175165078463 --field-trial-handle=1928,i,5412547219661376331,12609555368396639633,262144 --enable-features=PdfUseShowSaveFilePicker --disable-features=CalculateNativeWinOcclusion,DropInputEventsWhilePaintHolding,LocalNetworkAccessChecks,NetworkServiceSandbox,ScreenAIOCREnabled,SpareRendererForSitePerProcess,TraceSiteInstanceGetProcessCreation --variations-seed-version --pseudonymization-salt-handle=1936,i,18293342707787877556,11777698455955259779,4 --trace-process-track-uuid=3190708990997080739 --mojo-platform-channel-handle=8060 /prefetch:1",
+        "executable_path": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\core\\node_modules\\electron\\dist\\electron.exe",
+        "creation_date": "2026-09-12T13:37:23.5259690Z",
+        "cpu_seconds": 0.328125,
+        "private_bytes": 88875008,
+        "working_set_bytes": 197214208,
+        "gpu_engines": [
+          null
+        ]
+      }
+    ]
+  },
+  "expected_helper": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\core\\dist\\scripts\\dxgi-replay-ring.exe",
+  "helper_count": 0,
+  "injected_at": null,
+  "after_processes": null,
+  "log_evidence": null,
+  "helper_gone": false,
+  "pass": false,
+  "error": "native lifecycle proof requires exactly one owned service on the selected display",
+  "startup_failure": "2026-09-12T13:36:52.776Z WARN  [capture] display 2678724301: DXGI native replay unavailable (native-runtime-failed) — codec-config-invalid: dxgi replay: zero-B CodecAPI property contract unavailable; encoder=NVIDIA H.264 Encoder MFT; before-types-set=0x80070057; after-types-set-attempted=1; after-types-set=0x80070057; read-attempted=1; read=0x80004001; value-type=0; ui4-value-valid=0; ui4-value=0 | dxgi replay: zero-B property diagnostics; supported=0x80004001; modifiable=0x80004001; range=0x80004001; minimum-type=0; minimum-ui4=0; maximum-type=0; maximum-ui4=0; step-type=19; step-ui4=0 | dxgi replay: pre-stream codec-config diagnostics; read=0x00000000; bytes=37; bounded-hex=00000001674D402895A01E0089F9701100000303E8000075300F1C2AA00000000168EE3C80 | dxgi replay: verified H.264 POC2 zero-reordering contract; every access unit requires ordering validation | dxgi replay: H.264 no-B/order contract rejected access unit; retaining shipping replay path"
+}

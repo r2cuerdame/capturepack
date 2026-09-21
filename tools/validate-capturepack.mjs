@@ -170,7 +170,8 @@ function validateCadence(value, label, formatVersion, hasReplay) {
   }
   if (value.backend !== undefined
       && value.backend !== "chromium-desktop-capture"
-      && value.backend !== "windows-gdi-bitblt") {
+      && value.backend !== "windows-gdi-bitblt"
+      && value.backend !== "native-dxgi") {
     fail(`${label}.backend is not a defined CapturePack replay backend (SPEC §5.3)`);
     ok = false;
   }
@@ -568,12 +569,14 @@ function validateManifest(m, pack, snapshotDims) {
         // single raster covers.
         fail(`manifest.json: an image capture has one explicit source snapshot and MUST NOT declare media.displays, at any format version — it ships no per-display raster for an entry to name; media.image_scope says what its one snapshot covers (SPEC §5.3, §5.6)`);
       }
-      if (media.image_scope !== "region" && media.image_scope !== "fullscreen") {
-        fail(`manifest.json: an image capture MUST declare media.image_scope as "region" or "fullscreen" (SPEC §5.3)`);
+      if (media.image_scope !== "region" && media.image_scope !== "fullscreen" && media.image_scope !== "browser-page") {
+        fail(`manifest.json: an image capture MUST declare media.image_scope as "region", "fullscreen" or "browser-page" (SPEC §5.3)`);
       } else if (media.image_scope === "region" && !cropBoundsValid(media.crop_bounds)) {
         fail(`manifest.json: a region image requires valid virtual-desktop media.crop_bounds (SPEC §5.3)`);
       } else if (media.image_scope === "fullscreen" && media.crop_bounds !== undefined) {
         fail(`manifest.json: a fullscreen image MUST NOT declare media.crop_bounds (SPEC §5.3)`);
+      } else if (media.image_scope === "browser-page" && media.crop_bounds !== undefined) {
+        fail(`manifest.json: a browser-page image MUST NOT declare media.crop_bounds (SPEC §5.3)`);
       } else {
         pass(`manifest.json: image scope/provenance is explicit and valid`);
       }
@@ -970,8 +973,18 @@ function validateWindowsUia(pack, displayInfo) {
       // into a different display than the window it was walked from cannot be
       // resolved against it at all — occlusion, refinement and the "smallest
       // control of the top window" rule all compare the two directly.
-      if (displayBad === 0 && isInt(e.window) && windowDisplay.has(e.window) && windowDisplay.get(e.window) !== e.display) {
-        fail(`${label}.display ${JSON.stringify(e.display ?? null)} disagrees with windows[z=${e.window}].display ${JSON.stringify(windowDisplay.get(e.window) ?? null)} — a control and its window MUST be resolvable in ONE coordinate space (SPEC §11.3)`);
+      const focused = displayInfo ? displayInfo.focused : undefined;
+      const resolvedWindowDisplay = windowDisplay.get(e.window) ?? focused;
+      const resolvedElementDisplay = e.display ?? focused;
+      if (
+        displayBad === 0 &&
+        isInt(e.window) &&
+        windowDisplay.has(e.window) &&
+        resolvedWindowDisplay !== resolvedElementDisplay
+      ) {
+        fail(
+          `${label}.display ${JSON.stringify(e.display ?? null)} disagrees with windows[z=${e.window}].display ${JSON.stringify(windowDisplay.get(e.window) ?? null)} — a control and its window MUST be resolvable in ONE coordinate space (SPEC §11.3)`,
+        );
         bad++;
       }
     });

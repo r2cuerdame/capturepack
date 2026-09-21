@@ -1,0 +1,4 @@
+DXGI helper built: .review-archive\stabilization-final-20260912\mux-red-green\red\dxgi-replay-ring.exe
+RED: isolated per-duration rounding mutant failed the cumulative drift regression, exit 1
+DXGI helper built: .review-archive\stabilization-final-20260912\mux-red-green\green\dxgi-replay-ring.exe
+GREEN: actual current source passed all native markers, exit 0

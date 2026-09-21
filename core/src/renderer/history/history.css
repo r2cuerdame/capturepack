@@ -697,6 +697,92 @@ button.danger:hover:not(:disabled) {
   font-size: 12px;
 }
 
+/* ---- After Save Action rows on History cards (#165) ---- */
+
+.cardActionStatus {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+}
+
+.cardActionRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.cardActionName {
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.cardActionMsg {
+  color: var(--muted);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.cardActionRetryBtn {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 2px 9px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  margin-left: auto;
+}
+
+.cardActionRetryBtn:hover {
+  background: var(--panel-hover);
+  border-color: #4a4a58;
+}
+
+.cardActionRetryBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.badge.action-ok {
+  border-color: #245c37;
+  background: #142a1c;
+  color: #7fd89b;
+}
+
+.badge.action-failed {
+  border-color: #7a2b2b;
+  background: #331515;
+  color: #f58b8b;
+}
+
+.badge.action-timed-out {
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+
+.badge.action-blocked {
+  border-color: var(--border);
+  background: var(--panel-hover);
+  color: var(--muted);
+}
+
+.badge.action-skipped {
+  border-color: var(--border);
+  background: var(--panel-hover);
+  color: var(--muted);
+}
+
 /* ---- status bar ---- */
 
 #statusbar {

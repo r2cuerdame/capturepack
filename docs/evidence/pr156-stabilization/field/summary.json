@@ -1,0 +1,288 @@
+{
+  "result": "FAIL",
+  "execution_order": [
+    {
+      "trial": 1,
+      "backend": "shipping",
+      "artifacts": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\shipping-1"
+    },
+    {
+      "trial": 1,
+      "backend": "native-dxgi",
+      "artifacts": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\native-1"
+    },
+    {
+      "trial": 2,
+      "backend": "native-dxgi",
+      "artifacts": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\native-2"
+    },
+    {
+      "trial": 2,
+      "backend": "shipping",
+      "artifacts": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\shipping-2"
+    },
+    {
+      "trial": 3,
+      "backend": "shipping",
+      "artifacts": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\shipping-3"
+    },
+    {
+      "trial": 3,
+      "backend": "native-dxgi",
+      "artifacts": "C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-field-20260912-1\\artifacts\\native-3"
+    }
+  ],
+  "failures": [
+    "shipping trial 1 failed or timed out (status=1, signal=null)",
+    "native-dxgi trial 1 failed or timed out (status=1, signal=null)",
+    "native-dxgi trial 2 failed or timed out (status=1, signal=null)",
+    "shipping trial 2 failed or timed out (status=1, signal=null)",
+    "shipping trial 3 failed or timed out (status=1, signal=null)",
+    "native-dxgi trial 3 failed or timed out (status=1, signal=null)",
+    "shipping trial 1 field report was not OK",
+    "shipping trial 1 source tree was dirty or unknown",
+    "shipping trial 2 field report was not OK",
+    "shipping trial 2 source tree was dirty or unknown",
+    "shipping trial 3 field report was not OK",
+    "shipping trial 3 source tree was dirty or unknown",
+    "native-dxgi trial 1 field report was not OK",
+    "native-dxgi trial 1 observed backend was not native-dxgi",
+    "native-dxgi trial 1 performance evidence was incomplete",
+    "native-dxgi trial 1 source tree was dirty or unknown",
+    "native-dxgi trial 1 did not prove READY and SNAPSHOT for every display",
+    "native-dxgi trial 2 field report was not OK",
+    "native-dxgi trial 2 observed backend was not native-dxgi",
+    "native-dxgi trial 2 performance evidence was incomplete",
+    "native-dxgi trial 2 had too few post-ready process samples",
+    "native-dxgi trial 2 source tree was dirty or unknown",
+    "native-dxgi trial 2 did not prove READY and SNAPSHOT for every display",
+    "native-dxgi trial 3 field report was not OK",
+    "native-dxgi trial 3 observed backend was not native-dxgi",
+    "native-dxgi trial 3 performance evidence was incomplete",
+    "native-dxgi trial 3 source tree was dirty or unknown",
+    "native-dxgi trial 3 did not prove READY and SNAPSHOT for every display",
+    "cpu_total_capacity_percent exceeded its release threshold or was missing",
+    "replay_export_ms exceeded its release threshold or was missing"
+  ],
+  "trials": [
+    {
+      "trial": "shipping-1",
+      "result": "BROKEN",
+      "failures": [
+        "one or more replay media criteria failed",
+        "persisted past sampling/reopen verification failed"
+      ],
+      "checks": {
+        "pack_saved": true,
+        "requested_display_count": 1,
+        "saved_display_count": 1,
+        "saved_display_count_matches_request": true,
+        "replay_file_count": 1,
+        "every_replay_probes_decodes_and_meets_cadence": false,
+        "past_sampling": false,
+        "requested_replay_backend_observed": true,
+        "release_performance_evidence_complete": true,
+        "native_fmp4_production_validator_and_full_decode": true,
+        "native_ready_suspend_snapshot_and_failure_fallback": true,
+        "every_spawned_process_terminated": true
+      },
+      "observed_backend": "shipping",
+      "object_pick": {
+        "pass": false,
+        "query_count": 5,
+        "successful_query_count": 2,
+        "attempted_point_count": 15,
+        "successful_point_count": 2,
+        "basis": "production ObjectIndex.pick at the center and four inset corners of decoded replay target pixels"
+      },
+      "source_commit": "fb982677c96d6d365ea06bd1d1a2d430b09873dc",
+      "app_main_sha256": "a0669e1e49955cb9d36663c6c978b2a817d938d9877c900ad1beaef5efe6bccd",
+      "dxgi_helper_sha256": "fd529165f9e33a3d069adf2f0be82e85ae3db8420eea9efa88646d1205a81b6f",
+      "native_startup_failure": null
+    },
+    {
+      "trial": "native-1",
+      "result": "BROKEN",
+      "failures": [
+        "native lifecycle: native lifecycle proof requires exactly one owned service on the selected display",
+        "persisted past sampling/reopen verification failed",
+        "requested native-dxgi but observed mixed-or-unverified",
+        "post-ready CPU/GPU/working-set/capture-export evidence is incomplete"
+      ],
+      "checks": {
+        "pack_saved": true,
+        "requested_display_count": 1,
+        "saved_display_count": 1,
+        "saved_display_count_matches_request": true,
+        "replay_file_count": 1,
+        "every_replay_probes_decodes_and_meets_cadence": true,
+        "past_sampling": false,
+        "requested_replay_backend_observed": false,
+        "release_performance_evidence_complete": false,
+        "native_fmp4_production_validator_and_full_decode": true,
+        "native_ready_suspend_snapshot_and_failure_fallback": false,
+        "every_spawned_process_terminated": true
+      },
+      "observed_backend": "mixed-or-unverified",
+      "object_pick": {
+        "pass": false,
+        "query_count": 5,
+        "successful_query_count": 3,
+        "attempted_point_count": 10,
+        "successful_point_count": 2,
+        "basis": "production ObjectIndex.pick at the center and four inset corners of decoded replay target pixels"
+      },
+      "source_commit": "fb982677c96d6d365ea06bd1d1a2d430b09873dc",
+      "app_main_sha256": "a0669e1e49955cb9d36663c6c978b2a817d938d9877c900ad1beaef5efe6bccd",
+      "dxgi_helper_sha256": "fd529165f9e33a3d069adf2f0be82e85ae3db8420eea9efa88646d1205a81b6f",
+      "native_startup_failure": "2026-09-12T13:33:23.940Z WARN  [capture] display 2678724301: DXGI native replay unavailable (native-runtime-failed) — codec-config-invalid: dxgi replay: zero-B CodecAPI property contract unavailable; encoder=NVIDIA H.264 Encoder MFT; before-types-set=0x80070057; after-types-set-attempted=1; after-types-set=0x80070057; read-attempted=1; read=0x80004001; value-type=0; ui4-value-valid=0; ui4-value=0 | dxgi replay: zero-B property diagnostics; supported=0x80004001; modifiable=0x80004001; range=0x80004001; minimum-type=0; minimum-ui4=0; maximum-type=0; maximum-ui4=0; step-type=19; step-ui4=0 | dxgi replay: pre-stream codec-config diagnostics; read=0x00000000; bytes=37; bounded-hex=00000001674D402895A01E0089F9701100000303E8000075300F1C2AA00000000168EE3C80 | dxgi replay: verified H.264 POC2 zero-reordering contract; every access unit requires ordering validation | dxgi replay: H.264 no-B/order contract rejected access unit; retaining shipping replay path"
+    },
+    {
+      "trial": "native-2",
+      "result": "BROKEN",
+      "failures": [
+        "native lifecycle: could not terminate the verified owned native service",
+        "one or more replay media criteria failed",
+        "persisted past sampling/reopen verification failed",
+        "requested native-dxgi but observed shipping",
+        "post-ready CPU/GPU/working-set/capture-export evidence is incomplete"
+      ],
+      "checks": {
+        "pack_saved": true,
+        "requested_display_count": 1,
+        "saved_display_count": 1,
+        "saved_display_count_matches_request": true,
+        "replay_file_count": 1,
+        "every_replay_probes_decodes_and_meets_cadence": false,
+        "past_sampling": false,
+        "requested_replay_backend_observed": false,
+        "release_performance_evidence_complete": false,
+        "native_fmp4_production_validator_and_full_decode": true,
+        "native_ready_suspend_snapshot_and_failure_fallback": false,
+        "every_spawned_process_terminated": true
+      },
+      "observed_backend": "shipping",
+      "object_pick": {
+        "pass": false,
+        "query_count": 5,
+        "successful_query_count": 2,
+        "attempted_point_count": 15,
+        "successful_point_count": 3,
+        "basis": "production ObjectIndex.pick at the center and four inset corners of decoded replay target pixels"
+      },
+      "source_commit": "fb982677c96d6d365ea06bd1d1a2d430b09873dc",
+      "app_main_sha256": "a0669e1e49955cb9d36663c6c978b2a817d938d9877c900ad1beaef5efe6bccd",
+      "dxgi_helper_sha256": "fd529165f9e33a3d069adf2f0be82e85ae3db8420eea9efa88646d1205a81b6f",
+      "native_startup_failure": "2026-09-12T13:34:20.834Z INFO  [capture] display 2678724301: DXGI native replay unavailable (native-not-ready) — waiting for the first Desktop Duplication frame; retaining shipping replay path"
+    },
+    {
+      "trial": "shipping-2",
+      "result": "BROKEN",
+      "failures": [
+        "persisted past sampling/reopen verification failed"
+      ],
+      "checks": {
+        "pack_saved": true,
+        "requested_display_count": 1,
+        "saved_display_count": 1,
+        "saved_display_count_matches_request": true,
+        "replay_file_count": 1,
+        "every_replay_probes_decodes_and_meets_cadence": true,
+        "past_sampling": false,
+        "requested_replay_backend_observed": true,
+        "release_performance_evidence_complete": true,
+        "native_fmp4_production_validator_and_full_decode": true,
+        "native_ready_suspend_snapshot_and_failure_fallback": true,
+        "every_spawned_process_terminated": true
+      },
+      "observed_backend": "shipping",
+      "object_pick": {
+        "pass": false,
+        "query_count": 5,
+        "successful_query_count": 2,
+        "attempted_point_count": 15,
+        "successful_point_count": 2,
+        "basis": "production ObjectIndex.pick at the center and four inset corners of decoded replay target pixels"
+      },
+      "source_commit": "fb982677c96d6d365ea06bd1d1a2d430b09873dc",
+      "app_main_sha256": "a0669e1e49955cb9d36663c6c978b2a817d938d9877c900ad1beaef5efe6bccd",
+      "dxgi_helper_sha256": "fd529165f9e33a3d069adf2f0be82e85ae3db8420eea9efa88646d1205a81b6f",
+      "native_startup_failure": null
+    },
+    {
+      "trial": "shipping-3",
+      "result": "BROKEN",
+      "failures": [
+        "one or more replay media criteria failed",
+        "persisted past sampling/reopen verification failed"
+      ],
+      "checks": {
+        "pack_saved": true,
+        "requested_display_count": 1,
+        "saved_display_count": 1,
+        "saved_display_count_matches_request": true,
+        "replay_file_count": 1,
+        "every_replay_probes_decodes_and_meets_cadence": false,
+        "past_sampling": false,
+        "requested_replay_backend_observed": true,
+        "release_performance_evidence_complete": true,
+        "native_fmp4_production_validator_and_full_decode": true,
+        "native_ready_suspend_snapshot_and_failure_fallback": true,
+        "every_spawned_process_terminated": true
+      },
+      "observed_backend": "shipping",
+      "object_pick": {
+        "pass": false,
+        "query_count": 5,
+        "successful_query_count": 2,
+        "attempted_point_count": 15,
+        "successful_point_count": 5,
+        "basis": "production ObjectIndex.pick at the center and four inset corners of decoded replay target pixels"
+      },
+      "source_commit": "fb982677c96d6d365ea06bd1d1a2d430b09873dc",
+      "app_main_sha256": "a0669e1e49955cb9d36663c6c978b2a817d938d9877c900ad1beaef5efe6bccd",
+      "dxgi_helper_sha256": "fd529165f9e33a3d069adf2f0be82e85ae3db8420eea9efa88646d1205a81b6f",
+      "native_startup_failure": null
+    },
+    {
+      "trial": "native-3",
+      "result": "BROKEN",
+      "failures": [
+        "native lifecycle: native lifecycle proof requires exactly one owned service on the selected display",
+        "one or more replay media criteria failed",
+        "persisted past sampling/reopen verification failed",
+        "requested native-dxgi but observed mixed-or-unverified",
+        "post-ready CPU/GPU/working-set/capture-export evidence is incomplete"
+      ],
+      "checks": {
+        "pack_saved": true,
+        "requested_display_count": 1,
+        "saved_display_count": 1,
+        "saved_display_count_matches_request": true,
+        "replay_file_count": 1,
+        "every_replay_probes_decodes_and_meets_cadence": false,
+        "past_sampling": false,
+        "requested_replay_backend_observed": false,
+        "release_performance_evidence_complete": false,
+        "native_fmp4_production_validator_and_full_decode": true,
+        "native_ready_suspend_snapshot_and_failure_fallback": false,
+        "every_spawned_process_terminated": true
+      },
+      "observed_backend": "mixed-or-unverified",
+      "object_pick": {
+        "pass": false,
+        "query_count": 5,
+        "successful_query_count": 1,
+        "attempted_point_count": 20,
+        "successful_point_count": 8,
+        "basis": "production ObjectIndex.pick at the center and four inset corners of decoded replay target pixels"
+      },
+      "source_commit": "fb982677c96d6d365ea06bd1d1a2d430b09873dc",
+      "app_main_sha256": "a0669e1e49955cb9d36663c6c978b2a817d938d9877c900ad1beaef5efe6bccd",
+      "dxgi_helper_sha256": "fd529165f9e33a3d069adf2f0be82e85ae3db8420eea9efa88646d1205a81b6f",
+      "native_startup_failure": "2026-09-12T13:36:52.776Z WARN  [capture] display 2678724301: DXGI native replay unavailable (native-runtime-failed) — codec-config-invalid: dxgi replay: zero-B CodecAPI property contract unavailable; encoder=NVIDIA H.264 Encoder MFT; before-types-set=0x80070057; after-types-set-attempted=1; after-types-set=0x80070057; read-attempted=1; read=0x80004001; value-type=0; ui4-value-valid=0; ui4-value=0 | dxgi replay: zero-B property diagnostics; supported=0x80004001; modifiable=0x80004001; range=0x80004001; minimum-type=0; minimum-ui4=0; maximum-type=0; maximum-ui4=0; step-type=19; step-ui4=0 | dxgi replay: pre-stream codec-config diagnostics; read=0x00000000; bytes=37; bounded-hex=00000001674D402895A01E0089F9701100000303E8000075300F1C2AA00000000168EE3C80 | dxgi replay: verified H.264 POC2 zero-reordering contract; every access unit requires ordering validation | dxgi replay: H.264 no-B/order contract rejected access unit; retaining shipping replay path"
+    }
+  ],
+  "cleanup_survivors": [],
+  "scope": "exact fb98267; existing build; 3 paired trials; 15fps; 30s; primary; unchanged thresholds; no installed app"
+}

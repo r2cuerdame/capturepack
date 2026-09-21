@@ -178,6 +178,7 @@ function buildDisplayMedia(
           : Number.isSafeInteger(d.replayClockOffsetMs)
             ? d.replayClockOffsetMs
             : undefined
+    const cadence = d.focused ? media.cadence : d.cadence
     return {
       index: d.index,
       snapshot: d.focused ? media.snapshot : d.snapshotFile,
@@ -194,7 +195,8 @@ function buildDisplayMedia(
         : {}),
       // Only where there IS a replay and it measured itself: a rate reported
       // next to no recording, or one nobody measured, says nothing true.
-      ...(replay !== null && d.cadence !== undefined ? { cadence: d.cadence } : {}),
+      // On the focused entry, cadence MUST equal top-level media.cadence (SPEC §5.6).
+      ...(replay !== null && cadence !== undefined ? { cadence } : {}),
       bounds: { ...d.bounds },
       scale: d.scale,
       focused: d.focused,
@@ -488,8 +490,13 @@ export const DOM_PLUGIN_NAME = 'chrome-dom'
  * pick made two seconds before the shutter would be indistinguishable from one
  * made at it. A page can change in between, and that is the reader's judgement
  * to make. Absent on a replay pack, where `t_ms` already carries the time.
+ *
+ * 0.4.0 adds `scope` on a document (#157). A full-page still's document is the
+ * WHOLE page in document CSS pixels, with `viewport` naming the picture's CSS
+ * size; a viewport walk says so too. Absent from an older writer, which only
+ * ever walked the viewport.
  */
-export const DOM_PLUGIN_VERSION = '0.3.0'
+export const DOM_PLUGIN_VERSION = '0.4.0'
 
 /**
  * WHAT WAS ON SCREEN, AND WHAT WAS DELIBERATELY LEFT OFF IT.
@@ -509,6 +516,8 @@ export interface DomPluginDocument {
     scroll_x: number
     scroll_y: number
   }
+  /** What the rectangles describe (0.4.0): the viewport, or the whole document. */
+  scope?: 'viewport' | 'document'
   url: string
   title: string
   elements: readonly {
@@ -560,7 +569,34 @@ export interface DomPluginPayload {
     }
     /** Added in payload 0.2.0. Absent means nobody looked, not an empty page. */
     document?: DomPluginDocument
+    /**
+     * How a browser-page picture was made (payload 0.4.0, #157). Written on
+     * the `dom.document.captured` event of a `browser-page` still and nowhere
+     * else: the document's CSS size, the picture's pixel size and the scale
+     * between them, and whether the page was cut at the tile budget or scaled
+     * down to fit — everything a reader needs to weigh the picture.
+     */
+    page?: DomPluginPage
   }[]
+}
+
+export interface DomPluginPage {
+  css_width: number
+  css_height: number
+  pixel_width: number
+  pixel_height: number
+  device_pixel_ratio: number
+  scale: number
+  client_width: number
+  client_height: number
+  scroll_width: number
+  scroll_height: number
+  tiles: number
+  truncated: boolean
+  downscaled: boolean
+  exact_scale: boolean
+  hidden_repeating: number
+  capture_ms: number
 }
 
 export function domPluginDeclaration(): Manifest['plugins'][number] {
@@ -621,6 +657,7 @@ export function domEventForPack(
               scroll_x: e.document.viewport.scrollX,
               scroll_y: e.document.viewport.scrollY,
             },
+            ...(e.document.scope === undefined ? {} : { scope: e.document.scope }),
             url: e.document.url,
             title: e.document.title,
             elements: e.document.elements,
@@ -628,6 +665,28 @@ export function domEventForPack(
             visited_count: e.document.visitedCount,
             elapsed_ms: e.document.elapsedMs,
             omitted: e.document.omitted,
+          },
+        }),
+    ...(e.page === undefined
+      ? {}
+      : {
+          page: {
+            css_width: e.page.cssWidth,
+            css_height: e.page.cssHeight,
+            pixel_width: e.page.pixelWidth,
+            pixel_height: e.page.pixelHeight,
+            device_pixel_ratio: e.page.devicePixelRatio,
+            scale: e.page.scale,
+            client_width: e.page.clientWidth,
+            client_height: e.page.clientHeight,
+            scroll_width: e.page.scrollWidth,
+            scroll_height: e.page.scrollHeight,
+            tiles: e.page.tiles,
+            truncated: e.page.truncated,
+            downscaled: e.page.downscaled,
+            exact_scale: e.page.exactScale,
+            hidden_repeating: e.page.hiddenRepeating,
+            capture_ms: e.page.captureMs,
           },
         }),
   }
@@ -1012,14 +1071,21 @@ function validImageCropBounds(value: ImageCropBounds | undefined): value is Imag
 export function buildManifest(input: ManifestInput): Manifest {
   const captureKind = input.captureKind ?? 'video'
   if (captureKind === 'image') {
-    if (input.imageScope !== 'region' && input.imageScope !== 'fullscreen') {
-      throw new Error('image capture requires an explicit region or fullscreen scope')
+    if (
+      input.imageScope !== 'region'
+      && input.imageScope !== 'fullscreen'
+      && input.imageScope !== 'browser-page'
+    ) {
+      throw new Error('image capture requires an explicit region, fullscreen or browser-page scope')
     }
     if (input.imageScope === 'region' && !validImageCropBounds(input.cropBounds)) {
       throw new Error('region image capture requires valid virtual-desktop crop bounds')
     }
     if (input.imageScope === 'fullscreen' && input.cropBounds !== undefined) {
       throw new Error('fullscreen image capture must not declare crop bounds')
+    }
+    if (input.imageScope === 'browser-page' && input.cropBounds !== undefined) {
+      throw new Error('browser-page image capture must not declare crop bounds')
     }
   }
   // Version from what this manifest will actually DECLARE, not from stale

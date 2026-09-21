@@ -203,6 +203,13 @@ export const BUILTIN_WEBHOOK_MANIFEST: ActionManifest = {
  * exist. Loopback is the exception, because that is where someone tests their
  * own receiver.
  *
+ * Credentials in the URL (`https://user:token@host/`) are refused on every
+ * protocol, loopback included. The secret belongs in the action's own secret
+ * field, which keeps it in the OS store and out of the settings file; and
+ * Node's fetch throws on such a URL anyway, quoting the whole thing, so
+ * accepting it would only move the failure to a log line that carries the
+ * secret (#173).
+ *
  * In the contract rather than beside the implementation so that Settings can
  * say "this URL will not be used" BEFORE a save, instead of the user finding
  * out from a failed action afterwards.
@@ -214,6 +221,7 @@ export function isAcceptableWebhookUrl(candidate: string): boolean {
   } catch {
     return false
   }
+  if (url.username !== '' || url.password !== '') return false
   if (url.protocol === 'https:') return true
   if (url.protocol !== 'http:') return false
   return url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]'

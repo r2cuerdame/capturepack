@@ -12,11 +12,12 @@
 // read is an empty ledger rather than a refusal to run.
 
 import { app, safeStorage } from 'electron'
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import {
   type ActionConfig,
   type ActionManifest,
+  type ActionOutcome,
   type ActionResult,
   type PackState,
   type PipelineStep,
@@ -155,13 +156,29 @@ export function storeActionSecret(configId: string, secret: string): boolean {
   try {
     const store = readSecretStore()
     store[configId] = safeStorage.encryptString(secret).toString('base64')
-    mkdirSync(app.getPath('userData'), { recursive: true })
-    writeFileSync(secretsPath(), JSON.stringify(store), 'utf8')
+    writeSecretStore(store)
     return true
   } catch (error) {
     logError('[actions] could not store the action secret:', error)
     return false
   }
+}
+
+/**
+ * Replace the secret store on disk. Throws; the callers own the message.
+ *
+ * Written beside the target and renamed, like the ledger. Writing in place
+ * truncates first, and a shutdown in that gap leaves invalid JSON that
+ * `readSecretStore` reads as "no secrets" — which the NEXT store or forget
+ * would then persist over every secret the user had. One interrupted write
+ * must cost at most the one change that was in flight.
+ */
+function writeSecretStore(store: Record<string, string>): void {
+  mkdirSync(app.getPath('userData'), { recursive: true })
+  const target = secretsPath()
+  const temporary = `${target}.tmp`
+  writeFileSync(temporary, JSON.stringify(store), 'utf8')
+  renameSync(temporary, target)
 }
 
 function readSecretStore(): Record<string, string> {
@@ -200,7 +217,7 @@ export function forgetActionSecret(configId: string): void {
     const store = readSecretStore()
     if (store[configId] === undefined) return
     delete store[configId]
-    writeFileSync(secretsPath(), JSON.stringify(store), 'utf8')
+    writeSecretStore(store)
   } catch (error) {
     logError('[actions] could not forget an action secret:', error)
   }
@@ -263,11 +280,15 @@ function executorFor(request: ActionRunRequest) {
       throw new Error('no webhook URL is configured')
     }
     if (!isAcceptableWebhookUrl(settings.url)) {
-      throw new Error('the webhook URL must be https, or http on this machine')
+      throw new Error('the webhook URL must be https, or http on this machine, and carry no credentials')
+    }
+    const secret = readActionSecret(step.config.configId)
+    if (secret === null && hasActionSecret(step.config.configId)) {
+      throw new Error('configured webhook secret could not be decrypted')
     }
     await deliverWebhook(request.packDir, {
       url: settings.url,
-      secret: readActionSecret(step.config.configId),
+      secret,
       timeoutMs: step.config.timeoutMs,
     })
   }
@@ -279,6 +300,77 @@ const realClock = {
     new Promise<void>((resolve) => {
       setTimeout(resolve, ms)
     }),
+}
+
+function actionResultsPath(packDir: string): string {
+  return path.join(packDir, 'plugins', 'action-results.json')
+}
+
+/**
+ * Read the durable action execution results recorded for a pack.
+ * Returns an empty array if no results have been recorded or if the file is unreadable.
+ */
+export function readActionResults(packDir: string): ActionResult[] {
+  try {
+    const target = actionResultsPath(packDir)
+    if (!existsSync(target)) return []
+    const parsed: unknown = JSON.parse(readFileSync(target, 'utf8'))
+    if (!Array.isArray(parsed)) return []
+    const results: ActionResult[] = []
+    for (const item of parsed) {
+      if (
+        typeof item === 'object' && item !== null
+        && typeof item.actionId === 'string'
+        && typeof item.configId === 'string'
+        && typeof item.outcome === 'string'
+        && typeof item.attempts === 'number'
+        && typeof item.durationMs === 'number'
+        && typeof item.retryable === 'boolean'
+      ) {
+        results.push({
+          actionId: item.actionId,
+          configId: item.configId,
+          outcome: item.outcome as ActionOutcome,
+          attempts: item.attempts,
+          durationMs: item.durationMs,
+          ...(typeof item.message === 'string' ? { message: item.message } : {}),
+          retryable: item.retryable,
+        })
+      }
+    }
+    return results
+  } catch (error) {
+    logError('[actions] could not read action results:', error)
+    return []
+  }
+}
+
+/**
+ * Persist action run outcomes to plugins/action-results.json inside the pack folder.
+ * Merges newly produced results by configId and writes atomically.
+ */
+export function persistActionResults(packDir: string, newResults: readonly ActionResult[]): void {
+  if (newResults.length === 0) return
+  try {
+    const existing = readActionResults(packDir)
+    const merged = [...existing]
+    for (const result of newResults) {
+      const idx = merged.findIndex((item) => item.configId === result.configId)
+      if (idx >= 0) {
+        merged[idx] = result
+      } else {
+        merged.push(result)
+      }
+    }
+    const dir = path.join(packDir, 'plugins')
+    mkdirSync(dir, { recursive: true })
+    const target = actionResultsPath(packDir)
+    const temporary = `${target}.tmp`
+    writeFileSync(temporary, JSON.stringify(merged, null, 2), 'utf8')
+    renameSync(temporary, target)
+  } catch (error) {
+    logError('[actions] could not persist action results:', error)
+  }
 }
 
 /**
@@ -301,6 +393,7 @@ export async function runActionsForPack(request: ActionRunRequest): Promise<read
       clock: realClock,
     })
     recordCompleted(request.packId, run.newCompletedKeys)
+    persistActionResults(request.packDir, run.results)
     for (const result of run.results) {
       logInfo(
         `[actions] ${result.actionId} ${result.outcome}`
@@ -329,6 +422,7 @@ export async function retryAction(
 ): Promise<ActionResult | null> {
   const config = request.configs.find((candidate) => candidate.configId === configId)
   if (config === undefined) return null
+  if (!config.enabled) return null
   const manifest = findAction(config.actionId)
   if (manifest === undefined) return null
 

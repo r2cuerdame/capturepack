@@ -476,7 +476,16 @@ export function frozenRingObservations(
   if (spaces.length === 0) return []
   const observations: ContextObservation[] = []
   const controlOwnerAnchors: ControlOwnerAnchors = new Map()
-  const end = Math.max(0, Math.round(replayDurationMs))
+  // Persisted context uses integer milliseconds and must never extend past the
+  // media duration declared by the pack. Keep the exact fractional endpoint
+  // for the surface query, but label it with the last whole millisecond that
+  // belongs to the replay. Rounding a 29485.933ms MP4 endpoint to 29486 made
+  // the strict timeline either unencodable (fractional range) or outlive its
+  // declared media (rounded range).
+  const exactEnd = Number.isFinite(replayDurationMs)
+    ? Math.max(0, replayDurationMs)
+    : 0
+  const end = Math.floor(exactEnd)
   // THE RING'S OWN TIMES WHEN THEY ARE KNOWN (#87), a grid only as a fallback.
   //
   // KEPT EXACT, AND ONLY THE LABEL IS ROUNDED (#110). The ring's times are
@@ -497,9 +506,9 @@ export function frozenRingObservations(
   // `t` went on to be the QUERY — was the whole "움직일때 어긋나" bug.
   const times: number[] = []
   if (sampleTimesMs !== undefined && sampleTimesMs.length > 0) {
-    for (const t of sampleTimesMs) if (t >= 0 && t <= end) times.push(t)
+    for (const t of sampleTimesMs) if (t >= 0 && t <= exactEnd) times.push(t)
   } else {
-    for (let t = 0; t <= end; t += READ_INTERVAL_MS) times.push(t)
+    for (let t = 0; t <= exactEnd; t += READ_INTERVAL_MS) times.push(t)
   }
   let previousLabel = -1
   for (const t of times) {
@@ -509,7 +518,7 @@ export function frozenRingObservations(
     // half a millisecond of label error is bounded and harmless. Two samples
     // under 1 ms apart would round to one label — the first keeps it, the
     // other is skipped rather than published twice under one instant.
-    const label = Math.round(t)
+    const label = Math.min(end, Math.round(t))
     if (label === previousLabel) continue
     previousLabel = label
     observations.push(observationOf(
@@ -521,16 +530,17 @@ export function frozenRingObservations(
     ))
   }
   // The capture instant itself, which the walk only lands on when a sample
-  // happened to fall exactly there. It is the one moment the user is guaranteed
-  // to look at.
-  if (times[times.length - 1] !== end) {
-    const last = surfacesAt(end)
+  // happened to fall or round there. It is the one moment the user is
+  // guaranteed to look at, but publishing its integer label twice makes the
+  // otherwise valid persisted timeline fail its strict monotonic-time check.
+  if (times[times.length - 1] !== exactEnd && previousLabel !== end) {
+    const last = surfacesAt(exactEnd)
     if (last !== null && last.surfaces.length > 0) {
       observations.push(observationOf(
         end,
         last.surfaces,
         spaces,
-        controlsAt?.(end) ?? EMPTY_CONTROLS,
+        controlsAt?.(exactEnd) ?? EMPTY_CONTROLS,
         controlOwnerAnchors,
       ))
     }

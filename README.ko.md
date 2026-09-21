@@ -32,7 +32,7 @@ AutomationId, 프로세스를 기록하고, 브라우저에서는 보이던 페�
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [다운로드](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-현재 공개 Windows 릴리스: **CapturePack 0.5.0**. 기록에서 검토한
+현재 공개 Windows 릴리스: **CapturePack 0.5.1**. 기록에서 검토한
 **공유용 사본**(`.share.zip`)을 만들 수 있습니다. 미디어는 검토한 주석 PNG 정지
 이미지뿐이며, 생성된 README, 오프라인 뷰어, 최소 목록이 함께 들어갑니다. 원본, 모든
 동영상, 구조화된 맥락은 제외됩니다. 전체 ZIP(`.zip`)에는 원본이 계속 포함됩니다.
@@ -90,12 +90,21 @@ AutomationId, 프로세스를 기록하고, 브라우저에서는 보이던 페�
 
 - **Windows UI Automation(기본 내장):** 접근성 컨트롤 이름, 의미 있는 컨트롤
   유형, AutomationId, 프로세스/창 식별 정보, 그리고 앱이 제공하는 경우 관측 경계.
-- **Chrome DOM(선택 프리뷰 확장):** 사용자가 명시적으로 고른 요소의 selector,
-  역할, 텍스트와 URL — CapturePack 툴바 아이콘을 누른 뒤 요소를 클릭하면 됩니다.
-  iframe 안에서도 동작하고, 그 선택에 한해서만 페이지를 읽으며, DOM을 계속
-  전송하지 않습니다. 설정 › 플러그인 › Chrome DOM에 피커가 마지막으로 한 일이
-  표시되므로, 선택이 도착하지 않았다면 그 이유를 알 수 있습니다.
-  **CapturePack 아이콘을 한 번 클릭해 브라우저에 권한을 주세요.** 그다음부터
+- **Chrome DOM(선택 프리뷰 확장):** **CapturePack 툴바 아이콘을 클릭하면 지금
+  보고 있는 페이지 전체가 한 장의 스틸이 됩니다.** 맨 위부터 맨 아래까지
+  브라우저가 그린 그대로 페이지의 픽셀 비율로 이어 붙이고, 문서의 모든 요소를 같은
+  좌표계로 함께 기록하며, 캡처 단축키가 여는 것과 똑같은 편집기에서 바로 열립니다.
+  고정(sticky/fixed) 헤더는 한 번만 나타나고, 스크롤해야 로드되는 내용은 먼저
+  불러오며, 페이지의 스크롤 위치와 스타일은 정확히 원래대로 되돌립니다. Chrome이
+  확장에 읽기를 허용하지 않는 페이지(`chrome://`, 웹 스토어, PDF)는 아이콘에
+  이유와 함께 실패를 표시하고 조용히 넘어가지 않습니다. 요소 하나를 고르는 기능은
+  명시적인 보조 동작으로 남아 있습니다 — `Ctrl+Shift+E`, 또는 아이콘 우클릭 ›
+  *Pick an element on this page* — selector, 역할, 텍스트와 URL을 기록하고 iframe
+  안에서도 동작합니다. 클릭한 순간에만 캡처하고, DOM을 계속 전송하지 않으며,
+  번들은 이 PC의 CapturePack 앱으로만 갑니다. 설정 › 플러그인 › Chrome DOM에
+  피커가 마지막으로 한 일이 표시되므로, 선택이 도착하지 않았다면 그 이유를 알 수
+  있습니다.
+  **첫 클릭은 브라우저 허용도 함께 묻습니다.** 그다음부터
   Chrome에서는 아무것도 누르지 않습니다. 평소 쓰던 캡처 단축키가 보이던 페이지를
   함께 가져옵니다. 이 한 번의 허용이 필요한 이유는 Chrome이 전역 단축키를 결코
   볼 수 없기 때문입니다. Chrome은 Chrome 안에서 일어난 클릭이거나 사용자가
@@ -256,10 +265,10 @@ claude mcp add --transport http capturepack http://127.0.0.1:39393/mcp
 
 [GitHub Releases](https://github.com/r2cuerdame/capturepack/releases/latest)에서 최신 설치 프로그램을 다운로드하세요:
 
-1. `CapturePack-Setup-0.5.0.exe`와 `SHA256SUMS.txt`를 다운로드합니다.
+1. `CapturePack-Setup-0.5.1.exe`와 `SHA256SUMS.txt`를 다운로드합니다.
 2. PowerShell에서 체크섬을 확인합니다:
    ```powershell
-   Get-FileHash CapturePack-Setup-0.5.0.exe -Algorithm SHA256
+   Get-FileHash CapturePack-Setup-0.5.1.exe -Algorithm SHA256
    ```
 3. 설치 프로그램을 실행합니다. 오픈소스 코드 서명 심사 중이므로 Windows SmartScreen 경고가 표시될 수 있습니다: **추가 정보** → **실행**을 클릭하세요.
 
@@ -287,7 +296,7 @@ npm run qa:rc
 
 ## 상태
 
-**현재 공개 Windows 다운로드는 0.5.0입니다.** CapturePack은 아직 초기 단계
+**현재 공개 Windows 다운로드는 0.5.1입니다.** CapturePack은 아직 초기 단계
 프로젝트이므로, 문제를 보고할 때는 원본 팩을 보관해 두세요. 제품이 향하는 방향은
 [GOAL.md](GOAL.md)에, 다음에 올 것은 [ROADMAP.md](ROADMAP.md)에 있습니다.
 
@@ -302,7 +311,7 @@ npm run qa:rc
 - [릴리스 QA](docs/QA.md), [현재 핸드오프](docs/HANDOFF.md), [릴리스 절차](docs/RELEASING.md) — 변경 사항을 어떻게 검증하고, 인계하고, 발행하는지 다룹니다.
 - [MCP](docs/MCP.md)와 [시간 맥락 제공자 API](docs/temporal-provider-api.md) — 읽기 전용 저장 팩 접근과 맥락 제공자 연동을 안내합니다.
 
-CapturePack `0.5.0`은 애플리케이션 버전입니다. 팩의 `format_version`은 호환 가능한
+CapturePack `0.5.1`은 애플리케이션 버전입니다. 팩의 `format_version`은 호환 가능한
 포맷 변경을 따라 독립적으로 올라갑니다. 읽는 쪽은 앱 버전으로 포맷 지원 범위를
 추측하지 말고 [SPEC.md](SPEC.md)를 따라야 합니다.
 
