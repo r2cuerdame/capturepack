@@ -378,7 +378,7 @@ function pluginSection(manifest: Manifest, lang: Language): string {
   const t = makeT(lang)
   const plugins = Array.isArray(manifest.plugins) ? manifest.plugins : []
   return `<section aria-labelledby="plugins-heading">
-<h2 id="plugins-heading">${escapeHtml(t('pack.skillDom'))}</h2>
+<h2 id="plugins-heading">${escapeHtml(t('pack.plugins'))}</h2>
 ${
   plugins.length === 0
     ? '<p class="empty">No plugin data is declared.</p>'
