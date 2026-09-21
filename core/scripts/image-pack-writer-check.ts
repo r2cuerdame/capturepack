@@ -9,6 +9,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
@@ -326,6 +327,192 @@ async function main(): Promise<void> {
     !existsSync(path.join(handle.dirPath, 'timeline.json')) &&
       !existsSync(path.join(handle.dirPath, 'skills', 'timeline.md')),
   )
+
+    console.log('\nRE-EDIT DISPLAY MEDIA CLEANUP')
+    const validSnapshot = readFileSync(
+      path.resolve(process.cwd(), '..', 'examples', 'minimal', 'snapshot.png'),
+    )
+    const videoDisplays: DisplayCapture[] = [
+      {
+        index: 1,
+        focused: true,
+        bounds: { x: 0, y: 0, width: 640, height: 400 },
+        scale: 1,
+        snapshotWidth: 640,
+        snapshotHeight: 400,
+        hasReplay: true,
+        replayDurationMs: 30_000,
+        snapshotFile: 'snapshot.png',
+        replayFile: 'replay.mp4',
+        snapshotPng: null,
+        replayWebm: null,
+      },
+      {
+        index: 2,
+        focused: false,
+        bounds: { x: 640, y: 0, width: 640, height: 400 },
+        scale: 1,
+        snapshotWidth: 640,
+        snapshotHeight: 400,
+        hasReplay: true,
+        replayDurationMs: 30_000,
+        snapshotFile: 'snapshot-d2.png',
+        replayFile: 'replay-d2.mp4',
+        snapshotPng: validSnapshot,
+        replayWebm: Buffer.from('DISPLAY TWO VIDEO'),
+      },
+      {
+        index: 3,
+        focused: false,
+        bounds: { x: 1280, y: 0, width: 640, height: 400 },
+        scale: 1,
+        snapshotWidth: 640,
+        snapshotHeight: 400,
+        hasReplay: true,
+        replayDurationMs: 30_000,
+        snapshotFile: 'snapshot-d3.png',
+        replayFile: 'replay-d3.mp4',
+        snapshotPng: validSnapshot,
+        replayWebm: Buffer.from('DISPLAY THREE VIDEO'),
+      },
+    ]
+    const videoInitial: InitialSaveInput = {
+      snapshotPng: validSnapshot,
+      width: 640,
+      height: 400,
+      captureKind: 'video',
+      capturedAt: createdAt,
+      replayWebm: Buffer.from('TOP LEVEL VIDEO'),
+      replayFile: 'replay.mp4',
+      replayDurationMs: 30_000,
+      timeline: { t0: createdAt.toISOString(), events: [] },
+      outputDir: root,
+      displays: videoDisplays,
+      screens: videoDisplays.map((display) => ({
+        width: display.snapshotWidth,
+        height: display.snapshotHeight,
+        scale: display.scale,
+      })),
+      windowsContext: null,
+      docLanguage: 'en',
+    }
+    const makeVideoEdit = (editDisplays: DisplayCapture[]): ExportInput => ({
+      snapshotPng: validSnapshot,
+      width: 640,
+      height: 400,
+      captureKind: 'video',
+      capturedAt: createdAt,
+      replayWebm: null,
+      replayFile: 'replay.mp4',
+      replayDurationMs: 30_000,
+      annotations: [],
+      title: '',
+      note: '',
+      snapshotTMs: 0,
+      timeline: { t0: createdAt.toISOString(), events: [] },
+      displays: editDisplays,
+      screens: editDisplays.map((display) => ({
+        width: display.snapshotWidth,
+        height: display.snapshotHeight,
+        scale: display.scale,
+      })),
+      windowsContext: undefined,
+      clipboardAfterSave: 'off',
+      docLanguage: 'en',
+    })
+    const seedDerivedDisplayFiles = (dirPath: string, index: number): string[] => {
+      const names = [
+        `replay-d${index}.webm`,
+        `replay_annotated-d${index}.webm`,
+        `replay_annotated-d${index}.mp4`,
+      ]
+      for (const name of names) writeFileSync(path.join(dirPath, name), 'STALE DISPLAY MEDIA')
+      const frames = path.join(dirPath, `frames-d${index}`)
+      mkdirSync(frames, { recursive: true })
+      writeFileSync(path.join(frames, 'frame-001.png'), validSnapshot)
+      return [...names, `frames-d${index}`]
+    }
+
+    const droppedHandle = await savePack(videoInitial)
+    const droppedNames = [
+      'snapshot-d3.png',
+      'replay-d3.mp4',
+      ...seedDerivedDisplayFiles(droppedHandle.dirPath, 3),
+    ]
+    const survivingDisplays = videoDisplays.slice(0, 2).map((display) => ({
+      ...display,
+      snapshotPng: null,
+      replayWebm: null,
+    }))
+    await updatePack(droppedHandle, makeVideoEdit(survivingDisplays), { keepReplay: true })
+    check(
+      'dropping display 3 removes its snapshot, both source/annotated replay containers and frames',
+      droppedNames.every((name) => !existsSync(path.join(droppedHandle.dirPath, name))),
+      droppedNames.filter((name) => existsSync(path.join(droppedHandle.dirPath, name))).join(', '),
+    )
+    check(
+      'dropping display 3 preserves surviving display 2 source media',
+      existsSync(path.join(droppedHandle.dirPath, 'snapshot-d2.png')) &&
+        existsSync(path.join(droppedHandle.dirPath, 'replay-d2.mp4')),
+    )
+
+    const convertedHandle = await savePack(videoInitial)
+    const convertedSecondaryNames = [
+      'snapshot-d2.png',
+      'replay-d2.mp4',
+      ...seedDerivedDisplayFiles(convertedHandle.dirPath, 2),
+      'snapshot-d3.png',
+      'replay-d3.mp4',
+      ...seedDerivedDisplayFiles(convertedHandle.dirPath, 3),
+      'snapshot-d9.png',
+      'replay-d9.mp4',
+      ...seedDerivedDisplayFiles(convertedHandle.dirPath, 9),
+    ]
+    writeFileSync(path.join(convertedHandle.dirPath, 'snapshot-d9.png'), validSnapshot)
+    writeFileSync(path.join(convertedHandle.dirPath, 'replay-d9.mp4'), 'UNDECLARED DISPLAY VIDEO')
+    writeFileSync(path.join(convertedHandle.dirPath, 'replay_annotated.mp4'), 'STALE ANNOTATED')
+    const imageEdit: ExportInput = {
+      ...makeVideoEdit(videoDisplays),
+      captureKind: 'image',
+      imageScope: 'region',
+      cropBounds: {
+        x: 0,
+        y: 0,
+        width: 640,
+        height: 400,
+        coordinate_space: 'virtual-desktop-dip',
+      },
+      replayWebm: Buffer.from('MUST NOT BE WRITTEN'),
+      displays: videoDisplays,
+      snapshotTMs: null,
+    }
+    await updatePack(convertedHandle, imageEdit)
+    check(
+      'converting a multi-display pack to an image removes every secondary display asset',
+      convertedSecondaryNames.every(
+        (name) => !existsSync(path.join(convertedHandle.dirPath, name)),
+      ),
+      convertedSecondaryNames
+        .filter((name) => existsSync(path.join(convertedHandle.dirPath, name)))
+        .join(', '),
+    )
+    check(
+      'converting to an image removes stale MP4 annotated replay output',
+      !existsSync(path.join(convertedHandle.dirPath, 'replay_annotated.mp4')),
+    )
+    const validation = spawnSync(
+      process.execPath,
+      [path.resolve(process.cwd(), '..', 'tools', 'validate-capturepack.mjs'), convertedHandle.dirPath],
+      { encoding: 'utf8' },
+    )
+    const validationOutput = `${validation.stdout ?? ''}${validation.stderr ?? ''}`
+    check(
+      'converted image pack passes the validator without undeclared secondary-media findings',
+      validation.status === 0 &&
+        validationOutput.includes('result: VALID') &&
+        !/(?:snapshot-d|replay-d|replay_annotated-d|frames-d)[1-9]/u.test(validationOutput),
+      validationOutput.trim(),
+    )
 
   console.log('\nIMAGE UIA PACK ROUND TRIP')
   const reopenedManifest = manifestAt(handle.dirPath)
