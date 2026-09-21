@@ -22,7 +22,7 @@
 import { Notification } from 'electron'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
-import { type ActionResult, type PackState, mergeActionResults } from '../../shared/actions'
+import type { ActionResult, PackState } from '../../shared/actions'
 import { SaveActionLifecycle } from '../../shared/actionPipeline'
 import type { Settings } from '../../shared/types'
 import { uiT, uiLanguage } from '../locale'
@@ -160,18 +160,17 @@ export async function runActionsAtState(
     })
 
     inFlightByPack.set(packId, runPromise)
-    let rawResults: readonly ActionResult[] = []
+    let results: readonly ActionResult[] = []
     try {
-      rawResults = await runPromise
+      results = await runPromise
     } finally {
       if (inFlightByPack.get(packId) === runPromise) {
         inFlightByPack.delete(packId)
       }
     }
 
-    session.recordResults(rawResults)
-    announceFailures(rawResults, settings)
-    const results = mergeActionResults(readActionResults(packDir), rawResults)
+    session.recordResults(results)
+    announceFailures(results, settings)
     updateToastActionResults(packDir, results)
     return results
   } catch (error) {
