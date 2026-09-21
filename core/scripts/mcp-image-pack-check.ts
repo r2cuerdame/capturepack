@@ -10,6 +10,7 @@ type ToolResult = {
   isError?: boolean
 }
 type ToolCallback = (args: Record<string, unknown>) => ToolResult | Promise<ToolResult>
+type ToolDefinition = { inputSchema?: Record<string, unknown> }
 
 let failed = 0
 function check(ok: boolean, message: string): void {
@@ -45,8 +46,10 @@ function annotation(
 
 async function main(): Promise<void> {
   const callbacks = new Map<string, ToolCallback>()
+  const definitions = new Map<string, ToolDefinition>()
   const server = {
-    registerTool(name: string, _definition: unknown, callback: ToolCallback): void {
+    registerTool(name: string, definition: ToolDefinition, callback: ToolCallback): void {
+      definitions.set(name, definition)
       callbacks.set(name, callback)
     },
   }
@@ -84,6 +87,71 @@ async function main(): Promise<void> {
       },
     }),
     annotations: () => ({ reference_width: 2_560, reference_height: 1_440, annotations: multiAnnotations }),
+  }
+  const multiFrameReads: string[] = []
+  const multiFrameManifest = {
+    capture_kind: 'video',
+    id: 'multi-frame-pack',
+    title: 'Two display replay',
+    created_at: '2026-09-21T12:00:00+09:00',
+    environment: {
+      os: 'windows',
+      screens: [
+        { width: 1_920, height: 1_080, scale: 1 },
+        { width: 2_560, height: 1_440, scale: 1 },
+      ],
+    },
+    media: {
+      snapshot: 'snapshot.png',
+      snapshot_t_ms: 2_000,
+      replay: null,
+      keyframes: [],
+      displays: [
+        {
+          index: 1,
+          focused: true,
+          snapshot: 'snapshot.png',
+          snapshot_width: 1_920,
+          snapshot_height: 1_080,
+        },
+        {
+          index: 2,
+          focused: false,
+          snapshot: 'snapshot-d2.png',
+          snapshot_width: 2_560,
+          snapshot_height: 1_440,
+          keyframes: [
+            { file: 'frames-d2/frame-01_00-00.500.png', t_ms: 500 },
+            { file: 'frames-d2/frame-02_00-01.500.png', t_ms: 1_500 },
+            { file: 'frames-d0/frame-03_00-02.500.png', t_ms: 2_500 },
+          ],
+        },
+      ],
+    },
+    plugins: [],
+  }
+  const multiFramePack = {
+    id: multiFrameManifest.id,
+    path: 'C:\\packs\\multi-frame-pack',
+    kind: 'dir',
+    manifest: () => multiFrameManifest,
+    manifestText: () => JSON.stringify(multiFrameManifest),
+    report: () => null,
+    annotations: () => ({ reference_width: 1_920, reference_height: 1_080, annotations: [] }),
+    timeline: () => null,
+    plugins: () => [],
+    readText: () => null,
+    readBinary: (file: string) => {
+      multiFrameReads.push(file)
+      if (file === 'snapshot.png') return Buffer.from('focused-snapshot')
+      if (file === 'snapshot-d2.png') return Buffer.from('display-two-snapshot')
+      if (file === 'frames-d2/frame-01_00-00.500.png') return Buffer.from('display-two-frame-one')
+      if (file === 'frames-d2/frame-02_00-01.500.png') return Buffer.from('display-two-frame-two')
+      return null
+    },
+    fileSize: () => null,
+    listFiles: () => [],
+    warnings: () => [],
   }
   const manifest = {
     capture_kind: 'image',
@@ -144,6 +212,7 @@ async function main(): Promise<void> {
     resolve: (id?: string) => {
       if (id === singlePack.id) return singlePack
       if (id === multiPack.id) return multiPack
+      if (id === multiFramePack.id) return multiFramePack
       if (id === reportPack.id) return reportPack
       return pack
     },
@@ -239,6 +308,10 @@ async function main(): Promise<void> {
   check(!markdownText.includes('## Timeline'), 'image Markdown export omits the video timeline section')
 
   console.log('FRAME')
+  check(
+    definitions.get('capturepack_frame')?.inputSchema?.display !== undefined,
+    'capturepack_frame schema accepts display',
+  )
   const frame = await callbacks.get('capturepack_frame')?.({})
   check(frame !== undefined && frame.isError !== true, 'capturepack_frame returns the selected image')
   check(
@@ -267,6 +340,55 @@ async function main(): Promise<void> {
   check(
     reads.length === 1 && reads[0] === 'frames/frame-01_00-00.000.png',
     'a forged context-full keyframe declaration is ignored',
+  )
+
+  console.log('MULTI-DISPLAY FRAME')
+  const displaySnapshot = await callbacks.get('capturepack_frame')?.({
+    id: multiFramePack.id,
+    display: 2,
+  })
+  check(
+    multiFrameReads.length === 1 && multiFrameReads[0] === 'snapshot-d2.png',
+    'display 2 without time_s reads its declared snapshot',
+  )
+  check(
+    displaySnapshot?.content.find((item) => item.type === 'image')?.data ===
+      Buffer.from('display-two-snapshot').toString('base64'),
+    'display 2 snapshot bytes are returned',
+  )
+  multiFrameReads.length = 0
+  const displayKeyframe = await callbacks.get('capturepack_frame')?.({
+    id: multiFramePack.id,
+    display: 2,
+    time_s: 1.4,
+  })
+  check(
+    multiFrameReads.length === 1 &&
+      multiFrameReads[0] === 'frames-d2/frame-02_00-01.500.png',
+    'display 2 time_s reads the nearest frames-d2 keyframe',
+  )
+  check(
+    displayKeyframe?.content.find((item) => item.type === 'image')?.data ===
+      Buffer.from('display-two-frame-two').toString('base64'),
+    'display 2 keyframe bytes are returned',
+  )
+  multiFrameReads.length = 0
+  await callbacks.get('capturepack_frame')?.({ id: multiFramePack.id })
+  check(
+    multiFrameReads.length === 1 && multiFrameReads[0] === 'snapshot.png',
+    'omitting display defaults to the focused display snapshot',
+  )
+  const multiFrameSummary = textJson(
+    await callbacks.get('capturepack_summary')?.({ id: multiFramePack.id }) as ToolResult,
+  )
+  const summaryKeyframes = multiFrameSummary.keyframes as Record<string, unknown>
+  const summaryDisplays = summaryKeyframes.displays as Array<Record<string, unknown>>
+  check(
+    summaryKeyframes.count === 2 &&
+      summaryDisplays.length === 1 &&
+      summaryDisplays[0]?.display === 2 &&
+      JSON.stringify(summaryDisplays[0]?.t_ms) === JSON.stringify([500, 1_500]),
+    'summary reports valid secondary-display keyframes and rejects malformed frame paths',
   )
 
   console.log('REPLAY')

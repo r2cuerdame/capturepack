@@ -218,7 +218,7 @@ pack as described above.
 | `capturepack_timeline` | `id?`, `from_ms?`, `to_ms?` | Video timeline or a slice; explicit image packs return a non-error explanation that no timeline applies. Includes the `input.*` events described below |
 | `capturepack_annotations` | `id?` | The annotation list — including each box's optional `target` (the real UI object it was placed on, e.g. `{source:"uia", name:"Save", control_type:"Button"}`) and, on a multi-display capture, **which screen it is on** (`display_index` + `display_snapshot`, see below) |
 | `capturepack_find_annotations` | `keyword`, `id?` | Annotations matching the keyword |
-| `capturepack_frame` | `time_s?`, `id?` | An image of the capture: the **nearest annotated keyframe** to `time_s` when the pack has them, else `snapshot.png` — **see below** |
+| `capturepack_frame` | `display?`, `time_s?`, `id?` | An image of the selected 1-based display (focused by default): the **nearest annotated keyframe** to `time_s` when that display has them, else its snapshot — **see below** |
 | `capturepack_replay` | `id?` | Replay **metadata** only: filename, duration_ms, size_bytes — never raw video bytes |
 | `capturepack_dom` | `id?` | Generic plugin metadata under `plugins/*/` — on Windows usually `windows-uia` (the capture-instant window list + the control trees the dump reached); DOM-ish data lives under a chrome plugin dir when present |
 | `capturepack_find_dom` | `selector`, `id?` | Plugin/DOM entries matching the selector — e.g. an `automation_id` or a control name in the `windows-uia` dump |
@@ -389,12 +389,14 @@ no label, and `reference_width`/`reference_height` already describe it.
 `capturepack_frame` always answers with MCP image content (base64 PNG) plus a text note.
 Which image depends on the pack:
 
-- **The pack has annotated keyframes** (`manifest.media.keyframes`, [SPEC §5.7](../SPEC.md)) —
+- **The selected display has annotated keyframes** (`manifest.media.keyframes` for the focused
+  display, or `manifest.media.displays[].keyframes` for another display; [SPEC §5.7](../SPEC.md)) —
   stills rendered at every annotation state change, with blur, borders, number badges and text
-  drawn into the pixels. `capturepack_frame(time_s)` returns the **nearest** one, and the note
-  states which keyframe it is, its exact time, and **every** keyframe time in the pack — so a
+  drawn into the pixels. `capturepack_frame(display, time_s)` returns the **nearest** one, and the note
+  states which keyframe it is, its exact time, and **every** keyframe time on that display — so a
   model can walk the whole story image by image (`0.0s, 3.2s, 5.4s, …`).
-- **No keyframes, or `time_s` omitted** — `snapshot.png` is returned (original pixels, never
+- **No keyframes, or `time_s` omitted** — the display's declared snapshot is returned
+  (`snapshot.png` for the focused display, `snapshot-d<N>.png` for another; original pixels, never
   annotated), with a note giving its frame time (`media.snapshot_t_ms`, or the capture instant)
   and, when keyframes exist, the times available. Keyframes render in the background right
    after a save, so a pack saved seconds ago may not have them yet.

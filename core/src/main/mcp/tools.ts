@@ -380,15 +380,22 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
     {
       title: 'Frame at a time',
       description:
-        'A frame of the capture as a PNG image. Pass time_s (seconds on the replay timeline) for ' +
-        'the moment you want. When the pack has ANNOTATED KEYFRAMES (manifest.media.keyframes — ' +
+        'A frame of the capture as a PNG image. Pass display (the 1-based manifest display index; ' +
+        'default: focused display) to inspect a particular screen, and time_s (seconds on the replay ' +
+        'timeline) for the moment you want. When that display has ANNOTATED KEYFRAMES — ' +
         'stills rendered at every annotation state change, with blur, borders, number badges and ' +
-        'text drawn in), the NEAREST keyframe to time_s is returned; the response lists every ' +
-        'keyframe time so you can walk the story image by image. Without keyframes — and whenever ' +
-        'time_s is omitted — the exported snapshot.png is returned, with a note stating its frame ' +
-        'time. Frames at arbitrary replay times are never decoded out of the video.',
+        'text drawn in — the NEAREST keyframe to time_s is returned; the response lists every ' +
+        'keyframe time for that display so you can walk the story image by image. Without keyframes — ' +
+        'and whenever time_s is omitted — the selected display snapshot is returned, with a note ' +
+        'stating its frame time. Frames at arbitrary replay times are never decoded out of the video.',
       inputSchema: {
         ...idArg,
+        display: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe('1-based manifest.media.displays[].index (default: focused display).'),
         time_s: z.number().min(0).optional().describe('Requested time in seconds on the replay timeline.'),
       },
     },
@@ -397,7 +404,11 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
         const pack = store.resolve(args.id)
         const manifest = pack.manifest()
         const captureMedia = captureMediaForMcp(manifest)
-        const keyframes = keyframeList(manifest)
+        const display = frameDisplay(manifest, captureMedia, args.display)
+        if (display === null) {
+          return errorResult(`Display ${args.display} is not declared in pack "${pack.id}"`)
+        }
+        const keyframes = keyframeList(manifest, display.index)
         const times = keyframes.map((k) => `${(k.t_ms / 1000).toFixed(3)}s`).join(', ')
 
         // Annotated keyframes (SPEC §5.7) answer "what did it look like at t"
@@ -422,10 +433,11 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
                 {
                   type: 'text',
                   text:
-                    `Annotated keyframe ${n}/${keyframes.length} (${best.file}) at ` +
+                    `Display ${display.index} annotated keyframe ${n}/${keyframes.length} (${best.file}) at ` +
                     `${(best.t_ms / 1000).toFixed(3)}s — the nearest state change to the requested ` +
                     `${args.time_s}s. Annotations (blur, borders, numbers, text) are rendered into ` +
-                    `this image; snapshot.png is never annotated. Keyframe times: ${times}.` +
+                    `this image; ${display.snapshot} is never annotated. Keyframe times for display ` +
+                    `${display.index}: ${times}.` +
                     imageBoundary,
                 },
               ],
@@ -433,9 +445,9 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
           }
         }
 
-        // The current format has exactly one source image name. In particular,
-        // never probe for a "context-full" sibling of a region capture.
-        const snapshotFile = captureMedia.snapshot.file
+        // Read only the snapshot declared for the selected display. In
+        // particular, never probe for a "context-full" sibling of a region capture.
+        const snapshotFile = display.snapshot
         const png = pack.readBinary(snapshotFile)
         if (!png) return errorResult(`${snapshotFile} not found in pack "${pack.id}"`)
         const snapT = manifest?.media?.snapshot_t_ms
@@ -443,13 +455,15 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
         const keyframeNote =
           keyframes.length === 0
             ? ' This pack has no annotated keyframes (they render in the background after save), so ' +
-              'no frame is available at other times.'
+              `no frame is available at other times on display ${display.index}.`
             : ` This pack has ${keyframes.length} annotated keyframe(s) at ${times} — pass time_s to get ` +
-              'the nearest one, with the annotations rendered in.'
+              `the nearest one for display ${display.index}, with the annotations rendered in.`
         const note =
           args.time_s === undefined
-            ? `${snapshotDescription(captureMedia)}. Frame time: ${snapDesc} (original pixels, no annotations).${keyframeNote}`
-            : `Requested ${args.time_s}s; returned the exported snapshot frame, which is from ${snapDesc}.` +
+            ? `${snapshotDescription(captureMedia)}. Display ${display.index} snapshot ${snapshotFile}. ` +
+              `Frame time: ${snapDesc} (original pixels, no annotations).${keyframeNote}`
+            : `Requested ${args.time_s}s; returned display ${display.index} snapshot ${snapshotFile}, ` +
+              `which is from ${snapDesc}.` +
               keyframeNote
         return {
           content: [
@@ -727,13 +741,23 @@ function summarize(pack: PackHandle): Record<string, unknown> {
   if (typeof media?.snapshot_t_ms === 'number') summary.snapshot_t_ms = media.snapshot_t_ms
   // Annotated keyframes (SPEC §5.7): announce them here so a session that only
   // calls latest()/summary() knows images of every annotation state exist and
-  // can fetch them with capturepack_frame(time_s).
-  const keyframes = keyframeList(manifest)
-  if (keyframes.length > 0) {
+  // can fetch them with capturepack_frame(display, time_s).
+  const keyframeDisplays = keyframesByDisplay(manifest)
+  const keyframeCount = keyframeDisplays.reduce((total, entry) => total + entry.keyframes.length, 0)
+  if (keyframeCount > 0) {
     summary.keyframes = {
-      count: keyframes.length,
-      t_ms: keyframes.map((k) => k.t_ms),
-      note: 'Annotated stills, one per annotation state change — capturepack_frame(time_s) returns the nearest one.',
+      count: keyframeCount,
+      t_ms: keyframeDisplays
+        .flatMap((entry) => entry.keyframes.map((k) => k.t_ms))
+        .sort((a, b) => a - b),
+      displays: keyframeDisplays.map((entry) => ({
+        display: entry.display,
+        count: entry.keyframes.length,
+        t_ms: entry.keyframes.map((k) => k.t_ms),
+      })),
+      note:
+        'Annotated stills, one per annotation state change — ' +
+        'capturepack_frame(display, time_s) returns the nearest one for that display.',
     }
   }
   const warnings = pack.warnings()
@@ -742,12 +766,23 @@ function summarize(pack: PackHandle): Record<string, unknown> {
 }
 
 /**
- * manifest.media.keyframes, entry-validated and ordered by t_ms (SPEC §5.7).
+ * The requested display's keyframes, entry-validated and ordered by t_ms
+ * (SPEC §5.6, §5.7). The focused display uses media.keyframes; every other
+ * display uses its media.displays[] entry.
  * External packs are hand-writable, so nothing here trusts the declaration's
  * shape — a malformed entry is skipped, never thrown on.
  */
-function keyframeList(manifest: Manifest | null): ManifestKeyframe[] {
-  const raw: unknown = manifest?.media?.keyframes
+function keyframeList(manifest: Manifest | null, displayIndex?: number): ManifestKeyframe[] {
+  const displays = manifest?.media?.displays
+  const focused = focusedDisplayIndex(displays)
+  const selected = displayIndex ?? focused
+  const raw: unknown =
+    selected === focused
+      ? manifest?.media?.keyframes
+      : displays?.find(
+          (display) =>
+            display !== null && typeof display === 'object' && display.index === selected,
+        )?.keyframes
   if (!Array.isArray(raw)) return []
   const frames: ManifestKeyframe[] = []
   for (const item of raw as unknown[]) {
@@ -755,7 +790,7 @@ function keyframeList(manifest: Manifest | null): ManifestKeyframe[] {
     const k = item as Partial<ManifestKeyframe>
     if (
       typeof k.file !== 'string' ||
-      !/^frames\/frame-[0-9]{2,}_[0-9]{2,}-[0-9]{2}\.[0-9]{3}\.png$/.test(k.file) ||
+      !/^frames(?:-d[1-9][0-9]*)?\/frame-[0-9]{2,}_[0-9]{2,}-[0-9]{2}\.[0-9]{3}\.png$/.test(k.file) ||
       typeof k.t_ms !== 'number' ||
       !Number.isInteger(k.t_ms) ||
       k.t_ms < 0
@@ -765,6 +800,49 @@ function keyframeList(manifest: Manifest | null): ManifestKeyframe[] {
     frames.push({ file: k.file, t_ms: k.t_ms })
   }
   return frames.sort((a, b) => a.t_ms - b.t_ms)
+}
+
+function keyframesByDisplay(
+  manifest: Manifest | null,
+): Array<{ display: number; keyframes: ManifestKeyframe[] }> {
+  const displays = manifest?.media?.displays
+  const focused = focusedDisplayIndex(displays)
+  const indices = [focused]
+  if (Array.isArray(displays)) {
+    for (const display of displays) {
+      if (
+        display !== null &&
+        typeof display === 'object' &&
+        Number.isInteger(display.index) &&
+        display.index > 0 &&
+        !indices.includes(display.index)
+      ) {
+        indices.push(display.index)
+      }
+    }
+  }
+  return indices
+    .map((display) => ({ display, keyframes: keyframeList(manifest, display) }))
+    .filter((entry) => entry.keyframes.length > 0)
+}
+
+function frameDisplay(
+  manifest: Manifest | null,
+  captureMedia: McpCaptureMedia,
+  requested?: number,
+): { index: number; snapshot: string } | null {
+  const displays = manifest?.media?.displays
+  const focused = focusedDisplayIndex(displays)
+  const index = requested ?? focused
+  if (index === focused) return { index, snapshot: captureMedia.snapshot.file }
+  if (!Array.isArray(displays)) return null
+  const display = displays.find(
+    (candidate) =>
+      candidate !== null && typeof candidate === 'object' && candidate.index === index,
+  )
+  return typeof display?.snapshot === 'string'
+    ? { index, snapshot: display.snapshot }
+    : null
 }
 
 function annotationList(pack: PackHandle): Annotation[] {
