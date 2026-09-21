@@ -326,7 +326,7 @@ function annotationSection(
 <h2 id="annotations-heading">${escapeHtml(t('pack.annotations'))}</h2>
 <ol class="annotations">
 ${annotations
-  .map((annotation, index) => {
+  .map((annotation) => {
     const marker = numbers.get(annotation.annotation_id)
     const display = annotationDisplayIndex(annotation, focused, declared)
     const bounds = annotation.bounds
@@ -335,9 +335,13 @@ ${annotations
     if (annotation.blur) flags.push('blur')
     if (annotation.numbered) flags.push('numbered')
     const flagsText = flags.length > 0 ? flags.join(', ') : '—'
+    const markerBadge =
+      marker !== undefined
+        ? `<span class="annotation-number">${escapeHtml(marker)}</span>`
+        : ''
     return `<li>
 <article>
-<header><span class="annotation-number">${escapeHtml(marker ?? index + 1)}</span><strong>${escapeHtml(text)}</strong></header>
+<header>${markerBadge}<strong>${escapeHtml(text)}</strong></header>
 <dl>
 <div><dt>Time</dt><dd>${escapeHtml(lifetimeLabel(annotation, t))}</dd></div>
 <div><dt>${escapeHtml(t('pack.display'))}</dt><dd>${escapeHtml(display)}${display === focused ? ` (${escapeHtml(t('pack.displayFocused'))})` : ''}</dd></div>
