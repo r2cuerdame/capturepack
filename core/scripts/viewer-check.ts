@@ -244,6 +244,26 @@ function pureContractChecks(): void {
   check('annotation display and semantic target are preserved', multiHtml.includes('<dd>2</dd>') && multiHtml.includes('saveButton') && multiHtml.includes('<b>role:</b> button'))
   check('core navigation follows pack language', multiHtml.includes('>주석</h2>') && multiHtml.includes('>파일</h2>') && multiHtml.includes('>디스플레이</h2>'))
 
+  const flagsHtml = buildViewerHtml(
+    videoManifest(),
+    annotations([
+      box('ann_numbered', 'Numbered only', { numbered: true, blur: false }),
+      box('ann_plain', 'Plain box', { numbered: false, blur: false }),
+      box('ann_both', 'Blur and numbered', { numbered: true, blur: true }),
+    ]),
+    timeline(),
+    'en',
+  )
+  check(
+    'numbered annotation without blur renders numbered without em-dash',
+    flagsHtml.includes('<dd>numbered</dd>') && !flagsHtml.includes('—numbered'),
+  )
+  check('unflagged annotation renders em-dash', flagsHtml.includes('<dd>—</dd>'))
+  check(
+    'annotation with blur and numbered renders both flags',
+    flagsHtml.includes('<dd>blur, numbered</dd>'),
+  )
+
   const malicious = '</style><script>globalThis.PWNED=true</script>'
   const maliciousManifest = videoManifest({
     title: malicious,
