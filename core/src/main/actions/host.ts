@@ -282,9 +282,13 @@ function executorFor(request: ActionRunRequest) {
     if (!isAcceptableWebhookUrl(settings.url)) {
       throw new Error('the webhook URL must be https, or http on this machine, and carry no credentials')
     }
+    const secret = readActionSecret(step.config.configId)
+    if (secret === null && hasActionSecret(step.config.configId)) {
+      throw new Error('configured webhook secret could not be decrypted')
+    }
     await deliverWebhook(request.packDir, {
       url: settings.url,
-      secret: readActionSecret(step.config.configId),
+      secret,
       timeoutMs: step.config.timeoutMs,
     })
   }
