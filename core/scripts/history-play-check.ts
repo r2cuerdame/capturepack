@@ -427,6 +427,10 @@ async function run(): Promise<void> {
 
   console.log('\n--- 5. Static contract & source checks ---')
   const historySource = fs.readFileSync(path.resolve('src/main/historyWindow.ts'), 'utf8')
+  const historyRendererSource = fs.readFileSync(
+    path.resolve('src/renderer/history/history.ts'),
+    'utf8',
+  )
   check(
     'historyWindow.ts does not hardcode path.join(entry.path, "replay_annotated.webm") in historyPlay',
     !historySource.includes("path.join(entry.path, 'replay_annotated.webm')"),
@@ -438,6 +442,18 @@ async function run(): Promise<void> {
   check(
     'historyWindow.ts uses resolveHistoryPlayFile',
     historySource.includes('resolveHistoryPlayFile(entry.path, manifest)'),
+  )
+  check(
+    'History Play stays disabled for replay-less image packs even when keyframes are ready',
+    historyRendererSource.includes(
+      "playBtn.disabled = !p.hasReplay || p.annotated !== 'ready' || p.kind !== 'dir'",
+    ),
+  )
+  check(
+    'History Play explains that replay-less image packs have no replay',
+    historyRendererSource.includes(
+      "playBtn.title =\n    !p.hasReplay\n      ? t('history.playNoReplay')",
+    ),
   )
   } finally {
     try {
