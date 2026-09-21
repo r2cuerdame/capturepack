@@ -57,13 +57,12 @@ function box(id: string, at: string, opts: { numbered?: boolean; pin?: number } 
     type: 'box',
     bounds: { x: 0, y: 0, width: 10, height: 10 },
     text: '',
-    numbered: opts.numbered ?? false,
+    ...(opts.numbered === undefined ? {} : { numbered: opts.numbered }),
     ...(opts.pin === undefined ? {} : { number_pin: opts.pin }),
-    blur: false,
     tracking: { enabled: false },
     created_at: at,
     z: seq,
-  } as Annotation
+  }
 }
 
 const at = (second: number): string =>
