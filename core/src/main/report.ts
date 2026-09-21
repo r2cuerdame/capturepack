@@ -478,7 +478,8 @@ export function buildReport(
   const annotatedReplayName = manifest.media.replay_annotated
   const annotatedReplayPending = hasReplay && renderPending && annotatedReplayName === undefined
   const hasAnnotatedReplay = annotatedReplayName !== undefined || annotatedReplayPending
-  const annotatedReplayFile = annotatedReplayName ?? 'replay_annotated.webm'
+  const annotatedReplayFile =
+    annotatedReplayName ?? (replayName.endsWith('.mp4') ? 'replay_annotated.mp4' : 'replay_annotated.webm')
   const replaySeconds = ((manifest.media.replay_duration_ms ?? 0) / 1000).toFixed(1)
   lines.push(`## ${t('pack.environment')}`)
   lines.push('')
