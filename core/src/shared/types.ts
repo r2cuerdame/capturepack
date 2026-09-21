@@ -785,7 +785,8 @@ function pinOf(a: Annotation): number | null {
 
 /** The numbered boxes in creation order — the sequence described above. */
 function numberedInCreationOrder(annotations: readonly Annotation[]): Annotation[] {
-  const numbered = annotations
+  const safe: readonly Annotation[] = Array.isArray(annotations) ? annotations : []
+  const numbered = safe
     .map((a, index) => ({ a, index }))
     .filter(({ a }) => a.numbered)
   numbered.sort((p, q) => {
@@ -812,7 +813,8 @@ function numberedInCreationOrder(annotations: readonly Annotation[]): Annotation
 export function computeDisplayNumbers(
   annotations: readonly Annotation[],
 ): Map<string, number> {
-  const ordered = numberedInCreationOrder(annotations)
+  const safe: readonly Annotation[] = Array.isArray(annotations) ? annotations : []
+  const ordered = numberedInCreationOrder(safe)
   const total = ordered.length
   // As many slots as boxes: that is where contiguity comes from, not from a
   // rule anyone has to remember to apply.
@@ -1004,7 +1006,8 @@ export function annotationsOnDisplay(
   focusedIndex: number,
   declared?: ReadonlySet<number>,
 ): Annotation[] {
-  return annotations.filter((a) => {
+  const safe: readonly Annotation[] = Array.isArray(annotations) ? annotations : []
+  return safe.filter((a) => {
     if (annotationDisplayIndex(a, focusedIndex, declared) === index) return true
     // A TRACKED BOX BELONGS TO EVERY SCREEN ITS OBJECT VISITS (#86). The window
     // was dragged onto this display, so this display's rendering has to carry

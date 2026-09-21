@@ -831,23 +831,24 @@ export async function readAnnotationsSafe(
         reference_height?: unknown
         annotations?: unknown
       }
-      if (
-        Array.isArray(candidate.annotations) &&
-        candidate.annotations.every((a) => a !== null && typeof a === 'object')
-      ) {
-        const reference_width =
-          typeof candidate.reference_width === 'number' && Number.isFinite(candidate.reference_width)
-            ? candidate.reference_width
-            : fallbackWidth
-        const reference_height =
-          typeof candidate.reference_height === 'number' && Number.isFinite(candidate.reference_height)
-            ? candidate.reference_height
-            : fallbackHeight
-        return {
-          reference_width,
-          reference_height,
-          annotations: candidate.annotations as AnnotationsFile['annotations'],
-        }
+      const reference_width =
+        typeof candidate.reference_width === 'number' && Number.isFinite(candidate.reference_width)
+          ? candidate.reference_width
+          : fallbackWidth
+      const reference_height =
+        typeof candidate.reference_height === 'number' && Number.isFinite(candidate.reference_height)
+          ? candidate.reference_height
+          : fallbackHeight
+      const rawAnnotations = candidate.annotations
+      const annotations: AnnotationsFile['annotations'] =
+        Array.isArray(rawAnnotations) &&
+        rawAnnotations.every((a) => a !== null && typeof a === 'object')
+          ? (rawAnnotations as AnnotationsFile['annotations'])
+          : []
+      return {
+        reference_width,
+        reference_height,
+        annotations,
       }
     }
     return fallback

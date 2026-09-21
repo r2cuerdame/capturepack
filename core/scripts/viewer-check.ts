@@ -1095,6 +1095,34 @@ async function writerIntegrationChecks(): Promise<void> {
         !nonArrayAnnotationsSkill.includes('undefined'),
     )
 
+    // Omitted annotations array (SPEC §8, §14 minimal/unannotated pack)
+    writeFileSync(
+      path.join(handle.dirPath, 'annotations.json'),
+      JSON.stringify({ reference_width: 1920, reference_height: 1080 }),
+      'utf8',
+    )
+    await refreshPackDocs(handle.dirPath, 'en')
+    const omittedAnnotationsSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'annotation.md'),
+      'utf8',
+    )
+    const omittedAnnotationsReport = readFileSync(
+      path.join(handle.dirPath, 'report.md'),
+      'utf8',
+    )
+    const omittedAnnotationsReadme = readFileSync(
+      path.join(handle.dirPath, 'README.md'),
+      'utf8',
+    )
+    check(
+      'refreshPackDocs succeeds and falls back to empty annotations when annotations array is omitted',
+      omittedAnnotationsSkill.includes('This pack has no annotation boxes.') &&
+        !omittedAnnotationsSkill.includes('undefined') &&
+        omittedAnnotationsReport.includes('Coordinates are pixels in snapshot.png') === false &&
+        omittedAnnotationsReadme.includes('no annotation boxes') &&
+        !omittedAnnotationsReadme.includes('undefined'),
+    )
+
     // Direct unit checks for readAnnotationsSafe contract
     const safeMissingAnn = await readAnnotationsSafe(path.join(outputDir, 'nonexistent'))
     check('readAnnotationsSafe returns fallback for missing directory or file', safeMissingAnn.reference_width === 0 && safeMissingAnn.reference_height === 0 && safeMissingAnn.annotations.length === 0)
@@ -1102,6 +1130,8 @@ async function writerIntegrationChecks(): Promise<void> {
     check('readAnnotationsSafe preserves explicit fallback dimensions when file is missing', safeDimensionsAnn.reference_width === 1920 && safeDimensionsAnn.reference_height === 1080 && safeDimensionsAnn.annotations.length === 0)
     const safeManifestAnn = await readAnnotationsSafe(path.join(outputDir, 'nonexistent'), manifestAfterLateMalformedAnn)
     check('readAnnotationsSafe extracts fallback dimensions from manifest', safeManifestAnn.reference_width === (manifestAfterLateMalformedAnn.media.displays?.[0]?.snapshot_width ?? 0) && safeManifestAnn.annotations.length === 0)
+    const safeOmittedAnn = await readAnnotationsSafe(handle.dirPath)
+    check('readAnnotationsSafe preserves dimensions and defaults annotations when annotations array is omitted', safeOmittedAnn.reference_width === 1920 && safeOmittedAnn.reference_height === 1080 && safeOmittedAnn.annotations.length === 0)
     writeFileSync(
       path.join(handle.dirPath, 'annotations.json'),
       JSON.stringify({

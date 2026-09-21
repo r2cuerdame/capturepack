@@ -61,10 +61,11 @@ export function replayLabel(manifest: Manifest, t: TranslateFn): string {
 }
 
 function annotationCounts(annotations: readonly Annotation[]): string {
-  const numbered = annotations.filter((a) => a.numbered).length
-  const blurred = annotations.filter((a) => a.blur).length
-  const plain = annotations.filter((a) => !a.numbered && !a.blur).length
-  const n = annotations.length
+  const safe = Array.isArray(annotations) ? annotations : []
+  const numbered = safe.filter((a) => a.numbered).length
+  const blurred = safe.filter((a) => a.blur).length
+  const plain = safe.filter((a) => !a.numbered && !a.blur).length
+  const n = safe.length
   if (n === 0) return 'no annotation boxes'
   const parts = [`${numbered} numbered`, `${blurred} blurred`, `${plain} plain`]
   return `${n} annotation box${n === 1 ? '' : 'es'} (${parts.join(', ')})`
@@ -86,7 +87,15 @@ export function buildReadme(
   includeViewer = false,
 ): string {
   const t = makeT(lang)
-  const annotations = annotationsFile.annotations
+  const annotations = Array.isArray(annotationsFile?.annotations) ? annotationsFile.annotations : []
+  const refWidth =
+    typeof annotationsFile?.reference_width === 'number'
+      ? annotationsFile.reference_width
+      : (manifest.media?.displays?.[0]?.snapshot_width ?? 0)
+  const refHeight =
+    typeof annotationsFile?.reference_height === 'number'
+      ? annotationsFile.reference_height
+      : (manifest.media?.displays?.[0]?.snapshot_height ?? 0)
   const imageCapture = manifest.capture_kind === 'image'
   const hasReplay = typeof manifest.media.replay === 'string' && manifest.media.replay.length > 0
   const replayName = manifest.media.replay ?? 'replay.webm'
@@ -136,7 +145,7 @@ export function buildReadme(
   lines.push(`| ${t('pack.fileCol')} | ${t('pack.whatCol')} |`)
   lines.push('|---|---|')
   lines.push(
-    `| snapshot.png | The captured ${imageCapture ? 'still image' : 'frame'}, ${annotationsFile.reference_width}×${annotationsFile.reference_height} — original pixels, never modified |`,
+    `| snapshot.png | The captured ${imageCapture ? 'still image' : 'frame'}, ${refWidth}×${refHeight} — original pixels, never modified |`,
   )
   if (hasReplay) {
     const seconds = ((manifest.media.replay_duration_ms ?? 0) / 1000).toFixed(1)
@@ -250,7 +259,15 @@ function buildOverviewSkill(
   t: TranslateFn,
   renderPending: boolean,
 ): string {
-  const annotations = annotationsFile.annotations
+  const annotations = Array.isArray(annotationsFile?.annotations) ? annotationsFile.annotations : []
+  const refWidth =
+    typeof annotationsFile?.reference_width === 'number'
+      ? annotationsFile.reference_width
+      : (manifest.media?.displays?.[0]?.snapshot_width ?? 0)
+  const refHeight =
+    typeof annotationsFile?.reference_height === 'number'
+      ? annotationsFile.reference_height
+      : (manifest.media?.displays?.[0]?.snapshot_height ?? 0)
   const imageCapture = manifest.capture_kind === 'image'
   const hasReplay = typeof manifest.media.replay === 'string' && manifest.media.replay.length > 0
   const replayName = manifest.media.replay ?? 'replay.webm'
@@ -272,7 +289,7 @@ function buildOverviewSkill(
       (manifest.environment.app !== undefined ? `, focused app ${manifest.environment.app}` : '') +
       '.',
   )
-  const size = `${annotationsFile.reference_width}×${annotationsFile.reference_height}`
+  const size = `${refWidth}×${refHeight}`
   if (imageCapture) {
     const scope = imageScopeLabel(manifest.media.image_scope)
     lines.push(`**Media:** ${size} still image in snapshot.png (${scope}).`)
@@ -366,10 +383,11 @@ function buildOverviewSkill(
   }
 
   const plugins = Array.isArray(manifest.plugins) ? manifest.plugins : []
+  const timelineEventsCount = Array.isArray(timeline?.events) ? timeline.events.length : 0
   lines.push(
     imageCapture
       ? `Counts: ${annotationCounts(annotations)}, ${plugins.length} plugins.`
-      : `Counts: ${annotationCounts(annotations)}, ${timeline.events.length} timeline events, ` +
+      : `Counts: ${annotationCounts(annotations)}, ${timelineEventsCount} timeline events, ` +
           `${plugins.length} plugins.`,
   )
 
@@ -392,22 +410,24 @@ function buildTimelineSkill(manifest: Manifest, timeline: TimelineFile, t: Trans
   const lines: string[] = []
   lines.push(`# ${t('pack.skillTimeline')}`)
   lines.push('')
+  const t0 = timeline?.t0 ?? manifest.created_at
   lines.push(
-    `\`t0\` = ${timeline.t0} (${
+    `\`t0\` = ${t0} (${
       hasReplay
         ? `the start of ${replayName} — offsets are positions on the replay clock`
         : 'the capture trigger — this pack has no replay, so offsets are relative to the trigger'
     }).`,
   )
   lines.push('')
-  if (timeline.events.length === 0) {
+  const events = Array.isArray(timeline?.events) ? timeline.events : []
+  if (events.length === 0) {
     lines.push('No events were recorded.')
     lines.push('')
     return lines.join('\n')
   }
   lines.push('| Offset | Event | Detail |')
   lines.push('|---|---|---|')
-  for (const e of timeline.events) {
+  for (const e of events) {
     lines.push(`| ${formatClock(e.t_ms)} | ${e.type} | ${timelineEventDetail(e.type, e.data)} |`)
   }
   lines.push('')
@@ -416,7 +436,7 @@ function buildTimelineSkill(manifest: Manifest, timeline: TimelineFile, t: Trans
       'annotation box being created in the editor (its `annotation_id` matches annotations.json), ' +
       'and `core.export.created` is the pack being saved. Other `source` values would be plugins.',
   )
-  if (timeline.events.some((e) => e.type.startsWith('input.'))) {
+  if (events.some((e) => e.type.startsWith('input.'))) {
     lines.push('')
     lines.push(
       '`input.mouse.*` and `input.window.*` are what the desk did during the replay, observed ' +
@@ -473,7 +493,15 @@ function buildAnnotationSkill(
   annotationsFile: AnnotationsFile,
   t: TranslateFn,
 ): string {
-  const annotations = annotationsFile.annotations
+  const annotations = Array.isArray(annotationsFile?.annotations) ? annotationsFile.annotations : []
+  const refWidth =
+    typeof annotationsFile?.reference_width === 'number'
+      ? annotationsFile.reference_width
+      : (manifest.media?.displays?.[0]?.snapshot_width ?? 0)
+  const refHeight =
+    typeof annotationsFile?.reference_height === 'number'
+      ? annotationsFile.reference_height
+      : (manifest.media?.displays?.[0]?.snapshot_height ?? 0)
   const imageCapture = manifest.capture_kind === 'image'
   const numbers = computeDisplayNumbers(annotations)
   const multi = isMultiDisplay(manifest)
@@ -487,10 +515,10 @@ function buildAnnotationSkill(
   lines.push(
     multi
       ? `Coordinate space of the FOCUSED display (${focusedIndex}): snapshot.png, ` +
-          `${annotationsFile.reference_width}×${annotationsFile.reference_height} pixels, origin top-left. ` +
+          `${refWidth}×${refHeight} pixels, origin top-left. ` +
           'That is what annotations.json’s reference_width/reference_height mean here — ' +
           'the focused display’s frame, not the whole desk.'
-      : `Coordinate space: snapshot.png, ${annotationsFile.reference_width}×${annotationsFile.reference_height} pixels, origin top-left.`,
+      : `Coordinate space: snapshot.png, ${refWidth}×${refHeight} pixels, origin top-left.`,
   )
   if (multi) {
     lines.push('')
@@ -616,7 +644,8 @@ function buildDomSkill(manifest: Manifest, annotationsFile: AnnotationsFile, t: 
   lines.push(`# ${t('pack.skillDom')}`)
   lines.push('')
   const plugins = Array.isArray(manifest.plugins) ? manifest.plugins : []
-  const targeted = annotationsFile.annotations.filter((a) => a.target !== undefined)
+  const annotations = Array.isArray(annotationsFile?.annotations) ? annotationsFile.annotations : []
+  const targeted = annotations.filter((a) => a.target !== undefined)
   if (plugins.length === 0 && targeted.length === 0) {
     // Honest empty: no invented structure when no plugin contributed data.
     lines.push('No DOM metadata in this pack.')
