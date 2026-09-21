@@ -215,8 +215,8 @@ pack as described above.
 | `capturepack_summary` | `id?` | Title, note, captured_at, environment (os/screens/app), explicit/inferred `capture_kind`, image scope/crop provenance, annotation/plugin counts; video packs also report replay, timeline and frame-time details |
 | `capturepack_manifest` | `id?` | Raw `manifest.json` |
 | `capturepack_report` | `id?` | Raw `report.md` |
-| `capturepack_timeline` | `id?`, `from_ms?`, `to_ms?` | Video timeline or a slice; explicit image packs return a non-error explanation that no timeline applies. Includes the `input.*` events described below |
-| `capturepack_annotations` | `id?` | The annotation list — including each box's optional `target` (the real UI object it was placed on, e.g. `{source:"uia", name:"Save", control_type:"Button"}`) and, on a multi-display capture, **which screen it is on** (`display_index` + `display_snapshot`, see below) |
+| `capturepack_timeline` | `id?`, `from_ms?`, `to_ms?` | Video timeline or a slice; image packs and video packs omitting `timeline.json` return a non-error explanation that no timeline applies. Includes the `input.*` events described below |
+| `capturepack_annotations` | `id?` | The annotation list — including each box's optional `target` (the real UI object it was placed on, e.g. `{source:"uia", name:"Save", control_type:"Button"}`) and, on a multi-display capture, **which screen it is on** (`display_index` + `display_snapshot`, see below). Packs omitting `annotations.json` return an empty list with `available: false` |
 | `capturepack_find_annotations` | `keyword`, `id?` | Annotations matching the keyword |
 | `capturepack_frame` | `display?`, `time_s?`, `id?` | An image of the selected 1-based display (focused by default): the **nearest annotated keyframe** to `time_s` when that display has them, else its snapshot — **see below** |
 | `capturepack_replay` | `id?` | Replay **metadata** only: filename, duration_ms, size_bytes — never raw video bytes |

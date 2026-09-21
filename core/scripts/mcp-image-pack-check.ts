@@ -320,6 +320,63 @@ async function main(): Promise<void> {
     }],
     readText: (file: string) => file === 'plugins/broken-plugin/elements.json' ? '{"elements":[' : null,
   }
+  const minimalPack = {
+    ...pack,
+    id: 'minimal-pack',
+    path: 'C:\\packs\\minimal-pack',
+    manifest: () => ({
+      format: '0.8.0',
+      id: 'minimal-pack',
+      capture_kind: 'image',
+      created_at: '2026-09-21T12:00:00+09:00',
+      media: {
+        snapshot: 'snapshot.png',
+        image_scope: 'fullscreen',
+      },
+    }),
+    annotations: () => null,
+    timeline: () => null,
+    readText: () => null,
+  }
+  const malformedAnnotationsPack = {
+    ...minimalPack,
+    id: 'malformed-annotations-pack',
+    path: 'C:\\packs\\malformed-annotations-pack',
+    readText: (file: string) => file === 'annotations.json' ? '{"annotations":[' : null,
+  }
+  const videoOmittedTimelinePack = {
+    ...multiFramePack,
+    id: 'video-no-timeline-pack',
+    path: 'C:\\packs\\video-no-timeline-pack',
+    timeline: () => null,
+    readText: () => null,
+  }
+  const videoMalformedTimelinePack = {
+    ...multiFramePack,
+    id: 'video-malformed-timeline-pack',
+    path: 'C:\\packs\\video-malformed-timeline-pack',
+    timeline: () => null,
+    readText: (file: string) => file === 'timeline.json' ? '{"events":[' : null,
+  }
+  const legacyNoTimelineManifest = {
+    format: '0.2.0',
+    id: 'legacy-no-timeline-pack',
+    created_at: '2026-01-01T12:00:00+09:00',
+    media: {
+      snapshot: 'snapshot.png',
+      replay: null,
+    },
+  }
+  const legacyNoTimelinePack = {
+    ...pack,
+    id: 'legacy-no-timeline-pack',
+    path: 'C:\\packs\\legacy-no-timeline-pack',
+    manifest: () => legacyNoTimelineManifest,
+    manifestText: () => JSON.stringify(legacyNoTimelineManifest),
+    annotations: () => null,
+    timeline: () => null,
+    readText: () => null,
+  }
   const store = {
     outputDir: 'C:\\packs',
     latest: () => pack,
@@ -333,6 +390,11 @@ async function main(): Promise<void> {
       if (id === longTimelinePack.id) return longTimelinePack
       if (id === shortTimelinePack.id) return shortTimelinePack
       if (id === invalidPluginPack.id) return invalidPluginPack
+      if (id === minimalPack.id) return minimalPack
+      if (id === malformedAnnotationsPack.id) return malformedAnnotationsPack
+      if (id === videoOmittedTimelinePack.id) return videoOmittedTimelinePack
+      if (id === videoMalformedTimelinePack.id) return videoMalformedTimelinePack
+      if (id === legacyNoTimelinePack.id) return legacyNoTimelinePack
       return pack
     },
     list: () => ({
@@ -421,6 +483,35 @@ async function main(): Promise<void> {
       timelineJson.capture_kind === 'image' &&
       timelineJson.available === false,
     'timeline reader explains the intentional absence for a still-image pack',
+  )
+
+  const videoTimeline = await callbacks.get('capturepack_timeline')?.({ id: videoOmittedTimelinePack.id })
+  const videoTimelineJson = textJson(videoTimeline as ToolResult)
+  check(
+    videoTimeline?.isError !== true &&
+      videoTimelineJson.capture_kind === 'video' &&
+      videoTimelineJson.available === false &&
+      Array.isArray(videoTimelineJson.events) &&
+      videoTimelineJson.events.length === 0 &&
+      typeof videoTimelineJson.message === 'string',
+    'timeline reader returns non-error result with available: false on video pack omitting timeline.json',
+  )
+
+  const legacyTimeline = await callbacks.get('capturepack_timeline')?.({ id: legacyNoTimelinePack.id })
+  const legacyTimelineJson = textJson(legacyTimeline as ToolResult)
+  check(
+    legacyTimeline?.isError !== true &&
+      legacyTimelineJson.available === false &&
+      Array.isArray(legacyTimelineJson.events) &&
+      legacyTimelineJson.events.length === 0,
+    'timeline reader returns non-error result on legacy pack omitting timeline.json',
+  )
+
+  const malformedTimeline = await callbacks.get('capturepack_timeline')?.({ id: videoMalformedTimelinePack.id })
+  const malformedTimelineErr = (malformedTimeline as ToolResult)?.content.find((item) => item.type === 'text')?.text ?? ''
+  check(
+    malformedTimeline?.isError === true && malformedTimelineErr.includes('malformed'),
+    'timeline reader returns fatal tool error on corrupt timeline.json',
   )
   const markdown = await callbacks.get('capturepack_export_markdown')?.({})
   const markdownText = markdown?.content.find((item) => item.type === 'text')?.text ?? ''
@@ -743,6 +834,27 @@ async function main(): Promise<void> {
       foundRows[0]?.display_number === 2 &&
       foundRows[1]?.display_number === null,
     'annotation search returns the same computed display_number fields',
+  )
+
+  const omittedAnnResult = await callbacks.get('capturepack_annotations')?.({ id: minimalPack.id })
+  const omittedAnnJson = textJson(omittedAnnResult as ToolResult)
+  check(
+    omittedAnnResult?.isError !== true &&
+      omittedAnnJson.available === false &&
+      omittedAnnJson.count === 0 &&
+      Array.isArray(omittedAnnJson.annotations) &&
+      omittedAnnJson.annotations.length === 0 &&
+      omittedAnnJson.reference_width === null &&
+      omittedAnnJson.reference_height === null &&
+      typeof omittedAnnJson.message === 'string',
+    'capturepack_annotations returns non-error result with available: false when annotations.json is omitted',
+  )
+
+  const malformedAnnResult = await callbacks.get('capturepack_annotations')?.({ id: malformedAnnotationsPack.id })
+  const malformedAnnErr = (malformedAnnResult as ToolResult)?.content.find((item) => item.type === 'text')?.text ?? ''
+  check(
+    malformedAnnResult?.isError === true && malformedAnnErr.includes('malformed'),
+    'capturepack_annotations returns fatal tool error on corrupt annotations.json',
   )
 
   console.log(failed === 0 ? '\nmcp-image-pack-check ok' : `\nmcp-image-pack-check FAILED (${failed})`)
