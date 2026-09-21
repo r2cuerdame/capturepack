@@ -236,6 +236,9 @@ export function registerHistoryIpc(live: Settings): void {
     if (entry === null) return { ok: false, error: t('history.errPackNotFound') }
     if (entry.kind !== 'dir') return { ok: false, error: t('history.editZipTooltip') }
     if (liveSettings === null) return { ok: false, error: t('history.couldNotEdit') }
+    if (isRenderInFlight(entry.path)) {
+      return { ok: false, error: t('history.shareErrNotReady') }
+    }
     return startEditFlow(entry.path, liveSettings)
       ? { ok: true }
       : { ok: false, error: t('history.errFlowBusy') }

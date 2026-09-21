@@ -63,6 +63,7 @@ import type { AuthoredMotionSpace } from '../shared/track'
 import type { DomPluginPayload } from './exporter'
 import type { Language } from '../shared/i18n'
 import {
+  isRenderInFlight,
   renderTrimmedReplay,
   startAnnotatedRender,
   startDisplayRender,
@@ -348,6 +349,10 @@ export function startEditFlow(dirPath: string, settings: Settings): boolean {
   if (flowActive) {
     focusActiveEditor()
     logWarn(`[capture] re-edit of ${path.basename(dirPath)} requested while a flow was already open`)
+    return false
+  }
+  if (isRenderInFlight(dirPath)) {
+    logWarn(`[capture] re-edit of ${path.basename(dirPath)} requested while render was in flight`)
     return false
   }
   logInfo(`[capture] re-edit requested: ${path.basename(dirPath)}`)
