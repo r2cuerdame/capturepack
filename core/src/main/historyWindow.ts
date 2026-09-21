@@ -738,7 +738,7 @@ export function safePackPath(baseDir: string, rel: unknown): string | null {
 }
 
 // Resolves the playable video file for a pack folder. Takes the declared annotated
-// replay from manifest.media.replay_annotated (falling back to replay_annotated.webm),
+// replay from manifest.media.replay_annotated (falling back to replay_annotated.(webm|mp4)),
 // and falls back to manifest.media.replay when no annotated replay exists (SPEC §5.3, §7.2).
 export function resolveHistoryPlayFile(entryPath: string, manifest: Manifest | null): string | null {
   const declaredAnnotated =
@@ -750,7 +750,8 @@ export function resolveHistoryPlayFile(entryPath: string, manifest: Manifest | n
       ? manifest.media.replay.trim()
       : null
 
-  const targetAnnotated = declaredAnnotated ?? 'replay_annotated.webm'
+  const targetAnnotated =
+    declaredAnnotated ?? (declaredReplay?.endsWith('.mp4') ? 'replay_annotated.mp4' : 'replay_annotated.webm')
   const annotatedPath = safePackPath(entryPath, targetAnnotated)
   if (annotatedPath !== null && fs.existsSync(annotatedPath)) {
     return annotatedPath
