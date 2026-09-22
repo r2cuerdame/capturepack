@@ -10,11 +10,16 @@
 // Runs against the real updater.ts and lifecycle.ts with electron and
 // electron-updater stubbed: quitAndInstall is recorded, not executed, and
 // will-quit is stood in for by calling endRun() the way index.ts does.
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { app } from 'electron'
 import { autoUpdater } from 'electron-updater'
-import { beginRun, endRun } from '../src/main/lifecycle'
+import {
+  beginRun,
+  endRun,
+  previousRunVanished,
+  resetLifecycleForTesting,
+} from '../src/main/lifecycle'
 import { restartAndUpdate } from '../src/main/updater'
 
 let failed = 0
@@ -62,7 +67,192 @@ check(
 )
 endRun()
 
-// A CHECK CAN EXIST, BE CORRECT, AND BE WIRED TO NOTHING.
+console.log('\nATOMIC MARKER WRITES VIA TEMPORARY FILE (#223)')
+resetLifecycleForTesting()
+if (existsSync(markerFile)) unlinkSync(markerFile)
+if (existsSync(`${markerFile}.tmp`)) unlinkSync(`${markerFile}.tmp`)
+
+check('fresh profile has no previous run', beginRun() === null)
+check('previousRunVanished is false on fresh profile', previousRunVanished() === false)
+check('marker is written on beginRun', existsSync(markerFile))
+check('no temporary marker is left lingering after writeMarker', !existsSync(`${markerFile}.tmp`))
+endRun()
+check('no temporary marker is left lingering after endRun', !existsSync(`${markerFile}.tmp`))
+
+console.log('\nRECOVERY FROM 0-BYTE CORRUPTED MARKER FILE (#223)')
+resetLifecycleForTesting()
+writeFileSync(markerFile, '', 'utf8')
+if (existsSync(`${markerFile}.tmp`)) unlinkSync(`${markerFile}.tmp`)
+
+const prevFromZeroByte = beginRun()
+check(
+  'a 0-byte corrupted marker is recognized as an existing previous run',
+  prevFromZeroByte !== null,
+)
+check(
+  'previousRunVanished() reports true for 0-byte corrupted marker',
+  previousRunVanished() === true,
+)
+check(
+  'status is vanished for 0-byte corrupted marker',
+  prevFromZeroByte?.status === 'vanished',
+  `status=${String(prevFromZeroByte?.status)}`,
+)
+check(
+  'record has valid date string for lastAliveAt',
+  typeof prevFromZeroByte?.record.lastAliveAt === 'string' &&
+    !Number.isNaN(new Date(prevFromZeroByte.record.lastAliveAt).getTime()),
+  `lastAliveAt=${String(prevFromZeroByte?.record.lastAliveAt)}`,
+)
+endRun()
+
+console.log('\nRECOVERY FROM TRUNCATED JSON MARKER FILE (#223)')
+resetLifecycleForTesting()
+const truncatedTargetJson =
+  '{"version":"0.5.0","startedAt":"2026-09-22T01:00:00.000Z","lastAliveAt":"2026-09-22T01:05:00.000Z"'
+writeFileSync(markerFile, truncatedTargetJson, 'utf8')
+if (existsSync(`${markerFile}.tmp`)) unlinkSync(`${markerFile}.tmp`)
+
+const prevFromTruncated = beginRun()
+check(
+  'a truncated JSON marker is recognized as a previous run',
+  prevFromTruncated !== null,
+)
+check(
+  'previousRunVanished() reports true for truncated JSON marker',
+  previousRunVanished() === true,
+)
+check(
+  'status is vanished for truncated JSON marker',
+  prevFromTruncated?.status === 'vanished',
+  `status=${String(prevFromTruncated?.status)}`,
+)
+check(
+  'forensic version is recovered from truncated JSON',
+  prevFromTruncated?.record.version === '0.5.0',
+  `version=${String(prevFromTruncated?.record.version)}`,
+)
+check(
+  'forensic startedAt is recovered from truncated JSON',
+  prevFromTruncated?.record.startedAt === '2026-09-22T01:00:00.000Z',
+  `startedAt=${String(prevFromTruncated?.record.startedAt)}`,
+)
+check(
+  'forensic lastAliveAt is recovered from truncated JSON',
+  prevFromTruncated?.record.lastAliveAt === '2026-09-22T01:05:00.000Z',
+  `lastAliveAt=${String(prevFromTruncated?.record.lastAliveAt)}`,
+)
+endRun()
+
+console.log('\nRECOVERY FROM LINGERING .TMP FILE (VALID JSON) (#223)')
+resetLifecycleForTesting()
+writeFileSync(
+  markerFile,
+  JSON.stringify({
+    version: '0.5.0',
+    startedAt: '2026-09-22T00:00:00.000Z',
+    lastAliveAt: '2026-09-22T00:01:00.000Z',
+    exit: 'user-quit',
+    faults: 0,
+    firstFaultAt: null,
+    firstFaultSummary: null,
+  }),
+  'utf8',
+)
+writeFileSync(
+  `${markerFile}.tmp`,
+  JSON.stringify({
+    version: '0.5.0',
+    startedAt: '2026-09-22T02:00:00.000Z',
+    lastAliveAt: '2026-09-22T02:10:00.000Z',
+    exit: null,
+    faults: 2,
+    firstFaultAt: '2026-09-22T02:05:00.000Z',
+    firstFaultSummary: 'fatal test error',
+  }),
+  'utf8',
+)
+
+const prevFromValidTmp = beginRun()
+check(
+  'lingering .tmp prevents false clean exit report from old marker',
+  prevFromValidTmp !== null && prevFromValidTmp.status === 'vanished',
+  `status=${String(prevFromValidTmp?.status)}`,
+)
+check(
+  'previousRunVanished() reports true when lingering .tmp exists',
+  previousRunVanished() === true,
+)
+check(
+  'in-flight lastAliveAt from .tmp is preserved',
+  prevFromValidTmp?.record.lastAliveAt === '2026-09-22T02:10:00.000Z',
+  `lastAliveAt=${String(prevFromValidTmp?.record.lastAliveAt)}`,
+)
+check(
+  'in-flight faults from .tmp are preserved',
+  prevFromValidTmp?.record.faults === 2,
+  `faults=${String(prevFromValidTmp?.record.faults)}`,
+)
+check(
+  'lingering .tmp file is cleaned up after detection',
+  !existsSync(`${markerFile}.tmp`),
+)
+endRun()
+
+console.log('\nRECOVERY FROM LINGERING .TMP FILE (TRUNCATED JSON) (#223)')
+resetLifecycleForTesting()
+writeFileSync(
+  markerFile,
+  JSON.stringify({
+    version: '0.5.0',
+    startedAt: '2026-09-22T00:00:00.000Z',
+    lastAliveAt: '2026-09-22T00:01:00.000Z',
+    exit: 'user-quit',
+    faults: 0,
+    firstFaultAt: null,
+    firstFaultSummary: null,
+  }),
+  'utf8',
+)
+writeFileSync(
+  `${markerFile}.tmp`,
+  '{"version":"0.5.0","startedAt":"2026-09-22T03:00:00.000Z","lastAliveAt":"2026-09-22T03:08:00.000Z"',
+  'utf8',
+)
+
+const prevFromTruncTmp = beginRun()
+check(
+  'truncated .tmp overrides old clean marker and reports vanished',
+  prevFromTruncTmp !== null && prevFromTruncTmp.status === 'vanished',
+  `status=${String(prevFromTruncTmp?.status)}`,
+)
+check(
+  'previousRunVanished() reports true for truncated .tmp',
+  previousRunVanished() === true,
+)
+check(
+  'forensic lastAliveAt recovered from truncated .tmp',
+  prevFromTruncTmp?.record.lastAliveAt === '2026-09-22T03:08:00.000Z',
+  `lastAliveAt=${String(prevFromTruncTmp?.record.lastAliveAt)}`,
+)
+endRun()
+
+console.log('\nCRASH DURING FIRST RUN WRITE (#223)')
+resetLifecycleForTesting()
+if (existsSync(markerFile)) unlinkSync(markerFile)
+writeFileSync(`${markerFile}.tmp`, '', 'utf8')
+
+const prevFirstRunCrash = beginRun()
+check(
+  '0-byte .tmp on first run is not treated as clean empty install',
+  prevFirstRunCrash !== null && prevFirstRunCrash.status === 'vanished',
+  `status=${String(prevFirstRunCrash?.status)}`,
+)
+check(
+  'previousRunVanished() reports true for first run crash',
+  previousRunVanished() === true,
+)
+endRun()
 //
 // The runtime proof above is the fix; the source assertions below stop a
 // refactor from moving the intent back to a caller site, where the About
@@ -100,6 +290,24 @@ check(
   'the three callers — tray, About window, toast — all still go through restartAndUpdate()',
   callSites(indexSource) === 2 && callSites(aboutSource) === 1,
   `index.ts=${callSites(indexSource)} aboutWindow.ts=${callSites(aboutSource)}`,
+)
+
+console.log('\nATOMICITY AND RECOVERY CONTRACT IN LIFECYCLE SOURCE (#223)')
+const lifecycleSource = readFileSync(path.join(process.cwd(), 'src/main/lifecycle.ts'), 'utf8')
+check(
+  'writeMarker uses a temporary file and renameSync',
+  /const\s+temporary\s*=\s*`\$\{target\}\.tmp`/u.test(lifecycleSource) &&
+    /fs\.renameSync\(temporary,\s*target\)/u.test(lifecycleSource),
+)
+check(
+  'writeMarker does not write target directly in-place',
+  !/fs\.writeFileSync\(target,/u.test(lifecycleSource) &&
+    !/fs\.writeFileSync\(runStateFile\(\),/u.test(lifecycleSource),
+)
+check(
+  'readPreviousRun handles lingering .tmp files and corrupted markers',
+  lifecycleSource.includes('temporaryExists') &&
+    lifecycleSource.includes('recoverInterruptedRun'),
 )
 
 if (failed > 0) {
