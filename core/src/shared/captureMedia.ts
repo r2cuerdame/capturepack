@@ -412,7 +412,7 @@ export function captureMediaViolations(
           !Number.isInteger(raster.width) ||
           !Number.isInteger(raster.height) ||
           raster.width !== snapshot.width ||
-          raster.height !== snapshot.height
+          raster.height < snapshot.height
         ) {
           violations.push({
             code: 'image.raster_dimensions_mismatch',
