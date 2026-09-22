@@ -210,6 +210,50 @@ check(
     ['snapshot.png', 'frames/frame-01_00-00.000.png'],
     [
       { file: 'snapshot.png', width: 1080, height: 720 },
+      { file: 'frames/frame-01_00-00.000.png', width: 1080, height: 836 },
+    ],
+  ).length === 0,
+  'an annotated still may extend downward for bottom callout gutters',
+)
+check(
+  captureMediaViolations(
+    withDerivedFrame,
+    ['snapshot.png', 'frames/frame-01_00-00.000.png'],
+    [
+      { file: 'snapshot.png', width: 1080, height: 720 },
+      { file: 'frames/frame-01_00-00.000.png', width: 1080, height: 600 },
+    ],
+  ).some((v) => v.code === 'image.raster_dimensions_mismatch'),
+  'a derived still shorter than the snapshot is rejected',
+)
+check(
+  captureMediaViolations(
+    withDerivedFrame,
+    ['snapshot.png', 'frames/frame-01_00-00.000.png'],
+    [
+      { file: 'snapshot.png', width: 1080, height: 720 },
+      { file: 'frames/frame-01_00-00.000.png', width: 960, height: 720 },
+    ],
+  ).some((v) => v.code === 'image.raster_dimensions_mismatch'),
+  'a derived still narrower than the snapshot is rejected',
+)
+check(
+  captureMediaViolations(
+    withDerivedFrame,
+    ['snapshot.png', 'frames/frame-01_00-00.000.png'],
+    [
+      { file: 'snapshot.png', width: 1080, height: 720 },
+      { file: 'frames/frame-01_00-00.000.png', width: 1200, height: 720 },
+    ],
+  ).some((v) => v.code === 'image.raster_dimensions_mismatch'),
+  'a derived still wider than the snapshot is rejected',
+)
+check(
+  captureMediaViolations(
+    withDerivedFrame,
+    ['snapshot.png', 'frames/frame-01_00-00.000.png'],
+    [
+      { file: 'snapshot.png', width: 1080, height: 720 },
       { file: 'frames/frame-01_00-00.000.png', width: 1920, height: 1080 },
     ],
   ).some((v) => v.code === 'image.raster_dimensions_mismatch'),
