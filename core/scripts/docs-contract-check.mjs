@@ -364,6 +364,22 @@ console.log('\nSPEC §8.3 defines annotation.z as OPTIONAL')
   )
 }
 
+console.log('\nSPEC §8.3 defines annotation.created_at as OPTIONAL')
+{
+  const spec = readFileSync(join(ROOT, 'SPEC.md'), 'utf8')
+  check(
+    'SPEC §8.3 declares annotation.created_at as OPTIONAL',
+    /\|\s*`created_at`\s*\|\s*string\s*\|\s*OPTIONAL\s*\|\s*When the annotation was made/u.test(spec),
+    'SPEC.md §8.3 lost its created_at OPTIONAL declaration',
+  )
+  const typesSource = readFileSync(join(CORE, 'src', 'shared', 'types.ts'), 'utf8')
+  check(
+    'types.ts declares BoxAnnotation.created_at as optional string',
+    /created_at\?:\s*string/u.test(typesSource),
+    'types.ts does not declare created_at?: string in BoxAnnotation',
+  )
+}
+
 console.log('\nSPEC §5.3 / §13.1 defines media.replay as nullable/omitted for screenshot-only packs')
 {
   const spec = readFileSync(join(ROOT, 'SPEC.md'), 'utf8')
