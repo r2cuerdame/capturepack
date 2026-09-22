@@ -698,7 +698,7 @@ export interface BoxAnnotation {
   keyframes?: AnnotationKeyframe[]
   target?: AnnotationTarget
   style?: AnnotationStyle
-  created_at: string
+  created_at?: string
   // Stacking order for rendering; higher draws on top. Default: array position (SPEC §8.3).
   z?: number
 }
@@ -790,8 +790,8 @@ function numberedInCreationOrder(annotations: readonly Annotation[]): Annotation
     .map((a, index) => ({ a, index }))
     .filter(({ a }) => a.numbered)
   numbered.sort((p, q) => {
-    const pAt = Date.parse(p.a.created_at)
-    const qAt = Date.parse(q.a.created_at)
+    const pAt = typeof p.a.created_at === 'string' ? Date.parse(p.a.created_at) : NaN
+    const qAt = typeof q.a.created_at === 'string' ? Date.parse(q.a.created_at) : NaN
     const pDated = Number.isFinite(pAt)
     const qDated = Number.isFinite(qAt)
     // A known creation moment beats an unknown one; among known ones, earlier

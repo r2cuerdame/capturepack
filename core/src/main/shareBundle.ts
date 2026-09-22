@@ -1068,7 +1068,7 @@ function laneKey(display: number | null): string {
   return display === null ? 'capture' : `display-${String(display)}`
 }
 
-function normalizeAnnotation(
+export function normalizeAnnotation(
   value: unknown,
   index: number,
   ids: Set<string>,
@@ -1104,13 +1104,14 @@ function normalizeAnnotation(
     throw new ShareBundleError('invalid-annotations')
   }
   ids.add(value['annotation_id'])
+  const { created_at: rawCreatedAt, ...rest } = value as Record<string, unknown>
   return {
-    ...value,
+    ...rest,
     text: value['text'] ?? '',
     numbered: value['numbered'] ?? false,
     blur: value['blur'] ?? false,
     tracking: value['tracking'] ?? { enabled: false },
-    created_at: value['created_at'] ?? '',
+    ...(typeof rawCreatedAt === 'string' ? { created_at: rawCreatedAt } : {}),
     z: value['z'] ?? index,
   } as unknown as Annotation
 }

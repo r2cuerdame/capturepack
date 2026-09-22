@@ -1541,7 +1541,6 @@ function dragDraft(d: {
     blur: false,
     tracking: { enabled: false },
     style: { color: MANUAL_BOX_COLOR },
-    created_at: '',
     z: Number.MAX_SAFE_INTEGER,
   }
 }

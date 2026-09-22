@@ -19,6 +19,7 @@ import path from 'node:path'
 import { deflateSync, inflateSync } from 'node:zlib'
 import {
   createShareBundle,
+  normalizeAnnotation,
   planShareBundle,
   readCanonicalShareStill,
   ShareBundleError,
@@ -637,6 +638,7 @@ try {
     delete annotation.numbered
     delete annotation.blur
     delete annotation.tracking
+    delete annotation.created_at
   }
   writeFileSync(optionalDefaultsFile, `${JSON.stringify(optionalAnnotations, null, 2)}\n`)
   writeFileSync(path.join(optionalDefaults.dir, 'frames', 'frame-01_00-01.000.png'), PNG)
@@ -648,11 +650,29 @@ try {
       !optionalDefaultsPlan.hasBlur &&
       optionalDefaultsPlan.blockers.length === 0)
 
+  const normalizedWithoutCreatedAt = normalizeAnnotation({
+    annotation_id: 'ann_000001',
+    type: 'box',
+    bounds: { x: 0, y: 0, width: 10, height: 10 },
+  }, 0, new Set())
+  check('normalizeAnnotation preserves omitted created_at without empty string fallback',
+    normalizedWithoutCreatedAt.created_at === undefined && !('created_at' in normalizedWithoutCreatedAt))
+
+  const normalizedWithCreatedAt = normalizeAnnotation({
+    annotation_id: 'ann_000002',
+    type: 'box',
+    bounds: { x: 0, y: 0, width: 10, height: 10 },
+    created_at: '2026-08-21T00:00:00+09:00',
+  }, 1, new Set())
+  check('normalizeAnnotation preserves provided created_at string',
+    normalizedWithCreatedAt.created_at === '2026-08-21T00:00:00+09:00')
+
   for (const [name, mutate] of [
     ['annotation text type', (annotation: any) => { annotation.text = 1 }],
     ['annotation numbered type', (annotation: any) => { annotation.numbered = 'true' }],
     ['annotation blur type', (annotation: any) => { annotation.blur = 1 }],
     ['annotation tracking type', (annotation: any) => { annotation.tracking = null }],
+    ['annotation created_at type', (annotation: any) => { annotation.created_at = 1 }],
   ] as const) {
     const malformed = makeFixture(name.replaceAll(' ', '-'))
     const annotationsFile = path.join(malformed.dir, 'annotations.json')
