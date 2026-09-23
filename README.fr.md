@@ -34,7 +34,7 @@ local et ouvert, qui fonctionne sans IA, sans compte et sans service cloud.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Télécharger](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Version Windows publique actuelle : **CapturePack 0.5.1**. Historique permet
+Version Windows publique actuelle : **CapturePack 0.6.0**. Historique permet
 de créer une **Copie de partage** (`.share.zip`) dont les seuls médias sont des
 images fixes PNG annotées et vérifiées ; un README généré, une visionneuse
 hors ligne et un inventaire minimal les accompagnent. Elle exclut les originaux,
@@ -283,10 +283,10 @@ Outils, configuration des clients et réglages : [docs/MCP.md](docs/MCP.md).
 
 Téléchargez le dernier installateur sur [GitHub Releases](https://github.com/r2cuerdame/capturepack/releases/latest) :
 
-1. Téléchargez `CapturePack-Setup-0.5.1.exe` et `SHA256SUMS.txt`.
+1. Téléchargez `CapturePack-Setup-0.6.0.exe` et `SHA256SUMS.txt`.
 2. Vérifiez l'intégrité de la somme de contrôle via PowerShell :
    ```powershell
-   Get-FileHash CapturePack-Setup-0.5.1.exe -Algorithm SHA256
+   Get-FileHash CapturePack-Setup-0.6.0.exe -Algorithm SHA256
    ```
 3. Lancez l'installateur. La demande de signature de code open source étant en cours, Windows SmartScreen affichera un avertissement : cliquez sur **Informations complémentaires** → **Exécuter quand même**.
 
@@ -314,7 +314,7 @@ npm run qa:rc
 
 ## État
 
-**0.5.1 est la version Windows publique actuellement téléchargeable.** CapturePack
+**0.6.0 est la version Windows publique actuellement téléchargeable.** CapturePack
 reste un projet à un stade précoce : conservez le pack d’origine lorsque vous
 signalez un problème, et consultez [GOAL.md](GOAL.md) pour la vision produit et
 [ROADMAP.md](ROADMAP.md) pour la suite.
@@ -338,7 +338,7 @@ un décalage global codé en dur.
   — accès en lecture seule aux packs enregistrés et intégration des fournisseurs de
   contexte.
 
-CapturePack `0.5.1` est la version de l’application. Le `format_version` des packs
+CapturePack `0.6.0` est la version de l’application. Le `format_version` des packs
 évolue indépendamment, par ajouts successifs au format ; les lecteurs doivent suivre
 [SPEC.md](SPEC.md) plutôt que déduire la prise en charge du format de la version de
 l’application.
