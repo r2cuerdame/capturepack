@@ -34,6 +34,7 @@ function section(text, start, end) {
 console.log('IMAGE TRIGGER + PRIVACY ORDER')
 const session = source('src/main/session.ts')
 const imageFlow = section(session, 'async function runImageFlow(', 'async function runFlow(')
+const editFlow = section(session, 'async function runEditFlow(', 'interface DisplayRenderSource')
 const freezeAt = imageFlow.indexOf('await takeDisplaySnapshots(')
 const selectorAt = imageFlow.indexOf('selectionPending = selectImageRegion(')
 const cropAt = imageFlow.indexOf('cropSnapshot(desktopPng, selection)')
@@ -94,6 +95,15 @@ check(
       'loadedWindowsContextObservations.some((observation) => observation.windows.length > 0)',
     ) &&
     !session.includes('loadedWindowsContextObservations.length > 1'),
+)
+check(
+  'still-image capture flow fires after-save actions and notes pack saved once durable',
+  imageFlow.includes('notePackSaved(savedHandle.dirPath)') &&
+    imageFlow.includes("void runActionsAtState(savedHandle.dirPath, 'source-ready', settings)"),
+)
+check(
+  're-edit save fires after-save actions at source-ready once durable',
+  editFlow.includes("void runActionsAtState(handle.dirPath, 'source-ready', settings)"),
 )
 
 console.log('\nSELECTOR UX + TRUST SURFACE')
