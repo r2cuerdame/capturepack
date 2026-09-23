@@ -275,6 +275,8 @@ Tools, client setup, and settings: [docs/MCP.md](docs/MCP.md).
 
 Download the latest installer from [GitHub Releases](https://github.com/r2cuerdame/capturepack/releases/latest):
 
+[Code signing policy](docs/CODE_SIGNING.md) — current signing status and release verification.
+
 1. Download `CapturePack-Setup-0.6.0.exe` and `SHA256SUMS.txt`.
 2. Verify checksum integrity via PowerShell:
    ```powershell
