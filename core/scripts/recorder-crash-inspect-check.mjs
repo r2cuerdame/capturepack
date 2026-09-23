@@ -111,3 +111,21 @@ for (const [label, overrides] of [
 test('integer-only AMD64 context is sufficient for operand interpretation', () => {
   assert.equal(inspect(identity.dumps[0], { contextFlags: 0x100002 }).checkedU32Add.sumMatchesRax, true)
 })
+
+test('multiple dumps produce one parseable JSON array in argument order', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'issue243-inspect-'))
+  try {
+    const paths = identity.dumps.map(dump => {
+      const path = join(directory, dump.name)
+      writeFileSync(path, fixture(dump))
+      return path
+    })
+    const result = spawnSync(process.execPath, [inspector, ...paths, '--checked-u32-add'],
+      { encoding: 'utf8', windowsHide: true, timeout: 10000 })
+    assert.equal(result.status, 0, result.stderr)
+    const output = JSON.parse(result.stdout)
+    assert.ok(Array.isArray(output))
+    assert.deepEqual(output.map(entry => entry.dump), identity.dumps.map(dump => dump.name))
+    assert.deepEqual(output.map(entry => entry.checkedU32Add.sum), identity.dumps.map(dump => String(dump.sum)))
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})

@@ -21,6 +21,8 @@ const verifiedSite = {
   exception: '0x80000003', module: 'CapturePack.exe', rva: '0x3b28d0a',
   codeViewGuidBytes: '0dff164f3181aab74c4c44205044422e', codeViewAge: 1,
 }
+// One JSON document per run: an object for one dump, an array for several.
+const results = []
 for (const path of paths) {
   const data = readFileSync(path)
   const u32 = offset => data.readUInt32LE(offset)
@@ -92,7 +94,7 @@ for (const path of paths) {
           available: false,
           reason: 'Complete AMD64 integer context not established',
         }
-        console.log(JSON.stringify(output, null, 2))
+        results.push(output)
         continue
       }
       const ranges = []
@@ -130,5 +132,6 @@ for (const path of paths) {
       }
     }
   }
-  console.log(JSON.stringify(output, null, 2))
+  results.push(output)
 }
+console.log(JSON.stringify(results.length === 1 ? results[0] : results, null, 2))

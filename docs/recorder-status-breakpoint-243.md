@@ -196,7 +196,8 @@ If this independently verified identity/site cannot be established, it reports
 It also requires an in-file AMD64 context record with CONTEXT_INTEGER set before
 reading registers. A matching executable does not validate uncaptured register
 slots. Missing flags or truncated/out-of-file context return unavailable with no
-operand fields. It is not a generic STATUS_BREAKPOINT detector.
+operand fields. It is not a generic STATUS_BREAKPOINT detector. Each run prints
+one JSON document: an object for one dump, an array in argument order for several.
 
 The focused check constructs tiny synthetic minidumps from the two documented
 dump identities/operands in `core/test/fixtures/issue243/crash-identities.json`;
@@ -207,7 +208,9 @@ an unrelated site with unusable context must all be unavailable. Before the
 gate, 11 negative tests failed (the two positive fixtures and metadata-only test
 passed); with the identity gate, all 14 passed. The subsequent integer-context
 review regression adds six negative cases (all RED before the correction) and an
-integer-only positive case. All 21 pass after the correction. Both recorder
+integer-only positive case. All 21 pass after the correction. A later review
+found that several dumps printed concatenated JSON documents; the multi-dump
+array regression was RED before that fix and all 22 now pass. Both recorder
 checks are registered in full QA and the video profile.
 
 Installed logs, dumps and executable were only read; no installed app was started
