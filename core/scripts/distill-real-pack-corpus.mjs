@@ -12,6 +12,7 @@
 //     --case 'dense-overlay=C:\_CapturePack\CapturePack_...' `
 //     --tags 'dense-overlay=mixed-dpi,region,browser-overlay' `
 //     --hands-off 'dense-overlay=1871' `
+//     --baseline 'dense-overlay=10,0.07,0.09,0.13,0.65' `
 //     --controls 'dense-overlay=some'
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -258,7 +259,7 @@ function safeScreen(source, index) {
   }
 }
 
-function distill(id, dirPath, tags, handsOffMs, controls) {
+function distill(id, dirPath, tags, handsOffMs, controls, baseline) {
   const manifest = JSON.parse(readFileSync(path.join(dirPath, 'manifest.json'), 'utf8'))
   const uiaPath = path.join(dirPath, 'plugins', 'windows-uia', 'elements.json')
   const sourceUia = JSON.parse(readFileSync(uiaPath, 'utf8'))
@@ -279,14 +280,8 @@ function distill(id, dirPath, tags, handsOffMs, controls) {
     shape_sha256: shapeSha256,
     classifications: [...new Set(tags.split(',').map((tag) => token(tag, '')).filter(Boolean))].sort(),
     observed_hands_off_ms: handsOffMs,
-    thresholds: {
-      max_hands_off_ms: 5000,
-      max_replay_to_candidates_ms: 1000,
-      max_median_control_fraction: 0.15,
-      max_p90_control_fraction: 0.55,
-      min_precise_control_share: controls === 'some' ? 0.001 : 0,
-      expected_controls: controls,
-    },
+    baseline,
+    thresholds: { expected_controls: controls },
     pack: {
       width: size.width,
       height: size.height,
@@ -303,6 +298,7 @@ function distill(id, dirPath, tags, handsOffMs, controls) {
 const cases = assignments('--case')
 const tags = assignments('--tags')
 const handsOff = assignments('--hands-off')
+const baselines = assignments('--baseline')
 const controls = assignments('--controls')
 if (cases.size === 0) throw new Error('at least one --case id=path is required')
 
@@ -318,6 +314,8 @@ const corpus = {
     { id: 'motion', status: 'coverage-gap', companion_checks: ['check:motion', 'check:temporal'] },
     { id: 'similar-frames', status: 'coverage-gap', companion_checks: ['check:temporal-alignment'] },
     { id: 'hdr-sdr', status: 'coverage-gap' },
+    { id: 'dom-provider-replay', status: 'coverage-gap', companion_checks: ['check:dom', 'check:pack-readback'] },
+    { id: 'capture-to-painted-editor', status: 'coverage-gap', companion_checks: ['capture-e2e', 'check:capture-latency'] },
   ],
   cases: [...cases].map(([id, source]) => {
     const tagValue = tags.get(id)
@@ -328,7 +326,20 @@ const corpus = {
     if (controlExpectation !== 'some' && controlExpectation !== 'none') {
       throw new Error(`--controls for ${id} must be some or none`)
     }
-    return distill(id, path.resolve(source), tagValue, latency, controlExpectation)
+    const values = (baselines.get(id) ?? '').split(',').map(Number)
+    if (values.length !== 5 || values.some((value) => !Number.isFinite(value) || value < 0) ||
+      values[0] <= 0 || (controlExpectation === 'some' && values.slice(1).some((value) => value <= 0)) ||
+      (controlExpectation === 'none' && values.slice(1).some((value) => value !== 0))) {
+      throw new Error(`--baseline for ${id} must be measured replay-ms,median,p90,precise-share,control-share`)
+    }
+    const baseline = {
+      replay_to_candidates_ms: values[0],
+      median_control_fraction: values[1],
+      p90_control_fraction: values[2],
+      precise_control_share: values[3],
+      control_share: values[4],
+    }
+    return distill(id, path.resolve(source), tagValue, latency, controlExpectation, baseline)
   }),
 }
 

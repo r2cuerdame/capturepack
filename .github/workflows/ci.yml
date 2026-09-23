@@ -104,6 +104,12 @@ jobs:
           Write-Host "capture exited $LASTEXITCODE"
           exit $LASTEXITCODE
 
+      - name: Assert live capture to painted editor under five seconds
+        run: |
+          $work = "${{ runner.temp }}\capturepack-e2e"
+          node scripts/assert-live-capture-latency.mjs "$work\userdata\logs\main.log" 5000
+          exit $LASTEXITCODE
+
       - name: Assert on the pack
         run: |
           $work = "${{ runner.temp }}\capturepack-e2e"

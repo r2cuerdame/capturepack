@@ -197,6 +197,8 @@ interface PackSweep {
   probes: number
   offers: Offer[]
   kinds: Set<SurfaceKind>
+  /** Read saved context through candidate index construction; excludes grid sweep. */
+  replayToCandidatesMs: number
   /** Browser picks the pack actually carries — not merely a registered provider. */
   domEvents: number
   /** Element rectangles the chrome-dom payload DECLARES... */
@@ -251,6 +253,7 @@ function sweepDisplay(
 }
 
 async function sweepPack(dirPath: string, stride: number): Promise<PackSweep | null> {
+  const started = performance.now()
   const context = readPackObjectContext(dirPath)
   if (context === null) return null
   const session = openPackContextSession(context)
@@ -259,12 +262,22 @@ async function sweepPack(dirPath: string, stride: number): Promise<PackSweep | n
   // hold control data for — measuring anywhere else would measure the surface
   // ring's window floor and call the result picking quality.
   const frame = await session.frameAt(context.replayDurationMs)
+  const indexes = context.displays.map((display) => ({
+    display,
+    index: ObjectIndex.forDisplay(frame, {
+      index: display.index,
+      width: display.width,
+      height: display.height,
+    }),
+  }))
+  const replayToCandidatesMs = performance.now() - started
   const sweep: PackSweep = {
     name: path.basename(dirPath),
     captureKind: context.captureKind,
     probes: 0,
     offers: [],
     kinds: new Set<SurfaceKind>(),
+    replayToCandidatesMs,
     domEvents: context.domEvents.length,
     domRectangles: context.domRectanglesDeclared,
     domParsed: context.domEvents.reduce(
@@ -307,13 +320,9 @@ async function sweepPack(dirPath: string, stride: number): Promise<PackSweep | n
       }
     }
   } catch { }
-  for (const display of context.displays) {
+  for (const { display, index } of indexes) {
     sweepDisplay(
-      ObjectIndex.forDisplay(frame, {
-        index: display.index,
-        width: display.width,
-        height: display.height,
-      }),
+      index,
       display,
       stride,
       sweep,
@@ -439,12 +448,8 @@ async function main(): Promise<void> {
   // discarded. Reconstructing a pack here keeps the gate on the same
   // readPackObjectContext -> frameAt -> ObjectIndex path as a reopen.
   //
-  // Two clocks remain separate on purpose:
-  //   observed_hands_off_ms is the capture -> painted editor measurement from
-  //     the source run's production monotonic log;
-  //   replayMs is what THIS build spends reopening that saved shape and making
-  //     candidates available. Adding them would double-count unrelated work
-  //     and make neither regression diagnosable.
+  // Saved-pack replay is measured on this build. Live capture -> painted editor
+  // needs an actual capture run; the historical source log is not a gate.
   const corpus = loadRealPackCorpus()
   let corpusFailures = 0
   console.log(`--- maintained real-pack corpus: ${String(corpus.cases.length)} privacy-safe case(s) ---`)
@@ -455,9 +460,7 @@ async function main(): Promise<void> {
     console.log(`  coverage ${entry.id}: ${entry.status}${companion}`)
   }
   for (const written of writeRealPackCorpusCases(corpus)) {
-    const started = performance.now()
     const swept = await sweepPack(written.dirPath, stride)
-    const replayMs = performance.now() - started
     if (swept === null) {
       console.error(`FAIL ${written.definition.id}: the distilled saved pack could not be reopened`)
       corpusFailures += 1
@@ -466,10 +469,14 @@ async function main(): Promise<void> {
     swept.name = written.definition.id
     const stats = statsOf(swept)
     const t = written.definition.thresholds
+    const b = written.definition.baseline
     const reasons: string[] = []
-    if (replayMs > t.max_replay_to_candidates_ms) {
+    // 50% drift allowance for geometric quality. Candidate construction has
+    // a 40 ms scheduling allowance for shared Windows CI runners.
+    const replayLimit = b.replay_to_candidates_ms * 1.5 + 40
+    if (swept.replayToCandidatesMs > replayLimit) {
       reasons.push(
-        `replay-to-candidates ${replayMs.toFixed(1)} ms > ${String(t.max_replay_to_candidates_ms)} ms`,
+        `replay-to-candidates ${swept.replayToCandidatesMs.toFixed(1)} ms > ${replayLimit.toFixed(1)} ms`,
       )
     }
     if (t.expected_controls === 'some' && stats.controls === 0) {
@@ -478,22 +485,25 @@ async function main(): Promise<void> {
     if (t.expected_controls === 'none' && stats.controls !== 0) {
       reasons.push(`expected the honest window-only floor but got ${String(stats.controls)} control offers`)
     }
-    if (stats.controls > 0 && stats.median > t.max_median_control_fraction) {
-      reasons.push(`median ${pct(stats.median)} > ${pct(t.max_median_control_fraction)}`)
+    if (stats.controls > 0 && stats.median > b.median_control_fraction * 1.5) {
+      reasons.push(`median ${pct(stats.median)} > ${pct(b.median_control_fraction * 1.5)}`)
     }
-    if (stats.controls > 0 && stats.p90 > t.max_p90_control_fraction) {
-      reasons.push(`p90 ${pct(stats.p90)} > ${pct(t.max_p90_control_fraction)}`)
+    if (stats.controls > 0 && stats.p90 > b.p90_control_fraction * 1.5) {
+      reasons.push(`p90 ${pct(stats.p90)} > ${pct(b.p90_control_fraction * 1.5)}`)
     }
-    if (stats.preciseShare < t.min_precise_control_share) {
-      reasons.push(`precise share ${pct(stats.preciseShare)} < ${pct(t.min_precise_control_share)}`)
+    if (stats.preciseShare < b.precise_control_share * 0.8) {
+      reasons.push(`precise share ${pct(stats.preciseShare)} < ${pct(b.precise_control_share * 0.8)}`)
+    }
+    if (stats.controlShare < b.control_share * 0.9) {
+      reasons.push(`control coverage ${pct(stats.controlShare)} < ${pct(b.control_share * 0.9)}`)
     }
     const failed = reasons.length > 0
     if (failed) corpusFailures += 1
     console.log(line(swept, stats, failed))
     console.log(
-      `      capture->editor ${String(written.definition.observed_hands_off_ms)} ms` +
-        ` / ${String(t.max_hands_off_ms)} ms; replay->candidates ${replayMs.toFixed(1)} ms` +
-        ` / ${String(t.max_replay_to_candidates_ms)} ms; ${written.definition.classifications.join('+')}`,
+      `      capture->painted-editor CORPUS COVERAGE GAP (live capture-e2e gate: 5000 ms); ` +
+        `replay->candidates ${swept.replayToCandidatesMs.toFixed(1)} ms` +
+        ` / ${replayLimit.toFixed(1)} ms; ${written.definition.classifications.join('+')}`,
     )
     for (const reason of reasons) console.error(`      FAIL: ${reason}`)
   }
