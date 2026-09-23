@@ -224,14 +224,17 @@ export function inspectPack(inputPath, { strict = false } = {}) {
   }
 
   const manifestFile = requireFile('manifest.json')
-  const annotationsFile = requireFile('annotations.json')
+  const annotationsPath = resolve(packPath, 'annotations.json')
+  const annotationsFile = existsSync(annotationsPath) && statSync(annotationsPath).isFile()
+    ? annotationsPath
+    : null
   const manifest = readJson(manifestFile, 'manifest.json')
   const stillImage = isRecord(manifest) && manifest.capture_kind === 'image'
   const timelinePath = resolve(packPath, 'timeline.json')
   let timelineFile = null
-  if (stillImage) {
-    if (existsSync(timelinePath) && statSync(timelinePath).isFile()) {
-      timelineFile = timelinePath
+  if (existsSync(timelinePath) && statSync(timelinePath).isFile()) {
+    timelineFile = timelinePath
+    if (stillImage) {
       add(
         'error',
         'structure',
@@ -239,8 +242,6 @@ export function inspectPack(inputPath, { strict = false } = {}) {
         'Explicit still-image packs must not contain timeline.json',
       )
     }
-  } else {
-    timelineFile = requireFile('timeline.json')
   }
 
   const skillsDirectory = resolve(packPath, 'skills')
@@ -568,17 +569,19 @@ export function inspectPack(inputPath, { strict = false } = {}) {
     if (annotation.type !== 'box') {
       add('error', 'schema', 'annotation_type_invalid', `${prefix}.type must equal "box"`)
     }
-    if (typeof annotation.text !== 'string') {
+    if (annotation.text !== undefined && typeof annotation.text !== 'string') {
       add('error', 'schema', 'annotation_text_invalid', `${prefix}.text must be a string`)
     }
-    if (typeof annotation.numbered !== 'boolean' || typeof annotation.blur !== 'boolean') {
+    if ((annotation.numbered !== undefined && typeof annotation.numbered !== 'boolean')
+      || (annotation.blur !== undefined && typeof annotation.blur !== 'boolean')) {
       add('error', 'schema', 'annotation_flags_invalid',
         `${prefix}.numbered and ${prefix}.blur must be booleans`)
     }
-    if (!isFiniteNumber(annotation.z)) {
+    if (annotation.z !== undefined && !isFiniteNumber(annotation.z)) {
       add('error', 'schema', 'annotation_z_invalid', `${prefix}.z must be a finite number`)
     }
-    if (typeof annotation.created_at !== 'string' || !Number.isFinite(Date.parse(annotation.created_at))) {
+    if (annotation.created_at !== undefined
+      && (typeof annotation.created_at !== 'string' || !Number.isFinite(Date.parse(annotation.created_at)))) {
       add('error', 'schema', 'annotation_created_at_invalid',
         `${prefix}.created_at must be an ISO-compatible timestamp`)
     }
@@ -606,31 +609,33 @@ export function inspectPack(inputPath, { strict = false } = {}) {
       add('error', 'timeline', 'annotation_lifetime_reversed', `${prefix}.start_ms is after end_ms`)
     }
 
-    if (isRecord(annotation.tracking)) {
-      if (annotation.tracking.picked_at_ms !== undefined) {
-        validateTime(annotation.tracking.picked_at_ms, `${prefix}.tracking.picked_at_ms`, annotation.display)
+    if (annotation.tracking !== undefined) {
+      if (isRecord(annotation.tracking)) {
+        if (annotation.tracking.picked_at_ms !== undefined) {
+          validateTime(annotation.tracking.picked_at_ms, `${prefix}.tracking.picked_at_ms`, annotation.display)
+        }
+        if (annotation.tracking.samples !== undefined && !Array.isArray(annotation.tracking.samples)) {
+          add('error', 'schema', 'tracking_samples_invalid', `${prefix}.tracking.samples must be an array`)
+        } else if (Array.isArray(annotation.tracking.samples)) {
+          let previousTime = -Infinity
+          annotation.tracking.samples.forEach((sample, sampleIndex) => {
+            const samplePrefix = `${prefix}.tracking.samples[${sampleIndex}]`
+            if (!isRecord(sample)) {
+              add('error', 'schema', 'tracking_sample_invalid', `${samplePrefix} must be an object`)
+              return
+            }
+            validateTime(sample.t_ms, `${samplePrefix}.t_ms`, sample.display ?? annotation.display)
+            validateBounds(sample, samplePrefix, sample.display ?? annotation.display)
+            if (isFiniteNumber(sample.t_ms) && sample.t_ms < previousTime) {
+              add('error', 'timeline', 'tracking_samples_unsorted',
+                `${samplePrefix}.t_ms is earlier than the previous sample`)
+            }
+            if (isFiniteNumber(sample.t_ms)) previousTime = sample.t_ms
+          })
+        }
+      } else {
+        add('error', 'schema', 'annotation_tracking_missing', `${prefix}.tracking must be an object`)
       }
-      if (annotation.tracking.samples !== undefined && !Array.isArray(annotation.tracking.samples)) {
-        add('error', 'schema', 'tracking_samples_invalid', `${prefix}.tracking.samples must be an array`)
-      } else if (Array.isArray(annotation.tracking.samples)) {
-        let previousTime = -Infinity
-        annotation.tracking.samples.forEach((sample, sampleIndex) => {
-          const samplePrefix = `${prefix}.tracking.samples[${sampleIndex}]`
-          if (!isRecord(sample)) {
-            add('error', 'schema', 'tracking_sample_invalid', `${samplePrefix} must be an object`)
-            return
-          }
-          validateTime(sample.t_ms, `${samplePrefix}.t_ms`, sample.display ?? annotation.display)
-          validateBounds(sample, samplePrefix, sample.display ?? annotation.display)
-          if (isFiniteNumber(sample.t_ms) && sample.t_ms < previousTime) {
-            add('error', 'timeline', 'tracking_samples_unsorted',
-              `${samplePrefix}.t_ms is earlier than the previous sample`)
-          }
-          if (isFiniteNumber(sample.t_ms)) previousTime = sample.t_ms
-        })
-      }
-    } else {
-      add('error', 'schema', 'annotation_tracking_missing', `${prefix}.tracking must be an object`)
     }
 
     if (annotation.keyframes !== undefined && !Array.isArray(annotation.keyframes)) {

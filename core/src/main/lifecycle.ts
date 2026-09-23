@@ -272,37 +272,214 @@ export function endRun(): void {
   }
 }
 
-function writeMarker(): void {
+export function resetLifecycleForTesting(): void {
+  if (heartbeat !== undefined) clearInterval(heartbeat)
+  heartbeat = undefined
+  current = null
+  intendedExit = null
+  previous = null
+  markerPath = null
+  pendingFaults = 0
+  pendingFirstFault = null
+}
+
+export function writeMarker(): void {
   if (current === null) return
+  const target = runStateFile()
+  const temporary = `${target}.tmp`
   try {
-    fs.mkdirSync(path.dirname(runStateFile()), { recursive: true })
-    fs.writeFileSync(runStateFile(), JSON.stringify(current, null, 2) + '\n')
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    // Written beside the target and renamed, so a crash or hard kill mid-write
+    // cannot leave a truncated marker that destroys crash forensics (#223).
+    fs.writeFileSync(temporary, JSON.stringify(current, null, 2) + '\n', 'utf8')
+    fs.renameSync(temporary, target)
   } catch (err) {
+    try {
+      if (fs.existsSync(temporary)) {
+        fs.unlinkSync(temporary)
+      }
+    } catch {
+      // Clean up failed write without failing
+    }
     // A marker that cannot be written costs the next start its diagnosis, and
     // nothing else. Never fatal.
     logError('[lifecycle] could not write the run marker', err)
   }
 }
 
-function readPreviousRun(): PreviousRun | null {
-  let text: string
+function extractField(text: string, field: string): string | null {
+  const match = new RegExp(`"${field}"\\s*:\\s*"([^"]+)"`, 'u').exec(text)
+  return match && match[1] !== undefined ? match[1] : null
+}
+
+function extractNumberField(text: string, field: string): number | null {
+  const match = new RegExp(`"${field}"\\s*:\\s*([0-9]+)`, 'u').exec(text)
+  return match && match[1] !== undefined ? parseInt(match[1], 10) : null
+}
+
+function recoverInterruptedRun(
+  target: string,
+  temporary: string,
+  targetText: string | null,
+  tempText: string | null,
+): PreviousRun {
+  let mtimeIso = new Date().toISOString()
   try {
-    text = fs.readFileSync(runStateFile(), 'utf8')
+    const fileForStat = fs.existsSync(temporary) ? temporary : target
+    mtimeIso = fs.statSync(fileForStat).mtime.toISOString()
   } catch {
+    // Keep mtimeIso fallback
+  }
+
+  const combinedText = (tempText ?? '') + '\n' + (targetText ?? '')
+  const version = extractField(combinedText, 'version') ?? app.getVersion()
+  const startedAt = extractField(combinedText, 'startedAt') ?? mtimeIso
+  const lastAliveAt = extractField(combinedText, 'lastAliveAt') ?? mtimeIso
+  const rawFaults = extractNumberField(combinedText, 'faults')
+  const faults =
+    rawFaults !== null && Number.isFinite(rawFaults) && rawFaults > 0 ? Math.floor(rawFaults) : 0
+  const firstFaultAt = extractField(combinedText, 'firstFaultAt')
+  const firstFaultSummary = extractField(combinedText, 'firstFaultSummary')
+
+  const record: RunRecord = {
+    version,
+    startedAt,
+    lastAliveAt,
+    exit: null,
+    faults,
+    firstFaultAt,
+    firstFaultSummary,
+  }
+
+  return {
+    record,
+    status: 'vanished',
+  }
+}
+
+export function readPreviousRun(): PreviousRun | null {
+  const target = runStateFile()
+  const temporary = `${target}.tmp`
+
+  let temporaryExists = false
+  try {
+    temporaryExists = fs.existsSync(temporary)
+  } catch {
+    temporaryExists = false
+  }
+
+  let targetExists = false
+  try {
+    targetExists = fs.existsSync(target)
+  } catch {
+    targetExists = false
+  }
+
+  if (!targetExists && !temporaryExists) {
     // No marker: a fresh install, a wiped profile, or a version that predates
     // this file. Not an unclean exit — claiming a crash we cannot evidence
     // would be the same kind of lie as the tray icon in #43.
     return null
   }
-  try {
-    const parsed: unknown = JSON.parse(text.replace(/^\uFEFF/, ''))
-    const record = asRunRecord(parsed)
-    if (record === null) return null
-    return { record, status: statusOf(record) }
-  } catch (err) {
-    logError('[lifecycle] could not read the previous run marker', err)
-    return null
+
+  let tempText: string | null = null
+  if (temporaryExists) {
+    try {
+      tempText = fs.readFileSync(temporary, 'utf8')
+    } catch {
+      tempText = null
+    }
   }
+
+  let targetText: string | null = null
+  if (targetExists) {
+    try {
+      targetText = fs.readFileSync(target, 'utf8')
+    } catch {
+      targetText = null
+    }
+  }
+
+  // If a lingering .tmp file is present, a previous writeMarker() was interrupted
+  // before renameSync completed. The previous run ended abnormally during marker
+  // recording (#223).
+  if (temporaryExists) {
+    logWarn(
+      '[lifecycle] detected lingering temporary run marker; prior run was interrupted during state recording',
+    )
+    try {
+      fs.unlinkSync(temporary)
+    } catch {
+      // Ignore unlinking error
+    }
+
+    // Try parsing the temporary file first since it may carry the newest in-flight state
+    if (tempText !== null) {
+      try {
+        const parsed: unknown = JSON.parse(tempText.replace(/^\uFEFF/, ''))
+        const record = asRunRecord(parsed)
+        if (record !== null) {
+          record.exit = null
+          return { record, status: 'vanished' }
+        }
+      } catch {
+        // Fall through to target file or synthesized record
+      }
+    }
+
+    // If temporary was truncated, try target file for historical timestamps/version
+    // and overlay any newer fields recovered from temporary
+    if (targetText !== null) {
+      try {
+        const parsed: unknown = JSON.parse(targetText.replace(/^\uFEFF/, ''))
+        const record = asRunRecord(parsed)
+        if (record !== null) {
+          if (tempText !== null) {
+            const tempVersion = extractField(tempText, 'version')
+            if (tempVersion !== null) record.version = tempVersion
+            const tempStartedAt = extractField(tempText, 'startedAt')
+            if (tempStartedAt !== null) record.startedAt = tempStartedAt
+            const tempLastAlive = extractField(tempText, 'lastAliveAt')
+            if (tempLastAlive !== null) record.lastAliveAt = tempLastAlive
+            const tempFaults = extractNumberField(tempText, 'faults')
+            if (tempFaults !== null) record.faults = tempFaults
+            const tempFirstFaultAt = extractField(tempText, 'firstFaultAt')
+            if (tempFirstFaultAt !== null) record.firstFaultAt = tempFirstFaultAt
+            const tempFirstFaultSummary = extractField(tempText, 'firstFaultSummary')
+            if (tempFirstFaultSummary !== null) record.firstFaultSummary = tempFirstFaultSummary
+          }
+          record.exit = null
+          return { record, status: 'vanished' }
+        }
+      } catch {
+        // Fall through to synthesized record
+      }
+    }
+
+    return recoverInterruptedRun(target, temporary, targetText, tempText)
+  }
+
+  // temporary does not exist; only target exists
+  if (targetText !== null) {
+    try {
+      const parsed: unknown = JSON.parse(targetText.replace(/^\uFEFF/, ''))
+      const record = asRunRecord(parsed)
+      if (record !== null) {
+        return { record, status: statusOf(record) }
+      }
+      logWarn(
+        '[lifecycle] previous run marker has invalid record structure; treating as abnormal run',
+      )
+    } catch {
+      logWarn('[lifecycle] previous run marker is corrupted or truncated')
+    }
+  }
+
+  // target exists but is 0-byte, truncated, or invalid JSON (#223)
+  logWarn(
+    '[lifecycle] recognizing abnormal termination from truncated or invalid previous run marker',
+  )
+  return recoverInterruptedRun(target, temporary, targetText, tempText)
 }
 
 /**
@@ -310,7 +487,7 @@ function readPreviousRun(): PreviousRun | null {
  * know: a run that vanished outranks everything, and "it exited" is only ever
  * called CLEAN when nothing went unhandled along the way.
  */
-function statusOf(record: RunRecord): PreviousRunStatus {
+export function statusOf(record: RunRecord): PreviousRunStatus {
   if (record.exit === null) {
     // A version that is not this one means the build that wrote the marker is
     // not the build reading it: the installer closed it (issue #61 must not
@@ -324,7 +501,7 @@ function statusOf(record: RunRecord): PreviousRunStatus {
 // Hand-written validation rather than a cast: the file is on disk in a folder
 // the user can edit, and a garbled marker must degrade to "no previous run",
 // never to a crash on the startup path.
-function asRunRecord(value: unknown): RunRecord | null {
+export function asRunRecord(value: unknown): RunRecord | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
   const raw = value as Record<string, unknown>
   const version = typeof raw['version'] === 'string' ? raw['version'] : ''
@@ -345,11 +522,12 @@ function asRunRecord(value: unknown): RunRecord | null {
   return { version, startedAt, lastAliveAt, exit, faults, firstFaultAt, firstFaultSummary }
 }
 
-function isExitKind(value: unknown): value is ExitKind {
+export function isExitKind(value: unknown): value is ExitKind {
   return (
     value === 'user-quit' ||
     value === 'update-restart' ||
     value === 'startup-failure' ||
+    value === 'unattended-save' ||
     value === 'unknown'
   )
 }

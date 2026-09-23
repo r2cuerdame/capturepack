@@ -12,15 +12,17 @@
 // read is an empty ledger rather than a refusal to run.
 
 import { app, safeStorage } from 'electron'
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import {
   type ActionConfig,
   type ActionManifest,
+  type ActionOutcome,
   type ActionResult,
   type PackState,
   type PipelineStep,
   idempotencyKey,
+  mergeActionResults,
 } from '../../shared/actions'
 import { runPipeline } from '../../shared/actionPipeline'
 import { logError, logInfo } from '../log'
@@ -281,9 +283,13 @@ function executorFor(request: ActionRunRequest) {
     if (!isAcceptableWebhookUrl(settings.url)) {
       throw new Error('the webhook URL must be https, or http on this machine, and carry no credentials')
     }
+    const secret = readActionSecret(step.config.configId)
+    if (secret === null && hasActionSecret(step.config.configId)) {
+      throw new Error('configured webhook secret could not be decrypted')
+    }
     await deliverWebhook(request.packDir, {
       url: settings.url,
-      secret: readActionSecret(step.config.configId),
+      secret,
       timeoutMs: step.config.timeoutMs,
     })
   }
@@ -291,10 +297,88 @@ function executorFor(request: ActionRunRequest) {
 
 const realClock = {
   now: () => Date.now(),
-  delay: (ms: number) =>
+  delay: (ms: number, signal?: AbortSignal) =>
     new Promise<void>((resolve) => {
-      setTimeout(resolve, ms)
+      if (signal?.aborted) {
+        resolve()
+        return
+      }
+
+      const timer = setTimeout(() => {
+        signal?.removeEventListener('abort', cancel)
+        resolve()
+      }, ms)
+      function cancel(): void {
+        clearTimeout(timer)
+        resolve()
+      }
+      signal?.addEventListener('abort', cancel, { once: true })
     }),
+}
+
+function actionResultsPath(packDir: string): string {
+  return path.join(packDir, 'plugins', 'action-results.json')
+}
+
+/**
+ * Read the durable action execution results recorded for a pack.
+ * Returns an empty array if no results have been recorded or if the file is unreadable.
+ */
+export function readActionResults(packDir: string): ActionResult[] {
+  try {
+    const target = actionResultsPath(packDir)
+    if (!existsSync(target)) return []
+    const parsed: unknown = JSON.parse(readFileSync(target, 'utf8'))
+    if (!Array.isArray(parsed)) return []
+    const results: ActionResult[] = []
+    for (const item of parsed) {
+      if (
+        typeof item === 'object' && item !== null
+        && typeof item.actionId === 'string'
+        && typeof item.configId === 'string'
+        && typeof item.outcome === 'string'
+        && typeof item.attempts === 'number'
+        && typeof item.durationMs === 'number'
+        && typeof item.retryable === 'boolean'
+      ) {
+        results.push({
+          actionId: item.actionId,
+          configId: item.configId,
+          outcome: item.outcome as ActionOutcome,
+          attempts: item.attempts,
+          durationMs: item.durationMs,
+          ...(typeof item.message === 'string' ? { message: item.message } : {}),
+          retryable: item.retryable,
+        })
+      }
+    }
+    return results
+  } catch (error) {
+    logError('[actions] could not read action results:', error)
+    return []
+  }
+}
+
+export { mergeActionResults } from '../../shared/actions'
+
+/**
+ * Persist action run outcomes to plugins/action-results.json inside the pack folder.
+ * Merges newly produced results by configId and writes atomically.
+ */
+export function persistActionResults(packDir: string, newResults: readonly ActionResult[]): void {
+  if (newResults.length === 0) return
+  try {
+    const existing = readActionResults(packDir)
+    const merged = mergeActionResults(existing, newResults)
+    const dir = path.join(packDir, 'plugins')
+    mkdirSync(dir, { recursive: true })
+    const target = actionResultsPath(packDir)
+    const temporary = `${target}.tmp`
+    writeFileSync(temporary, JSON.stringify(merged, null, 2), 'utf8')
+    renameSync(temporary, target)
+  } catch (error) {
+    logError('[actions] could not persist action results:', error)
+  }
 }
 
 /**
@@ -317,6 +401,7 @@ export async function runActionsForPack(request: ActionRunRequest): Promise<read
       clock: realClock,
     })
     recordCompleted(request.packId, run.newCompletedKeys)
+    persistActionResults(request.packDir, run.results)
     for (const result of run.results) {
       logInfo(
         `[actions] ${result.actionId} ${result.outcome}`
@@ -345,6 +430,7 @@ export async function retryAction(
 ): Promise<ActionResult | null> {
   const config = request.configs.find((candidate) => candidate.configId === configId)
   if (config === undefined) return null
+  if (!config.enabled) return null
   const manifest = findAction(config.actionId)
   if (manifest === undefined) return null
 

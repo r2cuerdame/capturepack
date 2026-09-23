@@ -63,6 +63,7 @@ import type { AuthoredMotionSpace } from '../shared/track'
 import type { DomPluginPayload } from './exporter'
 import type { Language } from '../shared/i18n'
 import {
+  isRenderInFlight,
   renderTrimmedReplay,
   startAnnotatedRender,
   startDisplayRender,
@@ -348,6 +349,10 @@ export function startEditFlow(dirPath: string, settings: Settings): boolean {
   if (flowActive) {
     focusActiveEditor()
     logWarn(`[capture] re-edit of ${path.basename(dirPath)} requested while a flow was already open`)
+    return false
+  }
+  if (isRenderInFlight(dirPath)) {
+    logWarn(`[capture] re-edit of ${path.basename(dirPath)} requested while render was in flight`)
     return false
   }
   logInfo(`[capture] re-edit requested: ${path.basename(dirPath)}`)
@@ -1102,7 +1107,7 @@ function captureMetadataFromManifest(manifest: Manifest): {
   // their recorder failed and only snapshot.png survived. Do not rewrite that
   // ambiguous legacy evidence as an explicitly requested full-screen still.
   if (manifest.capture_kind !== 'image') return { captureKind: 'video' }
-  if (manifest.media.replay !== null || manifest.media.displays !== undefined) {
+  if (typeof manifest.media.replay === 'string' || manifest.media.displays !== undefined) {
     throw new Error('image CapturePack must not declare replay or per-display media')
   }
   const scope = manifest.media.image_scope
@@ -3469,8 +3474,9 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
   // later screen and silently point each display's index at the wrong one.
   // A placeholder keeps the positions; the bounds x scale of the display that
   // refers to it is the honest substitute where one exists.
-  const loadedScreens = Array.isArray(manifest.environment?.screens)
-    ? manifest.environment.screens.map((s, i) =>
+  const manifestScreens = manifest.environment?.screens
+  const loadedScreens = Array.isArray(manifestScreens)
+    ? manifestScreens.map((s, i) =>
         s !== null && typeof s === 'object' && typeof s.width === 'number' && typeof s.height === 'number'
           ? { width: s.width, height: s.height, scale: typeof s.scale === 'number' && s.scale > 0 ? s.scale : 1 }
           : screenFromDisplay(manifest, i + 1),
@@ -3500,7 +3506,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
   const reopenedContextDisplays = reopenedContextDisplayTargets({
     snapshotWidth: width,
     snapshotHeight: height,
-    screens: manifest.environment.screens,
+    screens: loadedScreens,
     displays: manifest.media.displays,
     loadedDisplays: loadedEditorDisplayList,
     cropBounds: manifest.media.crop_bounds,

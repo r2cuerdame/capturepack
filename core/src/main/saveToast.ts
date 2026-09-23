@@ -4,15 +4,21 @@
 // blurred box, and the background render status. Auto-closes after 30 s.
 import { app, BrowserWindow, clipboard, ipcMain, screen, shell } from 'electron'
 import type { IpcMainEvent, IpcMainInvokeEvent } from 'electron'
+import { existsSync, readFileSync } from 'node:fs'
 import * as path from 'node:path'
 import { IPC } from '../shared/ipc'
 import type {
+  ActionRetryResult,
   ReplayUnavailablePayload,
+  ToastActionResultsPayload,
   ToastInitPayload,
   ToastRenderState,
 } from '../shared/ipc'
+import { type ActionResult, mergeActionResults } from '../shared/actions'
 import { analyzePackPrompt } from '../shared/prompt'
 import { copyTextToClipboard } from './clipboard'
+import { readActionResults, retryAction } from './actions/host'
+import { loadSettings } from './settings'
 
 const TOAST_WIDTH = 420
 const TOAST_HEIGHT = 180
@@ -32,6 +38,7 @@ interface ActiveToast {
   // The 30 s auto-close, armed only once nothing is in flight (see below).
   timer: NodeJS.Timeout | null
   ceiling: NodeJS.Timeout
+  actionResults: ActionResult[]
 }
 
 /** True while the toast is reporting work the user is waiting on. */
@@ -85,7 +92,11 @@ export function showSaveToast(options: {
   active = null
 
   const work = screen.getPrimaryDisplay().workArea
-  const height = TOAST_HEIGHT + (options.replayUnavailable === null ? 0 : REPLAY_WARNING_HEIGHT)
+  const settings = loadSettings().settings
+  const actionResults = readActionResults(options.folderPath)
+  const actionCount = actionResults.length
+  const actionExtraHeight = actionCount > 0 ? Math.min(actionCount * 32 + 16, 140) : 0
+  const height = TOAST_HEIGHT + (options.replayUnavailable === null ? 0 : REPLAY_WARNING_HEIGHT) + actionExtraHeight
   const win = new BrowserWindow({
     x: work.x + work.width - TOAST_WIDTH - TOAST_MARGIN,
     y: work.y + work.height - height - TOAST_MARGIN,
@@ -108,7 +119,13 @@ export function showSaveToast(options: {
   const ceiling = setTimeout(() => {
     if (!win.isDestroyed()) win.close()
   }, MAX_OPEN_MS)
-  const toast: ActiveToast = { win, folderPath: options.folderPath, timer: null, ceiling }
+  const toast: ActiveToast = {
+    win,
+    folderPath: options.folderPath,
+    timer: null,
+    ceiling,
+    actionResults: [...actionResults],
+  }
   armAutoClose(toast, options.renderState)
   win.on('closed', () => {
     if (toast.timer !== null) clearTimeout(toast.timer)
@@ -124,6 +141,8 @@ export function showSaveToast(options: {
       replayUnavailable: options.replayUnavailable,
       renderState: options.renderState,
       uiLanguage: options.uiLanguage,
+      actionResults,
+      actionConfigs: settings.actionConfigs,
     }
     win.webContents.send(IPC.toastInit, init)
     // showInactive: a toast must never steal focus from the user's work.
@@ -154,6 +173,40 @@ export function updateToastRenderStatus(
   armAutoClose(active, state)
 }
 
+/**
+ * Push updated action execution results to the toast for `folderPath`.
+ */
+export function updateToastActionResults(
+  folderPath: string,
+  results: readonly ActionResult[],
+): void {
+  if (active === null || active.win.isDestroyed()) return
+  if (active.folderPath !== folderPath) return
+  const settings = loadSettings().settings
+  const stored = readActionResults(folderPath)
+  const base = stored.length > 0 ? stored : active.actionResults
+  const effective = mergeActionResults(base, results)
+  active.actionResults = effective
+  const payload: ToastActionResultsPayload = {
+    results: effective,
+    actionConfigs: settings.actionConfigs,
+  }
+  active.win.webContents.send(IPC.toastActionResults, payload)
+  const actionCount = effective.length
+  const actionExtraHeight = actionCount > 0 ? Math.min(actionCount * 32 + 16, 140) : 0
+  const work = screen.getPrimaryDisplay().workArea
+  const current = active.win.getBounds()
+  const targetHeight = TOAST_HEIGHT + actionExtraHeight
+  if (current.height < targetHeight) {
+    active.win.setBounds({
+      x: work.x + work.width - TOAST_WIDTH - TOAST_MARGIN,
+      y: work.y + work.height - targetHeight - TOAST_MARGIN,
+      width: TOAST_WIDTH,
+      height: targetHeight,
+    })
+  }
+}
+
 function fromActiveToast(event: IpcMainEvent | IpcMainInvokeEvent): ActiveToast | null {
   if (active === null || active.win.isDestroyed()) return null
   return event.sender === active.win.webContents ? active : null
@@ -181,10 +234,66 @@ function registerToastIpc(): void {
     return copyTextToClipboard(analyzePrompt(toast.folderPath))
   })
 
+  ipcMain.handle(IPC.toastActionResults, (event): ActionResult[] => {
+    const toast = fromActiveToast(event)
+    if (toast === null) return []
+    const stored = readActionResults(toast.folderPath)
+    return stored.length > 0 ? stored : toast.actionResults
+  })
+
+  ipcMain.handle(IPC.toastActionRetry, async (event, configId: unknown): Promise<ActionRetryResult> => {
+    const toast = fromActiveToast(event)
+    if (toast === null) return { ok: false, error: 'No active toast' }
+    if (typeof configId !== 'string' || configId === '') {
+      return { ok: false, error: 'Invalid config id' }
+    }
+    const settings = loadSettings().settings
+    const config = settings.actionConfigs.find((c) => c.configId === configId)
+    if (config === undefined || !config.enabled) {
+      return { ok: false, error: 'Action configuration is disabled or not found' }
+    }
+    const manifestPath = path.join(toast.folderPath, 'manifest.json')
+    if (!existsSync(manifestPath)) {
+      return { ok: false, error: 'Manifest not found' }
+    }
+    let packId = ''
+    try {
+      const raw = readFileSync(manifestPath, 'utf8')
+      const parsed: unknown = JSON.parse(raw)
+      if (typeof parsed === 'object' && parsed !== null) {
+        const id = (parsed as Record<string, unknown>).id
+        packId = typeof id === 'string' ? id : ''
+      }
+    } catch {
+      return { ok: false, error: 'Could not read pack manifest' }
+    }
+    if (packId === '') {
+      return { ok: false, error: 'Empty pack id' }
+    }
+    try {
+      const result = await retryAction(
+        {
+          packDir: toast.folderPath,
+          packId,
+          packState: 'complete',
+          configs: settings.actionConfigs,
+          webhooks: settings.actionWebhooks,
+        },
+        configId,
+      )
+      if (result === null) {
+        return { ok: false, error: 'Action retry returned no result' }
+      }
+      toast.actionResults = mergeActionResults(toast.actionResults, [result])
+      return { ok: true, result }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
   ipcMain.on(IPC.toastClose, (event) => {
     const toast = fromActiveToast(event)
     if (toast === null) return
     toast.win.close()
   })
-
 }

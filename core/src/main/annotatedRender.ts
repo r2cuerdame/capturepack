@@ -2,7 +2,7 @@
 // replay, a hidden BrowserWindow plays replay.webm into a canvas, draws the
 // per-frame annotation overlays (blur -> border -> number badge -> text,
 // lifetime-gated, GLOBAL display numbers, no editor controls), records the
-// canvas, and returns webm bytes; main writes replay_annotated.webm into the
+// canvas, and returns video bytes; main writes replay_annotated.(webm|mp4) into the
 // pack folder and declares it in manifest.json. Failures are logged, never
 // fatal — the pack stays valid without the annotated view.
 //
@@ -18,13 +18,14 @@ import * as path from 'node:path'
 import { IPC } from '../shared/ipc'
 import type { RenderFramePayload, RenderResultPayload, RenderStartPayload } from '../shared/ipc'
 import type { Language } from '../shared/i18n'
-import { displayAnnotatedName, displayFramesDir, keyframeFileName } from '../shared/keyframes'
+import { displayFramesDir, keyframeFileName } from '../shared/keyframes'
 import type { Annotation, ManifestKeyframe } from '../shared/types'
 import type { AuthoredMotionSpace } from '../shared/track'
 import {
   BoundedBackgroundMediaQueue,
   copyBufferResponsively,
 } from './backgroundMediaQueue'
+import { writeAnnotatedReplayOutput } from './annotatedReplayOutput'
 import { refreshPackDocs, setManifestRenderOutputs, type PackHandle } from './exporter'
 import { beginPackOperation } from './packOperations'
 import { PackRenderBatchTracker, type RenderBatchFinish } from './renderBatch'
@@ -51,9 +52,9 @@ export interface AnnotatedRenderJob {
   // declared, so their image links describe what the render actually wrote.
   docLanguage?: Language
   // WHICH captured display this job renders (GOAL "Multi-Monitor Support").
-  // Absent = the focused display: replay_annotated.webm + frames/, declared as
+  // Absent = the focused display: replay_annotated.(webm|mp4) + frames/, declared as
   // the top-level media. A 1-based index renders THAT display's own boxes into
-  // replay_annotated-d<N>.webm + frames-d<N>/, declared inside its
+  // replay_annotated-d<N>.(webm|mp4) + frames-d<N>/, declared inside its
   // media.displays entry — a box belongs to the screen it was drawn on, so a
   // display's rendering may only ever carry its own.
   display?: number
@@ -234,8 +235,6 @@ async function renderAnnotatedReplay(
   // removes frames/ and rewrites it, so another render of the same pack landing
   // between the writes and the declaration would leave the manifest pointing at
   // files that no longer exist.
-  const video =
-    job.display === undefined ? 'replay_annotated.webm' : displayAnnotatedName(job.display)
   const framesDir = job.display === undefined ? 'frames' : displayFramesDir(job.display)
   await enqueueRender(async (signal) => {
     // Allocate/copy only after this job owns the single media lane. Queued
@@ -253,6 +252,9 @@ async function renderAnnotatedReplay(
       height: job.height,
       fps: job.fps,
       durationMs: job.replayDurationMs,
+      // Keep the derived replay in the source replay's container so its
+      // manifest filename and bytes agree for both WebM and MP4 captures.
+      preferMimeType: job.replayMimeType,
       // The annotated stills come out of this same pass (SPEC §7.3).
       keyframes: true,
     }
@@ -264,7 +266,12 @@ async function renderAnnotatedReplay(
     )
     throwIfRenderAborted(signal)
     if (result.webm === undefined) throw new Error('render window returned no video')
-    await writeFile(path.join(handle.dirPath, video), Buffer.from(result.webm))
+    await writeAnnotatedReplayOutput(
+      handle.dirPath,
+      Buffer.from(result.webm),
+      job.replayMimeType,
+      job.display,
+    )
     throwIfRenderAborted(signal)
     // The stills are the smaller half of this job: losing them must never cost
     // the annotated replay its declaration (SPEC §5.7 — keyframes are optional).
@@ -415,7 +422,7 @@ async function renderKeyframeStill(handle: PackHandle, job: KeyframeStillJob): P
 /**
  * Writes frames/ from scratch and returns the manifest declarations.
  * Stale stills never outlive the render that replaced them: the directory is
- * removed first (the same rule replay_annotated.webm follows), so a re-edit or
+ * removed first (the same rule replay_annotated.(webm|mp4) follows), so a re-edit or
  * a History re-render can only ever leave the CURRENT set behind.
  */
 async function writeKeyframes(

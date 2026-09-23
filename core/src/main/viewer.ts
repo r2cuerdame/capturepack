@@ -50,7 +50,9 @@ export function safeViewerPath(value: unknown): string | null {
   ) {
     return null
   }
-  const segments = value.split('/')
+  const normalized = value.endsWith('/') ? value.slice(0, -1) : value
+  if (normalized === '') return null
+  const segments = normalized.split('/')
   if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
     return null
   }
@@ -330,7 +332,10 @@ ${annotations
     const marker = numbers.get(annotation.annotation_id)
     const display = annotationDisplayIndex(annotation, focused, declared)
     const bounds = annotation.bounds
-    const text = annotation.text.trim() === '' ? t('pack.none') : annotation.text
+    const text =
+      typeof annotation.text === 'string' && annotation.text.trim() !== ''
+        ? annotation.text
+        : t('pack.none')
     const flags: string[] = []
     if (annotation.blur) flags.push('blur')
     if (annotation.numbered) flags.push('numbered')
@@ -413,7 +418,7 @@ function inventory(
     const safe = safeViewerPath(value)
     if (safe !== null) files.add(safe)
   }
-  if (annotationsFile !== undefined && (annotationsFile.annotations?.length ?? 0) > 0) {
+  if (Array.isArray(annotationsFile?.annotations) && annotationsFile.annotations.length > 0) {
     files.add('annotations.json')
   }
   add(manifest.media.snapshot)
@@ -462,13 +467,16 @@ export function buildViewerHtml(
   const captureKind = captureKindOf(manifest)
   const title = manifest.title ?? t('pack.untitled')
   const focused = focusedDisplayIndex(manifest.media.displays)
-  const blurCount = (annotationsFile?.annotations ?? []).filter((annotation) => annotation.blur).length
+  const annotations = Array.isArray(annotationsFile?.annotations)
+    ? annotationsFile.annotations
+    : []
+  const blurCount = annotations.filter((annotation) => Boolean(annotation?.blur)).length
   const duration =
     captureKind === 'video' && manifest.media.replay_duration_ms !== undefined
       ? `${(manifest.media.replay_duration_ms / 1000).toFixed(1)}s`
       : '—'
-  const screens = manifest.environment.screens
-    .map((screen) => `${screen.width}×${screen.height} @${screen.scale}x`)
+  const screens = (manifest.environment.screens ?? [])
+    .map((screen) => `${screen.width}×${screen.height} @${screen.scale ?? 1}x`)
     .join('; ')
   const mainMedia = primaryMedia(manifest, captureKind)
   const privacyWarning =
@@ -531,7 +539,7 @@ a:focus-visible,summary:focus-visible,video:focus-visible{outline:3px solid var(
 <div><dt>Capture</dt><dd>${escapeHtml(captureKind)}${captureKind === 'image' && manifest.media.image_scope !== undefined ? ` · ${escapeHtml(manifest.media.image_scope)}` : ''}</dd></div>
 <div><dt>${escapeHtml(t('pack.application'))}</dt><dd>${escapeHtml(manifest.environment.app ?? t('pack.unknown'))}</dd></div>
 <div><dt>${escapeHtml(t('pack.duration'))}</dt><dd>${escapeHtml(duration)}</dd></div>
-<div><dt>${escapeHtml(t('pack.os'))}</dt><dd>${escapeHtml(`${manifest.environment.os} ${manifest.environment.os_version}`)}</dd></div>
+<div><dt>${escapeHtml(t('pack.os'))}</dt><dd>${escapeHtml(manifest.environment.os_version ? `${manifest.environment.os} ${manifest.environment.os_version}` : manifest.environment.os)}</dd></div>
 <div><dt>${escapeHtml(t('pack.screens'))}</dt><dd>${escapeHtml(screens === '' ? t('pack.unknown') : screens)}</dd></div>
 <div><dt>${escapeHtml(t('pack.display'))}</dt><dd>${escapeHtml(focused)} (${escapeHtml(t('pack.displayFocused'))})</dd></div>
 </dl>

@@ -14,6 +14,7 @@
 import { computeDisplayNumbers, nextDisplayNumber, planNumberPins } from '../src/shared/types'
 import type { Annotation, AnnotationsFile, Manifest } from '../src/shared/types'
 import { buildReadme } from '../src/main/packdocs'
+import '../test/annotations.test'
 
 let failed = 0
 
@@ -30,7 +31,7 @@ let seq = 0
 /** A numbered box. `at` is its creation instant; `start` where it sits on the replay. */
 function box(
   id: string,
-  at: string,
+  at?: string,
   opts: { start?: number; pin?: number; numbered?: boolean } = {},
 ): Annotation {
   seq += 1
@@ -43,7 +44,7 @@ function box(
     numbered: opts.numbered ?? true,
     ...(opts.pin === undefined ? {} : { number_pin: opts.pin }),
     tracking: { enabled: false },
-    created_at: at,
+    ...(typeof at === 'string' && at !== '' ? { created_at: at } : {}),
     z: seq,
   }
 }
@@ -80,18 +81,16 @@ console.log('ORDER — creation, not timeline')
 {
   // An externally written pack: no created_at anywhere. It must number exactly
   // as it always did — z, then id.
-  const bare = (id: string, z: number): Annotation =>
-    ({
-      annotation_id: id,
-      type: 'box',
-      bounds: { x: 0, y: 0, width: 10, height: 10 },
-      text: '',
-      numbered: true,
-      blur: false,
-      tracking: { enabled: false },
-      created_at: '',
-      z,
-    }) as Annotation
+  const bare = (id: string, z: number): Annotation => ({
+    annotation_id: id,
+    type: 'box',
+    bounds: { x: 0, y: 0, width: 10, height: 10 },
+    text: '',
+    numbered: true,
+    blur: false,
+    tracking: { enabled: false },
+    z,
+  })
   check('undated boxes keep the old z order', numbersOf([bare('ann_00000z', 5), bare('ann_00000y', 2)]), {
     ann_00000y: 1,
     ann_00000z: 2,
@@ -102,6 +101,20 @@ console.log('ORDER — creation, not timeline')
     numbersOf([bare('ann_0000nn', 1), box('ann_0000dd', '2026-07-29T18:00:00+09:00')]),
     { ann_0000dd: 1, ann_0000nn: 2 },
   )
+
+  // SPEC §8.3: z is OPTIONAL and defaults to array position
+  const noZ1 = box('ann_0000z1', '', { numbered: true })
+  delete (noZ1 as Partial<Annotation>).z
+  const noZ2 = box('ann_0000z2', '', { numbered: true })
+  delete (noZ2 as Partial<Annotation>).z
+  check('undated boxes omitting z default to array position', numbersOf([noZ1, noZ2]), {
+    ann_0000z1: 1,
+    ann_0000z2: 2,
+  })
+  check('undated boxes omitting z inverted array position', numbersOf([noZ2, noZ1]), {
+    ann_0000z2: 1,
+    ann_0000z1: 2,
+  })
 }
 
 console.log('PINS')
@@ -294,6 +307,116 @@ console.log('OPTIONAL numbered AND blur FLAGS (SPEC §8.3)')
     'buildReadme lists blur section only for blur: true box, not for omitted blur',
     readme.includes('Note: one annotation box is marked blur.'),
     true,
+  )
+}
+
+console.log('OPTIONAL created_at (SPEC §8.3)')
+{
+  // SPEC §8.3: created_at is OPTIONAL. An undated annotation omitting created_at
+  // satisfies Annotation contract directly and sorts after dated boxes.
+  const undated1: Annotation = {
+    annotation_id: 'ann_undated1',
+    type: 'box',
+    bounds: { x: 0, y: 0, width: 10, height: 10 },
+    text: '',
+    numbered: true,
+    tracking: { enabled: false },
+    z: 10,
+  }
+  const undated2: Annotation = {
+    annotation_id: 'ann_undated2',
+    type: 'box',
+    bounds: { x: 0, y: 0, width: 10, height: 10 },
+    text: '',
+    numbered: true,
+    tracking: { enabled: false },
+    z: 20,
+  }
+  const dated: Annotation = {
+    annotation_id: 'ann_dated01',
+    type: 'box',
+    bounds: { x: 0, y: 0, width: 10, height: 10 },
+    text: '',
+    numbered: true,
+    tracking: { enabled: false },
+    created_at: '2026-07-29T18:00:00+09:00',
+    z: 99,
+  }
+  check(
+    'dated box comes before undated box omitting created_at regardless of z',
+    numbersOf([undated2, dated, undated1]),
+    { ann_dated01: 1, ann_undated1: 2, ann_undated2: 3 },
+  )
+  check(
+    'undated boxes sort among themselves by z ascending',
+    numbersOf([undated2, undated1]),
+    { ann_undated1: 1, ann_undated2: 2 },
+  )
+  const tieZ1: Annotation = {
+    annotation_id: 'ann_tie_a',
+    type: 'box',
+    bounds: { x: 0, y: 0, width: 10, height: 10 },
+    text: '',
+    numbered: true,
+    tracking: { enabled: false },
+    z: 5,
+  }
+  const tieZ2: Annotation = {
+    annotation_id: 'ann_tie_b',
+    type: 'box',
+    bounds: { x: 0, y: 0, width: 10, height: 10 },
+    text: '',
+    numbered: true,
+    tracking: { enabled: false },
+    z: 5,
+  }
+  check(
+    'undated boxes with equal z break tie by annotation_id',
+    numbersOf([tieZ2, tieZ1]),
+    { ann_tie_a: 1, ann_tie_b: 2 },
+  )
+  // Boxes omitting both created_at and z fall back to array position
+  const noZCreatedA: Annotation = {
+    annotation_id: 'ann_no_z_a',
+    type: 'box',
+    bounds: { x: 0, y: 0, width: 10, height: 10 },
+    text: '',
+    numbered: true,
+    tracking: { enabled: false },
+  }
+  const noZCreatedB: Annotation = {
+    annotation_id: 'ann_no_z_b',
+    type: 'box',
+    bounds: { x: 0, y: 0, width: 10, height: 10 },
+    text: '',
+    numbered: true,
+    tracking: { enabled: false },
+  }
+  check(
+    'undated boxes omitting z fall back to array index',
+    numbersOf([noZCreatedA, noZCreatedB]),
+    { ann_no_z_a: 1, ann_no_z_b: 2 },
+  )
+  check(
+    'undated boxes omitting z in reversed array order',
+    numbersOf([noZCreatedB, noZCreatedA]),
+    { ann_no_z_b: 1, ann_no_z_a: 2 },
+  )
+  // Invalid string created_at is safely treated as unparseable/undated (NaN)
+  const invalidDate: Annotation = {
+    annotation_id: 'ann_invalid_date',
+    type: 'box',
+    bounds: { x: 0, y: 0, width: 10, height: 10 },
+    text: '',
+    numbered: true,
+    tracking: { enabled: false },
+    created_at: 'not-a-date',
+    z: 50,
+  }
+  check(
+    'unparseable created_at string is safely treated as undated',
+    numbersOf([invalidDate, dated]),
+    { ann_dated01: 1, ann_invalid_date: 2 },
   )
 }
 

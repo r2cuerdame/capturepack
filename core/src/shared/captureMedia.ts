@@ -69,6 +69,17 @@ export interface McpCaptureMedia {
   } | null
 }
 
+export interface McpCaptureReplay {
+  display_index: number
+  focused: boolean
+  /** True when the manifest declares media for more than one display. */
+  multi_display: boolean
+  replay: {
+    filename: string
+    duration_ms: number | null
+  } | null
+}
+
 type JsonRecord = Record<string, unknown>
 
 function recordOf(value: unknown): JsonRecord | null {
@@ -79,6 +90,21 @@ function recordOf(value: unknown): JsonRecord | null {
 
 function mediaOf(manifest: unknown): JsonRecord | null {
   return recordOf(recordOf(manifest)?.media)
+}
+
+const REPLAY_FILENAME_RE = /^(?:replay|replay-d[1-9][0-9]*)\.(?:webm|mp4)$/
+
+function replayOf(media: JsonRecord | null): McpCaptureReplay['replay'] {
+  const replay = media?.replay
+  if (typeof replay !== 'string' || !REPLAY_FILENAME_RE.test(replay)) return null
+  const duration = media?.replay_duration_ms
+  return {
+    filename: replay,
+    duration_ms:
+      typeof duration === 'number' && Number.isFinite(duration) && duration >= 0
+        ? duration
+        : null,
+  }
 }
 
 function explicitCaptureKind(manifest: unknown): CaptureKind | null {
@@ -130,24 +156,13 @@ export function captureMediaForMcp(manifest: unknown): McpCaptureMedia {
   const explicit = explicitCaptureKind(manifest)
   const captureKind = explicit ?? captureKindOf(manifest)
   const media = mediaOf(manifest)
-  const replay = media?.replay
-  const duration = media?.replay_duration_ms
 
   if (captureKind === 'video') {
     return {
       capture_kind: captureKind,
       legacy_inferred: explicit === null,
       snapshot: { file: 'snapshot.png', scope: 'video_frame' },
-      replay:
-        typeof replay === 'string' && /^replay\.(?:webm|mp4)$/.test(replay)
-          ? {
-              filename: replay,
-              duration_ms:
-                typeof duration === 'number' && Number.isFinite(duration) && duration >= 0
-                  ? duration
-                  : null,
-            }
-          : null,
+      replay: replayOf(media),
     }
   }
 
@@ -167,6 +182,51 @@ export function captureMediaForMcp(manifest: unknown): McpCaptureMedia {
     },
     // Even a malformed image manifest cannot make MCP advertise video bytes.
     replay: null,
+  }
+}
+
+/**
+ * Resolve one display's replay declaration for MCP.
+ *
+ * An omitted display means the focused display in a multi-display manifest,
+ * or display 1 for legacy/single-image packs. A declared display is resolved
+ * from its own media.displays[] entry, including a null replay, so a failed
+ * primary recorder cannot hide a valid secondary replay.
+ */
+export function captureReplayForDisplay(
+  manifest: unknown,
+  requestedDisplay?: number,
+): McpCaptureReplay | null {
+  const media = mediaOf(manifest)
+  const video = captureKindOf(manifest) === 'video'
+  const rawDisplays = media?.displays
+  if (!Array.isArray(rawDisplays)) {
+    if (requestedDisplay !== undefined && requestedDisplay !== 1) return null
+    return {
+      display_index: 1,
+      focused: true,
+      multi_display: false,
+      replay: video ? replayOf(media) : null,
+    }
+  }
+
+  const displays = rawDisplays
+    .map(recordOf)
+    .filter((display): display is JsonRecord => display !== null)
+  const focused = displays.find((display) => display.focused === true)
+  const focusedIndex =
+    typeof focused?.index === 'number' && Number.isInteger(focused.index) && focused.index > 0
+      ? focused.index
+      : 1
+  const displayIndex = requestedDisplay ?? focusedIndex
+  const selected = displays.find((display) => display.index === displayIndex)
+  if (selected === undefined) return null
+
+  return {
+    display_index: displayIndex,
+    focused: displayIndex === focusedIndex,
+    multi_display: displays.length > 1,
+    replay: video ? replayOf(selected) : null,
   }
 }
 
@@ -352,7 +412,7 @@ export function captureMediaViolations(
           !Number.isInteger(raster.width) ||
           !Number.isInteger(raster.height) ||
           raster.width !== snapshot.width ||
-          raster.height !== snapshot.height
+          raster.height < snapshot.height
         ) {
           violations.push({
             code: 'image.raster_dimensions_mismatch',

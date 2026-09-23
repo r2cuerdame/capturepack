@@ -4,12 +4,18 @@
 // pack has no API path by which MCP can ask for pixels outside snapshot.png.
 import { registerTools } from '../src/main/mcp/tools'
 import type { Annotation } from '../src/shared/types'
+import { z } from 'zod'
 
 type ToolResult = {
   content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>
   isError?: boolean
 }
 type ToolCallback = (args: Record<string, unknown>) => ToolResult | Promise<ToolResult>
+type ToolDefinition = {
+  title?: string
+  description?: string
+  inputSchema?: Record<string, unknown>
+}
 
 let failed = 0
 function check(ok: boolean, message: string): void {
@@ -45,8 +51,10 @@ function annotation(
 
 async function main(): Promise<void> {
   const callbacks = new Map<string, ToolCallback>()
+  const definitions = new Map<string, ToolDefinition>()
   const server = {
-    registerTool(name: string, _definition: unknown, callback: ToolCallback): void {
+    registerTool(name: string, definition: ToolDefinition, callback: ToolCallback): void {
+      definitions.set(name, definition)
       callbacks.set(name, callback)
     },
   }
@@ -84,6 +92,103 @@ async function main(): Promise<void> {
       },
     }),
     annotations: () => ({ reference_width: 2_560, reference_height: 1_440, annotations: multiAnnotations }),
+  }
+  const multiFrameReads: string[] = []
+  const multiFrameManifest = {
+    capture_kind: 'video',
+    id: 'multi-frame-pack',
+    title: 'Two display replay',
+    created_at: '2026-09-21T12:00:00+09:00',
+    environment: {
+      os: 'windows',
+      screens: [
+        { width: 1_920, height: 1_080, scale: 1 },
+        { width: 2_560, height: 1_440, scale: 1 },
+      ],
+    },
+    media: {
+      snapshot: 'snapshot.png',
+      snapshot_t_ms: 2_000,
+      replay: null,
+      keyframes: [],
+      displays: [
+        {
+          index: 1,
+          focused: true,
+          snapshot: 'snapshot.png',
+          snapshot_width: 1_920,
+          snapshot_height: 1_080,
+          replay: null,
+        },
+        {
+          index: 2,
+          focused: false,
+          snapshot: 'snapshot-d2.png',
+          snapshot_width: 2_560,
+          snapshot_height: 1_440,
+          replay: 'replay-d2.webm',
+          replay_duration_ms: 3_900,
+          keyframes: [
+            { file: 'frames-d2/frame-01_00-00.500.png', t_ms: 500 },
+            { file: 'frames-d2/frame-02_00-01.500.png', t_ms: 1_500 },
+            { file: 'frames-d0/frame-03_00-02.500.png', t_ms: 2_500 },
+          ],
+        },
+      ],
+    },
+    plugins: [],
+  }
+  const multiFramePack = {
+    id: multiFrameManifest.id,
+    path: 'C:\\packs\\multi-frame-pack',
+    kind: 'dir',
+    manifest: () => multiFrameManifest,
+    manifestText: () => JSON.stringify(multiFrameManifest),
+    report: () => null,
+    annotations: () => ({ reference_width: 1_920, reference_height: 1_080, annotations: [] }),
+    timeline: () => null,
+    plugins: () => [],
+    readText: () => null,
+    readBinary: (file: string) => {
+      multiFrameReads.push(file)
+      if (file === 'snapshot.png') return Buffer.from('focused-snapshot')
+      if (file === 'snapshot-d2.png') return Buffer.from('display-two-snapshot')
+      if (file === 'frames-d2/frame-01_00-00.500.png') return Buffer.from('display-two-frame-one')
+      if (file === 'frames-d2/frame-02_00-01.500.png') return Buffer.from('display-two-frame-two')
+      return null
+    },
+    fileSize: (file: string) => file === 'replay-d2.webm' ? 2_222 : null,
+    listFiles: () => [],
+    warnings: () => [],
+  }
+  const multiReplayManifest = {
+    ...multiFrameManifest,
+    id: 'multi-replay-pack',
+    media: {
+      ...multiFrameManifest.media,
+      replay: 'replay.mp4',
+      replay_duration_ms: 4_000,
+      displays: [
+        {
+          ...multiFrameManifest.media.displays[0],
+          replay: 'replay.mp4',
+          replay_duration_ms: 4_000,
+        },
+        multiFrameManifest.media.displays[1],
+      ],
+    },
+  }
+  const multiReplayPack = {
+    ...multiFramePack,
+    id: multiReplayManifest.id,
+    path: 'C:\\packs\\multi-replay-pack',
+    manifest: () => multiReplayManifest,
+    manifestText: () => JSON.stringify(multiReplayManifest),
+    fileSize: (file: string) => {
+      if (file === 'replay.mp4') return 4_444
+      if (file === 'replay-d2.webm') return 2_222
+      return null
+    },
   }
   const manifest = {
     capture_kind: 'image',
@@ -138,13 +243,177 @@ async function main(): Promise<void> {
     path: 'C:\\packs\\pack-with-report',
     report: () => reportText,
   }
+  const largeUiaPayload = JSON.stringify({
+    captured_at: '2026-09-21T12:00:00+09:00',
+    budget_ms: 700,
+    truncated: false,
+    windows: [{
+      hwnd: '123456',
+      title: 'CapturePack regression window',
+      process: 'capturepack',
+      class_name: 'Chrome_WidgetWin_1',
+      bounds: { x: 40, y: 80, width: 1_200, height: 800 },
+      client_bounds: { x: 48, y: 112, width: 1_184, height: 760 },
+      display: 2,
+      focused: true,
+      z: 0,
+      tree: 'collected',
+      element_count: 1_200,
+    }],
+    elements: Array.from({ length: 1_200 }, (_, index) => ({
+      name: `UI Automation control ${index}`,
+      control_type: 'Button',
+      automation_id: `control-${index}`,
+      class_name: 'Button',
+      bounds: { x: 50, y: 120 + index, width: 100, height: 20 },
+      depth: 1,
+      window: 0,
+    })),
+  })
+  check(largeUiaPayload.length > 100_000, 'window regression fixture exceeds the plugin inline limit')
+  const windowsPack = {
+    ...pack,
+    id: 'large-windows-uia-pack',
+    path: 'C:\\packs\\large-windows-uia-pack',
+    timeline: () => ({
+      events: [{ t_ms: 25, type: 'input.window.focus', source: 'windows', title: 'CapturePack regression window' }],
+    }),
+    plugins: () => [{
+      name: 'windows-uia',
+      version: '0.5.0',
+      files: ['plugins/windows-uia/meta.json', 'plugins/windows-uia/elements.json'],
+    }],
+    readText: (file: string) => {
+      if (file === 'plugins/windows-uia/meta.json') return JSON.stringify({ source: 'windows-uia' })
+      if (file === 'plugins/windows-uia/elements.json') return largeUiaPayload
+      return null
+    },
+  }
+  // A multi-minute video capture: the Markdown export must stay bounded rather
+  // than dumping every recorded pointer/window event into one response.
+  const longTimelineEvents = Array.from({ length: 500 }, (_, index) => ({
+    t_ms: index * 20,
+    type: 'input.pointer.move',
+    source: 'windows',
+    data: { x: index, y: index * 2 },
+  }))
+  const longTimelinePack = {
+    ...multiFramePack,
+    id: 'long-timeline-pack',
+    path: 'C:\\packs\\long-timeline-pack',
+    timeline: () => ({ t0: '2026-09-21T12:00:00+09:00', events: longTimelineEvents }),
+  }
+  const shortTimelineEvents = [
+    { t_ms: 10, type: 'input.window.focus', source: 'windows' },
+    { t_ms: 40, type: 'input.pointer.click', source: 'windows', data: { x: 5, y: 6 } },
+    { t_ms: 90, type: 'input.window.move', source: 'windows' },
+  ]
+  const shortTimelinePack = {
+    ...multiFramePack,
+    id: 'short-timeline-pack',
+    path: 'C:\\packs\\short-timeline-pack',
+    timeline: () => ({ t0: '2026-09-21T12:00:00+09:00', events: shortTimelineEvents }),
+  }
+  const preT0TimelineEvents = [
+    { t_ms: -4000, type: 'plugin.hotkey.down', source: 'plugin' },
+    { t_ms: -2500, type: 'input.pointer.move', source: 'windows', data: { x: 10, y: 20 } },
+    { t_ms: -500, type: 'input.pointer.click', source: 'windows', data: { x: 10, y: 20 } },
+    { t_ms: 0, type: 'core.capture.trigger', source: 'core' },
+    { t_ms: 1200, type: 'input.pointer.move', source: 'windows', data: { x: 15, y: 25 } },
+  ]
+  const preT0TimelinePack = {
+    ...multiFramePack,
+    id: 'pre-t0-timeline-pack',
+    path: 'C:\\packs\\pre-t0-timeline-pack',
+    timeline: () => ({ t0: '2026-09-21T12:00:00+09:00', events: preT0TimelineEvents }),
+  }
+  const invalidPluginPack = {
+    ...pack,
+    id: 'invalid-plugin-pack',
+    path: 'C:\\packs\\invalid-plugin-pack',
+    plugins: () => [{
+      name: 'broken-plugin',
+      version: '1.0.0',
+      files: ['plugins/broken-plugin/elements.json'],
+    }],
+    readText: (file: string) => file === 'plugins/broken-plugin/elements.json' ? '{"elements":[' : null,
+  }
+  const minimalPack = {
+    ...pack,
+    id: 'minimal-pack',
+    path: 'C:\\packs\\minimal-pack',
+    manifest: () => ({
+      format: '0.8.0',
+      id: 'minimal-pack',
+      capture_kind: 'image',
+      created_at: '2026-09-21T12:00:00+09:00',
+      media: {
+        snapshot: 'snapshot.png',
+        image_scope: 'fullscreen',
+      },
+    }),
+    annotations: () => null,
+    timeline: () => null,
+    readText: () => null,
+  }
+  const malformedAnnotationsPack = {
+    ...minimalPack,
+    id: 'malformed-annotations-pack',
+    path: 'C:\\packs\\malformed-annotations-pack',
+    readText: (file: string) => file === 'annotations.json' ? '{"annotations":[' : null,
+  }
+  const videoOmittedTimelinePack = {
+    ...multiFramePack,
+    id: 'video-no-timeline-pack',
+    path: 'C:\\packs\\video-no-timeline-pack',
+    timeline: () => null,
+    readText: () => null,
+  }
+  const videoMalformedTimelinePack = {
+    ...multiFramePack,
+    id: 'video-malformed-timeline-pack',
+    path: 'C:\\packs\\video-malformed-timeline-pack',
+    timeline: () => null,
+    readText: (file: string) => file === 'timeline.json' ? '{"events":[' : null,
+  }
+  const legacyNoTimelineManifest = {
+    format: '0.2.0',
+    id: 'legacy-no-timeline-pack',
+    created_at: '2026-01-01T12:00:00+09:00',
+    media: {
+      snapshot: 'snapshot.png',
+      replay: null,
+    },
+  }
+  const legacyNoTimelinePack = {
+    ...pack,
+    id: 'legacy-no-timeline-pack',
+    path: 'C:\\packs\\legacy-no-timeline-pack',
+    manifest: () => legacyNoTimelineManifest,
+    manifestText: () => JSON.stringify(legacyNoTimelineManifest),
+    annotations: () => null,
+    timeline: () => null,
+    readText: () => null,
+  }
   const store = {
     outputDir: 'C:\\packs',
     latest: () => pack,
     resolve: (id?: string) => {
       if (id === singlePack.id) return singlePack
       if (id === multiPack.id) return multiPack
+      if (id === multiFramePack.id) return multiFramePack
+      if (id === multiReplayPack.id) return multiReplayPack
       if (id === reportPack.id) return reportPack
+      if (id === windowsPack.id) return windowsPack
+      if (id === longTimelinePack.id) return longTimelinePack
+      if (id === shortTimelinePack.id) return shortTimelinePack
+      if (id === preT0TimelinePack.id) return preT0TimelinePack
+      if (id === invalidPluginPack.id) return invalidPluginPack
+      if (id === minimalPack.id) return minimalPack
+      if (id === malformedAnnotationsPack.id) return malformedAnnotationsPack
+      if (id === videoOmittedTimelinePack.id) return videoOmittedTimelinePack
+      if (id === videoMalformedTimelinePack.id) return videoMalformedTimelinePack
+      if (id === legacyNoTimelinePack.id) return legacyNoTimelinePack
       return pack
     },
     list: () => ({
@@ -234,11 +503,253 @@ async function main(): Promise<void> {
       timelineJson.available === false,
     'timeline reader explains the intentional absence for a still-image pack',
   )
+
+  const videoTimeline = await callbacks.get('capturepack_timeline')?.({ id: videoOmittedTimelinePack.id })
+  const videoTimelineJson = textJson(videoTimeline as ToolResult)
+  check(
+    videoTimeline?.isError !== true &&
+      videoTimelineJson.capture_kind === 'video' &&
+      videoTimelineJson.available === false &&
+      Array.isArray(videoTimelineJson.events) &&
+      videoTimelineJson.events.length === 0 &&
+      typeof videoTimelineJson.message === 'string',
+    'timeline reader returns non-error result with available: false on video pack omitting timeline.json',
+  )
+
+  const legacyTimeline = await callbacks.get('capturepack_timeline')?.({ id: legacyNoTimelinePack.id })
+  const legacyTimelineJson = textJson(legacyTimeline as ToolResult)
+  check(
+    legacyTimeline?.isError !== true &&
+      legacyTimelineJson.available === false &&
+      Array.isArray(legacyTimelineJson.events) &&
+      legacyTimelineJson.events.length === 0,
+    'timeline reader returns non-error result on legacy pack omitting timeline.json',
+  )
+
+  const malformedTimeline = await callbacks.get('capturepack_timeline')?.({ id: videoMalformedTimelinePack.id })
+  const malformedTimelineErr = (malformedTimeline as ToolResult)?.content.find((item) => item.type === 'text')?.text ?? ''
+  check(
+    malformedTimeline?.isError === true && malformedTimelineErr.includes('malformed'),
+    'timeline reader returns fatal tool error on corrupt timeline.json',
+  )
+
+  const timelineDef = definitions.get('capturepack_timeline')
+  check(
+    typeof timelineDef?.description === 'string' &&
+      timelineDef.description.includes('relative to t0') &&
+      timelineDef.description.includes('negative'),
+    'timeline description accurately states t_ms is relative to t0 and may be negative',
+  )
+
+  const timelineSchema = z.object(timelineDef?.inputSchema as z.ZodRawShape)
+  const schemaNegativeResult = timelineSchema.safeParse({ id: 'any-id', from_ms: -3000, to_ms: 0 })
+  check(
+    schemaNegativeResult.success,
+    'capturepack_timeline schema accepts negative from_ms and to_ms parameters',
+  )
+
+  const fromMsDesc = (timelineDef?.inputSchema?.from_ms as { description?: string })?.description ?? ''
+  const toMsDesc = (timelineDef?.inputSchema?.to_ms as { description?: string })?.description ?? ''
+  check(
+    fromMsDesc.includes('negative') && toMsDesc.includes('negative'),
+    'timeline from_ms and to_ms descriptions note offsets may be negative',
+  )
+
+  const preT0Slice = await callbacks.get('capturepack_timeline')?.({
+    id: preT0TimelinePack.id,
+    from_ms: -3000,
+    to_ms: 0,
+  })
+  const preT0SliceJson = textJson(preT0Slice as ToolResult)
+  const preT0SliceEvents = (preT0SliceJson.events as Array<{ t_ms: number }>) ?? []
+  check(
+    preT0Slice?.isError !== true &&
+      preT0SliceJson.total_events === 5 &&
+      preT0SliceJson.returned === 3 &&
+      preT0SliceEvents.length === 3 &&
+      preT0SliceEvents[0]?.t_ms === -2500 &&
+      preT0SliceEvents[1]?.t_ms === -500 &&
+      preT0SliceEvents[2]?.t_ms === 0,
+    'capturepack_timeline slices with negative bounds (-3000 to 0) returning matching pre-anchor events',
+  )
+
+  const preT0NegativeUpperOnly = await callbacks.get('capturepack_timeline')?.({
+    id: preT0TimelinePack.id,
+    to_ms: -1000,
+  })
+  const preT0NegativeUpperOnlyJson = textJson(preT0NegativeUpperOnly as ToolResult)
+  const preT0NegativeUpperEvents = (preT0NegativeUpperOnlyJson.events as Array<{ t_ms: number }>) ?? []
+  check(
+    preT0NegativeUpperOnly?.isError !== true &&
+      preT0NegativeUpperEvents.length === 2 &&
+      preT0NegativeUpperEvents[0]?.t_ms === -4000 &&
+      preT0NegativeUpperEvents[1]?.t_ms === -2500,
+    'capturepack_timeline filters events with negative to_ms bound',
+  )
+
+  const preT0NegativeLowerOnly = await callbacks.get('capturepack_timeline')?.({
+    id: preT0TimelinePack.id,
+    from_ms: -500,
+  })
+  const preT0NegativeLowerOnlyJson = textJson(preT0NegativeLowerOnly as ToolResult)
+  const preT0NegativeLowerEvents = (preT0NegativeLowerOnlyJson.events as Array<{ t_ms: number }>) ?? []
+  check(
+    preT0NegativeLowerOnly?.isError !== true &&
+      preT0NegativeLowerEvents.length === 3 &&
+      preT0NegativeLowerEvents[0]?.t_ms === -500 &&
+      preT0NegativeLowerEvents[1]?.t_ms === 0 &&
+      preT0NegativeLowerEvents[2]?.t_ms === 1200,
+    'capturepack_timeline filters events with negative from_ms bound',
+  )
   const markdown = await callbacks.get('capturepack_export_markdown')?.({})
   const markdownText = markdown?.content.find((item) => item.type === 'text')?.text ?? ''
   check(!markdownText.includes('## Timeline'), 'image Markdown export omits the video timeline section')
 
+  console.log('MARKDOWN EXPORT BOUNDS')
+  const longExport = await callbacks.get('capturepack_export_markdown')?.({ id: longTimelinePack.id })
+  const longExportText = longExport?.content.find((item) => item.type === 'text')?.text ?? ''
+  const longEventLines = longExportText
+    .split('\n')
+    .filter((line) => / ms — `input\.pointer\.move`/.test(line))
+  check(
+    longExport?.isError !== true && longExportText.includes('## Timeline (500 events'),
+    'Markdown export still reports the true total event count in the heading',
+  )
+  check(
+    longEventLines.length === 100,
+    `Markdown export emits at most 100 timeline event lines — got ${longEventLines.length}`,
+  )
+  check(
+    longEventLines[0]?.startsWith('- 0 ms —') === true &&
+      longEventLines[99]?.startsWith('- 1980 ms —') === true,
+    'Markdown export keeps the first 100 events in recorded order',
+  )
+  check(
+    longExportText.includes(
+      '- … and 400 more timeline events (use capturepack_timeline to inspect full event log or filter by time range).',
+    ),
+    'Markdown export names how many events were omitted and points at capturepack_timeline',
+  )
+  check(
+    longExportText.includes('## Plugins'),
+    'Markdown export still reaches the sections after the truncated timeline',
+  )
+  const shortExport = await callbacks.get('capturepack_export_markdown')?.({ id: shortTimelinePack.id })
+  const shortExportText = shortExport?.content.find((item) => item.type === 'text')?.text ?? ''
+  const shortEventLines = shortExportText.split('\n').filter((line) => / ms — `input\./.test(line))
+  check(
+    shortEventLines.length === shortTimelineEvents.length &&
+      !shortExportText.includes('more timeline events'),
+    'a timeline under the cap is still exported in full with no truncation notice',
+  )
+
+  console.log('WINDOWS')
+  const windowsResult = await callbacks.get('capturepack_windows')?.({ id: windowsPack.id })
+  check(windowsResult !== undefined && windowsResult.isError !== true, 'large UIA payload returns a non-error response')
+  const windowsJson = textJson(windowsResult as ToolResult)
+  const windowRows = windowsJson.windows as Array<Record<string, unknown>>
+  const firstWindow = windowRows[0]
+  check(
+    windowRows.length === 1 &&
+      firstWindow?.title === 'CapturePack regression window' &&
+      firstWindow?.process === 'capturepack' &&
+      firstWindow?.class_name === 'Chrome_WidgetWin_1' &&
+      firstWindow?.z === 0 &&
+      firstWindow?.focused === true &&
+      firstWindow?.tree === 'collected' &&
+      JSON.stringify(firstWindow?.bounds) === JSON.stringify({ x: 40, y: 80, width: 1_200, height: 800 }) &&
+      JSON.stringify(firstWindow?.client_bounds) === JSON.stringify({ x: 48, y: 112, width: 1_184, height: 760 }),
+    'capturepack_windows returns the validated top-level window layout',
+  )
+  check(
+    Array.isArray(windowsJson.window_events) && windowsJson.window_events.length === 1,
+    'capturepack_windows retains window and focus timeline events',
+  )
+  check(
+    !('window_plugins' in windowsJson) && !('elements' in windowsJson) && !JSON.stringify(windowsJson).includes('file too large to inline'),
+    'capturepack_windows omits raw UIA controls and plugin inline-limit errors',
+  )
+
+  console.log('PLUGIN SEARCH')
+  const findDomResult = await callbacks.get('capturepack_find_dom')?.({
+    id: windowsPack.id,
+    selector: 'control-1199',
+  })
+  const findDomJson = textJson(findDomResult as ToolResult)
+  const domMatches = findDomJson.matches as Array<Record<string, unknown>>
+  check(
+    findDomResult?.isError !== true &&
+      findDomJson.count === 1 &&
+      domMatches[0]?.plugin === 'windows-uia' &&
+      domMatches[0]?.file === 'plugins/windows-uia/elements.json' &&
+      domMatches[0]?.json_path === 'elements[1199].automation_id' &&
+      domMatches[0]?.value === 'control-1199',
+    'capturepack_find_dom searches plugin JSON beyond the 100k inline limit',
+  )
+  const searchResult = await callbacks.get('capturepack_search')?.({
+    id: windowsPack.id,
+    keyword: 'control-1199',
+  })
+  const searchJson = textJson(searchResult as ToolResult)
+  const searchHits = searchJson.hits as Record<string, unknown>
+  const pluginHits = searchHits.plugins as Array<Record<string, unknown>>
+  check(
+    searchResult?.isError !== true &&
+      searchJson.total_hits === 1 &&
+      pluginHits[0]?.json_path === 'elements[1199].automation_id' &&
+      pluginHits[0]?.value === 'control-1199',
+    'capturepack_search returns plugin hits beyond the 100k inline limit',
+  )
+  const domResult = textJson(
+    await callbacks.get('capturepack_dom')?.({ id: windowsPack.id }) as ToolResult,
+  )
+  const domPlugins = domResult.plugins as Array<Record<string, unknown>>
+  const domFiles = domPlugins[0]?.files as Array<Record<string, unknown>>
+  check(
+    domFiles.some((file) =>
+      file.file === 'plugins/windows-uia/elements.json' &&
+      typeof file.error === 'string' &&
+      file.error.includes('file too large to inline')),
+    'capturepack_dom retains the 100k plugin inline limit',
+  )
+  const invalidFindDom = textJson(
+    await callbacks.get('capturepack_find_dom')?.({ id: invalidPluginPack.id, selector: 'save' }) as ToolResult,
+  )
+  const invalidFindWarnings = invalidFindDom.warnings as Array<Record<string, unknown>>
+  check(
+    invalidFindDom.count === 0 &&
+      invalidFindWarnings[0]?.file === 'plugins/broken-plugin/elements.json' &&
+      String(invalidFindWarnings[0]?.error).startsWith('invalid JSON:') &&
+      String(invalidFindDom.message).includes('could not be searched'),
+    'capturepack_find_dom surfaces plugin parse failures instead of a silent false negative',
+  )
+  const invalidSearch = textJson(
+    await callbacks.get('capturepack_search')?.({ id: invalidPluginPack.id, keyword: 'save' }) as ToolResult,
+  )
+  const invalidSearchWarnings = invalidSearch.plugin_warnings as Array<Record<string, unknown>>
+  check(
+    invalidSearch.total_hits === 0 &&
+      invalidSearchWarnings[0]?.file === 'plugins/broken-plugin/elements.json' &&
+      String(invalidSearchWarnings[0]?.error).startsWith('invalid JSON:') &&
+      String(invalidSearch.message).includes('could not be searched'),
+    'capturepack_search surfaces plugin parse failures instead of a silent false negative',
+  )
+  const emptyWindowsResult = await callbacks.get('capturepack_windows')?.({ id: pack.id })
+  const emptyWindowsJson = textJson(emptyWindowsResult as ToolResult)
+  check(
+    Array.isArray(emptyWindowsJson.windows) &&
+      emptyWindowsJson.windows.length === 0 &&
+      Array.isArray(emptyWindowsJson.window_events) &&
+      emptyWindowsJson.window_events.length === 0 &&
+      typeof emptyWindowsJson.message === 'string',
+    'capturepack_windows explains when both window metadata and events are absent',
+  )
+
   console.log('FRAME')
+  check(
+    definitions.get('capturepack_frame')?.inputSchema?.display !== undefined,
+    'capturepack_frame schema accepts display',
+  )
   const frame = await callbacks.get('capturepack_frame')?.({})
   check(frame !== undefined && frame.isError !== true, 'capturepack_frame returns the selected image')
   check(
@@ -269,10 +780,113 @@ async function main(): Promise<void> {
     'a forged context-full keyframe declaration is ignored',
   )
 
+  console.log('MULTI-DISPLAY FRAME')
+  const displaySnapshot = await callbacks.get('capturepack_frame')?.({
+    id: multiFramePack.id,
+    display: 2,
+  })
+  check(
+    multiFrameReads.length === 1 && multiFrameReads[0] === 'snapshot-d2.png',
+    'display 2 without time_s reads its declared snapshot',
+  )
+  check(
+    displaySnapshot?.content.find((item) => item.type === 'image')?.data ===
+      Buffer.from('display-two-snapshot').toString('base64'),
+    'display 2 snapshot bytes are returned',
+  )
+  multiFrameReads.length = 0
+  const displayKeyframe = await callbacks.get('capturepack_frame')?.({
+    id: multiFramePack.id,
+    display: 2,
+    time_s: 1.4,
+  })
+  check(
+    multiFrameReads.length === 1 &&
+      multiFrameReads[0] === 'frames-d2/frame-02_00-01.500.png',
+    'display 2 time_s reads the nearest frames-d2 keyframe',
+  )
+  check(
+    displayKeyframe?.content.find((item) => item.type === 'image')?.data ===
+      Buffer.from('display-two-frame-two').toString('base64'),
+    'display 2 keyframe bytes are returned',
+  )
+  multiFrameReads.length = 0
+  await callbacks.get('capturepack_frame')?.({ id: multiFramePack.id })
+  check(
+    multiFrameReads.length === 1 && multiFrameReads[0] === 'snapshot.png',
+    'omitting display defaults to the focused display snapshot',
+  )
+  const multiFrameSummary = textJson(
+    await callbacks.get('capturepack_summary')?.({ id: multiFramePack.id }) as ToolResult,
+  )
+  const summaryKeyframes = multiFrameSummary.keyframes as Record<string, unknown>
+  const summaryDisplays = summaryKeyframes.displays as Array<Record<string, unknown>>
+  check(
+    summaryKeyframes.count === 2 &&
+      summaryDisplays.length === 1 &&
+      summaryDisplays[0]?.display === 2 &&
+      JSON.stringify(summaryDisplays[0]?.t_ms) === JSON.stringify([500, 1_500]),
+    'summary reports valid secondary-display keyframes and rejects malformed frame paths',
+  )
+
   console.log('REPLAY')
+  check(
+    definitions.get('capturepack_replay')?.inputSchema?.display !== undefined,
+    'capturepack_replay schema accepts display',
+  )
   const replay = await callbacks.get('capturepack_replay')?.({})
   const replayJson = textJson(replay as ToolResult)
   check(replayJson.capture_kind === 'image' && replayJson.replay === null, 'image replay is explicitly null')
+
+  const focusedReplay = textJson(
+    await callbacks.get('capturepack_replay')?.({ id: multiReplayPack.id }) as ToolResult,
+  )
+  const focusedReplayMedia = focusedReplay.replay as Record<string, unknown>
+  check(
+    focusedReplay.display_index === 1 &&
+      focusedReplay.focused === true &&
+      focusedReplayMedia.filename === 'replay.mp4' &&
+      focusedReplayMedia.duration_ms === 4_000 &&
+      focusedReplayMedia.size_bytes === 4_444,
+    'omitting display returns the focused display 1 replay metadata and context',
+  )
+  const explicitPrimaryReplay = textJson(
+    await callbacks.get('capturepack_replay')?.({ id: multiReplayPack.id, display: 1 }) as ToolResult,
+  )
+  check(
+    explicitPrimaryReplay.display_index === 1 &&
+      (explicitPrimaryReplay.replay as Record<string, unknown>).filename === 'replay.mp4',
+    'display 1 explicitly returns the primary replay metadata',
+  )
+
+  const secondaryReplay = textJson(
+    await callbacks.get('capturepack_replay')?.({ id: multiReplayPack.id, display: 2 }) as ToolResult,
+  )
+  const secondaryReplayMedia = secondaryReplay.replay as Record<string, unknown>
+  check(
+    secondaryReplay.display_index === 2 &&
+      secondaryReplay.focused === false &&
+      secondaryReplayMedia.filename === 'replay-d2.webm' &&
+      secondaryReplayMedia.duration_ms === 3_900 &&
+      secondaryReplayMedia.size_bytes === 2_222,
+    'display 2 returns replay-d2.webm metadata and context',
+  )
+
+  const missingPrimaryReplay = textJson(
+    await callbacks.get('capturepack_replay')?.({ id: multiFramePack.id }) as ToolResult,
+  )
+  check(
+    missingPrimaryReplay.display_index === 1 && missingPrimaryReplay.replay === null,
+    'a missing display 1 replay is reported for display 1 without hiding other displays',
+  )
+  const survivingSecondaryReplay = textJson(
+    await callbacks.get('capturepack_replay')?.({ id: multiFramePack.id, display: 2 }) as ToolResult,
+  )
+  check(
+    survivingSecondaryReplay.display_index === 2 &&
+      (survivingSecondaryReplay.replay as Record<string, unknown>).filename === 'replay-d2.webm',
+    'display 2 remains queryable when display 1 has no replay',
+  )
 
   console.log('ANNOTATIONS')
   const singleResult = await callbacks.get('capturepack_annotations')?.({ id: singlePack.id })
@@ -308,6 +922,27 @@ async function main(): Promise<void> {
       foundRows[0]?.display_number === 2 &&
       foundRows[1]?.display_number === null,
     'annotation search returns the same computed display_number fields',
+  )
+
+  const omittedAnnResult = await callbacks.get('capturepack_annotations')?.({ id: minimalPack.id })
+  const omittedAnnJson = textJson(omittedAnnResult as ToolResult)
+  check(
+    omittedAnnResult?.isError !== true &&
+      omittedAnnJson.available === false &&
+      omittedAnnJson.count === 0 &&
+      Array.isArray(omittedAnnJson.annotations) &&
+      omittedAnnJson.annotations.length === 0 &&
+      omittedAnnJson.reference_width === null &&
+      omittedAnnJson.reference_height === null &&
+      typeof omittedAnnJson.message === 'string',
+    'capturepack_annotations returns non-error result with available: false when annotations.json is omitted',
+  )
+
+  const malformedAnnResult = await callbacks.get('capturepack_annotations')?.({ id: malformedAnnotationsPack.id })
+  const malformedAnnErr = (malformedAnnResult as ToolResult)?.content.find((item) => item.type === 'text')?.text ?? ''
+  check(
+    malformedAnnResult?.isError === true && malformedAnnErr.includes('malformed'),
+    'capturepack_annotations returns fatal tool error on corrupt annotations.json',
   )
 
   console.log(failed === 0 ? '\nmcp-image-pack-check ok' : `\nmcp-image-pack-check FAILED (${failed})`)

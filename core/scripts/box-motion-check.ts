@@ -447,7 +447,7 @@ console.log('\nONE DISPLAY REPLAY CLOCK SHIFTS THE WHOLE ANNOTATION')
     { t_ms: 10_000, x: 100, y: 200, width: 300, height: 150 },
     { t_ms: 10_600, x: 900, y: 200, width: 300, height: 150 },
   ]
-  a.tracking.picked_at_ms = 10_500
+  if (a.tracking !== undefined) a.tracking.picked_at_ms = 10_500
   const shifted = rebaseAnnotationClock(a, -10_200, 1_000)
   check('lifetime shifts and clamps', [shifted.start_ms, shifted.end_ms], [0, 800])
   check(
@@ -458,11 +458,20 @@ console.log('\nONE DISPLAY REPLAY CLOCK SHIFTS THE WHOLE ANNOTATION')
   check(
     'observed samples and picked instant use the same local clock',
     {
-      picked: shifted.tracking.picked_at_ms,
-      samples: shifted.tracking.samples?.map((sample) => sample.t_ms),
+      picked: shifted.tracking?.picked_at_ms,
+      samples: shifted.tracking?.samples?.map((sample) => sample.t_ms),
     },
     { picked: 300, samples: [0, 300] },
   )
+}
+
+console.log('\nREBASE ANNOTATION CLOCK ON ANNOTATION WITHOUT TRACKING')
+{
+  const a = manualBox()
+  delete a.tracking
+  const shifted = rebaseAnnotationClock(a, -10_200, 1_000)
+  check('shifts without throwing', [shifted.start_ms, shifted.end_ms], [0, 800])
+  check('tracking remains omitted', shifted.tracking, undefined)
 }
 
 console.log(failed === 0 ? '\nbox-motion-check ok' : `\nbox-motion-check FAILED (${failed})`)
