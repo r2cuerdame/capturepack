@@ -80,7 +80,8 @@ import {
 const DEFAULT_STRIDE = 16
 const CORPUS_REPLAY_SAMPLES = 5
 const CORPUS_REPLAY_MULTIPLIER = 3
-const CORPUS_REPLAY_FLOOR_MS = 2
+const CORPUS_CI_REPLAY_FLOOR_MS = 8
+const CORPUS_LOCAL_REPLAY_LIMIT_MS = 25
 
 /**
  * THE GATE: how big the median offered CONTROL may be, as a fraction of its
@@ -495,9 +496,13 @@ async function main(): Promise<void> {
     const t = written.definition.thresholds
     const b = written.definition.baseline
     const reasons: string[] = []
-    // CI Windows runner baseline, 3x tolerance and a 2 ms minimum. A 30 ms
-    // per-replay slowdown must fail even on the fastest corpus case.
-    const replayLimit = Math.max(b.replay_to_candidates_ms * CORPUS_REPLAY_MULTIPLIER, CORPUS_REPLAY_FLOOR_MS)
+    // These baselines were measured on hosted Windows CI. A 3x tolerance with
+    // an 8 ms floor absorbs runner jitter but fails a 30 ms slowdown. Local
+    // machines have very different pack-read costs (14-21 ms on the maintainer
+    // desk), so use a stated 25 ms local ceiling; the same slowdown fails there.
+    const replayLimit = process.env['GITHUB_ACTIONS'] === 'true'
+      ? Math.max(b.replay_to_candidates_ms * CORPUS_REPLAY_MULTIPLIER, CORPUS_CI_REPLAY_FLOOR_MS)
+      : CORPUS_LOCAL_REPLAY_LIMIT_MS
     if (swept.replayToCandidatesMs > replayLimit) {
       reasons.push(
         `replay-to-candidates ${swept.replayToCandidatesMs.toFixed(1)} ms > ${replayLimit.toFixed(1)} ms`,

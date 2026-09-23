@@ -183,6 +183,19 @@ capture kind, storage layout and MCP behavior are separate contracts.
 | Picking answers a hover with a rectangle covering a fifth of the screen, or capture-to-candidates drifts past the five-second promise, and every check stays green | Presence of picking data is not quality of it: a half-window container once passed every filter and then won by being the smallest rectangle containing the point, for months, until a user said hover select felt wrong. The real editor assembly (`readPackObjectContext` + `ObjectIndex.forDisplay`, the same path re-edit and the renderer use) is swept on a grid and the CONTROL rung's offered area is measured — the window rung is not ours to judge, since a maximized window legitimately is most of the frame. Four privacy-safe, geometry-only distillations of actual saved packs now run on every machine: mixed-DPI browser/native, overlay/dense document, honest window-only Electron/native, and dense Electron/native. The current build is gated on per-case saved-pack candidate latency and on median/p90 control size, precise-target share and control coverage relative to committed healthy baselines. Historical capture-to-painted-editor time is source provenance only; the Windows capture-e2e job separately gates the release build live capture to painted editor at 5,000 ms. DOM replay remains an explicit real-pack corpus coverage gap. Neutral regenerated pixels keep a visual baseline change separate from a selection/capture regression; the reviewed geometry hash must still match. The optional local root (`CAPTUREPACK_PACK_ROOT`, default `C:\_CapturePack`) remains a broader diagnostic sweep, never the CI corpus. Full-profile only. | `check:pick-quality` |
 | A saved pack has a page, a viewport and a matching window, and can place none of it | Measured before the check existed: 12 packs, 6,091 of 6,092 rectangles on disk unrecoverable, while live capture was fine the whole time. A pack is written through the REAL writers and read through the REAL reader, then rectangles on disk are counted against rectangles recovered. A hand-built fixture cannot catch this class — the wire spelling and the on-disk spelling disagreed, and a fixture agrees with whatever spelling its author typed. Full-profile only. | `check:pack-readback` |
 
+For the maintained real-pack cases, `check:pick-quality` times five complete
+saved-pack read → frame → candidate-index replays and gates their median. The
+committed per-case baselines (1.5, 2.0, 1.5, 2.0 ms) came from the Windows
+GitHub Actions build job in [CI run 35911053175](https://github.com/r2cuerdame/capturepack/actions/runs/35911053175),
+which measured 1.5, 1.9, 1.4, and 2.0 ms. Hosted CI fails above the larger
+of baseline × 3 or 8 ms; this is 8 ms for each current case. Local Windows
+checks use a 25 ms ceiling because the same replay measured about 14–21 ms on
+the maintainer machine. Both ceilings reject an added 30 ms per candidate
+construction. These are replay-to-candidate thresholds, separate from the live
+capture-to-painted-editor 5,000 ms gate. Recalibrate the committed CI baselines
+only from a clean hosted Windows run, and review any threshold change against a
+slowdown mutation before changing them.
+
 ## Manual Windows smoke still required
 
 The deterministic gate proves coordinate, persistence, scheduling, and media
