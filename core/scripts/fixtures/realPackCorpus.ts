@@ -17,13 +17,16 @@ export interface RealPackCorpusCase {
   provenance: 'distilled-real-pack'
   shape_sha256: string
   classifications: string[]
+  /** Source-run history only; never counted as a current-build measurement. */
   observed_hands_off_ms: number
+  baseline: {
+    replay_to_candidates_ms: number
+    median_control_fraction: number
+    p90_control_fraction: number
+    precise_control_share: number
+    control_share: number
+  }
   thresholds: {
-    max_hands_off_ms: number
-    max_replay_to_candidates_ms: number
-    max_median_control_fraction: number
-    max_p90_control_fraction: number
-    min_precise_control_share: number
     expected_controls: 'some' | 'none'
   }
   pack: {
@@ -149,6 +152,8 @@ function validate(corpus: RealPackCorpus, raw: string): void {
     'motion',
     'similar-frames',
     'hdr-sdr',
+    'dom-provider-replay',
+    'capture-to-painted-editor',
   ]) {
     if (!inventory.has(required)) throw new Error(`real-pack corpus: ${required} is not inventoried`)
   }
@@ -167,17 +172,21 @@ function validate(corpus: RealPackCorpus, raw: string): void {
     }
     finitePositive(caseDef.pack.width, `${id}.pack.width`)
     finitePositive(caseDef.pack.height, `${id}.pack.height`)
-    finitePositive(caseDef.thresholds.max_hands_off_ms, `${id}.max_hands_off_ms`)
-    finitePositive(
-      caseDef.thresholds.max_replay_to_candidates_ms,
-      `${id}.max_replay_to_candidates_ms`,
-    )
-    if (
-      !Number.isFinite(caseDef.observed_hands_off_ms)
-      || caseDef.observed_hands_off_ms < 0
-      || caseDef.observed_hands_off_ms > caseDef.thresholds.max_hands_off_ms
-    ) {
-      throw new Error(`${id}: observed hands-off latency exceeds its release threshold`)
+    finitePositive(caseDef.baseline.replay_to_candidates_ms, `${id}.baseline.replay_to_candidates_ms`)
+    if (!Number.isFinite(caseDef.observed_hands_off_ms) || caseDef.observed_hands_off_ms < 0) {
+      throw new Error(`${id}: invalid historical hands-off latency`)
+    }
+    if (caseDef.thresholds.expected_controls === 'some') {
+      finitePositive(caseDef.baseline.median_control_fraction, `${id}.baseline.median_control_fraction`)
+      finitePositive(caseDef.baseline.p90_control_fraction, `${id}.baseline.p90_control_fraction`)
+      finitePositive(caseDef.baseline.precise_control_share, `${id}.baseline.precise_control_share`)
+      finitePositive(caseDef.baseline.control_share, `${id}.baseline.control_share`)
+    } else if (caseDef.thresholds.expected_controls !== 'none' ||
+      caseDef.baseline.median_control_fraction !== 0 ||
+      caseDef.baseline.p90_control_fraction !== 0 ||
+      caseDef.baseline.precise_control_share !== 0 ||
+      caseDef.baseline.control_share !== 0) {
+      throw new Error(`${id}: window-only baseline must have zero control metrics`)
     }
     const shapeHash = createHash('sha256').update(JSON.stringify(shapeOf(caseDef))).digest('hex')
     if (shapeHash !== caseDef.shape_sha256) {
