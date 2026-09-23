@@ -446,6 +446,7 @@ async function main(): Promise<void> {
   //     candidates available. Adding them would double-count unrelated work
   //     and make neither regression diagnosable.
   const corpus = loadRealPackCorpus()
+  let corpusFailures = 0
   console.log(`--- maintained real-pack corpus: ${String(corpus.cases.length)} privacy-safe case(s) ---`)
   for (const entry of corpus.hard_case_inventory) {
     const companion = entry.companion_checks?.length
@@ -459,7 +460,7 @@ async function main(): Promise<void> {
     const replayMs = performance.now() - started
     if (swept === null) {
       console.error(`FAIL ${written.definition.id}: the distilled saved pack could not be reopened`)
-      failures += 1
+      corpusFailures += 1
       continue
     }
     swept.name = written.definition.id
@@ -487,7 +488,7 @@ async function main(): Promise<void> {
       reasons.push(`precise share ${pct(stats.preciseShare)} < ${pct(t.min_precise_control_share)}`)
     }
     const failed = reasons.length > 0
-    if (failed) failures += 1
+    if (failed) corpusFailures += 1
     console.log(line(swept, stats, failed))
     console.log(
       `      capture->editor ${String(written.definition.observed_hands_off_ms)} ms` +
@@ -574,6 +575,16 @@ async function main(): Promise<void> {
     )
   }
 
+  if (corpusFailures > 0) {
+    // Kept apart from the median summary below: a corpus case can fail on
+    // latency, availability, p90 or precision, and naming the wrong one
+    // sends the reader after the wrong regression.
+    console.error(
+      `\nFAIL: ${String(corpusFailures)} maintained real-pack corpus case(s) broke a release ` +
+        'threshold — see the per-case FAIL lines above (#139)',
+    )
+    process.exitCode = 1
+  }
   if (failures > 0) {
     console.error(
       `\nFAIL: ${String(failures)} pack(s) answer the median hover with a rectangle over ` +
@@ -582,6 +593,7 @@ async function main(): Promise<void> {
     process.exitCode = 1
     return
   }
+  if (corpusFailures > 0) return
   console.log('\nOK: every measured pack keeps its median offered control inside the limit')
 }
 
