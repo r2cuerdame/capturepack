@@ -78,6 +78,10 @@ import {
  * evidence folder in about three seconds.
  */
 const DEFAULT_STRIDE = 16
+const CORPUS_REPLAY_SAMPLES = 5
+const CORPUS_REPLAY_MULTIPLIER = 3
+const CORPUS_CI_REPLAY_FLOOR_MS = 8
+const CORPUS_LOCAL_REPLAY_LIMIT_MS = 25
 
 /**
  * THE GATE: how big the median offered CONTROL may be, as a fraction of its
@@ -252,7 +256,7 @@ function sweepDisplay(
   for (const surface of index.surfaceStack) into.kinds.add(surfaceKind(surface))
 }
 
-async function sweepPack(dirPath: string, stride: number): Promise<PackSweep | null> {
+async function sweepPack(dirPath: string, stride: number, replaySamples = 1): Promise<PackSweep | null> {
   const started = performance.now()
   const context = readPackObjectContext(dirPath)
   if (context === null) return null
@@ -270,7 +274,28 @@ async function sweepPack(dirPath: string, stride: number): Promise<PackSweep | n
       height: display.height,
     }),
   }))
-  const replayToCandidatesMs = performance.now() - started
+  const replaySamplesMs = [performance.now() - started]
+  // Repeat the complete saved-pack read -> frame -> index path. The first run
+  // also supplies the indexes swept below; the median damps a single Windows
+  // runner scheduling spike without hiding a persistent candidate slowdown.
+  if (replaySamples > 1) {
+    for (let sample = 1; sample < replaySamples; sample += 1) {
+      const replayStarted = performance.now()
+      const repeatedContext = readPackObjectContext(dirPath)
+      if (repeatedContext === null) throw new Error(`corpus pack vanished: ${dirPath}`)
+      const repeatedSession = openPackContextSession(repeatedContext)
+      const repeatedFrame = await repeatedSession.frameAt(repeatedContext.replayDurationMs)
+      for (const display of repeatedContext.displays) {
+        ObjectIndex.forDisplay(repeatedFrame, {
+          index: display.index,
+          width: display.width,
+          height: display.height,
+        })
+      }
+      replaySamplesMs.push(performance.now() - replayStarted)
+    }
+  }
+  const replayToCandidatesMs = quantile(replaySamplesMs.sort((a, b) => a - b), 0.5)
   const sweep: PackSweep = {
     name: path.basename(dirPath),
     captureKind: context.captureKind,
@@ -460,7 +485,7 @@ async function main(): Promise<void> {
     console.log(`  coverage ${entry.id}: ${entry.status}${companion}`)
   }
   for (const written of writeRealPackCorpusCases(corpus)) {
-    const swept = await sweepPack(written.dirPath, stride)
+    const swept = await sweepPack(written.dirPath, stride, CORPUS_REPLAY_SAMPLES)
     if (swept === null) {
       console.error(`FAIL ${written.definition.id}: the distilled saved pack could not be reopened`)
       corpusFailures += 1
@@ -471,9 +496,13 @@ async function main(): Promise<void> {
     const t = written.definition.thresholds
     const b = written.definition.baseline
     const reasons: string[] = []
-    // 50% drift allowance for geometric quality. Candidate construction has
-    // a 40 ms scheduling allowance for shared Windows CI runners.
-    const replayLimit = b.replay_to_candidates_ms * 1.5 + 40
+    // These baselines were measured on hosted Windows CI. A 3x tolerance with
+    // an 8 ms floor absorbs runner jitter but fails a 30 ms slowdown. Local
+    // machines have very different pack-read costs (14-21 ms on the maintainer
+    // desk), so use a stated 25 ms local ceiling; the same slowdown fails there.
+    const replayLimit = process.env['GITHUB_ACTIONS'] === 'true'
+      ? Math.max(b.replay_to_candidates_ms * CORPUS_REPLAY_MULTIPLIER, CORPUS_CI_REPLAY_FLOOR_MS)
+      : CORPUS_LOCAL_REPLAY_LIMIT_MS
     if (swept.replayToCandidatesMs > replayLimit) {
       reasons.push(
         `replay-to-candidates ${swept.replayToCandidatesMs.toFixed(1)} ms > ${replayLimit.toFixed(1)} ms`,

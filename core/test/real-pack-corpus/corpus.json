@@ -499,7 +499,7 @@
         ]
       },
       "baseline": {
-        "replay_to_candidates_ms": 10,
+        "replay_to_candidates_ms": 1.5,
         "median_control_fraction": 0.002,
         "p90_control_fraction": 0.004,
         "precise_control_share": 0.3249,
@@ -1366,7 +1366,7 @@
         ]
       },
       "baseline": {
-        "replay_to_candidates_ms": 10,
+        "replay_to_candidates_ms": 2,
         "median_control_fraction": 0.0699,
         "p90_control_fraction": 0.0862,
         "precise_control_share": 0.134,
@@ -1909,7 +1909,7 @@
         ]
       },
       "baseline": {
-        "replay_to_candidates_ms": 12,
+        "replay_to_candidates_ms": 1.5,
         "median_control_fraction": 0,
         "p90_control_fraction": 0,
         "precise_control_share": 0,
@@ -3418,7 +3418,7 @@
         ]
       },
       "baseline": {
-        "replay_to_candidates_ms": 12,
+        "replay_to_candidates_ms": 2,
         "median_control_fraction": 0.0076,
         "p90_control_fraction": 0.039,
         "precise_control_share": 0.2599,
