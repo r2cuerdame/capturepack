@@ -13,8 +13,18 @@ when running the installer; choose *More info → Run anyway*. Every release als
 Get-FileHash .\CapturePack-Setup-<version>.exe -Algorithm SHA256
 ```
 
-An application for free OSS code signing is pending. Once granted, this document will
-state the certificate issuer and the signed artifacts.
+The application for free OSS code signing has not yet been submitted. The planned
+route is: Free code signing provided by [SignPath.io](https://signpath.io/),
+certificate by [SignPath Foundation](https://signpath.org/). This is a plan,
+not a claim that current releases carry a signature. Once approved and a signed
+release is verified, this document will identify the actual certificate issuer,
+publisher, and signed artifacts.
+
+SignPath Foundation must approve the application and provision the project before
+the release workflow can request signing. The maintainer must then configure the
+SignPath organization, project, signing policy, and API token in GitHub Actions.
+The release workflow must keep the installer and updater metadata consistent with
+the signed bytes, and verify Authenticode before publishing a release.
 
 ## Team roles
 
@@ -58,14 +68,15 @@ and the download button on [capturepack.dev](https://capturepack.dev), which lin
 
 ## Privacy
 
-CapturePack is local-first and collects nothing:
+CapturePack keeps capture content local:
 
-- **No telemetry, no analytics, no accounts, no cloud.** The app never uploads captures,
-  usage data, or crash reports.
+- **No accounts or capture uploads.** The app never uploads captures or crash reports.
+- Once per local day, the app sends PurplePulse a random install ID, app version,
+  OS, and `platform: "electron"`. It sends no username, device name, or capture content.
 - Captures (screen recordings, screenshots, annotations) are written only to the output
   folder the user chooses on their own machine.
-- The only outbound network request is the update check against the GitHub Releases API
-  (`https://github.com/r2cuerdame/capturepack`), which can be disabled in
+- The optional update check uses the GitHub Releases API
+  (`https://github.com/r2cuerdame/capturepack`) and can be disabled in
   Settings → General → *Check for updates automatically*.
 - The bundled MCP server binds to `127.0.0.1` only, is read-only, rejects non-loopback
   `Host`/`Origin` headers, and can be disabled in Settings → MCP.
