@@ -1,4 +1,4 @@
-# CapturePack handoff — after v0.5.1
+# CapturePack handoff — after v0.6.0
 
 Last verified: 2026-09-05 (Asia/Seoul)
 
@@ -20,25 +20,25 @@ Use [docs/README.md](README.md) as the documentation index. The older
 
 ## Public state
 
-CapturePack **0.5.1** is the current stable Windows release.
+CapturePack **0.6.0** is the current stable Windows release.
 
 | Item | Current state |
 |---|---|
-| Public release | [v0.5.1](https://github.com/r2cuerdame/capturepack/releases/tag/v0.5.1), stable (`draft=false`, `prerelease=false`) |
-| Release source | Immutable `v0.5.1` tag; never move or replace it |
+| Public release | [v0.6.0](https://github.com/r2cuerdame/capturepack/releases/tag/v0.6.0), stable (`draft=false`, `prerelease=false`) |
+| Release source | Immutable `v0.6.0` tag; never move or replace it |
 | Release verification | The guarded Release workflow reran the complete `qa:rc` gate on the tagged source, built the Windows artifacts, and byte-verified the exact four-file draft before publication |
-| Delivery | WebM recorder ownership, strict image/callback boundaries, packaged-QA telemetry isolation, zero-audit dependency refresh, and bounded Windows evidence sampling; native DXGI remains opt-in experimental work for a later release |
+| Delivery | One-click Chrome full-page capture into the normal still editor (extension 0.4.1, HiDPI-safe plan), After Save Action outcomes and retry, and optional-field tolerance across readers, exporters and MCP; native DXGI remains opt-in experimental work for a later release |
 | Website | [capturepack.dev](https://capturepack.dev/), with all nine languages kept on the application version |
 
 The Release workflow and its remote byte verification are authoritative for the
 published installer's hashes. Do not reuse a local RC hash or any older release's
-values when checking 0.5.1.
+values when checking 0.6.0.
 
 ### Historical 0.4.1 publication evidence
 
 The following table and investigation record apply to **0.4.1 only**. They stay
 here because they established the release-verification discipline; they are not
-the current version or 0.5.1 asset metadata.
+the current version or 0.6.0 asset metadata.
 
 | Item | Verified state |
 |---|---|
@@ -415,7 +415,7 @@ because breaking them is quiet:
   save and a render must not multiply decoders or encoders.
 
 Application version and pack format version are different contracts.
-`core/package.json` is application version `0.5.1`; packs containing the
+`core/package.json` is application version `0.6.0`; packs containing the
 optional viewer declare a compatible format version of at least `0.5.0`.
 
 ## Measured characteristic: the picture lags its own timestamp
@@ -765,9 +765,9 @@ A push or tag push does not publish CapturePack. Publication is a manual
 `workflow_dispatch` that runs the full QA/build/package/remote-byte-verification
 sequence described in [RELEASING.md](RELEASING.md).
 
-Never overwrite a public version. A product hotfix after 0.5.1 must use a higher
+Never overwrite a public version. A product hotfix after 0.6.0 must use a higher
 version and fix forward. Documentation-only commits may follow the release on
-`main`, but they do not alter the binaries identified by the `v0.5.1` tag.
+`main`, but they do not alter the binaries identified by the `v0.6.0` tag.
 
 ## Suggested next order
 
