@@ -36,9 +36,9 @@
  * until somebody with three monitors runs a real capture.
  * ---------------------------------------------------------------------------
  */
-import { buildManifest, savePack, settleDisplayWrites } from '../src/main/exporter'
+import { buildManifest, saveAsNewPack, savePack, settleDisplayWrites } from '../src/main/exporter'
 import { displayReplayName, displaySnapshotName } from '../src/main/exporter'
-import type { DisplayCapture, InitialSaveInput } from '../src/main/exporter'
+import type { DisplayCapture, ExportInput, InitialSaveInput } from '../src/main/exporter'
 import { aggregateRecorderState } from '../src/main/capture'
 import { replayUnavailableForToast } from '../src/main/session'
 import { displaySummaryLines, extraDisplayFiles, groupByDisplay } from '../src/main/report'
@@ -176,6 +176,81 @@ try {
     'a pack carrying a required media.displays declares format 0.7.0 (SPEC §13.1)',
     onScreen.format_version === '0.7.0',
     onScreen.format_version,
+  )
+
+  // TOP-LEVEL CADENCE PROPAGATION TO FOCUSED DISPLAY (#239, SPEC §5.6).
+  // When top-level cadence is supplied and display declaration omits it,
+  // the focused display MUST inherit media.cadence. When replay is null,
+  // cadence MUST be absent.
+  const withCadence = buildManifest({
+    id: 'cadence-focused-display',
+    createdAt: new Date('2026-07-30T00:00:00.000Z'),
+    generatorVersion: 'check',
+    title: '',
+    note: '',
+    osVersion: 'check',
+    screens: [{ width: 1_920, height: 1_080, scale: 1 }],
+    captureKind: 'video',
+    hasReplay: true,
+    replayFile: 'replay.webm',
+    replayDurationMs: 5_000,
+    snapshotTMs: 1_000,
+    cadence: { achieved_fps: 30, worst_stall_ms: 33 },
+    displays: [
+      {
+        index: 1,
+        focused: true,
+        bounds: { x: 0, y: 0, width: 1_920, height: 1_080 },
+        scale: 1,
+        snapshotWidth: 1_920,
+        snapshotHeight: 1_080,
+        hasReplay: true,
+        replayDurationMs: 5_000,
+        snapshotFile: 'snapshot.png',
+        replayFile: 'replay.webm',
+      },
+    ],
+  })
+  check(
+    'focused display inherits top-level cadence when omitted on display declaration (SPEC §5.6, #239)',
+    JSON.stringify(withCadence.media.displays?.[0]?.cadence) ===
+      JSON.stringify(withCadence.media.cadence) &&
+      withCadence.media.displays?.[0]?.cadence?.achieved_fps === 30,
+  )
+
+  const noReplayWithCadence = buildManifest({
+    id: 'cadence-no-replay-display',
+    createdAt: new Date('2026-07-30T00:00:00.000Z'),
+    generatorVersion: 'check',
+    title: '',
+    note: '',
+    osVersion: 'check',
+    screens: [{ width: 1_920, height: 1_080, scale: 1 }],
+    captureKind: 'video',
+    hasReplay: false,
+    replayFile: 'replay.webm',
+    replayDurationMs: 0,
+    snapshotTMs: null,
+    cadence: { achieved_fps: 30, worst_stall_ms: 33 },
+    displays: [
+      {
+        index: 1,
+        focused: true,
+        bounds: { x: 0, y: 0, width: 1_920, height: 1_080 },
+        scale: 1,
+        snapshotWidth: 1_920,
+        snapshotHeight: 1_080,
+        hasReplay: false,
+        replayDurationMs: 0,
+        snapshotFile: 'snapshot.png',
+        replayFile: 'replay.webm',
+      },
+    ],
+  })
+  check(
+    'cadence is omitted on focused display when replay is null (SPEC §5.6, #239)',
+    noReplayWithCadence.media.displays?.[0]?.cadence === undefined &&
+      noReplayWithCadence.media.cadence === undefined,
   )
 
   // THREE SCREENS, ONE PORTRAIT, ONE SCALED, FOCUS ON THE THIRD (#76) —
@@ -431,6 +506,7 @@ async function writtenPackChecks(): Promise<void> {
       replayWebm: Buffer.from('REPLAY BYTES'),
       replayFile: 'replay.webm',
       replayDurationMs: 4_000,
+      cadence: { achieved_fps: 30, worst_stall_ms: 33 },
       timeline: {
         t0: '2026-07-30T12:00:00+09:00',
         events: [{ t_ms: 0, type: 'core.capture.triggered', source: 'core' }],
@@ -472,6 +548,11 @@ async function writtenPackChecks(): Promise<void> {
         entry.snapshot_height === 400,
       `${written.format_version}, ${String(written.media.displays?.length)} display(s)`,
     )
+    check(
+      'the written pack preserves cadence on top-level media and focused display (SPEC §5.6, #239)',
+      written.media.cadence !== undefined &&
+        JSON.stringify(entry?.cadence) === JSON.stringify(written.media.cadence),
+    )
     const run = spawnSync(process.execPath, [validator, handle.dirPath], {
       cwd: repositoryRoot,
       encoding: 'utf8',
@@ -481,6 +562,222 @@ async function writtenPackChecks(): Promise<void> {
       run.status === 0,
       `${run.stdout ?? ''}`.split('\n').filter((l) => l.includes('FAIL')).join(' | '),
     )
+}
+
+/**
+ * SAVE AS NEW AFTER A DISPLAY FILE DISAPPEARED (#208). The source still tells
+ * the editor about display 2, but saveAsNewPack can only carry media that is on
+ * disk. Every annotation coordinate must therefore be filtered against the
+ * declaration the NEW pack actually writes, not the source declaration.
+ */
+async function saveAsNewDisplaySanitizationChecks(): Promise<void> {
+  const outputDir = path.join(work, 'save-as-new-display-source')
+  const snapshotPng = readFileSync(path.join(repositoryRoot, 'examples', 'minimal', 'snapshot.png'))
+  const displays: DisplayCapture[] = [
+    {
+      index: 1,
+      focused: true,
+      bounds: { x: 0, y: 0, width: 640, height: 400 },
+      scale: 1,
+      snapshotWidth: 640,
+      snapshotHeight: 400,
+      hasReplay: true,
+      replayDurationMs: 4_000,
+      snapshotFile: 'snapshot.png',
+      replayFile: 'replay.webm',
+      snapshotPng: null,
+      replayWebm: null,
+    },
+    {
+      index: 2,
+      focused: false,
+      bounds: { x: 640, y: 0, width: 320, height: 200 },
+      scale: 1,
+      snapshotWidth: 320,
+      snapshotHeight: 200,
+      hasReplay: false,
+      replayDurationMs: 0,
+      snapshotFile: 'snapshot-d2.png',
+      replayFile: null,
+      snapshotPng: pngHeader(320, 200),
+      replayWebm: null,
+    },
+  ]
+  const timeline = {
+    t0: '2026-09-22T12:00:00+09:00',
+    events: [{ t_ms: 0, type: 'core.capture.triggered', source: 'core' }],
+  }
+  const source = await savePack({
+    captureKind: 'video',
+    snapshotPng,
+    width: 640,
+    height: 400,
+    capturedAt: new Date('2026-09-22T03:00:00.000Z'),
+    replayWebm: Buffer.from('REPLAY BYTES'),
+    replayFile: 'replay.webm',
+    replayDurationMs: 4_000,
+    timeline,
+    outputDir,
+    screens: [
+      { width: 640, height: 400, scale: 1 },
+      { width: 320, height: 200, scale: 1 },
+    ],
+    displays,
+    windowsContext: null,
+    docLanguage: 'en',
+  })
+  await settleDisplayWrites(source.dirPath)
+  rmSync(path.join(source.dirPath, 'snapshot-d2.png'))
+
+  const input: ExportInput = {
+    captureKind: 'video',
+    snapshotPng,
+    width: 640,
+    height: 400,
+    capturedAt: new Date('2026-09-22T03:00:00.000Z'),
+    replayWebm: null,
+    replayFile: 'replay.webm',
+    replayDurationMs: 4_000,
+    title: 'Save As New display sanitization',
+    note: '',
+    snapshotTMs: null,
+    timeline,
+    displays,
+    screens: [
+      { width: 640, height: 400, scale: 1 },
+      { width: 320, height: 200, scale: 1 },
+    ],
+    annotations: [
+      {
+        annotation_id: 'ann_208001',
+        type: 'box',
+        display: 2,
+        bounds: { x: 20, y: 20, width: 80, height: 40 },
+        text: 'drop with its missing primary raster',
+        created_at: '2026-09-22T12:00:00+09:00',
+      },
+      {
+        annotation_id: 'ann_208002',
+        type: 'box',
+        display: 1,
+        bounds: { x: 20, y: 20, width: 80, height: 40 },
+        text: 'keep surviving authored motion',
+        keyframes: [
+          { t_ms: 100, display: 1, x: 20, y: 20, width: 80, height: 40 },
+          { t_ms: 200, display: 2, x: 30, y: 30, width: 80, height: 40 },
+          { t_ms: 300, display: 1, x: 40, y: 40, width: 80, height: 40 },
+        ],
+        created_at: '2026-09-22T12:00:01+09:00',
+      },
+      {
+        annotation_id: 'ann_208003',
+        type: 'box',
+        bounds: { x: 50, y: 50, width: 90, height: 45 },
+        text: 'collapse one surviving keyframe',
+        keyframes: [
+          { t_ms: 100, display: 1, x: 60, y: 60, width: 90, height: 45 },
+          { t_ms: 200, display: 2, x: 70, y: 70, width: 90, height: 45 },
+        ],
+        created_at: '2026-09-22T12:00:02+09:00',
+      },
+      {
+        annotation_id: 'ann_208004',
+        type: 'box',
+        bounds: { x: 80, y: 80, width: 100, height: 50 },
+        text: 'keep surviving observed samples',
+        tracking: {
+          enabled: true,
+          picked_at_ms: 100,
+          samples: [
+            { t_ms: 100, display: 1, x: 80, y: 80, width: 100, height: 50 },
+            { t_ms: 200, display: 2, x: 90, y: 90, width: 100, height: 50 },
+            { t_ms: 300, display: 1, x: 100, y: 100, width: 100, height: 50 },
+          ],
+        },
+        created_at: '2026-09-22T12:00:03+09:00',
+      },
+      {
+        annotation_id: 'ann_208005',
+        type: 'box',
+        bounds: { x: 120, y: 120, width: 60, height: 30 },
+        text: 'disable an emptied track',
+        tracking: {
+          enabled: true,
+          samples: [{ t_ms: 100, display: 2, x: 10, y: 10, width: 60, height: 30 }],
+        },
+        created_at: '2026-09-22T12:00:04+09:00',
+      },
+    ],
+    clipboardAfterSave: 'off',
+    docLanguage: 'en',
+  }
+
+  const saved = await saveAsNewPack(source.dirPath, input)
+  const manifest = JSON.parse(readFileSync(path.join(saved.dirPath, 'manifest.json'), 'utf8')) as Manifest
+  const annotations = JSON.parse(
+    readFileSync(path.join(saved.dirPath, 'annotations.json'), 'utf8'),
+  ) as { annotations: Array<Record<string, any>> }
+  const declared = new Set((manifest.media.displays ?? []).map((display) => display.index))
+  const written = annotations.annotations
+  const motion = written.find((annotation) => annotation.annotation_id === 'ann_208002')
+  const collapsed = written.find((annotation) => annotation.annotation_id === 'ann_208003')
+  const tracked = written.find((annotation) => annotation.annotation_id === 'ann_208004')
+  const emptied = written.find((annotation) => annotation.annotation_id === 'ann_208005')
+
+  check(
+    'Save As New declares only the display whose snapshot survived',
+    manifest.media.displays?.length === 1 && declared.has(1) && !declared.has(2),
+  )
+  check(
+    'an annotation rooted in the dropped display is removed instead of reinterpreting its pixels',
+    !written.some((annotation) => annotation.annotation_id === 'ann_208001'),
+  )
+  check(
+    'authored motion removes undeclared-display keyframes and keeps two valid positions',
+    motion?.display === undefined &&
+      motion?.keyframes?.length === 2 &&
+      motion.keyframes.every((frame: Record<string, any>) => declared.has(frame.display)),
+  )
+  check(
+    'one surviving authored position collapses into bounds and does not emit keyframes',
+    collapsed?.keyframes === undefined &&
+      collapsed?.display === undefined &&
+      collapsed?.bounds?.x === 60 &&
+      collapsed?.bounds?.y === 60,
+  )
+  check(
+    'tracking removes undeclared-display samples while preserving a truthful surviving track',
+    tracked?.tracking?.enabled === true &&
+      tracked.tracking.samples?.length === 2 &&
+      tracked.tracking.samples.every((sample: Record<string, any>) => declared.has(sample.display)),
+  )
+  check(
+    'a track with no surviving observations becomes a valid static annotation',
+    emptied?.tracking?.enabled === false && emptied.tracking.samples === undefined,
+  )
+  check(
+    'no annotation, keyframe, or tracking sample in the new pack names an undeclared display',
+    written.every(
+      (annotation) =>
+        (annotation.display === undefined || declared.has(annotation.display)) &&
+        (annotation.keyframes ?? []).every(
+          (frame: Record<string, any>) => frame.display === undefined || declared.has(frame.display),
+        ) &&
+        (annotation.tracking?.samples ?? []).every(
+          (sample: Record<string, any>) =>
+            sample.display === undefined || declared.has(sample.display),
+        ),
+    ),
+  )
+  const run = spawnSync(process.execPath, [validator, saved.dirPath], {
+    cwd: repositoryRoot,
+    encoding: 'utf8',
+  })
+  check(
+    'the Save As New pack with a dropped secondary display passes the official validator',
+    run.status === 0 && !`${run.stdout ?? ''}${run.stderr ?? ''}`.includes('FAIL'),
+    `${run.stdout ?? ''}${run.stderr ?? ''}`.split('\n').filter((line) => line.includes('FAIL')).join(' | '),
+  )
 }
 
 // ===========================================================================
@@ -1015,7 +1312,8 @@ function numberingChecks(): void {
   check(
     'N1 = environment.screens: screens[index - 1] has that display’s scale and orientation — the ' +
       'portrait screen is the SECOND entry, where index 2 says it is',
-    screens.length === 3 &&
+    screens !== undefined &&
+      screens.length === 3 &&
       DESK.every((desk) => {
         const s = screens[desk.index - 1]
         return (
@@ -1530,6 +1828,7 @@ function toastAndTrayChecks(): void {
 }
 
 void writtenPackChecks()
+  .then(saveAsNewDisplaySanitizationChecks)
   .then(() => {
     console.log('')
     console.log('THE DESK — three screens, portrait in the middle, focus on 3, recorder 2 dead (#76)')

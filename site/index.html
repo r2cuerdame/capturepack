@@ -29,7 +29,7 @@
     "name": "CapturePack",
     "operatingSystem": "Windows",
     "applicationCategory": "DeveloperApplication",
-    "softwareVersion": "0.5.0",
+    "softwareVersion": "0.6.0",
     "description": "Open-source context capture toolkit. Rewind the last 30 seconds and box what broke, or capture a still and pick a real UI control, then export structured object context for humans and AI.",
     "url": "https://capturepack.dev/",
     "downloadUrl": "https://github.com/r2cuerdame/capturepack/releases/latest",
@@ -69,10 +69,10 @@
         <a class="btn" href="https://github.com/r2cuerdame/capturepack">GitHub</a>
         <a class="btn" href="https://github.com/sponsors/r2cuerdame" rel="noopener" data-i18n="btn_sponsor">♥ Sponsor</a>
       </div>
-          <p class="output-note" data-i18n="release_note">Public download: 0.5.0. From History, create a reviewed, still-only Share Copy without originals, videos, or structured capture context.</p>
+          <p class="output-note" data-i18n="release_note">Public download: 0.6.0. From History, create a reviewed, still-only Share Copy without originals, videos, or structured capture context.</p>
       <p class="badges">
         <span class="badge">Windows</span>
-        <span class="badge">v0.5.0</span>
+        <span class="badge">v0.6.0</span>
         <span class="badge" data-i18n="badge_foss">Free &amp; open source</span>
         <span class="badge">MIT</span>
         <span class="badge" data-i18n="badge_local">Local-first · no cloud</span>
@@ -198,9 +198,10 @@
         <span class="still-kicker" data-i18n="privacy_kicker">LOCAL DOES NOT MEAN REDACTED</span>
         <h2 id="privacy-title" data-i18n="privacy_title">Review the original before sharing.</h2>
       </div>
-      <p data-i18n="privacy_body">CapturePack uploads no captures, telemetry or crash reports; the optional GitHub
-      update check can be disabled, and MCP can be stopped in Settings. Blur is non-destructive: annotated views are
-      protected, but snapshot.png and the original replay in a full pack remain unredacted.</p>
+      <p data-i18n="privacy_body">CapturePack uploads no captures or crash reports. Once per local day, the app and
+      this site send PurplePulse only a random install ID, version, OS, and platform — never a username, device name,
+      or capture data. Blur is non-destructive: annotated views are protected, but snapshot.png and the original
+      replay in a full pack remain unredacted.</p>
     </aside>
 
   </main>
@@ -221,6 +222,7 @@
   </footer>
 
   <script src="i18n.js"></script>
+  <script src="telemetry.js"></script>
   <script>
     // Point Download at the latest installer directly; fall back to the releases page.
     fetch('https://api.github.com/repos/r2cuerdame/capturepack/releases/latest')

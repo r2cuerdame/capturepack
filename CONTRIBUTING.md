@@ -31,27 +31,27 @@ The file format matters more than any implementation. [SPEC.md](SPEC.md) is auth
 capturepack/
 ├── SPEC.md          # the format specification — source of truth
 ├── GOAL.md          # vision and principles
-├── docs/            # schemas, release process, other documentation
-├── core/            # the reference app (Electron): capture, annotate, export
-├── plugins/         # plugin implementations (planned)
+├── ARCHITECTURE.md  # current system architecture
+├── ROADMAP.md       # project roadmap and milestone history
+├── docs/            # schemas, release process, handoffs, and other documentation
+├── core/            # the reference app (Electron): capture, annotate, export, MCP
+├── extensions/      # browser extensions (extensions/chrome)
 ├── examples/        # example packs — examples/minimal is a complete valid pack
 ├── tools/           # standalone CLI tools — validate-capturepack.mjs checks a pack against SPEC.md
-├── site/            # landing page (GitHub Pages)
-└── tests/           # cross-cutting tests, e.g. spec conformance (planned)
+└── site/            # landing page and guide (capturepack.dev)
 ```
-
-Directories marked *planned* don't exist yet — creating the first one is a fine contribution.
 
 ## Development setup
 
-You need **Node.js 20+** and npm. The app lives in `core/`:
+You need **Node.js 22.12+** and npm. The app lives in `core/`:
 
 ```
 cd core
-npm install
+npm ci
 npm run dev        # build and launch the app
 npm run typecheck  # TypeScript check
 npm run build      # build only
+npm run qa:rc      # deterministic release QA gate
 ```
 
 Everything runs locally. There is no backend, no login, nothing to provision.
@@ -109,8 +109,36 @@ Format changes are the highest-impact changes in this project, so they move deli
 - Reviews aim to be fast and friendly; "simpler" is the most common review comment here, and it's
   meant kindly.
 
-We also keep a daily **usage journal** in GitHub Issues (what worked, what hurt, ideas) — reading
-recent entries is the best way to find something worth fixing.
+## Usage journal
+
+GitHub Issues are not only for feature requests: this repository keeps a daily **usage journal**
+in them, and reading recent entries is the best way to find something worth fixing.
+
+**The rule:** one issue per day of real use. Title `Journal: YYYY-MM-DD`, label `journal`. Honest
+notes, ten seconds to write. After a month, the journal itself becomes the best roadmap.
+
+Click *New issue* and pick **Usage journal** — the template
+([`.github/ISSUE_TEMPLATE/usage-journal.md`](.github/ISSUE_TEMPLATE/usage-journal.md)) sets the
+title, the label and the three sections:
+
+```
+## Used Today
+
+Today I used CapturePack 7 times.
+
+## Pain
+
+- Annotation took too long.
+
+## Idea
+
+- Need object picker.
+```
+
+Tag concrete friction with `pain` and concrete proposals with `idea` so the roadmap can be mined
+later. The standing "how this works" issue is
+[#1](https://github.com/r2cuerdame/capturepack/issues/1); the practice itself is described in
+[GOAL.md](GOAL.md#development-practice-usage-journal).
 
 ## License
 

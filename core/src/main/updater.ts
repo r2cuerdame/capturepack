@@ -11,6 +11,7 @@
 import { app } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import type { UpdaterStatusPayload } from '../shared/ipc'
+import { noteExitIntent } from './lifecycle'
 import { logError, logInfo } from './log'
 
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000
@@ -248,6 +249,12 @@ export function setAutoUpdateCheck(enabled: boolean): void {
 }
 
 export function restartAndUpdate(): void {
+  // Not a disappearance: the app is coming straight back (issue #61). Recorded
+  // HERE, not by the caller — the tray menu remembered to, the About window's
+  // Restart button and the update toast did not, and their runs closed the
+  // marker as 'unknown' (#182). First intent wins, so a caller that still
+  // notes it first loses nothing.
+  noteExitIntent('update-restart')
   // isSilent=false, isForceRunAfter=true — the only permitted quitAndInstall.
   autoUpdater.quitAndInstall(false, true)
 }

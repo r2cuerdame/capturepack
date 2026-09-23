@@ -10,6 +10,8 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
   addManifestPlugin,
+  readAnnotationsSafe,
+  readTimelineSafe,
   refreshPackDocs,
   savePack,
   setManifestRenderOutputs,
@@ -17,12 +19,19 @@ import {
   type ExportInput,
   type InitialSaveInput,
 } from '../src/main/exporter'
+import { writeAnnotatedReplayOutput } from '../src/main/annotatedReplayOutput'
+import { replayMimeType } from '../src/shared/replayMedia'
 import {
   buildViewerHtml,
   manifestWithViewerFormat,
   safeViewerPath,
   VIEWER_FORMAT_VERSION,
 } from '../src/main/viewer'
+import { buildReport, describeAnnotation, keyframeSet } from '../src/main/report'
+import { buildReadme, buildSkills, replayLabel } from '../src/main/packdocs'
+import { makeT } from '../src/shared/i18n'
+import { drawDisplayLabels } from '../src/renderer/editor/render'
+import { drawBox, renderedLabelBottomGutter } from '../src/renderer/render/render'
 import type {
   Annotation,
   AnnotationsFile,
@@ -115,6 +124,74 @@ function pureContractChecks(): void {
   check('script-free', !/<script\b/iu.test(sourceHtml) && !/\bfetch\s*\(/u.test(sourceHtml))
   check('network disabled by CSP', sourceHtml.includes("connect-src 'none'") && sourceHtml.includes("script-src 'none'"))
   check('390px responsive rule is present', sourceHtml.includes('@media(max-width:390px)'))
+  check('unannotated pack omits annotations.json from file inventory', !sourceHtml.includes('<code>annotations.json</code>'))
+  const unannotatedHtml = buildViewerHtml(base, undefined, timeline(), 'en')
+  check('pack without annotations file omits annotations.json from file inventory', !unannotatedHtml.includes('<code>annotations.json</code>'))
+
+  // Issue #206: buildViewerHtml with omitted, null, or non-array annotations
+  const omittedAnnotationsFile = {
+    reference_width: 1920,
+    reference_height: 1080,
+  } as AnnotationsFile
+  let omittedAnnThrew = false
+  let omittedAnnHtml = ''
+  try {
+    omittedAnnHtml = buildViewerHtml(base, omittedAnnotationsFile, timeline(), 'en')
+  } catch {
+    omittedAnnThrew = true
+  }
+  check(
+    'buildViewerHtml succeeds without throwing on annotationsFile omitting annotations',
+    !omittedAnnThrew &&
+      typeof omittedAnnHtml === 'string' &&
+      omittedAnnHtml.startsWith('<!doctype html>') &&
+      !omittedAnnHtml.includes('Privacy warning') &&
+      !omittedAnnHtml.includes('blur annotation') &&
+      omittedAnnHtml.includes('Original evidence may contain private information.') &&
+      !omittedAnnHtml.includes('<code>annotations.json</code>'),
+  )
+
+  const nullAnnotationsFile = {
+    reference_width: 1920,
+    reference_height: 1080,
+    annotations: null as unknown as Annotation[],
+  } as AnnotationsFile
+  let nullAnnThrew = false
+  let nullAnnHtml = ''
+  try {
+    nullAnnHtml = buildViewerHtml(base, nullAnnotationsFile, timeline(), 'en')
+  } catch {
+    nullAnnThrew = true
+  }
+  check(
+    'buildViewerHtml succeeds without throwing on annotationsFile with null annotations',
+    !nullAnnThrew &&
+      typeof nullAnnHtml === 'string' &&
+      !nullAnnHtml.includes('Privacy warning') &&
+      nullAnnHtml.includes('Original evidence may contain private information.') &&
+      !nullAnnHtml.includes('<code>annotations.json</code>'),
+  )
+
+  const nonArrayAnnotationsFile = {
+    reference_width: 1920,
+    reference_height: 1080,
+    annotations: 'not-an-array' as unknown as Annotation[],
+  } as AnnotationsFile
+  let nonArrayAnnThrew = false
+  let nonArrayAnnHtml = ''
+  try {
+    nonArrayAnnHtml = buildViewerHtml(base, nonArrayAnnotationsFile, timeline(), 'en')
+  } catch {
+    nonArrayAnnThrew = true
+  }
+  check(
+    'buildViewerHtml succeeds without throwing on annotationsFile with non-array annotations',
+    !nonArrayAnnThrew &&
+      typeof nonArrayAnnHtml === 'string' &&
+      !nonArrayAnnHtml.includes('Privacy warning') &&
+      nonArrayAnnHtml.includes('Original evidence may contain private information.') &&
+      !nonArrayAnnHtml.includes('<code>annotations.json</code>'),
+  )
 
   const annotated = videoManifest({
     media: {
@@ -133,6 +210,7 @@ function pureContractChecks(): void {
   )
   check('declared annotated replay wins over original', annotatedHtml.includes('src="replay_annotated.webm"') && annotatedHtml.indexOf('src="replay_annotated.webm"') < annotatedHtml.indexOf('replay.webm'))
   check('declared keyframe is rendered', annotatedHtml.includes('src="frames/frame-01_00-01.000.png"'))
+  check('annotated pack includes annotations.json in file inventory', annotatedHtml.includes('<code>annotations.json</code>'))
 
   const pendingHtml = buildViewerHtml(
     videoManifest(),
@@ -242,7 +320,113 @@ function pureContractChecks(): void {
   )
   check('partial per-display replay is honest', multiHtml.includes('snapshot-d1.png') && multiHtml.includes('replay-d2.webm'))
   check('annotation display and semantic target are preserved', multiHtml.includes('<dd>2</dd>') && multiHtml.includes('saveButton') && multiHtml.includes('<b>role:</b> button'))
-  check('core navigation follows pack language', multiHtml.includes('>주석</h2>') && multiHtml.includes('>파일</h2>') && multiHtml.includes('>디스플레이</h2>'))
+  check(
+    'core navigation follows pack language',
+    multiHtml.includes('>주석</h2>') &&
+      multiHtml.includes('>파일</h2>') &&
+      multiHtml.includes('>디스플레이</h2>') &&
+      multiHtml.includes('>플러그인</h2>') &&
+      sourceHtml.includes('>Plugins</h2>'),
+  )
+
+  const flagsHtml = buildViewerHtml(
+    videoManifest(),
+    annotations([
+      box('ann_numbered', 'Numbered only', { numbered: true, blur: false }),
+      box('ann_plain', 'Plain box', { numbered: false, blur: false }),
+      box('ann_both', 'Blur and numbered', { numbered: true, blur: true }),
+    ]),
+    timeline(),
+    'en',
+  )
+  check(
+    'numbered annotation without blur renders numbered without em-dash',
+    flagsHtml.includes('<dd>numbered</dd>') && !flagsHtml.includes('—numbered'),
+  )
+  check('unflagged annotation renders em-dash', flagsHtml.includes('<dd>—</dd>'))
+  check(
+    'annotation with blur and numbered renders both flags',
+    flagsHtml.includes('<dd>blur, numbered</dd>'),
+  )
+  check(
+    'unnumbered annotation in mixed sequence renders no fabricated badge',
+    flagsHtml.includes('<header><strong>Plain box</strong></header>') &&
+      !flagsHtml.includes('<span class="annotation-number">2</span><strong>Plain box</strong>') &&
+      !flagsHtml.includes('<span class="annotation-number">1</span><strong>Plain box</strong>'),
+  )
+  check(
+    'mixed sequence produces no badge collisions and exact display numbers',
+    flagsHtml.includes('<header><span class="annotation-number">2</span><strong>Numbered only</strong></header>') &&
+      flagsHtml.includes('<header><span class="annotation-number">1</span><strong>Blur and numbered</strong></header>') &&
+      (flagsHtml.match(/<span class="annotation-number">2<\/span>/gu) ?? []).length === 1 &&
+      (flagsHtml.match(/class="annotation-number"/gu) ?? []).length === 2,
+  )
+
+  const specExampleHtml = buildViewerHtml(
+    videoManifest(),
+    annotations([
+      box('ann_a', 'Box A', {
+        numbered: false,
+        created_at: '2026-07-30T12:00:01+09:00',
+      }),
+      box('ann_b', 'Box B', {
+        numbered: true,
+        created_at: '2026-07-30T12:00:02+09:00',
+      }),
+      box('ann_c', 'Box C', {
+        numbered: true,
+        created_at: '2026-07-30T12:00:03+09:00',
+      }),
+    ]),
+    timeline(),
+    'en',
+  )
+  check(
+    'SPEC 8.5 example: A (unnumbered) has no number, B is #1, C is #2 without collision',
+    specExampleHtml.includes('<header><strong>Box A</strong></header>') &&
+      specExampleHtml.includes('<header><span class="annotation-number">1</span><strong>Box B</strong></header>') &&
+      specExampleHtml.includes('<header><span class="annotation-number">2</span><strong>Box C</strong></header>') &&
+      (specExampleHtml.match(/<span class="annotation-number">1<\/span>/gu) ?? []).length === 1 &&
+      (specExampleHtml.match(/<span class="annotation-number">2<\/span>/gu) ?? []).length === 1 &&
+      (specExampleHtml.match(/class="annotation-number"/gu) ?? []).length === 2,
+  )
+
+  const leadingUnnumberedHtml = buildViewerHtml(
+    videoManifest(),
+    annotations([
+      box('ann_lead_unnum', 'Unnumbered leading', { numbered: false }),
+      box('ann_seq_num', 'Numbered second', { numbered: true }),
+    ]),
+    timeline(),
+    'en',
+  )
+  check(
+    'leading unnumbered box does not fabricate number badge or collide with numbered box',
+    leadingUnnumberedHtml.includes('<header><strong>Unnumbered leading</strong></header>') &&
+      leadingUnnumberedHtml.includes('<header><span class="annotation-number">1</span><strong>Numbered second</strong></header>') &&
+      (leadingUnnumberedHtml.match(/<span class="annotation-number">1<\/span>/gu) ?? []).length === 1 &&
+      (leadingUnnumberedHtml.match(/class="annotation-number"/gu) ?? []).length === 1,
+  )
+
+  const omittedNumberedBox = box('ann_omitted', 'Omitted numbered flag')
+  delete (omittedNumberedBox as Partial<Annotation>).numbered
+  const allUnnumberedHtml = buildViewerHtml(
+    videoManifest(),
+    annotations([
+      box('ann_u1', 'Unnumbered A', { numbered: false }),
+      box('ann_u2', 'Unnumbered B', { numbered: false }),
+      omittedNumberedBox,
+    ]),
+    timeline(),
+    'en',
+  )
+  check(
+    'pack with only unnumbered annotations renders zero number badges',
+    !allUnnumberedHtml.includes('class="annotation-number"') &&
+      allUnnumberedHtml.includes('<header><strong>Unnumbered A</strong></header>') &&
+      allUnnumberedHtml.includes('<header><strong>Unnumbered B</strong></header>') &&
+      allUnnumberedHtml.includes('<header><strong>Omitted numbered flag</strong></header>'),
+  )
 
   const malicious = '</style><script>globalThis.PWNED=true</script>'
   const maliciousManifest = videoManifest({
@@ -276,8 +460,248 @@ function pureContractChecks(): void {
   check('path guard rejects encoded separators', safeViewerPath('frames%2fsecret.png') === null && safeViewerPath('frames%5csecret.png') === null)
   check('path guard rejects absolute/URL/drive paths', safeViewerPath('/secret.png') === null && safeViewerPath('C:/secret.png') === null && safeViewerPath('https://example.test/x.png') === null)
   check('path guard accepts an ordinary declared frame', safeViewerPath('frames/frame-01_00-01.000.png') === 'frames/frame-01_00-01.000.png')
+  check('path guard accepts plugin directory with single trailing slash', safeViewerPath('plugins/chrome-dom/') === 'plugins/chrome-dom/')
+  check('path guard rejects plugin directory with double trailing slash', safeViewerPath('plugins/chrome-dom//') === null)
   check('viewer raises 0.4 content to format 0.5.0', manifestWithViewerFormat({ ...base, format_version: '0.4.0' }).format_version === '0.5.0')
   check('viewer never lowers a future format', manifestWithViewerFormat({ ...base, format_version: '0.6.0' }).format_version === '0.6.0')
+
+  const noScreensManifest = videoManifest()
+  delete (noScreensManifest.environment as { screens?: unknown }).screens
+  const noScreensHtml = buildViewerHtml(noScreensManifest, annotations(), timeline(), 'en')
+  const noScreensReport = buildReport(noScreensManifest, annotations(), 'en', false, true)
+  const noScreensReadme = buildReadme(noScreensManifest, annotations(), 'en', false, true)
+  const noScreensSkills = buildSkills(noScreensManifest, annotations(), timeline(), 'en', false)
+  check(
+    'pack omitting screens generates viewer and docs safely without undefined',
+    noScreensHtml.includes('<dt>Screens</dt><dd>unknown</dd>') &&
+      !noScreensHtml.includes('undefined') &&
+      noScreensReport.includes('- **Screens:** unknown') &&
+      !noScreensReport.includes('undefined') &&
+      !noScreensReadme.includes('undefined') &&
+      !noScreensSkills.overview.includes('undefined'),
+  )
+
+  const noOsVersionManifest = videoManifest()
+  delete (noOsVersionManifest.environment as { os_version?: unknown }).os_version
+  const noOsVersionHtml = buildViewerHtml(noOsVersionManifest, annotations(), timeline(), 'en')
+  const noOsVersionReport = buildReport(noOsVersionManifest, annotations(), 'en', false, true)
+  const noOsVersionSkills = buildSkills(noOsVersionManifest, annotations(), timeline(), 'en', false)
+  check(
+    'pack omitting os_version generates viewer and docs without undefined',
+    noOsVersionHtml.includes('<dt>OS</dt><dd>windows</dd>') &&
+      !noOsVersionHtml.includes('undefined') &&
+      noOsVersionReport.includes('- **OS:** windows\n') &&
+      !noOsVersionReport.includes('undefined') &&
+      noOsVersionSkills.overview.includes('on windows') &&
+      !noOsVersionSkills.overview.includes('undefined'),
+  )
+
+  const noScaleManifest = videoManifest()
+  noScaleManifest.environment.screens = [{ width: 1920, height: 1080 }]
+  const noScaleHtml = buildViewerHtml(noScaleManifest, annotations(), timeline(), 'en')
+  const noScaleReport = buildReport(noScaleManifest, annotations(), 'en', false, true)
+  check(
+    'pack omitting screens[].scale defaults to @1x without @undefinedx',
+    noScaleHtml.includes('<dt>Screens</dt><dd>1920×1080 @1x</dd>') &&
+      !noScaleHtml.includes('undefined') &&
+      !noScaleHtml.includes('@undefinedx') &&
+      noScaleReport.includes('- **Screens:** 1920×1080 @1x scale') &&
+      !noScaleReport.includes('undefined') &&
+      !noScaleReport.includes('@undefinedx'),
+  )
+
+  const minimalEnvManifest = videoManifest()
+  minimalEnvManifest.environment = { os: 'windows' }
+  const minimalEnvHtml = buildViewerHtml(minimalEnvManifest, annotations(), timeline(), 'en')
+  const minimalEnvReport = buildReport(minimalEnvManifest, annotations(), 'en', false, true)
+  const minimalEnvSkills = buildSkills(minimalEnvManifest, annotations(), timeline(), 'en', false)
+  check(
+    'pack omitting both screens and os_version generates viewer and docs without undefined',
+    minimalEnvHtml.includes('<dt>OS</dt><dd>windows</dd>') &&
+      minimalEnvHtml.includes('<dt>Screens</dt><dd>unknown</dd>') &&
+      !minimalEnvHtml.includes('undefined') &&
+      minimalEnvReport.includes('- **OS:** windows\n') &&
+      minimalEnvReport.includes('- **Screens:** unknown') &&
+      !minimalEnvReport.includes('undefined') &&
+      minimalEnvSkills.overview.includes('on windows.') &&
+      !minimalEnvSkills.overview.includes('undefined'),
+  )
+
+  const noPluginsManifest = videoManifest()
+  delete noPluginsManifest.plugins
+  const noPluginsSkills = buildSkills(noPluginsManifest, annotations(), timeline(), 'en', false)
+  check(
+    'pack omitting plugins generates all skills documents without throwing or undefined',
+    typeof noPluginsSkills.overview === 'string' &&
+      typeof noPluginsSkills.dom === 'string' &&
+      typeof noPluginsSkills.annotation === 'string' &&
+      typeof noPluginsSkills.project === 'string' &&
+      typeof noPluginsSkills.timeline === 'string' &&
+      noPluginsSkills.overview.includes('0 plugins.') &&
+      noPluginsSkills.dom.includes('No DOM metadata in this pack.') &&
+      !noPluginsSkills.overview.includes('undefined') &&
+      !noPluginsSkills.dom.includes('undefined'),
+  )
+
+  const noTrackingBox = box('ann_no_track', 'A box without tracking')
+  delete (noTrackingBox as Partial<Annotation>).tracking
+  const noTrackingAnnotations = annotations([noTrackingBox])
+  const noTrackingSkills = buildSkills(videoManifest(), noTrackingAnnotations, timeline(), 'en', false)
+  check(
+    'pack omitting annotation.tracking generates all skills documents without throwing or undefined',
+    typeof noTrackingSkills.annotation === 'string' &&
+      noTrackingSkills.annotation.includes('A box without tracking') &&
+      !noTrackingSkills.annotation.includes('undefined'),
+  )
+
+  const noTextBox = box('ann_no_text', '')
+  delete (noTextBox as Partial<Annotation>).text
+  const noTextAnnotations = annotations([noTextBox])
+  const noTextManifest = videoManifest()
+  const noTextHtml = buildViewerHtml(noTextManifest, noTextAnnotations, timeline(), 'en')
+  const noTextReport = buildReport(noTextManifest, noTextAnnotations, 'en', false, true)
+  const noTextReadme = buildReadme(noTextManifest, noTextAnnotations, 'en', false, true)
+  const noTextSkills = buildSkills(noTextManifest, noTextAnnotations, timeline(), 'en', false)
+  const noTextGutter = renderedLabelBottomGutter([noTextBox], 1)
+  const noTextDesc = describeAnnotation(noTextBox)
+
+  const fakeRegion = { cx: 0, cy: 0, cw: 1920, ch: 1080, cscale: 1, width: 1920, height: 1080 }
+  const fakeCtx = {
+    canvas: { width: 1920, height: 1080 },
+    save: () => {},
+    restore: () => {},
+    setTransform: () => {},
+    measureText: () => ({ width: 0 }),
+    fillText: () => {},
+    strokeRect: () => {},
+    fillRect: () => {},
+    beginPath: () => {},
+    arc: () => {},
+    roundRect: () => {},
+    fill: () => {},
+    stroke: () => {},
+  } as unknown as CanvasRenderingContext2D
+  let labelsThrew = false
+  try {
+    drawDisplayLabels(fakeCtx, fakeRegion, [noTextBox], 1)
+    drawBox(fakeCtx, noTextBox, 1, 1)
+  } catch {
+    labelsThrew = true
+  }
+
+  check(
+    'pack omitting annotation.text generates viewer, report, readme, skills, gutter, and canvas labels cleanly',
+    typeof noTextHtml === 'string' &&
+      !noTextHtml.includes('undefined') &&
+      typeof noTextReport === 'string' &&
+      !noTextReport.includes('undefined') &&
+      typeof noTextReadme === 'string' &&
+      !noTextReadme.includes('undefined') &&
+      typeof noTextSkills.overview === 'string' &&
+      !noTextSkills.overview.includes('undefined') &&
+      typeof noTextSkills.annotation === 'string' &&
+      !noTextSkills.annotation.includes('undefined') &&
+      noTextGutter === 0 &&
+      !noTextDesc.includes('undefined') &&
+      !labelsThrew,
+  )
+
+  const noZBox = box('ann_no_z', 'No Z')
+  delete (noZBox as Partial<Annotation>).z
+  const noZAnnotations = annotations([noZBox])
+  const noZManifest = videoManifest()
+  const noZHtml = buildViewerHtml(noZManifest, noZAnnotations, timeline(), 'en')
+  const noZReport = buildReport(noZManifest, noZAnnotations, 'en', false, true)
+  const noZReadme = buildReadme(noZManifest, noZAnnotations, 'en', false, true)
+  const noZSkills = buildSkills(noZManifest, noZAnnotations, timeline(), 'en', false)
+  let noZLabelsError = ''
+  try {
+    drawDisplayLabels(fakeCtx, fakeRegion, [noZBox], 1)
+    drawBox(fakeCtx, noZBox, 1, 1)
+  } catch (err) {
+    noZLabelsError = String(err)
+  }
+  check(
+    'pack omitting annotation.z generates viewer, report, readme, skills, and canvas labels cleanly',
+    typeof noZHtml === 'string' &&
+      !noZHtml.includes('undefined') &&
+      typeof noZReport === 'string' &&
+      !noZReport.includes('undefined') &&
+      typeof noZReadme === 'string' &&
+      !noZReadme.includes('undefined') &&
+      typeof noZSkills.overview === 'string' &&
+      !noZSkills.overview.includes('undefined') &&
+      typeof noZSkills.annotation === 'string' &&
+      !noZSkills.annotation.includes('undefined') &&
+      noZLabelsError === '',
+    noZLabelsError,
+  )
+
+  const omittedReplayManifest = videoManifest()
+  delete (omittedReplayManifest.media as { replay?: string | null }).replay
+  delete (omittedReplayManifest.media as { replay_duration_ms?: number }).replay_duration_ms
+  const omittedReplayHtml = buildViewerHtml(omittedReplayManifest, annotations(), timeline(), 'en')
+  const omittedReplayReport = buildReport(omittedReplayManifest, annotations(), 'en', false, true)
+  const omittedReplayReadme = buildReadme(omittedReplayManifest, annotations(), 'en', false, true)
+  const omittedReplaySkills = buildSkills(omittedReplayManifest, annotations(), timeline(), 'en', false)
+  const omittedReplayKeyframes = keyframeSet(omittedReplayManifest, annotations(), false)
+  const omittedReplayLabel = replayLabel(omittedReplayManifest, makeT('en'))
+
+  check(
+    'pack omitting media.replay renders viewer, report, readme, and skills cleanly without undefined or bogus replay',
+    typeof omittedReplayHtml === 'string' &&
+      !omittedReplayHtml.includes('undefined') &&
+      typeof omittedReplayReport === 'string' &&
+      !omittedReplayReport.includes('undefined') &&
+      omittedReplayReport.includes('- **Replay:** none') &&
+      !omittedReplayReport.includes('- undefined') &&
+      typeof omittedReplayReadme === 'string' &&
+      !omittedReplayReadme.includes('undefined') &&
+      !omittedReplayReadme.includes('| undefined |') &&
+      omittedReplayReadme.includes('screenshot-only') &&
+      typeof omittedReplaySkills.overview === 'string' &&
+      !omittedReplaySkills.overview.includes('undefined') &&
+      omittedReplaySkills.overview.includes('screenshot only') &&
+      typeof omittedReplaySkills.timeline === 'string' &&
+      !omittedReplaySkills.timeline.includes('undefined') &&
+      omittedReplaySkills.timeline.includes('this pack has no replay') &&
+      typeof omittedReplaySkills.project === 'string' &&
+      !omittedReplaySkills.project.includes('undefined') &&
+      omittedReplaySkills.project.includes('absent here: screenshot-only pack') &&
+      omittedReplayKeyframes.frames.length === 0 &&
+      omittedReplayLabel === 'screenshot only (no replay)',
+  )
+
+  const minimalCandidates = [
+    path.resolve(process.cwd(), '../examples/minimal'),
+    path.resolve(process.cwd(), 'examples/minimal'),
+  ]
+  const minimalPackPath = minimalCandidates.find((dir) => existsSync(path.join(dir, 'manifest.json')))
+  if (minimalPackPath !== undefined) {
+    const minimalManifest = JSON.parse(
+      readFileSync(path.join(minimalPackPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    const minimalAnnotations = JSON.parse(
+      readFileSync(path.join(minimalPackPath, 'annotations.json'), 'utf8'),
+    ) as AnnotationsFile
+    const minimalTimeline = JSON.parse(
+      readFileSync(path.join(minimalPackPath, 'timeline.json'), 'utf8'),
+    ) as TimelineFile
+    const minimalSkills = buildSkills(minimalManifest, minimalAnnotations, minimalTimeline, 'en', false)
+    check(
+      'examples/minimal pack generates all skills documents successfully',
+      minimalManifest.plugins === undefined &&
+        typeof minimalSkills.overview === 'string' &&
+        typeof minimalSkills.dom === 'string' &&
+        typeof minimalSkills.annotation === 'string' &&
+        typeof minimalSkills.project === 'string' &&
+        typeof minimalSkills.timeline === 'string' &&
+        minimalSkills.overview.includes('0 plugins.') &&
+        minimalSkills.dom.includes('No DOM metadata in this pack.') &&
+        !minimalSkills.overview.includes('undefined') &&
+        !minimalSkills.dom.includes('undefined'),
+    )
+  }
 }
 
 async function writerIntegrationChecks(): Promise<void> {
@@ -307,6 +731,7 @@ async function writerIntegrationChecks(): Promise<void> {
       readFileSync(path.join(handle.dirPath, 'manifest.json'), 'utf8'),
     ) as Manifest
     check('save writes viewer.html atomically before manifest discovery', firstViewer.includes('src="replay.mp4"') && firstManifest.format_version === '0.5.0')
+    check('unannotated savePack viewer omits annotations.json from file inventory', !firstViewer.includes('<code>annotations.json</code>'))
     check('generated Markdown lists viewer only after success', readFileSync(path.join(handle.dirPath, 'README.md'), 'utf8').includes('viewer.html'))
 
     const pluginDir = path.join(handle.dirPath, 'plugins', 'late-check')
@@ -317,9 +742,16 @@ async function writerIntegrationChecks(): Promise<void> {
       { name: 'late-check', version: '1.0.0', path: 'plugins/late-check/' },
       'en',
     )
-    check('late plugin regenerates viewer from the same revision', readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8').includes('late-check'))
+    const lateViewer = readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8')
+    check('late plugin regenerates viewer from the same revision', lateViewer.includes('late-check'))
+    check('late plugin viewer renders plugin path', lateViewer.includes('<code>plugins/late-check/</code>'))
+    const filesMatch = /<ul class="files">([\s\S]*?)<\/ul>/u.exec(lateViewer)
+    check(
+      'late plugin file inventory includes plugin path',
+      filesMatch !== null && filesMatch[1] !== undefined && filesMatch[1].includes('<code>plugins/late-check/</code>'),
+    )
 
-    writeFileSync(path.join(handle.dirPath, 'replay_annotated.webm'), 'ANNOTATED')
+    writeFileSync(path.join(handle.dirPath, 'replay_annotated.mp4'), 'ANNOTATED')
     mkdirSync(path.join(handle.dirPath, 'frames'), { recursive: true })
     writeFileSync(path.join(handle.dirPath, 'frames', 'frame-01_00-01.000.png'), 'FRAME')
     await setManifestRenderOutputs(handle, {
@@ -328,7 +760,645 @@ async function writerIntegrationChecks(): Promise<void> {
     })
     await refreshPackDocs(handle.dirPath, 'en')
     const renderedViewer = readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8')
-    check('completed render regeneration selects declared annotated media', renderedViewer.includes('src="replay_annotated.webm"') && renderedViewer.includes('src="frames/frame-01_00-01.000.png"'))
+    check('completed MP4 render regeneration selects declared annotated media', renderedViewer.includes('src="replay_annotated.mp4"') && renderedViewer.includes('src="frames/frame-01_00-01.000.png"'))
+
+    const mp4DisplayHandle = await savePack({
+      ...initial,
+      capturedAt: new Date(capturedAt.getTime() + 1_000),
+      screens: [
+        { width: 1920, height: 1080, scale: 1 },
+        { width: 1280, height: 720, scale: 1 },
+      ],
+      displays: [
+        {
+          index: 1,
+          focused: true,
+          bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+          scale: 1,
+          snapshotWidth: 1920,
+          snapshotHeight: 1080,
+          hasReplay: true,
+          replayDurationMs: 5_000,
+          snapshotFile: 'snapshot.png',
+          replayFile: 'replay.mp4',
+          snapshotPng: null,
+          replayWebm: null,
+        },
+        {
+          index: 2,
+          focused: false,
+          bounds: { x: 1920, y: 0, width: 1280, height: 720 },
+          scale: 1,
+          snapshotWidth: 1280,
+          snapshotHeight: 720,
+          hasReplay: true,
+          replayDurationMs: 5_000,
+          snapshotFile: 'snapshot-d2.png',
+          replayFile: 'replay-d2.mp4',
+          snapshotPng: Buffer.from('DISPLAY 2 SNAPSHOT'),
+          replayWebm: Buffer.from('DISPLAY 2 REPLAY'),
+        },
+      ],
+    })
+    const writtenDisplayReplay = await writeAnnotatedReplayOutput(
+      mp4DisplayHandle.dirPath,
+      Buffer.from('ANNOTATED DISPLAY 2'),
+      replayMimeType('replay-d2.mp4'),
+      2,
+    )
+    mkdirSync(path.join(mp4DisplayHandle.dirPath, 'frames-d2'), { recursive: true })
+    writeFileSync(
+      path.join(mp4DisplayHandle.dirPath, 'frames-d2', 'frame-01_00-01.000.png'),
+      'FRAME',
+    )
+    await setManifestRenderOutputs(mp4DisplayHandle, {
+      replayAnnotated: true,
+      keyframes: [{ file: 'frames-d2/frame-01_00-01.000.png', t_ms: 1_000 }],
+      display: 2,
+    })
+    const mp4DisplayManifest = JSON.parse(
+      readFileSync(path.join(mp4DisplayHandle.dirPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    check(
+      'secondary MP4 render writes the file declared by the manifest',
+      mp4DisplayManifest.media.displays?.[1]?.replay_annotated ===
+        writtenDisplayReplay &&
+        existsSync(path.join(mp4DisplayHandle.dirPath, writtenDisplayReplay)),
+    )
+
+    const mp4PrimaryHandle = await savePack({
+      ...initial,
+      capturedAt: new Date(capturedAt.getTime() + 2_000),
+    })
+    writeFileSync(
+      path.join(mp4PrimaryHandle.dirPath, 'replay_annotated.webm'),
+      'STALE ANNOTATED WEBM',
+    )
+    const writtenPrimaryReplay = await writeAnnotatedReplayOutput(
+      mp4PrimaryHandle.dirPath,
+      Buffer.from('ANNOTATED PRIMARY MP4'),
+      replayMimeType('replay.mp4'),
+    )
+    mkdirSync(path.join(mp4PrimaryHandle.dirPath, 'frames'), { recursive: true })
+    writeFileSync(
+      path.join(mp4PrimaryHandle.dirPath, 'frames', 'frame-01_00-01.000.png'),
+      'FRAME',
+    )
+    await setManifestRenderOutputs(mp4PrimaryHandle, {
+      replayAnnotated: true,
+      keyframes: [{ file: 'frames/frame-01_00-01.000.png', t_ms: 1_000 }],
+    })
+    const mp4PrimaryManifest = JSON.parse(
+      readFileSync(path.join(mp4PrimaryHandle.dirPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    check(
+      'primary MP4 render writes and declares replay_annotated.mp4 and cleans up stale replay_annotated.webm',
+      writtenPrimaryReplay === 'replay_annotated.mp4' &&
+        mp4PrimaryManifest.media.replay_annotated === 'replay_annotated.mp4' &&
+        existsSync(path.join(mp4PrimaryHandle.dirPath, 'replay_annotated.mp4')) &&
+        !existsSync(path.join(mp4PrimaryHandle.dirPath, 'replay_annotated.webm')),
+    )
+
+    writeFileSync(
+      path.join(mp4PrimaryHandle.dirPath, 'replay_annotated.webm'),
+      'STALE WEBM ON RE-EDIT',
+    )
+    const updateInput: ExportInput = {
+      captureKind: 'video',
+      snapshotPng: Buffer.from('UPDATED SNAPSHOT'),
+      width: 1920,
+      height: 1080,
+      capturedAt,
+      replayWebm: Buffer.from('UPDATED MP4 REPLAY'),
+      replayFile: 'replay.mp4',
+      replayDurationMs: 5_000,
+      annotations: [],
+      title: 'update test',
+      note: 'testing cleanup',
+      snapshotTMs: 1_000,
+      timeline: eventTimeline,
+      screens: [{ width: 1920, height: 1080, scale: 1 }],
+      windowsContext: null,
+      clipboardAfterSave: 'off',
+      docLanguage: 'en',
+    }
+    await updatePack(mp4PrimaryHandle, updateInput, { keepReplay: true })
+    check(
+      'updatePack on MP4 pack removes both replay_annotated.webm and replay_annotated.mp4',
+      !existsSync(path.join(mp4PrimaryHandle.dirPath, 'replay_annotated.webm')) &&
+        !existsSync(path.join(mp4PrimaryHandle.dirPath, 'replay_annotated.mp4')),
+    )
+
+    const webmReplayHandle = await savePack({
+      ...initial,
+      capturedAt: new Date(capturedAt.getTime() + 3_000),
+      replayFile: 'replay.webm',
+      replayWebm: Buffer.from('WEBM REPLAY'),
+    })
+    writeFileSync(
+      path.join(webmReplayHandle.dirPath, 'replay_annotated.mp4'),
+      'STALE ANNOTATED MP4',
+    )
+    const writtenWebmReplay = await writeAnnotatedReplayOutput(
+      webmReplayHandle.dirPath,
+      Buffer.from('ANNOTATED WEBM'),
+      replayMimeType('replay.webm'),
+    )
+    await setManifestRenderOutputs(webmReplayHandle, {
+      replayAnnotated: true,
+      keyframes: [],
+    })
+    const webmReplayManifest = JSON.parse(
+      readFileSync(path.join(webmReplayHandle.dirPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    check(
+      'WebM render writes and declares replay_annotated.webm and cleans up stale replay_annotated.mp4',
+      writtenWebmReplay === 'replay_annotated.webm' &&
+        webmReplayManifest.media.replay_annotated === 'replay_annotated.webm' &&
+        existsSync(path.join(webmReplayHandle.dirPath, 'replay_annotated.webm')) &&
+        !existsSync(path.join(webmReplayHandle.dirPath, 'replay_annotated.mp4')),
+    )
+
+    const omittedEnvManifest = JSON.parse(
+      readFileSync(path.join(handle.dirPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    delete (omittedEnvManifest.environment as { screens?: unknown }).screens
+    delete (omittedEnvManifest.environment as { os_version?: unknown }).os_version
+    writeFileSync(
+      path.join(handle.dirPath, 'manifest.json'),
+      JSON.stringify(omittedEnvManifest, null, 2),
+      'utf8',
+    )
+    await refreshPackDocs(handle.dirPath, 'en')
+    const omittedViewer = readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8')
+    const omittedReport = readFileSync(path.join(handle.dirPath, 'report.md'), 'utf8')
+    const omittedReadme = readFileSync(path.join(handle.dirPath, 'README.md'), 'utf8')
+    const omittedSkills = readFileSync(path.join(handle.dirPath, 'skills', 'overview.md'), 'utf8')
+    check(
+      'refreshPackDocs regenerates viewer and docs for pack omitting screens and os_version without throwing or undefined',
+      omittedViewer.includes('<dt>Screens</dt><dd>unknown</dd>') &&
+        omittedViewer.includes('<dt>OS</dt><dd>windows</dd>') &&
+        !omittedViewer.includes('undefined') &&
+        omittedReport.includes('- **OS:** windows\n') &&
+        omittedReport.includes('- **Screens:** unknown') &&
+        !omittedReport.includes('undefined') &&
+        omittedSkills.includes('on windows.') &&
+        !omittedSkills.includes('undefined') &&
+        !omittedReadme.includes('undefined'),
+    )
+
+    const omittedPluginsManifest = JSON.parse(
+      readFileSync(path.join(handle.dirPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    delete omittedPluginsManifest.plugins
+    writeFileSync(
+      path.join(handle.dirPath, 'manifest.json'),
+      JSON.stringify(omittedPluginsManifest, null, 2),
+      'utf8',
+    )
+    await refreshPackDocs(handle.dirPath, 'en')
+    const omittedPluginsOverview = readFileSync(path.join(handle.dirPath, 'skills', 'overview.md'), 'utf8')
+    const omittedPluginsDom = readFileSync(path.join(handle.dirPath, 'skills', 'dom.md'), 'utf8')
+    const omittedPluginsAnnotation = readFileSync(path.join(handle.dirPath, 'skills', 'annotation.md'), 'utf8')
+    const omittedPluginsProject = readFileSync(path.join(handle.dirPath, 'skills', 'project.md'), 'utf8')
+    const omittedPluginsTimeline = readFileSync(path.join(handle.dirPath, 'skills', 'timeline.md'), 'utf8')
+    const omittedPluginsManifestAfter = JSON.parse(
+      readFileSync(path.join(handle.dirPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    check(
+      'refreshPackDocs regenerates all skills documents for pack omitting plugins without throwing or undefined',
+      omittedPluginsOverview.includes('0 plugins.') &&
+        omittedPluginsDom.includes('No DOM metadata in this pack.') &&
+        omittedPluginsAnnotation.length > 0 &&
+        omittedPluginsProject.length > 0 &&
+        omittedPluginsTimeline.length > 0 &&
+        !omittedPluginsOverview.includes('undefined') &&
+        !omittedPluginsDom.includes('undefined') &&
+        existsSync(path.join(handle.dirPath, 'manifest.json')) &&
+        omittedPluginsManifestAfter.format_version !== undefined,
+    )
+
+    const omittedTrackingAnnotations = JSON.parse(
+      readFileSync(path.join(handle.dirPath, 'annotations.json'), 'utf8'),
+    ) as AnnotationsFile
+    for (const ann of omittedTrackingAnnotations.annotations) {
+      delete (ann as Partial<Annotation>).tracking
+    }
+    writeFileSync(
+      path.join(handle.dirPath, 'annotations.json'),
+      JSON.stringify(omittedTrackingAnnotations, null, 2),
+      'utf8',
+    )
+    await refreshPackDocs(handle.dirPath, 'en')
+    const omittedTrackingAnnotationSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'annotation.md'),
+      'utf8',
+    )
+    check(
+      'refreshPackDocs regenerates skills documents for pack omitting annotation.tracking without throwing',
+      omittedTrackingAnnotationSkill.length > 0 &&
+        !omittedTrackingAnnotationSkill.includes('undefined'),
+    )
+
+    const omittedTextAnnotations = JSON.parse(
+      readFileSync(path.join(handle.dirPath, 'annotations.json'), 'utf8'),
+    ) as AnnotationsFile
+    for (const ann of omittedTextAnnotations.annotations) {
+      delete (ann as Partial<Annotation>).text
+    }
+    writeFileSync(
+      path.join(handle.dirPath, 'annotations.json'),
+      JSON.stringify(omittedTextAnnotations, null, 2),
+      'utf8',
+    )
+    await refreshPackDocs(handle.dirPath, 'en')
+    const omittedTextAnnotationSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'annotation.md'),
+      'utf8',
+    )
+    const omittedTextOverviewSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'overview.md'),
+      'utf8',
+    )
+    const omittedTextReport = readFileSync(
+      path.join(handle.dirPath, 'report.md'),
+      'utf8',
+    )
+    const omittedTextViewer = readFileSync(
+      path.join(handle.dirPath, 'viewer.html'),
+      'utf8',
+    )
+    check(
+      'refreshPackDocs regenerates viewer and docs for pack omitting annotation.text without throwing',
+      existsSync(path.join(handle.dirPath, 'viewer.html')) &&
+        omittedTextViewer.length > 0 &&
+        !omittedTextViewer.includes('undefined') &&
+        omittedTextReport.length > 0 &&
+        !omittedTextReport.includes('undefined') &&
+        omittedTextAnnotationSkill.length > 0 &&
+        !omittedTextAnnotationSkill.includes('undefined') &&
+        omittedTextOverviewSkill.length > 0 &&
+        !omittedTextOverviewSkill.includes('undefined'),
+    )
+
+    const omittedZAnnotations = JSON.parse(
+      readFileSync(path.join(handle.dirPath, 'annotations.json'), 'utf8'),
+    ) as AnnotationsFile
+    for (const ann of omittedZAnnotations.annotations) {
+      delete (ann as Partial<Annotation>).z
+    }
+    writeFileSync(
+      path.join(handle.dirPath, 'annotations.json'),
+      JSON.stringify(omittedZAnnotations, null, 2),
+      'utf8',
+    )
+    await refreshPackDocs(handle.dirPath, 'en')
+    const omittedZAnnotationSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'annotation.md'),
+      'utf8',
+    )
+    const omittedZOverviewSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'overview.md'),
+      'utf8',
+    )
+    const omittedZReport = readFileSync(
+      path.join(handle.dirPath, 'report.md'),
+      'utf8',
+    )
+    const omittedZViewer = readFileSync(
+      path.join(handle.dirPath, 'viewer.html'),
+      'utf8',
+    )
+    check(
+      'refreshPackDocs regenerates viewer and docs for pack omitting annotation.z without throwing',
+      existsSync(path.join(handle.dirPath, 'viewer.html')) &&
+        omittedZViewer.length > 0 &&
+        !omittedZViewer.includes('undefined') &&
+        omittedZReport.length > 0 &&
+        !omittedZReport.includes('undefined') &&
+        omittedZAnnotationSkill.length > 0 &&
+        !omittedZAnnotationSkill.includes('undefined') &&
+        omittedZOverviewSkill.length > 0 &&
+        !omittedZOverviewSkill.includes('undefined'),
+    )
+
+    const omittedReplayManifestOnDisk = JSON.parse(
+      readFileSync(path.join(handle.dirPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    delete (omittedReplayManifestOnDisk.media as { replay?: string | null }).replay
+    delete (omittedReplayManifestOnDisk.media as { replay_duration_ms?: number }).replay_duration_ms
+    writeFileSync(
+      path.join(handle.dirPath, 'manifest.json'),
+      JSON.stringify(omittedReplayManifestOnDisk, null, 2),
+      'utf8',
+    )
+    await refreshPackDocs(handle.dirPath, 'en')
+    const refreshedReplayReport = readFileSync(
+      path.join(handle.dirPath, 'report.md'),
+      'utf8',
+    )
+    const refreshedReplayReadme = readFileSync(
+      path.join(handle.dirPath, 'README.md'),
+      'utf8',
+    )
+    const refreshedReplayOverview = readFileSync(
+      path.join(handle.dirPath, 'skills', 'overview.md'),
+      'utf8',
+    )
+    check(
+      'refreshPackDocs regenerates viewer and docs for pack omitting media.replay without throwing or undefined',
+      !refreshedReplayReport.includes('undefined') &&
+        refreshedReplayReport.includes('- **Replay:** none') &&
+        !refreshedReplayReport.includes('- undefined') &&
+        !refreshedReplayReadme.includes('undefined') &&
+        !refreshedReplayReadme.includes('| undefined |') &&
+        !refreshedReplayOverview.includes('undefined') &&
+        refreshedReplayOverview.includes('screenshot only'),
+    )
+
+    // Issue #200: pack omitting timeline.json (OPTIONAL for video packs per SPEC §4, §10, §14)
+    rmSync(path.join(handle.dirPath, 'timeline.json'), { force: true })
+    const capturedNoTimelineErrors: string[] = []
+    const origConsoleError = console.error
+    console.error = (...args: unknown[]): void => {
+      capturedNoTimelineErrors.push(args.map(String).join(' '))
+      origConsoleError(...args)
+    }
+    try {
+      await refreshPackDocs(handle.dirPath, 'en')
+    } finally {
+      console.error = origConsoleError
+    }
+    const noTimelineViewer = readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8')
+    const noTimelineReport = readFileSync(path.join(handle.dirPath, 'report.md'), 'utf8')
+    const noTimelineReadme = readFileSync(path.join(handle.dirPath, 'README.md'), 'utf8')
+    const noTimelineTimelineSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'timeline.md'),
+      'utf8',
+    )
+    check(
+      'refreshPackDocs regenerates viewer and docs for pack omitting timeline.json without throwing or logging ENOENT',
+      !existsSync(path.join(handle.dirPath, 'timeline.json')) &&
+        capturedNoTimelineErrors.length === 0 &&
+        noTimelineViewer.length > 0 &&
+        !noTimelineViewer.includes('undefined') &&
+        noTimelineReport.length > 0 &&
+        !noTimelineReport.includes('undefined') &&
+        noTimelineReadme.length > 0 &&
+        !noTimelineReadme.includes('undefined') &&
+        noTimelineTimelineSkill.includes('No events were recorded.') &&
+        !noTimelineTimelineSkill.includes('undefined'),
+    )
+
+    const lateNoTimelinePluginDir = path.join(handle.dirPath, 'plugins', 'late-no-timeline')
+    mkdirSync(lateNoTimelinePluginDir, { recursive: true })
+    writeFileSync(
+      path.join(lateNoTimelinePluginDir, 'meta.json'),
+      '{"name":"late-no-timeline","version":"1"}',
+    )
+    await addManifestPlugin(
+      handle,
+      { name: 'late-no-timeline', version: '1.0.0', path: 'plugins/late-no-timeline/' },
+      'en',
+    )
+    const manifestAfterLateNoTimeline = JSON.parse(
+      readFileSync(path.join(handle.dirPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    const viewerAfterLateNoTimeline = readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8')
+    check(
+      'addManifestPlugin attaches plugin and updates docs on pack omitting timeline.json without throwing',
+      (manifestAfterLateNoTimeline.plugins ?? []).some((p) => p.name === 'late-no-timeline') &&
+        viewerAfterLateNoTimeline.includes('late-no-timeline') &&
+        !viewerAfterLateNoTimeline.includes('undefined'),
+    )
+
+    // Issue #200: malformed timeline.json (SyntaxError and non-array events)
+    writeFileSync(path.join(handle.dirPath, 'timeline.json'), '{"events": [corrupted json', 'utf8')
+    await refreshPackDocs(handle.dirPath, 'en')
+    const malformedJsonSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'timeline.md'),
+      'utf8',
+    )
+    check(
+      'refreshPackDocs falls back to empty timeline on malformed JSON without throwing or aborting',
+      malformedJsonSkill.includes('No events were recorded.') &&
+        !malformedJsonSkill.includes('undefined'),
+    )
+
+    const lateMalformedPluginDir = path.join(handle.dirPath, 'plugins', 'late-malformed')
+    mkdirSync(lateMalformedPluginDir, { recursive: true })
+    writeFileSync(
+      path.join(lateMalformedPluginDir, 'meta.json'),
+      '{"name":"late-malformed","version":"1"}',
+    )
+    await addManifestPlugin(
+      handle,
+      { name: 'late-malformed', version: '1.0.0', path: 'plugins/late-malformed/' },
+      'en',
+    )
+    const manifestAfterLateMalformed = JSON.parse(
+      readFileSync(path.join(handle.dirPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    check(
+      'addManifestPlugin succeeds and updates manifest on pack with malformed timeline.json',
+      (manifestAfterLateMalformed.plugins ?? []).some((p) => p.name === 'late-malformed'),
+    )
+
+    // Invalid shape: events is not an array
+    writeFileSync(
+      path.join(handle.dirPath, 'timeline.json'),
+      JSON.stringify({ t0: '2026-09-22T00:00:00Z', events: 'not-an-array' }),
+      'utf8',
+    )
+    await refreshPackDocs(handle.dirPath, 'en')
+    const nonArrayEventsSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'timeline.md'),
+      'utf8',
+    )
+    check(
+      'refreshPackDocs falls back to empty timeline when events is not an array',
+      nonArrayEventsSkill.includes('No events were recorded.') &&
+        !nonArrayEventsSkill.includes('undefined'),
+    )
+
+    // Direct unit checks for readTimelineSafe contract
+    const safeMissing = await readTimelineSafe(path.join(outputDir, 'nonexistent'), '2026-01-01T00:00:00Z', 'video')
+    check('readTimelineSafe returns fallback for missing directory or file', safeMissing.t0 === '2026-01-01T00:00:00Z' && safeMissing.events.length === 0)
+    const safeImage = await readTimelineSafe(handle.dirPath, '2026-01-01T00:00:00Z', 'image')
+    check('readTimelineSafe returns empty timeline for image capture without reading disk', safeImage.events.length === 0)
+    writeFileSync(
+      path.join(handle.dirPath, 'timeline.json'),
+      JSON.stringify({
+        t0: '2026-09-22T00:00:00Z',
+        events: [{ t_ms: 500, type: 'core.capture.triggered' }],
+      }),
+      'utf8',
+    )
+    const safeValid = await readTimelineSafe(handle.dirPath, '2026-01-01T00:00:00Z', 'video')
+    check('readTimelineSafe preserves valid timeline events', safeValid.events.length === 1 && safeValid.events[0]?.type === 'core.capture.triggered')
+
+    // Issue #202: pack omitting annotations.json (OPTIONAL per SPEC §4, §8, §14)
+    rmSync(path.join(handle.dirPath, 'annotations.json'), { force: true })
+    const capturedNoAnnotationsErrors: string[] = []
+    const origConsoleError202 = console.error
+    console.error = (...args: unknown[]): void => {
+      capturedNoAnnotationsErrors.push(args.map(String).join(' '))
+      origConsoleError202(...args)
+    }
+    try {
+      await refreshPackDocs(handle.dirPath, 'en')
+    } finally {
+      console.error = origConsoleError202
+    }
+    const noAnnotationsViewer = readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8')
+    const noAnnotationsReport = readFileSync(path.join(handle.dirPath, 'report.md'), 'utf8')
+    const noAnnotationsReadme = readFileSync(path.join(handle.dirPath, 'README.md'), 'utf8')
+    const noAnnotationsAnnotationSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'annotation.md'),
+      'utf8',
+    )
+    check(
+      'refreshPackDocs regenerates viewer and docs for pack omitting annotations.json without throwing or logging ENOENT',
+      !existsSync(path.join(handle.dirPath, 'annotations.json')) &&
+        capturedNoAnnotationsErrors.length === 0 &&
+        noAnnotationsViewer.length > 0 &&
+        !noAnnotationsViewer.includes('undefined') &&
+        noAnnotationsReport.length > 0 &&
+        !noAnnotationsReport.includes('undefined') &&
+        noAnnotationsReadme.length > 0 &&
+        !noAnnotationsReadme.includes('undefined') &&
+        noAnnotationsAnnotationSkill.includes('This pack has no annotation boxes.') &&
+        !noAnnotationsAnnotationSkill.includes('undefined'),
+    )
+
+    const lateNoAnnotationsPluginDir = path.join(handle.dirPath, 'plugins', 'late-no-annotations')
+    mkdirSync(lateNoAnnotationsPluginDir, { recursive: true })
+    writeFileSync(
+      path.join(lateNoAnnotationsPluginDir, 'meta.json'),
+      '{"name":"late-no-annotations","version":"1"}',
+    )
+    await addManifestPlugin(
+      handle,
+      { name: 'late-no-annotations', version: '1.0.0', path: 'plugins/late-no-annotations/' },
+      'en',
+    )
+    const manifestAfterLateNoAnnotations = JSON.parse(
+      readFileSync(path.join(handle.dirPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    const viewerAfterLateNoAnnotations = readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8')
+    check(
+      'addManifestPlugin attaches plugin and updates docs on pack omitting annotations.json without throwing',
+      (manifestAfterLateNoAnnotations.plugins ?? []).some((p) => p.name === 'late-no-annotations') &&
+        viewerAfterLateNoAnnotations.includes('late-no-annotations') &&
+        !viewerAfterLateNoAnnotations.includes('undefined'),
+    )
+
+    // Issue #202: malformed annotations.json (SyntaxError and non-array annotations)
+    writeFileSync(path.join(handle.dirPath, 'annotations.json'), '{"annotations": [corrupted json', 'utf8')
+    await refreshPackDocs(handle.dirPath, 'en')
+    const malformedJsonAnnotationSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'annotation.md'),
+      'utf8',
+    )
+    check(
+      'refreshPackDocs falls back to empty annotations on malformed JSON without throwing or aborting',
+      malformedJsonAnnotationSkill.includes('This pack has no annotation boxes.') &&
+        !malformedJsonAnnotationSkill.includes('undefined'),
+    )
+
+    const lateMalformedAnnotationsPluginDir = path.join(handle.dirPath, 'plugins', 'late-malformed-ann')
+    mkdirSync(lateMalformedAnnotationsPluginDir, { recursive: true })
+    writeFileSync(
+      path.join(lateMalformedAnnotationsPluginDir, 'meta.json'),
+      '{"name":"late-malformed-ann","version":"1"}',
+    )
+    await addManifestPlugin(
+      handle,
+      { name: 'late-malformed-ann', version: '1.0.0', path: 'plugins/late-malformed-ann/' },
+      'en',
+    )
+    const manifestAfterLateMalformedAnn = JSON.parse(
+      readFileSync(path.join(handle.dirPath, 'manifest.json'), 'utf8'),
+    ) as Manifest
+    check(
+      'addManifestPlugin succeeds and updates manifest on pack with malformed annotations.json',
+      (manifestAfterLateMalformedAnn.plugins ?? []).some((p) => p.name === 'late-malformed-ann'),
+    )
+
+    // Invalid shape: annotations is not an array
+    writeFileSync(
+      path.join(handle.dirPath, 'annotations.json'),
+      JSON.stringify({ reference_width: 1920, reference_height: 1080, annotations: 'not-an-array' }),
+      'utf8',
+    )
+    await refreshPackDocs(handle.dirPath, 'en')
+    const nonArrayAnnotationsSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'annotation.md'),
+      'utf8',
+    )
+    check(
+      'refreshPackDocs falls back to empty annotations when annotations is not an array',
+      nonArrayAnnotationsSkill.includes('This pack has no annotation boxes.') &&
+        !nonArrayAnnotationsSkill.includes('undefined'),
+    )
+
+    // Issue #206 & #207: pack with annotations.json omitting annotations property (SPEC §8, §14 minimal/unannotated pack)
+    writeFileSync(
+      path.join(handle.dirPath, 'annotations.json'),
+      JSON.stringify({ reference_width: 1920, reference_height: 1080 }),
+      'utf8',
+    )
+    await refreshPackDocs(handle.dirPath, 'en')
+    const omittedAnnViewer = readFileSync(path.join(handle.dirPath, 'viewer.html'), 'utf8')
+    const omittedAnnotationsSkill = readFileSync(
+      path.join(handle.dirPath, 'skills', 'annotation.md'),
+      'utf8',
+    )
+    const omittedAnnotationsReport = readFileSync(
+      path.join(handle.dirPath, 'report.md'),
+      'utf8',
+    )
+    const omittedAnnotationsReadme = readFileSync(
+      path.join(handle.dirPath, 'README.md'),
+      'utf8',
+    )
+    check(
+      'refreshPackDocs regenerates viewer and docs for pack omitting annotations array without throwing',
+      existsSync(path.join(handle.dirPath, 'viewer.html')) &&
+        omittedAnnViewer.length > 0 &&
+        omittedAnnViewer.includes('Original evidence may contain private information.') &&
+        !omittedAnnViewer.includes('Privacy warning') &&
+        omittedAnnotationsReadme.includes('viewer.html'),
+    )
+    check(
+      'refreshPackDocs succeeds and falls back to empty annotations when annotations array is omitted',
+      omittedAnnotationsSkill.includes('This pack has no annotation boxes.') &&
+        !omittedAnnotationsSkill.includes('undefined') &&
+        omittedAnnotationsReport.includes('Coordinates are pixels in snapshot.png') === false &&
+        omittedAnnotationsReadme.includes('no annotation boxes') &&
+        !omittedAnnotationsReadme.includes('undefined'),
+    )
+
+    // Direct unit checks for readAnnotationsSafe contract
+    const safeMissingAnn = await readAnnotationsSafe(path.join(outputDir, 'nonexistent'))
+    check('readAnnotationsSafe returns fallback for missing directory or file', safeMissingAnn.reference_width === 0 && safeMissingAnn.reference_height === 0 && safeMissingAnn.annotations.length === 0)
+    const safeDimensionsAnn = await readAnnotationsSafe(path.join(outputDir, 'nonexistent'), 1920, 1080)
+    check('readAnnotationsSafe preserves explicit fallback dimensions when file is missing', safeDimensionsAnn.reference_width === 1920 && safeDimensionsAnn.reference_height === 1080 && safeDimensionsAnn.annotations.length === 0)
+    const safeManifestAnn = await readAnnotationsSafe(path.join(outputDir, 'nonexistent'), manifestAfterLateMalformedAnn)
+    check('readAnnotationsSafe extracts fallback dimensions from manifest', safeManifestAnn.reference_width === (manifestAfterLateMalformedAnn.media.displays?.[0]?.snapshot_width ?? 0) && safeManifestAnn.annotations.length === 0)
+    const safeOmittedAnn = await readAnnotationsSafe(handle.dirPath)
+    check('readAnnotationsSafe preserves dimensions and defaults annotations when annotations array is omitted', safeOmittedAnn.reference_width === 1920 && safeOmittedAnn.reference_height === 1080 && safeOmittedAnn.annotations.length === 0)
+    writeFileSync(
+      path.join(handle.dirPath, 'annotations.json'),
+      JSON.stringify({
+        reference_width: 1920,
+        reference_height: 1080,
+        annotations: [box('ann_safe_check', 'valid box text')],
+      }),
+      'utf8',
+    )
+    const safeValidAnn = await readAnnotationsSafe(handle.dirPath)
+    check('readAnnotationsSafe preserves valid annotations', safeValidAnn.annotations.length === 1 && safeValidAnn.annotations[0]?.annotation_id === 'ann_safe_check')
 
     rmSync(path.join(handle.dirPath, 'viewer.html'), { force: true })
     mkdirSync(path.join(handle.dirPath, 'viewer.html'))

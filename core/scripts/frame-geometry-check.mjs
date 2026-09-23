@@ -160,9 +160,13 @@ console.log('\nThe picker actually uses it, in every frame')
   // moves, so a wire change that leaves it alone ships a worker that cannot
   // speak the new payload. 0.2.0 was a pick carrying the document it sat in;
   // 0.3.0 adds a second way to arm the picker; 0.3.4 answers a capture with one
-  // document per VISIBLE BROWSER WINDOW instead of the focused one alone (#132).
+  // document per VISIBLE BROWSER WINDOW instead of the focused one alone (#132);
+  // 0.4.0 makes the toolbar click a full-page capture that speaks
+  // `page.captured` / `page.chunk` and expects `page.received` back (#157);
+  // 0.4.1 keeps that wire and fixes the HiDPI full-page plan, so a shipped
+  // worker can be told apart from the one QA rejected.
   check('the manifest version moved with the protocol change',
-    manifest.version === '0.3.4', manifest.version)
+    manifest.version === '0.4.1', manifest.version)
   check('and the document walker ships with it',
     existsSync(resolve(EXTENSION, 'document-snapshot.js')))
 
@@ -179,11 +183,21 @@ console.log('\nThe picker actually uses it, in every frame')
     JSON.stringify(manifest.commands))
   check('the shortcut suggests a default binding',
     manifest.commands?.['pick-element']?.suggested_key?.default !== undefined)
-  check('both entry points call one arming path',
+  // THE CLICK IS THE CAPTURE NOW (#157). The toolbar icon photographs the whole
+  // page; the picker stays reachable as an explicit secondary action from the
+  // shortcut and the icon's context menu, and both of those call the one
+  // arming path — so a click can never again leave the user in an armed state
+  // nothing explained.
+  check('the toolbar click is the full-page capture, not the picker',
+    /chrome\.action\.onClicked\.addListener/.test(background) &&
+      /captureFullPage\(tab, 'toolbar'\)/.test(background) &&
+      !/armPicker\(tab, 'toolbar'\)/.test(background))
+  check('the shortcut and the context menu call one arming path',
     /function armPicker\(/.test(background) &&
-      /chrome\.action\.onClicked\.addListener/.test(background) &&
-      /armPicker\(tab, 'toolbar'\)/.test(background) &&
-      /commands\.onCommand\.addListener/.test(background))
+      /armPicker\(target, 'shortcut'\)/.test(background) &&
+      /armPicker\(tab, 'context-menu'\)/.test(background) &&
+      /commands\.onCommand\.addListener/.test(background) &&
+      /contextMenus\.onClicked\.addListener/.test(background))
 
   // THE ONE-TIME GRANT (#125). CapturePack's capture hotkey is global, so Chrome
   // never sees it and `activeTab` can never apply to it. The user grants the

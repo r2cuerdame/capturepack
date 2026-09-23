@@ -1,0 +1,30 @@
+FAIL: shipping trial 1 failed or timed out (status=1, signal=null)
+FAIL: native-dxgi trial 1 failed or timed out (status=1, signal=null)
+FAIL: native-dxgi trial 2 failed or timed out (status=1, signal=null)
+FAIL: shipping trial 2 failed or timed out (status=1, signal=null)
+FAIL: shipping trial 3 failed or timed out (status=1, signal=null)
+FAIL: native-dxgi trial 3 failed or timed out (status=1, signal=null)
+FAIL: shipping trial 1 field report was not OK
+FAIL: shipping trial 1 source tree was dirty or unknown
+FAIL: shipping trial 2 field report was not OK
+FAIL: shipping trial 2 source tree was dirty or unknown
+FAIL: shipping trial 3 field report was not OK
+FAIL: shipping trial 3 source tree was dirty or unknown
+FAIL: native-dxgi trial 1 field report was not OK
+FAIL: native-dxgi trial 1 observed backend was not native-dxgi
+FAIL: native-dxgi trial 1 performance evidence was incomplete
+FAIL: native-dxgi trial 1 source tree was dirty or unknown
+FAIL: native-dxgi trial 1 did not prove READY and SNAPSHOT for every display
+FAIL: native-dxgi trial 2 field report was not OK
+FAIL: native-dxgi trial 2 observed backend was not native-dxgi
+FAIL: native-dxgi trial 2 performance evidence was incomplete
+FAIL: native-dxgi trial 2 had too few post-ready process samples
+FAIL: native-dxgi trial 2 source tree was dirty or unknown
+FAIL: native-dxgi trial 2 did not prove READY and SNAPSHOT for every display
+FAIL: native-dxgi trial 3 field report was not OK
+FAIL: native-dxgi trial 3 observed backend was not native-dxgi
+FAIL: native-dxgi trial 3 performance evidence was incomplete
+FAIL: native-dxgi trial 3 source tree was dirty or unknown
+FAIL: native-dxgi trial 3 did not prove READY and SNAPSHOT for every display
+FAIL: cpu_total_capacity_percent exceeded its release threshold or was missing
+FAIL: replay_export_ms exceeded its release threshold or was missing

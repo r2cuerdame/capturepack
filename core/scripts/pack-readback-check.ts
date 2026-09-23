@@ -33,6 +33,8 @@
 //
 // Run: npm run check:pack-readback
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import fs from 'node:fs'
+import { mock } from 'node:test'
 import { tmpdir } from 'node:os'
 import * as path from 'node:path'
 import {
@@ -50,6 +52,7 @@ import type { DomEvent } from '../src/main/chrome/domBridge'
 import type { ContextObservation } from '../src/main/context/buffer'
 import { openPackContextSession, readPackObjectContext } from '../src/main/context/packObjects'
 import { reopenedContextDisplayTargets } from '../src/main/reopenDisplay'
+import { pngPixelSize } from '../src/main/png'
 import { greyPng } from './fixtures/greyPng'
 
 let failures = 0
@@ -361,7 +364,130 @@ function recoveredRectangles(events: readonly DomEvent[]): number {
   )
 }
 
+function checkPngHeaders(): void {
+  console.log('\nPNG dimension reads stay within the first 24 bytes (#180)')
+  const dir = mkdtempSync(path.join(tmpdir(), 'capturepack-png-header-'))
+  const file = path.join(dir, 'snapshot.png')
+  const png = greyPng(3840, 2160)
+  const original = {
+    openSync: fs.openSync,
+    readSync: fs.readSync,
+    closeSync: fs.closeSync,
+    readFileSync: fs.readFileSync,
+  }
+
+  function probe(name: string, run: () => unknown, expected: unknown, failRead = false): void {
+    const opened: number[] = []
+    const closed: number[] = []
+    const active = new Set<number>()
+    const reads: { bufferSize: number; offset: number; length: number; position: number }[] = []
+    let bytesRead = 0
+    let wholeFileReads = 0
+    const open = mock.method(fs, 'openSync', (...args: Parameters<typeof fs.openSync>) => {
+      const fd = original.openSync(...args)
+      if (String(args[0]).endsWith('.png')) {
+        opened.push(fd)
+        active.add(fd)
+      }
+      return fd
+    })
+    const read = mock.method(fs, 'readSync', (
+      fd: number, buffer: Buffer, offset: number, length: number, position: number,
+    ) => {
+      if (!active.has(fd)) return original.readSync(fd, buffer, offset, length, position)
+      reads.push({ bufferSize: buffer.length, offset, length, position })
+      if (failRead) throw new Error('injected PNG read failure')
+      const count = original.readSync(fd, buffer, offset, length, position)
+      bytesRead += count
+      return count
+    })
+    const close = mock.method(fs, 'closeSync', (fd: number) => {
+      original.closeSync(fd)
+      if (active.delete(fd)) closed.push(fd)
+    })
+    const wholeFile = mock.method(fs, 'readFileSync', (...args: Parameters<typeof fs.readFileSync>) => {
+      if (String(args[0]).endsWith('.png')) {
+        wholeFileReads += 1
+        throw new Error('PNG dimensions must not read the whole file')
+      }
+      return original.readFileSync(...args)
+    })
+    try {
+      const actual = run()
+      check(`${name}: dimensions`, JSON.stringify(actual) === JSON.stringify(expected), JSON.stringify(actual))
+      check(`${name}: only a 24-byte buffer/read at offset zero`,
+        wholeFileReads === 0 && reads.length === opened.length && reads.every((r) =>
+          r.bufferSize === 24 && r.offset === 0 && r.length === 24 && r.position === 0),
+        JSON.stringify({ wholeFileReads, reads, bytesRead }))
+      check(`${name}: every opened descriptor closes`,
+        JSON.stringify(opened) === JSON.stringify(closed) && closed.every((fd) => {
+          try { fs.fstatSync(fd); return false } catch (err) {
+            return (err as NodeJS.ErrnoException).code === 'EBADF'
+          }
+        }))
+      if (name.startsWith('128 MiB')) {
+        check(`${name}: exactly 24 bytes returned per probe`,
+          reads.length > 0 && bytesRead === 24 * reads.length, `${bytesRead} bytes in ${reads.length} reads`)
+        console.log(`  I/O   ${name}: ${fs.statSync(file).size} file bytes; ${bytesRead} bytes read; ${closed.length} descriptors closed`)
+      }
+    } finally {
+      wholeFile.mock.restore()
+      close.mock.restore()
+      read.mock.restore()
+      open.mock.restore()
+    }
+  }
+
+  try {
+    writeFileSync(file, png)
+    probe('valid PNG', () => pngPixelSize(file), { width: 3840, height: 2160 })
+    for (let length = 0; length < 24; length += 1) {
+      writeFileSync(file, png.subarray(0, length))
+      probe(`truncated at ${length} bytes`, () => pngPixelSize(file), null)
+    }
+    const malformed = [
+      ['non-PNG', Buffer.alloc(24)],
+      ['bad signature with IHDR', Buffer.from(png.subarray(0, 24))],
+      ['bad IHDR length', Buffer.from(png.subarray(0, 24))],
+      ['bad IHDR marker', Buffer.from(png.subarray(0, 24))],
+      ['zero width', Buffer.from(png.subarray(0, 24))],
+      ['zero height', Buffer.from(png.subarray(0, 24))],
+    ] as const
+    malformed[1][1][0] = 0
+    malformed[2][1].writeUInt32BE(12, 8)
+    malformed[3][1].write('IDAT', 12, 'ascii')
+    malformed[4][1].writeUInt32BE(0, 16)
+    malformed[5][1].writeUInt32BE(0, 20)
+    for (const [name, header] of malformed) {
+      writeFileSync(file, header)
+      probe(name, () => pngPixelSize(file), null)
+    }
+    writeFileSync(file, png.subarray(0, 24))
+    probe('header-only PNG-like file', () => pngPixelSize(file), { width: 3840, height: 2160 })
+    probe('injected read failure', () => pngPixelSize(file), null, true)
+    probe('missing file', () => pngPixelSize(path.join(dir, 'missing.png')), null)
+
+    // Extend on disk without allocating the body in the test process.
+    fs.truncateSync(file, 128 * 1024 * 1024)
+    probe('128 MiB PNG-like file', () => pngPixelSize(file), { width: 3840, height: 2160 })
+    writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({
+      capture_kind: 'image',
+      media: {
+        snapshot: 'snapshot.png', replay: null,
+        displays: [{ index: 1, focused: true, snapshot: 'snapshot.png', scale: 1,
+          snapshot_width: 1, snapshot_height: 1 }],
+      },
+    }))
+    probe('128 MiB pack context readback', () => readPackObjectContext(dir)?.displays.map(
+      ({ index, width, height }) => ({ index, width, height }),
+    ), [{ index: 1, width: 3840, height: 2160 }])
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+}
+
 async function main(): Promise<void> {
+  checkPngHeaders()
   console.log(
     `pack read-back: windows-uia ${UIA_PLUGIN_VERSION}, chrome-dom ${DOM_PLUGIN_VERSION}` +
       ` — ${String(DOCUMENT_ELEMENTS)} element rectangle(s) written by the real writers`,

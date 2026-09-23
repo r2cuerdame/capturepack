@@ -3,24 +3,32 @@
 import {
   existsSync,
   mkdtempSync,
+  mkdirSync,
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
+  writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import AdmZip from 'adm-zip'
 import {
   addManifestPlugin,
+  createPackZip,
   domPluginDeclaration,
   savePack,
+  saveAsNewPack,
+  setManifestRenderOutputs,
   tryWriteDomPlugin,
   updatePack,
+  type DisplayCapture,
   type ExportInput,
   type InitialSaveInput,
 } from '../src/main/exporter'
 import { createPackStore } from '../src/main/mcp/store'
 import { startSourceFirstFinalSave } from '../src/main/sourceFirstFinalSave'
-import type { Annotation } from '../src/shared/types'
+import type { Annotation, Manifest } from '../src/shared/types'
 
 let failures = 0
 
@@ -60,6 +68,67 @@ function allFiles(root: string): string[] {
 
 async function nextImmediate(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve))
+}
+
+async function observeManifestPublication<T>(
+  phase: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const fsPromises = require('node:fs/promises') as typeof import('node:fs/promises')
+  const originalRename = fsPromises.rename
+  let commits = 0
+  try {
+    fsPromises.rename = (async (...args: Parameters<typeof originalRename>) => {
+      const [temporaryPath, destinationPath] = args
+      const destination = String(destinationPath)
+      if (path.basename(destination) === 'manifest.json') {
+        commits += 1
+        const candidates: Array<{ state: string; manifest: Manifest }> = [
+          {
+            state: 'incoming',
+            manifest: JSON.parse(readFileSync(String(temporaryPath), 'utf8')) as Manifest,
+          },
+        ]
+        if (existsSync(destination)) {
+          candidates.push({
+            state: 'published',
+            manifest: JSON.parse(readFileSync(destination, 'utf8')) as Manifest,
+          })
+        }
+        for (const { state, manifest } of candidates) {
+          const declaredMedia = new Set<string>([manifest.media.snapshot])
+          if (typeof manifest.media.replay === 'string') declaredMedia.add(manifest.media.replay)
+          if (typeof manifest.media.replay_annotated === 'string') {
+            declaredMedia.add(manifest.media.replay_annotated)
+          }
+          for (const keyframe of manifest.media.keyframes ?? []) {
+            declaredMedia.add(keyframe.file)
+          }
+          for (const display of manifest.media.displays ?? []) {
+            declaredMedia.add(display.snapshot)
+            if (typeof display.replay === 'string') declaredMedia.add(display.replay)
+            if (typeof display.replay_annotated === 'string') {
+              declaredMedia.add(display.replay_annotated)
+            }
+            for (const keyframe of display.keyframes ?? []) declaredMedia.add(keyframe.file)
+          }
+          for (const mediaName of declaredMedia) {
+            const mediaPath = path.join(path.dirname(destination), mediaName)
+            check(
+              `${phase}: ${state} ${mediaName} is non-empty at the manifest commit point`,
+              existsSync(mediaPath) && statSync(mediaPath).size > 0,
+            )
+          }
+        }
+      }
+      return originalRename(...args)
+    }) as typeof fsPromises.rename
+    const result = await run()
+    check(`${phase}: manifest commit was observed`, commits > 0)
+    return result
+  } finally {
+    fsPromises.rename = originalRename
+  }
 }
 
 async function main(): Promise<void> {
@@ -108,6 +177,36 @@ async function main(): Promise<void> {
         },
       ],
     }
+    const displays: DisplayCapture[] = [
+      {
+        index: 1,
+        focused: true,
+        bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+        scale: 1,
+        snapshotWidth: 1920,
+        snapshotHeight: 1080,
+        hasReplay: true,
+        replayDurationMs: 10_000,
+        snapshotFile: 'snapshot.png',
+        replayFile: 'replay.mp4',
+        snapshotPng: null,
+        replayWebm: null,
+      },
+      {
+        index: 2,
+        focused: false,
+        bounds: { x: 1920, y: 0, width: 1280, height: 720 },
+        scale: 1,
+        snapshotWidth: 1280,
+        snapshotHeight: 720,
+        hasReplay: true,
+        replayDurationMs: 10_000,
+        snapshotFile: 'snapshot-d2.png',
+        replayFile: 'replay-d2.mp4',
+        snapshotPng: Buffer.from('SECONDARY SNAPSHOT'),
+        replayWebm: Buffer.from('SECONDARY REPLAY'),
+      },
+    ]
     const initial: InitialSaveInput = {
       captureKind: 'video',
       snapshotPng: Buffer.from('RAW SNAPSHOT'),
@@ -119,11 +218,54 @@ async function main(): Promise<void> {
       replayDurationMs: 10_000,
       timeline,
       outputDir,
-      screens: [{ width: 1920, height: 1080, scale: 1 }],
+      screens: [
+        { width: 1920, height: 1080, scale: 1 },
+        { width: 1280, height: 720, scale: 1 },
+      ],
+      displays,
       windowsContext: null,
       docLanguage: 'en',
     }
-    const handle = await savePack(initial)
+    const handle = await observeManifestPublication('savePack', () => savePack(initial))
+    const failedDisplayRoot = path.join(outputDir, 'secondary-display-failure')
+    const mediaFsPromises = require('node:fs/promises') as typeof import('node:fs/promises')
+    const originalWriteFile = mediaFsPromises.writeFile
+    let degradedHandle: Awaited<ReturnType<typeof savePack>> | null = null
+    let degradedSaveThrew = false
+    try {
+      mediaFsPromises.writeFile = (async (...args: Parameters<typeof originalWriteFile>) => {
+        if (path.basename(String(args[0])) === 'snapshot-d2.png') {
+          throw new Error('simulated secondary display write failure')
+        }
+        return originalWriteFile(...args)
+      }) as typeof mediaFsPromises.writeFile
+      try {
+        degradedHandle = await savePack({ ...initial, outputDir: failedDisplayRoot })
+      } catch {
+        degradedSaveThrew = true
+      }
+    } finally {
+      mediaFsPromises.writeFile = originalWriteFile
+    }
+    check('secondary display failure does not fail savePack', !degradedSaveThrew)
+    check('secondary display failure preserves the pack folder', degradedHandle !== null)
+    if (degradedHandle !== null) {
+      const degradedManifest = JSON.parse(
+        readFileSync(path.join(degradedHandle.dirPath, 'manifest.json'), 'utf8'),
+      ) as Manifest
+      check(
+        'secondary display failure preserves non-empty focused media',
+        ['snapshot.png', 'replay.mp4'].every((name) => {
+          const file = path.join(degradedHandle!.dirPath, name)
+          return existsSync(file) && statSync(file).size > 0
+        }),
+      )
+      check(
+        'secondary display failure collapses the declaration to focused media',
+        degradedManifest.media.displays?.length === 1 &&
+          degradedManifest.media.displays[0]?.focused === true,
+      )
+    }
     const saveFirstReadme = readFileSync(path.join(handle.dirPath, 'README.md'), 'utf8')
     const saveFirstReport = readFileSync(path.join(handle.dirPath, 'report.md'), 'utf8')
     check(
@@ -135,6 +277,11 @@ async function main(): Promise<void> {
       box('ann_000001', 'first durable annotation', 1_000),
       box('ann_000002', 'second durable annotation', 4_000),
     ]
+    const reeditDisplays: DisplayCapture[] = displays.map((display) => ({
+      ...display,
+      snapshotPng: null,
+      replayWebm: null,
+    }))
     const finalInput: ExportInput = {
       captureKind: 'video',
       snapshotPng: Buffer.from('FINAL SOURCE SNAPSHOT'),
@@ -150,7 +297,11 @@ async function main(): Promise<void> {
       snapshotTMs: 7_500,
       trimOffsetMs: 2_000,
       timeline,
-      screens: [{ width: 1920, height: 1080, scale: 1 }],
+      screens: [
+        { width: 1920, height: 1080, scale: 1 },
+        { width: 1280, height: 720, scale: 1 },
+      ],
+      displays: reeditDisplays,
       windowsContext: null,
       clipboardAfterSave: 'off',
       docLanguage: 'en',
@@ -189,6 +340,24 @@ async function main(): Promise<void> {
       lateOverview.includes('1 plugins.'),
     )
 
+    const focusedFrame = 'frames/frame-01_00-01.000.png'
+    const displayFrame = 'frames-d2/frame-01_00-01.000.png'
+    mkdirSync(path.join(handle.dirPath, 'frames'), { recursive: true })
+    mkdirSync(path.join(handle.dirPath, 'frames-d2'), { recursive: true })
+    writeFileSync(path.join(handle.dirPath, 'replay_annotated.mp4'), 'FOCUSED DERIVED REPLAY')
+    writeFileSync(path.join(handle.dirPath, focusedFrame), 'FOCUSED DERIVED FRAME')
+    writeFileSync(path.join(handle.dirPath, 'replay_annotated-d2.mp4'), 'DISPLAY DERIVED REPLAY')
+    writeFileSync(path.join(handle.dirPath, displayFrame), 'DISPLAY DERIVED FRAME')
+    await setManifestRenderOutputs(handle, {
+      replayAnnotated: true,
+      keyframes: [{ file: focusedFrame, t_ms: 1_000 }],
+    })
+    await setManifestRenderOutputs(handle, {
+      replayAnnotated: true,
+      keyframes: [{ file: displayFrame, t_ms: 1_000 }],
+      display: 2,
+    })
+
     let releaseRender: () => void = () => {
       throw new Error('render gate was not initialized')
     }
@@ -198,20 +367,22 @@ async function main(): Promise<void> {
     let renderStarted = false
     let renderFailed = false
 
-    const sourcePath = await startSourceFirstFinalSave({
-      persistSource: async () => {
-        await updatePack(handle, finalInput, { keepReplay: true })
-        return handle.dirPath
-      },
-      renderDerived: async () => {
-        renderStarted = true
-        await renderGate
-        throw new Error('simulated derived renderer failure')
-      },
-      onDerivedFailure: () => {
-        renderFailed = true
-      },
-    })
+    const sourcePath = await observeManifestPublication('updatePack', () =>
+      startSourceFirstFinalSave({
+        persistSource: async () => {
+          await updatePack(handle, finalInput, { keepReplay: true })
+          return handle.dirPath
+        },
+        renderDerived: async () => {
+          renderStarted = true
+          await renderGate
+          throw new Error('simulated derived renderer failure')
+        },
+        onDerivedFailure: () => {
+          renderFailed = true
+        },
+      }),
+    )
 
     check('source completion returns the pack path', sourcePath === handle.dirPath)
     check(
@@ -262,7 +433,7 @@ async function main(): Promise<void> {
       )
       check(
         'plugin source and declaration are readable before render',
-        manifest?.plugins.some((plugin) => plugin.name === 'chrome-dom') === true &&
+        manifest?.plugins?.some((plugin) => plugin.name === 'chrome-dom') === true &&
           latest.readText('plugins/chrome-dom/elements.json')?.includes('"click"') === true,
       )
     } finally {
@@ -288,6 +459,143 @@ async function main(): Promise<void> {
     check(
       'atomic source publication leaves no temporary files behind',
       allFiles(handle.dirPath).every((file) => !file.endsWith('.tmp')),
+    )
+    check(
+      'finalize removes stale derived media only after undeclaring it',
+      !existsSync(path.join(handle.dirPath, 'replay_annotated.mp4')) &&
+        !existsSync(path.join(handle.dirPath, 'frames')) &&
+        !existsSync(path.join(handle.dirPath, 'replay_annotated-d2.mp4')) &&
+        !existsSync(path.join(handle.dirPath, 'frames-d2')),
+    )
+
+    console.log('\nMEDIA-FIRST MANIFEST COMMIT (#216)')
+    const manifestBeforeFailedUpdate = readFileSync(
+      path.join(handle.dirPath, 'manifest.json'),
+      'utf8',
+    )
+    let mediaFailureObserved = false
+    try {
+      mediaFsPromises.writeFile = (async (...args: Parameters<typeof originalWriteFile>) => {
+        if (String(args[0]) === path.join(handle.dirPath, 'snapshot.png')) {
+          throw new Error('simulated snapshot write failure')
+        }
+        return originalWriteFile(...args)
+      }) as typeof mediaFsPromises.writeFile
+      try {
+        await updatePack(
+          handle,
+          { ...finalInput, title: 'must not be published after media failure' },
+          { keepReplay: true },
+        )
+      } catch (error) {
+        mediaFailureObserved = (error as Error).message === 'simulated snapshot write failure'
+      }
+    } finally {
+      mediaFsPromises.writeFile = originalWriteFile
+    }
+    check('finalize propagates a source-media write failure', mediaFailureObserved)
+    check(
+      'failed source-media write leaves the previously published manifest unchanged',
+      readFileSync(path.join(handle.dirPath, 'manifest.json'), 'utf8') ===
+        manifestBeforeFailedUpdate,
+    )
+
+    const copied = await observeManifestPublication('saveAsNewPack', () =>
+      saveAsNewPack(handle.dirPath, finalInput),
+    )
+    check(
+      'Save As New publishes a complete independent media set',
+      ['snapshot.png', 'replay.mp4', 'snapshot-d2.png', 'replay-d2.mp4'].every((name) => {
+        const file = path.join(copied.dirPath, name)
+        return existsSync(file) && statSync(file).size > 0
+      }),
+    )
+
+    console.log('\nFULL ZIP ATOMIC ARCHIVE CREATION & RESILIENCE (#177)')
+    // 1. Successful creation: archive contains complete media and manifest
+    const zipPath = await createPackZip(handle.dirPath)
+    check('createPackZip returns the expected zip destination path', zipPath === `${handle.dirPath}.zip`)
+    check('createPackZip created the zip archive', existsSync(zipPath))
+    const initialZip = new AdmZip(zipPath)
+    const initialEntries = initialZip.getEntries().map((e) => e.entryName)
+    check('Full ZIP archive contains manifest.json', initialEntries.includes('manifest.json'))
+    check('Full ZIP archive contains snapshot.png', initialEntries.includes('snapshot.png'))
+    check('Full ZIP archive contains annotations.json', initialEntries.includes('annotations.json'))
+    check(
+      'Full ZIP archive creation leaves no temporary files in pack or parent directory',
+      allFiles(handle.dirPath).every((f) => !f.includes('.tmp')) &&
+        readdirSync(outputDir).every((f) => !f.includes('.tmp-')),
+    )
+
+    // 2. Atomic replacement: updating pack files and creating zip again replaces the existing archive
+    const initialZipBytes = readFileSync(zipPath)
+    writeFileSync(path.join(handle.dirPath, 'test-render-finish.txt'), 'render completed successfully')
+    await createPackZip(handle.dirPath)
+    const updatedZip = new AdmZip(zipPath)
+    const updatedEntries = updatedZip.getEntries().map((e) => e.entryName)
+    check(
+      'createPackZip atomically replaces preexisting archive with updated files',
+      updatedEntries.includes('test-render-finish.txt') &&
+        updatedZip.getEntry('test-render-finish.txt')?.getData().toString('utf8') ===
+          'render completed successfully',
+    )
+    const updatedZipBytes = readFileSync(zipPath)
+    check('preexisting archive bytes were replaced', !updatedZipBytes.equals(initialZipBytes))
+
+    // 3. Error / interruption resilience: failed or interrupted zip operations clean up temporary files and leave preexisting archive unharmed
+    const fsPromises = require('node:fs/promises') as typeof import('node:fs/promises')
+    const originalRename = fsPromises.rename
+    try {
+      fsPromises.rename = (async () => {
+        throw new Error('Simulated atomic rename failure')
+      }) as unknown as typeof fsPromises.rename
+      let renameThrew = false
+      try {
+        await createPackZip(handle.dirPath)
+      } catch (err) {
+        renameThrew = (err as Error).message === 'Simulated atomic rename failure'
+      }
+      check('createPackZip propagates atomic rename failure cleanly', renameThrew)
+      check(
+        'failed zip operation leaves preexisting archive completely unharmed',
+        readFileSync(zipPath).equals(updatedZipBytes),
+      )
+      check(
+        'failed zip operation cleans up all temporary sibling files',
+        readdirSync(outputDir).every((f) => !f.includes('.tmp-')),
+      )
+    } finally {
+      fsPromises.rename = originalRename
+    }
+
+    // 4. Source invariant checks for #177
+    const historySource = readFileSync(
+      path.join(process.cwd(), 'src', 'main', 'historyWindow.ts'),
+      'utf8',
+    ).split('\r\n').join('\n')
+    const exporterSource = readFileSync(
+      path.join(process.cwd(), 'src', 'main', 'exporter.ts'),
+      'utf8',
+    ).split('\r\n').join('\n')
+
+    const historyCreateZipSection = historySource.slice(
+      historySource.indexOf('IPC.historyCreateZip'),
+      historySource.indexOf('IPC.historyPlanShare'),
+    )
+    check(
+      'historyCreateZip guards against in-flight renders before starting zip operation',
+      historyCreateZipSection.includes('isRenderInFlight(entry.path)') &&
+        historyCreateZipSection.includes("return { ok: false, error: t('history.shareErrNotReady') }"),
+    )
+    check(
+      'createPackZip writes to a unique temporary sibling file and renames it',
+      exporterSource.includes('const temporaryPath = `${zipPath}.tmp-${process.pid}-${randomUUID()}.zip`') &&
+        exporterSource.includes('await zip.writeZipPromise(temporaryPath, { overwrite: true })') &&
+        exporterSource.includes('await rename(temporaryPath, zipPath)'),
+    )
+    check(
+      'createPackZip cleans up temporary files in finally block',
+      exporterSource.includes('await rm(temporaryPath, { force: true })'),
     )
   } finally {
     rmSync(outputDir, { recursive: true, force: true })

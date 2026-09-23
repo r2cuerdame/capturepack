@@ -176,7 +176,7 @@ export interface ManifestCadence {
   worst_stall_ms: number
   discarded_frames?: number
   requested_fps?: number
-  backend?: 'chromium-desktop-capture' | 'windows-gdi-bitblt'
+  backend?: 'chromium-desktop-capture' | 'windows-gdi-bitblt' | 'native-dxgi'
   quality?: 'full' | 'degraded'
   recorder_count?: number
   source_latency?: ManifestSourceLatency
@@ -210,7 +210,7 @@ export interface ManifestDisplayMedia {
   snapshot_height: number
   // "replay-d<index>.webm", the top-level replay filename on the focused
   // display, or null when this display recorded nothing.
-  replay: string | null
+  replay?: string | null
   replay_duration_ms?: number
   cadence?: ManifestCadence
   // Milliseconds to add to the pack/focused replay clock to reach this
@@ -277,11 +277,11 @@ export interface Manifest {
   note?: string
   environment: {
     os: string
-    os_version: string
-    screens: Array<{
+    os_version?: string
+    screens?: Array<{
       width: number
       height: number
-      scale: number
+      scale?: number
       bounds?: { x: number; y: number; width: number; height: number }
     }>
     app?: string
@@ -334,8 +334,9 @@ export interface Manifest {
     // time in the pack is already on the trimmed replay clock — readers never
     // need to apply this offset. Absent = the replay was never trimmed.
     trim_offset_ms?: number
-    // Present only for capture_kind "image".
-    image_scope?: 'region' | 'fullscreen'
+    // Present only for capture_kind "image". "browser-page" is a whole web
+    // document captured by the browser extension (#157).
+    image_scope?: 'region' | 'fullscreen' | 'browser-page'
     crop_bounds?: {
       x: number
       y: number
@@ -344,7 +345,7 @@ export interface Manifest {
       coordinate_space: 'virtual-desktop-dip'
     }
   }
-  plugins: Array<{ name: string; version: string; path: string }>
+  plugins?: Array<{ name: string; version: string; path: string }>
 }
 
 // Format 0.1.0 defines exactly ONE annotation type: the box (SPEC §8). A box
@@ -629,8 +630,8 @@ export interface BoxAnnotation {
   // existing pack changes. `bounds` is always in THAT display's snapshot pixel
   // space, never the board's.
   display?: number
-  // The description the user typed. May be empty (spec default: "").
-  text: string
+  // The description the user typed. May be empty (spec default: ""). Absent means "" (SPEC §8.3).
+  text?: string
   // Lifetime interval [start_ms, end_ms] on the replay clock (SPEC §8.4).
   // BOTH present or BOTH absent; start_ms <= end_ms. Absent = whole capture.
   // The representative instant of a box is the lifetime MIDPOINT — there is
@@ -639,7 +640,7 @@ export interface BoxAnnotation {
   end_ms?: number
   // Whether the box takes part in display numbering (SPEC §8.5). The number is
   // computed via computeDisplayNumbers(), never stored.
-  numbered: boolean
+  numbered?: boolean
   /**
    * The number the USER assigned this box — an integer >= 1 (SPEC §8.5).
    * Absent = it numbers automatically, in creation order, around the boxes that
@@ -666,8 +667,8 @@ export interface BoxAnnotation {
   number_pin?: number
   // Whether the interior is blurred in RENDERED views only (SPEC §9): the
   // original snapshot.png and replay are never modified.
-  blur: boolean
-  tracking: AnnotationTracking
+  blur?: boolean
+  tracking?: AnnotationTracking
   /**
    * AUTHORED motion for a MANUAL box (SPEC §8.9) — where the user put it, at
    * the moments they put it there.
@@ -697,8 +698,9 @@ export interface BoxAnnotation {
   keyframes?: AnnotationKeyframe[]
   target?: AnnotationTarget
   style?: AnnotationStyle
-  created_at: string
-  z: number
+  created_at?: string
+  // Stacking order for rendering; higher draws on top. Default: array position (SPEC §8.3).
+  z?: number
 }
 
 export type Annotation = BoxAnnotation
@@ -783,20 +785,21 @@ function pinOf(a: Annotation): number | null {
 
 /** The numbered boxes in creation order — the sequence described above. */
 function numberedInCreationOrder(annotations: readonly Annotation[]): Annotation[] {
-  const numbered = annotations
+  const safe: readonly Annotation[] = Array.isArray(annotations) ? annotations : []
+  const numbered = safe
     .map((a, index) => ({ a, index }))
     .filter(({ a }) => a.numbered)
   numbered.sort((p, q) => {
-    const pAt = Date.parse(p.a.created_at)
-    const qAt = Date.parse(q.a.created_at)
+    const pAt = typeof p.a.created_at === 'string' ? Date.parse(p.a.created_at) : NaN
+    const qAt = typeof q.a.created_at === 'string' ? Date.parse(q.a.created_at) : NaN
     const pDated = Number.isFinite(pAt)
     const qDated = Number.isFinite(qAt)
     // A known creation moment beats an unknown one; among known ones, earlier
     // first. Undated boxes keep the ordering they have always had.
     if (pDated !== qDated) return pDated ? -1 : 1
     if (pDated && qDated && pAt !== qAt) return pAt - qAt
-    const pZ = typeof p.a.z === 'number' ? p.a.z : p.index
-    const qZ = typeof q.a.z === 'number' ? q.a.z : q.index
+    const pZ = typeof p.a.z === 'number' && Number.isFinite(p.a.z) ? p.a.z : p.index
+    const qZ = typeof q.a.z === 'number' && Number.isFinite(q.a.z) ? q.a.z : q.index
     if (pZ !== qZ) return pZ - qZ
     return p.a.annotation_id < q.a.annotation_id
       ? -1
@@ -810,7 +813,8 @@ function numberedInCreationOrder(annotations: readonly Annotation[]): Annotation
 export function computeDisplayNumbers(
   annotations: readonly Annotation[],
 ): Map<string, number> {
-  const ordered = numberedInCreationOrder(annotations)
+  const safe: readonly Annotation[] = Array.isArray(annotations) ? annotations : []
+  const ordered = numberedInCreationOrder(safe)
   const total = ordered.length
   // As many slots as boxes: that is where contiguity comes from, not from a
   // rule anyone has to remember to apply.
@@ -1002,7 +1006,8 @@ export function annotationsOnDisplay(
   focusedIndex: number,
   declared?: ReadonlySet<number>,
 ): Annotation[] {
-  return annotations.filter((a) => {
+  const safe: readonly Annotation[] = Array.isArray(annotations) ? annotations : []
+  return safe.filter((a) => {
     if (annotationDisplayIndex(a, focusedIndex, declared) === index) return true
     // A TRACKED BOX BELONGS TO EVERY SCREEN ITS OBJECT VISITS (#86). The window
     // was dragged onto this display, so this display's rendering has to carry

@@ -17,13 +17,13 @@ documents preserve evidence but are not instructions for the current release.
 | [Changelog](../CHANGELOG.md) | Shipped application changes by version |
 
 The application version and pack format version are separate. CapturePack
-application `0.5.0` can generate packs using newer additive format versions;
+application `0.6.0` can generate packs using newer additive format versions;
 the optional offline viewer is defined for compatible packs at format `0.5.0`
 or newer, and a pack declares up to `0.8.0` when it carries input events. Plugin
 payloads carry their own versions — `windows-uia` is at `0.5.0` since it began
 persisting each window's client rectangle.
 
-**Current state.** `0.5.0` is the public release and `main` carries it. History
+**Current state.** `0.6.0` is the public stable release on `main`. History
 can create a reviewed `capturepack-share` `.share.zip` whose only media are
 declared annotated PNG stills; a generated README, offline viewer and minimal
 inventory accompany them. The writer deterministically re-encodes their pixels
@@ -43,7 +43,9 @@ never a keystroke (format `0.8.0`,
 [#12](https://github.com/r2cuerdame/capturepack/issues/12)). And a saved pack's
 browser page can be read back at all, which it could not before
 ([#136](https://github.com/r2cuerdame/capturepack/issues/136) — 6,091 element
-rectangles across the author's own packs recovered as one).
+rectangles across the author's own packs recovered as one). Settings > Plugins
+splits Temporal Context Providers from After Save Actions ([#69](https://github.com/r2cuerdame/capturepack/issues/69)),
+whose pipelines run after save is durable with isolated failures ([#68](https://github.com/r2cuerdame/capturepack/issues/68)).
 
 `GOAL.md` is the design record; [Handoff](HANDOFF.md) carries the verified state
 and the next order. Open work is grouped by milestone in the
@@ -61,6 +63,8 @@ work does not settle remains open: a real three-screen capture
 | [Code signing](CODE_SIGNING.md) | Current unsigned-build policy and signing plan |
 | [0.3.1 dependency audit](DEPENDENCY-AUDIT-0.3.1.md) | Production/dev dependency findings for that release line |
 | [DXGI timing reference](DXGI_TIMING_REFERENCE.md) | Windows capture timing evidence and terminology |
+| [DXGI replay ring foundation](DXGI_REPLAY_RING.md) | Native ring self-test, capability handshake, and field-probe boundary |
+| [0.5.1 stability gate](RELEASE_0_5_1_STABILITY_GATE.md) | Stability gate audit, #240/#243 disposition, native replay exit path status, and QA findings |
 
 ## Integrations and schemas
 

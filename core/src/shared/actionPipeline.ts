@@ -32,8 +32,8 @@ export type ActionExecutor = (step: PipelineStep, attempt: number) => Promise<vo
 export interface PipelineClock {
   /** Monotonic-ish milliseconds. Injected so durations are testable. */
   now: () => number
-  /** Resolves after ms. Injected so retry backoff costs a test nothing. */
-  delay: (ms: number) => Promise<void>
+  /** Resolves after ms, or early when cancelled. Injected so waits are testable. */
+  delay: (ms: number, signal?: AbortSignal) => Promise<void>
 }
 
 export interface RunPipelineInput {
@@ -71,23 +71,29 @@ async function attemptOnce(
   execute: ActionExecutor,
   clock: PipelineClock,
 ): Promise<void> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const timeout = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => {
-      reject(new TimeoutError(`timed out after ${step.config.timeoutMs} ms`))
-    }, step.config.timeoutMs)
-  })
+  const timeoutController = new AbortController()
+  let timeoutActive = true
   try {
+    // Start the action before asking the clock for a delay. A fast clock may
+    // settle immediately, but an action that also settles immediately still
+    // completed within its budget.
+    const execution = execute(step, attempt)
+    const timeout = clock.delay(step.config.timeoutMs, timeoutController.signal).then(() => {
+      if (timeoutActive) {
+        throw new TimeoutError(`timed out after ${step.config.timeoutMs} ms`)
+      }
+    })
+
     // Promise.race, not an abort: an action that ignores cancellation must not
     // be able to hold the pipeline open, and the host cannot make a third-party
     // action stop. The attempt is abandoned, its result discarded, and the
     // pipeline moves on — which is exactly what "timeouts are budgets, not
     // suggestions" means when the other side may not cooperate.
-    await Promise.race([execute(step, attempt), timeout])
+    await Promise.race([execution, timeout])
   } finally {
-    if (timer !== undefined) clearTimeout(timer)
+    timeoutActive = false
+    timeoutController.abort()
   }
-  void clock
 }
 
 /**
@@ -194,4 +200,78 @@ export async function runPipeline(input: RunPipelineInput): Promise<PipelineRun>
 export function canRetry(result: ActionResult, config: ActionConfig | undefined): boolean {
   if (config === undefined || !config.enabled) return false
   return result.retryable
+}
+
+/**
+ * Failures and timeouts from a pipeline run that warrant notifying the user.
+ */
+export function failureResults(results: readonly ActionResult[]): readonly ActionResult[] {
+  return results.filter(
+    (result) => result.outcome === 'failed' || result.outcome === 'timed-out',
+  )
+}
+
+/**
+ * Tracks action outcomes across a pack's save lifecycle state transitions (#169).
+ *
+ * A pack moves through discrete states: source-ready -> annotated-replay-ready -> complete.
+ * At the initial transition (source-ready), all enabled configurations are evaluated.
+ * Actions that fail or succeed must not automatically re-execute on subsequent
+ * pack state transitions — retries for failed actions are explicit user requests
+ * (retryAction). Only actions that were previously BLOCKED (waiting for a later
+ * pack state) receive their second chance when that required state arrives.
+ */
+export class SaveActionLifecycle {
+  private initialRunDone = false
+  private readonly blocked = new Set<string>()
+
+  /** Whether the initial transition for this pack has been executed. */
+  get hasRun(): boolean {
+    return this.initialRunDone
+  }
+
+  /** The configuration IDs currently blocked waiting for a later pack state. */
+  get blockedConfigIds(): ReadonlySet<string> {
+    return this.blocked
+  }
+
+  /**
+   * Filter the enabled configurations for the current pack state transition.
+   *
+   * On the initial transition for a pack, all enabled configurations are returned.
+   * On subsequent transitions, only configurations that were previously blocked
+   * waiting for a later pack state are returned.
+   */
+  filterConfigs(configs: readonly ActionConfig[]): readonly ActionConfig[] {
+    if (!this.initialRunDone) {
+      return configs.filter((c) => c.enabled)
+    }
+    return configs.filter((c) => c.enabled && this.blocked.has(c.configId))
+  }
+
+  /**
+   * Record the results of a transition's pipeline execution.
+   *
+   * Updates the set of blocked configurations:
+   * - On the initial run, all actions with outcome 'blocked' are remembered.
+   * - On subsequent runs, actions that ran (ok, failed, timed-out) or skipped
+   *   are removed from the blocked set.
+   */
+  recordResults(results: readonly ActionResult[]): void {
+    if (!this.initialRunDone) {
+      this.initialRunDone = true
+      this.blocked.clear()
+      for (const result of results) {
+        if (result.outcome === 'blocked') {
+          this.blocked.add(result.configId)
+        }
+      }
+    } else {
+      for (const result of results) {
+        if (result.outcome !== 'blocked') {
+          this.blocked.delete(result.configId)
+        }
+      }
+    }
+  }
 }

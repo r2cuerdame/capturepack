@@ -1541,7 +1541,6 @@ function dragDraft(d: {
     blur: false,
     tracking: { enabled: false },
     style: { color: MANUAL_BOX_COLOR },
-    created_at: '',
     z: Number.MAX_SAFE_INTEGER,
   }
 }
@@ -1659,7 +1658,7 @@ function beginPendingBox(
   syncLanes()
   // A pre-filled description opens SELECTED: keeping it is one Enter, replacing
   // it is just typing.
-  openTextEditor(on, draft.bounds, draft.text, draft.text !== '')
+  openTextEditor(on, draft.bounds, draft.text ?? '', (draft.text ?? '') !== '')
   // GOAL "Unified Annotation Box" — the header appears WITH the description
   // input: [#] [1.0s] [Blur] [×] are placed over the pending rect now, not
   // after a commit + re-select, so number/duration/blur can be set while
@@ -1700,7 +1699,7 @@ function selectBox(id: string, on?: BoardDisplay): void {
   textSession = { kind: 'edit', id }
   // The bounds OBJECT, not a copy: a move/resize mutates it in place and
   // positionTextEditor re-reads it, so the input rides along with the box.
-  openTextEditor(display, a.bounds, a.text, true)
+  openTextEditor(display, a.bounds, a.text ?? '', true)
 }
 
 // ---------------------------------------------------------------------------
@@ -2093,7 +2092,7 @@ function syncSelectionUi(): void {
   // pending box, the number it will carry the moment Enter commits it.
   const number = displayNumbers().get(a.annotation_id)
   numberBtn.textContent = a.numbered && number !== undefined ? String(number) : '#'
-  numberBtn.classList.toggle('on', a.numbered)
+  numberBtn.classList.toggle('on', Boolean(a.numbered))
   // Choosing WHICH number is meaningless for a box that shows none, so the
   // caret follows the toggle. Turning numbering off RELEASES the number (#51):
   // there is nothing kept behind the caret to be restored, because turning it
@@ -2102,7 +2101,7 @@ function syncSelectionUi(): void {
   if (!a.numbered && numberPickerOpen) closeNumberPicker(false)
   syncNumberPicker(a)
   blurBtn.textContent = a.blur ? t('editor.blurOn') : t('editor.blur')
-  blurBtn.classList.toggle('on', a.blur)
+  blurBtn.classList.toggle('on', Boolean(a.blur))
   // Duration is only meaningful with a replay; respect settings.showDurationLabel.
   const showChip = scrub !== null && showDurationLabel
   durationChip.hidden = !showChip

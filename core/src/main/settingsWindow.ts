@@ -15,6 +15,11 @@ import {
   stopDomBridge,
 } from './chrome/domBridge'
 import {
+  forgetActionSecret,
+  hasActionSecret,
+  storeActionSecret,
+} from './actions/host'
+import {
   extensionDir,
   bundledExtensionVersion,
   findOurExtensionIds,
@@ -475,6 +480,64 @@ export function registerSettingsIpc(live: Settings, hooks: SettingsIpcHooks = {}
         return { ok: false, packsDeleted: 0, bytesFreed: 0, error: 'unsupported age' }
       }
       return purgeOlderThan(live, olderThanDays)
+    },
+  )
+
+  ipcMain.handle(
+    IPC.settingsActionSetSecret,
+    async (_event, configIdOrPayload: unknown, secretArg?: unknown): Promise<boolean> => {
+      let configId = ''
+      let secret = ''
+      if (
+        configIdOrPayload !== null &&
+        typeof configIdOrPayload === 'object' &&
+        'configId' in configIdOrPayload &&
+        'secret' in configIdOrPayload
+      ) {
+        configId = String((configIdOrPayload as { configId: unknown }).configId ?? '').trim()
+        secret = String((configIdOrPayload as { secret: unknown }).secret ?? '')
+      } else if (typeof configIdOrPayload === 'string') {
+        configId = configIdOrPayload.trim()
+        secret = typeof secretArg === 'string' ? secretArg : ''
+      }
+      if (configId === '' || secret === '') return false
+      return storeActionSecret(configId, secret)
+    },
+  )
+
+  ipcMain.handle(
+    IPC.settingsActionHasSecret,
+    async (_event, configIdOrPayload: unknown): Promise<boolean> => {
+      let configId = ''
+      if (
+        configIdOrPayload !== null &&
+        typeof configIdOrPayload === 'object' &&
+        'configId' in configIdOrPayload
+      ) {
+        configId = String((configIdOrPayload as { configId: unknown }).configId ?? '').trim()
+      } else if (typeof configIdOrPayload === 'string') {
+        configId = configIdOrPayload.trim()
+      }
+      if (configId === '') return false
+      return hasActionSecret(configId)
+    },
+  )
+
+  ipcMain.handle(
+    IPC.settingsActionForgetSecret,
+    async (_event, configIdOrPayload: unknown): Promise<void> => {
+      let configId = ''
+      if (
+        configIdOrPayload !== null &&
+        typeof configIdOrPayload === 'object' &&
+        'configId' in configIdOrPayload
+      ) {
+        configId = String((configIdOrPayload as { configId: unknown }).configId ?? '').trim()
+      } else if (typeof configIdOrPayload === 'string') {
+        configId = configIdOrPayload.trim()
+      }
+      if (configId === '') return
+      forgetActionSecret(configId)
     },
   )
 

@@ -23,6 +23,7 @@ import {
 } from '../../shared/annotationCanvas'
 import { renderedAnnotationAt } from '../../shared/track'
 import type { AuthoredMotionSpace } from '../../shared/track'
+import { renderContractError } from '../../shared/renderContract'
 
 interface RenderBridge {
   onStart(cb: (payload: RenderStartPayload) => void): void
@@ -40,9 +41,11 @@ declare global {
 
 const BLUR_BLOCK = 12 // native px per pixelation block (matches the editor preview)
 
-window.renderBridge.onStart((payload) => {
-  void run(payload)
-})
+if (typeof window !== 'undefined' && window.renderBridge) {
+  window.renderBridge.onStart((payload) => {
+    void run(payload)
+  })
+}
 
 async function run(payload: RenderStartPayload): Promise<void> {
   try {
@@ -81,7 +84,7 @@ async function shipFrame(pending: Promise<RenderFramePayload>): Promise<boolean>
 }
 
 /** The overlay drawing state shared by every frame of a job. */
-interface Overlay {
+export interface Overlay {
   ordered: Annotation[]
   numbers: Map<string, number>
   ui: number
@@ -102,12 +105,14 @@ interface Overlay {
  * Getting that wrong would silently drop every tracked box from the focused
  * display's own video, which is the one most people watch.
  */
-function onThisDisplay(a: Annotation, overlay: Overlay): boolean {
+export function onThisDisplay(a: Annotation, overlay: Overlay): boolean {
   if (overlay.focused === undefined) return true // single-display pack: one screen, every box
   return (a.display ?? overlay.focused) === (overlay.display ?? overlay.focused)
 }
 
-function makeOverlay(job: RenderStartPayload, outputWidth: number, outputHeight: number): Overlay {
+export function makeOverlay(job: RenderStartPayload, outputWidth: number, outputHeight: number): Overlay {
+  const contractError = renderContractError(job)
+  if (contractError !== null) throw new Error(contractError)
   const scaleX = job.width > 0 ? outputWidth / job.width : 1
   const scaleY = job.height > 0 ? outputHeight / job.height : 1
   return {
@@ -115,8 +120,15 @@ function makeOverlay(job: RenderStartPayload, outputWidth: number, outputHeight:
     // Keep every source rectangle in its declared native-pixel space until
     // annotationAt resolves the current sample/keyframe. Scaling first used to
     // leave authored keyframes unscaled and overwrite the correct 0.5x bounds
-    // with 4K coordinates on a 1920px annotated replay.
-    ordered: [...job.annotations].sort((a, b) => a.z - b.z),
+    // Stacking order for the overlay passes; z decides who draws on top (SPEC §8.3).
+    // Falls back to array index when z is omitted, preventing NaN sort comparisons.
+    ordered: [...job.annotations.map((a, i) => ({ a, i }))]
+      .sort((p, q) => {
+        const pZ = typeof p.a.z === 'number' && Number.isFinite(p.a.z) ? p.a.z : p.i
+        const qZ = typeof q.a.z === 'number' && Number.isFinite(q.a.z) ? q.a.z : q.i
+        return pZ !== qZ ? pZ - qZ : p.i - q.i
+      })
+      .map(({ a }) => a),
     // GLOBAL display numbers (SPEC §8.5) — global over the whole PACK, not just
     // over this job's boxes: a frame where only box 2 is alive still labels it
     // 2, and so does a per-display render that received box 2 alone. The map is
@@ -141,7 +153,7 @@ function makeOverlay(job: RenderStartPayload, outputWidth: number, outputHeight:
 
 /** Draw order per frame (SPEC §7.2): original -> blur -> border -> badge -> text.
  * `tMs` null = no clock (still job): every box is drawn. */
-function drawOverlay(
+export function drawOverlay(
   ctx: CanvasRenderingContext2D,
   canvas: HTMLCanvasElement,
   overlay: Overlay,
@@ -156,7 +168,9 @@ function drawOverlay(
   // which is exactly what `bounds` means.
   const alive =
     tMs === null
-      ? overlay.ordered.map((a) => scaleAnnotation(a, overlay.scaleX, overlay.scaleY))
+      ? overlay.ordered
+          .filter((a) => onThisDisplay(a, overlay))
+          .map((a) => scaleAnnotation(a, overlay.scaleX, overlay.scaleY))
       : overlay.ordered
           .filter((a) => visibleAt(a, tMs))
           .map((a) =>
@@ -196,15 +210,15 @@ function renderedLabelStyle(text: string, ui: number): AnnotationLabelStyle {
  * bottom-edge box or flipping its callout above. The source frame remains at
  * (0, 0); this is result-only space and does not alter annotation coordinates.
  */
-function renderedLabelBottomGutter(
+export function renderedLabelBottomGutter(
   annotations: readonly Annotation[],
   ui: number,
 ): number {
-  if (!annotations.some((annotation) => annotation.text.trim() !== '')) return 0
+  if (!annotations.some((annotation) => typeof annotation.text === 'string' && annotation.text.trim() !== '')) return 0
   return Math.ceil(annotationLabelBottomOutset(renderedLabelStyle('', ui)))
 }
 
-function renderedCanvasHeight(mediaHeight: number, bottomGutter: number): number {
+export function renderedCanvasHeight(mediaHeight: number, bottomGutter: number): number {
   const requested = Math.max(1, Math.ceil(mediaHeight + bottomGutter))
   // Canvas MediaRecorder encoders are least surprising on 2-pixel chroma
   // boundaries. One spare dark result row is cheaper than a codec-specific
@@ -212,7 +226,7 @@ function renderedCanvasHeight(mediaHeight: number, bottomGutter: number): number
   return requested % 2 === 0 ? requested : requested + 1
 }
 
-function scaleAnnotation(
+export function scaleAnnotation(
   a: Annotation,
   scaleX: number,
   scaleY: number,
@@ -246,10 +260,11 @@ async function renderStill(job: RenderStartPayload): Promise<{ frameCount: numbe
     const mediaWidth = job.width
     const mediaHeight = job.height
     const overlay = makeOverlay(job, mediaWidth, mediaHeight)
+    const activeAnnotations = overlay.ordered.filter((a) => onThisDisplay(a, overlay))
     canvas.width = mediaWidth
     canvas.height = renderedCanvasHeight(
       mediaHeight,
-      renderedLabelBottomGutter(overlay.ordered, overlay.ui),
+      renderedLabelBottomGutter(activeAnnotations, overlay.ui),
     )
     const ctx = canvas.getContext('2d')
     if (!ctx) throw new Error('canvas 2d context unavailable')
@@ -367,8 +382,8 @@ async function renderAnnotated(
   captureDue(drawFrame())
 
   const stream = canvas.captureStream(job.fps)
-  // Only a trim asks for a container: the annotated view is a derived file that
-  // has always been WebM, and nothing declares it by codec.
+  // Trim and annotated-render callers may preserve an MP4 source container;
+  // unsupported preferences fall through to the WebM encoder choices below.
   const producedMimeType = pickMimeType(job.preferMimeType)
   const recorder = new MediaRecorder(stream, {
     mimeType: producedMimeType,
@@ -559,14 +574,14 @@ function pixelate(ctx: CanvasRenderingContext2D, source: HTMLCanvasElement, a: A
 }
 
 /** Border + number badge + text for one alive box. Results only — no controls. */
-function drawBox(
+export function drawBox(
   ctx: CanvasRenderingContext2D,
   a: Annotation,
   displayNumber: number | undefined,
   ui: number,
 ): void {
   const color = annotationColor(a)
-  const text = a.text.trim()
+  const text = typeof a.text === 'string' ? a.text.trim() : ''
   drawAnnotationBox(ctx, a.bounds, {
     color,
     borderWidth: 3 * ui,

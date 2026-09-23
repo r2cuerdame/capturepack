@@ -254,11 +254,14 @@ console.log('Wiring — a flow cannot be added without being measured')
   const session = readFileSync(path.join(process.cwd(), 'src/main/session.ts'), 'utf8')
   const count = (pattern: RegExp): number => (session.match(pattern) ?? []).length
 
+  // Four since #157: the video flow, the desktop still, the re-edit, and the
+  // browser page the extension's toolbar button hands over — measured as an
+  // image flow, because that is the editor it opens.
   const gates = count(/flowActive = true/g)
   const begins = count(/beginFlowLatency\('/g)
   check(
     'every flow that takes the exclusive gate begins a measurement',
-    gates === begins && begins === 3,
+    gates === begins && begins === 4,
     `${String(gates)} gates, ${String(begins)} begins`,
   )
 

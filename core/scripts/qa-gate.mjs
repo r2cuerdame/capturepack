@@ -7,7 +7,7 @@ import { inspectPack } from './pack-forensics.mjs'
 import { terminateProcessTree } from './process-tree.mjs'
 
 const REPORT_SCHEMA_VERSION = 1
-// The complete 48-check gate finishes in about 21 seconds on the release
+// The complete gate finishes in about 21 seconds on the release
 // machine. A 15-minute timeout PER child made one wedged helper look like the
 // entire tool had frozen for exactly the delays the owner reported. Two
 // minutes leaves ample CI headroom while keeping a single failure bounded;
@@ -23,6 +23,7 @@ const VIDEO_PROFILE_CHECKS = new Set([
   'check:provider-host',
   'check:dom',
   'check:controls',
+  'check:longrun-resources',
   'check:context-host-dirty',
   'check:identity',
   'check:keyframes',
@@ -31,6 +32,7 @@ const VIDEO_PROFILE_CHECKS = new Set([
   'check:number-assignment',
   'check:motion',
   'check:render',
+  'check:history-rerender',
   'check:annotation-style',
   'check:annotation-placement',
   'check:trim',
@@ -55,10 +57,14 @@ const VIDEO_PROFILE_CHECKS = new Set([
   'check:replay-clock-map',
   'check:fmp4-sample-timeline',
   'check:processor-qpc-latency',
+  'check:dxgi-replay-ring',
+  'check:dxgi-replay-runtime',
+  'check:dxgi-replay-ab',
   'check:settings',
   'check:hotkeys',
   'check:about',
-  'check:clipboard',
+  'check:update-restart',
+  'check:clipboard-contract',
   'check:source-first-save',
   'check:save-now',
   'check:pack-assertions',
@@ -185,7 +191,7 @@ function runScript(name, timeoutMs) {
         FORCE_COLOR: '0',
         NO_COLOR: '1',
       },
-      shell: false,
+      shell: process.platform === 'win32' && !command.executable.toLowerCase().endsWith('.exe'),
       detached: process.platform !== 'win32',
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],

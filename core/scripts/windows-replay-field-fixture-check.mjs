@@ -1,3 +1,10 @@
+import './windows-replay-process-snapshot-check.mjs'
+import './windows-replay-continuous-sampler-check.mjs'
+import './windows-replay-field-clock-check.mjs'
+import {
+  parseWindowsIntegrityGroups,
+  WINDOWS_MEDIUM_INTEGRITY_RID,
+} from './windows-replay-launch-integrity.mjs'
 import { createRequire } from 'node:module'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -119,6 +126,34 @@ const fieldSource = readFileSync(
   path.join(here, 'windows-replay-field-check.mjs'),
   'utf8',
 )
+check(
+  'release field runs require the proven Explorer-equivalent Medium integrity token',
+  fieldSource.includes('readWindowsLaunchIntegrity()')
+    && fieldSource.includes('releaseComparison')
+    && fieldSource.includes('WINDOWS_MEDIUM_INTEGRITY_RID'),
+)
+{
+  const medium = parseWindowsIntegrityGroups(
+    'Mandatory Label,Medium Mandatory Level,S-1-16-8192,Group used for deny only',
+  )
+  const high = parseWindowsIntegrityGroups(
+    'Mandatory Label,High Mandatory Level,S-1-16-12288,Group used for deny only',
+  )
+  check(
+    'integrity parser identifies exact Medium and does not collapse High into it',
+    medium.rid === WINDOWS_MEDIUM_INTEGRITY_RID
+      && medium.level === 'medium'
+      && high.rid !== WINDOWS_MEDIUM_INTEGRITY_RID
+      && high.level === 'high',
+  )
+  let ambiguousRejected = false
+  try {
+    parseWindowsIntegrityGroups('S-1-16-8192 S-1-16-12288')
+  } catch {
+    ambiguousRejected = true
+  }
+  check('ambiguous integrity evidence is rejected', ambiguousRejected)
+}
 const durationSource = readFileSync(
   path.join(here, 'fixtures', 'windows-replay-field-duration.cjs'),
   'utf8',
@@ -139,15 +174,34 @@ check(
   fieldSource.includes('layout.movement_start_display_id !== expectedFixtureStartDisplayId'),
 )
 check(
+  'native lifecycle teardown rechecks the full owned-process identity after termination',
+  fieldSource.includes('$remaining=Get-CimInstance Win32_Process')
+    && fieldSource.includes("$remaining.CreationDate.ToUniversalTime().ToString('o')")
+    && !fieldSource.includes("Get-Process -Id ([int]$target.ProcessId)"),
+)
+check(
+  'performance sampling uses one asynchronous owned sampler and stops it before fault injection',
+  fieldSource.includes('performanceSampler = createContinuousProcessSampler({')
+    && fieldSource.includes('spawnProcess: (command, args, options) => track(spawn(')
+    && fieldSource.includes('await performanceSampler.stop()')
+    && fieldSource.indexOf('await performanceSampler.stop()')
+      < fieldSource.indexOf("setStage('native-fallback-proof'")
+    && !fieldSource.includes('const snapshot = await processTreeSnapshot(appProcess.pid)'),
+)
+check(
   'field replay hashing preserves the encoded VFR cadence instead of dropping a valid frame',
   fieldSource.includes("'-fps_mode', 'passthrough'")
     && fieldSource.includes("'-f', 'framemd5', '-'"),
 )
 check(
-  'visual object-pick truth decodes the requested pack time, not a stale materialized sample time',
-  fieldSource.includes(
-    'query.requested_t_ms + Number(display?.replay_clock_offset_ms ?? 0)',
-  )
+  'visual object-pick truth follows the replay frame actually presented by production',
+  fieldSource.includes('const presentedQueryTimes = focusedProbe === undefined')
+    && fieldSource.includes('queryTimesMs: presentedQueryTimes')
+    && fieldSource.includes(
+      'query.requested_t_ms + Number(display?.replay_clock_offset_ms ?? 0)',
+    )
+    && fieldSource.includes('geometry_alignment_diagnostics')
+    && !fieldSource.includes('aligned_context_t_ms')
     && fieldSource.includes(
       'five points inside decoded replay target pixels at the requested pack time',
     ),
