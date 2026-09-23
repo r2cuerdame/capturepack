@@ -162,9 +162,11 @@ console.log('\nThe picker actually uses it, in every frame')
   // 0.3.0 adds a second way to arm the picker; 0.3.4 answers a capture with one
   // document per VISIBLE BROWSER WINDOW instead of the focused one alone (#132);
   // 0.4.0 makes the toolbar click a full-page capture that speaks
-  // `page.captured` / `page.chunk` and expects `page.received` back (#157).
+  // `page.captured` / `page.chunk` and expects `page.received` back (#157);
+  // 0.4.1 keeps that wire and fixes the HiDPI full-page plan, so a shipped
+  // worker can be told apart from the one QA rejected.
   check('the manifest version moved with the protocol change',
-    manifest.version === '0.4.0', manifest.version)
+    manifest.version === '0.4.1', manifest.version)
   check('and the document walker ships with it',
     existsSync(resolve(EXTENSION, 'document-snapshot.js')))
 

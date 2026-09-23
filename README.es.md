@@ -35,7 +35,7 @@ cuenta y sin servicios en la nube.
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Descargar](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Versión pública actual para Windows: **CapturePack 0.5.1**. Historial crea una
+Versión pública actual para Windows: **CapturePack 0.6.0**. Historial crea una
 **Copia para compartir** (`.share.zip`) cuyos únicos medios son imágenes fijas PNG
 anotadas y revisadas; las acompañan un README generado, un visor sin conexión y
 un inventario mínimo. Se excluyen los originales, todos los vídeos y el contexto
@@ -285,10 +285,10 @@ Herramientas, configuración del cliente y ajustes: [docs/MCP.md](docs/MCP.md).
 
 Descarga el instalador más reciente desde [GitHub Releases](https://github.com/r2cuerdame/capturepack/releases/latest):
 
-1. Descarga `CapturePack-Setup-0.5.1.exe` y `SHA256SUMS.txt`.
+1. Descarga `CapturePack-Setup-0.6.0.exe` y `SHA256SUMS.txt`.
 2. Verifica la integridad del instalador en PowerShell:
    ```powershell
-   Get-FileHash CapturePack-Setup-0.5.1.exe -Algorithm SHA256
+   Get-FileHash CapturePack-Setup-0.6.0.exe -Algorithm SHA256
    ```
 3. Ejecuta el instalador. Dado que la firma de código para software libre está en tramitación, Windows SmartScreen mostrará una advertencia: haz clic en **Más información** → **Ejecutar de todas formas**.
 
@@ -316,7 +316,7 @@ npm run qa:rc
 
 ## Estado
 
-**0.5.1 es la descarga pública actual para Windows.** CapturePack sigue siendo un
+**0.6.0 es la descarga pública actual para Windows.** CapturePack sigue siendo un
 proyecto en fase temprana, así que conserva el pack original cuando informes de
 un problema y consulta [GOAL.md](GOAL.md) para la visión del producto y
 [ROADMAP.md](ROADMAP.md) para lo que viene después.
@@ -339,7 +339,7 @@ desfase global fijado en el código.
   — acceso de solo lectura a los packs guardados e integración de proveedores de
   contexto.
 
-CapturePack `0.5.1` es la versión de la aplicación. El `format_version` del pack
+CapturePack `0.6.0` es la versión de la aplicación. El `format_version` del pack
 evoluciona de forma independiente mediante cambios aditivos del formato; quien lo
 lea debe seguir [SPEC.md](SPEC.md) en lugar de deducir la compatibilidad del
 formato a partir de la versión de la aplicación.

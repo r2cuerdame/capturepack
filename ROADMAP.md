@@ -9,7 +9,7 @@ status; it never overrides either document.
 end on a real install (0.1.0 → 0.1.1 → 0.1.2). The active source and
 documentation baseline and current public
 [GitHub Release](https://github.com/r2cuerdame/capturepack/releases/latest) are
-**0.5.1**.
+**0.6.0**.
 What is *not* yet proven is the long-run habit — the one-month
 no-manual-reinstall criterion is still running.
 
@@ -21,7 +21,7 @@ Ctrl+Alt+C  →  capture  →  5-second annotation  →  save folder  →  share
 
 ---
 
-## Current baseline — 0.5.1
+## Current baseline — 0.6.0
 
 The milestone narrative below is preserved as the product's design and
 verification history. These are the current additions and next gates:
@@ -417,7 +417,7 @@ less complete without them, and nothing becomes an AI API integration (a stated 
 | 7 | Plugin API | V2 | Done — After Save Actions host and pipeline shipped in 0.5.0; temporal provider protocol v1 documented; on-disk plugin contract (SPEC §11) implemented |
 | 8 | Browser plugin | V2 | Done — picker, document snapshot, protocol v1, native host, Chromium-family installer registration. Shadow DOM / SPA routes pending |
 | 9 | Windows plugin | V2 | Done — built-in UI Automation provider writing `plugins/windows-uia` and `plugins/windows-context` |
-| 10 | Public release | V1 | Done (0.5.1 live; auto-update chain proven from 0.1.0) |
+| 10 | Public release | V1 | Done (0.6.0 live; auto-update chain proven from 0.1.0) |
 
 ---
 
