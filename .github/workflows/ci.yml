@@ -104,6 +104,12 @@ jobs:
           Write-Host "capture exited $LASTEXITCODE"
           exit $LASTEXITCODE
 
+      - name: Assert live capture to painted editor under five seconds
+        run: |
+          $work = "${{ runner.temp }}\capturepack-e2e"
+          node scripts/assert-live-capture-latency.mjs "$work\userdata\logs\main.log" 5000
+          exit $LASTEXITCODE
+
       - name: Assert on the pack
         run: |
           $work = "${{ runner.temp }}\capturepack-e2e"
@@ -111,12 +117,6 @@ jobs:
           if ($null -eq $pack) { throw "no pack was written to $work\packs" }
           Write-Host "asserting on $pack"
           node scripts/assert-capturepack.mjs $pack --expect-replay --log "$work\userdata\logs\main.log"
-          exit $LASTEXITCODE
-
-      - name: Assert live capture to painted editor under five seconds
-        run: |
-          $work = "${{ runner.temp }}\capturepack-e2e"
-          node scripts/assert-live-capture-latency.mjs "$work\userdata\logs\main.log" 5000
           exit $LASTEXITCODE
 
       # The other ending, and the one that has to stay honest: a recorder that
