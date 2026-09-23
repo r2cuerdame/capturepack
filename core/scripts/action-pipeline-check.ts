@@ -892,6 +892,7 @@ console.log('\nTHE WEBHOOK SUMMARY READS FIELDS THAT EXIST')
       })
       .join('\n')
   const webhook = stripComments(readNorm('src/main/actions/webhook.ts'))
+  const onSave = stripComments(readNorm('src/main/actions/onSave.ts'))
   const schemaText = readNorm('../docs/schemas/manifest.schema.json')
   const schema: unknown = JSON.parse(schemaText)
   const properties =
@@ -918,6 +919,10 @@ console.log('\nTHE WEBHOOK SUMMARY READS FIELDS THAT EXIST')
   check(
     'manifest.json is the ONLY file the action opens — no media, annotations, timeline or context',
     (webhook.match(/readFile\(/gu) ?? []).length === 1 && webhook.includes("path.join(packDir, 'manifest.json')"),
+  )
+  check(
+    'the after-save pack id reader removes a leading UTF-8 BOM before parsing',
+    onSave.includes('JSON.parse(stripUtf8Bom(raw))'),
   )
   check(
     'and no pack file name other than the manifest appears in its code at all',
@@ -1222,9 +1227,17 @@ console.log('\nWEBHOOK DELIVERY REFUSES HTTP REDIRECTS')
     generator: { name: 'CapturePack', version: '0.5.0' },
     media: { displays: [] },
   })
-  writeFileSync(path.join(tempPackDir, 'manifest.json'), manifestContent, 'utf8')
+  writeFileSync(path.join(tempPackDir, 'manifest.json'), '\uFEFF' + manifestContent, 'utf8')
 
   try {
+    const bomSummary = await readPackSummary(tempPackDir)
+    check(
+      'readPackSummary parses a UTF-8 BOM-prefixed manifest',
+      bomSummary.packId === 'e3f1c0de-0000-4000-8000-000000000001'
+        && bomSummary.appVersion === '0.5.0'
+        && bomSummary.formatVersion === '1.0.0',
+    )
+
     // 302 redirect
     let caught302: Error | null = null
     try {

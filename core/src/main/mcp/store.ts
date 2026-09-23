@@ -2,6 +2,7 @@
 // pack directories), kept fresh by fs.watch, and reads pack contents lazily via
 // adm-zip (zip) or fs (dir). Read-only: nothing here writes to disk.
 import AdmZip from 'adm-zip'
+import { stripUtf8Bom } from '../../shared/json'
 import { directoryHoldsCapturePack, manifestNamesCapturePack } from '../../shared/packIdentity'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
@@ -501,7 +502,7 @@ export function openPack(absPath: string, kind: PackKind, id: string): PackHandl
     const text = readText(rel)
     if (text === null) return null
     try {
-      return JSON.parse(text) as unknown
+      return JSON.parse(stripUtf8Bom(text)) as unknown
     } catch (err) {
       warnings.push(`${rel} is not valid JSON: ${errorMessage(err)}`)
       return null

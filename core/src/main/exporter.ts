@@ -24,6 +24,7 @@ import AdmZip from 'adm-zip'
 import { sealUiaPayload } from './uia'
 import type { DomEvent } from './chrome/domBridge'
 import type { Language } from '../shared/i18n'
+import { stripUtf8Bom } from '../shared/json'
 import type {
   Annotation,
   AnnotationsFile,
@@ -781,7 +782,7 @@ export async function readTimelineSafe(
   }
   try {
     const raw = await readFile(timelinePath, 'utf8')
-    const parsed = JSON.parse(raw) as unknown
+    const parsed = JSON.parse(stripUtf8Bom(raw)) as unknown
     if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
       const candidate = parsed as { t0?: unknown; events?: unknown }
       const t0 =
@@ -847,7 +848,7 @@ export async function readAnnotationsSafe(
   }
   try {
     const raw = await readFile(annotationsPath, 'utf8')
-    const parsed = JSON.parse(raw) as unknown
+    const parsed = JSON.parse(stripUtf8Bom(raw)) as unknown
     if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
       const candidate = parsed as {
         reference_width?: unknown
@@ -899,7 +900,7 @@ export async function addManifestPlugin(
 ): Promise<void> {
   return withManifestMutation(handle.dirPath, async () => {
     const manifestPath = join(handle.dirPath, 'manifest.json')
-    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Manifest
+    const manifest = JSON.parse(stripUtf8Bom(await readFile(manifestPath, 'utf8'))) as Manifest
     const plugins = Array.isArray(manifest.plugins) ? manifest.plugins : []
     const declared = plugins.some(
       (p) => p !== null && typeof p === 'object' && p.name === declaration.name,
@@ -1717,7 +1718,9 @@ export async function updatePack(
 
 async function readManifestIfPresent(dirPath: string): Promise<Manifest | null> {
   try {
-    return JSON.parse(await readFile(join(dirPath, 'manifest.json'), 'utf8')) as Manifest
+    return JSON.parse(
+      stripUtf8Bom(await readFile(join(dirPath, 'manifest.json'), 'utf8')),
+    ) as Manifest
   } catch {
     return null
   }
@@ -2225,7 +2228,9 @@ async function writeDocs(
  */
 export async function refreshPackDocs(dirPath: string, docLanguage: Language = 'en'): Promise<void> {
   return withManifestMutation(dirPath, async () => {
-    const manifest = JSON.parse(await readFile(join(dirPath, 'manifest.json'), 'utf8')) as Manifest
+    const manifest = JSON.parse(
+      stripUtf8Bom(await readFile(join(dirPath, 'manifest.json'), 'utf8')),
+    ) as Manifest
     const annotationsFile = await readAnnotationsSafe(
       dirPath,
       manifest.media.displays?.[0]?.snapshot_width ?? 0,
@@ -2286,7 +2291,7 @@ export async function setManifestRenderOutputs(
 ): Promise<void> {
   return withManifestMutation(handle.dirPath, async () => {
   const manifestPath = join(handle.dirPath, 'manifest.json')
-  const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Manifest
+  const manifest = JSON.parse(stripUtf8Bom(await readFile(manifestPath, 'utf8'))) as Manifest
   // Belt and braces against a second render for the same folder having wiped
   // the stills between this render's writes and this declaration: a declared
   // file MUST exist (SPEC §5.7). Renders are serialized (annotatedRender.ts),
