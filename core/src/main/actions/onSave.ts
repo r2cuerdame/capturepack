@@ -1,17 +1,18 @@
 // Firing the After Save Action pipeline at the moments a pack changes state
-// (#68, #169), and telling the user by name when one fails.
+// (#68, #160, #169), and telling the user by name when one fails.
 //
 // Call sites in session.ts are chosen because they are where the pack
 // genuinely reaches a state rather than where it is convenient to call:
 //
-//   source-ready            immediately after notePackSaved() — the line the
-//                           save flow itself documents as "everything above
-//                           this is what saved means"
+//   source-ready            immediately after notePackSaved() or image pack save —
+//                           the line the save flow itself documents as "everything
+//                           above this is what saved means"
 //   annotated-replay-ready  when the derived render reports 'done'
-//   complete                when background derived processing settles
+//   complete                when background derived processing settles (after
+//                           annotated-replay-ready, or after keyframe still finishes)
 //
 // Actions blocked at earlier moments receive their second chance when their
-// required pack state arrives (#68, #169).
+// required pack state arrives (#68, #160, #169).
 //
 // Crucially, only previously BLOCKED actions are re-run on subsequent pack
 // state transitions. Actions that already attempted and failed (or timed out)

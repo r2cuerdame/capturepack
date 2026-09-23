@@ -1933,6 +1933,10 @@ async function runImageEditor(settings: Settings, still: PreparedStill): Promise
         settings.imageClipboardAfterSave === 'image' ? 'image-rendering' : 'none',
       uiLanguage: uiLanguage(settings),
     })
+    void runActionsAtState(savedHandle.dirPath, 'source-ready', settings)
+    const onStillSettled = (): void => {
+      void runActionsAtState(savedHandle.dirPath, 'complete', settings)
+    }
     startKeyframeStill(
       savedHandle,
       {
@@ -1944,22 +1948,26 @@ async function runImageEditor(settings: Settings, still: PreparedStill): Promise
         height,
         docLanguage: packDocLanguage(settings),
       },
-      settings.imageClipboardAfterSave === 'image'
-        ? {
-            onRendered: async (png) => {
-              const copied = await copyPngToClipboard(png)
-              if (copied) {
-                updateToastRenderStatus(savedHandle.dirPath, 'image-copied')
-              } else {
-                logWarn('[image] final annotated image could not be copied to the clipboard')
-                updateToastRenderStatus(savedHandle.dirPath, 'image-copy-failed')
-              }
-            },
-            onFailed: () => {
+      {
+        onRendered: async (png) => {
+          if (settings.imageClipboardAfterSave === 'image') {
+            const copied = await copyPngToClipboard(png)
+            if (copied) {
+              updateToastRenderStatus(savedHandle.dirPath, 'image-copied')
+            } else {
+              logWarn('[image] final annotated image could not be copied to the clipboard')
               updateToastRenderStatus(savedHandle.dirPath, 'image-copy-failed')
-            },
+            }
           }
-        : {},
+          onStillSettled()
+        },
+        onFailed: () => {
+          if (settings.imageClipboardAfterSave === 'image') {
+            updateToastRenderStatus(savedHandle.dirPath, 'image-copy-failed')
+          }
+          onStillSettled()
+        },
+      },
     )
   } catch (err) {
     logError('[image] save failed:', err)
@@ -3175,22 +3183,35 @@ function startFreshCaptureRenders(
         // idempotent action that already succeeded, so only what was waiting
         // actually runs.
         if (state === 'done') {
-          void runActionsAtState(dirPath, 'annotated-replay-ready', settings)
+          void runActionsAtState(dirPath, 'annotated-replay-ready', settings).then(() => {
+            void runActionsAtState(dirPath, 'complete', settings)
+          })
         }
       },
       (ratio) => updateToastRenderStatus(dirPath, 'rendering', ratio),
     )
   } else {
-    startKeyframeStill(handle, {
-      snapshotPng: input.snapshotPng,
-      annotations: focusedAnnotations,
-      motionSpace,
-      displayNumbers: numbers,
-      focusedDisplay: focusedIndex,
-      width: input.width,
-      height: input.height,
-      docLanguage: packDocLanguage(settings),
-    })
+    startKeyframeStill(
+      handle,
+      {
+        snapshotPng: input.snapshotPng,
+        annotations: focusedAnnotations,
+        motionSpace,
+        displayNumbers: numbers,
+        focusedDisplay: focusedIndex,
+        width: input.width,
+        height: input.height,
+        docLanguage: packDocLanguage(settings),
+      },
+      {
+        onRendered: () => {
+          void runActionsAtState(dirPath, 'complete', settings)
+        },
+        onFailed: () => {
+          void runActionsAtState(dirPath, 'complete', settings)
+        },
+      },
+    )
   }
 
   if (displays.length > 1) {
