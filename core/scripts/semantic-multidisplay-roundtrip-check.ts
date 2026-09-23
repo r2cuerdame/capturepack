@@ -11,7 +11,7 @@
 // reader before asking the same render helper used by the editor and annotated
 // renderer where the object belongs. A JSON stringify/parse-only check cannot
 // catch a writer, manifest, or reader dropping display/time/identity fields.
-import { mkdtemp, rm } from 'node:fs/promises'
+import { access, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
@@ -170,6 +170,11 @@ async function main(): Promise<void> {
 
     console.log('PRODUCTION WRITER -> DISK -> PRODUCTION DIRECTORY READER')
     const saved = await savePack(initial)
+    const staleDisplayRenders = [
+      path.join(saved.dirPath, 'replay_annotated-d1.webm'),
+      path.join(saved.dirPath, 'replay_annotated-d1.mp4'),
+    ]
+    await Promise.all(staleDisplayRenders.map(async (file) => writeFile(file, 'STALE RENDER')))
     const finalInput: ExportInput = {
       captureKind: 'video',
       snapshotPng: initial.snapshotPng,
@@ -191,6 +196,13 @@ async function main(): Promise<void> {
       docLanguage: 'en',
     }
     await updatePack(saved, finalInput, { keepReplay: true })
+    const staleDisplayRendersRemoved = await Promise.all(
+      staleDisplayRenders.map(async (file) => access(file).then(() => false, () => true)),
+    )
+    check(
+      're-edit removes stale WebM and MP4 annotated replays for secondary displays',
+      staleDisplayRendersRemoved.every(Boolean),
+    )
 
     // A new handle is the close/reopen boundary. It lazily reads the committed
     // files from disk; it shares no annotations or manifest object with the
@@ -224,8 +236,8 @@ async function main(): Promise<void> {
       'disk annotations preserve semantic identity, picked time and every observed sample',
       loaded !== undefined
         && same(loaded.target, target)
-        && loaded.tracking.picked_at_ms === 100
-        && same(loaded.tracking.samples, semantic.tracking.samples),
+        && loaded.tracking?.picked_at_ms === 100
+        && same(loaded.tracking?.samples, semantic.tracking?.samples),
       JSON.stringify(loaded),
     )
 
@@ -233,7 +245,7 @@ async function main(): Promise<void> {
     const motionSpace: AuthoredMotionSpace = {
       focusedIndex: declared.find((display) => display.focused)?.index ?? 1,
       displays: declared.flatMap((display) => {
-        const screen = manifest.environment.screens[display.index - 1]
+        const screen = manifest.environment.screens?.[display.index - 1]
         return screen === undefined || display.bounds === undefined
           ? []
           : [{
@@ -271,8 +283,8 @@ async function main(): Promise<void> {
       loaded.display === 1
         && loaded.start_ms === 100
         && loaded.end_ms === 900
-        && loaded.tracking.samples?.[1]?.display === 2
-        && loaded.tracking.samples?.[2]?.display === 3
+        && loaded.tracking?.samples?.[1]?.display === 2
+        && loaded.tracking?.samples?.[2]?.display === 3
         && same(loaded.target, target),
       JSON.stringify(loaded),
     )

@@ -12,6 +12,7 @@ import {
   mkdir,
   open,
   readFile,
+  readdir,
   rename,
   rm,
   writeFile,
@@ -49,6 +50,12 @@ import {
   FORMAT_VERSION_SOURCE_LATENCY,
 } from '../shared/types'
 import { displayAnnotatedName, displayFramesDir } from '../shared/keyframes'
+import {
+  DISPLAY_REPLAY_NAME_RE,
+  REPLAY_NAME_RE,
+  replayMimeType,
+} from '../shared/replayMedia'
+export { REPLAY_NAME_RE, replayMimeType } from '../shared/replayMedia'
 import { buildReport } from './report'
 import { buildReadme, buildSkills, SKILLS_FILES } from './packdocs'
 import { buildViewerHtml, manifestWithViewerFormat } from './viewer'
@@ -127,18 +134,13 @@ export function displayReplayName(index: number, replayFile = 'replay.webm'): st
 // manifest.json this process did not write (re-edit of an external or
 // hand-edited pack), and it is joined onto a path — so it is checked against
 // these before it can reach existsSync/copyFile/writeFile/rm.
-export const REPLAY_NAME_RE = /^replay\.(webm|mp4)$/
 const DISPLAY_SNAPSHOT_NAME_RE = /^snapshot-d[1-9][0-9]*\.png$/
-const DISPLAY_REPLAY_NAME_RE = /^replay-d[1-9][0-9]*\.(webm|mp4)$/
+const DISPLAY_ANNOTATED_NAME_RE = /^replay_annotated-d[1-9][0-9]*\.(webm|mp4)$/
+const DISPLAY_FRAMES_DIR_NAME_RE = /^frames-d[1-9][0-9]*$/
 
 /** A declared top-level replay filename, or the default when it is not legal. */
 export function replayFileName(declared: string | null | undefined): string {
   return typeof declared === 'string' && REPLAY_NAME_RE.test(declared) ? declared : 'replay.webm'
-}
-
-/** MIME type implied by a validated replay filename. */
-export function replayMimeType(declared: string | null | undefined): string {
-  return replayFileName(declared).endsWith('.mp4') ? 'video/mp4' : 'video/webm'
 }
 
 /** A declared per-display filename, or the index-derived default. */
@@ -207,8 +209,8 @@ function buildDisplayMedia(
 /**
  * Writes the per-display media files (the focused display's are the top-level
  * ones). Concurrent on purpose: each of these is 20-45 MB of webm, and a
- * sequential loop over three or four screens is seconds of wall clock between
- * the hotkey and the editor (see savePack's background write).
+ * sequential loop over three or four screens adds seconds to a finalize or
+ * exact-cut update.
  */
 async function writeDisplayFiles(
   dirPath: string,
@@ -229,6 +231,59 @@ async function writeDisplayFiles(
 }
 
 /**
+ * Save-first must preserve the focused capture even when a secondary monitor
+ * cannot be persisted. Return only displays whose snapshots landed, and
+ * downgrade a display to screenshot-only when just its replay failed, so the
+ * first published manifest never declares a missing file (SPEC §5.6).
+ */
+async function writeSaveFirstDisplayFiles(
+  dirPath: string,
+  displays: readonly DisplayCapture[] | undefined,
+): Promise<DisplayCapture[] | undefined> {
+  if (displays === undefined) return undefined
+  const written = await Promise.all(
+    displays.map(async (display): Promise<DisplayCapture | null> => {
+      if (display.focused) return display
+
+      try {
+        if (display.snapshotPng !== null) {
+          await writeFile(join(dirPath, display.snapshotFile), display.snapshotPng)
+        }
+        const snapshotStat = await lstat(join(dirPath, display.snapshotFile))
+        if (!snapshotStat.isFile() || snapshotStat.size === 0) {
+          throw new Error(`${display.snapshotFile} is empty`)
+        }
+      } catch (err) {
+        console.error(
+          `capturepack: writing display ${display.index} snapshot failed; keeping focused capture:`,
+          err instanceof Error ? err.message : String(err),
+        )
+        return null
+      }
+
+      if (!display.hasReplay || display.replayFile === null) return display
+      try {
+        if (display.replayWebm !== null) {
+          await writeFile(join(dirPath, display.replayFile), display.replayWebm)
+        }
+        const replayStat = await lstat(join(dirPath, display.replayFile))
+        if (!replayStat.isFile() || replayStat.size === 0) {
+          throw new Error(`${display.replayFile} is empty`)
+        }
+        return display
+      } catch (err) {
+        console.error(
+          `capturepack: writing display ${display.index} replay failed; declaring snapshot only:`,
+          err instanceof Error ? err.message : String(err),
+        )
+        return { ...display, hasReplay: false, replayWebm: null }
+      }
+    }),
+  )
+  return written.filter((display): display is DisplayCapture => display !== null)
+}
+
+/**
  * Removes every non-focused display's annotated replay and stills. The
  * derived-view rule of the top-level media (SPEC §7.2) applies per display: a
  * rendering is only ever as current as the annotations it was made from, so a
@@ -242,21 +297,46 @@ async function clearDisplayRenderOutputs(
   if (displays === undefined) return
   for (const d of displays) {
     if (d.focused) continue
-    await rm(join(dirPath, displayAnnotatedName(d.index)), { force: true })
-    await rm(join(dirPath, displayFramesDir(d.index)), { recursive: true, force: true })
+    await clearDisplayDerivedOutputs(dirPath, d.index)
   }
 }
 
-// ---------------------------------------------------------------------------
-// Save-first per-display writes, off the editor-opening critical path
-// ---------------------------------------------------------------------------
+async function clearDisplayDerivedOutputs(dirPath: string, index: number): Promise<void> {
+  await Promise.all([
+    rm(join(dirPath, displayAnnotatedName(index)), { force: true }),
+    rm(join(dirPath, displayAnnotatedName(index, 'replay.mp4')), { force: true }),
+    rm(join(dirPath, displayFramesDir(index)), { recursive: true, force: true }),
+  ])
+}
 
-// dirPath -> the save-first per-display write still in flight for it. savePack
-// returns as soon as the CRASH-CRITICAL bytes (manifest, snapshot.png,
-// declared replay, annotations/timeline/docs) are down, so the editor opens without
-// waiting for 100+ MB of other screens; every later writer for that folder
-// (updatePack, saveAsNewPack) settles this first.
-const pendingDisplayWrites = new Map<string, Promise<void>>()
+async function clearDisplayMedia(dirPath: string, index: number): Promise<void> {
+  await Promise.all([
+    rm(join(dirPath, displaySnapshotName(index)), { force: true }),
+    rm(join(dirPath, displayReplayName(index)), { force: true }),
+    rm(join(dirPath, displayReplayName(index, 'replay.mp4')), { force: true }),
+    clearDisplayDerivedOutputs(dirPath, index),
+  ])
+}
+
+/**
+ * Image packs have no secondary-display media at all. Sweep canonical names
+ * rather than trusting only the previous manifest: older writers could leave
+ * an already-undeclared display behind, and a Full ZIP includes every file in
+ * the folder regardless of whether the manifest still names it.
+ */
+async function clearAllSecondaryDisplayMedia(dirPath: string): Promise<void> {
+  const entries = await readdir(dirPath)
+  await Promise.all(
+    entries
+      .filter((name) =>
+        DISPLAY_SNAPSHOT_NAME_RE.test(name) ||
+        DISPLAY_REPLAY_NAME_RE.test(name) ||
+        DISPLAY_ANNOTATED_NAME_RE.test(name) ||
+        DISPLAY_FRAMES_DIR_NAME_RE.test(name),
+      )
+      .map((name) => rm(join(dirPath, name), { recursive: true, force: true })),
+  )
+}
 
 // Every read-modify-write of one pack's manifest shares this queue. UIA/DOM
 // providers finish on independent budgets while final save and background
@@ -340,70 +420,13 @@ async function withManifestMutation<T>(
   }
 }
 
-/** Waits for a save-first per-display write to finish. Never rejects. */
-export async function settleDisplayWrites(dirPath: string): Promise<void> {
-  const pending = pendingDisplayWrites.get(dirPath)
-  if (pending === undefined) return
-  try {
-    await pending
-  } catch {
-    /* already logged by the writer */
-  }
-}
-
 /**
- * A per-display file the background write could not lay down must not stay
- * DECLARED: re-reads the manifest and drops every media.displays entry whose
- * files are missing. Keeps a save-first folder valid even when the editor is
- * cancelled.
- *
- * IT COLLAPSES, IT NEVER DELETES (0.7.0, SPEC §5.6). This used to remove the
- * whole array once fewer than two entries survived, because that was the
- * single-display shape. Under a REQUIRED media.displays that would turn a
- * crash-recovery folder into an invalid 0.7.0 pack — a manifest declaring
- * 0.7.0 with no displays at all — and this runs on precisely the path nobody is
- * watching. One surviving entry is now a one-entry array, which is exactly what
- * a single-display capture writes anyway.
+ * Kept for callers that may run against an older save-first implementation.
+ * Display media is now committed synchronously before manifest publication, so
+ * there is no local background write to settle.
  */
-async function dropUndeclarableDisplays(dirPath: string): Promise<void> {
-  return withManifestMutation(dirPath, async () => {
-    const manifestPath = join(dirPath, 'manifest.json')
-    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Manifest
-    const displays = manifest.media.displays
-    if (!Array.isArray(displays)) return
-    let changed = false
-    const kept: ManifestDisplayMedia[] = []
-    for (const d of displays) {
-      if (d.focused) {
-        kept.push(d)
-        continue
-      }
-      if (!existsSync(join(dirPath, d.snapshot))) {
-        changed = true
-        continue // no frame for this display: it is not in the pack at all
-      }
-      if (d.replay !== null && !existsSync(join(dirPath, d.replay))) {
-        // The frame landed, the recording did not — a screenshot-only display is
-        // a legal entry (SPEC §5.6); a declared missing file is not.
-        const {
-          replay_duration_ms: _droppedDuration,
-          replay_clock_offset_ms: _droppedClock,
-          ...rest
-        } = d
-        kept.push({ ...rest, replay: null })
-        changed = true
-        continue
-      }
-      kept.push(d)
-    }
-    if (!changed) return
-    // Zero survivors means the array had no focused entry — a manifest that was
-    // already malformed before this ran. There is nothing honest to collapse to,
-    // so the undeclarable array goes rather than being left pointing at nothing.
-    if (kept.length > 0) manifest.media.displays = kept
-    else delete manifest.media.displays
-    await writeSourceFile(manifestPath, toJson(manifest))
-  })
+export async function settleDisplayWrites(dirPath: string): Promise<void> {
+  void dirPath
 }
 
 // ---------------------------------------------------------------------------
@@ -446,7 +469,7 @@ export const UIA_PLUGIN_NAME = 'windows-uia'
 export const UIA_PLUGIN_VERSION = '0.5.0'
 
 /** The manifest.plugins entry for the payload writeUiaPlugin() lays down. */
-export function uiaPluginDeclaration(): Manifest['plugins'][number] {
+export function uiaPluginDeclaration(): NonNullable<Manifest['plugins']>[number] {
   return { name: UIA_PLUGIN_NAME, version: UIA_PLUGIN_VERSION, path: `plugins/${UIA_PLUGIN_NAME}/` }
 }
 
@@ -490,8 +513,13 @@ export const DOM_PLUGIN_NAME = 'chrome-dom'
  * pick made two seconds before the shutter would be indistinguishable from one
  * made at it. A page can change in between, and that is the reader's judgement
  * to make. Absent on a replay pack, where `t_ms` already carries the time.
+ *
+ * 0.4.0 adds `scope` on a document (#157). A full-page still's document is the
+ * WHOLE page in document CSS pixels, with `viewport` naming the picture's CSS
+ * size; a viewport walk says so too. Absent from an older writer, which only
+ * ever walked the viewport.
  */
-export const DOM_PLUGIN_VERSION = '0.3.0'
+export const DOM_PLUGIN_VERSION = '0.4.0'
 
 /**
  * WHAT WAS ON SCREEN, AND WHAT WAS DELIBERATELY LEFT OFF IT.
@@ -511,6 +539,8 @@ export interface DomPluginDocument {
     scroll_x: number
     scroll_y: number
   }
+  /** What the rectangles describe (0.4.0): the viewport, or the whole document. */
+  scope?: 'viewport' | 'document'
   url: string
   title: string
   elements: readonly {
@@ -562,10 +592,37 @@ export interface DomPluginPayload {
     }
     /** Added in payload 0.2.0. Absent means nobody looked, not an empty page. */
     document?: DomPluginDocument
+    /**
+     * How a browser-page picture was made (payload 0.4.0, #157). Written on
+     * the `dom.document.captured` event of a `browser-page` still and nowhere
+     * else: the document's CSS size, the picture's pixel size and the scale
+     * between them, and whether the page was cut at the tile budget or scaled
+     * down to fit — everything a reader needs to weigh the picture.
+     */
+    page?: DomPluginPage
   }[]
 }
 
-export function domPluginDeclaration(): Manifest['plugins'][number] {
+export interface DomPluginPage {
+  css_width: number
+  css_height: number
+  pixel_width: number
+  pixel_height: number
+  device_pixel_ratio: number
+  scale: number
+  client_width: number
+  client_height: number
+  scroll_width: number
+  scroll_height: number
+  tiles: number
+  truncated: boolean
+  downscaled: boolean
+  exact_scale: boolean
+  hidden_repeating: number
+  capture_ms: number
+}
+
+export function domPluginDeclaration(): NonNullable<Manifest['plugins']>[number] {
   return { name: DOM_PLUGIN_NAME, version: DOM_PLUGIN_VERSION, path: `plugins/${DOM_PLUGIN_NAME}/` }
 }
 
@@ -623,6 +680,7 @@ export function domEventForPack(
               scroll_x: e.document.viewport.scrollX,
               scroll_y: e.document.viewport.scrollY,
             },
+            ...(e.document.scope === undefined ? {} : { scope: e.document.scope }),
             url: e.document.url,
             title: e.document.title,
             elements: e.document.elements,
@@ -630,6 +688,28 @@ export function domEventForPack(
             visited_count: e.document.visitedCount,
             elapsed_ms: e.document.elapsedMs,
             omitted: e.document.omitted,
+          },
+        }),
+    ...(e.page === undefined
+      ? {}
+      : {
+          page: {
+            css_width: e.page.cssWidth,
+            css_height: e.page.cssHeight,
+            pixel_width: e.page.pixelWidth,
+            pixel_height: e.page.pixelHeight,
+            device_pixel_ratio: e.page.devicePixelRatio,
+            scale: e.page.scale,
+            client_width: e.page.clientWidth,
+            client_height: e.page.clientHeight,
+            scroll_width: e.page.scrollWidth,
+            scroll_height: e.page.scrollHeight,
+            tiles: e.page.tiles,
+            truncated: e.page.truncated,
+            downscaled: e.page.downscaled,
+            exact_scale: e.page.exactScale,
+            hidden_repeating: e.page.hiddenRepeating,
+            capture_ms: e.page.captureMs,
           },
         }),
   }
@@ -674,6 +754,133 @@ export async function tryWriteDomPlugin(
 }
 
 /**
+ * Safely reads timeline.json from a pack directory.
+ *
+ * SPEC §4, §10, and §14 declare timeline.json as OPTIONAL for video packs
+ * and absent for image packs. If timeline.json is missing, unreadable, or
+ * contains malformed JSON or invalid event arrays, falls back to a safe empty
+ * timeline ({ t0: fallbackCreatedAt, events: [] }) rather than throwing or
+ * aborting doc refresh.
+ */
+export async function readTimelineSafe(
+  dirPath: string,
+  fallbackCreatedAt: string,
+  captureKind?: CaptureKind,
+): Promise<TimelineFile> {
+  const safeT0 =
+    typeof fallbackCreatedAt === 'string' && fallbackCreatedAt.length > 0
+      ? fallbackCreatedAt
+      : new Date().toISOString()
+  const fallback: TimelineFile = { t0: safeT0, events: [] }
+  if (captureKind === 'image') {
+    return fallback
+  }
+  const timelinePath = join(dirPath, 'timeline.json')
+  if (!existsSync(timelinePath)) {
+    return fallback
+  }
+  try {
+    const raw = await readFile(timelinePath, 'utf8')
+    const parsed = JSON.parse(raw) as unknown
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const candidate = parsed as { t0?: unknown; events?: unknown }
+      const t0 =
+        typeof candidate.t0 === 'string' && candidate.t0.length > 0
+          ? candidate.t0
+          : safeT0
+      if (
+        Array.isArray(candidate.events) &&
+        candidate.events.every(
+          (e) =>
+            e !== null &&
+            typeof e === 'object' &&
+            typeof (e as { type?: unknown }).type === 'string' &&
+            typeof (e as { t_ms?: unknown }).t_ms === 'number',
+        )
+      ) {
+        return {
+          t0,
+          events: candidate.events as TimelineFile['events'],
+        }
+      }
+    }
+    return fallback
+  } catch {
+    return fallback
+  }
+}
+
+/**
+ * Safely reads annotations.json from a pack directory.
+ *
+ * SPEC §4, §8, and §14 declare annotations.json as OPTIONAL.
+ * If annotations.json is missing, unreadable, or contains malformed JSON
+ * or invalid annotations array, falls back to a safe empty AnnotationsFile
+ * ({ reference_width: fallbackWidth, reference_height: fallbackHeight, annotations: [] })
+ * rather than throwing or aborting doc refresh.
+ */
+export async function readAnnotationsSafe(
+  dirPath: string,
+  fallbackWidthOrManifest: number | Manifest = 0,
+  fallbackHeightParam: number = 0,
+): Promise<AnnotationsFile> {
+  let fallbackWidth = 0
+  let fallbackHeight = 0
+  if (typeof fallbackWidthOrManifest === 'number') {
+    fallbackWidth = Number.isFinite(fallbackWidthOrManifest) ? fallbackWidthOrManifest : 0
+    fallbackHeight =
+      typeof fallbackHeightParam === 'number' && Number.isFinite(fallbackHeightParam)
+        ? fallbackHeightParam
+        : 0
+  } else if (fallbackWidthOrManifest && typeof fallbackWidthOrManifest === 'object') {
+    fallbackWidth = fallbackWidthOrManifest.media?.displays?.[0]?.snapshot_width ?? 0
+    fallbackHeight = fallbackWidthOrManifest.media?.displays?.[0]?.snapshot_height ?? 0
+  }
+  const fallback: AnnotationsFile = {
+    reference_width: fallbackWidth,
+    reference_height: fallbackHeight,
+    annotations: [],
+  }
+  const annotationsPath = join(dirPath, 'annotations.json')
+  if (!existsSync(annotationsPath)) {
+    return fallback
+  }
+  try {
+    const raw = await readFile(annotationsPath, 'utf8')
+    const parsed = JSON.parse(raw) as unknown
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const candidate = parsed as {
+        reference_width?: unknown
+        reference_height?: unknown
+        annotations?: unknown
+      }
+      const reference_width =
+        typeof candidate.reference_width === 'number' && Number.isFinite(candidate.reference_width)
+          ? candidate.reference_width
+          : fallbackWidth
+      const reference_height =
+        typeof candidate.reference_height === 'number' && Number.isFinite(candidate.reference_height)
+          ? candidate.reference_height
+          : fallbackHeight
+      const rawAnnotations = candidate.annotations
+      const annotations: AnnotationsFile['annotations'] =
+        Array.isArray(rawAnnotations) &&
+        rawAnnotations.every((a) => a !== null && typeof a === 'object')
+          ? (rawAnnotations as AnnotationsFile['annotations'])
+          : []
+      return {
+        reference_width,
+        reference_height,
+        annotations,
+      }
+    }
+    return fallback
+  } catch {
+    return fallback
+  }
+}
+
+/**
  * Adds one plugin declaration to an ALREADY written manifest.json, the way
  * setManifestRenderOutputs() adds the render outputs: the save-first folder is
  * complete before the (asynchronous, budgeted) dump lands, so its payload is
@@ -687,7 +894,7 @@ export async function tryWriteDomPlugin(
  */
 export async function addManifestPlugin(
   handle: PackHandle,
-  declaration: Manifest['plugins'][number],
+  declaration: NonNullable<Manifest['plugins']>[number],
   docLanguage: Language,
 ): Promise<void> {
   return withManifestMutation(handle.dirPath, async () => {
@@ -700,15 +907,16 @@ export async function addManifestPlugin(
     const nextManifest: Manifest = declared
       ? manifest
       : { ...manifest, plugins: [...plugins, declaration] }
-    const annotationsFile = JSON.parse(
-      await readFile(join(handle.dirPath, 'annotations.json'), 'utf8'),
-    ) as AnnotationsFile
-    const timeline: TimelineFile =
-      nextManifest.capture_kind === 'image'
-        ? { t0: nextManifest.created_at, events: [] }
-        : JSON.parse(
-            await readFile(join(handle.dirPath, 'timeline.json'), 'utf8'),
-          ) as TimelineFile
+    const annotationsFile = await readAnnotationsSafe(
+      handle.dirPath,
+      nextManifest.media.displays?.[0]?.snapshot_width ?? 0,
+      nextManifest.media.displays?.[0]?.snapshot_height ?? 0,
+    )
+    const timeline = await readTimelineSafe(
+      handle.dirPath,
+      nextManifest.created_at,
+      nextManifest.capture_kind,
+    )
 
     // A late plugin belongs to the durable source revision, not to derived
     // rendering. Under-promising while a final render starts is safe; once the
@@ -743,7 +951,7 @@ export async function addManifestPlugin(
 export const WINDOWS_CONTEXT_PLUGIN_NAME = 'windows-context'
 export const WINDOWS_CONTEXT_PLUGIN_VERSION = '0.1.0'
 
-export function windowsContextPluginDeclaration(): Manifest['plugins'][number] {
+export function windowsContextPluginDeclaration(): NonNullable<Manifest['plugins']>[number] {
   return {
     name: WINDOWS_CONTEXT_PLUGIN_NAME,
     version: WINDOWS_CONTEXT_PLUGIN_VERSION,
@@ -947,11 +1155,11 @@ export interface ManifestInput {
   generatorVersion: string
   title: string
   note: string
-  osVersion: string
-  screens: Array<{
+  osVersion?: string
+  screens?: Array<{
     width: number
     height: number
-    scale: number
+    scale?: number
     bounds?: { x: number; y: number; width: number; height: number }
   }>
   captureKind?: CaptureKind
@@ -1014,14 +1222,21 @@ function validImageCropBounds(value: ImageCropBounds | undefined): value is Imag
 export function buildManifest(input: ManifestInput): Manifest {
   const captureKind = input.captureKind ?? 'video'
   if (captureKind === 'image') {
-    if (input.imageScope !== 'region' && input.imageScope !== 'fullscreen') {
-      throw new Error('image capture requires an explicit region or fullscreen scope')
+    if (
+      input.imageScope !== 'region'
+      && input.imageScope !== 'fullscreen'
+      && input.imageScope !== 'browser-page'
+    ) {
+      throw new Error('image capture requires an explicit region, fullscreen or browser-page scope')
     }
     if (input.imageScope === 'region' && !validImageCropBounds(input.cropBounds)) {
       throw new Error('region image capture requires valid virtual-desktop crop bounds')
     }
     if (input.imageScope === 'fullscreen' && input.cropBounds !== undefined) {
       throw new Error('fullscreen image capture must not declare crop bounds')
+    }
+    if (input.imageScope === 'browser-page' && input.cropBounds !== undefined) {
+      throw new Error('browser-page image capture must not declare crop bounds')
     }
   }
   // Version from what this manifest will actually DECLARE, not from stale
@@ -1108,8 +1323,8 @@ export function buildManifest(input: ManifestInput): Manifest {
     generator: { name: 'capturepack', version: input.generatorVersion },
     environment: {
       os: 'windows',
-      os_version: input.osVersion,
-      screens: input.screens,
+      ...(input.osVersion !== undefined ? { os_version: input.osVersion } : {}),
+      ...(input.screens !== undefined ? { screens: input.screens } : {}),
     },
     media: {
       snapshot: 'snapshot.png',
@@ -1252,6 +1467,17 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
       dirPath,
       imageCapture ? null : input.windowsContext,
     )
+    // Every file declared by the manifest must be complete before that manifest
+    // becomes discoverable. This includes non-focused displays: manifest.json
+    // is the commit point, so none of their writes may remain in the background.
+    await writeFile(join(dirPath, 'snapshot.png'), input.snapshotPng)
+    if (!imageCapture && input.replayWebm !== null) {
+      await writeFile(join(dirPath, replayFileName(input.replayFile)), input.replayWebm)
+    }
+    const writtenDisplays = await writeSaveFirstDisplayFiles(
+      dirPath,
+      imageCapture ? undefined : input.displays,
+    )
     const manifest = buildManifest({
       id,
       createdAt: input.capturedAt,
@@ -1268,7 +1494,7 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
       replayDurationMs: input.replayDurationMs,
       snapshotTMs: null,
       plugins: withWindowsContextPlugin(undefined, contextDisposition),
-      displays: imageCapture ? undefined : input.displays,
+      displays: writtenDisplays,
       cadence: imageCapture ? undefined : input.cadence,
       // Save-first already carries the capture's input events — they were
       // observed before the trigger, not authored in the editor — so the folder
@@ -1279,33 +1505,10 @@ export async function savePack(input: InitialSaveInput): Promise<PackHandle> {
     // No render follows a save-first folder — the editor may never finish — so
     // the documents must not promise stills nothing will ever write.
     await writePackFiles(dirPath, manifest, annotationsFile, input.timeline, input.docLanguage, false)
-    await writeFile(join(dirPath, 'snapshot.png'), input.snapshotPng)
-    if (!imageCapture && input.replayWebm !== null) {
-      await writeFile(join(dirPath, replayFileName(input.replayFile)), input.replayWebm)
-    }
   } catch (err) {
     // Never leave a half-written pack behind.
     await rm(dirPath, { recursive: true, force: true })
     throw err
-  }
-  // The OTHER displays' media (up to ~45 MB of webm each) is written in the
-  // background: the focused pack above is already complete and valid, and the editor
-  // must not wait on 100+ MB of screens the user is not annotating. Every later
-  // writer for this folder settles it first (settleDisplayWrites).
-  if (!imageCapture && input.displays !== undefined) {
-    const write = writeDisplayFiles(dirPath, input.displays)
-      .catch(async (err: unknown) => {
-        console.error(
-          'capturepack: writing the per-display media failed:',
-          err instanceof Error ? err.message : String(err),
-        )
-        // A file that did not land must not stay declared (SPEC §5.6).
-        await dropUndeclarableDisplays(dirPath).catch(() => {})
-      })
-      .finally(() => {
-        if (pendingDisplayWrites.get(dirPath) === write) pendingDisplayWrites.delete(dirPath)
-      })
-    pendingDisplayWrites.set(dirPath, write)
   }
   return { id, dirPath }
 }
@@ -1354,6 +1557,11 @@ export async function updateInitialPack(
     reference_height: input.height,
     annotations: [],
   }
+  await writeDisplayFiles(handle.dirPath, imageCapture ? undefined : input.displays)
+  const replayFile = replayFileName(input.replayFile)
+  if (!imageCapture && input.replayWebm !== null) {
+    await writeFile(join(handle.dirPath, replayFile), input.replayWebm)
+  }
   await writePackFiles(
     handle.dirPath,
     manifest,
@@ -1362,12 +1570,14 @@ export async function updateInitialPack(
     input.docLanguage,
     false,
   )
-  await writeDisplayFiles(handle.dirPath, imageCapture ? undefined : input.displays)
-  const replayFile = replayFileName(input.replayFile)
   if (imageCapture || input.replayWebm === null) {
     await rm(join(handle.dirPath, replayFile), { force: true })
   }
-  else await writeFile(join(handle.dirPath, replayFile), input.replayWebm)
+  await Promise.all([
+    rm(join(handle.dirPath, 'replay_annotated.webm'), { force: true }),
+    rm(join(handle.dirPath, 'replay_annotated.mp4'), { force: true }),
+    rm(join(handle.dirPath, 'frames'), { recursive: true, force: true }),
+  ])
   await removeReplacedReplayFiles(handle.dirPath, previous, manifest)
   })
 }
@@ -1452,34 +1662,46 @@ export async function updatePack(
   // Save time (not capturedAt) — this event records when the pack was written.
   const timeline = withExportEvent(input.timeline, new Date())
 
-  // A background render always follows this save (annotated replay + stills, or
-  // the single still of a screenshot-only pack), so the documents may reference
-  // the keyframe files it is about to write.
-  await writePackFiles(handle.dirPath, manifest, annotationsFile, timeline, input.docLanguage, true)
   await writeFile(join(handle.dirPath, 'snapshot.png'), input.snapshotPng)
   // Non-focused displays: rewritten from the same bytes save-first used (a
   // failed save-first retries the whole write here). Re-edit passes null
   // buffers, so the files already on disk are left alone.
   await writeDisplayFiles(handle.dirPath, imageCapture ? undefined : input.displays)
-  // A stale annotated replay must never outlive the annotations that produced
-  // it: the background render rewrites it (and re-declares it in the manifest)
-  // after this save. The annotated keyframe stills follow the same rule — the
-  // manifest written above declares neither, so both are removed here and the
-  // render puts back exactly the current set (SPEC §5.7).
-  await rm(join(handle.dirPath, 'replay_annotated.webm'), { force: true })
+  if (!keepReplay) {
+    if (!imageCapture && input.replayWebm !== null) {
+      await writeFile(join(handle.dirPath, replayFile), input.replayWebm)
+    }
+  }
+  // A background render always follows this save (annotated replay + stills, or
+  // the single still of a screenshot-only pack), so the documents may reference
+  // the keyframe files it is about to write. The manifest is published only
+  // after every source raster and declared replay above is complete.
+  await writePackFiles(handle.dirPath, manifest, annotationsFile, timeline, input.docLanguage, true)
+  // The replacement manifest no longer declares outputs from the previous
+  // render. Delete those stale derived files only after that commit, so a
+  // concurrent reader following the old manifest can always open them.
+  await Promise.all([
+    rm(join(handle.dirPath, 'replay_annotated.webm'), { force: true }),
+    rm(join(handle.dirPath, 'replay_annotated.mp4'), { force: true }),
+    ...(typeof previousManifest?.media?.replay_annotated === 'string' &&
+    previousManifest.media.replay_annotated !== 'replay_annotated.webm' &&
+    previousManifest.media.replay_annotated !== 'replay_annotated.mp4' &&
+    !previousManifest.media.replay_annotated.includes('/') &&
+    !previousManifest.media.replay_annotated.includes('\\')
+      ? [rm(join(handle.dirPath, previousManifest.media.replay_annotated), { force: true })]
+      : []),
+  ])
   await rm(join(handle.dirPath, 'frames'), { recursive: true, force: true })
   // Same rule per display (GOAL "Multi-Monitor Support"): a screen the user
   // just un-annotated must not keep an annotated replay showing boxes that no
   // longer exist. Removed for EVERY declared display; the renders that follow
   // put back only the ones that still have annotations.
   await clearDisplayRenderOutputs(handle.dirPath, imageCapture ? undefined : input.displays)
-  if (!keepReplay) {
-    if (imageCapture || input.replayWebm === null) {
-      // The user excluded the replay at save time (e.g. privacy).
-      await rm(join(handle.dirPath, replayFile), { force: true })
-    } else {
-      await writeFile(join(handle.dirPath, replayFile), input.replayWebm)
-    }
+  if (!keepReplay && (imageCapture || input.replayWebm === null)) {
+    // The user excluded the replay at save time (e.g. privacy). Remove it only
+    // after the new manifest stops declaring it, keeping the previous revision
+    // readable throughout the commit.
+    await rm(join(handle.dirPath, replayFile), { force: true })
   }
   await removeReplacedReplayFiles(handle.dirPath, previousManifest, manifest)
 
@@ -1523,10 +1745,25 @@ async function removeReplacedReplayFiles(
     (current.media.displays ?? []).map((d) => [d.index, d.replay] as const),
   )
   for (const old of previous?.media?.displays ?? []) {
-    if (old.focused || typeof old.replay !== 'string') continue
-    if (!DISPLAY_REPLAY_NAME_RE.test(old.replay)) continue
-    if (currentDisplays.get(old.index) === old.replay) continue
-    await rm(join(dirPath, old.replay), { force: true })
+    if (old.focused) continue
+    // Previous manifests can come from outside this writer. Never interpolate
+    // an unvalidated index into a removal path.
+    if (!Number.isSafeInteger(old.index) || old.index < 1) continue
+    if (!currentDisplays.has(old.index)) {
+      await clearDisplayMedia(dirPath, old.index)
+      continue
+    }
+    if (
+      typeof old.replay === 'string' &&
+      DISPLAY_REPLAY_NAME_RE.test(old.replay) &&
+      currentDisplays.get(old.index) !== old.replay
+    ) {
+      await rm(join(dirPath, old.replay), { force: true })
+    }
+  }
+
+  if (current.capture_kind === 'image') {
+    await clearAllSecondaryDisplayMedia(dirPath)
   }
 }
 
@@ -1660,9 +1897,10 @@ async function copyImagePluginMetadata(
  */
 /**
  * Annotations restricted to the display set a pack actually declares (SPEC
- * §8.8): a `display` that names no declared entry is DROPPED from the box, so
- * the box resolves to the focused display instead of carrying an index that
- * fails validation, renders into nothing, and disappears from the documents.
+ * §8.8). A box whose own display disappeared is dropped: its bounds are pixels
+ * of that missing raster, so treating them as focused-display pixels would
+ * silently move (or invalidate) it. Motion points on a surviving box are
+ * filtered independently because they each name their own coordinate space.
  *
  * A `display` naming the FOCUSED entry is dropped too, because §8.8 says absent
  * MEANS the focused display and writers SHOULD omit it there. That rule used to
@@ -1677,11 +1915,97 @@ function withDeclaredDisplays(
 ): Annotation[] {
   const declared = new Set((displays ?? []).map((d) => d.index))
   const focused = (displays ?? []).find((d) => d.focused)?.index
-  return annotations.map((a) => {
-    if (a.display === undefined) return a
-    if (declared.has(a.display) && a.display !== focused) return a
-    const { display: _dropped, ...rest } = a
-    return rest
+  const sampleMatchesBounds = (
+    sample: NonNullable<NonNullable<Annotation['tracking']>['samples']>[number],
+    annotation: Annotation,
+  ): boolean =>
+    (sample.display ?? annotation.display ?? focused) === (annotation.display ?? focused) &&
+    Math.round(sample.x) === annotation.bounds.x &&
+    Math.round(sample.y) === annotation.bounds.y &&
+    Math.round(sample.width) === annotation.bounds.width &&
+    Math.round(sample.height) === annotation.bounds.height
+
+  return annotations.flatMap((annotation) => {
+    // There is no trustworthy transform after this raster has disappeared.
+    // Keeping the box and merely deleting `display` corrupts its coordinates.
+    if (annotation.display !== undefined && !declared.has(annotation.display)) return []
+
+    let sanitized: Annotation =
+      annotation.display === focused
+        ? (({ display: _focused, ...rest }) => rest)(annotation)
+        : annotation
+
+    if (annotation.keyframes !== undefined) {
+      const keyframes = annotation.keyframes.filter(
+        (frame) => frame.display === undefined || declared.has(frame.display),
+      )
+      if (keyframes.length >= 2) {
+        if (keyframes.length !== annotation.keyframes.length) {
+          sanitized = { ...sanitized, keyframes }
+        }
+      } else {
+        const { keyframes: _dropped, ...withoutKeyframes } = sanitized
+        sanitized = withoutKeyframes
+        const survivor = keyframes[0]
+        // A lone authored position is a static box (SPEC §8.9). Do not replace
+        // the representative bounds of a legacy box that also carries an
+        // observed track: readers correctly give those measurements priority.
+        if (survivor !== undefined && annotation.tracking?.enabled !== true) {
+          const survivorDisplay = survivor.display ?? sanitized.display ?? focused
+          const { display: _oldDisplay, ...withoutDisplay } = sanitized
+          sanitized = {
+            ...withoutDisplay,
+            bounds: {
+              x: survivor.x,
+              y: survivor.y,
+              width: survivor.width,
+              height: survivor.height,
+            },
+            ...(survivorDisplay === undefined || survivorDisplay === focused
+              ? {}
+              : { display: survivorDisplay }),
+          }
+        }
+      }
+    }
+
+    const tracking = annotation.tracking
+    if (tracking?.samples !== undefined) {
+      const samples = tracking.samples.filter(
+        (sample) => sample.display === undefined || declared.has(sample.display),
+      )
+      if (samples.length !== tracking.samples.length) {
+        if (tracking.enabled && samples.length > 0) {
+          const boundsObserved = samples.some((sample) => sampleMatchesBounds(sample, sanitized))
+          const nearest =
+            tracking.picked_at_ms === undefined
+              ? undefined
+              : samples.reduce((best, sample) =>
+                  Math.abs(sample.t_ms - tracking.picked_at_ms!) <
+                  Math.abs(best.t_ms - tracking.picked_at_ms!)
+                    ? sample
+                    : best,
+                )
+          if (boundsObserved && (nearest === undefined || sampleMatchesBounds(nearest, sanitized))) {
+            sanitized = { ...sanitized, tracking: { ...tracking, samples } }
+          } else {
+            // Filtering can remove the observation that made `bounds` (or the
+            // picked-frame anchor) truthful. Preserve the static box instead
+            // of emitting a track whose remaining evidence contradicts it.
+            sanitized = { ...sanitized, tracking: { enabled: false } }
+          }
+        } else if (tracking.enabled) {
+          sanitized = { ...sanitized, tracking: { enabled: false } }
+        } else if (samples.length > 0) {
+          sanitized = { ...sanitized, tracking: { ...tracking, samples } }
+        } else {
+          const { samples: _dropped, picked_at_ms: _picked, ...inactive } = tracking
+          sanitized = { ...sanitized, tracking: inactive }
+        }
+      }
+    }
+
+    return [sanitized]
   })
 }
 
@@ -1716,10 +2040,9 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
   // keeps it at the older version rather than inventing geometry for it.
   const displayFiles =
     surviving !== undefined && surviving.length > 0 ? surviving : undefined
-  // A box may only name a display this pack DECLARES (SPEC §8.8). Anything the
-  // filter above dropped resolves back to the focused display — the field is
-  // removed, which is what "absent = focused" means — rather than being written
-  // as an index nothing in the new pack can resolve.
+  // A box or motion point may only name a display this pack DECLARES (SPEC
+  // §8.3, §8.8, §8.9). Boxes rooted in a missing raster cannot be reinterpreted
+  // safely and are dropped; undeclared points on surviving boxes are removed.
   const annotations = withDeclaredDisplays(input.annotations, displayFiles)
   const annotationsFile: AnnotationsFile = {
     reference_width: input.width,
@@ -1776,8 +2099,6 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
       usesKeyframes: annotations.some((a) => (a.keyframes?.length ?? 0) > 0),
       hasInputEvents: timelineHasInputEvents(timeline),
     })
-    // A background render for the NEW folder always follows this save.
-    await writePackFiles(dirPath, manifest, annotationsFile, timeline, input.docLanguage, true)
     await writeFile(join(dirPath, 'snapshot.png'), input.snapshotPng)
     if (hasReplay) await copyFile(srcReplay, join(dirPath, replayFile))
     // Per-display media travels byte-for-byte with its declaration — under the
@@ -1792,6 +2113,9 @@ export async function saveAsNewPack(sourceDir: string, input: ExportInput): Prom
       if (d.replayWebm !== null) await writeFile(join(dirPath, replayName), d.replayWebm)
       else await copyFile(join(sourceDir, replayName), join(dirPath, replayName))
     }
+    // A background render for the NEW folder always follows this save. Publish
+    // its discovery commit only after every declared media copy has completed.
+    await writePackFiles(dirPath, manifest, annotationsFile, timeline, input.docLanguage, true)
   } catch (err) {
     // Never leave a half-written pack behind.
     await rm(dirPath, { recursive: true, force: true })
@@ -1902,15 +2226,16 @@ async function writeDocs(
 export async function refreshPackDocs(dirPath: string, docLanguage: Language = 'en'): Promise<void> {
   return withManifestMutation(dirPath, async () => {
     const manifest = JSON.parse(await readFile(join(dirPath, 'manifest.json'), 'utf8')) as Manifest
-    const annotationsFile = JSON.parse(
-      await readFile(join(dirPath, 'annotations.json'), 'utf8'),
-    ) as AnnotationsFile
-    if (!Array.isArray(annotationsFile.annotations)) return
-    let timeline: TimelineFile = { t0: manifest.created_at, events: [] }
-    if (manifest.capture_kind !== 'image') {
-      timeline = JSON.parse(await readFile(join(dirPath, 'timeline.json'), 'utf8')) as TimelineFile
-      if (!Array.isArray(timeline.events)) return
-    }
+    const annotationsFile = await readAnnotationsSafe(
+      dirPath,
+      manifest.media.displays?.[0]?.snapshot_width ?? 0,
+      manifest.media.displays?.[0]?.snapshot_height ?? 0,
+    )
+    const timeline = await readTimelineSafe(
+      dirPath,
+      manifest.created_at,
+      manifest.capture_kind,
+    )
     // The render has already run: nothing further will write stills, so an
     // undeclared keyframe set is an ABSENT one, not a pending one.
     const previousFormatVersion = manifest.format_version
@@ -1944,7 +2269,7 @@ export async function refreshPackDocs(dirPath: string, docLanguage: Language = '
  * rather than rebuilding, so it composes with whatever the last save wrote.
  *
  * The declaration always follows the files: the caller has already written
- * replay_annotated.webm and frames/, so a declared file is a file that exists.
+ * replay_annotated.(webm|mp4) and frames/, so a declared file is a file that exists.
  */
 export async function setManifestRenderOutputs(
   handle: PackHandle,
@@ -1999,7 +2324,10 @@ export async function setManifestRenderOutputs(
     // files are undeclared and readers ignore them — never invent an entry.
     if (entry === undefined) return
     if (outputs.replayAnnotated && entry.replay !== null) {
-      entry.replay_annotated = displayAnnotatedName(entry.index)
+      entry.replay_annotated = displayAnnotatedName(entry.index, entry.replay ?? undefined)
+      const isMp4 = typeof entry.replay === 'string' && entry.replay.endsWith('.mp4')
+      const staleOther = displayAnnotatedName(entry.index, isMp4 ? 'replay.webm' : 'replay.mp4')
+      await rm(join(handle.dirPath, staleOther), { force: true })
     }
     if (declared.length > 0) entry.keyframes = declared
     else delete entry.keyframes
@@ -2009,8 +2337,12 @@ export async function setManifestRenderOutputs(
 
   // Never declared without a replay (SPEC §5.3) — keyframes have no such rule:
   // a screenshot-only pack has exactly one still, rendered from snapshot.png.
-  if (outputs.replayAnnotated && manifest.media.replay !== null) {
-    manifest.media.replay_annotated = 'replay_annotated.webm'
+  if (outputs.replayAnnotated && typeof manifest.media.replay === 'string') {
+    const isMp4 = manifest.media.replay.endsWith('.mp4')
+    manifest.media.replay_annotated = isMp4
+      ? 'replay_annotated.mp4'
+      : 'replay_annotated.webm'
+    await rm(join(handle.dirPath, isMp4 ? 'replay_annotated.webm' : 'replay_annotated.mp4'), { force: true })
   }
   if (declared.length > 0) manifest.media.keyframes = declared
   else delete manifest.media.keyframes
@@ -2036,6 +2368,10 @@ export async function setManifestRenderOutputs(
  *
  * The FORMAT is still CapturePack — manifest.json says so, and the folder
  * inside is unchanged. Only the wrapper now admits to being a zip.
+ *
+ * The archive is written beside the destination to a unique temporary file and
+ * atomically replaced upon completion, ensuring temporary files are cleaned up
+ * on error and preexisting archives are unharmed (#177).
  */
 export async function createPackZip(dirPath: string): Promise<string> {
   const zipPath = `${dirPath}.zip`
@@ -2044,10 +2380,19 @@ export async function createPackZip(dirPath: string): Promise<string> {
   if (existsSync(zipPath) && isShareBundleArchive(zipPath)) {
     throw new Error('The Full ZIP filename is occupied by another pack\'s Share Copy.')
   }
+  const temporaryPath = `${zipPath}.tmp-${process.pid}-${randomUUID()}.zip`
   const zip = new AdmZip()
   zip.addLocalFolder(dirPath)
-  await zip.writeZipPromise(zipPath, { overwrite: true })
-  return zipPath
+  try {
+    await zip.writeZipPromise(temporaryPath, { overwrite: true })
+    if (existsSync(zipPath) && isShareBundleArchive(zipPath)) {
+      throw new Error('The Full ZIP filename is occupied by another pack\'s Share Copy.')
+    }
+    await rename(temporaryPath, zipPath)
+    return zipPath
+  } finally {
+    await rm(temporaryPath, { force: true }).catch(() => {})
+  }
 }
 
 function physicalScreens(): Array<{ width: number; height: number; scale: number }> {
@@ -2100,26 +2445,51 @@ export async function copyAfterSave(
 ): Promise<boolean> {
   if (mode === 'off') return true
   if (mode === 'folder') {
-    copyFolderToClipboard(dirPath)
-    return true
+    return await copyFolderToClipboard(dirPath)
   }
   return await copyTextToClipboard(mode === 'path' ? dirPath : analyzePackPrompt(dirPath))
 }
 
-function copyFolderToClipboard(dirPath: string): void {
+const FOLDER_CLIPBOARD_TIMEOUT_MS = 5_000
+
+async function copyFolderToClipboard(dirPath: string): Promise<boolean> {
   const escaped = dirPath.replace(/'/g, "''")
   const child = spawn(
     'powershell.exe',
     ['-NoProfile', '-Command', `Set-Clipboard -LiteralPath '${escaped}'`],
     { windowsHide: true, stdio: 'ignore' },
   )
-  child.on('error', (err) => console.error('capturepack: clipboard copy failed:', err))
-  child.on('exit', (code) => {
-    if (code !== 0 && code !== null) {
-      console.error(`capturepack: clipboard copy exited with code ${code}`)
+
+  return await new Promise<boolean>((resolve) => {
+    let settled = false
+    let timedOut = false
+    const finish = (succeeded: boolean): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      resolve(succeeded)
     }
+    const timeout = setTimeout(() => {
+      timedOut = true
+      console.error(
+        `capturepack: clipboard copy timed out after ${FOLDER_CLIPBOARD_TIMEOUT_MS} ms`,
+      )
+      // On Windows, SIGKILL uses TerminateProcess. Keep the child referenced and
+      // wait for close so copyAfterSave cannot resolve while PowerShell survives.
+      if (!child.kill('SIGKILL')) finish(false)
+    }, FOLDER_CLIPBOARD_TIMEOUT_MS)
+
+    child.once('error', (err) => {
+      console.error('capturepack: clipboard copy failed:', err)
+      finish(false)
+    })
+    child.once('close', (code) => {
+      if (!timedOut && code !== 0) {
+        console.error(`capturepack: clipboard copy exited with code ${String(code)}`)
+      }
+      finish(!timedOut && code === 0)
+    })
   })
-  child.unref()
 }
 
 function toJson(value: unknown): string {

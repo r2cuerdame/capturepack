@@ -14,7 +14,11 @@
         "host.hello",
         "picker.armed",
         "picker.disarmed",
-        "picker.failed"
+        "picker.failed",
+        "page.captured",
+        "page.chunk",
+        "page.received",
+        "page.capture.failed"
       ]
     },
     "protocol": { "const": 1 },
@@ -74,7 +78,57 @@
       "description": "Why picker.failed happened: a restricted page, no tab, or an injection error."
     },
     "app": { "type": "string" },
-    "version": { "type": "string" }
+    "version": { "type": "string" },
+    "capture_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{1,64}$",
+      "description": "Correlates a page.captured header, its page.chunk pieces and the app's page.received answer (extension 0.4.0, #157)."
+    },
+    "via": { "type": "string", "maxLength": 32, "description": "What triggered a page capture: toolbar." },
+    "stage": { "type": "string", "maxLength": 32, "description": "Where a page capture failed: inject, plan, capture, timeout, send, restore or unexpected." },
+    "page": {
+      "type": "object",
+      "description": "How a full-page picture was made (extension 0.4.0). Sizes are CSS px unless named pixel; scale is picture pixels per CSS px, the device pixel ratio unless the page was downscaled to fit.",
+      "properties": {
+        "url": { "type": "string" },
+        "title": { "type": "string" },
+        "cssWidth": { "type": "number", "exclusiveMinimum": 0 },
+        "cssHeight": { "type": "number", "exclusiveMinimum": 0 },
+        "pixelWidth": { "type": "integer", "minimum": 1 },
+        "pixelHeight": { "type": "integer", "minimum": 1 },
+        "devicePixelRatio": { "type": "number", "exclusiveMinimum": 0, "maximum": 16 },
+        "scale": { "type": "number", "exclusiveMinimum": 0, "maximum": 16 },
+        "clientWidth": { "type": "number" },
+        "clientHeight": { "type": "number" },
+        "scrollWidth": { "type": "number" },
+        "scrollHeight": { "type": "number" },
+        "tiles": { "type": "array", "description": "One entry per photographed viewport: its index, the scroll position the page actually reached, and where it landed in the picture." },
+        "truncated": { "type": "boolean", "description": "The page was taller than the tile budget; the picture is its top." },
+        "downscaled": { "type": "boolean", "description": "The whole page was kept at a scale below the device pixel ratio to fit the canvas and memory bound." },
+        "exactScale": { "type": "boolean", "description": "cssWidth * scale is an integer, so element placement is exact." },
+        "hiddenRepeating": { "type": "integer", "minimum": 0, "description": "Fixed and stuck-sticky elements hidden after the first tile so each appears once." },
+        "captureMs": { "type": "number", "minimum": 0 }
+      },
+      "required": ["cssWidth", "cssHeight", "pixelWidth", "pixelHeight", "devicePixelRatio", "scale"]
+    },
+    "document": {
+      "type": "object",
+      "description": "The document walk: on a pick from extension 0.2.0, and in document scope on a page.captured from 0.4.0 (every rectangle in document CSS px). Fields and refusals are SPEC 11.4's.",
+      "properties": { "scope": { "type": "string", "enum": ["viewport", "document"] } }
+    },
+    "png": {
+      "type": "object",
+      "description": "The picture that follows in page.chunk messages.",
+      "properties": {
+        "bytes": { "type": "integer", "minimum": 1, "description": "Total PNG bytes; the app refuses a reassembly of any other length, and checks the PNG's own IHDR against page.pixelWidth/pixelHeight." },
+        "chunks": { "type": "integer", "minimum": 1, "maximum": 1024 },
+        "chunkChars": { "type": "integer", "multipleOf": 4 }
+      },
+      "required": ["bytes", "chunks"]
+    },
+    "index": { "type": "integer", "minimum": 0, "description": "Position of a page.chunk within its capture." },
+    "data": { "type": "string", "pattern": "^[A-Za-z0-9+/]*={0,2}$", "description": "Base64, a multiple of four characters, so the app concatenates the chunks and decodes once." },
+    "ok": { "type": "boolean", "description": "page.received: whether the app opened the page in its editor; reason says why not." }
   },
   "allOf": [
     {
@@ -97,6 +151,34 @@
         "properties": { "type": { "const": "picker.failed" } }
       },
       "then": { "required": ["reason"] }
+    },
+    {
+      "if": {
+        "required": ["type"],
+        "properties": { "type": { "const": "page.captured" } }
+      },
+      "then": { "required": ["capture_id", "tab", "page", "png"] }
+    },
+    {
+      "if": {
+        "required": ["type"],
+        "properties": { "type": { "const": "page.chunk" } }
+      },
+      "then": { "required": ["capture_id", "index", "data"] }
+    },
+    {
+      "if": {
+        "required": ["type"],
+        "properties": { "type": { "const": "page.received" } }
+      },
+      "then": { "required": ["capture_id", "ok"] }
+    },
+    {
+      "if": {
+        "required": ["type"],
+        "properties": { "type": { "const": "page.capture.failed" } }
+      },
+      "then": { "required": ["reason", "stage"] }
     }
   ]
 }

@@ -1,37 +1,43 @@
 // The After Save Action contract and pipeline (#68).
 //
-// Everything asserted here is production code imported directly: both modules
-// are dependency-free on purpose, so this check needs no Electron stub and
-// cannot end up holding a mock to the standard the app is not held to.
+// Everything asserted here is production code imported directly. The runner
+// supplies an Electron stub only for the host's app path and safeStorage: that
+// lets this check exercise the real executor and prove a decryption failure
+// cannot reach the network.
 //
 // The invariant under test throughout: THE PACK IS ALREADY SAVED. An action
 // that fails, hangs, or throws something that is not an Error is that action's
 // own failure and nothing else's.
 import { createServer } from 'node:http'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { deliverWebhook } from '../src/main/actions/webhook'
+import { app } from 'electron'
+import { runActionsForPack } from '../src/main/actions/host'
+import { deliverWebhook, readPackSummary } from '../src/main/actions/webhook'
 import {
   ACTION_PERMISSIONS,
   ACTION_TIMEOUT_DEFAULT_MS,
   ACTION_TIMEOUT_MAX_MS,
+  BUILTIN_WEBHOOK_ACTION_ID,
   PACK_STATE_ORDER,
   type ActionConfig,
   type ActionManifest,
+  type ActionResult,
   type PackState,
   type PipelineStep,
   decideStep,
   haltsPipeline,
   idempotencyKey,
   isAcceptableWebhookUrl,
+  mergeActionResults,
   normalizeActionTimeout,
   packStateAtLeast,
   pipelineOrder,
   sendsDataOffMachine,
   totalAttempts,
 } from '../src/shared/actions'
-import { runPipeline, canRetry } from '../src/shared/actionPipeline'
+import { runPipeline, canRetry, SaveActionLifecycle, failureResults } from '../src/shared/actionPipeline'
 
 let failed = 0
 
@@ -253,6 +259,26 @@ console.log('\nRUNNING A PIPELINE')
   check('a failed idempotent action adds NOTHING to the ledger — the next run must be allowed to try again', run.newCompletedKeys.length === 0)
 }
 {
+  const timeoutStartedAt = Date.now()
+  const run = await runPipeline({
+    packId: PACK,
+    packState: 'complete',
+    steps: [step({ id: 'a' }, { timeoutMs: 1_000 })],
+    completedKeys: new Set(),
+    // Never settles. The pipeline must abandon it rather than wait for an
+    // action that cannot be made to stop.
+    execute: () => new Promise<void>(() => {}),
+    clock: fastClock(),
+  })
+  const timeoutWallClockMs = Date.now() - timeoutStartedAt
+  check('an action that never returns TIMES OUT and is retryable', run.results[0]?.outcome === 'timed-out' && run.results[0]?.retryable === true)
+  check(
+    'timeout budgeting uses the injected fast clock, not a wall-clock timer',
+    timeoutWallClockMs < 250,
+    `${String(timeoutWallClockMs)} ms`,
+  )
+}
+{
   const run = await runPipeline({
     packId: PACK,
     packState: 'complete',
@@ -269,17 +295,28 @@ console.log('\nRUNNING A PIPELINE')
   )
 }
 {
+  let timeoutCancelled = false
   const run = await runPipeline({
     packId: PACK,
     packState: 'complete',
-    steps: [step({ id: 'a' }, { timeoutMs: 1_000 })],
+    steps: [step({ id: 'a' }, { timeoutMs: 30_000 })],
     completedKeys: new Set(),
-    // Never settles. The pipeline must abandon it rather than wait for an
-    // action that cannot be made to stop.
-    execute: () => new Promise<void>(() => {}),
-    clock: fastClock(),
+    execute: async () => {},
+    clock: {
+      now: () => 0,
+      delay: (_ms, signal) =>
+        new Promise<void>((resolve) => {
+          const cancel = (): void => {
+            timeoutCancelled = true
+            resolve()
+          }
+          if (signal?.aborted) cancel()
+          else signal?.addEventListener('abort', cancel, { once: true })
+        }),
+    },
   })
-  check('an action that never returns TIMES OUT and is retryable', run.results[0]?.outcome === 'timed-out' && run.results[0]?.retryable === true)
+  check('an action that completes before its timeout succeeds', run.results[0]?.outcome === 'ok')
+  check('a completed action cancels its pending clock delay', timeoutCancelled)
 }
 {
   const run = await runPipeline({
@@ -334,6 +371,238 @@ console.log('\nRETRY IS OFFERED ONLY WHERE IT MEANS SOMETHING')
   check(
     'a successful action offers none',
     !canRetry({ actionId: 'a', configId: 'cfg-1', outcome: 'ok', attempts: 1, durationMs: 2, retryable: false }, config()),
+  )
+  check(
+    'a timed-out action with an enabled config offers Retry',
+    canRetry({ actionId: 'a', configId: 'cfg-1', outcome: 'timed-out', attempts: 1, durationMs: 2, retryable: true }, config()),
+  )
+}
+
+console.log('\nSUBSEQUENT PACK STATE TRANSITIONS DO NOT RE-EXECUTE FAILED ACTIONS (#169)')
+{
+  const session = new SaveActionLifecycle()
+  const completedKeys = new Set<string>()
+  const clock = fastClock()
+
+  const cfg1 = config({ actionId: 'a', configId: 'cfg-1', order: 1, continueOnFailure: true })
+  const cfg2 = config({ actionId: 'b', configId: 'cfg-2', order: 2 })
+  const cfg3 = config({ actionId: 'c', configId: 'cfg-3', order: 3 })
+  const allConfigs = [cfg1, cfg2, cfg3]
+
+  const stepA = step({ id: 'a', requiredPackState: 'source-ready' }, cfg1)
+  const stepB = step({ id: 'b', requiredPackState: 'annotated-replay-ready' }, cfg2)
+  const stepC = step({ id: 'c', requiredPackState: 'complete' }, cfg3)
+  const allSteps = [stepA, stepB, stepC]
+
+  let aAttempts = 0
+  let bAttempts = 0
+  let cAttempts = 0
+  const failureAnnouncements: string[][] = []
+
+  const execute = async (s: PipelineStep) => {
+    if (s.manifest.id === 'a') {
+      aAttempts += 1
+      throw new Error('remote service down')
+    }
+    if (s.manifest.id === 'b') {
+      bAttempts += 1
+    }
+    if (s.manifest.id === 'c') {
+      cAttempts += 1
+    }
+  }
+
+  // Simulates onSave's runActionsAtState execution for a transition:
+  const runState = async (packState: PackState) => {
+    const targetConfigs = session.filterConfigs(allConfigs)
+    if (targetConfigs.length === 0) return []
+    const targetConfigIds = new Set(targetConfigs.map((c) => c.configId))
+    const stepsToRun = allSteps.filter((s) => targetConfigIds.has(s.config.configId))
+    const run = await runPipeline({
+      packId: PACK,
+      packState,
+      steps: stepsToRun,
+      completedKeys,
+      execute,
+      clock,
+    })
+    for (const key of run.newCompletedKeys) completedKeys.add(key)
+    session.recordResults(run.results)
+    const failures = failureResults(run.results)
+    if (failures.length > 0) {
+      failureAnnouncements.push(failures.map((f) => f.actionId))
+    }
+    return run.results
+  }
+
+  // 1. Initial transition: source-ready
+  const r1 = await runState('source-ready')
+  check(
+    'at source-ready: failed action a exhausts attempts and is recorded as failed',
+    r1.find((r) => r.actionId === 'a')?.outcome === 'failed' && aAttempts === 1,
+  )
+  check(
+    'at source-ready: actions b and c are blocked waiting for later pack states',
+    r1.find((r) => r.actionId === 'b')?.outcome === 'blocked'
+      && r1.find((r) => r.actionId === 'c')?.outcome === 'blocked'
+      && bAttempts === 0
+      && cAttempts === 0,
+  )
+  check(
+    'at source-ready: exactly one failure announcement is made for action a',
+    failureAnnouncements.length === 1 && failureAnnouncements[0]?.join(',') === 'a',
+  )
+  check(
+    'lifecycle tracks only actions b and c as blocked',
+    session.blockedConfigIds.has('cfg-2')
+      && session.blockedConfigIds.has('cfg-3')
+      && !session.blockedConfigIds.has('cfg-1'),
+  )
+
+  // 2. Second transition: annotated-replay-ready
+  const r2 = await runState('annotated-replay-ready')
+  check(
+    'at annotated-replay-ready: failed action a is NOT re-executed (#169)',
+    aAttempts === 1,
+    `action a attempts: ${String(aAttempts)}`,
+  )
+  check(
+    'at annotated-replay-ready: previously blocked action b runs and succeeds',
+    r2.find((r) => r.actionId === 'b')?.outcome === 'ok' && bAttempts === 1,
+  )
+  check(
+    'at annotated-replay-ready: action c remains blocked',
+    r2.find((r) => r.actionId === 'c')?.outcome === 'blocked' && cAttempts === 0,
+  )
+  check(
+    'at annotated-replay-ready: no duplicate failure announcement is emitted for action a (#169)',
+    failureAnnouncements.length === 1,
+    `announcements count: ${String(failureAnnouncements.length)}`,
+  )
+  check(
+    'lifecycle now tracks only action c as blocked',
+    session.blockedConfigIds.has('cfg-3')
+      && !session.blockedConfigIds.has('cfg-2')
+      && !session.blockedConfigIds.has('cfg-1'),
+  )
+
+  // 3. Third transition: complete
+  const r3 = await runState('complete')
+  check(
+    'at complete: failed action a is still NOT re-executed (#169)',
+    aAttempts === 1,
+    `action a attempts: ${String(aAttempts)}`,
+  )
+  check(
+    'at complete: successful action b is NOT re-executed',
+    bAttempts === 1,
+    `action b attempts: ${String(bAttempts)}`,
+  )
+  check(
+    'at complete: previously blocked action c runs and succeeds',
+    r3.find((r) => r.actionId === 'c')?.outcome === 'ok' && cAttempts === 1,
+  )
+  check(
+    'at complete: total failure announcements across the entire save session is still exactly 1',
+    failureAnnouncements.length === 1,
+  )
+  check(
+    'lifecycle blocked set is now completely clear',
+    session.blockedConfigIds.size === 0,
+  )
+
+  // 4. Any further transition does nothing
+  const r4 = await runState('complete')
+  check('subsequent transitions after all blocked actions settle execute zero actions', r4.length === 0)
+  check('failed action a attempts remains exactly 1', aAttempts === 1)
+
+  // 5. Explicit user retry of the failed action executes it
+  check('failed action offers canRetry', canRetry(r1[0]!, cfg1))
+  const retryRun = await runPipeline({
+    packId: PACK,
+    packState: 'complete',
+    steps: [stepA],
+    completedKeys,
+    execute,
+    clock,
+  })
+  check(
+    'explicit retry (retryAction path) re-executes the failed action on user request (#169)',
+    aAttempts === 2 && retryRun.results[0]?.actionId === 'a',
+  )
+}
+{
+  const session = new SaveActionLifecycle()
+  const clock = fastClock()
+  const cfg1 = config({ actionId: 'a', configId: 'cfg-1', order: 1 })
+  const stepA = step({ id: 'a', requiredPackState: 'annotated-replay-ready' }, cfg1)
+  let aAttempts = 0
+
+  // 1. source-ready: stepA is blocked
+  session.filterConfigs([cfg1])
+  const r1 = await runPipeline({
+    packId: PACK,
+    packState: 'source-ready',
+    steps: [stepA],
+    completedKeys: new Set(),
+    execute: async () => { aAttempts += 1 },
+    clock,
+  })
+  session.recordResults(r1.results)
+  check('stepA blocked at source-ready', r1.results[0]?.outcome === 'blocked' && aAttempts === 0)
+
+  // 2. annotated-replay-ready: stepA runs and fails
+  session.filterConfigs([cfg1])
+  const r2 = await runPipeline({
+    packId: PACK,
+    packState: 'annotated-replay-ready',
+    steps: [stepA],
+    completedKeys: new Set(),
+    execute: async () => {
+      aAttempts += 1
+      throw new Error('fail at annotated-replay-ready')
+    },
+    clock,
+  })
+  session.recordResults(r2.results)
+  check('stepA fails at annotated-replay-ready', r2.results[0]?.outcome === 'failed' && aAttempts === 1)
+
+  // 3. complete: stepA must NOT re-execute
+  const c3 = session.filterConfigs([cfg1])
+  check('stepA is excluded from configs at complete after failing at annotated-replay-ready (#169)', c3.length === 0)
+  check('stepA was not re-executed at complete', aAttempts === 1)
+}
+{
+  const session = new SaveActionLifecycle()
+  const clock = fastClock()
+  const cfg1 = config({ actionId: 'a', configId: 'cfg-1', order: 1, continueOnFailure: false })
+  const cfg2 = config({ actionId: 'b', configId: 'cfg-2', order: 2 })
+  const stepA = step({ id: 'a', requiredPackState: 'source-ready' }, cfg1)
+  const stepB = step({ id: 'b', requiredPackState: 'annotated-replay-ready' }, cfg2)
+  let bAttempts = 0
+
+  // Action a fails at source-ready and halts the pipeline; action b is skipped
+  session.filterConfigs([cfg1, cfg2])
+  const r1 = await runPipeline({
+    packId: PACK,
+    packState: 'source-ready',
+    steps: [stepA, stepB],
+    completedKeys: new Set(),
+    execute: async (s) => {
+      if (s.manifest.id === 'a') throw new Error('fail')
+      bAttempts += 1
+    },
+    clock,
+  })
+  session.recordResults(r1.results)
+  check(
+    'a halting failure leaves downstream action skipped (not blocked)',
+    r1.results.find((r) => r.actionId === 'b')?.outcome === 'skipped',
+  )
+  const c2 = session.filterConfigs([cfg1, cfg2])
+  check(
+    'downstream action behind a halted pipeline is not resurrected at subsequent transitions',
+    c2.length === 0 && bAttempts === 0,
   )
 }
 
@@ -461,6 +730,21 @@ console.log('\nTHE APP ACTUALLY RUNS THE PIPELINE')
   check(
     'a pack whose id cannot be read runs NOTHING — an action keyed on a guessed id could duplicate against the real one later',
     onSave.includes('if (packId === null) return []'),
+  )
+  check(
+    'onSave.ts filters configs through SaveActionLifecycle so failed actions do not re-execute (#169)',
+    onSave.includes('session.filterConfigs(allConfigs)')
+      && onSave.includes('session.recordResults(results)'),
+  )
+  check(
+    'onSave.ts serializes state transitions per pack so concurrent transitions do not race (#169)',
+    onSave.includes('inFlightByPack.get(packId)')
+      && onSave.includes('await inFlight.catch('),
+  )
+  check(
+    'onSave.ts bounds remembered save sessions to 1,000 packs just like the ledger',
+    onSave.includes('MAX_REMEMBERED_PACKS = 1_000')
+      && onSave.includes('sessionsByPack.size > MAX_REMEMBERED_PACKS'),
   )
 }
 
@@ -660,6 +944,73 @@ console.log('\nTHE WEBHOOK SUMMARY READS FIELDS THAT EXIST')
   )
 }
 
+console.log('\nTHE WEBHOOK SUMMARY COUNTS CAPTURE-TIME DISPLAYS (#197)')
+{
+  const packDir = mkdtempSync(path.join(tmpdir(), 'capturepack-webhook-summary-'))
+  const writeManifest = (manifest: Record<string, unknown>): void => {
+    writeFileSync(path.join(packDir, 'manifest.json'), JSON.stringify(manifest), 'utf8')
+  }
+
+  try {
+    writeManifest({
+      capture_kind: 'image',
+      environment: { screens: [{ id: 'left' }, { id: 'right' }] },
+      media: { snapshot: 'snapshot.png' },
+    })
+    const still = await readPackSummary(packDir)
+    check(
+      'still-image packs count environment.screens when media.displays is forbidden',
+      still.displayCount === 2,
+      `displayCount: ${String(still.displayCount)}`,
+    )
+
+    writeManifest({
+      capture_kind: 'video',
+      environment: { screens: [{ id: 'left' }, { id: 'right' }] },
+      media: { replay: 'replay.webm', displays: null },
+    })
+    const legacyVideo = await readPackSummary(packDir)
+    check(
+      'legacy video packs count environment.screens when media.displays is null',
+      legacyVideo.displayCount === 2,
+      `displayCount: ${String(legacyVideo.displayCount)}`,
+    )
+
+    writeManifest({
+      capture_kind: 'video',
+      media: { replay: 'replay.webm' },
+    })
+    const legacyVideoWithoutScreens = await readPackSummary(packDir)
+    check(
+      'legacy video packs default to one display when environment.screens is omitted',
+      legacyVideoWithoutScreens.displayCount === 1,
+      `displayCount: ${String(legacyVideoWithoutScreens.displayCount)}`,
+    )
+
+    writeManifest({
+      capture_kind: 'video',
+      environment: { screens: [{ id: 'physical' }] },
+      media: { displays: [{ id: 'one' }, { id: 'two' }, { id: 'three' }] },
+    })
+    const modernVideo = await readPackSummary(packDir)
+    check(
+      'modern video packs continue to prefer media.displays',
+      modernVideo.displayCount === 3,
+      `displayCount: ${String(modernVideo.displayCount)}`,
+    )
+
+    writeManifest({ capture_kind: 'video', environment: 'not-an-object', media: {} })
+    const malformedEnvironment = await readPackSummary(packDir)
+    check(
+      'a malformed environment value is handled safely',
+      malformedEnvironment.displayCount === 1,
+      `displayCount: ${String(malformedEnvironment.displayCount)}`,
+    )
+  } finally {
+    rmSync(packDir, { recursive: true, force: true })
+  }
+}
+
 // A SECRET STORE THAT ONE INTERRUPTED WRITE CAN EMPTY FOR GOOD.
 //
 // The idempotency ledger is written beside its target and renamed. The secret
@@ -746,6 +1097,67 @@ console.log('\nACTION SECRETS ROUND-TRIP')
   const encrypted = fakeSafeStorage.encryptString(secret).toString('base64')
   const decrypted = fakeSafeStorage.decryptString(Buffer.from(encrypted, 'base64'))
   check('secrets round-trip via safeStorage encryption and decryption logic', decrypted === secret)
+}
+
+console.log('\nA CONFIGURED WEBHOOK SECRET FAILS CLOSED WHEN DECRYPTION FAILS (#170)')
+{
+  const configId = 'cfg-decryption-failure'
+  const packDir = mkdtempSync(path.join(tmpdir(), 'capturepack-webhook-secret-failure-'))
+  const userDataDir = app.getPath('userData')
+  mkdirSync(userDataDir, { recursive: true })
+  writeFileSync(
+    path.join(userDataDir, 'action-secrets.json'),
+    JSON.stringify({ [configId]: Buffer.from('ciphertext-that-cannot-be-decrypted').toString('base64') }),
+    'utf8',
+  )
+  writeFileSync(
+    path.join(packDir, 'manifest.json'),
+    JSON.stringify({
+      id: PACK,
+      created_at: '2026-09-21T00:00:00.000Z',
+      capture_kind: 'still',
+      format_version: '1.0',
+      generator: { version: '0.5.1' },
+      media: { displays: [] },
+    }),
+    'utf8',
+  )
+
+  let receivedCount = 0
+  const receiver = createServer((_req, res) => {
+    receivedCount += 1
+    res.writeHead(200)
+    res.end()
+  })
+  await new Promise<void>((resolve) => receiver.listen(0, '127.0.0.1', () => resolve()))
+  const receiverPort = (receiver.address() as { port: number }).port
+
+  try {
+    const results = await runActionsForPack({
+      packDir,
+      packId: PACK,
+      packState: 'complete',
+      configs: [config({ actionId: BUILTIN_WEBHOOK_ACTION_ID, configId })],
+      webhooks: {
+        [configId]: { url: `http://127.0.0.1:${String(receiverPort)}/hook` },
+      },
+    })
+    const result = results[0]
+    check(
+      'the action fails with the local decryption error',
+      result?.outcome === 'failed'
+        && result.message === 'configured webhook secret could not be decrypted',
+      result?.message ?? 'no action result',
+    )
+    check(
+      'the receiver is never contacted when the configured secret cannot be decrypted',
+      receivedCount === 0,
+      `requests: ${String(receivedCount)}`,
+    )
+  } finally {
+    await new Promise<void>((resolve) => receiver.close(() => resolve()))
+    rmSync(packDir, { recursive: true, force: true })
+  }
 }
 
 console.log('\nWEBHOOK DELIVERY REFUSES HTTP REDIRECTS')
@@ -895,6 +1307,207 @@ console.log('\nWEBHOOK DELIVERY REFUSES HTTP REDIRECTS')
     await new Promise<void>((resolve) => targetServer.close(() => resolve()))
     await new Promise<void>((resolve) => redirectServer.close(() => resolve()))
     rmSync(tempPackDir, { recursive: true, force: true })
+  }
+}
+
+console.log('\nAFTER SAVE ACTION EXECUTION RESULTS & RETRY (#165)')
+{
+  const readNorm = (relative: string): string =>
+    readFileSync(path.join(process.cwd(), relative), 'utf8').split('\r\n').join('\n')
+  const ipc = readNorm('src/shared/ipc.ts')
+  const host = readNorm('src/main/actions/host.ts')
+  const onSave = readNorm('src/main/actions/onSave.ts')
+  const saveToast = readNorm('src/main/saveToast.ts')
+  const historyWindow = readNorm('src/main/historyWindow.ts')
+  const preloadToast = readNorm('src/preload/toast.ts')
+  const preloadHistory = readNorm('src/preload/history.ts')
+  const toastHtml = readNorm('src/renderer/toast/toast.html')
+  const toastTs = readNorm('src/renderer/toast/toast.ts')
+  const historyTs = readNorm('src/renderer/history/history.ts')
+  const i18n = readNorm('src/shared/i18n.ts')
+
+  // IPC channel definitions
+  check('IPC declares toastActionResults channel', ipc.includes("toastActionResults: 'toast:action-results'"))
+  check('IPC declares toastActionRetry channel', ipc.includes("toastActionRetry: 'toast:action-retry'"))
+  check('IPC declares historyActionResults channel', ipc.includes("historyActionResults: 'history:action-results'"))
+  check('IPC declares historyActionRetry channel', ipc.includes("historyActionRetry: 'history:action-retry'"))
+  check('ToastInitPayload carries actionResults and actionConfigs', ipc.includes('actionResults?: ActionResult[]') && ipc.includes('actionConfigs?: ActionConfig[]'))
+  check('HistoryPackSummary carries actionResults', ipc.includes('actionResults?: ActionResult[]'))
+  check('HistoryListResult carries actionConfigs', ipc.includes('actionConfigs?: ActionConfig[]'))
+
+  // Host persistence
+  check('host exports persistActionResults', host.includes('export function persistActionResults('))
+  check('host exports readActionResults', host.includes('export function readActionResults('))
+  check('action results path targets plugins/action-results.json', host.includes("path.join(packDir, 'plugins', 'action-results.json')"))
+  check('persistActionResults writes atomically via sibling temporary file', host.includes('const temporary = `${target}.tmp`') && host.includes('renameSync(temporary, target)'))
+  check('runActionsForPack persists results to pack plugins folder', host.includes('persistActionResults(request.packDir, run.results)'))
+  check('retryAction refuses disabled configuration', host.includes('if (!config.enabled) return null'))
+  check('retryAction forgets idempotency key from ledger before re-running', host.includes('const key = idempotencyKey(request.packId, manifest.id, configId)') && host.includes('ledger.packs[request.packId] = remaining'))
+  check('retryAction delegates to runActionsForPack which persists updated result', host.includes('const results = await runActionsForPack({ ...request, configs: [config] })'))
+
+  // onSave coordination
+  check('onSave runs actions and pushes results to active save toast', onSave.includes('updateToastActionResults(packDir, results)'))
+  check('onSave exports readActionResults', onSave.includes("export { readActionResults } from './host'"))
+
+  // Save toast wiring
+  check('saveToast reads actionResults and passes actionConfigs', saveToast.includes('readActionResults(options.folderPath)') && saveToast.includes('actionConfigs: settings.actionConfigs'))
+  check('saveToast handles IPC toastActionRetry', saveToast.includes('IPC.toastActionRetry') && saveToast.includes('retryAction('))
+  check('saveToast exposes updateToastActionResults helper', saveToast.includes('export function updateToastActionResults('))
+
+  // History window wiring
+  check('historyWindow includes actionResults in safeSummarize', historyWindow.includes("entry.kind === 'dir' ? readActionResults(entry.path) : readZipActionResults(pack)"))
+  check('historyWindow includes actionConfigs in historyList', historyWindow.includes('actionConfigs: live.actionConfigs'))
+  check('historyWindow handles IPC historyActionRetry', historyWindow.includes('IPC.historyActionRetry') && historyWindow.includes('retryAction('))
+  check('historyWindow handles IPC historyActionResults', historyWindow.includes('IPC.historyActionResults') && historyWindow.includes('readActionResults('))
+
+  // Preload bridges
+  check('preload toast exposes onActionResults and actionRetry', preloadToast.includes('onActionResults(') && preloadToast.includes('actionRetry('))
+  check('preload history exposes actionRetry and actionResults', preloadHistory.includes('actionRetry(') && preloadHistory.includes('actionResults('))
+
+  // Renderer UI
+  check('toast.html includes actionStatus container', toastHtml.includes('id="actionStatus"'))
+  check('toast.ts renders action results and wires retry', toastTs.includes('renderActionResults()') && toastTs.includes('toastBridge.actionRetry('))
+  check('history.ts builds action status rows and wires retry', historyTs.includes('buildActionStatus(') && historyTs.includes('actionRetry('))
+
+  // i18n keys across all 9 locales
+  const actionI18nKeys = [
+    'actions.retry',
+    'actions.retrying',
+    'actions.statusOk',
+    'actions.statusFailed',
+    'actions.statusTimedOut',
+    'actions.statusBlocked',
+    'actions.statusSkipped',
+    'actions.heading',
+  ]
+  for (const key of actionI18nKeys) {
+    const count = (i18n.match(new RegExp(`'${key}':`, 'gu')) ?? []).length
+    check(`i18n key '${key}' exists in all 9 locales`, count === 9, `found ${String(count)}`)
+  }
+
+  // Functional filesystem test of action results round-trip
+  const testPackDir = mkdtempSync(path.join(tmpdir(), 'capturepack-action-results-test-'))
+  try {
+    const pluginsDir = path.join(testPackDir, 'plugins')
+    mkdirSync(pluginsDir, { recursive: true })
+    const resultsFile = path.join(pluginsDir, 'action-results.json')
+    const sampleResults = [
+      {
+        actionId: 'builtin:webhook',
+        configId: 'cfg-test-1',
+        outcome: 'failed',
+        attempts: 2,
+        durationMs: 45,
+        message: 'connection refused',
+        retryable: true,
+      },
+      {
+        actionId: 'builtin:webhook',
+        configId: 'cfg-test-2',
+        outcome: 'ok',
+        attempts: 1,
+        durationMs: 12,
+        retryable: false,
+      },
+    ]
+    const tempFile = `${resultsFile}.tmp`
+    writeFileSync(tempFile, JSON.stringify(sampleResults, null, 2), 'utf8')
+    renameSync(tempFile, resultsFile)
+
+    const raw = readFileSync(resultsFile, 'utf8')
+    const parsed = JSON.parse(raw) as typeof sampleResults
+    check('durable action results file parses successfully', Array.isArray(parsed) && parsed.length === 2)
+    check(
+      'failed action in results file retains message and retryable flag',
+      parsed[0]?.outcome === 'failed' && parsed[0]?.retryable === true && parsed[0]?.message === 'connection refused',
+    )
+    check('ok action in results file retains ok outcome', parsed[1]?.outcome === 'ok' && parsed[1]?.retryable === false)
+  } finally {
+    rmSync(testPackDir, { recursive: true, force: true })
+  }
+
+  // Host persistence merge behavior
+  check('host exports mergeActionResults', host.includes('export { mergeActionResults } from'))
+  check('persistActionResults preserves terminal outcomes against non-run skipped results', host.includes('mergeActionResults(existing, newResults)'))
+
+  // mergeActionResults contract
+  const priorOk: ActionResult = { actionId: 'a', configId: 'c1', outcome: 'ok', attempts: 1, durationMs: 25, retryable: false }
+  const priorFailed: ActionResult = { actionId: 'a', configId: 'c2', outcome: 'failed', attempts: 1, durationMs: 10, message: 'err', retryable: true }
+  const priorTimedOut: ActionResult = { actionId: 'a', configId: 'c3', outcome: 'timed-out', attempts: 1, durationMs: 1000, message: 'timeout', retryable: true }
+  const skippedRun: ActionResult = { actionId: 'a', configId: 'c1', outcome: 'skipped', attempts: 0, durationMs: 0, message: 'already completed for this pack', retryable: false }
+  const skippedDisabled: ActionResult = { actionId: 'a', configId: 'c2', outcome: 'skipped', attempts: 0, durationMs: 0, message: 'disabled', retryable: false }
+  const skippedHalted: ActionResult = { actionId: 'a', configId: 'c3', outcome: 'skipped', attempts: 0, durationMs: 0, message: 'halted', retryable: false }
+  const mergedOk = mergeActionResults([priorOk], [skippedRun])
+  check('mergeActionResults does not let non-run skipped overwrite terminal ok', mergedOk[0]?.outcome === 'ok' && mergedOk[0]?.attempts === 1)
+  const mergedFailed = mergeActionResults([priorFailed], [skippedDisabled])
+  check('mergeActionResults does not let non-run skipped overwrite terminal failed', mergedFailed[0]?.outcome === 'failed' && mergedFailed[0]?.attempts === 1)
+  const mergedTimedOut = mergeActionResults([priorTimedOut], [skippedHalted])
+  check('mergeActionResults does not let non-run skipped overwrite terminal timed-out', mergedTimedOut[0]?.outcome === 'timed-out' && mergedTimedOut[0]?.attempts === 1)
+  const retriedOk: ActionResult = { actionId: 'a', configId: 'c2', outcome: 'ok', attempts: 1, durationMs: 15, retryable: false }
+  const mergedRetry = mergeActionResults([priorFailed], [retriedOk])
+  check('mergeActionResults allows retry to update terminal failed to ok', mergedRetry[0]?.outcome === 'ok' && mergedRetry[0]?.attempts === 1)
+
+  // Functional rerun test: source-ready then annotated-replay-ready leaves persisted outcome ok
+  const testRerunPackDir = mkdtempSync(path.join(tmpdir(), 'capturepack-action-rerun-test-'))
+  try {
+    const configId = 'cfg-rerun-test'
+    const stepConfig = config({ configId, order: 1 })
+    const stepManifest = manifest({ id: 'webhook', requiredPackState: 'source-ready', idempotent: true })
+    const pipelineStep = { manifest: stepManifest, config: stepConfig }
+
+    // First pass at source-ready: runs and succeeds ('ok')
+    let completedKeys = new Set<string>()
+    const run1 = await runPipeline({
+      packId: PACK,
+      packState: 'source-ready',
+      steps: [pipelineStep],
+      completedKeys,
+      execute: async () => {},
+      clock: fastClock(),
+    })
+    check('first pipeline pass at source-ready succeeds', run1.results[0]?.outcome === 'ok')
+    completedKeys = new Set([...completedKeys, ...run1.newCompletedKeys])
+
+    const resultsFile = path.join(testRerunPackDir, 'plugins', 'action-results.json')
+    mkdirSync(path.dirname(resultsFile), { recursive: true })
+
+    const persist = (results: readonly ActionResult[]): void => {
+      let existing: ActionResult[] = []
+      if (existsSync(resultsFile)) {
+        try {
+          existing = JSON.parse(readFileSync(resultsFile, 'utf8')) as ActionResult[]
+        } catch {}
+      }
+      const merged = mergeActionResults(existing, results)
+      const tmp = `${resultsFile}.tmp`
+      writeFileSync(tmp, JSON.stringify(merged, null, 2), 'utf8')
+      renameSync(tmp, resultsFile)
+    }
+
+    persist(run1.results)
+    const disk1 = JSON.parse(readFileSync(resultsFile, 'utf8')) as ActionResult[]
+    check('first pass persisted outcome is ok', disk1[0]?.outcome === 'ok' && disk1[0]?.attempts === 1)
+
+    // Second pass at annotated-replay-ready: decideStep returns skipped ('already completed for this pack')
+    const run2 = await runPipeline({
+      packId: PACK,
+      packState: 'annotated-replay-ready',
+      steps: [pipelineStep],
+      completedKeys,
+      execute: async () => {},
+      clock: fastClock(),
+    })
+    check('second pipeline pass at annotated-replay-ready returns skipped', run2.results[0]?.outcome === 'skipped')
+
+    // Persisting the second run must not overwrite the earlier 'ok' result
+    persist(run2.results)
+    const disk2 = JSON.parse(readFileSync(resultsFile, 'utf8')) as ActionResult[]
+    check(
+      'running the pipeline at source-ready (ok) and then at annotated-replay-ready leaves the persisted outcome ok for the completed config',
+      disk2[0]?.outcome === 'ok' && disk2[0]?.attempts === 1 && disk2[0]?.configId === configId,
+    )
+  } finally {
+    rmSync(testRerunPackDir, { recursive: true, force: true })
   }
 }
 

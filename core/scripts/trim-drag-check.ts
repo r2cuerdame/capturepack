@@ -188,10 +188,10 @@ console.log('\nA trim rebases the whole annotation, not just its lifetime')
   )
   check(
     'and moves every observed sample by the same in-point',
-    (head.tracking.samples ?? []).map((x) => x.t_ms).join(','),
+    (head.tracking?.samples ?? []).map((x) => x.t_ms).join(','),
     '1000,4000,7500',
   )
-  check('and the pick instant', String(head.tracking.picked_at_ms), '1000')
+  check('and the pick instant', String(head.tracking?.picked_at_ms), '1000')
   check(
     'and the authored keyframes',
     (head.keyframes ?? []).map((k) => k.t_ms).join(','),
@@ -203,13 +203,35 @@ console.log('\nA trim rebases the whole annotation, not just its lifetime')
   const tail = rebaseAnnotationClock(tracked, 0, 9_000)
   check(
     'a tail cut leaves no sample past the declared end',
-    String((tail.tracking.samples ?? []).filter((x) => x.t_ms > 9_000).length),
+    String((tail.tracking?.samples ?? []).filter((x) => x.t_ms > 9_000).length),
     '0',
   )
   check(
     'and does not move the samples that were already inside it',
-    (tail.tracking.samples ?? []).slice(0, 2).map((x) => x.t_ms).join(','),
+    (tail.tracking?.samples ?? []).slice(0, 2).map((x) => x.t_ms).join(','),
     '3000,6000',
+  )
+
+  const noTrackingBox: Annotation = {
+    annotation_id: 'ann_no_tracking',
+    type: 'box',
+    bounds: { x: 500, y: 200, width: 300, height: 150 },
+    text: '',
+    start_ms: 1_000,
+    end_ms: 5_000,
+    created_at: '2026-07-29T00:00:00+09:00',
+    z: 0,
+  }
+  const trimmedNoTracking = rebaseAnnotationClock(noTrackingBox, -1_000, 4_000)
+  check(
+    'rebaseAnnotationClock trims annotation omitting tracking without throwing',
+    `${trimmedNoTracking.start_ms},${trimmedNoTracking.end_ms}`,
+    '0,4000',
+  )
+  check(
+    'rebaseAnnotationClock leaves tracking undefined when absent',
+    String(trimmedNoTracking.tracking),
+    'undefined',
   )
 
   // The trim path must actually call it, rather than hand-rolling the two

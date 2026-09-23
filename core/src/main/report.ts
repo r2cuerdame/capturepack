@@ -16,14 +16,16 @@ import { replayCoverage } from '../shared/displayClock'
 
 const px = (n: number): number => Math.round(n)
 
-/** Replay-clock label, e.g. 3200 -> "00:03.200". */
+/** Replay-clock label, e.g. 3200 -> "00:03.200", -1500 -> "-00:01.500". */
 export function formatClock(ms: number): string {
-  const total = Math.max(0, Math.round(ms))
+  const rounded = Math.round(ms)
+  const sign = rounded < 0 ? '-' : ''
+  const total = Math.abs(rounded)
   const minutes = Math.floor(total / 60_000)
   const seconds = Math.floor((total % 60_000) / 1000)
   const millis = total % 1000
   const pad = (n: number, w: number): string => String(n).padStart(w, '0')
-  return `${pad(minutes, 2)}:${pad(seconds, 2)}.${pad(millis, 3)}`
+  return `${sign}${pad(minutes, 2)}:${pad(seconds, 2)}.${pad(millis, 3)}`
 }
 
 /**
@@ -50,7 +52,7 @@ export function lifetimeLabel(a: Annotation, t: TranslateFn = makeT('en')): stri
  */
 export function describeAnnotation(a: Annotation, t: TranslateFn = makeT('en')): string {
   const parts: string[] = [lifetimeLabel(a, t)]
-  if (a.text.trim() !== '') parts.push(`"${a.text.trim()}"`)
+  if (typeof a.text === 'string' && a.text.trim() !== '') parts.push(`"${a.text.trim()}"`)
   const b = a.bounds
   const flags = a.blur ? ', blur' : ''
   parts.push(`box at (${px(b.x)}, ${px(b.y)}) size ${px(b.width)}×${px(b.height)}${flags}`)
@@ -170,6 +172,7 @@ export function displaySummaryLines(
 ): string[] {
   const displays = manifest.media.displays
   if (displays === undefined || displays.length < 2) return []
+  const safeAnnotations = Array.isArray(annotations) ? annotations : []
   const focusedIndex = packFocusedDisplay(manifest)
   const declared = packDisplayIndices(manifest)
   const lines = [`- **${t('pack.displays')}:** ${displays.length} captured`]
@@ -186,21 +189,22 @@ export function displaySummaryLines(
       manifest.media.replay_duration_ms ?? 0,
       d.replay_clock_offset_ms,
     )
+    const hasReplay = typeof d.replay === 'string' && d.replay.length > 0
     const compressed =
-      d.replay !== null && coverage.compressed
+      hasReplay && coverage.compressed
         ? ` — ${t('pack.replayCompressed', {
             media: (coverage.mediaMs / 1000).toFixed(1),
             capture: (coverage.captureMs / 1000).toFixed(1),
           })}`
         : ''
     const replay =
-      d.replay === null
-        ? 'no replay'
-        : `${((d.replay_duration_ms ?? 0) / 1000).toFixed(1)}s \`${d.replay}\`${compressed}`
+      hasReplay
+        ? `${((d.replay_duration_ms ?? 0) / 1000).toFixed(1)}s \`${d.replay}\`${compressed}`
+        : 'no replay'
     const focused = d.focused ? ` (${t('pack.displayFocused')})` : ''
     // How many boxes were drawn on THIS screen — the single most useful thing
     // to know about a display once every display is annotatable (SPEC §8.8).
-    const count = annotationsOnDisplay(annotations, d.index, focusedIndex, declared).length
+    const count = annotationsOnDisplay(safeAnnotations, d.index, focusedIndex, declared).length
     const boxes = count === 0 ? '' : `, ${count} annotation${count === 1 ? '' : 's'}`
     lines.push(
       `  - ${d.index}: ${displayPixels(d)} at ${px(d.bounds.x)},${px(d.bounds.y)} @${d.scale}x — ` +
@@ -226,7 +230,7 @@ export function extraDisplayFiles(manifest: Manifest): Array<{ name: string; wha
       name: d.snapshot,
       what: `Display ${d.index}, ${displayPixels(d)} — the same instant on another screen (original pixels, no annotations)`,
     })
-    if (d.replay !== null) {
+    if (typeof d.replay === 'string' && d.replay.length > 0) {
       files.push({
         name: d.replay,
         what: `Display ${d.index} screen recording, ${((d.replay_duration_ms ?? 0) / 1000).toFixed(1)}s — original evidence, never modified`,
@@ -295,13 +299,14 @@ export function keyframeSet(
   renderPending = false,
 ): KeyframeSet {
   const durationMs =
-    manifest.media.replay === null ? 0 : (manifest.media.replay_duration_ms ?? 0)
+    typeof manifest.media.replay !== 'string' ? 0 : (manifest.media.replay_duration_ms ?? 0)
   // The same input the render used, so the cap it hit is the cap reported here.
   // The pack's OWN stills cover the FOCUSED display (SPEC §5.6): a box on
   // another screen is rendered into that screen's own stills, so counting it
   // here would predict filenames the render never writes.
+  const annotations = Array.isArray(annotationsFile?.annotations) ? annotationsFile.annotations : []
   const { times, dropped } = computeKeyframes(
-    boxesOnDisplay(manifest, annotationsFile.annotations, packFocusedDisplay(manifest)),
+    boxesOnDisplay(manifest, annotations, packFocusedDisplay(manifest)),
     durationMs,
   )
   const declared = manifest.media.keyframes
@@ -331,6 +336,7 @@ export function keyframeSectionLines(
   set: KeyframeSet,
   t: TranslateFn,
   imageCapture = false,
+  annotatedReplayFile = 'replay_annotated.webm',
 ): string[] {
   if (set.frames.length === 0) return []
   if (imageCapture) {
@@ -368,7 +374,7 @@ export function keyframeSectionLines(
     lines.push(
       `${set.dropped} further annotation state change${set.dropped === 1 ? '' : 's'} ` +
         'were not rendered as stills (per-pack still limit); annotations.json carries every ' +
-        'lifetime, and replay_annotated.webm shows them all.',
+        `lifetime, and ${annotatedReplayFile} shows them all.`,
     )
   }
   if (!set.declared) {
@@ -443,6 +449,15 @@ export function buildReport(
   includeViewer = false,
 ): string {
   const t = makeT(lang)
+  const annotations = Array.isArray(annotationsFile?.annotations) ? annotationsFile.annotations : []
+  const refWidth =
+    typeof annotationsFile?.reference_width === 'number'
+      ? annotationsFile.reference_width
+      : (manifest.media?.displays?.[0]?.snapshot_width ?? 0)
+  const refHeight =
+    typeof annotationsFile?.reference_height === 'number'
+      ? annotationsFile.reference_height
+      : (manifest.media?.displays?.[0]?.snapshot_height ?? 0)
   const lines: string[] = []
   const imageCapture = manifest.capture_kind === 'image'
 
@@ -459,22 +474,24 @@ export function buildReport(
   lines.push(manifest.note ?? t('pack.noNote'))
   lines.push('')
 
-  const hasReplay = manifest.media.replay !== null
+  const hasReplay = typeof manifest.media.replay === 'string' && manifest.media.replay.length > 0
   const replayName = manifest.media.replay ?? 'replay.webm'
   const annotatedReplayName = manifest.media.replay_annotated
   const annotatedReplayPending = hasReplay && renderPending && annotatedReplayName === undefined
   const hasAnnotatedReplay = annotatedReplayName !== undefined || annotatedReplayPending
-  const annotatedReplayFile = annotatedReplayName ?? 'replay_annotated.webm'
+  const annotatedReplayFile =
+    annotatedReplayName ?? (replayName.endsWith('.mp4') ? 'replay_annotated.mp4' : 'replay_annotated.webm')
   const replaySeconds = ((manifest.media.replay_duration_ms ?? 0) / 1000).toFixed(1)
   lines.push(`## ${t('pack.environment')}`)
   lines.push('')
-  lines.push(`- **${t('pack.os')}:** ${manifest.environment.os} (version ${manifest.environment.os_version})`)
-  const screens = manifest.environment.screens
-    .map((s) => `${s.width}×${s.height} @${s.scale}x scale`)
+  const osVersion = manifest.environment.os_version ? ` (version ${manifest.environment.os_version})` : ''
+  lines.push(`- **${t('pack.os')}:** ${manifest.environment.os}${osVersion}`)
+  const screens = (manifest.environment.screens ?? [])
+    .map((s) => `${s.width}×${s.height} @${s.scale ?? 1}x scale`)
     .join('; ')
-  lines.push(`- **${t('pack.screens')}:** ${screens}`)
+  lines.push(`- **${t('pack.screens')}:** ${screens === '' ? t('pack.unknown') : screens}`)
   // All-displays capture: what the trigger actually froze, per display.
-  lines.push(...displaySummaryLines(manifest, t, annotationsFile.annotations))
+  lines.push(...displaySummaryLines(manifest, t, annotations))
   if (manifest.environment.app !== undefined) {
     lines.push(`- **${t('pack.focusedApp')}:** ${manifest.environment.app}`)
   }
@@ -495,7 +512,6 @@ export function buildReport(
 
   lines.push(`## ${t('pack.annotations')}`)
   lines.push('')
-  const annotations = annotationsFile.annotations
   if (annotations.length === 0) {
     lines.push(t('pack.none'))
   } else {
@@ -506,7 +522,7 @@ export function buildReport(
     const groups = groupByDisplay(manifest, annotations)
     if (groups.length === 0) {
       lines.push(
-        `Coordinates are pixels in snapshot.png (${annotationsFile.reference_width}×${annotationsFile.reference_height}). ` +
+        `Coordinates are pixels in snapshot.png (${refWidth}×${refHeight}). ` +
           'Numbers are the computed display numbers (SPEC §8.5) — identical in every rendered view.',
       )
       lines.push('')
@@ -529,7 +545,7 @@ export function buildReport(
         // reader which file to open a box's coordinates against.
         const entry = declaredDisplays.find((d) => d.index === g.index)
         const snapshot = g.focused
-          ? `snapshot.png, ${annotationsFile.reference_width}×${annotationsFile.reference_height}`
+          ? `snapshot.png, ${refWidth}×${refHeight}`
           : entry === undefined
             ? `snapshot-d${g.index}.png`
             : `${entry.snapshot}, ${displayPixels(entry)}`
@@ -558,7 +574,7 @@ export function buildReport(
   // Annotated keyframes (GOAL "Annotated keyframes"): images beat video for an
   // LLM, so they sit directly under the annotation list they illustrate.
   const keyframes = keyframeSet(manifest, annotationsFile, renderPending)
-  const keyframeLines = keyframeSectionLines(keyframes, t, imageCapture)
+  const keyframeLines = keyframeSectionLines(keyframes, t, imageCapture, annotatedReplayFile)
   if (keyframeLines.length > 0) {
     lines.push(imageCapture ? '## Annotated image' : `## ${t('pack.keyframes')}`)
     lines.push('')
@@ -570,7 +586,7 @@ export function buildReport(
   lines.push('')
   lines.push('- manifest.json — pack identity, environment, file inventory')
   lines.push(
-    `- snapshot.png — captured frame, ${annotationsFile.reference_width}×${annotationsFile.reference_height} (original pixels, never modified)`,
+    `- snapshot.png — captured frame, ${refWidth}×${refHeight} (original pixels, never modified)`,
   )
   lines.push('- annotations.json — the annotation boxes above, as editable data (the true source)')
   if (!imageCapture) lines.push('- timeline.json — timestamped events from capture start to save')

@@ -5,6 +5,7 @@
 import { applyDomI18n, makeT } from '../../shared/i18n'
 import type { TranslateFn } from '../../shared/i18n'
 import type {
+  ActionRetryResult,
   HistoryActionResult,
   HistoryCreateShareResult,
   HistoryCreateZipResult,
@@ -17,6 +18,9 @@ import type {
   HistoryShareStillResult,
   StorageUsage,
 } from '../../shared/ipc'
+import type { ActionConfig, ActionResult } from '../../shared/actions'
+import { BUILTIN_WEBHOOK_MANIFEST } from '../../shared/actions'
+import { canRetry } from '../../shared/actionPipeline'
 import { budgetLevel, budgetPercent, formatBytes } from '../../shared/retention'
 import { DEFAULT_CAPTURE_HOTKEY } from '../../shared/types'
 
@@ -38,6 +42,8 @@ interface HistoryBridge {
   rerender(packPath: string): Promise<HistoryActionResult>
   rename(packPath: string, newName: string): Promise<HistoryRenameResult>
   remove(packPath: string): Promise<HistoryActionResult>
+  actionRetry(packPath: string, configId: string): Promise<ActionRetryResult>
+  actionResults(packPath: string): Promise<ActionResult[]>
   openSettings(): void
   onChanged(cb: () => void): void
   onRenderStatus(cb: (payload: HistoryRenderStatusPayload) => void): void
@@ -79,6 +85,7 @@ settingsBtn.addEventListener('click', () => {
 // State
 
 let packs: HistoryPackSummary[] = []
+let actionConfigs: ActionConfig[] = []
 let outputDir = ''
 // Active-language t(); every list result carries uiLanguage, so a language
 // change from the settings GUI reaches this window on its next re-list.
@@ -175,6 +182,7 @@ async function refresh(): Promise<void> {
     const result = await bridge.list()
     outputDir = result.outputDir
     packs = result.packs
+    actionConfigs = result.actionConfigs ?? []
     captureHotkey = result.captureHotkey
     if (result.uiLanguage !== uiLanguage) {
       uiLanguage = result.uiLanguage
@@ -511,6 +519,9 @@ function buildCard(p: HistoryPackSummary): HTMLElement {
   if (p.kind === 'zip') badges.append(elc('span', 'badge', t('history.badgeZipPack')))
   body.append(badges)
 
+  const actionStatus = buildActionStatus(p)
+  if (actionStatus !== null) body.append(actionStatus)
+
   // Inline delete confirm / rename input replace the action row.
   if (sharingFor === p.path) {
     body.append(buildShareReview(p))
@@ -529,6 +540,89 @@ function buildCard(p: HistoryPackSummary): HTMLElement {
 
   if (openMenuFor === p.path) card.append(buildMenu(p))
   return card
+}
+
+function actionNameFor(actionId: string): string {
+  if (actionId === BUILTIN_WEBHOOK_MANIFEST.id) return BUILTIN_WEBHOOK_MANIFEST.name
+  return actionId
+}
+
+function buildActionStatus(p: HistoryPackSummary): HTMLElement | null {
+  const results = p.actionResults
+  if (!results || results.length === 0) return null
+
+  const container = elc('div', 'cardActionStatus')
+  const configMap = new Map<string, ActionConfig>(actionConfigs.map((c) => [c.configId, c]))
+
+  for (const result of results) {
+    const row = elc('div', 'cardActionRow')
+    row.dataset['configId'] = result.configId
+
+    const name = elc('span', 'cardActionName', actionNameFor(result.actionId))
+    row.append(name)
+
+    let badgeClass = 'badge action-ok'
+    let badgeText = t('actions.statusOk')
+    if (result.outcome === 'failed') {
+      badgeClass = 'badge action-failed'
+      badgeText = t('actions.statusFailed')
+    } else if (result.outcome === 'timed-out') {
+      badgeClass = 'badge action-timed-out'
+      badgeText = t('actions.statusTimedOut')
+    } else if (result.outcome === 'blocked') {
+      badgeClass = 'badge action-blocked'
+      badgeText = t('actions.statusBlocked')
+    } else if (result.outcome === 'skipped') {
+      badgeClass = 'badge action-skipped'
+      badgeText = t('actions.statusSkipped')
+    }
+    const badge = elc('span', badgeClass, badgeText)
+    row.append(badge)
+
+    if (result.message) {
+      const msg = elc('span', 'cardActionMsg', result.message)
+      msg.title = result.message
+      row.append(msg)
+    }
+
+    const config = configMap.get(result.configId)
+    if (canRetry(result, config)) {
+      const retryBtn = elc('button', 'cardActionRetryBtn', t('actions.retry'))
+      retryBtn.type = 'button'
+      retryBtn.addEventListener('click', () => {
+        retryBtn.disabled = true
+        retryBtn.textContent = t('actions.retrying')
+        void bridge
+          .actionRetry(p.path, result.configId)
+          .then((res) => {
+            if (res.ok && res.result) {
+              if (!p.actionResults) p.actionResults = []
+              const idx = p.actionResults.findIndex((r) => r.configId === result.configId)
+              if (idx >= 0) {
+                p.actionResults[idx] = res.result
+              } else {
+                p.actionResults.push(res.result)
+              }
+              render()
+            } else {
+              retryBtn.disabled = false
+              retryBtn.textContent = t('actions.retry')
+              if (res.error) showCardError(p.path, res.error)
+            }
+          })
+          .catch((err: unknown) => {
+            retryBtn.disabled = false
+            retryBtn.textContent = t('actions.retry')
+            showCardError(p.path, err instanceof Error ? err.message : String(err))
+          })
+      })
+      row.append(retryBtn)
+    }
+
+    container.append(row)
+  }
+
+  return container
 }
 
 function buildActions(p: HistoryPackSummary): HTMLElement {
@@ -572,9 +666,9 @@ function buildActions(p: HistoryPackSummary): HTMLElement {
 
   const playBtn = elc('button', undefined, t('history.play'))
   playBtn.type = 'button'
-  playBtn.disabled = p.annotated !== 'ready' || p.kind !== 'dir'
+  playBtn.disabled = !p.hasReplay || p.annotated !== 'ready' || p.kind !== 'dir'
   playBtn.title =
-    p.annotated === 'none'
+    !p.hasReplay
       ? t('history.playNoReplay')
       : p.annotated === 'missing'
         ? t('history.playNotRendered')

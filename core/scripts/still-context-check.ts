@@ -112,8 +112,8 @@ console.log('\nA pack written before 0.4.0 still reads exactly as it did')
   check(
     'a trim still rebases a legacy track with the lifetime it moves',
     trimmed.start_ms === 0
-      && (trimmed.tracking.samples ?? []).map((s) => s.t_ms).join(',') === '0,300,600',
-    (trimmed.tracking.samples ?? []).map((s) => s.t_ms).join(','),
+      && (trimmed.tracking?.samples ?? []).map((s) => s.t_ms).join(',') === '0,300,600',
+    (trimmed.tracking?.samples ?? []).map((s) => s.t_ms).join(','),
   )
   check(
     'the reader is kept deliberately, not by accident',
