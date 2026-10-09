@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, w
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { app } from 'electron'
-import { runActionsForPack } from '../src/main/actions/host'
+import { clearPackLedger, runActionsForPack } from '../src/main/actions/host'
 import { deliverWebhook, readPackSummary } from '../src/main/actions/webhook'
 import {
   ACTION_PERMISSIONS,
@@ -119,6 +119,40 @@ check(
   'a different PACK is a different key',
   idempotencyKey(PACK, 'webhook', 'cfg-1') !== idempotencyKey('other', 'webhook', 'cfg-1'),
 )
+
+console.log('\nRE-EDIT SAVE RE-ARMS AN IDEMPOTENT ACTION')
+{
+  const ledgerFile = path.join(app.getPath('userData'), 'action-ledger.json')
+  const completed = idempotencyKey(PACK, 'webhook', 'cfg-1')
+  const otherPack = 'other-pack'
+  const otherCompleted = idempotencyKey(otherPack, 'webhook', 'cfg-1')
+  mkdirSync(path.dirname(ledgerFile), { recursive: true })
+  writeFileSync(ledgerFile, JSON.stringify({ version: 1, packs: {
+    [PACK]: [completed],
+    [otherPack]: [otherCompleted],
+  } }), 'utf8')
+  const before = decideStep({
+    packState: 'source-ready',
+    completedKeys: new Set([completed]),
+    packId: PACK,
+    pipelineHalted: false,
+    step: step(),
+  })
+  clearPackLedger(PACK)
+  const after = JSON.parse(readFileSync(ledgerFile, 'utf8')) as {
+    packs: Record<string, string[]>
+  }
+  const rearmed = decideStep({
+    packState: 'source-ready',
+    completedKeys: new Set(after.packs[PACK] ?? []),
+    packId: PACK,
+    pipelineHalted: false,
+    step: step(),
+  })
+  check('the prior successful webhook is skipped before an in-place re-edit', !before.run && before.outcome === 'skipped')
+  check('clearing the saved pack ledger re-arms its webhook', after.packs[PACK] === undefined && rearmed.run)
+  check('clearing one pack preserves unrelated completed keys', after.packs[otherPack]?.[0] === otherCompleted)
+}
 
 console.log('\nPIPELINE ORDER IS DETERMINISTIC')
 {
@@ -661,13 +695,14 @@ console.log('\nTHE APP ACTUALLY RUNS THE PIPELINE')
     return from >= 0 && to > from ? text.slice(from, to) : ''
   }
   const imageFlow = section(session, 'async function runImageFlow(', 'async function runFlow(')
+  const videoFlow = section(session, 'async function runFlow(', 'async function cutCapturedDisplays(')
   const editFlow = section(session, 'async function runEditFlow(', 'interface DisplayRenderSource')
 
   check('session.ts imports the after-save entry point', /import \{ runActionsAtState(?:, [^}]*)? \} from '\.\/actions\/onSave'/u.test(session))
   check(
     'it fires at source-ready immediately after the save flow calls publication finished',
-    session.includes("notePackSaved(savedHandle.dirPath)")
-      && session.includes("void runActionsAtState(savedHandle.dirPath, 'source-ready', settings)"),
+    videoFlow.includes("notePackSaved(savedHandle.dirPath)")
+      && videoFlow.includes("void runActionsAtState(savedHandle.dirPath, 'source-ready', settings)"),
   )
   check(
     'still-image capture flow fires after-save actions and notes pack saved once durable',
@@ -699,8 +734,9 @@ console.log('\nTHE APP ACTUALLY RUNS THE PIPELINE')
   )
   check(
     'neither call is awaited — a pack that is already durable never waits for an action',
-    session.includes("void runActionsAtState(savedHandle.dirPath")
-      && session.includes("void runActionsAtState(handle.dirPath")
+    videoFlow.includes("void runActionsAtState(savedHandle.dirPath")
+      && imageFlow.includes("void runActionsAtState(savedHandle.dirPath")
+      && editFlow.includes("void runActionsAtState(handle.dirPath")
       && session.includes("void runActionsAtState(dirPath"),
   )
 
@@ -990,6 +1026,7 @@ console.log('\nTHE WEBHOOK SUMMARY COUNTS CAPTURE-TIME DISPLAYS (#197)')
       media: { snapshot: 'snapshot.png' },
     })
     const still = await readPackSummary(packDir)
+    check('still-image webhook summary identifies the image capture kind', still.captureKind === 'image')
     check(
       'still-image packs count environment.screens when media.displays is forbidden',
       still.displayCount === 2,
