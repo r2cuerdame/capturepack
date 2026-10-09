@@ -132,7 +132,7 @@
     "qa:rc": "node scripts/qa-gate.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "^1.31.0",
     "adm-zip": "^0.6.0",
     "electron-updater": "^6.3.9",
     "zod": "^4.4.3"
