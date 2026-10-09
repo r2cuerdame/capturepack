@@ -37,7 +37,7 @@ if (process.argv.includes('--mutate-omit-recorder-stop')) {
 }
 const rendererCode = [
   fn(retention, 'detachRecorderHandlers'), fn(retention, 'releaseRecorderReferences'),
-  suspend, fn(renderer, 'retainNativeReplayClock'), fn(renderer, 'teardown'), fn(renderer, 'terminalCaptureFailure'),
+  fn(renderer, 'clearRecorderRemuxers'), suspend, fn(renderer, 'retainNativeReplayClock'), fn(renderer, 'teardown'), fn(renderer, 'terminalCaptureFailure'),
   fn(renderer, 'resumeShippingReplayEncoding'), fn(renderer, 'startCapture'), workloadNode.getText(renderer),
 ].join('\n')
 let tickPump = fn(renderer, 'startFrameTicks')
@@ -78,7 +78,8 @@ function harness() {
     ondataavailable: () => events.push('unexpected-old-data'), onerror: () => {},
     stop() { this.state = 'inactive'; events.push('recorder-stop') },
   }
-  const oldSession = { recorder, flushTimer: 'flush', flushBatch: { cancel: () => events.push('flush-cancel') } }
+  const remuxOwner = { retainedBytes: 1024, clear() { this.retainedBytes = 0; events.push('remux-clear') } }
+  const oldSession = { avcRemuxer: remuxOwner, recorder, flushTimer: 'flush', flushBatch: { cancel: () => events.push('flush-cancel') } }
   let workloadCallback
   const rendererContext = vm.createContext({
     console: { info: () => {} }, captureGeneration: 7, captureStreamGeneration: 0, replayWorkloadActive: true,
@@ -94,6 +95,7 @@ function harness() {
     ingestQueue: { cancel: () => events.push('ingest-cancel') }, recorderQueue: Promise.resolve(),
     replayHold: { watchdog: 'hold' }, replayResumeTokens: { clear: () => events.push('resume-tokens-clear') },
     retryTimer: 'retry', evidenceTimer: 'evidence', cadenceTimer: 'cadence', cadence: {},
+    recorderRemuxers: new Set([remuxOwner]),
     activeRecorder: oldSession, replayRing: { clear: () => events.push('ring-clear') },
     webmRing: { clear: () => events.push('webm-clear') },
     stopFrameTicks: () => { events.push('lane-s-ticks-stop'); rendererContext.tickVideo = null },
@@ -180,7 +182,7 @@ function harness() {
   mainContext.win = mainContext.captureWindows.get(17)
   run(mainCode, mainContext)
   run(`globalThis.handleCaptureError = ${errorHandler}`, mainContext)
-  return { events, recorder, oldSession, originalStream, rendererContext, mainContext, managers,
+  return { events, recorder, oldSession, remuxOwner, originalStream, rendererContext, mainContext, managers,
     workload: (active) => workloadCallback({ active }),
     connectErrors: () => {
       const sender = mainContext.win.webContents
@@ -212,6 +214,9 @@ await check('native READY stops/releases shipping MP4 while retaining focused La
   for (const name of ['onstop', 'ondataavailable', 'onerror']) assert.equal(h.recorder[name], null)
   for (const name of ['activeRecorder', 'replayRing', 'webmRing', 'ingestQueue', 'replayHold']) assert.equal(h.rendererContext[name], null)
   assert.equal(h.oldSession.flushBatch, null)
+  assert.equal(h.remuxOwner.retainedBytes, 0, 'native READY must clear the internal AVC byte owner')
+  assert.equal(h.rendererContext.recorderRemuxers.size, 0)
+  assert.equal(count(h.events, 'remux-clear'), 1)
   for (const event of ['flush-cancel', 'ingest-cancel', 'ring-clear', 'webm-clear', 'watchdog-stop', 'resume-tokens-clear',
     'timeout-clear:flush', 'timeout-clear:hold', 'timeout-clear:retry', 'timeout-clear:evidence', 'interval-clear:cadence']) {
     assert.equal(count(h.events, event), 1, event)
