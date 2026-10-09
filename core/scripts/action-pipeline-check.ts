@@ -15,6 +15,7 @@ import path from 'node:path'
 import { app } from 'electron'
 import { runActionsForPack } from '../src/main/actions/host'
 import { deliverWebhook, readPackSummary } from '../src/main/actions/webhook'
+import { PackRenderBatchTracker } from '../src/main/renderBatch'
 import {
   ACTION_PERMISSIONS,
   ACTION_TIMEOUT_DEFAULT_MS,
@@ -163,6 +164,21 @@ console.log('\nWHETHER A STEP MAY RUN')
   )
   const halted = decideStep({ ...base, pipelineHalted: true, step: step() })
   check('a step behind a halted pipeline is SKIPPED', !halted.run && halted.outcome === 'skipped')
+  const waitingForComplete = decideStep({
+    ...base,
+    packState: 'annotated-replay-ready',
+    step: step({ requiredPackState: 'complete' }),
+  })
+  check(
+    "a step requiring 'complete' is BLOCKED at annotated-replay-ready",
+    !waitingForComplete.run && waitingForComplete.outcome === 'blocked' && (waitingForComplete.message ?? '').includes('complete'),
+  )
+  const completeStep = decideStep({
+    ...base,
+    packState: 'complete',
+    step: step({ requiredPackState: 'complete' }),
+  })
+  check("a step requiring 'complete' runs when pack state is complete", completeStep.run)
 }
 
 console.log('\nWHAT STOPS A PIPELINE')
@@ -359,6 +375,38 @@ console.log('\nRUNNING A PIPELINE')
   check(
     'a blocked action does not hold back one that needs nothing it is waiting for',
     run.results.map((r) => `${r.actionId}:${r.outcome}`).join(',') === 'a:blocked,b:ok',
+  )
+}
+{
+  let completeActionCalls = 0
+  const blockedRun = await runPipeline({
+    packId: PACK,
+    packState: 'annotated-replay-ready',
+    steps: [step({ id: 'terminal-action', requiredPackState: 'complete' })],
+    completedKeys: new Set(),
+    execute: async () => {
+      completeActionCalls += 1
+    },
+    clock: fastClock(),
+  })
+  check(
+    "an action configured with requiredPackState 'complete' is BLOCKED at annotated-replay-ready",
+    blockedRun.results[0]?.outcome === 'blocked' && completeActionCalls === 0,
+  )
+
+  const completeRun = await runPipeline({
+    packId: PACK,
+    packState: 'complete',
+    steps: [step({ id: 'terminal-action', requiredPackState: 'complete' })],
+    completedKeys: new Set(),
+    execute: async () => {
+      completeActionCalls += 1
+    },
+    clock: fastClock(),
+  })
+  check(
+    "an action configured with requiredPackState 'complete' executes when 'complete' is emitted",
+    completeRun.results[0]?.outcome === 'ok' && completeActionCalls === 1,
   )
 }
 
@@ -670,6 +718,37 @@ console.log('\nTHE APP ACTUALLY RUNS THE PIPELINE')
     'neither call is awaited — a pack that is already durable never waits for an action',
     session.includes("void runActionsAtState(savedHandle.dirPath")
       && session.includes("void runActionsAtState(dirPath"),
+  )
+  check(
+    'video completion waits for both the pack-wide render batch and annotated-replay-ready actions',
+    session.includes('const stopWatchingRender = onRenderStateChange((renderDir, state) => {')
+      && session.includes('if (!derivedSettled || !annotatedReadySettled || completionEmitted) return')
+      && session.includes("void runActionsAtState(dirPath, 'annotated-replay-ready', settings).then(() => {")
+      && session.includes("void runActionsAtState(dirPath, 'complete', settings)"),
+  )
+  check(
+    "replay-less captures use the pack-wide still render settlement for 'complete'",
+    session.includes('let annotatedReadySettled = !hasAnnotatedReplay')
+      && session.includes("if (renderDir !== dirPath || state === 'rendering') return")
+      && session.includes('derivedSettled = true')
+      && session.includes('startKeyframeStill('),
+  )
+
+  const renderStates: string[] = []
+  const tracker = new PackRenderBatchTracker(
+    () => () => {},
+    (_dirPath, state) => { renderStates.push(state) },
+  )
+  const finishFocused = tracker.begin('pack')
+  const finishSecondDisplay = tracker.begin('pack')
+  finishFocused?.('done')
+  check('focused render settling does not finish a multi-display pack', !renderStates.includes('done'))
+  finishSecondDisplay?.('done')
+  check('pack-wide render terminal event arrives after the last display settles', renderStates.at(-1) === 'done')
+  check(
+    "image packs transition through source-ready and emit 'complete' upon still completion",
+    session.includes("void runActionsAtState(savedHandle.dirPath, 'source-ready', settings)")
+      && session.includes("void runActionsAtState(savedHandle.dirPath, 'complete', settings)"),
   )
 
   check('settings persist the configured pipeline', settings.includes('readActionConfigs(raw.actionConfigs'))
