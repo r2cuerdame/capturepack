@@ -18,13 +18,19 @@
 // (1800x2880 @2/3 beside 3840x2160 @1:1), not a hand-built tree: hand-built
 // fixtures agree with whatever the author already believed.
 
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { spawnSync } from 'node:child_process'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { composeUiaForImageDesktop, mergeImageWindowFloor } from '../src/main/imageContext'
+import { join, resolve } from 'node:path'
+import {
+  composeUiaForImageDesktop,
+  imageWindowObservation,
+  mergeImageWindowFloor,
+} from '../src/main/imageContext'
 import { writeUiaPlugin } from '../src/main/exporter'
 import { mapUiaToSnapshot, sealUiaPayload } from '../src/main/uia'
 import type { UiaRawDump, UiaScreenAccess } from '../src/main/uia'
+import type { ContextObservation } from '../src/main/context/buffer'
 import type { UiaElementRecord, UiaPluginPayload } from '../src/shared/types'
 
 let failures = 0
@@ -64,13 +70,17 @@ const raw: UiaRawDump = {
   windows: [
     // 0: healthy Chrome, wholly on DISPLAY1.
     { hwnd: '11', title: 'YouTube', process: 'chrome.exe', class_name: 'Chrome_WidgetWin_1',
-      bounds: { x: -1788, y: 182, width: 1776, height: 1221 }, focused: true, z: 0, tree: 'collected', element_count: 0 },
+      bounds: { x: -1788, y: 182, width: 1776, height: 1221 },
+      client_bounds: { x: -1780, y: 250, width: 1760, height: 1140 },
+      focused: true, z: 0, tree: 'collected', element_count: 0 },
     // 1: Chrome on DISPLAY2 whose renderer still answers in DISPLAY1's space.
     { hwnd: '22', title: 'Dragged', process: 'chrome.exe', class_name: 'Chrome_WidgetWin_1',
       bounds: { x: 100, y: 100, width: 1500, height: 1200 }, focused: false, z: 1, tree: 'collected', element_count: 0 },
     // 2: a non-browser window, which must never be affected by any of this.
     { hwnd: '33', title: 'Explorer', process: 'explorer.exe', class_name: 'CabinetWClass',
-      bounds: { x: 2000, y: 300, width: 900, height: 700 }, focused: false, z: 2, tree: 'collected', element_count: 0 },
+      bounds: { x: 2000, y: 300, width: 900, height: 700 },
+      client_bounds: { x: 2008, y: 340, width: 884, height: 650 },
+      focused: false, z: 2, tree: 'collected', element_count: 0 },
   ] as UiaRawDump['windows'],
   elements: [
     el(0, 0, 'Window', -1788, 182, 1776, 1221, 'YouTube'),
@@ -224,6 +234,42 @@ async function main(): Promise<void> {
       yt?.bounds.width === 1184,
       JSON.stringify(yt?.bounds),
     )
+    check(
+      'the 2/3 display mapped and preserved client_bounds: 1760 -> 1173',
+      yt?.client_bounds?.width === 1173 && yt?.client_bounds?.x === 13,
+      JSON.stringify(yt?.client_bounds),
+    )
+
+    const exp = onDisk.windows.find((w) => w.title === 'Explorer')
+    check(
+      'the secondary display window gained desktop offset for bounds: 2000 -> 3200',
+      exp?.bounds.x === 3200,
+      JSON.stringify(exp?.bounds),
+    )
+    check(
+      'the secondary display window preserved and offset client_bounds: 2008 -> 3208',
+      exp?.client_bounds?.x === 3208 && exp?.client_bounds?.width === 884,
+      JSON.stringify(exp?.client_bounds),
+    )
+
+    const invalidClients = onDisk.windows.filter((w) => {
+      if (w.client_bounds === undefined) return false
+      const c = w.client_bounds
+      const f = w.bounds
+      return (
+        c.x < f.x ||
+        c.y < f.y ||
+        c.x + c.width > f.x + f.width ||
+        c.y + c.height > f.y + f.height ||
+        c.width <= 0 ||
+        c.height <= 0
+      )
+    })
+    check(
+      'every window client_bounds is inside its bounds with positive area (SPEC §11.3)',
+      invalidClients.length === 0,
+      JSON.stringify(invalidClients),
+    )
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -327,7 +373,9 @@ async function main(): Promise<void> {
       monitors: MONITORS,
       windows: [
         { hwnd: '11', title: 'YouTube', process: 'chrome.exe', class_name: 'Chrome_WidgetWin_1',
-          bounds: { x: -1788, y: 0, width: 1776, height: 1403 }, focused: true, z: 0, tree: 'collected', element_count: 0 },
+          bounds: { x: -1788, y: 0, width: 1776, height: 1403 },
+          client_bounds: { x: -1780, y: 50, width: 1760, height: 1340 },
+          focused: true, z: 0, tree: 'collected', element_count: 0 },
       ] as UiaRawDump['windows'],
       elements: [
         el(0, 0, 'Window', -1788, 0, 1776, 1403, 'YouTube'),
@@ -345,7 +393,9 @@ async function main(): Promise<void> {
       tMs: 0,
       windows: [
         { hwnd: '11', title: 'YouTube', process: 'chrome.exe', class_name: 'Chrome_WidgetWin_1',
-          bounds: { x: 8, y: 0, width: 1184, height: 935 }, focused: true, z: 0 },
+          bounds: { x: 8, y: 0, width: 1184, height: 935 },
+          client_bounds: { x: 13, y: 33, width: 1173, height: 890 },
+          focused: true, z: 0 },
       ],
       elements: [],
     }
@@ -377,6 +427,11 @@ async function main(): Promise<void> {
         `${String(assembled.windows.length)} windows`,
       )
       check(
+        'the assembled window preserves client_bounds for DOM picking',
+        assembled.windows[0]?.client_bounds?.width === 1173,
+        JSON.stringify(assembled.windows[0]?.client_bounds),
+      )
+      check(
         'and the tab beside the refused subtree survives',
         assembled.elements.some((e) => e.name === 'a tab'),
         JSON.stringify(assembled.elements.map((e) => e.name)),
@@ -389,6 +444,127 @@ async function main(): Promise<void> {
           twice?.elements.length === assembled.elements.length,
         `${String(twice?.geometry_refused)} vs ${String(assembled.geometry_refused)}`,
       )
+    }
+  }
+
+  // REGION-CROP STILL ASSEMBLY WITH CANONICAL VALIDATOR (SPEC §11.3, #217).
+  //
+  // A region crop still capture where a window is larger than the crop must write
+  // client_bounds that is clipped to the crop, strictly contained within bounds.
+  // The written pack must pass tools/validate-capturepack.mjs.
+  console.log('\nRegion crop still assembly with canonical validator')
+  {
+    const cropRegion = { x: 300, y: 150, width: 485, height: 254 }
+    const floorSource: ContextObservation = {
+      tMs: 0,
+      windows: [
+        {
+          surface_id: 'browser-crop',
+          hwnd: '888',
+          title: 'Cropped Chrome - YouTube',
+          process: 'chrome.exe',
+          class_name: 'Chrome_WidgetWin_1',
+          bounds: { x: 100, y: 100, width: 1000, height: 800 },
+          client_bounds: { x: 108, y: 150, width: 984, height: 724 },
+          display: 1,
+          focused: true,
+          z: 0,
+          hasControls: false,
+          tree: 'skipped',
+        },
+      ],
+      elements: [],
+    }
+    const cropFloor = imageWindowObservation(
+      floorSource,
+      PLACEMENTS as never,
+      cropRegion,
+    )
+    const croppedPayload = sealUiaPayload(
+      mergeImageWindowFloor(
+        null,
+        cropFloor,
+        '2026-08-01T19:30:00+09:00',
+        [],
+      ),
+    )
+    check('region crop payload assembled successfully', croppedPayload !== null)
+    if (croppedPayload !== null) {
+      const w = croppedPayload.windows[0]
+      check(
+        'cropped window bounds clipped to crop region',
+        w?.bounds.x === 0 && w?.bounds.y === 0 && w?.bounds.width === 485 && w?.bounds.height === 254,
+        JSON.stringify(w?.bounds),
+      )
+      check(
+        'cropped client_bounds clipped and contained within bounds (SPEC §11.3)',
+        w?.client_bounds !== undefined &&
+          w.client_bounds.x >= w.bounds.x &&
+          w.client_bounds.y >= w.bounds.y &&
+          w.client_bounds.x + w.client_bounds.width <= w.bounds.x + w.bounds.width &&
+          w.client_bounds.y + w.client_bounds.height <= w.bounds.y + w.bounds.height &&
+          w.client_bounds.width > 0 &&
+          w.client_bounds.height > 0,
+        JSON.stringify(w?.client_bounds),
+      )
+
+      // Write pack to temp dir and run canonical validator
+      const cropDir = await mkdtemp(join(tmpdir(), 'capturepack-crop-e2e-'))
+      try {
+        const manifest = {
+          format: 'capturepack',
+          format_version: '0.3.0',
+          id: '8a9b0c1d-2e3f-4a5b-8c7d-6e5f4a3b2c1d',
+          created_at: '2026-08-01T19:30:00+09:00',
+          generator: { name: 'capturepack-check', version: '0.5.1' },
+          environment: {
+            os: 'Windows 11',
+            screens: [{ width: 485, height: 254, scale: 1 }],
+          },
+          capture_kind: 'image',
+          media: {
+            image_scope: 'region',
+            crop_bounds: {
+              x: 300,
+              y: 150,
+              width: 485,
+              height: 254,
+              coordinate_space: 'virtual-desktop-dip',
+            },
+            snapshot: 'snapshot.png',
+            snapshot_width: 485,
+            snapshot_height: 254,
+            replay: null,
+          },
+          plugins: [
+            {
+              name: 'windows-uia',
+              version: '0.5.0',
+              path: 'plugins/windows-uia/',
+            },
+          ],
+        }
+        await writeFile(join(cropDir, 'manifest.json'), JSON.stringify(manifest, null, 2))
+        const png = Buffer.alloc(33)
+        Buffer.from('89504e470d0a1a0a', 'hex').copy(png, 0)
+        png.writeUInt32BE(13, 8)
+        png.write('IHDR', 12, 'ascii')
+        png.writeUInt32BE(485, 16)
+        png.writeUInt32BE(254, 20)
+        await writeFile(join(cropDir, 'snapshot.png'), png)
+        await writeUiaPlugin(cropDir, croppedPayload)
+
+        const validatorPath = resolve(process.cwd(), '..', 'tools', 'validate-capturepack.mjs')
+        const validation = spawnSync(process.execPath, [validatorPath, cropDir], { encoding: 'utf8' })
+        const validationOutput = `${validation.stdout ?? ''}${validation.stderr ?? ''}`
+        check(
+          'canonical validator accepts the region-crop still pack as VALID (SPEC §11.3)',
+          validation.status === 0 && validationOutput.includes('result: VALID'),
+          validationOutput.trim(),
+        )
+      } finally {
+        await rm(cropDir, { recursive: true, force: true })
+      }
     }
   }
 

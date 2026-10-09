@@ -1,6 +1,7 @@
 import { buildManifest } from '../src/main/exporter'
 import {
   reopenedContextDisplayTargets,
+  reopenedImageCropSpace,
   reopenedSnapshotPixelsPerDip,
 } from '../src/main/reopenDisplay'
 import { readFileSync } from 'node:fs'
@@ -546,9 +547,51 @@ check(
     }) === undefined,
   )
   check(
+    'snapshot density lookup treats omitted environment screens as empty',
+    reopenedSnapshotPixelsPerDip({
+      snapshotWidth: 1_920,
+      snapshotHeight: 1_080,
+      screens: undefined,
+      displays: undefined,
+    }) === undefined,
+  )
+  check(
+    'image crop-space lookup treats omitted environment screens as empty',
+    reopenedImageCropSpace(
+      1_920,
+      1_080,
+      undefined,
+      {
+        x: 0,
+        y: 0,
+        width: 1_920,
+        height: 1_080,
+        coordinate_space: 'virtual-desktop-dip',
+      },
+    ) === null,
+  )
+  const noScreensContext = reopenedContextDisplayTargets({
+    snapshotWidth: 1_920,
+    snapshotHeight: 1_080,
+    screens: undefined,
+    displays: undefined,
+    loadedDisplays: [],
+  })
+  check(
+    'reopen context falls back to the snapshot when environment screens are omitted',
+    noScreensContext.length === 1
+      && noScreensContext[0]?.index === 1
+      && noScreensContext[0]?.width === 1_920
+      && noScreensContext[0]?.height === 1_080
+      && noScreensContext[0]?.snapshotPixelsPerDip === undefined,
+    JSON.stringify(noScreensContext),
+  )
+  check(
     'reopen context uses persisted display identity instead of environment.screens[0]',
     sessionSource.includes('reopenedContextDisplayTargets({')
-      && !sessionSource.includes('manifest.environment.screens[0].scale'),
+      && !sessionSource.includes('manifest.environment.screens[0].scale')
+      && sessionSource.includes('const manifestScreens = manifest.environment?.screens')
+      && sessionSource.includes('screens: loadedScreens,'),
   )
   check(
     'degraded two-display reopen preserves the surviving focused display index',

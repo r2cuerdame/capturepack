@@ -36,6 +36,7 @@ const payload: UiaPluginPayload = {
       class_name: 'Outside',
       display: 1,
       bounds: { x: 0, y: 0, width: 1200, height: 1920 },
+      client_bounds: { x: 8, y: 30, width: 1184, height: 1880 },
       focused: false,
       z: 0,
       tree: 'collected',
@@ -49,6 +50,7 @@ const payload: UiaPluginPayload = {
       // deliberately maps the selected physical monitor as focused and then
       // normalizes it to image-local display 1.
       bounds: { x: 80, y: 40, width: 500, height: 400 },
+      client_bounds: { x: 88, y: 70, width: 484, height: 360 },
       focused: true,
       z: 1,
       tree: 'collected',
@@ -59,6 +61,7 @@ const payload: UiaPluginPayload = {
       process: 'secret',
       class_name: 'Secret',
       bounds: { x: 2000, y: 1000, width: 500, height: 400 },
+      client_bounds: { x: 2008, y: 1030, width: 484, height: 360 },
       focused: false,
       z: 2,
       tree: 'collected',
@@ -126,6 +129,17 @@ check('the surviving window is clipped and translated', cropped?.windows[0]?.bou
   width: 300,
   height: 200,
 })
+check('the surviving window translates and crops its client rectangle', cropped?.windows[0]?.client_bounds, {
+  x: 0,
+  y: 10,
+  width: 300,
+  height: 190,
+})
+check(
+  'crop covering only window frame omits client_bounds',
+  cropUiaForImage(payload, { display: 2, x: 80, y: 40, width: 200, height: 25 }, 2)?.windows[0]?.client_bounds,
+  undefined,
+)
 check('only the visible child survives', cropped?.elements.map((e) => e.name), ['visible button'])
 check('the child is crop-local and its owner is remapped', cropped?.elements[0], {
   name: 'visible button',
@@ -190,6 +204,15 @@ check(
   ],
 )
 check(
+  'desktop composition preserves and translates client rectangles across all displays',
+  desktop?.windows.map((window) => window.client_bounds),
+  [
+    { x: 8, y: 30, width: 1184, height: 1880 },
+    { x: 1288, y: 70, width: 484, height: 360 },
+    { x: 3208, y: 1030, width: 484, height: 360 },
+  ],
+)
+check(
   'flattened desktop objects no longer claim per-display coordinates',
   {
     windowDisplays: desktop?.windows.map((window) => window.display),
@@ -237,6 +260,7 @@ const seamRaw: UiaRawDump = {
     class_name: 'SeamWindow',
     // Most of the window is on the primary/right display.
     bounds: { x: -100, y: 100, width: 500, height: 500 },
+    client_bounds: { x: -92, y: 130, width: 484, height: 460 },
     focused: true,
     z: 0,
     tree: 'collected',
@@ -287,6 +311,11 @@ check(
     elementBounds: { x: 1120, y: 160, width: 60, height: 30 },
   },
 )
+check(
+  'place() transforms client_bounds into scaled snapshot space',
+  seamMapped.windows[0]?.client_bounds,
+  { x: -138, y: 195, width: 726, height: 690 },
+)
 const seamDesktop = composeUiaForImageDesktop(
   seamMapped,
   [
@@ -327,6 +356,11 @@ check(
     bounds: { x: 1120, y: 160, width: 60, height: 30 },
     window: 0,
   }],
+)
+check(
+  'desktop composition preserves clipped and offset client_bounds on seam window',
+  seamDesktop?.windows[0]?.client_bounds,
+  { x: 1200, y: 195, width: 588, height: 690 },
 )
 if (seamDesktop !== null) {
   const seamObservation: ContextObservation = {
@@ -454,16 +488,13 @@ check(
   { windows: [['100', 'Visible app', 'skipped']], elements: 0 },
 )
 
-// A CLIENT RECTANGLE IS A MEASURING STICK, SO IT IS TRANSLATED AND NEVER
-// CLIPPED (#136) — the rule ringObservations.ts already applies on the temporal
-// path, now applied here because this rectangle is WRITTEN to the pack.
+// A CLIENT RECTANGLE IN A STILL PACK MUST BE CONTAINED WITHIN BOUNDS (SPEC §11.3, #217).
 //
-// The window below is 400 px wide with a 20 px frame each side; the crop keeps
-// only its left 200 px. Clip the client rectangle to that crop and the derived
-// scale is 180/400 of the truth, so every element of the page inside it lands at
-// 45% size and shifted — inside the reader's own agreement band, so never
-// refused, just wrong. Translated, the stick keeps its length and points off the
-// left edge at a negative x, which is exactly what it means.
+// In a written still pack (windows-uia 0.5.0), SPEC §11.3 defines client_bounds as
+// the window's drawable area, and canonical validation requires client_bounds
+// to be strictly inside bounds. A region crop clips the client rectangle to the
+// crop boundaries so that it remains inside the cropped window bounds, or omits
+// it entirely if the crop does not intersect the drawable area.
 const cropSource: ContextObservation = {
   tMs: 0,
   windows: [
@@ -501,20 +532,30 @@ const cropFloor = imageWindowObservation(
   { x: 300, y: 150, width: 200, height: 400 },
 )
 check(
-  'a cropped still keeps the client rectangle at full size, in crop-local coordinates',
+  'a cropped still crops its client rectangle to satisfy SPEC §11.3 containment',
   cropFloor?.windows.map((w) => ({ bounds: w.bounds, client_bounds: w.client_bounds })),
   [{
     // The visible part of the window: clipped, because a WINDOW is a region.
     bounds: { x: 0, y: 0, width: 200, height: 250 },
-    // The drawable rectangle: whole, translated by the crop origin only.
-    client_bounds: { x: -180, y: 10, width: 360, height: 220 },
+    // The drawable rectangle: clipped to crop and contained inside bounds.
+    client_bounds: { x: 0, y: 10, width: 180, height: 220 },
   }],
+)
+const frameOnlyCropFloor = imageWindowObservation(
+  cropSource,
+  cropPlacement,
+  { x: 100, y: 100, width: 200, height: 50 },
+)
+check(
+  'crop covering only window frame omits client_bounds on floor',
+  frameOnlyCropFloor?.windows[0]?.client_bounds,
+  undefined,
 )
 const croppedPayload = mergeImageWindowFloor(null, cropFloor, '2026-07-30T11:00:00+09:00')
 check(
   'and writes that same rectangle into the payload a reader will reopen',
   croppedPayload?.windows.map((w) => w.client_bounds),
-  [{ x: -180, y: 10, width: 360, height: 220 }],
+  [{ x: 0, y: 10, width: 180, height: 220 }],
 )
 const seamSlicePayload = composeUiaForImageDesktop(
   {

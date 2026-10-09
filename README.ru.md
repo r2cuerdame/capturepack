@@ -34,7 +34,7 @@
 
 🌐 **[capturepack.dev](https://capturepack.dev)** · [Скачать](https://github.com/r2cuerdame/capturepack/releases/latest)
 
-Текущая публичная версия для Windows: **CapturePack 0.5.1**. В Истории можно
+Текущая публичная версия для Windows: **CapturePack 0.6.0**. В Истории можно
 создать проверенную **Копию для отправки** (`.share.zip`), чьи единственные
 медиафайлы — проверенные статичные PNG с аннотациями; их дополняют созданные
 README, автономный просмотрщик и минимальная опись. Исходные материалы, любые
@@ -287,10 +287,10 @@ claude mcp add --transport http capturepack http://127.0.0.1:39393/mcp
 
 Скачайте последний установщик со страницы [GitHub Releases](https://github.com/r2cuerdame/capturepack/releases/latest):
 
-1. Скачайте `CapturePack-Setup-0.5.1.exe` и `SHA256SUMS.txt`.
+1. Скачайте `CapturePack-Setup-0.6.0.exe` и `SHA256SUMS.txt`.
 2. Проверьте контрольную сумму в PowerShell:
    ```powershell
-   Get-FileHash CapturePack-Setup-0.5.1.exe -Algorithm SHA256
+   Get-FileHash CapturePack-Setup-0.6.0.exe -Algorithm SHA256
    ```
 3. Запустите установщик. Поскольку заявка на сертификат подписи кода открытого ПО находится на рассмотрении, Windows SmartScreen покажет предупреждение: нажмите **Подробнее** → **Выполнить в любом случае**.
 
@@ -318,7 +318,7 @@ npm run qa:rc
 
 ## Статус
 
-**0.5.1 — текущая публичная сборка для Windows.** CapturePack остаётся проектом
+**0.6.0 — текущая публичная сборка для Windows.** CapturePack остаётся проектом
 на ранней стадии, поэтому сохраняйте исходный пакет, когда сообщаете о проблеме,
 и смотрите [GOAL.md](GOAL.md) — там продуктовый замысел — и
 [ROADMAP.md](ROADMAP.md) — там планы на будущее.
@@ -341,7 +341,7 @@ CapturePack записывает неоднозначные временные �
   — доступ к сохранённым пакетам только на чтение и интеграция поставщиков
   контекста.
 
-CapturePack `0.5.1` — это версия приложения. `format_version` пакета развивается
+CapturePack `0.6.0` — это версия приложения. `format_version` пакета развивается
 независимо, через дополняющие изменения формата; читатели должны опираться на
 [SPEC.md](SPEC.md), а не выводить поддержку формата из версии приложения.
 

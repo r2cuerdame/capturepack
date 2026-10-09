@@ -31,20 +31,20 @@ A CapturePack should contain enough information that another human or any LLM ca
 
 ---
 
-## Active release target — stable 0.5.1
+## Active release target — stable 0.6.0
 
 The long sections below preserve design history and measurements, including
 older stable and pre-release identifiers. They do not change the active target:
-the next public release is **stable `v0.5.1`**, not an RC, draft, or historical
+the next public release is **stable `v0.6.0`**, not an RC, draft, or historical
 0.2/0.3 milestone. This section remains the governing product truth. Stable
-0.5.1 preserves the default 0.5.0 shipping recorder behavior and may publish
+0.6.0 preserves the default 0.5.0 shipping recorder behavior and may publish
 only after the existing complete `qa:rc`, privacy isolation, updater artifact,
 release-contract, and live site integration gates pass without weakening them.
 The native Windows DXGI replay implementation is an explicit opt-in experimental
 candidate for a later release. Its retained-duration, cadence, past-context,
 backend-ownership, lifecycle, and resource field acceptance remains required
 before that implementation can become a default or a release claim, but it is
-not a 0.5.1 publication gate.
+not a 0.6.0 publication gate.
 
 - Live recording is on by default, holds 30 seconds by default, is configurable
   from 1–60 seconds at 5–30 fps, and records nothing when switched off.

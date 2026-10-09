@@ -491,6 +491,86 @@ try {
   check('skills existing as a non-directory is rejected with skills_directory_missing',
     notDirSkills.findings.some((f) => f.code === 'skills_directory_missing'))
 
+  // Issue #226: inspectPack allows omitting optional annotations.json, timeline.json, and optional box properties
+  const omittedTimelinePack = makePack('omitted-timeline')
+  rmSync(join(omittedTimelinePack, 'timeline.json'), { force: true })
+  const omittedTimeline = inspectPack(omittedTimelinePack, { strict: true })
+  check('omitting optional timeline.json does not emit required_file_missing',
+    !omittedTimeline.findings.some((f) => f.code === 'required_file_missing' && f.message.includes('timeline.json')))
+  check('video pack omitting optional timeline.json passes strict inspection',
+    omittedTimeline.gate_status === 'passed' && omittedTimeline.counts.errors === 0)
+
+  const omittedAnnotationsPack = makePack('omitted-annotations')
+  rmSync(join(omittedAnnotationsPack, 'annotations.json'), { force: true })
+  const omittedAnnotations = inspectPack(omittedAnnotationsPack, { strict: true })
+  check('omitting optional annotations.json does not emit required_file_missing',
+    !omittedAnnotations.findings.some((f) => f.code === 'required_file_missing' && f.message.includes('annotations.json')))
+  check('pack omitting optional annotations.json passes strict inspection',
+    omittedAnnotations.gate_status === 'passed' && omittedAnnotations.counts.errors === 0)
+  check('pack omitting optional annotations.json records zero annotations',
+    omittedAnnotations.metrics.annotation_count === 0)
+
+  const unannotatedNoTimelinePack = makePack('unannotated-no-timeline')
+  rmSync(join(unannotatedNoTimelinePack, 'annotations.json'), { force: true })
+  rmSync(join(unannotatedNoTimelinePack, 'timeline.json'), { force: true })
+  const unannotatedNoTimeline = inspectPack(unannotatedNoTimelinePack, { strict: true })
+  check('pack omitting both annotations.json and timeline.json emits no required_file_missing',
+    !unannotatedNoTimeline.findings.some((f) => f.code === 'required_file_missing'))
+  check('pack omitting both annotations.json and timeline.json passes strict inspection',
+    unannotatedNoTimeline.gate_status === 'passed' && unannotatedNoTimeline.counts.errors === 0)
+
+  const minimalBoxPack = makePack('minimal-box')
+  writeJson(join(minimalBoxPack, 'annotations.json'), {
+    reference_width: 1_000,
+    reference_height: 800,
+    annotations: [{
+      annotation_id: 'ann_min001',
+      type: 'box',
+      bounds: { x: 10, y: 10, width: 50, height: 20 },
+    }],
+  })
+  const minimalBox = inspectPack(minimalBoxPack, { strict: true })
+  check('box omitting optional properties (text, numbered, blur, z, created_at, tracking) passes strict inspection',
+    minimalBox.gate_status === 'passed' && minimalBox.counts.errors === 0)
+  check('minimal box annotation does not emit schema errors for omitted optional properties',
+    !minimalBox.findings.some((f) => [
+      'annotation_text_invalid',
+      'annotation_flags_invalid',
+      'annotation_z_invalid',
+      'annotation_created_at_invalid',
+      'annotation_tracking_missing',
+    ].includes(f.code)))
+
+  const malformedBoxPack = makePack('malformed-box')
+  writeJson(join(malformedBoxPack, 'annotations.json'), {
+    reference_width: 1_000,
+    reference_height: 800,
+    annotations: [{
+      annotation_id: 'ann_bad001',
+      type: 'box',
+      bounds: { x: 10, y: 10, width: 50, height: 20 },
+      text: 12345,
+      numbered: 'yes',
+      blur: 'no',
+      z: 'high',
+      created_at: 'not-a-valid-timestamp',
+      tracking: 'invalid-tracking-not-object',
+    }],
+  })
+  const malformedBox = inspectPack(malformedBoxPack, { strict: true })
+  check('malformed present text is rejected with annotation_text_invalid',
+    malformedBox.findings.some((f) => f.code === 'annotation_text_invalid'))
+  check('malformed present flags are rejected with annotation_flags_invalid',
+    malformedBox.findings.some((f) => f.code === 'annotation_flags_invalid'))
+  check('malformed present z is rejected with annotation_z_invalid',
+    malformedBox.findings.some((f) => f.code === 'annotation_z_invalid'))
+  check('malformed present created_at is rejected with annotation_created_at_invalid',
+    malformedBox.findings.some((f) => f.code === 'annotation_created_at_invalid'))
+  check('malformed present tracking is rejected with annotation_tracking_missing',
+    malformedBox.findings.some((f) => f.code === 'annotation_tracking_missing'))
+  check('pack with malformed present annotation properties fails strict gate',
+    malformedBox.gate_status === 'failed')
+
   const missing = inspectPack(join(temporaryRoot, 'does-not-exist'))
   check('an explicitly supplied missing pack is a configuration failure', missing.configuration_error === true)
   check('a missing configured pack always fails the gate', missing.gate_status === 'failed')

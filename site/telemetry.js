@@ -4,7 +4,7 @@
 
   var ENDPOINT = 'https://pulse-api.purpleshiphub.workers.dev/api/v1/ping'
   var PROJECT_ID = 'pp_capturepack_6bede657'
-  var SITE_VERSION = '0.5.1'
+  var SITE_VERSION = '0.6.0'
   var INSTALL_KEY = 'capturepack_purplepulse_install_id'
   var DAY_KEY = 'capturepack_purplepulse_day'
   var TIMEOUT_MS = 2500

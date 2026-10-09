@@ -219,7 +219,7 @@ export function displayFramesDir(index: number): string {
   return `frames-d${index}`
 }
 
-/** The annotated replay of one non-focused display: `replay_annotated-d<index>.webm`. */
-export function displayAnnotatedName(index: number): string {
-  return `replay_annotated-d${index}.webm`
+/** The annotated replay of one non-focused display, matching its replay container. */
+export function displayAnnotatedName(index: number, replayFile = 'replay.webm'): string {
+  return `replay_annotated-d${index}.${replayFile.endsWith('.mp4') ? 'mp4' : 'webm'}`
 }

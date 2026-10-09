@@ -158,6 +158,43 @@ export interface ActionResult {
 }
 
 /**
+ * Merges newly produced action results into existing recorded results.
+ *
+ * Rules:
+ * - Newly produced results update or append entries by configId.
+ * - CRITICAL: A non-run result (outcome 'skipped' or 'blocked' with attempts === 0,
+ *   such as 'already completed for this pack' or 'disabled') must NEVER replace an
+ *   existing terminal outcome ('ok', 'failed', 'timed-out') for the same configId.
+ *   This ensures that re-running the pipeline at later pack states (e.g. annotated-replay-ready)
+ *   does not overwrite an action that already succeeded or reached terminal failure.
+ */
+export function mergeActionResults(
+  existing: readonly ActionResult[],
+  incoming: readonly ActionResult[],
+): ActionResult[] {
+  const merged = [...existing]
+  for (const result of incoming) {
+    const idx = merged.findIndex((item) => item.configId === result.configId)
+    if (idx >= 0) {
+      const current = merged[idx]
+      if (current !== undefined) {
+        const currentTerminal =
+          current.outcome === 'ok' || current.outcome === 'failed' || current.outcome === 'timed-out'
+        const incomingNonRun =
+          (result.outcome === 'skipped' || result.outcome === 'blocked') && result.attempts === 0
+        if (currentTerminal && incomingNonRun) {
+          continue
+        }
+      }
+      merged[idx] = result
+    } else {
+      merged.push(result)
+    }
+  }
+  return merged
+}
+
+/**
  * pack id + action id + config id — GOAL.md's idempotency key, verbatim.
  *
  * The pack id is the manifest's UUID rather than the folder name: a pack that

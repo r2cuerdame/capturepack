@@ -15,13 +15,27 @@ import {
   declaredDisplayIndices,
   focusedDisplayIndex,
 } from '../../shared/types'
-import { captureMediaForMcp, type McpCaptureMedia } from '../../shared/captureMedia'
+import {
+  captureMediaForMcp,
+  captureReplayForDisplay,
+  type McpCaptureMedia,
+} from '../../shared/captureMedia'
 import { computeDisplayNumbers } from '../../shared/numbering'
+import { parseUiaPayload } from '../uia'
 import { errorMessage, type PackHandle, type PackStore } from './store'
 
 const MAX_HITS_PER_GROUP = 100
 const MAX_JSON_MATCHES = 100
+// capturepack_dom inlines JSON into the response and must stay small. Search parses
+// one file at a time and returns only capped matches, so it can safely inspect the
+// multi-megabyte DOM/UIA payloads produced by real captures.
 const MAX_PLUGIN_FILE_CHARS = 100_000
+const MAX_PLUGIN_SEARCH_FILE_CHARS = 20_000_000
+// A multi-minute video capture holds tens of thousands of timeline events. The
+// Markdown export is a single text response, so an uncapped dump overflows the
+// reader's context before it reaches the plugin section. capturepack_timeline
+// stays the unbounded, range-filterable reader.
+const MAX_TIMELINE_EXPORT_EVENTS = 100
 
 export interface ToolOptions {
   logRequests: boolean
@@ -269,13 +283,13 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
       title: 'Event timeline',
       description:
         'Machine-readable timeline events of a VIDEO CapturePack (capture trigger, annotations added, ' +
-        'plugin events, export). Each event has t_ms (milliseconds since capture start t0), type, ' +
-        'source, and optional data. Optionally slice by from_ms/to_ms. Explicit still-image packs ' +
-        'intentionally have no timeline and return an explanatory empty result.',
+        'plugin events, export). Each event has t_ms (millisecond offset relative to t0; may be negative ' +
+        'for events preceding t0), type, source, and optional data. Optionally slice by from_ms/to_ms. ' +
+        'Explicit still-image packs and video packs omitting timeline.json return an explanatory empty result.',
       inputSchema: {
         ...idArg,
-        from_ms: z.number().min(0).optional().describe('Only events with t_ms >= from_ms.'),
-        to_ms: z.number().min(0).optional().describe('Only events with t_ms <= to_ms.'),
+        from_ms: z.number().optional().describe('Only events with t_ms >= from_ms (may be negative for events preceding t0).'),
+        to_ms: z.number().optional().describe('Only events with t_ms <= to_ms (may be negative for events preceding t0).'),
       },
     },
     (args) =>
@@ -293,7 +307,19 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
                 'This is a still-image CapturePack. timeline.json is intentionally absent; read snapshot.png, annotations and plugin context.',
             })
           }
-          return errorResult(`timeline.json missing or malformed in video pack "${pack.id}"`)
+          const raw = typeof pack.readText === 'function' ? pack.readText('timeline.json') : null
+          if (raw !== null) {
+            return errorResult(`timeline.json malformed in video pack "${pack.id}"`)
+          }
+          return jsonResult({
+            pack: pack.id,
+            capture_kind: captureMedia.capture_kind,
+            available: false,
+            total_events: 0,
+            returned: 0,
+            events: [],
+            message: 'timeline.json is absent; this pack contains no timeline events.',
+          })
         }
         const all = Array.isArray(timeline.events) ? timeline.events : []
         const events = all.filter(
@@ -333,7 +359,21 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
       run('capturepack_annotations', args, () => {
         const pack = store.resolve(args.id)
         const file = pack.annotations()
-        if (!file) return errorResult(`annotations.json missing or malformed in pack "${pack.id}"`)
+        if (!file) {
+          const raw = typeof pack.readText === 'function' ? pack.readText('annotations.json') : null
+          if (raw === null) {
+            return jsonResult({
+              pack: pack.id,
+              reference_width: null,
+              reference_height: null,
+              count: 0,
+              annotations: [],
+              available: false,
+              message: 'annotations.json is absent; this pack contains no annotations.',
+            })
+          }
+          return errorResult(`annotations.json malformed in pack "${pack.id}"`)
+        }
         const list = Array.isArray(file.annotations) ? file.annotations : []
         return jsonResult({
           pack: pack.id,
@@ -380,15 +420,22 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
     {
       title: 'Frame at a time',
       description:
-        'A frame of the capture as a PNG image. Pass time_s (seconds on the replay timeline) for ' +
-        'the moment you want. When the pack has ANNOTATED KEYFRAMES (manifest.media.keyframes — ' +
+        'A frame of the capture as a PNG image. Pass display (the 1-based manifest display index; ' +
+        'default: focused display) to inspect a particular screen, and time_s (seconds on the replay ' +
+        'timeline) for the moment you want. When that display has ANNOTATED KEYFRAMES — ' +
         'stills rendered at every annotation state change, with blur, borders, number badges and ' +
-        'text drawn in), the NEAREST keyframe to time_s is returned; the response lists every ' +
-        'keyframe time so you can walk the story image by image. Without keyframes — and whenever ' +
-        'time_s is omitted — the exported snapshot.png is returned, with a note stating its frame ' +
-        'time. Frames at arbitrary replay times are never decoded out of the video.',
+        'text drawn in — the NEAREST keyframe to time_s is returned; the response lists every ' +
+        'keyframe time for that display so you can walk the story image by image. Without keyframes — ' +
+        'and whenever time_s is omitted — the selected display snapshot is returned, with a note ' +
+        'stating its frame time. Frames at arbitrary replay times are never decoded out of the video.',
       inputSchema: {
         ...idArg,
+        display: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe('1-based manifest.media.displays[].index (default: focused display).'),
         time_s: z.number().min(0).optional().describe('Requested time in seconds on the replay timeline.'),
       },
     },
@@ -397,7 +444,11 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
         const pack = store.resolve(args.id)
         const manifest = pack.manifest()
         const captureMedia = captureMediaForMcp(manifest)
-        const keyframes = keyframeList(manifest)
+        const display = frameDisplay(manifest, captureMedia, args.display)
+        if (display === null) {
+          return errorResult(`Display ${args.display} is not declared in pack "${pack.id}"`)
+        }
+        const keyframes = keyframeList(manifest, display.index)
         const times = keyframes.map((k) => `${(k.t_ms / 1000).toFixed(3)}s`).join(', ')
 
         // Annotated keyframes (SPEC §5.7) answer "what did it look like at t"
@@ -422,10 +473,11 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
                 {
                   type: 'text',
                   text:
-                    `Annotated keyframe ${n}/${keyframes.length} (${best.file}) at ` +
+                    `Display ${display.index} annotated keyframe ${n}/${keyframes.length} (${best.file}) at ` +
                     `${(best.t_ms / 1000).toFixed(3)}s — the nearest state change to the requested ` +
                     `${args.time_s}s. Annotations (blur, borders, numbers, text) are rendered into ` +
-                    `this image; snapshot.png is never annotated. Keyframe times: ${times}.` +
+                    `this image; ${display.snapshot} is never annotated. Keyframe times for display ` +
+                    `${display.index}: ${times}.` +
                     imageBoundary,
                 },
               ],
@@ -433,9 +485,9 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
           }
         }
 
-        // The current format has exactly one source image name. In particular,
-        // never probe for a "context-full" sibling of a region capture.
-        const snapshotFile = captureMedia.snapshot.file
+        // Read only the snapshot declared for the selected display. In
+        // particular, never probe for a "context-full" sibling of a region capture.
+        const snapshotFile = display.snapshot
         const png = pack.readBinary(snapshotFile)
         if (!png) return errorResult(`${snapshotFile} not found in pack "${pack.id}"`)
         const snapT = manifest?.media?.snapshot_t_ms
@@ -443,13 +495,15 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
         const keyframeNote =
           keyframes.length === 0
             ? ' This pack has no annotated keyframes (they render in the background after save), so ' +
-              'no frame is available at other times.'
+              `no frame is available at other times on display ${display.index}.`
             : ` This pack has ${keyframes.length} annotated keyframe(s) at ${times} — pass time_s to get ` +
-              'the nearest one, with the annotations rendered in.'
+              `the nearest one for display ${display.index}, with the annotations rendered in.`
         const note =
           args.time_s === undefined
-            ? `${snapshotDescription(captureMedia)}. Frame time: ${snapDesc} (original pixels, no annotations).${keyframeNote}`
-            : `Requested ${args.time_s}s; returned the exported snapshot frame, which is from ${snapDesc}.` +
+            ? `${snapshotDescription(captureMedia)}. Display ${display.index} snapshot ${snapshotFile}. ` +
+              `Frame time: ${snapDesc} (original pixels, no annotations).${keyframeNote}`
+            : `Requested ${args.time_s}s; returned display ${display.index} snapshot ${snapshotFile}, ` +
+              `which is from ${snapDesc}.` +
               keyframeNote
         return {
           content: [
@@ -465,30 +519,49 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
     {
       title: 'Replay metadata',
       description:
-        'Metadata about the screen replay video of a CapturePack: filename, duration_ms and ' +
-        'size_bytes. Never returns raw video bytes. Screenshot-only packs have no replay.',
-      inputSchema: idArg,
+        'Metadata about one display\'s screen replay video: filename, duration_ms and size_bytes. ' +
+        'Pass display (the 1-based manifest display index; default: focused display) to inspect a ' +
+        'particular screen. Never returns raw video bytes. Screenshot-only packs have no replay.',
+      inputSchema: {
+        ...idArg,
+        display: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe('1-based manifest.media.displays[].index (default: focused display).'),
+      },
     },
     (args) =>
       run('capturepack_replay', args, () => {
         const pack = store.resolve(args.id)
         const manifest = pack.manifest()
         const captureMedia = captureMediaForMcp(manifest)
-        const replay = captureMedia.replay
+        const selected = captureReplayForDisplay(manifest, args.display)
+        if (selected === null) {
+          return errorResult(`Display ${args.display} is not declared in pack "${pack.id}"`)
+        }
+        const replay = selected.replay
+        const displayContext = {
+          display_index: selected.display_index,
+          ...(selected.multi_display ? { focused: selected.focused } : {}),
+        }
         if (replay === null) {
           return jsonResult({
             pack: pack.id,
             capture_kind: captureMedia.capture_kind,
+            ...displayContext,
             replay: null,
             message:
               captureMedia.capture_kind === 'image'
                 ? 'Image capture: this user-created pack has no replay video.'
-                : 'No valid replay is declared by this pack.',
+                : `No valid replay is declared for display ${selected.display_index}.`,
           })
         }
         return jsonResult({
           pack: pack.id,
           capture_kind: captureMedia.capture_kind,
+          ...displayContext,
           replay: {
             filename: replay.filename,
             duration_ms: replay.duration_ms,
@@ -558,18 +631,21 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
       run('capturepack_find_dom', args, () => {
         const pack = store.resolve(args.id)
         const kw = args.selector.toLowerCase()
-        const matches: Array<{ plugin: string; file: string; json_path: string; value: string }> = []
-        for (const plugin of pluginJsonContents(pack)) {
-          for (const file of plugin.files) {
-            if (file.json === undefined) continue
-            for (const hit of findStrings(file.json, (s) => s.toLowerCase().includes(kw), MAX_JSON_MATCHES - matches.length)) {
-              matches.push({ plugin: plugin.name, file: file.file, json_path: hit.path, value: cap(hit.value, 300) })
-            }
-            if (matches.length >= MAX_JSON_MATCHES) break
-          }
-        }
-        const message = matches.length === 0 ? 'No matches. This pack may have no DOM/plugin metadata — check capturepack_dom.' : undefined
-        return jsonResult({ pack: pack.id, selector: args.selector, count: matches.length, matches, ...(message ? { message } : {}) })
+        const search = pluginJsonSearch(pack, (s) => s.toLowerCase().includes(kw), MAX_JSON_MATCHES)
+        const message = search.matches.length === 0
+          ? search.warnings.length > 0
+            ? 'No matches in searchable DOM/plugin metadata. Some plugin files could not be searched — see warnings.'
+            : 'No matches. This pack may have no DOM/plugin metadata — check capturepack_dom.'
+          : undefined
+        return jsonResult({
+          pack: pack.id,
+          selector: args.selector,
+          count: search.matches.length,
+          matches: search.matches,
+          ...(search.warnings.length > 0 ? { warnings: search.warnings } : {}),
+          ...(search.truncated ? { matches_truncated: true } : {}),
+          ...(message ? { message } : {}),
+        })
       }),
   )
 
@@ -597,12 +673,12 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
         const timeline = pack.timeline()
         const all = Array.isArray(timeline?.events) ? timeline.events : []
         const events = all.filter((e) => /window|focus/i.test(`${e.type} ${e.source}`))
-        const plugins = pluginJsonContents(pack).filter((p) => /window/i.test(p.name))
-        const empty = events.length === 0 && plugins.length === 0
+        const windows = parseUiaPayload(pack.readText('plugins/windows-uia/elements.json'))?.windows ?? []
+        const empty = events.length === 0 && windows.length === 0
         return jsonResult({
           pack: pack.id,
+          windows,
           window_events: events,
-          window_plugins: plugins,
           ...(empty ? { message: 'No window-tracking data in this pack (no window/focus timeline events and no window plugin metadata).' } : {}),
         })
       }),
@@ -631,7 +707,10 @@ export function registerTools(server: McpServer, store: PackStore, options: Tool
       description:
         'A single self-contained Markdown document for a CapturePack: report.md followed by an ' +
         'annotations table (with computed display numbers and lifetimes), the plugin inventory, ' +
-        'and—for video packs only—the timeline. Returns the Markdown as text; writes no files.',
+        'and—for video packs only—the timeline. The timeline section lists at most ' +
+        `${MAX_TIMELINE_EXPORT_EVENTS} events and then says how many were omitted; use ` +
+        'capturepack_timeline for the full, time-filterable event log. Returns the Markdown as ' +
+        'text; writes no files.',
       inputSchema: idArg,
     },
     (args) => run('capturepack_export_markdown', args, () => textResult(exportMarkdown(store.resolve(args.id)))),
@@ -727,13 +806,23 @@ function summarize(pack: PackHandle): Record<string, unknown> {
   if (typeof media?.snapshot_t_ms === 'number') summary.snapshot_t_ms = media.snapshot_t_ms
   // Annotated keyframes (SPEC §5.7): announce them here so a session that only
   // calls latest()/summary() knows images of every annotation state exist and
-  // can fetch them with capturepack_frame(time_s).
-  const keyframes = keyframeList(manifest)
-  if (keyframes.length > 0) {
+  // can fetch them with capturepack_frame(display, time_s).
+  const keyframeDisplays = keyframesByDisplay(manifest)
+  const keyframeCount = keyframeDisplays.reduce((total, entry) => total + entry.keyframes.length, 0)
+  if (keyframeCount > 0) {
     summary.keyframes = {
-      count: keyframes.length,
-      t_ms: keyframes.map((k) => k.t_ms),
-      note: 'Annotated stills, one per annotation state change — capturepack_frame(time_s) returns the nearest one.',
+      count: keyframeCount,
+      t_ms: keyframeDisplays
+        .flatMap((entry) => entry.keyframes.map((k) => k.t_ms))
+        .sort((a, b) => a - b),
+      displays: keyframeDisplays.map((entry) => ({
+        display: entry.display,
+        count: entry.keyframes.length,
+        t_ms: entry.keyframes.map((k) => k.t_ms),
+      })),
+      note:
+        'Annotated stills, one per annotation state change — ' +
+        'capturepack_frame(display, time_s) returns the nearest one for that display.',
     }
   }
   const warnings = pack.warnings()
@@ -742,12 +831,23 @@ function summarize(pack: PackHandle): Record<string, unknown> {
 }
 
 /**
- * manifest.media.keyframes, entry-validated and ordered by t_ms (SPEC §5.7).
+ * The requested display's keyframes, entry-validated and ordered by t_ms
+ * (SPEC §5.6, §5.7). The focused display uses media.keyframes; every other
+ * display uses its media.displays[] entry.
  * External packs are hand-writable, so nothing here trusts the declaration's
  * shape — a malformed entry is skipped, never thrown on.
  */
-function keyframeList(manifest: Manifest | null): ManifestKeyframe[] {
-  const raw: unknown = manifest?.media?.keyframes
+function keyframeList(manifest: Manifest | null, displayIndex?: number): ManifestKeyframe[] {
+  const displays = manifest?.media?.displays
+  const focused = focusedDisplayIndex(displays)
+  const selected = displayIndex ?? focused
+  const raw: unknown =
+    selected === focused
+      ? manifest?.media?.keyframes
+      : displays?.find(
+          (display) =>
+            display !== null && typeof display === 'object' && display.index === selected,
+        )?.keyframes
   if (!Array.isArray(raw)) return []
   const frames: ManifestKeyframe[] = []
   for (const item of raw as unknown[]) {
@@ -755,7 +855,7 @@ function keyframeList(manifest: Manifest | null): ManifestKeyframe[] {
     const k = item as Partial<ManifestKeyframe>
     if (
       typeof k.file !== 'string' ||
-      !/^frames\/frame-[0-9]{2,}_[0-9]{2,}-[0-9]{2}\.[0-9]{3}\.png$/.test(k.file) ||
+      !/^frames(?:-d[1-9][0-9]*)?\/frame-[0-9]{2,}_[0-9]{2,}-[0-9]{2}\.[0-9]{3}\.png$/.test(k.file) ||
       typeof k.t_ms !== 'number' ||
       !Number.isInteger(k.t_ms) ||
       k.t_ms < 0
@@ -765,6 +865,49 @@ function keyframeList(manifest: Manifest | null): ManifestKeyframe[] {
     frames.push({ file: k.file, t_ms: k.t_ms })
   }
   return frames.sort((a, b) => a.t_ms - b.t_ms)
+}
+
+function keyframesByDisplay(
+  manifest: Manifest | null,
+): Array<{ display: number; keyframes: ManifestKeyframe[] }> {
+  const displays = manifest?.media?.displays
+  const focused = focusedDisplayIndex(displays)
+  const indices = [focused]
+  if (Array.isArray(displays)) {
+    for (const display of displays) {
+      if (
+        display !== null &&
+        typeof display === 'object' &&
+        Number.isInteger(display.index) &&
+        display.index > 0 &&
+        !indices.includes(display.index)
+      ) {
+        indices.push(display.index)
+      }
+    }
+  }
+  return indices
+    .map((display) => ({ display, keyframes: keyframeList(manifest, display) }))
+    .filter((entry) => entry.keyframes.length > 0)
+}
+
+function frameDisplay(
+  manifest: Manifest | null,
+  captureMedia: McpCaptureMedia,
+  requested?: number,
+): { index: number; snapshot: string } | null {
+  const displays = manifest?.media?.displays
+  const focused = focusedDisplayIndex(displays)
+  const index = requested ?? focused
+  if (index === focused) return { index, snapshot: captureMedia.snapshot.file }
+  if (!Array.isArray(displays)) return null
+  const display = displays.find(
+    (candidate) =>
+      candidate !== null && typeof candidate === 'object' && candidate.index === index,
+  )
+  return typeof display?.snapshot === 'string'
+    ? { index, snapshot: display.snapshot }
+    : null
 }
 
 function annotationList(pack: PackHandle): Annotation[] {
@@ -869,6 +1012,25 @@ interface PluginJsonContents {
   files: PluginJsonFile[]
 }
 
+interface PluginJsonSearchMatch {
+  plugin: string
+  file: string
+  json_path: string
+  value: string
+}
+
+interface PluginJsonSearchWarning {
+  plugin: string
+  file: string
+  error: string
+}
+
+interface PluginJsonSearchResult {
+  matches: PluginJsonSearchMatch[]
+  warnings: PluginJsonSearchWarning[]
+  truncated: boolean
+}
+
 function pluginJsonContents(pack: PackHandle): PluginJsonContents[] {
   return pack.plugins().map((plugin) => ({
     name: plugin.name,
@@ -885,6 +1047,58 @@ function pluginJsonContents(pack: PackHandle): PluginJsonContents[] {
       }
     }),
   }))
+}
+
+function pluginJsonSearch(
+  pack: PackHandle,
+  predicate: (value: string) => boolean,
+  budget: number,
+): PluginJsonSearchResult {
+  const matches: PluginJsonSearchMatch[] = []
+  const warnings: PluginJsonSearchWarning[] = []
+  let truncated = false
+
+  outer: for (const plugin of pack.plugins()) {
+    for (const file of plugin.files) {
+      if (!file.toLowerCase().endsWith('.json')) continue
+      if (matches.length >= budget) {
+        truncated = true
+        break outer
+      }
+
+      const text = pack.readText(file)
+      if (text === null) {
+        warnings.push({ plugin: plugin.name, file, error: 'unreadable' })
+        continue
+      }
+      if (text.length > MAX_PLUGIN_SEARCH_FILE_CHARS) {
+        warnings.push({
+          plugin: plugin.name,
+          file,
+          error: `file too large to search (${text.length} chars; limit ${MAX_PLUGIN_SEARCH_FILE_CHARS})`,
+        })
+        continue
+      }
+
+      let json: unknown
+      try {
+        json = JSON.parse(text) as unknown
+      } catch (err) {
+        warnings.push({ plugin: plugin.name, file, error: `invalid JSON: ${errorMessage(err)}` })
+        continue
+      }
+
+      const remaining = budget - matches.length
+      const hits = findStrings(json, predicate, remaining + 1)
+      if (hits.length > remaining) truncated = true
+      for (const hit of hits.slice(0, remaining)) {
+        matches.push({ plugin: plugin.name, file, json_path: hit.path, value: cap(hit.value, 300) })
+      }
+      if (truncated) break outer
+    }
+  }
+
+  return { matches, warnings, truncated }
 }
 
 function searchPack(pack: PackHandle, keyword: string): Record<string, unknown> {
@@ -918,16 +1132,8 @@ function searchPack(pack: PackHandle, keyword: string): Record<string, unknown> 
     }
   }
 
-  const pluginHits: Array<{ plugin: string; file: string; json_path: string; value: string }> = []
-  outer: for (const plugin of pluginJsonContents(pack)) {
-    for (const file of plugin.files) {
-      if (pluginHits.length >= MAX_JSON_MATCHES) break outer
-      if (file.json === undefined) continue
-      for (const hit of findStrings(file.json, (s) => s.toLowerCase().includes(kw), MAX_JSON_MATCHES - pluginHits.length)) {
-        pluginHits.push({ plugin: plugin.name, file: file.file, json_path: hit.path, value: cap(hit.value, 300) })
-      }
-    }
-  }
+  const pluginSearch = pluginJsonSearch(pack, (s) => s.toLowerCase().includes(kw), MAX_JSON_MATCHES)
+  const pluginHits = pluginSearch.matches
 
   const total = manifestHits.length + reportHits.length + annotationHits.length + timelineHits.length + pluginHits.length
   return {
@@ -942,7 +1148,15 @@ function searchPack(pack: PackHandle, keyword: string): Record<string, unknown> 
       plugins: pluginHits,
     },
     ...(allAnnotationHits.length > annotationHits.length ? { annotations_truncated: true } : {}),
-    ...(total === 0 ? { message: `No hits for "${keyword}" anywhere in this pack.` } : {}),
+    ...(pluginSearch.warnings.length > 0 ? { plugin_warnings: pluginSearch.warnings } : {}),
+    ...(pluginSearch.truncated ? { plugins_truncated: true } : {}),
+    ...(total === 0
+      ? {
+          message: pluginSearch.warnings.length > 0
+            ? `No hits for "${keyword}" in searchable pack data. Some plugin files could not be searched — see plugin_warnings.`
+            : `No hits for "${keyword}" anywhere in this pack.`,
+        }
+      : {}),
   }
 }
 
@@ -989,8 +1203,16 @@ function exportMarkdown(pack: PackHandle): string {
     const events = Array.isArray(timeline?.events) ? timeline.events : []
     lines.push('', `## Timeline (${events.length} events${timeline?.t0 ? `, t0 = ${timeline.t0}` : ''})`, '')
     if (events.length === 0) lines.push('No timeline events.')
-    for (const e of events) {
+    for (const e of events.slice(0, MAX_TIMELINE_EXPORT_EVENTS)) {
       lines.push(`- ${e.t_ms} ms — \`${e.type}\` (${e.source})${e.data !== undefined ? ' ' + cap(JSON.stringify(e.data), 200) : ''}`)
+    }
+    // Say what was dropped and where the rest lives: a silently short list reads
+    // as a short capture, which is the one thing the reader must not conclude.
+    if (events.length > MAX_TIMELINE_EXPORT_EVENTS) {
+      lines.push(
+        `- … and ${events.length - MAX_TIMELINE_EXPORT_EVENTS} more timeline events ` +
+          '(use capturepack_timeline to inspect full event log or filter by time range).',
+      )
     }
   }
 

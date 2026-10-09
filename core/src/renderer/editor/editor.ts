@@ -1541,7 +1541,6 @@ function dragDraft(d: {
     blur: false,
     tracking: { enabled: false },
     style: { color: MANUAL_BOX_COLOR },
-    created_at: '',
     z: Number.MAX_SAFE_INTEGER,
   }
 }
@@ -1659,7 +1658,7 @@ function beginPendingBox(
   syncLanes()
   // A pre-filled description opens SELECTED: keeping it is one Enter, replacing
   // it is just typing.
-  openTextEditor(on, draft.bounds, draft.text, draft.text !== '')
+  openTextEditor(on, draft.bounds, draft.text ?? '', (draft.text ?? '') !== '')
   // GOAL "Unified Annotation Box" — the header appears WITH the description
   // input: [#] [1.0s] [Blur] [×] are placed over the pending rect now, not
   // after a commit + re-select, so number/duration/blur can be set while
@@ -1700,7 +1699,7 @@ function selectBox(id: string, on?: BoardDisplay): void {
   textSession = { kind: 'edit', id }
   // The bounds OBJECT, not a copy: a move/resize mutates it in place and
   // positionTextEditor re-reads it, so the input rides along with the box.
-  openTextEditor(display, a.bounds, a.text, true)
+  openTextEditor(display, a.bounds, a.text ?? '', true)
 }
 
 // ---------------------------------------------------------------------------

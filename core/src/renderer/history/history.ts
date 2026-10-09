@@ -666,9 +666,9 @@ function buildActions(p: HistoryPackSummary): HTMLElement {
 
   const playBtn = elc('button', undefined, t('history.play'))
   playBtn.type = 'button'
-  playBtn.disabled = p.annotated !== 'ready' || p.kind !== 'dir'
+  playBtn.disabled = !p.hasReplay || p.annotated !== 'ready' || p.kind !== 'dir'
   playBtn.title =
-    p.annotated === 'none'
+    !p.hasReplay
       ? t('history.playNoReplay')
       : p.annotated === 'missing'
         ? t('history.playNotRendered')

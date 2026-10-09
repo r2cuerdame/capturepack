@@ -326,6 +326,70 @@ console.log('The plan: what the picture is, and where the tiles go')
     chunkPlan(1000, 8) !== null && chunkPlan(1000, 8).chunks === 125 && chunkPlan(1000, 6) === null && chunkPlan(0, 8).chunks === 1)
 }
 
+console.log('\nHiDPI pages near the memory bound are planned, never refused (QA REJECT on #157)')
+{
+  // QA measured, with the REAL limits, that a downscaled plan whose rounded
+  // width times rounded height landed a few pixels past 40 M px returned null,
+  // and the user saw "the page could not be re-measured". 1418x902 at 2 with a
+  // 7760 px page is the one reproduced in a real Chromium; the rest are the
+  // arithmetic sweep bands QA listed.
+  const viewports = [
+    { clientWidth: 1920, clientHeight: 1080, dpr: 2 },
+    { clientWidth: 1440, clientHeight: 900, dpr: 2 },
+    { clientWidth: 1536, clientHeight: 864, dpr: 2 },
+    { clientWidth: 1920, clientHeight: 1080, dpr: 1.5 },
+    { clientWidth: 1418, clientHeight: 902, dpr: 2 },
+    { clientWidth: 1263, clientHeight: 800, dpr: 1.25 },
+  ]
+  const reproduced = planPage({ clientWidth: 1418, clientHeight: 902, scrollWidth: 1418, scrollHeight: 7760, dpr: 2 })
+  check('the page QA reproduced at device scale 2 is planned',
+    reproduced !== null && reproduced.pixelWidth * reproduced.pixelHeight <= worker.plan.MAX_AREA,
+    JSON.stringify(reproduced && { scale: reproduced.scale, w: reproduced.pixelWidth, h: reproduced.pixelHeight }))
+  for (const vp of viewports) {
+    let refused = 0
+    let overBound = 0
+    let inexact = 0
+    let gaps = 0
+    let firstBad = ''
+    for (let scrollHeight = 5000; scrollHeight <= 13000; scrollHeight += 1) {
+      const p = planPage({ ...vp, scrollWidth: vp.clientWidth, scrollHeight })
+      if (p === null) {
+        refused += 1
+        firstBad ||= `refused at ${scrollHeight}`
+        continue
+      }
+      if (p.pixelWidth * p.pixelHeight > worker.plan.MAX_AREA
+        || p.pixelWidth > worker.plan.MAX_DIMENSION || p.pixelHeight > worker.plan.MAX_DIMENSION) {
+        overBound += 1
+        firstBad ||= `over the bound at ${scrollHeight}`
+      }
+      // The app derives the DOM scale as pixelWidth / cssWidth; it must be the
+      // scale the tiles were drawn at.
+      if (Math.abs(p.pixelWidth / p.cssWidth - p.scale) > 1e-9) {
+        inexact += 1
+        firstBad ||= `derived scale drifts at ${scrollHeight}`
+      }
+      // Lay every tile down as the worker would (the bitmap carries a
+      // scrollbar gutter) and require the rows to cover the canvas exactly.
+      const bitmap = { width: Math.round((vp.clientWidth + 15) * vp.dpr), height: Math.round(vp.clientHeight * vp.dpr) }
+      let covered = 0
+      let ok = true
+      for (const tile of p.tiles) {
+        const placed = placeTile(p, tile.scrollY, bitmap)
+        if (placed === null || placed.dw !== p.pixelWidth || placed.dy > covered) { ok = false; break }
+        covered = Math.max(covered, placed.dy + placed.dh)
+      }
+      if (!ok || covered !== p.pixelHeight) {
+        gaps += 1
+        firstBad ||= `tiles leave a gap at ${scrollHeight}`
+      }
+    }
+    check(`${vp.clientWidth}x${vp.clientHeight}@${vp.dpr}, pages 5000..13000 px: every plan fits the bound and its tiles fill the canvas`,
+      refused === 0 && overBound === 0 && inexact === 0 && gaps === 0,
+      JSON.stringify({ refused, overBound, inexact, gaps, firstBad }))
+  }
+}
+
 console.log('\nA long page with a sticky header, a fixed banner and lazy-loading content')
 {
   const page = makePage({ scrollHeight: 5000, lazyGrowAt: 3000, lazyGrowTo: 6500, initialScrollY: 1234 })

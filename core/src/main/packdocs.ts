@@ -54,17 +54,18 @@ function imageScopeLabel(scope: Manifest['media']['image_scope']): string {
   return 'user-requested full screen'
 }
 
-function replayLabel(manifest: Manifest, t: TranslateFn): string {
-  if (manifest.media.replay === null) return t('pack.screenshotOnly')
+export function replayLabel(manifest: Manifest, t: TranslateFn): string {
+  if (typeof manifest.media.replay !== 'string') return t('pack.screenshotOnly')
   const seconds = ((manifest.media.replay_duration_ms ?? 0) / 1000).toFixed(1)
   return t('pack.replaySnapshot', { seconds })
 }
 
 function annotationCounts(annotations: readonly Annotation[]): string {
-  const numbered = annotations.filter((a) => a.numbered).length
-  const blurred = annotations.filter((a) => a.blur).length
-  const plain = annotations.filter((a) => !a.numbered && !a.blur).length
-  const n = annotations.length
+  const safe = Array.isArray(annotations) ? annotations : []
+  const numbered = safe.filter((a) => a.numbered).length
+  const blurred = safe.filter((a) => a.blur).length
+  const plain = safe.filter((a) => !a.numbered && !a.blur).length
+  const n = safe.length
   if (n === 0) return 'no annotation boxes'
   const parts = [`${numbered} numbered`, `${blurred} blurred`, `${plain} plain`]
   return `${n} annotation box${n === 1 ? '' : 'es'} (${parts.join(', ')})`
@@ -86,14 +87,23 @@ export function buildReadme(
   includeViewer = false,
 ): string {
   const t = makeT(lang)
-  const annotations = annotationsFile.annotations
+  const annotations = Array.isArray(annotationsFile?.annotations) ? annotationsFile.annotations : []
+  const refWidth =
+    typeof annotationsFile?.reference_width === 'number'
+      ? annotationsFile.reference_width
+      : (manifest.media?.displays?.[0]?.snapshot_width ?? 0)
+  const refHeight =
+    typeof annotationsFile?.reference_height === 'number'
+      ? annotationsFile.reference_height
+      : (manifest.media?.displays?.[0]?.snapshot_height ?? 0)
   const imageCapture = manifest.capture_kind === 'image'
-  const hasReplay = manifest.media.replay !== null
+  const hasReplay = typeof manifest.media.replay === 'string' && manifest.media.replay.length > 0
   const replayName = manifest.media.replay ?? 'replay.webm'
   const annotatedReplayName = manifest.media.replay_annotated
   const annotatedReplayPending = hasReplay && renderPending && annotatedReplayName === undefined
   const hasAnnotatedReplay = annotatedReplayName !== undefined || annotatedReplayPending
-  const annotatedReplayFile = annotatedReplayName ?? 'replay_annotated.webm'
+  const annotatedReplayFile =
+    annotatedReplayName ?? (replayName.endsWith('.mp4') ? 'replay_annotated.mp4' : 'replay_annotated.webm')
   const blurCount = annotations.filter((a) => a.blur).length
   const lines: string[] = []
 
@@ -123,7 +133,7 @@ export function buildReadme(
   // images, right after the description — before the reader is asked to open
   // anything at all.
   const keyframes = keyframeSet(manifest, annotationsFile, renderPending)
-  const keyframeLines = keyframeSectionLines(keyframes, t, imageCapture)
+  const keyframeLines = keyframeSectionLines(keyframes, t, imageCapture, annotatedReplayFile)
   if (keyframeLines.length > 0) {
     lines.push(imageCapture ? '## Annotated image' : `## ${t('pack.keyframes')}`)
     lines.push('')
@@ -136,7 +146,7 @@ export function buildReadme(
   lines.push(`| ${t('pack.fileCol')} | ${t('pack.whatCol')} |`)
   lines.push('|---|---|')
   lines.push(
-    `| snapshot.png | The captured ${imageCapture ? 'still image' : 'frame'}, ${annotationsFile.reference_width}×${annotationsFile.reference_height} — original pixels, never modified |`,
+    `| snapshot.png | The captured ${imageCapture ? 'still image' : 'frame'}, ${refWidth}×${refHeight} — original pixels, never modified |`,
   )
   if (hasReplay) {
     const seconds = ((manifest.media.replay_duration_ms ?? 0) / 1000).toFixed(1)
@@ -250,26 +260,38 @@ function buildOverviewSkill(
   t: TranslateFn,
   renderPending: boolean,
 ): string {
-  const annotations = annotationsFile.annotations
+  const annotations = Array.isArray(annotationsFile?.annotations) ? annotationsFile.annotations : []
+  const refWidth =
+    typeof annotationsFile?.reference_width === 'number'
+      ? annotationsFile.reference_width
+      : (manifest.media?.displays?.[0]?.snapshot_width ?? 0)
+  const refHeight =
+    typeof annotationsFile?.reference_height === 'number'
+      ? annotationsFile.reference_height
+      : (manifest.media?.displays?.[0]?.snapshot_height ?? 0)
   const imageCapture = manifest.capture_kind === 'image'
-  const hasReplay = manifest.media.replay !== null
+  const hasReplay = typeof manifest.media.replay === 'string' && manifest.media.replay.length > 0
   const replayName = manifest.media.replay ?? 'replay.webm'
   const annotatedReplayName = manifest.media.replay_annotated
   const annotatedReplayPending = hasReplay && renderPending && annotatedReplayName === undefined
   const hasAnnotatedReplay = annotatedReplayName !== undefined || annotatedReplayPending
-  const annotatedReplayFile = annotatedReplayName ?? 'replay_annotated.webm'
+  const annotatedReplayFile =
+    annotatedReplayName ?? (replayName.endsWith('.mp4') ? 'replay_annotated.mp4' : 'replay_annotated.webm')
   const numbers = computeDisplayNumbers(annotations)
   const lines: string[] = []
 
   lines.push(`# ${t('pack.skillOverview')}`)
   lines.push('')
   lines.push(`**Title:** ${manifest.title ?? '(untitled capture)'}`)
+  const osText = manifest.environment.os_version
+    ? `${manifest.environment.os} ${manifest.environment.os_version}`
+    : manifest.environment.os
   lines.push(
-    `**Captured:** ${humanDate(manifest.created_at)} on ${manifest.environment.os} ${manifest.environment.os_version}` +
+    `**Captured:** ${humanDate(manifest.created_at)} on ${osText}` +
       (manifest.environment.app !== undefined ? `, focused app ${manifest.environment.app}` : '') +
       '.',
   )
-  const size = `${annotationsFile.reference_width}×${annotationsFile.reference_height}`
+  const size = `${refWidth}×${refHeight}`
   if (imageCapture) {
     const scope = imageScopeLabel(manifest.media.image_scope)
     lines.push(`**Media:** ${size} still image in snapshot.png (${scope}).`)
@@ -318,7 +340,7 @@ function buildOverviewSkill(
   // story as images — the single most useful thing in this document for a
   // model that cannot decode video.
   const keyframes = keyframeSet(manifest, annotationsFile, renderPending)
-  const keyframeLines = keyframeSectionLines(keyframes, t, imageCapture)
+  const keyframeLines = keyframeSectionLines(keyframes, t, imageCapture, annotatedReplayFile)
   if (keyframeLines.length > 0) {
     lines.push(imageCapture ? '## Annotated image' : `## ${t('pack.keyframes')}`)
     lines.push('')
@@ -348,7 +370,7 @@ function buildOverviewSkill(
       .filter((a) => numbers.has(a.annotation_id))
       .sort((a, b) => (numbers.get(a.annotation_id) ?? 0) - (numbers.get(b.annotation_id) ?? 0))
     for (const a of numbered) {
-      const text = a.text.trim() !== '' ? ` — "${a.text.trim()}"` : ''
+      const text = typeof a.text === 'string' && a.text.trim() !== '' ? ` — "${a.text.trim()}"` : ''
       // WHICH screen those coordinates are in: without it, a reader of a
       // multi-display pack has no way to place the box at all.
       const where = multi
@@ -362,11 +384,13 @@ function buildOverviewSkill(
     lines.push('')
   }
 
+  const plugins = Array.isArray(manifest.plugins) ? manifest.plugins : []
+  const timelineEventsCount = Array.isArray(timeline?.events) ? timeline.events.length : 0
   lines.push(
     imageCapture
-      ? `Counts: ${annotationCounts(annotations)}, ${manifest.plugins.length} plugins.`
-      : `Counts: ${annotationCounts(annotations)}, ${timeline.events.length} timeline events, ` +
-          `${manifest.plugins.length} plugins.`,
+      ? `Counts: ${annotationCounts(annotations)}, ${plugins.length} plugins.`
+      : `Counts: ${annotationCounts(annotations)}, ${timelineEventsCount} timeline events, ` +
+          `${plugins.length} plugins.`,
   )
 
   const blurCount = annotations.filter((a) => a.blur).length
@@ -383,27 +407,29 @@ function buildOverviewSkill(
 }
 
 function buildTimelineSkill(manifest: Manifest, timeline: TimelineFile, t: TranslateFn): string {
-  const hasReplay = manifest.media.replay !== null
+  const hasReplay = typeof manifest.media.replay === 'string' && manifest.media.replay.length > 0
   const replayName = manifest.media.replay ?? 'replay.webm'
   const lines: string[] = []
   lines.push(`# ${t('pack.skillTimeline')}`)
   lines.push('')
+  const t0 = timeline?.t0 ?? manifest.created_at
   lines.push(
-    `\`t0\` = ${timeline.t0} (${
+    `\`t0\` = ${t0} (${
       hasReplay
         ? `the start of ${replayName} — offsets are positions on the replay clock`
         : 'the capture trigger — this pack has no replay, so offsets are relative to the trigger'
     }).`,
   )
   lines.push('')
-  if (timeline.events.length === 0) {
+  const events = Array.isArray(timeline?.events) ? timeline.events : []
+  if (events.length === 0) {
     lines.push('No events were recorded.')
     lines.push('')
     return lines.join('\n')
   }
   lines.push('| Offset | Event | Detail |')
   lines.push('|---|---|---|')
-  for (const e of timeline.events) {
+  for (const e of events) {
     lines.push(`| ${formatClock(e.t_ms)} | ${e.type} | ${timelineEventDetail(e.type, e.data)} |`)
   }
   lines.push('')
@@ -412,7 +438,7 @@ function buildTimelineSkill(manifest: Manifest, timeline: TimelineFile, t: Trans
       'annotation box being created in the editor (its `annotation_id` matches annotations.json), ' +
       'and `core.export.created` is the pack being saved. Other `source` values would be plugins.',
   )
-  if (timeline.events.some((e) => e.type.startsWith('input.'))) {
+  if (events.some((e) => e.type.startsWith('input.'))) {
     lines.push('')
     lines.push(
       '`input.mouse.*` and `input.window.*` are what the desk did during the replay, observed ' +
@@ -469,7 +495,15 @@ function buildAnnotationSkill(
   annotationsFile: AnnotationsFile,
   t: TranslateFn,
 ): string {
-  const annotations = annotationsFile.annotations
+  const annotations = Array.isArray(annotationsFile?.annotations) ? annotationsFile.annotations : []
+  const refWidth =
+    typeof annotationsFile?.reference_width === 'number'
+      ? annotationsFile.reference_width
+      : (manifest.media?.displays?.[0]?.snapshot_width ?? 0)
+  const refHeight =
+    typeof annotationsFile?.reference_height === 'number'
+      ? annotationsFile.reference_height
+      : (manifest.media?.displays?.[0]?.snapshot_height ?? 0)
   const imageCapture = manifest.capture_kind === 'image'
   const numbers = computeDisplayNumbers(annotations)
   const multi = isMultiDisplay(manifest)
@@ -483,10 +517,10 @@ function buildAnnotationSkill(
   lines.push(
     multi
       ? `Coordinate space of the FOCUSED display (${focusedIndex}): snapshot.png, ` +
-          `${annotationsFile.reference_width}×${annotationsFile.reference_height} pixels, origin top-left. ` +
+          `${refWidth}×${refHeight} pixels, origin top-left. ` +
           'That is what annotations.json’s reference_width/reference_height mean here — ' +
           'the focused display’s frame, not the whole desk.'
-      : `Coordinate space: snapshot.png, ${annotationsFile.reference_width}×${annotationsFile.reference_height} pixels, origin top-left.`,
+      : `Coordinate space: snapshot.png, ${refWidth}×${refHeight} pixels, origin top-left.`,
   )
   if (multi) {
     lines.push('')
@@ -549,7 +583,7 @@ function buildAnnotationSkill(
         : `## ${a.annotation_id} (${flags.join(', ')})`,
     )
     lines.push('')
-    if (a.text.trim() !== '') lines.push(`- **Text:** "${a.text.trim()}"`)
+    if (typeof a.text === 'string' && a.text.trim() !== '') lines.push(`- **Text:** "${a.text.trim()}"`)
     if (multi) {
       // The DECLARED set resolves a box naming a display this pack does not
       // have back onto the focused one (SPEC §8.8), so the file named below is
@@ -595,7 +629,7 @@ function buildAnnotationSkill(
     lines.push('')
   }
 
-  const tracked = annotations.some((a) => a.tracking.enabled)
+  const tracked = annotations.some((a) => a.tracking?.enabled === true)
   const targeted = annotations.some((a) => a.target !== undefined)
   if (!tracked && !targeted) {
     lines.push(
@@ -611,8 +645,10 @@ function buildDomSkill(manifest: Manifest, annotationsFile: AnnotationsFile, t: 
   const lines: string[] = []
   lines.push(`# ${t('pack.skillDom')}`)
   lines.push('')
-  const targeted = annotationsFile.annotations.filter((a) => a.target !== undefined)
-  if (manifest.plugins.length === 0 && targeted.length === 0) {
+  const plugins = Array.isArray(manifest.plugins) ? manifest.plugins : []
+  const annotations = Array.isArray(annotationsFile?.annotations) ? annotationsFile.annotations : []
+  const targeted = annotations.filter((a) => a.target !== undefined)
+  if (plugins.length === 0 && targeted.length === 0) {
     // Honest empty: no invented structure when no plugin contributed data.
     lines.push('No DOM metadata in this pack.')
     lines.push('')
@@ -626,10 +662,10 @@ function buildDomSkill(manifest: Manifest, annotationsFile: AnnotationsFile, t: 
     lines.push('')
     return lines.join('\n')
   }
-  if (manifest.plugins.length > 0) {
+  if (plugins.length > 0) {
     lines.push('Plugins that contributed data (see `plugins/`):')
     lines.push('')
-    for (const p of manifest.plugins) {
+    for (const p of plugins) {
       lines.push(`- **${p.name}** v${p.version} — files under \`${p.path}\``)
     }
     lines.push('')
@@ -639,7 +675,7 @@ function buildDomSkill(manifest: Manifest, annotationsFile: AnnotationsFile, t: 
     // what is ABSENT from that structure changes what it may conclude. A model
     // that does not know field values were withheld will read an empty form as
     // an empty form; a model that does knows it is looking at a redaction.
-    const dom = manifest.plugins.find((p) => p.name === 'chrome-dom')
+    const dom = plugins.find((p) => p.name === 'chrome-dom')
     if (dom !== undefined) {
       lines.push(
         'A `chrome-dom` pick from extension 0.2.0 or newer carries a `document`: every element',
@@ -661,7 +697,7 @@ function buildDomSkill(manifest: Manifest, annotationsFile: AnnotationsFile, t: 
     // page rectangles land on the neighbouring thing, so the walk throws them
     // away — and a model that does not know they were thrown away will read a
     // window with no controls as a window that HAD no controls.
-    const uia = manifest.plugins.find((p) => p.name === 'windows-uia')
+    const uia = plugins.find((p) => p.name === 'windows-uia')
     if (uia !== undefined) {
       lines.push(
         'In `windows-uia` 0.4.0 or newer, read `geometry_refused` before concluding anything from',
@@ -693,12 +729,13 @@ function buildProjectSkill(
   t: TranslateFn,
   renderPending: boolean,
 ): string {
-  const hasReplay = manifest.media.replay !== null
+  const hasReplay = typeof manifest.media.replay === 'string' && manifest.media.replay.length > 0
   const replayName = manifest.media.replay ?? 'replay.webm'
   const annotatedReplayName = manifest.media.replay_annotated
   const annotatedReplayPending = hasReplay && renderPending && annotatedReplayName === undefined
   const hasAnnotatedReplay = annotatedReplayName !== undefined || annotatedReplayPending
-  const annotatedReplayFile = annotatedReplayName ?? 'replay_annotated.webm'
+  const annotatedReplayFile =
+    annotatedReplayName ?? (replayName.endsWith('.mp4') ? 'replay_annotated.mp4' : 'replay_annotated.webm')
   const lines: string[] = []
   lines.push(`# ${t('pack.skillProject')}`)
   lines.push('')
@@ -760,7 +797,7 @@ function buildProjectSkill(
         : `  Declared in manifest.json and regenerable from ${replayName} + annotations.json.`,
     )
   } else {
-    lines.push('- `replay_annotated.webm` — optional derived rendering, absent from this source revision.')
+    lines.push(`- \`${annotatedReplayFile}\` — optional derived rendering, absent from this source revision.`)
   }
   if (manifest.media.displays !== undefined && manifest.media.displays.length > 1) {
     lines.push('- `snapshot-d<N>.png` / `replay-d<N>.webm` — the OTHER displays this capture froze, one')

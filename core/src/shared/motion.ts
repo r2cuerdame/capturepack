@@ -258,20 +258,24 @@ export function rebaseAnnotationClock(
       ? {}
       : { start_ms: clamp(a.start_ms), end_ms: clamp(a.end_ms) }),
     ...(keyframes === undefined ? {} : { keyframes }),
-    tracking: {
-      ...a.tracking,
-      ...(a.tracking.picked_at_ms === undefined
-        ? {}
-        : { picked_at_ms: clamp(a.tracking.picked_at_ms) }),
-      ...(a.tracking.samples === undefined
-        ? {}
-        : {
-            samples: a.tracking.samples.map((sample) => ({
-              ...sample,
-              t_ms: clamp(sample.t_ms),
-            })),
-          }),
-    },
+    ...(a.tracking === undefined
+      ? {}
+      : {
+          tracking: {
+            ...a.tracking,
+            ...(a.tracking.picked_at_ms === undefined
+              ? {}
+              : { picked_at_ms: clamp(a.tracking.picked_at_ms) }),
+            ...(a.tracking.samples === undefined
+              ? {}
+              : {
+                  samples: a.tracking.samples.map((sample) => ({
+                    ...sample,
+                    t_ms: clamp(sample.t_ms),
+                  })),
+                }),
+          },
+        }),
   }
 }
 

@@ -90,14 +90,33 @@
     scale = Math.min(scale, maxDimension / clientWidth, maxDimension / cssHeight)
     scale = Math.min(scale, Math.sqrt(maxArea / (clientWidth * cssHeight)))
     if (!Number.isFinite(scale) || scale < MIN_SCALE) return null
-    const downscaled = scale < dpr - 1e-9
+    let downscaled = scale < dpr - 1e-9
 
     let cssWidth = exactCssWidth(clientWidth, scale)
     let exact = cssWidth !== null
     if (cssWidth === null) cssWidth = Math.floor(clientWidth)
     if (cssWidth <= 0) return null
-    const pixelWidth = Math.round(cssWidth * scale)
-    const pixelHeight = Math.round(cssHeight * scale)
+    let pixelWidth = Math.round(cssWidth * scale)
+    let pixelHeight = Math.round(cssHeight * scale)
+    const overBound = () => pixelWidth > maxDimension || pixelHeight > maxDimension
+      || pixelWidth * pixelHeight > maxArea
+    // A bound-derived scale is an irrational number, so rounding both sides up
+    // can land a few pixels past the bound — QA measured thousands of ordinary
+    // page heights at device scale 2 refused that way. When the scale is
+    // already a compromise, pick the WIDTH as a whole pixel count at or below
+    // it and make the scale exactly `pixelWidth / cssWidth`: the product can
+    // then only shrink, and the ratio the app derives is the one the tiles were
+    // drawn at.
+    if (downscaled || overBound()) {
+      cssWidth = Math.floor(clientWidth)
+      pixelWidth = Math.floor(cssWidth * scale)
+      if (pixelWidth <= 0) return null
+      scale = pixelWidth / cssWidth
+      pixelHeight = Math.floor(cssHeight * scale)
+      downscaled = scale < dpr - 1e-9
+      exact = true
+      if (scale < MIN_SCALE) return null
+    }
     if (pixelWidth <= 0 || pixelHeight <= 0) return null
     if (pixelWidth > maxDimension || pixelHeight > maxDimension) return null
     if (pixelWidth * pixelHeight > maxArea) return null
@@ -156,7 +175,10 @@
     const dy = Math.round(actualScrollY * plan.scale)
     if (dy >= plan.pixelHeight) return null
     const dw = Math.min(plan.pixelWidth, Math.round((sw / plan.dpr) * plan.scale))
-    const dh = Math.min(plan.pixelHeight - dy, Math.round((sh / plan.dpr) * plan.scale))
+    // The bottom edge is rounded as a POSITION, not as a length added to dy:
+    // at a fractional scale two roundings would leave a one-row gap between
+    // this tile and the next one, which starts at the same position rounded.
+    const dh = Math.min(plan.pixelHeight, Math.round((actualScrollY + sh / plan.dpr) * plan.scale)) - dy
     if (dw <= 0 || dh <= 0) return null
     // Keep source and destination describing the same rows when the bottom of
     // the picture cuts the tile short.
