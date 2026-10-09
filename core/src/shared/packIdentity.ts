@@ -15,6 +15,7 @@
 // paths that are about to delete or publish something.
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import { stripUtf8Bom } from './json'
 import { FORMAT_NAME } from './types'
 
 /**
@@ -29,7 +30,7 @@ export function manifestNamesCapturePack(raw: string): boolean {
   try {
     // A BOM survives plenty of editors and would otherwise fail the parse for
     // a pack that is perfectly valid.
-    const parsed: unknown = JSON.parse(raw.replace(/^\uFEFF/, ''))
+    const parsed: unknown = JSON.parse(stripUtf8Bom(raw))
     if (typeof parsed !== 'object' || parsed === null) return false
     return (parsed as { format?: unknown }).format === FORMAT_NAME
   } catch {
