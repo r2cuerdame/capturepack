@@ -3,8 +3,10 @@
  *
  * This parser deliberately does not inspect media payload bytes. It follows
  * the ISO-BMFF timing declarations only: the video track's `mdhd` timescale,
- * each `traf`'s `tfdt`, and the duration/composition fields declared by
- * `tfhd`, `trex`, and `trun`. No wall-clock or frame-rate estimate is used.
+ * each `traf`'s `tfdt` when present, and the duration/composition fields declared by
+ * `tfhd`, `trex`, and `trun`. When `tfdt` is omitted, decode time is inferred only
+ * by contiguous declared sample durations from the prior fragment. No wall-clock
+ * or frame-rate estimate is used.
  */
 
 export const FMP4_TIMELINE_DEFAULT_MAX_INPUT_BYTES = 512 * 1024 * 1024
@@ -457,6 +459,7 @@ function appendFragmentSamples(
   fragmentIndex: number,
   tracksById: ReadonlyMap<number, VideoTrackDefinition>,
   samplesByTrack: ReadonlyMap<number, Fmp4VideoSample[]>,
+  nextDecodeTimeByTrack: Map<number, bigint>,
 ): void {
   for (const traf of boxesIn(state, moof.payloadStart, moof.end).filter(
     (box) => box.type === 'traf',
@@ -470,13 +473,9 @@ function appendFragmentSamples(
     const tfdt = singleChild(children, 'tfdt', 'traf')
     const runs = children.filter((box) => box.type === 'trun')
     if (runs.length === 0) continue
-    if (tfdt === undefined) {
-      fail(
-        'missing-tfdt',
-        `video track ${String(track.trackId)} fragment has no tfdt`,
-      )
-    }
-    let decodeTime = decodeTimeFromTfdt(state, tfdt)
+    let decodeTime = tfdt === undefined
+      ? (nextDecodeTimeByTrack.get(track.trackId) ?? 0n)
+      : decodeTimeFromTfdt(state, tfdt)
     const trackSamples = samplesByTrack.get(track.trackId)
     if (trackSamples === undefined) {
       fail('malformed-box', `video track ${String(track.trackId)} is not initialized`)
@@ -493,6 +492,7 @@ function appendFragmentSamples(
         trackSamples,
       )
     }
+    nextDecodeTimeByTrack.set(track.trackId, decodeTime)
   }
 }
 
@@ -546,6 +546,7 @@ export function enumerateFmp4VideoSamples(
     const samplesByTrack = new Map(
       definitions.map((track) => [track.trackId, [] as Fmp4VideoSample[]] as const),
     )
+    const nextDecodeTimeByTrack = new Map<number, bigint>()
     let fragmentIndex = 0
     for (const root of roots) {
       if (root.type !== 'moof') continue
@@ -555,6 +556,7 @@ export function enumerateFmp4VideoSamples(
         fragmentIndex,
         tracksById,
         samplesByTrack,
+        nextDecodeTimeByTrack,
       )
       fragmentIndex += 1
     }

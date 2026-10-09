@@ -325,8 +325,14 @@ export class SurfaceLane {
    */
   private readonly pendingTicks = new Map<
     number,
-    { coreMs: number; ageMs: number | null; delayMs: number }
+    {
+      coreMs: number
+      ageMs: number | null
+      delayMs: number
+      contextClockBasis: 'frame-presentation' | 'wall-observation'
+    }
   >()
+  private contextClockBasis: 'frame-presentation' | 'wall-observation' = 'frame-presentation'
   /**
    * ONE RING, ONE CLOCK (#110) — the display whose frame clock this ring is on.
    *
@@ -623,7 +629,13 @@ export class SurfaceLane {
    * loop will take anyway a few tens of milliseconds later; it must never make
    * the recorder wait.
    */
-  tickAt(displayId: string, frameMs: number, frameAgeMs?: number, tickDelayMs?: number): void {
+  tickAt(
+    displayId: string,
+    frameMs: number,
+    frameAgeMs?: number,
+    tickDelayMs?: number,
+    contextClockBasis: 'frame-presentation' | 'wall-observation' = 'frame-presentation',
+  ): void {
     if (!this.running) return
     // ONE RING, ONE CLOCK (#110) — see `clockSourceDisplayId`.
     if (this.clockSourceDisplayId === null) {
@@ -655,6 +667,15 @@ export class SurfaceLane {
         )
       }
       return
+    }
+    if (this.contextClockBasis !== contextClockBasis) {
+      this.contextClockBasis = contextClockBasis
+      this.pendingTicks.clear()
+      this.frameClockOffsetMs = null
+      this.frameAgeShiftMs = null
+      logInfo(
+        `[context] lane S clock basis changed to ${contextClockBasis}`,
+      )
     }
     // ONE TIME BASE, MORE OBSERVATIONS (#106 revised by #110).
     //
@@ -712,6 +733,7 @@ export class SurfaceLane {
     // frame's time and the instant the host is about to be asked.
     this.pendingTicks.set(frameMs, {
       coreMs: this.clock.nowMs(),
+      contextClockBasis,
       ageMs:
         typeof frameAgeMs === 'number' &&
         Number.isFinite(frameAgeMs) &&
@@ -728,7 +750,10 @@ export class SurfaceLane {
       if (oldest === undefined) break
       this.pendingTicks.delete(oldest)
     }
-    void this.host.request('surface.tick', { tMs: frameMs }).catch(() => {
+    void this.host.request('surface.tick', {
+      tMs: frameMs,
+      composed: contextClockBasis === 'wall-observation',
+    }).catch(() => {
       /* Rule 1: a missed observation is a gap in the ring, never a lost frame. */
     })
   }
@@ -804,10 +829,14 @@ export class SurfaceLane {
       // that decides whether anything is left to fix here.
       // THE TICK THAT ASKED FOR THIS SAMPLE (#110). The reply echoes the frame
       // time it was sent with, so the pair is exact; a reply whose tick has
-      // aged out of the table has no partner and claims no lag rather than
-      // borrowing a stranger's.
+      // aged out of the table has no partner and is rejected rather than
+      // borrowing a stranger's clock basis or timing terms.
       const asked = this.pendingTicks.get(frameMs)
       this.pendingTicks.delete(frameMs)
+      if (asked === undefined) {
+        this.dropped += 1
+        return
+      }
       const takenAt = this.offset.toCoreMs(hostMs)
       // SIGNED, and the clamp that used to be here is why this always read 0.
       //
@@ -818,8 +847,8 @@ export class SurfaceLane {
       // reported "tick lag 0 ms" for a round trip nobody had ever seen the size
       // of. A number that cannot be negative is not a measurement of a
       // difference.
-      const lag = takenAt === null || asked === undefined ? 0 : takenAt - asked.coreMs
-      const ageMs = asked?.ageMs ?? null
+      const lag = takenAt === null ? 0 : takenAt - asked.coreMs
+      const ageMs = asked.ageMs
       // HOW LATE THE CALLBACK RAN (#110) — the leg every other measurement
       // missed, and the one that was carrying the whole error.
       //
@@ -834,8 +863,19 @@ export class SurfaceLane {
       // (4 ms updates, probed during a real 52 s shake), the host (0 repeats
       // in 644 driven samples), and the lane+ring (0 in 433) were each proven
       // clean. The only unmeasured sender left was this delay.
-      const delayMs = asked?.delayMs ?? 0
-      if (takenAt !== null && asked !== undefined) {
+      const delayMs = asked.delayMs
+      if (
+        takenAt !== null
+        && asked.contextClockBasis === 'wall-observation'
+      ) {
+        // Under native ownership this tick does not name the saved pixels.
+        // The host's timestamp is the only observation being claimed, already
+        // translated onto Core's monotonic clock by the measured host offset.
+        this.frameClockOffsetMs = 0
+        this.frameAgeShiftMs = null
+        this.tickLagMs.push(lag)
+        if (this.tickLagMs.length > 200) this.tickLagMs.shift()
+      } else if (takenAt !== null) {
         // The two clocks, read at ONE instant — this tick's, not the newest
         // one's. Refreshed every tick, so the mapping stays current without
         // ever pairing readings that were taken apart. The tick was SENT at
@@ -919,7 +959,13 @@ export class SurfaceLane {
       // frame clock; a known age shifts it onto the clock the reader's eyes are
       // on. Unknown remains null and contributes no invented correction.
       const observedAtMs =
-        frameMs + delayMs + lag + (ageMs ?? 0)
+        asked.contextClockBasis === 'wall-observation'
+          ? takenAt
+          : frameMs + delayMs + lag + (ageMs ?? 0)
+      if (observedAtMs === null) {
+        this.dropped += 1
+        return
+      }
       // AN OBSERVATION THAT CANNOT BE FILED TRUTHFULLY IS NOT FILED.
       //
       // Two wrong answers were tried here first, and both are worth naming.

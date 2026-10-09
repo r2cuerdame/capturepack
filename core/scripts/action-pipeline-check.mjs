@@ -1,8 +1,10 @@
-// Bundles the production pure helpers so this check cannot drift from them.
+// Bundles the production helpers so this check cannot drift from them. The
+// Electron stub supplies a private userData directory and a safeStorage
+// implementation that deterministically rejects the stored ciphertext.
 // ESM, not CJS: the pipeline checks are async and use top-level await, which
 // esbuild cannot express in a CommonJS bundle.
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -10,6 +12,16 @@ import { fileURLToPath } from 'node:url'
 const here = path.dirname(fileURLToPath(import.meta.url))
 const work = mkdtempSync(path.join(tmpdir(), 'capturepack-action-pipeline-'))
 try {
+  const stub = path.join(work, 'electron-stub.cjs')
+  writeFileSync(
+    stub,
+    `exports.app={getPath:()=>${JSON.stringify(path.join(work, 'user-data'))}};` +
+      `exports.safeStorage={` +
+        `isEncryptionAvailable:()=>true,` +
+        `encryptString:value=>Buffer.from(value,'utf8'),` +
+        `decryptString:()=>{throw new Error('simulated decryption failure')}` +
+      `};\n`,
+  )
   const bundle = path.join(work, 'check.mjs')
   execFileSync(
     process.execPath,
@@ -20,6 +32,7 @@ try {
       '--platform=node',
       '--format=esm',
       `--outfile=${bundle}`,
+      `--alias:electron=${stub}`,
     ],
     { stdio: ['ignore', 'ignore', 'inherit'] },
   )

@@ -1,0 +1,27 @@
+
+> capturepack@0.5.0 check:docs
+> node scripts/docs-contract-check.mjs
+
+
+Every link and anchor resolves (56 documents)
+  PASS  no broken relative link or section anchor
+
+Every npm script the documents name exists
+  PASS  no document names a script that does not exist
+
+The handoff set agrees with the gate it describes
+  PASS  the handoff states the real check count (91 discovered, 94 steps)
+  PASS  the handoff prompt states the real step count (94, 92 with --skip-build)
+  PASS  docs/QA.md states the real discovered check count (91 checks)
+
+The documents name the version this repository builds
+  PASS  the handoff names the application version under development (0.5.0)
+  PASS  the documentation index names it too (0.5.0)
+  PASS  every "core/package.json is application version" claim says 0.5.0
+
+The current handoff is the only one that reads as instructions
+  PASS  every archived handoff declares itself historical (1 found)
+  PASS  the index separates historical material from current sources
+
+result: OK — 10 passed, 0 failed
+

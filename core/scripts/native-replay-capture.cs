@@ -93,6 +93,15 @@ internal static class NativeReplayCapture
     [DllImport("user32.dll")]
     private static extern int ReleaseDC(IntPtr hwnd, IntPtr hdc);
 
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr OpenInputDesktop(
+        uint dwFlags,
+        bool fInherit,
+        uint dwDesiredAccess);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool CloseDesktop(IntPtr hDesk);
+
     [DllImport("gdi32.dll", SetLastError = true)]
     private static extern bool StretchBlt(
         IntPtr dest,
@@ -119,6 +128,23 @@ internal static class NativeReplayCapture
 
     [DllImport("gdi32.dll")]
     private static extern int SetStretchBltMode(IntPtr hdc, int mode);
+
+    private const uint DESKTOP_READOBJECTS = 0x0001;
+
+    private static bool IsInputDesktopAccessible()
+    {
+        try
+        {
+            IntPtr desk = OpenInputDesktop(0, false, DESKTOP_READOBJECTS);
+            if (desk == IntPtr.Zero) return false;
+            CloseDesktop(desk);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
 
     private static int IntArg(string[] args, string name, int fallback)
     {
@@ -237,12 +263,52 @@ internal static class NativeReplayCapture
                         sourceHeight,
                         SRCCOPY | CAPTUREBLT);
                 }
+                if (!bltOk && isDeviceDc)
+                {
+                    DeleteDC(screen);
+                    screen = IntPtr.Zero;
+                    isDeviceDc = false;
+                    srcX = monitor.Rect.Left;
+                    srcY = monitor.Rect.Top;
+                    screen = GetDC(IntPtr.Zero);
+
+                    bltOk = StretchBlt(
+                        dest,
+                        0,
+                        0,
+                        outputWidth,
+                        outputHeight,
+                        screen,
+                        srcX,
+                        srcY,
+                        sourceWidth,
+                        sourceHeight,
+                        SRCCOPY);
+                    if (!bltOk)
+                    {
+                        bltOk = StretchBlt(
+                            dest,
+                            0,
+                            0,
+                            outputWidth,
+                            outputHeight,
+                            screen,
+                            srcX,
+                            srcY,
+                            sourceWidth,
+                            sourceHeight,
+                            SRCCOPY | CAPTUREBLT);
+                    }
+                }
                 if (!bltOk)
                 {
                     int err = Marshal.GetLastWin32Error();
-                    throw new System.ComponentModel.Win32Exception(
-                        err,
-                        "StretchBlt failed on device " + monitor.Device + " (err " + err + ")");
+                    string detail = "StretchBlt failed on device " + monitor.Device + " (err " + err + ")";
+                    if (!IsInputDesktopAccessible())
+                    {
+                        detail += " [desktop locked or inaccessible]";
+                    }
+                    throw new System.ComponentModel.Win32Exception(err, detail);
                 }
                 // Timestamp the completed BitBlt, not JPEG encoding or IPC.
                 capturedQpc = Stopwatch.GetTimestamp();
@@ -250,8 +316,11 @@ internal static class NativeReplayCapture
             }
             finally
             {
-                if (isDeviceDc) DeleteDC(screen);
-                else ReleaseDC(IntPtr.Zero, screen);
+                if (screen != IntPtr.Zero)
+                {
+                    if (isDeviceDc) DeleteDC(screen);
+                    else ReleaseDC(IntPtr.Zero, screen);
+                }
                 graphics.ReleaseHdc(dest);
             }
             using (var bytes = new MemoryStream())
@@ -269,6 +338,16 @@ internal static class NativeReplayCapture
 
     private static int Main(string[] args)
     {
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (string.Equals(args[i], "--probe-desktop", StringComparison.OrdinalIgnoreCase))
+            {
+                bool accessible = IsInputDesktopAccessible();
+                Console.WriteLine(accessible ? "interactive" : "locked");
+                return accessible ? 0 : 1;
+            }
+        }
+
         // PER_MONITOR_AWARE_V2 where available; the legacy call is the
         // compatible fallback. EnumDisplayMonitors then reports physical pixels.
         try { SetProcessDpiAwarenessContext(new IntPtr(-4)); }

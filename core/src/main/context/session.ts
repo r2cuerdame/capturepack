@@ -34,6 +34,7 @@ import {
 import type { ContextObservation } from './buffer'
 import type { EditorUiaElement, EditorUiaWindow } from '../../shared/ipc'
 import { SessionClock } from './clock'
+import { ptsToSessionMs, type ObservedReplayClockMap } from '../../shared/replayClockMap'
 // THE SAME REGISTRY THE RECORDING SIDE USES (#64). Not a second, smaller one
 // for the editor: a provider that is budgeted, isolated, clock-corrected and
 // disable-on-repeated-failure while recording, but asked through a bare
@@ -79,6 +80,8 @@ export interface ContextSessionOptions {
   displays: readonly ContextDisplayTarget[]
   /** The pack clock's end — the capture instant (SPEC §10.1). */
   replayDurationMs: number
+  /** Measured replay/media time -> persisted Windows-context time. */
+  replayClockMap?: ObservedReplayClockMap
   /** The capture-instant observation, or null when there is none (yet). */
   observation: ContextObservation | null
   /** The observation was attempted and produced nothing; none is coming. */
@@ -288,6 +291,7 @@ export class ContextSession {
   readonly sessionId: string
   private readonly displays: readonly ContextDisplayTarget[]
   private readonly replayDurationMs: number
+  private readonly replayClockMap: ObservedReplayClockMap | null
   private readonly host: ProviderHost
   private readonly onWarn: (message: string) => void
   private readonly onInfo: (message: string) => void
@@ -321,6 +325,7 @@ export class ContextSession {
     this.sessionId = sessionId
     this.displays = options.displays
     this.replayDurationMs = options.replayDurationMs
+    this.replayClockMap = options.replayClockMap ?? null
     this.dropped = options.dropped
     this.domEvents = options.domEvents ?? []
     this.onWarn = options.onWarn ?? ((): void => undefined)
@@ -655,20 +660,42 @@ export class ContextSession {
    * does 7 and 8 over it, at the point the pointer is actually on.
    */
   async frameAt(timeMs: number): Promise<ContextFrame> {
+    const contextTimeMs = this.replayClockMap === null
+      ? timeMs
+      : ptsToSessionMs(this.replayClockMap, timeMs)
+    if (contextTimeMs === undefined) {
+      return {
+        sessionId: this.sessionId,
+        protocolVersion: CONTEXT_PROTOCOL_VERSION,
+        requestedTimeMs: timeMs,
+        accuracy: {
+          requestedTimeMs: timeMs,
+          materializedTimeMs: timeMs,
+          errorMs: Number.POSITIVE_INFINITY,
+          exact: false,
+          coverage: 'none',
+        },
+        displays: this.split([], [], []),
+        providers: [],
+        claims: [],
+        pending: false,
+        dropped: this.dropped,
+      }
+    }
     // 1. restore the surface stack at T, from CORE's timeline — before any
     //    provider is asked anything at all.
-    const restored = this.timeline.restore(timeMs)
+    const restored = this.timeline.restore(contextTimeMs)
     // `restored.surfaces`, NOT `restored.sample.surfaces`: the sample says when
     // Core looked, these say where things were at the time asked for (#83).
     const surfaces = restored.surfaces
     // 3. who holds a claim at this time? Claims are time-varying: a window did
     //    not exist at T-20 s, and a provider that has nothing to say about a
     //    surface must not be asked about it (#66, design GAP 8).
-    const claims = await this.host.claims(timeMs, surfaces)
+    const claims = await this.host.claims(contextTimeMs, surfaces)
     const claimants = new Set(claims.map((claim) => claim.providerId))
     // 4. ask only the claimants, in parallel, each with its own budget.
     const result = await this.host.frames(
-      { sessionId: this.sessionId, timeMs, surfaces, maxCandidates: MAX_CANDIDATES },
+      { sessionId: this.sessionId, timeMs: contextTimeMs, surfaces, maxCandidates: MAX_CANDIDATES },
       [...claimants],
     )
     const providerCandidates: ContextCandidate[] = []
@@ -728,18 +755,22 @@ export class ContextSession {
     point: { x: number; y: number },
     display?: number,
   ): Promise<readonly ContextCandidate[]> {
-    const restored = this.timeline.restore(timeMs)
+    const contextTimeMs = this.replayClockMap === null
+      ? timeMs
+      : ptsToSessionMs(this.replayClockMap, timeMs)
+    if (contextTimeMs === undefined) return []
+    const restored = this.timeline.restore(contextTimeMs)
     // `restored.surfaces`, NOT `restored.sample.surfaces`: the sample says when
     // Core looked, these say where things were at the time asked for (#83).
     const surfaces = restored.surfaces
     const stack = surfaceStackAt(surfaces, point, display)
     const surface = stack[0]
     if (surface === undefined) return []
-    const claims = await this.host.claims(timeMs, surfaces)
+    const claims = await this.host.claims(contextTimeMs, surfaces)
     const claimants = new Set(claims.map((claim) => claim.providerId))
     const hits = await this.host.hitTest([...claimants], {
       sessionId: this.sessionId,
-      timeMs,
+      timeMs: contextTimeMs,
       point,
       // Declared, not assumed: these are a saved pack's snapshot pixels, and the
       // physical rect they came from was never recorded. See `RectSpace`.

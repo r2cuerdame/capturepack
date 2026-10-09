@@ -1,0 +1,92 @@
+{
+  "schema": "capturepack.issue138-before-after",
+  "version": 1,
+  "basis": "one bounded 30 s trial per backend on the same host, primary display 3840x2160 -> 1920x1080 @ 15 fps, same fixture workload; diagnostic measurement, not the >=3-trial qa:dxgi-replay-ab acceptance",
+  "source_commit": "76edf645d5b4ca72c83099c591dd95207c54d9ec",
+  "launch_integrity": "medium",
+  "shipping": {
+    "cpu_one_core_percent": {
+      "mean": 37.74147586245075,
+      "p95": 47.48145279118223,
+      "peak": 48.2926221335992
+    },
+    "working_set_peak_bytes": 1138659328,
+    "private_bytes_mean": 851257207.4666667,
+    "gpu_total_engine_mean_percent": 4.591522963709946,
+    "gpu_video_encode_mean_percent": 2.834053683374931,
+    "achieved_fps": 14.662985833178807,
+    "max_pts_gap_ms": 131.46700000000004,
+    "capture_latency": {
+      "at": "2026-09-19T07:28:05.626Z",
+      "frozen_ms": 1721,
+      "saved_ms": 1845,
+      "editor_visible_ms": 2386,
+      "hands_off_ms": 2386,
+      "refused": null,
+      "raw": "frozen 1721 ms, saved 1845 ms, editor-visible 2386 ms; hands-off 2386 ms"
+    }
+  },
+  "native": {
+    "cpu_one_core_percent": {
+      "mean": 32.59354117102183,
+      "p95": 38.04130432243702,
+      "peak": 38.54059609455293
+    },
+    "working_set_peak_bytes": 1121054720,
+    "private_bytes_mean": 826784512,
+    "gpu_total_engine_mean_percent": 4.193243655244039,
+    "gpu_video_encode_mean_percent": 2.3652606199101953,
+    "achieved_fps": 14.9728044979527,
+    "max_pts_gap_ms": 113.19999999999709,
+    "capture_latency": {
+      "at": "2026-09-19T07:26:03.865Z",
+      "frozen_ms": 2259,
+      "saved_ms": 2371,
+      "editor_visible_ms": 2848,
+      "hands_off_ms": 2848,
+      "refused": null,
+      "raw": "frozen 2259 ms, saved 2371 ms, editor-visible 2848 ms; hands-off 2848 ms"
+    },
+    "native_ready": [
+      {
+        "display_id": "3666076570",
+        "width": 1920,
+        "height": 1080,
+        "fps": 15,
+        "encoder": "NVIDIA H.264 Encoder MFT",
+        "at": "2026-09-19T07:25:29.695Z",
+        "at_ms": 1789802729695
+      }
+    ],
+    "native_snapshots": [
+      {
+        "display_id": "3666076570",
+        "bytes": 18324067,
+        "duration_ms": 29520,
+        "samples": 442,
+        "keyframes": 30,
+        "at": "2026-09-19T07:26:02.431Z",
+        "at_ms": 1789802762431
+      }
+    ],
+    "fallback_proof": {
+      "phase": "post-save, outside performance measurement window",
+      "helper_count": 1,
+      "log_evidence": {
+        "ready": true,
+        "suspended": true,
+        "snapshot": true,
+        "failed": true,
+        "restarted": true,
+        "fresh_ready": true,
+        "ready_suspend_snapshot_ordered": true,
+        "advancing_presentations": true,
+        "frame_evidence_recording": true,
+        "pass": true
+      },
+      "helper_gone": true,
+      "pass": true
+    }
+  },
+  "shared_failure": "past_sampling (windows-context fixture window clipped at the display edge) fails identically for both backends and is unrelated to the replay backend"
+}

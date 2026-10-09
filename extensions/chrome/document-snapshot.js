@@ -73,17 +73,42 @@
     return clip(out.replace(/\s+/gu, ' '), MAX_TEXT)
   }
 
+  /**
+   * THE AREA THE PICTURE COVERS, which is what "visible" means here.
+   *
+   * A pick or a capture-time fetch records the VIEWPORT: `snapshot.png` shows
+   * the screen, so the licence above covers exactly what is on it. A full-page
+   * capture (#157) photographs the whole document, so the same licence covers
+   * the whole document — every rectangle is then recorded in DOCUMENT CSS
+   * pixels (viewport position plus scroll offset), the space that picture is
+   * in, and the walk stops at the height the picture was actually cut at.
+   */
+  const viewportArea = () => ({
+    scrollX: 0,
+    scrollY: 0,
+    width: window.innerWidth,
+    height: window.innerHeight,
+  })
+  const documentArea = (options) => ({
+    scrollX: Math.round(window.scrollX),
+    scrollY: Math.round(window.scrollY),
+    width: options.width,
+    height: options.height,
+  })
+
   /** Visible to the user, in the sense the picture can corroborate. */
-  const visibility = (el, rect, style) => {
+  const visibility = (el, rect, style, area) => {
     if (style.visibility === 'hidden' || style.display === 'none') return 'hidden'
     if (style.opacity === '0') return 'hidden'
     if (el.hasAttribute('hidden') || el.getAttribute('aria-hidden') === 'true') return 'hidden'
     // Everything above this line is INHERITED and prunes the subtree. Everything
     // below is about this element's own box, which its children do not share.
     if (rect.width < MIN_SIZE_PX || rect.height < MIN_SIZE_PX) return 'offscreen'
-    // Outside the viewport is outside the picture.
-    if (rect.bottom <= 0 || rect.right <= 0) return 'offscreen'
-    if (rect.top >= window.innerHeight || rect.left >= window.innerWidth) return 'offscreen'
+    // Outside the captured area is outside the picture.
+    const top = rect.top + area.scrollY
+    const left = rect.left + area.scrollX
+    if (top + rect.height <= 0 || left + rect.width <= 0) return 'offscreen'
+    if (top >= area.height || left >= area.width) return 'offscreen'
     return 'visible'
   }
 
@@ -95,10 +120,10 @@
   /** Not recordable here, but its descendants still might be. */
   const SKIP = Object.freeze({ skip: true })
 
-  function describe(el, index) {
+  function describe(el, index, area) {
     const rect = el.getBoundingClientRect()
     const style = window.getComputedStyle(el)
-    const state = visibility(el, rect, style)
+    const state = visibility(el, rect, style, area)
     // null prunes the subtree; SKIP records nothing and keeps walking.
     if (state === 'hidden') return null
     if (state !== 'visible') return SKIP
@@ -108,11 +133,12 @@
       i: index,
       tag,
       role: el.getAttribute('role') || IMPLICIT_ROLE[tag] || '',
-      // Viewport coordinates. The host translates them into the display's
-      // pixels using the same client rectangle the picker already uses.
+      // Coordinates of the captured area: viewport pixels for a viewport walk,
+      // document pixels for a full-page one. The host translates them into the
+      // picture's pixels using the same client rectangle the picker already uses.
       bounds: {
-        x: Math.round(rect.left),
-        y: Math.round(rect.top),
+        x: Math.round(rect.left + area.scrollX),
+        y: Math.round(rect.top + area.scrollY),
         width: Math.round(rect.width),
         height: Math.round(rect.height),
       },
@@ -146,7 +172,7 @@
    * whole branch is invisible — a closed menu costs one refusal, not one per
    * item inside it.
    */
-  function walk() {
+  function walk(area) {
     const elements = []
     let truncated = false
     let visited = 0
@@ -159,7 +185,7 @@
         truncated = true
         break
       }
-      const described = describe(el, elements.length)
+      const described = describe(el, elements.length, area)
       // TWO DIFFERENT REFUSALS, AND CONFLATING THEM COST A WHOLE PAGE.
       //
       // `display: none`, `visibility: hidden`, `aria-hidden` and `opacity: 0`
@@ -183,18 +209,31 @@
     return { elements, truncated, visited }
   }
 
-  window.__capturepackDocumentSnapshot = () => {
+  /**
+   * @param {{ scope?: 'viewport' | 'document', width?: number, height?: number }} [options]
+   *   `scope: 'document'` records the whole page for a full-page picture whose
+   *   CSS size is `width` x `height` (#157); anything else is the viewport.
+   */
+  window.__capturepackDocumentSnapshot = (options) => {
     const started = Date.now()
-    const { elements, truncated, visited } = walk()
+    const wholeDocument =
+      !!options && options.scope === 'document'
+      && typeof options.width === 'number' && options.width > 0
+      && typeof options.height === 'number' && options.height > 0
+    const area = wholeDocument ? documentArea(options) : viewportArea()
+    const { elements, truncated, visited } = walk(area)
     return {
-      // The space the bounds are in, so the host never has to guess.
+      // The space the bounds are in, so the host never has to guess. For a
+      // document walk it is the PICTURE: its CSS size, with no scroll offset,
+      // because every rectangle already has the page's scroll folded in.
       viewport: {
-        width: window.innerWidth,
-        height: window.innerHeight,
+        width: area.width,
+        height: area.height,
         devicePixelRatio: window.devicePixelRatio || 1,
-        scrollX: Math.round(window.scrollX),
-        scrollY: Math.round(window.scrollY),
+        scrollX: wholeDocument ? 0 : Math.round(window.scrollX),
+        scrollY: wholeDocument ? 0 : Math.round(window.scrollY),
       },
+      scope: wholeDocument ? 'document' : 'viewport',
       url: location.href,
       title: document.title,
       elements,
@@ -207,7 +246,7 @@
         'the value of every input, textarea and select',
         'everything but the presence of a password field',
         'text of elements the user could not see',
-        'elements outside the viewport',
+        wholeDocument ? 'elements outside the captured page area' : 'elements outside the viewport',
         'attributes outside the recorded allowlist',
       ],
     }

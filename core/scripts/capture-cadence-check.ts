@@ -220,18 +220,19 @@ console.log('\nCadence is frozen beside the replay it describes')
   check(
     'a frozen display carries the cadence measured when its replay was taken',
     session.includes('cadence?: ManifestCadence')
-      && (session.match(/const cadence = manifestCadence\(display\.id\)/gu) ?? []).length === 2,
+      && session.includes('replay.cadence === undefined')
+      && session.includes('manifestCadenceFromSummary(replay.cadence)'),
   )
   check(
     'the display captures read that frozen value rather than the live registry',
     session.includes('...(d.cadence === undefined ? {} : { cadence: d.cadence })')
       && !session.includes('const cadence = manifestCadence(d.id)'),
   )
-  // manifestCadence itself still exists for the one caller that legitimately
-  // reads at capture time - the top-level focused value.
+  // The top-level focused declaration is the already-frozen display value;
+  // re-reading the shipping registry would lose native snapshot cadence.
   check(
-    'the live read survives only where it is taken at the capture instant',
-    session.includes('const focusedCadence = manifestCadence(display.id)'),
+    'the focused manifest reuses the cadence frozen beside its exact bytes',
+    session.includes('const focusedCadence = display.cadence'),
   )
   const renderer = readFileSync(
     path.join(process.cwd(), 'src/renderer/capture/capture.ts'),

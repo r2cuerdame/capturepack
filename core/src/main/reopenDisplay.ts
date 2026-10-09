@@ -1,7 +1,7 @@
 interface PersistedScreenGeometry {
   width: number
   height: number
-  scale: number
+  scale?: number
   bounds?: { x: number; y: number; width: number; height: number }
 }
 
@@ -38,8 +38,8 @@ export interface ReopenedContextDisplayTarget {
   snapshotDipBounds?: { x: number; y: number; width: number; height: number }
 }
 
-function positive(value: number): boolean {
-  return Number.isFinite(value) && value > 0
+function positive(value: number | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
 }
 
 function rasterMatches(
@@ -61,10 +61,10 @@ function rasterMatches(
  * agree and the density is one the captured desk actually declared. A region
  * spanning mixed-DPI displays has no single scale and must stay unmapped.
  */
-function reopenedImageCropSpace(
+export function reopenedImageCropSpace(
   snapshotWidth: number,
   snapshotHeight: number,
-  screens: readonly PersistedScreenGeometry[],
+  screens: readonly PersistedScreenGeometry[] | undefined,
   cropBounds: PersistedImageCropGeometry | undefined,
 ): {
   snapshotPixelsPerDip: number
@@ -89,16 +89,17 @@ function reopenedImageCropSpace(
     return null
   }
   const scale = (scaleX + scaleY) / 2
-  const declared = screens.some((screen) => {
+  const declared = (screens ?? []).some((screen) => {
     const bounds = screen.bounds
+    const screenScale = screen.scale ?? 1
     if (
       bounds === undefined
       || !Number.isFinite(bounds.x)
       || !Number.isFinite(bounds.y)
       || !positive(bounds.width)
       || !positive(bounds.height)
-      || !positive(screen.scale)
-      || Math.abs(screen.scale - scale) > tolerance
+      || !positive(screenScale)
+      || Math.abs(screenScale - scale) > tolerance
     ) {
       return false
     }
@@ -141,7 +142,7 @@ export function reopenedSnapshotPixelsPerDip({
 }: {
   snapshotWidth: number
   snapshotHeight: number
-  screens: readonly PersistedScreenGeometry[]
+  screens?: readonly PersistedScreenGeometry[]
   displays: readonly PersistedDisplayGeometry[] | undefined
 }): number | undefined {
   if (!positive(snapshotWidth) || !positive(snapshotHeight)) return undefined
@@ -168,12 +169,12 @@ export function reopenedSnapshotPixelsPerDip({
     }
   }
 
-  const matchingScales = screens
+  const matchingScales = (screens ?? [])
     .filter(
       (screen) =>
         positive(screen.width)
         && positive(screen.height)
-        && positive(screen.scale)
+        && positive(screen.scale ?? 1)
         && rasterMatches(
           screen.width,
           screen.height,
@@ -181,7 +182,7 @@ export function reopenedSnapshotPixelsPerDip({
           snapshotHeight,
         ),
     )
-    .map((screen) => screen.scale)
+    .map((screen) => screen.scale ?? 1)
   if (matchingScales.length === 0) return undefined
   const uniqueScales = new Set(matchingScales)
   return uniqueScales.size === 1 ? matchingScales[0] : undefined
@@ -210,7 +211,7 @@ export function reopenedContextDisplayTargets({
 }: {
   snapshotWidth: number
   snapshotHeight: number
-  screens: readonly PersistedScreenGeometry[]
+  screens?: readonly PersistedScreenGeometry[]
   displays: readonly PersistedDisplayGeometry[] | undefined
   loadedDisplays: readonly ReopenedLoadedDisplayGeometry[]
   cropBounds?: PersistedImageCropGeometry

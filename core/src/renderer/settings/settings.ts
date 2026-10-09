@@ -71,6 +71,9 @@ interface SettingsBridge {
   chromeDetect(): Promise<ChromeIntegrationStatus>
   status(): Promise<SettingsStatusResult>
   restartMcp(): Promise<SettingsStatusResult>
+  actionSetSecret(configId: string, secret: string): Promise<boolean>
+  actionHasSecret(configId: string): Promise<boolean>
+  actionForgetSecret(configId: string): Promise<void>
 }
 
 declare global {
@@ -205,6 +208,7 @@ function refreshLanguage(): void {
   // applyDomI18n cannot reach any of them. Re-asking for the usage repaints all
   // five in the new language at once, off a cached main-side snapshot.
   refreshStorage()
+  renderActionList()
   // The client dropdown is NOT rebuilt here: its entries are product names and
   // config paths, identical in every language, and rebuilding it would throw
   // away the client the user just picked.
@@ -1672,6 +1676,68 @@ function renderActionRow(
   })
   panel.append(labelled(t('settings.actionUrl'), url))
 
+  const secretWrap = document.createElement('div')
+  secretWrap.className = 'actionSecretWrap'
+
+  const secretInput = document.createElement('input')
+  secretInput.type = 'password'
+  secretInput.spellcheck = false
+  secretInput.autocomplete = 'off'
+  secretInput.placeholder = t('settings.actionSecretPlaceholder')
+
+  const secretSave = document.createElement('button')
+  secretSave.type = 'button'
+  secretSave.className = 'quiet'
+  secretSave.textContent = t('settings.actionSecretSave')
+
+  const secretClear = document.createElement('button')
+  secretClear.type = 'button'
+  secretClear.className = 'quiet'
+  secretClear.textContent = t('settings.actionSecretClear')
+  secretClear.disabled = true
+
+  const secretStatus = document.createElement('span')
+  secretStatus.className = 'actionSecretStatus'
+
+  const updateSecretIndicator = (hasSecret: boolean): void => {
+    secretStatus.textContent = hasSecret
+      ? t('settings.actionSecretConfigured')
+      : t('settings.actionSecretNone')
+    secretClear.disabled = !hasSecret
+  }
+
+  void bridge.actionHasSecret(config.configId).then((hasSecret) => {
+    updateSecretIndicator(hasSecret)
+  })
+
+  secretSave.addEventListener('click', () => {
+    const val = secretInput.value.trim()
+    if (val === '') return
+    void bridge.actionSetSecret(config.configId, val).then((ok) => {
+      if (ok) {
+        secretInput.value = ''
+        updateSecretIndicator(true)
+      }
+    })
+  })
+
+  secretInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      secretSave.click()
+    }
+  })
+
+  secretClear.addEventListener('click', () => {
+    void bridge.actionForgetSecret(config.configId).then(() => {
+      secretInput.value = ''
+      updateSecretIndicator(false)
+    })
+  })
+
+  secretWrap.append(secretInput, secretSave, secretClear, secretStatus)
+  panel.append(labelled(t('settings.actionSecret'), secretWrap))
+
   const continueOnFailure = document.createElement('input')
   continueOnFailure.type = 'checkbox'
   continueOnFailure.checked = config.continueOnFailure
@@ -1758,6 +1824,7 @@ function renderActionRow(
   remove.className = 'quiet'
   remove.textContent = t('settings.actionRemove')
   remove.addEventListener('click', () => {
+    void bridge.actionForgetSecret(config.configId)
     void writePipeline(
       actionConfigsOf(settings).filter((candidate) => candidate.configId !== config.configId),
       settings.actionWebhooks,

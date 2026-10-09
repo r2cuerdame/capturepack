@@ -19,6 +19,7 @@ const pack = join(temporaryRoot, 'chrome-dom.capturepack')
 const motionPack = join(temporaryRoot, 'mixed-display-motion.capturepack')
 const imagePack = join(temporaryRoot, 'region-image.capturepack')
 const viewerPack = join(temporaryRoot, 'offline-viewer.capturepack')
+const uiaDisplayPack = join(temporaryRoot, 'uia-display.capturepack')
 let checks = 0
 
 function check(message, condition) {
@@ -128,6 +129,157 @@ try {
     !`${invalidJson.stdout}\n${invalidJson.stderr}`.includes('ReferenceError')
       && !invalidJson.stderr.includes('SyntaxError'))
 
+  const validDoc = {
+    viewport: {
+      width: 1280,
+      height: 720,
+      device_pixel_ratio: 1,
+      scroll_x: 0,
+      scroll_y: 0,
+    },
+    url: 'https://example.test/doc',
+    title: 'Doc Title',
+    truncated: false,
+    visited_count: 10,
+    elapsed_ms: 3.5,
+    omitted: [],
+    elements: [{
+      i: 0,
+      tag: 'button',
+      role: 'button',
+      bounds: { x: 10, y: 20, width: 80, height: 24 },
+    }],
+  }
+
+  writeJson(elementsFile, {
+    protocol: 1,
+    extension_version: '0.1.8',
+    events: [{
+      t_ms: 0,
+      type: 'dom.document.captured',
+      tab: { url: 'https://example.test/', title: 'Fixture' },
+      document: validDoc,
+    }],
+  })
+  const capturedDocRes = runValidator()
+  check('validate-capturepack recognizes dom.document.captured as known event',
+    capturedDocRes.status === 0 && capturedDocRes.stdout.includes('result: VALID'))
+  check('dom.document.captured does not emit unknown event type note',
+    !capturedDocRes.stdout.includes('event(s) of a type this validator does not know'))
+
+  const invalidDocViewport = JSON.parse(JSON.stringify(validDoc))
+  delete invalidDocViewport.viewport.device_pixel_ratio
+  writeJson(elementsFile, {
+    protocol: 1,
+    extension_version: '0.1.8',
+    events: [{
+      t_ms: 0,
+      type: 'dom.document.captured',
+      tab: { url: 'https://example.test/', title: 'Fixture' },
+      document: invalidDocViewport,
+    }],
+  })
+  const missingViewportRes = runValidator()
+  check('validateChromeDom rejects document with missing viewport properties',
+    missingViewportRes.status === 1
+      && missingViewportRes.stdout.includes('result: INVALID')
+      && missingViewportRes.stdout.includes('document.viewport MUST carry numbers'))
+
+  const invalidDocElements = JSON.parse(JSON.stringify(validDoc))
+  invalidDocElements.elements = [{ i: 0, tag: 'div' }]
+  writeJson(elementsFile, {
+    protocol: 1,
+    extension_version: '0.1.8',
+    events: [{
+      t_ms: 0,
+      type: 'dom.document.captured',
+      tab: { url: 'https://example.test/', title: 'Fixture' },
+      document: invalidDocElements,
+    }],
+  })
+  const malformedElRes = runValidator()
+  check('validateChromeDom rejects document with malformed element entry',
+    malformedElRes.status === 1
+      && malformedElRes.stdout.includes('result: INVALID')
+      && malformedElRes.stdout.includes('document.elements[0] MUST be an object with'))
+
+  // age_ms rules for still image captures vs video/replay packs (SPEC §11.4)
+  manifest.format_version = '0.3.0'
+  manifest.capture_kind = 'image'
+  manifest.media.image_scope = 'fullscreen'
+  rmSync(join(pack, 'timeline.json'), { force: true })
+  rmSync(join(pack, 'skills', 'timeline.md'), { force: true })
+  writeJson(manifestFile, manifest)
+
+  writeJson(elementsFile, {
+    protocol: 1,
+    extension_version: '0.1.8',
+    events: [{
+      t_ms: 0,
+      type: 'dom.document.captured',
+      tab: { url: 'https://example.test/', title: 'Fixture' },
+      document: validDoc,
+    }],
+  })
+  const missingAgeStillRes = runValidator()
+  check('validateChromeDom rejects still image event missing age_ms',
+    missingAgeStillRes.status === 1
+      && missingAgeStillRes.stdout.includes('result: INVALID')
+      && missingAgeStillRes.stdout.includes('age_ms is REQUIRED in a still capture'))
+
+  writeJson(elementsFile, {
+    protocol: 1,
+    extension_version: '0.1.8',
+    events: [{
+      t_ms: 0,
+      age_ms: 0,
+      type: 'dom.document.captured',
+      tab: { url: 'https://example.test/', title: 'Fixture' },
+      document: validDoc,
+    }],
+  })
+  const validStillRes = runValidator()
+  check('validateChromeDom accepts still image event with valid age_ms',
+    validStillRes.status === 0 && validStillRes.stdout.includes('result: VALID'))
+
+  manifest.capture_kind = 'video'
+  manifest.media.replay = 'replay.webm'
+  manifest.media.replay_duration_ms = 1_000
+  delete manifest.media.image_scope
+  writeFileSync(join(pack, 'replay.webm'), Buffer.alloc(0))
+  writeJson(manifestFile, manifest)
+
+  writeJson(elementsFile, {
+    protocol: 1,
+    extension_version: '0.1.8',
+    events: [{
+      t_ms: 0,
+      age_ms: 0,
+      type: 'dom.document.captured',
+      tab: { url: 'https://example.test/', title: 'Fixture' },
+      document: validDoc,
+    }],
+  })
+  const replayWithAgeRes = runValidator()
+  check('validateChromeDom rejects replay pack event carrying age_ms',
+    replayWithAgeRes.status === 1
+      && replayWithAgeRes.stdout.includes('result: INVALID')
+      && replayWithAgeRes.stdout.includes('age_ms MUST NOT appear in a replay pack'))
+
+  writeJson(elementsFile, {
+    protocol: 1,
+    extension_version: '0.1.8',
+    events: [{
+      t_ms: 0,
+      type: 'dom.document.captured',
+      tab: { url: 'https://example.test/', title: 'Fixture' },
+      document: validDoc,
+    }],
+  })
+  const replayWithoutAgeRes = runValidator()
+  check('validateChromeDom accepts replay pack event omitting age_ms',
+    replayWithoutAgeRes.status === 0 && replayWithoutAgeRes.stdout.includes('result: VALID'))
+
   cpSync(join(repositoryRoot, 'examples', 'minimal'), viewerPack, { recursive: true })
   writeFileSync(join(viewerPack, 'viewer.html'), '<!doctype html><title>CapturePack</title>', 'utf8')
   const viewerManifestFile = join(viewerPack, 'manifest.json')
@@ -220,6 +372,16 @@ try {
     validCaptureDiagnostics.status === 0
       && validCaptureDiagnostics.stdout.includes('capture provenance is honest'))
 
+  motionManifest.media.cadence.backend = 'native-dxgi'
+  motionManifest.media.displays[1].cadence.backend = 'native-dxgi'
+  writeJson(motionManifestFile, motionManifest)
+  const validNativeCadence = runValidator(motionPack)
+  check('native snapshot cadence provenance is accepted beside its replay',
+    validNativeCadence.status === 0
+      && validNativeCadence.stdout.includes('capture provenance is honest'))
+  motionManifest.media.cadence.backend = 'chromium-desktop-capture'
+  motionManifest.media.displays[1].cadence.backend = 'chromium-desktop-capture'
+
   motionManifest.media.cadence.requested_fps = 1
   motionManifest.media.displays[1].cadence.requested_fps = 1
   writeJson(motionManifestFile, motionManifest)
@@ -262,6 +424,16 @@ try {
     divergentFocusedCadence.status === 1
       && divergentFocusedCadence.stdout.includes('cadence MUST equal top-level media.cadence'))
 
+  delete motionManifest.media.displays[1].cadence
+  writeJson(motionManifestFile, motionManifest)
+  const missingFocusedCadence = runValidator(motionPack)
+  check('focused display missing cadence when top-level cadence is present is rejected (SPEC §5.6, #239)',
+    missingFocusedCadence.status === 1
+      && missingFocusedCadence.stdout.includes('cadence MUST equal top-level media.cadence'))
+
+  motionManifest.media.displays[1].cadence = {
+    ...motionManifest.media.cadence,
+  }
   motionManifest.media.displays[1].cadence.requested_fps = 15
   motionManifest.format_version = '0.3.0'
   writeJson(motionManifestFile, motionManifest)
@@ -537,6 +709,229 @@ try {
   check('a client rectangle missing a side is rejected',
     malformedClient.status === 1
       && malformedClient.stdout.includes('client_bounds MUST be { x, y, width, height }'))
+
+  // REGION-CROP STILL PACK WITH WINDOW LARGER THAN CROP (SPEC §11.3, #217).
+  //
+  // In a region-crop capture, a window partially covering the crop is clipped to
+  // the crop rectangle (e.g. bounds: { x: 0, y: 0, width: 485, height: 254 }).
+  // If client_bounds was left unclipped in global or translated coordinates
+  // (e.g. { x: -192, y: -132, width: 984, height: 724 }), it falls outside bounds
+  // and the canonical validator rejects the pack.
+  // When client_bounds is clipped to the crop, containment holds and validator passes.
+  const regionCropPayload = (clientBounds) => ({
+    captured_at: '2026-08-02T00:59:13+09:00',
+    budget_ms: 3000,
+    truncated: false,
+    windows: [{
+      hwnd: '9002',
+      title: 'Cropped Browser - Chrome',
+      process: 'chrome',
+      class_name: 'Chrome_WidgetWin_1',
+      bounds: { x: 0, y: 0, width: 485, height: 254 },
+      ...(clientBounds === null ? {} : { client_bounds: clientBounds }),
+      focused: true,
+      z: 0,
+      tree: 'collected',
+      element_count: 0,
+    }],
+    elements: [],
+  })
+
+  writeJson(uiaFile, regionCropPayload({ x: -192, y: -132, width: 984, height: 724 }))
+  const unclippedRegionClient = runValidator(imagePack)
+  check('a region-crop still pack rejects unclipped client_bounds extending outside cropped window bounds',
+    unclippedRegionClient.status === 1
+      && unclippedRegionClient.stdout.includes('is not inside its own window\'s bounds'))
+
+  writeJson(uiaFile, regionCropPayload({ x: 0, y: 10, width: 470, height: 240 }))
+  const clippedRegionClient = runValidator(imagePack)
+  check('a region-crop still pack accepts client_bounds clipped to cropped window bounds (SPEC §11.3)',
+    clippedRegionClient.status === 0
+      && clippedRegionClient.stdout.includes('result: VALID')
+      && clippedRegionClient.stdout.includes('1 window(s), 1 with a client rectangle'))
+
+  // WINDOW AND ELEMENT DISPLAY COORDINATE SPACE RESOLUTION (SPEC §11.3, #232).
+  //
+  // In SPEC §11.3, an omitted `display` on a window or element denotes the
+  // focused display. Explicitly declaring the focused display index is also
+  // conforming and legal (issuing an advisory note). Coordinate space agreement
+  // between a control and its window must compare the resolved displays, so
+  // mixing explicit and omitted representations for the focused display is
+  // accepted as VALID.
+  cpSync(join(repositoryRoot, 'examples', 'minimal'), uiaDisplayPack, { recursive: true })
+  const uiaDisplayManifestFile = join(uiaDisplayPack, 'manifest.json')
+  const uiaDisplayManifest = JSON.parse(readFileSync(uiaDisplayManifestFile, 'utf8'))
+  uiaDisplayManifest.format_version = '0.7.0'
+  uiaDisplayManifest.environment.screens = [
+    { width: 640, height: 400, scale: 1 },
+    { width: 800, height: 600, scale: 1 },
+  ]
+  uiaDisplayManifest.media.displays = [
+    {
+      index: 1,
+      focused: true,
+      bounds: { x: 0, y: 0, width: 640, height: 400 },
+      scale: 1,
+      snapshot: 'snapshot.png',
+      snapshot_width: 640,
+      snapshot_height: 400,
+      replay: null,
+    },
+    {
+      index: 2,
+      focused: false,
+      bounds: { x: 640, y: 0, width: 800, height: 600 },
+      scale: 1,
+      snapshot: 'snapshot-d2.png',
+      snapshot_width: 800,
+      snapshot_height: 600,
+      replay: null,
+    },
+  ]
+  writeFileSync(join(uiaDisplayPack, 'snapshot-d2.png'), pngHeader(800, 600))
+  uiaDisplayManifest.plugins = [{
+    name: 'windows-uia',
+    version: '0.5.0',
+    path: 'plugins/windows-uia/',
+  }]
+  writeJson(uiaDisplayManifestFile, uiaDisplayManifest)
+  mkdirSync(join(uiaDisplayPack, 'plugins', 'windows-uia'), { recursive: true })
+  writeJson(join(uiaDisplayPack, 'plugins', 'windows-uia', 'meta.json'), {
+    name: 'windows-uia',
+    version: '0.5.0',
+  })
+
+  const uiaDisplayElementsFile = join(uiaDisplayPack, 'plugins', 'windows-uia', 'elements.json')
+  const makeUiaDisplayPayload = (windowDisplay, elementDisplay) => ({
+    captured_at: uiaDisplayManifest.created_at,
+    budget_ms: 500,
+    truncated: false,
+    windows: [{
+      title: 'Test Window',
+      process: 'test',
+      class_name: 'TestClass',
+      focused: true,
+      bounds: { x: 0, y: 0, width: 640, height: 400 },
+      z: 0,
+      tree: 'collected',
+      element_count: 1,
+      ...(windowDisplay !== undefined ? { display: windowDisplay } : {}),
+    }],
+    elements: [{
+      name: 'Test Button',
+      control_type: 'Button',
+      automation_id: 'btn1',
+      class_name: 'Button',
+      bounds: { x: 10, y: 10, width: 100, height: 30 },
+      depth: 1,
+      window: 0,
+      ...(elementDisplay !== undefined ? { display: elementDisplay } : {}),
+    }],
+  })
+
+  writeJson(uiaDisplayElementsFile, makeUiaDisplayPayload(undefined, 1))
+  const omittedWinExplicitEl = runValidator(uiaDisplayPack)
+  check('windows-uia accepts omitted window display with explicit focused element display',
+    omittedWinExplicitEl.status === 0
+      && omittedWinExplicitEl.stdout.includes('result: VALID')
+      && omittedWinExplicitEl.stdout.includes('elements[0].display 1 names the FOCUSED display'))
+
+  writeJson(uiaDisplayElementsFile, makeUiaDisplayPayload(1, undefined))
+  const explicitWinOmittedEl = runValidator(uiaDisplayPack)
+  check('windows-uia accepts explicit focused window display with omitted element display',
+    explicitWinOmittedEl.status === 0
+      && explicitWinOmittedEl.stdout.includes('result: VALID')
+      && explicitWinOmittedEl.stdout.includes('windows[0].display 1 names the FOCUSED display'))
+
+  writeJson(uiaDisplayElementsFile, makeUiaDisplayPayload(undefined, 2))
+  const omittedWinDifferentEl = runValidator(uiaDisplayPack)
+  check('windows-uia rejects element on different display when window display is omitted (focused)',
+    omittedWinDifferentEl.status === 1
+      && omittedWinDifferentEl.stdout.includes('elements[0].display 2 disagrees with windows[z=0].display null'))
+
+  writeJson(uiaDisplayElementsFile, makeUiaDisplayPayload(2, undefined))
+  const differentWinOmittedEl = runValidator(uiaDisplayPack)
+  check('windows-uia rejects omitted element display when window is on a non-focused display',
+    differentWinOmittedEl.status === 1
+      && differentWinOmittedEl.stdout.includes('elements[0].display null disagrees with windows[z=0].display 2'))
+
+  writeJson(uiaDisplayElementsFile, makeUiaDisplayPayload(1, 2))
+  const explicitDisagreement = runValidator(uiaDisplayPack)
+  check('windows-uia rejects genuinely disagreeing explicit window and element displays',
+    explicitDisagreement.status === 1
+      && explicitDisagreement.stdout.includes('elements[0].display 2 disagrees with windows[z=0].display 1'))
+
+  // WINDOW CLIENT BOUNDS ON SECONDARY DISPLAY (SPEC §11.3, #217).
+  //
+  // A window on a secondary display mapped to snapshot pixel coordinates carries
+  // client_bounds also mapped to that snapshot. When client_bounds is correctly
+  // mapped within the window's bounds, validation passes. If client_bounds is
+  // unmapped (e.g. left in desktop coordinates), validator fails with containment error.
+  const makeMultiDisplayClientPayload = (secondaryClientBounds) => ({
+    captured_at: uiaDisplayManifest.created_at,
+    budget_ms: 500,
+    truncated: false,
+    windows: [
+      {
+        title: 'Focused Window',
+        process: 'test',
+        class_name: 'TestClass',
+        focused: true,
+        bounds: { x: 0, y: 0, width: 640, height: 400 },
+        client_bounds: { x: 8, y: 30, width: 624, height: 360 },
+        z: 0,
+        tree: 'collected',
+        element_count: 1,
+      },
+      {
+        title: 'Secondary Window',
+        process: 'test',
+        class_name: 'TestClass',
+        focused: false,
+        display: 2,
+        bounds: { x: 50, y: 50, width: 700, height: 500 },
+        ...(secondaryClientBounds !== undefined ? { client_bounds: secondaryClientBounds } : {}),
+        z: 1,
+        tree: 'collected',
+        element_count: 1,
+      },
+    ],
+    elements: [
+      {
+        name: 'Btn 1',
+        control_type: 'Button',
+        automation_id: 'b1',
+        class_name: 'Button',
+        bounds: { x: 10, y: 40, width: 100, height: 30 },
+        depth: 1,
+        window: 0,
+      },
+      {
+        name: 'Btn 2',
+        control_type: 'Button',
+        automation_id: 'b2',
+        class_name: 'Button',
+        display: 2,
+        bounds: { x: 60, y: 90, width: 100, height: 30 },
+        depth: 1,
+        window: 1,
+      },
+    ],
+  })
+
+  writeJson(uiaDisplayElementsFile, makeMultiDisplayClientPayload({ x: 58, y: 80, width: 684, height: 460 }))
+  const validMultiDisplayClient = runValidator(uiaDisplayPack)
+  check('windows-uia accepts correctly mapped client_bounds on secondary display (SPEC §11.3)',
+    validMultiDisplayClient.status === 0
+      && validMultiDisplayClient.stdout.includes('result: VALID')
+      && validMultiDisplayClient.stdout.includes('2 window(s), 2 with a client rectangle'))
+
+  // Unmapped client_bounds in desktop coordinates (e.g. x=698 > bounds.x + bounds.width=750 on display 2)
+  writeJson(uiaDisplayElementsFile, makeMultiDisplayClientPayload({ x: 698, y: 80, width: 684, height: 460 }))
+  const unmappedSecondaryClient = runValidator(uiaDisplayPack)
+  check('windows-uia rejects unmapped desktop-coordinate client_bounds on secondary display',
+    unmappedSecondaryClient.status === 1
+      && unmappedSecondaryClient.stdout.includes('is not inside its own window\'s bounds'))
 
   console.log(`\n${checks}/${checks} CapturePack validator checks passed`)
 } finally {

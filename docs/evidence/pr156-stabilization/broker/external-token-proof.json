@@ -1,0 +1,58 @@
+﻿{
+    "time":  "2026-09-12T13:29:06.2515409Z",
+    "sourceHead":  "fb982677c96d6d365ea06bd1d1a2d430b09873dc",
+    "inspectorPid":  66592,
+    "tokens":  {
+                   "value":  [
+                                 {
+                                     "pid":  7240,
+                                     "name":  "explorer",
+                                     "session":  1,
+                                     "integritySid":  "S-1-16-8192"
+                                 },
+                                 {
+                                     "pid":  70196,
+                                     "name":  "powershell",
+                                     "session":  1,
+                                     "integritySid":  "S-1-16-8192"
+                                 },
+                                 {
+                                     "pid":  22064,
+                                     "name":  "node",
+                                     "session":  1,
+                                     "integritySid":  "S-1-16-8192"
+                                 },
+                                 {
+                                     "pid":  66592,
+                                     "name":  "powershell",
+                                     "session":  1,
+                                     "integritySid":  "S-1-16-12288"
+                                 }
+                             ],
+                   "Count":  4
+               },
+    "processes":  [
+                      {
+                          "ProcessId":  7240,
+                          "ParentProcessId":  9192,
+                          "ExecutablePath":  "C:\\WINDOWS\\Explorer.EXE",
+                          "CommandLine":  "C:\\WINDOWS\\Explorer.EXE",
+                          "CreationDate":  "\/Date(1789045091684)\/"
+                      },
+                      {
+                          "ProcessId":  70196,
+                          "ParentProcessId":  7240,
+                          "ExecutablePath":  "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                          "CommandLine":  "\"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -File \"C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-broker-20260912-1\\launcher.ps1\"",
+                          "CreationDate":  "\/Date(1789219715817)\/"
+                      },
+                      {
+                          "ProcessId":  22064,
+                          "ParentProcessId":  70196,
+                          "ExecutablePath":  "C:\\Program Files\\nodejs\\node.exe",
+                          "CommandLine":  "\"C:\\Program Files\\nodejs\\node.exe\" \"C:\\_WorktreeArchive\\Herder-2026-09-12\\worktrees\\job_01M21Z4M10PGMW2N12MNTC3EN3\\.review-archive\\medium-broker-20260912-1\\waiting-node.cjs\" ",
+                          "CreationDate":  "\/Date(1789219716109)\/"
+                      }
+                  ],
+    "bothMedium":  true
+}

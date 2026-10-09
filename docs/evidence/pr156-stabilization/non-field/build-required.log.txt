@@ -1,0 +1,7 @@
+
+> capturepack@0.5.0 build
+> node scripts/build.mjs --require-dxgi-helper
+
+DXGI helper built: dist\scripts\dxgi-timing-reference.exe
+DXGI helper built: dist\scripts\dxgi-replay-ring.exe
+build ok

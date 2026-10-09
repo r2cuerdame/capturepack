@@ -13,6 +13,7 @@ import type {
   CaptureReplayRequestPayload,
   CaptureReplayResumePayload,
   CaptureReplayResultPayload,
+  CaptureReplayWorkloadPayload,
   CaptureStartPayload,
   CaptureTickPayload,
 } from '../../shared/ipc'
@@ -58,6 +59,7 @@ import {
   buildSourceLatencyFingerprint,
   buildSourceLatencyFingerprintFromRgb,
   decideProcessorPresentationLatency,
+  decideSameFrameSourcePresentationLatency,
   decideSourceLatencyCalibration,
   decideSourcePresentationLatency,
   mapDxgiTimingReferenceEpoch,
@@ -72,9 +74,9 @@ import {
 } from './sourceLatencyCalibration'
 import {
   decideReplayPixelClock,
+  discoverReplayPixelClockTargets,
   REPLAY_PIXEL_CLOCK_SAMPLE_LIMIT,
   retainReplayPixelClockPresentedSample,
-  sourceClockAnchorsFromObservedCaptureTime,
   sourceClockAnchorsFromMeasuredMediaTime,
   type ReplayPixelClockAnchor,
   type ReplayPixelClockDecision,
@@ -105,6 +107,7 @@ import { WebmDualSlotRing } from './webmDualSlotRing'
 
 interface CaptureBridge {
   onStart(cb: (payload: CaptureStartPayload) => void): void
+  onReplayWorkload(cb: (payload: CaptureReplayWorkloadPayload) => void): void
   onRequestReplay(cb: (payload: CaptureReplayRequestPayload) => void): void
   onResumeReplay(cb: (payload: CaptureReplayResumePayload) => void): void
   sendReplayResult(payload: CaptureReplayResultPayload): void
@@ -142,6 +145,10 @@ const REPLAY_PIXEL_CLOCK_DECODE_DEADLINE_MS = 1_500
 const REPLAY_PIXEL_CLOCK_SEEK_DEADLINE_MS = 200
 let replayPixelClockDecodeDiagnostics: Record<string, unknown> | undefined
 let recorderSourceFps = 15
+// The capture window remains alive as the display-identity/IPC owner while a
+// healthy native service is selected. Shipping encoders must not remain alive;
+// the focused stream survives only because it still owns Lane-S frame ticks.
+let replayWorkloadActive = true
 
 function currentMp4FragmentIntervalMs(): number {
   return mp4FragmentIntervalMs(recorderSourceFps)
@@ -242,6 +249,7 @@ let activeRecorder: ActiveRecorder | null = null
 let sourceLatencyCalibration: CaptureReadyPayload['sourceLatencyCalibration']
 let sourceLatencyCalibrationGeneration: number | null = null
 let sourceLatencyCalibrationCancel: (() => void) | null = null
+let sourceLatencyPresentationObserver: ((sample: ReplayPixelClockPresentedSample) => void) | null = null
 let replayPixelClockPresentedSamples: ReplayPixelClockPresentedSample[] = []
 let replayPixelClockCanvas: HTMLCanvasElement | null = null
 let replayPixelClockContext: CanvasRenderingContext2D | null = null
@@ -255,6 +263,9 @@ let latestPresentedFrame:
 let replayRing: FragmentedMp4Ring | null = null
 let webmRing: WebmDualSlotRing | null = null
 let captureGeneration = 0
+// Native READY retires recorder work, but a focused display still owns its
+// pending desktop stream for Lane-S. Only a real teardown retires that stream.
+let captureStreamGeneration = 0
 let ingestQueue: BoundedBlobIngestQueue<RecorderIngestPayload> | null = null
 let recorderQueue: Promise<void> = Promise.resolve()
 let replayHold: ReplayHold | null = null
@@ -566,7 +577,10 @@ function startFrameTicks(preparedVideo?: HTMLVideoElement): void {
     video.style.position = 'fixed'
     video.style.width = '1px'
     video.style.height = '1px'
-    video.style.opacity = '0'
+    // The BrowserWindow is hidden. Keep this one pixel paintable: Chromium can
+    // throttle undrawn compositor frames to 1 Hz despite backgroundThrottling
+    // being disabled, starving rVFC and the bounded exposure calibration.
+    video.style.opacity = '1'
     video.style.pointerEvents = 'none'
     video.srcObject = active
     document.body.appendChild(video)
@@ -678,11 +692,8 @@ function startFrameTicks(preparedVideo?: HTMLVideoElement): void {
       video.requestVideoFrameCallback(pump)
       return
     }
-    const base = activeRecorder
-    if (base === null) {
-      video.requestVideoFrameCallback(pump)
-      return
-    }
+    // Native READY retires MediaRecorder, but this stream still owns Lane-S
+    // presentation ticks (#243). Only the tick generation retires this chain.
     // ONE MONOTONIC NUMBER FOR THE WHOLE SESSION (#112).
     //
     // This used to send the frame's position within the CURRENT recorder slot.
@@ -738,9 +749,25 @@ function startFrameTicks(preparedVideo?: HTMLVideoElement): void {
     // would be a clock artifact, not a negative delay.
     const delayMs = Math.max(0, now - submitted)
     if (startPayload?.focused === true) {
+      if (!replayWorkloadActive) {
+        // Native DXGI/MF owns the saved bytes. This surviving Chromium stream
+        // is only a metronome that asks Lane-S to observe; its presentation
+        // timestamp and captureTime describe different pixels and must not
+        // shift the context timeline. Main/Lane-S files the host's measured
+        // observation instant, then the native PTS->wall anchors map replay
+        // queries onto that independent clock at freeze time.
+        window.captureBridge.sendTick?.({
+          displayId: startPayload.displayId,
+          mediaTimeMs: wallComparableTimeMs(performance.timeOrigin, now),
+          contextClockBasis: 'wall-observation',
+        })
+        video.requestVideoFrameCallback(pump)
+        return
+      }
       window.captureBridge.sendTick?.({
         displayId: startPayload.displayId,
         mediaTimeMs: wallComparableTimeMs(performance.timeOrigin, submitted),
+        contextClockBasis: 'frame-presentation',
         tickDelayMs: delayMs,
         ...(ageMs === undefined ? {} : { frameAgeMs: ageMs }),
       })
@@ -892,6 +919,7 @@ function retainReplayPixelClockFrame(
         ? { mediaTimeMs }
         : {}),
     }
+    sourceLatencyPresentationObserver?.(sample)
     retainReplayPixelClockPresentedSample(
       replayPixelClockPresentedSamples,
       sample,
@@ -928,6 +956,7 @@ function waitForPrimaryReadiness(
   acquiredStream: MediaStream,
   generation: number,
   minimumObservationMs: number,
+  requireAdvancingPresentations = false,
   onPresentedSample?: (sample: ReplayPixelClockPresentedSample) => void,
 ): Promise<PrimaryReadyResult> {
   return new Promise<PrimaryReadyResult>((resolve, reject) => {
@@ -942,7 +971,9 @@ function waitForPrimaryReadiness(
     video.style.position = 'fixed'
     video.style.width = '1px'
     video.style.height = '1px'
-    video.style.opacity = '0'
+    // Reuse a paintable one-pixel sink after readiness; a fully transparent
+    // sink can leave the hidden document on Chromium's undrawn-frame throttle.
+    video.style.opacity = '1'
     video.style.pointerEvents = 'none'
     video.srcObject = acquiredStream
     document.body.appendChild(video)
@@ -1008,7 +1039,16 @@ function waitForPrimaryReadiness(
         cancel()
         return
       }
-      if (readiness.canStartAtDeadline()) {
+      if (
+        readiness.canStartAtDeadline()
+        && (
+          !requireAdvancingPresentations
+          || (
+            readiness.observedFrames() >= 2
+            && readiness.observedSpanMs() > 0
+          )
+        )
+      ) {
         // Two monotonic frames are the early path. At the bounded deadline one
         // real presentation is sufficient for a legitimately static desktop;
         // its post-start watchdog is the only place a freeze can be judged,
@@ -1017,7 +1057,9 @@ function waitForPrimaryReadiness(
       } else {
         fail(
           new Error(
-            `primary capture produced no presented frame within ${PRIMARY_READY_TIMEOUT_MS} ms`,
+            requireAdvancingPresentations
+              ? `primary capture produced fewer than two advancing presentations within ${PRIMARY_READY_TIMEOUT_MS} ms`
+              : `primary capture produced no presented frame within ${PRIMARY_READY_TIMEOUT_MS} ms`,
           ),
         )
       }
@@ -1434,6 +1476,36 @@ interface SourceLatencyCalibrationHandle {
   observePresented(sample: ReplayPixelClockPresentedSample): void
 }
 
+/**
+ * Give the processor/rVFC bridge enough real presentation witnesses before
+ * acquiring the independent DXGI exposure reference.
+ *
+ * Hidden capture windows may receive only two rVFC callbacks during primary
+ * readiness. Taking the DXGI snapshot immediately made those callbacks both
+ * post-reference, so no processor sample already linked to the rVFC media
+ * clock could also contain the later DXGI pixel. Waiting for two real callbacks
+ * supplies pre-reference bridge candidates; the existing bounded
+ * post-reference observation supplies the other side. This one-shot does not
+ * gate recorder startup and does not invent a delay, FPS interval, or latency.
+ */
+async function waitForSourcePresentationWitnesses(
+  control: SourceLatencyCalibrationControl,
+  generation: number,
+  acquiredStream: MediaStream,
+): Promise<void> {
+  const deadline = performance.now() + PRIMARY_READY_TIMEOUT_MS
+  while (
+    control.presentedSamples.length < 2
+    && performance.now() < deadline
+    && !control.cancelled
+    && generation === captureGeneration
+    && stream === acquiredStream
+    && captureBackend === 'chromium-desktop-capture'
+  ) {
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 16))
+  }
+}
+
 function processorTimestampDiagnostic(
   samples: readonly ProcessorFingerprintSample[],
   qpcDecision?: ProcessorQpcDeliveryDecision,
@@ -1616,6 +1688,11 @@ async function measureChromiumSourceLatency(
     void processorSampler?.stop()
   }
   try {
+    await waitForSourcePresentationWitnesses(
+      control,
+      generation,
+      acquiredStream,
+    )
     const dxgi = await startDxgiLatencyReference()
     if (
       control.cancelled
@@ -1851,20 +1928,21 @@ async function measureChromiumSourceLatency(
         && Number.isFinite(diagnostic.latencyMs)
           ? diagnostic.latencyMs
           : undefined
-      const measuredBridge =
-        bridge.status === 'measured' ? bridge : undefined
+      const sameFramePresentation = decideSameFrameSourcePresentationLatency(
+        referenceAtMs,
+        measuredBaseLatencyMs,
+        processorEpochSamples,
+        bridge,
+        control.presentedSamples,
+      )
       const sourceMediaTimeOriginMs =
-        direct.status === 'measured'
-        && typeof direct.sourceMediaTimeOriginMs === 'number'
-        && Number.isFinite(direct.sourceMediaTimeOriginMs)
-          ? direct.sourceMediaTimeOriginMs
+        sameFramePresentation.status === 'measured'
+          ? sameFramePresentation.sourceMediaTimeOriginMs
           : undefined
       const measuredTotalLatencyMs =
-        measuredBaseLatencyMs === undefined
-        || qpcDecision.status !== 'measured'
-        || measuredBridge === undefined
-          ? undefined
-          : measuredBaseLatencyMs + measuredBridge.latencyMs
+        sameFramePresentation.status === 'measured'
+          ? sameFramePresentation.latencyMs
+          : undefined
       const presentation: NonNullable<
         NonNullable<
           CaptureReadyPayload['sourceLatencyCalibration']
@@ -1880,11 +1958,17 @@ async function measureChromiumSourceLatency(
               method: 'dxgi-processor-rvfc-pixel-join',
               sampleCount: control.presentedSamples.length,
               latencyMs: measuredTotalLatencyMs,
-              matchedPairCount: measuredBridge?.matchedPairCount,
-              processorToPresentationMs: measuredBridge?.latencyMs,
-              dispersionMs: measuredBridge?.dispersionMs,
+              matchedPairCount: bridge.matchedPairCount,
+              processorToPresentationMs:
+                sameFramePresentation.status === 'measured'
+                  ? sameFramePresentation.processorToPresentationMs
+                  : undefined,
+              dispersionMs:
+                bridge.status === 'measured'
+                  ? bridge.dispersionMs
+                  : undefined,
               observedProcessorSpacingMs:
-                measuredBridge?.observedProcessorSpacingMs,
+                bridge.observedProcessorSpacingMs,
               ...(sourceMediaTimeOriginMs === undefined
                 ? {}
                 : { sourceMediaTimeOriginMs }),
@@ -1894,6 +1978,7 @@ async function measureChromiumSourceLatency(
               status:
                 diagnostic.status === 'unavailable'
                 || bridge.status === 'unavailable'
+                || sameFramePresentation.status === 'unavailable'
                   ? 'unavailable'
                   : 'ambiguous',
               reason:
@@ -1901,9 +1986,7 @@ async function measureChromiumSourceLatency(
                   ? `source-base-${diagnostic.reason ?? diagnostic.status}`
                   : qpcDecision.status !== 'measured'
                     ? `processor-clock-${qpcDecision.reason}`
-                    : bridge.status !== 'measured'
-                      ? `processor-presentation-${bridge.reason}`
-                      : 'invalid-composed-latency',
+                    : `same-frame-presentation-${sameFramePresentation.reason}`,
               sampleCount: control.presentedSamples.length,
               matchedPairCount: bridge.matchedPairCount,
               ...(bridge.dispersionMs === undefined
@@ -1915,9 +1998,6 @@ async function measureChromiumSourceLatency(
                     observedProcessorSpacingMs:
                       bridge.observedProcessorSpacingMs,
                   }),
-              ...(sourceMediaTimeOriginMs === undefined
-                ? {}
-                : { sourceMediaTimeOriginMs }),
               direct,
             }
       return {
@@ -1996,13 +2076,28 @@ function startChromiumSourceLatencyCalibration(
     presentedSamples: [],
   }
   let settled = false
-  void measureChromiumSourceLatency(
-    payload,
-    generation,
-    acquiredStream,
-    control,
-  ).then((calibration) => {
+  const releaseObservers = (): void => {
+    if (sourceLatencyPresentationObserver === observePresented) sourceLatencyPresentationObserver = null
+    if (sourceLatencyCalibrationCancel === cancel) sourceLatencyCalibrationCancel = null
+  }
+  const cancel = (): void => {
+    if (control.cancelled || settled) return
+    control.cancelled = true
+    releaseObservers()
+    control.stopSampler?.()
+  }
+  const observePresented = (sample: ReplayPixelClockPresentedSample): void => {
+    if (control.cancelled || settled) return
+    control.presentedSamples.push(sample)
+    if (control.presentedSamples.length > REPLAY_PIXEL_CLOCK_SAMPLE_LIMIT) {
+      control.presentedSamples.splice(0, control.presentedSamples.length - REPLAY_PIXEL_CLOCK_SAMPLE_LIMIT)
+    }
+  }
+  sourceLatencyCalibrationCancel = cancel
+  sourceLatencyPresentationObserver = observePresented
+  const settleCalibration = (calibration: CaptureReadyPayload['sourceLatencyCalibration']): void => {
     settled = true
+    releaseObservers()
     if (control.cancelled) return
     console.info(
       `[capture] display ${payload.displayId}: source latency calibration ${JSON.stringify(calibration)}`,
@@ -2015,28 +2110,19 @@ function startChromiumSourceLatencyCalibration(
       return
     }
     sourceLatencyCalibration = calibration
-  })
-  return {
-    cancel: () => {
-      if (control.cancelled || settled) return
-      control.cancelled = true
-      control.stopSampler?.()
-    },
-    observePresented: (sample) => {
-      if (control.cancelled || settled) return
-      control.presentedSamples.push(sample)
-      if (
-        control.presentedSamples.length
-        > REPLAY_PIXEL_CLOCK_SAMPLE_LIMIT
-      ) {
-        control.presentedSamples.splice(
-          0,
-          control.presentedSamples.length
-            - REPLAY_PIXEL_CLOCK_SAMPLE_LIMIT,
-        )
-      }
-    },
   }
+  void measureChromiumSourceLatency(
+    payload,
+    generation,
+    acquiredStream,
+    control,
+  ).then(settleCalibration, (error: unknown) => settleCalibration({
+    status: 'unavailable',
+    reason: 'probe-failed',
+    sampleCount: 0,
+    detail: describe(error),
+  }))
+  return { cancel, observePresented }
 }
 
 function stopReplayHealthWatchdog(): void {
@@ -2375,6 +2461,7 @@ function failCapture(message: string, generation = captureGeneration): void {
 
 function teardown(): void {
   captureGeneration += 1
+  captureStreamGeneration += 1
   sourceLatencyCalibrationCancel?.()
   sourceLatencyCalibrationCancel = null
   sourceLatencyCalibration = undefined
@@ -2477,12 +2564,137 @@ function teardown(): void {
   }
 }
 
+/** Retain a focused presentation clock independently of recorder generations. */
+function retainNativeReplayClock(): void {
+  const clockStream = stream
+  if (clockStream === null) return
+  const streamGeneration = captureStreamGeneration
+  clockStream.getVideoTracks()[0]?.addEventListener('ended', () => {
+    if (
+      streamGeneration !== captureStreamGeneration ||
+      stream !== clockStream ||
+      replayWorkloadActive
+    ) return
+    terminalCaptureFailure('focused presentation clock stream ended')
+  })
+  if (tickVideo === null) startFrameTicks()
+}
+
+/**
+ * Release the shipping encoders/rings after native READY without removing the
+ * focused display's live presentation clock. Lane-S context observations are
+ * driven by startFrameTicks(), so the one-pixel video sink and its MediaStream
+ * intentionally survive native ownership until the native protocol can carry
+ * an equivalent per-frame clock itself.
+ */
+function suspendReplayEncoding(): void {
+  captureGeneration += 1
+  sourceLatencyCalibrationCancel?.()
+  sourceLatencyCalibrationCancel = null
+  primaryReadinessCancel?.()
+  primaryReadinessCancel = null
+  stopReplayHealthWatchdog()
+  ingestQueue?.cancel()
+  ingestQueue = null
+  recorderQueue = Promise.resolve()
+  window.clearTimeout(replayHold?.watchdog)
+  replayHold = null
+  replayResumeTokens.clear()
+  window.clearTimeout(retryTimer)
+  retryTimer = undefined
+  window.clearTimeout(evidenceTimer)
+  evidenceTimer = undefined
+  window.clearInterval(cadenceTimer)
+  cadenceTimer = undefined
+  cadence = null
+  const session = activeRecorder
+  activeRecorder = null
+  if (session !== null) {
+    window.clearTimeout(session.flushTimer)
+    session.flushTimer = undefined
+    const recorder = session.recorder
+    if (recorder.onstop === null) {
+      session.flushBatch?.cancel()
+      session.flushBatch = null
+      releaseRecorderReferences(recorder, [])
+    }
+    if (recorder.state !== 'inactive') {
+      try {
+        recorder.stop()
+      } catch {
+        // The recorder may already have a stop task queued.
+      }
+    }
+  }
+  replayRing?.clear()
+  replayRing = null
+  const fallback = webmRing
+  webmRing = null
+  fallback?.clear()
+  // READY can interrupt initial recorder readiness before its video sink has
+  // become the Lane-S clock. Keep the acquired stream and establish that clock
+  // now; the retired recorder generation cannot later start an encoder.
+  retainNativeReplayClock()
+}
+
+/**
+ * Restart shipping recording over the live focused stream retained for Lane-S.
+ *
+ * Native READY deliberately keeps this stream as its presentation clock. On a
+ * later native service failure, stopping that still-healthy source and calling
+ * getDisplayMedia again in the same task races Chromium's asynchronous desktop
+ * source teardown on Windows and can fail with NotReadableError. The retained
+ * stream is already the assigned display, is still delivering fresh frames,
+ * and has no shipping encoder owner after suspendReplayEncoding(), so create a
+ * new recorder epoch on it instead of destroying and reacquiring the source.
+ */
+function resumeShippingReplayEncoding(payload: CaptureStartPayload): boolean {
+  const retainedStream = stream
+  if (payload.focused !== true || retainedStream === null || !retainedStream.active) return false
+  const generation = ++captureGeneration
+  startPayload = payload
+  if (recorderFormat === null) {
+    terminalCaptureFailure('MediaRecorder has no supported CapturePack replay format', generation)
+    return true
+  }
+  const backend = captureBackend
+  const quality = captureQuality
+  // A retained stream avoids the getDisplayMedia teardown/reacquire race, but
+  // liveness still has to be re-established for this new encoder epoch. Unlike
+  // first launch, resume cannot use the one-frame static-desktop deadline: the
+  // lifecycle contract requires two increasing presentation timestamps.
+  void waitForPrimaryReadiness(retainedStream, generation, 0, true)
+    .then((ready) => {
+      if (generation !== captureGeneration || stream !== retainedStream) {
+        releaseVideoSink(ready.clockVideo)
+        return
+      }
+      console.info(
+        `[capture] display ${payload.displayId}: primary recorder readiness after ` +
+          `${Math.round(ready.waitedMs)} ms (${ready.observedFrames} presented frames, ` +
+          `timeout=${String(ready.timedOut)}, excluded-before-recorder=${Math.round(ready.waitedMs)} ms, ` +
+          `presentation-span=${Math.round(ready.observedSpanMs)} ms, startup-observation=false)`,
+      )
+      beginInstalledRecording(payload, generation, retainedStream, backend, quality, undefined, undefined, ready)
+    })
+    .catch((error: unknown) => {
+      if (generation !== captureGeneration) return
+      failCapture(`primary recorder readiness failed: ${describe(error)}`, generation)
+    })
+  return true
+}
+
 async function startCapture(payload: CaptureStartPayload): Promise<void> {
   // Explicit starts and guarded retries both supersede an in-flight
-  // getDisplayMedia call. Teardown retires its generation; the local stream
-  // below is installed only if this attempt still owns the renderer.
+  // getDisplayMedia call. Stream ownership survives recorder-only suspension,
+  // but never an actual teardown or replacement start.
   teardown()
+  if (!replayWorkloadActive && !payload.focused) {
+    startPayload = payload
+    return
+  }
   const generation = ++captureGeneration
+  const streamGeneration = captureStreamGeneration
   startPayload = payload
   recorderSourceFps = payload.fps
   captureBackend = 'chromium-desktop-capture'
@@ -2491,7 +2703,7 @@ async function startCapture(payload: CaptureStartPayload): Promise<void> {
   recorderFormat = pickRecorderFormat((mimeType) =>
     MediaRecorder.isTypeSupported(mimeType),
   )
-  if (recorderFormat === null) {
+  if (replayWorkloadActive && recorderFormat === null) {
     failCapture('MediaRecorder has no supported CapturePack replay format')
     return
   }
@@ -2515,11 +2727,23 @@ async function startCapture(payload: CaptureStartPayload): Promise<void> {
       },
     })
   } catch (err) {
+    if (streamGeneration !== captureStreamGeneration) return
+    if (!replayWorkloadActive) {
+      terminalCaptureFailure(`focused presentation clock acquisition failed: ${describe(err)}`)
+      return
+    }
     failCapture(`getDisplayMedia failed: ${describe(err)}`, generation)
     return
   }
-  if (generation !== captureGeneration) {
+  if (streamGeneration !== captureStreamGeneration) {
     for (const track of acquiredStream.getTracks()) track.stop()
+    return
+  }
+  if (!replayWorkloadActive) {
+    // The focused stream is a presentation clock only. Never send it through
+    // recorder installation after native READY, including a fast initial READY.
+    stream = acquiredStream
+    retainNativeReplayClock()
     return
   }
   installRecordingStream(
@@ -2753,9 +2977,10 @@ function installRecordingStream(
     primaryStartupObservationAttempted = true
     // Clone/processor setup briefly disturbed the first encoded PTS on the
     // physical 30 fps run (134.5 ms startup gap vs 36.9 ms steady state).
-    // Spend that work inside the already-declared first-start observation
-    // interval, never inside retained replay. Later reacquisitions have no such
-    // interval and skip this diagnostic rather than taxing their recorder.
+    // Start that work inside the first-start observation interval. The bounded
+    // one-shot may finish after READY; sparse hidden-video callbacks otherwise
+    // lose their independent exposure proof at the recorder boundary. Later
+    // reacquisitions still skip the diagnostic.
     const calibration =
       minimumObservationMs > 0
         ? startChromiumSourceLatencyCalibration(
@@ -2768,25 +2993,15 @@ function installRecordingStream(
       acquiredStream,
       generation,
       minimumObservationMs,
-      (sample) => calibration?.observePresented(sample),
     )
-    const cancelCalibration =
-      calibration === null ? null : () => calibration.cancel()
-    sourceLatencyCalibrationCancel = cancelCalibration
-    const closeCalibrationWindow = (): void => {
-      if (sourceLatencyCalibrationCancel === cancelCalibration) {
-        sourceLatencyCalibrationCancel = null
-      }
-      cancelCalibration?.()
-    }
     void readiness
       .then(async (ready) => {
-        closeCalibrationWindow()
         if (
           generation !== captureGeneration ||
           stream !== acquiredStream ||
           captureBackend !== backend
         ) {
+          calibration?.cancel()
           releaseVideoSink(ready.clockVideo)
           return
         }
@@ -2811,7 +3026,7 @@ function installRecordingStream(
         )
       })
       .catch((error: unknown) => {
-        closeCalibrationWindow()
+        calibration?.cancel()
         if (generation !== captureGeneration) return
         failCapture(`primary recorder readiness failed: ${describe(error)}`, generation)
       })
@@ -3604,6 +3819,7 @@ async function decodeReplayPixelClockSamples(
   const startedAt = performance.now()
   let seekAttempts = 0
   let seekCallbacks = 0
+  const attemptedPts = new Set<number>()
   try {
     document.body.appendChild(video)
     video.src = url
@@ -3636,12 +3852,14 @@ async function decodeReplayPixelClockSamples(
       )
       return []
     }
-    for (const target of targets) {
+    while (targets.length > 0 && seekAttempts < REPLAY_PIXEL_CLOCK_DECODE_SAMPLE_LIMIT) {
+      const target = targets.shift()!
       const remainingMs =
         REPLAY_PIXEL_CLOCK_DECODE_DEADLINE_MS
         - (performance.now() - startedAt)
       if (remainingMs <= 0) break
       seekAttempts += 1
+      attemptedPts.add(target.presentationTimeMs)
       // Seek just inside the exact declared sample interval. This affects only
       // which decoded frame is selected; the clock still uses the sample's
       // integer-timescale PTS below.
@@ -3666,10 +3884,24 @@ async function decodeReplayPixelClockSamples(
         continue
       }
       try {
-        decoded.push({
+        const observation = {
           ptsMs,
           fingerprint: replayPixelClockFingerprint(video),
-        })
+        }
+        decoded.push(observation)
+        // A same-pixel seed proposes where to look next on the observed media
+        // clock. It is not an accepted clock: only independently decoded pixels
+        // passed through the unchanged final matcher can establish that.
+        const discovered = discoverReplayPixelClockTargets(presented, observation, encodedSamples)
+        if (discovered.length > 0) {
+          const queued = new Set(attemptedPts)
+          const next = [...discovered, ...targets].filter((sample) => {
+            if (queued.has(sample.presentationTimeMs)) return false
+            queued.add(sample.presentationTimeMs)
+            return true
+          })
+          targets.splice(0, targets.length, ...next.slice(0, REPLAY_PIXEL_CLOCK_DECODE_SAMPLE_LIMIT - seekAttempts))
+        }
       } catch {
         // A single unreadable decoded frame is a missing observation.
       }
@@ -3681,7 +3913,7 @@ async function decodeReplayPixelClockSamples(
           `${JSON.stringify({
             mimeType,
             bytes: buffer.byteLength,
-            targets: targets.length,
+            targets: attemptedPts.size + targets.length,
             duration: video.duration,
             readyState: video.readyState,
             networkState: video.networkState,
@@ -3696,6 +3928,7 @@ async function decodeReplayPixelClockSamples(
     replayPixelClockDecodeDiagnostics = {
       ...replayPixelClockDecodeDiagnostics,
       stage: decoded.length === 0 ? 'no-decoded-frames' : 'decoded',
+      targetCount: attemptedPts.size + targets.length,
       mediaDurationSeconds: video.duration,
       readyState: video.readyState,
       networkState: video.networkState,
@@ -3769,18 +4002,19 @@ function measuredReplaySourceClockAnchors(
   clock: ReplayPixelClockDecision,
   durationMs: number,
 ): CaptureReplayResultPayload['sourceClockAnchors'] {
-  const sourceMediaTimeOriginMs =
-    sourceLatencyCalibration?.presentation?.sourceMediaTimeOriginMs
+  const calibration = sourceLatencyCalibration
+  const presentation = calibration?.presentation
+  const sourceMediaTimeOriginMs = presentation?.sourceMediaTimeOriginMs
   const anchors = replayClockAnchorsWithinDuration(clock, durationMs)
-  const observedCaptureAnchors =
-    anchors === undefined
-      ? undefined
-      : sourceClockAnchorsFromObservedCaptureTime(anchors)
-  if (observedCaptureAnchors !== undefined) {
-    return observedCaptureAnchors
-  }
+  // WGC rVFC captureTime can follow delivery of older compositor pixels. Only
+  // a DXGI -> processor -> rVFC join through the exact same pixel sample
+  // establishes the source axis.
   if (
     anchors === undefined
+    || calibration?.reference?.source !== 'dxgi-desktop-duplication'
+    || calibration.reference.timing !== 'pixel-exposure'
+    || presentation?.status !== 'measured'
+    || presentation.method !== 'dxgi-processor-rvfc-pixel-join'
     || typeof sourceMediaTimeOriginMs !== 'number'
     || !Number.isFinite(sourceMediaTimeOriginMs)
   ) {
@@ -4008,6 +4242,28 @@ window.captureBridge.onStart((payload) => {
   // the prior command through startCapture()->teardown().
   retried = false
   nativeFallbackCircuitOpen = false
+  void startCapture(payload)
+})
+window.captureBridge.onReplayWorkload(({ active }) => {
+  if (active === replayWorkloadActive) return
+  replayWorkloadActive = active
+  const payload = startPayload
+  if (!active) {
+    // Only the focused display owns Lane-S ticks. Passive displays can release
+    // the whole stream; the focused display keeps its one-pixel clock sink but
+    // still releases every MediaRecorder/ring workload.
+    if (payload?.focused === true) suspendReplayEncoding()
+    else teardown()
+    console.info(
+      `[capture] display ${payload?.displayId ?? '?'}: shipping replay encoders suspended; native replay owns the display`,
+    )
+    return
+  }
+  if (payload === null) return
+  console.info(
+    `[capture] display ${payload.displayId}: native replay unavailable; restarting shipping replay workload`,
+  )
+  if (resumeShippingReplayEncoding(payload)) return
   void startCapture(payload)
 })
 window.captureBridge.onNativeFallbackFrame((payload) => {

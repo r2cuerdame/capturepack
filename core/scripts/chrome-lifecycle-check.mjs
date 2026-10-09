@@ -17,6 +17,16 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const work = mkdtempSync(path.join(tmpdir(), 'capturepack-chrome-lifecycle-'))
 
 try {
+  const stub = path.join(work, 'electron-stub.cjs')
+  writeFileSync(
+    stub,
+    `exports.app={` +
+      `getPath:(name)=>name==='userData'?${JSON.stringify(path.join(work, 'user-data'))}:${JSON.stringify(work)},` +
+      `getAppPath:()=>${JSON.stringify(path.join(work, 'app'))},` +
+      `isPackaged:false` +
+      `};` +
+      `exports.crashReporter={start:()=>{}};\n`,
+  )
   const bundle = path.join(work, 'check.cjs')
   execFileSync(
     process.execPath,
@@ -27,6 +37,7 @@ try {
       '--platform=node',
       '--format=cjs',
       `--outfile=${bundle}`,
+      `--alias:electron=${stub}`,
     ],
     { stdio: ['ignore', 'ignore', 'inherit'] },
   )
@@ -102,7 +113,9 @@ try {
       onStartup: event(),
       onMessage: event(),
     },
-    action: { setBadgeText() {}, onClicked: event() },
+    action: { setBadgeText() {}, setBadgeBackgroundColor() {}, setTitle() {}, onClicked: event() },
+    // The picker's context-menu door (#157): created at worker start.
+    contextMenus: { removeAll(callback) { callback() }, create() {}, onClicked: event() },
     storage: {
       local: {
         get(key, callback) {
@@ -121,10 +134,19 @@ try {
     tabs: { onActivated: event(), onUpdated: event() },
     scripting: { executeScript: async () => undefined },
   }
+  const extensionDir = path.join(here, '..', '..', 'extensions', 'chrome')
   const context = {
     chrome,
     console,
     Date,
+    // The worker loads the full-page capture's plan and procedure through
+    // importScripts before anything else runs (#157); a classic worker's
+    // importScripts is synchronous and shares the worker's global.
+    importScripts(...files) {
+      for (const file of files) {
+        vm.runInContext(readFileSync(path.join(extensionDir, file), 'utf8'), context)
+      }
+    },
     setTimeout(callback, delay) {
       const id = nextTimer++
       timers.set(id, { callback, delay })
@@ -134,8 +156,11 @@ try {
       timers.delete(id)
     },
   }
-  vm.runInNewContext(
-    readFileSync(path.join(here, '..', '..', 'extensions', 'chrome', 'background.js'), 'utf8'),
+  context.self = context
+  context.globalThis = context
+  vm.createContext(context)
+  vm.runInContext(
+    readFileSync(path.join(extensionDir, 'background.js'), 'utf8'),
     context,
   )
 

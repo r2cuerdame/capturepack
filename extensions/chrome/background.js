@@ -1,6 +1,11 @@
 // CapturePack extension background: forwards protocol v1 messages to the
 // CapturePack native host. The DOM is never streamed — messages flow only when
-// the user picks an element or the tab context changes.
+// the user captures a page, picks an element or the tab context changes.
+
+// The full-page capture (#157): the arithmetic and the procedure, in files a
+// test can load without a browser. `importScripts` is synchronous, so both are
+// defined before anything below can be called.
+importScripts('full-page-plan.js', 'full-page-capture.js')
 
 const HOST = 'com.capturepack.host'
 const PROTOCOL = 1
@@ -168,6 +173,10 @@ function connect() {
         void answerDomRequest(message.request_id)
         return
       }
+      if (message && message.type === 'page.received' && message.protocol === PROTOCOL) {
+        settlePageAck(message)
+        return
+      }
       if (!message || message.type !== 'host.hello' || message.protocol !== PROTOCOL) return
       // STATE ON CONNECT, NOT ONLY ON CHANGE.
       //
@@ -262,7 +271,8 @@ function send(message) {
   setTimeout(() => chrome.action.setBadgeText({ text: '' }), 2000)
 }
 
-// Toolbar click: arm the picker in the active tab.
+// Arm the picker in the active tab — from the keyboard shortcut or the icon's
+// context menu (#157 made the toolbar click itself the full-page capture).
 //
 // EVERY STEP OF THIS REPORTS ITSELF. Picking an element failed twice in the
 // field with nothing to look at: the native port was healthy (tab.updated
@@ -309,7 +319,7 @@ async function armPicker(tab, via) {
   }
 }
 
-// TWO WAYS IN, ONE PERMISSION STORY.
+// THREE WAYS IN, ONE PERMISSION STORY.
 //
 // The toolbar button is not a ceremony we invented — `activeTab` is granted
 // only by a user gesture, and it is what lets this extension read the page you
@@ -317,11 +327,13 @@ async function armPicker(tab, via) {
 // alternative is `<all_urls>`, which Chrome describes to the user as "read your
 // data on all websites", and which would be true.
 //
-// But Chrome grants `activeTab` for a KEYBOARD SHORTCUT just as it does for a
-// toolbar click, so the gesture never had to be a trip to the corner of the
-// window. `_execute_action` maps a shortcut straight onto the handler below;
-// the user assigns it at chrome://extensions/shortcuts, and nothing about the
-// permission model changes.
+// Chrome grants `activeTab` for a KEYBOARD SHORTCUT and for the icon's own
+// context menu just as it does for a toolbar click, so the gesture never had
+// to be a trip to the corner of the window. The click captures the whole page
+// (#157); the shortcut and the menu arm the picker; the user assigns the key at
+// chrome://extensions/shortcuts, and nothing about the permission model
+// changes for any of the three. `tabs.captureVisibleTab` is likewise covered by
+// `activeTab` for the tab the gesture was made on.
 /**
  * THE ONE-TIME GRANT, AND WHY IT IS THE ONLY WAY TO GET OUT OF TWO STEPS.
  *
@@ -525,11 +537,256 @@ async function answerDomRequest(requestId) {
   })
 }
 
-// TOOLBAR: the grant first, the picker after.
+// ---------------------------------------------------------------------------
+// THE WHOLE PAGE, ON ONE CLICK (#157).
+//
+// The toolbar icon used to arm the element picker, which left the user in a
+// state — "armed, now click something" — that nothing explained and that
+// failed silently on pages Chrome will not inject into. Now the click IS the
+// capture: the current page, top to bottom, photographed one viewport at a
+// time and stitched, with the document walked in the same coordinates, and the
+// bundle handed to the CapturePack app on this machine — which opens the same
+// editor a `Ctrl+Alt+S` still opens. The picker is still here, as a secondary,
+// explicit action: the keyboard shortcut and the icon's context menu.
+//
+// It only ever runs on the click. Nothing is captured in the background, and
+// nothing leaves the machine: the bundle travels the native messaging port to
+// the local app, the same wire a pick does.
+// ---------------------------------------------------------------------------
+
+/** Outcome feedback: the badge, and the icon's tooltip for the reason. */
+const OUTCOME_MS = 5000
+const outcomeTimers = new Map()
+
+function showOutcome(tabId, text, color, title) {
+  const target = tabId ? { tabId } : {}
+  chrome.action.setBadgeBackgroundColor({ color, ...target })
+  chrome.action.setBadgeText({ text, ...target })
+  if (title) chrome.action.setTitle({ title: `CapturePack: ${title}`, ...target })
+  const key = tabId ?? 0
+  const previous = outcomeTimers.get(key)
+  if (previous) clearTimeout(previous)
+  outcomeTimers.set(
+    key,
+    setTimeout(() => {
+      outcomeTimers.delete(key)
+      chrome.action.setBadgeText({ text: '', ...target })
+      chrome.action.setTitle({ title: chrome.runtime.getManifest().action.default_title, ...target })
+    }, OUTCOME_MS),
+  )
+}
+
+function showProgress(tabId, done, total) {
+  const target = tabId ? { tabId } : {}
+  chrome.action.setBadgeBackgroundColor({ color: '#7c5cff', ...target })
+  chrome.action.setBadgeText({ text: total > 1 ? `${String(done)}/${String(total)}` : '…', ...target })
+}
+
+/** Bytes to base64 in bounded slices, so a large picture never builds one giant call. */
+function bytesToBase64(bytes) {
+  const SLICE = 0x8000
+  let binary = ''
+  for (let offset = 0; offset < bytes.length; offset += SLICE) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(offset, offset + SLICE))
+  }
+  return btoa(binary)
+}
+
+/** The app's answer to a bundle, by capture id. */
+const PAGE_ACK_TIMEOUT_MS = 20000
+const pageAcks = new Map()
+
+function settlePageAck(message) {
+  const id = typeof message.capture_id === 'string' ? message.capture_id : ''
+  const pending = pageAcks.get(id)
+  if (!pending) return
+  pageAcks.delete(id)
+  clearTimeout(pending.timer)
+  pending.resolve({
+    ok: message.ok === true,
+    reason: typeof message.reason === 'string' ? message.reason.slice(0, 200) : null,
+  })
+}
+
+function waitForPageAck(captureId) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      pageAcks.delete(captureId)
+      resolve(null)
+    }, PAGE_ACK_TIMEOUT_MS)
+    pageAcks.set(captureId, { resolve, timer })
+  })
+}
+
+let pageCaptureInFlight = false
+let pageCaptureSeq = 0
+
+/** The real browser, handed to the capture procedure. */
+function fullPageIo(tab) {
+  return {
+    inject: (tabId) =>
+      chrome.scripting.executeScript({
+        target: { tabId },
+        // Top frame only, in one isolated world, in this order: the walker is
+        // defined before the page helper looks for it.
+        files: ['frame-geometry.js', 'document-snapshot.js', 'full-page-content.js'],
+      }),
+    call: async (tabId, name, args) => {
+      const [out] = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: async (fn, fnArgs) => {
+          try {
+            const api = window.__capturepackFullPage
+            if (!api || typeof api[fn] !== 'function') {
+              return { ok: false, error: `full-page helper missing: ${fn}` }
+            }
+            return { ok: true, value: await api[fn](...fnArgs) }
+          } catch (err) {
+            return { ok: false, error: String(err && err.message ? err.message : err) }
+          }
+        },
+        args: [name, args ?? []],
+      })
+      const result = out && out.result
+      if (!result || result.ok !== true) {
+        throw new Error(result && result.error ? result.error : `no answer from the page for ${name}`)
+      }
+      return result.value
+    },
+    captureTile: (t) => chrome.tabs.captureVisibleTab(t.windowId, { format: 'png' }),
+    decode: async (dataUrl) => createImageBitmap(await (await fetch(dataUrl)).blob()),
+    createCanvas: (width, height) => {
+      const canvas = new OffscreenCanvas(width, height)
+      const ctx = canvas.getContext('2d')
+      if (!ctx) throw new Error('no 2d context for the page canvas')
+      return {
+        drawImage: (bitmap, sx, sy, sw, sh, dx, dy, dw, dh) =>
+          ctx.drawImage(bitmap, sx, sy, sw, sh, dx, dy, dw, dh),
+        toPng: async () => new Uint8Array(await (await canvas.convertToBlob({ type: 'image/png' })).arrayBuffer()),
+      }
+    },
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    now: () => Date.now(),
+    progress: (done, total) => showProgress(tab.id, done, total),
+  }
+}
+
+function reportPageFailure(tab, via, stage, why) {
+  send({
+    type: 'page.capture.failed',
+    protocol: PROTOCOL,
+    timestamp: Date.now(),
+    via,
+    stage,
+    reason: String(why).slice(0, 200),
+    tab: tabFacts(tab || {}),
+  })
+}
+
+async function captureFullPage(tab, via) {
+  if (!tab || !tab.id) {
+    reportPageFailure(tab, via, 'tab', 'no-tab')
+    return
+  }
+  if (pageCaptureInFlight) {
+    showOutcome(tab.id, '…', '#7c5cff', 'a page capture is already running')
+    return
+  }
+  // WITHOUT THE APP THERE IS NOWHERE TO PUT THE PICTURE. Say so before spending
+  // thirty seconds scrolling a page whose capture would then be dropped.
+  if (port === null || handshakeAt === null) {
+    connect()
+    showOutcome(tab.id, '✕', '#d93025', 'the CapturePack app is not running')
+    return
+  }
+  pageCaptureInFlight = true
+  const startedAt = Date.now()
+  try {
+    showProgress(tab.id, 0, 1)
+    const { createFullPageCapturer, bundleMessages } = self.__capturepackFullPageCapture
+    const result = await createFullPageCapturer(fullPageIo(tab)).capture(tab)
+    if (!result.ok) {
+      // A page the extension may not touch is the common case, and the user has
+      // no way to know which pages those are — so say it on the icon AND on the
+      // wire, rather than failing silently.
+      showOutcome(tab.id, '✕', '#d93025', `could not capture this page (${result.reason})`)
+      reportPageFailure(tab, via, result.stage, result.reason)
+      return
+    }
+    if (result.restored && result.restored.restored === false) {
+      // Still reported, never hidden: the picture is good, the page is not
+      // where the user left it, and the log should say so.
+      reportPageFailure(tab, via, 'restore', `scroll restored to ${String(result.restored.scrollY)} not ${String(result.restored.wantedY)}`)
+    }
+    pageCaptureSeq += 1
+    const captureId = `p${String(startedAt)}-${String(pageCaptureSeq)}`
+    const { header, chunks } = bundleMessages(result, {
+      protocol: PROTOCOL,
+      captureId,
+      tab: tabFacts(tab),
+      via,
+      timestamp: startedAt,
+      base64: bytesToBase64(result.png),
+    })
+    if (port === null || handshakeAt === null) {
+      showOutcome(tab.id, '✕', '#d93025', 'the CapturePack app went away during the capture')
+      reportPageFailure(tab, via, 'send', 'app-disconnected')
+      return
+    }
+    showProgress(tab.id, chunks.length, chunks.length)
+    const acked = waitForPageAck(captureId)
+    send(header)
+    for (const chunk of chunks) send(chunk)
+    const ack = await acked
+    if (ack === null) {
+      showOutcome(tab.id, '?', '#b26a00', 'the CapturePack app did not confirm the capture')
+    } else if (ack.ok) {
+      showOutcome(tab.id, '✓', '#1a7f37', 'page captured — the CapturePack editor is open')
+    } else {
+      showOutcome(tab.id, '✕', '#d93025', `the CapturePack app refused the page (${ack.reason ?? 'unknown'})`)
+    }
+  } catch (err) {
+    showOutcome(tab.id, '✕', '#d93025', `page capture failed (${String(err && err.message ? err.message : err).slice(0, 120)})`)
+    reportPageFailure(tab, via, 'unexpected', err && err.message ? err.message : err)
+  } finally {
+    pageCaptureInFlight = false
+  }
+}
+
+// THE PICKER'S SECONDARY DOORS. The keyboard shortcut below has existed since
+// 0.3.0; the icon's context menu is the mouse equivalent, so no explicit action
+// was lost when the click itself became the capture.
+const PICK_MENU_ID = 'capturepack-pick-element'
+
+function installPickMenu() {
+  if (!chrome.contextMenus) return
+  chrome.contextMenus.removeAll(() => {
+    void chrome.runtime.lastError
+    chrome.contextMenus.create(
+      {
+        id: PICK_MENU_ID,
+        title: 'Pick an element on this page',
+        contexts: ['action'],
+      },
+      () => void chrome.runtime.lastError,
+    )
+  })
+}
+
+if (chrome.contextMenus && chrome.contextMenus.onClicked) {
+  chrome.contextMenus.onClicked.addListener((info, tab) => {
+    if (info.menuItemId !== PICK_MENU_ID) return
+    void armPicker(tab, 'context-menu')
+  })
+}
+chrome.runtime.onInstalled.addListener(() => installPickMenu())
+installPickMenu()
+
+// TOOLBAR: the grant first, the whole page after.
 //
 // The first click is where the user is actually asked — `permissions.request`
 // needs a user gesture, and this is the only one the extension reliably gets.
-// Once granted, the button goes back to being the element picker.
+// Granted or refused, the click then captures the page it was made on.
 chrome.action.onClicked.addListener((tab) => {
   // NOT `async`, AND NOTHING IS AWAITED BEFORE THE REQUEST.
   //
@@ -545,22 +802,18 @@ chrome.action.onClicked.addListener((tab) => {
   // already held resolves `true` immediately and shows nothing, which is why the
   // check it replaced was never needed.
   let settled = false
-  const thenArm = () => {
+  const thenCapture = () => {
     if (settled) return
     settled = true
-    void armPicker(tab, 'toolbar')
+    void captureFullPage(tab, 'toolbar')
   }
   try {
     chrome.permissions.request(ALL_URLS).then(
       (granted) => {
         announceGrant(granted)
-        if (granted) {
-          chrome.action.setBadgeBackgroundColor({ color: '#1a7f37' })
-          chrome.action.setBadgeText({ text: '✓', tabId: tab?.id })
-          setTimeout(() => chrome.action.setBadgeText({ text: '', tabId: tab?.id }), 4000)
-        }
-        // The button keeps its second job either way: pick one element here.
-        thenArm()
+        // Granted or not, the click captures the page it was made on: `activeTab`
+        // was given for this click, and that is all the capture needs.
+        thenCapture()
       },
       (err) => {
         // A REFUSAL AND A BROKEN CALL ARE DIFFERENT FACTS. The first is the user
@@ -573,7 +826,7 @@ chrome.action.onClicked.addListener((tab) => {
           reason: `grant-request-failed: ${String(err && err.message ? err.message : err).slice(0, 160)}`,
           via: 'toolbar',
         })
-        thenArm()
+        thenCapture()
       },
     )
   } catch (err) {
@@ -584,7 +837,7 @@ chrome.action.onClicked.addListener((tab) => {
       reason: `grant-request-threw: ${String(err && err.message ? err.message : err).slice(0, 160)}`,
       via: 'toolbar',
     })
-    thenArm()
+    thenCapture()
   }
 })
 

@@ -1,0 +1,102 @@
+import { build } from 'esbuild'
+import { readFileSync } from 'node:fs'
+
+const bundle = await build({
+  entryPoints: ['scripts/history-rerender-check.entry.ts'],
+  bundle: true,
+  format: 'esm',
+  platform: 'node',
+  write: false,
+})
+const {
+  historyAnnotatedState,
+  historyRerenderKind,
+  planHistoryRerender,
+  replayMimeType,
+  renderContractError,
+} = await import(
+  `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`
+)
+
+let passed = 0
+let failed = 0
+function check(name, condition, detail = '') {
+  if (condition) passed += 1
+  else failed += 1
+  console.log(`  ${condition ? 'PASS' : 'FAIL'}  ${name}${detail === '' ? '' : ` — ${detail}`}`)
+}
+
+const displays = [
+  {
+    index: 2, snapshot: 'snapshot.png', snapshot_width: 1920, snapshot_height: 1080,
+    replay: 'replay.webm', replay_duration_ms: 1000, replay_clock_offset_ms: 0,
+    bounds: { x: 0, y: 0, width: 1920, height: 1080 }, scale: 1, focused: true,
+  },
+  {
+    index: 1, snapshot: 'snapshot-d1.png', snapshot_width: 2560, snapshot_height: 1440,
+    replay: 'replay-d1.webm', replay_duration_ms: 900, replay_clock_offset_ms: -25,
+    bounds: { x: -2560, y: 0, width: 2560, height: 1440 }, scale: 1, focused: false,
+  },
+]
+const annotations = [
+  { annotation_id: 'focused', type: 'box', bounds: { x: 10, y: 10, width: 50, height: 50 }, text: '', numbered: true, blur: false, start_ms: 100, end_ms: 800, tracking: { enabled: false }, created_at: '', z: 1 },
+  { annotation_id: 'secondary', type: 'box', display: 1, bounds: { x: 20, y: 20, width: 50, height: 50 }, text: '', numbered: true, blur: false, start_ms: 200, end_ms: 700, tracking: { enabled: false }, created_at: '', z: 2 },
+]
+const manifest = { media: { displays } }
+const plan = planHistoryRerender(manifest, annotations)
+
+console.log('\nHistory retry plan for a two-display saved pack')
+check('uses the declared focused display even when entries are unsorted', plan.focusedDisplay === 2)
+check('focused render receives no secondary-display box', plan.focusedAnnotations.length === 1 && plan.focusedAnnotations[0].annotation_id === 'focused')
+check('global numbers are computed before display filtering', JSON.stringify(plan.displayNumbers) === JSON.stringify([['focused', 1], ['secondary', 2]]), JSON.stringify(plan.displayNumbers))
+check('motion space preserves both declared raster frames', plan.motionSpace?.displays.length === 2 && plan.motionSpace.displays[1].width === 2560)
+check('one secondary output job is planned', plan.displays.length === 1 && plan.displays[0].index === 1)
+check('secondary job receives only its own box', plan.displays[0].annotations.length === 1 && plan.displays[0].annotations[0].annotation_id === 'secondary')
+check('secondary lifetime is rebased to its replay clock', plan.displays[0].annotations[0].start_ms === 175 && plan.displays[0].annotations[0].end_ms === 675, JSON.stringify(plan.displays[0].annotations[0]))
+
+console.log('\nRenderer contract')
+check('secondary MP4 replay keeps its MIME type', replayMimeType('replay-d2.mp4') === 'video/mp4')
+check('secondary WebM replay keeps its MIME type', replayMimeType('replay-d2.webm') === 'video/webm')
+check('invalid replay names fail closed to WebM', replayMimeType('other.mp4') === 'video/webm')
+check('complete multi-display payload is accepted', renderContractError({ motionSpace: plan.motionSpace, focusedDisplay: plan.focusedDisplay, displayNumbers: plan.displayNumbers }) === null)
+check('missing global numbers is rejected', renderContractError({ motionSpace: plan.motionSpace, focusedDisplay: plan.focusedDisplay })?.includes('displayNumbers'))
+check('missing focused display is rejected', renderContractError({ motionSpace: plan.motionSpace, displayNumbers: plan.displayNumbers })?.includes('focusedDisplay'))
+
+console.log('\nStill-image History recovery')
+const imageManifest = {
+  capture_kind: 'image',
+  media: { snapshot: 'snapshot.png', replay: null },
+}
+const renderedImageManifest = {
+  ...imageManifest,
+  media: {
+    ...imageManifest.media,
+    keyframes: [{ file: 'frames/frame-01_00-00.000.png', t_ms: 0 }],
+  },
+}
+check('image packs select the still renderer', historyRerenderKind(imageManifest) === 'still')
+check('legacy replay-less packs select the still renderer', historyRerenderKind({ media: { snapshot: 'snapshot.png', replay: null } }) === 'still')
+check('video packs with replay select the replay renderer', historyRerenderKind({ capture_kind: 'video', media: { snapshot: 'snapshot.png', replay: 'replay.webm' } }) === 'replay')
+check('unannotated image packs need no derived still', historyAnnotatedState(imageManifest, 0, () => false) === 'none')
+check('annotated image packs without declarations are missing', historyAnnotatedState(imageManifest, 1, () => false) === 'missing')
+check('declared but absent image keyframes are missing', historyAnnotatedState(renderedImageManifest, 1, () => false) === 'missing')
+check('declared and present image keyframes are ready', historyAnnotatedState(renderedImageManifest, 1, (file) => file === 'frames/frame-01_00-00.000.png') === 'ready')
+
+console.log('\nHistory wiring')
+const historySource = readFileSync('src/main/historyWindow.ts', 'utf8').replaceAll('\r\n', '\n')
+const rendererSource = readFileSync('src/renderer/render/render.ts', 'utf8')
+check('retry starts every preflighted secondary render', historySource.includes('startHistoryDisplayRenders(\n    handle,'))
+check('secondary replay jobs use the display renderer', historySource.includes('startDisplayRender(handle, {'))
+check('secondary still-only jobs use the keyframe renderer', historySource.includes('startKeyframeStill(handle, {'))
+check('focused still retries dispatch the saved snapshot', historySource.includes('snapshotPng: focusedSource,'))
+check('renderer rejects an incomplete contract before making the overlay', rendererSource.includes('const contractError = renderContractError(job)'))
+
+import { execFileSync } from 'node:child_process'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const here = path.dirname(fileURLToPath(import.meta.url))
+execFileSync(process.execPath, [path.join(here, 'history-play-check.mjs')], { stdio: 'inherit' })
+
+console.log(`\nrerender result: ${failed === 0 ? 'OK' : 'BROKEN'} — ${passed} passed, ${failed} failed\n`)
+process.exit(failed === 0 ? 0 : 1)

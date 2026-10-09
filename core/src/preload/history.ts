@@ -4,6 +4,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../shared/ipc'
 import type {
+  ActionRetryResult,
   HistoryActionResult,
   HistoryCreateShareResult,
   HistoryCreateZipResult,
@@ -14,6 +15,7 @@ import type {
   HistoryShareStillResult,
   StorageUsage,
 } from '../shared/ipc'
+import type { ActionResult } from '../shared/actions'
 
 contextBridge.exposeInMainWorld('historyBridge', {
   list(): Promise<HistoryListResult> {
@@ -75,6 +77,12 @@ contextBridge.exposeInMainWorld('historyBridge', {
   },
   openSettings(): void {
     ipcRenderer.send(IPC.historyOpenSettings)
+  },
+  actionRetry(packPath: string, configId: string): Promise<ActionRetryResult> {
+    return ipcRenderer.invoke(IPC.historyActionRetry, packPath, configId) as Promise<ActionRetryResult>
+  },
+  actionResults(packPath: string): Promise<ActionResult[]> {
+    return ipcRenderer.invoke(IPC.historyActionResults, packPath) as Promise<ActionResult[]>
   },
   onChanged(cb: () => void): void {
     ipcRenderer.on(IPC.historyChanged, () => cb())

@@ -136,3 +136,97 @@ header {
 @media (prefers-reduced-motion: reduce) {
   .bar.indeterminate > div { animation: none; width: 100%; opacity: 0.45; }
 }
+
+/* After Save Action rows (#165) */
+.actions-container {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid #34343c;
+  overflow-y: auto;
+  max-height: 120px;
+}
+
+.actionRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.actionName {
+  font-weight: 600;
+  color: #e8e8ec;
+}
+
+.actionBadge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid #34343c;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.actionBadge.ok {
+  border-color: #245c37;
+  background: #142a1c;
+  color: #7fd89b;
+}
+
+.actionBadge.failed {
+  border-color: #7a2b2b;
+  background: #331515;
+  color: #f58b8b;
+}
+
+.actionBadge.timed-out {
+  border-color: #6e5020;
+  background: #2a1f10;
+  color: #ffb454;
+}
+
+.actionBadge.blocked {
+  border-color: #3c3c46;
+  background: #26262e;
+  color: #9a9aa4;
+}
+
+.actionBadge.skipped {
+  border-color: #3c3c46;
+  background: #26262e;
+  color: #9a9aa4;
+}
+
+.actionMsg {
+  color: #9a9aa4;
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.actionRetryBtn {
+  border: 1px solid #3c3c46;
+  border-radius: 4px;
+  background: #26262e;
+  color: #e8e8ec;
+  padding: 2px 7px;
+  font-size: 11px;
+  cursor: pointer;
+  margin-left: auto;
+}
+
+.actionRetryBtn:hover {
+  background: #30303a;
+}
+
+.actionRetryBtn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}

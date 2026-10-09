@@ -431,7 +431,7 @@ function replayFindings(dirPath, manifest, options) {
   return findings
 }
 
-const KNOWN_BACKENDS = new Set(['chromium-desktop-capture', 'windows-gdi-bitblt'])
+const KNOWN_BACKENDS = new Set(['chromium-desktop-capture', 'windows-gdi-bitblt', 'native-dxgi'])
 
 /**
  * A pack that carries a replay MUST say which capture path produced it.

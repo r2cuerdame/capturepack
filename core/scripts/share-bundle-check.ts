@@ -19,6 +19,7 @@ import path from 'node:path'
 import { deflateSync, inflateSync } from 'node:zlib'
 import {
   createShareBundle,
+  normalizeAnnotation,
   planShareBundle,
   readCanonicalShareStill,
   ShareBundleError,
@@ -31,6 +32,7 @@ import {
   siblingShareBundle,
 } from '../src/main/packArchive'
 import { PackRenderBatchTracker } from '../src/main/renderBatch'
+import { displayAnnotatedName } from '../src/shared/keyframes'
 import { greyPng } from './fixtures/greyPng'
 
 let failures = 0
@@ -240,6 +242,37 @@ try {
     isShareBundleArchive(success.share) && siblingShareBundle(success.dir) === success.share)
   check('the same .share.zip is not stolen as another pack folder\'s Full ZIP',
     siblingArchive(`${success.dir}.share`) === null)
+
+  check('display annotated filename follows the replay container',
+    displayAnnotatedName(2, 'replay-d2.mp4') === 'replay_annotated-d2.mp4' &&
+      displayAnnotatedName(2) === 'replay_annotated-d2.webm')
+
+  const multiDisplayMp4 = makeFixture('multi-display-mp4')
+  const multiDisplayMp4ManifestFile = path.join(multiDisplayMp4.dir, 'manifest.json')
+  const multiDisplayMp4Manifest = JSON.parse(
+    readFileSync(multiDisplayMp4ManifestFile, 'utf8'),
+  )
+  multiDisplayMp4Manifest.media.displays[1].replay = 'replay-d2.mp4'
+  multiDisplayMp4Manifest.media.displays[1].replay_annotated =
+    'replay_annotated-d2.mp4'
+  writeFileSync(
+    multiDisplayMp4ManifestFile,
+    `${JSON.stringify(multiDisplayMp4Manifest, null, 2)}\n`,
+  )
+  renameSync(
+    path.join(multiDisplayMp4.dir, 'replay-d2.webm'),
+    path.join(multiDisplayMp4.dir, 'replay-d2.mp4'),
+  )
+  rmSync(path.join(multiDisplayMp4.dir, 'replay_annotated-d2.webm'))
+  writeFileSync(path.join(multiDisplayMp4.dir, 'replay_annotated-d2.mp4'), WEBM)
+  const multiDisplayMp4Plan = await planShareBundle(multiDisplayMp4.dir)
+  const multiDisplayMp4Created = await createShareBundle(
+    multiDisplayMp4.dir,
+    multiDisplayMp4Plan.revision,
+  )
+  check('multi-display MP4 pack plans and creates a Share Copy',
+    multiDisplayMp4Created.zipPath === multiDisplayMp4Plan.outputPath &&
+      existsSync(multiDisplayMp4Plan.outputPath))
 
   const image = makeImageFixture('image')
   const imagePlan = await planShareBundle(image.dir)
@@ -496,7 +529,6 @@ try {
     }],
     ['missing display scale', (manifest: any) => { delete manifest.media.displays[1].scale }],
     ['invalid display scale', (manifest: any) => { manifest.media.displays[1].scale = 0 }],
-    ['display without matching screen', (manifest: any) => { manifest.environment.screens.pop() }],
   ] as const) {
     const malformed = makeFixture(`display-${name.replaceAll(' ', '-')}`)
     const manifestFile = path.join(malformed.dir, 'manifest.json')
@@ -506,6 +538,78 @@ try {
     await expectError('invalid-pack', () => planShareBundle(malformed.dir))
     check(`${name} cannot create a partial Share Copy`, !existsSync(malformed.share))
   }
+
+  // Issue #192: environment.screens is optional per SPEC §5.2.
+  // 1. Pack omitting environment.screens succeeds.
+  const omittedScreens = makeFixture('omitted-screens')
+  const omittedScreensManifestFile = path.join(omittedScreens.dir, 'manifest.json')
+  const omittedScreensManifest = JSON.parse(readFileSync(omittedScreensManifestFile, 'utf8'))
+  delete omittedScreensManifest.environment.screens
+  writeFileSync(omittedScreensManifestFile, `${JSON.stringify(omittedScreensManifest, null, 2)}\n`)
+  const omittedScreensPlan = await planShareBundle(omittedScreens.dir)
+  const omittedScreensCreated = await createShareBundle(omittedScreens.dir, omittedScreensPlan.revision)
+  check('pack omitting environment.screens plans and creates Share Copy',
+    omittedScreensCreated.zipPath === omittedScreensPlan.outputPath && existsSync(omittedScreensPlan.outputPath))
+
+  // 2. Pack where environment.screens is not an array succeeds.
+  const nonArrayScreens = makeFixture('non-array-screens')
+  const nonArrayScreensManifestFile = path.join(nonArrayScreens.dir, 'manifest.json')
+  const nonArrayScreensManifest = JSON.parse(readFileSync(nonArrayScreensManifestFile, 'utf8'))
+  nonArrayScreensManifest.environment.screens = 'not-an-array'
+  writeFileSync(nonArrayScreensManifestFile, `${JSON.stringify(nonArrayScreensManifest, null, 2)}\n`)
+  const nonArrayScreensPlan = await planShareBundle(nonArrayScreens.dir)
+  const nonArrayScreensCreated = await createShareBundle(nonArrayScreens.dir, nonArrayScreensPlan.revision)
+  check('pack with non-array environment.screens plans and creates Share Copy',
+    nonArrayScreensCreated.zipPath === nonArrayScreensPlan.outputPath && existsSync(nonArrayScreensPlan.outputPath))
+
+  // 3. Multi-monitor pack where display index does not align with 1-based screens index (e.g. subset of displays).
+  const unalignedScreens = makeFixture('unaligned-screens')
+  const unalignedScreensManifestFile = path.join(unalignedScreens.dir, 'manifest.json')
+  const unalignedScreensManifest = JSON.parse(readFileSync(unalignedScreensManifestFile, 'utf8'))
+  unalignedScreensManifest.environment.screens.pop()
+  writeFileSync(unalignedScreensManifestFile, `${JSON.stringify(unalignedScreensManifest, null, 2)}\n`)
+  const unalignedScreensPlan = await planShareBundle(unalignedScreens.dir)
+  const unalignedScreensCreated = await createShareBundle(unalignedScreens.dir, unalignedScreensPlan.revision)
+  check('pack with display indices exceeding environment.screens count plans and creates Share Copy',
+    unalignedScreensCreated.zipPath === unalignedScreensPlan.outputPath && existsSync(unalignedScreensPlan.outputPath))
+
+  // 4. Valid multi-display pack where OS enumeration order differs from display order.
+  const reversedOrder = makeFixture('reversed-screen-order')
+  const reversedOrderManifestFile = path.join(reversedOrder.dir, 'manifest.json')
+  const reversedOrderManifest = JSON.parse(readFileSync(reversedOrderManifestFile, 'utf8'))
+  reversedOrderManifest.environment.screens = [
+    { width: 3840, height: 2160, scale: 2 },
+    { width: reversedOrderManifest.environment.screens[0].width, height: reversedOrderManifest.environment.screens[0].height, scale: 1 },
+  ]
+  writeFileSync(reversedOrderManifestFile, `${JSON.stringify(reversedOrderManifest, null, 2)}\n`)
+  const reversedOrderPlan = await planShareBundle(reversedOrder.dir)
+  const reversedOrderCreated = await createShareBundle(reversedOrder.dir, reversedOrderPlan.revision)
+  check('multi-display pack with different OS enumeration order creates Share Copy without false geometry mismatch',
+    reversedOrderCreated.zipPath === reversedOrderPlan.outputPath && existsSync(reversedOrderPlan.outputPath))
+
+  // 5. Multi-display pack with non-trivial display indices (displays 2 and 3).
+  const nonTrivialIndices = makeFixture('non-trivial-indices')
+  const nonTrivialManifestFile = path.join(nonTrivialIndices.dir, 'manifest.json')
+  const nonTrivialManifest = JSON.parse(readFileSync(nonTrivialManifestFile, 'utf8'))
+  nonTrivialManifest.media.displays[0].index = 2
+  nonTrivialManifest.media.displays[1].index = 3
+  nonTrivialManifest.media.displays[1].snapshot = 'snapshot-d3.png'
+  nonTrivialManifest.media.displays[1].replay = 'replay-d3.webm'
+  nonTrivialManifest.media.displays[1].replay_annotated = 'replay_annotated-d3.webm'
+  nonTrivialManifest.media.displays[1].keyframes = [{ file: 'frames-d3/frame-01_00-01.000.png', t_ms: 1_000 }]
+  delete nonTrivialManifest.environment.screens
+  writeFileSync(nonTrivialManifestFile, `${JSON.stringify(nonTrivialManifest, null, 2)}\n`)
+  renameSync(path.join(nonTrivialIndices.dir, 'frames-d2'), path.join(nonTrivialIndices.dir, 'frames-d3'))
+  const nonTrivialAnnotationsFile = path.join(nonTrivialIndices.dir, 'annotations.json')
+  const nonTrivialAnnotations = JSON.parse(readFileSync(nonTrivialAnnotationsFile, 'utf8'))
+  nonTrivialAnnotations.annotations[1].display = 3
+  writeFileSync(nonTrivialAnnotationsFile, `${JSON.stringify(nonTrivialAnnotations, null, 2)}\n`)
+  writeFileSync(path.join(nonTrivialIndices.dir, 'frames', 'frame-01_00-01.000.png'), PNG)
+  writeFileSync(path.join(nonTrivialIndices.dir, 'frames-d3', 'frame-01_00-01.000.png'), PNG)
+  const nonTrivialPlan = await planShareBundle(nonTrivialIndices.dir)
+  const nonTrivialCreated = await createShareBundle(nonTrivialIndices.dir, nonTrivialPlan.revision)
+  check('pack with non-trivial multi-monitor display indices plans and creates Share Copy',
+    nonTrivialCreated.zipPath === nonTrivialPlan.outputPath && existsSync(nonTrivialPlan.outputPath))
 
   for (const [name, lane] of [['focused', 'top'], ['non-blur secondary', 'display']] as const) {
     const incomplete = makeFixture(`missing-${name.replaceAll(' ', '-')}-lane`)
@@ -534,6 +638,7 @@ try {
     delete annotation.numbered
     delete annotation.blur
     delete annotation.tracking
+    delete annotation.created_at
   }
   writeFileSync(optionalDefaultsFile, `${JSON.stringify(optionalAnnotations, null, 2)}\n`)
   writeFileSync(path.join(optionalDefaults.dir, 'frames', 'frame-01_00-01.000.png'), PNG)
@@ -545,11 +650,29 @@ try {
       !optionalDefaultsPlan.hasBlur &&
       optionalDefaultsPlan.blockers.length === 0)
 
+  const normalizedWithoutCreatedAt = normalizeAnnotation({
+    annotation_id: 'ann_000001',
+    type: 'box',
+    bounds: { x: 0, y: 0, width: 10, height: 10 },
+  }, 0, new Set())
+  check('normalizeAnnotation preserves omitted created_at without empty string fallback',
+    normalizedWithoutCreatedAt.created_at === undefined && !('created_at' in normalizedWithoutCreatedAt))
+
+  const normalizedWithCreatedAt = normalizeAnnotation({
+    annotation_id: 'ann_000002',
+    type: 'box',
+    bounds: { x: 0, y: 0, width: 10, height: 10 },
+    created_at: '2026-08-21T00:00:00+09:00',
+  }, 1, new Set())
+  check('normalizeAnnotation preserves provided created_at string',
+    normalizedWithCreatedAt.created_at === '2026-08-21T00:00:00+09:00')
+
   for (const [name, mutate] of [
     ['annotation text type', (annotation: any) => { annotation.text = 1 }],
     ['annotation numbered type', (annotation: any) => { annotation.numbered = 'true' }],
     ['annotation blur type', (annotation: any) => { annotation.blur = 1 }],
     ['annotation tracking type', (annotation: any) => { annotation.tracking = null }],
+    ['annotation created_at type', (annotation: any) => { annotation.created_at = 1 }],
   ] as const) {
     const malformed = makeFixture(name.replaceAll(' ', '-'))
     const annotationsFile = path.join(malformed.dir, 'annotations.json')
@@ -888,6 +1011,14 @@ try {
       renderer.includes('refreshUsage()'))
   check('Full ZIP refuses to overwrite the neighbouring Share Copy identity',
     exporter.includes('isShareBundleArchive(zipPath)'))
+  check('Full ZIP writes to a unique temporary file and replaces atomically',
+    exporter.includes('const temporaryPath = `${zipPath}.tmp-${process.pid}-${randomUUID()}.zip`') &&
+      exporter.includes('await zip.writeZipPromise(temporaryPath, { overwrite: true })') &&
+      exporter.includes('await rename(temporaryPath, zipPath)') &&
+      exporter.includes('await rm(temporaryPath, { force: true })'))
+  check('History Create ZIP rejects requests while render is in flight',
+    history.slice(history.indexOf('IPC.historyCreateZip'), history.indexOf('IPC.historyPlanShare')).includes('isRenderInFlight(entry.path)') &&
+      history.slice(history.indexOf('IPC.historyCreateZip'), history.indexOf('IPC.historyPlanShare')).includes("return { ok: false, error: t('history.shareErrNotReady') }"))
   check('raw full ZIP is demoted to the More menu with an originals warning',
     renderer.includes("t('history.menuFullZip')") && renderer.includes("t('history.fullZipTooltip')"))
   check('save toast no longer exposes the stale raw-ZIP IPC',

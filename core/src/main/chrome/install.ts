@@ -201,7 +201,10 @@ export function bundledExtensionVersion(): string | null {
  * `process.execPath` is the electron binary and it would otherwise start with
  * no app at all.
  */
-function hostCommand(): { path: string; args: readonly string[] } {
+export function hostCommand(scriptResolver: () => string | null = resolveNativeHostScript): {
+  path: string
+  args: readonly string[]
+} {
   // AS PLAIN NODE, NEVER AS ELECTRON. The previous revision registered the
   // packaged exe directly, argument-free, and was proud of it ("no cmd.exe
   // sitting between Chrome and the process whose stdin and stdout are the
@@ -217,38 +220,52 @@ function hostCommand(): { path: string; args: readonly string[] } {
   // measured zero bytes of unsolicited stdout, running the standalone host
   // bundle. The environment variable is what makes the launcher .cmd unavoidable now:
   // Chromium's manifest has no place for env or args.
-  const script = resolveNativeHostScript()
-  return { path: process.execPath, args: script === null ? [] : [script] }
+  const script = scriptResolver()
+  if (script === null || script.trim() === '') {
+    logError('[chrome] cannot resolve native host script: refusing uninsulated Electron execution')
+    throw new Error('native host script unresolved; refusing uninsulated Electron fallback')
+  }
+  return { path: process.execPath, args: [script] }
 }
 
 /**
  * dist/scripts/native-host.js — emitted by scripts/build.mjs, outside the asar
  * (asarUnpack) because plain Node cannot read Electron's archive format.
  */
-function resolveNativeHostScript(): string | null {
-  const packed = path.join(app.getAppPath(), 'dist', 'scripts', 'native-host.js')
+export function resolveNativeHostScript(appPath: string = app.getAppPath()): string | null {
+  const packed = path.join(appPath, 'dist', 'scripts', 'native-host.js')
   const unpacked = packed.replace(
     `${path.sep}app.asar${path.sep}`,
     `${path.sep}app.asar.unpacked${path.sep}`,
   )
-  return [unpacked, packed].find((candidate) => fs.existsSync(candidate)) ?? null
+  const resolved = [unpacked, packed].find((candidate) => fs.existsSync(candidate)) ?? null
+  if (resolved === null) {
+    logError(`[chrome] native host script unresolved: neither ${unpacked} nor ${packed} exists`)
+  }
+  return resolved
 }
 
 /**
  * Chromium's manifest has no place for extra arguments — it starts `path` and
  * nothing else. When an argument IS needed, a one-line launcher supplies it.
  *
- * The test was `args.length === 1` and it had the packaged case exactly
- * backwards: one argument meant `['--native-host']`, the flag that made the
- * process a host at all, and the launcher was skipped precisely when it was
- * needed. Chrome then started the app normally, the single-instance lock ended
- * it, and the extension's port closed on a host that had never spoken. Now: no
- * arguments, no launcher.
+ * The launcher sets ELECTRON_RUN_AS_NODE=1 so the binary runs as plain Node
+ * and stdout carries protocol frames and nothing else (preventing \r\n
+ * stdout poisoning).
+ *
+ * If the native host script cannot be resolved, this MUST NOT fall back to
+ * returning `cmd.path` directly (which would launch uninsulated Electron).
  */
-function writeLauncherIfNeeded(): string {
-  const cmd = hostCommand()
-  if (cmd.args.length === 0) return cmd.path
-  const launcher = path.join(app.getPath('userData'), 'capturepack-host.cmd')
+export function writeLauncherIfNeeded(
+  commandResolver: () => { path: string; args: readonly string[] } = hostCommand,
+  userDataDir: string = app.getPath('userData'),
+): string {
+  const cmd = commandResolver()
+  if (cmd.args.length === 0 || !cmd.args[0] || cmd.args[0].trim() === '') {
+    logError('[chrome] host command has no arguments; refusing to register bare executable')
+    throw new Error('host command has no arguments; refusing uninsulated Electron fallback')
+  }
+  const launcher = path.join(userDataDir, 'capturepack-host.cmd')
   const quoted = cmd.args.map((a) => `"${a}"`).join(' ')
   // `set` before the exec is the entire fix for the \r\n poisoning above: with
   // ELECTRON_RUN_AS_NODE the binary is plain Node and stdout carries protocol
@@ -270,12 +287,21 @@ function writeLauncherIfNeeded(): string {
  * different ID than the same code from the Web Store, and a user in developer
  * mode should not have to choose between them.
  */
-export function writeHostManifest(allowedExtensionIds: readonly string[]): string {
-  const target = manifestPath()
+export function writeHostManifest(
+  allowedExtensionIds: readonly string[],
+  launcherWriter: () => string = writeLauncherIfNeeded,
+  targetManifestPath: string = manifestPath(),
+): string {
+  const launcherPath = launcherWriter()
+  if (launcherPath === process.execPath || !launcherPath.toLowerCase().endsWith('.cmd')) {
+    logError('[chrome] refusing to register uninsulated executable in native host manifest')
+    throw new Error('invalid launcher path; refusing to register uninsulated executable')
+  }
+  const target = targetManifestPath
   const manifest = {
     name: NATIVE_HOST_NAME,
     description: 'CapturePack native messaging host',
-    path: writeLauncherIfNeeded(),
+    path: launcherPath,
     type: 'stdio',
     allowed_origins: allowedExtensionIds.map((id) => `chrome-extension://${id}/`),
   }
@@ -318,8 +344,11 @@ export async function registerBrowsers(): Promise<readonly BrowserRegistration[]
  * registration describing the previous one. A machine with no manifest is left
  * alone; installing is still the user's decision.
  */
-export function refreshHostManifestIfInstalled(): void {
-  const target = manifestPath()
+export function refreshHostManifestIfInstalled(
+  target: string = manifestPath(),
+  manifestWriter: (allowed: readonly string[]) => string = (allowed) =>
+    writeHostManifest(allowed, writeLauncherIfNeeded, target),
+): void {
   let allowed: string[] = []
   try {
     const raw = JSON.parse(fs.readFileSync(target, 'utf8')) as Record<string, unknown>
@@ -334,7 +363,7 @@ export function refreshHostManifestIfInstalled(): void {
   }
   if (allowed.length === 0) return
   try {
-    writeHostManifest(allowed)
+    manifestWriter(allowed)
     logInfo('[chrome] native host manifest refreshed for this build')
   } catch (err) {
     logError('[chrome] could not refresh the native host manifest:', err)

@@ -1,0 +1,18 @@
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: geometry matching 700ms away MUST FAIL strict field acceptance
+
+true !== false
+
+    at file:///C:/Users/recue/.herder/worktrees/job_01M21Z4M10PGMW2N12MNTC3EN3/.review-archive/stabilization-final-20260912/field-clock-red.mjs:54:8 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: true,
+  expected: false,
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+
+Node.js v24.13.1

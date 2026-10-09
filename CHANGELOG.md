@@ -4,6 +4,67 @@ All notable changes to CapturePack. Format follows [Keep a Changelog](https://ke
 this project uses [semantic versioning](https://semver.org/) for the app, and the pack
 format carries its own `format_version` (see [SPEC.md](SPEC.md) §13.1).
 
+## 0.6.0 — 2026-09-24
+
+### Added
+
+- **One click on the Chrome toolbar captures the whole page.** The extension
+  (0.4.1, shipped with the app) scrolls the current tab one viewport at a time,
+  stitches the tiles into one picture at the page's device pixel ratio, and hands
+  it — with the page's document snapshot, URL, title, timestamp and
+  viewport/document geometry — to the same still editor `Ctrl+Alt+S` opens.
+  Sticky and fixed elements appear once, lazy-loaded content is waited for, the
+  page's scroll position and styles are put back on every path, and restricted
+  pages fail with Chrome's own reason on the icon. Element picking stays
+  available from the shortcut and the icon's menu
+  ([#157](https://github.com/r2cuerdame/capturepack/issues/157)).
+- After Save Actions report their execution outcome in Settings and over IPC, and
+  a failed action can be retried by hand
+  ([#165](https://github.com/r2cuerdame/capturepack/issues/165)).
+
+### Fixed
+
+- **Full-page capture on HiDPI displays.** At device scale 1.5 and 2 a wide band
+  of ordinary page heights near the 40 M px bound was refused as "the page could
+  not be re-measured"; the downscaled picture now takes a whole-pixel width and
+  the exact scale it implies, so it always fits, the DOM rectangles land on the
+  pixels, and consecutive tiles leave no one-row seam
+  ([#157](https://github.com/r2cuerdame/capturepack/issues/157)).
+- Failed After Save Actions no longer re-run by themselves when a pack changes
+  state, and a webhook whose secret cannot be decrypted fails closed instead of
+  sending an unauthenticated request
+  ([#169](https://github.com/r2cuerdame/capturepack/issues/169),
+  [#170](https://github.com/r2cuerdame/capturepack/issues/170)).
+- Packs whose optional files or fields are absent — `annotations.json`,
+  `timeline.json`, `report.md`, replays, screen geometry, annotation text,
+  tracking, z-order, display numbers — are read, re-edited, exported, shared and
+  served over MCP instead of failing, and the validator accepts them as SPEC
+  allows.
+- MP4 display replays keep their container through annotated renders, pack
+  manifests are published only after their media, media failures leave the
+  previous pack intact, and Full ZIP export is atomic and waits for in-flight
+  renders.
+- MCP exposes frames and replays for every display, windows without UI
+  Automation controls, and bounded timelines in Markdown export.
+
+## 0.5.1 — 2026-09-16
+
+### Fixed
+
+- WebM replay rotation no longer waits on a stalled Blob conversion, so one
+  conversion cannot take ownership of later recorder epochs or stop retention.
+- Display-media requests complete exactly once even when the callback throws,
+  and missing, empty, or invalid exact-display images fail closed before the
+  editor instead of substituting another display's pixels.
+- Packaged QA telemetry is isolated as `environment=test` with separate daily
+  identity state; invalid QA/environment overrides disable collection instead
+  of falling through to production.
+- Runtime and packaging parser dependencies are updated so both production and
+  full development-tree audits report zero vulnerabilities.
+- Windows release evidence sampling reuses bounded process/GPU queries, waits
+  for exact-PID readiness, and rejects incomplete samples instead of treating
+  missing measurements as success.
+
 ## 0.5.0 — 2026-09-05
 
 ### Added

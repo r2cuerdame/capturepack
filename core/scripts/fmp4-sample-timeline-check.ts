@@ -215,6 +215,26 @@ async function main(): Promise<void> {
     resultDetail(explicitResult),
   )
 
+  const implicitTfdtResult = enumerateFmp4VideoSamples(asArrayBuffer(concat(
+    initialization(),
+    fragment(
+      tfhdWithoutDefault(7),
+      trunExplicit(0, [{ duration: 40 }, { duration: 60 }]),
+    ),
+    fragment(
+      tfhdWithoutDefault(7),
+      trunExplicit(0, [{ duration: 30 }]),
+    ),
+  )))
+  const implicitTfdtTrack = onlyTrack(implicitTfdtResult)
+  check(
+    'tfdt-free fragments inherit contiguous DTS from declared sample durations',
+    implicitTfdtTrack?.samples.map((sample) => sample.decodeTimeTicks).join(',')
+      === '0,40,100'
+      && implicitTfdtTrack.samples[2]?.durationTicks === 30n,
+    resultDetail(implicitTfdtResult),
+  )
+
   const trexResult = enumerateFmp4VideoSamples(asArrayBuffer(concat(
     initialization(90_000, 7, 3_000),
     fragment(

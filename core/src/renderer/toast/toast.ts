@@ -1,18 +1,23 @@
-// Save-complete toast renderer: folder name, the four actions, the blur
-// warning line, and the background render status. Kept dumb: every action is
-// one bridge call; main owns the file system and the clipboard.
 import { applyDomI18n, makeT, recorderFailureText } from '../../shared/i18n'
 import type { TranslateFn } from '../../shared/i18n'
 import type {
+  ActionRetryResult,
   FailedDisplayInfo,
   ReplayUnavailablePayload,
+  ToastActionResultsPayload,
   ToastInitPayload,
   ToastRenderStatusPayload,
 } from '../../shared/ipc'
+import type { ActionConfig, ActionResult } from '../../shared/actions'
+import { BUILTIN_WEBHOOK_MANIFEST } from '../../shared/actions'
+import { canRetry } from '../../shared/actionPipeline'
 
 interface ToastBridge {
   onInit(cb: (payload: ToastInitPayload) => void): void
   onRenderStatus(cb: (payload: ToastRenderStatusPayload) => void): void
+  onActionResults(cb: (payload: ToastActionResultsPayload) => void): void
+  actionRetry(configId: string): Promise<ActionRetryResult>
+  actionResults(): Promise<ActionResult[]>
   openFolder(): void
   copyPath(): void
   copyPrompt(): Promise<boolean>
@@ -42,6 +47,10 @@ const renderStatus = el<HTMLDivElement>('renderStatus')
 const renderLabel = el<HTMLSpanElement>('renderLabel')
 const renderBar = el<HTMLDivElement>('renderBar')
 const renderBarFill = el<HTMLDivElement>('renderBarFill')
+const actionStatus = el<HTMLDivElement>('actionStatus')
+
+let currentActionResults: ActionResult[] = []
+let currentActionConfigs: ActionConfig[] = []
 
 // Active-language t(); replaced by the init payload's uiLanguage.
 let t: TranslateFn = makeT('en')
@@ -171,6 +180,84 @@ function setReplayWarning(unavailable: ReplayUnavailablePayload | null): void {
       })
 }
 
+function actionNameFor(actionId: string): string {
+  if (actionId === BUILTIN_WEBHOOK_MANIFEST.id) return BUILTIN_WEBHOOK_MANIFEST.name
+  return actionId
+}
+
+function renderActionResults(): void {
+  if (currentActionResults.length === 0) {
+    actionStatus.hidden = true
+    actionStatus.replaceChildren()
+    return
+  }
+  actionStatus.hidden = false
+  actionStatus.replaceChildren()
+
+  const configMap = new Map<string, ActionConfig>(
+    currentActionConfigs.map((c) => [c.configId, c]),
+  )
+
+  for (const result of currentActionResults) {
+    const row = document.createElement('div')
+    row.className = 'actionRow'
+    row.dataset['configId'] = result.configId
+
+    const name = document.createElement('span')
+    name.className = 'actionName'
+    name.textContent = actionNameFor(result.actionId)
+    row.append(name)
+
+    const badge = document.createElement('span')
+    badge.className = `actionBadge ${result.outcome}`
+    let badgeText: string = result.outcome
+    if (result.outcome === 'ok') badgeText = t('actions.statusOk')
+    else if (result.outcome === 'failed') badgeText = t('actions.statusFailed')
+    else if (result.outcome === 'timed-out') badgeText = t('actions.statusTimedOut')
+    else if (result.outcome === 'blocked') badgeText = t('actions.statusBlocked')
+    else if (result.outcome === 'skipped') badgeText = t('actions.statusSkipped')
+    badge.textContent = badgeText
+    row.append(badge)
+
+    if (result.message) {
+      const msg = document.createElement('span')
+      msg.className = 'actionMsg'
+      msg.textContent = result.message
+      msg.title = result.message
+      row.append(msg)
+    }
+
+    const config = configMap.get(result.configId)
+    if (canRetry(result, config)) {
+      const retryBtn = document.createElement('button')
+      retryBtn.type = 'button'
+      retryBtn.className = 'actionRetryBtn'
+      retryBtn.textContent = t('actions.retry')
+      retryBtn.addEventListener('click', () => {
+        retryBtn.disabled = true
+        retryBtn.textContent = t('actions.retrying')
+        void window.toastBridge.actionRetry(result.configId).then((res) => {
+          if (res.ok && res.result) {
+            const idx = currentActionResults.findIndex((r) => r.configId === result.configId)
+            if (idx >= 0) {
+              currentActionResults[idx] = res.result
+            } else {
+              currentActionResults.push(res.result)
+            }
+            renderActionResults()
+          } else {
+            retryBtn.disabled = false
+            retryBtn.textContent = t('actions.retry')
+          }
+        })
+      })
+      row.append(retryBtn)
+    }
+
+    actionStatus.append(row)
+  }
+}
+
 window.toastBridge.onInit((payload) => {
   t = makeT(payload.uiLanguage)
   applyDomI18n(t)
@@ -179,10 +266,19 @@ window.toastBridge.onInit((payload) => {
   blurWarning.hidden = !payload.hasBlur
   setReplayWarning(payload.replayUnavailable)
   setRenderStatus(payload.renderState)
+  currentActionResults = payload.actionResults ?? []
+  currentActionConfigs = payload.actionConfigs ?? []
+  renderActionResults()
 })
 
 window.toastBridge.onRenderStatus((payload) => {
   setRenderStatus(payload.state, payload.progress)
+})
+
+window.toastBridge.onActionResults((payload) => {
+  currentActionResults = payload.results
+  if (payload.actionConfigs) currentActionConfigs = payload.actionConfigs
+  renderActionResults()
 })
 
 closeBtn.addEventListener('click', () => window.toastBridge.close())

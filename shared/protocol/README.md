@@ -78,7 +78,9 @@ Sent on navigation (including SPA history changes in Phase 2): `{ "tab": { "url"
 
 ### `picker.armed` / `picker.disarmed` / `picker.failed`
 
-The element picker's own lifecycle, sent from extension 0.1.5 onward. These are
+The element picker's own lifecycle, sent from extension 0.1.5 onward. From
+0.4.0 the picker is armed by the keyboard shortcut or the icon's context menu;
+the toolbar click itself captures the whole page (see `page.captured`). These are
 diagnostics, not pack content: nothing about them is written into a CapturePack.
 They exist because every other step of picking already reports itself, and a
 pick that never happens is otherwise indistinguishable from a pick that was
@@ -99,6 +101,60 @@ Settings › Plugins › Chrome DOM.
 
 First message in both directions; carries `{ "app": "capturepack", "version": "0.1.0" }`
 so each side can verify versions.
+
+### `page.captured` / `page.chunk` / `page.received` / `page.capture.failed`
+
+The toolbar click, from extension 0.4.0 ([#157](https://github.com/r2cuerdame/capturepack/issues/157)):
+the extension photographs the WHOLE current page — one viewport at a time,
+stitched at the positions the page actually scrolled to, fixed and stuck-sticky
+elements shown once, the page's scroll and styles restored afterwards — walks
+the document in the same coordinates, and hands the bundle to the app, which
+opens it in the same still editor a `Ctrl+Alt+S` capture opens.
+
+The picture is too large for one native messaging frame, so a capture is
+three kinds of message correlated by `capture_id`:
+
+```json
+{
+  "type": "page.captured", "protocol": 1, "timestamp": 1758400000000,
+  "capture_id": "p1758400000000-1", "via": "toolbar",
+  "tab": { "url": "https://app.example.com/docs", "title": "Docs" },
+  "page": {
+    "url": "https://app.example.com/docs", "title": "Docs",
+    "cssWidth": 1262, "cssHeight": 6500, "pixelWidth": 1893, "pixelHeight": 9750,
+    "devicePixelRatio": 1.5, "scale": 1.5,
+    "clientWidth": 1263, "clientHeight": 800, "scrollWidth": 1263, "scrollHeight": 6500,
+    "tiles": [{ "index": 0, "scrollY": 0, "y": 0, "height": 1200 }],
+    "truncated": false, "downscaled": false, "exactScale": true,
+    "hiddenRepeating": 2, "captureMs": 6100
+  },
+  "document": { "scope": "document", "viewport": { "width": 1262, "height": 6500, "devicePixelRatio": 1.5, "scrollX": 0, "scrollY": 0 }, "elements": [] },
+  "png": { "bytes": 2481930, "chunks": 7, "chunkChars": 524288 }
+}
+```
+
+- `page.captured` announces the capture: the page's geometry, the document walk
+  in **document scope** (every rectangle in document CSS pixels, `viewport` the
+  picture's CSS size), and how many bytes follow in how many chunks.
+- `page.chunk` carries `index` and `data`: base64 of the PNG, cut at multiples of
+  four characters so the app concatenates the pieces and decodes once. Chunks may
+  arrive in any order.
+- `page.received` is the app's answer on the same wire, `{ "capture_id", "ok",
+  "reason"? }`, sent when the editor is open (or when the bundle was refused:
+  a byte count that does not add up, a PNG whose IHDR disagrees with `page`, a
+  picture over the size bound, a chunk repeated or out of range). The extension's
+  icon shows the outcome and the reason.
+- `page.capture.failed` is a diagnostic like `picker.failed`: the extension could
+  not capture (`stage`: `inject` for a restricted page, `capture`, `timeout`,
+  `restore` when the page could not be put back exactly) and says why.
+
+`page.cssWidth` is chosen so that `cssWidth * scale` is an integer (a few columns
+of the scrollbar gutter are given up for it), and `scale` is the device pixel
+ratio unless the page had to be kept whole at a smaller scale — so the app's one
+placement rule, scale = picture width / viewport width, is exact for a page.
+
+Nothing here runs in the background: a capture starts on the click and nowhere
+else, and the bundle goes to the local app and nowhere else.
 
 ## Rules
 

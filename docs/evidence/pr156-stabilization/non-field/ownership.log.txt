@@ -1,0 +1,23 @@
+  PASS  #243 native READY stops/releases shipping MP4 while retaining focused Lane-S clock
+  PASS  #243 actual frame callback keeps sending Lane-S ticks after READY and stops on teardown
+  PASS  #243 readiness uses the same opaque one-pixel clock sink without exposing a window
+  PASS  #243 stale READY after service teardown cannot suspend the replacement shipping owner
+  PASS  #243 native teardown resumes fresh shipping capture after native ownership
+  PASS  #243 obsolete service callbacks cannot change replacement native ownership
+  PASS  #243 failed workload IPC discards native instead of selecting duplicate encoders
+  PASS  #243 READY during deferred focused acquisition establishes Lane-S without shipping recorder
+  PASS  #243 focused start while native already owns replay still acquires only a Lane-S clock
+  PASS  #243 real teardown rejects an old pending clock acquisition
+  PASS  #243 replacement capture rejects pending old clock even with identical payload
+  PASS  #243 clock acquisition failure after READY is reported instead of silently discarded
+  PASS  #243 READY during recorder readiness establishes clock and rejects late recorder continuation
+  PASS  #243 fallback rejects pending native clock before installing a fresh shipping acquisition
+  PASS  #243 existing clock ending after READY reports terminal failure without shipping restart
+  PASS  #243 late-acquired native clock ending reports failure but obsolete clock ending is ignored
+  PASS  #243 current native clock fatal crosses sendError to retire native and resume shipping
+  PASS  #243 suspended shipping and obsolete sender errors cannot demote current native owner
+  PASS  #243 bounded calibration survives recorder readiness and collects live clock witnesses
+  PASS  #243 native READY and actual teardown cancel calibration and reject late proof
+  PASS  #243 rejected calibration settles unavailable and releases live observers
+  PASS  #243 only independent DXGI pixel exposure can select the replay source clock
+dxgi replay ownership behavior check: 22 passed

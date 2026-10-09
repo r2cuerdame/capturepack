@@ -243,7 +243,7 @@ export class Timebar {
       bar.style.width = `${(Math.max(0, Math.min(end, durationMs) - start) / durationMs) * 100}%`
       bar.style.top = `${lane * LANE_STEP}px`
       bar.style.background = boxColor(a)
-      bar.title = a.text !== '' ? a.text : this.t('editor.box')
+      bar.title = typeof a.text === 'string' && a.text !== '' ? a.text : this.t('editor.box')
       bar.addEventListener('pointerdown', (e) => {
         if (e.button !== 0) return
         e.stopPropagation()

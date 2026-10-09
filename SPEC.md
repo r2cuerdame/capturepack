@@ -359,7 +359,7 @@ of screen count or scaling.
 | `replay_annotated` | string | OPTIONAL | Filename of the **annotated replay** — `"replay_annotated.webm"` or `"replay_annotated.mp4"` ([§7.2](#72-the-annotated-replay)). MUST be absent when `replay` is `null` (there is nothing to render it from), and absent while the annotated replay has not (yet) been rendered. A writer MUST finish the file before publishing this declaration. A defensive reader that encounters a declared but missing file in an interrupted or older pack SHOULD treat the derived view as unavailable and fall back to `replay` + `annotations.json`. |
 | `snapshot_t_ms` | integer | OPTIONAL | Position on the replay clock, in milliseconds, of the frame shown in `snapshot.png` — the same clock as annotation lifetimes ([§8.4](#84-lifetime)) and timeline `t_ms` offsets relative to `t0` ([§10.1](#101-structure)). MUST be >= 0. **Absent means the snapshot is the capture instant** — the native "now" frame. SHOULD be absent when `replay` is `null`: without a replay there is no timeline to anchor the value to. See [§7.1](#71-frame-accurate-captures). |
 | `trim_offset_ms` | integer | OPTIONAL | **Provenance only.** When the writer trimmed the replay before saving, the position (ms) in the original captured recording of this replay's first frame — the trim in-point. MUST be >= 0. Purely informational: every time in the pack (annotation lifetimes, `snapshot_t_ms`, timeline offsets against `t0`) is already on the trimmed replay's clock, so readers never apply this offset to anything. Absent means the replay was never trimmed. SHOULD be absent when `replay` is `null`. |
-| `image_scope` | `"region"` or `"fullscreen"` | REQUIRED when `capture_kind` is `"image"`; otherwise MUST be absent | The explicit still-image choice. `"region"` means `snapshot.png` contains only the selected pixels. `"fullscreen"` means the user explicitly requested the complete virtual desktop: every attached display is composed into the single `snapshot.png`, with no separate per-display raster. **Added in 0.3.0.** |
+| `image_scope` | `"region"`, `"fullscreen"` or `"browser-page"` | REQUIRED when `capture_kind` is `"image"`; otherwise MUST be absent | The explicit still-image choice. `"region"` means `snapshot.png` contains only the selected pixels. `"fullscreen"` means the user explicitly requested the complete virtual desktop: every attached display is composed into the single `snapshot.png`, with no separate per-display raster. **Added in 0.3.0.** `"browser-page"` means `snapshot.png` is one whole web document, top to bottom, rendered by the browser itself and handed over by the CapturePack browser extension on the user's explicit click: no display raster is involved, `environment.screens` still describes the desk the capture was made on, and `plugins/chrome-dom` carries the page's DOM in the picture's own coordinates ([§11.4](#114-chrome-dom-browser-dom-context)). **Added in 0.5.2.** |
 | `crop_bounds` | object | REQUIRED for a region image; otherwise MUST be absent | Places the selected crop in OS virtual-desktop DIP coordinates: `{ x, y, width, height, coordinate_space: "virtual-desktop-dip" }`. `x`/`y` are finite numbers and MAY be negative; `width`/`height` MUST be finite and > 0. This is placement provenance, not an authorization to store pixels outside the crop. **Added in 0.3.0.** |
 | `displays` | array | **REQUIRED** for `capture_kind: "video"` from format **0.7.0**; OPTIONAL before it; MUST be absent for `capture_kind: "image"` | Per-display media: ONE entry for every display the trigger froze, focused one included. A capture that froze a single display writes an array of ONE — "how many displays" is a question every reader asks the same way, not a special case half of them forget. `snapshot` and `replay` above are ALIASES for the focused entry's files, never a second copy of the bytes. Absent in packs written before 0.7.0, which readers MUST accept and read as a single-display pack whose one display is the focused one ([§13.1](#131-format_version-policy)). See [§5.6](#56-displays-multi-monitor-captures). |
 | `keyframes` | array | OPTIONAL (RECOMMENDED) | The **annotated keyframe stills** in `frames/`: one PNG per annotation state change, with the annotations rendered into the pixels. Absent until the render that produces them completes (the same background render as `replay_annotated`), and absent in a pack that was never rendered. See [§5.7](#57-keyframes-annotated-stills). |
@@ -705,6 +705,13 @@ screen content at (or immediately before) the capture trigger.
   frame the user explicitly requested. It MUST include every attached display captured by that
   trigger; a writer MUST fail rather than label a partial set as fullscreen. Fullscreen MUST NOT
   be inferred merely because no crop was supplied.
+- In a `capture_kind: "image"` browser-page pack, `snapshot.png` is the browser's own rendering
+  of one document from its top to its bottom (or to the writer's stated tile budget), at the
+  page's device pixel ratio unless the writer had to scale the whole page down to fit — and the
+  chrome-dom payload's `page` geometry says which. It contains no browser chrome, no other
+  window and no desktop pixels. A writer MUST capture it only on the user's explicit gesture in
+  the browser and MUST restore the page's scroll position and styles afterwards; the picture
+  never comes from a background walk of open tabs.
 - **The snapshot is original evidence and MUST NOT be modified.** No annotation is ever burned
   into `snapshot.png` — including blur. Blur renders only into derived views
   ([§9](#9-blur-and-privacy)). The snapshot is pixels; annotations are data drawn on top of it by
@@ -1777,7 +1784,7 @@ plugins/
     └── elements.json
 ```
 
-`meta.json` is the standard plugin metadata (`{ "name": "chrome-dom", "version": "0.3.0" }`).
+`meta.json` is the standard plugin metadata (`{ "name": "chrome-dom", "version": "0.4.0" }`).
 
 `elements.json`:
 
@@ -1804,6 +1811,7 @@ Each `document`:
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `viewport` | object | REQUIRED | `width`, `height`, `device_pixel_ratio`, `scroll_x`, `scroll_y` — all numbers. The space every `elements[].bounds` below is measured in. |
+| `scope` | `"viewport"` or `"document"` | OPTIONAL (0.4.0) | What `viewport` and the rectangles describe. `"viewport"` (and absent, from older writers) is the visible viewport at one instant. `"document"` is the WHOLE document of a browser-page still ([§5.3](#53-media)): `viewport` is then the picture's CSS size with `scroll_x`/`scroll_y` of 0, and every rectangle is in document CSS pixels — the page's scroll folded in — because the picture shows the whole page, which is exactly what licenses recording all of it. |
 | `url` | string | REQUIRED | The document's own URL, which MAY differ from `tab.url`. |
 | `title` | string | REQUIRED | The document's title. MAY be empty. |
 | `elements` | array | REQUIRED | One entry per element the writer recorded: `i` (its ordinal), `tag`, `role` and `bounds` are required; `id`, `class`, `name`, `type`, `placeholder`, `alt`, `title`, `href`, `text`, `filled` and `secret` are written only when the page had them and the rules above allow them. MAY be empty. |
@@ -1837,6 +1845,13 @@ either half MUST decline to place the element** rather than assume a device pixe
 chrome height; a rectangle drawn from a guess is indistinguishable from a measured one and is
 wrong. Declining costs the reader the document rung and keeps the window, which is at least
 true.
+
+**A browser-page still places the same way (payload 0.4.0).** Its `snapshot.png` IS the page,
+so the writer records ONE window in `plugins/windows-uia` — the browser, titled as the tab —
+whose `bounds` and `client_bounds` are the whole picture, and the event's `viewport` is the
+document's CSS size with `dpr` set to the picture's pixels per CSS pixel. The reader's rule above
+then yields a scale equal to that ratio and a chrome height of zero, with nothing assumed: a
+reader that knows only the viewport rule reads a whole page correctly without knowing it is one.
 
 ---
 

@@ -50,8 +50,9 @@ interface PackSummary {
 /**
  * Read the pack's own manifest for the summary.
  *
- * Anything missing is reported as null rather than guessed. A webhook payload
- * that invents a field is a payload someone downstream will trust.
+ * Missing optional summary fields are reported as null rather than guessed.
+ * Display count is the compatibility exception: older packs imply one display
+ * when neither the modern media list nor capture-time screen metadata exists.
  */
 export async function readPackSummary(packDir: string): Promise<PackSummary> {
   const manifestPath = path.join(packDir, 'manifest.json')
@@ -62,6 +63,10 @@ export async function readPackSummary(packDir: string): Promise<PackSummary> {
     ? (record.media as Record<string, unknown>)
     : {}
   const displays = Array.isArray(media.displays) ? media.displays : null
+  const environment = typeof record.environment === 'object' && record.environment !== null
+    ? (record.environment as Record<string, unknown>)
+    : {}
+  const screens = Array.isArray(environment.screens) ? environment.screens : null
   // THE VERSION IS UNDER generator, NOT AT THE TOP LEVEL.
   //
   // This read `record.app_version` and shipped null to a real receiver in the
@@ -79,10 +84,41 @@ export async function readPackSummary(packDir: string): Promise<PackSummary> {
     packPath: packDir,
     createdAt: asString(record.created_at),
     captureKind: asString(record.capture_kind),
-    displayCount: displays === null ? null : displays.length,
+    displayCount: displays?.length ?? screens?.length ?? 1,
     appVersion: asString(generator.version),
     formatVersion: asString(record.format_version),
   }
+}
+
+/**
+ * Strip `user:password@` out of any URL quoted in an error message.
+ *
+ * The contract refuses a URL with credentials in it, so this should never
+ * have anything to do. It exists for the day it does: fetch quotes the whole
+ * URL when it rejects one, and a message from here is written to the log and
+ * shown in the notification, retried and written again (#173).
+ */
+export function redactUrlCredentials(message: string): string {
+  return message.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/giu, '$1<redacted>@')
+}
+
+/**
+ * Whether an error raised during delivery was caused by an HTTP redirect (#172).
+ *
+ * With `redirect: 'error'`, the Fetch Standard treats encountering a redirect
+ * status (301, 302, 303, 307, 308) as a network error. In Node's undici, this
+ * throws a TypeError with `cause: Error: unexpected redirect`.
+ */
+function isRedirectError(error: unknown): boolean {
+  if (error instanceof Error) {
+    if (/redirect/i.test(error.message)) return true
+    const cause = (error as { cause?: unknown }).cause
+    if (cause instanceof Error && /redirect/i.test(cause.message)) return true
+    if (typeof cause === 'string' && /redirect/i.test(cause)) return true
+  } else if (typeof error === 'string') {
+    if (/redirect/i.test(error)) return true
+  }
+  return false
 }
 
 /**
@@ -91,6 +127,10 @@ export async function readPackSummary(packDir: string): Promise<PackSummary> {
  * Throws on anything that is not a 2xx, with the status in the message, because
  * that message is what the save screen shows next to the Retry button. "Failed"
  * with no status is a row the user cannot act on.
+ *
+ * Redirects are refused (`redirect: 'error'`). Following redirects can downgrade
+ * HTTPS to plaintext HTTP, expose Authorization secrets to third parties, or
+ * mutate POST to GET, violating the action's URL security policy (#172).
  */
 export async function deliverWebhook(packDir: string, delivery: WebhookDelivery): Promise<void> {
   const summary = await readPackSummary(packDir)
@@ -114,16 +154,22 @@ export async function deliverWebhook(packDir: string, delivery: WebhookDelivery)
       headers,
       body: JSON.stringify({ event: 'capturepack.pack.saved', pack: summary }),
       signal: controller.signal,
+      redirect: 'error',
     })
   } catch (error) {
+    if (isRedirectError(error)) {
+      throw new Error('the webhook responded with an unsupported redirect')
+    }
     const message = error instanceof Error ? error.message : String(error)
-    throw new Error(`could not reach the webhook: ${message}`)
+    throw new Error(`could not reach the webhook: ${redactUrlCredentials(message)}`)
   } finally {
     clearTimeout(timer)
   }
 
   if (!response.ok) {
+    if (response.status >= 300 && response.status < 400) {
+      throw new Error('the webhook responded with an unsupported redirect')
+    }
     throw new Error(`the webhook answered ${String(response.status)} ${response.statusText}`)
   }
 }
-

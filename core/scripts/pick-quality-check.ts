@@ -37,6 +37,10 @@ import { openPackContextSession, readPackObjectContext } from '../src/main/conte
 import { ObjectIndex } from '../src/renderer/editor/objects'
 import type { PickableObject } from '../src/renderer/editor/objects'
 import { writeFixturePack } from './fixtures/pickQualityFixture'
+import {
+  loadRealPackCorpus,
+  writeRealPackCorpusCases,
+} from './fixtures/realPackCorpus'
 
 /**
  * PROBE SPACING, in snapshot pixels — and the reason for the number.
@@ -74,6 +78,10 @@ import { writeFixturePack } from './fixtures/pickQualityFixture'
  * evidence folder in about three seconds.
  */
 const DEFAULT_STRIDE = 16
+const CORPUS_REPLAY_SAMPLES = 5
+const CORPUS_REPLAY_MULTIPLIER = 3
+const CORPUS_CI_REPLAY_FLOOR_MS = 8
+const CORPUS_LOCAL_REPLAY_LIMIT_MS = 25
 
 /**
  * THE GATE: how big the median offered CONTROL may be, as a fraction of its
@@ -193,6 +201,8 @@ interface PackSweep {
   probes: number
   offers: Offer[]
   kinds: Set<SurfaceKind>
+  /** Read saved context through candidate index construction; excludes grid sweep. */
+  replayToCandidatesMs: number
   /** Browser picks the pack actually carries — not merely a registered provider. */
   domEvents: number
   /** Element rectangles the chrome-dom payload DECLARES... */
@@ -246,7 +256,8 @@ function sweepDisplay(
   for (const surface of index.surfaceStack) into.kinds.add(surfaceKind(surface))
 }
 
-async function sweepPack(dirPath: string, stride: number): Promise<PackSweep | null> {
+async function sweepPack(dirPath: string, stride: number, replaySamples = 1): Promise<PackSweep | null> {
+  const started = performance.now()
   const context = readPackObjectContext(dirPath)
   if (context === null) return null
   const session = openPackContextSession(context)
@@ -255,12 +266,43 @@ async function sweepPack(dirPath: string, stride: number): Promise<PackSweep | n
   // hold control data for — measuring anywhere else would measure the surface
   // ring's window floor and call the result picking quality.
   const frame = await session.frameAt(context.replayDurationMs)
+  const indexes = context.displays.map((display) => ({
+    display,
+    index: ObjectIndex.forDisplay(frame, {
+      index: display.index,
+      width: display.width,
+      height: display.height,
+    }),
+  }))
+  const replaySamplesMs = [performance.now() - started]
+  // Repeat the complete saved-pack read -> frame -> index path. The first run
+  // also supplies the indexes swept below; the median damps a single Windows
+  // runner scheduling spike without hiding a persistent candidate slowdown.
+  if (replaySamples > 1) {
+    for (let sample = 1; sample < replaySamples; sample += 1) {
+      const replayStarted = performance.now()
+      const repeatedContext = readPackObjectContext(dirPath)
+      if (repeatedContext === null) throw new Error(`corpus pack vanished: ${dirPath}`)
+      const repeatedSession = openPackContextSession(repeatedContext)
+      const repeatedFrame = await repeatedSession.frameAt(repeatedContext.replayDurationMs)
+      for (const display of repeatedContext.displays) {
+        ObjectIndex.forDisplay(repeatedFrame, {
+          index: display.index,
+          width: display.width,
+          height: display.height,
+        })
+      }
+      replaySamplesMs.push(performance.now() - replayStarted)
+    }
+  }
+  const replayToCandidatesMs = quantile(replaySamplesMs.sort((a, b) => a - b), 0.5)
   const sweep: PackSweep = {
     name: path.basename(dirPath),
     captureKind: context.captureKind,
     probes: 0,
     offers: [],
     kinds: new Set<SurfaceKind>(),
+    replayToCandidatesMs,
     domEvents: context.domEvents.length,
     domRectangles: context.domRectanglesDeclared,
     domParsed: context.domEvents.reduce(
@@ -303,13 +345,9 @@ async function sweepPack(dirPath: string, stride: number): Promise<PackSweep | n
       }
     }
   } catch { }
-  for (const display of context.displays) {
+  for (const { display, index } of indexes) {
     sweepDisplay(
-      ObjectIndex.forDisplay(frame, {
-        index: display.index,
-        width: display.width,
-        height: display.height,
-      }),
+      index,
       display,
       stride,
       sweep,
@@ -429,9 +467,81 @@ async function main(): Promise<void> {
     failures += 1
   }
 
+  // THE MAINTAINED REAL-PACK CORPUS (#139). Each committed case is a
+  // geometry-only distillation of a pack that really passed through the app:
+  // neutral pixels replace the screenshot and every user-controlled string is
+  // discarded. Reconstructing a pack here keeps the gate on the same
+  // readPackObjectContext -> frameAt -> ObjectIndex path as a reopen.
+  //
+  // Saved-pack replay is measured on this build. Live capture -> painted editor
+  // needs an actual capture run; the historical source log is not a gate.
+  const corpus = loadRealPackCorpus()
+  let corpusFailures = 0
+  console.log(`--- maintained real-pack corpus: ${String(corpus.cases.length)} privacy-safe case(s) ---`)
+  for (const entry of corpus.hard_case_inventory) {
+    const companion = entry.companion_checks?.length
+      ? `; companion ${entry.companion_checks.join(', ')}`
+      : ''
+    console.log(`  coverage ${entry.id}: ${entry.status}${companion}`)
+  }
+  for (const written of writeRealPackCorpusCases(corpus)) {
+    const swept = await sweepPack(written.dirPath, stride, CORPUS_REPLAY_SAMPLES)
+    if (swept === null) {
+      console.error(`FAIL ${written.definition.id}: the distilled saved pack could not be reopened`)
+      corpusFailures += 1
+      continue
+    }
+    swept.name = written.definition.id
+    const stats = statsOf(swept)
+    const t = written.definition.thresholds
+    const b = written.definition.baseline
+    const reasons: string[] = []
+    // These baselines were measured on hosted Windows CI. A 3x tolerance with
+    // an 8 ms floor absorbs runner jitter but fails a 30 ms slowdown. Local
+    // machines have very different pack-read costs (14-21 ms on the maintainer
+    // desk), so use a stated 25 ms local ceiling; the same slowdown fails there.
+    const replayLimit = process.env['GITHUB_ACTIONS'] === 'true'
+      ? Math.max(b.replay_to_candidates_ms * CORPUS_REPLAY_MULTIPLIER, CORPUS_CI_REPLAY_FLOOR_MS)
+      : CORPUS_LOCAL_REPLAY_LIMIT_MS
+    if (swept.replayToCandidatesMs > replayLimit) {
+      reasons.push(
+        `replay-to-candidates ${swept.replayToCandidatesMs.toFixed(1)} ms > ${replayLimit.toFixed(1)} ms`,
+      )
+    }
+    if (t.expected_controls === 'some' && stats.controls === 0) {
+      reasons.push('expected a control offer but candidates became unavailable')
+    }
+    if (t.expected_controls === 'none' && stats.controls !== 0) {
+      reasons.push(`expected the honest window-only floor but got ${String(stats.controls)} control offers`)
+    }
+    if (stats.controls > 0 && stats.median > b.median_control_fraction * 1.5) {
+      reasons.push(`median ${pct(stats.median)} > ${pct(b.median_control_fraction * 1.5)}`)
+    }
+    if (stats.controls > 0 && stats.p90 > b.p90_control_fraction * 1.5) {
+      reasons.push(`p90 ${pct(stats.p90)} > ${pct(b.p90_control_fraction * 1.5)}`)
+    }
+    if (stats.preciseShare < b.precise_control_share * 0.8) {
+      reasons.push(`precise share ${pct(stats.preciseShare)} < ${pct(b.precise_control_share * 0.8)}`)
+    }
+    if (stats.controlShare < b.control_share * 0.9) {
+      reasons.push(`control coverage ${pct(stats.controlShare)} < ${pct(b.control_share * 0.9)}`)
+    }
+    const failed = reasons.length > 0
+    if (failed) corpusFailures += 1
+    console.log(line(swept, stats, failed))
+    console.log(
+      `      capture->painted-editor CORPUS COVERAGE GAP (live capture-e2e gate: 5000 ms); ` +
+        `replay->candidates ${swept.replayToCandidatesMs.toFixed(1)} ms` +
+        ` / ${replayLimit.toFixed(1)} ms; ${written.definition.classifications.join('+')}`,
+    )
+    for (const reason of reasons) console.error(`      FAIL: ${reason}`)
+  }
+
   const folders = packFolders(PACK_ROOT)
   if (folders.length === 0) {
-    console.log(`no packs under ${PACK_ROOT} — the fixture is the whole measurement here`)
+    console.log(
+      `no optional packs under ${PACK_ROOT} — the committed corpus is the complete measurement here`,
+    )
   } else {
     console.log(`--- ${String(folders.length)} pack(s) under ${PACK_ROOT} ---`)
     const medians: number[] = []
@@ -504,6 +614,16 @@ async function main(): Promise<void> {
     )
   }
 
+  if (corpusFailures > 0) {
+    // Kept apart from the median summary below: a corpus case can fail on
+    // latency, availability, p90 or precision, and naming the wrong one
+    // sends the reader after the wrong regression.
+    console.error(
+      `\nFAIL: ${String(corpusFailures)} maintained real-pack corpus case(s) broke a release ` +
+        'threshold — see the per-case FAIL lines above (#139)',
+    )
+    process.exitCode = 1
+  }
   if (failures > 0) {
     console.error(
       `\nFAIL: ${String(failures)} pack(s) answer the median hover with a rectangle over ` +
@@ -512,6 +632,7 @@ async function main(): Promise<void> {
     process.exitCode = 1
     return
   }
+  if (corpusFailures > 0) return
   console.log('\nOK: every measured pack keeps its median offered control inside the limit')
 }
 

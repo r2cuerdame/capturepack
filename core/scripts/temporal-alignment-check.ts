@@ -246,13 +246,13 @@ const pastTie = trackedSampleAt(tracked, 200)
 const pastNearLater = trackedSampleAt(tracked, 260)
 check(
   'past object lookup returns the earlier recorded rectangle on an exact tie',
-  pastTie === tracked.tracking.samples?.[0]
+  pastTie === tracked.tracking?.samples?.[0]
     && pastTie?.x === 10
     && pastTie.display === undefined,
 )
 check(
   'past object lookup crosses displays using the nearest observed sample unchanged',
-  pastNearLater === tracked.tracking.samples?.[1]
+  pastNearLater === tracked.tracking?.samples?.[1]
     && pastNearLater?.display === 3
     && pastNearLater.x === 610,
 )
@@ -317,8 +317,12 @@ check(
     && !sourceClockSource.includes('presentedAtMs -'),
 )
 check(
-  'observed getDisplayMedia captureTime is preferred as the same-frame source clock',
-  sourceClockSource.includes('sourceClockAnchorsFromObservedCaptureTime(')
+  'unverified getDisplayMedia captureTime remains diagnostic instead of overriding DXGI exposure',
+  !sourceClockSource.includes('sourceClockAnchorsFromObservedCaptureTime(')
+    && sourceClockSource.includes("calibration?.reference?.source !== 'dxgi-desktop-duplication'")
+    && sourceClockSource.includes("presentation?.status !== 'measured'")
+    && sourceClockSource.includes("presentation.method !== 'dxgi-processor-rvfc-pixel-join'")
+    && !sourceClockSource.includes("presentation?.direct?.status !== 'measured'")
     && captureSource.includes('capturedAtMs: wallComparableTimeMs(')
     && captureSource.includes('metadata.captureTime,'),
 )
@@ -357,7 +361,8 @@ check(
   'measured pixel-clock decoding still covers the full retained replay',
   decodeStart >= 0
     && decodeEnd > decodeStart
-    && decodeSource.includes('for (const target of targets)')
+    && decodeSource.includes('while (targets.length > 0 && seekAttempts < REPLAY_PIXEL_CLOCK_DECODE_SAMPLE_LIMIT)')
+    && decodeSource.includes('const target = targets.shift()!')
     && !decodeSource.includes('decideReplayPixelClock(presented, decoded)'),
 )
 const targetStart = captureSource.indexOf(

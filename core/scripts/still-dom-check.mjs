@@ -136,7 +136,9 @@ check(
 )
 check(
   'and the version says the field exists',
-  /DOM_PLUGIN_VERSION = '0\.3\.0'/.test(source('src/main/exporter.ts')),
+  // 0.3.0 introduced `age_ms`; 0.4.0 added `scope` on a document (#157). Any
+  // version at or past 0.3.0 declares the field.
+  /DOM_PLUGIN_VERSION = '0\.[3-9]\.\d+'/.test(source('src/main/exporter.ts')),
   'a reader keys on the declared version to know what to expect',
 )
 

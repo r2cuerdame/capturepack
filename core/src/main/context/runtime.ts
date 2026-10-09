@@ -584,6 +584,7 @@ export function tickSurfaces(
   frameWallMs: number,
   frameAgeMs?: number,
   tickDelayMs?: number,
+  contextClockBasis?: 'frame-presentation' | 'wall-observation',
 ): void {
   const current = runtime
   if (current === null) return
@@ -592,6 +593,7 @@ export function tickSurfaces(
     current.clock.fromWallClockMs(frameWallMs),
     frameAgeMs,
     tickDelayMs,
+    contextClockBasis,
   )
 }
 

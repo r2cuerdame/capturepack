@@ -1,0 +1,265 @@
+{
+  "schema": "capturepack.issue138-field-trial-summary",
+  "version": 1,
+  "derived_from": "core/scripts/windows-replay-field-check.mjs report.json (distilled; raw samples, pack, window titles and local paths omitted)",
+  "run_id": "20260919072525109-40596-15fps-native-dxgi",
+  "started_at": "2026-09-19T07:25:25.110Z",
+  "finished_at": "2026-09-19T07:26:18.992Z",
+  "case": {
+    "replay_backend_requested": "native-dxgi",
+    "release_comparison": true,
+    "fps": 15,
+    "duration_seconds": 30,
+    "capture_delay_seconds": 33,
+    "target_requested": "primary",
+    "replay_max_width": 1920,
+    "sample_interval_ms": 2000,
+    "workload": {
+      "fixture": "windows-replay-field-surface",
+      "fixture_schema_version": 1,
+      "movement_cycle_ms": 9000
+    }
+  },
+  "environment": {
+    "platform": "win32",
+    "node": "v24.13.1",
+    "launch_integrity": {
+      "rid": 8192,
+      "sid": "S-1-16-8192",
+      "level": "medium"
+    },
+    "build": {
+      "source_commit": "76edf645d5b4ca72c83099c591dd95207c54d9ec",
+      "source_dirty": true,
+      "app_main_sha256": "c4e381b138ef9f48ba759646fb97a8ed6007dd8ccba6d3af37d54bfbbc7af740",
+      "dxgi_helper_sha256": "d33752261f504e97a6f531ea299f76e9e36e987bcdc0ccfc014d49692534450d"
+    },
+    "displays": [
+      {
+        "index": 1,
+        "physical_bounds": {
+          "x": -1200,
+          "y": 0,
+          "width": 1200,
+          "height": 1920
+        },
+        "scale_factor": 1,
+        "rotation": 90
+      },
+      {
+        "index": 2,
+        "physical_bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 3840,
+          "height": 2160
+        },
+        "scale_factor": 1.5,
+        "rotation": 0
+      }
+    ]
+  },
+  "process_metrics": {
+    "sample_count": 16,
+    "sample_interval_ms": 2000,
+    "logical_processors": 16,
+    "cpu_total_capacity_percent": {
+      "mean": 2.0370963231888646,
+      "p95": 2.377581520152314,
+      "peak": 2.4087872559095582
+    },
+    "cpu_one_core_percent": {
+      "mean": 32.59354117102183,
+      "p95": 38.04130432243702,
+      "peak": 38.54059609455293
+    },
+    "private_bytes": {
+      "count": 16,
+      "min": 809926656,
+      "p50": 822665216,
+      "p95": 859543552,
+      "max": 862154752,
+      "mean": 826784512,
+      "peak": 862154752
+    },
+    "working_set_bytes": {
+      "count": 16,
+      "min": 1091559424,
+      "p50": 1114052608,
+      "p95": 1120996352,
+      "max": 1121054720,
+      "mean": 1112861440,
+      "peak": 1121054720
+    },
+    "process_count": {
+      "min": 11,
+      "peak": 11
+    }
+  },
+  "gpu": {
+    "counter": "\\GPU Engine(*)\\Utilization Percentage",
+    "basis": "sum of Windows per-process GPU Engine utilization counters in the app process tree",
+    "available_sample_count": 16,
+    "unavailable_sample_count": 0,
+    "total_engine_percent": {
+      "count": 16,
+      "min": 3.545643576493549,
+      "p50": 4.248313613406174,
+      "p95": 4.538357470096413,
+      "max": 4.618226719147746,
+      "mean": 4.193243655244039
+    },
+    "video_encode_percent": {
+      "count": 16,
+      "min": 1.5078539204859225,
+      "p50": 2.4573369737705235,
+      "p95": 2.70426186007709,
+      "max": 2.7927058877364472,
+      "mean": 2.3652606199101953
+    }
+  },
+  "performance": {
+    "requested_backend": "native-dxgi",
+    "observed_backend": "native-dxgi",
+    "native_ready": [
+      {
+        "display_id": "3666076570",
+        "width": 1920,
+        "height": 1080,
+        "fps": 15,
+        "encoder": "NVIDIA H.264 Encoder MFT",
+        "at": "2026-09-19T07:25:29.695Z",
+        "at_ms": 1789802729695
+      }
+    ],
+    "native_snapshots": [
+      {
+        "display_id": "3666076570",
+        "bytes": 18324067,
+        "duration_ms": 29520,
+        "samples": 442,
+        "keyframes": 30,
+        "at": "2026-09-19T07:26:02.431Z",
+        "at_ms": 1789802762431
+      }
+    ],
+    "capture_latency": {
+      "at": "2026-09-19T07:26:03.865Z",
+      "frozen_ms": 2259,
+      "saved_ms": 2371,
+      "editor_visible_ms": 2848,
+      "hands_off_ms": 2848,
+      "refused": null,
+      "raw": "frozen 2259 ms, saved 2371 ms, editor-visible 2848 ms; hands-off 2848 ms"
+    },
+    "capture_to_saved_ms": 2371,
+    "replay_export_ms": 1414,
+    "measurement_window": {
+      "start_at": "2026-09-19T07:25:29.695Z",
+      "start_ms": 1789802729695,
+      "end_at": "2026-09-19T07:26:01.017Z",
+      "end_ms": 1789802761017,
+      "basis": "latest production DXGI native READY through capture request",
+      "sample_count": 16
+    },
+    "backend_evidence": {
+      "expected_display_count": 1,
+      "native_ready_display_count": 1,
+      "native_snapshot_display_count": 1,
+      "native_production_fmp4_valid": true,
+      "native_timing_valid": true,
+      "shipping_replay_ready_count": 0
+    },
+    "evidence_complete": true
+  },
+  "media": {
+    "codec": "h264",
+    "size": {
+      "width": 1920,
+      "height": 1080
+    },
+    "requested_fps": 15,
+    "frame_count": 442,
+    "decoded_frame_hash_count": 442,
+    "unique_decoded_frame_hashes": 442,
+    "achieved_fps": 14.9728044979527,
+    "max_pts_gap_ms": 113.19999999999709,
+    "pts_gap_ms": {
+      "count": 441,
+      "min": 31.534000000000006,
+      "p50": 65.0669999999991,
+      "p95": 101.20000000000027,
+      "max": 113.19999999999709,
+      "mean": 66.7877551020408
+    },
+    "duration_ms": 29520.067000000003,
+    "bytes": 18324067,
+    "probe_ok": true,
+    "full_decode_ok": true,
+    "production_fmp4_validation": {
+      "status": "valid",
+      "durationMs": 29520.06666666667,
+      "sampleCount": 442,
+      "firstPresentationTimeMs": 0,
+      "lastPresentationEndMs": 29520.06666666667,
+      "lastPresentationTimeMs": 29453.4,
+      "timestampQuantumMs": 0.06666666666666667,
+      "maximumPresentationGapMs": 113.20000000000073,
+      "reported_duration_ms": 29520.06666666667,
+      "basis": "production validateDxgiReplayMp4"
+    }
+  },
+  "native_lifecycle": {
+    "phase": "post-save, outside performance measurement window",
+    "helper_count": 1,
+    "log_evidence": {
+      "ready": true,
+      "suspended": true,
+      "snapshot": true,
+      "failed": true,
+      "restarted": true,
+      "fresh_ready": true,
+      "ready_suspend_snapshot_ordered": true,
+      "advancing_presentations": true,
+      "frame_evidence_recording": true,
+      "pass": true
+    },
+    "helper_gone": true,
+    "pass": true
+  },
+  "past_sampling": {
+    "status": "loaded",
+    "pass": false,
+    "observation_count": 465,
+    "query_count": 5,
+    "covered_query_count": 2,
+    "no_interpolation": true,
+    "actual_object_pick": {
+      "pass": false,
+      "query_count": 5,
+      "successful_query_count": 2,
+      "attempted_point_count": 15,
+      "successful_point_count": 5,
+      "basis": "production ObjectIndex.pick at the center and four inset corners of decoded replay target pixels"
+    },
+    "reopen_identical": true
+  },
+  "checks": {
+    "pack_saved": true,
+    "requested_display_count": 1,
+    "saved_display_count": 1,
+    "saved_display_count_matches_request": true,
+    "replay_file_count": 1,
+    "every_replay_probes_decodes_and_meets_cadence": true,
+    "past_sampling": false,
+    "requested_replay_backend_observed": true,
+    "release_performance_evidence_complete": true,
+    "native_fmp4_production_validator_and_full_decode": true,
+    "native_ready_suspend_snapshot_and_failure_fallback": true,
+    "every_spawned_process_terminated": true
+  },
+  "result": "BROKEN",
+  "failures": [
+    "persisted past sampling/reopen verification failed"
+  ]
+}

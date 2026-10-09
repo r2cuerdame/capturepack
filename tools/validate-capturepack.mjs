@@ -170,7 +170,8 @@ function validateCadence(value, label, formatVersion, hasReplay) {
   }
   if (value.backend !== undefined
       && value.backend !== "chromium-desktop-capture"
-      && value.backend !== "windows-gdi-bitblt") {
+      && value.backend !== "windows-gdi-bitblt"
+      && value.backend !== "native-dxgi") {
     fail(`${label}.backend is not a defined CapturePack replay backend (SPEC §5.3)`);
     ok = false;
   }
@@ -568,12 +569,14 @@ function validateManifest(m, pack, snapshotDims) {
         // single raster covers.
         fail(`manifest.json: an image capture has one explicit source snapshot and MUST NOT declare media.displays, at any format version — it ships no per-display raster for an entry to name; media.image_scope says what its one snapshot covers (SPEC §5.3, §5.6)`);
       }
-      if (media.image_scope !== "region" && media.image_scope !== "fullscreen") {
-        fail(`manifest.json: an image capture MUST declare media.image_scope as "region" or "fullscreen" (SPEC §5.3)`);
+      if (media.image_scope !== "region" && media.image_scope !== "fullscreen" && media.image_scope !== "browser-page") {
+        fail(`manifest.json: an image capture MUST declare media.image_scope as "region", "fullscreen" or "browser-page" (SPEC §5.3)`);
       } else if (media.image_scope === "region" && !cropBoundsValid(media.crop_bounds)) {
         fail(`manifest.json: a region image requires valid virtual-desktop media.crop_bounds (SPEC §5.3)`);
       } else if (media.image_scope === "fullscreen" && media.crop_bounds !== undefined) {
         fail(`manifest.json: a fullscreen image MUST NOT declare media.crop_bounds (SPEC §5.3)`);
+      } else if (media.image_scope === "browser-page" && media.crop_bounds !== undefined) {
+        fail(`manifest.json: a browser-page image MUST NOT declare media.crop_bounds (SPEC §5.3)`);
       } else {
         pass(`manifest.json: image scope/provenance is explicit and valid`);
       }
@@ -666,7 +669,7 @@ function validateManifest(m, pack, snapshotDims) {
         // windows-uia is a well-known payload with a defined shape (SPEC §11.3);
         // every other plugin's contents stay plugin-defined and unchecked.
         if (p.name === "windows-uia") validateWindowsUia(pack, displayInfo);
-        if (p.name === "chrome-dom") validateChromeDom(pack, replayDurationMs);
+        if (p.name === "chrome-dom") validateChromeDom(pack, replayDurationMs, captureKind);
       }
       if (m.plugins.length === 0) pass(`manifest.json: plugins is [] (no plugin data)`);
     }
@@ -709,7 +712,16 @@ function validateManifest(m, pack, snapshotDims) {
  * at one instant. An event outside the replay is not a small error; it is the
  * payload failing at the only thing it claims.
  */
-function validateChromeDom(pack, replayDurationMs) {
+function validateChromeDom(pack, replayDurationMs, captureKind = null) {
+  if (captureKind === null && pack && pack.files && pack.files.has("manifest.json")) {
+    const mb = pack.files.get("manifest.json");
+    try {
+      const parsedM = JSON.parse(mb.toString("utf8"));
+      if (parsedM && (parsedM.capture_kind === "image" || parsedM.capture_kind === "video")) {
+        captureKind = parsedM.capture_kind;
+      }
+    } catch {}
+  }
   const name = "plugins/chrome-dom/elements.json";
   const buf = pack.files.get(name);
   if (!buf) {
@@ -735,11 +747,13 @@ function validateChromeDom(pack, replayDurationMs) {
     fail(`${name}.events is empty — a payload with nothing in it MUST NOT be written at all, because an empty list reads as "the browser saw nothing" (SPEC §11.4, §11.3)`);
     return;
   }
-  const KNOWN = ["dom.element.selected", "tab.updated", "url.changed"];
+  const KNOWN = ["dom.element.selected", "dom.document.captured", "tab.updated", "url.changed"];
   let offClock = 0;
   let malformed = 0;
   let picked = 0;
-  for (const e of v.events) {
+  let bad = 0;
+  for (const [i, e] of v.events.entries()) {
+    const label = `${name}: events[${i}]`;
     if (!isObj(e) || typeof e.type !== "string" || !isObj(e.tab)) { malformed += 1; continue; }
     if (typeof e.tab.url !== "string" || typeof e.tab.title !== "string") { malformed += 1; continue; }
     if (typeof e.t_ms !== "number" || !Number.isFinite(e.t_ms)) { malformed += 1; continue; }
@@ -755,13 +769,102 @@ function validateChromeDom(pack, replayDurationMs) {
         malformed += 1;
       }
     }
+    if (captureKind === "image") {
+      if (typeof e.age_ms !== "number" || !Number.isFinite(e.age_ms)) {
+        fail(`${label}.age_ms is REQUIRED in a still capture and MUST be a finite number (SPEC §11.4)`);
+        bad += 1;
+      }
+    } else if (captureKind === "video" || replayDurationMs !== null) {
+      if (e.age_ms !== undefined) {
+        fail(`${label}.age_ms MUST NOT appear in a replay pack (SPEC §11.4)`);
+        bad += 1;
+      }
+    }
+    if (e.document !== undefined) {
+      const doc = e.document;
+      const docLabel = `${label}.document`;
+      if (!isObj(doc)) {
+        fail(`${docLabel} MUST be an object when present (SPEC §11.4)`);
+        bad += 1;
+      } else {
+        if (!isStr(doc.url)) {
+          fail(`${docLabel}.url MUST be a string (SPEC §11.4)`);
+          bad += 1;
+        }
+        if (!isStr(doc.title)) {
+          fail(`${docLabel}.title MUST be a string (SPEC §11.4)`);
+          bad += 1;
+        }
+        if (typeof doc.truncated !== "boolean") {
+          fail(`${docLabel}.truncated MUST be a boolean (SPEC §11.4)`);
+          bad += 1;
+        }
+        if (!isInt(doc.visited_count)) {
+          fail(`${docLabel}.visited_count MUST be an integer (SPEC §11.4)`);
+          bad += 1;
+        }
+        if (!isNum(doc.elapsed_ms)) {
+          fail(`${docLabel}.elapsed_ms MUST be a number (SPEC §11.4)`);
+          bad += 1;
+        }
+        if (!Array.isArray(doc.omitted)) {
+          fail(`${docLabel}.omitted MUST be an array (SPEC §11.4)`);
+          bad += 1;
+        }
+        if (doc.scope !== undefined && doc.scope !== "viewport" && doc.scope !== "document") {
+          fail(`${docLabel}.scope, when present, MUST be "viewport" or "document" (SPEC §11.4)`);
+          bad += 1;
+        }
+        if (
+          !isObj(doc.viewport) ||
+          ["width", "height", "device_pixel_ratio", "scroll_x", "scroll_y"].some(
+            (k) => !isNum(doc.viewport[k]),
+          )
+        ) {
+          fail(
+            `${docLabel}.viewport MUST carry numbers width, height, device_pixel_ratio, scroll_x, scroll_y (SPEC §11.4)`,
+          );
+          bad += 1;
+        }
+        if (!Array.isArray(doc.elements)) {
+          fail(`${docLabel}.elements MUST be an array (SPEC §11.4)`);
+          bad += 1;
+        } else {
+          let malformedElements = 0;
+          doc.elements.forEach((el, j) => {
+            const elLabel = `${docLabel}.elements[${j}]`;
+            if (
+              !isObj(el) ||
+              !isInt(el.i) ||
+              !isStr(el.tag) ||
+              !isStr(el.role) ||
+              !isObj(el.bounds) ||
+              ["x", "y", "width", "height"].some((k) => !isNum(el.bounds[k]))
+            ) {
+              malformedElements += 1;
+              if (malformedElements <= 5) {
+                fail(
+                  `${elLabel} MUST be an object with integer i, string tag, string role, and bounds{x, y, width, height} (SPEC §11.4)`,
+                );
+              }
+              bad += 1;
+            }
+          });
+          if (malformedElements > 5) {
+            fail(`${docLabel}: ${malformedElements - 5} further element(s) in document are also malformed (SPEC §11.4)`);
+          }
+        }
+      }
+    }
   }
   const unknown = v.events.filter((e) => isObj(e) && !KNOWN.includes(e.type)).length;
   if (malformed > 0) {
     fail(`${name}: ${malformed} event(s) are not {t_ms, type, tab{url,title}} — and a "dom.element.selected" MUST carry element{tag,selector,bounds} (SPEC §11.4)`);
-  } else if (offClock > 0) {
+  }
+  if (offClock > 0) {
     fail(`${name}: ${offClock} event(s) sit outside the replay — t_ms is on the REPLAY clock, so an event the replay does not cover cannot be lined up with anything in the pack (SPEC §11.4, §10.1)`);
-  } else {
+  }
+  if (malformed === 0 && offClock === 0 && bad === 0) {
     pass(`${name}: ${v.events.length} event(s), ${picked} picked element(s), all on the replay clock — the pack says what was clicked, not where it was drawn (SPEC §11.4)`);
   }
   if (unknown > 0) {
@@ -970,8 +1073,18 @@ function validateWindowsUia(pack, displayInfo) {
       // into a different display than the window it was walked from cannot be
       // resolved against it at all — occlusion, refinement and the "smallest
       // control of the top window" rule all compare the two directly.
-      if (displayBad === 0 && isInt(e.window) && windowDisplay.has(e.window) && windowDisplay.get(e.window) !== e.display) {
-        fail(`${label}.display ${JSON.stringify(e.display ?? null)} disagrees with windows[z=${e.window}].display ${JSON.stringify(windowDisplay.get(e.window) ?? null)} — a control and its window MUST be resolvable in ONE coordinate space (SPEC §11.3)`);
+      const focused = displayInfo ? displayInfo.focused : undefined;
+      const resolvedWindowDisplay = windowDisplay.get(e.window) ?? focused;
+      const resolvedElementDisplay = e.display ?? focused;
+      if (
+        displayBad === 0 &&
+        isInt(e.window) &&
+        windowDisplay.has(e.window) &&
+        resolvedWindowDisplay !== resolvedElementDisplay
+      ) {
+        fail(
+          `${label}.display ${JSON.stringify(e.display ?? null)} disagrees with windows[z=${e.window}].display ${JSON.stringify(windowDisplay.get(e.window) ?? null)} — a control and its window MUST be resolvable in ONE coordinate space (SPEC §11.3)`,
+        );
         bad++;
       }
     });

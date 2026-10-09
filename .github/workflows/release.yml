@@ -100,6 +100,24 @@ jobs:
         timeout-minutes: 10
         run: npm run qa:rc -- --fail-fast
 
+      - name: Gate live capture to painted editor
+        working-directory: core
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $work = "${{ runner.temp }}\capturepack-release-latency"
+          New-Item -ItemType Directory -Force "$work\userdata" | Out-Null
+          New-Item -ItemType Directory -Force "$work\packs" | Out-Null
+          & .\node_modules\.bin\electron.cmd . `
+            --user-data-dir="$work\userdata" `
+            --output-dir="$work\packs" `
+            --no-global-shortcut `
+            --capture-now=6 `
+            --save-now=180
+          if ($LASTEXITCODE -ne 0) { throw "capture exited $LASTEXITCODE" }
+          node scripts/assert-live-capture-latency.mjs "$work\userdata\logs\main.log" 5000
+          exit $LASTEXITCODE
+
       # Package locally first. Publishing directly from electron-builder used
       # to make the release visible before latest.yml and SHA256SUMS were
       # checked; a malformed or partial updater release could therefore escape.

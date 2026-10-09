@@ -216,11 +216,11 @@ console.log('\nProduction wiring')
       installSource.includes('minimumObservationMs > 0'),
   )
   check(
-    'readiness cancels a slow sampler before constructing the recorder',
-    installSource.indexOf('closeCalibrationWindow()') >= 0 &&
-      installSource.indexOf('closeCalibrationWindow()') <
-        installSource.indexOf('beginInstalledRecording(') &&
-      installSource.includes('cancelCalibration?.()'),
+    'bounded exposure calibration survives readiness and receives later live witnesses',
+    !installSource.includes('closeCalibrationWindow()') &&
+      installSource.includes('calibration?.cancel()') &&
+      source.includes('sourceLatencyPresentationObserver?.(sample)') &&
+      source.includes('sourceLatencyPresentationObserver = observePresented'),
   )
   check(
     'teardown cancels source-latency sampling without awaiting it',
@@ -390,12 +390,15 @@ console.log('\nProduction wiring')
       source.includes('decideSourceLatencyCalibration(samples, {'),
   )
   check(
-    'only observed same-frame clocks can move the replay source map',
-    source.includes('sourceClockAnchorsFromObservedCaptureTime(') &&
+    'only the exact DXGI-processor-rVFC same-pixel join can move the replay source map',
+    !source.includes('sourceClockAnchorsFromObservedCaptureTime(') &&
       source.includes('sourceClockAnchorsFromMeasuredMediaTime(') &&
       source.includes('capturedAtMs: wallComparableTimeMs(') &&
-      source.indexOf('sourceClockAnchorsFromObservedCaptureTime(') <
-        source.lastIndexOf('sourceClockAnchorsFromMeasuredMediaTime(') &&
+      source.includes("calibration?.reference?.source !== 'dxgi-desktop-duplication'") &&
+      source.includes("calibration.reference.timing !== 'pixel-exposure'") &&
+      source.includes("presentation?.status !== 'measured'") &&
+      source.includes("presentation.method !== 'dxgi-processor-rvfc-pixel-join'") &&
+      !source.includes("presentation?.direct?.status !== 'measured'") &&
       !source.includes('alignReplayOriginToMeasuredPixels('),
   )
   const ipcSource = readFileSync(

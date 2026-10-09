@@ -1,3 +1,6 @@
+import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as path from 'node:path'
 import {
   createReconnectBackoff,
   ExtensionConnectionLedger,
@@ -5,6 +8,13 @@ import {
   type ReconnectTimer,
 } from '../src/main/chrome/lifecycle'
 import { domPipePath } from '../src/main/chrome/nativeHost'
+import {
+  hostCommand,
+  refreshHostManifestIfInstalled,
+  resolveNativeHostScript,
+  writeHostManifest,
+  writeLauncherIfNeeded,
+} from '../src/main/chrome/install'
 
 let passed = 0
 let failed = 0
@@ -115,6 +125,150 @@ console.log('\nChrome integration lifecycle')
   const before = pending.length
   reconnect.schedule()
   check('shutdown cannot be revived by a late close event', pending.length === before)
+}
+
+console.log('\nNative host launcher and manifest isolation (CRLF poisoning guard)')
+
+{
+  const missing = resolveNativeHostScript(path.join(os.tmpdir(), 'capturepack-nonexistent-app'))
+  check('missing host script returns null', missing === null)
+}
+
+{
+  let threwNull = false
+  try {
+    hostCommand(() => null)
+  } catch (err) {
+    threwNull = err instanceof Error && err.message.includes('native host script unresolved')
+  }
+  check('hostCommand throws when native host script is unresolved', threwNull)
+
+  let threwEmpty = false
+  try {
+    hostCommand(() => '   ')
+  } catch (err) {
+    threwEmpty = err instanceof Error && err.message.includes('native host script unresolved')
+  }
+  check('hostCommand throws when native host script is empty or whitespace', threwEmpty)
+}
+
+{
+  let threwUnresolved = false
+  try {
+    writeLauncherIfNeeded(() => hostCommand(() => null))
+  } catch {
+    threwUnresolved = true
+  }
+  check(
+    'writeLauncherIfNeeded throws and never returns bare executable when script is unresolved',
+    threwUnresolved,
+  )
+
+  let threwEmptyArgs = false
+  let returnedPath: string | null = null
+  try {
+    returnedPath = writeLauncherIfNeeded(() => ({ path: process.execPath, args: [] }))
+  } catch {
+    threwEmptyArgs = true
+  }
+  check(
+    'writeLauncherIfNeeded refuses empty args instead of returning bare executable',
+    threwEmptyArgs && returnedPath === null && returnedPath !== process.execPath,
+  )
+}
+
+{
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'capturepack-manifest-check-'))
+  const manifestFile = path.join(tempDir, 'com.capturepack.host.json')
+  let threwManifest = false
+  try {
+    writeHostManifest(
+      ['abcdefghijklmnopabcdefghijklmnop'],
+      () => writeLauncherIfNeeded(() => hostCommand(() => null)),
+      manifestFile,
+    )
+  } catch {
+    threwManifest = true
+  }
+  check('writeHostManifest fails closed on unresolved script', threwManifest)
+  check('unresolved script creates no manifest file', !fs.existsSync(manifestFile))
+
+  let threwBareExe = false
+  try {
+    writeHostManifest(
+      ['abcdefghijklmnopabcdefghijklmnop'],
+      () => process.execPath,
+      manifestFile,
+    )
+  } catch {
+    threwBareExe = true
+  }
+  check('writeHostManifest explicitly refuses bare process.execPath', threwBareExe)
+  check('refused bare executable does not write manifest', !fs.existsSync(manifestFile))
+
+  fs.rmSync(tempDir, { recursive: true, force: true })
+}
+
+{
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'capturepack-refresh-check-'))
+  const manifestFile = path.join(tempDir, 'com.capturepack.host.json')
+  const initialLauncher = path.join(tempDir, 'capturepack-host.cmd')
+  const initialManifestContent =
+    JSON.stringify(
+      {
+        name: 'com.capturepack.host',
+        description: 'CapturePack native messaging host',
+        path: initialLauncher,
+        type: 'stdio',
+        allowed_origins: ['chrome-extension://abcdefghijklmnopabcdefghijklmnop/'],
+      },
+      null,
+      2,
+    ) + '\n'
+  fs.writeFileSync(manifestFile, initialManifestContent, 'utf8')
+
+  refreshHostManifestIfInstalled(
+    manifestFile,
+    () => {
+      throw new Error('simulated unresolved host script')
+    },
+  )
+  const afterFailedRefresh = fs.readFileSync(manifestFile, 'utf8')
+  check(
+    'refreshHostManifestIfInstalled preserves existing manifest when script is unresolved',
+    afterFailedRefresh === initialManifestContent && !afterFailedRefresh.includes(process.execPath),
+  )
+
+  fs.rmSync(tempDir, { recursive: true, force: true })
+}
+
+{
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'capturepack-valid-launcher-'))
+  const fakeScript = path.join(tempDir, 'fake-native-host.js')
+  fs.writeFileSync(fakeScript, '// fake host', 'utf8')
+  const cmd = hostCommand(() => fakeScript)
+  check('hostCommand with valid script returns script in args', cmd.args.length === 1 && cmd.args[0] === fakeScript)
+
+  const launcher = writeLauncherIfNeeded(() => cmd, tempDir)
+  check('launcher is a .cmd file', launcher.endsWith('capturepack-host.cmd'))
+  const content = fs.readFileSync(launcher, 'utf8')
+  check(
+    'launcher sets ELECTRON_RUN_AS_NODE=1 and includes script and %*',
+    content.includes('set ELECTRON_RUN_AS_NODE=1') &&
+      content.includes(`"${fakeScript}"`) &&
+      content.includes('%*') &&
+      content.startsWith('@echo off\r\n'),
+  )
+
+  const manifestFile = path.join(tempDir, 'com.capturepack.host.json')
+  writeHostManifest(['abcdefghijklmnopabcdefghijklmnop'], () => launcher, manifestFile)
+  const manifestRaw = JSON.parse(fs.readFileSync(manifestFile, 'utf8')) as Record<string, unknown>
+  check(
+    'manifest points to .cmd launcher and not process.execPath',
+    manifestRaw['path'] === launcher && manifestRaw['path'] !== process.execPath,
+  )
+
+  fs.rmSync(tempDir, { recursive: true, force: true })
 }
 
 console.log(`\nresult: ${failed === 0 ? 'OK' : 'BROKEN'} — ${passed} passed, ${failed} failed\n`)

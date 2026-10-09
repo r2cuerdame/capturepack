@@ -243,7 +243,11 @@ function outputDirOverride(argv: string[]): string | null {
 export function saveSettings(settings: Settings): void {
   const file = settingsFilePath()
   fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n')
+  // Write beside the settings file and replace it only after serialization is
+  // complete, so an interrupted write cannot truncate the last valid profile.
+  const temporary = `${file}.tmp`
+  fs.writeFileSync(temporary, JSON.stringify(settings, null, 2) + '\n')
+  fs.renameSync(temporary, file)
 }
 
 // An EXPLICIT outputDir choice from the settings GUI supersedes an active

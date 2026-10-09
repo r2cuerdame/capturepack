@@ -1,0 +1,3 @@
+[context] host is using 7.5% of a core — dropping lane S to 200 ms
+[context] lane A: window 66080 dropped — it took 121.4 ms a pass and would define this lane's latency
+[context] host is using 7.8% of a core — dropping lane S to 500 ms

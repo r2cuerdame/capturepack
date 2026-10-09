@@ -759,6 +759,139 @@ async function checkWebmFallbackLifecycle(): Promise<void> {
       ),
   )
 
+  const stalledTimers = new SimulatedTimers()
+  class CountingMediaRecorder extends SimulatedMediaRecorder {
+    logicalBytes = 0
+
+    override start(): void {
+      super.start()
+      this.logicalBytes = 5_000
+    }
+
+    emit(size: number): void {
+      if (this.state !== 'recording') return
+      this.logicalBytes += size
+      this.ondataavailable?.({
+        data: new Blob([new Uint8Array(size)], {
+          type: 'video/webm;codecs=vp8',
+        }),
+      })
+    }
+  }
+  const stalledRecorders: CountingMediaRecorder[] = []
+  const stalledFailures: string[] = []
+  let releaseConversion: (() => void) | undefined
+  let conversionSource: Blob | undefined
+  const conversionGate = new Promise<void>((resolve) => {
+    releaseConversion = resolve
+  })
+  const stalledFallback = new WebmDualSlotRing({
+    generation: 77,
+    segmentMs: 1_000,
+    mimeType: 'video/webm;codecs=vp8',
+    timesliceMs: 100,
+    stopTimeoutMs: RECORDER_STOP_TIMEOUT_MS,
+    timers: stalledTimers,
+    createRecorder: () => {
+      const recorder = new CountingMediaRecorder()
+      stalledRecorders.push(recorder)
+      return recorder as unknown as MediaRecorder
+    },
+    readBlob: async (source) => {
+      conversionSource = source
+      await conversionGate
+      return source.arrayBuffer()
+    },
+    discardRecorderOutput: () => false,
+    onBytes: () => undefined,
+    onFailure: (message) => stalledFailures.push(message),
+  })
+  try {
+    stalledFallback.start()
+    stalledTimers.advanceBy(1_000)
+    const stalledReplay = stalledFallback.capture(stalledTimers.now())
+    for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+    let maximumActiveBytes = 0
+    let liveSlotOwnershipHeld = true
+    let retiredHandlersDetached = true
+    for (let elapsed = 0; elapsed < 60_000; elapsed += 1_000) {
+      for (const recorder of stalledRecorders) recorder.emit(81_920)
+      stalledTimers.advanceBy(1_000)
+      for (let turn = 0; turn < 8; turn += 1) await Promise.resolve()
+      const active = stalledRecorders.filter(
+        (recorder) => recorder.state === 'recording',
+      )
+      liveSlotOwnershipHeld &&=
+        active.length === 2 && stalledTimers.pendingCount === 2
+      retiredHandlersDetached &&= stalledRecorders
+        .filter((recorder) => recorder.state === 'inactive')
+        .every(
+          (recorder) =>
+            recorder.ondataavailable === null &&
+            recorder.onerror === null &&
+            recorder.onstop === null,
+        )
+      maximumActiveBytes = Math.max(
+        maximumActiveBytes,
+        ...active.map((recorder) => recorder.logicalBytes),
+      )
+    }
+    console.log(
+      `  INFO  stalled conversion peak: ${maximumActiveBytes} logical active-session bytes`,
+    )
+    check(
+      'a stalled WebM Blob conversion cannot block bounded slot rotation',
+      maximumActiveBytes <= 200_000 && stalledFailures.length === 0,
+      `${maximumActiveBytes} logical active-session bytes / ${stalledFailures.join(',')}`,
+    )
+    check(
+      'the stalled conversion keeps two live slots and two bounded rotation timers',
+      liveSlotOwnershipHeld,
+    )
+    check(
+      'each recorder retired during the stall has already detached its handlers',
+      retiredHandlersDetached,
+    )
+    check(
+      'the delayed conversion owns the stopped-session Blob after its chunk array clears',
+      conversionSource?.size === 5_128,
+      `${conversionSource?.size ?? 0} bytes`,
+    )
+    const release = releaseConversion
+    if (release === undefined) throw new Error('WebM conversion did not start')
+    release()
+    const replayAfterStall = await stalledReplay
+    const replayBytes = new Uint8Array(
+      replayAfterStall?.buffer ?? new ArrayBuffer(0),
+    )
+    check(
+      'the stopped-session replay survives later rotations and delayed conversion',
+      replayAfterStall?.durationMs === 1_000 &&
+        replayAfterStall.startAtMs === 0 &&
+        replayBytes.length === 5_128 &&
+        replayBytes[0] === 0x2a &&
+        replayBytes[4_999] === 0x2a &&
+        replayBytes[5_000] === 0x7f &&
+        replayBytes[5_127] === 0x7f,
+      replayAfterStall === null
+        ? 'null replay'
+        : `${replayAfterStall.startAtMs} + ${replayAfterStall.durationMs} ms / ${replayBytes.length} bytes`,
+    )
+  } finally {
+    stalledFallback.clear()
+  }
+  check(
+    'stalled WebM conversion cleanup leaves no recorder handler or timer owner',
+    stalledTimers.pendingCount === 0 &&
+      stalledRecorders.every(
+        (recorder) =>
+          recorder.state === 'inactive' &&
+          recorder.ondataavailable === null &&
+          recorder.onerror === null &&
+          recorder.onstop === null,
+      ),
+  )
+
   const deadlineTimers = new SimulatedTimers()
   const deadlineRecorders: MissingStopMediaRecorder[] = []
   const deadlineFailures: string[] = []
