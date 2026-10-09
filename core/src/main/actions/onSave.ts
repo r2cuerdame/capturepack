@@ -4,9 +4,8 @@
 // Call sites in session.ts are chosen because they are where the pack
 // genuinely reaches a state rather than where it is convenient to call:
 //
-//   source-ready            immediately after notePackSaved() or image pack save —
-//                           the line the save flow itself documents as "everything
-//                           above this is what saved means"
+//   source-ready            after the source pack is durable (and after
+//                           notePackSaved() in fresh capture flows)
 //   annotated-replay-ready  when the derived render reports 'done'
 //   complete                when background derived processing settles (after
 //                           annotated-replay-ready, or after keyframe still finishes)
@@ -116,6 +115,13 @@ function sessionFor(packId: string): SaveActionLifecycle {
 export function clearSaveActionSessions(): void {
   sessionsByPack.clear()
   inFlightByPack.clear()
+}
+
+/** Finish any earlier transition before starting a new save of the same pack. */
+export async function settleSaveActionSession(packId: string): Promise<void> {
+  const inFlight = inFlightByPack.get(packId)
+  if (inFlight !== undefined) await inFlight.catch(() => {})
+  sessionsByPack.delete(packId)
 }
 
 /**
