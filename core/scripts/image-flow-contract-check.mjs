@@ -111,9 +111,10 @@ check(
     editFlow.includes('clearPackLedger(handle.id)'),
 )
 check(
-  're-edited still pack settles complete after a render or failure',
-  /onRendered: \(\) => \{\s*void runActionsAtState\(handle\.dirPath, 'complete', settings\)/u.test(editFlow) &&
-    /onFailed: \(\) => \{\s*void runActionsAtState\(handle\.dirPath, 'complete', settings\)/u.test(editFlow),
+  're-edited still pack settles complete after the pack render batch finishes',
+  editFlow.includes('let annotatedReadySettled = replayWebm === null') &&
+    editFlow.includes("if (renderDir !== handle.dirPath || state === 'rendering') return") &&
+    editFlow.includes("void runActionsAtState(handle.dirPath, 'complete', settings)"),
 )
 
 console.log('\nSELECTOR UX + TRUST SURFACE')
