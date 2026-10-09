@@ -31,6 +31,7 @@ import { pngPixelSize } from '../png'
 import { parseDomPayload } from '../chrome/domBridge'
 import type { DomEvent } from '../chrome/domBridge'
 import { parseUiaPayload } from '../uia'
+import { stripUtf8Bom } from '../../shared/json'
 import { focusedDisplayIndex } from '../../shared/types'
 import type { Manifest, UiaPluginPayload } from '../../shared/types'
 import { reopenedContextDisplayTargets } from '../reopenDisplay'
@@ -108,7 +109,9 @@ function packReader(dirPath: string): {
 
 function readManifest(dirPath: string): Manifest | null {
   try {
-    const parsed: unknown = JSON.parse(readFileSync(path.join(dirPath, 'manifest.json'), 'utf8'))
+    const parsed: unknown = JSON.parse(
+      stripUtf8Bom(readFileSync(path.join(dirPath, 'manifest.json'), 'utf8')),
+    )
     if (parsed === null || typeof parsed !== 'object') return null
     return parsed as Manifest
   } catch {
@@ -165,7 +168,7 @@ function declaredDomRectangles(text: string | null): number {
   if (text === null) return 0
   let parsed: unknown
   try {
-    parsed = JSON.parse(text)
+    parsed = JSON.parse(stripUtf8Bom(text))
   } catch {
     return 0
   }

@@ -14,7 +14,9 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { app } from 'electron'
 import { clearPackLedger, runActionsForPack } from '../src/main/actions/host'
+import { clearSaveActionSessions, runActionsAtState } from '../src/main/actions/onSave'
 import { deliverWebhook, readPackSummary } from '../src/main/actions/webhook'
+import type { Settings } from '../src/shared/types'
 import { PackRenderBatchTracker } from '../src/main/renderBatch'
 import {
   ACTION_PERMISSIONS,
@@ -1444,6 +1446,22 @@ console.log('\nWEBHOOK DELIVERY REFUSES HTTP REDIRECTS')
     check(
       '200 OK receiver received the pack summary payload',
       okServerReceivedBody.includes('capturepack.pack.saved') && okServerReceivedBody.includes('e3f1c0de-0000-4000-8000-000000000001'),
+    )
+
+    const bomConfigId = 'cfg-bom-after-save'
+    clearSaveActionSessions()
+    const bomActionResults = await runActionsAtState(
+      tempPackDir,
+      'source-ready',
+      {
+        actionConfigs: [config({ actionId: BUILTIN_WEBHOOK_ACTION_ID, configId: bomConfigId })],
+        actionWebhooks: { [bomConfigId]: { url: `http://127.0.0.1:${String(redirectPort)}/ok` } },
+      } as unknown as Settings,
+    )
+    check(
+      'After Save executes a webhook for a BOM-prefixed manifest',
+      bomActionResults[0]?.outcome === 'ok' && okServerReceivedBody.includes(PACK),
+      bomActionResults[0]?.message ?? 'no action result',
     )
 
     // A URL that slipped past the contract with credentials in it. fetch refuses

@@ -21,6 +21,7 @@ import {
   type McpCaptureMedia,
 } from '../../shared/captureMedia'
 import { computeDisplayNumbers } from '../../shared/numbering'
+import { stripUtf8Bom } from '../../shared/json'
 import { parseUiaPayload } from '../uia'
 import { errorMessage, type PackHandle, type PackStore } from './store'
 
@@ -1041,7 +1042,7 @@ function pluginJsonContents(pack: PackHandle): PluginJsonContents[] {
       if (text === null) return { file, error: 'unreadable' }
       if (text.length > MAX_PLUGIN_FILE_CHARS) return { file, error: `file too large to inline (${text.length} chars)` }
       try {
-        return { file, json: JSON.parse(text) as unknown }
+        return { file, json: JSON.parse(stripUtf8Bom(text)) as unknown }
       } catch (err) {
         return { file, error: `invalid JSON: ${errorMessage(err)}` }
       }
@@ -1082,7 +1083,7 @@ function pluginJsonSearch(
 
       let json: unknown
       try {
-        json = JSON.parse(text) as unknown
+        json = JSON.parse(stripUtf8Bom(text)) as unknown
       } catch (err) {
         warnings.push({ plugin: plugin.name, file, error: `invalid JSON: ${errorMessage(err)}` })
         continue
