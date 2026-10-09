@@ -663,7 +663,7 @@ console.log('\nTHE APP ACTUALLY RUNS THE PIPELINE')
   const imageFlow = section(session, 'async function runImageFlow(', 'async function runFlow(')
   const editFlow = section(session, 'async function runEditFlow(', 'interface DisplayRenderSource')
 
-  check('session.ts imports the after-save entry point', session.includes("import { runActionsAtState } from './actions/onSave'"))
+  check('session.ts imports the after-save entry point', /import \{ runActionsAtState(?:, [^}]*)? \} from '\.\/actions\/onSave'/u.test(session))
   check(
     'it fires at source-ready immediately after the save flow calls publication finished',
     session.includes("notePackSaved(savedHandle.dirPath)")
@@ -677,6 +677,20 @@ console.log('\nTHE APP ACTUALLY RUNS THE PIPELINE')
   check(
     're-edit save fires after-save actions at source-ready once durable',
     editFlow.includes("void runActionsAtState(handle.dirPath, 'source-ready', settings)"),
+  )
+  check(
+    'in-place re-edit resets its old action lifecycle and idempotency keys before source-ready',
+    /if \(outcome\.kind === 'export'\) \{[\s\S]*?await updatePack\(handle, input, \{ keepReplay: true \}\)[\s\S]*?await settleSaveActionSession\(handle\.id\)[\s\S]*?clearPackLedger\(handle\.id\)[\s\S]*?void runActionsAtState\(handle\.dirPath, 'source-ready', settings\)/u.test(editFlow),
+  )
+  check(
+    're-edited video advances actions after its annotated replay finishes',
+    /startAnnotatedRender\([\s\S]*?if \(state === 'done'\) \{\s*void runActionsAtState\(handle\.dirPath, 'annotated-replay-ready', settings\)\s*\.then\(\(\) => runActionsAtState\(handle\.dirPath, 'complete', settings\)\)/u.test(editFlow),
+  )
+  check(
+    're-edited still settles complete on render success and failure',
+    /startKeyframeStill\([\s\S]*?onRendered: async \(png\) => \{\s*void runActionsAtState\(handle\.dirPath, 'complete', settings\)/u.test(editFlow)
+      && /onFailed: \(\) => \{\s*void runActionsAtState\(handle\.dirPath, 'complete', settings\)/u.test(editFlow)
+      && /onRendered: \(\) => \{\s*void runActionsAtState\(handle\.dirPath, 'complete', settings\)/u.test(editFlow),
   )
   check(
     'it fires again at annotated-replay-ready when the derived render reports done, so a blocked action gets its second chance',

@@ -105,6 +105,16 @@ check(
   're-edit save fires after-save actions at source-ready once durable',
   editFlow.includes("void runActionsAtState(handle.dirPath, 'source-ready', settings)"),
 )
+check(
+  're-edit refreshes action state for an existing pack before source-ready',
+  editFlow.includes('await settleSaveActionSession(handle.id)') &&
+    editFlow.includes('clearPackLedger(handle.id)'),
+)
+check(
+  're-edited still pack settles complete after a render or failure',
+  /onRendered: \(\) => \{\s*void runActionsAtState\(handle\.dirPath, 'complete', settings\)/u.test(editFlow) &&
+    /onFailed: \(\) => \{\s*void runActionsAtState\(handle\.dirPath, 'complete', settings\)/u.test(editFlow),
+)
 
 console.log('\nSELECTOR UX + TRUST SURFACE')
 const selectorMain = source('src/main/imageRegionSelector.ts')

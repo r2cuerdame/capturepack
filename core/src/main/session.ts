@@ -150,7 +150,8 @@ import { copyPngToClipboard } from './clipboard'
 import { logError, logInfo, logWarn } from './log'
 import { openPack } from './mcp/store'
 import { showSaveToast, updateToastRenderStatus } from './saveToast'
-import { runActionsAtState } from './actions/onSave'
+import { runActionsAtState, settleSaveActionSession } from './actions/onSave'
+import { clearPackLedger } from './actions/host'
 import {
   noteFlowEnded,
   notePackSaved,
@@ -3766,6 +3767,10 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
         : { id: manifest.id, dirPath }
     if (outcome.kind === 'export') {
       await updatePack(handle, input, { keepReplay: true })
+      // This explicit save starts a new action lifecycle for the same pack ID.
+      // Let the previous run finish before forgetting its completed keys.
+      await settleSaveActionSession(handle.id)
+      clearPackLedger(handle.id)
       // Save As New copied inside saveAsNewPack, which is where its folder came
       // into existence; a re-edit save has to do it here for the same reason a
       // fresh capture does — before the render, not after it.
@@ -3810,7 +3815,13 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
           replayDurationMs,
           docLanguage: packDocLanguage(settings),
         },
-        (state) => updateToastRenderStatus(handle.dirPath, state),
+        (state) => {
+          updateToastRenderStatus(handle.dirPath, state)
+          if (state === 'done') {
+            void runActionsAtState(handle.dirPath, 'annotated-replay-ready', settings)
+              .then(() => runActionsAtState(handle.dirPath, 'complete', settings))
+          }
+        },
       )
     } else {
       // Same rule on re-edit: a pack without a replay re-renders its single
@@ -3830,6 +3841,7 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
         editAfterSaveMode === 'image'
           ? {
               onRendered: async (png) => {
+                void runActionsAtState(handle.dirPath, 'complete', settings)
                 const copied = await copyPngToClipboard(png)
                 if (copied) {
                   updateToastRenderStatus(handle.dirPath, 'image-copied')
@@ -3839,10 +3851,18 @@ async function runEditFlow(dirPath: string, settings: Settings): Promise<void> {
                 }
               },
               onFailed: () => {
+                void runActionsAtState(handle.dirPath, 'complete', settings)
                 updateToastRenderStatus(handle.dirPath, 'image-copy-failed')
               },
             }
-          : {},
+          : {
+              onRendered: () => {
+                void runActionsAtState(handle.dirPath, 'complete', settings)
+              },
+              onFailed: () => {
+                void runActionsAtState(handle.dirPath, 'complete', settings)
+              },
+            },
       )
     }
     if (loadedCapture.captureKind === 'video') {
